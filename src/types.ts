@@ -104,7 +104,7 @@ export const Assertion = z.object({
 });
 export type Assertion = z.infer<typeof Assertion>;
 
-const ScenarioObject = z
+export const ScenarioObject = z
   .object({
     // Optional: defaults to the scenario's filename (sans extension) via parseScenarioFile —
     // the file IS the identity. An explicit `name:` is an override (keys the run dir + cassette).

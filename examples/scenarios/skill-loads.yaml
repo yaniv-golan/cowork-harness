@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=../../schema/scenario.schema.json
 # Acceptance (B8): the staged agent in cowork mode loads a real local skill and can
 # run its python3 producer toolchain — proves Phase-1 false-reds are fixed.
 baseline: latest

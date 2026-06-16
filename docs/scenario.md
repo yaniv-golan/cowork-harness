@@ -4,6 +4,8 @@ A **scenario** (`scenarios/*.yaml`) is one test: a prompt, scripted answers to t
 
 ## Full schema
 
+> **Machine-readable:** [`schema/scenario.schema.json`](../schema/scenario.schema.json) is generated from the zod source of truth (`npm run schema`) and pinned by a drift-guard test. Editors with a YAML language server validate scenarios against it automatically — the bundled examples carry a `# yaml-language-server: $schema=../../schema/scenario.schema.json` hint.
+
 ```yaml
 name: my-test                             # OPTIONAL — defaults to the filename (sans ext); keys runs/<name>/
 baseline: latest                          # platform baseline: "latest" or "desktop-<ver>"

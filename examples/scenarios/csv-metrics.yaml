@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=../../schema/scenario.schema.json
 # Worked example: a non-trivial skill that runs a BUNDLED producer script end-to-end.
 #
 # Unlike example-pdf-skill.yaml (where the agent does the work itself and the skill is

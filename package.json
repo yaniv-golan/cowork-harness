@@ -43,6 +43,7 @@
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.json && chmod +x dist/cli.js",
     "dev": "tsx src/cli.ts",
+    "schema": "tsx scripts/gen-schema.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:live": "vitest run --config vitest.config.live.ts",
@@ -62,7 +63,8 @@
     "prettier": "3.8.4",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0",
-    "vitest": "^2.1.0"
+    "vitest": "^2.1.0",
+    "zod-to-json-schema": "^3.25.2"
   },
   "engines": {
     "node": ">=20"

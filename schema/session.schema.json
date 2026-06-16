@@ -1,0 +1,240 @@
+{
+  "$ref": "#/definitions/CoworkHarnessSession",
+  "definitions": {
+    "CoworkHarnessSession": {
+      "type": "object",
+      "properties": {
+        "model": {
+          "type": "string"
+        },
+        "effort": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ]
+        },
+        "max_thinking_tokens": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "exclusiveMinimum": 0
+            },
+            {
+              "type": "object",
+              "additionalProperties": {
+                "type": "integer",
+                "exclusiveMinimum": 0
+              }
+            }
+          ]
+        },
+        "extended_thinking": {
+          "type": "boolean"
+        },
+        "permission_mode": {
+          "type": "string",
+          "enum": [
+            "default",
+            "acceptEdits",
+            "plan",
+            "bypassPermissions"
+          ],
+          "default": "default"
+        },
+        "permission_parity": {
+          "type": "string",
+          "enum": [
+            "cowork",
+            "strict"
+          ],
+          "default": "cowork"
+        },
+        "folders": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "from": {
+                "type": "string"
+              },
+              "to": {
+                "type": "string"
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "r",
+                  "rw",
+                  "rwd"
+                ],
+                "default": "rw"
+              }
+            },
+            "required": [
+              "from"
+            ],
+            "additionalProperties": false
+          },
+          "default": []
+        },
+        "trusted_folders": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "auto_mount_folders": {
+          "type": "boolean",
+          "default": false
+        },
+        "uploads": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "plugins": {
+          "type": "object",
+          "properties": {
+            "config_dir": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "marketplaces": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "local_marketplaces": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "enabled": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "local_plugins": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "remote_plugins": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            }
+          },
+          "additionalProperties": false,
+          "default": {
+            "config_dir": null,
+            "marketplaces": [],
+            "local_marketplaces": [],
+            "enabled": [],
+            "local_plugins": [],
+            "remote_plugins": []
+          }
+        },
+        "skills": {
+          "type": "object",
+          "properties": {
+            "local": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            }
+          },
+          "additionalProperties": false,
+          "default": {
+            "local": []
+          }
+        },
+        "mcp": {
+          "type": "object",
+          "properties": {
+            "config": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "enabled": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            }
+          },
+          "additionalProperties": false,
+          "default": {
+            "config": null,
+            "enabled": []
+          }
+        },
+        "egress": {
+          "type": "object",
+          "properties": {
+            "extra_allow": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "unrestricted": {
+              "type": "boolean",
+              "default": false
+            }
+          },
+          "additionalProperties": false,
+          "default": {
+            "extra_allow": [],
+            "unrestricted": false
+          }
+        },
+        "web_fetch": {
+          "type": "object",
+          "properties": {
+            "approved_domains": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            }
+          },
+          "additionalProperties": false,
+          "default": {
+            "approved_domains": []
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "cowork-harness session YAML — pre-prompt setup (model, mounts, discovery). See docs/session.md."
+}

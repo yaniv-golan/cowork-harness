@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=../../schema/scenario.schema.json
 # Worked example #2: graceful degradation under default-deny egress.
 #
 # This is the NON-ARTIFICIAL egress test. The skill's job naturally needs the network

@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=../../schema/scenario.schema.json
 # Example scenario: a prompt + scripted answers + assertions, run against a session.
 # The session (model, folders, plugins, mcp, egress) lives in examples/sessions/default.yaml.
 # Run:  cowork-harness run examples/scenarios/example-pdf-skill.yaml
