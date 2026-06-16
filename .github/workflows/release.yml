@@ -2,7 +2,9 @@ name: release
 
 # Tag a release: `npm version <patch|minor|major>` then `git push --follow-tags`.
 # A pushed `vX.Y.Z` tag (matching package.json) builds, tests, publishes to npm with
-# provenance, and creates a GitHub Release. Requires an `NPM_TOKEN` repo secret.
+# provenance, and creates a GitHub Release. Auth is npm Trusted Publishing (OIDC) —
+# no NPM_TOKEN secret: configure cowork-harness's trusted publisher on npmjs.com
+# (GitHub repo yaniv-golan/cowork-harness + workflow `release.yml`).
 on:
   push:
     tags: ["v*"]
@@ -22,6 +24,10 @@ jobs:
           registry-url: "https://registry.npmjs.org"
           cache: npm
 
+      # Trusted Publishing (OIDC) requires npm >= 11.5.1; Node 20 ships npm 10.
+      - name: Use a trusted-publishing-capable npm
+        run: npm install -g npm@latest
+
       - run: npm ci
 
       - name: Verify the tag matches package.json version
@@ -35,10 +41,8 @@ jobs:
       - name: Build + test (also runs via prepublishOnly)
         run: npm run ci
 
-      - name: Publish to npm (with provenance)
+      - name: Publish to npm (Trusted Publishing + provenance)
         run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
