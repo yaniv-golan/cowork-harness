@@ -1,0 +1,39 @@
+# Worked example #2: graceful degradation under default-deny egress.
+#
+# This is the NON-ARTIFICIAL egress test. The skill's job naturally needs the network
+# (fetch an FX rate to convert EUR -> USD). Under Cowork's sealed egress that fetch is
+# blocked, so the `egress_denied` assertion below is backed by a REAL attempt the skill
+# makes as part of its work — not a synthetic "curl example.com" probe. The skill falls
+# back to source currency and still delivers, which `result: success` + the artifact prove.
+# The denial is deterministic (the proxy 403s the CONNECT immediately), so this is a stable
+# regression even though it involves the network.
+#
+# Run:  cowork-harness run examples/scenarios/csv-fx-normalize.yaml
+baseline: latest
+session: ../sessions/csv-fx-normalize.yaml
+fidelity: container
+
+prompt: |
+  Use the csv-fx-normalize skill to normalize sales_eur.csv from your uploads to USD.
+  Run the skill's bundled producer, then tell me whether it converted the amounts or
+  fell back to the source currency, and the path to the output JSON.
+
+answers:
+  - when_question: ".*"
+    choose: "Proceed"
+  - when_tool: Skill
+    decide: allow
+  - when_tool: Write
+    decide: allow
+  - when_tool: Bash # allow running the producer; forbid installs / deletes
+    allow_if: "!command.includes('rm') && !command.includes('pip')"
+    else: deny
+
+assert:
+  - result: success # the skill survived the sealed network instead of crashing/hanging
+  - tool_called: Skill
+  - tool_called: Bash
+  - egress_denied: api.frankfurter.app # the skill's REAL FX fetch, blocked by default-deny
+  - user_visible_artifact: outputs/normalized.json # degraded gracefully — still delivered
+  - transcript_matches: "offline|fell back|source currency|without conversion"
+  - no_delete_in_outputs: true

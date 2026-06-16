@@ -1,0 +1,45 @@
+name: Bug report
+description: Something doesn't work as documented
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you ran and what went wrong.
+      placeholder: "cowork-harness run scenarios/x.yaml → ..."
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected
+    validations:
+      required: true
+  - type: dropdown
+    id: fidelity
+    attributes:
+      label: Fidelity tier
+      options: [protocol, container, microvm, "n/a"]
+    validations:
+      required: true
+  - type: input
+    id: baseline
+    attributes:
+      label: Platform baseline
+      description: Which baselines/desktop-*.json (and your Desktop app version if relevant)
+      placeholder: "desktop-1.12603.1 / app 1.12603.1 / agent 2.1.170"
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      description: OS + arch, Node version, Docker/Podman version, container runtime.
+      placeholder: "macOS 15 arm64, Node 20.11, Docker 27, ..."
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / run artifacts
+      description: Relevant lines from runs/<name>/<id>/ (result.json, egress.log) or console output.
+      render: shell

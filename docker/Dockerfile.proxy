@@ -1,0 +1,12 @@
+# Default-deny egress proxy sidecar (test fixture, not a security boundary).
+# Built from the SHIPPED dist/ (no source checkout / TS build) so it works from an installed package.
+FROM node:20-slim
+WORKDIR /app
+# package.json provides "type":"module"; dist/egress/proxy.js uses only Node built-ins (http/net/fs).
+COPY package.json ./
+COPY dist/egress ./dist/egress
+ENV PORT=8080
+# Entry runs the proxy standalone reading COWORK_ALLOW (comma-separated).
+# COWORK_PROXY_LOG: where to write JSON decision lines (default stdout; the sidecar
+# points it at a bind-mounted file so the CLI can read per-run egress decisions).
+CMD ["node", "-e", "import('./dist/egress/proxy.js').then(m=>m.startEgressProxy({allow:(process.env.COWORK_ALLOW||'').split(',').filter(Boolean),port:Number(process.env.PORT||8080),logPath:process.env.COWORK_PROXY_LOG||'/dev/stdout'}))"]

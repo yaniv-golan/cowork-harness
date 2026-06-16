@@ -1,0 +1,125 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── Stage 1: static checks + unit tests (fast, no Docker, no secrets) ──────────
+  unit:
+    name: typecheck · test · build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - run: npm ci
+      - name: Format check
+        run: npm run format:check
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Unit tests (schema, answerer, egress, launch plan, example validation)
+        run: npm test
+      - name: Build
+        run: npm run build
+      - name: Validate CLI wiring
+        run: node dist/cli.js list
+      - name: Token-free replay gate (example-pdf-skill fixture)
+        run: node dist/cli.js replay --cassette examples/replays/example-pdf-skill.cassette.json --output-format json
+
+  # ── Stage 1b: pytest `cowork` lane — helper self-checks (no Docker/token; -m 'not cowork') ──
+  python:
+    name: pytest cowork-lane (helper self-checks)
+    runs-on: ubuntu-latest
+    needs: unit
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: pip install pytest
+      - name: Run the non-cowork (pure) helper tests
+        working-directory: python
+        run: pytest -m 'not cowork'
+
+  # ── Stage 2: boundary parity (Docker; no API key needed — pure sandbox probes) ──
+  boundary:
+    name: boundary parity (L1 container)
+    runs-on: ubuntu-24.04-arm   # arm64 to match Cowork's linux/arm64 guest
+    needs: unit
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "20", cache: npm }
+      - run: npm ci && npm run build
+      - name: Build agent base image (no Anthropic binary baked in)
+        run: docker build --platform linux/arm64 -t cowork-agent-base:1 -f docker/Dockerfile.agent .
+      - name: Prove the sandbox enforces Cowork's limitations (self-contained sidecar)
+        run: node dist/cli.js boundary-check
+      - name: Live contract tests — guard the binary assumptions (no token needed)
+        # Requires the staged agent; only runs where it's present. Skips cleanly otherwise.
+        run: npm run test:live
+
+  # ── Stage 3: live scenario suite (needs ANTHROPIC_API_KEY; skipped on forks) ────
+  scenarios:
+    name: scenario suite (L1, live inference)
+    runs-on: ubuntu-24.04-arm
+    needs: boundary
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "20", cache: npm }
+      - run: npm ci && npm run build
+      - name: Guard — require API key
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "::warning::ANTHROPIC_API_KEY not set — skipping live scenario suite."; exit 0
+          fi
+      - name: Build agent base image (per-run egress sidecar is self-managed)
+        run: docker build --platform linux/arm64 -t cowork-agent-base:1 -f docker/Dockerfile.agent .
+      - name: Run example scenarios (L1 container — the user-facing worked examples)
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: node dist/cli.js run examples/scenarios/
+      - name: Run e2e self-tests (L0 / L1 / hostloop — microvm excluded; needs a real VM)
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          for s in smoke-askuserquestion smoke-l1-container smoke-l1-egress canary-hostloop; do
+            node dist/cli.js run "e2e/scenarios/$s.yaml" || exit 1
+          done
+      - name: Upload run artifacts (transcripts, decisions, egress logs)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-artifacts
+          path: runs/
+          retention-days: 14
+
+  # ── Stage 4: parity drift watch (informational; never fails the build) ─────────
+  parity-drift:
+    name: parity drift vs upstream Desktop
+    runs-on: ubuntu-latest
+    needs: unit
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Note
+        run: |
+          echo "Platform baselines are synced from a developer's installed Claude Desktop via"
+          echo "\`cowork-harness sync --diff\` (needs the macOS/Windows app — not available on CI runners)."
+          echo "This job is a placeholder reminder; run sync locally when Desktop updates."
+          echo "See docs/maintenance via README → Maintenance."

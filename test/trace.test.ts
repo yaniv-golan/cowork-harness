@@ -1,0 +1,197 @@
+import { describe, it, expect } from "vitest";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { buildTrace, formatTrace, buildGateTrace, resolveEventsFile } from "../src/run/trace-view.js";
+
+function eventsFile(lines: unknown[], controlOut?: unknown[]): string {
+  const dir = mkdtempSync(join(tmpdir(), "cwh-trace-"));
+  const f = join(dir, "events.jsonl");
+  writeFileSync(f, lines.map((l) => JSON.stringify(l)).join("\n"));
+  if (controlOut) writeFileSync(join(dir, "control-out.jsonl"), controlOut.map((l) => JSON.stringify(l)).join("\n"));
+  return f;
+}
+
+// E — resolveEventsFile: exact match preferred over fragment, ambiguous fragment warns loudly
+describe("trace — E resolveEventsFile exact vs fragment resolution", () => {
+  // resolveEventsFile resolves relative to cwd; we chdir to a temp tree and restore after each test.
+  const orig = process.cwd();
+
+  function makeRunsTree(layout: { scen: string; run: string }[]): string {
+    const root = mkdtempSync(join(tmpdir(), "cwh-runs-"));
+    for (const { scen, run } of layout) {
+      const runDir = join(root, "runs", scen, run);
+      mkdirSync(runDir, { recursive: true });
+      writeFileSync(join(runDir, "events.jsonl"), "");
+    }
+    return root;
+  }
+
+  it("exact run-dir name is preferred over a fragment match", () => {
+    const root = makeRunsTree([
+      { scen: "my-scenario", run: "exact-run-id" },
+      { scen: "my-scenario", run: "abc-exact-run-id-xyz" }, // contains the exact name as fragment
+    ]);
+    process.chdir(root);
+    try {
+      const f = resolveEventsFile("exact-run-id");
+      expect(f).toContain(`my-scenario/exact-run-id/events.jsonl`);
+    } finally {
+      process.chdir(orig);
+    }
+  });
+
+  it("single unambiguous fragment resolves without warning", () => {
+    const root = makeRunsTree([{ scen: "skill-a", run: "run-unique-abc123" }]);
+    process.chdir(root);
+    const stderrChunks: string[] = [];
+    const origWrite = process.stderr.write.bind(process.stderr);
+    (process.stderr as any).write = (s: string, ...rest: any[]) => {
+      stderrChunks.push(s);
+      return origWrite(s, ...rest);
+    };
+    try {
+      const f = resolveEventsFile("unique-abc123");
+      expect(f).toContain("events.jsonl");
+      expect(stderrChunks.join("")).not.toMatch(/ambiguous/);
+    } finally {
+      (process.stderr as any).write = origWrite;
+      process.chdir(orig);
+    }
+  });
+
+  it("ambiguous fragment warns loudly and picks most recent (deterministic)", () => {
+    const root = makeRunsTree([
+      { scen: "skill-a", run: "local_aaaa" },
+      { scen: "skill-a", run: "local_bbbb" },
+    ]);
+    process.chdir(root);
+    const stderrChunks: string[] = [];
+    const origWrite = process.stderr.write.bind(process.stderr);
+    (process.stderr as any).write = (s: string, ...rest: any[]) => {
+      stderrChunks.push(s);
+      return origWrite(s, ...rest);
+    };
+    try {
+      const f = resolveEventsFile("local_");
+      expect(f).toContain("events.jsonl");
+      const combined = stderrChunks.join("");
+      expect(combined).toMatch(/ambiguous trace fragment/);
+      expect(combined).toMatch(/2 run dirs/);
+    } finally {
+      (process.stderr as any).write = origWrite;
+      process.chdir(orig);
+    }
+  });
+});
+
+const assistant = (blocks: unknown[], parent?: string) => ({
+  type: "assistant",
+  ...(parent ? { parent_tool_use_id: parent } : {}),
+  message: { content: blocks },
+});
+const userResult = (toolUseId: string, isError: boolean, text: string) => ({
+  type: "user",
+  message: { content: [{ type: "tool_result", tool_use_id: toolUseId, is_error: isError, content: text }] },
+});
+
+describe("trace view (item 8)", () => {
+  it("dedupes the Agent dispatch (one dispatch row, not also a tool row) and excludes TaskCreate todos", () => {
+    const f = eventsFile([
+      { type: "system", subtype: "init", tools: ["Agent", "Task"], mcp_servers: [] },
+      assistant([
+        { type: "tool_use", id: "a1", name: "Agent", input: { description: "orchestrate", subagent_type: "general-purpose", prompt: "…" } },
+      ]),
+      assistant([{ type: "tool_use", id: "c1", name: "TaskCreate", input: { subject: "step 0", description: "d", activeForm: "doing" } }]),
+      assistant([{ type: "tool_use", id: "r1", name: "Read", input: { file_path: "/x" } }]),
+      { type: "result", is_error: false },
+    ]);
+    const rows = buildTrace(f);
+    const dispatch = rows.filter((r) => r.kind === "dispatch");
+    const tools = rows.filter((r) => r.kind === "tool");
+    expect(dispatch).toHaveLength(1);
+    expect(dispatch[0].agentType).toBe("general-purpose");
+    // the Agent block does NOT also appear as a tool row; TaskCreate + Read do
+    expect(tools.map((t) => t.name).sort()).toEqual(["Read", "TaskCreate"]);
+    expect(formatTrace(rows)).toContain("1 sub-agent dispatch(es)");
+  });
+
+  it("--tools filters to tool/dispatch rows only", () => {
+    const f = eventsFile([
+      assistant([{ type: "text", text: "thinking out loud" }]),
+      assistant([{ type: "tool_use", id: "r1", name: "Grep", input: { pattern: "x" } }]),
+      { type: "result", is_error: false },
+    ]);
+    const rows = buildTrace(f, { tools: true });
+    expect(rows.every((r) => r.kind === "tool" || r.kind === "dispatch")).toBe(true);
+    expect(rows.find((r) => r.kind === "text")).toBeUndefined();
+  });
+
+  it("Part 4: a tool row carries its result STATUS (ok/error) from the paired tool_result", () => {
+    const f = eventsFile([
+      assistant([{ type: "tool_use", id: "toolu_1", name: "Bash", input: { command: "x" } }]),
+      userResult("toolu_1", true, "boom: permission denied"),
+      assistant([{ type: "tool_use", id: "toolu_2", name: "Read", input: { file_path: "/x" } }]),
+      userResult("toolu_2", false, "file contents"),
+      { type: "result", is_error: false },
+    ]);
+    const tools = buildTrace(f).filter((r) => r.kind === "tool");
+    expect(tools.find((t) => t.name === "Bash")).toMatchObject({ resultStatus: "error", resultText: "boom: permission denied" });
+    expect(tools.find((t) => t.name === "Read")).toMatchObject({ resultStatus: "ok" });
+    expect(formatTrace(buildTrace(f))).toContain("✗ error: boom");
+  });
+
+  it("Part 4: --gates pairs question → injected answer → delivered result (bridging UUID↔toolu_ keys)", () => {
+    const f = eventsFile(
+      [
+        // gate: control_request carries BOTH the UUID request_id AND the toolu_ tool_use_id
+        {
+          type: "control_request",
+          request_id: "uuid-1",
+          request: {
+            subtype: "can_use_tool",
+            tool_name: "AskUserQuestion",
+            tool_use_id: "toolu_g",
+            input: { questions: [{ question: "Proceed?", options: [{ label: "Yes" }] }] },
+          },
+        },
+        userResult("toolu_g", false, "delivered"),
+        { type: "result", is_error: false },
+      ],
+      [
+        // control-out.jsonl: the injected answer, keyed by request_id (UUID)
+        {
+          type: "control_response",
+          response: {
+            subtype: "success",
+            request_id: "uuid-1",
+            response: { behavior: "allow", updatedInput: { questions: [{ question: "Proceed?" }], answers: { "Proceed?": "Yes" } } },
+          },
+        },
+      ],
+    );
+    const gates = buildGateTrace(f);
+    expect(gates).toHaveLength(1);
+    expect(gates[0]).toMatchObject({ question: "Proceed?", injectedAnswer: '{"Proceed?":"Yes"}', delivered: "ok" });
+  });
+
+  it("Part 4: --gates flags an O7-style delivery failure (errored tool_result)", () => {
+    const f = eventsFile([
+      {
+        type: "control_request",
+        request_id: "uuid-2",
+        request: {
+          subtype: "can_use_tool",
+          tool_name: "AskUserQuestion",
+          tool_use_id: "toolu_b",
+          input: { questions: [{ question: "Branch?", options: [{ label: "A" }] }] },
+        },
+      },
+      userResult("toolu_b", true, "undefined is not an object (evaluating 'q.map')"),
+      { type: "result", is_error: false },
+    ]);
+    const gates = buildGateTrace(f);
+    expect(gates[0]).toMatchObject({ question: "Branch?", delivered: "error" });
+    expect(gates[0].error).toContain("q.map");
+  });
+});

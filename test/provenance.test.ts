@@ -1,0 +1,231 @@
+import { describe, it, expect, vi } from "vitest";
+import { ProvenanceTracker, normalizeUrl, extractUrls } from "../src/hostloop/provenance.js";
+import {
+  makeWorkspaceHandler,
+  isLocalOrPrivate,
+  u1t,
+  type WebFetchProvenance,
+  type EgressEntry,
+  type RawFetch,
+} from "../src/hostloop/workspace-handler.js";
+import { compile } from "../src/egress/proxy.js";
+import { readGateFlag } from "../src/loop-decision.js";
+import type { PlatformBaseline } from "../src/types.js";
+
+describe("web_fetch provenance-unenforced warning is per-handler (not once-per-process)", () => {
+  it("each freshly-built handler warns when provenance is unenforced", async () => {
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    // allow=[] → after the unenforced warning, the fetch hard-denies (no curl, no network call).
+    const mk = () => makeWorkspaceHandler("c", "/mnt", "docker", []);
+    const call = (h: ReturnType<typeof makeWorkspaceHandler>) =>
+      h("workspace", { method: "tools/call", params: { name: "web_fetch", arguments: { url: "https://x.example/y" } } });
+    await call(mk());
+    await call(mk());
+    const warns = spy.mock.calls.filter((c) => String(c[0]).includes("provenance is NOT enforced"));
+    spy.mockRestore();
+    expect(warns.length).toBe(2); // two handlers → two warnings (a module latch would give 1)
+  });
+});
+
+describe("#30 — normalizeUrl (zG port)", () => {
+  it("drops the fragment and a single trailing slash; lowercases host (via URL)", () => {
+    expect(normalizeUrl("https://Example.com/a/#frag")).toBe("https://example.com/a");
+    expect(normalizeUrl("https://example.com/")).toBe("https://example.com/"); // root slash kept
+    expect(normalizeUrl("http://example.com/p/")).toBe("http://example.com/p");
+  });
+  it("rejects non-http(s) and unparseable URLs", () => {
+    expect(normalizeUrl("ftp://example.com")).toBeNull();
+    expect(normalizeUrl("file:///etc/passwd")).toBeNull();
+    expect(normalizeUrl("not a url")).toBeNull();
+  });
+  it("membership is exact on the normalized form", () => {
+    const t = new ProvenanceTracker();
+    t.add("https://example.com/page#x");
+    expect(t.has("https://example.com/page")).toBe(true); // fragment ignored
+    expect(t.has("https://example.com/other")).toBe(false);
+  });
+});
+
+describe("#30 — extractUrls (Ien port)", () => {
+  it("extracts full URLs, www. hosts, and bare domains; ZHA-trims trailing punctuation", () => {
+    const urls = extractUrls("see https://a.com/x, and www.b.com! also c.io.");
+    expect(urls).toContain("https://a.com/x"); // trailing comma trimmed
+    expect(urls).toContain("https://www.b.com/"); // www. → https://; root path keeps "/" (zG)
+    expect(urls).toContain("https://c.io/"); // bare domain, trailing . trimmed; root "/" kept
+  });
+  it("seedFromText returns the count of NEW urls and dedupes", () => {
+    const t = new ProvenanceTracker();
+    expect(t.seedFromText("go to https://x.com/p")).toBe(1);
+    expect(t.seedFromText("again https://x.com/p")).toBe(0); // already seen
+    expect(t.has("https://x.com/p")).toBe(true);
+  });
+  it("snapshot/restore round-trips", () => {
+    const t = new ProvenanceTracker();
+    t.add("https://a.com");
+    const r = ProvenanceTracker.restore(t.snapshot());
+    expect(r.has("https://a.com")).toBe(true);
+  });
+});
+
+describe("#30 — web_fetch provenance gate (G1t port, via the handler)", () => {
+  // Drive the handler's web_fetch branch with a fake provenance bundle + an egress collector + a STUB
+  // fetcher (spawn-free). On Path A a provenance pass now fetches DIRECTLY (decoupled from the hostname
+  // allowlist), so the stub returns a `FETCHED <url>` marker; the allowlist (other.example) is irrelevant
+  // on Path A — it only proves the host is NOT in the list, so a fetch means decoupling worked.
+  const stubFetch: RawFetch = async (u: string) => ({ status: 200, text: async () => `FETCHED ${u}` });
+  const callWebFetch = async (prov: WebFetchProvenance, url: string, rawFetch: RawFetch = stubFetch) => {
+    const egress: EgressEntry[] = [];
+    const ref = { current: prov };
+    const h = makeWorkspaceHandler("c", "/mnt", "docker", ["other.example"], (e) => egress.push(e), ref, rawFetch);
+    const out = (await h("workspace", { method: "tools/call", params: { name: "web_fetch", arguments: { url } } })) as {
+      result: { isError?: boolean; content: { text: string }[] };
+    };
+    return { text: out.result.content[0].text, isError: out.result.isError, egress };
+  };
+  const fake = (over: Partial<WebFetchProvenance>): WebFetchProvenance => ({
+    isAllowed: () => false,
+    markAllowed: () => {},
+    promptGateOn: false,
+    ...over,
+  });
+
+  it("a provenance HIT fetches DIRECTLY — NO hostname allowlist (decoupled from egress)", async () => {
+    // denied.example is NOT in the handler's allowlist, yet a provenance hit fetches it: Path A is gated by
+    // the provenance set ONLY, not the egress domain list (the #30 conflation fix).
+    const r = await callWebFetch(fake({ isAllowed: () => true }), "https://denied.example/x");
+    expect(r.text).toMatch(/FETCHED https:\/\/denied\.example\/x/);
+    expect(r.egress).toEqual([{ host: "denied.example", decision: "allow" }]);
+  });
+
+  it("a MISS with no approval (prompt gate off) is a hard deny with the verbatim provenance string", async () => {
+    const r = await callWebFetch(fake({ isAllowed: () => false, promptGateOn: false }), "https://x.example/x");
+    expect(r.isError).toBe(true);
+    expect(r.text).toMatch(/URL not in provenance set\. web_fetch can only retrieve URLs that appeared/);
+    expect(r.egress).toEqual([{ host: "x.example", decision: "deny" }]);
+  });
+
+  it("a MISS + approval GRANTED marks the url allowed and fetches directly", async () => {
+    let marked: string | undefined;
+    const r = await callWebFetch(
+      fake({ isAllowed: () => false, promptGateOn: true, requestApproval: async () => true, markAllowed: (u) => (marked = u) }),
+      "https://denied.example/x",
+    );
+    expect(marked).toBe("https://denied.example/x");
+    expect(r.text).toMatch(/FETCHED https:\/\/denied\.example\/x/); // approved → fetched (no allowlist on Path A)
+  });
+
+  it("a MISS + approval DECLINED is denied with the verbatim 'not allowed' string", async () => {
+    const r = await callWebFetch(
+      fake({ isAllowed: () => false, promptGateOn: true, requestApproval: async () => false }),
+      "https://x.example/x",
+    );
+    expect(r.isError).toBe(true);
+    expect(r.text).toBe("Web fetch was not allowed.");
+    expect(r.egress).toEqual([{ host: "x.example", decision: "deny" }]);
+  });
+
+  it("permissiveMode (bypassPermissions) pre-adds and skips the check", async () => {
+    // Stateful fake: markAllowed makes isAllowed true (as the real ProvenanceTracker does) — the
+    // handler relies on that, mirroring Cowork's `cre(...) && e.add(n), !e.has(n)`.
+    const allowed = new Set<string>();
+    const r = await callWebFetch(
+      fake({ isAllowed: (u) => allowed.has(u), markAllowed: (u) => void allowed.add(u), permissiveMode: true }),
+      "https://denied.example/x",
+    );
+    expect(allowed.has("https://denied.example/x")).toBe(true);
+    expect(r.text).toMatch(/FETCHED https:\/\/denied\.example\/x/); // bypass → fetched directly
+  });
+
+  it("#43 — Path A blocks a non-http scheme even when provenance-approved (no file:// reads)", async () => {
+    const r = await callWebFetch(fake({ isAllowed: () => true }), "file:///etc/passwd");
+    expect(r.isError).toBe(true);
+    expect(r.text).toMatch(/scheme "file:" is not allowed/);
+  });
+
+  it("#44 — Path A blocks a redirect to a private address (SSRF), even from an approved URL", async () => {
+    let n = 0;
+    const rawFetch: RawFetch = async () =>
+      n++ === 0
+        ? { status: 302, location: "http://169.254.169.254/latest/meta-data", text: async () => "" }
+        : { status: 200, text: async () => "SECRET" };
+    const r = await callWebFetch(fake({ isAllowed: () => true }), "http://approved.example/x", rawFetch);
+    expect(r.isError).toBe(true);
+    expect(r.text).toMatch(/Redirect to .* blocked: Host "169\.254\.169\.254" is a local or private address/);
+  });
+});
+
+describe("#30 — readGateFlag (prefixed key + prose/structured shapes)", () => {
+  const withGates = (gates: Record<string, unknown>) => ({ provenance: { gates } }) as unknown as PlatformBaseline;
+
+  it("reads a sub-flag from the committed PROSE string under the prefixed key", () => {
+    const b = withGates({ "coworkRuntimeConfig:1978029737": "on(force) coworkWebFetchViaApi=true coworkWebFetchPrompt=true" });
+    expect(readGateFlag(b, "1978029737", "coworkWebFetchPrompt")).toBe(true);
+    expect(readGateFlag(b, "1978029737", "coworkWebFetchViaApi")).toBe(true);
+  });
+  it("reads a sub-flag from a #39-decoded STRUCTURED entry", () => {
+    const b = withGates({ "coworkRuntimeConfig:1978029737": { on: true, source: "force", value: { coworkWebFetchPrompt: true } } });
+    expect(readGateFlag(b, "1978029737", "coworkWebFetchPrompt")).toBe(true);
+    expect(readGateFlag(b, "1978029737", "coworkWebFetchViaApi")).toBe(false); // absent sub-flag
+  });
+  it("returns false for a missing gate (no silent true)", () => {
+    expect(readGateFlag(withGates({}), "1978029737", "coworkWebFetchPrompt")).toBe(false);
+  });
+  it("also resolves a bare-id key (no prefix)", () => {
+    const b = withGates({ "1978029737": "coworkWebFetchPrompt=true" });
+    expect(readGateFlag(b, "1978029737", "coworkWebFetchPrompt")).toBe(true);
+  });
+});
+
+describe("web_fetch Path B — U1t + manual redirect re-check (provenance off)", () => {
+  const callB = async (url: string, allow: string[], rawFetch: RawFetch) => {
+    const egress: EgressEntry[] = [];
+    // provenanceRef + fetchImpl undefined → Path B; inject rawFetch for the redirect loop (spawn-free).
+    const h = makeWorkspaceHandler("c", "/mnt", "docker", allow, (e) => egress.push(e), undefined, rawFetch);
+    const out = (await h("workspace", { method: "tools/call", params: { name: "web_fetch", arguments: { url } } })) as {
+      result: { isError?: boolean; content: { text: string }[] };
+    };
+    return { text: out.result.content[0].text, isError: out.result.isError, egress };
+  };
+  const ok =
+    (body: string): RawFetch =>
+    async () => ({ status: 200, text: async () => body });
+
+  it("u1t: scheme / private-address / wen-allowlist / '*' gates", () => {
+    const m = compile(["example.com"]);
+    expect(u1t(new URL("ftp://example.com/"), ["example.com"], m)).toMatch(/scheme/);
+    expect(u1t(new URL("http://127.0.0.1/x"), ["*"], compile(["*"]))).toMatch(/private/);
+    expect(u1t(new URL("http://other.com/"), ["example.com"], m)).toMatch(/not in the session/);
+    expect(u1t(new URL("http://sub.example.com/"), ["example.com"], m)).toMatch(/not in the session/); // exact-for-bare: subdomain NOT matched
+    expect(u1t(new URL("http://example.com/x"), ["example.com"], m)).toBeNull();
+    expect(u1t(new URL("http://anything.com/"), ["*"], compile(["*"]))).toBeNull();
+  });
+
+  it("isLocalOrPrivate flags loopback/private/link-local, not public", () => {
+    for (const h of ["localhost", "127.0.0.1", "10.1.2.3", "192.168.0.1", "169.254.169.254", "::1"]) expect(isLocalOrPrivate(h)).toBe(true);
+    for (const h of ["example.com", "8.8.8.8", "203.0.113.5"]) expect(isLocalOrPrivate(h)).toBe(false);
+  });
+
+  it("BLOCKS a redirect to a private address (SSRF) even when the initial host is allowed", async () => {
+    let n = 0;
+    const rawFetch: RawFetch = async () =>
+      n++ === 0
+        ? { status: 302, location: "http://169.254.169.254/latest/meta-data", text: async () => "" }
+        : { status: 200, text: async () => "SECRET" };
+    const r = await callB("http://example.com/x", ["example.com"], rawFetch);
+    expect(r.isError).toBe(true);
+    expect(r.text).toMatch(/Redirect to .* blocked: Host "169\.254\.169\.254" is a local or private address/);
+  });
+
+  it("an allowlisted host fetches (happy path)", async () => {
+    const r = await callB("http://example.com/x", ["example.com"], ok("HELLO"));
+    expect(r.text).toBe("HELLO");
+    expect(r.egress).toEqual([{ host: "example.com", decision: "allow" }]);
+  });
+
+  it("denies a host not in the allowlist", async () => {
+    const r = await callB("http://evil.com/x", ["example.com"], ok("X"));
+    expect(r.isError).toBe(true);
+    expect(r.text).toMatch(/not in the session web-fetch allowlist/);
+    expect(r.egress).toEqual([{ host: "evil.com", decision: "deny" }]);
+  });
+});

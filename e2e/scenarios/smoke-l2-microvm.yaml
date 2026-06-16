@@ -1,0 +1,14 @@
+# L2: staged agent in a real Apple-VZ microVM (separate kernel), guest default-deny egress.
+baseline: latest
+session: ../sessions/minimal.yaml
+fidelity: microvm
+prompt: |
+  Call the AskUserQuestion tool to ask which fruit I prefer: Mango or Kiwi.
+  After I answer, reply with exactly: "You picked <fruit>." and nothing else.
+answers:
+  - when_question: "fruit|prefer"
+    choose: "Kiwi"
+assert:
+  - result: success
+  - transcript_contains: "Kiwi"
+  - egress_allowed: api.anthropic.com

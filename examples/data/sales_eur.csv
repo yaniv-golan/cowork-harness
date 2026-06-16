@@ -1,0 +1,6 @@
+region,product,amount_eur,units
+North,Widget,1000,30
+South,Widget,500,20
+North,Gadget,1500,15
+West,Gadget,800,10
+East,Widget,200,5

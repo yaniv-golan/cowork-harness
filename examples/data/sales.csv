@@ -1,0 +1,6 @@
+region,product,amount,units
+North,Widget,1200,30
+South,Widget,800,20
+North,Gadget,1500,15
+West,Gadget,700,10
+East,Widget,0,0

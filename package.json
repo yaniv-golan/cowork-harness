@@ -1,0 +1,70 @@
+{
+  "name": "cowork-harness",
+  "version": "0.1.0",
+  "description": "Scriptable, CI-friendly harness for Claude Cowork's runtime contract for testing skills across scenarios — same agent, mounts, egress allowlist, permission protocol, and sandbox limitations.",
+  "license": "MIT",
+  "type": "module",
+  "keywords": [
+    "claude",
+    "claude-code",
+    "cowork",
+    "agent",
+    "skills",
+    "testing",
+    "ci",
+    "sandbox",
+    "harness",
+    "test-harness",
+    "headless",
+    "anthropic"
+  ],
+  "homepage": "https://github.com/yaniv-golan/cowork-harness#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yaniv-golan/cowork-harness.git"
+  },
+  "bugs": {
+    "url": "https://github.com/yaniv-golan/cowork-harness/issues"
+  },
+  "author": "Yaniv Golan",
+  "files": [
+    "dist",
+    "baselines",
+    "fixtures",
+    "docker",
+    ".env.example",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "bin": {
+    "cowork-harness": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.json && chmod +x dist/cli.js",
+    "dev": "tsx src/cli.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:live": "vitest run --config vitest.config.live.ts",
+    "test:golden:update": "vitest run -u test/golden.test.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
+    "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.ts\"",
+    "smoke:cli": "node dist/cli.js list",
+    "ci": "npm run typecheck && npm run build && npm run test",
+    "prepublishOnly": "npm run ci"
+  },
+  "dependencies": {
+    "yaml": "^2.5.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "prettier": "3.8.4",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

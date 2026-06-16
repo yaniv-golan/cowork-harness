@@ -1,0 +1,146 @@
+# The `cowork` pytest lane
+
+Drive the cowork-harness from pytest — test your skills in a Cowork-faithful sandbox
+beside your normal Python tests. This is an **opt-in lane** (mark tests `@pytest.mark.cowork`),
+not the fast inner loop: each call spawns the node CLI (and Docker at `container`/`hostloop`/`microvm`
+fidelity).
+
+## Prerequisites
+
+1. **Build the CLI** — the helper drives `dist/cli.js`:
+   ```bash
+   npm install && npm run build        # from the repo root, produces dist/cli.js
+   ```
+   Override the path with `COWORK_HARNESS_CLI=/path/to/cli.js` if it lives elsewhere.
+2. **Docker** + the agent image, for any fidelity above `protocol`:
+   ```bash
+   docker build --platform linux/arm64 -t cowork-agent-base:1 -f docker/Dockerfile.agent .
+   ```
+3. **An auth token** for runs that actually call the model — export it, or put it in a `.env` file in
+   the dir you run `pytest` from (the CLI auto-loads `./.env`; it's gitignored, host-side, never mounted):
+   ```bash
+   export CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token)   # or: echo "CLAUDE_CODE_OAUTH_TOKEN=…" >> .env
+   ```
+4. **pytest**: `pip install pytest` (or `uv add --dev pytest`).
+5. **Make `cowork_harness` importable.** The helper module sits beside these tests in `python/`. Either run
+   `pytest` **from the `python/` directory** (pytest adds it to `sys.path`, which is what `conftest.py`'s
+   `from cowork_harness import Cowork` relies on), or `pip install -e ./python` to put it on the path from
+   anywhere.
+
+   **cwd note for the `cowork` lane:** the live-lane tests (`test_csv_fx_lane.py`,
+   `test_csv_metrics_lane.py`) use `Path(__file__).resolve().parents[1]` to locate
+   `examples/` paths, so they work from both `python/` and the repo root.
+   The fast lane (`-m 'not cowork'`) is always cwd-independent.
+
+## Usage
+
+This is the real shipped lane (`python/test_csv_metrics_lane.py`), verbatim — copy it and adapt:
+
+```python
+from pathlib import Path
+
+import pytest
+
+# Resolve example paths relative to the repo root regardless of the cwd pytest is invoked from.
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+PROMPT = (
+    "Use the csv-metrics skill to analyze sales.csv from your uploads. Run the skill's "
+    "bundled producer to write outputs/metrics.json and outputs/summary.md, then reply "
+    "with a one-line confirmation that includes the path to the metrics file."
+)
+
+
+@pytest.mark.cowork
+def test_csv_metrics_end_to_end(cowork):
+    r = (
+        cowork.skill(str(REPO_ROOT / "examples/skills/csv-metrics")).run(
+            PROMPT,
+            upload=str(REPO_ROOT / "examples/data/sales.csv"),
+            fidelity="container",
+            on_unanswered="first",  # the skill shouldn't ask; don't hard-fail the demo if it does
+        )
+    )
+    r.assert_success()
+    r.assert_tool_called("Skill")          # the skill loaded
+    r.assert_tool_called("Bash")           # the bundled producer ran
+    # The payoff: a full predicate over the producer's structured output — the thing YAML can't express.
+    r.assert_artifact_json(
+        "outputs/metrics.json",
+        lambda d: (
+            d["rows"] == 5
+            and d["columns"]["amount"]["sum"] == 4200
+            and d["columns"]["amount"]["median"] == 800
+            and d["columns"]["units"]["sum"] == 75
+        ),
+    )
+```
+
+For sub-agent assertions (`assert_subagent_dispatched`, `assert_dispatch_count_max`), see the
+resume example below — csv-metrics dispatches no sub-agents, so it can't demonstrate them.
+
+Run it:
+```bash
+pytest -m cowork            # the lane (needs build + Docker + token)
+pytest -m 'not cowork'      # the fast loop (skips this lane) — the CI default
+```
+
+## API
+
+- `cowork.skill(folder).run(...)` → `Result`. Parameters:
+  - `prompt` (or `prompt_file=` for a verbatim file — avoids shell `$`-expansion)
+  - `answers={q: choice}` — pre-script AskUserQuestions; `on_unanswered="fail|first|prompt"`
+  - `fidelity="container"` (also `protocol|microvm|hostloop|cowork`)
+  - `upload=` (str or list) — attach files at `mnt/uploads/` (deck-review, financial-model-review)
+  - `folder=` (str or list) — connect folders at `mnt/.projects/`
+  - `session_id="…"` + `resume=True` — pin then resume a session (checkpoint-and-resume gated skills)
+  - `decider_cmd="python decider.py"` — answer **live** (stochastic) questions via a spawned helper. The
+    helper owns its own pipes, so this composes with `--output-format json` (the fixture parses the one envelope
+    like every other run). Write the helper with `serve_decider` (below) — no wire-protocol boilerplate.
+- `serve_decider(fn)` — the pre-built `--decider-cmd` loop, so a helper script writes ONLY the decision:
+  ```python
+  # decider.py — point --decider-cmd / decider_cmd= at:  python decider.py
+  from cowork_harness import serve_decider
+  def decide(req):                                  # req = the decision_request dict
+      q = req["questions"][0]["question"].lower()
+      return "Series A" if "stage" in q else 1      # a {q: label/index} mapping, or a bare label/index
+  serve_decider(decide)
+  ```
+  `fn(request)` is called once per gate; the adapter reads each request line, echoes the `id`, and
+  flushes the reply. (This is the spawn-helper analogue of the CLI's `gates`/`answer` commands.)
+- `cowork.replay(cassette_path)` → `Result` (deterministic, no token/Docker — content assertions only)
+- `cowork.trace(run_id_or_dir, tools=False)` → `list[dict]` of trace rows (tool calls, sub-agent
+  dispatches, decisions) — for asserting the *real* dispatch count vs. todo items named after sub-agents.
+- `Result`: `.assert_success()`, `.assert_transcript_contains(s)`, `.assert_tool_called(name)`,
+  `.assert_subagent_dispatched(agent_type)`, `.assert_dispatch_count_max(n)`,
+  `.assert_artifact_json(rel_path, predicate)`; plus `.result`, `.out_dir`, `.work_dir`, `.outputs_dir`
+  (the `mnt/outputs` deliverable path), `.subagents`, `.failed_assertions()`, and from the json envelope
+  `.ok` (overall pass) / `.error` (`{category, message, hint?}` if the run threw).
+
+Resume example (deck-review's checkpoint gate):
+```python
+sid = "deck-acme"
+cowork.skill(PLUGIN).run("Review this pitch deck.", upload="decks/acme.pdf",
+                         session_id=sid, fidelity="cowork")          # run 1: ingests + hits the gate
+# … answer the gate (write gate_state.json, or carry the RUN_ID in the next prompt) …
+r = cowork.skill(PLUGIN).run("Continue review for RUN_ID …; stage confirmed.",
+                             session_id=sid, resume=True, fidelity="cowork")  # run 2: resumes → report
+assert len([s for s in r.subagents]) >= 1
+```
+
+## Sharp edges
+
+- **`assert_artifact_json(rel_path, …)`** resolves under `.work_dir` — the `mnt/` root the json
+  envelope reports (`workDir`), which is fidelity-correct (sandboxed tiers nest under
+  `work/session/mnt`; `protocol` flattens under `work/`). `rel_path` is e.g.
+  `"artifacts/<slug>/sizing.json"` (a skill's structured output usually lands under `mnt/artifacts/`, while
+  `mnt/outputs/` holds the user-visible deliverable). This Python predicate (full callable, autocomplete,
+  `print(d)`) is the **structured-content** path — strictly richer than a YAML scenario's content
+  assertions; prefer it over a YAML predicate when you're already in Python. Use **scenario YAML** instead
+  when you want a portable, toolchain-free regression suite run via `cowork-harness run` (see
+  [docs/scenario.md](../docs/scenario.md) → "Scenario YAML vs the pytest lane").
+- **`on_unanswered=` takes `fail | first | prompt`.** `on_unanswered="llm"` is **rejected** by the CLI
+  (exit 2) — the LLM terminal isn't exposed through this flag. To answer live questions from the lane, pass
+  `decider_cmd=` (e.g. a `serve_decider(fn)` helper, above); to let a scenario use the model, set
+  `on_unanswered: llm` in the scenario **YAML** (flags the run non-deterministic).
+- Each call shells out to node (and Docker) — treat this as a slow lane, not per-keystroke.

@@ -1,0 +1,14 @@
+# Session for the graceful-degradation example (scenarios/csv-fx-normalize.yaml).
+# Mounts the csv-fx-normalize skill and uploads a EUR-denominated CSV.
+# Deliberately NO egress.extra_allow: the FX host (api.frankfurter.app) stays blocked,
+# so the run exercises the skill's offline fallback under Cowork's default-deny egress —
+# which is the whole point. The denied fetch is real skill behavior, not a synthetic probe.
+model: claude-opus-4-8
+effort: high
+permission_mode: default
+permission_parity: cowork
+uploads:
+  - ../data/sales_eur.csv
+plugins:
+  local_plugins:
+    - ../skills/csv-fx-normalize

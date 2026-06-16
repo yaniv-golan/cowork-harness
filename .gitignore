@@ -1,0 +1,16 @@
+node_modules/
+dist/
+runs/
+cassettes/
+.claude/skills/*-workspace/
+*.log
+.DS_Store
+docs/internal/
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+*.tgz
+.env
+.env.*
+!.env.example

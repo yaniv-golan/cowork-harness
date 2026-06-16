@@ -1,0 +1,31 @@
+# L1 parity network: a DEFAULT-DENY boundary that mirrors Cowork's gVisor egress.
+#
+#   cowork-net  : internal=true  -> agents have NO route off-box except via the proxy
+#   egress-out  : external       -> only the proxy is dual-homed onto it
+#
+# Result: the agent container can reach ONLY allowlisted hosts, and ONLY through the
+# proxy. Raw/direct egress is impossible (no default route). This reproduces the
+# constraint, not just the policy. Bring the proxy up before a suite:
+#
+#   COWORK_ALLOW="api.anthropic.com,*.claude.ai,sentry.io" \
+#     docker compose -f docker/compose.yml up -d egress-proxy
+#   cowork-harness run scenarios/
+#
+name: cowork-harness
+
+networks:
+  cowork-net:
+    name: cowork-net
+    internal: true        # <-- the boundary: no external connectivity for agents
+  egress-out:
+    name: cowork-egress-out
+
+services:
+  egress-proxy:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.proxy
+    networks: [cowork-net, egress-out]   # dual-homed: reachable by agents, can reach allowlisted hosts
+    environment:
+      COWORK_ALLOW: "${COWORK_ALLOW:-api.anthropic.com,a-api.anthropic.com,*.claude.ai,sentry.io,statsig.anthropic.com}"
+      PORT: "8080"

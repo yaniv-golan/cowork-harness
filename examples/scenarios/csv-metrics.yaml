@@ -1,0 +1,40 @@
+# Worked example: a non-trivial skill that runs a BUNDLED producer script end-to-end.
+#
+# Unlike example-pdf-skill.yaml (where the agent does the work itself and the skill is
+# a placeholder), here the csv-metrics skill carries a real script (scripts/metrics.py).
+# The agent loads the skill, runs that script on the uploaded CSV — stdlib-only, so it
+# works under default-deny egress — and writes a structured + prose deliverable to
+# outputs/. The assertions verify the things you can only check by actually running:
+# the skill loaded, the producer ran (Bash), and both user-visible artifacts exist.
+#
+# Run:  cowork-harness run examples/scenarios/csv-metrics.yaml
+# Structured-content checks (e.g. amount.sum == 4200) live in the pytest lane:
+# python/test_csv_metrics_lane.py (assert_artifact_json over outputs/metrics.json).
+baseline: latest
+session: ../sessions/csv-metrics.yaml
+fidelity: container
+
+prompt: |
+  Use the csv-metrics skill to analyze sales.csv from your uploads. Run the skill's
+  bundled producer to write outputs/metrics.json and outputs/summary.md, then reply
+  with a one-line confirmation that includes the path to the metrics file.
+
+answers:
+  - when_question: ".*" # this skill shouldn't ask; catch-all keeps the run deterministic
+    choose: "Proceed"
+  - when_tool: Skill
+    decide: allow
+  - when_tool: Write
+    decide: allow
+  - when_tool: Bash # allow running the producer; forbid network / installs / deletes
+    allow_if: "!command.includes('rm') && !command.includes('curl') && !command.includes('pip')"
+    else: deny
+
+assert:
+  - result: success
+  - tool_called: Skill # the skill actually loaded
+  - tool_called: Bash # the bundled producer actually ran
+  - user_visible_artifact: outputs/metrics.json # structured deliverable, user-visible
+  - user_visible_artifact: outputs/summary.md # prose deliverable, user-visible
+  - transcript_matches: 'metrics\.json' # the agent reported the deliverable path
+  - no_delete_in_outputs: true # nothing deleted the deliverable

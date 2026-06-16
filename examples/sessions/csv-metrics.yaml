@@ -1,0 +1,14 @@
+# Session for the worked end-to-end example (examples/scenarios/csv-metrics.yaml).
+# Mounts the csv-metrics skill and uploads the CSV it analyzes.
+# NOTE: no egress.extra_allow — the skill's producer is stdlib-only, so the whole
+# run completes under Cowork's default-deny egress. That offline-by-design property
+# is the point; if the producer needed pypi/network, the run would fail here, faithfully.
+model: claude-opus-4-8
+effort: high
+permission_mode: default
+permission_parity: cowork
+uploads:
+  - ../data/sales.csv
+plugins:
+  local_plugins:
+    - ../skills/csv-metrics

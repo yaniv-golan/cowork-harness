@@ -1,0 +1,11 @@
+# A reusable --answer-policy file: the same regex→label rules a scenario's `answers:` block uses,
+# pulled out so several `cowork-harness skill` invocations can share one set of known gates.
+# Shape: a bare list of {when_question, choose} rules (an `{answers: [...]}` doc is also accepted).
+# `when_question` is a case-insensitive regex on the question text; `choose` is the option label.
+#
+#   cowork-harness skill examples/skills/my-pdf-skill --answer-policy examples/answer-policies/demo.yaml
+#
+- when_question: "output format|which format"
+  choose: "Markdown"
+- when_question: "confirm.*stage|detected stage"
+  choose: "Looks right"

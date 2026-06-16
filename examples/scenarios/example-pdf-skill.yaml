@@ -1,0 +1,31 @@
+# Example scenario: a prompt + scripted answers + assertions, run against a session.
+# The session (model, folders, plugins, mcp, egress) lives in examples/sessions/default.yaml.
+# Run:  cowork-harness run examples/scenarios/example-pdf-skill.yaml
+baseline: latest # platform baseline (auto-synced from Desktop)
+session: ../sessions/default.yaml # everything you'd set in Cowork pre-prompt
+fidelity: container # protocol | container | microvm
+
+prompt: |
+  Read report.pdf from your uploads, summarize it, and write the action items
+  to outputs/actions.md as a markdown checklist.
+
+# Scripted answers — same can_use_tool control channel Desktop's question UI uses.
+answers:
+  - when_question: "format|markdown|output style" # AskUserQuestion (regex, case-insensitive)
+    choose: "Markdown checklist"
+  - when_tool: Write
+    decide: allow
+  - when_tool: Bash
+    allow_if: "!command.includes('rm') && !command.includes('curl')"
+    else: deny
+
+# No egress assertion here: this prompt never makes a network call, so there is nothing to
+# deny — asserting egress_denied without a real attempt would be a latent false-green. For a
+# genuine egress-denied test backed by real skill behavior, see scenarios/csv-fx-normalize.yaml.
+
+assert:
+  - result: success
+  - file_exists: outputs/actions.md
+  - transcript_contains: "action items"
+  - tool_called: Write
+  - tool_not_called: WebFetch

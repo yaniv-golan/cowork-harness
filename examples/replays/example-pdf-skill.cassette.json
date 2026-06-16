@@ -1,0 +1,33 @@
+{
+  "scenario": {
+    "name": "example-pdf-skill",
+    "baseline": "latest",
+    "session": "(inline)",
+    "fidelity": "container",
+    "prompt": "Convert the report to PDF format",
+    "answers": [],
+    "expect_denied": [],
+    "assert": [
+      { "transcript_contains": "I'll convert your report to PDF" },
+      { "tool_called": "Write" },
+      { "question_asked": "Format" },
+      { "gate_answers_delivered": true },
+      { "result": "success" }
+    ]
+  },
+  "events": [
+    "{\"type\":\"system\",\"subtype\":\"init\",\"tools\":[\"Write\",\"Read\",\"AskUserQuestion\"],\"cwd\":\"/sessions/example\"}",
+    "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"I'll convert your report to PDF format. First, let me ask which output format you prefer.\"}]}}",
+    "{\"type\":\"control_request\",\"request_id\":\"req-q1\",\"request\":{\"subtype\":\"can_use_tool\",\"tool_name\":\"AskUserQuestion\",\"tool_use_id\":\"toolu_GATE1\",\"input\":{\"questions\":[{\"question\":\"Which format would you like?\",\"header\":\"Format\",\"options\":[{\"label\":\"PDF\"},{\"label\":\"DOCX\"}]}]}}}",
+    "{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"toolu_GATE1\",\"is_error\":false,\"content\":\"PDF\"}]}}",
+    "{\"type\":\"control_request\",\"request_id\":\"req-p1\",\"request\":{\"subtype\":\"can_use_tool\",\"tool_name\":\"Write\",\"input\":{\"file_path\":\"output/report.pdf\",\"content\":\"(pdf content)\"}}}",
+    "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"id\":\"toolu_WRITE1\",\"name\":\"Write\",\"input\":{\"file_path\":\"output/report.pdf\",\"content\":\"(pdf content)\"}}]}}",
+    "{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"toolu_WRITE1\",\"is_error\":false,\"content\":\"File written successfully\"}]}}",
+    "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Done! Your report has been converted to PDF and saved to output/report.pdf.\"}]}}",
+    "{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false}"
+  ],
+  "controlOut": [
+    "{\"type\":\"control_response\",\"response\":{\"subtype\":\"success\",\"request_id\":\"req-q1\",\"response\":{\"behavior\":\"allow\",\"updatedInput\":{\"questions\":[{\"question\":\"Which format would you like?\",\"header\":\"Format\",\"options\":[{\"label\":\"PDF\"},{\"label\":\"DOCX\"}]}],\"answers\":{\"Which format would you like?\":\"PDF\"}}}}}",
+    "{\"type\":\"control_response\",\"response\":{\"subtype\":\"success\",\"request_id\":\"req-p1\",\"response\":{\"behavior\":\"allow\",\"updatedInput\":{\"file_path\":\"output/report.pdf\",\"content\":\"(pdf content)\"}}}}"
+  ]
+}

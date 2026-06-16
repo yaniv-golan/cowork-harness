@@ -1,0 +1,17 @@
+# Acceptance (B8): the staged agent in cowork mode loads a real local skill and can
+# run its python3 producer toolchain — proves Phase-1 false-reds are fixed.
+baseline: latest
+session: ../sessions/skill.yaml
+fidelity: container
+prompt: |
+  First run this bash command and report its output: python3 --version
+  Then use the Skill tool to load the "my-pdf-skill" skill (read its SKILL.md).
+  Confirm both succeeded once you're done.
+answers:
+  - when_question: ".*"
+    choose: "Proceed"
+assert:
+  - result: success
+  - tool_called: Bash
+  - tool_called: Skill
+  - transcript_contains: "python"

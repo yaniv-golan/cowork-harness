@@ -1,0 +1,46 @@
+# Session setup — mirrors everything you set in Cowork BEFORE the first prompt.
+# Author + maintain one of these per project; scenarios reference it via `session:`.
+# (Separate from baselines/desktop-*.json, which is the auto-synced runtime baseline.)
+
+# --- model & reasoning (Cowork model picker + toggles) ---
+model: claude-opus-4-8 # setModel; omit to use the agent default
+effort: high # setEffort: low | medium | high | xhigh
+max_thinking_tokens: 8000 # session thinking budget (the boolean thinking toggle is inert)
+permission_mode: default # setPermissionMode: default | acceptEdits | plan | bypassPermissions
+permission_parity: cowork # cowork (allow unscripted tool calls, Cowork default) | strict (deny unscripted)
+
+# --- work folders / projects (Cowork "add folder" / Spaces) -> mnt/.projects/<id> ---
+folders:
+  - { from: ../data/project, to: proj1, mode: rwd }
+trusted_folders: # localAgentModeTrustedFolders (mount without a trust prompt)
+  - ../data/project
+auto_mount_folders: false # autoMountFolders
+
+# --- files uploaded before the first prompt -> mnt/uploads ---
+uploads:
+  - ../data/report.pdf
+
+# --- discovery: marketplaces / plugins / skills / mcp ---
+# Defaults reproduce the in-VM claude-code roots; every field is an override knob.
+plugins:
+  config_dir: null # CLAUDE_CONFIG_DIR; null = harness builds a clean managed dir
+  marketplaces: # plugin_marketplaces (git URLs or local paths)
+    - https://github.com/anthropics/claude-code.git
+  # local_marketplaces: ["../my-marketplace"]  # LOCAL marketplace dirs (each with a marketplace.json)
+  enabled: # enabledPlugins (name@marketplace)
+    - my-pdf-skill@local
+  local_plugins: # host plugin dirs -> mnt/.local-plugins/cache (marketplace-style)
+    - ../skills/my-pdf-skill
+  remote_plugins: [] # host plugin dirs -> mnt/.remote-plugins (org-remote-style)
+
+skills:
+  local: [] # extra host skill dirs -> CLAUDE_CONFIG_DIR/skills
+
+mcp:
+  config: null # --mcp-config <file> (a standard mcpServers JSON); e.g. ../data/mcp.json
+  enabled: [] # enabledMcpjsonServers
+
+# --- network (Cowork egress, pre-prompt) ---
+egress:
+  extra_allow: [] # added to the synced allowlist for this session
+  unrestricted: false # true == Cowork "*" (allow all)

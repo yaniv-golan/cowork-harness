@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cowork-harness"
+# Decoupled from the npm package version (also "cowork-harness", different registry) — this is just
+# the pytest helper module. Bump independently; there is no automated sync.
+version = "0.1.0"
+description = "pytest helper for the cowork-harness (the `cowork` lane)"
+requires-python = ">=3.9"
+dependencies = []
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[tool.setuptools]
+# Flat layout: ship ONLY the helper module. Without this, setuptools auto-discovery trips over the
+# sibling test_*.py top-level modules ("Multiple top-level modules discovered in a flat-layout") and
+# `pip install -e ./python` fails.
+py-modules = ["cowork_harness"]
+
+[tool.pytest.ini_options]
+markers = [
+  "cowork: opt-in lane that drives the cowork-harness (spawns node + Docker)",
+]
+# Default: run only non-cowork tests in the fast loop. Run the lane with `pytest -m cowork`.
+addopts = "-m 'not cowork'"

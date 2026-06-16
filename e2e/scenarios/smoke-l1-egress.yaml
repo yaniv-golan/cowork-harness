@@ -1,0 +1,14 @@
+# L1 + egress assertion: agent reaches inference via the allowlist proxy.
+baseline: latest
+session: ../sessions/minimal.yaml
+fidelity: container
+prompt: |
+  Call the AskUserQuestion tool to ask which fruit I prefer: Mango or Kiwi.
+  After I answer, reply with exactly: "You picked <fruit>." and nothing else.
+answers:
+  - when_question: "fruit|prefer"
+    choose: "Mango"
+assert:
+  - result: success
+  - transcript_contains: "Mango"
+  - egress_allowed: api.anthropic.com # proven via the per-run sidecar proxy log

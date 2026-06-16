@@ -1,0 +1,1129 @@
+#!/usr/bin/env node
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, writeSync, existsSync } from "node:fs";
+import { join, basename, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { parse as parseYaml } from "yaml";
+import { Scenario, AnswerRule, type RunResult } from "./types.js";
+import { loadBaseline, BASELINES_DIR } from "./baseline.js";
+import { loadSession, resolveSessionPaths } from "./session.js";
+import { executeScenario, parseScenarioFile, UnansweredError, BoundaryError, type ExecuteOptions } from "./run/execute.js";
+import { ScriptedDecider, ExternalDecider, LlmDecider, ABSTAIN, type OnUnanswered } from "./decide/decider.js";
+import { claudeCliComplete } from "./decide/llm-transport.js";
+import type { DecisionRequest } from "./agent/session.js";
+import { vmInit, vmDelete, vmStatus, vmPrune, instanceName } from "./runtime/lima.js";
+import { sync } from "./sync/cowork-sync.js";
+import { runBoundaryChecks, formatBoundary } from "./boundary.js";
+import { cmdChat } from "./run/chat.js";
+import { cmdRecord, cmdReplay } from "./run/cassette.js";
+import { loadDotenv } from "./dotenv.js";
+import { makeRenderer, renderStart, renderFooter, startHeartbeat, type RenderPlan } from "./run/renderer.js";
+import { resolveEventsFile, buildTrace, formatTrace, buildGateTrace, formatGateTrace } from "./run/trace-view.js";
+import { pkgVersion, jsonEnvelope, jsonError, type ErrCategory } from "./run/envelope.js";
+import { spawnChannel, fileChannel, streamGates, answerGate, readGate, type DecisionChannel } from "./decide/external-channel.js";
+
+// Synchronous writes (fd 1/2): `process.stdout.write` + `process.exit()` truncates on a PIPE, which
+// would lose the json envelope for any agent/CI that pipes us. writeSync flushes before exit.
+const out = (s: string) => writeSync(1, s + "\n"); // machine (stdout)
+const log = (s: string) => writeSync(2, s + "\n"); // human (stderr)
+
+const HELP = `cowork-harness <command>   (v${"$VERSION"})
+
+  skill <folder> "<prompt>"    test a LOCAL skill folder directly (copied fresh each run)
+      [--prompt-file <path>]   read the prompt verbatim from a file (bypasses the shell — no $-expansion)
+      [--fidelity protocol|container|microvm|hostloop|cowork]  (default container)
+      [--plugin <dir>]… [--marketplace <dir> --enable name@mkt]   extra plugin/marketplace sources
+      [--answer "<question-regex>=<choice>"]   scripted AskUserQuestion answer (repeatable)
+      [--on-unanswered fail|prompt|first]  policy for unscripted questions (default: adaptive — prompt on a TTY, fail when piped/CI)
+      [--decider-llm [--intent "…"]]   answer LIVE questions with a model (state test intent in one line)
+      [--decider-cmd '<helper>']   …or via a spawned helper (custom logic)
+      [--decider-dir <dir>]   …or in-band from the driving agent (arm a Monitor; see 'skill --help')
+      [--upload <file>]… [--folder <dir>]…   attach files / connect folders (mnt/uploads, mnt/.projects)
+      [--session-id <id> [--resume]]   pin + resume a session (for gated, checkpoint-and-resume skills)
+      [--output-format text|json] [--model <id>] [--keep] [--dry-run]
+      (run 'skill --help' for the full flag reference)
+
+  run <scenario.yaml | dir/>   run one scenario or every *.yaml in a dir
+      [--on-unanswered fail|first]   (run rejects 'prompt' — would break determinism)
+      [--output-format text|json] [--quiet|-q] [--verbose|-V]
+      (run 'run --help' for the full flag reference)
+  chat <folder>                interactive multi-turn REPL against a skill (TTY); --raw for native
+  record <scenario.yaml>       run + save a control-protocol cassette
+      [--out <file>]           cassette path (default: cassettes/<scenario-name>.cassette.json)
+  replay --cassette <file>     deterministic protocol-replay of a cassette (no token) [--output-format json]
+  trace <run-id | dir | path>  digest a run's events.jsonl (tools+result status, dispatches, decisions)
+      [--tools]  tool/dispatch rows only   [--gates]  gate lifecycle (question→answer→delivered)
+      [--output-format json]  structured rows
+  decide                       VALIDATE a decider against a sample question in ~2s (no run)
+      (--decider-cmd '<helper>' | --decider-llm [--intent …] | --answer "rx=c" | --answer-policy <yaml>)
+      [--question "<text>"] [--option <label>]…   override the sample question
+  gates <dir> [--follow]       in-band gate stream (for --decider-dir): one JSON line per pending gate
+                               + a terminal {"done":true}. Point a single Monitor at this.
+  answer <dir> --gate <N>      answer an in-band gate (atomic write): --choose <label> | --answer "q=c"
+  sync [--diff]                derive/refresh a platform baseline from the live Desktop install
+  list                         list available platform baselines
+  boundary-check [baseline]    prove the sandbox enforces Cowork's limitations
+  vm <init|status|delete|prune>  manage the L2 Apple-VZ microVM (fidelity: microvm); prune drops orphaned VMs
+
+  Global:  --dotenv <path>     load a .env before the command (host-side creds; never mounted).
+           Auth resolves from process.env > --dotenv > ./.env > <install>/.env.
+  --version, -v                print version        --help, -h    print this help`;
+
+const SKILL_HELP = `cowork-harness skill <plugin-folder> "<prompt>"
+
+  Run a LOCAL skill/plugin folder against the staged Cowork agent. The folder is copied fresh into the
+  session on every run — no install, marketplace registration, or version bump.
+
+Source (at least one):
+  <plugin-folder>                  dir containing .claude-plugin/plugin.json
+  --plugin <dir>                   extra plugin source (repeatable)
+  --marketplace <dir> --enable name@mkt    load skills via a marketplace.json
+
+Files (for skills that need an attached file, e.g. deck-review):
+  --upload <path>                  mount a file at mnt/uploads/<name> — the "attach a file" path (repeatable)
+  --folder <dir>                   mount a folder at mnt/.projects/<id> — a connected repo/space (repeatable)
+
+Session persistence (for gated skills that checkpoint + resume):
+  --session-id <id>                pin a stable session (persists the work dir + the agent's session)
+  --resume                         continue a prior --session-id session (reuses its work dir, so any
+                                   skill-written checkpoint state + outputs survive; passes the agent's
+                                   native --resume so it reloads the conversation)
+
+Prompt (one of):
+  "<prompt>"                       inline — MIND SHELL EXPANSION: a literal $ in double quotes is
+                                   eaten by the shell. Single-quote it, or use --prompt-file.
+  --prompt-file <path>             read the prompt verbatim from a file (raw bytes; no shell parsing)
+
+Fidelity  --fidelity <tier>       (default: container)
+  protocol    L0 — no sandbox, control protocol only
+  container   L1 — Docker + per-run default-deny egress proxy (CI-native; fast)
+  microvm     L2 — Apple-VZ Lima microVM + guest firewall
+  hostloop    Cowork's production split-execution (file tools on host, shell/web via the workspace MCP)
+  cowork      auto-pick host-loop vs container the way real Cowork does (via the synced gate)
+
+Questions:
+  --answer "<q-regex>=<choice>"    pre-answer a matching AskUserQuestion (repeatable)
+  --answer-policy <yaml>           a reusable file of the same regex→choice rules (a bare list, or an
+                                   {answers: [...]} doc) — for skills with several known gates
+  --on-unanswered <policy>         what to do with an UNscripted question (default: adaptive)
+      fail     error + print the exact --answer to add (default when piped / CI)
+      prompt   ask at the TTY (default when a human is attached)
+      first    pick option 1, loudly warn — then the footer prints the --answer to lock it in
+      (the footer always echoes auto-answered questions as copy-pasteable --answer lines)
+      (to answer LIVE questions, use --decider-llm / --decider-cmd / --decider-dir below)
+  --decider-llm [--intent "<one line>"]   answer LIVE questions with a small model (the ergonomic
+                                   default for agent-driven runs: state the test's intent once instead of
+                                   writing a helper). Picks an option by label per question; an out-of-set
+                                   answer FAILS LOUD. NON-deterministic — the footer flags the run so a
+                                   green isn't mistaken for a scripted pass; pin with --answer for CI.
+                                   (Uses the host 'claude -p' on a small model — COWORK_HARNESS_DECIDER_MODEL.)
+  --decider-cmd '<helper>'         answer the LIVE question via a spawned helper (for custom logic). The
+                                   helper reads a {"type":"decision_request",…} line on stdin and writes
+                                   back {"answers":{"<q>":"<label or 1-based index>"}} (MUST flush per
+                                   line). Carries a reply_with template + a scrubbed transcript context.
+                                   The helper owns its own pipes → the CLI's stdout stays free, so this
+                                   composes with --output-format json.
+  --decider-dir <dir>              answer LIVE questions IN-BAND from the DRIVING agent (run the harness
+                                   in the background; arm a Monitor on <dir>). Each gate is written to
+                                   <dir>/req-N.json; write the answer to <dir>/resp-N.json (temp+rename).
+                                   stdout stays free → composes with --output-format json. The run is marked
+                                   non-deterministic. Use a FRESH empty dir per run. (See docs/decider-dir.md.)
+
+Output:
+  --output-format text|json        text = live stream + footer (default); json = one stdout envelope
+  --quiet, -q                      verdict footer only            --verbose, -V   + thinking/tool inputs/sub-agent tree
+  --keep                           print the run dir + deliverable path (runs are always kept on disk)
+  --model <id>                     override the session model
+  --dry-run                        resolve + print the plan, don't run        NO_COLOR=1   disable ANSI
+
+Long runs:  an idle "still running" heartbeat prints on stderr after ~30s of silence.
+            COWORK_HARNESS_NO_HEARTBEAT=1 disables it; COWORK_HARNESS_HEARTBEAT_MS tunes the interval.
+
+Auth:  CLAUDE_CODE_OAUTH_TOKEN (or ANTHROPIC_API_KEY) from process.env > --dotenv <path> > ./.env >
+       <install>/.env. So you can run from any directory and still pick up the install's credentials.
+
+Exit codes:  0 pass · 1 assertion/agent failure · 2 usage / unanswered-under-fail / boundary / runtime.`;
+
+const RUN_HELP = `cowork-harness run <scenario.yaml | dir/>
+
+  Run one authored scenario, or every *.yaml/*.yml in a directory, with assertions and a CI-ready exit
+  code. Verdict-first: on FAIL the failing transcript is printed inline (no spelunking runs/…).
+
+Input policy:
+  --on-unanswered fail|first       policy for an unscripted question (default: fail — deterministic).
+                                   'prompt' is rejected (it would break reproducibility).
+      fail     error + the exact --answer to add (the CI default)
+      first    pick option 1, loudly warn; the footer echoes it as a --answer line to lock in
+  --decider-cmd '<helper>'         answer live questions via a spawned helper (see 'skill --help')
+  --decider-dir <dir>              answer live questions in-band from the driving agent (see 'skill --help')
+  (run omits --decider-llm by design — scenarios pin answers for reproducibility; a scenario may still
+   opt into the model with 'on_unanswered: llm' in its YAML, which flags the run non-deterministic)
+  (per-scenario answers/on_unanswered in the YAML take precedence where set)
+
+Output:
+  --output-format text|json        text = verdict + failing transcript (default); json = stdout envelope
+  --quiet, -q                      verdict only            --verbose, -V   live stream + per-tool markers
+  NO_COLOR=1                       disable ANSI on stderr
+
+Long runs:  an idle "still running" heartbeat prints on stderr after ~30s of silence
+            (COWORK_HARNESS_NO_HEARTBEAT=1 / COWORK_HARNESS_HEARTBEAT_MS to disable/tune).
+
+Exit codes:  0 all pass · 1 any assertion/agent failure · 2 usage / unanswered-under-fail / boundary.`;
+
+function printHelp() {
+  log(HELP.replace("$VERSION", pkgVersion()));
+}
+function hasHelp(args: string[]): boolean {
+  return args.includes("--help") || args.includes("-h");
+}
+
+async function main() {
+  const argv = process.argv.slice(2);
+
+  // `--dotenv <path>` is a GLOBAL flag — parse + strip it before command dispatch so a skill run from
+  // any directory can point at the install's credentials. Credentials then resolve in priority order:
+  // process.env (exported wins) > --dotenv > ./.env (cwd) > <install>/.env (package root). loadDotenv
+  // only fills UNDEFINED keys, so calling it in this order yields exactly that precedence.
+  // (NOT `--env-file`: Node reserves that name and consumes it before this code runs.)
+  const envFileIdx = argv.indexOf("--dotenv");
+  const explicitEnvFile = envFileIdx >= 0 ? argv[envFileIdx + 1] : undefined;
+  // #4: bounds-check the value, reject a command name mistaken as the path (`--dotenv run x.yaml`
+  // would treat `run` as the dotenv path and dispatch `x.yaml`), and FAIL when an explicitly named
+  // file is absent — an explicitly-requested credential file silently ignored is a footgun.
+  if (envFileIdx >= 0) {
+    if (explicitEnvFile === undefined) {
+      log("--dotenv requires a path (none provided)");
+      process.exit(2);
+    }
+    const COMMANDS = [
+      "skill",
+      "run",
+      "chat",
+      "record",
+      "replay",
+      "trace",
+      "decide",
+      "gates",
+      "answer",
+      "sync",
+      "list",
+      "boundary-check",
+      "vm",
+    ];
+    if (COMMANDS.includes(explicitEnvFile)) {
+      log(`--dotenv requires a path but got the command "${explicitEnvFile}" — write \`--dotenv <path> ${explicitEnvFile} …\``);
+      process.exit(2);
+    }
+    argv.splice(envFileIdx, 2);
+    if (!existsSync(explicitEnvFile)) {
+      log(`--dotenv file not found: ${explicitEnvFile}`);
+      process.exit(2);
+    }
+  }
+
+  const packageRootEnv = fileURLToPath(new URL("../.env", import.meta.url)); // dist/cli.js → <install>/.env
+  const sources = [...(explicitEnvFile ? [explicitEnvFile] : []), resolve(process.cwd(), ".env"), packageRootEnv];
+  const loadedEnv: string[] = [];
+  const seenSources = new Set<string>();
+  for (const f of sources) {
+    const key = resolve(f);
+    if (seenSources.has(key)) continue; // don't double-load when cwd === install dir
+    seenSources.add(key);
+    loadedEnv.push(...loadDotenv(f));
+  }
+  // Only surface env-loading when it's non-obvious — an explicit --dotenv, or debug. The common
+  // auto-load (./.env / install .env) stays silent: auth either works or fails loudly. (Feedback: the
+  // line was repetitive noise across many invocations.)
+  if (loadedEnv.length && (explicitEnvFile || process.env.COWORK_HARNESS_DEBUG))
+    log(`[env] loaded ${loadedEnv.length} var(s): ${loadedEnv.join(", ")}`);
+
+  const [cmd, ...rest] = argv;
+  if (cmd === "--version" || cmd === "-v") return void out(pkgVersion());
+  if (cmd === undefined || cmd === "--help" || cmd === "-h" || cmd === "help") return printHelp();
+  switch (cmd) {
+    case "run":
+      return cmdRun(rest);
+    case "sync":
+      return cmdSync(rest);
+    case "list":
+      return cmdList();
+    case "boundary-check":
+      return cmdBoundary(rest);
+    case "vm":
+      return cmdVm(rest);
+    case "skill":
+      return cmdSkill(rest);
+    case "chat":
+      return cmdChat(rest);
+    case "record":
+      return cmdRecord(rest);
+    case "replay":
+      return cmdReplay(rest);
+    case "trace":
+      return cmdTrace(rest);
+    case "decide":
+      return cmdDecide(rest);
+    case "gates":
+      return cmdGates(rest);
+    case "answer":
+      return cmdAnswer(rest);
+    default:
+      log(`unknown command: ${cmd}\n`);
+      printHelp();
+      process.exit(2);
+  }
+}
+
+interface CommonFlags {
+  onUnanswered?: OnUnanswered;
+  output: "text" | "json";
+  quiet: boolean;
+  verbose: boolean;
+  deciderCmd?: string; // --decider-cmd: spawn a helper that answers each decision (external channel B)
+  deciderDir?: string; // --decider-dir: file-rendezvous for a driving agent's Monitor (external channel C)
+}
+/** Shared json-output predicate so the parser and the top-level catch can never drift. */
+function isJsonOutput(args: string[]): boolean {
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--output-format" && args[i + 1] === "json") return true;
+    if (args[i] === "--output-format=json") return true;
+  }
+  return false;
+}
+/**
+ * #58: bounds-checked reader for value-taking flags. `args[++i]` with no following token silently
+ * yields `undefined` (e.g. a trailing `--decider-cmd` at the end of argv), which then becomes a
+ * broken flag value. Read the next token explicitly and, when it's absent, fail with the established
+ * usage-error exit code (2). takeCommonFlags can run before --output-format json is resolved, so the error
+ * goes to stderr unconditionally (machine callers piping us still see a non-zero exit).
+ */
+function flagValue(args: string[], i: number, flag: string): string {
+  const v = args[i + 1];
+  if (v === undefined) {
+    log(`${flag} requires a value (none provided)`); // stderr usage error
+    process.exit(2);
+  }
+  return v;
+}
+
+/**
+ * Extract true positionals — args that are neither a flag nor the value consumed by a known
+ * value-taking flag. Fixes the `args.find((a) => !a.startsWith("--"))` idiom (#15/#16), which
+ * mistook a flag's value (e.g. the `1` in `--gate 1`, the `json` in `--output-format json`) for
+ * the positional. `valueFlags` lists the value-taking flags whose following token must be skipped.
+ */
+function positionals(args: string[], valueFlags: string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (valueFlags.includes(a)) {
+      i++; // skip the flag AND its value
+      continue;
+    }
+    if (a.startsWith("-")) continue; // any other (boolean) flag — skip just the flag
+    out.push(a);
+  }
+  return out;
+}
+
+function takeCommonFlags(args: string[]): { rest: string[]; flags: CommonFlags } {
+  const rest: string[] = [];
+  const flags: CommonFlags = { output: "text", quiet: false, verbose: false };
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "--on-unanswered") flags.onUnanswered = flagValue(args, i++, a) as OnUnanswered;
+    else if (a === "--output-format") {
+      // #2: validate the enum (and bounds-check the value). An invalid/missing value previously fell
+      // back to "text" silently (`--output-format xml` behaved as text; a trailing `--output-format` too).
+      const v = flagValue(args, i++, a);
+      if (v !== "text" && v !== "json") {
+        log(`--output-format must be "text" or "json" (got "${v}")`);
+        process.exit(2);
+      }
+      flags.output = v;
+    } else if (a === "--output-format=json") flags.output = "json";
+    else if (a === "--output-format=text") flags.output = "text";
+    else if (a === "--quiet" || a === "-q") flags.quiet = true;
+    else if (a === "--verbose" || a === "-V") flags.verbose = true;
+    else if (a === "--decider-cmd") flags.deciderCmd = flagValue(args, i++, a);
+    else if (a === "--decider-dir") flags.deciderDir = flagValue(args, i++, a);
+    else rest.push(a);
+  }
+  return { rest, flags };
+}
+
+/** Resolve the output/render plan for a command (unified output model). */
+function resolveOutput(
+  command: "run" | "skill",
+  flags: CommonFlags,
+): { json: boolean; render: boolean; footer: boolean; plan: RenderPlan } {
+  const color = process.stderr.isTTY === true && !process.env.NO_COLOR;
+  if (flags.output === "json")
+    return { json: true, render: false, footer: false, plan: { live: false, progress: false, verbose: false, color: false } };
+  if (flags.quiet) return { json: false, render: false, footer: true, plan: { live: false, progress: false, verbose: false, color } };
+  const verbose = flags.verbose;
+  // skill renders live ("show me what it did"); run is verdict-first (renderer buffers for the
+  // failure transcript; live/per-tool only under --verbose).
+  const live = command === "skill" ? true : verbose;
+  const progress = command === "skill" ? true : verbose;
+  return { json: false, render: true, footer: true, plan: { live, progress, verbose, color } };
+}
+
+/** Resolve the on_unanswered default for a command (input-and-interactivity plan §3). This is the choke
+ *  point BOTH run and skill pass through, so the removed/internal policy values are rejected here — they
+ *  can't silently degrade to `fail` (which would pass a no-gate run green under a bogus policy). */
+function resolvePolicy(command: "run" | "skill", flags: CommonFlags): OnUnanswered {
+  const json = flags.output === "json";
+  // `external` (the removed stdio channel) → `--decider-dir`/`--decider-cmd` subsume it.
+  if ((flags.onUnanswered as string) === "external")
+    fail(
+      command,
+      "usage",
+      "--on-unanswered external was removed. Use --decider-dir <dir> (the in-band file channel for a driving agent) or --decider-cmd '<helper>'.",
+      undefined,
+      json,
+    );
+  // The LLM decider's CLI spelling is --decider-llm; we reject the raw policy value on the CLI to keep deciders in the --decider-* family (the scenario-YAML spelling is on_unanswered: llm).
+  if ((flags.onUnanswered as string) === "llm")
+    fail(
+      command,
+      "usage",
+      '--on-unanswered llm is not a user flag. Use --decider-llm [--intent "<one line>"] to answer live questions with a model.',
+      undefined,
+      json,
+    );
+  if (flags.onUnanswered) {
+    // #3: validate the accepted set. `external`/`llm` are rejected above with redirect messages (the
+    // decider-orthogonality invariant); any OTHER bogus value (e.g. "banana") used to fall through here
+    // and pass unvalidated, with audit metadata reporting a nonsensical policy. Reject it loudly.
+    if (flags.onUnanswered !== "fail" && flags.onUnanswered !== "prompt" && flags.onUnanswered !== "first")
+      fail(
+        command,
+        "usage",
+        `--on-unanswered must be fail|prompt|first (got "${flags.onUnanswered}")`,
+        "for a model/external decider use --decider-llm, --decider-dir, or --decider-cmd",
+        json,
+      );
+    if (command === "run" && flags.onUnanswered === "prompt") {
+      log("run rejects --on-unanswered prompt (would break determinism). Use fail|first.");
+      process.exit(2);
+    }
+    return flags.onUnanswered;
+  }
+  if (command === "run") return "fail"; // scenarios are reproducible regression tests
+  // skill: adaptive — prompt if a human is at the TTY, else fail (CI/agent)
+  return process.stdin.isTTY && !process.env.CI ? "prompt" : "fail";
+}
+
+/** Resolve the external decider channel, if requested: `--decider-cmd` → a spawned helper, or
+ *  `--decider-dir` → a file rendezvous (the driving agent answers in-band). BOTH keep the CLI's stdout
+ *  FREE (the protocol is on the helper's pipes / on disk), so they compose with `--output-format json`.
+ *  Returns undefined when neither is set. */
+function resolveExternal(command: string, flags: CommonFlags): DecisionChannel | undefined {
+  if (flags.deciderDir != null && flags.deciderCmd != null)
+    fail(command, "usage", "--decider-dir conflicts with --decider-cmd (one terminal channel).", undefined, flags.output === "json");
+  if (flags.deciderDir != null) {
+    try {
+      return fileChannel(flags.deciderDir);
+    } catch (e) {
+      return fail(command, "usage", String((e as Error).message), undefined, flags.output === "json");
+    }
+  }
+  return flags.deciderCmd != null ? spawnChannel(flags.deciderCmd) : undefined;
+}
+
+/** The single error exit used by commands + the top-level catch. Every category → exit 2. */
+function fail(command: string, category: ErrCategory, message: string, hint: string | undefined, json: boolean): never {
+  if (json) out(jsonError(command, category, message, hint));
+  else {
+    log(message);
+    if (hint) log(hint);
+  }
+  process.exit(2);
+}
+
+/** Split a `--answer "<key>=<value>"` arg; the value rejoins on "=" so a choice may itself contain "=". */
+function splitEq(s: string | undefined): [string, string] {
+  const [k, ...r] = (s ?? "").split("=");
+  return [k, r.join("=")];
+}
+
+/** Load an `--answer-policy <yaml>` file → scripted rules. Same shape as a scenario `answers:` block (a
+ *  bare list, or an `{answers: [...]}` doc). Fails LOUD on a missing / unparseable / non-list file — a
+ *  malformed policy must NOT validate as "0 rules" (the user would discover it only when a gate goes
+ *  unanswered mid-run). */
+function loadAnswerPolicy(command: string, path: string, json: boolean): AnswerRule[] {
+  if (!existsSync(path)) fail(command, "usage", `--answer-policy file not found: ${path}`, undefined, json);
+  let parsed: unknown;
+  try {
+    parsed = parseYaml(readFileSync(path, "utf8"));
+  } catch (e) {
+    return fail(command, "usage", `cannot parse --answer-policy ${path}: ${String((e as Error).message)}`, undefined, json);
+  }
+  const rules = Array.isArray(parsed) ? parsed : ((parsed as { answers?: unknown })?.answers ?? []);
+  if (!Array.isArray(rules))
+    fail(command, "usage", `--answer-policy must be a list of rules (or an {answers: [...]} doc)`, undefined, json);
+  // #7: validate EACH rule against the AnswerRule schema instead of a blind cast. A malformed rule
+  // (non-object, wrong field types) must fail loud here, not silently validate as a rule that never
+  // matches and surfaces only as an unanswered gate mid-run.
+  const out: AnswerRule[] = [];
+  for (const [idx, raw] of (rules as unknown[]).entries()) {
+    const r = AnswerRule.safeParse(raw);
+    if (!r.success)
+      fail(
+        command,
+        "usage",
+        `--answer-policy rule #${idx + 1} is malformed: ${r.error.issues.map((i) => `${i.path.join(".") || "(root)"} ${i.message}`).join("; ")}`,
+        undefined,
+        json,
+      );
+    out.push(r.data);
+  }
+  return out;
+}
+
+/**
+ * The per-scenario run lifecycle shared by `cmdRun` and `cmdSkill` (they had drifted while hand-kept in
+ * sync). Owns ONLY the per-scenario spine: renderer + renderStart, the idle heartbeat (disabled under
+ * --output-format json OR an external channel), `executeScenario`, the `UnansweredError → fail` mapping, and the
+ * footer. The CALLER keeps everything that differs: the external channel's create/close (run reuses ONE
+ * across the file loop), the `--output-format json` envelope, and the exit code.
+ */
+async function runOneScenario(p: {
+  command: "run" | "skill";
+  scenario: Scenario;
+  label: string;
+  flags: CommonFlags;
+  policy: OnUnanswered;
+  externalChannel: DecisionChannel | undefined;
+  o: ReturnType<typeof resolveOutput>;
+  keep?: boolean;
+  extra?: Partial<ExecuteOptions>; // skill-only opts: session/sessionId/resume/llmIntent/nonDeterministicHint
+}): Promise<RunResult> {
+  const { command, scenario, label, flags, policy, externalChannel, o, keep, extra } = p;
+  const renderer = o.render ? makeRenderer(o.plan) : undefined;
+  if (!o.json && !flags.quiet) renderStart(label, scenario.fidelity, o.plan);
+  const start = Date.now();
+  const stopHeartbeat = o.json || externalChannel ? () => {} : startHeartbeat(renderer, o.plan, start);
+  let result: RunResult;
+  try {
+    result = await executeScenario(scenario, { ...extra, onUnanswered: policy, externalChannel, hooks: renderer ? [renderer] : [] });
+  } catch (e) {
+    if (e instanceof UnansweredError) {
+      const chan = flags.deciderDir ? "decider-dir" : flags.deciderCmd ? "decider-cmd" : policy;
+      const prefix = command === "run" ? `${scenario.name}: ` : ""; // run names the scenario; skill is single
+      fail(command, "unanswered", `${prefix}unanswered question (on_unanswered=${chan})`, e.hint, o.json);
+    }
+    throw e; // BoundaryError + generic → top-level catch (categorized there)
+  } finally {
+    stopHeartbeat();
+  }
+  // footer (stderr) and the json envelope (stdout, emitted by the caller) are mutually exclusive —
+  // resolveOutput makes `footer` false under --output-format json — so their relative order never matters.
+  if (o.footer) renderFooter(result, o.plan, { durationMs: Date.now() - start, renderer, keep });
+  return result;
+}
+
+async function cmdRun(rawArgs: string[]) {
+  if (hasHelp(rawArgs)) return void log(RUN_HELP);
+  const { rest: args, flags } = takeCommonFlags(rawArgs);
+  const target = args[0];
+  if (!target) fail("run", "usage", "usage: run <scenario.yaml | dir/>", undefined, flags.output === "json");
+  // `takeCommonFlags` strips known flags; `run` takes exactly one positional (a scenario file or a
+  // dir), so anything left over is unexpected. Reject it LOUDLY instead of silently dropping it —
+  // e.g. `--fidelity microvm` was a silent no-op (fidelity comes from the scenario's `fidelity:`
+  // field, not a flag). Runs before existsSync so the message is precise even for a bogus path.
+  const extra = args.slice(1);
+  if (extra.length)
+    fail(
+      "run",
+      "usage",
+      `unexpected argument(s): ${extra.join(" ")} — \`run\` takes one <scenario.yaml | dir/> plus common flags. Fidelity is set by the scenario's \`fidelity:\` field, not a flag.`,
+      undefined,
+      flags.output === "json",
+    );
+  // A non-existent path threw a raw ENOENT (exit 2 + stack) instead of a clean usage message.
+  if (!existsSync(target)) fail("run", "usage", `scenario path not found: ${target}`, undefined, flags.output === "json");
+  const files = statSync(target).isDirectory()
+    ? readdirSync(target)
+        .filter((f) => f.endsWith(".yaml") || f.endsWith(".yml"))
+        .sort() // deterministic batch order — readdirSync is FS/OS-dependent
+        .map((f) => join(target, f))
+    : [target];
+
+  const externalChannel = resolveExternal("run", flags); // created once; reused across scenarios
+  const policy = externalChannel ? "fail" : resolvePolicy("run", flags);
+  const o = resolveOutput("run", flags);
+  const results: RunResult[] = [];
+  try {
+    for (let i = 0; i < files.length; i++) {
+      const scenario = parseScenarioFile(files[i]);
+      // The CLI flag guard (resolvePolicy) rejects --on-unanswered prompt on `run`, but a committed
+      // scenario could smuggle it via its YAML and silently block/hang in non-TTY CI. Reject it here too.
+      if (scenario.on_unanswered === "prompt")
+        fail(
+          "run",
+          "usage",
+          `scenario "${scenario.name}" sets on_unanswered: prompt — rejected on \`run\` (breaks determinism / hangs in CI). Use fail|first, or --decider-dir/--decider-cmd.`,
+          undefined,
+          o.json,
+        );
+      const label = files.length > 1 ? `[${i + 1}/${files.length}] ${scenario.name}` : scenario.name;
+      results.push(await runOneScenario({ command: "run", scenario, label, flags, policy, externalChannel, o }));
+    }
+  } finally {
+    externalChannel?.close?.(); // ONE channel reused across the loop — close after ALL scenarios (not per-run)
+  }
+  // All channels keep stdout free → the normal output path (envelope under --output-format json, nothing
+  // otherwise). No terminal {type:"result"} line — `--decider-cmd`/`--decider-dir` compose with json.
+  if (o.json) out(jsonEnvelope("run", results));
+  const failed = results.filter((r) => r.assertions.some((a) => !a.pass) || r.result === "error");
+  process.exit(failed.length > 0 ? 1 : 0);
+}
+
+async function cmdSkill(rawArgs: string[]) {
+  if (hasHelp(rawArgs)) return void log(SKILL_HELP);
+  const { rest: args, flags } = takeCommonFlags(rawArgs);
+  const positional: string[] = [];
+  const answers: AnswerRule[] = [];
+  const extraPlugins: string[] = [];
+  const marketplaces: string[] = [];
+  const enables: string[] = [];
+  const uploads: string[] = [];
+  const folders: string[] = [];
+  let fidelity: "protocol" | "container" | "microvm" | "hostloop" | "cowork" = "container";
+  let model: string | undefined;
+  let promptFile: string | undefined;
+  let sessionId: string | undefined;
+  let answerPolicy: string | undefined;
+  let intent: string | undefined;
+  let deciderLlm = false;
+  let resume = false;
+  let dryRun = false;
+  let keep = false;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "--fidelity") {
+      fidelity = flagValue(args, i++, a) as typeof fidelity; // #58: bounds-checked
+      // #6: validate at parse time → category `usage`. Previously an invalid value was only rejected
+      // later by Scenario.parse (a Zod throw), which the top-level catch mapped to `internal` — a user
+      // mistake masquerading as a harness bug.
+      const FID = ["protocol", "container", "microvm", "hostloop", "cowork"];
+      if (!FID.includes(fidelity))
+        fail("skill", "usage", `--fidelity must be one of ${FID.join("|")} (got "${fidelity}")`, undefined, flags.output === "json");
+    } else if (a === "--model") model = flagValue(args, i++, a);
+    else if (a === "--prompt-file") promptFile = flagValue(args, i++, a);
+    else if (a === "--upload") uploads.push(flagValue(args, i++, a));
+    else if (a === "--folder") folders.push(flagValue(args, i++, a));
+    else if (a === "--session-id") sessionId = flagValue(args, i++, a);
+    else if (a === "--resume") resume = true;
+    else if (a === "--decider-llm") deciderLlm = true;
+    else if (a === "--intent") intent = flagValue(args, i++, a);
+    else if (a === "--dry-run") dryRun = true;
+    else if (a === "--keep") keep = true;
+    else if (a === "--plugin") extraPlugins.push(flagValue(args, i++, a));
+    else if (a === "--marketplace") marketplaces.push(flagValue(args, i++, a));
+    else if (a === "--enable") enables.push(flagValue(args, i++, a));
+    else if (a === "--answer") {
+      const [q, choose] = splitEq(flagValue(args, i++, a));
+      answers.push({ when_question: q, choose });
+    } else if (a === "--answer-policy") answerPolicy = flagValue(args, i++, a);
+    else positional.push(a);
+  }
+  const isJson = flags.output === "json";
+  if (resume && !sessionId) fail("skill", "usage", "--resume requires --session-id <id> (the session to resume)", undefined, isJson);
+
+  // #5: reject extra positionals so a shell-quoting slip (an unquoted multi-word prompt) can't silently
+  // drop part of the intended prompt. With --prompt-file the only positional is the plugin folder (1);
+  // without it, <plugin-folder> "<prompt>" (2). Anything beyond is unexpected.
+  const maxPositional = promptFile !== undefined ? 1 : 2;
+  if (positional.length > maxPositional)
+    fail(
+      "skill",
+      "usage",
+      `unexpected extra argument(s): ${positional.slice(maxPositional).join(" ")} — ${
+        promptFile !== undefined
+          ? "with --prompt-file, skill takes at most one positional (the plugin folder)"
+          : 'skill takes <plugin-folder> "<prompt>" — quote a prompt that contains spaces'
+      }`,
+      undefined,
+      isJson,
+    );
+
+  // --answer-policy <yaml>: a reusable file of regex→choice rules (same shape as a scenario `answers:`
+  // block), so the common "answer known gates, zero JS" case needs no --decider-cmd helper. Rules from
+  // the file resolve first (ScriptedDecider); anything unmatched still follows --on-unanswered.
+  if (answerPolicy) answers.push(...loadAnswerPolicy("skill", answerPolicy, isJson));
+
+  // --prompt-file reads the prompt verbatim (raw bytes, no shell parsing) — the robust way to pass a
+  // prompt containing $, backticks, or newlines. When given, the folder is positional[0] (no inline
+  // prompt positional is consumed for the prompt).
+  let filePrompt: string | undefined;
+  if (promptFile !== undefined) {
+    if (!existsSync(promptFile)) fail("skill", "usage", `--prompt-file not found: ${promptFile}`, undefined, isJson);
+    try {
+      filePrompt = readFileSync(promptFile, "utf8");
+    } catch (e) {
+      fail("skill", "usage", `cannot read --prompt-file ${promptFile}: ${String((e as Error).message)}`, undefined, isJson);
+    }
+    if (!filePrompt.trim()) fail("skill", "usage", `--prompt-file is empty: ${promptFile}`, undefined, isJson);
+  }
+
+  // With --prompt-file, every positional is a source (folder); without it, the LAST positional is the
+  // inline prompt and earlier positionals (if any) are the folder.
+  const haveSource =
+    (filePrompt !== undefined ? positional.length >= 1 : positional.length >= 2) || marketplaces.length || extraPlugins.length;
+  const folder = filePrompt !== undefined ? positional[0] : positional.length >= 2 ? positional[0] : undefined;
+  const prompt = filePrompt ?? positional[positional.length >= 2 ? 1 : 0];
+  if (!haveSource || !prompt) {
+    fail(
+      "skill",
+      "usage",
+      'usage: cowork-harness skill <plugin-folder> "<prompt>" [--prompt-file <path>] [--marketplace <dir> --enable name@mkt] [--plugin <dir>]… [--fidelity …] [--answer "q=choice"]  (skill --help for all flags)',
+      undefined,
+      isJson,
+    );
+  }
+  const localPlugins = [...(folder ? [folder] : []), ...extraPlugins];
+
+  // Resolve the inline session's relative paths against cwd (consistent with `run`'s file path, which
+  // goes through resolveSessionPaths) so uploads/folders/plugins are cwd-independent for the skill path.
+  const session = resolveSessionPaths(
+    loadSession({
+      model,
+      permission_parity: "cowork",
+      plugins: { local_plugins: localPlugins, local_marketplaces: marketplaces, enabled: enables },
+      uploads, // --upload <file> → mnt/uploads/<basename> (the "attach a file" path; ad-hoc parity with session.uploads)
+      folders: folders.map((from) => ({ from, mode: "rw" as const })), // --folder <dir> → mnt/.projects/<id> (asar: rw, delete denied by default)
+    }),
+    process.cwd(),
+  );
+  // Name the run after the skill folder's BASENAME (not the whole dashified path → "skill-ill-…").
+  const sourceName = basename((folder ?? marketplaces[0] ?? extraPlugins[0] ?? "test").replace(/\/+$/, "")) || "test";
+  const scenario = Scenario.parse({
+    name: `skill-${sourceName
+      .replace(/[^a-zA-Z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 40)}`,
+    baseline: "latest",
+    session: "(inline)",
+    fidelity,
+    prompt,
+    answers,
+    assert: [{ result: "success" }],
+  });
+
+  if (dryRun) {
+    out(JSON.stringify({ fidelity, prompt, localPlugins, marketplaces, enabled: enables, answers }, null, 2));
+    return;
+  }
+
+  const externalChannel = resolveExternal("skill", flags);
+  // `--decider-llm` is the ONLY user-facing way to select the LLM terminal (it maps to the `llm`
+  // policy below; the bare `--on-unanswered llm` CLI flag is rejected at resolvePolicy). (Issue 2)
+  const useLlm = deciderLlm;
+  if (useLlm && externalChannel)
+    fail("skill", "usage", "--decider-llm conflicts with --decider-cmd/--decider-dir (two terminals).", undefined, isJson);
+  // base policy; an external channel or the LLM decider overrides the terminal in execute.ts
+  const policy: OnUnanswered = externalChannel ? "fail" : useLlm ? "llm" : resolvePolicy("skill", flags);
+  const o = resolveOutput("skill", flags);
+  let result: RunResult;
+  try {
+    result = await runOneScenario({
+      command: "skill",
+      scenario,
+      label: scenario.name,
+      flags,
+      policy,
+      externalChannel,
+      o,
+      keep,
+      extra: {
+        session,
+        sessionId,
+        resume,
+        llmIntent: intent,
+        nonDeterministicHint: flags.deciderDir != null || flags.deciderCmd != null, // driving agent / helper answers → not reproducible (M4; #48)
+      },
+    });
+  } finally {
+    externalChannel?.close?.();
+  }
+  const bad = result.assertions.filter((a) => !a.pass);
+  // All channels keep stdout free → the json envelope is the only stdout (footer goes to stderr, and is
+  // mutually exclusive with --output-format json). The footer itself is emitted inside runOneScenario.
+  if (o.json) out(jsonEnvelope("skill", [result]));
+  process.exit(bad.length || result.result === "error" ? 1 : 0);
+}
+
+function cmdVm(args: string[]) {
+  const sub = args[0];
+  const baseline = loadBaseline(args[1] ?? "latest");
+  // #62/#63: the instance name is derived from the config hash (see lima.ts instanceName) — a config
+  // change yields a new name, so a stale VM is never silently reused.
+  const instance = instanceName(baseline);
+  if (sub === "status") log(`${instance}: ${vmStatus(instance)}`);
+  else if (sub === "init") {
+    const { status } = vmInit(baseline);
+    log(`${instance}: ${status}`);
+  } else if (sub === "delete") {
+    vmDelete(instance);
+    log(`${instance} deleted`);
+  } else if (sub === "prune") {
+    const pruned = vmPrune(instance);
+    log(pruned.length ? `pruned ${pruned.length} orphaned VM(s): ${pruned.join(", ")}` : `no orphaned VMs (current: ${instance})`);
+  } else {
+    // #11: an invalid/absent subcommand must exit non-zero — a bare `log` exits 0, so a CI script
+    // running `vm typo` would read it as success.
+    log("usage: vm <init|status|delete|prune>");
+    process.exit(2);
+  }
+}
+
+function cmdBoundary(args: string[]) {
+  // Optional --session <file>: fold that session's egress additions into the boundary allowlist so the
+  // self-test exercises the same boundary the session's runs would (not just baseline invariants).
+  const si = args.indexOf("--session");
+  // #12: a trailing `--session` with no value silently ran the boundary check WITHOUT the session's
+  // egress additions. Bounds-check it.
+  if (si >= 0 && args[si + 1] === undefined) {
+    log("--session requires a value (path to a session YAML)");
+    process.exit(2);
+  }
+  const sessionPath = si >= 0 ? args[si + 1] : undefined;
+  const positional = args.filter((a, i) => a !== "--session" && args[i - 1] !== "--session");
+  const baseline = loadBaseline(positional[0] ?? "latest");
+  let sessionEgress: { extraAllow?: string[]; unrestricted?: boolean } | undefined;
+  if (sessionPath) {
+    const s = loadSession(parseYaml(readFileSync(sessionPath, "utf8")));
+    sessionEgress = { extraAllow: s.egress.extra_allow, unrestricted: s.egress.unrestricted };
+  }
+  const results = runBoundaryChecks(baseline, sessionEgress);
+  log(formatBoundary(results));
+  process.exit(results.every((r) => r.pass) ? 0 : 1);
+}
+
+function cmdSync(args: string[]) {
+  const allowEmpty = args.includes("--allow-empty");
+  const res = sync();
+
+  // #37 — refuse to write a baseline with empty version fields. An empty appVersion would produce
+  // `desktop-.json` (invalid filename); an empty agentVersion means resolveAgentBinary will fail.
+  const versionErrors: string[] = [];
+  if (!res.appVersion) versionErrors.push("appVersion (Desktop not found or Info.plist unreadable — install/open Claude Desktop)");
+  if (!res.agentVersion) versionErrors.push("agentVersion (.sdk-version missing — open Cowork once to stage the agent binary)");
+  if (versionErrors.length) {
+    log("ERROR: sync could not resolve required version fields — refusing to write baseline:");
+    for (const e of versionErrors) log(`  - ${e}`);
+    log("Fix the above, then re-run `cowork-harness sync`.");
+    process.exit(1);
+  }
+
+  // #41 — refuse to write a baseline with an empty allowlist unless --allow-empty is passed.
+  // An empty allowDomains = default-deny on ALL egress, which silently breaks every scenario.
+  if (res.allowDomains.length === 0) {
+    log("WARNING: sync produced an empty allowDomains list (asar domain regex matched nothing — asar layout moved).");
+    if (!allowEmpty) {
+      log("Refusing to write baseline with allowDomains: []. Fix the regex in cowork-sync.ts,");
+      log("or hand-edit network.allowDomains in an existing baseline, then re-run.");
+      log("Pass --allow-empty to force-write anyway (use only if you understand the egress impact).");
+      process.exit(1);
+    }
+    log("--allow-empty passed: proceeding with empty allowDomains (egress will be default-deny for ALL domains).");
+  }
+
+  const baselinePath = join(BASELINES_DIR, `desktop-${res.appVersion}.json`);
+  let base: Record<string, unknown>;
+  try {
+    base = JSON.parse(JSON.stringify(loadBaseline("latest")));
+  } catch {
+    throw new Error("No base baseline in baselines/. Commit one (e.g. desktop-<ver>.json) before sync can merge onto it.");
+  }
+
+  // #38 — recompute agentBinary.stagedPath when agentVersion changes.
+  // Strategy: derive the path by convention (same layout as in the committed baselines:
+  //   ~/Library/Application Support/Claude/claude-code-vm/<agentVersion>/claude)
+  // then VERIFY the derived path exists, because resolveAgentBinary (baseline.ts:16) will fail
+  // on a stale path. We warn loudly rather than blocking — the file may not be staged yet on this
+  // machine, but the path is the correct convention for the new version.
+  const baseAgentBinary = (base.agentBinary ?? {}) as Record<string, unknown>;
+  const oldStagedPath = (baseAgentBinary.stagedPath as string) ?? "";
+  // Replace the version segment in the staged path with the new agentVersion. Gate on whether the regex
+  // actually MATCHED (not result==input) — an unchanged-version re-sync produces result==input and must NOT
+  // warn; an empty/non-standard layout falls back to the canonical Desktop path so the pointer isn't stale.
+  const versionRe = /claude-code-vm\/[^/]+\/claude$/;
+  let derivedStagedPath: string;
+  if (versionRe.test(oldStagedPath)) {
+    derivedStagedPath = oldStagedPath.replace(versionRe, `claude-code-vm/${res.agentVersion}/claude`);
+  } else {
+    derivedStagedPath = `~/Library/Application Support/Claude/claude-code-vm/${res.agentVersion}/claude`;
+    if (oldStagedPath)
+      log(
+        `WARNING: agentBinary.stagedPath layout was unexpected ("${oldStagedPath}") — rewrote to the canonical path for ${res.agentVersion}.`,
+      );
+  }
+  const resolvedDerived = derivedStagedPath.replace(/^~(?=$|\/)/, join(process.env.HOME ?? "~"));
+  if (!existsSync(resolvedDerived)) {
+    log(`WARNING: derived agentBinary.stagedPath does not exist on this machine: ${derivedStagedPath}`);
+    log(`  (The new agentVersion is ${res.agentVersion}. Open Cowork once to stage the binary, then re-run sync.)`);
+    log(`  resolveAgentBinary will fail until the file is present or COWORK_AGENT_BINARY is set.`);
+  }
+  const nextAgentBinary = { ...baseAgentBinary, stagedPath: derivedStagedPath };
+
+  // #39 — re-sync GrowthBook gate states from the decoded fcache (was: stale-carry + blanket warning).
+  // Gates drive the cowork loop decision (decideLoopFromBaseline) and the dispatch cap; decoding the
+  // fcache here makes a re-sync refresh them and surfaces real drift instead of silently carrying stale.
+  const baseProvenance = (base.provenance ?? {}) as Record<string, unknown>;
+  const baseGates = (baseProvenance.gates ?? {}) as Record<string, unknown>;
+  let nextGates: Record<string, unknown> = baseGates;
+  if (res.gates) {
+    nextGates = {};
+    // Preserve authored $comment / any non-pinned keys from the base.
+    for (const [k, v] of Object.entries(baseGates)) if (k.startsWith("$")) nextGates[k] = v;
+    for (const g of Object.values(res.gates)) {
+      const key = `${g.name}:${g.id}`;
+      const prev = baseGates[key];
+      const prevOn = typeof prev === "string" ? /on|true|force/i.test(prev) : !!(prev as { on?: boolean } | undefined)?.on;
+      // Preserve the human annotation: from a prose string, drop the leading "on(force) " token; from
+      // a structured entry, keep its `note`.
+      const prevNote =
+        typeof prev === "string"
+          ? prev.replace(/^(on|off)\([^)]*\)\s*/i, "").trim()
+          : ((prev as { note?: string } | undefined)?.note ?? "").trim();
+      nextGates[key] = { on: g.on, source: g.source, value: g.value, ...(prevNote ? { note: prevNote } : {}) };
+      if (prev !== undefined && prevOn !== g.on) {
+        log(
+          `WARNING: gate ${key} DRIFTED: ${prevOn ? "on" : "off"} → ${g.on ? "on" : "off"} (source=${g.source}). Loop/dispatch behavior may change — review carefully.`,
+        );
+      }
+    }
+    // A pinned gate absent from THIS fcache (partial cache) would otherwise vanish from provenance,
+    // silently dropping a loop/dispatch-driving gate. Carry it forward from the base and flag it.
+    for (const [k, v] of Object.entries(baseGates)) {
+      if (k.startsWith("$") || k in nextGates) continue;
+      nextGates[k] = v;
+      log(`WARNING: gate ${k} not present in fcache this sync — carried forward from base (may be stale).`);
+    }
+    log(`gates: re-synced ${Object.values(res.gates).length} pinned gate states from fcache.`);
+  } else {
+    log("WARNING: fcache unreadable — provenance.gates carried over from base (may be stale).");
+  }
+  const prevFingerprint = baseProvenance.asarFingerprint as string | undefined;
+  if (prevFingerprint && prevFingerprint !== res.asarFingerprint) {
+    log(`note: asarFingerprint changed (${prevFingerprint} → ${res.asarFingerprint}); gates re-synced above.`);
+  }
+
+  const next = {
+    ...base,
+    baselineVersion: 1,
+    appVersion: res.appVersion,
+    capturedAt: new Date().toISOString().slice(0, 10),
+    agentVersion: res.agentVersion,
+    agentBinary: nextAgentBinary,
+    network: { ...(base.network as object), mode: res.networkMode ?? "gvisor", allowKind: "allowlist", allowDomains: res.allowDomains },
+    requireFullVmSandbox: res.requireFullVmSandbox,
+    provenance: { ...baseProvenance, gates: nextGates, asarFingerprint: res.asarFingerprint },
+  };
+  if (args.includes("--diff")) {
+    try {
+      const prev = JSON.parse(readFileSync(baselinePath, "utf8"));
+      log("=== diff vs committed baseline ===");
+      diff(prev, next, "");
+    } catch {
+      log(`(no committed ${baselinePath} yet — this would be the first)`);
+    }
+  }
+  if (res.unknownDeltas.length) {
+    log("\n⚠ unknown deltas (extend src/sync/cowork-sync.ts):");
+    for (const d of res.unknownDeltas) log("   - " + d);
+  }
+  if (!args.includes("--diff")) {
+    mkdirSync(BASELINES_DIR, { recursive: true });
+    writeFileSync(baselinePath, JSON.stringify(next, null, 2));
+    log(`wrote ${baselinePath}`);
+  }
+}
+
+function cmdList() {
+  for (const f of readdirSync(BASELINES_DIR).filter((f) => f.endsWith(".json"))) out(f);
+}
+
+/** `decide` — validate a decider (helper OR policy) against a sample question in ~2s, so you don't
+ *  discover a wire-protocol bug 12 minutes into a live run. Shows the exact request a `--decider-cmd`
+ *  helper receives and the answer it produced (or the protocol error); for `--answer`/`--answer-policy`
+ *  it shows which rule matched. */
+async function cmdDecide(args: string[]) {
+  const json = isJsonOutput(args);
+  let question = "Confirm the detected stage before proceeding?";
+  const options: string[] = [];
+  let deciderCmd: string | undefined;
+  let policy: string | undefined;
+  let deciderLlm = false;
+  let intent: string | undefined;
+  const rules: AnswerRule[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "--question")
+      question = flagValue(args, i++, a); // #58: bounds-checked
+    else if (a === "--option") options.push(flagValue(args, i++, a));
+    else if (a === "--decider-cmd") deciderCmd = flagValue(args, i++, a);
+    else if (a === "--decider-llm") deciderLlm = true;
+    else if (a === "--intent") intent = flagValue(args, i++, a);
+    else if (a === "--answer-policy") policy = flagValue(args, i++, a);
+    else if (a === "--answer") {
+      const [q, choose] = splitEq(flagValue(args, i++, a));
+      rules.push({ when_question: q, choose });
+    }
+  }
+  // #13: `decide` does not implement the file-rendezvous channel — reject `--decider-dir` loudly
+  // instead of silently ignoring a first-class runtime path.
+  if (args.includes("--decider-dir"))
+    fail(
+      "decide",
+      "usage",
+      "decide does not support --decider-dir (the file-rendezvous channel); validate that path by running a scenario with --decider-dir. Use --decider-cmd '<helper>' to check a spawned helper here.",
+      undefined,
+      json,
+    );
+  // #14: reject conflicting terminal deciders — both set, the LLM branch would silently win and the
+  // helper would never be exercised. Mirrors cmdSkill/resolveExternal's conflict guards.
+  if (deciderLlm && deciderCmd)
+    fail("decide", "usage", "--decider-llm conflicts with --decider-cmd (one terminal decider).", undefined, json);
+  if (policy) rules.push(...loadAnswerPolicy("decide", policy, json));
+  const opts = options.length ? options : ["Looks right", "Change it", "Correct or add data"];
+  const req: DecisionRequest = { id: "check", kind: "question", questions: [{ question, options: opts.map((label) => ({ label })) }] };
+  const ctx = { task: "", transcript: () => "(sample transcript context)", toolLog: () => [], runId: "decide-check" };
+
+  log(`sample question: "${question}"  options: [${opts.join(" | ")}]`);
+  try {
+    if (deciderLlm) {
+      const d = await new LlmDecider(claudeCliComplete, intent).decide(req, ctx);
+      const answer = (d as { response: { answers?: Record<string, string> }; model?: string }).response.answers?.[question];
+      if (json) out(JSON.stringify({ tool: "cowork-harness", command: "decide", ok: true, answer, by: "llm" }));
+      else log(`✓ LLM decider answered: "${question}" → "${answer}"  (non-deterministic)`);
+    } else if (deciderCmd) {
+      const inner = spawnChannel(deciderCmd);
+      let sent = "";
+      const channel = {
+        write: (l: string) => ((sent = l), inner.write(l)),
+        readLine: () => inner.readLine(),
+        close: () => inner.close?.(),
+      };
+      try {
+        const d = await new ExternalDecider(channel).decide(req, ctx);
+        const answer = (d as { response: { answers?: Record<string, string> } }).response.answers?.[question];
+        log(`helper received: ${sent}`);
+        if (json) out(JSON.stringify({ tool: "cowork-harness", command: "decide", ok: true, answer }));
+        else log(`✓ helper answered: "${question}" → "${answer}"`);
+      } finally {
+        channel.close();
+      }
+    } else {
+      const d = await new ScriptedDecider(rules).decide(req, ctx);
+      if (d === ABSTAIN) {
+        if (json) out(JSON.stringify({ tool: "cowork-harness", command: "decide", ok: false, matched: false }));
+        else log(`✗ no rule matched — this question would fall to --on-unanswered (add an --answer/--answer-policy rule)`);
+        process.exit(1);
+      }
+      const answer = (d as { response: { answers?: Record<string, string> } }).response.answers?.[question];
+      if (json) out(JSON.stringify({ tool: "cowork-harness", command: "decide", ok: true, matched: true, answer }));
+      else log(`✓ rule matched: "${question}" → "${answer}"`);
+    }
+  } catch (e) {
+    if (json) out(jsonError("decide", "runtime", String((e as Error).message)));
+    else log(`✗ decider error: ${String((e as Error).message)}`);
+    process.exit(1);
+  }
+}
+
+/** `gates <dir> [--follow]` — the gate stream for the in-band `--decider-dir` path. Emits one clean
+ *  JSON line per pending gate (`{seq, …decision_request}`) + a terminal `{"done":true}`. Point ONE
+ *  Monitor at this (no hand-written zsh/find/seen-set loop). */
+async function cmdGates(args: string[]) {
+  const follow = args.includes("--follow");
+  const dir = args.find((a) => !a.startsWith("--"));
+  if (!dir) return void fail("gates", "usage", "usage: gates <dir> [--follow]", undefined, isJsonOutput(args));
+  await streamGates(dir, (line) => out(line), { once: !follow });
+}
+
+/** `answer <dir> --gate <N> (--choose <label> | --answer "<q>=<label>"…)` — write a gate answer
+ *  atomically with the right wire shape (hides the temp+rename + `{id, answers}` the driver had to build). */
+function cmdAnswer(args: string[]) {
+  const json = isJsonOutput(args);
+  // #15: skip flag values so `answer --gate 1 --choose Yes <dir>` doesn't read `1` as the directory.
+  const dir = positionals(args, ["--gate", "--choose", "--answer", "--output-format"])[0];
+  let seq: number | undefined;
+  let choose: string | undefined;
+  const pairs: { q: string; label: string }[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "--gate")
+      seq = Number(flagValue(args, i++, a)); // #58: bounds-checked
+    else if (a === "--choose") choose = flagValue(args, i++, a);
+    else if (a === "--answer") {
+      const [q, label] = splitEq(flagValue(args, i++, a));
+      pairs.push({ q, label });
+    }
+  }
+  if (!dir || !seq)
+    return void fail("answer", "usage", 'usage: answer <dir> --gate <N> (--choose <label> | --answer "<q>=<label>")', undefined, json);
+  const answers: Record<string, string> = {};
+  if (pairs.length) for (const p of pairs) answers[p.q] = p.label;
+  else if (choose) {
+    try {
+      const g = readGate(dir, seq);
+      answers[g.questions?.[0]?.question ?? g.questions?.[0]?.header ?? ""] = choose;
+    } catch (e) {
+      return void fail("answer", "usage", `cannot read gate ${seq} in ${dir}: ${String((e as Error).message)}`, undefined, json);
+    }
+  } else return void fail("answer", "usage", 'answer needs --choose <label> or --answer "<q>=<label>"', undefined, json);
+  answerGate(dir, seq, answers);
+  if (json) out(JSON.stringify({ tool: "cowork-harness", command: "answer", ok: true, gate: seq, answers }));
+  else log(`✓ answered gate ${seq}: ${JSON.stringify(answers)}`);
+}
+
+function cmdTrace(args: string[]) {
+  const json = isJsonOutput(args);
+  const tools = args.includes("--tools");
+  const gates = args.includes("--gates");
+  // #16: skip the `--output-format` value so `trace --output-format json` doesn't try to trace a run
+  // named `json` instead of reporting the missing target.
+  const target = positionals(args, ["--output-format"])[0];
+  if (!target)
+    fail("trace", "usage", "usage: trace <run-id | run-dir | events.jsonl> [--tools | --gates] [--output-format json]", undefined, json);
+  let file: string;
+  try {
+    file = resolveEventsFile(target);
+  } catch (e) {
+    return fail("trace", "usage", String((e as Error).message), undefined, json);
+  }
+  if (gates) {
+    // --gates: question → injected answer → delivered result, the full gate lifecycle in one command (Part 4).
+    const rows = buildGateTrace(file);
+    if (json) out(JSON.stringify({ tool: "cowork-harness", command: "trace", file, gates: rows }));
+    else out(formatGateTrace(rows));
+    return;
+  }
+  const rows = buildTrace(file, { tools });
+  if (json) out(JSON.stringify({ tool: "cowork-harness", command: "trace", file, rows }));
+  else out(formatTrace(rows));
+}
+
+function diff(a: any, b: any, path: string) {
+  const keys = new Set([...Object.keys(a ?? {}), ...Object.keys(b ?? {})]);
+  for (const k of keys) {
+    const pa = JSON.stringify(a?.[k]);
+    const pb = JSON.stringify(b?.[k]);
+    if (pa !== pb) log(`  ${path}${k}: ${pa} -> ${pb}`);
+  }
+}
+
+main().catch((e) => {
+  const command = process.argv[2] ?? "";
+  const json = isJsonOutput(process.argv.slice(2));
+  if (e instanceof UnansweredError) fail(command, "unanswered", e.message, e.hint, json);
+  if (e instanceof BoundaryError) fail(command, "boundary", e.message, undefined, json);
+  // runtime/unexpected: keep the stack on stderr for humans; a structured envelope on stdout for json.
+  if (json) out(jsonError(command, "internal", String(e?.message ?? e)));
+  else log(String(e?.stack ?? e));
+  process.exit(2);
+});

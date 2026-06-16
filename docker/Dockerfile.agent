@@ -1,0 +1,31 @@
+# Minimal linux/arm64 runtime for the staged in-VM agent.
+#
+# Base = ubuntu:22.04 — binary-verified: the Cowork system prompt says the guest is
+# "a lightweight Linux VM (Ubuntu 22)". Matching the distro matters (python 3.10, glibc,
+# coreutils) so skills behave as they would in the real VM.
+#
+# IMPORTANT: this image contains NO Anthropic binary. The `claude` agent is the
+# Linux/arm64 build that Claude Desktop stages on the user's own machine
+# (~/Library/Application Support/Claude/claude-code-vm/<ver>/claude); the harness
+# BIND-MOUNTS it into the container at run time (see src/runtime/container.ts).
+#
+#   docker build --platform linux/arm64 -t cowork-agent-base:1 -f docker/Dockerfile.agent .
+#
+# Toolchain mirrors what skill producers and the real VM rootfs expect: python3 (+pip,
+# PEP-668 stays in effect — pip needs --break-system-packages, faithful), node, jq, git,
+# ripgrep, curl. NOT openpyxl (pypi is off the default egress allowlist — absence is faithful).
+
+FROM --platform=linux/arm64 ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates git ripgrep curl jq \
+      python3 python3-pip python3-venv \
+      nodejs npm \
+    && rm -rf /var/lib/apt/lists/*
+
+# cwd is /sessions/<id>; the whole session root is bind-mounted writable at run time.
+WORKDIR /sessions/local
+
+# The agent binary is mounted at /usr/local/bin/claude at run time; no ENTRYPOINT —
+# the Controller invokes it and drives stream-json over stdio.

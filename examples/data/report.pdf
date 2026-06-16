@@ -1,0 +1,54 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>
+endobj
+4 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+5 0 obj
+<< /Length 505 >>
+stream
+BT
+/F1 14 Tf
+72 720 Td
+16 TL
+(Q2 Project Status Report) Tj
+T*
+T*
+(The migration to the new ingest pipeline is on track. End-to-end) Tj
+T*
+(latency dropped 30% after the caching layer landed, and error rates) Tj
+T*
+(are within target. Remaining risk is the data-backfill window.) Tj
+T*
+T*
+(Action items:) Tj
+T*
+(1. Alice: finalize the production rollout plan by June 20.) Tj
+T*
+(2. Bob: add monitoring dashboards for the new pipeline.) Tj
+T*
+(3. Carol: update the on-call runbook and notify support.) Tj
+ET
+endstream
+endobj
+xref
+0 6
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000121 00000 n 
+0000000247 00000 n 
+0000000317 00000 n 
+trailer
+<< /Size 6 /Root 1 0 R >>
+startxref
+873
+%%EOF

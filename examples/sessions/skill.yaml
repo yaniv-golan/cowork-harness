@@ -1,0 +1,9 @@
+# Lean session that mounts the public example skill (skills/my-pdf-skill).
+# Used by the skill-load acceptance scenario and the host-loop canary.
+model: claude-opus-4-8
+effort: high
+permission_mode: default
+permission_parity: cowork
+plugins:
+  local_plugins:
+    - ../skills/my-pdf-skill

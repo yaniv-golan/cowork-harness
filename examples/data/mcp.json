@@ -1,0 +1,10 @@
+{
+  "$comment": "Example --mcp-config for the harness. Standard mcpServers shape, identical to what Cowork/claude-code consume. Point session.mcp.config here and list names under session.mcp.enabled. In real Cowork, stdio servers run host-side (split execution); here they run inside the runtime alongside the agent.",
+  "mcpServers": {
+    "example-fs": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/sessions/local/mnt"],
+      "env": {}
+    }
+  }
+}

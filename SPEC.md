@@ -1,0 +1,355 @@
+# Authoritative spec — cowork-harness
+
+The single source of truth for **what the harness must produce** given its inputs. Golden snapshot tests assert the **contract layer** against this; live contract tests assert the **runtime layer** against the real binary. Anything that contradicts the binary wins over this doc — keep them in sync via `cowork-harness sync` + the [spawn contract](./docs/cowork-spawn-contract-1.12603.1.md).
+
+## 0. Model
+
+```
+platform baseline (baselines/desktop-*.json)   what Cowork's runtime IS this release (auto-synced)
+session setup (sessions/*.yaml)           what the user set up pre-prompt (model, folders, plugins, …)
+scenario (scenarios/*.yaml | `skill` cmd)    the prompt + scripted answers + assertions
+                         │
+                         ▼
+            buildLaunchPlan(session, baseline) ──► LaunchPlan (pure data)
+                         │
+        decideLoop(baseline, overrides) ──► effective fidelity
+                         │
+   ┌─────────────────────┼───────────────────────────────────────┐
+   ▼ (pure: argv+env)    ▼                                        ▼
+ contract layer    runtime layer (stage fs, spawn, drive)   egress sidecar
+```
+
+Two layers, tested differently:
+
+- **Contract layer** — pure functions of `(baseline, session, scenario, sessionId)`: the launch plan, the docker/limactl **argv + env**, the control-protocol **messages**, the loop **decision**, the **assertions**. Deterministic ⇒ golden snapshot tests (§7).
+- **Runtime layer** — fs staging, process spawn, the live agent. Needs Docker + a token ⇒ live contract tests (§8).
+
+## 1. Loop decision (`src/loop-decision.ts`) — exact replica of Cowork `f_()`
+
+```
+decideLoop(i):
+  if i.requireFullVmSandbox === true   → "vm"      # HeA()
+  if i.forceDisableHostLoop  === true  → "vm"      # iX()
+  if i.devForceHostLoop      === true  → "host"    # CLAUDE_FORCE_HOST_LOOP=1 + dev-approved
+  return i.gateHostLoopOn ? "host" : "vm"          # gate 1143815894
+```
+
+`fidelity: cowork` ⇒ `decideLoopFromBaseline(baseline)` → `host`⇒`hostloop`, `vm`⇒`container`. Gate state from `baseline.provenance.gates["hostLoop:1143815894"]` (synced from `fcache`; currently `on(force)` ⇒ `cowork → hostloop`). Explicit `protocol|container|microvm|hostloop` bypass the decision.
+
+## 2. Launch plan (`buildLaunchPlan`) — pure
+
+Given a session + baseline, returns:
+
+| field | value |
+|---|---|
+| `configDir` | managed host dir (or `session.plugins.config_dir`); contains `settings.json`, `cowork_settings.json`, `skills/` |
+| `mounts[]` | `{hostPath, mountPath, mode}`, `mountPath` **relative to mnt**: `uploads/<f>`, `.projects/<id>`, `.local-plugins/cache/<marketplace>/<plugin>/<version>` (marketplace-resolved, verified shape), `.local-plugins/cache/<name>` (direct `local_plugins`), `.remote-plugins/<name>` |
+| `pluginDirs[]` | mnt-relative plugin roots → `--plugin-dir` (incl. marketplace-resolved plugins) |
+| `model/effort/extendedThinking/permissionMode/permissionParity` | from session |
+| `egressAllow[]` | `baseline.network.allowDomains` + `session.egress.extra_allow` (or `["*"]` if unrestricted) |
+
+**Marketplace resolution (required):** for each `local_marketplaces` dir, parse `.claude-plugin/marketplace.json`; for each `session.plugins.enabled` entry `name@mkt` matching `manifest.name`, resolve `manifest.plugins[name].source` → a `.local-plugins/cache/<marketplace>/<plugin>/<version>` mount + pluginDir, where `<version>` is the marketplace entry's `version` or the plugin's `.claude-plugin/plugin.json` `version` (fallback `0.0.0`). This reproduces the real desktop spawn argv (`--plugin-dir …/cache/<mp>/<plugin>/<version>`, verified 2026-06-13). (Cowork loads plugins via `--plugin-dir`; the registry is inert in-VM — §6.)
+
+## 3. Spawn argv + env (contract layer) — what each tier MUST emit
+
+Resolved inputs: `sessionRoot=/sessions/<id>`, `mntRoot=/sessions/<id>/mnt`, `configGuest=/sessions/<id>/mnt/.claude`.
+
+### 3.1 Common agent args (container, hostloop, microvm)
+```
+claude -p --verbose
+  --input-format stream-json --output-format stream-json
+  --permission-prompt-tool stdio
+  --permission-mode default
+  --setting-sources user
+  --effort <session.effort ?? baseline.spawn.effortDefault>
+  [--append-system-prompt <rendered cowork sections>]
+  [--model <session.model>]
+  [--mcp-config <configGuest>/mcp.json]         # if session.mcp.config set — HONORED in plain cowork mode (§6)
+  (--plugin-dir <mntRoot>/<p>)…                 # one per pluginDirs entry
+  --tools <baseline.spawn.tools…>                # variadic, LAST
+  --allowedTools <baseline.spawn.allowedTools…>  # variadic, LAST
+```
+Variadic `--tools`/`--allowedTools` MUST be last (they consume to end-of-args).
+
+### 3.2 Spawn env (container/hostloop/microvm)
+```
+<baseline.spawn.env …>                  # CLAUDE_CODE_IS_COWORK=1, ENTRYPOINT=local-agent,
+                                        # DISABLE_BACKGROUND_TASKS=1, ENABLE_APPEND_SUBAGENT_PROMPT=1, …
+CLAUDE_CONFIG_DIR = <configGuest>
+MAX_THINKING_TOKENS = <baseline.spawn.maxThinkingTokens>   # never 0
+HOME = /tmp
+HTTP(S)_PROXY / http(s)_proxy = <egress proxy>
+[TZ] [ANTHROPIC_API_KEY] [CLAUDE_CODE_OAUTH_TOKEN]        # passthrough iff set in host env
+```
+MUST NOT set `CLAUDE_CODE_USE_COWORK_PLUGINS`. MUST NOT blanket-passthrough host `CLAUDE_*`.
+
+**Auth-env fidelity note (2026-06-13).** Real Cowork passes **only** the OAuth token: the desktop's
+VM-env builder `rtA()` sets `CLAUDE_CODE_OAUTH_TOKEN` and blanks `ANTHROPIC_API_KEY` /
+`ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_CUSTOM_HEADERS` to `""`, then `itA()` **deletes** each empty one —
+so the final env has the token and **no** API-key vars at all. **IMPLEMENTED** (`host-env.ts`
+`runtimeAuthEnv()`): when `CLAUDE_CODE_OAUTH_TOKEN` is present the harness mirrors the desktop and
+passes **only** the token, dropping `ANTHROPIC_API_KEY`; `ANTHROPIC_API_KEY` is forwarded **only** when
+there is no token (the CI/headless fallback the harness intentionally keeps). (`CLAUDE_CODE_EXECPATH`
+is the agent's *own* `process.execPath` — never forward a host value; covered by the "no blanket
+`CLAUDE_*`" rule above.)
+
+### 3.3 L1 container (`spawnContainer`)
+```
+docker run --rm -i --platform linux/arm64 --network <net>
+  [--cap-drop ALL --security-opt no-new-privileges --read-only --tmpfs /tmp:… --pids-limit 1024]  # lockdown
+  -w /sessions/<id>
+  -e …(§3.2)
+  -v <agentHost>:/usr/local/bin/claude:ro
+  -v <sessionHost>:/sessions/<id>            # writable session world
+  cowork-agent-base:1
+  claude …(§3.1)
+```
+
+### 3.4 host-loop (`spawnHostLoop`) — deltas vs §3.3
+- `--name cowork-hl-<id>` (so the driver can `docker exec`).
+- `--disallowedTools Bash WebFetch NotebookEdit`; append `mcp__workspace__bash mcp__workspace__web_fetch` to `--tools`/`--allowedTools`. (The asar `HOST_LOOP_EXCLUDED_BUILTIN_TOOLS` = {Bash, NotebookEdit, REPL, JavaScript, WebFetch}; only Bash/NotebookEdit/WebFetch exist in the CLI agent's 26-tool registry — REPL/JavaScript are absent here, verified 2026-06-13.)
+- env `CLAUDE_PLUGIN_ROOT = /host/plugins/<firstPlugin>` (UNMOUNTED ⇒ unresolvable in bash ⇒ self-heal).
+- system-prompt append includes the host-loop "Shell access" section.
+- the driver declares `sdkMcpServers:["workspace"]` and handles `mcp_message` (§4, §5).
+
+### 3.5 L2 microvm (`spawnMicroVm`)
+`limactl shell <inst> sh -c 'set -e; cd /sessions/<id> 2>/dev/null || { echo "<not provisioned>" >&2; exit 1; }; while IFS= read -r __cs; do [ "$__cs" = "__COWORK_SECRETS_END__" ] && break; export "$__cs"; done; exec "$@"' _ env <non-secret pairs> claude …(§3.1)`. The work root (`VM_WORK_HOST`) is mounted **directly at `/sessions`** (not `/cowork-work` + a per-run symlink), so `/sessions/<id>` is a real dir — `getcwd()` = `/sessions/<id>` (inv. #1, §9), the encoded-cwd matches the container tier, and `CLAUDE_CONFIG_DIR` is a writable host-mounted path so the agent persists its session (enabling `--resume`). `set -e` + the explicit `cd` guard make a missing mount FAIL LOUD (a stale/un-provisioned VM) instead of silently exec'ing with the wrong cwd. `<inst>` is **hash-derived** (`cowork-vm-<sha8(limaConfig)>`): a config change (mounts/image/provision/agent-version) yields a new name ⇒ a fresh VM, so a stale-config VM is never silently reused (no drift). Egress: host proxy at `192.168.5.2:<port>` + guest default-deny iptables. **Secrets (#29): the auth token rides a stdin PROLOGUE** (one `KEY=value` per line up to the `__COWORK_SECRETS_END__` sentinel; the shell `read`s + `export`s them, then `exec`s `claude` with stdin positioned at the control stream) — off the host argv (`ps`/`limactl`) AND off disk. Non-secret env still rides argv via `env <pairs>`.
+
+### 3.6 L0 protocol (`spawnProtocol`)
+Host `claude` (NO `--cowork`, NO cowork env), `cwd = work/`, mounts flattened under `work/`. Control-loop validation only.
+
+## 4. Control protocol (`src/agent/session.ts` — `LiveAgentSession`)
+
+The protocol seam is `LiveAgentSession` (the old monolithic `src/control/controller.ts` was split into
+the three seams `AgentSession` (`src/agent/session.ts`) / `Decider` (`src/decide/decider.ts`) / `Run`
+(`src/run/run.ts`)). Golden snapshots are built by the shared envelope builders in `src/run/envelope.ts`.
+
+1. Driver → CLI **first**: `{type:"control_request", request_id:"init-1", request:{subtype:"initialize", [appendSubagentSystemPrompt], [sdkMcpServers]}}`.
+2. Driver → CLI: the user turn (`sendUserTurn`; multi-turn capable).
+3. CLI → driver `can_use_tool` / `request_user_dialog` / `elicitation` → `Decider` replies (§5); `request_user_dialog` has a ~6 s auto-cancel.
+4. CLI → driver `mcp_message` (host-loop) → driver replies `mcp_response` (§5); both directions recorded (`events.jsonl` + `control-out.jsonl`).
+5. CLI → driver `result` → `Run` pulls the next turn, or `close()` ends stdin.
+
+### 4.1 `events.jsonl` schema (what `parseMessage` reads; `trace` digests)
+
+Each line is one stream-json message. The message types that carry signal:
+- `{type:"system", subtype:"init", tools:[…], mcp_servers:[…], cwd}` — the registry + cwd.
+- `{type:"assistant", parent_tool_use_id?, message:{content:[…]}}` — content blocks are `{type:"text"}`,
+  `{type:"thinking"}`, or `{type:"tool_use", id, name, input}`. A non-null `parent_tool_use_id` means
+  the block ran **inside a sub-agent**.
+- `{type:"control_request", request_id, request:{subtype}}` — `can_use_tool` (→ permission, or question
+  when `tool_name==="AskUserQuestion"`), `request_user_dialog`, `elicitation`/`side_question`, `mcp_message`.
+- `{type:"result", is_error, usage}` — turn end.
+
+**Sub-agent dispatch recognition (binary fact):** the real cowork dispatch tool is **`Agent`** (in-VM
+ELF 2.1.170: `{name:"Agent", aliases:["Task"], description:"Launch a new agent",
+inputSchema:{description, subagent_type, prompt}}`). `parseMessage` synthesizes a `subagent_dispatch`
+for a `tool_use` whose `name` is `Agent` **or** `Task` (the alias) **or** whose `input` carries
+`subagent_type`. The cowork **`TaskCreate`/`TaskUpdate`** tools are the *todo list*
+(`{subject, description, activeForm}` / `{taskId, status}`) and **`Monitor`** is a command watcher —
+none carry `subagent_type`, so they are NOT dispatches. `subagent_declared_but_unused` needs a declared
+tools list, which the `Agent` tool does not provide → inert on the cowork path (legacy-`Task` only).
+
+### 4.2 Deciders (the terminal of the chain: scripted → parity → terminal)
+
+The chain `Chain(ScriptedDecider, PermissionDefaultDecider, terminal)` resolves each `decision` event;
+the terminal is one of:
+
+- **`FailDecider`/`FirstOptionDecider`/`PromptDecider`** — `--on-unanswered fail|first|prompt`.
+- **`LlmDecider`** (CLI `--decider-llm [--intent "…"]`; scenario YAML `on_unanswered: llm`) — per question, a small
+  model (host `claude -p`, `COWORK_HARNESS_DECIDER_MODEL`) picks a label; out-of-set → `UnansweredError`
+  (loud, no `coerceLabel` fallback). Transport is `claude -p` not a direct `/v1/messages` (the harness
+  process is not behind the egress proxy). The run is flagged `nonDeterministic`.
+- **`ExternalDecider`** over a `DecisionChannel` (`src/decide/external-channel.ts`) — two transports of
+  the SAME wire protocol: **spawn** (`--decider-cmd '<cmd>'` → a `shell:true` helper) and **file
+  rendezvous** (`--decider-dir <dir>` → `req-N.json`/`resp-N.json`). For each unscripted decision it emits
+  `{type:"decision_request", id, runId, kind, …payload, context, reply_with}` (secret-scrubbed before
+  write — `0600` files for the dir; the helper's own pipe for spawn) and reads one reply; answers are
+  coerced via `coerceLabel`. EOF / invalid JSON / wrong-`id` / timeout → `UnansweredError` (exit 2). A
+  question that reaches the terminal unanswered (`ABSTAIN`) **throws** — never a silent option-1 (`run.ts`).
+
+Both external channels keep the CLI's stdout FREE (the protocol is on the helper's own pipes / in files),
+so both compose with `--output-format json` (no terminal `{type:"result"}` line). The legacy **stdio** channel
+(`--on-unanswered external`) — which seized the CLI's own stdout/stdin as a JSONL stream — was **removed**;
+`--decider-dir` subsumes it without owning stdout (passing it now fails loud at `resolvePolicy` with a
+redirect). `--decider-dir` is flagged `nonDeterministic` (a driving agent answers). The harness owns its
+transport: `cowork-harness gates <dir> --follow` streams one JSON line per pending gate + a terminal
+`{"done":true}` (a `process.on("exit")` marker guarantees completion on any exit path), and
+`cowork-harness answer <dir> --gate <N> --choose <label>` writes the atomic `resp`. For `--decider-cmd`,
+the Python package's `serve_decider(fn)` is the symmetric pre-built loop (the helper writes only the
+decision function; the adapter owns readline/parse/answer-envelope/flush). The driving agent arms ONE
+Monitor on `gates --follow` (binary-verified: a Monitor stdout line wakes the persistent session via a
+`task-notification`). The dialog ~6 s auto-cancel is relaxed to ∞ under an external/LLM/prompt terminal
+(`COWORK_HARNESS_DIALOG_TIMEOUT_MS` overrides).
+
+### 4.3 File provision & session persistence (local fidelity)
+
+Real Cowork stages files via the Files API + a `stage_file` control message and persists sessions
+server-side (`/v1/sessions`), but the agent's *behavior* depends only on (a) the file being present at
+the expected path and (b) the session being resumable. The harness models both **locally**:
+
+- **Files** — `session.uploads` / `--upload <file>` → `mnt/uploads/<name>`; `session.folders` /
+  `--folder <dir>` → `mnt/.projects/<id>` (the `register_repo_root` analog). Behaviorally faithful: the
+  agent `Read`s the file at the same path it would in Desktop.
+- **Persistence** — `--session-id <id>` derives a stable cwd (`/sessions/sess-<id>`) + run dir and pins
+  the agent's native session UUID (persisted in `<outDir>/session.json`). The agent writes its session to
+  `CLAUDE_CONFIG_DIR/projects/<encoded-cwd>/<uuid>.jsonl` (= `mnt/.claude/projects/…` on the host). The
+  work-dir staging is additive (`mkdir -p` + `cpSync` merge — `plan.configDir` has no `projects/`), so a
+  reused run dir **preserves** the sessionFile, any skill-written checkpoint state (e.g. deck-review's
+  `gate_state.json` — a *skill* artifact, not a harness one), and `mnt/outputs`. `--resume` reuses
+  the dir and passes the agent's native `--resume <uuid>` — the agent reloads `messages` +
+  `fileHistorySnapshots` + `deferredToolUse`. We do NOT reimplement resume. Verified end-to-end (a
+  codeword established in run 1 is recalled after `--resume` in run 2) and against the host binary.
+- **Divergences (don't affect skill behavior):** files don't transit `/v1/files`; no cloud
+  `/v1/sessions` event log; no cross-session document store.
+
+## 5. Control-response envelopes (exact shapes — golden-tested)
+
+```
+allow:  {type:"control_response", response:{subtype:"success", request_id, response:{behavior:"allow", updatedInput}}}
+deny:   {type:"control_response", response:{subtype:"success", request_id, response:{behavior:"deny", message}}}
+AskUserQuestion allow.updatedInput.answers = Record<questionText, chosenLabel>
+mcp_message reply: {type:"control_response", response:{subtype:"success", request_id, response:{mcp_response:{jsonrpc:"2.0", id, result|error}}}}
+```
+Payload sits under an **inner** `response`. Missing the nesting ⇒ `ZodError: expected object`.
+
+## 6. MCP (binary fact)
+
+**Three MCP delivery channels (corrected 2026-06-13 — first-party probe):**
+
+1. **SDK servers over the control protocol** — declared via `sdkMcpServers` in `initialize`; tool calls tunnel as `mcp_message`. This is how the **desktop host** bridges its own servers (incl. `claude_desktop_config.json` `mcpServers`, spawned host-side with full host env) and how the harness delivers the workspace shell. The workspace handler (`src/hostloop/workspace-handler.ts`) implements `initialize`/`tools/list`/`tools/call`; `bash`→`docker exec -w <mntRoot> <container> sh -c <cmd>` (container-egress-gated). **`web_fetch` is NOT container-egress-gated:** real Cowork routes it through the host API (gate `1978029737` `coworkWebFetchViaApi:true` → `POST /api/organizations/<org>/cowork/web_fetch`), gated by a **separate web-fetch hostname allowlist** (`getWebFetchAllowedUrls`, `*`=unrestricted) + a **URL-provenance** rule (URL must have appeared in a prior message/result). The harness mirrors this with the **two-path model** (`src/hostloop/workspace-handler.ts`, binary-verified `G1t`/`U1t`): **Path A** (provenance engaged — `coworkWebFetchViaApi` on) gates on the **exact-URL provenance set** ONLY (seeded from user-turn + tool-result URLs; `src/hostloop/provenance.ts`), with **no** hostname allowlist — but still an `http(s)`-scheme + private-address **SSRF backstop re-checked on every redirect hop** (a manual redirect loop, not `curl -L`; #43/#44) — a miss raises a per-domain approval (`webfetch:<domain>` permission with options `Allow once | Allow all for website | Deny`) routed through the Decider; "Allow all for website" approves the host for the rest of the run (`Run.approvedDomains`, per-run/ephemeral). **Path B** (gate off) is a direct host fetch gated by the egress domain list via the same `wen()`/`compile()` matcher container egress uses, with `redirect:"manual"` re-checking `U1t` (scheme + private-address SSRF + allowlist) on **every** redirect hop. web_fetch is thus **decoupled from `plan.egressAllow`** on Path A (egress applies to `bash`/Path B only). An unanswered cold miss is fail-closed (B5); scenarios answer via `--answer "webfetch:<domain>=allow"` (with `grant`), `web_fetch.approved_domains`, or an LLM/external terminal. `bash` stays container-egress-sandboxed.
+2. **CLI-spawned `--mcp-config` / `.mcp.json` servers — HONORED in plain cowork mode** (NOT ignored). **Verified:** a valid `--mcp-config` populates `mcp_servers` (`[{name,status:"pending"|"connected"}]`); these run in-sandbox with the env-allowlist `CLAUDE_CODE_MCP_ALLOWLIST_ENV` (`RW8`/`oG8`/`LU5` = {HOME, LOGNAME, PATH, SHELL, TERM, USER}). The harness MAY use this as a convenience injection path.
+3. **The drop is SAFE/HERMETIC-mode-gated, not cowork-gated.** `--mcp-config` is filtered to SDK-only (`ap5()`) **only when** safe mode (`I5()`) or `xB8()` is true, and `xB8()` requires **both** `CLAUDE_CODE_REMOTE` **and** `CLAUDE_CODE_REMOTE_HERMETIC_MODE`. **Verified:** with both set, `mcp_servers:[]`; without them (plain `SESSION_KIND=bg`), the config is honored. The earlier "cowork ignores `--mcp-config`" was a hermetic-session observation over-generalized.
+
+## 7. Golden snapshot targets (contract layer)
+
+For canonical fixtures (a minimal session, a plugin session, a marketplace session, host-loop), snapshot — with volatile paths normalized (`outDir`, `<id>`, `$HOME`) — the:
+- `buildLaunchPlan` output (mounts, pluginDirs, env keys, egressAllow),
+- docker/limactl **argv** per tier (container, hostloop, microvm),
+- the **initialize** request and the **allow/deny/answers/mcp_response** envelopes,
+- the loop **decision** for each input combination.
+
+A diff in any of these = an intentional contract change (review the snapshot) or a regression.
+
+## 8. Live contract tests (runtime layer; token+Docker gated)
+
+Assert the **binary** still matches the contract (run on `sync`, skip without token/Docker):
+- spawn flags in §3.1 are accepted (no "unknown option").
+- `--permission-prompt-tool stdio` + initialize ⇒ AskUserQuestion routes; the answer shape drives the model.
+- `sdkMcpServers:["workspace"]` ⇒ `mcp_servers:[{workspace,connected}]` + `mcp__workspace__bash` surfaces.
+- a VALID `--mcp-config` (plain cowork) ⇒ the server appears in `mcp_servers` (HONORED); the same config with `CLAUDE_CODE_REMOTE=1`+`CLAUDE_CODE_REMOTE_HERMETIC_MODE=1` ⇒ `mcp_servers:[]` (hermetic drop). Guards the §6 three-channel model. (A *nonexistent* file errors with "Invalid MCP configuration" — do NOT use that to assert inertness.)
+- cowork mode ⇒ `cwd:/sessions/<id>`, `TodoWrite` absent from the registry.
+
+## 9. Invariants (never regress)
+- cwd = `/sessions/<id>`; config = `mnt/.claude`. Holds for ALL sandbox tiers — incl. microVM, which
+  mounts the work root directly at `/sessions` (§3.5) so `getcwd()` is the real `/sessions/<id>` (not a
+  symlink resolving to a `/cowork-work` physical path). A microVM cwd of `/cowork-work/<id>` is a
+  regression (it breaks session persistence + cross-tier encoded-cwd parity).
+- `CLAUDE_CODE_USE_COWORK_PLUGINS` never set; host `CLAUDE_*` never blanket-forwarded.
+- `MAX_THINKING_TOKENS` never `0`.
+- plugins via `--plugin-dir`; marketplaces resolved to plugin dirs.
+- variadic tool flags last.
+- host FS sealed (only declared binds); egress default-deny at L1/L2.
+- `web_fetch` is host/API-routed (NOT container-egress); `bash` is container-egress-sandboxed (§6).
+- secrets never written to disk in a runtime path.
+
+## 10. Production gate constraints (fidelity — pinned from `provenance.gates`)
+
+Behaviors real Cowork enforces via server-side GrowthBook gates (binary-verified, app.asar 1.12603.1;
+states in `baseline.provenance.gates`). A skill that ignores these behaves differently in real Cowork.
+
+- **Task-dispatch rate-limiter** (gate `1648655587`, `{perTask:1, global:3}`). The desktop host
+  **SKIPS** a Task dispatch that would exceed the cap (`recordSkipAndEmit`/`GCA.PerTaskLimit` —
+  **not** queue, not error): a dispatch session launches **≤1 sub-task per task** and **≤3 concurrent
+  globally**. Enforcement in the harness is **DEFERRED** to the planned sub-agent dispatch tree
+  (architecture plan §A3/§B2); until then the harness **does not** cap, so a multi-sub-agent skill that
+  passes here may throttle in real Cowork. SPEC records the constraint; the planned trace/canary must
+  surface dispatch counts against `{perTask:1, global:3}`.
+- **`web_fetch` routing** (gate `1978029737`, `coworkWebFetchViaApi:true`) — see §6; implemented.
+- **Env vars that DON'T affect skill behavior** (documented as not-needed, per the fidelity filter):
+  `CLAUDE_CODE_WORKSPACE_HOST_PATHS` (telemetry only — `workspace.host_paths`), `CLAUDE_CODE_DONT_INHERIT_ENV`
+  (moot under host-loop, which disables native Bash), the bg auth-handshake vars (`CLAUDE_BG_CLAIM_AUTH`
+  etc., single-use host↔worker), `CLAUDE_CODE_ENVIRONMENT_KIND`, `CLAUDE_CODE_WORKER_EPOCH`. Not set.
+
+## 11. Machine output (`--output-format json`)
+
+### 11.0 Replay fidelity contract
+
+`replay` consumes BOTH recorded protocol directions:
+
+- **`cassette.events`** (child→driver): the full assistant turn stream (text, tool_use, tool_result,
+  decision requests, result).
+- **`cassette.controlOut`** (driver→child): the serialized decision responses. When present, a
+  `ReplayDecider` serves these back into the decision pipeline, populating `rec.questions`,
+  `rec.gateAnswers`, and `rec.gateDeliveries` exactly as in a live run.
+
+**Assertion evaluation on replay:**
+- **Content assertions** (`contentKeys` in `src/run/cassette.ts`) are evaluated — `transcript_*`,
+  `tool_*`, `subagent_*`, `dispatch_count_max`, `result`, and (when `controlOut` is present)
+  `question_asked`, `questions_count_max`, `gate_answers_delivered`.
+- **Filesystem/egress assertions** (`file_exists`, `user_visible_artifact`, `no_delete_in_outputs`,
+  `self_heal_ran`, `transcript_no_host_path`, `egress_*`) are skipped — absent from `assertions[]`,
+  not present-and-passing.
+- **`question_asked` / `questions_count_max` / `gate_answers_delivered`** additionally require
+  `controlOut`. Without it, a loud `::warning::` fires and these keys are excluded (not vacuously
+  passed). The authoritative list is `contentKeys`; `docs/cassette.md` mirrors it.
+
+**`replay_protocol_fidelity` (O7 guard):** after the run, `replay` re-serializes each decision
+response via `serializeDecision` and compares to the frozen `controlOut` envelope (canonical
+key-sorted JSON). A mismatch produces a synthesized `{ assertion: { replay_protocol_fidelity: true },
+pass: false, message }` entry in `assertions[]` and exits 1. This catches regressions in
+`serializeDecision` — e.g. dropping `questions` from the AskUserQuestion `updatedInput` — on the
+token-free lane. `replay_protocol_fidelity` is synthesized-only; it is not in `contentKeys` and is
+never user-authored.
+
+`run`, `skill`, and `replay` emit a single JSON object on **stdout** under `--output-format json` (nothing
+else hits stdout in that mode — the renderer/footer/`[env]`/`[input]` all go to stderr). One shape for
+every command:
+
+```jsonc
+{
+  "tool": "cowork-harness",
+  "version": "0.1.0",
+  "command": "run" | "skill" | "replay",
+  "ok": true,                 // false if any result failed OR an error occurred
+  "results": [ RunResult ],   // one per scenario; skill/replay = array of 1
+  "error": null               // or the error envelope (below) when a run THREW
+}
+```
+
+`ok = error===null && results.length>0 && results.every(r => r.result==="success" && r.assertions.every(a=>a.pass))`.
+
+**`RunResult`** (`src/types.ts`):
+```jsonc
+{
+  "scenario": "string",
+  "fidelity": "protocol|container|microvm|hostloop|cowork  (replay: \"replay:<f>\")",
+  "baseline": "string",                          // platform baseline appVersion
+  "result": "success" | "error",                // did the agent turn end without error
+  "decisions": [{ "kind","name","decision","by","rationale?","detail?" }],
+  "toolCounts?": { "WebSearch": 8, … },          // truthful per-tool call count (top-level; host-routed WebSearch shows HERE, not usage.server_tool_use)
+  "gateDeliveries?":[{ "question","delivered": true|false|null, "error?" }], // did each answered gate's answer reach the model (null = unobserved)
+  "egress":    [{ "host","decision":"allow|deny" }],
+  "assertions":[{ "assertion": <Assertion>, "pass": bool, "message?": "string" }],
+  "subagents": [{ "toolUseId","parentToolUseId?","agentType","declaredTools":[],"toolsUsed":[] }],
+  "unanswered":[{ "question","chosen","by","rationale?","model?" }],
+  "usage?": {...}, "cost?": {...}, "durationMs?": number,
+  "outDir": "string",
+  "workDir?": "string",                          // the agent's working root (mnt/) inside the run dir
+  "outputsDir?": "string",                       // the user-visible deliverable mount (mnt/outputs)
+  "effectiveFidelity?": "string",                // tier actually used (differs from `fidelity` when "cowork" resolved)
+  "nonDeterministic?": bool,                      // true if any decision came from a non-deterministic source → not reproducible
+  "permissiveAutoAllow?": ["string"]              // tools auto-allowed by cowork parity that real Cowork BLOCKS → green is NOT faithful
+}
+```
+
+**Error envelope** — a thrown failure (not an assertion failure) under `--output-format json`:
+```jsonc
+{ "tool":"cowork-harness","version":"...","command":"...","ok":false,"results":[],
+  "error": { "category": "usage|unanswered|boundary|runtime|internal", "message": "string", "hint?": "string" } }
+```
+Categories come from TYPED errors (`UnansweredError`→`unanswered`, `BoundaryError`→`boundary`).
+
+**Exit codes** (branchable without parsing): `0` all-pass · `1` assertion/agent failure · `2` usage /
+unanswered-under-`fail` / boundary / runtime. (`--output-format json` writes via `writeSync` so the envelope
+is never truncated by `process.exit` on a pipe.)

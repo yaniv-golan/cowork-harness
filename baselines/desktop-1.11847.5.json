@@ -1,0 +1,78 @@
+{
+  "$comment": "Platform baseline auto-derived by `cowork-harness sync` from a live Claude Desktop install + app.asar. VOLATILE per-release facts only. Regenerate per release; review the diff. Captured 2026-06-12 on macOS arm64.",
+  "baselineVersion": 1,
+  "appVersion": "1.11847.5",
+  "capturedAt": "2026-06-12",
+  "platform": "darwin-arm64",
+
+  "agentVersion": "2.1.170",
+  "agentBinary": {
+    "stagedPath": "~/Library/Application Support/Claude/claude-code-vm/2.1.170/claude",
+    "format": "elf-aarch64",
+    "$comment": "There is NO npm path — the Linux/arm64 ELF is bind-mounted from this staged Desktop install (or COWORK_AGENT_BINARY). npmPackage/preferReuseStaged removed (Q1)."
+  },
+
+  "guest": { "os": "linux", "arch": "arm64" },
+
+  "mountLayout": {
+    "sessionRoot": "/sessions/{sessionId}/mnt",
+    "cwd": "/sessions/{sessionId}/mnt",
+    "mounts": [
+      { "name": "uploads",        "mountPath": "uploads",                 "mode": "r",   "purpose": "user-uploaded files (read-only — asar 'ro')" },
+      { "name": "projects",       "mountPath": ".projects/{projectId}",   "mode": "rw",  "purpose": "selected work folders (a Space) — delete denied by default (asar IX)" },
+      { "name": "local-plugins",  "mountPath": ".local-plugins/cache",    "mode": "r",   "purpose": "marketplace skills/plugins, runtime-discovered" },
+      { "name": "remote-plugins", "mountPath": ".remote-plugins",         "mode": "r",   "purpose": "org-remote plugins, runtime-discovered" },
+      { "name": "outputs",        "mountPath": "outputs",                 "mode": "rw",  "purpose": "session outputs/artifacts — delete denied by default (asar IX); rwd only when approved" }
+    ]
+  },
+
+  "network": {
+    "mode": "gvisor",
+    "configKey_networkMode": "coworkNetworkMode",
+    "configKey_requireFullVmSandbox": "lastSeenRequireCoworkFullVmSandbox",
+    "allowKind": "allowlist",
+    "allowDomains": [
+      "api.anthropic.com",
+      "a-api.anthropic.com",
+      "a-cdn.anthropic.com",
+      "api-staging.anthropic.com",
+      "console.anthropic.com",
+      "docs.anthropic.com",
+      "mcp-proxy.anthropic.com",
+      "support.anthropic.com",
+      "assets.claude.ai",
+      "downloads.claude.ai",
+      "pivot.claude.ai",
+      "preview.claude.ai",
+      "sentry.io",
+      "statsig.anthropic.com",
+      "statsigapi.net"
+    ],
+    "userOverrideKey": "coworkEgressAllowedHosts",
+    "$comment_allow": "Derived from asar vmAllowedDomains() + firewallAlso + config.json:coworkEgressAllowedHosts. statsig* host normalized; verify exact statsig endpoint per release."
+  },
+
+  "settings": {
+    "autoMountFolders": { "key": "autoMountFolders", "default": false },
+    "localAgentModeTrustedFolders": { "key": "localAgentModeTrustedFolders", "default": [] }
+  },
+
+  "bgEnvStrip": {
+    "$comment": "Vars Cowork strips before spawning the in-VM agent (≥2.1.160 = 12 vars incl CLAUDE_CODE_OAUTH_TOKEN). The harness mirrors this strip so skills can't rely on host env that Cowork removes.",
+    "count": 12,
+    "knownVars": [
+      "CLAUDE_CODE_OAUTH_TOKEN",
+      "CLAUDE_CODE_SESSION_KIND",
+      "CLAUDE_CODE_SESSION_ID",
+      "CLAUDE_CODE_SESSION_NAME",
+      "CLAUDE_CODE_SESSION_LOG"
+    ]
+  },
+
+  "provenance": {
+    "asarPath": "/Applications/Claude.app/Contents/Resources/app.asar",
+    "asarFingerprint": "TODO:computed-by-sync",
+    "eipcChannelUuid": "4f426349-8d6f-45f3-ae22-280fef323564",
+    "$comment": "eipcChannelUuid is per-build; recorded for provenance only — the harness does not use Desktop IPC."
+  }
+}

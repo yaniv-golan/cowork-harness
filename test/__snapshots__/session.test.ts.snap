@@ -1,0 +1,43 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`buildLaunchPlan > SPEC §7 buildLaunchPlan output snapshot (mounts/pluginDirs/egressAllow, volatile paths normalized) 1`] = `
+{
+  "egressAllow": [
+    "api.anthropic.com",
+    "a-api.anthropic.com",
+    "a-cdn.anthropic.com",
+    "api-staging.anthropic.com",
+    "console.anthropic.com",
+    "docs.anthropic.com",
+    "mcp-proxy.anthropic.com",
+    "support.anthropic.com",
+    "assets.claude.ai",
+    "downloads.claude.ai",
+    "pivot.claude.ai",
+    "preview.claude.ai",
+    "sentry.io",
+    "statsig.anthropic.com",
+    "statsigapi.net",
+    "api.github.com",
+  ],
+  "model": undefined,
+  "mounts": [
+    {
+      "mode": "r",
+      "mountPath": "uploads/report.pdf",
+    },
+    {
+      "mode": "rw",
+      "mountPath": ".projects/proj1",
+    },
+    {
+      "mode": "r",
+      "mountPath": ".local-plugins/cache/my-pdf-skill",
+    },
+  ],
+  "permissionParity": "cowork",
+  "pluginDirs": [
+    ".local-plugins/cache/my-pdf-skill",
+  ],
+}
+`;
