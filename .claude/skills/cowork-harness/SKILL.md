@@ -3,8 +3,8 @@ name: cowork-harness
 description: Test or debug a Claude Code skill/plugin under Claude Cowork's runtime — sandboxed agent, default-deny egress, the can_use_tool permission/question protocol — using the cowork-harness CLI. Use when validating or regression-testing a skill, authoring or debugging a scenario YAML (prompt + scripted answers + assert:), choosing a fidelity tier, scripting AskUserQuestion / tool-permission answers, or asserting artifacts, egress, or sub-agent dispatch. Especially when a harness run no-ops an assertion, fails on an unanswered gate, false-greens, a steered answer never reaches the model, or a web_fetch is unexpectedly denied or gated. NOT for generic unit testing (pytest/vitest of your own scripts) or non-Cowork CI. Covers the skill / run / chat / record / replay / trace / decide commands and the session-vs-scenario split.
 metadata:
   author: cowork-harness
-  version: 0.1.0
-  tracks-harness: cowork-harness 0.1.0 (baseline desktop-1.12603.1)
+  version: 0.1.1
+  tracks-harness: cowork-harness 0.1.1 (baseline desktop-1.12603.1)
 ---
 
 # cowork-harness
