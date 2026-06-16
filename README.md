@@ -9,6 +9,7 @@
 [![node: >=20](https://img.shields.io/badge/node-%3E%3D20-339933.svg)](#quick-start)
 [![Claude Code plugin](https://img.shields.io/badge/Claude_Code-plugin-F97316)](#drive-it-from-claude-code-companion-skill)
 [![Built with Skill Creator Plus](https://img.shields.io/badge/Built_with-Skill_Creator_Plus-4ecdc4)](https://github.com/yaniv-golan/skill-creator-plus)
+[![Agent Skills compatible](https://img.shields.io/badge/Agent_Skills-compatible-4A90D9)](https://agentskills.io)
 
 Scriptable, CI-friendly test harness that reproduces **Claude Cowork's observable runtime contract** closely enough to test the skills you write — across many scenarios, headless, in CI — without the (locked) Desktop app. It reproduces not just Cowork's *behavior* but its *limitations*: sealed filesystem, default-deny egress, MCP-only cross-boundary — so a green test means green in real Cowork.
 
@@ -448,6 +449,17 @@ The diff shows exactly what moved (agent bump, allowlist change, new mount). You
 - **Egress fidelity is allowlist-exact, transport-approximate** at L1 and L2. Domain allow/deny matches Cowork; the packet-level gVisor netstack is reproduced at neither — both use a default-deny allowlist proxy (L2 adds a guest iptables firewall).
 
 These are documented per-tier in [DESIGN.md](./DESIGN.md) so a green test means what you think it means.
+
+---
+
+## For AI agents
+
+This repo is built to be driven by agents, not just read by humans:
+
+- **[AGENTS.md](./AGENTS.md)** — the canonical agent-instructions file (architecture seams, the build gate, invariants, ethos). Read it before changing code. Also indexed in **[llms.txt](./llms.txt)**.
+- **Companion skill** — [`.claude/skills/cowork-harness/`](./.claude/skills/cowork-harness/SKILL.md) teaches an agent to drive the harness; install it via the marketplace (see [above](#drive-it-from-claude-code-companion-skill)).
+- **Machine-readable interfaces** — stable `--output-format json` envelope on stdout, deterministic exit codes (`0`/`1`/`2`), and `--help` on every command.
+- **JSON Schemas** — [`schema/scenario.schema.json`](./schema/scenario.schema.json) and [`schema/session.schema.json`](./schema/session.schema.json) describe every field of the YAML you author (generated from the source schemas; `npm run schema`).
 
 ---
 
