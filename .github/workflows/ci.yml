@@ -19,8 +19,8 @@ jobs:
     name: typecheck · test · build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
           node-version: "20"
           cache: npm
@@ -44,8 +44,8 @@ jobs:
     runs-on: ubuntu-latest
     needs: unit
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
         with: { python-version: "3.11" }
       - run: pip install pytest
       - name: Run the non-cowork (pure) helper tests
@@ -58,8 +58,8 @@ jobs:
     runs-on: ubuntu-24.04-arm   # arm64 to match Cowork's linux/arm64 guest
     needs: unit
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with: { node-version: "20", cache: npm }
       - run: npm ci && npm run build
       - name: Build agent base image (no Anthropic binary baked in)
@@ -77,8 +77,8 @@ jobs:
     needs: boundary
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with: { node-version: "20", cache: npm }
       - run: npm ci && npm run build
       - name: Guard — require API key
@@ -110,7 +110,7 @@ jobs:
           done
       - name: Upload run artifacts (transcripts, decisions, egress logs)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: run-artifacts
           path: runs/
@@ -123,7 +123,7 @@ jobs:
     needs: unit
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Note
         run: |
           echo "Platform baselines are synced from a developer's installed Claude Desktop via"
