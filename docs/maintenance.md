@@ -101,7 +101,8 @@ Versioning follows [SemVer](https://semver.org/); pre-1.0 minor bumps may includ
 (baseline-schema or CLI-contract changes count as breaking). A parity-baseline *content* update (a new
 Desktop release) is **not** a package version bump on its own — it ships in a normal patch/minor.
 
-Release flow (CD via `.github/workflows/release.yml`):
+Release flow — CD via `.github/workflows/release.yml`, published with **npm Trusted Publishing (OIDC)**
+(no stored token):
 
 ```bash
 # 1. land changes on main (CI green); add a new version heading to CHANGELOG.md
@@ -112,8 +113,22 @@ git push --follow-tags
 ```
 
 Pushing the `vX.Y.Z` tag triggers `release.yml`, which verifies the tag matches `package.json`, runs
-`npm run ci` (typecheck + tests + build), `npm publish --provenance --access public`, and opens a
-GitHub Release. `prepublishOnly` re-runs CI so a manual `npm publish` is guarded too.
+`npm run ci`, then `npm publish --provenance --access public`. Auth is **OIDC**: the workflow's
+`id-token: write` is exchanged for a short-lived publish credential — there is **no `NPM_TOKEN`**. A
+GitHub Release is opened from the tag, and `prepublishOnly` re-runs CI so a manual publish is guarded too.
+A published version is **immutable** — the same `X.Y.Z` can never be re-published, so a botched run needs a
+new patch (not a re-run against the same version).
 
-**One-time setup:** add an `NPM_TOKEN` repository secret (an npm automation token with publish rights);
-the workflow already requests `id-token: write` for npm provenance.
+**One-time setup (on npmjs.com):** configure a Trusted Publisher on the `cowork-harness` package →
+provider GitHub Actions, repo `yaniv-golan/cowork-harness`, workflow filename `release.yml`,
+**environment blank**, allowed action **`npm publish`**. Recommended: *Publishing access → require 2FA and
+disallow tokens* (OIDC keeps working and the long-lived-token surface is gone). The workflow upgrades npm
+(`npm i -g npm@latest`) because OIDC publishing needs npm ≥ 11.5.1.
+
+### The companion skill versions independently
+
+The Claude Code skill under `.claude/skills/cowork-harness/` carries its **own** version, separate from the
+npm package. When you change the skill, bump it in lockstep across **`SKILL.md`** (frontmatter `version:`
+and `tracks-harness:`), **`.claude/skills/cowork-harness/.claude-plugin/plugin.json`**, and the entry in
+**`.claude-plugin/marketplace.json`**, then run `claude plugin validate .`. The marketplace only delivers a
+skill update to already-installed users when this `version` changes — an unbumped edit is invisible to them.
