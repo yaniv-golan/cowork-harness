@@ -25,6 +25,15 @@ section below is the highest-value part. Read it.
 > `desktop-1.12603.1`). If your checkout is newer, prefer the live `--help`, `SPEC.md`, and
 > `docs/*.md` over this snapshot, and re-run the bundled linter.
 
+## 0. Preflight — make sure the harness can actually run
+
+Before the first command, confirm the CLI is reachable and **fail loud** (never fake a pass) when a tier's dependencies are missing:
+
+- **CLI on PATH?** Run `cowork-harness --version`. If it's *not* found you don't need a global install — prefix every command with `npx`: `npx cowork-harness@latest <cmd>` (auto-fetches; Node ≥ 20). To install once instead: `npm i -g cowork-harness`.
+- **Agent binary (every tier).** The staged Claude Code agent is **bind-mounted** from a local Claude Desktop install, or point `COWORK_AGENT_BINARY` at a `claude-code-vm/<ver>/claude` ELF. Nothing is bundled. No agent → no run; report that, don't skip silently.
+- **Docker / Lima.** Only `--fidelity protocol` (L0) runs without them. `container` / `microvm` / `hostloop` / `cowork` need Docker (Lima for L2). If they're absent, drop to `--fidelity protocol` and **say so** — a green that never exercised the sandbox is not a sandbox pass.
+- **Auth.** `CLAUDE_CODE_OAUTH_TOKEN` (preferred) or `ANTHROPIC_API_KEY`, via env or `.env`.
+
 ## 1. Pick the loop
 
 - **"Is it even alive?"** (inner loop) → `cowork-harness skill <folder> "<prompt>"`. Fastest; no

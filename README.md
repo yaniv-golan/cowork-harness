@@ -159,6 +159,19 @@ npm install && npm run build && npm link    # puts the `cowork-harness` command 
 # …or skip the link and call it directly: node dist/cli.js <cmd>
 ```
 
+### Drive it from Claude Code (companion skill)
+
+This repo ships a **companion skill** (`.claude/skills/cowork-harness/`) that teaches an agent how to drive the harness — author scenarios, pick a fidelity tier, script answers, place assertions in the right CI lane, and avoid the "✓ passed ≠ correct" traps. Install it into Claude Code via the bundled marketplace:
+
+```bash
+/plugin marketplace add yaniv-golan/cowork-harness
+/plugin install cowork-harness@cowork-harness
+```
+
+The skill **self-bootstraps the CLI**: if `cowork-harness` isn't on your PATH it falls back to `npx cowork-harness@latest` (Node ≥ 20). Tiers above `protocol` still need Docker/Lima and a Claude Desktop agent binary — see the prerequisites below.
+
+It also follows the open [Agent Skills](https://github.com/vercel-labs/skills) spec, so it installs cross-editor (Cursor, Codex, OpenCode, …) by pointing the `npx skills` CLI at `.claude/skills/cowork-harness` in this repo. (Working *inside* this repo, the skill auto-loads as a project skill — no install needed.)
+
 **Prerequisites for anything above `protocol` fidelity** (the `protocol` tier needs none of these — it's pure logic iteration):
 1. **Claude Desktop, opened once.** The Cowork agent binary is **bind-mounted from your own install** at run time — nothing Anthropic-owned is bundled. Open Cowork once so the agent ELF is staged (`…/claude-code-vm/<ver>/claude`); the harness auto-detects it, or set `COWORK_AGENT_BINARY=<path>` to point at it. Without a staged agent, container/cowork runs fail with "Open Cowork once to stage it…".
 2. **Docker (arm64)** + the agent image: `docker build --platform linux/arm64 -t cowork-agent-base:1 -f docker/Dockerfile.agent .` (override the tag with `COWORK_AGENT_IMAGE`).
