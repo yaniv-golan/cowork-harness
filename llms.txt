@@ -1,0 +1,31 @@
+# cowork-harness
+
+> A scriptable, CI-friendly harness that reproduces Claude Cowork's observable runtime contract — staged agent, mount layout, default-deny egress allowlist, and the permission/AskUserQuestion control protocol — so you can test Claude Code **skills** the way Cowork runs them, headless and outside the Desktop app. It reproduces Cowork's *limitations*, so a green test means green in real Cowork.
+
+It is a fidelity fixture, not the Desktop runtime. The CLI binary is `cowork-harness`; commands are `skill · run · chat · record · replay · trace · decide · gates · answer · sync · list · boundary-check · vm`. Output is human-readable on stderr with a stable `--output-format json` envelope on stdout; exit codes are `0` pass / `1` failure / `2` usage.
+
+## Start here
+- [README](README.md): overview, fidelity tiers, quick start, command reference
+- [AGENTS.md](AGENTS.md): instructions for AI agents working in this repo — architecture seams, build gate, invariants, ethos
+- [SPEC.md](SPEC.md): the authoritative contract (CLI surface, JSON envelope, assertions, exit codes)
+
+## Authoring tests
+- [docs/scenario.md](docs/scenario.md): scenario YAML — prompt + scripted answers + assert:
+- [docs/session.md](docs/session.md): session YAML — pre-prompt setup (model, mounts, discovery)
+- [schema/scenario.schema.json](schema/scenario.schema.json): JSON Schema for scenario files (machine-readable)
+- [schema/session.schema.json](schema/session.schema.json): JSON Schema for session files (machine-readable)
+
+## Concepts & internals
+- [DESIGN.md](DESIGN.md): parity matrix per tier, deliberate deltas vs. real Cowork, the maintenance contract
+- [docs/boundary.md](docs/boundary.md): the sandbox limitations model (what's enforced, what isn't)
+- [docs/discovery.md](docs/discovery.md): how marketplaces / plugins / skills / MCP are discovered
+- [docs/cassette.md](docs/cassette.md): record/replay cassettes and the token-free PR gate
+- [docs/decider-dir.md](docs/decider-dir.md): in-band gate answering by a driving agent
+- [docs/maintenance.md](docs/maintenance.md): keeping parity across Claude Desktop releases (`sync`)
+
+## Using it from an agent
+- [.claude/skills/cowork-harness/SKILL.md](.claude/skills/cowork-harness/SKILL.md): the companion skill that teaches an agent to drive the harness
+
+## Optional
+- [CHANGELOG.md](CHANGELOG.md): release notes
+- [python/README.md](python/README.md): the pytest `cowork` lane
