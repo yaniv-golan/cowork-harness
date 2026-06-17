@@ -528,6 +528,15 @@ export class ExternalDecider implements Decider {
       return { kind: "question", answers };
     }
     if (req.kind === "permission") {
+      // A PRESENT-but-invalid behavior (e.g. a "alow" typo) must fail LOUD, symmetric with the question
+      // branch's mistyped-label throw — the old `parsed.behavior === "allow"` silently flipped any typo
+      // to deny, a non-reproducible false-deny. Only "allow"/"deny" are valid; absent behavior keeps the
+      // existing deny default (the helper may legitimately omit it).
+      if (parsed.behavior != null && parsed.behavior !== "allow" && parsed.behavior !== "deny")
+        throw new UnansweredError(
+          `external decider permission behavior ${JSON.stringify(parsed.behavior)} is not a valid behavior`,
+          `valid behaviors: "allow", "deny"`,
+        );
       const allow = parsed.behavior === "allow";
       // web_fetch approval (options present): carry the grant scope. Helper may send {behavior, grant?};
       // an allow without an explicit grant defaults to "once" (no host-wide approval).

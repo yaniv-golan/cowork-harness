@@ -455,6 +455,38 @@ describe("Run — turn loop + record", () => {
     expect(closed).toBe(true);
   });
 
+  it("Bug 49: a nonzero child exit (source:exit) AFTER a success result flips result to error with the stderr tail", async () => {
+    // LiveAgentSession emits source:"exit" only for a nonzero/signal exit, and it lands AFTER stdout
+    // closes — i.e. after a successful turn already emitted {type:"result", isError:false} and set
+    // rec.result = "success". A child that crashes nonzero after printing a result is NOT a passing run:
+    // the exit error must override result back to "error" and surface the stderr tail.
+    const ev: AgentEvent[] = [
+      { type: "init", tools: ["Bash"], mcpServers: [] },
+      { type: "result", isError: false },
+      { type: "error", source: "exit", message: "agent process exited with code 137 — stderr tail: OOMKilled" },
+    ];
+    let closed = false;
+    class ExitErrSession implements AgentSession {
+      async *start(): AsyncIterable<AgentEvent> {
+        for (const e of ev) yield e;
+      }
+      sendUserTurn() {}
+      respond() {}
+      close() {
+        closed = true;
+      }
+    }
+    const rec = await new Run(new ExitErrSession(), new ScriptedDecider([])).drive("go");
+    // The success result was overridden by the fatal nonzero exit.
+    expect(rec.result).toBe("error");
+    expect(closed).toBe(true);
+    // The exit error is recorded as a decision, carrying the stderr tail in its detail.
+    const exitDec = rec.decisions.find((d) => d.name === "exit");
+    expect(exitDec).toBeDefined();
+    expect(exitDec?.decision).toBe("error");
+    expect(String(exitDec?.detail)).toContain("OOMKilled");
+  });
+
   it("#13/#16: a non-fatal agent error (source:agent) does NOT terminate the run", async () => {
     // source:"agent" is non-terminal — the SDK may still emit a recovering result.
     const ev: AgentEvent[] = [

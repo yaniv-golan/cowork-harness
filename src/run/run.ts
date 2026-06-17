@@ -199,7 +199,15 @@ export class Run {
             // #16: spawn/protocol errors are fatal — set result, close the session, and stop the loop.
             // source:"agent" is non-terminal (the SDK may still emit a recovering `result` event).
             // CRITICAL: set rec.result BEFORE break — gateDeliveries mapping runs after the loop exits.
-            if (ev.source === "spawn" || ev.source === "protocol") {
+            //
+            // Bug 49: source:"exit" is ALSO fatal. LiveAgentSession only emits an "exit" error for a
+            // nonzero/signal child exit (session.ts: `signal || (code !== null && code !== 0)`) — a clean
+            // exit:0 produces NO "exit" event — so there is no benign exit case to preserve here. This
+            // event lands AFTER stdout closes, which means a successful turn already set rec.result =
+            // "success" via the preceding `result` event; a nonzero exit after that result must override
+            // it back to "error" (a child that crashes after printing a result is NOT a passing run). The
+            // stderr tail is already embedded in ev.message by LiveAgentSession.
+            if (ev.source === "spawn" || ev.source === "protocol" || ev.source === "exit") {
               this.rec.result = "error";
               this.rec.decisions.push({ kind: "tool", name: ev.source, decision: "error", by: "agent", detail: ev.message });
               this.session.close();

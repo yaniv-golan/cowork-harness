@@ -219,6 +219,31 @@ describe("web_fetch Path B — U1t + manual redirect re-check (provenance off)",
     for (const h of ["example.com", "8.8.8.8", "203.0.113.5"]) expect(isLocalOrPrivate(h)).toBe(false);
   });
 
+  it("#36 isLocalOrPrivate normalizes IPv4-mapped IPv6 + numeric/hex/octal/short IPv4 forms", () => {
+    const local = [
+      "::ffff:127.0.0.1", // IPv4-mapped IPv6 loopback
+      "[::ffff:127.0.0.1]", // …with brackets (as a URL hostname carries it)
+      "::ffff:169.254.169.254", // IPv4-mapped link-local metadata
+      "::ffff:7f00:1", // IPv4-mapped written as hex groups (= 127.0.0.1)
+      "2130706433", // integer form of 127.0.0.1
+      "0x7f000001", // hex integer form of 127.0.0.1
+      "017700000001", // octal integer form of 127.0.0.1
+      "0177.0.0.1", // octal first octet
+      "0x7f.0.0.1", // hex first octet
+      "127.1", // short form (last part fills low bytes) = 127.0.0.1
+      "10.0.0.1", // sanity: plain private still caught
+    ];
+    for (const h of local) expect(isLocalOrPrivate(h), h).toBe(true);
+
+    const publicHosts = [
+      "::ffff:8.8.8.8", // IPv4-mapped public
+      "134744072", // integer form of 8.8.8.8
+      "0x08080808", // hex form of 8.8.8.8
+      "8.8.8.8",
+    ];
+    for (const h of publicHosts) expect(isLocalOrPrivate(h), h).toBe(false);
+  });
+
   it("BLOCKS a redirect to a private address (SSRF) even when the initial host is allowed", async () => {
     let n = 0;
     const rawFetch: RawFetch = async () =>

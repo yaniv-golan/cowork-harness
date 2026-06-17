@@ -55,6 +55,18 @@ describe("ExternalDecider", () => {
     expect((deny as any).response).toMatchObject({ kind: "permission", behavior: "deny" });
   });
 
+  it("permission: a present-but-INVALID behavior typo throws UnansweredError (no silent flip-to-deny)", async () => {
+    const perm: DecisionRequest = { id: "p1", kind: "permission", tool: "Bash", input: { command: "ls" } };
+    // "alow" is a typo for "allow" — it used to silently normalize to deny. It must now fail loud,
+    // symmetric with the question branch's mistyped-label throw.
+    await expect(new ExternalDecider(memChannel(['{"id":"p1","behavior":"alow"}']).channel).decide(perm, ctx())).rejects.toThrow(
+      UnansweredError,
+    );
+    // an explicit, valid "deny" still works (proving it's the typo, not deny itself, that throws)
+    const deny = await new ExternalDecider(memChannel(['{"id":"p1","behavior":"deny"}']).channel).decide(perm, ctx());
+    expect((deny as any).response).toMatchObject({ kind: "permission", behavior: "deny" });
+  });
+
   it("SCRUBS injected secrets from the emitted request — no token leak (Opus C1)", async () => {
     const TOKEN = "sk-ant-oat01-SECRETVALUE123";
     const { channel, sent } = memChannel(['{"answers":{"Which format?":"Markdown"}}']);

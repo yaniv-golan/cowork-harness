@@ -1,24 +1,95 @@
 import { warn } from "../io.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import net from "node:net";
 import { compile } from "../egress/proxy.js";
 
 const pexec = promisify(execFile);
 const MAX_REDIRECTS = 5; // Cowork's RZe redirect cap (Path B re-checks U1t per hop)
 
+/** Is a dotted-quad's four octets in a loopback/this-host/private/link-local range? */
+function isPrivateIPv4Octets(a: number, b: number): boolean {
+  if (a === 0 || a === 127 || a === 10) return true; // this-host / loopback / private
+  if (a === 192 && b === 168) return true; // private
+  if (a === 172 && b >= 16 && b <= 31) return true; // private
+  if (a === 169 && b === 254) return true; // link-local (incl. cloud metadata 169.254.169.254)
+  return false;
+}
+
+/**
+ * #36: parse the many literal IPv4 host forms a request can carry into canonical octets so the
+ * private-range guard isn't defeated by an alternate encoding. Handles:
+ *  - dotted quad: `127.0.0.1`
+ *  - dotted with octal/hex parts: `0177.0.0.1`, `0x7f.0.0.1`
+ *  - a single integer: `2130706433` (= 127.0.0.1), incl. hex `0x7f000001` / octal `017700000001`
+ *  - 1–3 part short forms where the final part fills the remaining low bytes (`127.1`, `127.0.1`)
+ * Returns the 32-bit value, or null if `host` is not an integer-style IPv4 literal.
+ */
+function parseIPv4Literal(host: string): number | null {
+  const parseUInt = (tok: string): number | null => {
+    if (!tok) return null;
+    let val: number;
+    if (/^0[xX][0-9a-fA-F]+$/.test(tok)) val = parseInt(tok, 16);
+    else if (/^0[0-7]+$/.test(tok)) val = parseInt(tok, 8);
+    else if (/^[0-9]+$/.test(tok)) val = parseInt(tok, 10);
+    else return null;
+    return Number.isFinite(val) && val >= 0 ? val : null;
+  };
+  const parts = host.split(".");
+  if (parts.length === 0 || parts.length > 4) return null;
+  const nums = parts.map(parseUInt);
+  if (nums.some((n) => n === null)) return null;
+  const u = nums as number[];
+  // The leading parts are single bytes; the final part fills the remaining low-order bytes.
+  let value = 0;
+  for (let i = 0; i < u.length - 1; i++) {
+    if (u[i] > 0xff) return null;
+    value = (value << 8) | u[i];
+  }
+  const last = u[u.length - 1];
+  const remainingBytes = 4 - (u.length - 1);
+  const maxLast = remainingBytes >= 4 ? 0xffffffff : Math.pow(256, remainingBytes) - 1;
+  if (last > maxLast) return null;
+  value = (value * Math.pow(256, remainingBytes) + last) >>> 0;
+  return value >>> 0;
+}
+
 /** Port of Cowork's `XwA`: is the host a local / private / link-local address (SSRF backstop)? */
 export function isLocalOrPrivate(host: string): boolean {
-  const h = host.toLowerCase().replace(/^\[|\]$/g, "");
+  let h = host.toLowerCase().replace(/^\[|\]$/g, "");
   if (h === "localhost" || h.endsWith(".localhost") || h.endsWith(".local")) return true;
-  if (h === "::1" || h.startsWith("fe80:") || h.startsWith("fc") || h.startsWith("fd")) return true; // IPv6 loopback/ULA/link-local
+
+  // #36: normalize IPv4-mapped / IPv4-compatible IPv6 (`::ffff:127.0.0.1`, `::ffff:7f00:1`) down to
+  // the embedded IPv4 so the v4 private-range checks below apply. net.isIP recognizes the literal.
+  if (net.isIP(h) === 6) {
+    const mapped = h.match(/^(?:::ffff:|::)(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
+    if (mapped) {
+      h = mapped[1];
+    } else {
+      // Pure IPv6: loopback / ULA (fc00::/7) / link-local (fe80::/10).
+      if (h === "::1" || h.startsWith("fe80:") || h.startsWith("fc") || h.startsWith("fd")) return true;
+      // IPv4-mapped written in hex groups, e.g. `::ffff:7f00:0001`.
+      const hexMapped = h.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+      if (hexMapped) {
+        const hi = parseInt(hexMapped[1], 16);
+        const lo = parseInt(hexMapped[2], 16);
+        return isPrivateIPv4Octets((hi >> 8) & 0xff, hi & 0xff);
+      }
+      return false;
+    }
+  }
+
+  // Dotted-quad fast path (preserves the original behavior for the cases it already caught).
   const m = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
-  if (m) {
-    const a = Number(m[1]);
-    const b = Number(m[2]);
-    if (a === 0 || a === 127 || a === 10) return true; // this-host / loopback / private
-    if (a === 192 && b === 168) return true; // private
-    if (a === 172 && b >= 16 && b <= 31) return true; // private
-    if (a === 169 && b === 254) return true; // link-local (incl. cloud metadata 169.254.169.254)
+  if (m && Number(m[1]) <= 255 && Number(m[2]) <= 255 && Number(m[3]) <= 255 && Number(m[4]) <= 255) {
+    return isPrivateIPv4Octets(Number(m[1]), Number(m[2]));
+  }
+
+  // #36: integer / octal / hex / short-form IPv4 literals that resolve to a private range
+  // (e.g. `2130706433`, `0x7f000001`, `0177.0.0.1`, `127.1` all == 127.0.0.1).
+  const v4 = parseIPv4Literal(h);
+  if (v4 !== null) {
+    return isPrivateIPv4Octets((v4 >>> 24) & 0xff, (v4 >>> 16) & 0xff);
   }
   return false;
 }

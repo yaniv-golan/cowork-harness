@@ -43,7 +43,37 @@ export function resolveDotPath(doc: unknown, path: string | undefined): DotResol
   return { state: "value", value: cur };
 }
 
-const jsonEq = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
+/**
+ * Recursive deep equality for parsed-JSON values, used by `artifact_json.equals` / `.in`.
+ * Object key ORDER is irrelevant ({a:1,b:2} === {b:2,a:1}), but array ORDER is significant
+ * ([1,2] !== [2,1]) — arrays carry meaning in their order, so we never sort them. The old
+ * `JSON.stringify(a) === JSON.stringify(b)` was wrongly order-sensitive on object keys.
+ */
+const deepJsonEqual = (a: unknown, b: unknown): boolean => {
+  if (a === b) return true; // primitives + identity (JSON has no NaN, so no special-casing needed)
+  if (a === null || b === null) return false; // one is null and they weren't ===
+  if (typeof a !== "object" || typeof b !== "object") return false;
+  const aArr = Array.isArray(a);
+  const bArr = Array.isArray(b);
+  if (aArr !== bArr) return false;
+  if (aArr && bArr) {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) if (!deepJsonEqual(a[i], b[i])) return false; // order-sensitive
+    return true;
+  }
+  const ao = a as Record<string, unknown>;
+  const bo = b as Record<string, unknown>;
+  const aKeys = Object.keys(ao);
+  const bKeys = Object.keys(bo);
+  if (aKeys.length !== bKeys.length) return false; // same set of keys (order-insensitive)
+  for (const k of aKeys) {
+    if (!Object.prototype.hasOwnProperty.call(bo, k)) return false;
+    if (!deepJsonEqual(ao[k], bo[k])) return false;
+  }
+  return true;
+};
+
+const jsonEq = (a: unknown, b: unknown): boolean => deepJsonEqual(a, b);
 
 /**
  * Boundary-aware host matching: `host` must equal `needle` exactly or be a proper subdomain of it.

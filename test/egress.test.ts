@@ -104,6 +104,54 @@ describe("#40/#41/#42 — proxy routing fixes", () => {
       server.close();
     }
   });
+
+  it("#38 — plain-HTTP Host header with a bracketed IPv6 authority parses to the bare host", async () => {
+    const decisions: Array<{ host: string; decision: string }> = [];
+    const { server, port } = await listen({ allow: ["example.com"], onDecision: (host, decision) => decisions.push({ host, decision }) });
+    try {
+      // Relative req.url → hostOf falls back to the Host header. A bracketed IPv6 Host must parse to
+      // the bare literal, not `[` (the old `(hostHeader ?? "").split(":")[0]` bug).
+      const resp = await send(port, "GET /foo HTTP/1.1\r\nHost: [2001:db8::1]:80\r\nConnection: close\r\n\r\n");
+      expect(resp).toMatch(/403 /);
+      expect(decisions).toContainEqual({ host: "2001:db8::1", decision: "deny" });
+      // and never `[`
+      expect(decisions.some((d) => d.host === "[")).toBe(false);
+    } finally {
+      server.close();
+    }
+  });
+
+  it("#39 — logs `allow` only after the upstream actually connects, not on allowlist pass", async () => {
+    // Start an upstream that immediately accepts a connection and replies, so the proxy can forward.
+    const upstream = net.createServer((sock) => {
+      sock.on("data", () => sock.write("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nhi"));
+    });
+    await new Promise<void>((r) => upstream.listen(0, "127.0.0.1", () => r()));
+    const upPort = (upstream.address() as net.AddressInfo).port;
+
+    const okDecisions: Array<{ host: string; decision: string }> = [];
+    const ok = await listen({ allow: ["127.0.0.1"], onDecision: (host, decision) => okDecisions.push({ host, decision }) });
+
+    const failDecisions: Array<{ host: string; decision: string }> = [];
+    const failProxy = await listen({ allow: ["127.0.0.1"], onDecision: (host, decision) => failDecisions.push({ host, decision }) });
+    try {
+      // Allowed host that answers → `allow` is logged once the upstream responds.
+      const good = await send(ok.port, `GET http://127.0.0.1:${upPort}/ HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n`);
+      expect(good).toMatch(/200 OK/);
+      expect(okDecisions).toContainEqual({ host: "127.0.0.1", decision: "allow" });
+
+      // Allowed host with NO listener on the target port → connect fails (ECONNREFUSED). The host
+      // passed the allowlist, but nothing reached upstream, so NO `allow` may be logged (#39).
+      const dead = await freePort();
+      const bad = await send(failProxy.port, `GET http://127.0.0.1:${dead}/ HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n`);
+      expect(bad).toMatch(/502/);
+      expect(failDecisions.filter((d) => d.decision === "allow")).toHaveLength(0);
+    } finally {
+      ok.server.close();
+      failProxy.server.close();
+      await new Promise<void>((r) => upstream.close(() => r()));
+    }
+  });
 });
 
 describe("#33 — proxy returns 400 on a malformed proxy URL instead of crashing", () => {

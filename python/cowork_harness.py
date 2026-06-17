@@ -200,8 +200,6 @@ class Cowork:
         self,
         path: str,
         *,
-        fidelity: Optional[str] = None,  # override the scenario's authored fidelity
-        answers: Optional[Mapping[str, str]] = None,  # extra --answer rules (q-regex → choice)
         on_unanswered: str = "fail",  # run's deterministic default
         check: bool = False,  # raise on a failed/enveloped-error run
     ) -> Result:
@@ -210,12 +208,14 @@ class Cowork:
         Removes the subprocess-spawn + JSON-parse + outputs-dir-resolution boilerplate every consumer
         otherwise reinvents. The Result exposes `.outputs_dir` (the resolved artifacts dir),
         `.artifacts` (the ENV-MANIFEST), `.effective_fidelity`, and the assertions — so a test can also
-        prove which tier actually ran (e.g. cowork → hostloop)."""
+        prove which tier actually ran (e.g. cowork → hostloop).
+
+        Fidelity and AskUserQuestion answers are SCENARIO-AUTHORED, not wrapper arguments: set them in
+        the scenario YAML's `fidelity:` / `answers:` fields. The `run` command deliberately rejects
+        `--fidelity` / `--answer` (it takes one <scenario.yaml|dir/> plus common flags only), so the
+        wrapper must never pass them — doing so trips a usage error. To vary fidelity or answers per run,
+        author distinct scenario files (or edit the YAML) rather than overriding from Python."""
         args = ["run", str(path), "--output-format", "json", "--on-unanswered", on_unanswered]
-        if fidelity:
-            args += ["--fidelity", fidelity]
-        for q, choice in (answers or {}).items():
-            args += ["--answer", f"{q}={choice}"]
         return self._invoke(args, check=check)
 
     def replay(self, cassette: str) -> Result:
@@ -280,8 +280,6 @@ class Cowork:
 def run_scenario(
     path: str,
     *,
-    fidelity: Optional[str] = None,
-    answers: Optional[Mapping[str, str]] = None,
     on_unanswered: str = "fail",
     check: bool = False,
     cli: Optional[str] = None,
@@ -289,12 +287,15 @@ def run_scenario(
     """#2: module-level convenience — run an authored scenario YAML in one call.
 
         from cowork_harness import run_scenario
-        r = run_scenario("scenarios/cap_table.yaml", fidelity="container")
+        r = run_scenario("scenarios/cap_table.yaml")  # fidelity/answers live in the YAML
         r.assert_success()
         assert r.effective_fidelity == "hostloop"   # prove which tier ran (fidelity is the tiebreaker)
         assert any(a["path"] == "outputs/cap_state.json" for a in r.artifacts)
+
+    Fidelity and answers are scenario-authored (the scenario YAML's `fidelity:` / `answers:` fields);
+    the `run` command rejects `--fidelity` / `--answer`, so they are not wrapper arguments.
     """
-    return Cowork(cli).run_scenario(path, fidelity=fidelity, answers=answers, on_unanswered=on_unanswered, check=check)
+    return Cowork(cli).run_scenario(path, on_unanswered=on_unanswered, check=check)
 
 
 def serve_decider(fn: Callable[[dict], Any], *, _in=None, _out=None) -> None:

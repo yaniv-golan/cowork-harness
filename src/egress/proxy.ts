@@ -64,13 +64,14 @@ export function startEgressProxy(opts: ProxyOptions): EgressProxy {
       res.end("bad request: malformed proxy URL");
       return;
     }
-    // Log `allow` only once the request is valid and we're about to forward. Logging before
-    // the parse would record an `allow` for a malformed URL that never reached an upstream,
-    // false-passing `egress_allowed` assertions.
-    log(host, "allow");
+    // #39: log `allow` only once the upstream actually responds — not merely because the host
+    // passed the allowlist. Logging here (before the request reaches an upstream) would false-pass
+    // an `egress_allowed` assertion even when DNS/connect/request failed and nothing reached the
+    // host. An upstream error logs nothing (the deny path is unaffected: it still logs above).
     const proxyReq = http.request(
       { host: target.hostname, port: target.port || 80, path: target.pathname + target.search, method: req.method, headers: req.headers },
       (proxyRes) => {
+        log(host, "allow");
         res.writeHead(proxyRes.statusCode ?? 502, proxyRes.headers);
         proxyRes.pipe(res);
       },
@@ -97,8 +98,11 @@ export function startEgressProxy(opts: ProxyOptions): EgressProxy {
       clientSocket.end();
       return;
     }
-    log(host, "allow");
+    // #39: log `allow` only once the upstream socket actually connects, not merely because the
+    // host passed the allowlist — otherwise `egress_allowed` false-passes when the connect fails
+    // and nothing reached the host. The deny path above is unchanged.
     const upstream = net.connect(port, host, () => {
+      log(host, "allow");
       clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
       upstream.write(head);
       upstream.pipe(clientSocket);
@@ -168,10 +172,14 @@ export function compile(patterns: string[]): (host: string) => boolean {
 }
 
 function hostOf(url: string, hostHeader?: string): string {
+  // #38: a bracketed IPv6 `Host` (e.g. `[2001:db8::1]:80`) must not be split on the first ":",
+  // which would read `[` as the host. Route the Host header through the same bracket-aware
+  // authority parser used for CONNECT so plain-HTTP requests resolve the same bare host.
+  const fromHeader = () => (hostHeader ? parseAuthority(hostHeader).host : "");
   try {
-    return new URL(url).hostname || (hostHeader ?? "").split(":")[0];
+    return new URL(url).hostname || fromHeader();
   } catch {
-    return (hostHeader ?? "").split(":")[0];
+    return fromHeader();
   }
 }
 

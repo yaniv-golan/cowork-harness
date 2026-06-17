@@ -212,6 +212,39 @@ describe("artifact_json assertion (#5)", () => {
   });
 });
 
+// Bug 37 — artifact_json equals/in deep-equality is INSENSITIVE to object key order but
+// SENSITIVE to array order (the old JSON.stringify compare was wrongly key-order-sensitive).
+describe("artifact_json equals/in — key-order-insensitive, array-order-sensitive (Bug 37)", () => {
+  const A = (doc: unknown, artifact_json: any) => {
+    const root = artifactRoot(doc);
+    return evaluate([{ artifact_json }], ctx({ workRoot: root }));
+  };
+  it("equals passes for an object with reordered keys", () => {
+    expect(pass(A({ a: 1, b: 2 }, { artifact: "outputs/state.json", path: undefined, equals: { b: 2, a: 1 } }))).toBe(true);
+  });
+  it("equals passes for nested reordering", () => {
+    const doc = { outer: { x: 1, y: { p: "a", q: "b" } }, list: [1, 2, 3] };
+    const expected = { list: [1, 2, 3], outer: { y: { q: "b", p: "a" }, x: 1 } };
+    expect(pass(A(doc, { artifact: "outputs/state.json", path: undefined, equals: expected }))).toBe(true);
+  });
+  it("equals FAILS for a reordered array (arrays are order-significant)", () => {
+    expect(pass(A({ nums: [1, 2] }, { artifact: "outputs/state.json", path: "nums", equals: [2, 1] }))).toBe(false);
+    expect(pass(A({ nums: [1, 2] }, { artifact: "outputs/state.json", path: "nums", equals: [1, 2] }))).toBe(true);
+  });
+  it("equals FAILS for genuinely different values", () => {
+    expect(pass(A({ a: 1, b: 2 }, { artifact: "outputs/state.json", path: undefined, equals: { a: 1, b: 3 } }))).toBe(false);
+    expect(pass(A({ a: 1 }, { artifact: "outputs/state.json", path: undefined, equals: { a: 1, b: 2 } }))).toBe(false);
+  });
+  it("in matches via reordered-key deep equality", () => {
+    expect(
+      pass(A({ a: 1, b: 2 }, { artifact: "outputs/state.json", path: undefined, in: [{ b: 2, a: 1 }, { z: 9 }] })),
+    ).toBe(true);
+    expect(
+      pass(A({ a: 1, b: 2 }, { artifact: "outputs/state.json", path: undefined, in: [{ a: 1, b: 3 }, { z: 9 }] })),
+    ).toBe(false);
+  });
+});
+
 describe("collectArtifacts — ENV-MANIFEST recursive listing", () => {
   it("lists files (relative path + bytes) under the user-visible prefixes; empty when nothing written", () => {
     const root = mkdtempSync(join(tmpdir(), "cwh-manifest-"));

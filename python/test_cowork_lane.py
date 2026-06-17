@@ -112,6 +112,37 @@ def test_assert_tool_called_uses_toolcounts_not_decisions():
         no_counts.assert_tool_called("Read")
 
 
+# ---- Theme C (#18/#19): run_scenario must not pass --fidelity/--answer ----
+# The `run` command takes exactly one <scenario.yaml|dir/> plus common flags and REJECTS extra
+# arguments (fidelity is the scenario's `fidelity:` field; answers are its `answers:`). These tests pin
+# the wrapper to that contract so it can't drift back to emitting flags `run` would reject.
+
+
+def test_run_scenario_does_not_pass_fidelity_or_answer_flags(monkeypatch):
+    captured: dict = {}
+    c = Cowork.__new__(Cowork)  # skip __init__/_find_cli — we only inspect the built argv
+    c.cli = "dist/cli.js"
+    monkeypatch.setattr(c, "_invoke", lambda args, check=False: captured.setdefault("args", args))
+    c.run_scenario("scenarios/x.yaml")
+    args = captured["args"]
+    assert args[:2] == ["run", "scenarios/x.yaml"]
+    assert "--fidelity" not in args, "fidelity is scenario-authored; `run` rejects --fidelity"
+    assert "--answer" not in args, "answers are scenario-authored; `run` rejects --answer"
+    # the contract it DOES keep: json envelope + deterministic on-unanswered policy
+    assert "--output-format" in args and "json" in args
+    assert "--on-unanswered" in args
+
+
+def test_run_scenario_signature_drops_fidelity_and_answers():
+    # The params themselves are gone (not just unused) — a stale caller passing them must fail loudly,
+    # not be silently accepted and then trip `run`'s usage error at the CLI boundary.
+    import inspect
+
+    params = inspect.signature(Cowork.run_scenario).parameters
+    assert "fidelity" not in params
+    assert "answers" not in params
+
+
 # ---- #11: trace() raises on bad target / nonzero exit ----
 
 def test_trace_raises_on_nonexistent_target():
