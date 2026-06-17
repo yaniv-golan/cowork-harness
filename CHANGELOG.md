@@ -6,6 +6,13 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-06-18
+
+The parsing/validation hardening + safety release: a current-tree code-review sweep plus fidelity and
+robustness findings from real skill-testing sessions — uniform fail-loud CLI parsing (enforced by a
+structural test + CI guard), a centralized staging-source resolver, cassette replay/manifest safety
+(base64 + containment + hash-verify), egress SSRF/DNS-rebind hardening, `replay <dir>`, and `cowork-harness lint`.
+
 ### Added
 
 - **`cowork-harness lint <scenario.yaml>…`** — the bundled scenario linter/scaffolder (`scenario.py`) is now
