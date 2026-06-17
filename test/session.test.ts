@@ -355,7 +355,10 @@ describe("SEAM A — fail-loud declared-source staging", () => {
     const mk = mkdtempSync(join(tmpdir(), "cowork-corrupt-pj-"));
     mkdirSync(join(mk, ".claude-plugin"), { recursive: true });
     mkdirSync(join(mk, "p", ".claude-plugin"), { recursive: true });
-    writeFileSync(join(mk, ".claude-plugin", "marketplace.json"), JSON.stringify({ name: "mymkt", plugins: [{ name: "p", source: "./p" }] }));
+    writeFileSync(
+      join(mk, ".claude-plugin", "marketplace.json"),
+      JSON.stringify({ name: "mymkt", plugins: [{ name: "p", source: "./p" }] }),
+    );
     writeFileSync(join(mk, "p", ".claude-plugin", "plugin.json"), "{ not valid json"); // corrupt
     expect(() => plan({ plugins: { local_marketplaces: [mk], enabled: ["p@mymkt"] } })).toThrow(/plugin manifest is not valid JSON/);
   });
@@ -365,7 +368,10 @@ describe("SEAM A — fail-loud declared-source staging", () => {
     const mk = mkdtempSync(join(tmpdir(), "cowork-noversion-pj-"));
     mkdirSync(join(mk, ".claude-plugin"), { recursive: true });
     mkdirSync(join(mk, "p", ".claude-plugin"), { recursive: true });
-    writeFileSync(join(mk, ".claude-plugin", "marketplace.json"), JSON.stringify({ name: "mymkt", plugins: [{ name: "p", source: "./p" }] }));
+    writeFileSync(
+      join(mk, ".claude-plugin", "marketplace.json"),
+      JSON.stringify({ name: "mymkt", plugins: [{ name: "p", source: "./p" }] }),
+    );
     writeFileSync(join(mk, "p", ".claude-plugin", "plugin.json"), JSON.stringify({ name: "p" })); // valid, no version
     const { plan: p } = plan({ plugins: { local_marketplaces: [mk], enabled: ["p@mymkt"] } });
     expect(p.pluginDirs).toContain(".local-plugins/cache/mymkt/p/0.0.0");

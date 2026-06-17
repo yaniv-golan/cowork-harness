@@ -2,7 +2,7 @@ import { warn } from "../io.js";
 import { existsSync, mkdirSync, cpSync } from "node:fs";
 import { join, dirname } from "node:path";
 import type { LaunchPlan } from "../session.js";
-import { requireFile } from "../staging/resolve.js";
+import { resolveDeclaredSource } from "../staging/resolve.js";
 
 /** Subdirs the writable session tree always pre-creates under mnt (idempotent). */
 const BARE_DIRS = ["uploads", "outputs", ".projects", ".local-plugins/cache", ".remote-plugins", ".claude"];
@@ -45,20 +45,21 @@ export function stageWorkspace(plan: LaunchPlan, mntHost: string): StageResult {
       if (existsSync(mt.hostPath)) cpSync(mt.hostPath, dest, { recursive: true });
     }
     // A declared mcp.config whose source is missing must FAIL on a fresh run (it was silently dropped
-    // before — no --mcp-config, no error). Checked HERE, not in buildLaunchPlan, because resume (the
+    // before — no --mcp-config, no error). Resolved HERE, not in buildLaunchPlan, because resume (the
     // else branch) must stay exempt: on resume the source may be gone but the staged copy persists.
-    // COWORK_HARNESS_SOFT_MISSING=1 downgrades to warn-and-skip.
-    if (plan.mcpConfig && !existsSync(plan.mcpConfig)) {
+    // Route through SEAM A: a present source is kind-checked (--mcp-config models a single mcpServers
+    // FILE; a directory would otherwise reach the no-`recursive` cpSync below and throw an opaque
+    // ERR_FS_EISDIR, so a wrong-kind source fails loud regardless of softMissing); a missing source
+    // throws by default or, under COWORK_HARNESS_SOFT_MISSING=1, returns null → warn-and-skip.
+    if (plan.mcpConfig) {
       const softMissing = (process.env.COWORK_HARNESS_SOFT_MISSING ?? "") !== "";
-      if (!softMissing)
-        throw new Error(`mcp.config not found: ${plan.mcpConfig}. Fix the path, or set COWORK_HARNESS_SOFT_MISSING=1 to skip it.`);
-      warn(`::warning:: [mcp] config missing, --mcp-config not advertised (COWORK_HARNESS_SOFT_MISSING): ${plan.mcpConfig}\n`);
-    } else if (plan.mcpConfig) {
-      // --mcp-config models a single mcpServers FILE; a directory source would otherwise reach
-      // the `cpSync(plan.mcpConfig, mcpDest)` below (no `recursive`) and throw an opaque ERR_FS_EISDIR.
-      // Kind-check only when the source EXISTS (the missing case is reconciled by the softMissing branch
-      // above); a wrong-kind source fails loud regardless of softMissing — it is malformed, not missing.
-      requireFile(plan.mcpConfig, "mcp.config");
+      const resolved = resolveDeclaredSource(plan.mcpConfig, mcpDest, "r", "file", {
+        softMissing,
+        deferMissing: false,
+        what: "mcp.config",
+      });
+      if (!resolved)
+        warn(`::warning:: [mcp] config missing, --mcp-config not advertised (COWORK_HARNESS_SOFT_MISSING): ${plan.mcpConfig}\n`);
     }
     // Advertise --mcp-config only when THIS run actually staged a config. Tie it to the current
     // plan, not to whether a file happens to exist: a fresh non-resume run that reuses a stable

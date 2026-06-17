@@ -4,7 +4,7 @@ import { mkdirSync, writeFileSync, readFileSync, cpSync, existsSync, statSync } 
 import { join, resolve, basename, isAbsolute } from "node:path";
 import { homedir } from "node:os";
 import type { PlatformBaseline } from "./types.js";
-import { safePathSegment, safeMountSegment, requireDir } from "./staging/resolve.js";
+import { safePathSegment, safeMountSegment, resolveDeclaredSource } from "./staging/resolve.js";
 
 /** Clone process env with Cowork's bg-env-strip applied. */
 function strippedEnv(baseline: PlatformBaseline): NodeJS.ProcessEnv {
@@ -200,15 +200,16 @@ export function buildLaunchPlan(session: SessionConfig, baseline: PlatformBaseli
   const skillDests = new Set<string>();
   for (const s of session.skills.local) {
     const src = expand(s);
-    if (!existsSync(src)) {
-      if (!softMissing) throw new Error(`skill source not found: ${src}. Fix the path, or set COWORK_HARNESS_SOFT_MISSING=1 to skip it.`);
+    // A skill is staged IMMEDIATELY (cpSync'd recursively into CLAUDE_CONFIG_DIR/skills), not via the
+    // mount list, so its missing decision is made here (not deferred to the post-loop batch check). The
+    // resolver kind-checks a present source (a file source would copy as a lone file, diverging from
+    // Cowork's skill-dir model) and honors softMissing: a missing source throws by default, or returns
+    // null (skip) under softMissing.
+    const resolved = resolveDeclaredSource(src, "", "r", "dir", { softMissing, deferMissing: false, what: "skill source" });
+    if (!resolved) {
       warn(`::warning:: [skill] missing source excluded (COWORK_HARNESS_SOFT_MISSING): ${src}\n`);
       continue;
     }
-    // a skill is a directory (it is cpSync'd recursively into CLAUDE_CONFIG_DIR/skills). A file
-    // source would copy as a lone file, silently diverging from Cowork's skill-dir model. Kind-check
-    // here, where the source is known to exist (missing already handled above, softMissing-aware).
-    requireDir(src, "skill source");
     const dest = safePathSegment(basename(src), "skill basename");
     if (skillDests.has(dest))
       throw new Error(
@@ -232,27 +233,28 @@ export function buildLaunchPlan(session: SessionConfig, baseline: PlatformBaseli
   for (const f of session.folders) {
     const src = expand(f.from);
     // a folder models a workspace DIRECTORY copied into `.projects/<id>`; a file source would
-    // be copied as a lone file, diverging from Cowork. Mirror the upload `isFile` guard above, inverted
-    // — kind-check only when the source EXISTS (a missing source stays on the post-loop missing-mount
-    // check, softMissing-aware), so a wrong-kind source fails loud but a missing one is reconciled later.
-    if (existsSync(src)) requireDir(src, `folder "${f.from}"`);
+    // be copied as a lone file, diverging from Cowork. The resolver kind-checks only when the source
+    // EXISTS — a missing source is deferred to the post-loop missing-mount check (softMissing-aware), so
+    // a wrong-kind source fails loud but a missing one is reconciled later.
     // A folder `to` (or the default basename) is interpolated into `.projects/<id>` — validate it as a
     // single safe segment so neither `to: ../../x` nor a `from` whose basename is ".." escapes .projects.
     const id = f.to ? safePathSegment(f.to, "folder `to`") : safePathSegment(basename(src), "folder default id (from basename)");
-    mounts.push({ hostPath: src, mountPath: `.projects/${id}`, mode: f.mode });
+    mounts.push(
+      resolveDeclaredSource(src, `.projects/${id}`, f.mode, "dir", { softMissing, deferMissing: true, what: `folder "${f.from}"` })!,
+    );
   }
   for (const p of session.plugins.local_plugins) {
     const src = expand(p);
     // a plugin root is a DIRECTORY (mounted as a --plugin-dir); a file source would yield a
-    // bogus --plugin-dir. Kind-check only when present (missing stays on the post-loop check).
-    if (existsSync(src)) requireDir(src, `local_plugin "${p}"`);
-    mounts.push({ hostPath: src, mountPath: `.local-plugins/cache/${safePathSegment(basename(src), "local_plugin basename")}`, mode: "r" });
+    // bogus --plugin-dir. Kind-check only when present (missing deferred to the post-loop check).
+    const mountPath = `.local-plugins/cache/${safePathSegment(basename(src), "local_plugin basename")}`;
+    mounts.push(resolveDeclaredSource(src, mountPath, "r", "dir", { softMissing, deferMissing: true, what: `local_plugin "${p}"` })!);
   }
   for (const p of session.plugins.remote_plugins) {
     const src = expand(p);
     // same as local_plugins — a remote-plugin root is a directory; kind-check when present.
-    if (existsSync(src)) requireDir(src, `remote_plugin "${p}"`);
-    mounts.push({ hostPath: src, mountPath: `.remote-plugins/${safePathSegment(basename(src), "remote_plugin basename")}`, mode: "r" });
+    const mountPath = `.remote-plugins/${safePathSegment(basename(src), "remote_plugin basename")}`;
+    mounts.push(resolveDeclaredSource(src, mountPath, "r", "dir", { softMissing, deferMissing: true, what: `remote_plugin "${p}"` })!);
   }
   // Local marketplaces: resolve enabled `name@marketplace` plugins to --plugin-dir.
   // The agent loads plugins via --plugin-dir, not the marketplace registry (inert in

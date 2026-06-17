@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { safePathSegment, noTraversal, safeMountSegment, requireFile, requireDir } from "../src/staging/resolve.js";
+import { safePathSegment, noTraversal, safeMountSegment, requireFile, requireDir, resolveDeclaredSource } from "../src/staging/resolve.js";
 
 describe("staging/resolve — path-segment validators", () => {
   describe("safePathSegment", () => {
@@ -63,6 +63,53 @@ describe("staging/resolve — path-segment validators", () => {
       expect(noTraversal("@scope/pkg", "x")).toBe("@scope/pkg");
       expect(() => noTraversal("a/../b", "x")).toThrow(/unsafe x/);
       expect(() => noTraversal("/abs", "x")).toThrow(/unsafe x/);
+    });
+  });
+
+  describe("resolveDeclaredSource — the central staging choke point", () => {
+    function fileFixture() {
+      const d = mkdtempSync(join(tmpdir(), "rds-"));
+      const f = join(d, "x.json");
+      writeFileSync(f, "{}");
+      const sub = join(d, "adir");
+      mkdirSync(sub);
+      return { d, f, sub };
+    }
+
+    it("a present source of the right kind returns the Mount with the given mountPath/mode", () => {
+      const { sub } = fileFixture();
+      const m = resolveDeclaredSource(sub, ".projects/p", "rw", "dir", { softMissing: false, deferMissing: true, what: "folder" });
+      expect(m).toEqual({ hostPath: sub, mountPath: ".projects/p", mode: "rw" });
+    });
+
+    it("a present WRONG-KIND source throws regardless of softMissing or deferMissing", () => {
+      const { f, sub } = fileFixture();
+      // dir expected, file given
+      expect(() => resolveDeclaredSource(f, "m", "r", "dir", { softMissing: true, deferMissing: true, what: "folder" })).toThrow(
+        /folder must be a directory/,
+      );
+      // file expected, dir given
+      expect(() => resolveDeclaredSource(sub, "m", "r", "file", { softMissing: true, deferMissing: false, what: "mcp.config" })).toThrow(
+        /mcp.config must be a file/,
+      );
+    });
+
+    it("deferMissing: a MISSING source still returns the Mount (post-loop batch check owns the decision)", () => {
+      const m = resolveDeclaredSource("/no/such/path", ".projects/p", "rw", "dir", {
+        softMissing: false,
+        deferMissing: true,
+        what: "folder",
+      });
+      expect(m).toEqual({ hostPath: "/no/such/path", mountPath: ".projects/p", mode: "rw" });
+    });
+
+    it("immediate (deferMissing:false): a MISSING source throws by default, returns null under softMissing", () => {
+      expect(() =>
+        resolveDeclaredSource("/no/such/path", "", "r", "dir", { softMissing: false, deferMissing: false, what: "skill source" }),
+      ).toThrow(/skill source not found:.*COWORK_HARNESS_SOFT_MISSING/);
+      expect(
+        resolveDeclaredSource("/no/such/path", "", "r", "dir", { softMissing: true, deferMissing: false, what: "skill source" }),
+      ).toBeNull();
     });
   });
 });
