@@ -183,6 +183,47 @@ Re-record a cassette when:
 - `replay` exits 1 on a `replay_protocol_fidelity` mismatch — this means `serializeDecision` changed;
   review the change, confirm it's correct, then re-record to update the frozen envelope.
 
+## Batch recording
+
+`record` takes a single scenario OR a directory:
+
+```bash
+cowork-harness record scenarios/                 # record every scenario in the dir (one cassette each)
+cowork-harness record cassettes/ --rerecord-stale # re-record ONLY the cassettes whose fingerprint drifted
+```
+
+Directory discovery keys on a **positive `prompt:` signal**: a `*.yaml` with no top-level `prompt:` is an
+announced skip (it's a session/other doc), but a doc that *looks* like a scenario (has `prompt:`) yet fails
+to parse is a **failure**, never a silent skip. Zero scenarios discovered → loud non-zero exit. `record`
+also **refuses to freeze a failing live run** into a cassette (`--allow-failing` overrides) — a committed
+red cassette is a latent false-signal.
+
+## Privacy: cassettes are committed fixtures
+
+A cassette snapshots the transcript **and** the `outputs/` JSON bodies (names, dollar figures, share
+counts) — committed PII surface. Two layers, distinct from secret-scrub (which only strips auth tokens):
+
+- **Opt-in redaction** (the mutation). Drop a `.cowork-redact.json` next to your scenarios, or set
+  `COWORK_HARNESS_REDACT_PATTERNS` / `COWORK_HARNESS_REDACT_KEYS`. At record time it rewrites matching PII
+  across the whole cassette surface (transcript, artifact bodies + filenames, prompt/answers/assert,
+  skillSources) **structurally** — JSON stays valid and the AskUserQuestion question/answer strings stay in
+  sync, so the O7 guard still passes. Redaction is **verdict-preserving**: `record` replays before/after and
+  **refuses to write** if redaction would flip an assertion (a manufactured green is the cardinal sin).
+  `--no-redact` skips it for known-synthetic inputs.
+- **Always-on scan gate** — `verify-cassettes <file|dir>` flags `email` / `currency` / bare-`domain`
+  matches in the committed cassettes and **exits non-zero**, so "no leak" is a gate, not discipline.
+  `--allow <regex>` suppresses synthetic / public reference names (e.g. `NVCA`, `Cooley GO`, `Acme`).
+  Multi-word proper names are **not** a default class (too noisy to gate on — add a pattern via config if
+  your corpus needs it). `verify-cassettes` also runs the **staleness** check (`--staleness-only`): a
+  drifted `skillHash` (you edited the skill but didn't re-record) fails the gate.
+
+```bash
+cowork-harness verify-cassettes cassettes/ --allow 'NVCA|Cooley GO|Acme'
+```
+
+The cardinal rule still holds: record against **synthetic** inputs (e.g. "Cadence / Acme", made-up
+numbers) — redaction and the scan are belt-and-suspenders, not a license to record real customer data.
+
 ## Committed fixture
 
 `examples/replays/example-pdf-skill.cassette.json` is a **synthetic** cassette committed to the repo

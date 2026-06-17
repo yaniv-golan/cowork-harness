@@ -353,3 +353,25 @@ Categories come from TYPED errors (`UnansweredError`→`unanswered`, `BoundaryEr
 **Exit codes** (branchable without parsing): `0` all-pass · `1` assertion/agent failure · `2` usage /
 unanswered-under-`fail` / boundary / runtime. (`--output-format json` writes via `writeSync` so the envelope
 is never truncated by `process.exit` on a pipe.)
+
+### 11.1 `verify-cassettes` — dedicated envelope (NOT the RunResult shape)
+
+`verify-cassettes <file|dir>` is the token/agent-free CI gate over committed cassettes (privacy scan +
+staleness). It does **not** reuse the `run/skill/replay` envelope (that routes `ok` through live-lane
+verdict logic a finding doesn't have) — it emits its own:
+
+```jsonc
+{ "command": "verify-cassettes",
+  "ok": true,                       // false if any real finding, staleness drift, or unreadable cassette
+  "results": [ { "file": "string",
+                 "findings": [ { "where": "string", "cls": "email|currency|domain|unscanned", "sample": "string" } ],
+                 "staleness": [ "string" ],   // drift / unresolvable-fingerprint messages (gate failures)
+                 "error?": "string" } ] }     // a malformed cassette is TALLIED here, never crashes the batch
+```
+
+`ok = no finding with cls!="unscanned"  &&  no staleness message  &&  no error`. An `unscanned` finding (a
+`>64 KiB`/unreadable artifact body, which is hash-only — nothing committed to leak) is reported but does NOT
+fail the gate. **Exit codes:** `0` clean · `1` any finding/staleness/error · `2` usage (e.g.
+`--privacy-only`+`--staleness-only` together, or zero cassettes under a dir — a loud non-zero, never a
+vacuous pass). The `in:` assert operator (§ scenario schema) and `record <dir>`/`--rerecord-stale` batch
+recording are also part of 0.3.0; see `docs/scenario.md` and `docs/cassette.md`.

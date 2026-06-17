@@ -6,6 +6,37 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+The CI-operate + privacy layer for committed cassettes: record-time redaction, an always-on
+`verify-cassettes` scan/staleness gate, batch recording, and a set-membership assert operator.
+
+### Added
+
+- **`verify-cassettes <file|dir>`** — a token/agent-free CI gate over committed cassettes. A privacy
+  **scan** flags `email`/`currency`/bare-`domain` matches (`--allow <regex>` suppresses synthetic/public
+  reference names; multi-word proper names are opt-in, not a default class) and a **staleness** check
+  (`--staleness-only`) fails when a cassette's fingerprint drifted (you edited the skill but didn't
+  re-record). Exit 1 on any finding/drift/unreadable cassette; a malformed cassette is tallied, never
+  crashes the batch. Dedicated JSON envelope (`{command, ok, results}`), not the `RunResult` shape.
+- **Record-time content redaction** (opt-in; distinct from secret-scrub). A `.cowork-redact.json` (or
+  `COWORK_HARNESS_REDACT_PATTERNS`/`_KEYS`) rewrites configured PII across the **whole** cassette surface
+  (transcript, artifact bodies + filenames, prompt/answers/assert, skillSources) **structurally** — JSON
+  stays valid and the AskUserQuestion question/answer strings stay in sync (the O7 guard still passes), with
+  collision-safe deterministic tokens. Redaction is **verdict-preserving**: `record` refuses to write if it
+  would flip an assertion (a manufactured green). `--no-redact` / `--allow-failing` escape hatches.
+- **Batch recording** — `record <dir>` records every scenario in a directory (classified by a positive
+  `prompt:` signal: a non-scenario YAML is an announced skip, a broken scenario is a failure, never a silent
+  skip); `record <cassette-dir> --rerecord-stale` re-records only the cassettes whose fingerprint drifted.
+- **`artifact_json` `in:` operator** — assert the resolved value deep-equals one of a fixed set; stable for
+  stochastic (LLM-extracted) values where `equals` churns across re-records.
+
+### Fixed
+
+- **`skillHash` cassette fingerprint was silently dead** — `skillSourceDirs` passed a path string to
+  `loadSession` (which wants parsed YAML), threw, and the throw was swallowed, so the staleness gate's
+  skill-edit signal never computed for a file-based session. Now parses + resolves the session correctly;
+  `hashDir` folds in each file's relative path + type marker (a *move* now registers); `skillSources` are
+  stored relative, never as absolute host paths.
+
 ## [0.2.0] — 2026-06-17
 
 Binary-verified the AskUserQuestion answer wire shape (agent ELF 2.1.170), implemented the

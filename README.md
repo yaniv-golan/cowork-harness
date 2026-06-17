@@ -74,7 +74,8 @@ Skill testing is the headline use, but the tool is a general harness over the Co
 | `skill <folder> "<prompt>"` | Run a local skill/plugin folder once against the staged agent | ad-hoc "is the skill alive / does it do X?" — the fast inner loop |
 | `run <scenario.yaml \| dir/>` | Run authored scenarios with `assert:` + a CI-ready exit code | you want a repeatable, **asserted regression test** |
 | `chat <folder>` | Interactive multi-turn REPL against a skill (TTY) | debugging a multi-turn flow by hand |
-| `record` / `replay` | Save a control-protocol cassette, then replay it deterministically (`replay --strict` fails on a stale cassette) | **token-free, Docker-free CI** from a once-recorded run |
+| `record` / `replay` | Save a control-protocol cassette (one scenario, or batch a `dir/`; `--rerecord-stale` refreshes only drifted ones), then replay it deterministically (`replay --strict` fails on a stale cassette) | **token-free, Docker-free CI** from a once-recorded run |
+| `verify-cassettes <file\|dir>` | Token-free CI gate over committed cassettes: a privacy scan (email/currency/domain → exit 1) + a staleness check (`--staleness-only`) | gating **committed cassettes** against PII leaks + "edited the skill, forgot to re-record" |
 | `trace <run-id>` | Digest a run's `events.jsonl` (`--tools`, `--gates`, `--dispatches` for the sub-agent dispatch tree + total) | "how many sub-agents *actually* dispatched, and which?" |
 | `scaffold --from-run <id>` | Turn a kept run into a starter scenario YAML (gates→answers, artifacts→`file_exists`) | authoring a scenario from a real run instead of guessing |
 | `assert --list` | List the available scenario assertions (generated from the schema) | "what can I assert?" without grepping the source |
@@ -204,7 +205,16 @@ cowork-harness replay --cassette cassettes/example-pdf-skill.cassette.json
 
 # A committed synthetic fixture is ready to replay on a fresh clone (no record step needed):
 cowork-harness replay --cassette examples/replays/example-pdf-skill.cassette.json
+
+# Cassettes are COMMITTED fixtures — record against synthetic data, and gate them in CI:
+cowork-harness verify-cassettes cassettes/   # privacy scan (email/currency/domain) + staleness; exit 1 on a finding
 ```
+
+> **Privacy:** a cassette snapshots the transcript and the `outputs/` JSON bodies, so it's committed PII
+> surface. Record against synthetic inputs; opt into record-time **redaction** with a `.cowork-redact.json`
+> (verdict-preserving — `record` refuses to write if redaction would flip an assertion); and gate every
+> commit with `verify-cassettes` (the always-on scan, `--allow <regex>` for synthetic/public names). See
+> [docs/cassette.md](./docs/cassette.md).
 
 > **What replay checks.** A cassette bundles BOTH recorded protocol directions: the child→driver
 > `events` stream AND the driver→child `controlOut` decision responses. `replay` re-runs the
@@ -385,7 +395,7 @@ The provided [GitHub Actions workflow](.github/workflows/ci.yml) runs a **four-s
 
 | Stage | Runs | Needs | Gates |
 |---|---|---|---|
-| **unit** | format check · typecheck · unit tests · build · CLI smoke · token-free `replay` gate | nothing | every push/PR |
+| **unit** | format check · typecheck · unit tests · build · CLI smoke · token-free `replay` + `verify-cassettes` gates | nothing | every push/PR |
 | **boundary** | builds the pinned agent image, brings up the default-deny network, runs `boundary-check` | Docker, arm64 runner | proves the sandbox enforces Cowork's limits — **no API key** |
 | **scenarios** | the live scenario suite at `container` fidelity, uploads transcripts/egress logs as artifacts | `ANTHROPIC_API_KEY` (or `CLAUDE_CODE_OAUTH_TOKEN`) | fork PRs: the whole job is skipped (`if:` guard); same-repo without a key: warns and exits 0 |
 | **parity-drift** | reminder to re-`sync` when Desktop updates | nothing | informational, never blocks |
