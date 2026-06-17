@@ -1,8 +1,9 @@
 import { z } from "zod";
-import { mkdirSync, writeFileSync, readFileSync, cpSync, existsSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, cpSync, existsSync, statSync } from "node:fs";
 import { join, resolve, basename, isAbsolute } from "node:path";
 import { homedir } from "node:os";
 import type { PlatformBaseline } from "./types.js";
+import { safePathSegment, safeMountSegment } from "./staging/resolve.js";
 
 /** Clone process env with Cowork's bg-env-strip applied. */
 function strippedEnv(baseline: PlatformBaseline): NodeJS.ProcessEnv {
@@ -140,22 +141,6 @@ function readPluginVersion(pluginRoot: string): string | null {
   }
 }
 
-/** #19: reject anything but a single safe path segment (no separators, no "..", not empty). For ids
- *  that must stay flat (a folder `to`, interpolated into `.projects/<id>`). */
-function safePathSegment(s: string, what: string): string {
-  if (!s || s === "." || s === ".." || /[/\\\0]/.test(s))
-    throw new Error(`unsafe ${what} "${s}" — must be a single path segment (no "/", "\\", "..", or empty)`);
-  return s;
-}
-
-/** #20: reject a path component that could escape its parent (traversal / absolute / NUL). Allows
- *  LEGITIMATE nesting (e.g. a scoped plugin name "@scope/pkg") but never a ".." / "." segment. */
-function noTraversal(s: string, what: string): string {
-  if (!s || s.includes("\0") || s.startsWith("/") || s.startsWith("\\") || s.split(/[/\\]/).some((seg) => seg === ".." || seg === "."))
-    throw new Error(`unsafe ${what} "${s}" — must not be empty, absolute, or contain "." / ".." path segments`);
-  return s;
-}
-
 /**
  * Materialize the session into a launch plan: builds a clean CLAUDE_CONFIG_DIR
  * (settings.json with enabledPlugins / enabledMcpjsonServers / plugin_marketplaces),
@@ -193,32 +178,56 @@ export function buildLaunchPlan(session: SessionConfig, baseline: PlatformBaseli
   writeFileSync(join(configDir, "settings.json"), settingsJson);
   writeFileSync(join(configDir, "cowork_settings.json"), settingsJson);
 
-  // 3. stage local skills into CLAUDE_CONFIG_DIR/skills
+  // SEAM A — fail-loud is the only path for a declared source. A missing source FAILS by default (the
+  // runtimes existsSync-skip the copy, so the agent silently gets a path that does not exist — a
+  // confusing late failure, or a manufactured green). COWORK_HARNESS_SOFT_MISSING=1 downgrades every
+  // such case to warn-and-exclude. Defined up here because skills (below) consult it too.
+  const softMissing = (process.env.COWORK_HARNESS_SOFT_MISSING ?? "") !== "";
+
+  // 3. stage local skills into CLAUDE_CONFIG_DIR/skills. A missing source fails (like a mount); two
+  // skills with the same basename would copy to the same dest and silently clobber — fail on that too.
+  const skillDests = new Set<string>();
   for (const s of session.skills.local) {
     const src = expand(s);
-    if (existsSync(src)) cpSync(src, join(configDir, "skills", basename(src)), { recursive: true });
+    if (!existsSync(src)) {
+      if (!softMissing) throw new Error(`skill source not found: ${src}. Fix the path, or set COWORK_HARNESS_SOFT_MISSING=1 to skip it.`);
+      process.stderr.write(`::warning:: [skill] missing source excluded (COWORK_HARNESS_SOFT_MISSING): ${src}\n`);
+      continue;
+    }
+    const dest = safePathSegment(basename(src), "skill basename");
+    if (skillDests.has(dest))
+      throw new Error(
+        `duplicate skill destination "skills/${dest}" — two skills.local entries share a basename (they would overwrite). Rename or relocate one.`,
+      );
+    skillDests.add(dest);
+    cpSync(src, join(configDir, "skills", dest), { recursive: true });
   }
 
-  // 4. mounts: uploads + projects + plugin roots (Cowork mount model)
+  // 4. mounts: uploads + projects + plugin roots (Cowork mount model). Every basename-derived leaf
+  // goes through safePathSegment — basename("..") is ".." (it does NOT collapse), so a `from: ".."`
+  // would otherwise yield `.projects/..` and clobber the workspace root on staging.
   const mounts: Mount[] = [];
   for (const u of session.uploads) {
     const src = expand(u);
-    mounts.push({ hostPath: src, mountPath: `uploads/${basename(src)}`, mode: "r" }); // asar: uploads are read-only ('ro')
+    // Uploads model attached FILES; a directory would be copied recursively, diverging from Cowork.
+    if (existsSync(src) && !statSync(src).isFile())
+      throw new Error(`upload "${src}" is a directory; uploads model attached files. Use folders: for a directory mount.`);
+    mounts.push({ hostPath: src, mountPath: `uploads/${safePathSegment(basename(src), "upload basename")}`, mode: "r" });
   }
   for (const f of session.folders) {
     const src = expand(f.from);
-    // #19: a folder `to` is interpolated into `.projects/<id>` — validate it as a single safe segment
-    // so `to: ../../x` can't stage outside the .projects subtree.
-    const id = f.to ? safePathSegment(f.to, "folder `to`") : basename(src);
+    // A folder `to` (or the default basename) is interpolated into `.projects/<id>` — validate it as a
+    // single safe segment so neither `to: ../../x` nor a `from` whose basename is ".." escapes .projects.
+    const id = f.to ? safePathSegment(f.to, "folder `to`") : safePathSegment(basename(src), "folder default id (from basename)");
     mounts.push({ hostPath: src, mountPath: `.projects/${id}`, mode: f.mode });
   }
   for (const p of session.plugins.local_plugins) {
     const src = expand(p);
-    mounts.push({ hostPath: src, mountPath: `.local-plugins/cache/${basename(src)}`, mode: "r" });
+    mounts.push({ hostPath: src, mountPath: `.local-plugins/cache/${safePathSegment(basename(src), "local_plugin basename")}`, mode: "r" });
   }
   for (const p of session.plugins.remote_plugins) {
     const src = expand(p);
-    mounts.push({ hostPath: src, mountPath: `.remote-plugins/${basename(src)}`, mode: "r" });
+    mounts.push({ hostPath: src, mountPath: `.remote-plugins/${safePathSegment(basename(src), "remote_plugin basename")}`, mode: "r" });
   }
   // Local marketplaces: resolve enabled `name@marketplace` plugins to --plugin-dir.
   // The agent loads plugins via --plugin-dir, not the marketplace registry (inert in
@@ -228,17 +237,35 @@ export function buildLaunchPlan(session: SessionConfig, baseline: PlatformBaseli
   // desktop spawn argv — `--plugin-dir …/cache/<mp>/<plugin>/<version>`); reproduce that
   // shape so `${CLAUDE_PLUGIN_ROOT}` and the layout match real sessions.
   const mountedBareNames = new Set<string>(); // across ALL marketplaces — dedupe bare `enabled` names
+  const declaredLocalMktNames = new Set<string>(); // names of successfully-parsed local marketplaces
+  const resolvedEnabled = new Set<string>(); // `enabled` entries that mounted (or hit the legit dedupe-skip)
   for (const mk of session.plugins.local_marketplaces) {
     const mkRoot = expand(mk);
     const manifestPath = join(mkRoot, ".claude-plugin", "marketplace.json");
-    if (!existsSync(manifestPath)) continue;
+    // A declared local marketplace whose manifest is absent or unparsable must FAIL (it silently
+    // resolved nothing before) — softMissing downgrades to warn-and-skip.
+    if (!existsSync(manifestPath)) {
+      if (!softMissing)
+        throw new Error(
+          `local marketplace manifest not found: ${manifestPath}. Fix the path, or set COWORK_HARNESS_SOFT_MISSING=1 to skip it.`,
+        );
+      process.stderr.write(`::warning:: [marketplace] manifest missing, excluded (COWORK_HARNESS_SOFT_MISSING): ${manifestPath}\n`);
+      continue;
+    }
     let manifest: { name?: string; plugins?: Array<{ name: string; source?: string; version?: string }> };
     try {
       manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-    } catch {
+    } catch (e) {
+      if (!softMissing)
+        throw new Error(
+          `local marketplace manifest is not valid JSON: ${manifestPath} (${(e as Error).message}). ` +
+            `Fix it, or set COWORK_HARNESS_SOFT_MISSING=1 to skip it.`,
+        );
+      process.stderr.write(`::warning:: [marketplace] manifest unparsable, excluded (COWORK_HARNESS_SOFT_MISSING): ${manifestPath}\n`);
       continue;
     }
     const mktName = manifest.name ?? basename(mkRoot);
+    if (manifest.name) declaredLocalMktNames.add(manifest.name);
     for (const en of session.plugins.enabled) {
       // Split on the LAST `@` so a scoped plugin name (@scope/pkg) or an embedded `@` keeps its name and
       // only the trailing `@marketplace` qualifier is peeled off. at>0 so a leading `@` isn't a separator.
@@ -249,7 +276,7 @@ export function buildLaunchPlan(session: SessionConfig, baseline: PlatformBaseli
       const entry = (manifest.plugins ?? []).find((p) => p.name === pName);
       if (!entry) continue;
       const pluginSrc = resolve(mkRoot, entry.source ?? `./${pName}`);
-      if (!existsSync(pluginSrc)) continue;
+      if (!existsSync(pluginSrc)) continue; // unresolved here; post-loop reconciliation decides whether to throw
       // A bare `enabled` name (no @marketplace) matches EVERY marketplace defining it → duplicate mounts.
       // Dedupe bare names only; a qualified `foo@mkt` is already pinned to one marketplace by the guard above.
       if (!pMkt) {
@@ -257,25 +284,45 @@ export function buildLaunchPlan(session: SessionConfig, baseline: PlatformBaseli
           process.stderr.write(
             `::warning:: [plugins] "${pName}" is enabled without @marketplace and exists in multiple local_marketplaces — mounting only the first ("${mktName}"); qualify it as ${pName}@<marketplace> to pin one\n`,
           );
+          resolvedEnabled.add(en); // a legit dedupe-skip is a resolution, not a failure
           continue;
         }
         mountedBareNames.add(pName);
       }
       const version = entry.version ?? readPluginVersion(pluginSrc) ?? "0.0.0";
-      // #20: each component comes from marketplace/plugin metadata (untrusted) and is interpolated
-      // into the cache path — reject traversal so a crafted manifest can't escape the cache layout.
-      // (pName may legitimately nest for a scoped name like "@scope/pkg", so allow nesting, not "..".)
-      noTraversal(mktName, "marketplace name");
-      noTraversal(pName, "plugin name");
-      noTraversal(version, "plugin version");
+      // Each component comes from marketplace/plugin metadata (untrusted) and is interpolated into the
+      // cache path that becomes a Docker -v overlay arg — reject traversal AND ":"/control chars.
+      // (pName may legitimately nest for a scoped name like "@scope/pkg", so nesting is allowed.)
+      safeMountSegment(mktName, "marketplace name");
+      safeMountSegment(pName, "plugin name");
+      safeMountSegment(version, "plugin version");
       mounts.push({ hostPath: pluginSrc, mountPath: `.local-plugins/cache/${mktName}/${pName}/${version}`, mode: "r" });
+      resolvedEnabled.add(en);
     }
   }
+  // Post-loop reconciliation: an `enabled` entry's resolution is only known after ALL marketplaces are
+  // tried (it may resolve on a later one). `enabled` is dual-role — also written verbatim to
+  // enabledPlugins (settings.json) for remote/git marketplaces and paired with local_plugins delivery —
+  // so fail ONLY when a `name@<mkt>` entry names a DECLARED local marketplace yet did not resolve there
+  // (a within-marketplace plugin-name typo). A bare name, or a `@<mkt>` that names no declared local
+  // marketplace (remote/git → enabledPlugins), must NOT throw.
+  for (const en of session.plugins.enabled) {
+    if (resolvedEnabled.has(en)) continue;
+    const at = en.lastIndexOf("@");
+    if (at <= 0) continue; // bare name → may be remote/git or local_plugins delivery
+    const pName = en.slice(0, at);
+    const pMkt = en.slice(at + 1);
+    if (!declaredLocalMktNames.has(pMkt)) continue; // names a non-local (remote/git) or undeclared marketplace
+    if (!softMissing)
+      throw new Error(
+        `enabled plugin "${en}" names local marketplace "${pMkt}", but plugin "${pName}" was not found or its source is missing there. ` +
+          `Fix the name, or set COWORK_HARNESS_SOFT_MISSING=1 to skip it.`,
+      );
+    process.stderr.write(
+      `::warning:: [plugins] enabled "${en}" did not resolve in local marketplace "${pMkt}" (COWORK_HARNESS_SOFT_MISSING)\n`,
+    );
+  }
 
-  // #22: a missing mount source must FAIL by default — the runtimes existsSync-skip the copy, so the
-  // agent silently gets a mount / --plugin-dir path that does not exist (a confusing late failure).
-  // COWORK_HARNESS_SOFT_MISSING=1 downgrades to warn-and-exclude.
-  const softMissing = (process.env.COWORK_HARNESS_SOFT_MISSING ?? "") !== "";
   const missing = mounts.filter((mt) => !existsSync(mt.hostPath));
   if (missing.length) {
     const list = missing.map((m) => `${m.hostPath} → ${m.mountPath}`).join("; ");

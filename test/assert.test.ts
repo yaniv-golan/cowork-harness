@@ -218,3 +218,24 @@ describe("collectArtifacts — ENV-MANIFEST recursive listing", () => {
     expect(collectArtifacts(mkdtempSync(join(tmpdir(), "cwh-empty-")), ["outputs"])).toEqual([]);
   });
 });
+
+describe("assertion path containment", () => {
+  const root = mkdtempSync(join(tmpdir(), "assert-root-"));
+  mkdirSync(join(root, "outputs"), { recursive: true });
+  writeFileSync(join(root, "outputs", "report.pdf"), "x");
+
+  it("file_exists finds a contained file and rejects traversal / absolute paths", () => {
+    expect(pass(evaluate([{ file_exists: "outputs/report.pdf" }], ctx({ workRoot: root })))).toBe(true);
+    const esc = evaluate([{ file_exists: "../../etc/passwd" }], ctx({ workRoot: root }));
+    expect(pass(esc)).toBe(false);
+    expect(esc[0].message).toMatch(/unsafe file_exists path/);
+    expect(pass(evaluate([{ file_exists: "/etc/passwd" }], ctx({ workRoot: root })))).toBe(false);
+  });
+
+  it("user_visible_artifact rejects a traversal that slips past the prefix (normalized before the prefix test)", () => {
+    const r = evaluate([{ user_visible_artifact: "outputs/../../escape" }], ctx({ workRoot: root }));
+    expect(pass(r)).toBe(false);
+    expect(r[0].message).toMatch(/unsafe user_visible_artifact path/);
+    expect(pass(evaluate([{ user_visible_artifact: "outputs/report.pdf" }], ctx({ workRoot: root })))).toBe(true);
+  });
+});

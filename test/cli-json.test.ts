@@ -239,4 +239,84 @@ describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
     expect(r.code).toBe(0);
     expect(r.stdout.trim()).toMatch(/^\d+\.\d+\.\d+/);
   });
+
+  it("skill --marketplace with no --enable → usage error (nothing would load), exit 2", () => {
+    const r = run(["skill", "--marketplace", "./some-mkt", "hi", "--output-format", "json"]);
+    expect(r.code).toBe(2);
+    expect(r.json?.error?.category).toBe("usage");
+    expect(r.json?.error?.message).toMatch(/--marketplace requires at least one --enable/);
+  });
+
+  it("skill --intent without --decider-llm → usage error, exit 2", () => {
+    const r = run(["skill", "./x", "hi", "--intent", "test the thing", "--output-format", "json"]);
+    expect(r.code).toBe(2);
+    expect(r.json?.error?.message).toMatch(/--intent requires --decider-llm/);
+  });
+
+  it("skill --decider-llm with an explicit --on-unanswered → usage error (conflict), exit 2", () => {
+    const r = run(["skill", "./x", "hi", "--decider-llm", "--on-unanswered", "fail", "--output-format", "json"]);
+    expect(r.code).toBe(2);
+    expect(r.json?.error?.message).toMatch(/--decider-llm conflicts with --on-unanswered/);
+  });
+
+  it("answer --gate with a non-positive integer → usage error, exit 2", () => {
+    const r = run(["answer", ".", "--gate", "-1", "--choose", "Yes", "--output-format", "json"]);
+    expect(r.code).toBe(2);
+    expect(r.json?.error?.message).toMatch(/--gate must be a positive integer/);
+  });
+
+  it("record rejects extra scenario positionals (exit 2)", () => {
+    const r = run(["record", "a.yaml", "b.yaml"]);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(/record takes a single scenario/);
+  });
+
+  it("replay --cassette with a flag-looking value is a usage error, not a file error (exit 2)", () => {
+    const r = run(["replay", "--cassette", "--output-format", "json"]);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(/usage: replay --cassette/);
+  });
+
+  it("an invalid --output-format value is rejected by replay / trace / decide (exit 2)", () => {
+    expect(run(["replay", "--cassette", "x.json", "--output-format", "xml"]).code).toBe(2);
+    expect(run(["trace", "somerun", "--output-format", "xml"]).code).toBe(2);
+    expect(run(["decide", "--output-format", "xml"]).code).toBe(2);
+  });
+
+  it("boundary-check rejects more than one baseline positional (exit 2)", () => {
+    const r = run(["boundary-check", "a", "b"]);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(/at most one baseline/);
+  });
+
+  it("a standalone allow_permissive_auto_allow assertion replays green with no filesystem-skip warning", () => {
+    const r0 = run(["--version"]); // borrow a temp cwd
+    writeIn(r0.cwd, "c.cassette.json", JSON.stringify(cassette([{ allow_permissive_auto_allow: true }])));
+    const r = spawnSync("node", [CLI, "replay", "--cassette", "c.cassette.json", "--output-format", "json"], {
+      encoding: "utf8",
+      cwd: r0.cwd,
+    });
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout)?.ok).toBe(true); // no-op verdict modifier → green
+    expect(r.stderr).not.toMatch(/skipped \d+ filesystem/); // not misclassified as a filesystem/egress skip
+  });
+
+  it("answer --choose validates the label against the gate's options", () => {
+    const r0 = run(["--version"]); // borrow a temp cwd
+    writeIn(
+      r0.cwd,
+      "req-1.json",
+      JSON.stringify({ id: "req-1", questions: [{ question: "Pick", options: [{ label: "Yes" }, { label: "No" }] }] }),
+    );
+    const bad = spawnSync("node", [CLI, "answer", r0.cwd, "--gate", "1", "--choose", "Maybe", "--output-format", "json"], {
+      encoding: "utf8",
+    });
+    expect(bad.status).toBe(2);
+    expect(JSON.parse(bad.stdout)?.error?.message).toMatch(/is not an option for gate 1/);
+    // a valid label (and a case-insensitive variant, which the decider accepts) succeeds
+    const ok = spawnSync("node", [CLI, "answer", r0.cwd, "--gate", "1", "--choose", "yes", "--output-format", "json"], {
+      encoding: "utf8",
+    });
+    expect(ok.status).toBe(0);
+  });
 });

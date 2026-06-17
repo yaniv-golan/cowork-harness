@@ -4,6 +4,7 @@ import { resolve, join } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import type { PlatformBaseline, Scenario } from "../types.js";
+import { DEFAULT_MAX_THINKING_TOKENS } from "../types.js";
 import type { LaunchPlan } from "../session.js";
 import { resolveMounts } from "../baseline.js";
 import { makeWorkspaceHandler, type McpHandler, type EgressEntry, type WebFetchProvenance } from "../hostloop/workspace-handler.js";
@@ -82,7 +83,11 @@ export function spawnHostLoop(
     configGuest,
     proxyHost,
     extra: { CLAUDE_PLUGIN_ROOT: hostPluginRoot, ...runtimeAuthEnv() },
-    maxThinkingTokens: resolveMaxThinkingTokens(plan.maxThinkingTokens, plan.model, baseline.spawn?.maxThinkingTokens ?? 31999),
+    maxThinkingTokens: resolveMaxThinkingTokens(
+      plan.maxThinkingTokens,
+      plan.model,
+      baseline.spawn?.maxThinkingTokens ?? DEFAULT_MAX_THINKING_TOKENS,
+    ),
   });
   const claudeArgs = agentArgs(baseline, plan, {
     mntRoot,

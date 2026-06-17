@@ -19,7 +19,8 @@ import {
 import { ABSTAIN, UnansweredError, type Decider } from "../decide/decider.js";
 import { evaluate } from "../assert.js";
 import { makeRenderer, renderFooter, type RenderPlan } from "./renderer.js";
-import { jsonEnvelope } from "./envelope.js";
+import { jsonEnvelope, parseOutputFormat } from "./envelope.js";
+import { computeVerdict } from "./verdict.js";
 
 const out = (s: string) => process.stdout.write(s + "\n");
 const log = (s: string) => process.stderr.write(s + "\n");
@@ -320,11 +321,17 @@ export async function cmdRecord(args: string[]) {
     log("usage: record <scenario.yaml> --out <file.cassette.json>  (--out needs a value)");
     process.exit(2);
   }
-  // #8: skip --out's VALUE when scanning for the scenario positional, so the common flag-first form
+  // Skip --out's VALUE when scanning for the scenario positional, so the common flag-first form
   // `record --out out.json scenario.yaml` records scenario.yaml (not out.json) as the scenario.
-  const file = args.find((a, i) => !a.startsWith("--") && args[i - 1] !== "--out");
+  const scenarioPositionals = args.filter((a, i) => !a.startsWith("--") && args[i - 1] !== "--out");
+  const file = scenarioPositionals[0];
   if (!file) {
     log("usage: record <scenario.yaml> [--out <file.cassette.json>]");
+    process.exit(2);
+  }
+  // Reject extra scenario positionals rather than silently dropping all but the first (record takes ONE).
+  if (scenarioPositionals.length > 1) {
+    log(`record takes a single scenario (got ${scenarioPositionals.length}: ${scenarioPositionals.join(", ")})`);
     process.exit(2);
   }
   const scenario = parseScenarioFile(file);
@@ -379,22 +386,32 @@ export async function cmdRecord(args: string[]) {
 export async function cmdReplay(args: string[]) {
   const cIdx = args.indexOf("--cassette");
   const path = cIdx >= 0 ? args[cIdx + 1] : args.find((a) => !a.startsWith("--"));
-  if (!path) {
+  // Bounds/flag-check the path: `replay --cassette --output-format json` must NOT treat `--output-format`
+  // as the cassette path (then fail later as a confusing file/JSON error) — reject a flag-looking value.
+  if (!path || path.startsWith("-")) {
     log("usage: replay --cassette <file.cassette.json>");
     process.exit(2);
   }
-  const json =
-    (args.includes("--output-format") && args[args.indexOf("--output-format") + 1] === "json") || args.includes("--output-format=json");
+  let json: boolean;
+  try {
+    json = parseOutputFormat(args) === "json"; // #8: validate the value (don't silently treat `xml` as text)
+  } catch (e) {
+    log(String((e as Error).message));
+    process.exit(2);
+  }
   const strict = args.includes("--strict"); // #1b: escalate staleness warnings to failures (release gate)
   const cassette: Cassette = JSON.parse(readFileSync(path, "utf8"));
   const plan: RenderPlan = { live: false, progress: false, verbose: false, color: process.stderr.isTTY === true && !process.env.NO_COLOR };
   const renderer = json ? undefined : makeRenderer(plan);
   const result = await replayCassette(cassette, renderer ? [renderer] : [], { strict, cassetteDir: dirname(path) });
-  const bad = result.assertions.filter((a) => !a.pass);
+  // SEAM B: the replay lane evaluates assertions + result only (a cassette can't reproduce the scan /
+  // permissive signals). One verdict source for the footer AND the exit, so they can't diverge (and the
+  // exit now honors result:"error", which the old `bad.length`-only check missed).
+  const verdict = computeVerdict(result, "replay");
   // stdout = machine ONLY under --output-format json; humans get the footer on stderr.
   if (json) out(jsonEnvelope("replay", [result]));
-  else renderFooter(result, plan, { renderer });
-  process.exit(bad.length ? 1 : 0);
+  else renderFooter(result, plan, { renderer, lane: "replay" });
+  process.exit(verdict.exitCode);
 }
 
 /** Replay a cassette through Run and re-evaluate the content assertions. With a `cassette.artifacts`
@@ -487,6 +504,9 @@ export async function replayCassette(
     "subagent_declared_but_unused",
     "dispatch_count_max",
     "result",
+    // A verdict modifier, not a filesystem/egress assertion — keep it on replay (it evaluates to a no-op
+    // pass) so it neither inflates the "filesystem/egress skipped" count nor emits a misleading warning.
+    "allow_permissive_auto_allow",
   ];
   const questionGateKeys: (keyof Assertion)[] = ["question_asked", "questions_count_max", "gate_answers_delivered"];
   // #1: with an artifact manifest, the filesystem assertions become replay-checkable (materialized below).

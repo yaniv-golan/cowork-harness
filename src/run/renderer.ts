@@ -2,6 +2,7 @@ import { writeSync } from "node:fs";
 import type { AgentEvent } from "../agent/session.js";
 import type { RunHooks } from "./run.js";
 import type { RunResult } from "../types.js";
+import { computeVerdict } from "./verdict.js";
 
 /**
  * Shared output renderer. The seam is `RunHooks` (attached to `Run` via `executeScenario`): it
@@ -135,11 +136,13 @@ export function startHeartbeat(renderer: Renderer | undefined, plan: RenderPlan,
 export function renderFooter(
   r: RunResult,
   plan: RenderPlan,
-  opts: { durationMs?: number; renderer?: Renderer; keep?: boolean; write?: Sink } = {},
+  opts: { durationMs?: number; renderer?: Renderer; keep?: boolean; write?: Sink; lane?: "live" | "replay" } = {},
 ): void {
   const write = opts.write ?? stderr;
-  const bad = r.assertions.filter((a) => !a.pass);
-  const passed = r.result === "success" && bad.length === 0;
+  // SEAM B: pass/fail and the failure reasons come from the SAME verdict the exit code / envelope use.
+  const verdict = computeVerdict(r, opts.lane ?? "live");
+  const passed = verdict.pass;
+  const failSignals = verdict.signals.filter((s) => s.severity === "fail");
   const sum = opts.renderer?.summary() ?? { tools: 0, subagents: 0 };
   const dur = opts.durationMs != null ? ` · ${(opts.durationMs / 1000).toFixed(1)}s` : "";
   // H2: an LLM-decided run is NOT reproducible — never let a green read as a deterministic pass.
@@ -152,7 +155,7 @@ export function renderFooter(
     return;
   }
   write(`${red(plan, "✗ " + (r.result === "error" ? "error" : "FAIL"))} ${meta}\n`);
-  for (const a of bad) write(`   ${red(plan, "✗ " + (a.message ?? "assertion failed"))}\n`);
+  for (const s of failSignals) write(`   ${red(plan, "✗ " + s.message)}\n`);
   renderAnswerHints(r, plan, write);
   const t = opts.renderer?.dump().trim();
   if (t) {

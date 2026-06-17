@@ -146,9 +146,14 @@ provision:
     script: |
       #!/bin/sh
       set -e
-      # Put the staged agent on PATH (mounted read-only from the host).
-      ln -sf /opt/cowork/agent/${agentBasename} /usr/local/bin/claude || true
-      apt-get update -y && apt-get install -y --no-install-recommends iptables curl ca-certificates ripgrep git || true
+      # Install required tools FIRST — fail provisioning loudly if any cannot install. A trailing
+      # "|| true" here let a VM boot missing iptables (firewall silently no-ops), curl (boundary probes
+      # fail), git or ripgrep, surfacing as confusing late failures far from the cause.
+      apt-get update -y && apt-get install -y --no-install-recommends iptables curl ca-certificates ripgrep git
+      # Put the staged agent on PATH (mounted read-only from the host) and verify it resolves to an
+      # executable — a masked symlink failure would leave 'claude' missing while vm init still succeeded.
+      ln -sf /opt/cowork/agent/${agentBasename} /usr/local/bin/claude
+      test -x /usr/local/bin/claude
 networks: []
 `;
 }
@@ -166,7 +171,11 @@ export function guestFirewallScript(proxyGatewayPort: number, gatewayIp: string)
     "sudo iptables -P OUTPUT DROP || true",
     "sudo iptables -A OUTPUT -o lo -j ACCEPT",
     "sudo iptables -A OUTPUT -d 127.0.0.0/8 -j ACCEPT",
-    // DNS + the host gateway (where the allowlist proxy listens) only.
+    // Allow DNS (to ANY resolver — see caveat) plus the host gateway where the allowlist proxy listens.
+    // CAVEAT (#44, fidelity-gated): outbound 53 is unscoped, so DNS-tunneling is technically possible.
+    // This is a TEST FIXTURE, not a security boundary, and the north star is Cowork parity — tightening
+    // DNS to a fixed resolver would DIVERGE from Cowork unless Cowork itself scopes it (verify against the
+    // binary/live lane before changing). Left at parity deliberately; the earlier "…only" comment overstated it.
     "sudo iptables -A OUTPUT -p udp --dport 53 -j ACCEPT",
     "sudo iptables -A OUTPUT -p tcp --dport 53 -j ACCEPT",
     `sudo iptables -A OUTPUT -d ${gatewayIp} -p tcp --dport ${proxyGatewayPort} -j ACCEPT`,

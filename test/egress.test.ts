@@ -1,7 +1,28 @@
 import { describe, it, expect } from "vitest";
 import net from "node:net";
-import { compile, startEgressProxy } from "../src/egress/proxy.js";
+import { compile, startEgressProxy, freePort } from "../src/egress/proxy.js";
 import { parseEgressLine } from "../src/egress/sidecar.js";
+
+describe("egress allowlist validation + proxy readiness", () => {
+  it("rejects a scheme / path / port entry (would silently never match a bare host)", () => {
+    expect(() => compile(["https://api.anthropic.com"])).toThrow(/invalid egress allow entry/);
+    expect(() => compile(["api.anthropic.com/v1"])).toThrow(/invalid egress allow entry/);
+    expect(() => compile(["api.anthropic.com:443"])).toThrow(/invalid egress allow entry/);
+    // bare hosts and wildcards are still fine
+    expect(compile(["api.anthropic.com"])("api.anthropic.com")).toBe(true);
+    expect(compile(["*.claude.ai"])("assets.claude.ai")).toBe(true);
+    expect(compile(["*"])("anything.example")).toBe(true);
+  });
+
+  it("freePort returns a bindable port; startEgressProxy exposes a ready handshake", async () => {
+    const p = await freePort();
+    expect(p).toBeGreaterThan(0);
+    const server = startEgressProxy({ allow: ["example.com"], port: 0 });
+    await server.ready; // resolves once listening (would reject on a bind error)
+    expect((server.address() as net.AddressInfo).port).toBeGreaterThan(0);
+    await new Promise<void>((r) => server.close(() => r()));
+  });
+});
 
 describe("egress allowlist", () => {
   it("matches exact hosts", () => {

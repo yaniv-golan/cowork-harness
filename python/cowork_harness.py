@@ -93,6 +93,10 @@ class Result:
     def assert_success(self) -> "Result":
         assert self.result == "success", f"run result was {self.result}\n{self.stderr[-1000:]}"
         assert not self.failed_assertions(), f"failed assertions: {self.failed_assertions()}"
+        # `ok` is the authoritative SEAM-B verdict (same as the process exit code): it also fails on a
+        # cowork-parity permissive auto-allow or a recorded delete/host-path leak the scenario didn't
+        # assert about. Without this a Python-lane run would green where the CLI exits non-zero.
+        assert self.ok, "run envelope ok=false (permissive auto-allow or an unasserted delete/host-path leak — see the run's signals)"
         return self
 
     def assert_transcript_contains(self, needle: str) -> "Result":
@@ -101,9 +105,9 @@ class Result:
         return self
 
     def assert_tool_called(self, name: str) -> "Result":
-        # toolCounts is the authoritative O6 signal: a tool present with count > 0 was called. The old
-        # decisions[]/_tools() fallback matched a name that was merely REQUESTED (a prompted-then-denied
-        # tool records its name in decisions) → a false positive. Rely on toolCounts only.
+        # toolCounts is the authoritative O6 signal: a tool present with count > 0 was called. An older
+        # decisions[]-based fallback matched a name that was merely REQUESTED (a prompted-then-denied tool
+        # records its name in decisions) → a false positive. Rely on toolCounts only (the fallback is gone).
         tool_counts = self.data.get("toolCounts")
         if tool_counts is None:
             raise AssertionError(
@@ -141,19 +145,6 @@ class Result:
                 if obj.get("t") == "transcript":
                     return obj.get("text", "")
         return ""
-
-    def _tools(self) -> set[str]:
-        rj = Path(self.out_dir) / "run.jsonl"
-        tools: set[str] = set()
-        if rj.exists():
-            for line in rj.read_text().splitlines():
-                try:
-                    obj = json.loads(line)
-                except ValueError:
-                    continue
-                if obj.get("t") == "decision":
-                    tools.add(obj.get("name", ""))
-        return tools
 
 
 class Skill:
@@ -358,9 +349,14 @@ def serve_decider(fn: Callable[[dict], Any], *, _in=None, _out=None) -> None:
         ans = fn(req)
 
         if kind == "permission":
-            # fn may return "allow"/"deny" (bare string) or {"behavior": "allow"|"deny"}
+            # fn may return "allow"/"deny" (bare string) or {"behavior": "allow"|"deny", "grant": ...}
             if isinstance(ans, Mapping):
                 reply: dict = {"behavior": ans.get("behavior", "deny")}
+                # #50: preserve the web_fetch grant scope so a domain-wide approval isn't silently
+                # downgraded to "once" on the TS side (decider.ts reads parsed.grant === "domain").
+                grant = ans.get("grant")
+                if grant in ("once", "domain"):
+                    reply["grant"] = grant
             else:
                 reply = {"behavior": "allow" if str(ans) == "allow" else "deny"}
         elif kind == "dialog":

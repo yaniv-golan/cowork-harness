@@ -63,6 +63,10 @@ export function startEgressSidecar(allow: string[], outDir: string, runId: strin
     ]);
     rollback.push(() => d(runner, ["rm", "-f", proxyName], true));
     d(runner, ["network", "connect", outNet, proxyName]);
+    // #43: `run -d` returns once the container is CREATED, not once the proxy is accepting. A proxy that
+    // crashes on boot would otherwise surface only as the agent's first egress hanging/refused. Confirm
+    // the container is actually running before handing out the proxy URL (the catch below rolls back).
+    waitProxyRunning(runner, proxyName);
   } catch (e) {
     for (const undo of rollback.reverse()) undo();
     throw e;
@@ -142,4 +146,18 @@ function d(runner: string, args: string[], ignoreError = false) {
   if (r.status !== 0 && !ignoreError) {
     throw new Error(`${runner} ${args.slice(0, 2).join(" ")} failed: ${(r.stderr || r.stdout || "").trim().slice(0, 200)}`);
   }
+}
+
+/** #43: poll the proxy container's running state (bounded, ~3s). Returns on the first observed `true`;
+ *  a container that fails to start or crashes on boot never reports running → throws so the caller rolls
+ *  back instead of handing the agent a dead proxy. (A fuller in-container health probe needs the live lane.) */
+function waitProxyRunning(runner: string, name: string) {
+  for (let i = 0; i < 16; i++) {
+    spawnSync("sh", ["-c", "sleep 0.2"]); // brief settle between samples
+    const r = spawnSync(runner, ["inspect", "-f", "{{.State.Running}}", name], { encoding: "utf8" });
+    if (r.status === 0 && (r.stdout ?? "").trim() === "true") return;
+  }
+  throw new Error(
+    `[egress] proxy container ${name} is not running after start — it likely crashed on boot (see \`${runner} logs ${name}\`)`,
+  );
 }

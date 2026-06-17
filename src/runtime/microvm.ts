@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { join } from "node:path";
 import type { PlatformBaseline, Scenario } from "../types.js";
+import { DEFAULT_MAX_THINKING_TOKENS } from "../types.js";
 import type { LaunchPlan } from "../session.js";
 import { limaPath, vmInit, applyGuestFirewall, vmGatewayIp, VM_WORK_HOST } from "./lima.js";
 import { resolveMounts } from "../baseline.js";
@@ -26,7 +27,7 @@ export function spawnMicroVm(
   plan: LaunchPlan,
   outDir: string,
   sessionId: string,
-  opts: { systemPromptAppend?: string } = {},
+  opts: { systemPromptAppend?: string; proxyPort?: number } = {},
 ) {
   const { instance } = vmInit(baseline);
   const m = resolveMounts(baseline, sessionId, "proj1");
@@ -45,8 +46,10 @@ export function spawnMicroVm(
   // (Local marketplaces are resolved to --plugin-dir in buildLaunchPlan; the registry
   // is inert in cowork mode — SPEC §6. No registration step.)
 
-  // Guest default-deny egress (allow only the host proxy gateway + DNS).
-  const proxyPort = Number(process.env.COWORK_VM_PROXY_PORT ?? 8899);
+  // Guest default-deny egress (allow only the host proxy gateway + DNS). #41: use the port the caller
+  // allocated for THIS run's host proxy (so host bind and guest firewall/proxy agree); fall back to the
+  // env/8899 default only when spawned without an explicit port.
+  const proxyPort = opts.proxyPort ?? Number(process.env.COWORK_VM_PROXY_PORT ?? 8899);
   const gatewayIp = vmGatewayIp(); // #39: one resolved value feeds both the firewall rule and proxy URL.
   const lockdown = (process.env.COWORK_LOCKDOWN ?? "on") !== "off";
   if (lockdown) {
@@ -72,7 +75,11 @@ export function spawnMicroVm(
     configGuest: configVm,
     proxyHost: proxyUrl,
     extra: runtimeAuthEnv(),
-    maxThinkingTokens: resolveMaxThinkingTokens(plan.maxThinkingTokens, plan.model, baseline.spawn?.maxThinkingTokens ?? 31999),
+    maxThinkingTokens: resolveMaxThinkingTokens(
+      plan.maxThinkingTokens,
+      plan.model,
+      baseline.spawn?.maxThinkingTokens ?? DEFAULT_MAX_THINKING_TOKENS,
+    ),
   });
   // #29: keep SECRET values off the `limactl shell …` argv (host-visible via ps). Public env rides
   // argv via `env KEY=value`; secrets are handed to the guest over a stdin PROLOGUE the shell script
@@ -163,7 +170,7 @@ export function microvmAgentArgs(
     // carried the budget, but the CLI-flag channel diverged from the documented spawn contract. Add it
     // before the variadic tool flags, matching argv.ts §3.1.
     "--max-thinking-tokens",
-    String(resolveMaxThinkingTokens(plan.maxThinkingTokens, plan.model, spawn_?.maxThinkingTokens ?? 31999)),
+    String(resolveMaxThinkingTokens(plan.maxThinkingTokens, plan.model, spawn_?.maxThinkingTokens ?? DEFAULT_MAX_THINKING_TOKENS)),
     ...(opts.systemPromptAppend ? ["--append-system-prompt", opts.systemPromptAppend] : []),
     ...(plan.model ? ["--model", plan.model] : []),
     ...(opts.mcpVm ? ["--mcp-config", opts.mcpVm] : []),

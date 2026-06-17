@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
-import { readSessionManifest, hostPathLeaked } from "../src/run/execute.js";
+import { readSessionManifest, hostPathLeaked, scanEvents } from "../src/run/execute.js";
 import { isHostFsSealed, boundaryAllowList } from "../src/boundary.js";
 import { loadBaseline } from "../src/baseline.js";
 import { clampTimeout } from "../src/hostloop/workspace-handler.js";
@@ -72,6 +72,40 @@ describe("execute — hostPathLeaked (#24)", () => {
 
   it("does NOT flag a legitimate in-VM file:// URI", () => {
     expect(hostPathLeaked("file:///sessions/abc/mnt/outputs/y.md")).toBe(false);
+  });
+
+  // #48: URL-encoded and backslash forms are now decoded/normalized before matching.
+  it("flags a URL-encoded host path (%2FUsers%2F…)", () => {
+    expect(hostPathLeaked("link=%2FUsers%2Falice%2Fsecret")).toBe(true);
+  });
+  it("flags a backslash file URI (file:\\\\host\\Users\\…)", () => {
+    expect(hostPathLeaked("file:\\\\host\\Users\\alice")).toBe(true);
+  });
+  it("tolerates a malformed %-escape without throwing (and still matches the raw form)", () => {
+    expect(hostPathLeaked("100% done, see /Users/alice")).toBe(true);
+    expect(hostPathLeaked("just 50% off")).toBe(false);
+  });
+});
+
+// #29 — scanEvents output-delete detector, broadened beyond rm/mv to python/find/etc.
+describe("execute — scanEvents output-delete detection", () => {
+  const bash = (command: string) =>
+    JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name: "Bash", input: { command } }] } });
+  const scanOf = (cmds: string[]) => {
+    const dir = mkdtempSync(join(tmpdir(), "scan-"));
+    const f = join(dir, "events.jsonl");
+    writeFileSync(f, cmds.map(bash).join("\n"));
+    return scanEvents(f).outputsDeletes;
+  };
+  it("catches python os.remove, find -delete, shred, and plain rm touching outputs/", () => {
+    expect(scanOf([`python -c "import os; os.remove('outputs/x.json')"`]).length).toBe(1);
+    expect(scanOf(["find outputs -name '*.tmp' -delete"]).length).toBe(1);
+    expect(scanOf(["shred -u outputs/secret"]).length).toBe(1);
+    expect(scanOf(["rm -rf mnt/outputs/dir"]).length).toBe(1);
+  });
+  it("does NOT flag a non-destructive command on outputs/", () => {
+    expect(scanOf(["cat outputs/report.json"]).length).toBe(0);
+    expect(scanOf(["rm /tmp/scratch"]).length).toBe(0); // delete, but not under outputs/
   });
 });
 

@@ -14,7 +14,7 @@ import { spawnMicroVm } from "../runtime/microvm.js";
 import { decideLoopFromBaseline, readGateFlag } from "../loop-decision.js";
 import type { WebFetchProvenance } from "../hostloop/workspace-handler.js";
 import { startEgressSidecar, type EgressSidecar } from "../egress/sidecar.js";
-import { startEgressProxy } from "../egress/proxy.js";
+import { startEgressProxy, freePort } from "../egress/proxy.js";
 import { evaluate, hostMatches } from "../assert.js";
 import { renderPrompts } from "../prompt.js";
 import { LiveAgentSession, type SdkMcp } from "../agent/session.js";
@@ -22,6 +22,7 @@ import { buildDecider, ExternalDecider, LlmDecider, type Decider, type OnUnanswe
 import { type DecisionChannel } from "../decide/external-channel.js";
 import { claudeCliComplete } from "../decide/llm-transport.js";
 import { Run, type RunRecord, type RunHooks } from "./run.js";
+import { runsWriteRoot } from "./trace-view.js";
 import { collectSecrets, scrub } from "../secrets.js";
 
 export interface ExecuteOptions {
@@ -82,7 +83,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   const sessionId = stable ?? `local_${process.hrtime.bigint().toString(36)}`;
   // #17: the scenario name (YAML or filename-derived) is a PATH component — slugify so a name like
   // "../x" can't place run artifacts outside runs/. The display name (scenario.name) is unchanged.
-  const outDir = join("runs", slugForPath(scenario.name), sessionId);
+  const outDir = join(runsWriteRoot(), slugForPath(scenario.name), sessionId);
   // #25/#26: a non-resume run reusing a stable --session-id must be FRESH — the prior run's staged tree
   // (uploads, plugins, mnt/.claude agent state, outputs) would otherwise leak in via cpSync's merge
   // semantics, and a new agentSessionId would be written over stale native session files. Clear it
@@ -164,18 +165,23 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   let egress: RunResult["egress"] = [];
   let sidecar: EgressSidecar | undefined;
   let hostProxy: ReturnType<typeof startEgressProxy> | undefined;
+  let microvmProxyPort: number | undefined;
   if (containerLike) {
     // #43: thread proxy/network EXPLICITLY into spawn opts — no process.env mutation so
     // concurrent executeScenario calls don't stomp each other's values.
     sidecar = startEgressSidecar(plan.egressAllow, outDir, runToken);
   } else if (effectiveFidelity === "microvm") {
-    const port = Number(process.env.COWORK_VM_PROXY_PORT ?? 8899);
+    // #41: allocate a free host port per run unless explicitly pinned, so concurrent microVM runs don't
+    // collide on the fixed 8899. The SAME port is threaded into spawnMicroVm below, so the guest firewall
+    // rule and HTTP(S)_PROXY point at the exact host bind.
+    microvmProxyPort = process.env.COWORK_VM_PROXY_PORT ? Number(process.env.COWORK_VM_PROXY_PORT) : await freePort();
     hostProxy = startEgressProxy({
       allow: plan.egressAllow,
-      port,
+      port: microvmProxyPort,
       logPath: join(outDir, "egress.log"),
       onDecision: (host, decision) => egress.push({ host, decision }),
     });
+    await hostProxy.ready; // #42: don't spawn the agent until the proxy is accepting (or fail loud on a bind error)
   }
 
   const prompts = renderPrompts(baseline, session, sessionId);
@@ -210,7 +216,10 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         dockerNetwork: sidecar?.network,
       });
     } else if (effectiveFidelity === "microvm") {
-      child = spawnMicroVm(scenario, baseline, plan, outDir, sessionId, { systemPromptAppend: prompts.systemPromptAppend });
+      child = spawnMicroVm(scenario, baseline, plan, outDir, sessionId, {
+        systemPromptAppend: prompts.systemPromptAppend,
+        proxyPort: microvmProxyPort,
+      });
     } else {
       child = spawnProtocol(scenario, baseline, plan, outDir);
     }
@@ -328,6 +337,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       !!opts.nonDeterministicHint,
     nonDeterministicTerminal: onUnanswered === "llm" || onUnanswered === "prompt" || !!opts.externalChannel,
     permissiveAutoAllow: record.permissiveAutoAllow.length ? record.permissiveAutoAllow : undefined, // #6: cowork-parity off-registry auto-allows (real Cowork blocks) — non-empty ⇒ NOT a faithful pass
+    scan, // post-run scan signals (delete-in-outputs / host-path-leak / self-heal) — computeVerdict default-fails when unasserted
     effectiveFidelity, // The tier actually used — differs from fidelity when fidelity:"cowork" (#24)
   };
 
@@ -500,12 +510,23 @@ function scrubFileInPlace(path: string, secrets: string[]) {
  * The boundary also allows a `file://[authority]` prefix so file-URI leaks are caught: in
  * `file:///Users/alice` the char before `/Users/` is the path's own `/`, which is NOT in the class,
  * so the bare anchor would miss it. `file:\/\/[^\s\/]*` consumes the optional authority (empty or a
- * host like `localhost`) and lets the path root match. SCOPE: URL-encoded (`%2FUsers`) and backslash
- * (`file:\\host\Users`) forms are NOT covered; the Windows `file:///C:/Users/` form is caught
- * incidentally via the drive-letter `:` boundary, not this branch.
+ * host like `localhost`) and lets the path root match. #48: URL-encoded (`%2FUsers`) and backslash
+ * (`file:\\host\Users`) forms ARE now covered (see the decode+normalize pass in the body); the Windows
+ * `file:///C:/Users/` form is caught incidentally via the drive-letter `:` boundary.
  */
 export function hostPathLeaked(text: string): boolean {
-  return /(^|[\s"'(=:]|file:\/\/[^\s\/]*)(\/Users\/|\/opt\/cowork\/|\/home\/|\/root\/)/.test(text);
+  const re = /(^|[\s"'(=:]|file:\/\/[^\s\/]*)(\/Users\/|\/opt\/cowork\/|\/home\/|\/root\/)/;
+  if (re.test(text)) return true;
+  // #48: also catch URL-encoded (%2FUsers%2F) and backslash (file:\\host\Users) forms by testing a
+  // decoded + backslash-normalized copy. decodeURIComponent throws on a malformed %-escape — guard it.
+  let decoded = text;
+  try {
+    decoded = decodeURIComponent(text);
+  } catch {
+    /* malformed %-escape — keep the raw text */
+  }
+  const normalized = decoded.replace(/\\/g, "/");
+  return normalized !== text && re.test(normalized);
 }
 
 /** Scan a run's events.jsonl for limitation-fidelity signals (moved from cli.ts). */
@@ -517,7 +538,18 @@ export function scanEvents(file: string): { outputsDeletes: string[]; hostPathLe
   } catch {
     return out;
   }
-  const delRe = /\b(rm|unlink|rmdir|mv)\b[^\n]*\b(mnt\/)?outputs\//;
+  // #29: a delete touches outputs when a delete-ish token AND an outputs/ reference co-occur in one
+  // command. Broadened beyond `rm/unlink/rmdir/mv` to also catch `find … -delete`, `shred`, `truncate`,
+  // and the common `python -c` forms (os.remove/os.unlink/os.rmdir/shutil.rmtree, pathlib .unlink()) —
+  // all of which ride the same Bash/`mcp__workspace__bash` command string. RESIDUAL GAP (documented,
+  // Phase 7): a delete via a script file, a renamed binary, or a non-bash tool still evades this post-hoc
+  // scan — real enforcement is the deferred FUSE/MCP-layer sub-project, not this best-effort heuristic.
+  const delToken =
+    /\b(rm|unlink|rmdir|shred|truncate)\b|\bfind\b[^\n]*-delete\b|\bos\.(remove|unlink|rmdir)\b|\bshutil\.rmtree\b|\.unlink\(/;
+  // `outputs` as a path segment: followed by `/` (a file under it) OR a boundary (the dir itself, e.g.
+  // `find outputs -delete`). The negative lookahead avoids `outputs.txt` / `myoutputs` false matches.
+  const touchesOutputs = /(^|[\s"'`(/])(mnt\/)?outputs(?![\w.])/;
+  const delRe = { test: (cmd: string) => (delToken.test(cmd) || /\bmv\b/.test(cmd)) && touchesOutputs.test(cmd) };
   const selfHealRe = /\/sessions\/[^\s"]*\/mnt\/\.local-plugins/;
   for (const l of lines) {
     let msg: any;

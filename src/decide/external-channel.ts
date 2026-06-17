@@ -124,7 +124,10 @@ export function answerGate(dir: string, seq: number, answers: Record<string, str
 }
 
 /** Read a gate's request (for `answer` to map a `--choose` to the question text). */
-export function readGate(dir: string, seq: number): { id?: string; questions?: { question?: string; header?: string }[] } {
+export function readGate(
+  dir: string,
+  seq: number,
+): { id?: string; questions?: { question?: string; header?: string; options?: { label?: string }[]; multiSelect?: boolean }[] } {
   return JSON.parse(readFileSync(join(dir, `req-${seq}.json`), "utf8"));
 }
 

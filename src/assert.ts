@@ -1,6 +1,19 @@
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve, relative, isAbsolute, sep } from "node:path";
 import type { Assertion, RunResult } from "./types.js";
+
+/** Resolve a user-authored assertion path under `workRoot`, rejecting absolute paths and any `..` that
+ *  escapes the root. Returns the absolute path, or null if it would leave `workRoot`. Assertion paths are
+ *  author-controlled, not attacker input, but a `file_exists: "../../etc/passwd"` silently probing the host
+ *  FS (or an `outputs/../../x` slipping past the user-visible prefix check) is a containment bug regardless. */
+function containedPath(workRoot: string, p: string): string | null {
+  if (isAbsolute(p)) return null;
+  const root = resolve(workRoot);
+  const abs = resolve(root, p);
+  const rel = relative(root, abs);
+  if (rel === ".." || rel.startsWith(".." + sep) || isAbsolute(rel)) return null;
+  return abs;
+}
 
 /**
  * #5: resolve a dotted path into a parsed JSON document with THREE distinct outcomes (conflating them
@@ -106,16 +119,26 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
     }
     if (re) results.push(!re.test(ctx.transcript) ? ok() : fail(`transcript unexpectedly matched /${a.transcript_not_matches}/i`));
   }
-  if (a.file_exists !== undefined)
-    results.push(existsSync(join(ctx.workRoot, a.file_exists)) ? ok() : fail(`file not found: ${a.file_exists} (under ${ctx.workRoot})`));
+  if (a.file_exists !== undefined) {
+    const abs = containedPath(ctx.workRoot, a.file_exists);
+    if (!abs) results.push(fail(`unsafe file_exists path "${a.file_exists}" — must stay under the work root (no absolute paths or "..")`));
+    else results.push(existsSync(abs) ? ok() : fail(`file not found: ${a.file_exists} (under ${ctx.workRoot})`));
+  }
   if (a.user_visible_artifact !== undefined) {
     const p = a.user_visible_artifact;
-    const visible = ctx.userVisiblePrefixes.some((pre) => p === pre || p.startsWith(pre + "/"));
-    if (!visible)
-      results.push(
-        fail(`"${p}" is not under a user-visible prefix (${ctx.userVisiblePrefixes.join(", ")}) — invisible to the user in Cowork`),
-      );
-    else results.push(existsSync(join(ctx.workRoot, p)) ? ok() : fail(`user-visible artifact not found: ${p}`));
+    const abs = containedPath(ctx.workRoot, p);
+    if (!abs) {
+      // normalize/contain BEFORE the prefix test so `outputs/../../x` can't pass startsWith("outputs/")
+      results.push(fail(`unsafe user_visible_artifact path "${p}" — must stay under the work root (no absolute paths or "..")`));
+    } else {
+      const rel = relative(resolve(ctx.workRoot), abs); // normalized, guaranteed under workRoot
+      const visible = ctx.userVisiblePrefixes.some((pre) => rel === pre || rel.startsWith(pre + "/"));
+      if (!visible)
+        results.push(
+          fail(`"${p}" is not under a user-visible prefix (${ctx.userVisiblePrefixes.join(", ")}) — invisible to the user in Cowork`),
+        );
+      else results.push(existsSync(abs) ? ok() : fail(`user-visible artifact not found: ${p}`));
+    }
   }
   if (a.tool_called !== undefined) results.push(ctx.toolsCalled.has(a.tool_called) ? ok() : fail(`tool not called: ${a.tool_called}`));
   if (a.tool_not_called !== undefined)
@@ -178,6 +201,9 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
     );
   if (a.self_heal_ran !== undefined)
     results.push(ctx.selfHealRan === a.self_heal_ran ? ok() : fail(`self_heal_ran was ${ctx.selfHealRan}, expected ${a.self_heal_ran}`));
+  // Verdict modifier (consumed by computeVerdict, not here). It always "passes" as an assertion so a
+  // standalone `{allow_permissive_auto_allow: true}` is a valid non-empty assertion, not "empty assertion".
+  if (a.allow_permissive_auto_allow !== undefined) results.push(ok());
   if (a.transcript_no_host_path !== undefined)
     results.push(
       !ctx.hostPathLeaked === a.transcript_no_host_path ? ok() : fail(`host path leaked into model-visible text: ${ctx.hostPathLeaked}`),
@@ -228,8 +254,9 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
   }
   if (a.artifact_json !== undefined) {
     const aj = a.artifact_json;
-    const file = join(ctx.workRoot, aj.artifact);
-    if (!existsSync(file)) results.push(fail(`artifact_json: file not found: ${aj.artifact} (under ${ctx.workRoot})`));
+    const file = containedPath(ctx.workRoot, aj.artifact);
+    if (!file) results.push(fail(`unsafe artifact_json path "${aj.artifact}" — must stay under the work root (no absolute paths or "..")`));
+    else if (!existsSync(file)) results.push(fail(`artifact_json: file not found: ${aj.artifact} (under ${ctx.workRoot})`));
     else {
       let doc: unknown;
       let parsed = true;

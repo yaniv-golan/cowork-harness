@@ -9,9 +9,9 @@ import { parseMessage, type AgentEvent, type DecisionRequest } from "../agent/se
  * under the current cwd (the path `execute.ts`/`chat.ts` write to today — preserved so a read finds a
  * just-written run); then the REPO-relative `runs/` derived from this module's URL (mirrors the
  * `sidecar.ts`/`grants.ts` `fileURLToPath(new URL("../..", import.meta.url))` pattern), which is what
- * makes the cross-directory case work. NOTE: `execute.ts`/`chat.ts` still write runs/ via their own
- * cwd-relative `"runs"` path — they should ideally route through this same helper (with the env
- * override threaded) so the write/read roots can never drift.
+ * makes the cross-directory case work. The WRITERS (`execute.ts`/`chat.ts`) now route through
+ * `runsWriteRoot()` below, so a `COWORK_HARNESS_RUNS_DIR` override is honored on write and the
+ * write/read roots can no longer drift.
  */
 export function runsRoot(): string {
   if (process.env.COWORK_HARNESS_RUNS_DIR) return process.env.COWORK_HARNESS_RUNS_DIR;
@@ -19,6 +19,13 @@ export function runsRoot(): string {
   if (existsSync(cwdRuns)) return cwdRuns;
   const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
   return join(repoRoot, "runs");
+}
+
+/** The root that run WRITERS use: the `COWORK_HARNESS_RUNS_DIR` override if set, else a cwd-relative
+ *  `runs/`. This is the env-honoring half of `runsRoot()` (no repo-root fallback — a writer needs a
+ *  deterministic target), so a write and a subsequent `trace`/read resolve to the same place. */
+export function runsWriteRoot(): string {
+  return process.env.COWORK_HARNESS_RUNS_DIR ?? join(process.cwd(), "runs");
 }
 
 /**

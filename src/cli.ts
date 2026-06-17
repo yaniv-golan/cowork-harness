@@ -7,7 +7,7 @@ import { Scenario, AnswerRule, Assertion, type RunResult } from "./types.js";
 import { loadBaseline, BASELINES_DIR } from "./baseline.js";
 import { loadSession, resolveSessionPaths } from "./session.js";
 import { executeScenario, parseScenarioFile, UnansweredError, BoundaryError, type ExecuteOptions } from "./run/execute.js";
-import { ScriptedDecider, ExternalDecider, LlmDecider, ABSTAIN, type OnUnanswered } from "./decide/decider.js";
+import { ScriptedDecider, ExternalDecider, LlmDecider, ABSTAIN, coerceLabel, type OnUnanswered } from "./decide/decider.js";
 import { claudeCliComplete } from "./decide/llm-transport.js";
 import type { DecisionRequest } from "./agent/session.js";
 import { vmInit, vmDelete, vmStatus, vmPrune, instanceName } from "./runtime/lima.js";
@@ -27,7 +27,8 @@ import {
   formatDispatchTree,
 } from "./run/trace-view.js";
 import { buildScaffold } from "./run/scaffold.js";
-import { pkgVersion, jsonEnvelope, jsonError, type ErrCategory } from "./run/envelope.js";
+import { pkgVersion, jsonEnvelope, jsonError, parseOutputFormat, type ErrCategory } from "./run/envelope.js";
+import { computeVerdict } from "./run/verdict.js";
 import { spawnChannel, fileChannel, streamGates, answerGate, readGate, type DecisionChannel } from "./decide/external-channel.js";
 
 // Synchronous writes (fd 1/2): `process.stdout.write` + `process.exit()` truncates on a PIPE, which
@@ -308,6 +309,15 @@ function isJsonOutput(args: string[]): boolean {
     if (args[i] === "--output-format=json") return true;
   }
   return false;
+}
+/** #8: validate `--output-format` is text|json for the ad-hoc commands (trace/decide/gates) the way the
+ *  common parser already does for run/skill — an invalid value is a usage error, not a silent text degrade. */
+function ensureOutputFormat(command: string, args: string[]): void {
+  try {
+    parseOutputFormat(args);
+  } catch (e) {
+    fail(command, "usage", String((e as Error).message), undefined, isJsonOutput(args));
+  }
 }
 /**
  * #58: bounds-checked reader for value-taking flags. `args[++i]` with no following token silently
@@ -596,8 +606,8 @@ async function cmdRun(rawArgs: string[]) {
   // All channels keep stdout free → the normal output path (envelope under --output-format json, nothing
   // otherwise). No terminal {type:"result"} line — `--decider-cmd`/`--decider-dir` compose with json.
   if (o.json) out(jsonEnvelope("run", results));
-  const failed = results.filter((r) => r.assertions.some((a) => !a.pass) || r.result === "error");
-  process.exit(failed.length > 0 ? 1 : 0);
+  const anyFail = results.some((r) => !computeVerdict(r, "live").pass);
+  process.exit(anyFail ? 1 : 0);
 }
 
 async function cmdSkill(rawArgs: string[]) {
@@ -703,6 +713,17 @@ async function cmdSkill(rawArgs: string[]) {
       isJson,
     );
   }
+  // A marketplace dir is only a real source if something is enabled from it. With --marketplace but no
+  // --enable (and no plugin folder / --plugin), nothing is loaded, yet the scenario asserts success — a
+  // vacuous green. Require an --enable when a marketplace is the only source.
+  if (marketplaces.length && enables.length === 0 && !folder && extraPlugins.length === 0)
+    fail(
+      "skill",
+      "usage",
+      "--marketplace requires at least one --enable <name@marketplace> — nothing would be loaded otherwise.",
+      undefined,
+      isJson,
+    );
   const localPlugins = [...(folder ? [folder] : []), ...extraPlugins];
 
   // Resolve the inline session's relative paths against cwd (consistent with `run`'s file path, which
@@ -743,6 +764,24 @@ async function cmdSkill(rawArgs: string[]) {
   const useLlm = deciderLlm;
   if (useLlm && externalChannel)
     fail("skill", "usage", "--decider-llm conflicts with --decider-cmd/--decider-dir (two terminals).", undefined, isJson);
+  // --intent only feeds the LLM decider; without --decider-llm it is silently ignored.
+  if (intent !== undefined && !useLlm)
+    fail(
+      "skill",
+      "usage",
+      "--intent requires --decider-llm (it states the test intent for the model answering live questions).",
+      undefined,
+      isJson,
+    );
+  // --decider-llm forces the `llm` terminal; an explicit --on-unanswered would be silently overridden — reject the conflict.
+  if (useLlm && flags.onUnanswered !== undefined)
+    fail(
+      "skill",
+      "usage",
+      `--decider-llm conflicts with --on-unanswered ${flags.onUnanswered} (it forces the model terminal). Drop one.`,
+      undefined,
+      isJson,
+    );
   // base policy; an external channel or the LLM decider overrides the terminal in execute.ts
   const policy: OnUnanswered = externalChannel ? "fail" : useLlm ? "llm" : resolvePolicy("skill", flags);
   const o = resolveOutput("skill", flags);
@@ -768,11 +807,10 @@ async function cmdSkill(rawArgs: string[]) {
   } finally {
     externalChannel?.close?.();
   }
-  const bad = result.assertions.filter((a) => !a.pass);
   // All channels keep stdout free → the json envelope is the only stdout (footer goes to stderr, and is
   // mutually exclusive with --output-format json). The footer itself is emitted inside runOneScenario.
   if (o.json) out(jsonEnvelope("skill", [result]));
-  process.exit(bad.length || result.result === "error" ? 1 : 0);
+  process.exit(computeVerdict(result, "live").pass ? 0 : 1);
 }
 
 function cmdVm(args: string[]) {
@@ -810,7 +848,12 @@ function cmdBoundary(args: string[]) {
     process.exit(2);
   }
   const sessionPath = si >= 0 ? args[si + 1] : undefined;
-  const positional = args.filter((a, i) => a !== "--session" && args[i - 1] !== "--session");
+  const positional = args.filter((a, i) => a !== "--session" && args[i - 1] !== "--session" && !a.startsWith("--"));
+  // Reject extra baseline positionals rather than silently using only the first.
+  if (positional.length > 1) {
+    log(`boundary-check takes at most one baseline (got ${positional.length}: ${positional.join(", ")})`);
+    process.exit(2);
+  }
   const baseline = loadBaseline(positional[0] ?? "latest");
   let sessionEgress: { extraAllow?: string[]; unrestricted?: boolean } | undefined;
   if (sessionPath) {
@@ -972,6 +1015,7 @@ function cmdList() {
  *  helper receives and the answer it produced (or the protocol error); for `--answer`/`--answer-policy`
  *  it shows which rule matched. */
 async function cmdDecide(args: string[]) {
+  ensureOutputFormat("decide", args);
   const json = isJsonOutput(args);
   let question = "Confirm the detected stage before proceeding?";
   const options: string[] = [];
@@ -1059,6 +1103,7 @@ async function cmdDecide(args: string[]) {
  *  JSON line per pending gate (`{seq, …decision_request}`) + a terminal `{"done":true}`. Point ONE
  *  Monitor at this (no hand-written zsh/find/seen-set loop). */
 async function cmdGates(args: string[]) {
+  ensureOutputFormat("gates", args);
   const follow = args.includes("--follow");
   const dir = args.find((a) => !a.startsWith("--"));
   if (!dir) return void fail("gates", "usage", "usage: gates <dir> [--follow]", undefined, isJsonOutput(args));
@@ -1084,14 +1129,38 @@ function cmdAnswer(args: string[]) {
       pairs.push({ q, label });
     }
   }
-  if (!dir || !seq)
+  if (!dir)
     return void fail("answer", "usage", 'usage: answer <dir> --gate <N> (--choose <label> | --answer "<q>=<label>")', undefined, json);
+  // A gate sequence is a positive integer; `!seq` alone admitted negatives/fractions, which then built
+  // odd gate file names. Require a safe positive integer.
+  if (seq === undefined || !Number.isSafeInteger(seq) || seq <= 0)
+    return void fail(
+      "answer",
+      "usage",
+      `--gate must be a positive integer (got ${seq === undefined ? "nothing" : `"${seq}"`})`,
+      undefined,
+      json,
+    );
   const answers: Record<string, string> = {};
   if (pairs.length) for (const p of pairs) answers[p.q] = p.label;
   else if (choose) {
     try {
       const g = readGate(dir, seq);
-      answers[g.questions?.[0]?.question ?? g.questions?.[0]?.header ?? ""] = choose;
+      const q0 = g.questions?.[0];
+      // Validate the chosen label at write time so a typo fails HERE (located, immediate) instead of
+      // only later when the run consumes the answer. Use the decider's own coerceLabel so the CLI
+      // accepts exactly what the run would (exact / case-insensitive / 1-based index). An options-less
+      // (free-text) gate skips the check; an "Other" free-text reply should use --answer, not --choose.
+      const labels = (q0?.options ?? []).map((o) => o.label).filter((l): l is string => typeof l === "string");
+      if (labels.length && !coerceLabel(choose, labels).matched)
+        return void fail(
+          "answer",
+          "usage",
+          `--choose "${choose}" is not an option for gate ${seq}. Options: ${labels.join(", ")}. (Use --answer "<q>=<text>" for a free-text "Other" reply.)`,
+          undefined,
+          json,
+        );
+      answers[q0?.question ?? q0?.header ?? ""] = choose;
     } catch (e) {
       return void fail("answer", "usage", `cannot read gate ${seq} in ${dir}: ${String((e as Error).message)}`, undefined, json);
     }
@@ -1136,6 +1205,7 @@ function cmdAssert(args: string[]) {
 }
 
 function cmdTrace(args: string[]) {
+  ensureOutputFormat("trace", args);
   const json = isJsonOutput(args);
   const tools = args.includes("--tools");
   const gates = args.includes("--gates");

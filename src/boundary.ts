@@ -52,77 +52,82 @@ export function runBoundaryChecks(baseline: PlatformBaseline, session?: Boundary
   const network = sidecar.network;
   const proxy = sidecar.proxyUrl;
 
-  const probe = (shell: string, withProxy = false) =>
-    spawnSync(
-      runtime,
-      [
-        "run",
-        "--rm",
-        "--platform",
-        "linux/arm64",
-        "--network",
-        network,
-        ...(withProxy ? ["-e", `HTTPS_PROXY=${proxy}`, "-e", `HTTP_PROXY=${proxy}`] : []),
-        "--entrypoint",
-        "sh",
-        image,
-        "-c",
-        shell,
-      ],
-      { encoding: "utf8", timeout: 30_000 },
-    );
+  // Probes can throw (spawnSync setup errors, etc.); tear the sidecar down in `finally` so an unexpected
+  // throw never leaks the proxy container + both Docker networks.
+  try {
+    const probe = (shell: string, withProxy = false) =>
+      spawnSync(
+        runtime,
+        [
+          "run",
+          "--rm",
+          "--platform",
+          "linux/arm64",
+          "--network",
+          network,
+          ...(withProxy ? ["-e", `HTTPS_PROXY=${proxy}`, "-e", `HTTP_PROXY=${proxy}`] : []),
+          "--entrypoint",
+          "sh",
+          image,
+          "-c",
+          shell,
+        ],
+        { encoding: "utf8", timeout: 30_000 },
+      );
 
-  // 1. Host filesystem is NOT visible (no /Users, no host home bind).
-  {
-    const r = probe(`ls /Users 2>&1 || true; ls /host 2>&1 || true`);
-    const out = (r.stdout ?? "") + (r.stderr ?? "");
-    const blocked = isHostFsSealed(out);
-    results.push({
-      check: "host-fs-sealed",
-      expectation: "host paths (/Users, /host) invisible",
-      pass: blocked,
-      detail: out.trim().slice(0, 200),
-    });
+    // 1. Host filesystem is NOT visible (no /Users, no host home bind).
+    {
+      const r = probe(`ls /Users 2>&1 || true; ls /host 2>&1 || true`);
+      const out = (r.stdout ?? "") + (r.stderr ?? "");
+      const blocked = isHostFsSealed(out);
+      results.push({
+        check: "host-fs-sealed",
+        expectation: "host paths (/Users, /host) invisible",
+        pass: blocked,
+        detail: out.trim().slice(0, 200),
+      });
+    }
+
+    // 2. Direct (non-proxied) egress is impossible — no route off the internal net.
+    {
+      const r = probe(`curl -sS -m 5 -o /dev/null http://example.com && echo REACHED || echo BLOCKED`);
+      const out = ((r.stdout ?? "") + (r.stderr ?? "")).trim();
+      results.push({
+        check: "direct-egress-denied",
+        expectation: "no route to internet without proxy",
+        pass: /BLOCKED/.test(out) && !/REACHED/.test(out),
+        detail: out,
+      });
+    }
+
+    // 3. Non-allowlisted egress via the proxy is refused (403).
+    {
+      const r = probe(`curl -sS -m 5 -o /dev/null https://example.com && echo REACHED || echo BLOCKED`, true);
+      const out = ((r.stdout ?? "") + (r.stderr ?? "")).trim();
+      results.push({
+        check: "allowlist-enforced",
+        expectation: "off-list host refused by proxy",
+        pass: /BLOCKED|403/.test(out) && !/REACHED/.test(out),
+        detail: out.slice(0, 200),
+      });
+    }
+
+    // 4. Allowlisted egress via the proxy works (so the agent can reach inference).
+    {
+      const r = probe(`curl -sS -m 8 -o /dev/null https://api.anthropic.com && echo OK || echo FAIL`, true);
+      const out = ((r.stdout ?? "") + (r.stderr ?? "")).trim();
+      results.push({
+        check: "allowlist-permits",
+        expectation: "allowlisted host reachable via proxy",
+        pass: /OK/.test(out),
+        detail: out.slice(0, 200),
+      });
+    }
+
+    return results;
+  } finally {
+    sidecar.teardown();
   }
-
-  // 2. Direct (non-proxied) egress is impossible — no route off the internal net.
-  {
-    const r = probe(`curl -sS -m 5 -o /dev/null http://example.com && echo REACHED || echo BLOCKED`);
-    const out = ((r.stdout ?? "") + (r.stderr ?? "")).trim();
-    results.push({
-      check: "direct-egress-denied",
-      expectation: "no route to internet without proxy",
-      pass: /BLOCKED/.test(out) && !/REACHED/.test(out),
-      detail: out,
-    });
-  }
-
-  // 3. Non-allowlisted egress via the proxy is refused (403).
-  {
-    const r = probe(`curl -sS -m 5 -o /dev/null https://example.com && echo REACHED || echo BLOCKED`, true);
-    const out = ((r.stdout ?? "") + (r.stderr ?? "")).trim();
-    results.push({
-      check: "allowlist-enforced",
-      expectation: "off-list host refused by proxy",
-      pass: /BLOCKED|403/.test(out) && !/REACHED/.test(out),
-      detail: out.slice(0, 200),
-    });
-  }
-
-  // 4. Allowlisted egress via the proxy works (so the agent can reach inference).
-  {
-    const r = probe(`curl -sS -m 8 -o /dev/null https://api.anthropic.com && echo OK || echo FAIL`, true);
-    const out = ((r.stdout ?? "") + (r.stderr ?? "")).trim();
-    results.push({
-      check: "allowlist-permits",
-      expectation: "allowlisted host reachable via proxy",
-      pass: /OK/.test(out),
-      detail: out.slice(0, 200),
-    });
-  }
-
-  sidecar.teardown();
-  return results;
 }
 
 /** Escape regex metacharacters in a literal so it can be embedded in a RegExp. */

@@ -207,3 +207,86 @@ describe("buildLaunchPlan", () => {
     delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
   });
 });
+
+describe("SEAM A — fail-loud declared-source staging", () => {
+  // Build a local marketplace dir; controls let us simulate every failure mode.
+  function mktDir(opts: { name?: string; withPlugin?: boolean; pluginVersion?: string; badJson?: boolean; noManifest?: boolean }) {
+    const mk = mkdtempSync(join(tmpdir(), "cowork-seamA-mkt-"));
+    if (opts.noManifest) return mk;
+    mkdirSync(join(mk, ".claude-plugin"), { recursive: true });
+    if (opts.badJson) {
+      writeFileSync(join(mk, ".claude-plugin", "marketplace.json"), "{ not valid json");
+      return mk;
+    }
+    const plugins: Array<{ name: string; source: string }> = [];
+    if (opts.withPlugin) {
+      mkdirSync(join(mk, "p", ".claude-plugin"), { recursive: true });
+      writeFileSync(join(mk, "p", ".claude-plugin", "plugin.json"), JSON.stringify({ name: "p", version: opts.pluginVersion ?? "1.0.0" }));
+      plugins.push({ name: "p", source: "./p" });
+    }
+    writeFileSync(join(mk, ".claude-plugin", "marketplace.json"), JSON.stringify({ name: opts.name ?? "mymkt", plugins }));
+    return mk;
+  }
+
+  it("a missing local skill source throws", () => {
+    expect(() => plan({ skills: { local: ["./does/not/exist-skill"] } })).toThrow(/skill source not found/);
+  });
+
+  it("two skills.local entries with the same basename throw (would clobber)", () => {
+    const a = mkdtempSync(join(tmpdir(), "skA-"));
+    const b = mkdtempSync(join(tmpdir(), "skB-"));
+    mkdirSync(join(a, "dup"), { recursive: true });
+    mkdirSync(join(b, "dup"), { recursive: true });
+    expect(() => plan({ skills: { local: [join(a, "dup"), join(b, "dup")] } })).toThrow(/duplicate skill destination/);
+  });
+
+  it("an upload that is a directory is rejected (uploads model attached files)", () => {
+    expect(() => plan({ uploads: ["./examples/data/project"] })).toThrow(/is a directory/);
+  });
+
+  it("a default folder id whose basename is '..' is rejected (would clobber the workspace root)", () => {
+    expect(() => plan({ folders: [{ from: ".." }] })).toThrow(/unsafe folder default id/);
+  });
+
+  it("a missing or unparsable marketplace manifest throws", () => {
+    expect(() => plan({ plugins: { local_marketplaces: [mktDir({ noManifest: true })] } })).toThrow(/manifest not found/);
+    expect(() => plan({ plugins: { local_marketplaces: [mktDir({ badJson: true })] } })).toThrow(/not valid JSON/);
+  });
+
+  it("rejects ':' in marketplace metadata (it would break the docker -v overlay)", () => {
+    const mk = mktDir({ name: "mymkt", withPlugin: true, pluginVersion: "1.0:evil" });
+    expect(() => plan({ plugins: { local_marketplaces: [mk], enabled: ["p@mymkt"] } })).toThrow(/unsafe plugin version/);
+  });
+
+  it("throws when name@<local-mkt> names a declared local marketplace but the plugin is absent there", () => {
+    const mk = mktDir({ name: "mymkt", withPlugin: false }); // manifest present, plugin "p" missing
+    expect(() => plan({ plugins: { local_marketplaces: [mk], enabled: ["p@mymkt"] } })).toThrow(/names local marketplace "mymkt"/);
+  });
+
+  it("does NOT throw for an enabled entry qualified by a REMOTE marketplace (no local_marketplaces)", () => {
+    expect(() => plan({ plugins: { enabled: ["x@local"], marketplaces: ["https://example.com/m.git"] } })).not.toThrow();
+  });
+
+  it("does NOT throw for a BARE enabled name delivered via local_plugins", () => {
+    expect(() => plan({ plugins: { enabled: ["x"], local_plugins: ["./examples/skills/my-pdf-skill"] } })).not.toThrow();
+  });
+
+  it("does NOT throw when the entry resolves on a LATER marketplace iteration", () => {
+    const empty = mktDir({ name: "mktA", withPlugin: false }); // iterated first, lacks "p"
+    const has = mktDir({ name: "mktB", withPlugin: true }); // has "p"
+    expect(() => plan({ plugins: { local_marketplaces: [empty, has], enabled: ["p"] } })).not.toThrow();
+  });
+
+  it("COWORK_HARNESS_SOFT_MISSING downgrades a missing manifest and an unresolved entry to warn-and-skip", () => {
+    const prev = process.env.COWORK_HARNESS_SOFT_MISSING;
+    process.env.COWORK_HARNESS_SOFT_MISSING = "1";
+    try {
+      expect(() => plan({ plugins: { local_marketplaces: [mktDir({ noManifest: true })] } })).not.toThrow();
+      const mk = mktDir({ name: "mymkt", withPlugin: false });
+      expect(() => plan({ plugins: { local_marketplaces: [mk], enabled: ["p@mymkt"] } })).not.toThrow();
+    } finally {
+      if (prev === undefined) delete process.env.COWORK_HARNESS_SOFT_MISSING;
+      else process.env.COWORK_HARNESS_SOFT_MISSING = prev;
+    }
+  });
+});

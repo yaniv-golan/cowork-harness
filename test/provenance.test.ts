@@ -152,6 +152,20 @@ describe("#30 — web_fetch provenance gate (G1t port, via the handler)", () => 
     expect(r.isError).toBe(true);
     expect(r.text).toMatch(/Redirect to .* blocked: Host "169\.254\.169\.254" is a local or private address/);
   });
+
+  it("#38 — a redirect logs egress for EACH hop, not just the terminal host", async () => {
+    let n = 0;
+    const rawFetch: RawFetch = async () =>
+      n++ === 0 ? { status: 302, location: "http://b.example/y", text: async () => "" } : { status: 200, text: async () => "FINAL" };
+    const r = await callWebFetch(fake({ isAllowed: () => true }), "http://a.example/x", rawFetch);
+    expect(r.text).toMatch(/FINAL/);
+    // BOTH the intermediate (a.example) hop that redirected AND the terminal (b.example) host are
+    // recorded — the per-hop onEgress emit, vs the old terminal-only logging.
+    expect(r.egress).toEqual([
+      { host: "a.example", decision: "allow" },
+      { host: "b.example", decision: "allow" },
+    ]);
+  });
 });
 
 describe("#30 — readGateFlag (prefixed key + prose/structured shapes)", () => {

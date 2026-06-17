@@ -156,7 +156,8 @@
                 "description": "a sub-agent declared this tool but never used it (the fabrication proxy)"
               },
               "dispatch_count_max": {
-                "type": "number",
+                "type": "integer",
+                "minimum": 0,
                 "description": "total sub-agent dispatches ≤ N (the {global:3} ceiling)"
               },
               "egress_denied": {
@@ -169,7 +170,7 @@
               },
               "no_delete_in_outputs": {
                 "type": "boolean",
-                "description": "fails if any delete op touched mnt/outputs"
+                "description": "fails if a delete touching mnt/outputs is DETECTED (post-run bash-command scan, not FUSE-level enforcement — a green means none was detected)"
               },
               "self_heal_ran": {
                 "type": "boolean",
@@ -184,7 +185,8 @@
                 "description": "a question matching this regex was asked"
               },
               "questions_count_max": {
-                "type": "number",
+                "type": "integer",
+                "minimum": 0,
                 "description": "at most N questions were asked"
               },
               "gate_answers_delivered": {
@@ -198,6 +200,10 @@
                   "error"
                 ],
                 "description": "the run's final result was success | error"
+              },
+              "allow_permissive_auto_allow": {
+                "type": "boolean",
+                "description": "(verdict modifier) suppress the default-fail when the run recorded a cowork-parity permissive auto-allow — for tests that deliberately assert Cowork's permissive behavior"
               },
               "replay_protocol_fidelity": {
                 "type": "boolean",

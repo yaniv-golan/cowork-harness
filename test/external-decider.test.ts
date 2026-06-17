@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtempSync, writeFileSync, readFileSync, existsSync, renameSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ExternalDecider, ABSTAIN, UnansweredError, type RunContext } from "../src/decide/decider.js";
+import { ExternalDecider, PromptDecider, ABSTAIN, UnansweredError, type RunContext } from "../src/decide/decider.js";
 import type { DecisionChannel } from "../src/decide/external-channel.js";
 import { spawnChannel, fileChannel, streamGates, answerGate, writeDoneMarker } from "../src/decide/external-channel.js";
 import type { DecisionRequest } from "../src/agent/session.js";
@@ -248,5 +248,31 @@ describe("fileChannel — #49 exit listener removed on close()", () => {
     expect(existsSync(join(dir, "done.json"))).toBe(false);
     ch.close?.();
     expect(existsSync(join(dir, "done.json"))).toBe(true);
+  });
+});
+
+describe("decider Phase-5 fixes (#35 elicit cancel, #36 JSON-safe reply_with)", () => {
+  it("#35 — a TTY elicit can return cancel (not just accept/decline)", async () => {
+    const orig = process.stdin.isTTY;
+    Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+    try {
+      const elicit = { id: "e1", kind: "elicit", server: "s", prompt: "go?", schema: {} } as unknown as DecisionRequest;
+      const action = async (reply: string) =>
+        ((await new PromptDecider(async () => reply).decide(elicit, ctx())) as { response: { action: string } }).response.action;
+      expect(await action("cancel")).toBe("cancel");
+      expect(await action("accept")).toBe("accept");
+      expect(await action("nope")).toBe("decline");
+    } finally {
+      Object.defineProperty(process.stdin, "isTTY", { value: orig, configurable: true });
+    }
+  });
+
+  it("#36 — reply_with builds a JSON-safe key for question text with quotes/newlines/backslashes", async () => {
+    const tricky = 'He said "hi"\npath C:\\x';
+    const req: DecisionRequest = { id: "q1", kind: "question", questions: [{ question: tricky, options: [{ label: "Yes" }] }] };
+    const { channel, sent } = memChannel([JSON.stringify({ id: "q1", answers: { [tricky]: "Yes" } })]);
+    await new ExternalDecider(channel).decide(req, ctx());
+    // the advertised reply_with must carry the question as a properly-escaped JSON key
+    expect(JSON.parse(sent[0]).reply_with).toContain(JSON.stringify(tricky) + ":");
   });
 });

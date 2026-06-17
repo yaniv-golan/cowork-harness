@@ -415,8 +415,11 @@ export class PromptDecider implements Decider {
       return { response: { kind: "dialog", behavior: /^o/i.test(ans) ? "ok" : "cancelled" }, by: "human" };
     }
     if (req.kind === "elicit") {
-      const ans = await this.ask(`[elicit ${req.prompt ?? ""}] accept/decline? `);
-      return { response: { kind: "elicit", action: /^a/i.test(ans) ? "accept" : "decline" }, by: "human" };
+      // The internal type (and serialize/deserialize/ExternalDecider) support cancel — offer it at the TTY
+      // too, so a human can express all three: "accept"/"a" accepts, "cancel"/"c" cancels, else decline.
+      const ans = await this.ask(`[elicit ${req.prompt ?? ""}] accept/decline/cancel? `);
+      const action = /^a/i.test(ans) ? "accept" : /^c/i.test(ans) ? "cancel" : "decline";
+      return { response: { kind: "elicit", action }, by: "human" };
     }
     return ABSTAIN;
   }
@@ -463,9 +466,11 @@ export class ExternalDecider implements Decider {
   private emit(req: DecisionRequest, ctx?: RunContext): any {
     const base = { type: "decision_request", id: req.id, runId: ctx?.runId, kind: req.kind, context: this.contextTail(ctx) };
     if (req.kind === "question") {
-      const pairs = req.questions
-        .map((q) => `"${(q.question ?? q.header ?? "").replace(/"/g, '\\"')}":"<label or 1-based index>"`)
-        .join(",");
+      // JSON.stringify the KEY so a question containing a backslash / newline / control char / quote
+      // produces a valid JSON object key — the old `"…".replace(/"/g,'\\"')` only escaped quotes and
+      // could emit invalid guidance. (The value stays a literal placeholder, so the whole template
+      // isn't itself parseable JSON — only the keys must be well-formed.)
+      const pairs = req.questions.map((q) => `${JSON.stringify(q.question ?? q.header ?? "")}:"<label or 1-based index>"`).join(",");
       return { ...base, questions: req.questions, reply_with: `{"id":"${req.id}","answers":{${pairs}}}` };
     }
     if (req.kind === "permission")

@@ -45,7 +45,7 @@ export type AgentEvent =
   | { type: "init"; tools: string[]; mcpServers: unknown[]; cwd?: string }
   | { type: "assistant_text"; text: string; parentToolUseId?: string }
   | { type: "tool_use"; name: string; input: unknown; parentToolUseId?: string; toolUseId?: string; synthetic?: boolean } // toolUseId for tool_use↔tool_result pairing (amendment #2); synthetic = the MCP round-trip echo (trace-only, NOT counted — the real call already arrives as an assistant tool_use block, live-verified)
-  | { type: "tool_result"; toolUseId?: string; isError: boolean; text: string } // the OUTCOME of a tool call (from `user`/tool_result blocks) — the q.map-error surface (Part 2)
+  | { type: "tool_result"; toolUseId?: string; isError: boolean; text: string; provenanceText?: string } // the OUTCOME of a tool call (from `user`/tool_result blocks). `text` is display-truncated; `provenanceText` is the larger raw value so URLs past the display cap still seed web_fetch provenance (#32)
   | {
       type: "subagent_dispatch";
       toolUseId: string;
@@ -58,7 +58,7 @@ export type AgentEvent =
   | { type: "metrics"; data: Record<string, unknown> } // F2 (api_metrics → cost)
   | { type: "decision"; request: DecisionRequest }
   | { type: "result"; isError: boolean; usage?: Record<string, unknown> }
-  | { type: "error"; source: "spawn" | "agent" | "protocol"; message: string }
+  | { type: "error"; source: "spawn" | "agent" | "protocol" | "exit"; message: string }
   | { type: "raw"; line: string };
 
 export type SdkMcp = {
@@ -246,6 +246,8 @@ export class LiveAgentSession implements AgentSession {
   /** Reject function set when proc emits an error — bridges the callback into the async generator.
    *  Set before the generator loop starts; called at most once (the Promise settles once). */
   private rejectError?: (e: Error) => void;
+  /** Bounded tail of the child's stderr, for the #31 nonzero-exit error message. */
+  private stderrTail = "";
 
   constructor(
     private proc: ChildProcessByStdio<Writable, Readable, Readable>,
@@ -255,6 +257,11 @@ export class LiveAgentSession implements AgentSession {
     this.controlOut = createWriteStream(join(outDir, "control-out.jsonl"), { flags: "a" });
     const errLog = createWriteStream(join(outDir, "agent.stderr.log"), { flags: "a" });
     this.proc.stderr.pipe(errLog);
+    // #31: keep a bounded stderr tail and capture the exit code/signal so a child that dies nonzero
+    // (with no structured {type:"result"} error) is surfaced as a typed error event, not a silent stop.
+    this.proc.stderr.on("data", (d) => {
+      this.stderrTail = (this.stderrTail + d.toString()).slice(-2000);
+    });
     // #15: attach stdin error listener once at construction so dead-child writes don't produce
     // unhandled process errors. Routes to the same error path as spawn errors when possible.
     this.proc.stdin.on("error", (e) => {
@@ -323,6 +330,20 @@ export class LiveAgentSession implements AgentSession {
           continue;
         }
         yield* this.translate(msg);
+      }
+      // #31: stdout closed. Give a pending 'exit' one tick to land (NOT a blocking wait on 'close' — a
+      // mock/fake child may never emit it), then surface a nonzero/signal exit as a typed error — a
+      // crashed child that emitted no {type:"result"} error line would otherwise be a silent stop.
+      await new Promise<void>((res) => setImmediate(res));
+      const code = this.proc.exitCode;
+      const signal = this.proc.signalCode;
+      if (signal || (code !== null && code !== 0)) {
+        const tail = this.stderrTail.trim();
+        yield {
+          type: "error",
+          source: "exit",
+          message: `agent process exited ${signal ? `on signal ${signal}` : `with code ${code}`}${tail ? ` — stderr tail: ${tail}` : ""}`,
+        };
       }
     } finally {
       this.rejectError = undefined; // generator is done; stop routing errors here
@@ -423,14 +444,13 @@ export class LiveAgentSession implements AgentSession {
 
   private write(obj: unknown) {
     const line = JSON.stringify(obj);
-    // #54: the control protocol writes small single-line JSON frames, so stdin backpressure
-    // effectively never engages; we intentionally ignore the write() return / drain here. If frame
-    // sizes ever grow, revisit with a drain-aware queue (which would make write()/respond() async).
-    // #47: guard that assumption — a frame past the threshold warns loudly so the "revisit" trigger
-    // fires instead of silently risking partial buffering on a frame far larger than expected.
+    // The control protocol writes small single-line JSON frames, so stdin backpressure effectively never
+    // engages; we ignore the write() return / drain here. A frame past the safe threshold is anomalous —
+    // hard-FAIL rather than risk a partially-buffered write that silently corrupts the protocol stream.
+    // (If large control frames ever become legitimate, switch to a drain-aware queue, making writes async.)
     if (line.length > 256 * 1024)
-      process.stderr.write(
-        `::warning:: control frame is ${line.length} bytes (> 256 KiB) — stdin backpressure may engage; revisit write() with a drain-aware queue\n`,
+      throw new Error(
+        `control frame is ${line.length} bytes (> 256 KiB safe limit) — refusing to write to avoid partial stdin buffering; this indicates an unexpectedly large control payload`,
       );
     this.controlOut.write(line + "\n");
     this.proc.stdin.write(line + "\n");
@@ -503,6 +523,7 @@ export function parseMessage(msg: any): AgentEvent[] {
             toolUseId: block.tool_use_id ? String(block.tool_use_id) : undefined,
             isError: !!block.is_error,
             text: toolResultText(block.content),
+            provenanceText: toolResultRaw(block.content),
           });
       }
       break;
@@ -513,15 +534,25 @@ export function parseMessage(msg: any): AgentEvent[] {
   return ev;
 }
 
-/** Flatten a tool_result `content` (a string, or an array of `{type:"text",text}` blocks) to a short string. */
-function toolResultText(content: unknown): string {
-  if (typeof content === "string") return content.slice(0, 500);
+/** Flatten a tool_result `content` (a string, or an array of `{type:"text",text}` blocks), capped at
+ *  `max` chars. The 500-char DISPLAY value (toolResultText) keeps the recorder/trace compact; the larger
+ *  PROVENANCE value (toolResultRaw) is what seeds web_fetch provenance, so a URL past char 500 isn't lost. */
+function flattenToolResult(content: unknown, max: number): string {
+  if (typeof content === "string") return content.slice(0, max);
   if (Array.isArray(content))
     return content
       .map((b) => (b && typeof b === "object" && "text" in b ? String((b as { text: unknown }).text) : ""))
       .join(" ")
-      .slice(0, 500);
+      .slice(0, max);
   return "";
+}
+function toolResultText(content: unknown): string {
+  return flattenToolResult(content, 500);
+}
+/** Larger cap for provenance (URL extraction) — matches the web_fetch body cap so any URL the agent
+ *  could realistically act on is seeded; still bounded so a pathological result can't blow up memory. */
+function toolResultRaw(content: unknown): string {
+  return flattenToolResult(content, 200_000);
 }
 
 export function toDecisionRequest(msg: any): DecisionRequest | null {

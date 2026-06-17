@@ -1,5 +1,9 @@
 import { z } from "zod";
 
+/** Cowork's `DEFAULT_MAX_THINKING_TOKENS` (the ELF's `hre`), binary-verified = 31999. The single source
+ *  for the schema default and every runtime arg/env fallback, so they can't drift. Never 0. */
+export const DEFAULT_MAX_THINKING_TOKENS = 31999;
+
 /** PlatformBaseline — VOLATILE per-release facts (one synced snapshot per Cowork release), from cowork-sync. */
 export const MountSpec = z.object({
   name: z.string(),
@@ -26,7 +30,7 @@ export const PlatformBaseline = z
         configDirInGuest: z.string().default("mnt/.claude"),
         settingSources: z.array(z.string()).default(["user"]),
         permissionMode: z.string().default("default"),
-        maxThinkingTokens: z.number().default(31999),
+        maxThinkingTokens: z.number().default(DEFAULT_MAX_THINKING_TOKENS),
         effortDefault: z.string().default("medium"),
         tools: z.array(z.string()).default([]),
         allowedTools: z.array(z.string()).default([]),
@@ -62,25 +66,41 @@ export const Profile = PlatformBaseline;
 export type Profile = PlatformBaseline;
 
 /** Scenario — what the user authors. */
-export const AnswerRule = z.object({
-  // AskUserQuestion matcher
-  when_question: z.string().optional(),
-  // a label (single-select / one member) OR a list of labels (multiSelect — delivered comma-joined,
-  // the binary-verified wire shape). Each member is validated against the gate's offered options.
-  choose: z.union([z.string(), z.array(z.string())]).optional(),
-  // free-text "Other" answer: an arbitrary string delivered verbatim, bypassing label validation by
-  // author intent (Cowork auto-provides an "Other" free-text path on every AskUserQuestion gate). Mutually
-  // exclusive with `choose`.
-  answer: z.string().optional(),
-  // tool-permission matcher
-  when_tool: z.string().optional(),
-  decide: z.enum(["allow", "deny"]).optional(),
-  allow_if: z.string().optional(), // JS predicate over `input` (e.g. "!command.includes('rm')")
-  else: z.enum(["allow", "deny"]).optional(),
-  // web_fetch grant scope (only meaningful for a `webfetch:<domain>` allow): "once" = this fetch; "domain"
-  // = approve the host for the rest of the run (models "Allow all for website", session-scoped).
-  grant: z.enum(["once", "domain"]).optional(),
-});
+export const AnswerRule = z
+  .object({
+    // AskUserQuestion matcher
+    when_question: z.string().optional(),
+    // a label (single-select / one member) OR a list of labels (multiSelect — delivered comma-joined,
+    // the binary-verified wire shape). Each member is validated against the gate's offered options.
+    choose: z.union([z.string(), z.array(z.string())]).optional(),
+    // free-text "Other" answer: an arbitrary string delivered verbatim, bypassing label validation by
+    // author intent (Cowork auto-provides an "Other" free-text path on every AskUserQuestion gate). Mutually
+    // exclusive with `choose`.
+    answer: z.string().optional(),
+    // tool-permission matcher
+    when_tool: z.string().optional(),
+    decide: z.enum(["allow", "deny"]).optional(),
+    allow_if: z.string().optional(), // JS predicate over `input` (e.g. "!command.includes('rm')")
+    else: z.enum(["allow", "deny"]).optional(),
+    // web_fetch grant scope (only meaningful for a `webfetch:<domain>` allow): "once" = this fetch; "domain"
+    // = approve the host for the rest of the run (models "Allow all for website", session-scoped).
+    grant: z.enum(["once", "domain"]).optional(),
+  })
+  .superRefine((r, ctx) => {
+    // Reject inert rules: a matcher-less object (e.g. `{}`) or a matcher with no action passes the bare
+    // object schema but silently never matches, surfacing only later as an unanswered gate. Require a
+    // valid question-rule shape (when_question + choose|answer) or tool-rule shape (when_tool + decide|allow_if).
+    const hasQuestion = r.when_question !== undefined;
+    const hasTool = r.when_tool !== undefined;
+    if (!hasQuestion && !hasTool) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "answer rule has no matcher — set `when_question` or `when_tool`" });
+      return;
+    }
+    if (hasQuestion && r.choose === undefined && r.answer === undefined)
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "a `when_question` rule needs an action — set `choose` or `answer`" });
+    if (hasTool && r.decide === undefined && r.allow_if === undefined)
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "a `when_tool` rule needs an action — set `decide` or `allow_if`" });
+  });
 export type AnswerRule = z.infer<typeof AnswerRule>;
 
 // Each field carries a `.describe()` so it is the SINGLE source for both the published JSON schema and
@@ -102,19 +122,30 @@ export const Assertion = z.object({
   subagent_tool_absent: z.string().optional().describe("no sub-agent used this tool"),
   subagent_dispatched: z.string().optional().describe("a sub-agent matching this regex (by agentType or description) was dispatched"),
   subagent_declared_but_unused: z.string().optional().describe("a sub-agent declared this tool but never used it (the fabrication proxy)"),
-  dispatch_count_max: z.number().optional().describe("total sub-agent dispatches ≤ N (the {global:3} ceiling)"),
+  dispatch_count_max: z.number().int().nonnegative().optional().describe("total sub-agent dispatches ≤ N (the {global:3} ceiling)"),
   egress_denied: z.string().optional().describe("egress to this host was denied"),
   egress_allowed: z.string().optional().describe("egress to this host was allowed"),
-  no_delete_in_outputs: z.boolean().optional().describe("fails if any delete op touched mnt/outputs"),
+  no_delete_in_outputs: z
+    .boolean()
+    .optional()
+    .describe(
+      "fails if a delete touching mnt/outputs is DETECTED (post-run bash-command scan, not FUSE-level enforcement — a green means none was detected)",
+    ),
   self_heal_ran: z.boolean().optional().describe("skill resolved scripts via /sessions (plugin-root self-heal)"),
   transcript_no_host_path: z.boolean().optional().describe("no /Users//opt host path leaked into model-visible text"),
   question_asked: z.string().optional().describe("a question matching this regex was asked"),
-  questions_count_max: z.number().optional().describe("at most N questions were asked"),
+  questions_count_max: z.number().int().nonnegative().optional().describe("at most N questions were asked"),
   gate_answers_delivered: z
     .boolean()
     .optional()
     .describe("every answered AskUserQuestion gate's tool_result was non-error (the answer reached the model)"),
   result: z.enum(["success", "error"]).optional().describe("the run's final result was success | error"),
+  allow_permissive_auto_allow: z
+    .boolean()
+    .optional()
+    .describe(
+      "(verdict modifier) suppress the default-fail when the run recorded a cowork-parity permissive auto-allow — for tests that deliberately assert Cowork's permissive behavior",
+    ),
   replay_protocol_fidelity: z
     .boolean()
     .optional()
@@ -223,6 +254,9 @@ export interface RunResult {
   nonDeterministicTerminal?: boolean;
   /** #6: tools auto-allowed by cowork parity for unscripted, off-registry permission requests — real Cowork BLOCKS these for the user. A non-empty list means a green is NOT a faithful pass (pin with --answer or permission_parity: strict). */
   permissiveAutoAllow?: string[];
+  /** Post-run scan signals (live lane only). computeVerdict default-fails on `outputsDeletes`/`hostPathLeaked`
+   *  when the scenario did NOT author the matching assertion. Absent on the replay lane (a cassette can't reproduce them). */
+  scan?: { outputsDeletes: string[]; hostPathLeaked: boolean; selfHealRan: boolean };
   /** The fidelity tier actually used. Equals `fidelity` unless `fidelity:"cowork"` resolved to a specific tier. (#24) */
   effectiveFidelity?: string;
 }

@@ -71,6 +71,18 @@ describe("stageWorkspace — resume staging (fidelity guard)", () => {
     expect(res.mcpStaged).toBe(false); // must NOT leak the removed MCP servers into the new run
   });
 
+  it("fresh run with a declared-but-missing mcp.config throws (no silent drop)", () => {
+    const { mntHost, plan } = fixture(false);
+    (plan as { mcpConfig: string | null }).mcpConfig = join(mntHost, "..", "nope-mcp.json"); // does not exist
+    expect(() => stageWorkspace(plan, mntHost)).toThrow(/mcp.config not found/);
+  });
+
+  it("resume does NOT throw on a missing mcp.config source (the staged copy persists)", () => {
+    const { mntHost, plan } = fixture(true);
+    (plan as { mcpConfig: string | null }).mcpConfig = join(mntHost, "..", "nope-mcp.json");
+    expect(() => stageWorkspace(plan, mntHost)).not.toThrow();
+  });
+
   it("bare dirs are always created (idempotent), even on resume", () => {
     const { mntHost, plan } = fixture(true);
     const res = stageWorkspace(plan, mntHost);

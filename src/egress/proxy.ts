@@ -18,7 +18,26 @@ export interface ProxyOptions {
   onDecision?: (host: string, decision: "allow" | "deny") => void;
 }
 
-export function startEgressProxy(opts: ProxyOptions): http.Server {
+/** The proxy server plus a `ready` handshake (#42): resolves once it is accepting connections, rejects
+ *  on a listen error (e.g. EADDRINUSE) instead of crashing the process via an uncaught server error. */
+export interface EgressProxy extends http.Server {
+  ready: Promise<void>;
+}
+
+/** Allocate a free TCP port by binding an ephemeral listener and releasing it. Used to give each microVM
+ *  run its own host proxy port so concurrent runs can't collide on a fixed default (#41). */
+export function freePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer();
+    srv.once("error", reject);
+    srv.listen(0, () => {
+      const port = (srv.address() as net.AddressInfo).port;
+      srv.close(() => resolve(port));
+    });
+  });
+}
+
+export function startEgressProxy(opts: ProxyOptions): EgressProxy {
   const allow = compile(opts.allow);
   const log = (host: string, decision: "allow" | "deny") => {
     opts.onDecision?.(host, decision);
@@ -105,6 +124,13 @@ export function startEgressProxy(opts: ProxyOptions): http.Server {
   };
   process.on("uncaughtException", uncaughtHandler);
 
+  // #42: readiness/error handshake. With an `error` listener a bind failure (EADDRINUSE) is a rejected
+  // `ready` rather than an uncaught server error that crashes the process; callers `await proxy.ready`
+  // before routing traffic so the agent never starts before the socket is accepting.
+  const ready = new Promise<void>((resolve, reject) => {
+    server.once("listening", () => resolve());
+    server.once("error", reject);
+  });
   server.listen(opts.port ?? 8080);
   // Wrap close() so the uncaughtException handler is cleaned up when the server stops.
   const origClose = server.close.bind(server);
@@ -112,17 +138,25 @@ export function startEgressProxy(opts: ProxyOptions): http.Server {
     process.removeListener("uncaughtException", uncaughtHandler);
     return origClose(cb);
   };
-  return server;
+  (server as EgressProxy).ready = ready;
+  return server as EgressProxy;
 }
 
 export function compile(patterns: string[]): (host: string) => boolean {
   const exact = new Set<string>();
   const suffixes: string[] = [];
   // DNS hostnames are case-insensitive: store patterns lowercased and lowercase the candidate
-  // host in the matcher, so `HTTPS://API.ANTHROPIC.COM` matches an `api.anthropic.com` allow.
+  // host in the matcher, so `API.ANTHROPIC.COM` matches an `api.anthropic.com` allow.
   for (const p0 of patterns) {
     const p = p0.toLowerCase();
     if (p === "*") return () => true; // unrestricted
+    // An egress entry is a bare host or a `*.suffix` wildcard. A scheme / path / port / whitespace entry
+    // (e.g. `https://api.anthropic.com`) used to be stored verbatim as an exact pattern that could never
+    // match a bare hostname — a silent, confusing always-deny. Reject it loudly instead.
+    if (p.includes("://") || p.includes("/") || p.includes(":") || /\s/.test(p))
+      throw new Error(
+        `invalid egress allow entry "${p0}" — use a bare host (api.anthropic.com) or a wildcard (*.claude.ai), not a URL / scheme / path / port`,
+      );
     if (p.startsWith("*."))
       suffixes.push(p.slice(1)); // ".claude.ai"
     else exact.add(p);

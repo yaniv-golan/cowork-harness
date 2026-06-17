@@ -201,6 +201,9 @@ async function followWithRedirects(
       return textResult(`Fetch failed: ${e?.message ?? String(e)}`, true);
     }
     if (resp.status >= 300 && resp.status < 400) {
+      // This intermediate hop WAS contacted (it passed the gate and we fetched it) before redirecting —
+      // record the egress so the log reflects every host actually reached, not just the terminal one.
+      onEgress?.({ host: cur.hostname, decision: "allow" });
       if (!resp.location) return textResult(`Redirect ${resp.status} from ${cur.href} had no Location header.`, true);
       try {
         cur = new URL(resp.location, cur);

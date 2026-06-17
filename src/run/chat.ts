@@ -13,6 +13,7 @@ import { Scenario } from "../types.js";
 import { LiveAgentSession } from "../agent/session.js";
 import { Run } from "./run.js";
 import { makeRenderer } from "./renderer.js";
+import { runsWriteRoot } from "./trace-view.js";
 import { Chain, ScriptedDecider, PermissionDefaultDecider, PromptDecider } from "../decide/decider.js";
 import { readGateFlag } from "../loop-decision.js";
 import type { WebFetchProvenance } from "../hostloop/workspace-handler.js";
@@ -47,7 +48,7 @@ export async function cmdChat(args: string[]) {
   const session = loadSession({ model, permission_parity: "cowork", plugins: { local_plugins: [folder] } });
   const baseline = loadBaseline("latest");
   const sessionId = `local_${process.hrtime.bigint().toString(36)}`;
-  const outDir = join("runs", "chat", sessionId);
+  const outDir = join(runsWriteRoot(), "chat", sessionId);
   mkdirSync(outDir, { recursive: true });
   const plan = buildLaunchPlan(session, baseline, outDir);
   const scenario = Scenario.parse({ name: "chat", baseline: "latest", session: "(inline)", fidelity, prompt: "(interactive)", assert: [] });

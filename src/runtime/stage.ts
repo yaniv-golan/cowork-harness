@@ -42,6 +42,18 @@ export function stageWorkspace(plan: LaunchPlan, mntHost: string): StageResult {
       mkdirSync(dirname(dest), { recursive: true });
       if (existsSync(mt.hostPath)) cpSync(mt.hostPath, dest, { recursive: true });
     }
+    // A declared mcp.config whose source is missing must FAIL on a fresh run (it was silently dropped
+    // before — no --mcp-config, no error). Checked HERE, not in buildLaunchPlan, because resume (the
+    // else branch) must stay exempt: on resume the source may be gone but the staged copy persists.
+    // COWORK_HARNESS_SOFT_MISSING=1 downgrades to warn-and-skip.
+    if (plan.mcpConfig && !existsSync(plan.mcpConfig)) {
+      const softMissing = (process.env.COWORK_HARNESS_SOFT_MISSING ?? "") !== "";
+      if (!softMissing)
+        throw new Error(`mcp.config not found: ${plan.mcpConfig}. Fix the path, or set COWORK_HARNESS_SOFT_MISSING=1 to skip it.`);
+      process.stderr.write(
+        `::warning:: [mcp] config missing, --mcp-config not advertised (COWORK_HARNESS_SOFT_MISSING): ${plan.mcpConfig}\n`,
+      );
+    }
     // Advertise --mcp-config only when THIS run actually staged a config. Tie it to the current
     // plan, not to whether a file happens to exist: a fresh non-resume run that reuses a stable
     // outDir (e.g. same --session-id) must NOT inherit a prior run's mnt/.claude/mcp.json when the
@@ -51,6 +63,15 @@ export function stageWorkspace(plan: LaunchPlan, mntHost: string): StageResult {
   } else {
     // Resume reuses the persisted tree (no re-copy). Advertise the preserved mcp.json only if the
     // current plan still declares one — so dropping MCP between a run and its --resume is honored.
+    // #21: if the persisted tree was deleted out-of-band (manifest kept, staged content gone) the run
+    // would silently proceed against an empty workspace. We can't hard-fail (an empty-tree resume is a
+    // supported shape), but warn loudly so the cause is visible if it was unintended.
+    const looksStaged =
+      plan.mounts.some((mt) => existsSync(join(mntHost, mt.mountPath))) || existsSync(join(mntHost, ".claude", "settings.json"));
+    if (!looksStaged)
+      process.stderr.write(
+        `::warning:: [resume] staged workspace at ${mntHost} looks empty (no prior mounts/config found) — if the prior session's files were removed, re-run WITHOUT --resume to re-stage\n`,
+      );
     mcpStaged = !!plan.mcpConfig && existsSync(mcpDest);
   }
 

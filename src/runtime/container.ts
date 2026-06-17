@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { homedir } from "node:os";
 import type { PlatformBaseline, Scenario } from "../types.js";
+import { DEFAULT_MAX_THINKING_TOKENS } from "../types.js";
 import type { LaunchPlan } from "../session.js";
 import { resolveMounts } from "../baseline.js";
 import { agentArgs, spawnEnv, dockerRunArgv, resolveMaxThinkingTokens } from "./argv.js";
@@ -56,7 +57,11 @@ export function spawnContainer(
     configGuest,
     proxyHost,
     extra: runtimeAuthEnv(),
-    maxThinkingTokens: resolveMaxThinkingTokens(plan.maxThinkingTokens, plan.model, baseline.spawn?.maxThinkingTokens ?? 31999),
+    maxThinkingTokens: resolveMaxThinkingTokens(
+      plan.maxThinkingTokens,
+      plan.model,
+      baseline.spawn?.maxThinkingTokens ?? DEFAULT_MAX_THINKING_TOKENS,
+    ),
   });
   const claudeArgs = agentArgs(baseline, plan, { mntRoot, systemPromptAppend: opts.systemPromptAppend, mcpGuest });
   const dockerArgs = dockerRunArgv({

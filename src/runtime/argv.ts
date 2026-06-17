@@ -1,4 +1,5 @@
 import type { PlatformBaseline } from "../types.js";
+import { DEFAULT_MAX_THINKING_TOKENS } from "../types.js";
 import type { LaunchPlan } from "../session.js";
 import { SECRET_ENV_KEYS } from "./host-env.js";
 
@@ -47,7 +48,7 @@ export function agentArgs(baseline: PlatformBaseline, plan: LaunchPlan, opts: Ag
     // so both channels carry the same resolved value. Kept among the FIXED flags so the variadic
     // --tools/--allowedTools stay last (golden invariant).
     "--max-thinking-tokens",
-    String(resolveMaxThinkingTokens(plan.maxThinkingTokens, plan.model, spawn?.maxThinkingTokens ?? 31999)),
+    String(resolveMaxThinkingTokens(plan.maxThinkingTokens, plan.model, spawn?.maxThinkingTokens ?? DEFAULT_MAX_THINKING_TOKENS)),
     ...(opts.disallowed?.length ? ["--disallowedTools", ...opts.disallowed] : []),
     ...(opts.systemPromptAppend ? ["--append-system-prompt", opts.systemPromptAppend] : []),
     ...(plan.model ? ["--model", plan.model] : []),
@@ -97,7 +98,7 @@ export function spawnEnv(
     ...(baseline.spawn?.env ?? { CLAUDE_CODE_IS_COWORK: "1" }),
     CLAUDE_CONFIG_DIR: opts.configGuest,
     // #23: session override (resolved per-model) wins; else the synced baseline default (hre=31999). Never 0.
-    MAX_THINKING_TOKENS: String(opts.maxThinkingTokens ?? baseline.spawn?.maxThinkingTokens ?? 31999),
+    MAX_THINKING_TOKENS: String(opts.maxThinkingTokens ?? baseline.spawn?.maxThinkingTokens ?? DEFAULT_MAX_THINKING_TOKENS),
     HOME: "/tmp",
     HTTP_PROXY: opts.proxyHost,
     HTTPS_PROXY: opts.proxyHost,
