@@ -67,17 +67,33 @@ describe("SEAM A — Guard A (companion): stage.ts mcp.config resolves through t
 });
 
 /**
- * Guard B (deferred — documented).
+ * Guard B — intentionally NOT built (a reasoned decision, not an oversight).
  *
- * In the SEAM analysis the two structural guards are: Guard A (this file — SEAM A staging) and Guard B,
- * which is the SEAM B verdict guard: "no scenario pass/fail is computed outside `computeVerdict`",
- * covering the five verdict sites (cli.ts run/skill exits, renderer.ts footer, cassette.ts replay exit,
- * envelope.ts `ok`). Guard B belongs to a DIFFERENT seam (`src/run/verdict.ts`) and would have to read /
- * couple to cli.ts / renderer.ts / cassette.ts / envelope.ts — files outside this SEAM-A change's scope.
- * It is therefore deferred to the verdict-seam work item rather than implemented here; landing it now
- * would either touch out-of-scope files or assert over source it cannot legitimately own. Guard A is the
- * SEAM-A half and is implemented solidly above.
+ * Guard B was the proposed SEAM-B structural guard: "no scenario pass/fail is computed outside
+ * `computeVerdict`", covering the verdict sites (cli.ts run/skill exits, renderer.ts footer, cassette.ts
+ * replay exit, envelope.ts `ok`). After review we decided NOT to implement it, because the invariant it
+ * would protect is already both structurally true and behaviorally tested, while the guard itself would be
+ * brittle:
+ *
+ *  1. STRUCTURALLY ENFORCED already. `computeVerdict` (src/run/verdict.ts) is the single verdict source and
+ *     is wired into every site (cli.ts / envelope.ts / renderer.ts / cassette.ts all CONSUME it; none
+ *     compute a verdict inline). Unlike SEAM A's resolver — which had never been built, so Guard A locks in
+ *     a freshly-created choke point — SEAM B already shipped and matured (the verdict layer had no real
+ *     bugs in the review). A guard over an already-correct, already-centralized seam is near-zero value.
+ *  2. BEHAVIORALLY TESTED already. `verdict.test.ts` unit-tests `computeVerdict` (incl. exitCode↔pass,
+ *     replay-lane, permissive/delete/error cases), and `cli-json.test.ts` asserts exit-code AND json `ok`
+ *     together dozens of times — i.e. the cross-surface agreement (footer/exit/ok cannot diverge) is
+ *     already covered.
+ *  3. The literal form is BRITTLE. "No pass/fail outside computeVerdict" is a source-text assertion with no
+ *     clean banned idiom to anchor on — every legitimate site that READS `verdict.pass`/`exitCode`/
+ *     `result === "error"` looks like a verdict computation, so it false-positives (the reason the SEAM
+ *     work deferred it originally). Guard A avoids this by banning specific staging idioms; Guard B has no
+ *     equivalent.
+ *
+ * If a behavioral belt-and-suspenders is ever wanted, the SOUND form is a test asserting the three verdict
+ * surfaces (exit code, footer, json `ok`) agree for pass/fail/error — but that largely duplicates the
+ * existing exit+ok assertions. So this stays a conscious won't-fix.
  */
 describe("SEAM B — Guard B", () => {
-  it.todo("verdict-seam guard (no pass/fail outside computeVerdict) — deferred to the SEAM B work item; see note above");
+  it.todo("verdict-seam guard — intentionally not built (already structurally enforced + behaviorally tested; see note above)");
 });
