@@ -28,9 +28,9 @@ The split is not just about tokens — it decides **where each lane can run**:
 
 The cardinal rule: **a replay PR gate cannot verify an artifact's content or any boundary** — it has
 no filesystem and no network. Don't let a green replay gate convince you the deliverable is correct.
-Run the bundled `scenario.py lint` in CI to catch a scenario that put a filesystem/egress-only check
-on the replay lane (a silent no-op). Author new scenarios with `scenario.py scaffold` so they start
-from a valid, self-linted skeleton.
+Run `cowork-harness lint` (the bundled `scenario.py lint`) in CI to catch a scenario that put a
+filesystem/egress-only check on the replay lane (a silent no-op). Author new scenarios with
+`scenario.py scaffold` so they start from a valid, self-linted skeleton.
 
 ## Recording a cassette
 
@@ -38,7 +38,8 @@ from a valid, self-linted skeleton.
 cowork-harness record scenarios/my-test.yaml      # live run that also writes the cassette
 cowork-harness record scenarios/                  # batch: record every scenario in the dir
 cowork-harness record cassettes/ --rerecord-stale # re-record ONLY the cassettes whose fingerprint drifted
-cowork-harness replay scenarios/my-test.yaml      # token-free re-evaluation of content assertions
+cowork-harness replay cassettes/my-test.cassette.json  # token-free re-evaluation of content assertions
+cowork-harness replay cassettes/                   # replay every *.cassette.json in the committed dir
 ```
 
 Re-record whenever the protocol or your scenario's expected content changes. An old cassette without
@@ -74,11 +75,11 @@ cowork-harness verify-cassettes cassettes/ --staleness-only      # just the "edi
 A typical skill repo runs four stages, fastest/cheapest first:
 
 1. **Unit** — your skill's own tests (pytest/vitest of its scripts). Not the harness's job.
-2. **Boundary / lint** — `python3 scripts/scenario.py lint scenarios/*.yaml` (no-silent-false-green
-   invariants) + `cowork-harness verify-cassettes cassettes/` (privacy scan + staleness) +
+2. **Boundary / lint** — `cowork-harness lint scenarios/*.yaml` (no-silent-false-green invariants; needs
+   python3 + PyYAML) + `cowork-harness verify-cassettes cassettes/` (privacy scan + staleness) +
    `cowork-harness boundary-check` where relevant. Token-free, agent-free.
-3. **Scenarios (replay)** — `cowork-harness replay scenarios/` on every PR. Token-free; content +
-   structure + gate delivery.
+3. **Scenarios (replay)** — `cowork-harness replay cassettes/` on every PR (the committed `*.cassette.json`).
+   Token-free; content + structure + gate delivery.
 4. **Parity / live (nightly, self-hosted)** — `cowork-harness run scenarios/` with a token + Docker +
    the agent binary; full filesystem/egress/boundary coverage. **Self-hosted / local runner only**
    (needs the ELF). Optionally `cowork-harness sync` drift checks against a new Desktop release.
@@ -98,9 +99,9 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: '20' }
       - run: npm i -g cowork-harness
-      - run: python3 .claude/skills/cowork-harness/scripts/scenario.py lint scenarios/*.yaml
+      - run: cowork-harness lint scenarios/*.yaml                              # no-silent-false-green (needs python3 + PyYAML)
       - run: cowork-harness verify-cassettes cassettes/ --output-format json   # privacy + staleness gate
-      - run: cowork-harness replay scenarios/ --output-format json
+      - run: cowork-harness replay cassettes/ --output-format json             # token-free content/structure
 ```
 
 Nightly live job — **self-hosted only** (needs the agent ELF, not present on GitHub-hosted runners):
