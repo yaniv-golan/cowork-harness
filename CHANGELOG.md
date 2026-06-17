@@ -6,7 +6,21 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
-## [0.4.2] — 2026-06-18
+## [0.4.3] — 2026-06-18
+
+### Fixed
+
+- **`cowork-harness lint` no longer flags `artifact_json` / `allow_permissive_auto_allow` as unknown keys.**
+  The linter's assertion-key list is now **generated from the Zod `Assertion` schema** (the same source
+  `assert --list` uses) into a file shipped next to `scenario.py`, with a CI drift-guard — so it can't lag the
+  schema again. Its replay-class warnings were also reconciled with the 0.3.0 artifact-manifest: `file_exists`,
+  `user_visible_artifact`, and `artifact_json` are now treated as **manifest-backed** (replay-checkable when the
+  cassette carries an `artifacts` manifest) rather than always-skipped, so a scenario asserting only those is no
+  longer a false `replay-noop`. A self-check fails the linter if a future schema key isn't classified.
+
+### Internal
+
+- The npm tarball no longer ships `docs/internal/` (internal planning docs were being published).
 
 ### Added
 
