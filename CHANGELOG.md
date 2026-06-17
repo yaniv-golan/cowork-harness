@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-06-17
+
 The CI-operate + privacy layer for committed cassettes: record-time redaction, an always-on
 `verify-cassettes` scan/staleness gate, batch recording, and a set-membership assert operator.
 
