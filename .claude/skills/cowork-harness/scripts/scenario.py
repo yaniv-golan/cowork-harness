@@ -55,19 +55,55 @@ CONTENT_KEYS = {
 }
 # content keys, but only evaluated on replay when the cassette carries controlOut
 GATE_KEYS = {"question_asked", "questions_count_max", "gate_answers_delivered"}
-# live-only: silently skipped on replay (no filesystem, no network)
-FS_EGRESS_KEYS = {
-    "file_exists",
-    "user_visible_artifact",
+# manifest-backed: replay-checkable when the cassette carries an `artifacts` manifest (record snapshots one);
+# a manifest-less cassette skips them. Since the 0.3.0 artifact-manifest these are NOT always live-only.
+MANIFEST_KEYS = {"file_exists", "user_visible_artifact", "artifact_json"}
+# live-only: ALWAYS silently skipped on replay (no filesystem, no network on the token-free lane)
+LIVE_ONLY_KEYS = {
+    "egress_denied",
+    "egress_allowed",
     "no_delete_in_outputs",
     "self_heal_ran",
     "transcript_no_host_path",
-    "egress_denied",
-    "egress_allowed",
 }
 EGRESS_KEYS = {"egress_denied", "egress_allowed"}
-# every valid key inside an `assert:` list item
-ASSERT_KEYS = CONTENT_KEYS | GATE_KEYS | FS_EGRESS_KEYS | {"replay_protocol_fidelity"}
+# verdict modifiers — don't verify anything themselves (e.g. suppress a default-fail)
+VERDICT_MODIFIER_KEYS = {"allow_permissive_auto_allow"}
+
+# Every key the replay-class logic knows how to handle. `replay_protocol_fidelity` is valid-but-not-authorable
+# (errored separately below). This is also the embedded fallback for ASSERT_KEYS — kept EQUAL to the generated
+# list (test-enforced) so a missing assertion-keys.json can't silently reintroduce key drift.
+_CLASSIFIED_KEYS = CONTENT_KEYS | GATE_KEYS | MANIFEST_KEYS | LIVE_ONLY_KEYS | VERDICT_MODIFIER_KEYS | {"replay_protocol_fidelity"}
+
+
+def _load_assert_keys():
+    """The authoritative `assert:` key set, generated from the Zod Assertion schema into a sibling
+    `assertion-keys.json` (so the unknown-key check can't drift). Falls back to the embedded
+    `_CLASSIFIED_KEYS` (kept equal to the generated list) with a loud warning if the file is missing."""
+    p = Path(__file__).resolve().parent / "assertion-keys.json"
+    try:
+        return set(json.loads(p.read_text(encoding="utf-8"))["keys"])
+    except Exception:
+        print(
+            f"::warning:: assertion-keys.json not found next to scenario.py ({p}) — "
+            "using a built-in key list that may be stale (run `npm run schema`).",
+            file=sys.stderr,
+        )
+        return set(_CLASSIFIED_KEYS)
+
+
+# every valid key inside an `assert:` list item (generated from the zod schema; see _load_assert_keys)
+ASSERT_KEYS = _load_assert_keys()
+
+# Self-check: every valid assertion key must be classified, else the replay-class lint logic mishandles it.
+# Surfaced loudly at load AND as a lint ERROR in cmd_lint (so --strict / exit codes flow). Never sys.exit here.
+UNCLASSIFIED_KEYS = sorted(ASSERT_KEYS - _CLASSIFIED_KEYS)
+if UNCLASSIFIED_KEYS:
+    print(
+        f"::warning:: scenario.py: assertion key(s) {UNCLASSIFIED_KEYS} are in the schema but not classified "
+        "— add them to the linter's CONTENT/GATE/MANIFEST/LIVE_ONLY/VERDICT_MODIFIER sets.",
+        file=sys.stderr,
+    )
 # every valid top-level scenario key
 TOP_LEVEL_KEYS = {
     "name",
@@ -232,39 +268,58 @@ def lint_doc(doc, path, raw_lines):
             )
         )
 
-    # W: no content assertion → a replay PR gate verifies nothing
+    # W: nothing replay-checkable → a replay PR gate verifies nothing. Content/gate are replay-checkable, and
+    # manifest-backed keys are too WHEN the cassette carries an artifacts manifest — so only an all-live-only
+    # (egress / no_delete / self_heal / host-path) assert set genuinely no-ops on replay.
     if items:
-        content_present = bool(assert_keys & (CONTENT_KEYS | GATE_KEYS))
-        if not content_present:
+        replay_checkable = bool(assert_keys & (CONTENT_KEYS | GATE_KEYS | MANIFEST_KEYS))
+        if not replay_checkable:
             findings.append(
                 Finding(
                     "WARN",
                     "replay-noop",
-                    "every assertion is filesystem/egress — on the token-free `replay` lane they are "
-                    "ALL silently skipped, so a replay PR gate would verify nothing.",
-                    "Add a content assertion (result / transcript_* / tool_* / subagent_*) or run this "
+                    "every assertion is live-only (egress / no_delete_in_outputs / self_heal_ran / "
+                    "transcript_no_host_path) — on the token-free `replay` lane they are ALL silently "
+                    "skipped, so a replay PR gate would verify nothing.",
+                    "Add a content assertion (result / transcript_* / tool_* / subagent_*) or a "
+                    "manifest-backed one (file_exists / user_visible_artifact / artifact_json), or run this "
                     "scenario only on the live (run/record) lane.",
                     path,
                 )
             )
 
-    # W: mixed-class assert item → fs/egress half dropped on replay
+    # W: mixed-class assert item → the live-only half is dropped on replay (manifest-backed keys are NOT)
     for idx, item in enumerate(items):
         ks = set(item.keys())
-        content_half = ks & (CONTENT_KEYS | GATE_KEYS)
-        fs_half = ks & FS_EGRESS_KEYS
-        if content_half and fs_half:
+        kept_half = ks & (CONTENT_KEYS | GATE_KEYS | MANIFEST_KEYS)
+        live_half = ks & LIVE_ONLY_KEYS
+        if kept_half and live_half:
             findings.append(
                 Finding(
                     "WARN",
                     "mixed-assert-item",
-                    f"assert item #{idx} mixes content {sorted(content_half)} with "
-                    f"filesystem/egress {sorted(fs_half)} — on replay the filesystem/egress half is "
-                    "dropped (only the content half is evaluated).",
+                    f"assert item #{idx} mixes replay-checkable {sorted(kept_half)} with "
+                    f"live-only {sorted(live_half)} — on replay the live-only half is dropped "
+                    "(only the replay-checkable half is evaluated).",
                     "Split into separate list items: one per concern.",
                     path,
                 )
             )
+
+    # I: manifest-backed keys need an artifacts manifest on replay
+    manifest_present = sorted(assert_keys & MANIFEST_KEYS)
+    if manifest_present:
+        findings.append(
+            Finding(
+                "INFO",
+                "manifest-needs-snapshot",
+                f"assertion(s) {manifest_present} evaluate on replay only when the cassette carries an "
+                "`artifacts` manifest (`record` snapshots one). A manifest-less cassette skips them "
+                "(with a loud warning).",
+                "Record with a current harness so the cassette carries the artifacts manifest.",
+                path,
+            )
+        )
 
     # I: gate keys need a controlOut cassette on replay
     gate_present = sorted(assert_keys & GATE_KEYS)
@@ -361,6 +416,19 @@ def _print_findings(findings, n_files):
 
 def cmd_lint(args):
     all_findings = []
+    # Linter self-check (B3): a valid schema key the replay-class sets don't classify can't be linted
+    # correctly — surface it as a hard ERROR so it fails the gate (and --strict) until someone classifies it.
+    if UNCLASSIFIED_KEYS:
+        all_findings.append(
+            Finding(
+                "ERROR",
+                "linter-unclassified-key",
+                f"linter is out of date: assertion key(s) {UNCLASSIFIED_KEYS} are valid (in the schema) but "
+                "scenario.py doesn't classify their replay behavior, so they can't be linted.",
+                "Add them to the linter's CONTENT/GATE/MANIFEST/LIVE_ONLY/VERDICT_MODIFIER sets.",
+                "(scenario.py)",
+            )
+        )
     for f in args.files:
         all_findings.extend(lint_file(f))
     if args.json:

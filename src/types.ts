@@ -158,7 +158,8 @@ export const Assertion = z.object({
     ),
   // #5: assert over the CONTENTS of a JSON artifact via a dotted path. `absent` and `is_null` are DISTINCT
   // (key-missing vs present-null); an unresolved INTERMEDIATE segment fails loud (malformed artifact),
-  // never a vacuous pass. Live-only until the cassette artifact-manifest (#1) lands — stripped on replay.
+  // never a vacuous pass. Manifest-backed: evaluated on replay when the cassette carries an `artifacts`
+  // manifest (`record` snapshots one); a manifest-less cassette skips it (with a loud warning).
   artifact_json: z
     .object({
       artifact: z.string().describe("relative path to a JSON artifact under the work root (e.g. outputs/cap_state.json)"),

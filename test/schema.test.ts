@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildSchemas, SCHEMA_DIR } from "../scripts/gen-schema.js";
+import { buildSchemas, buildAssertionKeys, SCHEMA_DIR, ASSERTION_KEYS_PATH } from "../scripts/gen-schema.js";
 import { AnswerRule, Assertion } from "../src/types.js";
 
 describe("AnswerRule rejects inert rules, accepts valid shapes", () => {
@@ -53,4 +53,16 @@ describe("JSON schema is in sync with the zod source", () => {
       expect(committed).toBe(body);
     });
   }
+});
+
+// Guard: the linter's assertion-key list (read by scenario.py) must match the zod Assertion schema, so
+// `cowork-harness lint` can't drift and flag a real key as unknown. Run `npm run schema` if this fails.
+describe("scenario.py assertion-keys.json is in sync with the zod Assertion schema", () => {
+  it("the committed assertion-keys.json matches buildAssertionKeys()", () => {
+    expect(readFileSync(ASSERTION_KEYS_PATH, "utf8")).toBe(buildAssertionKeys());
+  });
+  it("the generated key set equals Object.keys(Assertion.shape) (no silent filtering)", () => {
+    const keys = JSON.parse(buildAssertionKeys()).keys as string[];
+    expect([...keys].sort()).toEqual([...Object.keys(Assertion.shape)].sort());
+  });
 });

@@ -1,0 +1,30 @@
+{
+  "$comment": "GENERATED from the Zod Assertion schema (src/types.ts) by scripts/gen-schema.ts — do not edit; run `npm run schema`.",
+  "keys": [
+    "allow_permissive_auto_allow",
+    "artifact_json",
+    "dispatch_count_max",
+    "egress_allowed",
+    "egress_denied",
+    "file_exists",
+    "gate_answers_delivered",
+    "no_delete_in_outputs",
+    "question_asked",
+    "questions_count_max",
+    "replay_protocol_fidelity",
+    "result",
+    "self_heal_ran",
+    "subagent_declared_but_unused",
+    "subagent_dispatched",
+    "subagent_tool_absent",
+    "subagent_tool_used",
+    "tool_called",
+    "tool_not_called",
+    "transcript_contains",
+    "transcript_matches",
+    "transcript_no_host_path",
+    "transcript_not_contains",
+    "transcript_not_matches",
+    "user_visible_artifact"
+  ]
+}

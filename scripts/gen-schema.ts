@@ -9,11 +9,31 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { zodToJsonSchema } from "zod-to-json-schema";
-import { ScenarioObject } from "../src/types.js";
+import { ScenarioObject, Assertion } from "../src/types.js";
 import { SessionConfig } from "../src/session.js";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 export const SCHEMA_DIR = join(REPO_ROOT, "schema");
+/** The bundled linter (`scenario.py`) reads this for its assertion-key list. It lives NEXT TO scenario.py
+ *  (not under schema/) because schema/ is not shipped inside the plugin tree — only the skill's scripts dir
+ *  is. Writer + the drift-guard test both reference this one constant. */
+export const ASSERTION_KEYS_PATH = join(REPO_ROOT, ".claude/skills/cowork-harness/scripts/assertion-keys.json");
+
+/** The authoritative assertion-key list, derived from the Zod `Assertion` schema (the same source
+ *  `assert --list` reads). Generating it keeps `scenario.py`'s unknown-key check from drifting. */
+export function buildAssertionKeys(): string {
+  return (
+    JSON.stringify(
+      {
+        $comment:
+          "GENERATED from the Zod Assertion schema (src/types.ts) by scripts/gen-schema.ts — do not edit; run `npm run schema`.",
+        keys: Object.keys(Assertion.shape).sort(),
+      },
+      null,
+      2,
+    ) + "\n"
+  );
+}
 
 const TARGETS = [
   {
@@ -54,6 +74,8 @@ function main(): void {
     writeFileSync(join(SCHEMA_DIR, file), body);
     process.stdout.write(`wrote schema/${file}\n`);
   }
+  writeFileSync(ASSERTION_KEYS_PATH, buildAssertionKeys());
+  process.stdout.write(`wrote ${ASSERTION_KEYS_PATH}\n`);
 }
 
 // Run only when invoked directly (so the test can import buildSchemas without side effects).
