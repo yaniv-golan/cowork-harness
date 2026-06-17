@@ -15,6 +15,7 @@ import { sync } from "./sync/cowork-sync.js";
 import { runBoundaryChecks, formatBoundary } from "./boundary.js";
 import { cmdChat } from "./run/chat.js";
 import { cmdRecord, cmdReplay, cmdVerifyCassettes } from "./run/cassette.js";
+import { resolveInputs } from "./run/inputs.js";
 import { loadDotenv } from "./dotenv.js";
 import { makeRenderer, renderStart, renderFooter, startHeartbeat, type RenderPlan } from "./run/renderer.js";
 import {
@@ -580,12 +581,11 @@ async function cmdRun(rawArgs: string[]) {
     );
   // A non-existent path threw a raw ENOENT (exit 2 + stack) instead of a clean usage message.
   if (!existsSync(target)) fail("run", "usage", `scenario path not found: ${target}`, undefined, flags.output === "json");
-  const files = statSync(target).isDirectory()
-    ? readdirSync(target)
-        .filter((f) => f.endsWith(".yaml") || f.endsWith(".yml"))
-        .sort() // deterministic batch order — readdirSync is FS/OS-dependent
-        .map((f) => join(target, f))
-    : [target];
+  // Bug 1: an empty directory (no *.yaml/*.yml) must be a LOUD non-zero, not a vacuous exit-0 pass.
+  // resolveInputs centralizes the file-or-dir + empty-dir-is-loud rule (shared with replay/verify).
+  const resolved = resolveInputs(target, [".yaml", ".yml"]);
+  if ("error" in resolved) fail("run", "usage", `run: ${resolved.error}`, undefined, flags.output === "json");
+  const files = resolved.files;
 
   const externalChannel = resolveExternal("run", flags); // created once; reused across scenarios
   const policy = externalChannel ? "fail" : resolvePolicy("run", flags);
