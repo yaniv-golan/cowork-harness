@@ -1,8 +1,8 @@
 /**
  * Declarative CLI argument parser — the single choke point that makes "reject unknown flag / extra
  * positional / flag-looking value" the STRUCTURAL DEFAULT for every command. Hand-rolled per-command
- * parsing (the `args.find(a => !a.startsWith("--"))` / unbounded `args[i+1]` idioms) silently accepted
- * unknown flags and mistook flag values for positionals; declaring a flag-spec removes that whole class.
+ * parsing (a first-non-dash-token scan, or an unbounded next-index read) silently accepted unknown flags
+ * and mistook flag values for positionals; declaring a flag-spec removes that whole class.
  *
  * Behavior contract (fidelity-preserving — error paths only, green paths unchanged):
  *  - unknown flag / missing value / bad enum / flag-looking value → throws `ArgError`; each command

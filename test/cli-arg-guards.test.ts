@@ -17,7 +17,16 @@ function run(args: string[], cwd: string) {
 
 const cassette = () =>
   JSON.stringify({
-    scenario: { name: "c", baseline: "latest", session: "(inline)", fidelity: "container", prompt: "hi", answers: [], expect_denied: [], assert: [{ result: "success" }] },
+    scenario: {
+      name: "c",
+      baseline: "latest",
+      session: "(inline)",
+      fidelity: "container",
+      prompt: "hi",
+      answers: [],
+      expect_denied: [],
+      assert: [{ result: "success" }],
+    },
     events: [JSON.stringify({ type: "result", subtype: "success" })],
   });
 

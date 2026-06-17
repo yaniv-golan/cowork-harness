@@ -29,6 +29,16 @@ jobs:
         run: npm run check:versions
       - name: Format check
         run: npm run format:check
+      - name: CLI parsing-idiom guard (no silent positional-grab)
+        # The first-non-dash-token scan silently grabbed a flag's value as the positional and swallowed
+        # unknown flags. Commands resolve positionals via positionals()/parseArgs instead; ban a regression.
+        # (The comprehensive enforcement is test/cli-structural-guard.test.ts — every command must reject an
+        # unknown flag — which runs under `npm test` below.)
+        run: |
+          if grep -rEn 'args\.find\(.*startsWith\("--"' src/; then
+            echo "::error::Forbidden CLI parsing idiom (first-non-dash-token scan). Use positionals()/parseArgs."
+            exit 1
+          fi
       - name: Typecheck
         run: npm run typecheck
       - name: Unit tests (schema, answerer, egress, launch plan, example validation)

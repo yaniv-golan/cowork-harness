@@ -17,6 +17,7 @@ import { cmdChat } from "./run/chat.js";
 import { cmdRecord, cmdReplay, cmdVerifyCassettes } from "./run/cassette.js";
 import { resolveInputs } from "./run/inputs.js";
 import { cmdLint } from "./run/scenario-tool.js";
+import { parseArgs } from "./cli-args.js";
 import { loadDotenv } from "./dotenv.js";
 import { makeRenderer, renderStart, renderFooter, startHeartbeat, type RenderPlan } from "./run/renderer.js";
 import {
@@ -215,11 +216,7 @@ async function main() {
   const spaceIdx = argv.indexOf("--dotenv");
   const envFileIdx = spaceIdx >= 0 ? spaceIdx : eqIdx;
   const isEquals = spaceIdx < 0 && eqIdx >= 0;
-  const explicitEnvFile = isEquals
-    ? argv[eqIdx].slice("--dotenv=".length)
-    : envFileIdx >= 0
-      ? argv[envFileIdx + 1]
-      : undefined;
+  const explicitEnvFile = isEquals ? argv[eqIdx].slice("--dotenv=".length) : envFileIdx >= 0 ? argv[envFileIdx + 1] : undefined;
   // #4: bounds-check the value, reject a command name mistaken as the path (`--dotenv run x.yaml`
   // would treat `run` as the dotenv path and dispatch `x.yaml`), and FAIL when an explicitly named
   // file is absent — an explicitly-requested credential file silently ignored is a footgun.
@@ -367,9 +364,9 @@ function flagValue(args: string[], i: number, flag: string): string {
 
 /**
  * Extract true positionals — args that are neither a flag nor the value consumed by a known
- * value-taking flag. Fixes the `args.find((a) => !a.startsWith("--"))` idiom (#15/#16), which
- * mistook a flag's value (e.g. the `1` in `--gate 1`, the `json` in `--output-format json`) for
- * the positional. `valueFlags` lists the value-taking flags whose following token must be skipped.
+ * value-taking flag. Replaces the naive first-non-dash-token scan, which mistook a flag's value
+ * (e.g. the `1` in `--gate 1`, the `json` in `--output-format json`) for the positional.
+ * `valueFlags` lists the value-taking flags whose following token must be skipped.
  */
 function positionals(args: string[], valueFlags: string[]): string[] {
   const out: string[] = [];
@@ -894,24 +891,21 @@ function cmdVm(args: string[]) {
 function cmdBoundary(args: string[]) {
   // Optional --session <file>: fold that session's egress additions into the boundary allowlist so the
   // self-test exercises the same boundary the session's runs would (not just baseline invariants).
-  const si = args.indexOf("--session");
-  // #12: a trailing `--session` with no value silently ran the boundary check WITHOUT the session's
-  // egress additions. Bounds-check it.
-  if (si >= 0 && args[si + 1] === undefined) {
-    log("--session requires a value (path to a session YAML)");
-    process.exit(2);
+  let p;
+  try {
+    // --session is the only flag; parseArgs rejects any other flag and a flag-looking --session value.
+    p = parseArgs(args, { values: ["--session"], noDashValue: ["--session"] });
+  } catch (e) {
+    log((e as Error).message);
+    return process.exit(2);
   }
-  const sessionPath = si >= 0 ? args[si + 1] : undefined;
-  // reject unknown flags instead of dropping them via the positional filter (a typo'd flag was
-  // a silent no-op). --session is the only flag boundary-check accepts.
-  rejectUnknownFlags("boundary-check", args, ["--session"], false);
-  const positional = args.filter((a, i) => a !== "--session" && args[i - 1] !== "--session" && !a.startsWith("--"));
+  const sessionPath = p.options["--session"];
   // Reject extra baseline positionals rather than silently using only the first.
-  if (positional.length > 1) {
-    log(`boundary-check takes at most one baseline (got ${positional.length}: ${positional.join(", ")})`);
-    process.exit(2);
+  if (p.positionals.length > 1) {
+    log(`boundary-check takes at most one baseline (got ${p.positionals.length}: ${p.positionals.join(", ")})`);
+    return process.exit(2);
   }
-  const baseline = loadBaseline(positional[0] ?? "latest");
+  const baseline = loadBaseline(p.positionals[0] ?? "latest");
   let sessionEgress: { extraAllow?: string[]; unrestricted?: boolean } | undefined;
   if (sessionPath) {
     const s = loadSession(parseYaml(readFileSync(sessionPath, "utf8")));
@@ -1090,9 +1084,9 @@ async function cmdDecide(args: string[]) {
       deciderCmd = flagValue(args, i++, a);
       // The helper command is never a flag — reject a flag-looking value so `--decider-cmd --question`
       // doesn't silently swallow the next flag as the command.
-      if (deciderCmd.startsWith("-")) fail("decide", "usage", `--decider-cmd: missing value (got flag-looking "${deciderCmd}")`, undefined, json);
-    }
-    else if (a === "--decider-llm") deciderLlm = true;
+      if (deciderCmd.startsWith("-"))
+        fail("decide", "usage", `--decider-cmd: missing value (got flag-looking "${deciderCmd}")`, undefined, json);
+    } else if (a === "--decider-llm") deciderLlm = true;
     else if (a === "--intent") intent = flagValue(args, i++, a);
     else if (a === "--answer-policy") policy = flagValue(args, i++, a);
     else if (a === "--answer") {
@@ -1198,11 +1192,16 @@ async function cmdDecide(args: string[]) {
  *  Monitor at this (no hand-written zsh/find/seen-set loop). */
 async function cmdGates(args: string[]) {
   ensureOutputFormat("gates", args);
+  // Reject unknown flags rather than silently ignoring a typo.
+  rejectUnknownFlags("gates", args, ["--follow", "--output-format", "--output-format=json", "--output-format=text"], isJsonOutput(args));
   const follow = args.includes("--follow");
   // skip the `--output-format` value so `gates --output-format json <dir>` doesn't read `json`
-  // as the directory (the old `args.find(a => !a.startsWith("--"))` idiom did exactly that).
+  // as the directory.
   const dir = positionals(args, ["--output-format"])[0];
   if (!dir) return void fail("gates", "usage", "usage: gates <dir> [--follow]", undefined, isJsonOutput(args));
+  // Reject extra positionals rather than silently using the first.
+  if (positionals(args, ["--output-format"]).length > 1)
+    return void fail("gates", "usage", "gates takes one <dir>", undefined, isJsonOutput(args));
   await streamGates(dir, (line) => out(line), { once: !follow });
 }
 
@@ -1273,6 +1272,8 @@ function cmdScaffold(args: string[]) {
   // validate --output-format is text|json — an invalid value was a silent text degrade (only
   // isJsonOutput was consulted), unlike decide/gates/trace.
   ensureOutputFormat("scaffold", args);
+  // Reject unknown flags rather than silently ignoring a typo (e.g. `--form-run`).
+  rejectUnknownFlags("scaffold", args, ["--from-run", "--out", "--output-format", "--output-format=json", "--output-format=text"], json);
   // the --from-run value must be a real run id/dir, never a following flag. `--from-run --out`
   // would treat `--out` as the run id. Read it bounds-checked (flagValue) and reject a dash-prefixed
   // token (mirrors replay --cassette's guard).
@@ -1339,13 +1340,7 @@ function cmdTrace(args: string[]) {
   // dispatches > default) silently ignored the others. Reject more than one so a contradictory request
   // fails loud instead of quietly picking one.
   if ([tools, gates, dispatches].filter(Boolean).length > 1)
-    fail(
-      "trace",
-      "usage",
-      "trace --tools/--gates/--dispatches are mutually exclusive (pick one view)",
-      undefined,
-      json,
-    );
+    fail("trace", "usage", "trace --tools/--gates/--dispatches are mutually exclusive (pick one view)", undefined, json);
   // #16: skip the `--output-format` value so `trace --output-format json` doesn't try to trace a run
   // named `json` instead of reporting the missing target.
   const allPositionals = positionals(args, ["--output-format"]);
