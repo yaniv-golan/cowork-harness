@@ -24,6 +24,7 @@ import { makeRenderer, renderFooter, type RenderPlan } from "./renderer.js";
 import { jsonEnvelope, parseOutputFormat } from "./envelope.js";
 import { parseArgs } from "../cli-args.js";
 import { resolveInputs } from "./inputs.js";
+import { hashSkillDirs } from "./skill-hash.js";
 import { computeVerdict } from "./verdict.js";
 import { redactJsonLine, redactText, redactStructural, loadRedactionPolicy, type RedactionPolicy } from "../redact.js";
 import { collectSecrets, scrub } from "../secrets.js";
@@ -101,39 +102,6 @@ function materializeManifest(entries: ManifestEntry[]): { workRoot: string; pref
   return { workRoot, prefixes: ["outputs", ".projects"] };
 }
 
-/** Hash a directory's structure + file CONTENTS recursively (sorted) — stable across machines. The hash
- *  folds in each entry's RELATIVE path (not just its basename) plus a type marker, so a file MOVING within
- *  the tree (`a/x.json` → `a/sub/x.json`, same content) changes the hash (S2 — basename-only missed moves). */
-function hashDir(dir: string, hash: ReturnType<typeof createHash>, rel = ""): void {
-  let entries: string[];
-  try {
-    entries = readdirSync(dir).sort();
-  } catch {
-    return;
-  }
-  for (const name of entries) {
-    const abs = join(dir, name);
-    const relPath = rel ? `${rel}/${name}` : name;
-    let st;
-    try {
-      st = statSync(abs);
-    } catch {
-      continue;
-    }
-    if (st.isDirectory()) {
-      hash.update(`D:${relPath}\n`); // structure marker — an empty/renamed dir registers too
-      hashDir(abs, hash, relPath);
-    } else if (st.isFile()) {
-      hash.update(`F:${relPath}\n`); // relative path, not basename — a move changes the digest
-      try {
-        hash.update(readFileSync(abs));
-      } catch {
-        /* unreadable file — skip content */
-      }
-    }
-  }
-}
-
 /** #1b: the local skill/plugin/marketplace source dirs a session mounts — the "skill dir" hash unit.
  *  Returns ABSOLUTE dirs (for hashing/reading) plus `baseDir`, the session-file dir the relative
  *  `skillSources` are stored against (so the committed fingerprint carries no absolute host path — C1). */
@@ -161,11 +129,12 @@ function skillSourceDirs(sessionPath: string, cassetteDir?: string): { dirs: str
 export function buildFingerprint(sessionPath: string, baselineAppVersion: string, cassetteDir?: string): Fingerprint {
   const { dirs, baseDir } = skillSourceDirs(sessionPath, cassetteDir);
   if (dirs.length === 0) return { baseline: baselineAppVersion };
-  const hash = createHash("sha256");
-  for (const d of dirs.sort()) hashDir(d, hash);
+  // hashSkillDirs excludes recorded cassettes (*.cassette.json) + VCS/cache dirs so a committed cassette
+  // and unrelated VCS noise don't self-invalidate the fingerprint they were recorded under (H-B).
+  const skillHash = hashSkillDirs(dirs);
   // Store skillSources RELATIVE to the session-file dir — diagnostics only (the replay recompute re-derives
   // the dirs from the session), so a relative path is enough and never leaks an absolute `/Users/...` path.
-  return { baseline: baselineAppVersion, skillHash: hash.digest("hex"), skillSources: dirs.map((d) => relative(baseDir, d)) };
+  return { baseline: baselineAppVersion, skillHash, skillSources: dirs.sort().map((d) => relative(baseDir, d)) };
 }
 
 /** A2: scan the WHOLE cassette surface for PII (default classes: email/currency/domain). A `truncated`
@@ -709,36 +678,66 @@ async function recordScenarioObject(
   return { result, cassettePath, artifacts: artifacts.length };
 }
 
-/** `replay --cassette <file>` — deterministic protocol-replay; re-evaluates content assertions. */
+/** A synthetic `result:"error"` RunResult for an unreadable/invalid cassette in a directory replay — so
+ *  the JSON envelope's `ok` (results.every(pass)) turns false and can never report ok:true alongside a
+ *  non-zero exit (the cardinal no-false-green rule). */
+function replayErrorResult(file: string): RunResult {
+  return { scenario: file, fidelity: "replay", baseline: "", result: "error", decisions: [], egress: [], assertions: [], outDir: "", durationMs: 0 };
+}
+
+/** `replay <file|dir>` (or `--cassette <file>`) — deterministic protocol-replay; re-evaluates content
+ *  assertions. A directory replays every `*.cassette.json` (non-recursive, sorted) and exits on the worst
+ *  verdict; an unreadable cassette is a per-file error (never aborts the batch, never a vacuous pass). */
 export async function cmdReplay(args: string[]) {
-  const cIdx = args.indexOf("--cassette");
-  const path = cIdx >= 0 ? args[cIdx + 1] : args.find((a) => !a.startsWith("--"));
-  // Bounds/flag-check the path: `replay --cassette --output-format json` must NOT treat `--output-format`
-  // as the cassette path (then fail later as a confusing file/JSON error) — reject a flag-looking value.
-  if (!path || path.startsWith("-")) {
-    log("usage: replay --cassette <file.cassette.json>");
-    process.exit(2);
-  }
-  let json: boolean;
+  let p;
   try {
-    json = parseOutputFormat(args) === "json"; // validate the value (don't silently treat `xml` as text)
+    p = parseArgs(args, {
+      booleans: ["--strict"],
+      values: ["--cassette", "--output-format"],
+      noDashValue: ["--cassette"],
+      enums: { "--output-format": ["text", "json"] },
+    });
   } catch (e) {
     log(String((e as Error).message));
-    process.exit(2);
+    return process.exit(2);
   }
-  const strict = args.includes("--strict"); // #1b: escalate staleness warnings to failures (release gate)
-  const cassette: Cassette = JSON.parse(readFileSync(path, "utf8"));
+  const target = p.options["--cassette"] ?? p.positionals[0];
+  if (!target) {
+    log("usage: replay <file.cassette.json | dir/> [--cassette <file>] [--strict] [--output-format text|json]");
+    return process.exit(2);
+  }
+  if (p.positionals.length > 1) {
+    log(`replay takes one target (got ${p.positionals.length}: ${p.positionals.join(", ")})`);
+    return process.exit(2);
+  }
+  const json = p.options["--output-format"] === "json";
+  const strict = p.flags["--strict"] ?? false; // #1b: escalate staleness warnings to failures (release gate)
+  const resolved = resolveInputs(target, ".cassette.json");
+  if ("error" in resolved) {
+    log(`replay: ${resolved.error}`);
+    return process.exit(2);
+  }
   const plan: RenderPlan = { live: false, progress: false, verbose: false, color: process.stderr.isTTY === true && !process.env.NO_COLOR };
-  const renderer = json ? undefined : makeRenderer(plan);
-  const result = await replayCassette(cassette, renderer ? [renderer] : [], { strict, cassetteDir: dirname(path) });
-  // SEAM B: the replay lane evaluates assertions + result only (a cassette can't reproduce the scan /
-  // permissive signals). One verdict source for the footer AND the exit, so they can't diverge (and the
-  // exit now honors result:"error", which the old `bad.length`-only check missed).
-  const verdict = computeVerdict(result, "replay");
-  // stdout = machine ONLY under --output-format json; humans get the footer on stderr.
-  if (json) out(jsonEnvelope("replay", [result]));
-  else renderFooter(result, plan, { renderer, lane: "replay" });
-  process.exit(verdict.exitCode);
+  const results: RunResult[] = [];
+  let worst = 0;
+  for (const f of resolved.files) {
+    const rc = readCassette(f); // safe parse + lenient Zod — never throws
+    if ("error" in rc) {
+      log(`replay: ${f}: ${rc.error}`);
+      results.push(replayErrorResult(f)); // turns the envelope's ok false (no false green)
+      worst = Math.max(worst, 2);
+      continue;
+    }
+    const renderer = json ? undefined : makeRenderer(plan);
+    const result = await replayCassette(rc.cassette, renderer ? [renderer] : [], { strict, cassetteDir: dirname(f) });
+    // SEAM B: the replay lane evaluates assertions + result only; one verdict source for footer AND exit.
+    if (!json) renderFooter(result, plan, { renderer, lane: "replay" });
+    results.push(result);
+    worst = Math.max(worst, computeVerdict(result, "replay").exitCode);
+  }
+  // stdout = machine ONLY under --output-format json; humans get per-file footers on stderr.
+  if (json) out(jsonEnvelope("replay", results));
+  return process.exit(worst);
 }
 
 /** `verify-cassettes <file|dir>` — the CI gate (token/agent-free). Runs the privacy scan (A2) and the

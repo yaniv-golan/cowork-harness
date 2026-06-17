@@ -59,4 +59,25 @@ describe.skipIf(!can)("CLI arg guards — migrated commands fail loud", () => {
     writeFileSync(join(d, "ok.cassette.json"), cassette());
     expect(run(["verify-cassettes", join(d, "ok.cassette.json"), "--typo"], d).code).toBe(2);
   });
+
+  it("replay: a directory of cassettes is replayed (H-D dir mode)", () => {
+    const d = mkdtempSync(join(tmpdir(), "g-"));
+    writeFileSync(join(d, "a.cassette.json"), cassette());
+    writeFileSync(join(d, "b.cassette.json"), cassette());
+    expect(run(["replay", d, "--output-format", "json"], d).code).toBe(0);
+  });
+
+  it("replay: an empty directory is a loud non-zero (no vacuous pass)", () => {
+    const d = mkdtempSync(join(tmpdir(), "g-"));
+    expect(run(["replay", d], d).code).toBe(2);
+  });
+
+  it("replay: an unreadable cassette in a dir does not yield ok:true (no false green)", () => {
+    const d = mkdtempSync(join(tmpdir(), "g-"));
+    writeFileSync(join(d, "ok.cassette.json"), cassette());
+    writeFileSync(join(d, "bad.cassette.json"), "{ not valid json");
+    const r = run(["replay", d, "--output-format", "json"], d);
+    expect(r.code).not.toBe(0);
+    expect(r.out).toMatch(/"ok":false/);
+  });
 });

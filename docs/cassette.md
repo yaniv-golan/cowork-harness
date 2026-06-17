@@ -229,6 +229,10 @@ counts) — committed PII surface. Two layers, distinct from secret-scrub (which
   suppresses synthetic / public reference names (e.g. `NVCA`, `Cooley GO`, `Acme`); multi-word proper names
   are **not** a default class (too noisy). `verify-cassettes` also runs the **staleness** check
   (`--staleness-only`): a drifted `skillHash` (you edited the skill but didn't re-record) fails the gate.
+  The `skillHash` excludes recorded cassettes (`*.cassette.json`, by extension — so writing a cassette
+  under the hashed tree doesn't self-invalidate the fingerprint it just recorded) and VCS/cache dirs
+  (`.git`, `node_modules`, `__pycache__`, …). It deliberately still hashes `tests/` (a non-cassette edit
+  there re-triggers staleness — the conservative, no-false-negative choice).
 
 ```bash
 cowork-harness verify-cassettes cassettes/ --allow 'NVCA|Cooley GO|Acme'
