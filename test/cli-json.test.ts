@@ -274,7 +274,8 @@ describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
   it("replay --cassette with a flag-looking value is a usage error, not a file error (exit 2)", () => {
     const r = run(["replay", "--cassette", "--output-format", "json"]);
     expect(r.code).toBe(2);
-    expect(r.stderr).toMatch(/usage: replay --cassette/);
+    // parseArgs rejects the flag-looking value for the noDashValue flag --cassette.
+    expect(r.stderr).toMatch(/--cassette: missing value/);
   });
 
   it("an invalid --output-format value is rejected by replay / trace / decide (exit 2)", () => {
@@ -318,5 +319,126 @@ describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
       encoding: "utf8",
     });
     expect(ok.status).toBe(0);
+  });
+
+  // ── Theme A: CLI parsing-hygiene (Bugs 5–17 + global --dotenv equals form, Bug 2) ──
+
+  it("Bug 5 — gates reads the dir, not the --output-format value (exit 2 on the missing dir)", () => {
+    // `gates --output-format json` (no dir) must report the missing directory, not try to stream a
+    // directory literally named `json` (the old args.find(!startsWith--) idiom mistook `json` for the dir).
+    const r = run(["gates", "--output-format", "json"]);
+    expect(r.code).toBe(2);
+    expect(r.json?.error?.category).toBe("usage");
+    expect(r.json?.error?.message).toMatch(/usage: gates/);
+  });
+
+  it("Bug 6 — trace rejects more than one of --tools/--gates/--dispatches (exit 2)", () => {
+    const r = run(["trace", "somerun", "--tools", "--gates", "--output-format", "json"]);
+    expect(r.code).toBe(2);
+    expect(r.json?.error?.category).toBe("usage");
+    expect(r.json?.error?.message).toMatch(/mutually exclusive/);
+  });
+
+  it("Bug 7 — trace rejects extra positionals (exit 2)", () => {
+    const r = run(["trace", "run-a", "run-b", "--output-format", "json"]);
+    expect(r.code).toBe(2);
+    expect(r.json?.error?.category).toBe("usage");
+    expect(r.json?.error?.message).toMatch(/takes a single/);
+  });
+
+  it("Bug 8 — scaffold rejects an invalid --output-format value (exit 2)", () => {
+    const r = run(["scaffold", "--from-run", "someid", "--output-format", "xml"]);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(/--output-format must be/);
+  });
+
+  it("Bug 9 — scaffold --from-run with a flag-looking value is a usage error (exit 2)", () => {
+    const r = run(["scaffold", "--from-run", "--out", "x.yaml", "--output-format", "json"]);
+    expect(r.code).toBe(2);
+    expect(r.json?.error?.category).toBe("usage");
+    expect(r.json?.error?.message).toMatch(/--from-run requires a run id/);
+  });
+
+  it("Bug 10 — scaffold --out with a flag-looking value is a usage error (exit 2)", () => {
+    const r = run(["scaffold", "--from-run", "someid", "--out", "--output-format", "json"]);
+    expect(r.code).toBe(2);
+    expect(r.json?.error?.category).toBe("usage");
+    expect(r.json?.error?.message).toMatch(/--out requires a file path/);
+  });
+
+  it("Bug 11 — assert --list rejects an invalid --output-format value (exit 2)", () => {
+    const r = run(["assert", "--list", "--output-format", "xml"]);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(/--output-format must be/);
+  });
+
+  it("Bug 12 — assert --list rejects extra positionals (exit 2)", () => {
+    const r = run(["assert", "--list", "stray", "--output-format", "json"]);
+    expect(r.code).toBe(2);
+    expect(r.json?.error?.category).toBe("usage");
+    expect(r.json?.error?.message).toMatch(/no positional/);
+  });
+
+  it("Bug 12 — assert --list rejects an unknown flag (exit 2)", () => {
+    const r = run(["assert", "--list", "--bogus", "--output-format", "json"]);
+    expect(r.code).toBe(2);
+    expect(r.json?.error?.category).toBe("usage");
+    expect(r.json?.error?.message).toMatch(/unknown flag/);
+  });
+
+  it("Bug 13 — decide rejects an unknown flag (exit 2)", () => {
+    const r = run(["decide", "--bogus", "--output-format", "json"]);
+    expect(r.code).toBe(2);
+    expect(r.json?.error?.category).toBe("usage");
+    expect(r.json?.error?.message).toMatch(/unknown flag/);
+  });
+
+  it("Bug 13 — decide rejects a stray positional (takes none) (exit 2)", () => {
+    const r = run(["decide", "stray-positional", "--output-format", "json"]);
+    expect(r.code).toBe(2);
+    expect(r.json?.error?.category).toBe("usage");
+    expect(r.json?.error?.message).toMatch(/no positional/);
+  });
+
+  it("Bug 14 — decide --intent without --decider-llm → usage error (exit 2)", () => {
+    const r = run(["decide", "--intent", "test the thing", "--output-format", "json"]);
+    expect(r.code).toBe(2);
+    expect(r.json?.error?.category).toBe("usage");
+    expect(r.json?.error?.message).toMatch(/--intent requires --decider-llm/);
+  });
+
+  it("Bug 15 — decide --decider-llm combined with --answer → usage conflict (exit 2)", () => {
+    const r = run(["decide", "--decider-llm", "--answer", "stage=Series A", "--output-format", "json"]);
+    expect(r.code).toBe(2);
+    expect(r.json?.error?.category).toBe("usage");
+    expect(r.json?.error?.message).toMatch(/conflicts with --answer/);
+  });
+
+  it("Bug 16 — vm validates the subcommand before touching the baseline (exit 2)", () => {
+    // A bad subcommand with a stray second arg used to surface as a baseline-load error; it must now be
+    // a clean `usage: vm` (the subcommand is checked before loadBaseline).
+    const r = run(["vm", "bogus", "some-baseline"]);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(/usage: vm/);
+  });
+
+  it("Bug 17 — boundary-check rejects an unknown flag instead of dropping it (exit 2)", () => {
+    const r = run(["boundary-check", "--bogus"]);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(/unknown flag/);
+  });
+
+  it("Bug 2 — global --dotenv=<path> equals form with a missing file fails (exit 2)", () => {
+    // The equals form was missed by indexOf("--dotenv"): the whole token fell through to dispatch as the
+    // command name. It must now apply the same existence guard as the space form.
+    const r = run(["--dotenv=/no/such/file.env", "list"]);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(/--dotenv file not found/);
+  });
+
+  it("Bug 2 — global --dotenv= with an empty value is a usage error (exit 2)", () => {
+    const r = run(["--dotenv=", "list"]);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(/--dotenv requires a path/);
   });
 });
