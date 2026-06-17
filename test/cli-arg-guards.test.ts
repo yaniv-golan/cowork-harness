@@ -72,6 +72,18 @@ describe.skipIf(!can)("CLI arg guards — migrated commands fail loud", () => {
     expect(run(["replay", d], d).code).toBe(2);
   });
 
+  it("replay: a cassette missing the optional `assert` key does not crash (readCassette normalizes it)", () => {
+    const d = mkdtempSync(join(tmpdir(), "g-"));
+    const noAssert = JSON.stringify({
+      scenario: { name: "c", baseline: "latest", session: "(inline)", fidelity: "container", prompt: "hi", answers: [], expect_denied: [] },
+      events: [JSON.stringify({ type: "result", subtype: "success" })],
+    });
+    writeFileSync(join(d, "a.cassette.json"), noAssert);
+    const r = run(["replay", join(d, "a.cassette.json"), "--output-format", "json"], d);
+    expect(r.out).not.toMatch(/Cannot read properties of undefined/); // no NPE
+    expect(r.code).toBe(0);
+  });
+
   it("replay: an unreadable cassette in a dir does not yield ok:true (no false green)", () => {
     const d = mkdtempSync(join(tmpdir(), "g-"));
     writeFileSync(join(d, "ok.cassette.json"), cassette());

@@ -489,7 +489,13 @@ function readCassette(path: string): { cassette: Cassette } | { error: string } 
   const parsed = CassetteShape.safeParse(raw);
   if (!parsed.success)
     return { error: `invalid cassette shape: ${parsed.error.issues.map((i) => `${i.path.join(".") || "<root>"}: ${i.message}`).join("; ")}` };
-  return { cassette: raw as Cassette };
+  const cassette = raw as Cassette;
+  // `assert` is optional in an old/truncated cassette (the schema tolerates its absence) but downstream
+  // (replayCassette/redact) iterates it unconditionally — normalize to [] here, at the one parse boundary,
+  // so a missing-assert cassette can't NPE and abort a whole replay batch (readCassette's never-crash contract).
+  const scn = cassette.scenario as { assert?: unknown[] };
+  if (!Array.isArray(scn.assert)) scn.assert = [];
+  return { cassette };
 }
 
 /** B2: the committed cassettes under `dir` whose fingerprint has drifted (baseline/skill) — the re-record
