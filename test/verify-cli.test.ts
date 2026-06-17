@@ -65,4 +65,21 @@ describe.skipIf(!can)("verify-cassettes CLI gate", () => {
     const r = run(["verify-cassettes", d], d);
     expect(r.code).toBe(2);
   });
+
+  it("--privacy-only + --staleness-only together → exit 2 (they'd check nothing — no silent green)", () => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-vc-"));
+    writeFileSync(join(d, "ok.cassette.json"), JSON.stringify(cassette([JSON.stringify({ type: "result", subtype: "success" })])));
+    const r = run(["verify-cassettes", join(d, "ok.cassette.json"), "--privacy-only", "--staleness-only"], d);
+    expect(r.code).toBe(2);
+  });
+
+  it("a malformed cassette is TALLIED (exit 1), not a crash — clean siblings still verified", () => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-vc-"));
+    writeFileSync(join(d, "ok.cassette.json"), JSON.stringify(cassette([JSON.stringify({ type: "result", subtype: "success" })])));
+    writeFileSync(join(d, "junk.cassette.json"), "{ this is not valid json");
+    const r = run(["verify-cassettes", d, "--output-format", "json"], d);
+    expect(r.code).toBe(1);
+    expect(r.json.ok).toBe(false);
+    expect(JSON.stringify(r.json)).toMatch(/invalid cassette JSON|unreadable/);
+  });
 });

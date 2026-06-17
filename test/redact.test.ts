@@ -40,6 +40,15 @@ describe("redactStructural — string LEAVES and object KEYS (C3)", () => {
     expect(keys.length).toBe(2); // distinct emails stay distinct keys
     expect(keys.every((k) => !k.includes("@"))).toBe(true);
   });
+
+  it("redacts a value under a configured KEY regardless of TYPE (string, number, object) — #7", () => {
+    const p: RedactionPolicy = { patterns: [], keyNames: ["ssn", "amount", "owner"] };
+    const out = redactStructural({ ssn: "123-45-6789", amount: 1250000, owner: { name: "Eve" }, note: "fine" }, p) as any;
+    expect(out.ssn).toMatch(/REDACTED/);
+    expect(out.amount).toMatch(/REDACTED/); // a NUMBER under a sensitive key leaks just like a string
+    expect(out.owner).toMatch(/REDACTED/); // an OBJECT under a sensitive key, too
+    expect(out.note).toBe("fine");
+  });
 });
 
 describe("redactJsonLine — structural for JSON protocol lines", () => {

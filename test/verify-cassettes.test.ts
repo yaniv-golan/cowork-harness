@@ -40,6 +40,15 @@ describe("scanCassette — whole-surface privacy scan (A2)", () => {
     expect(scanCassette(c, [/cooley\.com/i]).some((f) => f.cls === "domain")).toBe(false);
   });
 
+  it("flags PII in an artifact FILENAME / path (C1)", () => {
+    const c: any = {
+      scenario: scenario([{ result: "success" }]),
+      events: [JSON.stringify({ type: "result", subtype: "success" })],
+      artifacts: [{ path: "outputs/eve@evil.com-cap-table.json", bytes: 2, sha256: "x", body: "{}" }],
+    };
+    expect(scanCassette(c, []).some((f) => f.cls === "email" && /artifact path/.test(f.where))).toBe(true);
+  });
+
   it("a truncated (uncommitted) artifact body is reported 'unscanned', not a silent pass", () => {
     const c: any = {
       scenario: scenario([{ result: "success" }]),

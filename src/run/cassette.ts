@@ -173,6 +173,7 @@ export function scanCassette(cassette: Cassette, allow: RegExp[]): ScanFinding[]
   cassette.events.forEach((l, i) => findings.push(...scanText(l, `events[${i}]`, allow)));
   cassette.controlOut?.forEach((l, i) => findings.push(...scanText(l, `controlOut[${i}]`, allow)));
   for (const a of cassette.artifacts ?? []) {
+    findings.push(...scanText(a.path, `artifact path ${a.path}`, allow)); // C1: filenames can name a customer
     if (a.body !== undefined) findings.push(...scanText(a.body, `artifact ${a.path}`, allow));
     else if (a.truncated)
       findings.push({ where: `artifact ${a.path}`, cls: "unscanned", sample: "(body not committed — too large or unreadable)" });
@@ -195,9 +196,15 @@ export function checkStaleness(cassette: Cassette, cassetteDir: string): string[
   try {
     liveBaseline = loadBaseline("latest").appVersion;
   } catch {
-    /* no baseline available (e.g. CI without `sync`) — skip the baseline arm */
+    /* baseline not loadable */
   }
-  if (liveBaseline && liveBaseline !== fp.baseline) msgs.push(`baseline moved ${fp.baseline} → ${liveBaseline} since record — re-record`);
+  // Gate mode: can't verify ⇒ not green. The cassette carries a baseline-of-record but we can't load the
+  // current one to compare — a fail, not a silent skip (baselines ship with the package, so this is rare).
+  if (liveBaseline === undefined)
+    msgs.push(
+      "cannot load the latest baseline to verify staleness — run `cowork-harness sync` or ship baselines/ (can't verify ⇒ not green)",
+    );
+  else if (liveBaseline !== fp.baseline) msgs.push(`baseline moved ${fp.baseline} → ${liveBaseline} since record — re-record`);
   if (fp.skillHash) {
     const live = buildFingerprint(cassette.scenario.session, fp.baseline, cassetteDir);
     if (live.skillHash === undefined)
@@ -392,7 +399,11 @@ export function redactCassette(cassette: Cassette, policy: RedactionPolicy): Cas
     scenario,
     events: cassette.events.map((l) => redactJsonLine(l, policy)),
     controlOut: cassette.controlOut?.map((l) => redactJsonLine(l, policy)),
-    artifacts: cassette.artifacts?.map((a) => (a.body !== undefined ? { ...a, body: redactJsonLine(a.body, policy) } : a)),
+    artifacts: cassette.artifacts?.map((a) => ({
+      ...a,
+      path: redactText(a.path, policy), // C1: a filename can name a customer (outputs/Acme-cap-table.json)
+      ...(a.body !== undefined ? { body: redactJsonLine(a.body, policy) } : {}),
+    })),
     fingerprint: cassette.fingerprint
       ? { ...cassette.fingerprint, skillSources: cassette.fingerprint.skillSources?.map((s) => redactText(s, policy)) }
       : undefined,
@@ -453,14 +464,28 @@ export function discoverScenarios(dir: string): ScenarioDiscovery {
   return out;
 }
 
+/** Read + parse a cassette, never throwing — a malformed `*.cassette.json` must be TALLIED, not crash a
+ *  whole batch (a crash mid-walk reads as "the rest were fine" — a false-green by abort). */
+function readCassette(path: string): { cassette: Cassette } | { error: string } {
+  try {
+    return { cassette: JSON.parse(readFileSync(path, "utf8")) as Cassette };
+  } catch (e) {
+    return { error: `unreadable / invalid cassette JSON: ${(e as Error).message}` };
+  }
+}
+
 /** B2: the committed cassettes under `dir` whose fingerprint has drifted (baseline/skill) — the re-record
- *  work-list. Pure + token-free (reuses `checkStaleness`); the actual re-record needs the live agent. */
+ *  work-list. Pure + token-free (reuses `checkStaleness`); the actual re-record needs the live agent. A
+ *  malformed cassette is surfaced as stale (needs attention) rather than silently dropped. */
 export function selectStaleCassettes(dir: string): { path: string; staleness: string[] }[] {
   return readdirSync(dir)
     .filter((f) => f.endsWith(".cassette.json"))
     .sort()
     .map((f) => join(dir, f))
-    .map((path) => ({ path, staleness: checkStaleness(JSON.parse(readFileSync(path, "utf8")) as Cassette, dirname(path)) }))
+    .map((path) => {
+      const r = readCassette(path);
+      return "error" in r ? { path, staleness: [r.error] } : { path, staleness: checkStaleness(r.cassette, dirname(path)) };
+    })
     .filter((x) => x.staleness.length > 0);
 }
 
@@ -481,6 +506,7 @@ async function recordScenarioFile(file: string, opts: RecordOpts): Promise<{ res
  *  the dir as committed cassettes and re-records only those whose fingerprint drifted. */
 export async function cmdRecord(args: string[]) {
   const noRedact = args.includes("--no-redact");
+  if (noRedact) log("record: --no-redact — content redaction is OFF; the cassette is written verbatim, so ensure inputs are synthetic.");
   const allowFailing = args.includes("--allow-failing");
   const rerecordStale = args.includes("--rerecord-stale");
   const outIdx = args.indexOf("--out");
@@ -513,7 +539,13 @@ export async function cmdRecord(args: string[]) {
     }
     let failures = 0;
     for (const { path: cp, staleness } of stale) {
-      const cassette: Cassette = JSON.parse(readFileSync(cp, "utf8"));
+      const rc = readCassette(cp);
+      if ("error" in rc) {
+        failures++;
+        log(`  ✗ ${cp}: ${rc.error} — cannot re-record`);
+        continue;
+      }
+      const cassette = rc.cassette;
       // Re-record from the embedded scenario, re-resolving its relocatable session against the cassette dir.
       const sessionRef = cassette.scenario.session === "(inline)" ? "(inline)" : join(dirname(cp), cassette.scenario.session);
       log(`↻ re-recording ${cp} (stale: ${staleness.join("; ")})`);
@@ -660,6 +692,12 @@ export function cmdVerifyCassettes(args: string[]) {
   }
   const privacyOnly = args.includes("--privacy-only");
   const stalenessOnly = args.includes("--staleness-only");
+  // Both flags together would disable BOTH families → empty findings → ok=true → exit 0: a silent
+  // false-green in the gate itself. Reject it as a usage error.
+  if (privacyOnly && stalenessOnly) {
+    log("verify-cassettes: --privacy-only and --staleness-only are mutually exclusive (together they'd check nothing)");
+    return process.exit(2);
+  }
   const doPrivacy = !stalenessOnly;
   const doStaleness = !privacyOnly;
   const allow: RegExp[] = [];
@@ -697,25 +735,28 @@ export function cmdVerifyCassettes(args: string[]) {
     return process.exit(2);
   }
   const results = files.map((f) => {
-    const cassette: Cassette = JSON.parse(readFileSync(f, "utf8"));
-    const findings = doPrivacy ? scanCassette(cassette, allow) : [];
-    const staleness = doStaleness ? checkStaleness(cassette, dirname(f)) : [];
-    return { file: f, findings, staleness };
+    const rc = readCassette(f);
+    if ("error" in rc) return { file: f, findings: [], staleness: [], error: rc.error };
+    const findings = doPrivacy ? scanCassette(rc.cassette, allow) : [];
+    const staleness = doStaleness ? checkStaleness(rc.cassette, dirname(f)) : [];
+    return { file: f, findings, staleness, error: undefined as string | undefined };
   });
   const realFindings = results.flatMap((r) => r.findings.filter((x) => x.cls !== "unscanned"));
   const staleAny = results.some((r) => r.staleness.length > 0);
-  const ok = realFindings.length === 0 && !staleAny;
+  const errorAny = results.some((r) => r.error !== undefined);
+  const ok = realFindings.length === 0 && !staleAny && !errorAny;
   if (json) {
     out(JSON.stringify({ command: "verify-cassettes", ok, results }));
   } else {
     for (const r of results) {
+      if (r.error) log(`✗ ${r.file}: [error] ${r.error}`);
       for (const f of r.findings) log(`${f.cls === "unscanned" ? "·" : "✗"} ${r.file}: [${f.cls}] ${f.where} — ${f.sample}`);
       for (const s of r.staleness) log(`✗ ${r.file}: [stale] ${s}`);
     }
     log(
       ok
         ? `✓ verify-cassettes: ${files.length} cassette(s) clean`
-        : `✗ verify-cassettes: ${realFindings.length} PII finding(s)${staleAny ? " + staleness drift" : ""} across ${files.length} cassette(s)`,
+        : `✗ verify-cassettes: ${realFindings.length} PII finding(s)${staleAny ? " + staleness drift" : ""}${errorAny ? " + unreadable cassette(s)" : ""} across ${files.length} cassette(s)`,
     );
   }
   return process.exit(ok ? 0 : 1);

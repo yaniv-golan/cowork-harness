@@ -78,7 +78,9 @@ export function redactStructural(value: unknown, policy: RedactionPolicy): unkno
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
       const rk = redactText(k, policy);
-      const rv = policy.keyNames.includes(k) && typeof v === "string" ? token("key", v) : redactStructural(v, policy);
+      // A value under a configured key is redacted wholesale regardless of TYPE (a sensitive number/object
+      // leaks just like a string). The hash is over its JSON form so the token stays deterministic.
+      const rv = policy.keyNames.includes(k) ? token("key", typeof v === "string" ? v : JSON.stringify(v)) : redactStructural(v, policy);
       if (Object.prototype.hasOwnProperty.call(out, rk))
         throw new Error(`redaction collision: two distinct keys both redacted to "${rk}" — refusing to silently merge`);
       out[rk] = rv;
