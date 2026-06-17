@@ -1,8 +1,8 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, isAbsolute } from "node:path";
-import { parseSessionFile, parseScenarioFile, scanEvents, parseDialogTimeout, slugForPath, isOutputsDelete } from "../src/run/execute.js";
+import { parseSessionFile, parseScenarioFile, scanEvents, parseDialogTimeout, slugForPath, isOutputsDelete, collectArtifacts } from "../src/run/execute.js";
 import { loadSession, resolveSessionPaths } from "../src/session.js";
 import { spawnEnv } from "../src/runtime/argv.js";
 import { loadBaseline } from "../src/baseline.js";
@@ -246,4 +246,47 @@ describe("execute — #45 parseDialogTimeout", () => {
   it("returns undefined for '0' (not > 0)", () => expect(parseDialogTimeout("0")).toBeUndefined());
   it("returns undefined for empty string", () => expect(parseDialogTimeout("")).toBeUndefined());
   it("returns undefined for absent (empty)", () => expect(parseDialogTimeout("")).toBeUndefined());
+});
+
+// Bug 31 — collectArtifacts must not follow symlinks (no escape out of workRoot, no cycle).
+describe("Bug 31 — collectArtifacts skips symlinks (lstat, no out-of-root follow, cycle-safe)", () => {
+  it("records real files but skips a symlink that points OUT of workRoot", () => {
+    const outside = mkdtempSync(join(tmpdir(), "cwh-outside-"));
+    writeFileSync(join(outside, "secret.txt"), "OUT-OF-TREE SECRET");
+
+    const root = mkdtempSync(join(tmpdir(), "cwh-b31-"));
+    mkdirSync(join(root, "outputs"), { recursive: true });
+    writeFileSync(join(root, "outputs", "real.txt"), "hello");
+    // a symlink under outputs/ pointing at a file OUTSIDE the work root
+    symlinkSync(join(outside, "secret.txt"), join(root, "outputs", "escape.txt"));
+
+    const got = collectArtifacts(root, ["outputs"]);
+    const paths = got.map((g) => g.path);
+    expect(paths).toContain("outputs/real.txt"); // the real file is recorded
+    expect(paths).not.toContain("outputs/escape.txt"); // the symlink is NOT followed/recorded
+  });
+
+  it("skips a symlinked subdirectory (would otherwise follow into / cycle outside the tree)", () => {
+    const outsideDir = mkdtempSync(join(tmpdir(), "cwh-outsidedir-"));
+    writeFileSync(join(outsideDir, "leak.json"), "{}");
+
+    const root = mkdtempSync(join(tmpdir(), "cwh-b31d-"));
+    mkdirSync(join(root, "outputs"), { recursive: true });
+    writeFileSync(join(root, "outputs", "ok.json"), "{}");
+    symlinkSync(outsideDir, join(root, "outputs", "linkdir")); // dir symlink out of tree
+
+    const got = collectArtifacts(root, ["outputs"]);
+    const paths = got.map((g) => g.path);
+    expect(paths).toEqual(["outputs/ok.json"]); // only the real file; the symlinked dir is skipped
+  });
+
+  it("does not infinite-loop on a directory cycle (self-referential symlink)", () => {
+    const root = mkdtempSync(join(tmpdir(), "cwh-b31c-"));
+    mkdirSync(join(root, "outputs", "a"), { recursive: true });
+    writeFileSync(join(root, "outputs", "a", "f.txt"), "x");
+    // a symlink that loops back to its own parent — must be skipped (it's a symlink) and never recurse
+    symlinkSync(join(root, "outputs"), join(root, "outputs", "a", "loop"));
+    const got = collectArtifacts(root, ["outputs"]);
+    expect(got.map((g) => g.path)).toEqual(["outputs/a/f.txt"]); // terminates, records only the real file
+  });
 });

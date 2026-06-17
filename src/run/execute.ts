@@ -1,5 +1,5 @@
 import { warn } from "../io.js";
-import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync, readdirSync, statSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync, readdirSync, statSync, lstatSync, realpathSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { join, dirname, resolve, basename, isAbsolute } from "node:path";
@@ -168,25 +168,6 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   let sidecar: EgressSidecar | undefined;
   let hostProxy: ReturnType<typeof startEgressProxy> | undefined;
   let microvmProxyPort: number | undefined;
-  if (containerLike) {
-    // #43: thread proxy/network EXPLICITLY into spawn opts — no process.env mutation so
-    // concurrent executeScenario calls don't stomp each other's values.
-    sidecar = startEgressSidecar(plan.egressAllow, outDir, runToken);
-  } else if (effectiveFidelity === "microvm") {
-    // allocate a free host port per run unless explicitly pinned, so concurrent microVM runs don't
-    // collide on the fixed 8899. The SAME port is threaded into spawnMicroVm below, so the guest firewall
-    // rule and HTTP(S)_PROXY point at the exact host bind.
-    microvmProxyPort = process.env.COWORK_VM_PROXY_PORT ? Number(process.env.COWORK_VM_PROXY_PORT) : await freePort();
-    hostProxy = startEgressProxy({
-      allow: plan.egressAllow,
-      port: microvmProxyPort,
-      logPath: join(outDir, "egress.log"),
-      onDecision: (host, decision) => egress.push({ host, decision }),
-    });
-    await hostProxy.ready; // don't spawn the agent until the proxy is accepting (or fail loud on a bind error)
-  }
-
-  const prompts = renderPrompts(baseline, session, sessionId);
   let record: RunRecord;
   let child: { kill?: (s?: NodeJS.Signals) => void } | undefined; // hoisted so the finally can reap a crashed/orphaned container (F1)
   let containerName: string | undefined;
@@ -198,6 +179,29 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   const promptGateOn = readGateFlag(baseline, "1978029737", "coworkWebFetchPrompt");
   const provenanceRef: { current?: WebFetchProvenance } = {};
   try {
+    // Bug 33: acquire the egress sidecar / host proxy INSIDE the protected try so a throw in resource
+    // acquisition OR in renderPrompts below can't leak a Docker network / a bound proxy port — the `finally`
+    // tears down whatever was assigned to sidecar/hostProxy. (Previously these were acquired before the try,
+    // so a renderPrompts throw skipped teardown and orphaned the resource.)
+    if (containerLike) {
+      // #43: thread proxy/network EXPLICITLY into spawn opts — no process.env mutation so
+      // concurrent executeScenario calls don't stomp each other's values.
+      sidecar = startEgressSidecar(plan.egressAllow, outDir, runToken);
+    } else if (effectiveFidelity === "microvm") {
+      // allocate a free host port per run unless explicitly pinned, so concurrent microVM runs don't
+      // collide on the fixed 8899. The SAME port is threaded into spawnMicroVm below, so the guest firewall
+      // rule and HTTP(S)_PROXY point at the exact host bind.
+      microvmProxyPort = process.env.COWORK_VM_PROXY_PORT ? Number(process.env.COWORK_VM_PROXY_PORT) : await freePort();
+      hostProxy = startEgressProxy({
+        allow: plan.egressAllow,
+        port: microvmProxyPort,
+        logPath: join(outDir, "egress.log"),
+        onDecision: (host, decision) => egress.push({ host, decision }),
+      });
+      await hostProxy.ready; // don't spawn the agent until the proxy is accepting (or fail loud on a bind error)
+    }
+
+    const prompts = renderPrompts(baseline, session, sessionId);
     let sdkMcp: SdkMcp | undefined;
     if (effectiveFidelity === "hostloop") {
       const hl = spawnHostLoop(scenario, baseline, plan, outDir, sessionId, {
@@ -439,10 +443,24 @@ function writeRunJsonl(
 
 /** B3: the structured run trace. */
 /** ENV-MANIFEST: recursively list files under each user-visible prefix (relative path + byte size).
- *  Paths only — NO content snapshot (that is the cassette manifest, #1). Symlinks are not followed. */
+ *  Paths only — NO content snapshot (that is the cassette manifest, #1).
+ *
+ *  Bug 31: use `lstatSync` (does NOT follow symlinks) and SKIP any symlink entry — a symlink could point out
+ *  of `workRoot` (inlining out-of-tree content into a committed cassette) or form a cycle. A `visited` set of
+ *  resolved real directory paths breaks cycles among real directories too. Only regular files are recorded. */
 export function collectArtifacts(workRoot: string, prefixes: string[]): { path: string; bytes: number }[] {
   const out: { path: string; bytes: number }[] = [];
+  const visited = new Set<string>();
   const walk = (abs: string, rel: string) => {
+    // Cycle guard: resolve the real path of this directory; if we've already walked it, stop.
+    let real: string;
+    try {
+      real = realpathSync(abs);
+    } catch {
+      return; // prefix dir absent / unreadable — not an error
+    }
+    if (visited.has(real)) return;
+    visited.add(real);
     let entries: string[];
     try {
       entries = readdirSync(abs);
@@ -454,8 +472,14 @@ export function collectArtifacts(workRoot: string, prefixes: string[]): { path: 
       const childRel = rel ? `${rel}/${name}` : name;
       let st;
       try {
-        st = statSync(childAbs); // statSync follows symlinks; lstat would be safer but outputs are real files
+        st = lstatSync(childAbs); // lstat: does NOT follow symlinks — see Bug 31
       } catch {
+        continue;
+      }
+      if (st.isSymbolicLink()) {
+        // Skip symlinks: they can escape workRoot or cycle. (Recording-side; the agent's own outputs are
+        // real files, so this loses nothing in practice while closing the escape/cycle hole.)
+        warn(`::warning:: collectArtifacts: skipping symlink ${childRel} (not followed — see Bug 31)\n`);
         continue;
       }
       if (st.isDirectory()) walk(childAbs, childRel);

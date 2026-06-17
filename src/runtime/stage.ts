@@ -2,6 +2,7 @@ import { warn } from "../io.js";
 import { existsSync, mkdirSync, cpSync } from "node:fs";
 import { join, dirname } from "node:path";
 import type { LaunchPlan } from "../session.js";
+import { requireFile } from "../staging/resolve.js";
 
 /** Subdirs the writable session tree always pre-creates under mnt (idempotent). */
 const BARE_DIRS = ["uploads", "outputs", ".projects", ".local-plugins/cache", ".remote-plugins", ".claude"];
@@ -52,6 +53,12 @@ export function stageWorkspace(plan: LaunchPlan, mntHost: string): StageResult {
       if (!softMissing)
         throw new Error(`mcp.config not found: ${plan.mcpConfig}. Fix the path, or set COWORK_HARNESS_SOFT_MISSING=1 to skip it.`);
       warn(`::warning:: [mcp] config missing, --mcp-config not advertised (COWORK_HARNESS_SOFT_MISSING): ${plan.mcpConfig}\n`);
+    } else if (plan.mcpConfig) {
+      // Bug 40: --mcp-config models a single mcpServers FILE; a directory source would otherwise reach
+      // the `cpSync(plan.mcpConfig, mcpDest)` below (no `recursive`) and throw an opaque ERR_FS_EISDIR.
+      // Kind-check only when the source EXISTS (the missing case is reconciled by the softMissing branch
+      // above); a wrong-kind source fails loud regardless of softMissing — it is malformed, not missing.
+      requireFile(plan.mcpConfig, "mcp.config");
     }
     // Advertise --mcp-config only when THIS run actually staged a config. Tie it to the current
     // plan, not to whether a file happens to exist: a fresh non-resume run that reuses a stable

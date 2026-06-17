@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { createHash } from "node:crypto";
 import type { AgentEvent, AgentSession, DecisionRequest, DecisionResponse } from "../src/agent/session.js";
 import { serializeDecision, deserializeDecision, canon, parseMessage } from "../src/agent/session.js";
 import {
@@ -647,7 +648,16 @@ describe("Cassette — protocol replay", () => {
         { result: "success" as const },
       ]),
       events,
-      artifacts: [{ path: "outputs/state.json", bytes: 24, sha256: "deadbeef", body: JSON.stringify({ me: { run_id: "r1" } }) }],
+      artifacts: [
+        {
+          path: "outputs/state.json",
+          bytes: 24,
+          // Bug 29: materializeManifest now verifies the body against this hash — it must be the real
+          // sha256 of the raw body bytes (a placeholder like "deadbeef" now correctly fails replay).
+          sha256: createHash("sha256").update(Buffer.from(JSON.stringify({ me: { run_id: "r1" } }))).digest("hex"),
+          body: JSON.stringify({ me: { run_id: "r1" } }),
+        },
+      ],
     } as any;
     const r = await replayCassette(cassette);
     expect(r.assertions.filter((a) => !a.pass)).toHaveLength(0);

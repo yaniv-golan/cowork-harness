@@ -297,4 +297,77 @@ describe("SEAM A — fail-loud declared-source staging", () => {
       else process.env.COWORK_HARNESS_SOFT_MISSING = prev;
     }
   });
+
+  it("Bug 43 — a skills.local source that is a FILE (not a dir) fails loud", () => {
+    expect(() => plan({ skills: { local: ["./examples/data/report.pdf"] } })).toThrow(/skill source must be a directory/);
+  });
+
+  it("Bug 42 — a folder `from` that is a FILE (not a dir) fails loud", () => {
+    expect(() => plan({ folders: [{ from: "./examples/data/report.pdf", to: "proj1" }] })).toThrow(/folder .* must be a directory/);
+  });
+
+  it("Bug 41 — a local_plugins source that is a FILE (not a dir) fails loud", () => {
+    expect(() => plan({ plugins: { local_plugins: ["./examples/data/report.pdf"] } })).toThrow(/local_plugin .* must be a directory/);
+  });
+
+  it("Bug 41 — a remote_plugins source that is a FILE (not a dir) fails loud", () => {
+    expect(() => plan({ plugins: { remote_plugins: ["./examples/data/report.pdf"] } })).toThrow(/remote_plugin .* must be a directory/);
+  });
+
+  it("Bug 41/42/43 — a MISSING directory source still routes through the post-loop check (not the kind-check)", () => {
+    // a kind-check must NOT fire for a missing path: it stays on the existing missing-mount path so the
+    // softMissing escape hatch keeps working. (Bug 42/41 are mount sources → "source(s) not found".)
+    expect(() => plan({ folders: [{ from: "./does/not/exist", to: "p" }] })).toThrow(/source\(s\) not found/);
+    expect(() => plan({ plugins: { local_plugins: ["./does/not/exist"] } })).toThrow(/source\(s\) not found/);
+  });
+
+  it("Bug 41/42 — COWORK_HARNESS_SOFT_MISSING still downgrades a MISSING directory source", () => {
+    const prev = process.env.COWORK_HARNESS_SOFT_MISSING;
+    process.env.COWORK_HARNESS_SOFT_MISSING = "1";
+    try {
+      expect(() => plan({ folders: [{ from: "./does/not/exist", to: "p" }] })).not.toThrow();
+      expect(() => plan({ plugins: { local_plugins: ["./does/not/exist"] } })).not.toThrow();
+    } finally {
+      if (prev === undefined) delete process.env.COWORK_HARNESS_SOFT_MISSING;
+      else process.env.COWORK_HARNESS_SOFT_MISSING = prev;
+    }
+  });
+
+  it("Bug 44/45 — a NAMELESS manifest resolves `plugin@<derived-name>` (qualifier compared to derived mktName)", () => {
+    // manifest has no `name`; the derived name is the dir basename. Qualifying by the derived name must
+    // resolve the plugin (Bug 45), and a typo'd qualifier against the derived name must be CAUGHT (Bug 44).
+    const mk = mkdtempSync(join(tmpdir(), "cowork-nameless-mkt-"));
+    const derived = mk.split("/").pop()!; // basename of the marketplace dir = derived mktName
+    mkdirSync(join(mk, ".claude-plugin"), { recursive: true });
+    mkdirSync(join(mk, "p", ".claude-plugin"), { recursive: true });
+    writeFileSync(join(mk, ".claude-plugin", "marketplace.json"), JSON.stringify({ plugins: [{ name: "p", source: "./p" }] })); // no `name`
+    writeFileSync(join(mk, "p", ".claude-plugin", "plugin.json"), JSON.stringify({ name: "p", version: "1.0.0" }));
+    // Bug 45: qualifier matches the derived name → resolves and mounts.
+    const { plan: ok } = plan({ plugins: { local_marketplaces: [mk], enabled: [`p@${derived}`] } });
+    expect(ok.pluginDirs).toContain(`.local-plugins/cache/${derived}/p/1.0.0`);
+    // Bug 44: a plugin-name typo qualified against the derived name is now CAUGHT (was silently ignored).
+    expect(() => plan({ plugins: { local_marketplaces: [mk], enabled: [`typo@${derived}`] } })).toThrow(
+      new RegExp(`names local marketplace "${derived}"`),
+    );
+  });
+
+  it("Bug 48 — a present-but-CORRUPT plugin.json throws (no silent 0.0.0 default)", () => {
+    const mk = mkdtempSync(join(tmpdir(), "cowork-corrupt-pj-"));
+    mkdirSync(join(mk, ".claude-plugin"), { recursive: true });
+    mkdirSync(join(mk, "p", ".claude-plugin"), { recursive: true });
+    writeFileSync(join(mk, ".claude-plugin", "marketplace.json"), JSON.stringify({ name: "mymkt", plugins: [{ name: "p", source: "./p" }] }));
+    writeFileSync(join(mk, "p", ".claude-plugin", "plugin.json"), "{ not valid json"); // corrupt
+    expect(() => plan({ plugins: { local_marketplaces: [mk], enabled: ["p@mymkt"] } })).toThrow(/plugin manifest is not valid JSON/);
+  });
+
+  it("Bug 48 — a genuinely-VERSIONLESS plugin (absent/empty version) still falls back to 0.0.0", () => {
+    // absent manifest version and no entry.version → readPluginVersion returns null → caller default 0.0.0.
+    const mk = mkdtempSync(join(tmpdir(), "cowork-noversion-pj-"));
+    mkdirSync(join(mk, ".claude-plugin"), { recursive: true });
+    mkdirSync(join(mk, "p", ".claude-plugin"), { recursive: true });
+    writeFileSync(join(mk, ".claude-plugin", "marketplace.json"), JSON.stringify({ name: "mymkt", plugins: [{ name: "p", source: "./p" }] }));
+    writeFileSync(join(mk, "p", ".claude-plugin", "plugin.json"), JSON.stringify({ name: "p" })); // valid, no version
+    const { plan: p } = plan({ plugins: { local_marketplaces: [mk], enabled: ["p@mymkt"] } });
+    expect(p.pluginDirs).toContain(".local-plugins/cache/mymkt/p/0.0.0");
+  });
 });

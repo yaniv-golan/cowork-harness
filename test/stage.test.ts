@@ -83,6 +83,30 @@ describe("stageWorkspace — resume staging (fidelity guard)", () => {
     expect(() => stageWorkspace(plan, mntHost)).not.toThrow();
   });
 
+  it("Bug 40 — a fresh-run mcp.config pointing at a DIRECTORY fails loud (not an opaque cpSync EISDIR)", () => {
+    const { root, mntHost, plan } = fixture(false);
+    const dir = join(root, "mcp-as-dir");
+    mkdirSync(dir, { recursive: true });
+    (plan as { mcpConfig: string | null }).mcpConfig = dir; // present, but wrong kind
+    expect(() => stageWorkspace(plan, mntHost)).toThrow(/mcp.config must be a file/);
+  });
+
+  it("Bug 40 — a directory mcp.config fails even under COWORK_HARNESS_SOFT_MISSING (wrong-kind, not missing)", () => {
+    const { root, mntHost, plan } = fixture(false);
+    const dir = join(root, "mcp-as-dir2");
+    mkdirSync(dir, { recursive: true });
+    (plan as { mcpConfig: string | null }).mcpConfig = dir;
+    const prev = process.env.COWORK_HARNESS_SOFT_MISSING;
+    process.env.COWORK_HARNESS_SOFT_MISSING = "1";
+    try {
+      // softMissing downgrades MISSING sources, but a present-but-wrong-kind source is malformed: still loud.
+      expect(() => stageWorkspace(plan, mntHost)).toThrow(/mcp.config must be a file/);
+    } finally {
+      if (prev === undefined) delete process.env.COWORK_HARNESS_SOFT_MISSING;
+      else process.env.COWORK_HARNESS_SOFT_MISSING = prev;
+    }
+  });
+
   it("bare dirs are always created (idempotent), even on resume", () => {
     const { mntHost, plan } = fixture(true);
     const res = stageWorkspace(plan, mntHost);

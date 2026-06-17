@@ -170,7 +170,8 @@
               },
               "no_delete_in_outputs": {
                 "type": "boolean",
-                "description": "fails if a delete touching mnt/outputs is DETECTED (post-run bash-command scan, not FUSE-level enforcement — a green means none was detected)"
+                "const": true,
+                "description": "fails if a delete touching mnt/outputs is DETECTED (post-run bash-command scan, not FUSE-level enforcement — a green means none was detected); only `true` is valid (writing `false` is a rejected footgun — omit to allow deletes)"
               },
               "self_heal_ran": {
                 "type": "boolean",

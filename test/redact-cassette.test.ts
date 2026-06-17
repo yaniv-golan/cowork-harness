@@ -133,3 +133,90 @@ describe("assertRedactionVerdictPreserved — A3 / C4 cardinal-sin guard", () =>
     await expect(assertRedactionVerdictPreserved(base, red)).rejects.toThrow(/verdict|redaction/i);
   });
 });
+
+// ── Cassette manifest safety (Bugs 28/29/30) — token-free, spawn-free ───────────────────────────────
+import { buildManifest, materializeManifest } from "../src/run/cassette.js";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+describe("Bug 30 — binary artifact bodies round-trip byte-exact via a base64 encoding marker", () => {
+  it("buildManifest stores non-UTF-8 bytes as base64; materializeManifest restores them exactly", () => {
+    const root = mkdtempSync(join(tmpdir(), "cwh-b30-"));
+    mkdirSync(join(root, "outputs"), { recursive: true });
+    // bytes that do NOT survive a utf8 round-trip (0x80, 0xFF, lone high bytes, a NUL)
+    const binary = Buffer.from([0x00, 0x80, 0xff, 0xfe, 0x01, 0xc3, 0x28, 0xed, 0xa0, 0x80]);
+    writeFileSync(join(root, "outputs", "blob.bin"), binary);
+    // a normal text file should stay utf8 (no marker) for readable cassettes
+    writeFileSync(join(root, "outputs", "note.txt"), "hello world");
+
+    const manifest = buildManifest(root);
+    const blob = manifest.find((m) => m.path === "outputs/blob.bin")!;
+    const note = manifest.find((m) => m.path === "outputs/note.txt")!;
+    expect(blob.encoding).toBe("base64"); // binary → base64 marker
+    expect(blob.body).toBe(binary.toString("base64"));
+    expect(note.encoding).toBeUndefined(); // text → no marker (stays readable)
+    expect(note.body).toBe("hello world");
+    // the sha256 is over the RAW bytes (so Bug-29 verify stays valid)
+    expect(blob.sha256).toBe(createHash("sha256").update(binary).digest("hex"));
+
+    // record → replay: materialize and confirm the bytes are EXACTLY the original (no utf8 corruption)
+    const { workRoot } = materializeManifest(manifest);
+    expect(readFileSync(join(workRoot, "outputs", "blob.bin")).equals(binary)).toBe(true);
+    expect(readFileSync(join(workRoot, "outputs", "note.txt"), "utf8")).toBe("hello world");
+  });
+});
+
+describe("Bug 28 — materializeManifest rejects a cassette entry that escapes the temp work root", () => {
+  const entry = (path: string) => {
+    const body = "x";
+    return { path, bytes: 1, sha256: createHash("sha256").update(Buffer.from(body)).digest("hex"), body };
+  };
+
+  it("throws on a ../escape relative path", () => {
+    expect(() => materializeManifest([entry("../escape")])).toThrow(/escape|traversal/i);
+  });
+  it("throws on a deep ../../outside traversal", () => {
+    expect(() => materializeManifest([entry("../../outside/x.json")])).toThrow(/escape|traversal/i);
+  });
+  it("throws on an absolute path", () => {
+    expect(() => materializeManifest([entry("/etc/passwd")])).toThrow(/absolute|relative/i);
+  });
+  it("accepts a normal contained path", () => {
+    const { workRoot } = materializeManifest([entry("outputs/ok.json")]);
+    expect(readFileSync(join(workRoot, "outputs", "ok.json"), "utf8")).toBe("x");
+  });
+});
+
+describe("Bug 29 — materializeManifest fails replay on a body that does not match its recorded sha256", () => {
+  it("throws when the body was tampered (hash mismatch over decoded raw bytes)", () => {
+    const tampered = {
+      path: "outputs/state.json",
+      bytes: 2,
+      // sha256 of the ORIGINAL "{}" but body is now different content → mismatch
+      sha256: createHash("sha256").update(Buffer.from("{}")).digest("hex"),
+      body: '{"evil":true}',
+    };
+    expect(() => materializeManifest([tampered])).toThrow(/sha256|corrupt|tampered/i);
+  });
+
+  it("passes when the body matches its recorded sha256 (including a base64 binary body)", () => {
+    const binary = Buffer.from([0x00, 0xff, 0x10]);
+    const good = {
+      path: "outputs/blob.bin",
+      bytes: binary.length,
+      sha256: createHash("sha256").update(binary).digest("hex"),
+      body: binary.toString("base64"),
+      encoding: "base64" as const,
+    };
+    const { workRoot } = materializeManifest([good]);
+    expect(readFileSync(join(workRoot, "outputs", "blob.bin")).equals(binary)).toBe(true);
+  });
+
+  it("does NOT verify a truncated (hash-only) entry — it carries no body", () => {
+    const truncated = { path: "outputs/huge.bin", bytes: 9_000_000, sha256: "deadbeef", truncated: true };
+    const { workRoot } = materializeManifest([truncated]);
+    expect(readFileSync(join(workRoot, "outputs", "huge.bin"), "utf8")).toBe(""); // empty placeholder, no throw
+  });
+});

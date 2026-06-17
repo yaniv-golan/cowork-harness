@@ -33,6 +33,16 @@ describe("count assertions require nonnegative integers", () => {
   });
 });
 
+describe("no_delete_in_outputs accepts only `true` (the `false` footgun is rejected)", () => {
+  it("accepts `true` and absence", () => {
+    expect(Assertion.safeParse({ no_delete_in_outputs: true }).success).toBe(true);
+    expect(Assertion.safeParse({}).success).toBe(true);
+  });
+  it("rejects `false` (would be a silent no-effect — omit the assertion to allow deletes)", () => {
+    expect(Assertion.safeParse({ no_delete_in_outputs: false }).success).toBe(false);
+  });
+});
+
 // Guard: the committed schema/*.schema.json must match what the zod schemas produce.
 // If this fails, a zod schema changed without regenerating — run `npm run schema`.
 describe("JSON schema is in sync with the zod source", () => {

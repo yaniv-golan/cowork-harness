@@ -126,11 +126,14 @@ export const Assertion = z.object({
   dispatch_count_max: z.number().int().nonnegative().optional().describe("total sub-agent dispatches ≤ N (the {global:3} ceiling)"),
   egress_denied: z.string().optional().describe("egress to this host was denied"),
   egress_allowed: z.string().optional().describe("egress to this host was allowed"),
+  // Only `true` is accepted: `false` is rejected as a footgun. The assertion is presence-semantic — authoring
+  // `false` reads as "permit deletes" but would behave identically to `true` (a silent no-effect). To allow
+  // deletes, OMIT the assertion entirely rather than writing `false`.
   no_delete_in_outputs: z
-    .boolean()
+    .literal(true)
     .optional()
     .describe(
-      "fails if a delete touching mnt/outputs is DETECTED (post-run bash-command scan, not FUSE-level enforcement — a green means none was detected)",
+      "fails if a delete touching mnt/outputs is DETECTED (post-run bash-command scan, not FUSE-level enforcement — a green means none was detected); only `true` is valid (writing `false` is a rejected footgun — omit to allow deletes)",
     ),
   self_heal_ran: z.boolean().optional().describe("skill resolved scripts via /sessions (plugin-root self-heal)"),
   transcript_no_host_path: z.boolean().optional().describe("no /Users//opt host path leaked into model-visible text"),
