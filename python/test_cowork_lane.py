@@ -59,7 +59,7 @@ def test_helper_imports_and_cli_resolves():
 
 
 def test_result_assertions_are_pure():
-    r = Result({"result": "success", "assertions": [], "subagents": [{"agentType": "researcher"}]}, "")
+    r = Result({"result": "success", "assertions": [], "subagents": [{"agentType": "researcher"}]}, "", ok=True)
     r.assert_success().assert_subagent_dispatched("researcher").assert_dispatch_count_max(3)
 
 
