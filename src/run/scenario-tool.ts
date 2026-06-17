@@ -29,8 +29,9 @@ export function cmdLint(args: string[]): never {
   if (r.error) {
     const enoent = (r.error as NodeJS.ErrnoException).code === "ENOENT";
     process.stderr.write(
-      (enoent ? `${py} not found — \`lint\` needs Python 3 (+ PyYAML: pip install pyyaml). Set $PYTHON or install Python.` : String(r.error.message)) +
-        "\n",
+      (enoent
+        ? `${py} not found — \`lint\` needs Python 3 (+ PyYAML: pip install pyyaml). Set $PYTHON or install Python.`
+        : String(r.error.message)) + "\n",
     );
     return process.exit(127);
   }

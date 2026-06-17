@@ -236,12 +236,8 @@ describe("artifact_json equals/in — key-order-insensitive, array-order-sensiti
     expect(pass(A({ a: 1 }, { artifact: "outputs/state.json", path: undefined, equals: { a: 1, b: 2 } }))).toBe(false);
   });
   it("in matches via reordered-key deep equality", () => {
-    expect(
-      pass(A({ a: 1, b: 2 }, { artifact: "outputs/state.json", path: undefined, in: [{ b: 2, a: 1 }, { z: 9 }] })),
-    ).toBe(true);
-    expect(
-      pass(A({ a: 1, b: 2 }, { artifact: "outputs/state.json", path: undefined, in: [{ a: 1, b: 3 }, { z: 9 }] })),
-    ).toBe(false);
+    expect(pass(A({ a: 1, b: 2 }, { artifact: "outputs/state.json", path: undefined, in: [{ b: 2, a: 1 }, { z: 9 }] }))).toBe(true);
+    expect(pass(A({ a: 1, b: 2 }, { artifact: "outputs/state.json", path: undefined, in: [{ a: 1, b: 3 }, { z: 9 }] }))).toBe(false);
   });
 });
 

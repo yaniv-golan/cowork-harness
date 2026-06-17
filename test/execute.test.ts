@@ -2,7 +2,15 @@ import { describe, it, expect, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, isAbsolute } from "node:path";
-import { parseSessionFile, parseScenarioFile, scanEvents, parseDialogTimeout, slugForPath, isOutputsDelete, collectArtifacts } from "../src/run/execute.js";
+import {
+  parseSessionFile,
+  parseScenarioFile,
+  scanEvents,
+  parseDialogTimeout,
+  slugForPath,
+  isOutputsDelete,
+  collectArtifacts,
+} from "../src/run/execute.js";
 import { loadSession, resolveSessionPaths } from "../src/session.js";
 import { spawnEnv } from "../src/runtime/argv.js";
 import { loadBaseline } from "../src/baseline.js";

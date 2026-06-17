@@ -16,6 +16,7 @@ export function resolveInputs(target: string, exts: string | string[]): { files:
     .filter((f) => list.some((e) => f.endsWith(e)))
     .sort()
     .map((f) => join(target, f));
-  if (files.length === 0) return { error: `no ${list.join("/")} files under ${target} — nothing to do (loud non-zero, not a vacuous pass)` };
+  if (files.length === 0)
+    return { error: `no ${list.join("/")} files under ${target} — nothing to do (loud non-zero, not a vacuous pass)` };
   return { files, isDir: true };
 }

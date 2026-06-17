@@ -112,7 +112,7 @@ def test_assert_tool_called_uses_toolcounts_not_decisions():
         no_counts.assert_tool_called("Read")
 
 
-# ---- Theme C (#18/#19): run_scenario must not pass --fidelity/--answer ----
+# ---- run_scenario must not pass --fidelity/--answer (they are scenario-authored) ----
 # The `run` command takes exactly one <scenario.yaml|dir/> plus common flags and REJECTS extra
 # arguments (fidelity is the scenario's `fidelity:` field; answers are its `answers:`). These tests pin
 # the wrapper to that contract so it can't drift back to emitting flags `run` would reject.

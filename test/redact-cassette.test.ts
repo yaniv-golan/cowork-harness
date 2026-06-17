@@ -158,7 +158,7 @@ describe("binary artifact bodies round-trip byte-exact via a base64 encoding mar
     expect(blob.body).toBe(binary.toString("base64"));
     expect(note.encoding).toBeUndefined(); // text → no marker (stays readable)
     expect(note.body).toBe("hello world");
-    // the sha256 is over the RAW bytes (so Bug-29 verify stays valid)
+    // the sha256 is over the RAW bytes (so the replay-time verify stays valid)
     expect(blob.sha256).toBe(createHash("sha256").update(binary).digest("hex"));
 
     // record → replay: materialize and confirm the bytes are EXACTLY the original (no utf8 corruption)

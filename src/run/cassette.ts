@@ -100,9 +100,8 @@ function isLosslessUtf8(buf: Buffer): boolean {
  *  Exported for token-free record→replay round-trip tests. */
 export function buildManifest(workRoot: string): ManifestEntry[] {
   return collectArtifacts(workRoot, ["outputs", ".projects"]).map(({ path, bytes }) => {
-    // collectArtifacts paths are derived from a directory walk; a symlinked artifact (post-Bug-31
-    // collectArtifacts already skips symlinks, but the entry could still point oddly) must not inline content
-    // outside the work root. Re-confirm containment before reading the raw body.
+    // collectArtifacts paths are derived from a directory walk; even though it already skips symlinks,
+    // an entry must not inline content outside the work root. Re-confirm containment before reading the body.
     let abs: string;
     try {
       abs = containedPath(workRoot, path);
@@ -528,9 +527,7 @@ export function discoverScenarios(dir: string): ScenarioDiscovery {
 const CassetteShape = z
   .object({
     events: z.array(z.string()),
-    scenario: z
-      .object({ prompt: z.string(), session: z.string(), assert: z.array(z.unknown()).optional() })
-      .passthrough(),
+    scenario: z.object({ prompt: z.string(), session: z.string(), assert: z.array(z.unknown()).optional() }).passthrough(),
   })
   .passthrough();
 
@@ -545,7 +542,9 @@ function readCassette(path: string): { cassette: Cassette } | { error: string } 
   }
   const parsed = CassetteShape.safeParse(raw);
   if (!parsed.success)
-    return { error: `invalid cassette shape: ${parsed.error.issues.map((i) => `${i.path.join(".") || "<root>"}: ${i.message}`).join("; ")}` };
+    return {
+      error: `invalid cassette shape: ${parsed.error.issues.map((i) => `${i.path.join(".") || "<root>"}: ${i.message}`).join("; ")}`,
+    };
   const cassette = raw as Cassette;
   // `assert` is optional in an old/truncated cassette (the schema tolerates its absence) but downstream
   // (replayCassette/redact) iterates it unconditionally — normalize to [] here, at the one parse boundary,
@@ -605,7 +604,9 @@ export async function cmdRecord(args: string[]) {
   const asJson = p.options["--output-format"] === "json";
   const target = p.positionals[0];
   if (!target) {
-    log("usage: record <scenario.yaml | dir/> [--out <file>] [--output-format text|json] [--rerecord-stale] [--no-redact] [--allow-failing]");
+    log(
+      "usage: record <scenario.yaml | dir/> [--out <file>] [--output-format text|json] [--rerecord-stale] [--no-redact] [--allow-failing]",
+    );
     return process.exit(2);
   }
   if (p.positionals.length > 1) {
@@ -747,7 +748,17 @@ async function recordScenarioObject(
  *  the JSON envelope's `ok` (results.every(pass)) turns false and can never report ok:true alongside a
  *  non-zero exit (the cardinal no-false-green rule). */
 function replayErrorResult(file: string): RunResult {
-  return { scenario: file, fidelity: "replay", baseline: "", result: "error", decisions: [], egress: [], assertions: [], outDir: "", durationMs: 0 };
+  return {
+    scenario: file,
+    fidelity: "replay",
+    baseline: "",
+    result: "error",
+    decisions: [],
+    egress: [],
+    assertions: [],
+    outDir: "",
+    durationMs: 0,
+  };
 }
 
 /** `replay <file|dir>` (or `--cassette <file>`) — deterministic protocol-replay; re-evaluates content

@@ -19,10 +19,7 @@ export function resolveAgentBinary(baseline: PlatformBaseline): string {
   // newest sibling binary under the same claude-code-vm/ root before giving up.
   const fallback = staged ? newestStagedBinary(staged) : undefined;
   if (fallback) {
-    process.stderr.write(
-      `cowork-harness: staged agent binary "${staged}" not found; ` +
-        `falling back to newest sibling "${fallback}".\n`,
-    );
+    process.stderr.write(`cowork-harness: staged agent binary "${staged}" not found; ` + `falling back to newest sibling "${fallback}".\n`);
     return fallback;
   }
   throw new Error(

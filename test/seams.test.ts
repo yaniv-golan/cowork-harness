@@ -654,7 +654,9 @@ describe("Cassette — protocol replay", () => {
           bytes: 24,
           // materializeManifest now verifies the body against this hash — it must be the real
           // sha256 of the raw body bytes (a placeholder like "deadbeef" now correctly fails replay).
-          sha256: createHash("sha256").update(Buffer.from(JSON.stringify({ me: { run_id: "r1" } }))).digest("hex"),
+          sha256: createHash("sha256")
+            .update(Buffer.from(JSON.stringify({ me: { run_id: "r1" } })))
+            .digest("hex"),
           body: JSON.stringify({ me: { run_id: "r1" } }),
         },
       ],
