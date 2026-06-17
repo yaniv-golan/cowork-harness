@@ -22,6 +22,8 @@ import { ABSTAIN, UnansweredError, type Decider } from "../decide/decider.js";
 import { evaluate } from "../assert.js";
 import { makeRenderer, renderFooter, type RenderPlan } from "./renderer.js";
 import { jsonEnvelope, parseOutputFormat } from "./envelope.js";
+import { parseArgs } from "../cli-args.js";
+import { resolveInputs } from "./inputs.js";
 import { computeVerdict } from "./verdict.js";
 import { redactJsonLine, redactText, redactStructural, loadRedactionPolicy, type RedactionPolicy } from "../redact.js";
 import { collectSecrets, scrub } from "../secrets.js";
@@ -552,26 +554,38 @@ async function recordScenarioFile(file: string, opts: RecordOpts): Promise<{ res
  *  run live + save a cassette. A single file records one; a dir batches (B1); --rerecord-stale (B2) treats
  *  the dir as committed cassettes and re-records only those whose fingerprint drifted. */
 export async function cmdRecord(args: string[]) {
-  const noRedact = args.includes("--no-redact");
+  let p;
+  try {
+    p = parseArgs(args, {
+      booleans: ["--no-redact", "--allow-failing", "--rerecord-stale"],
+      values: ["--out", "--output-format"],
+      noDashValue: ["--out"],
+      enums: { "--output-format": ["text", "json"] },
+    });
+  } catch (e) {
+    log((e as Error).message);
+    return process.exit(2);
+  }
+  const noRedact = p.flags["--no-redact"] ?? false;
   if (noRedact) log("record: --no-redact — content redaction is OFF; the cassette is written verbatim, so ensure inputs are synthetic.");
-  const allowFailing = args.includes("--allow-failing");
-  const rerecordStale = args.includes("--rerecord-stale");
-  const outIdx = args.indexOf("--out");
-  if (outIdx >= 0 && args[outIdx + 1] === undefined) {
-    log("usage: record <scenario.yaml> --out <file.cassette.json>  (--out needs a value)");
-    return process.exit(2);
-  }
-  const positionals = args.filter((a, i) => !a.startsWith("--") && args[i - 1] !== "--out");
-  const target = positionals[0];
+  const allowFailing = p.flags["--allow-failing"] ?? false;
+  const rerecordStale = p.flags["--rerecord-stale"] ?? false;
+  const asJson = p.options["--output-format"] === "json";
+  const target = p.positionals[0];
   if (!target) {
-    log("usage: record <scenario.yaml | dir/> [--out <file>] [--rerecord-stale] [--no-redact] [--allow-failing]");
+    log("usage: record <scenario.yaml | dir/> [--out <file>] [--output-format text|json] [--rerecord-stale] [--no-redact] [--allow-failing]");
     return process.exit(2);
   }
-  if (positionals.length > 1) {
-    log(`record takes a single scenario or dir (got ${positionals.length}: ${positionals.join(", ")})`);
+  if (p.positionals.length > 1) {
+    log(`record takes a single scenario or dir (got ${p.positionals.length}: ${p.positionals.join(", ")})`);
     return process.exit(2);
   }
   const isDir = existsSync(target) && statSync(target).isDirectory();
+  // Bug 22: `--out` names ONE cassette; it has no meaning for a directory batch — reject rather than silently ignore.
+  if (isDir && p.options["--out"] !== undefined) {
+    log("record: --out names a single cassette file and is not valid for a directory batch");
+    return process.exit(2);
+  }
 
   // B2: re-record only the drifted cassettes in a committed cassette dir.
   if (rerecordStale) {
@@ -636,9 +650,10 @@ export async function cmdRecord(args: string[]) {
 
   // Single scenario file.
   try {
-    const cassettePath = outIdx >= 0 ? args[outIdx + 1] : undefined;
+    const cassettePath = p.options["--out"];
     const r = await recordScenarioFile(target, { noRedact, allowFailing, cassettePath });
-    log(`✓ recorded ${r.result.result} · ${r.artifacts} artifact(s) → ${r.cassettePath}`);
+    if (asJson) out(JSON.stringify({ command: "record", result: r.result.result, artifacts: r.artifacts, cassette: r.cassettePath }));
+    else log(`✓ recorded ${r.result.result} · ${r.artifacts} artifact(s) → ${r.cassettePath}`);
   } catch (e) {
     log(`record: ${(e as Error).message}`);
     return process.exit(1);
@@ -730,15 +745,21 @@ export async function cmdReplay(args: string[]) {
  *  staleness check (B3) over one cassette or every `*.cassette.json` in a dir (non-recursive). Exit 1 on any
  *  real PII finding or staleness drift; `unscanned` notes are informational. Dedicated JSON envelope. */
 export function cmdVerifyCassettes(args: string[]) {
-  let json: boolean;
+  let p;
   try {
-    json = parseOutputFormat(args) === "json";
+    p = parseArgs(args, {
+      booleans: ["--privacy-only", "--staleness-only"],
+      values: ["--output-format"],
+      repeated: ["--allow"],
+      enums: { "--output-format": ["text", "json"] },
+    });
   } catch (e) {
     log(String((e as Error).message));
     return process.exit(2);
   }
-  const privacyOnly = args.includes("--privacy-only");
-  const stalenessOnly = args.includes("--staleness-only");
+  const json = p.options["--output-format"] === "json";
+  const privacyOnly = p.flags["--privacy-only"] ?? false;
+  const stalenessOnly = p.flags["--staleness-only"] ?? false;
   // Both flags together would disable BOTH families → empty findings → ok=true → exit 0: a silent
   // false-green in the gate itself. Reject it as a usage error.
   if (privacyOnly && stalenessOnly) {
@@ -748,13 +769,7 @@ export function cmdVerifyCassettes(args: string[]) {
   const doPrivacy = !stalenessOnly;
   const doStaleness = !privacyOnly;
   const allow: RegExp[] = [];
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] !== "--allow") continue;
-    const src = args[++i];
-    if (src === undefined) {
-      log("--allow needs a regex value");
-      return process.exit(2);
-    }
+  for (const src of p.repeated["--allow"] ?? []) {
     try {
       allow.push(new RegExp(src, "i"));
     } catch {
@@ -762,25 +777,21 @@ export function cmdVerifyCassettes(args: string[]) {
       return process.exit(2);
     }
   }
-  const target = args.find((a, i) => !a.startsWith("--") && args[i - 1] !== "--allow");
+  const target = p.positionals[0];
   if (!target) {
     log("usage: verify-cassettes <file|dir> [--privacy-only|--staleness-only] [--allow <regex>]... [--output-format json]");
     return process.exit(2);
   }
-  if (!existsSync(target)) {
-    log(`verify-cassettes: path not found: ${target}`);
+  if (p.positionals.length > 1) {
+    log(`verify-cassettes takes one <file|dir> (got ${p.positionals.length}: ${p.positionals.join(", ")})`);
     return process.exit(2);
   }
-  const files = statSync(target).isDirectory()
-    ? readdirSync(target)
-        .filter((f) => f.endsWith(".cassette.json"))
-        .sort()
-        .map((f) => join(target, f))
-    : [target];
-  if (files.length === 0) {
-    log(`verify-cassettes: no .cassette.json files under ${target} — nothing verified (loud non-zero, not a vacuous pass)`);
+  const resolved = resolveInputs(target, ".cassette.json");
+  if ("error" in resolved) {
+    log(`verify-cassettes: ${resolved.error}`);
     return process.exit(2);
   }
+  const files = resolved.files;
   const results = files.map((f) => {
     const rc = readCassette(f);
     if ("error" in rc) return { file: f, findings: [], staleness: [], error: rc.error };
