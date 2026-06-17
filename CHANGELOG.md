@@ -8,6 +8,14 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **`cowork-harness lint <scenario.yaml>…`** — the bundled scenario linter/scaffolder (`scenario.py`) is now
+  shipped in the npm package and reachable as a first-class subcommand, so a consumer who `npm i`s the harness
+  (with no skill checkout) can run the no-silent-false-green checks in CI. Needs `python3` + PyYAML; a missing
+  interpreter fails with a clear, actionable message.
+- **`replay <dir>`** — `replay` now accepts a directory and replays every `*.cassette.json` in it (sorted,
+  non-recursive), exiting on the worst per-cassette verdict, in addition to the existing `--cassette <file>`
+  form. An unreadable cassette is reported per-file and forces the JSON envelope's `ok:false` (never a vacuous
+  pass), and never aborts the batch.
 - **A shipped `protocol`-tier example** (`examples/scenarios/protocol-smoke.yaml` + its session) — the first
   zero-Docker/zero-agent worked example for the L0 tier (a scripted answer reaches the model, a tool runs, a
   file is written), with the host-path leak owned via `transcript_no_host_path: false` to illustrate exactly
@@ -20,6 +28,15 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed
 
+- **Uniform CLI argument validation.** A shared declarative argument parser now backs the cassette commands
+  (`record`/`replay`/`verify-cassettes`), and every hand-rolled command rejects unknown flags, extra
+  positionals, and flag-looking values for path/id flags instead of silently ignoring them — closing a class
+  of silent-accept parsing footguns. Error paths only; valid invocations are unchanged.
+- **The npm package ships `scenario.py`** (the linter/scaffolder) and publishes with provenance attestation so
+  CI consumers can lint without a skill checkout.
+- **Agent-binary discovery falls back to the newest staged build.** When the baseline's exact
+  `claude-code-vm/<ver>/claude` is absent (e.g. Cowork staged a newer build), the harness now uses the newest
+  staged sibling with a warning instead of hard-failing; `COWORK_AGENT_BINARY` still takes precedence.
 - **`chat --fidelity` now validates its argument** — a value other than `container`/`hostloop` is rejected
   (exit 2) instead of being silently coerced to `container` (a fidelity footgun).
 - **`assert --list`** now describes `replay_protocol_fidelity` as replay-only and **not authorable** (it is
@@ -27,6 +44,37 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **CLI parsing hygiene across commands.** `run` now treats an empty scenario directory as a loud non-zero
+  (was a vacuous exit-0 pass); `record`/`verify-cassettes`/`gates` no longer mistake a `--output-format`/
+  `--allow` value for the positional target; `trace` rejects mutually-exclusive view flags and extra targets;
+  `scaffold`/`assert --list` validate `--output-format` and reject stray arguments; `decide` rejects unknown
+  flags, stray positionals, `--intent` without `--decider-llm`, an `--decider-llm`+`--answer` conflict, and a
+  flag-looking `--decider-cmd` value; `vm` validates its subcommand before loading a baseline; `boundary-check`
+  rejects unknown flags; the global `--dotenv=<path>` equals form is accepted; and `--output-format=<x>`
+  validates the value rather than silently degrading to text.
+- **Cassette replay safety.** `replay` routes reads through the safe cassette reader (a malformed cassette is a
+  clean error, not an internal crash); a lenient schema guards the dereferenced `scenario`/`events` fields and
+  a missing optional `assert` is normalized so it can't crash a batch; manifest bodies are stored with an
+  encoding marker (binary as base64) so non-text artifacts round-trip byte-exactly; materialized entries are
+  path-contained (no `..`/absolute escape) and verified against their recorded sha256.
+- **Staging source validation.** `mcp.config` must be a file; connected folders, local/remote plugin roots, and
+  local skills must be directories; a nameless marketplace manifest now resolves and qualifier-matches by its
+  derived name; and a corrupt `plugin.json` errors instead of silently defaulting to version `0.0.0`. The
+  soft-missing reconciliation path is preserved (a missing source still reconciles; only a wrong-kind existing
+  source fails loud).
+- **Artifact collection no longer follows symlinks** (`lstat` + symlink-skip + a realpath cycle guard), and the
+  egress sidecar/proxy are acquired inside the protected block so a prompt-render throw can't leak them.
+- **Egress/web-fetch guards.** The private-address guard recognizes IPv4-mapped IPv6 and numeric/hex/octal IPv4
+  loopback forms; the proxy parses bracketed IPv6 `Host` headers; and an `allow` egress decision is recorded
+  only once the upstream actually connects (so `egress_allowed` can't pass when nothing reached the host).
+- **Verdict/assertion correctness.** A nonzero child exit after a success result is now fatal (with the stderr
+  tail); `artifact_json` `equals`/`in` compare JSON with key-order-insensitive deep equality (arrays stay
+  order-significant); the external decider rejects an invalid permission `behavior` loudly instead of silently
+  denying; `no_delete_in_outputs` accepts only `true` (authoring `false` was a silent no-op footgun); and the
+  outputs-delete detector parses `mv` direction (a move *into* `outputs/` is no longer a false delete) with an
+  opt-in safe-staging-prefix suppression for scratch cleanups.
+- **Python wrapper drift.** `run_scenario()` no longer passes `--fidelity`/`--answer` flags the `run` command
+  rejects; fidelity and answers are scenario-authored (the YAML's `fidelity:`/`answers:` fields).
 - **Docs reconciled with the 0.3.0 artifact-manifest replay behavior.** README, SPEC, `docs/scenario.md`,
   the companion `SKILL.md`, and the skill references previously claimed `file_exists`/`user_visible_artifact`/
   `artifact_json` were "always skipped" on replay; they now correctly state these are evaluated **when the
