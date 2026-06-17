@@ -24,6 +24,49 @@ describe("scanCassette — whole-surface privacy scan (A2)", () => {
     expect(findings.some((f) => f.cls === "email" && /outputs\/x\.json/.test(f.where))).toBe(true);
   });
 
+  it("capability-manifest exclusion: domain/currency suppressed on the agent registry, but FLAGGED in agent reasoning", () => {
+    // The two manifest forms: a system/init event (mcp_servers names) and the init-1 registry control_response
+    // (slash-command descriptions naming docsend.com). Catalog noise → NOT flagged.
+    const manifest: any = {
+      scenario: scenario([{ result: "success" }]),
+      events: [
+        JSON.stringify({ type: "system", subtype: "init", tools: [], mcp_servers: [{ name: "claude.ai Gmail" }], cwd: "/x" }),
+        JSON.stringify({
+          type: "control_response",
+          response: {
+            request_id: "init-1",
+            subtype: "success",
+            response: { commands: [{ description: "download from docsend.com" }], agents: [] },
+          },
+        }),
+      ],
+    };
+    expect(scanCassette(manifest, []).some((f) => f.cls === "domain")).toBe(false);
+    // But a domain in an ASSISTANT message (the agent's actual reasoning) IS flagged — full net off the manifest.
+    const reasoning: any = {
+      scenario: scenario([{ result: "success" }]),
+      events: [JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "pulling the cap table from acme.co" }] } })],
+    };
+    expect(scanCassette(reasoning, []).some((f) => f.cls === "domain")).toBe(true);
+  });
+
+  it("email is scanned EVEN on the capability manifest (the registry `account` field can carry the dev's email)", () => {
+    const c: any = {
+      scenario: scenario([{ result: "success" }]),
+      events: [
+        JSON.stringify({
+          type: "control_response",
+          response: {
+            request_id: "init-1",
+            subtype: "success",
+            response: { commands: [], agents: [], account: { email: "dev@company.com" } },
+          },
+        }),
+      ],
+    };
+    expect(scanCassette(c, []).some((f) => f.cls === "email")).toBe(true);
+  });
+
   it("a clean synthetic cassette → no findings", () => {
     const c: any = {
       scenario: scenario([{ result: "success" }], "run the cap table for Acme"),

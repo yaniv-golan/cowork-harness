@@ -12,8 +12,11 @@ The CI-operate + privacy layer for committed cassettes: record-time redaction, a
 ### Added
 
 - **`verify-cassettes <file|dir>`** — a token/agent-free CI gate over committed cassettes. A privacy
-  **scan** flags `email`/`currency`/bare-`domain` matches (`--allow <regex>` suppresses synthetic/public
-  reference names; multi-word proper names are opt-in, not a default class) and a **staleness** check
+  **scan** flags `email`/`currency`/bare-`domain` matches across the whole cassette, excluding only the
+  agent's **capability-manifest** messages (`system/init` + the `init-1` registry) from the noisy classes —
+  that catalog/MCP-server boilerplate is the sole concentrated false-positive source (email still scans it,
+  since the registry `account` field can carry the dev's email). `--allow <regex>` suppresses synthetic/
+  public reference names; multi-word proper names are opt-in, not a default class. Plus a **staleness** check
   (`--staleness-only`) fails when a cassette's fingerprint drifted (you edited the skill but didn't
   re-record). Exit 1 on any finding/drift/unreadable cassette; a malformed cassette is tallied, never
   crashes the batch. Dedicated JSON envelope (`{command, ok, results}`), not the `RunResult` shape.

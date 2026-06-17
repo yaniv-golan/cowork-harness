@@ -210,12 +210,19 @@ counts) — committed PII surface. Two layers, distinct from secret-scrub (which
   sync, so the O7 guard still passes. Redaction is **verdict-preserving**: `record` replays before/after and
   **refuses to write** if redaction would flip an assertion (a manufactured green is the cardinal sin).
   `--no-redact` skips it for known-synthetic inputs.
-- **Always-on scan gate** — `verify-cassettes <file|dir>` flags `email` / `currency` / bare-`domain`
-  matches in the committed cassettes and **exits non-zero**, so "no leak" is a gate, not discipline.
-  `--allow <regex>` suppresses synthetic / public reference names (e.g. `NVCA`, `Cooley GO`, `Acme`).
-  Multi-word proper names are **not** a default class (too noisy to gate on — add a pattern via config if
-  your corpus needs it). `verify-cassettes` also runs the **staleness** check (`--staleness-only`): a
-  drifted `skillHash` (you edited the skill but didn't re-record) fails the gate.
+- **Always-on scan gate** — `verify-cassettes <file|dir>` scans the committed cassettes and **exits
+  non-zero** on a finding, so "no leak" is a gate, not discipline. The full net (`email` + `currency` +
+  bare-`domain`) runs over the **whole cassette** — the deliverable (`outputs/` bodies + filenames), the
+  author-written `prompt`/`answers`/`assert`, AND the agent's reasoning + tool I/O — with **one structural
+  exception**: the agent's **capability-manifest** messages (the `system/init` event and the `initialize`
+  registry `control_response`, `request_id:"init-1"`) are excluded from the noisy classes. Those two carry
+  the tool/skill catalog (slash-command descriptions naming `docsend.com`, `Pitch.com`, …) and the MCP-server
+  names (`claude.ai Gmail`, …) — environment boilerplate a regex can't tell apart from customer data, and the
+  sole concentrated source of false positives. They are excluded **as a unit**, not by domain — but `email`
+  still scans them (the registry's `account` field can carry the developer's own email). `--allow <regex>`
+  suppresses synthetic / public reference names (e.g. `NVCA`, `Cooley GO`, `Acme`); multi-word proper names
+  are **not** a default class (too noisy). `verify-cassettes` also runs the **staleness** check
+  (`--staleness-only`): a drifted `skillHash` (you edited the skill but didn't re-record) fails the gate.
 
 ```bash
 cowork-harness verify-cassettes cassettes/ --allow 'NVCA|Cooley GO|Acme'

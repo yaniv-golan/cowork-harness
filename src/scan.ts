@@ -19,6 +19,15 @@ export const DEFAULT_SCAN_PATTERNS: { re: RegExp; cls: string }[] = [
   { re: /\b[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.(?:com|io|net|org|co|app|ai|dev|xyz)\b/gi, cls: "domain" },
 ];
 
+/** The high-precision subset (email only). `email` is scanned UNIVERSALLY — even on the agent
+ *  capability-manifest messages (the `system/init` event and the `initialize` registry `control_response`),
+ *  because the registry's `account` field can carry the developer's own email (a real leak). The noisy
+ *  classes (`currency`/`domain`) are the ones suppressed on those two manifest messages, where every hit is
+ *  the agent's tool/skill catalog or MCP-server names — environment boilerplate a regex can't tell apart
+ *  from customer data. Everywhere else (assistant reasoning, tool I/O, decisions, the deliverable) gets the
+ *  full net. */
+export const EMAIL_SCAN_PATTERNS = DEFAULT_SCAN_PATTERNS.filter((p) => p.cls === "email");
+
 function allowed(sample: string, allow: RegExp[]): boolean {
   // Test against a non-global clone so a caller's /g regex can't carry lastIndex across calls.
   return allow.some((a) => new RegExp(a.source, a.flags.replace("g", "")).test(sample));

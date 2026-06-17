@@ -24,7 +24,7 @@ import { jsonEnvelope, parseOutputFormat } from "./envelope.js";
 import { computeVerdict } from "./verdict.js";
 import { redactJsonLine, redactText, redactStructural, loadRedactionPolicy, type RedactionPolicy } from "../redact.js";
 import { collectSecrets, scrub } from "../secrets.js";
-import { scanText, type ScanFinding } from "../scan.js";
+import { scanText, DEFAULT_SCAN_PATTERNS, EMAIL_SCAN_PATTERNS, type ScanFinding } from "../scan.js";
 import { parse as parseYaml } from "yaml";
 
 const out = (s: string) => process.stdout.write(s + "\n");
@@ -168,20 +168,48 @@ export function buildFingerprint(sessionPath: string, baselineAppVersion: string
 /** A2: scan the WHOLE cassette surface for PII (default classes: email/currency/domain). A `truncated`
  *  artifact has NO committed body (hash-only) — nothing to leak — but is reported as `unscanned` so coverage
  *  is never silently implied. Real-class findings fail the gate; `unscanned` is informational. */
+/** The agent's CAPABILITY MANIFEST — environment boilerplate, never user data, and the sole concentrated
+ *  source of `domain`/`currency` scan noise (tool/skill catalog descriptions + MCP-server names a regex
+ *  can't tell apart from customer data). Two stable structural forms:
+ *   - the `system/init` event (tools/mcp_servers/skills/cwd registry), and
+ *   - the `initialize` `control_response` (`request_id: "init-1"`; body = commands/agents/models/account).
+ *  These get `email`-only scanning (email is universal — the `account` field can carry the dev's own email);
+ *  the noisy classes are suppressed only here. */
+function isCapabilityManifest(line: string): boolean {
+  let m: { type?: string; subtype?: string; response?: { request_id?: string; response?: Record<string, unknown> } };
+  try {
+    m = JSON.parse(line);
+  } catch {
+    return false;
+  }
+  if (m?.type === "system" && m?.subtype === "init") return true;
+  if (m?.type === "control_response") {
+    const r = m.response ?? {};
+    if (r.request_id === "init-1") return true;
+    const body = r.response;
+    if (body && typeof body === "object" && "commands" in body && "agents" in body) return true; // shape fallback
+  }
+  return false;
+}
+
 export function scanCassette(cassette: Cassette, allow: RegExp[]): ScanFinding[] {
   const findings: ScanFinding[] = [];
-  cassette.events.forEach((l, i) => findings.push(...scanText(l, `events[${i}]`, allow)));
-  cassette.controlOut?.forEach((l, i) => findings.push(...scanText(l, `controlOut[${i}]`, allow)));
+  const FULL = DEFAULT_SCAN_PATTERNS; // email + currency + domain
+  const EMAIL = EMAIL_SCAN_PATTERNS; // email only — for the capability-manifest messages
+  // Transcript: full net EXCEPT the capability-manifest messages (catalog noise), where only email runs.
+  cassette.events.forEach((l, i) => findings.push(...scanText(l, `events[${i}]`, allow, isCapabilityManifest(l) ? EMAIL : FULL)));
+  cassette.controlOut?.forEach((l, i) => findings.push(...scanText(l, `controlOut[${i}]`, allow, isCapabilityManifest(l) ? EMAIL : FULL)));
+  // Deliverable + author-written fields — full net (a real cap table's figures/domains live here).
   for (const a of cassette.artifacts ?? []) {
-    findings.push(...scanText(a.path, `artifact path ${a.path}`, allow)); // C1: filenames can name a customer
-    if (a.body !== undefined) findings.push(...scanText(a.body, `artifact ${a.path}`, allow));
+    findings.push(...scanText(a.path, `artifact path ${a.path}`, allow, FULL)); // a filename can name a customer
+    if (a.body !== undefined) findings.push(...scanText(a.body, `artifact ${a.path}`, allow, FULL));
     else if (a.truncated)
       findings.push({ where: `artifact ${a.path}`, cls: "unscanned", sample: "(body not committed — too large or unreadable)" });
   }
-  findings.push(...scanText(cassette.scenario.prompt, "scenario.prompt", allow));
-  findings.push(...scanText(JSON.stringify(cassette.scenario.answers ?? null), "scenario.answers", allow));
-  findings.push(...scanText(JSON.stringify(cassette.scenario.assert ?? null), "scenario.assert", allow));
-  for (const s of cassette.fingerprint?.skillSources ?? []) findings.push(...scanText(s, "fingerprint.skillSources", allow));
+  findings.push(...scanText(cassette.scenario.prompt, "scenario.prompt", allow, FULL));
+  findings.push(...scanText(JSON.stringify(cassette.scenario.answers ?? null), "scenario.answers", allow, FULL));
+  findings.push(...scanText(JSON.stringify(cassette.scenario.assert ?? null), "scenario.assert", allow, FULL));
+  for (const s of cassette.fingerprint?.skillSources ?? []) findings.push(...scanText(s, "fingerprint.skillSources", allow, FULL));
   return findings;
 }
 
