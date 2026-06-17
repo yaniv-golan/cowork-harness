@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { warn } from "../io.js";
 import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, existsSync, readdirSync, statSync } from "node:fs";
 import { createHash } from "node:crypto";
@@ -492,14 +493,32 @@ export function discoverScenarios(dir: string): ScenarioDiscovery {
   return out;
 }
 
+/** LENIENT structural schema for a cassette — guards exactly the fields the replay/scan/staleness paths
+ *  dereference (`events`, `scenario.prompt`, `scenario.session`, `scenario.assert`) so a malformed-but-valid
+ *  JSON cassette is a clean error instead of a runtime crash. Deliberately `.passthrough()` (NOT the strict
+ *  authoring-time ScenarioObject) so a forward-compatible cassette carrying unknown keys still replays. */
+const CassetteShape = z
+  .object({
+    events: z.array(z.string()),
+    scenario: z
+      .object({ prompt: z.string(), session: z.string(), assert: z.array(z.unknown()).optional() })
+      .passthrough(),
+  })
+  .passthrough();
+
 /** Read + parse a cassette, never throwing — a malformed `*.cassette.json` must be TALLIED, not crash a
  *  whole batch (a crash mid-walk reads as "the rest were fine" — a false-green by abort). */
 function readCassette(path: string): { cassette: Cassette } | { error: string } {
+  let raw: unknown;
   try {
-    return { cassette: JSON.parse(readFileSync(path, "utf8")) as Cassette };
+    raw = JSON.parse(readFileSync(path, "utf8"));
   } catch (e) {
     return { error: `unreadable / invalid cassette JSON: ${(e as Error).message}` };
   }
+  const parsed = CassetteShape.safeParse(raw);
+  if (!parsed.success)
+    return { error: `invalid cassette shape: ${parsed.error.issues.map((i) => `${i.path.join(".") || "<root>"}: ${i.message}`).join("; ")}` };
+  return { cassette: raw as Cassette };
 }
 
 /** B2: the committed cassettes under `dir` whose fingerprint has drifted (baseline/skill) — the re-record

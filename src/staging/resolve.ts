@@ -8,6 +8,8 @@
  * metadata) is validated through the same place and the fail-loud path is the only path.
  */
 
+import { existsSync, statSync } from "node:fs";
+
 /**
  * A single safe path segment: not empty, not "." / "..", no separators. For ids interpolated into a
  * fixed parent (`.projects/<id>`, `uploads/<id>`, `.local-plugins/cache/<id>`) so a crafted or
@@ -15,9 +17,25 @@
  * id derived from `basename(src)` must pass through here too, not just an explicit user-supplied id.
  */
 export function safePathSegment(s: string, what: string): string {
-  if (!s || s === "." || s === ".." || /[/\\\0]/.test(s))
-    throw new Error(`unsafe ${what} "${s}" — must be a single path segment (no "/", "\\", "..", or empty)`);
+  // Reject separators/NUL/empty/dot-dirs AND ":" + control chars: a ":" breaks a Docker `-v src:dst:ro`
+  // overlay and control chars are never valid in a path component (both Docker-hostile / unsafe).
+  if (!s || s === "." || s === ".." || /[/\\:\x00-\x1f]/.test(s))
+    throw new Error(`unsafe ${what} "${s}" — must be a single path segment (no "/", "\\", ":", control chars, "..", or empty)`);
   return s;
+}
+
+/** Require a declared source PATH to be an existing regular file (mirrors the upload `isFile` guard). */
+export function requireFile(path: string, what: string): string {
+  if (!existsSync(path)) throw new Error(`${what} not found: ${path}`);
+  if (!statSync(path).isFile()) throw new Error(`${what} must be a file, not a directory: ${path}`);
+  return path;
+}
+
+/** Require a declared source PATH to be an existing directory (plugins/folders/skills model directories). */
+export function requireDir(path: string, what: string): string {
+  if (!existsSync(path)) throw new Error(`${what} not found: ${path}`);
+  if (!statSync(path).isDirectory()) throw new Error(`${what} must be a directory, not a file: ${path}`);
+  return path;
 }
 
 /**
@@ -25,8 +43,9 @@ export function safePathSegment(s: string, what: string): string {
  * nesting (e.g. a scoped plugin name "@scope/pkg") — never a ".." / "." segment.
  */
 export function noTraversal(s: string, what: string): string {
-  if (!s || s.includes("\0") || s.startsWith("/") || s.startsWith("\\") || s.split(/[/\\]/).some((seg) => seg === ".." || seg === "."))
-    throw new Error(`unsafe ${what} "${s}" — must not be empty, absolute, or contain "." / ".." path segments`);
+  // Also reject EMPTY interior/trailing components (`foo//bar`, `foo/`) — ambiguous, never a valid source.
+  if (!s || s.includes("\0") || s.startsWith("/") || s.startsWith("\\") || s.split(/[/\\]/).some((seg) => seg === ".." || seg === "." || seg === ""))
+    throw new Error(`unsafe ${what} "${s}" — must not be empty, absolute, or contain "." / ".." / empty path segments`);
   return s;
 }
 

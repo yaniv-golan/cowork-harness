@@ -24,8 +24,12 @@ export function parseOutputFormat(args: string[]): "text" | "json" {
         throw new Error(`--output-format must be "text" or "json" (got ${v === undefined ? "nothing" : `"${v}"`})`);
       return v;
     }
-    if (args[i] === "--output-format=json") return "json";
-    if (args[i] === "--output-format=text") return "text";
+    // Equals form: validate the value rather than silently degrading any `--output-format=<x>` to text.
+    if (args[i].startsWith("--output-format=")) {
+      const v = args[i].slice("--output-format=".length);
+      if (v !== "text" && v !== "json") throw new Error(`--output-format must be "text" or "json" (got "${v}")`);
+      return v;
+    }
   }
   return "text";
 }
