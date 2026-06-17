@@ -18,14 +18,14 @@ export interface ProxyOptions {
   onDecision?: (host: string, decision: "allow" | "deny") => void;
 }
 
-/** The proxy server plus a `ready` handshake (#42): resolves once it is accepting connections, rejects
+/** The proxy server plus a `ready` handshake: resolves once it is accepting connections, rejects
  *  on a listen error (e.g. EADDRINUSE) instead of crashing the process via an uncaught server error. */
 export interface EgressProxy extends http.Server {
   ready: Promise<void>;
 }
 
 /** Allocate a free TCP port by binding an ephemeral listener and releasing it. Used to give each microVM
- *  run its own host proxy port so concurrent runs can't collide on a fixed default (#41). */
+ *  run its own host proxy port so concurrent runs can't collide on a fixed default. */
 export function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const srv = net.createServer();
@@ -124,7 +124,7 @@ export function startEgressProxy(opts: ProxyOptions): EgressProxy {
   };
   process.on("uncaughtException", uncaughtHandler);
 
-  // #42: readiness/error handshake. With an `error` listener a bind failure (EADDRINUSE) is a rejected
+  // readiness/error handshake. With an `error` listener a bind failure (EADDRINUSE) is a rejected
   // `ready` rather than an uncaught server error that crashes the process; callers `await proxy.ready`
   // before routing traffic so the agent never starts before the socket is accepting.
   const ready = new Promise<void>((resolve, reject) => {

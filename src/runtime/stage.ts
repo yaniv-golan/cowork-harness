@@ -63,7 +63,7 @@ export function stageWorkspace(plan: LaunchPlan, mntHost: string): StageResult {
   } else {
     // Resume reuses the persisted tree (no re-copy). Advertise the preserved mcp.json only if the
     // current plan still declares one — so dropping MCP between a run and its --resume is honored.
-    // #21: if the persisted tree was deleted out-of-band (manifest kept, staged content gone) the run
+    // if the persisted tree was deleted out-of-band (manifest kept, staged content gone) the run
     // would silently proceed against an empty workspace. We can't hard-fail (an empty-tree resume is a
     // supported shape), but warn loudly so the cause is visible if it was unintended.
     const looksStaged =

@@ -15,7 +15,7 @@ export type ErrCategory = "usage" | "unanswered" | "boundary" | "runtime" | "int
 
 /** Validate `--output-format <v>` is text|json (shared by every command). Returns the resolved format;
  *  THROWS on an invalid value so the caller renders a usage error instead of silently treating an
- *  unrecognized value (e.g. `--output-format xml`) as text. (#8) */
+ *  unrecognized value (e.g. `--output-format xml`) as text. */
 export function parseOutputFormat(args: string[]): "text" | "json" {
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--output-format") {

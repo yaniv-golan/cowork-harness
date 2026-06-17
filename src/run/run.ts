@@ -154,7 +154,7 @@ export class Run {
           }
           case "tool_result": {
             this.rec.toolResults.push({ toolUseId: ev.toolUseId, isError: ev.isError, text: ev.text });
-            this.provenance.seedFromToolResult(ev.provenanceText ?? ev.text); // #30/#32: seed from the UNtruncated value so URLs past the display cap are still fetchable
+            this.provenance.seedFromToolResult(ev.provenanceText ?? ev.text); // seed from the UNtruncated value so URLs past the display cap are still fetchable
             // (matches Cowork's tool_response provenance hook)
             // Delivery check (Part 3): if this is the result of an answered gate and it ERRORED, the injected
             // answer never reached the model (the O7 q.map class). Surface it in real time — "resp consumed"

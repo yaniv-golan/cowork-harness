@@ -172,7 +172,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // concurrent executeScenario calls don't stomp each other's values.
     sidecar = startEgressSidecar(plan.egressAllow, outDir, runToken);
   } else if (effectiveFidelity === "microvm") {
-    // #41: allocate a free host port per run unless explicitly pinned, so concurrent microVM runs don't
+    // allocate a free host port per run unless explicitly pinned, so concurrent microVM runs don't
     // collide on the fixed 8899. The SAME port is threaded into spawnMicroVm below, so the guest firewall
     // rule and HTTP(S)_PROXY point at the exact host bind.
     microvmProxyPort = process.env.COWORK_VM_PROXY_PORT ? Number(process.env.COWORK_VM_PROXY_PORT) : await freePort();
@@ -182,7 +182,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       logPath: join(outDir, "egress.log"),
       onDecision: (host, decision) => egress.push({ host, decision }),
     });
-    await hostProxy.ready; // #42: don't spawn the agent until the proxy is accepting (or fail loud on a bind error)
+    await hostProxy.ready; // don't spawn the agent until the proxy is accepting (or fail loud on a bind error)
   }
 
   const prompts = renderPrompts(baseline, session, sessionId);
@@ -505,14 +505,14 @@ function scrubFileInPlace(path: string, secrets: string[]) {
  * The boundary also allows a `file://[authority]` prefix so file-URI leaks are caught: in
  * `file:///Users/alice` the char before `/Users/` is the path's own `/`, which is NOT in the class,
  * so the bare anchor would miss it. `file:\/\/[^\s\/]*` consumes the optional authority (empty or a
- * host like `localhost`) and lets the path root match. #48: URL-encoded (`%2FUsers`) and backslash
+ * host like `localhost`) and lets the path root match. URL-encoded (`%2FUsers`) and backslash
  * (`file:\\host\Users`) forms ARE now covered (see the decode+normalize pass in the body); the Windows
  * `file:///C:/Users/` form is caught incidentally via the drive-letter `:` boundary.
  */
 export function hostPathLeaked(text: string): boolean {
   const re = /(^|[\s"'(=:]|file:\/\/[^\s\/]*)(\/Users\/|\/opt\/cowork\/|\/home\/|\/root\/)/;
   if (re.test(text)) return true;
-  // #48: also catch URL-encoded (%2FUsers%2F) and backslash (file:\\host\Users) forms by testing a
+  // also catch URL-encoded (%2FUsers%2F) and backslash (file:\\host\Users) forms by testing a
   // decoded + backslash-normalized copy. decodeURIComponent throws on a malformed %-escape — guard it.
   let decoded = text;
   try {
@@ -525,7 +525,7 @@ export function hostPathLeaked(text: string): boolean {
 }
 
 /**
- * #29 — a bash command deletes in outputs when a delete-ish token AND an `outputs/` reference co-occur.
+ * A bash command deletes in outputs when a delete-ish token AND an `outputs/` reference co-occur.
  * Beyond `rm/unlink/rmdir/mv` this catches `find … -delete`, `shred`, `truncate`, and the common
  * `python -c` forms (os.remove/os.unlink/os.rmdir/shutil.rmtree, pathlib `.unlink()`) — all of which
  * ride the same Bash/`mcp__workspace__bash` command string. Pure + exported so the rule is directly

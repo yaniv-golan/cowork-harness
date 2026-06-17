@@ -310,7 +310,7 @@ function isJsonOutput(args: string[]): boolean {
   }
   return false;
 }
-/** #8: validate `--output-format` is text|json for the ad-hoc commands (trace/decide/gates) the way the
+/** Validate `--output-format` is text|json for the ad-hoc commands (trace/decide/gates) the way the
  *  common parser already does for run/skill — an invalid value is a usage error, not a silent text degrade. */
 function ensureOutputFormat(command: string, args: string[]): void {
   try {

@@ -172,7 +172,7 @@ export function guestFirewallScript(proxyGatewayPort: number, gatewayIp: string)
     "sudo iptables -A OUTPUT -o lo -j ACCEPT",
     "sudo iptables -A OUTPUT -d 127.0.0.0/8 -j ACCEPT",
     // Allow DNS (to ANY resolver — see caveat) plus the host gateway where the allowlist proxy listens.
-    // CAVEAT (#44, fidelity-gated): outbound 53 is unscoped, so DNS-tunneling is technically possible.
+    // CAVEAT (fidelity-gated): outbound 53 is unscoped, so DNS-tunneling is technically possible.
     // This is a TEST FIXTURE, not a security boundary, and the north star is Cowork parity — tightening
     // DNS to a fixed resolver would DIVERGE from Cowork unless Cowork itself scopes it (verify against the
     // binary/live lane before changing). Left at parity deliberately; the earlier "…only" comment overstated it.

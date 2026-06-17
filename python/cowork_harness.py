@@ -352,7 +352,7 @@ def serve_decider(fn: Callable[[dict], Any], *, _in=None, _out=None) -> None:
             # fn may return "allow"/"deny" (bare string) or {"behavior": "allow"|"deny", "grant": ...}
             if isinstance(ans, Mapping):
                 reply: dict = {"behavior": ans.get("behavior", "deny")}
-                # #50: preserve the web_fetch grant scope so a domain-wide approval isn't silently
+                # preserve the web_fetch grant scope so a domain-wide approval isn't silently
                 # downgraded to "once" on the TS side (decider.ts reads parsed.grant === "domain").
                 grant = ans.get("grant")
                 if grant in ("once", "domain"):

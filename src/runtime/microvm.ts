@@ -46,7 +46,7 @@ export function spawnMicroVm(
   // (Local marketplaces are resolved to --plugin-dir in buildLaunchPlan; the registry
   // is inert in cowork mode — SPEC §6. No registration step.)
 
-  // Guest default-deny egress (allow only the host proxy gateway + DNS). #41: use the port the caller
+  // Guest default-deny egress (allow only the host proxy gateway + DNS). Use the port the caller
   // allocated for THIS run's host proxy (so host bind and guest firewall/proxy agree); fall back to the
   // env/8899 default only when spawned without an explicit port.
   const proxyPort = opts.proxyPort ?? Number(process.env.COWORK_VM_PROXY_PORT ?? 8899);

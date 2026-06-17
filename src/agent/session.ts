@@ -45,7 +45,7 @@ export type AgentEvent =
   | { type: "init"; tools: string[]; mcpServers: unknown[]; cwd?: string }
   | { type: "assistant_text"; text: string; parentToolUseId?: string }
   | { type: "tool_use"; name: string; input: unknown; parentToolUseId?: string; toolUseId?: string; synthetic?: boolean } // toolUseId for tool_use↔tool_result pairing (amendment #2); synthetic = the MCP round-trip echo (trace-only, NOT counted — the real call already arrives as an assistant tool_use block, live-verified)
-  | { type: "tool_result"; toolUseId?: string; isError: boolean; text: string; provenanceText?: string } // the OUTCOME of a tool call (from `user`/tool_result blocks). `text` is display-truncated; `provenanceText` is the larger raw value so URLs past the display cap still seed web_fetch provenance (#32)
+  | { type: "tool_result"; toolUseId?: string; isError: boolean; text: string; provenanceText?: string } // the OUTCOME of a tool call (from `user`/tool_result blocks). `text` is display-truncated; `provenanceText` is the larger raw value so URLs past the display cap still seed web_fetch provenance
   | {
       type: "subagent_dispatch";
       toolUseId: string;
@@ -246,7 +246,7 @@ export class LiveAgentSession implements AgentSession {
   /** Reject function set when proc emits an error — bridges the callback into the async generator.
    *  Set before the generator loop starts; called at most once (the Promise settles once). */
   private rejectError?: (e: Error) => void;
-  /** Bounded tail of the child's stderr, for the #31 nonzero-exit error message. */
+  /** Bounded tail of the child's stderr, for the nonzero-exit error message. */
   private stderrTail = "";
 
   constructor(
@@ -257,7 +257,7 @@ export class LiveAgentSession implements AgentSession {
     this.controlOut = createWriteStream(join(outDir, "control-out.jsonl"), { flags: "a" });
     const errLog = createWriteStream(join(outDir, "agent.stderr.log"), { flags: "a" });
     this.proc.stderr.pipe(errLog);
-    // #31: keep a bounded stderr tail and capture the exit code/signal so a child that dies nonzero
+    // keep a bounded stderr tail and capture the exit code/signal so a child that dies nonzero
     // (with no structured {type:"result"} error) is surfaced as a typed error event, not a silent stop.
     this.proc.stderr.on("data", (d) => {
       this.stderrTail = (this.stderrTail + d.toString()).slice(-2000);
@@ -331,7 +331,7 @@ export class LiveAgentSession implements AgentSession {
         }
         yield* this.translate(msg);
       }
-      // #31: stdout closed. Give a pending 'exit' one tick to land (NOT a blocking wait on 'close' — a
+      // stdout closed. Give a pending 'exit' one tick to land (NOT a blocking wait on 'close' — a
       // mock/fake child may never emit it), then surface a nonzero/signal exit as a typed error — a
       // crashed child that emitted no {type:"result"} error line would otherwise be a silent stop.
       await new Promise<void>((res) => setImmediate(res));

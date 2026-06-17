@@ -394,7 +394,7 @@ export async function cmdReplay(args: string[]) {
   }
   let json: boolean;
   try {
-    json = parseOutputFormat(args) === "json"; // #8: validate the value (don't silently treat `xml` as text)
+    json = parseOutputFormat(args) === "json"; // validate the value (don't silently treat `xml` as text)
   } catch (e) {
     log(String((e as Error).message));
     process.exit(2);
