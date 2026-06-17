@@ -7,6 +7,7 @@ import {
   type WebFetchProvenance,
   type EgressEntry,
   type RawFetch,
+  type Resolver,
 } from "../src/hostloop/workspace-handler.js";
 import { compile } from "../src/egress/proxy.js";
 import { readGateFlag } from "../src/loop-decision.js";
@@ -73,10 +74,18 @@ describe("#30 — web_fetch provenance gate (G1t port, via the handler)", () => 
   // allowlist), so the stub returns a `FETCHED <url>` marker; the allowlist (other.example) is irrelevant
   // on Path A — it only proves the host is NOT in the list, so a fetch means decoupling worked.
   const stubFetch: RawFetch = async (u: string) => ({ status: 200, text: async () => `FETCHED ${u}` });
-  const callWebFetch = async (prov: WebFetchProvenance, url: string, rawFetch: RawFetch = stubFetch) => {
+  // Network-free DNS stub: every test host "resolves" to a public address so the SSRF backstop allows it
+  // (the real lookup() would NXDOMAIN these synthetic `.example` names and fail closed).
+  const publicResolver: Resolver = async () => [{ address: "203.0.113.10" }];
+  const callWebFetch = async (
+    prov: WebFetchProvenance,
+    url: string,
+    rawFetch: RawFetch = stubFetch,
+    resolve: Resolver = publicResolver,
+  ) => {
     const egress: EgressEntry[] = [];
     const ref = { current: prov };
-    const h = makeWorkspaceHandler("c", "/mnt", "docker", ["other.example"], (e) => egress.push(e), ref, rawFetch);
+    const h = makeWorkspaceHandler("c", "/mnt", "docker", ["other.example"], (e) => egress.push(e), ref, rawFetch, resolve);
     const out = (await h("workspace", { method: "tools/call", params: { name: "web_fetch", arguments: { url } } })) as {
       result: { isError?: boolean; content: { text: string }[] };
     };
@@ -191,10 +200,12 @@ describe("#30 — readGateFlag (prefixed key + prose/structured shapes)", () => 
 });
 
 describe("web_fetch Path B — U1t + manual redirect re-check (provenance off)", () => {
-  const callB = async (url: string, allow: string[], rawFetch: RawFetch) => {
+  const publicResolver: Resolver = async () => [{ address: "203.0.113.10" }];
+  const callB = async (url: string, allow: string[], rawFetch: RawFetch, resolve: Resolver = publicResolver) => {
     const egress: EgressEntry[] = [];
     // provenanceRef + fetchImpl undefined → Path B; inject rawFetch for the redirect loop (spawn-free).
-    const h = makeWorkspaceHandler("c", "/mnt", "docker", allow, (e) => egress.push(e), undefined, rawFetch);
+    // A network-free DNS stub keeps the SSRF backstop from NXDOMAIN-denying the synthetic test hosts.
+    const h = makeWorkspaceHandler("c", "/mnt", "docker", allow, (e) => egress.push(e), undefined, rawFetch, resolve);
     const out = (await h("workspace", { method: "tools/call", params: { name: "web_fetch", arguments: { url } } })) as {
       result: { isError?: boolean; content: { text: string }[] };
     };
@@ -266,5 +277,78 @@ describe("web_fetch Path B — U1t + manual redirect re-check (provenance off)",
     expect(r.isError).toBe(true);
     expect(r.text).toMatch(/not in the session web-fetch allowlist/);
     expect(r.egress).toEqual([{ host: "evil.com", decision: "deny" }]);
+  });
+
+  it("DENIES a host whose name RESOLVES to a private/loopback address (DNS-rebind SSRF)", async () => {
+    // The host passes the literal private-address check (it is a name, not an IP) and the allowlist, but
+    // its DNS resolution points at a loopback address → the async backstop denies it before any fetch.
+    const toLoopback: Resolver = async () => [{ address: "127.0.0.1" }];
+    const r = await callB("http://example.com/x", ["example.com"], ok("SECRET"), toLoopback);
+    expect(r.isError).toBe(true);
+    expect(r.text).toMatch(/resolves to a local or private address \(127\.0\.0\.1\)/);
+    expect(r.egress).toEqual([{ host: "example.com", decision: "deny" }]);
+  });
+
+  it("ALLOWS a host that resolves entirely to public addresses", async () => {
+    const toPublic: Resolver = async () => [{ address: "203.0.113.10" }];
+    const r = await callB("http://example.com/x", ["example.com"], ok("HELLO"), toPublic);
+    expect(r.text).toBe("HELLO");
+    expect(r.egress).toEqual([{ host: "example.com", decision: "allow" }]);
+  });
+
+  it("DENIES (fail-closed) a host whose DNS resolution FAILS", async () => {
+    const nxdomain: Resolver = async () => {
+      throw Object.assign(new Error("getaddrinfo ENOTFOUND"), { code: "ENOTFOUND" });
+    };
+    const r = await callB("http://example.com/x", ["example.com"], ok("X"), nxdomain);
+    expect(r.isError).toBe(true);
+    expect(r.text).toMatch(/could not be resolved/);
+    expect(r.egress).toEqual([{ host: "example.com", decision: "deny" }]);
+  });
+
+  it("DENIES if ANY of multiple resolved addresses is private (a public+private mix)", async () => {
+    const mixed: Resolver = async () => [{ address: "203.0.113.10" }, { address: "10.0.0.5" }];
+    const r = await callB("http://example.com/x", ["example.com"], ok("X"), mixed);
+    expect(r.isError).toBe(true);
+    expect(r.text).toMatch(/resolves to a local or private address \(10\.0\.0\.5\)/);
+  });
+});
+
+describe("web_fetch DNS-rebind SSRF backstop — Path A (provenance), and literal-IP fast path", () => {
+  const ok =
+    (body: string): RawFetch =>
+    async () => ({ status: 200, text: async () => body });
+  const fake = (over: Partial<WebFetchProvenance>): WebFetchProvenance => ({
+    isAllowed: () => true, // provenance HIT so Path A reaches the fetch/SSRF gate
+    markAllowed: () => {},
+    promptGateOn: false,
+    ...over,
+  });
+  const run = async (url: string, resolve: Resolver, rawFetch: RawFetch = ok("BODY")) => {
+    const egress: EgressEntry[] = [];
+    const ref = { current: fake({}) };
+    const h = makeWorkspaceHandler("c", "/mnt", "docker", ["other.example"], (e) => egress.push(e), ref, rawFetch, resolve);
+    const out = (await h("workspace", { method: "tools/call", params: { name: "web_fetch", arguments: { url } } })) as {
+      result: { isError?: boolean; content: { text: string }[] };
+    };
+    return { text: out.result.content[0].text, isError: out.result.isError, egress };
+  };
+
+  it("Path A denies a provenance-approved host that resolves to a private address", async () => {
+    const toLoopback: Resolver = async () => [{ address: "127.0.0.1" }];
+    const r = await run("http://approved.example/x", toLoopback);
+    expect(r.isError).toBe(true);
+    expect(r.text).toMatch(/resolves to a local or private address \(127\.0\.0\.1\)/);
+  });
+
+  it("a LITERAL public IP host skips DNS and is allowed (resolver never consulted)", async () => {
+    let called = false;
+    const tripwire: Resolver = async () => {
+      called = true;
+      return [{ address: "10.0.0.1" }];
+    };
+    const r = await run("http://8.8.8.8/x", tripwire);
+    expect(r.text).toBe("BODY"); // public literal passes; DNS short-circuited
+    expect(called).toBe(false); // literal IP never hits the resolver
   });
 });

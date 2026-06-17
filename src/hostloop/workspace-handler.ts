@@ -2,6 +2,7 @@ import { warn } from "../io.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import net from "node:net";
+import { lookup } from "node:dns/promises";
 import { compile } from "../egress/proxy.js";
 
 const pexec = promisify(execFile);
@@ -94,6 +95,40 @@ export function isLocalOrPrivate(host: string): boolean {
   return false;
 }
 
+/** Resolve a hostname to its address records — injectable so the token-free suite can drive the SSRF
+ *  DNS backstop without real network/DNS (parallels the `RawFetch` seam). Defaults to node:dns lookup. */
+export type Resolver = (host: string) => Promise<{ address: string }[]>;
+const defaultResolver: Resolver = (host) => lookup(host, { all: true });
+
+/**
+ * SSRF backstop, async tier: a HOSTNAME (not a literal) can still resolve to a private/loopback
+ * address. `isLocalOrPrivate` only catches literals; this resolves the name via DNS and runs EVERY
+ * returned address through the same per-IP check. A literal IP would already have been caught by the
+ * synchronous `isLocalOrPrivate` gate, so this is reached only for names that need resolution.
+ *
+ * Returns a deny reason if any resolved address is local/private, or if the name fails to resolve
+ * (fail-closed — matching the conservative posture of the surrounding gates, which deny on doubt).
+ * Returns null = the host resolved entirely to public addresses (allow).
+ */
+async function resolvesToPrivate(host: string, resolve: Resolver): Promise<string | null> {
+  // A bracket-stripped literal IP resolves to itself; the sync gate already covered literals, so skip
+  // the DNS round-trip for them (and avoid lookup() quirks on literals).
+  const bare = host.replace(/^\[|\]$/g, "");
+  if (net.isIP(bare) !== 0) return null;
+  let addrs: { address: string }[];
+  try {
+    addrs = await resolve(host);
+  } catch {
+    // Name does not resolve (NXDOMAIN, SERVFAIL, etc.) → fail closed.
+    return `Host "${host}" could not be resolved.`;
+  }
+  if (!addrs.length) return `Host "${host}" could not be resolved.`;
+  for (const { address } of addrs) {
+    if (isLocalOrPrivate(address)) return `Host "${host}" resolves to a local or private address (${address}).`;
+  }
+  return null;
+}
+
 /** Port of Cowork's `U1t` (Path B domain gate): scheme + private-address + the egress domain allowlist
  *  (the SAME `wen()`/`compile()` matcher the container egress uses). Returns a deny reason, or null = allow. */
 export function u1t(u: URL, allow: string[], matcher: (h: string) => boolean): string | null {
@@ -153,6 +188,7 @@ export function makeWorkspaceHandler(
   onEgress?: (entry: EgressEntry) => void,
   provenanceRef?: { current?: WebFetchProvenance }, // #30: Run fills this before the stream starts
   rawFetch: RawFetch = defaultRawFetch, // per-hop fetch (redirect:manual) for BOTH paths; injectable
+  resolve: Resolver = defaultResolver, // per-hop DNS resolution for the SSRF backstop; injectable
 ): McpHandler {
   // Per-handler (per-spawn) latch for the provenance-unenforced warning — was module-level, which
   // silenced the gap after the first run in a long-lived process. Each fresh handler warns once.
@@ -187,7 +223,7 @@ export function makeWorkspaceHandler(
         return { result: await execInContainer(runner, containerName, vmMnt, String(a.command ?? ""), clampTimeout(a.timeout_ms)) };
       if (name === "web_fetch")
         return {
-          result: await fetchViaHost(String(a.url ?? ""), webFetchAllow, onEgress, provenanceRef?.current, provWarned, rawFetch),
+          result: await fetchViaHost(String(a.url ?? ""), webFetchAllow, onEgress, provenanceRef?.current, provWarned, rawFetch, resolve),
         };
       return { error: { code: -32602, message: `unknown tool: ${name}` } };
     }
@@ -252,6 +288,7 @@ async function followWithRedirects(
   startUrl: string,
   rawFetch: RawFetch,
   gate: (u: URL) => string | null,
+  resolve: Resolver,
   onEgress?: (entry: EgressEntry) => void,
 ): Promise<ReturnType<typeof textResult>> {
   let cur: URL;
@@ -261,7 +298,10 @@ async function followWithRedirects(
     return textResult("web_fetch failed: invalid URL", true);
   }
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-    const blocked = gate(cur);
+    // Synchronous gate first (scheme + literal private-address, plus the allowlist on Path B), then the
+    // async DNS backstop: a host that RESOLVES to a private/loopback address (or fails to resolve) is
+    // denied even though its literal form passed — closing the SSRF gap the literal-only check left.
+    const blocked = gate(cur) ?? (await resolvesToPrivate(cur.hostname, resolve));
     if (blocked) {
       onEgress?.({ host: cur.hostname, decision: "deny" });
       return textResult(hop === 0 ? blocked : `Redirect to ${cur.href} blocked: ${blocked}`, true);
@@ -297,6 +337,7 @@ async function fetchViaHost(
   prov?: WebFetchProvenance,
   warned?: { value: boolean },
   rawFetch: RawFetch = defaultRawFetch,
+  resolve: Resolver = defaultResolver,
 ) {
   if (!url) return textResult("error: missing 'url'", true);
   let host: string;
@@ -330,7 +371,7 @@ async function fetchViaHost(
     // Provenance satisfied. Cowork fetches server-side (host API); the hostname allowlist does NOT apply
     // here (decoupled from egress — the #30 conflation). But scheme + private-address ARE enforced per
     // hop (#43/#44): follow redirects manually instead of `curl -L`, blocking file:// / SSRF targets.
-    return followWithRedirects(url, rawFetch, schemePrivateGate, onEgress);
+    return followWithRedirects(url, rawFetch, schemePrivateGate, resolve, onEgress);
   }
   // PATH B (provenance not enforced — coworkWebFetchViaApi off). Faithful port of U1t re-checked on EVERY
   // redirect hop (a redirect to a denied or private host is blocked — the SSRF false-green `curl -L` had).
@@ -339,5 +380,5 @@ async function fetchViaHost(
     warn("::warning:: web_fetch provenance is NOT enforced (fidelity gap vs Cowork)\n");
   }
   const matcher = compile(allow);
-  return followWithRedirects(url, rawFetch, (u) => u1t(u, allow, matcher), onEgress);
+  return followWithRedirects(url, rawFetch, (u) => u1t(u, allow, matcher), resolve, onEgress);
 }
