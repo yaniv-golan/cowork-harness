@@ -501,14 +501,21 @@ describe("Run — turn loop + record", () => {
     await expect(new Run(new MockSession(ev), new ScriptedDecider([])).drive("go")).rejects.toThrow(/header-only/);
   });
 
-  it("a multiSelect question gate fails loud rather than mis-answering with one label", async () => {
+  it("a multiSelect gate is answered with a comma-joined string of validated labels (binary-verified wire shape)", async () => {
     const req: DecisionRequest = {
       id: "q1",
       kind: "question",
-      questions: [{ question: "Pick some", options: [{ label: "a" }, { label: "b" }], multiSelect: true }],
+      questions: [{ question: "Pick some", options: [{ label: "Auth" }, { label: "Billing" }, { label: "Search" }], multiSelect: true }],
     };
-    const ev: AgentEvent[] = [{ type: "decision", request: req }];
-    await expect(new Run(new MockSession(ev), new ScriptedDecider([])).drive("go")).rejects.toThrow(/multiSelect/);
+    const ev: AgentEvent[] = [
+      { type: "decision", request: req },
+      { type: "result", isError: false },
+    ];
+    const rec = await new Run(
+      new MockSession(ev),
+      new ScriptedDecider([{ when_question: "Pick some", choose: ["Auth", "Billing"] }]),
+    ).drive("go");
+    expect(rec.gateAnswers[0]?.answers).toEqual({ "Pick some": "Auth, Billing" });
   });
 
   it("records mismatch→deny (not 'answered') when the decider returns a wrong response kind", async () => {
@@ -590,6 +597,66 @@ describe("Cassette — protocol replay", () => {
     const r = await replayCassette(cassette);
     expect(r.assertions.every((a) => a.pass)).toBe(true);
     expect(r.result).toBe("success");
+  });
+
+  // #1: an artifact manifest makes file_exists + artifact_json replay-checkable (token-free), against the
+  // materialized snapshot — instead of being stripped as live-only.
+  it("#1: a cassette artifact manifest makes file_exists + artifact_json replay-checkable", async () => {
+    const events = [
+      JSON.stringify({ type: "system", subtype: "init", tools: ["Write"] }),
+      JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "done" }] } }),
+      JSON.stringify({ type: "result", subtype: "success", is_error: false }),
+    ];
+    const cassette = {
+      scenario: makeScenario([
+        { file_exists: "outputs/state.json" },
+        { artifact_json: { artifact: "outputs/state.json", path: "me.run_id", equals: "r1" } },
+        { artifact_json: { artifact: "outputs/state.json", path: "me.secret", absent: true } },
+        { result: "success" as const },
+      ]),
+      events,
+      artifacts: [{ path: "outputs/state.json", bytes: 24, sha256: "deadbeef", body: JSON.stringify({ me: { run_id: "r1" } }) }],
+    } as any;
+    const r = await replayCassette(cassette);
+    expect(r.assertions.filter((a) => !a.pass)).toHaveLength(0);
+  });
+
+  // #1b: a baseline-of-record mismatch warns by default and FAILS under --strict.
+  it("#1b: --strict escalates a staleness mismatch to a failing assertion", async () => {
+    const events = [
+      JSON.stringify({ type: "system", subtype: "init", tools: ["Write"] }),
+      JSON.stringify({ type: "result", subtype: "success", is_error: false }),
+    ];
+    const cassette = {
+      scenario: makeScenario([{ result: "success" as const }]),
+      events,
+      fingerprint: { baseline: "0.0.0-ancient" }, // != the current latest baseline
+    } as any;
+    const lenient = await replayCassette(cassette); // warns to stderr only
+    expect(lenient.assertions.filter((a) => !a.pass)).toHaveLength(0);
+    const strict = await replayCassette(cassette, [], { strict: true });
+    expect(strict.assertions.some((a) => !a.pass && /stale/.test(a.message ?? ""))).toBe(true);
+  });
+
+  // Cassette format version: a FUTURE version warns loudly (forward-compat) but still replays; absent = legacy (no warn).
+  it("cassette version: a newer format version warns but still replays; legacy (absent) does not warn", async () => {
+    const events = [
+      JSON.stringify({ type: "system", subtype: "init", tools: ["Write"] }),
+      JSON.stringify({ type: "result", subtype: "success", is_error: false }),
+    ];
+    const warnings: string[] = [];
+    const orig = process.stderr.write.bind(process.stderr);
+    (process.stderr as any).write = (s: string | Uint8Array): boolean => (warnings.push(String(s)), true);
+    try {
+      const future = { cassetteVersion: 999, scenario: makeScenario([{ result: "success" as const }]), events } as any;
+      expect((await replayCassette(future)).result).toBe("success");
+      const legacy = { scenario: makeScenario([{ result: "success" as const }]), events } as any; // no version → legacy
+      await replayCassette(legacy);
+    } finally {
+      (process.stderr as any).write = orig;
+    }
+    const all = warnings.join("");
+    expect((all.match(/is newer than this harness understands/g) ?? []).length).toBe(1); // only the future cassette warned
   });
 
   // ---- C1 Phase 0: pin the bug BEFORE fixing it. ----

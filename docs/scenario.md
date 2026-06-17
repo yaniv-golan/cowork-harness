@@ -65,6 +65,28 @@ Each rule resolves an inbound `can_use_tool` control request — the same channe
 - when_question: "format|style"   # regex (case-insensitive) on the question text
   choose: "Markdown"              # the option label to select
 ```
+`choose` tolerates the standard `(Recommended)` label suffix (write `choose: Approve` for an offered
+`"Approve (Recommended)"`), and accepts the keywords `choose: recommended` / `choose: first`.
+
+**multiSelect gates** — supply a list of labels; the harness validates each against the offered options and
+delivers them as the binary-verified comma-joined wire shape (`"Auth, Billing"`):
+```yaml
+- when_question: "which features"
+  choose: ["Auth", "Billing"]     # multiSelect: a list of labels
+```
+(If a member label itself contains a comma, the harness warns — the wire joins with `", "` unescaped, a
+Cowork limitation that can't round-trip such a set.)
+
+**Free-text "Other"** — Cowork offers an "Other" free-text path on every gate; supply an arbitrary string
+with `answer:` (distinct from `choose:`, which stays validated against the offered labels):
+```yaml
+- when_question: "company name"
+  answer: "Acme Holdings LLC"     # free-text; bypasses label validation by intent
+```
+`choose` and `answer` are mutually exclusive on one rule (setting both fails loud). *(Reserved for later: a
+whole-gate freeform `response:` — "typed instead of selecting" — is a distinct future key; if added it will
+have an explicit precedence vs `answer`/`choose`, so today's two-key model stays forward-compatible.)*
+
 If no rule matches a question, the **`on_unanswered` policy** decides — the harness never silently
 fabricates an answer. Set it per scenario (`on_unanswered: fail | prompt | first | llm`) or per run
 (`--on-unanswered`). Default for `run` is **`fail`** (the error names the exact `--answer`/`choose`
@@ -83,6 +105,13 @@ the CLI's `--decider-llm`). It is **non-deterministic** by construction, so a ru
 > gate it didn't anticipate (correct, but flaky for that skill). For that case answer live instead —
 > `--decider-llm` (a model answers, run flagged non-deterministic) or `--decider-dir` (you answer in-band)
 > — accepting the run is then no longer a deterministic regression.
+
+> **Batched gates are answered atomically.** A gate with several sub-questions is answered (and delivered)
+> as one unit. If your scripted rules match only *some* sub-questions, the **whole gate** falls through to
+> the `on_unanswered` policy (the warning names which sub-questions were unmatched, so you know which rule to
+> add). *Current* behavior — don't build on "a partial match always sends the whole gate to the fallback":
+> it may later become **opt-in composable** (script some sub-questions, let the fallback fill the rest in one
+> envelope), which would be introduced behind an explicit flag so this default is preserved.
 
 ### Reusable answer policies (`--answer-policy`)
 
@@ -162,8 +191,26 @@ if *every* key passes (don't rely on the first; keep one concern per item unless
 | `transcript_no_host_path: true` | no host path (`/Users`, `/opt`) leaked into model-visible text |
 | `egress_denied: <host>` | the host was blocked by the egress proxy |
 | `egress_allowed: <host>` | the host was allowed through |
+| `artifact_json: {…}` | assert over a JSON artifact's contents — see below |
 
 `expect_denied: [host, …]` is shorthand that adds an `egress_denied` assertion per host.
+
+Run **`cowork-harness assert --list`** for this table from the live schema (it can't drift).
+
+#### `artifact_json` — assert structured JSON in YAML
+
+For a skill that emits structured JSON, assert its contents in the scenario lane (no Python needed). A
+dotted `path` selects into the document; one operator decides the check:
+```yaml
+- artifact_json: { artifact: outputs/cap_state.json, path: me.run_id, equals: "r1" }
+- artifact_json: { artifact: outputs/cap_state.json, path: rounds.0.amount, gt: 0 }
+- artifact_json: { artifact: outputs/instruments.json, path: exclusivity_days, absent: true }   # anti-hallucination
+```
+Operators: `equals` (deep-equal) · `gt` (number) · `exists: <bool>` · `absent: <bool>` · `is_null: <bool>`.
+The three states are **distinct**: `absent` (the final key is missing from a parent that resolved) vs
+`is_null` (present but JSON `null`) vs an **unresolved intermediate** segment (the artifact is malformed for
+that path) — which **fails loud**, never a vacuous pass. (No JSONPath/jq — a dotted path keeps it
+dependency-free and side-effect-free.)
 
 > **Boundary assertions** (`egress_*`, `expect_denied`) require a sandboxed fidelity — `container`, `microvm`, or `hostloop` (all share the container sandbox + egress proxy). Only `protocol` is rejected, to avoid a false pass — see [boundary.md](./boundary.md).
 
@@ -185,9 +232,17 @@ assertions, but they require the cassette to carry `controlOut` (full-fidelity r
 When `controlOut` is absent (old cassette), a **loud warning** fires and these keys are **excluded**
 from evaluation (not vacuously passed). Re-record with a current harness to enable them.
 
-**Filesystem/egress** assertions (`file_exists`, `user_visible_artifact`, `no_delete_in_outputs`,
-`self_heal_ran`, `transcript_no_host_path`, `egress_*`/`expect_denied`) are **silently skipped** —
-they only run on a live `run`/`record` (token + Docker).
+**Filesystem assertions** (`file_exists`, `user_visible_artifact`, `artifact_json`) run on `replay` **when
+the cassette carries an artifact manifest** — `record` snapshots `outputs/`/`​.projects/` (paths + hashes +
+small JSON bodies) into the cassette, and `replay` materializes that snapshot to evaluate them token-free.
+`artifact_json` needs the JSON body inlined (small files); a hash-only (oversized) entry still satisfies
+`file_exists` but not `artifact_json`. Without a manifest (older cassettes), they are **skipped** (loud).
+A green `replay` re-confirms *record-time* artifacts, **not** that the current skill still produces them —
+that needs a live `run` (the cassette's `--strict` staleness fingerprint warns when the skill/baseline drifted).
+
+**Egress + other filesystem** assertions (`no_delete_in_outputs`, `self_heal_ran`,
+`transcript_no_host_path`, `egress_*`/`expect_denied`) are still **skipped** on `replay` — they only run on
+a live `run`/`record` (token + Docker).
 
 Two consequences for CI:
 - Put the **always-on PR gate** on `replay` (token-free) and rely on `transcript_matches`/`transcript_*` +

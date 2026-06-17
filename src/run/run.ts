@@ -254,15 +254,10 @@ export class Run {
         );
     }
 
-    // A multiSelect gate cannot be faithfully answered — deciders emit one label per question and the
-    // multi-select answer wire-shape (array vs delimited string) is NOT binary-verified. Fail LOUD rather
-    // than mis-answer with a single label (ethos: no silent false-greens).
-    if (req.kind === "question" && req.questions.some((q) => q.multiSelect)) {
-      throw new UnansweredError(
-        "multiSelect AskUserQuestion gates are not supported — a decider answers with a single label per question and the multiSelect answer wire-shape is not binary-verified",
-        "binary-verify the multiSelect answer shape (ELF) before enabling; until then this fails loud rather than mis-answering",
-      );
-    }
+    // multiSelect gates ARE supported (binary-verified 2026-06-17): the answer wire-shape is a comma-joined
+    // string (`answers[q]` = "Label A, Label B"). The ScriptedDecider validates each member against the
+    // offered options and joins; fallback terminals answer with a single (valid) member. See MULTISELECT in
+    // docs/internal/harness-improvements-plan-2026-06-16.md.
 
     const decided = await this.withDialogTimeout(req, this.decider.decide(req, this.ctx()));
     if (decided === ABSTAIN) {

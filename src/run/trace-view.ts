@@ -222,6 +222,56 @@ export function formatGateTrace(rows: GateTraceRow[]): string {
     .join("\n");
 }
 
+export interface DispatchNode {
+  toolUseId: string;
+  agentType: string;
+  description?: string;
+  declaredTools: string[];
+  depth: number; // 0 = top-level dispatch; >0 = dispatched by another sub-agent
+}
+
+/**
+ * `trace --dispatches` (#6) — the sub-agent dispatch tree, so an author can read off the REAL total
+ * dispatch count (what `dispatch_count_max` asserts against) instead of guess-and-check, and see the
+ * nesting (a sub-agent that dispatches further). Ordered by appearance; depth derived from
+ * `parentToolUseId` chains among the dispatches themselves.
+ */
+export function buildDispatchTree(file: string): { nodes: DispatchNode[]; total: number } {
+  const events = eventsOf(file);
+  const dispatches = events.filter((e): e is Extract<AgentEvent, { type: "subagent_dispatch" }> => e.type === "subagent_dispatch");
+  const byId = new Map(dispatches.map((d) => [d.toolUseId, d]));
+  const depthOf = (d: Extract<AgentEvent, { type: "subagent_dispatch" }>): number => {
+    let depth = 0;
+    let cur = d.parentToolUseId;
+    const seen = new Set<string>(); // guard against a cyclic/self parent ref
+    while (cur && byId.has(cur) && !seen.has(cur)) {
+      seen.add(cur);
+      depth++;
+      cur = byId.get(cur)!.parentToolUseId;
+    }
+    return depth;
+  };
+  const nodes = dispatches.map((d) => ({
+    toolUseId: d.toolUseId,
+    agentType: d.agentType,
+    description: d.description,
+    declaredTools: d.declaredTools,
+    depth: depthOf(d),
+  }));
+  return { nodes, total: nodes.length };
+}
+
+export function formatDispatchTree({ nodes, total }: { nodes: DispatchNode[]; total: number }): string {
+  if (!nodes.length) return "(no sub-agent dispatches in this run)";
+  const lines = nodes.map((n) => {
+    const indent = "  ".repeat(n.depth);
+    const tools = n.declaredTools.length ? ` [${n.declaredTools.join(",")}]` : "";
+    return `${indent}└ ${n.agentType}${n.description ? ` (${n.description})` : ""}${tools}`;
+  });
+  lines.push(`\n${total} sub-agent dispatch(es) total — assert with \`dispatch_count_max: ${total}\``);
+  return lines.join("\n");
+}
+
 export function formatTrace(rows: TraceRow[]): string {
   const lines: string[] = [];
   for (const r of rows) {

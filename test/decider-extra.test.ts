@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { matchLabel, ScriptedDecider, type RunContext } from "../src/decide/decider.js";
+import { matchLabel, ScriptedDecider, ABSTAIN, type RunContext } from "../src/decide/decider.js";
 import { spawnChannel } from "../src/decide/external-channel.js";
 import type { DecisionRequest } from "../src/agent/session.js";
 import type { AnswerRule } from "../src/types.js";
@@ -69,5 +69,98 @@ describe("spawnChannel readLine timeout (#53 — borderline, spawn-based)", () =
       if (prev === undefined) delete process.env.COWORK_HARNESS_DECIDER_CMD_TIMEOUT_MS;
       else process.env.COWORK_HARNESS_DECIDER_CMD_TIMEOUT_MS = prev;
     }
+  });
+});
+
+// AskUserQuestion answer shapes (binary-verified 2026-06-17): CHOOSE-SUFFIX, MULTISELECT, FREE-TEXT, #4b.
+const ques = (questions: any[]): DecisionRequest => ({ id: "q1", kind: "question", questions });
+async function answersOf(rules: AnswerRule[], questions: any[]): Promise<Record<string, string> | "abstain"> {
+  const r = await new ScriptedDecider(rules).decide(ques(questions), ctx());
+  if (r === ABSTAIN) return "abstain";
+  return (r as any).response.answers;
+}
+
+describe("CHOOSE-SUFFIX — tolerate the (Recommended) suffix + recommended/first keywords", () => {
+  const opts = [{ label: "Approve (Recommended)" }, { label: "Reject" }];
+  it("a bare label matches its (Recommended)-suffixed option and delivers the FULL canonical label", async () => {
+    expect(await answersOf([{ when_question: "go", choose: "Approve" }], [{ question: "go?", options: opts }])).toEqual({
+      "go?": "Approve (Recommended)",
+    });
+  });
+  it("`recommended` keyword picks the (Recommended) option", async () => {
+    expect(await answersOf([{ when_question: "go", choose: "recommended" }], [{ question: "go?", options: opts }])).toEqual({
+      "go?": "Approve (Recommended)",
+    });
+  });
+  it("`first` keyword picks option 1", async () => {
+    expect(await answersOf([{ when_question: "go", choose: "first" }], [{ question: "go?", options: opts }])).toEqual({
+      "go?": "Approve (Recommended)",
+    });
+  });
+});
+
+describe("MULTISELECT — list of labels delivered comma-joined (verified wire shape)", () => {
+  const opts = [{ label: "Auth" }, { label: "Billing" }, { label: "Search" }];
+  it("an array choose on a multiSelect gate joins validated labels with ', '", async () => {
+    expect(
+      await answersOf([{ when_question: "pick", choose: ["Auth", "Billing"] }], [{ question: "pick?", options: opts, multiSelect: true }]),
+    ).toEqual({ "pick?": "Auth, Billing" });
+  });
+  it("an array choose on a SINGLE-select gate fails loud", async () => {
+    await expect(
+      new ScriptedDecider([{ when_question: "pick", choose: ["Auth", "Billing"] }]).decide(
+        ques([{ question: "pick?", options: opts }]),
+        ctx(),
+      ),
+    ).rejects.toThrow(/single-select/);
+  });
+  it("an unknown member label fails loud (per-element #49 guard preserved)", async () => {
+    await expect(
+      new ScriptedDecider([{ when_question: "pick", choose: ["Auth", "Nope"] }]).decide(
+        ques([{ question: "pick?", options: opts, multiSelect: true }]),
+        ctx(),
+      ),
+    ).rejects.toThrow(/matched no offered option/);
+  });
+});
+
+describe("FREE-TEXT (#3) — answer: delivers an arbitrary string, bypassing label validation", () => {
+  const opts = [{ label: "Yes" }, { label: "No" }];
+  it("answer: is delivered verbatim even though it is not an offered option", async () => {
+    expect(await answersOf([{ when_question: "name", answer: "Acme Holdings LLC" }], [{ question: "name?", options: opts }])).toEqual({
+      "name?": "Acme Holdings LLC",
+    });
+  });
+  it("setting both choose and answer on the same rule fails loud", async () => {
+    await expect(
+      new ScriptedDecider([{ when_question: "name", choose: "Yes", answer: "x" }]).decide(
+        ques([{ question: "name?", options: opts }]),
+        ctx(),
+      ),
+    ).rejects.toThrow(/both choose and answer/);
+  });
+});
+
+describe("#4b — a partial batched-gate match names the UNMATCHED sub-questions then abstains", () => {
+  it("abstains the whole gate and the warning lists the unmatched question text", async () => {
+    const writes: string[] = [];
+    const spy = (s: string | Uint8Array): boolean => (writes.push(String(s)), true);
+    const orig = process.stderr.write.bind(process.stderr);
+    (process.stderr as any).write = spy;
+    try {
+      const out = await answersOf(
+        [{ when_question: "first one", choose: "A" }],
+        [
+          { question: "first one?", options: [{ label: "A" }] },
+          { question: "second one?", options: [{ label: "B" }] },
+        ],
+      );
+      expect(out).toBe("abstain");
+    } finally {
+      (process.stderr as any).write = orig;
+    }
+    const warn = writes.join("");
+    expect(warn).toMatch(/UNMATCHED:/);
+    expect(warn).toMatch(/second one\?/);
   });
 });

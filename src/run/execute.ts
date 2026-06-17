@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync, readdirSync, statSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { join, dirname, resolve, basename, isAbsolute } from "node:path";
@@ -296,6 +296,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
 
   const result: RunResult = {
     scenario: scenario.name,
+    prompt: scenario.prompt, // persisted for `scaffold --from-run`
     fidelity: scenario.fidelity,
     baseline: baseline.appVersion,
     result: record.result,
@@ -319,6 +320,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     outDir,
     workDir: workRoot,
     outputsDir: join(workRoot, "outputs"),
+    artifacts: collectArtifacts(workRoot, ["outputs", ".projects"]), // ENV-MANIFEST: observed user-visible files
     nonDeterministic:
       // LLM-, external-, human-, or first-option-decided → not reproducible. `first` picks options[0] and
       // option order can vary run-to-run; it's already pushed to unanswered[], so include it here to agree.
@@ -430,6 +432,34 @@ function writeRunJsonl(
 }
 
 /** B3: the structured run trace. */
+/** ENV-MANIFEST: recursively list files under each user-visible prefix (relative path + byte size).
+ *  Paths only — NO content snapshot (that is the cassette manifest, #1). Symlinks are not followed. */
+export function collectArtifacts(workRoot: string, prefixes: string[]): { path: string; bytes: number }[] {
+  const out: { path: string; bytes: number }[] = [];
+  const walk = (abs: string, rel: string) => {
+    let entries: string[];
+    try {
+      entries = readdirSync(abs);
+    } catch {
+      return; // prefix dir absent (skill wrote nothing there) — not an error
+    }
+    for (const name of entries.sort()) {
+      const childAbs = join(abs, name);
+      const childRel = rel ? `${rel}/${name}` : name;
+      let st;
+      try {
+        st = statSync(childAbs); // statSync follows symlinks; lstat would be safer but outputs are real files
+      } catch {
+        continue;
+      }
+      if (st.isDirectory()) walk(childAbs, childRel);
+      else if (st.isFile()) out.push({ path: childRel, bytes: st.size });
+    }
+  };
+  for (const prefix of prefixes) walk(join(workRoot, prefix), prefix);
+  return out;
+}
+
 function writeTrace(outDir: string, rec: RunRecord, egress: RunResult["egress"], secrets: string[], durationMs?: number) {
   const trace = {
     steps: [...rec.toolsCalled],

@@ -1,6 +1,35 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Assertion, RunResult } from "./types.js";
+
+/**
+ * #5: resolve a dotted path into a parsed JSON document with THREE distinct outcomes (conflating them
+ * reintroduces a false-green at the field level):
+ *  - `value`      — the path resolves to a present value (which may itself be JSON null);
+ *  - `absent`     — the FINAL key is missing from a parent that DID resolve (the anti-hallucination case);
+ *  - `unresolved` — an INTERMEDIATE segment is missing / not an object — the artifact is malformed for this
+ *                   path, which must FAIL LOUD, never pass vacuously.
+ * Array indices are addressed as numeric string segments (e.g. `items.0.id`).
+ */
+export type DotResolve = { state: "value"; value: unknown } | { state: "absent" } | { state: "unresolved"; at: string };
+export function resolveDotPath(doc: unknown, path: string | undefined): DotResolve {
+  if (!path) return { state: "value", value: doc };
+  const segs = path.split(".");
+  let cur: unknown = doc;
+  for (let i = 0; i < segs.length; i++) {
+    const seg = segs[i];
+    const last = i === segs.length - 1;
+    if (cur === null || typeof cur !== "object") return { state: "unresolved", at: segs.slice(0, i).join(".") || "(root)" };
+    const obj = cur as Record<string, unknown>;
+    const has = Object.prototype.hasOwnProperty.call(obj, seg);
+    if (last) return has ? { state: "value", value: obj[seg] } : { state: "absent" };
+    if (!has) return { state: "unresolved", at: segs.slice(0, i + 1).join(".") };
+    cur = obj[seg];
+  }
+  return { state: "value", value: cur };
+}
+
+const jsonEq = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
 
 /**
  * Boundary-aware host matching: `host` must equal `needle` exactly or be a proper subdomain of it.
@@ -195,6 +224,72 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
       // inverse: expect a CONFIRMED delivery failure (a real errored tool_result), not merely unobserved.
       const failedConfirmed = ctx.gateDeliveries.filter((g) => g.delivered === false);
       results.push(failedConfirmed.length > 0 ? ok() : fail(`expected a confirmed gate-delivery failure but none was observed`));
+    }
+  }
+  if (a.artifact_json !== undefined) {
+    const aj = a.artifact_json;
+    const file = join(ctx.workRoot, aj.artifact);
+    if (!existsSync(file)) results.push(fail(`artifact_json: file not found: ${aj.artifact} (under ${ctx.workRoot})`));
+    else {
+      let doc: unknown;
+      let parsed = true;
+      try {
+        doc = JSON.parse(readFileSync(file, "utf8"));
+      } catch (e) {
+        parsed = false;
+        results.push(fail(`artifact_json: ${aj.artifact} is not valid JSON: ${String((e as Error).message)}`));
+      }
+      if (parsed) {
+        const r = resolveDotPath(doc, aj.path);
+        if (r.state === "unresolved") {
+          // Malformed/truncated artifact for this path — fail loud, NOT a vacuous "absent" pass (the H4
+          // false-green at the field level).
+          results.push(
+            fail(`artifact_json: path "${aj.path}" unresolvable in ${aj.artifact} — intermediate "${r.at}" is missing or not an object`),
+          );
+        } else {
+          const present = r.state === "value";
+          const val = r.state === "value" ? r.value : undefined;
+          let any = false;
+          if (aj.exists !== undefined) {
+            any = true;
+            results.push(
+              present === aj.exists ? ok() : fail(`artifact_json: "${aj.path ?? "(root)"}" exists=${present}, expected ${aj.exists}`),
+            );
+          }
+          if (aj.absent !== undefined) {
+            any = true;
+            const absent = r.state === "absent";
+            results.push(absent === aj.absent ? ok() : fail(`artifact_json: "${aj.path}" absent=${absent}, expected ${aj.absent}`));
+          }
+          if (aj.is_null !== undefined) {
+            any = true;
+            const isNull = present && val === null;
+            results.push(isNull === aj.is_null ? ok() : fail(`artifact_json: "${aj.path}" is_null=${isNull}, expected ${aj.is_null}`));
+          }
+          if (aj.equals !== undefined) {
+            any = true;
+            results.push(
+              present && jsonEq(val, aj.equals)
+                ? ok()
+                : fail(`artifact_json: "${aj.path}" = ${JSON.stringify(val)}, expected ${JSON.stringify(aj.equals)}`),
+            );
+          }
+          if (aj.gt !== undefined) {
+            any = true;
+            results.push(
+              typeof val === "number" && val > aj.gt
+                ? ok()
+                : fail(`artifact_json: "${aj.path}" = ${JSON.stringify(val)}, expected > ${aj.gt}`),
+            );
+          }
+          // No operator → an existence assertion (the value must be present).
+          if (!any)
+            results.push(
+              present ? ok() : fail(`artifact_json: "${aj.path ?? "(root)"}" is not present (no operator given → existence check)`),
+            );
+        }
+      }
     }
   }
   if (a.result !== undefined) results.push(ctx.result === a.result ? ok() : fail(`result was ${ctx.result}, expected ${a.result}`));

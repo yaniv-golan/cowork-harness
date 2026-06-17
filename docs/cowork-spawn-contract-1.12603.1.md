@@ -43,6 +43,32 @@ Host-derived/conditional (do not hardcode): `CLAUDE_CODE_ACCOUNT_UUID/_USER_EMAI
 2. `canUseTool`: `mcp__workspace__web_fetch` auto-allow after egress-allowlist URL check; session rule cache `Hen(...)` auto-allows user-approved (`permission_auto_approved`); `duA()` always-ask set never cached.
 3. Unmatched → `handleToolPermission` → human UI (no auto default). Plus a PreToolUse hook forces "ask" for 5 cowork tools (`mcp__cowork__allow_cowork_file_delete`, `request_cowork_directory`, `launch_code_session`, `create/update_scheduled_task`); PreToolUse `Task` blocks `run_in_background`.
 
+## AskUserQuestion answer shape (binary-verified, agent ELF 2.1.170 — 2026-06-17)
+
+Verified by grep token against the in-VM agent ELF (the authoritative source — the desktop asar only
+routes/stores the answer; the answer-input widget is served by the remote web renderer). Re-derive by
+**grep token**, not byte offset (offsets shift across extractions).
+
+- **Input** (`AskUserQuestion` tool schema): `questions[]` each `{ question, header, options: array(2..4 of
+  {label, description, preview?}), multiSelect: v.boolean().default(false) }`. `preview` is single-select only.
+- **Answer** (the can_use_tool / "permission component" path the harness drives): one
+  `updatedInput.answers` Record keyed over **all** of `questions[]`, delivered in a single `control_response`
+  (no per-sub-question event — this is why a partial scripted match must abstain the whole gate atomically).
+  Token: `answers: v.record(v.string(), Ne1())` where
+  `Ne1 = v.preprocess(q => Array.isArray(q) && q.every(isString) ? q.join(", ") : q, v.string())`.
+  ⇒ the answer value is a **string**; a **multi-select answer is comma-joined** (`"A, B"`). The widget builds
+  an array transiently, but `onAnswer` joins it (`if(Array.isArray)…join(", ")`) BEFORE the wire — so the
+  harness delivers the comma-joined string (higher-fidelity than an array). The join does **no escaping**, so
+  a label containing a comma can't round-trip (Cowork limitation → the harness warns).
+- **"Other" / free-text** is auto-provided on **every** question ("Users will always be able to select
+  'Other' to provide custom text input"; "There should be no 'Other' option, that will be provided
+  automatically"). Sentinel `__other__`; the delivered value is the arbitrary typed string. A top-level
+  `response: v.string().optional()` carries whole-gate freeform text.
+
+The `can_use_tool` control request always carries `tool_use_id` (builder token `{subtype:"can_use_tool", …,
+tool_use_id:Y, agent_id:…}`) — so a faithful gate is always pairable with its `tool_result`
+(`gate_answers_delivered` never legitimately reports `no-pairing-metadata` on a real run).
+
 ## System prompt (verbatim-extractable)
 - Base template at asar offset ~9,005,714; tokens `{{cwd}} {{workspaceFolder}} {{workspaceContext}} {{userSelectedFolders}} {{skillsDir}} {{folderSelected}} {{modelName}} {{accountName}} {{emailAddress}} {{currentDate}} {{currentTimezone}} {{promptCacheBoundary}}`. Builder `y8r`: `{{cwd}}→/sessions/<id>`, `{{skillsDir}}→/sessions/<id>/mnt/.claude`, `{{workspaceFolder}}→/sessions/<id>/mnt/<firstFolder>` or `/sessions/<id>/mnt/outputs` if none. Server `spVariant`/`rendererAppends` can override — un-modelable delta.
 - Guest = "lightweight Linux VM (Ubuntu 22)".

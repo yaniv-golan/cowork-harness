@@ -1,7 +1,11 @@
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { join, dirname, relative } from "node:path";
+import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, existsSync, readdirSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { tmpdir } from "node:os";
+import { join, dirname, relative, isAbsolute } from "node:path";
 import { type Scenario, type RunResult, type Assertion } from "../types.js";
-import { executeScenario, parseScenarioFile } from "./execute.js";
+import { executeScenario, parseScenarioFile, collectArtifacts } from "./execute.js";
+import { loadSession } from "../session.js";
+import { loadBaseline } from "../baseline.js";
 import { Run, type RunHooks, type RunRecord } from "./run.js";
 import {
   parseMessage,
@@ -20,11 +24,123 @@ import { jsonEnvelope } from "./envelope.js";
 const out = (s: string) => process.stdout.write(s + "\n");
 const log = (s: string) => process.stderr.write(s + "\n");
 
+/** #1: a snapshotted artifact — relative path + size + content hash, plus an inlined raw body for small
+ *  files (so `artifact_json`/`file_exists`/`user_visible_artifact` survive token-free replay). A file too
+ *  big to inline is hash-only with `truncated:true` (a loud marker — silent truncation reads as "covered"). */
+interface ManifestEntry {
+  path: string; // relative to the work root, e.g. "outputs/cap_state.json"
+  bytes: number;
+  sha256: string;
+  body?: string; // inlined RAW text for small files (≤ cap) — materialized on replay so JSON asserts work
+  truncated?: boolean; // too big to inline → hash-only (file_exists works; artifact_json cannot)
+}
+
+/** #1b: a staleness tripwire over the inputs that determine the recording — mirrors `asarFingerprint`
+ *  (warn-don't-fail; `--strict` hardens). `baseline` is the canonical staleness cause (a Cowork bump);
+ *  `skillHash` covers local skill/plugin edits (the dev-loop case). */
+interface Fingerprint {
+  baseline: string; // appVersion at record time
+  skillHash?: string; // hash of the session's local skill/plugin/marketplace dir contents (if any)
+  skillSources?: string[]; // the local dirs that fed skillHash (for the replay recompute + diagnostics)
+}
+
 interface Cassette {
+  // Schema version of the cassette FORMAT (not the package). Bump when the structure changes in a way a
+  // reader must branch on (a new manifest-entry shape, a fingerprint-algorithm change, a2's nonDeterministic
+  // provenance, …). ABSENT = pre-versioning legacy (treated as 0). Stamping it now — while ~no cassettes
+  // exist in the wild — lets future evolution branch cleanly instead of guessing a cassette's age.
+  cassetteVersion?: number;
   scenario: Scenario;
   events: string[]; // recorded child→driver stdout (events.jsonl) — the cassette source
   controlOut?: string[]; // driver→child control_responses (control-out.jsonl) — for full-fidelity replay
   effectiveFidelity?: string; // the tier the live record actually resolved to (e.g. cowork → hostloop)
+  artifacts?: ManifestEntry[]; // #1: outputs/.projects snapshot (paths + hashes + small JSON bodies)
+  fingerprint?: Fingerprint; // #1b: cassette→skill/baseline staleness tripwire
+}
+
+/** Current cassette format version. Readers tolerate ABSENT (legacy → 0) and warn on a FUTURE version. */
+const CASSETTE_VERSION = 1;
+
+const MANIFEST_BODY_CAP = 64 * 1024; // inline JSON/text bodies ≤ 64 KiB; larger → hash-only + truncated marker
+
+/** #1: snapshot the user-visible artifacts under `workRoot` into manifest entries. */
+function buildManifest(workRoot: string): ManifestEntry[] {
+  return collectArtifacts(workRoot, ["outputs", ".projects"]).map(({ path, bytes }) => {
+    const abs = join(workRoot, path);
+    let buf: Buffer;
+    try {
+      buf = readFileSync(abs);
+    } catch {
+      return { path, bytes, sha256: "", truncated: true };
+    }
+    const sha256 = createHash("sha256").update(buf).digest("hex");
+    if (buf.length <= MANIFEST_BODY_CAP) return { path, bytes, sha256, body: buf.toString("utf8") };
+    return { path, bytes, sha256, truncated: true };
+  });
+}
+
+/** #1: materialize a manifest into a temp work root so replay can run the filesystem assertions against it.
+ *  Small files get their inlined body; hash-only (truncated) files get an empty placeholder (file_exists
+ *  still passes; artifact_json on them fails loud — it needs the body, which only small files carry). */
+function materializeManifest(entries: ManifestEntry[]): { workRoot: string; prefixes: string[] } {
+  const workRoot = mkdtempSync(join(tmpdir(), "cwh-replay-"));
+  for (const e of entries) {
+    const abs = join(workRoot, e.path);
+    mkdirSync(dirname(abs), { recursive: true });
+    writeFileSync(abs, e.body ?? "");
+  }
+  return { workRoot, prefixes: ["outputs", ".projects"] };
+}
+
+/** Hash a directory's file CONTENTS recursively (sorted, path-relative) — stable across machines. */
+function hashDir(dir: string, hash: ReturnType<typeof createHash>): void {
+  let entries: string[];
+  try {
+    entries = readdirSync(dir).sort();
+  } catch {
+    return;
+  }
+  for (const name of entries) {
+    const abs = join(dir, name);
+    let st;
+    try {
+      st = statSync(abs);
+    } catch {
+      continue;
+    }
+    if (st.isDirectory()) hashDir(abs, hash);
+    else if (st.isFile()) {
+      hash.update(name);
+      try {
+        hash.update(readFileSync(abs));
+      } catch {
+        /* unreadable file — skip content */
+      }
+    }
+  }
+}
+
+/** #1b: the local skill/plugin/marketplace source dirs a session mounts — the "skill dir" hash unit. */
+function skillSourceDirs(sessionPath: string, cassetteDir?: string): string[] {
+  const resolved = cassetteDir && !isAbsolute(sessionPath) ? join(cassetteDir, sessionPath) : sessionPath;
+  if (sessionPath === "(inline)" || !existsSync(resolved)) return [];
+  let cfg;
+  try {
+    cfg = loadSession(resolved);
+  } catch {
+    return [];
+  }
+  return [...cfg.skills.local, ...cfg.plugins.local_plugins, ...cfg.plugins.remote_plugins, ...cfg.plugins.local_marketplaces].filter((d) =>
+    existsSync(d),
+  );
+}
+
+function buildFingerprint(sessionPath: string, baselineAppVersion: string, cassetteDir?: string): Fingerprint {
+  const dirs = skillSourceDirs(sessionPath, cassetteDir);
+  if (dirs.length === 0) return { baseline: baselineAppVersion };
+  const hash = createHash("sha256");
+  for (const d of dirs.sort()) hashDir(d, hash);
+  return { baseline: baselineAppVersion, skillHash: hash.digest("hex"), skillSources: dirs };
 }
 
 /** A minimal RunRecord for a truncated-cassette replay — empty collections so downstream evaluate()/the
@@ -224,7 +340,20 @@ export async function cmdRecord(args: string[]) {
     ...scenario,
     session: scenario.session === "(inline)" ? "(inline)" : relative(dirname(cassettePath), scenario.session),
   };
-  const cassette: Cassette = { scenario: relocatable, events, controlOut, effectiveFidelity: result.effectiveFidelity };
+  // #1: snapshot the user-visible artifacts (from the live work root, before --keep cleanup) so
+  // file_exists/user_visible_artifact/artifact_json survive token-free replay. #1b: a staleness tripwire
+  // over the recording's inputs (baseline + local skill dirs) — `scenario.session` is still absolute here.
+  const artifacts = result.workDir ? buildManifest(result.workDir) : [];
+  const fingerprint = buildFingerprint(scenario.session, result.baseline);
+  const cassette: Cassette = {
+    cassetteVersion: CASSETTE_VERSION,
+    scenario: relocatable,
+    events,
+    controlOut,
+    effectiveFidelity: result.effectiveFidelity,
+    artifacts,
+    fingerprint,
+  };
   writeFileSync(cassettePath, JSON.stringify(cassette, null, 2));
   // capture summary: turns (assistant messages) + tool calls in the recording
   let turns = 0;
@@ -241,7 +370,9 @@ export async function cmdRecord(args: string[]) {
       for (const b of m.message?.content ?? []) if (b.type === "tool_use") tools++;
     }
   }
-  log(`✓ recorded ${events.length} events · ${turns} turns · ${tools} tool calls → ${cassettePath}  (${result.result})`);
+  log(
+    `✓ recorded ${events.length} events · ${turns} turns · ${tools} tool calls · ${artifacts.length} artifact(s) → ${cassettePath}  (${result.result})`,
+  );
 }
 
 /** `replay --cassette <file>` — deterministic protocol-replay; re-evaluates content assertions. */
@@ -254,10 +385,11 @@ export async function cmdReplay(args: string[]) {
   }
   const json =
     (args.includes("--output-format") && args[args.indexOf("--output-format") + 1] === "json") || args.includes("--output-format=json");
+  const strict = args.includes("--strict"); // #1b: escalate staleness warnings to failures (release gate)
   const cassette: Cassette = JSON.parse(readFileSync(path, "utf8"));
   const plan: RenderPlan = { live: false, progress: false, verbose: false, color: process.stderr.isTTY === true && !process.env.NO_COLOR };
   const renderer = json ? undefined : makeRenderer(plan);
-  const result = await replayCassette(cassette, renderer ? [renderer] : []);
+  const result = await replayCassette(cassette, renderer ? [renderer] : [], { strict, cassetteDir: dirname(path) });
   const bad = result.assertions.filter((a) => !a.pass);
   // stdout = machine ONLY under --output-format json; humans get the footer on stderr.
   if (json) out(jsonEnvelope("replay", [result]));
@@ -265,9 +397,51 @@ export async function cmdReplay(args: string[]) {
   process.exit(bad.length ? 1 : 0);
 }
 
-/** Replay a cassette through Run and re-evaluate the content (non-filesystem) assertions. */
-export async function replayCassette(cassette: Cassette, hooks: RunHooks[] = []): Promise<RunResult> {
+/** Replay a cassette through Run and re-evaluate the content assertions. With a `cassette.artifacts`
+ *  manifest (#1), filesystem assertions (file_exists/user_visible_artifact/artifact_json) ALSO run, against
+ *  the materialized snapshot. `opts.strict` (#1b) escalates staleness warnings to failing assertions. */
+export async function replayCassette(
+  cassette: Cassette,
+  hooks: RunHooks[] = [],
+  opts: { strict?: boolean; cassetteDir?: string } = {},
+): Promise<RunResult> {
+  // Cassette format version: ABSENT = legacy (0); a FUTURE version means this harness may misread fields
+  // it doesn't know about — warn loudly (forward-compat guard). Same-or-older replays normally.
+  const cassetteVersion = cassette.cassetteVersion ?? 0;
+  if (cassetteVersion > CASSETTE_VERSION)
+    process.stderr.write(
+      `::warning:: [replay] cassette format v${cassetteVersion} is newer than this harness understands (v${CASSETTE_VERSION}) — some fields may be ignored or misread; upgrade cowork-harness\n`,
+    );
+
   const session = new CassetteAgentSession(cassette.events, cassette.controlOut);
+
+  // #1b: cassette→skill/baseline staleness tripwire. Mirrors `asarFingerprint` — warn by default; `--strict`
+  // turns a mismatch into a failing assertion (release gate). A green replay must not imply the skill is
+  // unchanged (frozen-structure limit). The skill-hash recompute needs the local skill dirs to be resolvable
+  // from the cassette's session path; when they aren't (a moved/committed cassette), we say so rather than
+  // silently skipping.
+  const staleness: string[] = [];
+  if (cassette.fingerprint) {
+    const fp = cassette.fingerprint;
+    let liveBaseline: string | undefined;
+    try {
+      liveBaseline = loadBaseline("latest").appVersion;
+    } catch {
+      /* no baseline available (e.g. CI without baselines) — skip the baseline arm */
+    }
+    if (liveBaseline && liveBaseline !== fp.baseline)
+      staleness.push(`baseline moved ${fp.baseline} → ${liveBaseline} since record — re-record before trusting this replay`);
+    if (fp.skillHash) {
+      const live = buildFingerprint(cassette.scenario.session, fp.baseline, opts.cassetteDir);
+      if (live.skillHash === undefined)
+        process.stderr.write(
+          "::warning:: [replay] skill fingerprint not re-checkable (local skill dirs not resolvable from this cassette location) — baseline check still applies\n",
+        );
+      else if (live.skillHash !== fp.skillHash)
+        staleness.push("local skill/plugin dir contents changed since record — re-record before trusting this replay");
+    }
+    for (const s of staleness) process.stderr.write(`::warning:: [replay] cassette stale: ${s}\n`);
+  }
 
   // §2.5 backward compat: warn loudly when controlOut is absent so the user knows question/gate
   // assertions are being EXCLUDED (not vacuously evaluated) from this run.
@@ -315,7 +489,16 @@ export async function replayCassette(cassette: Cassette, hooks: RunHooks[] = [])
     "result",
   ];
   const questionGateKeys: (keyof Assertion)[] = ["question_asked", "questions_count_max", "gate_answers_delivered"];
-  const contentKeys: (keyof Assertion)[] = session.hasControlOut ? [...alwaysContentKeys, ...questionGateKeys] : alwaysContentKeys;
+  // #1: with an artifact manifest, the filesystem assertions become replay-checkable (materialized below).
+  // Without a manifest they stay live-only (stripped → skip warning), exactly as before.
+  const manifestKeys: (keyof Assertion)[] = cassette.artifacts?.length ? ["file_exists", "user_visible_artifact", "artifact_json"] : [];
+  const { workRoot: replayWorkRoot, prefixes: replayPrefixes } = manifestKeys.length
+    ? materializeManifest(cassette.artifacts!)
+    : { workRoot: "", prefixes: [] as string[] };
+  const contentKeys: (keyof Assertion)[] = [
+    ...(session.hasControlOut ? [...alwaysContentKeys, ...questionGateKeys] : alwaysContentKeys),
+    ...manifestKeys,
+  ];
 
   // #5: with AND-semantics in check(), we must STRIP each assertion to only its active content keys
   // before evaluating — otherwise a mixed object (e.g. {question_asked, result} with controlOut
@@ -340,7 +523,7 @@ export async function replayCassette(cassette: Cassette, hooks: RunHooks[] = [])
   // `contentishKeys` (always-content ∪ question/gate) marks keys that are NEVER filesystem/egress;
   // a key outside it is genuinely live-only. (Gate keys dropped purely for missing controlOut are
   // already announced by the controlOut warning above, so they don't count as a PARTIAL drop.)
-  const contentishKeys = new Set<keyof Assertion>([...alwaysContentKeys, ...questionGateKeys]);
+  const contentishKeys = new Set<keyof Assertion>([...alwaysContentKeys, ...questionGateKeys, ...manifestKeys]);
   let fullSkipCount = cassette.scenario.expect_denied?.length ?? 0;
   let partialSkipCount = 0;
   for (const a of cassette.scenario.assert) {
@@ -370,8 +553,8 @@ export async function replayCassette(cassette: Cassette, hooks: RunHooks[] = [])
     subagentTools: rec.subagentTools,
     egress: [],
     result: rec.result,
-    workRoot: "",
-    userVisiblePrefixes: [],
+    workRoot: replayWorkRoot,
+    userVisiblePrefixes: replayPrefixes,
     outputsDeletes: [],
     questions: rec.questions,
     hostPathLeaked: false,
@@ -379,6 +562,10 @@ export async function replayCassette(cassette: Cassette, hooks: RunHooks[] = [])
     subagents: rec.subagents,
     gateDeliveries: rec.gateDeliveries,
   });
+
+  // #1b: under --strict, a staleness mismatch is a failing assertion (non-zero exit), not just a warning.
+  if (opts.strict)
+    for (const s of staleness) assertions.push({ assertion: {} as Assertion, pass: false, message: `cassette stale (--strict): ${s}` });
 
   // §2.4: surface each serializeDecision mismatch as a failing replay_protocol_fidelity assertion.
   // Shape: { assertion: { replay_protocol_fidelity: true }, pass: false, message } — well-typed via types.ts.

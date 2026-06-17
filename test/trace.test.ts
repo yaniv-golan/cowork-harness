@@ -195,3 +195,116 @@ describe("trace view (item 8)", () => {
     expect(gates[0].error).toContain("q.map");
   });
 });
+
+// #6 — trace --dispatches: the sub-agent dispatch tree + the real total (read off dispatch_count_max).
+import { buildDispatchTree, formatDispatchTree } from "../src/run/trace-view.js";
+describe("trace --dispatches (#6 — dispatch tree + total)", () => {
+  it("builds the tree with depth from parentToolUseId nesting and a total", () => {
+    const f = eventsFile([
+      {
+        type: "assistant",
+        message: {
+          content: [
+            {
+              type: "tool_use",
+              id: "toolu_1",
+              name: "Task",
+              input: { subagent_type: "explorer", description: "explore", tools: ["Read", "Grep"] },
+            },
+          ],
+        },
+      },
+      {
+        type: "assistant",
+        parent_tool_use_id: "toolu_1",
+        message: { content: [{ type: "tool_use", id: "toolu_2", name: "Task", input: { subagent_type: "child" } }] },
+      },
+      { type: "assistant", message: { content: [{ type: "tool_use", id: "toolu_3", name: "Task", input: { subagent_type: "writer" } }] } },
+    ]);
+    const tree = buildDispatchTree(f);
+    expect(tree.total).toBe(3);
+    expect(tree.nodes.map((n) => [n.agentType, n.depth])).toEqual([
+      ["explorer", 0],
+      ["child", 1],
+      ["writer", 0],
+    ]);
+    const txt = formatDispatchTree(tree);
+    expect(txt).toMatch(/dispatch_count_max: 3/);
+    expect(txt).toContain("[Read,Grep]");
+  });
+
+  it("no dispatches → friendly message", () => {
+    const f = eventsFile([{ type: "assistant", message: { content: [{ type: "text", text: "hi" }] } }]);
+    expect(formatDispatchTree(buildDispatchTree(f))).toMatch(/no sub-agent dispatches/);
+  });
+});
+
+// #8 — assert --list is generated from the Zod Assertion schema; every key MUST carry a description so
+// the list can never drift (and the published JSON schema is enriched).
+import { Assertion } from "../src/types.js";
+describe("assert --list (#8 — every Assertion key has a description, drift guard)", () => {
+  it("no Assertion field is missing its .describe()", () => {
+    const shape = Assertion.shape as Record<string, { description?: string }>;
+    const missing = Object.keys(shape).filter((k) => !shape[k].description);
+    expect(missing).toEqual([]);
+  });
+});
+
+// SCAFFOLD-FROM-RUN — turn a kept run into a starter scenario YAML.
+import { buildScaffold } from "../src/run/scaffold.js";
+import { parse as parseYaml } from "yaml";
+describe("scaffold --from-run (SCAFFOLD-FROM-RUN)", () => {
+  it("emits a scenario from observed gates, artifacts, and prompt", () => {
+    const reqId = "r1";
+    const tuid = "toolu_G1";
+    const dir = mkdtempSync(join(tmpdir(), "cwh-scaffold-"));
+    const eventsFilePath = join(dir, "events.jsonl");
+    const events = [
+      { type: "system", subtype: "init", tools: ["AskUserQuestion"] },
+      {
+        type: "control_request",
+        request_id: reqId,
+        request: {
+          subtype: "can_use_tool",
+          tool_name: "AskUserQuestion",
+          tool_use_id: tuid,
+          input: { questions: [{ question: "Which format?", options: [{ label: "PDF" }] }] },
+        },
+      },
+      { type: "user", message: { content: [{ type: "tool_result", tool_use_id: tuid, is_error: false, content: "PDF" }] } },
+      { type: "result", subtype: "success", is_error: false },
+    ];
+    writeFileSync(eventsFilePath, events.map((e) => JSON.stringify(e)).join("\n"));
+    writeFileSync(
+      join(dir, "control-out.jsonl"),
+      JSON.stringify({
+        type: "control_response",
+        response: {
+          subtype: "success",
+          request_id: reqId,
+          response: {
+            behavior: "allow",
+            updatedInput: { questions: [{ question: "Which format?", options: [{ label: "PDF" }] }], answers: { "Which format?": "PDF" } },
+          },
+        },
+      }),
+    );
+    writeFileSync(
+      join(dir, "result.json"),
+      JSON.stringify({
+        prompt: "make a report",
+        fidelity: "container",
+        result: "success",
+        artifacts: [{ path: "outputs/report.pdf", bytes: 10 }],
+        subagents: [],
+      }),
+    );
+    const parsed = parseYaml(buildScaffold(eventsFilePath));
+    expect(parsed.prompt).toBe("make a report");
+    expect(parsed.fidelity).toBe("container");
+    expect(parsed.answers[0].choose).toBe("PDF");
+    expect(parsed.answers[0].when_question).toMatch(/Which format/);
+    expect(parsed.assert.some((a: any) => a.file_exists === "outputs/report.pdf")).toBe(true);
+    expect(parsed.assert.some((a: any) => a.result === "success")).toBe(true);
+  });
+});

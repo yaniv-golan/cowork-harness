@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, writeSyn
 import { join, basename, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
-import { Scenario, AnswerRule, type RunResult } from "./types.js";
+import { Scenario, AnswerRule, Assertion, type RunResult } from "./types.js";
 import { loadBaseline, BASELINES_DIR } from "./baseline.js";
 import { loadSession, resolveSessionPaths } from "./session.js";
 import { executeScenario, parseScenarioFile, UnansweredError, BoundaryError, type ExecuteOptions } from "./run/execute.js";
@@ -17,7 +17,16 @@ import { cmdChat } from "./run/chat.js";
 import { cmdRecord, cmdReplay } from "./run/cassette.js";
 import { loadDotenv } from "./dotenv.js";
 import { makeRenderer, renderStart, renderFooter, startHeartbeat, type RenderPlan } from "./run/renderer.js";
-import { resolveEventsFile, buildTrace, formatTrace, buildGateTrace, formatGateTrace } from "./run/trace-view.js";
+import {
+  resolveEventsFile,
+  buildTrace,
+  formatTrace,
+  buildGateTrace,
+  formatGateTrace,
+  buildDispatchTree,
+  formatDispatchTree,
+} from "./run/trace-view.js";
+import { buildScaffold } from "./run/scaffold.js";
 import { pkgVersion, jsonEnvelope, jsonError, type ErrCategory } from "./run/envelope.js";
 import { spawnChannel, fileChannel, streamGates, answerGate, readGate, type DecisionChannel } from "./decide/external-channel.js";
 
@@ -50,9 +59,14 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
   record <scenario.yaml>       run + save a control-protocol cassette
       [--out <file>]           cassette path (default: cassettes/<scenario-name>.cassette.json)
   replay --cassette <file>     deterministic protocol-replay of a cassette (no token) [--output-format json]
+      [--strict]               escalate a cassette-staleness warning (baseline/skill drift) to a failure
   trace <run-id | dir | path>  digest a run's events.jsonl (tools+result status, dispatches, decisions)
       [--tools]  tool/dispatch rows only   [--gates]  gate lifecycle (question→answer→delivered)
+      [--dispatches]  sub-agent dispatch tree + the real total (read off dispatch_count_max)
       [--output-format json]  structured rows
+  assert --list                list the available scenario assertions (generated from the schema)
+  scaffold --from-run <id>     turn a kept run into a starter scenario YAML (gates→answers, artifacts→file_exists)
+      [--out <file.yaml>]      write to a file (default: stdout)
   decide                       VALIDATE a decider against a sample question in ~2s (no run)
       (--decider-cmd '<helper>' | --decider-llm [--intent …] | --answer "rx=c" | --answer-policy <yaml>)
       [--question "<text>"] [--option <label>]…   override the sample question
@@ -201,6 +215,8 @@ async function main() {
       "record",
       "replay",
       "trace",
+      "assert",
+      "scaffold",
       "decide",
       "gates",
       "answer",
@@ -260,6 +276,10 @@ async function main() {
       return cmdReplay(rest);
     case "trace":
       return cmdTrace(rest);
+    case "assert":
+      return cmdAssert(rest);
+    case "scaffold":
+      return cmdScaffold(rest);
     case "decide":
       return cmdDecide(rest);
     case "gates":
@@ -1081,15 +1101,56 @@ function cmdAnswer(args: string[]) {
   else log(`✓ answered gate ${seq}: ${JSON.stringify(answers)}`);
 }
 
+/** `scaffold --from-run <id>` — turn a kept run into a starter scenario YAML (observed gates → answers,
+ *  artifacts → file_exists, the prompt). Authoring becomes explore→lock instead of guess-and-re-run. */
+function cmdScaffold(args: string[]) {
+  const json = isJsonOutput(args);
+  const fromIdx = args.indexOf("--from-run");
+  const target = fromIdx >= 0 ? args[fromIdx + 1] : positionals(args, ["--from-run", "--out", "--output-format"])[0];
+  if (!target) return void fail("scaffold", "usage", "usage: scaffold --from-run <run-id | run-dir> [--out <file.yaml>]", undefined, json);
+  let file: string;
+  try {
+    file = resolveEventsFile(target);
+  } catch (e) {
+    return void fail("scaffold", "usage", String((e as Error).message), undefined, json);
+  }
+  const yaml = buildScaffold(file);
+  const outIdx = args.indexOf("--out");
+  if (outIdx >= 0 && args[outIdx + 1]) {
+    writeFileSync(args[outIdx + 1], yaml);
+    log(`✓ scaffolded scenario → ${args[outIdx + 1]}`);
+  } else out(yaml);
+}
+
+/** `assert --list` (#8) — enumerate the available assertion keys + one-line semantics, generated from the
+ *  Zod `Assertion` schema (`Assertion.shape[k].description`) so the list can NEVER drift from the schema. */
+function cmdAssert(args: string[]) {
+  const json = isJsonOutput(args);
+  if (!args.includes("--list")) return void fail("assert", "usage", "usage: assert --list [--output-format json]", undefined, json);
+  const shape = Assertion.shape as Record<string, { description?: string }>;
+  const keys = Object.keys(shape).map((k) => ({ key: k, description: shape[k].description ?? "" }));
+  if (json) return void out(JSON.stringify({ tool: "cowork-harness", command: "assert", assertions: keys }));
+  const width = Math.max(...keys.map((k) => k.key.length));
+  out(`available assertions (${keys.length}) — use under a scenario's \`assert:\` list:\n`);
+  for (const { key, description } of keys) out(`  ${key.padEnd(width)}  ${description}`);
+}
+
 function cmdTrace(args: string[]) {
   const json = isJsonOutput(args);
   const tools = args.includes("--tools");
   const gates = args.includes("--gates");
+  const dispatches = args.includes("--dispatches");
   // #16: skip the `--output-format` value so `trace --output-format json` doesn't try to trace a run
   // named `json` instead of reporting the missing target.
   const target = positionals(args, ["--output-format"])[0];
   if (!target)
-    fail("trace", "usage", "usage: trace <run-id | run-dir | events.jsonl> [--tools | --gates] [--output-format json]", undefined, json);
+    fail(
+      "trace",
+      "usage",
+      "usage: trace <run-id | run-dir | events.jsonl> [--tools | --gates | --dispatches] [--output-format json]",
+      undefined,
+      json,
+    );
   let file: string;
   try {
     file = resolveEventsFile(target);
@@ -1101,6 +1162,13 @@ function cmdTrace(args: string[]) {
     const rows = buildGateTrace(file);
     if (json) out(JSON.stringify({ tool: "cowork-harness", command: "trace", file, gates: rows }));
     else out(formatGateTrace(rows));
+    return;
+  }
+  if (dispatches) {
+    // --dispatches (#6): the sub-agent dispatch tree + the real total (read off dispatch_count_max).
+    const tree = buildDispatchTree(file);
+    if (json) out(JSON.stringify({ tool: "cowork-harness", command: "trace", file, dispatches: tree.nodes, total: tree.total }));
+    else out(formatDispatchTree(tree));
     return;
   }
   const rows = buildTrace(file, { tools });

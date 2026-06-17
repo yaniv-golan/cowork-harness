@@ -142,3 +142,79 @@ describe("false-green catchers (deterministic)", () => {
     expect(pass(evaluate([{ transcript_no_host_path: true }], ctx({ hostPathLeaked: true })))).toBe(false);
   });
 });
+
+// #5 — artifact_json: dotted-path resolver (three states) + operators; live-only (stripped on replay).
+import { resolveDotPath } from "../src/assert.js";
+import { collectArtifacts } from "../src/run/execute.js";
+
+function artifactRoot(doc: unknown): string {
+  const root = mkdtempSync(join(tmpdir(), "cwh-artifact-"));
+  mkdirSync(join(root, "outputs"), { recursive: true });
+  writeFileSync(join(root, "outputs", "state.json"), JSON.stringify(doc));
+  return root;
+}
+
+describe("resolveDotPath — three distinct states", () => {
+  const doc = { me: { run_id: "r1", count: 3, note: null }, items: [{ id: "a" }] };
+  it("value: a present value (including array index)", () => {
+    expect(resolveDotPath(doc, "me.run_id")).toEqual({ state: "value", value: "r1" });
+    expect(resolveDotPath(doc, "items.0.id")).toEqual({ state: "value", value: "a" });
+    expect(resolveDotPath(doc, undefined)).toEqual({ state: "value", value: doc });
+  });
+  it("value with JSON null is distinct from absent", () => {
+    expect(resolveDotPath(doc, "me.note")).toEqual({ state: "value", value: null });
+  });
+  it("absent: final key missing from a resolved parent", () => {
+    expect(resolveDotPath(doc, "me.exclusivity_days")).toEqual({ state: "absent" });
+  });
+  it("unresolved: an intermediate segment is missing / not an object", () => {
+    expect(resolveDotPath(doc, "nope.deep.key").state).toBe("unresolved");
+    expect(resolveDotPath(doc, "me.run_id.x").state).toBe("unresolved"); // descend into a string
+  });
+});
+
+describe("artifact_json assertion (#5)", () => {
+  const doc = { me: { run_id: "r1", count: 3, note: null } };
+  const root = artifactRoot(doc);
+  const A = (artifact_json: any) => evaluate([{ artifact_json }], ctx({ workRoot: root }));
+  it("equals on a dotted path", () => {
+    expect(pass(A({ artifact: "outputs/state.json", path: "me.run_id", equals: "r1" }))).toBe(true);
+    expect(pass(A({ artifact: "outputs/state.json", path: "me.run_id", equals: "WRONG" }))).toBe(false);
+  });
+  it("gt requires a number greater than", () => {
+    expect(pass(A({ artifact: "outputs/state.json", path: "me.count", gt: 2 }))).toBe(true);
+    expect(pass(A({ artifact: "outputs/state.json", path: "me.count", gt: 3 }))).toBe(false);
+  });
+  it("absent (anti-hallucination) vs is_null are distinct", () => {
+    expect(pass(A({ artifact: "outputs/state.json", path: "me.exclusivity_days", absent: true }))).toBe(true);
+    expect(pass(A({ artifact: "outputs/state.json", path: "me.note", absent: true }))).toBe(false); // present (null) ≠ absent
+    expect(pass(A({ artifact: "outputs/state.json", path: "me.note", is_null: true }))).toBe(true);
+    expect(pass(A({ artifact: "outputs/state.json", path: "me.run_id", is_null: true }))).toBe(false);
+  });
+  it("exists true/false", () => {
+    expect(pass(A({ artifact: "outputs/state.json", path: "me.run_id", exists: true }))).toBe(true);
+    expect(pass(A({ artifact: "outputs/state.json", path: "me.nope", exists: false }))).toBe(true);
+  });
+  it("an unresolved intermediate path FAILS LOUD (not a vacuous absent pass)", () => {
+    const r = A({ artifact: "outputs/state.json", path: "nope.deep.key", absent: true });
+    expect(pass(r)).toBe(false);
+    expect(r[0].message).toMatch(/unresolvable/);
+  });
+  it("missing file and invalid JSON both fail", () => {
+    expect(pass(A({ artifact: "outputs/missing.json", path: "x", exists: true }))).toBe(false);
+  });
+});
+
+describe("collectArtifacts — ENV-MANIFEST recursive listing", () => {
+  it("lists files (relative path + bytes) under the user-visible prefixes; empty when nothing written", () => {
+    const root = mkdtempSync(join(tmpdir(), "cwh-manifest-"));
+    mkdirSync(join(root, "outputs", "sub"), { recursive: true });
+    writeFileSync(join(root, "outputs", "a.txt"), "hello");
+    writeFileSync(join(root, "outputs", "sub", "b.json"), "{}");
+    const got = collectArtifacts(root, ["outputs", ".projects"]);
+    expect(got.map((g) => g.path)).toEqual(["outputs/a.txt", "outputs/sub/b.json"]);
+    expect(got.find((g) => g.path === "outputs/a.txt")?.bytes).toBe(5);
+    // a fresh root with no outputs/ → empty manifest (the all-or-nothing truncation signal)
+    expect(collectArtifacts(mkdtempSync(join(tmpdir(), "cwh-empty-")), ["outputs"])).toEqual([]);
+  });
+});

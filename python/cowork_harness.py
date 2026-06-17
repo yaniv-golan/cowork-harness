@@ -79,6 +79,13 @@ class Result:
     def subagents(self) -> list[dict]:
         return self.data.get("subagents", []) or []
 
+    @property
+    def artifacts(self) -> list[dict]:
+        """ENV-MANIFEST: files written under the user-visible prefixes (relative path + bytes).
+        An EMPTY list on a run that should have produced a deliverable is the all-or-nothing
+        truncated-run signal (necessary, not sufficient — pair with assert_success())."""
+        return self.data.get("artifacts", []) or []
+
     def failed_assertions(self) -> list[dict]:
         return [a for a in self.data.get("assertions", []) if not a.get("pass")]
 
@@ -198,6 +205,28 @@ class Cowork:
     def skill(self, folder: str) -> Skill:
         return Skill(self, folder)
 
+    def run_scenario(
+        self,
+        path: str,
+        *,
+        fidelity: Optional[str] = None,  # override the scenario's authored fidelity
+        answers: Optional[Mapping[str, str]] = None,  # extra --answer rules (q-regex → choice)
+        on_unanswered: str = "fail",  # run's deterministic default
+        check: bool = False,  # raise on a failed/enveloped-error run
+    ) -> Result:
+        """#2: run an authored scenario YAML and return the typed Result.
+
+        Removes the subprocess-spawn + JSON-parse + outputs-dir-resolution boilerplate every consumer
+        otherwise reinvents. The Result exposes `.outputs_dir` (the resolved artifacts dir),
+        `.artifacts` (the ENV-MANIFEST), `.effective_fidelity`, and the assertions — so a test can also
+        prove which tier actually ran (e.g. cowork → hostloop)."""
+        args = ["run", str(path), "--output-format", "json", "--on-unanswered", on_unanswered]
+        if fidelity:
+            args += ["--fidelity", fidelity]
+        for q, choice in (answers or {}).items():
+            args += ["--answer", f"{q}={choice}"]
+        return self._invoke(args, check=check)
+
     def replay(self, cassette: str) -> Result:
         return self._invoke(["replay", "--cassette", cassette, "--output-format", "json"])
 
@@ -255,6 +284,26 @@ class Cowork:
         if check:
             result.assert_success()
         return result
+
+
+def run_scenario(
+    path: str,
+    *,
+    fidelity: Optional[str] = None,
+    answers: Optional[Mapping[str, str]] = None,
+    on_unanswered: str = "fail",
+    check: bool = False,
+    cli: Optional[str] = None,
+) -> Result:
+    """#2: module-level convenience — run an authored scenario YAML in one call.
+
+        from cowork_harness import run_scenario
+        r = run_scenario("scenarios/cap_table.yaml", fidelity="container")
+        r.assert_success()
+        assert r.effective_fidelity == "hostloop"   # prove which tier ran (fidelity is the tiebreaker)
+        assert any(a["path"] == "outputs/cap_state.json" for a in r.artifacts)
+    """
+    return Cowork(cli).run_scenario(path, fidelity=fidelity, answers=answers, on_unanswered=on_unanswered, check=check)
 
 
 def serve_decider(fn: Callable[[dict], Any], *, _in=None, _out=None) -> None:

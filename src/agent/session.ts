@@ -46,7 +46,14 @@ export type AgentEvent =
   | { type: "assistant_text"; text: string; parentToolUseId?: string }
   | { type: "tool_use"; name: string; input: unknown; parentToolUseId?: string; toolUseId?: string; synthetic?: boolean } // toolUseId for tool_use↔tool_result pairing (amendment #2); synthetic = the MCP round-trip echo (trace-only, NOT counted — the real call already arrives as an assistant tool_use block, live-verified)
   | { type: "tool_result"; toolUseId?: string; isError: boolean; text: string } // the OUTCOME of a tool call (from `user`/tool_result blocks) — the q.map-error surface (Part 2)
-  | { type: "subagent_dispatch"; toolUseId: string; agentType: string; declaredTools: string[]; description?: string } // A3
+  | {
+      type: "subagent_dispatch";
+      toolUseId: string;
+      parentToolUseId?: string;
+      agentType: string;
+      declaredTools: string[];
+      description?: string;
+    } // A3 (parentToolUseId = nesting, for the dispatch tree)
   | { type: "thinking"; text: string } // F2
   | { type: "metrics"; data: Record<string, unknown> } // F2 (api_metrics → cost)
   | { type: "decision"; request: DecisionRequest }
@@ -473,6 +480,7 @@ export function parseMessage(msg: any): AgentEvent[] {
             ev.push({
               type: "subagent_dispatch",
               toolUseId: String(block.id ?? ""),
+              parentToolUseId,
               // Skills often dispatch with only {description, prompt} (no subagent_type) → agentType is
               // "unknown" but the description still identifies the dispatch (e.g. "TOP_DOWN market sizing").
               agentType: String(inp.subagent_type ?? inp.subagentType ?? "unknown"),

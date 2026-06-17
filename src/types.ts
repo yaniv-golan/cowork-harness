@@ -65,7 +65,13 @@ export type Profile = PlatformBaseline;
 export const AnswerRule = z.object({
   // AskUserQuestion matcher
   when_question: z.string().optional(),
-  choose: z.string().optional(),
+  // a label (single-select / one member) OR a list of labels (multiSelect — delivered comma-joined,
+  // the binary-verified wire shape). Each member is validated against the gate's offered options.
+  choose: z.union([z.string(), z.array(z.string())]).optional(),
+  // free-text "Other" answer: an arbitrary string delivered verbatim, bypassing label validation by
+  // author intent (Cowork auto-provides an "Other" free-text path on every AskUserQuestion gate). Mutually
+  // exclusive with `choose`.
+  answer: z.string().optional(),
   // tool-permission matcher
   when_tool: z.string().optional(),
   decide: z.enum(["allow", "deny"]).optional(),
@@ -77,30 +83,57 @@ export const AnswerRule = z.object({
 });
 export type AnswerRule = z.infer<typeof AnswerRule>;
 
+// Each field carries a `.describe()` so it is the SINGLE source for both the published JSON schema and
+// `cowork-harness assert --list` (which reads `Assertion.shape[k].description`) — the list can never drift
+// from the schema. Keep descriptions one line.
 export const Assertion = z.object({
-  transcript_contains: z.string().optional(),
-  transcript_not_contains: z.string().optional(),
-  transcript_matches: z.string().optional(), // regex (case-insensitive) over the transcript — fuzzy content for stochastic prose
-  transcript_not_matches: z.string().optional(),
-  file_exists: z.string().optional(),
-  user_visible_artifact: z.string().optional(), // passes only for files under mnt/outputs or mnt/.projects (Cowork-promoted)
-  tool_called: z.string().optional(),
-  tool_not_called: z.string().optional(),
-  subagent_tool_used: z.string().optional(),
-  subagent_tool_absent: z.string().optional(),
-  subagent_dispatched: z.string().optional(), // B2: an agentType was dispatched
-  subagent_declared_but_unused: z.string().optional(), // B2: a sub-agent declared a tool but never used it (the v0.3.0 fabrication proxy)
-  dispatch_count_max: z.number().optional(), // SPEC §10: assert total sub-agent dispatches ≤ N (the {global:3} ceiling)
-  egress_denied: z.string().optional(),
-  egress_allowed: z.string().optional(),
-  no_delete_in_outputs: z.boolean().optional(), // fails if any delete op touched mnt/outputs
-  self_heal_ran: z.boolean().optional(), // skill resolved scripts via /sessions (plugin-root self-heal)
-  transcript_no_host_path: z.boolean().optional(), // no /Users//opt host path leaked to the model
-  question_asked: z.string().optional(), // a question matching this regex was asked
-  questions_count_max: z.number().optional(), // at most N questions asked
-  gate_answers_delivered: z.boolean().optional(), // every answered AskUserQuestion gate's tool_result was non-error (the answer reached the model — catches O7-class delivery failures)
-  result: z.enum(["success", "error"]).optional(),
-  replay_protocol_fidelity: z.boolean().optional(), // synthesized by replayCassette — serializeDecision output matched the frozen controlOut recording (O7 guard on the token-free lane)
+  transcript_contains: z.string().optional().describe("the transcript contains this literal substring"),
+  transcript_not_contains: z.string().optional().describe("the transcript does NOT contain this literal substring"),
+  transcript_matches: z.string().optional().describe("regex (case-insensitive) over the transcript — fuzzy content for stochastic prose"),
+  transcript_not_matches: z.string().optional().describe("regex (case-insensitive) that must NOT match the transcript"),
+  file_exists: z.string().optional().describe("a file exists at this path under the agent's work root"),
+  user_visible_artifact: z
+    .string()
+    .optional()
+    .describe("a file exists AND is under a user-visible prefix (mnt/outputs or mnt/.projects — Cowork-promoted)"),
+  tool_called: z.string().optional().describe("a tool with this name was called"),
+  tool_not_called: z.string().optional().describe("a tool with this name was NOT called"),
+  subagent_tool_used: z.string().optional().describe("a sub-agent used this tool"),
+  subagent_tool_absent: z.string().optional().describe("no sub-agent used this tool"),
+  subagent_dispatched: z.string().optional().describe("a sub-agent matching this regex (by agentType or description) was dispatched"),
+  subagent_declared_but_unused: z.string().optional().describe("a sub-agent declared this tool but never used it (the fabrication proxy)"),
+  dispatch_count_max: z.number().optional().describe("total sub-agent dispatches ≤ N (the {global:3} ceiling)"),
+  egress_denied: z.string().optional().describe("egress to this host was denied"),
+  egress_allowed: z.string().optional().describe("egress to this host was allowed"),
+  no_delete_in_outputs: z.boolean().optional().describe("fails if any delete op touched mnt/outputs"),
+  self_heal_ran: z.boolean().optional().describe("skill resolved scripts via /sessions (plugin-root self-heal)"),
+  transcript_no_host_path: z.boolean().optional().describe("no /Users//opt host path leaked into model-visible text"),
+  question_asked: z.string().optional().describe("a question matching this regex was asked"),
+  questions_count_max: z.number().optional().describe("at most N questions were asked"),
+  gate_answers_delivered: z
+    .boolean()
+    .optional()
+    .describe("every answered AskUserQuestion gate's tool_result was non-error (the answer reached the model)"),
+  result: z.enum(["success", "error"]).optional().describe("the run's final result was success | error"),
+  replay_protocol_fidelity: z
+    .boolean()
+    .optional()
+    .describe("(replay) serializeDecision output matched the frozen recording — the token-free O7 guard"),
+  // #5: assert over the CONTENTS of a JSON artifact via a dotted path. `absent` and `is_null` are DISTINCT
+  // (key-missing vs present-null); an unresolved INTERMEDIATE segment fails loud (malformed artifact),
+  // never a vacuous pass. Live-only until the cassette artifact-manifest (#1) lands — stripped on replay.
+  artifact_json: z
+    .object({
+      artifact: z.string().describe("relative path to a JSON artifact under the work root (e.g. outputs/cap_state.json)"),
+      path: z.string().optional().describe("dotted path into the JSON (e.g. me.run_id); omit to target the whole document"),
+      equals: z.unknown().optional().describe("the resolved value deep-equals this"),
+      gt: z.number().optional().describe("the resolved value is a number greater than this"),
+      exists: z.boolean().optional().describe("the path resolves to a present (non-absent) value"),
+      absent: z.boolean().optional().describe("the final key is absent from its (resolved) parent — the anti-hallucination negative"),
+      is_null: z.boolean().optional().describe("the resolved value is JSON null (distinct from absent)"),
+    })
+    .optional()
+    .describe("assert over a JSON artifact's contents (dotted path + equals|gt|exists|absent|is_null)"),
 });
 export type Assertion = z.infer<typeof Assertion>;
 
@@ -142,6 +175,7 @@ export type Scenario = z.infer<typeof ScenarioObject>;
 
 export interface RunResult {
   scenario: string;
+  prompt?: string; // the prompt that was run — persisted so `scaffold --from-run` can reconstruct the scenario
   fidelity: string;
   baseline: string;
   result: "success" | "error";
@@ -178,6 +212,10 @@ export interface RunResult {
   outDir: string;
   workDir?: string; // the agent's working root (mnt/) inside the run dir — where the agent's FS lives
   outputsDir?: string; // the user-visible deliverable mount (mnt/outputs) — where a skill's artifacts land
+  // ENV-MANIFEST: files written under the user-visible prefixes (outputs/, .projects/), relative paths +
+  // sizes. Paths only (no content snapshot — that is the cassette manifest, #1). Kills path-guessing and
+  // makes an all-or-nothing truncated run (empty manifest) detectable. NOT sufficient for mid-write truncation.
+  artifacts?: { path: string; bytes: number }[];
   nonDeterministic?: boolean; // true if any decision was made by a non-deterministic source (by:"llm"|"external"|"human"|"first") — a green run is NOT reproducible (#47)
   /** True when the CONFIGURED terminal (on_unanswered: llm/prompt, or an external channel) could answer
    *  non-deterministically — even if THIS run was fully scripted and didn't hit it. `nonDeterministic`

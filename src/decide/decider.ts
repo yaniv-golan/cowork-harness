@@ -65,7 +65,7 @@ export class ScriptedDecider implements Decider {
   async decide(req: DecisionRequest, _ctx: RunContext): Promise<Decision | Abstain> {
     if (req.kind === "question") {
       const answers: Record<string, string> = {};
-      let allMatched = true;
+      const unmatched: string[] = []; // #4b: sub-questions no rule answered (named in the fallthrough warning)
       for (const q of req.questions) {
         const text = q.question ?? q.header ?? "";
         const rule = this.rules.find((r) => {
@@ -78,31 +78,68 @@ export class ScriptedDecider implements Decider {
             throw new Error(`bad regex in when_question "${r.when_question}": ${String((e as Error).message)}`);
           }
         });
-        if (rule?.choose) {
-          // #49: validate the scripted choice against the offered options (exact / case-insensitive
-          // label or 1-based index) and deliver the CANONICAL label. A typo matching no option is a
-          // silent false-green — the run would record "answered" with an impossible option — so fail
-          // loud, symmetric with the external/LLM terminals. A degenerate gate with no options has
-          // nothing to validate against, so the value passes through.
-          const labels = q.options?.map((o) => o.label) ?? [];
-          if (labels.length > 0) {
-            const coerced = coerceLabel(rule.choose, labels);
-            if (!coerced.matched)
-              throw new UnansweredError(
-                `scripted answer "${rule.choose}" for "${text}" matched no offered option`,
-                `valid labels: ${labels.map((l) => JSON.stringify(l)).join(", ")}`,
-              );
-            answers[text] = coerced.value;
-          } else answers[text] = rule.choose;
-        } else allMatched = false;
+        if (!rule || (rule.choose === undefined && rule.answer === undefined)) {
+          unmatched.push(text);
+          continue;
+        }
+        if (rule.choose !== undefined && rule.answer !== undefined)
+          throw new UnansweredError(
+            `rule for "${text}" sets both choose and answer`,
+            "use exactly one: choose: <label(s)> for an offered option, or answer: <text> for a free-text 'Other'",
+          );
+        // FREE-TEXT (#3): a free-text "Other" answer — an arbitrary string delivered verbatim, bypassing
+        // label validation BY AUTHOR INTENT. Cowork auto-provides an "Other" free-text path on every gate
+        // (binary-verified), so this is always faithful; `choose:` keeps the #49 label guard for the common case.
+        if (rule.answer !== undefined) {
+          answers[text] = rule.answer;
+          continue;
+        }
+        // choose path — single label, or (multiSelect) a list of labels delivered comma-joined.
+        const labels = q.options?.map((o) => o.label) ?? [];
+        const picks = Array.isArray(rule.choose) ? rule.choose : [rule.choose!];
+        if (picks.length > 1 && !q.multiSelect)
+          throw new UnansweredError(
+            `rule for "${text}" supplies ${picks.length} choices but the gate is single-select`,
+            "use a single choose: value, or only supply a list for a multiSelect gate",
+          );
+        if (labels.length === 0) {
+          // Degenerate gate with no options — nothing to validate against; pass the value(s) through.
+          answers[text] = picks.join(", ");
+          continue;
+        }
+        // #49: validate EACH chosen label against the offered options and deliver the CANONICAL label(s).
+        // A member matching no option is a silent false-green (the run would record an impossible answer) —
+        // fail loud, symmetric with the external/LLM terminals.
+        const resolved = picks.map((p) => {
+          const coerced = coerceLabel(p, labels);
+          if (!coerced.matched)
+            throw new UnansweredError(
+              `scripted answer "${p}" for "${text}" matched no offered option`,
+              `valid labels: ${labels.map((l) => JSON.stringify(l)).join(", ")}`,
+            );
+          return coerced.value;
+        });
+        // MULTISELECT comma-in-label hazard: the wire joins members with ", " WITHOUT escaping (binary-
+        // verified), so a member label that itself contains a comma can't be unambiguously round-tripped.
+        // This is a Cowork limitation, not ours — but silently joining it is a false-green, so warn loud.
+        if (picks.length > 1) {
+          const commaLabel = resolved.find((l) => l.includes(","));
+          if (commaLabel)
+            process.stderr.write(
+              `::warning:: multiSelect member label ${JSON.stringify(commaLabel)} for "${text}" contains a comma — the wire joins members with ", " WITHOUT escaping, so the model may re-read the selected set differently (Cowork limitation). Verify this gate.\n`,
+            );
+        }
+        answers[text] = resolved.join(", ");
       }
-      if (!allMatched) {
+      if (unmatched.length > 0) {
         // A gate's answers are delivered atomically — a partial scripted match cannot answer just one
-        // sub-question, so the WHOLE gate falls through to the fallback. Warn so that silent surprise
-        // (scripted Q1 but the LLM/fail terminal actually handled the gate) is visible.
+        // sub-question, so the WHOLE gate falls through to the fallback. #4b: name the UNMATCHED
+        // sub-questions (not just a count) so the author knows exactly which rule to add.
         if (Object.keys(answers).length > 0)
           process.stderr.write(
-            `::warning:: scripted rules matched only ${Object.keys(answers).length}/${req.questions.length} sub-questions of this gate — the whole gate falls through to the fallback decider (answers are delivered atomically)\n`,
+            `::warning:: scripted rules answered ${Object.keys(answers).length}/${req.questions.length} sub-questions of this gate; UNMATCHED: ${unmatched
+              .map((u) => JSON.stringify(u))
+              .join(", ")} — the whole gate falls through to the fallback decider (answers are delivered atomically)\n`,
           );
         return ABSTAIN;
       }
@@ -545,12 +582,32 @@ export function coerceLabel(a: string | number, labels: string[]): { value: stri
     const resolved = labels[a - 1];
     return resolved !== undefined ? { value: resolved, matched: true } : { value: labels[0] ?? String(a), matched: false };
   }
+  const s = a.trim();
   // #50: only treat the string as an index when it is ENTIRELY digits — `parseInt("1-no")` returns 1,
   // which would silently mis-select option 1. A digit-prefixed *label* falls through to the label match.
-  const n = /^\d+$/.test(a.trim()) ? parseInt(a.trim(), 10) : NaN;
+  const n = /^\d+$/.test(s) ? parseInt(s, 10) : NaN;
   if (!isNaN(n) && n >= 1 && n <= labels.length) return { value: labels[n - 1], matched: true };
-  const match = labels.find((l) => l.toLowerCase() === String(a).toLowerCase());
-  return match !== undefined ? { value: match, matched: true } : { value: labels[0] ?? String(a), matched: false };
+  // Exact / case-insensitive label.
+  const exact = labels.find((l) => l.toLowerCase() === s.toLowerCase());
+  if (exact !== undefined) return { value: exact, matched: true };
+  // CHOOSE-SUFFIX: tolerate the standard `(Recommended)` label suffix — the offered label is e.g.
+  // "Approve (Recommended)" but authors write `choose: Approve`. Match ignoring a trailing "(Recommended)"
+  // on EITHER side, and ALWAYS return the canonical full label (with the suffix) so the wire stays faithful.
+  const stripRec = (x: string) =>
+    x
+      .toLowerCase()
+      .replace(/\s*\(recommended\)\s*$/i, "")
+      .trim();
+  const suffixMatch = labels.find((l) => stripRec(l) === stripRec(s));
+  if (suffixMatch !== undefined) return { value: suffixMatch, matched: true };
+  // CHOOSE-SUFFIX keywords (lower priority than any literal label match above, so a real "First"/"Recommended"
+  // label is never hijacked): `recommended` → the option suffixed "(Recommended)"; `first` → option 1.
+  if (s.toLowerCase() === "recommended") {
+    const rec = labels.find((l) => /\(recommended\)\s*$/i.test(l));
+    if (rec !== undefined) return { value: rec, matched: true };
+  }
+  if (s.toLowerCase() === "first" && labels.length > 0) return { value: labels[0], matched: true };
+  return { value: labels[0] ?? s, matched: false };
 }
 
 export type OnUnanswered = "fail" | "prompt" | "llm" | "first";
