@@ -1,5 +1,5 @@
 import { readFileSync, readdirSync, existsSync } from "node:fs";
-import { join, resolve, isAbsolute } from "node:path";
+import { join, resolve, isAbsolute, dirname } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { PlatformBaseline } from "./types.js";
@@ -14,13 +14,56 @@ export function resolveAgentBinary(baseline: PlatformBaseline): string {
     return resolve(override);
   }
   const staged = (baseline.agentBinary?.stagedPath ?? "").replace(/^~(?=$|\/)/, homedir());
-  if (!staged || !existsSync(staged)) {
-    throw new Error(
-      `Staged agent binary not found at "${staged}". It is extracted from your Claude Desktop install ` +
-        `(claude-code-vm/<ver>/claude). Open Cowork once to stage it, or set COWORK_AGENT_BINARY to its path.`,
+  if (staged && existsSync(staged)) return resolve(staged);
+  // The baseline's exact version dir is gone (e.g. Claude Desktop updated). Fall back to the
+  // newest sibling binary under the same claude-code-vm/ root before giving up.
+  const fallback = staged ? newestStagedBinary(staged) : undefined;
+  if (fallback) {
+    process.stderr.write(
+      `cowork-harness: staged agent binary "${staged}" not found; ` +
+        `falling back to newest sibling "${fallback}".\n`,
     );
+    return fallback;
   }
-  return resolve(staged);
+  throw new Error(
+    `Staged agent binary not found at "${staged}". It is extracted from your Claude Desktop install ` +
+      `(claude-code-vm/<ver>/claude). Open Cowork once to stage it, or set COWORK_AGENT_BINARY to its path.`,
+  );
+}
+
+/**
+ * Given a `.../claude-code-vm/<ver>/claude` staged path whose exact version dir is missing,
+ * scan the `claude-code-vm/` root for `<ver>/claude` siblings and return the newest existing
+ * binary by numeric version sort. Returns undefined if none exist.
+ */
+function newestStagedBinary(stagedPath: string): string | undefined {
+  const root = dirname(dirname(stagedPath)); // .../claude-code-vm
+  if (!existsSync(root)) return undefined;
+  // Numeric/semver-aware sort matching compareBaselineVersions: parseInt each dot-segment, NaN→0.
+  const seg = (v: string) =>
+    v.split(".").map((s) => {
+      const n = parseInt(s, 10);
+      return Number.isNaN(n) ? 0 : n;
+    });
+  const cmp = (a: string, b: string) => {
+    const segA = seg(a);
+    const segB = seg(b);
+    const len = Math.max(segA.length, segB.length);
+    for (let i = 0; i < len; i++) {
+      const diff = (segA[i] ?? 0) - (segB[i] ?? 0);
+      if (diff !== 0) return diff;
+    }
+    return 0;
+  };
+  let dirs: string[];
+  try {
+    dirs = readdirSync(root);
+  } catch {
+    return undefined;
+  }
+  const versions = dirs.filter((d) => existsSync(join(root, d, "claude"))).sort(cmp);
+  if (versions.length === 0) return undefined;
+  return resolve(join(root, versions[versions.length - 1], "claude"));
 }
 
 /**

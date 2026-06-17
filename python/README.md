@@ -108,16 +108,17 @@ pytest -m 'not cowork'      # the fast loop (skips this lane) — the CI default
   ```
   `fn(request)` is called once per gate; the adapter reads each request line, echoes the `id`, and
   flushes the reply. (This is the spawn-helper analogue of the CLI's `gates`/`answer` commands.)
-- `cowork.run_scenario(path, *, fidelity=None, answers=None, on_unanswered="fail", check=False)` → `Result`
+- `cowork.run_scenario(path, *, on_unanswered="fail", check=False)` → `Result`
   — run an **authored scenario YAML** (its prompt + scripted answers + `assert:`) and get the typed
-  `Result` back, without the subprocess-spawn + JSON-parse + outputs-dir boilerplate. `fidelity=` overrides
-  the scenario's authored tier; `answers={q-regex: choice}` adds extra `--answer` rules; `check=True` raises
-  on a failed/enveloped-error run. The `Result` also exposes `.effective_fidelity` and `.artifacts` (the
-  ENV-MANIFEST) so a test can prove which tier actually ran (e.g. `cowork` → `hostloop`). A module-level
-  `run_scenario(path, …, cli=None)` is exported for the one-call case:
+  `Result` back, without the subprocess-spawn + JSON-parse + outputs-dir boilerplate. Fidelity and answers
+  are **scenario-authored** (the YAML's `fidelity:` / `answers:` fields) — `run` takes no `--fidelity` /
+  `--answer` flags, so the wrapper doesn't accept them either. `check=True` raises on a failed/enveloped-error
+  run. The `Result` also exposes `.effective_fidelity` and `.artifacts` (the ENV-MANIFEST) so a test can prove
+  which tier actually ran (e.g. `cowork` → `hostloop`). A module-level `run_scenario(path, …, cli=None)` is
+  exported for the one-call case:
   ```python
   from cowork_harness import run_scenario
-  r = run_scenario("scenarios/cap_table.yaml", fidelity="container")
+  r = run_scenario("scenarios/cap_table.yaml")
   r.assert_success()
   assert r.effective_fidelity == "hostloop"   # prove which tier ran
   ```

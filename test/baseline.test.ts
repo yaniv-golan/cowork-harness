@@ -1,9 +1,10 @@
-import { describe, it, expect } from "vitest";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
-import { compareBaselineVersions, loadBaseline } from "../src/baseline.js";
+import { compareBaselineVersions, loadBaseline, resolveAgentBinary } from "../src/baseline.js";
+import type { PlatformBaseline } from "../src/types.js";
 import { decodeFcacheGates, sync, checkMountModeFacts, checkWebFetchFacts } from "../src/sync/cowork-sync.js";
 
 describe("#40 — compareBaselineVersions (semver-aware baseline sort)", () => {
@@ -122,5 +123,53 @@ describe("checkWebFetchFacts (drift guard for the two-path web_fetch model)", ()
   });
   it("flags when the provenance URL set is gone", () => {
     expect(checkWebFetchFacts(ok.replace("getWebFetchAllowedUrls", "gone")).some((f) => f.includes("provenance URL set"))).toBe(true);
+  });
+});
+
+describe("H-F — resolveAgentBinary newest-sibling fallback", () => {
+  // Build a baseline whose only relevant field is agentBinary.stagedPath.
+  const baselineWith = (stagedPath: string) => ({ agentBinary: { stagedPath } }) as unknown as PlatformBaseline;
+
+  // Stage claude-code-vm/<ver>/claude binaries under a temp root; point the baseline at a missing version.
+  const stageVm = (versions: string[]) => {
+    const root = mkdtempSync(join(tmpdir(), "cowork-vm-"));
+    const vmRoot = join(root, "claude-code-vm");
+    for (const v of versions) {
+      mkdirSync(join(vmRoot, v), { recursive: true });
+      writeFileSync(join(vmRoot, v, "claude"), "#!/bin/sh\n");
+    }
+    return vmRoot;
+  };
+
+  afterEach(() => {
+    delete process.env.COWORK_AGENT_BINARY;
+    vi.restoreAllMocks();
+  });
+
+  it("falls back to the newest sibling binary when the exact staged version dir is missing", () => {
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    const vmRoot = stageVm(["2.1.170", "2.1.177"]);
+    const baseline = baselineWith(join(vmRoot, "2.1.999", "claude")); // non-existent version dir
+
+    const resolved = resolveAgentBinary(baseline);
+
+    expect(resolved).toBe(join(vmRoot, "2.1.177", "claude"));
+    expect(stderr).toHaveBeenCalled();
+  });
+
+  it("COWORK_AGENT_BINARY override keeps top precedence over both exact path and fallback", () => {
+    const vmRoot = stageVm(["2.1.170", "2.1.177"]);
+    const override = join(vmRoot, "2.1.170", "claude"); // an existing, distinct binary
+    process.env.COWORK_AGENT_BINARY = override;
+    const baseline = baselineWith(join(vmRoot, "2.1.999", "claude"));
+
+    expect(resolveAgentBinary(baseline)).toBe(override);
+  });
+
+  it("throws the original error when no sibling binary exists", () => {
+    const vmRoot = stageVm([]); // claude-code-vm exists but is empty
+    const baseline = baselineWith(join(vmRoot, "2.1.999", "claude"));
+
+    expect(() => resolveAgentBinary(baseline)).toThrow(/Staged agent binary not found/);
   });
 });
