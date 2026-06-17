@@ -1,8 +1,8 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, isAbsolute } from "node:path";
-import { parseSessionFile, parseScenarioFile, scanEvents, parseDialogTimeout, slugForPath } from "../src/run/execute.js";
+import { parseSessionFile, parseScenarioFile, scanEvents, parseDialogTimeout, slugForPath, isOutputsDelete } from "../src/run/execute.js";
 import { loadSession, resolveSessionPaths } from "../src/session.js";
 import { spawnEnv } from "../src/runtime/argv.js";
 import { loadBaseline } from "../src/baseline.js";
@@ -188,6 +188,51 @@ describe("execute — scanEvents host-path leak detection (#32)", () => {
       },
     ]);
     expect(scanEvents(f).outputsDeletes.length).toBe(1);
+  });
+});
+
+// H-A — outputs-delete detector: mv-direction (default) + opt-in /tmp suppression
+describe("isOutputsDelete — mv direction + opt-in safe-prefix suppression", () => {
+  const setEnv = (v?: string) => {
+    if (v === undefined) delete process.env.COWORK_HARNESS_SAFE_STAGING_PREFIX;
+    else process.env.COWORK_HARNESS_SAFE_STAGING_PREFIX = v;
+  };
+  afterEach(() => setEnv(undefined));
+
+  it("mv: standalone move INTO outputs is not a delete (Bug 34)", () => {
+    expect(isOutputsDelete("mv tmp/x outputs/x")).toBe(false);
+  });
+  it("mv: move OUT of outputs is a delete", () => {
+    expect(isOutputsDelete("mv outputs/x tmp/x")).toBe(true);
+  });
+  it("mv: dst MENTIONS but is not UNDER outputs → still a delete (UNDER_OUTPUTS fix)", () => {
+    expect(isOutputsDelete('mv outputs/a "/tmp/outputs-backup/a"')).toBe(true);
+  });
+  it("mv: ambiguous -t mentioning outputs → conservative flag", () => {
+    expect(isOutputsDelete("mv -t /tmp outputs/a outputs/b")).toBe(true);
+  });
+
+  it("default (no env): flags every rm co-occurrence", () => {
+    expect(isOutputsDelete("rm -rf /tmp/s.* ; cat outputs/y")).toBe(true);
+    expect(isOutputsDelete("rm mnt/outputs/a.md")).toBe(true);
+    expect(isOutputsDelete("cd outputs && rm -rf *")).toBe(true);
+  });
+  it("mv INTO outputs co-located with an unrelated rm/tmp still flags by the rm default", () => {
+    expect(isOutputsDelete("mv tmp/x outputs/x && rm /tmp/y")).toBe(true);
+  });
+
+  it("opt-in (/tmp): suppresses provably-safe staging cleanups", () => {
+    setEnv("/tmp");
+    expect(isOutputsDelete("rm -rf /tmp/cap.staging.* ; cat /mnt/outputs/x.csv")).toBe(false);
+    expect(isOutputsDelete('STAGING=/tmp/x.123 && cp "$STAGING/o.csv" mnt/outputs/o.csv && rm -rf "$STAGING"')).toBe(false);
+  });
+  it("opt-in (/tmp): STILL flags true positives", () => {
+    setEnv("/tmp");
+    expect(isOutputsDelete("rm mnt/outputs/a.md")).toBe(true);
+    expect(isOutputsDelete("find outputs -delete")).toBe(true);
+    expect(isOutputsDelete("cd outputs && rm -rf *")).toBe(true);
+    expect(isOutputsDelete("rm -rf scratch/* && cp x mnt/outputs/y")).toBe(true);
+    expect(isOutputsDelete('rm -rf "$UNDEFINED/data" ; cp a mnt/outputs/b')).toBe(true); // unresolved var
   });
 });
 

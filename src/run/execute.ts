@@ -525,21 +525,100 @@ export function hostPathLeaked(text: string): boolean {
   return normalized !== text && re.test(normalized);
 }
 
+const DELETE_TOKEN =
+  /\b(rm|unlink|rmdir|shred|truncate)\b|\bfind\b[^\n]*-delete\b|\bos\.(remove|unlink|rmdir)\b|\bshutil\.rmtree\b|\.unlink\(/;
+// `outputs` MENTIONED as a path segment (followed by `/` or a boundary) — broad, used for the conservative
+// rm co-occurrence + ambiguous-mv branch. The negative lookahead avoids `outputs.txt` / `myoutputs`.
+const TOUCHES_OUTPUTS = /(^|[\s"'`(/])(mnt\/)?outputs(?![\w.])/;
+// `outputs` as a real path COMPONENT (preceded by start/`/`, followed by `/` or end) — used for mv direction
+// so a dst like `/tmp/outputs-backup` is NOT mistaken for being inside outputs/.
+const UNDER_OUTPUTS = /(^|\/)(mnt\/)?outputs(\/|$)/;
+const CD_INTO_OUTPUTS = /\b(cd|pushd)\s+["']?(mnt\/)?outputs(?![\w.])/;
+
+/** Configured safe-staging prefixes (opt-in, no default — `/tmp` is NOT assumed scratch since a skill may
+ *  stage deliverables there). Set COWORK_HARNESS_SAFE_STAGING_PREFIX to a comma-separated list to enable
+ *  rm-suppression for deletes provably scoped under those prefixes. */
+function safePrefixes(): string[] {
+  return (process.env.COWORK_HARNESS_SAFE_STAGING_PREFIX ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((p) => (p.endsWith("/") ? p : p + "/"));
+}
+
+/** Substitute simple `NAME=VALUE` assignments into later `$NAME`/`${NAME}` uses. Conservative: skips
+ *  command-substituted values (`$(...)`/backticks) so an unresolved indirect target is never treated as
+ *  resolved (and therefore never "provably safe"). */
+function expandSimpleVars(cmd: string): string {
+  const vars = new Map<string, string>();
+  const assign = /(^|[\s;&|(])([A-Za-z_][A-Za-z0-9_]*)=("[^"]*"|'[^']*'|[^\s;&|]+)/g;
+  let m: RegExpExecArray | null;
+  while ((m = assign.exec(cmd))) {
+    const v = m[3].replace(/^['"]|['"]$/g, "");
+    if (/\$\(|`/.test(v)) continue;
+    vars.set(m[2], v);
+  }
+  let out = cmd;
+  for (const [k, v] of vars) out = out.replace(new RegExp(`\\$\\{${k}\\}|\\$${k}\\b`, "g"), v);
+  return out;
+}
+
+function splitStatements(cmd: string): string[] {
+  return cmd
+    .split(/\n|;|&&|\|\|/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+/** Non-flag argument tokens of a statement (lightweight word split — NOT a full shell tokenizer; a quoted
+ *  path with spaces mis-splits toward MORE matches, never fewer, so it cannot cause a false negative). */
+function nonFlagArgs(stmt: string): string[] {
+  return stmt
+    .split(/\s+/)
+    .slice(1)
+    .filter((t) => t && !t.startsWith("-"))
+    .map((t) => t.replace(/^['"]|['"]$/g, ""));
+}
+
+/** An `mv` statement is a delete-from-outputs when it moves a file OUT of outputs (src UNDER outputs, dst
+ *  NOT under outputs). Moving INTO outputs is not a delete. Ambiguous mv (`-t`/`--target-directory`, ≠2
+ *  operands) → flag only if it mentions outputs (conservative — never a false negative). */
+function mvDeletesOutputs(stmt: string): boolean {
+  if (!/\bmv\b/.test(stmt)) return false;
+  if (/(^|\s)(-t|--target-directory)\b/.test(stmt)) return TOUCHES_OUTPUTS.test(stmt);
+  const ops = nonFlagArgs(stmt);
+  if (ops.length !== 2) return TOUCHES_OUTPUTS.test(stmt);
+  const [src, dst] = ops;
+  return UNDER_OUTPUTS.test(src) && !UNDER_OUTPUTS.test(dst);
+}
+
 /**
- * A bash command deletes in outputs when a delete-ish token AND an `outputs/` reference co-occur.
- * Beyond `rm/unlink/rmdir/mv` this catches `find … -delete`, `shred`, `truncate`, and the common
- * `python -c` forms (os.remove/os.unlink/os.rmdir/shutil.rmtree, pathlib `.unlink()`) — all of which
- * ride the same Bash/`mcp__workspace__bash` command string. Pure + exported so the rule is directly
- * unit-testable. RESIDUAL GAP (documented, Phase 7): a delete via a script file, a renamed binary, or a
- * non-bash tool still evades this post-hoc scan — real enforcement is the deferred FUSE/MCP sub-project.
+ * A bash command deletes in outputs when (a) an `mv` moves a file OUT of outputs, or (b) an rm-family
+ * delete (`rm/unlink/rmdir/shred/truncate`, `find … -delete`, python os.remove/unlink/rmdir/shutil.rmtree,
+ * pathlib `.unlink()`) co-occurs with an `outputs/` reference. mv-direction is always evaluated (fixes the
+ * move-INTO false positive without losing the move-OUT true positive). For the rm family the DEFAULT is
+ * conservative (flag any co-occurrence — current behavior); when the operator opts in via
+ * COWORK_HARNESS_SAFE_STAGING_PREFIX, a delete is suppressed only when provably scoped to a configured
+ * prefix and outputs is referenced only by non-delete statements. Unresolved/command-substituted targets
+ * are never "provably safe". Pure + exported so the rule is directly unit-testable. RESIDUAL GAP: a delete
+ * via a script file / renamed binary / non-bash tool still evades this post-hoc scan — real enforcement is
+ * the deferred FUSE/MCP sub-project.
  */
 export function isOutputsDelete(cmd: string): boolean {
-  const delToken =
-    /\b(rm|unlink|rmdir|shred|truncate)\b|\bfind\b[^\n]*-delete\b|\bos\.(remove|unlink|rmdir)\b|\bshutil\.rmtree\b|\.unlink\(/;
-  // `outputs` as a path segment: followed by `/` (a file under it) OR a boundary (the dir itself, e.g.
-  // `find outputs -delete`). The negative lookahead avoids `outputs.txt` / `myoutputs` false matches.
-  const touchesOutputs = /(^|[\s"'`(/])(mnt\/)?outputs(?![\w.])/;
-  return (delToken.test(cmd) || /\bmv\b/.test(cmd)) && touchesOutputs.test(cmd);
+  const expanded = expandSimpleVars(cmd);
+  for (const stmt of splitStatements(expanded)) if (mvDeletesOutputs(stmt)) return true; // mv: always-on, direction-aware
+  if (!DELETE_TOKEN.test(expanded) || !TOUCHES_OUTPUTS.test(expanded)) return false; // rm-family fast path
+  const prefixes = safePrefixes();
+  if (prefixes.length === 0) return true; // no opt-in → flag the co-occurrence (unchanged default behavior)
+  if (CD_INTO_OUTPUTS.test(expanded)) return true; // a cwd-relative delete could hit outputs
+  for (const stmt of splitStatements(expanded)) {
+    if (!DELETE_TOKEN.test(stmt)) continue;
+    if (TOUCHES_OUTPUTS.test(stmt)) return true; // a delete statement itself names outputs
+    const targets = nonFlagArgs(stmt);
+    const allSafe = targets.length > 0 && targets.every((t) => prefixes.some((pre) => t.startsWith(pre)));
+    if (!allSafe) return true; // unprovable (incl. unexpanded/command-subst vars) → flag
+  }
+  return false; // every rm delete is provably under a safe prefix; outputs ref was non-delete only
 }
 
 /** Scan a run's events.jsonl for limitation-fidelity signals (moved from cli.ts). */
