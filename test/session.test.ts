@@ -1,9 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { mkdtempSync, readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { loadBaseline } from "../src/baseline.js";
 import { loadSession, buildLaunchPlan, resolveSessionPaths } from "../src/session.js";
+import { parseSessionFile } from "../src/run/execute.js";
 import { agentArgs } from "../src/runtime/argv.js";
 import { Scenario } from "../src/types.js";
 
@@ -142,6 +143,13 @@ describe("buildLaunchPlan", () => {
     const r = resolveSessionPaths(s, "/base/dir");
     expect(r.plugins.marketplaces[0]).toBe("/base/dir/local-mkt");
     expect(r.plugins.marketplaces[1]).toBe("https://example.com/m.git");
+  });
+
+  it("E: a committed session file's relative local_plugins resolves against the FILE's own dir (repo-relative mount)", () => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-sess-"));
+    writeFileSync(join(d, "session.yaml"), "plugins:\n  local_plugins:\n    - ../skills/cap-table\n");
+    const s = resolveSessionPaths(loadSession(parseSessionFile(join(d, "session.yaml"))), d);
+    expect(s.plugins.local_plugins[0]).toBe(resolve(d, "../skills/cap-table"));
   });
 
   it("a scenario omitting `session:` defaults to the all-defaults inline session (not a missing file)", () => {

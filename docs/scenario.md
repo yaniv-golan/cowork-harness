@@ -205,12 +205,20 @@ dotted `path` selects into the document; one operator decides the check:
 - artifact_json: { artifact: outputs/cap_state.json, path: me.run_id, equals: "r1" }
 - artifact_json: { artifact: outputs/cap_state.json, path: rounds.0.amount, gt: 0 }
 - artifact_json: { artifact: outputs/instruments.json, path: exclusivity_days, absent: true }   # anti-hallucination
+- artifact_json: { artifact: outputs/cap_state.json, path: stage, in: ["seed", "series-a"] }     # one of a stable set
 ```
-Operators: `equals` (deep-equal) · `gt` (number) · `exists: <bool>` · `absent: <bool>` · `is_null: <bool>`.
+Operators: `equals` (deep-equal) · `in: [<set>]` (deep-equal one of) · `gt` (number) · `exists: <bool>` · `absent: <bool>` · `is_null: <bool>`.
 The three states are **distinct**: `absent` (the final key is missing from a parent that resolved) vs
 `is_null` (present but JSON `null`) vs an **unresolved intermediate** segment (the artifact is malformed for
 that path) — which **fails loud**, never a vacuous pass. (No JSONPath/jq — a dotted path keeps it
 dependency-free and side-effect-free.)
+
+> **Stable vs brittle asserts on stochastic (LLM-extracted) values.** A cassette freezes ONE stochastic
+> output, so an `equals` on an LLM-extracted string will churn every time you re-record. Prefer **stable**
+> operators for extracted values: `absent` / `exists` (the anti-hallucination negative is rock-stable),
+> or `in: [<set>]` to accept any of a known-good set. Reserve `equals` for values the skill computes
+> deterministically (ids, counts, enums). This pairs with record-time redaction: redaction rewrites the
+> very strings an `equals` would pin, so `equals` on a redacted field would break on re-record anyway.
 
 > **Boundary assertions** (`egress_*`, `expect_denied`) require a sandboxed fidelity — `container`, `microvm`, or `hostloop` (all share the container sandbox + egress proxy). Only `protocol` is rejected, to avoid a false pass — see [boundary.md](./boundary.md).
 
