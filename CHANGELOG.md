@@ -6,6 +6,18 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-06-18
+
+### Fixed
+
+- **Agent-binary newest-staged fallback now applies on the real runtime paths** (container / hostloop, and
+  thus `skill` / `run` / `chat`), not just `sync`/tests. `resolveAgentBinary` had two private duplicates
+  (`container.ts`, `hostloop.ts`) **without** the 0.4.0 fallback, so a host with a newer staged
+  `claude-code-vm/<ver>` than the baseline expects still hard-failed with "Staged agent binary not found".
+  The duplicates were consolidated into the single exported resolver; a host that has staged a newer build
+  now falls back to it (with a warning) instead of failing. A structural test + CI guard prevent the
+  resolver from being re-duplicated.
+
 ## [0.4.0] — 2026-06-18
 
 The parsing/validation hardening + safety release: a current-tree code-review sweep plus fidelity and
