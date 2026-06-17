@@ -6,6 +6,40 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **A shipped `protocol`-tier example** (`examples/scenarios/protocol-smoke.yaml` + its session) — the first
+  zero-Docker/zero-agent worked example for the L0 tier (a scripted answer reaches the model, a tool runs, a
+  file is written), with the host-path leak owned via `transcript_no_host_path: false` to illustrate exactly
+  what protocol fidelity does and does not seal.
+- **Documentation for previously-undocumented surfaces:** `sync --allow-empty`, `boundary-check --session`,
+  `decide`'s `--decider-dir` rejection, `verify-cassettes`'s non-recursive scan, `replay` (one file vs
+  `record` batching), `gates` raw-output (no envelope), `gate_answers_delivered: false`, python
+  `run_scenario()`, six public reproducibility env vars, and HELP text for `chat --fidelity/--model` and
+  `sync --allow-empty`. Plus a zero-dependency "try it in 10s" `replay` lead in the README quick start.
+
+### Changed
+
+- **`chat --fidelity` now validates its argument** — a value other than `container`/`hostloop` is rejected
+  (exit 2) instead of being silently coerced to `container` (a fidelity footgun).
+- **`assert --list`** now describes `replay_protocol_fidelity` as replay-only and **not authorable** (it is
+  synthesized by the replay lane and rejected if written in a scenario).
+
+### Fixed
+
+- **Docs reconciled with the 0.3.0 artifact-manifest replay behavior.** README, SPEC, `docs/scenario.md`,
+  the companion `SKILL.md`, and the skill references previously claimed `file_exists`/`user_visible_artifact`/
+  `artifact_json` were "always skipped" on replay; they now correctly state these are evaluated **when the
+  cassette carries an `artifacts` manifest** (only the live-only egress keys are always skipped), with
+  `docs/cassette.md` flagged as canonical and `allow_permissive_auto_allow` added to its table.
+- **Corrected the claim that the `protocol` tier needs no token** — L0 spawns the host `claude` and calls a
+  real model, so it needs the auth token (Docker-free/agent-free, not token-free).
+- **Aligned stale references:** npx floor `>=0.2.0` → `>=0.3.0`; skill reference headers `0.1.0` → `0.3.0`;
+  stale `cassette.ts` line-cites → the `contentKeys` symbol; and the broken `DESIGN.md §1` anchor.
+- **Doc accuracy:** all five fidelity values (vs "L0/L1/L2"), `max_thinking_tokens` over "extended thinking",
+  the `config_dir` write-guard caveat, the `boundary-check` (exit 1) vs `BoundaryError` (exit 2) exit-code
+  distinction, and the `npm run ci` vs CI-Stage-1 gate framing.
+
 ## [0.3.0] — 2026-06-17
 
 The CI-operate + privacy layer for committed cassettes: record-time redaction, an always-on

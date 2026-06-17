@@ -15,9 +15,10 @@ Self-contained reference. Tracks `cowork-harness 0.3.0` (baseline `desktop-1.126
 - `hostloop` / `cowork` are the production-faithful path; `container` is the practical default.
 - Boundary assertions (`egress_*`, `expect_denied`) are enforced at `container`, `microvm`, and
   `hostloop` (all share the container sandbox + egress proxy). Only `protocol` is rejected.
-- **Set the tier in the scenario's `fidelity:` field — not a flag.** `--fidelity` is a `skill`-only
-  flag; `run` rejects an extra `--fidelity` positional ("Fidelity is set by the scenario's
-  `fidelity:` field, not a flag"). Pre-fix it was a silent no-op (ran the scenario's own tier).
+- **Set the tier in the scenario's `fidelity:` field — not a flag.** `--fidelity` is accepted only by
+  `skill` (any tier) and `chat` (`container`/`hostloop` only); `run` rejects an extra `--fidelity`
+  positional ("Fidelity is set by the scenario's `fidelity:` field, not a flag"). Pre-fix it was a silent
+  no-op (ran the scenario's own tier).
 
 ### `microvm` prerequisites & lifecycle
 
