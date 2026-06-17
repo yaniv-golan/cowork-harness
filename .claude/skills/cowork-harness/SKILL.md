@@ -3,7 +3,7 @@ name: cowork-harness
 description: Test or debug a Claude Code skill/plugin under Claude Cowork's runtime — sandboxed agent, default-deny egress, the can_use_tool permission/question protocol — using the cowork-harness CLI. Use when validating or regression-testing a skill, authoring or debugging a scenario YAML (prompt + scripted answers + assert:), choosing a fidelity tier, scripting AskUserQuestion / tool-permission answers, or asserting artifacts, egress, or sub-agent dispatch. Especially when a harness run no-ops an assertion, fails on an unanswered gate, false-greens, a steered answer never reaches the model, or a web_fetch is unexpectedly denied or gated. NOT for generic unit testing (pytest/vitest of your own scripts) or non-Cowork CI. Covers the skill / run / chat / record / replay / trace / decide / assert / scaffold commands and the session-vs-scenario split.
 metadata:
   author: cowork-harness
-  version: 0.1.2
+  version: 0.2.0
   tracks-harness: cowork-harness 0.2.0 (baseline desktop-1.12603.1)
 ---
 
@@ -21,7 +21,7 @@ several ways to *silently* no-op a check (skip an assertion on replay, auto-answ
 an empty egress allowlist). This skill exists mostly to keep you out of those traps — the Gotchas
 section below is the highest-value part. Read it.
 
-> **Version note:** the facts and `file:line` pointers here track `cowork-harness 0.1.0` (baseline
+> **Version note:** the facts and `file:line` pointers here track `cowork-harness 0.2.0` (baseline
 > `desktop-1.12603.1`). If your checkout is newer, prefer the live `--help`, `SPEC.md`, and
 > `docs/*.md` over this snapshot, and re-run the bundled linter.
 

@@ -6,8 +6,10 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
-Binary-verified the AskUserQuestion answer wire shape (agent ELF 2.1.170) and implemented the
-harness-improvements plan.
+## [0.2.0] — 2026-06-17
+
+Binary-verified the AskUserQuestion answer wire shape (agent ELF 2.1.170), implemented the
+harness-improvements plan, and resolved a 39-finding code-review pass behind two centralizing seams.
 
 ### Added
 
@@ -24,9 +26,32 @@ harness-improvements plan.
   now carry a `cassetteVersion` (forward-compat guard).
 - **`RunResult.artifacts`** (ENV-MANIFEST) — observed user-visible files (path + bytes); also surfaced as
   `Result.artifacts` in the Python helper.
+- **`allow_permissive_auto_allow` assertion + `RunResult.scan`** — a security-scan surface for the
+  Cowork-parity verdict (below); the assertion opts a scenario into a permissive auto-allow on purpose.
 - **CLI:** `trace --dispatches` (sub-agent dispatch tree + real total), `assert --list` (schema-generated),
   `scaffold --from-run <id>` (kept run → starter scenario YAML).
 - **Python:** `run_scenario()` — run an authored scenario YAML and get the typed `Result`.
+
+### Changed
+
+- **Single verdict source (`computeVerdict()`)** wired into all five pass/fail sites (run/skill exit, footer,
+  replay exit, JSON-envelope `ok`) plus the Python `assert_success`. A Cowork-parity violation — a permissive
+  auto-allow, a recorded `outputs/` delete, or a host-path leak — now **default-fails** the run unless the
+  scenario explicitly asserts about it.
+- **Single fail-loud staging policy (`src/staging/resolve.ts`)** for every declared input (marketplace
+  manifest, enabled-plugin resolution, local skills, `mcp.config`, uploads, folders), with a Docker-safe
+  marketplace charset.
+- The run root honors `COWORK_HARNESS_RUNS_DIR`.
+
+### Fixed
+
+- **Egress / runtime hardening:** per-hop redirect egress logging, allowlist validation, a per-run proxy
+  port, proxy/sidecar readiness handshakes, fail-loud Lima provisioning, and boundary teardown in
+  `try/finally`.
+- **Protocol / decider hardening:** oversized control-frame hard-fail, a nonzero child-exit error event,
+  provenance untruncation, TTY-elicit cancel, and a JSON-safe `reply_with` key.
+- **Detection / packaging:** `%2F`/backslash decode in the outputs-delete detector; the npm package now
+  ships `schema/`, `docs/`, `python/`, and `scripts/`; assertion path containment; resume empty-tree warning.
 
 ### Notes
 

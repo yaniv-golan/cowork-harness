@@ -173,7 +173,7 @@ This repo ships a **companion skill** (`.claude/skills/cowork-harness/`) that te
 /plugin install cowork-harness@cowork-harness
 ```
 
-The skill **self-bootstraps the CLI**: if `cowork-harness` isn't on your PATH it falls back to `npx cowork-harness@latest` (Node ≥ 20). Tiers above `protocol` still need Docker/Lima and a Claude Desktop agent binary — see the prerequisites below.
+The skill **self-bootstraps the CLI**: if `cowork-harness` isn't on your PATH it falls back to `npx cowork-harness@>=0.2.0` (a version floor that fails loud rather than silently fetching a too-old CLI; Node ≥ 20). Tiers above `protocol` still need Docker/Lima and a Claude Desktop agent binary — see the prerequisites below.
 
 It also follows the open [Agent Skills](https://github.com/vercel-labs/skills) spec, so it installs cross-editor (Cursor, Codex, OpenCode, …) by pointing the `npx skills` CLI at `.claude/skills/cowork-harness` in this repo. (Working *inside* this repo, the skill auto-loads as a project skill — no install needed.)
 

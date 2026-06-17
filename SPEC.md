@@ -309,7 +309,7 @@ every command:
 ```jsonc
 {
   "tool": "cowork-harness",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "command": "run" | "skill" | "replay",
   "ok": true,                 // false if any result failed OR an error occurred
   "results": [ RunResult ],   // one per scenario; skill/replay = array of 1
