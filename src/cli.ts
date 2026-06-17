@@ -14,7 +14,7 @@ import { vmInit, vmDelete, vmStatus, vmPrune, instanceName } from "./runtime/lim
 import { sync } from "./sync/cowork-sync.js";
 import { runBoundaryChecks, formatBoundary } from "./boundary.js";
 import { cmdChat } from "./run/chat.js";
-import { cmdRecord, cmdReplay } from "./run/cassette.js";
+import { cmdRecord, cmdReplay, cmdVerifyCassettes } from "./run/cassette.js";
 import { loadDotenv } from "./dotenv.js";
 import { makeRenderer, renderStart, renderFooter, startHeartbeat, type RenderPlan } from "./run/renderer.js";
 import {
@@ -61,6 +61,8 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
       [--out <file>]           cassette path (default: cassettes/<scenario-name>.cassette.json)
   replay --cassette <file>     deterministic protocol-replay of a cassette (no token) [--output-format json]
       [--strict]               escalate a cassette-staleness warning (baseline/skill drift) to a failure
+  verify-cassettes <file|dir>  CI gate (no token): privacy scan + staleness — exit 1 on a PII finding or drift
+      [--privacy-only|--staleness-only] [--allow <regex>]... [--output-format json]
   trace <run-id | dir | path>  digest a run's events.jsonl (tools+result status, dispatches, decisions)
       [--tools]  tool/dispatch rows only   [--gates]  gate lifecycle (question→answer→delivered)
       [--dispatches]  sub-agent dispatch tree + the real total (read off dispatch_count_max)
@@ -215,6 +217,7 @@ async function main() {
       "chat",
       "record",
       "replay",
+      "verify-cassettes",
       "trace",
       "assert",
       "scaffold",
@@ -275,6 +278,8 @@ async function main() {
       return cmdRecord(rest);
     case "replay":
       return cmdReplay(rest);
+    case "verify-cassettes":
+      return cmdVerifyCassettes(rest);
     case "trace":
       return cmdTrace(rest);
     case "assert":

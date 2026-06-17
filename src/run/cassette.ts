@@ -24,6 +24,7 @@ import { jsonEnvelope, parseOutputFormat } from "./envelope.js";
 import { computeVerdict } from "./verdict.js";
 import { redactJsonLine, redactText, redactStructural, loadRedactionPolicy, type RedactionPolicy } from "../redact.js";
 import { collectSecrets, scrub } from "../secrets.js";
+import { scanText, type ScanFinding } from "../scan.js";
 
 const out = (s: string) => process.stdout.write(s + "\n");
 const log = (s: string) => process.stderr.write(s + "\n");
@@ -161,6 +162,48 @@ export function buildFingerprint(sessionPath: string, baselineAppVersion: string
   // Store skillSources RELATIVE to the session-file dir — diagnostics only (the replay recompute re-derives
   // the dirs from the session), so a relative path is enough and never leaks an absolute `/Users/...` path.
   return { baseline: baselineAppVersion, skillHash: hash.digest("hex"), skillSources: dirs.map((d) => relative(baseDir, d)) };
+}
+
+/** A2: scan the WHOLE cassette surface for PII (default classes: email/currency/domain). A `truncated`
+ *  artifact has NO committed body (hash-only) — nothing to leak — but is reported as `unscanned` so coverage
+ *  is never silently implied. Real-class findings fail the gate; `unscanned` is informational. */
+export function scanCassette(cassette: Cassette, allow: RegExp[]): ScanFinding[] {
+  const findings: ScanFinding[] = [];
+  cassette.events.forEach((l, i) => findings.push(...scanText(l, `events[${i}]`, allow)));
+  cassette.controlOut?.forEach((l, i) => findings.push(...scanText(l, `controlOut[${i}]`, allow)));
+  for (const a of cassette.artifacts ?? []) {
+    if (a.body !== undefined) findings.push(...scanText(a.body, `artifact ${a.path}`, allow));
+    else if (a.truncated)
+      findings.push({ where: `artifact ${a.path}`, cls: "unscanned", sample: "(body not committed — too large or unreadable)" });
+  }
+  findings.push(...scanText(cassette.scenario.prompt, "scenario.prompt", allow));
+  findings.push(...scanText(JSON.stringify(cassette.scenario.answers ?? null), "scenario.answers", allow));
+  findings.push(...scanText(JSON.stringify(cassette.scenario.assert ?? null), "scenario.assert", allow));
+  for (const s of cassette.fingerprint?.skillSources ?? []) findings.push(...scanText(s, "fingerprint.skillSources", allow));
+  return findings;
+}
+
+/** B3 staleness GATE: recompute the fingerprint and report drift. Unlike `replayCassette` (which WARNS),
+ *  the gate treats an unresolvable skillHash as a failure — can't verify ⇒ not green. No fingerprint → nothing
+ *  to check (legacy cassette). */
+export function checkStaleness(cassette: Cassette, cassetteDir: string): string[] {
+  const fp = cassette.fingerprint;
+  if (!fp) return [];
+  const msgs: string[] = [];
+  let liveBaseline: string | undefined;
+  try {
+    liveBaseline = loadBaseline("latest").appVersion;
+  } catch {
+    /* no baseline available (e.g. CI without `sync`) — skip the baseline arm */
+  }
+  if (liveBaseline && liveBaseline !== fp.baseline) msgs.push(`baseline moved ${fp.baseline} → ${liveBaseline} since record — re-record`);
+  if (fp.skillHash) {
+    const live = buildFingerprint(cassette.scenario.session, fp.baseline, cassetteDir);
+    if (live.skillHash === undefined)
+      msgs.push("skill dirs not resolvable from the cassette location — cannot verify staleness (gate fails: can't verify ⇒ not green)");
+    else if (live.skillHash !== fp.skillHash) msgs.push("local skill/plugin dir contents changed since record — re-record");
+  }
+  return msgs;
 }
 
 /** A minimal RunRecord for a truncated-cassette replay — empty collections so downstream evaluate()/the
@@ -494,6 +537,80 @@ export async function cmdReplay(args: string[]) {
   if (json) out(jsonEnvelope("replay", [result]));
   else renderFooter(result, plan, { renderer, lane: "replay" });
   process.exit(verdict.exitCode);
+}
+
+/** `verify-cassettes <file|dir>` — the CI gate (token/agent-free). Runs the privacy scan (A2) and the
+ *  staleness check (B3) over one cassette or every `*.cassette.json` in a dir (non-recursive). Exit 1 on any
+ *  real PII finding or staleness drift; `unscanned` notes are informational. Dedicated JSON envelope. */
+export function cmdVerifyCassettes(args: string[]) {
+  let json: boolean;
+  try {
+    json = parseOutputFormat(args) === "json";
+  } catch (e) {
+    log(String((e as Error).message));
+    return process.exit(2);
+  }
+  const privacyOnly = args.includes("--privacy-only");
+  const stalenessOnly = args.includes("--staleness-only");
+  const doPrivacy = !stalenessOnly;
+  const doStaleness = !privacyOnly;
+  const allow: RegExp[] = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] !== "--allow") continue;
+    const src = args[++i];
+    if (src === undefined) {
+      log("--allow needs a regex value");
+      return process.exit(2);
+    }
+    try {
+      allow.push(new RegExp(src, "i"));
+    } catch {
+      log(`--allow: invalid regex: ${src}`);
+      return process.exit(2);
+    }
+  }
+  const target = args.find((a, i) => !a.startsWith("--") && args[i - 1] !== "--allow");
+  if (!target) {
+    log("usage: verify-cassettes <file|dir> [--privacy-only|--staleness-only] [--allow <regex>]... [--output-format json]");
+    return process.exit(2);
+  }
+  if (!existsSync(target)) {
+    log(`verify-cassettes: path not found: ${target}`);
+    return process.exit(2);
+  }
+  const files = statSync(target).isDirectory()
+    ? readdirSync(target)
+        .filter((f) => f.endsWith(".cassette.json"))
+        .sort()
+        .map((f) => join(target, f))
+    : [target];
+  if (files.length === 0) {
+    log(`verify-cassettes: no .cassette.json files under ${target} — nothing verified (loud non-zero, not a vacuous pass)`);
+    return process.exit(2);
+  }
+  const results = files.map((f) => {
+    const cassette: Cassette = JSON.parse(readFileSync(f, "utf8"));
+    const findings = doPrivacy ? scanCassette(cassette, allow) : [];
+    const staleness = doStaleness ? checkStaleness(cassette, dirname(f)) : [];
+    return { file: f, findings, staleness };
+  });
+  const realFindings = results.flatMap((r) => r.findings.filter((x) => x.cls !== "unscanned"));
+  const staleAny = results.some((r) => r.staleness.length > 0);
+  const ok = realFindings.length === 0 && !staleAny;
+  if (json) {
+    out(JSON.stringify({ command: "verify-cassettes", ok, results }));
+  } else {
+    for (const r of results) {
+      for (const f of r.findings) log(`${f.cls === "unscanned" ? "·" : "✗"} ${r.file}: [${f.cls}] ${f.where} — ${f.sample}`);
+      for (const s of r.staleness) log(`✗ ${r.file}: [stale] ${s}`);
+    }
+    log(
+      ok
+        ? `✓ verify-cassettes: ${files.length} cassette(s) clean`
+        : `✗ verify-cassettes: ${realFindings.length} PII finding(s)${staleAny ? " + staleness drift" : ""} across ${files.length} cassette(s)`,
+    );
+  }
+  return process.exit(ok ? 0 : 1);
 }
 
 /** Replay a cassette through Run and re-evaluate the content assertions. With a `cassette.artifacts`
