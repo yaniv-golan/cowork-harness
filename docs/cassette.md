@@ -22,15 +22,25 @@ Use a live `run` for filesystem/egress assertions; use `replay` for the token-fr
 
 ```jsonc
 {
+  "cassetteVersion": 1,                  // format version; ABSENT = legacy (0); a FUTURE version warns
   "scenario": { /* Scenario object — same schema as the .yaml */ },
   "events": [ /* JSON lines from events.jsonl (child→driver stdout) */ ],
-  "controlOut": [ /* JSON lines from control-out.jsonl (driver→child control_responses) */ ]
+  "controlOut": [ /* JSON lines from control-out.jsonl (driver→child control_responses) */ ],
+  "artifacts": [                         // #1: snapshot of outputs/ + .projects/ (optional)
+    { "path": "outputs/x.json", "bytes": 24, "sha256": "…", "body": "{…}" }, // body inlined ≤ 64 KiB
+    { "path": "outputs/big.bin", "bytes": 9e6, "sha256": "…", "truncated": true } // oversized → hash-only
+  ],
+  "fingerprint": { "baseline": "1.12603.1", "skillHash": "…", "skillSources": ["…"] } // #1b staleness tripwire
 }
 ```
 
 `controlOut` is optional (old cassettes pre-dating full-fidelity replay lack it). When present it
 enables full-fidelity replay (see §Full-fidelity replay below). When absent, replay falls back to
 events-only mode with a loud warning.
+
+`artifacts` (#1) and `fingerprint` (#1b) are also optional — both engage only when present, so old
+cassettes replay unchanged. `cassetteVersion` is the format-schema version (a monotonic integer, not
+semver): a value newer than the harness understands triggers a loud forward-compat warning.
 
 ## Recording prerequisites
 
@@ -81,20 +91,32 @@ Content keys are evaluated on replay; everything else is skipped.
 replay). On an old cassette without `controlOut` these three keys are excluded from evaluation — not
 vacuously passed — and a loud warning fires (see §Backward compatibility).
 
-### Skipped on replay (filesystem / egress — run on live `run` only)
+### Filesystem assertions — replay-checkable WITH an artifact manifest (#1)
 
-`file_exists`, `user_visible_artifact`, `no_delete_in_outputs`, `self_heal_ran`,
-`transcript_no_host_path`, `egress_denied`, `egress_allowed`, `expect_denied`.
+`file_exists`, `user_visible_artifact`, and `artifact_json` run on replay **when the cassette carries an
+`artifacts` manifest** — `record` snapshots `outputs/`/`.projects/` and `replay` materializes that snapshot
+to evaluate them token-free. `artifact_json` needs the JSON `body` inlined (small files); a hash-only
+(`truncated`) entry still satisfies `file_exists` but not `artifact_json`. Without a manifest (older
+cassettes), these are skipped. A green replay re-confirms *record-time* artifacts, **not** that the current
+skill still produces them — `replay --strict` fails the run when the `fingerprint` shows the skill/baseline
+drifted.
+
+### Still skipped on replay (no filesystem/network in a cassette)
+
+`no_delete_in_outputs`, `self_heal_ran`, `transcript_no_host_path`, `egress_denied`, `egress_allowed`,
+`expect_denied`.
 
 Skipped assertions are **absent** from `assertions[]` in the replay result (filtered before evaluation),
 not present-and-passing. A CI script must not assume a fixed assertion count across replay and live lanes.
 
 ### Mixed assertions and the partial-skip warning
 
-A single assertion object may mix a content key with a filesystem/egress key, e.g.
-`{ result: "success", file_exists: "out.pdf" }`. On replay the object is **stripped to its content
-keys** before evaluation — only `result` is checked; `file_exists` is silently dropped (it's live-only).
-To keep "skipped ≠ false-green," replay fires a second loud warning whenever this happens:
+A single assertion object may mix a content key with a still-skipped egress/filesystem key, e.g.
+`{ result: "success", egress_denied: "evil.com" }`. On replay the object is **stripped to its
+replay-checkable keys** before evaluation — only `result` is checked; `egress_denied` is dropped. (With an
+artifact manifest, `file_exists`/`user_visible_artifact`/`artifact_json` are no longer dropped — they're
+checkable; only the genuinely live-only keys above are.) To keep "skipped ≠ false-green," replay fires a
+second loud warning whenever a key is dropped this way:
 
 ```
 ::warning:: [replay] N mixed assertion(s) had their filesystem/egress half dropped — only the content half was evaluated on replay

@@ -74,8 +74,10 @@ Skill testing is the headline use, but the tool is a general harness over the Co
 | `skill <folder> "<prompt>"` | Run a local skill/plugin folder once against the staged agent | ad-hoc "is the skill alive / does it do X?" — the fast inner loop |
 | `run <scenario.yaml \| dir/>` | Run authored scenarios with `assert:` + a CI-ready exit code | you want a repeatable, **asserted regression test** |
 | `chat <folder>` | Interactive multi-turn REPL against a skill (TTY) | debugging a multi-turn flow by hand |
-| `record` / `replay` | Save a control-protocol cassette, then replay it deterministically | **token-free, Docker-free CI** from a once-recorded run |
-| `trace <run-id>` | Digest a run's `events.jsonl` (tools, sub-agent dispatches, decisions) | "how many sub-agents *actually* dispatched, and which?" |
+| `record` / `replay` | Save a control-protocol cassette, then replay it deterministically (`replay --strict` fails on a stale cassette) | **token-free, Docker-free CI** from a once-recorded run |
+| `trace <run-id>` | Digest a run's `events.jsonl` (`--tools`, `--gates`, `--dispatches` for the sub-agent dispatch tree + total) | "how many sub-agents *actually* dispatched, and which?" |
+| `scaffold --from-run <id>` | Turn a kept run into a starter scenario YAML (gates→answers, artifacts→`file_exists`) | authoring a scenario from a real run instead of guessing |
+| `assert --list` | List the available scenario assertions (generated from the schema) | "what can I assert?" without grepping the source |
 | `decide` | Validate a decider against a sample question in ~2 s (no run) | sanity-check a `--decider-*` / `--answer` wiring before a long run |
 | `gates` / `answer` | Stream / answer in-band gates for `--decider-dir` | a **driving agent** answers live questions via a Monitor |
 | `boundary-check [baseline]` | Prove the sandbox enforces Cowork's limitations | verifying the harness's own fidelity |

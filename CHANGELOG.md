@@ -4,6 +4,35 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The project uses
 [Semantic Versioning](https://semver.org/); pre-1.0 minor versions may include breaking changes.
 
+## [Unreleased]
+
+Binary-verified the AskUserQuestion answer wire shape (agent ELF 2.1.170) and implemented the
+harness-improvements plan.
+
+### Added
+
+- **AskUserQuestion answer shapes.** `multiSelect` gates (answer with a list of labels → the verified
+  comma-joined wire shape); free-text **"Other"** via `answer:` (distinct from the label-validated
+  `choose:`); `choose` tolerates the `(Recommended)` suffix + `recommended`/`first` keywords. A partial
+  match on a batched gate now **names the unmatched sub-questions**.
+- **`artifact_json` assertion** — assert a JSON artifact's contents via a dotted path
+  (`equals`/`gt`/`exists`/`absent`/`is_null`); `absent`, `is_null`, and an unresolved intermediate are
+  distinct (the last fails loud, never a vacuous pass).
+- **Artifact manifest in cassettes** — `record` snapshots `outputs/`/`.projects/` (paths + hashes + small
+  JSON bodies) so `file_exists`/`user_visible_artifact`/`artifact_json` run on token-free `replay`. A
+  cassette→skill/baseline **staleness fingerprint** warns on drift; `replay --strict` fails on it. Cassettes
+  now carry a `cassetteVersion` (forward-compat guard).
+- **`RunResult.artifacts`** (ENV-MANIFEST) — observed user-visible files (path + bytes); also surfaced as
+  `Result.artifacts` in the Python helper.
+- **CLI:** `trace --dispatches` (sub-agent dispatch tree + real total), `assert --list` (schema-generated),
+  `scaffold --from-run <id>` (kept run → starter scenario YAML).
+- **Python:** `run_scenario()` — run an authored scenario YAML and get the typed `Result`.
+
+### Notes
+
+- Held/deferred per the plan's gating: composed partial-gate answering, `decider_intent:` in scenario YAML,
+  a whole-gate `response:` freeform, and `artifacts_share_field`. All additive/opt-in when built.
+
 ## [0.1.1] — 2026-06-16
 
 Docs, distribution, and packaging. No CLI behavior change.
