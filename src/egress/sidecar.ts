@@ -1,3 +1,4 @@
+import { warn } from "../io.js";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -105,18 +106,18 @@ export function parseEgressLine(line: string): { host: string; decision: "allow"
   try {
     o = JSON.parse(line);
   } catch {
-    process.stderr.write(`::warning:: [egress] proxy log line is not valid JSON — dropping: ${line.slice(0, 200)}\n`);
+    warn(`::warning:: [egress] proxy log line is not valid JSON — dropping: ${line.slice(0, 200)}\n`);
     return null;
   }
   // Valid JSON that isn't a non-null object (e.g. `null`, a number, an array) would throw on the
   // field reads below, OUTSIDE the parse catch — crashing collect() at teardown. Drop it loudly.
   if (o === null || typeof o !== "object" || Array.isArray(o)) {
-    process.stderr.write(`::warning:: [egress] proxy log line is not a JSON object — dropping: ${line.slice(0, 200)}\n`);
+    warn(`::warning:: [egress] proxy log line is not a JSON object — dropping: ${line.slice(0, 200)}\n`);
     return null;
   }
   const host = String(o.host);
   if (o.decision !== "allow" && o.decision !== "deny") {
-    process.stderr.write(`::warning:: [egress] unknown decision "${o.decision}" for host ${host} — dropping (not coercing to allow)\n`);
+    warn(`::warning:: [egress] unknown decision "${o.decision}" for host ${host} — dropping (not coercing to allow)\n`);
     return null;
   }
   return { host, decision: o.decision };
@@ -131,7 +132,7 @@ function ensureProxyImage(runner: string) {
   // #38: Dockerfile.proxy COPYs the SHIPPED dist/egress; running from source (tsx) before
   // `npm run build` leaves it absent, so the image build would fail confusingly. Build dist/ first.
   if (!existsSync(join(repoRoot, "dist", "egress", "proxy.js"))) {
-    process.stderr.write(`::warning:: [egress] dist/egress missing — running \`npm run build\` before the proxy image build\n`);
+    warn(`::warning:: [egress] dist/egress missing — running \`npm run build\` before the proxy image build\n`);
     const built = spawnSync("npm", ["run", "build"], { cwd: repoRoot, stdio: "inherit" });
     if (built.status !== 0) throw new Error("failed to build dist/ for the egress proxy image (npm run build)");
   }

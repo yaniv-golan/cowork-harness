@@ -1,3 +1,4 @@
+import { warn } from "../io.js";
 import { createWriteStream, type WriteStream } from "node:fs";
 import { join } from "node:path";
 import readline from "node:readline";
@@ -377,7 +378,7 @@ export class LiveAgentSession implements AgentSession {
           // reply — an unanswered mcp_message blocks the in-VM agent on the round-trip forever (deadlock).
           // Reply with a JSON-RPC error instead, mirroring the no-handler defense below.
           const message = (e as Error)?.message ?? String(e);
-          process.stderr.write(`::warning:: sdkMcp.handle threw for "${server}" — replying with a JSON-RPC error: ${message}\n`);
+          warn(`::warning:: sdkMcp.handle threw for "${server}" — replying with a JSON-RPC error: ${message}\n`);
           out = { error: { code: -32603, message: `handler error: ${message}` } };
         }
         this.write(mcpResponseEnvelope(msg.request_id, out as any, jr.id));
@@ -397,7 +398,7 @@ export class LiveAgentSession implements AgentSession {
       // #10: an mcp_message arrived but no sdkMcp handler is configured. Reply with a JSON-RPC error
       // (well-formed via mcpResponseEnvelope) instead of silently dropping it — a dropped request
       // leaves the in-VM agent waiting on the round-trip forever (protocol deadlock in host-loop mode).
-      process.stderr.write(
+      warn(
         `::warning:: mcp_message for server "${server}" arrived but no sdkMcp handler is configured — replying with a JSON-RPC error (would otherwise deadlock)\n`,
       );
       this.write(mcpResponseEnvelope(msg.request_id, { error: { code: -32601, message: "no sdkMcp handler configured" } }, jr.id));
@@ -418,7 +419,7 @@ export class LiveAgentSession implements AgentSession {
     if (!req) {
       // #13: an id with no matching request_id is a protocol drift. Writing a guessed envelope would
       // be worse, but a silent return leaves the agent blocked until timeout (looks like a hang).
-      process.stderr.write(
+      warn(
         `::warning:: respond() for unknown decision id "${decisionId}" — no matching request_id was seen; the agent may block until timeout (protocol drift)\n`,
       );
       return;
@@ -428,7 +429,7 @@ export class LiveAgentSession implements AgentSession {
     // while the agent actually received a deny. (serializeDecision stays a pure declared inverse of
     // deserializeDecision; the warning lives here in the caller, not in the pure function.)
     if (req.kind !== r.kind)
-      process.stderr.write(
+      warn(
         `::warning:: decider returned kind "${r.kind}" for a "${req.kind}" request (id ${decisionId}) → sending a safe deny/cancel; the agent did NOT receive an answer\n`,
       );
     this.write(serializeDecision(req, r));

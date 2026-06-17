@@ -1,3 +1,4 @@
+import { warn } from "../io.js";
 import { spawn } from "node:child_process";
 import { mkdirSync, cpSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
@@ -76,7 +77,7 @@ export function spawnProtocol(scenario: Scenario, baseline: PlatformBaseline, pl
   // applies the Cowork auth-env drop nor passes --plugin-dir, so plugin fidelity is not what
   // a cowork tier would give. Mirrors the L0 "network tool ran at L0" warning in execute.ts.
   if (plan.pluginDirs.length > 0) {
-    process.stderr.write(
+    warn(
       `::warning:: ${scenario.name}: L0 (protocol) does not apply the Cowork auth-env drop or --plugin-dir; ` +
         `${plan.pluginDirs.length} plugin dir(s) load via --settings/managed config, not the --plugin-dir cache layout — ` +
         `use container/microvm for auth+plugin fidelity.\n`,

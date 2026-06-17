@@ -1,3 +1,4 @@
+import { warn } from "../io.js";
 import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, existsSync, readdirSync, statSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -209,7 +210,7 @@ export class CassetteAgentSession implements AgentSession {
       try {
         msg = JSON.parse(line);
       } catch {
-        process.stderr.write(`::warning:: [replay] cassette events line ${i} is not valid JSON — skipping\n`);
+        warn(`::warning:: [replay] cassette events line ${i} is not valid JSON — skipping\n`);
         continue;
       }
       for (const ev of parseMessage(msg)) {
@@ -269,7 +270,7 @@ function buildControlOutIndex(controlOut: string[]): Map<string, Record<string, 
     try {
       m = JSON.parse(line);
     } catch {
-      process.stderr.write(`::warning:: [replay] control-out.jsonl line ${i} is not valid JSON — skipping\n`);
+      warn(`::warning:: [replay] control-out.jsonl line ${i} is not valid JSON — skipping\n`);
       continue;
     }
     // Only control_response success envelopes (not init-1 control_requests or mcp_response envelopes)
@@ -426,7 +427,7 @@ export async function replayCassette(
   // it doesn't know about — warn loudly (forward-compat guard). Same-or-older replays normally.
   const cassetteVersion = cassette.cassetteVersion ?? 0;
   if (cassetteVersion > CASSETTE_VERSION)
-    process.stderr.write(
+    warn(
       `::warning:: [replay] cassette format v${cassetteVersion} is newer than this harness understands (v${CASSETTE_VERSION}) — some fields may be ignored or misread; upgrade cowork-harness\n`,
     );
 
@@ -451,19 +452,19 @@ export async function replayCassette(
     if (fp.skillHash) {
       const live = buildFingerprint(cassette.scenario.session, fp.baseline, opts.cassetteDir);
       if (live.skillHash === undefined)
-        process.stderr.write(
+        warn(
           "::warning:: [replay] skill fingerprint not re-checkable (local skill dirs not resolvable from this cassette location) — baseline check still applies\n",
         );
       else if (live.skillHash !== fp.skillHash)
         staleness.push("local skill/plugin dir contents changed since record — re-record before trusting this replay");
     }
-    for (const s of staleness) process.stderr.write(`::warning:: [replay] cassette stale: ${s}\n`);
+    for (const s of staleness) warn(`::warning:: [replay] cassette stale: ${s}\n`);
   }
 
   // §2.5 backward compat: warn loudly when controlOut is absent so the user knows question/gate
   // assertions are being EXCLUDED (not vacuously evaluated) from this run.
   if (!session.hasControlOut) {
-    process.stderr.write(
+    warn(
       "::warning:: [replay] cassette has no controlOut (pre-full-fidelity) — question/gate assertions are NOT checked; re-record to enable them\n",
     );
   }
@@ -557,12 +558,12 @@ export async function replayCassette(
     }
   }
   if (fullSkipCount > 0) {
-    process.stderr.write(
+    warn(
       `::warning:: [replay] skipped ${fullSkipCount} filesystem/egress/expect_denied assertions (live-only) — not evaluated on replay\n`,
     );
   }
   if (partialSkipCount > 0) {
-    process.stderr.write(
+    warn(
       `::warning:: [replay] ${partialSkipCount} mixed assertion(s) had their filesystem/egress half dropped — only the content half was evaluated on replay\n`,
     );
   }
@@ -646,7 +647,7 @@ function safeLines(path: string): string[] {
     // Any other error (permissions, corrupted inode, etc.) is unexpected and must be loud.
     const code = (err as NodeJS.ErrnoException).code;
     if (code !== "ENOENT") {
-      process.stderr.write(`::warning:: [replay] failed to read ${path}: ${String(err)}\n`);
+      warn(`::warning:: [replay] failed to read ${path}: ${String(err)}\n`);
     }
     return [];
   }

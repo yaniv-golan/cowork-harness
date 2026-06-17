@@ -1,3 +1,4 @@
+import { warn } from "../io.js";
 import { randomUUID } from "node:crypto";
 import type { AgentSession, AgentEvent, DecisionRequest, DecisionResponse } from "../agent/session.js";
 import { questionKey, questionLabel } from "../agent/session.js";
@@ -162,9 +163,7 @@ export class Run {
             if (ev.isError && ev.toolUseId) {
               const gate = this.rec.gateAnswers.find((g) => g.toolUseId === ev.toolUseId);
               if (gate)
-                process.stderr.write(
-                  `::warning:: [gate] DELIVERY FAILED for "${gate.question}" → tool error: ${ev.text.split("\n")[0].slice(0, 120)}\n`,
-                );
+                warn(`::warning:: [gate] DELIVERY FAILED for "${gate.question}" → tool error: ${ev.text.split("\n")[0].slice(0, 120)}\n`);
             }
             break;
           }
@@ -334,7 +333,7 @@ export class Run {
       // so a green carrying one isn't mistaken for a faithful pass.
       if (behavior === "allow" && by === "cowork" && rationale === PERMISSIVE_AUTOALLOW_RATIONALE) {
         this.rec.permissiveAutoAllow.push(req.tool);
-        process.stderr.write(
+        warn(
           `::warning:: [permission] "${req.tool}" auto-allowed by cowork parity (unscripted, off-registry) — real Cowork would BLOCK for the user. Not a faithful pass; pin with --answer or set permission_parity: strict.\n`,
         );
       }

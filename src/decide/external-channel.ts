@@ -1,3 +1,4 @@
+import { warn } from "../io.js";
 import { mkdirSync, readdirSync, existsSync, readFileSync, writeFileSync, renameSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import readline from "node:readline";
@@ -94,7 +95,7 @@ export function streamGates(dir: string, write: (line: string) => void, opts: { 
           tries.set(f, n);
           if (n >= 3) {
             seen.add(f);
-            process.stderr.write(`::warning:: [gates] ${f} is unreadable/malformed after ${n} tries — dropping\n`);
+            warn(`::warning:: [gates] ${f} is unreadable/malformed after ${n} tries — dropping\n`);
           }
         }
       }

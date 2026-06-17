@@ -1,3 +1,4 @@
+import { warn } from "../io.js";
 import readline from "node:readline";
 import type { AnswerRule } from "../types.js";
 import type { DecisionRequest, DecisionResponse } from "../agent/session.js";
@@ -124,7 +125,7 @@ export class ScriptedDecider implements Decider {
         if (picks.length > 1) {
           const commaLabel = resolved.find((l) => l.includes(","));
           if (commaLabel)
-            process.stderr.write(
+            warn(
               `::warning:: multiSelect member label ${JSON.stringify(commaLabel)} for "${text}" contains a comma — the wire joins members with ", " WITHOUT escaping, so the model may re-read the selected set differently (Cowork limitation). Verify this gate.\n`,
             );
         }
@@ -135,7 +136,7 @@ export class ScriptedDecider implements Decider {
         // sub-question, so the WHOLE gate falls through to the fallback. #4b: name the UNMATCHED
         // sub-questions (not just a count) so the author knows exactly which rule to add.
         if (Object.keys(answers).length > 0)
-          process.stderr.write(
+          warn(
             `::warning:: scripted rules answered ${Object.keys(answers).length}/${req.questions.length} sub-questions of this gate; UNMATCHED: ${unmatched
               .map((u) => JSON.stringify(u))
               .join(", ")} — the whole gate falls through to the fallback decider (answers are delivered atomically)\n`,
@@ -237,7 +238,7 @@ export class FirstOptionDecider implements Decider {
           );
         const label = q.options[0].label;
         answers[text] = label;
-        process.stderr.write(`::warning:: unscripted question "${text}" → picked first option "${label}" (--on-unanswered first)\n`);
+        warn(`::warning:: unscripted question "${text}" → picked first option "${label}" (--on-unanswered first)\n`);
       }
       return { response: { kind: "question", answers }, by: "first", rationale: "first option (on_unanswered=first)" };
     }

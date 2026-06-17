@@ -1,3 +1,4 @@
+import { warn } from "./io.js";
 import { z } from "zod";
 import { mkdirSync, writeFileSync, readFileSync, cpSync, existsSync, statSync } from "node:fs";
 import { join, resolve, basename, isAbsolute } from "node:path";
@@ -191,7 +192,7 @@ export function buildLaunchPlan(session: SessionConfig, baseline: PlatformBaseli
     const src = expand(s);
     if (!existsSync(src)) {
       if (!softMissing) throw new Error(`skill source not found: ${src}. Fix the path, or set COWORK_HARNESS_SOFT_MISSING=1 to skip it.`);
-      process.stderr.write(`::warning:: [skill] missing source excluded (COWORK_HARNESS_SOFT_MISSING): ${src}\n`);
+      warn(`::warning:: [skill] missing source excluded (COWORK_HARNESS_SOFT_MISSING): ${src}\n`);
       continue;
     }
     const dest = safePathSegment(basename(src), "skill basename");
@@ -249,7 +250,7 @@ export function buildLaunchPlan(session: SessionConfig, baseline: PlatformBaseli
         throw new Error(
           `local marketplace manifest not found: ${manifestPath}. Fix the path, or set COWORK_HARNESS_SOFT_MISSING=1 to skip it.`,
         );
-      process.stderr.write(`::warning:: [marketplace] manifest missing, excluded (COWORK_HARNESS_SOFT_MISSING): ${manifestPath}\n`);
+      warn(`::warning:: [marketplace] manifest missing, excluded (COWORK_HARNESS_SOFT_MISSING): ${manifestPath}\n`);
       continue;
     }
     let manifest: { name?: string; plugins?: Array<{ name: string; source?: string; version?: string }> };
@@ -261,7 +262,7 @@ export function buildLaunchPlan(session: SessionConfig, baseline: PlatformBaseli
           `local marketplace manifest is not valid JSON: ${manifestPath} (${(e as Error).message}). ` +
             `Fix it, or set COWORK_HARNESS_SOFT_MISSING=1 to skip it.`,
         );
-      process.stderr.write(`::warning:: [marketplace] manifest unparsable, excluded (COWORK_HARNESS_SOFT_MISSING): ${manifestPath}\n`);
+      warn(`::warning:: [marketplace] manifest unparsable, excluded (COWORK_HARNESS_SOFT_MISSING): ${manifestPath}\n`);
       continue;
     }
     const mktName = manifest.name ?? basename(mkRoot);
@@ -281,7 +282,7 @@ export function buildLaunchPlan(session: SessionConfig, baseline: PlatformBaseli
       // Dedupe bare names only; a qualified `foo@mkt` is already pinned to one marketplace by the guard above.
       if (!pMkt) {
         if (mountedBareNames.has(pName)) {
-          process.stderr.write(
+          warn(
             `::warning:: [plugins] "${pName}" is enabled without @marketplace and exists in multiple local_marketplaces — mounting only the first ("${mktName}"); qualify it as ${pName}@<marketplace> to pin one\n`,
           );
           resolvedEnabled.add(en); // a legit dedupe-skip is a resolution, not a failure
@@ -318,9 +319,7 @@ export function buildLaunchPlan(session: SessionConfig, baseline: PlatformBaseli
         `enabled plugin "${en}" names local marketplace "${pMkt}", but plugin "${pName}" was not found or its source is missing there. ` +
           `Fix the name, or set COWORK_HARNESS_SOFT_MISSING=1 to skip it.`,
       );
-    process.stderr.write(
-      `::warning:: [plugins] enabled "${en}" did not resolve in local marketplace "${pMkt}" (COWORK_HARNESS_SOFT_MISSING)\n`,
-    );
+    warn(`::warning:: [plugins] enabled "${en}" did not resolve in local marketplace "${pMkt}" (COWORK_HARNESS_SOFT_MISSING)\n`);
   }
 
   const missing = mounts.filter((mt) => !existsSync(mt.hostPath));
@@ -328,7 +327,7 @@ export function buildLaunchPlan(session: SessionConfig, baseline: PlatformBaseli
     const list = missing.map((m) => `${m.hostPath} → ${m.mountPath}`).join("; ");
     if (!softMissing)
       throw new Error(`mount source(s) not found: ${list}. Fix the path(s), or set COWORK_HARNESS_SOFT_MISSING=1 to skip them.`);
-    process.stderr.write(`::warning:: [mount] ${missing.length} missing source(s) excluded (COWORK_HARNESS_SOFT_MISSING): ${list}\n`);
+    warn(`::warning:: [mount] ${missing.length} missing source(s) excluded (COWORK_HARNESS_SOFT_MISSING): ${list}\n`);
   }
   const presentMounts = softMissing ? mounts.filter((mt) => existsSync(mt.hostPath)) : mounts;
 
@@ -358,7 +357,7 @@ export function buildLaunchPlan(session: SessionConfig, baseline: PlatformBaseli
     .map((m) => m.mountPath);
 
   if (session.extended_thinking !== undefined) {
-    process.stderr.write(
+    warn(
       "::warning:: [session] `extended_thinking` is deprecated and inert — Cowork has no such toggle. " +
         "Use `max_thinking_tokens` (a number or per-model map; default 31999) instead.\n",
     );

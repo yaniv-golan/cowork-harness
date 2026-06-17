@@ -1,3 +1,4 @@
+import { warn } from "../io.js";
 import { existsSync, mkdirSync, cpSync } from "node:fs";
 import { join, dirname } from "node:path";
 import type { LaunchPlan } from "../session.js";
@@ -50,9 +51,7 @@ export function stageWorkspace(plan: LaunchPlan, mntHost: string): StageResult {
       const softMissing = (process.env.COWORK_HARNESS_SOFT_MISSING ?? "") !== "";
       if (!softMissing)
         throw new Error(`mcp.config not found: ${plan.mcpConfig}. Fix the path, or set COWORK_HARNESS_SOFT_MISSING=1 to skip it.`);
-      process.stderr.write(
-        `::warning:: [mcp] config missing, --mcp-config not advertised (COWORK_HARNESS_SOFT_MISSING): ${plan.mcpConfig}\n`,
-      );
+      warn(`::warning:: [mcp] config missing, --mcp-config not advertised (COWORK_HARNESS_SOFT_MISSING): ${plan.mcpConfig}\n`);
     }
     // Advertise --mcp-config only when THIS run actually staged a config. Tie it to the current
     // plan, not to whether a file happens to exist: a fresh non-resume run that reuses a stable
@@ -69,7 +68,7 @@ export function stageWorkspace(plan: LaunchPlan, mntHost: string): StageResult {
     const looksStaged =
       plan.mounts.some((mt) => existsSync(join(mntHost, mt.mountPath))) || existsSync(join(mntHost, ".claude", "settings.json"));
     if (!looksStaged)
-      process.stderr.write(
+      warn(
         `::warning:: [resume] staged workspace at ${mntHost} looks empty (no prior mounts/config found) — if the prior session's files were removed, re-run WITHOUT --resume to re-stage\n`,
       );
     mcpStaged = !!plan.mcpConfig && existsSync(mcpDest);

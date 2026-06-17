@@ -1,3 +1,4 @@
+import { warn } from "../io.js";
 import { readFileSync, existsSync, statSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -118,7 +119,7 @@ export function resolveEventsFile(arg: string): string {
     if (candidates.length > 1) {
       // Sort deterministically (most recent first by run dir name, which encodes a timestamp).
       candidates.sort((a, b) => b.localeCompare(a));
-      process.stderr.write(
+      warn(
         `::warning:: ambiguous trace fragment "${arg}" matches ${candidates.length} run dirs:\n` +
           candidates.map((c) => `  ${c}`).join("\n") +
           `\nUsing the most recent: ${candidates[0]}\nPass a more specific id or full path to be deterministic.\n`,
@@ -139,7 +140,7 @@ function eventsOf(file: string): AgentEvent[] {
       msg = JSON.parse(line);
     } catch {
       // #47: skip malformed JSON (a truncated final line is normal) but be LOUD — mirror cassette.ts.
-      process.stderr.write(`::warning:: trace: skipping malformed JSON line in ${file}: ${line.slice(0, 120)}\n`);
+      warn(`::warning:: trace: skipping malformed JSON line in ${file}: ${line.slice(0, 120)}\n`);
       continue;
     }
     events.push(...parseMessage(msg));
@@ -198,7 +199,7 @@ export function buildGateTrace(file: string): GateTraceRow[] {
         if (rid && a) answers.set(String(rid), JSON.stringify(a));
       } catch {
         // #47: a malformed control-out line is skipped (truncation is normal) but surfaced loudly.
-        process.stderr.write(`::warning:: trace: skipping malformed JSON line in ${controlOut}: ${line.slice(0, 120)}\n`);
+        warn(`::warning:: trace: skipping malformed JSON line in ${controlOut}: ${line.slice(0, 120)}\n`);
         continue;
       }
     }

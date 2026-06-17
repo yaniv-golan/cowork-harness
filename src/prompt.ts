@@ -1,3 +1,4 @@
+import { warn } from "./io.js";
 import { readFileSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -42,7 +43,7 @@ export function renderPrompts(baseline: PlatformBaseline, session: SessionConfig
     if (!existsSync(p)) {
       // #35: a baseline that REFERENCES a prompt asset which is absent must not silently degrade — the
       // run would proceed without key Cowork framing. Warn loudly, consistent with the host-loop path (#34).
-      process.stderr.write(`::warning:: [prompt] referenced asset not found: ${p} — running WITHOUT this prompt section (fidelity gap)\n`);
+      warn(`::warning:: [prompt] referenced asset not found: ${p} — running WITHOUT this prompt section (fidelity gap)\n`);
       return undefined;
     }
     return subst(stripComments(readFileSync(p, "utf8"))).trim();

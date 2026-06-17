@@ -1,3 +1,4 @@
+import { warn } from "../io.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { compile } from "../egress/proxy.js";
@@ -264,7 +265,7 @@ async function fetchViaHost(
   // redirect hop (a redirect to a denied or private host is blocked — the SSRF false-green `curl -L` had).
   if (warned && !warned.value) {
     warned.value = true;
-    process.stderr.write("::warning:: web_fetch provenance is NOT enforced (fidelity gap vs Cowork)\n");
+    warn("::warning:: web_fetch provenance is NOT enforced (fidelity gap vs Cowork)\n");
   }
   const matcher = compile(allow);
   return followWithRedirects(url, rawFetch, (u) => u1t(u, allow, matcher), onEgress);

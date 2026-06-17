@@ -1,3 +1,4 @@
+import { warn } from "./io.js";
 import { z } from "zod";
 
 /** Cowork's `DEFAULT_MAX_THINKING_TOKENS` (the ELF's `hre`), binary-verified = 31999. The single source
@@ -194,9 +195,7 @@ export const Scenario = z.preprocess((raw) => {
     const o = raw as Record<string, unknown>;
     if ("profile" in o && !("baseline" in o)) {
       const { profile, ...rest } = o;
-      process.stderr.write(
-        "::warning:: scenario field `profile:` is deprecated — rename it to `baseline:` (accepted for now; removed next minor).\n",
-      );
+      warn("::warning:: scenario field `profile:` is deprecated — rename it to `baseline:` (accepted for now; removed next minor).\n");
       return { ...rest, baseline: profile };
     }
   }

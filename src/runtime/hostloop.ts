@@ -1,3 +1,4 @@
+import { warn } from "../io.js";
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve, join } from "node:path";
@@ -130,7 +131,7 @@ function hostLoopShellSection(vmMnt: string, appVersion: string): string {
     content = readFileSync(dir, "utf8");
   } catch (err) {
     // Loud failure: a missing prompt asset is a real fidelity gap, not a silent no-op. (#27)
-    process.stderr.write(
+    warn(
       `::warning:: [hostloop] host-loop prompt asset not found at ${dir} (baseline desktop-${appVersion}) — host-loop shell section will be EMPTY. ` +
         `Run \`cowork-harness sync\` to update baselines, or set COWORK_AGENT_BINARY to a matching binary. (${String(err)})\n`,
     );
