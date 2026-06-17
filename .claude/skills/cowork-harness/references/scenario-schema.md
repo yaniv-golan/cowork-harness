@@ -116,6 +116,19 @@ an answer.
 - when_question: "format|style"   # case-insensitive regex on the question text
   choose: "Markdown"              # the option label to select
 ```
+`choose` tolerates the `(Recommended)` label suffix (`choose: Approve` matches `"Approve (Recommended)"`)
+and the keywords `recommended` / `first`. For a **multiSelect** gate, pass a list — validated per-member
+and delivered as the verified comma-joined wire shape (`"Auth, Billing"`):
+```yaml
+- when_question: "which features"
+  choose: ["Auth", "Billing"]
+```
+For free-text **"Other"** (auto-offered on every gate), use `answer:` — an arbitrary string that bypasses
+label validation by intent (mutually exclusive with `choose`):
+```yaml
+- when_question: "company name"
+  answer: "Acme Holdings LLC"
+```
 
 **Tool permissions:**
 ```yaml
@@ -167,8 +180,10 @@ passes only if every key passes. Keep one concern per item unless you mean conju
 | `transcript_no_host_path: true` | no host path (`/Users`, `/opt`) leaked into model-visible text |
 | `egress_denied: <host>` | the host was blocked by the egress proxy |
 | `egress_allowed: <host>` | the host was allowed through |
+| `artifact_json: {artifact, path, …}` | assert a JSON artifact's contents — `equals`/`gt`/`exists`/`absent`/`is_null` over a dotted `path` (`absent` ≠ `is_null`; an unresolved intermediate fails loud) |
 
-`expect_denied: [host, …]` adds one `egress_denied` per host.
+`expect_denied: [host, …]` adds one `egress_denied` per host. Run `cowork-harness assert --list` for this
+table from the live schema. Example: `artifact_json: { artifact: outputs/cap.json, path: me.run_id, equals: "r1" }`.
 
 **Content correctness:** match the assertion to the deliverable. Prose → `transcript_matches`
 (regex, drift-tolerant) or `transcript_contains` (literal marker). `transcript_matches` is
@@ -188,15 +203,22 @@ A cassette (`record`/`replay`) has **no filesystem and no network**. `replay` re
 `gate_answers_delivered`. With `controlOut` present they evaluate; on an old cassette without it, a
 **loud warning** fires and they are **excluded** (not vacuously passed). Re-record to enable them.
 
-**Filesystem/egress — silently skipped on replay (live-only):** `file_exists`,
-`user_visible_artifact`, `no_delete_in_outputs`, `self_heal_ran`, `transcript_no_host_path`,
-`egress_*` / `expect_denied`. These run only on a live `run`/`record`.
+**Filesystem — replay-checkable WITH an artifact manifest:** `file_exists`, `user_visible_artifact`,
+`artifact_json` run on replay when the cassette carries an `artifacts` snapshot (`record` captures
+`outputs/`/`.projects/`; `replay` materializes it). `artifact_json` needs the small-file JSON `body`
+inlined; a hash-only entry still satisfies `file_exists`. Without a manifest (older cassettes) they're
+skipped. A green replay re-confirms *record-time* artifacts, not that the current skill still produces them
+— `replay --strict` fails when the staleness `fingerprint` shows the skill/baseline drifted.
 
-**Mixed assertions on replay:** before evaluating, `replay` strips each assertion to its content
-keys and drops any left empty. So `{result, file_exists}` evaluates on replay as `{result}` alone —
-its `file_exists` half is removed (not AND-ed against an unreadable value). The harness is **loud in
-two classes**: a *full skip* (`::warning::` with the count of pure-filesystem/egress assertions not
-evaluated) and a *partial skip* (`::warning::` when a mixed assertion's filesystem half was dropped).
+**Egress + other filesystem — still skipped on replay (live-only):** `no_delete_in_outputs`,
+`self_heal_ran`, `transcript_no_host_path`, `egress_*` / `expect_denied`. These run only on a live `run`/`record`.
+
+**Mixed assertions on replay:** before evaluating, `replay` strips each assertion to its replay-checkable
+keys and drops any left empty. So `{result, egress_denied}` evaluates on replay as `{result}` alone — its
+`egress_denied` half is removed (not AND-ed against an unreadable value); with a manifest, `file_exists`/
+`artifact_json` are no longer stripped. The harness is **loud in two classes**: a *full skip* (`::warning::`
+with the count of pure live-only assertions not evaluated) and a *partial skip* (`::warning::` when a mixed
+assertion's live-only half was dropped).
 Two CI consequences: skipped assertions are **absent** from `results[].assertions[]` (not
 present-and-passing), so don't assume a fixed assertion count across lanes; and a replay PR gate
 **cannot** verify an artifact's content.
@@ -303,7 +325,8 @@ at the top of this file.
     `.env`.
 
 17. **web_fetch: `egress.extra_allow` is a no-op on the provenanced path** — provenance is the gate
-    (see the web_fetch section). multiSelect AskUserQuestion gates are unsupported (fail loud).
+    (see the web_fetch section). multiSelect gates ARE supported (answer with a `choose:` list → comma-joined
+    wire shape); a member label containing a comma warns (the wire join is unescaped — a Cowork limitation).
 
 18. **`replay_protocol_fidelity` is replay-synthesized only** — authoring it in a scenario is
     rejected (live it would be an empty assertion).

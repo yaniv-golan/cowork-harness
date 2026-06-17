@@ -1,10 +1,10 @@
 ---
 name: cowork-harness
-description: Test or debug a Claude Code skill/plugin under Claude Cowork's runtime — sandboxed agent, default-deny egress, the can_use_tool permission/question protocol — using the cowork-harness CLI. Use when validating or regression-testing a skill, authoring or debugging a scenario YAML (prompt + scripted answers + assert:), choosing a fidelity tier, scripting AskUserQuestion / tool-permission answers, or asserting artifacts, egress, or sub-agent dispatch. Especially when a harness run no-ops an assertion, fails on an unanswered gate, false-greens, a steered answer never reaches the model, or a web_fetch is unexpectedly denied or gated. NOT for generic unit testing (pytest/vitest of your own scripts) or non-Cowork CI. Covers the skill / run / chat / record / replay / trace / decide commands and the session-vs-scenario split.
+description: Test or debug a Claude Code skill/plugin under Claude Cowork's runtime — sandboxed agent, default-deny egress, the can_use_tool permission/question protocol — using the cowork-harness CLI. Use when validating or regression-testing a skill, authoring or debugging a scenario YAML (prompt + scripted answers + assert:), choosing a fidelity tier, scripting AskUserQuestion / tool-permission answers, or asserting artifacts, egress, or sub-agent dispatch. Especially when a harness run no-ops an assertion, fails on an unanswered gate, false-greens, a steered answer never reaches the model, or a web_fetch is unexpectedly denied or gated. NOT for generic unit testing (pytest/vitest of your own scripts) or non-Cowork CI. Covers the skill / run / chat / record / replay / trace / decide / assert / scaffold commands and the session-vs-scenario split.
 metadata:
   author: cowork-harness
-  version: 0.1.1
-  tracks-harness: cowork-harness 0.1.1 (baseline desktop-1.12603.1)
+  version: 0.1.2
+  tracks-harness: cowork-harness 0.2.0 (baseline desktop-1.12603.1)
 ---
 
 # cowork-harness
@@ -177,9 +177,9 @@ are the ones that bite hardest.
    gate; keep one concern per `assert:` item; run the linter. The harness warns loudly on skip.
 
 2. **A steered gate answer never reached the model.** *Why:* `serializeDecision` must emit
-   `updatedInput: { questions, answers }`; a header-only gate (empty `question`) can never be keyed,
-   and multiSelect AskUserQuestion gates are unsupported. *Fix:* give every gate a non-empty
-   `question`; script single-select gates. `question_asked` / `questions_count_max` /
+   `updatedInput: { questions, answers }`; a header-only gate (empty `question`) can never be keyed.
+   *Fix:* give every gate a non-empty `question`. (multiSelect gates ARE supported — answer with a
+   `choose:` list; free-text "Other" via `answer:`.) `question_asked` / `questions_count_max` /
    `gate_answers_delivered` only evaluate on replay **with a `controlOut` cassette** — re-record an
    old cassette or they're excluded (loudly), not vacuously passed. `gate_answers_delivered` *fails*
    on unobserved delivery (absence of evidence is failure, not neutral).
