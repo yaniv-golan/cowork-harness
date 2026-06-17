@@ -28,10 +28,12 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed
 
-- **Uniform CLI argument validation.** A shared declarative argument parser now backs the cassette commands
-  (`record`/`replay`/`verify-cassettes`), and every hand-rolled command rejects unknown flags, extra
-  positionals, and flag-looking values for path/id flags instead of silently ignoring them — closing a class
-  of silent-accept parsing footguns. Error paths only; valid invocations are unchanged.
+- **Uniform CLI argument validation.** A shared declarative argument parser backs the cassette commands
+  (`record`/`replay`/`verify-cassettes`) + `boundary-check`, and **every** command now rejects unknown flags,
+  extra positionals, and flag-looking values for path/id flags instead of silently ignoring them — closing a
+  class of silent-accept parsing footguns. This is enforced going forward by a structural test (every command
+  must reject an unknown flag) and a CI grep-ban on the legacy first-non-dash-token idiom. Error paths only;
+  valid invocations are unchanged.
 - **The npm package ships `scenario.py`** (the linter/scaffolder) and publishes with provenance attestation so
   CI consumers can lint without a skill checkout.
 - **Agent-binary discovery falls back to the newest staged build.** When the baseline's exact
@@ -57,22 +59,31 @@ All notable changes to this project are documented here. The format is based on
   a missing optional `assert` is normalized so it can't crash a batch; manifest bodies are stored with an
   encoding marker (binary as base64) so non-text artifacts round-trip byte-exactly; materialized entries are
   path-contained (no `..`/absolute escape) and verified against their recorded sha256.
-- **Staging source validation.** `mcp.config` must be a file; connected folders, local/remote plugin roots, and
-  local skills must be directories; a nameless marketplace manifest now resolves and qualifier-matches by its
-  derived name; and a corrupt `plugin.json` errors instead of silently defaulting to version `0.0.0`. The
-  soft-missing reconciliation path is preserved (a missing source still reconciles; only a wrong-kind existing
-  source fails loud).
+- **Skill-staleness hash no longer self-invalidates.** The `skillHash` fingerprint now excludes recorded
+  cassettes (`*.cassette.json`, by extension) and VCS/cache dirs (`.git`/`node_modules`/`__pycache__`/…), so
+  writing a cassette under the hashed skill tree no longer changes the fingerprint it just recorded (and a
+  repo that co-locates committed cassettes with the skill stops falsely tripping the staleness gate). Real
+  skill-source edits — including under a `tests/` dir — still change the hash (kept conservative: no
+  false-negative).
+- **Staging source validation.** Every declared session source now resolves through one central choke point
+  (`resolveDeclaredSource`, guarded by a structural test): `mcp.config` must be a file; connected folders,
+  local/remote plugin roots, and local skills must be directories; a nameless marketplace manifest now
+  resolves and qualifier-matches by its derived name; and a corrupt `plugin.json` errors instead of silently
+  defaulting to version `0.0.0`. The soft-missing reconciliation path is preserved (a missing source still
+  reconciles; only a wrong-kind existing source fails loud).
 - **Artifact collection no longer follows symlinks** (`lstat` + symlink-skip + a realpath cycle guard), and the
   egress sidecar/proxy are acquired inside the protected block so a prompt-render throw can't leak them.
 - **Egress/web-fetch guards.** The private-address guard recognizes IPv4-mapped IPv6 and numeric/hex/octal IPv4
-  loopback forms; the proxy parses bracketed IPv6 `Host` headers; and an `allow` egress decision is recorded
-  only once the upstream actually connects (so `egress_allowed` can't pass when nothing reached the host).
+  loopback forms; a host-side `web_fetch` to a hostname that **resolves** to a private/loopback address is now
+  denied (DNS-rebind/SSRF, fail-closed — a name that won't resolve is also denied), checked on every redirect
+  hop; the proxy parses bracketed IPv6 `Host` headers; and an `allow` egress decision is recorded only once the
+  upstream actually connects (so `egress_allowed` can't pass when nothing reached the host).
 - **Verdict/assertion correctness.** A nonzero child exit after a success result is now fatal (with the stderr
   tail); `artifact_json` `equals`/`in` compare JSON with key-order-insensitive deep equality (arrays stay
   order-significant); the external decider rejects an invalid permission `behavior` loudly instead of silently
   denying; `no_delete_in_outputs` accepts only `true` (authoring `false` was a silent no-op footgun); and the
   outputs-delete detector parses `mv` direction (a move *into* `outputs/` is no longer a false delete) with an
-  opt-in safe-staging-prefix suppression for scratch cleanups.
+  opt-in safe-staging-prefix suppression for scratch cleanups (`COWORK_HARNESS_SAFE_STAGING_PREFIX`).
 - **Python wrapper drift.** `run_scenario()` no longer passes `--fidelity`/`--answer` flags the `run` command
   rejects; fidelity and answers are scenario-authored (the YAML's `fidelity:`/`answers:` fields).
 - **Docs reconciled with the 0.3.0 artifact-manifest replay behavior.** README, SPEC, `docs/scenario.md`,
