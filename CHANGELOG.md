@@ -6,6 +6,16 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.4.2] — 2026-06-18
+
+### Added
+
+- **Platform baseline `desktop-1.13576.1`** — synced from the updated Claude Desktop (the app moved
+  `1.12603.1` → `1.13576.1`). `loadBaseline("latest")` now resolves to it. The embedded agent binary is
+  unchanged at `2.1.177` (the update changed the app shell + gate states, not the agent ELF); this baseline
+  also corrects the prior baselines' stale `2.1.170` agent pin to the actually-staged `2.1.177`. Egress
+  allowlist unchanged.
+
 ## [0.4.1] — 2026-06-18
 
 ### Fixed
