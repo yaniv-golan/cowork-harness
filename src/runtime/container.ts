@@ -1,11 +1,9 @@
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
 import { resolve, join } from "node:path";
-import { homedir } from "node:os";
 import type { PlatformBaseline, Scenario } from "../types.js";
 import { DEFAULT_MAX_THINKING_TOKENS } from "../types.js";
 import type { LaunchPlan } from "../session.js";
-import { resolveMounts } from "../baseline.js";
+import { resolveMounts, resolveAgentBinary } from "../baseline.js";
 import { agentArgs, spawnEnv, dockerRunArgv, resolveMaxThinkingTokens } from "./argv.js";
 import { runtimeAuthEnv } from "./host-env.js";
 import { stageWorkspace } from "./stage.js";
@@ -78,21 +76,4 @@ export function spawnContainer(
   });
 
   return spawn(runner, dockerArgs, { stdio: ["pipe", "pipe", "pipe"] });
-}
-
-/** Resolve the staged Linux agent binary on the host (override: COWORK_AGENT_BINARY). */
-function resolveAgentBinary(baseline: PlatformBaseline): string {
-  const override = process.env.COWORK_AGENT_BINARY;
-  if (override) {
-    if (!existsSync(override)) throw new Error(`COWORK_AGENT_BINARY not found: ${override}`);
-    return resolve(override);
-  }
-  const staged = (baseline.agentBinary?.stagedPath ?? "").replace(/^~(?=$|\/)/, homedir());
-  if (!staged || !existsSync(staged)) {
-    throw new Error(
-      `Staged agent binary not found at "${staged}". It is extracted from your Claude Desktop install ` +
-        `(claude-code-vm/<ver>/claude). Open Cowork once to stage it, or set COWORK_AGENT_BINARY to its path.`,
-    );
-  }
-  return resolve(staged);
 }

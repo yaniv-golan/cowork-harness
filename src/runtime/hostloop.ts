@@ -1,13 +1,12 @@
 import { warn } from "../io.js";
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { resolve, join } from "node:path";
-import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import type { PlatformBaseline, Scenario } from "../types.js";
 import { DEFAULT_MAX_THINKING_TOKENS } from "../types.js";
 import type { LaunchPlan } from "../session.js";
-import { resolveMounts } from "../baseline.js";
+import { resolveMounts, resolveAgentBinary } from "../baseline.js";
 import { makeWorkspaceHandler, type McpHandler, type EgressEntry, type WebFetchProvenance } from "../hostloop/workspace-handler.js";
 import { agentArgs, spawnEnv, dockerRunArgv, resolveMaxThinkingTokens } from "./argv.js";
 import { runtimeAuthEnv } from "./host-env.js";
@@ -142,17 +141,4 @@ function hostLoopShellSection(vmMnt: string, appVersion: string): string {
     .split("{{vmMnt}}")
     .join(vmMnt)
     .trim();
-}
-
-function resolveAgentBinary(baseline: PlatformBaseline): string {
-  const override = process.env.COWORK_AGENT_BINARY;
-  if (override) {
-    if (!existsSync(override)) throw new Error(`COWORK_AGENT_BINARY not found: ${override}`);
-    return resolve(override);
-  }
-  const staged = (baseline.agentBinary?.stagedPath ?? "").replace(/^~(?=$|\/)/, homedir());
-  if (!staged || !existsSync(staged)) {
-    throw new Error(`Staged agent binary not found at "${staged}". Open Cowork once to stage it, or set COWORK_AGENT_BINARY.`);
-  }
-  return resolve(staged);
 }

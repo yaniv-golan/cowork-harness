@@ -39,6 +39,16 @@ jobs:
             echo "::error::Forbidden CLI parsing idiom (first-non-dash-token scan). Use positionals()/parseArgs."
             exit 1
           fi
+      - name: Single-source guard (resolveAgentBinary)
+        # The agent-binary resolver (with the newest-staged fallback) must be defined ONLY in src/baseline.ts.
+        # It was once duplicated inline in container.ts/hostloop.ts without the fallback, so the fallback was
+        # dead on the real runtime paths. Ban a second definition. (test/agent-binary-single-source.test.ts
+        # also covers this.)
+        run: |
+          if grep -rEn 'function resolveAgentBinary|const resolveAgentBinary[[:space:]]*=' src/ | grep -vE '^src/baseline\.ts:'; then
+            echo "::error::resolveAgentBinary must be defined only in src/baseline.ts (import it; don't re-duplicate)."
+            exit 1
+          fi
       - name: Typecheck
         run: npm run typecheck
       - name: Unit tests (schema, answerer, egress, launch plan, example validation)
