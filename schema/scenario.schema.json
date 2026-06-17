@@ -223,6 +223,11 @@
                   "equals": {
                     "description": "the resolved value deep-equals this"
                   },
+                  "in": {
+                    "type": "array",
+                    "items": {},
+                    "description": "the resolved value deep-equals one of these (stable for stochastic/LLM-extracted values where equals churns)"
+                  },
                   "gt": {
                     "type": "number",
                     "description": "the resolved value is a number greater than this"
@@ -244,7 +249,7 @@
                   "artifact"
                 ],
                 "additionalProperties": false,
-                "description": "assert over a JSON artifact's contents (dotted path + equals|gt|exists|absent|is_null)"
+                "description": "assert over a JSON artifact's contents (dotted path + equals|in|gt|exists|absent|is_null)"
               }
             },
             "additionalProperties": false

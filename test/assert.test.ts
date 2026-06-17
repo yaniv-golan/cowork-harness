@@ -185,6 +185,13 @@ describe("artifact_json assertion (#5)", () => {
     expect(pass(A({ artifact: "outputs/state.json", path: "me.count", gt: 2 }))).toBe(true);
     expect(pass(A({ artifact: "outputs/state.json", path: "me.count", gt: 3 }))).toBe(false);
   });
+  it("in: set membership (stable for stochastic extraction) — #4", () => {
+    expect(pass(A({ artifact: "outputs/state.json", path: "me.run_id", in: ["r1", "r2"] }))).toBe(true);
+    expect(pass(A({ artifact: "outputs/state.json", path: "me.run_id", in: ["x", "y"] }))).toBe(false);
+    expect(pass(A({ artifact: "outputs/state.json", path: "me.count", in: [1, 2, 3] }))).toBe(true);
+    // an ABSENT value must NOT satisfy in: (mirrors equals' `present &&` guard)
+    expect(pass(A({ artifact: "outputs/state.json", path: "me.exclusivity_days", in: ["a"] }))).toBe(false);
+  });
   it("absent (anti-hallucination) vs is_null are distinct", () => {
     expect(pass(A({ artifact: "outputs/state.json", path: "me.exclusivity_days", absent: true }))).toBe(true);
     expect(pass(A({ artifact: "outputs/state.json", path: "me.note", absent: true }))).toBe(false); // present (null) ≠ absent

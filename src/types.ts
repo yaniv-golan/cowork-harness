@@ -159,13 +159,17 @@ export const Assertion = z.object({
       artifact: z.string().describe("relative path to a JSON artifact under the work root (e.g. outputs/cap_state.json)"),
       path: z.string().optional().describe("dotted path into the JSON (e.g. me.run_id); omit to target the whole document"),
       equals: z.unknown().optional().describe("the resolved value deep-equals this"),
+      in: z
+        .array(z.unknown())
+        .optional()
+        .describe("the resolved value deep-equals one of these (stable for stochastic/LLM-extracted values where equals churns)"),
       gt: z.number().optional().describe("the resolved value is a number greater than this"),
       exists: z.boolean().optional().describe("the path resolves to a present (non-absent) value"),
       absent: z.boolean().optional().describe("the final key is absent from its (resolved) parent — the anti-hallucination negative"),
       is_null: z.boolean().optional().describe("the resolved value is JSON null (distinct from absent)"),
     })
     .optional()
-    .describe("assert over a JSON artifact's contents (dotted path + equals|gt|exists|absent|is_null)"),
+    .describe("assert over a JSON artifact's contents (dotted path + equals|in|gt|exists|absent|is_null)"),
 });
 export type Assertion = z.infer<typeof Assertion>;
 

@@ -295,6 +295,17 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
                 : fail(`artifact_json: "${aj.path}" = ${JSON.stringify(val)}, expected > ${aj.gt}`),
             );
           }
+          // #4: set membership — the resolved value deep-equals one of a fixed set. Stable for stochastic
+          // (LLM-extracted) values where `equals` would churn across re-records. `present &&` guard mirrors
+          // `equals` so an absent value never vacuously satisfies it.
+          if (aj.in !== undefined) {
+            any = true;
+            results.push(
+              present && Array.isArray(aj.in) && aj.in.some((x) => jsonEq(val, x))
+                ? ok()
+                : fail(`artifact_json: "${aj.path}" = ${JSON.stringify(val)}, expected one of ${JSON.stringify(aj.in)}`),
+            );
+          }
           // No operator → an existence assertion (the value must be present).
           if (!any)
             results.push(
