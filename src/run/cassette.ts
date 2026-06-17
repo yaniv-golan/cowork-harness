@@ -4,8 +4,8 @@ import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join, dirname, relative, isAbsolute } from "node:path";
 import { type Scenario, type RunResult, type Assertion } from "../types.js";
-import { executeScenario, parseScenarioFile, collectArtifacts } from "./execute.js";
-import { loadSession } from "../session.js";
+import { executeScenario, parseScenarioFile, collectArtifacts, parseSessionFile } from "./execute.js";
+import { loadSession, resolveSessionPaths } from "../session.js";
 import { loadBaseline } from "../baseline.js";
 import { Run, type RunHooks, type RunRecord } from "./run.js";
 import {
@@ -94,8 +94,10 @@ function materializeManifest(entries: ManifestEntry[]): { workRoot: string; pref
   return { workRoot, prefixes: ["outputs", ".projects"] };
 }
 
-/** Hash a directory's file CONTENTS recursively (sorted, path-relative) — stable across machines. */
-function hashDir(dir: string, hash: ReturnType<typeof createHash>): void {
+/** Hash a directory's structure + file CONTENTS recursively (sorted) — stable across machines. The hash
+ *  folds in each entry's RELATIVE path (not just its basename) plus a type marker, so a file MOVING within
+ *  the tree (`a/x.json` → `a/sub/x.json`, same content) changes the hash (S2 — basename-only missed moves). */
+function hashDir(dir: string, hash: ReturnType<typeof createHash>, rel = ""): void {
   let entries: string[];
   try {
     entries = readdirSync(dir).sort();
@@ -104,15 +106,18 @@ function hashDir(dir: string, hash: ReturnType<typeof createHash>): void {
   }
   for (const name of entries) {
     const abs = join(dir, name);
+    const relPath = rel ? `${rel}/${name}` : name;
     let st;
     try {
       st = statSync(abs);
     } catch {
       continue;
     }
-    if (st.isDirectory()) hashDir(abs, hash);
-    else if (st.isFile()) {
-      hash.update(name);
+    if (st.isDirectory()) {
+      hash.update(`D:${relPath}\n`); // structure marker — an empty/renamed dir registers too
+      hashDir(abs, hash, relPath);
+    } else if (st.isFile()) {
+      hash.update(`F:${relPath}\n`); // relative path, not basename — a move changes the digest
       try {
         hash.update(readFileSync(abs));
       } catch {
@@ -122,27 +127,38 @@ function hashDir(dir: string, hash: ReturnType<typeof createHash>): void {
   }
 }
 
-/** #1b: the local skill/plugin/marketplace source dirs a session mounts — the "skill dir" hash unit. */
-function skillSourceDirs(sessionPath: string, cassetteDir?: string): string[] {
+/** #1b: the local skill/plugin/marketplace source dirs a session mounts — the "skill dir" hash unit.
+ *  Returns ABSOLUTE dirs (for hashing/reading) plus `baseDir`, the session-file dir the relative
+ *  `skillSources` are stored against (so the committed fingerprint carries no absolute host path — C1). */
+function skillSourceDirs(sessionPath: string, cassetteDir?: string): { dirs: string[]; baseDir: string } {
   const resolved = cassetteDir && !isAbsolute(sessionPath) ? join(cassetteDir, sessionPath) : sessionPath;
-  if (sessionPath === "(inline)" || !existsSync(resolved)) return [];
+  const baseDir = dirname(resolved);
+  if (sessionPath === "(inline)" || !existsSync(resolved)) return { dirs: [], baseDir };
   let cfg;
   try {
-    cfg = loadSession(resolved);
+    // Mirror loadSessionFromFile (execute.ts): parse the YAML, then RESOLVE its relative skill/plugin
+    // paths against the session-file dir (`baseDir` — the post-cassetteDir-join location, so this works for
+    // both the record call (no cassetteDir) and the replay call (cassetteDir set)). Passing the raw path
+    // string to loadSession() throws (it wants parsed YAML) — the swallowed throw is why skillHash was
+    // silently never computed.
+    cfg = resolveSessionPaths(loadSession(parseSessionFile(resolved)), baseDir);
   } catch {
-    return [];
+    return { dirs: [], baseDir };
   }
-  return [...cfg.skills.local, ...cfg.plugins.local_plugins, ...cfg.plugins.remote_plugins, ...cfg.plugins.local_marketplaces].filter((d) =>
-    existsSync(d),
+  const dirs = [...cfg.skills.local, ...cfg.plugins.local_plugins, ...cfg.plugins.remote_plugins, ...cfg.plugins.local_marketplaces].filter(
+    (d) => existsSync(d),
   );
+  return { dirs, baseDir };
 }
 
-function buildFingerprint(sessionPath: string, baselineAppVersion: string, cassetteDir?: string): Fingerprint {
-  const dirs = skillSourceDirs(sessionPath, cassetteDir);
+export function buildFingerprint(sessionPath: string, baselineAppVersion: string, cassetteDir?: string): Fingerprint {
+  const { dirs, baseDir } = skillSourceDirs(sessionPath, cassetteDir);
   if (dirs.length === 0) return { baseline: baselineAppVersion };
   const hash = createHash("sha256");
   for (const d of dirs.sort()) hashDir(d, hash);
-  return { baseline: baselineAppVersion, skillHash: hash.digest("hex"), skillSources: dirs };
+  // Store skillSources RELATIVE to the session-file dir — diagnostics only (the replay recompute re-derives
+  // the dirs from the session), so a relative path is enough and never leaks an absolute `/Users/...` path.
+  return { baseline: baselineAppVersion, skillHash: hash.digest("hex"), skillSources: dirs.map((d) => relative(baseDir, d)) };
 }
 
 /** A minimal RunRecord for a truncated-cassette replay — empty collections so downstream evaluate()/the
