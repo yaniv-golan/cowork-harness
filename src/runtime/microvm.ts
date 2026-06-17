@@ -5,7 +5,7 @@ import { DEFAULT_MAX_THINKING_TOKENS } from "../types.js";
 import type { LaunchPlan } from "../session.js";
 import { limaPath, vmInit, applyGuestFirewall, vmGatewayIp, VM_WORK_HOST } from "./lima.js";
 import { resolveMounts } from "../baseline.js";
-import { spawnEnv, resolveMaxThinkingTokens } from "./argv.js";
+import { spawnEnv, resolveMaxThinkingTokens, baseAgentArgs } from "./argv.js";
 import { stageWorkspace } from "./stage.js";
 import { runtimeAuthEnv, SECRET_ENV_KEYS } from "./host-env.js";
 
@@ -136,11 +136,10 @@ export function microvmShellScript(sessionVm: string): string {
 }
 
 /**
- * The microVM `claude …` args. Hand-built (not `agentArgs()`) because the microvm exec omits the
- * leading "claude" token (appended separately in the lima argv), uses the guest mount root `mntVm`,
- * and does not apply disallowed/extraTools. Kept in sync with `argv.ts` §3.1 — including the
- * session-persistence block (#26): pin/resume the agent's native session id when one was requested.
- * Exported for unit testing of the session-flag wiring.
+ * The microVM `claude …` args (sans the leading "claude" token, which the lima argv appends). Delegates
+ * to the shared `baseAgentArgs` so it can NEVER drift from the container/hostloop flag set again — the
+ * exact divergence that once dropped `--max-thinking-tokens` from this path. The microvm uses the guest
+ * mount root `mntVm` and passes no disallowed/extraTools. Exported for unit testing of the flag wiring.
  */
 export function microvmAgentArgs(
   baseline: PlatformBaseline,
@@ -148,37 +147,5 @@ export function microvmAgentArgs(
   mntVm: string,
   opts: { mcpVm?: string; systemPromptAppend?: string } = {},
 ): string[] {
-  const spawn_ = baseline.spawn;
-  const effort = plan.effort ?? spawn_?.effortDefault ?? "medium";
-  return [
-    "-p",
-    "--verbose",
-    "--input-format",
-    "stream-json",
-    "--output-format",
-    "stream-json",
-    "--permission-prompt-tool",
-    "stdio",
-    "--permission-mode",
-    // Session permission_mode wins at the microvm tier too (parity with L0 protocol.ts:71 + L1 argv.ts).
-    plan.permissionMode ?? spawn_?.permissionMode ?? "default",
-    "--setting-sources",
-    (spawn_?.settingSources ?? ["user"]).join(","),
-    "--effort",
-    effort,
-    // #32: L2 was missing --max-thinking-tokens (present in agentArgs/L1/hostloop) — the env var still
-    // carried the budget, but the CLI-flag channel diverged from the documented spawn contract. Add it
-    // before the variadic tool flags, matching argv.ts §3.1.
-    "--max-thinking-tokens",
-    String(resolveMaxThinkingTokens(plan.maxThinkingTokens, plan.model, spawn_?.maxThinkingTokens ?? DEFAULT_MAX_THINKING_TOKENS)),
-    ...(opts.systemPromptAppend ? ["--append-system-prompt", opts.systemPromptAppend] : []),
-    ...(plan.model ? ["--model", plan.model] : []),
-    ...(opts.mcpVm ? ["--mcp-config", opts.mcpVm] : []),
-    // #26: session persistence — pin (--session-id) or resume (--resume) the agent's native session,
-    // matching argv.ts:47. Only emitted when a stable session was requested.
-    ...(plan.agentSessionId ? (plan.resume ? ["--resume", plan.agentSessionId] : ["--session-id", plan.agentSessionId]) : []),
-    ...plan.pluginDirs.flatMap((p) => ["--plugin-dir", `${mntVm}/${p}`]),
-    ...(spawn_?.tools?.length ? ["--tools", ...spawn_.tools] : []),
-    ...(spawn_?.allowedTools?.length ? ["--allowedTools", ...spawn_.allowedTools] : []),
-  ];
+  return baseAgentArgs(baseline, plan, { mntRoot: mntVm, mcpGuest: opts.mcpVm, systemPromptAppend: opts.systemPromptAppend });
 }

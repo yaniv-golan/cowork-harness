@@ -18,14 +18,23 @@ export interface AgentArgsOpts {
   extraTools?: string[]; // e.g. mcp__workspace__bash — appended to --tools AND --allowedTools
 }
 
-/** §3.1 — the `claude …` args shared by container/hostloop/microvm. */
-export function agentArgs(baseline: PlatformBaseline, plan: LaunchPlan, opts: AgentArgsOpts): string[] {
+/**
+ * §3.1 — the agent CLI args WITHOUT the leading `claude` token (the microvm exec appends it separately
+ * in the lima argv). The single source for the flag set + order; `agentArgs` (container/hostloop) and
+ * `microvmAgentArgs` both delegate here so the two can never drift again (a past divergence dropped
+ * `--max-thinking-tokens` from the microvm path). `mntRoot` differs per tier; disallowed/extraTools are
+ * container/hostloop-only (the microvm passes neither).
+ */
+export function baseAgentArgs(
+  baseline: PlatformBaseline,
+  plan: LaunchPlan,
+  opts: { mntRoot: string; mcpGuest?: string; systemPromptAppend?: string; disallowed?: string[]; extraTools?: string[] },
+): string[] {
   const spawn = baseline.spawn;
   const effort = plan.effort ?? spawn?.effortDefault ?? "medium";
   const tools = [...(spawn?.tools ?? []).filter(notIn(opts.disallowed)), ...(opts.extraTools ?? [])];
   const allowed = [...(spawn?.allowedTools ?? []).filter(notIn(opts.disallowed)), ...(opts.extraTools ?? [])];
   return [
-    "claude",
     "-p",
     "--verbose",
     "--input-format",
@@ -36,16 +45,16 @@ export function agentArgs(baseline: PlatformBaseline, plan: LaunchPlan, opts: Ag
     "stdio",
     "--permission-mode",
     // The session's permission_mode (threaded onto plan.permissionMode) must win at L1/L2 too — L0
-    // already honors it (protocol.ts:71). Without this, agentArgs hard-wired the baseline default and a
-    // session asking for acceptEdits/bypassPermissions was silently ignored in every sandbox tier.
+    // already honors it. Without this, agentArgs hard-wired the baseline default and a session asking
+    // for acceptEdits/bypassPermissions was silently ignored in every sandbox tier.
     plan.permissionMode ?? spawn?.permissionMode ?? "default",
     "--setting-sources",
     (spawn?.settingSources ?? ["user"]).join(","),
     "--effort",
     effort,
-    // #2: emit the thinking budget as a CLI flag too (channel fidelity — Cowork passes it). The ELF
-    // ALSO honors the MAX_THINKING_TOKENS env (set in spawnEnv) and env wins (V1, binary-verified),
-    // so both channels carry the same resolved value. Kept among the FIXED flags so the variadic
+    // Emit the thinking budget as a CLI flag too (channel fidelity — Cowork passes it). The ELF ALSO
+    // honors the MAX_THINKING_TOKENS env (set in spawnEnv) and env wins (binary-verified), so both
+    // channels carry the same resolved value. Kept among the FIXED flags so the variadic
     // --tools/--allowedTools stay last (golden invariant).
     "--max-thinking-tokens",
     String(resolveMaxThinkingTokens(plan.maxThinkingTokens, plan.model, spawn?.maxThinkingTokens ?? DEFAULT_MAX_THINKING_TOKENS)),
@@ -60,6 +69,20 @@ export function agentArgs(baseline: PlatformBaseline, plan: LaunchPlan, opts: Ag
     // variadic flags LAST so they don't swallow other options
     ...(tools.length ? ["--tools", ...tools] : []),
     ...(allowed.length ? ["--allowedTools", ...allowed] : []),
+  ];
+}
+
+/** §3.1 — the full `claude …` args (container/hostloop): the shared base prefixed with the binary token. */
+export function agentArgs(baseline: PlatformBaseline, plan: LaunchPlan, opts: AgentArgsOpts): string[] {
+  return [
+    "claude",
+    ...baseAgentArgs(baseline, plan, {
+      mntRoot: opts.mntRoot,
+      mcpGuest: opts.mcpGuest,
+      systemPromptAppend: opts.systemPromptAppend,
+      disallowed: opts.disallowed,
+      extraTools: opts.extraTools,
+    }),
   ];
 }
 

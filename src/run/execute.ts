@@ -16,6 +16,7 @@ import type { WebFetchProvenance } from "../hostloop/workspace-handler.js";
 import { startEgressSidecar, type EgressSidecar } from "../egress/sidecar.js";
 import { startEgressProxy, freePort } from "../egress/proxy.js";
 import { evaluate, hostMatches } from "../assert.js";
+import { compileUserRegex } from "../regex.js";
 import { renderPrompts } from "../prompt.js";
 import { LiveAgentSession, type SdkMcp } from "../agent/session.js";
 import { buildDecider, ExternalDecider, LlmDecider, type Decider, type OnUnanswered, UnansweredError } from "../decide/decider.js";
@@ -390,22 +391,16 @@ function validateScenarioRegexes(scenario: Scenario, scenarioPath: string): void
     for (const key of ["transcript_matches", "transcript_not_matches", "question_asked", "subagent_dispatched"] as const) {
       const pattern = a[key];
       if (pattern !== undefined) {
-        try {
-          new RegExp(pattern, "i");
-        } catch (e) {
-          throw new Error(`bad regex in ${key} in ${context}: ${String((e as Error).message)}`);
-        }
+        const c = compileUserRegex(pattern);
+        if ("error" in c) throw new Error(`bad regex in ${key} in ${context}: ${c.error}`);
       }
     }
   }
   // answers[].when_question patterns (ScriptedDecider uses these)
   for (const rule of scenario.answers) {
     if (rule.when_question !== undefined) {
-      try {
-        new RegExp(rule.when_question, "i");
-      } catch (e) {
-        throw new Error(`bad regex in when_question in ${context}: ${String((e as Error).message)}`);
-      }
+      const c = compileUserRegex(rule.when_question);
+      if ("error" in c) throw new Error(`bad regex in when_question in ${context}: ${c.error}`);
     }
   }
 }
@@ -529,6 +524,23 @@ export function hostPathLeaked(text: string): boolean {
   return normalized !== text && re.test(normalized);
 }
 
+/**
+ * #29 — a bash command deletes in outputs when a delete-ish token AND an `outputs/` reference co-occur.
+ * Beyond `rm/unlink/rmdir/mv` this catches `find … -delete`, `shred`, `truncate`, and the common
+ * `python -c` forms (os.remove/os.unlink/os.rmdir/shutil.rmtree, pathlib `.unlink()`) — all of which
+ * ride the same Bash/`mcp__workspace__bash` command string. Pure + exported so the rule is directly
+ * unit-testable. RESIDUAL GAP (documented, Phase 7): a delete via a script file, a renamed binary, or a
+ * non-bash tool still evades this post-hoc scan — real enforcement is the deferred FUSE/MCP sub-project.
+ */
+export function isOutputsDelete(cmd: string): boolean {
+  const delToken =
+    /\b(rm|unlink|rmdir|shred|truncate)\b|\bfind\b[^\n]*-delete\b|\bos\.(remove|unlink|rmdir)\b|\bshutil\.rmtree\b|\.unlink\(/;
+  // `outputs` as a path segment: followed by `/` (a file under it) OR a boundary (the dir itself, e.g.
+  // `find outputs -delete`). The negative lookahead avoids `outputs.txt` / `myoutputs` false matches.
+  const touchesOutputs = /(^|[\s"'`(/])(mnt\/)?outputs(?![\w.])/;
+  return (delToken.test(cmd) || /\bmv\b/.test(cmd)) && touchesOutputs.test(cmd);
+}
+
 /** Scan a run's events.jsonl for limitation-fidelity signals (moved from cli.ts). */
 export function scanEvents(file: string): { outputsDeletes: string[]; hostPathLeaked: boolean; selfHealRan: boolean } {
   const out = { outputsDeletes: [] as string[], hostPathLeaked: false, selfHealRan: false };
@@ -538,18 +550,6 @@ export function scanEvents(file: string): { outputsDeletes: string[]; hostPathLe
   } catch {
     return out;
   }
-  // #29: a delete touches outputs when a delete-ish token AND an outputs/ reference co-occur in one
-  // command. Broadened beyond `rm/unlink/rmdir/mv` to also catch `find … -delete`, `shred`, `truncate`,
-  // and the common `python -c` forms (os.remove/os.unlink/os.rmdir/shutil.rmtree, pathlib .unlink()) —
-  // all of which ride the same Bash/`mcp__workspace__bash` command string. RESIDUAL GAP (documented,
-  // Phase 7): a delete via a script file, a renamed binary, or a non-bash tool still evades this post-hoc
-  // scan — real enforcement is the deferred FUSE/MCP-layer sub-project, not this best-effort heuristic.
-  const delToken =
-    /\b(rm|unlink|rmdir|shred|truncate)\b|\bfind\b[^\n]*-delete\b|\bos\.(remove|unlink|rmdir)\b|\bshutil\.rmtree\b|\.unlink\(/;
-  // `outputs` as a path segment: followed by `/` (a file under it) OR a boundary (the dir itself, e.g.
-  // `find outputs -delete`). The negative lookahead avoids `outputs.txt` / `myoutputs` false matches.
-  const touchesOutputs = /(^|[\s"'`(/])(mnt\/)?outputs(?![\w.])/;
-  const delRe = { test: (cmd: string) => (delToken.test(cmd) || /\bmv\b/.test(cmd)) && touchesOutputs.test(cmd) };
   const selfHealRe = /\/sessions\/[^\s"]*\/mnt\/\.local-plugins/;
   for (const l of lines) {
     let msg: any;
@@ -575,7 +575,7 @@ export function scanEvents(file: string): { outputsDeletes: string[]; hostPathLe
       // input shape. Missing the MCP name was a host-loop blind-spot in the post-hoc backstop.
       if (block.type === "tool_use" && (block.name === "Bash" || block.name === "mcp__workspace__bash") && msg.type === "assistant") {
         const cmd = String(block.input?.command ?? "");
-        if (delRe.test(cmd)) out.outputsDeletes.push(cmd.slice(0, 120));
+        if (isOutputsDelete(cmd)) out.outputsDeletes.push(cmd.slice(0, 120));
         if (selfHealRe.test(cmd)) out.selfHealRan = true;
       }
       if (block.type === "text" && typeof block.text === "string" && hostPathLeaked(block.text)) out.hostPathLeaked = true;

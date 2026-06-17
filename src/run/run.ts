@@ -1,7 +1,14 @@
 import { randomUUID } from "node:crypto";
 import type { AgentSession, AgentEvent, DecisionRequest, DecisionResponse } from "../agent/session.js";
 import { questionKey, questionLabel } from "../agent/session.js";
-import { ABSTAIN, UnansweredError, PERMISSIVE_AUTOALLOW_RATIONALE, type Decider, type RunContext } from "../decide/decider.js";
+import {
+  ABSTAIN,
+  UnansweredError,
+  PERMISSIVE_AUTOALLOW_RATIONALE,
+  type Decider,
+  type Decision,
+  type RunContext,
+} from "../decide/decider.js";
 import { ProvenanceTracker } from "../hostloop/provenance.js";
 
 /** A3: the observable sub-agent dispatch tree (single owner = RunRecord). */
@@ -304,36 +311,36 @@ export class Run {
     return Promise.race([p.finally(() => clearTimeout(t)), timeout]);
   }
 
-  private recordDecision(req: DecisionRequest, resp: any, by: string, rationale?: string, model?: string) {
+  // Typed: `resp` is the discriminated DecisionResponse and `by` is the Decision["by"] union (a typo'd
+  // attribution is now a compile error). resp fields are read via resp.kind narrowing; req fields via req.
+  private recordDecision(req: DecisionRequest, resp: DecisionResponse, by: Decision["by"], rationale?: string, model?: string) {
     if (req.kind === "question") {
-      this.rec.decisions.push({ kind: "question", name: "AskUserQuestion", decision: "answered", by, detail: resp.answers, rationale });
-      // #18: for the human-readable label, include ALL questions — not just questions[0]. Single-question
-      // gates produce the same output as before ("<question>"); multi-question gates produce
-      // "<q1> / <q2>" so the label is accurate and traceable. The answers map is already complete.
+      const answers = resp.kind === "question" ? resp.answers : {};
+      this.rec.decisions.push({ kind: "question", name: "AskUserQuestion", decision: "answered", by, detail: answers, rationale });
+      // For the human-readable label, include ALL questions — not just questions[0]. Single-question gates
+      // produce "<question>"; multi-question gates produce "<q1> / <q2>". The answers map is already complete.
       const label = req.questions.map(questionLabel).filter(Boolean).join(" / ") || "";
       // Record the answered gate (with its toolUseId) so finalize can pair it with the tool_result to
-      // verify the answer actually reached the model (Part 3). Independent of `by` — delivery ≠ attribution.
-      this.rec.gateAnswers.push({
-        question: label,
-        toolUseId: req.toolUseId,
-        answers: resp.answers ?? {},
-      });
-      for (const [question, chosen] of Object.entries(resp.answers ?? {})) {
+      // verify the answer actually reached the model. Independent of `by` — delivery ≠ attribution.
+      this.rec.gateAnswers.push({ question: label, toolUseId: req.toolUseId, answers });
+      for (const [question, chosen] of Object.entries(answers)) {
         if (by !== "scripted") this.rec.unanswered.push({ question, chosen: String(chosen), by, rationale, model });
       }
     } else if (req.kind === "permission") {
-      this.rec.decisions.push({ kind: "tool", name: req.tool, decision: resp.behavior, by, rationale });
-      // #6: a cowork-parity off-registry auto-allow is a SILENT false-green risk — real Cowork blocks
-      // for the user. Make it loud (stderr) AND machine-distinguishable (rec.permissiveAutoAllow → the
-      // envelope), so a green carrying one isn't mistaken for a faithful pass.
-      if (resp.behavior === "allow" && by === "cowork" && rationale === PERMISSIVE_AUTOALLOW_RATIONALE) {
+      const behavior = resp.kind === "permission" ? resp.behavior : undefined;
+      this.rec.decisions.push({ kind: "tool", name: req.tool, decision: behavior ?? "?", by, rationale });
+      // A cowork-parity off-registry auto-allow is a SILENT false-green risk — real Cowork blocks for the
+      // user. Make it loud (stderr) AND machine-distinguishable (rec.permissiveAutoAllow → the envelope),
+      // so a green carrying one isn't mistaken for a faithful pass.
+      if (behavior === "allow" && by === "cowork" && rationale === PERMISSIVE_AUTOALLOW_RATIONALE) {
         this.rec.permissiveAutoAllow.push(req.tool);
         process.stderr.write(
-          `::warning:: [permission] "${req.tool}" auto-allowed by cowork parity (unscripted, off-registry) — real Cowork would BLOCK for the user. Not a faithful pass; pin with --answer or set permission_parity: strict. (#6)\n`,
+          `::warning:: [permission] "${req.tool}" auto-allowed by cowork parity (unscripted, off-registry) — real Cowork would BLOCK for the user. Not a faithful pass; pin with --answer or set permission_parity: strict.\n`,
         );
       }
     } else {
-      this.rec.decisions.push({ kind: req.kind, name: req.kind, decision: resp.behavior ?? resp.action ?? "?", by, rationale });
+      const outcome = resp.kind === "dialog" ? resp.behavior : resp.kind === "elicit" ? resp.action : "?";
+      this.rec.decisions.push({ kind: req.kind, name: req.kind, decision: outcome, by, rationale });
     }
   }
 

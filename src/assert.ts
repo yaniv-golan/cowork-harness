@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve, relative, isAbsolute, sep } from "node:path";
 import type { Assertion, RunResult } from "./types.js";
+import { compileUserRegex } from "./regex.js";
 
 /** Resolve a user-authored assertion path under `workRoot`, rejecting absolute paths and any `..` that
  *  escapes the root. Returns the absolute path, or null if it would leave `workRoot`. Assertion paths are
@@ -102,22 +103,14 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
   // `evaluate()` is a bare `.map(check)` with no error boundary, so a malformed pattern must be a
   // clean assertion failure, not an uncaught throw. Case-insensitive ("i").
   if (a.transcript_matches !== undefined) {
-    let re: RegExp | undefined;
-    try {
-      re = new RegExp(a.transcript_matches, "i");
-    } catch (e) {
-      results.push(fail(`transcript_matches: bad regex "${a.transcript_matches}": ${String((e as Error).message)}`));
-    }
-    if (re) results.push(re.test(ctx.transcript) ? ok() : fail(`transcript did not match /${a.transcript_matches}/i`));
+    const c = compileUserRegex(a.transcript_matches);
+    if ("error" in c) results.push(fail(`transcript_matches: bad regex "${a.transcript_matches}": ${c.error}`));
+    else results.push(c.re.test(ctx.transcript) ? ok() : fail(`transcript did not match /${a.transcript_matches}/i`));
   }
   if (a.transcript_not_matches !== undefined) {
-    let re: RegExp | undefined;
-    try {
-      re = new RegExp(a.transcript_not_matches, "i");
-    } catch (e) {
-      results.push(fail(`transcript_not_matches: bad regex "${a.transcript_not_matches}": ${String((e as Error).message)}`));
-    }
-    if (re) results.push(!re.test(ctx.transcript) ? ok() : fail(`transcript unexpectedly matched /${a.transcript_not_matches}/i`));
+    const c = compileUserRegex(a.transcript_not_matches);
+    if ("error" in c) results.push(fail(`transcript_not_matches: bad regex "${a.transcript_not_matches}": ${c.error}`));
+    else results.push(!c.re.test(ctx.transcript) ? ok() : fail(`transcript unexpectedly matched /${a.transcript_not_matches}/i`));
   }
   if (a.file_exists !== undefined) {
     const abs = containedPath(ctx.workRoot, a.file_exists);
@@ -150,15 +143,11 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
   if (a.subagent_dispatched !== undefined) {
     // Match the agentType OR the description — skills often dispatch with only a `description`
     // (no subagent_type → agentType "unknown"), so name-matching alone would miss those (O1).
-    let rx: RegExp | undefined;
-    try {
-      rx = new RegExp(a.subagent_dispatched, "i");
-    } catch (e) {
-      results.push(fail(`subagent_dispatched: bad regex "${a.subagent_dispatched}": ${String((e as Error).message)}`));
-    }
-    if (rx)
+    const c = compileUserRegex(a.subagent_dispatched);
+    if ("error" in c) results.push(fail(`subagent_dispatched: bad regex "${a.subagent_dispatched}": ${c.error}`));
+    else
       results.push(
-        ctx.subagents.some((s) => rx!.test(s.agentType) || rx!.test(s.description ?? ""))
+        ctx.subagents.some((s) => c.re.test(s.agentType) || c.re.test(s.description ?? ""))
           ? ok()
           : fail(`no sub-agent matching "${a.subagent_dispatched}" was dispatched (by type or description)`),
       );
@@ -209,13 +198,9 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
       !ctx.hostPathLeaked === a.transcript_no_host_path ? ok() : fail(`host path leaked into model-visible text: ${ctx.hostPathLeaked}`),
     );
   if (a.question_asked !== undefined) {
-    let rx: RegExp | undefined;
-    try {
-      rx = new RegExp(a.question_asked, "i");
-    } catch (e) {
-      results.push(fail(`question_asked: bad regex "${a.question_asked}": ${String((e as Error).message)}`));
-    }
-    if (rx) results.push(ctx.questions.some((q) => rx!.test(q)) ? ok() : fail(`no question matched: ${a.question_asked}`));
+    const c = compileUserRegex(a.question_asked);
+    if ("error" in c) results.push(fail(`question_asked: bad regex "${a.question_asked}": ${c.error}`));
+    else results.push(ctx.questions.some((q) => c.re.test(q)) ? ok() : fail(`no question matched: ${a.question_asked}`));
   }
   if (a.questions_count_max !== undefined)
     results.push(

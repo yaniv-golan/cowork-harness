@@ -3,6 +3,7 @@ import type { AnswerRule } from "../types.js";
 import type { DecisionRequest, DecisionResponse } from "../agent/session.js";
 import type { DecisionChannel } from "./external-channel.js";
 import { scrub } from "../secrets.js";
+import { compileUserRegex } from "../regex.js";
 
 /**
  * Seam 2 — Decider: policy for the agent's `decision` events. Deciders return a
@@ -70,13 +71,11 @@ export class ScriptedDecider implements Decider {
         const text = q.question ?? q.header ?? "";
         const rule = this.rules.find((r) => {
           if (!r.when_question) return false;
-          try {
-            return new RegExp(r.when_question, "i").test(text);
-          } catch (e) {
-            // Malformed pattern in a CLI-supplied rule (--answer/--answer-policy) — load-time
-            // validation catches file-based scenarios; this guards the CLI path (M2).
-            throw new Error(`bad regex in when_question "${r.when_question}": ${String((e as Error).message)}`);
-          }
+          const c = compileUserRegex(r.when_question);
+          // Malformed pattern in a CLI-supplied rule (--answer/--answer-policy) — load-time validation
+          // catches file-based scenarios; this guards the CLI path.
+          if ("error" in c) throw new Error(`bad regex in when_question "${r.when_question}": ${c.error}`);
+          return c.re.test(text);
         });
         if (!rule || (rule.choose === undefined && rule.answer === undefined)) {
           unmatched.push(text);
