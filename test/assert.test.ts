@@ -212,9 +212,9 @@ describe("artifact_json assertion (#5)", () => {
   });
 });
 
-// Bug 37 — artifact_json equals/in deep-equality is INSENSITIVE to object key order but
+// artifact_json equals/in deep-equality is INSENSITIVE to object key order but
 // SENSITIVE to array order (the old JSON.stringify compare was wrongly key-order-sensitive).
-describe("artifact_json equals/in — key-order-insensitive, array-order-sensitive (Bug 37)", () => {
+describe("artifact_json equals/in — key-order-insensitive, array-order-sensitive", () => {
   const A = (doc: unknown, artifact_json: any) => {
     const root = artifactRoot(doc);
     return evaluate([{ artifact_json }], ctx({ workRoot: root }));

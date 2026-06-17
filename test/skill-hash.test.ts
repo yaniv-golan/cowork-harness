@@ -11,7 +11,7 @@ function skillDir(): string {
   return d;
 }
 
-describe("skill-hash — excludes cassettes/VCS, keeps real source (H-B)", () => {
+describe("skill-hash — excludes cassettes/VCS, keeps real source", () => {
   it("is unchanged when a recorded cassette is written into an existing cassettes dir (self-invalidation fix)", () => {
     const d = skillDir();
     // The real scenario: the cassettes dir already exists in the tree; recording writes a *.cassette.json

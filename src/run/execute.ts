@@ -179,7 +179,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   const promptGateOn = readGateFlag(baseline, "1978029737", "coworkWebFetchPrompt");
   const provenanceRef: { current?: WebFetchProvenance } = {};
   try {
-    // Bug 33: acquire the egress sidecar / host proxy INSIDE the protected try so a throw in resource
+    // acquire the egress sidecar / host proxy INSIDE the protected try so a throw in resource
     // acquisition OR in renderPrompts below can't leak a Docker network / a bound proxy port — the `finally`
     // tears down whatever was assigned to sidecar/hostProxy. (Previously these were acquired before the try,
     // so a renderPrompts throw skipped teardown and orphaned the resource.)
@@ -445,7 +445,7 @@ function writeRunJsonl(
 /** ENV-MANIFEST: recursively list files under each user-visible prefix (relative path + byte size).
  *  Paths only — NO content snapshot (that is the cassette manifest, #1).
  *
- *  Bug 31: use `lstatSync` (does NOT follow symlinks) and SKIP any symlink entry — a symlink could point out
+ *  use `lstatSync` (does NOT follow symlinks) and SKIP any symlink entry — a symlink could point out
  *  of `workRoot` (inlining out-of-tree content into a committed cassette) or form a cycle. A `visited` set of
  *  resolved real directory paths breaks cycles among real directories too. Only regular files are recorded. */
 export function collectArtifacts(workRoot: string, prefixes: string[]): { path: string; bytes: number }[] {
@@ -472,14 +472,14 @@ export function collectArtifacts(workRoot: string, prefixes: string[]): { path: 
       const childRel = rel ? `${rel}/${name}` : name;
       let st;
       try {
-        st = lstatSync(childAbs); // lstat: does NOT follow symlinks — see Bug 31
+        st = lstatSync(childAbs); // lstat: does NOT follow symlinks
       } catch {
         continue;
       }
       if (st.isSymbolicLink()) {
         // Skip symlinks: they can escape workRoot or cycle. (Recording-side; the agent's own outputs are
         // real files, so this loses nothing in practice while closing the escape/cycle hole.)
-        warn(`::warning:: collectArtifacts: skipping symlink ${childRel} (not followed — see Bug 31)\n`);
+        warn(`::warning:: collectArtifacts: skipping symlink ${childRel} (not followed)\n`);
         continue;
       }
       if (st.isDirectory()) walk(childAbs, childRel);

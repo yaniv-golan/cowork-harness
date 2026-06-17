@@ -83,7 +83,7 @@ describe("stageWorkspace — resume staging (fidelity guard)", () => {
     expect(() => stageWorkspace(plan, mntHost)).not.toThrow();
   });
 
-  it("Bug 40 — a fresh-run mcp.config pointing at a DIRECTORY fails loud (not an opaque cpSync EISDIR)", () => {
+  it("a fresh-run mcp.config pointing at a DIRECTORY fails loud (not an opaque cpSync EISDIR)", () => {
     const { root, mntHost, plan } = fixture(false);
     const dir = join(root, "mcp-as-dir");
     mkdirSync(dir, { recursive: true });
@@ -91,7 +91,7 @@ describe("stageWorkspace — resume staging (fidelity guard)", () => {
     expect(() => stageWorkspace(plan, mntHost)).toThrow(/mcp.config must be a file/);
   });
 
-  it("Bug 40 — a directory mcp.config fails even under COWORK_HARNESS_SOFT_MISSING (wrong-kind, not missing)", () => {
+  it("a directory mcp.config fails even under COWORK_HARNESS_SOFT_MISSING (wrong-kind, not missing)", () => {
     const { root, mntHost, plan } = fixture(false);
     const dir = join(root, "mcp-as-dir2");
     mkdirSync(dir, { recursive: true });

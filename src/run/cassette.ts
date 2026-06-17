@@ -42,7 +42,7 @@ interface ManifestEntry {
   bytes: number;
   sha256: string;
   body?: string; // inlined small-file body (≤ cap) — materialized on replay so JSON asserts work
-  /** Bug 30: how `body` is encoded. "utf8" (default/absent) for text; "base64" for non-UTF-8/binary
+  /** how `body` is encoded. "utf8" (default/absent) for text; "base64" for non-UTF-8/binary
    *  bodies, which would otherwise corrupt on a `toString("utf8")` round-trip (and then false-fail the
    *  sha256 verify, since the hash is over the RAW bytes). */
   encoding?: "utf8" | "base64";
@@ -78,9 +78,9 @@ const CASSETTE_VERSION = 1;
 const MANIFEST_BODY_CAP = 64 * 1024; // inline JSON/text bodies ≤ 64 KiB; larger → hash-only + truncated marker
 
 /** Resolve `rel` against `root` and confirm it stays inside `root`. Returns the absolute path on success;
- *  throws (Bug 28/32) on an absolute path, a `..` escape, or anything that resolves outside the root.
- *  Used both at record time (containment before reading an artifact body — Bug 32) and at replay time
- *  (containment before writing a materialized entry — Bug 28). */
+ *  throws on an absolute path, a `..` escape, or anything that resolves outside the root.
+ *  Used both at record time (containment before reading an artifact body) and at replay time
+ *  (containment before writing a materialized entry). */
 function containedPath(root: string, rel: string): string {
   if (isAbsolute(rel)) throw new Error(`artifact path "${rel}" is absolute — refusing (must be relative to the work root)`);
   const rootResolved = resolve(root);
@@ -90,17 +90,17 @@ function containedPath(root: string, rel: string): string {
   return abs;
 }
 
-/** Bug 30: a buffer round-trips losslessly through UTF-8 only if re-encoding the decoded string reproduces
+/** a buffer round-trips losslessly through UTF-8 only if re-encoding the decoded string reproduces
  *  the exact bytes. Binary content (and lone surrogates / invalid sequences) fail this — store them base64. */
 function isLosslessUtf8(buf: Buffer): boolean {
   return Buffer.from(buf.toString("utf8"), "utf8").equals(buf);
 }
 
 /** #1: snapshot the user-visible artifacts under `workRoot` into manifest entries.
- *  Exported for token-free record→replay round-trip tests (Bugs 28/29/30). */
+ *  Exported for token-free record→replay round-trip tests. */
 export function buildManifest(workRoot: string): ManifestEntry[] {
   return collectArtifacts(workRoot, ["outputs", ".projects"]).map(({ path, bytes }) => {
-    // Bug 32: collectArtifacts paths are derived from a directory walk; a symlinked artifact (post-Bug-31
+    // collectArtifacts paths are derived from a directory walk; a symlinked artifact (post-Bug-31
     // collectArtifacts already skips symlinks, but the entry could still point oddly) must not inline content
     // outside the work root. Re-confirm containment before reading the raw body.
     let abs: string;
@@ -117,31 +117,31 @@ export function buildManifest(workRoot: string): ManifestEntry[] {
     }
     const sha256 = createHash("sha256").update(buf).digest("hex");
     if (buf.length > MANIFEST_BODY_CAP) return { path, bytes, sha256, truncated: true };
-    // Bug 30: store an encoding marker. UTF-8-safe bodies stay text (readable cassettes); binary bodies go
-    // base64 so the record→replay round-trip is byte-exact and the sha256 verify (Bug 29) stays valid.
+    // store an encoding marker. UTF-8-safe bodies stay text (readable cassettes); binary bodies go
+    // base64 so the record→replay round-trip is byte-exact and the sha256 verify stays valid.
     if (isLosslessUtf8(buf)) return { path, bytes, sha256, body: buf.toString("utf8") };
     return { path, bytes, sha256, body: buf.toString("base64"), encoding: "base64" };
   });
 }
 
-/** Bug 30: decode an entry's body to its RAW bytes per the encoding marker (default utf8). */
+/** decode an entry's body to its RAW bytes per the encoding marker (default utf8). */
 function decodeBody(e: ManifestEntry): Buffer {
   if (e.body === undefined) return Buffer.alloc(0);
   return Buffer.from(e.body, e.encoding === "base64" ? "base64" : "utf8");
 }
 
 /** #1: materialize a manifest into a temp work root so replay can run the filesystem assertions against it.
- *  Small files get their inlined body (decoded per its encoding marker — Bug 30); hash-only (truncated)
+ *  Small files get their inlined body (decoded per its encoding marker); hash-only (truncated)
  *  files get an empty placeholder (file_exists still passes; artifact_json on them fails loud — it needs the
- *  body, which only small files carry). Bug 28: each path is containment-checked before writing so a hostile
- *  cassette entry can't escape the temp root. Bug 29: every non-truncated body is verified against its
+ *  body, which only small files carry). each path is containment-checked before writing so a hostile
+ *  cassette entry can't escape the temp root. every non-truncated body is verified against its
  *  recorded sha256 (over the decoded RAW bytes) — a mismatch fails replay (throws). */
 export function materializeManifest(entries: ManifestEntry[]): { workRoot: string; prefixes: string[] } {
   const workRoot = mkdtempSync(join(tmpdir(), "cwh-replay-"));
   for (const e of entries) {
-    const abs = containedPath(workRoot, e.path); // Bug 28: reject absolute / `..` / out-of-root before writing
-    const raw = decodeBody(e); // Bug 30: decode per the encoding marker
-    // Bug 29: verify the non-truncated body against its recorded hash (over the RAW bytes). A truncated entry
+    const abs = containedPath(workRoot, e.path); // reject absolute / `..` / out-of-root before writing
+    const raw = decodeBody(e); // decode per the encoding marker
+    // verify the non-truncated body against its recorded hash (over the RAW bytes). A truncated entry
     // carries no body (hash-only) — nothing to verify. Mismatch ⇒ a tampered/corrupt cassette ⇒ fail replay.
     if (!e.truncated && e.body !== undefined && e.sha256) {
       const got = createHash("sha256").update(raw).digest("hex");
@@ -185,7 +185,7 @@ export function buildFingerprint(sessionPath: string, baselineAppVersion: string
   const { dirs, baseDir } = skillSourceDirs(sessionPath, cassetteDir);
   if (dirs.length === 0) return { baseline: baselineAppVersion };
   // hashSkillDirs excludes recorded cassettes (*.cassette.json) + VCS/cache dirs so a committed cassette
-  // and unrelated VCS noise don't self-invalidate the fingerprint they were recorded under (H-B).
+  // and unrelated VCS noise don't self-invalidate the fingerprint they were recorded under.
   const skillHash = hashSkillDirs(dirs);
   // Store skillSources RELATIVE to the session-file dir — diagnostics only (the replay recompute re-derives
   // the dirs from the session), so a relative path is enough and never leaks an absolute `/Users/...` path.
@@ -457,8 +457,8 @@ export function redactCassette(cassette: Cassette, policy: RedactionPolicy): Cas
     artifacts: cassette.artifacts?.map((a) => ({
       ...a,
       path: redactText(a.path, policy), // C1: a filename can name a customer (outputs/Acme-cap-table.json)
-      // Bug 30: a base64 (binary) body has no text PII to redact, and redacting it would corrupt the bytes
-      // and then false-fail the replay-time sha256 verify (Bug 29) — leave binary bodies untouched.
+      // a base64 (binary) body has no text PII to redact, and redacting it would corrupt the bytes
+      // and then false-fail the replay-time sha256 verify — leave binary bodies untouched.
       ...(a.body !== undefined && a.encoding !== "base64" ? { body: redactJsonLine(a.body, policy) } : {}),
     })),
     fingerprint: cassette.fingerprint
@@ -613,7 +613,7 @@ export async function cmdRecord(args: string[]) {
     return process.exit(2);
   }
   const isDir = existsSync(target) && statSync(target).isDirectory();
-  // Bug 22: `--out` names ONE cassette; it has no meaning for a directory batch — reject rather than silently ignore.
+  // `--out` names ONE cassette; it has no meaning for a directory batch — reject rather than silently ignore.
   if (isDir && p.options["--out"] !== undefined) {
     log("record: --out names a single cassette file and is not valid for a directory batch");
     return process.exit(2);
@@ -714,8 +714,8 @@ async function recordScenarioObject(
   // C2: buildManifest reads output bodies RAW (executeScenario scrubs result/events/control-out, NOT
   // outputs/) — secret-scrub each body before it is committed.
   const secrets = collectSecrets();
-  // Bug 30: a base64 (binary) body must NOT be scrubbed — scrub mutates text matches and would corrupt the
-  // bytes, then false-fail the replay-time sha256 verify (Bug 29). Text bodies are scrubbed as before (C2).
+  // a base64 (binary) body must NOT be scrubbed — scrub mutates text matches and would corrupt the
+  // bytes, then false-fail the replay-time sha256 verify. Text bodies are scrubbed as before (C2).
   const artifacts = (result.workDir ? buildManifest(result.workDir) : []).map((a) =>
     a.body !== undefined && a.encoding !== "base64" ? { ...a, body: scrub(a.body, secrets) } : a,
   );

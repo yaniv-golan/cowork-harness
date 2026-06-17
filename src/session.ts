@@ -133,7 +133,7 @@ export interface LaunchPlan {
 /**
  * Read a plugin's declared version from its `.claude-plugin/plugin.json`.
  *
- * Bug 48: split missing-vs-malformed. A genuinely-absent manifest returns `null` (legitimately
+ * split missing-vs-malformed. A genuinely-absent manifest returns `null` (legitimately
  * versionless plugins fall back to the caller's default), but a PRESENT-but-corrupt manifest THROWS —
  * silently defaulting an unparseable plugin.json to "0.0.0" would mask a real authoring error and
  * stage the plugin at a wrong cache path. A present manifest with no/empty `version` is not corrupt:
@@ -205,7 +205,7 @@ export function buildLaunchPlan(session: SessionConfig, baseline: PlatformBaseli
       warn(`::warning:: [skill] missing source excluded (COWORK_HARNESS_SOFT_MISSING): ${src}\n`);
       continue;
     }
-    // Bug 43: a skill is a directory (it is cpSync'd recursively into CLAUDE_CONFIG_DIR/skills). A file
+    // a skill is a directory (it is cpSync'd recursively into CLAUDE_CONFIG_DIR/skills). A file
     // source would copy as a lone file, silently diverging from Cowork's skill-dir model. Kind-check
     // here, where the source is known to exist (missing already handled above, softMissing-aware).
     requireDir(src, "skill source");
@@ -231,7 +231,7 @@ export function buildLaunchPlan(session: SessionConfig, baseline: PlatformBaseli
   }
   for (const f of session.folders) {
     const src = expand(f.from);
-    // Bug 42: a folder models a workspace DIRECTORY copied into `.projects/<id>`; a file source would
+    // a folder models a workspace DIRECTORY copied into `.projects/<id>`; a file source would
     // be copied as a lone file, diverging from Cowork. Mirror the upload `isFile` guard above, inverted
     // — kind-check only when the source EXISTS (a missing source stays on the post-loop missing-mount
     // check, softMissing-aware), so a wrong-kind source fails loud but a missing one is reconciled later.
@@ -243,14 +243,14 @@ export function buildLaunchPlan(session: SessionConfig, baseline: PlatformBaseli
   }
   for (const p of session.plugins.local_plugins) {
     const src = expand(p);
-    // Bug 41: a plugin root is a DIRECTORY (mounted as a --plugin-dir); a file source would yield a
+    // a plugin root is a DIRECTORY (mounted as a --plugin-dir); a file source would yield a
     // bogus --plugin-dir. Kind-check only when present (missing stays on the post-loop check).
     if (existsSync(src)) requireDir(src, `local_plugin "${p}"`);
     mounts.push({ hostPath: src, mountPath: `.local-plugins/cache/${safePathSegment(basename(src), "local_plugin basename")}`, mode: "r" });
   }
   for (const p of session.plugins.remote_plugins) {
     const src = expand(p);
-    // Bug 41: same as local_plugins — a remote-plugin root is a directory; kind-check when present.
+    // same as local_plugins — a remote-plugin root is a directory; kind-check when present.
     if (existsSync(src)) requireDir(src, `remote_plugin "${p}"`);
     mounts.push({ hostPath: src, mountPath: `.remote-plugins/${safePathSegment(basename(src), "remote_plugin basename")}`, mode: "r" });
   }
@@ -289,7 +289,7 @@ export function buildLaunchPlan(session: SessionConfig, baseline: PlatformBaseli
       warn(`::warning:: [marketplace] manifest unparsable, excluded (COWORK_HARNESS_SOFT_MISSING): ${manifestPath}\n`);
       continue;
     }
-    // Bug 44: a nameless manifest still has an effective marketplace name (derived from its dir
+    // a nameless manifest still has an effective marketplace name (derived from its dir
     // basename) — `mktName` — and plugins resolve under it. Record the DERIVED name so the post-loop
     // typo check (declaredLocalMktNames) recognizes `plugin@<derived>` qualifiers, not only manifests
     // that carry an explicit `name`.
@@ -301,7 +301,7 @@ export function buildLaunchPlan(session: SessionConfig, baseline: PlatformBaseli
       const at = en.lastIndexOf("@");
       const pName = at > 0 ? en.slice(0, at) : en;
       const pMkt = at > 0 ? en.slice(at + 1) : undefined;
-      // Bug 45: compare the qualifier against the DERIVED `mktName` unconditionally. The old `manifest.name &&`
+      // compare the qualifier against the DERIVED `mktName` unconditionally. The old `manifest.name &&`
       // guard skipped this filter for a nameless manifest, so `p@othermkt` would wrongly match it.
       if (pMkt && pMkt !== mktName) continue;
       const entry = (manifest.plugins ?? []).find((p) => p.name === pName);

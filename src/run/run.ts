@@ -200,7 +200,7 @@ export class Run {
             // source:"agent" is non-terminal (the SDK may still emit a recovering `result` event).
             // CRITICAL: set rec.result BEFORE break — gateDeliveries mapping runs after the loop exits.
             //
-            // Bug 49: source:"exit" is ALSO fatal. LiveAgentSession only emits an "exit" error for a
+            // source:"exit" is ALSO fatal. LiveAgentSession only emits an "exit" error for a
             // nonzero/signal child exit (session.ts: `signal || (code !== null && code !== 0)`) — a clean
             // exit:0 produces NO "exit" event — so there is no benign exit case to preserve here. This
             // event lands AFTER stdout closes, which means a successful turn already set rec.result =

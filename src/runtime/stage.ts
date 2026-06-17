@@ -54,7 +54,7 @@ export function stageWorkspace(plan: LaunchPlan, mntHost: string): StageResult {
         throw new Error(`mcp.config not found: ${plan.mcpConfig}. Fix the path, or set COWORK_HARNESS_SOFT_MISSING=1 to skip it.`);
       warn(`::warning:: [mcp] config missing, --mcp-config not advertised (COWORK_HARNESS_SOFT_MISSING): ${plan.mcpConfig}\n`);
     } else if (plan.mcpConfig) {
-      // Bug 40: --mcp-config models a single mcpServers FILE; a directory source would otherwise reach
+      // --mcp-config models a single mcpServers FILE; a directory source would otherwise reach
       // the `cpSync(plan.mcpConfig, mcpDest)` below (no `recursive`) and throw an opaque ERR_FS_EISDIR.
       // Kind-check only when the source EXISTS (the missing case is reconciled by the softMissing branch
       // above); a wrong-kind source fails loud regardless of softMissing — it is malformed, not missing.

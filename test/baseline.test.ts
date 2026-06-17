@@ -126,7 +126,7 @@ describe("checkWebFetchFacts (drift guard for the two-path web_fetch model)", ()
   });
 });
 
-describe("H-F — resolveAgentBinary newest-sibling fallback", () => {
+describe("resolveAgentBinary newest-sibling fallback", () => {
   // Build a baseline whose only relevant field is agentBinary.stagedPath.
   const baselineWith = (stagedPath: string) => ({ agentBinary: { stagedPath } }) as unknown as PlatformBaseline;
 

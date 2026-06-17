@@ -191,7 +191,7 @@ describe("execute — scanEvents host-path leak detection (#32)", () => {
   });
 });
 
-// H-A — outputs-delete detector: mv-direction (default) + opt-in /tmp suppression
+// outputs-delete detector: mv-direction (default) + opt-in /tmp suppression
 describe("isOutputsDelete — mv direction + opt-in safe-prefix suppression", () => {
   const setEnv = (v?: string) => {
     if (v === undefined) delete process.env.COWORK_HARNESS_SAFE_STAGING_PREFIX;
@@ -199,7 +199,7 @@ describe("isOutputsDelete — mv direction + opt-in safe-prefix suppression", ()
   };
   afterEach(() => setEnv(undefined));
 
-  it("mv: standalone move INTO outputs is not a delete (Bug 34)", () => {
+  it("mv: standalone move INTO outputs is not a delete", () => {
     expect(isOutputsDelete("mv tmp/x outputs/x")).toBe(false);
   });
   it("mv: move OUT of outputs is a delete", () => {
@@ -248,8 +248,8 @@ describe("execute — #45 parseDialogTimeout", () => {
   it("returns undefined for absent (empty)", () => expect(parseDialogTimeout("")).toBeUndefined());
 });
 
-// Bug 31 — collectArtifacts must not follow symlinks (no escape out of workRoot, no cycle).
-describe("Bug 31 — collectArtifacts skips symlinks (lstat, no out-of-root follow, cycle-safe)", () => {
+// collectArtifacts must not follow symlinks (no escape out of workRoot, no cycle).
+describe("collectArtifacts skips symlinks (lstat, no out-of-root follow, cycle-safe)", () => {
   it("records real files but skips a symlink that points OUT of workRoot", () => {
     const outside = mkdtempSync(join(tmpdir(), "cwh-outside-"));
     writeFileSync(join(outside, "secret.txt"), "OUT-OF-TREE SECRET");

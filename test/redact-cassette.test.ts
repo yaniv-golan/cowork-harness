@@ -134,14 +134,14 @@ describe("assertRedactionVerdictPreserved — A3 / C4 cardinal-sin guard", () =>
   });
 });
 
-// ── Cassette manifest safety (Bugs 28/29/30) — token-free, spawn-free ───────────────────────────────
+// ── Cassette manifest safety — token-free, spawn-free ───────────────────────────────
 import { buildManifest, materializeManifest } from "../src/run/cassette.js";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-describe("Bug 30 — binary artifact bodies round-trip byte-exact via a base64 encoding marker", () => {
+describe("binary artifact bodies round-trip byte-exact via a base64 encoding marker", () => {
   it("buildManifest stores non-UTF-8 bytes as base64; materializeManifest restores them exactly", () => {
     const root = mkdtempSync(join(tmpdir(), "cwh-b30-"));
     mkdirSync(join(root, "outputs"), { recursive: true });
@@ -168,7 +168,7 @@ describe("Bug 30 — binary artifact bodies round-trip byte-exact via a base64 e
   });
 });
 
-describe("Bug 28 — materializeManifest rejects a cassette entry that escapes the temp work root", () => {
+describe("materializeManifest rejects a cassette entry that escapes the temp work root", () => {
   const entry = (path: string) => {
     const body = "x";
     return { path, bytes: 1, sha256: createHash("sha256").update(Buffer.from(body)).digest("hex"), body };
@@ -189,7 +189,7 @@ describe("Bug 28 — materializeManifest rejects a cassette entry that escapes t
   });
 });
 
-describe("Bug 29 — materializeManifest fails replay on a body that does not match its recorded sha256", () => {
+describe("materializeManifest fails replay on a body that does not match its recorded sha256", () => {
   it("throws when the body was tampered (hash mismatch over decoded raw bytes)", () => {
     const tampered = {
       path: "outputs/state.json",

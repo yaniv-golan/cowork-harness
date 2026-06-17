@@ -28,19 +28,19 @@ describe.skipIf(!can)("CLI arg guards — migrated commands fail loud", () => {
     expect(run(["record", "s.yaml", "--typo"], d).code).toBe(2);
   });
 
-  it("record: --output-format value is not read as a 2nd positional (H-E)", () => {
+  it("record: --output-format value is not read as a 2nd positional", () => {
     const d = mkdtempSync(join(tmpdir(), "g-"));
     const r = run(["record", "missing.yaml", "--output-format", "json"], d);
     expect(r.out).not.toMatch(/got 2/); // it failed for a real reason, not the multi-positional mis-parse
   });
 
-  it("record: --out with a flag-looking value → exit 2 (Bug 20)", () => {
+  it("record: --out with a flag-looking value → exit 2", () => {
     const d = mkdtempSync(join(tmpdir(), "g-"));
     writeFileSync(join(d, "s.yaml"), "prompt: hi\n");
     expect(run(["record", "s.yaml", "--out", "--no-redact"], d).code).toBe(2);
   });
 
-  it("verify-cassettes: --output-format value is not read as the target (Bug 23)", () => {
+  it("verify-cassettes: --output-format value is not read as the target", () => {
     const d = mkdtempSync(join(tmpdir(), "g-"));
     writeFileSync(join(d, "ok.cassette.json"), cassette());
     // `verify-cassettes <dir> --output-format json` must scan the dir, not treat `json` as the target.
@@ -48,19 +48,19 @@ describe.skipIf(!can)("CLI arg guards — migrated commands fail loud", () => {
     expect(r.code).toBe(0);
   });
 
-  it("verify-cassettes: extra positional → exit 2 (Bug 24)", () => {
+  it("verify-cassettes: extra positional → exit 2", () => {
     const d = mkdtempSync(join(tmpdir(), "g-"));
     writeFileSync(join(d, "ok.cassette.json"), cassette());
     expect(run(["verify-cassettes", join(d, "ok.cassette.json"), "extra.cassette.json"], d).code).toBe(2);
   });
 
-  it("verify-cassettes: unknown flag → exit 2 (Bug 24)", () => {
+  it("verify-cassettes: unknown flag → exit 2", () => {
     const d = mkdtempSync(join(tmpdir(), "g-"));
     writeFileSync(join(d, "ok.cassette.json"), cassette());
     expect(run(["verify-cassettes", join(d, "ok.cassette.json"), "--typo"], d).code).toBe(2);
   });
 
-  it("replay: a directory of cassettes is replayed (H-D dir mode)", () => {
+  it("replay: a directory of cassettes is replayed", () => {
     const d = mkdtempSync(join(tmpdir(), "g-"));
     writeFileSync(join(d, "a.cassette.json"), cassette());
     writeFileSync(join(d, "b.cassette.json"), cassette());

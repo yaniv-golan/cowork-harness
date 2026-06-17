@@ -456,7 +456,7 @@ describe("Run — turn loop + record", () => {
     expect(closed).toBe(true);
   });
 
-  it("Bug 49: a nonzero child exit (source:exit) AFTER a success result flips result to error with the stderr tail", async () => {
+  it("a nonzero child exit (source:exit) AFTER a success result flips result to error with the stderr tail", async () => {
     // LiveAgentSession emits source:"exit" only for a nonzero/signal exit, and it lands AFTER stdout
     // closes — i.e. after a successful turn already emitted {type:"result", isError:false} and set
     // rec.result = "success". A child that crashes nonzero after printing a result is NOT a passing run:
@@ -652,7 +652,7 @@ describe("Cassette — protocol replay", () => {
         {
           path: "outputs/state.json",
           bytes: 24,
-          // Bug 29: materializeManifest now verifies the body against this hash — it must be the real
+          // materializeManifest now verifies the body against this hash — it must be the real
           // sha256 of the raw body bytes (a placeholder like "deadbeef" now correctly fails replay).
           sha256: createHash("sha256").update(Buffer.from(JSON.stringify({ me: { run_id: "r1" } }))).digest("hex"),
           body: JSON.stringify({ me: { run_id: "r1" } }),
