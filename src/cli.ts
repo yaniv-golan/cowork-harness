@@ -57,6 +57,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
       [--output-format text|json] [--quiet|-q] [--verbose|-V]
       (run 'run --help' for the full flag reference)
   chat <folder>                interactive multi-turn REPL against a skill (TTY); --raw for native
+                               (--fidelity container|hostloop, default container; --model <id>)
   record <scenario.yaml>       run + save a control-protocol cassette
       [--out <file>]           cassette path (default: cassettes/<scenario-name>.cassette.json)
   replay --cassette <file>     deterministic protocol-replay of a cassette (no token) [--output-format json]
@@ -76,7 +77,8 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
   gates <dir> [--follow]       in-band gate stream (for --decider-dir): one JSON line per pending gate
                                + a terminal {"done":true}. Point a single Monitor at this.
   answer <dir> --gate <N>      answer an in-band gate (atomic write): --choose <label> | --answer "q=c"
-  sync [--diff]                derive/refresh a platform baseline from the live Desktop install
+  sync [--diff] [--allow-empty]  derive/refresh a platform baseline from the live Desktop install
+                               (--allow-empty: write even when the derived egress allowlist is empty)
   list                         list available platform baselines
   boundary-check [baseline]    prove the sandbox enforces Cowork's limitations
   vm <init|status|delete|prune>  manage the L2 Apple-VZ microVM (fidelity: microvm); prune drops orphaned VMs

@@ -33,8 +33,14 @@ export async function cmdChat(args: string[]) {
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === "--raw") raw = true;
-    else if (a === "--fidelity") fidelity = args[++i] as "container" | "hostloop";
-    else if (a === "--model") model = args[++i];
+    else if (a === "--fidelity") {
+      const v = args[++i];
+      if (v !== "container" && v !== "hostloop") {
+        log(`chat --fidelity must be "container" or "hostloop" (got "${v ?? ""}")\n`);
+        process.exit(2);
+      }
+      fidelity = v;
+    } else if (a === "--model") model = args[++i];
     else positional.push(a);
   }
   const folder = positional[0];

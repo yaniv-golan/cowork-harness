@@ -150,7 +150,9 @@ export const Assertion = z.object({
   replay_protocol_fidelity: z
     .boolean()
     .optional()
-    .describe("(replay) serializeDecision output matched the frozen recording — the token-free O7 guard"),
+    .describe(
+      "(replay-only, NOT authorable) serializeDecision output matched the frozen recording — the token-free O7 guard; synthesized by the replay lane and rejected if written in a scenario",
+    ),
   // #5: assert over the CONTENTS of a JSON artifact via a dotted path. `absent` and `is_null` are DISTINCT
   // (key-missing vs present-null); an unresolved INTERMEDIATE segment fails loud (malformed artifact),
   // never a vacuous pass. Live-only until the cassette artifact-manifest (#1) lands — stripped on replay.

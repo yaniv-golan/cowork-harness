@@ -207,7 +207,7 @@
               },
               "replay_protocol_fidelity": {
                 "type": "boolean",
-                "description": "(replay) serializeDecision output matched the frozen recording — the token-free O7 guard"
+                "description": "(replay-only, NOT authorable) serializeDecision output matched the frozen recording — the token-free O7 guard; synthesized by the replay lane and rejected if written in a scenario"
               },
               "artifact_json": {
                 "type": "object",
