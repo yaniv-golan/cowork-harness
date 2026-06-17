@@ -1,0 +1,9 @@
+# Lean session for the zero-infra `protocol` (L0) smoke test.
+# No mounts, no uploads, no plugins — protocol runs the host `claude` directly, so the
+# fewer moving parts, the faster the inner loop. The scenario asserts only control-loop +
+# skill-logic behavior (a scripted answer reaches the model, a file is written), which is
+# exactly what L0 is for. Sandbox/egress fidelity is NOT tested here (that needs container+).
+model: claude-opus-4-8
+effort: high
+permission_mode: default
+permission_parity: cowork

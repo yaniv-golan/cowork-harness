@@ -287,12 +287,16 @@ states in `baseline.provenance.gates`). A skill that ignores these behaves diffe
 - **Content assertions** (`contentKeys` in `src/run/cassette.ts`) are evaluated — `transcript_*`,
   `tool_*`, `subagent_*`, `dispatch_count_max`, `result`, and (when `controlOut` is present)
   `question_asked`, `questions_count_max`, `gate_answers_delivered`.
-- **Filesystem/egress assertions** (`file_exists`, `user_visible_artifact`, `no_delete_in_outputs`,
-  `self_heal_ran`, `transcript_no_host_path`, `egress_*`) are skipped — absent from `assertions[]`,
-  not present-and-passing.
+- **Filesystem assertions** (`file_exists`, `user_visible_artifact`, `artifact_json`) are evaluated
+  **when the cassette carries an `artifacts` manifest** (`record` snapshots `outputs/`; `replay`
+  materializes it token-free — `artifact_json` needs the small JSON body inlined). On older,
+  manifest-less cassettes they are skipped (loud) — absent from `assertions[]`, not present-and-passing.
+- **Egress / live-only assertions** (`no_delete_in_outputs`, `self_heal_ran`, `transcript_no_host_path`,
+  `egress_*`, `expect_denied`) are always skipped on replay — absent from `assertions[]`.
 - **`question_asked` / `questions_count_max` / `gate_answers_delivered`** additionally require
   `controlOut`. Without it, a loud `::warning::` fires and these keys are excluded (not vacuously
-  passed). The authoritative list is `contentKeys`; `docs/cassette.md` mirrors it.
+  passed). The authoritative list is `contentKeys` in `src/run/cassette.ts`; `docs/cassette.md` mirrors
+  it — consult it for the full table.
 
 **`replay_protocol_fidelity` (O7 guard):** after the run, `replay` re-serializes each decision
 response via `serializeDecision` and compares to the frozen `controlOut` envelope (canonical
@@ -353,6 +357,12 @@ Categories come from TYPED errors (`UnansweredError`→`unanswered`, `BoundaryEr
 **Exit codes** (branchable without parsing): `0` all-pass · `1` assertion/agent failure · `2` usage /
 unanswered-under-`fail` / boundary / runtime. (`--output-format json` writes via `writeSync` so the envelope
 is never truncated by `process.exit` on a pipe.)
+
+> The `2` "boundary" category here is the **typed `BoundaryError`** raised during a `run`/`skill` (e.g.
+> asserting egress behavior at `protocol` fidelity). It is distinct from the **`boundary-check` command**,
+> whose own probe failures follow the assertion convention and exit **`1`** (a failed sandbox probe is a
+> failing check, not a usage/typed error). Likewise `sync` hard failures (missing baseline versions, a
+> refused empty allowlist) exit `1`.
 
 ### 11.1 `verify-cassettes` — dedicated envelope (NOT the RunResult shape)
 

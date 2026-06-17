@@ -86,6 +86,7 @@ Content keys are evaluated on replay; everything else is skipped.
 | `questions_count_max` | at most N questions asked |
 | `gate_answers_delivered` | answered gates' answers reached the model |
 | `result` | run ended with `success` or `error` |
+| `allow_permissive_auto_allow` | verdict modifier — kept on replay, where it evaluates to a no-op pass |
 
 **`question_asked`, `questions_count_max`, `gate_answers_delivered` require `controlOut`** (full-fidelity
 replay). On an old cassette without `controlOut` these three keys are excluded from evaluation — not
@@ -140,6 +141,11 @@ the decision pipeline instead of consulting a live decider or asking the user. T
 `Run.handleDecision` path execute on replay, which populates `rec.questions`, `rec.gateAnswers`, and
 `rec.gateDeliveries` — exactly as in a live run. Consequence: `question_asked`, `questions_count_max`,
 and `gate_answers_delivered` are now genuinely evaluated, not silently skipped or vacuously passed.
+
+`gate_answers_delivered` accepts a boolean: `: true` asserts the answered gates' answers reached the
+model; `: false` is the **inverse** — it asserts a *confirmed delivery failure* (at least one gate whose
+`delivered === false`), for scenarios that deliberately exercise a non-delivery path. Unobserved delivery
+(`delivered: null`) satisfies neither — absence of evidence is a failure, not a pass.
 
 ### The O7 guard — `replay_protocol_fidelity`
 

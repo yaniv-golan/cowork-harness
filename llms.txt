@@ -12,6 +12,7 @@ It is a fidelity fixture, not the Desktop runtime. The CLI binary is `cowork-har
 ## Authoring tests
 - [docs/scenario.md](docs/scenario.md): scenario YAML — prompt + scripted answers + assert:
 - [docs/session.md](docs/session.md): session YAML — pre-prompt setup (model, mounts, discovery)
+- [examples/README.md](examples/README.md): worked, copyable example scenarios + sessions + skills (protocol/container tiers, token-free replay, prerequisites)
 - [schema/scenario.schema.json](schema/scenario.schema.json): JSON Schema for scenario files (machine-readable)
 - [schema/session.schema.json](schema/session.schema.json): JSON Schema for session files (machine-readable)
 
@@ -27,5 +28,6 @@ It is a fidelity fixture, not the Desktop runtime. The CLI binary is `cowork-har
 - [.claude/skills/cowork-harness/SKILL.md](.claude/skills/cowork-harness/SKILL.md): the companion skill that teaches an agent to drive the harness
 
 ## Optional
+- [CONTRIBUTING.md](CONTRIBUTING.md): dev setup, the build gate, and the test-alongside-any-schema-change rule for contributors
 - [CHANGELOG.md](CHANGELOG.md): release notes
 - [python/README.md](python/README.md): the pytest `cowork` lane

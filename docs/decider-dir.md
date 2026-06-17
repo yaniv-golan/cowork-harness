@@ -30,6 +30,9 @@ You **do not** hand-write those files. Two CLI subcommands wrap the protocol:
   per new gate (`{seq, ...decision_request}`) and a terminal `{"done":true}` when the run finishes.
   With `--follow` it watches until done; without it, one pass and exit. The harness owns the watcher,
   so the driving agent points **one** Monitor at this instead of hand-rolling a `find`/seen-set/poll loop.
+  Note: `gates` streams these **raw protocol lines** — it does *not* wrap them in the standard
+  `{tool, version, command, ok}` result envelope (that's the in-band contract a Monitor consumes line by
+  line); `--output-format json` is accepted but does not change the shape.
 - **`cowork-harness answer <dir> --gate <N> (--choose <label> | --answer "<q>=<label>")`** — write the
   answer for gate `N` with the correct wire shape (the atomic temp+rename and the `{id, answers}`
   envelope are handled for you). `--choose <label>` answers the gate's first question by option label;

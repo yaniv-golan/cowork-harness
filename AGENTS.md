@@ -14,7 +14,9 @@ the way Cowork runs them. It is a *fidelity fixture*, not the Desktop runtime.
 protocol layer or run-loop bookkeeping in the CLI.
 
 ## Build & gates
-- **`npm run ci`** (typecheck + build + test) is THE gate before claiming done.
+- **`npm run ci`** (typecheck + build + test) is THE local gate before claiming done. It does **not**
+  include `npm run format:check` — run that separately. (CI Stage 1 runs these steps individually rather
+  than via `npm run ci`; see [CONTRIBUTING.md](./CONTRIBUTING.md).)
 - Tests are **token-free & spawn-free** wherever possible (`cli-json` uses usage-errors + cassette replay).
   Don't add a test that needs a live model or Docker to the default suite; that's the `pytest -m cowork` /
   `npm run test:live` lane. Python fast lane: `pytest -m 'not cowork'`.

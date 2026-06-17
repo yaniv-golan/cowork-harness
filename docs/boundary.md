@@ -21,7 +21,7 @@ This page describes the limitations the harness reproduces, how each tier enforc
 | MCP-only crossing | ⚠️ not enforced | ✅ no host FS/procs; egress via proxy only | ✅ VM boundary |
 | Escape resistance (untrusted code) | ❌ | ⚠️ container-grade | ✅ VM-grade |
 
-**`protocol` runs on the host with no sandbox.** It's for fast logic iteration only. The CLI **refuses** to "pass" any scenario that asserts boundary behavior (`egress_denied`, `expect_denied`) at this tier — that would be a false pass. Use it for "did the skill produce the right output / answer the question correctly," not "does the skill respect the boundary."
+**`protocol` runs on the host with no sandbox.** It's for fast logic iteration only. The CLI **refuses** to "pass" any scenario that asserts boundary behavior (`egress_denied`, `egress_allowed`, `expect_denied`) at this tier — that would be a false pass. Use it for "did the skill produce the right output / answer the question correctly," not "does the skill respect the boundary."
 
 **`container` is the default and reproduces all three constraints:**
 
@@ -40,6 +40,14 @@ The harness validates its **own** faithfulness — don't take our word for it:
 ```bash
 cowork-harness boundary-check          # uses the latest platform baseline
 ```
+
+To verify the sandbox still enforces boundaries **given a session's egress widening**, pass that session:
+
+```bash
+cowork-harness boundary-check --session ./sessions/with-github.yaml
+```
+
+`--session` loads the session YAML and folds its egress additions (`egress.extra_allow` / `egress.unrestricted`) into the allowlist the probes test against — so the `allowlist-permits` / `allowlist-enforced` checks reflect the same allowlist a scenario using that session would run under.
 
 This runs probes (independent of any agent) and asserts each constraint:
 

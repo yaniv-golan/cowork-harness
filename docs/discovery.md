@@ -31,10 +31,14 @@ Plugins are bind-mounted at the Cowork paths; the MCP config is passed via `--mc
 | Goal | How |
 |---|---|
 | Test a single local skill in isolation | `plugins.local_plugins: ["./skills/my-skill"]`, nothing else |
-| Reproduce a real `~/.claude` setup | `plugins.config_dir: ~/.claude` (pins the real dir instead of a clean one) |
+| Reproduce a real `~/.claude` setup | `plugins.config_dir: ~/.claude` (pins the real dir instead of a clean one) [^configdir] |
 | Swap an MCP server for a stub | point `mcp.config` at a test `mcp.json` (see `examples/data/mcp.json`) |
 | Exercise an org-remote plugin | `plugins.remote_plugins: ["./fixtures/org-plugin"]` |
 | Disable all discovery | leave the `plugins` / `skills` / `mcp` blocks empty |
+
+[^configdir]: Writing into an existing pinned `config_dir` is **refused by default** — the harness won't
+clobber a real Claude config. Set `COWORK_HARNESS_ALLOW_CONFIG_DIR_WRITE=1` to permit it, or use a managed
+(clean) dir with `config_dir: null`.
 
 ## MCP and the host/VM split — a fidelity note
 

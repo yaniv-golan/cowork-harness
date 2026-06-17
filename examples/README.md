@@ -25,12 +25,13 @@ self-contained and relocatable.
 
 ## The scenarios
 
-| Scenario | What it demonstrates |
-|---|---|
-| `scenarios/example-pdf-skill.yaml` | the minimal shape — prompt + scripted answers + assertions (placeholder skill; harness plumbing only) |
-| `scenarios/csv-metrics.yaml` | a non-trivial skill running a **bundled producer** end-to-end → structured `outputs/metrics.json` + a `summary.md` (paired with `python/test_csv_metrics_lane.py` for a JSON-content predicate) |
-| `scenarios/csv-fx-normalize.yaml` | **graceful degradation** under default-deny egress — the skill's real network step is blocked, so `egress_denied` is backed by genuine behavior and the skill falls back instead of crashing |
-| `scenarios/skill-loads.yaml` | an acceptance check that a local skill loads and the python toolchain is present |
+| Scenario | Fidelity | What it demonstrates |
+|---|---|---|
+| `scenarios/protocol-smoke.yaml` | `protocol` | the **zero-infra smoke test** — no Docker, no staged agent, just the host control loop. Asserts only control-loop + skill-logic facts (a scripted answer reaches the model, a file is written); see the `transcript_no_host_path: false` line for what L0 does and does not seal |
+| `scenarios/example-pdf-skill.yaml` | `container` | the minimal sandboxed shape — prompt + scripted answers + assertions (placeholder skill; harness plumbing only) |
+| `scenarios/csv-metrics.yaml` | `container` | a non-trivial skill running a **bundled producer** end-to-end → structured `outputs/metrics.json` + a `summary.md` (paired with `python/test_csv_metrics_lane.py` for a JSON-content predicate) |
+| `scenarios/csv-fx-normalize.yaml` | `container` | **graceful degradation** under default-deny egress — the skill's real network step is blocked, so `egress_denied` is backed by genuine behavior and the skill falls back instead of crashing. Its `egress_denied` assertion needs a sandboxed tier (`container`+) and is pre-rejected at `protocol` fidelity (no sandbox to enforce it would be a false pass) |
+| `scenarios/skill-loads.yaml` | `container` | an acceptance check that a local skill loads and the python toolchain is present |
 
 ## Run them
 
@@ -38,3 +39,34 @@ self-contained and relocatable.
 cowork-harness run examples/scenarios/csv-metrics.yaml   # one
 cowork-harness run examples/scenarios/                    # all (CI-ready exit code)
 ```
+
+> From a source checkout, `node dist/cli.js run …` works too (skip the `npm link`).
+
+### Prerequisites
+
+The `container` scenarios above are **live `run`s**: they spawn the staged Cowork agent in a
+sandboxed arm64 container, so they need Docker (arm64) + the agent image, a Claude Desktop agent
+ELF staged once, and an auth token. The full setup (and the resolution order for each) is in the
+README's [Quick start → Prerequisites](../README.md#quick-start) — it isn't duplicated here.
+
+**Two paths that need none of that:**
+
+- **Token-free, Docker-free replay.** A committed synthetic cassette replays on a fresh clone:
+
+  ```bash
+  cowork-harness replay --cassette examples/replays/example-pdf-skill.cassette.json
+  ```
+
+- **The `protocol` tier — zero infra.** `--fidelity protocol` (L0) runs the host control loop
+  directly: no Docker, no staged agent. `scenarios/protocol-smoke.yaml` is authored at this tier,
+  and you can force any scenario down to it on the command line:
+
+  ```bash
+  cowork-harness run examples/scenarios/protocol-smoke.yaml          # already protocol
+  cowork-harness run examples/scenarios/example-pdf-skill.yaml --fidelity protocol
+  ```
+
+  L0 still calls a real model (so your normal `claude` login / token applies), but it has **no
+  sandbox** — egress/`expect_denied` assertions are pre-rejected here, and a host path naturally
+  leaks into tool output (the FS isn't sealed). Use it for fast logic iteration; graduate to
+  `container` for boundary fidelity.

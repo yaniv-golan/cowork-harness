@@ -23,7 +23,7 @@ Start with the [project README](../README.md) for the overview and quick start, 
 | Topic | Where |
 |---|---|
 | Commands at a glance (what / when) | [README → Commands at a glance](../README.md#commands-at-a-glance); full flags via `<command> --help` |
-| Fidelity tiers (L0/L1/L2) | [boundary.md](./boundary.md), [README](../README.md) |
+| Fidelity — three isolation tiers (L0/L1/L2) + two loop overlays (`hostloop`, `cowork`) | [boundary.md](./boundary.md), [README](../README.md) |
 | Control-protocol / spawn contract | [cowork-spawn-contract-1.12603.1.md](./cowork-spawn-contract-1.12603.1.md); see also [SPEC.md](../SPEC.md) |
 | Security & threat model | [../SECURITY.md](../SECURITY.md) |
 | Contributing | [../CONTRIBUTING.md](../CONTRIBUTING.md) |

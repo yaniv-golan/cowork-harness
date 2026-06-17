@@ -14,21 +14,24 @@ replay path end-to-end, including:
 Run it with:
 
 ```sh
-node dist/cli.js replay --cassette examples/replays/example-pdf-skill.cassette.json
+cowork-harness replay --cassette examples/replays/example-pdf-skill.cassette.json
 ```
 
 Or with JSON output (for CI):
 
 ```sh
-node dist/cli.js replay --cassette examples/replays/example-pdf-skill.cassette.json --output-format json
+cowork-harness replay --cassette examples/replays/example-pdf-skill.cassette.json --output-format json
 ```
+
+> From a source checkout you can skip the `npm link` and call the CLI directly:
+> `node dist/cli.js replay …`. The commands below use the installed `cowork-harness` binary.
 
 ## Re-recording
 
 To replace this fixture with a real recording from a live run:
 
 ```sh
-node dist/cli.js record examples/scenarios/your-scenario.yaml --out examples/replays/your-name.cassette.json
+cowork-harness record examples/scenarios/your-scenario.yaml --out examples/replays/your-name.cassette.json
 ```
 
 Note: real recordings require a live ANTHROPIC_API_KEY and Docker. The synthetic fixture in this

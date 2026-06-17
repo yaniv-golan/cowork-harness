@@ -170,11 +170,13 @@ CI placement: a **token-free `replay` PR gate** (content/structure only) + a **n
 Stated as *symptom → why → fix*. The full catalog (with `file:line`) is in the references; these
 are the ones that bite hardest.
 
-1. **An assertion passed but tested nothing on the PR gate.** *Why:* `replay` silently skips
-   filesystem/egress keys (`file_exists`, `egress_*`, `user_visible_artifact`, `no_delete_in_outputs`,
-   `self_heal_ran`, `transcript_no_host_path`); a *mixed* item like `{result, file_exists}` greens on
-   `result` while its `file_exists` half is dropped. *Fix:* put artifact-*content* checks on a live
-   gate; keep one concern per `assert:` item; run the linter. The harness warns loudly on skip.
+1. **An assertion passed but tested nothing on the PR gate.** *Why:* on a manifest-less cassette
+   `replay` skips filesystem/egress keys (`file_exists`, `user_visible_artifact`, `artifact_json`,
+   `egress_*`, `no_delete_in_outputs`, `self_heal_ran`, `transcript_no_host_path`); a *mixed* item like
+   `{result, egress_denied}` greens on `result` while its `egress_denied` half is dropped. (`record`
+   snapshots an `artifacts` manifest, which makes `file_exists`/`user_visible_artifact`/`artifact_json`
+   replay-checkable — but the live-only egress keys stay skipped.) *Fix:* put egress/live-only checks on
+   a live gate; keep one concern per `assert:` item; run the linter. The harness warns loudly on skip.
 
 2. **A steered gate answer never reached the model.** *Why:* `serializeDecision` must emit
    `updatedInput: { questions, answers }`; a header-only gate (empty `question`) can never be keyed.

@@ -108,6 +108,19 @@ pytest -m 'not cowork'      # the fast loop (skips this lane) — the CI default
   ```
   `fn(request)` is called once per gate; the adapter reads each request line, echoes the `id`, and
   flushes the reply. (This is the spawn-helper analogue of the CLI's `gates`/`answer` commands.)
+- `cowork.run_scenario(path, *, fidelity=None, answers=None, on_unanswered="fail", check=False)` → `Result`
+  — run an **authored scenario YAML** (its prompt + scripted answers + `assert:`) and get the typed
+  `Result` back, without the subprocess-spawn + JSON-parse + outputs-dir boilerplate. `fidelity=` overrides
+  the scenario's authored tier; `answers={q-regex: choice}` adds extra `--answer` rules; `check=True` raises
+  on a failed/enveloped-error run. The `Result` also exposes `.effective_fidelity` and `.artifacts` (the
+  ENV-MANIFEST) so a test can prove which tier actually ran (e.g. `cowork` → `hostloop`). A module-level
+  `run_scenario(path, …, cli=None)` is exported for the one-call case:
+  ```python
+  from cowork_harness import run_scenario
+  r = run_scenario("scenarios/cap_table.yaml", fidelity="container")
+  r.assert_success()
+  assert r.effective_fidelity == "hostloop"   # prove which tier ran
+  ```
 - `cowork.replay(cassette_path)` → `Result` (deterministic, no token/Docker — content assertions only)
 - `cowork.trace(run_id_or_dir, tools=False)` → `list[dict]` of trace rows (tool calls, sub-agent
   dispatches, decisions) — for asserting the *real* dispatch count vs. todo items named after sub-agents.

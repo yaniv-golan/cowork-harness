@@ -256,7 +256,9 @@ Two consequences for CI:
 - Put the **always-on PR gate** on `replay` (token-free) and rely on `transcript_matches`/`transcript_*` +
   `subagent_*` + `question_asked`/`gate_answers_delivered` (with `controlOut`) for content/structure; put
   **filesystem/egress** checks in a **nightly/pre-release live job**.
-  Don't assume a `replay`-based PR gate verifies an artifact's *content* — it can't read the file.
+  A `replay`-based PR gate verifies artifact *content* only when the cassette carries an artifact
+  manifest (small inlined bodies, via `artifact_json`); without one it can't read the file, and
+  oversized/hash-only entries satisfy `file_exists` but not `artifact_json`.
 - On `replay`, skipped assertions are **absent** from `results[].assertions[]` (filtered before evaluation),
   not present-and-passing — so a CI script must not assume a fixed assertion count across the two lanes.
 
@@ -267,9 +269,11 @@ See [docs/cassette.md](./cassette.md) for the mental model, file shape, and the 
 A multi-key assertion is an **AND** (every key must pass). That has a consequence on `replay`, where the
 filesystem/egress keys can't be checked: before evaluating, `replay` **strips each assertion down to only
 its content keys**, then drops any assertion left empty. So a mixed item like `{ result: success,
-file_exists: outputs/x.md }` is evaluated on replay as `{ result: success }` alone — its `file_exists`
-half is removed rather than AND-ed against a value `replay` can't read (which would false-fail). The full
-object — every key checkable — is still evaluated on a live `run`/`record`.
+egress_denied: evil.com }` is evaluated on replay as `{ result: success }` alone — its `egress_denied`
+half is removed rather than AND-ed against a value `replay` can't observe (which would false-fail).
+(With an artifact manifest, `file_exists`/`user_visible_artifact`/`artifact_json` are **not** dropped —
+they're replay-checkable; only the genuinely live-only keys above are stripped.) The full object —
+every key checkable — is still evaluated on a live `run`/`record`.
 
 Because that strip is silent on its own, `replay` is **loud about it in two classes** (a silent partial
 false-green is the cardinal sin):
@@ -336,7 +340,8 @@ synthetic `AskUserQuestion` and feeds it to whichever decider you point at: `--a
 `--answer-policy <yaml>` (scripted rules — reports which rule matched, or exits non-zero if none did),
 `--decider-cmd '<helper>'` (shows the exact request the helper received and its answer), or `--decider-llm`
 (a live model answers; flagged non-deterministic). Override the prompt with `--question` and repeat
-`--option` to set the choices.
+`--option` to set the choices. `decide` does **not** accept `--decider-dir` (the file-rendezvous channel
+is a live-run concern) — passing it is a hard usage error (exit 2).
 
 ```bash
 # Does my answer-policy actually answer the gate I think it does?

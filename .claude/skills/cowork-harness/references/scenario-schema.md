@@ -1,6 +1,6 @@
 # Scenario & session schema, assertion catalog, web_fetch, full gotchas
 
-Self-contained reference for authoring `cowork-harness` scenarios. Tracks `cowork-harness 0.1.0`
+Self-contained reference for authoring `cowork-harness` scenarios. Tracks `cowork-harness 0.3.0`
 (baseline `desktop-1.12603.1`). If your checkout is newer, prefer the live `docs/scenario.md`,
 `docs/session.md`, and `SPEC.md`.
 
@@ -263,18 +263,19 @@ The "✓ passed ≠ correct" landmines, as *symptom → why → fix*. `file:line
 at the top of this file.
 
 1. **Replay silently skips filesystem/egress assertions (two shapes).** *Full skip:* a pure
-   `file_exists`/`egress_*`/`user_visible_artifact`/`no_delete_in_outputs`/`self_heal_ran`/
-   `transcript_no_host_path` item on a `replay` gate is filtered out, not passing. *Partial skip:* a
-   mixed `{result, file_exists}` greens on `result` while `file_exists` is dropped. Both now warn
-   loudly. → put artifact-*content* on a live gate; one concern per item; run the linter.
-   (`src/run/cassette.ts:303-318` contentKeys; warnings `:358,363`.)
+   live-only `egress_*`/`no_delete_in_outputs`/`self_heal_ran`/`transcript_no_host_path` item on a
+   `replay` gate is filtered out, not passing. (`file_exists`/`user_visible_artifact`/`artifact_json`
+   are replay-checkable **when the cassette carries an `artifacts` manifest**; without one they are
+   skipped too.) *Partial skip:* a mixed `{result, egress_denied}` greens on `result` while
+   `egress_denied` is dropped. Both now warn loudly. → put egress/live-only checks on a live gate; one
+   concern per item; run the linter. (`contentKeys` in `src/run/cassette.ts`.)
 
 2. **Gate keys need a `controlOut` cassette.** `question_asked`, `questions_count_max`,
    `gate_answers_delivered` only evaluate on replay with `controlOut`; on an old cassette they warn
    and are excluded (not passed). `gate_answers_delivered` **fails on unobserved delivery**
    (`delivered: null`) — absence of evidence is failure. A **header-only gate** (empty `question`,
    only `header`) can never be keyed and is rejected loudly — every gate needs a non-empty `question`.
-   (`src/run/cassette.ts:317`; `src/assert.ts:169-200`.)
+   (`contentKeys` in `src/run/cassette.ts`; `src/assert.ts`.)
 
 3. **The LLM-decider's two spellings.** Scripted answers + `on_unanswered: fail` is deterministic;
    the stochastic path flags the run `nonDeterministic`. The LLM decider is one mechanism, two

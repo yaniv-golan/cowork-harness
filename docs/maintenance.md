@@ -40,6 +40,14 @@ cowork-harness run examples/scenarios/   # regression — drift now shows as tes
 
 If the agent version bumped, the container image rebuilds against the new pin automatically (CI derives `AGENT_VERSION` from the baseline).
 
+`sync` **refuses to write an empty `allowDomains`** allowlist — an empty egress allowlist is a safety tripwire (it would silently produce a baseline that permits nothing/everything rather than the real Desktop set). Override the refusal with `--allow-empty` only when an empty allowlist is genuinely correct:
+
+```bash
+cowork-harness sync --allow-empty   # force-write a baseline even when allowDomains is empty
+```
+
+**Hard-failure exit codes (for CI scripts):** `sync` exits **1** (not 2) on its hard failures — specifically (a) a missing required version field in the Desktop install it derives from, and (b) a refused empty allowlist (when `--allow-empty` is not passed).
+
 ## Drift detection — two independent signals
 
 1. **Extractor failures → `⚠ unknown deltas`.** When `sync` can't find what it expects in the asar — the
