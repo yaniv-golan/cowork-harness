@@ -25,6 +25,7 @@ import { computeVerdict } from "./verdict.js";
 import { redactJsonLine, redactText, redactStructural, loadRedactionPolicy, type RedactionPolicy } from "../redact.js";
 import { collectSecrets, scrub } from "../secrets.js";
 import { scanText, type ScanFinding } from "../scan.js";
+import { parse as parseYaml } from "yaml";
 
 const out = (s: string) => process.stdout.write(s + "\n");
 const log = (s: string) => process.stderr.write(s + "\n");
@@ -413,73 +414,197 @@ export async function assertRedactionVerdictPreserved(base: Cassette, redacted: 
     );
 }
 
-/** `record <scenario.yaml> [--out <file>]` — run live + save a cassette. */
+export interface ScenarioDiscovery {
+  scenarios: string[]; // files with a top-level `prompt:` that parse as a valid Scenario
+  skipped: string[]; // *.yaml with NO `prompt:` key — a session/other doc; announced, not a failure
+  broken: { file: string; error: string }[]; // looks like a scenario (has `prompt:`) but unparseable/invalid
+}
+
+/** B1: classify the `*.yaml`/`*.yml` (non-recursive) under `dir` for batch `record`. Classification keys on a
+ *  POSITIVE `prompt:` signal — NOT on "Scenario.parse threw", because a session YAML and a broken scenario
+ *  both throw the same error. A doc with `prompt:` that fails to parse is BROKEN (a batch failure), never a
+ *  silent skip — silently swallowing a broken scenario as a non-scenario is the false-green this guards. */
+export function discoverScenarios(dir: string): ScenarioDiscovery {
+  const files = readdirSync(dir)
+    .filter((f) => /\.ya?ml$/i.test(f))
+    .sort()
+    .map((f) => join(dir, f));
+  const out: ScenarioDiscovery = { scenarios: [], skipped: [], broken: [] };
+  for (const f of files) {
+    let raw: unknown;
+    try {
+      raw = parseYaml(readFileSync(f, "utf8"));
+    } catch (e) {
+      out.broken.push({ file: f, error: `YAML parse error: ${(e as Error).message}` });
+      continue;
+    }
+    const hasPrompt = raw !== null && typeof raw === "object" && "prompt" in (raw as Record<string, unknown>);
+    if (!hasPrompt) {
+      out.skipped.push(f); // no prompt → a session/other doc; announced skip, not a failure
+      continue;
+    }
+    try {
+      parseScenarioFile(f);
+      out.scenarios.push(f);
+    } catch (e) {
+      out.broken.push({ file: f, error: (e as Error).message });
+    }
+  }
+  return out;
+}
+
+/** B2: the committed cassettes under `dir` whose fingerprint has drifted (baseline/skill) — the re-record
+ *  work-list. Pure + token-free (reuses `checkStaleness`); the actual re-record needs the live agent. */
+export function selectStaleCassettes(dir: string): { path: string; staleness: string[] }[] {
+  return readdirSync(dir)
+    .filter((f) => f.endsWith(".cassette.json"))
+    .sort()
+    .map((f) => join(dir, f))
+    .map((path) => ({ path, staleness: checkStaleness(JSON.parse(readFileSync(path, "utf8")) as Cassette, dirname(path)) }))
+    .filter((x) => x.staleness.length > 0);
+}
+
+interface RecordOpts {
+  noRedact: boolean;
+  allowFailing: boolean;
+  cassettePath?: string; // explicit --out (single); otherwise cassettes/<name>.cassette.json
+}
+
+/** Record one scenario FILE → one cassette (parses the file, then shares the live-record tail with the
+ *  in-memory path). The file's dir feeds the redaction-policy search (for a co-located .cowork-redact.json). */
+async function recordScenarioFile(file: string, opts: RecordOpts): Promise<{ result: RunResult; cassettePath: string; artifacts: number }> {
+  return recordScenarioObject(parseScenarioFile(file), opts, [dirname(file)]);
+}
+
+/** `record <scenario.yaml | dir> [--out <file>] [--rerecord-stale] [--no-redact] [--allow-failing]` —
+ *  run live + save a cassette. A single file records one; a dir batches (B1); --rerecord-stale (B2) treats
+ *  the dir as committed cassettes and re-records only those whose fingerprint drifted. */
 export async function cmdRecord(args: string[]) {
+  const noRedact = args.includes("--no-redact");
+  const allowFailing = args.includes("--allow-failing");
+  const rerecordStale = args.includes("--rerecord-stale");
   const outIdx = args.indexOf("--out");
-  // #9: bounds-check --out's value — a trailing `--out` makes cassettePath undefined → a raw
-  // dirname(undefined)/writeFileSync(undefined) crash surfacing as an `internal` error.
   if (outIdx >= 0 && args[outIdx + 1] === undefined) {
     log("usage: record <scenario.yaml> --out <file.cassette.json>  (--out needs a value)");
-    process.exit(2);
+    return process.exit(2);
   }
-  // Skip --out's VALUE when scanning for the scenario positional, so the common flag-first form
-  // `record --out out.json scenario.yaml` records scenario.yaml (not out.json) as the scenario.
-  const scenarioPositionals = args.filter((a, i) => !a.startsWith("--") && args[i - 1] !== "--out");
-  const file = scenarioPositionals[0];
-  if (!file) {
-    log("usage: record <scenario.yaml> [--out <file.cassette.json>]");
-    process.exit(2);
+  const positionals = args.filter((a, i) => !a.startsWith("--") && args[i - 1] !== "--out");
+  const target = positionals[0];
+  if (!target) {
+    log("usage: record <scenario.yaml | dir/> [--out <file>] [--rerecord-stale] [--no-redact] [--allow-failing]");
+    return process.exit(2);
   }
-  // Reject extra scenario positionals rather than silently dropping all but the first (record takes ONE).
-  if (scenarioPositionals.length > 1) {
-    log(`record takes a single scenario (got ${scenarioPositionals.length}: ${scenarioPositionals.join(", ")})`);
-    process.exit(2);
+  if (positionals.length > 1) {
+    log(`record takes a single scenario or dir (got ${positionals.length}: ${positionals.join(", ")})`);
+    return process.exit(2);
   }
-  const noRedact = args.includes("--no-redact"); // A1 escape hatch for known-synthetic inputs
-  const allowFailing = args.includes("--allow-failing"); // A3: explicitly permit freezing a red live run
-  const scenario = parseScenarioFile(file);
-  const result = await executeScenario(scenario);
-  const events = safeLines(join(result.outDir, "events.jsonl"));
-  const controlOut = safeLines(join(result.outDir, "control-out.jsonl"));
-  const cassettePath = outIdx >= 0 ? args[outIdx + 1] : join("cassettes", `${scenario.name}.cassette.json`);
-  mkdirSync(dirname(cassettePath), { recursive: true });
-  // A3: a failing live run frozen into a committed cassette is a latent false-signal — refuse unless the
-  // caller opts in. (Distinct from the redaction-verdict guard below; this catches a red run BEFORE redaction.)
-  if (!computeVerdict(result, "live").pass && !allowFailing) {
+  const isDir = existsSync(target) && statSync(target).isDirectory();
+
+  // B2: re-record only the drifted cassettes in a committed cassette dir.
+  if (rerecordStale) {
+    if (!isDir) {
+      log("record --rerecord-stale takes a DIRECTORY of committed cassettes");
+      return process.exit(2);
+    }
+    const stale = selectStaleCassettes(target);
+    if (stale.length === 0) {
+      log(`✓ record --rerecord-stale: all cassettes under ${target} are fresh — nothing to re-record`);
+      return process.exit(0);
+    }
+    let failures = 0;
+    for (const { path: cp, staleness } of stale) {
+      const cassette: Cassette = JSON.parse(readFileSync(cp, "utf8"));
+      // Re-record from the embedded scenario, re-resolving its relocatable session against the cassette dir.
+      const sessionRef = cassette.scenario.session === "(inline)" ? "(inline)" : join(dirname(cp), cassette.scenario.session);
+      log(`↻ re-recording ${cp} (stale: ${staleness.join("; ")})`);
+      try {
+        const r = await recordScenarioObject({ ...cassette.scenario, session: sessionRef }, { noRedact, allowFailing, cassettePath: cp });
+        log(`  ✓ ${cp} (${r.result.result})`);
+      } catch (e) {
+        failures++;
+        log(`  ✗ ${cp}: ${(e as Error).message}`);
+      }
+    }
+    return process.exit(failures > 0 ? 1 : 0);
+  }
+
+  // B1: batch a directory of scenarios.
+  if (isDir) {
+    const disc = discoverScenarios(target);
+    for (const s of disc.skipped) log(`· skipped (not a scenario — no \`prompt:\`): ${s}`);
+    for (const b of disc.broken) log(`✗ ${b.file}: ${b.error}`);
+    if (disc.scenarios.length === 0) {
+      log(`record: no scenarios discovered under ${target} (loud non-zero — not a vacuous "0 failures = green")`);
+      return process.exit(2);
+    }
+    let failures = disc.broken.length;
+    for (const f of disc.scenarios) {
+      try {
+        const r = await recordScenarioFile(f, { noRedact, allowFailing });
+        log(`✓ ${f} → ${r.cassettePath} (${r.result.result})`);
+      } catch (e) {
+        failures++;
+        log(`✗ ${f}: ${(e as Error).message}`);
+      }
+    }
     log(
-      `record: live run did NOT pass (result=${result.result}) — refusing to freeze a failing run into a cassette. Re-run, or pass --allow-failing.`,
+      failures > 0
+        ? `✗ record: ${failures} of ${disc.scenarios.length + disc.broken.length} failed`
+        : `✓ record: ${disc.scenarios.length} cassette(s)`,
     );
-    process.exit(1);
+    return process.exit(failures > 0 ? 1 : 0);
   }
-  // Store a RELOCATABLE session path (relative to the cassette dir) instead of the absolute resolved path
-  // parseScenarioFile baked in — replay never loads the session for the pipeline, so this is metadata-only,
-  // but it keeps a moved bundle honest. Record the resolved tier so replay can report effectiveFidelity.
+
+  // Single scenario file.
+  try {
+    const cassettePath = outIdx >= 0 ? args[outIdx + 1] : undefined;
+    const r = await recordScenarioFile(target, { noRedact, allowFailing, cassettePath });
+    log(`✓ recorded ${r.result.result} · ${r.artifacts} artifact(s) → ${r.cassettePath}`);
+  } catch (e) {
+    log(`record: ${(e as Error).message}`);
+    return process.exit(1);
+  }
+}
+
+/** The live-record TAIL shared by the file (B1/single) and in-memory (B2 re-record) paths: run live, refuse
+ *  a failing run unless opted in (A3), snapshot + secret-scrub bodies (C2), opt-in redact + verdict-preserve
+ *  (A1/A3), write. `extraPolicyDirs` adds the scenario-file dir to the .cowork-redact.json search. */
+async function recordScenarioObject(
+  scenario: Scenario,
+  opts: RecordOpts,
+  extraPolicyDirs: string[] = [],
+): Promise<{ result: RunResult; cassettePath: string; artifacts: number }> {
+  const result = await executeScenario(scenario);
+  const cassettePath = opts.cassettePath ?? join("cassettes", `${scenario.name}.cassette.json`);
+  mkdirSync(dirname(cassettePath), { recursive: true });
+  // A3: a failing live run frozen into a cassette is a latent false-signal — refuse unless opted in.
+  if (!computeVerdict(result, "live").pass && !opts.allowFailing)
+    throw new Error(`live run did NOT pass (result=${result.result}) — refusing to freeze a failing run (re-run, or --allow-failing)`);
+  // RELOCATABLE session path (relative to the cassette dir) — metadata-only, keeps a moved bundle honest.
   const relocatable: Scenario = {
     ...scenario,
     session: scenario.session === "(inline)" ? "(inline)" : relative(dirname(cassettePath), scenario.session),
   };
-  // #1: snapshot the user-visible artifacts (from the live work root, before --keep cleanup) so
-  // file_exists/user_visible_artifact/artifact_json survive token-free replay. C2: buildManifest reads the
-  // output bodies RAW — executeScenario scrubs result/events/control-out but NOT outputs/ — so secret-scrub
-  // each body here before it is committed. #1b: a staleness tripwire over the recording's inputs.
+  // C2: buildManifest reads output bodies RAW (executeScenario scrubs result/events/control-out, NOT
+  // outputs/) — secret-scrub each body before it is committed.
   const secrets = collectSecrets();
   const artifacts = (result.workDir ? buildManifest(result.workDir) : []).map((a) =>
     a.body !== undefined ? { ...a, body: scrub(a.body, secrets) } : a,
   );
-  const fingerprint = buildFingerprint(scenario.session, result.baseline);
   const base: Cassette = {
     cassetteVersion: CASSETTE_VERSION,
     scenario: relocatable,
-    events,
-    controlOut,
+    events: safeLines(join(result.outDir, "events.jsonl")),
+    controlOut: safeLines(join(result.outDir, "control-out.jsonl")),
     effectiveFidelity: result.effectiveFidelity,
     artifacts,
-    fingerprint,
+    fingerprint: buildFingerprint(scenario.session, result.baseline),
   };
-  // A1 (opt-in) content redaction over the whole cassette surface (C1). If the policy is empty, this is a
-  // no-op and `base` is written verbatim. If non-empty, redaction must be VERDICT-PRESERVING (A3): a green
-  // a redaction manufactured is the cardinal sin, so we replay both and refuse to write on divergence.
-  const policy = noRedact ? { patterns: [], keyNames: [] } : loadRedactionPolicy([process.cwd(), dirname(file), dirname(cassettePath)]);
+  // A1 (opt-in) content redaction over the whole surface (C1). Empty policy → no-op. Non-empty → must be
+  // VERDICT-PRESERVING (A3): replay both and refuse to write on divergence (a manufactured green).
+  const policy = opts.noRedact
+    ? { patterns: [], keyNames: [] }
+    : loadRedactionPolicy([process.cwd(), ...extraPolicyDirs, dirname(cassettePath)]);
   let cassette = base;
   if (policy.patterns.length || policy.keyNames.length) {
     const redacted = redactCassette(base, policy);
@@ -487,24 +612,7 @@ export async function cmdRecord(args: string[]) {
     cassette = redacted;
   }
   writeFileSync(cassettePath, JSON.stringify(cassette, null, 2));
-  // capture summary: turns (assistant messages) + tool calls in the recording
-  let turns = 0;
-  let tools = 0;
-  for (const e of cassette.events) {
-    let m: any;
-    try {
-      m = JSON.parse(e);
-    } catch {
-      continue;
-    }
-    if (m.type === "assistant") {
-      turns++;
-      for (const b of m.message?.content ?? []) if (b.type === "tool_use") tools++;
-    }
-  }
-  log(
-    `✓ recorded ${events.length} events · ${turns} turns · ${tools} tool calls · ${artifacts.length} artifact(s) → ${cassettePath}  (${result.result})`,
-  );
+  return { result, cassettePath, artifacts: artifacts.length };
 }
 
 /** `replay --cassette <file>` — deterministic protocol-replay; re-evaluates content assertions. */
