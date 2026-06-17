@@ -132,3 +132,14 @@ npm package. When you change the skill, bump it in lockstep across **`SKILL.md`*
 and `tracks-harness:`), **`.claude/skills/cowork-harness/.claude-plugin/plugin.json`**, and the entry in
 **`.claude-plugin/marketplace.json`**, then run `claude plugin validate .`. The marketplace only delivers a
 skill update to already-installed users when this `version` changes — an unbumped edit is invisible to them.
+
+**Invariant — the skill must NOT lead the npm release.** The marketplace serves the skill from this repo's
+default branch, so **pushing `main` makes the skill live** — independent of any npm tag. But the skill
+bootstraps the CLI with `npx cowork-harness@latest`, which resolves to the latest *published* npm version.
+So if a skill release documents features that are only in an unpublished npm version, a user who updates the
+skill gets instructions for a CLI they can't install yet (`@latest` fetches the older version → "unknown
+command"). Therefore: **when a skill bump documents new CLI features, push it only WITH or AFTER the npm
+release that ships those features** (publish the `vX.Y.Z` tag first, then push the skill commit — or push
+both together). The skill's `tracks-harness:` line names the harness version it assumes; that version must
+be published before the skill goes public. A skill bump that only touches skill-internal wording (no new CLI
+dependency) is exempt and can ship anytime.
