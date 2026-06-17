@@ -56,7 +56,8 @@
     "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.ts\"",
     "smoke:cli": "node dist/cli.js list",
     "ci": "npm run typecheck && npm run build && npm run test",
-    "prepublishOnly": "npm run ci"
+    "prepublishOnly": "npm run ci",
+    "check:versions": "tsx scripts/check-versions.ts"
   },
   "dependencies": {
     "yaml": "^2.5.0",

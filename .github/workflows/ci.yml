@@ -25,6 +25,8 @@ jobs:
           node-version: "20"
           cache: npm
       - run: npm ci
+      - name: Version lockstep guard (npm package <-> companion skill)
+        run: npm run check:versions
       - name: Format check
         run: npm run format:check
       - name: Typecheck

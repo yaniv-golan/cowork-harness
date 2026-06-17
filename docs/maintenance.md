@@ -112,12 +112,26 @@ npm version patch        # or minor | major
 git push --follow-tags
 ```
 
-Pushing the `vX.Y.Z` tag triggers `release.yml`, which verifies the tag matches `package.json`, runs
-`npm run ci`, then `npm publish --provenance --access public`. Auth is **OIDC**: the workflow's
-`id-token: write` is exchanged for a short-lived publish credential — there is **no `NPM_TOKEN`**. A
-GitHub Release is opened from the tag, and `prepublishOnly` re-runs CI so a manual publish is guarded too.
-A published version is **immutable** — the same `X.Y.Z` can never be re-published, so a botched run needs a
-new patch (not a re-run against the same version).
+Pushing the `vX.Y.Z` tag triggers `release.yml`, which (in order) **waits for `ci.yml` to have succeeded
+for that commit**, verifies the tag matches `package.json`, checks `CHANGELOG.md` has a `## [X.Y.Z]`
+heading, runs the **version-lockstep guard** (`npm run check:versions`), runs `npm run ci`, then
+`npm publish --provenance --access public`. Auth is **OIDC**: the workflow's `id-token: write` is exchanged
+for a short-lived publish credential — there is **no `NPM_TOKEN`**. A GitHub Release is opened from the tag,
+and `prepublishOnly` re-runs CI so a manual publish is guarded too. A published version is **immutable** —
+the same `X.Y.Z` can never be re-published, so a botched run needs a new patch (not a re-run against the
+same version).
+
+The `ci.yml`-success gate matters because `release.yml`'s own `npm run ci` is **TypeScript-only**, while
+`ci.yml` also runs pytest (the Python helper lane), `format:check`, the replay gate, and the boundary +
+scenario suites. Without the gate, a tag could publish a build that `main`'s CI would have rejected. The
+gate polls (~30 min) so `git push --follow-tags` works even when the commit's CI is still running.
+
+**Version-lockstep guard (`scripts/check-versions.ts`, run in both `ci.yml` and `release.yml`).** Fails
+loud unless all version strings agree: `package.json` == `package-lock.json`; the three skill versions
+(`marketplace.json`, the skill `plugin.json`, `SKILL.md` frontmatter) == each other; the `SKILL.md`
+bootstrap floor `@>=X.Y.Z` == its `tracks-harness:` version; and that floor is `<=` `package.json` (the
+skill can't demand a harness newer than this repo publishes). This enforces the lockstep the next section
+describes, so a hand-edited bump can't silently drift.
 
 **One-time setup (on npmjs.com):** configure a Trusted Publisher on the `cowork-harness` package →
 provider GitHub Actions, repo `yaniv-golan/cowork-harness`, workflow filename `release.yml`,
