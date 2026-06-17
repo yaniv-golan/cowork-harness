@@ -207,7 +207,7 @@ async function main() {
   // process.env (exported wins) > --dotenv > ./.env (cwd) > <install>/.env (package root). loadDotenv
   // only fills UNDEFINED keys, so calling it in this order yields exactly that precedence.
   // (NOT `--env-file`: Node reserves that name and consumes it before this code runs.)
-  // Bug 2: accept BOTH `--dotenv <path>` (space form) and `--dotenv=<path>` (equals form). The equals
+  // accept BOTH `--dotenv <path>` (space form) and `--dotenv=<path>` (equals form). The equals
   // form was missed by indexOf("--dotenv") → the whole `--dotenv=...` token fell through to dispatch as
   // the command name ("unknown command"). Find either spelling and apply the SAME existence + command-
   // name guards.
@@ -620,7 +620,7 @@ async function cmdRun(rawArgs: string[]) {
     );
   // A non-existent path threw a raw ENOENT (exit 2 + stack) instead of a clean usage message.
   if (!existsSync(target)) fail("run", "usage", `scenario path not found: ${target}`, undefined, flags.output === "json");
-  // Bug 1: an empty directory (no *.yaml/*.yml) must be a LOUD non-zero, not a vacuous exit-0 pass.
+  // an empty directory (no *.yaml/*.yml) must be a LOUD non-zero, not a vacuous exit-0 pass.
   // resolveInputs centralizes the file-or-dir + empty-dir-is-loud rule (shared with replay/verify).
   const resolved = resolveInputs(target, [".yaml", ".yml"]);
   if ("error" in resolved) fail("run", "usage", `run: ${resolved.error}`, undefined, flags.output === "json");
@@ -861,7 +861,7 @@ async function cmdSkill(rawArgs: string[]) {
 
 function cmdVm(args: string[]) {
   const sub = args[0];
-  // Bug 16: validate the subcommand BEFORE loadBaseline(args[1]) — a bad subcommand (e.g. `vm typo`)
+  // validate the subcommand BEFORE loadBaseline(args[1]) — a bad subcommand (e.g. `vm typo`)
   // otherwise surfaced as a baseline-load error (or, with a stray arg, a confusing baseline message)
   // instead of the clear `usage: vm …`. (A bare `log` then exit-0 was the older footgun, now exit 2.)
   const VM_SUBS = ["init", "status", "delete", "prune"];
@@ -902,7 +902,7 @@ function cmdBoundary(args: string[]) {
     process.exit(2);
   }
   const sessionPath = si >= 0 ? args[si + 1] : undefined;
-  // Bug 17: reject unknown flags instead of dropping them via the positional filter (a typo'd flag was
+  // reject unknown flags instead of dropping them via the positional filter (a typo'd flag was
   // a silent no-op). --session is the only flag boundary-check accepts.
   rejectUnknownFlags("boundary-check", args, ["--session"], false);
   const positional = args.filter((a, i) => a !== "--session" && args[i - 1] !== "--session" && !a.startsWith("--"));
@@ -1100,10 +1100,10 @@ async function cmdDecide(args: string[]) {
     // --decider-dir is rejected explicitly below with a redirect message; consume its value here so the
     // value isn't flagged as a stray positional before that guard fires.
     else if (a === "--decider-dir") i++;
-    // Bug 13: an unrecognized `--`-prefixed token used to be silently ignored (the loop had no else).
+    // an unrecognized `--`-prefixed token used to be silently ignored (the loop had no else).
     else if (a.startsWith("--") && a !== "--output-format=json" && a !== "--output-format=text")
       fail("decide", "usage", `unknown flag: ${a}`, undefined, json);
-    // Bug 13: decide takes NO positionals (the sample question comes from --question, not a positional).
+    // decide takes NO positionals (the sample question comes from --question, not a positional).
     else if (!a.startsWith("--")) fail("decide", "usage", `decide takes no positional arguments (got: ${a})`, undefined, json);
   }
   // #13: `decide` does not implement the file-rendezvous channel — reject `--decider-dir` loudly
@@ -1120,7 +1120,7 @@ async function cmdDecide(args: string[]) {
   // helper would never be exercised. Mirrors cmdSkill/resolveExternal's conflict guards.
   if (deciderLlm && deciderCmd)
     fail("decide", "usage", "--decider-llm conflicts with --decider-cmd (one terminal decider).", undefined, json);
-  // Bug 14: --intent only feeds the LLM decider; without --decider-llm it is silently ignored (mirrors
+  // --intent only feeds the LLM decider; without --decider-llm it is silently ignored (mirrors
   // cmdSkill's guard).
   if (intent !== undefined && !deciderLlm)
     fail(
@@ -1130,7 +1130,7 @@ async function cmdDecide(args: string[]) {
       undefined,
       json,
     );
-  // Bug 15: --decider-llm is a terminal decider; combining it with the scripted --answer/--answer-policy
+  // --decider-llm is a terminal decider; combining it with the scripted --answer/--answer-policy
   // rules is contradictory (the LLM branch wins, the rules are never exercised). Reject the conflict the
   // same way --decider-llm + --decider-cmd is rejected above.
   if (deciderLlm && (rules.length || policy))
@@ -1194,7 +1194,7 @@ async function cmdDecide(args: string[]) {
 async function cmdGates(args: string[]) {
   ensureOutputFormat("gates", args);
   const follow = args.includes("--follow");
-  // Bug 5: skip the `--output-format` value so `gates --output-format json <dir>` doesn't read `json`
+  // skip the `--output-format` value so `gates --output-format json <dir>` doesn't read `json`
   // as the directory (the old `args.find(a => !a.startsWith("--"))` idiom did exactly that).
   const dir = positionals(args, ["--output-format"])[0];
   if (!dir) return void fail("gates", "usage", "usage: gates <dir> [--follow]", undefined, isJsonOutput(args));
@@ -1265,10 +1265,10 @@ function cmdAnswer(args: string[]) {
  *  artifacts → file_exists, the prompt). Authoring becomes explore→lock instead of guess-and-re-run. */
 function cmdScaffold(args: string[]) {
   const json = isJsonOutput(args);
-  // Bug 8: validate --output-format is text|json — an invalid value was a silent text degrade (only
+  // validate --output-format is text|json — an invalid value was a silent text degrade (only
   // isJsonOutput was consulted), unlike decide/gates/trace.
   ensureOutputFormat("scaffold", args);
-  // Bug 9: the --from-run value must be a real run id/dir, never a following flag. `--from-run --out`
+  // the --from-run value must be a real run id/dir, never a following flag. `--from-run --out`
   // would treat `--out` as the run id. Read it bounds-checked (flagValue) and reject a dash-prefixed
   // token (mirrors replay --cassette's guard).
   const fromIdx = args.indexOf("--from-run");
@@ -1279,7 +1279,7 @@ function cmdScaffold(args: string[]) {
       return void fail("scaffold", "usage", `--from-run requires a run id/dir, got a flag: ${target}`, undefined, json);
   } else target = positionals(args, ["--from-run", "--out", "--output-format"])[0];
   if (!target) return void fail("scaffold", "usage", "usage: scaffold --from-run <run-id | run-dir> [--out <file.yaml>]", undefined, json);
-  // Bug 10: validate --out BEFORE resolving the run — a missing/flag-looking --out value is a usage
+  // validate --out BEFORE resolving the run — a missing/flag-looking --out value is a usage
   // error, not a silent fall-through to stdout (the old `args[outIdx + 1]` truthiness check) or a file
   // literally named `--output-format`. Done before resolveEventsFile so the --out error isn't masked by
   // an unrelated run-resolution failure.
@@ -1307,10 +1307,10 @@ function cmdScaffold(args: string[]) {
  *  Zod `Assertion` schema (`Assertion.shape[k].description`) so the list can NEVER drift from the schema. */
 function cmdAssert(args: string[]) {
   const json = isJsonOutput(args);
-  // Bug 11: validate --output-format is text|json (an invalid value was a silent text degrade).
+  // validate --output-format is text|json (an invalid value was a silent text degrade).
   ensureOutputFormat("assert", args);
   if (!args.includes("--list")) return void fail("assert", "usage", "usage: assert --list [--output-format json]", undefined, json);
-  // Bug 12: `assert --list` takes no positionals and no other flags; reject stray ones rather than
+  // `assert --list` takes no positionals and no other flags; reject stray ones rather than
   // silently ignoring them (e.g. `assert --list extra` or `assert --list --bogus`).
   const stray = positionals(args, ["--output-format"]);
   if (stray.length)
@@ -1330,7 +1330,7 @@ function cmdTrace(args: string[]) {
   const tools = args.includes("--tools");
   const gates = args.includes("--gates");
   const dispatches = args.includes("--dispatches");
-  // Bug 6: --tools/--gates/--dispatches select mutually-exclusive views; the old precedence (gates >
+  // --tools/--gates/--dispatches select mutually-exclusive views; the old precedence (gates >
   // dispatches > default) silently ignored the others. Reject more than one so a contradictory request
   // fails loud instead of quietly picking one.
   if ([tools, gates, dispatches].filter(Boolean).length > 1)
@@ -1345,7 +1345,7 @@ function cmdTrace(args: string[]) {
   // named `json` instead of reporting the missing target.
   const allPositionals = positionals(args, ["--output-format"]);
   const target = allPositionals[0];
-  // Bug 7: trace takes exactly one target; reject stray positionals rather than silently using the first.
+  // trace takes exactly one target; reject stray positionals rather than silently using the first.
   if (allPositionals.length > 1)
     fail(
       "trace",
