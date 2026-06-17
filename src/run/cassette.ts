@@ -22,6 +22,8 @@ import { evaluate } from "../assert.js";
 import { makeRenderer, renderFooter, type RenderPlan } from "./renderer.js";
 import { jsonEnvelope, parseOutputFormat } from "./envelope.js";
 import { computeVerdict } from "./verdict.js";
+import { redactJsonLine, redactText, redactStructural, loadRedactionPolicy, type RedactionPolicy } from "../redact.js";
+import { collectSecrets, scrub } from "../secrets.js";
 
 const out = (s: string) => process.stdout.write(s + "\n");
 const log = (s: string) => process.stderr.write(s + "\n");
@@ -329,6 +331,45 @@ const NOOP_DECIDER: Decider = {
   },
 };
 
+/** Apply CONTENT redaction (the opt-in policy) across the WHOLE cassette surface (C1): events/controlOut
+ *  protocol lines (structurally — string leaves AND object keys, keeping JSON valid + the O7 question/answer
+ *  strings in sync), artifact bodies, the scenario prompt/answers/assert metadata, and the diagnostic
+ *  skillSources. Identity fields (name/session/fidelity/baseline) are left intact so replay still resolves.
+ *  Pure — returns a new cassette. Distinct from secret-scrub (`scrub`), which runs first. */
+export function redactCassette(cassette: Cassette, policy: RedactionPolicy): Cassette {
+  const scenario = {
+    ...cassette.scenario,
+    prompt: redactText(cassette.scenario.prompt, policy),
+    answers: redactStructural(cassette.scenario.answers, policy),
+    assert: redactStructural(cassette.scenario.assert, policy),
+  } as Scenario;
+  return {
+    ...cassette,
+    scenario,
+    events: cassette.events.map((l) => redactJsonLine(l, policy)),
+    controlOut: cassette.controlOut?.map((l) => redactJsonLine(l, policy)),
+    artifacts: cassette.artifacts?.map((a) => (a.body !== undefined ? { ...a, body: redactJsonLine(a.body, policy) } : a)),
+    fingerprint: cassette.fingerprint
+      ? { ...cassette.fingerprint, skillSources: cassette.fingerprint.skillSources?.map((s) => redactText(s, policy)) }
+      : undefined,
+  };
+}
+
+/** A3 / C4 cardinal-sin guard: redaction must be VERDICT-PRESERVING. Replay both the pre-redaction and the
+ *  redacted cassette (token-free) and compare verdicts; if redaction flipped any replay-checkable assertion
+ *  (e.g. stripped a value a `transcript_not_matches` keys on, manufacturing a green), throw — never write a
+ *  cassette whose verdict was changed by redaction. */
+export async function assertRedactionVerdictPreserved(base: Cassette, redacted: Cassette): Promise<void> {
+  const vb = computeVerdict(await replayCassette(base), "replay");
+  const vr = computeVerdict(await replayCassette(redacted), "replay");
+  if (vb.pass !== vr.pass)
+    throw new Error(
+      `redaction changed the replay verdict (pre-redaction pass=${vb.pass} → redacted pass=${vr.pass}) — redaction altered an ` +
+        `asserted observable; refusing to write a cassette whose verdict was manufactured by redaction (A3). ` +
+        `Record against synthetic inputs, or narrow the redaction policy so it doesn't touch asserted values.`,
+    );
+}
+
 /** `record <scenario.yaml> [--out <file>]` — run live + save a cassette. */
 export async function cmdRecord(args: string[]) {
   const outIdx = args.indexOf("--out");
@@ -351,12 +392,22 @@ export async function cmdRecord(args: string[]) {
     log(`record takes a single scenario (got ${scenarioPositionals.length}: ${scenarioPositionals.join(", ")})`);
     process.exit(2);
   }
+  const noRedact = args.includes("--no-redact"); // A1 escape hatch for known-synthetic inputs
+  const allowFailing = args.includes("--allow-failing"); // A3: explicitly permit freezing a red live run
   const scenario = parseScenarioFile(file);
   const result = await executeScenario(scenario);
   const events = safeLines(join(result.outDir, "events.jsonl"));
   const controlOut = safeLines(join(result.outDir, "control-out.jsonl"));
   const cassettePath = outIdx >= 0 ? args[outIdx + 1] : join("cassettes", `${scenario.name}.cassette.json`);
   mkdirSync(dirname(cassettePath), { recursive: true });
+  // A3: a failing live run frozen into a committed cassette is a latent false-signal — refuse unless the
+  // caller opts in. (Distinct from the redaction-verdict guard below; this catches a red run BEFORE redaction.)
+  if (!computeVerdict(result, "live").pass && !allowFailing) {
+    log(
+      `record: live run did NOT pass (result=${result.result}) — refusing to freeze a failing run into a cassette. Re-run, or pass --allow-failing.`,
+    );
+    process.exit(1);
+  }
   // Store a RELOCATABLE session path (relative to the cassette dir) instead of the absolute resolved path
   // parseScenarioFile baked in — replay never loads the session for the pipeline, so this is metadata-only,
   // but it keeps a moved bundle honest. Record the resolved tier so replay can report effectiveFidelity.
@@ -365,11 +416,15 @@ export async function cmdRecord(args: string[]) {
     session: scenario.session === "(inline)" ? "(inline)" : relative(dirname(cassettePath), scenario.session),
   };
   // #1: snapshot the user-visible artifacts (from the live work root, before --keep cleanup) so
-  // file_exists/user_visible_artifact/artifact_json survive token-free replay. #1b: a staleness tripwire
-  // over the recording's inputs (baseline + local skill dirs) — `scenario.session` is still absolute here.
-  const artifacts = result.workDir ? buildManifest(result.workDir) : [];
+  // file_exists/user_visible_artifact/artifact_json survive token-free replay. C2: buildManifest reads the
+  // output bodies RAW — executeScenario scrubs result/events/control-out but NOT outputs/ — so secret-scrub
+  // each body here before it is committed. #1b: a staleness tripwire over the recording's inputs.
+  const secrets = collectSecrets();
+  const artifacts = (result.workDir ? buildManifest(result.workDir) : []).map((a) =>
+    a.body !== undefined ? { ...a, body: scrub(a.body, secrets) } : a,
+  );
   const fingerprint = buildFingerprint(scenario.session, result.baseline);
-  const cassette: Cassette = {
+  const base: Cassette = {
     cassetteVersion: CASSETTE_VERSION,
     scenario: relocatable,
     events,
@@ -378,6 +433,16 @@ export async function cmdRecord(args: string[]) {
     artifacts,
     fingerprint,
   };
+  // A1 (opt-in) content redaction over the whole cassette surface (C1). If the policy is empty, this is a
+  // no-op and `base` is written verbatim. If non-empty, redaction must be VERDICT-PRESERVING (A3): a green
+  // a redaction manufactured is the cardinal sin, so we replay both and refuse to write on divergence.
+  const policy = noRedact ? { patterns: [], keyNames: [] } : loadRedactionPolicy([process.cwd(), dirname(file), dirname(cassettePath)]);
+  let cassette = base;
+  if (policy.patterns.length || policy.keyNames.length) {
+    const redacted = redactCassette(base, policy);
+    await assertRedactionVerdictPreserved(base, redacted);
+    cassette = redacted;
+  }
   writeFileSync(cassettePath, JSON.stringify(cassette, null, 2));
   // capture summary: turns (assistant messages) + tool calls in the recording
   let turns = 0;
