@@ -1086,7 +1086,12 @@ async function cmdDecide(args: string[]) {
     if (a === "--question")
       question = flagValue(args, i++, a); // #58: bounds-checked
     else if (a === "--option") options.push(flagValue(args, i++, a));
-    else if (a === "--decider-cmd") deciderCmd = flagValue(args, i++, a);
+    else if (a === "--decider-cmd") {
+      deciderCmd = flagValue(args, i++, a);
+      // The helper command is never a flag — reject a flag-looking value so `--decider-cmd --question`
+      // doesn't silently swallow the next flag as the command.
+      if (deciderCmd.startsWith("-")) fail("decide", "usage", `--decider-cmd: missing value (got flag-looking "${deciderCmd}")`, undefined, json);
+    }
     else if (a === "--decider-llm") deciderLlm = true;
     else if (a === "--intent") intent = flagValue(args, i++, a);
     else if (a === "--answer-policy") policy = flagValue(args, i++, a);

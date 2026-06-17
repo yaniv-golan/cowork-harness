@@ -60,6 +60,11 @@ describe.skipIf(!can)("CLI arg guards — migrated commands fail loud", () => {
     expect(run(["verify-cassettes", join(d, "ok.cassette.json"), "--typo"], d).code).toBe(2);
   });
 
+  it("decide: --decider-cmd with a flag-looking value → exit 2 (not swallowing the next flag)", () => {
+    const d = mkdtempSync(join(tmpdir(), "g-"));
+    expect(run(["decide", "--decider-cmd", "--question", "confirm?"], d).code).toBe(2);
+  });
+
   it("replay: a directory of cassettes is replayed", () => {
     const d = mkdtempSync(join(tmpdir(), "g-"));
     writeFileSync(join(d, "a.cassette.json"), cassette());
