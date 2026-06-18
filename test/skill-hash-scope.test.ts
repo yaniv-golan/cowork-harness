@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { hashSkillDirs, compileIgnore } from "../src/run/skill-hash.js";
+import { hashSkillDirs, hashSharedOnly, compileIgnore } from "../src/run/skill-hash.js";
 
 /** A plugin-root with two skills + shared roots (scripts/, .claude-plugin/plugin.json) — the founder-skills
  *  shape that F-6 scoping targets. */
@@ -176,6 +176,35 @@ describe("compileIgnore — glob semantics", () => {
   it("`?` is a literal, not a quantifier (only * / ** are wildcards)", () => {
     expect(m("a?b", "a?b")).toBe(true);
     expect(m("a?b", "ab")).toBe(false); // would be true if `?` acted as the optional quantifier
+  });
+});
+
+describe("hashSharedOnly — shared-roots-only hash", () => {
+  it("returns null when the dir has no skills/ layout (individual-skill mount)", () => {
+    const d = mkdtempSync(join(tmpdir(), "no-layout-"));
+    writeFileSync(join(d, "SKILL.md"), "# direct mount\n");
+    expect(hashSharedOnly([d])).toBeNull();
+  });
+
+  it("returns a hex string for a plugin-root with a skills/ dir", () => {
+    const d = pluginRoot();
+    const h = hashSharedOnly([d]);
+    expect(h).not.toBeNull();
+    expect(h).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("changes when a shared-root file changes", () => {
+    const d = pluginRoot();
+    const before = hashSharedOnly([d]);
+    writeFileSync(join(d, "scripts", "shared.py"), "x = 99\n");
+    expect(hashSharedOnly([d])).not.toBe(before);
+  });
+
+  it("does NOT change when a skills/<name> file changes (skills are excluded)", () => {
+    const d = pluginRoot();
+    const before = hashSharedOnly([d]);
+    writeFileSync(join(d, "skills", "alpha", "SKILL.md"), "# alpha edited\n");
+    expect(hashSharedOnly([d])).toBe(before);
   });
 });
 

@@ -24,7 +24,7 @@ import { makeRenderer, renderFooter, type RenderPlan } from "./renderer.js";
 import { jsonEnvelope, parseOutputFormat } from "./envelope.js";
 import { parseArgs } from "../cli-args.js";
 import { resolveInputs } from "./inputs.js";
-import { hashSkillDirs } from "./skill-hash.js";
+import { hashSkillDirs, hashSharedOnly } from "./skill-hash.js";
 import { computeVerdict } from "./verdict.js";
 import { redactJsonLine, redactText, redactStructural, loadRedactionPolicy, type RedactionPolicy } from "../redact.js";
 import { collectSecrets, scrub } from "../secrets.js";
@@ -57,6 +57,7 @@ interface Fingerprint {
   skillHash?: string; // hash of the session's local skill/plugin/marketplace dir contents (if any)
   skillSources?: string[]; // the local dirs that fed skillHash (for the replay recompute + diagnostics)
   skillScope?: string[]; // F-6: the skills the hash was scoped to (empty/absent = whole-tree); diagnostics
+  sharedHash?: string; // G-4: shared-root hash for scoped cassettes; absent on whole-tree or non-plugin-root mounts
 }
 
 interface Cassette {
@@ -216,6 +217,12 @@ export function buildFingerprint(
   // the dirs from the session), so a relative path is enough and never leaks an absolute `/Users/...` path.
   const fp: Fingerprint = { baseline: baselineAppVersion, skillHash, skillSources: dirs.sort().map((d) => relative(baseDir, d)) };
   if (scopeSkills && scopeSkills.length) fp.skillScope = [...scopeSkills].sort();
+  // G-4: for scoped cassettes, store the shared-root hash separately so checkStaleness can name
+  // the changed bucket (skill vs shared root) at verify time.
+  if (scopeSkills && scopeSkills.length) {
+    const sh = hashSharedOnly(dirs, hashIgnore);
+    if (sh !== null) fp.sharedHash = sh;
+  }
   return fp;
 }
 
@@ -297,6 +304,14 @@ export function checkStaleness(cassette: Cassette, cassetteDir: string): string[
         msgs.push(
           `recorded under an older hash format (v${recordedVersion} → v${CASSETTE_VERSION}) — re-record once after upgrading`,
         );
+      } else if (fp.sharedHash !== undefined && live.sharedHash !== undefined) {
+        // G-4: bucket-level diagnosis — which component of the scoped hash changed?
+        const scope = fp.skillScope?.length ? fp.skillScope.map((s) => `skills/${s}`).join(", ") : "skill";
+        if (live.sharedHash !== fp.sharedHash) {
+          msgs.push(`shared root changed since record (scope: ${scope}) — re-record`);
+        } else {
+          msgs.push(`${scope} changed since record — re-record`);
+        }
       } else {
         msgs.push("local skill/plugin dir contents changed since record — re-record");
       }

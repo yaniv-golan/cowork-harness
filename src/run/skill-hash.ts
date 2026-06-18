@@ -142,6 +142,37 @@ function skillDirNames(root: string): string[] {
   }
 }
 
+/** Accept function for shared-root-only hashing: include everything EXCEPT `skills/<name>/` subtrees.
+ *  Used by `hashSharedOnly` to isolate the shared-root contribution for bucket-level diagnostics. */
+function sharedOnlyAccept(): AcceptFn {
+  return (relPath) => {
+    const parts = relPath.split("/");
+    if (parts[0] !== "skills") return true; // shared content + plugin root files
+    if (parts.length === 1) return true; // the `skills` dir marker itself
+    return false; // exclude ALL skills/<name>/… subtrees
+  };
+}
+
+/**
+ * Hash ONLY the shared-root content (everything outside `skills/`) of plugin-roots in `dirs`.
+ * Returns `null` when none of the dirs have a top-level `skills/` layout (individual-skill mounts,
+ * marketplaces) — in that case there's no shared/skill split to report.
+ * Used by `checkStaleness` to name the changed bucket in scoped cassettes (G-4).
+ */
+export function hashSharedOnly(dirs: string[], sessionIgnore?: string[]): string | null {
+  const sorted = [...dirs].sort();
+  const pluginRoots = sorted.filter((d) => isDir(join(d, "skills")));
+  if (pluginRoots.length === 0) return null;
+  const accept = sharedOnlyAccept();
+  const hash = createHash("sha256");
+  for (const d of pluginRoots) {
+    const ignoreRes = [...readHashIgnore(d), ...(sessionIgnore ?? [])].map(compileIgnore).filter((re): re is RegExp => re !== null);
+    const combinedAccept: AcceptFn = ignoreRes.length ? (rel) => accept(rel) && !ignoreRes.some((re) => re.test(rel)) : accept;
+    hashDir(d, hash, "", combinedAccept);
+  }
+  return hash.digest("hex");
+}
+
 /** F-6 structural accept: under a plugin-root, include everything NOT under `skills/`, plus only the
  *  `skills/<name>` subtrees whose name is in `keep`. This hashes the plugin's shared roots (agents/, scripts/,
  *  references/, plugin.json, …) PLUS the named skills — so editing one skill re-stales only its cassettes,

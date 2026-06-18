@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { scanCassette, checkStaleness } from "../src/run/cassette.js";
+import { scanCassette, checkStaleness, buildFingerprint } from "../src/run/cassette.js";
 
 const scenario = (assert: unknown[], prompt = "hi") => ({
   name: "c",
@@ -214,5 +214,70 @@ describe("checkStaleness — staleness message variants", () => {
     const skillMsg = msgs.find((m) => /contents changed|changed since/.test(m));
     expect(skillMsg).toBeDefined();
     expect(skillMsg).not.toMatch(/hash format|older/i);
+  });
+});
+
+describe("checkStaleness — bucket-named messages (G-4)", () => {
+  function pluginSessionRoot(): { root: string; sessionPath: string } {
+    const root = mkdtempSync(join(tmpdir(), "cwh-g4-"));
+    mkdirSync(join(root, "plugin", "skills", "alpha"), { recursive: true });
+    mkdirSync(join(root, "plugin", "scripts"), { recursive: true });
+    writeFileSync(join(root, "plugin", "skills", "alpha", "SKILL.md"), "# alpha v1\n");
+    writeFileSync(join(root, "plugin", "scripts", "shared.py"), "x = 1\n");
+    const sessionPath = join(root, "session.yaml");
+    writeFileSync(sessionPath, `skills:\n  local:\n    - ./plugin\n`);
+    return { root, sessionPath };
+  }
+
+  it("names the skill dir when only the skill changed (not shared root)", () => {
+    const { root, sessionPath } = pluginSessionRoot();
+    const fp = buildFingerprint(sessionPath, "99.0.0", root, ["alpha"]);
+    writeFileSync(join(root, "plugin", "skills", "alpha", "SKILL.md"), "# alpha v2\n");
+    const c: any = {
+      cassetteVersion: 2,
+      scenario: {
+        name: "alpha-smoke",
+        baseline: "99.0.0",
+        session: sessionPath,
+        fidelity: "container",
+        prompt: "hi",
+        answers: [],
+        expect_denied: [],
+        assert: [],
+        skills: ["alpha"],
+      },
+      events: [],
+      fingerprint: fp,
+    };
+    const msgs = checkStaleness(c, root);
+    const skillMsg = msgs.find((m) => /skills\/alpha/.test(m));
+    expect(skillMsg).toBeDefined();
+    expect(skillMsg).not.toMatch(/shared root/);
+  });
+
+  it("names the shared root when only shared content changed (not the scoped skill)", () => {
+    const { root, sessionPath } = pluginSessionRoot();
+    const fp = buildFingerprint(sessionPath, "99.0.0", root, ["alpha"]);
+    writeFileSync(join(root, "plugin", "scripts", "shared.py"), "x = 99\n");
+    const c: any = {
+      cassetteVersion: 2,
+      scenario: {
+        name: "alpha-smoke",
+        baseline: "99.0.0",
+        session: sessionPath,
+        fidelity: "container",
+        prompt: "hi",
+        answers: [],
+        expect_denied: [],
+        assert: [],
+        skills: ["alpha"],
+      },
+      events: [],
+      fingerprint: fp,
+    };
+    const msgs = checkStaleness(c, root);
+    const sharedMsg = msgs.find((m) => /shared root/.test(m));
+    expect(sharedMsg).toBeDefined();
+    expect(sharedMsg).toMatch(/scope: skills\/alpha/);
   });
 });
