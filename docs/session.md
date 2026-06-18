@@ -56,7 +56,7 @@ web_fetch:
                                  # raises no approval gate. (web_fetch's real gate is the URL provenance
                                  # set, seeded from URLs you put in the prompt — see boundary.md.)
 
-# ── staleness fingerprint scope (F-6) ───────────────────────────────────────────
+# ── staleness fingerprint scope ──────────────────────────────────────────────────
 staleness:
   hash_ignore: []                # gitignore-style globs (matched against each mounted skill/plugin dir's
                                  # root-relative path) for paths that DON'T affect recorded behavior —
@@ -76,7 +76,7 @@ staleness:
 |---|---|---|---|
 | `model` | string | model picker | e.g. `claude-opus-4-8`. Omit to use the agent default. |
 | `effort` | enum | effort selector | `low` \| `medium` \| `high` \| `xhigh`. Passed as the `--effort` CLI flag (the `CLAUDE_EFFORT` env var is a no-op). |
-| `max_thinking_tokens` | number \| map | thinking budget | a flat **positive integer**, or a per-model map `{ default, <model>: <n> }` of them (0/negative are rejected, #33), resolved per-model (Cowork's `f7e`) and emitted as `MAX_THINKING_TOKENS`. Default `31999` (binary-verified `DEFAULT_MAX_THINKING_TOKENS`). The `extended_thinking` bool is inert — not a real Cowork toggle; use this field. |
+| `max_thinking_tokens` | number \| map | thinking budget | a flat **positive integer**, or a per-model map `{ default, <model>: <n> }` of them (0/negative are rejected), resolved per-model (Cowork's `f7e`) and emitted as `MAX_THINKING_TOKENS`. Default `31999` (binary-verified `DEFAULT_MAX_THINKING_TOKENS`). The `extended_thinking` bool is inert — not a real Cowork toggle; use this field. |
 | `permission_mode` | enum | permission mode | `default` \| `acceptEdits` \| `plan` \| `bypassPermissions` → `--permission-mode`. |
 | `permission_parity` | enum | (harness policy) | `cowork` (default) \| `strict`. `cowork` mirrors Cowork's permission default — unscripted tool calls are allowed; `strict` denies any tool call that no scripted answer / decider covers. Affects the harness `Decider`, not a Cowork control. |
 
@@ -91,7 +91,7 @@ staleness:
 For an ad-hoc `skill` run (no session file), the CLI flags **`--upload <file>`** and **`--folder <dir>`**
 are the equivalents of `uploads[]` and `folders[]`.
 
-`folders[].mode` is `r` \| `rw` \| `rwd` (read / read-write / read-write-delete), matching Cowork's per-mount grants. Enforcement: `r` mounts get a per-mount `:ro` bind on the Docker tiers (#23), so writes fail in the guest; the `rw` vs `rwd` delete-deny distinction is not yet mount-enforced (post-hoc `no_delete_in_outputs` + the planned #9-A FUSE sub-project — see [boundary.md](./boundary.md)).
+`folders[].mode` is `r` \| `rw` \| `rwd` (read / read-write / read-write-delete), matching Cowork's per-mount grants. Enforcement: `r` mounts get a per-mount `:ro` bind on the Docker tiers, so writes fail in the guest; the `rw` vs `rwd` delete-deny distinction is not yet mount-enforced (post-hoc `no_delete_in_outputs` + the planned FUSE delete-deny sub-project — see [boundary.md](./boundary.md)).
 
 ### Discovery
 See [discovery.md](./discovery.md) for the full model. In short: the harness builds a clean `CLAUDE_CONFIG_DIR` with a generated `settings.json`, mounts plugins at the Cowork paths, and wires `--mcp-config` — every field here is an override knob.

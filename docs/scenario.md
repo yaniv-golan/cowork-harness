@@ -359,6 +359,25 @@ cowork-harness decide \
 # ✓ rule matched: "Which output format do you want?" → "Markdown"
 ```
 
+### Re-checking assertions without a re-record (`verify-run`)
+
+When an assertion is wrong (a typo, the wrong path, an over-pinned regex) but the *run* itself was fine, you
+don't need a fresh live run to fix it. `cowork-harness verify-run <run-dir> <scenario.yaml>` re-evaluates the
+scenario's `assert:` block against an already-kept run dir — **no live agent, no tokens, no Docker** — in about
+a second:
+
+```bash
+cowork-harness skill ~/my-plugin "..." --keep            # prints the run dir
+cowork-harness verify-run runs/<scenario>/<sessionId>/ my-scenario.yaml
+# ✗ verify-run: 1/3 assertion(s) failed  → fix the assertion, re-run verify-run, repeat
+```
+
+It reconstructs the assert context (transcript, tool calls, egress, artifacts, questions) from the run's
+persisted `result.json` + sidecars and uses the **same verdict path as a live record**. Two limits: it needs a
+**kept** run dir (`--keep`, or a `--session-id` run), and filesystem assertions (`file_exists` /
+`user_visible_artifact` / `artifact_json`) need the run's work dir still on disk — if it has been torn down,
+`verify-run` refuses rather than reporting a false failure.
+
 ### Shipped examples to read
 
 The repo ships runnable scenarios you can copy from, under [`examples/`](../examples/) — each pairs with an `examples/sessions/*.yaml` and, for the skills, a folder under `examples/skills/`. (The harness's own fidelity self-tests live separately in `e2e/`.)

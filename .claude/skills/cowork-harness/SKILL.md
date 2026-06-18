@@ -3,8 +3,8 @@ name: cowork-harness
 description: Test or debug a Claude Code skill/plugin under Claude Cowork's runtime — sandboxed agent, default-deny egress, the can_use_tool permission/question protocol — using the cowork-harness CLI. Use when validating or regression-testing a skill, authoring or debugging a scenario YAML (prompt + scripted answers + assert:), choosing a fidelity tier, scripting AskUserQuestion / tool-permission answers, or asserting artifacts, egress, or sub-agent dispatch. Especially when a harness run no-ops an assertion, fails on an unanswered gate, false-greens, a steered answer never reaches the model, or a web_fetch is unexpectedly denied or gated. NOT for generic unit testing (pytest/vitest of your own scripts) or non-Cowork CI. Covers the skill / run / chat / record / replay / trace / decide / assert / scaffold commands and the session-vs-scenario split.
 metadata:
   author: cowork-harness
-  version: 0.4.3
-  tracks-harness: cowork-harness 0.4.0 (baseline desktop-1.12603.1)
+  version: 0.5.0
+  tracks-harness: cowork-harness 0.5.0 (baseline desktop-1.13576.1)
 ---
 
 # cowork-harness
@@ -21,15 +21,15 @@ several ways to *silently* no-op a check (skip an assertion on replay, auto-answ
 an empty egress allowlist). This skill exists mostly to keep you out of those traps — the Gotchas
 section below is the highest-value part. Read it.
 
-> **Version note:** the facts and `file:line` pointers here track `cowork-harness 0.4.0` (baseline
-> `desktop-1.12603.1`). If your checkout is newer, prefer the live `--help`, `SPEC.md`, and
+> **Version note:** the facts and `file:line` pointers here track `cowork-harness 0.5.0` (baseline
+> `desktop-1.13576.1`). If your checkout is newer, prefer the live `--help`, `SPEC.md`, and
 > `docs/*.md` over this snapshot, and re-run the bundled linter.
 
 ## 0. Preflight — make sure the harness can actually run
 
 Before the first command, confirm the CLI is reachable and **fail loud** (never fake a pass) when a tier's dependencies are missing:
 
-- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 0.4.0** (the commands/assertions it teaches: `assert --list`, `scaffold`, `trace --dispatches`, `artifact_json` incl. the `in:` operator, `verify-cassettes`, batch `record <dir>`/`--rerecord-stale`, record-time redaction, multiSelect/`answer:`). If it's missing *or older than 0.4.0*, prefix every command with `npx` using a version floor: `npx cowork-harness@>=0.4.0 <cmd>` (Node ≥ 20). The floor matters — plain `@latest` would silently fetch an older CLI and the new commands would fail as "unknown command"; `@>=0.4.0` instead **fails loud** if no compatible version is published. To install once instead: `npm i -g cowork-harness@latest`.
+- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 0.5.0** (the commands/assertions it teaches: `assert --list`, `scaffold`, `trace --dispatches`, `artifact_json` incl. the `in:` operator, `verify-cassettes`, batch `record <dir>`/`--rerecord-stale`, record-time redaction, multiSelect/`answer:`, `verify-run`, `record --max-artifact-bytes`, `verify-cassettes --allow-domain`/`--allow-email`/`--allow-file`, and scenario `skills:` staleness scoping). If it's missing *or older than 0.5.0*, prefix every command with `npx` using a version floor: `npx cowork-harness@>=0.5.0 <cmd>` (Node ≥ 20). The floor matters — plain `@latest` would silently fetch an older CLI and the new commands would fail as "unknown command"; `@>=0.5.0` instead **fails loud** if no compatible version is published. To install once instead: `npm i -g cowork-harness@latest`.
 - **Agent binary (every tier).** The staged Claude Code agent is **bind-mounted** from a local Claude Desktop install, or point `COWORK_AGENT_BINARY` at a `claude-code-vm/<ver>/claude` ELF. Nothing is bundled. No agent → no run; report that, don't skip silently.
 - **Docker / Lima.** Only `--fidelity protocol` (L0) runs without them. `container` / `microvm` / `hostloop` / `cowork` need Docker (Lima for L2). If they're absent, drop to `--fidelity protocol` and **say so** — a green that never exercised the sandbox is not a sandbox pass.
 - **Auth.** `CLAUDE_CODE_OAUTH_TOKEN` (preferred) or `ANTHROPIC_API_KEY`, via env or `.env`.
@@ -42,8 +42,8 @@ Before the first command, confirm the CLI is reachable and **fail loud** (never 
   This is the CI-grade path and most of this skill.
 - **Multi-turn debugging** → `cowork-harness chat`.
 
-Full command set: `skill · run · chat · record · replay · trace · decide · gates · answer · sync ·
-list · boundary-check · vm <init|status|delete|prune>`. Always check `cowork-harness <cmd> --help`.
+Full command set: `skill · run · chat · record · replay · verify-cassettes · verify-run · trace ·
+decide · gates · answer · scaffold · assert · sync · list · boundary-check · vm <init|status|delete|prune>`. Always check `cowork-harness <cmd> --help`.
 
 ## 2. Two files: session vs scenario
 
@@ -98,7 +98,7 @@ for scripted answers. See `references/fidelity-and-answers.md`.
 
 ## 6. Assertions: two orthogonal axes
 
-Conflating these is the **#1 landmine**. An assertion key has two independent properties:
+Conflating these is the **biggest landmine**. An assertion key has two independent properties:
 
 - **Axis A — robust to LLM phrasing drift?** Structural/boundary keys (`subagent_dispatched`,
   `egress_*`, `file_exists`, `user_visible_artifact`, `result`) are robust. Free-text content is
@@ -134,7 +134,9 @@ Full model in `references/scenario-schema.md`.
 
 Read the verdict and the inline failing transcript. To pin a flaky-because-stochastic gate, paste
 the echoed `--answer "<q>=<choice>"` footer lines back into the scenario's `answers:` for a
-deterministic re-run. Use `cowork-harness trace <id>` to digest a run.
+deterministic re-run. Use `cowork-harness trace <id>` to digest a run. If only an *assertion* is wrong (the
+run itself was fine), `cowork-harness verify-run <run-dir> <scenario.yaml>` re-checks the `assert:` block against
+a **kept** run dir (`--keep`, or a `--session-id` run) with no live re-record — tokens-free, ~1s per iteration.
 
 ## 9. Scaffold a valid scenario, lint before you push, then place in CI
 
@@ -189,7 +191,7 @@ are the ones that bite hardest.
 
 3. **A multi-key `assert:` item is an AND.** A single list item with more than one key passes iff
    **every** key passes. *Fix:* one concern per item unless you genuinely mean conjunction (and a
-   mixed-class conjunction still loses its filesystem half on replay — see #1).
+   mixed-class conjunction still loses its filesystem half on replay — see gotcha 1).
 
 4. **`tool_called` doesn't mean "attempted".** Tool counts are authoritative and de-duped: a tool
    that was *requested then denied* does **not** register as called. *Fix:* don't assert `tool_called`

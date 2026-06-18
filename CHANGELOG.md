@@ -6,6 +6,59 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **`verify-run <run-dir> <scenario.yaml>`** — re-evaluate a scenario's `assert:` block against an
+  already-kept run dir with **no live agent** (no tokens, no Docker). Fixing a wrong assertion was a full live
+  re-record (~17 min); this turns it into ~1s. Reconstructs the assert context from the run's `result.json` +
+  the `run.jsonl`/`trace.json` sidecars and routes the verdict through the same path as a real record. Refuses
+  (rather than false-passing) when a filesystem assertion needs a work dir that's already torn down.
+- **`record --max-artifact-bytes <n>` / `COWORK_HARNESS_MAX_ARTIFACT_BYTES`** — override the 64 KiB
+  inline-body cap so a large structured deliverable can be inlined instead of stored hash-only. Paired with a
+  **record-time guard**: if an `artifact_json` asserts an artifact that had to be truncated, record now fails
+  (or warns under `--allow-failing`) at the cause, instead of producing a green record that goes red at replay
+  (no committed body to parse).
+- **`verify-cassettes --allow-domain` / `--allow-email` / `--allow-file`** — class-scoped privacy allows, plus
+  a version-controlled allow file (one regex per line, `#` comments).
+- **Scoped cassette-staleness fingerprint** — scenario **`skills: [<name>]`** narrows the staleness hash to the
+  named skills' dirs plus the plugin's shared roots (fail-closed to whole-tree on an unknown name); session
+  **`staleness.hash_ignore`** globs and a plugin-local **`.cowork-hashignore`** file (composed) drop
+  non-runtime paths (`tests/`, `docs/`). Default behavior is unchanged (whole-tree, byte-identical). Cassette
+  format bumped to **v2** (an older reader warns rather than mis-flagging a scoped cassette as stale).
+- **Per-subcommand `--help`** — subcommands now print a usage line and exit 0 instead of answering `--help`
+  with `unknown flag` (exit 2).
+- **Cowork identity in the system-prompt append** — the emulated agent now self-identifies as "Claude, the
+  Cowork assistant" and is told it is **not** Claude Code (verified against the installed Claude Desktop app;
+  reconstructed, not bundled).
+
+### Fixed
+
+- **Privacy allows are whole-token + class-scoped.** A bare `--allow <regex>` previously substring-matched, so a
+  domain allow (`example\.com`) silently cleared an email finding (`alice@example.com`) whose domain it matched.
+  Allows are now anchored to the whole finding token, and `--allow-domain`/`--allow-email` can't bleed across
+  classes — the email tripwire stays live.
+- **Staleness hash no longer over-fires.** A pure `plugin.json` `version` bump (and, with the new scoping knobs,
+  unrelated skills/tests/docs) no longer re-stales every cassette in a multi-skill plugin. *Upgrade note:*
+  because the hash now ignores the `plugin.json` `version` field, cassettes recorded before this release
+  recompute to a new digest and are flagged **stale once** after upgrading — re-record them
+  (`record --rerecord-stale`). The cassette format is also bumped to **v2**.
+- **`chat` is pipe/script-safe.** A piped/non-interactive stdin reaching EOF mid-turn crashed the REPL with
+  `ERR_USE_AFTER_CLOSE`; it now exits cleanly.
+- **Outputs-delete findings show the `rm` itself.** A long `VAR=…` assignment prefix used to push the operative
+  delete past the truncation; the finding now isolates and variable-resolves the delete target.
+- **Clearer record/run messaging.** The record freeze-refusal separates the run *result* from the *verdict* and
+  names the failing signal; the run log states the unscripted-question *policy* instead of reading as a failure
+  on clean runs.
+- **`sync` warns when a synced baseline lacks its host-loop prompt asset** — previously host-loop records
+  silently ran with an empty shell-access section.
+
+### Internal
+
+- Corrected the system-prompt fidelity note in `docs/boundary.md` (Cowork appends onto the `claude_code` preset
+  by default rather than replacing it).
+- Assertion docs steer content checks to `artifact_json` / stable lexical markers (not paraphrasable prose).
+- `vitest` excludes `runs/` from test discovery (ephemeral live output could crash the walk with EACCES).
+
 ## [0.4.3] — 2026-06-18
 
 ### Fixed

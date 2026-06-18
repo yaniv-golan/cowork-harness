@@ -46,6 +46,10 @@ assert:
   - transcript_contains: "action items"
   - tool_called: Write
   - egress_denied: evil.example.com
+
+skills: [report-gen]                # OPTIONAL — scope the cassette-staleness hash to these skills (each a
+                                    # `skills/<name>` dir under a mounted plugin-root) + the plugin's shared
+                                    # roots. Fail-closed to whole-tree on an unknown name. Omit = whole tree.
 ```
 
 Relative paths resolve from the file's own directory, so a scenario + session + referenced files
@@ -92,6 +96,11 @@ egress:
 # web_fetch (TEST CONVENIENCE — not a real Cowork setting)
 web_fetch:
   approved_domains: []           # pre-approve hosts for the run (per-run only; seeds Run.approvedDomains)
+
+# cassette-staleness fingerprint scope
+staleness:
+  hash_ignore: []                # gitignore-style globs (e.g. tests/, docs/, "**/*.md") excluded from the
+                                 # staleness hash; composes with a plugin-local .cowork-hashignore file
 ```
 
 **Mounting the skill under test:** put the skill folder in `plugins.local_plugins` and enable it via
@@ -296,7 +305,7 @@ at the top of this file.
    one concatenated string → use `[\s\S]`, not `.`. `transcript_matches` is case-insensitive.
 
 7. **Multi-key assertion item = AND.** Passes iff every key passes. One concern per item unless
-   conjunction is intended (and a mixed-class conjunction loses its filesystem half on replay — #1).
+   conjunction is intended (and a mixed-class conjunction loses its filesystem half on replay — gotcha 1).
 
 8. **`tool_called` proves a tool ran, not that it was attempted.** Tool counts are authoritative and
    de-duped: a requested-then-denied tool does NOT register as called; the synthetic

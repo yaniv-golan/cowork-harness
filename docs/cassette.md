@@ -26,11 +26,11 @@ Use a live `run` for filesystem/egress assertions; use `replay` for the token-fr
   "scenario": { /* Scenario object — same schema as the .yaml */ },
   "events": [ /* JSON lines from events.jsonl (child→driver stdout) */ ],
   "controlOut": [ /* JSON lines from control-out.jsonl (driver→child control_responses) */ ],
-  "artifacts": [                         // #1: snapshot of outputs/ + .projects/ (optional)
+  "artifacts": [                         // snapshot of outputs/ + .projects/ (optional)
     { "path": "outputs/x.json", "bytes": 24, "sha256": "…", "body": "{…}" }, // body inlined ≤ 64 KiB
     { "path": "outputs/big.bin", "bytes": 9e6, "sha256": "…", "truncated": true } // oversized → hash-only
   ],
-  "fingerprint": { "baseline": "1.12603.1", "skillHash": "…", "skillSources": ["…"] } // #1b staleness tripwire
+  "fingerprint": { "baseline": "1.12603.1", "skillHash": "…", "skillSources": ["…"] } // staleness tripwire
 }
 ```
 
@@ -38,7 +38,7 @@ Use a live `run` for filesystem/egress assertions; use `replay` for the token-fr
 enables full-fidelity replay (see §Full-fidelity replay below). When absent, replay falls back to
 events-only mode with a loud warning.
 
-`artifacts` (#1) and `fingerprint` (#1b) are also optional — both engage only when present, so old
+`artifacts` and `fingerprint` are also optional — both engage only when present, so old
 cassettes replay unchanged. `cassetteVersion` is the format-schema version (a monotonic integer, not
 semver): a value newer than the harness understands triggers a loud forward-compat warning.
 
@@ -92,12 +92,15 @@ Content keys are evaluated on replay; everything else is skipped.
 replay). On an old cassette without `controlOut` these three keys are excluded from evaluation — not
 vacuously passed — and a loud warning fires (see §Backward compatibility).
 
-### Filesystem assertions — replay-checkable WITH an artifact manifest (#1)
+### Filesystem assertions — replay-checkable WITH an artifact manifest
 
 `file_exists`, `user_visible_artifact`, and `artifact_json` run on replay **when the cassette carries an
 `artifacts` manifest** — `record` snapshots `outputs/`/`.projects/` and `replay` materializes that snapshot
 to evaluate them token-free. `artifact_json` needs the JSON `body` inlined (small files); a hash-only
-(`truncated`) entry still satisfies `file_exists` but not `artifact_json`. Without a manifest (older
+(`truncated`) entry still satisfies `file_exists` but not `artifact_json`. The inline cap is 64 KiB; raise it
+with `record --max-artifact-bytes <n>` (or `COWORK_HARNESS_MAX_ARTIFACT_BYTES`) so a large structured deliverable
+stays replay-checkable, and `record` fails fast if an `artifact_json` targets an artifact it had to truncate (that
+would pass at record but fail at replay). Without a manifest (older
 cassettes), these are skipped. A green replay re-confirms *record-time* artifacts, **not** that the current
 skill still produces them — `replay --strict` fails the run when the `fingerprint` shows the skill/baseline
 drifted.
@@ -226,15 +229,18 @@ counts) — committed PII surface. Two layers, distinct from secret-scrub (which
   names (`claude.ai Gmail`, …) — environment boilerplate a regex can't tell apart from customer data, and the
   sole concentrated source of false positives. They are excluded **as a unit**, not by domain — but `email`
   still scans them (the registry's `account` field can carry the developer's own email). `--allow <regex>`
-  suppresses synthetic / public reference names (e.g. `NVCA`, `Cooley GO`, `Acme`); multi-word proper names
-  are **not** a default class (too noisy). `verify-cassettes` also runs the **staleness** check
+  suppresses synthetic / public reference names (e.g. `NVCA`, `Cooley GO`, `Acme`); each allow must match the
+  **whole** finding token (so a bare-domain allow no longer silently clears an email whose domain it matches), and
+  `--allow-domain` / `--allow-email` scope an allow to a single finding class, while `--allow-file <path>` loads
+  allows from a version-controlled file (one regex per line, `#` comments). Multi-word proper names are **not** a
+  default class (too noisy). `verify-cassettes` also runs the **staleness** check
   (`--staleness-only`): a drifted `skillHash` (you edited the skill but didn't re-record) fails the gate.
   The `skillHash` hard-excludes only what is UNIVERSALLY non-runtime — recorded cassettes (`*.cassette.json`,
   by extension, so writing a cassette under the hashed tree doesn't self-invalidate the fingerprint it just
   recorded), VCS/cache dirs (`.git`, `node_modules`, `__pycache__`, …), and the `version` field of a
   `.claude-plugin/plugin.json` manifest (a pure version bump is metadata; mcpServers/hooks/deps still count).
 
-  **Scoping the hash to what changed (F-6).** Two consumer-declared knobs narrow the hash so an unrelated
+  **Scoping the hash to what changed.** Two consumer-declared knobs narrow the hash so an unrelated
   edit doesn't re-stale every cassette in a multi-skill plugin:
   - **`skills: [<name>, …]`** on a *scenario* — hash only those skills' `skills/<name>/` dirs plus the
     plugin's shared roots (everything not under `skills/<x>/`). Fail-closed: an unknown skill name falls back
