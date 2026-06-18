@@ -143,10 +143,23 @@ export async function cmdChat(args: string[]) {
 /** Async generator of user turns read from the TTY until EOF / `/exit`. Uses the caller's shared
  *  readline interface (the same one PromptDecider prompts gates on) — cmdChat owns its lifetime. */
 async function* ttyTurns(rl: readline.Interface): AsyncGenerator<string> {
+  // Track EOF once: with a piped/non-interactive stdin the interface can `close` while a turn is
+  // still being processed, so the NEXT ask() must not call rl.question() on a closed interface
+  // (that throws ERR_USE_AFTER_CLOSE). The per-turn close listener is removed when a line arrives
+  // so listeners don't accumulate across a long interactive session.
+  let closed = false;
+  rl.once("close", () => {
+    closed = true;
+  });
   const ask = () =>
     new Promise<string | null>((res) => {
-      rl.question("\nyou> ", (a) => res(a));
-      rl.once("close", () => res(null));
+      if (closed) return res(null);
+      const onClose = () => res(null);
+      rl.question("\nyou> ", (a) => {
+        rl.removeListener("close", onClose);
+        res(a);
+      });
+      rl.once("close", onClose);
     });
   while (true) {
     const line = await ask();
