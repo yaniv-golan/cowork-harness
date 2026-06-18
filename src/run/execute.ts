@@ -743,7 +743,8 @@ export function parseDialogTimeout(raw: string): number | undefined {
   if (String(n) !== s) throw new Error(`cowork-harness: COWORK_HARNESS_DIALOG_TIMEOUT_MS=${raw.trim()} must be an integer (no decimals)`);
   if (n <= 0) throw new Error(`cowork-harness: COWORK_HARNESS_DIALOG_TIMEOUT_MS=${raw.trim()} must be > 0`);
   const MAX_MS = 3_600_000;
-  if (n > MAX_MS) throw new Error(`cowork-harness: COWORK_HARNESS_DIALOG_TIMEOUT_MS=${raw.trim()} exceeds maximum of ${MAX_MS} ms (1 hour)`);
+  if (n > MAX_MS)
+    throw new Error(`cowork-harness: COWORK_HARNESS_DIALOG_TIMEOUT_MS=${raw.trim()} exceeds maximum of ${MAX_MS} ms (1 hour)`);
   return n;
 }
 
@@ -779,9 +780,7 @@ export function readSessionManifest(path: string, sessionId: string): string {
   // stale manifest cannot resume the wrong native agent conversation. Legacy manifests without a
   // sessionId field are allowed through for backward compatibility.
   if (parsed?.sessionId !== undefined && sessionId && parsed.sessionId !== sessionId) {
-    throw new Error(
-      `cowork-harness: manifest session ID mismatch: manifest has ${parsed.sessionId}, expected ${sessionId}`,
-    );
+    throw new Error(`cowork-harness: manifest session ID mismatch: manifest has ${parsed.sessionId}, expected ${sessionId}`);
   }
   const id = parsed?.agentSessionId;
   if (typeof id !== "string" || !id) {

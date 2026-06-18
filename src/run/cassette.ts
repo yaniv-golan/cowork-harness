@@ -220,7 +220,11 @@ export function buildFingerprint(
   }
   // Store skillSources RELATIVE to the session-file dir — diagnostics only (the replay recompute re-derives
   // the dirs from the session), so a relative path is enough and never leaks an absolute `/Users/...` path.
-  const fp: Fingerprint = { baseline: baselineAppVersion, skillHash: hashResult.hash, skillSources: dirs.sort().map((d) => relative(baseDir, d)) };
+  const fp: Fingerprint = {
+    baseline: baselineAppVersion,
+    skillHash: hashResult.hash,
+    skillSources: dirs.sort().map((d) => relative(baseDir, d)),
+  };
   if (scopeSkills && scopeSkills.length) fp.skillScope = [...scopeSkills].sort();
   // G-4: for scoped cassettes, store the shared-root hash separately so checkStaleness can name
   // the changed bucket (skill vs shared root) at verify time.
@@ -963,7 +967,9 @@ export async function cmdReplay(args: string[]) {
   }
   // §8.1: reject ambiguous invocation — both positional and --cassette given. Positional is canonical.
   if (p.options["--cassette"] !== undefined && p.positionals.length > 0) {
-    log("replay: provide the cassette path as a positional OR via --cassette, not both.\n       --cassette is a legacy alias; prefer: replay <file.cassette.json>");
+    log(
+      "replay: provide the cassette path as a positional OR via --cassette, not both.\n       --cassette is a legacy alias; prefer: replay <file.cassette.json>",
+    );
     return process.exit(2);
   }
   const target = p.positionals[0] ?? p.options["--cassette"];
@@ -1236,14 +1242,22 @@ export async function replayCassette(
     const ALL_CLASSIFICATION_KEYS = new Set<keyof Assertion>([
       ...alwaysContentKeys,
       ...questionGateKeys,
-      "file_exists", "user_visible_artifact", "artifact_json",
-      "egress_denied", "egress_allowed", "no_delete_in_outputs", "self_heal_ran", "transcript_no_host_path",
+      "file_exists",
+      "user_visible_artifact",
+      "artifact_json",
+      "egress_denied",
+      "egress_allowed",
+      "no_delete_in_outputs",
+      "self_heal_ran",
+      "transcript_no_host_path",
       "replay_protocol_fidelity",
       "allow_l0_plugin_divergence",
     ]);
     for (const key of Object.keys(AssertionSchema.shape) as (keyof Assertion)[]) {
       if (!ALL_CLASSIFICATION_KEYS.has(key))
-        throw new Error(`cowork-harness: assertion key "${String(key)}" is not classified for replay — add it to one of the classification buckets in replayCassette`);
+        throw new Error(
+          `cowork-harness: assertion key "${String(key)}" is not classified for replay — add it to one of the classification buckets in replayCassette`,
+        );
     }
   }
   const { workRoot: replayWorkRoot, prefixes: replayPrefixes } = manifestKeys.length

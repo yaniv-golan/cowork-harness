@@ -53,9 +53,7 @@ export function renderPrompts(baseline: PlatformBaseline, session: SessionConfig
         fidelityWarnings.push(msg); // #49: surface to JSON callers via RunResult.fidelityWarnings
         return undefined;
       }
-      throw new Error(
-        `cowork-harness: missing prompt asset: ${p}. Set COWORK_HARNESS_ALLOW_MISSING_PROMPT=1 to skip.`,
-      );
+      throw new Error(`cowork-harness: missing prompt asset: ${p}. Set COWORK_HARNESS_ALLOW_MISSING_PROMPT=1 to skip.`);
     }
     return subst(stripComments(readFileSync(p, "utf8"))).trim();
   };

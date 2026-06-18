@@ -139,9 +139,7 @@ function hostLoopShellSection(vmMnt: string, appVersion: string): string {
       );
       return "";
     }
-    throw new Error(
-      `cowork-harness: missing host-loop shell prompt asset: ${dir}. Set COWORK_HARNESS_ALLOW_MISSING_PROMPT=1 to skip.`,
-    );
+    throw new Error(`cowork-harness: missing host-loop shell prompt asset: ${dir}. Set COWORK_HARNESS_ALLOW_MISSING_PROMPT=1 to skip.`);
   }
   return content
     .replace(/<!--[\s\S]*?-->/g, "")

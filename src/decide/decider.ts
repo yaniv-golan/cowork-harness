@@ -416,7 +416,9 @@ export class PromptDecider implements Decider {
           const raw = await this.ask(optionList);
           coerced = coerceLabel(raw, optionLabels);
           if (!coerced.matched)
-            process.stderr.write(`Unrecognized input. Please enter a number (1–${optionLabels.length}) or one of: ${optionLabels.join(", ")}\n`);
+            process.stderr.write(
+              `Unrecognized input. Please enter a number (1–${optionLabels.length}) or one of: ${optionLabels.join(", ")}\n`,
+            );
         } while (!coerced.matched);
         answers[text] = coerced.value;
       }

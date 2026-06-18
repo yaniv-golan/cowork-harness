@@ -239,5 +239,7 @@ export function hashSkillDirs(dirs: string[], scopeSkills?: string[], sessionIgn
     hashDir(d, hash, "", accept);
   }
   const scoped = keep !== null;
-  return scoped ? { hash: hash.digest("hex"), scoped: true } : { hash: hash.digest("hex"), scoped: false, ...(missedSkills ? { missedSkills } : {}) };
+  return scoped
+    ? { hash: hash.digest("hex"), scoped: true }
+    : { hash: hash.digest("hex"), scoped: false, ...(missedSkills ? { missedSkills } : {}) };
 }

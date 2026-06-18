@@ -517,8 +517,7 @@ function takeCommonFlags(args: string[]): { rest: string[]; flags: CommonFlags }
       if (v.startsWith("-"))
         fail("skill", "usage", `--decider-dir: missing value (got flag-looking "${v}")`, undefined, flags.output === "json");
       flags.deciderDir = v;
-    }
-    else rest.push(a);
+    } else rest.push(a);
   }
   return { rest, flags };
 }
@@ -764,8 +763,15 @@ async function cmdSkill(rawArgs: string[]) {
   const envFidelity = process.env.COWORK_HARNESS_FIDELITY;
   const FID_VALUES = ["protocol", "container", "microvm", "hostloop", "cowork"];
   if (envFidelity && !FID_VALUES.includes(envFidelity))
-    fail("skill", "usage", `COWORK_HARNESS_FIDELITY must be one of ${FID_VALUES.join("|")} (got "${envFidelity}")`, undefined, flags.output === "json");
-  let fidelity: "protocol" | "container" | "microvm" | "hostloop" | "cowork" = (envFidelity as "protocol" | "container" | "microvm" | "hostloop" | "cowork" | undefined) ?? "container";
+    fail(
+      "skill",
+      "usage",
+      `COWORK_HARNESS_FIDELITY must be one of ${FID_VALUES.join("|")} (got "${envFidelity}")`,
+      undefined,
+      flags.output === "json",
+    );
+  let fidelity: "protocol" | "container" | "microvm" | "hostloop" | "cowork" =
+    (envFidelity as "protocol" | "container" | "microvm" | "hostloop" | "cowork" | undefined) ?? "container";
   let model: string | undefined = process.env.COWORK_HARNESS_MODEL;
   let promptFile: string | undefined;
   let sessionId: string | undefined;
@@ -880,7 +886,7 @@ async function cmdSkill(rawArgs: string[]) {
   // policy below; the bare `--on-unanswered llm` CLI flag is rejected at resolvePolicy). (Issue 2)
   const useLlm = deciderLlm;
   // Resolve external channel for validation (we pass flags, which have deciderCmd/deciderDir)
-  const externalChannelForValidation = (flags.deciderDir != null || flags.deciderCmd != null);
+  const externalChannelForValidation = flags.deciderDir != null || flags.deciderCmd != null;
   if (useLlm && externalChannelForValidation)
     fail("skill", "usage", "--decider-llm conflicts with --decider-cmd/--decider-dir (two terminals).", undefined, isJson);
   // --intent only feeds the LLM decider; without --decider-llm it is silently ignored.
@@ -967,10 +973,10 @@ async function cmdSkill(rawArgs: string[]) {
 }
 
 const VM_SUB_HELP: Record<string, string> = {
-  init:   "usage: vm init [<baseline>] [--output-format text|json]   — create the L2 Apple-VZ microVM",
+  init: "usage: vm init [<baseline>] [--output-format text|json]   — create the L2 Apple-VZ microVM",
   status: "usage: vm status [<baseline>] [--output-format text|json] — show running VM state",
   delete: "usage: vm delete [<baseline>] [--output-format text|json] — remove the named VM",
-  prune:  "usage: vm prune [<baseline>] [--output-format text|json]  — drop all orphaned VMs except the current one",
+  prune: "usage: vm prune [<baseline>] [--output-format text|json]  — drop all orphaned VMs except the current one",
 };
 
 function cmdVm(args: string[]) {
@@ -1277,18 +1283,22 @@ async function cmdDecide(args: string[]) {
     else if (a === "--decider-dir") {
       const v = args[i + 1];
       if (v === undefined || v.startsWith("-"))
-        fail("decide", "usage", `--decider-dir: missing value (got ${v === undefined ? "nothing" : `flag-looking "${v}"`})`, undefined, json);
+        fail(
+          "decide",
+          "usage",
+          `--decider-dir: missing value (got ${v === undefined ? "nothing" : `flag-looking "${v}"`})`,
+          undefined,
+          json,
+        );
       i++;
-    }
-    else if (a === "--quiet" || a === "-q" || a === "--verbose" || a === "-V") {
+    } else if (a === "--quiet" || a === "-q" || a === "--verbose" || a === "-V") {
       /* accepted but currently a no-op in decide — wired for flag consistency (§2.1) */
     }
     // an unrecognized `--`-prefixed token used to be silently ignored (the loop had no else).
     else if (a.startsWith("--") && a !== "--output-format=json" && a !== "--output-format=text")
       fail("decide", "usage", `unknown flag: ${a}`, undefined, json);
     // single-dash flags other than -q/-V are unknown; reject them explicitly (don't silently swallow -x etc.)
-    else if (a.startsWith("-"))
-      fail("decide", "usage", `unknown flag: ${a}`, undefined, json);
+    else if (a.startsWith("-")) fail("decide", "usage", `unknown flag: ${a}`, undefined, json);
     // decide takes NO positionals (the sample question comes from --question, not a positional).
     else fail("decide", "usage", `decide takes no positional arguments (got: ${a})`, undefined, json);
   }
@@ -1420,8 +1430,7 @@ function cmdAnswer(args: string[]) {
     else if (a === "--choose") {
       // Bug 11: reject repeated --choose (only one allowed)
       chooseCount++;
-      if (chooseCount > 1)
-        return void fail("answer", "usage", "--choose may only be specified once", undefined, json);
+      if (chooseCount > 1) return void fail("answer", "usage", "--choose may only be specified once", undefined, json);
       choose = flagValue(args, i++, a);
     } else if (a === "--answer") {
       const [q, label] = splitEq(flagValue(args, i++, a));
@@ -1700,8 +1709,7 @@ function cmdTrace(args: string[]) {
   // R8: --view tools|questions|dispatches replaces the three boolean flags. Legacy flags kept as aliases.
   const viewIdx = args.indexOf("--view");
   const viewEqMatch = args.find((a) => a.startsWith("--view="));
-  let viewArg: string | undefined =
-    viewEqMatch ? viewEqMatch.slice("--view=".length) : viewIdx >= 0 ? args[viewIdx + 1] : undefined;
+  let viewArg: string | undefined = viewEqMatch ? viewEqMatch.slice("--view=".length) : viewIdx >= 0 ? args[viewIdx + 1] : undefined;
 
   const VIEWS = ["tools", "questions", "dispatches"] as const;
   type View = (typeof VIEWS)[number];
@@ -1718,8 +1726,7 @@ function cmdTrace(args: string[]) {
   const legacyCount = [legacyTools, legacyGates, legacyDispatches].filter(Boolean).length;
   if (viewArg !== undefined && legacyCount > 0)
     fail("trace", "usage", "--view and legacy flags (--tools/--gates/--dispatches) are mutually exclusive", undefined, json);
-  if (legacyCount > 1)
-    fail("trace", "usage", "trace --tools/--gates/--dispatches are mutually exclusive (prefer --view)", undefined, json);
+  if (legacyCount > 1) fail("trace", "usage", "trace --tools/--gates/--dispatches are mutually exclusive (prefer --view)", undefined, json);
   if (legacyTools) viewArg = "tools";
   if (legacyGates) viewArg = "questions";
   if (legacyDispatches) viewArg = "dispatches";

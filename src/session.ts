@@ -326,16 +326,12 @@ export function buildLaunchPlan(session: SessionConfig, baseline: PlatformBaseli
       if (entry.source !== undefined) {
         const rel = relative(mkRoot, pluginSrc);
         if (rel.startsWith("..") || isAbsolute(rel))
-          throw new Error(
-            `cowork-harness: marketplace entry.source "${entry.source}" escapes the marketplace root`,
-          );
+          throw new Error(`cowork-harness: marketplace entry.source "${entry.source}" escapes the marketplace root`);
       }
       if (!existsSync(pluginSrc)) continue; // unresolved here; post-loop reconciliation decides whether to throw
       // Bug 22: marketplace plugin sources must be directories (same kind-check as local_plugins / remote_plugins).
       if (!statSync(pluginSrc).isDirectory())
-        throw new Error(
-          `cowork-harness: marketplace entry.source "${entry.source ?? `./${pName}`}" is not a directory`,
-        );
+        throw new Error(`cowork-harness: marketplace entry.source "${entry.source ?? `./${pName}`}" is not a directory`);
       // A bare `enabled` name (no @marketplace) matches EVERY marketplace defining it → duplicate mounts.
       // Dedupe bare names only; a qualified `foo@mkt` is already pinned to one marketplace by the guard above.
       if (!pMkt) {

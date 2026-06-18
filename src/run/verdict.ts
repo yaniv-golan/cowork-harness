@@ -1,7 +1,14 @@
 import type { RunResult } from "../types.js";
 
 export interface VerdictSignal {
-  code: "assertion" | "result_error" | "permissive_auto_allow" | "outputs_delete" | "host_path_leak" | "non_deterministic" | "l0_plugin_divergence";
+  code:
+    | "assertion"
+    | "result_error"
+    | "permissive_auto_allow"
+    | "outputs_delete"
+    | "host_path_leak"
+    | "non_deterministic"
+    | "l0_plugin_divergence";
   severity: "fail" | "warn";
   message: string;
 }

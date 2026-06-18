@@ -31,7 +31,10 @@ function normAllow(a: AllowInput): AllowPattern {
 export const DEFAULT_SCAN_PATTERNS: { re: RegExp; cls: string }[] = [
   { re: /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/gi, cls: "email" },
   { re: /\$\s?\d[\d,]*(?:\.\d+)?\s?(?:k|m|b|bn|million|billion)?/gi, cls: "currency" },
-  { re: /\b[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.(?:com|io|net|org|co|app|ai|dev|xyz|vc|fund|capital|tech|cloud|health|finance|us|uk|de|fr|ca|au|me|tv|info|biz|edu|gov|mil)\b/gi, cls: "domain" },
+  {
+    re: /\b[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.(?:com|io|net|org|co|app|ai|dev|xyz|vc|fund|capital|tech|cloud|health|finance|us|uk|de|fr|ca|au|me|tv|info|biz|edu|gov|mil)\b/gi,
+    cls: "domain",
+  },
 ];
 
 /** The high-precision subset (email only). `email` is scanned UNIVERSALLY — even on the agent
