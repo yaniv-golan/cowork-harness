@@ -56,6 +56,7 @@ interface Fingerprint {
   baseline: string; // appVersion at record time
   skillHash?: string; // hash of the session's local skill/plugin/marketplace dir contents (if any)
   skillSources?: string[]; // the local dirs that fed skillHash (for the replay recompute + diagnostics)
+  skillScope?: string[]; // F-6: the skills the hash was scoped to (empty/absent = whole-tree); diagnostics
 }
 
 interface Cassette {
@@ -159,10 +160,10 @@ export function materializeManifest(entries: ManifestEntry[]): { workRoot: strin
 /** #1b: the local skill/plugin/marketplace source dirs a session mounts — the "skill dir" hash unit.
  *  Returns ABSOLUTE dirs (for hashing/reading) plus `baseDir`, the session-file dir the relative
  *  `skillSources` are stored against (so the committed fingerprint carries no absolute host path — C1). */
-function skillSourceDirs(sessionPath: string, cassetteDir?: string): { dirs: string[]; baseDir: string } {
+function skillSourceDirs(sessionPath: string, cassetteDir?: string): { dirs: string[]; baseDir: string; hashIgnore: string[] } {
   const resolved = cassetteDir && !isAbsolute(sessionPath) ? join(cassetteDir, sessionPath) : sessionPath;
   const baseDir = dirname(resolved);
-  if (sessionPath === "(inline)" || !existsSync(resolved)) return { dirs: [], baseDir };
+  if (sessionPath === "(inline)" || !existsSync(resolved)) return { dirs: [], baseDir, hashIgnore: [] };
   let cfg;
   try {
     // Mirror loadSessionFromFile (execute.ts): parse the YAML, then RESOLVE its relative skill/plugin
@@ -172,23 +173,33 @@ function skillSourceDirs(sessionPath: string, cassetteDir?: string): { dirs: str
     // silently never computed.
     cfg = resolveSessionPaths(loadSession(parseSessionFile(resolved)), baseDir);
   } catch {
-    return { dirs: [], baseDir };
+    return { dirs: [], baseDir, hashIgnore: [] };
   }
   const dirs = [...cfg.skills.local, ...cfg.plugins.local_plugins, ...cfg.plugins.remote_plugins, ...cfg.plugins.local_marketplaces].filter(
     (d) => existsSync(d),
   );
-  return { dirs, baseDir };
+  // F-6: session-declared ignore globs (added to any plugin-local .cowork-hashignore inside hashSkillDirs).
+  return { dirs, baseDir, hashIgnore: cfg.staleness.hash_ignore };
 }
 
-export function buildFingerprint(sessionPath: string, baselineAppVersion: string, cassetteDir?: string): Fingerprint {
-  const { dirs, baseDir } = skillSourceDirs(sessionPath, cassetteDir);
+export function buildFingerprint(
+  sessionPath: string,
+  baselineAppVersion: string,
+  cassetteDir?: string,
+  scopeSkills?: string[],
+): Fingerprint {
+  const { dirs, baseDir, hashIgnore } = skillSourceDirs(sessionPath, cassetteDir);
   if (dirs.length === 0) return { baseline: baselineAppVersion };
   // hashSkillDirs excludes recorded cassettes (*.cassette.json) + VCS/cache dirs so a committed cassette
-  // and unrelated VCS noise don't self-invalidate the fingerprint they were recorded under.
-  const skillHash = hashSkillDirs(dirs);
+  // and unrelated VCS noise don't self-invalidate the fingerprint they were recorded under. F-6: when
+  // scopeSkills is set, the hash is scoped to those skills' dirs + the plugin's shared roots (fail-closed);
+  // hashIgnore (session globs + each mount's .cowork-hashignore) drops consumer-declared non-runtime paths.
+  const skillHash = hashSkillDirs(dirs, scopeSkills, hashIgnore);
   // Store skillSources RELATIVE to the session-file dir — diagnostics only (the replay recompute re-derives
   // the dirs from the session), so a relative path is enough and never leaks an absolute `/Users/...` path.
-  return { baseline: baselineAppVersion, skillHash, skillSources: dirs.sort().map((d) => relative(baseDir, d)) };
+  const fp: Fingerprint = { baseline: baselineAppVersion, skillHash, skillSources: dirs.sort().map((d) => relative(baseDir, d)) };
+  if (scopeSkills && scopeSkills.length) fp.skillScope = [...scopeSkills].sort();
+  return fp;
 }
 
 /** A2: scan the WHOLE cassette surface for PII (default classes: email/currency/domain). A `truncated`
@@ -260,7 +271,7 @@ export function checkStaleness(cassette: Cassette, cassetteDir: string): string[
     );
   else if (liveBaseline !== fp.baseline) msgs.push(`baseline moved ${fp.baseline} → ${liveBaseline} since record — re-record`);
   if (fp.skillHash) {
-    const live = buildFingerprint(cassette.scenario.session, fp.baseline, cassetteDir);
+    const live = buildFingerprint(cassette.scenario.session, fp.baseline, cassetteDir, cassette.scenario.skills);
     if (live.skillHash === undefined)
       msgs.push("skill dirs not resolvable from the cassette location — cannot verify staleness (gate fails: can't verify ⇒ not green)");
     else if (live.skillHash !== fp.skillHash) msgs.push("local skill/plugin dir contents changed since record — re-record");
@@ -737,7 +748,7 @@ async function recordScenarioObject(
     controlOut: safeLines(join(result.outDir, "control-out.jsonl")),
     effectiveFidelity: result.effectiveFidelity,
     artifacts,
-    fingerprint: buildFingerprint(scenario.session, result.baseline),
+    fingerprint: buildFingerprint(scenario.session, result.baseline, undefined, scenario.skills),
   };
   // A1 (opt-in) content redaction over the whole surface (C1). Empty policy → no-op. Non-empty → must be
   // VERDICT-PRESERVING (A3): replay both and refuse to write on divergence (a manufactured green).
@@ -963,7 +974,7 @@ export async function replayCassette(
     if (liveBaseline && liveBaseline !== fp.baseline)
       staleness.push(`baseline moved ${fp.baseline} → ${liveBaseline} since record — re-record before trusting this replay`);
     if (fp.skillHash) {
-      const live = buildFingerprint(cassette.scenario.session, fp.baseline, opts.cassetteDir);
+      const live = buildFingerprint(cassette.scenario.session, fp.baseline, opts.cassetteDir, cassette.scenario.skills);
       if (live.skillHash === undefined)
         warn(
           "::warning:: [replay] skill fingerprint not re-checkable (local skill dirs not resolvable from this cassette location) — baseline check still applies\n",

@@ -55,6 +55,18 @@ web_fetch:
                                  # Cowork has no persistent pre-approval. A web_fetch to a listed host
                                  # raises no approval gate. (web_fetch's real gate is the URL provenance
                                  # set, seeded from URLs you put in the prompt — see boundary.md.)
+
+# ── staleness fingerprint scope (F-6) ───────────────────────────────────────────
+staleness:
+  hash_ignore: []                # gitignore-style globs (matched against each mounted skill/plugin dir's
+                                 # root-relative path) for paths that DON'T affect recorded behavior —
+                                 # e.g. [tests/, docs/, "**/*.md"]. The cassette-staleness hash skips them,
+                                 # so editing them no longer re-stales cassettes. The harness only hard-
+                                 # excludes universally-non-runtime paths (VCS/caches/cassettes + the
+                                 # plugin.json `version` field); a plugin's own runtime boundary is yours
+                                 # to declare here. Composes with a plugin-local `.cowork-hashignore` file
+                                 # at the mount root. (For per-skill scoping in a multi-skill plugin, set
+                                 # `skills: [<name>]` on the SCENARIO — see scenario.md / cassette.md.)
 ```
 
 ## Field reference

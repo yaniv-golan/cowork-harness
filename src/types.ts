@@ -196,6 +196,13 @@ export const ScenarioObject = z
     on_unanswered: z.enum(["fail", "prompt", "llm", "first"]).optional(),
     expect_denied: z.array(z.string()).default([]), // shorthand: egress hosts asserted to be DENIED (one egress_denied assertion per host)
     assert: z.array(Assertion).default([]),
+    // F-6 (opt-in): scope the skill-staleness hash to the skill(s) this scenario actually exercises, named by
+    // their `skills/<name>` dir under a mounted plugin-root. Empty/omitted = hash the WHOLE mounted tree (the
+    // default — so an unrelated skill edit re-stales every cassette). When set, only the named skill dirs plus
+    // the plugin's SHARED roots (everything not under `skills/<x>/`) feed the hash, so editing one skill
+    // re-stales only its own cassettes. Fail-closed: if any named skill is absent, the whole tree is hashed
+    // (a typo can't silently narrow the gate).
+    skills: z.array(z.string()).default([]),
   })
   .strict();
 // Back-compat (one minor): accept the deprecated top-level `profile:` key as an alias for `baseline:`,

@@ -1,0 +1,176 @@
+import { describe, it, expect } from "vitest";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { hashSkillDirs, compileIgnore } from "../src/run/skill-hash.js";
+
+/** A plugin-root with two skills + shared roots (scripts/, .claude-plugin/plugin.json) — the founder-skills
+ *  shape that F-6 scoping targets. */
+function pluginRoot(): string {
+  const d = mkdtempSync(join(tmpdir(), "plugin-"));
+  mkdirSync(join(d, "skills", "alpha"), { recursive: true });
+  mkdirSync(join(d, "skills", "beta"), { recursive: true });
+  mkdirSync(join(d, "scripts"), { recursive: true });
+  mkdirSync(join(d, ".claude-plugin"), { recursive: true });
+  writeFileSync(join(d, "skills", "alpha", "SKILL.md"), "# alpha v1\n");
+  writeFileSync(join(d, "skills", "beta", "SKILL.md"), "# beta v1\n");
+  writeFileSync(join(d, "scripts", "shared.py"), "x = 1\n");
+  writeFileSync(join(d, ".claude-plugin", "plugin.json"), '{"name":"p","version":"1"}');
+  return d;
+}
+
+describe("F-6: scoped skill hashing", () => {
+  it("default (no scope) is byte-identical to an explicitly-empty scope (whole tree)", () => {
+    const d = pluginRoot();
+    expect(hashSkillDirs([d])).toBe(hashSkillDirs([d], []));
+  });
+
+  it("whole-tree (default) re-stales on ANY skill edit — the F-6 problem it fixes when scoped", () => {
+    const d = pluginRoot();
+    const before = hashSkillDirs([d]);
+    writeFileSync(join(d, "skills", "beta", "SKILL.md"), "# beta v2\n");
+    expect(hashSkillDirs([d])).not.toBe(before); // unrelated skill edit changes the whole-tree hash
+  });
+
+  it("scoped to [alpha]: editing an UNLISTED skill does NOT change the hash", () => {
+    const d = pluginRoot();
+    const before = hashSkillDirs([d], ["alpha"]);
+    writeFileSync(join(d, "skills", "beta", "SKILL.md"), "# beta v2 (unrelated)\n");
+    expect(hashSkillDirs([d], ["alpha"])).toBe(before); // beta is out of scope
+  });
+
+  it("scoped to [alpha]: editing the LISTED skill DOES change the hash", () => {
+    const d = pluginRoot();
+    const before = hashSkillDirs([d], ["alpha"]);
+    writeFileSync(join(d, "skills", "alpha", "SKILL.md"), "# alpha v2\n");
+    expect(hashSkillDirs([d], ["alpha"])).not.toBe(before);
+  });
+
+  it("scoped to [alpha]: editing a SHARED root STILL changes the hash (no false-fresh)", () => {
+    const d = pluginRoot();
+    const before = hashSkillDirs([d], ["alpha"]);
+    writeFileSync(join(d, "scripts", "shared.py"), "x = 2\n");
+    expect(hashSkillDirs([d], ["alpha"])).not.toBe(before);
+    const before2 = hashSkillDirs([d], ["alpha"]);
+    // a NON-version plugin.json change (version bumps are exempt — covered separately below)
+    writeFileSync(join(d, ".claude-plugin", "plugin.json"), '{"name":"renamed","version":"1"}');
+    expect(hashSkillDirs([d], ["alpha"])).not.toBe(before2);
+  });
+
+  it("fail-closed: a typo'd/absent skill name falls back to whole-tree (no silent narrowing)", () => {
+    const d = pluginRoot();
+    const scoped = hashSkillDirs([d], ["typo-not-a-skill"]);
+    expect(scoped).toBe(hashSkillDirs([d])); // == whole-tree
+    // and because it's whole-tree, an unrelated skill edit DOES re-stale (gate stays safe)
+    writeFileSync(join(d, "skills", "beta", "SKILL.md"), "# beta v2\n");
+    expect(hashSkillDirs([d], ["typo-not-a-skill"])).not.toBe(scoped);
+  });
+
+  it("a root WITHOUT a top-level skills/ (individual mount) hashes whole even when scoped", () => {
+    const d = mkdtempSync(join(tmpdir(), "indiv-"));
+    writeFileSync(join(d, "SKILL.md"), "# standalone\n");
+    expect(hashSkillDirs([d], ["alpha"])).toBe(hashSkillDirs([d])); // structural rule degenerates safely
+  });
+
+  it("a plugin.json VERSION bump alone does NOT change the hash (metadata, no behavior impact)", () => {
+    const d = pluginRoot();
+    const before = hashSkillDirs([d]);
+    writeFileSync(join(d, ".claude-plugin", "plugin.json"), '{"name":"p","version":"9.9.9"}');
+    expect(hashSkillDirs([d])).toBe(before); // version bump is ignored
+  });
+
+  it("a plugin.json change OTHER than version STILL changes the hash (behavior-bearing fields count)", () => {
+    const d = pluginRoot();
+    const before = hashSkillDirs([d]);
+    writeFileSync(join(d, ".claude-plugin", "plugin.json"), '{"name":"p","version":"1","mcpServers":{"x":{}}}');
+    expect(hashSkillDirs([d])).not.toBe(before); // adding mcpServers re-stales
+  });
+
+  it("the version-bump exemption holds under scoping too (plugin.json is a shared root)", () => {
+    const d = pluginRoot();
+    const before = hashSkillDirs([d], ["alpha"]);
+    writeFileSync(join(d, ".claude-plugin", "plugin.json"), '{"name":"p","version":"2.0.0"}');
+    expect(hashSkillDirs([d], ["alpha"])).toBe(before);
+  });
+});
+
+describe("F-6: consumer-declared hash_ignore (session globs + plugin-local .cowork-hashignore)", () => {
+  it("a session-level ignore glob drops a non-runtime dir from the hash", () => {
+    const d = pluginRoot();
+    mkdirSync(join(d, "tests"), { recursive: true });
+    writeFileSync(join(d, "tests", "test_x.py"), "x = 1\n");
+    const before = hashSkillDirs([d], undefined, ["tests/"]);
+    writeFileSync(join(d, "tests", "test_x.py"), "x = 2\n");
+    expect(hashSkillDirs([d], undefined, ["tests/"])).toBe(before); // tests/ edit ignored
+    // ...but a runtime file still re-stales even with tests/ ignored
+    const before2 = hashSkillDirs([d], undefined, ["tests/"]);
+    writeFileSync(join(d, "skills", "alpha", "SKILL.md"), "# alpha v2\n");
+    expect(hashSkillDirs([d], undefined, ["tests/"])).not.toBe(before2);
+  });
+
+  it("a plugin-local .cowork-hashignore is honored, and the ignore file itself is not hashed", () => {
+    const d = pluginRoot();
+    mkdirSync(join(d, "docs"), { recursive: true });
+    writeFileSync(join(d, "docs", "guide.md"), "v1\n");
+    writeFileSync(join(d, ".cowork-hashignore"), "# non-runtime\ndocs/\n");
+    const before = hashSkillDirs([d]);
+    writeFileSync(join(d, "docs", "guide.md"), "v2 — docs changed\n");
+    expect(hashSkillDirs([d])).toBe(before); // docs/ ignored via the plugin-local file
+    // editing the ignore file itself does not change the hash (it's harness metadata, not hashed)
+    writeFileSync(join(d, ".cowork-hashignore"), "# non-runtime\ndocs/\n# touched\n");
+    expect(hashSkillDirs([d])).toBe(before);
+  });
+
+  it("session globs and the plugin-local file COMPOSE (union)", () => {
+    const d = pluginRoot();
+    mkdirSync(join(d, "tests"), { recursive: true });
+    mkdirSync(join(d, "docs"), { recursive: true });
+    writeFileSync(join(d, "tests", "t.py"), "1\n");
+    writeFileSync(join(d, "docs", "d.md"), "1\n");
+    writeFileSync(join(d, ".cowork-hashignore"), "docs/\n");
+    const before = hashSkillDirs([d], undefined, ["tests/"]);
+    writeFileSync(join(d, "tests", "t.py"), "2\n"); // ignored via session glob
+    writeFileSync(join(d, "docs", "d.md"), "2\n"); // ignored via plugin-local file
+    expect(hashSkillDirs([d], undefined, ["tests/"])).toBe(before);
+  });
+
+  it("ignore composes with skill scoping", () => {
+    const d = pluginRoot();
+    mkdirSync(join(d, "skills", "alpha", "tests"), { recursive: true });
+    writeFileSync(join(d, "skills", "alpha", "tests", "t.py"), "1\n");
+    const before = hashSkillDirs([d], ["alpha"], ["tests/"]);
+    writeFileSync(join(d, "skills", "alpha", "tests", "t.py"), "2\n"); // a tests/ dir nested under the scoped skill
+    expect(hashSkillDirs([d], ["alpha"], ["tests/"])).toBe(before); // slash-free `tests` matches at any depth
+  });
+});
+
+describe("compileIgnore — glob semantics", () => {
+  const m = (pat: string, path: string) => {
+    const re = compileIgnore(pat);
+    return re ? re.test(path) : false;
+  };
+  it("slash-free name matches at any depth + its subtree", () => {
+    expect(m("tests/", "tests")).toBe(true);
+    expect(m("tests", "a/tests")).toBe(true);
+    expect(m("tests", "a/tests/b.py")).toBe(true);
+    expect(m("tests", "a/contests")).toBe(false); // whole-segment, not substring
+  });
+  it("`*` is within-segment; `*.md` matches any .md basename at any depth", () => {
+    expect(m("*.md", "README.md")).toBe(true);
+    expect(m("*.md", "docs/x.md")).toBe(true);
+    expect(m("*.md", "x.mdx")).toBe(false);
+  });
+  it("a slashed pattern is anchored to the mount root", () => {
+    expect(m("docs/api", "docs/api")).toBe(true);
+    expect(m("docs/api", "docs/api/v1.json")).toBe(true);
+    expect(m("docs/api", "skills/docs/api")).toBe(false); // not anchored at depth
+  });
+  it("a leading globstar segment matches at any depth", () => {
+    expect(m("**/fixtures", "fixtures")).toBe(true);
+    expect(m("**/fixtures", "skills/alpha/fixtures")).toBe(true);
+  });
+  it("comments and blanks compile to null", () => {
+    expect(compileIgnore("# a comment")).toBeNull();
+    expect(compileIgnore("   ")).toBeNull();
+  });
+});

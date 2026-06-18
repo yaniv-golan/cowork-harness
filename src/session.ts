@@ -99,6 +99,19 @@ export const SessionConfig = z
         approved_domains: z.array(z.string()).default([]),
       })
       .default({ approved_domains: [] }),
+
+    // --- staleness fingerprint scope (F-6) ---
+    // The cassette-staleness hash covers the mounted skill/plugin tree. The harness only hard-excludes what
+    // is UNIVERSALLY non-runtime (VCS/caches/recorded cassettes); the runtime boundary of a SPECIFIC plugin
+    // is the consumer's to declare. `hash_ignore` is a list of gitignore-style globs (matched against each
+    // mounted dir's root-relative POSIX path) for paths that don't affect recorded behavior — e.g. `tests/`,
+    // `docs/`, `**/*.md`. Composes with (and adds to) a plugin-local `.cowork-hashignore` file at a mount
+    // root. Editing an ignored path no longer re-stales cassettes.
+    staleness: z
+      .object({
+        hash_ignore: z.array(z.string()).default([]),
+      })
+      .default({ hash_ignore: [] }),
   })
   .strict();
 export type SessionConfig = z.infer<typeof SessionConfig>;

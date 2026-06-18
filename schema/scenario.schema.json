@@ -256,6 +256,13 @@
             "additionalProperties": false
           },
           "default": []
+        },
+        "skills": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
         }
       },
       "required": [

@@ -229,10 +229,21 @@ counts) — committed PII surface. Two layers, distinct from secret-scrub (which
   suppresses synthetic / public reference names (e.g. `NVCA`, `Cooley GO`, `Acme`); multi-word proper names
   are **not** a default class (too noisy). `verify-cassettes` also runs the **staleness** check
   (`--staleness-only`): a drifted `skillHash` (you edited the skill but didn't re-record) fails the gate.
-  The `skillHash` excludes recorded cassettes (`*.cassette.json`, by extension — so writing a cassette
-  under the hashed tree doesn't self-invalidate the fingerprint it just recorded) and VCS/cache dirs
-  (`.git`, `node_modules`, `__pycache__`, …). It deliberately still hashes `tests/` (a non-cassette edit
-  there re-triggers staleness — the conservative, no-false-negative choice).
+  The `skillHash` hard-excludes only what is UNIVERSALLY non-runtime — recorded cassettes (`*.cassette.json`,
+  by extension, so writing a cassette under the hashed tree doesn't self-invalidate the fingerprint it just
+  recorded), VCS/cache dirs (`.git`, `node_modules`, `__pycache__`, …), and the `version` field of a
+  `.claude-plugin/plugin.json` manifest (a pure version bump is metadata; mcpServers/hooks/deps still count).
+
+  **Scoping the hash to what changed (F-6).** Two consumer-declared knobs narrow the hash so an unrelated
+  edit doesn't re-stale every cassette in a multi-skill plugin:
+  - **`skills: [<name>, …]`** on a *scenario* — hash only those skills' `skills/<name>/` dirs plus the
+    plugin's shared roots (everything not under `skills/<x>/`). Fail-closed: an unknown skill name falls back
+    to hashing the whole tree. Omit it → whole-tree (default).
+  - **`hash_ignore`** — gitignore-style globs for paths that don't affect recorded behavior (`tests/`,
+    `docs/`, `**/*.md`). Declare them in the *session* under `staleness.hash_ignore: [...]`, and/or in a
+    plugin-local **`.cowork-hashignore`** file at the mount root (the two compose). The harness does NOT
+    hard-code layout opinions like `tests/`; the plugin/test author declares its own runtime boundary. A
+    slash-free glob matches that name at any depth; a slashed glob is anchored to the mount root.
 
 ```bash
 cowork-harness verify-cassettes cassettes/ --allow 'NVCA|Cooley GO|Acme'

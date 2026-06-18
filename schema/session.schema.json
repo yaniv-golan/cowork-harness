@@ -230,6 +230,22 @@
           "default": {
             "approved_domains": []
           }
+        },
+        "staleness": {
+          "type": "object",
+          "properties": {
+            "hash_ignore": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            }
+          },
+          "additionalProperties": false,
+          "default": {
+            "hash_ignore": []
+          }
         }
       },
       "additionalProperties": false

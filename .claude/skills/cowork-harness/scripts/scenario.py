@@ -115,6 +115,7 @@ TOP_LEVEL_KEYS = {
     "answers",
     "expect_denied",
     "assert",
+    "skills",  # F-6: opt-in skill-staleness hash scope
 }
 REGEX_KEYS = {
     "transcript_matches",
