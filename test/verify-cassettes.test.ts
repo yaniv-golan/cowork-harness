@@ -281,3 +281,51 @@ describe("checkStaleness — bucket-named messages (G-4)", () => {
     expect(sharedMsg).toMatch(/scope: skills\/alpha/);
   });
 });
+
+describe("checkStaleness — mixed-mount falls back to generic message", () => {
+  it("does not emit a bucket-named message when the session mixes plugin-root and individual-skill-mount dirs", () => {
+    const root = mkdtempSync(join(tmpdir(), "cwh-mixed-"));
+    // Plugin-root (has skills/)
+    mkdirSync(join(root, "plugin", "skills", "alpha"), { recursive: true });
+    mkdirSync(join(root, "plugin", "scripts"), { recursive: true });
+    writeFileSync(join(root, "plugin", "skills", "alpha", "SKILL.md"), "# alpha\n");
+    writeFileSync(join(root, "plugin", "scripts", "shared.py"), "x = 1\n");
+    // Individual-skill-mount (no skills/ dir — a direct single-skill dir)
+    mkdirSync(join(root, "extra-skill"), { recursive: true });
+    writeFileSync(join(root, "extra-skill", "SKILL.md"), "# extra\n");
+    // Session mounts both
+    const sessionPath = join(root, "session.yaml");
+    writeFileSync(sessionPath, `skills:\n  local:\n    - ./plugin\n    - ./extra-skill\n`);
+
+    const fp = buildFingerprint(sessionPath, "99.0.0", root, ["alpha"]);
+    // With the fix, fp.sharedHash must be absent (mixed dirs → no bucket diagnosis)
+    expect(fp.sharedHash).toBeUndefined();
+
+    // Now change the individual-skill-mount
+    writeFileSync(join(root, "extra-skill", "SKILL.md"), "# extra edited\n");
+
+    const c = {
+      cassetteVersion: 2,
+      scenario: {
+        name: "alpha-smoke",
+        baseline: "99.0.0",
+        session: sessionPath,
+        fidelity: "container" as const,
+        prompt: "hi",
+        answers: [],
+        expect_denied: [],
+        assert: [],
+        skills: ["alpha"],
+      },
+      events: [],
+      fingerprint: fp,
+    };
+    const msgs = checkStaleness(c, root);
+    const staleMsg = msgs.find((m) => /skill|plugin dir/.test(m));
+    expect(staleMsg).toBeDefined();
+    // Must not name a specific bucket — the mixed layout makes that unreliable
+    expect(staleMsg).not.toMatch(/skills\/alpha/);
+    expect(staleMsg).not.toMatch(/shared root/);
+    expect(staleMsg).toMatch(/local skill\/plugin dir contents changed/);
+  });
+});

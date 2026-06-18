@@ -220,8 +220,20 @@ export function buildFingerprint(
   // G-4: for scoped cassettes, store the shared-root hash separately so checkStaleness can name
   // the changed bucket (skill vs shared root) at verify time.
   if (scopeSkills && scopeSkills.length) {
-    const sh = hashSharedOnly(dirs, hashIgnore);
-    if (sh !== null) fp.sharedHash = sh;
+    // Only store sharedHash when ALL dirs are plugin-roots; a mix that includes individual-skill-mount dirs
+    // (dirs without a top-level skills/) makes bucket diagnosis unreliable — those dirs contribute to
+    // skillHash but not to sharedHash, so a change there would be mis-attributed to the scoped skill.
+    const allPluginRoots = dirs.every((d) => {
+      try {
+        return statSync(join(d, "skills")).isDirectory();
+      } catch {
+        return false;
+      }
+    });
+    if (allPluginRoots) {
+      const sh = hashSharedOnly(dirs, hashIgnore);
+      if (sh !== null) fp.sharedHash = sh;
+    }
   }
   return fp;
 }
