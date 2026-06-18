@@ -88,7 +88,7 @@ Skill testing is the headline use, but the tool is a general harness over the Co
 | `assert --list` | List the available scenario assertions (generated from the schema) | "what can I assert?" without grepping the source |
 | `decide` | Validate a decider against a sample question in ~2 s (no run) | sanity-check a `--decider-*` / `--answer` wiring before a long run |
 | `gates` / `answer` | Stream / answer in-band gates for `--decider-dir` | a **driving agent** answers live questions via a Monitor |
-| `boundary-check [baseline]` | Prove the sandbox enforces Cowork's limitations | verifying the harness's own fidelity |
+| `boundary-check [baseline] [--session <file>]` | Prove the sandbox enforces Cowork's limitations; `--session` folds a session's `egress.extra_allow` into the probe allowlist | verifying the harness's own fidelity |
 | `sync` / `list` | Derive/refresh & list platform baselines from the Desktop install | after Claude Desktop updates (baselines ship, so it's optional otherwise) |
 | `doctor [--tier <t>]` | Read-only prerequisite check (Docker, staged agent, token, baseline); prints the exact `docker build` line if the agent image is missing | "can I run the live tiers — what's missing?" before a first live run |
 | `vm <init\|status\|delete\|prune>` | Manage the L2 Apple-VZ / Lima microVM (`prune` removes orphaned VMs left by config/agent-version changes) | running `--fidelity microvm` |
@@ -217,14 +217,15 @@ cowork-harness run examples/scenarios/ --output-format json
 
 # 4. Record a cassette once, then replay it deterministically (no token, no Docker)
 #    (without --out, the cassette is named after the scenario — its `name:`, or the filename)
-cowork-harness record examples/scenarios/example-pdf-skill.yaml --out cassettes/example-pdf-skill.cassette.json
-cowork-harness replay --cassette cassettes/example-pdf-skill.cassette.json
+#    Commit cassettes under examples/replays/ (this repo) or cassettes/ (conventional skill-repo name).
+cowork-harness record examples/scenarios/example-pdf-skill.yaml --out examples/replays/example-pdf-skill.cassette.json
+cowork-harness replay --cassette examples/replays/example-pdf-skill.cassette.json
 
 # A committed synthetic fixture is ready to replay on a fresh clone (no record step needed):
 cowork-harness replay --cassette examples/replays/example-pdf-skill.cassette.json
 
 # Cassettes are COMMITTED fixtures — record against synthetic data, and gate them in CI:
-cowork-harness verify-cassettes cassettes/   # privacy scan (email/currency/domain) + staleness; exit 1 on a finding
+cowork-harness verify-cassettes examples/replays/   # privacy scan (email/currency/domain) + staleness; exit 1 on a finding
 ```
 
 > **Privacy:** a cassette snapshots the transcript and the `outputs/` JSON bodies, so it's committed PII
@@ -411,11 +412,11 @@ Author scenarios in your own `scenarios/` dir, run the lot, get a non-zero exit 
 cowork-harness run scenarios/            # your repo's scenarios; runs every *.yaml, CI-ready exit code
 ```
 
-The provided [GitHub Actions workflow](.github/workflows/ci.yml) runs a **four-stage pipeline** you can copy into your skill repo:
+The provided [GitHub Actions workflow](.github/workflows/ci.yml) runs a **four-stage pipeline**. The **unit** stage is the token-free gate you can copy into your skill repo; the `boundary`, `scenarios`, and `parity-drift` stages are this repo's own fidelity self-tests and are not directly portable (they build the harness's Docker image and run harness-specific e2e scenarios — see [`ci-recipe.md`](./.claude/skills/cowork-harness/references/ci-recipe.md) for the skill-repo template):
 
 | Stage | Runs | Needs | Gates |
 |---|---|---|---|
-| **unit** | format check · typecheck · unit tests · build · CLI smoke · token-free `replay` + `verify-cassettes` gates | nothing | every push/PR |
+| **unit** | format check · typecheck · unit tests · build · CLI smoke · token-free `replay` · `verify-cassettes` · `lint` | nothing | every push/PR |
 | **boundary** | builds the pinned agent image, brings up the default-deny network, runs `boundary-check` | Docker, arm64 runner | proves the sandbox enforces Cowork's limits — **no API key** |
 | **scenarios** | the live scenario suite at `container` fidelity, uploads transcripts/egress logs as artifacts | `ANTHROPIC_API_KEY` (or `CLAUDE_CODE_OAUTH_TOKEN`) | fork PRs: the whole job is skipped (`if:` guard); same-repo without a key: warns and exits 0 |
 | **parity-drift** | reminder to re-`sync` when Desktop updates | nothing | informational, never blocks |
@@ -441,7 +442,7 @@ Unit tests cover the scripted-answer logic, the egress allowlist matcher, the se
 - `COWORK_AGENT_IMAGE=<tag>` — override the agent image name (default `cowork-agent-base:1`); `COWORK_AGENT_BINARY=<path>` — override the auto-detected staged agent ELF.
 - `COWORK_HARNESS_DECIDER_DIR_POLL_MS` / `_TIMEOUT_MS` — tune the `--decider-dir` rendezvous poll/backstop; `COWORK_HARNESS_DECIDER_CMD_TIMEOUT_MS` / `COWORK_HARNESS_LLM_TIMEOUT_MS` — backstop a hung `--decider-cmd` helper / `--decider-llm` model call (default 600 s, fail loud); `COWORK_HARNESS_DIALOG_TIMEOUT_MS` — override the 6 s dialog auto-cancel.
 - `COWORK_HARNESS_RUNS_DIR` — relocate the `runs/` output root (so `trace` resolves runs from any directory).
-- **Networking / loop:** `COWORK_EGRESS_PROXY` overrides the egress-proxy URL injected into the sandbox; `COWORK_DOCKER_NETWORK` pins the Docker network the agent container joins; `CLAUDE_FORCE_HOST_LOOP=1` forces the host-loop path regardless of the baseline's loop decision (the `cowork` tier's auto-pick). `COWORK_LIMACTL` overrides the `limactl` binary path (default `/opt/homebrew/bin/limactl`).
+- **Networking / loop:** `COWORK_EGRESS_PROXY` overrides the egress-proxy URL injected into the sandbox; `COWORK_PROXY_IMAGE` overrides the egress proxy Docker image name (default `cowork-egress-proxy:1`); `COWORK_DOCKER_NETWORK` pins the Docker network the agent container joins; `CLAUDE_FORCE_HOST_LOOP=1` forces the host-loop path regardless of the baseline's loop decision (the `cowork` tier's auto-pick). `COWORK_LIMACTL` overrides the `limactl` binary path (default `/opt/homebrew/bin/limactl`).
 - **Strictness escape hatches** (the harness fails loud by default): `COWORK_HARNESS_SOFT_MISSING=1` downgrades a missing mount source from a hard error to warn-and-exclude; `COWORK_HARNESS_ALLOW_CONFIG_DIR_WRITE=1` permits writing into an existing pinned `plugins.config_dir` (otherwise refused, to avoid clobbering a real Claude config).
 - **Secret scrubbing:** `COWORK_HARNESS_SCRUB_KEYS=<KEY1,KEY2>` adds extra env-var names whose values are redacted from logs (beyond the known auth tokens + `ANTHROPIC_CUSTOM_HEADERS`); `COWORK_HARNESS_SCRUB_VALUES=<v1,v2>` redacts literal values regardless of env. **Committed-cassette redaction:** `COWORK_HARNESS_REDACT_PATTERNS=<rx1,rx2>` / `COWORK_HARNESS_REDACT_KEYS=<k1,k2>` extend the privacy layer that scrubs recorded `controlOut` before a cassette is written for commit.
 - L2 microVM: `COWORK_VM_GATEWAY` overrides the Lima host-proxy gateway IP (default `192.168.5.2`); `COWORK_VM_PROXY_PORT` the proxy port. The Lima instance is named `cowork-vm-<config-hash>` (a config change → a fresh VM); `COWORK_LIMA_INSTANCE` pins a fixed name, and `vm prune` removes orphaned ones.

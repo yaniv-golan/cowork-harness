@@ -22,7 +22,7 @@ Start with the [project README](../README.md) for the overview and quick start, 
 
 | Topic | Where |
 |---|---|
-| Commands at a glance (what / when) | [README → Commands at a glance](../README.md#commands-at-a-glance); full flags via `<command> --help` |
+| Commands at a glance (what / when) | [README → Commands at a glance](../README.md#commands-at-a-glance); full flags via `<command> --help` — includes `doctor` (prerequisite check before first live run) |
 | Fidelity — three isolation tiers (L0/L1/L2) + two loop overlays (`hostloop`, `cowork`) | [boundary.md](./boundary.md), [README](../README.md) |
 | Control-protocol / spawn contract | [cowork-spawn-contract-1.12603.1.md](./cowork-spawn-contract-1.12603.1.md) (verified on `desktop-1.12603.1`; control-protocol fields unchanged through `desktop-1.13576.1`; volatile fields — `agentVersion`, egress allowlist, GrowthBook gates — tracked in `baselines/`); see also [SPEC.md](../SPEC.md) |
 | AI agent instructions for this repo | [AGENTS.md](../AGENTS.md) |

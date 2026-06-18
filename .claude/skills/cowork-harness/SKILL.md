@@ -148,6 +148,8 @@ separated from live-only ones, one concern per item) and **self-lints its own ou
 
 ```bash
 S="${CLAUDE_PLUGIN_ROOT}/skills/cowork-harness/scripts/scenario.py"
+# Working from a repo checkout instead of an installed plugin?
+# S=".claude/skills/cowork-harness/scripts/scenario.py"
 python3 "$S" scaffold --name report-check --skill ./skills/report-gen \
   --prompt "Generate the weekly report to outputs/report.md." \
   --content 'weekly report' --artifact outputs/report.md \

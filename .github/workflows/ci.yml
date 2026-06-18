@@ -59,6 +59,10 @@ jobs:
         run: node dist/cli.js list
       - name: Token-free replay gate (example-pdf-skill fixture)
         run: node dist/cli.js replay --cassette examples/replays/example-pdf-skill.cassette.json --output-format json
+      - name: Cassette privacy + staleness scan (committed fixtures)
+        run: node dist/cli.js verify-cassettes examples/replays/
+      - name: Lint example scenarios (no-silent-false-green invariants)
+        run: node dist/cli.js lint examples/scenarios/*.yaml
 
   # ── Stage 1b: pytest `cowork` lane — helper self-checks (no Docker/token; -m 'not cowork') ──
   python:

@@ -34,5 +34,5 @@ To replace this fixture with a real recording from a live run:
 cowork-harness record examples/scenarios/your-scenario.yaml --out examples/replays/your-name.cassette.json
 ```
 
-Note: real recordings require a live ANTHROPIC_API_KEY and Docker. The synthetic fixture in this
+Note: real recordings require a live CLAUDE_CODE_OAUTH_TOKEN (or ANTHROPIC_API_KEY) and Docker. The synthetic fixture in this
 directory is designed to run token-free on CI.
