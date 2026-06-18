@@ -40,7 +40,9 @@ export function compileIgnore(raw: string): RegExp | null {
       i++;
     } else if (c === "*") {
       body += "[^/]*";
-    } else if (".+^${}()|[]\\".includes(c)) {
+    } else if (".+^${}()|[]\\?".includes(c)) {
+      // `?` is NOT a supported wildcard here (only `*`/`**`), so escape it to a literal — unescaped it would
+      // act as the regex optional-quantifier and over-match (e.g. `a?b` would match `ab`).
       body += "\\" + c;
     } else {
       body += c;

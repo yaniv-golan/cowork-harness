@@ -173,4 +173,8 @@ describe("compileIgnore — glob semantics", () => {
     expect(compileIgnore("# a comment")).toBeNull();
     expect(compileIgnore("   ")).toBeNull();
   });
+  it("`?` is a literal, not a quantifier (only * / ** are wildcards)", () => {
+    expect(m("a?b", "a?b")).toBe(true);
+    expect(m("a?b", "ab")).toBe(false); // would be true if `?` acted as the optional quantifier
+  });
 });
