@@ -301,9 +301,7 @@ export function checkStaleness(cassette: Cassette, cassetteDir: string): string[
     else if (live.skillHash !== fp.skillHash) {
       const recordedVersion = cassette.cassetteVersion ?? 0;
       if (recordedVersion < CASSETTE_VERSION) {
-        msgs.push(
-          `recorded under an older hash format (v${recordedVersion} → v${CASSETTE_VERSION}) — re-record once after upgrading`,
-        );
+        msgs.push(`recorded under an older hash format (v${recordedVersion} → v${CASSETTE_VERSION}) — re-record once after upgrading`);
       } else if (fp.sharedHash !== undefined && live.sharedHash !== undefined) {
         // G-4: bucket-level diagnosis — which component of the scoped hash changed?
         const scope = fp.skillScope!.map((s) => `skills/${s}`).join(", ");
@@ -749,9 +747,10 @@ export async function cmdRecord(args: string[]) {
         } else {
           // No on-disk scenario found — fall back to the embedded snapshot (original behavior).
           // The user should pass the scenario file directly (`record <scenario.yaml>`) to pick up edits.
-          log(`  ⚠ no on-disk scenario found for "${cassette.scenario.name}" — re-recording from embedded snapshot (edits to the scenario YAML won't apply; use \`record <scenario.yaml>\` to re-record from disk)`);
-          const sessionRef =
-            cassette.scenario.session === "(inline)" ? "(inline)" : join(dirname(cp), cassette.scenario.session);
+          log(
+            `  ⚠ no on-disk scenario found for "${cassette.scenario.name}" — re-recording from embedded snapshot (edits to the scenario YAML won't apply; use \`record <scenario.yaml>\` to re-record from disk)`,
+          );
+          const sessionRef = cassette.scenario.session === "(inline)" ? "(inline)" : join(dirname(cp), cassette.scenario.session);
           r = await recordScenarioObject(
             { ...cassette.scenario, session: sessionRef },
             { noRedact, allowFailing, cassettePath: cp, maxArtifactBytes },
@@ -1098,7 +1097,9 @@ export async function replayCassette(
       else if (live.skillHash !== fp.skillHash) {
         const recordedVersion = cassette.cassetteVersion ?? 0;
         if (recordedVersion < CASSETTE_VERSION) {
-          staleness.push(`recorded under an older hash format (v${recordedVersion} → v${CASSETTE_VERSION}) — re-record once after upgrading`);
+          staleness.push(
+            `recorded under an older hash format (v${recordedVersion} → v${CASSETTE_VERSION}) — re-record once after upgrading`,
+          );
         } else if (fp.sharedHash !== undefined && live.sharedHash !== undefined) {
           const scope = fp.skillScope?.length ? fp.skillScope.map((s) => `skills/${s}`).join(", ") : "skill";
           if (live.sharedHash !== fp.sharedHash) {
