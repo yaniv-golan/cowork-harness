@@ -174,7 +174,7 @@ passes only if every key passes. Keep one concern per item unless you mean conju
 | `transcript_not_matches: <regex>` | it does not match (e.g. no leaked stack trace) |
 | `file_exists: <path>` | the path exists under the run's `work/` (e.g. `outputs/x.md`) |
 | `user_visible_artifact: <path>` | exists **and** under a user-visible prefix (`outputs/`, `.projects/`) |
-| `no_delete_in_outputs: true` | no delete op touched `mnt/outputs` |
+| `no_delete_in_outputs: true` | no delete op touched `mnt/outputs` — **only `true` is valid**; `false` is rejected (omit to allow deletes) |
 | `self_heal_ran: <bool>` | a plugin-root self-heal script was (not) invoked |
 | `tool_called: <Tool>` | the agent invoked the tool (actually ran it) |
 | `tool_not_called: <Tool>` | the agent never invoked it |
@@ -186,6 +186,8 @@ passes only if every key passes. Keep one concern per item unless you mean conju
 | `question_asked: <regex>` | the agent asked an AskUserQuestion whose text matches |
 | `questions_count_max: <N>` | the agent asked at most N questions |
 | `gate_answers_delivered: true` | every answered gate's answer reached the model (observed `tool_result`; unobserved = fail) |
+| `gate_answers_delivered: false` | asserts at least one answered gate's answer did **not** reach the model — for negative-path delivery tests |
+| `allow_permissive_auto_allow: true` | verdict modifier — suppresses the default-fail when the run recorded a cowork-parity permissive auto-allow; for tests that deliberately assert Cowork's permissive behavior |
 | `transcript_no_host_path: true` | no host path (`/Users`, `/opt`) leaked into model-visible text |
 | `egress_denied: <host>` | the host was blocked by the egress proxy |
 | `egress_allowed: <host>` | the host was allowed through |

@@ -17,8 +17,7 @@ Self-contained reference. Tracks `cowork-harness 0.5.0` (baseline `desktop-1.135
   `hostloop` (all share the container sandbox + egress proxy). Only `protocol` is rejected.
 - **Set the tier in the scenario's `fidelity:` field — not a flag.** `--fidelity` is accepted only by
   `skill` (any tier) and `chat` (`container`/`hostloop` only); `run` rejects an extra `--fidelity`
-  positional ("Fidelity is set by the scenario's `fidelity:` field, not a flag"). Pre-fix it was a silent
-  no-op (ran the scenario's own tier).
+  positional ("Fidelity is set by the scenario's `fidelity:` field, not a flag").
 
 ### `microvm` prerequisites & lifecycle
 

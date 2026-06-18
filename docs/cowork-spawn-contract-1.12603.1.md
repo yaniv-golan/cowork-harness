@@ -1,5 +1,11 @@
 # Cowork spawn contract — app.asar 1.12603.1 / agent ELF 2.1.170
 
+> **Applicability note:** verified on `desktop-1.12603.1`. The current baseline is `desktop-1.13576.1`
+> (agent ELF 2.1.177). Control-protocol fields documented here (spawn flags, handshake envelope,
+> permission/question shapes, mount layout) are **unchanged**. Volatile fields — `agentVersion`,
+> egress `allowDomains`, GrowthBook gate values — have moved and are tracked in
+> `baselines/desktop-1.13576.1.json`.
+
 Binary-verified this session. Anchors: asar `/tmp/asar-review/.vite/build/index.js` find `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS:"1"` (spawn env), `function TSO(` (settings filename), `{{workspaceContext}}` (prompt template); ELF `strings | grep`.
 
 ## Execution mode
