@@ -60,7 +60,7 @@ interface Fingerprint {
   sharedHash?: string; // G-4: shared-root hash for scoped cassettes; absent on whole-tree or non-plugin-root mounts
 }
 
-interface Cassette {
+export interface Cassette {
   // Schema version of the cassette FORMAT (not the package). Bump when the structure changes in a way a
   // reader must branch on (a new manifest-entry shape, a fingerprint-algorithm change, a2's nonDeterministic
   // provenance, …). ABSENT = pre-versioning legacy (treated as 0). Stamping it now — while ~no cassettes
