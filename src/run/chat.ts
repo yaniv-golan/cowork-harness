@@ -1,6 +1,5 @@
 import readline from "node:readline";
 import { spawn, spawnSync } from "node:child_process";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { mkdirSync } from "node:fs";
 import { loadBaseline, resolveAgentBinary } from "../baseline.js";
@@ -13,7 +12,7 @@ import { startEgressSidecar } from "../egress/sidecar.js";
 import { Scenario } from "../types.js";
 import { LiveAgentSession } from "../agent/session.js";
 import { Run } from "./run.js";
-import { makeRenderer } from "./renderer.js";
+import { makeRenderer, startHeartbeat, type RenderPlan } from "./renderer.js";
 import { runsWriteRoot } from "./trace-view.js";
 import { Chain, ScriptedDecider, PermissionDefaultDecider, PromptDecider } from "../decide/decider.js";
 import { readGateFlag } from "../loop-decision.js";
@@ -22,9 +21,10 @@ import type { WebFetchProvenance } from "../hostloop/workspace-handler.js";
 const log = (s: string) => process.stderr.write(s);
 
 /**
- * `chat <folder> [--raw] [--fidelity protocol|container|hostloop]` — interactive multi-turn REPL
- * against a skill, keeping the full harness (egress sandbox, control protocol). `--raw` drops the
- * protocol and `docker run -it`s the agent in its NATIVE interactive cowork mode (unmediated escape hatch).
+ * `chat <folder> [prompt] [--raw] [--fidelity protocol|container|hostloop]` — interactive
+ * multi-turn REPL against a skill, keeping the full harness (egress sandbox, control protocol).
+ * `--raw` drops the protocol and `docker run -it`s the agent in its NATIVE interactive cowork
+ * mode (unmediated escape hatch; egress sandbox NOT applied).
  */
 export async function cmdChat(args: string[]) {
   const positional: string[] = [];
@@ -35,9 +35,13 @@ export async function cmdChat(args: string[]) {
     envFid === "hostloop" ? "hostloop" : envFid === "protocol" ? "protocol" : "container";
   // R4: COWORK_HARNESS_MODEL env var default (CLI --model takes precedence).
   let model: string | undefined = process.env.COWORK_HARNESS_MODEL;
+  let verbose = false;
+  const uploads: string[] = [];
+  const folders: Array<{ from: string; mode: "rw" }> = [];
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === "--raw") raw = true;
+    else if (a === "--verbose" || a === "-V") verbose = true;
     else if (a === "--fidelity") {
       const v = ++i < args.length ? args[i] : undefined; // §8.2: bounds check
       if (v !== "protocol" && v !== "container" && v !== "hostloop") {
@@ -46,29 +50,57 @@ export async function cmdChat(args: string[]) {
       }
       fidelity = v;
     } else if (a === "--model") {
-      if (++i >= args.length) { // §8.2: bounds check — args[++i] was silent undefined at end-of-argv
+      if (++i >= args.length) {
         log(`chat --model requires a value\n`);
         process.exit(2);
       }
       model = args[i];
-    }
-    else positional.push(a);
+    } else if (a === "--upload") {
+      if (++i >= args.length) {
+        log(`chat --upload requires a file path\n`);
+        process.exit(2);
+      }
+      uploads.push(args[i]);
+    } else if (a === "--folder") {
+      if (++i >= args.length) {
+        log(`chat --folder requires a directory path\n`);
+        process.exit(2);
+      }
+      folders.push({ from: args[i], mode: "rw" });
+    } else positional.push(a);
   }
   const folder = positional[0];
+  const seedPrompt = positional[1]; // optional: injected as the first turn before the REPL
   if (!folder) {
-    log("usage: chat <skill-folder> [--raw] [--fidelity protocol|container|hostloop] [--model <id>]\n");
+    log(
+      "usage: chat <skill-folder> [prompt] [--raw] [--fidelity protocol|container|hostloop]\n" +
+        "              [--model <id>] [--upload <file>]... [--folder <dir>]... [--verbose]\n",
+    );
     process.exit(2);
   }
 
-  if (raw) return chatRaw(folder);
+  if (raw) return chatRaw(folder, model);
 
-  const session = loadSession({ model, permission_parity: "cowork", plugins: { local_plugins: [folder] } });
+  const session = loadSession({
+    model,
+    uploads,
+    folders,
+    permission_parity: "cowork",
+    plugins: { local_plugins: [folder] },
+  });
   const baseline = loadBaseline("latest");
   const sessionId = `local_${process.hrtime.bigint().toString(36)}`;
   const outDir = join(runsWriteRoot(), "chat", sessionId);
   mkdirSync(outDir, { recursive: true });
   const plan = buildLaunchPlan(session, baseline, outDir);
-  const scenario = Scenario.parse({ name: "chat", baseline: "latest", session: "(inline)", fidelity, prompt: "(interactive)", assert: [] });
+  const scenario = Scenario.parse({
+    name: "chat",
+    baseline: "latest",
+    session: "(inline)",
+    fidelity,
+    prompt: "(interactive)",
+    assert: [],
+  });
 
   // #49: name ephemeral docker resources by a per-invocation runToken (not the persistent sessionId),
   // mirroring execute.ts's F1 hardening so a re-run can't collide on the sidecar container name.
@@ -78,7 +110,14 @@ export async function cmdChat(args: string[]) {
   const sidecar = fidelity !== "protocol" ? startEgressSidecar(plan.egressAllow, outDir, runToken) : null;
   const prompts = renderPrompts(baseline, session, sessionId);
 
-  log(`cowork chat [${fidelity}] — type your message, /exit to quit\n`);
+  log(`cowork chat [${fidelity}] — run: ${sessionId}\n`);
+  // Startup summary: show uploads and project folders so the developer knows what the agent sees.
+  for (const m of plan.mounts) {
+    if (m.mountPath.startsWith("uploads/")) log(`  upload: ${m.hostPath} → mnt/${m.mountPath}\n`);
+    else if (m.mountPath.startsWith(".projects/")) log(`  folder: ${m.hostPath} → mnt/${m.mountPath}\n`);
+  }
+  log(`type your message, /exit to quit\n`);
+
   const runner = process.env.COWORK_CONTAINER_RUNTIME ?? "docker";
   let containerName: string | undefined;
   let child: { kill?: (s?: NodeJS.Signals) => void } | undefined;
@@ -90,19 +129,23 @@ export async function cmdChat(args: string[]) {
   // prompter (PromptDecider). Two interfaces would race for the same stdin → undefined input routing.
   const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
   const ask = (prompt: string) => new Promise<string>((resolve) => rl.question(prompt, (a) => resolve(a.trim())));
+  const renderPlan: RenderPlan = {
+    live: true,
+    progress: true,
+    verbose,
+    color: process.stderr.isTTY === true && !process.env.NO_COLOR,
+  };
+  const start = Date.now();
+  let stopHeartbeat: (() => void) | undefined;
   try {
     if (fidelity === "protocol") {
       child = spawnProtocol(scenario, baseline, plan, outDir);
       const agent = new LiveAgentSession(child as any, outDir);
       const decider = Chain(new ScriptedDecider([]), new PermissionDefaultDecider("cowork"), new PromptDecider(ask));
-      const renderer = makeRenderer({
-        live: true,
-        progress: true,
-        verbose: false,
-        color: process.stderr.isTTY === true && !process.env.NO_COLOR,
-      });
+      const renderer = makeRenderer(renderPlan);
       const run = new Run(agent, decider, [renderer], sessionId);
-      await run.drive(ttyTurns(rl), { systemPromptAppend: prompts.systemPromptAppend });
+      stopHeartbeat = startHeartbeat(renderer, renderPlan, start);
+      await run.drive(withSeedPrompt(seedPrompt, ttyTurns(rl)), { systemPromptAppend: prompts.systemPromptAppend });
     } else if (fidelity === "hostloop") {
       // #25: honor --fidelity hostloop in chat, mirroring execute.ts's branch selection.
       const hl = spawnHostLoop(scenario, baseline, plan, outDir, sessionId, {
@@ -116,13 +159,9 @@ export async function cmdChat(args: string[]) {
       containerName = hl.containerName;
       const agent = new LiveAgentSession(hl.child as any, outDir);
       const decider = Chain(new ScriptedDecider([]), new PermissionDefaultDecider("cowork"), new PromptDecider(ask));
-      const renderer = makeRenderer({
-        live: true,
-        progress: true,
-        verbose: false,
-        color: process.stderr.isTTY === true && !process.env.NO_COLOR,
-      });
+      const renderer = makeRenderer(renderPlan);
       const run = new Run(agent, decider, [renderer], sessionId);
+      stopHeartbeat = startHeartbeat(renderer, renderPlan, start);
       if (viaApiOn) {
         provenanceRef.current = {
           isAllowed: (u) => run.provenanceHas(u),
@@ -132,7 +171,10 @@ export async function cmdChat(args: string[]) {
           permissiveMode: plan.permissionMode === "bypassPermissions",
         };
       }
-      await run.drive(ttyTurns(rl), { systemPromptAppend: prompts.systemPromptAppend, sdkMcp: hl.sdkMcp });
+      await run.drive(withSeedPrompt(seedPrompt, ttyTurns(rl)), {
+        systemPromptAppend: prompts.systemPromptAppend,
+        sdkMcp: hl.sdkMcp,
+      });
     } else {
       child = spawnContainer(scenario, baseline, plan, outDir, sessionId, {
         systemPromptAppend: prompts.systemPromptAppend,
@@ -141,16 +183,13 @@ export async function cmdChat(args: string[]) {
       });
       const agent = new LiveAgentSession(child as any, outDir);
       const decider = Chain(new ScriptedDecider([]), new PermissionDefaultDecider("cowork"), new PromptDecider(ask));
-      const renderer = makeRenderer({
-        live: true,
-        progress: true,
-        verbose: false,
-        color: process.stderr.isTTY === true && !process.env.NO_COLOR,
-      });
+      const renderer = makeRenderer(renderPlan);
       const run = new Run(agent, decider, [renderer], sessionId);
-      await run.drive(ttyTurns(rl), { systemPromptAppend: prompts.systemPromptAppend });
+      stopHeartbeat = startHeartbeat(renderer, renderPlan, start);
+      await run.drive(withSeedPrompt(seedPrompt, ttyTurns(rl)), { systemPromptAppend: prompts.systemPromptAppend });
     }
   } finally {
+    stopHeartbeat?.();
     // Reap the agent container first (mirrors execute.ts F1 hardening — #34).
     try {
       child?.kill?.("SIGKILL");
@@ -162,6 +201,12 @@ export async function cmdChat(args: string[]) {
     rl.close(); // the one shared stdin interface — closed once, here
   }
   log(`\nchat ended (transcript under ${outDir})\n`);
+}
+
+/** Prepend an optional seed prompt before yielding from the TTY turn generator. */
+async function* withSeedPrompt(seed: string | undefined, turns: AsyncGenerator<string>): AsyncGenerator<string> {
+  if (seed) yield seed;
+  yield* turns;
 }
 
 /** Async generator of user turns read from the TTY until EOF / `/exit`. Uses the caller's shared
@@ -195,8 +240,9 @@ async function* ttyTurns(rl: readline.Interface): AsyncGenerator<string> {
   }
 }
 
-/** `chat --raw` — native interactive cowork mode (no -p / stream-json), stdio inherited. */
-function chatRaw(folder: string) {
+/** `chat --raw` — native interactive cowork mode (no -p / stream-json), stdio inherited.
+ *  Egress sandbox NOT applied. `--fidelity` is ignored. */
+function chatRaw(folder: string, model?: string) {
   const baseline = loadBaseline("latest");
   const agent = resolveAgentBinary(baseline);
   const image = process.env.COWORK_AGENT_IMAGE ?? "cowork-agent-base:1";
@@ -225,6 +271,7 @@ function chatRaw(folder: string) {
     "claude",
     "--plugin-dir",
     "/sessions/local/mnt/.local-plugins/cache/skill",
+    ...(model ? ["--model", model] : []),
   ];
   const child = spawn(runner, dockerArgs, { stdio: "inherit" });
   child.on("exit", (code) => process.exit(code ?? 0));
@@ -233,5 +280,3 @@ function chatRaw(folder: string) {
     process.exit(2);
   });
 }
-
-void homedir;
