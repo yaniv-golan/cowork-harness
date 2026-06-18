@@ -6,6 +6,49 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-06-19
+
+### Breaking changes
+
+- **Exit code 3 for boundary/integrity violations.** Commands that previously exited `2` for a
+  boundary constraint (e.g. `skill` hitting the egress sandbox, `run` with a `boundary`-category
+  failure) now exit `3`. Exit `2` is narrowed to usage errors, unknown flags, and runtime errors.
+  Scripts that check `$? -eq 2` to detect boundary failures must be updated to `$? -eq 3`.
+- **`verify-cassettes --staleness-only` / `--privacy-only` removed.** Replaced by
+  `--skip-staleness` (run privacy scan only) and `--skip-privacy` (run staleness scan only). The
+  old flags are not aliased — they now exit `2` as unknown flags.
+- **`decide` with no configuration exits `2` instead of `1`.** Previously, calling `decide` with no
+  `--decider-*`, `--answer`, or `--answer-policy` would fall through to a `ScriptedDecider([])` and
+  exit `1` ("no rule matched"). It now fails early with exit `2` ("no decider configured") and a
+  clear message.
+
+### Added
+
+- **`chat` — full flag parity for interactive debugging:**
+  - `[prompt]` — optional seed prompt sent as the first turn before the REPL opens.
+  - `--upload <file>` (repeatable) — attach a file at `mnt/uploads/<basename>`; live at session start.
+  - `--folder <dir>` (repeatable) — connect a project folder at `mnt/.projects/<basename>` as a live bind mount.
+  - `--verbose` / `-V` — show thinking blocks, tool inputs, and the sub-agent tree (previously hardcoded off).
+  - `--fidelity protocol` — no-Docker fastest tier; accepted alongside `container` and `hostloop`.
+  - `--model` in `--raw` mode — previously silently dropped; now passed as `--model <id>` to the docker argv.
+  - Idle heartbeat wired in all three fidelity branches (protocol / hostloop / container).
+  - Run ID printed at session start (before first turn) so a mid-session crash still tells you where the transcript is.
+- **`assertions` command** — canonical rename of `assert`; `assert` is kept as a deprecated alias
+  that prints a migration notice. `assertions --list` is the new canonical form.
+- **`scaffold <run-id>` positional** — canonical form; `--from-run <id>` is kept as a deprecated
+  alias that prints a migration notice.
+- **`trace --view tools|questions|dispatches`** — replaces the three separate `--tools` / `--gates`
+  / `--dispatches` flags with a single `--view` enum. Legacy flags are kept as backward-compat
+  aliases (`--gates` maps to `--view questions`).
+- **Env-var defaults for all live commands:**
+  - `COWORK_HARNESS_FIDELITY` — default fidelity tier for `skill` and `chat` (validated; exits 2 on an invalid value).
+  - `COWORK_HARNESS_MODEL` — default model override for `skill` and `chat`.
+  - `COWORK_HARNESS_OUTPUT_FORMAT` — default `--output-format` for all commands (`text` or `json`).
+- **`decide` no-decider guard** — calling `decide` with no configuration fails immediately with a
+  clear message and exit `2` instead of falling through to a vacuous "no rule matched" exit `1`.
+- **`vm` per-subcommand `--help`** — `vm <sub> --help` prints the subcommand usage and exits `0`.
+- **`--quiet` / `-q` accepted in `decide`** — no-op flag for flag-surface consistency with `skill` / `run`.
+
 ### Fixed
 
 - **`--rerecord-stale` now prefers on-disk scenario over embedded snapshot (G-1).** When a
@@ -23,6 +66,26 @@ All notable changes to this project are documented here. The format is based on
 - **Scoped staleness findings now name the changed bucket (G-4).** When a cassette was recorded with
   `skills: [<name>]` scoping, `verify-cassettes` now reports `skills/<name> changed` or
   `shared root changed` rather than the generic `local skill/plugin dir contents changed`.
+- **Unknown flags in `chat` now exit `2`.** Previously ignored silently; any unrecognised flag now
+  exits `2` with a clear message.
+- **`chat --model` bounds-checked.** If `--model` is the last argument (no value following), the
+  command now exits `2` with a clear message instead of silently using `undefined`.
+- **`cmdSync` platform guard fires before argument parsing.** On non-macOS platforms the guard now
+  exits before `parseArgs`, so `sync --help` on Linux no longer crashes on a missing flag.
+- **`record` conflict check.** Passing both a positional and `--cassette` now exits `2` immediately
+  instead of silently preferring one.
+- **L0 plugin divergence signal.** `spawnProtocol` now reports whether the skill resolved at L0
+  (no container) vs. L1, so callers can surface the divergence accurately.
+- **System-prompt threading.** `systemPromptAppend` is now passed through all runtime paths that
+  previously dropped it.
+- **Strict agent binary resolution.** When the exact staged binary path is missing, the harness now
+  fails with a clear message pointing to `COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1` instead of
+  silently falling back to an arbitrary sibling version.
+- **Path traversal guard on plugin sources.** Plugin source paths are now validated to be
+  directories (not files or traversal strings) before mounting.
+- **Cassette correctness (batch):** privacy/staleness coverage tracking, redaction verdict
+  preservation across re-records, base64-encoded artifact body scanning, and exhaustiveness
+  checks on the replay assertion set.
 
 ## [0.5.0] — 2026-06-18
 
