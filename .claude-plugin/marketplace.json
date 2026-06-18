@@ -9,7 +9,7 @@
       "name": "cowork-harness",
       "source": "./.claude/skills/cowork-harness",
       "description": "Skill that drives the cowork-harness CLI to test Claude Code skills under Claude Cowork's runtime (fidelity tiers, scripted answers, egress + artifact + sub-agent assertions).",
-      "version": "0.4.3"
+      "version": "0.5.0"
     }
   ]
 }
