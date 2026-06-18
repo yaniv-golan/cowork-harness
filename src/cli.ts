@@ -32,6 +32,7 @@ import {
 import { buildScaffold } from "./run/scaffold.js";
 import { pkgVersion, jsonEnvelope, jsonError, parseOutputFormat, type ErrCategory } from "./run/envelope.js";
 import { computeVerdict } from "./run/verdict.js";
+import { evaluate, hostMatches, type AssertContext } from "./assert.js";
 import { spawnChannel, fileChannel, streamGates, answerGate, readGate, type DecisionChannel } from "./decide/external-channel.js";
 
 // Synchronous writes (fd 1/2): `process.stdout.write` + `process.exit()` truncates on a PIPE, which
@@ -69,7 +70,9 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
   lint <scenario.yaml>…        check scenarios for silent false-greens (bundled scenario.py; needs python3 + PyYAML)
       [--strict]               escalate a cassette-staleness warning (baseline/skill drift) to a failure
   verify-cassettes <file|dir>  CI gate (no token): privacy scan + staleness — exit 1 on a PII finding or drift
-      [--privacy-only|--staleness-only] [--allow <regex>]... [--output-format json]
+      [--privacy-only|--staleness-only] [--allow <regex>]... [--allow-domain/-email <regex>]... [--allow-file <path>]... [--output-format json]
+  verify-run <run-dir> <scenario.yaml>   re-evaluate a scenario's assert: against a kept run dir (no live agent)
+      [--output-format json]   (fast assert iteration: fix an assertion + re-check in ~1s instead of a full re-record)
   trace <run-id | dir | path>  digest a run's events.jsonl (tools+result status, dispatches, decisions)
       [--tools]  tool/dispatch rows only   [--gates]  gate lifecycle (question→answer→delivered)
       [--dispatches]  sub-agent dispatch tree + the real total (read off dispatch_count_max)
@@ -261,6 +264,7 @@ async function main() {
       "record",
       "replay",
       "verify-cassettes",
+      "verify-run",
       "trace",
       "assert",
       "scaffold",
@@ -332,6 +336,8 @@ async function main() {
       return cmdLint(rest);
     case "verify-cassettes":
       return cmdVerifyCassettes(rest);
+    case "verify-run":
+      return cmdVerifyRun(rest);
     case "trace":
       return cmdTrace(rest);
     case "assert":
@@ -1347,6 +1353,150 @@ function cmdScaffold(args: string[]) {
     writeFileSync(outPath, yaml);
     log(`✓ scaffolded scenario → ${outPath}`);
   } else out(yaml);
+}
+
+/** Read the persisted transcript from a kept run's `run.jsonl` (the `{t:"transcript"}` line). */
+function readTranscriptSidecar(file: string): string {
+  try {
+    for (const line of readFileSync(file, "utf8").split("\n")) {
+      if (!line.trim()) continue;
+      const o = JSON.parse(line);
+      if (o && o.t === "transcript") return String(o.text ?? "");
+    }
+  } catch {
+    /* sidecar absent/unreadable — empty transcript (content asserts over it simply won't match) */
+  }
+  return "";
+}
+
+/** Read the AskUserQuestion question texts from a kept run's `trace.json` (`questions` array). */
+function readQuestionsSidecar(file: string): string[] {
+  try {
+    const t = JSON.parse(readFileSync(file, "utf8"));
+    if (Array.isArray(t.questions)) return t.questions.map(String);
+  } catch {
+    /* sidecar absent/unreadable */
+  }
+  return [];
+}
+
+/**
+ * F-1: `verify-run <run-dir> <scenario.yaml>` — re-evaluate a scenario's `assert:` block against an
+ * already-kept run dir, WITHOUT a live agent (no tokens, no Docker). Fixing a wrong assertion was previously
+ * a full live re-record (~17 min); this turns it into ~1s. Reconstructs the AssertContext from the run dir's
+ * persisted `result.json` + the `run.jsonl`/`trace.json` sidecars (transcript + questions live there, not in
+ * result.json), reproduces the `expect_denied` expansion that `evaluate()` doesn't do, and routes the verdict
+ * through the same `computeVerdict(…, "live")` as a real record.
+ *
+ * Limits (vs a fresh live record): sidecars are SCRUBBED at record time, so an assertion over a redacted
+ * secret value is not faithfully re-checkable; and filesystem assertions (`file_exists`/`artifact_json`/
+ * `user_visible_artifact`) need the run's `workDir` to still exist on disk — if it's gone (container/microvm
+ * teardown), verify-run refuses rather than false-failing them.
+ */
+function cmdVerifyRun(args: string[]) {
+  let p;
+  try {
+    p = parseArgs(args, { values: ["--output-format"], enums: { "--output-format": ["text", "json"] } });
+  } catch (e) {
+    log((e as Error).message);
+    return process.exit(2);
+  }
+  const json = p.options["--output-format"] === "json";
+  const [runDir, scenarioFile] = p.positionals;
+  if (!runDir || !scenarioFile) {
+    log("usage: verify-run <run-dir> <scenario.yaml> [--output-format json]");
+    return process.exit(2);
+  }
+  if (p.positionals.length > 2) {
+    log(`verify-run takes <run-dir> <scenario.yaml> (got ${p.positionals.length}: ${p.positionals.join(", ")})`);
+    return process.exit(2);
+  }
+  const resultPath = join(runDir, "result.json");
+  if (!existsSync(resultPath)) {
+    log(`verify-run: no result.json under ${runDir} (is this a kept run dir? e.g. runs/<scenario>/<sessionId>/)`);
+    return process.exit(2);
+  }
+  let result: RunResult;
+  try {
+    result = JSON.parse(readFileSync(resultPath, "utf8")) as RunResult;
+  } catch (e) {
+    log(`verify-run: cannot read ${resultPath}: ${(e as Error).message}`);
+    return process.exit(2);
+  }
+  let scenario;
+  try {
+    scenario = parseScenarioFile(scenarioFile);
+  } catch (e) {
+    log(`verify-run: cannot load scenario ${scenarioFile}: ${(e as Error).message}`);
+    return process.exit(2);
+  }
+
+  const workRoot = result.workDir ?? "";
+  const scan = result.scan ?? { outputsDeletes: [], hostPathLeaked: false, selfHealRan: false };
+  // FS-class assertions resolve under workRoot; if it's gone we can't faithfully re-check them — refuse
+  // rather than report a false fail. Content-only re-asserts stay valid without it.
+  const FS_KEYS: (keyof Assertion)[] = ["file_exists", "user_visible_artifact", "artifact_json"];
+  const hasFsAssert = scenario.assert.some((a) => FS_KEYS.some((k) => a[k] !== undefined));
+  if (hasFsAssert && !existsSync(workRoot)) {
+    log(
+      `verify-run: work dir not found (${workRoot || "<unset>"}) — filesystem assertions ` +
+        `(file_exists/artifact_json/user_visible_artifact) cannot be re-evaluated from this run dir; re-record. (can't verify ⇒ not green)`,
+    );
+    return process.exit(2);
+  }
+
+  const ctx: AssertContext = {
+    transcript: readTranscriptSidecar(join(runDir, "run.jsonl")),
+    toolsCalled: new Set(Object.keys(result.toolCounts ?? {})),
+    subagentTools: new Set((result.subagents ?? []).flatMap((s) => s.toolsUsed ?? [])),
+    egress: result.egress ?? [],
+    result: result.result === "error" ? "error" : "success",
+    workRoot,
+    userVisiblePrefixes: ["outputs", ".projects"],
+    outputsDeletes: scan.outputsDeletes,
+    questions: readQuestionsSidecar(join(runDir, "trace.json")),
+    hostPathLeaked: scan.hostPathLeaked,
+    selfHealRan: scan.selfHealRan,
+    subagents: result.subagents ?? [],
+    gateDeliveries: result.gateDeliveries ?? [],
+  };
+
+  const assertions = evaluate(scenario.assert, ctx);
+  // Reproduce execute.ts's expect_denied → egress_denied expansion (evaluate() does not handle it).
+  for (const host of scenario.expect_denied) {
+    assertions.push({
+      assertion: { egress_denied: host },
+      pass: ctx.egress.some((e) => hostMatches(e.host, host) && e.decision === "deny"),
+      message: `expected ${host} to be denied`,
+    });
+  }
+
+  // Verdict via the SAME path as a live record (the run dir is a live run, so the "live" lane honors the
+  // scan/parity signals already persisted in result.json).
+  const verdict = computeVerdict({ ...result, assertions }, "live");
+  const failed = assertions.filter((a) => !a.pass);
+
+  if (json) {
+    out(
+      JSON.stringify({
+        command: "verify-run",
+        pass: verdict.pass,
+        assertions: assertions.map((a) => ({ assertion: a.assertion, pass: a.pass, message: a.message })),
+        signals: verdict.signals,
+      }),
+    );
+  } else {
+    for (const a of assertions)
+      log(`${a.pass ? "✓" : "✗"} ${Object.keys(a.assertion).join("+") || "(assertion)"}${a.message ? ` — ${a.message}` : ""}`);
+    for (const s of verdict.signals.filter((s) => s.code !== "assertion"))
+      log(`${s.severity === "fail" ? "✗" : "·"} ${s.code}: ${s.message}`);
+    log(
+      verdict.pass
+        ? `✓ verify-run: all ${assertions.length} assertion(s) pass (no live agent)`
+        : `✗ verify-run: ${failed.length}/${assertions.length} assertion(s) failed`,
+    );
+  }
+  return process.exit(verdict.exitCode);
 }
 
 /** `assert --list` (#8) — enumerate the available assertion keys + one-line semantics, generated from the
