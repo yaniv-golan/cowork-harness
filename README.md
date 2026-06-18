@@ -85,6 +85,7 @@ Skill testing is the headline use, but the tool is a general harness over the Co
 | `gates` / `answer` | Stream / answer in-band gates for `--decider-dir` | a **driving agent** answers live questions via a Monitor |
 | `boundary-check [baseline]` | Prove the sandbox enforces Cowork's limitations | verifying the harness's own fidelity |
 | `sync` / `list` | Derive/refresh & list platform baselines from the Desktop install | after Claude Desktop updates (baselines ship, so it's optional otherwise) |
+| `doctor [--tier <t>]` | Read-only prerequisite check (Docker, staged agent, token, baseline); prints the exact `docker build` line if the agent image is missing | "can I run the live tiers — what's missing?" before a first live run |
 | `vm <init\|status\|delete\|prune>` | Manage the L2 Apple-VZ / Lima microVM (`prune` removes orphaned VMs left by config/agent-version changes) | running `--fidelity microvm` |
 
 There's also a **Python `cowork` pytest lane** (`python/`) for driving any of this from `pytest` beside your normal tests — see [`python/README.md`](./python/README.md).

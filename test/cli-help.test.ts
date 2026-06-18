@@ -54,6 +54,8 @@ describe.skipIf(!can)("cli --help: parseArgs-direct subcommands print usage (F-7
     ["list", "usage: list"],
     ["chat", "usage: chat"],
     ["decide", "usage: decide"],
+    ["verify-run", "usage: verify-run"],
+    ["doctor", "usage: doctor"],
   ];
   for (const [cmd, expected] of cases) {
     it(`\`${cmd} --help\` exits 0 with a usage line (not "unknown flag")`, () => {
@@ -61,6 +63,19 @@ describe.skipIf(!can)("cli --help: parseArgs-direct subcommands print usage (F-7
       expect(code).toBe(0);
       expect(text).toContain(expected);
       expect(text).not.toContain("unknown flag");
+    });
+  }
+});
+
+// Membership guard: a command added to the dispatch but forgotten in the top-level HELP ships
+// undiscoverable. Pin the recently-added commands explicitly. (cli-structural-guard only checks
+// unknown-flag rejection, not HELP membership — see the plan note.)
+describe.skipIf(!can)("cli --help: top-level help lists newer commands", () => {
+  const r = spawnSync("node", [CLI, "--help"], { encoding: "utf8", cwd: mkdtempSync(join(tmpdir(), "cc-help-")) });
+  const text = (r.stderr || "") + (r.stdout || "");
+  for (const c of ["doctor", "verify-run"]) {
+    it(`top-level --help mentions \`${c}\``, () => {
+      expect(text).toContain(c);
     });
   }
 });

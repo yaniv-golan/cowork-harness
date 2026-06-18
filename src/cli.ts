@@ -17,6 +17,7 @@ import { cmdChat } from "./run/chat.js";
 import { cmdRecord, cmdReplay, cmdVerifyCassettes } from "./run/cassette.js";
 import { resolveInputs } from "./run/inputs.js";
 import { cmdLint } from "./run/scenario-tool.js";
+import { cmdDoctor } from "./run/doctor.js";
 import { parseArgs } from "./cli-args.js";
 import { loadDotenv } from "./dotenv.js";
 import { makeRenderer, renderStart, renderFooter, startHeartbeat, type RenderPlan } from "./run/renderer.js";
@@ -91,6 +92,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
   list                         list available platform baselines
   boundary-check [baseline]    prove the sandbox enforces Cowork's limitations
   vm <init|status|delete|prune>  manage the L2 Apple-VZ microVM (fidelity: microvm); prune drops orphaned VMs
+  doctor [--tier <tier>]       read-only prerequisite check (Docker, staged agent, token, baseline)
 
   Global:  --dotenv <path>     load a .env before the command (host-side creds; never mounted).
            Auth resolves from process.env > --dotenv > ./.env > <install>/.env.
@@ -228,6 +230,7 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
   gates: "usage: gates <dir> [--follow]",
   answer: 'usage: answer <dir> --gate <N> (--choose <label> | --answer "<q>=<label>")',
   "verify-run": "usage: verify-run <run-dir> <scenario.yaml> [--output-format json]   (re-evaluate a scenario's assert: against a kept run dir; no live agent)",
+  doctor: "usage: doctor [--tier protocol|container|microvm|hostloop|cowork] [--output-format json]   (read-only prerequisite check)",
 };
 
 async function main() {
@@ -276,6 +279,7 @@ async function main() {
       "boundary-check",
       "vm",
       "lint",
+      "doctor",
     ];
     // The command-name footgun only applies to the space form (the equals form can't swallow the next
     // token as its value), but checking both is harmless and keeps the guard uniform.
@@ -320,6 +324,8 @@ async function main() {
       return cmdSync(rest);
     case "list":
       return cmdList();
+    case "doctor":
+      return cmdDoctor(rest);
     case "boundary-check":
       return cmdBoundary(rest);
     case "vm":
