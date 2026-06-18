@@ -25,6 +25,8 @@ protocol layer or run-loop bookkeeping in the CLI.
 - `cowork-harness sync` is **local-only** (needs Desktop + `app.asar`; not on CI). The committed
   `baselines/*.json` are CI's source of truth — never hand-edit release facts into source; they come from
   `sync` (see `docs/maintenance.md`).
+- **`cowork-harness lint` exit 127 is a hard failure** (python3 or PyYAML not installed). CI scripts MUST
+  NOT swallow this exit code — treat it as a missing gate, not a vacuous pass.
 
 ## Invariants — do NOT break (each one cost a real bug)
 - **AskUserQuestion answer shape.** `serializeDecision` (`src/agent/session.ts`) MUST emit

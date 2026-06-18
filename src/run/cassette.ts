@@ -687,10 +687,12 @@ export async function cmdRecord(args: string[]) {
   let p;
   try {
     p = parseArgs(args, {
-      booleans: ["--no-redact", "--allow-failing", "--rerecord-stale"],
+      // --quiet/--verbose accepted for flag consistency but currently no-op in record (renderer plan is fixed).
+      booleans: ["--no-redact", "--allow-failing", "--rerecord-stale", "--quiet", "--verbose"],
       values: ["--out", "--output-format", "--max-artifact-bytes"],
       noDashValue: ["--out"],
       enums: { "--output-format": ["text", "json"] },
+      aliases: { "-q": "--quiet", "-V": "--verbose" },
     });
   } catch (e) {
     log((e as Error).message);
@@ -916,18 +918,25 @@ export async function cmdReplay(args: string[]) {
   let p;
   try {
     p = parseArgs(args, {
-      booleans: ["--strict"],
+      // --quiet/--verbose accepted for flag consistency but currently no-op in replay (renderer plan is fixed).
+      booleans: ["--strict", "--quiet", "--verbose"],
       values: ["--cassette", "--output-format"],
       noDashValue: ["--cassette"],
       enums: { "--output-format": ["text", "json"] },
+      aliases: { "-q": "--quiet", "-V": "--verbose" },
     });
   } catch (e) {
     log(String((e as Error).message));
     return process.exit(2);
   }
-  const target = p.options["--cassette"] ?? p.positionals[0];
+  // §8.1: reject ambiguous invocation — both positional and --cassette given. Positional is canonical.
+  if (p.options["--cassette"] !== undefined && p.positionals.length > 0) {
+    log("replay: provide the cassette path as a positional OR via --cassette, not both.\n       --cassette is a legacy alias; prefer: replay <file.cassette.json>");
+    return process.exit(2);
+  }
+  const target = p.positionals[0] ?? p.options["--cassette"];
   if (!target) {
-    log("usage: replay <file.cassette.json | dir/> [--cassette <file>] [--strict] [--output-format text|json]");
+    log("usage: replay <file.cassette.json | dir/> [--strict] [--output-format text|json]");
     return process.exit(2);
   }
   if (p.positionals.length > 1) {
@@ -971,27 +980,27 @@ export function cmdVerifyCassettes(args: string[]) {
   let p;
   try {
     p = parseArgs(args, {
-      booleans: ["--privacy-only", "--staleness-only"],
+      // Q9: --skip-privacy/--skip-staleness are the new canonical names; old --privacy-only/--staleness-only kept as aliases.
+      booleans: ["--skip-privacy", "--skip-staleness", "--privacy-only", "--staleness-only", "--quiet", "--verbose"],
       values: ["--output-format"],
       repeated: ["--allow", "--allow-domain", "--allow-email", "--allow-file"],
       enums: { "--output-format": ["text", "json"] },
       noDashValue: ["--allow-file"],
+      aliases: { "-q": "--quiet", "-V": "--verbose" },
     });
   } catch (e) {
     log(String((e as Error).message));
     return process.exit(2);
   }
   const json = p.options["--output-format"] === "json";
-  const privacyOnly = p.flags["--privacy-only"] ?? false;
-  const stalenessOnly = p.flags["--staleness-only"] ?? false;
-  // Both flags together would disable BOTH families → empty findings → ok=true → exit 0: a silent
-  // false-green in the gate itself. Reject it as a usage error.
-  if (privacyOnly && stalenessOnly) {
-    log("verify-cassettes: --privacy-only and --staleness-only are mutually exclusive (together they'd check nothing)");
+  const skipPrivacy = (p.flags["--skip-privacy"] || p.flags["--privacy-only"]) ?? false;
+  const skipStaleness = (p.flags["--skip-staleness"] || p.flags["--staleness-only"]) ?? false;
+  if (skipPrivacy && skipStaleness) {
+    log("verify-cassettes: --skip-privacy and --skip-staleness are mutually exclusive (together they'd check nothing)");
     return process.exit(2);
   }
-  const doPrivacy = !stalenessOnly;
-  const doStaleness = !privacyOnly;
+  const doPrivacy = !skipPrivacy;
+  const doStaleness = !skipStaleness;
   // Allow model (F-2): each entry is whole-token anchored + class-scoped. A bare `--allow` applies to every
   // class (back-compat); `--allow-domain`/`--allow-email` scope to one class so a domain allow can't bleed
   // into the email tripwire. `--allow-file` (F-8) loads bare (all-class) patterns from a version-controlled
@@ -1024,7 +1033,7 @@ export function cmdVerifyCassettes(args: string[]) {
   const target = p.positionals[0];
   if (!target) {
     log(
-      "usage: verify-cassettes <file|dir> [--privacy-only|--staleness-only] [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-file <path>]... [--output-format json]",
+      "usage: verify-cassettes <file|dir> [--skip-privacy|--skip-staleness] [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-file <path>]... [--output-format json]",
     );
     return process.exit(2);
   }

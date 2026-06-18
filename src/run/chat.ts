@@ -7,6 +7,7 @@ import { loadBaseline, resolveAgentBinary } from "../baseline.js";
 import { loadSession, buildLaunchPlan } from "../session.js";
 import { spawnContainer } from "../runtime/container.js";
 import { spawnHostLoop } from "../runtime/hostloop.js";
+import { spawnProtocol } from "../runtime/protocol.js";
 import { renderPrompts } from "../prompt.js";
 import { startEgressSidecar } from "../egress/sidecar.js";
 import { Scenario } from "../types.js";
@@ -21,31 +22,41 @@ import type { WebFetchProvenance } from "../hostloop/workspace-handler.js";
 const log = (s: string) => process.stderr.write(s);
 
 /**
- * `chat <folder> [--raw] [--fidelity container|hostloop]` — interactive multi-turn REPL against a
- * skill, keeping the full harness (egress sandbox, control protocol). `--raw` drops the protocol and
- * `docker run -it`s the agent in its NATIVE interactive cowork mode (unmediated escape hatch).
+ * `chat <folder> [--raw] [--fidelity protocol|container|hostloop]` — interactive multi-turn REPL
+ * against a skill, keeping the full harness (egress sandbox, control protocol). `--raw` drops the
+ * protocol and `docker run -it`s the agent in its NATIVE interactive cowork mode (unmediated escape hatch).
  */
 export async function cmdChat(args: string[]) {
   const positional: string[] = [];
   let raw = false;
-  let fidelity: "container" | "hostloop" = "container";
-  let model: string | undefined;
+  // R4: COWORK_HARNESS_FIDELITY env var — protocol|container|hostloop accepted here (subset of skill tiers).
+  const envFid = process.env.COWORK_HARNESS_FIDELITY;
+  let fidelity: "protocol" | "container" | "hostloop" =
+    envFid === "hostloop" ? "hostloop" : envFid === "protocol" ? "protocol" : "container";
+  // R4: COWORK_HARNESS_MODEL env var default (CLI --model takes precedence).
+  let model: string | undefined = process.env.COWORK_HARNESS_MODEL;
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === "--raw") raw = true;
     else if (a === "--fidelity") {
-      const v = args[++i];
-      if (v !== "container" && v !== "hostloop") {
-        log(`chat --fidelity must be "container" or "hostloop" (got "${v ?? ""}")\n`);
+      const v = ++i < args.length ? args[i] : undefined; // §8.2: bounds check
+      if (v !== "protocol" && v !== "container" && v !== "hostloop") {
+        log(`chat --fidelity must be "protocol", "container", or "hostloop" (got "${v ?? ""}")\n`);
         process.exit(2);
       }
       fidelity = v;
-    } else if (a === "--model") model = args[++i];
+    } else if (a === "--model") {
+      if (++i >= args.length) { // §8.2: bounds check — args[++i] was silent undefined at end-of-argv
+        log(`chat --model requires a value\n`);
+        process.exit(2);
+      }
+      model = args[i];
+    }
     else positional.push(a);
   }
   const folder = positional[0];
   if (!folder) {
-    log("usage: chat <skill-folder> [--raw] [--fidelity container|hostloop] [--model <id>]\n");
+    log("usage: chat <skill-folder> [--raw] [--fidelity protocol|container|hostloop] [--model <id>]\n");
     process.exit(2);
   }
 
@@ -63,7 +74,8 @@ export async function cmdChat(args: string[]) {
   // mirroring execute.ts's F1 hardening so a re-run can't collide on the sidecar container name.
   const runToken = `r${process.hrtime.bigint().toString(36)}`;
   // #43: no process.env mutation — pass proxy/network explicitly so concurrent calls don't stomp.
-  const sidecar = startEgressSidecar(plan.egressAllow, outDir, runToken);
+  // protocol tier runs the host claude binary with no Docker sandbox, so no sidecar is needed.
+  const sidecar = fidelity !== "protocol" ? startEgressSidecar(plan.egressAllow, outDir, runToken) : null;
   const prompts = renderPrompts(baseline, session, sessionId);
 
   log(`cowork chat [${fidelity}] — type your message, /exit to quit\n`);
@@ -79,13 +91,25 @@ export async function cmdChat(args: string[]) {
   const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
   const ask = (prompt: string) => new Promise<string>((resolve) => rl.question(prompt, (a) => resolve(a.trim())));
   try {
-    if (fidelity === "hostloop") {
+    if (fidelity === "protocol") {
+      child = spawnProtocol(scenario, baseline, plan, outDir);
+      const agent = new LiveAgentSession(child as any, outDir);
+      const decider = Chain(new ScriptedDecider([]), new PermissionDefaultDecider("cowork"), new PromptDecider(ask));
+      const renderer = makeRenderer({
+        live: true,
+        progress: true,
+        verbose: false,
+        color: process.stderr.isTTY === true && !process.env.NO_COLOR,
+      });
+      const run = new Run(agent, decider, [renderer], sessionId);
+      await run.drive(ttyTurns(rl), { systemPromptAppend: prompts.systemPromptAppend });
+    } else if (fidelity === "hostloop") {
       // #25: honor --fidelity hostloop in chat, mirroring execute.ts's branch selection.
       const hl = spawnHostLoop(scenario, baseline, plan, outDir, sessionId, {
         systemPromptAppend: prompts.systemPromptAppend,
         runToken,
-        egressProxy: sidecar.proxyUrl,
-        dockerNetwork: sidecar.network,
+        egressProxy: sidecar!.proxyUrl,
+        dockerNetwork: sidecar!.network,
         provenanceRef,
       });
       child = hl.child;
@@ -112,8 +136,8 @@ export async function cmdChat(args: string[]) {
     } else {
       child = spawnContainer(scenario, baseline, plan, outDir, sessionId, {
         systemPromptAppend: prompts.systemPromptAppend,
-        egressProxy: sidecar.proxyUrl,
-        dockerNetwork: sidecar.network,
+        egressProxy: sidecar!.proxyUrl,
+        dockerNetwork: sidecar!.network,
       });
       const agent = new LiveAgentSession(child as any, outDir);
       const decider = Chain(new ScriptedDecider([]), new PermissionDefaultDecider("cowork"), new PromptDecider(ask));
@@ -134,7 +158,7 @@ export async function cmdChat(args: string[]) {
       /* already gone */
     }
     if (containerName) spawnSync(runner, ["rm", "-f", containerName], { stdio: "ignore" });
-    sidecar.teardown();
+    sidecar?.teardown();
     rl.close(); // the one shared stdin interface — closed once, here
   }
   log(`\nchat ended (transcript under ${outDir})\n`);
