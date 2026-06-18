@@ -229,7 +229,8 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
     'usage: decide [--question <q>] [--option <o>]... [--decider-cmd <cmd> | --decider-llm] [--answer "<q>=<label>"]... [--answer-policy <p>] [--intent <s>] [--output-format json]',
   gates: "usage: gates <dir> [--follow]",
   answer: 'usage: answer <dir> --gate <N> (--choose <label> | --answer "<q>=<label>")',
-  "verify-run": "usage: verify-run <run-dir> <scenario.yaml> [--output-format json]   (re-evaluate a scenario's assert: against a kept run dir; no live agent)",
+  "verify-run":
+    "usage: verify-run <run-dir> <scenario.yaml> [--output-format json]   (re-evaluate a scenario's assert: against a kept run dir; no live agent)",
   doctor: "usage: doctor [--tier protocol|container|microvm|hostloop|cowork] [--output-format json]   (read-only prerequisite check)",
 };
 

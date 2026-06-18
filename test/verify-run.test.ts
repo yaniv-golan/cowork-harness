@@ -34,7 +34,10 @@ function keptRun(): string {
   writeFileSync(join(root, "result.json"), JSON.stringify(result, null, 2));
   writeFileSync(
     join(root, "run.jsonl"),
-    [JSON.stringify({ t: "run", scenario: "smoke" }), JSON.stringify({ t: "transcript", text: "the skill flagged the blank exclusivity field" })].join("\n"),
+    [
+      JSON.stringify({ t: "run", scenario: "smoke" }),
+      JSON.stringify({ t: "transcript", text: "the skill flagged the blank exclusivity field" }),
+    ].join("\n"),
   );
   writeFileSync(join(root, "trace.json"), JSON.stringify({ questions: [], steps: ["Read", "Bash"] }));
   return root;
@@ -58,7 +61,7 @@ describe.skipIf(!can)("F-1: verify-run re-asserts a kept run dir without a live 
       run,
       [
         "  - transcript_matches: 'flagged the blank'",
-        "  - artifact_json: { artifact: outputs/report.json, path: detected_stage, equals: \"seed\" }",
+        '  - artifact_json: { artifact: outputs/report.json, path: detected_stage, equals: "seed" }',
         "  - file_exists: outputs/report.json",
       ].join("\n") + "\nexpect_denied:\n  - tracker.evil.com\n",
     );

@@ -177,9 +177,7 @@ export function hashSkillDirs(dirs: string[], scopeSkills?: string[], sessionIgn
     const scopeFn = keep && isDir(join(d, "skills")) ? scopedAccept(keep) : undefined;
     // No scope + no ignore → undefined accept → byte-identical to the legacy whole-tree hash.
     const accept =
-      scopeFn || ignoreRes.length
-        ? (rel: string) => (scopeFn ? scopeFn(rel) : true) && !ignoreRes.some((re) => re.test(rel))
-        : undefined;
+      scopeFn || ignoreRes.length ? (rel: string) => (scopeFn ? scopeFn(rel) : true) && !ignoreRes.some((re) => re.test(rel)) : undefined;
     hashDir(d, hash, "", accept);
   }
   return hash.digest("hex");

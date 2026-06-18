@@ -79,8 +79,7 @@ export const realProbe: DoctorProbe = {
       return { ok: false, error: (e as Error).message };
     }
   },
-  hasToken: () =>
-    !!(process.env.CLAUDE_CODE_OAUTH_TOKEN || process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN),
+  hasToken: () => !!(process.env.CLAUDE_CODE_OAUTH_TOKEN || process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN),
   baseline() {
     try {
       return { ok: true, version: loadBaseline("latest").appVersion };
@@ -138,7 +137,11 @@ export function runDoctorChecks(tier: Tier, probe: DoctorProbe = realProbe): Doc
       title: "Container runtime",
       status: up ? "ok" : "fail",
       detail: avail ? (up ? `${runtime} daemon reachable` : `${runtime} found but daemon not reachable`) : `${runtime} not found`,
-      remedy: up ? undefined : avail ? `start ${runtime} (the daemon isn't responding to \`${runtime} info\`)` : `install ${runtime} (or set COWORK_CONTAINER_RUNTIME)`,
+      remedy: up
+        ? undefined
+        : avail
+          ? `start ${runtime} (the daemon isn't responding to \`${runtime} info\`)`
+          : `install ${runtime} (or set COWORK_CONTAINER_RUNTIME)`,
       required: true,
     });
 
