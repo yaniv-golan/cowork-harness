@@ -28,7 +28,7 @@ import { hashSkillDirs } from "./skill-hash.js";
 import { computeVerdict } from "./verdict.js";
 import { redactJsonLine, redactText, redactStructural, loadRedactionPolicy, type RedactionPolicy } from "../redact.js";
 import { collectSecrets, scrub } from "../secrets.js";
-import { scanText, DEFAULT_SCAN_PATTERNS, EMAIL_SCAN_PATTERNS, type ScanFinding } from "../scan.js";
+import { scanText, DEFAULT_SCAN_PATTERNS, EMAIL_SCAN_PATTERNS, type ScanFinding, type AllowInput, type AllowPattern } from "../scan.js";
 import { parse as parseYaml } from "yaml";
 
 const out = (s: string) => process.stdout.write(s + "\n");
@@ -218,7 +218,7 @@ function isCapabilityManifest(line: string): boolean {
   return false;
 }
 
-export function scanCassette(cassette: Cassette, allow: RegExp[]): ScanFinding[] {
+export function scanCassette(cassette: Cassette, allow: AllowInput[]): ScanFinding[] {
   const findings: ScanFinding[] = [];
   const FULL = DEFAULT_SCAN_PATTERNS; // email + currency + domain
   const EMAIL = EMAIL_SCAN_PATTERNS; // email only — for the capability-manifest messages
@@ -835,8 +835,9 @@ export function cmdVerifyCassettes(args: string[]) {
     p = parseArgs(args, {
       booleans: ["--privacy-only", "--staleness-only"],
       values: ["--output-format"],
-      repeated: ["--allow"],
+      repeated: ["--allow", "--allow-domain", "--allow-email", "--allow-file"],
       enums: { "--output-format": ["text", "json"] },
+      noDashValue: ["--allow-file"],
     });
   } catch (e) {
     log(String((e as Error).message));
@@ -853,18 +854,40 @@ export function cmdVerifyCassettes(args: string[]) {
   }
   const doPrivacy = !stalenessOnly;
   const doStaleness = !privacyOnly;
-  const allow: RegExp[] = [];
-  for (const src of p.repeated["--allow"] ?? []) {
+  // Allow model (F-2): each entry is whole-token anchored + class-scoped. A bare `--allow` applies to every
+  // class (back-compat); `--allow-domain`/`--allow-email` scope to one class so a domain allow can't bleed
+  // into the email tripwire. `--allow-file` (F-8) loads bare (all-class) patterns from a version-controlled
+  // file, one per line, `#` comments and blanks ignored.
+  const allow: AllowPattern[] = [];
+  const addAllow = (src: string, cls: string | undefined, flag: string): void => {
     try {
-      allow.push(new RegExp(src, "i"));
+      allow.push({ cls, re: new RegExp(src, "i") });
     } catch {
-      log(`--allow: invalid regex: ${src}`);
+      log(`${flag}: invalid regex: ${src}`);
+      process.exit(2);
+    }
+  };
+  for (const src of p.repeated["--allow"] ?? []) addAllow(src, undefined, "--allow");
+  for (const src of p.repeated["--allow-domain"] ?? []) addAllow(src, "domain", "--allow-domain");
+  for (const src of p.repeated["--allow-email"] ?? []) addAllow(src, "email", "--allow-email");
+  for (const file of p.repeated["--allow-file"] ?? []) {
+    let body: string;
+    try {
+      body = readFileSync(file, "utf8");
+    } catch (e) {
+      log(`--allow-file: cannot read ${file}: ${(e as Error).message}`);
       return process.exit(2);
+    }
+    for (const raw of body.split("\n")) {
+      const line = raw.trim();
+      if (line && !line.startsWith("#")) addAllow(line, undefined, `--allow-file (${file})`);
     }
   }
   const target = p.positionals[0];
   if (!target) {
-    log("usage: verify-cassettes <file|dir> [--privacy-only|--staleness-only] [--allow <regex>]... [--output-format json]");
+    log(
+      "usage: verify-cassettes <file|dir> [--privacy-only|--staleness-only] [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-file <path>]... [--output-format json]",
+    );
     return process.exit(2);
   }
   if (p.positionals.length > 1) {

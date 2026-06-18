@@ -83,6 +83,28 @@ describe("scanCassette — whole-surface privacy scan (A2)", () => {
     expect(scanCassette(c, [/cooley\.com/i]).some((f) => f.cls === "domain")).toBe(false);
   });
 
+  it("F-2: a domain allow does NOT silently clear an email finding (no cross-class bleed)", () => {
+    const c: any = {
+      scenario: scenario([{ result: "success" }]),
+      events: [JSON.stringify({ text: "reach founder@startup.com or visit startup.com" })],
+    };
+    // A bare allow for the domain `startup\.com` used to substring-match (and suppress) the email
+    // `founder@startup.com`. After anchoring it clears only the whole-token domain, never the email.
+    const f = scanCassette(c, [/startup\.com/i]);
+    expect(f.some((x) => x.cls === "email")).toBe(true); // email tripwire stays live
+    expect(f.some((x) => x.cls === "domain")).toBe(false); // domain still allowed
+  });
+
+  it("F-2: a class-scoped --allow-domain leaves the email class untouched", () => {
+    const c: any = {
+      scenario: scenario([{ result: "success" }]),
+      events: [JSON.stringify({ text: "reach founder@startup.com or visit startup.com" })],
+    };
+    const f = scanCassette(c, [{ cls: "domain", re: /startup\.com/i }]);
+    expect(f.some((x) => x.cls === "domain")).toBe(false);
+    expect(f.some((x) => x.cls === "email")).toBe(true);
+  });
+
   it("flags PII in an artifact FILENAME / path (C1)", () => {
     const c: any = {
       scenario: scenario([{ result: "success" }]),

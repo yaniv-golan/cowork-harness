@@ -13,6 +13,21 @@ export interface ScanFinding {
   sample: string; // the matched text (already redaction-survived, so safe to surface)
 }
 
+/** An allowlist entry. `cls` undefined = applies to every class (a bare `--allow`); `cls` set = scoped to one
+ *  finding class (`--allow-domain` → "domain"). Scoping plus whole-token anchoring stops a domain allow from
+ *  silently clearing an email finding whose domain it happens to match (F-2). */
+export interface AllowPattern {
+  cls?: string;
+  re: RegExp;
+}
+
+/** Allow entries may be authored as a bare RegExp (all-class, the ergonomic default) or a scoped {cls,re}. */
+export type AllowInput = RegExp | AllowPattern;
+
+function normAllow(a: AllowInput): AllowPattern {
+  return a instanceof RegExp ? { re: a } : a;
+}
+
 export const DEFAULT_SCAN_PATTERNS: { re: RegExp; cls: string }[] = [
   { re: /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/gi, cls: "email" },
   { re: /\$\s?\d[\d,]*(?:\.\d+)?\s?(?:k|m|b|bn|million|billion)?/gi, cls: "currency" },
@@ -28,19 +43,27 @@ export const DEFAULT_SCAN_PATTERNS: { re: RegExp; cls: string }[] = [
  *  full net. */
 export const EMAIL_SCAN_PATTERNS = DEFAULT_SCAN_PATTERNS.filter((p) => p.cls === "email");
 
-function allowed(sample: string, allow: RegExp[]): boolean {
-  // Test against a non-global clone so a caller's /g regex can't carry lastIndex across calls.
-  return allow.some((a) => new RegExp(a.source, a.flags.replace("g", "")).test(sample));
+function allowed(sample: string, cls: string, allow: AllowPattern[]): boolean {
+  // An allow suppresses a finding only when (a) it is unscoped OR scoped to this finding's class, AND (b) it
+  // matches the WHOLE finding token. Anchoring with ^(?:…)$ is the F-2 fix: substring matching let a domain
+  // allow (e.g. `example\.com`) silently clear an EMAIL finding (`alice@example.com`) whose domain matched —
+  // a real founder@startup.com could then pass a gate that "has an email class". Test against a non-global
+  // clone so a caller's /g regex can't carry lastIndex across calls.
+  return allow.some((a) => {
+    if (a.cls !== undefined && a.cls !== cls) return false;
+    return new RegExp(`^(?:${a.re.source})$`, a.re.flags.replace("g", "")).test(sample);
+  });
 }
 
-/** Scan one string for PII matches, suppressing anything the allowlist covers. */
-export function scanText(text: string, where: string, allow: RegExp[], patterns = DEFAULT_SCAN_PATTERNS): ScanFinding[] {
+/** Scan one string for PII matches, suppressing anything the (class-scoped, whole-token) allowlist covers. */
+export function scanText(text: string, where: string, allow: AllowInput[], patterns = DEFAULT_SCAN_PATTERNS): ScanFinding[] {
   const out: ScanFinding[] = [];
+  const norm = allow.map(normAllow);
   for (const { re, cls } of patterns) {
     const g = new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g");
     for (const m of text.matchAll(g)) {
       const sample = m[0];
-      if (!allowed(sample, allow)) out.push({ where, cls, sample });
+      if (!allowed(sample, cls, norm)) out.push({ where, cls, sample });
     }
   }
   return out;

@@ -52,12 +52,28 @@ describe.skipIf(!can)("verify-cassettes CLI gate", () => {
     expect(r.json.ok).toBe(false);
   });
 
-  it("--allow suppresses the finding → exit 0", () => {
+  it("--allow suppresses the finding (whole-token match) → exit 0", () => {
     const d = mkdtempSync(join(tmpdir(), "cwh-vc-"));
     const c = cassette([JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "mail eve@evil.com" }] } })]);
     writeFileSync(join(d, "leak.cassette.json"), JSON.stringify(c));
-    const r = run(["verify-cassettes", join(d, "leak.cassette.json"), "--allow", "evil\\.com", "--output-format", "json"], d);
+    // F-2: an allow must match the WHOLE finding token. `eve@evil.com` yields BOTH an email token
+    // (`eve@evil.com`) and a domain token (`evil.com`), so suppressing the cassette needs a whole-token
+    // allow for each class.
+    const r = run(
+      ["verify-cassettes", join(d, "leak.cassette.json"), "--allow", "eve@evil\\.com", "--allow", "evil\\.com", "--output-format", "json"],
+      d,
+    );
     expect(r.code).toBe(0);
+  });
+
+  it("F-2: a bare-DOMAIN allow does NOT suppress an EMAIL finding (no cross-class bleed) → still exit 1", () => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-vc-"));
+    const c = cassette([JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "mail eve@evil.com" }] } })]);
+    writeFileSync(join(d, "leak.cassette.json"), JSON.stringify(c));
+    // Pre-fix, `--allow evil\.com` substring-matched inside the email and silently cleared it. Now it can't.
+    const r = run(["verify-cassettes", join(d, "leak.cassette.json"), "--allow", "evil\\.com", "--output-format", "json"], d);
+    expect(r.code).toBe(1);
+    expect(r.json.ok).toBe(false);
   });
 
   it("a directory with no cassettes → loud non-zero (exit 2), not a vacuous pass", () => {
