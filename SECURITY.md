@@ -27,9 +27,10 @@ This project is a **test harness**, and its sandbox is a **fidelity fixture, not
   vars win). `.env` is a **host-side** store — it is read into the CLI process and **never mounted
   into the sandbox**. **Keep `.env` at the working-dir root, not inside a mounted skill/project
   folder**, or its contents would be copied into the agent's filesystem.
-- The token is passed into the runtime via argv/env, **never written to disk in a runtime path**, and
-  **scrubbed by value** from every persisted run log (events/run/trace/result). Still, treat scenario
-  runs like any CI job that holds a key.
+- The token is passed into the sandbox **off the process argv** (Docker: `-e KEY` inherit-by-name, not
+  on `argv`; microVM: a stdin prologue before the agent binary starts), so it is not visible via
+  `ps`/`/proc`. It is **never written to disk in a runtime path** and **scrubbed by value** from every
+  persisted run log (events/run/trace/result). Still, treat scenario runs like any CI job that holds a key.
 - **Scenario files are trusted input.** A scenario's `allow_if` predicate is evaluated as host
   JavaScript (via `new Function`); only run scenarios you trust, the same as any test you'd execute.
 - The egress allowlist limits where the agent can send data, but at the `container` tier it is enforced by a proxy + an `internal` Docker network, not a kernel-level netfilter you should rely on against hostile code.

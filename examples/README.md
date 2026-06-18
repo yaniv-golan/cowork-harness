@@ -57,13 +57,13 @@ README's [Quick start → Prerequisites](../README.md#quick-start) — it isn't 
   cowork-harness replay --cassette examples/replays/example-pdf-skill.cassette.json
   ```
 
-- **The `protocol` tier — zero infra.** `--fidelity protocol` (L0) runs the host control loop
-  directly: no Docker, no staged agent. `scenarios/protocol-smoke.yaml` is authored at this tier,
-  and you can force any scenario down to it on the command line:
+- **The `protocol` tier — zero infra.** The `protocol` (L0) fidelity tier runs the host control loop
+  directly: no Docker, no staged agent. `scenarios/protocol-smoke.yaml` is authored at this tier.
+  To run a different scenario at L0, set `fidelity: protocol` in its YAML (fidelity is a scenario
+  field, not a CLI flag on `run`):
 
   ```bash
-  cowork-harness run examples/scenarios/protocol-smoke.yaml          # already protocol
-  cowork-harness run examples/scenarios/example-pdf-skill.yaml --fidelity protocol
+  cowork-harness run examples/scenarios/protocol-smoke.yaml   # already protocol in YAML
   ```
 
   L0 still calls a real model (so your normal `claude` login / token applies), but it has **no

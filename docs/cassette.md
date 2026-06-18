@@ -22,7 +22,7 @@ Use a live `run` for filesystem/egress assertions; use `replay` for the token-fr
 
 ```jsonc
 {
-  "cassetteVersion": 1,                  // format version; ABSENT = legacy (0); a FUTURE version warns
+  "cassetteVersion": 2,                  // format version; ABSENT = legacy (0); a FUTURE version warns
   "scenario": { /* Scenario object — same schema as the .yaml */ },
   "events": [ /* JSON lines from events.jsonl (child→driver stdout) */ ],
   "controlOut": [ /* JSON lines from control-out.jsonl (driver→child control_responses) */ ],
@@ -30,7 +30,7 @@ Use a live `run` for filesystem/egress assertions; use `replay` for the token-fr
     { "path": "outputs/x.json", "bytes": 24, "sha256": "…", "body": "{…}" }, // body inlined ≤ 64 KiB
     { "path": "outputs/big.bin", "bytes": 9e6, "sha256": "…", "truncated": true } // oversized → hash-only
   ],
-  "fingerprint": { "baseline": "1.12603.1", "skillHash": "…", "skillSources": ["…"] } // staleness tripwire
+  "fingerprint": { "baseline": "1.13576.1", "skillHash": "…", "skillSources": ["…"] } // staleness tripwire
 }
 ```
 

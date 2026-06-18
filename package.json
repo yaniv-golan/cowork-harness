@@ -30,6 +30,7 @@
   "files": [
     "dist",
     "baselines",
+    "examples/replays",
     "fixtures",
     "docker",
     "schema",

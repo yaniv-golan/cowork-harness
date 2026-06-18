@@ -79,6 +79,7 @@ Skill testing is the headline use, but the tool is a general harness over the Co
 | `verify-run <run-dir> <scenario.yaml>` | Re-evaluate a scenario's `assert:` against an already-kept run dir — **no live agent, no tokens, no Docker** (~1s) | iterating on a wrong assertion without a full live re-record |
 | `trace <run-id>` | Digest a run's `events.jsonl` (`--tools`, `--gates`, `--dispatches` for the sub-agent dispatch tree + total) | "how many sub-agents *actually* dispatched, and which?" |
 | `scaffold --from-run <id>` | Turn a kept run into a starter scenario YAML (gates→answers, artifacts→`file_exists`) | authoring a scenario from a real run instead of guessing |
+| `lint <scenario.yaml>…` | Check scenarios for silent false-greens — assertions placed on the wrong CI lane, mixed content/live keys, missing `controlOut`-required keys (bundled `scenario.py`; needs python3 + PyYAML) | before committing a new scenario or after changing assertions |
 | `assert --list` | List the available scenario assertions (generated from the schema) | "what can I assert?" without grepping the source |
 | `decide` | Validate a decider against a sample question in ~2 s (no run) | sanity-check a `--decider-*` / `--answer` wiring before a long run |
 | `gates` / `answer` | Stream / answer in-band gates for `--decider-dir` | a **driving agent** answers live questions via a Monitor |
@@ -183,7 +184,7 @@ This repo ships a **companion skill** (`.claude/skills/cowork-harness/`) that te
 /plugin install cowork-harness@cowork-harness
 ```
 
-The skill **self-bootstraps the CLI**: if `cowork-harness` isn't on your PATH it falls back to `npx cowork-harness@>=0.3.0` (a version floor that fails loud rather than silently fetching a too-old CLI; Node ≥ 20). Tiers above `protocol` still need Docker/Lima and a Claude Desktop agent binary — see the prerequisites below.
+The skill **self-bootstraps the CLI**: if `cowork-harness` isn't on your PATH it falls back to `npx cowork-harness@>=0.5.0` (a version floor that fails loud rather than silently fetching a too-old CLI; Node ≥ 20). Tiers above `protocol` still need Docker/Lima and a Claude Desktop agent binary — see the prerequisites below.
 
 It also follows the open [Agent Skills](https://github.com/vercel-labs/skills) spec, so it installs cross-editor (Cursor, Codex, OpenCode, …) by pointing the `npx skills` CLI at `.claude/skills/cowork-harness` in this repo. (Working *inside* this repo, the skill auto-loads as a project skill — no install needed.)
 
@@ -509,7 +510,7 @@ This repo is built to be driven by agents, not just read by humans:
 
 ## Status
 
-**Verified end-to-end against the live staged agent (2.1.170 / asar 1.12603.1).**
+**Verified end-to-end against the live staged agent (2.1.177 / asar 1.13576.1).**
 
 - ✅ **Three isolation tiers (L0/L1/L2) + two loop-mode overlays** — `protocol` (L0 control loop), `container` (L1 sandboxed arm64 + per-run default-deny egress sidecar), `microvm` (L2 real Apple-VZ Linux microVM + guest firewall); plus the loop-mode overlays `hostloop` (production split-execution: agent loop on host, shell/web via the workspace SDK-MCP server) and `cowork` (auto-picks host-loop vs container the way Cowork does — gate `1143815894`). Egress enforced at container/microvm/hostloop; `boundary-check` reports **ALL CONSTRAINTS ENFORCED**.
 - ✅ **Three-seam driver** — `AgentSession` (control protocol) → `Decider` (scripted + `on_unanswered` policy, no silent false-greens) → `Run` (turn loop, sub-agent dispatch tree, `RunRecord`). Multi-turn `chat`, deterministic cassette `record`/`replay` (no token), `run.jsonl`/`trace.json` logging with secret-scrub.
