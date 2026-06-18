@@ -107,6 +107,18 @@ describe("execute — scanEvents output-delete detection", () => {
     expect(scanOf(["cat outputs/report.json"]).length).toBe(0);
     expect(scanOf(["rm /tmp/scratch"]).length).toBe(0); // delete, but not under outputs/
   });
+  it("F-4: the stored finding surfaces the rm itself (resolved), not a leading VAR= assignment block", () => {
+    // A long assignment prefix before the rm used to push the operative command past the 120-char slice,
+    // so the finding showed only `ARTIFACTS_ROOT=… ANALYSIS_DIR=…`. The snippet now isolates the delete and
+    // resolves $ANALYSIS_DIR.
+    const cmd =
+      'ARTIFACTS_ROOT="mnt/outputs/artifacts" && ANALYSIS_DIR="$ARTIFACTS_ROOT/market-sizing" && rm -f "$ANALYSIS_DIR"/inputs.json';
+    const snip = scanOf([cmd]);
+    expect(snip.length).toBe(1);
+    expect(snip[0]).toMatch(/^rm /); // starts at the delete, not the assignment
+    expect(snip[0]).toContain("mnt/outputs/artifacts/market-sizing"); // $ANALYSIS_DIR resolved + visible
+    expect(snip[0]).not.toContain("ARTIFACTS_ROOT="); // assignment prefix dropped
+  });
 });
 
 // #35 — isHostFsSealed: environment-agnostic negative guard.

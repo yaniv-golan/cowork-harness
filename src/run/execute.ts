@@ -645,6 +645,25 @@ export function isOutputsDelete(cmd: string): boolean {
   return false; // every rm delete is provably under a safe prefix; outputs ref was non-delete only
 }
 
+/** F-4: the operative delete statement(s) within a command that `isOutputsDelete` flagged — for a readable
+ *  finding. The raw `cmd.slice(0,120)` truncated away the actual `rm` when a long `VAR=…` assignment prefix
+ *  preceded it (the finding then showed only the assignment block). This surfaces the delete/mv itself, with
+ *  simple `VAR=literal` assignments resolved so the real target path is visible. Falls back to the whole
+ *  (expanded) command if no single statement isolates the delete. Bounded length for the stored finding. */
+export function outputsDeleteSnippet(cmd: string): string {
+  // Iterate var expansion to a fixed point so CHAINED assignments (ARTIFACTS_ROOT → ANALYSIS_DIR → rm) fully
+  // resolve in the displayed path. (Detection keeps the single-pass `expandSimpleVars` — its semantics are
+  // pinned by tests; multi-pass here only sharpens the finding, never changes what gets flagged.)
+  let expanded = cmd;
+  for (let i = 0; i < 5; i++) {
+    const next = expandSimpleVars(expanded);
+    if (next === expanded) break;
+    expanded = next;
+  }
+  const ops = splitStatements(expanded).filter((s) => mvDeletesOutputs(s) || DELETE_TOKEN.test(s));
+  return (ops.length ? ops.join("; ") : expanded).trim().slice(0, 160);
+}
+
 /** Scan a run's events.jsonl for limitation-fidelity signals (moved from cli.ts). */
 export function scanEvents(file: string): { outputsDeletes: string[]; hostPathLeaked: boolean; selfHealRan: boolean } {
   const out = { outputsDeletes: [] as string[], hostPathLeaked: false, selfHealRan: false };
@@ -679,7 +698,7 @@ export function scanEvents(file: string): { outputsDeletes: string[]; hostPathLe
       // input shape. Missing the MCP name was a host-loop blind-spot in the post-hoc backstop.
       if (block.type === "tool_use" && (block.name === "Bash" || block.name === "mcp__workspace__bash") && msg.type === "assistant") {
         const cmd = String(block.input?.command ?? "");
-        if (isOutputsDelete(cmd)) out.outputsDeletes.push(cmd.slice(0, 120));
+        if (isOutputsDelete(cmd)) out.outputsDeletes.push(outputsDeleteSnippet(cmd));
         if (selfHealRe.test(cmd)) out.selfHealRan = true;
       }
       if (block.type === "text" && typeof block.text === "string" && hostPathLeaked(block.text)) out.hostPathLeaked = true;
