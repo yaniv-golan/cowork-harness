@@ -29,9 +29,15 @@ export function compileIgnore(raw: string): RegExp | null {
   if (!p || p.startsWith("#")) return null;
   p = p.replace(/\/+$/, ""); // trailing slash optional (dir matches via subtree prune)
   if (!p) return null;
+  // A leading slash means "anchored to the mount root" (like a leading / in .gitignore).
+  // Strip it before further processing; the anchoring is encoded in the regex prefix below.
+  const leadingSlash = p.startsWith("/") && !p.startsWith("/**/");
+  if (leadingSlash) p = p.slice(1);
+  if (!p) return null;
   const leadingGlobstar = p.startsWith("**/");
   if (leadingGlobstar) p = p.slice(3);
-  const anchored = p.includes("/") && !leadingGlobstar;
+  // anchored: has an internal slash (e.g. docs/api) OR had a leading slash — both anchor to mount root.
+  const anchored = (leadingSlash || p.includes("/")) && !leadingGlobstar;
   let body = "";
   for (let i = 0; i < p.length; i++) {
     const c = p[i];

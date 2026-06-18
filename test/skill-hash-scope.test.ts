@@ -178,3 +178,43 @@ describe("compileIgnore — glob semantics", () => {
     expect(m("a?b", "ab")).toBe(false); // would be true if `?` acted as the optional quantifier
   });
 });
+
+describe("compileIgnore — glob form matrix", () => {
+  it("/tests (leading slash) anchors to the mount root only", () => {
+    const re = compileIgnore("/tests");
+    expect(re).not.toBeNull();
+    expect(re!.test("tests")).toBe(true);
+    expect(re!.test("tests/foo")).toBe(true);
+    expect(re!.test("deep/tests")).toBe(false);
+    expect(re!.test("deep/tests/foo")).toBe(false);
+  });
+
+  it("tests/ (trailing slash, no leading slash) matches at ANY depth", () => {
+    const re = compileIgnore("tests/");
+    expect(re).not.toBeNull();
+    expect(re!.test("tests")).toBe(true);
+    expect(re!.test("tests/foo")).toBe(true);
+    expect(re!.test("deep/tests")).toBe(true);
+    expect(re!.test("deep/tests/foo")).toBe(true);
+  });
+
+  it("tests (bare, no slashes) matches at any depth — same as trailing-slash form", () => {
+    const re = compileIgnore("tests");
+    expect(re).not.toBeNull();
+    expect(re!.test("tests")).toBe(true);
+    expect(re!.test("deep/tests")).toBe(true);
+  });
+
+  it("docs/api (has internal slash, no leading slash) anchors to mount root", () => {
+    const re = compileIgnore("docs/api");
+    expect(re).not.toBeNull();
+    expect(re!.test("docs/api")).toBe(true);
+    expect(re!.test("docs/api/foo")).toBe(true);
+    expect(re!.test("src/docs/api")).toBe(false);
+  });
+
+  it("# comment compiles to null", () => {
+    expect(compileIgnore("# ignore me")).toBeNull();
+    expect(compileIgnore("")).toBeNull();
+  });
+});
