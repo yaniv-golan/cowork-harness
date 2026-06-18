@@ -1055,6 +1055,16 @@ function cmdSync(args: string[]) {
     mkdirSync(BASELINES_DIR, { recursive: true });
     writeFileSync(baselinePath, JSON.stringify(next, null, 2));
     log(`wrote ${baselinePath}`);
+    // F-3: the host-loop prompt asset is hand-authored (not extracted), so a new baseline silently lands
+    // WITHOUT it — and every host-loop record then runs with an EMPTY shell-access section. Warn loudly here,
+    // tying the missing asset to the baseline just synced (mirrors the agentBinary.stagedPath warn above).
+    const hostLoopAsset = join(BASELINES_DIR, "prompts", `desktop-${res.appVersion}`, "host-loop-append.md");
+    if (!existsSync(hostLoopAsset)) {
+      log(
+        `WARNING: host-loop prompt asset missing for the synced baseline: ${hostLoopAsset} — host-loop records will run with an EMPTY shell-access section. ` +
+          `Author it (carry forward baselines/prompts/desktop-1.12603.1/host-loop-append.md and verify against the desktop-${res.appVersion} asar).`,
+      );
+    }
   }
 }
 
