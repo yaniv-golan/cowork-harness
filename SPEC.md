@@ -141,8 +141,8 @@ Each line is one stream-json message. The message types that carry signal:
   when `tool_name==="AskUserQuestion"`), `request_user_dialog`, `elicitation`/`side_question`, `mcp_message`.
 - `{type:"result", is_error, usage}` — turn end.
 
-**Sub-agent dispatch recognition (binary fact):** the real cowork dispatch tool is **`Agent`** (in-VM
-ELF 2.1.170: `{name:"Agent", aliases:["Task"], description:"Launch a new agent",
+**Sub-agent dispatch recognition (binary fact):** the real cowork dispatch tool is **`Agent`** (agent
+ELF 2.1.177 as of baseline desktop-1.13576.1: `{name:"Agent", aliases:["Task"], description:"Launch a new agent",
 inputSchema:{description, subagent_type, prompt}}`). `parseMessage` synthesizes a `subagent_dispatch`
 for a `tool_use` whose `name` is `Agent` **or** `Task` (the alias) **or** whose `input` carries
 `subagent_type`. The cowork **`TaskCreate`/`TaskUpdate`** tools are the *todo list*

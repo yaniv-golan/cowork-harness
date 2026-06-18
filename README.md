@@ -84,6 +84,7 @@ Skill testing is the headline use, but the tool is a general harness over the Co
 | `verify-run <run-dir> <scenario.yaml>` | Re-evaluate a scenario's `assert:` against an already-kept run dir — **no live agent, no tokens, no Docker** (~1s) | iterating on a wrong assertion without a full live re-record |
 | `trace <run-id>` | Digest a run's `events.jsonl` (`--tools`, `--gates`, `--dispatches` for the sub-agent dispatch tree + total) | "how many sub-agents *actually* dispatched, and which?" |
 | `scaffold --from-run <id>` | Turn a kept run into a starter scenario YAML (gates→answers, artifacts→`file_exists`) | authoring a scenario from a real run instead of guessing |
+| `python3 …/scenario.py scaffold --name <name> --skill <dir>` | Generate a starter scenario skeleton from scratch (the `…` is `.claude/skills/cowork-harness/scripts/`; `cowork-harness lint --help` shows the resolved path) | starting a new scenario when you have no prior run |
 | `lint <scenario.yaml>…` | Check scenarios for silent false-greens — assertions placed on the wrong CI lane, mixed content/live keys, missing `controlOut`-required keys (bundled `scenario.py`; needs python3 + PyYAML) | before committing a new scenario or after changing assertions |
 | `assert --list` | List the available scenario assertions (generated from the schema) | "what can I assert?" without grepping the source |
 | `decide` | Validate a decider against a sample question in ~2 s (no run) | sanity-check a `--decider-*` / `--answer` wiring before a long run |
@@ -194,9 +195,11 @@ The skill **self-bootstraps the CLI**: if `cowork-harness` isn't on your PATH it
 
 It also follows the open [Agent Skills](https://github.com/vercel-labs/skills) spec, so it installs cross-editor (Cursor, Codex, OpenCode, …) by pointing the `npx skills` CLI at `.claude/skills/cowork-harness` in this repo. (Working *inside* this repo, the skill auto-loads as a project skill — no install needed.)
 
+> Note: `npm install -g cowork-harness` ships `scenario.py` and assertion keys (enough for `lint` in CI) but not the full SKILL.md teaching document; install via the marketplace command above to get the teaching skill.
+
 **Prerequisites for anything above `protocol` fidelity** (the `protocol` tier skips items 1–2 — no Docker, no staged agent — but still calls a real model via the host `claude`, so it needs item 3, the auth token; only a committed-cassette `replay` needs nothing at all):
 1. **Claude Desktop, opened once.** The Cowork agent binary is **bind-mounted from your own install** at run time — nothing Anthropic-owned is bundled. Open Cowork once so the agent ELF is staged (`…/claude-code-vm/<ver>/claude`); the harness auto-detects it, or set `COWORK_AGENT_BINARY=<path>` to point at it. Without a staged agent, container/cowork runs fail with "Open Cowork once to stage it…".
-2. **Docker (arm64)** + the agent image: `docker build --platform linux/arm64 -t cowork-agent-base:1 -f docker/Dockerfile.agent .` (override the tag with `COWORK_AGENT_IMAGE`). The `-f docker/Dockerfile.agent .` paths are **repo-relative** — run it from a source checkout, not a global `npm install -g` (where the Dockerfile lives under the package dir).
+2. **Docker (arm64)** + the agent image: `docker build --platform linux/arm64 -t cowork-agent-base:1 -f docker/Dockerfile.agent .` (override the tag with `COWORK_AGENT_IMAGE`). The `-f docker/Dockerfile.agent .` paths are **repo-relative** — run it from a source checkout, not a global `npm install -g` (where the Dockerfile lives under the package dir). (Global install? Run `cowork-harness doctor --tier container` — it prints the exact `docker build` command with the correct package-local Dockerfile path.)
 3. **An auth token** — either `export CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token)` or a **`.env`** file (copy `.env.example` → `.env`; gitignored). The token resolves in priority order: exported env > `--dotenv <path>` > `./.env` (cwd) > `<install>/.env` (the package root), so a `npm link`ed install works from any directory. Keep `.env` at a working-dir or install root, never inside a mounted skill/project folder. (Use `--dotenv`, not `--env-file` — Node reserves the latter.)
 
 > `sync` (below) is **optional for a first run** — the repo ships `baselines/desktop-*.json`, so `baseline: latest` already resolves. Run `sync` only to refresh the platform baseline after Claude Desktop updates. (`sync` is **macOS-only** today; on Linux/Windows use the committed baselines — they work cross-platform.)
@@ -221,9 +224,6 @@ cowork-harness run examples/scenarios/ --output-format json
 cowork-harness record examples/scenarios/example-pdf-skill.yaml --out examples/replays/example-pdf-skill.cassette.json
 cowork-harness replay --cassette examples/replays/example-pdf-skill.cassette.json
 
-# A committed synthetic fixture is ready to replay on a fresh clone (no record step needed):
-cowork-harness replay --cassette examples/replays/example-pdf-skill.cassette.json
-
 # Cassettes are COMMITTED fixtures — record against synthetic data, and gate them in CI:
 cowork-harness verify-cassettes examples/replays/   # privacy scan (email/currency/domain) + staleness; exit 1 on a finding
 ```
@@ -239,7 +239,8 @@ cowork-harness verify-cassettes examples/replays/   # privacy scan (email/curren
 > orchestration from both, re-evaluates the **content** assertions, and re-exercises
 > `serializeDecision` as a token-free O7 guard (the AskUserQuestion `{questions,answers}` answer-shape
 > invariant). Evaluated on replay: `transcript_*`, `tool_*`, `subagent_*`, `dispatch_count_max`,
-> `result`. **`question_asked`, `questions_count_max`, and `gate_answers_delivered` are also evaluated —
+> `result`, `allow_permissive_auto_allow` (always-on Cowork-parity scan). **`question_asked`,
+> `questions_count_max`, and `gate_answers_delivered` are also evaluated —
 > but only when the cassette carries `controlOut` (full-fidelity)**; old cassettes without it get a
 > loud warning and those three keys are excluded (not vacuously passed). **Filesystem assertions
 > (`file_exists`, `user_visible_artifact`, `artifact_json`) are evaluated when the cassette carries an
@@ -296,7 +297,7 @@ assert:
 ```
 
 ```yaml
-# sessions/default.yaml  (abridged — see the file for every field)
+# examples/sessions/default.yaml  (abridged — see the file for every field)
 # Relative paths below resolve from THIS file's dir (absolute and ~ are used as-is).
 model: claude-opus-4-8
 effort: high

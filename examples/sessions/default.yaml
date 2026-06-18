@@ -5,7 +5,7 @@
 # --- model & reasoning (Cowork model picker + toggles) ---
 model: claude-opus-4-8 # setModel; omit to use the agent default
 effort: high # setEffort: low | medium | high | xhigh
-max_thinking_tokens: 8000 # session thinking budget (the boolean thinking toggle is inert)
+max_thinking_tokens: 8000 # kept low for example cost; real default 31999 (see docs/session.md); the boolean thinking toggle is inert
 permission_mode: default # setPermissionMode: default | acceptEdits | plan | bypassPermissions
 permission_parity: cowork # cowork (allow unscripted tool calls, Cowork default) | strict (deny unscripted)
 
