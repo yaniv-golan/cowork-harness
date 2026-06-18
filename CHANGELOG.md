@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-06-18
+
 ### Added
 
 - **`verify-run <run-dir> <scenario.yaml>`** — re-evaluate a scenario's `assert:` block against an
