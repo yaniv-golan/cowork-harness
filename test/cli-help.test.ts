@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -67,15 +67,32 @@ describe.skipIf(!can)("cli --help: parseArgs-direct subcommands print usage (F-7
   }
 });
 
-// Membership guard: a command added to the dispatch but forgotten in the top-level HELP ships
-// undiscoverable. Pin the recently-added commands explicitly. (cli-structural-guard only checks
-// unknown-flag rejection, not HELP membership — see the plan note.)
-describe.skipIf(!can)("cli --help: top-level help lists newer commands", () => {
-  const r = spawnSync("node", [CLI, "--help"], { encoding: "utf8", cwd: mkdtempSync(join(tmpdir(), "cc-help-")) });
-  const text = (r.stderr || "") + (r.stdout || "");
-  for (const c of ["doctor", "verify-run"]) {
-    it(`top-level --help mentions \`${c}\``, () => {
-      expect(text).toContain(c);
-    });
-  }
+// Membership guard (structural): a command added to the dispatch switch but forgotten in the COMMANDS
+// allowlist or the top-level HELP ships inconsistent/undiscoverable. cli-structural-guard only checks
+// unknown-flag rejection, NOT this three-way consistency — so assert it here. Source of truth = the
+// dispatch switch (parsed from src/cli.ts); SUBCOMMAND_USAGE/self-handled --help is covered by the
+// per-subcommand cases above.
+describe("cli dispatch ↔ COMMANDS ↔ HELP membership", () => {
+  const src = readFileSync(resolve("src/cli.ts"), "utf8");
+  const sw = src.indexOf("switch (cmd) {");
+  const swBlock = src.slice(sw, src.indexOf("default:", sw));
+  const dispatched = [...swBlock.matchAll(/case "([^"]+)":/g)].map((m) => m[1]);
+  const arr = src.indexOf("const COMMANDS = [");
+  const arrBlock = src.slice(arr, src.indexOf("];", arr));
+  const allowlist = [...arrBlock.matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+
+  it("parsed a sane dispatch set (incl. doctor)", () => {
+    expect(dispatched).toContain("doctor");
+    expect(dispatched.length).toBeGreaterThan(10);
+  });
+
+  it("every dispatched command is in the COMMANDS allowlist (--dotenv guard)", () => {
+    expect(dispatched.filter((c) => !allowlist.includes(c))).toEqual([]);
+  });
+
+  it.skipIf(!can)("every dispatched command appears in the top-level --help", () => {
+    const r = spawnSync("node", [CLI, "--help"], { encoding: "utf8", cwd: mkdtempSync(join(tmpdir(), "cc-help-")) });
+    const text = (r.stderr || "") + (r.stdout || "");
+    expect(dispatched.filter((c) => !text.includes(c))).toEqual([]);
+  });
 });

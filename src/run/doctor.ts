@@ -34,6 +34,8 @@ export interface DoctorProbe {
   runtimeDaemonUp(): boolean;
   imageName(): string;
   imagePresent(): boolean;
+  proxyImageName(): string;
+  proxyImagePresent(): boolean;
   agentBinary(): { ok: true; path: string } | { ok: false; error: string };
   hasToken(): boolean;
   baseline(): { ok: true; version: string } | { ok: false; error: string };
@@ -63,6 +65,11 @@ export const realProbe: DoctorProbe = {
   imageName: () => process.env.COWORK_AGENT_IMAGE ?? "cowork-agent-base:1",
   imagePresent() {
     const r = spawnSync(this.runtimeName(), ["image", "inspect", this.imageName()], { stdio: "ignore" });
+    return !r.error && r.status === 0;
+  },
+  proxyImageName: () => process.env.COWORK_PROXY_IMAGE ?? "cowork-egress-proxy:1",
+  proxyImagePresent() {
+    const r = spawnSync(this.runtimeName(), ["image", "inspect", this.proxyImageName()], { stdio: "ignore" });
     return !r.error && r.status === 0;
   },
   agentBinary() {
@@ -112,7 +119,9 @@ export function runDoctorChecks(tier: Tier, probe: DoctorProbe = realProbe): Doc
       ? undefined
       : tier === "microvm"
         ? "microvm needs macOS Apple Silicon (Apple Virtualization.framework); use `container` instead"
-        : "best on macOS arm64; other hosts may need emulation, and `sync`/`microvm` are macOS-arm64 only",
+        : plat === "win32"
+          ? "Windows is not a supported host for the live tiers — use macOS Apple Silicon, or the token-free `replay`"
+          : "best on macOS arm64; other hosts may need emulation, and `sync`/`microvm` are macOS-arm64 only",
     required: tier === "microvm",
   });
 
@@ -152,6 +161,22 @@ export function runDoctorChecks(tier: Tier, probe: DoctorProbe = realProbe): Doc
       detail: agent.ok ? agent.path : agent.error.split("\n")[0],
       remedy: agent.ok ? undefined : "open Claude Cowork once to stage the agent, or set COWORK_AGENT_BINARY=<path>",
       required: true,
+    });
+
+    // Egress proxy image — informational, never blocking: the egress sidecar builds it on the fly
+    // (ensureProxyImage) when absent, so report status but don't gate the verdict on it.
+    const proxy = probe.proxyImageName();
+    const proxyPresent = up && probe.proxyImagePresent();
+    checks.push({
+      id: "proxy",
+      title: "Egress proxy image",
+      status: proxyPresent ? "ok" : "skip",
+      detail: !up
+        ? `(skipped — ${runtime} not reachable)`
+        : proxyPresent
+          ? `${proxy} present`
+          : `${proxy} absent — built automatically on first run`,
+      required: false,
     });
   }
 

@@ -18,7 +18,7 @@ Scriptable, CI-friendly test harness that reproduces **Claude Cowork's observabl
 > **Requirements at a glance**
 > - **Free demo (`replay`):** Node ≥ 20 — nothing else (no Docker, token, or Claude Desktop).
 > - **Live tiers** (`container` default / `microvm` / `hostloop`): **Docker (arm64)** · **Claude Desktop opened once** (stages the agent — nothing is bundled) · a **Claude token** (real per-run cost; runs take minutes). The `protocol` tier skips Docker + the staged agent but still calls a real model, so it needs the token.
-> - **Platform:** best on **macOS Apple Silicon**; `sync` and `microvm` are **macOS-arm64 only**. Full detail in [Quick start → prerequisites](#quick-start).
+> - **Platform:** best on **macOS Apple Silicon**; **Windows is not supported** for the live tiers (use the token-free `replay`); `sync` and `microvm` are **macOS-arm64 only**. Full detail in [Quick start → prerequisites](#quick-start).
 
 > **New here?** Read [docs/boundary.md](./docs/boundary.md) (the limitations model) and [docs/session.md](./docs/session.md) (the file you'll author).
 

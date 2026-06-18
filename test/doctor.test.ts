@@ -10,6 +10,8 @@ const OK_PROBE: DoctorProbe = {
   runtimeDaemonUp: () => true,
   imageName: () => "cowork-agent-base:1",
   imagePresent: () => true,
+  proxyImageName: () => "cowork-egress-proxy:1",
+  proxyImagePresent: () => true,
   agentBinary: () => ({ ok: true, path: "/x/claude-code-vm/2.1.177/claude" }),
   hasToken: () => true,
   baseline: () => ({ ok: true, version: "1.13576.1" }),
@@ -69,6 +71,22 @@ describe("doctor — runDoctorChecks", () => {
 
   it("Node < 20 fails", () => {
     expect(get(runDoctorChecks("protocol", probe({ nodeMajor: () => 18 })), "node").status).toBe("fail");
+  });
+
+  it("egress proxy image is reported but never blocks (auto-built on first run)", () => {
+    const present = get(runDoctorChecks("container", OK_PROBE), "proxy");
+    expect(present.status).toBe("ok");
+    expect(present.required).toBe(false);
+    const absentCs = runDoctorChecks("container", probe({ proxyImagePresent: () => false }));
+    expect(get(absentCs, "proxy").status).toBe("skip");
+    expect(get(absentCs, "proxy").detail).toMatch(/built automatically/);
+    expect(blocking(absentCs)).toEqual([]); // absence is never a blocking failure
+  });
+
+  it("Windows host gets an explicit unsupported note (warn on container, not a hard fail)", () => {
+    const os = get(runDoctorChecks("container", probe({ platform: () => "win32", arch: () => "x64" })), "os");
+    expect(os.status).toBe("warn");
+    expect(os.remedy).toMatch(/Windows/);
   });
 
   it("agentBuildLine names the image and the agent Dockerfile", () => {
