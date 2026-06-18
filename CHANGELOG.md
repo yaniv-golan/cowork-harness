@@ -6,6 +6,24 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+
+- **`--rerecord-stale` now prefers on-disk scenario over embedded snapshot (G-1).** When a
+  `scenarios/<name>.yaml` exists alongside the cassette dir, `--rerecord-stale` re-records from it
+  instead of the embedded copy. Edits to the scenario (e.g. adding `skills:` for staleness scoping)
+  now take effect. Falls back to the embedded snapshot when no on-disk file is found, with a clear
+  warning.
+- **Staleness message distinguishes format-version bump from real content change (G-2).** After a
+  harness upgrade that changes the hash algorithm, `verify-cassettes` now reports
+  `recorded under an older hash format (vN → vM)` instead of the misleading
+  `local skill/plugin dir contents changed`.
+- **`.cowork-hashignore` leading-slash patterns now correctly anchor to the mount root (G-3).**
+  `/tests` previously compiled to a regex that never matched (no leading slash in relative paths);
+  it now matches only the top-level `tests/` dir, as expected.
+- **Scoped staleness findings now name the changed bucket (G-4).** When a cassette was recorded with
+  `skills: [<name>]` scoping, `verify-cassettes` now reports `skills/<name> changed` or
+  `shared root changed` rather than the generic `local skill/plugin dir contents changed`.
+
 ## [0.5.0] — 2026-06-18
 
 ### Added
