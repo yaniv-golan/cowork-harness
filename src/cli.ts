@@ -201,6 +201,32 @@ function hasHelp(args: string[]): boolean {
   return args.includes("--help") || args.includes("-h");
 }
 
+// F-7: per-subcommand `--help`. `run`/`skill` already print their own help via hasHelp(); `lint` delegates
+// to the Python argparse path (which has its own --help). Every OTHER subcommand goes straight to parseArgs,
+// where `--help` was an "unknown flag" error — so you could only discover flags by triggering a bad
+// invocation. Intercept `--help`/`-h` at dispatch and print the command's usage (exit 0). One concise line
+// per command, kept in sync with each command's own bad-invocation `usage:` string.
+const SUBCOMMAND_USAGE: Record<string, string> = {
+  sync: "usage: sync [--diff]   (re-sync the platform baseline from the installed Cowork app)",
+  list: "usage: list   (list available platform baselines)",
+  "boundary-check": "usage: boundary-check [<baseline>] [--session <file>]",
+  vm: "usage: vm <init|status|delete|prune>",
+  chat: "usage: chat <skill-folder> [--raw] [--fidelity container|hostloop] [--model <id>]",
+  record:
+    "usage: record <scenario.yaml | dir/> [--out <file>] [--output-format text|json] [--rerecord-stale] [--no-redact] [--allow-failing] [--max-artifact-bytes <n>]",
+  replay: "usage: replay <file.cassette.json | dir/> [--cassette <file>] [--strict] [--output-format text|json]",
+  "verify-cassettes":
+    "usage: verify-cassettes <file|dir> [--privacy-only|--staleness-only] [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-file <path>]... [--output-format json]",
+  trace: "usage: trace <run-id | run-dir | events.jsonl> [--tools | --gates | --dispatches] [--output-format json]",
+  assert: "usage: assert --list [--output-format json]",
+  scaffold: "usage: scaffold --from-run <run-id | run-dir> [--out <file.yaml>]",
+  decide:
+    'usage: decide [--question <q>] [--option <o>]... [--decider-cmd <cmd> | --decider-llm] [--answer "<q>=<label>"]... [--answer-policy <p>] [--intent <s>] [--output-format json]',
+  gates: "usage: gates <dir> [--follow]",
+  answer: 'usage: answer <dir> --gate <N> (--choose <label> | --answer "<q>=<label>")',
+  "verify-run": "usage: verify-run <run-dir> <scenario.yaml> [--output-format json]   (re-evaluate a scenario's assert: against a kept run dir; no live agent)",
+};
+
 async function main() {
   const argv = process.argv.slice(2);
 
@@ -280,6 +306,9 @@ async function main() {
   const [cmd, ...rest] = argv;
   if (cmd === "--version" || cmd === "-v") return void out(pkgVersion());
   if (cmd === undefined || cmd === "--help" || cmd === "-h" || cmd === "help") return printHelp();
+  // F-7: per-subcommand --help for the parseArgs-direct commands (run/skill/lint self-handle, so they're
+  // absent from the map and fall through to their own handling).
+  if (hasHelp(rest) && cmd in SUBCOMMAND_USAGE) return void log(SUBCOMMAND_USAGE[cmd]);
   switch (cmd) {
     case "run":
       return cmdRun(rest);

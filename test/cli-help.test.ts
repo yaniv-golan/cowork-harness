@@ -35,3 +35,32 @@ describe.skipIf(!can)("cli --help: on_unanswered value can't regress", () => {
     expect(text).not.toContain("on_unanswered: agent");
   });
 });
+
+// F-7: the parseArgs-direct subcommands used to answer `--help` with `unknown flag: --help` (exit 2).
+// They now print a usage line and exit 0.
+describe.skipIf(!can)("cli --help: parseArgs-direct subcommands print usage (F-7)", () => {
+  const cases: [string, string][] = [
+    ["record", "usage: record"],
+    ["replay", "usage: replay"],
+    ["verify-cassettes", "usage: verify-cassettes"],
+    ["trace", "usage: trace"],
+    ["assert", "usage: assert"],
+    ["scaffold", "usage: scaffold"],
+    ["gates", "usage: gates"],
+    ["answer", "usage: answer"],
+    ["boundary-check", "usage: boundary-check"],
+    ["vm", "usage: vm"],
+    ["sync", "usage: sync"],
+    ["list", "usage: list"],
+    ["chat", "usage: chat"],
+    ["decide", "usage: decide"],
+  ];
+  for (const [cmd, expected] of cases) {
+    it(`\`${cmd} --help\` exits 0 with a usage line (not "unknown flag")`, () => {
+      const { code, text } = help(cmd);
+      expect(code).toBe(0);
+      expect(text).toContain(expected);
+      expect(text).not.toContain("unknown flag");
+    });
+  }
+});
