@@ -160,9 +160,16 @@ without actually running the agent. For **content correctness**, match the asser
   is **case-insensitive**; **single-quote** the regex in YAML (double-quoted YAML eats a backslash, so
   `"\d"` breaks — use `'\d'` or a block scalar); the transcript is one concatenated string, so use `[\s\S]`,
   not `.`, to span turns.
-- a skill that emits **structured JSON** → assert it in the **pytest `cowork` lane**
-  (`assert_artifact_json(path, lambda d: …)`, a full Python predicate over the parsed object) rather than a
-  transcript substring — see "Scenario YAML vs the pytest lane" below.
+  - **Use it only for stable lexical markers** — a number format, a header, a literal token the skill always
+    emits. **Do NOT use it to assert semantic content the model paraphrases** ("the skill flagged the blank
+    field"): a regex pinned to one phrasing passes on one record and fails on a re-record when the model
+    rewords it, even though the behavior is identical (a re-record flake). If the fact also lands in a
+    structured artifact, assert *that* field instead (next bullet) — it's phrasing-independent.
+- a skill that emits **structured JSON** → assert it directly in the scenario YAML with **`artifact_json`**
+  (a dotted `path` + an operator — no Python; see below). Reach for the **pytest `cowork` lane**
+  (`assert_artifact_json(path, lambda d: …)`, a full Python predicate over the parsed object) only when the
+  check is too complex for a dotted path + single operator. Either way, prefer a structured-field assert over
+  a transcript substring for anything the skill writes to an artifact.
 
 Each list item under `assert:` is one assertion. An item with **multiple keys is an AND** — it passes only
 if *every* key passes (don't rely on the first; keep one concern per item unless you mean conjunction).

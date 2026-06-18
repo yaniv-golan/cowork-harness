@@ -102,8 +102,9 @@ Conflating these is the **#1 landmine**. An assertion key has two independent pr
 
 - **Axis A — robust to LLM phrasing drift?** Structural/boundary keys (`subagent_dispatched`,
   `egress_*`, `file_exists`, `user_visible_artifact`, `result`) are robust. Free-text content is
-  not: match prose with `transcript_matches` / `transcript_contains`; check structured JSON in the
-  pytest lane, not via a transcript substring.
+  not: match prose with `transcript_matches` / `transcript_contains` (stable lexical markers only —
+  not semantic content the model paraphrases, which re-records red); check structured JSON with YAML
+  `artifact_json` (or the pytest lane for complex predicates), not via a transcript substring.
 - **Axis B — survives `replay`?** *Independent of Axis A.* On the token-free `replay` lane, only
   **content keys** evaluate; filesystem / egress keys are **silently skipped** (live-only). A key
   being "robust" says nothing about whether it runs on your replay gate.

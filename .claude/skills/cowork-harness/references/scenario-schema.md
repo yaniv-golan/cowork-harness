@@ -189,7 +189,10 @@ table from the live schema. Example: `artifact_json: { artifact: outputs/cap.jso
 (regex, drift-tolerant) or `transcript_contains` (literal marker). `transcript_matches` is
 case-insensitive; **single-quote** the regex in YAML (double-quoted YAML eats backslashes, so `"\d"`
 breaks — use `'\d'`); the transcript is one concatenated string, so use `[\s\S]`, not `.`, to span
-turns. Structured JSON → the pytest lane (see below).
+turns. Use `transcript_matches` only for **stable lexical markers**, not semantic content the model
+paraphrases (that re-records red). Structured JSON → assert it in YAML with **`artifact_json`** (dotted
+`path` + operator); use the pytest lane (`assert_artifact_json`) only for predicates too complex for a
+dotted path.
 
 ## Replay class
 
@@ -299,8 +302,9 @@ at the top of this file.
    de-duped: a requested-then-denied tool does NOT register as called; the synthetic
    `mcp__workspace__*` round-trip is not double-counted.
 
-9. **Structured JSON → pytest lane**, not a transcript substring (`assert_artifact_json` with a real
-   predicate). Find field paths via `--keep`.
+9. **Structured JSON → a structured-field assert, not a transcript substring.** Prefer YAML
+   `artifact_json` (dotted `path` + operator); use the pytest lane (`assert_artifact_json` with a real
+   predicate) only for checks too complex for a dotted path. Find field paths via `--keep`.
 
 10. **`subagent_dispatched` matches by `description` too** — skills often dispatch with no
     `subagent_type` (`agentType:"unknown"`), so match the dispatch description.
