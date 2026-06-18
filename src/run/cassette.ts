@@ -705,8 +705,18 @@ async function recordScenarioObject(
   const cassettePath = opts.cassettePath ?? join("cassettes", `${scenario.name}.cassette.json`);
   mkdirSync(dirname(cassettePath), { recursive: true });
   // A3: a failing live run frozen into a cassette is a latent false-signal — refuse unless opted in.
-  if (!computeVerdict(result, "live").pass && !opts.allowFailing)
-    throw new Error(`live run did NOT pass (result=${result.result}) — refusing to freeze a failing run (re-run, or --allow-failing)`);
+  // F-5: separate the run RESULT from the VERDICT (they're distinct — the run can succeed while an assertion
+  // or parity check fails) and name which check failed, instead of the misleading "did NOT pass (result=success)".
+  const liveVerdict = computeVerdict(result, "live");
+  if (!liveVerdict.pass && !opts.allowFailing) {
+    const why = liveVerdict.signals
+      .filter((s) => s.severity === "fail")
+      .map((s) => `${s.code}: ${s.message}`)
+      .join("; ");
+    throw new Error(
+      `refusing to freeze a failing run: run result=${result.result}, but the live verdict FAILED — ${why} (re-run, or --allow-failing)`,
+    );
+  }
   // RELOCATABLE session path (relative to the cassette dir) — metadata-only, keeps a moved bundle honest.
   const relocatable: Scenario = {
     ...scenario,

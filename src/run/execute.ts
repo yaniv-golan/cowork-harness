@@ -131,10 +131,12 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   if (scenario.fidelity === "cowork") process.stderr.write(`[loop] cowork → ${effectiveFidelity} (per gate 1143815894)\n`);
 
   const onUnanswered: OnUnanswered = scenario.on_unanswered ?? opts.onUnanswered ?? "fail";
+  // This is a POLICY line (what happens IF an unscripted question arrives), not an outcome — the old
+  // `unanswered questions → fail` wording read as a failure on clean runs (F-5). State it as policy + source.
   process.stderr.write(
     opts.externalChannel
-      ? `[input] unanswered questions → live decider channel\n`
-      : `[input] unanswered questions → ${onUnanswered}${scenario.on_unanswered ? " (scenario)" : opts.onUnanswered ? " (flag)" : " (default)"}\n`,
+      ? `[input] unscripted-question policy: live decider channel\n`
+      : `[input] unscripted-question policy: ${onUnanswered} (${scenario.on_unanswered ? "scenario" : opts.onUnanswered ? "flag" : "default"})\n`,
   );
 
   // Secrets are needed BEFORE the decider is built — the external channel emits live, ahead of the
