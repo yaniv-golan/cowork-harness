@@ -63,6 +63,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
                                (--fidelity container|hostloop, default container; --model <id>)
   record <scenario.yaml>       run + save a control-protocol cassette
       [--out <file>]           cassette path (default: cassettes/<scenario-name>.cassette.json)
+      [--max-artifact-bytes <n>]  inline-body cap (default 65536 / $COWORK_HARNESS_MAX_ARTIFACT_BYTES)
   replay <file|dir>            deterministic protocol-replay of a cassette or a dir of them (no token)
       [--cassette <file>]      explicit single-cassette form   [--strict] [--output-format json]
   lint <scenario.yaml>…        check scenarios for silent false-greens (bundled scenario.py; needs python3 + PyYAML)

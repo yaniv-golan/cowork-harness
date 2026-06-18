@@ -74,9 +74,25 @@ interface Cassette {
 }
 
 /** Current cassette format version. Readers tolerate ABSENT (legacy → 0) and warn on a FUTURE version. */
-const CASSETTE_VERSION = 1;
+// v2 (F-6): the fingerprint may be SCOPED to a scenario's `skills:` (whole-tree default stays byte-identical
+// to v1). Bumped because a scoped `skillHash` is not reproducible by a pre-F-6 reader — which would recompute
+// whole-tree and mis-flag a scoped cassette as stale; the version lets such a reader warn instead.
+const CASSETTE_VERSION = 2;
 
-const MANIFEST_BODY_CAP = 64 * 1024; // inline JSON/text bodies ≤ 64 KiB; larger → hash-only + truncated marker
+const DEFAULT_MANIFEST_BODY_CAP = 64 * 1024; // inline JSON/text bodies ≤ 64 KiB; larger → hash-only + truncated marker
+
+/** The effective inline-body cap. Overridable (F-9) so a large structured deliverable can opt into inlining
+ *  rather than silently truncating — which would pass `artifact_json` at record (on-disk) but fail at replay
+ *  (no body). Env `COWORK_HARNESS_MAX_ARTIFACT_BYTES`; `record --max-artifact-bytes` takes precedence via the
+ *  explicit `cap` argument to buildManifest. Invalid/non-positive env is ignored (falls back to the default). */
+function defaultBodyCap(): number {
+  const env = process.env.COWORK_HARNESS_MAX_ARTIFACT_BYTES;
+  if (env !== undefined) {
+    const n = Number(env);
+    if (Number.isFinite(n) && n > 0) return Math.floor(n);
+  }
+  return DEFAULT_MANIFEST_BODY_CAP;
+}
 
 /** Resolve `rel` against `root` and confirm it stays inside `root`. Returns the absolute path on success;
  *  throws on an absolute path, a `..` escape, or anything that resolves outside the root.
@@ -99,7 +115,8 @@ function isLosslessUtf8(buf: Buffer): boolean {
 
 /** #1: snapshot the user-visible artifacts under `workRoot` into manifest entries.
  *  Exported for token-free record→replay round-trip tests. */
-export function buildManifest(workRoot: string): ManifestEntry[] {
+export function buildManifest(workRoot: string, cap?: number): ManifestEntry[] {
+  const limit = cap ?? defaultBodyCap();
   return collectArtifacts(workRoot, ["outputs", ".projects"]).map(({ path, bytes }) => {
     // collectArtifacts paths are derived from a directory walk; even though it already skips symlinks,
     // an entry must not inline content outside the work root. Re-confirm containment before reading the body.
@@ -116,7 +133,7 @@ export function buildManifest(workRoot: string): ManifestEntry[] {
       return { path, bytes, sha256: "", truncated: true };
     }
     const sha256 = createHash("sha256").update(buf).digest("hex");
-    if (buf.length > MANIFEST_BODY_CAP) return { path, bytes, sha256, truncated: true };
+    if (buf.length > limit) return { path, bytes, sha256, truncated: true };
     // store an encoding marker. UTF-8-safe bodies stay text (readable cassettes); binary bodies go
     // base64 so the record→replay round-trip is byte-exact and the sha256 verify stays valid.
     if (isLosslessUtf8(buf)) return { path, bytes, sha256, body: buf.toString("utf8") };
@@ -584,6 +601,24 @@ interface RecordOpts {
   noRedact: boolean;
   allowFailing: boolean;
   cassettePath?: string; // explicit --out (single); otherwise cassettes/<name>.cassette.json
+  maxArtifactBytes?: number; // F-9: override the inline-body cap (else env / 64 KiB default)
+}
+
+/** F-9: return the `artifact_json.artifact` paths a scenario asserts that ended up TRUNCATED in the manifest
+ *  (body >cap, hash-only). Such an assertion passes at record (evaluated on the live on-disk file) but FAILS
+ *  at replay (the materialized body is empty → "not valid JSON"). Paths are normalized through `resolve` so
+ *  `./outputs/x.json` and `outputs/x.json` join cleanly against the manifest's walk paths. */
+export function artifactJsonTargetsTruncated(scenario: Scenario, workRoot: string, artifacts: ManifestEntry[]): string[] {
+  const truncatedAbs = new Set<string>();
+  for (const a of artifacts) if (a.truncated) truncatedAbs.add(resolve(workRoot, a.path));
+  if (truncatedAbs.size === 0) return [];
+  const hits: string[] = [];
+  for (const a of scenario.assert ?? []) {
+    const aj = a.artifact_json;
+    if (!aj?.artifact) continue;
+    if (truncatedAbs.has(resolve(workRoot, aj.artifact)) && !hits.includes(aj.artifact)) hits.push(aj.artifact);
+  }
+  return hits;
 }
 
 /** Record one scenario FILE → one cassette (parses the file, then shares the live-record tail with the
@@ -600,13 +635,23 @@ export async function cmdRecord(args: string[]) {
   try {
     p = parseArgs(args, {
       booleans: ["--no-redact", "--allow-failing", "--rerecord-stale"],
-      values: ["--out", "--output-format"],
+      values: ["--out", "--output-format", "--max-artifact-bytes"],
       noDashValue: ["--out"],
       enums: { "--output-format": ["text", "json"] },
     });
   } catch (e) {
     log((e as Error).message);
     return process.exit(2);
+  }
+  let maxArtifactBytes: number | undefined;
+  const mab = p.options["--max-artifact-bytes"];
+  if (mab !== undefined) {
+    const n = Number(mab);
+    if (!Number.isFinite(n) || n <= 0) {
+      log(`record: --max-artifact-bytes must be a positive integer (got ${mab})`);
+      return process.exit(2);
+    }
+    maxArtifactBytes = Math.floor(n);
   }
   const noRedact = p.flags["--no-redact"] ?? false;
   if (noRedact) log("record: --no-redact — content redaction is OFF; the cassette is written verbatim, so ensure inputs are synthetic.");
@@ -616,7 +661,7 @@ export async function cmdRecord(args: string[]) {
   const target = p.positionals[0];
   if (!target) {
     log(
-      "usage: record <scenario.yaml | dir/> [--out <file>] [--output-format text|json] [--rerecord-stale] [--no-redact] [--allow-failing]",
+      "usage: record <scenario.yaml | dir/> [--out <file>] [--output-format text|json] [--rerecord-stale] [--no-redact] [--allow-failing] [--max-artifact-bytes <n>]",
     );
     return process.exit(2);
   }
@@ -655,7 +700,10 @@ export async function cmdRecord(args: string[]) {
       const sessionRef = cassette.scenario.session === "(inline)" ? "(inline)" : join(dirname(cp), cassette.scenario.session);
       log(`↻ re-recording ${cp} (stale: ${staleness.join("; ")})`);
       try {
-        const r = await recordScenarioObject({ ...cassette.scenario, session: sessionRef }, { noRedact, allowFailing, cassettePath: cp });
+        const r = await recordScenarioObject(
+          { ...cassette.scenario, session: sessionRef },
+          { noRedact, allowFailing, cassettePath: cp, maxArtifactBytes },
+        );
         log(`  ✓ ${cp} (${r.result.result})`);
       } catch (e) {
         failures++;
@@ -677,7 +725,7 @@ export async function cmdRecord(args: string[]) {
     let failures = disc.broken.length;
     for (const f of disc.scenarios) {
       try {
-        const r = await recordScenarioFile(f, { noRedact, allowFailing });
+        const r = await recordScenarioFile(f, { noRedact, allowFailing, maxArtifactBytes });
         log(`✓ ${f} → ${r.cassettePath} (${r.result.result})`);
       } catch (e) {
         failures++;
@@ -695,7 +743,7 @@ export async function cmdRecord(args: string[]) {
   // Single scenario file.
   try {
     const cassettePath = p.options["--out"];
-    const r = await recordScenarioFile(target, { noRedact, allowFailing, cassettePath });
+    const r = await recordScenarioFile(target, { noRedact, allowFailing, cassettePath, maxArtifactBytes });
     if (asJson) out(JSON.stringify({ command: "record", result: r.result.result, artifacts: r.artifacts, cassette: r.cassettePath }));
     else log(`✓ recorded ${r.result.result} · ${r.artifacts} artifact(s) → ${r.cassettePath}`);
   } catch (e) {
@@ -738,9 +786,24 @@ async function recordScenarioObject(
   const secrets = collectSecrets();
   // a base64 (binary) body must NOT be scrubbed — scrub mutates text matches and would corrupt the
   // bytes, then false-fail the replay-time sha256 verify. Text bodies are scrubbed as before (C2).
-  const artifacts = (result.workDir ? buildManifest(result.workDir) : []).map((a) =>
+  const artifacts = (result.workDir ? buildManifest(result.workDir, opts.maxArtifactBytes) : []).map((a) =>
     a.body !== undefined && a.encoding !== "base64" ? { ...a, body: scrub(a.body, secrets) } : a,
   );
+  // F-9: if an `artifact_json` targets an artifact we had to truncate, it passes here (on-disk) but FAILS
+  // replay (no committed body). Surface that record→replay asymmetry NOW, at its cause, instead of letting a
+  // green record produce a red replay in CI. Honor --allow-failing (warn, don't block) like the verdict gate.
+  if (result.workDir) {
+    const truncatedAsserted = artifactJsonTargetsTruncated(scenario, result.workDir, artifacts);
+    if (truncatedAsserted.length) {
+      const cap = opts.maxArtifactBytes ?? defaultBodyCap();
+      const msg =
+        `artifact_json asserts artifact(s) too large to commit (>${cap} B, stored hash-only): ${truncatedAsserted.join(", ")} — ` +
+        `this passes at record (on-disk) but FAILS replay (no body). Raise --max-artifact-bytes / ` +
+        `COWORK_HARNESS_MAX_ARTIFACT_BYTES, or assert a smaller artifact.`;
+      if (opts.allowFailing) warn(`::warning:: record: ${msg}\n`);
+      else throw new Error(msg);
+    }
+  }
   const base: Cassette = {
     cassetteVersion: CASSETTE_VERSION,
     scenario: relocatable,
