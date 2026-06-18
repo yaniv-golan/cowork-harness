@@ -306,7 +306,7 @@ export function checkStaleness(cassette: Cassette, cassetteDir: string): string[
         );
       } else if (fp.sharedHash !== undefined && live.sharedHash !== undefined) {
         // G-4: bucket-level diagnosis — which component of the scoped hash changed?
-        const scope = fp.skillScope?.length ? fp.skillScope.map((s) => `skills/${s}`).join(", ") : "skill";
+        const scope = fp.skillScope!.map((s) => `skills/${s}`).join(", ");
         if (live.sharedHash !== fp.sharedHash) {
           msgs.push(`shared root changed since record (scope: ${scope}) — re-record`);
         } else {
@@ -1066,8 +1066,21 @@ export async function replayCassette(
         warn(
           "::warning:: [replay] skill fingerprint not re-checkable (local skill dirs not resolvable from this cassette location) — baseline check still applies\n",
         );
-      else if (live.skillHash !== fp.skillHash)
-        staleness.push("local skill/plugin dir contents changed since record — re-record before trusting this replay");
+      else if (live.skillHash !== fp.skillHash) {
+        const recordedVersion = cassette.cassetteVersion ?? 0;
+        if (recordedVersion < CASSETTE_VERSION) {
+          staleness.push(`recorded under an older hash format (v${recordedVersion} → v${CASSETTE_VERSION}) — re-record once after upgrading`);
+        } else if (fp.sharedHash !== undefined && live.sharedHash !== undefined) {
+          const scope = fp.skillScope?.length ? fp.skillScope.map((s) => `skills/${s}`).join(", ") : "skill";
+          if (live.sharedHash !== fp.sharedHash) {
+            staleness.push(`shared root changed since record (scope: ${scope}) — re-record before trusting this replay`);
+          } else {
+            staleness.push(`${scope} changed since record — re-record before trusting this replay`);
+          }
+        } else {
+          staleness.push("local skill/plugin dir contents changed since record — re-record before trusting this replay");
+        }
+      }
     }
     for (const s of staleness) warn(`::warning:: [replay] cassette stale: ${s}\n`);
   }
