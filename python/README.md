@@ -148,7 +148,8 @@ assert len([s for s in r.subagents]) >= 1
   envelope reports (`workDir`), which is fidelity-correct (sandboxed tiers nest under
   `work/session/mnt`; `protocol` flattens under `work/`). `rel_path` is e.g.
   `"artifacts/<slug>/sizing.json"` (a skill's structured output usually lands under `mnt/artifacts/`, while
-  `mnt/outputs/` holds the user-visible deliverable). This Python predicate (full callable, autocomplete,
+  `mnt/outputs/` holds the user-visible deliverable — `rel_path` omits the `mnt/` prefix, so pass
+  `"outputs/metrics.json"`, not `"mnt/outputs/metrics.json"`). This Python predicate (full callable, autocomplete,
   `print(d)`) is the **structured-content** path — strictly richer than a YAML scenario's content
   assertions; prefer it over a YAML predicate when you're already in Python. Use **scenario YAML** instead
   when you want a portable, toolchain-free regression suite run via `cowork-harness run` (see
