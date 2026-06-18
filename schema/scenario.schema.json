@@ -206,6 +206,10 @@
                 "type": "boolean",
                 "description": "(verdict modifier) suppress the default-fail when the run recorded a cowork-parity permissive auto-allow — for tests that deliberately assert Cowork's permissive behavior"
               },
+              "allow_l0_plugin_divergence": {
+                "type": "boolean",
+                "description": "(verdict modifier) suppress the default-fail when L0 (protocol) runs with plugins that load via --settings/managed config instead of --plugin-dir — for tests that deliberately test at L0 with plugins"
+              },
               "replay_protocol_fidelity": {
                 "type": "boolean",
                 "description": "(replay-only, NOT authorable) serializeDecision output matched the frozen recording — the token-free O7 guard; synthesized by the replay lane and rejected if written in a scenario"

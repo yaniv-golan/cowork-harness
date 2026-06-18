@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, existsSync, readdi
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join, dirname, relative, isAbsolute, resolve, sep } from "node:path";
-import { type Scenario, type RunResult, type Assertion } from "../types.js";
+import { type Scenario, type RunResult, type Assertion, Assertion as AssertionSchema } from "../types.js";
 import { executeScenario, parseScenarioFile, collectArtifacts, parseSessionFile } from "./execute.js";
 import { loadSession, resolveSessionPaths } from "../session.js";
 import { loadBaseline } from "../baseline.js";
@@ -212,10 +212,15 @@ export function buildFingerprint(
   // and unrelated VCS noise don't self-invalidate the fingerprint they were recorded under. F-6: when
   // scopeSkills is set, the hash is scoped to those skills' dirs + the plugin's shared roots (fail-closed);
   // hashIgnore (session globs + each mount's .cowork-hashignore) drops consumer-declared non-runtime paths.
-  const skillHash = hashSkillDirs(dirs, scopeSkills, hashIgnore);
+  const hashResult = hashSkillDirs(dirs, scopeSkills, hashIgnore);
+  if (!hashResult.scoped && hashResult.missedSkills && hashResult.missedSkills.length) {
+    process.stderr.write(
+      `cowork-harness: skill-hash: scopeSkills fallback to whole-tree — skills not found in any plugin-root: ${hashResult.missedSkills.join(", ")}\n`,
+    );
+  }
   // Store skillSources RELATIVE to the session-file dir — diagnostics only (the replay recompute re-derives
   // the dirs from the session), so a relative path is enough and never leaks an absolute `/Users/...` path.
-  const fp: Fingerprint = { baseline: baselineAppVersion, skillHash, skillSources: dirs.sort().map((d) => relative(baseDir, d)) };
+  const fp: Fingerprint = { baseline: baselineAppVersion, skillHash: hashResult.hash, skillSources: dirs.sort().map((d) => relative(baseDir, d)) };
   if (scopeSkills && scopeSkills.length) fp.skillScope = [...scopeSkills].sort();
   // G-4: for scoped cassettes, store the shared-root hash separately so checkStaleness can name
   // the changed bucket (skill vs shared root) at verify time.
@@ -275,8 +280,20 @@ export function scanCassette(cassette: Cassette, allow: AllowInput[]): ScanFindi
   // Deliverable + author-written fields — full net (a real cap table's figures/domains live here).
   for (const a of cassette.artifacts ?? []) {
     findings.push(...scanText(a.path, `artifact path ${a.path}`, allow, FULL)); // a filename can name a customer
-    if (a.body !== undefined) findings.push(...scanText(a.body, `artifact ${a.path}`, allow, FULL));
-    else if (a.truncated)
+    if (a.body !== undefined) {
+      if (a.encoding === "base64") {
+        const decoded = Buffer.from(a.body, "base64");
+        const asUtf8 = decoded.toString("utf8");
+        const isText = Buffer.from(asUtf8, "utf8").equals(decoded);
+        if (isText) {
+          findings.push(...scanText(asUtf8, `artifact ${a.path}`, allow, FULL));
+        } else {
+          findings.push({ where: `artifact ${a.path}`, cls: "unscanned", sample: "(binary body — decoded but not text-scannable)" });
+        }
+      } else {
+        findings.push(...scanText(a.body, `artifact ${a.path}`, allow, FULL));
+      }
+    } else if (a.truncated)
       findings.push({ where: `artifact ${a.path}`, cls: "unscanned", sample: "(body not committed — too large or unreadable)" });
   }
   findings.push(...scanText(cassette.scenario.prompt, "scenario.prompt", allow, FULL));
@@ -533,14 +550,29 @@ export function redactCassette(cassette: Cassette, policy: RedactionPolicy): Cas
  *  (e.g. stripped a value a `transcript_not_matches` keys on, manufacturing a green), throw — never write a
  *  cassette whose verdict was changed by redaction. */
 export async function assertRedactionVerdictPreserved(base: Cassette, redacted: Cassette): Promise<void> {
-  const vb = computeVerdict(await replayCassette(base), "replay");
-  const vr = computeVerdict(await replayCassette(redacted), "replay");
-  if (vb.pass !== vr.pass)
+  const [rb, rr] = await Promise.all([replayCassette(base), replayCassette(redacted)]);
+  const vb = computeVerdict(rb, "replay");
+  const vr = computeVerdict(rr, "replay");
+  const failedKeys = (result: RunResult): string[] =>
+    result.assertions
+      .filter((a) => !a.pass)
+      .map((a) => Object.keys(a.assertion).filter((k) => (a.assertion as Record<string, unknown>)[k] !== undefined)[0] ?? "(unknown)")
+      .sort();
+  const baseFailedKeys = failedKeys(rb);
+  const redactedFailedKeys = failedKeys(rr);
+  const verdictMismatch = vb.pass !== vr.pass;
+  const countMismatch = baseFailedKeys.length !== redactedFailedKeys.length;
+  const keysMismatch = baseFailedKeys.join(",") !== redactedFailedKeys.join(",");
+  if (verdictMismatch || countMismatch || keysMismatch) {
+    const detail = verdictMismatch
+      ? `pre-redaction pass=${vb.pass} → redacted pass=${vr.pass}`
+      : `assertion failures changed: [${baseFailedKeys.join(", ")}] → [${redactedFailedKeys.join(", ")}]`;
     throw new Error(
-      `redaction changed the replay verdict (pre-redaction pass=${vb.pass} → redacted pass=${vr.pass}) — redaction altered an ` +
+      `cowork-harness: redaction changed assertion failures: ${detail} — redaction altered an ` +
         `asserted observable; refusing to write a cassette whose verdict was manufactured by redaction (A3). ` +
         `Record against synthetic inputs, or narrow the redaction policy so it doesn't touch asserted values.`,
     );
+  }
 }
 
 export interface ScenarioDiscovery {
@@ -1058,9 +1090,12 @@ export function cmdVerifyCassettes(args: string[]) {
   const staleAny = results.some((r) => r.staleness.length > 0);
   const errorAny = results.some((r) => r.error !== undefined);
   const ok = realFindings.length === 0 && !staleAny && !errorAny;
+  const coverage = { privacy: doPrivacy, staleness: doStaleness };
   if (json) {
-    out(JSON.stringify({ command: "verify-cassettes", ok, results }));
+    out(JSON.stringify({ command: "verify-cassettes", ok, coverage, results }));
   } else {
+    if (!doStaleness) log("⚠ cowork-harness: --privacy-only: staleness check was skipped");
+    if (!doPrivacy) log("⚠ cowork-harness: --staleness-only: privacy scan was skipped");
     for (const r of results) {
       if (r.error) log(`✗ ${r.file}: [error] ${r.error}`);
       for (const f of r.findings) log(`${f.cls === "unscanned" ? "·" : "✗"} ${r.file}: [${f.cls}] ${f.where} — ${f.sample}`);
@@ -1102,12 +1137,18 @@ export async function replayCassette(
   if (cassette.fingerprint) {
     const fp = cassette.fingerprint;
     let liveBaseline: string | undefined;
+    let baselineLoadFailed = false;
     try {
       liveBaseline = loadBaseline("latest").appVersion;
     } catch {
-      /* no baseline available (e.g. CI without baselines) — skip the baseline arm */
+      baselineLoadFailed = true;
+      if (opts.strict) {
+        staleness.push("baseline could not be loaded — cannot verify staleness (--strict: treating as stale)");
+      } else {
+        warn("cowork-harness: strict staleness check skipped — baseline could not be loaded\n");
+      }
     }
-    if (liveBaseline && liveBaseline !== fp.baseline)
+    if (!baselineLoadFailed && liveBaseline && liveBaseline !== fp.baseline)
       staleness.push(`baseline moved ${fp.baseline} → ${liveBaseline} since record — re-record before trusting this replay`);
     if (fp.skillHash) {
       const live = buildFingerprint(cassette.scenario.session, fp.baseline, opts.cassetteDir, cassette.scenario.skills);
@@ -1188,6 +1229,23 @@ export async function replayCassette(
   // #1: with an artifact manifest, the filesystem assertions become replay-checkable (materialized below).
   // Without a manifest they stay live-only (stripped → skip warning), exactly as before.
   const manifestKeys: (keyof Assertion)[] = cassette.artifacts?.length ? ["file_exists", "user_visible_artifact", "artifact_json"] : [];
+  // Bug 37: deterministic exhaustiveness check — every key in the Assertion schema must appear in exactly
+  // one classification bucket. If a new key is added to the schema but not here, this throws at the first
+  // replay, making the oversight impossible to miss in CI.
+  {
+    const ALL_CLASSIFICATION_KEYS = new Set<keyof Assertion>([
+      ...alwaysContentKeys,
+      ...questionGateKeys,
+      "file_exists", "user_visible_artifact", "artifact_json",
+      "egress_denied", "egress_allowed", "no_delete_in_outputs", "self_heal_ran", "transcript_no_host_path",
+      "replay_protocol_fidelity",
+      "allow_l0_plugin_divergence",
+    ]);
+    for (const key of Object.keys(AssertionSchema.shape) as (keyof Assertion)[]) {
+      if (!ALL_CLASSIFICATION_KEYS.has(key))
+        throw new Error(`cowork-harness: assertion key "${String(key)}" is not classified for replay — add it to one of the classification buckets in replayCassette`);
+    }
+  }
   const { workRoot: replayWorkRoot, prefixes: replayPrefixes } = manifestKeys.length
     ? materializeManifest(cassette.artifacts!)
     : { workRoot: "", prefixes: [] as string[] };

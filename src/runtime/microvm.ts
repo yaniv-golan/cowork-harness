@@ -12,6 +12,16 @@ import { runtimeAuthEnv, SECRET_ENV_KEYS } from "./host-env.js";
 /** Sentinel terminating the #29 stdin secret prologue (unlikely to collide with env content). */
 export const MICROVM_SECRET_SENTINEL = "__COWORK_SECRETS_END__";
 
+/** Parse an environment variable as a TCP port (integer in 1..65535). Returns defaultValue when absent/empty. */
+function parseEnvPortMicroVm(name: string, defaultValue: number): number {
+  const val = process.env[name];
+  if (!val) return defaultValue;
+  const n = parseInt(val, 10);
+  if (!Number.isFinite(n) || n < 1 || n > 65535 || String(n) !== val.trim())
+    throw new Error(`cowork-harness: ${name}=${val} must be an integer in 1..65535`);
+  return n;
+}
+
 /**
  * L2 — microVM parity runtime. Runs the staged agent inside a REAL Apple VZ Linux
  * microVM (separate kernel) — the closest analog to Cowork's own sandbox, for
@@ -49,7 +59,7 @@ export function spawnMicroVm(
   // Guest default-deny egress (allow only the host proxy gateway + DNS). Use the port the caller
   // allocated for THIS run's host proxy (so host bind and guest firewall/proxy agree); fall back to the
   // env/8899 default only when spawned without an explicit port.
-  const proxyPort = opts.proxyPort ?? Number(process.env.COWORK_VM_PROXY_PORT ?? 8899);
+  const proxyPort = opts.proxyPort ?? parseEnvPortMicroVm("COWORK_VM_PROXY_PORT", 8899);
   const gatewayIp = vmGatewayIp(); // #39: one resolved value feeds both the firewall rule and proxy URL.
   const lockdown = (process.env.COWORK_LOCKDOWN ?? "on") !== "off";
   if (lockdown) {

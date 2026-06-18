@@ -28,6 +28,9 @@ export function collectSecrets(): string[] {
     if (v && v.length >= MIN_SECRET_LENGTH) {
       out.push(v);
       out.push(Buffer.from(v).toString("base64"));
+      out.push(encodeURIComponent(v));
+      out.push(JSON.stringify(v).slice(1, -1));
+      out.push("Bearer " + v);
     }
   };
   for (const k of [...KNOWN_SECRET_KEYS, ...csv(process.env.COWORK_HARNESS_SCRUB_KEYS)]) push(process.env[k]);

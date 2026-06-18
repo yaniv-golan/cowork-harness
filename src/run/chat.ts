@@ -67,6 +67,9 @@ export async function cmdChat(args: string[]) {
         process.exit(2);
       }
       folders.push({ from: args[i], mode: "rw" });
+    } else if (a.startsWith("-")) {
+      log(`chat: unknown flag: ${a}\n`);
+      process.exit(2);
     } else positional.push(a);
   }
   const folder = positional[0];
@@ -139,7 +142,7 @@ export async function cmdChat(args: string[]) {
   let stopHeartbeat: (() => void) | undefined;
   try {
     if (fidelity === "protocol") {
-      child = spawnProtocol(scenario, baseline, plan, outDir);
+      child = spawnProtocol(scenario, baseline, plan, outDir, { systemPromptAppend: prompts.systemPromptAppend }).child;
       const agent = new LiveAgentSession(child as any, outDir);
       const decider = Chain(new ScriptedDecider([]), new PermissionDefaultDecider("cowork"), new PromptDecider(ask));
       const renderer = makeRenderer(renderPlan);

@@ -258,8 +258,12 @@ async function execInContainer(runner: string, container: string, cwd: string, c
     const out = (stdout ?? "") + (stderr ?? "");
     return textResult(out.length ? out : "(no output)");
   } catch (e: any) {
+    // Distinguish infrastructure failures (spawn errors, timeouts, container-not-found) from
+    // normal bash non-zero exits, so the model can tell the difference.
+    const isInfraError = e.code === "ETIMEDOUT" || e.killed || (!e.code && !e.stdout && !e.stderr);
     const out = (e.stdout ?? "") + (e.stderr ?? "");
-    return textResult(`[exit ${e.code ?? 1}]\n${out}`, true);
+    const prefix = isInfraError ? `[infrastructure error: ${e.message ?? String(e)}]` : `[exit ${e.code ?? 1}]`;
+    return textResult(`${prefix}\n${out}`, true);
   }
 }
 
@@ -310,6 +314,7 @@ async function followWithRedirects(
     try {
       resp = await rawFetch(cur.href);
     } catch (e: any) {
+      onEgress?.({ host: cur.hostname, decision: "deny" });
       return textResult(`Fetch failed: ${e?.message ?? String(e)}`, true);
     }
     if (resp.status >= 300 && resp.status < 400) {

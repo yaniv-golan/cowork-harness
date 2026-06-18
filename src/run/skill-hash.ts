@@ -29,13 +29,13 @@ export function compileIgnore(raw: string): RegExp | null {
   if (!p || p.startsWith("#")) return null;
   p = p.replace(/\/+$/, ""); // trailing slash optional (dir matches via subtree prune)
   if (!p) return null;
+  const leadingGlobstar = p.startsWith("**/");
+  if (leadingGlobstar) p = p.slice(3);
   // A leading slash means "anchored to the mount root" (like a leading / in .gitignore).
   // Strip it before further processing; the anchoring is encoded in the regex prefix below.
   const leadingSlash = p.startsWith("/") && !p.startsWith("/**/");
   if (leadingSlash) p = p.slice(1);
   if (!p) return null;
-  const leadingGlobstar = p.startsWith("**/");
-  if (leadingGlobstar) p = p.slice(3);
   // anchored: has an internal slash (e.g. docs/api) OR had a leading slash — both anchor to mount root.
   const anchored = (leadingSlash || p.includes("/")) && !leadingGlobstar;
   let body = "";
@@ -80,7 +80,8 @@ function hashDir(dir: string, hash: ReturnType<typeof createHash>, rel = "", acc
   let entries: string[];
   try {
     entries = readdirSync(dir).sort();
-  } catch {
+  } catch (e) {
+    process.stderr.write(`cowork-harness: skill-hash: cannot read directory ${dir}: ${String((e as Error)?.message ?? e)} — skipping\n`);
     return;
   }
   for (const name of entries) {
@@ -89,7 +90,8 @@ function hashDir(dir: string, hash: ReturnType<typeof createHash>, rel = "", acc
     let st;
     try {
       st = statSync(abs);
-    } catch {
+    } catch (e) {
+      process.stderr.write(`cowork-harness: skill-hash: cannot stat ${abs}: ${String((e as Error)?.message ?? e)} — skipping\n`);
       continue;
     }
     if (st.isDirectory()) {
@@ -118,8 +120,8 @@ function hashDir(dir: string, hash: ReturnType<typeof createHash>, rel = "", acc
       }
       try {
         hash.update(readFileSync(abs));
-      } catch {
-        /* unreadable file — skip content */
+      } catch (e) {
+        process.stderr.write(`cowork-harness: skill-hash: cannot read file ${abs}: ${String((e as Error)?.message ?? e)} — skipping\n`);
       }
     }
   }
@@ -186,6 +188,17 @@ function scopedAccept(keep: Set<string>): AcceptFn {
   };
 }
 
+export interface HashSkillDirsResult {
+  /** The sha256 hex digest. */
+  hash: string;
+  /** true when `scopeSkills` was given and every named skill was found under a plugin-root (scope applied);
+   *  false when the whole-tree fallback was used (scope not applied). */
+  scoped: boolean;
+  /** When `scoped` is false and `scopeSkills` was provided, the skill names that were absent from every
+   *  plugin-root and caused the fallback. */
+  missedSkills?: string[];
+}
+
 /**
  * Hash a set of skill/plugin source dirs into one sha256 hex digest (sorted for determinism).
  *
@@ -195,18 +208,26 @@ function scopedAccept(keep: Set<string>): AcceptFn {
  * plugin-root, or any named skill is absent from every plugin-root (a typo/rename), hash the WHOLE tree —
  * narrowing the gate on a bad name would be a silent staleness false-negative. Individual-skill mounts and
  * marketplaces (no top-level `skills/`) always hash whole (the structural rule degenerates safely).
+ *
+ * Returns a {@link HashSkillDirsResult} with the digest and a `scoped` diagnostic so callers can detect
+ * the whole-tree fallback (e.g. log a warning when a named skill was not found).
  */
-export function hashSkillDirs(dirs: string[], scopeSkills?: string[], sessionIgnore?: string[]): string {
+export function hashSkillDirs(dirs: string[], scopeSkills?: string[], sessionIgnore?: string[]): HashSkillDirsResult {
   const hash = createHash("sha256");
   const sorted = [...dirs].sort();
   // Resolve F-6 skill scoping fail-closed: only narrow to `keep` when every named skill exists under some
   // plugin-root; otherwise `keep` stays null → whole-tree (a typo can't silently narrow the gate).
   let keep: Set<string> | null = null;
+  let missedSkills: string[] | undefined;
   if (scopeSkills && scopeSkills.length) {
     const pluginRoots = sorted.filter((d) => isDir(join(d, "skills")));
     const available = new Set<string>();
     for (const d of pluginRoots) for (const n of skillDirNames(d)) available.add(n);
-    if (pluginRoots.length && scopeSkills.every((s) => available.has(s))) keep = new Set(scopeSkills);
+    if (pluginRoots.length && scopeSkills.every((s) => available.has(s))) {
+      keep = new Set(scopeSkills);
+    } else if (scopeSkills.length) {
+      missedSkills = scopeSkills.filter((s) => !available.has(s));
+    }
   }
   for (const d of sorted) {
     // Consumer-declared ignore for THIS root = the plugin-local .cowork-hashignore + the session-level globs.
@@ -217,5 +238,6 @@ export function hashSkillDirs(dirs: string[], scopeSkills?: string[], sessionIgn
       scopeFn || ignoreRes.length ? (rel: string) => (scopeFn ? scopeFn(rel) : true) && !ignoreRes.some((re) => re.test(rel)) : undefined;
     hashDir(d, hash, "", accept);
   }
-  return hash.digest("hex");
+  const scoped = keep !== null;
+  return scoped ? { hash: hash.digest("hex"), scoped: true } : { hash: hash.digest("hex"), scoped: false, ...(missedSkills ? { missedSkills } : {}) };
 }

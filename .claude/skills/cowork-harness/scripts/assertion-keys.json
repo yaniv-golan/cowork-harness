@@ -1,6 +1,7 @@
 {
   "$comment": "GENERATED from the Zod Assertion schema (src/types.ts) by scripts/gen-schema.ts — do not edit; run `npm run schema`.",
   "keys": [
+    "allow_l0_plugin_divergence",
     "allow_permissive_auto_allow",
     "artifact_json",
     "dispatch_count_max",

@@ -203,8 +203,8 @@ export function fileChannel(dir: string): DecisionChannel {
           for (const f of files) writeFileSync(join(destDir, f), readFileSync(join(dir, f)));
         }
         lastSnapshotSeq = seq; // advance past this scenario's gates
-      } catch {
-        /* dir may be gone / nothing to snapshot */
+      } catch (e) {
+        process.stderr.write(`cowork-harness: fileChannel snapshot failed: ${String((e as Error)?.message ?? e)}\n`);
       }
     },
     close: () => {

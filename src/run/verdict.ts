@@ -1,7 +1,7 @@
 import type { RunResult } from "../types.js";
 
 export interface VerdictSignal {
-  code: "assertion" | "result_error" | "permissive_auto_allow" | "outputs_delete" | "host_path_leak" | "non_deterministic";
+  code: "assertion" | "result_error" | "permissive_auto_allow" | "outputs_delete" | "host_path_leak" | "non_deterministic" | "l0_plugin_divergence";
   severity: "fail" | "warn";
   message: string;
 }
@@ -65,6 +65,18 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
         code: "host_path_leak",
         severity: "fail",
         message: "a host path leaked into model-visible text (assert transcript_no_host_path to make this explicit)",
+      });
+
+    // #20: L0 (protocol) with plugins diverges from Cowork's --plugin-dir cache layout — fail unless the
+    // scenario explicitly opts in via `allow_l0_plugin_divergence: true`. A warn-only let runs appear green
+    // even though plugin loading behavior may differ from production Cowork.
+    if (result.l0PluginDivergence && !authored.some((a) => a.allow_l0_plugin_divergence === true))
+      signals.push({
+        code: "l0_plugin_divergence",
+        severity: "fail",
+        message:
+          "L0 (protocol) ran with plugins that load via --settings/managed config, not --plugin-dir (Cowork cache layout) — " +
+          "not a faithful pass for plugin fidelity. Use container/microvm, or assert allow_l0_plugin_divergence: true to opt in.",
       });
   }
 

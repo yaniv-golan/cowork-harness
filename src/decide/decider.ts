@@ -96,6 +96,7 @@ export class ScriptedDecider implements Decider {
         }
         // choose path — single label, or (multiSelect) a list of labels delivered comma-joined.
         const labels = q.options?.map((o) => o.label) ?? [];
+        warnDuplicateLabels(labels, JSON.stringify(text));
         const picks = Array.isArray(rule.choose) ? rule.choose : [rule.choose!];
         if (picks.length > 1 && !q.multiSelect)
           throw new UnansweredError(
@@ -326,6 +327,7 @@ export class LlmDecider implements Decider {
     for (const q of req.questions) {
       const text = q.question ?? q.header ?? "";
       const labels = q.options.map((o) => o.label);
+      warnDuplicateLabels(labels, JSON.stringify(text));
       const raw = await this.complete(this.prompt(text, q.options, ctx), this.model);
       const pick = matchLabel(raw, labels);
       if (!pick)
@@ -384,8 +386,15 @@ export class PromptDecider implements Decider {
       throw new UnansweredError("prompt policy needs a terminal", "use --on-unanswered fail|first or run interactively");
     if (req.kind === "permission") {
       const labels = (req.options ?? []).map((o) => o.label);
-      const ans = await this.ask(`${req.tool}?\n${labels.map((l, i) => `  ${i + 1}) ${l}`).join("\n")}\n> `);
-      const { behavior, grant } = coerceWebFetchGrant(coerceLabel(ans, labels).value);
+      const permPrompt = `${req.tool}?\n${labels.map((l, i) => `  ${i + 1}) ${l}`).join("\n")}\n> `;
+      let coercedPerm: { value: string; matched: boolean };
+      do {
+        const ans = await this.ask(permPrompt);
+        coercedPerm = coerceLabel(ans, labels);
+        if (!coercedPerm.matched)
+          process.stderr.write(`Unrecognized input. Please enter a number (1–${labels.length}) or one of: ${labels.join(", ")}\n`);
+      } while (!coercedPerm.matched);
+      const { behavior, grant } = coerceWebFetchGrant(coercedPerm.value);
       return {
         response: {
           kind: "permission",
@@ -399,14 +408,17 @@ export class PromptDecider implements Decider {
       const answers: Record<string, string> = {};
       for (const q of req.questions) {
         const text = q.question ?? q.header ?? "";
-        const raw = await this.ask(
-          `${text}\n${q.options.map((o, i) => `  ${i + 1}) ${o.label}${o.description ? " — " + o.description : ""}`).join("\n")}\n> `,
-        );
-        // Human TTY input: coerce lenient input (index or label) — fallback to option 1 is acceptable here.
-        answers[text] = coerceLabel(
-          raw,
-          q.options.map((o) => o.label),
-        ).value;
+        const optionLabels = q.options.map((o) => o.label);
+        warnDuplicateLabels(optionLabels, JSON.stringify(text));
+        const optionList = `${text}\n${q.options.map((o, i) => `  ${i + 1}) ${o.label}${o.description ? " — " + o.description : ""}`).join("\n")}\n> `;
+        let coerced: { value: string; matched: boolean };
+        do {
+          const raw = await this.ask(optionList);
+          coerced = coerceLabel(raw, optionLabels);
+          if (!coerced.matched)
+            process.stderr.write(`Unrecognized input. Please enter a number (1–${optionLabels.length}) or one of: ${optionLabels.join(", ")}\n`);
+        } while (!coerced.matched);
+        answers[text] = coerced.value;
       }
       return { response: { kind: "question", answers }, by: "human" };
     }
@@ -491,7 +503,7 @@ export class ExternalDecider implements Decider {
       server: req.server,
       prompt: req.prompt,
       schema: req.schema,
-      reply_with: `{"id":"${req.id}","action":"accept|decline"}`,
+      reply_with: `{"id":"${req.id}","action":"accept|cancel|decline"}`,
     };
   }
 
@@ -502,6 +514,7 @@ export class ExternalDecider implements Decider {
       for (const q of req.questions) {
         const text = q.question ?? q.header ?? "";
         const labels = q.options.map((o) => o.label);
+        warnDuplicateLabels(labels, JSON.stringify(text));
         const raw = parsed.answers?.[text];
         if (raw === undefined) {
           // #20: the reply didn't answer THIS question (a key mismatch — the helper must key `answers`
@@ -541,6 +554,11 @@ export class ExternalDecider implements Decider {
       // web_fetch approval (options present): carry the grant scope. Helper may send {behavior, grant?};
       // an allow without an explicit grant defaults to "once" (no host-wide approval).
       if (req.options && allow) {
+        if (parsed.grant != null && parsed.grant !== "domain" && parsed.grant !== "once")
+          throw new UnansweredError(
+            `external decider grant ${JSON.stringify(parsed.grant)} is not a valid grant scope`,
+            `valid grant values: "once", "domain"`,
+          );
         const grant: "once" | "domain" = parsed.grant === "domain" ? "domain" : "once";
         return { kind: "permission", behavior: "allow", updatedInput: parsed.updatedInput ?? req.input, grant };
       }
@@ -548,7 +566,19 @@ export class ExternalDecider implements Decider {
         ? { kind: "permission", behavior: "allow", updatedInput: parsed.updatedInput ?? req.input }
         : { kind: "permission", behavior: "deny", message: parsed.message ?? "denied (external)" };
     }
-    if (req.kind === "dialog") return { kind: "dialog", behavior: parsed.behavior === "ok" ? "ok" : "cancelled", choice: parsed.choice };
+    if (req.kind === "dialog") {
+      if (parsed.behavior != null && parsed.behavior !== "ok" && parsed.behavior !== "cancelled")
+        throw new UnansweredError(
+          `external decider dialog behavior ${JSON.stringify(parsed.behavior)} is not a valid behavior`,
+          `valid behaviors: "ok", "cancelled"`,
+        );
+      return { kind: "dialog", behavior: parsed.behavior === "ok" ? "ok" : "cancelled", choice: parsed.choice };
+    }
+    if (parsed.action != null && parsed.action !== "accept" && parsed.action !== "cancel" && parsed.action !== "decline")
+      throw new UnansweredError(
+        `external decider elicit action ${JSON.stringify(parsed.action)} is not a valid action`,
+        `valid actions: "accept", "cancel", "decline"`,
+      );
     return {
       kind: "elicit",
       action: parsed.action === "accept" ? "accept" : parsed.action === "cancel" ? "cancel" : "decline",
@@ -587,6 +617,23 @@ function askRaw(prompt: string): Promise<string> {
     });
   });
 }
+/** Warn if a labels array contains duplicate values — duplicates make the second occurrence permanently
+ *  unreachable via `coerceLabel` (which uses `find`, returning the first match). Called wherever a
+ *  `labels` array is built from gate options so duplicate gates are surfaced at decision time. */
+function warnDuplicateLabels(labels: string[], context: string): void {
+  const seen = new Set<string>();
+  const dupes = new Set<string>();
+  for (const l of labels) {
+    const key = l.toLowerCase();
+    if (seen.has(key)) dupes.add(l);
+    else seen.add(key);
+  }
+  if (dupes.size > 0)
+    warn(
+      `::warning:: gate ${context} has duplicate option labels: ${[...dupes].map((d) => JSON.stringify(d)).join(", ")} — the second occurrence is permanently unreachable via coerceLabel (find returns the first match). Fix the gate to use unique labels.\n`,
+    );
+}
+
 /** Coerce a raw answer (1-based index OR label, case-insensitive) to a canonical option label.
  *  Returns a discriminated result: `matched` is true when the value was found in `labels`
  *  (by index or case-insensitive name); false when the fallback to `labels[0]` was used.

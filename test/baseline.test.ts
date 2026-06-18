@@ -143,10 +143,19 @@ describe("resolveAgentBinary newest-sibling fallback", () => {
 
   afterEach(() => {
     delete process.env.COWORK_AGENT_BINARY;
+    delete process.env.COWORK_HARNESS_ALLOW_AGENT_FALLBACK;
     vi.restoreAllMocks();
   });
 
-  it("falls back to the newest sibling binary when the exact staged version dir is missing", () => {
+  it("throws when the exact staged version dir is missing (default: no fallback)", () => {
+    const vmRoot = stageVm(["2.1.170", "2.1.177"]);
+    const baseline = baselineWith(join(vmRoot, "2.1.999", "claude")); // non-existent version dir
+
+    expect(() => resolveAgentBinary(baseline)).toThrow("COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1");
+  });
+
+  it("falls back to the newest sibling binary when COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1", () => {
+    process.env.COWORK_HARNESS_ALLOW_AGENT_FALLBACK = "1";
     const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
     const vmRoot = stageVm(["2.1.170", "2.1.177"]);
     const baseline = baselineWith(join(vmRoot, "2.1.999", "claude")); // non-existent version dir

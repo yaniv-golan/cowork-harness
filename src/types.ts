@@ -150,6 +150,12 @@ export const Assertion = z.object({
     .describe(
       "(verdict modifier) suppress the default-fail when the run recorded a cowork-parity permissive auto-allow — for tests that deliberately assert Cowork's permissive behavior",
     ),
+  allow_l0_plugin_divergence: z
+    .boolean()
+    .optional()
+    .describe(
+      "(verdict modifier) suppress the default-fail when L0 (protocol) runs with plugins that load via --settings/managed config instead of --plugin-dir — for tests that deliberately test at L0 with plugins",
+    ),
   replay_protocol_fidelity: z
     .boolean()
     .optional()
@@ -275,4 +281,11 @@ export interface RunResult {
   scan?: { outputsDeletes: string[]; hostPathLeaked: boolean; selfHealRan: boolean };
   /** The fidelity tier actually used. Equals `fidelity` unless `fidelity:"cowork"` resolved to a specific tier. (#24) */
   effectiveFidelity?: string;
+  /** #49: structured fidelity warnings (prompt asset gaps, version mismatches) — visible to JSON callers,
+   *  not just stderr. Populated when a non-fatal prompt warning is emitted during a run. */
+  fidelityWarnings?: string[];
+  /** #20: true when L0 (protocol) ran with plugins that loaded via --settings/managed config instead of
+   *  --plugin-dir (the Cowork cache layout). computeVerdict fails on this unless allow_l0_plugin_divergence
+   *  is asserted — a warn-only was insufficient since the run could still appear green. */
+  l0PluginDivergence?: boolean;
 }

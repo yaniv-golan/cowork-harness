@@ -10,6 +10,8 @@ import {
   slugForPath,
   isOutputsDelete,
   collectArtifacts,
+  readSessionManifest,
+  parseEnvPort,
 } from "../src/run/execute.js";
 import { loadSession, resolveSessionPaths } from "../src/session.js";
 import { spawnEnv } from "../src/runtime/argv.js";
@@ -254,6 +256,99 @@ describe("execute — #45 parseDialogTimeout", () => {
   it("returns undefined for '0' (not > 0)", () => expect(parseDialogTimeout("0")).toBeUndefined());
   it("returns undefined for empty string", () => expect(parseDialogTimeout("")).toBeUndefined());
   it("returns undefined for absent (empty)", () => expect(parseDialogTimeout("")).toBeUndefined());
+  // Bug 16: reject unsafe/invalid values
+  it("throws for a decimal '1.5'", () => expect(() => parseDialogTimeout("1.5")).toThrow(/no decimals/));
+  it("throws for 'NaN'", () => expect(() => parseDialogTimeout("NaN")).toThrow());
+  it("throws for 'Infinity'", () => expect(() => parseDialogTimeout("Infinity")).toThrow());
+  it("throws for a negative value '-5' (not the -1 sentinel)", () => expect(() => parseDialogTimeout("-5")).toThrow());
+  it("throws for an overflow value beyond 3_600_000", () => expect(() => parseDialogTimeout("3600001")).toThrow(/exceeds maximum/));
+  it("accepts the maximum allowed value 3_600_000", () => expect(parseDialogTimeout("3600000")).toBe(3_600_000));
+  it("accepts 1 ms (minimum positive)", () => expect(parseDialogTimeout("1")).toBe(1));
+});
+
+// Bug 15 — parseEnvPort (pure function, token-free)
+describe("execute — parseEnvPort", () => {
+  const setEnv = (v?: string) => {
+    if (v === undefined) delete process.env.TEST_PORT_VAR;
+    else process.env.TEST_PORT_VAR = v;
+  };
+  afterEach(() => setEnv(undefined));
+
+  it("returns defaultValue when env var is absent", () => {
+    setEnv(undefined);
+    expect(parseEnvPort("TEST_PORT_VAR", 8899)).toBe(8899);
+  });
+  it("returns defaultValue when env var is empty", () => {
+    setEnv("");
+    expect(parseEnvPort("TEST_PORT_VAR", 8899)).toBe(8899);
+  });
+  it("accepts a valid port (1)", () => {
+    setEnv("1");
+    expect(parseEnvPort("TEST_PORT_VAR", 8899)).toBe(1);
+  });
+  it("accepts a valid port (65535)", () => {
+    setEnv("65535");
+    expect(parseEnvPort("TEST_PORT_VAR", 8899)).toBe(65535);
+  });
+  it("accepts a typical port (8080)", () => {
+    setEnv("8080");
+    expect(parseEnvPort("TEST_PORT_VAR", 8899)).toBe(8080);
+  });
+  it("throws for NaN", () => {
+    setEnv("NaN");
+    expect(() => parseEnvPort("TEST_PORT_VAR", 8899)).toThrow(/must be an integer in 1..65535/);
+  });
+  it("throws for 0", () => {
+    setEnv("0");
+    expect(() => parseEnvPort("TEST_PORT_VAR", 8899)).toThrow(/must be an integer in 1..65535/);
+  });
+  it("throws for a negative value", () => {
+    setEnv("-1");
+    expect(() => parseEnvPort("TEST_PORT_VAR", 8899)).toThrow(/must be an integer in 1..65535/);
+  });
+  it("throws for 65536 (out of range)", () => {
+    setEnv("65536");
+    expect(() => parseEnvPort("TEST_PORT_VAR", 8899)).toThrow(/must be an integer in 1..65535/);
+  });
+  it("throws for a decimal '8080.5'", () => {
+    setEnv("8080.5");
+    expect(() => parseEnvPort("TEST_PORT_VAR", 8899)).toThrow(/must be an integer in 1..65535/);
+  });
+});
+
+// Bug 17 — readSessionManifest session ID verification
+describe("execute — readSessionManifest session ID mismatch", () => {
+  const writeManifest = (content: object): string => {
+    const dir = mkdtempSync(join(tmpdir(), "cwh-manifest-"));
+    const f = join(dir, "session.json");
+    writeFileSync(f, JSON.stringify(content));
+    return f;
+  };
+
+  it("returns agentSessionId when sessionId matches", () => {
+    const f = writeManifest({ sessionId: "abc", agentSessionId: "uuid-123", createdAt: "2024-01-01T00:00:00.000Z" });
+    expect(readSessionManifest(f, "abc")).toBe("uuid-123");
+  });
+  it("throws when manifest sessionId does not match the requested sessionId", () => {
+    const f = writeManifest({ sessionId: "abc", agentSessionId: "uuid-123", createdAt: "2024-01-01T00:00:00.000Z" });
+    expect(() => readSessionManifest(f, "xyz")).toThrow(/manifest session ID mismatch/);
+    expect(() => readSessionManifest(f, "xyz")).toThrow(/abc/);
+    expect(() => readSessionManifest(f, "xyz")).toThrow(/xyz/);
+  });
+  it("allows through a legacy manifest with no sessionId field (backward compat)", () => {
+    const f = writeManifest({ agentSessionId: "uuid-legacy" });
+    expect(readSessionManifest(f, "anyid")).toBe("uuid-legacy");
+  });
+  it("throws for corrupt JSON", () => {
+    const dir = mkdtempSync(join(tmpdir(), "cwh-manifest-bad-"));
+    const f = join(dir, "session.json");
+    writeFileSync(f, "not json{{");
+    expect(() => readSessionManifest(f, "abc")).toThrow(/corrupt manifest/);
+  });
+  it("throws when agentSessionId is missing", () => {
+    const f = writeManifest({ sessionId: "abc" });
+    expect(() => readSessionManifest(f, "abc")).toThrow(/missing agentSessionId/);
+  });
 });
 
 // collectArtifacts must not follow symlinks (no escape out of workRoot, no cycle).

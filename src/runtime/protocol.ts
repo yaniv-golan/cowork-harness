@@ -13,7 +13,13 @@ import type { LaunchPlan } from "../session.js";
  * Mounts are reproduced as plain directories under work/ so the agent sees the
  * same relative layout (uploads/, .projects/, .local-plugins/) — minus isolation.
  */
-export function spawnProtocol(scenario: Scenario, baseline: PlatformBaseline, plan: LaunchPlan, outDir: string) {
+export function spawnProtocol(
+  scenario: Scenario,
+  baseline: PlatformBaseline,
+  plan: LaunchPlan,
+  outDir: string,
+  opts: { systemPromptAppend?: string } = {},
+) {
   const work = join(outDir, "work");
   mkdirSync(join(work, "uploads"), { recursive: true });
   mkdirSync(join(work, "outputs"), { recursive: true });
@@ -71,12 +77,20 @@ export function spawnProtocol(scenario: Scenario, baseline: PlatformBaseline, pl
     ...(plan.model ? ["--model", plan.model] : []),
     ...(plan.permissionMode ? ["--permission-mode", plan.permissionMode] : []),
     ...(plan.mcpConfig ? ["--mcp-config", plan.mcpConfig] : []),
+    // #19: thread the rendered system prompt append into L0, matching container/microvm/host-loop.
+    // The host `claude` CLI accepts --append-system-prompt just like the staged binary does, so L0
+    // records can carry Cowork framing instead of running with no system prompt extension at all.
+    ...(opts.systemPromptAppend ? ["--append-system-prompt", opts.systemPromptAppend] : []),
   ];
 
-  // #34/#12: make the L0 divergence LOUD when the session declares plugins — L0 neither
+  // #34/#12/#20: make the L0 divergence LOUD when the session declares plugins — L0 neither
   // applies the Cowork auth-env drop nor passes --plugin-dir, so plugin fidelity is not what
   // a cowork tier would give. Mirrors the L0 "network tool ran at L0" warning in execute.ts.
+  // Bug 20: this also sets l0PluginDivergence=true so execute.ts can surface a FAILING fidelity
+  // signal in the RunResult — a warn-only was insufficient since the run could still appear green.
+  let l0PluginDivergence = false;
   if (plan.pluginDirs.length > 0) {
+    l0PluginDivergence = true;
     warn(
       `::warning:: ${scenario.name}: L0 (protocol) does not apply the Cowork auth-env drop or --plugin-dir; ` +
         `${plan.pluginDirs.length} plugin dir(s) load via --settings/managed config, not the --plugin-dir cache layout — ` +
@@ -84,5 +98,5 @@ export function spawnProtocol(scenario: Scenario, baseline: PlatformBaseline, pl
     );
   }
 
-  return spawn("claude", args, { cwd: work, env, stdio: ["pipe", "pipe", "pipe"] });
+  return { child: spawn("claude", args, { cwd: work, env, stdio: ["pipe", "pipe", "pipe"] }), l0PluginDivergence };
 }

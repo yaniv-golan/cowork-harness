@@ -1,7 +1,7 @@
 import { warn } from "./io.js";
 import { z } from "zod";
 import { mkdirSync, writeFileSync, readFileSync, cpSync, existsSync, statSync } from "node:fs";
-import { join, resolve, basename, isAbsolute } from "node:path";
+import { join, resolve, relative, basename, isAbsolute } from "node:path";
 import { homedir } from "node:os";
 import type { PlatformBaseline } from "./types.js";
 import { safePathSegment, safeMountSegment, resolveDeclaredSource } from "./staging/resolve.js";
@@ -322,7 +322,20 @@ export function buildLaunchPlan(session: SessionConfig, baseline: PlatformBaseli
       const entry = (manifest.plugins ?? []).find((p) => p.name === pName);
       if (!entry) continue;
       const pluginSrc = resolve(mkRoot, entry.source ?? `./${pName}`);
+      // Bug 21: reject entry.source values that escape the marketplace root (absolute paths or .. traversal).
+      if (entry.source !== undefined) {
+        const rel = relative(mkRoot, pluginSrc);
+        if (rel.startsWith("..") || isAbsolute(rel))
+          throw new Error(
+            `cowork-harness: marketplace entry.source "${entry.source}" escapes the marketplace root`,
+          );
+      }
       if (!existsSync(pluginSrc)) continue; // unresolved here; post-loop reconciliation decides whether to throw
+      // Bug 22: marketplace plugin sources must be directories (same kind-check as local_plugins / remote_plugins).
+      if (!statSync(pluginSrc).isDirectory())
+        throw new Error(
+          `cowork-harness: marketplace entry.source "${entry.source ?? `./${pName}`}" is not a directory`,
+        );
       // A bare `enabled` name (no @marketplace) matches EVERY marketplace defining it → duplicate mounts.
       // Dedupe bare names only; a qualified `foo@mkt` is already pinned to one marketplace by the guard above.
       if (!pMkt) {

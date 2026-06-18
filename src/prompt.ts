@@ -20,6 +20,8 @@ const BASELINES_DIR = join(fileURLToPath(new URL("..", import.meta.url)), "basel
 export interface RenderedPrompts {
   systemPromptAppend?: string;
   subagentAppend?: string;
+  /** #49: structured fidelity warnings collected during prompt rendering — surfaced in RunResult.fidelityWarnings. */
+  fidelityWarnings?: string[];
 }
 
 export function renderPrompts(baseline: PlatformBaseline, session: SessionConfig, sessionId: string): RenderedPrompts {
@@ -37,20 +39,30 @@ export function renderPrompts(baseline: PlatformBaseline, session: SessionConfig
     "{{modelName}}": session.model ?? "Claude",
   };
   const subst = (s: string) => Object.entries(tokens).reduce((acc, [k, v]) => acc.split(k).join(v), s);
+  const fidelityWarnings: string[] = [];
   const read = (rel?: string) => {
     if (!rel) return undefined; // no asset configured — not a drift, just absent
     const p = join(BASELINES_DIR, rel);
     if (!existsSync(p)) {
-      // #35: a baseline that REFERENCES a prompt asset which is absent must not silently degrade — the
-      // run would proceed without key Cowork framing. Warn loudly, consistent with the host-loop path (#34).
-      warn(`::warning:: [prompt] referenced asset not found: ${p} — running WITHOUT this prompt section (fidelity gap)\n`);
-      return undefined;
+      // #35/#24: a baseline that REFERENCES a prompt asset which is absent must not silently degrade — the
+      // run would proceed without key Cowork framing. By default this is a fatal error.
+      // Set COWORK_HARNESS_ALLOW_MISSING_PROMPT=1 to skip and continue (still emits a warning).
+      if (process.env.COWORK_HARNESS_ALLOW_MISSING_PROMPT === "1") {
+        const msg = `[prompt] referenced asset not found: ${p} — running WITHOUT this prompt section (fidelity gap)`;
+        warn(`::warning:: ${msg}\n`);
+        fidelityWarnings.push(msg); // #49: surface to JSON callers via RunResult.fidelityWarnings
+        return undefined;
+      }
+      throw new Error(
+        `cowork-harness: missing prompt asset: ${p}. Set COWORK_HARNESS_ALLOW_MISSING_PROMPT=1 to skip.`,
+      );
     }
     return subst(stripComments(readFileSync(p, "utf8"))).trim();
   };
   return {
     systemPromptAppend: read(spawn.promptTemplate),
     subagentAppend: read(spawn.subagentAppend),
+    fidelityWarnings: fidelityWarnings.length ? fidelityWarnings : undefined,
   };
 }
 
