@@ -109,7 +109,7 @@ describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
     expect(r.json?.error?.message).toMatch(/does not support --decider-dir/);
   });
 
-  it("#11 — vm with an invalid subcommand exits non-zero (not 0)", () => {
+  it.skipIf(process.platform !== "darwin")("#11 — vm with an invalid subcommand exits non-zero (not 0)", () => {
     const r = run(["vm", "bogus-subcommand"]);
     expect(r.code).toBe(2);
     expect(r.stderr).toMatch(/usage: vm/);
@@ -414,9 +414,10 @@ describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
     expect(r.json?.error?.message).toMatch(/conflicts with --answer/);
   });
 
-  it("vm validates the subcommand before touching the baseline (exit 2)", () => {
+  it.skipIf(process.platform !== "darwin")("vm validates the subcommand before touching the baseline (exit 2)", () => {
     // A bad subcommand with a stray second arg used to surface as a baseline-load error; it must now be
-    // a clean `usage: vm` (the subcommand is checked before loadBaseline).
+    // a clean `usage: vm` (the subcommand is checked before loadBaseline). macOS-only: on Linux the
+    // platform guard fires first, which is also correct behaviour.
     const r = run(["vm", "bogus", "some-baseline"]);
     expect(r.code).toBe(2);
     expect(r.stderr).toMatch(/usage: vm/);

@@ -1312,6 +1312,16 @@ async function cmdDecide(args: string[]) {
       undefined,
       json,
     );
+  // --intent only feeds the LLM decider; check this before the no-decider guard so the error is
+  // specific ("--intent requires --decider-llm") rather than the generic "no decider configured".
+  if (intent !== undefined && !deciderLlm)
+    fail(
+      "decide",
+      "usage",
+      "--intent requires --decider-llm (it states the test intent for the model answering the question).",
+      undefined,
+      json,
+    );
   // Q5/§8.5: pre-flight — exit 2 (usage error) when no decider is configured at all. Previously this
   // fell through to ScriptedDecider([]).decide() → ABSTAIN → exit 1 "no rule matched", which implies
   // the user wrote a rule that failed to match rather than that they forgot to configure anything.
@@ -1327,16 +1337,6 @@ async function cmdDecide(args: string[]) {
   // helper would never be exercised. Mirrors cmdSkill/resolveExternal's conflict guards.
   if (deciderLlm && deciderCmd)
     fail("decide", "usage", "--decider-llm conflicts with --decider-cmd (one terminal decider).", undefined, json);
-  // --intent only feeds the LLM decider; without --decider-llm it is silently ignored (mirrors
-  // cmdSkill's guard).
-  if (intent !== undefined && !deciderLlm)
-    fail(
-      "decide",
-      "usage",
-      "--intent requires --decider-llm (it states the test intent for the model answering the question).",
-      undefined,
-      json,
-    );
   // --decider-llm is a terminal decider; combining it with the scripted --answer/--answer-policy
   // rules is contradictory (the LLM branch wins, the rules are never exercised). Reject the conflict the
   // same way --decider-llm + --decider-cmd is rejected above.
