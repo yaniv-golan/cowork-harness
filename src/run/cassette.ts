@@ -645,6 +645,25 @@ export function artifactJsonTargetsTruncated(scenario: Scenario, workRoot: strin
   return hits;
 }
 
+/** G-1: probe for an on-disk scenario file at the two conventional locations relative to a cassette.
+ *  Sibling layout: <cassetteDir>/../scenarios/<name>.yaml (the standard multi-skill repo layout).
+ *  Flat layout:    <cassetteDir>/<name>.yaml (single-dir layout).
+ *  Returns the first found path, or null if neither exists.
+ *  Exported as _findScenarioOnDisk for unit tests only; not part of the public API. */
+export function _findScenarioOnDisk(cassettePath: string, scenarioName: string): string | null {
+  const cassetteDir = dirname(cassettePath);
+  const candidates = [
+    join(cassetteDir, "..", "scenarios", `${scenarioName}.yaml`),
+    join(cassetteDir, "..", "scenarios", `${scenarioName}.yml`),
+    join(cassetteDir, `${scenarioName}.yaml`),
+    join(cassetteDir, `${scenarioName}.yml`),
+  ];
+  for (const c of candidates) {
+    if (existsSync(c)) return resolve(c);
+  }
+  return null;
+}
+
 /** Record one scenario FILE → one cassette (parses the file, then shares the live-record tail with the
  *  in-memory path). The file's dir feeds the redaction-policy search (for a co-located .cowork-redact.json). */
 async function recordScenarioFile(file: string, opts: RecordOpts): Promise<{ result: RunResult; cassettePath: string; artifacts: number }> {
@@ -720,14 +739,24 @@ export async function cmdRecord(args: string[]) {
         continue;
       }
       const cassette = rc.cassette;
-      // Re-record from the embedded scenario, re-resolving its relocatable session against the cassette dir.
-      const sessionRef = cassette.scenario.session === "(inline)" ? "(inline)" : join(dirname(cp), cassette.scenario.session);
+      const diskScenario = _findScenarioOnDisk(cp, cassette.scenario.name);
       log(`↻ re-recording ${cp} (stale: ${staleness.join("; ")})`);
       try {
-        const r = await recordScenarioObject(
-          { ...cassette.scenario, session: sessionRef },
-          { noRedact, allowFailing, cassettePath: cp, maxArtifactBytes },
-        );
+        let r: { result: RunResult };
+        if (diskScenario) {
+          // G-1: re-record from the on-disk scenario YAML so any edits (e.g. added `skills:`) take effect.
+          r = await recordScenarioFile(diskScenario, { noRedact, allowFailing, cassettePath: cp, maxArtifactBytes });
+        } else {
+          // No on-disk scenario found — fall back to the embedded snapshot (original behavior).
+          // The user should pass the scenario file directly (`record <scenario.yaml>`) to pick up edits.
+          log(`  ⚠ no on-disk scenario found for "${cassette.scenario.name}" — re-recording from embedded snapshot (edits to the scenario YAML won't apply; use \`record <scenario.yaml>\` to re-record from disk)`);
+          const sessionRef =
+            cassette.scenario.session === "(inline)" ? "(inline)" : join(dirname(cp), cassette.scenario.session);
+          r = await recordScenarioObject(
+            { ...cassette.scenario, session: sessionRef },
+            { noRedact, allowFailing, cassettePath: cp, maxArtifactBytes },
+          );
+        }
         log(`  ✓ ${cp} (${r.result.result})`);
       } catch (e) {
         failures++;
