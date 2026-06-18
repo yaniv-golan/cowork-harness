@@ -291,7 +291,16 @@ export function checkStaleness(cassette: Cassette, cassetteDir: string): string[
     const live = buildFingerprint(cassette.scenario.session, fp.baseline, cassetteDir, cassette.scenario.skills);
     if (live.skillHash === undefined)
       msgs.push("skill dirs not resolvable from the cassette location — cannot verify staleness (gate fails: can't verify ⇒ not green)");
-    else if (live.skillHash !== fp.skillHash) msgs.push("local skill/plugin dir contents changed since record — re-record");
+    else if (live.skillHash !== fp.skillHash) {
+      const recordedVersion = cassette.cassetteVersion ?? 0;
+      if (recordedVersion < CASSETTE_VERSION) {
+        msgs.push(
+          `recorded under an older hash format (v${recordedVersion} → v${CASSETTE_VERSION}) — re-record once after upgrading`,
+        );
+      } else {
+        msgs.push("local skill/plugin dir contents changed since record — re-record");
+      }
+    }
   }
   return msgs;
 }

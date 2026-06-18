@@ -1,4 +1,7 @@
 import { describe, it, expect } from "vitest";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { scanCassette, checkStaleness } from "../src/run/cassette.js";
 
 const scenario = (assert: unknown[], prompt = "hi") => ({
@@ -142,5 +145,74 @@ describe("checkStaleness — B3 gate", () => {
   it("no fingerprint → nothing to check (no false staleness)", () => {
     const c: any = { scenario: scenario([{ result: "success" }]), events: [] };
     expect(checkStaleness(c, ".")).toEqual([]);
+  });
+});
+
+describe("checkStaleness — staleness message variants", () => {
+  it("emits 'older hash format' message when cassette v < current and skillHash mismatches", () => {
+    const root = mkdtempSync(join(tmpdir(), "cwh-g2-"));
+    const skillDir = join(root, "skill");
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(join(skillDir, "SKILL.md"), "# s\n");
+    const sessionPath = join(root, "session.yaml");
+    writeFileSync(sessionPath, `skills:\n  local:\n    - ./skill\n`);
+
+    const c: any = {
+      cassetteVersion: 1, // older format — should trigger format-version message
+      scenario: {
+        name: "s",
+        baseline: "latest",
+        session: sessionPath,
+        fidelity: "container",
+        prompt: "hi",
+        answers: [],
+        expect_denied: [],
+        assert: [],
+      },
+      events: [],
+      fingerprint: {
+        baseline: "99.0.0",
+        skillHash: "0000000000000000000000000000000000000000000000000000000000000000",
+      },
+    };
+
+    const msgs = checkStaleness(c, root);
+    const skillMsg = msgs.find((m) => /hash format|older/.test(m));
+    expect(skillMsg).toBeDefined();
+    expect(skillMsg).toMatch(/v1.*v2|older hash format/i);
+    expect(skillMsg).not.toMatch(/contents changed/);
+  });
+
+  it("emits 'contents changed' message when cassette version is current and skillHash mismatches", () => {
+    const root = mkdtempSync(join(tmpdir(), "cwh-g2b-"));
+    const skillDir = join(root, "skill");
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(join(skillDir, "SKILL.md"), "# s\n");
+    const sessionPath = join(root, "session.yaml");
+    writeFileSync(sessionPath, `skills:\n  local:\n    - ./skill\n`);
+
+    const c: any = {
+      cassetteVersion: 2, // current format — should get the generic contents-changed message
+      scenario: {
+        name: "s",
+        baseline: "latest",
+        session: sessionPath,
+        fidelity: "container",
+        prompt: "hi",
+        answers: [],
+        expect_denied: [],
+        assert: [],
+      },
+      events: [],
+      fingerprint: {
+        baseline: "99.0.0",
+        skillHash: "0000000000000000000000000000000000000000000000000000000000000000",
+      },
+    };
+
+    const msgs = checkStaleness(c, root);
+    const skillMsg = msgs.find((m) => /contents changed|changed since/.test(m));
+    expect(skillMsg).toBeDefined();
+    expect(skillMsg).not.toMatch(/hash format|older/i);
   });
 });
