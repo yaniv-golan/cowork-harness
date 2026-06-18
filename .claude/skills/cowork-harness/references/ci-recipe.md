@@ -10,10 +10,10 @@ The split is not just about tokens — it decides **where each lane can run**:
 - **`replay` / `verify-cassettes` (token-free, agent-free).** Replays a recorded cassette
   (`events.jsonl` + `control-out.jsonl`) and lints the committed cassettes. **No model tokens, no
   Docker, no agent binary** — runs on a stock GitHub Actions runner. Evaluates **content** assertions
-  only (`transcript_*`, `tool_*`, `subagent_*`, `dispatch_count_max`, `result`; plus the gate keys
-  `question_asked` / `questions_count_max` / `gate_answers_delivered` **if** the cassette has
-  `controlOut`). Filesystem/egress assertions are **silently skipped**. This is your **always-on PR
-  gate**.
+  only (`transcript_*`, `tool_*`, `subagent_*`, `dispatch_count_max`, `result`,
+  `allow_permissive_auto_allow`; plus the gate keys `question_asked` / `questions_count_max` /
+  `gate_answers_delivered` **if** the cassette has `controlOut`). Filesystem/egress assertions are
+  **silently skipped**. This is your **always-on PR gate**.
 - **`run` / `record` (live).** Spawns the real agent in a sandbox: real model tokens + Docker **+ the
   staged Claude Code agent ELF**, bind-mounted from a local Claude Desktop install or pointed to via
   `COWORK_AGENT_BINARY`. Nothing is bundled, and **the agent binary is not redistributable** — a clean

@@ -129,12 +129,17 @@ function hostLoopShellSection(vmMnt: string, appVersion: string): string {
   try {
     content = readFileSync(dir, "utf8");
   } catch (err) {
-    // Loud failure: a missing prompt asset is a real fidelity gap, not a silent no-op. (#27)
-    warn(
-      `::warning:: [hostloop] host-loop prompt asset not found at ${dir} (baseline desktop-${appVersion}) — host-loop shell section will be EMPTY. ` +
-        `Run \`cowork-harness sync\` to update baselines, or set COWORK_AGENT_BINARY to a matching binary. (${String(err)})\n`,
-    );
-    return "";
+    // #25: a missing host-loop prompt asset is a real fidelity gap — the shell-access section would be
+    // silently empty, making the run look green while missing key Cowork framing. By default this is fatal.
+    // Set COWORK_HARNESS_ALLOW_MISSING_PROMPT=1 to continue with an empty section (still warns).
+    if (process.env.COWORK_HARNESS_ALLOW_MISSING_PROMPT === "1") {
+      warn(
+        `::warning:: [hostloop] host-loop prompt asset not found at ${dir} (baseline desktop-${appVersion}) — host-loop shell section will be EMPTY. ` +
+          `Run \`cowork-harness sync\` to update baselines, or set COWORK_AGENT_BINARY to a matching binary. (${String(err)})\n`,
+      );
+      return "";
+    }
+    throw new Error(`cowork-harness: missing host-loop shell prompt asset: ${dir}. Set COWORK_HARNESS_ALLOW_MISSING_PROMPT=1 to skip.`);
   }
   return content
     .replace(/<!--[\s\S]*?-->/g, "")

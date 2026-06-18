@@ -1,12 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, basename } from "node:path";
-import { selectStaleCassettes } from "../src/run/cassette.js";
+import { selectStaleCassettes, _findScenarioOnDisk } from "../src/run/cassette.js";
 
-const cassette = (fingerprint?: unknown) => ({
+const cassette = (fingerprint?: unknown, name = "c") => ({
   scenario: {
-    name: "c",
+    name,
     baseline: "latest",
     session: "(inline)",
     fidelity: "container",
@@ -27,5 +27,35 @@ describe("selectStaleCassettes — B2 selection", () => {
     const stale = selectStaleCassettes(d);
     expect(stale.map((s) => basename(s.path))).toEqual(["stale.cassette.json"]);
     expect(stale[0].staleness.length).toBeGreaterThan(0);
+  });
+});
+
+describe("_findScenarioOnDisk — on-disk scenario probe", () => {
+  it("returns null when neither layout has the scenario file", () => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-find-"));
+    const cassettePath = join(d, "cassettes", "my-scenario.cassette.json");
+    mkdirSync(join(d, "cassettes"), { recursive: true });
+    writeFileSync(cassettePath, "{}");
+    expect(_findScenarioOnDisk(cassettePath, "my-scenario")).toBeNull();
+  });
+
+  it("returns the sibling-layout path when ../scenarios/<name>.yaml exists", () => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-find2-"));
+    mkdirSync(join(d, "cassettes"), { recursive: true });
+    mkdirSync(join(d, "scenarios"), { recursive: true });
+    const cassettePath = join(d, "cassettes", "my-scenario.cassette.json");
+    const scenarioPath = join(d, "scenarios", "my-scenario.yaml");
+    writeFileSync(cassettePath, "{}");
+    writeFileSync(scenarioPath, "prompt: hi\n");
+    expect(_findScenarioOnDisk(cassettePath, "my-scenario")).toBe(scenarioPath);
+  });
+
+  it("returns the flat-layout path when <cassetteDir>/<name>.yaml exists", () => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-find3-"));
+    const cassettePath = join(d, "my-scenario.cassette.json");
+    const scenarioPath = join(d, "my-scenario.yaml");
+    writeFileSync(cassettePath, "{}");
+    writeFileSync(scenarioPath, "prompt: hi\n");
+    expect(_findScenarioOnDisk(cassettePath, "my-scenario")).toBe(scenarioPath);
   });
 });

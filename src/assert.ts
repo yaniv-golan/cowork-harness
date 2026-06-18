@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { join, resolve, relative, isAbsolute, sep } from "node:path";
 import type { Assertion, RunResult } from "./types.js";
 import { compileUserRegex } from "./regex.js";
@@ -242,6 +242,13 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
     // evidence the assertion requires, so it fails loud ("no silent false-greens"). `delivered:
     // false` is a real errored tool_result; `null` is "no tool_result observed for this gate".
     if (a.gate_answers_delivered) {
+      if (ctx.gateDeliveries.length === 0) {
+        results.push(
+          fail(
+            "gate_answers_delivered: no gates were recorded during this run — either no gate fired, or gate delivery tracking is not wired. Expected at least one delivered gate.",
+          ),
+        );
+      }
       const bad = ctx.gateDeliveries.filter((g) => g.delivered !== true);
       results.push(
         bad.length === 0
@@ -275,8 +282,14 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
     else {
       let doc: unknown;
       let parsed = true;
+      const fileSizeLimit = 10 * 1024 * 1024;
+      const fileSize = statSync(file).size;
+      if (fileSize > fileSizeLimit) {
+        results.push(fail(`artifact_json: file too large to parse as JSON (${fileSize} bytes, limit 10 MiB)`));
+        parsed = false;
+      }
       try {
-        doc = JSON.parse(readFileSync(file, "utf8"));
+        if (parsed) doc = JSON.parse(readFileSync(file, "utf8"));
       } catch (e) {
         parsed = false;
         results.push(fail(`artifact_json: ${aj.artifact} is not valid JSON: ${String((e as Error).message)}`));

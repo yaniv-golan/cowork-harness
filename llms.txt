@@ -12,6 +12,7 @@ It is a fidelity fixture, not the Desktop runtime. The CLI binary is `cowork-har
 ## Authoring tests
 - [docs/scenario.md](docs/scenario.md): scenario YAML — prompt + scripted answers + assert:
 - [docs/session.md](docs/session.md): session YAML — pre-prompt setup (model, mounts, discovery)
+- Greenfield scaffold: `python3 .claude/skills/cowork-harness/scripts/scenario.py scaffold --name <name> --skill <dir>` — generates a valid scenario skeleton from scratch (distinct from `cowork-harness scaffold --from-run`, which requires a prior kept run)
 - [examples/README.md](examples/README.md): worked, copyable example scenarios + sessions + skills (protocol/container tiers, token-free replay, prerequisites)
 - [schema/scenario.schema.json](schema/scenario.schema.json): JSON Schema for scenario files (machine-readable)
 - [schema/session.schema.json](schema/session.schema.json): JSON Schema for session files (machine-readable)

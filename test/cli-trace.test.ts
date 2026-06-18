@@ -157,9 +157,9 @@ describe.skipIf(!canCli)("assert --list / scaffold (CLI smokes)", () => {
     const env = JSON.parse(r.stdout.trim().split("\n").filter(Boolean).pop()!);
     expect(env.assertions.some((a: any) => a.key === "file_exists" && a.description)).toBe(true);
   });
-  it("scaffold with no --from-run is a usage error (exit 2)", () => {
+  it("scaffold with no run id is a usage error (exit 2)", () => {
     const r = run(["scaffold"]);
     expect(r.status).toBe(2);
-    expect(r.stderr).toMatch(/--from-run/);
+    expect(r.stderr).toMatch(/scaffold <run-id/);
   });
 });

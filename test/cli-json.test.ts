@@ -164,12 +164,12 @@ describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
     expect(r.json?.matched).toBe(false);
   });
 
-  it("boundary error → category 'boundary', exit 2 (protocol + expect_denied)", () => {
+  it("boundary error → category 'boundary', exit 3 (protocol + expect_denied)", () => {
     const { cwd } = run(["--version"]); // borrow a temp cwd
     writeIn(cwd, "sess.yaml", "permission_mode: default\n");
     writeIn(cwd, "b.yaml", "name: b\nbaseline: latest\nsession: ./sess.yaml\nfidelity: protocol\nprompt: hi\nexpect_denied: [evil.com]\n");
     const r = spawnSync("node", [CLI, "run", "b.yaml", "--output-format=json"], { encoding: "utf8", cwd });
-    expect(r.status).toBe(2);
+    expect(r.status).toBe(3); // R7: boundary violations → exit 3 (integrity, not usage)
     expect(JSON.parse(r.stdout).error.category).toBe("boundary");
   });
 
@@ -179,7 +179,7 @@ describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
     writeIn(cwd, "sess.yaml", "permission_mode: default\n");
     writeIn(cwd, "b.yaml", "name: b\nprofile: latest\nsession: ./sess.yaml\nfidelity: protocol\nprompt: hi\nexpect_denied: [evil.com]\n");
     const r = spawnSync("node", [CLI, "run", "b.yaml", "--output-format=json"], { encoding: "utf8", cwd });
-    expect(r.status).toBe(2); // still reaches the boundary check (the alias mapped profile→baseline)
+    expect(r.status).toBe(3); // R7: boundary → exit 3; alias still mapped profile→baseline
     expect(JSON.parse(r.stdout).error.category).toBe("boundary");
     expect(r.stderr).toMatch(/`profile:` is deprecated/); // the deprecation warning fired
   });

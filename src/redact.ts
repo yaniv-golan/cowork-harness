@@ -14,6 +14,20 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { z } from "zod";
+
+const RedactConfigSchema = z.object({
+  patterns: z
+    .array(
+      z.object({
+        regex: z.string(),
+        label: z.string().optional(),
+        flags: z.string().optional(),
+      }),
+    )
+    .optional(),
+  keys: z.array(z.string()).optional(),
+});
 
 export interface RedactionPolicy {
   patterns: { re: RegExp; label: string }[]; // value/key substrings to redact, by class
@@ -41,7 +55,12 @@ export function loadRedactionPolicy(searchDirs: string[]): RedactionPolicy {
     const f = join(dir, ".cowork-redact.json");
     if (seen.has(f) || !existsSync(f)) continue;
     seen.add(f);
-    const cfg = JSON.parse(readFileSync(f, "utf8")) as { patterns?: { regex: string; label?: string; flags?: string }[]; keys?: string[] };
+    let cfg: z.infer<typeof RedactConfigSchema>;
+    try {
+      cfg = RedactConfigSchema.parse(JSON.parse(readFileSync(f, "utf8")));
+    } catch (e) {
+      throw new Error(`cowork-harness: invalid .cowork-redact.json: ${e instanceof z.ZodError ? e.message : String(e)}`);
+    }
     for (const p of cfg.patterns ?? []) patterns.push({ re: new RegExp(p.regex, p.flags ?? "g"), label: p.label ?? "redacted" });
     for (const k of cfg.keys ?? []) keyNames.push(k);
   }

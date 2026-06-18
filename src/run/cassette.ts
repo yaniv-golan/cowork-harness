@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, existsSync, readdi
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join, dirname, relative, isAbsolute, resolve, sep } from "node:path";
-import { type Scenario, type RunResult, type Assertion } from "../types.js";
+import { type Scenario, type RunResult, type Assertion, Assertion as AssertionSchema } from "../types.js";
 import { executeScenario, parseScenarioFile, collectArtifacts, parseSessionFile } from "./execute.js";
 import { loadSession, resolveSessionPaths } from "../session.js";
 import { loadBaseline } from "../baseline.js";
@@ -24,7 +24,7 @@ import { makeRenderer, renderFooter, type RenderPlan } from "./renderer.js";
 import { jsonEnvelope, parseOutputFormat } from "./envelope.js";
 import { parseArgs } from "../cli-args.js";
 import { resolveInputs } from "./inputs.js";
-import { hashSkillDirs } from "./skill-hash.js";
+import { hashSkillDirs, hashSharedOnly } from "./skill-hash.js";
 import { computeVerdict } from "./verdict.js";
 import { redactJsonLine, redactText, redactStructural, loadRedactionPolicy, type RedactionPolicy } from "../redact.js";
 import { collectSecrets, scrub } from "../secrets.js";
@@ -57,9 +57,10 @@ interface Fingerprint {
   skillHash?: string; // hash of the session's local skill/plugin/marketplace dir contents (if any)
   skillSources?: string[]; // the local dirs that fed skillHash (for the replay recompute + diagnostics)
   skillScope?: string[]; // F-6: the skills the hash was scoped to (empty/absent = whole-tree); diagnostics
+  sharedHash?: string; // G-4: shared-root hash for scoped cassettes; absent on whole-tree or non-plugin-root mounts
 }
 
-interface Cassette {
+export interface Cassette {
   // Schema version of the cassette FORMAT (not the package). Bump when the structure changes in a way a
   // reader must branch on (a new manifest-entry shape, a fingerprint-algorithm change, a2's nonDeterministic
   // provenance, …). ABSENT = pre-versioning legacy (treated as 0). Stamping it now — while ~no cassettes
@@ -211,11 +212,38 @@ export function buildFingerprint(
   // and unrelated VCS noise don't self-invalidate the fingerprint they were recorded under. F-6: when
   // scopeSkills is set, the hash is scoped to those skills' dirs + the plugin's shared roots (fail-closed);
   // hashIgnore (session globs + each mount's .cowork-hashignore) drops consumer-declared non-runtime paths.
-  const skillHash = hashSkillDirs(dirs, scopeSkills, hashIgnore);
+  const hashResult = hashSkillDirs(dirs, scopeSkills, hashIgnore);
+  if (!hashResult.scoped && hashResult.missedSkills && hashResult.missedSkills.length) {
+    process.stderr.write(
+      `cowork-harness: skill-hash: scopeSkills fallback to whole-tree — skills not found in any plugin-root: ${hashResult.missedSkills.join(", ")}\n`,
+    );
+  }
   // Store skillSources RELATIVE to the session-file dir — diagnostics only (the replay recompute re-derives
   // the dirs from the session), so a relative path is enough and never leaks an absolute `/Users/...` path.
-  const fp: Fingerprint = { baseline: baselineAppVersion, skillHash, skillSources: dirs.sort().map((d) => relative(baseDir, d)) };
+  const fp: Fingerprint = {
+    baseline: baselineAppVersion,
+    skillHash: hashResult.hash,
+    skillSources: dirs.sort().map((d) => relative(baseDir, d)),
+  };
   if (scopeSkills && scopeSkills.length) fp.skillScope = [...scopeSkills].sort();
+  // G-4: for scoped cassettes, store the shared-root hash separately so checkStaleness can name
+  // the changed bucket (skill vs shared root) at verify time.
+  if (scopeSkills && scopeSkills.length) {
+    // Only store sharedHash when ALL dirs are plugin-roots; a mix that includes individual-skill-mount dirs
+    // (dirs without a top-level skills/) makes bucket diagnosis unreliable — those dirs contribute to
+    // skillHash but not to sharedHash, so a change there would be mis-attributed to the scoped skill.
+    const allPluginRoots = dirs.every((d) => {
+      try {
+        return statSync(join(d, "skills")).isDirectory();
+      } catch {
+        return false;
+      }
+    });
+    if (allPluginRoots) {
+      const sh = hashSharedOnly(dirs, hashIgnore);
+      if (sh !== null) fp.sharedHash = sh;
+    }
+  }
   return fp;
 }
 
@@ -256,8 +284,20 @@ export function scanCassette(cassette: Cassette, allow: AllowInput[]): ScanFindi
   // Deliverable + author-written fields — full net (a real cap table's figures/domains live here).
   for (const a of cassette.artifacts ?? []) {
     findings.push(...scanText(a.path, `artifact path ${a.path}`, allow, FULL)); // a filename can name a customer
-    if (a.body !== undefined) findings.push(...scanText(a.body, `artifact ${a.path}`, allow, FULL));
-    else if (a.truncated)
+    if (a.body !== undefined) {
+      if (a.encoding === "base64") {
+        const decoded = Buffer.from(a.body, "base64");
+        const asUtf8 = decoded.toString("utf8");
+        const isText = Buffer.from(asUtf8, "utf8").equals(decoded);
+        if (isText) {
+          findings.push(...scanText(asUtf8, `artifact ${a.path}`, allow, FULL));
+        } else {
+          findings.push({ where: `artifact ${a.path}`, cls: "unscanned", sample: "(binary body — decoded but not text-scannable)" });
+        }
+      } else {
+        findings.push(...scanText(a.body, `artifact ${a.path}`, allow, FULL));
+      }
+    } else if (a.truncated)
       findings.push({ where: `artifact ${a.path}`, cls: "unscanned", sample: "(body not committed — too large or unreadable)" });
   }
   findings.push(...scanText(cassette.scenario.prompt, "scenario.prompt", allow, FULL));
@@ -291,7 +331,22 @@ export function checkStaleness(cassette: Cassette, cassetteDir: string): string[
     const live = buildFingerprint(cassette.scenario.session, fp.baseline, cassetteDir, cassette.scenario.skills);
     if (live.skillHash === undefined)
       msgs.push("skill dirs not resolvable from the cassette location — cannot verify staleness (gate fails: can't verify ⇒ not green)");
-    else if (live.skillHash !== fp.skillHash) msgs.push("local skill/plugin dir contents changed since record — re-record");
+    else if (live.skillHash !== fp.skillHash) {
+      const recordedVersion = cassette.cassetteVersion ?? 0;
+      if (recordedVersion < CASSETTE_VERSION) {
+        msgs.push(`recorded under an older hash format (v${recordedVersion} → v${CASSETTE_VERSION}) — re-record once after upgrading`);
+      } else if (fp.sharedHash !== undefined && live.sharedHash !== undefined) {
+        // G-4: bucket-level diagnosis — which component of the scoped hash changed?
+        const scope = fp.skillScope!.map((s) => `skills/${s}`).join(", ");
+        if (live.sharedHash !== fp.sharedHash) {
+          msgs.push(`shared root changed since record (scope: ${scope}) — re-record`);
+        } else {
+          msgs.push(`${scope} changed since record — re-record`);
+        }
+      } else {
+        msgs.push("local skill/plugin dir contents changed since record — re-record");
+      }
+    }
   }
   return msgs;
 }
@@ -499,14 +554,29 @@ export function redactCassette(cassette: Cassette, policy: RedactionPolicy): Cas
  *  (e.g. stripped a value a `transcript_not_matches` keys on, manufacturing a green), throw — never write a
  *  cassette whose verdict was changed by redaction. */
 export async function assertRedactionVerdictPreserved(base: Cassette, redacted: Cassette): Promise<void> {
-  const vb = computeVerdict(await replayCassette(base), "replay");
-  const vr = computeVerdict(await replayCassette(redacted), "replay");
-  if (vb.pass !== vr.pass)
+  const [rb, rr] = await Promise.all([replayCassette(base), replayCassette(redacted)]);
+  const vb = computeVerdict(rb, "replay");
+  const vr = computeVerdict(rr, "replay");
+  const failedKeys = (result: RunResult): string[] =>
+    result.assertions
+      .filter((a) => !a.pass)
+      .map((a) => Object.keys(a.assertion).filter((k) => (a.assertion as Record<string, unknown>)[k] !== undefined)[0] ?? "(unknown)")
+      .sort();
+  const baseFailedKeys = failedKeys(rb);
+  const redactedFailedKeys = failedKeys(rr);
+  const verdictMismatch = vb.pass !== vr.pass;
+  const countMismatch = baseFailedKeys.length !== redactedFailedKeys.length;
+  const keysMismatch = baseFailedKeys.join(",") !== redactedFailedKeys.join(",");
+  if (verdictMismatch || countMismatch || keysMismatch) {
+    const detail = verdictMismatch
+      ? `pre-redaction pass=${vb.pass} → redacted pass=${vr.pass}`
+      : `assertion failures changed: [${baseFailedKeys.join(", ")}] → [${redactedFailedKeys.join(", ")}]`;
     throw new Error(
-      `redaction changed the replay verdict (pre-redaction pass=${vb.pass} → redacted pass=${vr.pass}) — redaction altered an ` +
+      `cowork-harness: redaction changed assertion failures: ${detail} — redaction altered an ` +
         `asserted observable; refusing to write a cassette whose verdict was manufactured by redaction (A3). ` +
         `Record against synthetic inputs, or narrow the redaction policy so it doesn't touch asserted values.`,
     );
+  }
 }
 
 export interface ScenarioDiscovery {
@@ -621,6 +691,25 @@ export function artifactJsonTargetsTruncated(scenario: Scenario, workRoot: strin
   return hits;
 }
 
+/** G-1: probe for an on-disk scenario file at the two conventional locations relative to a cassette.
+ *  Sibling layout: <cassetteDir>/../scenarios/<name>.yaml (the standard multi-skill repo layout).
+ *  Flat layout:    <cassetteDir>/<name>.yaml (single-dir layout).
+ *  Returns the first found path, or null if neither exists.
+ *  Exported as _findScenarioOnDisk for unit tests only; not part of the public API. */
+export function _findScenarioOnDisk(cassettePath: string, scenarioName: string): string | null {
+  const cassetteDir = dirname(cassettePath);
+  const candidates = [
+    join(cassetteDir, "..", "scenarios", `${scenarioName}.yaml`),
+    join(cassetteDir, "..", "scenarios", `${scenarioName}.yml`),
+    join(cassetteDir, `${scenarioName}.yaml`),
+    join(cassetteDir, `${scenarioName}.yml`),
+  ];
+  for (const c of candidates) {
+    if (existsSync(c)) return resolve(c);
+  }
+  return null;
+}
+
 /** Record one scenario FILE → one cassette (parses the file, then shares the live-record tail with the
  *  in-memory path). The file's dir feeds the redaction-policy search (for a co-located .cowork-redact.json). */
 async function recordScenarioFile(file: string, opts: RecordOpts): Promise<{ result: RunResult; cassettePath: string; artifacts: number }> {
@@ -634,10 +723,12 @@ export async function cmdRecord(args: string[]) {
   let p;
   try {
     p = parseArgs(args, {
-      booleans: ["--no-redact", "--allow-failing", "--rerecord-stale"],
+      // --quiet/--verbose accepted for flag consistency but currently no-op in record (renderer plan is fixed).
+      booleans: ["--no-redact", "--allow-failing", "--rerecord-stale", "--quiet", "--verbose"],
       values: ["--out", "--output-format", "--max-artifact-bytes"],
       noDashValue: ["--out"],
       enums: { "--output-format": ["text", "json"] },
+      aliases: { "-q": "--quiet", "-V": "--verbose" },
     });
   } catch (e) {
     log((e as Error).message);
@@ -696,14 +787,25 @@ export async function cmdRecord(args: string[]) {
         continue;
       }
       const cassette = rc.cassette;
-      // Re-record from the embedded scenario, re-resolving its relocatable session against the cassette dir.
-      const sessionRef = cassette.scenario.session === "(inline)" ? "(inline)" : join(dirname(cp), cassette.scenario.session);
+      const diskScenario = _findScenarioOnDisk(cp, cassette.scenario.name);
       log(`↻ re-recording ${cp} (stale: ${staleness.join("; ")})`);
       try {
-        const r = await recordScenarioObject(
-          { ...cassette.scenario, session: sessionRef },
-          { noRedact, allowFailing, cassettePath: cp, maxArtifactBytes },
-        );
+        let r: { result: RunResult };
+        if (diskScenario) {
+          // G-1: re-record from the on-disk scenario YAML so any edits (e.g. added `skills:`) take effect.
+          r = await recordScenarioFile(diskScenario, { noRedact, allowFailing, cassettePath: cp, maxArtifactBytes });
+        } else {
+          // No on-disk scenario found — fall back to the embedded snapshot (original behavior).
+          // The user should pass the scenario file directly (`record <scenario.yaml>`) to pick up edits.
+          log(
+            `  ⚠ no on-disk scenario found for "${cassette.scenario.name}" — re-recording from embedded snapshot (edits to the scenario YAML won't apply; use \`record <scenario.yaml>\` to re-record from disk)`,
+          );
+          const sessionRef = cassette.scenario.session === "(inline)" ? "(inline)" : join(dirname(cp), cassette.scenario.session);
+          r = await recordScenarioObject(
+            { ...cassette.scenario, session: sessionRef },
+            { noRedact, allowFailing, cassettePath: cp, maxArtifactBytes },
+          );
+        }
         log(`  ✓ ${cp} (${r.result.result})`);
       } catch (e) {
         failures++;
@@ -852,18 +954,27 @@ export async function cmdReplay(args: string[]) {
   let p;
   try {
     p = parseArgs(args, {
-      booleans: ["--strict"],
+      // --quiet/--verbose accepted for flag consistency but currently no-op in replay (renderer plan is fixed).
+      booleans: ["--strict", "--quiet", "--verbose"],
       values: ["--cassette", "--output-format"],
       noDashValue: ["--cassette"],
       enums: { "--output-format": ["text", "json"] },
+      aliases: { "-q": "--quiet", "-V": "--verbose" },
     });
   } catch (e) {
     log(String((e as Error).message));
     return process.exit(2);
   }
-  const target = p.options["--cassette"] ?? p.positionals[0];
+  // §8.1: reject ambiguous invocation — both positional and --cassette given. Positional is canonical.
+  if (p.options["--cassette"] !== undefined && p.positionals.length > 0) {
+    log(
+      "replay: provide the cassette path as a positional OR via --cassette, not both.\n       --cassette is a legacy alias; prefer: replay <file.cassette.json>",
+    );
+    return process.exit(2);
+  }
+  const target = p.positionals[0] ?? p.options["--cassette"];
   if (!target) {
-    log("usage: replay <file.cassette.json | dir/> [--cassette <file>] [--strict] [--output-format text|json]");
+    log("usage: replay <file.cassette.json | dir/> [--strict] [--output-format text|json]");
     return process.exit(2);
   }
   if (p.positionals.length > 1) {
@@ -907,27 +1018,27 @@ export function cmdVerifyCassettes(args: string[]) {
   let p;
   try {
     p = parseArgs(args, {
-      booleans: ["--privacy-only", "--staleness-only"],
+      // Q9: --skip-privacy/--skip-staleness are the new canonical names; old --privacy-only/--staleness-only kept as aliases.
+      booleans: ["--skip-privacy", "--skip-staleness", "--privacy-only", "--staleness-only", "--quiet", "--verbose"],
       values: ["--output-format"],
       repeated: ["--allow", "--allow-domain", "--allow-email", "--allow-file"],
       enums: { "--output-format": ["text", "json"] },
       noDashValue: ["--allow-file"],
+      aliases: { "-q": "--quiet", "-V": "--verbose" },
     });
   } catch (e) {
     log(String((e as Error).message));
     return process.exit(2);
   }
   const json = p.options["--output-format"] === "json";
-  const privacyOnly = p.flags["--privacy-only"] ?? false;
-  const stalenessOnly = p.flags["--staleness-only"] ?? false;
-  // Both flags together would disable BOTH families → empty findings → ok=true → exit 0: a silent
-  // false-green in the gate itself. Reject it as a usage error.
-  if (privacyOnly && stalenessOnly) {
-    log("verify-cassettes: --privacy-only and --staleness-only are mutually exclusive (together they'd check nothing)");
+  const skipPrivacy = (p.flags["--skip-privacy"] || p.flags["--privacy-only"]) ?? false;
+  const skipStaleness = (p.flags["--skip-staleness"] || p.flags["--staleness-only"]) ?? false;
+  if (skipPrivacy && skipStaleness) {
+    log("verify-cassettes: --skip-privacy and --skip-staleness are mutually exclusive (together they'd check nothing)");
     return process.exit(2);
   }
-  const doPrivacy = !stalenessOnly;
-  const doStaleness = !privacyOnly;
+  const doPrivacy = !skipPrivacy;
+  const doStaleness = !skipStaleness;
   // Allow model (F-2): each entry is whole-token anchored + class-scoped. A bare `--allow` applies to every
   // class (back-compat); `--allow-domain`/`--allow-email` scope to one class so a domain allow can't bleed
   // into the email tripwire. `--allow-file` (F-8) loads bare (all-class) patterns from a version-controlled
@@ -960,7 +1071,7 @@ export function cmdVerifyCassettes(args: string[]) {
   const target = p.positionals[0];
   if (!target) {
     log(
-      "usage: verify-cassettes <file|dir> [--privacy-only|--staleness-only] [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-file <path>]... [--output-format json]",
+      "usage: verify-cassettes <file|dir> [--skip-privacy|--skip-staleness] [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-file <path>]... [--output-format json]",
     );
     return process.exit(2);
   }
@@ -985,9 +1096,12 @@ export function cmdVerifyCassettes(args: string[]) {
   const staleAny = results.some((r) => r.staleness.length > 0);
   const errorAny = results.some((r) => r.error !== undefined);
   const ok = realFindings.length === 0 && !staleAny && !errorAny;
+  const coverage = { privacy: doPrivacy, staleness: doStaleness };
   if (json) {
-    out(JSON.stringify({ command: "verify-cassettes", ok, results }));
+    out(JSON.stringify({ command: "verify-cassettes", ok, coverage, results }));
   } else {
+    if (!doStaleness) log("⚠ cowork-harness: --privacy-only: staleness check was skipped");
+    if (!doPrivacy) log("⚠ cowork-harness: --staleness-only: privacy scan was skipped");
     for (const r of results) {
       if (r.error) log(`✗ ${r.file}: [error] ${r.error}`);
       for (const f of r.findings) log(`${f.cls === "unscanned" ? "·" : "✗"} ${r.file}: [${f.cls}] ${f.where} — ${f.sample}`);
@@ -1029,12 +1143,18 @@ export async function replayCassette(
   if (cassette.fingerprint) {
     const fp = cassette.fingerprint;
     let liveBaseline: string | undefined;
+    let baselineLoadFailed = false;
     try {
       liveBaseline = loadBaseline("latest").appVersion;
     } catch {
-      /* no baseline available (e.g. CI without baselines) — skip the baseline arm */
+      baselineLoadFailed = true;
+      if (opts.strict) {
+        staleness.push("baseline could not be loaded — cannot verify staleness (--strict: treating as stale)");
+      } else {
+        warn("cowork-harness: strict staleness check skipped — baseline could not be loaded\n");
+      }
     }
-    if (liveBaseline && liveBaseline !== fp.baseline)
+    if (!baselineLoadFailed && liveBaseline && liveBaseline !== fp.baseline)
       staleness.push(`baseline moved ${fp.baseline} → ${liveBaseline} since record — re-record before trusting this replay`);
     if (fp.skillHash) {
       const live = buildFingerprint(cassette.scenario.session, fp.baseline, opts.cassetteDir, cassette.scenario.skills);
@@ -1042,8 +1162,23 @@ export async function replayCassette(
         warn(
           "::warning:: [replay] skill fingerprint not re-checkable (local skill dirs not resolvable from this cassette location) — baseline check still applies\n",
         );
-      else if (live.skillHash !== fp.skillHash)
-        staleness.push("local skill/plugin dir contents changed since record — re-record before trusting this replay");
+      else if (live.skillHash !== fp.skillHash) {
+        const recordedVersion = cassette.cassetteVersion ?? 0;
+        if (recordedVersion < CASSETTE_VERSION) {
+          staleness.push(
+            `recorded under an older hash format (v${recordedVersion} → v${CASSETTE_VERSION}) — re-record once after upgrading`,
+          );
+        } else if (fp.sharedHash !== undefined && live.sharedHash !== undefined) {
+          const scope = fp.skillScope?.length ? fp.skillScope.map((s) => `skills/${s}`).join(", ") : "skill";
+          if (live.sharedHash !== fp.sharedHash) {
+            staleness.push(`shared root changed since record (scope: ${scope}) — re-record before trusting this replay`);
+          } else {
+            staleness.push(`${scope} changed since record — re-record before trusting this replay`);
+          }
+        } else {
+          staleness.push("local skill/plugin dir contents changed since record — re-record before trusting this replay");
+        }
+      }
     }
     for (const s of staleness) warn(`::warning:: [replay] cassette stale: ${s}\n`);
   }
@@ -1100,6 +1235,31 @@ export async function replayCassette(
   // #1: with an artifact manifest, the filesystem assertions become replay-checkable (materialized below).
   // Without a manifest they stay live-only (stripped → skip warning), exactly as before.
   const manifestKeys: (keyof Assertion)[] = cassette.artifacts?.length ? ["file_exists", "user_visible_artifact", "artifact_json"] : [];
+  // Bug 37: deterministic exhaustiveness check — every key in the Assertion schema must appear in exactly
+  // one classification bucket. If a new key is added to the schema but not here, this throws at the first
+  // replay, making the oversight impossible to miss in CI.
+  {
+    const ALL_CLASSIFICATION_KEYS = new Set<keyof Assertion>([
+      ...alwaysContentKeys,
+      ...questionGateKeys,
+      "file_exists",
+      "user_visible_artifact",
+      "artifact_json",
+      "egress_denied",
+      "egress_allowed",
+      "no_delete_in_outputs",
+      "self_heal_ran",
+      "transcript_no_host_path",
+      "replay_protocol_fidelity",
+      "allow_l0_plugin_divergence",
+    ]);
+    for (const key of Object.keys(AssertionSchema.shape) as (keyof Assertion)[]) {
+      if (!ALL_CLASSIFICATION_KEYS.has(key))
+        throw new Error(
+          `cowork-harness: assertion key "${String(key)}" is not classified for replay — add it to one of the classification buckets in replayCassette`,
+        );
+    }
+  }
   const { workRoot: replayWorkRoot, prefixes: replayPrefixes } = manifestKeys.length
     ? materializeManifest(cassette.artifacts!)
     : { workRoot: "", prefixes: [] as string[] };

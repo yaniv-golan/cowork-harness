@@ -43,60 +43,85 @@ const log = (s: string) => writeSync(2, s + "\n"); // human (stderr)
 
 const HELP = `cowork-harness <command>   (v${"$VERSION"})
 
+── Interactive / exploratory ──────────────────────────────────────────────────
   skill <folder> "<prompt>"    test a LOCAL skill folder directly (copied fresh each run)
       [--prompt-file <path>]   read the prompt verbatim from a file (bypasses the shell — no $-expansion)
-      [--fidelity protocol|container|microvm|hostloop|cowork]  (default container)
+      [--fidelity protocol|container|microvm|hostloop|cowork]  (default: container; $COWORK_HARNESS_FIDELITY)
       [--plugin <dir>]… [--marketplace <dir> --enable name@mkt]   extra plugin/marketplace sources
       [--answer "<question-regex>=<choice>"]   scripted AskUserQuestion answer (repeatable)
-      [--on-unanswered fail|prompt|first]  policy for unscripted questions (default: adaptive — prompt on a TTY, fail when piped/CI)
+      [--on-unanswered fail|prompt|first]  policy for unscripted questions (default: adaptive — prompt on TTY, fail in CI)
       [--decider-llm [--intent "…"]]   answer LIVE questions with a model (state test intent in one line)
-      [--decider-cmd '<helper>']   …or via a spawned helper (custom logic)
-      [--decider-dir <dir>]   …or in-band from the driving agent (arm a Monitor; see 'skill --help')
+      [--decider-cmd '<helper>']   …or via a spawned helper; see 'skill --help'
+      [--decider-dir <dir>]   …or in-band from the driving agent; then use 'gates'/'answer' to stream/respond
       [--upload <file>]… [--folder <dir>]…   attach files / connect folders (mnt/uploads, mnt/.projects)
       [--session-id <id> [--resume]]   pin + resume a session (for gated, checkpoint-and-resume skills)
-      [--output-format text|json] [--model <id>] [--keep] [--dry-run]
+      [--output-format text|json] [--quiet|-q] [--verbose|-V] [--model <id>] [--keep] [--dry-run]
       (run 'skill --help' for the full flag reference)
 
-  run <scenario.yaml | dir/>   run one scenario or every *.yaml in a dir
-      [--on-unanswered fail|first]   (run rejects 'prompt' — would break determinism)
+  chat <folder>                interactive multi-turn REPL against a skill (TTY); --raw for native cowork
+                               (--fidelity container|hostloop only, default container; --model <id>)
+
+── Automated scenarios ────────────────────────────────────────────────────────
+  run <scenario.yaml | dir/>   run one scenario or every *.yaml in a dir (CI-ready exit code)
+      [--on-unanswered fail|first]   ('prompt' rejected — breaks determinism)
+      [--decider-cmd '<helper>']   answer live questions via a spawned helper
+      [--decider-dir <dir>]   answer live questions in-band; then use 'gates'/'answer' to stream/respond
       [--output-format text|json] [--quiet|-q] [--verbose|-V]
       (run 'run --help' for the full flag reference)
-  chat <folder>                interactive multi-turn REPL against a skill (TTY); --raw for native
-                               (--fidelity container|hostloop, default container; --model <id>)
+
+── Cassette lifecycle ─────────────────────────────────────────────────────────
   record <scenario.yaml>       run + save a control-protocol cassette
       [--out <file>]           cassette path (default: cassettes/<scenario-name>.cassette.json)
       [--max-artifact-bytes <n>]  inline-body cap (default 65536 / $COWORK_HARNESS_MAX_ARTIFACT_BYTES)
-  replay <file|dir>            deterministic protocol-replay of a cassette or a dir of them (no token)
-      [--cassette <file>]      explicit single-cassette form   [--strict] [--output-format json]
+  replay <file|dir>            deterministic protocol-replay of a cassette or a dir of them (no token, no Docker)
+      [--strict]               fail (exit 1) on a stale cassette instead of warning
+      [--output-format json]
+  verify-cassettes <file|dir>  CI gate (no token): privacy scan + staleness — exit 1 on finding or drift
+      [--skip-privacy|--skip-staleness]  skip one check
+      [--allow <regex>]... [--allow-domain/-email <regex>]... [--allow-file <path>]... [--output-format json]
+
+── CI lint + assertion reference ──────────────────────────────────────────────
   lint <scenario.yaml>…        check scenarios for silent false-greens (bundled scenario.py; needs python3 + PyYAML)
-      [--strict]               escalate a cassette-staleness warning (baseline/skill drift) to a failure
-  verify-cassettes <file|dir>  CI gate (no token): privacy scan + staleness — exit 1 on a PII finding or drift
-      [--privacy-only|--staleness-only] [--allow <regex>]... [--allow-domain/-email <regex>]... [--allow-file <path>]... [--output-format json]
-  verify-run <run-dir> <scenario.yaml>   re-evaluate a scenario's assert: against a kept run dir (no live agent)
-      [--output-format json]   (fast assert iteration: fix an assertion + re-check in ~1s instead of a full re-record)
+      [--strict]               escalate cassette-staleness warning to failure
+      NOTE: exit 127 (python3/PyYAML missing) must be treated as failure in CI — do not swallow it.
+  assertions --list            list available scenario assertions (generated from Zod schema)
+      [--output-format json]
+
+── Debugging / inspection ─────────────────────────────────────────────────────
   trace <run-id | dir | path>  digest a run's events.jsonl (tools+result status, dispatches, decisions)
-      [--tools]  tool/dispatch rows only   [--gates]  gate lifecycle (question→answer→delivered)
-      [--dispatches]  sub-agent dispatch tree + the real total (read off dispatch_count_max)
-      [--output-format json]  structured rows
-  assert --list                list the available scenario assertions (generated from the schema)
-  scaffold --from-run <id>     turn a kept run into a starter scenario YAML (gates→answers, artifacts→file_exists)
+      [--view tools|questions|dispatches]   focus on one view (default: all); see 'trace --help'
+      [--output-format json]   structured rows
+  verify-run <run-dir> <scenario.yaml>   re-evaluate assert: against a kept run dir (no live agent, ~1s)
+      [--output-format json]
+  scaffold <run-id | run-dir>  turn a kept run into a starter scenario YAML (gates→answers, artifacts→file_exists)
       [--out <file.yaml>]      write to a file (default: stdout)
-  decide                       VALIDATE a decider against a sample question in ~2s (no run)
+
+── In-band gate plumbing (for --decider-dir) ─────────────────────────────────
+  gates <dir> [--follow]       stream pending gates as JSON lines + terminal {"done":true}; arm a Monitor here
+  answer <dir> --gate <N>      answer an in-band gate (atomic write): --choose <label> | --answer "q=c"
+
+── Decider testing ────────────────────────────────────────────────────────────
+  decide                       fire a sample question through your configured decider (~2s, no run)
       (--decider-cmd '<helper>' | --decider-llm [--intent …] | --answer "rx=c" | --answer-policy <yaml>)
       [--question "<text>"] [--option <label>]…   override the sample question
-  gates <dir> [--follow]       in-band gate stream (for --decider-dir): one JSON line per pending gate
-                               + a terminal {"done":true}. Point a single Monitor at this.
-  answer <dir> --gate <N>      answer an in-band gate (atomic write): --choose <label> | --answer "q=c"
-  sync [--diff] [--allow-empty]  derive/refresh a platform baseline from the live Desktop install
-                               (--allow-empty: write even when the derived egress allowlist is empty)
+
+── Platform admin ─────────────────────────────────────────────────────────────
+  sync [--diff] [--force]      derive/refresh a platform baseline from the live Desktop install (macOS only)
   list                         list available platform baselines
   boundary-check [baseline]    prove the sandbox enforces Cowork's limitations
-  vm <init|status|delete|prune>  manage the L2 Apple-VZ microVM (fidelity: microvm); prune drops orphaned VMs
+  vm <init|status|delete|prune>  manage the L2 Apple-VZ microVM (fidelity: microvm); macOS arm64 only
   doctor [--tier <tier>]       read-only prerequisite check (Docker, staged agent, token, baseline)
 
   Global:  --dotenv <path>     load a .env before the command (host-side creds; never mounted).
            Auth resolves from process.env > --dotenv > ./.env > <install>/.env.
-  --version, -v                print version        --help, -h    print this help`;
+           Run 'doctor' to diagnose auth failures.
+  --version                    print version        --help, -h    print this help
+
+  Env-var defaults (CLI flags take precedence):
+    COWORK_HARNESS_FIDELITY        default --fidelity tier (skill/run/chat)
+    COWORK_HARNESS_OUTPUT_FORMAT   default --output-format (text|json)
+    COWORK_HARNESS_MODEL           default --model
+    NO_COLOR=1                     disable ANSI output`;
 
 const SKILL_HELP = `cowork-harness skill <plugin-folder> "<prompt>"
 
@@ -157,6 +182,8 @@ Questions:
                                    <dir>/req-N.json; write the answer to <dir>/resp-N.json (temp+rename).
                                    stdout stays free → composes with --output-format json. The run is marked
                                    non-deterministic. Use a FRESH empty dir per run. (See docs/decider-dir.md.)
+                                   Plumbing: 'gates <dir> [--follow]' streams pending gates as JSON lines;
+                                   'answer <dir> --gate N --choose <label>' writes the reply atomically.
 
 Output:
   --output-format text|json        text = live stream + footer (default); json = one stdout envelope
@@ -171,7 +198,10 @@ Long runs:  an idle "still running" heartbeat prints on stderr after ~30s of sil
 Auth:  CLAUDE_CODE_OAUTH_TOKEN (or ANTHROPIC_API_KEY) from process.env > --dotenv <path> > ./.env >
        <install>/.env. So you can run from any directory and still pick up the install's credentials.
 
-Exit codes:  0 pass · 1 assertion/agent failure · 2 usage / unanswered-under-fail / boundary / runtime.`;
+Auth:  Run 'doctor' to check auth. CLAUDE_CODE_OAUTH_TOKEN (or ANTHROPIC_API_KEY) from process.env >
+       --dotenv <path> > ./.env > <install>/.env.
+
+Exit codes:  0 pass · 1 assertion/agent failure · 2 usage / unanswered-under-fail / runtime · 3 boundary/integrity.`;
 
 const RUN_HELP = `cowork-harness run <scenario.yaml | dir/>
 
@@ -184,7 +214,9 @@ Input policy:
       fail     error + the exact --answer to add (the CI default)
       first    pick option 1, loudly warn; the footer echoes it as a --answer line to lock in
   --decider-cmd '<helper>'         answer live questions via a spawned helper (see 'skill --help')
-  --decider-dir <dir>              answer live questions in-band from the driving agent (see 'skill --help')
+  --decider-dir <dir>              answer live questions in-band from the driving agent (see 'skill --help').
+                                   Plumbing: 'gates <dir> [--follow]' streams pending gates as JSON lines;
+                                   'answer <dir> --gate N --choose <label>' writes the reply atomically.
   (run omits --decider-llm by design — scenarios pin answers for reproducibility; a scenario may still
    opt into the model with 'on_unanswered: llm' in its YAML, which flags the run non-deterministic)
   (per-scenario answers/on_unanswered in the YAML take precedence where set)
@@ -197,7 +229,10 @@ Output:
 Long runs:  an idle "still running" heartbeat prints on stderr after ~30s of silence
             (COWORK_HARNESS_NO_HEARTBEAT=1 / COWORK_HARNESS_HEARTBEAT_MS to disable/tune).
 
-Exit codes:  0 all pass · 1 any assertion/agent failure · 2 usage / unanswered-under-fail / boundary.`;
+Auth:  Run 'doctor' to diagnose auth failures. CLAUDE_CODE_OAUTH_TOKEN (or ANTHROPIC_API_KEY) from
+       process.env > --dotenv <path> > ./.env > <install>/.env.
+
+Exit codes:  0 all pass · 1 any assertion/agent failure · 2 usage / unanswered-under-fail / runtime · 3 boundary/integrity.`;
 
 function printHelp() {
   log(HELP.replace("$VERSION", pkgVersion()));
@@ -212,23 +247,27 @@ function hasHelp(args: string[]): boolean {
 // invocation. Intercept `--help`/`-h` at dispatch and print the command's usage (exit 0). One concise line
 // per command, kept in sync with each command's own bad-invocation `usage:` string.
 const SUBCOMMAND_USAGE: Record<string, string> = {
-  sync: "usage: sync [--diff]   (re-sync the platform baseline from the installed Cowork app)",
-  list: "usage: list   (list available platform baselines)",
-  "boundary-check": "usage: boundary-check [<baseline>] [--session <file>]",
-  vm: "usage: vm <init|status|delete|prune>",
-  chat: "usage: chat <skill-folder> [--raw] [--fidelity container|hostloop] [--model <id>]",
+  sync: "usage: sync [--diff] [--force]   (re-sync the platform baseline from the installed Cowork app; macOS only)\n       --force: write even when the derived egress allowlist is empty",
+  list: "usage: list [--output-format text|json]   (list available platform baselines)",
+  "boundary-check": "usage: boundary-check [<baseline>] [--session <file>] [--output-format text|json]",
+  vm: "usage: vm <init|status|delete|prune> [--output-format text|json]   (macOS arm64 only)\n  init    create the L2 Apple-VZ microVM\n  status  show running VM state\n  delete  remove a named VM\n  prune   drop all orphaned VMs",
+  chat: "usage: chat <skill-folder> [prompt] [--fidelity protocol|container|hostloop] [--model <id>]\n              [--upload <file>]... [--folder <dir>]... [--verbose] [--raw]\n       --raw: native cowork mode via docker run -it; egress sandbox NOT applied; --model/--fidelity ignored\n       --fidelity: protocol/container/hostloop only (no microvm/cowork); protocol = no Docker, no sandbox",
   record:
     "usage: record <scenario.yaml | dir/> [--out <file>] [--output-format text|json] [--rerecord-stale] [--no-redact] [--allow-failing] [--max-artifact-bytes <n>]",
-  replay: "usage: replay <file.cassette.json | dir/> [--cassette <file>] [--strict] [--output-format text|json]",
+  replay:
+    "usage: replay <file.cassette.json | dir/> [--strict] [--output-format text|json]\n       Positional path is the canonical form. --cassette <file> is a legacy alias (positional takes precedence when both given).",
   "verify-cassettes":
-    "usage: verify-cassettes <file|dir> [--privacy-only|--staleness-only] [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-file <path>]... [--output-format json]",
-  trace: "usage: trace <run-id | run-dir | events.jsonl> [--tools | --gates | --dispatches] [--output-format json]",
-  assert: "usage: assert --list [--output-format json]",
-  scaffold: "usage: scaffold --from-run <run-id | run-dir> [--out <file.yaml>]",
+    "usage: verify-cassettes <file|dir> [--skip-privacy|--skip-staleness] [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-file <path>]... [--output-format json]",
+  trace:
+    "usage: trace <run-id | run-dir | events.jsonl> [--view tools|questions|dispatches] [--output-format json]\n       --view tools       tool call / result rows\n       --view questions   gate lifecycle (question → answer → delivered)\n       --view dispatches  sub-agent dispatch tree + dispatch_count_max\n       (default: all views)",
+  assertions: "usage: assertions --list [--output-format json]",
+  assert: "usage: assertions --list [--output-format json]   (use 'assertions' — 'assert' is the legacy name)",
+  scaffold:
+    "usage: scaffold <run-id | run-dir> [--out <file.yaml>]\n       Turns a kept run into a starter scenario YAML (gates→answers, artifacts→file_exists).\n       Positional <run-id | run-dir> is the canonical form.",
   decide:
     'usage: decide [--question <q>] [--option <o>]... [--decider-cmd <cmd> | --decider-llm] [--answer "<q>=<label>"]... [--answer-policy <p>] [--intent <s>] [--output-format json]',
-  gates: "usage: gates <dir> [--follow]",
-  answer: 'usage: answer <dir> --gate <N> (--choose <label> | --answer "<q>=<label>")',
+  gates: "usage: gates <dir> [--follow]   (stream pending in-band gates as JSON lines; pair with --decider-dir)",
+  answer: 'usage: answer <dir> --gate <N> (--choose <label> | --answer "<q>=<label>")   (write an in-band gate reply atomically)',
   "verify-run":
     "usage: verify-run <run-dir> <scenario.yaml> [--output-format json]   (re-evaluate a scenario's assert: against a kept run dir; no live agent)",
   doctor: "usage: doctor [--tier protocol|container|microvm|hostloop|cowork] [--output-format json]   (read-only prerequisite check)",
@@ -270,6 +309,7 @@ async function main() {
       "verify-cassettes",
       "verify-run",
       "trace",
+      "assertions",
       "assert",
       "scaffold",
       "decide",
@@ -324,7 +364,7 @@ async function main() {
     case "sync":
       return cmdSync(rest);
     case "list":
-      return cmdList();
+      return cmdList(rest);
     case "doctor":
       return cmdDoctor(rest);
     case "boundary-check":
@@ -347,7 +387,10 @@ async function main() {
       return cmdVerifyRun(rest);
     case "trace":
       return cmdTrace(rest);
-    case "assert":
+    case "assertions":
+      return cmdAssert(rest);
+    case "assert": // legacy alias — keep working, show deprecation notice
+      log("note: 'assert' has been renamed to 'assertions'; please update your scripts.\n");
       return cmdAssert(rest);
     case "scaffold":
       return cmdScaffold(rest);
@@ -426,15 +469,16 @@ function positionals(args: string[], valueFlags: string[]): string[] {
 }
 
 /**
- * Reject any `--`-prefixed token not in `knownFlags`. The positional-filter idiom silently DROPS an
+ * Reject any `--`-prefixed or `-`-prefixed token not in `knownFlags`. The positional-filter idiom silently DROPS an
  * unknown flag (a typo'd `--ouput-format`, a misremembered flag) — a no-op that reads as success. After
  * a command has parsed its recognized flags, run this so an unrecognized flag fails LOUD (exit 2) the
  * same way every other usage error does. `knownFlags` lists the flag spellings the command accepts
  * (include the `--output-format=json`/`=text` equals forms where the command honors them).
+ * Bug 14: also rejects single-dash flags (e.g. `-x`, `-abc`) that aren't in knownFlags.
  */
 function rejectUnknownFlags(command: string, args: string[], knownFlags: string[], json: boolean): void {
   for (const a of args) {
-    if (!a.startsWith("--")) continue;
+    if (!a.startsWith("-")) continue;
     // Honor the `--flag=value` equals form: compare on the flag name before `=`.
     const name = a.includes("=") ? a.slice(0, a.indexOf("=")) : a;
     if (knownFlags.includes(a) || knownFlags.includes(name)) continue;
@@ -444,7 +488,9 @@ function rejectUnknownFlags(command: string, args: string[], knownFlags: string[
 
 function takeCommonFlags(args: string[]): { rest: string[]; flags: CommonFlags } {
   const rest: string[] = [];
-  const flags: CommonFlags = { output: "text", quiet: false, verbose: false };
+  const envOutputFormat = process.env.COWORK_HARNESS_OUTPUT_FORMAT;
+  const defaultOutput: "text" | "json" = envOutputFormat === "json" ? "json" : "text";
+  const flags: CommonFlags = { output: defaultOutput, quiet: false, verbose: false };
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === "--on-unanswered") flags.onUnanswered = flagValue(args, i++, a) as OnUnanswered;
@@ -461,9 +507,17 @@ function takeCommonFlags(args: string[]): { rest: string[]; flags: CommonFlags }
     else if (a === "--output-format=text") flags.output = "text";
     else if (a === "--quiet" || a === "-q") flags.quiet = true;
     else if (a === "--verbose" || a === "-V") flags.verbose = true;
-    else if (a === "--decider-cmd") flags.deciderCmd = flagValue(args, i++, a);
-    else if (a === "--decider-dir") flags.deciderDir = flagValue(args, i++, a);
-    else rest.push(a);
+    else if (a === "--decider-cmd") {
+      const v = flagValue(args, i++, a);
+      if (v.startsWith("-"))
+        fail("skill", "usage", `--decider-cmd: missing value (got flag-looking "${v}")`, undefined, flags.output === "json");
+      flags.deciderCmd = v;
+    } else if (a === "--decider-dir") {
+      const v = flagValue(args, i++, a);
+      if (v.startsWith("-"))
+        fail("skill", "usage", `--decider-dir: missing value (got flag-looking "${v}")`, undefined, flags.output === "json");
+      flags.deciderDir = v;
+    } else rest.push(a);
   }
   return { rest, flags };
 }
@@ -555,7 +609,7 @@ function fail(command: string, category: ErrCategory, message: string, hint: str
     log(message);
     if (hint) log(hint);
   }
-  process.exit(2);
+  process.exit(category === "boundary" ? 3 : 2);
 }
 
 /** Split a `--answer "<key>=<value>"` arg; the value rejoins on "=" so a choice may itself contain "=". */
@@ -636,7 +690,7 @@ async function runOneScenario(p: {
   }
   // footer (stderr) and the json envelope (stdout, emitted by the caller) are mutually exclusive —
   // resolveOutput makes `footer` false under --output-format json — so their relative order never matters.
-  if (o.footer) renderFooter(result, o.plan, { durationMs: Date.now() - start, renderer, keep });
+  if (o.footer) renderFooter(result, o.plan, { durationMs: Date.now() - start, renderer, keep, scaffoldTip: command === "skill" });
   return result;
 }
 
@@ -706,8 +760,19 @@ async function cmdSkill(rawArgs: string[]) {
   const enables: string[] = [];
   const uploads: string[] = [];
   const folders: string[] = [];
-  let fidelity: "protocol" | "container" | "microvm" | "hostloop" | "cowork" = "container";
-  let model: string | undefined;
+  const envFidelity = process.env.COWORK_HARNESS_FIDELITY;
+  const FID_VALUES = ["protocol", "container", "microvm", "hostloop", "cowork"];
+  if (envFidelity && !FID_VALUES.includes(envFidelity))
+    fail(
+      "skill",
+      "usage",
+      `COWORK_HARNESS_FIDELITY must be one of ${FID_VALUES.join("|")} (got "${envFidelity}")`,
+      undefined,
+      flags.output === "json",
+    );
+  let fidelity: "protocol" | "container" | "microvm" | "hostloop" | "cowork" =
+    (envFidelity as "protocol" | "container" | "microvm" | "hostloop" | "cowork" | undefined) ?? "container";
+  let model: string | undefined = process.env.COWORK_HARNESS_MODEL;
   let promptFile: string | undefined;
   let sessionId: string | undefined;
   let answerPolicy: string | undefined;
@@ -743,6 +808,8 @@ async function cmdSkill(rawArgs: string[]) {
       const [q, choose] = splitEq(flagValue(args, i++, a));
       answers.push({ when_question: q, choose });
     } else if (a === "--answer-policy") answerPolicy = flagValue(args, i++, a);
+    // Bug 1: reject unknown flags (any token starting with - or -- that wasn't consumed above)
+    else if (a.startsWith("-")) fail("skill", "usage", `unknown flag: ${a}`, undefined, flags.output === "json");
     else positional.push(a);
   }
   const isJson = flags.output === "json";
@@ -812,6 +879,40 @@ async function cmdSkill(rawArgs: string[]) {
     );
   const localPlugins = [...(folder ? [folder] : []), ...extraPlugins];
 
+  // Bug 13: All semantic validation must happen BEFORE the dry-run return so --dry-run doesn't bypass
+  // conflict guards. The dry-run only skips side effects (actually running), not validation.
+
+  // `--decider-llm` is the ONLY user-facing way to select the LLM terminal (it maps to the `llm`
+  // policy below; the bare `--on-unanswered llm` CLI flag is rejected at resolvePolicy). (Issue 2)
+  const useLlm = deciderLlm;
+  // Resolve external channel for validation (we pass flags, which have deciderCmd/deciderDir)
+  const externalChannelForValidation = flags.deciderDir != null || flags.deciderCmd != null;
+  if (useLlm && externalChannelForValidation)
+    fail("skill", "usage", "--decider-llm conflicts with --decider-cmd/--decider-dir (two terminals).", undefined, isJson);
+  // --intent only feeds the LLM decider; without --decider-llm it is silently ignored.
+  if (intent !== undefined && !useLlm)
+    fail(
+      "skill",
+      "usage",
+      "--intent requires --decider-llm (it states the test intent for the model answering live questions).",
+      undefined,
+      isJson,
+    );
+  // --decider-llm forces the `llm` terminal; an explicit --on-unanswered would be silently overridden — reject the conflict.
+  if (useLlm && flags.onUnanswered !== undefined)
+    fail(
+      "skill",
+      "usage",
+      `--decider-llm conflicts with --on-unanswered ${flags.onUnanswered} (it forces the model terminal). Drop one.`,
+      undefined,
+      isJson,
+    );
+
+  if (dryRun) {
+    out(JSON.stringify({ fidelity, prompt, localPlugins, marketplaces, enabled: enables, answers }, null, 2));
+    return;
+  }
+
   // Resolve the inline session's relative paths against cwd (consistent with `run`'s file path, which
   // goes through resolveSessionPaths) so uploads/folders/plugins are cwd-independent for the skill path.
   const session = resolveSessionPaths(
@@ -839,35 +940,7 @@ async function cmdSkill(rawArgs: string[]) {
     assert: [{ result: "success" }],
   });
 
-  if (dryRun) {
-    out(JSON.stringify({ fidelity, prompt, localPlugins, marketplaces, enabled: enables, answers }, null, 2));
-    return;
-  }
-
   const externalChannel = resolveExternal("skill", flags);
-  // `--decider-llm` is the ONLY user-facing way to select the LLM terminal (it maps to the `llm`
-  // policy below; the bare `--on-unanswered llm` CLI flag is rejected at resolvePolicy). (Issue 2)
-  const useLlm = deciderLlm;
-  if (useLlm && externalChannel)
-    fail("skill", "usage", "--decider-llm conflicts with --decider-cmd/--decider-dir (two terminals).", undefined, isJson);
-  // --intent only feeds the LLM decider; without --decider-llm it is silently ignored.
-  if (intent !== undefined && !useLlm)
-    fail(
-      "skill",
-      "usage",
-      "--intent requires --decider-llm (it states the test intent for the model answering live questions).",
-      undefined,
-      isJson,
-    );
-  // --decider-llm forces the `llm` terminal; an explicit --on-unanswered would be silently overridden — reject the conflict.
-  if (useLlm && flags.onUnanswered !== undefined)
-    fail(
-      "skill",
-      "usage",
-      `--decider-llm conflicts with --on-unanswered ${flags.onUnanswered} (it forces the model terminal). Drop one.`,
-      undefined,
-      isJson,
-    );
   // base policy; an external channel or the LLM decider overrides the terminal in execute.ts
   const policy: OnUnanswered = externalChannel ? "fail" : useLlm ? "llm" : resolvePolicy("skill", flags);
   const o = resolveOutput("skill", flags);
@@ -899,14 +972,34 @@ async function cmdSkill(rawArgs: string[]) {
   process.exit(computeVerdict(result, "live").pass ? 0 : 1);
 }
 
+const VM_SUB_HELP: Record<string, string> = {
+  init: "usage: vm init [<baseline>] [--output-format text|json]   — create the L2 Apple-VZ microVM",
+  status: "usage: vm status [<baseline>] [--output-format text|json] — show running VM state",
+  delete: "usage: vm delete [<baseline>] [--output-format text|json] — remove the named VM",
+  prune: "usage: vm prune [<baseline>] [--output-format text|json]  — drop all orphaned VMs except the current one",
+};
+
 function cmdVm(args: string[]) {
+  // R3: macOS arm64 guard — Lima VMs are macOS-only.
+  if (process.platform !== "darwin") {
+    log("vm is only supported on macOS arm64 (requires Lima + Apple Virtualization Framework)\n");
+    process.exit(2);
+  }
+
   const sub = args[0];
+  const VM_SUBS = Object.keys(VM_SUB_HELP);
+
+  // R3: per-subcommand --help (e.g. `vm init --help`).
+  if (sub && VM_SUBS.includes(sub) && (args.includes("--help") || args.includes("-h"))) {
+    log(VM_SUB_HELP[sub]);
+    process.exit(0);
+  }
+
   // validate the subcommand BEFORE loadBaseline(args[1]) — a bad subcommand (e.g. `vm typo`)
   // otherwise surfaced as a baseline-load error (or, with a stray arg, a confusing baseline message)
   // instead of the clear `usage: vm …`. (A bare `log` then exit-0 was the older footgun, now exit 2.)
-  const VM_SUBS = ["init", "status", "delete", "prune"];
   if (!VM_SUBS.includes(sub ?? "")) {
-    log("usage: vm <init|status|delete|prune>");
+    log(SUBCOMMAND_USAGE["vm"] ?? "usage: vm <init|status|delete|prune>");
     process.exit(2);
   }
   const baseline = loadBaseline(args[1] ?? "latest");
@@ -960,7 +1053,24 @@ function cmdBoundary(args: string[]) {
 }
 
 function cmdSync(args: string[]) {
-  const allowEmpty = args.includes("--allow-empty");
+  // Q3: platform guard fires before arg parsing — wrong platform is an environment error, not a usage error.
+  if (process.platform !== "darwin") {
+    log("sync requires macOS (the Cowork Desktop app is macOS-only).");
+    return process.exit(2);
+  }
+  // Bug 6: use parseArgs to reject unknown flags and positionals.
+  let syncParsed;
+  try {
+    syncParsed = parseArgs(args, { booleans: ["--diff", "--allow-empty"] });
+  } catch (e) {
+    log((e as Error).message);
+    return process.exit(2);
+  }
+  if (syncParsed.positionals.length > 0) {
+    log(`sync takes no positional arguments (got: ${syncParsed.positionals.join(", ")})`);
+    return process.exit(2);
+  }
+  const allowEmpty = !!syncParsed.flags["--allow-empty"];
   const res = sync();
 
   // #37 — refuse to write a baseline with empty version fields. An empty appVersion would produce
@@ -1080,7 +1190,8 @@ function cmdSync(args: string[]) {
     requireFullVmSandbox: res.requireFullVmSandbox,
     provenance: { ...baseProvenance, gates: nextGates, asarFingerprint: res.asarFingerprint },
   };
-  if (args.includes("--diff")) {
+  const diffFlag = !!syncParsed.flags["--diff"];
+  if (diffFlag) {
     try {
       const prev = JSON.parse(readFileSync(baselinePath, "utf8"));
       log("=== diff vs committed baseline ===");
@@ -1092,8 +1203,13 @@ function cmdSync(args: string[]) {
   if (res.unknownDeltas.length) {
     log("\n⚠ unknown deltas (extend src/sync/cowork-sync.ts):");
     for (const d of res.unknownDeltas) log("   - " + d);
+    // Bug 23: unknown deltas block the write unless --diff (diagnosis mode) is active.
+    if (!diffFlag && !allowEmpty) {
+      log("Refusing to write baseline with unknown deltas. Fix src/sync/cowork-sync.ts or pass --allow-empty to force-write.");
+      process.exit(1);
+    }
   }
-  if (!args.includes("--diff")) {
+  if (!diffFlag) {
     mkdirSync(BASELINES_DIR, { recursive: true });
     writeFileSync(baselinePath, JSON.stringify(next, null, 2));
     log(`wrote ${baselinePath}`);
@@ -1110,7 +1226,19 @@ function cmdSync(args: string[]) {
   }
 }
 
-function cmdList() {
+function cmdList(args: string[] = []) {
+  // Bug 7: reject unknown flags and positionals.
+  let listParsed;
+  try {
+    listParsed = parseArgs(args, {});
+  } catch (e) {
+    log((e as Error).message);
+    return process.exit(2);
+  }
+  if (listParsed.positionals.length > 0) {
+    log(`list takes no positional arguments (got: ${listParsed.positionals.join(", ")})`);
+    return process.exit(2);
+  }
   for (const f of readdirSync(BASELINES_DIR).filter((f) => f.endsWith(".json"))) out(f);
 }
 
@@ -1151,12 +1279,28 @@ async function cmdDecide(args: string[]) {
     else if (a === "--output-format") i++;
     // --decider-dir is rejected explicitly below with a redirect message; consume its value here so the
     // value isn't flagged as a stray positional before that guard fires.
-    else if (a === "--decider-dir") i++;
+    // Bug 12: check that the next token exists and doesn't look like a flag before consuming it.
+    else if (a === "--decider-dir") {
+      const v = args[i + 1];
+      if (v === undefined || v.startsWith("-"))
+        fail(
+          "decide",
+          "usage",
+          `--decider-dir: missing value (got ${v === undefined ? "nothing" : `flag-looking "${v}"`})`,
+          undefined,
+          json,
+        );
+      i++;
+    } else if (a === "--quiet" || a === "-q" || a === "--verbose" || a === "-V") {
+      /* accepted but currently a no-op in decide — wired for flag consistency (§2.1) */
+    }
     // an unrecognized `--`-prefixed token used to be silently ignored (the loop had no else).
     else if (a.startsWith("--") && a !== "--output-format=json" && a !== "--output-format=text")
       fail("decide", "usage", `unknown flag: ${a}`, undefined, json);
+    // single-dash flags other than -q/-V are unknown; reject them explicitly (don't silently swallow -x etc.)
+    else if (a.startsWith("-")) fail("decide", "usage", `unknown flag: ${a}`, undefined, json);
     // decide takes NO positionals (the sample question comes from --question, not a positional).
-    else if (!a.startsWith("--")) fail("decide", "usage", `decide takes no positional arguments (got: ${a})`, undefined, json);
+    else fail("decide", "usage", `decide takes no positional arguments (got: ${a})`, undefined, json);
   }
   // #13: `decide` does not implement the file-rendezvous channel — reject `--decider-dir` loudly
   // instead of silently ignoring a first-class runtime path.
@@ -1165,6 +1309,17 @@ async function cmdDecide(args: string[]) {
       "decide",
       "usage",
       "decide does not support --decider-dir (the file-rendezvous channel); validate that path by running a scenario with --decider-dir. Use --decider-cmd '<helper>' to check a spawned helper here.",
+      undefined,
+      json,
+    );
+  // Q5/§8.5: pre-flight — exit 2 (usage error) when no decider is configured at all. Previously this
+  // fell through to ScriptedDecider([]).decide() → ABSTAIN → exit 1 "no rule matched", which implies
+  // the user wrote a rule that failed to match rather than that they forgot to configure anything.
+  if (!deciderLlm && !deciderCmd && rules.length === 0 && !policy)
+    fail(
+      "decide",
+      "usage",
+      "no decider configured — pass --decider-cmd '<helper>', --decider-llm, --answer \"<rx>=<label>\", or --answer-policy <yaml>.",
       undefined,
       json,
     );
@@ -1266,17 +1421,33 @@ function cmdAnswer(args: string[]) {
   const dir = positionals(args, ["--gate", "--choose", "--answer", "--output-format"])[0];
   let seq: number | undefined;
   let choose: string | undefined;
+  let chooseCount = 0;
   const pairs: { q: string; label: string }[] = [];
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === "--gate")
       seq = Number(flagValue(args, i++, a)); // #58: bounds-checked
-    else if (a === "--choose") choose = flagValue(args, i++, a);
-    else if (a === "--answer") {
+    else if (a === "--choose") {
+      // Bug 11: reject repeated --choose (only one allowed)
+      chooseCount++;
+      if (chooseCount > 1) return void fail("answer", "usage", "--choose may only be specified once", undefined, json);
+      choose = flagValue(args, i++, a);
+    } else if (a === "--answer") {
       const [q, label] = splitEq(flagValue(args, i++, a));
       pairs.push({ q, label });
+    } else if (a === "--output-format") {
+      i++; // skip value — already parsed by isJsonOutput above
+    } else if (a === "--output-format=json" || a === "--output-format=text") {
+      // no-op — already handled by isJsonOutput
+    } else if (a.startsWith("-")) {
+      // Bug 10: reject unknown flags
+      return void fail("answer", "usage", `unknown flag: ${a}`, undefined, json);
     }
+    // positionals already handled above via positionals() helper
   }
+  // Bug 11: reject conflicting --choose and --answer
+  if (choose !== undefined && pairs.length > 0)
+    return void fail("answer", "usage", "cannot use both --choose and --answer", undefined, json);
   if (!dir)
     return void fail("answer", "usage", 'usage: answer <dir> --gate <N> (--choose <label> | --answer "<q>=<label>")', undefined, json);
   // A gate sequence is a positive integer; `!seq` alone admitted negatives/fractions, which then built
@@ -1327,21 +1498,8 @@ function cmdScaffold(args: string[]) {
   ensureOutputFormat("scaffold", args);
   // Reject unknown flags rather than silently ignoring a typo (e.g. `--form-run`).
   rejectUnknownFlags("scaffold", args, ["--from-run", "--out", "--output-format", "--output-format=json", "--output-format=text"], json);
-  // the --from-run value must be a real run id/dir, never a following flag. `--from-run --out`
-  // would treat `--out` as the run id. Read it bounds-checked (flagValue) and reject a dash-prefixed
-  // token (mirrors replay --cassette's guard).
-  const fromIdx = args.indexOf("--from-run");
-  let target: string | undefined;
-  if (fromIdx >= 0) {
-    target = flagValue(args, fromIdx, "--from-run");
-    if (target.startsWith("-"))
-      return void fail("scaffold", "usage", `--from-run requires a run id/dir, got a flag: ${target}`, undefined, json);
-  } else target = positionals(args, ["--from-run", "--out", "--output-format"])[0];
-  if (!target) return void fail("scaffold", "usage", "usage: scaffold --from-run <run-id | run-dir> [--out <file.yaml>]", undefined, json);
-  // validate --out BEFORE resolving the run — a missing/flag-looking --out value is a usage
-  // error, not a silent fall-through to stdout (the old `args[outIdx + 1]` truthiness check) or a file
-  // literally named `--output-format`. Done before resolveEventsFile so the --out error isn't masked by
-  // an unrelated run-resolution failure.
+
+  // Validate --out FIRST (flag-looking value is a usage error regardless of --from-run presence).
   const outIdx = args.indexOf("--out");
   let outPath: string | undefined;
   if (outIdx >= 0) {
@@ -1349,6 +1507,23 @@ function cmdScaffold(args: string[]) {
     if (outPath.startsWith("-"))
       return void fail("scaffold", "usage", `--out requires a file path, got a flag: ${outPath}`, undefined, json);
   }
+
+  // Validate --from-run flag-looking value before computing positionals (so the error is specific).
+  const fromIdx = args.indexOf("--from-run");
+  let fromRunVal: string | undefined;
+  if (fromIdx >= 0) {
+    fromRunVal = flagValue(args, fromIdx, "--from-run");
+    if (fromRunVal.startsWith("-"))
+      return void fail("scaffold", "usage", `--from-run requires a run id/dir, got a flag: ${fromRunVal}`, undefined, json);
+    log("note: --from-run is deprecated; prefer: scaffold <run-id | run-dir>\n");
+  }
+
+  // Positional is canonical; --from-run is a backward-compatible alias.
+  const positional = positionals(args, ["--from-run", "--out", "--output-format"])[0];
+  if (positional && fromRunVal && positional !== fromRunVal)
+    return void fail("scaffold", "usage", "provide the run id as a positional OR via --from-run, not both", undefined, json);
+  const target = positional ?? fromRunVal;
+  if (!target) return void fail("scaffold", "usage", "usage: scaffold <run-id | run-dir> [--out <file.yaml>]", undefined, json);
   let file: string;
   try {
     file = resolveEventsFile(target);
@@ -1530,17 +1705,36 @@ function cmdAssert(args: string[]) {
 function cmdTrace(args: string[]) {
   ensureOutputFormat("trace", args);
   const json = isJsonOutput(args);
-  const tools = args.includes("--tools");
-  const gates = args.includes("--gates");
-  const dispatches = args.includes("--dispatches");
-  // --tools/--gates/--dispatches select mutually-exclusive views; the old precedence (gates >
-  // dispatches > default) silently ignored the others. Reject more than one so a contradictory request
-  // fails loud instead of quietly picking one.
-  if ([tools, gates, dispatches].filter(Boolean).length > 1)
-    fail("trace", "usage", "trace --tools/--gates/--dispatches are mutually exclusive (pick one view)", undefined, json);
-  // #16: skip the `--output-format` value so `trace --output-format json` doesn't try to trace a run
-  // named `json` instead of reporting the missing target.
-  const allPositionals = positionals(args, ["--output-format"]);
+
+  // R8: --view tools|questions|dispatches replaces the three boolean flags. Legacy flags kept as aliases.
+  const viewIdx = args.indexOf("--view");
+  const viewEqMatch = args.find((a) => a.startsWith("--view="));
+  let viewArg: string | undefined = viewEqMatch ? viewEqMatch.slice("--view=".length) : viewIdx >= 0 ? args[viewIdx + 1] : undefined;
+
+  const VIEWS = ["tools", "questions", "dispatches"] as const;
+  type View = (typeof VIEWS)[number];
+  if (viewArg !== undefined && !VIEWS.includes(viewArg as View)) {
+    fail("trace", "usage", `--view: expected one of ${VIEWS.join("|")}, got "${viewArg}"`, undefined, json);
+    return;
+  }
+
+  // Legacy flag aliases: --tools → tools, --gates → questions (renamed; old --gates still accepted),
+  // --dispatches → dispatches.
+  const legacyTools = args.includes("--tools");
+  const legacyGates = args.includes("--gates");
+  const legacyDispatches = args.includes("--dispatches");
+  const legacyCount = [legacyTools, legacyGates, legacyDispatches].filter(Boolean).length;
+  if (viewArg !== undefined && legacyCount > 0)
+    fail("trace", "usage", "--view and legacy flags (--tools/--gates/--dispatches) are mutually exclusive", undefined, json);
+  if (legacyCount > 1) fail("trace", "usage", "trace --tools/--gates/--dispatches are mutually exclusive (prefer --view)", undefined, json);
+  if (legacyTools) viewArg = "tools";
+  if (legacyGates) viewArg = "questions";
+  if (legacyDispatches) viewArg = "dispatches";
+
+  const view = viewArg as View | undefined;
+
+  // #16: skip the `--output-format` and `--view` values so they don't get treated as the target path.
+  const allPositionals = positionals(args, ["--output-format", "--view"]);
   const target = allPositionals[0];
   // trace takes exactly one target; reject stray positionals rather than silently using the first.
   if (allPositionals.length > 1)
@@ -1555,31 +1749,31 @@ function cmdTrace(args: string[]) {
     fail(
       "trace",
       "usage",
-      "usage: trace <run-id | run-dir | events.jsonl> [--tools | --gates | --dispatches] [--output-format json]",
+      "usage: trace <run-id | run-dir | events.jsonl> [--view tools|questions|dispatches] [--output-format json]",
       undefined,
       json,
     );
   let file: string;
   try {
-    file = resolveEventsFile(target);
+    file = resolveEventsFile(target!);
   } catch (e) {
     return fail("trace", "usage", String((e as Error).message), undefined, json);
   }
-  if (gates) {
-    // --gates: question → injected answer → delivered result, the full gate lifecycle in one command (Part 4).
+  if (view === "questions") {
+    // questions view: question → injected answer → delivered result, the full gate lifecycle (Part 4).
     const rows = buildGateTrace(file);
     if (json) out(JSON.stringify({ tool: "cowork-harness", command: "trace", file, gates: rows }));
     else out(formatGateTrace(rows));
     return;
   }
-  if (dispatches) {
-    // --dispatches (#6): the sub-agent dispatch tree + the real total (read off dispatch_count_max).
+  if (view === "dispatches") {
+    // dispatches view: the sub-agent dispatch tree + the real total (read off dispatch_count_max).
     const tree = buildDispatchTree(file);
     if (json) out(JSON.stringify({ tool: "cowork-harness", command: "trace", file, dispatches: tree.nodes, total: tree.total }));
     else out(formatDispatchTree(tree));
     return;
   }
-  const rows = buildTrace(file, { tools });
+  const rows = buildTrace(file, { tools: view === "tools" });
   if (json) out(JSON.stringify({ tool: "cowork-harness", command: "trace", file, rows }));
   else out(formatTrace(rows));
 }

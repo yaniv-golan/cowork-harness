@@ -136,7 +136,7 @@ export function startHeartbeat(renderer: Renderer | undefined, plan: RenderPlan,
 export function renderFooter(
   r: RunResult,
   plan: RenderPlan,
-  opts: { durationMs?: number; renderer?: Renderer; keep?: boolean; write?: Sink; lane?: "live" | "replay" } = {},
+  opts: { durationMs?: number; renderer?: Renderer; keep?: boolean; write?: Sink; lane?: "live" | "replay"; scaffoldTip?: boolean } = {},
 ): void {
   const write = opts.write ?? stderr;
   // SEAM B: pass/fail and the failure reasons come from the SAME verdict the exit code / envelope use.
@@ -152,6 +152,11 @@ export function renderFooter(
     write(`${green(plan, "✓ " + r.result)} ${meta}${nd}${opts.keep ? " · " + r.outDir : ""}\n`);
     if (opts.keep && r.outputsDir) write(`   ${dim(plan, "→ outputs: " + r.outputsDir)}\n`);
     renderAnswerHints(r, plan, write);
+    // Q2: scaffold tip — only for skill (exploratory) runs, not automated `run` scenarios.
+    // Callers opt in via scaffoldTip: true; run command omits it (you already have a scenario YAML).
+    if (opts.scaffoldTip && opts.lane !== "replay" && r.outDir) {
+      write(`   ${dim(plan, "Tip: scaffold " + r.outDir + " → turn this run into a starter scenario YAML")}\n`);
+    }
     return;
   }
   write(`${red(plan, "✗ " + (r.result === "error" ? "error" : "FAIL"))} ${meta}\n`);

@@ -192,6 +192,27 @@ Re-record a cassette when:
 - `replay` exits 1 on a `replay_protocol_fidelity` mismatch — this means `serializeDecision` changed;
   review the change, confirm it's correct, then re-record to update the frozen envelope.
 
+### Upgrading cowork-harness
+
+On every **harness major** (x.0.0) version bump, re-record AND re-verify all cassettes:
+
+```bash
+cowork-harness record scenarios/ --out cassettes/   # or: record cassettes/ --rerecord-stale
+cowork-harness verify-cassettes cassettes/
+```
+
+Why: a major may change the emulated system-prompt, the egress policy, or the hash algorithm — any of
+which can shift recorded behavior. Structural assertions (`artifact_json`, `file_exists`, `result`) are
+stable across these shifts; prose-level `transcript_matches` is not. Prefer structural asserts where
+possible.
+
+`verify-cassettes` reports three distinct staleness causes:
+- **`recorded under an older hash format (v1 → v2)`** — format upgrade; re-record once and the message
+  goes away.
+- **`skills/<name> changed since record`** — the scoped skill was edited; re-record that cassette.
+- **`shared root changed since record`** — a shared dependency (scripts/, references/) was edited;
+  re-record all cassettes in that scope.
+
 ## Batch recording
 
 `record` takes a single scenario OR a directory:

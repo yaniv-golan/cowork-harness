@@ -453,8 +453,18 @@ export class LiveAgentSession implements AgentSession {
       throw new Error(
         `control frame is ${line.length} bytes (> 256 KiB safe limit) — refusing to write to avoid partial stdin buffering; this indicates an unexpectedly large control payload`,
       );
+    // Bug 34: check stream writability before writing — a closed/destroyed stdin after a child crash
+    // loses decision frames silently. Throw immediately so callers surface the failure rather than
+    // hanging or silently dropping frames.
+    if (this.proc.stdin.destroyed || !this.proc.stdin.writable)
+      throw new Error("control-protocol write failed: child stdin is no longer writable (process may have crashed)");
     this.controlOut.write(line + "\n");
-    this.proc.stdin.write(line + "\n");
+    // Attach a one-shot error handler on the write so stream errors surface via rejectError rather
+    // than as unhandled 'error' events (the permanent 'error' handler on constructor covers stdin
+    // errors that fire outside a write, e.g. EPIPE after a crash).
+    this.proc.stdin.write(line + "\n", (err) => {
+      if (err && this.rejectError) this.rejectError(err instanceof Error ? err : new Error(String(err)));
+    });
   }
 }
 
@@ -535,14 +545,20 @@ export function parseMessage(msg: any): AgentEvent[] {
   return ev;
 }
 
-/** Flatten a tool_result `content` (a string, or an array of `{type:"text",text}` blocks), capped at
+/** Flatten a tool_result `content` (a string, or an array of content blocks), capped at
  *  `max` chars. The 500-char DISPLAY value (toolResultText) keeps the recorder/trace compact; the larger
- *  PROVENANCE value (toolResultRaw) is what seeds web_fetch provenance, so a URL past char 500 isn't lost. */
+ *  PROVENANCE value (toolResultRaw) is what seeds web_fetch provenance, so a URL past char 500 isn't lost.
+ *  Bug 35: preserve all content block types — text blocks use their text value; all other block types
+ *  (json, resource, link, unknown shapes) are JSON-stringified so no content is silently dropped. */
 function flattenToolResult(content: unknown, max: number): string {
   if (typeof content === "string") return content.slice(0, max);
   if (Array.isArray(content))
     return content
-      .map((b) => (b && typeof b === "object" && "text" in b ? String((b as { text: unknown }).text) : ""))
+      .map((b) => {
+        if (b && typeof b === "object" && "text" in b) return String((b as { text: unknown }).text);
+        // Non-text blocks (json, resource, link, unknown): JSON-stringify to preserve all content.
+        return JSON.stringify(b);
+      })
       .join(" ")
       .slice(0, max);
   return "";

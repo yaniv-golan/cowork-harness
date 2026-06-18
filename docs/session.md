@@ -60,7 +60,14 @@ web_fetch:
 staleness:
   hash_ignore: []                # gitignore-style globs (matched against each mounted skill/plugin dir's
                                  # root-relative path) for paths that DON'T affect recorded behavior —
-                                 # e.g. [tests/, docs/, "**/*.md"]. The cassette-staleness hash skips them,
+                                 # e.g. [tests/, docs/, "**/*.md"]. Glob form matrix:
+                                 #   tests     — matches a `tests` entry at ANY depth (bare name, no slash)
+                                 #   tests/    — same as bare name (trailing slash is optional)
+                                 #   /tests    — anchored to mount root only (leading slash = root-relative)
+                                 #   docs/api  — root-anchored path with a slash component
+                                 #   **/tests  — explicit any-depth (same as bare `tests`)
+                                 #   **/*.md   — any .md at any depth
+                                 # The cassette-staleness hash skips ignored paths,
                                  # so editing them no longer re-stales cassettes. The harness only hard-
                                  # excludes universally-non-runtime paths (VCS/caches/cassettes + the
                                  # plugin.json `version` field); a plugin's own runtime boundary is yours

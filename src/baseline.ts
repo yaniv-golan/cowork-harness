@@ -15,12 +15,21 @@ export function resolveAgentBinary(baseline: PlatformBaseline): string {
   }
   const staged = (baseline.agentBinary?.stagedPath ?? "").replace(/^~(?=$|\/)/, homedir());
   if (staged && existsSync(staged)) return resolve(staged);
-  // The baseline's exact version dir is gone (e.g. Claude Desktop updated). Fall back to the
-  // newest sibling binary under the same claude-code-vm/ root before giving up.
+  // The baseline's exact version dir is gone (e.g. Claude Desktop updated).
+  // By default this is a hard failure — a different agent version can silently change behavior.
+  // Set COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1 to opt in to using the newest sibling binary.
+  const exactPath = staged || "(unknown)";
   const fallback = staged ? newestStagedBinary(staged) : undefined;
-  if (fallback) {
+  if (fallback && process.env.COWORK_HARNESS_ALLOW_AGENT_FALLBACK === "1") {
     process.stderr.write(`cowork-harness: staged agent binary "${staged}" not found; ` + `falling back to newest sibling "${fallback}".\n`);
     return fallback;
+  }
+  if (fallback) {
+    // A fallback exists but the opt-in env is not set — fail explicitly rather than silently using a
+    // different agent version that could make the run appear green while running the wrong binary.
+    throw new Error(
+      `cowork-harness: baseline agent binary not found: ${exactPath}. Set COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1 to use the newest available.`,
+    );
   }
   throw new Error(
     `Staged agent binary not found at "${staged}". It is extracted from your Claude Desktop install ` +

@@ -174,6 +174,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   let child: { kill?: (s?: NodeJS.Signals) => void } | undefined; // hoisted so the finally can reap a crashed/orphaned container (F1)
   let containerName: string | undefined;
   let hostEgress: { host: string; decision: "allow" | "deny" }[] | undefined; // #31: host-routed web_fetch egress
+  let l0PluginDivergence = false; // #20: set when protocol mode runs with plugins (failing fidelity signal)
+  let promptFidelityWarnings: string[] | undefined; // #49: structured prompt warnings collected by renderPrompts
   // #30: web_fetch provenance is gate-driven (coworkWebFetchViaApi) and host-loop only. The ref is
   // created HERE (before spawnHostLoop builds the handler) and filled with a Run-backed bundle after
   // the Run exists — the handler reads ref.current at call time (strictly after the stream starts).
@@ -193,7 +195,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       // allocate a free host port per run unless explicitly pinned, so concurrent microVM runs don't
       // collide on the fixed 8899. The SAME port is threaded into spawnMicroVm below, so the guest firewall
       // rule and HTTP(S)_PROXY point at the exact host bind.
-      microvmProxyPort = process.env.COWORK_VM_PROXY_PORT ? Number(process.env.COWORK_VM_PROXY_PORT) : await freePort();
+      microvmProxyPort = process.env.COWORK_VM_PROXY_PORT ? parseEnvPort("COWORK_VM_PROXY_PORT", 0) : await freePort();
       hostProxy = startEgressProxy({
         allow: plan.egressAllow,
         port: microvmProxyPort,
@@ -204,6 +206,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     }
 
     const prompts = renderPrompts(baseline, session, sessionId);
+    promptFidelityWarnings = prompts.fidelityWarnings; // #49: hoist out so RunResult construction (after try) can access it
     let sdkMcp: SdkMcp | undefined;
     if (effectiveFidelity === "hostloop") {
       const hl = spawnHostLoop(scenario, baseline, plan, outDir, sessionId, {
@@ -229,7 +232,11 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         proxyPort: microvmProxyPort,
       });
     } else {
-      child = spawnProtocol(scenario, baseline, plan, outDir);
+      // #19: pass systemPromptAppend so L0 records carry Cowork framing (matches container/microvm/host-loop).
+      // #20: capture l0PluginDivergence so computeVerdict can fail the run when plugins are configured.
+      const proto = spawnProtocol(scenario, baseline, plan, outDir, { systemPromptAppend: prompts.systemPromptAppend });
+      child = proto.child;
+      l0PluginDivergence = proto.l0PluginDivergence;
     }
 
     const sessionT = new LiveAgentSession(child as any, outDir);
@@ -347,6 +354,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     permissiveAutoAllow: record.permissiveAutoAllow.length ? record.permissiveAutoAllow : undefined, // #6: cowork-parity off-registry auto-allows (real Cowork blocks) — non-empty ⇒ NOT a faithful pass
     scan, // post-run scan signals (delete-in-outputs / host-path-leak / self-heal) — computeVerdict default-fails when unasserted
     effectiveFidelity, // The tier actually used — differs from fidelity when fidelity:"cowork" (#24)
+    fidelityWarnings: promptFidelityWarnings, // #49: structured prompt warnings visible to JSON callers
+    l0PluginDivergence: l0PluginDivergence || undefined, // #20: failing fidelity signal for protocol+plugins
   };
 
   // Artifacts (C3): the harness-observability log `run.jsonl` REPLACES transcript.json/decisions.jsonl.
@@ -721,15 +730,36 @@ export function scanEvents(file: string): { outputsDeletes: string[]; hostPathLe
 /**
  * #45: parse `COWORK_HARNESS_DIALOG_TIMEOUT_MS`. Returns:
  *  - `Infinity` for "inf", "infinite", or "-1" (explicit no-timeout sentinel)
- *  - a positive number (milliseconds) for a numeric string > 0
+ *  - a positive integer (milliseconds) for a valid numeric string in 1..3_600_000
  *  - `undefined` for absent / "0" / empty (→ policy-based default applies)
+ * Rejects decimals, NaN, negative values, zero, and values exceeding 3_600_000 ms (1 hour).
  */
 export function parseDialogTimeout(raw: string): number | undefined {
   const s = raw.trim().toLowerCase();
+  if (!s || s === "0") return undefined;
   if (s === "inf" || s === "infinite" || s === "-1") return Infinity;
-  const n = Number(s);
-  if (n > 0) return n;
-  return undefined;
+  const n = parseInt(s, 10);
+  if (!Number.isSafeInteger(n)) throw new Error(`cowork-harness: COWORK_HARNESS_DIALOG_TIMEOUT_MS=${raw.trim()} is not a safe integer`);
+  if (String(n) !== s) throw new Error(`cowork-harness: COWORK_HARNESS_DIALOG_TIMEOUT_MS=${raw.trim()} must be an integer (no decimals)`);
+  if (n <= 0) throw new Error(`cowork-harness: COWORK_HARNESS_DIALOG_TIMEOUT_MS=${raw.trim()} must be > 0`);
+  const MAX_MS = 3_600_000;
+  if (n > MAX_MS)
+    throw new Error(`cowork-harness: COWORK_HARNESS_DIALOG_TIMEOUT_MS=${raw.trim()} exceeds maximum of ${MAX_MS} ms (1 hour)`);
+  return n;
+}
+
+/**
+ * Parse an environment variable as a TCP port (integer in 1..65535).
+ * Returns `defaultValue` when the variable is absent or empty.
+ * Throws with a descriptive message if the value is present but not a valid port.
+ */
+export function parseEnvPort(name: string, defaultValue: number): number {
+  const val = process.env[name];
+  if (!val) return defaultValue;
+  const n = parseInt(val, 10);
+  if (!Number.isFinite(n) || n < 1 || n > 65535 || String(n) !== val.trim())
+    throw new Error(`cowork-harness: ${name}=${val} must be an integer in 1..65535`);
+  return n;
 }
 
 /**
@@ -745,6 +775,12 @@ export function readSessionManifest(path: string, sessionId: string): string {
     parsed = JSON.parse(raw);
   } catch {
     throw new Error(`corrupt manifest at ${path}: not valid JSON`);
+  }
+  // #17: if the manifest records a sessionId, verify it matches the requested one so a copied or
+  // stale manifest cannot resume the wrong native agent conversation. Legacy manifests without a
+  // sessionId field are allowed through for backward compatibility.
+  if (parsed?.sessionId !== undefined && sessionId && parsed.sessionId !== sessionId) {
+    throw new Error(`cowork-harness: manifest session ID mismatch: manifest has ${parsed.sessionId}, expected ${sessionId}`);
   }
   const id = parsed?.agentSessionId;
   if (typeof id !== "string" || !id) {
