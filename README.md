@@ -15,6 +15,11 @@ Scriptable, CI-friendly test harness that reproduces **Claude Cowork's observabl
 
 **Contents:** [Why it works](#why-this-works-for-skill-testing) · [Fidelity tiers](#fidelity-tiers-pick-per-scenario--per-ci-job) · [Quick start](#quick-start) · [Session + scenario](#two-files-session--scenario) · [Boundary](#sandboxing-container-vs-the-real-vm) · [Discovery](#discovery-marketplaces-plugins-skills-mcp) · [Testing & CI/CD](#testing--cicd) · [Maintenance](#maintenance-parity-between-releases) · [Docs](#documentation)
 
+> **Requirements at a glance**
+> - **Free demo (`replay`):** Node ≥ 20 — nothing else (no Docker, token, or Claude Desktop).
+> - **Live tiers** (`container` default / `microvm` / `hostloop`): **Docker (arm64)** · **Claude Desktop opened once** (stages the agent — nothing is bundled) · a **Claude token** (real per-run cost; runs take minutes). The `protocol` tier skips Docker + the staged agent but still calls a real model, so it needs the token.
+> - **Platform:** best on **macOS Apple Silicon**; `sync` and `microvm` are **macOS-arm64 only**. Full detail in [Quick start → prerequisites](#quick-start).
+
 > **New here?** Read [docs/boundary.md](./docs/boundary.md) (the limitations model) and [docs/session.md](./docs/session.md) (the file you'll author).
 
 > **What this is and isn't.** This is an *emulator of the contract*, not the Desktop runtime. Cowork's real session control plane lives behind the Desktop renderer's IPC (per-build UUID + `senderFrame` origin checks) and the app ships with remote debugging disabled (verified: `--remote-debugging-port` opens no listener; Electron `EnableNodeCliInspectArguments` fuse is OFF). So you **cannot** drive the real Apple Virtualization.framework microVM from a script. What you *can* faithfully reproduce is everything that actually changes how a **skill** behaves: the same agent binary in **cowork mode** (`CLAUDE_CODE_IS_COWORK=1` — there is no `--cowork` flag), the same mount layout, the same egress allowlist, and the same permission/question protocol. That's what this project does.

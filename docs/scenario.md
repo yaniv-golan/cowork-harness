@@ -384,6 +384,26 @@ persisted `result.json` + sidecars and uses the **same verdict path as a live re
 `user_visible_artifact` / `artifact_json`) need the run's work dir still on disk — if it has been torn down,
 `verify-run` refuses rather than reporting a false failure.
 
+### Debugging with `chat`
+
+`cowork-harness chat <skill-folder>` is an interactive multi-turn REPL for **hand-debugging** a skill under
+the runtime — reach for it to reproduce a gate/permission flow interactively, poke a stochastic multi-turn
+skill, or explore before authoring a scenario. It is *not* an asserted test (that's `run`); it's the
+exploratory loop.
+
+- **Gates are answered interactively at the TTY** — `chat` carries no scripted `answers:`; an unscripted
+  AskUserQuestion / permission request prompts you in the terminal.
+- **It always writes a transcript** under `runs/chat/<sessionId>` (there is no `--keep` flag); inspect it
+  afterward with `cowork-harness trace <dir>`. Exit with `/exit` or `/quit`.
+- **Use plain `chat`, not `chat --raw`, for faithful debugging.** `--raw` is a native `docker run -it`
+  session with **no egress sandbox** — convenient, but it does *not* reproduce Cowork's default-deny network,
+  so behavior there isn't representative.
+- **`chat` does not support `--session-id` / `--resume`** (those are `skill`-only; chat mints a throwaway
+  session) — for checkpoint/resume debugging use `skill … --session-id … --resume`.
+- **Promote a finding to a scenario to make it deterministic.** `chat` is live/non-deterministic and —
+  unlike `skill`/`run` — prints no copy-pasteable `--answer` footer. Once you've reproduced a flow, re-express
+  it as a `scenarios/*.yaml` with scripted `answers:` so it becomes a repeatable regression.
+
 ### Shipped examples to read
 
 The repo ships runnable scenarios you can copy from, under [`examples/`](../examples/) — each pairs with an `examples/sessions/*.yaml` and, for the skills, a folder under `examples/skills/`. (The harness's own fidelity self-tests live separately in `e2e/`.)

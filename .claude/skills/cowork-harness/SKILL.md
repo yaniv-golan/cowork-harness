@@ -40,7 +40,8 @@ Before the first command, confirm the CLI is reachable and **fail loud** (never 
   scenario file.
 - **Repeatable, asserted regression** → author a `scenarios/*.yaml` and run `cowork-harness run`.
   This is the CI-grade path and most of this skill.
-- **Multi-turn debugging** → `cowork-harness chat`.
+- **Multi-turn debugging** → `cowork-harness chat` (interactive; gates answered at the TTY, **not** an
+  asserted test — see *Debugging with `chat`* in `docs/scenario.md`).
 
 Full command set: `skill · run · chat · record · replay · verify-cassettes · verify-run · trace ·
 decide · gates · answer · scaffold · assert · sync · list · boundary-check · vm <init|status|delete|prune>`. Always check `cowork-harness <cmd> --help`.
@@ -153,10 +154,11 @@ python3 "$S" scaffold --name report-check --skill ./skills/report-gen \
   --egress-allowed api.weather.example.com --out scenarios/report-check.yaml
 ```
 
-Then lint every scenario — it encodes the no-silent-false-green invariants:
+Then lint every scenario — it encodes the no-silent-false-green invariants. Use the CLI wrapper
+`cowork-harness lint` (it runs the same bundled `scenario.py lint`):
 
 ```bash
-python3 "$S" lint scenarios/*.yaml
+cowork-harness lint scenarios/*.yaml
 ```
 
 `lint` flags: filesystem/egress-only assertions on a `replay` gate (silent no-op), bad regex
