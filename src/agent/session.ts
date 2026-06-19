@@ -433,6 +433,9 @@ export class LiveAgentSession implements AgentSession {
         `::warning:: decider returned kind "${r.kind}" for a "${req.kind}" request (id ${decisionId}) → sending a safe deny/cancel; the agent did NOT receive an answer\n`,
       );
     this.write(serializeDecision(req, r));
+    // Invariant: each decision id is answered at most once. Delete after a successful write so
+    // stale entries don't accumulate (live sessions may process thousands of decisions per run).
+    this.reqById.delete(decisionId);
   }
 
   close(): void {
@@ -484,8 +487,15 @@ export function parseMessage(msg: any): AgentEvent[] {
       break;
     }
     case "assistant": {
-      const parentToolUseId = msg.parent_tool_use_id ? String(msg.parent_tool_use_id) : undefined;
+      // Protocol v1: parentToolUseId is message-level. Block-level parent_tool_use_id (if present)
+      // is canonical — prefer it when both exist (block-level is more precise for nested dispatches).
+      const msgParentToolUseId = msg.parent_tool_use_id ? String(msg.parent_tool_use_id) : undefined;
+      let blockIndex = 0;
       for (const block of msg.message?.content ?? []) {
+        // Block-level parent wins over message-level when both are present (see comment above).
+        const parentToolUseId = block.parent_tool_use_id
+          ? String(block.parent_tool_use_id)
+          : msgParentToolUseId;
         if (block.type === "text") ev.push({ type: "assistant_text", text: block.text, parentToolUseId });
         else if (block.type === "thinking") ev.push({ type: "thinking", text: block.thinking ?? block.text ?? "" });
         else if (block.type === "tool_use") {
@@ -508,9 +518,12 @@ export function parseMessage(msg: any): AgentEvent[] {
               : Array.isArray(inp.allowedTools)
                 ? (inp.allowedTools as unknown[]).map(String)
                 : []; // the `Agent` tool declares no tools list → []; declared-but-unused is legacy-`Task`-only
+            // When block.id is absent, synthesize a fallback to avoid collapsing all anonymous
+            // dispatches into the empty-string identity, which breaks dispatch tracking.
+            const toolUseId = block.id ? String(block.id) : `unpaired-${blockIndex}`;
             ev.push({
               type: "subagent_dispatch",
-              toolUseId: String(block.id ?? ""),
+              toolUseId,
               parentToolUseId,
               // Skills often dispatch with only {description, prompt} (no subagent_type) → agentType is
               // "unknown" but the description still identifies the dispatch (e.g. "TOP_DOWN market sizing").
@@ -520,6 +533,7 @@ export function parseMessage(msg: any): AgentEvent[] {
             });
           }
         }
+        blockIndex++;
       }
       break;
     }
@@ -557,7 +571,11 @@ function flattenToolResult(content: unknown, max: number): string {
       .map((b) => {
         if (b && typeof b === "object" && "text" in b) return String((b as { text: unknown }).text);
         // Non-text blocks (json, resource, link, unknown): JSON-stringify to preserve all content.
-        return JSON.stringify(b);
+        // JSON.stringify returns `undefined` for blocks that contain functions or other
+        // non-serializable values; wrap those in an explicit marker so downstream code can identify
+        // and skip them rather than treating the literal string "undefined" as block content.
+        const serialized = JSON.stringify(b);
+        return serialized !== undefined ? serialized : JSON.stringify({ type: "unsupported", raw: "[unserializable]" });
       })
       .join(" ")
       .slice(0, max);
@@ -574,6 +592,11 @@ function toolResultRaw(content: unknown): string {
 
 export function toDecisionRequest(msg: any): DecisionRequest | null {
   const sub = msg.request?.subtype;
+  // Validate request_id early — every DecisionRequest.id is a non-empty string. A missing or
+  // non-string request_id means the agent sent a malformed control_request; reject loudly rather
+  // than silently building a DecisionRequest with an unusable id (respond() would always miss it).
+  if (typeof msg.request_id !== "string" || msg.request_id === "")
+    throw new Error(`control-in: malformed request_id: ${JSON.stringify(msg.request_id)}`);
   const id = msg.request_id;
   if (sub === "can_use_tool") {
     const tool = msg.request.tool_name ?? "";
