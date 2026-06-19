@@ -165,8 +165,12 @@ the terminal is one of:
   rendezvous** (`--decider-dir <dir>` → `req-N.json`/`resp-N.json`). For each unscripted decision it emits
   `{type:"decision_request", id, runId, kind, …payload, context, reply_with}` (secret-scrubbed before
   write — `0600` files for the dir; the helper's own pipe for spawn) and reads one reply; answers are
-  coerced via `coerceLabel`. EOF / invalid JSON / wrong-`id` / timeout → `UnansweredError` (exit 2). A
-  question that reaches the terminal unanswered (`ABSTAIN`) **throws** — never a silent option-1 (`run.ts`).
+  coerced via `coerceLabel(raw, labels, enableFirstShorthand)`. **CB-1:** `ExternalDecider` calls
+  `coerceLabel` with `enableFirstShorthand=false` — a helper returning the literal string `"first"` must
+  match an actual label named `"first"`; it is NOT silently coerced to option 1. (The `"first"` shorthand
+  remains active at its default `true` for internal deciders only.) EOF / invalid JSON / wrong-`id` /
+  timeout → `UnansweredError` (exit 2). A question that reaches the terminal unanswered (`ABSTAIN`)
+  **throws** — never a silent option-1 (`run.ts`).
 
 Both external channels keep the CLI's stdout FREE (the protocol is on the helper's own pipes / in files),
 so both compose with `--output-format json` (no terminal `{type:"result"}` line). The legacy **stdio** channel
@@ -217,7 +221,7 @@ Payload sits under an **inner** `response`. Missing the nesting ⇒ `ZodError: e
 
 **Three MCP delivery channels (corrected 2026-06-13 — first-party probe):**
 
-1. **SDK servers over the control protocol** — declared via `sdkMcpServers` in `initialize`; tool calls tunnel as `mcp_message`. This is how the **desktop host** bridges its own servers (incl. `claude_desktop_config.json` `mcpServers`, spawned host-side with full host env) and how the harness delivers the workspace shell. The workspace handler (`src/hostloop/workspace-handler.ts`) implements `initialize`/`tools/list`/`tools/call`; `bash`→`docker exec -w <mntRoot> <container> sh -c <cmd>` (container-egress-gated). **`web_fetch` is NOT container-egress-gated:** real Cowork routes it through the host API (gate `1978029737` `coworkWebFetchViaApi:true` → `POST /api/organizations/<org>/cowork/web_fetch`), gated by a **separate web-fetch hostname allowlist** (`getWebFetchAllowedUrls`, `*`=unrestricted) + a **URL-provenance** rule (URL must have appeared in a prior message/result). The harness mirrors this with the **two-path model** (`src/hostloop/workspace-handler.ts`, binary-verified `G1t`/`U1t`): **Path A** (provenance engaged — `coworkWebFetchViaApi` on) gates on the **exact-URL provenance set** ONLY (seeded from user-turn + tool-result URLs; `src/hostloop/provenance.ts`), with **no** hostname allowlist — but still an `http(s)`-scheme + private-address **SSRF backstop re-checked on every redirect hop** (a manual redirect loop, not `curl -L`) — a miss raises a per-domain approval (`webfetch:<domain>` permission with options `Allow once | Allow all for website | Deny`) routed through the Decider; "Allow all for website" approves the host for the rest of the run (`Run.approvedDomains`, per-run/ephemeral). **Path B** (gate off) is a direct host fetch gated by the egress domain list via the same `wen()`/`compile()` matcher container egress uses, with `redirect:"manual"` re-checking `U1t` (scheme + private-address SSRF + allowlist) on **every** redirect hop. web_fetch is thus **decoupled from `plan.egressAllow`** on Path A (egress applies to `bash`/Path B only). An unanswered cold miss is fail-closed (B5); scenarios answer via `--answer "webfetch:<domain>=allow"` (with `grant`), `web_fetch.approved_domains`, or an LLM/external terminal. `bash` stays container-egress-sandboxed.
+1. **SDK servers over the control protocol** — declared via `sdkMcpServers` in `initialize`; tool calls tunnel as `mcp_message`. This is how the **desktop host** bridges its own servers (incl. `claude_desktop_config.json` `mcpServers`, spawned host-side with full host env) and how the harness delivers the workspace shell. The workspace handler (`src/hostloop/workspace-handler.ts`) implements `initialize`/`tools/list`/`tools/call`; `bash`→`docker exec -w <mntRoot> <container> sh -c <cmd>` (container-egress-gated). **CB-8:** `makeWorkspaceHandler` accepts an `onInfraError?: (message: string) => void` callback at parameter position 6 (after `onEgress`); on infrastructure errors (ETIMEDOUT / killed / no code+stdout+stderr) the handler calls `onInfraError?.(e.message)`, returns a textResult with `"[infrastructure error: …]"`, and `spawnHostLoop` wires `onInfraError` to append `{type:"infra_error", ts, message}` to `events.jsonl`. **`web_fetch` is NOT container-egress-gated:** real Cowork routes it through the host API (gate `1978029737` `coworkWebFetchViaApi:true` → `POST /api/organizations/<org>/cowork/web_fetch`), gated by a **separate web-fetch hostname allowlist** (`getWebFetchAllowedUrls`, `*`=unrestricted) + a **URL-provenance** rule (URL must have appeared in a prior message/result). The harness mirrors this with the **two-path model** (`src/hostloop/workspace-handler.ts`, binary-verified `G1t`/`U1t`): **Path A** (provenance engaged — `coworkWebFetchViaApi` on) gates on the **exact-URL provenance set** ONLY (seeded from user-turn + tool-result URLs; `src/hostloop/provenance.ts`), with **no** hostname allowlist — but still an `http(s)`-scheme + private-address **SSRF backstop re-checked on every redirect hop** (a manual redirect loop, not `curl -L`) — a miss raises a per-domain approval (`webfetch:<domain>` permission with options `Allow once | Allow all for website | Deny`) routed through the Decider; "Allow all for website" approves the host for the rest of the run (`Run.approvedDomains`, per-run/ephemeral). **Path B** (gate off) is a direct host fetch gated by the egress domain list via the same `wen()`/`compile()` matcher container egress uses, with `redirect:"manual"` re-checking `U1t` (scheme + private-address SSRF + allowlist) on **every** redirect hop. web_fetch is thus **decoupled from `plan.egressAllow`** on Path A (egress applies to `bash`/Path B only). An unanswered cold miss is fail-closed (B5); scenarios answer via `--answer "webfetch:<domain>=allow"` (with `grant`), `web_fetch.approved_domains`, or an LLM/external terminal. `bash` stays container-egress-sandboxed.
 2. **CLI-spawned `--mcp-config` / `.mcp.json` servers — HONORED in plain cowork mode** (NOT ignored). **Verified:** a valid `--mcp-config` populates `mcp_servers` (`[{name,status:"pending"|"connected"}]`); these run in-sandbox with the env-allowlist `CLAUDE_CODE_MCP_ALLOWLIST_ENV` (`RW8`/`oG8`/`LU5` = {HOME, LOGNAME, PATH, SHELL, TERM, USER}). The harness MAY use this as a convenience injection path.
 3. **The drop is SAFE/HERMETIC-mode-gated, not cowork-gated.** `--mcp-config` is filtered to SDK-only (`ap5()`) **only when** safe mode (`I5()`) or `xB8()` is true, and `xB8()` requires **both** `CLAUDE_CODE_REMOTE` **and** `CLAUDE_CODE_REMOTE_HERMETIC_MODE`. **Verified:** with both set, `mcp_servers:[]`; without them (plain `SESSION_KIND=bg`), the config is honored. The earlier "cowork ignores `--mcp-config`" was a hermetic-session observation over-generalized.
 
@@ -347,6 +351,14 @@ every command:
 }
 ```
 
+**VerdictSignal codes** — synthesized entries that appear in `assertions[]` alongside user-authored
+assertions (never user-authored themselves):
+
+| code | severity | trigger |
+|---|---|---|
+| `replay_protocol_fidelity` | error | `serializeDecision` mismatch vs frozen `controlOut` (replay only) |
+| `prompt_asset_missing` | warn | `fidelityWarnings` contains `"referenced asset not found"` — run proceeded with a missing prompt asset; result may be degraded (CB-7) |
+
 **Error envelope** — a thrown failure (not an assertion failure) under `--output-format json`:
 ```jsonc
 { "tool":"cowork-harness","version":"...","command":"...","ok":false,"results":[],
@@ -390,3 +402,27 @@ fail the gate. **Exit codes:** `0` clean · `1` any finding/staleness/error · `
 `--privacy-only`+`--staleness-only` together, or zero cassettes under a dir — a loud non-zero, never a
 vacuous pass). The `in:` assert operator (§ scenario schema) and `record <dir>`/`--rerecord-stale` batch
 recording are also part of 0.3.0; see `docs/scenario.md` and `docs/cassette.md`.
+
+**CB-3/CB-4 — `chat` REPL flags and `/help`:** The `chat` subcommand accepts `[--plugin <dir>]…`
+(repeatable; CB-3) — each `<dir>` is appended to `localPlugins` and injected alongside the default
+skill folder in `plugins.local_plugins`. In `--raw` mode, `--plugin` flags are silently ignored (native
+docker mode mounts one skill folder only; a warning is logged). The REPL now accepts `/help` as a
+built-in command (CB-4), printing `"Commands: /exit  /quit  /help"` without sending a turn; the startup
+prompt reads `"type your message (/help for commands)"`. **CB-2:** `flagValue()` in `src/cli.ts` and
+the inline `--model` parser in `src/run/chat.ts` both reject empty-string values (`""`/whitespace) with
+a usage error (exit 2); passing `--model ""` or `--model` with no following value is now a hard error
+rather than silently propagating an empty model string.
+
+**CB-6 — `scrubField` and artifact redaction (`src/secrets.ts`, `src/run/cassette.ts`):** The exported
+`scrubField(value, secrets)` function applies a three-pass scrub to a single field value: (1) direct
+`scrub()` — covers literal tokens, `base64(TOKEN)`, `encodeURIComponent(TOKEN)`, etc.; (2) whole-field
+base64 decode (≥20 chars, `/^[A-Za-z0-9+/=]+$/`) → if the decoded form contains a secret hit, returns
+`"[REDACTED:base64]"`; (3) whole-field URI decode (if `%` present) → returns `"[REDACTED:uri]"` on a
+hit. Cassette artifact scrubbing uses `scrubField`: base64-encoded artifact bodies are replaced wholesale
+with `"[REDACTED:base64]"` (encoding cleared, sha256 recomputed over the marker bytes; a `::warning::`
+is emitted about assertion breakage at replay); utf8 artifact bodies pass through `scrubField` (safe —
+text passes unchanged unless the entire value is a base64 blob). A guard in `redactCassette()` skips
+`redactJsonLine` on bodies that already start with `"[REDACTED"` to prevent sha256 corruption on
+already-redacted markers. The TLD list used by the domain scanner was also extended from 22 to 51
+entries (CB-5), adding major European, Asian, and Latin American ccTLDs
+(`ch|nl|se|no|it|jp|br|nz|in|sg|kr|mx|es|pt|pl|be|at|dk|fi|ie|ru|cn|tw|hu|cz|ro|il|za|ar|cl|pe|tr`).
