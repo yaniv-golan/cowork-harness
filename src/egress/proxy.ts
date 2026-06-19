@@ -119,14 +119,15 @@ export function startEgressProxy(opts: ProxyOptions): EgressProxy {
       /* already gone */
     }
   });
-  // #50: store the handler so it can be removed when the server is closed — otherwise each
-  // startEgressProxy() call in one process stacks another uncaughtException handler, causing
-  // benign ECONNRESET/EPIPE to be swallowed N times by stale handlers after their server is gone.
-  const uncaughtHandler = (e: NodeJS.ErrnoException) => {
-    if (e?.code === "ECONNRESET" || e?.code === "EPIPE") return; // benign socket teardown
-    throw e;
-  };
-  process.on("uncaughtException", uncaughtHandler);
+  // Swallow benign ECONNRESET/EPIPE on the server itself (e.g. a client that disconnects before the
+  // response is fully sent). These are normal socket-teardown events and must not crash the proxy.
+  // Using a direct `.on("error", …)` handler here — rather than a process-wide `uncaughtException`
+  // hook — keeps the suppression scoped exactly to this server object and never masks unrelated errors.
+  server.on("error", (e: NodeJS.ErrnoException) => {
+    if (e.code === "ECONNRESET" || e.code === "EPIPE") return; // benign socket teardown — ignore
+    // All other server errors (e.g. EADDRINUSE before `listening`) are captured via the `ready`
+    // rejection path below; re-throwing here would crash the process with no context.
+  });
 
   // readiness/error handshake. With an `error` listener a bind failure (EADDRINUSE) is a rejected
   // `ready` rather than an uncaught server error that crashes the process; callers `await proxy.ready`
@@ -136,12 +137,6 @@ export function startEgressProxy(opts: ProxyOptions): EgressProxy {
     server.once("error", reject);
   });
   server.listen(opts.port ?? 8080);
-  // Wrap close() so the uncaughtException handler is cleaned up when the server stops.
-  const origClose = server.close.bind(server);
-  server.close = (cb?: (err?: Error) => void) => {
-    process.removeListener("uncaughtException", uncaughtHandler);
-    return origClose(cb);
-  };
   (server as EgressProxy).ready = ready;
   return server as EgressProxy;
 }

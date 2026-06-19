@@ -603,25 +603,82 @@ export function redactCassette(cassette: Cassette, policy: RedactionPolicy): Cas
 /** A3 / C4 cardinal-sin guard: redaction must be VERDICT-PRESERVING. Replay both the pre-redaction and the
  *  redacted cassette (token-free) and compare verdicts; if redaction flipped any replay-checkable assertion
  *  (e.g. stripped a value a `transcript_not_matches` keys on, manufacturing a green), throw — never write a
- *  cassette whose verdict was changed by redaction. */
+ *  cassette whose verdict was changed by redaction.
+ *
+ *  Beyond pass/fail counts, the check also compares:
+ *  1. All assertion code+pass pairs as a sorted set — a flip from pass→fail or fail→pass on a SPECIFIC
+ *     assertion is caught even when the total failure count is the same.
+ *  2. Failing assertion messages, normalized so [REDACTED] substitutions are tolerated while unexpected
+ *     message mutations (e.g. a body swap that changes which value triggered the failure) are caught.
+ *  3. Artifact SHA-256 hashes for text bodies — a redaction that replaces a body while keeping the
+ *     assertion passing would corrupt the cassette's replay-time sha256 verify; catch it here first. */
 export async function assertRedactionVerdictPreserved(base: Cassette, redacted: Cassette): Promise<void> {
   const [rb, rr] = await Promise.all([replayCassette(base), replayCassette(redacted)]);
   const vb = computeVerdict(rb, "replay");
   const vr = computeVerdict(rr, "replay");
-  const failedKeys = (result: RunResult): string[] =>
+
+  // 1. All assertion code+pass pairs as a sorted set.
+  //    Each pair is "<assertionKey>:<pass>" — the first defined key names the assertion type.
+  const assertionPairs = (result: RunResult): string[] =>
+    result.assertions
+      .map((a) => {
+        const key = Object.keys(a.assertion).filter((k) => (a.assertion as Record<string, unknown>)[k] !== undefined)[0] ?? "(unknown)";
+        return `${key}:${a.pass}`;
+      })
+      .sort();
+
+  const basePairs = assertionPairs(rb);
+  const redactedPairs = assertionPairs(rr);
+
+  // (kept for the error detail message) failed assertion keys only
+  const failedKeys = (pairs: string[]): string[] =>
+    pairs
+      .filter((p) => p.endsWith(":false"))
+      .map((p) => p.slice(0, -":false".length))
+      .sort();
+
+  // 2. Failing assertion messages, normalized so [REDACTED] substitutions are acceptable.
+  //    Strip any [REDACTED] tokens from the message before comparing, so a redacted string that
+  //    appears in an error message doesn't fire a false-positive on normalization.
+  const normalizeMsg = (msg: string | undefined): string =>
+    (msg ?? "").replace(/\[REDACTED\]/g, "\x00REDACTED\x00").replace(/\x00REDACTED\x00/g, "");
+  const failedMsgs = (result: RunResult): string[] =>
     result.assertions
       .filter((a) => !a.pass)
-      .map((a) => Object.keys(a.assertion).filter((k) => (a.assertion as Record<string, unknown>)[k] !== undefined)[0] ?? "(unknown)")
+      .map((a) => normalizeMsg(a.message))
       .sort();
-  const baseFailedKeys = failedKeys(rb);
-  const redactedFailedKeys = failedKeys(rr);
+
+  // 3. Artifact SHA-256 hashes for text bodies — compare only non-truncated text-body entries.
+  //    Binary (base64) bodies are excluded since redaction deliberately leaves them unchanged; their
+  //    hash is already protected by the replay-time materializeManifest sha256 verify.
+  const artifactHashes = (cassette: Cassette): string[] =>
+    (cassette.artifacts ?? [])
+      .filter((a) => !a.truncated && a.body !== undefined && a.encoding !== "base64" && a.sha256)
+      .map((a) => `${a.path}:${a.sha256}`)
+      .sort();
+
+  const baseHashes = artifactHashes(base);
+  const redactedHashes = artifactHashes(redacted);
+
   const verdictMismatch = vb.pass !== vr.pass;
-  const countMismatch = baseFailedKeys.length !== redactedFailedKeys.length;
-  const keysMismatch = baseFailedKeys.join(",") !== redactedFailedKeys.join(",");
-  if (verdictMismatch || countMismatch || keysMismatch) {
-    const detail = verdictMismatch
-      ? `pre-redaction pass=${vb.pass} → redacted pass=${vr.pass}`
-      : `assertion failures changed: [${baseFailedKeys.join(", ")}] → [${redactedFailedKeys.join(", ")}]`;
+  const pairsMismatch = basePairs.join("|") !== redactedPairs.join("|");
+  const msgsMismatch = failedMsgs(rb).join("|") !== failedMsgs(rr).join("|");
+  const hashesMismatch = baseHashes.join("|") !== redactedHashes.join("|");
+
+  if (verdictMismatch || pairsMismatch || msgsMismatch || hashesMismatch) {
+    let detail: string;
+    if (verdictMismatch) {
+      detail = `pre-redaction pass=${vb.pass} → redacted pass=${vr.pass}`;
+    } else if (pairsMismatch) {
+      const bf = failedKeys(basePairs);
+      const rf = failedKeys(redactedPairs);
+      detail = `assertion failures changed: [${bf.join(", ")}] → [${rf.join(", ")}]`;
+    } else if (msgsMismatch) {
+      detail = "failing assertion messages changed unexpectedly after redaction";
+    } else {
+      const changed = redactedHashes.filter((h) => !baseHashes.includes(h)).map((h) => h.split(":")[0]);
+      detail = `artifact body hash(es) changed: ${changed.join(", ")}`;
+    }
     throw new Error(
       `cowork-harness: redaction changed assertion failures: ${detail} — redaction altered an ` +
         `asserted observable; refusing to write a cassette whose verdict was manufactured by redaction (A3). ` +
