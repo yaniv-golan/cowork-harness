@@ -76,8 +76,8 @@ export type SdkMcp = {
 export interface AgentSession {
   /** #45: write `initialize` before the first user turn (idempotent; `start()` also calls it).
    *  Optional — replay sessions (cassette) have no live control channel and omit it. */
-  init?(opts?: { systemPromptAppend?: string; subagentAppend?: string; sdkMcp?: SdkMcp }): void;
-  start(opts?: { systemPromptAppend?: string; subagentAppend?: string; sdkMcp?: SdkMcp }): AsyncIterable<AgentEvent>;
+  init?(opts?: { subagentAppend?: string; sdkMcp?: SdkMcp }): void;
+  start(opts?: { subagentAppend?: string; sdkMcp?: SdkMcp }): AsyncIterable<AgentEvent>;
   sendUserTurn(text: string): void;
   respond(decisionId: string, r: DecisionResponse): void;
   close(): void;
@@ -249,6 +249,10 @@ export class LiveAgentSession implements AgentSession {
   private rejectError?: (e: Error) => void;
   /** Bounded tail of the child's stderr, for the nonzero-exit error message. */
   private stderrTail = "";
+  private writeQueue: string[] = [];
+  private pumping = false;
+  private queueIdle?: () => void;
+  private closing = false;
 
   constructor(
     private proc: ChildProcessByStdio<Writable, Readable, Readable>,
@@ -268,7 +272,7 @@ export class LiveAgentSession implements AgentSession {
     this.proc.stdin.on("error", (e) => {
       if (this.rejectError) this.rejectError(e);
       // else: the error fired before/after the generator — log it but don't throw
-      else this.events.write(JSON.stringify({ _emu: "stdin_error", message: String(e) }) + "\n");
+      else if (!this.closing) this.events.write(JSON.stringify({ _emu: "stdin_error", message: String(e) }) + "\n");
     });
   }
 
@@ -278,7 +282,7 @@ export class LiveAgentSession implements AgentSession {
    * also calls it so a standalone `start()` (no prior `init`) still initializes. Guarded so the two
    * call sites never double-write init-1.
    */
-  init(opts: { systemPromptAppend?: string; subagentAppend?: string; sdkMcp?: SdkMcp } = {}): void {
+  init(opts: { subagentAppend?: string; sdkMcp?: SdkMcp } = {}): void {
     if (this.initWritten) return;
     this.initWritten = true;
     this.sdkMcp = opts.sdkMcp;
@@ -289,7 +293,7 @@ export class LiveAgentSession implements AgentSession {
     this.write({ type: "control_request", request_id: "init-1", request: initRequest });
   }
 
-  async *start(opts: { systemPromptAppend?: string; subagentAppend?: string; sdkMcp?: SdkMcp } = {}): AsyncIterable<AgentEvent> {
+  async *start(opts: { subagentAppend?: string; sdkMcp?: SdkMcp } = {}): AsyncIterable<AgentEvent> {
     this.init(opts); // idempotent — a no-op if drive() already wrote init-1 before the first user turn
 
     // #13: race-approach latch — `errorPromise` rejects when proc emits an error, which is
@@ -301,7 +305,7 @@ export class LiveAgentSession implements AgentSession {
     // below rejects and the generator yields a typed {type:"error"} event instead of hanging on
     // stdout that will never arrive.
     this.proc.on("error", (e) => {
-      this.events.write(JSON.stringify({ _emu: "spawn_error", message: String(e) }) + "\n");
+      if (!this.closing) this.events.write(JSON.stringify({ _emu: "spawn_error", message: String(e) }) + "\n");
       if (this.rejectError) this.rejectError(e instanceof Error ? e : new Error(String(e)));
     });
 
@@ -322,7 +326,7 @@ export class LiveAgentSession implements AgentSession {
         if (next.done) break;
         const line = next.value;
         if (!line.trim()) continue;
-        this.events.write(line + "\n");
+        if (!this.closing) this.events.write(line + "\n");
         let msg: any;
         try {
           msg = JSON.parse(line);
@@ -348,6 +352,8 @@ export class LiveAgentSession implements AgentSession {
       }
     } finally {
       this.rejectError = undefined; // generator is done; stop routing errors here
+      this.closing = true;          // discard any late write() from translate()'s async hook/mcp paths
+      await this.drainAll();        // queue empty + all callbacks confirmed before ending either stream
       // #46: AWAIT the stream flush before the generator resolves. executeScenario reads/scans/scrubs
       // events.jsonl + control-out.jsonl immediately after `drive()` returns; a fire-and-forget end()
       // races the final buffered writes. end(cb) fires the callback on 'finish' (fully flushed).
@@ -446,27 +452,92 @@ export class LiveAgentSession implements AgentSession {
     }
   }
 
-  private write(obj: unknown) {
+  private write(obj: unknown): void {
     const line = JSON.stringify(obj);
-    // The control protocol writes small single-line JSON frames, so stdin backpressure effectively never
-    // engages; we ignore the write() return / drain here. A frame past the safe threshold is anomalous —
-    // hard-FAIL rather than risk a partially-buffered write that silently corrupts the protocol stream.
-    // (If large control frames ever become legitimate, switch to a drain-aware queue, making writes async.)
-    if (line.length > 256 * 1024)
-      throw new Error(
-        `control frame is ${line.length} bytes (> 256 KiB safe limit) — refusing to write to avoid partial stdin buffering; this indicates an unexpectedly large control payload`,
-      );
+    if (this.closing) return; // session draining — discard silently
     // Bug 34: check stream writability before writing — a closed/destroyed stdin after a child crash
     // loses decision frames silently. Throw immediately so callers surface the failure rather than
     // hanging or silently dropping frames.
     if (this.proc.stdin.destroyed || !this.proc.stdin.writable)
       throw new Error("control-protocol write failed: child stdin is no longer writable (process may have crashed)");
-    this.controlOut.write(line + "\n");
-    // Attach a one-shot error handler on the write so stream errors surface via rejectError rather
-    // than as unhandled 'error' events (the permanent 'error' handler on constructor covers stdin
-    // errors that fire outside a write, e.g. EPIPE after a crash).
-    this.proc.stdin.write(line + "\n", (err) => {
-      if (err && this.rejectError) this.rejectError(err instanceof Error ? err : new Error(String(err)));
+    this.writeQueue.push(line + "\n");
+    void this.pump().catch((err) => {
+      // Route unexpected pump errors through rejectError so they surface as a typed error + clean
+      // teardown instead of a silent hang. Known failure modes call rejectError themselves before
+      // the pump returns, so this only fires on unanticipated throws.
+      if (this.rejectError) this.rejectError(err instanceof Error ? err : new Error(String(err)));
+    });
+  }
+
+  private async pump(): Promise<void> {
+    if (this.pumping) return;
+    this.pumping = true;
+    try {
+      while (this.writeQueue.length) {
+        const frame = this.writeQueue.shift()!;
+        if (this.proc.stdin.destroyed || !this.proc.stdin.writable) {
+          this.events.write(JSON.stringify({ _emu: "control_undelivered", frame }) + "\n");
+          if (this.rejectError) this.rejectError(new Error("stdin no longer writable while draining queue"));
+          while (this.writeQueue.length) {
+            const remaining = this.writeQueue.shift()!;
+            this.events.write(JSON.stringify({ _emu: "control_undelivered", frame: remaining }) + "\n");
+          }
+          break;
+        }
+        // Await the write callback directly — the ONLY reliable signal for child-process stdin
+        // pipes (EPIPE goes to the callback, not an 'error' event; 'drain'/'close' are unreliable).
+        // Awaiting inline also bounds in-flight depth to 1, giving deterministic replay ordering.
+        const writeErr = await new Promise<Error | null>((resolve) => {
+          try {
+            this.proc.stdin.write(frame, (err) => {
+              resolve(err ?? null);
+            });
+          } catch (e) {
+            resolve(e instanceof Error ? e : new Error(String(e)));
+          }
+        });
+        if (writeErr) {
+          this.events.write(JSON.stringify({ _emu: "control_undelivered", frame }) + "\n");
+          if (this.rejectError) this.rejectError(writeErr);
+          while (this.writeQueue.length) {
+            const remaining = this.writeQueue.shift()!;
+            this.events.write(JSON.stringify({ _emu: "control_undelivered", frame: remaining }) + "\n");
+          }
+          break;
+        } else {
+          if (frame.length > 256 * 1024) {
+            // Frame too large to mirror verbatim — record a truncation marker instead.
+            this.controlOut.write(
+              JSON.stringify({ _emu: "control_out_truncated", bytes: frame.length, head: frame.slice(0, 4096) }) + "\n",
+            );
+          } else {
+            this.controlOut.write(frame);
+          }
+        }
+      }
+    } finally {
+      this.pumping = false;
+      // Unconditionally drain any remaining frames — handles a synchronous throw from
+      // controlOut.write/events.write inside the try body, which would otherwise leave
+      // writeQueue non-empty and queueIdle unfired, hanging drainAll().
+      while (this.writeQueue.length) {
+        const remaining = this.writeQueue.shift()!;
+        try {
+          this.events.write(JSON.stringify({ _emu: "control_undelivered", frame: remaining }) + "\n");
+        } catch {
+          /* events may already be ended; discard silently */
+        }
+      }
+      const idle = this.queueIdle;
+      this.queueIdle = undefined;
+      idle?.();
+    }
+  }
+
+  private drainAll(): Promise<void> {
+    if (!this.pumping && this.writeQueue.length === 0) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      this.queueIdle = resolve;
     });
   }
 }

@@ -270,7 +270,6 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       };
     }
     record = await run.drive(scenario.prompt, {
-      systemPromptAppend: prompts.systemPromptAppend,
       subagentAppend: prompts.subagentAppend,
       sdkMcp,
     });

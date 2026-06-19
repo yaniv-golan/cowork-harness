@@ -148,7 +148,7 @@ export async function cmdChat(args: string[]) {
       const renderer = makeRenderer(renderPlan);
       const run = new Run(agent, decider, [renderer], sessionId);
       stopHeartbeat = startHeartbeat(renderer, renderPlan, start);
-      await run.drive(withSeedPrompt(seedPrompt, ttyTurns(rl)), { systemPromptAppend: prompts.systemPromptAppend });
+      await run.drive(withSeedPrompt(seedPrompt, ttyTurns(rl)), {});
     } else if (fidelity === "hostloop") {
       // #25: honor --fidelity hostloop in chat, mirroring execute.ts's branch selection.
       const hl = spawnHostLoop(scenario, baseline, plan, outDir, sessionId, {
@@ -175,7 +175,6 @@ export async function cmdChat(args: string[]) {
         };
       }
       await run.drive(withSeedPrompt(seedPrompt, ttyTurns(rl)), {
-        systemPromptAppend: prompts.systemPromptAppend,
         sdkMcp: hl.sdkMcp,
       });
     } else {
@@ -189,7 +188,7 @@ export async function cmdChat(args: string[]) {
       const renderer = makeRenderer(renderPlan);
       const run = new Run(agent, decider, [renderer], sessionId);
       stopHeartbeat = startHeartbeat(renderer, renderPlan, start);
-      await run.drive(withSeedPrompt(seedPrompt, ttyTurns(rl)), { systemPromptAppend: prompts.systemPromptAppend });
+      await run.drive(withSeedPrompt(seedPrompt, ttyTurns(rl)), {});
     }
   } finally {
     stopHeartbeat?.();
