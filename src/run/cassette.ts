@@ -414,6 +414,10 @@ export class CassetteAgentSession implements AgentSession {
    *  in a full-fidelity cassette — a truncated recording. Surfaced as failing replay_protocol_fidelity
    *  (instead of silently replaying a recorded allow as abstain→deny with no fidelity signal). */
   readonly missingControlOut: string[] = [];
+  /** Bug 47: indices of malformed (non-JSON) event lines; surfaced as replay_protocol_error results. */
+  readonly malformedEventLines: number[] = [];
+  /** Bug 46: duplicate request_ids in controlOut with differing bodies — surfaced as failures in strict mode. */
+  readonly duplicateControlOutIds: string[] = [];
   /** controlOut index: request_id → recorded response body (only control_response success envelopes
    *  whose request_id matches a known decision req.id — skips init-1 and mcp_response lines).
    *  Exposed (readonly) so replayCassette can hand it to the ReplayDecider without re-parsing. */
@@ -426,7 +430,9 @@ export class CassetteAgentSession implements AgentSession {
     controlOut: string[] | undefined,
   ) {
     this.hasControlOut = !!(controlOut && controlOut.length > 0);
-    this.controlOutIndex = buildControlOutIndex(controlOut ?? []);
+    const { index, differingDuplicates } = buildControlOutIndex(controlOut ?? []);
+    this.controlOutIndex = index;
+    this.duplicateControlOutIds.push(...differingDuplicates);
   }
 
   async *start(): AsyncIterable<AgentEvent> {
@@ -437,7 +443,11 @@ export class CassetteAgentSession implements AgentSession {
       try {
         msg = JSON.parse(line);
       } catch {
-        warn(`::warning:: [replay] cassette events line ${i} is not valid JSON — skipping\n`);
+        // Bug 47: record the malformed line index so replayCassette can surface it as a
+        // replay_protocol_error assertion failure — a malformed line could conceal a failed
+        // assertion, so a silent skip risks a false-green.
+        warn(`::warning:: [replay] cassette events line ${i} is not valid JSON — recording as replay_protocol_error\n`);
+        this.malformedEventLines.push(i);
         continue;
       }
       for (const ev of parseMessage(msg)) {
@@ -488,8 +498,13 @@ export class CassetteAgentSession implements AgentSession {
  * (we don't have the decision IDs yet at index-build time), so we index all control_response
  * success envelopes here and let respond() silently ignore non-decision ones.
  */
-function buildControlOutIndex(controlOut: string[]): Map<string, Record<string, unknown>> {
+/** Bug 46: returns the index AND the list of request_ids that appeared with differing bodies.
+ *  Byte-identical duplicates are silently de-duplicated (no-op). Differing duplicates are warned
+ *  and the FIRST entry is kept (first-wins); the id is added to `differingDuplicates` so
+ *  replayCassette can surface it as a failing assertion in strict mode. */
+function buildControlOutIndex(controlOut: string[]): { index: Map<string, Record<string, unknown>>; differingDuplicates: string[] } {
   const index = new Map<string, Record<string, unknown>>();
+  const differingDuplicates: string[] = [];
   for (let i = 0; i < controlOut.length; i++) {
     const line = controlOut[i];
     if (!line.trim()) continue;
@@ -509,10 +524,25 @@ function buildControlOutIndex(controlOut: string[]): Map<string, Record<string, 
     // Skip mcp_response envelopes: they carry { mcp_response: { jsonrpc, id, ... } } not a decision body.
     if (body && typeof body === "object" && "mcp_response" in body) continue;
     if (rid && body && typeof body === "object") {
-      index.set(String(rid), body as Record<string, unknown>);
+      const ridStr = String(rid);
+      // Bug 46: detect duplicate request_id entries before overwriting.
+      if (index.has(ridStr)) {
+        const existing = index.get(ridStr)!;
+        if (canon(existing) !== canon(body as Record<string, unknown>)) {
+          // Differing bodies: warn loudly and record for strict-mode failure; first-wins so replay
+          // uses the originally-recorded envelope rather than a potentially corrupt later duplicate.
+          warn(
+            `::warning:: [replay] control-out.jsonl line ${i}: duplicate request_id "${ridStr}" with DIFFERENT body — keeping first entry; cassette may be corrupt\n`,
+          );
+          if (!differingDuplicates.includes(ridStr)) differingDuplicates.push(ridStr);
+        }
+        // byte-identical duplicate: silent no-op (de-duplicate)
+      } else {
+        index.set(ridStr, body as Record<string, unknown>);
+      }
     }
   }
-  return index;
+  return { index, differingDuplicates };
 }
 
 /**
@@ -1189,6 +1219,13 @@ export function cmdVerifyCassettes(args: string[]) {
     if ("error" in rc) return { file: f, findings: [], staleness: [], error: rc.error };
     const findings = doPrivacy ? scanCassette(rc.cassette, allow) : [];
     const staleness = doStaleness ? checkStaleness(rc.cassette, dirname(f)) : [];
+    // Bug 45: a cassette written by a NEWER harness version may carry semantics this version can't
+    // correctly interpret — treat it as a staleness failure in verify-cassettes (can't verify ⇒ not green).
+    const recordedVersion = rc.cassette.cassetteVersion ?? 0;
+    if (recordedVersion > CASSETTE_VERSION)
+      staleness.push(
+        `cassette format v${recordedVersion} is newer than this harness understands (v${CASSETTE_VERSION}) — upgrade cowork-harness (can't verify ⇒ not green)`,
+      );
     return { file: f, findings, staleness, error: undefined as string | undefined };
   });
   const realFindings = results.flatMap((r) => r.findings.filter((x) => x.cls !== "unscanned"));
@@ -1389,12 +1426,21 @@ export async function replayCassette(
   opts: { strict?: boolean; cassetteDir?: string } = {},
 ): Promise<RunResult> {
   // Cassette format version: ABSENT = legacy (0); a FUTURE version means this harness may misread fields
-  // it doesn't know about — warn loudly (forward-compat guard). Same-or-older replays normally.
+  // it doesn't know about. Bug 45: in strict mode this is a hard failure (future semantics may not be
+  // correctly interpreted → a false-green is possible). In non-strict mode, warn clearly that results may
+  // be unreliable and continue (forward-compat best-effort).
   const cassetteVersion = cassette.cassetteVersion ?? 0;
-  if (cassetteVersion > CASSETTE_VERSION)
-    warn(
-      `::warning:: [replay] cassette format v${cassetteVersion} is newer than this harness understands (v${CASSETTE_VERSION}) — some fields may be ignored or misread; upgrade cowork-harness\n`,
-    );
+  const futureVersionMsg =
+    cassetteVersion > CASSETTE_VERSION
+      ? `cassette format v${cassetteVersion} is newer than this harness understands (v${CASSETTE_VERSION}) — results may be unreliable; upgrade cowork-harness`
+      : undefined;
+  if (futureVersionMsg) {
+    if (opts.strict) {
+      // fail fast via the staleness path — the assertions push is handled below with staleness[]
+    } else {
+      warn(`::warning:: [replay] ${futureVersionMsg}\n`);
+    }
+  }
 
   const session = new CassetteAgentSession(cassette.events, cassette.controlOut);
 
@@ -1422,10 +1468,19 @@ export async function replayCassette(
       staleness.push(`baseline moved ${fp.baseline} → ${liveBaseline} since record — re-record before trusting this replay`);
     if (fp.skillHash) {
       const live = buildFingerprint(cassette.scenario.session, fp.baseline, opts.cassetteDir, cassette.scenario.skills);
-      if (live.skillHash === undefined)
-        warn(
-          "::warning:: [replay] skill fingerprint not re-checkable (local skill dirs not resolvable from this cassette location) — baseline check still applies\n",
-        );
+      if (live.skillHash === undefined) {
+        // Bug 44: under --strict, unresolvable skill dirs are a failure (can't verify ⇒ not green).
+        // Without --strict, warn but continue (the baseline check still applies).
+        if (opts.strict) {
+          staleness.push(
+            "skill dirs not resolvable from this cassette location — cannot verify skill staleness (--strict: treating as stale)",
+          );
+        } else {
+          warn(
+            "::warning:: [replay] skill fingerprint not re-checkable (local skill dirs not resolvable from this cassette location) — baseline check still applies\n",
+          );
+        }
+      }
       else if (live.skillHash !== fp.skillHash) {
         const recordedVersion = cassette.cassetteVersion ?? 0;
         if (recordedVersion < CASSETTE_VERSION) {
@@ -1598,6 +1653,34 @@ export async function replayCassette(
   // #1b: under --strict, a staleness mismatch is a failing assertion (non-zero exit), not just a warning.
   if (opts.strict)
     for (const s of staleness) assertions.push({ assertion: {} as Assertion, pass: false, message: `cassette stale (--strict): ${s}` });
+
+  // Bug 45: future cassette version — hard failure under --strict (forward semantics may not be
+  // correctly interpreted here, so a green replay would be a false-green).
+  if (futureVersionMsg && opts.strict)
+    assertions.push({ assertion: {} as Assertion, pass: false, message: `cassette format too new (--strict): ${futureVersionMsg}` });
+
+  // Bug 46: differing duplicate request_ids in control-out — hard failure under --strict.
+  for (const id of session.duplicateControlOutIds) {
+    if (opts.strict) {
+      assertions.push({
+        assertion: { replay_protocol_fidelity: true },
+        pass: false,
+        message: `control-out.jsonl has duplicate request_id "${id}" with differing bodies (--strict) — cassette may be corrupt; re-record`,
+      });
+    }
+    // In non-strict mode, the warning was already emitted during index construction.
+  }
+
+  // Bug 47: malformed event lines — always surface as a replay_protocol_error result (non-zero exit
+  // in strict; a warning-level result that still appears in output in non-strict). A malformed line
+  // could conceal a failed assertion (false-green risk), so it is never silently swallowed.
+  for (const idx of session.malformedEventLines) {
+    assertions.push({
+      assertion: { replay_protocol_fidelity: true },
+      pass: false,
+      message: `cassette events line ${idx} is not valid JSON — replay_protocol_error (malformed line may conceal a failed assertion)`,
+    });
+  }
 
   // §2.4: surface each serializeDecision mismatch as a failing replay_protocol_fidelity assertion.
   // Shape: { assertion: { replay_protocol_fidelity: true }, pass: false, message } — well-typed via types.ts.
