@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join, dirname, relative, isAbsolute, resolve, sep } from "node:path";
 import { type Scenario, type RunResult, type Assertion, Assertion as AssertionSchema } from "../types.js";
-import { executeScenario, parseScenarioFile, collectArtifacts, parseSessionFile } from "./execute.js";
+import { executeScenario, parseScenarioFile, collectArtifacts, parseSessionFile, slugForPath } from "./execute.js";
 import { loadSession, resolveSessionPaths } from "../session.js";
 import { loadBaseline } from "../baseline.js";
 import { Run, type RunHooks, type RunRecord } from "./run.js";
@@ -718,12 +718,13 @@ export function artifactJsonTargetsTruncated(scenario: Scenario, workRoot: strin
  *  Returns the first found path, or null if neither exists.
  *  Exported as _findScenarioOnDisk for unit tests only; not part of the public API. */
 export function _findScenarioOnDisk(cassettePath: string, scenarioName: string): string | null {
+  const safeName = slugForPath(scenarioName);
   const cassetteDir = dirname(cassettePath);
   const candidates = [
-    join(cassetteDir, "..", "scenarios", `${scenarioName}.yaml`),
-    join(cassetteDir, "..", "scenarios", `${scenarioName}.yml`),
-    join(cassetteDir, `${scenarioName}.yaml`),
-    join(cassetteDir, `${scenarioName}.yml`),
+    join(cassetteDir, "..", "scenarios", `${safeName}.yaml`),
+    join(cassetteDir, "..", "scenarios", `${safeName}.yml`),
+    join(cassetteDir, `${safeName}.yaml`),
+    join(cassetteDir, `${safeName}.yml`),
   ];
   for (const c of candidates) {
     if (existsSync(c)) return resolve(c);
@@ -957,7 +958,9 @@ async function recordScenarioObject(
   extraPolicyDirs: string[] = [],
 ): Promise<{ result: RunResult; cassettePath: string; artifacts: number }> {
   const result = await executeScenario(scenario);
-  const cassettePath = opts.cassettePath ?? join("cassettes", `${scenario.name}.cassette.json`);
+  const safeName = slugForPath(scenario.name);
+  const cassettePath = opts.cassettePath ?? join("cassettes", `${safeName}.cassette.json`);
+  if (!opts.cassettePath) containedPath("cassettes", `${safeName}.cassette.json`); // path traversal guard
   mkdirSync(dirname(cassettePath), { recursive: true });
   // A3: a failing live run frozen into a cassette is a latent false-signal — refuse unless opted in.
   // F-5: separate the run RESULT from the VERDICT (they're distinct — the run can succeed while an assertion
