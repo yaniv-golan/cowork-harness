@@ -24,6 +24,7 @@ import { makeRenderer, renderFooter, type RenderPlan } from "./renderer.js";
 import { jsonEnvelope, parseOutputFormat } from "./envelope.js";
 import { parseArgs } from "../cli-args.js";
 import { resolveInputs } from "./inputs.js";
+import { realProbe } from "./doctor.js";
 import { hashSkillDirs, hashSharedOnly, computeContentSig } from "./skill-hash.js";
 import { computeVerdict } from "./verdict.js";
 import { redactJsonLine, redactText, redactStructural, loadRedactionPolicy, type RedactionPolicy } from "../redact.js";
@@ -776,6 +777,66 @@ export async function cmdRecord(args: string[]) {
   if (isDir && p.options["--out"] !== undefined) {
     log("record: --out names a single cassette file and is not valid for a directory batch");
     return process.exit(2);
+  }
+
+  const dryRun = p.flags["--dry-run"] ?? false;
+
+  if (dryRun) {
+    // Conflict guard: --dry-run + --rerecord-stale is undefined — dry-run of a stale re-record
+    // has no clear semantics (it would need to select stale cassettes, which requires real FS work).
+    if (rerecordStale) {
+      log("record: --dry-run and --rerecord-stale cannot be combined");
+      return process.exit(2);
+    }
+
+    const token = realProbe.hasToken();
+    const agent = realProbe.agentBinary();
+    const tokenLine = token
+      ? "  token:  found"
+      : "  token:  ✗ MISSING — set CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY";
+    const agentLine = agent.ok
+      ? `  agent:  ${agent.path}`
+      : `  agent:  ✗ ${agent.error.split("\n")[0]}`;
+
+    if (isDir) {
+      const disc = discoverScenarios(target);
+      for (const s of disc.skipped) log(`· skipped: ${s}`);
+      for (const b of disc.broken) log(`✗ broken: ${b.file}: ${b.error}`);
+      if (disc.scenarios.length === 0) {
+        if (disc.broken.length === 0) {
+          log(`record --dry-run: no scenarios discovered under ${target}`);
+          // Exit 2 for "nothing discovered at all" — matches the non-dry-run B1 path.
+          return process.exit(2);
+        }
+        // Broken files found but no valid scenarios — exit 1 (broken, not nothing).
+        return process.exit(1);
+      }
+      log(`record --dry-run: ${disc.scenarios.length} scenario(s) in ${target}`);
+      for (let i = 0; i < disc.scenarios.length; i++) log(`  [${i + 1}] ${disc.scenarios[i]}`);
+      log(tokenLine);
+      log(agentLine);
+      // Exit 1 when there are broken files (they won't run but the user should know).
+      return process.exit(disc.broken.length > 0 ? 1 : 0);
+    }
+
+    // Single scenario dry-run.
+    let scenario;
+    try {
+      scenario = parseScenarioFile(target);
+    } catch (e) {
+      log(`record --dry-run: cannot parse scenario: ${(e as Error).message}`);
+      return process.exit(2);
+    }
+    // Mirror the default cassette path from recordScenarioObject so the dry-run report is accurate.
+    const cassettePath = p.options["--out"] ?? join("cassettes", `${scenario.name}.cassette.json`);
+    log("record --dry-run");
+    log(`  scenario: ${scenario.name}`);
+    log(`  file:     ${target}`);
+    log(`  fidelity: ${scenario.fidelity}`);
+    log(`  cassette: ${cassettePath}`);
+    log(tokenLine);
+    log(agentLine);
+    return process.exit(0);
   }
 
   // Auth guard: fail with a clear message if no model token is present.
