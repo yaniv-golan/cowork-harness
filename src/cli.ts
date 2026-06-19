@@ -15,6 +15,7 @@ import { sync } from "./sync/cowork-sync.js";
 import { runBoundaryChecks, formatBoundary } from "./boundary.js";
 import { cmdChat } from "./run/chat.js";
 import { cmdRecord, cmdReplay, cmdVerifyCassettes, cmdRehash } from "./run/cassette.js";
+import { cmdRunsGc } from "./run/runs-gc.js";
 import { resolveInputs } from "./run/inputs.js";
 import { cmdLint } from "./run/scenario-tool.js";
 import { cmdDoctor } from "./run/doctor.js";
@@ -80,6 +81,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
       [--skip-privacy|--skip-staleness]  skip one check
       [--allow <regex>]... [--allow-domain/-email <regex>]... [--allow-file <path>]... [--output-format json]
   rehash <dir/>                migrate cassette fingerprints to current version when content is provably unchanged (requires contentSig from v3+)
+  runs gc [--keep-last <n>]    prune accumulated run dirs, keeping N most recent per scenario (default: 5)
 
 ── CI lint + assertion reference ──────────────────────────────────────────────
   lint <scenario.yaml>…        check scenarios for silent false-greens (bundled scenario.py; needs python3 + PyYAML)
@@ -273,6 +275,7 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
     "usage: verify-run <run-dir> <scenario.yaml> [--output-format json]   (re-evaluate a scenario's assert: against a kept run dir; no live agent)",
   doctor: "usage: doctor [--tier protocol|container|microvm|hostloop|cowork] [--output-format json]   (read-only prerequisite check)",
   rehash: "usage: rehash <dir/> [--dry-run] [--output-format text|json]   (migrate cassettes across format bumps using contentSig verification; no re-record needed)",
+  runs: "usage: runs gc [--keep-last <n>] [--dry-run] [<runs-dir>]   (prune accumulated run dirs; default --keep-last 5)",
 };
 
 async function main() {
@@ -324,6 +327,7 @@ async function main() {
       "lint",
       "doctor",
       "rehash",
+      "runs",
     ];
     // The command-name footgun only applies to the space form (the equals form can't swallow the next
     // token as its value), but checking both is harmless and keeps the guard uniform.
@@ -405,6 +409,12 @@ async function main() {
       return cmdGates(rest);
     case "answer":
       return cmdAnswer(rest);
+    case "runs": {
+      const sub = rest[0];
+      if (sub === "gc") return cmdRunsGc(rest.slice(1));
+      log(`runs: unknown subcommand "${sub ?? ""}" — available: gc`);
+      return process.exit(2);
+    }
     default:
       log(`unknown command: ${cmd}\n`);
       printHelp();
