@@ -731,7 +731,7 @@ export async function cmdRecord(args: string[]) {
   try {
     p = parseArgs(args, {
       // --quiet/--verbose accepted for flag consistency but currently no-op in record (renderer plan is fixed).
-      booleans: ["--no-redact", "--allow-failing", "--rerecord-stale", "--quiet", "--verbose"],
+      booleans: ["--no-redact", "--allow-failing", "--rerecord-stale", "--quiet", "--verbose", "--dry-run"],
       values: ["--out", "--output-format", "--max-artifact-bytes"],
       noDashValue: ["--out"],
       enums: { "--output-format": ["text", "json"] },
@@ -771,6 +771,18 @@ export async function cmdRecord(args: string[]) {
   // `--out` names ONE cassette; it has no meaning for a directory batch — reject rather than silently ignore.
   if (isDir && p.options["--out"] !== undefined) {
     log("record: --out names a single cassette file and is not valid for a directory batch");
+    return process.exit(2);
+  }
+
+  // Auth guard: fail with a clear message if no model token is present.
+  // In-Docker containers cannot read the macOS Keychain; the error would otherwise
+  // surface as result:"error" + empty stderr after the agent spawns.
+  // Note: --dry-run bypasses this guard (dry-run branch exits before reaching here).
+  if (!(process.env.CLAUDE_CODE_OAUTH_TOKEN || process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN)) {
+    log(
+      "record: no model credentials — set CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY " +
+        "(in-Docker the macOS Keychain is not accessible; run `cowork-harness doctor` for full diagnostics)",
+    );
     return process.exit(2);
   }
 

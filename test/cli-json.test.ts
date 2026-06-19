@@ -271,6 +271,30 @@ describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
     expect(r.stderr).toMatch(/record takes a single scenario/);
   });
 
+  it("record: no token → exit 2 with a clear auth-guard message (before any agent spawn)", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "cc-auth-"));
+    writeIn(cwd, "s.yaml", 'prompt: hi\nfidelity: container\nbaseline: latest\n');
+    // Set all three auth vars to empty string so loadDotenv can't overwrite them
+    // (loadDotenv skips keys already defined in process.env, even if empty).
+    const r = spawnSync("node", [CLI, "record", "s.yaml"], {
+      encoding: "utf8",
+      cwd,
+      env: {
+        ...Object.fromEntries(
+          Object.entries(process.env).filter(
+            ([k]) => !["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"].includes(k),
+          ),
+        ),
+        CLAUDE_CODE_OAUTH_TOKEN: "",
+        ANTHROPIC_API_KEY: "",
+        ANTHROPIC_AUTH_TOKEN: "",
+      },
+    });
+    expect(r.status).toBe(2);
+    expect(r.stderr).toMatch(/no model credentials/);
+    expect(r.stderr).toMatch(/CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_API_KEY/);
+  });
+
   it("replay --cassette with a flag-looking value is a usage error, not a file error (exit 2)", () => {
     const r = run(["replay", "--cassette", "--output-format", "json"]);
     expect(r.code).toBe(2);
