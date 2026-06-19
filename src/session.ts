@@ -279,6 +279,13 @@ export function buildLaunchPlan(session: SessionConfig, baseline: PlatformBaseli
   const mountedBareNames = new Set<string>(); // across ALL marketplaces — dedupe bare `enabled` names
   const declaredLocalMktNames = new Set<string>(); // names of successfully-parsed local marketplaces
   const resolvedEnabled = new Set<string>(); // `enabled` entries that mounted (or hit the legit dedupe-skip)
+  const bareLocalSourceMissing = new Set<string>(); // bare enabled names found in a marketplace but with missing source
+  // local_plugins and remote_plugins deliver plugins outside the marketplace loop. A bare `enabled` name
+  // that matches one of these basenames must NOT error even if the marketplace entry has a missing source.
+  const nonMarketplacePluginNames = new Set<string>([
+    ...session.plugins.local_plugins.map((p) => basename(expand(p))),
+    ...session.plugins.remote_plugins.map((p) => basename(expand(p))),
+  ]);
   for (const mk of session.plugins.local_marketplaces) {
     const mkRoot = expand(mk);
     const manifestPath = join(mkRoot, ".claude-plugin", "marketplace.json");
@@ -328,7 +335,10 @@ export function buildLaunchPlan(session: SessionConfig, baseline: PlatformBaseli
         if (rel.startsWith("..") || isAbsolute(rel))
           throw new Error(`cowork-harness: marketplace entry.source "${entry.source}" escapes the marketplace root`);
       }
-      if (!existsSync(pluginSrc)) continue; // unresolved here; post-loop reconciliation decides whether to throw
+      if (!existsSync(pluginSrc)) {
+        if (!pMkt) bareLocalSourceMissing.add(en); // bare name with missing source; post-loop decides
+        continue; // unresolved here; post-loop reconciliation decides whether to throw
+      }
       // Bug 22: marketplace plugin sources must be directories (same kind-check as local_plugins / remote_plugins).
       if (!statSync(pluginSrc).isDirectory())
         throw new Error(`cowork-harness: marketplace entry.source "${entry.source ?? `./${pName}`}" is not a directory`);
@@ -364,7 +374,19 @@ export function buildLaunchPlan(session: SessionConfig, baseline: PlatformBaseli
   for (const en of session.plugins.enabled) {
     if (resolvedEnabled.has(en)) continue;
     const at = en.lastIndexOf("@");
-    if (at <= 0) continue; // bare name → may be remote/git or local_plugins delivery
+    if (at <= 0) {
+      // Bare name: error only when it was found in a local marketplace but its source was missing,
+      // AND it is not delivered via local_plugins/remote_plugins (which mount outside this loop).
+      if (bareLocalSourceMissing.has(en) && !nonMarketplacePluginNames.has(en)) {
+        if (!softMissing)
+          throw new Error(
+            `enabled plugin "${en}" was declared in a local marketplace but failed to mount (source directory missing). ` +
+              `Fix the path, or set COWORK_HARNESS_SOFT_MISSING=1 to skip it.`,
+          );
+        warn(`::warning:: [plugins] enabled "${en}" declared in local marketplace but failed to mount (COWORK_HARNESS_SOFT_MISSING)\n`);
+      }
+      continue; // bare name → may be remote/git or local_plugins delivery
+    }
     const pName = en.slice(0, at);
     const pMkt = en.slice(at + 1);
     if (!declaredLocalMktNames.has(pMkt)) continue; // names a non-local (remote/git) or undeclared marketplace

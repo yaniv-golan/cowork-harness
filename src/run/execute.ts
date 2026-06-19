@@ -2,7 +2,7 @@ import { warn } from "../io.js";
 import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync, readdirSync, statSync, lstatSync, realpathSync } from "node:fs";
 import { randomUUID, createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { join, dirname, resolve, basename, isAbsolute } from "node:path";
+import { join, dirname, resolve, basename, isAbsolute, sep } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { Scenario } from "../types.js";
 import type { RunResult } from "../types.js";
@@ -484,6 +484,13 @@ function writeRunJsonl(
 export function collectArtifacts(workRoot: string, prefixes: string[]): { path: string; bytes: number }[] {
   const out: { path: string; bytes: number }[] = [];
   const visited = new Set<string>();
+  // Resolve workRoot once — used in the containment assertion inside walk().
+  let workRootReal: string;
+  try {
+    workRootReal = realpathSync(workRoot);
+  } catch {
+    return out; // workRoot itself absent/unreadable
+  }
   const walk = (abs: string, rel: string) => {
     // Cycle guard: resolve the real path of this directory; if we've already walked it, stop.
     let real: string;
@@ -491,6 +498,12 @@ export function collectArtifacts(workRoot: string, prefixes: string[]): { path: 
       real = realpathSync(abs);
     } catch {
       return; // prefix dir absent / unreadable — not an error
+    }
+    // Containment: reject any entry whose realpath escapes workRoot. Catches prefix-level symlinks
+    // (not caught by the child lstatSync below) and any other realpath-diverging construct.
+    if (real !== workRootReal && !real.startsWith(workRootReal + sep)) {
+      warn(`::warning:: collectArtifacts: skipping "${rel}" — real path escapes work root\n`);
+      return;
     }
     if (visited.has(real)) return;
     visited.add(real);

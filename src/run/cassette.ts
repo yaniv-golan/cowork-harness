@@ -47,7 +47,7 @@ interface ManifestEntry {
    *  bodies, which would otherwise corrupt on a `toString("utf8")` round-trip (and then false-fail the
    *  sha256 verify, since the hash is over the RAW bytes). */
   encoding?: "utf8" | "base64";
-  truncated?: boolean; // too big to inline → hash-only (file_exists works; artifact_json cannot)
+  truncated?: boolean; // too big to inline → hash-only (file_exists FAILS on replay; artifact_json cannot run)
 }
 
 /** #1b: a staleness tripwire over the inputs that determine the recording — mirrors `asarFingerprint`
@@ -161,7 +161,7 @@ function decodeBody(e: ManifestEntry): Buffer {
 
 /** #1: materialize a manifest into a temp work root so replay can run the filesystem assertions against it.
  *  Small files get their inlined body (decoded per its encoding marker); hash-only (truncated)
- *  files get an empty placeholder (file_exists still passes; artifact_json on them fails loud — it needs the
+ *  files get an empty placeholder (file_exists FAILS; artifact_json on them fails loud — it needs the
  *  body, which only small files carry). each path is containment-checked before writing so a hostile
  *  cassette entry can't escape the temp root. every non-truncated body is verified against its
  *  recorded sha256 (over the decoded RAW bytes) — a mismatch fails replay (throws). */
