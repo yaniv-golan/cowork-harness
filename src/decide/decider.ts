@@ -62,7 +62,22 @@ export function Chain(...deciders: Decider[]): Decider {
 
 /** Scripted rules (`--answer`/`--answer-policy`/scenario `answers:`) → response, else ABSTAIN. */
 export class ScriptedDecider implements Decider {
-  constructor(private rules: AnswerRule[]) {}
+  // Bug 15: pre-compiled regex map, keyed by when_question pattern string. Compiled once at construction
+  // so the hot decision path never calls compileUserRegex() per question. An invalid pattern throws at
+  // construction time (i.e. at scenario/CLI-arg loading time), not on the first matching attempt.
+  private compiledPatterns: Map<string, RegExp>;
+
+  constructor(private rules: AnswerRule[]) {
+    this.compiledPatterns = new Map();
+    for (const rule of rules) {
+      if (rule.when_question !== undefined && !this.compiledPatterns.has(rule.when_question)) {
+        const c = compileUserRegex(rule.when_question);
+        if ("error" in c)
+          throw new Error(`bad regex in when_question "${rule.when_question}": ${c.error}`);
+        this.compiledPatterns.set(rule.when_question, c.re);
+      }
+    }
+  }
 
   async decide(req: DecisionRequest, _ctx: RunContext): Promise<Decision | Abstain> {
     if (req.kind === "question") {
@@ -72,11 +87,9 @@ export class ScriptedDecider implements Decider {
         const text = q.question ?? q.header ?? "";
         const rule = this.rules.find((r) => {
           if (!r.when_question) return false;
-          const c = compileUserRegex(r.when_question);
-          // Malformed pattern in a CLI-supplied rule (--answer/--answer-policy) — load-time validation
-          // catches file-based scenarios; this guards the CLI path.
-          if ("error" in c) throw new Error(`bad regex in when_question "${r.when_question}": ${c.error}`);
-          return c.re.test(text);
+          // Use the pre-compiled regex (compiled at construction time — never compileUserRegex() here).
+          const re = this.compiledPatterns.get(r.when_question)!;
+          return re.test(text);
         });
         if (!rule || (rule.choose === undefined && rule.answer === undefined)) {
           unmatched.push(text);
@@ -386,10 +399,20 @@ export class PromptDecider implements Decider {
       throw new UnansweredError("prompt policy needs a terminal", "use --on-unanswered fail|first or run interactively");
     if (req.kind === "permission") {
       const labels = (req.options ?? []).map((o) => o.label);
+      // Bug 20: a web_fetch approval with options present but empty would spin the coercedPerm loop
+      // forever — coerceLabel always returns matched:false when labels is empty. Fail immediately with
+      // a clear protocol error (the protocol guarantees at least one option on an options-bearing gate).
+      if (labels.length === 0)
+        throw new UnansweredError(
+          `protocol error: permission request for "${req.tool}" carries an empty options array`,
+          "the protocol guarantees at least one option on an options-bearing permission gate",
+        );
       const permPrompt = `${req.tool}?\n${labels.map((l, i) => `  ${i + 1}) ${l}`).join("\n")}\n> `;
       let coercedPerm: { value: string; matched: boolean };
       do {
         const ans = await this.ask(permPrompt);
+        // coerceLabel accepts: 1-based index, exact label (case-insensitive), "(Recommended)" suffix
+        // tolerance, "recommended" keyword, and "first" keyword (option 1). "last" is NOT a keyword.
         coercedPerm = coerceLabel(ans, labels);
         if (!coercedPerm.matched)
           process.stderr.write(`Unrecognized input. Please enter a number (1–${labels.length}) or one of: ${labels.join(", ")}\n`);
@@ -414,6 +437,8 @@ export class PromptDecider implements Decider {
         let coerced: { value: string; matched: boolean };
         do {
           const raw = await this.ask(optionList);
+          // coerceLabel accepts: 1-based index, exact label (case-insensitive), "(Recommended)" suffix
+          // tolerance, "recommended" keyword, and "first" keyword (option 1). "last" is NOT a keyword.
           coerced = coerceLabel(raw, optionLabels);
           if (!coerced.matched)
             process.stderr.write(
@@ -528,6 +553,20 @@ export class ExternalDecider implements Decider {
             `Key your reply by the exact question text: {"answers":{${JSON.stringify(text)}:"<label or 1-based index>"}}`,
           );
         } else {
+          // Bug 19: when the question has no options it is a free-text / open-ended gate — coerceLabel
+          // always returns matched:false for an empty labels array and would throw below. Accept any
+          // non-empty string verbatim (the external helper is the authoritative answerer for these gates).
+          if (labels.length === 0) {
+            if (!raw || String(raw).trim() === "")
+              throw new UnansweredError(
+                `external decider sent an empty answer for the open-ended question "${text}"`,
+                `provide a non-empty string as the answer`,
+              );
+            answers[text] = String(raw);
+            continue;
+          }
+          // coerceLabel accepts: 1-based index, exact label (case-insensitive), "(Recommended)" suffix
+          // tolerance, "recommended" keyword, and "first" keyword (option 1). "last" is NOT a keyword.
           const coerced = coerceLabel(raw, labels);
           if (!coerced.matched)
             // ExternalDecider is the TERMINAL decider — a present-but-mistyped label silently greening

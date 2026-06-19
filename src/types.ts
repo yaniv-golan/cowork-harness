@@ -97,10 +97,25 @@ export const AnswerRule = z
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: "answer rule has no matcher — set `when_question` or `when_tool`" });
       return;
     }
+    // Bug 13: reject rules that set both matcher families — their precedence is undefined and the rule
+    // would silently act as either a question rule or a tool rule depending on which branch runs first.
+    if (hasQuestion && hasTool)
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "answer rule sets both `when_question` and `when_tool` — use exactly one matcher family per rule",
+      });
     if (hasQuestion && r.choose === undefined && r.answer === undefined)
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: "a `when_question` rule needs an action — set `choose` or `answer`" });
     if (hasTool && r.decide === undefined && r.allow_if === undefined)
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: "a `when_tool` rule needs an action — set `decide` or `allow_if`" });
+    // Bug 14: reject rules that set both `allow_if` and `decide` — `decide` silently takes precedence
+    // over `allow_if` in the runtime's if/else-if chain, making `allow_if` unreachable and the author's
+    // intent opaque. Require exactly one action field.
+    if (r.allow_if !== undefined && r.decide !== undefined)
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "answer rule sets both `allow_if` and `decide` — use exactly one: `decide` for a static outcome, `allow_if` for a predicate",
+      });
   });
 export type AnswerRule = z.infer<typeof AnswerRule>;
 
