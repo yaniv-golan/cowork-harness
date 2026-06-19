@@ -63,8 +63,8 @@ interface Fingerprint {
 }
 
 export interface Cassette {
-  $schema?: string;    // provenance: schema URL for this cassette format version
-  generator?: string;  // provenance: tool that produced this file ("cowork-harness")
+  $schema?: string; // provenance: schema URL for this cassette format version
+  generator?: string; // provenance: tool that produced this file ("cowork-harness")
   // Schema version of the cassette FORMAT (not the package). Bump when the structure changes in a way a
   // reader must branch on (a new manifest-entry shape, a fingerprint-algorithm change, a2's nonDeterministic
   // provenance, …). ABSENT = pre-versioning legacy (treated as 0). Stamping it now — while ~no cassettes
@@ -791,12 +791,8 @@ export async function cmdRecord(args: string[]) {
 
     const token = realProbe.hasToken();
     const agent = realProbe.agentBinary();
-    const tokenLine = token
-      ? "  token:  found"
-      : "  token:  ✗ MISSING — set CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY";
-    const agentLine = agent.ok
-      ? `  agent:  ${agent.path}`
-      : `  agent:  ✗ ${agent.error.split("\n")[0]}`;
+    const tokenLine = token ? "  token:  found" : "  token:  ✗ MISSING — set CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY";
+    const agentLine = agent.ok ? `  agent:  ${agent.path}` : `  agent:  ✗ ${agent.error.split("\n")[0]}`;
 
     if (isDir) {
       const disc = discoverScenarios(target);
@@ -1278,7 +1274,11 @@ export function cmdRehash(args: string[]): void {
 
     // No fingerprint — no skill dirs were tracked; only baseline staleness applies, which requires re-record.
     if (!cassette.fingerprint?.skillHash) {
-      results.push({ file, action: "skipped", reason: "no skillHash in fingerprint — only baseline drift is possible; re-record if needed" });
+      results.push({
+        file,
+        action: "skipped",
+        reason: "no skillHash in fingerprint — only baseline drift is possible; re-record if needed",
+      });
       continue;
     }
 
@@ -1287,8 +1287,7 @@ export function cmdRehash(args: string[]): void {
       results.push({
         file,
         action: "error",
-        reason:
-          "no contentSig (recorded before v3) — re-record once to enable `rehash` for future format bumps",
+        reason: "no contentSig (recorded before v3) — re-record once to enable `rehash` for future format bumps",
       });
       continue;
     }
@@ -1304,7 +1303,12 @@ export function cmdRehash(args: string[]): void {
     }
 
     // Compute current contentSig from skill dirs relative to the cassette location.
-    const liveFingerprint = buildFingerprint(cassette.scenario.session, cassette.fingerprint.baseline, dirname(file), cassette.scenario.skills);
+    const liveFingerprint = buildFingerprint(
+      cassette.scenario.session,
+      cassette.fingerprint.baseline,
+      dirname(file),
+      cassette.scenario.skills,
+    );
 
     if (!liveFingerprint.contentSig) {
       results.push({ file, action: "error", reason: "skill dirs not resolvable from cassette location — cannot compute contentSig" });

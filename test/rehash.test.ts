@@ -101,7 +101,16 @@ describe.skipIf(!can)("rehash CLI", () => {
     const dir = mkdtempSync(join(tmpdir(), "cwh-rehash-"));
     const body = {
       cassetteVersion: 2,
-      scenario: { name: "s", baseline: "latest", session: "(inline)", fidelity: "container", prompt: "hi", answers: [], expect_denied: [], assert: [] },
+      scenario: {
+        name: "s",
+        baseline: "latest",
+        session: "(inline)",
+        fidelity: "container",
+        prompt: "hi",
+        answers: [],
+        expect_denied: [],
+        assert: [],
+      },
       events: [
         JSON.stringify({ type: "system", subtype: "init" }),
         JSON.stringify({ type: "result", subtype: "success", is_error: false }),
@@ -126,7 +135,16 @@ describe.skipIf(!can)("rehash CLI", () => {
     const dir = mkdtempSync(join(tmpdir(), "cwh-rehash-"));
     const body = {
       cassetteVersion: 2,
-      scenario: { name: "s", baseline: "not-a-real-baseline", session: "(inline)", fidelity: "container", prompt: "hi", answers: [], expect_denied: [], assert: [] },
+      scenario: {
+        name: "s",
+        baseline: "not-a-real-baseline",
+        session: "(inline)",
+        fidelity: "container",
+        prompt: "hi",
+        answers: [],
+        expect_denied: [],
+        assert: [],
+      },
       events: [
         JSON.stringify({ type: "system", subtype: "init" }),
         JSON.stringify({ type: "result", subtype: "success", is_error: false }),
