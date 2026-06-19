@@ -28,7 +28,7 @@ import { realProbe } from "./doctor.js";
 import { hashSkillDirs, hashSharedOnly, computeContentSig } from "./skill-hash.js";
 import { computeVerdict } from "./verdict.js";
 import { redactJsonLine, redactText, redactStructural, loadRedactionPolicy, type RedactionPolicy } from "../redact.js";
-import { collectSecrets, scrub } from "../secrets.js";
+import { collectSecrets, scrub, scrubField } from "../secrets.js";
 import { scanText, DEFAULT_SCAN_PATTERNS, EMAIL_SCAN_PATTERNS, type ScanFinding, type AllowInput, type AllowPattern } from "../scan.js";
 import { parse as parseYaml } from "yaml";
 
@@ -594,7 +594,11 @@ export function redactCassette(cassette: Cassette, policy: RedactionPolicy): Cas
       path: redactText(a.path, policy), // C1: a filename can name a customer (outputs/Acme-cap-table.json)
       // a base64 (binary) body has no text PII to redact, and redacting it would corrupt the bytes
       // and then false-fail the replay-time sha256 verify — leave binary bodies untouched.
-      ...(a.body !== undefined && a.encoding !== "base64" ? { body: redactJsonLine(a.body, policy) } : {}),
+      // Also skip bodies that are already secret-scrub redaction markers ([REDACTED:*]): rewriting
+      // them without recomputing sha256 would produce a misleading "corrupt cassette" error at replay.
+      ...(a.body !== undefined && a.encoding !== "base64" && !a.body.startsWith("[REDACTED")
+        ? { body: redactJsonLine(a.body, policy) }
+        : {}),
     })),
     fingerprint: cassette.fingerprint
       ? { ...cassette.fingerprint, skillSources: cassette.fingerprint.skillSources?.map((s) => redactText(s, policy)) }
@@ -1072,11 +1076,32 @@ async function recordScenarioObject(
   // C2: buildManifest reads output bodies RAW (executeScenario scrubs result/events/control-out, NOT
   // outputs/) — secret-scrub each body before it is committed.
   const secrets = collectSecrets();
-  // a base64 (binary) body must NOT be scrubbed — scrub mutates text matches and would corrupt the
-  // bytes, then false-fail the replay-time sha256 verify. Text bodies are scrubbed as before (C2).
-  const artifacts = (result.workDir ? buildManifest(result.workDir, opts.maxArtifactBytes) : []).map((a) =>
-    a.body !== undefined && a.encoding !== "base64" ? { ...a, body: scrub(a.body, secrets) } : a,
-  );
+  // Text bodies are scrubbed in-place (C2). Base64 (binary) bodies cannot be scrubbed with plain
+  // `scrub` — text-substitution corrupts the bytes and then false-fails the replay-time sha256 verify.
+  // Instead use `scrubField`, which whole-field-decodes first: if the decoded content contains a secret
+  // (covering the base64(prefix+TOKEN+suffix) case), the entire body is replaced with a redaction marker,
+  // `encoding` is cleared (marker is plain text), and sha256 is recomputed so replay verification stays
+  // intact. Artifact assertions on a redacted binary body will fail at replay — the ::warning:: flags this.
+  const artifacts = (result.workDir ? buildManifest(result.workDir, opts.maxArtifactBytes) : []).map((a) => {
+    if (a.body === undefined) return a;
+    if (a.encoding === "base64") {
+      const scrubbed = scrubField(a.body, secrets);
+      if (scrubbed === a.body) return a;
+      warn(
+        `::warning:: record: artifact "${a.path}" contains a secret in base64-encoded content — ` +
+          `body replaced with redaction marker; artifact_json/user_visible_artifact assertions on this artifact will fail at replay\n`,
+      );
+      // Recompute sha256 over the marker bytes (utf8) so materializeManifest's verify passes:
+      // decodeBody reads encoding-undefined as utf8, matching this hash.
+      const newSha256 = createHash("sha256").update(Buffer.from(scrubbed, "utf8")).digest("hex");
+      return { ...a, body: scrubbed, encoding: undefined, sha256: newSha256 };
+    }
+    // Also apply scrubField to utf8 bodies: safe because scrubField calls scrub first and the
+    // whole-field base64 branch only fires when the entire value is a pure base64 blob — ordinary
+    // text passes through unchanged. This closes the gap for text artifacts whose content is
+    // itself a base64(prefix+TOKEN+suffix) blob (e.g. a .txt file containing an encoded credential).
+    return { ...a, body: scrubField(a.body, secrets) };
+  });
   // F-9: if an `artifact_json` targets an artifact we had to truncate, it passes here (on-disk) but FAILS
   // replay (no committed body). Surface that record→replay asymmetry NOW, at its cause, instead of letting a
   // green record produce a red replay in CI. Honor --allow-failing (warn, don't block) like the verdict gate.

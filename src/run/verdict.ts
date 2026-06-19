@@ -8,7 +8,8 @@ export interface VerdictSignal {
     | "outputs_delete"
     | "host_path_leak"
     | "non_deterministic"
-    | "l0_plugin_divergence";
+    | "l0_plugin_divergence"
+    | "prompt_asset_missing";
   severity: "fail" | "warn";
   message: string;
 }
@@ -92,6 +93,15 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
       code: "non_deterministic",
       severity: "warn",
       message: "non-deterministic (LLM/external/human-decided) — a green run is NOT reproducible",
+    });
+
+  if (result.fidelityWarnings?.some((w) => w.includes("referenced asset not found")))
+    signals.push({
+      code: "prompt_asset_missing",
+      severity: "warn",
+      message:
+        "run proceeded with a missing prompt asset (COWORK_HARNESS_ALLOW_MISSING_PROMPT=1) — " +
+        "Cowork framing may be incomplete (fidelity gap)",
     });
 
   const pass = !signals.some((s) => s.severity === "fail");

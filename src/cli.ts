@@ -254,7 +254,7 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
   list: "usage: list [--output-format text|json]   (list available platform baselines)",
   "boundary-check": "usage: boundary-check [<baseline>] [--session <file>] [--output-format text|json]",
   vm: "usage: vm <init|status|delete|prune> [--output-format text|json]   (macOS arm64 only)\n  init    create the L2 Apple-VZ microVM\n  status  show running VM state\n  delete  remove a named VM\n  prune   drop all orphaned VMs",
-  chat: "usage: chat <skill-folder> [prompt] [--fidelity protocol|container|hostloop] [--model <id>]\n              [--upload <file>]... [--folder <dir>]... [--verbose] [--raw]\n       --raw: native cowork mode via docker run -it; egress sandbox NOT applied; --model/--fidelity ignored\n       --fidelity: protocol/container/hostloop only (no microvm/cowork); protocol = no Docker, no sandbox",
+  chat: "usage: chat <skill-folder> [prompt] [--fidelity protocol|container|hostloop] [--model <id>]\n              [--upload <file>]... [--folder <dir>]... [--plugin <dir>]... [--verbose] [--raw]\n       --raw: native cowork mode via docker run -it; egress sandbox NOT applied; --model/--fidelity ignored\n       --fidelity: protocol/container/hostloop only (no microvm/cowork); protocol = no Docker, no sandbox",
   record:
     "usage: record <scenario.yaml | dir/> [--out <file>] [--output-format text|json] [--rerecord-stale] [--no-redact] [--allow-failing] [--max-artifact-bytes <n>] [--dry-run]",
   replay:
@@ -459,6 +459,10 @@ function flagValue(args: string[], i: number, flag: string): string {
   const v = args[i + 1];
   if (v === undefined) {
     log(`${flag} requires a value (none provided)`); // stderr usage error
+    process.exit(2);
+  }
+  if (v.trim() === "") {
+    log(`${flag} requires a non-empty value`);
     process.exit(2);
   }
   return v;

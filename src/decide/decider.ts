@@ -601,9 +601,9 @@ export class ExternalDecider implements Decider {
             answers[text] = String(raw);
             continue;
           }
-          // coerceLabel accepts: 1-based index, exact label (case-insensitive), "(Recommended)" suffix
-          // tolerance, "recommended" keyword, and "first" keyword (option 1). "last" is NOT a keyword.
-          const coerced = coerceLabel(raw, labels);
+          // "first" is a documented shorthand for scripted/human deciders but NOT for external helpers —
+          // a helper returning the literal string "first" must match an actual label, not be coerced to option 1.
+          const coerced = coerceLabel(raw, labels, false);
           if (!coerced.matched)
             // ExternalDecider is the TERMINAL decider — a present-but-mistyped label silently greening
             // option 1 is the false-green the ethos forbids. Fail loud (symmetric with the missing-key
@@ -715,7 +715,7 @@ function warnDuplicateLabels(labels: string[], context: string): void {
  *  Returns a discriminated result: `matched` is true when the value was found in `labels`
  *  (by index or case-insensitive name); false when the fallback to `labels[0]` was used.
  *  Shared by the TTY prompt and the external decider so both accept the same lenient forms (Opus L4). */
-export function coerceLabel(a: string | number, labels: string[]): { value: string; matched: boolean } {
+export function coerceLabel(a: string | number, labels: string[], enableFirstShorthand = true): { value: string; matched: boolean } {
   if (typeof a === "number") {
     const resolved = labels[a - 1];
     return resolved !== undefined ? { value: resolved, matched: true } : { value: labels[0] ?? String(a), matched: false };
@@ -744,7 +744,7 @@ export function coerceLabel(a: string | number, labels: string[]): { value: stri
     const rec = labels.find((l) => /\(recommended\)\s*$/i.test(l));
     if (rec !== undefined) return { value: rec, matched: true };
   }
-  if (s.toLowerCase() === "first" && labels.length > 0) return { value: labels[0], matched: true };
+  if (enableFirstShorthand && s.toLowerCase() === "first" && labels.length > 0) return { value: labels[0], matched: true };
   return { value: labels[0] ?? s, matched: false };
 }
 

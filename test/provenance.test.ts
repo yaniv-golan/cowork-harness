@@ -85,7 +85,7 @@ describe("#30 — web_fetch provenance gate (G1t port, via the handler)", () => 
   ) => {
     const egress: EgressEntry[] = [];
     const ref = { current: prov };
-    const h = makeWorkspaceHandler("c", "/mnt", "docker", ["other.example"], (e) => egress.push(e), ref, rawFetch, resolve);
+    const h = makeWorkspaceHandler("c", "/mnt", "docker", ["other.example"], (e) => egress.push(e), undefined, ref, rawFetch, resolve);
     const out = (await h("workspace", { method: "tools/call", params: { name: "web_fetch", arguments: { url } } })) as {
       result: { isError?: boolean; content: { text: string }[] };
     };
@@ -205,7 +205,7 @@ describe("web_fetch Path B — U1t + manual redirect re-check (provenance off)",
     const egress: EgressEntry[] = [];
     // provenanceRef + fetchImpl undefined → Path B; inject rawFetch for the redirect loop (spawn-free).
     // A network-free DNS stub keeps the SSRF backstop from NXDOMAIN-denying the synthetic test hosts.
-    const h = makeWorkspaceHandler("c", "/mnt", "docker", allow, (e) => egress.push(e), undefined, rawFetch, resolve);
+    const h = makeWorkspaceHandler("c", "/mnt", "docker", allow, (e) => egress.push(e), undefined, undefined, rawFetch, resolve);
     const out = (await h("workspace", { method: "tools/call", params: { name: "web_fetch", arguments: { url } } })) as {
       result: { isError?: boolean; content: { text: string }[] };
     };
@@ -327,7 +327,7 @@ describe("web_fetch DNS-rebind SSRF backstop — Path A (provenance), and litera
   const run = async (url: string, resolve: Resolver, rawFetch: RawFetch = ok("BODY")) => {
     const egress: EgressEntry[] = [];
     const ref = { current: fake({}) };
-    const h = makeWorkspaceHandler("c", "/mnt", "docker", ["other.example"], (e) => egress.push(e), ref, rawFetch, resolve);
+    const h = makeWorkspaceHandler("c", "/mnt", "docker", ["other.example"], (e) => egress.push(e), undefined, ref, rawFetch, resolve);
     const out = (await h("workspace", { method: "tools/call", params: { name: "web_fetch", arguments: { url } } })) as {
       result: { isError?: boolean; content: { text: string }[] };
     };
