@@ -67,7 +67,19 @@ export function cmdRunsGc(args: string[]): void {
         }
       })
       .sort((a, b) => {
-        const mtimeDiff = statSync(b.path).mtimeMs - statSync(a.path).mtimeMs;
+        let aMtime = 0,
+          bMtime = 0;
+        try {
+          aMtime = statSync(a.path).mtimeMs;
+        } catch {
+          /* deleted between filter and sort — treat as oldest */
+        }
+        try {
+          bMtime = statSync(b.path).mtimeMs;
+        } catch {
+          /* deleted between filter and sort — treat as oldest */
+        }
+        const mtimeDiff = bMtime - aMtime;
         return mtimeDiff !== 0 ? mtimeDiff : b.name.localeCompare(a.name);
       })
       .map(({ path }) => path);

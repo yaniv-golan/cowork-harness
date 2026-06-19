@@ -28,6 +28,30 @@
     "outputsDir": { "type": "string" },
     "artifacts": { "type": "array" },
     "nonDeterministic": { "type": "boolean" },
-    "nonDeterministicTerminal": { "type": "boolean" }
+    "nonDeterministicTerminal": { "type": "boolean" },
+    "permissiveAutoAllow": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "#6: off-registry auto-allows (real Cowork blocks these); non-empty means NOT a faithful pass"
+    },
+    "scan": {
+      "type": "object",
+      "description": "Post-run scan signals (live lane only)",
+      "properties": {
+        "outputsDeletes": { "type": "array", "items": { "type": "string" } },
+        "hostPathLeaked": { "type": "boolean" },
+        "selfHealRan": { "type": "boolean" }
+      }
+    },
+    "effectiveFidelity": {
+      "type": "string",
+      "description": "The fidelity tier actually used (differs from fidelity when fidelity:'cowork')"
+    },
+    "fidelityWarnings": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "#49: structured prompt warnings visible to JSON callers"
+    },
+    "l0PluginDivergence": { "type": "boolean", "description": "#20: failing fidelity signal for protocol+plugins" }
   }
 }

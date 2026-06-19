@@ -193,7 +193,7 @@ Output:
   --quiet, -q                      verdict footer only            --verbose, -V   + thinking/tool inputs/sub-agent tree
   --keep                           print the run dir + deliverable path (runs are always kept on disk)
   --model <id>                     override the session model
-  --dry-run                        resolve + print the plan, don't run        NO_COLOR=1   disable ANSI
+  --dry-run                        preview scenarios, token and binary checks, without recording     NO_COLOR=1   disable ANSI
 
 Long runs:  an idle "still running" heartbeat prints on stderr after ~30s of silence.
             COWORK_HARNESS_NO_HEARTBEAT=1 disables it; COWORK_HARNESS_HEARTBEAT_MS tunes the interval.
@@ -840,7 +840,14 @@ async function cmdSkill(rawArgs: string[]) {
     else if (a === "--answer") {
       const raw = flagValueStrict(args, i++, a);
       const parts = splitEq(raw);
-      if (!parts) fail("skill", "usage", `--answer requires "question-regex=choice" (got "${raw}" — both sides must be non-empty)`, undefined, flags.output === "json");
+      if (!parts)
+        fail(
+          "skill",
+          "usage",
+          `--answer requires "question-regex=choice" (got "${raw}" — both sides must be non-empty)`,
+          undefined,
+          flags.output === "json",
+        );
       const [q, choose] = parts!;
       answers.push({ when_question: q, choose });
     } else if (a === "--answer-policy") answerPolicy = flagValueStrict(args, i++, a);
@@ -1298,7 +1305,13 @@ function cmdList(args: string[] = []) {
   const files = readdirSync(BASELINES_DIR).filter((f) => f.endsWith(".json"));
   if (json) {
     // emit a JSON array of objects (filename + name stem) to stdout
-    out(JSON.stringify(files.map((f) => ({ file: f, name: f.replace(/\.json$/, "") })), null, 2));
+    out(
+      JSON.stringify(
+        files.map((f) => ({ file: f, name: f.replace(/\.json$/, "") })),
+        null,
+        2,
+      ),
+    );
   } else {
     for (const f of files) out(f);
   }
@@ -1335,7 +1348,8 @@ async function cmdDecide(args: string[]) {
     else if (a === "--answer") {
       const raw = flagValueStrict(args, i++, a);
       const parts = splitEq(raw);
-      if (!parts) fail("decide", "usage", `--answer requires "question-regex=choice" (got "${raw}" — both sides must be non-empty)`, undefined, json);
+      if (!parts)
+        fail("decide", "usage", `--answer requires "question-regex=choice" (got "${raw}" — both sides must be non-empty)`, undefined, json);
       const [q, choose] = parts!;
       rules.push({ when_question: q, choose });
     }
@@ -1502,7 +1516,14 @@ function cmdAnswer(args: string[]) {
     } else if (a === "--answer") {
       const raw = flagValueStrict(args, i++, a);
       const parts = splitEq(raw);
-      if (!parts) return void fail("answer", "usage", `--answer requires "question=choice" (got "${raw}" — both sides must be non-empty)`, undefined, json);
+      if (!parts)
+        return void fail(
+          "answer",
+          "usage",
+          `--answer requires "question=choice" (got "${raw}" — both sides must be non-empty)`,
+          undefined,
+          json,
+        );
       const [q, label] = parts;
       pairs.push({ q, label });
     } else if (a === "--output-format") {
@@ -1808,8 +1829,13 @@ function cmdTrace(args: string[]) {
     "trace",
     args,
     [
-      "--view", "--output-format", "--output-format=json", "--output-format=text",
-      "--tools", "--gates", "--dispatches", // legacy aliases
+      "--view",
+      "--output-format",
+      "--output-format=json",
+      "--output-format=text",
+      "--tools",
+      "--gates",
+      "--dispatches", // legacy aliases
     ],
     json,
   );
