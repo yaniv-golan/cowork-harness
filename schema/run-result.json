@@ -1,0 +1,33 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/yaniv-golan/cowork-harness/main/schema/run-result.json",
+  "title": "RunResult",
+  "description": "Structured output written to runs/<sha>/result.json by cowork-harness executeScenario",
+  "type": "object",
+  "required": ["scenario", "fidelity", "baseline", "result", "decisions", "egress", "assertions", "outDir"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "generator": { "type": "string" },
+    "scenario": { "type": "string" },
+    "prompt": { "type": "string" },
+    "fidelity": { "type": "string" },
+    "baseline": { "type": "string" },
+    "result": { "type": "string", "enum": ["success", "error"] },
+    "decisions": { "type": "array" },
+    "toolCounts": { "type": "object" },
+    "gateDeliveries": { "type": "array" },
+    "egress": { "type": "array" },
+    "assertions": { "type": "array" },
+    "subagents": { "type": "array" },
+    "unanswered": { "type": "array" },
+    "usage": { "type": "object" },
+    "cost": { "type": "object" },
+    "durationMs": { "type": "number" },
+    "outDir": { "type": "string" },
+    "workDir": { "type": "string" },
+    "outputsDir": { "type": "string" },
+    "artifacts": { "type": "array" },
+    "nonDeterministic": { "type": "boolean" },
+    "nonDeterministicTerminal": { "type": "boolean" }
+  }
+}

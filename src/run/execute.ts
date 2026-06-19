@@ -20,6 +20,8 @@ import { evaluate, hostMatches } from "../assert.js";
 import { compileUserRegex } from "../regex.js";
 import { renderPrompts } from "../prompt.js";
 import { LiveAgentSession, type SdkMcp } from "../agent/session.js";
+
+const RUN_RESULT_SCHEMA_URL = "https://raw.githubusercontent.com/yaniv-golan/cowork-harness/main/schema/run-result.json";
 import { buildDecider, ExternalDecider, LlmDecider, type Decider, type OnUnanswered, UnansweredError } from "../decide/decider.js";
 import { type DecisionChannel } from "../decide/external-channel.js";
 import { claudeCliComplete } from "../decide/llm-transport.js";
@@ -319,6 +321,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   }
 
   const result: RunResult = {
+    $schema: RUN_RESULT_SCHEMA_URL,
+    generator: "cowork-harness",
     scenario: scenario.name,
     prompt: scenario.prompt, // persisted for `scaffold --from-run`
     fidelity: scenario.fidelity,

@@ -227,6 +227,8 @@ export const Scenario = z.preprocess((raw) => {
 export type Scenario = z.infer<typeof ScenarioObject>;
 
 export interface RunResult {
+  $schema?: string;
+  generator?: string;
   scenario: string;
   prompt?: string; // the prompt that was run — persisted so `scaffold --from-run` can reconstruct the scenario
   fidelity: string;
