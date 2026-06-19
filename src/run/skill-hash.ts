@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readdirSync, statSync, readFileSync } from "node:fs";
+import { readdirSync, statSync, lstatSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 /**
@@ -76,12 +76,19 @@ function readHashIgnore(root: string): string[] {
  *  file or directory subtree from the hash. Absent ⇒ include everything (byte-identical to the legacy hash). */
 type AcceptFn = (relPath: string) => boolean;
 
-function hashDir(dir: string, hash: ReturnType<typeof createHash>, rel = "", accept?: AcceptFn): void {
+/** Bug 42: uses lstatSync (does NOT follow symlinks) so an in-tree symlink can't silently include
+ *  out-of-tree content. Symlinks to directories are skipped with a warning; symlinks to files are
+ *  skipped with a warning (same policy as collectArtifacts in execute.ts).
+ *  Bug 43: push any read error into `errors` rather than silently continuing — the caller treats a
+ *  non-empty errors array as a staleness failure (can't verify ⇒ not green). */
+function hashDir(dir: string, hash: ReturnType<typeof createHash>, errors: string[], rel = "", accept?: AcceptFn): void {
   let entries: string[];
   try {
     entries = readdirSync(dir).sort();
   } catch (e) {
-    process.stderr.write(`cowork-harness: skill-hash: cannot read directory ${dir}: ${String((e as Error)?.message ?? e)} — skipping\n`);
+    const msg = `cowork-harness: skill-hash: cannot read directory ${dir}: ${String((e as Error)?.message ?? e)}`;
+    process.stderr.write(`${msg} — skipping\n`);
+    errors.push(msg);
     return;
   }
   for (const name of entries) {
@@ -89,16 +96,26 @@ function hashDir(dir: string, hash: ReturnType<typeof createHash>, rel = "", acc
     const relPath = rel ? `${rel}/${name}` : name;
     let st;
     try {
-      st = statSync(abs);
+      // Bug 42: lstatSync does NOT follow symlinks — so a symlinked entry is detected as a symlink,
+      // not as the file/dir it points to. This prevents following out-of-tree symlinks.
+      st = lstatSync(abs);
     } catch (e) {
-      process.stderr.write(`cowork-harness: skill-hash: cannot stat ${abs}: ${String((e as Error)?.message ?? e)} — skipping\n`);
+      const msg = `cowork-harness: skill-hash: cannot stat ${abs}: ${String((e as Error)?.message ?? e)}`;
+      process.stderr.write(`${msg} — skipping\n`);
+      errors.push(msg);
+      continue;
+    }
+    // Bug 42: skip symlinks explicitly (both to files and directories) — a symlink can escape the
+    // skill dir tree. Model: collectArtifacts in execute.ts uses lstatSync + skip for the same reason.
+    if (st.isSymbolicLink()) {
+      process.stderr.write(`cowork-harness: skill-hash: skipping symlink ${abs} (not followed)\n`);
       continue;
     }
     if (st.isDirectory()) {
       if (SKILL_HASH_DIR_DENYLIST.has(name)) continue; // skip VCS/cache subtrees entirely
       if (accept && !accept(relPath)) continue; // F-6: scoped out (an unlisted skill's subtree)
       hash.update(`D:${relPath}\n`); // structure marker — an empty/renamed dir registers too
-      hashDir(abs, hash, relPath, accept);
+      hashDir(abs, hash, errors, relPath, accept);
     } else if (st.isFile()) {
       if (name.endsWith(".cassette.json")) continue; // a recorded cassette is output, not skill source
       if (relPath === HASH_IGNORE_FILE) continue; // the ignore file is harness metadata, not skill source
@@ -121,7 +138,12 @@ function hashDir(dir: string, hash: ReturnType<typeof createHash>, rel = "", acc
       try {
         hash.update(readFileSync(abs));
       } catch (e) {
-        process.stderr.write(`cowork-harness: skill-hash: cannot read file ${abs}: ${String((e as Error)?.message ?? e)} — skipping\n`);
+        // Bug 43: propagate read errors — a temporarily unreadable file would otherwise produce a
+        // stale-but-clean hash that silently passes the staleness gate. Push to errors so the caller
+        // treats this as "can't verify ⇒ not green".
+        const msg = `cowork-harness: skill-hash: cannot read file ${abs}: ${String((e as Error)?.message ?? e)}`;
+        process.stderr.write(`${msg} — skipping\n`);
+        errors.push(msg);
       }
     }
   }
@@ -170,7 +192,10 @@ export function hashSharedOnly(dirs: string[], sessionIgnore?: string[]): string
   for (const d of pluginRoots) {
     const ignoreRes = [...readHashIgnore(d), ...(sessionIgnore ?? [])].map(compileIgnore).filter((re): re is RegExp => re !== null);
     const combinedAccept: AcceptFn = ignoreRes.length ? (rel) => accept(rel) && !ignoreRes.some((re) => re.test(rel)) : accept;
-    hashDir(d, hash, "", combinedAccept);
+    const errors: string[] = [];
+    hashDir(d, hash, errors, "", combinedAccept);
+    // hashSharedOnly is used only for bucket-level diagnostics; errors are already logged to stderr.
+    // The primary staleness check goes through hashSkillDirs which surfaces errors to callers.
   }
   return hash.digest("hex");
 }
@@ -256,6 +281,10 @@ export interface HashSkillDirsResult {
   /** When `scoped` is false and `scopeSkills` was provided, the skill names that were absent from every
    *  plugin-root and caused the fallback. */
   missedSkills?: string[];
+  /** Bug 43: non-empty when any file or directory was unreadable during hashing. The caller MUST treat
+   *  this as a staleness failure (can't verify ⇒ not green) — a hash computed over partial data is
+   *  unreliable. */
+  readErrors?: string[];
 }
 
 /**
@@ -270,6 +299,8 @@ export interface HashSkillDirsResult {
  *
  * Returns a {@link HashSkillDirsResult} with the digest and a `scoped` diagnostic so callers can detect
  * the whole-tree fallback (e.g. log a warning when a named skill was not found).
+ * Bug 43: also returns `readErrors` when any input was unreadable — callers must treat this as a
+ * staleness failure.
  */
 export function hashSkillDirs(dirs: string[], scopeSkills?: string[], sessionIgnore?: string[]): HashSkillDirsResult {
   const hash = createHash("sha256");
@@ -288,6 +319,7 @@ export function hashSkillDirs(dirs: string[], scopeSkills?: string[], sessionIgn
       missedSkills = scopeSkills.filter((s) => !available.has(s));
     }
   }
+  const allErrors: string[] = [];
   for (const d of sorted) {
     // Consumer-declared ignore for THIS root = the plugin-local .cowork-hashignore + the session-level globs.
     const ignoreRes = [...readHashIgnore(d), ...(sessionIgnore ?? [])].map(compileIgnore).filter((re): re is RegExp => re !== null);
@@ -295,10 +327,11 @@ export function hashSkillDirs(dirs: string[], scopeSkills?: string[], sessionIgn
     // No scope + no ignore → undefined accept → byte-identical to the legacy whole-tree hash.
     const accept =
       scopeFn || ignoreRes.length ? (rel: string) => (scopeFn ? scopeFn(rel) : true) && !ignoreRes.some((re) => re.test(rel)) : undefined;
-    hashDir(d, hash, "", accept);
+    hashDir(d, hash, allErrors, "", accept);
   }
   const scoped = keep !== null;
+  const readErrors = allErrors.length > 0 ? allErrors : undefined;
   return scoped
-    ? { hash: hash.digest("hex"), scoped: true }
-    : { hash: hash.digest("hex"), scoped: false, ...(missedSkills ? { missedSkills } : {}) };
+    ? { hash: hash.digest("hex"), scoped: true, ...(readErrors ? { readErrors } : {}) }
+    : { hash: hash.digest("hex"), scoped: false, ...(missedSkills ? { missedSkills } : {}), ...(readErrors ? { readErrors } : {}) };
 }

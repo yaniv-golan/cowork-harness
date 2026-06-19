@@ -229,6 +229,12 @@ export function buildFingerprint(
       `cowork-harness: skill-hash: scopeSkills fallback to whole-tree — skills not found in any plugin-root: ${hashResult.missedSkills.join(", ")}\n`,
     );
   }
+  // Bug 43: unreadable files produce a partial (unreliable) hash — treat as "can't verify" by omitting
+  // skillHash. checkStaleness already treats a missing live.skillHash as a gate failure. Errors are already
+  // written to stderr inside hashSkillDirs/hashDir.
+  if (hashResult.readErrors && hashResult.readErrors.length > 0) {
+    return { baseline: baselineAppVersion, skillSources: dirs.sort().map((d) => relative(baseDir, d)) };
+  }
   // Store skillSources RELATIVE to the session-file dir — diagnostics only (the replay recompute re-derives
   // the dirs from the session), so a relative path is enough and never leaks an absolute `/Users/...` path.
   const fp: Fingerprint = {

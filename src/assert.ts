@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync, realpathSync } from "node:fs";
 import { join, resolve, relative, isAbsolute, sep } from "node:path";
 import type { Assertion, RunResult } from "./types.js";
 import { compileUserRegex } from "./regex.js";
@@ -14,6 +14,43 @@ function containedPath(workRoot: string, p: string): string | null {
   const rel = relative(root, abs);
   if (rel === ".." || rel.startsWith(".." + sep) || isAbsolute(rel)) return null;
   return abs;
+}
+
+/**
+ * Bug 37: containedPath checks lexical traversal but not symlink targets. A symlink inside the workspace
+ * root that points outside satisfies containedPath yet lets existsSync observe host files.
+ * This helper resolves symlinks with realpathSync and verifies the real path is still under `root`.
+ * Returns the absolute path when safe; returns null when:
+ *  - the path escapes root after symlink resolution (containment violation), or
+ *  - realpathSync throws ENOENT (file does not exist — treat as "not found", not a violation).
+ * Other realpathSync errors (permission denied, etc.) are treated as containment failures (not found = safe
+ * but conservative; the caller's existsSync will return false anyway).
+ *
+ * Note: workRoot itself is also resolved via realpathSync to handle platforms (macOS) where tmpdir()
+ * returns a symlinked path (e.g. /var/folders/... → /private/var/folders/...). Without resolving
+ * both sides, a legitimate file under a symlinked workRoot would be incorrectly flagged as escaping.
+ */
+function containedRealPath(workRoot: string, abs: string): string | null {
+  // Resolve workRoot itself to its real path so comparisons are apples-to-apples.
+  let realRoot: string;
+  try {
+    realRoot = realpathSync(resolve(workRoot));
+  } catch {
+    // workRoot doesn't exist (e.g. /nonexistent in tests) — fall back to lexical root.
+    realRoot = resolve(workRoot);
+  }
+  let real: string;
+  try {
+    real = realpathSync(abs);
+  } catch (e: any) {
+    // ENOENT: path doesn't exist — not a containment violation, just absent.
+    if (e?.code === "ENOENT") return abs; // return the original abs; existsSync will return false
+    // Other errors (EPERM, dangling symlink pointing outside): treat conservatively as "not accessible".
+    return null;
+  }
+  const rel = relative(realRoot, real);
+  if (rel === ".." || rel.startsWith(".." + sep) || isAbsolute(rel)) return null;
+  return real;
 }
 
 /**
@@ -145,7 +182,12 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
   if (a.file_exists !== undefined) {
     const abs = containedPath(ctx.workRoot, a.file_exists);
     if (!abs) results.push(fail(`unsafe file_exists path "${a.file_exists}" — must stay under the work root (no absolute paths or "..")`));
-    else results.push(existsSync(abs) ? ok() : fail(`file not found: ${a.file_exists} (under ${ctx.workRoot})`));
+    else {
+      // Bug 37: verify the real path (after symlink resolution) is still under workRoot.
+      const real = containedRealPath(ctx.workRoot, abs);
+      if (!real) results.push(fail(`unsafe file_exists path "${a.file_exists}" — symlink target escapes the work root`));
+      else results.push(existsSync(real) ? ok() : fail(`file not found: ${a.file_exists} (under ${ctx.workRoot})`));
+    }
   }
   if (a.user_visible_artifact !== undefined) {
     const p = a.user_visible_artifact;
@@ -160,7 +202,12 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
         results.push(
           fail(`"${p}" is not under a user-visible prefix (${ctx.userVisiblePrefixes.join(", ")}) — invisible to the user in Cowork`),
         );
-      else results.push(existsSync(abs) ? ok() : fail(`user-visible artifact not found: ${p}`));
+      else {
+        // Bug 37: verify the real path (after symlink resolution) is still under workRoot.
+        const real = containedRealPath(ctx.workRoot, abs);
+        if (!real) results.push(fail(`unsafe user_visible_artifact path "${p}" — symlink target escapes the work root`));
+        else results.push(existsSync(real) ? ok() : fail(`user-visible artifact not found: ${p}`));
+      }
     }
   }
   if (a.tool_called !== undefined) results.push(ctx.toolsCalled.has(a.tool_called) ? ok() : fail(`tool not called: ${a.tool_called}`));
@@ -278,82 +325,89 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
     const aj = a.artifact_json;
     const file = containedPath(ctx.workRoot, aj.artifact);
     if (!file) results.push(fail(`unsafe artifact_json path "${aj.artifact}" — must stay under the work root (no absolute paths or "..")`));
-    else if (!existsSync(file)) results.push(fail(`artifact_json: file not found: ${aj.artifact} (under ${ctx.workRoot})`));
     else {
-      let doc: unknown;
-      let parsed = true;
-      const fileSizeLimit = 10 * 1024 * 1024;
-      const fileSize = statSync(file).size;
-      if (fileSize > fileSizeLimit) {
-        results.push(fail(`artifact_json: file too large to parse as JSON (${fileSize} bytes, limit 10 MiB)`));
-        parsed = false;
-      }
-      try {
-        if (parsed) doc = JSON.parse(readFileSync(file, "utf8"));
-      } catch (e) {
-        parsed = false;
-        results.push(fail(`artifact_json: ${aj.artifact} is not valid JSON: ${String((e as Error).message)}`));
-      }
-      if (parsed) {
-        const r = resolveDotPath(doc, aj.path);
-        if (r.state === "unresolved") {
-          // Malformed/truncated artifact for this path — fail loud, NOT a vacuous "absent" pass (the H4
-          // false-green at the field level).
-          results.push(
-            fail(`artifact_json: path "${aj.path}" unresolvable in ${aj.artifact} — intermediate "${r.at}" is missing or not an object`),
-          );
-        } else {
-          const present = r.state === "value";
-          const val = r.state === "value" ? r.value : undefined;
-          let any = false;
-          if (aj.exists !== undefined) {
-            any = true;
+      // Bug 37: verify the real path (after symlink resolution) is still under workRoot.
+      const realFile = containedRealPath(ctx.workRoot, file);
+      if (!realFile) {
+        results.push(fail(`unsafe artifact_json path "${aj.artifact}" — symlink target escapes the work root`));
+      } else if (!existsSync(realFile)) {
+        results.push(fail(`artifact_json: file not found: ${aj.artifact} (under ${ctx.workRoot})`));
+      } else {
+        let doc: unknown;
+        let parsed = true;
+        const fileSizeLimit = 10 * 1024 * 1024;
+        const fileSize = statSync(realFile).size;
+        if (fileSize > fileSizeLimit) {
+          results.push(fail(`artifact_json: file too large to parse as JSON (${fileSize} bytes, limit 10 MiB)`));
+          parsed = false;
+        }
+        try {
+          if (parsed) doc = JSON.parse(readFileSync(realFile, "utf8"));
+        } catch (e) {
+          parsed = false;
+          results.push(fail(`artifact_json: ${aj.artifact} is not valid JSON: ${String((e as Error).message)}`));
+        }
+        if (parsed) {
+          const r = resolveDotPath(doc, aj.path);
+          if (r.state === "unresolved") {
+            // Malformed/truncated artifact for this path — fail loud, NOT a vacuous "absent" pass (the H4
+            // false-green at the field level).
             results.push(
-              present === aj.exists ? ok() : fail(`artifact_json: "${aj.path ?? "(root)"}" exists=${present}, expected ${aj.exists}`),
+              fail(`artifact_json: path "${aj.path}" unresolvable in ${aj.artifact} — intermediate "${r.at}" is missing or not an object`),
             );
+          } else {
+            const present = r.state === "value";
+            const val = r.state === "value" ? r.value : undefined;
+            let any = false;
+            if (aj.exists !== undefined) {
+              any = true;
+              results.push(
+                present === aj.exists ? ok() : fail(`artifact_json: "${aj.path ?? "(root)"}" exists=${present}, expected ${aj.exists}`),
+              );
+            }
+            if (aj.absent !== undefined) {
+              any = true;
+              const absent = r.state === "absent";
+              results.push(absent === aj.absent ? ok() : fail(`artifact_json: "${aj.path}" absent=${absent}, expected ${aj.absent}`));
+            }
+            if (aj.is_null !== undefined) {
+              any = true;
+              const isNull = present && val === null;
+              results.push(isNull === aj.is_null ? ok() : fail(`artifact_json: "${aj.path}" is_null=${isNull}, expected ${aj.is_null}`));
+            }
+            if (aj.equals !== undefined) {
+              any = true;
+              results.push(
+                present && jsonEq(val, aj.equals)
+                  ? ok()
+                  : fail(`artifact_json: "${aj.path}" = ${JSON.stringify(val)}, expected ${JSON.stringify(aj.equals)}`),
+              );
+            }
+            if (aj.gt !== undefined) {
+              any = true;
+              results.push(
+                typeof val === "number" && val > aj.gt
+                  ? ok()
+                  : fail(`artifact_json: "${aj.path}" = ${JSON.stringify(val)}, expected > ${aj.gt}`),
+              );
+            }
+            // #4: set membership — the resolved value deep-equals one of a fixed set. Stable for stochastic
+            // (LLM-extracted) values where `equals` would churn across re-records. `present &&` guard mirrors
+            // `equals` so an absent value never vacuously satisfies it.
+            if (aj.in !== undefined) {
+              any = true;
+              results.push(
+                present && Array.isArray(aj.in) && aj.in.some((x) => jsonEq(val, x))
+                  ? ok()
+                  : fail(`artifact_json: "${aj.path}" = ${JSON.stringify(val)}, expected one of ${JSON.stringify(aj.in)}`),
+              );
+            }
+            // No operator → an existence assertion (the value must be present).
+            if (!any)
+              results.push(
+                present ? ok() : fail(`artifact_json: "${aj.path ?? "(root)"}" is not present (no operator given → existence check)`),
+              );
           }
-          if (aj.absent !== undefined) {
-            any = true;
-            const absent = r.state === "absent";
-            results.push(absent === aj.absent ? ok() : fail(`artifact_json: "${aj.path}" absent=${absent}, expected ${aj.absent}`));
-          }
-          if (aj.is_null !== undefined) {
-            any = true;
-            const isNull = present && val === null;
-            results.push(isNull === aj.is_null ? ok() : fail(`artifact_json: "${aj.path}" is_null=${isNull}, expected ${aj.is_null}`));
-          }
-          if (aj.equals !== undefined) {
-            any = true;
-            results.push(
-              present && jsonEq(val, aj.equals)
-                ? ok()
-                : fail(`artifact_json: "${aj.path}" = ${JSON.stringify(val)}, expected ${JSON.stringify(aj.equals)}`),
-            );
-          }
-          if (aj.gt !== undefined) {
-            any = true;
-            results.push(
-              typeof val === "number" && val > aj.gt
-                ? ok()
-                : fail(`artifact_json: "${aj.path}" = ${JSON.stringify(val)}, expected > ${aj.gt}`),
-            );
-          }
-          // #4: set membership — the resolved value deep-equals one of a fixed set. Stable for stochastic
-          // (LLM-extracted) values where `equals` would churn across re-records. `present &&` guard mirrors
-          // `equals` so an absent value never vacuously satisfies it.
-          if (aj.in !== undefined) {
-            any = true;
-            results.push(
-              present && Array.isArray(aj.in) && aj.in.some((x) => jsonEq(val, x))
-                ? ok()
-                : fail(`artifact_json: "${aj.path}" = ${JSON.stringify(val)}, expected one of ${JSON.stringify(aj.in)}`),
-            );
-          }
-          // No operator → an existence assertion (the value must be present).
-          if (!any)
-            results.push(
-              present ? ok() : fail(`artifact_json: "${aj.path ?? "(root)"}" is not present (no operator given → existence check)`),
-            );
         }
       }
     }
