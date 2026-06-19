@@ -1595,6 +1595,8 @@ export async function replayCassette(
     "transcript_not_contains",
     "transcript_matches",
     "transcript_not_matches",
+    "tool_result_contains",
+    "tool_result_not_contains",
     "tool_called",
     "tool_not_called",
     "subagent_tool_used",
@@ -1705,6 +1707,7 @@ export async function replayCassette(
     selfHealRan: false,
     subagents: rec.subagents,
     gateDeliveries: rec.gateDeliveries,
+    toolResultTexts: rec.toolResults.map((r) => r.assertText ?? r.text),
   });
 
   // #1b: under --strict, a staleness mismatch is a failing assertion (non-zero exit), not just a warning.

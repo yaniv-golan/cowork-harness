@@ -45,7 +45,7 @@ export interface RunRecord {
   decisions: DecisionRecord[];
   permissiveAutoAllow: string[]; // #6: tools auto-allowed by cowork parity for unscripted/off-registry perms (real Cowork blocks these)
   unanswered: { question: string; chosen: string; by: string; rationale?: string; model?: string }[];
-  toolResults: { toolUseId?: string; isError: boolean; text: string }[]; // Part 2: captured tool OUTCOMES
+  toolResults: { toolUseId?: string; isError: boolean; text: string; assertText?: string }[]; // Part 2: captured tool OUTCOMES
   gateAnswers: { question: string; toolUseId?: string; answers: Record<string, string> }[]; // answered AskUserQuestion gates
   gateDeliveries: {
     question: string;
@@ -154,7 +154,7 @@ export class Run {
             break;
           }
           case "tool_result": {
-            this.rec.toolResults.push({ toolUseId: ev.toolUseId, isError: ev.isError, text: ev.text });
+            this.rec.toolResults.push({ toolUseId: ev.toolUseId, isError: ev.isError, text: ev.text, assertText: ev.assertText });
             this.provenance.seedFromToolResult(ev.provenanceText ?? ev.text); // seed from the UNtruncated value so URLs past the display cap are still fetchable
             // (matches Cowork's tool_response provenance hook)
             // Delivery check (Part 3): if this is the result of an answered gate and it ERRORED, the injected

@@ -1628,29 +1628,32 @@ function cmdScaffold(args: string[]) {
   } else out(yaml);
 }
 
-/** Read the persisted transcript from a kept run's `run.jsonl` (the `{t:"transcript"}` line). */
-function readTranscriptSidecar(file: string): string {
+/** Read the persisted transcript from a kept run's `run.jsonl` (the `{t:"transcript"}` line).
+ *  Returns `null` when the sidecar is absent or unreadable — distinct from an empty-but-present transcript.
+ *  Returns `""` when the file is readable but contains no transcript line (run produced no model output). */
+function readTranscriptSidecar(file: string): string | null {
   try {
     for (const line of readFileSync(file, "utf8").split("\n")) {
       if (!line.trim()) continue;
       const o = JSON.parse(line);
       if (o && o.t === "transcript") return String(o.text ?? "");
     }
+    return ""; // file readable but no transcript line — empty transcript (not missing)
   } catch {
-    /* sidecar absent/unreadable — empty transcript (content asserts over it simply won't match) */
+    return null;
   }
-  return "";
 }
 
-/** Read the AskUserQuestion question texts from a kept run's `trace.json` (`questions` array). */
-function readQuestionsSidecar(file: string): string[] {
+/** Read the AskUserQuestion question texts from a kept run's `trace.json` (`questions` array).
+ *  Returns `null` when the sidecar is absent or unreadable — distinct from a run with zero questions. */
+function readQuestionsSidecar(file: string): string[] | null {
   try {
     const t = JSON.parse(readFileSync(file, "utf8"));
     if (Array.isArray(t.questions)) return t.questions.map(String);
+    return null;
   } catch {
-    /* sidecar absent/unreadable */
+    return null;
   }
-  return [];
 }
 
 /**
@@ -1718,8 +1721,10 @@ function cmdVerifyRun(args: string[]) {
     return process.exit(2);
   }
 
+  const sidecarTranscript = readTranscriptSidecar(join(runDir, "run.jsonl"));
+  const sidecarQuestions = readQuestionsSidecar(join(runDir, "trace.json"));
   const ctx: AssertContext = {
-    transcript: readTranscriptSidecar(join(runDir, "run.jsonl")),
+    transcript: sidecarTranscript ?? "",
     toolsCalled: new Set(Object.keys(result.toolCounts ?? {})),
     subagentTools: new Set((result.subagents ?? []).flatMap((s) => s.toolsUsed ?? [])),
     egress: result.egress ?? [],
@@ -1727,11 +1732,14 @@ function cmdVerifyRun(args: string[]) {
     workRoot,
     userVisiblePrefixes: ["outputs", ".projects"],
     outputsDeletes: scan.outputsDeletes,
-    questions: readQuestionsSidecar(join(runDir, "trace.json")),
+    questions: sidecarQuestions ?? [],
     hostPathLeaked: scan.hostPathLeaked,
     selfHealRan: scan.selfHealRan,
     subagents: result.subagents ?? [],
     gateDeliveries: result.gateDeliveries ?? [],
+    toolResultTexts: (result.toolResults ?? []).map((r) => r.assertText ?? r.text),
+    transcriptMissing: sidecarTranscript === null,
+    questionsMissing: sidecarQuestions === null,
   };
 
   const assertions = evaluate(scenario.assert, ctx);

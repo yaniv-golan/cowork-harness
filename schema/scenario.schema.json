@@ -123,6 +123,14 @@
                 "type": "string",
                 "description": "regex (case-insensitive) that must NOT match the transcript"
               },
+              "tool_result_contains": {
+                "type": "string",
+                "description": "at least one tool result contains this literal substring (per-result match, not concatenated; 10 KB cap per result)"
+              },
+              "tool_result_not_contains": {
+                "type": "string",
+                "description": "no tool result contains this literal substring (per-result match, not concatenated; 10 KB cap per result)"
+              },
               "file_exists": {
                 "type": "string",
                 "description": "a file exists at this path under the agent's work root"

@@ -46,7 +46,7 @@ export type AgentEvent =
   | { type: "init"; tools: string[]; mcpServers: unknown[]; cwd?: string }
   | { type: "assistant_text"; text: string; parentToolUseId?: string }
   | { type: "tool_use"; name: string; input: unknown; parentToolUseId?: string; toolUseId?: string; synthetic?: boolean } // toolUseId for tool_use↔tool_result pairing (amendment #2); synthetic = the MCP round-trip echo (trace-only, NOT counted — the real call already arrives as an assistant tool_use block, live-verified)
-  | { type: "tool_result"; toolUseId?: string; isError: boolean; text: string; provenanceText?: string } // the OUTCOME of a tool call (from `user`/tool_result blocks). `text` is display-truncated; `provenanceText` is the larger raw value so URLs past the display cap still seed web_fetch provenance
+  | { type: "tool_result"; toolUseId?: string; isError: boolean; text: string; provenanceText?: string; assertText?: string } // the OUTCOME of a tool call (from `user`/tool_result blocks). `text` is display-truncated; `provenanceText` is the larger raw value so URLs past the display cap still seed web_fetch provenance; `assertText` is assertion-fidelity cap (10 KB)
   | {
       type: "subagent_dispatch";
       toolUseId: string;
@@ -620,6 +620,7 @@ export function parseMessage(msg: any): AgentEvent[] {
             isError: !!block.is_error,
             text: toolResultText(block.content),
             provenanceText: toolResultRaw(block.content),
+            assertText: toolResultAssertText(block.content),
           });
       }
       break;
@@ -659,6 +660,12 @@ function toolResultText(content: unknown): string {
  *  could realistically act on is seeded; still bounded so a pathological result can't blow up memory. */
 function toolResultRaw(content: unknown): string {
   return flattenToolResult(content, 200_000);
+}
+/** Assertion-fidelity cap — enough to cover realistic tool outputs for content assertions without
+ *  blowing up result.json; deliberately larger than the 500-char display cap so text past the display
+ *  truncation is still assertable. */
+function toolResultAssertText(content: unknown): string {
+  return flattenToolResult(content, 10_240);
 }
 
 export function toDecisionRequest(msg: any): DecisionRequest | null {

@@ -20,6 +20,9 @@ import { Run } from "../src/run/run.js";
 import { replayCassette } from "../src/run/cassette.js";
 import { microvmAgentArgs } from "../src/runtime/microvm.js";
 import { resolveMaxThinkingTokens } from "../src/runtime/argv.js";
+import { executeScenario } from "../src/run/execute.js";
+import { Scenario } from "../src/types.js";
+import type { DecisionChannel } from "../src/decide/external-channel.js";
 
 const ctx: RunContext = { task: "", transcript: () => "", toolLog: () => [], runId: "t" };
 const perm = (tool: string, input: Record<string, unknown> = {}): DecisionRequest => ({ id: "r1", kind: "permission", tool, input });
@@ -1493,5 +1496,59 @@ describe("Run.requestWebFetchApproval — recorded synthetic permission (#30 C3 
     const after1 = rec.decisions.length;
     expect(await run.requestWebFetchApproval("ok.com", "https://ok.com/b")).toBe(true);
     expect(rec.decisions.length).toBe(after1 + 1); // re-gated → a new decision recorded
+  });
+});
+
+describe("Cassette — transcript_not_contains evaluates on content (not on missing flag) during replay", () => {
+  it("passes when the cassette transcript does not contain the needle", async () => {
+    const events = [
+      JSON.stringify({ type: "system", subtype: "init", tools: ["Bash"], cwd: "/sessions/x" }),
+      JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "Hello from the skill" }] } }),
+      JSON.stringify({ type: "result", subtype: "success", is_error: false }),
+    ];
+    const cassette = {
+      scenario: makeScenario([{ transcript_not_contains: "needle" }]),
+      events,
+    } as any;
+    const r = await replayCassette(cassette);
+    expect(r.assertions.every((a) => a.pass)).toBe(true);
+  });
+
+  it("fails when the cassette transcript DOES contain the needle", async () => {
+    const events = [
+      JSON.stringify({ type: "system", subtype: "init", tools: ["Bash"], cwd: "/sessions/x" }),
+      JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "this is a needle in the text" }] } }),
+      JSON.stringify({ type: "result", subtype: "success", is_error: false }),
+    ];
+    const cassette = {
+      scenario: makeScenario([{ transcript_not_contains: "needle" }]),
+      events,
+    } as any;
+    const r = await replayCassette(cassette);
+    const a = r.assertions.find((x) => x.assertion.transcript_not_contains !== undefined);
+    expect(a?.pass).toBe(false);
+    expect(a?.message).toContain("unexpectedly contains");
+  });
+});
+
+describe("execute.ts — COWORK_HARNESS_DIALOG_TIMEOUT_MS configuration guard", () => {
+  it("throws when a finite timeout is set alongside an externalChannel", async () => {
+    const prev = process.env.COWORK_HARNESS_DIALOG_TIMEOUT_MS;
+    process.env.COWORK_HARNESS_DIALOG_TIMEOUT_MS = "100";
+    try {
+      const stubChannel: DecisionChannel = {
+        write: async () => {},
+        readLine: async () => "",
+        close: () => {},
+        snapshot: () => undefined,
+      };
+      const scenario = Scenario.parse({ prompt: "hi" });
+      await expect(executeScenario(scenario, { externalChannel: stubChannel })).rejects.toThrow(
+        "COWORK_HARNESS_DIALOG_TIMEOUT_MS: cannot use a finite timeout",
+      );
+    } finally {
+      if (prev === undefined) delete process.env.COWORK_HARNESS_DIALOG_TIMEOUT_MS;
+      else process.env.COWORK_HARNESS_DIALOG_TIMEOUT_MS = prev;
+    }
   });
 });

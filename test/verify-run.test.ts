@@ -43,6 +43,21 @@ function keptRun(): string {
   return root;
 }
 
+/** Build a kept-run dir that is missing one sidecar file. */
+function keptRunWithout(sidecar: "transcript" | "questions"): string {
+  const root = keptRun();
+  if (sidecar === "transcript") require("node:fs").unlinkSync(join(root, "run.jsonl"));
+  if (sidecar === "questions") require("node:fs").unlinkSync(join(root, "trace.json"));
+  return root;
+}
+
+/** Build a kept-run dir whose transcript is present but empty (zero-length run.jsonl with no transcript line). */
+function keptRunWithEmptyTranscript(): string {
+  const root = keptRun();
+  writeFileSync(join(root, "run.jsonl"), JSON.stringify({ t: "run", scenario: "smoke" }) + "\n");
+  return root;
+}
+
 function scenarioFile(dir: string, assertYaml: string): string {
   const f = join(dir, "scenario.yaml");
   writeFileSync(f, `name: smoke\nprompt: do the thing\nfidelity: container\nassert:\n${assertYaml}`);
@@ -100,5 +115,30 @@ describe.skipIf(!can)("F-1: verify-run re-asserts a kept run dir without a live 
     const { code, text } = verifyRun(empty, sc);
     expect(code).toBe(2);
     expect(text).toContain("no result.json");
+  });
+
+  it("FAILS with 'evidence unavailable' when run.jsonl is absent and transcript_not_contains is asserted", () => {
+    const run = keptRunWithout("transcript");
+    const sc = scenarioFile(run, '  - transcript_not_contains: "needle"');
+    const { code, text } = verifyRun(run, sc);
+    expect(code).toBe(1);
+    expect(text).toContain("evidence unavailable");
+    expect(text).toContain("run.jsonl");
+  });
+
+  it("FAILS with 'evidence unavailable' when trace.json is absent and questions_count_max: 0 is asserted", () => {
+    const run = keptRunWithout("questions");
+    const sc = scenarioFile(run, "  - questions_count_max: 0");
+    const { code, text } = verifyRun(run, sc);
+    expect(code).toBe(1);
+    expect(text).toContain("evidence unavailable");
+    expect(text).toContain("trace.json");
+  });
+
+  it("PASSES when run.jsonl is present but empty-transcript and transcript_not_contains is asserted (absent ≠ empty)", () => {
+    const run = keptRunWithEmptyTranscript();
+    const sc = scenarioFile(run, '  - transcript_not_contains: "needle"');
+    const { code } = verifyRun(run, sc);
+    expect(code).toBe(0);
   });
 });

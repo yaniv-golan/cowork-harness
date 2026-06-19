@@ -127,6 +127,8 @@ export const Assertion = z.object({
   transcript_not_contains: z.string().optional().describe("the transcript does NOT contain this literal substring"),
   transcript_matches: z.string().optional().describe("regex (case-insensitive) over the transcript — fuzzy content for stochastic prose"),
   transcript_not_matches: z.string().optional().describe("regex (case-insensitive) that must NOT match the transcript"),
+  tool_result_contains: z.string().optional().describe("at least one tool result contains this literal substring (per-result match, not concatenated; 10 KB cap per result)"),
+  tool_result_not_contains: z.string().optional().describe("no tool result contains this literal substring (per-result match, not concatenated; 10 KB cap per result)"),
   file_exists: z.string().optional().describe("a file exists at this path under the agent's work root"),
   user_visible_artifact: z
     .string()
@@ -301,6 +303,10 @@ export interface RunResult {
   /** #49: structured fidelity warnings (prompt asset gaps, version mismatches) — visible to JSON callers,
    *  not just stderr. Populated when a non-fatal prompt warning is emitted during a run. */
   fidelityWarnings?: string[];
+  /** Tool-result text at assertion-fidelity cap (10 KB per result). Used by `tool_result_contains` /
+   *  `tool_result_not_contains`. `assertText` is preferred when present; falls back to `text` (500-char
+   *  display cap) for cassettes recorded before this field was added. */
+  toolResults?: { toolUseId?: string; isError: boolean; text: string; assertText?: string }[];
   /** #20: true when L0 (protocol) ran with plugins that loaded via --settings/managed config instead of
    *  --plugin-dir (the Cowork cache layout). computeVerdict fails on this unless allow_l0_plugin_divergence
    *  is asserted — a warn-only was insufficient since the run could still appear green. */

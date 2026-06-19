@@ -139,6 +139,13 @@ export interface AssertContext {
     error?: string;
     reason?: "ok" | "errored" | "unobserved" | "no-pairing-metadata";
   }[]; // Part 3: per-gate answer-delivery outcome
+  toolResultTexts: string[]; // assertion-fidelity text for each tool result (assertText ?? text, 10 KB cap)
+  /** Set by verify-run only when run.jsonl is absent/unreadable. Prevents negative transcript assertions
+   *  from passing vacuously on missing evidence (absent ≠ empty). Undefined/false on live and replay lanes. */
+  transcriptMissing?: boolean;
+  /** Set by verify-run only when trace.json is absent/unreadable. Prevents questions_count_max from
+   *  passing vacuously on missing evidence (absent ≠ zero questions). Undefined/false on live/replay lanes. */
+  questionsMissing?: boolean;
 }
 
 export function evaluate(assertions: Assertion[], ctx: AssertContext): RunResult["assertions"] {
@@ -161,23 +168,53 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
   const fail = (message: string): KeyResult => ({ pass: false, message });
 
   if (a.transcript_contains !== undefined)
-    results.push(ctx.transcript.includes(a.transcript_contains) ? ok() : fail(`transcript missing "${a.transcript_contains}"`));
+    results.push(
+      ctx.transcriptMissing
+        ? fail(`evidence unavailable: transcript sidecar (run.jsonl) absent — cannot evaluate transcript_contains`)
+        : ctx.transcript.includes(a.transcript_contains)
+          ? ok()
+          : fail(`transcript missing "${a.transcript_contains}"`),
+    );
   if (a.transcript_not_contains !== undefined)
     results.push(
-      !ctx.transcript.includes(a.transcript_not_contains) ? ok() : fail(`transcript unexpectedly contains "${a.transcript_not_contains}"`),
+      ctx.transcriptMissing
+        ? fail(`evidence unavailable: transcript sidecar (run.jsonl) absent — cannot evaluate transcript_not_contains`)
+        : !ctx.transcript.includes(a.transcript_not_contains)
+          ? ok()
+          : fail(`transcript unexpectedly contains "${a.transcript_not_contains}"`),
+    );
+  if (a.tool_result_contains !== undefined)
+    results.push(
+      ctx.toolResultTexts.some((t) => t.includes(a.tool_result_contains!))
+        ? ok()
+        : fail(`no tool result contained "${a.tool_result_contains}"`),
+    );
+  if (a.tool_result_not_contains !== undefined)
+    results.push(
+      ctx.toolResultTexts.every((t) => !t.includes(a.tool_result_not_contains!))
+        ? ok()
+        : fail(`a tool result unexpectedly contained "${a.tool_result_not_contains}"`),
     );
   // Fuzzy content for stochastic prose. All regex-building assertions are try/catch-wrapped —
   // `evaluate()` is a bare `.map(check)` with no error boundary, so a malformed pattern must be a
   // clean assertion failure, not an uncaught throw. Case-insensitive ("i").
   if (a.transcript_matches !== undefined) {
-    const c = compileUserRegex(a.transcript_matches);
-    if ("error" in c) results.push(fail(`transcript_matches: bad regex "${a.transcript_matches}": ${c.error}`));
-    else results.push(c.re.test(ctx.transcript) ? ok() : fail(`transcript did not match /${a.transcript_matches}/i`));
+    if (ctx.transcriptMissing) {
+      results.push(fail(`evidence unavailable: transcript sidecar (run.jsonl) absent — cannot evaluate transcript_matches`));
+    } else {
+      const c = compileUserRegex(a.transcript_matches);
+      if ("error" in c) results.push(fail(`transcript_matches: bad regex "${a.transcript_matches}": ${c.error}`));
+      else results.push(c.re.test(ctx.transcript) ? ok() : fail(`transcript did not match /${a.transcript_matches}/i`));
+    }
   }
   if (a.transcript_not_matches !== undefined) {
-    const c = compileUserRegex(a.transcript_not_matches);
-    if ("error" in c) results.push(fail(`transcript_not_matches: bad regex "${a.transcript_not_matches}": ${c.error}`));
-    else results.push(!c.re.test(ctx.transcript) ? ok() : fail(`transcript unexpectedly matched /${a.transcript_not_matches}/i`));
+    if (ctx.transcriptMissing) {
+      results.push(fail(`evidence unavailable: transcript sidecar (run.jsonl) absent — cannot evaluate transcript_not_matches`));
+    } else {
+      const c = compileUserRegex(a.transcript_not_matches);
+      if ("error" in c) results.push(fail(`transcript_not_matches: bad regex "${a.transcript_not_matches}": ${c.error}`));
+      else results.push(!c.re.test(ctx.transcript) ? ok() : fail(`transcript unexpectedly matched /${a.transcript_not_matches}/i`));
+    }
   }
   if (a.file_exists !== undefined) {
     const abs = containedPath(ctx.workRoot, a.file_exists);
@@ -275,13 +312,21 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
       !ctx.hostPathLeaked === a.transcript_no_host_path ? ok() : fail(`host path leaked into model-visible text: ${ctx.hostPathLeaked}`),
     );
   if (a.question_asked !== undefined) {
-    const c = compileUserRegex(a.question_asked);
-    if ("error" in c) results.push(fail(`question_asked: bad regex "${a.question_asked}": ${c.error}`));
-    else results.push(ctx.questions.some((q) => c.re.test(q)) ? ok() : fail(`no question matched: ${a.question_asked}`));
+    if (ctx.questionsMissing) {
+      results.push(fail(`evidence unavailable: questions sidecar (trace.json) absent — cannot evaluate question_asked`));
+    } else {
+      const c = compileUserRegex(a.question_asked);
+      if ("error" in c) results.push(fail(`question_asked: bad regex "${a.question_asked}": ${c.error}`));
+      else results.push(ctx.questions.some((q) => c.re.test(q)) ? ok() : fail(`no question matched: ${a.question_asked}`));
+    }
   }
   if (a.questions_count_max !== undefined)
     results.push(
-      ctx.questions.length <= a.questions_count_max ? ok() : fail(`asked ${ctx.questions.length} questions, max ${a.questions_count_max}`),
+      ctx.questionsMissing
+        ? fail(`evidence unavailable: questions sidecar (trace.json) absent — cannot evaluate questions_count_max`)
+        : ctx.questions.length <= a.questions_count_max
+          ? ok()
+          : fail(`asked ${ctx.questions.length} questions, max ${a.questions_count_max}`),
     );
   if (a.gate_answers_delivered !== undefined) {
     // #19: passes iff every answered gate's tool_result was OBSERVED and non-error. On a finished

@@ -45,6 +45,8 @@ CONTENT_KEYS = {
     "transcript_not_contains",
     "transcript_matches",
     "transcript_not_matches",
+    "tool_result_contains",
+    "tool_result_not_contains",
     "tool_called",
     "tool_not_called",
     "subagent_tool_used",

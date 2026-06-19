@@ -168,6 +168,15 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       : opts.externalChannel || onUnanswered === "llm" || onUnanswered === "prompt"
         ? Infinity
         : undefined;
+  // A finite env-override combined with an authoritative async answerer (external channel, LLM, prompt)
+  // makes withDialogTimeout() race a never-settling decider promise — on timeout the channel desyncs
+  // because the late reply consumes the NEXT gate's readLine slot. There is no valid use case for this
+  // combination; reject it early so the desync is impossible, not just serial-gate-guarded.
+  if (envDialogMs !== undefined && isFinite(envDialogMs) && (opts.externalChannel || onUnanswered === "llm" || onUnanswered === "prompt")) {
+    throw new Error(
+      `COWORK_HARNESS_DIALOG_TIMEOUT_MS: cannot use a finite timeout with --decider-cmd/--decider-dir/--on-unanswered=llm/prompt — those are authoritative answerers (set to 'inf' or remove the env var)`,
+    );
+  }
 
   // Docker resources (sidecar networks/proxy + the host-loop container) are EPHEMERAL per run — name
   // them by a unique per-invocation token, NOT the (now-stable) sessionId, so a `--resume` after a
@@ -313,6 +322,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     selfHealRan: scan.selfHealRan,
     subagents: record.subagents,
     gateDeliveries: record.gateDeliveries,
+    toolResultTexts: record.toolResults.map((r) => r.assertText ?? r.text),
   });
 
   if (scenario.fidelity === "protocol" && (record.toolsCalled.has("WebFetch") || record.toolsCalled.has("WebSearch"))) {
@@ -347,6 +357,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     gateDeliveries: record.gateDeliveries,
     egress,
     assertions,
+    toolResults: record.toolResults,
     subagents: record.subagents,
     unanswered: record.unanswered,
     usage: record.usage,
