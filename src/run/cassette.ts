@@ -61,6 +61,8 @@ interface Fingerprint {
 }
 
 export interface Cassette {
+  $schema?: string;    // provenance: schema URL for this cassette format version
+  generator?: string;  // provenance: tool that produced this file ("cowork-harness")
   // Schema version of the cassette FORMAT (not the package). Bump when the structure changes in a way a
   // reader must branch on (a new manifest-entry shape, a fingerprint-algorithm change, a2's nonDeterministic
   // provenance, …). ABSENT = pre-versioning legacy (treated as 0). Stamping it now — while ~no cassettes
@@ -79,6 +81,11 @@ export interface Cassette {
 // to v1). Bumped because a scoped `skillHash` is not reproducible by a pre-F-6 reader — which would recompute
 // whole-tree and mis-flag a scoped cassette as stale; the version lets such a reader warn instead.
 const CASSETTE_VERSION = 2;
+
+/** Canonical URL of the JSON Schema for this cassette format version.
+ *  Appears in every written cassette as `$schema` so editors and unfamiliar readers
+ *  can discover what tool produced the file and what the format means. */
+const CASSETTE_SCHEMA_URL = `https://raw.githubusercontent.com/yaniv-golan/cowork-harness/main/schema/cassette.v${CASSETTE_VERSION}.json`;
 
 const DEFAULT_MANIFEST_BODY_CAP = 64 * 1024; // inline JSON/text bodies ≤ 64 KiB; larger → hash-only + truncated marker
 
@@ -907,6 +914,8 @@ async function recordScenarioObject(
     }
   }
   const base: Cassette = {
+    $schema: CASSETTE_SCHEMA_URL,
+    generator: "cowork-harness",
     cassetteVersion: CASSETTE_VERSION,
     scenario: relocatable,
     events: safeLines(join(result.outDir, "events.jsonl")),

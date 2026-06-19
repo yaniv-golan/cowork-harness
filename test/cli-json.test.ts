@@ -442,4 +442,22 @@ describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
     expect(r.code).toBe(2);
     expect(r.stderr).toMatch(/--dotenv requires a path/);
   });
+
+  it("cassette carrying $schema and generator fields survives replay (forward-compat)", () => {
+    // replay never rewrites the cassette file, so asserting file contents after replay
+    // would only prove our own write was intact — a false-green. Instead, just verify
+    // that replay exits 0 on a cassette that has these new fields, i.e. forward-compat.
+    // Live verification that recordScenarioObject emits the fields belongs in the
+    // live/integration test suite (requires a real record run).
+    const cwd = mkdtempSync(join(tmpdir(), "cc-prov-"));
+    const body = {
+      $schema: "https://raw.githubusercontent.com/yaniv-golan/cowork-harness/main/schema/cassette.v2.json",
+      generator: "cowork-harness",
+      cassetteVersion: 2,
+      ...cassette([]),
+    };
+    writeIn(cwd, "s.cassette.json", JSON.stringify(body));
+    const r = spawnSync("node", [CLI, "replay", "s.cassette.json"], { encoding: "utf8", cwd });
+    expect(r.status).toBe(0);
+  });
 });
