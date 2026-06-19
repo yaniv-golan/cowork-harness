@@ -165,8 +165,9 @@ function decodeBody(e: ManifestEntry): Buffer {
  *  body, which only small files carry). each path is containment-checked before writing so a hostile
  *  cassette entry can't escape the temp root. every non-truncated body is verified against its
  *  recorded sha256 (over the decoded RAW bytes) — a mismatch fails replay (throws). */
-export function materializeManifest(entries: ManifestEntry[]): { workRoot: string; prefixes: string[] } {
+export function materializeManifest(entries: ManifestEntry[]): { workRoot: string; prefixes: string[]; truncatedPaths: Set<string> } {
   const workRoot = mkdtempSync(join(tmpdir(), "cwh-replay-"));
+  const truncatedPaths = new Set<string>();
   for (const e of entries) {
     const abs = containedPath(workRoot, e.path); // reject absolute / `..` / out-of-root before writing
     const raw = decodeBody(e); // decode per the encoding marker
@@ -182,8 +183,9 @@ export function materializeManifest(entries: ManifestEntry[]): { workRoot: strin
     }
     mkdirSync(dirname(abs), { recursive: true });
     writeFileSync(abs, raw);
+    if (e.truncated) truncatedPaths.add(relative(resolve(workRoot), abs));
   }
-  return { workRoot, prefixes: ["outputs", ".projects"] };
+  return { workRoot, prefixes: ["outputs", ".projects"], truncatedPaths };
 }
 
 /** #1b: the local skill/plugin/marketplace source dirs a session mounts — the "skill dir" hash unit.
@@ -1638,9 +1640,9 @@ export async function replayCassette(
         );
     }
   }
-  const { workRoot: replayWorkRoot, prefixes: replayPrefixes } = manifestKeys.length
+  const { workRoot: replayWorkRoot, prefixes: replayPrefixes, truncatedPaths: replayTruncatedPaths } = manifestKeys.length
     ? materializeManifest(cassette.artifacts!)
-    : { workRoot: "", prefixes: [] as string[] };
+    : { workRoot: "", prefixes: [] as string[], truncatedPaths: new Set<string>() };
   const contentKeys: (keyof Assertion)[] = [
     ...(session.hasControlOut ? [...alwaysContentKeys, ...questionGateKeys] : alwaysContentKeys),
     ...manifestKeys,
@@ -1708,6 +1710,7 @@ export async function replayCassette(
     subagents: rec.subagents,
     gateDeliveries: rec.gateDeliveries,
     toolResultTexts: rec.toolResults.map((r) => r.assertText ?? r.text),
+    truncatedPaths: replayTruncatedPaths,
   });
 
   // #1b: under --strict, a staleness mismatch is a failing assertion (non-zero exit), not just a warning.

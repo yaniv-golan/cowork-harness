@@ -146,6 +146,9 @@ export interface AssertContext {
   /** Set by verify-run only when trace.json is absent/unreadable. Prevents questions_count_max from
    *  passing vacuously on missing evidence (absent ≠ zero questions). Undefined/false on live/replay lanes. */
   questionsMissing?: boolean;
+  /** Relative paths of artifacts written as 0-byte placeholders in the cassette (truncated: true entries).
+   *  Set by replay lane from materializeManifest(); empty set on live and verify-run lanes. */
+  truncatedPaths?: Set<string>;
 }
 
 export function evaluate(assertions: Assertion[], ctx: AssertContext): RunResult["assertions"] {
@@ -166,6 +169,7 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
   const results: KeyResult[] = [];
   const ok = (): KeyResult => ({ pass: true });
   const fail = (message: string): KeyResult => ({ pass: false, message });
+  const truncated = ctx.truncatedPaths ?? new Set<string>();
 
   if (a.transcript_contains !== undefined)
     results.push(
@@ -220,10 +224,15 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
     const abs = containedPath(ctx.workRoot, a.file_exists);
     if (!abs) results.push(fail(`unsafe file_exists path "${a.file_exists}" — must stay under the work root (no absolute paths or "..")`));
     else {
-      // Bug 37: verify the real path (after symlink resolution) is still under workRoot.
-      const real = containedRealPath(ctx.workRoot, abs);
-      if (!real) results.push(fail(`unsafe file_exists path "${a.file_exists}" — symlink target escapes the work root`));
-      else results.push(existsSync(real) ? ok() : fail(`file not found: ${a.file_exists} (under ${ctx.workRoot})`));
+      const relPath = relative(resolve(ctx.workRoot), abs);
+      if (truncated.has(relPath)) {
+        results.push(fail(`"${a.file_exists}" was truncated in the cassette — content was not committed; assertion cannot pass`));
+      } else {
+        // Bug 37: verify the real path (after symlink resolution) is still under workRoot.
+        const real = containedRealPath(ctx.workRoot, abs);
+        if (!real) results.push(fail(`unsafe file_exists path "${a.file_exists}" — symlink target escapes the work root`));
+        else results.push(existsSync(real) ? ok() : fail(`file not found: ${a.file_exists} (under ${ctx.workRoot})`));
+      }
     }
   }
   if (a.user_visible_artifact !== undefined) {
@@ -234,16 +243,20 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
       results.push(fail(`unsafe user_visible_artifact path "${p}" — must stay under the work root (no absolute paths or "..")`));
     } else {
       const rel = relative(resolve(ctx.workRoot), abs); // normalized, guaranteed under workRoot
-      const visible = ctx.userVisiblePrefixes.some((pre) => rel === pre || rel.startsWith(pre + "/"));
-      if (!visible)
-        results.push(
-          fail(`"${p}" is not under a user-visible prefix (${ctx.userVisiblePrefixes.join(", ")}) — invisible to the user in Cowork`),
-        );
-      else {
-        // Bug 37: verify the real path (after symlink resolution) is still under workRoot.
-        const real = containedRealPath(ctx.workRoot, abs);
-        if (!real) results.push(fail(`unsafe user_visible_artifact path "${p}" — symlink target escapes the work root`));
-        else results.push(existsSync(real) ? ok() : fail(`user-visible artifact not found: ${p}`));
+      if (truncated.has(rel)) {
+        results.push(fail(`"${p}" was truncated in the cassette — content was not committed; assertion cannot pass`));
+      } else {
+        const visible = ctx.userVisiblePrefixes.some((pre) => rel === pre || rel.startsWith(pre + "/"));
+        if (!visible)
+          results.push(
+            fail(`"${p}" is not under a user-visible prefix (${ctx.userVisiblePrefixes.join(", ")}) — invisible to the user in Cowork`),
+          );
+        else {
+          // Bug 37: verify the real path (after symlink resolution) is still under workRoot.
+          const real = containedRealPath(ctx.workRoot, abs);
+          if (!real) results.push(fail(`unsafe user_visible_artifact path "${p}" — symlink target escapes the work root`));
+          else results.push(existsSync(real) ? ok() : fail(`user-visible artifact not found: ${p}`));
+        }
       }
     }
   }

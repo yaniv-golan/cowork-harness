@@ -1531,6 +1531,60 @@ describe("Cassette — transcript_not_contains evaluates on content (not on miss
   });
 });
 
+describe("Cassette — truncated artifact entries fail file_exists and user_visible_artifact", () => {
+  const truncatedArtifact = { path: "outputs/report.json", bytes: 50000, sha256: "abc", truncated: true };
+
+  it("FAILS file_exists when the artifact was truncated in the cassette", async () => {
+    const events = [
+      JSON.stringify({ type: "system", subtype: "init", tools: ["Write"], cwd: "/sessions/x" }),
+      JSON.stringify({ type: "result", subtype: "success", is_error: false }),
+    ];
+    const cassette = {
+      scenario: makeScenario([{ file_exists: "outputs/report.json" }]),
+      events,
+      artifacts: [truncatedArtifact],
+    } as any;
+    const r = await replayCassette(cassette);
+    const a = r.assertions.find((x) => x.assertion.file_exists !== undefined);
+    expect(a?.pass).toBe(false);
+    expect(a?.message).toContain("truncated in the cassette");
+  });
+
+  it("FAILS user_visible_artifact when the artifact was truncated in the cassette", async () => {
+    const events = [
+      JSON.stringify({ type: "system", subtype: "init", tools: ["Write"], cwd: "/sessions/x" }),
+      JSON.stringify({ type: "result", subtype: "success", is_error: false }),
+    ];
+    const cassette = {
+      scenario: makeScenario([{ user_visible_artifact: "outputs/report.json" }]),
+      events,
+      artifacts: [truncatedArtifact],
+    } as any;
+    const r = await replayCassette(cassette);
+    const a = r.assertions.find((x) => x.assertion.user_visible_artifact !== undefined);
+    expect(a?.pass).toBe(false);
+    expect(a?.message).toContain("truncated in the cassette");
+  });
+
+  it("PASSES file_exists when the artifact is NOT truncated (regression guard)", async () => {
+    const events = [
+      JSON.stringify({ type: "system", subtype: "init", tools: ["Write"], cwd: "/sessions/x" }),
+      JSON.stringify({ type: "result", subtype: "success", is_error: false }),
+    ];
+    const body = JSON.stringify({ ok: true });
+    const { createHash } = await import("node:crypto");
+    const sha256 = createHash("sha256").update(Buffer.from(body)).digest("hex");
+    const cassette = {
+      scenario: makeScenario([{ file_exists: "outputs/report.json" }]),
+      events,
+      artifacts: [{ path: "outputs/report.json", bytes: body.length, sha256, body }],
+    } as any;
+    const r = await replayCassette(cassette);
+    const a = r.assertions.find((x) => x.assertion.file_exists !== undefined);
+    expect(a?.pass).toBe(true);
+  });
+});
+
 describe("execute.ts — COWORK_HARNESS_DIALOG_TIMEOUT_MS configuration guard", () => {
   it("throws when a finite timeout is set alongside an externalChannel", async () => {
     const prev = process.env.COWORK_HARNESS_DIALOG_TIMEOUT_MS;
