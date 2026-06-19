@@ -1038,6 +1038,10 @@ function cmdVm(args: string[]) {
     log(SUBCOMMAND_USAGE["vm"] ?? "usage: vm <init|status|delete|prune>");
     process.exit(2);
   }
+  // Bug 25: reject unknown flags so a typo (e.g. `--coonfigure`) fails fast instead of being silently
+  // passed to loadBaseline as a positional. Known flags: --output-format (+ equals forms), --help, -h.
+  const knownVmFlags = ["--output-format", "--output-format=json", "--output-format=text", "--help", "-h"];
+  rejectUnknownFlags("vm", args, knownVmFlags, isJsonOutput(args));
   const baseline = loadBaseline(args[1] ?? "latest");
   // #62/#63: the instance name is derived from the config hash (see lima.ts instanceName) — a config
   // change yields a new name, so a stale VM is never silently reused.
@@ -1063,10 +1067,17 @@ function cmdVm(args: string[]) {
 function cmdBoundary(args: string[]) {
   // Optional --session <file>: fold that session's egress additions into the boundary allowlist so the
   // self-test exercises the same boundary the session's runs would (not just baseline invariants).
+  // Bug 24: accept --output-format so the advertised flag isn't rejected at runtime.
+  ensureOutputFormat("boundary-check", args);
+  const json = isJsonOutput(args);
   let p;
   try {
-    // --session is the only flag; parseArgs rejects any other flag and a flag-looking --session value.
-    p = parseArgs(args, { values: ["--session"], noDashValue: ["--session"] });
+    // --session and --output-format are the known flags; parseArgs rejects any other.
+    p = parseArgs(args, {
+      values: ["--session", "--output-format"],
+      enums: { "--output-format": ["text", "json"] },
+      noDashValue: ["--session"],
+    });
   } catch (e) {
     log((e as Error).message);
     return process.exit(2);
@@ -1084,7 +1095,11 @@ function cmdBoundary(args: string[]) {
     sessionEgress = { extraAllow: s.egress.extra_allow, unrestricted: s.egress.unrestricted };
   }
   const results = runBoundaryChecks(baseline, sessionEgress);
-  log(formatBoundary(results));
+  if (json) {
+    out(JSON.stringify({ tool: "cowork-harness", command: "boundary-check", pass: results.every((r) => r.pass), results }));
+  } else {
+    log(formatBoundary(results));
+  }
   process.exit(results.every((r) => r.pass) ? 0 : 1);
 }
 
@@ -1266,9 +1281,12 @@ function cmdSync(args: string[]) {
 
 function cmdList(args: string[] = []) {
   // Bug 7: reject unknown flags and positionals.
+  // Bug 23: accept --output-format with enum validation so the advertised flag isn't rejected.
+  ensureOutputFormat("list", args);
+  const json = isJsonOutput(args);
   let listParsed;
   try {
-    listParsed = parseArgs(args, {});
+    listParsed = parseArgs(args, { values: ["--output-format"], enums: { "--output-format": ["text", "json"] } });
   } catch (e) {
     log((e as Error).message);
     return process.exit(2);
@@ -1277,7 +1295,13 @@ function cmdList(args: string[] = []) {
     log(`list takes no positional arguments (got: ${listParsed.positionals.join(", ")})`);
     return process.exit(2);
   }
-  for (const f of readdirSync(BASELINES_DIR).filter((f) => f.endsWith(".json"))) out(f);
+  const files = readdirSync(BASELINES_DIR).filter((f) => f.endsWith(".json"));
+  if (json) {
+    // emit a JSON array of objects (filename + name stem) to stdout
+    out(JSON.stringify(files.map((f) => ({ file: f, name: f.replace(/\.json$/, "") })), null, 2));
+  } else {
+    for (const f of files) out(f);
+  }
 }
 
 /** `decide` — validate a decider (helper OR policy) against a sample question in ~2s, so you don't
