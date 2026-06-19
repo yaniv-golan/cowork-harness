@@ -798,16 +798,18 @@ export async function cmdRecord(args: string[]) {
       return process.exit(0);
     }
     let failures = 0;
-    for (const { path: cp, staleness } of stale) {
+    const staleTotal = stale.length;
+    for (let i = 0; i < staleTotal; i++) {
+      const { path: cp, staleness } = stale[i];
       const rc = readCassette(cp);
       if ("error" in rc) {
         failures++;
-        log(`  ✗ ${cp}: ${rc.error} — cannot re-record`);
+        log(`  ✗ [${i + 1}/${staleTotal}] ${cp}: ${rc.error} — cannot re-record`);
         continue;
       }
       const cassette = rc.cassette;
       const diskScenario = _findScenarioOnDisk(cp, cassette.scenario.name);
-      log(`↻ re-recording ${cp} (stale: ${staleness.join("; ")})`);
+      log(`[${i + 1}/${staleTotal}] ↻ re-recording ${cp} (stale: ${staleness.join("; ")})`);
       try {
         let r: { result: RunResult };
         if (diskScenario) {
@@ -844,13 +846,16 @@ export async function cmdRecord(args: string[]) {
       return process.exit(2);
     }
     let failures = disc.broken.length;
-    for (const f of disc.scenarios) {
+    const total = disc.scenarios.length;
+    for (let i = 0; i < total; i++) {
+      const f = disc.scenarios[i];
+      log(`[${i + 1}/${total}] recording ${f}…`);
       try {
         const r = await recordScenarioFile(f, { noRedact, allowFailing, maxArtifactBytes });
-        log(`✓ ${f} → ${r.cassettePath} (${r.result.result})`);
+        log(`  ✓ → ${r.cassettePath} (${r.result.result})`);
       } catch (e) {
         failures++;
-        log(`✗ ${f}: ${(e as Error).message}`);
+        log(`  ✗ ${(e as Error).message}`);
       }
     }
     log(
