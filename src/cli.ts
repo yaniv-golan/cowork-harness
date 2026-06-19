@@ -14,7 +14,7 @@ import { vmInit, vmDelete, vmStatus, vmPrune, instanceName } from "./runtime/lim
 import { sync } from "./sync/cowork-sync.js";
 import { runBoundaryChecks, formatBoundary } from "./boundary.js";
 import { cmdChat } from "./run/chat.js";
-import { cmdRecord, cmdReplay, cmdVerifyCassettes } from "./run/cassette.js";
+import { cmdRecord, cmdReplay, cmdVerifyCassettes, cmdRehash } from "./run/cassette.js";
 import { resolveInputs } from "./run/inputs.js";
 import { cmdLint } from "./run/scenario-tool.js";
 import { cmdDoctor } from "./run/doctor.js";
@@ -79,6 +79,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
   verify-cassettes <file|dir>  CI gate (no token): privacy scan + staleness — exit 1 on finding or drift
       [--skip-privacy|--skip-staleness]  skip one check
       [--allow <regex>]... [--allow-domain/-email <regex>]... [--allow-file <path>]... [--output-format json]
+  rehash <dir/>                migrate cassette fingerprints to current version when content is provably unchanged (requires contentSig from v3+)
 
 ── CI lint + assertion reference ──────────────────────────────────────────────
   lint <scenario.yaml>…        check scenarios for silent false-greens (bundled scenario.py; needs python3 + PyYAML)
@@ -271,6 +272,7 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
   "verify-run":
     "usage: verify-run <run-dir> <scenario.yaml> [--output-format json]   (re-evaluate a scenario's assert: against a kept run dir; no live agent)",
   doctor: "usage: doctor [--tier protocol|container|microvm|hostloop|cowork] [--output-format json]   (read-only prerequisite check)",
+  rehash: "usage: rehash <dir/> [--dry-run] [--output-format text|json]   (migrate cassettes across format bumps using contentSig verification; no re-record needed)",
 };
 
 async function main() {
@@ -321,6 +323,7 @@ async function main() {
       "vm",
       "lint",
       "doctor",
+      "rehash",
     ];
     // The command-name footgun only applies to the space form (the equals form can't swallow the next
     // token as its value), but checking both is harmless and keeps the guard uniform.
@@ -383,6 +386,8 @@ async function main() {
       return cmdLint(rest);
     case "verify-cassettes":
       return cmdVerifyCassettes(rest);
+    case "rehash":
+      return cmdRehash(rest);
     case "verify-run":
       return cmdVerifyRun(rest);
     case "trace":

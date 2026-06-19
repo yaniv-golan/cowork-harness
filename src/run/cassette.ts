@@ -24,7 +24,7 @@ import { makeRenderer, renderFooter, type RenderPlan } from "./renderer.js";
 import { jsonEnvelope, parseOutputFormat } from "./envelope.js";
 import { parseArgs } from "../cli-args.js";
 import { resolveInputs } from "./inputs.js";
-import { hashSkillDirs, hashSharedOnly } from "./skill-hash.js";
+import { hashSkillDirs, hashSharedOnly, computeContentSig } from "./skill-hash.js";
 import { computeVerdict } from "./verdict.js";
 import { redactJsonLine, redactText, redactStructural, loadRedactionPolicy, type RedactionPolicy } from "../redact.js";
 import { collectSecrets, scrub } from "../secrets.js";
@@ -58,6 +58,7 @@ interface Fingerprint {
   skillSources?: string[]; // the local dirs that fed skillHash (for the replay recompute + diagnostics)
   skillScope?: string[]; // F-6: the skills the hash was scoped to (empty/absent = whole-tree); diagnostics
   sharedHash?: string; // G-4: shared-root hash for scoped cassettes; absent on whole-tree or non-plugin-root mounts
+  contentSig?: string; // v3+: algorithm-independent content fingerprint; used by `rehash` to verify content is unchanged across format bumps
 }
 
 export interface Cassette {
@@ -80,7 +81,9 @@ export interface Cassette {
 // v2 (F-6): the fingerprint may be SCOPED to a scenario's `skills:` (whole-tree default stays byte-identical
 // to v1). Bumped because a scoped `skillHash` is not reproducible by a pre-F-6 reader — which would recompute
 // whole-tree and mis-flag a scoped cassette as stale; the version lets such a reader warn instead.
-const CASSETTE_VERSION = 2;
+// v3: adds `contentSig` to Fingerprint — an algorithm-independent content fingerprint that survives
+// hash-algorithm changes, enabling `rehash` to migrate cassettes without a full re-record.
+const CASSETTE_VERSION = 3;
 
 /** Canonical URL of the JSON Schema for this cassette format version.
  *  Appears in every written cassette as `$schema` so editors and unfamiliar readers
@@ -230,6 +233,7 @@ export function buildFingerprint(
   const fp: Fingerprint = {
     baseline: baselineAppVersion,
     skillHash: hashResult.hash,
+    contentSig: computeContentSig(dirs), // v3: algorithm-independent; survives hash-format changes
     skillSources: dirs.sort().map((d) => relative(baseDir, d)),
   };
   if (scopeSkills && scopeSkills.length) fp.skillScope = [...scopeSkills].sort();
@@ -1140,6 +1144,161 @@ export function cmdVerifyCassettes(args: string[]) {
     );
   }
   return process.exit(ok ? 0 : 1);
+}
+
+/** `cowork-harness rehash <dir/> [--dry-run] [--output-format text|json]`
+ *
+ *  Migrates cassettes recorded under an older `cassetteVersion` to the current version
+ *  WITHOUT a full re-record — but ONLY when `contentSig` confirms the skill content is
+ *  provably unchanged. Cassettes without `contentSig` (pre-v3) cannot be rehashed; re-record once.
+ *
+ *  Safe to run repeatedly: already-current cassettes are reported as skipped. */
+export function cmdRehash(args: string[]): void {
+  let p;
+  try {
+    p = parseArgs(args, {
+      booleans: ["--dry-run"],
+      values: ["--output-format"],
+      enums: { "--output-format": ["text", "json"] },
+    });
+  } catch (e) {
+    log((e as Error).message);
+    return process.exit(2);
+  }
+  if (p.positionals.length !== 1) {
+    log("usage: rehash <dir/> [--dry-run] [--output-format text|json]");
+    return process.exit(2);
+  }
+  const dir = p.positionals[0];
+  if (!existsSync(dir) || !statSync(dir).isDirectory()) {
+    log(`rehash: not a directory: ${dir}`);
+    return process.exit(2);
+  }
+
+  const dryRun = p.flags["--dry-run"] ?? false;
+  const asJson = p.options["--output-format"] === "json";
+
+  let liveBaseline: string;
+  try {
+    liveBaseline = loadBaseline("latest").appVersion;
+  } catch (e) {
+    log(`rehash: cannot load latest baseline — ${(e as Error).message}`);
+    return process.exit(1);
+  }
+
+  const files = readdirSync(dir)
+    .filter((f) => f.endsWith(".cassette.json"))
+    .sort()
+    .map((f) => join(dir, f));
+
+  if (files.length === 0) {
+    if (asJson) out(JSON.stringify({ command: "rehash", dryRun, migrated: 0, skipped: 0, errors: 0, results: [] }));
+    else log("✓ rehash: nothing to migrate — no cassettes in directory");
+    return process.exit(0);
+  }
+
+  type Action = "migrated" | "skipped" | "error";
+  const results: { file: string; action: Action; reason: string }[] = [];
+
+  for (const file of files) {
+    const rc = readCassette(file);
+    if ("error" in rc) {
+      results.push({ file, action: "error", reason: rc.error });
+      continue;
+    }
+    const { cassette } = rc;
+    const recordedVersion = cassette.cassetteVersion ?? 0;
+
+    // Already at current version — nothing to do.
+    if (recordedVersion >= CASSETTE_VERSION) {
+      results.push({ file, action: "skipped", reason: `already at v${recordedVersion}` });
+      continue;
+    }
+
+    // No fingerprint — no skill dirs were tracked; only baseline staleness applies, which requires re-record.
+    if (!cassette.fingerprint?.skillHash) {
+      results.push({ file, action: "skipped", reason: "no skillHash in fingerprint — only baseline drift is possible; re-record if needed" });
+      continue;
+    }
+
+    // Pre-v3: no contentSig present — can't verify content is unchanged; must re-record once to adopt it.
+    if (!cassette.fingerprint.contentSig) {
+      results.push({
+        file,
+        action: "error",
+        reason:
+          "no contentSig (recorded before v3) — re-record once to enable `rehash` for future format bumps",
+      });
+      continue;
+    }
+
+    // Baseline drifted — a re-record is required regardless of skill content.
+    if (cassette.fingerprint.baseline !== liveBaseline) {
+      results.push({
+        file,
+        action: "skipped",
+        reason: `baseline drifted (${cassette.fingerprint.baseline} → ${liveBaseline}) — re-record required`,
+      });
+      continue;
+    }
+
+    // Compute current contentSig from skill dirs relative to the cassette location.
+    const liveFingerprint = buildFingerprint(cassette.scenario.session, cassette.fingerprint.baseline, dirname(file), cassette.scenario.skills);
+
+    if (!liveFingerprint.contentSig) {
+      results.push({ file, action: "error", reason: "skill dirs not resolvable from cassette location — cannot compute contentSig" });
+      continue;
+    }
+
+    // The content check: current contentSig must match the recorded one.
+    if (liveFingerprint.contentSig !== cassette.fingerprint.contentSig) {
+      results.push({
+        file,
+        action: "error",
+        reason: "skill content changed since recording (contentSig mismatch) — re-record required",
+      });
+      continue;
+    }
+
+    // Safe to migrate: content is provably unchanged. Recompute the full fingerprint under the
+    // current algorithm and bump cassetteVersion.
+    if (!dryRun) {
+      const updated: Cassette = {
+        ...cassette,
+        cassetteVersion: CASSETTE_VERSION,
+        fingerprint: { ...liveFingerprint },
+      };
+      writeFileSync(file, JSON.stringify(updated, null, 2));
+    }
+    results.push({
+      file,
+      action: "migrated",
+      reason: `v${recordedVersion} → v${CASSETTE_VERSION}${dryRun ? " (dry-run)" : ""}`,
+    });
+  }
+
+  const migrated = results.filter((r) => r.action === "migrated").length;
+  const skipped = results.filter((r) => r.action === "skipped").length;
+  const errors = results.filter((r) => r.action === "error").length;
+
+  if (asJson) {
+    out(JSON.stringify({ command: "rehash", dryRun, migrated, skipped, errors, results }));
+  } else {
+    for (const r of results) {
+      const glyph = r.action === "migrated" ? "✓" : r.action === "error" ? "✗" : "·";
+      log(`${glyph} ${r.file}: ${r.reason}`);
+    }
+    if (migrated > 0 || errors > 0) {
+      log(
+        errors > 0
+          ? `✗ rehash: ${migrated} migrated, ${skipped} skipped, ${errors} could not migrate${dryRun ? " (dry-run)" : ""}`
+          : `✓ rehash: ${migrated} cassette(s) migrated to v${CASSETTE_VERSION}${dryRun ? " (dry-run — nothing written)" : ""}`,
+      );
+    } else {
+      log("✓ rehash: nothing to migrate");
+    }
+  }
+  return process.exit(errors > 0 ? 1 : 0);
 }
 
 /** Replay a cassette through Run and re-evaluate the content assertions. With a `cassette.artifacts`

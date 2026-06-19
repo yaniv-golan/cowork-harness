@@ -188,6 +188,65 @@ function scopedAccept(keep: Set<string>): AcceptFn {
   };
 }
 
+/** Algorithm-independent content fingerprint over `dirs`.
+ *  SHA-256 over globally-sorted `"dirN/relpath:content-sha256"` entries for every regular file
+ *  in every dir, using the same VCS/cache exclusions as `hashDir` but NO hashIgnore rules
+ *  (those are staleness-algorithm-specific and change between CASSETTE_VERSIONs).
+ *  Does NOT strip plugin.json version — hashes raw file bytes.
+ *  Each dir is prefixed by its 0-based sort index (dir0, dir1, …) to prevent collisions
+ *  between dirs that share the same basename (e.g. two plugins both named `skills`).
+ *  Returns `undefined` for an empty or all-missing dirs list. */
+export function computeContentSig(dirs: string[]): string | undefined {
+  if (dirs.length === 0) return undefined;
+  const entries: string[] = [];
+
+  function walkForSig(dir: string, prefix: string, rel: string): void {
+    let names: string[];
+    try {
+      names = readdirSync(dir).sort();
+    } catch {
+      return; // unreadable dir → treat as empty
+    }
+    for (const name of names) {
+      const abs = join(dir, name);
+      const relPath = rel ? `${rel}/${name}` : name;
+      const fullRelPath = `${prefix}/${relPath}`;
+      let st;
+      try {
+        st = statSync(abs);
+      } catch {
+        continue;
+      }
+      if (st.isDirectory()) {
+        if (SKILL_HASH_DIR_DENYLIST.has(name)) continue;
+        walkForSig(abs, prefix, relPath);
+      } else if (st.isFile()) {
+        if (name.endsWith(".cassette.json")) continue;
+        if (name === HASH_IGNORE_FILE) continue;
+        let content: Buffer;
+        try {
+          content = readFileSync(abs);
+        } catch {
+          continue;
+        }
+        const sha = createHash("sha256").update(content).digest("hex");
+        entries.push(`${fullRelPath}:${sha}`);
+      }
+    }
+  }
+
+  // Sort dirs for determinism, then prefix by index to prevent basename collisions
+  // (two dirs with the same basename — e.g. both named `skills` — would otherwise alias).
+  const sorted = [...dirs].sort();
+  for (let i = 0; i < sorted.length; i++) {
+    walkForSig(sorted[i], `dir${i}`, "");
+  }
+
+  if (entries.length === 0) return undefined;
+  entries.sort(); // global sort across all dirs
+  return createHash("sha256").update(entries.join("\n")).digest("hex");
+}
+
 export interface HashSkillDirsResult {
   /** The sha256 hex digest. */
   hash: string;
