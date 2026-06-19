@@ -204,9 +204,12 @@ function skillSourceDirs(sessionPath: string, cassetteDir?: string): { dirs: str
   } catch {
     return { dirs: [], baseDir, hashIgnore: [] };
   }
-  const dirs = [...cfg.skills.local, ...cfg.plugins.local_plugins, ...cfg.plugins.remote_plugins, ...cfg.plugins.local_marketplaces].filter(
-    (d) => existsSync(d),
-  );
+  const allDeclared = [...cfg.skills.local, ...cfg.plugins.local_plugins, ...cfg.plugins.remote_plugins, ...cfg.plugins.local_marketplaces];
+  const dirs = allDeclared.filter((d) => {
+    if (existsSync(d)) return true;
+    process.stderr.write(`cowork-harness: skill source dir declared in session does not exist: ${d} — skipping from fingerprint\n`);
+    return false;
+  });
   // F-6: session-declared ignore globs (added to any plugin-local .cowork-hashignore inside hashSkillDirs).
   return { dirs, baseDir, hashIgnore: cfg.staleness.hash_ignore };
 }
