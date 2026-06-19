@@ -24,7 +24,7 @@ export interface RunContext {
 
 export interface Decision {
   response: DecisionResponse;
-  by: "scripted" | "cowork" | "strict" | "human" | "llm" | "agent" | "external" | "first" | "fail" | "replay";
+  by: "scripted" | "cowork" | "strict" | "human" | "llm" | "agent" | "external" | "first" | "fail" | "replay" | "abstain-fallback";
   rationale?: string;
   model?: string; // set by LlmDecider — surfaced in unanswered[].model for auditability
 }

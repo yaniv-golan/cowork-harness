@@ -1459,12 +1459,12 @@ describe("Run.requestWebFetchApproval — recorded synthetic permission (#30 C3 
     expect(rec.decisions.find((d) => d.name === "webfetch:no.com")).toMatchObject({ decision: "deny", by: "scripted" });
   });
 
-  it("ABSTAIN → fail-closed deny, recorded by:fail, and NEVER responds to the agent (no stray control_response)", async () => {
+  it("ABSTAIN → fail-closed deny, recorded by:abstain-fallback, and NEVER responds to the agent (no stray control_response)", async () => {
     const session = resultOnly();
     const run = new Run(session, new ScriptedDecider([]), [], "t");
     const rec = await run.drive("hi");
     expect(await run.requestWebFetchApproval("x.com", "https://x.com/x")).toBe(false);
-    expect(rec.decisions.find((d) => d.name === "webfetch:x.com")).toMatchObject({ decision: "deny", by: "fail" });
+    expect(rec.decisions.find((d) => d.name === "webfetch:x.com")).toMatchObject({ decision: "deny", by: "abstain-fallback" });
     expect(session.responded.length).toBe(0); // synthetic id is never sent to the agent
   });
 

@@ -1,6 +1,6 @@
 import { warn } from "../io.js";
 import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync, readdirSync, statSync, lstatSync, realpathSync } from "node:fs";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { join, dirname, resolve, basename, isAbsolute } from "node:path";
 import { parse as parseYaml } from "yaml";
@@ -55,15 +55,23 @@ export interface ExecuteOptions {
  */
 /** #17: turn a scenario name into a SAFE single directory segment — neutralize path separators and
  *  ".." so a YAML/filename-derived name can't escape `runs/`. Otherwise human-readable; the display
- *  name (scenario.name) is kept separate and unchanged. */
+ *  name (scenario.name) is kept separate and unchanged.
+ *
+ *  Length bound: the full sanitized slug is truncated to 128 chars and a collision-avoidance suffix
+ *  is appended: "-" + the first 8 hex chars of SHA-256(full-slug). This caps the segment at 137 chars
+ *  (128 + 1 + 8) and prevents names that share a 128-char prefix from colliding in the filesystem.
+ *  Format: <up-to-128-char-prefix>-<8-hex-chars>
+ */
 export function slugForPath(name: string): string {
-  return (
+  const full =
     name
       .split(/[/\\]/)
       .join("-")
       .replace(/\.{2,}/g, ".")
-      .replace(/^[.\-]+/, "") || "scenario"
-  );
+      .replace(/^[.\-]+/, "") || "scenario";
+  if (full.length <= 128) return full;
+  const hash = createHash("sha256").update(full).digest("hex").slice(0, 8);
+  return `${full.slice(0, 128)}-${hash}`;
 }
 
 export async function executeScenario(scenario: Scenario, opts: ExecuteOptions = {}): Promise<RunResult> {
