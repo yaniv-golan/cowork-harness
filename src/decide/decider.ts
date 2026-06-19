@@ -266,16 +266,20 @@ export class FirstOptionDecider implements Decider {
 /** Pluggable model-completion transport (so LlmDecider is unit-testable without a real model call). */
 export type Complete = (prompt: string, model: string) => Promise<string>;
 
-/** Strict label match: exact → case-insensitive → contained-in-response. NULL on no match (caller fails
- *  loud — we deliberately do NOT fall back to option 1 like `coerceLabel`, which would silently mis-answer). */
-export function matchLabel(raw: string, labels: string[]): string | null {
+/** Strict label match: exact → case-insensitive. NULL on no match (caller fails loud — we deliberately
+ *  do NOT fall back to option 1 like `coerceLabel`, which would silently mis-answer).
+ *  When `fuzzy` is true, also accept a substring match (ONLY when exactly one label appears in the reply
+ *  to avoid ambiguity). Callers that consume human or LLM output should leave `fuzzy` at its default
+ *  (false) to require an exact answer — the substring heuristic is opt-in only. */
+export function matchLabel(raw: string, labels: string[], fuzzy = false): string | null {
   const r = raw.trim();
   const exact = labels.find((l) => l === r) ?? labels.find((l) => l.toLowerCase() === r.toLowerCase());
   if (exact) return exact;
-  // #6: the substring tier fires ONLY when EXACTLY ONE label is contained in the reply. With labels
-  // ["No","Notation"] and reply "Notation", both the apex match and the contains-check used to pick
-  // "No" (the first substring) — an ambiguous mis-steer. If two+ labels match (or none), return null so
-  // the caller's UnansweredError fires (fail loud) rather than guessing the wrong option.
+  if (!fuzzy) return null;
+  // fuzzy=true: the substring tier fires ONLY when EXACTLY ONE label is contained in the reply. With
+  // labels ["No","Notation"] and reply "Notation", both the apex match and the contains-check used to
+  // pick "No" (the first substring) — an ambiguous mis-steer. If two+ labels match (or none), return
+  // null so the caller's UnansweredError fires (fail loud) rather than guessing the wrong option.
   const rl = r.toLowerCase();
   const substr = labels.filter((l) => rl.includes(l.toLowerCase()));
   return substr.length === 1 ? substr[0] : null;
@@ -433,19 +437,51 @@ export class PromptDecider implements Decider {
         const text = q.question ?? q.header ?? "";
         const optionLabels = q.options.map((o) => o.label);
         warnDuplicateLabels(optionLabels, JSON.stringify(text));
-        const optionList = `${text}\n${q.options.map((o, i) => `  ${i + 1}) ${o.label}${o.description ? " — " + o.description : ""}`).join("\n")}\n> `;
-        let coerced: { value: string; matched: boolean };
-        do {
-          const raw = await this.ask(optionList);
-          // coerceLabel accepts: 1-based index, exact label (case-insensitive), "(Recommended)" suffix
-          // tolerance, "recommended" keyword, and "first" keyword (option 1). "last" is NOT a keyword.
-          coerced = coerceLabel(raw, optionLabels);
-          if (!coerced.matched)
-            process.stderr.write(
-              `Unrecognized input. Please enter a number (1–${optionLabels.length}) or one of: ${optionLabels.join(", ")}\n`,
-            );
-        } while (!coerced.matched);
-        answers[text] = coerced.value;
+        if (q.multiSelect) {
+          // Multi-select gate: accept comma-separated indices or labels; validate each pick; serialize
+          // as a comma-joined string matching the AskUserQuestion wire shape (binary-verified).
+          const optionList = `${text}\n${q.options.map((o, i) => `  ${i + 1}) ${o.label}${o.description ? " — " + o.description : ""}`).join("\n")}\nSelect one or more, comma-separated:\n> `;
+          let resolved: string[] | null = null;
+          do {
+            const raw = await this.ask(optionList);
+            const parts = raw.split(",").map((p) => p.trim()).filter(Boolean);
+            if (parts.length === 0) {
+              process.stderr.write(`Please enter at least one choice (comma-separated numbers or labels).\n`);
+              continue;
+            }
+            const picks: string[] = [];
+            let invalid = false;
+            for (const part of parts) {
+              // coerceLabel accepts: 1-based index, exact label (case-insensitive), "(Recommended)" suffix
+              // tolerance, "recommended" keyword, and "first" keyword (option 1). "last" is NOT a keyword.
+              const coerced = coerceLabel(part, optionLabels);
+              if (!coerced.matched) {
+                process.stderr.write(
+                  `Unrecognized input "${part}". Please enter numbers (1–${optionLabels.length}) or labels: ${optionLabels.join(", ")}\n`,
+                );
+                invalid = true;
+                break;
+              }
+              picks.push(coerced.value);
+            }
+            if (!invalid) resolved = picks;
+          } while (resolved === null);
+          answers[text] = resolved!.join(", ");
+        } else {
+          const optionList = `${text}\n${q.options.map((o, i) => `  ${i + 1}) ${o.label}${o.description ? " — " + o.description : ""}`).join("\n")}\n> `;
+          let coerced: { value: string; matched: boolean };
+          do {
+            const raw = await this.ask(optionList);
+            // coerceLabel accepts: 1-based index, exact label (case-insensitive), "(Recommended)" suffix
+            // tolerance, "recommended" keyword, and "first" keyword (option 1). "last" is NOT a keyword.
+            coerced = coerceLabel(raw, optionLabels);
+            if (!coerced.matched)
+              process.stderr.write(
+                `Unrecognized input. Please enter a number (1–${optionLabels.length}) or one of: ${optionLabels.join(", ")}\n`,
+              );
+          } while (!coerced.matched);
+          answers[text] = coerced.value;
+        }
       }
       return { response: { kind: "question", answers }, by: "human" };
     }

@@ -7,26 +7,37 @@ import type { AnswerRule } from "../src/types.js";
 const ctx = (): RunContext => ({ task: "", transcript: () => "", toolLog: () => [], runId: "local_x" });
 const perm = (input: Record<string, unknown>): DecisionRequest => ({ id: "p1", kind: "permission", tool: "Bash", input });
 
-// #6 — matchLabel: ambiguous substring → null (fail loud), single substring → match, exact tiers win first.
-describe("matchLabel (#6 — substring tier only fires on a UNIQUE substring)", () => {
-  it("ambiguous: two labels are substrings of the reply → null (caller fails loud)", () => {
+// Bug 17 — matchLabel: substring heuristic is opt-in (fuzzy=true). Default (fuzzy=false) requires exact match.
+describe("matchLabel — exact-only by default; substring is opt-in via fuzzy=true", () => {
+  it("exact match wins regardless of fuzzy flag", () => {
     // The old code returned "No" (first substring) for reply "Notation" — a mis-steer. Both "No" and
     // "Notation" are contained in "Notation", so the substring tier must decline.
     expect(matchLabel("Notation", ["No", "Notation"])).toBe("Notation"); // exact wins, not the substring tier
-    expect(matchLabel("xNotationx", ["No", "Notation"])).toBe(null); // both substrings, no exact → null
+    expect(matchLabel("Notation", ["No", "Notation"], true)).toBe("Notation"); // same with fuzzy=true
   });
 
-  it("single substring → match (the useful lenient case is preserved)", () => {
-    expect(matchLabel("Markdown format please", ["Markdown", "PDF"])).toBe("Markdown");
+  it("without fuzzy flag: reply containing a single label substring does NOT match (returns null)", () => {
+    expect(matchLabel("Markdown format please", ["Markdown", "PDF"])).toBe(null);
   });
 
-  it("exact and case-insensitive-exact tiers win before the substring tier", () => {
+  it("with fuzzy=true: single substring → match (the lenient case is preserved for opt-in callers)", () => {
+    expect(matchLabel("Markdown format please", ["Markdown", "PDF"], true)).toBe("Markdown");
+  });
+
+  it("with fuzzy=true: ambiguous substrings → null (fail loud, not a guess)", () => {
+    expect(matchLabel("xNotationx", ["No", "Notation"], true)).toBe(null); // both substrings, no exact → null
+  });
+
+  it("exact and case-insensitive-exact tiers win before the substring tier (both modes)", () => {
     expect(matchLabel("PDF", ["Markdown", "PDF"])).toBe("PDF"); // exact
     expect(matchLabel("pdf", ["Markdown", "PDF"])).toBe("PDF"); // case-insensitive exact
+    expect(matchLabel("PDF", ["Markdown", "PDF"], true)).toBe("PDF"); // exact with fuzzy
+    expect(matchLabel("pdf", ["Markdown", "PDF"], true)).toBe("PDF"); // case-insensitive exact with fuzzy
   });
 
-  it("no match at all → null", () => {
+  it("no match at all → null (both modes)", () => {
     expect(matchLabel("CSV", ["Markdown", "PDF"])).toBe(null);
+    expect(matchLabel("CSV", ["Markdown", "PDF"], true)).toBe(null);
   });
 });
 

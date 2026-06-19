@@ -19,12 +19,21 @@ describe("LlmDecider", () => {
     expect((d as any).model).toBe("haiku-test");
   });
 
-  it("puts the --intent into the model prompt and matches a label inside a prose answer", async () => {
+  it("puts the --intent into the model prompt; requires an exact label (not a prose answer) — Bug 17", async () => {
     let seenPrompt = "";
-    const complete: Complete = async (p) => ((seenPrompt = p), "I would choose Series A here.");
-    const d = await new LlmDecider(complete, "test the not_ai branch").decide(ask("Confirm the stage?", ["Seed", "Series A"]), ctx());
+    // Bug 17 fix: matchLabel defaults to fuzzy=false, so a prose answer is no longer accepted.
+    // The LLM prompt says "Reply with ONLY the exact label" — a well-behaved model should return the
+    // exact label, not a prose sentence. A prose answer must now fail loud (not silently accept it).
+    const completeProse: Complete = async (p) => ((seenPrompt = p), "I would choose Series A here.");
+    await expect(
+      new LlmDecider(completeProse, "test the not_ai branch").decide(ask("Confirm the stage?", ["Seed", "Series A"]), ctx()),
+    ).rejects.toThrow(UnansweredError);
     expect(seenPrompt).toContain("test the not_ai branch");
-    expect((d as any).response.answers).toEqual({ "Confirm the stage?": "Series A" }); // matched inside prose
+
+    // A well-behaved LLM returning the exact label still works.
+    const completeExact: Complete = async () => "Series A";
+    const d = await new LlmDecider(completeExact, "test the not_ai branch").decide(ask("Confirm the stage?", ["Seed", "Series A"]), ctx());
+    expect((d as any).response.answers).toEqual({ "Confirm the stage?": "Series A" });
   });
 
   it("FAILS LOUD on an out-of-set answer — never a silent default to option 1", async () => {
