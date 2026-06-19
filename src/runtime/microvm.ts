@@ -126,6 +126,15 @@ export function firewallFailureAction(lockdown: boolean): "throw" | "skip" {
 }
 
 /**
+ * Wrap a value in POSIX single-quotes so it is safe to interpolate into a shell string.
+ * Embedded single-quotes are escaped via the `'\''` idiom (close, escaped literal, reopen).
+ * Use this wherever a runtime value (session ID, path) appears in a `sh -c "..."` string.
+ */
+function shQuote(s: string): string {
+  return "'" + s.replace(/'/g, "'\\''") + "'";
+}
+
+/**
  * #63: the in-guest shell script. The work root is mounted directly at /sessions, so `sessionVm`
  * (/sessions/<id>) is a REAL dir — cd into it and exec the agent (no symlink, no mkdir). `set -e` +
  * the explicit cd guard FAIL LOUD if the mount is missing (a stale/un-provisioned VM) instead of
@@ -133,13 +142,18 @@ export function firewallFailureAction(lockdown: boolean): "throw" | "skip" {
  * script's silent false-green). The agent + public env ride in argv ($@); #29: SECRET env arrives
  * on a stdin PROLOGUE (read up to the sentinel, exported) so the token is never in argv or on disk.
  * Pure + exported so the script shape is unit-testable.
+ *
+ * #34: sessionVm is shell-quoted via shQuote() so a path with spaces or special characters cannot
+ * break out of the cd argument or the error message string.
  */
 export function microvmShellScript(sessionVm: string): string {
+  const quotedPath = shQuote(sessionVm);
   const cdFail = `microvm: ${sessionVm} is not mounted — VM not provisioned for this harness config; recreate it (cowork-harness vm delete && vm init)`;
   // Consume the #29 secret prologue (one KEY=value per line) up to the sentinel, exporting each, then
   // exec the agent — at which point stdin is positioned at the control-protocol stream for claude.
+  // cdFail is embedded in single-quotes so its content is literal (no $-expansion, no quote injection).
   return (
-    `set -e; cd ${sessionVm} 2>/dev/null || { echo "${cdFail}" >&2; exit 1; }; ` +
+    `set -e; cd ${quotedPath} 2>/dev/null || { echo ${shQuote(cdFail)} >&2; exit 1; }; ` +
     `while IFS= read -r __cs; do [ "$__cs" = "${MICROVM_SECRET_SENTINEL}" ] && break; export "$__cs"; done; ` +
     `exec "$@"`
   );

@@ -83,7 +83,7 @@ describe("#63 — work root is mounted at /sessions (no /cowork-work + symlink)"
 
   it("the in-guest script just cds into the real /sessions mount and execs — no symlink/mkdir, fails loud", () => {
     const script = microvmShellScript("/sessions/sess-abc");
-    expect(script).toMatch(/^set -e; cd \/sessions\/sess-abc/);
+    expect(script).toMatch(/^set -e; cd '\/sessions\/sess-abc'/);
     expect(script).toContain('exec "$@"');
     expect(script).not.toContain("ln -sfn");
     expect(script).not.toContain("mkdir");

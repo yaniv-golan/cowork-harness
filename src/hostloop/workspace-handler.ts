@@ -141,10 +141,10 @@ export function u1t(u: URL, allow: string[], matcher: (h: string) => boolean): s
 }
 
 /** A single redirect-manual network hop — injectable so the token-free suite can drive redirects/SSRF. */
-export type RawFetch = (url: string) => Promise<{ status: number; location?: string; text(): Promise<string> }>;
+export type RawFetch = (url: string) => Promise<{ status: number; location?: string; text(): Promise<string>; body?: ReadableStream<Uint8Array> | null }>;
 const defaultRawFetch: RawFetch = async (url) => {
   const r = await fetch(url, { redirect: "manual", signal: AbortSignal.timeout(30000) });
-  return { status: r.status, location: r.headers.get("location") ?? undefined, text: () => r.text() };
+  return { status: r.status, location: r.headers.get("location") ?? undefined, text: () => r.text(), body: r.body };
 };
 
 /**
@@ -330,7 +330,34 @@ async function followWithRedirects(
       continue; // re-check the gate on the new host
     }
     onEgress?.({ host: cur.hostname, decision: "allow" });
-    return textResult((await resp.text()).slice(0, 200000));
+    const LIMIT = 200000;
+    // #33: stream via resp.body to avoid buffering the full response before truncation.
+    // Falls back to resp.text() for injectable test fakes that don't provide a body stream.
+    if (resp.body) {
+      const reader = resp.body.getReader();
+      const chunks: Uint8Array[] = [];
+      let total = 0;
+      let truncated = false;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value) {
+          if (total + value.length > LIMIT) {
+            chunks.push(value.subarray(0, LIMIT - total));
+            total = LIMIT;
+            truncated = true;
+            reader.cancel().catch(() => {});
+            break;
+          }
+          chunks.push(value);
+          total += value.length;
+        }
+      }
+      const decoder = new TextDecoder();
+      const text = chunks.map((c) => decoder.decode(c, { stream: true })).join("") + decoder.decode();
+      return textResult(truncated ? text + "\n[truncated]" : text);
+    }
+    return textResult((await resp.text()).slice(0, LIMIT));
   }
   return textResult(`web_fetch failed: too many redirects (> ${MAX_REDIRECTS}).`, true);
 }

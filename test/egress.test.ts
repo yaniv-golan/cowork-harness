@@ -214,3 +214,34 @@ describe("#43 — parseEgressLine validates and never coerces unknown decisions 
     expect(warnings.some((w) => w.includes("not coercing to allow"))).toBe(true);
   });
 });
+
+describe("#31 — parseEgressLine rejects missing or non-string host (no 'undefined' coercion)", () => {
+  it("drops lines with missing host, null host, or non-string host — never coerces to 'undefined'", () => {
+    const warnings: string[] = [];
+    const orig = process.stderr.write.bind(process.stderr);
+    (process.stderr as any).write = (s: string) => {
+      warnings.push(String(s));
+      return true;
+    };
+    try {
+      // missing host field
+      const missingHost = parseEgressLine(JSON.stringify({ decision: "allow" }));
+      // host is null
+      const nullHost = parseEgressLine(JSON.stringify({ host: null, decision: "allow" }));
+      // host is a number (not a string)
+      const numericHost = parseEgressLine(JSON.stringify({ host: 12345, decision: "allow" }));
+      // host is an empty string
+      const emptyHost = parseEgressLine(JSON.stringify({ host: "", decision: "allow" }));
+
+      expect(missingHost).toBeNull();
+      expect(nullHost).toBeNull();
+      expect(numericHost).toBeNull();
+      expect(emptyHost).toBeNull();
+    } finally {
+      (process.stderr as any).write = orig;
+    }
+    // All four must have emitted a warning; none must produce a host of "undefined"
+    expect(warnings.filter((w) => w.startsWith("::warning::"))).toHaveLength(4);
+    expect(warnings.some((w) => w.includes('"undefined"') || w.includes("host: undefined"))).toBe(false);
+  });
+});

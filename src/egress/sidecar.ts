@@ -115,7 +115,11 @@ export function parseEgressLine(line: string): { host: string; decision: "allow"
     warn(`::warning:: [egress] proxy log line is not a JSON object — dropping: ${line.slice(0, 200)}\n`);
     return null;
   }
-  const host = String(o.host);
+  if (typeof o.host !== "string" || !o.host) {
+    warn(`::warning:: [egress] proxy log line missing or non-string host — dropping: ${line.slice(0, 200)}\n`);
+    return null;
+  }
+  const host = o.host;
   if (o.decision !== "allow" && o.decision !== "deny") {
     warn(`::warning:: [egress] unknown decision "${o.decision}" for host ${host} — dropping (not coercing to allow)\n`);
     return null;
