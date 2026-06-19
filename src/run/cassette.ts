@@ -832,7 +832,7 @@ export async function cmdRecord(args: string[]) {
     log("record --dry-run");
     log(`  scenario: ${scenario.name}`);
     log(`  file:     ${target}`);
-    log(`  fidelity: ${scenario.fidelity}`);
+    if (scenario.fidelity) log(`  fidelity: ${scenario.fidelity}`);
     log(`  cassette: ${cassettePath}`);
     log(tokenLine);
     log(agentLine);
@@ -1326,6 +1326,8 @@ export function cmdRehash(args: string[]): void {
     if (!dryRun) {
       const updated: Cassette = {
         ...cassette,
+        $schema: CASSETTE_SCHEMA_URL,
+        generator: "cowork-harness",
         cassetteVersion: CASSETTE_VERSION,
         fingerprint: { ...liveFingerprint },
       };
