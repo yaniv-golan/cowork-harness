@@ -1,0 +1,57 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/yaniv-golan/cowork-harness/main/schema/run-result.json",
+  "title": "RunResult",
+  "description": "Structured output written to runs/<sha>/result.json by cowork-harness executeScenario",
+  "type": "object",
+  "required": ["scenario", "fidelity", "baseline", "result", "decisions", "egress", "assertions", "outDir"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "generator": { "type": "string" },
+    "scenario": { "type": "string" },
+    "prompt": { "type": "string" },
+    "fidelity": { "type": "string" },
+    "baseline": { "type": "string" },
+    "result": { "type": "string", "enum": ["success", "error"] },
+    "decisions": { "type": "array" },
+    "toolCounts": { "type": "object" },
+    "gateDeliveries": { "type": "array" },
+    "egress": { "type": "array" },
+    "assertions": { "type": "array" },
+    "subagents": { "type": "array" },
+    "unanswered": { "type": "array" },
+    "usage": { "type": "object" },
+    "cost": { "type": "object" },
+    "durationMs": { "type": "number" },
+    "outDir": { "type": "string" },
+    "workDir": { "type": "string" },
+    "outputsDir": { "type": "string" },
+    "artifacts": { "type": "array" },
+    "nonDeterministic": { "type": "boolean" },
+    "nonDeterministicTerminal": { "type": "boolean" },
+    "permissiveAutoAllow": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "#6: off-registry auto-allows (real Cowork blocks these); non-empty means NOT a faithful pass"
+    },
+    "scan": {
+      "type": "object",
+      "description": "Post-run scan signals (live lane only)",
+      "properties": {
+        "outputsDeletes": { "type": "array", "items": { "type": "string" } },
+        "hostPathLeaked": { "type": "boolean" },
+        "selfHealRan": { "type": "boolean" }
+      }
+    },
+    "effectiveFidelity": {
+      "type": "string",
+      "description": "The fidelity tier actually used (differs from fidelity when fidelity:'cowork')"
+    },
+    "fidelityWarnings": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "#49: structured prompt warnings visible to JSON callers"
+    },
+    "l0PluginDivergence": { "type": "boolean", "description": "#20: failing fidelity signal for protocol+plugins" }
+  }
+}

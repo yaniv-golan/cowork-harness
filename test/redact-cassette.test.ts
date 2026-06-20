@@ -48,6 +48,24 @@ describe("redactCassette — whole-surface content redaction (C1)", () => {
     const red: any = redactCassette(c, policy);
     expect(red.artifacts[0].path).not.toContain("@acme.com");
   });
+
+  it("leaves a [REDACTED:*] marker body unchanged (Issue A fix — marker must not be rewritten without sha256 recompute)", () => {
+    // When a base64 artifact body is secret-scrubbed to "[REDACTED:base64]", the encoding is cleared
+    // and sha256 is recomputed over the marker. If redactCassette then ran redactJsonLine on the marker,
+    // a broad PII policy could rewrite it without updating sha256, causing a "corrupt cassette" error
+    // at replay. The fix: skip redactJsonLine when body starts with "[REDACTED".
+    const sha256 = "aabbcc"; // sentinel — not verified here, just checking body is preserved
+    const c: any = {
+      scenario: scenario([{ result: "success" }]),
+      events: [JSON.stringify({ type: "result", subtype: "success" })],
+      artifacts: [{ path: "outputs/secret.bin", bytes: 17, sha256, body: "[REDACTED:base64]" }],
+    };
+    // Use a broad policy that would match "base64" as a word if redactJsonLine ran on it.
+    const broadPolicy: RedactionPolicy = { patterns: [{ re: /base64/gi, label: "b64" }], keyNames: [] };
+    const red: any = redactCassette(c, broadPolicy);
+    expect(red.artifacts[0].body).toBe("[REDACTED:base64]"); // untouched
+    expect(red.artifacts[0].sha256).toBe(sha256); // sha256 unchanged
+  });
 });
 
 describe("O7-preservation — redacting a gated cassette must NOT break the replay protocol-fidelity guard", () => {

@@ -19,6 +19,7 @@ function ctx(over: Partial<AssertContext> = {}): AssertContext {
     selfHealRan: false,
     subagents: [],
     gateDeliveries: [],
+    toolResultTexts: [],
     ...over,
   };
 }

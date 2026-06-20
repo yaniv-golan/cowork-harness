@@ -38,6 +38,7 @@ export async function cmdChat(args: string[]) {
   let verbose = false;
   const uploads: string[] = [];
   const folders: Array<{ from: string; mode: "rw" }> = [];
+  const localPlugins: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === "--raw") raw = true;
@@ -55,6 +56,10 @@ export async function cmdChat(args: string[]) {
         process.exit(2);
       }
       model = args[i];
+      if (!model.trim()) {
+        log(`chat --model requires a non-empty value\n`);
+        process.exit(2);
+      }
     } else if (a === "--upload") {
       if (++i >= args.length) {
         log(`chat --upload requires a file path\n`);
@@ -67,6 +72,12 @@ export async function cmdChat(args: string[]) {
         process.exit(2);
       }
       folders.push({ from: args[i], mode: "rw" });
+    } else if (a === "--plugin") {
+      if (++i >= args.length) {
+        log(`chat --plugin requires a directory path\n`);
+        process.exit(2);
+      }
+      localPlugins.push(args[i]);
     } else if (a.startsWith("-")) {
       log(`chat: unknown flag: ${a}\n`);
       process.exit(2);
@@ -82,14 +93,18 @@ export async function cmdChat(args: string[]) {
     process.exit(2);
   }
 
-  if (raw) return chatRaw(folder, model);
+  if (raw) {
+    if (localPlugins.length > 0)
+      log(`chat --raw: --plugin flags are ignored in --raw mode (native docker mode mounts one skill folder only)\n`);
+    return chatRaw(folder, model);
+  }
 
   const session = loadSession({
     model,
     uploads,
     folders,
     permission_parity: "cowork",
-    plugins: { local_plugins: [folder] },
+    plugins: { local_plugins: [folder, ...localPlugins] },
   });
   const baseline = loadBaseline("latest");
   const sessionId = `local_${process.hrtime.bigint().toString(36)}`;
@@ -119,7 +134,7 @@ export async function cmdChat(args: string[]) {
     if (m.mountPath.startsWith("uploads/")) log(`  upload: ${m.hostPath} → mnt/${m.mountPath}\n`);
     else if (m.mountPath.startsWith(".projects/")) log(`  folder: ${m.hostPath} → mnt/${m.mountPath}\n`);
   }
-  log(`type your message, /exit to quit\n`);
+  log(`type your message (/help for commands)\n`);
 
   const runner = process.env.COWORK_CONTAINER_RUNTIME ?? "docker";
   let containerName: string | undefined;
@@ -148,7 +163,7 @@ export async function cmdChat(args: string[]) {
       const renderer = makeRenderer(renderPlan);
       const run = new Run(agent, decider, [renderer], sessionId);
       stopHeartbeat = startHeartbeat(renderer, renderPlan, start);
-      await run.drive(withSeedPrompt(seedPrompt, ttyTurns(rl)), { systemPromptAppend: prompts.systemPromptAppend });
+      await run.drive(withSeedPrompt(seedPrompt, ttyTurns(rl)), {});
     } else if (fidelity === "hostloop") {
       // #25: honor --fidelity hostloop in chat, mirroring execute.ts's branch selection.
       const hl = spawnHostLoop(scenario, baseline, plan, outDir, sessionId, {
@@ -175,7 +190,6 @@ export async function cmdChat(args: string[]) {
         };
       }
       await run.drive(withSeedPrompt(seedPrompt, ttyTurns(rl)), {
-        systemPromptAppend: prompts.systemPromptAppend,
         sdkMcp: hl.sdkMcp,
       });
     } else {
@@ -189,7 +203,7 @@ export async function cmdChat(args: string[]) {
       const renderer = makeRenderer(renderPlan);
       const run = new Run(agent, decider, [renderer], sessionId);
       stopHeartbeat = startHeartbeat(renderer, renderPlan, start);
-      await run.drive(withSeedPrompt(seedPrompt, ttyTurns(rl)), { systemPromptAppend: prompts.systemPromptAppend });
+      await run.drive(withSeedPrompt(seedPrompt, ttyTurns(rl)), {});
     }
   } finally {
     stopHeartbeat?.();
@@ -238,6 +252,10 @@ async function* ttyTurns(rl: readline.Interface): AsyncGenerator<string> {
     if (line == null) break;
     const t = line.trim();
     if (t === "/exit" || t === "/quit") break;
+    if (t === "/help") {
+      log("Commands: /exit  /quit  /help\n");
+      continue;
+    }
     if (!t) continue;
     yield t;
   }

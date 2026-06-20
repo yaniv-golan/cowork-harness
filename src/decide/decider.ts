@@ -24,7 +24,7 @@ export interface RunContext {
 
 export interface Decision {
   response: DecisionResponse;
-  by: "scripted" | "cowork" | "strict" | "human" | "llm" | "agent" | "external" | "first" | "fail" | "replay";
+  by: "scripted" | "cowork" | "strict" | "human" | "llm" | "agent" | "external" | "first" | "fail" | "replay" | "abstain-fallback";
   rationale?: string;
   model?: string; // set by LlmDecider — surfaced in unanswered[].model for auditability
 }
@@ -62,7 +62,21 @@ export function Chain(...deciders: Decider[]): Decider {
 
 /** Scripted rules (`--answer`/`--answer-policy`/scenario `answers:`) → response, else ABSTAIN. */
 export class ScriptedDecider implements Decider {
-  constructor(private rules: AnswerRule[]) {}
+  // Bug 15: pre-compiled regex map, keyed by when_question pattern string. Compiled once at construction
+  // so the hot decision path never calls compileUserRegex() per question. An invalid pattern throws at
+  // construction time (i.e. at scenario/CLI-arg loading time), not on the first matching attempt.
+  private compiledPatterns: Map<string, RegExp>;
+
+  constructor(private rules: AnswerRule[]) {
+    this.compiledPatterns = new Map();
+    for (const rule of rules) {
+      if (rule.when_question !== undefined && !this.compiledPatterns.has(rule.when_question)) {
+        const c = compileUserRegex(rule.when_question);
+        if ("error" in c) throw new Error(`bad regex in when_question "${rule.when_question}": ${c.error}`);
+        this.compiledPatterns.set(rule.when_question, c.re);
+      }
+    }
+  }
 
   async decide(req: DecisionRequest, _ctx: RunContext): Promise<Decision | Abstain> {
     if (req.kind === "question") {
@@ -72,11 +86,9 @@ export class ScriptedDecider implements Decider {
         const text = q.question ?? q.header ?? "";
         const rule = this.rules.find((r) => {
           if (!r.when_question) return false;
-          const c = compileUserRegex(r.when_question);
-          // Malformed pattern in a CLI-supplied rule (--answer/--answer-policy) — load-time validation
-          // catches file-based scenarios; this guards the CLI path.
-          if ("error" in c) throw new Error(`bad regex in when_question "${r.when_question}": ${c.error}`);
-          return c.re.test(text);
+          // Use the pre-compiled regex (compiled at construction time — never compileUserRegex() here).
+          const re = this.compiledPatterns.get(r.when_question)!;
+          return re.test(text);
         });
         if (!rule || (rule.choose === undefined && rule.answer === undefined)) {
           unmatched.push(text);
@@ -253,16 +265,20 @@ export class FirstOptionDecider implements Decider {
 /** Pluggable model-completion transport (so LlmDecider is unit-testable without a real model call). */
 export type Complete = (prompt: string, model: string) => Promise<string>;
 
-/** Strict label match: exact → case-insensitive → contained-in-response. NULL on no match (caller fails
- *  loud — we deliberately do NOT fall back to option 1 like `coerceLabel`, which would silently mis-answer). */
-export function matchLabel(raw: string, labels: string[]): string | null {
+/** Strict label match: exact → case-insensitive. NULL on no match (caller fails loud — we deliberately
+ *  do NOT fall back to option 1 like `coerceLabel`, which would silently mis-answer).
+ *  When `fuzzy` is true, also accept a substring match (ONLY when exactly one label appears in the reply
+ *  to avoid ambiguity). Callers that consume human or LLM output should leave `fuzzy` at its default
+ *  (false) to require an exact answer — the substring heuristic is opt-in only. */
+export function matchLabel(raw: string, labels: string[], fuzzy = false): string | null {
   const r = raw.trim();
   const exact = labels.find((l) => l === r) ?? labels.find((l) => l.toLowerCase() === r.toLowerCase());
   if (exact) return exact;
-  // #6: the substring tier fires ONLY when EXACTLY ONE label is contained in the reply. With labels
-  // ["No","Notation"] and reply "Notation", both the apex match and the contains-check used to pick
-  // "No" (the first substring) — an ambiguous mis-steer. If two+ labels match (or none), return null so
-  // the caller's UnansweredError fires (fail loud) rather than guessing the wrong option.
+  if (!fuzzy) return null;
+  // fuzzy=true: the substring tier fires ONLY when EXACTLY ONE label is contained in the reply. With
+  // labels ["No","Notation"] and reply "Notation", both the apex match and the contains-check used to
+  // pick "No" (the first substring) — an ambiguous mis-steer. If two+ labels match (or none), return
+  // null so the caller's UnansweredError fires (fail loud) rather than guessing the wrong option.
   const rl = r.toLowerCase();
   const substr = labels.filter((l) => rl.includes(l.toLowerCase()));
   return substr.length === 1 ? substr[0] : null;
@@ -386,10 +402,20 @@ export class PromptDecider implements Decider {
       throw new UnansweredError("prompt policy needs a terminal", "use --on-unanswered fail|first or run interactively");
     if (req.kind === "permission") {
       const labels = (req.options ?? []).map((o) => o.label);
+      // Bug 20: a web_fetch approval with options present but empty would spin the coercedPerm loop
+      // forever — coerceLabel always returns matched:false when labels is empty. Fail immediately with
+      // a clear protocol error (the protocol guarantees at least one option on an options-bearing gate).
+      if (labels.length === 0)
+        throw new UnansweredError(
+          `protocol error: permission request for "${req.tool}" carries an empty options array`,
+          "the protocol guarantees at least one option on an options-bearing permission gate",
+        );
       const permPrompt = `${req.tool}?\n${labels.map((l, i) => `  ${i + 1}) ${l}`).join("\n")}\n> `;
       let coercedPerm: { value: string; matched: boolean };
       do {
         const ans = await this.ask(permPrompt);
+        // coerceLabel accepts: 1-based index, exact label (case-insensitive), "(Recommended)" suffix
+        // tolerance, "recommended" keyword, and "first" keyword (option 1). "last" is NOT a keyword.
         coercedPerm = coerceLabel(ans, labels);
         if (!coercedPerm.matched)
           process.stderr.write(`Unrecognized input. Please enter a number (1–${labels.length}) or one of: ${labels.join(", ")}\n`);
@@ -410,17 +436,54 @@ export class PromptDecider implements Decider {
         const text = q.question ?? q.header ?? "";
         const optionLabels = q.options.map((o) => o.label);
         warnDuplicateLabels(optionLabels, JSON.stringify(text));
-        const optionList = `${text}\n${q.options.map((o, i) => `  ${i + 1}) ${o.label}${o.description ? " — " + o.description : ""}`).join("\n")}\n> `;
-        let coerced: { value: string; matched: boolean };
-        do {
-          const raw = await this.ask(optionList);
-          coerced = coerceLabel(raw, optionLabels);
-          if (!coerced.matched)
-            process.stderr.write(
-              `Unrecognized input. Please enter a number (1–${optionLabels.length}) or one of: ${optionLabels.join(", ")}\n`,
-            );
-        } while (!coerced.matched);
-        answers[text] = coerced.value;
+        if (q.multiSelect) {
+          // Multi-select gate: accept comma-separated indices or labels; validate each pick; serialize
+          // as a comma-joined string matching the AskUserQuestion wire shape (binary-verified).
+          const optionList = `${text}\n${q.options.map((o, i) => `  ${i + 1}) ${o.label}${o.description ? " — " + o.description : ""}`).join("\n")}\nSelect one or more, comma-separated:\n> `;
+          let resolved: string[] | null = null;
+          do {
+            const raw = await this.ask(optionList);
+            const parts = raw
+              .split(",")
+              .map((p) => p.trim())
+              .filter(Boolean);
+            if (parts.length === 0) {
+              process.stderr.write(`Please enter at least one choice (comma-separated numbers or labels).\n`);
+              continue;
+            }
+            const picks: string[] = [];
+            let invalid = false;
+            for (const part of parts) {
+              // coerceLabel accepts: 1-based index, exact label (case-insensitive), "(Recommended)" suffix
+              // tolerance, "recommended" keyword, and "first" keyword (option 1). "last" is NOT a keyword.
+              const coerced = coerceLabel(part, optionLabels);
+              if (!coerced.matched) {
+                process.stderr.write(
+                  `Unrecognized input "${part}". Please enter numbers (1–${optionLabels.length}) or labels: ${optionLabels.join(", ")}\n`,
+                );
+                invalid = true;
+                break;
+              }
+              picks.push(coerced.value);
+            }
+            if (!invalid) resolved = picks;
+          } while (resolved === null);
+          answers[text] = resolved!.join(", ");
+        } else {
+          const optionList = `${text}\n${q.options.map((o, i) => `  ${i + 1}) ${o.label}${o.description ? " — " + o.description : ""}`).join("\n")}\n> `;
+          let coerced: { value: string; matched: boolean };
+          do {
+            const raw = await this.ask(optionList);
+            // coerceLabel accepts: 1-based index, exact label (case-insensitive), "(Recommended)" suffix
+            // tolerance, "recommended" keyword, and "first" keyword (option 1). "last" is NOT a keyword.
+            coerced = coerceLabel(raw, optionLabels);
+            if (!coerced.matched)
+              process.stderr.write(
+                `Unrecognized input. Please enter a number (1–${optionLabels.length}) or one of: ${optionLabels.join(", ")}\n`,
+              );
+          } while (!coerced.matched);
+          answers[text] = coerced.value;
+        }
       }
       return { response: { kind: "question", answers }, by: "human" };
     }
@@ -528,7 +591,21 @@ export class ExternalDecider implements Decider {
             `Key your reply by the exact question text: {"answers":{${JSON.stringify(text)}:"<label or 1-based index>"}}`,
           );
         } else {
-          const coerced = coerceLabel(raw, labels);
+          // Bug 19: when the question has no options it is a free-text / open-ended gate — coerceLabel
+          // always returns matched:false for an empty labels array and would throw below. Accept any
+          // non-empty string verbatim (the external helper is the authoritative answerer for these gates).
+          if (labels.length === 0) {
+            if (!raw || String(raw).trim() === "")
+              throw new UnansweredError(
+                `external decider sent an empty answer for the open-ended question "${text}"`,
+                `provide a non-empty string as the answer`,
+              );
+            answers[text] = String(raw);
+            continue;
+          }
+          // "first" is a documented shorthand for scripted/human deciders but NOT for external helpers —
+          // a helper returning the literal string "first" must match an actual label, not be coerced to option 1.
+          const coerced = coerceLabel(raw, labels, false);
           if (!coerced.matched)
             // ExternalDecider is the TERMINAL decider — a present-but-mistyped label silently greening
             // option 1 is the false-green the ethos forbids. Fail loud (symmetric with the missing-key
@@ -640,7 +717,7 @@ function warnDuplicateLabels(labels: string[], context: string): void {
  *  Returns a discriminated result: `matched` is true when the value was found in `labels`
  *  (by index or case-insensitive name); false when the fallback to `labels[0]` was used.
  *  Shared by the TTY prompt and the external decider so both accept the same lenient forms (Opus L4). */
-export function coerceLabel(a: string | number, labels: string[]): { value: string; matched: boolean } {
+export function coerceLabel(a: string | number, labels: string[], enableFirstShorthand = true): { value: string; matched: boolean } {
   if (typeof a === "number") {
     const resolved = labels[a - 1];
     return resolved !== undefined ? { value: resolved, matched: true } : { value: labels[0] ?? String(a), matched: false };
@@ -669,7 +746,7 @@ export function coerceLabel(a: string | number, labels: string[]): { value: stri
     const rec = labels.find((l) => /\(recommended\)\s*$/i.test(l));
     if (rec !== undefined) return { value: rec, matched: true };
   }
-  if (s.toLowerCase() === "first" && labels.length > 0) return { value: labels[0], matched: true };
+  if (enableFirstShorthand && s.toLowerCase() === "first" && labels.length > 0) return { value: labels[0], matched: true };
   return { value: labels[0] ?? s, matched: false };
 }
 

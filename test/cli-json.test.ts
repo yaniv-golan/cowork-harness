@@ -271,6 +271,30 @@ describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
     expect(r.stderr).toMatch(/record takes a single scenario/);
   });
 
+  it("record: no token → exit 2 with a clear auth-guard message (before any agent spawn)", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "cc-auth-"));
+    writeIn(cwd, "s.yaml", "prompt: hi\nfidelity: container\nbaseline: latest\n");
+    // Set all three auth vars to empty string so loadDotenv can't overwrite them
+    // (loadDotenv skips keys already defined in process.env, even if empty).
+    const r = spawnSync("node", [CLI, "record", "s.yaml"], {
+      encoding: "utf8",
+      cwd,
+      env: {
+        ...Object.fromEntries(
+          Object.entries(process.env).filter(
+            ([k]) => !["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"].includes(k),
+          ),
+        ),
+        CLAUDE_CODE_OAUTH_TOKEN: "",
+        ANTHROPIC_API_KEY: "",
+        ANTHROPIC_AUTH_TOKEN: "",
+      },
+    });
+    expect(r.status).toBe(2);
+    expect(r.stderr).toMatch(/no model credentials/);
+    expect(r.stderr).toMatch(/CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_API_KEY/);
+  });
+
   it("replay --cassette with a flag-looking value is a usage error, not a file error (exit 2)", () => {
     const r = run(["replay", "--cassette", "--output-format", "json"]);
     expect(r.code).toBe(2);
@@ -300,6 +324,38 @@ describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
     expect(r.status).toBe(0);
     expect(JSON.parse(r.stdout)?.ok).toBe(true); // no-op verdict modifier → green
     expect(r.stderr).not.toMatch(/skipped \d+ filesystem/); // not misclassified as a filesystem/egress skip
+  });
+
+  it("record --dry-run: single scenario prints plan and exits 0", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "cc-dryrun-"));
+    // Include session: to avoid a parse error if parseScenarioFile has no default for that field.
+    writeIn(cwd, "s.yaml", "prompt: hi\nfidelity: container\nbaseline: latest\nsession: inline\n");
+    const r = spawnSync("node", [CLI, "record", "--dry-run", "s.yaml"], { encoding: "utf8", cwd });
+    expect(r.status).toBe(0);
+    expect(r.stderr).toMatch(/dry.run/i);
+    expect(r.stderr).toMatch(/s\.yaml/);
+  });
+
+  it("record --dry-run: dir with broken scenario exits 1", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "cc-dryrun-"));
+    writeIn(cwd, "broken.yaml", "prompt: x\nfidelity: not-a-real-tier\n");
+    const r = spawnSync("node", [CLI, "record", "--dry-run", "."], { encoding: "utf8", cwd });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/broken/i);
+  });
+
+  it("record --dry-run: nothing discovered exits 2 (matching non-dry-run behaviour)", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "cc-dryrun-"));
+    writeIn(cwd, "session.yaml", "skills:\n  local:\n    - ./s\n");
+    const r = spawnSync("node", [CLI, "record", "--dry-run", "."], { encoding: "utf8", cwd });
+    expect(r.status).toBe(2);
+  });
+
+  it("record --dry-run --rerecord-stale: rejected (conflict)", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "cc-dryrun-"));
+    const r = spawnSync("node", [CLI, "record", "--dry-run", "--rerecord-stale", "."], { encoding: "utf8", cwd });
+    expect(r.status).toBe(2);
+    expect(r.stderr).toMatch(/--dry-run.*--rerecord-stale|--rerecord-stale.*--dry-run/i);
   });
 
   it("answer --choose validates the label against the gate's options", () => {
@@ -441,5 +497,23 @@ describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
     const r = run(["--dotenv=", "list"]);
     expect(r.code).toBe(2);
     expect(r.stderr).toMatch(/--dotenv requires a path/);
+  });
+
+  it("cassette carrying $schema and generator fields survives replay (forward-compat)", () => {
+    // replay never rewrites the cassette file, so asserting file contents after replay
+    // would only prove our own write was intact — a false-green. Instead, just verify
+    // that replay exits 0 on a cassette that has these new fields, i.e. forward-compat.
+    // Live verification that recordScenarioObject emits the fields belongs in the
+    // live/integration test suite (requires a real record run).
+    const cwd = mkdtempSync(join(tmpdir(), "cc-prov-"));
+    const body = {
+      $schema: "https://raw.githubusercontent.com/yaniv-golan/cowork-harness/main/schema/cassette.v2.json",
+      generator: "cowork-harness",
+      cassetteVersion: 2,
+      ...cassette([]),
+    };
+    writeIn(cwd, "s.cassette.json", JSON.stringify(body));
+    const r = spawnSync("node", [CLI, "replay", "s.cassette.json"], { encoding: "utf8", cwd });
+    expect(r.status).toBe(0);
   });
 });

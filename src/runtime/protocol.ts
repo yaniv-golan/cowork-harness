@@ -27,7 +27,8 @@ export function spawnProtocol(
   for (const m of plan.mounts) {
     const dest = join(work, m.mountPath);
     mkdirSync(dirname(dest), { recursive: true });
-    if (existsSync(m.hostPath)) cpSync(m.hostPath, dest, { recursive: true });
+    // preserve symlinks as-is during staging; do not copy out-of-tree content
+    if (existsSync(m.hostPath)) cpSync(m.hostPath, dest, { recursive: true, dereference: false });
   }
 
   // NOTE: `--cowork` is a GUEST-ONLY flag — the host `claude` CLI rejects it

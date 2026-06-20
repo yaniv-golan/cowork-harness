@@ -200,7 +200,7 @@ describe("checkStaleness — staleness message variants", () => {
     writeFileSync(sessionPath, `skills:\n  local:\n    - ./skill\n`);
 
     const c = {
-      cassetteVersion: 2, // current format — should get the generic contents-changed message
+      cassetteVersion: 3, // current format — should get the generic contents-changed message
       scenario: {
         name: "s",
         baseline: "latest",
@@ -242,7 +242,7 @@ describe("checkStaleness — bucket-named messages (G-4)", () => {
     const fp = buildFingerprint(sessionPath, "99.0.0", root, ["alpha"]);
     writeFileSync(join(root, "plugin", "skills", "alpha", "SKILL.md"), "# alpha v2\n");
     const c = {
-      cassetteVersion: 2,
+      cassetteVersion: 3,
       scenario: {
         name: "alpha-smoke",
         baseline: "99.0.0",
@@ -268,7 +268,7 @@ describe("checkStaleness — bucket-named messages (G-4)", () => {
     const fp = buildFingerprint(sessionPath, "99.0.0", root, ["alpha"]);
     writeFileSync(join(root, "plugin", "scripts", "shared.py"), "x = 99\n");
     const c = {
-      cassetteVersion: 2,
+      cassetteVersion: 3,
       scenario: {
         name: "alpha-smoke",
         baseline: "99.0.0",
@@ -313,7 +313,7 @@ describe("checkStaleness — mixed-mount falls back to generic message", () => {
     writeFileSync(join(root, "extra-skill", "SKILL.md"), "# extra edited\n");
 
     const c = {
-      cassetteVersion: 2,
+      cassetteVersion: 3,
       scenario: {
         name: "alpha-smoke",
         baseline: "99.0.0",

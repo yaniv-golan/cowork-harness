@@ -43,3 +43,44 @@ export function scrub(text: string, secrets: string[]): string {
   for (const s of secrets) if (s) t = t.split(s).join("[REDACTED]");
   return t;
 }
+
+/**
+ * Like `scrub`, but additionally detects secrets embedded in whole-field encodings where
+ * surrounding bytes shift the alphabet (base64(prefix + TOKEN + suffix), URI-encoded blobs).
+ * If a hit is found in the decoded form, the ENTIRE encoded field is replaced — never partial
+ * redaction, which would break any SHA-256 hash stored alongside the field.
+ * Only attempt decoding on field-shaped values (not arbitrary long text).
+ */
+export function scrubField(value: string, secrets: string[]): string {
+  // Direct scrub first — covers literal, base64(TOKEN), encodeURIComponent(TOKEN), etc.
+  const direct = scrub(value, secrets);
+  if (direct !== value) return direct;
+
+  // Secondary: whole-field base64 decode. Guard: plausibly base64-shaped (only base64 chars,
+  // length ≥ 20 to avoid false positives on short label strings).
+  if (value.length >= 20 && /^[A-Za-z0-9+/=]+$/.test(value)) {
+    try {
+      const decoded = Buffer.from(value, "base64").toString("utf8");
+      // Only act if the decoded form is different and contains a secret hit.
+      if (decoded !== value && scrub(decoded, secrets) !== decoded) {
+        return "[REDACTED:base64]";
+      }
+    } catch {
+      // Not valid base64 — skip.
+    }
+  }
+
+  // Secondary: whole-field URI encoding.
+  if (value.includes("%")) {
+    try {
+      const decoded = decodeURIComponent(value);
+      if (decoded !== value && scrub(decoded, secrets) !== decoded) {
+        return "[REDACTED:uri]";
+      }
+    } catch {
+      // Not valid URI encoding — skip.
+    }
+  }
+
+  return direct;
+}

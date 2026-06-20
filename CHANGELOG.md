@@ -6,6 +6,58 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-06-19
+
+### Added
+
+- **`chat --plugin <dir>` (repeatable)** — load additional local plugins into a `chat` session alongside
+  the primary skill folder. Each `--plugin <dir>` is appended to `plugins.local_plugins` so multi-plugin
+  interactive debugging no longer requires a custom session YAML. In `--raw` mode (native Docker), `--plugin`
+  flags are silently ignored with a warning: `chat --raw: --plugin flags are ignored in --raw mode`.
+- **`/help` in the `chat` REPL** — typing `/help` in an interactive session now prints
+  `Commands: /exit  /quit  /help` and continues rather than forwarding the text to the model. The startup
+  prompt was updated from "type your message, /exit to quit" to "type your message (/help for commands)".
+- **`scrubField(value, secrets)` exported from `src/secrets.ts`** — a new multi-pass field-level scrubber
+  that covers token appearances beyond direct substring matches:
+  - Pass 1: direct `scrub()` — catches literal, base64-encoded, and `encodeURIComponent`-encoded tokens.
+  - Pass 2: whole-field base64 decode (≥20-char pure base64 strings) — if the decoded form contains a
+    secret hit, returns `[REDACTED:base64]`.
+  - Pass 3: whole-field URI decode (values containing `%`) — if the decoded form contains a secret hit,
+    returns `[REDACTED:uri]`.
+  Applied in `cassette.ts` artifact scrubbing: base64 artifacts (`encoding === "base64"`) are replaced
+  wholesale with `[REDACTED:base64]`, the encoding marker is cleared (so replay decodes as UTF-8), and the
+  sha256 is recomputed over the marker bytes (with a `::warning::` that artifact assertions will fail at
+  replay). UTF-8 artifacts pass through `scrubField` safely.
+- **`prompt_asset_missing` VerdictSignal** — `computeVerdict()` now pushes a `{ code: "prompt_asset_missing",
+  severity: "warn" }` signal when `result.fidelityWarnings` contains a "referenced asset not found" entry,
+  making a missing prompt asset visible in the verdict output rather than buried in the run log.
+- **`onInfraError` callback in `makeWorkspaceHandler`** — an optional sixth parameter
+  `onInfraError?: (message: string) => void` lets callers intercept infrastructure errors
+  (ETIMEDOUT / killed / no code+stdout+stderr) separately from model-visible error text.
+  `spawnHostLoop()` wires this to append `{ type: "infra_error", ts, message }` to `events.jsonl` so
+  infrastructure failures are structured and queryable rather than only appearing in the model-visible
+  response string.
+
+### Fixed
+
+- **`ExternalDecider` no longer coerces `"first"` to option 1.** `coerceLabel` gained an
+  `enableFirstShorthand` parameter (default `true`). External deciders (`--decider-cmd`,
+  `--decider-dir` helpers) now call `coerceLabel(raw, labels, false)`, so a helper script that
+  accidentally returns the string `"first"` must match an actual label named `"first"` — it is no
+  longer silently promoted to the first option. The shorthand remains active for internal (scripted)
+  use.
+- **`flagValue` and `chat --model` reject empty strings.** `flagValue()` in `src/cli.ts` now exits `2`
+  with a clear message when the supplied value is blank or whitespace-only. `chat` additionally guards
+  the `--model` value inline after parsing, so `--model ""` and `--model $UNSET_VAR` both fail loudly
+  instead of passing an empty model ID to the runtime.
+- **`redactCassette` skips `[REDACTED*]` marker bodies.** The per-line JSON redaction pass
+  (`redactJsonLine`) is now bypassed for artifact bodies that already start with `[REDACTED` — preventing
+  the sha256 from being corrupted by a second redaction pass over the marker string.
+- **TLD list extended from 22 to 51 entries.** The domain scanner in `src/scan.ts` now recognises
+  major European, Asian, and Latin American ccTLDs:
+  `ch|nl|se|no|it|jp|br|nz|in|sg|kr|mx|es|pt|pl|be|at|dk|fi|ie|ru|cn|tw|hu|cz|ro|il|za|ar|cl|pe|tr`.
+  Domain findings that were previously missed on these TLDs now fire correctly.
+
 ## [0.6.0] — 2026-06-19
 
 ### Breaking changes

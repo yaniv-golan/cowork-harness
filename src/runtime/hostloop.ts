@@ -1,6 +1,6 @@
 import { warn } from "../io.js";
 import { spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { PlatformBaseline, Scenario } from "../types.js";
@@ -116,7 +116,22 @@ export function spawnHostLoop(
   const hostEgress: EgressEntry[] = [];
   const sdkMcp: { servers: string[]; handle: McpHandler } = {
     servers: ["workspace"],
-    handle: makeWorkspaceHandler(containerName, mntRoot, runner, plan.egressAllow, (e) => hostEgress.push(e), opts.provenanceRef),
+    handle: makeWorkspaceHandler(
+      containerName,
+      mntRoot,
+      runner,
+      plan.egressAllow,
+      (e) => hostEgress.push(e),
+      (msg) => {
+        try {
+          appendFileSync(
+            join(outDir, "events.jsonl"),
+            JSON.stringify({ type: "infra_error", ts: new Date().toISOString(), message: msg }) + "\n",
+          );
+        } catch {}
+      },
+      opts.provenanceRef,
+    ),
   };
   return { child, sdkMcp, containerName, hostEgress };
 }

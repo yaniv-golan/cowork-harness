@@ -141,10 +141,12 @@ export function u1t(u: URL, allow: string[], matcher: (h: string) => boolean): s
 }
 
 /** A single redirect-manual network hop — injectable so the token-free suite can drive redirects/SSRF. */
-export type RawFetch = (url: string) => Promise<{ status: number; location?: string; text(): Promise<string> }>;
+export type RawFetch = (
+  url: string,
+) => Promise<{ status: number; location?: string; text(): Promise<string>; body?: ReadableStream<Uint8Array> | null }>;
 const defaultRawFetch: RawFetch = async (url) => {
   const r = await fetch(url, { redirect: "manual", signal: AbortSignal.timeout(30000) });
-  return { status: r.status, location: r.headers.get("location") ?? undefined, text: () => r.text() };
+  return { status: r.status, location: r.headers.get("location") ?? undefined, text: () => r.text(), body: r.body };
 };
 
 /**
@@ -186,6 +188,7 @@ export function makeWorkspaceHandler(
   runner = "docker",
   webFetchAllow: string[] = ["*"],
   onEgress?: (entry: EgressEntry) => void,
+  onInfraError?: (message: string) => void,
   provenanceRef?: { current?: WebFetchProvenance }, // #30: Run fills this before the stream starts
   rawFetch: RawFetch = defaultRawFetch, // per-hop fetch (redirect:manual) for BOTH paths; injectable
   resolve: Resolver = defaultResolver, // per-hop DNS resolution for the SSRF backstop; injectable
@@ -220,7 +223,9 @@ export function makeWorkspaceHandler(
       const name = jr.params?.name;
       const a = jr.params?.arguments ?? {};
       if (name === "bash")
-        return { result: await execInContainer(runner, containerName, vmMnt, String(a.command ?? ""), clampTimeout(a.timeout_ms)) };
+        return {
+          result: await execInContainer(runner, containerName, vmMnt, String(a.command ?? ""), clampTimeout(a.timeout_ms), onInfraError),
+        };
       if (name === "web_fetch")
         return {
           result: await fetchViaHost(String(a.url ?? ""), webFetchAllow, onEgress, provenanceRef?.current, provWarned, rawFetch, resolve),
@@ -245,7 +250,14 @@ export function clampTimeout(ms: unknown): number {
   return Math.min(Math.max(Number(ms) || 120000, 1000), 600000);
 }
 
-async function execInContainer(runner: string, container: string, cwd: string, command: string, timeoutMs = 120000) {
+async function execInContainer(
+  runner: string,
+  container: string,
+  cwd: string,
+  command: string,
+  timeoutMs = 120000,
+  onInfraError?: (message: string) => void,
+) {
   if (!command) return textResult("error: missing 'command'", true);
   // Async (execFile, not spawnSync) so the awaited MCP handler yields the event loop while the subprocess
   // runs — a slow `docker exec` no longer blocks all protocol I/O. Each call independent (fresh sh).
@@ -262,8 +274,11 @@ async function execInContainer(runner: string, container: string, cwd: string, c
     // normal bash non-zero exits, so the model can tell the difference.
     const isInfraError = e.code === "ETIMEDOUT" || e.killed || (!e.code && !e.stdout && !e.stderr);
     const out = (e.stdout ?? "") + (e.stderr ?? "");
-    const prefix = isInfraError ? `[infrastructure error: ${e.message ?? String(e)}]` : `[exit ${e.code ?? 1}]`;
-    return textResult(`${prefix}\n${out}`, true);
+    if (isInfraError) {
+      onInfraError?.(e.message ?? String(e));
+      return textResult(`[infrastructure error: see run log for details]\n${out}`, true);
+    }
+    return textResult(`[exit ${e.code ?? 1}]\n${out}`, true);
   }
 }
 
@@ -330,7 +345,34 @@ async function followWithRedirects(
       continue; // re-check the gate on the new host
     }
     onEgress?.({ host: cur.hostname, decision: "allow" });
-    return textResult((await resp.text()).slice(0, 200000));
+    const LIMIT = 200000;
+    // #33: stream via resp.body to avoid buffering the full response before truncation.
+    // Falls back to resp.text() for injectable test fakes that don't provide a body stream.
+    if (resp.body) {
+      const reader = resp.body.getReader();
+      const chunks: Uint8Array[] = [];
+      let total = 0;
+      let truncated = false;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value) {
+          if (total + value.length > LIMIT) {
+            chunks.push(value.subarray(0, LIMIT - total));
+            total = LIMIT;
+            truncated = true;
+            reader.cancel().catch(() => {});
+            break;
+          }
+          chunks.push(value);
+          total += value.length;
+        }
+      }
+      const decoder = new TextDecoder();
+      const text = chunks.map((c) => decoder.decode(c, { stream: true })).join("") + decoder.decode();
+      return textResult(truncated ? text + "\n[truncated]" : text);
+    }
+    return textResult((await resp.text()).slice(0, LIMIT));
   }
   return textResult(`web_fetch failed: too many redirects (> ${MAX_REDIRECTS}).`, true);
 }

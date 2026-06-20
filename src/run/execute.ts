@@ -1,8 +1,8 @@
 import { warn } from "../io.js";
 import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync, readdirSync, statSync, lstatSync, realpathSync } from "node:fs";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { join, dirname, resolve, basename, isAbsolute } from "node:path";
+import { join, dirname, resolve, basename, isAbsolute, sep } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { Scenario } from "../types.js";
 import type { RunResult } from "../types.js";
@@ -26,6 +26,8 @@ import { claudeCliComplete } from "../decide/llm-transport.js";
 import { Run, type RunRecord, type RunHooks } from "./run.js";
 import { runsWriteRoot } from "./trace-view.js";
 import { collectSecrets, scrub } from "../secrets.js";
+
+const RUN_RESULT_SCHEMA_URL = "https://raw.githubusercontent.com/yaniv-golan/cowork-harness/main/schema/run-result.json";
 
 export interface ExecuteOptions {
   session?: ReturnType<typeof loadSession>;
@@ -53,15 +55,23 @@ export interface ExecuteOptions {
  */
 /** #17: turn a scenario name into a SAFE single directory segment — neutralize path separators and
  *  ".." so a YAML/filename-derived name can't escape `runs/`. Otherwise human-readable; the display
- *  name (scenario.name) is kept separate and unchanged. */
+ *  name (scenario.name) is kept separate and unchanged.
+ *
+ *  Length bound: the full sanitized slug is truncated to 128 chars and a collision-avoidance suffix
+ *  is appended: "-" + the first 8 hex chars of SHA-256(full-slug). This caps the segment at 137 chars
+ *  (128 + 1 + 8) and prevents names that share a 128-char prefix from colliding in the filesystem.
+ *  Format: <up-to-128-char-prefix>-<8-hex-chars>
+ */
 export function slugForPath(name: string): string {
-  return (
+  const full =
     name
       .split(/[/\\]/)
       .join("-")
       .replace(/\.{2,}/g, ".")
-      .replace(/^[.\-]+/, "") || "scenario"
-  );
+      .replace(/^[.\-]+/, "") || "scenario";
+  if (full.length <= 128) return full;
+  const hash = createHash("sha256").update(full).digest("hex").slice(0, 8);
+  return `${full.slice(0, 128)}-${hash}`;
 }
 
 export async function executeScenario(scenario: Scenario, opts: ExecuteOptions = {}): Promise<RunResult> {
@@ -158,6 +168,15 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       : opts.externalChannel || onUnanswered === "llm" || onUnanswered === "prompt"
         ? Infinity
         : undefined;
+  // A finite env-override combined with an authoritative async answerer (external channel, LLM, prompt)
+  // makes withDialogTimeout() race a never-settling decider promise — on timeout the channel desyncs
+  // because the late reply consumes the NEXT gate's readLine slot. There is no valid use case for this
+  // combination; reject it early so the desync is impossible, not just serial-gate-guarded.
+  if (envDialogMs !== undefined && isFinite(envDialogMs) && (opts.externalChannel || onUnanswered === "llm" || onUnanswered === "prompt")) {
+    throw new Error(
+      `COWORK_HARNESS_DIALOG_TIMEOUT_MS: cannot use a finite timeout with --decider-cmd/--decider-dir/--on-unanswered=llm/prompt — those are authoritative answerers (set to 'inf' or remove the env var)`,
+    );
+  }
 
   // Docker resources (sidecar networks/proxy + the host-loop container) are EPHEMERAL per run — name
   // them by a unique per-invocation token, NOT the (now-stable) sessionId, so a `--resume` after a
@@ -260,7 +279,6 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       };
     }
     record = await run.drive(scenario.prompt, {
-      systemPromptAppend: prompts.systemPromptAppend,
       subagentAppend: prompts.subagentAppend,
       sdkMcp,
     });
@@ -304,6 +322,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     selfHealRan: scan.selfHealRan,
     subagents: record.subagents,
     gateDeliveries: record.gateDeliveries,
+    toolResultTexts: record.toolResults.map((r) => r.assertText ?? r.text),
   });
 
   if (scenario.fidelity === "protocol" && (record.toolsCalled.has("WebFetch") || record.toolsCalled.has("WebSearch"))) {
@@ -319,6 +338,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   }
 
   const result: RunResult = {
+    $schema: RUN_RESULT_SCHEMA_URL,
+    generator: "cowork-harness",
     scenario: scenario.name,
     prompt: scenario.prompt, // persisted for `scaffold --from-run`
     fidelity: scenario.fidelity,
@@ -336,6 +357,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     gateDeliveries: record.gateDeliveries,
     egress,
     assertions,
+    toolResults: record.toolResults,
     subagents: record.subagents,
     unanswered: record.unanswered,
     usage: record.usage,
@@ -462,6 +484,13 @@ function writeRunJsonl(
 export function collectArtifacts(workRoot: string, prefixes: string[]): { path: string; bytes: number }[] {
   const out: { path: string; bytes: number }[] = [];
   const visited = new Set<string>();
+  // Resolve workRoot once — used in the containment assertion inside walk().
+  let workRootReal: string;
+  try {
+    workRootReal = realpathSync(workRoot);
+  } catch {
+    return out; // workRoot itself absent/unreadable
+  }
   const walk = (abs: string, rel: string) => {
     // Cycle guard: resolve the real path of this directory; if we've already walked it, stop.
     let real: string;
@@ -469,6 +498,12 @@ export function collectArtifacts(workRoot: string, prefixes: string[]): { path: 
       real = realpathSync(abs);
     } catch {
       return; // prefix dir absent / unreadable — not an error
+    }
+    // Containment: reject any entry whose realpath escapes workRoot. Catches prefix-level symlinks
+    // (not caught by the child lstatSync below) and any other realpath-diverging construct.
+    if (real !== workRootReal && !real.startsWith(workRootReal + sep)) {
+      warn(`::warning:: collectArtifacts: skipping "${rel}" — real path escapes work root\n`);
+      return;
     }
     if (visited.has(real)) return;
     visited.add(real);

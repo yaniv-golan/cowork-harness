@@ -3,8 +3,8 @@ name: cowork-harness
 description: Test or debug a Claude Code skill/plugin under Claude Cowork's runtime — sandboxed agent, default-deny egress, the can_use_tool permission/question protocol — using the cowork-harness CLI. Use when validating or regression-testing a skill, authoring or debugging a scenario YAML (prompt + scripted answers + assert:), choosing a fidelity tier, scripting AskUserQuestion / tool-permission answers, or asserting artifacts, egress, or sub-agent dispatch. Especially when a harness run no-ops an assertion, fails on an unanswered gate, false-greens, a steered answer never reaches the model, or a web_fetch is unexpectedly denied or gated. NOT for generic unit testing (pytest/vitest of your own scripts) or non-Cowork CI. Covers the skill / run / chat / record / replay / trace / decide / assert / scaffold commands and the session-vs-scenario split.
 metadata:
   author: cowork-harness
-  version: 0.5.0
-  tracks-harness: cowork-harness 0.5.0 (baseline desktop-1.13576.1)
+  version: 0.7.0
+  tracks-harness: cowork-harness 0.7.0 (baseline desktop-1.13576.1)
 ---
 
 # cowork-harness
@@ -21,7 +21,7 @@ several ways to *silently* no-op a check (skip an assertion on replay, auto-answ
 an empty egress allowlist). This skill exists mostly to keep you out of those traps — the Gotchas
 section below is the highest-value part. Read it.
 
-> **Version note:** the facts and `file:line` pointers here track `cowork-harness 0.5.0` (baseline
+> **Version note:** the facts and `file:line` pointers here track `cowork-harness 0.7.0` (baseline
 > `desktop-1.13576.1`). If your checkout is newer, prefer the live `--help`, `SPEC.md`, and
 > `docs/*.md` over this snapshot, and re-run the bundled linter.
 
@@ -29,7 +29,7 @@ section below is the highest-value part. Read it.
 
 Before the first command, confirm the CLI is reachable and **fail loud** (never fake a pass) when a tier's dependencies are missing:
 
-- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 0.5.0** (the commands/assertions it teaches: `assertions --list`, `scaffold <run-id>`, `trace --view dispatches`, `artifact_json` incl. the `in:` operator, `verify-cassettes`, batch `record <dir>`/`--rerecord-stale`, record-time redaction, multiSelect/`answer:`, `verify-run`, `record --max-artifact-bytes`, `verify-cassettes --allow-domain`/`--allow-email`/`--allow-file`, and scenario `skills:` staleness scoping). If it's missing *or older than 0.5.0*, prefix every command with `npx` using a version floor: `npx cowork-harness@>=0.5.0 <cmd>` (Node ≥ 20). The floor matters — plain `@latest` would silently fetch an older CLI and the new commands would fail as "unknown command"; `@>=0.5.0` instead **fails loud** if no compatible version is published. To install once instead: `npm i -g cowork-harness@latest`.
+- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 0.7.0** (the commands/assertions it teaches: `assertions --list`, `scaffold <run-id>`, `trace --view dispatches`, `artifact_json` incl. the `in:` operator, `verify-cassettes`, batch `record <dir>`/`--rerecord-stale`, record-time redaction, multiSelect/`answer:`, `verify-run`, `record --max-artifact-bytes`, `verify-cassettes --allow-domain`/`--allow-email`/`--allow-file`, scenario `skills:` staleness scoping, `chat --plugin`, and `/help` in the chat REPL). If it's missing *or older than 0.7.0*, prefix every command with `npx` using a version floor: `npx cowork-harness@>=0.7.0 <cmd>` (Node ≥ 20). The floor matters — plain `@latest` would silently fetch an older CLI and the new commands would fail as "unknown command"; `@>=0.7.0` instead **fails loud** if no compatible version is published. To install once instead: `npm i -g cowork-harness@latest`.
 - **Agent binary (every tier).** The staged Claude Code agent is **bind-mounted** from a local Claude Desktop install, or point `COWORK_AGENT_BINARY` at a `claude-code-vm/<ver>/claude` ELF. Nothing is bundled. No agent → no run; report that, don't skip silently.
 - **Docker / Lima.** Only `--fidelity protocol` (L0) runs without them. `container` / `microvm` / `hostloop` / `cowork` need Docker (Lima for L2). If they're absent, drop to `--fidelity protocol` and **say so** — a green that never exercised the sandbox is not a sandbox pass.
 - **Auth.** `CLAUDE_CODE_OAUTH_TOKEN` (preferred) or `ANTHROPIC_API_KEY`, via env or `.env`.
@@ -97,6 +97,17 @@ The word `agent` is **retired** — do not write `on_unanswered: agent` (the sch
 `--on-unanswered first` is itself flagged `nonDeterministic` — it is *not* a deterministic stand-in
 for scripted answers. See `references/fidelity-and-answers.md`.
 
+### External deciders and the "first" shorthand
+
+When using `--decider-cmd` or `--decider-dir`, the helper's output is passed through
+`coerceLabel` **with the "first" shorthand disabled**. This means a helper that returns the literal
+string `"first"` must match an actual label named `"first"` — it is **not** coerced to option 1.
+This prevents a helper bug (accidentally emitting `"first"`) from silently green-ing option 1.
+
+The `"first"` shorthand remains active only for the built-in `--on-unanswered first` path. If you
+write an external helper, return a label name or option index — never the bare word `"first"` unless
+your gate actually has a label called `"first"`.
+
 ## 6. Assertions: two orthogonal axes
 
 Conflating these is the **biggest landmine**. An assertion key has two independent properties:
@@ -139,6 +150,15 @@ deterministic re-run. Use `cowork-harness trace <id>` to digest a run. If only a
 run itself was fine), `cowork-harness verify-run <run-dir> <scenario.yaml>` re-checks the `assert:` block against
 a **kept** run dir (`--keep`, or a `--session-id` run) with no live re-record — tokens-free, ~1s per iteration.
 
+### Interpreting verdict signals
+
+The run verdict may include `WARN`-severity signals in addition to pass/fail. One to watch for:
+
+- **`prompt_asset_missing`** — the run proceeded but a prompt asset referenced by the scenario was
+  not found. The model ran against an incomplete prompt. This is a `WARN`, not a hard failure, so
+  the run can still green. If you see it, fix the asset path — a green with a missing asset is
+  not a valid pass.
+
 ## 9. Scaffold a valid scenario, lint before you push, then place in CI
 
 Don't hand-write the YAML from memory — that's how invented keys (`assertions:` vs `assert:`,
@@ -171,6 +191,32 @@ for egress on `protocol`, so it never emits a scenario `lint` would reject.
 
 CI placement: a **token-free `replay` PR gate** (content/structure only) + a **nightly live `run`**
 (filesystem/egress). See `references/ci-recipe.md` for the four-stage pipeline.
+
+## 10. Debugging with `chat`
+
+`cowork-harness chat` opens an interactive multi-turn REPL against a live Cowork session. It is
+**not** an asserted test — no `assert:` block, no cassette. Use it to explore behavior, reproduce a
+bug interactively, or test a prompt before committing it to a scenario.
+
+**`--plugin <dir>` flag (repeatable).** Load additional skill folders alongside the primary session
+plugin. Each `--plugin <dir>` appends the folder to `local_plugins`. Useful when the skill-under-test
+depends on a sibling plugin:
+
+```bash
+cowork-harness chat --plugin ./skills/report-gen --plugin ./skills/shared-utils
+```
+
+**Note:** `--plugin` flags are silently ignored in `--raw` mode (native docker mode mounts one skill
+folder only). The harness logs a warning if you combine them.
+
+**`/help` in the REPL.** Type `/help` at the prompt to see available commands:
+
+```
+Commands: /exit  /quit  /help
+```
+
+The startup banner now reads `type your message (/help for commands)` as a reminder. `/exit` and
+`/quit` both terminate the session.
 
 ## Gotchas — the "✓ passed ≠ correct" landmines
 
@@ -219,6 +265,25 @@ are the ones that bite hardest.
 9. **Keep `.env` out of any mounted folder** — it is copied into the sandbox and the token could
    leak. Put it at a working-dir or install root (token resolution: env > `--dotenv` > `./.env` >
    install `.env`).
+
+10. **A base64 artifact that was scrubbed at record time will fail artifact assertions at replay.**
+    When `record` detects a secret embedded in a base64 artifact, it replaces the entire artifact
+    body with `[REDACTED:base64]` and emits a `::warning::`. Any `artifact_json` or content
+    assertion targeting that artifact will fail at replay because the body no longer matches. *Fix:*
+    do not let secrets flow into artifacts; if the artifact is intentionally opaque, drop the
+    content assertion and gate on `file_exists` on the live lane instead.
+
+11. **An external decider returning `"first"` does not select option 1.** The `"first"` keyword
+    shorthand is disabled for `--decider-cmd` / `--decider-dir` helpers (see §5). If your helper
+    accidentally emits `"first"` and no label named `"first"` exists, the gate fails — it does
+    **not** silently pick the first option. This is intentional: a helper bug should fail loud, not
+    green wrong. *Fix:* have helpers return a label name or numeric index.
+
+12. **`prompt_asset_missing` is a WARN, not a hard failure — greens can hide it.** The
+    `prompt_asset_missing` verdict signal (see §8) does not block a green verdict. Scan the verdict
+    signals section after every run; a run that greened with this signal ran against an incomplete
+    prompt. *Fix:* treat `prompt_asset_missing` as a blocking error in CI by checking the signals
+    array.
 
 For the complete gotcha list, the assertion catalog, the YAML schema, the fidelity/answer tables,
 and the CI recipe, read the files in `references/`.

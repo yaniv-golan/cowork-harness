@@ -6,17 +6,31 @@ Pushing a `vX.Y.Z` tag triggers the `.github/workflows/release.yml` workflow, wh
 npm via **OIDC Trusted Publishing** (no stored token). Do **not** run `npm publish` manually — it
 requires an OTP and is not how this repo ships.
 
-## The two-phase sequence
+## The preferred three-phase sequence (branch → PR → merge → tag)
 
-The release is split into two pushes to close the "docs skew" window as tightly as possible:
+CI only triggers on pushes to `main` **or on pull requests**. Pushing a release branch and opening
+a PR lets CI prove the exact SHA before anything lands on `main`, keeping the "docs skew" window
+(main has ≥X.Y.Z docs but npm still has X.Y-1.Z) as short as possible.
 
 ```
-Phase 1: git push origin main     # triggers CI; begins skew window
-                                   # (main has >=X.Y.Z docs but npm only has X.Y-1.Z)
-  ↓  CI passes (unit + boundary gate)
-Phase 2: git push origin vX.Y.Z   # triggers release workflow → npm publish + GitHub Release
-                                   # closes skew window
+Phase 1: git checkout -b release/X.Y.Z
+         git push origin release/X.Y.Z
+         gh pr create --base main --head release/X.Y.Z --title "release: X.Y.Z"
+         # CI runs on the PR (unit + boundary stages; scenario stage skipped — no API key on PR)
+  ↓  CI passes
+Phase 2: gh pr merge <number> --merge   (or merge via GitHub UI)
+         git checkout main && git pull origin main
+         git push origin main            # fast-forward; CI does NOT re-run (same SHA)
+Phase 3: git push origin vX.Y.Z         # triggers release workflow → npm publish + GitHub Release
+         # closes the skew window
+         git push origin --delete release/X.Y.Z   # clean up remote branch
+         git branch -d release/X.Y.Z              # clean up local branch
 ```
+
+**Why branch-first?** The old two-phase sequence (`push main` → `push tag`) opened the skew window
+the moment `main` was pushed and kept it open until CI passed. The branch+PR approach keeps `main`
+clean until CI is already green — the merge and tag happen in immediate succession, so the window is
+seconds wide rather than minutes.
 
 Never push the tag before CI is green for the exact commit you intend to tag. The release workflow
 enforces this (`Require ci.yml success for this commit` step), but don't rely on it — tag a green
@@ -30,13 +44,17 @@ stricter privacy gate, a changed cassette/staleness hash), are a **minor**.
 
 ## Version locations — bump ALL of these to the same `X.Y.Z`
 
-1. `package.json` → `"version"`.
-2. `.claude/skills/cowork-harness/SKILL.md` → frontmatter `version:`, the `tracks-harness:` line,
+1. `package.json` → `"version"` (then run `npm install` to update `package-lock.json`).
+2. `.claude-plugin/marketplace.json` → `plugins[0].version`.
+3. `.claude/skills/cowork-harness/.claude-plugin/plugin.json` → `"version"`.
+4. `.claude/skills/cowork-harness/SKILL.md` → frontmatter `version:`, the `tracks-harness:` line,
    the "**Version note**" block, and the **version floor** in §0 (`needs ≥ X.Y.Z`,
    `npx cowork-harness@>=X.Y.Z`).
-3. `.claude/skills/cowork-harness/references/scenario-schema.md` → the
+5. `.claude/skills/cowork-harness/references/scenario-schema.md` → the
    "Tracks `cowork-harness X.Y.Z`" line.
-4. The baseline these track (`tracks-harness … (baseline desktop-<ver>)`) — keep in sync with the
+6. `.claude/skills/cowork-harness/references/fidelity-and-answers.md` → the
+   "Tracks `cowork-harness X.Y.Z`" line.
+7. The baseline these track (`tracks-harness … (baseline desktop-<ver>)`) — keep in sync with the
    newest `baselines/desktop-*.json`.
 
 ## Checklist
@@ -45,20 +63,35 @@ stricter privacy gate, a changed cassette/staleness hash), are a **minor**.
 - [ ] **CHANGELOG.md** — move everything under `## [Unreleased]` into a new
       `## [X.Y.Z] — YYYY-MM-DD` section; leave an empty `## [Unreleased]` on top. Include any
       **upgrade notes** (e.g. "re-record cassettes after the staleness-hash change").
-- [ ] Bump every version location listed above.
-- [ ] `npm run format:check` — fix any issues before the release commit (a format failure is the
-      most common CI red on a release push).
+- [ ] Bump every version location listed above (items 1–7). `npm install` after bumping `package.json`.
+- [ ] `npm run format:check` — fix any issues (`npx prettier --write "src/**/*.ts" "test/**/*.ts"`).
+      A format failure is the most common first-pass CI red.
+- [ ] `npx tsc -p tsconfig.test.json --noEmit` — typecheck including tests.
 - [ ] `npm run ci` (typecheck + build + test) is green locally.
 - [ ] `npm pack --dry-run` — confirm the tarball contains `dist/`, `baselines/`, `docker/`, the
       skill, and no `docs/internal/`.
-- [ ] Commit the release (`release: X.Y.Z — <one-line summary>`), on `main`.
-- [ ] **Phase 1 — push `main`**: `git push origin main`
-- [ ] **Wait for CI green** (`gh run watch` or check GitHub Actions). Do not proceed until the
-      `unit` job passes for this exact commit.
-- [ ] **Tag the green commit**: `git tag vX.Y.Z` (if not already tagged).
-- [ ] **Phase 2 — push the tag**: `git push origin vX.Y.Z`
-      The release workflow runs automatically: build + test → npm publish (OIDC) → GitHub Release.
-      Watch with `gh run list` / `gh run watch`.
+- [ ] Commit everything (`chore: bump to X.Y.Z; sync docs, CHANGELOG, and skill`).
+- [ ] **Phase 1 — branch + PR**:
+      ```
+      git checkout -b release/X.Y.Z
+      git push origin release/X.Y.Z
+      gh pr create --base main --head release/X.Y.Z --title "release: X.Y.Z"
+      gh run watch $(gh run list --branch release/X.Y.Z --limit 1 --json databaseId --jq '.[0].databaseId')
+      ```
+- [ ] **Wait for CI green** on the PR. Fix any failures on the branch and push again; CI re-runs
+      automatically.
+- [ ] **Phase 2 — merge**:
+      ```
+      gh pr merge <number> --merge
+      git checkout main && git pull origin main
+      git push origin main
+      ```
+- [ ] **Phase 3 — tag and publish**:
+      ```
+      git push origin vX.Y.Z
+      gh run watch $(gh run list --limit 1 --json databaseId --jq '.[0].databaseId')
+      ```
+- [ ] **Clean up**: `git push origin --delete release/X.Y.Z && git branch -d release/X.Y.Z`
 - [ ] Smoke the published artifact: `npx cowork-harness@X.Y.Z --version` and
       `npx cowork-harness@X.Y.Z doctor --tier protocol`.
 
@@ -69,3 +102,6 @@ stricter privacy gate, a changed cassette/staleness hash), are a **minor**.
 - `docs/internal/` is gitignored and excluded from the npm tarball — keep planning notes there.
 - If the tag was placed on the wrong commit (e.g. a follow-up fix was needed), delete the local tag
   (`git tag -d vX.Y.Z`), re-create it on the correct commit, and push it.
+- The `scenario suite` CI stage is skipped on PRs (no API key available for fork PRs). It runs on
+  pushes to `main`. The `unit` + `boundary` stages are sufficient to gate a release; the scenario
+  suite is a post-merge health check.

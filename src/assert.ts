@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync, realpathSync } from "node:fs";
 import { join, resolve, relative, isAbsolute, sep } from "node:path";
 import type { Assertion, RunResult } from "./types.js";
 import { compileUserRegex } from "./regex.js";
@@ -14,6 +14,43 @@ function containedPath(workRoot: string, p: string): string | null {
   const rel = relative(root, abs);
   if (rel === ".." || rel.startsWith(".." + sep) || isAbsolute(rel)) return null;
   return abs;
+}
+
+/**
+ * Bug 37: containedPath checks lexical traversal but not symlink targets. A symlink inside the workspace
+ * root that points outside satisfies containedPath yet lets existsSync observe host files.
+ * This helper resolves symlinks with realpathSync and verifies the real path is still under `root`.
+ * Returns the absolute path when safe; returns null when:
+ *  - the path escapes root after symlink resolution (containment violation), or
+ *  - realpathSync throws ENOENT (file does not exist — treat as "not found", not a violation).
+ * Other realpathSync errors (permission denied, etc.) are treated as containment failures (not found = safe
+ * but conservative; the caller's existsSync will return false anyway).
+ *
+ * Note: workRoot itself is also resolved via realpathSync to handle platforms (macOS) where tmpdir()
+ * returns a symlinked path (e.g. /var/folders/... → /private/var/folders/...). Without resolving
+ * both sides, a legitimate file under a symlinked workRoot would be incorrectly flagged as escaping.
+ */
+function containedRealPath(workRoot: string, abs: string): string | null {
+  // Resolve workRoot itself to its real path so comparisons are apples-to-apples.
+  let realRoot: string;
+  try {
+    realRoot = realpathSync(resolve(workRoot));
+  } catch {
+    // workRoot doesn't exist (e.g. /nonexistent in tests) — fall back to lexical root.
+    realRoot = resolve(workRoot);
+  }
+  let real: string;
+  try {
+    real = realpathSync(abs);
+  } catch (e: any) {
+    // ENOENT: path doesn't exist — not a containment violation, just absent.
+    if (e?.code === "ENOENT") return abs; // return the original abs; existsSync will return false
+    // Other errors (EPERM, dangling symlink pointing outside): treat conservatively as "not accessible".
+    return null;
+  }
+  const rel = relative(realRoot, real);
+  if (rel === ".." || rel.startsWith(".." + sep) || isAbsolute(rel)) return null;
+  return real;
 }
 
 /**
@@ -102,6 +139,16 @@ export interface AssertContext {
     error?: string;
     reason?: "ok" | "errored" | "unobserved" | "no-pairing-metadata";
   }[]; // Part 3: per-gate answer-delivery outcome
+  toolResultTexts: string[]; // assertion-fidelity text for each tool result (assertText ?? text, 10 KB cap)
+  /** Set by verify-run only when run.jsonl is absent/unreadable. Prevents negative transcript assertions
+   *  from passing vacuously on missing evidence (absent ≠ empty). Undefined/false on live and replay lanes. */
+  transcriptMissing?: boolean;
+  /** Set by verify-run only when trace.json is absent/unreadable. Prevents questions_count_max from
+   *  passing vacuously on missing evidence (absent ≠ zero questions). Undefined/false on live/replay lanes. */
+  questionsMissing?: boolean;
+  /** Relative paths of artifacts written as 0-byte placeholders in the cassette (truncated: true entries).
+   *  Set by replay lane from materializeManifest(); empty set on live and verify-run lanes. */
+  truncatedPaths?: Set<string>;
 }
 
 export function evaluate(assertions: Assertion[], ctx: AssertContext): RunResult["assertions"] {
@@ -122,30 +169,71 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
   const results: KeyResult[] = [];
   const ok = (): KeyResult => ({ pass: true });
   const fail = (message: string): KeyResult => ({ pass: false, message });
+  const truncated = ctx.truncatedPaths ?? new Set<string>();
 
   if (a.transcript_contains !== undefined)
-    results.push(ctx.transcript.includes(a.transcript_contains) ? ok() : fail(`transcript missing "${a.transcript_contains}"`));
+    results.push(
+      ctx.transcriptMissing
+        ? fail(`evidence unavailable: transcript sidecar (run.jsonl) absent — cannot evaluate transcript_contains`)
+        : ctx.transcript.includes(a.transcript_contains)
+          ? ok()
+          : fail(`transcript missing "${a.transcript_contains}"`),
+    );
   if (a.transcript_not_contains !== undefined)
     results.push(
-      !ctx.transcript.includes(a.transcript_not_contains) ? ok() : fail(`transcript unexpectedly contains "${a.transcript_not_contains}"`),
+      ctx.transcriptMissing
+        ? fail(`evidence unavailable: transcript sidecar (run.jsonl) absent — cannot evaluate transcript_not_contains`)
+        : !ctx.transcript.includes(a.transcript_not_contains)
+          ? ok()
+          : fail(`transcript unexpectedly contains "${a.transcript_not_contains}"`),
+    );
+  if (a.tool_result_contains !== undefined)
+    results.push(
+      ctx.toolResultTexts.some((t) => t.includes(a.tool_result_contains!))
+        ? ok()
+        : fail(`no tool result contained "${a.tool_result_contains}"`),
+    );
+  if (a.tool_result_not_contains !== undefined)
+    results.push(
+      ctx.toolResultTexts.every((t) => !t.includes(a.tool_result_not_contains!))
+        ? ok()
+        : fail(`a tool result unexpectedly contained "${a.tool_result_not_contains}"`),
     );
   // Fuzzy content for stochastic prose. All regex-building assertions are try/catch-wrapped —
   // `evaluate()` is a bare `.map(check)` with no error boundary, so a malformed pattern must be a
   // clean assertion failure, not an uncaught throw. Case-insensitive ("i").
   if (a.transcript_matches !== undefined) {
-    const c = compileUserRegex(a.transcript_matches);
-    if ("error" in c) results.push(fail(`transcript_matches: bad regex "${a.transcript_matches}": ${c.error}`));
-    else results.push(c.re.test(ctx.transcript) ? ok() : fail(`transcript did not match /${a.transcript_matches}/i`));
+    if (ctx.transcriptMissing) {
+      results.push(fail(`evidence unavailable: transcript sidecar (run.jsonl) absent — cannot evaluate transcript_matches`));
+    } else {
+      const c = compileUserRegex(a.transcript_matches);
+      if ("error" in c) results.push(fail(`transcript_matches: bad regex "${a.transcript_matches}": ${c.error}`));
+      else results.push(c.re.test(ctx.transcript) ? ok() : fail(`transcript did not match /${a.transcript_matches}/i`));
+    }
   }
   if (a.transcript_not_matches !== undefined) {
-    const c = compileUserRegex(a.transcript_not_matches);
-    if ("error" in c) results.push(fail(`transcript_not_matches: bad regex "${a.transcript_not_matches}": ${c.error}`));
-    else results.push(!c.re.test(ctx.transcript) ? ok() : fail(`transcript unexpectedly matched /${a.transcript_not_matches}/i`));
+    if (ctx.transcriptMissing) {
+      results.push(fail(`evidence unavailable: transcript sidecar (run.jsonl) absent — cannot evaluate transcript_not_matches`));
+    } else {
+      const c = compileUserRegex(a.transcript_not_matches);
+      if ("error" in c) results.push(fail(`transcript_not_matches: bad regex "${a.transcript_not_matches}": ${c.error}`));
+      else results.push(!c.re.test(ctx.transcript) ? ok() : fail(`transcript unexpectedly matched /${a.transcript_not_matches}/i`));
+    }
   }
   if (a.file_exists !== undefined) {
     const abs = containedPath(ctx.workRoot, a.file_exists);
     if (!abs) results.push(fail(`unsafe file_exists path "${a.file_exists}" — must stay under the work root (no absolute paths or "..")`));
-    else results.push(existsSync(abs) ? ok() : fail(`file not found: ${a.file_exists} (under ${ctx.workRoot})`));
+    else {
+      const relPath = relative(resolve(ctx.workRoot), abs);
+      if (truncated.has(relPath)) {
+        results.push(fail(`"${a.file_exists}" was truncated in the cassette — content was not committed; assertion cannot pass`));
+      } else {
+        // Bug 37: verify the real path (after symlink resolution) is still under workRoot.
+        const real = containedRealPath(ctx.workRoot, abs);
+        if (!real) results.push(fail(`unsafe file_exists path "${a.file_exists}" — symlink target escapes the work root`));
+        else results.push(existsSync(real) ? ok() : fail(`file not found: ${a.file_exists} (under ${ctx.workRoot})`));
+      }
+    }
   }
   if (a.user_visible_artifact !== undefined) {
     const p = a.user_visible_artifact;
@@ -155,12 +243,21 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
       results.push(fail(`unsafe user_visible_artifact path "${p}" — must stay under the work root (no absolute paths or "..")`));
     } else {
       const rel = relative(resolve(ctx.workRoot), abs); // normalized, guaranteed under workRoot
-      const visible = ctx.userVisiblePrefixes.some((pre) => rel === pre || rel.startsWith(pre + "/"));
-      if (!visible)
-        results.push(
-          fail(`"${p}" is not under a user-visible prefix (${ctx.userVisiblePrefixes.join(", ")}) — invisible to the user in Cowork`),
-        );
-      else results.push(existsSync(abs) ? ok() : fail(`user-visible artifact not found: ${p}`));
+      if (truncated.has(rel)) {
+        results.push(fail(`"${p}" was truncated in the cassette — content was not committed; assertion cannot pass`));
+      } else {
+        const visible = ctx.userVisiblePrefixes.some((pre) => rel === pre || rel.startsWith(pre + "/"));
+        if (!visible)
+          results.push(
+            fail(`"${p}" is not under a user-visible prefix (${ctx.userVisiblePrefixes.join(", ")}) — invisible to the user in Cowork`),
+          );
+        else {
+          // Bug 37: verify the real path (after symlink resolution) is still under workRoot.
+          const real = containedRealPath(ctx.workRoot, abs);
+          if (!real) results.push(fail(`unsafe user_visible_artifact path "${p}" — symlink target escapes the work root`));
+          else results.push(existsSync(real) ? ok() : fail(`user-visible artifact not found: ${p}`));
+        }
+      }
     }
   }
   if (a.tool_called !== undefined) results.push(ctx.toolsCalled.has(a.tool_called) ? ok() : fail(`tool not called: ${a.tool_called}`));
@@ -228,13 +325,21 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
       !ctx.hostPathLeaked === a.transcript_no_host_path ? ok() : fail(`host path leaked into model-visible text: ${ctx.hostPathLeaked}`),
     );
   if (a.question_asked !== undefined) {
-    const c = compileUserRegex(a.question_asked);
-    if ("error" in c) results.push(fail(`question_asked: bad regex "${a.question_asked}": ${c.error}`));
-    else results.push(ctx.questions.some((q) => c.re.test(q)) ? ok() : fail(`no question matched: ${a.question_asked}`));
+    if (ctx.questionsMissing) {
+      results.push(fail(`evidence unavailable: questions sidecar (trace.json) absent — cannot evaluate question_asked`));
+    } else {
+      const c = compileUserRegex(a.question_asked);
+      if ("error" in c) results.push(fail(`question_asked: bad regex "${a.question_asked}": ${c.error}`));
+      else results.push(ctx.questions.some((q) => c.re.test(q)) ? ok() : fail(`no question matched: ${a.question_asked}`));
+    }
   }
   if (a.questions_count_max !== undefined)
     results.push(
-      ctx.questions.length <= a.questions_count_max ? ok() : fail(`asked ${ctx.questions.length} questions, max ${a.questions_count_max}`),
+      ctx.questionsMissing
+        ? fail(`evidence unavailable: questions sidecar (trace.json) absent — cannot evaluate questions_count_max`)
+        : ctx.questions.length <= a.questions_count_max
+          ? ok()
+          : fail(`asked ${ctx.questions.length} questions, max ${a.questions_count_max}`),
     );
   if (a.gate_answers_delivered !== undefined) {
     // #19: passes iff every answered gate's tool_result was OBSERVED and non-error. On a finished
@@ -278,82 +383,89 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
     const aj = a.artifact_json;
     const file = containedPath(ctx.workRoot, aj.artifact);
     if (!file) results.push(fail(`unsafe artifact_json path "${aj.artifact}" — must stay under the work root (no absolute paths or "..")`));
-    else if (!existsSync(file)) results.push(fail(`artifact_json: file not found: ${aj.artifact} (under ${ctx.workRoot})`));
     else {
-      let doc: unknown;
-      let parsed = true;
-      const fileSizeLimit = 10 * 1024 * 1024;
-      const fileSize = statSync(file).size;
-      if (fileSize > fileSizeLimit) {
-        results.push(fail(`artifact_json: file too large to parse as JSON (${fileSize} bytes, limit 10 MiB)`));
-        parsed = false;
-      }
-      try {
-        if (parsed) doc = JSON.parse(readFileSync(file, "utf8"));
-      } catch (e) {
-        parsed = false;
-        results.push(fail(`artifact_json: ${aj.artifact} is not valid JSON: ${String((e as Error).message)}`));
-      }
-      if (parsed) {
-        const r = resolveDotPath(doc, aj.path);
-        if (r.state === "unresolved") {
-          // Malformed/truncated artifact for this path — fail loud, NOT a vacuous "absent" pass (the H4
-          // false-green at the field level).
-          results.push(
-            fail(`artifact_json: path "${aj.path}" unresolvable in ${aj.artifact} — intermediate "${r.at}" is missing or not an object`),
-          );
-        } else {
-          const present = r.state === "value";
-          const val = r.state === "value" ? r.value : undefined;
-          let any = false;
-          if (aj.exists !== undefined) {
-            any = true;
+      // Bug 37: verify the real path (after symlink resolution) is still under workRoot.
+      const realFile = containedRealPath(ctx.workRoot, file);
+      if (!realFile) {
+        results.push(fail(`unsafe artifact_json path "${aj.artifact}" — symlink target escapes the work root`));
+      } else if (!existsSync(realFile)) {
+        results.push(fail(`artifact_json: file not found: ${aj.artifact} (under ${ctx.workRoot})`));
+      } else {
+        let doc: unknown;
+        let parsed = true;
+        const fileSizeLimit = 10 * 1024 * 1024;
+        const fileSize = statSync(realFile).size;
+        if (fileSize > fileSizeLimit) {
+          results.push(fail(`artifact_json: file too large to parse as JSON (${fileSize} bytes, limit 10 MiB)`));
+          parsed = false;
+        }
+        try {
+          if (parsed) doc = JSON.parse(readFileSync(realFile, "utf8"));
+        } catch (e) {
+          parsed = false;
+          results.push(fail(`artifact_json: ${aj.artifact} is not valid JSON: ${String((e as Error).message)}`));
+        }
+        if (parsed) {
+          const r = resolveDotPath(doc, aj.path);
+          if (r.state === "unresolved") {
+            // Malformed/truncated artifact for this path — fail loud, NOT a vacuous "absent" pass (the H4
+            // false-green at the field level).
             results.push(
-              present === aj.exists ? ok() : fail(`artifact_json: "${aj.path ?? "(root)"}" exists=${present}, expected ${aj.exists}`),
+              fail(`artifact_json: path "${aj.path}" unresolvable in ${aj.artifact} — intermediate "${r.at}" is missing or not an object`),
             );
+          } else {
+            const present = r.state === "value";
+            const val = r.state === "value" ? r.value : undefined;
+            let any = false;
+            if (aj.exists !== undefined) {
+              any = true;
+              results.push(
+                present === aj.exists ? ok() : fail(`artifact_json: "${aj.path ?? "(root)"}" exists=${present}, expected ${aj.exists}`),
+              );
+            }
+            if (aj.absent !== undefined) {
+              any = true;
+              const absent = r.state === "absent";
+              results.push(absent === aj.absent ? ok() : fail(`artifact_json: "${aj.path}" absent=${absent}, expected ${aj.absent}`));
+            }
+            if (aj.is_null !== undefined) {
+              any = true;
+              const isNull = present && val === null;
+              results.push(isNull === aj.is_null ? ok() : fail(`artifact_json: "${aj.path}" is_null=${isNull}, expected ${aj.is_null}`));
+            }
+            if (aj.equals !== undefined) {
+              any = true;
+              results.push(
+                present && jsonEq(val, aj.equals)
+                  ? ok()
+                  : fail(`artifact_json: "${aj.path}" = ${JSON.stringify(val)}, expected ${JSON.stringify(aj.equals)}`),
+              );
+            }
+            if (aj.gt !== undefined) {
+              any = true;
+              results.push(
+                typeof val === "number" && val > aj.gt
+                  ? ok()
+                  : fail(`artifact_json: "${aj.path}" = ${JSON.stringify(val)}, expected > ${aj.gt}`),
+              );
+            }
+            // #4: set membership — the resolved value deep-equals one of a fixed set. Stable for stochastic
+            // (LLM-extracted) values where `equals` would churn across re-records. `present &&` guard mirrors
+            // `equals` so an absent value never vacuously satisfies it.
+            if (aj.in !== undefined) {
+              any = true;
+              results.push(
+                present && Array.isArray(aj.in) && aj.in.some((x) => jsonEq(val, x))
+                  ? ok()
+                  : fail(`artifact_json: "${aj.path}" = ${JSON.stringify(val)}, expected one of ${JSON.stringify(aj.in)}`),
+              );
+            }
+            // No operator → an existence assertion (the value must be present).
+            if (!any)
+              results.push(
+                present ? ok() : fail(`artifact_json: "${aj.path ?? "(root)"}" is not present (no operator given → existence check)`),
+              );
           }
-          if (aj.absent !== undefined) {
-            any = true;
-            const absent = r.state === "absent";
-            results.push(absent === aj.absent ? ok() : fail(`artifact_json: "${aj.path}" absent=${absent}, expected ${aj.absent}`));
-          }
-          if (aj.is_null !== undefined) {
-            any = true;
-            const isNull = present && val === null;
-            results.push(isNull === aj.is_null ? ok() : fail(`artifact_json: "${aj.path}" is_null=${isNull}, expected ${aj.is_null}`));
-          }
-          if (aj.equals !== undefined) {
-            any = true;
-            results.push(
-              present && jsonEq(val, aj.equals)
-                ? ok()
-                : fail(`artifact_json: "${aj.path}" = ${JSON.stringify(val)}, expected ${JSON.stringify(aj.equals)}`),
-            );
-          }
-          if (aj.gt !== undefined) {
-            any = true;
-            results.push(
-              typeof val === "number" && val > aj.gt
-                ? ok()
-                : fail(`artifact_json: "${aj.path}" = ${JSON.stringify(val)}, expected > ${aj.gt}`),
-            );
-          }
-          // #4: set membership — the resolved value deep-equals one of a fixed set. Stable for stochastic
-          // (LLM-extracted) values where `equals` would churn across re-records. `present &&` guard mirrors
-          // `equals` so an absent value never vacuously satisfies it.
-          if (aj.in !== undefined) {
-            any = true;
-            results.push(
-              present && Array.isArray(aj.in) && aj.in.some((x) => jsonEq(val, x))
-                ? ok()
-                : fail(`artifact_json: "${aj.path}" = ${JSON.stringify(val)}, expected one of ${JSON.stringify(aj.in)}`),
-            );
-          }
-          // No operator → an existence assertion (the value must be present).
-          if (!any)
-            results.push(
-              present ? ok() : fail(`artifact_json: "${aj.path ?? "(root)"}" is not present (no operator given → existence check)`),
-            );
         }
       }
     }

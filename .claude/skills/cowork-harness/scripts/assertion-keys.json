@@ -21,6 +21,8 @@
     "subagent_tool_used",
     "tool_called",
     "tool_not_called",
+    "tool_result_contains",
+    "tool_result_not_contains",
     "transcript_contains",
     "transcript_matches",
     "transcript_no_host_path",

@@ -24,6 +24,15 @@ Scriptable, CI-friendly test harness that reproduces **Claude Cowork's observabl
 
 > **What this is and isn't.** This is an *emulator of the contract*, not the Desktop runtime. Cowork's real session control plane lives behind the Desktop renderer's IPC (per-build UUID + `senderFrame` origin checks) and the app ships with remote debugging disabled (verified: `--remote-debugging-port` opens no listener; Electron `EnableNodeCliInspectArguments` fuse is OFF). So you **cannot** drive the real Apple Virtualization.framework microVM from a script. What you *can* faithfully reproduce is everything that actually changes how a **skill** behaves: the same agent binary in **cowork mode** (`CLAUDE_CODE_IS_COWORK=1` — there is no `--cowork` flag), the same mount layout, the same egress allowlist, and the same permission/question protocol. That's what this project does.
 
+**Zero-friction preview — no token, no Docker.** A committed cassette replays on a fresh clone:
+
+```bash
+npm install -g cowork-harness
+cowork-harness replay examples/replays/example-pdf-skill.cassette.json
+```
+
+Full setup → [Quick start](#quick-start).
+
 ---
 
 ## Why this works for skill testing
@@ -226,6 +235,9 @@ cowork-harness replay --cassette examples/replays/example-pdf-skill.cassette.jso
 
 # Cassettes are COMMITTED fixtures — record against synthetic data, and gate them in CI:
 cowork-harness verify-cassettes examples/replays/   # privacy scan (email/currency/domain) + staleness; exit 1 on a finding
+
+# 5. Lint scenarios before committing (catches silent false-greens in assertion placement)
+cowork-harness lint scenarios/*.yaml
 ```
 
 > **Privacy:** a cassette snapshots the transcript and the `outputs/` JSON bodies, so it's committed PII

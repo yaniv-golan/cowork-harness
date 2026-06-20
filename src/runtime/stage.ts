@@ -37,12 +37,14 @@ export function stageWorkspace(plan: LaunchPlan, mntHost: string): StageResult {
   let mcpStaged: boolean;
   if (!plan.resume) {
     // managed config dir (settings.json/cowork_settings.json/skills) -> mnt/.claude
-    cpSync(plan.configDir, join(mntHost, ".claude"), { recursive: true });
+    // preserve symlinks as-is during staging; do not copy out-of-tree content
+    cpSync(plan.configDir, join(mntHost, ".claude"), { recursive: true, dereference: false });
     // session content (uploads/projects/plugins) -> under mnt
     for (const mt of plan.mounts) {
       const dest = join(mntHost, mt.mountPath);
       mkdirSync(dirname(dest), { recursive: true });
-      if (existsSync(mt.hostPath)) cpSync(mt.hostPath, dest, { recursive: true });
+      // preserve symlinks as-is during staging; do not copy out-of-tree content
+      if (existsSync(mt.hostPath)) cpSync(mt.hostPath, dest, { recursive: true, dereference: false });
     }
     // A declared mcp.config whose source is missing must FAIL on a fresh run (it was silently dropped
     // before — no --mcp-config, no error). Resolved HERE, not in buildLaunchPlan, because resume (the
@@ -66,7 +68,8 @@ export function stageWorkspace(plan: LaunchPlan, mntHost: string): StageResult {
     // outDir (e.g. same --session-id) must NOT inherit a prior run's mnt/.claude/mcp.json when the
     // current plan has no mcpConfig (that would leak removed MCP servers into the new run).
     mcpStaged = !!plan.mcpConfig && existsSync(plan.mcpConfig);
-    if (mcpStaged) cpSync(plan.mcpConfig!, mcpDest);
+    // preserve symlinks as-is during staging; do not copy out-of-tree content
+    if (mcpStaged) cpSync(plan.mcpConfig!, mcpDest, { dereference: false });
   } else {
     // Resume reuses the persisted tree (no re-copy). Advertise the preserved mcp.json only if the
     // current plan still declares one — so dropping MCP between a run and its --resume is honored.

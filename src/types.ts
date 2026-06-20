@@ -97,10 +97,26 @@ export const AnswerRule = z
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: "answer rule has no matcher — set `when_question` or `when_tool`" });
       return;
     }
+    // Bug 13: reject rules that set both matcher families — their precedence is undefined and the rule
+    // would silently act as either a question rule or a tool rule depending on which branch runs first.
+    if (hasQuestion && hasTool)
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "answer rule sets both `when_question` and `when_tool` — use exactly one matcher family per rule",
+      });
     if (hasQuestion && r.choose === undefined && r.answer === undefined)
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: "a `when_question` rule needs an action — set `choose` or `answer`" });
     if (hasTool && r.decide === undefined && r.allow_if === undefined)
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: "a `when_tool` rule needs an action — set `decide` or `allow_if`" });
+    // Bug 14: reject rules that set both `allow_if` and `decide` — `decide` silently takes precedence
+    // over `allow_if` in the runtime's if/else-if chain, making `allow_if` unreachable and the author's
+    // intent opaque. Require exactly one action field.
+    if (r.allow_if !== undefined && r.decide !== undefined)
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "answer rule sets both `allow_if` and `decide` — use exactly one: `decide` for a static outcome, `allow_if` for a predicate",
+      });
   });
 export type AnswerRule = z.infer<typeof AnswerRule>;
 
@@ -112,6 +128,14 @@ export const Assertion = z.object({
   transcript_not_contains: z.string().optional().describe("the transcript does NOT contain this literal substring"),
   transcript_matches: z.string().optional().describe("regex (case-insensitive) over the transcript — fuzzy content for stochastic prose"),
   transcript_not_matches: z.string().optional().describe("regex (case-insensitive) that must NOT match the transcript"),
+  tool_result_contains: z
+    .string()
+    .optional()
+    .describe("at least one tool result contains this literal substring (per-result match, not concatenated; 10 KB cap per result)"),
+  tool_result_not_contains: z
+    .string()
+    .optional()
+    .describe("no tool result contains this literal substring (per-result match, not concatenated; 10 KB cap per result)"),
   file_exists: z.string().optional().describe("a file exists at this path under the agent's work root"),
   user_visible_artifact: z
     .string()
@@ -227,6 +251,8 @@ export const Scenario = z.preprocess((raw) => {
 export type Scenario = z.infer<typeof ScenarioObject>;
 
 export interface RunResult {
+  $schema?: string;
+  generator?: string;
   scenario: string;
   prompt?: string; // the prompt that was run — persisted so `scaffold --from-run` can reconstruct the scenario
   fidelity: string;
@@ -284,6 +310,10 @@ export interface RunResult {
   /** #49: structured fidelity warnings (prompt asset gaps, version mismatches) — visible to JSON callers,
    *  not just stderr. Populated when a non-fatal prompt warning is emitted during a run. */
   fidelityWarnings?: string[];
+  /** Tool-result text at assertion-fidelity cap (10 KB per result). Used by `tool_result_contains` /
+   *  `tool_result_not_contains`. `assertText` is preferred when present; falls back to `text` (500-char
+   *  display cap) for cassettes recorded before this field was added. */
+  toolResults?: { toolUseId?: string; isError: boolean; text: string; assertText?: string }[];
   /** #20: true when L0 (protocol) ran with plugins that loaded via --settings/managed config instead of
    *  --plugin-dir (the Cowork cache layout). computeVerdict fails on this unless allow_l0_plugin_divergence
    *  is asserted — a warn-only was insufficient since the run could still appear green. */

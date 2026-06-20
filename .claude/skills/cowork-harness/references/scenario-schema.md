@@ -1,6 +1,6 @@
 # Scenario & session schema, assertion catalog, web_fetch, full gotchas
 
-Self-contained reference for authoring `cowork-harness` scenarios. Tracks `cowork-harness 0.5.0`
+Self-contained reference for authoring `cowork-harness` scenarios. Tracks `cowork-harness 0.7.0`
 (baseline `desktop-1.13576.1`). If your checkout is newer, prefer the live `docs/scenario.md`,
 `docs/session.md`, and `SPEC.md`.
 
@@ -160,6 +160,11 @@ always allow; otherwise `cowork` parity allows-with-audit, `strict` parity denie
 rules in a separate file. A missing/unparseable/non-list policy fails loud at load — never treated as
 "0 rules."
 
+**External deciders (`--decider-cmd`, `--decider-dir`):** the `"first"` string is **not** a shorthand
+when returned by an external helper — it must match an actual label named `"first"`. Only the built-in
+`choose: first` scripted keyword and the `on_unanswered: first` policy coerce to option 1. A helper
+that accidentally returns `"first"` will fail the gate rather than silently green option 1.
+
 ## Assertion catalog
 
 Each list item under `assert:` is one assertion. **An item with multiple keys is an AND** — it
@@ -204,6 +209,16 @@ turns. Use `transcript_matches` only for **stable lexical markers**, not semanti
 paraphrases (that re-records red). Structured JSON → assert it in YAML with **`artifact_json`** (dotted
 `path` + operator); use the pytest lane (`assert_artifact_json`) only for predicates too complex for a
 dotted path.
+
+**VerdictSignals in `result.signals`:** `computeVerdict` may push warning-severity signals into
+`result.signals` even on a `success` run. Current signal codes:
+
+| Code | Severity | Meaning |
+|---|---|---|
+| `prompt_asset_missing` | warn | The run proceeded with a missing prompt asset (set `COWORK_HARNESS_ALLOW_MISSING_PROMPT=1`); fidelity is degraded. Re-run with the asset present or update the scenario. |
+
+A `warn`-severity signal does **not** flip `result` to `error` — assert `result: success` still passes.
+To detect the signal programmatically, inspect `result.signals[].code` in the run's JSON output.
 
 ## Replay class
 
@@ -346,3 +361,18 @@ at the top of this file.
 
 18. **`replay_protocol_fidelity` is replay-synthesized only** — authoring it in a scenario is
     rejected (live it would be an empty assertion).
+
+19. **External decider returning `"first"` does NOT coerce to option 1.** The `"first"` shorthand is
+    only active in the built-in scripted-answer engine (`choose: first`) and the `on_unanswered: first`
+    policy. A `--decider-cmd` or `--decider-dir` helper that returns the literal string `"first"` must
+    match an actual label named `"first"` — otherwise the gate fails. This prevents a helper bug from
+    silently green-ing option 1. (`src/decide/decider.ts:coerceLabel`.)
+
+20. **Secret scrubbing catches base64-embedded tokens at record time.** The `scrubField` function
+    (introduced in 0.7.0) runs two additional decode passes on each cassette field value: a whole-field
+    base64 decode pass (fields ≥ 20 chars matching `[A-Za-z0-9+/=]+`) and a whole-field URI decode pass
+    (fields containing `%`). If either decoded form contains a secret, the entire field value is replaced
+    with `[REDACTED:base64]` or `[REDACTED:uri]` and its sha256 is recomputed over the marker bytes.
+    Consequence: artifact assertions (`artifact_json`) over fields that were redacted will fail at replay
+    — the harness emits `::warning::` at record time when this occurs. (`src/secrets.ts:scrubField`;
+    `src/run/cassette.ts`.)

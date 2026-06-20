@@ -62,6 +62,78 @@ time — safe to commit for synthetic fixtures (see §Committed fixture below).
 
 Without `--out`, the cassette is named after the scenario's `name:` (or the YAML filename).
 
+## Artifact scrubbing at record time
+
+Artifact bodies go through a multi-pass scrub before being written into the cassette. The scrub is
+applied via `scrubField()` — a function in `src/secrets.ts` that is also exported for custom use (see
+§scrubField utility below).
+
+### What scrubField catches
+
+A naive byte-by-byte scan misses secrets that appear **inside a longer base64 blob**. Consider an
+Authorization header value `Bearer <TOKEN>` stored as a base64-encoded field. The bytes of `TOKEN`
+alone don't form a valid base64 boundary inside `base64("Bearer " + TOKEN)` — so `base64(TOKEN)`
+doesn't appear in the encoded value, and a simple "look for base64(TOKEN)" pass silently misses it.
+
+`scrubField` addresses this with three passes:
+
+1. **Direct scrub** — literal token, `base64(TOKEN)`, `encodeURIComponent(TOKEN)`, and other
+   surface-level variants. Handled by the underlying `scrub()` call.
+2. **Whole-field base64 decode** — if the entire field value is ≥ 20 characters and matches
+   `/^[A-Za-z0-9+/=]+$/`, decode the whole blob and run `scrub()` on the decoded form. If a secret
+   hit is found in the decoded content: replace the **entire field value** with `"[REDACTED:base64]"`.
+3. **Whole-field URI decode** — if the field value contains `%`, URI-decode the whole value and run
+   `scrub()` on the decoded form. If a secret hit is found: replace the entire field value with
+   `"[REDACTED:uri]"`.
+
+This catches the `base64(prefix + TOKEN + suffix)` class — where surrounding bytes shift the alphabet
+so `base64(TOKEN)` alone does not appear in the encoded blob.
+
+### How base64 artifact bodies are handled
+
+When `record` processes a base64-encoded artifact (i.e. `artifact.encoding === "base64"`):
+
+1. `scrubField()` is applied to the body.
+2. If a secret hit is found anywhere in the decoded content, the **entire body** is replaced with the
+   marker string `"[REDACTED:base64]"`.
+3. The `encoding` field is cleared (set to `undefined`), so replay treats the marker as plain UTF-8
+   text rather than trying to base64-decode the marker.
+4. The `sha256` field is recomputed over the marker bytes.
+5. A CI warning fires:
+
+   ```
+   ::warning:: artifact <path>: body contained a secret and was replaced with [REDACTED:base64]; artifact_json/user_visible_artifact assertions on this artifact will fail at replay
+   ```
+
+The warning is intentional: any `artifact_json` or `user_visible_artifact` assertion targeting this
+artifact **will fail at replay** because the body no longer matches its record-time content. This is
+the correct outcome — a compromised artifact should not green a replay.
+
+For UTF-8 artifacts, `scrubField()` is applied in the same way (it is safe on plain text; text passes
+through unless the entire value is a base64 blob).
+
+### The [REDACTED*] marker guard in redactCassette
+
+`redactCassette()` runs the opt-in PII redaction pass over the whole cassette after scrubbing. To
+prevent double-processing, any artifact body that already starts with `"[REDACTED"` is skipped by
+`redactCassette()`. This guards the sha256 from being corrupted by a second rewrite of the marker
+string: the PII redactor sees the marker and leaves it alone, so the recomputed sha256 remains
+consistent with the actual stored body.
+
+### scrubField utility
+
+`scrubField` is exported from `src/secrets.ts` for use outside the cassette pipeline:
+
+```ts
+import { scrubField } from "cowork-harness/secrets";
+
+const safe = scrubField(rawValue, [process.env.ANTHROPIC_API_KEY!]);
+```
+
+Pass the raw field value and an array of secret strings to redact. Returns the original string
+(unchanged) if no hit is found, or a `"[REDACTED:base64]"` / `"[REDACTED:uri]"` marker if the
+whole-field decode pass triggered, or a scrubbed string from the direct pass.
+
 ## Assertion table
 
 This table mirrors `src/run/cassette.ts` `contentKeys`, which is **the single source of truth**.
@@ -320,3 +392,4 @@ the [README Testing section](../README.md#testing--cicd).
 - [SPEC.md](../SPEC.md) — the replay-fidelity contract clause (§11 / RunResult shape).
 - `src/run/cassette.ts` — the implementation: `contentKeys`, `replayCassette`, `CassetteAgentSession`.
 - `src/agent/session.ts` — `serializeDecision` (and its declared inverse `deserializeDecision`).
+- `src/secrets.ts` — `scrubField` (exported standalone utility for custom scrubbing pipelines).

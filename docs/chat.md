@@ -28,8 +28,9 @@ cowork-harness chat <skill-folder> [prompt] [options]
 | `--model <id>` | `$COWORK_HARNESS_MODEL` | Override the model; passed as `--model` to the agent binary. |
 | `--upload <file>` | — | Attach a file (repeatable). Visible at `mnt/uploads/<basename>`. |
 | `--folder <dir>` | — | Connect a project folder (repeatable). Visible at `mnt/.projects/<basename>`. Live bind mount — agent writes persist to host. |
+| `--plugin <dir>` | — | Load an additional local plugin alongside the main skill folder (repeatable). Ignored in `--raw` mode. |
 | `--verbose` / `-V` | off | Show thinking blocks, tool inputs, and the full sub-agent tree. Default: tool call markers only. |
-| `--raw` | off | Skip the control protocol; spawns `docker run -it` in native cowork mode. Egress sandbox is NOT applied. `--model` and `--fidelity` are ignored. |
+| `--raw` | off | Skip the control protocol; spawns `docker run -it` in native cowork mode. Egress sandbox is NOT applied. `--model`, `--fidelity`, and `--plugin` are ignored. |
 
 ## Fidelity tiers
 
@@ -46,11 +47,21 @@ only manifests in the production execution split.
 `--raw` is a different escape hatch entirely: it bypasses the harness control protocol and runs
 `docker run -it` directly. Because the harness egress sidecar is not attached, network behavior
 is unrestricted and does not reflect Cowork's default-deny sandbox. Use it only when you
-specifically want unmediated access to the native Cowork agent.
+specifically want unmediated access to the native Cowork agent. `--plugin` flags are silently
+ignored in `--raw` mode (a warning is printed at startup).
 
 ## In-session commands
 
-Type `/exit` or `/quit` to end the session. Ctrl-D (EOF) also terminates.
+The REPL prompt reads `type your message (/help for commands)`. The following commands are
+available:
+
+| Command | Effect |
+|---|---|
+| `/help` | Print the list of available in-session commands. |
+| `/exit` | End the session and print the transcript path. |
+| `/quit` | Alias for `/exit`. |
+
+Ctrl-D (EOF) also terminates the session.
 
 ## Mount paths
 
@@ -110,7 +121,18 @@ cowork-harness chat skills/my-skill \
 
 Starts a session with the PDF attached and the project folder connected. The seed prompt is sent
 as the first turn; you continue typing follow-up messages. The agent's responses, tool calls, and
-any gates appear on your terminal. Type `/exit` when done.
+any gates appear on your terminal. Type `/exit` when done (or `/help` to see the command list).
+
+To load an additional plugin alongside the skill:
+
+```bash
+cowork-harness chat skills/my-skill \
+  --plugin plugins/extra-tools \
+  "What tools do you have?"
+```
+
+The `--plugin` flag is repeatable; each directory is loaded as a local plugin in addition to the
+main skill folder.
 
 To use the fastest tier without Docker:
 

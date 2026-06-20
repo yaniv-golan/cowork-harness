@@ -45,7 +45,7 @@ export interface RunRecord {
   decisions: DecisionRecord[];
   permissiveAutoAllow: string[]; // #6: tools auto-allowed by cowork parity for unscripted/off-registry perms (real Cowork blocks these)
   unanswered: { question: string; chosen: string; by: string; rationale?: string; model?: string }[];
-  toolResults: { toolUseId?: string; isError: boolean; text: string }[]; // Part 2: captured tool OUTCOMES
+  toolResults: { toolUseId?: string; isError: boolean; text: string; assertText?: string }[]; // Part 2: captured tool OUTCOMES
   gateAnswers: { question: string; toolUseId?: string; answers: Record<string, string> }[]; // answered AskUserQuestion gates
   gateDeliveries: {
     question: string;
@@ -154,7 +154,7 @@ export class Run {
             break;
           }
           case "tool_result": {
-            this.rec.toolResults.push({ toolUseId: ev.toolUseId, isError: ev.isError, text: ev.text });
+            this.rec.toolResults.push({ toolUseId: ev.toolUseId, isError: ev.isError, text: ev.text, assertText: ev.assertText });
             this.provenance.seedFromToolResult(ev.provenanceText ?? ev.text); // seed from the UNtruncated value so URLs past the display cap are still fetchable
             // (matches Cowork's tool_response provenance hook)
             // Delivery check (Part 3): if this is the result of an answered gate and it ERRORED, the injected
@@ -356,7 +356,7 @@ export class Run {
   /** Pre-approve web_fetch hosts for this run (test convenience: `web_fetch.approved_domains`) — as if
    *  "Allow all for website" had been clicked earlier this session. Per-run only (no persistence). */
   seedApprovedDomains(domains: string[]): void {
-    for (const d of domains) this.approvedDomains.add(d);
+    for (const d of domains) this.approvedDomains.add(normalizeHost(d));
   }
 
   /** Is this URL already in the session's provenance set? */
@@ -380,7 +380,8 @@ export class Run {
   async requestWebFetchApproval(domain: string, url: string): Promise<boolean> {
     // Per-run "Allow all for website" grant: an already-approved host fetches with NO gate and records
     // nothing (Phase 0: a 2nd fetch to an approved host does not re-prompt). Checked BEFORE the decider.
-    if (this.approvedDomains.has(domain)) return true;
+    // Normalize both sides so "Example.com" and "example.com" match the same stored entry.
+    if (this.approvedDomains.has(normalizeHost(domain))) return true;
     const req: DecisionRequest = {
       id: `webfetch-${randomUUID()}`,
       kind: "permission",
@@ -391,13 +392,15 @@ export class Run {
     const d = await this.decider.decide(req, this.ctx());
     const allow = d !== ABSTAIN && d.response.kind === "permission" && d.response.behavior === "allow";
     const grant = d !== ABSTAIN && d.response.kind === "permission" ? d.response.grant : undefined;
-    const by = d === ABSTAIN ? "fail" : d.by;
+    // "fail" conflated the FailDecider class with the internal abstain-fallback path. Use a distinct
+    // provenance value so readers can tell "no decider answered" apart from an explicit FailDecider deny.
+    const by = d === ABSTAIN ? "abstain-fallback" : d.by;
     // Pass the RESPONSE BODY + by (recordDecision reads resp.behavior) — not the whole Decision.
     const resp: DecisionResponse =
       d === ABSTAIN ? { kind: "permission", behavior: "deny", message: "no decider answer (fail-closed)" } : d.response;
     this.recordDecision(req, resp, by);
     // "Allow all for website" → approve the host for the rest of the run (off-wire; Run-side state).
-    if (allow && grant === "domain") this.approvedDomains.add(domain);
+    if (allow && grant === "domain") this.approvedDomains.add(normalizeHost(domain));
     return allow;
   }
 }
@@ -419,4 +422,17 @@ function denyLike(req: DecisionRequest): any {
 
 async function* oneShot(s: string): AsyncGenerator<string> {
   yield s;
+}
+
+/**
+ * Normalize a web_fetch hostname for the approvedDomains set: lowercase + strip a trailing dot.
+ * This prevents "Example.com" vs "example.com" from being stored as two different entries.
+ *
+ * NOT normalized here (deferred — needs binary verification before touching matching semantics):
+ *   - IPv6 bracket stripping (e.g. "[::1]" → "::1"): affects URL-parsing parity with the host sandbox.
+ *   - Punycode / IDNA folding: requires a unicode-aware library not currently in scope.
+ *   - Wildcard subdomain semantics (e.g. "*.example.com"): structural, not cosmetic.
+ */
+function normalizeHost(host: string): string {
+  return host.toLowerCase().replace(/\.$/, "");
 }
