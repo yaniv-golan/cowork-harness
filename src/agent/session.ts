@@ -352,8 +352,8 @@ export class LiveAgentSession implements AgentSession {
       }
     } finally {
       this.rejectError = undefined; // generator is done; stop routing errors here
-      this.closing = true;          // discard any late write() from translate()'s async hook/mcp paths
-      await this.drainAll();        // queue empty + all callbacks confirmed before ending either stream
+      this.closing = true; // discard any late write() from translate()'s async hook/mcp paths
+      await this.drainAll(); // queue empty + all callbacks confirmed before ending either stream
       // #46: AWAIT the stream flush before the generator resolves. executeScenario reads/scans/scrubs
       // events.jsonl + control-out.jsonl immediately after `drive()` returns; a fire-and-forget end()
       // races the final buffered writes. end(cb) fires the callback on 'finish' (fully flushed).
@@ -564,9 +564,7 @@ export function parseMessage(msg: any): AgentEvent[] {
       let blockIndex = 0;
       for (const block of msg.message?.content ?? []) {
         // Block-level parent wins over message-level when both are present (see comment above).
-        const parentToolUseId = block.parent_tool_use_id
-          ? String(block.parent_tool_use_id)
-          : msgParentToolUseId;
+        const parentToolUseId = block.parent_tool_use_id ? String(block.parent_tool_use_id) : msgParentToolUseId;
         if (block.type === "text") ev.push({ type: "assistant_text", text: block.text, parentToolUseId });
         else if (block.type === "thinking") ev.push({ type: "thinking", text: block.thinking ?? block.text ?? "" });
         else if (block.type === "tool_use") {

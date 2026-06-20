@@ -1564,8 +1564,7 @@ export async function replayCassette(
             "::warning:: [replay] skill fingerprint not re-checkable (local skill dirs not resolvable from this cassette location) — baseline check still applies\n",
           );
         }
-      }
-      else if (live.skillHash !== fp.skillHash) {
+      } else if (live.skillHash !== fp.skillHash) {
         const recordedVersion = cassette.cassetteVersion ?? 0;
         if (recordedVersion < CASSETTE_VERSION) {
           staleness.push(
@@ -1665,7 +1664,11 @@ export async function replayCassette(
         );
     }
   }
-  const { workRoot: replayWorkRoot, prefixes: replayPrefixes, truncatedPaths: replayTruncatedPaths } = manifestKeys.length
+  const {
+    workRoot: replayWorkRoot,
+    prefixes: replayPrefixes,
+    truncatedPaths: replayTruncatedPaths,
+  } = manifestKeys.length
     ? materializeManifest(cassette.artifacts!)
     : { workRoot: "", prefixes: [] as string[], truncatedPaths: new Set<string>() };
   const contentKeys: (keyof Assertion)[] = [

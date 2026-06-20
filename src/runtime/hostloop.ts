@@ -124,7 +124,10 @@ export function spawnHostLoop(
       (e) => hostEgress.push(e),
       (msg) => {
         try {
-          appendFileSync(join(outDir, "events.jsonl"), JSON.stringify({ type: "infra_error", ts: new Date().toISOString(), message: msg }) + "\n");
+          appendFileSync(
+            join(outDir, "events.jsonl"),
+            JSON.stringify({ type: "infra_error", ts: new Date().toISOString(), message: msg }) + "\n",
+          );
         } catch {}
       },
       opts.provenanceRef,

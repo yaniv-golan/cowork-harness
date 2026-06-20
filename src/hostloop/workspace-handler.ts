@@ -141,7 +141,9 @@ export function u1t(u: URL, allow: string[], matcher: (h: string) => boolean): s
 }
 
 /** A single redirect-manual network hop — injectable so the token-free suite can drive redirects/SSRF. */
-export type RawFetch = (url: string) => Promise<{ status: number; location?: string; text(): Promise<string>; body?: ReadableStream<Uint8Array> | null }>;
+export type RawFetch = (
+  url: string,
+) => Promise<{ status: number; location?: string; text(): Promise<string>; body?: ReadableStream<Uint8Array> | null }>;
 const defaultRawFetch: RawFetch = async (url) => {
   const r = await fetch(url, { redirect: "manual", signal: AbortSignal.timeout(30000) });
   return { status: r.status, location: r.headers.get("location") ?? undefined, text: () => r.text(), body: r.body };
@@ -221,7 +223,9 @@ export function makeWorkspaceHandler(
       const name = jr.params?.name;
       const a = jr.params?.arguments ?? {};
       if (name === "bash")
-        return { result: await execInContainer(runner, containerName, vmMnt, String(a.command ?? ""), clampTimeout(a.timeout_ms), onInfraError) };
+        return {
+          result: await execInContainer(runner, containerName, vmMnt, String(a.command ?? ""), clampTimeout(a.timeout_ms), onInfraError),
+        };
       if (name === "web_fetch")
         return {
           result: await fetchViaHost(String(a.url ?? ""), webFetchAllow, onEgress, provenanceRef?.current, provWarned, rawFetch, resolve),
@@ -246,7 +250,14 @@ export function clampTimeout(ms: unknown): number {
   return Math.min(Math.max(Number(ms) || 120000, 1000), 600000);
 }
 
-async function execInContainer(runner: string, container: string, cwd: string, command: string, timeoutMs = 120000, onInfraError?: (message: string) => void) {
+async function execInContainer(
+  runner: string,
+  container: string,
+  cwd: string,
+  command: string,
+  timeoutMs = 120000,
+  onInfraError?: (message: string) => void,
+) {
   if (!command) return textResult("error: missing 'command'", true);
   // Async (execFile, not spawnSync) so the awaited MCP handler yields the event loop while the subprocess
   // runs — a slow `docker exec` no longer blocks all protocol I/O. Each call independent (fresh sh).

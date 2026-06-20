@@ -114,7 +114,8 @@ export const AnswerRule = z
     if (r.allow_if !== undefined && r.decide !== undefined)
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: "answer rule sets both `allow_if` and `decide` — use exactly one: `decide` for a static outcome, `allow_if` for a predicate",
+        message:
+          "answer rule sets both `allow_if` and `decide` — use exactly one: `decide` for a static outcome, `allow_if` for a predicate",
       });
   });
 export type AnswerRule = z.infer<typeof AnswerRule>;
@@ -127,8 +128,14 @@ export const Assertion = z.object({
   transcript_not_contains: z.string().optional().describe("the transcript does NOT contain this literal substring"),
   transcript_matches: z.string().optional().describe("regex (case-insensitive) over the transcript — fuzzy content for stochastic prose"),
   transcript_not_matches: z.string().optional().describe("regex (case-insensitive) that must NOT match the transcript"),
-  tool_result_contains: z.string().optional().describe("at least one tool result contains this literal substring (per-result match, not concatenated; 10 KB cap per result)"),
-  tool_result_not_contains: z.string().optional().describe("no tool result contains this literal substring (per-result match, not concatenated; 10 KB cap per result)"),
+  tool_result_contains: z
+    .string()
+    .optional()
+    .describe("at least one tool result contains this literal substring (per-result match, not concatenated; 10 KB cap per result)"),
+  tool_result_not_contains: z
+    .string()
+    .optional()
+    .describe("no tool result contains this literal substring (per-result match, not concatenated; 10 KB cap per result)"),
   file_exists: z.string().optional().describe("a file exists at this path under the agent's work root"),
   user_visible_artifact: z
     .string()

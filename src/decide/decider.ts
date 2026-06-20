@@ -72,8 +72,7 @@ export class ScriptedDecider implements Decider {
     for (const rule of rules) {
       if (rule.when_question !== undefined && !this.compiledPatterns.has(rule.when_question)) {
         const c = compileUserRegex(rule.when_question);
-        if ("error" in c)
-          throw new Error(`bad regex in when_question "${rule.when_question}": ${c.error}`);
+        if ("error" in c) throw new Error(`bad regex in when_question "${rule.when_question}": ${c.error}`);
         this.compiledPatterns.set(rule.when_question, c.re);
       }
     }
@@ -444,7 +443,10 @@ export class PromptDecider implements Decider {
           let resolved: string[] | null = null;
           do {
             const raw = await this.ask(optionList);
-            const parts = raw.split(",").map((p) => p.trim()).filter(Boolean);
+            const parts = raw
+              .split(",")
+              .map((p) => p.trim())
+              .filter(Boolean);
             if (parts.length === 0) {
               process.stderr.write(`Please enter at least one choice (comma-separated numbers or labels).\n`);
               continue;
