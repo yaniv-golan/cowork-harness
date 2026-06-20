@@ -249,7 +249,11 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
         // Truncated entry proves existence (path+bytes+sha256 recorded). Promotion is a path-prefix
         // property — also knowable without the body. Pass if under a user-visible prefix.
         const visible = ctx.userVisiblePrefixes.some((pre) => rel === pre || rel.startsWith(pre + "/"));
-        results.push(visible ? ok() : fail(`"${p}" is not under a user-visible prefix (${ctx.userVisiblePrefixes.join(", ")}) — invisible to the user in Cowork`));
+        results.push(
+          visible
+            ? ok()
+            : fail(`"${p}" is not under a user-visible prefix (${ctx.userVisiblePrefixes.join(", ")}) — invisible to the user in Cowork`),
+        );
       } else {
         const visible = ctx.userVisiblePrefixes.some((pre) => rel === pre || rel.startsWith(pre + "/"));
         if (!visible)
