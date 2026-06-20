@@ -52,6 +52,8 @@
     "build": "rm -rf dist && tsc -p tsconfig.json && chmod +x dist/cli.js",
     "dev": "tsx src/cli.ts",
     "schema": "tsx scripts/gen-schema.ts",
+    "capture:rootfs": "tsx scripts/capture-rootfs-manifest.ts",
+    "build:rootfs-image": "tsx scripts/build-rootfs-image.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:live": "vitest run --config vitest.config.live.ts",

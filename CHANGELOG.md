@@ -22,8 +22,36 @@ All notable changes to this project are documented here. The format is based on
     `./runs` (and, if it doesn't fail on empty, passes silently). The bundled CI recipe sets
     `COWORK_HARNESS_RUNS_DIR: runs` on the live-scenario job for exactly this reason.
 
+- **Agent image bumped `cowork-agent-base:1` → `:2` — REBUILD REQUIRED.** The image now mirrors the real
+  Cowork rootfs's preinstalled toolchain (binary-verified by mounting the rootfs): **Node 22.22.3** (was
+  ubuntu's node 12), the full **Python document/data stack** (openpyxl/pandas/numpy/pdfplumber/python-docx/
+  python-pptx/matplotlib/…), node doc-gen globals (pdf-lib/pptxgenjs/sharp/tsx/…), `ruby`/`ffmpeg`/`qpdf`,
+  `C.UTF-8` locale, and it now runs as **uid 1000 (`ubuntu`)** like the real VM. Rebuild with the command
+  `cowork-harness doctor --tier container` prints, or set `COWORK_AGENT_IMAGE` to your own tag. *(Why: the
+  real rootfs ships openpyxl etc. preinstalled — omitting them made skills that read `.xlsx`/PDFs falsely
+  appear degraded under the harness. "pypi blocked at runtime" ≠ "not preinstalled.")*
+- **A green run that uses a capability the agent image OMITS now FAILS** (verdict signal `missing_capability`),
+  mirroring `permissive_auto_allow`/`l0_plugin_divergence`. The default "core" image omits the heavy lane
+  (OCR/LibreOffice/markitdown/opencv/PDF-tables); a run that uses one is a likely false negative (real Cowork
+  ships it). Suppress per-scenario with **`allow_missing_capability: true`** (when the fallback is equivalent),
+  rebuild full parity (`--build-arg COWORK_FULL_PARITY=1`), use the rootfs `max` tier, or skip the check with
+  `COWORK_SKIP_CAPABILITY_PROBE=1`. Live tiers only (container/hostloop/microvm).
+
 ### Added
 
+- **Capability fidelity detection.** The harness probes the agent runtime (Docker image via `--network none`
+  run, or the L2 microVM via `limactl shell`) for the document/OCR/Office capabilities the real Cowork rootfs
+  ships, caches the result by `(tier, identity)`, and detects (from `events.jsonl`) when a skill used an
+  omitted one — surfaced as the new `RunResult.missingCapabilityUse` field, a `::notice::`/`::warning::`, and
+  the `missing_capability` verdict above. New assertion `allow_missing_capability`.
+- **Opt-in full-parity image** (`docker build --build-arg COWORK_FULL_PARITY=1 -t cowork-agent-full:2`) adds
+  tesseract / LibreOffice / opencv / onnxruntime+markitdown / camelot+tabula for OCR/Office/extraction skills.
+- **Rootfs `max` tier (`npm run build:rootfs-image`)** — builds a Docker image from the user's OWN
+  `rootfs.img` (local, byte-for-byte parity; cached by rootfs mtime+size); point `COWORK_AGENT_IMAGE` at it.
+- **Provisioning drift gate (`npm run capture:rootfs`)** — captures the rootfs's toolchain to
+  `baselines/provisioning/rootfs-provisioning.json`; `--check <image>` diffs a built image against it.
+- **L2 (microVM) toolchain parity** — Lima provisioning now installs the same document/data stack
+  (best-effort, with 24.04 version drift accepted).
 - **`--run-dir <path>` global flag** to relocate the runs root (a thin shim over `COWORK_HARNESS_RUNS_DIR`).
   Precedence: `--run-dir` > `COWORK_HARNESS_RUNS_DIR` > `~/.cowork-harness/runs`. Keeps sensitive artifacts out
   of a working tree without the prior `cd`-into-a-scratch-dir workaround. Both spellings (`--run-dir <path>` and

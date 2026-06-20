@@ -101,7 +101,7 @@ docker run --rm -i --platform linux/arm64 --network <net>
   -e …(§3.2)
   -v <agentHost>:/usr/local/bin/claude:ro
   -v <sessionHost>:/sessions/<id>            # writable session world
-  cowork-agent-base:1
+  cowork-agent-base:2
   claude …(§3.1)
 ```
 

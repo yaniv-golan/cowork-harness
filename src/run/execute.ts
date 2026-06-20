@@ -13,6 +13,8 @@ import { spawnProtocol } from "../runtime/protocol.js";
 import { spawnContainer } from "../runtime/container.js";
 import { spawnHostLoop } from "../runtime/hostloop.js";
 import { spawnMicroVm } from "../runtime/microvm.js";
+import { probeImageOmitted, probeMicrovmOmitted, detectCapabilityUse } from "../runtime/image-capabilities.js";
+import { instanceName } from "../runtime/lima.js";
 import { decideLoopFromBaseline, readGateFlag } from "../loop-decision.js";
 import type { WebFetchProvenance } from "../hostloop/workspace-handler.js";
 import { startEgressSidecar, type EgressSidecar } from "../egress/sidecar.js";
@@ -449,6 +451,46 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     });
   }
 
+  // Capability fidelity (§8.8 D6/D2): on a live sandboxed tier, probe what the runtime OMITS vs the real
+  // Cowork rootfs, then detect whether the skill USED an omitted family. A non-empty intersection on an
+  // otherwise-green run is a likely FALSE NEGATIVE → computeVerdict fails it (unless allow_missing_capability).
+  // Probing is structural (the runtime is the source of truth), so an old `:1` / custom image can't silently
+  // fail-open. container/hostloop → Docker image probe; microvm → `limactl shell` guest probe. Skipped on
+  // protocol/replay (no live runtime to probe) and via COWORK_SKIP_CAPABILITY_PROBE.
+  let missingCapabilityUse: string[] | undefined;
+  if (
+    (effectiveFidelity === "container" || effectiveFidelity === "hostloop" || effectiveFidelity === "microvm") &&
+    process.env.COWORK_SKIP_CAPABILITY_PROBE !== "1"
+  ) {
+    const omitted =
+      effectiveFidelity === "microvm"
+        ? probeMicrovmOmitted(instanceName(baseline))
+        : probeImageOmitted({
+            runtime: process.env.COWORK_CONTAINER_RUNTIME ?? "docker",
+            image: process.env.COWORK_AGENT_IMAGE ?? "cowork-agent-base:2",
+            tier: effectiveFidelity,
+          });
+    if (omitted === null) {
+      const w =
+        "agent runtime could not be probed for capabilities — capability fidelity unverified (capability false-negatives won't be caught this run)";
+      warn(`::warning:: [capability] ${w}\n`);
+      promptFidelityWarnings = [...(promptFidelityWarnings ?? []), w];
+    } else if (omitted.length) {
+      warn(
+        `::notice:: [capability] this agent runtime omits: ${omitted.join(", ")} — a skill that uses these may false-negative; ` +
+          `rebuild full parity (--build-arg COWORK_FULL_PARITY=1) or use the rootfs \`max\` tier to verify.\n`,
+      );
+      const used = detectCapabilityUse(join(outDir, "events.jsonl"), omitted);
+      if (used.length) {
+        missingCapabilityUse = used;
+        warn(
+          `::warning:: [capability] the skill USED omitted capabilit(ies) [${used.join(", ")}] — likely a FALSE NEGATIVE, ` +
+            `not a skill bug. Rebuild full parity / use the \`max\` tier, or assert allow_missing_capability: true if the fallback is equivalent.\n`,
+        );
+      }
+    }
+  }
+
   const result: RunResult = {
     $schema: RUN_RESULT_SCHEMA_URL,
     generator: "cowork-harness",
@@ -490,6 +532,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     effectiveFidelity, // The tier actually used — differs from fidelity when fidelity:"cowork" (#24)
     fidelityWarnings: promptFidelityWarnings, // #49: structured prompt warnings visible to JSON callers
     l0PluginDivergence: l0PluginDivergence || undefined, // #20: failing fidelity signal for protocol+plugins
+    missingCapabilityUse, // capability fidelity (§8.8 D6): omitted-capability families the skill used (live built-image tiers) — computeVerdict fails unless allow_missing_capability
   };
 
   // Artifacts (C3): the harness-observability log `run.jsonl` REPLACES transcript.json/decisions.jsonl.

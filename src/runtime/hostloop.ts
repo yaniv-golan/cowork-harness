@@ -77,7 +77,7 @@ export function spawnHostLoop(
   const hostPluginRoot = "/host/plugins/unmounted";
 
   const agentHost = resolveAgentBinary(baseline);
-  const image = process.env.COWORK_AGENT_IMAGE ?? "cowork-agent-base:1";
+  const image = process.env.COWORK_AGENT_IMAGE ?? "cowork-agent-base:2";
   const runner = process.env.COWORK_CONTAINER_RUNTIME ?? "docker";
 
   // Host-loop deltas: native Bash/WebFetch/NotebookEdit OFF (shell goes through the workspace

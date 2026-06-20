@@ -26,7 +26,7 @@ try {
   AGENT = ""; // baseline or binary missing — binOk will be false below
 }
 
-const IMAGE = "cowork-agent-base:1";
+const IMAGE = "cowork-agent-base:2";
 const dockerOk = spawnSync("docker", ["info"], { stdio: "ignore" }).status === 0;
 const imageOk = dockerOk && spawnSync("docker", ["image", "inspect", IMAGE], { stdio: "ignore" }).status === 0;
 const binOk = !!AGENT && existsSync(AGENT);
@@ -150,7 +150,7 @@ function runAgent(opts: {
 
 describe.skipIf(!CAN)("live contract (Docker + staged binary)", () => {
   beforeAll(() => {
-    if (!CAN) console.warn("skipping live-contract: need Docker + cowork-agent-base:1 + staged agent");
+    if (!CAN) console.warn("skipping live-contract: need Docker + cowork-agent-base:2 + staged agent");
   });
 
   it("SPEC §3.1 flags are accepted by the staged binary", async () => {

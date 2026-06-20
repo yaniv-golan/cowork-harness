@@ -53,7 +53,7 @@ cowork-harness record examples/scenarios/example-pdf-skill.yaml \
 
 This requires the same setup as `run` at container fidelity:
 - A staged agent binary (Claude Desktop opened once).
-- Docker (arm64) + the agent image (`cowork-agent-base:1`).
+- Docker (arm64) + the agent image (`cowork-agent-base:2`).
 - A valid auth token (`CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`).
 
 The generated cassette bundles the scenario, the event stream, and the decision responses. Secrets

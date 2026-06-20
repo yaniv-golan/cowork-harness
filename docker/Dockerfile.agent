@@ -9,23 +9,115 @@
 # (~/Library/Application Support/Claude/claude-code-vm/<ver>/claude); the harness
 # BIND-MOUNTS it into the container at run time (see src/runtime/container.ts).
 #
-#   docker build --platform linux/arm64 -t cowork-agent-base:1 -f docker/Dockerfile.agent .
+#   docker build --platform linux/arm64 -t cowork-agent-base:2 -f docker/Dockerfile.agent .
+#   # full-parity (OCR/Office/markitdown/opencv/table-extraction) image:
+#   docker build --platform linux/arm64 --build-arg COWORK_FULL_PARITY=1 -t cowork-agent-full:2 -f docker/Dockerfile.agent .
 #
-# Toolchain mirrors what skill producers and the real VM rootfs expect: python3 (+pip,
-# PEP-668 stays in effect — pip needs --break-system-packages, faithful), node, jq, git,
-# ripgrep, curl. NOT openpyxl (pypi is off the default egress allowlist — absence is faithful).
+# This image MIRRORS the real Cowork rootfs's preinstalled toolchain (binary-verified by
+# mounting ~/.../vm_bundles/claudevm.bundle/rootfs.img): Node 22.22.3, the python
+# document/data stack (openpyxl/pandas/numpy/pdfplumber/python-docx/matplotlib/…), and the
+# node doc-gen globals. NOTE on openpyxl: pypi is off the runtime egress allowlist (so a skill
+# can't `pip install` it at run time — faithful), BUT the real rootfs SHIPS it preinstalled —
+# so omitting it here was an infidelity (a false negative). We preinstall the rootfs stack,
+# pinned to the rootfs's versions. See docs/internal/2026-06-20-founder-skills-bug-validation.md.
 
 FROM --platform=linux/arm64 ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
+
+# Layer split (see the fix plan §3): Layer A (this default) covers the document/data stack
+# ~90% of skills use; Layer B (heavy: OCR/LibreOffice/opencv/onnxruntime) is opt-in.
+ARG COWORK_FULL_PARITY=0
+
+# --- Layer A: base toolchain + the lightweight apt deps the core python stack needs ---
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      ca-certificates git ripgrep curl jq \
+      ca-certificates git ripgrep curl jq gnupg \
       python3 python3-pip python3-venv \
-      nodejs npm \
+      poppler-utils ghostscript graphviz pandoc \
+      libcairo2 libpango-1.0-0 libgl1 libglib2.0-0 libgdk-pixbuf-2.0-0 \
+      libxml2 libxslt1.1 libmagic1 \
+      fonts-dejavu-core fonts-liberation \
+      ruby ffmpeg qpdf \
     && rm -rf /var/lib/apt/lists/*
+
+# --- Node 22.22.3 via NodeSource (the real rootfs ships 22.22.3-1nodesource1; ubuntu's apt
+#     `nodejs` is v12 — a fidelity gap). The `nodistro` repo serves the exact patch today; if
+#     it rotates out, drop the `=22.22.3-*` pin to the nearest 22.x (functionally faithful). ---
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && (apt-get install -y "nodejs=22.22.3-1nodesource1" || apt-get install -y nodejs) \
+    && rm -rf /var/lib/apt/lists/*
+
+# --- Layer A python stack (pinned to the real rootfs). Upgrade pip first to match the rootfs's pip 25.x
+#     (stock jammy pip 22.0 lacks --break-system-packages); PEP-668 → --break-system-packages is faithful
+#     (the rootfs's pip is PEP-668-restricted) and a harmless no-op if no marker is present. All pins have
+#     cp310 aarch64 wheels. ---
+RUN python3 -m pip install --no-cache-dir --upgrade pip
+RUN pip3 install --break-system-packages --no-cache-dir \
+      numpy==2.2.6 pandas==2.3.3 \
+      openpyxl==3.1.5 et_xmlfile==2.0.0 xlsxwriter==3.2.9 \
+      python-docx==1.2.0 python-pptx==1.0.2 odfpy==1.4.1 \
+      pdfplumber==0.11.9 pypdf==6.13.1 pdfminer.six==20251230 pikepdf==10.8.0 \
+      pdf2image==1.17.0 img2pdf==0.6.3 pypdfium2==5.9.0 playa-pdf==1.1.0 \
+      matplotlib==3.10.9 seaborn==0.13.2 pillow==12.2.0 reportlab==4.5.1 \
+      lxml==6.1.1 beautifulsoup4==4.15.0 markdownify==1.2.2 marko==2.2.3 mistune==3.2.1 \
+      tabulate==0.10.0 jsonschema==3.2.0 python-dotenv==1.2.2 requests==2.34.2 \
+      graphviz==0.21 sympy==1.14.0 python-magic==0.4.24 Markdown==3.10.2 Jinja2==3.0.3
+
+# --- Node doc-gen globals (the real rootfs installs these into a shared global prefix on NODE_PATH;
+#     @anthropic-ai/sandbox-runtime is intentionally NOT mirrored — it's infra the harness emulates). ---
+ENV NPM_CONFIG_PREFIX=/usr/local/lib/node_modules_global
+ENV NODE_PATH=/usr/local/lib/node_modules_global/lib/node_modules
+ENV PATH=/usr/local/lib/node_modules_global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin
+RUN npm install -g \
+      docx@9.7.1 graphviz@0.0.9 markdown-toc@1.2.0 marked@18.0.5 \
+      pdf-lib@1.17.1 pdfjs-dist@6.0.227 pptxgenjs@4.0.1 sharp@0.34.5 \
+      ts-node@10.9.2 tsx@4.22.4 typescript@6.0.3 \
+    && npm cache clean --force
+
+# --- Locale: the real rootfs is C.UTF-8 (NOT en_US.UTF-8, which isn't generated). C.UTF-8 is
+#     glibc-builtin on jammy (no locale-gen needed). Reproduce /etc/default/locale + the login
+#     fix script, and set ENV so the effective preferred encoding is UTF-8 regardless of shell. ---
+RUN printf 'LANG=C.UTF-8\n' > /etc/default/locale \
+    && printf '#!/bin/sh\nexport LANG=C.UTF-8\n' > /etc/profile.d/01-locale-fix.sh \
+    && chmod 0644 /etc/profile.d/01-locale-fix.sh
+ENV LANG=C.UTF-8
+
+# --- Sandbox env markers the real rootfs sets ---
+ENV IS_SANDBOX=yes
+ENV PYTHONUNBUFFERED=1
+ENV VM_IMAGE_BUILD=2
+
+# --- Layer B (opt-in): OCR / LibreOffice / opencv / onnxruntime / table-extraction.
+#     tesseract ships ONLY eng+osd in the real rootfs — do NOT add language packs (that would
+#     be an infidelity AND bloat). LibreOffice is the bulk of the image size. ---
+RUN if [ "$COWORK_FULL_PARITY" = "1" ]; then \
+      apt-get update && apt-get install -y --no-install-recommends \
+        tesseract-ocr \
+        imagemagick libmagickwand-6.q16-6 \
+        default-jre-headless \
+        libreoffice-calc libreoffice-writer libreoffice-impress libreoffice-core \
+        fonts-noto-core fonts-noto-cjk fonts-ipafont-gothic fonts-ipafont-mincho \
+        fonts-wqy-zenhei fonts-freefont-ttf \
+      && rm -rf /var/lib/apt/lists/* \
+      && pip3 install --break-system-packages --no-cache-dir \
+        onnxruntime==1.23.2 magika==0.6.3 markitdown==0.1.6 \
+        opencv-python==4.13.0.92 opencv-python-headless==4.13.0.92 \
+        Wand==0.7.1 pytesseract==0.3.13 camelot-py==2.0.0 tabula-py==2.10.0 \
+        unoserver==3.6 pyoo==1.4 ; \
+    fi
+
+# --- Run as uid 1000 `ubuntu` (the real rootfs does; the ubuntu:22.04 *docker* base has no
+#     uid-1000 user, so we create it). Privileged steps above run as root; USER is set LAST. ---
+RUN useradd -u 1000 -m -s /bin/bash ubuntu \
+    && mkdir -p /workspace /opt/cowork/cli-wrapper /smol/bin \
+    && chown 1000:1000 /workspace \
+    && printf 'prefix=/usr/local/lib/node_modules_global\ncache=/tmp/.npm\n' > /tmp/.npmrc \
+    && chown 1000:1000 /tmp/.npmrc
 
 # cwd is /sessions/<id>; the whole session root is bind-mounted writable at run time.
 WORKDIR /sessions/local
+
+USER ubuntu
 
 # The agent binary is mounted at /usr/local/bin/claude at run time; no ENTRYPOINT —
 # the Controller invokes it and drives stream-json over stdio.

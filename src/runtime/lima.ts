@@ -146,14 +146,34 @@ provision:
     script: |
       #!/bin/sh
       set -e
-      # Install required tools FIRST — fail provisioning loudly if any cannot install. A trailing
-      # "|| true" here let a VM boot missing iptables (firewall silently no-ops), curl (boundary probes
-      # fail), git or ripgrep, surfacing as confusing late failures far from the cause.
-      apt-get update -y && apt-get install -y --no-install-recommends iptables curl ca-certificates ripgrep git
+      # BLOCK 1 — REQUIRED tools + the agent symlink. Fail loudly; MUST be self-contained and must NOT depend
+      # on the (best-effort) toolchain block below — a toolchain install failure can never strand the agent
+      # (a regression the P5 boot-verification caught: a failed pip pin had aborted set -e BEFORE this symlink).
+      apt-get update -y && apt-get install -y --no-install-recommends iptables curl ca-certificates ripgrep git gnupg
       # Put the staged agent on PATH (mounted read-only from the host) and verify it resolves to an
       # executable — a masked symlink failure would leave 'claude' missing while vm init still succeeded.
       ln -sf /opt/cowork/agent/${agentBasename} /usr/local/bin/claude
       test -x /usr/local/bin/claude
+  - mode: system
+    script: |
+      #!/bin/sh
+      # BLOCK 2 — document/data toolchain parity with the container Layer-A (fix plan §8.4-P5). BEST-EFFORT:
+      # a separate provision block (Block 1 already secured the agent), and intentionally NOT set -e — a
+      # single drifted pin must not strand the rest. NB the L2 guest is Ubuntu 24.04 / python 3.12 (NOT the
+      # container's 22.04 / 3.10 — intentional), so versions DRIFT from the 22.04 set; that's accepted (§8.8 D5),
+      # and the capability probe reports whatever didn't land. Order: apt then node then env then npm then pip
+      # (pip last and tolerant). --ignore-installed avoids the "cannot uninstall pkg installed by debian"
+      # PEP-668 clash; jsonschema is dropped (apt ships 4.x on 24.04 and pip can't downgrade it — drift).
+      apt-get install -y --no-install-recommends python3 python3-pip jq poppler-utils ghostscript graphviz \\
+        pandoc libmagic1 ruby ffmpeg qpdf libcairo2 libpango-1.0-0 libgl1 libglib2.0-0 fonts-dejavu-core fonts-liberation || true
+      curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && apt-get install -y nodejs || true
+      printf 'IS_SANDBOX=yes\\nPYTHONUNBUFFERED=1\\nVM_IMAGE_BUILD=2\\nNODE_PATH=/usr/local/lib/node_modules_global/lib/node_modules\\nNPM_CONFIG_PREFIX=/usr/local/lib/node_modules_global\\n' >> /etc/environment
+      NPM_CONFIG_PREFIX=/usr/local/lib/node_modules_global npm install -g docx@9.7.1 marked@18.0.5 pdf-lib@1.17.1 pptxgenjs@4.0.1 sharp@0.34.5 tsx@4.22.4 typescript@6.0.3 || true
+      python3 -m pip install --break-system-packages --ignore-installed --no-cache-dir \\
+        numpy==2.2.6 pandas==2.3.3 openpyxl==3.1.5 et_xmlfile==2.0.0 xlsxwriter==3.2.9 \\
+        python-docx==1.2.0 python-pptx==1.0.2 odfpy==1.4.1 pdfplumber==0.11.9 pypdf==6.13.1 \\
+        pdfminer.six==20251230 pikepdf==10.8.0 matplotlib==3.10.9 pillow==12.2.0 reportlab==4.5.1 \\
+        lxml==6.1.1 beautifulsoup4==4.15.0 tabulate==0.10.0 requests==2.34.2 python-magic==0.4.24 || true
 networks: []
 `;
 }

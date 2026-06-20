@@ -218,6 +218,10 @@
                 "type": "boolean",
                 "description": "(verdict modifier) suppress the default-fail when L0 (protocol) runs with plugins that load via --settings/managed config instead of --plugin-dir — for tests that deliberately test at L0 with plugins"
               },
+              "allow_missing_capability": {
+                "type": "boolean",
+                "description": "(verdict modifier) suppress the default-fail when the (partial 'core') agent image omits a capability the skill used but real Cowork ships — assert this only when the skill's fallback is genuinely equivalent (otherwise rebuild full parity / the rootfs `max` tier)"
+              },
               "replay_protocol_fidelity": {
                 "type": "boolean",
                 "description": "(replay-only, NOT authorable) serializeDecision output matched the frozen recording — the token-free O7 guard; synthesized by the replay lane and rejected if written in a scenario"

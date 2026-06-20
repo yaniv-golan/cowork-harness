@@ -57,4 +57,23 @@ describe("computeVerdict (SEAM B — the single verdict source)", () => {
     expect(computeVerdict(rr({}), "live").exitCode).toBe(0);
     expect(computeVerdict(rr({ result: "error" }), "live").exitCode).toBe(1);
   });
+
+  it("default-fails when the skill used an omitted capability (likely false negative), unless opted in", () => {
+    // otherwise-green run that used a capability the image omits → FAIL (the silent-green false negative)
+    expect(computeVerdict(rr({ missingCapabilityUse: ["ocr"] }), "live").pass).toBe(false);
+    expect(
+      computeVerdict(rr({ missingCapabilityUse: ["ocr"] }), "live").signals.some(
+        (s) => s.code === "missing_capability" && s.severity === "fail",
+      ),
+    ).toBe(true);
+    // opt-in (the fallback is equivalent) suppresses it
+    const optIn = rr({ missingCapabilityUse: ["ocr"], assertions: [assn({ allow_missing_capability: true })] });
+    expect(computeVerdict(optIn, "live").pass).toBe(true);
+  });
+
+  it("missing-capability is live-only (a cassette can't probe the image → zeroed on replay)", () => {
+    const r = rr({ missingCapabilityUse: ["ml_extract"] });
+    expect(computeVerdict(r, "live").pass).toBe(false);
+    expect(computeVerdict(r, "replay").pass).toBe(true);
+  });
 });

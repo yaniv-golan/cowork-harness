@@ -180,6 +180,12 @@ export const Assertion = z.object({
     .describe(
       "(verdict modifier) suppress the default-fail when L0 (protocol) runs with plugins that load via --settings/managed config instead of --plugin-dir — for tests that deliberately test at L0 with plugins",
     ),
+  allow_missing_capability: z
+    .boolean()
+    .optional()
+    .describe(
+      "(verdict modifier) suppress the default-fail when the (partial 'core') agent image omits a capability the skill used but real Cowork ships — assert this only when the skill's fallback is genuinely equivalent (otherwise rebuild full parity / the rootfs `max` tier)",
+    ),
   replay_protocol_fidelity: z
     .boolean()
     .optional()
@@ -318,4 +324,10 @@ export interface RunResult {
    *  --plugin-dir (the Cowork cache layout). computeVerdict fails on this unless allow_l0_plugin_divergence
    *  is asserted — a warn-only was insufficient since the run could still appear green. */
   l0PluginDivergence?: boolean;
+  /** Capability families the agent image OMITS but the skill was observed USING (live lane only; the
+   *  intersection of the image's probed `omitted` set and capability-usage detected in events.jsonl).
+   *  computeVerdict default-fails on a non-empty list unless `allow_missing_capability` is asserted — a
+   *  green run that used an omitted capability is a likely FALSE NEGATIVE (real Cowork ships it). Absent on
+   *  replay (no live image to probe). See docs/internal/2026-06-20-founder-skills-bug-validation.md §8.8. */
+  missingCapabilityUse?: string[];
 }

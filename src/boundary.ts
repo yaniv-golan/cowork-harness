@@ -42,7 +42,7 @@ export function boundaryAllowList(baseline: PlatformBaseline, session?: Boundary
 
 export function runBoundaryChecks(baseline: PlatformBaseline, session?: BoundarySessionEgress): BoundaryResult[] {
   const runtime = process.env.COWORK_CONTAINER_RUNTIME ?? "docker";
-  const image = process.env.COWORK_AGENT_IMAGE ?? "cowork-agent-base:1";
+  const image = process.env.COWORK_AGENT_IMAGE ?? "cowork-agent-base:2";
   const results: BoundaryResult[] = [];
 
   // Stand up the real per-run boundary (internal network + allowlist proxy), exactly

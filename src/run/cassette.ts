@@ -1657,6 +1657,10 @@ export async function replayCassette(
       "transcript_no_host_path",
       "replay_protocol_fidelity",
       "allow_l0_plugin_divergence",
+      // Verdict modifier for a LIVE-only signal (missingCapabilityUse). Classified here (exhaustiveness
+      // set only — NOT alwaysContentKeys), matching allow_l0_plugin_divergence: the signal it suppresses
+      // is zeroed on replay (no live image to probe), so it never needs to reach the replay verdict.
+      "allow_missing_capability",
     ]);
     for (const key of Object.keys(AssertionSchema.shape) as (keyof Assertion)[]) {
       if (!ALL_CLASSIFICATION_KEYS.has(key))

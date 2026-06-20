@@ -52,6 +52,11 @@
       "items": { "type": "string" },
       "description": "#49: structured prompt warnings visible to JSON callers"
     },
-    "l0PluginDivergence": { "type": "boolean", "description": "#20: failing fidelity signal for protocol+plugins" }
+    "l0PluginDivergence": { "type": "boolean", "description": "#20: failing fidelity signal for protocol+plugins" },
+    "missingCapabilityUse": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "capability families the agent image omits but the skill used (live built-image tiers) — computeVerdict fails unless allow_missing_capability"
+    }
   }
 }

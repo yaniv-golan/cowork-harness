@@ -266,7 +266,7 @@ async function* ttyTurns(rl: readline.Interface): AsyncGenerator<string> {
 function chatRaw(folder: string, model?: string) {
   const baseline = loadBaseline("latest");
   const agent = resolveAgentBinary(baseline);
-  const image = process.env.COWORK_AGENT_IMAGE ?? "cowork-agent-base:1";
+  const image = process.env.COWORK_AGENT_IMAGE ?? "cowork-agent-base:2";
   const runner = process.env.COWORK_CONTAINER_RUNTIME ?? "docker";
   log(`cowork chat --raw — native interactive cowork mode (egress sandbox NOT applied in --raw)\n`);
   const dockerArgs = [

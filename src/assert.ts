@@ -329,6 +329,8 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
   // Verdict modifier (consumed by computeVerdict, not here). It always "passes" as an assertion so a
   // standalone `{allow_permissive_auto_allow: true}` is a valid non-empty assertion, not "empty assertion".
   if (a.allow_permissive_auto_allow !== undefined) results.push(ok());
+  // Verdict modifier (same pattern): standalone `{allow_missing_capability: true}` must not be "empty".
+  if (a.allow_missing_capability !== undefined) results.push(ok());
   if (a.transcript_no_host_path !== undefined)
     results.push(
       !ctx.hostPathLeaked === a.transcript_no_host_path ? ok() : fail(`host path leaked into model-visible text: ${ctx.hostPathLeaked}`),

@@ -62,7 +62,7 @@ export const realProbe: DoctorProbe = {
     const r = spawnSync(this.runtimeName(), ["info"], { stdio: "ignore" });
     return !r.error && r.status === 0;
   },
-  imageName: () => process.env.COWORK_AGENT_IMAGE ?? "cowork-agent-base:1",
+  imageName: () => process.env.COWORK_AGENT_IMAGE ?? "cowork-agent-base:2",
   imagePresent() {
     const r = spawnSync(this.runtimeName(), ["image", "inspect", this.imageName()], { stdio: "ignore" });
     return !r.error && r.status === 0;

@@ -9,6 +9,7 @@ export interface VerdictSignal {
     | "host_path_leak"
     | "non_deterministic"
     | "l0_plugin_divergence"
+    | "missing_capability"
     | "prompt_asset_missing";
   severity: "fail" | "warn";
   message: string;
@@ -59,6 +60,20 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
         message:
           `cowork parity auto-allowed off-registry tool(s) real Cowork would BLOCK: ${result.permissiveAutoAllow.join(", ")} — ` +
           "not a faithful pass. Pin with --answer / permission_parity: strict, or assert allow_permissive_auto_allow: true.",
+      });
+
+    // Capability fidelity: the (partial 'core') agent image omits a capability real Cowork ships, and the
+    // skill was observed USING it on an otherwise-green run → a likely FALSE NEGATIVE. Fail unless the
+    // scenario opts in via `allow_missing_capability: true` (the skill's fallback is genuinely equivalent).
+    // Mirrors permissive_auto_allow / l0_plugin_divergence — a warn-only would let the silent-green slip.
+    if (result.missingCapabilityUse?.length && !authored.some((a) => a.allow_missing_capability === true))
+      signals.push({
+        code: "missing_capability",
+        severity: "fail",
+        message:
+          `the agent image omits capabilit(ies) the skill used: ${result.missingCapabilityUse.join(", ")} — ` +
+          "likely a FALSE NEGATIVE (real Cowork ships them). Rebuild full parity (--build-arg COWORK_FULL_PARITY=1) " +
+          "or use the rootfs `max` tier; or assert allow_missing_capability: true if the fallback is equivalent.",
       });
 
     if (result.scan?.outputsDeletes.length && !authored.some((a) => a.no_delete_in_outputs !== undefined))

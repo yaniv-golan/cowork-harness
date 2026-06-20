@@ -40,7 +40,7 @@ export function spawnContainer(
   const mcpGuest = mcpStaged ? `${configGuest}/mcp.json` : undefined;
 
   const agentHost = resolveAgentBinary(baseline);
-  const image = process.env.COWORK_AGENT_IMAGE ?? "cowork-agent-base:1";
+  const image = process.env.COWORK_AGENT_IMAGE ?? "cowork-agent-base:2";
   // #43: explicit opts take priority over process.env (concurrency-safe); env var is the
   // manual/dev fallback for direct `docker run` invocations that bypass the sidecar.
   const proxyHost = opts.egressProxy ?? process.env.COWORK_EGRESS_PROXY ?? "http://egress-proxy:8080";
