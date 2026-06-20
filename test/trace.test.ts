@@ -304,4 +304,43 @@ describe("scaffold --from-run (SCAFFOLD-FROM-RUN)", () => {
     expect(parsed.assert.some((a: any) => a.file_exists === "outputs/report.pdf")).toBe(true);
     expect(parsed.assert.some((a: any) => a.result === "success")).toBe(true);
   });
+
+  it("emits a loud multiSelect marker when a delivered answer looks like a ', '-joined set", () => {
+    const reqId = "r1";
+    const dir = mkdtempSync(join(tmpdir(), "cwh-scaffold-ms-"));
+    const eventsFilePath = join(dir, "events.jsonl");
+    const events = [
+      { type: "system", subtype: "init", tools: ["AskUserQuestion"] },
+      {
+        type: "control_request",
+        request_id: reqId,
+        request: {
+          subtype: "can_use_tool",
+          tool_name: "AskUserQuestion",
+          tool_use_id: "toolu_M1",
+          input: { questions: [{ question: "Which to enable?", multiSelect: true, options: [{ label: "Auth" }, { label: "Billing" }] }] },
+        },
+      },
+      { type: "result", subtype: "success", is_error: false },
+    ];
+    writeFileSync(eventsFilePath, events.map((e) => JSON.stringify(e)).join("\n"));
+    writeFileSync(
+      join(dir, "control-out.jsonl"),
+      JSON.stringify({
+        type: "control_response",
+        response: {
+          subtype: "success",
+          request_id: reqId,
+          response: { behavior: "allow", updatedInput: { answers: { "Which to enable?": "Auth, Billing" } } },
+        },
+      }),
+    );
+    const out = buildScaffold(eventsFilePath);
+    // The marker is a YAML comment (not a parsed field), so assert on the raw string.
+    expect(out).toMatch(/# scaffold: answer\(s\) for "Which to enable\?" look like a multiSelect set/);
+    expect(out).toMatch(/split each into 'choose: \[A, B\]' before replay/);
+    // The scalar answer is still emitted (the marker tells the author to fix it), so the starter is complete.
+    const parsed = parseYaml(out);
+    expect(parsed.answers[0].choose).toBe("Auth, Billing");
+  });
 });

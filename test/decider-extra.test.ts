@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { matchLabel, ScriptedDecider, ABSTAIN, type RunContext } from "../src/decide/decider.js";
+import { matchLabel, coerceLabel, ScriptedDecider, ABSTAIN, UnansweredError, type RunContext } from "../src/decide/decider.js";
 import { spawnChannel } from "../src/decide/external-channel.js";
 import type { DecisionRequest } from "../src/agent/session.js";
 import type { AnswerRule } from "../src/types.js";
@@ -90,6 +90,23 @@ async function answersOf(rules: AnswerRule[], questions: any[]): Promise<Record<
   if (r === ABSTAIN) return "abstain";
   return (r as any).response.answers;
 }
+
+describe("coerceLabel — non-string/number input fails LOUD (no bare TypeError crash)", () => {
+  const labels = ["Auth", "Billing"];
+  it("an array argument throws UnansweredError, not 'a.trim is not a function'", () => {
+    expect(() => coerceLabel([] as any, labels)).toThrow(UnansweredError);
+    expect(() => coerceLabel(["Auth"] as any, labels)).toThrow(/must be a label string or a 1-based index/);
+  });
+  it("an object / null argument throws UnansweredError", () => {
+    expect(() => coerceLabel({} as any, labels)).toThrow(UnansweredError);
+    expect(() => coerceLabel(null as any, labels)).toThrow(UnansweredError);
+  });
+  it("valid string and number inputs are unchanged", () => {
+    expect(coerceLabel("Billing", labels)).toEqual({ value: "Billing", matched: true });
+    expect(coerceLabel(1, labels)).toEqual({ value: "Auth", matched: true });
+    expect(coerceLabel("nope", labels).matched).toBe(false);
+  });
+});
 
 describe("CHOOSE-SUFFIX — tolerate the (Recommended) suffix + recommended/first keywords", () => {
   const opts = [{ label: "Approve (Recommended)" }, { label: "Reject" }];

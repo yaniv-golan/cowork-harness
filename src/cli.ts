@@ -103,6 +103,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
 ── In-band gate plumbing (for --decider-dir) ─────────────────────────────────
   gates <dir> [--follow]       stream pending gates as JSON lines + terminal {"done":true}; arm a Monitor here
   answer <dir> --gate <N>      answer an in-band gate (atomic write): --choose <label> | --answer "q=c"
+                               (repeat --choose for a multiSelect gate)
 
 ── Decider testing ────────────────────────────────────────────────────────────
   decide                       fire a sample question through your configured decider (~2s, no run)
@@ -277,7 +278,8 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
   decide:
     'usage: decide [--question <q>] [--option <o>]... [--decider-cmd <cmd> | --decider-llm] [--answer "<q>=<label>"]... [--answer-policy <p>] [--intent <s>] [--output-format json]',
   gates: "usage: gates <dir> [--follow]   (stream pending in-band gates as JSON lines; pair with --decider-dir)",
-  answer: 'usage: answer <dir> --gate <N> (--choose <label> | --answer "<q>=<label>")   (write an in-band gate reply atomically)',
+  answer:
+    'usage: answer <dir> --gate <N> (--choose <label> [--choose <label>…] | --answer "<q>=<label>")   (write an in-band gate reply atomically; repeat --choose for a multiSelect gate)',
   "verify-run":
     "usage: verify-run <run-dir> <scenario.yaml> [--output-format json]   (re-evaluate a scenario's assert: against a kept run dir; no live agent)",
   doctor: "usage: doctor [--tier protocol|container|microvm|hostloop|cowork] [--output-format json]   (read-only prerequisite check)",
@@ -1544,18 +1546,17 @@ function cmdAnswer(args: string[]) {
   // #15: skip flag values so `answer --gate 1 --choose Yes <dir>` doesn't read `1` as the directory.
   const dir = positionals(args, ["--gate", "--choose", "--answer", "--output-format"])[0];
   let seq: number | undefined;
-  let choose: string | undefined;
-  let chooseCount = 0;
+  // --choose accumulates: a single value answers a single-select gate; multiple values answer a
+  // multiSelect gate (validated once the gate is read — a multi --choose on a single-select gate is
+  // rejected below, preserving the old "only one allowed" rule for that case).
+  const chooses: string[] = [];
   const pairs: { q: string; label: string }[] = [];
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === "--gate")
       seq = Number(flagValue(args, i++, a)); // #58: bounds-checked
     else if (a === "--choose") {
-      // Bug 11: reject repeated --choose (only one allowed)
-      chooseCount++;
-      if (chooseCount > 1) return void fail("answer", "usage", "--choose may only be specified once", undefined, json);
-      choose = flagValueStrict(args, i++, a);
+      chooses.push(flagValueStrict(args, i++, a));
     } else if (a === "--answer") {
       const raw = flagValueStrict(args, i++, a);
       const parts = splitEq(raw);
@@ -1580,8 +1581,7 @@ function cmdAnswer(args: string[]) {
     // positionals already handled above via positionals() helper
   }
   // Bug 11: reject conflicting --choose and --answer
-  if (choose !== undefined && pairs.length > 0)
-    return void fail("answer", "usage", "cannot use both --choose and --answer", undefined, json);
+  if (chooses.length > 0 && pairs.length > 0) return void fail("answer", "usage", "cannot use both --choose and --answer", undefined, json);
   if (!dir)
     return void fail("answer", "usage", 'usage: answer <dir> --gate <N> (--choose <label> | --answer "<q>=<label>")', undefined, json);
   // A gate sequence is a positive integer; `!seq` alone admitted negatives/fractions, which then built
@@ -1594,29 +1594,44 @@ function cmdAnswer(args: string[]) {
       undefined,
       json,
     );
-  const answers: Record<string, string> = {};
+  const answers: Record<string, string | string[]> = {};
   if (pairs.length) for (const p of pairs) answers[p.q] = p.label;
-  else if (choose) {
+  else if (chooses.length) {
+    let g: ReturnType<typeof readGate>;
     try {
-      const g = readGate(dir, seq);
-      const q0 = g.questions?.[0];
-      // Validate the chosen label at write time so a typo fails HERE (located, immediate) instead of
-      // only later when the run consumes the answer. Use the decider's own coerceLabel so the CLI
-      // accepts exactly what the run would (exact / case-insensitive / 1-based index). An options-less
-      // (free-text) gate skips the check; an "Other" free-text reply should use --answer, not --choose.
-      const labels = (q0?.options ?? []).map((o) => o.label).filter((l): l is string => typeof l === "string");
-      if (labels.length && !coerceLabel(choose, labels).matched)
-        return void fail(
-          "answer",
-          "usage",
-          `--choose "${choose}" is not an option for gate ${seq}. Options: ${labels.join(", ")}. (Use --answer "<q>=<text>" for a free-text "Other" reply.)`,
-          undefined,
-          json,
-        );
-      answers[q0?.question ?? q0?.header ?? ""] = choose;
+      g = readGate(dir, seq);
     } catch (e) {
       return void fail("answer", "usage", `cannot read gate ${seq} in ${dir}: ${String((e as Error).message)}`, undefined, json);
     }
+    const q0 = g.questions?.[0];
+    // A multi --choose answers a multiSelect gate; on a single-select gate it's the old "only one
+    // allowed" error (now deferred to here, where we know the gate's kind).
+    if (chooses.length > 1 && !q0?.multiSelect)
+      return void fail(
+        "answer",
+        "usage",
+        `--choose may only be specified once for gate ${seq} (it is not a multiSelect gate)`,
+        undefined,
+        json,
+      );
+    // Validate each chosen label at write time so a typo fails HERE (located, immediate) instead of only
+    // later when the run consumes the answer. Use the decider's own coerceLabel so the CLI accepts
+    // exactly what the run would (exact / case-insensitive / 1-based index). An options-less (free-text)
+    // gate skips the check; an "Other" free-text reply should use --answer, not --choose.
+    const labels = (q0?.options ?? []).map((o) => o.label).filter((l): l is string => typeof l === "string");
+    if (labels.length)
+      for (const c of chooses)
+        if (!coerceLabel(c, labels).matched)
+          return void fail(
+            "answer",
+            "usage",
+            `--choose "${c}" is not an option for gate ${seq}. Options: ${labels.join(", ")}. (Use --answer "<q>=<text>" for a free-text "Other" reply.)`,
+            undefined,
+            json,
+          );
+    const key = q0?.question ?? q0?.header ?? "";
+    // multiSelect → write the ARRAY (the on-wire shape normalize expects); single-select → the scalar.
+    answers[key] = q0?.multiSelect ? chooses : chooses[0];
   } else return void fail("answer", "usage", 'answer needs --choose <label> or --answer "<q>=<label>"', undefined, json);
   answerGate(dir, seq, answers);
   if (json) out(JSON.stringify({ tool: "cowork-harness", command: "answer", ok: true, gate: seq, answers }));

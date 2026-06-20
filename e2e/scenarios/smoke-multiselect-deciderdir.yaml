@@ -1,0 +1,16 @@
+# L0 smoke (manual / --decider-dir): the in-band channel answers a multiSelect gate via repeated
+# --choose. Run with `--decider-dir <dir>` and reply `answer <dir> --gate 1 --choose Auth --choose Audit`.
+# No scripted answers — the gate intentionally falls through to the in-band decider.
+baseline: latest
+session: ../sessions/minimal.yaml
+fidelity: protocol
+prompt: |
+  Call the AskUserQuestion tool exactly once with a SINGLE multi-select question
+  (allow selecting more than one option) asking which features to enable, with these
+  three options: Auth, Billing, Audit.
+  After I answer, reply with exactly: "Enabled: <the features I chose, comma-separated>."
+  and nothing else.
+assert:
+  - result: success
+  - transcript_contains: "Auth"
+  - transcript_contains: "Audit"

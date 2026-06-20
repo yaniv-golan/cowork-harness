@@ -356,8 +356,10 @@ at the top of this file.
     `.env`.
 
 17. **web_fetch: `egress.extra_allow` is a no-op on the provenanced path** — provenance is the gate
-    (see the web_fetch section). multiSelect gates ARE supported (answer with a `choose:` list → comma-joined
-    wire shape); a member label containing a comma warns (the wire join is unescaped — a Cowork limitation).
+    (see the web_fetch section). multiSelect gates ARE supported across every answer channel: scripted
+    (`choose:` list), in-band `--decider-dir` (repeat `--choose`, or a JSON-array reply), and
+    `--decider-cmd` (JSON-array reply) — all deliver the same `", "`-joined wire shape; a member label
+    containing a comma warns (the wire join is unescaped — a Cowork limitation).
 
 18. **`replay_protocol_fidelity` is replay-synthesized only** — authoring it in a scenario is
     rejected (live it would be an empty assertion).

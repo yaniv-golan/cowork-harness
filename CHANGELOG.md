@@ -44,12 +44,27 @@ All notable changes to this project are documented here. The format is based on
   out before counting, so a retained pinned dir can't evict a newer ephemeral run). Only ephemeral `local_*`
   runs are pruned. Because the default root is now shared, a bare `runs gc` prunes ephemeral runs across **all**
   projects; pass an explicit `<runs-dir>` to scope it.
+- **multiSelect `AskUserQuestion` gates are now answerable on every answer channel.** Scripted
+  `choose: [list]` already worked; the in-band `--decider-dir` channel now accepts a repeated
+  `--choose` (`answer <dir> --gate 1 --choose Auth --choose Audit`), and `--decider-cmd` helpers /
+  hand-written `resp-N.json` accept a JSON-array reply (`{"answers":{"<q>":["Auth","Audit"]}}`). All
+  channels deliver the binary-verified `", "`-joined wire shape; a member matching no option, an array
+  on a single-select gate, or an empty array each fails loud. `cowork-harness answer`'s `--choose` is
+  now repeatable for multiSelect gates (still single-only on single-select). Verified end-to-end
+  against a live model (the real agent re-reads the joined answer as multiple selections).
+- **`scaffold --from-run`** flags a delivered answer that looks like a multiSelect set (contains
+  `", "`) with a loud comment telling the author to split `choose: "A, B"` into `choose: [A, B]`
+  before replay (a scaffolded multiSelect answer would otherwise not match on replay).
 
 ### Fixed
 
 - `doctor`'s staged-agent remedy now hints to put `COWORK_AGENT_BINARY` in `.env` so `--dotenv` covers it
   (like the auth token) — avoiding a misleading "red" when `doctor` is run without the same env/flags the real
   run uses.
+- **`--decider-dir` / `--decider-cmd` no longer crash on a multiSelect array reply.** `coerceLabel`
+  previously called `.trim()` on a non-string answer and threw a bare `TypeError`, aborting the run;
+  it now throws a clear `UnansweredError` instead, and a multiSelect array is validated per-member and
+  delivered as the joined wire shape.
 
 ## [0.7.1] — 2026-06-20
 

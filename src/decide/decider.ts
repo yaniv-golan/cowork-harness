@@ -547,7 +547,15 @@ export class ExternalDecider implements Decider {
       // produces a valid JSON object key — the old `"…".replace(/"/g,'\\"')` only escaped quotes and
       // could emit invalid guidance. (The value stays a literal placeholder, so the whole template
       // isn't itself parseable JSON — only the keys must be well-formed.)
-      const pairs = req.questions.map((q) => `${JSON.stringify(q.question ?? q.header ?? "")}:"<label or 1-based index>"`).join(",");
+      // A multiSelect question advertises the ARRAY reply shape so a helper/driver sends a list; a
+      // single-select question keeps the scalar placeholder. (Only the keys must be well-formed JSON —
+      // the values are placeholders, so the template as a whole isn't parseable, by design.)
+      const pairs = req.questions
+        .map(
+          (q) =>
+            `${JSON.stringify(q.question ?? q.header ?? "")}:${q.multiSelect ? `["<label or 1-based index>", "…"]` : `"<label or 1-based index>"`}`,
+        )
+        .join(",");
       return { ...base, questions: req.questions, reply_with: `{"id":"${req.id}","answers":{${pairs}}}` };
     }
     if (req.kind === "permission")
@@ -578,8 +586,11 @@ export class ExternalDecider implements Decider {
       const answers: Record<string, string> = {};
       for (const q of req.questions) {
         const text = q.question ?? q.header ?? "";
-        const labels = q.options.map((o) => o.label);
+        // `options` is non-optional in the static QSpec, but the wire payload is cast through unchecked
+        // (a header-only gate can arrive with no options), so `q.options.map` would TypeError on undefined.
+        const labels = q.options?.map((o) => o.label) ?? [];
         warnDuplicateLabels(labels, JSON.stringify(text));
+        const validLabels = `valid labels: ${labels.map((l) => JSON.stringify(l)).join(", ")}`;
         const raw = parsed.answers?.[text];
         if (raw === undefined) {
           // #20: the reply didn't answer THIS question (a key mismatch — the helper must key `answers`
@@ -590,7 +601,54 @@ export class ExternalDecider implements Decider {
             `external decider reply had no answer for "${text}" (key mismatch)`,
             `Key your reply by the exact question text: {"answers":{${JSON.stringify(text)}:"<label or 1-based index>"}}`,
           );
+        } else if (q.multiSelect) {
+          // MULTISELECT: accept an array of labels/indices (the natural machine contract — a helper or
+          // driver emits JSON), or a single scalar (a one-element selection, parity with ScriptedDecider
+          // which wraps a scalar `choose` into `[choose]`). Normalize to the canonical ", "-joined string
+          // (the binary-verified AskUserQuestion wire shape) — mirror ScriptedDecider exactly.
+          const members = Array.isArray(raw) ? raw : [raw];
+          // Empty-check FIRST, before the optionless passthrough — an empty array answers nothing.
+          if (members.length === 0)
+            throw new UnansweredError(
+              `external decider sent an empty selection for multiSelect ${JSON.stringify(text)}`,
+              `supply at least one label or 1-based index in the array`,
+            );
+          if (labels.length === 0) {
+            // Degenerate optionless multiSelect gate — pass the member(s) through verbatim (parity with
+            // the free-text branch below; the external helper is the authoritative answerer).
+            answers[text] = members.map(String).join(", ");
+            continue;
+          }
+          const resolved = members.map((m) => {
+            // "first" shorthand stays disabled for externals (a literal "first" must match a real label).
+            const c = coerceLabel(m, labels, false);
+            if (!c.matched)
+              throw new UnansweredError(
+                `external decider member ${JSON.stringify(m)} for ${JSON.stringify(text)} matched no option label`,
+                validLabels,
+              );
+            return c.value;
+          });
+          // Comma-in-label hazard — mirror ScriptedDecider EXACTLY, incl. the `> 1` gate: the wire joins
+          // members with ", " WITHOUT escaping (Cowork limitation), so a member label containing a comma
+          // can't be unambiguously round-tripped. Only meaningful when more than one member is selected.
+          if (members.length > 1) {
+            const commaLabel = resolved.find((l) => l.includes(","));
+            if (commaLabel)
+              warn(
+                `::warning:: multiSelect member label ${JSON.stringify(commaLabel)} for "${text}" contains a comma — the wire joins members with ", " WITHOUT escaping, so the model may re-read the selected set differently (Cowork limitation). Verify this gate.\n`,
+              );
+          }
+          answers[text] = resolved.join(", ");
+          continue;
         } else {
+          // SINGLE-SELECT: reject an array up front — a list answer for a single-select gate is a protocol
+          // error, not a one-element coercion (fail loud, symmetric with the multiSelect guards).
+          if (Array.isArray(raw))
+            throw new UnansweredError(
+              `external decider sent an array for single-select ${JSON.stringify(text)} — send one label or 1-based index`,
+              validLabels,
+            );
           // Bug 19: when the question has no options it is a free-text / open-ended gate — coerceLabel
           // always returns matched:false for an empty labels array and would throw below. Accept any
           // non-empty string verbatim (the external helper is the authoritative answerer for these gates).
@@ -718,6 +776,16 @@ function warnDuplicateLabels(labels: string[], context: string): void {
  *  (by index or case-insensitive name); false when the fallback to `labels[0]` was used.
  *  Shared by the TTY prompt and the external decider so both accept the same lenient forms (Opus L4). */
 export function coerceLabel(a: string | number, labels: string[], enableFirstShorthand = true): { value: string; matched: boolean } {
+  // A non-string/number answer (e.g. an array or object that slipped past a caller's type guard — the
+  // external reply is parsed from arbitrary JSON) used to fall into `a.trim()` and crash with a bare
+  // `TypeError: a.trim is not a function`, aborting the run. The module's contract is fail-loud, never
+  // crash: throw an actionable UnansweredError instead. A multiSelect array is handled upstream in
+  // ExternalDecider.normalize before it reaches here, so this fires only on a genuinely malformed value.
+  if (typeof a !== "string" && typeof a !== "number")
+    throw new UnansweredError(
+      `answer must be a label string or a 1-based index, got ${Array.isArray(a) ? "an array" : typeof a}`,
+      `for a multiSelect gate send an array of labels; otherwise one label or index`,
+    );
   if (typeof a === "number") {
     const resolved = labels[a - 1];
     return resolved !== undefined ? { value: resolved, matched: true } : { value: labels[0] ?? String(a), matched: false };

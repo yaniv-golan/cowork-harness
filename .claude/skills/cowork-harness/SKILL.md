@@ -238,8 +238,11 @@ are the ones that bite hardest.
 
 2. **A steered gate answer never reached the model.** *Why:* `serializeDecision` must emit
    `updatedInput: { questions, answers }`; a header-only gate (empty `question`) can never be keyed.
-   *Fix:* give every gate a non-empty `question`. (multiSelect gates ARE supported — answer with a
-   `choose:` list; free-text "Other" via `answer:`.) `question_asked` / `questions_count_max` /
+   *Fix:* give every gate a non-empty `question`. (multiSelect gates ARE supported on **every** answer
+   channel: scripted `choose:` list, in-band `--decider-dir` via a repeated `--choose` / a JSON-array
+   reply, and `--decider-cmd` via a JSON-array reply — all deliver the same `", "`-joined wire shape.
+   Free-text "Other" via `answer:`. Do NOT hand-write a multiSelect reply as a bare comma-joined
+   string — send an array; a scalar is treated as one selection.) `question_asked` / `questions_count_max` /
    `gate_answers_delivered` only evaluate on replay **with a `controlOut` cassette** — re-record an
    old cassette or they're excluded (loudly), not vacuously passed. `gate_answers_delivered` *fails*
    on unobserved delivery (absence of evidence is failure, not neutral).
