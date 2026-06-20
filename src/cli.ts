@@ -4,7 +4,7 @@ import { join, basename, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
 import { Scenario, AnswerRule, Assertion, type RunResult } from "./types.js";
-import { loadBaseline, BASELINES_DIR } from "./baseline.js";
+import { loadBaseline, BASELINES_DIR, cmpVersionStrings } from "./baseline.js";
 import { loadSession, resolveSessionPaths } from "./session.js";
 import { executeScenario, parseScenarioFile, UnansweredError, BoundaryError, type ExecuteOptions } from "./run/execute.js";
 import { ScriptedDecider, ExternalDecider, LlmDecider, ABSTAIN, coerceLabel, type OnUnanswered } from "./decide/decider.js";
@@ -1277,15 +1277,19 @@ function cmdSync(args: string[]) {
     mkdirSync(BASELINES_DIR, { recursive: true });
     writeFileSync(baselinePath, JSON.stringify(next, null, 2));
     log(`wrote ${baselinePath}`);
-    // F-3: the host-loop prompt asset is hand-authored (not extracted), so a new baseline silently lands
-    // WITHOUT it — and every host-loop record then runs with an EMPTY shell-access section. Warn loudly here,
-    // tying the missing asset to the baseline just synced (mirrors the agentBinary.stagedPath warn above).
-    const hostLoopAsset = join(BASELINES_DIR, "prompts", `desktop-${res.appVersion}`, "host-loop-append.md");
-    if (!existsSync(hostLoopAsset)) {
-      log(
-        `WARNING: host-loop prompt asset missing for the synced baseline: ${hostLoopAsset} — host-loop records will run with an EMPTY shell-access section. ` +
-          `Author it (carry forward baselines/prompts/desktop-1.12603.1/host-loop-append.md and verify against the desktop-${res.appVersion} asar).`,
-      );
+    // F-3: the host-loop prompt asset is hand-authored (not extracted), so a new LEGACY baseline silently
+    // lands WITHOUT it — and every host-loop record then runs with an EMPTY shell-access section. Warn loudly
+    // here, tying the missing asset to the baseline just synced (mirrors the agentBinary.stagedPath warn).
+    // Generator-era versions (>= 1.14271.0) build the section dynamically from mount state and ship NO static
+    // asset, so the warning must be version-scoped — otherwise sync nags forever for a file we don't want.
+    if (cmpVersionStrings(res.appVersion, "1.14271.0") < 0) {
+      const hostLoopAsset = join(BASELINES_DIR, "prompts", `desktop-${res.appVersion}`, "host-loop-append.md");
+      if (!existsSync(hostLoopAsset)) {
+        log(
+          `WARNING: host-loop prompt asset missing for the synced baseline: ${hostLoopAsset} — host-loop records will run with an EMPTY shell-access section. ` +
+            `Author it (carry forward baselines/prompts/desktop-1.12603.1/host-loop-append.md and verify against the desktop-${res.appVersion} asar).`,
+        );
+      }
     }
   }
 }

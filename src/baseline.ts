@@ -96,15 +96,20 @@ export function loadBaseline(name: string): PlatformBaseline {
 export function compareBaselineVersions(a: string, b: string): number {
   // Strip the "desktop-" prefix and ".json" suffix to get the raw version string.
   const versionOf = (f: string) => f.replace(/^desktop-/, "").replace(/\.json$/, "");
-  // A non-numeric segment (e.g. "1.0.0-beta") → parseInt NaN → NaN-0 = NaN corrupts the whole sort.
-  // Coerce a non-number to 0 so the comparison stays total.
-  const seg = (f: string) =>
-    versionOf(f)
-      .split(".")
-      .map((s) => {
-        const n = parseInt(s, 10);
-        return Number.isNaN(n) ? 0 : n;
-      });
+  return cmpVersionStrings(versionOf(a), versionOf(b));
+}
+
+/**
+ * Compare two RAW dotted version strings (e.g. "1.14271.0" vs "1.13576.1") numerically by segment.
+ * Negative if a < b, zero if equal, positive if a > b. A non-numeric segment coerces to 0 so the
+ * comparison stays total — a garbage/empty version compares as 0.0.0 (the safe low end).
+ */
+export function cmpVersionStrings(a: string, b: string): number {
+  const seg = (v: string) =>
+    v.split(".").map((s) => {
+      const n = parseInt(s, 10);
+      return Number.isNaN(n) ? 0 : n;
+    });
   const segA = seg(a);
   const segB = seg(b);
   const len = Math.max(segA.length, segB.length);

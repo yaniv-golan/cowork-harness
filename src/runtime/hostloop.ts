@@ -1,12 +1,21 @@
 import { warn } from "../io.js";
 import { spawn } from "node:child_process";
-import { appendFileSync, readFileSync } from "node:fs";
+import { appendFileSync, readFileSync, existsSync, readdirSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { PlatformBaseline, Scenario } from "../types.js";
 import { DEFAULT_MAX_THINKING_TOKENS } from "../types.js";
 import type { LaunchPlan } from "../session.js";
-import { resolveMounts, resolveAgentBinary } from "../baseline.js";
+import { resolveMounts, resolveAgentBinary, cmpVersionStrings } from "../baseline.js";
+import { generateHostLoopShellSection } from "./hostloop-prompt.js";
+
+/**
+ * First Desktop release whose host-loop "## Shell access" section is built dynamically from mount
+ * state (asar function Lxr). At/above this version the harness generates the section in code; below
+ * it the section is read from the per-version static `host-loop-append.md` asset. The version is a
+ * proxy for "the asar uses the dynamic generator" — bump only when a release changes that contract.
+ */
+const HOSTLOOP_DYNAMIC_PROMPT_MIN_VERSION = "1.14271.0";
 import { makeWorkspaceHandler, type McpHandler, type EgressEntry, type WebFetchProvenance } from "../hostloop/workspace-handler.js";
 import { agentArgs, spawnEnv, dockerRunArgv, resolveMaxThinkingTokens } from "./argv.js";
 import { runtimeAuthEnv } from "./host-env.js";
@@ -78,7 +87,9 @@ export function spawnHostLoop(
   // JavaScript, WebFetch}; of those only Bash/NotebookEdit/WebFetch exist in the CLI agent's
   // registry (verified 2026-06-13 — REPL/JavaScript are asar names for other surfaces, absent
   // here), so disallowing the three real ones is the faithful set.
-  const systemPromptAppend = [opts.systemPromptAppend, hostLoopShellSection(mntRoot, baseline.appVersion)].filter(Boolean).join("\n\n");
+  const systemPromptAppend = [opts.systemPromptAppend, hostLoopShellSection(baseline, m.sessionRoot, mntRoot, plan)]
+    .filter(Boolean)
+    .join("\n\n");
   const env = spawnEnv(baseline, {
     configGuest,
     proxyHost,
@@ -136,9 +147,25 @@ export function spawnHostLoop(
   return { child, sdkMcp, containerName, hostEgress };
 }
 
-function hostLoopShellSection(vmMnt: string, appVersion: string): string {
-  // Parameterize by baseline appVersion so fidelity tracks the actual installed Desktop release. (#27)
+function hostLoopShellSection(baseline: PlatformBaseline, sessionRoot: string, mntRoot: string, plan: LaunchPlan): string {
+  const appVersion = baseline.appVersion;
+  // Generator era (Desktop >= 1.14271.0): the section is built from live mount state, not a static
+  // file. Branch BEFORE any file read so generator-era versions never hit the missing-asset throw.
+  if (cmpVersionStrings(appVersion, HOSTLOOP_DYNAMIC_PROMPT_MIN_VERSION) >= 0) {
+    const skillsDir = join(plan.configDir, "skills");
+    const skillsPresent = existsSync(skillsDir) && readdirSync(skillsDir).length > 0;
+    return generateHostLoopShellSection({
+      sessionRoot,
+      mntRoot,
+      folders: plan.mounts.filter((m) => m.mountPath.startsWith(".projects/")),
+      uploads: plan.mounts.filter((m) => m.mountPath.startsWith("uploads/")),
+      skillsConfigDir: skillsPresent ? plan.configDir : undefined,
+    });
+  }
+
+  // Legacy era (< 1.14271.0): read the per-version static asset and substitute {{vmMnt}}. (#27)
   // The path must resolve to baselines/prompts/desktop-<appVersion>/host-loop-append.md.
+  const vmMnt = mntRoot;
   const dir = fileURLToPath(new URL(`../../baselines/prompts/desktop-${appVersion}/host-loop-append.md`, import.meta.url));
   let content: string;
   try {
