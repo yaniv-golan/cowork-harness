@@ -63,4 +63,23 @@ describe.skipIf(!can)("runs gc", () => {
     expect(r.status).toBe(0);
     expect(readdirSync(join(runsRoot, "s")).length).toBe(2);
   });
+
+  // §1c — pinned sess-* dirs are persisted/resumable sessions on the shared root: never pruned, and they
+  // must NOT consume a --keep-last slot (partition before counting), or a retained pinned dir would evict
+  // a newer ephemeral local_* that should survive.
+  it("never prunes pinned sess-* dirs, and they don't consume a --keep-last slot", () => {
+    const runsRoot = mkdtempSync(join(tmpdir(), "cwh-runs-"));
+    makeRunDir(runsRoot, "s", "sess-ci"); // pinned — must survive
+    makeRunDir(runsRoot, "s", "local_a");
+    makeRunDir(runsRoot, "s", "local_b");
+    makeRunDir(runsRoot, "s", "local_c"); // newest ephemeral by name-desc tiebreaker — must survive
+    const r = spawnSync("node", [CLI, "runs", "gc", "--keep-last", "1", runsRoot], { encoding: "utf8" });
+    expect(r.status).toBe(0);
+    const remaining = readdirSync(join(runsRoot, "s")).sort();
+    expect(remaining).toContain("sess-ci"); // pinned retained
+    expect(remaining).toContain("local_c"); // the 1 kept ephemeral — proves sess-* didn't eat the slot
+    expect(remaining).not.toContain("local_a");
+    expect(remaining).not.toContain("local_b");
+    expect(remaining.length).toBe(2);
+  });
 });

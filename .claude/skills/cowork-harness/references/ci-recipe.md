@@ -136,7 +136,9 @@ scenario = `result === "success" && assertions.every(pass)`. Exit code is non-ze
 fails or a run errors, so a plain `cowork-harness run scenarios/` is already CI-ready without parsing
 JSON.
 
-A run writes `runs/<name>/<sessionId>/` with `events.jsonl`, `control-out.jsonl`, `run.jsonl`,
+A run writes to `~/.cowork-harness/runs/<name>/<sessionId>/` by default — outside any working tree. In CI,
+set `COWORK_HARNESS_RUNS_DIR` (or pass `--run-dir`) to a workspace-relative path (e.g. `runs`) so an
+artifact-upload step can collect them. Each run dir holds `events.jsonl`, `control-out.jsonl`, `run.jsonl`,
 `trace.json`, `egress.log`, `result.json`. Digest one with `cowork-harness trace <run-id | dir>`.
 Secrets are scrubbed from every persisted log by value.
 

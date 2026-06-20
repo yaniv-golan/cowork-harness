@@ -97,7 +97,7 @@ It works with `--answer`/`--answer-policy` (reports which rule matched, or exits
 
 ## Relevant environment variables
 
-- `COWORK_HARNESS_RUNS_DIR` — relocate `runs/` so `trace` resolves from any dir.
+- `COWORK_HARNESS_RUNS_DIR` (or `--run-dir <path>`) — override the default run-output root `~/.cowork-harness/runs` (out of any working tree). flag > env > default.
 - `COWORK_HARNESS_DECIDER_CMD_TIMEOUT_MS` / `COWORK_HARNESS_LLM_TIMEOUT_MS` — decider backstops
   (default 600 s; **fail loud** on timeout).
 - `COWORK_HARNESS_DECIDER_DIR_POLL_MS` / `_TIMEOUT_MS` — the `--decider-dir` rendezvous.

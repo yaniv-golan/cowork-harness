@@ -150,6 +150,11 @@ deterministic re-run. Use `cowork-harness trace <id>` to digest a run. If only a
 run itself was fine), `cowork-harness verify-run <run-dir> <scenario.yaml>` re-checks the `assert:` block against
 a **kept** run dir (`--keep`, or a `--session-id` run) with no live re-record — tokens-free, ~1s per iteration.
 
+Run artifacts are written to `~/.cowork-harness/runs/…` by default — **outside any working tree**, so a run
+launched from a repo root never drops sensitive skill inputs/outputs into it. Pass `--run-dir <path>` (or set
+`COWORK_HARNESS_RUNS_DIR`) to relocate; in CI point it at a workspace path so an artifact-upload step can
+collect the runs.
+
 ### Interpreting verdict signals
 
 The run verdict may include `WARN`-severity signals in addition to pass/fail. One to watch for:

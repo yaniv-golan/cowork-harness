@@ -30,6 +30,7 @@ import {
   formatGateTrace,
   buildDispatchTree,
   formatDispatchTree,
+  noteRunsLocation,
 } from "./run/trace-view.js";
 import { buildScaffold } from "./run/scaffold.js";
 import { pkgVersion, jsonEnvelope, jsonError, parseOutputFormat, type ErrCategory } from "./run/envelope.js";
@@ -118,6 +119,8 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
   Global:  --dotenv <path>     load a .env before the command (host-side creds; never mounted).
            Auth resolves from process.env > --dotenv > ./.env > <install>/.env.
            Run 'doctor' to diagnose auth failures.
+  Global:  --run-dir <path>    write runs/ output under <path> instead of the default ~/.cowork-harness/runs
+           (keeps sensitive inputs/outputs out of the working tree). flag > COWORK_HARNESS_RUNS_DIR > default.
   --version                    print version        --help, -h    print this help
 
   Env-var defaults (CLI flags take precedence):
@@ -192,6 +195,8 @@ Output:
   --output-format text|json        text = live stream + footer (default); json = one stdout envelope
   --quiet, -q                      verdict footer only            --verbose, -V   + thinking/tool inputs/sub-agent tree
   --keep                           print the run dir + deliverable path (runs are always kept on disk)
+  --run-dir <path>                 write runs/ under <path> (default ~/.cowork-harness/runs) — keeps sensitive
+                                   artifacts out of the working tree. flag > COWORK_HARNESS_RUNS_DIR > default.
   --model <id>                     override the session model
   --dry-run                        preview scenarios, token and binary checks, without recording     NO_COLOR=1   disable ANSI
 
@@ -227,6 +232,8 @@ Input policy:
 Output:
   --output-format text|json        text = verdict + failing transcript (default); json = stdout envelope
   --quiet, -q                      verdict only            --verbose, -V   live stream + per-tool markers
+  --run-dir <path>                 write runs/ under <path> (default ~/.cowork-harness/runs); keeps sensitive
+                                   artifacts out of the working tree. flag > COWORK_HARNESS_RUNS_DIR > default.
   NO_COLOR=1                       disable ANSI on stderr
 
 Long runs:  an idle "still running" heartbeat prints on stderr after ~30s of silence
@@ -279,6 +286,33 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
   runs: "usage: runs gc [--keep-last <n>] [--dry-run] [<runs-dir>]   (prune accumulated run dirs; default --keep-last 5)",
 };
 
+// Known subcommands — used by the global value-flag parsers (`--dotenv`, `--run-dir`) to reject a command
+// name mistaken as the flag's value (`--dotenv run x.yaml` would otherwise swallow `run`).
+const COMMANDS = [
+  "skill",
+  "run",
+  "chat",
+  "record",
+  "replay",
+  "verify-cassettes",
+  "verify-run",
+  "trace",
+  "assertions",
+  "assert",
+  "scaffold",
+  "decide",
+  "gates",
+  "answer",
+  "sync",
+  "list",
+  "boundary-check",
+  "vm",
+  "lint",
+  "doctor",
+  "rehash",
+  "runs",
+];
+
 async function main() {
   const argv = process.argv.slice(2);
 
@@ -306,30 +340,6 @@ async function main() {
       log("--dotenv requires a path (none provided)");
       process.exit(2);
     }
-    const COMMANDS = [
-      "skill",
-      "run",
-      "chat",
-      "record",
-      "replay",
-      "verify-cassettes",
-      "verify-run",
-      "trace",
-      "assertions",
-      "assert",
-      "scaffold",
-      "decide",
-      "gates",
-      "answer",
-      "sync",
-      "list",
-      "boundary-check",
-      "vm",
-      "lint",
-      "doctor",
-      "rehash",
-      "runs",
-    ];
     // The command-name footgun only applies to the space form (the equals form can't swallow the next
     // token as its value), but checking both is harmless and keeps the guard uniform.
     if (!isEquals && COMMANDS.includes(explicitEnvFile)) {
@@ -342,6 +352,29 @@ async function main() {
       log(`--dotenv file not found: ${explicitEnvFile}`);
       process.exit(2);
     }
+  }
+
+  // `--run-dir <path>` is a GLOBAL flag (parsed + stripped before dispatch, like --dotenv) that relocates
+  // the runs/ output root so sensitive skill inputs/outputs never land in a working tree. It is a thin
+  // shim over COWORK_HARNESS_RUNS_DIR: setting it here makes runsWriteRoot()/runsRoot() pick it up with no
+  // writer/reader changes. Precedence: flag > COWORK_HARNESS_RUNS_DIR > ~/.cowork-harness/runs. Unlike
+  // --dotenv it does NOT require the path to exist (it's an output dir, created on first write).
+  const rdEq = argv.findIndex((a) => a.startsWith("--run-dir="));
+  const rdSpace = argv.indexOf("--run-dir");
+  const rdIdx = rdSpace >= 0 ? rdSpace : rdEq;
+  const rdIsEquals = rdSpace < 0 && rdEq >= 0;
+  const runDirVal = rdIsEquals ? argv[rdEq].slice("--run-dir=".length) : rdIdx >= 0 ? argv[rdIdx + 1] : undefined;
+  if (rdIdx >= 0) {
+    if (runDirVal === undefined || runDirVal === "") {
+      log("--run-dir requires a path (none provided)");
+      process.exit(2);
+    }
+    if (!rdIsEquals && COMMANDS.includes(runDirVal)) {
+      log(`--run-dir requires a path but got the command "${runDirVal}" — write \`--run-dir <path> ${runDirVal} …\``);
+      process.exit(2);
+    }
+    argv.splice(rdIdx, rdIsEquals ? 1 : 2);
+    process.env.COWORK_HARNESS_RUNS_DIR = resolve(process.cwd(), runDirVal);
   }
 
   const packageRootEnv = fileURLToPath(new URL("../.env", import.meta.url)); // dist/cli.js → <install>/.env
@@ -760,6 +793,7 @@ async function cmdRun(rawArgs: string[]) {
   const externalChannel = resolveExternal("run", flags); // created once; reused across scenarios
   const policy = externalChannel ? "fail" : resolvePolicy("run", flags);
   const o = resolveOutput("run", flags);
+  noteRunsLocation({ json: o.json, quiet: !!flags.quiet });
   const results: RunResult[] = [];
   try {
     for (let i = 0; i < files.length; i++) {
@@ -991,6 +1025,7 @@ async function cmdSkill(rawArgs: string[]) {
   // base policy; an external channel or the LLM decider overrides the terminal in execute.ts
   const policy: OnUnanswered = externalChannel ? "fail" : useLlm ? "llm" : resolvePolicy("skill", flags);
   const o = resolveOutput("skill", flags);
+  noteRunsLocation({ json: o.json, quiet: !!flags.quiet });
   let result: RunResult;
   try {
     result = await runOneScenario({

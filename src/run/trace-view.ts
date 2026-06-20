@@ -1,32 +1,47 @@
 import { warn } from "../io.js";
 import { readFileSync, existsSync, statSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { homedir } from "node:os";
 import { parseMessage, type AgentEvent, type DecisionRequest } from "../agent/session.js";
 
 /**
- * #45: resolve the runs/ root so `trace <run-id>` works from ANY directory, not just from the dir that
- * happens to contain a `runs/`. Order: an explicit `COWORK_HARNESS_RUNS_DIR` override; then a `runs/`
- * under the current cwd (the path `execute.ts`/`chat.ts` write to today — preserved so a read finds a
- * just-written run); then the REPO-relative `runs/` derived from this module's URL (mirrors the
- * `sidecar.ts`/`grants.ts` `fileURLToPath(new URL("../..", import.meta.url))` pattern), which is what
- * makes the cross-directory case work. The WRITERS (`execute.ts`/`chat.ts`) now route through
- * `runsWriteRoot()` below, so a `COWORK_HARNESS_RUNS_DIR` override is honored on write and the
- * write/read roots can no longer drift.
+ * The default runs root when no override is set: a per-user state dir OUTSIDE any working tree, so run
+ * artifacts (often sensitive skill inputs/outputs) never land in a repo. Matches the `~/.cowork-harness/`
+ * convention used by the VM work dir (`lima.ts` `VM_WORK_HOST`). FLAT (shared across all projects on the
+ * machine): ephemeral `local_*` run dirs carry a unique hrtime id so they never path-collide; pinned
+ * `sess-*` dirs are deterministic, so a cross-project collision is guarded in `execute.ts` (the writer
+ * errors rather than overwriting another project's session) and `runs gc` never prunes them.
  */
-export function runsRoot(): string {
-  if (process.env.COWORK_HARNESS_RUNS_DIR) return process.env.COWORK_HARNESS_RUNS_DIR;
-  const cwdRuns = join(process.cwd(), "runs");
-  if (existsSync(cwdRuns)) return cwdRuns;
-  const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
-  return join(repoRoot, "runs");
+export function defaultRunsHome(): string {
+  return join(homedir(), ".cowork-harness", "runs");
 }
 
-/** The root that run WRITERS use: the `COWORK_HARNESS_RUNS_DIR` override if set, else a cwd-relative
- *  `runs/`. This is the env-honoring half of `runsRoot()` (no repo-root fallback — a writer needs a
- *  deterministic target), so a write and a subsequent `trace`/read resolve to the same place. */
+/**
+ * Resolve the runs/ root for READS (`trace`/`scaffold`/`verify-run`). `COWORK_HARNESS_RUNS_DIR` override
+ * if set, else `defaultRunsHome()`. Both halves are ABSOLUTE, so a `trace <run-id>` resolves from any
+ * directory — the absolute default replaces the old cwd-relative / repo-root walk (#45) more simply, and
+ * makes write/read roots identical so they can't drift. (An env-set *write* followed by a no-env read
+ * won't be found — pass the same env/flag, or an explicit run-dir/events.jsonl path.)
+ */
+export function runsRoot(): string {
+  return process.env.COWORK_HARNESS_RUNS_DIR ?? defaultRunsHome();
+}
+
+/** The root that run WRITERS use — identical resolution to `runsRoot()` so a write and a subsequent
+ *  `trace`/read resolve to the same place. */
 export function runsWriteRoot(): string {
-  return process.env.COWORK_HARNESS_RUNS_DIR ?? join(process.cwd(), "runs");
+  return process.env.COWORK_HARNESS_RUNS_DIR ?? defaultRunsHome();
+}
+
+/** One-time stderr notice of where runs are written, shown only when the user did NOT pick a location
+ *  (no `--run-dir` / `COWORK_HARNESS_RUNS_DIR`) — keeps the default `~/.cowork-harness/runs` discoverable
+ *  after moving output out of cwd, without polluting `--quiet` or a `--output-format json` stdout
+ *  envelope. Gated on env-PRESENCE (the `--run-dir` flag sets that env, so both flag and env suppress it).
+ */
+export function noteRunsLocation(opts: { json: boolean; quiet: boolean }): void {
+  if (opts.json || opts.quiet) return;
+  if (process.env.COWORK_HARNESS_RUNS_DIR !== undefined) return;
+  process.stderr.write(`runs → ${runsWriteRoot()} (override with --run-dir / COWORK_HARNESS_RUNS_DIR)\n`);
 }
 
 /**
@@ -94,7 +109,7 @@ export function resolveEventsFile(arg: string): string {
     const f = join(arg, "events.jsonl");
     if (existsSync(f)) return f;
   }
-  const root = runsRoot(); // #45: repo-relative (or COWORK_HARNESS_RUNS_DIR), not cwd-relative
+  const root = runsRoot(); // COWORK_HARNESS_RUNS_DIR, else the absolute ~/.cowork-harness/runs — not cwd-relative
   if (existsSync(root)) {
     // E: prefer EXACT match first; only fall through to fragment matching if nothing exact was found.
     // Collect ALL fragment matches and warn loudly (with candidates) before picking deterministically.

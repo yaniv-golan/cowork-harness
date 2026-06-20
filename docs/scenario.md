@@ -312,7 +312,7 @@ running once with `--keep` and inspecting the JSON under the run's `…/mnt/arti
 
 ## Output
 
-Each run writes `runs/<name>/<sessionId>/`:
+Each run writes to `~/.cowork-harness/runs/<name>/<sessionId>/` (relocate with `--run-dir <path>` or `COWORK_HARNESS_RUNS_DIR`):
 
 ```
 events.jsonl      full stream-json (child→driver; also the cassette source)
@@ -374,7 +374,7 @@ a second:
 
 ```bash
 cowork-harness skill ~/my-plugin "..." --keep            # prints the run dir
-cowork-harness verify-run runs/<scenario>/<sessionId>/ my-scenario.yaml
+cowork-harness verify-run ~/.cowork-harness/runs/<scenario>/<sessionId>/ my-scenario.yaml
 # ✗ verify-run: 1/3 assertion(s) failed  → fix the assertion, re-run verify-run, repeat
 ```
 

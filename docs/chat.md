@@ -83,15 +83,16 @@ or folders, restart `chat` with the appropriate `--upload` / `--folder` flags. S
 
 ## Transcript
 
-The session transcript is always written to `runs/chat/<session-id>/`. The path is printed when
-the session ends. If the session crashes before the footer prints, the run ID appears in the
-startup banner — use it to find the transcript directory.
+The session transcript is always written to `~/.cowork-harness/runs/chat/<session-id>/` (relocate with
+`--run-dir <path>` or `COWORK_HARNESS_RUNS_DIR`). The path is printed when the session ends. If the
+session crashes before the footer prints, the run ID appears in the startup banner — use it to find the
+transcript directory.
 
 To read the transcript as a digest (tool calls, sub-agent dispatches, decisions):
 
 ```bash
-cowork-harness trace runs/chat/<session-id>
-cowork-harness trace runs/chat/<session-id> --tools   # include full tool inputs
+cowork-harness trace <session-id>            # the run-id form resolves under the runs root, from any dir
+cowork-harness trace <session-id> --tools    # include full tool inputs
 ```
 
 There is no `--keep` flag — `chat` always writes the transcript and always keeps it.

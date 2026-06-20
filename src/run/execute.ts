@@ -2,6 +2,7 @@ import { warn } from "../io.js";
 import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync, readdirSync, statSync, lstatSync, realpathSync } from "node:fs";
 import { randomUUID, createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { homedir } from "node:os";
 import { join, dirname, resolve, basename, isAbsolute, sep } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { Scenario } from "../types.js";
@@ -74,6 +75,63 @@ export function slugForPath(name: string): string {
   return `${full.slice(0, 128)}-${hash}`;
 }
 
+/** The SOURCE host paths a session stages (skills/uploads/folders/plugins, plus the session file itself).
+ *  realpath-canonicalized + deduped + sorted, so the set identifies WHICH project a pinned session belongs
+ *  to, invariant to launch cwd and symlinks. Used by the cross-project overwrite guard below — cwd is the
+ *  wrong axis (it false-negatives when two checkouts launch from the same dir, e.g. CI / $HOME). */
+export function sessionOriginSources(session: ReturnType<typeof loadSession>, sessionRef: string): string[] {
+  const expand = (p: string) => p.replace(/^~(?=$|\/)/, homedir()); // match buildLaunchPlan's ~ handling
+  const raw = [
+    ...(sessionRef && sessionRef !== "(inline)" ? [sessionRef] : []),
+    ...session.uploads,
+    ...session.folders.map((f) => f.from),
+    ...session.skills.local,
+    ...session.plugins.local_plugins,
+    ...session.plugins.remote_plugins,
+    ...session.plugins.local_marketplaces,
+  ].map(expand);
+  // Identity is the DECLARED source set — do NOT drop missing paths. Filtering by existence would make the
+  // key depend on transient filesystem state (and would diverge from buildLaunchPlan, which only drops
+  // missing sources under COWORK_HARNESS_SOFT_MISSING), so a legit same-project refresh could be mis-keyed
+  // as "another project" when an optional source flips presence between runs. Canonicalize a present path
+  // via realpath (collapses symlinks/cwd); fall back to the lexical absolute for a not-yet-present one.
+  const canon = raw.map((p) => {
+    try {
+      return realpathSync(p);
+    } catch {
+      return resolve(p);
+    }
+  });
+  return Array.from(new Set(canon)).sort();
+}
+
+/** A short, deterministic identity hash for a pinned run's source set. With no on-disk sources (inline/
+ *  empty session) it falls back to a cwd-derived basis — but the guard treats an EMPTY source set as
+ *  UNCONFIRMABLE and never deletes on it (cwd is the false-negative axis), so this fallback is only ever a
+ *  stable id for the marker, never trusted to authorize an overwrite. */
+export function sessionOriginKey(sources: string[], sessionRef: string): string {
+  const basis = sources.length ? sources.join("\n") : `ref:${sessionRef === "(inline)" ? resolve(".") : resolve(sessionRef)}`;
+  return createHash("sha256").update(basis).digest("hex").slice(0, 16);
+}
+
+interface OriginMarker {
+  originKey: string;
+  sourceHint: string;
+  createdAt: string;
+}
+
+/** Read a pinned run dir's `.origin` marker, or null if absent/malformed (→ the caller fails CLOSED:
+ *  an unconfirmable origin is never deleted). */
+function readOriginMarker(path: string): OriginMarker | null {
+  try {
+    const m = JSON.parse(readFileSync(path, "utf8"));
+    if (m && typeof m.originKey === "string") return m as OriginMarker;
+  } catch {
+    /* missing or malformed */
+  }
+  return null;
+}
+
 export async function executeScenario(scenario: Scenario, opts: ExecuteOptions = {}): Promise<RunResult> {
   // #33: mirror the CLI guard (cli.ts:488) — a library caller skipping the CLI would otherwise get
   // a confusing `cannot resume "undefined"` error deep inside the resume branch.
@@ -96,12 +154,66 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // #17: the scenario name (YAML or filename-derived) is a PATH component — slugify so a name like
   // "../x" can't place run artifacts outside runs/. The display name (scenario.name) is unchanged.
   const outDir = join(runsWriteRoot(), slugForPath(scenario.name), sessionId);
-  // #25/#26: a non-resume run reusing a stable --session-id must be FRESH — the prior run's staged tree
-  // (uploads, plugins, mnt/.claude agent state, outputs) would otherwise leak in via cpSync's merge
-  // semantics, and a new agentSessionId would be written over stale native session files. Clear it
-  // first. (--resume deliberately reuses the tree.)
-  if (opts.sessionId && !opts.resume && existsSync(outDir)) rmSync(outDir, { recursive: true, force: true });
-  mkdirSync(outDir, { recursive: true });
+  // The marker lives at outDir/.origin — ABOVE workRoot (outDir/work/...), so it's invisible to
+  // collectArtifacts / file_exists / user_visible_artifact / the trace events.jsonl scan, and untouched
+  // by cpSync staging. It MUST stay here; moving it into the staged tree would surface it as an artifact.
+  const originPath = join(outDir, ".origin");
+
+  if (opts.sessionId) {
+    // Pinned (`sess-<id>`) run dirs are DETERMINISTIC, so on the shared (flat) runs root two different
+    // projects can resolve to the same path. Identify the run by its SOURCE content (sessionOriginSources)
+    // and refuse to touch a dir that belongs to a different project — replacing the old blind rmSync,
+    // which silently destroyed a colliding peer's persisted, resumable session.
+    const sources = sessionOriginSources(session, scenario.session);
+    const myOrigin = sessionOriginKey(sources, scenario.session);
+    // A session that mounts NO source (a bare inline scenario) has no content to identify which project it
+    // belongs to — its only fallback anchor is cwd, which false-negatives when two projects share a cwd.
+    // Treat that identity as UNCONFIRMABLE: never auto-delete or silently resume it (fail closed). `skill`
+    // runs always mount the skill dir, so the common pinned-session workflow stays confirmable.
+    const confirmable = sources.length > 0;
+    if (existsSync(outDir)) {
+      const prior = readOriginMarker(originPath);
+      // Same origin requires a CONFIRMABLE identity AND a matching marker; a missing/partial marker or an
+      // unconfirmable (sourceless) identity is never "same" → fail CLOSED (throw, never rm).
+      const sameOrigin = confirmable && prior?.originKey === myOrigin;
+      const where = prior?.sourceHint ?? "(unknown — partial or foreign run dir)";
+      if (opts.resume) {
+        // --resume reuses the tree IN PLACE; doing so onto another project's (or an unconfirmable) session
+        // bleeds across projects. Block unless explicitly allowed.
+        if (!sameOrigin && process.env.COWORK_HARNESS_ALLOW_FOREIGN_RESUME !== "1")
+          throw new Error(
+            `cannot resume "${opts.sessionId}": session dir ${outDir} ` +
+              (confirmable
+                ? `belongs to another project at ${where}`
+                : `can't be confirmed as this project's (the session mounts no source to identify it)`) +
+              ` — set COWORK_HARNESS_ALLOW_FOREIGN_RESUME=1 to override, or use --run-dir`,
+          );
+      } else if (sameOrigin) {
+        // #25/#26: a same-project non-resume run must be FRESH — the prior staged tree (uploads, plugins,
+        // mnt/.claude agent state, outputs) would otherwise leak in via cpSync's merge semantics, and a
+        // new agentSessionId would be written over stale native session files. Clear it first.
+        rmSync(outDir, { recursive: true, force: true });
+      } else {
+        // FAIL CLOSED: never delete a dir whose origin can't be confirmed as ours (different project,
+        // missing marker, or an unconfirmable sourceless identity).
+        throw new Error(
+          !confirmable
+            ? `session id "${opts.sessionId}" has an existing run dir at ${outDir}, but this session mounts no source ` +
+                `to identify it as yours — pass --run-dir, use a different --session-id, or delete ${outDir} to reset`
+            : `session id "${opts.sessionId}" is already in use by another project at ${where} — ` +
+                `pass --run-dir, or a different --session-id` +
+                (prior ? "" : ` (or delete ${outDir} to reset)`),
+        );
+      }
+    }
+    mkdirSync(outDir, { recursive: true });
+    // Write the origin marker FIRST (before session.json) to minimize the post-mkdir crash window where a
+    // dir exists with no marker (which would fail closed on the next run).
+    const sourceHint = sources[0] ?? (scenario.session === "(inline)" ? "(inline session)" : resolve(scenario.session));
+    writeFileSync(originPath, JSON.stringify({ originKey: myOrigin, sourceHint, createdAt: new Date().toISOString() }, null, 2));
+  } else {
+    mkdirSync(outDir, { recursive: true });
+  }
 
   let agentSessionId: string | undefined;
   if (opts.sessionId || opts.resume) {

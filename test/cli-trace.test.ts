@@ -12,7 +12,8 @@ import type { RenderPlan } from "../src/run/renderer.js";
 // source directly; #58 spawns the built CLI for usage-error exit codes (no agent spawn — the parser
 // fails before any run starts).
 
-// ── #45: runs/ root is resolved via COWORK_HARNESS_RUNS_DIR / repo-relative, NOT cwd-relative ──
+// ── #45: runs/ root is resolved via COWORK_HARNESS_RUNS_DIR (else the absolute ~/.cowork-harness/runs
+// default — see runs-root.test.ts), NOT cwd-relative — so `trace` resolves from any directory. ──
 describe("#45 — runsRoot resolves from another directory", () => {
   const orig = process.cwd();
   const origEnv = process.env.COWORK_HARNESS_RUNS_DIR;

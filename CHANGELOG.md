@@ -6,6 +6,51 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Breaking changes
+
+- **Run output now defaults to `~/.cowork-harness/runs`, not `<cwd>/runs`.** A `run` / `skill` / `chat` /
+  `record` launched from a repo no longer drops run artifacts (often sensitive skill inputs/outputs) into the
+  working tree — the root moved out of any working tree, matching the `~/.cowork-harness/` convention already
+  used for VM work dirs. The root is **flat and machine-global** (shared across every project on the machine),
+  not per-project. The readers (`trace` / `scaffold` / `verify-run`) resolve the same default, so a bare
+  `trace <run-id>` now works from any directory; the previous cwd-relative / repo-root resolution tiers were
+  removed. A one-time `runs → <dir>` line prints on stderr when the default is used (suppressed under
+  `--quiet` / `--output-format json`, or when an override is set).
+  - *Upgrade note (CI / scripts):* anything that reads `./runs` after a run — a CI `upload-artifact path: runs/`,
+    a glob over `runs/**`, a `.gitignore` entry — must now set **`COWORK_HARNESS_RUNS_DIR`** (or pass
+    `--run-dir`) to a workspace path so output lands where it's expected. Otherwise the step finds an empty
+    `./runs` (and, if it doesn't fail on empty, passes silently). The bundled CI recipe sets
+    `COWORK_HARNESS_RUNS_DIR: runs` on the live-scenario job for exactly this reason.
+
+### Added
+
+- **`--run-dir <path>` global flag** to relocate the runs root (a thin shim over `COWORK_HARNESS_RUNS_DIR`).
+  Precedence: `--run-dir` > `COWORK_HARNESS_RUNS_DIR` > `~/.cowork-harness/runs`. Keeps sensitive artifacts out
+  of a working tree without the prior `cd`-into-a-scratch-dir workaround. Both spellings (`--run-dir <path>` and
+  `--run-dir=<path>`) are accepted; unlike `--dotenv` it does not require the path to exist (it's an output dir).
+- **Cross-project overwrite guard for pinned (`--session-id`) sessions.** On the flat shared root a pinned
+  `sess-<id>` run dir is deterministic, so two projects can resolve to the same path. The writer now identifies
+  a run by its **mounted-source content** (recorded in an `outDir/.origin` marker) and:
+  - **errors instead of silently `rm -rf`-ing** a dir that belongs to a different project (the old behavior
+    blind-deleted a colliding peer's persisted, resumable session);
+  - **fails closed** on a missing/partial marker (a crashed prior run) — it throws with a "delete `<dir>` to
+    reset" hint rather than deleting an unconfirmable dir;
+  - treats a **sourceless inline scenario** (which has no content to identify it, only cwd) as unconfirmable —
+    it throws rather than risk a cwd-collision delete (`skill <dir>` runs always mount the skill, so the common
+    pinned workflow is unaffected);
+  - blocks **`--resume`** onto a different project's session in place (override with
+    `COWORK_HARNESS_ALLOW_FOREIGN_RESUME=1`).
+- **`runs gc` never prunes pinned `sess-*` sessions** (and they don't consume a `--keep-last` slot — partitioned
+  out before counting, so a retained pinned dir can't evict a newer ephemeral run). Only ephemeral `local_*`
+  runs are pruned. Because the default root is now shared, a bare `runs gc` prunes ephemeral runs across **all**
+  projects; pass an explicit `<runs-dir>` to scope it.
+
+### Fixed
+
+- `doctor`'s staged-agent remedy now hints to put `COWORK_AGENT_BINARY` in `.env` so `--dotenv` covers it
+  (like the auth token) — avoiding a misleading "red" when `doctor` is run without the same env/flags the real
+  run uses.
+
 ## [0.7.1] — 2026-06-20
 
 ### Fixed

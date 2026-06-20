@@ -9,8 +9,11 @@ const DEFAULT_KEEP_LAST = 5;
 
 /** `cowork-harness runs gc [--keep-last <n>] [--dry-run] [<runs-dir>]`
  *
- *  For each scenario directory under the runs root, sorts run dirs by mtime descending
+ *  For each scenario directory under the runs root, sorts EPHEMERAL run dirs by mtime descending
  *  (newest first) with the directory name as a tiebreaker, then removes all but the N most recent.
+ *  Pinned `sess-*` dirs (persisted, resumable `--session-id` sessions) are retained unconditionally.
+ *  The default root is the flat, machine-global `~/.cowork-harness/runs` (shared across projects), so a
+ *  bare `runs gc` prunes ephemeral runs from ALL projects; pass an explicit <runs-dir> to scope it.
  *  Safe by default (dry-run-able). */
 export function cmdRunsGc(args: string[]): void {
   let p;
@@ -57,7 +60,7 @@ export function cmdRunsGc(args: string[]): void {
     if (!st.isDirectory()) continue;
 
     // Sort run dirs: newest first (mtime desc), name desc as tiebreaker for determinism.
-    const runDirs = readdirSync(scenarioDir)
+    const sorted = readdirSync(scenarioDir)
       .map((name) => ({ name, path: join(scenarioDir, name) }))
       .filter(({ path }) => {
         try {
@@ -81,17 +84,24 @@ export function cmdRunsGc(args: string[]): void {
         }
         const mtimeDiff = bMtime - aMtime;
         return mtimeDiff !== 0 ? mtimeDiff : b.name.localeCompare(a.name);
-      })
-      .map(({ path }) => path);
+      });
 
-    for (let i = 0; i < runDirs.length; i++) {
+    // PARTITION before counting: pinned `sess-*` dirs are persisted, resumable sessions that share the
+    // flat (cross-project) runs root, so they are NEVER pruned — and they must not occupy a --keep-last
+    // slot either, or a retained pinned dir would evict a newer ephemeral `local_*` that should be kept.
+    // Only ephemeral `local_*` runs are subject to --keep-last.
+    const pinned = sorted.filter((d) => d.name.startsWith("sess-"));
+    const ephemeral = sorted.filter((d) => !d.name.startsWith("sess-"));
+    kept += pinned.length;
+
+    for (let i = 0; i < ephemeral.length; i++) {
       if (i < keepLast) {
         kept++;
       } else {
         if (!dryRun) {
-          rmSync(runDirs[i], { recursive: true, force: true });
+          rmSync(ephemeral[i].path, { recursive: true, force: true });
         }
-        log(`${dryRun ? "(dry-run) " : ""}✗ pruned ${runDirs[i]}`);
+        log(`${dryRun ? "(dry-run) " : ""}✗ pruned ${ephemeral[i].path}`);
         deleted++;
       }
     }

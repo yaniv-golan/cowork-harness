@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -14,36 +14,36 @@ function eventsFile(lines: unknown[], controlOut?: unknown[]): string {
 
 // E — resolveEventsFile: exact match preferred over fragment, ambiguous fragment warns loudly
 describe("trace — E resolveEventsFile exact vs fragment resolution", () => {
-  // resolveEventsFile resolves relative to cwd; we chdir to a temp tree and restore after each test.
-  const orig = process.cwd();
+  // resolveEventsFile resolves under runsRoot(); we point COWORK_HARNESS_RUNS_DIR at a temp runs/ tree
+  // (the runs root is now an absolute path, not cwd-relative) and restore the env after each test.
+  const origEnv = process.env.COWORK_HARNESS_RUNS_DIR;
+  afterEach(() => {
+    if (origEnv === undefined) delete process.env.COWORK_HARNESS_RUNS_DIR;
+    else process.env.COWORK_HARNESS_RUNS_DIR = origEnv;
+  });
 
   function makeRunsTree(layout: { scen: string; run: string }[]): string {
-    const root = mkdtempSync(join(tmpdir(), "cwh-runs-"));
+    const runsRoot = join(mkdtempSync(join(tmpdir(), "cwh-runs-")), "runs");
     for (const { scen, run } of layout) {
-      const runDir = join(root, "runs", scen, run);
+      const runDir = join(runsRoot, scen, run);
       mkdirSync(runDir, { recursive: true });
       writeFileSync(join(runDir, "events.jsonl"), "");
     }
-    return root;
+    process.env.COWORK_HARNESS_RUNS_DIR = runsRoot;
+    return runsRoot;
   }
 
   it("exact run-dir name is preferred over a fragment match", () => {
-    const root = makeRunsTree([
+    makeRunsTree([
       { scen: "my-scenario", run: "exact-run-id" },
       { scen: "my-scenario", run: "abc-exact-run-id-xyz" }, // contains the exact name as fragment
     ]);
-    process.chdir(root);
-    try {
-      const f = resolveEventsFile("exact-run-id");
-      expect(f).toContain(`my-scenario/exact-run-id/events.jsonl`);
-    } finally {
-      process.chdir(orig);
-    }
+    const f = resolveEventsFile("exact-run-id");
+    expect(f).toContain(`my-scenario/exact-run-id/events.jsonl`);
   });
 
   it("single unambiguous fragment resolves without warning", () => {
-    const root = makeRunsTree([{ scen: "skill-a", run: "run-unique-abc123" }]);
-    process.chdir(root);
+    makeRunsTree([{ scen: "skill-a", run: "run-unique-abc123" }]);
     const stderrChunks: string[] = [];
     const origWrite = process.stderr.write.bind(process.stderr);
     (process.stderr as any).write = (s: string, ...rest: any[]) => {
@@ -56,16 +56,14 @@ describe("trace — E resolveEventsFile exact vs fragment resolution", () => {
       expect(stderrChunks.join("")).not.toMatch(/ambiguous/);
     } finally {
       (process.stderr as any).write = origWrite;
-      process.chdir(orig);
     }
   });
 
   it("ambiguous fragment warns loudly and picks most recent (deterministic)", () => {
-    const root = makeRunsTree([
+    makeRunsTree([
       { scen: "skill-a", run: "local_aaaa" },
       { scen: "skill-a", run: "local_bbbb" },
     ]);
-    process.chdir(root);
     const stderrChunks: string[] = [];
     const origWrite = process.stderr.write.bind(process.stderr);
     (process.stderr as any).write = (s: string, ...rest: any[]) => {
@@ -80,7 +78,6 @@ describe("trace — E resolveEventsFile exact vs fragment resolution", () => {
       expect(combined).toMatch(/2 run dirs/);
     } finally {
       (process.stderr as any).write = origWrite;
-      process.chdir(orig);
     }
   });
 });

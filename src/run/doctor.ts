@@ -162,7 +162,9 @@ export function runDoctorChecks(tier: Tier, probe: DoctorProbe = realProbe): Doc
       title: "Staged agent binary",
       status: agent.ok ? "ok" : "fail",
       detail: agent.ok ? agent.path : agent.error.split("\n")[0],
-      remedy: agent.ok ? undefined : "open Claude Cowork once to stage the agent, or set COWORK_AGENT_BINARY=<path>",
+      remedy: agent.ok
+        ? undefined
+        : "open Claude Cowork once to stage the agent, or set COWORK_AGENT_BINARY=<path> (put it in your .env so --dotenv covers it, like the token)",
       required: true,
     });
 
