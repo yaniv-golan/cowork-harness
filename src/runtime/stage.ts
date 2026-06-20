@@ -4,8 +4,11 @@ import { join, dirname } from "node:path";
 import type { LaunchPlan } from "../session.js";
 import { resolveDeclaredSource } from "../staging/resolve.js";
 
-/** Subdirs the writable session tree always pre-creates under mnt (idempotent). */
-const BARE_DIRS = ["uploads", "outputs", ".projects", ".local-plugins/cache", ".remote-plugins", ".claude"];
+/** Subdirs the writable session tree always pre-creates under mnt (idempotent). `.local-plugins` (not
+ *  `.local-plugins/cache`) so both the gated `marketplaces/<mp>/<plugin>` and legacy `cache/<x>` plugin
+ *  layouts nest under it; per-mount parents are created on demand in stageWorkspace. `.projects` stays for
+ *  the legacy folder layout (an empty hidden dir is harmless under the gated bare-name layout). */
+const BARE_DIRS = ["uploads", "outputs", ".projects", ".local-plugins", ".remote-plugins", ".claude"];
 
 export interface StageResult {
   /** true iff mnt/.claude/mcp.json is present after staging — caller derives the guest --mcp-config path. */

@@ -99,11 +99,11 @@
         "name": "projects",
         "mountPath": ".projects/{projectId}",
         "mode": "rw",
-        "purpose": "selected work folders (a Space) — delete denied by default (asar IX)"
+        "purpose": "RESERVED namespace (and the separate UUID project-sync feature) — NOT the work-folder path. From Desktop 1.14271.0 selected work folders mount at mnt/<collision-resolved-basename> (dynamic, derived per session by buildLaunchPlan; see MOUNT_BARE_NAME_MIN_VERSION). This decorative row is not consumed for binding (staged paths come from plan.mounts)."
       },
       {
         "name": "local-plugins",
-        "mountPath": ".local-plugins/cache",
+        "mountPath": ".local-plugins/marketplaces",
         "mode": "r",
         "purpose": "marketplace skills/plugins, runtime-discovered"
       },

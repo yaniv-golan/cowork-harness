@@ -14,10 +14,11 @@ max_thinking_tokens: 31999       # thinking budget: a number, or a per-model map
 permission_mode: default         # setPermissionMode: default | acceptEdits | plan | bypassPermissions
 permission_parity: cowork        # cowork (unscripted tool calls allowed, Cowork default) | strict (deny unscripted)
 
-# ── work folders / projects (Cowork "add folder" / Spaces) → mnt/.projects/<id> ─
+# ── work folders / projects (Cowork "add folder" / Spaces) → mnt/<folder-name> ──
+#    (mount name = collision-resolved folder basename; ≥1.14271.0, older baselines use mnt/.projects/<id>)
 folders:
-  - { from: ~/code/myproject, to: proj1, mode: rw }    # to=basename; mode default rw (delete denied, like
-                                                       # Cowork); use rwd only to model a delete-approved mount
+  - { from: ~/code/myproject, mode: rw }    # mounted at mnt/myproject; mode default rw (delete denied, like
+                                            # Cowork); use rwd only to model a delete-approved mount
 trusted_folders:                 # localAgentModeTrustedFolders (mount without a trust prompt)
   - ~/code/myproject
 auto_mount_folders: false        # autoMountFolders
@@ -34,7 +35,8 @@ plugins:
   local_marketplaces: []         # LOCAL marketplace dirs → registered via `claude plugin marketplace add`
   enabled:                       # enabledPlugins (name@marketplace)
     - my-skill@local
-  local_plugins:                 # host plugin dirs → mnt/.local-plugins/cache (marketplace-style)
+  local_plugins:                 # host plugin dirs → mnt/.local-plugins/marketplaces/<marketplace>/<plugin>
+                                 #   (≥1.14271.0; older baselines use mnt/.local-plugins/cache)
     - ./skills/my-skill
   remote_plugins: []             # host plugin dirs → mnt/.remote-plugins (org-remote-style)
 skills:
@@ -90,7 +92,7 @@ staleness:
 ### Folders, projects, uploads
 | Field | Maps to | Mounted at |
 |---|---|---|
-| `folders[]` | "add folder" / Spaces | `mnt/.projects/<to>` |
+| `folders[]` | "add folder" / Spaces | `mnt/<folder-name>` (collision-resolved basename; ≥1.14271.0, older baselines use `.projects/<id>`) |
 | `trusted_folders[]` | `localAgentModeTrustedFolders` | (settings.json; mount without prompt) |
 | `auto_mount_folders` | `autoMountFolders` | (settings.json) |
 | `uploads[]` | pre-prompt file upload | `mnt/uploads/<basename>` |
@@ -98,7 +100,7 @@ staleness:
 For an ad-hoc `skill` run (no session file), the CLI flags **`--upload <file>`** and **`--folder <dir>`**
 are the equivalents of `uploads[]` and `folders[]`.
 
-`folders[].mode` is `r` \| `rw` \| `rwd` (read / read-write / read-write-delete), matching Cowork's per-mount grants. Enforcement: `r` mounts get a per-mount `:ro` bind on the Docker tiers, so writes fail in the guest; the `rw` vs `rwd` delete-deny distinction is not yet mount-enforced (post-hoc `no_delete_in_outputs` + the planned FUSE delete-deny sub-project — see [boundary.md](./boundary.md)).
+`folders[].mode` is `r` \| `rw` \| `rwd` (read / read-write / read-write-delete), matching Cowork's per-mount grants. (There is no `to:` field — the mount name is always derived from the folder basename, collision-resolved; `.projects` is now only a reserved name.) Enforcement: `r` mounts get a per-mount `:ro` bind on the Docker tiers, so writes fail in the guest; the `rw` vs `rwd` delete-deny distinction is not yet mount-enforced (post-hoc `no_delete_in_outputs` + the planned FUSE delete-deny sub-project — see [boundary.md](./boundary.md)).
 
 ### Discovery
 See [discovery.md](./discovery.md) for the full model. In short: the harness builds a clean `CLAUDE_CONFIG_DIR` with a generated `settings.json`, mounts plugins at the Cowork paths, and wires `--mcp-config` — every field here is an override knob.
@@ -108,7 +110,7 @@ See [discovery.md](./discovery.md) for the full model. In short: the harness bui
 | `plugins.marketplaces[]` | `plugin_marketplaces` / `extraKnownMarketplaces` | git URLs or local paths. |
 | `plugins.local_marketplaces[]` | `claude plugin marketplace add` | LOCAL marketplace dirs (each holds a `marketplace.json`); plugins they reference are mounted. The `skill --marketplace` flag is the ad-hoc equivalent. |
 | `plugins.enabled[]` | `enabledPlugins` | `name@marketplace`. |
-| `plugins.local_plugins[]` / `remote_plugins[]` | Cowork plugin mounts | → `mnt/.local-plugins/cache` / `mnt/.remote-plugins`. |
+| `plugins.local_plugins[]` / `remote_plugins[]` | Cowork plugin mounts | → `mnt/.local-plugins/marketplaces/<marketplace>/<plugin>` (≥1.14271.0; older baselines use `.local-plugins/cache`) / `mnt/.remote-plugins`. |
 | `mcp.config` / `mcp.enabled[]` | `--mcp-config` / `enabledMcpjsonServers` | the supported way to attach an MCP server to a session under test. |
 
 ### Egress

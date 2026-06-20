@@ -186,7 +186,7 @@ if *every* key passes (don't rely on the first; keep one concern per item unless
 | `transcript_matches: <regex>` | the transcript matches the regex (case-insensitive) — fuzzy content for stochastic prose, e.g. `'SOM:?\s*\$[0-9.]+\s*M'` |
 | `transcript_not_matches: <regex>` | it does not match (e.g. no leaked stack trace / `undefined`) |
 | `file_exists: <path>` | the path exists under the run's `work/` (e.g. `outputs/x.md`) |
-| `user_visible_artifact: <path>` | the path exists **and** is under a user-visible prefix (`outputs/`, `.projects/`) — i.e. the deliverable the user actually sees in Cowork |
+| `user_visible_artifact: <path>` | the path exists **and** is under a user-visible root (`outputs/` + each connected folder's mount name) — i.e. the deliverable the user actually sees in Cowork |
 | `no_delete_in_outputs: true` | no delete op (`rm`/`mv`/…) touched `mnt/outputs` (forbidden in Cowork) — **only `true` is valid**; writing `false` is rejected by the schema (omit the key entirely to allow deletes in the test) |
 | `self_heal_ran: <bool>` | a `/sessions/<id>/mnt` plugin script was (not) invoked — the plugin-root self-heal path |
 | `tool_called: <Tool>` | the agent invoked the tool |
@@ -254,7 +254,7 @@ When `controlOut` is absent (old cassette), a **loud warning** fires and these k
 from evaluation (not vacuously passed). Re-record with a current harness to enable them.
 
 **Filesystem assertions** (`file_exists`, `user_visible_artifact`, `artifact_json`) run on `replay` **when
-the cassette carries an artifact manifest** — `record` snapshots `outputs/`/`​.projects/` (paths + hashes +
+the cassette carries an artifact manifest** — `record` snapshots `outputs/` + connected folders (paths + hashes +
 small JSON bodies) into the cassette, and `replay` materializes that snapshot to evaluate them token-free.
 `artifact_json` needs the JSON body inlined (small files); a hash-only (oversized) entry still satisfies
 `file_exists` but not `artifact_json`. Without a manifest (older cassettes), they are **skipped** (loud).

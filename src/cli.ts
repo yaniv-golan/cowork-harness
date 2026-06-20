@@ -55,7 +55,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
       [--decider-llm [--intent "…"]]   answer LIVE questions with a model (state test intent in one line)
       [--decider-cmd '<helper>']   …or via a spawned helper; see 'skill --help'
       [--decider-dir <dir>]   …or in-band from the driving agent; then use 'gates'/'answer' to stream/respond
-      [--upload <file>]… [--folder <dir>]…   attach files / connect folders (mnt/uploads, mnt/.projects)
+      [--upload <file>]… [--folder <dir>]…   attach files / connect folders (mnt/uploads, mnt/<folder-name>)
       [--session-id <id> [--resume]]   pin + resume a session (for gated, checkpoint-and-resume skills)
       [--output-format text|json] [--quiet|-q] [--verbose|-V] [--model <id>] [--keep] [--dry-run]
       (run 'skill --help' for the full flag reference)
@@ -142,7 +142,7 @@ Source (at least one):
 
 Files (for skills that need an attached file, e.g. deck-review):
   --upload <path>                  mount a file at mnt/uploads/<name> — the "attach a file" path (repeatable)
-  --folder <dir>                   mount a folder at mnt/.projects/<id> — a connected repo/space (repeatable)
+  --folder <dir>                   connect a folder (mounts at mnt/<folder-name>, derived) — a repo/space (repeatable)
 
 Session persistence (for gated skills that checkpoint + resume):
   --session-id <id>                pin a stable session (persists the work dir + the agent's session)
@@ -1004,7 +1004,7 @@ async function cmdSkill(rawArgs: string[]) {
       permission_parity: "cowork",
       plugins: { local_plugins: localPlugins, local_marketplaces: marketplaces, enabled: enables },
       uploads, // --upload <file> → mnt/uploads/<basename> (the "attach a file" path; ad-hoc parity with session.uploads)
-      folders: folders.map((from) => ({ from, mode: "rw" as const })), // --folder <dir> → mnt/.projects/<id> (asar: rw, delete denied by default)
+      folders: folders.map((from) => ({ from, mode: "rw" as const })), // --folder <dir> → mnt/<derived-name> (asar: rw, delete denied by default)
     }),
     process.cwd(),
   );
@@ -1788,7 +1788,9 @@ function cmdVerifyRun(args: string[]) {
     egress: result.egress ?? [],
     result: result.result === "error" ? "error" : "success",
     workRoot,
-    userVisiblePrefixes: ["outputs", ".projects"],
+    // Read the roots persisted at run time (folder mount names are dynamic/gated, not a fixed prefix).
+    // Fall back to the legacy prefix for old result.json that predates the field.
+    userVisiblePrefixes: result.userVisibleRoots ?? ["outputs", ".projects"],
     outputsDeletes: scan.outputsDeletes,
     questions: sidecarQuestions ?? [],
     hostPathLeaked: scan.hostPathLeaked,

@@ -267,7 +267,7 @@ are the ones that bite hardest.
    assertions need a sandboxed tier (`container`+). Good: this one fails loud by design.
 
 8. **Read-only mounts are enforced; delete-deny is not.** `mode:r` mounts get a real `:ro` bind
-   (a write fails in-guest). But `rw` vs `rwd` (write-but-no-delete on `outputs/` / `.projects/`) is
+   (a write fails in-guest). But `rw` vs `rwd` (write-but-no-delete on `outputs/` / connected folders) is
    *not* mount-enforced — `rm` succeeds and is only caught post-hoc by `no_delete_in_outputs`.
 
 9. **Keep `.env` out of any mounted folder** — it is copied into the sandbox and the token could

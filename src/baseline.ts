@@ -6,6 +6,17 @@ import { PlatformBaseline } from "./types.js";
 
 export const BASELINES_DIR = join(fileURLToPath(new URL("..", import.meta.url)), "baselines");
 
+/**
+ * The Desktop release boundary at which Cowork's runtime switched to BOTH bare-name work-folder mounts
+ * (`mnt/<name>` instead of `mnt/.projects/<id>`) AND the dynamically-generated host-loop "## Shell access"
+ * prompt. These are the same binary's behavior, so they share ONE constant — host-loop prompt gating
+ * (`hostloop.ts`) and mount-path gating (`session.ts`) both import this. Homed here in `baseline.ts` (a
+ * near-leaf everyone imports) to stay cycle-free. For appVersion >= this, use the bare-name scheme + the
+ * generated prompt; below it, the legacy `.projects/<id>` + static prompt. Bump only when a new Desktop
+ * release changes that contract.
+ */
+export const MOUNT_BARE_NAME_MIN_VERSION = "1.14271.0";
+
 /** Resolve the host path to the staged agent ELF (COWORK_AGENT_BINARY override > baseline.stagedPath). */
 export function resolveAgentBinary(baseline: PlatformBaseline): string {
   const override = process.env.COWORK_AGENT_BINARY;

@@ -60,9 +60,6 @@
               "from": {
                 "type": "string"
               },
-              "to": {
-                "type": "string"
-              },
               "mode": {
                 "type": "string",
                 "enum": [

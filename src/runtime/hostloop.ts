@@ -6,16 +6,16 @@ import { fileURLToPath } from "node:url";
 import type { PlatformBaseline, Scenario } from "../types.js";
 import { DEFAULT_MAX_THINKING_TOKENS } from "../types.js";
 import type { LaunchPlan } from "../session.js";
-import { resolveMounts, resolveAgentBinary, cmpVersionStrings } from "../baseline.js";
+import { resolveMounts, resolveAgentBinary, cmpVersionStrings, MOUNT_BARE_NAME_MIN_VERSION } from "../baseline.js";
 import { generateHostLoopShellSection } from "./hostloop-prompt.js";
 
 /**
- * First Desktop release whose host-loop "## Shell access" section is built dynamically from mount
- * state (asar function Lxr). At/above this version the harness generates the section in code; below
- * it the section is read from the per-version static `host-loop-append.md` asset. The version is a
- * proxy for "the asar uses the dynamic generator" — bump only when a release changes that contract.
+ * The host-loop "## Shell access" section is built dynamically from mount state (asar fn Lxr) at/above
+ * this release, and read from the static `host-loop-append.md` asset below it. This is the SAME release
+ * boundary as bare-name mounting (the asar switched both together), so it aliases the single shared
+ * constant `MOUNT_BARE_NAME_MIN_VERSION` — keeping prompt-gating and mount-gating impossible to desync.
  */
-const HOSTLOOP_DYNAMIC_PROMPT_MIN_VERSION = "1.14271.0";
+const HOSTLOOP_DYNAMIC_PROMPT_MIN_VERSION = MOUNT_BARE_NAME_MIN_VERSION;
 import { makeWorkspaceHandler, type McpHandler, type EgressEntry, type WebFetchProvenance } from "../hostloop/workspace-handler.js";
 import { agentArgs, spawnEnv, dockerRunArgv, resolveMaxThinkingTokens } from "./argv.js";
 import { runtimeAuthEnv } from "./host-env.js";
@@ -157,8 +157,8 @@ function hostLoopShellSection(baseline: PlatformBaseline, sessionRoot: string, m
     return generateHostLoopShellSection({
       sessionRoot,
       mntRoot,
-      folders: plan.mounts.filter((m) => m.mountPath.startsWith(".projects/")),
-      uploads: plan.mounts.filter((m) => m.mountPath.startsWith("uploads/")),
+      folders: plan.mounts.filter((m) => m.kind === "folder"),
+      uploads: plan.mounts.filter((m) => m.kind === "upload"),
       skillsConfigDir: skillsPresent ? plan.configDir : undefined,
     });
   }

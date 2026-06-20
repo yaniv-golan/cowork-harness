@@ -30,7 +30,7 @@ The live VM hot-mount path uses `@ant/claude-swift` (`swift_addon.node`), a nati
 ### Workarounds
 
 - **Startup `--folder <dir>`** — a live bind mount; agent writes propagate back to the host. Restart `chat` with this flag if you need the agent to edit your project files.
-- **`docker cp` snapshot** — run `docker cp /local/dir/. <containerName>:/sessions/<id>/mnt/.projects/dir/` in a second terminal to inject a read-only snapshot mid-session, then tell the agent the path. Writes stay in the container.
+- **`docker cp` snapshot** — run `docker cp /local/dir/. <containerName>:/sessions/<id>/mnt/dir/` in a second terminal to inject a read-only snapshot mid-session, then tell the agent the path. Writes stay in the container.
 
 ---
 

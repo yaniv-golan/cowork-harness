@@ -8,6 +8,24 @@ All notable changes to this project are documented here. The format is based on
 
 ### Breaking changes
 
+- **Work folders now mount at `mnt/<folder-name>`, not `mnt/.projects/<id>`; the folder `to:` field is
+  removed.** Binary-verified (asar 1.14271.0): real Cowork mounts each connected work folder at a
+  collision-resolved **basename** of its canonical path (e.g. `mnt/project`) with no author-chosen name —
+  so the session-schema `folders[].to` override is GONE (it had no Cowork analog; names are always derived).
+  Same-basename folders are disambiguated tier-accurately (host-loop keeps the first bare, the VM/container
+  tier escalates both with a `--parent` prefix). Plugins likewise move from the synthetic
+  `mnt/.local-plugins/cache/<…>` to the real `mnt/.local-plugins/marketplaces/<marketplace>/<plugin>` (no
+  `cache/`, no version segment). **Version-gated:** this applies to Desktop **≥ 1.14271.0** (current
+  baselines); older baselines keep the legacy `.projects/<id>` + `cache/` paths. `user_visible_artifact`
+  and the artifact manifest now derive their visible roots from the actual mount set (persisted as
+  `RunResult.userVisibleRoots`), and the cassette format bumps **v3 → v4** to store them.
+  - *Upgrade note:* remove `to:` from `folders[]` in session files (the name derives from the folder
+    basename). Reference connected-folder artifacts as `<folder-name>/…` (e.g. `project/summary.md`) instead
+    of `.projects/<id>/…`. A folder-artifact cassette recorded before v4 must be **re-recorded** (`rehash`
+    cannot migrate it — it only re-hashes skill fingerprints). A connected folder whose basename collides
+    with a reserved Cowork mount name (`outputs`, `uploads`, `.projects`, …) on the VM/container tier is now
+    rejected loudly instead of silently shadowing the fixed dir — rename the folder.
+
 - **Run output now defaults to `~/.cowork-harness/runs`, not `<cwd>/runs`.** A `run` / `skill` / `chat` /
   `record` launched from a repo no longer drops run artifacts (often sensitive skill inputs/outputs) into the
   working tree — the root moved out of any working tree, matching the `~/.cowork-harness/` convention already

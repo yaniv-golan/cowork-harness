@@ -28,7 +28,7 @@ exports[`buildLaunchPlan > SPEC §7 buildLaunchPlan output snapshot (mounts/plug
     },
     {
       "mode": "rw",
-      "mountPath": ".projects/proj1",
+      "mountPath": ".projects/project",
     },
     {
       "mode": "r",

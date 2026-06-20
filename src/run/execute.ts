@@ -235,7 +235,13 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     }
   }
 
-  const plan = buildLaunchPlan(session, baseline, outDir);
+  // Resolve the effective tier BEFORE buildLaunchPlan so mount naming is tier-accurate (host-loop folders
+  // use hL, VM/container use fy). `cowork` resolves to hostloop|container via the loop-decision gate.
+  const effectiveFidelity =
+    scenario.fidelity === "cowork" ? (decideLoopFromBaseline(baseline) === "host" ? "hostloop" : "container") : scenario.fidelity;
+  if (scenario.fidelity === "cowork") process.stderr.write(`[loop] cowork → ${effectiveFidelity} (per gate 1143815894)\n`);
+
+  const plan = buildLaunchPlan(session, baseline, outDir, effectiveFidelity);
   if (agentSessionId) {
     plan.agentSessionId = agentSessionId;
     plan.resume = !!opts.resume;
@@ -249,10 +255,6 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         `Use a sandboxed fidelity (container, microvm, or hostloop) so the limitation is actually enforced — otherwise the result is a false pass.`,
     );
   }
-
-  const effectiveFidelity =
-    scenario.fidelity === "cowork" ? (decideLoopFromBaseline(baseline) === "host" ? "hostloop" : "container") : scenario.fidelity;
-  if (scenario.fidelity === "cowork") process.stderr.write(`[loop] cowork → ${effectiveFidelity} (per gate 1143815894)\n`);
 
   const onUnanswered: OnUnanswered = scenario.on_unanswered ?? opts.onUnanswered ?? "fail";
   // This is a POLICY line (what happens IF an unscripted question arrives), not an outcome — the old
@@ -338,7 +340,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       await hostProxy.ready; // don't spawn the agent until the proxy is accepting (or fail loud on a bind error)
     }
 
-    const prompts = renderPrompts(baseline, session, sessionId);
+    const prompts = renderPrompts(baseline, session, sessionId, plan.mounts.find((m) => m.kind === "folder")?.mountPath);
     promptFidelityWarnings = prompts.fidelityWarnings; // #49: hoist out so RunResult construction (after try) can access it
     let sdkMcp: SdkMcp | undefined;
     if (effectiveFidelity === "hostloop") {
@@ -422,6 +424,12 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   const scan = scanEvents(join(outDir, "events.jsonl"));
   const workRoot = effectiveFidelity === "protocol" ? join(outDir, "work") : join(outDir, "work", "session", "mnt");
 
+  // User-visible roots = outputs + each connected work folder's RESOLVED mount name (derived from the
+  // actual mount set, NOT a hardcoded `.projects/` prefix — folder names are now dynamic/gated). Plugins
+  // are read-only inputs and are NOT visible roots. Persisted to RunResult so the plan-less lanes
+  // (verify reads result.json; replay reads the cassette) match this without rebuilding a LaunchPlan.
+  const userVisibleRoots = ["outputs", ...plan.mounts.filter((m) => m.kind === "folder").map((m) => m.mountPath)];
+
   const assertions = evaluate(scenario.assert, {
     transcript: record.transcript,
     toolsCalled: record.toolsCalled,
@@ -429,7 +437,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     egress,
     result: record.result,
     workRoot,
-    userVisiblePrefixes: ["outputs", ".projects"],
+    userVisiblePrefixes: userVisibleRoots,
     outputsDeletes: scan.outputsDeletes,
     questions: record.questions,
     hostPathLeaked: scan.hostPathLeaked,
@@ -520,7 +528,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     outDir,
     workDir: workRoot,
     outputsDir: join(workRoot, "outputs"),
-    artifacts: collectArtifacts(workRoot, ["outputs", ".projects"]), // ENV-MANIFEST: observed user-visible files
+    userVisibleRoots,
+    artifacts: collectArtifacts(workRoot, userVisibleRoots), // ENV-MANIFEST: observed user-visible files
     nonDeterministic:
       // LLM-, external-, human-, or first-option-decided → not reproducible. `first` picks options[0] and
       // option order can vary run-to-run; it's already pushed to unanswered[], so include it here to agree.

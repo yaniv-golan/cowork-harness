@@ -88,7 +88,7 @@ describe("execute — file-relative path resolution", () => {
     const session = loadSession({
       uploads: ["../data/x.csv"],
       plugins: { local_plugins: ["../skills/my-skill"], config_dir: "~/.claude" },
-      folders: [{ from: "/abs/proj", to: "p" }],
+      folders: [{ from: "/abs/proj" }],
     });
     const r = resolveSessionPaths(session, base);
     expect(r.uploads[0]).toBe("/bundle/data/x.csv");

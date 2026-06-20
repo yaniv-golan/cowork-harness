@@ -28,7 +28,7 @@ function inlineScenario(name: string) {
 function sourcedScenario(name: string): { scenario: ReturnType<typeof parseScenarioFile>; src: string } {
   const src = mkdtempSync(join(tmpdir(), "cwh-src-"));
   writeFileSync(join(src, "f.txt"), "x");
-  return { scenario: bundle(name, `folders:\n  - from: ${src}\n    to: proj\n`), src };
+  return { scenario: bundle(name, `folders:\n  - from: ${src}\n`), src };
 }
 
 /** Pre-create a pinned run dir at <root>/<slug>/sess-<id> with the given `.origin` (or none). */
@@ -44,8 +44,8 @@ describe("execute — §1b origin identity (mounted-source, content-stable)", ()
   it("distinct source sets → distinct keys; the SAME set → the same key (so a same-project refresh works)", () => {
     const a = mkdtempSync(join(tmpdir(), "cwh-A-"));
     const b = mkdtempSync(join(tmpdir(), "cwh-B-"));
-    const sessA = loadSession({ folders: [{ from: a, to: "p" }] });
-    const sessB = loadSession({ folders: [{ from: b, to: "p" }] });
+    const sessA = loadSession({ folders: [{ from: a }] });
+    const sessB = loadSession({ folders: [{ from: b }] });
     const keyA = sessionOriginKey(sessionOriginSources(sessA, "(inline)"), "(inline)");
     const keyB = sessionOriginKey(sessionOriginSources(sessB, "(inline)"), "(inline)");
     expect(keyA).not.toBe(keyB); // different projects → different identity
@@ -60,10 +60,7 @@ describe("execute — §1b origin identity (mounted-source, content-stable)", ()
     const present = mkdtempSync(join(tmpdir(), "cwh-present-"));
     const missing = join(present, "does-not-exist-subdir");
     const sess = loadSession({
-      folders: [
-        { from: present, to: "p" },
-        { from: missing, to: "q" },
-      ],
+      folders: [{ from: present }, { from: missing }],
     });
     // The missing folder is retained in the key, so the identity doesn't change if it later appears/vanishes.
     expect(sessionOriginSources(sess, "(inline)").some((p) => p.endsWith("does-not-exist-subdir"))).toBe(true);

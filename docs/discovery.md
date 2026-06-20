@@ -6,7 +6,7 @@ The agent the harness runs **is** `claude-code` — the same binary Claude Deskt
 
 | Kind | Real roots | Populated from (session setup) |
 |---|---|---|
-| **Plugins / marketplaces** | `CLAUDE_CONFIG_DIR/plugins`, `plugin_marketplaces` in settings, + Cowork mounts `mnt/.local-plugins/cache`, `mnt/.remote-plugins` | `plugins.local_plugins[]` → `.local-plugins/cache`; `plugins.remote_plugins[]` → `.remote-plugins`; `plugins.marketplaces[]` → `extraKnownMarketplaces`; `plugins.enabled[]` → `enabledPlugins` |
+| **Plugins / marketplaces** | `CLAUDE_CONFIG_DIR/plugins`, `plugin_marketplaces` in settings, + Cowork mounts `mnt/.local-plugins/marketplaces/<marketplace>/<plugin>`, `mnt/.remote-plugins` (≥1.14271.0; older baselines use `.local-plugins/cache`) | `plugins.local_plugins[]` → `.local-plugins/marketplaces/<marketplace>/<plugin>`; `plugins.remote_plugins[]` → `.remote-plugins`; `plugins.marketplaces[]` → `extraKnownMarketplaces`; `plugins.enabled[]` → `enabledPlugins` |
 | **Skills** | `CLAUDE_CONFIG_DIR/skills`, + skills inside plugins | `skills.local[]` staged into the config dir; plugin skills discovered at the mounts |
 | **MCP servers** | `--mcp-config <file>` / `.mcp.json`, `enabledMcpjsonServers` in settings | `mcp.config` → `--mcp-config`; `mcp.enabled[]` → `enabledMcpjsonServers` |
 

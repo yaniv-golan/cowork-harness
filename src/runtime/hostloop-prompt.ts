@@ -17,7 +17,7 @@ import { dirname } from "node:path";
 export interface HostLoopFolder {
   /** Real host path of the mounted folder/upload. */
   hostPath: string;
-  /** Mount path RELATIVE to mntRoot (e.g. ".projects/proj1", "uploads/foo.txt"). */
+  /** Mount path RELATIVE to mntRoot (e.g. "project" for a work folder, "uploads/foo.txt"). */
   mountPath: string;
 }
 
@@ -26,7 +26,8 @@ export interface HostLoopShellInputs {
   sessionRoot: string;
   /** Mount root, e.g. "/sessions/<id>/mnt". */
   mntRoot: string;
-  /** Mountable work folders (the harness's `.projects/<id>` mounts). */
+  /** Mountable work folders — for Desktop >= 1.14271.0 these are the bare collision-resolved names
+   *  (e.g. `project`); the bullet renders whatever `mountPath` the plan resolved. */
   folders: HostLoopFolder[];
   /** Attached-file uploads (the harness's `uploads/<base>` mounts), if any. */
   uploads: HostLoopFolder[];
@@ -56,10 +57,10 @@ export function generateHostLoopShellSection(inp: HostLoopShellInputs): string {
   // sessionRoot → the " — cwd" suffix is always present. Outputs is NOT in plan.mounts; synthesize it.
   const outputsBullet = `- ${sessionRoot} → ${mntRoot}/outputs/  (your outputs directory — cwd)`;
 
-  // Per-folder bullets (asar `te`): `- <hostPath> → <mntRoot>/<.projects/id>/`. We render the harness's
-  // REAL mount path (with the `.projects/` segment); the asar's example used `mnt/<subdir>` — that gap is
-  // a mount-LAYOUT divergence (the harness mounts at mnt/.projects/<id>), documented in the plan, not a
-  // prompt bug. The rendered path must match where files actually are, or bash paths would be wrong.
+  // Per-folder bullets (asar `te`): `- <hostPath> → <mntRoot>/<name>/`. We render the folder's REAL
+  // resolved mount path. For Desktop >= 1.14271.0 that's the bare collision-resolved basename (matching
+  // real Cowork, e.g. `mnt/project`); on legacy baselines it's `mnt/.projects/<name>`. Either way the
+  // rendered path matches where files actually are, so the model's bash paths line up.
   const folderBullets = folders.map((f) => `- ${f.hostPath} → ${mntRoot}/${f.mountPath}/`);
   const te = folderBullets.length > 0 ? folderBullets.join("\n") + "\n" + outputsBullet : outputsBullet;
 

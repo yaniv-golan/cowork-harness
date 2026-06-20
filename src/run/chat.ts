@@ -99,6 +99,11 @@ export async function cmdChat(args: string[]) {
     return chatRaw(folder, model);
   }
 
+  // DECISION (mount-path fidelity work): chat's positional `folder` is the skill/plugin under test, so it
+  // is mounted as a `local_plugins` entry (NOT a work folder) — i.e. it routes through the plugin path
+  // (`mnt/.local-plugins/marketplaces/local-desktop-app-uploads/<name>` on a current baseline). Any folders
+  // the user additionally connects via `folders` get the work-folder path. This is intentional: `chat
+  // <skill-folder>` is a skill harness, not a Spaces folder.
   const session = loadSession({
     model,
     uploads,
@@ -110,7 +115,7 @@ export async function cmdChat(args: string[]) {
   const sessionId = `local_${process.hrtime.bigint().toString(36)}`;
   const outDir = join(runsWriteRoot(), "chat", sessionId);
   mkdirSync(outDir, { recursive: true });
-  const plan = buildLaunchPlan(session, baseline, outDir);
+  const plan = buildLaunchPlan(session, baseline, outDir, fidelity);
   const scenario = Scenario.parse({
     name: "chat",
     baseline: "latest",
@@ -126,13 +131,13 @@ export async function cmdChat(args: string[]) {
   // #43: no process.env mutation — pass proxy/network explicitly so concurrent calls don't stomp.
   // protocol tier runs the host claude binary with no Docker sandbox, so no sidecar is needed.
   const sidecar = fidelity !== "protocol" ? startEgressSidecar(plan.egressAllow, outDir, runToken) : null;
-  const prompts = renderPrompts(baseline, session, sessionId);
+  const prompts = renderPrompts(baseline, session, sessionId, plan.mounts.find((m) => m.kind === "folder")?.mountPath);
 
   log(`cowork chat [${fidelity}] — run: ${sessionId}\n`);
   // Startup summary: show uploads and project folders so the developer knows what the agent sees.
   for (const m of plan.mounts) {
-    if (m.mountPath.startsWith("uploads/")) log(`  upload: ${m.hostPath} → mnt/${m.mountPath}\n`);
-    else if (m.mountPath.startsWith(".projects/")) log(`  folder: ${m.hostPath} → mnt/${m.mountPath}\n`);
+    if (m.kind === "upload") log(`  upload: ${m.hostPath} → mnt/${m.mountPath}\n`);
+    else if (m.kind === "folder") log(`  folder: ${m.hostPath} → mnt/${m.mountPath}\n`);
   }
   log(`type your message (/help for commands)\n`);
 
@@ -278,7 +283,8 @@ function chatRaw(folder: string, model?: string) {
     "-v",
     `${agent}:/usr/local/bin/claude:ro`,
     "-v",
-    `${folder}:/sessions/local/mnt/.local-plugins/cache/skill:ro`,
+    // raw mode runs on `latest` (>=1.14271.0), so use the real Cowork local-plugin path (no `cache/`).
+    `${folder}:/sessions/local/mnt/.local-plugins/marketplaces/local-desktop-app-uploads/skill:ro`,
     "-w",
     "/sessions/local",
     "-e",
@@ -291,7 +297,7 @@ function chatRaw(folder: string, model?: string) {
     image,
     "claude",
     "--plugin-dir",
-    "/sessions/local/mnt/.local-plugins/cache/skill",
+    "/sessions/local/mnt/.local-plugins/marketplaces/local-desktop-app-uploads/skill",
     ...(model ? ["--model", model] : []),
   ];
   const child = spawn(runner, dockerArgs, { stdio: "inherit" });

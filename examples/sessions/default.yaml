@@ -9,9 +9,11 @@ max_thinking_tokens: 8000 # kept low for example cost; real default 31999 (see d
 permission_mode: default # setPermissionMode: default | acceptEdits | plan | bypassPermissions
 permission_parity: cowork # cowork (allow unscripted tool calls, Cowork default) | strict (deny unscripted)
 
-# --- work folders / projects (Cowork "add folder" / Spaces) -> mnt/.projects/<id> ---
+# --- work folders (Cowork "add folder" / Spaces) -> mnt/<name> (>=1.14271.0) or mnt/.projects/<name> (legacy) ---
+# The mount name is ALWAYS derived (collision-resolved basename of the folder, matching real Cowork) —
+# there is no author-chosen name override. `../data/project` mounts at `mnt/project` on a current baseline.
 folders:
-  - { from: ../data/project, to: proj1, mode: rwd }
+  - { from: ../data/project, mode: rwd }
 trusted_folders: # localAgentModeTrustedFolders (mount without a trust prompt)
   - ../data/project
 auto_mount_folders: false # autoMountFolders
@@ -29,7 +31,7 @@ plugins:
   # local_marketplaces: ["../my-marketplace"]  # LOCAL marketplace dirs (each with a marketplace.json)
   enabled: # enabledPlugins (name@marketplace)
     - my-pdf-skill@local
-  local_plugins: # host plugin dirs -> mnt/.local-plugins/cache (marketplace-style)
+  local_plugins: # host plugin dirs -> mnt/.local-plugins/marketplaces/local-desktop-app-uploads/<name> (>=1.14271.0)
     - ../skills/my-pdf-skill
   remote_plugins: [] # host plugin dirs -> mnt/.remote-plugins (org-remote-style)
 

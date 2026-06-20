@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type Cassette, scanCassette, checkStaleness, buildFingerprint } from "../src/run/cassette.js";
+import { type Cassette, scanCassette, checkStaleness, buildFingerprint, CASSETTE_VERSION } from "../src/run/cassette.js";
 
 const scenario = (assert: unknown[], prompt = "hi") => ({
   name: "c",
@@ -200,7 +200,7 @@ describe("checkStaleness — staleness message variants", () => {
     writeFileSync(sessionPath, `skills:\n  local:\n    - ./skill\n`);
 
     const c = {
-      cassetteVersion: 3, // current format — should get the generic contents-changed message
+      cassetteVersion: CASSETTE_VERSION, // current format — should get the generic contents-changed message
       scenario: {
         name: "s",
         baseline: "latest",
@@ -242,7 +242,7 @@ describe("checkStaleness — bucket-named messages (G-4)", () => {
     const fp = buildFingerprint(sessionPath, "99.0.0", root, ["alpha"]);
     writeFileSync(join(root, "plugin", "skills", "alpha", "SKILL.md"), "# alpha v2\n");
     const c = {
-      cassetteVersion: 3,
+      cassetteVersion: CASSETTE_VERSION,
       scenario: {
         name: "alpha-smoke",
         baseline: "99.0.0",
@@ -268,7 +268,7 @@ describe("checkStaleness — bucket-named messages (G-4)", () => {
     const fp = buildFingerprint(sessionPath, "99.0.0", root, ["alpha"]);
     writeFileSync(join(root, "plugin", "scripts", "shared.py"), "x = 99\n");
     const c = {
-      cassetteVersion: 3,
+      cassetteVersion: CASSETTE_VERSION,
       scenario: {
         name: "alpha-smoke",
         baseline: "99.0.0",
@@ -313,7 +313,7 @@ describe("checkStaleness — mixed-mount falls back to generic message", () => {
     writeFileSync(join(root, "extra-skill", "SKILL.md"), "# extra edited\n");
 
     const c = {
-      cassetteVersion: 3,
+      cassetteVersion: CASSETTE_VERSION,
       scenario: {
         name: "alpha-smoke",
         baseline: "99.0.0",

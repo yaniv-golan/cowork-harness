@@ -27,7 +27,7 @@ cowork-harness chat <skill-folder> [prompt] [options]
 | `--fidelity protocol\|container\|hostloop` | `container` (or `$COWORK_HARNESS_FIDELITY`) | Runtime tier (see below). |
 | `--model <id>` | `$COWORK_HARNESS_MODEL` | Override the model; passed as `--model` to the agent binary. |
 | `--upload <file>` | — | Attach a file (repeatable). Visible at `mnt/uploads/<basename>`. |
-| `--folder <dir>` | — | Connect a project folder (repeatable). Visible at `mnt/.projects/<basename>`. Live bind mount — agent writes persist to host. |
+| `--folder <dir>` | — | Connect a project folder (repeatable). Visible at `mnt/<basename>`. Live bind mount — agent writes persist to host. |
 | `--plugin <dir>` | — | Load an additional local plugin alongside the main skill folder (repeatable). Ignored in `--raw` mode. |
 | `--verbose` / `-V` | off | Show thinking blocks, tool inputs, and the full sub-agent tree. Default: tool call markers only. |
 | `--raw` | off | Skip the control protocol; spawns `docker run -it` in native cowork mode. Egress sandbox is NOT applied. `--model`, `--fidelity`, and `--plugin` are ignored. |
@@ -70,10 +70,10 @@ Files and folders are mounted at the same paths the real Cowork client uses:
 | CLI flag | Agent sees |
 |---|---|
 | `--upload ~/data/report.pdf` | `mnt/uploads/report.pdf` |
-| `--folder ~/code/myproject` | `mnt/.projects/myproject` |
+| `--folder ~/code/myproject` | `mnt/myproject` |
 
 `--folder` mounts are live bind mounts: any files the agent writes under
-`mnt/.projects/<basename>` persist to the corresponding host directory.
+`mnt/<basename>` persist to the corresponding host directory.
 
 ### Adding files mid-session
 

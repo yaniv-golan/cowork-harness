@@ -1,10 +1,12 @@
 import { warn } from "./io.js";
 import { z } from "zod";
-import { mkdirSync, writeFileSync, readFileSync, cpSync, existsSync, statSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, cpSync, existsSync, statSync, realpathSync } from "node:fs";
 import { join, resolve, relative, basename, isAbsolute } from "node:path";
 import { homedir } from "node:os";
 import type { PlatformBaseline } from "./types.js";
 import { safePathSegment, safeMountSegment, resolveDeclaredSource } from "./staging/resolve.js";
+import { assignFolderMountNames, RESERVED_MOUNT_NAMES, type MountTier } from "./staging/mount-naming.js";
+import { MOUNT_BARE_NAME_MIN_VERSION, cmpVersionStrings } from "./baseline.js";
 
 /** Clone process env with Cowork's bg-env-strip applied. */
 function strippedEnv(baseline: PlatformBaseline): NodeJS.ProcessEnv {
@@ -24,8 +26,9 @@ function strippedEnv(baseline: PlatformBaseline): NodeJS.ProcessEnv {
  */
 
 const Folder = z.object({
-  from: z.string(), // host path
-  to: z.string().optional(), // project id under .projects/ (defaults to basename)
+  from: z.string(), // host path; the mount name is ALWAYS derived (collision-resolved basename of the
+  // canonical path), matching real Cowork — there is no author-chosen `to:` override (it has no Cowork
+  // analog). For Desktop >= 1.14271.0 the folder mounts at `mnt/<name>`; below it at `mnt/.projects/<name>`.
   // Binary-verified default: Cowork mounts userSelectedFolders `rw` (delete DENIED until approved via
   // fileDeleteApprovedMounts; asar IX resolver). Set `rwd` explicitly to model a delete-approved folder.
   mode: z.enum(["r", "rw", "rwd"]).default("rw"),
@@ -50,7 +53,7 @@ export const SessionConfig = z
     // tools with a finding; strict = deny unmatched (for adversarial tests).
     permission_parity: z.enum(["cowork", "strict"]).default("cowork"),
 
-    // --- work folders / projects (Cowork "add folder" / Spaces) -> mnt/.projects/<id> ---
+    // --- work folders (Cowork "add folder" / Spaces) -> mnt/<name> (>=1.14271.0) or mnt/.projects/<name> (legacy) ---
     folders: z.array(Folder).default([]),
     trusted_folders: z.array(z.string()).default([]), // localAgentModeTrustedFolders
     auto_mount_folders: z.boolean().default(false), // autoMountFolders
@@ -121,6 +124,11 @@ export interface Mount {
   hostPath: string;
   mountPath: string;
   mode: "r" | "rw" | "rwd";
+  /**
+   * Structural discriminator so downstream code (host-loop prompt folder filter, artifact visibility,
+   * chat labels) keys off the KIND rather than fragile `mountPath` string prefixes like `.projects/`.
+   */
+  kind: "folder" | "upload" | "local-plugin" | "remote-plugin" | "marketplace-plugin";
 }
 
 /**
@@ -171,7 +179,12 @@ function readPluginVersion(pluginRoot: string): string | null {
  * stages skills + plugins, and computes mounts + flags. Because the agent we run
  * is the same claude-code binary Cowork stages, this reproduces Cowork's discovery.
  */
-export function buildLaunchPlan(session: SessionConfig, baseline: PlatformBaseline, outDir: string): LaunchPlan {
+export function buildLaunchPlan(
+  session: SessionConfig,
+  baseline: PlatformBaseline,
+  outDir: string,
+  tier: MountTier = "hostloop",
+): LaunchPlan {
   const expand = (p: string) => p.replace(/^~(?=$|\/)/, homedir());
 
   // 1. CLAUDE_CONFIG_DIR — clean managed dir unless the session pins one.
@@ -241,33 +254,60 @@ export function buildLaunchPlan(session: SessionConfig, baseline: PlatformBaseli
     // Uploads model attached FILES; a directory would be copied recursively, diverging from Cowork.
     if (existsSync(src) && !statSync(src).isFile())
       throw new Error(`upload "${src}" is a directory; uploads model attached files. Use folders: for a directory mount.`);
-    mounts.push({ hostPath: src, mountPath: `uploads/${safePathSegment(basename(src), "upload basename")}`, mode: "r" });
+    mounts.push({ hostPath: src, mountPath: `uploads/${safePathSegment(basename(src), "upload basename")}`, mode: "r", kind: "upload" });
   }
-  for (const f of session.folders) {
+  // Work folders. Real Cowork (Desktop >= MIN) mounts each connected folder at `mnt/<name>` where
+  // `<name>` is a collision-resolved BASENAME of the folder's CANONICAL path (no author override, no
+  // `.projects/` parent). Below MIN we keep the legacy `.projects/<basename>` shape (unverified older
+  // builds — gated, not churned). There is NO `to:` override: names are always derived (faithful).
+  const bareNames = cmpVersionStrings(baseline.appVersion, MOUNT_BARE_NAME_MIN_VERSION) >= 0;
+  // Canonicalize (realpath) to match real Cowork's `Os()`=canonical; fall back to the expanded path
+  // when the source is missing (softMissing/deferred) so naming still works.
+  const canon = (p: string) => {
+    try {
+      return realpathSync(p);
+    } catch {
+      return p;
+    }
+  };
+  const folderCanon = session.folders.map((f) => canon(expand(f.from)));
+  const nameByCanon = bareNames ? assignFolderMountNames(folderCanon, tier) : null;
+  for (let i = 0; i < session.folders.length; i++) {
+    const f = session.folders[i];
     const src = expand(f.from);
-    // a folder models a workspace DIRECTORY copied into `.projects/<id>`; a file source would
-    // be copied as a lone file, diverging from Cowork. The resolver kind-checks only when the source
-    // EXISTS — a missing source is deferred to the post-loop missing-mount check (softMissing-aware), so
-    // a wrong-kind source fails loud but a missing one is reconciled later.
-    // A folder `to` (or the default basename) is interpolated into `.projects/<id>` — validate it as a
-    // single safe segment so neither `to: ../../x` nor a `from` whose basename is ".." escapes .projects.
-    const id = f.to ? safePathSegment(f.to, "folder `to`") : safePathSegment(basename(src), "folder default id (from basename)");
-    mounts.push(
-      resolveDeclaredSource(src, `.projects/${id}`, f.mode, "dir", { softMissing, deferMissing: true, what: `folder "${f.from}"` })!,
-    );
+    // a folder models a workspace DIRECTORY; a file source would be copied as a lone file, diverging
+    // from Cowork. The resolver kind-checks only when the source EXISTS — a missing source is deferred
+    // to the post-loop missing-mount check (softMissing-aware).
+    const mountPath = bareNames
+      ? safePathSegment(nameByCanon!.get(folderCanon[i])!, "folder mount name")
+      : `.projects/${safePathSegment(basename(src), "folder default id (from basename)")}`;
+    mounts.push({
+      ...resolveDeclaredSource(src, mountPath, f.mode, "dir", { softMissing, deferMissing: true, what: `folder "${f.from}"` })!,
+      kind: "folder",
+    });
   }
   for (const p of session.plugins.local_plugins) {
     const src = expand(p);
     // a plugin root is a DIRECTORY (mounted as a --plugin-dir); a file source would yield a
     // bogus --plugin-dir. Kind-check only when present (missing deferred to the post-loop check).
-    const mountPath = `.local-plugins/cache/${safePathSegment(basename(src), "local_plugin basename")}`;
-    mounts.push(resolveDeclaredSource(src, mountPath, "r", "dir", { softMissing, deferMissing: true, what: `local_plugin "${p}"` })!);
+    // Real Cowork (>= MIN) mounts ALL local-class plugins under `.local-plugins/marketplaces/<mp>/<plugin>`;
+    // a user-added local dir maps to the synthetic `local-desktop-app-uploads` marketplace. No `cache/`, no
+    // version segment. Below MIN, keep the legacy `.local-plugins/cache/<base>` shape (gated, unverified).
+    const leaf = safePathSegment(basename(src), "local_plugin basename");
+    const mountPath = bareNames ? `.local-plugins/marketplaces/local-desktop-app-uploads/${leaf}` : `.local-plugins/cache/${leaf}`;
+    mounts.push({
+      ...resolveDeclaredSource(src, mountPath, "r", "dir", { softMissing, deferMissing: true, what: `local_plugin "${p}"` })!,
+      kind: "local-plugin",
+    });
   }
   for (const p of session.plugins.remote_plugins) {
     const src = expand(p);
     // same as local_plugins — a remote-plugin root is a directory; kind-check when present.
     const mountPath = `.remote-plugins/${safePathSegment(basename(src), "remote_plugin basename")}`;
-    mounts.push(resolveDeclaredSource(src, mountPath, "r", "dir", { softMissing, deferMissing: true, what: `remote_plugin "${p}"` })!);
+    mounts.push({
+      ...resolveDeclaredSource(src, mountPath, "r", "dir", { softMissing, deferMissing: true, what: `remote_plugin "${p}"` })!,
+      kind: "remote-plugin",
+    });
   }
   // Local marketplaces: resolve enabled `name@marketplace` plugins to --plugin-dir.
   // The agent loads plugins via --plugin-dir, not the marketplace registry (inert in
@@ -361,7 +401,13 @@ export function buildLaunchPlan(session: SessionConfig, baseline: PlatformBaseli
       safeMountSegment(mktName, "marketplace name");
       safeMountSegment(pName, "plugin name");
       safeMountSegment(version, "plugin version");
-      mounts.push({ hostPath: pluginSrc, mountPath: `.local-plugins/cache/${mktName}/${pName}/${version}`, mode: "r" });
+      // Real Cowork (>= MIN): `.local-plugins/marketplaces/<marketplaceName>/<pluginName>` (NO `cache/`, NO
+      // version segment — the `<mkt>/<plugin>` pair is the natural collision-free disambiguator). Legacy
+      // keeps the harness's synthetic 3-level `cache/<mkt>/<plugin>/<version>` shape (gated).
+      const mountPath = bareNames
+        ? `.local-plugins/marketplaces/${mktName}/${pName}`
+        : `.local-plugins/cache/${mktName}/${pName}/${version}`;
+      mounts.push({ hostPath: pluginSrc, mountPath, mode: "r", kind: "marketplace-plugin" });
       resolvedEnabled.add(en);
     }
   }
@@ -409,12 +455,22 @@ export function buildLaunchPlan(session: SessionConfig, baseline: PlatformBaseli
 
   // #21: two sources mapping to the same destination would silently overwrite during staging. Fail
   // before staging, naming the collision, so a same-basename upload/plugin pair can't clobber.
-  const seenDest = new Set<string>();
+  // Seed with the RESERVED special-dir names + the harness's fixed staged dirs (`.claude`): under the VM
+  // tier `fy` does NOT reserve these, so a user folder literally named e.g. `outputs` resolves to bare
+  // `outputs` and would otherwise shadow the fixed scratch dir. Seeding makes it trip this guard loudly
+  // (stricter-than-real-Cowork, which silently shadows — documented divergence). Host-loop `hL` already
+  // bumps such folders via the reserved seed, so they never collide there.
+  const FIXED_MOUNT_DIRS = [...RESERVED_MOUNT_NAMES, ".claude"];
+  const seenDest = new Set<string>(FIXED_MOUNT_DIRS);
   for (const m of presentMounts) {
-    if (seenDest.has(m.mountPath))
+    if (seenDest.has(m.mountPath)) {
+      const reserved = (FIXED_MOUNT_DIRS as string[]).includes(m.mountPath);
       throw new Error(
-        `duplicate mount destination "${m.mountPath}" — two sources map to it (they would overwrite). Rename or qualify one.`,
+        reserved
+          ? `mount destination "${m.mountPath}" collides with a reserved Cowork mount — a connected folder resolved to a fixed special-dir name. Rename the folder.`
+          : `duplicate mount destination "${m.mountPath}" — two sources map to it (they would overwrite). Rename or qualify one.`,
       );
+    }
     seenDest.add(m.mountPath);
   }
 
@@ -429,7 +485,7 @@ export function buildLaunchPlan(session: SessionConfig, baseline: PlatformBaseli
   // 7. plugin roots (--plugin-dir) as guest-relative paths under mnt. #22: derive from PRESENT mounts
   // only, so a soft-missing (excluded) plugin source never yields a --plugin-dir to a non-existent path.
   const pluginDirs = presentMounts
-    .filter((m) => m.mountPath.startsWith(".local-plugins/cache/") || m.mountPath.startsWith(".remote-plugins/"))
+    .filter((m) => m.kind === "local-plugin" || m.kind === "remote-plugin" || m.kind === "marketplace-plugin")
     .map((m) => m.mountPath);
 
   if (session.extended_thinking !== undefined) {

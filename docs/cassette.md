@@ -22,11 +22,13 @@ Use a live `run` for filesystem/egress assertions; use `replay` for the token-fr
 
 ```jsonc
 {
-  "cassetteVersion": 2,                  // format version; ABSENT = legacy (0); a FUTURE version warns
+  "cassetteVersion": 4,                  // format version; ABSENT = legacy (0); a FUTURE version warns
+                                         //   (v4 adds userVisibleRoots — the actual visible mount set)
   "scenario": { /* Scenario object — same schema as the .yaml */ },
   "events": [ /* JSON lines from events.jsonl (child→driver stdout) */ ],
   "controlOut": [ /* JSON lines from control-out.jsonl (driver→child control_responses) */ ],
-  "artifacts": [                         // snapshot of outputs/ + .projects/ (optional)
+  "userVisibleRoots": ["outputs/", "project/"], // visible roots = outputs/ + each connected folder's mount name
+  "artifacts": [                         // snapshot of outputs/ + connected folders (optional)
     { "path": "outputs/x.json", "bytes": 24, "sha256": "…", "body": "{…}" }, // body inlined ≤ 64 KiB
     { "path": "outputs/big.bin", "bytes": 9e6, "sha256": "…", "truncated": true } // oversized → hash-only
   ],
@@ -167,7 +169,7 @@ vacuously passed — and a loud warning fires (see §Backward compatibility).
 ### Filesystem assertions — replay-checkable WITH an artifact manifest
 
 `file_exists`, `user_visible_artifact`, and `artifact_json` run on replay **when the cassette carries an
-`artifacts` manifest** — `record` snapshots `outputs/`/`.projects/` and `replay` materializes that snapshot
+`artifacts` manifest** — `record` snapshots `outputs/` + connected folders and `replay` materializes that snapshot
 to evaluate them token-free. `artifact_json` needs the JSON `body` inlined (small files); a hash-only
 (`truncated`) entry still satisfies `file_exists` but not `artifact_json`. The inline cap is 64 KiB; raise it
 with `record --max-artifact-bytes <n>` (or `COWORK_HARNESS_MAX_ARTIFACT_BYTES`) so a large structured deliverable

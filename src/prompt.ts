@@ -24,18 +24,28 @@ export interface RenderedPrompts {
   fidelityWarnings?: string[];
 }
 
-export function renderPrompts(baseline: PlatformBaseline, session: SessionConfig, sessionId: string): RenderedPrompts {
+export function renderPrompts(
+  baseline: PlatformBaseline,
+  session: SessionConfig,
+  sessionId: string,
+  /**
+   * The mnt-relative mount path of the first connected work folder (from `plan.mounts`), e.g. `project`
+   * (gated, >=1.14271.0) or `.projects/project` (legacy). Passed by the caller so `{{workspaceFolder}}`
+   * uses the ACTUAL resolved+gated mount name and can never drift from where the folder is really mounted.
+   * Undefined when no folder is connected.
+   */
+  firstFolderMountPath?: string,
+): RenderedPrompts {
   const spawn = baseline.spawn;
   if (!spawn) return {};
   const sessionRoot = `/sessions/${sessionId}`;
   const mntRoot = `${sessionRoot}/mnt`;
-  const firstFolder = session.folders[0]?.to ?? (session.folders[0]?.from ? basenameish(session.folders[0].from) : undefined);
-  const workspaceFolder = firstFolder ? `${mntRoot}/.projects/${firstFolder}` : `${mntRoot}/outputs`;
+  const workspaceFolder = firstFolderMountPath ? `${mntRoot}/${firstFolderMountPath}` : `${mntRoot}/outputs`;
   const tokens: Record<string, string> = {
     "{{cwd}}": sessionRoot,
     "{{skillsDir}}": `${mntRoot}/.claude`,
     "{{workspaceFolder}}": workspaceFolder,
-    "{{folderSelected}}": firstFolder ? "true" : "false",
+    "{{folderSelected}}": firstFolderMountPath ? "true" : "false",
     "{{modelName}}": session.model ?? "Claude",
   };
   const subst = (s: string) => Object.entries(tokens).reduce((acc, [k, v]) => acc.split(k).join(v), s);
@@ -66,7 +76,4 @@ export function renderPrompts(baseline: PlatformBaseline, session: SessionConfig
 
 function stripComments(s: string): string {
   return s.replace(/<!--[\s\S]*?-->/g, "");
-}
-function basenameish(p: string): string {
-  return p.replace(/\/+$/, "").split("/").pop() ?? p;
 }

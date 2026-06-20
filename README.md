@@ -42,7 +42,7 @@ A skill's behavior under Cowork is determined by four things, all reproducible o
 | Dimension | What Cowork does | How we reproduce it | Fidelity |
 |---|---|---|---|
 | **Agent** | Spawns the staged in-VM agent `claude-code-vm/<ver>/claude` in cowork mode (`CLAUDE_CODE_IS_COWORK=1` env — there is no `--cowork` flag) | Run the **same pinned agent**, **bind-mounted** from your Claude Desktop install's staged Linux/arm64 ELF (no npm path; override with `COWORK_AGENT_BINARY`) | **High** — same binary contract |
-| **Mounts** | `/sessions/<id>/mnt/{uploads,.projects/<id>,.local-plugins,.remote-plugins}` | Recreate the same paths as bind mounts; skill-under-test discovered at the plugin mount, same as Cowork | **High** — same discovery path |
+| **Mounts** | `/sessions/<id>/mnt/{uploads,<folder-name>,.local-plugins,.remote-plugins}` (work folders mount at the collision-resolved folder basename; ≥1.14271.0, older baselines use `.projects/<id>`) | Recreate the same paths as bind mounts; skill-under-test discovered at the plugin mount, same as Cowork | **High** — same discovery path |
 | **Egress** | gVisor netstack with a compiled domain allowlist (`vmAllowedDomains()` + `coworkEgressAllowedHosts`) | Default-deny egress proxy enforcing the **synced** allowlist | **Med-High** — allowlist-exact, transport-approximate |
 | **Permissions / questions** | `onToolPermissionRequest` → `respondToToolPermission`; AskUserQuestion answered by the UI | The **Agent SDK `can_use_tool` control protocol** — the exact same channel — answered by your scenario script | **High** — same protocol Desktop uses |
 
@@ -317,13 +317,13 @@ max_thinking_tokens: 8000
 permission_mode: default
 permission_parity: cowork                   # cowork (allow unscripted tool calls, the default) | strict (deny unscripted)
 folders:
-  - { from: ~/code/myproject, to: proj1 }   # a work folder / Space -> mnt/.projects/proj1
+  - { from: ~/code/myproject }              # a work folder / Space -> mnt/myproject (collision-resolved basename)
 uploads:
   - ~/Downloads/report.pdf                  # -> mnt/uploads
 plugins:
   marketplaces: ["https://github.com/anthropics/claude-code.git"]
   # local_marketplaces: ["../my-marketplace"]  # LOCAL marketplace dirs (each with a marketplace.json)
-  local_plugins: ["../skills/my-pdf-skill"] # mounted at mnt/.local-plugins/cache under the synthetic "local" marketplace
+  local_plugins: ["../skills/my-pdf-skill"] # mounted at mnt/.local-plugins/marketplaces/local-desktop-app-uploads/<name>
   enabled: ["my-pdf-skill@local"]           # name@marketplace: a local_plugins entry is referenced as <plugin>@local
 mcp:
   config: ../data/mcp.json                  # standard mcpServers map (--mcp-config) — the way to attach an MCP server
@@ -345,7 +345,7 @@ The agent we run **is** `claude-code` (the same binary Cowork stages in `claude-
 
 | Kind | Real root | How the harness populates it | Override |
 |---|---|---|---|
-| Plugins / marketplaces | `CLAUDE_CONFIG_DIR/plugins`, `plugin_marketplaces` + Cowork mounts `.local-plugins/cache`, `.remote-plugins` | session `plugins.local_plugins`/`remote_plugins` → mounted at those paths; `marketplaces`/`local_marketplaces`/`enabled` → `settings.json` | point `plugins.config_dir` at a test dir |
+| Plugins / marketplaces | `CLAUDE_CONFIG_DIR/plugins`, `plugin_marketplaces` + Cowork mounts `.local-plugins/marketplaces/<marketplace>/<plugin>` (≥1.14271.0; older baselines use `.local-plugins/cache`), `.remote-plugins` | session `plugins.local_plugins`/`remote_plugins` → mounted at those paths; `marketplaces`/`local_marketplaces`/`enabled` → `settings.json` | point `plugins.config_dir` at a test dir |
 | Skills | `CLAUDE_CONFIG_DIR/skills` + skills inside plugins | session `skills.local` staged into the config dir; plugin skills discovered at the mount | swap the config dir or local dirs |
 | MCP servers | `.mcp.json` / `--mcp-config`, `enabledMcpjsonServers` | session `mcp.config` → `--mcp-config`; `mcp.enabled` → `settings.json` | use a test `mcp.json` |
 
@@ -388,7 +388,7 @@ Secrets (the injected OAuth token / API key) are scrubbed from every persisted l
                       │  Agent:  claude -p   (CLAUDE_CODE_IS_COWORK=1) │
                       │    --input-format / --output-format stream-json│
                       │    cwd = /sessions/<id>/mnt                    │
-                      │    mnt/uploads · mnt/.projects/* · plugins     │
+                      │    mnt/uploads · mnt/<folder-name> · plugins   │
                       └───────────────────────┬────────────────────────┘
             decision control request          │  outbound network (egress)
             (tool · question · dialog)        │  default-deny → allowlist
@@ -540,7 +540,7 @@ This repo is built to be driven by agents, not just read by humans:
 - ✅ **Answer delivery is verified, not assumed** — an AskUserQuestion answer is injected as the binary's full tool input (`{questions, answers}`, ELF-verified), so the answer actually reaches the model; `RunResult.gateDeliveries[]` + the `gate_answers_delivered` assertion catch any delivery failure, and `RunResult.toolCounts` gives the **truthful** per-tool call count (host-routed `WebSearch` shows here, not the always-0 `usage.server_tool_use`).
 - ✅ **Binary-grounded fidelity** — cwd `/sessions/<id>`, the three-channel MCP model (`--mcp-config` honored in plain cowork mode; host/API-routed `web_fetch`; SDK-server delivery), host-loop tool partition, auth-env token-only drop, and production GrowthBook gates pinned per release.
 - ✅ The agent binary is **bind-mounted from your own install** at run time — nothing Anthropic-owned is in any image or distributed.
-- ✅ **File provision & session resume** — `--upload <file>` / `--folder <dir>` attach files & connect folders (`mnt/uploads`, `mnt/.projects`); `--session-id <id>` + `--resume` persist and continue a session via the agent's *native* resume (binary-verified), so checkpoint-and-resume gated skills are testable. Demonstrated end-to-end in the live-contract suite (`test/live-contract.test.ts`: codeword established → resumed → recalled).
+- ✅ **File provision & session resume** — `--upload <file>` / `--folder <dir>` attach files & connect folders (`mnt/uploads`, `mnt/<folder-name>`); `--session-id <id>` + `--resume` persist and continue a session via the agent's *native* resume (binary-verified), so checkpoint-and-resume gated skills are testable. Demonstrated end-to-end in the live-contract suite (`test/live-contract.test.ts`: codeword established → resumed → recalled).
 - ✅ **The full unit suite + the live-contract suite green**; a `cowork` pytest lane (`python/`) for skill authors.
 - ℹ️ **Auth:** a `claude setup-token` OAuth token (or `ANTHROPIC_API_KEY`), provided via the env, `--dotenv <path>`, `./.env`, or the install's own `.env` (gitignored; keep it out of mounted folders). It's passed into the sandbox **off the process argv** (Docker: `-e KEY` inherit-by-name; microVM: a stdin prologue) so the token isn't visible via `ps`/`/proc`, scrubbed from logs, never persisted in a runtime path; the token-only path mirrors the desktop. A fresh `CLAUDE_CONFIG_DIR` alone breaks local OAuth.
 

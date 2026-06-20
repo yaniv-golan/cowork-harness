@@ -58,6 +58,36 @@ function keptRunWithEmptyTranscript(): string {
   return root;
 }
 
+/** Kept-run dir with a file written into a connected work folder mounted at the BARE name `project`.
+ *  `withRoots` controls whether result.json persists userVisibleRoots (the new field) or omits it. */
+function keptRunWithFolder(withRoots: boolean): string {
+  const root = mkdtempSync(join(tmpdir(), "cwh-vrf-"));
+  const workDir = join(root, "work", "session", "mnt");
+  mkdirSync(join(workDir, "project"), { recursive: true });
+  writeFileSync(join(workDir, "project", "summary.md"), "MOUNTOK");
+  const result: Record<string, unknown> = {
+    scenario: "folder",
+    fidelity: "cowork",
+    baseline: "desktop-1.14271.0",
+    result: "success",
+    decisions: [],
+    toolCounts: { Write: 1 },
+    gateDeliveries: [],
+    egress: [],
+    assertions: [],
+    subagents: [],
+    outDir: root,
+    workDir,
+    durationMs: 1,
+    scan: { outputsDeletes: [], hostPathLeaked: false, selfHealRan: false },
+  };
+  if (withRoots) result.userVisibleRoots = ["outputs", "project"];
+  writeFileSync(join(root, "result.json"), JSON.stringify(result, null, 2));
+  writeFileSync(join(root, "run.jsonl"), JSON.stringify({ t: "run", scenario: "folder" }) + "\n");
+  writeFileSync(join(root, "trace.json"), JSON.stringify({ questions: [], steps: ["Write"] }));
+  return root;
+}
+
 function scenarioFile(dir: string, assertYaml: string): string {
   const f = join(dir, "scenario.yaml");
   writeFileSync(f, `name: smoke\nprompt: do the thing\nfidelity: container\nassert:\n${assertYaml}`);
@@ -83,6 +113,22 @@ describe.skipIf(!can)("F-1: verify-run re-asserts a kept run dir without a live 
     const { code, text } = verifyRun(run, sc);
     expect(text).toContain("verify-run: all");
     expect(code).toBe(0);
+  });
+
+  it("verify lane: user_visible_artifact under a BARE folder name passes via persisted userVisibleRoots", () => {
+    const run = keptRunWithFolder(true);
+    const sc = scenarioFile(run, "  - user_visible_artifact: project/summary.md");
+    const { code, text } = verifyRun(run, sc);
+    expect(text).toContain("verify-run: all");
+    expect(code).toBe(0);
+  });
+
+  it("verify lane: the SAME artifact FAILS when userVisibleRoots is absent (legacy `.projects` fallback)", () => {
+    // Proves the persisted roots are load-bearing: without them the bare-named folder file is invisible.
+    const run = keptRunWithFolder(false);
+    const sc = scenarioFile(run, "  - user_visible_artifact: project/summary.md");
+    const { code } = verifyRun(run, sc);
+    expect(code).toBe(1);
   });
 
   it("FAILS (exit 1) when an assertion is wrong — and flips back to pass when corrected, no re-record", () => {

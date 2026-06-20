@@ -297,8 +297,15 @@ export interface RunResult {
   outDir: string;
   workDir?: string; // the agent's working root (mnt/) inside the run dir — where the agent's FS lives
   outputsDir?: string; // the user-visible deliverable mount (mnt/outputs) — where a skill's artifacts land
-  // ENV-MANIFEST: files written under the user-visible prefixes (outputs/, .projects/), relative paths +
-  // sizes. Paths only (no content snapshot — that is the cassette manifest, #1). Kills path-guessing and
+  /**
+   * The user-visible mount roots (relative to mnt/) for this run — `outputs` plus each connected work
+   * folder's resolved mount name. Persisted so the plan-less lanes (verify reads result.json; replay reads
+   * the cassette) derive `user_visible_artifact` from the ACTUAL mount set instead of a hardcoded
+   * `["outputs",".projects"]` prefix list. Plugins are NOT here (read-only inputs, never artifact roots).
+   */
+  userVisibleRoots?: string[];
+  // ENV-MANIFEST: files written under the user-visible roots (outputs/ + connected folders), relative paths
+  // + sizes. Paths only (no content snapshot — that is the cassette manifest, #1). Kills path-guessing and
   // makes an all-or-nothing truncated run (empty manifest) detectable. NOT sufficient for mid-write truncation.
   artifacts?: { path: string; bytes: number }[];
   nonDeterministic?: boolean; // true if any decision was made by a non-deterministic source (by:"llm"|"external"|"human"|"first") — a green run is NOT reproducible (#47)

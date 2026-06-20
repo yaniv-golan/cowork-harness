@@ -120,6 +120,26 @@ describe("false-green catchers (deterministic)", () => {
     expect(pass(evaluate([{ user_visible_artifact: "tmp/b.md" }], c))).toBe(false);
   });
 
+  it("user_visible_artifact honors DERIVED folder roots (bare name), not a hardcoded .projects prefix", () => {
+    // A file written into a connected work folder that mounts at the bare name `project` (gated). Visibility
+    // must come from the run's derived userVisibleRoots, NOT a fixed `.projects/` prefix.
+    const work = mkdtempSync(join(tmpdir(), "cowork-assert-uvr-"));
+    mkdirSync(join(work, "project"), { recursive: true });
+    writeFileSync(join(work, "project", "report.md"), "x");
+    // with the derived root present → visible
+    expect(
+      pass(
+        evaluate([{ user_visible_artifact: "project/report.md" }], ctx({ workRoot: work, userVisiblePrefixes: ["outputs", "project"] })),
+      ),
+    ).toBe(true);
+    // with only the legacy default → the bare-named folder file is INVISIBLE (proves derivation matters)
+    expect(
+      pass(
+        evaluate([{ user_visible_artifact: "project/report.md" }], ctx({ workRoot: work, userVisiblePrefixes: ["outputs", ".projects"] })),
+      ),
+    ).toBe(false);
+  });
+
   it("no_delete_in_outputs: flags any delete touching outputs", () => {
     expect(pass(evaluate([{ no_delete_in_outputs: true }], ctx({ outputsDeletes: [] })))).toBe(true);
     expect(pass(evaluate([{ no_delete_in_outputs: true }], ctx({ outputsDeletes: ["rm outputs/x"] })))).toBe(false);
@@ -328,5 +348,23 @@ describe("file_exists / user_visible_artifact pass on truncated cassette entries
   it("file_exists and artifact_json both pass for a small (inlined) entry", () => {
     expect(pass(evaluate([{ file_exists: "outputs/small.json" }], base))).toBe(true);
     expect(pass(evaluate([{ artifact_json: { artifact: "outputs/small.json", path: "ok", equals: true } }], base))).toBe(true);
+  });
+});
+
+describe("replay lane: user_visible_artifact honors the cassette's stored userVisibleRoots (v4)", () => {
+  const body = '{"ok":true}';
+  const sha = createHash("sha256").update(Buffer.from(body)).digest("hex");
+  const entries = [{ path: "project/report.md", bytes: body.length, sha256: sha, body }];
+
+  it("a file under a BARE folder root is visible when the cassette's roots include it", () => {
+    // materializeManifest is the replay path; it now takes the stored roots and returns them as `prefixes`.
+    const { workRoot, prefixes } = materializeManifest(entries, ["outputs", "project"]);
+    expect(prefixes).toContain("project");
+    expect(pass(evaluate([{ user_visible_artifact: "project/report.md" }], ctx({ workRoot, userVisiblePrefixes: prefixes })))).toBe(true);
+  });
+
+  it("the SAME file is INVISIBLE under the legacy default roots (proves the stored field is load-bearing)", () => {
+    const { workRoot, prefixes } = materializeManifest(entries); // default ["outputs",".projects"]
+    expect(pass(evaluate([{ user_visible_artifact: "project/report.md" }], ctx({ workRoot, userVisiblePrefixes: prefixes })))).toBe(false);
   });
 });

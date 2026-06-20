@@ -74,8 +74,12 @@ export interface Cassette {
   events: string[]; // recorded child→driver stdout (events.jsonl) — the cassette source
   controlOut?: string[]; // driver→child control_responses (control-out.jsonl) — for full-fidelity replay
   effectiveFidelity?: string; // the tier the live record actually resolved to (e.g. cowork → hostloop)
-  artifacts?: ManifestEntry[]; // #1: outputs/.projects snapshot (paths + hashes + small JSON bodies)
+  artifacts?: ManifestEntry[]; // #1: user-visible-roots snapshot (paths + hashes + small JSON bodies)
   fingerprint?: Fingerprint; // #1b: cassette→skill/baseline staleness tripwire
+  // v4: the user-visible mount roots captured at record time (`outputs` + each connected folder's resolved
+  // mount name). Replay reads THIS instead of a hardcoded `["outputs",".projects"]` prefix — folder mount
+  // names are dynamic/gated. ABSENT on pre-v4 cassettes → replay falls back to the legacy prefix.
+  userVisibleRoots?: string[];
 }
 
 /** Current cassette format version. Readers tolerate ABSENT (legacy → 0) and warn on a FUTURE version. */
@@ -84,7 +88,11 @@ export interface Cassette {
 // whole-tree and mis-flag a scoped cassette as stale; the version lets such a reader warn instead.
 // v3: adds `contentSig` to Fingerprint — an algorithm-independent content fingerprint that survives
 // hash-algorithm changes, enabling `rehash` to migrate cassettes without a full re-record.
-const CASSETTE_VERSION = 3;
+// v4: persists `userVisibleRoots` (outputs + resolved folder mount names) so replay derives
+// user_visible_artifact from the real mount set instead of a hardcoded `.projects/` prefix. A folder-
+// artifact cassette recorded pre-v4 has no folder root stored → must be RE-RECORDED, not rehashed
+// (rehash only re-hashes skill fingerprints; it cannot reconstruct folder names).
+export const CASSETTE_VERSION = 4;
 
 /** Canonical URL of the JSON Schema for this cassette format version.
  *  Appears in every written cassette as `$schema` so editors and unfamiliar readers
@@ -127,9 +135,9 @@ function isLosslessUtf8(buf: Buffer): boolean {
 
 /** #1: snapshot the user-visible artifacts under `workRoot` into manifest entries.
  *  Exported for token-free record→replay round-trip tests. */
-export function buildManifest(workRoot: string, cap?: number): ManifestEntry[] {
+export function buildManifest(workRoot: string, cap?: number, roots: string[] = ["outputs", ".projects"]): ManifestEntry[] {
   const limit = cap ?? defaultBodyCap();
-  return collectArtifacts(workRoot, ["outputs", ".projects"]).map(({ path, bytes }) => {
+  return collectArtifacts(workRoot, roots).map(({ path, bytes }) => {
     // collectArtifacts paths are derived from a directory walk; even though it already skips symlinks,
     // an entry must not inline content outside the work root. Re-confirm containment before reading the body.
     let abs: string;
@@ -166,7 +174,10 @@ function decodeBody(e: ManifestEntry): Buffer {
  *  only artifact_json fails loud (it needs the inlined body). each path is containment-checked before
  *  writing so a hostile cassette entry can't escape the temp root. every non-truncated body is verified
  *  against its recorded sha256 (over the decoded RAW bytes) — a mismatch fails replay (throws). */
-export function materializeManifest(entries: ManifestEntry[]): { workRoot: string; prefixes: string[]; truncatedPaths: Set<string> } {
+export function materializeManifest(
+  entries: ManifestEntry[],
+  roots: string[] = ["outputs", ".projects"],
+): { workRoot: string; prefixes: string[]; truncatedPaths: Set<string> } {
   const workRoot = mkdtempSync(join(tmpdir(), "cwh-replay-"));
   const truncatedPaths = new Set<string>();
   for (const e of entries) {
@@ -186,7 +197,7 @@ export function materializeManifest(entries: ManifestEntry[]): { workRoot: strin
     writeFileSync(abs, raw);
     if (e.truncated) truncatedPaths.add(relative(resolve(workRoot), abs));
   }
-  return { workRoot, prefixes: ["outputs", ".projects"], truncatedPaths };
+  return { workRoot, prefixes: roots, truncatedPaths };
 }
 
 /** #1b: the local skill/plugin/marketplace source dirs a session mounts — the "skill dir" hash unit.
@@ -1083,7 +1094,10 @@ async function recordScenarioObject(
   // (covering the base64(prefix+TOKEN+suffix) case), the entire body is replaced with a redaction marker,
   // `encoding` is cleared (marker is plain text), and sha256 is recomputed so replay verification stays
   // intact. Artifact assertions on a redacted binary body will fail at replay — the ::warning:: flags this.
-  const artifacts = (result.workDir ? buildManifest(result.workDir, opts.maxArtifactBytes) : []).map((a) => {
+  // Snapshot under the run's REAL user-visible roots (outputs + resolved folder mount names), persisted
+  // below as cassette.userVisibleRoots so replay matches — not the legacy hardcoded `.projects/` prefix.
+  const recordRoots = result.userVisibleRoots ?? ["outputs", ".projects"];
+  const artifacts = (result.workDir ? buildManifest(result.workDir, opts.maxArtifactBytes, recordRoots) : []).map((a) => {
     if (a.body === undefined) return a;
     if (a.encoding === "base64") {
       const scrubbed = scrubField(a.body, secrets);
@@ -1127,6 +1141,7 @@ async function recordScenarioObject(
     controlOut: safeLines(join(result.outDir, "control-out.jsonl")),
     effectiveFidelity: result.effectiveFidelity,
     artifacts,
+    userVisibleRoots: recordRoots,
     fingerprint: buildFingerprint(scenario.session, result.baseline, undefined, scenario.skills),
   };
   // A1 (opt-in) content redaction over the whole surface (C1). Empty policy → no-op. Non-empty → must be
@@ -1674,7 +1689,7 @@ export async function replayCassette(
     prefixes: replayPrefixes,
     truncatedPaths: replayTruncatedPaths,
   } = manifestKeys.length
-    ? materializeManifest(cassette.artifacts!)
+    ? materializeManifest(cassette.artifacts!, cassette.userVisibleRoots ?? ["outputs", ".projects"])
     : { workRoot: "", prefixes: [] as string[], truncatedPaths: new Set<string>() };
   const contentKeys: (keyof Assertion)[] = [
     ...(session.hasControlOut ? [...alwaysContentKeys, ...questionGateKeys] : alwaysContentKeys),

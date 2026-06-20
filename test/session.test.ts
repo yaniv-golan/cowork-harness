@@ -17,8 +17,10 @@ function plan(sessionObj: unknown) {
 }
 
 describe("WS-B — mount / path safety", () => {
-  it("#19 — a folder `to` with traversal is rejected", () => {
-    expect(() => plan({ folders: [{ from: "./examples/data/project", to: "../escape" }] })).toThrow(/unsafe folder/);
+  it("#19 — a folder whose derived name is an unsafe segment is rejected", () => {
+    // `to:` was removed (no Cowork analog) — names are always derived from the basename. A `from` whose
+    // basename is unsafe (e.g. "..") must still be rejected by safePathSegment on the derived name.
+    expect(() => plan({ folders: [{ from: "./examples/data/project/.." }] })).toThrow(/unsafe folder/);
   });
   it("#21 — duplicate mount destinations fail before staging", () => {
     expect(() => plan({ uploads: ["./examples/data/report.pdf", "./examples/data/report.pdf"] })).toThrow(/duplicate mount destination/);
@@ -30,10 +32,11 @@ describe("WS-B — mount / path safety", () => {
     const prev = process.env.COWORK_HARNESS_SOFT_MISSING;
     process.env.COWORK_HARNESS_SOFT_MISSING = "1";
     try {
-      const { plan: p } = plan({ uploads: ["./does/not/exist.pdf"], folders: [{ from: "./examples/data/project", to: "proj1" }] });
+      const { plan: p } = plan({ uploads: ["./does/not/exist.pdf"], folders: [{ from: "./examples/data/project" }] });
       const paths = p.mounts.map((m) => m.mountPath);
       expect(paths).not.toContain("uploads/exist.pdf"); // missing source excluded
-      expect(paths).toContain(".projects/proj1"); // present source kept
+      // legacy baseline (1.11847.5) → derived `.projects/<basename>`; `to:` removed
+      expect(paths).toContain(".projects/project"); // present source kept
     } finally {
       if (prev === undefined) delete process.env.COWORK_HARNESS_SOFT_MISSING;
       else process.env.COWORK_HARNESS_SOFT_MISSING = prev;
@@ -77,12 +80,13 @@ describe("buildLaunchPlan", () => {
   it("mounts uploads, projects and plugins at the Cowork paths", () => {
     const { plan: p } = plan({
       uploads: ["./examples/data/report.pdf"],
-      folders: [{ from: "./examples/data/project", to: "proj1" }],
+      folders: [{ from: "./examples/data/project" }],
       plugins: { local_plugins: ["./examples/skills/my-pdf-skill"] },
     });
     const paths = p.mounts.map((m) => m.mountPath);
     expect(paths).toContain("uploads/report.pdf");
-    expect(paths).toContain(".projects/proj1");
+    // legacy baseline (1.11847.5) → derived `.projects/<basename>` (no `to:`)
+    expect(paths).toContain(".projects/project");
     expect(paths.some((x) => x.startsWith(".local-plugins/cache/"))).toBe(true);
   });
 
@@ -195,7 +199,7 @@ describe("buildLaunchPlan", () => {
   it("SPEC §7 buildLaunchPlan output snapshot (mounts/pluginDirs/egressAllow, volatile paths normalized)", () => {
     const { plan: p } = plan({
       uploads: ["./examples/data/report.pdf"],
-      folders: [{ from: "./examples/data/project", to: "proj1" }],
+      folders: [{ from: "./examples/data/project" }],
       plugins: { local_plugins: ["./examples/skills/my-pdf-skill"] },
       egress: { extra_allow: ["api.github.com"] },
     });
@@ -303,7 +307,7 @@ describe("SEAM A — fail-loud declared-source staging", () => {
   });
 
   it("a folder `from` that is a FILE (not a dir) fails loud", () => {
-    expect(() => plan({ folders: [{ from: "./examples/data/report.pdf", to: "proj1" }] })).toThrow(/folder .* must be a directory/);
+    expect(() => plan({ folders: [{ from: "./examples/data/report.pdf" }] })).toThrow(/folder .* must be a directory/);
   });
 
   it("a local_plugins source that is a FILE (not a dir) fails loud", () => {
@@ -317,7 +321,7 @@ describe("SEAM A — fail-loud declared-source staging", () => {
   it("a MISSING directory source still routes through the post-loop check (not the kind-check)", () => {
     // a kind-check must NOT fire for a missing path: it stays on the existing missing-mount path so the
     // softMissing escape hatch keeps working. not found".)
-    expect(() => plan({ folders: [{ from: "./does/not/exist", to: "p" }] })).toThrow(/source\(s\) not found/);
+    expect(() => plan({ folders: [{ from: "./does/not/exist" }] })).toThrow(/source\(s\) not found/);
     expect(() => plan({ plugins: { local_plugins: ["./does/not/exist"] } })).toThrow(/source\(s\) not found/);
   });
 
@@ -325,7 +329,7 @@ describe("SEAM A — fail-loud declared-source staging", () => {
     const prev = process.env.COWORK_HARNESS_SOFT_MISSING;
     process.env.COWORK_HARNESS_SOFT_MISSING = "1";
     try {
-      expect(() => plan({ folders: [{ from: "./does/not/exist", to: "p" }] })).not.toThrow();
+      expect(() => plan({ folders: [{ from: "./does/not/exist" }] })).not.toThrow();
       expect(() => plan({ plugins: { local_plugins: ["./does/not/exist"] } })).not.toThrow();
     } finally {
       if (prev === undefined) delete process.env.COWORK_HARNESS_SOFT_MISSING;

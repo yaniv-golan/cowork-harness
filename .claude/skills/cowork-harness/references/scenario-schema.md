@@ -69,9 +69,10 @@ max_thinking_tokens: 31999       # positive int, or per-model map {default, <mod
 permission_mode: default         # default | acceptEdits | plan | bypassPermissions
 permission_parity: cowork        # cowork (unscripted tool calls allowed) | strict (deny unscripted)
 
-# work folders / uploads  → mnt/.projects/<to>, mnt/uploads/<basename>
+# work folders / uploads  → mnt/<folder-name>, mnt/uploads/<basename>
+#   (mount name = collision-resolved folder basename; ≥1.14271.0, older baselines use mnt/.projects/<id>)
 folders:
-  - { from: ~/code/myproject, to: proj1, mode: rw }   # mode: r | rw | rwd
+  - { from: ~/code/myproject, mode: rw }   # mounted at mnt/myproject; mode: r | rw | rwd
 uploads:
   - ~/Downloads/report.pdf
 
@@ -80,7 +81,8 @@ plugins:
   marketplaces: []               # plugin_marketplaces (git URLs or local paths)
   local_marketplaces: []         # local marketplace dirs (each has a marketplace.json)
   enabled: [my-skill@local]      # enabledPlugins (name@marketplace)
-  local_plugins: [./skills/my-skill]   # host plugin dirs → mnt/.local-plugins/cache
+  local_plugins: [./skills/my-skill]   # host plugin dirs → mnt/.local-plugins/marketplaces/<marketplace>/<plugin>
+                                       #   (≥1.14271.0; older baselines use mnt/.local-plugins/cache)
   remote_plugins: []
 skills:
   local: []                      # extra host skill dirs
@@ -109,10 +111,11 @@ with no session file, the CLI flags `--folder <dir>` and `--upload <file>` are t
 `folders[]` / `uploads[]`.
 
 **Mount enforcement:** `mode:r` mounts get a real per-mount `:ro` bind (a write fails in-guest). The
-`rw` vs `rwd` (write-but-no-delete) distinction is **not** mount-enforced — a delete in `outputs/` /
-`.projects/` succeeds and is only caught post-hoc by the `no_delete_in_outputs` assertion. A missing
-mount source is a **hard error** (set `COWORK_HARNESS_SOFT_MISSING=1` to downgrade to warn-and-skip);
-a `folders[].to` with `/` or `..` is rejected.
+`rw` vs `rwd` (write-but-no-delete) distinction is **not** mount-enforced — a delete in `outputs/` or a
+connected folder succeeds and is only caught post-hoc by the `no_delete_in_outputs` assertion. A missing
+mount source is a **hard error** (set `COWORK_HARNESS_SOFT_MISSING=1` to downgrade to warn-and-skip).
+There is no `folders[].to` field — the mount name is always derived from the folder basename
+(collision-resolved); `.projects` is now only a reserved name.
 
 ## Scripted answers
 
@@ -178,7 +181,7 @@ passes only if every key passes. Keep one concern per item unless you mean conju
 | `transcript_matches: <regex>` | the transcript matches (case-insensitive) — for stochastic prose |
 | `transcript_not_matches: <regex>` | it does not match (e.g. no leaked stack trace) |
 | `file_exists: <path>` | the path exists under the run's `work/` (e.g. `outputs/x.md`) |
-| `user_visible_artifact: <path>` | exists **and** under a user-visible prefix (`outputs/`, `.projects/`) |
+| `user_visible_artifact: <path>` | exists **and** under a user-visible root (`outputs/` + each connected folder's mount name) |
 | `no_delete_in_outputs: true` | no delete op touched `mnt/outputs` — **only `true` is valid**; `false` is rejected (omit to allow deletes) |
 | `self_heal_ran: <bool>` | a plugin-root self-heal script was (not) invoked |
 | `tool_called: <Tool>` | the agent invoked the tool (actually ran it) |
@@ -235,7 +238,7 @@ A cassette (`record`/`replay`) has **no filesystem and no network**. `replay` re
 
 **Filesystem — replay-checkable WITH an artifact manifest:** `file_exists`, `user_visible_artifact`,
 `artifact_json` run on replay when the cassette carries an `artifacts` snapshot (`record` captures
-`outputs/`/`.projects/`; `replay` materializes it). `artifact_json` needs the small-file JSON `body`
+`outputs/` + connected folders; `replay` materializes it). `artifact_json` needs the small-file JSON `body`
 inlined; a hash-only entry still satisfies `file_exists`. Without a manifest (older cassettes) they're
 skipped. A green replay re-confirms *record-time* artifacts, not that the current skill still produces them
 — `replay --strict` fails when the staleness `fingerprint` shows the skill/baseline drifted.
