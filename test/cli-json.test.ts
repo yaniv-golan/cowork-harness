@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -375,6 +375,37 @@ describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
       encoding: "utf8",
     });
     expect(ok.status).toBe(0);
+  });
+
+  it("answer: repeated --choose answers a multiSelect gate (array resp); rejected on a single-select gate", () => {
+    const r0 = run(["--version"]);
+    // multiSelect gate → two --choose accumulate into an ARRAY in the resp (the on-wire shape normalize reads)
+    writeIn(
+      r0.cwd,
+      "req-1.json",
+      JSON.stringify({
+        id: "req-1",
+        questions: [{ question: "Pick", multiSelect: true, options: [{ label: "Auth" }, { label: "Billing" }] }],
+      }),
+    );
+    const multi = spawnSync(
+      "node",
+      [CLI, "answer", r0.cwd, "--gate", "1", "--choose", "Auth", "--choose", "Billing", "--output-format", "json"],
+      { encoding: "utf8" },
+    );
+    expect(multi.status).toBe(0);
+    expect(JSON.parse(readFileSync(join(r0.cwd, "resp-1.json"), "utf8")).answers).toEqual({ Pick: ["Auth", "Billing"] });
+    // single-select gate → two --choose is the old "only one allowed" error
+    writeIn(
+      r0.cwd,
+      "req-2.json",
+      JSON.stringify({ id: "req-2", questions: [{ question: "One", options: [{ label: "A" }, { label: "B" }] }] }),
+    );
+    const single = spawnSync("node", [CLI, "answer", r0.cwd, "--gate", "2", "--choose", "A", "--choose", "B", "--output-format", "json"], {
+      encoding: "utf8",
+    });
+    expect(single.status).toBe(2);
+    expect(JSON.parse(single.stdout)?.error?.message).toMatch(/--choose may only be specified once.*not a multiSelect/);
   });
 
   // ── CLI parsing-hygiene: per-command flag/positional validation + global --dotenv equals form ──

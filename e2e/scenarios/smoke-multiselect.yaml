@@ -1,0 +1,19 @@
+# L0 smoke: validates multiSelect delivery fidelity end-to-end with a REAL model.
+# The harness delivers a multiSelect answer as a ", "-joined string (binary-verified wire shape);
+# this proves the real model re-reads "Auth, Audit" as TWO selections, not one label.
+baseline: latest
+session: ../sessions/minimal.yaml
+fidelity: protocol
+prompt: |
+  Call the AskUserQuestion tool exactly once with a SINGLE multi-select question
+  (allow selecting more than one option) asking which features to enable, with these
+  three options: Auth, Billing, Audit.
+  After I answer, reply with exactly: "Enabled: <the features I chose, comma-separated>."
+  and nothing else.
+answers:
+  - when_question: "feature|enable"
+    choose: ["Auth", "Audit"]
+assert:
+  - result: success
+  - transcript_contains: "Auth"
+  - transcript_contains: "Audit"

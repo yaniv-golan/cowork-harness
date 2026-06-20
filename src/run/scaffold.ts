@@ -23,6 +23,15 @@ export function buildScaffold(eventsFile: string): string {
 
   // Observed gates → scripted answers (one rule per answered sub-question).
   const answers: { when_question: string; choose: string }[] = [];
+  // A delivered answer containing ", " is LIKELY a multiSelect set (the wire joins members with ", ").
+  // Emitting it as a scalar `choose: "A, B"` is born un-replayable — ScriptedDecider wraps it to
+  // `["A, B"]` and no single option is named "A, B", so replay throws. We can't reconstruct the member
+  // list here (the gate trace carries neither the gate's options nor its multiSelect flag), so emit a
+  // loud marker telling the author to split it into a `choose: [list]` before replay. This is a HEURISTIC
+  // on the joined string: it can false-positive on a single-select free-text "Other" answer that happens
+  // to contain ", ", and false-negative on a multiSelect with one (comma-free) selection. Precise
+  // detection needs the gate trace to carry options+multiSelect — the deferred full-round-trip follow-up.
+  const multiSelectSuspects: string[] = [];
   for (const g of buildGateTrace(eventsFile)) {
     if (!g.injectedAnswer) continue;
     let map: Record<string, unknown>;
@@ -31,7 +40,11 @@ export function buildScaffold(eventsFile: string): string {
     } catch {
       continue;
     }
-    for (const [q, a] of Object.entries(map)) answers.push({ when_question: escapeRx(q), choose: String(a) });
+    for (const [q, a] of Object.entries(map)) {
+      const val = String(a);
+      if (val.includes(", ")) multiSelectSuspects.push(q);
+      answers.push({ when_question: escapeRx(q), choose: val });
+    }
   }
 
   // Observed artifacts → file_exists; sub-agent count → dispatch_count_max; final result.
@@ -50,9 +63,17 @@ export function buildScaffold(eventsFile: string): string {
     assert,
   };
 
+  const multiSelectMarker = multiSelectSuspects.length
+    ? `# scaffold: answer(s) for ${[...new Set(multiSelectSuspects)]
+        .map((q) => JSON.stringify(q))
+        .join(
+          ", ",
+        )} look like a multiSelect set (contain ", "), emitted as a scalar 'choose: "A, B"'. If multiSelect, split each into 'choose: [A, B]' before replay or the gate won't match. (If it was a single free-text answer, leave it.)\n`
+    : "";
   return (
     `# scaffolded by \`cowork-harness scaffold --from-run\` from ${runDir}\n` +
     `# REVIEW before committing: tighten the when_question regexes to stable fragments, prune asserts you don't need.\n` +
+    multiSelectMarker +
     stringify(scenario)
   );
 }

@@ -37,6 +37,10 @@ You **do not** hand-write those files. Two CLI subcommands wrap the protocol:
   answer for gate `N` with the correct wire shape (the atomic temp+rename and the `{id, answers}`
   envelope are handled for you). `--choose <label>` answers the gate's first question by option label;
   `--answer "<q>=<label>"` is repeatable for multi-question gates and matches by question text.
+  **multiSelect gate:** repeat `--choose` once per selection (`--choose Auth --choose Billing`) — the
+  members are written as a JSON array and delivered as the binary-verified `", "`-joined wire shape. A
+  repeated `--choose` on a *single-select* gate is rejected. (`--choose` answers the first
+  sub-question; a multi-*question* multiSelect gate needs `--answer "<q>=<label>"` per sub-question.)
 
 ## Recipe
 
@@ -119,6 +123,12 @@ cowork-harness answer "$GATES" --gate 1 --choose "PDF"
 - **stdout stays free.** The protocol lives on disk and on stderr lifecycle lines, so `--output-format
   json` composes cleanly.
 - **One gate at a time.** Answer in sequence; the harness will not emit `req-(N+1)` until `resp-N` lands.
+- **multiSelect gates.** The emitted `req-N.json` advertises an array `reply_with` for a multiSelect
+  question. If you answer by hand-writing `resp-N.json` (or via a `--decider-cmd` helper), send the
+  selections as a **JSON array** — `{"answers":{"Which to enable?":["Auth","Billing"]}}` (labels or
+  1-based indices). The harness validates each member and delivers the `", "`-joined wire shape. A
+  bare scalar is accepted as a single selection; an array on a single-select gate fails loud. (The
+  `answer` subcommand does this for you — just repeat `--choose`.)
 - **Backstop timeout.** If no answer arrives within the deadline, the harness raises a loud
   `UnansweredError` rather than hanging forever.
 - **Env knobs:**

@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { mkdtempSync, writeFileSync, readFileSync, existsSync, renameSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -104,6 +104,102 @@ describe("ExternalDecider", () => {
     await expect(new ExternalDecider(memChannel(['{"id":"WRONG","answers":{}}']).channel).decide(ask, ctx())).rejects.toThrow(
       /wrong request/,
     );
+  });
+});
+
+describe("ExternalDecider — multiSelect", () => {
+  const multi: DecisionRequest = {
+    id: "m1",
+    kind: "question",
+    questions: [
+      { question: "Which to enable?", multiSelect: true, options: [{ label: "Auth" }, { label: "Billing" }, { label: "Audit" }] },
+    ],
+  };
+  const decide = (reply: string, req: DecisionRequest = multi) => new ExternalDecider(memChannel([reply]).channel).decide(req, ctx());
+
+  it("array of labels → canonical ', '-joined string", async () => {
+    const d = await decide('{"id":"m1","answers":{"Which to enable?":["Auth","Billing"]}}');
+    expect((d as any).response.answers).toEqual({ "Which to enable?": "Auth, Billing" });
+  });
+
+  it("array of 1-based indices → labels", async () => {
+    const d = await decide('{"id":"m1","answers":{"Which to enable?":[1,3]}}');
+    expect((d as any).response.answers).toEqual({ "Which to enable?": "Auth, Audit" });
+  });
+
+  it("mixed label + index → both resolved", async () => {
+    const d = await decide('{"id":"m1","answers":{"Which to enable?":["Billing",1]}}');
+    expect((d as any).response.answers).toEqual({ "Which to enable?": "Billing, Auth" });
+  });
+
+  it("single scalar on a multiSelect gate → one-element selection (parity with ScriptedDecider)", async () => {
+    const d = await decide('{"id":"m1","answers":{"Which to enable?":"Billing"}}');
+    expect((d as any).response.answers).toEqual({ "Which to enable?": "Billing" });
+  });
+
+  it("a member matching no option → UnansweredError naming the member", async () => {
+    await expect(decide('{"id":"m1","answers":{"Which to enable?":["Auth","Nope"]}}')).rejects.toThrow(/"Nope".*matched no option/);
+  });
+
+  it("empty array → UnansweredError (no selection)", async () => {
+    await expect(decide('{"id":"m1","answers":{"Which to enable?":[]}}')).rejects.toThrow(/empty selection/);
+  });
+
+  it("an ARRAY on a SINGLE-select gate → UnansweredError (fail loud, no one-element coercion)", async () => {
+    await expect(decide('{"id":"req_3","answers":{"Which format?":["Markdown"]}}', ask)).rejects.toThrow(/array for single-select/);
+  });
+
+  it("duplicate selections are kept (no dedup — parity with scripted); whitespace trimmed; '2' and 2 agree", async () => {
+    expect(((await decide('{"id":"m1","answers":{"Which to enable?":["Auth","Auth"]}}')) as any).response.answers).toEqual({
+      "Which to enable?": "Auth, Auth",
+    });
+    expect(((await decide('{"id":"m1","answers":{"Which to enable?":[" Auth "]}}')) as any).response.answers).toEqual({
+      "Which to enable?": "Auth",
+    });
+    expect(((await decide('{"id":"m1","answers":{"Which to enable?":["2"]}}')) as any).response.answers).toEqual({
+      "Which to enable?": "Billing",
+    });
+    expect(((await decide('{"id":"m1","answers":{"Which to enable?":[2]}}')) as any).response.answers).toEqual({
+      "Which to enable?": "Billing",
+    });
+  });
+
+  it("optionless multiSelect: members joined verbatim; empty array still throws", async () => {
+    const optionless: DecisionRequest = { id: "o1", kind: "question", questions: [{ question: "Tags?", multiSelect: true, options: [] }] };
+    const ok = await new ExternalDecider(memChannel(['{"id":"o1","answers":{"Tags?":["x","y"]}}']).channel).decide(optionless, ctx());
+    expect((ok as any).response.answers).toEqual({ "Tags?": "x, y" });
+    await expect(new ExternalDecider(memChannel(['{"id":"o1","answers":{"Tags?":[]}}']).channel).decide(optionless, ctx())).rejects.toThrow(
+      /empty selection/,
+    );
+  });
+
+  it("comma-in-label: warns when >1 member selected, does NOT warn for a single member (scripted parity)", async () => {
+    const commaGate: DecisionRequest = {
+      id: "c1",
+      kind: "question",
+      questions: [{ question: "Pick?", multiSelect: true, options: [{ label: "A, B" }, { label: "C" }] }],
+    };
+    const warnings: string[] = [];
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation((l: any) => (warnings.push(String(l)), true));
+    try {
+      const two = await new ExternalDecider(memChannel(['{"id":"c1","answers":{"Pick?":["A, B","C"]}}']).channel).decide(commaGate, ctx());
+      expect((two as any).response.answers).toEqual({ "Pick?": "A, B, C" }); // resolves (ambiguous on the wire — hence the warn)
+      expect(warnings.some((w) => w.includes("contains a comma"))).toBe(true);
+      warnings.length = 0;
+      const one = await new ExternalDecider(memChannel(['{"id":"c1","answers":{"Pick?":["A, B"]}}']).channel).decide(commaGate, ctx());
+      expect((one as any).response.answers).toEqual({ "Pick?": "A, B" });
+      expect(warnings.some((w) => w.includes("contains a comma"))).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("emit advertises the ARRAY reply shape for a multiSelect question, scalar for single-select", async () => {
+    const { channel, sent } = memChannel(['{"id":"m1","answers":{"Which to enable?":["Auth"]}}']);
+    await new ExternalDecider(channel).decide(multi, ctx());
+    const req = JSON.parse(sent[0]);
+    expect(req.reply_with).toContain('["<label or 1-based index>", "…"]'); // array template
+    expect(req.questions[0].multiSelect).toBe(true); // multiSelect flag is on the wire (cmdAnswer trusts it)
   });
 });
 
@@ -223,6 +319,16 @@ describe("gates stream + answer (the in-band transport the harness owns)", () =>
     writeFileSync(join(dir, "req-3.json"), '{"id":"c","kind":"question","questions":[{"question":"Go?","options":[{"label":"Yes"}]}]}\n');
     answerGate(dir, 3, { "Go?": "Yes" });
     expect(JSON.parse(readFileSync(join(dir, "resp-3.json"), "utf8"))).toEqual({ id: "c", answers: { "Go?": "Yes" } });
+  });
+
+  it("answerGate carries a multiSelect ARRAY value unjoined (the wire shape normalize reads back)", () => {
+    const dir = tmp();
+    writeFileSync(
+      join(dir, "req-4.json"),
+      '{"id":"m","kind":"question","questions":[{"question":"Which?","multiSelect":true,"options":[{"label":"Auth"},{"label":"Billing"}]}]}\n',
+    );
+    answerGate(dir, 4, { "Which?": ["Auth", "Billing"] });
+    expect(JSON.parse(readFileSync(join(dir, "resp-4.json"), "utf8"))).toEqual({ id: "m", answers: { "Which?": ["Auth", "Billing"] } });
   });
 
   it("streamGates skips a malformed req file but still emits the valid ones and completes", async () => {

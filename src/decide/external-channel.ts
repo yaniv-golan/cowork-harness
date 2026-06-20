@@ -111,8 +111,10 @@ export function streamGates(dir: string, write: (line: string) => void, opts: { 
 }
 
 /** Write a gate answer atomically (temp+rename) with the right wire shape — behind `cowork-harness
- *  answer`. Hides the atomic write + the `{id, answers}` shape the driver had to hand-build. */
-export function answerGate(dir: string, seq: number, answers: Record<string, string>): void {
+ *  answer`. Hides the atomic write + the `{id, answers}` shape the driver had to hand-build. A value
+ *  may be a string (single-select) or a string[] (multiSelect) — the array is the on-wire multiSelect
+ *  shape that ExternalDecider.normalize expects, so it must round-trip through here unjoined. */
+export function answerGate(dir: string, seq: number, answers: Record<string, string | string[]>): void {
   let id: string | undefined;
   try {
     id = JSON.parse(readFileSync(join(dir, `req-${seq}.json`), "utf8")).id;
