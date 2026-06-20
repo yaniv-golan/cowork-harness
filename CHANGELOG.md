@@ -6,6 +6,19 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.7.1] — 2026-06-20
+
+### Fixed
+
+- **`file_exists` and `user_visible_artifact` now pass for truncated (large) cassette artifacts.**
+  A truncated manifest entry (`truncated: true`) carries `path`, `bytes`, and `sha256` — positive
+  proof the file existed at record time. 0.7.0 incorrectly failed these existence/promotion
+  assertions with `"was truncated in the cassette — content was not committed; assertion cannot
+  pass"`, producing false-REDs for any cassette whose artifacts exceeded the 64 KiB inline cap.
+  Only **content** assertions (`artifact_json`) require the inlined body; existence assertions
+  now correctly pass from the manifest. `artifact_json` on a truncated artifact continues to fail
+  (the 0-byte placeholder is not valid JSON). Regression test added.
+
 ## [0.7.0] — 2026-06-19
 
 ### Added

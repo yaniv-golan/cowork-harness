@@ -47,7 +47,7 @@ interface ManifestEntry {
    *  bodies, which would otherwise corrupt on a `toString("utf8")` round-trip (and then false-fail the
    *  sha256 verify, since the hash is over the RAW bytes). */
   encoding?: "utf8" | "base64";
-  truncated?: boolean; // too big to inline → hash-only (file_exists FAILS on replay; artifact_json cannot run)
+  truncated?: boolean; // too big to inline → hash-only (file_exists/user_visible_artifact PASS — existence proven by path+sha; artifact_json cannot run)
 }
 
 /** #1b: a staleness tripwire over the inputs that determine the recording — mirrors `asarFingerprint`
@@ -161,10 +161,11 @@ function decodeBody(e: ManifestEntry): Buffer {
 
 /** #1: materialize a manifest into a temp work root so replay can run the filesystem assertions against it.
  *  Small files get their inlined body (decoded per its encoding marker); hash-only (truncated)
- *  files get an empty placeholder (file_exists FAILS; artifact_json on them fails loud — it needs the
- *  body, which only small files carry). each path is containment-checked before writing so a hostile
- *  cassette entry can't escape the temp root. every non-truncated body is verified against its
- *  recorded sha256 (over the decoded RAW bytes) — a mismatch fails replay (throws). */
+ *  files get an empty placeholder. A truncated entry carries path+bytes+sha256 — positive proof the
+ *  file existed at record time — so file_exists and user_visible_artifact PASS from the manifest;
+ *  only artifact_json fails loud (it needs the inlined body). each path is containment-checked before
+ *  writing so a hostile cassette entry can't escape the temp root. every non-truncated body is verified
+ *  against its recorded sha256 (over the decoded RAW bytes) — a mismatch fails replay (throws). */
 export function materializeManifest(entries: ManifestEntry[]): { workRoot: string; prefixes: string[]; truncatedPaths: Set<string> } {
   const workRoot = mkdtempSync(join(tmpdir(), "cwh-replay-"));
   const truncatedPaths = new Set<string>();

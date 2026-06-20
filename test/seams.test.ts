@@ -1531,10 +1531,10 @@ describe("Cassette — transcript_not_contains evaluates on content (not on miss
   });
 });
 
-describe("Cassette — truncated artifact entries fail file_exists and user_visible_artifact", () => {
+describe("Cassette — truncated artifact entries pass file_exists and user_visible_artifact (existence proven by manifest)", () => {
   const truncatedArtifact = { path: "outputs/report.json", bytes: 50000, sha256: "abc", truncated: true };
 
-  it("FAILS file_exists when the artifact was truncated in the cassette", async () => {
+  it("PASSES file_exists when the artifact was truncated (path+sha in manifest = existence proof)", async () => {
     const events = [
       JSON.stringify({ type: "system", subtype: "init", tools: ["Write"], cwd: "/sessions/x" }),
       JSON.stringify({ type: "result", subtype: "success", is_error: false }),
@@ -1546,11 +1546,10 @@ describe("Cassette — truncated artifact entries fail file_exists and user_visi
     } as any;
     const r = await replayCassette(cassette);
     const a = r.assertions.find((x) => x.assertion.file_exists !== undefined);
-    expect(a?.pass).toBe(false);
-    expect(a?.message).toContain("truncated in the cassette");
+    expect(a?.pass).toBe(true);
   });
 
-  it("FAILS user_visible_artifact when the artifact was truncated in the cassette", async () => {
+  it("PASSES user_visible_artifact when the artifact was truncated and is under a user-visible prefix", async () => {
     const events = [
       JSON.stringify({ type: "system", subtype: "init", tools: ["Write"], cwd: "/sessions/x" }),
       JSON.stringify({ type: "result", subtype: "success", is_error: false }),
@@ -1562,8 +1561,7 @@ describe("Cassette — truncated artifact entries fail file_exists and user_visi
     } as any;
     const r = await replayCassette(cassette);
     const a = r.assertions.find((x) => x.assertion.user_visible_artifact !== undefined);
-    expect(a?.pass).toBe(false);
-    expect(a?.message).toContain("truncated in the cassette");
+    expect(a?.pass).toBe(true);
   });
 
   it("PASSES file_exists when the artifact is NOT truncated (regression guard)", async () => {

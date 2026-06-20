@@ -226,7 +226,9 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
     else {
       const relPath = relative(resolve(ctx.workRoot), abs);
       if (truncated.has(relPath)) {
-        results.push(fail(`"${a.file_exists}" was truncated in the cassette — content was not committed; assertion cannot pass`));
+        // A truncated manifest entry carries path+bytes+sha256 — positive proof the file existed at
+        // record time. Existence is provable without the inlined body; only content assertions need it.
+        results.push(ok());
       } else {
         // Bug 37: verify the real path (after symlink resolution) is still under workRoot.
         const real = containedRealPath(ctx.workRoot, abs);
@@ -244,7 +246,10 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
     } else {
       const rel = relative(resolve(ctx.workRoot), abs); // normalized, guaranteed under workRoot
       if (truncated.has(rel)) {
-        results.push(fail(`"${p}" was truncated in the cassette — content was not committed; assertion cannot pass`));
+        // Truncated entry proves existence (path+bytes+sha256 recorded). Promotion is a path-prefix
+        // property — also knowable without the body. Pass if under a user-visible prefix.
+        const visible = ctx.userVisiblePrefixes.some((pre) => rel === pre || rel.startsWith(pre + "/"));
+        results.push(visible ? ok() : fail(`"${p}" is not under a user-visible prefix (${ctx.userVisiblePrefixes.join(", ")}) — invisible to the user in Cowork`));
       } else {
         const visible = ctx.userVisiblePrefixes.some((pre) => rel === pre || rel.startsWith(pre + "/"));
         if (!visible)
