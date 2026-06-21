@@ -61,6 +61,26 @@ selections as a **JSON array** (`{"answers":{"<q>":["Auth","Billing"]}}`) — a 
 is read as one label and fails; a scalar is one selection; an array on a single-select gate fails loud.
 All paths deliver the binary-verified `", "`-joined wire shape.
 
+### The request envelope a `--decider-cmd` / `--decider-dir` helper parses
+
+Both external channels write the **same** self-describing request line per gate, so a helper can read
+valid labels off the wire instead of guessing. For a `question` gate it is shaped:
+
+```json
+{"type":"decision_request","id":"req_…","kind":"question",
+ "questions":[{"question":"Which output format?","header":"Format",
+              "options":[{"label":"Markdown"},{"label":"PDF"}],"multiSelect":false}],
+ "reply_with":"{\"id\":\"req_…\",\"answers\":{\"Which output format?\":\"<label or 1-based index>\"}}"}
+```
+
+So a helper keys its answer on `questions[N].question`, enumerates choices from
+`questions[N].options[].label`, and checks `questions[N].multiSelect` to decide scalar-vs-array reply.
+The `reply_with` field is a literal fill-in template for the reply shape (array placeholder when
+multiSelect). Notes: `options` is *optional* — a free-text / header-only gate arrives with no
+`options`; key off `question` (falling back to `header`). This is the shared wire model for both
+channels — `docs/decider-dir.md` shows the same shape, and the Python `serve_decider(fn)` adapter
+hands `fn` exactly this dict.
+
 ### `--on-unanswered` accepted values (precise)
 
 - On `skill`: `fail | prompt | first`.
@@ -100,6 +120,9 @@ cowork-harness decide \
 
 It works with `--answer`/`--answer-policy` (reports which rule matched, or exits non-zero if none),
 `--decider-cmd` (shows the exact request + answer), or `--decider-llm` (a live model answers).
+Caveat: `decide` only builds a **single-select** sample (set choices with `--option`; there is no
+multiSelect flag), so its printed request shows `options[].label` but never `multiSelect:true` — to
+exercise the array reply path, run a real multiSelect gate or unit-test the helper directly.
 
 ## Relevant environment variables
 

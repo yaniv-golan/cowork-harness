@@ -92,7 +92,7 @@ pytest -m 'not cowork'      # the fast loop (skips this lane) — the CI default
   - `answers={q: choice}` — pre-script AskUserQuestions; `on_unanswered="fail|first|prompt"`
   - `fidelity="container"` (also `protocol|microvm|hostloop|cowork`)
   - `upload=` (str or list) — attach files at `mnt/uploads/` (deck-review, financial-model-review)
-  - `folder=` (str or list) — connect folders at `mnt/.projects/`
+  - `folder=` (str or list) — connect folders at `mnt/<basename>` (collision-resolved; older baselines use `.projects/<id>`)
   - `session_id="…"` + `resume=True` — pin then resume a session (checkpoint-and-resume gated skills)
   - `decider_cmd="python decider.py"` — answer **live** (stochastic) questions via a spawned helper. The
     helper owns its own pipes, so this composes with `--output-format json` (the fixture parses the one envelope
@@ -101,13 +101,23 @@ pytest -m 'not cowork'      # the fast loop (skips this lane) — the CI default
   ```python
   # decider.py — point --decider-cmd / decider_cmd= at:  python decider.py
   from cowork_harness import serve_decider
-  def decide(req):                                  # req = the decision_request dict
-      q = req["questions"][0]["question"].lower()
-      return "Series A" if "stage" in q else 1      # a {q: label/index} mapping, or a bare label/index
+  def decide(req):                       # req = the self-describing decision_request dict
+      q = req["questions"][0]
+      label = q["question"]              # key the answer on the question text
+      opts = [o["label"] for o in q.get("options", [])]   # enumerate valid labels off the wire
+      if q.get("multiSelect"):           # multiSelect → return a LIST of labels/indices
+          return {label: opts}           # (here: select all; a scalar would be one selection)
+      pick = next((o for o in opts if "markdown" in o.lower()), 1)
+      return {label: pick}               # {q: label/index} mapping, or a bare label/index
   serve_decider(decide)
   ```
-  `fn(request)` is called once per gate; the adapter reads each request line, echoes the `id`, and
-  flushes the reply. (This is the spawn-helper analogue of the CLI's `gates`/`answer` commands.)
+  `req` is self-describing: each `questions[N]` carries `question`, optional `header`, `options[].label`
+  (absent for free-text gates), and `multiSelect`; a literal `reply_with` template states the reply
+  shape. `fn(request)` is called once per gate; the adapter reads each request line, echoes the `id`,
+  and flushes the reply. (This is the spawn-helper analogue of the CLI's `gates`/`answer` commands.)
+  To preview the exact request a gate produces before a full run, use `cowork-harness decide
+  --decider-cmd 'python decider.py'` (it prints `helper received: …`) — note it only builds a
+  single-select sample, so it shows `options[].label` but not `multiSelect`.
 - `cowork.run_scenario(path, *, on_unanswered="fail", check=False)` → `Result`
   — run an **authored scenario YAML** (its prompt + scripted answers + `assert:`) and get the typed
   `Result` back, without the subprocess-spawn + JSON-parse + outputs-dir boilerplate. Fidelity and answers
