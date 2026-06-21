@@ -123,6 +123,12 @@ pytest -m 'not cowork'      # the fast loop (skips this lane) — the CI default
   assert r.effective_fidelity == "hostloop"   # prove which tier ran
   ```
 - `cowork.replay(cassette_path)` → `Result` (deterministic, no token/Docker — content assertions only)
+- A **directory** input to `run_scenario` / `replay` (a `dir/` of scenarios or cassettes) produces more than
+  one run, so the wrapper returns a **`BatchResult`** instead of a single `Result`: it holds every per-run
+  `Result` (`len()`, iteration, indexing), and `.assert_success()` fails if **any** constituent run failed —
+  a later failure can't hide behind a passing first result. The single-result accessors (`.result`,
+  `.failed_assertions()`, transcript/artifact helpers) raise on a `BatchResult` directing you to iterate
+  `.results`. A single-file input still returns a plain `Result`.
 - `cowork.trace(run_id_or_dir, tools=False)` → `list[dict]` of trace rows (tool calls, sub-agent
   dispatches, decisions) — for asserting the *real* dispatch count vs. todo items named after sub-agents.
 - `Result`: `.assert_success()`, `.assert_transcript_contains(s)`, `.assert_tool_called(name)`,

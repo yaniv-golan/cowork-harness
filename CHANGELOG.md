@@ -54,6 +54,26 @@ All notable changes to this project are documented here. The format is based on
   ships it). Suppress per-scenario with **`allow_missing_capability: true`** (when the fallback is equivalent),
   rebuild full parity (`--build-arg COWORK_FULL_PARITY=1`), use the rootfs `max` tier, or skip the check with
   `COWORK_SKIP_CAPABILITY_PROBE=1`. Live tiers only (container/hostloop/microvm).
+- **Stricter, fail-loud guardrails from the codebase bug-review sweep — a few previously-silent paths now
+  error.** These close false-greens / false-accepts and can surface on an existing setup:
+  - **Negative `verify-run` assertions fail on *missing* evidence instead of passing vacuously.**
+    `tool_result_not_contains`, `tool_not_called`, `subagent_tool_absent`, `dispatch_count_max`,
+    `subagent_declared_but_unused`, `no_delete_in_outputs`, `transcript_no_host_path`, and `self_heal_ran`
+    now fail with an "evidence unavailable" reason when the underlying field is absent from a partial/older
+    `result.json` (verify-run lane only — the live and replay lanes, where the evidence is always present,
+    are unchanged). *Upgrade note:* re-run rather than re-assert against a fresh `result.json` if a verify-run
+    flips to this failure.
+  - **Non-strict cassette replay now fails on corrupt `controlOut`** — a malformed line, or a duplicate
+    `request_id` with differing bodies — instead of warning and proceeding. Corruption is a protocol-fidelity
+    failure, not advisory; `--strict` still additionally catches staleness/extra-data.
+  - **`chat --raw` now rejects `--upload` / `--folder` / `--plugin` / `--fidelity`** (it can't honor them in
+    native mode) instead of silently ignoring them, and an invalid `COWORK_HARNESS_FIDELITY` value is rejected
+    loudly instead of silently falling back to `container`. An invalid `COWORK_HARNESS_MAX_ARTIFACT_BYTES` now
+    errors (parity with the `--max-artifact-bytes` flag) instead of silently using the default.
+  - **A `web_fetch` `approved_domains` / seed entry that isn't a bare host** (a URL, scheme, path, port, empty
+    string, or `*` wildcard) is now rejected loudly instead of being added as an inert, never-matching entry.
+  - **An over-cap (> 256 KiB) control-out frame now fails the live recording immediately** with a clear error,
+    instead of writing an unreplayable truncation marker that only surfaced later as a replay failure.
 
 ### Added
 
@@ -111,6 +131,34 @@ All notable changes to this project are documented here. The format is based on
   previously called `.trim()` on a non-string answer and threw a bare `TypeError`, aborting the run;
   it now throws a clear `UnansweredError` instead, and a multiSelect array is validated per-member and
   delivered as the joined wire shape.
+- **Codebase bug-review sweep — 49 validated fixes across the harness** (beyond the behavior changes noted
+  under Breaking):
+  - **CLI parsing:** `vm status --output-format json` works and emits a JSON envelope, instead of misreading
+    the flag as a baseline name; `skill` and common flags accept every documented `--flag=value` form;
+    `boundary-check` reports a missing/malformed session as a clean (JSON-aware) usage error rather than an
+    internal error; `chat` rejects extra positionals and empty/flag-looking value-flag arguments; `parseArgs`
+    rejects empty `--flag ""` values.
+  - **Path / boundary hardening:** named baselines can no longer escape `baselines/` via `../`; marketplace and
+    staged-mount symlinks that resolve out of tree are rejected (realpath, not lexical); collected artifacts
+    skip hardlinks (`nlink > 1`) that could inline out-of-root content into a cassette; a new
+    `src/boundary-paths.ts` centralizes `safeNamedBaseline` / `containedRealPath` / `normalizeHost` /
+    `validateBareDomain` so the egress allowlist and seed-domain paths share one policy.
+  - **Protocol / replay integrity:** every control-request validates its `request_id` before replying; the
+    AskUserQuestion body is validated at ingress (optionless / header-only gates still pass); a malformed
+    cassette no longer aborts the whole replay batch; a `web_fetch` decision of the wrong kind is recorded as
+    `mismatch→deny` with a warning; egress host matching is case- and trailing-dot-normalized.
+  - **host-loop fidelity:** the `web_fetch` SSRF backstop pins the vetted address through connect (closing a
+    DNS-rebind TOCTOU) and re-vets each redirect; a Docker infrastructure failure (daemon down, missing
+    container, exit 125) is reported to the model as a generic harness error and logged raw, instead of
+    leaking daemon text framed as a normal command exit.
+  - **Fidelity drift checks:** the rootfs `--check` diffs the whole Layer-A pip set (generated from the
+    Dockerfile) plus Node, the apt doc stack, and global npm; rootfs image tags are content-addressed; the
+    capability cache keys on image content rather than a mutable tag; `sync` cleans its temp extraction dir and
+    records a drift signal on a corrupt `config.json`.
+  - **decider / schema / Python:** `allow_if` predicates accept non-identifier input keys (`input["file-path"]`);
+    `choose`+`answer` and inert `grant` are rejected at schema time; optionless prompt/LLM gates are answerable;
+    the Python wrapper returns a `BatchResult` for directory/replay runs so a later failure can't hide behind a
+    passing first result.
 
 ## [0.7.1] — 2026-06-20
 

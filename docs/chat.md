@@ -28,9 +28,9 @@ cowork-harness chat <skill-folder> [prompt] [options]
 | `--model <id>` | `$COWORK_HARNESS_MODEL` | Override the model; passed as `--model` to the agent binary. |
 | `--upload <file>` | — | Attach a file (repeatable). Visible at `mnt/uploads/<basename>`. |
 | `--folder <dir>` | — | Connect a project folder (repeatable). Visible at `mnt/<basename>`. Live bind mount — agent writes persist to host. |
-| `--plugin <dir>` | — | Load an additional local plugin alongside the main skill folder (repeatable). Ignored in `--raw` mode. |
+| `--plugin <dir>` | — | Load an additional local plugin alongside the main skill folder (repeatable). Rejected in `--raw` mode. |
 | `--verbose` / `-V` | off | Show thinking blocks, tool inputs, and the full sub-agent tree. Default: tool call markers only. |
-| `--raw` | off | Skip the control protocol; spawns `docker run -it` in native cowork mode. Egress sandbox is NOT applied. `--model`, `--fidelity`, and `--plugin` are ignored. |
+| `--raw` | off | Skip the control protocol; spawns `docker run -it` in native cowork mode. Egress sandbox is NOT applied. `--upload`, `--folder`, `--plugin`, and `--fidelity` are **rejected** (they can't be honored in native mode); `--model` is still applied. |
 
 ## Fidelity tiers
 
@@ -47,8 +47,9 @@ only manifests in the production execution split.
 `--raw` is a different escape hatch entirely: it bypasses the harness control protocol and runs
 `docker run -it` directly. Because the harness egress sidecar is not attached, network behavior
 is unrestricted and does not reflect Cowork's default-deny sandbox. Use it only when you
-specifically want unmediated access to the native Cowork agent. `--plugin` flags are silently
-ignored in `--raw` mode (a warning is printed at startup).
+specifically want unmediated access to the native Cowork agent. `--upload`, `--folder`, `--plugin`,
+and `--fidelity` are **rejected** in `--raw` mode (the command exits with a usage error listing them,
+rather than silently ignoring them); only `--model` is carried through.
 
 ## In-session commands
 
