@@ -2,9 +2,12 @@
 # Built from the SHIPPED dist/ (no source checkout / TS build) so it works from an installed package.
 FROM node:20-slim
 WORKDIR /app
-# package.json provides "type":"module"; dist/egress/proxy.js uses only Node built-ins (http/net/fs).
+# package.json provides "type":"module". dist/egress/proxy.js uses Node built-ins (http/net/fs) plus
+# one shared helper, dist/boundary-paths.js (validateBareDomain) — itself built-ins-only, so these two
+# dist paths are the proxy's complete closure. Keep both COPYs in sync if proxy.js gains an import.
 COPY package.json ./
 COPY dist/egress ./dist/egress
+COPY dist/boundary-paths.js ./dist/boundary-paths.js
 ENV PORT=8080
 # Entry runs the proxy standalone reading COWORK_ALLOW (comma-separated).
 # COWORK_PROXY_LOG: where to write JSON decision lines (default stdout; the sidecar
