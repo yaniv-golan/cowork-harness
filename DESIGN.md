@@ -111,6 +111,21 @@ git add baselines/desktop-<new>.json && git commit -m "parity: sync to Desktop <
 cowork-harness run examples/scenarios/   # regression: drift now shows as test diffs
 ```
 
+### Rootfs / image drift checks
+
+The agent *image* is a second fidelity surface (separate from the baseline facts above), and its drift is
+caught the same "silent rot → visible signal" way:
+
+- `scripts/capture-rootfs-manifest.ts --check <image>` diffs the **whole** Layer-A pip set — generated from
+  `docker/Dockerfile.agent` rather than a hand-maintained subset, so a missing PDF/image package (pdf2image,
+  pypdfium2, seaborn, …) fails the check instead of slipping through — plus the Node version, the apt
+  document stack (`dpkg-query`), and global npm packages (`npm ls -g`).
+- `scripts/build-rootfs-image.ts` tags the imported image by a **content hash** of `rootfs.img` (not
+  size+mtime), so an in-place content change can't reuse a stale cached image; the hash is printed in build
+  output.
+- The image-capability probe cache keys on the image's **content** (id + created time), not a mutable tag —
+  a rebuilt-in-place tag re-probes instead of serving stale capability facts.
+
 ## 5. Egress model details
 
 Real Cowork compiles `{kind:"allowlist", domains:[...vmAllowedDomains(), ...coworkEgressAllowedHosts]}` (or `{kind:"unrestricted"}` iff the set contains `"*"`). Default allowlist captured from the live asar includes:

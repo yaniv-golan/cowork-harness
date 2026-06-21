@@ -20,6 +20,27 @@ This project is a **test harness**, and its sandbox is a **fidelity fixture, not
 | Testing isolation of untrusted/3rd-party skills | `microvm` | VM-grade escape resistance |
 | Fast logic-only iteration | `protocol` | No sandbox — boundary assertions are refused to avoid false passes |
 
+### Input-boundary hardening
+
+The harness treats scenario/session YAML, cassettes, and marketplace metadata as **semi-trusted inputs** —
+authored by you or your CI, but worth validating so a typo or a copied fixture can't quietly read or write
+outside the intended tree. This is defense-in-depth against footguns and accidental host exposure, **not** a
+claim that the harness contains a deliberately malicious skill (see the tier guidance above for that). The
+following are enforced:
+
+- **Baseline names can't traverse out of `baselines/`** — a named baseline with a path separator / `../` is
+  rejected; an absolute path remains the explicit, deliberate out-of-tree escape hatch.
+- **Marketplace plugin sources and staged mount roots are containment-checked by real path** (symlinks are
+  resolved before the check), so an in-tree symlink that points outside the tree is rejected rather than
+  silently followed.
+- **Collected artifacts skip hardlinks** (`nlink > 1`) so a hardlink to an out-of-root host file can't inline
+  its contents into a committed cassette.
+- **The host-loop `web_fetch` SSRF backstop pins the vetted address through connect** (closing a DNS-rebind
+  time-of-check/time-of-use gap) and re-vets each redirect hop. As before, this is a backstop for test
+  fixtures, not the egress boundary itself — egress is enforced by the per-run proxy / guest firewall.
+- **Container infrastructure failures are reported to the model as a generic harness error** (the raw daemon
+  text is logged for the operator, not surfaced), so Docker/host details don't leak into model-visible output.
+
 ### Credentials
 
 - Provide the auth token (`CLAUDE_CODE_OAUTH_TOKEN`, preferred) or `ANTHROPIC_API_KEY` via the
