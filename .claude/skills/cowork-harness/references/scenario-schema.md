@@ -1,6 +1,6 @@
 # Scenario & session schema, assertion catalog, web_fetch, full gotchas
 
-Self-contained reference for authoring `cowork-harness` scenarios. Tracks `cowork-harness 0.7.1`
+Self-contained reference for authoring `cowork-harness` scenarios. Tracks `cowork-harness 0.8.0`
 (baseline `desktop-1.14271.0`). If your checkout is newer, prefer the live `docs/scenario.md`,
 `docs/session.md`, and `SPEC.md`.
 
