@@ -79,9 +79,27 @@ jobs:
       - name: Publish to npm (Trusted Publishing + provenance)
         run: npm publish --provenance --access public
 
+      - name: Extract this version's CHANGELOG section
+        run: |
+          V="${GITHUB_REF_NAME#v}"
+          # Print the lines under `## [V]` up to (not including) the next `## [` heading.
+          # `index(...)==1` matches the literal heading start, so dots in V need no escaping.
+          awk -v ver="$V" '
+            index($0, "## [" ver "]") == 1 { f=1; next }
+            f && /^## \[/ { exit }
+            f { print }
+          ' CHANGELOG.md > RELEASE_NOTES.md
+          # Fail-safe: the "Verify CHANGELOG has a heading" step above already guarantees the section,
+          # but never ship an empty body — fall back to an absolute CHANGELOG link.
+          if [ ! -s RELEASE_NOTES.md ]; then
+            echo "See [CHANGELOG.md](https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_REF_NAME}/CHANGELOG.md) for the release notes." > RELEASE_NOTES.md
+          fi
+          echo "----- RELEASE_NOTES.md -----"; cat RELEASE_NOTES.md
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
+          # The CHANGELOG section becomes the body; generate_release_notes appends the
+          # auto "Full Changelog" compare link below it (softprops pre-pends `body`).
           generate_release_notes: true
-          body: |
-            See [CHANGELOG.md](./CHANGELOG.md) for the release notes.
+          body_path: RELEASE_NOTES.md
