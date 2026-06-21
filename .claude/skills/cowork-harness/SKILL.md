@@ -211,8 +211,9 @@ depends on a sibling plugin:
 cowork-harness chat --plugin ./skills/report-gen --plugin ./skills/shared-utils
 ```
 
-**Note:** `--plugin` flags are silently ignored in `--raw` mode (native docker mode mounts one skill
-folder only). The harness logs a warning if you combine them.
+**Note:** `--raw` mode (native `docker run -it`) can't honor the harness-managed flags, so `--upload`,
+`--folder`, `--plugin`, and `--fidelity` are **rejected** with a usage error if combined with `--raw`;
+only `--model` is carried through.
 
 **`/help` in the REPL.** Type `/help` at the prompt to see available commands:
 

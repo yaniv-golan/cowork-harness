@@ -208,7 +208,7 @@ if *every* key passes (don't rely on the first; keep one concern per item unless
 
 `expect_denied: [host, …]` is shorthand that adds an `egress_denied` assertion per host.
 
-Run **`cowork-harness assert --list`** for this table from the live schema (it can't drift).
+Run **`cowork-harness assertions --list`** for this table from the live schema (it can't drift).
 
 #### `artifact_json` — assert structured JSON in YAML
 

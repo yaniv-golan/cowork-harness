@@ -186,7 +186,7 @@ npm install && npm run build && npm link    # puts the `cowork-harness` command 
 **Try it in 10 seconds — no token, no Docker.** A committed synthetic cassette replays on a fresh clone, so you can see a green run before setting anything up:
 
 ```bash
-cowork-harness replay --cassette examples/replays/example-pdf-skill.cassette.json
+cowork-harness replay examples/replays/example-pdf-skill.cassette.json
 ```
 
 Only the committed-cassette `replay` above is fully self-contained. Live `run`/`skill` need the prerequisites in the next section — and note the `protocol` tier skips Docker and the staged agent but **still calls a real model** (via the host `claude`), so it needs the auth token.
@@ -231,7 +231,7 @@ cowork-harness run examples/scenarios/ --output-format json
 #    (without --out, the cassette is named after the scenario — its `name:`, or the filename)
 #    Commit cassettes under examples/replays/ (this repo) or cassettes/ (conventional skill-repo name).
 cowork-harness record examples/scenarios/example-pdf-skill.yaml --out examples/replays/example-pdf-skill.cassette.json
-cowork-harness replay --cassette examples/replays/example-pdf-skill.cassette.json
+cowork-harness replay examples/replays/example-pdf-skill.cassette.json
 
 # Cassettes are COMMITTED fixtures — record against synthetic data, and gate them in CI:
 cowork-harness verify-cassettes examples/replays/   # privacy scan (email/currency/domain) + staleness; exit 1 on a finding

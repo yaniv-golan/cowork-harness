@@ -328,8 +328,9 @@ counts) — committed PII surface. Two layers, distinct from secret-scrub (which
   **whole** finding token (so a bare-domain allow no longer silently clears an email whose domain it matches), and
   `--allow-domain` / `--allow-email` scope an allow to a single finding class, while `--allow-file <path>` loads
   allows from a version-controlled file (one regex per line, `#` comments). Multi-word proper names are **not** a
-  default class (too noisy). `verify-cassettes` also runs the **staleness** check
-  (`--staleness-only`): a drifted `skillHash` (you edited the skill but didn't re-record) fails the gate.
+  default class (too noisy). `verify-cassettes` also runs the **staleness** check (both checks run by
+  default; scope to one with `--skip-privacy` or `--skip-staleness`): a drifted `skillHash` (you edited
+  the skill but didn't re-record) fails the gate.
   The `skillHash` hard-excludes only what is UNIVERSALLY non-runtime — recorded cassettes (`*.cassette.json`,
   by extension, so writing a cassette under the hashed tree doesn't self-invalidate the fingerprint it just
   recorded), VCS/cache dirs (`.git`, `node_modules`, `__pycache__`, …), and the `version` field of a
@@ -376,7 +377,7 @@ Add this to the **token-free** job in your CI pipeline (no API key needed):
 - name: Replay cassette (token-free PR gate)
   run: |
     node dist/cli.js replay \
-      --cassette examples/replays/example-pdf-skill.cassette.json \
+      examples/replays/example-pdf-skill.cassette.json \
       --output-format json
   # exit 1 if any assertion fails; the json envelope has ok:true on pass
 ```

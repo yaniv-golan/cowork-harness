@@ -202,7 +202,7 @@ passes only if every key passes. Keep one concern per item unless you mean conju
 | `egress_allowed: <host>` | the host was allowed through |
 | `artifact_json: {artifact, path, …}` | assert a JSON artifact's contents — `equals`/`gt`/`exists`/`absent`/`is_null` over a dotted `path` (`absent` ≠ `is_null`; an unresolved intermediate fails loud) |
 
-`expect_denied: [host, …]` adds one `egress_denied` per host. Run `cowork-harness assert --list` for this
+`expect_denied: [host, …]` adds one `egress_denied` per host. Run `cowork-harness assertions --list` for this
 table from the live schema. Example: `artifact_json: { artifact: outputs/cap.json, path: me.run_id, equals: "r1" }`.
 
 **Content correctness:** match the assertion to the deliverable. Prose → `transcript_matches`

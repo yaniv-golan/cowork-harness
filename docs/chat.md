@@ -106,7 +106,7 @@ There is no `--keep` flag — `chat` always writes the transcript and always kee
 | Gates | Answered interactively at the TTY | Scripted answers / decider flags |
 | Session ID | Throwaway (minted per invocation) | Supports `--session-id` / `--resume` |
 | Assertions | None | Full `assert:` block via scenario |
-| Cassette | No | Yes (`--record` / `--replay`) |
+| Cassette | No | Via the top-level `record` / `replay` subcommands (not `skill` flags) |
 | Primary use | Exploring, reproducing flows | CI-style testing, checkpoint/resume |
 
 `chat` does not support `--session-id` or `--resume`. For checkpoint/resume debugging, use

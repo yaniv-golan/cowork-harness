@@ -67,7 +67,7 @@ dollar figures). In a skill repo these cassettes get **committed**. So:
 ```bash
 cowork-harness verify-cassettes cassettes/                       # privacy scan + staleness, exit 1 on a finding
 cowork-harness verify-cassettes cassettes/ --allow 'NVCA|Cooley GO|Acme'
-cowork-harness verify-cassettes cassettes/ --staleness-only      # just the "edited the skill, didn't re-record" gate
+cowork-harness verify-cassettes cassettes/ --skip-privacy        # staleness only (skip the privacy scan); both run by default
 ```
 
 ## Four-stage pipeline
