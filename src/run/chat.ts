@@ -20,37 +20,99 @@ import type { WebFetchProvenance } from "../hostloop/workspace-handler.js";
 
 const log = (s: string) => process.stderr.write(s);
 
+/** Fidelity tiers `chat` supports. A subset of the full Scenario tier set: `microvm`/`cowork` are NOT
+ *  supported in the interactive REPL (no Lima/auto-pick plumbing here), so they are rejected loudly
+ *  rather than silently degraded to container — symmetric with the `--fidelity` flag's own validation. */
+const CHAT_FIDELITY_TIERS = ["protocol", "container", "hostloop"] as const;
+type ChatFidelity = (typeof CHAT_FIDELITY_TIERS)[number];
+
 /**
- * `chat <folder> [prompt] [--raw] [--fidelity protocol|container|hostloop]` — interactive
- * multi-turn REPL against a skill, keeping the full harness (egress sandbox, control protocol).
- * `--raw` drops the protocol and `docker run -it`s the agent in its NATIVE interactive cowork
- * mode (unmediated escape hatch; egress sandbox NOT applied).
+ * The chat option spec — the SINGLE source of truth for both parsing and the usage text (the
+ * usage string used to be hand-written and omitted `--plugin`). Each entry documents one option; the
+ * usage line is generated from `usage` fields so a parsed-but-undocumented flag is impossible.
+ */
+const CHAT_OPTIONS = [
+  { flag: "--raw", kind: "boolean", usage: "[--raw]" },
+  { flag: "--verbose", alias: "-V", kind: "boolean", usage: "[--verbose]" },
+  { flag: "--fidelity", kind: "value", usage: "[--fidelity protocol|container|hostloop]" },
+  { flag: "--model", kind: "value", usage: "[--model <id>]" },
+  { flag: "--upload", kind: "value", usage: "[--upload <file>]..." },
+  { flag: "--folder", kind: "value", usage: "[--folder <dir>]..." },
+  { flag: "--plugin", kind: "value", usage: "[--plugin <dir>]..." },
+] as const;
+
+/** Build the chat usage string from CHAT_OPTIONS so every parsed flag is documented. */
+function chatUsage(): string {
+  const opts = CHAT_OPTIONS.map((o) => o.usage);
+  return "usage: chat <skill-folder> [prompt] " + opts.slice(0, 3).join(" ") + "\n              " + opts.slice(3).join(" ") + "\n";
+}
+
+/**
+ * `chat <folder> [prompt] [--raw] [--fidelity protocol|container|hostloop] [--model <id>]
+ *  [--upload <file>]... [--folder <dir>]... [--plugin <dir>]... [--verbose]` — interactive multi-turn
+ * REPL against a skill, keeping the full harness (egress sandbox, control protocol). `--raw` drops the
+ * protocol and `docker run -it`s the agent in its NATIVE interactive cowork mode (unmediated escape
+ * hatch; egress sandbox NOT applied — and all file/fidelity options are rejected in `--raw`).
  */
 export async function cmdChat(args: string[]) {
   const positional: string[] = [];
   let raw = false;
-  // R4: COWORK_HARNESS_FIDELITY env var — protocol|container|hostloop accepted here (subset of skill tiers).
+  // parse COWORK_HARNESS_FIDELITY through the same tier set the --fidelity flag validates. An
+  // invalid value (a typo, or microvm/cowork which chat doesn't support) is rejected LOUDLY rather than
+  // silently degraded to container — symmetric with the CLI flag and with skill's env handling.
   const envFid = process.env.COWORK_HARNESS_FIDELITY;
-  let fidelity: "protocol" | "container" | "hostloop" =
-    envFid === "hostloop" ? "hostloop" : envFid === "protocol" ? "protocol" : "container";
+  if (envFid !== undefined && !(CHAT_FIDELITY_TIERS as readonly string[]).includes(envFid)) {
+    log(
+      `chat: COWORK_HARNESS_FIDELITY must be one of ${CHAT_FIDELITY_TIERS.join("|")} (got "${envFid}")` +
+        (["microvm", "cowork"].includes(envFid) ? ` — ${envFid} is not supported in chat` : "") +
+        "\n",
+    );
+    process.exit(2);
+  }
+  let fidelity: ChatFidelity = (envFid as ChatFidelity | undefined) ?? "container";
   // R4: COWORK_HARNESS_MODEL env var default (CLI --model takes precedence).
   let model: string | undefined = process.env.COWORK_HARNESS_MODEL;
   let verbose = false;
   const uploads: string[] = [];
   const folders: Array<{ from: string; mode: "rw" }> = [];
   const localPlugins: string[] = [];
+  // track which flags were actually passed, for the --raw consolidated-ignore check.
+  const seenFlags = new Set<string>();
+  // a value reader that rejects a MISSING, EMPTY, or flag-looking value for value-flags (the old
+  // code only bounds-checked, so `--upload --folder` took `--folder` as the upload path and `--upload ""`
+  // was accepted). --model already validated; this unifies the policy across --upload/--folder/--plugin too.
+  const nextValue = (i: number, flag: string, what: string): string => {
+    if (i + 1 >= args.length) {
+      log(`chat ${flag} requires ${what}\n`);
+      process.exit(2);
+    }
+    const v = args[i + 1];
+    if (!v.trim()) {
+      log(`chat ${flag} requires a non-empty ${what}\n`);
+      process.exit(2);
+    }
+    if (v.startsWith("-") && !/^-\d/.test(v)) {
+      log(`chat ${flag} requires ${what} but got a flag-looking token "${v}" — did you forget the value?\n`);
+      process.exit(2);
+    }
+    return v;
+  };
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
-    if (a === "--raw") raw = true;
-    else if (a === "--verbose" || a === "-V") verbose = true;
+    if (a === "--raw") {
+      raw = true;
+      seenFlags.add("--raw");
+    } else if (a === "--verbose" || a === "-V") verbose = true;
     else if (a === "--fidelity") {
       const v = ++i < args.length ? args[i] : undefined; // §8.2: bounds check
-      if (v !== "protocol" && v !== "container" && v !== "hostloop") {
-        log(`chat --fidelity must be "protocol", "container", or "hostloop" (got "${v ?? ""}")\n`);
+      if (v === undefined || !(CHAT_FIDELITY_TIERS as readonly string[]).includes(v)) {
+        log(`chat --fidelity must be ${CHAT_FIDELITY_TIERS.map((t) => `"${t}"`).join(", ")} (got "${v ?? ""}")\n`);
         process.exit(2);
       }
-      fidelity = v;
+      fidelity = v as ChatFidelity;
+      seenFlags.add("--fidelity");
     } else if (a === "--model") {
+      // --model keeps its own (already-correct) non-empty validation.
       if (++i >= args.length) {
         log(`chat --model requires a value\n`);
         process.exit(2);
@@ -60,24 +122,16 @@ export async function cmdChat(args: string[]) {
         log(`chat --model requires a non-empty value\n`);
         process.exit(2);
       }
+      seenFlags.add("--model");
     } else if (a === "--upload") {
-      if (++i >= args.length) {
-        log(`chat --upload requires a file path\n`);
-        process.exit(2);
-      }
-      uploads.push(args[i]);
+      uploads.push(nextValue(i++, "--upload", "a file path"));
+      seenFlags.add("--upload");
     } else if (a === "--folder") {
-      if (++i >= args.length) {
-        log(`chat --folder requires a directory path\n`);
-        process.exit(2);
-      }
-      folders.push({ from: args[i], mode: "rw" });
+      folders.push({ from: nextValue(i++, "--folder", "a directory path"), mode: "rw" });
+      seenFlags.add("--folder");
     } else if (a === "--plugin") {
-      if (++i >= args.length) {
-        log(`chat --plugin requires a directory path\n`);
-        process.exit(2);
-      }
-      localPlugins.push(args[i]);
+      localPlugins.push(nextValue(i++, "--plugin", "a directory path"));
+      seenFlags.add("--plugin");
     } else if (a.startsWith("-")) {
       log(`chat: unknown flag: ${a}\n`);
       process.exit(2);
@@ -85,17 +139,33 @@ export async function cmdChat(args: string[]) {
   }
   const folder = positional[0];
   const seedPrompt = positional[1]; // optional: injected as the first turn before the REPL
-  if (!folder) {
+  // reject extra positionals — `chat <folder> [prompt]` consumes at most two; a third (e.g. an
+  // unquoted multi-word prompt) was silently ignored, so the run used unintended input.
+  if (positional.length > 2) {
     log(
-      "usage: chat <skill-folder> [prompt] [--raw] [--fidelity protocol|container|hostloop]\n" +
-        "              [--model <id>] [--upload <file>]... [--folder <dir>]... [--verbose]\n",
+      `chat takes at most <skill-folder> [prompt] (got ${positional.length} positionals: ${positional.join(", ")}) — ` +
+        `quote a prompt that contains spaces\n`,
     );
+    process.exit(2);
+  }
+  if (!folder) {
+    log(chatUsage());
     process.exit(2);
   }
 
   if (raw) {
-    if (localPlugins.length > 0)
-      log(`chat --raw: --plugin flags are ignored in --raw mode (native docker mode mounts one skill folder only)\n`);
+    // --raw runs the agent in native docker mode — it has NO egress sandbox and NO control
+    // protocol, so every file/sandbox-fidelity option is meaningless there. Previously only --plugin
+    // warned; uploads/folders/fidelity were silently dropped. Reject the file/sandbox options loudly
+    // (they imply mounts/fidelity --raw cannot honor), and warn on the rest.
+    const rawRejected = ["--upload", "--folder", "--plugin", "--fidelity"].filter((f) => seenFlags.has(f));
+    if (rawRejected.length > 0) {
+      log(
+        `chat --raw does not support ${rawRejected.join(", ")} — --raw mounts ONE skill folder in native cowork ` +
+          `mode with no egress sandbox or fidelity selection. Drop these flags or omit --raw.\n`,
+      );
+      process.exit(2);
+    }
     return chatRaw(folder, model);
   }
 

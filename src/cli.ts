@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, writeSync, existsSync } from "node:fs";
-import { join, basename, resolve } from "node:path";
+import { join, basename, resolve, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
-import { Scenario, AnswerRule, Assertion, type RunResult } from "./types.js";
+import { Scenario, AnswerRule, Assertion, type RunResult, type PlatformBaseline } from "./types.js";
 import { loadBaseline, BASELINES_DIR, cmpVersionStrings } from "./baseline.js";
 import { loadSession, resolveSessionPaths } from "./session.js";
 import { executeScenario, parseScenarioFile, UnansweredError, BoundaryError, type ExecuteOptions } from "./run/execute.js";
@@ -262,7 +262,7 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
   list: "usage: list [--output-format text|json]   (list available platform baselines)",
   "boundary-check": "usage: boundary-check [<baseline>] [--session <file>] [--output-format text|json]",
   vm: "usage: vm <init|status|delete|prune> [--output-format text|json]   (macOS arm64 only)\n  init    create the L2 Apple-VZ microVM\n  status  show running VM state\n  delete  remove a named VM\n  prune   drop all orphaned VMs",
-  chat: "usage: chat <skill-folder> [prompt] [--fidelity protocol|container|hostloop] [--model <id>]\n              [--upload <file>]... [--folder <dir>]... [--plugin <dir>]... [--verbose] [--raw]\n       --raw: native cowork mode via docker run -it; egress sandbox NOT applied; --model/--fidelity ignored\n       --fidelity: protocol/container/hostloop only (no microvm/cowork); protocol = no Docker, no sandbox",
+  chat: "usage: chat <skill-folder> [prompt] [--fidelity protocol|container|hostloop] [--model <id>]\n              [--upload <file>]... [--folder <dir>]... [--plugin <dir>]... [--verbose] [--raw]\n       --raw: native cowork mode via docker run -it; egress sandbox NOT applied; rejects --upload/--folder/--plugin/--fidelity (only --model applies)\n       --fidelity: protocol/container/hostloop only (no microvm/cowork); protocol = no Docker, no sandbox",
   record:
     "usage: record <scenario.yaml | dir/> [--out <file>] [--output-format text|json] [--rerecord-stale] [--no-redact] [--allow-failing] [--max-artifact-bytes <n>] [--dry-run]",
   replay:
@@ -504,7 +504,7 @@ function flagValue(args: string[], i: number, flag: string): string {
 }
 
 /**
- * Bug 30: variant of flagValue that additionally rejects values that look like flags (start with "-",
+ * variant of flagValue that additionally rejects values that look like flags (start with "-",
  * excluding negative numbers like "-1"). Use this at call sites that do NOT have a downstream explicit
  * flag-like check. Name the flag and suspicious value in the error.
  */
@@ -543,7 +543,7 @@ function positionals(args: string[], valueFlags: string[]): string[] {
  * a command has parsed its recognized flags, run this so an unrecognized flag fails LOUD (exit 2) the
  * same way every other usage error does. `knownFlags` lists the flag spellings the command accepts
  * (include the `--output-format=json`/`=text` equals forms where the command honors them).
- * Bug 14: also rejects single-dash flags (e.g. `-x`, `-abc`) that aren't in knownFlags.
+ * also rejects single-dash flags (e.g. `-x`, `-abc`) that aren't in knownFlags.
  */
 function rejectUnknownFlags(command: string, args: string[], knownFlags: string[], json: boolean): void {
   for (const a of args) {
@@ -555,6 +555,13 @@ function rejectUnknownFlags(command: string, args: string[], knownFlags: string[
   }
 }
 
+/**
+ * Common flags shared by `run` and `skill`. Each value-flag accepts BOTH the spaced (`--flag v`) and the
+ * equals (`--flag=v`) form — the hand-rolled loop previously only special-cased
+ * `--output-format=json|text`, so e.g. `--on-unanswered=fail` or `--decider-cmd=cat` were not stripped
+ * and fell through to the per-command unknown-flag guard. Booleans (`--quiet`/`--verbose`) reject an
+ * equals value the way parseArgs does.
+ */
 function takeCommonFlags(args: string[], commandName: string = "skill"): { rest: string[]; flags: CommonFlags } {
   const rest: string[] = [];
   const envOutputFormat = process.env.COWORK_HARNESS_OUTPUT_FORMAT;
@@ -562,28 +569,48 @@ function takeCommonFlags(args: string[], commandName: string = "skill"): { rest:
   const flags: CommonFlags = { output: defaultOutput, quiet: false, verbose: false };
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
-    if (a === "--on-unanswered") flags.onUnanswered = flagValue(args, i++, a) as OnUnanswered;
-    else if (a === "--output-format") {
+    // resolve the equals form generically so every common value-flag accepts `--flag=value`, not
+    // just the two `--output-format=` literals. `name` is the flag before `=`; `eqVal` its inline value.
+    const eq = a.startsWith("--") ? a.indexOf("=") : -1;
+    const name = eq > 0 ? a.slice(0, eq) : a;
+    const eqVal = eq > 0 ? a.slice(eq + 1) : undefined;
+    // Read a value (equals-form inline, else the next token), applying the same non-empty bounds-check
+    // flagValue uses for the spaced form.
+    const readVal = (): string => {
+      if (eqVal !== undefined) {
+        if (eqVal.trim() === "") {
+          log(`${name} requires a non-empty value`);
+          process.exit(2);
+        }
+        return eqVal;
+      }
+      return flagValue(args, i++, name);
+    };
+    // A boolean common flag given an equals value (e.g. `--quiet=1`) is a usage error, mirroring parseArgs.
+    if (eq > 0 && (name === "--quiet" || name === "--verbose")) {
+      log(`${name} takes no value`);
+      process.exit(2);
+    }
+    if (name === "--on-unanswered") flags.onUnanswered = readVal() as OnUnanswered;
+    else if (name === "--output-format") {
       // #2: validate the enum (and bounds-check the value). An invalid/missing value previously fell
       // back to "text" silently (`--output-format xml` behaved as text; a trailing `--output-format` too).
-      const v = flagValue(args, i++, a);
+      const v = readVal();
       if (v !== "text" && v !== "json") {
         log(`--output-format must be "text" or "json" (got "${v}")`);
         process.exit(2);
       }
       flags.output = v;
-    } else if (a === "--output-format=json") flags.output = "json";
-    else if (a === "--output-format=text") flags.output = "text";
-    else if (a === "--quiet" || a === "-q") flags.quiet = true;
+    } else if (a === "--quiet" || a === "-q") flags.quiet = true;
     else if (a === "--verbose" || a === "-V") flags.verbose = true;
-    else if (a === "--decider-cmd") {
-      const v = flagValue(args, i++, a);
-      if (v.startsWith("-"))
+    else if (name === "--decider-cmd") {
+      const v = readVal();
+      if (eqVal === undefined && v.startsWith("-"))
         fail(commandName, "usage", `--decider-cmd: missing value (got flag-looking "${v}")`, undefined, flags.output === "json");
       flags.deciderCmd = v;
-    } else if (a === "--decider-dir") {
-      const v = flagValue(args, i++, a);
-      if (v.startsWith("-"))
+    } else if (name === "--decider-dir") {
+      const v = readVal();
+      if (eqVal === undefined && v.startsWith("-"))
         fail(commandName, "usage", `--decider-dir: missing value (got flag-looking "${v}")`, undefined, flags.output === "json");
       flags.deciderDir = v;
     } else rest.push(a);
@@ -854,31 +881,62 @@ async function cmdSkill(rawArgs: string[]) {
   let resume = false;
   let dryRun = false;
   let keep = false;
+  const isJson0 = flags.output === "json";
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
-    if (a === "--fidelity") {
-      fidelity = flagValue(args, i++, a) as typeof fidelity; // #58: bounds-checked
+    // accept BOTH `--flag value` and `--flag=value` for every skill value-flag (the old loop matched
+    // by exact `a === "--flag"`, so `--fidelity=container` fell through to the unknown-flag guard). `name`
+    // is the flag before `=`; when an inline `=value` is present, consume it instead of the next token.
+    const eq = a.startsWith("--") ? a.indexOf("=") : -1;
+    const name = eq > 0 ? a.slice(0, eq) : a;
+    const eqVal = eq > 0 ? a.slice(eq + 1) : undefined;
+    // value reader: equals-inline value (non-empty checked) else the next token (via flagValue/Strict).
+    const nextVal = (): string => {
+      if (eqVal !== undefined) {
+        if (eqVal.trim() === "") {
+          log(`${name} requires a non-empty value`);
+          process.exit(2);
+        }
+        return eqVal;
+      }
+      return flagValue(args, i++, name);
+    };
+    // strict variant additionally rejects a SPACED flag-looking value (the equals form is the escape).
+    const nextValStrict = (): string => {
+      const v = nextVal();
+      if (eqVal === undefined && v.startsWith("-") && !/^-\d/.test(v)) {
+        log(`${name} requires a value but got a flag-looking token "${v}" — did you forget the value?`);
+        process.exit(2);
+      }
+      return v;
+    };
+    // booleans reject an equals value, mirroring parseArgs.
+    if (eq > 0 && (name === "--resume" || name === "--decider-llm" || name === "--dry-run" || name === "--keep")) {
+      fail("skill", "usage", `${name} takes no value`, undefined, isJson0);
+    }
+    if (name === "--fidelity") {
+      fidelity = nextVal() as typeof fidelity; // #58: bounds-checked
       // #6: validate at parse time → category `usage`. Previously an invalid value was only rejected
       // later by Scenario.parse (a Zod throw), which the top-level catch mapped to `internal` — a user
       // mistake masquerading as a harness bug.
       const FID = ["protocol", "container", "microvm", "hostloop", "cowork"];
       if (!FID.includes(fidelity))
-        fail("skill", "usage", `--fidelity must be one of ${FID.join("|")} (got "${fidelity}")`, undefined, flags.output === "json");
-    } else if (a === "--model") model = flagValueStrict(args, i++, a);
-    else if (a === "--prompt-file") promptFile = flagValueStrict(args, i++, a);
-    else if (a === "--upload") uploads.push(flagValueStrict(args, i++, a));
-    else if (a === "--folder") folders.push(flagValueStrict(args, i++, a));
-    else if (a === "--session-id") sessionId = flagValueStrict(args, i++, a);
+        fail("skill", "usage", `--fidelity must be one of ${FID.join("|")} (got "${fidelity}")`, undefined, isJson0);
+    } else if (name === "--model") model = nextValStrict();
+    else if (name === "--prompt-file") promptFile = nextValStrict();
+    else if (name === "--upload") uploads.push(nextValStrict());
+    else if (name === "--folder") folders.push(nextValStrict());
+    else if (name === "--session-id") sessionId = nextValStrict();
     else if (a === "--resume") resume = true;
     else if (a === "--decider-llm") deciderLlm = true;
-    else if (a === "--intent") intent = flagValueStrict(args, i++, a);
+    else if (name === "--intent") intent = nextValStrict();
     else if (a === "--dry-run") dryRun = true;
     else if (a === "--keep") keep = true;
-    else if (a === "--plugin") extraPlugins.push(flagValueStrict(args, i++, a));
-    else if (a === "--marketplace") marketplaces.push(flagValueStrict(args, i++, a));
-    else if (a === "--enable") enables.push(flagValueStrict(args, i++, a));
-    else if (a === "--answer") {
-      const raw = flagValueStrict(args, i++, a);
+    else if (name === "--plugin") extraPlugins.push(nextValStrict());
+    else if (name === "--marketplace") marketplaces.push(nextValStrict());
+    else if (name === "--enable") enables.push(nextValStrict());
+    else if (name === "--answer") {
+      const raw = nextValStrict();
       const parts = splitEq(raw);
       if (!parts)
         fail(
@@ -886,13 +944,13 @@ async function cmdSkill(rawArgs: string[]) {
           "usage",
           `--answer requires "question-regex=choice" (got "${raw}" — both sides must be non-empty)`,
           undefined,
-          flags.output === "json",
+          isJson0,
         );
       const [q, choose] = parts!;
       answers.push({ when_question: q, choose });
-    } else if (a === "--answer-policy") answerPolicy = flagValueStrict(args, i++, a);
-    // Bug 1: reject unknown flags (any token starting with - or -- that wasn't consumed above)
-    else if (a.startsWith("-")) fail("skill", "usage", `unknown flag: ${a}`, undefined, flags.output === "json");
+    } else if (name === "--answer-policy") answerPolicy = nextValStrict();
+    // reject unknown flags (any token starting with - or -- that wasn't consumed above)
+    else if (a.startsWith("-")) fail("skill", "usage", `unknown flag: ${a}`, undefined, isJson0);
     else positional.push(a);
   }
   const isJson = flags.output === "json";
@@ -962,7 +1020,7 @@ async function cmdSkill(rawArgs: string[]) {
     );
   const localPlugins = [...(folder ? [folder] : []), ...extraPlugins];
 
-  // Bug 13: All semantic validation must happen BEFORE the dry-run return so --dry-run doesn't bypass
+  // All semantic validation must happen BEFORE the dry-run return so --dry-run doesn't bypass
   // conflict guards. The dry-run only skips side effects (actually running), not validation.
 
   // `--decider-llm` is the ONLY user-facing way to select the LLM terminal (it maps to the `llm`
@@ -1056,6 +1114,57 @@ async function cmdSkill(rawArgs: string[]) {
   process.exit(computeVerdict(result, "live").pass ? 0 : 1);
 }
 
+/** All fidelity tiers the harness understands (the canonical Scenario `fidelity:` enum), surfaced so a
+ *  JSON caller of `vm status` sees the same set the CLI validates. `container` is the default tier. */
+const FIDELITY_TIERS = ["protocol", "container", "microvm", "hostloop", "cowork"] as const;
+
+/** Resolve the on-disk file a named baseline loads from (mirrors loadBaseline's resolution) so the JSON
+ *  envelope can report it. `latest` resolves to its concrete file; an absolute name is itself. */
+function baselineFilePath(name: string): string {
+  if (name === "latest") {
+    const files = readdirSync(BASELINES_DIR)
+      .filter((f) => f.startsWith("desktop-") && f.endsWith(".json"))
+      .sort((a, b) =>
+        cmpVersionStrings(a.replace(/^desktop-/, "").replace(/\.json$/, ""), b.replace(/^desktop-/, "").replace(/\.json$/, "")),
+      );
+    return files.length ? join(BASELINES_DIR, files[files.length - 1]) : join(BASELINES_DIR, "latest");
+  }
+  if (isAbsolute(name)) return name;
+  return join(BASELINES_DIR, name.endsWith(".json") ? name : `${name}.json`);
+}
+
+/** stable JSON envelope for `vm status`. Surfaces baseline path/version, the fidelity tiers the
+ *  harness understands, guest-image hints, the resolved VM instance + its current status, and any
+ *  warnings (e.g. status the VM tooling could not determine). Keep the shape additive — JSON callers
+ *  pin field names, so add fields rather than rename/remove. */
+function vmStatusEnvelope(baselineName: string, baseline: PlatformBaseline, instance: string, status: string) {
+  const warnings: string[] = [];
+  // vmStatus returns "Absent" when no Lima VM exists for this config hash (see lima.ts) — surface that
+  // as a warning so a JSON caller doesn't read "Absent" as a running VM.
+  if (status === "Absent") warnings.push(`no VM exists for ${instance} (run \`vm init\` to create it)`);
+  return {
+    tool: "cowork-harness",
+    command: "vm",
+    subcommand: "status",
+    instance,
+    status,
+    baseline: {
+      name: baselineName,
+      path: baselineFilePath(baselineName),
+      appVersion: baseline.appVersion,
+      agentVersion: baseline.agentVersion,
+      baselineVersion: baseline.baselineVersion,
+    },
+    fidelity: { tiers: [...FIDELITY_TIERS], default: "container" },
+    image: {
+      guestOs: baseline.guest.os,
+      guestArch: baseline.guest.arch,
+      baseImage: baseline.guest.baseImage ?? null,
+    },
+    warnings,
+  };
+}
+
 const VM_SUB_HELP: Record<string, string> = {
   init: "usage: vm init [<baseline>] [--output-format text|json]   — create the L2 Apple-VZ microVM",
   status: "usage: vm status [<baseline>] [--output-format text|json] — show running VM state",
@@ -1086,16 +1195,41 @@ function cmdVm(args: string[]) {
     log(SUBCOMMAND_USAGE["vm"] ?? "usage: vm <init|status|delete|prune>");
     process.exit(2);
   }
-  // Bug 25: reject unknown flags so a typo (e.g. `--coonfigure`) fails fast instead of being silently
-  // passed to loadBaseline as a positional. Known flags: --output-format (+ equals forms), --help, -h.
-  const knownVmFlags = ["--output-format", "--output-format=json", "--output-format=text", "--help", "-h"];
-  rejectUnknownFlags("vm", args, knownVmFlags, isJsonOutput(args));
-  const baseline = loadBaseline(args[1] ?? "latest");
+  // parse the subcommand args through the shared spec so `--output-format` (and any
+  // unknown flag) is handled structurally — NOT peeked positionally. was `loadBaseline(args[1])`
+  // resolving `loadBaseline("--output-format")` for `vm status --output-format json`; the optional
+  // baseline is now the (single) positional, parsed independently of the flag.
+  const subArgs = args.slice(1); // drop the subcommand token
+  let vmParsed;
+  try {
+    vmParsed = parseArgs(subArgs, {
+      values: ["--output-format"],
+      enums: { "--output-format": ["text", "json"] },
+    });
+  } catch (e) {
+    return fail("vm", "usage", String((e as Error).message), undefined, isJsonOutput(args));
+  }
+  const vmJson = vmParsed.options["--output-format"] === "json";
+  if (vmParsed.positionals.length > 1) {
+    return fail(
+      "vm",
+      "usage",
+      `vm ${sub} takes at most one baseline (got ${vmParsed.positionals.length}: ${vmParsed.positionals.join(", ")})`,
+      undefined,
+      vmJson,
+    );
+  }
+  const baselineName = vmParsed.positionals[0] ?? "latest";
+  const baseline = loadBaseline(baselineName);
   // #62/#63: the instance name is derived from the config hash (see lima.ts instanceName) — a config
   // change yields a new name, so a stale VM is never silently reused.
   const instance = instanceName(baseline);
-  if (sub === "status") log(`${instance}: ${vmStatus(instance)}`);
-  else if (sub === "init") {
+  if (sub === "status") {
+    const status = vmStatus(instance);
+    // honor --output-format json (the flag was advertised but every branch printed text).
+    if (vmJson) out(JSON.stringify(vmStatusEnvelope(baselineName, baseline, instance, status)));
+    else log(`${instance}: ${status}`);
+  } else if (sub === "init") {
     const { status } = vmInit(baseline);
     log(`${instance}: ${status}`);
   } else if (sub === "delete") {
@@ -1115,7 +1249,7 @@ function cmdVm(args: string[]) {
 function cmdBoundary(args: string[]) {
   // Optional --session <file>: fold that session's egress additions into the boundary allowlist so the
   // self-test exercises the same boundary the session's runs would (not just baseline invariants).
-  // Bug 24: accept --output-format so the advertised flag isn't rejected at runtime.
+  // accept --output-format so the advertised flag isn't rejected at runtime.
   ensureOutputFormat("boundary-check", args);
   const json = isJsonOutput(args);
   let p;
@@ -1139,7 +1273,16 @@ function cmdBoundary(args: string[]) {
   const baseline = loadBaseline(p.positionals[0] ?? "latest");
   let sessionEgress: { extraAllow?: string[]; unrestricted?: boolean } | undefined;
   if (sessionPath) {
-    const s = loadSession(parseYaml(readFileSync(sessionPath, "utf8")));
+    // read + parse + load the session inside the command's usage-error path. Previously these ran
+    // OUTSIDE the `fail(...,json)` path, so a missing file (ENOENT) or malformed YAML surfaced as a
+    // top-level INTERNAL error with the JSON envelope never emitted. A bad --session is a usage error.
+    if (!existsSync(sessionPath)) fail("boundary-check", "usage", `--session file not found: ${sessionPath}`, undefined, json);
+    let s;
+    try {
+      s = loadSession(parseYaml(readFileSync(sessionPath, "utf8")));
+    } catch (e) {
+      return fail("boundary-check", "usage", `cannot parse --session ${sessionPath}: ${String((e as Error).message)}`, undefined, json);
+    }
     sessionEgress = { extraAllow: s.egress.extra_allow, unrestricted: s.egress.unrestricted };
   }
   const results = runBoundaryChecks(baseline, sessionEgress);
@@ -1157,8 +1300,8 @@ function cmdSync(args: string[]) {
     log("sync requires macOS (the Cowork Desktop app is macOS-only).");
     return process.exit(2);
   }
-  // Bug 6: use parseArgs to reject unknown flags and positionals.
-  // Bug 26: accept --force as a canonical alias for --allow-empty; normalize before parsing.
+  // use parseArgs to reject unknown flags and positionals.
+  // accept --force as a canonical alias for --allow-empty; normalize before parsing.
   const normalizedArgs = args.map((a) => (a === "--force" ? "--allow-empty" : a));
   let syncParsed;
   try {
@@ -1304,7 +1447,7 @@ function cmdSync(args: string[]) {
   if (res.unknownDeltas.length) {
     log("\n⚠ unknown deltas (extend src/sync/cowork-sync.ts):");
     for (const d of res.unknownDeltas) log("   - " + d);
-    // Bug 23: unknown deltas block the write unless --diff (diagnosis mode) is active.
+    // unknown deltas block the write unless --diff (diagnosis mode) is active.
     if (!diffFlag && !allowEmpty) {
       log("Refusing to write baseline with unknown deltas. Fix src/sync/cowork-sync.ts or pass --allow-empty to force-write.");
       process.exit(1);
@@ -1332,8 +1475,8 @@ function cmdSync(args: string[]) {
 }
 
 function cmdList(args: string[] = []) {
-  // Bug 7: reject unknown flags and positionals.
-  // Bug 23: accept --output-format with enum validation so the advertised flag isn't rejected.
+  // reject unknown flags and positionals.
+  // accept --output-format with enum validation so the advertised flag isn't rejected.
   ensureOutputFormat("list", args);
   const json = isJsonOutput(args);
   let listParsed;
@@ -1379,7 +1522,7 @@ async function cmdDecide(args: string[]) {
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === "--question")
-      question = flagValueStrict(args, i++, a); // #58: bounds-checked; Bug 30: rejects flag-looking values
+      question = flagValueStrict(args, i++, a); // #58: bounds-checked; rejects flag-looking values
     else if (a === "--option") options.push(flagValueStrict(args, i++, a));
     else if (a === "--decider-cmd") {
       deciderCmd = flagValue(args, i++, a);
@@ -1403,7 +1546,7 @@ async function cmdDecide(args: string[]) {
     else if (a === "--output-format") i++;
     // --decider-dir is rejected explicitly below with a redirect message; consume its value here so the
     // value isn't flagged as a stray positional before that guard fires.
-    // Bug 12: check that the next token exists and doesn't look like a flag before consuming it.
+    // check that the next token exists and doesn't look like a flag before consuming it.
     else if (a === "--decider-dir") {
       const v = args[i + 1];
       if (v === undefined || v.startsWith("-"))
@@ -1540,7 +1683,7 @@ async function cmdGates(args: string[]) {
 /** `answer <dir> --gate <N> (--choose <label> | --answer "<q>=<label>"…)` — write a gate answer
  *  atomically with the right wire shape (hides the temp+rename + `{id, answers}` the driver had to build). */
 function cmdAnswer(args: string[]) {
-  // Bug 29: validate --output-format before isJsonOutput so an unrecognized value is a usage error.
+  // validate --output-format before isJsonOutput so an unrecognized value is a usage error.
   ensureOutputFormat("answer", args);
   const json = isJsonOutput(args);
   // #15: skip flag values so `answer --gate 1 --choose Yes <dir>` doesn't read `1` as the directory.
@@ -1575,12 +1718,12 @@ function cmdAnswer(args: string[]) {
     } else if (a === "--output-format=json" || a === "--output-format=text") {
       // no-op — already handled by isJsonOutput
     } else if (a.startsWith("-")) {
-      // Bug 10: reject unknown flags
+      // reject unknown flags
       return void fail("answer", "usage", `unknown flag: ${a}`, undefined, json);
     }
     // positionals already handled above via positionals() helper
   }
-  // Bug 11: reject conflicting --choose and --answer
+  // reject conflicting --choose and --answer
   if (chooses.length > 0 && pairs.length > 0) return void fail("answer", "usage", "cannot use both --choose and --answer", undefined, json);
   if (!dir)
     return void fail("answer", "usage", 'usage: answer <dir> --gate <N> (--choose <label> | --answer "<q>=<label>")', undefined, json);
@@ -1800,6 +1943,16 @@ function cmdVerifyRun(args: string[]) {
     toolResultTexts: (result.toolResults ?? []).map((r) => r.assertText ?? r.text),
     transcriptMissing: sidecarTranscript === null,
     questionsMissing: sidecarQuestions === null,
+    // Evidence-missing flags: set ONLY when the underlying field is undefined (partial/old result.json),
+    // not when it is a legitimately-empty {}/[]. The producer serializes these unconditionally
+    // (execute.ts), so in the verify-run lane `undefined` reliably means the evidence is absent — not
+    // that the run produced none. Negative/absence assertions then fail loud instead of vacuously green.
+    toolResultsMissing: result.toolResults === undefined,
+    toolsCalledMissing: result.toolCounts === undefined,
+    subagentsMissing: result.subagents === undefined,
+    // Derive from `result.scan` directly — NOT the `scan` local, which already collapsed undefined into
+    // the `{outputsDeletes:[],hostPathLeaked:false,selfHealRan:false}` default above.
+    scanMissing: result.scan === undefined,
   };
 
   const assertions = evaluate(scenario.assert, ctx);
@@ -1892,7 +2045,7 @@ function cmdTrace(args: string[]) {
 
   const view = viewArg as View | undefined;
 
-  // Bug 28: reject unknown flags (typos like --ouput-format silently fell through before).
+  // reject unknown flags (typos like --ouput-format silently fell through before).
   rejectUnknownFlags(
     "trace",
     args,

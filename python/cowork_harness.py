@@ -20,7 +20,7 @@ import json
 import os
 import subprocess
 from pathlib import Path
-from typing import Any, Callable, Mapping, Optional
+from typing import Any, Callable, Mapping, Optional, Union
 
 
 def _find_cli() -> str:
@@ -147,6 +147,70 @@ class Result:
         return ""
 
 
+class BatchResult:
+    """A multi-result run (directory input / replay producing >1 RunResult).
+
+    The single-result accessors on `Result` read index 0 only, so collapsing a multi-result
+    envelope to its first entry would hide every later result — a passing first result would
+    mask a failing second one. `BatchResult` instead holds ALL results and refuses to answer
+    a single-result question: `assert_success()` fails if ANY result failed (or the envelope
+    `ok` is false), and the scalar accessors raise rather than silently picking index 0.
+    """
+
+    def __init__(self, results: list["Result"], stderr: str, ok: Optional[bool] = None, error: Optional[dict] = None):
+        self.results = results  # one Result per RunResult, in envelope order
+        self.stderr = stderr
+        self.ok = ok
+        self.error = error
+
+    def __len__(self) -> int:
+        return len(self.results)
+
+    def __iter__(self):
+        return iter(self.results)
+
+    def __getitem__(self, i: int) -> "Result":
+        return self.results[i]
+
+    def failed_results(self) -> list["Result"]:
+        """The constituent runs whose result was not "success" or that carry failed assertions."""
+        return [r for r in self.results if r.result != "success" or r.failed_assertions()]
+
+    def assert_success(self) -> "BatchResult":
+        """Pass only when EVERY result passed and the envelope ok=true.
+
+        A later failure can never be hidden: the first failing result (and the count) is reported.
+        """
+        failures = self.failed_results()
+        assert not failures, (
+            f"{len(failures)} of {len(self.results)} results failed; "
+            f"first failure: result={failures[0].result} "
+            f"assertions={failures[0].failed_assertions()}\n{self.stderr[-1000:]}"
+        )
+        # Envelope-level ok also catches a permissive auto-allow / unasserted host-path leak (see Result).
+        assert self.ok, "run envelope ok=false (permissive auto-allow or an unasserted delete/host-path leak — see the run's signals)"
+        return self
+
+    # The scalar/index-0 accessors that `Result` exposes are ambiguous across multiple results. Refuse
+    # them loudly (directing the caller to iterate `.results`) instead of silently reading index 0.
+    # NB: raise RuntimeError, not AttributeError — an AttributeError from a property/__getattr__ would
+    # be swallowed by Python's attribute-lookup fallback and re-surface as an opaque "no attribute".
+    _AMBIGUOUS_ATTRS = frozenset({
+        "result", "data", "out_dir", "outputs_dir", "work_dir", "artifacts", "subagents",
+        "effective_fidelity", "non_deterministic", "failed_assertions",
+        "assert_transcript_contains", "assert_tool_called", "assert_subagent_dispatched",
+        "assert_dispatch_count_max", "assert_artifact_json",
+    })
+
+    def __getattr__(self, name: str):
+        if name in BatchResult._AMBIGUOUS_ATTRS:
+            raise RuntimeError(
+                f"{name!r} is ambiguous on a multi-result run ({len(self.results)} results); "
+                f"iterate `.results` (or index it) and inspect each Result, or call .assert_success()"
+            )
+        raise AttributeError(name)
+
+
 class Skill:
     def __init__(self, runner: "Cowork", folder: str):
         self._runner = runner
@@ -202,8 +266,13 @@ class Cowork:
         *,
         on_unanswered: str = "fail",  # run's deterministic default
         check: bool = False,  # raise on a failed/enveloped-error run
-    ) -> Result:
-        """#2: run an authored scenario YAML and return the typed Result.
+    ) -> Union[Result, "BatchResult"]:
+        """#2: run an authored scenario YAML (or a directory of them) and return the typed result.
+
+        A single scenario returns a `Result`; a DIRECTORY input (multiple scenarios → multiple
+        RunResults) returns a `BatchResult` holding every result, so a later failure is never hidden
+        behind a passing first one. Call `.assert_success()` on either — on a BatchResult it
+        fails if ANY constituent run failed.
 
         Removes the subprocess-spawn + JSON-parse + outputs-dir-resolution boilerplate every consumer
         otherwise reinvents. The Result exposes `.outputs_dir` (the resolved artifacts dir),
@@ -218,7 +287,8 @@ class Cowork:
         args = ["run", str(path), "--output-format", "json", "--on-unanswered", on_unanswered]
         return self._invoke(args, check=check)
 
-    def replay(self, cassette: str) -> Result:
+    def replay(self, cassette: str) -> Union[Result, "BatchResult"]:
+        # A cassette/directory replay producing >1 RunResult returns a BatchResult.
         return self._invoke(["replay", "--cassette", cassette, "--output-format", "json"])
 
     def trace(self, target: str, tools: bool = False) -> list[dict]:
@@ -243,7 +313,7 @@ class Cowork:
                 f"stdout: {proc.stdout[:500]}"
             ) from exc
 
-    def _invoke(self, args: list[str], check: bool = False) -> Result:
+    def _invoke(self, args: list[str], check: bool = False) -> Union[Result, BatchResult]:
         proc = subprocess.run(["node", self.cli, *args], capture_output=True, text=True)
         # --output-format json emits exactly one envelope on stdout (all channels keep stdout free). Take the
         # last envelope-shaped line defensively in case anything else prints.
@@ -268,8 +338,20 @@ class Cowork:
                 f"stdout: {proc.stdout.strip()}"
             )
         results = env.get("results") or []
+        ok = env.get("ok")
+        error = env.get("error")
+        # A directory run / replay can produce >1 RunResult. Collapsing to results[0] would discard
+        # results[1:] and hide any later failure: the single-result accessors only read index 0.
+        # Return a BatchResult that holds every result and whose assert_success() fails if ANY failed.
+        if len(results) > 1:
+            batch = BatchResult(
+                [Result(d, proc.stderr, ok=ok, error=error) for d in results], proc.stderr, ok=ok, error=error
+            )
+            if check:
+                batch.assert_success()
+            return batch
         data = results[0] if results else {"result": "error", "raw": proc.stdout.strip()}
-        result = Result(data, proc.stderr, ok=env.get("ok"), error=env.get("error"))
+        result = Result(data, proc.stderr, ok=ok, error=error)
         # Opt-in (#10 default is non-raising): check=True raises on a failed/enveloped-error run so a
         # careless caller that skips assert_success() doesn't treat a failed-but-enveloped run as success.
         if check:
@@ -283,8 +365,10 @@ def run_scenario(
     on_unanswered: str = "fail",
     check: bool = False,
     cli: Optional[str] = None,
-) -> Result:
+) -> Union[Result, BatchResult]:
     """#2: module-level convenience — run an authored scenario YAML in one call.
+
+    A directory input (multiple scenarios) returns a `BatchResult`; see `Cowork.run_scenario`.
 
         from cowork_harness import run_scenario
         r = run_scenario("scenarios/cap_table.yaml")  # fidelity/answers live in the YAML

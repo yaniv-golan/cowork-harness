@@ -62,7 +62,7 @@ export function Chain(...deciders: Decider[]): Decider {
 
 /** Scripted rules (`--answer`/`--answer-policy`/scenario `answers:`) → response, else ABSTAIN. */
 export class ScriptedDecider implements Decider {
-  // Bug 15: pre-compiled regex map, keyed by when_question pattern string. Compiled once at construction
+  // pre-compiled regex map, keyed by when_question pattern string. Compiled once at construction
   // so the hot decision path never calls compileUserRegex() per question. An invalid pattern throws at
   // construction time (i.e. at scenario/CLI-arg loading time), not on the first matching attempt.
   private compiledPatterns: Map<string, RegExp>;
@@ -344,6 +344,23 @@ export class LlmDecider implements Decider {
       const text = q.question ?? q.header ?? "";
       const labels = q.options.map((o) => o.label);
       warnDuplicateLabels(labels, JSON.stringify(text));
+      // a no-option question is an open-ended / free-text gate (Cowork's "Other" path). matchLabel
+      // against an empty labels array is unconditionally null, so the label branch would always throw
+      // UnansweredError and the gate could never be answered. Ask the LLM for a free-text answer and deliver
+      // it verbatim through the same answers map (serialized into updatedInput:{questions,answers} downstream,
+      // the pinned AskUserQuestion path) — symmetric with ScriptedDecider/ExternalDecider's labels.length===0
+      // passthrough.
+      if (labels.length === 0) {
+        const free = (await this.complete(this.freeTextPrompt(text, ctx), this.model)).trim();
+        if (free === "")
+          throw new UnansweredError(
+            `LLM decider returned an empty answer for the open-ended question "${text}"`,
+            "an open-ended (no-option) gate needs a non-empty free-text answer",
+          );
+        process.stderr.write(`[llm-decider] "${text}" → free-text${this.intent ? ` (intent: ${this.intent})` : ""}\n`);
+        answers[text] = free;
+        continue;
+      }
       const raw = await this.complete(this.prompt(text, q.options, ctx), this.model);
       const pick = matchLabel(raw, labels);
       if (!pick)
@@ -388,6 +405,22 @@ export class LlmDecider implements Decider {
       .filter(Boolean)
       .join("\n\n");
   }
+
+  /** Prompt for an open-ended (no-option) question — Cowork's free-text "Other" gate. Asks for a direct
+   *  answer rather than a label pick. */
+  private freeTextPrompt(question: string, ctx?: RunContext): string {
+    const tail = (ctx?.transcript?.() ?? "").slice(-1000);
+    return [
+      this.intent
+        ? `You are answering an open-ended question on behalf of a tester driving an automated test. The tester's intent for THIS run: ${this.intent}\nAnswer in a way that best serves that intent.`
+        : `You are answering an open-ended question with realistic, sensible judgment (as a typical user would).`,
+      tail ? `Recent context (transcript tail):\n${tail}` : "",
+      `Question: ${question}`,
+      `This question has no preset options — reply with a concise free-text answer. No preamble.`,
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+  }
 }
 
 /** `prompt` policy — ask a human at the TTY. Requires a TTY (else throws). */
@@ -402,7 +435,7 @@ export class PromptDecider implements Decider {
       throw new UnansweredError("prompt policy needs a terminal", "use --on-unanswered fail|first or run interactively");
     if (req.kind === "permission") {
       const labels = (req.options ?? []).map((o) => o.label);
-      // Bug 20: a web_fetch approval with options present but empty would spin the coercedPerm loop
+      // a web_fetch approval with options present but empty would spin the coercedPerm loop
       // forever — coerceLabel always returns matched:false when labels is empty. Fail immediately with
       // a clear protocol error (the protocol guarantees at least one option on an options-bearing gate).
       if (labels.length === 0)
@@ -436,6 +469,25 @@ export class PromptDecider implements Decider {
         const text = q.question ?? q.header ?? "";
         const optionLabels = q.options.map((o) => o.label);
         warnDuplicateLabels(optionLabels, JSON.stringify(text));
+        // an empty options array would spin the coerced* loops forever — coerceLabel always returns
+        // matched:false when labels is empty, so `do…while (!coerced.matched)` never terminates. Guard before
+        // the loop, mirroring the permission path's empty-options guard and FirstOptionDecider's. A
+        // single-select with no options is an open-ended gate (Cowork's free-text "Other" path) — accept the
+        // typed answer verbatim; a multiSelect with no options is a protocol contradiction — fail loud.
+        if (optionLabels.length === 0) {
+          if (q.multiSelect)
+            throw new UnansweredError(
+              `protocol error: multi-select question "${text}" carries an empty options array`,
+              "a multi-select gate cannot offer zero options; check the gate payload",
+            );
+          let free = "";
+          do {
+            free = (await this.ask(`${text}\n(open-ended — type your answer)\n> `)).trim();
+            if (free === "") process.stderr.write(`Please enter a non-empty answer.\n`);
+          } while (free === "");
+          answers[text] = free;
+          continue;
+        }
         if (q.multiSelect) {
           // Multi-select gate: accept comma-separated indices or labels; validate each pick; serialize
           // as a comma-joined string matching the AskUserQuestion wire shape (binary-verified).
@@ -649,7 +701,7 @@ export class ExternalDecider implements Decider {
               `external decider sent an array for single-select ${JSON.stringify(text)} — send one label or 1-based index`,
               validLabels,
             );
-          // Bug 19: when the question has no options it is a free-text / open-ended gate — coerceLabel
+          // when the question has no options it is a free-text / open-ended gate — coerceLabel
           // always returns matched:false for an empty labels array and would throw below. Accept any
           // non-empty string verbatim (the external helper is the authoritative answerer for these gates).
           if (labels.length === 0) {
@@ -725,8 +777,18 @@ export class ExternalDecider implements Decider {
 }
 
 function evalPredicate(expr: string, input: Record<string, unknown>): boolean {
-  const keys = Object.keys(input);
-  const vals = keys.map((k) => input[k]);
+  // (additive): expose the whole input object as `input` so predicates can reach keys that are not
+  // valid JS identifiers — `input["file-path"]`, `input["foo.bar"]`. We ALSO keep binding each input key as
+  // a bare parameter (`command.includes(...)`), the form used by shipped example scenarios and the docs —
+  // dropping it would silently false-deny those on first run. Only identifier-shaped keys can be bound as a
+  // bare parameter (a key like `file-path` is not a legal parameter name and would fail `new Function`
+  // compilation regardless of the predicate body); non-identifier keys are reachable only via `input[...]`.
+  const isIdentifier = (k: string) => /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(k);
+  // `input` itself is always available; if an input key is literally named "input" the explicit object wins
+  // (don't bind it twice — a duplicate parameter name is a compile error under "use strict").
+  const namedKeys = Object.keys(input).filter((k) => isIdentifier(k) && k !== "input");
+  const params = ["input", ...namedKeys];
+  const args: unknown[] = [input, ...namedKeys.map((k) => input[k])];
   // #7: scenario YAML is author-supplied (same trust class as --decider-cmd), so `new Function` is NOT
   // sandboxed — an author can run arbitrary code, by design. But a BROKEN predicate must fail LOUD, not
   // silently deny: the old bare `catch { return false }` turned a compile error (bad `new Function`) or
@@ -734,12 +796,12 @@ function evalPredicate(expr: string, input: Record<string, unknown>): boolean {
   // A predicate that legitimately returns falsy still returns false — only ERRORS throw.
   let fn: Function;
   try {
-    fn = new Function(...keys, `"use strict"; return (${expr});`);
+    fn = new Function(...params, `"use strict"; return (${expr});`);
   } catch (e) {
     throw new Error(`allow_if predicate failed to compile: ${expr} — ${String((e as Error).message)}`);
   }
   try {
-    return Boolean(fn(...vals));
+    return Boolean(fn(...args));
   } catch (e) {
     throw new Error(`allow_if predicate threw at eval time: ${expr} — ${String((e as Error).message)}`);
   }

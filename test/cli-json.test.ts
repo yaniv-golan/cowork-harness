@@ -501,6 +501,53 @@ describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
     expect(r.json?.error?.message).toMatch(/conflicts with --answer/);
   });
 
+  it.skipIf(process.platform !== "darwin")(
+    "`vm status --output-format json` parses the flag (does not load a baseline named --output-format)",
+    () => {
+      // Pre-fix: loadBaseline(args[1]="--output-format") → ENOENT internal error. Now the flag parses and
+      // an optional baseline is an independent positional; status emits the JSON envelope, exit 0.
+      const r = run(["vm", "status", "--output-format", "json"]);
+      expect(r.code).toBe(0);
+      expect(r.json?.command).toBe("vm");
+      expect(r.json?.subcommand).toBe("status");
+      expect(r.json?.baseline?.name).toBe("latest");
+      expect(typeof r.json?.status).toBe("string");
+      expect(Array.isArray(r.json?.fidelity?.tiers)).toBe(true);
+      expect(r.json?.fidelity?.tiers).toContain("container");
+    },
+  );
+
+  it.skipIf(process.platform !== "darwin")("`vm status` (text) prints instance: status, exit 0", () => {
+    const r = run(["vm", "status"]);
+    expect(r.code).toBe(0);
+    expect(r.json).toBeNull(); // text mode → nothing parses as JSON
+    expect(r.stderr).toMatch(/:/); // `<instance>: <status>`
+  });
+
+  it.skipIf(process.platform !== "darwin")("`vm status latest` (explicit baseline) works in text mode", () => {
+    const r = run(["vm", "status", "latest"]);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toMatch(/:/);
+  });
+
+  it.skipIf(process.platform !== "darwin")("`vm status latest --output-format json` parses both the baseline and the flag", () => {
+    const r = run(["vm", "status", "latest", "--output-format", "json"]);
+    expect(r.code).toBe(0);
+    expect(r.json?.subcommand).toBe("status");
+    expect(r.json?.baseline?.name).toBe("latest");
+  });
+
+  it.skipIf(process.platform !== "darwin")("vm status JSON envelope carries baseline path/version, image hints, warnings", () => {
+    const r = run(["vm", "status", "--output-format", "json"]);
+    expect(r.code).toBe(0);
+    expect(typeof r.json?.baseline?.path).toBe("string");
+    expect(typeof r.json?.baseline?.appVersion).toBe("string");
+    expect(typeof r.json?.baseline?.agentVersion).toBe("string");
+    expect(r.json?.image).toBeTruthy();
+    expect(typeof r.json?.image?.guestOs).toBe("string");
+    expect(Array.isArray(r.json?.warnings)).toBe(true);
+  });
+
   it.skipIf(process.platform !== "darwin")("vm validates the subcommand before touching the baseline (exit 2)", () => {
     // A bad subcommand with a stray second arg used to surface as a baseline-load error; it must now be
     // a clean `usage: vm` (the subcommand is checked before loadBaseline). macOS-only: on Linux the
@@ -514,6 +561,37 @@ describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
     const r = run(["boundary-check", "--bogus"]);
     expect(r.code).toBe(2);
     expect(r.stderr).toMatch(/unknown flag/);
+  });
+
+  it("boundary-check with a missing --session file → usage error (text mode), exit 2", () => {
+    const r = run(["boundary-check", "--session", "/no/such/session.yaml"]);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(/--session file not found/);
+  });
+
+  it("boundary-check with a missing --session file → JSON usage envelope (not a top-level internal error), exit 2", () => {
+    const r = run(["boundary-check", "--session", "/no/such/session.yaml", "--output-format", "json"]);
+    expect(r.code).toBe(2);
+    expect(r.json?.error?.category).toBe("usage"); // was an uncaught internal error before the fix
+    expect(r.json?.error?.message).toMatch(/--session file not found/);
+  });
+
+  it("boundary-check with malformed --session YAML → usage error (text mode), exit 2", () => {
+    const { cwd } = run(["--version"]);
+    writeIn(cwd, "bad.yaml", "egress: [unterminated\n  : :\n"); // invalid YAML
+    const r = spawnSync("node", [CLI, "boundary-check", "--session", "bad.yaml"], { encoding: "utf8", cwd });
+    expect(r.status).toBe(2);
+    expect(r.stderr).toMatch(/cannot parse --session/);
+  });
+
+  it("boundary-check with malformed --session YAML → JSON usage envelope, exit 2", () => {
+    const { cwd } = run(["--version"]);
+    writeIn(cwd, "bad.yaml", "egress: [unterminated\n  : :\n");
+    const r = spawnSync("node", [CLI, "boundary-check", "--session", "bad.yaml", "--output-format", "json"], { encoding: "utf8", cwd });
+    expect(r.status).toBe(2);
+    const j = JSON.parse(r.stdout);
+    expect(j.error?.category).toBe("usage");
+    expect(j.error?.message).toMatch(/cannot parse --session/);
   });
 
   it("global --dotenv=<path> equals form with a missing file fails (exit 2)", () => {

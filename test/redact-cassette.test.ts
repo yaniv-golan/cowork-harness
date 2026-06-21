@@ -150,6 +150,71 @@ describe("assertRedactionVerdictPreserved — A3 / C4 cardinal-sin guard", () =>
     const red = redactCassette(base, policy);
     await expect(assertRedactionVerdictPreserved(base, red)).rejects.toThrow(/verdict|redaction/i);
   });
+
+  it("the verdict normalizer tolerates LABELED/HASHED [REDACTED:label:hash] tokens in failing messages", async () => {
+    // Both base and redacted FAIL the same assertion, but the failing MESSAGE quotes the (redacted) needle.
+    // The real token is `[REDACTED:email:<hash>]` — a normalizer that only strips a bare `[REDACTED]` would
+    // see different messages (base has the literal email, redacted has the labeled token) and false-fail the
+    // guard with "failing assertion messages changed unexpectedly". The widened pattern keeps them equal.
+    const failEvents = [
+      JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "contact zoe@acme.com now" }] } }),
+      JSON.stringify({ type: "result", subtype: "success", is_error: false }),
+    ];
+    // transcript_contains a string NOT present → both base and redacted FAIL; the failure message echoes the
+    // transcript context. (We assert the guard does NOT throw — verdict + messages preserved post-normalize.)
+    const base = cassetteWith(failEvents, [{ transcript_contains: "this-needle-is-absent" }]);
+    const red = redactCassette(base, policy);
+    // sanity: the redacted token really is the labeled/hashed form, not a bare [REDACTED]
+    expect(JSON.stringify(red)).toMatch(/\[REDACTED:email:[0-9a-f]{12}\]/);
+    await expect(assertRedactionVerdictPreserved(base, red)).resolves.toBeUndefined();
+  });
+});
+
+describe("redaction keeps userVisibleRoots structurally consistent with redacted artifact paths", () => {
+  const ROOT_POLICY: RedactionPolicy = { patterns: [{ re: /Acme/g, label: "cust" }], keyNames: [] };
+
+  it("redacts a customer folder root AND its artifact paths with the SAME rule (prefix relationship preserved)", () => {
+    const c: any = {
+      scenario: scenario([{ result: "success" }]),
+      events: [JSON.stringify({ type: "result", subtype: "success" })],
+      userVisibleRoots: ["outputs", ".projects/Acme"],
+      artifacts: [{ path: ".projects/Acme/report.json", bytes: 2, sha256: "x", body: "{}" }],
+    };
+    const red: any = redactCassette(c, ROOT_POLICY);
+    // The root no longer leaks "Acme"
+    expect(red.userVisibleRoots.join("/")).not.toContain("Acme");
+    // and the artifact path was redacted with the SAME context-free token → it still maps under the redacted
+    // root (the multi-segment prefix relationship is preserved; redactCassette would have thrown otherwise).
+    const redactedRoot = red.userVisibleRoots.find((r: string) => r.startsWith(".projects/"));
+    expect(red.artifacts[0].path.startsWith(redactedRoot + "/")).toBe(true);
+    expect(red.artifacts[0].path).not.toContain("Acme");
+  });
+
+  it("throws if a redaction rule rewrites an artifact path but not its containing root (inconsistent → fail loud)", () => {
+    // Here the rule only matches the FILENAME segment (not the root), so the path is rewritten while the root
+    // is untouched → the redacted path no longer maps under any redacted root. Must fail loud, not write a
+    // cassette that would silently mismatch at materialize/replay.
+    const FILE_ONLY: RedactionPolicy = { patterns: [{ re: /secret/g, label: "s" }], keyNames: [] };
+    const c: any = {
+      scenario: scenario([{ result: "success" }]),
+      events: [JSON.stringify({ type: "result", subtype: "success" })],
+      userVisibleRoots: ["secret-root"],
+      artifacts: [{ path: "secret-root/secret.json", bytes: 2, sha256: "x", body: "{}" }],
+    };
+    // root "secret-root" → "[REDACTED]-root"; path "secret-root/secret.json" → "[REDACTED]-root/[REDACTED].json"
+    // top segment "[REDACTED]-root" matches the redacted root → consistent here. Construct a genuine break:
+    const BREAK: RedactionPolicy = { patterns: [{ re: /onlyinpath/g, label: "x" }], keyNames: [] };
+    const c2: any = {
+      scenario: scenario([{ result: "success" }]),
+      events: [JSON.stringify({ type: "result", subtype: "success" })],
+      userVisibleRoots: ["onlyinpath"],
+      artifacts: [{ path: "onlyinpath-x/file.json", bytes: 2, sha256: "x", body: "{}" }],
+    };
+    // root "onlyinpath" redacts to "[REDACTED]"; path top "onlyinpath-x" redacts to "[REDACTED]-x" ≠ root → break
+    expect(() => redactCassette(c2, BREAK)).toThrow(/artifact↔root consistency|no longer maps under/);
+    void c;
+    void FILE_ONLY;
+  });
 });
 
 // ── Cassette manifest safety — token-free, spawn-free ───────────────────────────────

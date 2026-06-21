@@ -7,6 +7,7 @@ import type { PlatformBaseline } from "./types.js";
 import { safePathSegment, safeMountSegment, resolveDeclaredSource } from "./staging/resolve.js";
 import { assignFolderMountNames, RESERVED_MOUNT_NAMES, type MountTier } from "./staging/mount-naming.js";
 import { MOUNT_BARE_NAME_MIN_VERSION, cmpVersionStrings } from "./baseline.js";
+import { containedRealPath } from "./boundary-paths.js";
 
 /** Clone process env with Cowork's bg-env-strip applied. */
 function strippedEnv(baseline: PlatformBaseline): NodeJS.ProcessEnv {
@@ -369,7 +370,7 @@ export function buildLaunchPlan(
       const entry = (manifest.plugins ?? []).find((p) => p.name === pName);
       if (!entry) continue;
       const pluginSrc = resolve(mkRoot, entry.source ?? `./${pName}`);
-      // Bug 21: reject entry.source values that escape the marketplace root (absolute paths or .. traversal).
+      // reject entry.source values that escape the marketplace root (absolute paths or .. traversal).
       if (entry.source !== undefined) {
         const rel = relative(mkRoot, pluginSrc);
         if (rel.startsWith("..") || isAbsolute(rel))
@@ -379,7 +380,16 @@ export function buildLaunchPlan(
         if (!pMkt) bareLocalSourceMissing.add(en); // bare name with missing source; post-loop decides
         continue; // unresolved here; post-loop reconciliation decides whether to throw
       }
-      // Bug 22: marketplace plugin sources must be directories (same kind-check as local_plugins / remote_plugins).
+      // the lexical `relative(mkRoot, pluginSrc)` guard above is NOT enough — `statSync` (and the
+      // eventual `cpSync` mount) FOLLOW symlinks, so an in-root symlink `mkRoot/sub -> /etc` passes the
+      // lexical check (rel = "sub") yet resolves outside the marketplace tree. Resolve BOTH sides with
+      // realpath and require containment before mounting. (Runs only once the source exists, since
+      // realpath requires it; the lexical guard already rejected absolute / `..` declared sources.)
+      if (!containedRealPath(realpathSync(mkRoot), realpathSync(pluginSrc)))
+        throw new Error(
+          `cowork-harness: marketplace entry.source "${entry.source ?? `./${pName}`}" resolves outside the marketplace root (symlink escape)`,
+        );
+      // marketplace plugin sources must be directories (same kind-check as local_plugins / remote_plugins).
       if (!statSync(pluginSrc).isDirectory())
         throw new Error(`cowork-harness: marketplace entry.source "${entry.source ?? `./${pName}`}" is not a directory`);
       // A bare `enabled` name (no @marketplace) matches EVERY marketplace defining it → duplicate mounts.

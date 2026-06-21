@@ -19,9 +19,9 @@ describe("LlmDecider", () => {
     expect((d as any).model).toBe("haiku-test");
   });
 
-  it("puts the --intent into the model prompt; requires an exact label (not a prose answer) — Bug 17", async () => {
+  it("puts the --intent into the model prompt; requires an exact label (not a prose answer) — ", async () => {
     let seenPrompt = "";
-    // Bug 17 fix: matchLabel defaults to fuzzy=false, so a prose answer is no longer accepted.
+    // fix: matchLabel defaults to fuzzy=false, so a prose answer is no longer accepted.
     // The LLM prompt says "Reply with ONLY the exact label" — a well-behaved model should return the
     // exact label, not a prose sentence. A prose answer must now fail loud (not silently accept it).
     const completeProse: Complete = async (p) => ((seenPrompt = p), "I would choose Series A here.");
@@ -72,6 +72,32 @@ describe("LlmDecider", () => {
       options: [{ label: "Allow once" }, { label: "Allow all for website" }, { label: "Deny" }],
     };
     await expect(new LlmDecider(async () => "Maybe later").decide(req, ctx())).rejects.toThrow(UnansweredError);
+  });
+
+  it("answers an open-ended (no-option) question with free text via updatedInput:{questions,answers}", async () => {
+    let seenPrompt = "";
+    const complete: Complete = async (p) => ((seenPrompt = p), "I'd ship a concise weekly digest.");
+    const req: DecisionRequest = {
+      id: "r",
+      kind: "question",
+      questions: [{ question: "What should we build?", options: [] }],
+    };
+    const d = await new LlmDecider(complete, "be pragmatic").decide(req, ctx());
+    expect(d).not.toBe(ABSTAIN);
+    // The free-text prompt is used (not the label-pick prompt), and the intent is steered in.
+    expect(seenPrompt).toContain("no preset options");
+    expect(seenPrompt).toContain("be pragmatic");
+    expect((d as any).response).toEqual({
+      kind: "question",
+      answers: { "What should we build?": "I'd ship a concise weekly digest." },
+    });
+    expect((d as any).by).toBe("llm");
+  });
+
+  it("FAILS LOUD when the model returns an empty free-text answer for a no-option question", async () => {
+    const complete: Complete = async () => "   ";
+    const req: DecisionRequest = { id: "r", kind: "question", questions: [{ question: "Open?", options: [] }] };
+    await expect(new LlmDecider(complete).decide(req, ctx())).rejects.toThrow(UnansweredError);
   });
 
   it("answers each question of a multi-question request independently (one call per question)", async () => {

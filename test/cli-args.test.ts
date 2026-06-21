@@ -58,4 +58,31 @@ describe("parseArgs", () => {
     // --output-format is not in noDashValue; a dash value reaches the enum check, not the dash guard.
     expect(() => parseArgs(["--output-format", "-1"], SPEC)).toThrow(/expected one of/);
   });
+
+  // non-empty value policy (default reject empty/whitespace; opt out per-flag).
+  it("rejects an empty value for a value-flag by default (spaced and equals forms)", () => {
+    expect(() => parseArgs(["--out", ""], SPEC)).toThrow(/--out requires a non-empty value/);
+    expect(() => parseArgs(["--out="], SPEC)).toThrow(/--out requires a non-empty value/);
+  });
+
+  it("rejects a whitespace-only value for a value-flag by default", () => {
+    expect(() => parseArgs(["--out", "   "], SPEC)).toThrow(/--out requires a non-empty value/);
+    expect(() => parseArgs(["--out=\t"], SPEC)).toThrow(/--out requires a non-empty value/);
+  });
+
+  it("rejects an empty value for a repeated value-flag by default", () => {
+    expect(() => parseArgs(["--allow", ""], SPEC)).toThrow(/--allow requires a non-empty value/);
+  });
+
+  it("the empty-value default fires before the enum check (clear non-empty message, not enum mismatch)", () => {
+    expect(() => parseArgs(["--output-format", ""], SPEC)).toThrow(/--output-format requires a non-empty value/);
+  });
+
+  it("allowEmpty opts a flag out of the non-empty default (spaced and equals forms)", () => {
+    const optOut = { ...SPEC, allowEmpty: ["--out"] };
+    expect(parseArgs(["--out", ""], optOut).options["--out"]).toBe("");
+    expect(parseArgs(["--out="], optOut).options["--out"]).toBe("");
+    // the opt-out is per-flag: a non-opted flag still rejects empty
+    expect(() => parseArgs(["--decider-cmd", ""], optOut)).toThrow(/--decider-cmd requires a non-empty value/);
+  });
 });

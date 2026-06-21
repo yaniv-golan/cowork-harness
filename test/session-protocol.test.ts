@@ -135,6 +135,198 @@ describe("session protocol loud-failure fixes", () => {
     expect(warnings.some((w) => w.includes("unknown decision id") && w.includes("does-not-exist"))).toBe(true);
   });
 
+  it("an mcp_message with a missing request_id throws a typed protocol error (no unaddressable reply)", async () => {
+    const { proc, session } = newSession();
+    const it = session.start()[Symbol.asyncIterator]();
+    const firstP = it.next();
+    await tick();
+    // request_id omitted — a malformed control frame. The hook/mcp branches must not echo an unchecked id;
+    // on the LIVE path the throw propagates out of the generator (fail-closed), so it.next() rejects.
+    proc.stdout.write(
+      JSON.stringify({
+        type: "control_request",
+        request: { subtype: "mcp_message", server_name: "srv", message: { jsonrpc: "2.0", id: 1, method: "tools/call" } },
+      }) + "\n",
+    );
+    await expect(firstP).rejects.toThrow(/malformed request_id/);
+  });
+
+  it("a hook_callback with a non-string request_id throws a typed protocol error", async () => {
+    const { proc, session } = newSession();
+    const it = session.start()[Symbol.asyncIterator]();
+    const firstP = it.next();
+    await tick();
+    proc.stdout.write(
+      JSON.stringify({
+        type: "control_request",
+        request_id: 123, // non-string → malformed
+        request: { subtype: "hook_callback", callback_id: "x", input: {} },
+      }) + "\n",
+    );
+    await expect(firstP).rejects.toThrow(/malformed request_id/);
+  });
+
+  it("a malformed AskUserQuestion body (option missing label) becomes a typed protocol error, not trusted decider input", async () => {
+    const { proc, session } = newSession();
+    const it = session.start()[Symbol.asyncIterator]();
+    const firstP = it.next();
+    await tick();
+    proc.stdout.write(
+      JSON.stringify({
+        type: "control_request",
+        request_id: "q-bad",
+        request: {
+          subtype: "can_use_tool",
+          tool_name: "AskUserQuestion",
+          // options[0] has no `label` — previously cast to QSpec[] unchecked, flowing into deciders.
+          input: { questions: [{ question: "Pick?", options: [{ description: "no label here" }] }] },
+        },
+      }) + "\n",
+    );
+    await expect(firstP).rejects.toThrow(/malformed AskUserQuestion questions/);
+  });
+
+  it("questions not an array is a typed protocol error", async () => {
+    const { proc, session } = newSession();
+    const it = session.start()[Symbol.asyncIterator]();
+    const firstP = it.next();
+    await tick();
+    proc.stdout.write(
+      JSON.stringify({
+        type: "control_request",
+        request_id: "q-bad2",
+        request: { subtype: "can_use_tool", tool_name: "AskUserQuestion", input: { questions: "not-an-array" } },
+      }) + "\n",
+    );
+    await expect(firstP).rejects.toThrow(/malformed AskUserQuestion questions/);
+  });
+
+  it("a well-formed AskUserQuestion body still yields a decision event (no over-strict regression)", async () => {
+    const { proc, session } = newSession();
+    const it = session.start()[Symbol.asyncIterator]();
+    const firstP = it.next();
+    await tick();
+    proc.stdout.write(
+      JSON.stringify({
+        type: "control_request",
+        request_id: "q-ok",
+        request: {
+          subtype: "can_use_tool",
+          tool_name: "AskUserQuestion",
+          tool_use_id: "toolu_ok",
+          input: { questions: [{ question: "Pick?", options: [{ label: "A" }, { label: "B" }] }] },
+        },
+      }) + "\n",
+    );
+    const { value } = await firstP;
+    expect(value).toMatchObject({ type: "decision" });
+    expect((value as any).request.kind).toBe("question");
+    proc.stdout.end();
+    await drain(it).catch(() => {});
+  });
+
+  // Regression guard for the adversarial-review P0: QSpecSchema must NOT be stricter than the protocol the
+  // deciders already accept. An optionless / free-text gate (no `options`) and a header-only gate (no
+  // `question`) are real shapes — the deciders handle optionless gates and Run owns the
+  // header-only diagnostic. Both must reach a `decision` event at ingress, NOT throw "malformed" here.
+  it("an optionless AskUserQuestion frame is NOT rejected at ingress (reaches a decision event)", async () => {
+    const { proc, session } = newSession();
+    const it = session.start()[Symbol.asyncIterator]();
+    const firstP = it.next();
+    await tick();
+    proc.stdout.write(
+      JSON.stringify({
+        type: "control_request",
+        request_id: "q-noopts",
+        request: {
+          subtype: "can_use_tool",
+          tool_name: "AskUserQuestion",
+          tool_use_id: "toolu_noopts",
+          input: { questions: [{ question: "Free text?" }] }, // no `options` key
+        },
+      }) + "\n",
+    );
+    const { value } = await firstP;
+    expect(value).toMatchObject({ type: "decision" });
+    expect((value as any).request.kind).toBe("question");
+    proc.stdout.end();
+    await drain(it).catch(() => {});
+  });
+
+  it("a header-only AskUserQuestion frame (no `question`) is NOT rejected at ingress (Run owns that diagnostic)", async () => {
+    const { proc, session } = newSession();
+    const it = session.start()[Symbol.asyncIterator]();
+    const firstP = it.next();
+    await tick();
+    proc.stdout.write(
+      JSON.stringify({
+        type: "control_request",
+        request_id: "q-header",
+        request: {
+          subtype: "can_use_tool",
+          tool_name: "AskUserQuestion",
+          tool_use_id: "toolu_header",
+          input: { questions: [{ header: "Heads up", options: [{ label: "OK" }] }] }, // no `question` key
+        },
+      }) + "\n",
+    );
+    const { value } = await firstP;
+    expect(value).toMatchObject({ type: "decision" });
+    expect((value as any).request.kind).toBe("question");
+    proc.stdout.end();
+    await drain(it).catch(() => {});
+  });
+
+  it("an option missing its `label` IS still rejected at ingress (the real malformed case)", async () => {
+    const { proc, session } = newSession();
+    const it = session.start()[Symbol.asyncIterator]();
+    const firstP = it.next();
+    await tick();
+    proc.stdout.write(
+      JSON.stringify({
+        type: "control_request",
+        request_id: "q-badopt",
+        request: {
+          subtype: "can_use_tool",
+          tool_name: "AskUserQuestion",
+          input: { questions: [{ question: "Pick?", options: [{ description: "no label here" }] }] },
+        },
+      }) + "\n",
+    );
+    await expect(firstP).rejects.toThrow(/malformed AskUserQuestion questions/);
+  });
+
+  it("an over-cap control-out frame FAILS the live recording (the unreplayable truncation marker never reaches a cassette)", async () => {
+    const { proc, outDir, session } = newSession();
+    proc.stdin.resume(); // drain stdin so the pump's large write completes (no real child reads it)
+    const it = session.start()[Symbol.asyncIterator]();
+    const firstP = it.next(); // resolves with the decision event
+    await tick();
+    proc.stdout.write(
+      JSON.stringify({
+        type: "control_request",
+        request_id: "perm-big",
+        request: { subtype: "can_use_tool", tool_name: "Write", input: { path: "x" } },
+      }) + "\n",
+    );
+    const first = await firstP;
+    expect(first.value).toMatchObject({ type: "decision" });
+    // Respond with an >256KiB control payload (updatedInput body) — too large to mirror verbatim.
+    const huge = "Z".repeat(300 * 1024);
+    // The over-cap frame routes through rejectError → start()'s readline race loses to the error, which is
+    // surfaced as a typed {type:"error"} event (the same path as a spawn/stdin error).
+    const nextP = it.next();
+    session.respond("perm-big", { kind: "permission", behavior: "allow", updatedInput: { blob: huge } });
+    const { value } = await nextP;
+    expect(value).toMatchObject({ type: "error" });
+    expect((value as any).message).toMatch(/control-out frame too large/);
+    // The unreplayable truncation marker must NEVER have been written to control-out.jsonl.
+    const controlOut = readFileSync(join(outDir, "control-out.jsonl"), "utf8");
+    expect(controlOut).not.toContain("control_out_truncated");
+    proc.stdout.end();
+    await drain(it).catch(() => {});
+  });
+
   it("#14: a kind-mismatched decider response warns (agent silently got a deny otherwise)", async () => {
     const { proc, session } = newSession();
     const it = session.start()[Symbol.asyncIterator]();

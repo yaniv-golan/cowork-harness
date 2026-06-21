@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stageWorkspace } from "../src/runtime/stage.js";
@@ -115,5 +115,18 @@ describe("stageWorkspace — resume staging (fidelity guard)", () => {
     }
     // resume with no pre-existing mcp.json in the tree → not advertised
     expect(res.mcpStaged).toBe(false);
+  });
+
+  // a staged mount destination whose parent resolves (via a pre-existing symlink in the tree)
+  // OUTSIDE mntHost must be rejected — `cpSync`/Docker bind follow symlinks at access time, so a copy
+  // could otherwise land off-tree. The mount path here is `.projects/proj1`; pre-symlinking `.projects`
+  // out of tree makes `dirname(dest)` realpath outside mntHost.
+  it("rejects a fresh-run mount whose destination parent is a symlink pointing OUTSIDE the session tree", () => {
+    const { mntHost, plan } = fixture(false);
+    const outside = mkdtempSync(join(tmpdir(), "stage-b26-outside-"));
+    // pre-create mntHost (and .claude so the config copy succeeds) then symlink .projects out of tree.
+    mkdirSync(join(mntHost, ".claude"), { recursive: true });
+    symlinkSync(outside, join(mntHost, ".projects")); // dest parent now resolves outside mntHost
+    expect(() => stageWorkspace(plan, mntHost)).toThrow(/resolves outside the session tree/);
   });
 });

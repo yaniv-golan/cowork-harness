@@ -14,16 +14,17 @@ import { spawnSync } from "node:child_process";
 import { writeFileSync, readFileSync, existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+const DOCKERFILE = join(REPO_ROOT, "docker", "Dockerfile.agent");
 // NB: a SUBDIR of baselines/ — the baseline-validation test globs only top-level baselines/*.json as
 // PlatformBaseline; this provisioning manifest is a different artifact and must not sit alongside them.
 const MANIFEST = join(REPO_ROOT, "baselines", "provisioning", "rootfs-provisioning.json");
 const BUNDLE = join(homedir(), "Library", "Application Support", "Claude", "vm_bundles", "claudevm.bundle");
 const ROOTFS = join(BUNDLE, "rootfs.img");
 
-interface ProvisioningManifest {
+export interface ProvisioningManifest {
   capturedFrom: "rootfs.img";
   node: string;
   pip: Record<string, string>; // name -> version (from pip freeze)
@@ -128,75 +129,162 @@ function capture(): ProvisioningManifest {
   };
 }
 
-/** Diff a built agent image's installed stack against the manifest; returns missing package names. */
-function checkImage(image: string, manifest: ProvisioningManifest): { missingPip: string[]; node: { image: string; rootfs: string } } {
-  const r = spawnSync(
-    "docker",
-    ["run", "--rm", "--network", "none", image, "bash", "-lc", "node --version; echo '###PIP###'; python3 -m pip freeze 2>/dev/null"],
-    {
-      encoding: "utf8",
-      timeout: 120_000,
-      maxBuffer: 32 * 1024 * 1024,
-    },
-  );
-  if (r.status !== 0) throw new Error(`image probe failed for ${image}: ${r.stderr?.slice(0, 300)}`);
-  const [nodeLine, pipText] = (r.stdout ?? "").split("###PIP###");
-  const imagePip = parsePipFreeze(pipText ?? "");
-  // Only flag the document/data stack we deliberately mirror (Layer A); Layer-B-only packages are expected
-  // absent on the core image, so a check is most meaningful against cowork-agent-full.
-  const missingPip = Object.keys(manifest.pip).filter((p) => !(p in imagePip) && CORE_PIP.has(p));
-  return { missingPip, node: { image: (nodeLine ?? "").trim(), rootfs: manifest.node } };
+/** Probe a built agent image's installed stack (node + pip + dpkg + npm globals). */
+export interface ImageStack {
+  node: string;
+  pip: Record<string, string>;
+  apt: Set<string>;
+  npmGlobals: Set<string>;
 }
 
-// The Layer-A core stack (lowercased) — what the DEFAULT image must carry; used to scope --check.
-const CORE_PIP = new Set([
-  "numpy",
-  "pandas",
-  "openpyxl",
-  "et-xmlfile",
-  "et_xmlfile",
-  "xlsxwriter",
-  "python-docx",
-  "python-pptx",
-  "odfpy",
-  "pdfplumber",
-  "pypdf",
-  "pdfminer.six",
-  "pikepdf",
-  "matplotlib",
-  "pillow",
-  "reportlab",
-  "lxml",
-  "beautifulsoup4",
-  "tabulate",
-  "jsonschema",
-  "requests",
-  "python-magic",
-  "markdown",
-  "jinja2",
-]);
+export function probeImage(image: string, aptOfInterest: string[]): ImageStack {
+  const aptProbe = aptOfInterest
+    .map((p) => `dpkg-query -W -f='\${Package} \${Status}\\n' "${p}" 2>/dev/null | grep "install ok installed" | awk '{print $1}'`)
+    .join("; ");
+  const script = [
+    "node --version",
+    "echo '###PIP###'",
+    "python3 -m pip freeze 2>/dev/null",
+    "echo '###APT###'",
+    aptProbe || "true",
+    "echo '###NPM###'",
+    "npm ls -g --depth=0 --parseable 2>/dev/null || true",
+  ].join("; ");
+  const r = spawnSync("docker", ["run", "--rm", "--network", "none", image, "bash", "-lc", script], {
+    encoding: "utf8",
+    timeout: 120_000,
+    maxBuffer: 32 * 1024 * 1024,
+  });
+  if (r.status !== 0) throw new Error(`image probe failed for ${image}: ${r.stderr?.slice(0, 300)}`);
+  return parseImageStack(r.stdout ?? "");
+}
 
-const checkIdx = process.argv.indexOf("--check");
-if (checkIdx >= 0) {
-  const image = process.argv[checkIdx + 1];
-  if (!image) throw new Error("--check needs an image tag, e.g. --check cowork-agent-full:2");
+/** Pure parser for the probeImage stdout layout — token-free unit-testable. */
+export function parseImageStack(stdout: string): ImageStack {
+  const sec = (name: string): string => {
+    const re = new RegExp(`###${name}###\\n([\\s\\S]*?)(?:\\n###|$)`);
+    return (stdout.match(re)?.[1] ?? "").trim();
+  };
+  const [nodePart] = stdout.split("###PIP###");
+  // `npm ls -g --parseable` prints absolute module dirs; the last path segment is the package name.
+  const npmGlobals = new Set(
+    sec("NPM")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => line.split("/").filter(Boolean).pop() ?? "")
+      .filter((n) => n && n !== "lib" && !n.startsWith(".")),
+  );
+  return {
+    node: (nodePart ?? "").trim(),
+    pip: parsePipFreeze(sec("PIP")),
+    apt: new Set(
+      sec("APT")
+        .split("\n")
+        .map((s) => s.trim())
+        .filter(Boolean),
+    ),
+    npmGlobals,
+  };
+}
+
+/**
+ * Parse the Layer-A `pip3 install` pins out of docker/Dockerfile.agent so --check diffs the WHOLE
+ * Layer-A contract, not a hand-maintained subset that silently omitted pdf2image/seaborn/etc.
+ * Returns the lowercased pip package names (normalizing `_`/`.` the way pip freeze does).
+ */
+export function dockerfileCorePip(dockerfile = DOCKERFILE): Set<string> {
+  const text = readFileSync(dockerfile, "utf8");
+  // Grab the Layer-A pip block: the `pip3 install ... \` RUN that is NOT inside the Layer-B `if` guard.
+  // Layer B installs are inside `if [ "$COWORK_FULL_PARITY" = "1" ]`; we stop at that marker.
+  const layerB = text.indexOf('COWORK_FULL_PARITY" = "1"');
+  const layerA = layerB >= 0 ? text.slice(0, layerB) : text;
+  const m = layerA.match(/pip3 install[^\n]*--no-cache-dir\s*\\\n([\s\S]*?)(?:\n#|\nENV |\nRUN |\nUSER |$)/);
+  if (!m) throw new Error(`could not locate the Layer-A pip3 install block in ${dockerfile}`);
+  const out = new Set<string>();
+  // tokens look like `numpy==2.2.6`, `et_xmlfile==2.0.0`, `Markdown==3.10.2`; strip the `==version`.
+  for (const tok of m[1].split(/\s+/)) {
+    const name = tok.split("==")[0].replace(/\\$/, "").trim();
+    if (!name || name.startsWith("#")) continue;
+    out.add(normalizePip(name));
+  }
+  if (out.size === 0) throw new Error(`parsed an EMPTY Layer-A pip set from ${dockerfile}`);
+  return out;
+}
+
+const normalizePip = (n: string) => n.toLowerCase().replace(/_/g, "-");
+
+/** Compare a major.minor-ish node version string; returns true if the major versions differ. */
+export function nodeMajorDiffers(a: string, b: string): boolean {
+  const major = (v: string) => v.match(/v?(\d+)\./)?.[1] ?? v.trim();
+  return major(a) !== major(b);
+}
+
+/**
+ * Diff a probed image stack against the manifest. Pure (no docker) so it is unit-testable.
+ * Covers the full Layer-A pip contract (43), node drift (44), and the apt/npm layers (45).
+ */
+export interface DriftReport {
+  missingPip: string[];
+  missingApt: string[];
+  missingNpm: string[];
+  nodeMismatch: boolean;
+  node: { image: string; rootfs: string };
+}
+
+export function diffStack(stack: ImageStack, manifest: ProvisioningManifest, corePip: Set<string>): DriftReport {
+  const imagePip = new Set(Object.keys(stack.pip).map(normalizePip));
+  // Flag every Layer-A package (from the Dockerfile) that the manifest's rootfs ships but the image lacks.
+  const missingPip = [...corePip].filter((p) => manifestHasPip(manifest, p) && !imagePip.has(p)).sort();
+  const missingApt = manifest.aptDocStack.filter((p) => !stack.apt.has(p)).sort();
+  const missingNpm = manifest.npmGlobals.filter((p) => !stack.npmGlobals.has(p)).sort();
+  const nodeMismatch = !!stack.node && !!manifest.node && manifest.node !== "unknown" && nodeMajorDiffers(stack.node, manifest.node);
+  return { missingPip, missingApt, missingNpm, nodeMismatch, node: { image: stack.node, rootfs: manifest.node } };
+}
+
+const manifestHasPip = (m: ProvisioningManifest, name: string) => Object.keys(m.pip).some((k) => normalizePip(k) === name);
+
+function runCheck(image: string, warnOnly: boolean): void {
   if (!existsSync(MANIFEST)) throw new Error(`no manifest at ${MANIFEST} — run without --check first to capture it`);
   const manifest = JSON.parse(readFileSync(MANIFEST, "utf8")) as ProvisioningManifest;
-  const { missingPip, node } = checkImage(image, manifest);
-  console.log(`node: image=${node.image} rootfs=${node.rootfs}`);
-  if (missingPip.length) {
-    console.error(`DRIFT: ${image} is MISSING core pip packages the rootfs ships: ${missingPip.join(", ")}`);
+  const corePip = dockerfileCorePip();
+  const stack = probeImage(image, manifest.aptDocStack);
+  const report = diffStack(stack, manifest, corePip);
+  console.log(`node: image=${report.node.image} rootfs=${report.node.rootfs}`);
+  const drift: string[] = [];
+  if (report.missingPip.length) drift.push(`MISSING Layer-A pip packages the rootfs ships: ${report.missingPip.join(", ")}`);
+  if (report.nodeMismatch) drift.push(`Node major mismatch: image=${report.node.image} rootfs=${report.node.rootfs}`);
+  if (report.missingApt.length) drift.push(`MISSING apt doc-stack packages: ${report.missingApt.join(", ")}`);
+  if (report.missingNpm.length) drift.push(`MISSING npm globals: ${report.missingNpm.join(", ")}`);
+  if (drift.length) {
+    for (const d of drift) console.error(`DRIFT: ${image} — ${d}`);
+    if (warnOnly) {
+      console.error("(--warn-only: not failing)");
+      return;
+    }
     process.exit(1);
   }
   console.log(
-    `OK: ${image} carries the full Layer-A core stack the rootfs ships (${Object.keys(manifest.pip).length} rootfs pip pkgs total).`,
-  );
-} else {
-  const manifest = capture();
-  mkdirSync(dirname(MANIFEST), { recursive: true });
-  writeFileSync(MANIFEST, JSON.stringify(manifest, null, 2) + "\n");
-  console.log(`wrote ${MANIFEST}`);
-  console.log(
-    `  node=${manifest.node}  pip=${Object.keys(manifest.pip).length} pkgs  apt-of-interest=${manifest.aptDocStack.length}  npm-globals=${manifest.npmGlobals.length}`,
+    `OK: ${image} carries the full Layer-A core stack the rootfs ships ` +
+      `(pip=${corePip.size} core, apt=${manifest.aptDocStack.length}, npm=${manifest.npmGlobals.length}, node ok).`,
   );
 }
+
+function main(): void {
+  const checkIdx = process.argv.indexOf("--check");
+  if (checkIdx >= 0) {
+    const image = process.argv[checkIdx + 1];
+    if (!image) throw new Error("--check needs an image tag, e.g. --check cowork-agent-full:2");
+    runCheck(image, process.argv.includes("--warn-only"));
+  } else {
+    const manifest = capture();
+    mkdirSync(dirname(MANIFEST), { recursive: true });
+    writeFileSync(MANIFEST, JSON.stringify(manifest, null, 2) + "\n");
+    console.log(`wrote ${MANIFEST}`);
+    console.log(
+      `  node=${manifest.node}  pip=${Object.keys(manifest.pip).length} pkgs  apt-of-interest=${manifest.aptDocStack.length}  npm-globals=${manifest.npmGlobals.length}`,
+    );
+  }
+}
+
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) main();

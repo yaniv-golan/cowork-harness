@@ -36,6 +36,14 @@ export type ArgSpec = {
    * (`--out=-x`) always bypasses the guard, keeping a genuinely dash-leading value expressible.
    */
   noDashValue?: string[];
+  /**
+   * OPT-OUT list for the non-empty default: value-flags that legitimately accept `--flag ""`
+   * (or a whitespace-only value). By DEFAULT every value-flag rejects an empty/whitespace value the
+   * way the hand-rolled `flagValue` helper always has (`--session ""` was silently accepted before).
+   * No current caller needs an empty value, so this stays empty in practice; it exists so a future flag
+   * whose empty string is meaningful can opt out explicitly rather than the parser silently accepting it.
+   */
+  allowEmpty?: string[];
 };
 
 export type ParsedArgs = {
@@ -50,6 +58,7 @@ export function parseArgs(argv: string[], spec: ArgSpec): ParsedArgs {
   const repeated = new Set(spec.repeated ?? []);
   const values = new Set([...(spec.values ?? []), ...repeated]);
   const noDash = new Set(spec.noDashValue ?? []);
+  const allowEmpty = new Set(spec.allowEmpty ?? []);
   const aliases = spec.aliases ?? {};
   const enums = spec.enums ?? {};
   const out: ParsedArgs = { positionals: [], flags: {}, options: {}, repeated: {} };
@@ -74,6 +83,9 @@ export function parseArgs(argv: string[], spec: ArgSpec): ParsedArgs {
     if (values.has(name)) {
       const v = eq > 0 ? a.slice(eq + 1) : argv[++i];
       if (v === undefined) throw new ArgError(`${name} requires a value`); // wording matches the legacy flagValue helper
+      // reject empty / whitespace-only values by default (the hand-rolled flagValue helper always
+      // did; parseArgs silently accepted `--session ""`). Opt out per-flag via spec.allowEmpty.
+      if (v.trim() === "" && !allowEmpty.has(name)) throw new ArgError(`${name} requires a non-empty value`);
       if (enums[name] && !enums[name].includes(v)) throw new ArgError(`${name}: expected one of ${enums[name].join("|")}, got ${v}`);
       // opt-in dash guard, spaced form only (the equals form is the escape)
       if (noDash.has(name) && eq < 0 && v.startsWith("-")) throw new ArgError(`${name}: missing value (got flag-looking ${v})`);

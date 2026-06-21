@@ -1,8 +1,9 @@
 import { warn } from "../io.js";
-import { existsSync, mkdirSync, cpSync } from "node:fs";
+import { existsSync, mkdirSync, cpSync, realpathSync } from "node:fs";
 import { join, dirname } from "node:path";
 import type { LaunchPlan } from "../session.js";
 import { resolveDeclaredSource } from "../staging/resolve.js";
+import { containedRealPath } from "../boundary-paths.js";
 
 /** Subdirs the writable session tree always pre-creates under mnt (idempotent). `.local-plugins` (not
  *  `.local-plugins/cache`) so both the gated `marketplaces/<mp>/<plugin>` and legacy `cache/<x>` plugin
@@ -43,9 +44,18 @@ export function stageWorkspace(plan: LaunchPlan, mntHost: string): StageResult {
     // preserve symlinks as-is during staging; do not copy out-of-tree content
     cpSync(plan.configDir, join(mntHost, ".claude"), { recursive: true, dereference: false });
     // session content (uploads/projects/plugins) -> under mnt
+    const mntHostReal = realpathSync(mntHost); // resolved once; tmpdir() is symlinked on macOS
     for (const mt of plan.mounts) {
       const dest = join(mntHost, mt.mountPath);
-      mkdirSync(dirname(dest), { recursive: true });
+      const destParent = dirname(dest);
+      mkdirSync(destParent, { recursive: true });
+      // `cpSync`/Docker bind follow symlinks at access time, so a pre-existing out-of-tree
+      // symlink anywhere in the staged tree could make `destParent` resolve outside `mntHost` and let
+      // a copy land off-tree. `mt.mountPath` segments are already sanitized, but a realpath containment
+      // check on the destination's parent closes the symlinked-mount-root gap. Reject out-of-tree
+      // targets with a boundary error rather than copying into them.
+      if (!containedRealPath(mntHostReal, destParent))
+        throw new Error(`cowork-harness: staged mount path "${mt.mountPath}" resolves outside the session tree (symlink escape)`);
       // preserve symlinks as-is during staging; do not copy out-of-tree content
       if (existsSync(mt.hostPath)) cpSync(mt.hostPath, dest, { recursive: true, dereference: false });
     }

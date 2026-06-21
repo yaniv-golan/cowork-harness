@@ -12,10 +12,11 @@
 // harness env contract via `-c` (the capability probe then reports omitted:[] → the banner self-suppresses).
 
 import { spawnSync, spawn } from "node:child_process";
-import { statSync, existsSync } from "node:fs";
+import { existsSync, createReadStream } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
+import { pathToFileURL } from "node:url";
 
 const BUNDLE = join(homedir(), "Library", "Application Support", "Claude", "vm_bundles", "claudevm.bundle");
 const ROOTFS = join(BUNDLE, "rootfs.img");
@@ -25,10 +26,24 @@ const log = (m: string) => {
   if (!QUIET) console.error(m); // logs to stderr so --quiet stdout is JUST the tag (usable in $())
 };
 
-function tag(): string {
-  const st = statSync(ROOTFS);
-  const id = createHash("sha256").update(`${st.size}:${st.mtimeMs}`).digest("hex").slice(0, 12);
-  return `cowork-agent-rootfs:${id}`;
+/**
+ * Content-hash the rootfs.img bytes. size+mtime can be preserved across a content change
+ * (e.g. an in-place patch), which would reuse a STALE image. A streaming sha256 of the file bytes is
+ * content-addressed: any byte change yields a new tag. Runs once per Desktop build (then cached).
+ */
+export function hashFile(path: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const h = createHash("sha256");
+    const s = createReadStream(path);
+    s.on("error", reject);
+    s.on("data", (chunk) => h.update(chunk));
+    s.on("end", () => resolve(h.digest("hex")));
+  });
+}
+
+async function tag(): Promise<{ tag: string; hash: string }> {
+  const hash = await hashFile(ROOTFS);
+  return { tag: `cowork-agent-rootfs:${hash.slice(0, 12)}`, hash };
 }
 
 function imageExists(t: string): boolean {
@@ -40,13 +55,46 @@ function wait(p: ReturnType<typeof spawn>): Promise<number> {
   return new Promise((res) => p.on("close", (code) => res(code ?? 1)));
 }
 
+/**
+ * Drive a `producer | consumer` pipeline to completion with explicit cross-kill on failure.
+ * The OS pipe self-terminates the common case (producer dies → consumer sees EOF; consumer dies →
+ * producer gets EPIPE), but an edge-case where one side errors WITHOUT closing the pipe (e.g. the
+ * producer stuck before streaming) can hang the other. On any error/nonzero exit we kill the sibling,
+ * await BOTH, then surface the failure. Pure over the two procs → testable with fakes.
+ */
+export async function runPipeline(
+  producer: { proc: ReturnType<typeof spawn>; label: string },
+  consumer: { proc: ReturnType<typeof spawn>; label: string },
+): Promise<void> {
+  const kill = (p: ReturnType<typeof spawn>) => {
+    try {
+      if (p.exitCode === null && !p.killed) p.kill("SIGKILL");
+    } catch {
+      /* already gone */
+    }
+  };
+  // If either side errors or exits non-zero, kill the sibling so the other can't hang.
+  producer.proc.once("error", () => kill(consumer.proc));
+  consumer.proc.once("error", () => kill(producer.proc));
+  producer.proc.once("close", (code) => {
+    if (code) kill(consumer.proc);
+  });
+  consumer.proc.once("close", (code) => {
+    if (code) kill(producer.proc);
+  });
+  const [producerCode, consumerCode] = await Promise.all([wait(producer.proc), wait(consumer.proc)]);
+  if (producerCode !== 0) throw new Error(`${producer.label} failed (exit ${producerCode}) — see stderr above`);
+  if (consumerCode !== 0) throw new Error(`${consumer.label} failed (exit ${consumerCode})`);
+}
+
 async function main(): Promise<void> {
   if (!existsSync(ROOTFS)) {
     throw new Error(`rootfs not found at ${ROOTFS} — open Claude Desktop / Cowork once to stage the VM bundle`);
   }
-  const t = tag();
+  const { tag: t, hash } = await tag();
+  log(`rootfs content hash: ${hash} → tag ${t}`);
   if (imageExists(t) && !FORCE) {
-    log(`cached: ${t} already built for this rootfs.img — reuse it (pass --force to rebuild)`);
+    log(`cached: ${t} already built for this rootfs.img content — reuse it (pass --force to rebuild)`);
     console.log(t);
     return;
   }
@@ -91,14 +139,14 @@ async function main(): Promise<void> {
     { stdio: ["ignore", "pipe", "inherit"] },
   );
   const importProc = spawn("docker", ["import", ...importOpts, "-", t], { stdio: [tarProc.stdout!, "inherit", "inherit"] });
-  const [tarCode, importCode] = await Promise.all([wait(tarProc), wait(importProc)]);
-  if (tarCode !== 0) throw new Error(`rootfs mount/tar failed (exit ${tarCode}) — see stderr above`);
-  if (importCode !== 0) throw new Error(`docker import failed (exit ${importCode})`);
-  log(`built ${t}. Use it: COWORK_AGENT_IMAGE=${t} cowork-harness run <scenario> --tier container`);
+  await runPipeline({ proc: tarProc, label: "rootfs mount/tar" }, { proc: importProc, label: "docker import" });
+  log(`built ${t} (content ${hash.slice(0, 12)}). Use it: COWORK_AGENT_IMAGE=${t} cowork-harness run <scenario> --tier container`);
   console.log(t);
 }
 
-main().catch((e) => {
-  console.error(String(e?.message ?? e));
-  process.exit(1);
-});
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  main().catch((e) => {
+    console.error(String(e?.message ?? e));
+    process.exit(1);
+  });
+}

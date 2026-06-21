@@ -24,6 +24,11 @@ describe("redactText — deterministic, collision-safe text redaction", () => {
   it("empty policy is a no-op", () => {
     expect(redactText("alice@acme.com", { patterns: [], keyNames: [] })).toBe("alice@acme.com");
   });
+  it("the token is the LABELED+HASHED form [REDACTED:label:hash] (not a bare [REDACTED]) — the contract the verdict normalizer must tolerate", () => {
+    const out = redactText("mail alice@acme.com", policy);
+    expect(out).toMatch(/\[REDACTED:email:[0-9a-f]{12}\]/);
+    expect(out).not.toMatch(/\[REDACTED\](?!:)/); // never the bare form
+  });
 });
 
 describe("redactStructural — string LEAVES and object KEYS (C3)", () => {

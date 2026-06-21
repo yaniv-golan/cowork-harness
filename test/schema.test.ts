@@ -18,6 +18,29 @@ describe("AnswerRule rejects inert rules, accepts valid shapes", () => {
     expect(AnswerRule.safeParse({ when_tool: "Write", decide: "allow" }).success).toBe(true);
     expect(AnswerRule.safeParse({ when_tool: "Bash", allow_if: "true", else: "deny" }).success).toBe(true);
   });
+
+  // `choose` and `answer` are mutually exclusive at schema time (not only on a matching rule).
+  it("rejects a rule that sets both `choose` and `answer`", () => {
+    const r = AnswerRule.safeParse({ when_question: "name", choose: "PDF", answer: "Acme" });
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error.issues.some((i) => /both `choose` and `answer`/.test(i.message))).toBe(true);
+    // each alone is still valid (regression guard)
+    expect(AnswerRule.safeParse({ when_question: "name", choose: "PDF" }).success).toBe(true);
+    expect(AnswerRule.safeParse({ when_question: "name", answer: "Acme" }).success).toBe(true);
+  });
+
+  // `grant` is only valid on an ALLOW outcome of a `webfetch:` tool rule. Inert placements reject.
+  it("rejects inert `grant` placements (question / non-webfetch / deny)", () => {
+    expect(AnswerRule.safeParse({ when_question: "fmt", choose: "PDF", grant: "domain" }).success).toBe(false); // question rule
+    expect(AnswerRule.safeParse({ when_tool: "Bash", decide: "allow", grant: "domain" }).success).toBe(false); // non-webfetch tool
+    expect(AnswerRule.safeParse({ when_tool: "webfetch:x.com", decide: "deny", grant: "domain" }).success).toBe(false); // deny outcome
+  });
+
+  it("accepts `grant` on an allow / allow_if web_fetch rule", () => {
+    expect(AnswerRule.safeParse({ when_tool: "webfetch:x.com", decide: "allow", grant: "domain" }).success).toBe(true);
+    expect(AnswerRule.safeParse({ when_tool: "webfetch:x.com", decide: "allow", grant: "once" }).success).toBe(true);
+    expect(AnswerRule.safeParse({ when_tool: "webfetch:x.com", allow_if: "true", grant: "domain" }).success).toBe(true);
+  });
 });
 
 describe("count assertions require nonnegative integers", () => {

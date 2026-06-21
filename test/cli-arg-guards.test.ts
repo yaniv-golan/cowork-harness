@@ -107,3 +107,72 @@ describe.skipIf(!can)("CLI arg guards — migrated commands fail loud", () => {
     expect(r.out).toMatch(/"ok":false/);
   });
 });
+
+// skill + common flags accept BOTH `--flag value` and `--flag=value`. The old hand-rolled loops
+// matched flags by exact `a === "--flag"`, so the documented equals form fell through to the unknown-flag
+// guard for everything except the two `--output-format=` literals. We assert each documented value-flag's
+// `=value` form parses the SAME as its spaced form (no "unknown flag", same dry-run plan).
+describe.skipIf(!can)("skill/common flags accept --flag=value identically to --flag value", () => {
+  // skill --dry-run validates everything then prints the parsed plan as JSON and exits 0 — a spawn-free,
+  // token-free way to compare the two flag forms.
+  function dryRun(extra: string[], d: string) {
+    const r = run(["skill", "./plugin", "do the thing", "--dry-run", ...extra], d);
+    let plan: any = null;
+    // stdout carries the dry-run JSON; the helper folds stderr+stdout into `out`, so re-run to read stdout.
+    const raw = spawnSync("node", [CLI, "skill", "./plugin", "do the thing", "--dry-run", ...extra], { encoding: "utf8", cwd: d });
+    try {
+      plan = JSON.parse(raw.stdout);
+    } catch {
+      /* not json */
+    }
+    return { code: r.code, out: r.out, plan, stderr: raw.stderr };
+  }
+
+  // [flag, spacedArgs, equalsArgs] — each pair must parse to the same plan and never be "unknown flag".
+  const cases: Array<[string, string[], string[]]> = [
+    ["--fidelity", ["--fidelity", "protocol"], ["--fidelity=protocol"]],
+    ["--model", ["--model", "claude-x"], ["--model=claude-x"]],
+    ["--plugin", ["--plugin", "./p2"], ["--plugin=./p2"]],
+    ["--marketplace+--enable", ["--marketplace", "./mkt", "--enable", "a@mkt"], ["--marketplace=./mkt", "--enable=a@mkt"]],
+    ["--upload", ["--upload", "./f.csv"], ["--upload=./f.csv"]],
+    ["--folder", ["--folder", "./repo"], ["--folder=./repo"]],
+    ["--answer", ["--answer", "stage=Series A"], ["--answer=stage=Series A"]],
+    ["--on-unanswered (common)", ["--on-unanswered", "first"], ["--on-unanswered=first"]],
+    ["--output-format (common)", ["--output-format", "json"], ["--output-format=json"]],
+  ];
+
+  for (const [label, spaced, equals] of cases) {
+    it(`${label}: =value form is accepted and matches the spaced form`, () => {
+      const d = mkdtempSync(join(tmpdir(), "g5-"));
+      const a = dryRun(spaced, d);
+      const b = dryRun(equals, d);
+      // neither form is rejected as an unknown flag
+      expect(a.stderr).not.toMatch(/unknown flag/);
+      expect(b.stderr).not.toMatch(/unknown flag/);
+      expect(b.code).toBe(a.code);
+      // the dry-run plan (the parsed view of the flags) is identical between the two forms
+      if (a.plan && b.plan) expect(b.plan).toEqual(a.plan);
+    });
+  }
+
+  it("--fidelity=container (equals form) is honored, not rejected", () => {
+    const d = mkdtempSync(join(tmpdir(), "g5-"));
+    const raw = spawnSync("node", [CLI, "skill", "./plugin", "hi", "--dry-run", "--fidelity=container"], { encoding: "utf8", cwd: d });
+    expect(raw.status).toBe(0);
+    expect(JSON.parse(raw.stdout).fidelity).toBe("container");
+  });
+
+  it("a boolean flag given an equals value (e.g. --dry-run=1) is a usage error, exit 2", () => {
+    const d = mkdtempSync(join(tmpdir(), "g5-"));
+    const r = run(["skill", "./plugin", "hi", "--dry-run=1"], d);
+    expect(r.code).toBe(2);
+    expect(r.out).toMatch(/takes no value/);
+  });
+
+  it("an empty equals value (--model=) is rejected, exit 2", () => {
+    const d = mkdtempSync(join(tmpdir(), "g5-"));
+    const r = run(["skill", "./plugin", "hi", "--model=", "--dry-run"], d);
+    expect(r.code).toBe(2);
+    expect(r.out).toMatch(/requires a non-empty value/);
+  });
+});

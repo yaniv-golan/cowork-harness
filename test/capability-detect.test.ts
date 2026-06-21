@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { detectCapabilityUse, CAPABILITY_FAMILIES, type CapabilityFamily } from "../src/runtime/image-capabilities.js";
 
 const ALL = Object.keys(CAPABILITY_FAMILIES) as CapabilityFamily[];
@@ -11,6 +11,20 @@ function eventsFileWith(lines: object[]): string {
   const f = join(dir, "events.jsonl");
   writeFileSync(f, lines.map((l) => JSON.stringify(l)).join("\n"));
   return f;
+}
+/** Create an events.jsonl + a sibling workspace root, returning both so a `python script.py` can be followed. */
+function eventsAndWorkspace(lines: object[]): { events: string; workRoot: string } {
+  const dir = mkdtempSync(join(tmpdir(), "cap-ws-"));
+  const events = join(dir, "events.jsonl");
+  writeFileSync(events, lines.map((l) => JSON.stringify(l)).join("\n"));
+  const workRoot = join(dir, "work");
+  mkdirSync(workRoot, { recursive: true });
+  return { events, workRoot };
+}
+function writeScript(workRoot: string, rel: string, body: string): void {
+  const full = join(workRoot, rel);
+  mkdirSync(dirname(full), { recursive: true });
+  writeFileSync(full, body);
 }
 const assistantToolUse = (name: string, input: object) => ({
   type: "assistant",
@@ -60,5 +74,39 @@ describe("detectCapabilityUse — capability-USAGE ∩ omitted (the false-negati
 
   it("returns [] for a missing/empty events file", () => {
     expect(detectCapabilityUse(join(tmpdir(), "does-not-exist.jsonl"), ALL)).toEqual([]);
+  });
+});
+
+describe("detectCapabilityUse — workspace-script follow (the hidden-import false-negative)", () => {
+  it("detects `import cv2` inside a `python script.py` whose command text hides it", () => {
+    const { events, workRoot } = eventsAndWorkspace([assistantToolUse("Bash", { command: "python analyze.py input.png" })]);
+    writeScript(workRoot, "analyze.py", "import sys\nimport cv2\nprint(cv2.__version__)\n");
+    // Command text alone is undetectable (no signature); the script scan attributes it.
+    expect(detectCapabilityUse(events, ["cv"])).toEqual([]); // no workRoot → can't follow the file
+    expect(detectCapabilityUse(events, ["cv"], workRoot)).toEqual(["cv"]);
+  });
+
+  it("follows a nested relative script path (`python3 ./pkg/run.py`)", () => {
+    const { events, workRoot } = eventsAndWorkspace([assistantToolUse("Bash", { command: "python3 ./pkg/run.py --flag" })]);
+    writeScript(workRoot, "pkg/run.py", "from wand.image import Image\n");
+    expect(detectCapabilityUse(events, ["magick"], workRoot)).toEqual(["magick"]);
+  });
+
+  it("is a no-op when the referenced script is missing (read-only, guarded)", () => {
+    const { events, workRoot } = eventsAndWorkspace([assistantToolUse("Bash", { command: "python gone.py" })]);
+    expect(detectCapabilityUse(events, ["cv"], workRoot)).toEqual([]);
+  });
+
+  it("refuses to escape the workspace root via `../`", () => {
+    const { events, workRoot } = eventsAndWorkspace([assistantToolUse("Bash", { command: "python ../escape.py" })]);
+    // Place a cv2-importing file OUTSIDE workRoot; the containment guard must not read it.
+    writeScript(dirname(workRoot), "escape.py", "import cv2\n");
+    expect(detectCapabilityUse(events, ["cv"], workRoot)).toEqual([]);
+  });
+
+  it("does not follow inline `-c` code as a file path", () => {
+    const { events, workRoot } = eventsAndWorkspace([assistantToolUse("Bash", { command: 'python3 -c "print(1)"' })]);
+    // No .py token to follow; nothing to read, nothing detected.
+    expect(detectCapabilityUse(events, ["cv"], workRoot)).toEqual([]);
   });
 });

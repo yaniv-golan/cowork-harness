@@ -1497,6 +1497,32 @@ describe("Run.requestWebFetchApproval — recorded synthetic permission (#30 C3 
     expect(await run.requestWebFetchApproval("ok.com", "https://ok.com/b")).toBe(true);
     expect(rec.decisions.length).toBe(after1 + 1); // re-gated → a new decision recorded
   });
+
+  it("a kind-mismatched decider response is recorded as mismatch→deny + warns (not a silent decision:'?')", async () => {
+    // A decider that answers a "permission" web_fetch request with a "question"-kind response — a protocol
+    // mismatch. Previously this recorded decision:"?" with NO warning; now it records mismatch→deny + warns.
+    const mismatchDecider = {
+      async decide() {
+        return { response: { kind: "question", answers: {} } as DecisionResponse, by: "scripted" as const, rationale: "wrong kind" };
+      },
+    };
+    const warnings: string[] = [];
+    const orig = process.stderr.write.bind(process.stderr);
+    (process.stderr as any).write = (s: string | Uint8Array): boolean => (warnings.push(String(s)), true);
+    let rec, allowed: boolean;
+    try {
+      const run = new Run(resultOnly(), mismatchDecider, [], "t");
+      rec = await run.drive("hi");
+      allowed = await run.requestWebFetchApproval("bad.com", "https://bad.com/x");
+    } finally {
+      (process.stderr as any).write = orig;
+    }
+    expect(allowed).toBe(false); // fail-closed on mismatch
+    const d = rec.decisions.find((x) => x.name === "webfetch:bad.com");
+    expect(d).toMatchObject({ decision: "mismatch→deny" });
+    expect(d?.decision).not.toBe("?"); // the old silent value is gone
+    expect(warnings.some((w) => w.includes("webfetch") && w.includes('returned kind "question"'))).toBe(true);
+  });
 });
 
 describe("Cassette — transcript_not_contains evaluates on content (not on missing flag) during replay", () => {

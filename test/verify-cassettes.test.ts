@@ -70,6 +70,28 @@ describe("scanCassette — whole-surface privacy scan (A2)", () => {
     expect(scanCassette(c, []).some((f) => f.cls === "email")).toBe(true);
   });
 
+  it("a customer folder mount name in userVisibleRoots is scanned and flagged (metadata-marked)", () => {
+    const c = {
+      scenario: scenario([{ result: "success" }]),
+      events: [JSON.stringify({ type: "result", subtype: "success" })],
+      // A connected folder's resolved mount name carrying a customer email — never scanned before.
+      userVisibleRoots: ["outputs", ".projects/contact-jane@acme.com"],
+    } as unknown as Cassette;
+    const findings = scanCassette(c, []);
+    const hit = findings.find((f) => f.cls === "email" && /metadata:userVisibleRoots/.test(f.where));
+    expect(hit).toBeDefined();
+  });
+
+  it("the scenario name and session path metadata are scanned", () => {
+    const c = {
+      scenario: { ...scenario([{ result: "success" }]), name: "run for boss@corp.com", session: "sessions/owner@corp.com.yaml" },
+      events: [JSON.stringify({ type: "result", subtype: "success" })],
+    } as unknown as Cassette;
+    const findings = scanCassette(c, []);
+    expect(findings.some((f) => f.cls === "email" && /metadata:scenario\.name/.test(f.where))).toBe(true);
+    expect(findings.some((f) => f.cls === "email" && /metadata:scenario\.session/.test(f.where))).toBe(true);
+  });
+
   it("a clean synthetic cassette → no findings", () => {
     const c = {
       scenario: scenario([{ result: "success" }], "run the cap table for Acme"),

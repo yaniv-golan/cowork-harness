@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from cowork_harness import Cowork, Result, serve_decider
+from cowork_harness import BatchResult, Cowork, Result, serve_decider
 
 
 def _serve(fn, request: dict) -> dict:
@@ -225,6 +225,107 @@ def test_serve_decider_elicit_mapping():
     req = {"id": "e4", "kind": "elicit"}
     reply = _serve(lambda r: {"action": "accept"}, req)
     assert reply == {"id": "e4", "action": "accept"}
+
+
+# ---- #34: a multi-result run must NOT hide a later failure ----
+# A directory run / replay can emit >1 RunResult. _invoke() used to keep only results[0]; a passing
+# first result then masked a failing second. These tests pin the BatchResult path that surfaces it.
+
+
+class _FakeProc:
+    def __init__(self, stdout: str, returncode: int = 0, stderr: str = ""):
+        self.stdout = stdout
+        self.returncode = returncode
+        self.stderr = stderr
+
+
+def _stub_cli_envelope(monkeypatch, envelope: dict, returncode: int = 0):
+    """Make every node-CLI spawn return one JSON envelope on stdout (no real subprocess)."""
+    import cowork_harness
+
+    monkeypatch.setattr(
+        cowork_harness.subprocess,
+        "run",
+        lambda *a, **k: _FakeProc(json.dumps(envelope), returncode=returncode),
+    )
+
+
+def _two_result_envelope(ok: bool):
+    # ONE passing + ONE failing RunResult in a single envelope (the directory/replay shape).
+    return {
+        "ok": ok,
+        "results": [
+            {"result": "success", "assertions": [{"name": "a", "pass": True}]},
+            {"result": "failure", "assertions": [{"name": "b", "pass": False}]},
+        ],
+    }
+
+
+def test_invoke_returns_batchresult_for_multiple_results(monkeypatch):
+    _stub_cli_envelope(monkeypatch, _two_result_envelope(ok=False))
+    r = Cowork("dist/cli.js").run_scenario("scenarios/")
+    assert isinstance(r, BatchResult)
+    assert len(r) == 2
+
+
+def test_batch_failure_is_surfaced_not_hidden(monkeypatch):
+    # The crux of #34: one pass + one fail must NOT report success. The envelope ok is true here, so
+    # ONLY the per-result inspection (not the envelope-level guard) can catch it — proving results[1:]
+    # is no longer discarded.
+    _stub_cli_envelope(monkeypatch, _two_result_envelope(ok=True))
+    r = Cowork("dist/cli.js").run_scenario("scenarios/")
+    assert isinstance(r, BatchResult)
+    failed = r.failed_results()
+    assert len(failed) == 1 and failed[0].result == "failure"
+    with pytest.raises(AssertionError, match="1 of 2 results failed"):
+        r.assert_success()
+
+
+def test_batch_check_true_raises_on_later_failure(monkeypatch):
+    # check=True must propagate the batch failure (a careless caller skipping assert_success()).
+    _stub_cli_envelope(monkeypatch, _two_result_envelope(ok=True))
+    with pytest.raises(AssertionError, match="results failed"):
+        Cowork("dist/cli.js").run_scenario("scenarios/", check=True)
+
+
+def test_batch_all_pass_succeeds(monkeypatch):
+    env = {
+        "ok": True,
+        "results": [
+            {"result": "success", "assertions": []},
+            {"result": "success", "assertions": []},
+        ],
+    }
+    _stub_cli_envelope(monkeypatch, env)
+    r = Cowork("dist/cli.js").run_scenario("scenarios/")
+    assert isinstance(r, BatchResult)
+    r.assert_success()  # both passed → no raise
+
+
+def test_single_result_still_returns_plain_result(monkeypatch):
+    # A single-result envelope is unchanged: a Result, not a BatchResult (no behavior regression).
+    _stub_cli_envelope(monkeypatch, {"ok": True, "results": [{"result": "success", "assertions": []}]})
+    r = Cowork("dist/cli.js").run_scenario("scenarios/one.yaml")
+    assert isinstance(r, Result)
+    r.assert_success()
+
+
+def test_batch_scalar_accessor_is_ambiguous_not_index0(monkeypatch):
+    # The old collapse read index 0's `.result`. On a batch, `.result` must REFUSE (point at .results)
+    # rather than silently report the first result's verdict and mask the rest.
+    _stub_cli_envelope(monkeypatch, _two_result_envelope(ok=True))
+    r = Cowork("dist/cli.js").run_scenario("scenarios/")
+    for attr in ("result", "data", "artifacts", "out_dir"):
+        with pytest.raises(RuntimeError, match="ambiguous"):
+            getattr(r, attr)
+
+
+def test_batch_iteration_exposes_each_result(monkeypatch):
+    _stub_cli_envelope(monkeypatch, _two_result_envelope(ok=True))
+    r = Cowork("dist/cli.js").run_scenario("scenarios/")
+    verdicts = [res.result for res in r]
+    assert verdicts == ["success", "failure"]
+    assert r[1].failed_assertions() == [{"name": "b", "pass": False}]
 
 
 @pytest.mark.cowork

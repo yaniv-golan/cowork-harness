@@ -488,7 +488,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         `::notice:: [capability] this agent runtime omits: ${omitted.join(", ")} — a skill that uses these may false-negative; ` +
           `rebuild full parity (--build-arg COWORK_FULL_PARITY=1) or use the rootfs \`max\` tier to verify.\n`,
       );
-      const used = detectCapabilityUse(join(outDir, "events.jsonl"), omitted);
+      const used = detectCapabilityUse(join(outDir, "events.jsonl"), omitted, workRoot);
       if (used.length) {
         missingCapabilityUse = used;
         warn(
@@ -693,7 +693,20 @@ export function collectArtifacts(workRoot: string, prefixes: string[]): { path: 
         continue;
       }
       if (st.isDirectory()) walk(childAbs, childRel);
-      else if (st.isFile()) out.push({ path: childRel, bytes: st.size });
+      else if (st.isFile()) {
+        // a HARDLINK to an out-of-root host file reads as an ordinary regular file (the symlink
+        // and realpath-containment guards above CANNOT catch it — a hardlink is a second name for an
+        // inode, not path indirection, so `realpathSync` returns the path unchanged inside workRoot).
+        // Reject any file with nlink > 1 so a hardlinked out-of-root file's content can't be read into a
+        // committed cassette. Residual fidelity tradeoff: legitimate in-root hardlinks (cp -l / git / build
+        // tooling) are conservatively dropped — enumerating all links of an inode is not feasible from
+        // artifact-walk state, so reject + warn + document is the only correct posture.
+        if (st.nlink > 1) {
+          warn(`::warning:: collectArtifacts: skipping ${childRel} (hardlink, nlink=${st.nlink}) — may reference out-of-root content\n`);
+          continue;
+        }
+        out.push({ path: childRel, bytes: st.size });
+      }
     }
   };
   for (const prefix of prefixes) walk(join(workRoot, prefix), prefix);

@@ -80,6 +80,11 @@ export interface Cassette {
   // mount name). Replay reads THIS instead of a hardcoded `["outputs",".projects"]` prefix — folder mount
   // names are dynamic/gated. ABSENT on pre-v4 cassettes → replay falls back to the legacy prefix.
   userVisibleRoots?: string[];
+  // the authored scenario SOURCE file this cassette was recorded from, RELATIVE to the cassette dir
+  // (relocatable, no absolute host path). `record --rerecord-stale` prefers this over a `slugForPath(name)`
+  // guess so an authored `name:` that differs from the filename still re-records from the edited YAML rather
+  // than silently re-recording the embedded snapshot. ABSENT when recorded from an in-memory/inline scenario.
+  scenarioSource?: string;
 }
 
 /** Current cassette format version. Readers tolerate ABSENT (legacy → 0) and warn on a FUTURE version. */
@@ -101,15 +106,26 @@ const CASSETTE_SCHEMA_URL = `https://raw.githubusercontent.com/yaniv-golan/cowor
 
 const DEFAULT_MANIFEST_BODY_CAP = 64 * 1024; // inline JSON/text bodies ≤ 64 KiB; larger → hash-only + truncated marker
 
+/** Shared positive-integer validator for the artifact-body cap. Used by BOTH the `--max-artifact-bytes`
+ *  CLI flag and the `COWORK_HARNESS_MAX_ARTIFACT_BYTES` env var so the two can't diverge. Returns
+ *  the floored value or null when invalid/non-positive — the caller decides how to fail loudly. */
+export function parseMaxArtifactBytes(raw: string): number | null {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return Math.floor(n);
+}
+
 /** The effective inline-body cap. Overridable (F-9) so a large structured deliverable can opt into inlining
  *  rather than silently truncating — which would pass `artifact_json` at record (on-disk) but fail at replay
  *  (no body). Env `COWORK_HARNESS_MAX_ARTIFACT_BYTES`; `record --max-artifact-bytes` takes precedence via the
- *  explicit `cap` argument to buildManifest. Invalid/non-positive env is ignored (falls back to the default). */
+ *  explicit `cap` argument to buildManifest. An INVALID/non-positive env value now THROWS (fail loud,
+ *  matching the `--max-artifact-bytes` flag) instead of silently falling back to the default. */
 function defaultBodyCap(): number {
   const env = process.env.COWORK_HARNESS_MAX_ARTIFACT_BYTES;
   if (env !== undefined) {
-    const n = Number(env);
-    if (Number.isFinite(n) && n > 0) return Math.floor(n);
+    const n = parseMaxArtifactBytes(env);
+    if (n === null) throw new Error(`COWORK_HARNESS_MAX_ARTIFACT_BYTES must be a positive integer (got ${JSON.stringify(env)})`);
+    return n;
   }
   return DEFAULT_MANIFEST_BODY_CAP;
 }
@@ -246,7 +262,7 @@ export function buildFingerprint(
       `cowork-harness: skill-hash: scopeSkills fallback to whole-tree — skills not found in any plugin-root: ${hashResult.missedSkills.join(", ")}\n`,
     );
   }
-  // Bug 43: unreadable files produce a partial (unreliable) hash — treat as "can't verify" by omitting
+  // unreadable files produce a partial (unreliable) hash — treat as "can't verify" by omitting
   // skillHash. checkStaleness already treats a missing live.skillHash as a gate failure. Errors are already
   // written to stderr inside hashSkillDirs/hashDir.
   if (hashResult.readErrors && hashResult.readErrors.length > 0) {
@@ -339,6 +355,14 @@ export function scanCassette(cassette: Cassette, allow: AllowInput[]): ScanFindi
   findings.push(...scanText(JSON.stringify(cassette.scenario.answers ?? null), "scenario.answers", allow, FULL));
   findings.push(...scanText(JSON.stringify(cassette.scenario.assert ?? null), "scenario.assert", allow, FULL));
   for (const s of cassette.fingerprint?.skillSources ?? []) findings.push(...scanText(s, "fingerprint.skillSources", allow, FULL));
+  // human-authored / structural METADATA fields were never scanned, so a customer folder mount name
+  // in userVisibleRoots (or a customer name in the scenario name / session path) could leak through `verify-
+  // cassettes`. Scan them too, prefixed `metadata:` so a reviewer knows redaction here ALSO rewrites
+  // structural paths, distinct from free-text findings in the transcript/deliverable.
+  (cassette.userVisibleRoots ?? []).forEach((r, i) => findings.push(...scanText(r, `metadata:userVisibleRoots[${i}]`, allow, FULL)));
+  findings.push(...scanText(cassette.scenario.name ?? "", "metadata:scenario.name", allow, FULL));
+  findings.push(...scanText(cassette.scenario.session ?? "", "metadata:scenario.session", allow, FULL));
+  if (cassette.scenarioSource) findings.push(...scanText(cassette.scenarioSource, "metadata:scenarioSource", allow, FULL));
   return findings;
 }
 
@@ -428,10 +452,18 @@ export class CassetteAgentSession implements AgentSession {
    *  in a full-fidelity cassette — a truncated recording. Surfaced as failing replay_protocol_fidelity
    *  (instead of silently replaying a recorded allow as abstain→deny with no fidelity signal). */
   readonly missingControlOut: string[] = [];
-  /** Bug 47: indices of malformed (non-JSON) event lines; surfaced as replay_protocol_error results. */
+  /** indices of malformed (non-JSON) event lines; surfaced as replay_protocol_error results. */
   readonly malformedEventLines: number[] = [];
-  /** Bug 46: duplicate request_ids in controlOut with differing bodies — surfaced as failures in strict mode. */
+  /** per-line PROTOCOL validation failures (valid JSON but a malformed control frame — e.g. a bad
+   *  request_id or malformed AskUserQuestion body that throws in toDecisionRequest). Caught per-line so one
+   *  corrupt cassette cannot abort the whole replay batch; surfaced as failing replay_protocol_fidelity. */
+  readonly protocolErrorLines: { line: number; message: string }[] = [];
+  /** duplicate request_ids in controlOut with DIFFERING bodies — contradictory protocol data,
+   *  surfaced as UNCONDITIONAL replay_protocol_fidelity failures (no longer strict-only). */
   readonly duplicateControlOutIds: string[] = [];
+  /** malformed (non-JSON) controlOut line indices — cassette corruption, surfaced as
+   *  UNCONDITIONAL replay_protocol_fidelity failures (no longer warn-and-skip). */
+  readonly malformedControlOutLines: number[] = [];
   /** controlOut index: request_id → recorded response body (only control_response success envelopes
    *  whose request_id matches a known decision req.id — skips init-1 and mcp_response lines).
    *  Exposed (readonly) so replayCassette can hand it to the ReplayDecider without re-parsing. */
@@ -444,9 +476,10 @@ export class CassetteAgentSession implements AgentSession {
     controlOut: string[] | undefined,
   ) {
     this.hasControlOut = !!(controlOut && controlOut.length > 0);
-    const { index, differingDuplicates } = buildControlOutIndex(controlOut ?? []);
+    const { index, differingDuplicates, malformedLines } = buildControlOutIndex(controlOut ?? []);
     this.controlOutIndex = index;
     this.duplicateControlOutIds.push(...differingDuplicates);
+    this.malformedControlOutLines.push(...malformedLines);
   }
 
   async *start(): AsyncIterable<AgentEvent> {
@@ -457,14 +490,30 @@ export class CassetteAgentSession implements AgentSession {
       try {
         msg = JSON.parse(line);
       } catch {
-        // Bug 47: record the malformed line index so replayCassette can surface it as a
+        // record the malformed line index so replayCassette can surface it as a
         // replay_protocol_error assertion failure — a malformed line could conceal a failed
         // assertion, so a silent skip risks a false-green.
         warn(`::warning:: [replay] cassette events line ${i} is not valid JSON — recording as replay_protocol_error\n`);
         this.malformedEventLines.push(i);
         continue;
       }
-      for (const ev of parseMessage(msg)) {
+      // parseMessage → toDecisionRequest THROWS on a malformed control frame (bad request_id /
+      // malformed AskUserQuestion body). On the LIVE path that throw is the right fail-closed behaviour, but
+      // during REPLAY it fires deep inside start() and — re-thrown by replayCassette — aborts the entire
+      // batch (one bad cassette poisons every later file). Catch it per-line, record a typed protocol error
+      // so replayCassette surfaces a failing replay_protocol_fidelity assertion, and CONTINUE.
+      let parsed: AgentEvent[];
+      try {
+        parsed = parseMessage(msg);
+      } catch (e) {
+        const message = (e as Error)?.message ?? String(e);
+        warn(
+          `::warning:: [replay] cassette events line ${i} is a malformed control frame — recording as replay_protocol_fidelity failure: ${message}\n`,
+        );
+        this.protocolErrorLines.push({ line: i, message });
+        continue;
+      }
+      for (const ev of parsed) {
         if (ev.type === "decision") {
           // Track the request for respond() (mirrors LiveAgentSession behaviour)
           this.reqById.set(ev.request.id, ev.request);
@@ -512,13 +561,21 @@ export class CassetteAgentSession implements AgentSession {
  * (we don't have the decision IDs yet at index-build time), so we index all control_response
  * success envelopes here and let respond() silently ignore non-decision ones.
  */
-/** Bug 46: returns the index AND the list of request_ids that appeared with differing bodies.
- *  Byte-identical duplicates are silently de-duplicated (no-op). Differing duplicates are warned
- *  and the FIRST entry is kept (first-wins); the id is added to `differingDuplicates` so
- *  replayCassette can surface it as a failing assertion in strict mode. */
-function buildControlOutIndex(controlOut: string[]): { index: Map<string, Record<string, unknown>>; differingDuplicates: string[] } {
+/** Returns the index AND two corruption signals:
+ *  - `differingDuplicates` — request_ids that appeared with DIFFERENT bodies. Byte-identical duplicates are
+ *    silently de-duplicated (no-op); differing duplicates are CONTRADICTORY protocol data → an unconditional
+ *    corruption failure (first-wins for the index so replay still uses the originally-recorded envelope).
+ *  - `malformedLines` — controlOut lines that are not valid JSON. controlOut is part of the replay contract,
+ *    so a malformed line is an unconditional corruption failure (no longer warn-and-skip / strict-only).
+ *  replayCassette surfaces BOTH as failing replay_protocol_fidelity assertions, fail-closed (not --strict). */
+function buildControlOutIndex(controlOut: string[]): {
+  index: Map<string, Record<string, unknown>>;
+  differingDuplicates: string[];
+  malformedLines: number[];
+} {
   const index = new Map<string, Record<string, unknown>>();
   const differingDuplicates: string[] = [];
+  const malformedLines: number[] = [];
   for (let i = 0; i < controlOut.length; i++) {
     const line = controlOut[i];
     if (!line.trim()) continue;
@@ -526,7 +583,11 @@ function buildControlOutIndex(controlOut: string[]): { index: Map<string, Record
     try {
       m = JSON.parse(line);
     } catch {
-      warn(`::warning:: [replay] control-out.jsonl line ${i} is not valid JSON — skipping\n`);
+      // a malformed controlOut line is cassette corruption, not a skippable nuisance. Track it so
+      // replayCassette fails replay protocol fidelity unconditionally (a dropped non-decision envelope used
+      // to let a corrupt cassette green if the line wasn't referenced).
+      warn(`::warning:: [replay] control-out.jsonl line ${i} is not valid JSON — recording as cassette corruption\n`);
+      malformedLines.push(i);
       continue;
     }
     // Only control_response success envelopes (not init-1 control_requests or mcp_response envelopes)
@@ -539,7 +600,7 @@ function buildControlOutIndex(controlOut: string[]): { index: Map<string, Record
     if (body && typeof body === "object" && "mcp_response" in body) continue;
     if (rid && body && typeof body === "object") {
       const ridStr = String(rid);
-      // Bug 46: detect duplicate request_id entries before overwriting.
+      // detect duplicate request_id entries before overwriting.
       if (index.has(ridStr)) {
         const existing = index.get(ridStr)!;
         if (canon(existing) !== canon(body as Record<string, unknown>)) {
@@ -556,7 +617,7 @@ function buildControlOutIndex(controlOut: string[]): { index: Map<string, Record
       }
     }
   }
-  return { index, differingDuplicates };
+  return { index, differingDuplicates, malformedLines };
 }
 
 /**
@@ -596,22 +657,49 @@ export function redactCassette(cassette: Cassette, policy: RedactionPolicy): Cas
     answers: redactStructural(cassette.scenario.answers, policy),
     assert: redactStructural(cassette.scenario.assert, policy),
   } as Scenario;
+  // redact the user-visible mount roots STRUCTURALLY with the same policy. Previously the roots were
+  // spread through unredacted while artifact paths WERE redacted — so a customer folder root (e.g.
+  // `.projects/Acme`) leaked AND, worse, the redacted artifact path (`.projects/[REDACTED]/file`) no longer
+  // started with the unredacted root, breaking materializeManifest's prefix match (cassette.ts ~1692) at
+  // replay. `redactText` is context-free (same input → same token), so the SAME substring redacts identically
+  // in both the root and the path, keeping the prefix relationship intact.
+  const redactedRoots = cassette.userVisibleRoots?.map((r) => redactText(r, policy));
+  const redactedArtifacts = cassette.artifacts?.map((a) => ({
+    ...a,
+    path: redactText(a.path, policy), // C1: a filename can name a customer (outputs/Acme-cap-table.json)
+    // a base64 (binary) body has no text PII to redact, and redacting it would corrupt the bytes
+    // and then false-fail the replay-time sha256 verify — leave binary bodies untouched.
+    // Also skip bodies that are already secret-scrub redaction markers ([REDACTED:*]): rewriting
+    // them without recomputing sha256 would produce a misleading "corrupt cassette" error at replay.
+    ...(a.body !== undefined && a.encoding !== "base64" && !a.body.startsWith("[REDACTED") ? { body: redactJsonLine(a.body, policy) } : {}),
+  }));
+  // Structural consistency check: every redacted artifact path must still map under one of the
+  // redacted roots. If a redaction rule rewrote a path but not its containing root (or vice versa), the
+  // prefix relationship is broken and replay's user_visible_artifact/materialize would silently mismatch —
+  // fail LOUD here rather than write an inconsistent cassette. (Only checked when roots are present.)
+  if (redactedRoots && redactedRoots.length && redactedArtifacts) {
+    // A path maps under a root when it equals the root or sits under it (root + "/"). Roots may be
+    // multi-segment (e.g. `.projects/<folder>`), so compare on the full normalized prefix — not just the
+    // first path segment. Normalize separators so a `\`-vs-`/` cassette doesn't false-trip the check.
+    const norm = (p: string) => p.replace(/\\/g, "/");
+    const normRoots = redactedRoots.map(norm);
+    for (const a of redactedArtifacts) {
+      const p = norm(a.path);
+      const mapped = normRoots.some((r) => p === r || p.startsWith(r + "/"));
+      if (!mapped)
+        throw new Error(
+          `redaction broke artifact↔root consistency: artifact path "${a.path}" no longer maps under any redacted userVisibleRoot [${redactedRoots.join(", ")}] — ` +
+            `redact the root and the path with the same rule (a path component was rewritten but its root was not)`,
+        );
+    }
+  }
   return {
     ...cassette,
     scenario,
+    userVisibleRoots: redactedRoots,
+    artifacts: redactedArtifacts,
     events: cassette.events.map((l) => redactJsonLine(l, policy)),
     controlOut: cassette.controlOut?.map((l) => redactJsonLine(l, policy)),
-    artifacts: cassette.artifacts?.map((a) => ({
-      ...a,
-      path: redactText(a.path, policy), // C1: a filename can name a customer (outputs/Acme-cap-table.json)
-      // a base64 (binary) body has no text PII to redact, and redacting it would corrupt the bytes
-      // and then false-fail the replay-time sha256 verify — leave binary bodies untouched.
-      // Also skip bodies that are already secret-scrub redaction markers ([REDACTED:*]): rewriting
-      // them without recomputing sha256 would produce a misleading "corrupt cassette" error at replay.
-      ...(a.body !== undefined && a.encoding !== "base64" && !a.body.startsWith("[REDACTED")
-        ? { body: redactJsonLine(a.body, policy) }
-        : {}),
-    })),
     fingerprint: cassette.fingerprint
       ? { ...cassette.fingerprint, skillSources: cassette.fingerprint.skillSources?.map((s) => redactText(s, policy)) }
       : undefined,
@@ -656,10 +744,13 @@ export async function assertRedactionVerdictPreserved(base: Cassette, redacted: 
       .sort();
 
   // 2. Failing assertion messages, normalized so [REDACTED] substitutions are acceptable.
-  //    Strip any [REDACTED] tokens from the message before comparing, so a redacted string that
+  //    Strip any [REDACTED…] tokens from the message before comparing, so a redacted string that
   //    appears in an error message doesn't fire a false-positive on normalization.
-  const normalizeMsg = (msg: string | undefined): string =>
-    (msg ?? "").replace(/\[REDACTED\]/g, "\x00REDACTED\x00").replace(/\x00REDACTED\x00/g, "");
+  // the real token is `[REDACTED:label:hash]` (redact.ts token()), NOT a bare `[REDACTED]` —
+  //    matching only the bare form left labeled/hashed tokens in the redacted message while the base message
+  //    kept the original literal, manufacturing a false "redaction changed assertions" failure. Widen the
+  //    pattern to tolerate the optional `:label:hash` suffix.
+  const normalizeMsg = (msg: string | undefined): string => (msg ?? "").replace(/\[REDACTED(?::[^\]]+)?\]/g, "");
   const failedMsgs = (result: RunResult): string[] =>
     result.assertions
       .filter((a) => !a.pass)
@@ -755,9 +846,18 @@ const CassetteShape = z
   })
   .passthrough();
 
+/** the ONE place the default cassette path is computed from a scenario name. Both `record --dry-run`
+ *  and live `recordScenarioObject` route through this so the dry-run report can't print a different path than
+ *  the one record actually writes (the raw name vs `slugForPath` divergence: a name with spaces/separators
+ *  slugifies, so `cassettes/My Run.cassette.json` reported but `cassettes/my-run.cassette.json` written). */
+export function defaultCassettePath(scenarioName: string): string {
+  return join("cassettes", `${slugForPath(scenarioName)}.cassette.json`);
+}
+
 /** Read + parse a cassette, never throwing — a malformed `*.cassette.json` must be TALLIED, not crash a
- *  whole batch (a crash mid-walk reads as "the rest were fine" — a false-green by abort). */
-function readCassette(path: string): { cassette: Cassette } | { error: string } {
+ *  whole batch (a crash mid-walk reads as "the rest were fine" — a false-green by abort).
+ *  Exported for tests (the validate-and-warn-on-assert behavior). */
+export function readCassette(path: string): { cassette: Cassette } | { error: string } {
   let raw: unknown;
   try {
     raw = JSON.parse(readFileSync(path, "utf8"));
@@ -775,6 +875,19 @@ function readCassette(path: string): { cassette: Cassette } | { error: string } 
   // so a missing-assert cassette can't NPE and abort a whole replay batch (readCassette's never-crash contract).
   const scn = cassette.scenario as { assert?: unknown[] };
   if (!Array.isArray(scn.assert)) scn.assert = [];
+  // validate each `scenario.assert` element against the assertion schema — but VALIDATE-AND-WARN,
+  // never reject. CassetteShape is deliberately `.passthrough()`; a strict-by-default load would hard-reject
+  // cassettes recorded by a NEWER harness that added an assertion key this build doesn't know (a forward-compat
+  // regression). So a malformed/unknown assert element is surfaced as a loud warning, not a load error.
+  scn.assert.forEach((a, i) => {
+    const r = AssertionSchema.safeParse(a);
+    if (!r.success)
+      warn(
+        `::warning:: [cassette] scenario.assert[${i}] is not a recognized assertion shape: ` +
+          `${r.error.issues.map((iss) => `${iss.path.join(".") || "<root>"}: ${iss.message}`).join("; ")} ` +
+          `(tolerated for forward-compat; pass --strict to a future hardened loader to reject)\n`,
+      );
+  });
   return { cassette };
 }
 
@@ -798,6 +911,7 @@ interface RecordOpts {
   allowFailing: boolean;
   cassettePath?: string; // explicit --out (single); otherwise cassettes/<name>.cassette.json
   maxArtifactBytes?: number; // F-9: override the inline-body cap (else env / 64 KiB default)
+  scenarioSourceFile?: string; // the on-disk scenario YAML this was recorded from (for --rerecord-stale)
 }
 
 /** F-9: return the `artifact_json.artifact` paths a scenario asserts that ended up TRUNCATED in the manifest
@@ -822,6 +936,25 @@ export function artifactJsonTargetsTruncated(scenario: Scenario, workRoot: strin
  *  Flat layout:    <cassetteDir>/<name>.yaml (single-dir layout).
  *  Returns the first found path, or null if neither exists.
  *  Exported as _findScenarioOnDisk for unit tests only; not part of the public API. */
+/** resolve the scenario SOURCE file to re-record from, for `record --rerecord-stale`. PREFER the
+ *  cassette's persisted `scenarioSource` (robust to an authored `name:` ≠ filename); fall back to the
+ *  name-derived `_findScenarioOnDisk` probe. Returns the resolved path + how it was found (for the caller's
+ *  warning when a persisted source has gone missing). Exported for unit tests; not part of the public API. */
+export function _resolveRerecordSource(
+  cassettePath: string,
+  cassette: Pick<Cassette, "scenarioSource"> & { scenario: { name: string } },
+): { path: string | null; via: "persisted" | "name-lookup" | "none"; persistedMissing?: string } {
+  if (cassette.scenarioSource) {
+    const persisted = resolve(dirname(cassettePath), cassette.scenarioSource);
+    if (existsSync(persisted)) return { path: persisted, via: "persisted" };
+    // Persisted source recorded but now gone — fall back to the name lookup, signalling the miss.
+    const fallback = _findScenarioOnDisk(cassettePath, cassette.scenario.name);
+    return { path: fallback, via: fallback ? "name-lookup" : "none", persistedMissing: cassette.scenarioSource };
+  }
+  const fallback = _findScenarioOnDisk(cassettePath, cassette.scenario.name);
+  return { path: fallback, via: fallback ? "name-lookup" : "none" };
+}
+
 export function _findScenarioOnDisk(cassettePath: string, scenarioName: string): string | null {
   const safeName = slugForPath(scenarioName);
   const cassetteDir = dirname(cassettePath);
@@ -840,7 +973,9 @@ export function _findScenarioOnDisk(cassettePath: string, scenarioName: string):
 /** Record one scenario FILE → one cassette (parses the file, then shares the live-record tail with the
  *  in-memory path). The file's dir feeds the redaction-policy search (for a co-located .cowork-redact.json). */
 async function recordScenarioFile(file: string, opts: RecordOpts): Promise<{ result: RunResult; cassettePath: string; artifacts: number }> {
-  return recordScenarioObject(parseScenarioFile(file), opts, [dirname(file)]);
+  // remember the authored scenario source file so the cassette can persist it (relocatable) for a
+  // later `--rerecord-stale` that prefers it over a name-derived guess.
+  return recordScenarioObject(parseScenarioFile(file), { ...opts, scenarioSourceFile: file }, [dirname(file)]);
 }
 
 /** `record <scenario.yaml | dir> [--out <file>] [--rerecord-stale] [--no-redact] [--allow-failing]` —
@@ -864,12 +999,12 @@ export async function cmdRecord(args: string[]) {
   let maxArtifactBytes: number | undefined;
   const mab = p.options["--max-artifact-bytes"];
   if (mab !== undefined) {
-    const n = Number(mab);
-    if (!Number.isFinite(n) || n <= 0) {
+    const n = parseMaxArtifactBytes(mab);
+    if (n === null) {
       log(`record: --max-artifact-bytes must be a positive integer (got ${mab})`);
       return process.exit(2);
     }
-    maxArtifactBytes = Math.floor(n);
+    maxArtifactBytes = n;
   }
   const noRedact = p.flags["--no-redact"] ?? false;
   if (noRedact) log("record: --no-redact — content redaction is OFF; the cassette is written verbatim, so ensure inputs are synthetic.");
@@ -938,8 +1073,9 @@ export async function cmdRecord(args: string[]) {
       log(`record --dry-run: cannot parse scenario: ${(e as Error).message}`);
       return process.exit(2);
     }
-    // Mirror the default cassette path from recordScenarioObject so the dry-run report is accurate.
-    const cassettePath = p.options["--out"] ?? join("cassettes", `${scenario.name}.cassette.json`);
+    // mirror the EXACT default cassette path recordScenarioObject uses (slugForPath via the shared
+    // defaultCassettePath helper) so a name with spaces/separators reports the same path it writes.
+    const cassettePath = p.options["--out"] ?? defaultCassettePath(scenario.name);
     log("record --dry-run");
     log(`  scenario: ${scenario.name}`);
     log(`  file:     ${target}`);
@@ -984,7 +1120,14 @@ export async function cmdRecord(args: string[]) {
         continue;
       }
       const cassette = rc.cassette;
-      const diskScenario = _findScenarioOnDisk(cp, cassette.scenario.name);
+      // PREFER the persisted authored-source path (robust to an authored `name:` ≠ filename — the
+      // name-based probe misses that and would re-record the embedded snapshot, silently dropping edits).
+      const src = _resolveRerecordSource(cp, cassette);
+      if (src.persistedMissing)
+        log(
+          `  ⚠ persisted scenario source "${src.persistedMissing}" not found — falling back to name lookup for "${cassette.scenario.name}"`,
+        );
+      const diskScenario = src.path;
       log(`[${i + 1}/${staleTotal}] ↻ re-recording ${cp} (stale: ${staleness.join("; ")})`);
       try {
         let r: { result: RunResult };
@@ -1064,7 +1207,8 @@ async function recordScenarioObject(
 ): Promise<{ result: RunResult; cassettePath: string; artifacts: number }> {
   const result = await executeScenario(scenario);
   const safeName = slugForPath(scenario.name);
-  const cassettePath = opts.cassettePath ?? join("cassettes", `${safeName}.cassette.json`);
+  // shared default-path helper (slugForPath) — identical to the `record --dry-run` report.
+  const cassettePath = opts.cassettePath ?? defaultCassettePath(scenario.name);
   if (!opts.cassettePath) containedPath("cassettes", `${safeName}.cassette.json`); // path traversal guard
   mkdirSync(dirname(cassettePath), { recursive: true });
   // A3: a failing live run frozen into a cassette is a latent false-signal — refuse unless opted in.
@@ -1142,6 +1286,9 @@ async function recordScenarioObject(
     effectiveFidelity: result.effectiveFidelity,
     artifacts,
     userVisibleRoots: recordRoots,
+    // persist the authored scenario source file RELATIVE to the cassette dir (relocatable, no
+    // absolute host path) so `--rerecord-stale` re-records from the edited YAML even when name ≠ filename.
+    scenarioSource: opts.scenarioSourceFile ? relative(dirname(cassettePath), opts.scenarioSourceFile) : undefined,
     fingerprint: buildFingerprint(scenario.session, result.baseline, undefined, scenario.skills),
   };
   // A1 (opt-in) content redaction over the whole surface (C1). Empty policy → no-op. Non-empty → must be
@@ -1229,7 +1376,19 @@ export async function cmdReplay(args: string[]) {
       continue;
     }
     const renderer = json ? undefined : makeRenderer(plan);
-    const result = await replayCassette(rc.cassette, renderer ? [renderer] : [], { strict, cassetteDir: dirname(f) });
+    // replayCassette catches malformed control frames per-line (→ replay_protocol_fidelity
+    // failures) and re-throws nothing for them, but an UNEXPECTED throw (a harness bug, an OOM on a
+    // pathological cassette) must NOT abort the whole batch — a crash mid-walk reads as "the rest were
+    // fine" (false-green by abort). Wrap per-file: turn an unexpected throw into a tallied error result.
+    let result: RunResult;
+    try {
+      result = await replayCassette(rc.cassette, renderer ? [renderer] : [], { strict, cassetteDir: dirname(f) });
+    } catch (e) {
+      log(`replay: ${f}: ${(e as Error)?.message ?? String(e)}`);
+      results.push(replayErrorResult(f)); // turns the envelope's ok false (no false green)
+      worst = Math.max(worst, 2);
+      continue;
+    }
     // SEAM B: the replay lane evaluates assertions + result only; one verdict source for footer AND exit.
     if (!json) renderFooter(result, plan, { renderer, lane: "replay" });
     results.push(result);
@@ -1319,7 +1478,7 @@ export function cmdVerifyCassettes(args: string[]) {
     if ("error" in rc) return { file: f, findings: [], staleness: [], error: rc.error };
     const findings = doPrivacy ? scanCassette(rc.cassette, allow) : [];
     const staleness = doStaleness ? checkStaleness(rc.cassette, dirname(f)) : [];
-    // Bug 45: a cassette written by a NEWER harness version may carry semantics this version can't
+    // a cassette written by a NEWER harness version may carry semantics this version can't
     // correctly interpret — treat it as a staleness failure in verify-cassettes (can't verify ⇒ not green).
     const recordedVersion = rc.cassette.cassetteVersion ?? 0;
     if (recordedVersion > CASSETTE_VERSION)
@@ -1526,7 +1685,7 @@ export async function replayCassette(
   opts: { strict?: boolean; cassetteDir?: string } = {},
 ): Promise<RunResult> {
   // Cassette format version: ABSENT = legacy (0); a FUTURE version means this harness may misread fields
-  // it doesn't know about. Bug 45: in strict mode this is a hard failure (future semantics may not be
+  // it doesn't know about. in strict mode this is a hard failure (future semantics may not be
   // correctly interpreted → a false-green is possible). In non-strict mode, warn clearly that results may
   // be unreliable and continue (forward-compat best-effort).
   const cassetteVersion = cassette.cassetteVersion ?? 0;
@@ -1569,7 +1728,7 @@ export async function replayCassette(
     if (fp.skillHash) {
       const live = buildFingerprint(cassette.scenario.session, fp.baseline, opts.cassetteDir, cassette.scenario.skills);
       if (live.skillHash === undefined) {
-        // Bug 44: under --strict, unresolvable skill dirs are a failure (can't verify ⇒ not green).
+        // under --strict, unresolvable skill dirs are a failure (can't verify ⇒ not green).
         // Without --strict, warn but continue (the baseline check still applies).
         if (opts.strict) {
           staleness.push(
@@ -1655,7 +1814,7 @@ export async function replayCassette(
   // #1: with an artifact manifest, the filesystem assertions become replay-checkable (materialized below).
   // Without a manifest they stay live-only (stripped → skip warning), exactly as before.
   const manifestKeys: (keyof Assertion)[] = cassette.artifacts?.length ? ["file_exists", "user_visible_artifact", "artifact_json"] : [];
-  // Bug 37: deterministic exhaustiveness check — every key in the Assertion schema must appear in exactly
+  // deterministic exhaustiveness check — every key in the Assertion schema must appear in exactly
   // one classification bucket. If a new key is added to the schema but not here, this throws at the first
   // replay, making the oversight impossible to miss in CI.
   {
@@ -1765,24 +1924,34 @@ export async function replayCassette(
   if (opts.strict)
     for (const s of staleness) assertions.push({ assertion: {} as Assertion, pass: false, message: `cassette stale (--strict): ${s}` });
 
-  // Bug 45: future cassette version — hard failure under --strict (forward semantics may not be
+  // future cassette version — hard failure under --strict (forward semantics may not be
   // correctly interpreted here, so a green replay would be a false-green).
   if (futureVersionMsg && opts.strict)
     assertions.push({ assertion: {} as Assertion, pass: false, message: `cassette format too new (--strict): ${futureVersionMsg}` });
 
-  // Bug 46: differing duplicate request_ids in control-out — hard failure under --strict.
+  // differing duplicate request_ids in control-out are CONTRADICTORY protocol data — an
+  // UNCONDITIONAL cassette-corruption failure (no longer strict-only). --strict stays reserved for
+  // staleness/extra-data, not contradictory protocol data that could replay a corrupt decision history.
   for (const id of session.duplicateControlOutIds) {
-    if (opts.strict) {
-      assertions.push({
-        assertion: { replay_protocol_fidelity: true },
-        pass: false,
-        message: `control-out.jsonl has duplicate request_id "${id}" with differing bodies (--strict) — cassette may be corrupt; re-record`,
-      });
-    }
-    // In non-strict mode, the warning was already emitted during index construction.
+    assertions.push({
+      assertion: { replay_protocol_fidelity: true },
+      pass: false,
+      message: `control-out.jsonl has duplicate request_id "${id}" with differing bodies — cassette is corrupt; re-record`,
+    });
   }
 
-  // Bug 47: malformed event lines — always surface as a replay_protocol_error result (non-zero exit
+  // a malformed (non-JSON) control-out line is cassette corruption — UNCONDITIONAL failure.
+  // controlOut is part of the replay contract; a corrupt cassette must never green just because the
+  // malformed line happened not to be referenced.
+  for (const idx of session.malformedControlOutLines) {
+    assertions.push({
+      assertion: { replay_protocol_fidelity: true },
+      pass: false,
+      message: `control-out.jsonl line ${idx} is not valid JSON — cassette is corrupt; re-record`,
+    });
+  }
+
+  // malformed event lines — always surface as a replay_protocol_error result (non-zero exit
   // in strict; a warning-level result that still appears in output in non-strict). A malformed line
   // could conceal a failed assertion (false-green risk), so it is never silently swallowed.
   for (const idx of session.malformedEventLines) {
@@ -1790,6 +1959,18 @@ export async function replayCassette(
       assertion: { replay_protocol_fidelity: true },
       pass: false,
       message: `cassette events line ${idx} is not valid JSON — replay_protocol_error (malformed line may conceal a failed assertion)`,
+    });
+  }
+
+  // a per-line PROTOCOL validation failure (valid JSON but a malformed control frame — bad
+  // request_id / malformed AskUserQuestion body) is an unconditional replay_protocol_fidelity failure.
+  // Caught per-line in start() so a single corrupt cassette can't abort the batch (see cmdReplay's
+  // per-file try/catch); surfaced here as a failing assertion (fail-closed, not strict-gated).
+  for (const pe of session.protocolErrorLines) {
+    assertions.push({
+      assertion: { replay_protocol_fidelity: true },
+      pass: false,
+      message: `cassette events line ${pe.line} is a malformed control frame — ${pe.message}`,
     });
   }
 

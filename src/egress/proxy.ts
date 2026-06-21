@@ -1,6 +1,7 @@
 import http from "node:http";
 import net from "node:net";
 import { appendFileSync } from "node:fs";
+import { validateBareDomain } from "../boundary-paths.js";
 
 /**
  * Default-deny forward proxy reproducing Cowork's compiled allowlist behavior.
@@ -146,19 +147,17 @@ export function compile(patterns: string[]): (host: string) => boolean {
   const suffixes: string[] = [];
   // DNS hostnames are case-insensitive: store patterns lowercased and lowercase the candidate
   // host in the matcher, so `API.ANTHROPIC.COM` matches an `api.anthropic.com` allow.
+  //
+  // (P0-C): the per-entry policy lives in the shared `validateBareDomain` so this proxy and the
+  // run-side `seedApprovedDomains` cannot fork. It rejects scheme/path/port/whitespace entries (which
+  // could never match a bare host — a silent always-deny) AND, as the intended fail-loud hardening,
+  // empty/whitespace-only entries that `compile()` used to store as an unmatchable exact "".
   for (const p0 of patterns) {
-    const p = p0.toLowerCase();
-    if (p === "*") return () => true; // unrestricted
-    // An egress entry is a bare host or a `*.suffix` wildcard. A scheme / path / port / whitespace entry
-    // (e.g. `https://api.anthropic.com`) used to be stored verbatim as an exact pattern that could never
-    // match a bare hostname — a silent, confusing always-deny. Reject it loudly instead.
-    if (p.includes("://") || p.includes("/") || p.includes(":") || /\s/.test(p))
-      throw new Error(
-        `invalid egress allow entry "${p0}" — use a bare host (api.anthropic.com) or a wildcard (*.claude.ai), not a URL / scheme / path / port`,
-      );
-    if (p.startsWith("*."))
-      suffixes.push(p.slice(1)); // ".claude.ai"
-    else exact.add(p);
+    const v = validateBareDomain(p0);
+    if (v.kind === "all") return () => true; // unrestricted
+    if (v.kind === "suffix")
+      suffixes.push(v.value); // ".claude.ai"
+    else exact.add(v.value);
   }
   return (host: string) => {
     const h = host.toLowerCase();

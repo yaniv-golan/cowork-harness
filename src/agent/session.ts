@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { warn } from "../io.js";
 import { createWriteStream, type WriteStream } from "node:fs";
 import { join } from "node:path";
@@ -82,6 +83,40 @@ export interface AgentSession {
   respond(decisionId: string, r: DecisionResponse): void;
   close(): void;
 }
+
+// ---- Protocol ingress validation (fail-closed) ----
+/** Every control_request that the driver answers carries a non-empty string `request_id` — it is the
+ *  address the control_response is written back to. A missing / non-string / empty id means the agent sent
+ *  a malformed control frame; reject LOUDLY rather than echoing an unusable id into a response envelope
+ *  (which the in-VM agent could never match → it blocks until timeout). Shared by every control-request
+ *  branch (mcp_message, hook_callback, decision) so none can drift into trusting an unchecked id. */
+export function requireRequestId(msg: any): string {
+  if (typeof msg?.request_id !== "string" || msg.request_id === "")
+    throw new Error(`control-in: malformed request_id: ${JSON.stringify(msg?.request_id)}`);
+  return msg.request_id;
+}
+
+/** The AskUserQuestion control-request body was previously cast to QSpec[] with no runtime check,
+ *  so a malformed control frame (questions not an array, options missing, label not a string) flowed into
+ *  the deciders as trusted data and could crash or fabricate answers. Validate the supported question body
+ *  shape at protocol ingress and convert a malformed frame into a typed protocol error. */
+const OptionSchema = z.object({ label: z.string(), description: z.string().optional() }).passthrough();
+// `question` and `options` are OPTIONAL here ON PURPOSE. The runtime already tolerates both being absent:
+// optionless / free-text gates are handled by the deciders (`q.options?.map(...) ?? []`), and a
+// header-only gate with no `question` text gets a SPECIFIC loud diagnostic in Run (run.ts). Requiring them
+// here would reject those real shapes at protocol ingress with a generic error, defeating the sibling fixes
+// (a real optionless / header-only frame would crash the live run or false-fail replay). Its job is to
+// reject TRULY malformed bodies — `questions` not an array, or an option present but missing a string
+// `label` — not to be stricter than the protocol the deciders already accept.
+const QSpecSchema = z
+  .object({
+    question: z.string().optional(),
+    header: z.string().optional(),
+    options: z.array(OptionSchema).optional(),
+    multiSelect: z.boolean().optional(),
+  })
+  .passthrough();
+const QuestionsSchema = z.array(QSpecSchema);
 
 // ---- Control-response envelopes (verified zod shape; the inner `response` nesting is load-bearing) ----
 /** The one success-envelope shape every control_response shares; the four builders below differ ONLY in
@@ -238,6 +273,11 @@ export function deserializeDecision(req: DecisionRequest, body: Record<string, u
   return { kind: "permission", behavior: "deny", message: "deserializeDecision: unknown req kind" };
 }
 
+/** the largest control-out frame we mirror verbatim into control-out.jsonl. A frame above this
+ *  cannot be faithfully recorded (a truncation marker is unreplayable), so we fail the live recording
+ *  rather than freeze an unreplayable cassette. */
+export const CONTROL_OUT_MIRROR_CAP = 256 * 1024;
+
 export class LiveAgentSession implements AgentSession {
   private events: WriteStream;
   private controlOut: WriteStream;
@@ -368,11 +408,16 @@ export class LiveAgentSession implements AgentSession {
     // #8: a PreToolUse hook fired pre-dispatch (side-effecting, like mcp_message). Reply with the
     // installed hook's output so the agent blocks/allows; a dropped reply would deadlock the agent.
     if (msg.type === "control_request" && msg.request?.subtype === "hook_callback") {
-      this.write(successEnvelope(msg.request_id, hookOutput(msg.request.callback_id, msg.request.input)));
+      // validate request_id BEFORE emitting a response — a malformed id would write an
+      // unaddressable control_response and leave the in-VM agent blocked on the hook round-trip.
+      const reqId = requireRequestId(msg);
+      this.write(successEnvelope(reqId, hookOutput(msg.request.callback_id, msg.request.input)));
       return;
     }
     // mcp_message is the only side-effecting branch (the driver computes + writes the response).
     if (msg.type === "control_request" && msg.request?.subtype === "mcp_message") {
+      // same fail-closed request_id check as the decision path — never echo an unchecked id.
+      const reqId = requireRequestId(msg);
       const server = msg.request.server_name;
       const jr = msg.request.message ?? {};
       if (this.sdkMcp) {
@@ -387,7 +432,7 @@ export class LiveAgentSession implements AgentSession {
           warn(`::warning:: sdkMcp.handle threw for "${server}" — replying with a JSON-RPC error: ${message}\n`);
           out = { error: { code: -32603, message: `handler error: ${message}` } };
         }
-        this.write(mcpResponseEnvelope(msg.request_id, out as any, jr.id));
+        this.write(mcpResponseEnvelope(reqId, out as any, jr.id));
         // Echo the MCP round-trip as a SYNTHETIC tool_use for provenance/trace only. The real tool call
         // also arrives as an assistant tool_use block (live-verified: mcp__workspace__bash co-occurs with
         // this mcp_message), which is what gets counted — so this is marked synthetic and excluded from
@@ -407,7 +452,7 @@ export class LiveAgentSession implements AgentSession {
       warn(
         `::warning:: mcp_message for server "${server}" arrived but no sdkMcp handler is configured — replying with a JSON-RPC error (would otherwise deadlock)\n`,
       );
-      this.write(mcpResponseEnvelope(msg.request_id, { error: { code: -32601, message: "no sdkMcp handler configured" } }, jr.id));
+      this.write(mcpResponseEnvelope(reqId, { error: { code: -32601, message: "no sdkMcp handler configured" } }, jr.id));
       return;
     }
     for (const ev of parseMessage(msg)) {
@@ -455,7 +500,7 @@ export class LiveAgentSession implements AgentSession {
   private write(obj: unknown): void {
     const line = JSON.stringify(obj);
     if (this.closing) return; // session draining — discard silently
-    // Bug 34: check stream writability before writing — a closed/destroyed stdin after a child crash
+    // check stream writability before writing — a closed/destroyed stdin after a child crash
     // loses decision frames silently. Throw immediately so callers surface the failure rather than
     // hanging or silently dropping frames.
     if (this.proc.stdin.destroyed || !this.proc.stdin.writable)
@@ -505,14 +550,23 @@ export class LiveAgentSession implements AgentSession {
           }
           break;
         } else {
-          if (frame.length > 256 * 1024) {
-            // Frame too large to mirror verbatim — record a truncation marker instead.
-            this.controlOut.write(
-              JSON.stringify({ _emu: "control_out_truncated", bytes: frame.length, head: frame.slice(0, 4096) }) + "\n",
-            );
-          } else {
-            this.controlOut.write(frame);
+          if (frame.length > CONTROL_OUT_MIRROR_CAP) {
+            // an over-cap control frame can no longer be mirrored verbatim into control-out.jsonl.
+            // Previously we wrote a `_emu:control_out_truncated` marker — but that marker is UNREPLAYABLE
+            // (buildControlOutIndex skips it → the decision lands in missingControlOut → replay fails loud
+            // as "truncated; re-record"). FAIL at RECORD time instead, so the marker never reaches a cassette
+            // and the operator learns the real cause (a control frame too large) at its source. Route through
+            // rejectError + break for the same typed-error + clean-teardown path as a write failure above.
+            if (this.rejectError)
+              this.rejectError(
+                new Error(
+                  `control-out frame too large to mirror (${frame.length} bytes > ${CONTROL_OUT_MIRROR_CAP} cap) — ` +
+                    `a cassette recorded from this run would be unreplayable. Reduce the control payload (e.g. a smaller AskUserQuestion answer / tool input).`,
+                ),
+              );
+            break;
           }
+          this.controlOut.write(frame);
         }
       }
     } finally {
@@ -632,7 +686,7 @@ export function parseMessage(msg: any): AgentEvent[] {
 /** Flatten a tool_result `content` (a string, or an array of content blocks), capped at
  *  `max` chars. The 500-char DISPLAY value (toolResultText) keeps the recorder/trace compact; the larger
  *  PROVENANCE value (toolResultRaw) is what seeds web_fetch provenance, so a URL past char 500 isn't lost.
- *  Bug 35: preserve all content block types — text blocks use their text value; all other block types
+ * preserve all content block types — text blocks use their text value; all other block types
  *  (json, resource, link, unknown shapes) are JSON-stringified so no content is silently dropped. */
 function flattenToolResult(content: unknown, max: number): string {
   if (typeof content === "string") return content.slice(0, max);
@@ -671,20 +725,28 @@ export function toDecisionRequest(msg: any): DecisionRequest | null {
   // Validate request_id early — every DecisionRequest.id is a non-empty string. A missing or
   // non-string request_id means the agent sent a malformed control_request; reject loudly rather
   // than silently building a DecisionRequest with an unusable id (respond() would always miss it).
-  if (typeof msg.request_id !== "string" || msg.request_id === "")
-    throw new Error(`control-in: malformed request_id: ${JSON.stringify(msg.request_id)}`);
-  const id = msg.request_id;
+  const id = requireRequestId(msg);
   if (sub === "can_use_tool") {
     const tool = msg.request.tool_name ?? "";
-    if (tool === "AskUserQuestion")
+    if (tool === "AskUserQuestion") {
+      // validate the questions body at ingress instead of an unchecked `as QSpec[]` cast — a
+      // malformed control frame (questions not an array, an option with no `label`, …) is a protocol
+      // error, not trusted decider input. The thrown Error is caught per-line on the replay path
+      // and surfaces as a typed control-protocol failure on the live path.
+      const parsed = QuestionsSchema.safeParse(msg.request.input?.questions ?? []);
+      if (!parsed.success)
+        throw new Error(
+          `control-in: malformed AskUserQuestion questions for request ${id}: ${parsed.error.issues.map((i) => `${i.path.join(".") || "<root>"}: ${i.message}`).join("; ")}`,
+        );
       // Capture the `toolu_…` tool_use_id (distinct from the UUID request_id) to pair the gate with its
       // tool_result later (amendment #1). The SDK puts it on the request envelope.
       return {
         id,
         kind: "question",
-        questions: (msg.request.input?.questions ?? []) as QSpec[],
+        questions: parsed.data as QSpec[],
         toolUseId: msg.request.tool_use_id ? String(msg.request.tool_use_id) : undefined,
       };
+    }
     return { id, kind: "permission", tool, input: msg.request.input ?? {} };
   }
   if (sub === "request_user_dialog")

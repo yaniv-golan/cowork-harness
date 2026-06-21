@@ -87,7 +87,7 @@ export function spawnProtocol(
   // #34/#12/#20: make the L0 divergence LOUD when the session declares plugins — L0 neither
   // applies the Cowork auth-env drop nor passes --plugin-dir, so plugin fidelity is not what
   // a cowork tier would give. Mirrors the L0 "network tool ran at L0" warning in execute.ts.
-  // Bug 20: this also sets l0PluginDivergence=true so execute.ts can surface a FAILING fidelity
+  // this also sets l0PluginDivergence=true so execute.ts can surface a FAILING fidelity
   // signal in the RunResult — a warn-only was insufficient since the run could still appear green.
   let l0PluginDivergence = false;
   if (plan.pluginDirs.length > 0) {

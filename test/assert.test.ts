@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { evaluate, type AssertContext } from "../src/assert.js";
+import { evaluate, hostMatches, type AssertContext } from "../src/assert.js";
 
 function ctx(over: Partial<AssertContext> = {}): AssertContext {
   return {
@@ -24,6 +24,23 @@ function ctx(over: Partial<AssertContext> = {}): AssertContext {
   };
 }
 const pass = (r: ReturnType<typeof evaluate>) => r.every((x) => x.pass);
+
+describe("#24 — hostMatches normalizes both sides (case + trailing dot), keeps subdomain semantics", () => {
+  it("matches a mixed-case needle against a lowercase host", () => {
+    expect(hostMatches("api.anthropic.com", "API.Anthropic.COM")).toBe(true);
+    expect(hostMatches("API.ANTHROPIC.COM", "api.anthropic.com")).toBe(true);
+  });
+
+  it("matches a trailing-dot needle (FQDN form) against a bare host and vice versa", () => {
+    expect(hostMatches("api.anthropic.com", "anthropic.com.")).toBe(true); // x.needle subdomain rule
+    expect(hostMatches("anthropic.com.", "anthropic.com")).toBe(true); // exact after dot-strip
+  });
+
+  it("preserves the proper-subdomain boundary (no prefix-confusion match)", () => {
+    expect(hostMatches("x.anthropic.com", "anthropic.com")).toBe(true);
+    expect(hostMatches("evilanthropic.com", "anthropic.com")).toBe(false);
+  });
+});
 
 describe("transcript_matches — fuzzy content for stochastic prose", () => {
   const t = "The SOM is $4.9M for the AI meeting-notes market.";
@@ -161,6 +178,78 @@ describe("false-green catchers (deterministic)", () => {
   it("self_heal_ran + transcript_no_host_path", () => {
     expect(pass(evaluate([{ self_heal_ran: true }], ctx({ selfHealRan: true })))).toBe(true);
     expect(pass(evaluate([{ transcript_no_host_path: true }], ctx({ hostPathLeaked: true })))).toBe(false);
+  });
+});
+
+// Phase B — assertion evidence manifest: negative/absence assertions must fail loud when their
+// verify-run evidence source is ABSENT (undefined in result.json), not pass vacuously. The flags
+// default to "present" (undefined) so the replay/live lanes — which never set them — keep greening
+// an empty-but-present set as proof-of-absence (guards against the P0-1 verify-run-scoping regression).
+describe("Phase B — evidence-missing flags fail negative assertions loud (absent ≠ empty)", () => {
+  it("tool_result_not_contains: FAILS when toolResultsMissing, but still greens on empty-but-present", () => {
+    const r = evaluate([{ tool_result_not_contains: "secret" }], ctx({ toolResultsMissing: true }));
+    expect(pass(r)).toBe(false);
+    expect(r[0].message).toContain("evidence unavailable");
+    expect(r[0].message).toContain("tool_result_not_contains");
+    // replay/live lane: flag unset (present), empty set → proof the text never appeared → green.
+    expect(pass(evaluate([{ tool_result_not_contains: "secret" }], ctx({ toolResultTexts: [] })))).toBe(true);
+  });
+
+  it("tool_not_called: FAILS when toolsCalledMissing, but still greens on empty-but-present", () => {
+    const r = evaluate([{ tool_not_called: "Bash" }], ctx({ toolsCalledMissing: true }));
+    expect(pass(r)).toBe(false);
+    expect(r[0].message).toContain("evidence unavailable");
+    expect(r[0].message).toContain("tool_not_called");
+    expect(pass(evaluate([{ tool_not_called: "Bash" }], ctx({ toolsCalled: new Set() })))).toBe(true);
+  });
+
+  it("subagent_tool_absent: FAILS when subagentsMissing, but still greens on empty-but-present", () => {
+    const r = evaluate([{ subagent_tool_absent: "Bash" }], ctx({ subagentsMissing: true }));
+    expect(pass(r)).toBe(false);
+    expect(r[0].message).toContain("evidence unavailable");
+    expect(r[0].message).toContain("subagent_tool_absent");
+    expect(pass(evaluate([{ subagent_tool_absent: "Bash" }], ctx({ subagentTools: new Set() })))).toBe(true);
+  });
+
+  it("dispatch_count_max: FAILS when subagentsMissing (no vacuous 0 ≤ max), greens on empty-but-present", () => {
+    const r = evaluate([{ dispatch_count_max: 3 }], ctx({ subagentsMissing: true }));
+    expect(pass(r)).toBe(false);
+    expect(r[0].message).toContain("evidence unavailable");
+    expect(r[0].message).toContain("dispatch_count_max");
+    expect(pass(evaluate([{ dispatch_count_max: 3 }], ctx({ subagents: [] })))).toBe(true);
+  });
+
+  it("subagent_declared_but_unused: FAILS when subagentsMissing (no vacuous find=undefined), greens on empty", () => {
+    const r = evaluate([{ subagent_declared_but_unused: "Bash" }], ctx({ subagentsMissing: true }));
+    expect(pass(r)).toBe(false);
+    expect(r[0].message).toContain("evidence unavailable");
+    expect(r[0].message).toContain("subagent_declared_but_unused");
+    expect(pass(evaluate([{ subagent_declared_but_unused: "Bash" }], ctx({ subagents: [] })))).toBe(true);
+  });
+
+  it("no_delete_in_outputs: FAILS when scanMissing, but still greens on empty-but-present scan", () => {
+    const r = evaluate([{ no_delete_in_outputs: true }], ctx({ scanMissing: true }));
+    expect(pass(r)).toBe(false);
+    expect(r[0].message).toContain("evidence unavailable");
+    expect(r[0].message).toContain("no_delete_in_outputs");
+    expect(pass(evaluate([{ no_delete_in_outputs: true }], ctx({ outputsDeletes: [] })))).toBe(true);
+  });
+
+  it("transcript_no_host_path: FAILS when scanMissing, but still greens on empty-but-present scan", () => {
+    const r = evaluate([{ transcript_no_host_path: true }], ctx({ scanMissing: true }));
+    expect(pass(r)).toBe(false);
+    expect(r[0].message).toContain("evidence unavailable");
+    expect(r[0].message).toContain("transcript_no_host_path");
+    expect(pass(evaluate([{ transcript_no_host_path: true }], ctx({ hostPathLeaked: false })))).toBe(true);
+  });
+
+  it("self_heal_ran: FAILS when scanMissing, but still evaluates against an empty-but-present scan", () => {
+    const r = evaluate([{ self_heal_ran: false }], ctx({ scanMissing: true }));
+    expect(pass(r)).toBe(false);
+    expect(r[0].message).toContain("evidence unavailable");
+    expect(r[0].message).toContain("self_heal_ran");
+    // flag unset (present) + selfHealRan:false → the assertion's own truth check applies.
+    expect(pass(evaluate([{ self_heal_ran: false }], ctx({ selfHealRan: false })))).toBe(true);
   });
 });
 

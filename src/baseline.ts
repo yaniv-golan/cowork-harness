@@ -3,6 +3,7 @@ import { join, resolve, isAbsolute, dirname } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { PlatformBaseline } from "./types.js";
+import { safeNamedBaseline } from "./boundary-paths.js";
 
 export const BASELINES_DIR = join(fileURLToPath(new URL("..", import.meta.url)), "baselines");
 
@@ -86,7 +87,9 @@ function newestStagedBinary(stagedPath: string): string | undefined {
 /**
  * Resolve a baseline by `latest`, an absolute path, or a name under `baselines/`. A non-absolute name
  * is treated as a BARE FILENAME resolved under BASELINES_DIR — both `desktop-x` and `desktop-x.json`
- * load from there regardless of cwd. Use an absolute path for an out-of-tree baseline.
+ * load from there regardless of cwd. A non-absolute name MUST NOT contain a path separator
+ * (`safeNamedBaseline` rejects `../`, nested paths, and `../foo.json`). Use an absolute path for an
+ * out-of-tree baseline (the explicit escape hatch).
  */
 export function loadBaseline(name: string): PlatformBaseline {
   const file =
@@ -94,9 +97,18 @@ export function loadBaseline(name: string): PlatformBaseline {
       ? latestBaselineFile()
       : isAbsolute(name)
         ? name
-        : join(BASELINES_DIR, name.endsWith(".json") ? name : `${name}.json`);
+        : // A named (non-absolute) baseline is a BARE FILENAME under BASELINES_DIR. Reject path
+          // separators first: a name like `../../etc/hosts` or `../foo.json` (whose `.json` suffix
+          // skips the append below) would otherwise read an arbitrary out-of-tree `.json`. Absolute
+          // paths remain the explicit escape hatch (handled above).
+          join(BASELINES_DIR, withJsonSuffix(safeNamedBaseline(name)));
   const raw = JSON.parse(readFileSync(file, "utf8"));
   return PlatformBaseline.parse(raw);
+}
+
+/** Append `.json` to a baseline name unless it already carries the suffix. */
+function withJsonSuffix(name: string): string {
+  return name.endsWith(".json") ? name : `${name}.json`;
 }
 
 /**

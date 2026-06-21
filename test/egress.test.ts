@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import net from "node:net";
 import { compile, startEgressProxy, freePort } from "../src/egress/proxy.js";
 import { parseEgressLine } from "../src/egress/sidecar.js";
+import { validateBareDomain } from "../src/boundary-paths.js";
+import { Run } from "../src/run/run.js";
 
 describe("egress allowlist validation + proxy readiness", () => {
   it("rejects a scheme / path / port entry (would silently never match a bare host)", () => {
@@ -12,6 +14,49 @@ describe("egress allowlist validation + proxy readiness", () => {
     expect(compile(["api.anthropic.com"])("api.anthropic.com")).toBe(true);
     expect(compile(["*.claude.ai"])("assets.claude.ai")).toBe(true);
     expect(compile(["*"])("anything.example")).toBe(true);
+  });
+
+  // (P0-C): compile() and the seed path share validateBareDomain, which now also rejects
+  // empty/whitespace entries that compile() used to silently store as an unmatchable exact "".
+  it("rejects an empty / whitespace-only allow entry (fail-loud hardening)", () => {
+    expect(() => compile([""])).toThrow(/can never match/);
+    expect(() => compile(["   "])).toThrow(/can never match/);
+  });
+
+  describe("#21 — validateBareDomain shared policy classification", () => {
+    it("classifies `*`, wildcards, and bare hosts; throws on invalid", () => {
+      expect(validateBareDomain("*")).toEqual({ kind: "all" });
+      expect(validateBareDomain("*.claude.ai")).toEqual({ kind: "suffix", value: ".claude.ai" });
+      expect(validateBareDomain("API.Anthropic.COM")).toEqual({ kind: "exact", value: "api.anthropic.com" });
+      expect(() => validateBareDomain("")).toThrow(/can never match/);
+      expect(() => validateBareDomain("https://x.com")).toThrow(/invalid egress allow entry/);
+      expect(() => validateBareDomain("x.com:443")).toThrow(/invalid egress allow entry/);
+    });
+  });
+
+  describe("#21 — seedApprovedDomains validates seeds (same policy as compile())", () => {
+    // The Run constructor only builds the RunRecord; seedApprovedDomains is synchronous and never
+    // touches the session/decider, and requestWebFetchApproval short-circuits true for a seeded host
+    // BEFORE consulting the decider — so a null session/decider is safe for these assertions.
+    const mkRun = () => new Run(null as any, null as any);
+
+    it("rejects empty / URL / scheme / path / port seeds (throws like compile())", () => {
+      expect(() => mkRun().seedApprovedDomains([""])).toThrow(/can never match/);
+      expect(() => mkRun().seedApprovedDomains(["https://example.com/x"])).toThrow(/invalid egress allow entry/);
+      expect(() => mkRun().seedApprovedDomains(["example.com:443"])).toThrow(/invalid egress allow entry/);
+    });
+
+    it("rejects a `*` / `*.suffix` wildcard seed (a seed is a concrete host)", () => {
+      expect(() => mkRun().seedApprovedDomains(["*"])).toThrow(/concrete host/);
+      expect(() => mkRun().seedApprovedDomains(["*.example.com"])).toThrow(/concrete host/);
+    });
+
+    it("admits a valid host (case-folded) so a later fetch short-circuits without a gate", async () => {
+      const run = mkRun();
+      run.seedApprovedDomains(["Example.COM"]);
+      // approved → requestWebFetchApproval returns true before any decider is consulted
+      await expect(run.requestWebFetchApproval("example.com", "https://example.com/a")).resolves.toBe(true);
+    });
   });
 
   it("freePort returns a bindable port; startEgressProxy exposes a ready handshake", async () => {

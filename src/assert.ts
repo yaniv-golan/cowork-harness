@@ -2,6 +2,7 @@ import { existsSync, readFileSync, statSync, realpathSync } from "node:fs";
 import { join, resolve, relative, isAbsolute, sep } from "node:path";
 import type { Assertion, RunResult } from "./types.js";
 import { compileUserRegex } from "./regex.js";
+import { normalizeHost } from "./boundary-paths.js";
 
 /** Resolve a user-authored assertion path under `workRoot`, rejecting absolute paths and any `..` that
  *  escapes the root. Returns the absolute path, or null if it would leave `workRoot`. Assertion paths are
@@ -17,7 +18,7 @@ function containedPath(workRoot: string, p: string): string | null {
 }
 
 /**
- * Bug 37: containedPath checks lexical traversal but not symlink targets. A symlink inside the workspace
+ * containedPath checks lexical traversal but not symlink targets. A symlink inside the workspace
  * root that points outside satisfies containedPath yet lets existsSync observe host files.
  * This helper resolves symlinks with realpathSync and verifies the real path is still under `root`.
  * Returns the absolute path when safe; returns null when:
@@ -115,9 +116,16 @@ const jsonEq = (a: unknown, b: unknown): boolean => deepJsonEqual(a, b);
 /**
  * Boundary-aware host matching: `host` must equal `needle` exactly or be a proper subdomain of it.
  * `evilanthropic.com` does NOT match `anthropic.com`; `x.anthropic.com` does.
+ *
+ * Both sides are normalized (lowercase + trailing-dot strip) so an author needle that differs from the
+ * recorded host only in case or a trailing dot still matches the way runtime egress matching does.
+ * Normalization is COMPOSED onto the existing subdomain semantics, not a replacement — the
+ * `endsWith("." + needle)` proper-subdomain rule is preserved.
  */
 export function hostMatches(host: string, needle: string): boolean {
-  return host === needle || host.endsWith("." + needle);
+  const h = normalizeHost(host);
+  const n = normalizeHost(needle);
+  return h === n || h.endsWith("." + n);
 }
 
 export interface AssertContext {
@@ -146,6 +154,22 @@ export interface AssertContext {
   /** Set by verify-run only when trace.json is absent/unreadable. Prevents questions_count_max from
    *  passing vacuously on missing evidence (absent ≠ zero questions). Undefined/false on live/replay lanes. */
   questionsMissing?: boolean;
+  /** Set by verify-run only when `result.toolResults` is undefined in result.json (partial/old run).
+   *  Prevents tool_result_not_contains from passing vacuously (absent ≠ empty). Undefined/false on
+   *  live/replay lanes, where the structure is always present (empty = proof-of-absence). */
+  toolResultsMissing?: boolean;
+  /** Set by verify-run only when `result.toolCounts` is undefined in result.json (partial/old run).
+   *  Prevents tool_not_called from passing vacuously (absent ≠ empty). Undefined/false on live/replay. */
+  toolsCalledMissing?: boolean;
+  /** Set by verify-run only when `result.subagents` is undefined in result.json (partial/old run).
+   *  Prevents subagent_tool_absent / subagent_declared_but_unused / dispatch_count_max from passing
+   *  vacuously (absent ≠ no sub-agents). Undefined/false on live/replay. */
+  subagentsMissing?: boolean;
+  /** Set by verify-run only when `result.scan` is undefined in result.json (partial/old run).
+   *  Prevents no_delete_in_outputs / transcript_no_host_path / self_heal_ran from passing vacuously
+   *  on default-false/empty scan fields (absent ≠ clean scan). Undefined/false on live/replay, where
+   *  the scan structure is always populated (empty = proof-of-absence). */
+  scanMissing?: boolean;
   /** Relative paths of artifacts written as 0-byte placeholders in the cassette (truncated: true entries).
    *  Set by replay lane from materializeManifest(); empty set on live and verify-run lanes. */
   truncatedPaths?: Set<string>;
@@ -195,9 +219,11 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
     );
   if (a.tool_result_not_contains !== undefined)
     results.push(
-      ctx.toolResultTexts.every((t) => !t.includes(a.tool_result_not_contains!))
-        ? ok()
-        : fail(`a tool result unexpectedly contained "${a.tool_result_not_contains}"`),
+      ctx.toolResultsMissing
+        ? fail(`evidence unavailable: tool results absent from result.json — cannot evaluate tool_result_not_contains`)
+        : ctx.toolResultTexts.every((t) => !t.includes(a.tool_result_not_contains!))
+          ? ok()
+          : fail(`a tool result unexpectedly contained "${a.tool_result_not_contains}"`),
     );
   // Fuzzy content for stochastic prose. All regex-building assertions are try/catch-wrapped —
   // `evaluate()` is a bare `.map(check)` with no error boundary, so a malformed pattern must be a
@@ -230,7 +256,7 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
         // record time. Existence is provable without the inlined body; only content assertions need it.
         results.push(ok());
       } else {
-        // Bug 37: verify the real path (after symlink resolution) is still under workRoot.
+        // verify the real path (after symlink resolution) is still under workRoot.
         const real = containedRealPath(ctx.workRoot, abs);
         if (!real) results.push(fail(`unsafe file_exists path "${a.file_exists}" — symlink target escapes the work root`));
         else results.push(existsSync(real) ? ok() : fail(`file not found: ${a.file_exists} (under ${ctx.workRoot})`));
@@ -261,7 +287,7 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
             fail(`"${p}" is not under a user-visible prefix (${ctx.userVisiblePrefixes.join(", ")}) — invisible to the user in Cowork`),
           );
         else {
-          // Bug 37: verify the real path (after symlink resolution) is still under workRoot.
+          // verify the real path (after symlink resolution) is still under workRoot.
           const real = containedRealPath(ctx.workRoot, abs);
           if (!real) results.push(fail(`unsafe user_visible_artifact path "${p}" — symlink target escapes the work root`));
           else results.push(existsSync(real) ? ok() : fail(`user-visible artifact not found: ${p}`));
@@ -271,11 +297,23 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
   }
   if (a.tool_called !== undefined) results.push(ctx.toolsCalled.has(a.tool_called) ? ok() : fail(`tool not called: ${a.tool_called}`));
   if (a.tool_not_called !== undefined)
-    results.push(!ctx.toolsCalled.has(a.tool_not_called) ? ok() : fail(`tool unexpectedly called: ${a.tool_not_called}`));
+    results.push(
+      ctx.toolsCalledMissing
+        ? fail(`evidence unavailable: tool counts absent from result.json — cannot evaluate tool_not_called`)
+        : !ctx.toolsCalled.has(a.tool_not_called)
+          ? ok()
+          : fail(`tool unexpectedly called: ${a.tool_not_called}`),
+    );
   if (a.subagent_tool_used !== undefined)
     results.push(ctx.subagentTools.has(a.subagent_tool_used) ? ok() : fail(`sub-agent did not use: ${a.subagent_tool_used}`));
   if (a.subagent_tool_absent !== undefined)
-    results.push(!ctx.subagentTools.has(a.subagent_tool_absent) ? ok() : fail(`sub-agent unexpectedly used: ${a.subagent_tool_absent}`));
+    results.push(
+      ctx.subagentsMissing
+        ? fail(`evidence unavailable: sub-agent dispatch tree absent from result.json — cannot evaluate subagent_tool_absent`)
+        : !ctx.subagentTools.has(a.subagent_tool_absent)
+          ? ok()
+          : fail(`sub-agent unexpectedly used: ${a.subagent_tool_absent}`),
+    );
   if (a.subagent_dispatched !== undefined) {
     // Match the agentType OR the description — skills often dispatch with only a `description`
     // (no subagent_type → agentType "unknown"), so name-matching alone would miss those (O1).
@@ -293,18 +331,28 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
     // #25 / B2: declared a tool but never USED it — the observable proxy for the v0.3.0 fabrication
     // class. Previously also required `toolsUsed.length === 0`, which let "declared Bash, used Read"
     // pass; dropping that clause catches the broader declared-but-unused case.
-    const culprit = ctx.subagents.find((s) => s.declaredTools.includes(t) && !s.toolsUsed.includes(t));
-    results.push(
-      culprit
-        ? fail(`sub-agent "${culprit.agentType}" declared "${t}" but never used it (used: ${culprit.toolsUsed.join(", ") || "none"})`)
-        : ok(),
-    );
+    if (ctx.subagentsMissing) {
+      // Fabrication-detection assertion: find(...) returns undefined on an absent dispatch tree, which
+      // would pass vacuously. Absent evidence ≠ proof no sub-agent left a tool declared-but-unused.
+      results.push(
+        fail(`evidence unavailable: sub-agent dispatch tree absent from result.json — cannot evaluate subagent_declared_but_unused`),
+      );
+    } else {
+      const culprit = ctx.subagents.find((s) => s.declaredTools.includes(t) && !s.toolsUsed.includes(t));
+      results.push(
+        culprit
+          ? fail(`sub-agent "${culprit.agentType}" declared "${t}" but never used it (used: ${culprit.toolsUsed.join(", ") || "none"})`)
+          : ok(),
+      );
+    }
   }
   if (a.dispatch_count_max !== undefined)
     results.push(
-      ctx.subagents.length <= a.dispatch_count_max
-        ? ok()
-        : fail(`dispatched ${ctx.subagents.length} sub-agents, max ${a.dispatch_count_max} (SPEC §10 cap {global:3})`),
+      ctx.subagentsMissing
+        ? fail(`evidence unavailable: sub-agent dispatch tree absent from result.json — cannot evaluate dispatch_count_max`)
+        : ctx.subagents.length <= a.dispatch_count_max
+          ? ok()
+          : fail(`dispatched ${ctx.subagents.length} sub-agents, max ${a.dispatch_count_max} (SPEC §10 cap {global:3})`),
     );
   if (a.egress_denied !== undefined)
     results.push(
@@ -320,12 +368,20 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
     );
   if (a.no_delete_in_outputs !== undefined)
     results.push(
-      ctx.outputsDeletes.length === 0
-        ? ok()
-        : fail(`delete op(s) touched outputs (forbidden in Cowork): ${ctx.outputsDeletes.slice(0, 3).join("; ")}`),
+      ctx.scanMissing
+        ? fail(`evidence unavailable: post-run scan absent from result.json — cannot evaluate no_delete_in_outputs`)
+        : ctx.outputsDeletes.length === 0
+          ? ok()
+          : fail(`delete op(s) touched outputs (forbidden in Cowork): ${ctx.outputsDeletes.slice(0, 3).join("; ")}`),
     );
   if (a.self_heal_ran !== undefined)
-    results.push(ctx.selfHealRan === a.self_heal_ran ? ok() : fail(`self_heal_ran was ${ctx.selfHealRan}, expected ${a.self_heal_ran}`));
+    results.push(
+      ctx.scanMissing
+        ? fail(`evidence unavailable: post-run scan absent from result.json — cannot evaluate self_heal_ran`)
+        : ctx.selfHealRan === a.self_heal_ran
+          ? ok()
+          : fail(`self_heal_ran was ${ctx.selfHealRan}, expected ${a.self_heal_ran}`),
+    );
   // Verdict modifier (consumed by computeVerdict, not here). It always "passes" as an assertion so a
   // standalone `{allow_permissive_auto_allow: true}` is a valid non-empty assertion, not "empty assertion".
   if (a.allow_permissive_auto_allow !== undefined) results.push(ok());
@@ -333,7 +389,11 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
   if (a.allow_missing_capability !== undefined) results.push(ok());
   if (a.transcript_no_host_path !== undefined)
     results.push(
-      !ctx.hostPathLeaked === a.transcript_no_host_path ? ok() : fail(`host path leaked into model-visible text: ${ctx.hostPathLeaked}`),
+      ctx.scanMissing
+        ? fail(`evidence unavailable: post-run scan absent from result.json — cannot evaluate transcript_no_host_path`)
+        : !ctx.hostPathLeaked === a.transcript_no_host_path
+          ? ok()
+          : fail(`host path leaked into model-visible text: ${ctx.hostPathLeaked}`),
     );
   if (a.question_asked !== undefined) {
     if (ctx.questionsMissing) {
@@ -395,7 +455,7 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
     const file = containedPath(ctx.workRoot, aj.artifact);
     if (!file) results.push(fail(`unsafe artifact_json path "${aj.artifact}" — must stay under the work root (no absolute paths or "..")`));
     else {
-      // Bug 37: verify the real path (after symlink resolution) is still under workRoot.
+      // verify the real path (after symlink resolution) is still under workRoot.
       const realFile = containedRealPath(ctx.workRoot, file);
       if (!realFile) {
         results.push(fail(`unsafe artifact_json path "${aj.artifact}" — symlink target escapes the work root`));

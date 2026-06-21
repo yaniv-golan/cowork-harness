@@ -97,7 +97,7 @@ export const AnswerRule = z
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: "answer rule has no matcher — set `when_question` or `when_tool`" });
       return;
     }
-    // Bug 13: reject rules that set both matcher families — their precedence is undefined and the rule
+    // reject rules that set both matcher families — their precedence is undefined and the rule
     // would silently act as either a question rule or a tool rule depending on which branch runs first.
     if (hasQuestion && hasTool)
       ctx.addIssue({
@@ -106,9 +106,18 @@ export const AnswerRule = z
       });
     if (hasQuestion && r.choose === undefined && r.answer === undefined)
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: "a `when_question` rule needs an action — set `choose` or `answer`" });
+    // `choose` and `answer` are mutually exclusive (the field comment at the top of the schema
+    // promises this). Runtime rejects the combination only on a MATCHING rule (decider.ts), so a malformed
+    // rule that never matches sits unnoticed. Reject it at schema time so the author sees it regardless.
+    if (r.choose !== undefined && r.answer !== undefined)
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "answer rule sets both `choose` and `answer` — use exactly one: `choose` for an offered option, or `answer` for a free-text 'Other'",
+      });
     if (hasTool && r.decide === undefined && r.allow_if === undefined)
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: "a `when_tool` rule needs an action — set `decide` or `allow_if`" });
-    // Bug 14: reject rules that set both `allow_if` and `decide` — `decide` silently takes precedence
+    // reject rules that set both `allow_if` and `decide` — `decide` silently takes precedence
     // over `allow_if` in the runtime's if/else-if chain, making `allow_if` unreachable and the author's
     // intent opaque. Require exactly one action field.
     if (r.allow_if !== undefined && r.decide !== undefined)
@@ -117,6 +126,27 @@ export const AnswerRule = z
         message:
           "answer rule sets both `allow_if` and `decide` — use exactly one: `decide` for a static outcome, `allow_if` for a predicate",
       });
+    // `grant` is consumed only on an ALLOW outcome of a web_fetch permission rule (decider.ts —
+    // `behavior === "allow" && req.tool.startsWith("webfetch:")`). On a question rule, a non-webfetch tool
+    // rule, or a `decide: deny` rule it is silently inert — an author who sets it believes a domain grant is
+    // active when it is ignored. Reject those inert placements so the supported shape is explicit.
+    if (r.grant !== undefined) {
+      if (!hasTool)
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "`grant` is only valid on a `when_tool` web_fetch rule — it is inert on a question rule",
+        });
+      else if (!r.when_tool!.startsWith("webfetch:"))
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "`grant` is only consumed for a `webfetch:<domain>` tool rule — it is inert on any other tool",
+        });
+      else if (r.decide === "deny")
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "`grant` is only meaningful on an ALLOW outcome — it is inert on a `decide: deny` rule",
+        });
+    }
   });
 export type AnswerRule = z.infer<typeof AnswerRule>;
 

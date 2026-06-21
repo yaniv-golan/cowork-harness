@@ -228,7 +228,7 @@ export function cmdDoctor(args: string[]): void {
   const tier = (p.options["--tier"] as Tier) ?? "container";
   const json = p.options["--output-format"] === "json";
 
-  // Bug 8: reject unexpected positional arguments.
+  // reject unexpected positional arguments.
   if (p.positionals.length > 0) {
     log(`unexpected arguments: ${p.positionals.join(" ")}`);
     return process.exit(2);

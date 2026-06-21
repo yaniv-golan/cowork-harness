@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, linkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, isAbsolute } from "node:path";
 import {
@@ -256,7 +256,7 @@ describe("execute — #45 parseDialogTimeout", () => {
   it("returns undefined for '0' (not > 0)", () => expect(parseDialogTimeout("0")).toBeUndefined());
   it("returns undefined for empty string", () => expect(parseDialogTimeout("")).toBeUndefined());
   it("returns undefined for absent (empty)", () => expect(parseDialogTimeout("")).toBeUndefined());
-  // Bug 16: reject unsafe/invalid values
+  // reject unsafe/invalid values
   it("throws for a decimal '1.5'", () => expect(() => parseDialogTimeout("1.5")).toThrow(/no decimals/));
   it("throws for 'NaN'", () => expect(() => parseDialogTimeout("NaN")).toThrow());
   it("throws for 'Infinity'", () => expect(() => parseDialogTimeout("Infinity")).toThrow());
@@ -266,7 +266,7 @@ describe("execute — #45 parseDialogTimeout", () => {
   it("accepts 1 ms (minimum positive)", () => expect(parseDialogTimeout("1")).toBe(1));
 });
 
-// Bug 15 — parseEnvPort (pure function, token-free)
+// parseEnvPort (pure function, token-free)
 describe("execute — parseEnvPort", () => {
   const setEnv = (v?: string) => {
     if (v === undefined) delete process.env.TEST_PORT_VAR;
@@ -316,7 +316,7 @@ describe("execute — parseEnvPort", () => {
   });
 });
 
-// Bug 17 — readSessionManifest session ID verification
+// readSessionManifest session ID verification
 describe("execute — readSessionManifest session ID mismatch", () => {
   const writeManifest = (content: object): string => {
     const dir = mkdtempSync(join(tmpdir(), "cwh-manifest-"));
@@ -391,5 +391,26 @@ describe("collectArtifacts skips symlinks (lstat, no out-of-root follow, cycle-s
     symlinkSync(join(root, "outputs"), join(root, "outputs", "a", "loop"));
     const got = collectArtifacts(root, ["outputs"]);
     expect(got.map((g) => g.path)).toEqual(["outputs/a/f.txt"]); // terminates, records only the real file
+  });
+
+  // a HARDLINK to an out-of-root file reads as an ordinary regular file — the symlink and
+  // realpath-containment guards CANNOT catch it (realpathSync of a hardlink returns the path unchanged
+  // inside workRoot). It must be rejected via nlink > 1.
+  it("rejects a hardlink into outputs/ that points at an out-of-root file (nlink > 1)", () => {
+    const outside = mkdtempSync(join(tmpdir(), "cwh-hl-outside-"));
+    const outsideFile = join(outside, "secret.txt");
+    writeFileSync(outsideFile, "OUT-OF-TREE SECRET");
+
+    const root = mkdtempSync(join(tmpdir(), "cwh-b25-"));
+    mkdirSync(join(root, "outputs"), { recursive: true });
+    writeFileSync(join(root, "outputs", "real.txt"), "hello");
+    // hardlink the out-of-root file INTO outputs/. realpathSync returns the in-root path unchanged
+    // (a hardlink is a second inode name, not path indirection), so only nlink > 1 catches it.
+    linkSync(outsideFile, join(root, "outputs", "hard.txt"));
+
+    const got = collectArtifacts(root, ["outputs"]);
+    const paths = got.map((g) => g.path);
+    expect(paths).toContain("outputs/real.txt"); // the genuine single-link file is still recorded
+    expect(paths).not.toContain("outputs/hard.txt"); // the hardlink (nlink=2) is rejected, not read
   });
 });

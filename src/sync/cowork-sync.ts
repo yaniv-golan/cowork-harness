@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync, writeFileSync, existsSync, mkdtempSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdtempSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
@@ -104,8 +104,10 @@ export function sync(): SyncResult {
   // 2. App version.
   const appVersion = readDesktopAppVersion() ?? flag(unknown, "appVersion");
 
-  // 3. Cowork settings from config.json.
-  const config = jsonIf(join(SUPPORT, "config.json")) ?? {};
+  // 3. Cowork settings from config.json. — distinguish a MISSING config (allowed: a fresh install
+  // simply has no user overrides) from a CORRUPT/unreadable one (records an unknown delta so the emptied
+  // allowlist is a visible "sync incomplete" signal, not silent drift).
+  const config = readConfigJson(join(SUPPORT, "config.json"), unknown);
   const networkMode = (config["coworkNetworkMode"] as string) ?? null;
   const requireFullVmSandbox = config["lastSeenRequireCoworkFullVmSandbox"] ?? null;
   const userAllow = (config["coworkEgressAllowedHosts"] as string[]) ?? [];
@@ -159,6 +161,9 @@ function extractFromAsar(unknown: string[]): { domains: string[]; fingerprint: s
   } catch (e) {
     flag(unknown, `asar extract failed (npx @electron/asar): ${(e as Error).message} — check network/npx, or unpack ${ASAR} manually`);
     return { domains: [], fingerprint: "" };
+  } finally {
+    // mkdtempSync extraction dir is otherwise leaked under $TMPDIR on every invocation.
+    rmSync(tmp, { recursive: true, force: true });
   }
 }
 
@@ -236,13 +241,32 @@ function readDesktopAppVersion(): string | null {
 }
 
 const readIf = (p: string) => (existsSync(p) ? readFileSync(p, "utf8") : null);
-const jsonIf = (p: string) => {
+
+/**
+ * read a user config JSON, distinguishing the three states a try/catch-to-null would collapse:
+ *  - MISSING  → return {} silently (a fresh install legitimately has no overrides);
+ *  - VALID    → return the parsed object;
+ *  - CORRUPT / unreadable → return {} BUT push an unknown delta so the (now-emptied) allowlist surfaces
+ *               as an incomplete sync instead of silently dropping `coworkEgressAllowedHosts`.
+ */
+export function readConfigJson(p: string, unknown: string[]): Record<string, unknown> {
+  if (!existsSync(p)) return {};
+  let raw: string;
   try {
-    return JSON.parse(readFileSync(p, "utf8"));
-  } catch {
-    return null;
+    raw = readFileSync(p, "utf8");
+  } catch (e) {
+    flag(unknown, `config.json: unreadable at ${p} (${(e as Error).message}) — coworkEgressAllowedHosts NOT synced`);
+    return {};
   }
-};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
+  } catch (e) {
+    flag(unknown, `config.json: corrupt JSON at ${p} (${(e as Error).message}) — coworkEgressAllowedHosts NOT synced`);
+    return {};
+  }
+}
+
 const dedupe = <T>(a: T[]) => [...new Set(a)];
 const flag = (acc: string[], what: string) => {
   acc.push(what);

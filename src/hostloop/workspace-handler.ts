@@ -2,6 +2,8 @@ import { warn } from "../io.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import net from "node:net";
+import http from "node:http";
+import https from "node:https";
 import { lookup } from "node:dns/promises";
 import { compile } from "../egress/proxy.js";
 
@@ -106,27 +108,34 @@ const defaultResolver: Resolver = (host) => lookup(host, { all: true });
  * returned address through the same per-IP check. A literal IP would already have been caught by the
  * synchronous `isLocalOrPrivate` gate, so this is reached only for names that need resolution.
  *
- * Returns a deny reason if any resolved address is local/private, or if the name fails to resolve
+ * #39: also RETURNS the vetted addresses so the caller can PIN the connection to exactly those IPs.
+ * Resolving in the gate and then letting `fetch` re-resolve independently is a TOCTOU window (DNS
+ * rebinding: the name can answer public for the check, private for the fetch). The caller hands these
+ * addresses to `rawFetch`, which dials them directly with the original Host header, so the address
+ * that passed the check is the one actually contacted.
+ *
+ * Returns `{ deny }` if any resolved address is local/private, or if the name fails to resolve
  * (fail-closed — matching the conservative posture of the surrounding gates, which deny on doubt).
- * Returns null = the host resolved entirely to public addresses (allow).
+ * Returns `{ addresses }` (possibly empty for a literal IP) = the host is allowed; pin these.
  */
-async function resolvesToPrivate(host: string, resolve: Resolver): Promise<string | null> {
+async function resolveAndVet(host: string, resolve: Resolver): Promise<{ deny: string } | { addresses: string[] }> {
   // A bracket-stripped literal IP resolves to itself; the sync gate already covered literals, so skip
-  // the DNS round-trip for them (and avoid lookup() quirks on literals).
+  // the DNS round-trip for them (and avoid lookup() quirks on literals). No pinning needed — fetch will
+  // connect to the literal directly, and the literal already passed isLocalOrPrivate.
   const bare = host.replace(/^\[|\]$/g, "");
-  if (net.isIP(bare) !== 0) return null;
+  if (net.isIP(bare) !== 0) return { addresses: [] };
   let addrs: { address: string }[];
   try {
     addrs = await resolve(host);
   } catch {
     // Name does not resolve (NXDOMAIN, SERVFAIL, etc.) → fail closed.
-    return `Host "${host}" could not be resolved.`;
+    return { deny: `Host "${host}" could not be resolved.` };
   }
-  if (!addrs.length) return `Host "${host}" could not be resolved.`;
+  if (!addrs.length) return { deny: `Host "${host}" could not be resolved.` };
   for (const { address } of addrs) {
-    if (isLocalOrPrivate(address)) return `Host "${host}" resolves to a local or private address (${address}).`;
+    if (isLocalOrPrivate(address)) return { deny: `Host "${host}" resolves to a local or private address (${address}).` };
   }
-  return null;
+  return { addresses: addrs.map((a) => a.address) };
 }
 
 /** Port of Cowork's `U1t` (Path B domain gate): scheme + private-address + the egress domain allowlist
@@ -140,11 +149,86 @@ export function u1t(u: URL, allow: string[], matcher: (h: string) => boolean): s
   return null;
 }
 
-/** A single redirect-manual network hop — injectable so the token-free suite can drive redirects/SSRF. */
+/**
+ * A single redirect-manual network hop — injectable so the token-free suite can drive redirects/SSRF.
+ *
+ * #39: `pinnedAddresses` carries the IPs the SSRF backstop already vetted for this hop's hostname. The
+ * default implementation dials those exact addresses (closing the DNS-rebind TOCTOU); an empty/omitted
+ * list means "no pinning required" (literal-IP host, or an injected test fake that ignores it).
+ */
 export type RawFetch = (
   url: string,
+  pinnedAddresses?: string[],
 ) => Promise<{ status: number; location?: string; text(): Promise<string>; body?: ReadableStream<Uint8Array> | null }>;
-const defaultRawFetch: RawFetch = async (url) => {
+
+/** Shared web_fetch response byte cap (#33). The pinned path bounds buffering to this; followWithRedirects
+ *  slices/streams to the same value — single source of truth so the two paths can't drift. */
+const WEB_FETCH_BYTE_CAP = 200000;
+
+/** Pin the connection to a pre-vetted IP: a Node http(s) request whose DNS `lookup` is overridden to
+ *  hand back only the vetted address(es), so the host that passed the SSRF check is the host contacted.
+ *  The Host header and TLS servername stay the original hostname (name-based vhosts / SNI keep working). */
+function pinnedRequest(
+  url: string,
+  pinned: string[],
+): Promise<{ status: number; location?: string; text(): Promise<string>; body?: ReadableStream<Uint8Array> | null }> {
+  const u = new URL(url);
+  const mod = u.protocol === "https:" ? https : http;
+  const family = net.isIP(pinned[0]); // 4 | 6
+  return new Promise((resolve, reject) => {
+    const req = mod.request(
+      url,
+      {
+        servername: u.hostname, // SNI uses the real name, not the pinned IP
+        // Override resolution: always return a vetted address, never re-resolve the name.
+        lookup: (_host: string, _opts: unknown, cb: (err: NodeJS.ErrnoException | null, addr: string, fam: number) => void) =>
+          cb(null, pinned[0], family || 4),
+        signal: AbortSignal.timeout(30000),
+      },
+      (res) => {
+        // #33: bound memory — every resolved (public DNS) host now pins, so this is the common path. Stop
+        // buffering past WEB_FETCH_BYTE_CAP (followWithRedirects slices the returned text to the same cap,
+        // so the observable output is unchanged) instead of buffering an arbitrarily large response in RAM.
+        const chunks: Buffer[] = [];
+        let total = 0;
+        let settled = false;
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          const buf = Buffer.concat(chunks);
+          resolve({
+            status: res.statusCode ?? 0,
+            location: (res.headers.location as string | undefined) ?? undefined,
+            text: async () => buf.toString("utf8"),
+            body: null,
+          });
+        };
+        res.on("data", (c: Buffer) => {
+          if (settled) return;
+          if (total < WEB_FETCH_BYTE_CAP) {
+            const take = Math.min(c.length, WEB_FETCH_BYTE_CAP - total);
+            chunks.push(take === c.length ? c : c.subarray(0, take));
+            total += take;
+          }
+          if (total >= WEB_FETCH_BYTE_CAP) {
+            res.destroy(); // stop the transfer once capped
+            finish();
+          }
+        });
+        res.on("end", finish);
+        res.on("error", reject);
+      },
+    );
+    req.on("error", reject);
+    req.end();
+  });
+}
+
+const defaultRawFetch: RawFetch = async (url, pinnedAddresses) => {
+  // #39: when the SSRF backstop vetted specific addresses for a resolved hostname, dial THOSE addresses
+  // (no independent re-resolution) so a rebinding name can't answer public for the check and private for
+  // the fetch. Literal-IP hosts have no pinned addresses → the plain fetch path (unchanged).
+  if (pinnedAddresses && pinnedAddresses.length) return pinnedRequest(url, pinnedAddresses);
   const r = await fetch(url, { redirect: "manual", signal: AbortSignal.timeout(30000) });
   return { status: r.status, location: r.headers.get("location") ?? undefined, text: () => r.text(), body: r.body };
 };
@@ -250,6 +334,33 @@ export function clampTimeout(ms: unknown): number {
   return Math.min(Math.max(Number(ms) || 120000, 1000), 600000);
 }
 
+/**
+ * #40: tell a `docker exec` INFRASTRUCTURE failure apart from an ordinary bash non-zero exit.
+ *
+ * The old test (`ETIMEDOUT || killed || (!code && !stdout && !stderr)`) caught timeouts/kills/spawn
+ * errors, but a daemon-level failure (container not found, daemon not running, `docker exec` usage
+ * error) exits NON-ZERO WITH stderr — same shape as a real command exiting 1 with output. Returning
+ * `[exit 125]\n<docker daemon text>` to the model leaks harness infra detail and hides the failure.
+ *
+ * The Docker CLI exits 125 for "the command itself failed" (could not run the container/exec), vs the
+ * command's own non-zero exit which Docker propagates verbatim. We also match the daemon's stderr
+ * signatures so a custom runner / non-125 daemon error is still classified as infra. The `e.error`
+ * arm matches Cowork's own error-string surface ("Error response from daemon: …").
+ */
+export function isExecInfraError(e: { code?: unknown; killed?: boolean; stdout?: string; stderr?: string }): boolean {
+  if (e.code === "ETIMEDOUT" || e.killed) return true; // timeout / SIGKILL
+  if (!e.code && !e.stdout && !e.stderr) return true; // spawn failure (no exec at all)
+  if (e.code === 125) return true; // Docker CLI "couldn't run the container/exec" exit code
+  const stderr = (e.stderr ?? "").toLowerCase();
+  if (stderr.includes("error response from daemon")) return true; // daemon rejected the exec
+  if (stderr.includes("cannot connect to the docker daemon")) return true; // daemon down / socket gone
+  // "no such container" / "is not running" ARE docker infra failures, but those exact words can also appear
+  // in a LEGITIMATE command's own output (e.g. a `systemctl status` check that exits non-zero). Only treat
+  // them as infra when they sit on a docker ERROR line — the CLI prefixes its own failures with
+  // "Error response from daemon:" / "Error:" — not anywhere in arbitrary command stderr.
+  return /^error\b.*\b(no such container|is not running)\b/m.test(stderr);
+}
+
 async function execInContainer(
   runner: string,
   container: string,
@@ -270,14 +381,19 @@ async function execInContainer(
     const out = (stdout ?? "") + (stderr ?? "");
     return textResult(out.length ? out : "(no output)");
   } catch (e: any) {
-    // Distinguish infrastructure failures (spawn errors, timeouts, container-not-found) from
-    // normal bash non-zero exits, so the model can tell the difference.
-    const isInfraError = e.code === "ETIMEDOUT" || e.killed || (!e.code && !e.stdout && !e.stderr);
-    const out = (e.stdout ?? "") + (e.stderr ?? "");
-    if (isInfraError) {
-      onInfraError?.(e.message ?? String(e));
-      return textResult(`[infrastructure error: see run log for details]\n${out}`, true);
+    // #40: classify Docker/container INFRASTRUCTURE failures (timeouts, spawn errors, container-not-found,
+    // daemon errors, exit 125) before formatting — including the non-zero-WITH-stderr case the old
+    // classifier missed. Infra detail is recorded for the run log and a GENERIC error is returned to the
+    // model: leaking `[exit 125]\n<docker daemon text>` would both expose the harness and mislabel a
+    // harness failure as the model's command exiting non-zero.
+    if (isExecInfraError(e)) {
+      // Raw detail (incl. the docker stderr) goes to onInfraError → events.jsonl, NOT to the model.
+      const detail = [e.message, (e.stderr ?? "").trim()].filter(Boolean).join(": ") || String(e);
+      onInfraError?.(detail);
+      return textResult("[infrastructure error: see run log for details]", true);
     }
+    // Genuine command non-zero exit: surface the command's own exit code + output to the model.
+    const out = (e.stdout ?? "") + (e.stderr ?? "");
     return textResult(`[exit ${e.code ?? 1}]\n${out}`, true);
   }
 }
@@ -320,14 +436,21 @@ async function followWithRedirects(
     // Synchronous gate first (scheme + literal private-address, plus the allowlist on Path B), then the
     // async DNS backstop: a host that RESOLVES to a private/loopback address (or fails to resolve) is
     // denied even though its literal form passed — closing the SSRF gap the literal-only check left.
-    const blocked = gate(cur) ?? (await resolvesToPrivate(cur.hostname, resolve));
-    if (blocked) {
+    const syncBlocked = gate(cur);
+    if (syncBlocked) {
       onEgress?.({ host: cur.hostname, decision: "deny" });
-      return textResult(hop === 0 ? blocked : `Redirect to ${cur.href} blocked: ${blocked}`, true);
+      return textResult(hop === 0 ? syncBlocked : `Redirect to ${cur.href} blocked: ${syncBlocked}`, true);
+    }
+    // #39: resolve ONCE and pin the fetch to the vetted address — no second, unchecked resolution inside
+    // fetch (the DNS-rebind TOCTOU). `pinned` is empty for literal-IP hosts (already vetted synchronously).
+    const vet = await resolveAndVet(cur.hostname, resolve);
+    if ("deny" in vet) {
+      onEgress?.({ host: cur.hostname, decision: "deny" });
+      return textResult(hop === 0 ? vet.deny : `Redirect to ${cur.href} blocked: ${vet.deny}`, true);
     }
     let resp: Awaited<ReturnType<RawFetch>>;
     try {
-      resp = await rawFetch(cur.href);
+      resp = await rawFetch(cur.href, vet.addresses);
     } catch (e: any) {
       onEgress?.({ host: cur.hostname, decision: "deny" });
       return textResult(`Fetch failed: ${e?.message ?? String(e)}`, true);
@@ -345,7 +468,7 @@ async function followWithRedirects(
       continue; // re-check the gate on the new host
     }
     onEgress?.({ host: cur.hostname, decision: "allow" });
-    const LIMIT = 200000;
+    const LIMIT = WEB_FETCH_BYTE_CAP;
     // #33: stream via resp.body to avoid buffering the full response before truncation.
     // Falls back to resp.text() for injectable test fakes that don't provide a body stream.
     if (resp.body) {

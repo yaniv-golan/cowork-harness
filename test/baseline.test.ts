@@ -46,6 +46,29 @@ describe("loadBaseline — name resolution", () => {
   it("resolves a bare .json filename under baselines/ (same as the no-suffix form), regardless of cwd", () => {
     expect(loadBaseline("desktop-1.12603.1.json")).toEqual(loadBaseline("desktop-1.12603.1"));
   });
+
+  // a named (non-absolute) baseline must stay inside baselines/. Path separators escape the
+  // directory; a `../foo.json` is the subtle half (the `.json` branch skips the suffix-append and would
+  // read an arbitrary out-of-tree `.json`). Absolute paths remain the explicit escape hatch.
+  it("rejects a named baseline with `../` traversal", () => {
+    expect(() => loadBaseline("../../../etc/hosts")).toThrow(/must be a bare filename/);
+  });
+
+  it("rejects a named baseline with a nested path segment", () => {
+    expect(() => loadBaseline("sub/desktop-1.12603.1")).toThrow(/must be a bare filename/);
+  });
+
+  it("rejects a `.json` name with `../` (the suffix-append branch must not be an escape)", () => {
+    expect(() => loadBaseline("../foo.json")).toThrow(/must be a bare filename/);
+  });
+
+  it("still allows an ABSOLUTE custom baseline path (explicit out-of-tree escape hatch)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "cwh-baseline-abs-"));
+    const file = join(dir, "custom.json");
+    const ref = loadBaseline("desktop-1.12603.1");
+    writeFileSync(file, JSON.stringify(ref));
+    expect(loadBaseline(file)).toEqual(ref); // absolute path loads despite being out of tree
+  });
 });
 
 describe("#39 — decodeFcacheGates (GrowthBook fcache decode, binary-verified format)", () => {

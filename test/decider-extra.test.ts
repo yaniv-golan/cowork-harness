@@ -1,5 +1,13 @@
 import { describe, it, expect } from "vitest";
-import { matchLabel, coerceLabel, ScriptedDecider, ABSTAIN, UnansweredError, type RunContext } from "../src/decide/decider.js";
+import {
+  matchLabel,
+  coerceLabel,
+  ScriptedDecider,
+  PromptDecider,
+  ABSTAIN,
+  UnansweredError,
+  type RunContext,
+} from "../src/decide/decider.js";
 import { spawnChannel } from "../src/decide/external-channel.js";
 import type { DecisionRequest } from "../src/agent/session.js";
 import type { AnswerRule } from "../src/types.js";
@@ -7,7 +15,7 @@ import type { AnswerRule } from "../src/types.js";
 const ctx = (): RunContext => ({ task: "", transcript: () => "", toolLog: () => [], runId: "local_x" });
 const perm = (input: Record<string, unknown>): DecisionRequest => ({ id: "p1", kind: "permission", tool: "Bash", input });
 
-// Bug 17 — matchLabel: substring heuristic is opt-in (fuzzy=true). Default (fuzzy=false) requires exact match.
+// matchLabel: substring heuristic is opt-in (fuzzy=true). Default (fuzzy=false) requires exact match.
 describe("matchLabel — exact-only by default; substring is opt-in via fuzzy=true", () => {
   it("exact match wins regardless of fuzzy flag", () => {
     // The old code returned "No" (first substring) for reply "Notation" — a mis-steer. Both "No" and
@@ -60,6 +68,94 @@ describe("evalPredicate via ScriptedDecider (#7 — broken predicate throws, nev
     expect((allow as any).response).toMatchObject({ kind: "permission", behavior: "allow" });
     const deny = await new ScriptedDecider(rule("!command.includes('rm')")).decide(perm({ command: "rm -rf /" }), ctx());
     expect((deny as any).response).toMatchObject({ kind: "permission", behavior: "deny" });
+  });
+});
+
+// evalPredicate exposes a single `input` object (reaching non-identifier keys) AND keeps binding
+// each identifier-shaped key as a bare parameter (the form shipped example scenarios + docs rely on).
+describe("evalPredicate ( — additive input object + bare identifiers)", () => {
+  const rule = (allow_if: string): AnswerRule[] => [{ when_tool: "Bash", allow_if } as AnswerRule];
+  const permWith = (input: Record<string, unknown>): DecisionRequest => ({ id: "p1", kind: "permission", tool: "Bash", input });
+
+  it("a non-identifier key (file-path) no longer hard-fails compilation — reachable via input[...]", async () => {
+    const d = new ScriptedDecider(rule("input['file-path'].endsWith('.ts')"));
+    const allow = await d.decide(permWith({ "file-path": "/a/b.ts" }), ctx());
+    expect((allow as any).response).toMatchObject({ kind: "permission", behavior: "allow" });
+    const deny = await new ScriptedDecider(rule("input['file-path'].endsWith('.ts')")).decide(permWith({ "file-path": "/a/b.png" }), ctx());
+    expect((deny as any).response).toMatchObject({ kind: "permission", behavior: "deny" });
+  });
+
+  it("a dotted key (foo.bar) is reachable via input['foo.bar'] without a compile crash", async () => {
+    const d = new ScriptedDecider(rule("input['foo.bar'] === 1"));
+    const allow = await d.decide(permWith({ "foo.bar": 1 }), ctx());
+    expect((allow as any).response).toMatchObject({ kind: "permission", behavior: "allow" });
+  });
+
+  it("the bare-identifier form STILL works (command.includes — shipped example scenarios/docs)", async () => {
+    const allow = await new ScriptedDecider(rule("!command.includes('rm')")).decide(permWith({ command: "ls" }), ctx());
+    expect((allow as any).response).toMatchObject({ kind: "permission", behavior: "allow" });
+    const deny = await new ScriptedDecider(rule("!command.includes('rm')")).decide(permWith({ command: "rm -rf /" }), ctx());
+    expect((deny as any).response).toMatchObject({ kind: "permission", behavior: "deny" });
+  });
+
+  it("the bare identifier and the input object see the same value for an identifier-shaped key", async () => {
+    const d = new ScriptedDecider(rule("command === input.command && command === 'ls'"));
+    const allow = await d.decide(permWith({ command: "ls" }), ctx());
+    expect((allow as any).response).toMatchObject({ kind: "permission", behavior: "allow" });
+  });
+
+  it("an input key literally named `input` does not double-bind (the explicit object wins, no compile error)", async () => {
+    // `input` must not be bound twice (a duplicate parameter is a "use strict" compile error). The explicit
+    // object wins, so `input.command` is reachable even when there is also an `input` key.
+    const d = new ScriptedDecider(rule("input.command === 'ls'"));
+    const allow = await d.decide(permWith({ command: "ls", input: "ignored-shadow" }), ctx());
+    expect((allow as any).response).toMatchObject({ kind: "permission", behavior: "allow" });
+  });
+});
+
+// PromptDecider question paths guard empty option lists (mirrors the permission-path guard and
+// FirstOptionDecider). Single-select/no-options is open-ended free text; multi-select/no-options is a
+// protocol contradiction. WITHOUT the guard the do/while loop spins forever (coerceLabel([]) never matches).
+describe("PromptDecider ( — optionless question guard, no infinite loop)", () => {
+  const withTTY = async (fn: () => Promise<void>): Promise<void> => {
+    const orig = process.stdin.isTTY;
+    Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+    try {
+      await fn();
+    } finally {
+      Object.defineProperty(process.stdin, "isTTY", { value: orig, configurable: true });
+    }
+  };
+
+  it("a single-select question with NO options accepts free text (does not loop forever)", async () => {
+    await withTTY(async () => {
+      const asked: string[] = [];
+      const ask = async (p: string) => (asked.push(p), "Acme Holdings LLC");
+      const req: DecisionRequest = { id: "q", kind: "question", questions: [{ question: "Company name?", options: [] }] };
+      const res = await new PromptDecider(ask).decide(req, ctx());
+      expect((res as any).response.answers["Company name?"]).toBe("Acme Holdings LLC");
+      expect(asked).toHaveLength(1); // answered on the first non-empty input, did not spin
+    });
+  });
+
+  it("an empty answer is re-prompted, then a non-empty one is accepted", async () => {
+    await withTTY(async () => {
+      const replies = ["", "  ", "real answer"];
+      let i = 0;
+      const ask = async () => replies[i++];
+      const req: DecisionRequest = { id: "q", kind: "question", questions: [{ question: "Open?", options: [] }] };
+      const res = await new PromptDecider(ask).decide(req, ctx());
+      expect((res as any).response.answers["Open?"]).toBe("real answer");
+      expect(i).toBe(3); // re-prompted past the two empties
+    });
+  });
+
+  it("a MULTI-select question with NO options fails loud (protocol contradiction, no loop)", async () => {
+    await withTTY(async () => {
+      const ask = async () => "anything";
+      const req: DecisionRequest = { id: "q", kind: "question", questions: [{ question: "Pick?", options: [], multiSelect: true }] };
+      await expect(new PromptDecider(ask).decide(req, ctx())).rejects.toThrow(UnansweredError);
+    });
   });
 });
 

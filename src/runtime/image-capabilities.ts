@@ -9,9 +9,10 @@
 // detector (what the skill did) — they cannot drift.
 
 import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync, writeFileSync, mkdirSync, statSync, existsSync } from "node:fs";
+import { isAbsolute, join, resolve } from "node:path";
 import { runsWriteRoot } from "../run/trace-view.js";
+import { warn } from "../io.js";
 
 export type CapabilityFamily = "ocr" | "office_convert" | "ml_extract" | "cv" | "pdf_tables" | "magick";
 
@@ -96,10 +97,14 @@ export interface ProbeOpts {
  * Container/hostloop only (both use a Docker image); lima/rootfs probing is handled by their own tiers.
  */
 export function probeImageOmitted(opts: ProbeOpts): CapabilityFamily[] | null {
-  const digest = imageDigest(opts.runtime, opts.image);
-  const key = `${opts.tier}:${digest ?? opts.image}`;
+  // The cache key must be CONTENT-addressed so a tag rebuilt in place can't reuse a stale `omitted` set.
+  // imageIdentity returns the content-addressed image id (+Created) when `image inspect` succeeds; when it
+  // can't (daemon down, never-pulled tag), we have only the MUTABLE tag — which a rebuild reuses — so we
+  // must NOT persist that result to the on-disk cache (it would survive a rebuild and go stale).
+  const ident = imageIdentity(opts.runtime, opts.image);
+  const key = `${opts.tier}:${ident.key}`;
   const cache = readCache();
-  if (cache[key]) return cache[key] as CapabilityFamily[];
+  if (ident.cacheable && cache[key]) return cache[key] as CapabilityFamily[];
 
   // --network none: the probe touches only build-time-installed tools, so it must not depend on the egress
   // sidecar; this also makes the result a pure function of the image.
@@ -110,8 +115,18 @@ export function probeImageOmitted(opts: ProbeOpts): CapabilityFamily[] | null {
   if (r.status !== 0 || typeof r.stdout !== "string") return null; // unprobeable → caller decides (warn)
   const omitted = omittedFromPresent(r.stdout);
   if (omitted === null) return null;
-  cache[key] = omitted;
-  writeCache(cache);
+  if (ident.cacheable) {
+    cache[key] = omitted;
+    writeCache(cache);
+  } else {
+    // No content digest → the key is the mutable tag; persisting would let a rebuilt-in-place tag reuse this
+    // result. Probe fresh every run instead, and tell the user why caching is off.
+    warn(
+      `::warning:: [capability] could not read a content digest for image ${opts.image} ` +
+        `(\`${opts.runtime} image inspect\` failed) — capability probe is NOT cached this run; a rebuilt-in-place ` +
+        `tag would otherwise reuse stale capability data.\n`,
+    );
+  }
   return omitted;
 }
 
@@ -145,10 +160,64 @@ export function probeMicrovmOmitted(instance: string): CapabilityFamily[] | null
   return omitted;
 }
 
-function imageDigest(runtime: string, image: string): string | null {
-  const r = spawnSync(runtime, ["image", "inspect", "-f", "{{.Id}}", image], { encoding: "utf8" });
-  if (r.status !== 0 || typeof r.stdout !== "string") return null;
-  return r.stdout.trim() || null;
+interface ImageIdentity {
+  /** The cache-key payload: a content-addressed `id:created` when available, else the mutable tag. */
+  key: string;
+  /** True iff `key` is content-addressed (safe to persist); false when it's only the mutable tag. */
+  cacheable: boolean;
+}
+
+/**
+ * Resolve a STABLE identity for an image. `image inspect` yields the content-addressed config id (`{{.Id}}`),
+ * which already changes whenever the built image content changes; we fold in `{{.Created}}` so even an id
+ * collision (or a runtime that reuses ids) can't reuse a stale entry. When inspect fails (daemon down, tag
+ * never built locally) we fall back to the MUTABLE tag and mark the identity un-cacheable so the caller
+ * skips persistent caching — a tag rebuilt in place must never reuse a prior `omitted` set.
+ */
+function imageIdentity(runtime: string, image: string): ImageIdentity {
+  const r = spawnSync(runtime, ["image", "inspect", "-f", "{{.Id}} {{.Created}}", image], { encoding: "utf8" });
+  if (r.status === 0 && typeof r.stdout === "string") {
+    const fields = r.stdout.trim().split(/\s+/).filter(Boolean);
+    // Require at least the content-addressed id; Created is best-effort corroboration.
+    if (fields.length && fields[0]) return { key: fields.join(":"), cacheable: true };
+  }
+  return { key: image, cacheable: false };
+}
+
+/** Interpreters whose first script-file argument we follow into the workspace for a deeper signature scan. */
+const SCRIPT_INTERPRETERS = /(?:^|[;&|]|\s)(?:python3?|node|ruby|bash|sh)\s+/;
+/** A bare script-file token: `foo.py`, `./pkg/run.py`, `scripts/x.js` — NOT a flag and NOT inline `-c "…"`. */
+const SCRIPT_FILE_RE = /(?:^|\s)((?:\.{0,2}\/)?[\w./-]+\.(?:py|js|mjs|cjs|rb|sh))\b/g;
+/** Cap how many distinct workspace files we read per run — best-effort, never an unbounded fan-out. */
+const MAX_SCRIPT_SCANS = 64;
+/** Cap per-file read size so a pathological artifact can't blow up the scan. */
+const MAX_SCRIPT_BYTES = 1_000_000;
+
+/** Extract candidate script paths a shell command executes (`python script.py …` → `script.py`). */
+function scriptPathsInCommand(cmd: string): string[] {
+  if (!SCRIPT_INTERPRETERS.test(cmd)) return [];
+  const out: string[] = [];
+  for (const m of cmd.matchAll(SCRIPT_FILE_RE)) out.push(m[1]);
+  return out;
+}
+
+/**
+ * Best-effort, side-effect-free read of a workspace script for capability signatures. Resolves `rel` under
+ * `workRoot`, refuses to escape it (a `../` path or absolute path is ignored), and silently skips anything
+ * missing/oversized. Returns the file text or "".
+ */
+function readWorkspaceScript(workRoot: string, rel: string): string {
+  if (isAbsolute(rel)) return ""; // only follow paths relative to the agent's workspace
+  const full = resolve(workRoot, rel);
+  const root = resolve(workRoot);
+  if (full !== root && !full.startsWith(root + "/")) return ""; // containment: no escape via `../`
+  try {
+    if (!existsSync(full)) return "";
+    if (statSync(full).size > MAX_SCRIPT_BYTES) return "";
+    return readFileSync(full, "utf8");
+  } catch {
+    return "";
+  }
 }
 
 /**
@@ -156,8 +225,14 @@ function imageDigest(runtime: string, image: string): string | null {
  * skill was observed using. Usage = a command-signature match in a Bash/python tool_use command, OR a
  * failure-signature match in an `isError` tool_result (the secondary corroborator). Mirrors scanEvents'
  * block parsing; covers subagent tool calls (no parentToolUseId filter).
+ *
+ * When `workRoot` is given, a command that EXECUTES a workspace script (`python script.py`) also has that
+ * script's contents scanned for command signatures — so a missing-module import hidden inside a script file
+ * (e.g. `import cv2`) is still attributed, even when the import never surfaces in the command text or an
+ * error (the module may simply be present, or the script may swallow the failure). Script reads are
+ * read-only, containment-checked, and bounded; missing files are skipped.
  */
-export function detectCapabilityUse(eventsFile: string, omitted: CapabilityFamily[]): CapabilityFamily[] {
+export function detectCapabilityUse(eventsFile: string, omitted: CapabilityFamily[], workRoot?: string): CapabilityFamily[] {
   if (!omitted.length) return [];
   let lines: string[];
   try {
@@ -166,6 +241,10 @@ export function detectCapabilityUse(eventsFile: string, omitted: CapabilityFamil
     return [];
   }
   const used = new Set<CapabilityFamily>();
+  const scannedScripts = new Set<string>(); // de-dupe + bound disk reads across the whole run
+  const matchText = (text: string) => {
+    for (const f of omitted) if (CAPABILITY_FAMILIES[f].commandSignatures.some((re) => re.test(text))) used.add(f);
+  };
   for (const l of lines) {
     let msg: any;
     try {
@@ -177,7 +256,19 @@ export function detectCapabilityUse(eventsFile: string, omitted: CapabilityFamil
     for (const block of msg.message?.content ?? []) {
       if (block.type === "tool_use") {
         const cmd = String(block.input?.command ?? block.input?.code ?? "");
-        if (cmd) for (const f of omitted) if (CAPABILITY_FAMILIES[f].commandSignatures.some((re) => re.test(cmd))) used.add(f);
+        if (cmd) {
+          matchText(cmd);
+          // Follow a `python script.py` style command into the workspace file when we know where it lives.
+          if (workRoot && used.size < omitted.length) {
+            for (const rel of scriptPathsInCommand(cmd)) {
+              if (scannedScripts.size >= MAX_SCRIPT_SCANS) break;
+              if (scannedScripts.has(rel)) continue;
+              scannedScripts.add(rel);
+              const src = readWorkspaceScript(workRoot, rel);
+              if (src) matchText(src);
+            }
+          }
+        }
       }
       if (block.type === "tool_result" && block.is_error) {
         const c = block.content;

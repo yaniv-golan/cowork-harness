@@ -88,6 +88,30 @@ function keptRunWithFolder(withRoots: boolean): string {
   return root;
 }
 
+/** Build a kept-run dir whose result.json OMITS one evidence field (simulates a partial/old result.json).
+ *  In the verify-run lane an undefined field is "evidence absent", not "empty set". */
+function keptRunWithout_field(field: "toolCounts" | "toolResults" | "subagents" | "scan"): string {
+  const root = keptRun();
+  const fs = require("node:fs");
+  const result = JSON.parse(fs.readFileSync(join(root, "result.json"), "utf8"));
+  delete result[field];
+  fs.writeFileSync(join(root, "result.json"), JSON.stringify(result, null, 2));
+  return root;
+}
+
+/** Build a kept-run dir whose result.json carries the evidence field PRESENT-but-EMPTY (proof-of-absence,
+ *  the shape a real run with no tools/sub-agents/deletes produces). Must still green a negative assertion. */
+function keptRunWithEmpty_field(field: "toolCounts" | "toolResults" | "subagents" | "scan"): string {
+  const root = keptRun();
+  const fs = require("node:fs");
+  const result = JSON.parse(fs.readFileSync(join(root, "result.json"), "utf8"));
+  if (field === "toolCounts") result.toolCounts = {};
+  else if (field === "scan") result.scan = { outputsDeletes: [], hostPathLeaked: false, selfHealRan: false };
+  else result[field] = [];
+  fs.writeFileSync(join(root, "result.json"), JSON.stringify(result, null, 2));
+  return root;
+}
+
 function scenarioFile(dir: string, assertYaml: string): string {
   const f = join(dir, "scenario.yaml");
   writeFileSync(f, `name: smoke\nprompt: do the thing\nfidelity: container\nassert:\n${assertYaml}`);
@@ -186,5 +210,102 @@ describe.skipIf(!can)("F-1: verify-run re-asserts a kept run dir without a live 
     const sc = scenarioFile(run, '  - transcript_not_contains: "needle"');
     const { code } = verifyRun(run, sc);
     expect(code).toBe(0);
+  });
+
+  // Phase B — evidence manifest in the verify-run lane: a partial/old result.json that OMITS an evidence
+  // field must FAIL the corresponding negative/absence assertion loud (no false-green), while a field that
+  // is present-but-empty (the real proof-of-absence shape) must still GREEN it.
+  it("FAILS with 'evidence unavailable' when toolResults is absent and tool_result_not_contains is asserted", () => {
+    const run = keptRunWithout_field("toolResults");
+    const sc = scenarioFile(run, '  - tool_result_not_contains: "secret"');
+    const { code, text } = verifyRun(run, sc);
+    expect(code).toBe(1);
+    expect(text).toContain("evidence unavailable");
+    expect(text).toContain("tool_result_not_contains");
+  });
+  it("PASSES when toolResults is present-but-empty and tool_result_not_contains is asserted (absent ≠ empty)", () => {
+    const run = keptRunWithEmpty_field("toolResults");
+    const sc = scenarioFile(run, '  - tool_result_not_contains: "secret"');
+    expect(verifyRun(run, sc).code).toBe(0);
+  });
+
+  it("FAILS with 'evidence unavailable' when toolCounts is absent and tool_not_called is asserted", () => {
+    const run = keptRunWithout_field("toolCounts");
+    const sc = scenarioFile(run, "  - tool_not_called: Bash");
+    const { code, text } = verifyRun(run, sc);
+    expect(code).toBe(1);
+    expect(text).toContain("evidence unavailable");
+    expect(text).toContain("tool_not_called");
+  });
+  it("PASSES when toolCounts is present-but-empty and tool_not_called is asserted (absent ≠ empty)", () => {
+    const run = keptRunWithEmpty_field("toolCounts");
+    const sc = scenarioFile(run, "  - tool_not_called: Bash");
+    expect(verifyRun(run, sc).code).toBe(0);
+  });
+
+  it("FAILS with 'evidence unavailable' when subagents is absent and subagent_tool_absent is asserted", () => {
+    const run = keptRunWithout_field("subagents");
+    const sc = scenarioFile(run, "  - subagent_tool_absent: Bash");
+    const { code, text } = verifyRun(run, sc);
+    expect(code).toBe(1);
+    expect(text).toContain("evidence unavailable");
+    expect(text).toContain("subagent_tool_absent");
+  });
+  it("FAILS with 'evidence unavailable' when subagents is absent and dispatch_count_max is asserted", () => {
+    const run = keptRunWithout_field("subagents");
+    const sc = scenarioFile(run, "  - dispatch_count_max: 3");
+    const { code, text } = verifyRun(run, sc);
+    expect(code).toBe(1);
+    expect(text).toContain("evidence unavailable");
+    expect(text).toContain("dispatch_count_max");
+  });
+  it("FAILS with 'evidence unavailable' when subagents is absent and subagent_declared_but_unused is asserted", () => {
+    const run = keptRunWithout_field("subagents");
+    const sc = scenarioFile(run, "  - subagent_declared_but_unused: Bash");
+    const { code, text } = verifyRun(run, sc);
+    expect(code).toBe(1);
+    expect(text).toContain("evidence unavailable");
+    expect(text).toContain("subagent_declared_but_unused");
+  });
+  it("PASSES when subagents is present-but-empty and the subagent negatives are asserted (absent ≠ empty)", () => {
+    const run = keptRunWithEmpty_field("subagents");
+    const sc = scenarioFile(
+      run,
+      ["  - subagent_tool_absent: Bash", "  - dispatch_count_max: 3", "  - subagent_declared_but_unused: Bash"].join("\n"),
+    );
+    expect(verifyRun(run, sc).code).toBe(0);
+  });
+
+  it("FAILS with 'evidence unavailable' when scan is absent and no_delete_in_outputs is asserted", () => {
+    const run = keptRunWithout_field("scan");
+    const sc = scenarioFile(run, "  - no_delete_in_outputs: true");
+    const { code, text } = verifyRun(run, sc);
+    expect(code).toBe(1);
+    expect(text).toContain("evidence unavailable");
+    expect(text).toContain("no_delete_in_outputs");
+  });
+  it("FAILS with 'evidence unavailable' when scan is absent and transcript_no_host_path is asserted", () => {
+    const run = keptRunWithout_field("scan");
+    const sc = scenarioFile(run, "  - transcript_no_host_path: true");
+    const { code, text } = verifyRun(run, sc);
+    expect(code).toBe(1);
+    expect(text).toContain("evidence unavailable");
+    expect(text).toContain("transcript_no_host_path");
+  });
+  it("FAILS with 'evidence unavailable' when scan is absent and self_heal_ran is asserted", () => {
+    const run = keptRunWithout_field("scan");
+    const sc = scenarioFile(run, "  - self_heal_ran: false");
+    const { code, text } = verifyRun(run, sc);
+    expect(code).toBe(1);
+    expect(text).toContain("evidence unavailable");
+    expect(text).toContain("self_heal_ran");
+  });
+  it("PASSES when scan is present-but-empty and the scan-derived negatives are asserted (absent ≠ empty)", () => {
+    const run = keptRunWithEmpty_field("scan");
+    const sc = scenarioFile(
+      run,
+      ["  - no_delete_in_outputs: true", "  - transcript_no_host_path: true", "  - self_heal_ran: false"].join("\n"),
+    );
+    expect(verifyRun(run, sc).code).toBe(0);
   });
 });

@@ -11,6 +11,12 @@ import {
   type RunContext,
 } from "../decide/decider.js";
 import { ProvenanceTracker } from "../hostloop/provenance.js";
+import { normalizeHost, validateBareDomain } from "../boundary-paths.js";
+
+// Re-export the shared `normalizeHost` from run.ts's public surface. It used to be a private helper
+// here (/P0-2: assert.ts needs it too); it now lives in boundary-paths.ts as the single source
+// of truth, and is re-exported so existing `run.js` importers keep working.
+export { normalizeHost };
 
 /** A3: the observable sub-agent dispatch tree (single owner = RunRecord). */
 export interface SubagentDispatch {
@@ -293,8 +299,9 @@ export class Run {
     this.session.respond(req.id, decided.response);
     // serializeDecision rewrites a kind-mismatched response to a deny envelope (session.ts) — the agent
     // did NOT get the intended answer. Record the TRUTH ("mismatch→deny"), not "answered", and skip the
-    // gateAnswers push (no answer was delivered). ✓ success ≠ correct.
-    if (decided.response.kind !== req.kind) {
+    // gateAnswers push (no answer was delivered). ✓ success ≠ correct. (the mismatch detection +
+    // warning is the SHARED helper that the synthetic web_fetch path also uses.)
+    if (isDecisionKindMismatch(req, decided.response, "permission")) {
       this.rec.decisions.push({
         kind: kindOf(req),
         name: nameOf(req),
@@ -354,9 +361,24 @@ export class Run {
   // ── #30: web_fetch provenance, exposed to the workspace handler (via the bundle execute.ts builds) ──
 
   /** Pre-approve web_fetch hosts for this run (test convenience: `web_fetch.approved_domains`) — as if
-   *  "Allow all for website" had been clicked earlier this session. Per-run only (no persistence). */
+   *  "Allow all for website" had been clicked earlier this session. Per-run only (no persistence).
+   *
+   * each seed goes through the SAME `validateBareDomain` policy as the egress proxy's
+   *  `compile()`, then `normalizeHost`, so an empty string / URL / scheme / path / port can no longer be
+   *  admitted as an entry that could never match a bare fetch host. Invalid seeds THROW (consistent with
+   *  `compile()` — fail loud, not silently warn-and-skip). A seed "domain" is matched by exact host
+   *  equality (`approvedDomains.has(normalizeHost(domain))` in requestWebFetchApproval), so a `*` /
+   *  `*.suffix` WILDCARD is meaningless here and is rejected — provenance approval is per concrete host.
+   *  (The IPv6/punycode/wildcard normalization deferrals documented on `normalizeHost` still apply.) */
   seedApprovedDomains(domains: string[]): void {
-    for (const d of domains) this.approvedDomains.add(normalizeHost(d));
+    for (const d of domains) {
+      const v = validateBareDomain(d); // throws on empty / scheme / path / port / whitespace
+      if (v.kind !== "exact")
+        throw new Error(
+          `invalid web_fetch approved_domains entry "${d}" — use a concrete host, not a "${v.kind === "all" ? "*" : "*.suffix"}" wildcard`,
+        );
+      this.approvedDomains.add(normalizeHost(v.value));
+    }
   }
 
   /** Is this URL already in the session's provenance set? */
@@ -390,19 +412,45 @@ export class Run {
       options: [{ label: "Allow once" }, { label: "Allow all for website" }, { label: "Deny" }],
     };
     const d = await this.decider.decide(req, this.ctx());
-    const allow = d !== ABSTAIN && d.response.kind === "permission" && d.response.behavior === "allow";
-    const grant = d !== ABSTAIN && d.response.kind === "permission" ? d.response.grant : undefined;
     // "fail" conflated the FailDecider class with the internal abstain-fallback path. Use a distinct
     // provenance value so readers can tell "no decider answered" apart from an explicit FailDecider deny.
     const by = d === ABSTAIN ? "abstain-fallback" : d.by;
     // Pass the RESPONSE BODY + by (recordDecision reads resp.behavior) — not the whole Decision.
     const resp: DecisionResponse =
       d === ABSTAIN ? { kind: "permission", behavior: "deny", message: "no decider answer (fail-closed)" } : d.response;
+    // mirror handleDecision's mismatched-kind guard. A decider that answers a "permission" request
+    // with a non-permission response is a protocol error — previously this recorded `decision:"?"` (via
+    // recordDecision's behavior===undefined branch) with NO warning. Record `mismatch→deny`, warn loudly,
+    // and DENY the fetch (fail-closed), instead of silently treating it as "?".
+    if (d !== ABSTAIN && isDecisionKindMismatch(req, resp, "webfetch")) {
+      this.rec.decisions.push({
+        kind: kindOf(req),
+        name: nameOf(req),
+        decision: "mismatch→deny",
+        by,
+        rationale: "decider returned a mismatched response kind",
+      });
+      return false;
+    }
+    const allow = resp.kind === "permission" && resp.behavior === "allow";
+    const grant = resp.kind === "permission" ? resp.grant : undefined;
     this.recordDecision(req, resp, by);
     // "Allow all for website" → approve the host for the rest of the run (off-wire; Run-side state).
     if (allow && grant === "domain") this.approvedDomains.add(normalizeHost(domain));
     return allow;
   }
+}
+
+/** shared decision-kind validation. A decider response whose `kind` differs from the request's is a
+ *  protocol mismatch — the agent would receive a safe deny (serializeDecision rewrites it), NOT the intended
+ *  answer. Return true + WARN loudly so neither the normal-permission path (handleDecision) nor the synthetic
+ *  web_fetch path (requestWebFetchApproval) can silently record a mismatched response as if it were honored. */
+function isDecisionKindMismatch(req: DecisionRequest, resp: DecisionResponse, context: string): boolean {
+  if (resp.kind === req.kind) return false;
+  warn(
+    `::warning:: [${context}] decider returned kind "${resp.kind}" for a "${req.kind}" request (${nameOf(req)}) → mismatch→deny; the agent did NOT receive the intended answer\n`,
+  );
+  return true;
 }
 
 function kindOf(req: DecisionRequest): DecisionRecord["kind"] {
@@ -422,17 +470,4 @@ function denyLike(req: DecisionRequest): any {
 
 async function* oneShot(s: string): AsyncGenerator<string> {
   yield s;
-}
-
-/**
- * Normalize a web_fetch hostname for the approvedDomains set: lowercase + strip a trailing dot.
- * This prevents "Example.com" vs "example.com" from being stored as two different entries.
- *
- * NOT normalized here (deferred — needs binary verification before touching matching semantics):
- *   - IPv6 bracket stripping (e.g. "[::1]" → "::1"): affects URL-parsing parity with the host sandbox.
- *   - Punycode / IDNA folding: requires a unicode-aware library not currently in scope.
- *   - Wildcard subdomain semantics (e.g. "*.example.com"): structural, not cosmetic.
- */
-function normalizeHost(host: string): string {
-  return host.toLowerCase().replace(/\.$/, "");
 }

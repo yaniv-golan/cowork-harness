@@ -76,10 +76,10 @@ function readHashIgnore(root: string): string[] {
  *  file or directory subtree from the hash. Absent ⇒ include everything (byte-identical to the legacy hash). */
 type AcceptFn = (relPath: string) => boolean;
 
-/** Bug 42: uses lstatSync (does NOT follow symlinks) so an in-tree symlink can't silently include
+/** uses lstatSync (does NOT follow symlinks) so an in-tree symlink can't silently include
  *  out-of-tree content. Symlinks to directories are skipped with a warning; symlinks to files are
  *  skipped with a warning (same policy as collectArtifacts in execute.ts).
- *  Bug 43: push any read error into `errors` rather than silently continuing — the caller treats a
+ * push any read error into `errors` rather than silently continuing — the caller treats a
  *  non-empty errors array as a staleness failure (can't verify ⇒ not green). */
 function hashDir(dir: string, hash: ReturnType<typeof createHash>, errors: string[], rel = "", accept?: AcceptFn): void {
   let entries: string[];
@@ -96,7 +96,7 @@ function hashDir(dir: string, hash: ReturnType<typeof createHash>, errors: strin
     const relPath = rel ? `${rel}/${name}` : name;
     let st;
     try {
-      // Bug 42: lstatSync does NOT follow symlinks — so a symlinked entry is detected as a symlink,
+      // lstatSync does NOT follow symlinks — so a symlinked entry is detected as a symlink,
       // not as the file/dir it points to. This prevents following out-of-tree symlinks.
       st = lstatSync(abs);
     } catch (e) {
@@ -105,7 +105,7 @@ function hashDir(dir: string, hash: ReturnType<typeof createHash>, errors: strin
       errors.push(msg);
       continue;
     }
-    // Bug 42: skip symlinks explicitly (both to files and directories) — a symlink can escape the
+    // skip symlinks explicitly (both to files and directories) — a symlink can escape the
     // skill dir tree. Model: collectArtifacts in execute.ts uses lstatSync + skip for the same reason.
     if (st.isSymbolicLink()) {
       process.stderr.write(`cowork-harness: skill-hash: skipping symlink ${abs} (not followed)\n`);
@@ -138,7 +138,7 @@ function hashDir(dir: string, hash: ReturnType<typeof createHash>, errors: strin
       try {
         hash.update(readFileSync(abs));
       } catch (e) {
-        // Bug 43: propagate read errors — a temporarily unreadable file would otherwise produce a
+        // propagate read errors — a temporarily unreadable file would otherwise produce a
         // stale-but-clean hash that silently passes the staleness gate. Push to errors so the caller
         // treats this as "can't verify ⇒ not green".
         const msg = `cowork-harness: skill-hash: cannot read file ${abs}: ${String((e as Error)?.message ?? e)}`;
@@ -281,7 +281,7 @@ export interface HashSkillDirsResult {
   /** When `scoped` is false and `scopeSkills` was provided, the skill names that were absent from every
    *  plugin-root and caused the fallback. */
   missedSkills?: string[];
-  /** Bug 43: non-empty when any file or directory was unreadable during hashing. The caller MUST treat
+  /** non-empty when any file or directory was unreadable during hashing. The caller MUST treat
    *  this as a staleness failure (can't verify ⇒ not green) — a hash computed over partial data is
    *  unreliable. */
   readErrors?: string[];
@@ -299,7 +299,7 @@ export interface HashSkillDirsResult {
  *
  * Returns a {@link HashSkillDirsResult} with the digest and a `scoped` diagnostic so callers can detect
  * the whole-tree fallback (e.g. log a warning when a named skill was not found).
- * Bug 43: also returns `readErrors` when any input was unreadable — callers must treat this as a
+ * also returns `readErrors` when any input was unreadable — callers must treat this as a
  * staleness failure.
  */
 export function hashSkillDirs(dirs: string[], scopeSkills?: string[], sessionIgnore?: string[]): HashSkillDirsResult {

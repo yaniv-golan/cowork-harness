@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, readFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, mkdirSync, writeFileSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { loadBaseline } from "../src/baseline.js";
@@ -277,6 +277,26 @@ describe("SEAM A — fail-loud declared-source staging", () => {
 
   it("does NOT throw for an enabled entry qualified by a REMOTE marketplace (no local_marketplaces)", () => {
     expect(() => plan({ plugins: { enabled: ["x@local"], marketplaces: ["https://example.com/m.git"] } })).not.toThrow();
+  });
+
+  // an in-root symlink whose target points OUTSIDE the marketplace root passes the lexical
+  // `relative(mkRoot, pluginSrc)` guard (rel = "p") but `statSync`/`cpSync` follow it. Realpath
+  // containment on both sides rejects the symlink escape.
+  it("rejects a marketplace plugin source that is an in-root symlink pointing OUTSIDE the marketplace root", () => {
+    const outside = mkdtempSync(join(tmpdir(), "cowork-b27-outside-"));
+    mkdirSync(join(outside, ".claude-plugin"), { recursive: true }); // a real plugin dir, out of tree
+    writeFileSync(join(outside, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "p", version: "1.0.0" }));
+
+    const mk = mkdtempSync(join(tmpdir(), "cowork-b27-mkt-"));
+    mkdirSync(join(mk, ".claude-plugin"), { recursive: true });
+    // entry.source "./p" stays lexically inside mkRoot, but mkRoot/p is a symlink to the out-of-tree dir.
+    symlinkSync(outside, join(mk, "p"));
+    writeFileSync(
+      join(mk, ".claude-plugin", "marketplace.json"),
+      JSON.stringify({ name: "mymkt", plugins: [{ name: "p", source: "./p" }] }),
+    );
+
+    expect(() => plan({ plugins: { local_marketplaces: [mk], enabled: ["p@mymkt"] } })).toThrow(/resolves outside the marketplace root/);
   });
 
   it("does NOT throw for a BARE enabled name delivered via local_plugins", () => {
