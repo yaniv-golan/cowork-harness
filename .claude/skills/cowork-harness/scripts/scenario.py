@@ -70,7 +70,11 @@ LIVE_ONLY_KEYS = {
 }
 EGRESS_KEYS = {"egress_denied", "egress_allowed"}
 # verdict modifiers — don't verify anything themselves (e.g. suppress a default-fail)
-VERDICT_MODIFIER_KEYS = {"allow_permissive_auto_allow", "allow_l0_plugin_divergence"}
+VERDICT_MODIFIER_KEYS = {
+    "allow_permissive_auto_allow",
+    "allow_l0_plugin_divergence",
+    "allow_missing_capability",
+}
 
 # Every key the replay-class logic knows how to handle. `replay_protocol_fidelity` is valid-but-not-authorable
 # (errored separately below). This is also the embedded fallback for ASSERT_KEYS — kept EQUAL to the generated
