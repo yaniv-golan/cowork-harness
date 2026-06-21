@@ -191,6 +191,8 @@ if *every* key passes (don't rely on the first; keep one concern per item unless
 | `self_heal_ran: <bool>` | a `/sessions/<id>/mnt` plugin script was (not) invoked — the plugin-root self-heal path |
 | `tool_called: <Tool>` | the agent invoked the tool |
 | `tool_not_called: <Tool>` | the agent never invoked it |
+| `tool_result_contains: <str>` | a tool result includes the literal string (content / replay-checkable — substring match) |
+| `tool_result_not_contains: <str>` | no tool result includes the literal string — content / replay-checkable; **fails loud** if tool results are absent from `result.json` (absent ≠ empty) |
 | `subagent_tool_used: <Tool>` | a sub-agent used the tool |
 | `subagent_tool_absent: <Tool>` | no sub-agent used the tool |
 | `subagent_dispatched: <regex>` | a sub-agent whose `agentType` **or dispatch `description`** matches was dispatched (skills often dispatch with only a `description` and no `subagent_type` → `agentType:"unknown"`, so match by description, e.g. `subagent_dispatched: "TOP_DOWN"`) |
@@ -201,6 +203,7 @@ if *every* key passes (don't rely on the first; keep one concern per item unless
 | `gate_answers_delivered: true` | every answered AskUserQuestion gate's answer actually reached the model — requires a positive, observed `tool_result` (an **unobserved** delivery fails too, not only an errored one — no silent false-green) |
 | `gate_answers_delivered: false` | asserts that at least one answered gate's answer did **not** reach the model (unobserved or errored delivery) — useful for negative-path tests of delivery failures |
 | `allow_permissive_auto_allow: true` | verdict modifier — suppresses the default-fail when the run recorded a cowork-parity permissive auto-allow; use this for tests that **deliberately** assert Cowork's permissive behavior rather than strict scripted coverage |
+| `allow_missing_capability: true` | verdict modifier (**live tiers only**) — suppresses the default-fail when the lean/`core` agent image omits a capability the skill used but real Cowork ships (OCR/LibreOffice/markitdown/opencv/PDF-tables); assert only when the skill's fallback is genuinely equivalent, else rebuild full parity (`--build-arg COWORK_FULL_PARITY=1`) or use the rootfs `max` tier |
 | `transcript_no_host_path: true` | no host path (`/Users`, `/opt`) leaked into model-visible text |
 | `egress_denied: <host>` | the host was blocked by the egress proxy |
 | `egress_allowed: <host>` | the host was allowed through |
@@ -209,6 +212,17 @@ if *every* key passes (don't rely on the first; keep one concern per item unless
 `expect_denied: [host, …]` is shorthand that adds an `egress_denied` assertion per host.
 
 Run **`cowork-harness assertions --list`** for this table from the live schema (it can't drift).
+
+#### Verdict signals
+
+Beyond pass/fail assertions, a run can surface **verdict signals** in `result.signals` — non-fatal
+observations that nuance the verdict rather than flip it:
+
+- `prompt_asset_missing` (**warn**) — the run proceeded with a missing prompt asset (e.g.
+  `COWORK_HARNESS_ALLOW_MISSING_PROMPT=1`); fidelity is degraded (the agent ran, but not against the full
+  faithful prompt surface).
+
+See the skill reference [`scenario-schema.md`](../.claude/skills/cowork-harness/references/scenario-schema.md) for the full signal list.
 
 #### `artifact_json` — assert structured JSON in YAML
 
@@ -326,7 +340,7 @@ session.json      session manifest (only when --session-id/--resume is used: id 
 
 (`run.jsonl`/`trace.json` replace the old `transcript.json`/`decisions.jsonl`. Secrets are scrubbed
 from every persisted log by value.) To read a run's `events.jsonl` as a digest — tool calls, real
-sub-agent dispatches (deduped), decisions — run **`cowork-harness trace <run-id | dir> [--tools]`**.
+sub-agent dispatches (deduped), decisions — run **`cowork-harness trace <run-id | dir> [--view tools]`**.
 The deliverable a skill produces lands at the `outputsDir` (`…/mnt/outputs`), surfaced by `--keep` and
 in the `--output-format json` envelope.
 

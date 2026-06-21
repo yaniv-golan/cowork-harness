@@ -1,6 +1,6 @@
 # DESIGN — parity model, deltas, and the maintenance contract
 
-This document is the reference for *how faithful* each tier is, *what we deliberately don't reproduce*, and *why the chosen seams keep parity cheap to maintain*. Everything here is grounded in analysis of the live Claude Desktop `app.asar` (spawn contract and gates first verified at build 1.12603.1; updated through build 1.13576.1 — volatile fields tracked in `baselines/desktop-1.13576.1.json`) and the on-disk runtime state on macOS.
+This document is the reference for *how faithful* each tier is, *what we deliberately don't reproduce*, and *why the chosen seams keep parity cheap to maintain*. Everything here is grounded in analysis of the live Claude Desktop `app.asar` (spawn contract and gates first verified at build 1.12603.1; updated through build 1.14271.0 — volatile fields tracked in `baselines/desktop-1.14271.0.json`) and the on-disk runtime state on macOS.
 
 ## Architecture at a glance
 
@@ -34,7 +34,7 @@ flowchart TB
 A Cowork session is the Desktop app driving an agent that runs **inside an Apple Virtualization.framework microVM**:
 
 - VM bundle: `~/Library/Application Support/Claude/vm_bundles/claudevm.bundle/` (`rootfs.img`, `sessiondata.img`, `efivars.fd`, `machineIdentifier`, `gvisorMacAddress`, `vmIP`); a warm pool at `vm_bundles/warm/<sha>/`.
-- In-VM agent: `~/Library/Application Support/Claude/claude-code-vm/<ver>/claude` (currently **2.1.177**, an **ELF aarch64** binary), spawned by the host **in cowork mode via the `CLAUDE_CODE_IS_COWORK=1` env var** — *not* a `--cowork` flag (that flag is plugin-scope and the staged agent rejects it; see the control-protocol note below).
+- In-VM agent: `~/Library/Application Support/Claude/claude-code-vm/<ver>/claude` (currently **2.1.181**, an **ELF aarch64** binary), spawned by the host **in cowork mode via the `CLAUDE_CODE_IS_COWORK=1` env var** — *not* a `--cowork` flag (that flag is plugin-scope and the staged agent rejects it; see the control-protocol note below).
 - Network: `vm_network_mode: "gvisor"`, egress through a userspace netstack with a **compiled domain allowlist**; off-list partners rejected (`partner rejected: entry not on compiled allowlist`).
 - Control plane: Electron renderer→main typed IPC on channels named `$eipc_message$_<per-build-UUID>_$_claude.web_$_<Class>_$_<method>`, every handler validating `event.senderFrame.url` against a trusted-origin allowlist. The session manager is `LocalAgentModeSessions` (80 methods: `start`, `sendMessage`, `setDraftSessionFolders`, `onToolPermissionRequest`, `respondToToolPermission`, `getTranscript`, `onEvent`, …), bridged to the renderer as `window.cowork`.
 
@@ -151,7 +151,7 @@ L1 reproduces this as a **default-deny forward proxy**: the agent's `HTTP(S)_PRO
 | `getTranscript` | accumulated stream → the `transcript` line in `run.jsonl` |
 | `setDraftSessionFolders` / `addFolderToSession` | bind-mount into `mnt/.projects/*` before launch |
 
-### Control protocol — VERIFIED end-to-end against the live host CLI (macOS build 2.1.177+; the staged in-VM agent that L1/L2 run is 2.1.177, baseline `desktop-1.13576.1`)
+### Control protocol — VERIFIED end-to-end against the live host CLI (macOS build 2.1.177+; the staged in-VM agent that L1/L2 run is 2.1.181, baseline `desktop-1.14271.0`)
 
 The handshake and shapes below were confirmed empirically with an end-to-end run, not inferred:
 
@@ -161,9 +161,9 @@ The handshake and shapes below were confirmed empirically with an end-to-end run
 4. **Response envelope (nested!):** `{type:"control_response", response:{subtype:"success", request_id, response:{behavior:"allow", updatedInput} | {behavior:"deny", message}}}`. The payload sits under an **inner** `response`; missing that nesting yields `ZodError: expected object, received undefined`.
 5. **AskUserQuestion answer:** allow with `updatedInput.answers = Record<questionText, chosenLabel>` (the CLI's own schema is `z.record(z.string(), z.string())`). The model receives the answer and proceeds.
 
-> **Cowork mode is enabled by env, not a flag.** In the staged agent (2.1.177) `--cowork` is a *plugin-scope* flag ("can only be used with user scope") and is rejected by the agent invocation; cowork mode is entered via **`CLAUDE_CODE_IS_COWORK=1`**. (Do **not** also set `CLAUDE_CODE_USE_COWORK_PLUGINS` — Desktop doesn't, and it flips the agent's userSettings filename to `cowork_settings.json` and plugin cache to `cowork_plugins/` via `TSO()`; plugins are delivered via `--plugin-dir`.) The host CLI is a different (macOS) build, so L0 runs plain (control-loop validation only); L1/L2 run the staged **Linux/arm64** binary — bind-mounted from the user's own install.
+> **Cowork mode is enabled by env, not a flag.** In the staged agent (2.1.181) `--cowork` is a *plugin-scope* flag ("can only be used with user scope") and is rejected by the agent invocation; cowork mode is entered via **`CLAUDE_CODE_IS_COWORK=1`**. (Do **not** also set `CLAUDE_CODE_USE_COWORK_PLUGINS` — Desktop doesn't, and it flips the agent's userSettings filename to `cowork_settings.json` and plugin cache to `cowork_plugins/` via `TSO()`; plugins are delivered via `--plugin-dir`.) The host CLI is a different (macOS) build, so L0 runs plain (control-loop validation only); L1/L2 run the staged **Linux/arm64** binary — bind-mounted from the user's own install.
 
-### Spawn contract + host-loop vs VM-loop (binary-verified through asar 1.13576.1)
+### Spawn contract + host-loop vs VM-loop (binary-verified through asar 1.14271.0)
 
 The full Desktop→agent spawn contract (cwd `/sessions/<id>`, `CLAUDE_CONFIG_DIR=mnt/.claude`, the env object, `--tools`/`--allowedTools`/`--plugin-dir`/`--effort`/`--setting-sources`, permission layers, prompt templates) is documented in [docs/cowork-spawn-contract-1.12603.1.md](./docs/cowork-spawn-contract-1.12603.1.md) and encoded in `baseline.spawn`.
 

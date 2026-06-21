@@ -4,7 +4,7 @@ description: Test or debug a Claude Code skill/plugin under Claude Cowork's runt
 metadata:
   author: cowork-harness
   version: 0.7.1
-  tracks-harness: cowork-harness 0.7.1 (baseline desktop-1.13576.1)
+  tracks-harness: cowork-harness 0.7.1 (baseline desktop-1.14271.0)
 ---
 
 # cowork-harness
@@ -22,7 +22,7 @@ an empty egress allowlist). This skill exists mostly to keep you out of those tr
 section below is the highest-value part. Read it.
 
 > **Version note:** the facts and `file:line` pointers here track `cowork-harness 0.7.1` (baseline
-> `desktop-1.13576.1`). If your checkout is newer, prefer the live `--help`, `SPEC.md`, and
+> `desktop-1.14271.0`). If your checkout is newer, prefer the live `--help`, `SPEC.md`, and
 > `docs/*.md` over this snapshot, and re-run the bundled linter.
 
 ## 0. Preflight — make sure the harness can actually run
@@ -62,8 +62,8 @@ not use it. See `references/scenario-schema.md` for every field.
 The skill is **copied fresh into the sandbox each run**. Wire it via `plugins.local_plugins` +
 `plugins.enabled: [<plugin>@local]` in the session (or `--marketplace` / `--plugin` flags on
 `skill`). A missing mount source is now a **hard error** (`mount source(s) not found …`); set
-`COWORK_HARNESS_SOFT_MISSING=1` to fall back to warn-and-exclude. A `folders[].to` containing `/`
-or `..` is rejected. See `references/scenario-schema.md`.
+`COWORK_HARNESS_SOFT_MISSING=1` to fall back to warn-and-exclude. Mount names are always derived from
+the folder basename (collision-resolved); there is no `to:` override. See `references/scenario-schema.md`.
 
 ## 4. Choose a fidelity tier
 

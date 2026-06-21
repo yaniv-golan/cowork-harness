@@ -14,7 +14,7 @@ fidelity).
    Override the path with `COWORK_HARNESS_CLI=/path/to/cli.js` if it lives elsewhere.
 2. **Docker** + the agent image, for any fidelity above `protocol`:
    ```bash
-   docker build --platform linux/arm64 -t cowork-agent-base:1 -f docker/Dockerfile.agent .
+   docker build --platform linux/arm64 -t cowork-agent-base:2 -f docker/Dockerfile.agent .
    ```
 3. **An auth token** for runs that actually call the model — export it, or put it in a `.env` file in
    the dir you run `pytest` from (the CLI auto-loads `./.env`; it's gitignored, host-side, never mounted):

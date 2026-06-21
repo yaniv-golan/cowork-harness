@@ -151,6 +151,8 @@ Content keys are evaluated on replay; everything else is skipped.
 | `transcript_not_matches` | regex does not match |
 | `tool_called` | agent invoked the named tool |
 | `tool_not_called` | agent never invoked it |
+| `tool_result_contains` | literal substring in a tool result |
+| `tool_result_not_contains` | literal absent from all tool results |
 | `subagent_tool_used` | a sub-agent used the tool |
 | `subagent_tool_absent` | no sub-agent used the tool |
 | `subagent_dispatched` | a sub-agent matching the regex was dispatched |

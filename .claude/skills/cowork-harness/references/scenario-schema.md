@@ -1,7 +1,7 @@
 # Scenario & session schema, assertion catalog, web_fetch, full gotchas
 
 Self-contained reference for authoring `cowork-harness` scenarios. Tracks `cowork-harness 0.7.1`
-(baseline `desktop-1.13576.1`). If your checkout is newer, prefer the live `docs/scenario.md`,
+(baseline `desktop-1.14271.0`). If your checkout is newer, prefer the live `docs/scenario.md`,
 `docs/session.md`, and `SPEC.md`.
 
 ## Table of contents
@@ -186,6 +186,8 @@ passes only if every key passes. Keep one concern per item unless you mean conju
 | `self_heal_ran: <bool>` | a plugin-root self-heal script was (not) invoked |
 | `tool_called: <Tool>` | the agent invoked the tool (actually ran it) |
 | `tool_not_called: <Tool>` | the agent never invoked it |
+| `tool_result_contains: <str>` | a tool result includes the literal string (content / replay-checkable — substring match) |
+| `tool_result_not_contains: <str>` | no tool result includes the literal string (content / replay-checkable; fails loud when tool results are absent) |
 | `subagent_tool_used: <Tool>` | a sub-agent used the tool |
 | `subagent_tool_absent: <Tool>` | no sub-agent used the tool |
 | `subagent_dispatched: <regex>` | a sub-agent whose `agentType` **or dispatch description** matches |

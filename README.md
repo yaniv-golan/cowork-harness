@@ -101,6 +101,8 @@ Skill testing is the headline use, but the tool is a general harness over the Co
 | `boundary-check [baseline] [--session <file>]` | Prove the sandbox enforces Cowork's limitations; `--session` folds a session's `egress.extra_allow` into the probe allowlist | verifying the harness's own fidelity |
 | `sync` / `list` | Derive/refresh & list platform baselines from the Desktop install | after Claude Desktop updates (baselines ship, so it's optional otherwise) |
 | `doctor [--tier <t>]` | Read-only prerequisite check (Docker, staged agent, token, baseline); prints the exact `docker build` line if the agent image is missing | "can I run the live tiers — what's missing?" before a first live run |
+| `runs gc [--keep-last <n>]` | Prune accumulated run dirs (keeps the N most recent per scenario; pinned `--session-id` runs are never pruned); `--dry-run` | the machine-global runs root has grown and you want space back |
+| `rehash <dir/>` | Migrate cassette fingerprints to the current format version when the content is provably unchanged (`--dry-run`); no re-record needed | a cassette-format bump flagged committed fixtures as stale |
 | `vm <init\|status\|delete\|prune>` | Manage the L2 Apple-VZ / Lima microVM (`prune` removes orphaned VMs left by config/agent-version changes) | running `--fidelity microvm` |
 
 There's also a **Python `cowork` pytest lane** (`python/`) for driving any of this from `pytest` beside your normal tests — see [`python/README.md`](./python/README.md).
@@ -200,7 +202,7 @@ This repo ships a **companion skill** (`.claude/skills/cowork-harness/`) that te
 /plugin install cowork-harness@cowork-harness
 ```
 
-The skill **self-bootstraps the CLI**: if `cowork-harness` isn't on your PATH it falls back to `npx cowork-harness@>=0.5.0` (a version floor that fails loud rather than silently fetching a too-old CLI; Node ≥ 20). Tiers above `protocol` still need Docker/Lima and a Claude Desktop agent binary — see the prerequisites below.
+The skill **self-bootstraps the CLI**: if `cowork-harness` isn't on your PATH it falls back to `npx cowork-harness@>=0.7.1` (a version floor that fails loud rather than silently fetching a too-old CLI; Node ≥ 20). Tiers above `protocol` still need Docker/Lima and a Claude Desktop agent binary — see the prerequisites below.
 
 It also follows the open [Agent Skills](https://github.com/vercel-labs/skills) spec, so it installs cross-editor (Cursor, Codex, OpenCode, …) by pointing the `npx skills` CLI at `.claude/skills/cowork-harness` in this repo. (Working *inside* this repo, the skill auto-loads as a project skill — no install needed.)
 
@@ -506,7 +508,7 @@ This repo is built to be driven by agents, not just read by humans:
 
 - **[AGENTS.md](./AGENTS.md)** — the canonical agent-instructions file (architecture seams, the build gate, invariants, ethos). Read it before changing code. Also indexed in **[llms.txt](./llms.txt)**.
 - **Companion skill** — [`.claude/skills/cowork-harness/`](./.claude/skills/cowork-harness/SKILL.md) teaches an agent to drive the harness; install it via the marketplace (see [above](#drive-it-from-claude-code-companion-skill)).
-- **Machine-readable interfaces** — stable `--output-format json` envelope on stdout, deterministic exit codes (`0`/`1`/`2`), and `--help` on every command.
+- **Machine-readable interfaces** — stable `--output-format json` envelope on stdout, deterministic exit codes (`0`/`1`/`2`/`3`), and `--help` on every command.
 - **JSON Schemas** — [`schema/scenario.schema.json`](./schema/scenario.schema.json) and [`schema/session.schema.json`](./schema/session.schema.json) describe every field of the YAML you author (generated from the source schemas; `npm run schema`).
 
 ---
@@ -531,7 +533,7 @@ This repo is built to be driven by agents, not just read by humans:
 
 ## Status
 
-**Verified end-to-end against the live staged agent (2.1.177 / asar 1.13576.1).**
+**Verified end-to-end against the live staged agent (2.1.181 / asar 1.14271.0).**
 
 - ✅ **Three isolation tiers (L0/L1/L2) + two loop-mode overlays** — `protocol` (L0 control loop), `container` (L1 sandboxed arm64 + per-run default-deny egress sidecar), `microvm` (L2 real Apple-VZ Linux microVM + guest firewall); plus the loop-mode overlays `hostloop` (production split-execution: agent loop on host, shell/web via the workspace SDK-MCP server) and `cowork` (auto-picks host-loop vs container the way Cowork does — gate `1143815894`). Egress enforced at container/microvm/hostloop; `boundary-check` reports **ALL CONSTRAINTS ENFORCED**.
 - ✅ **Three-seam driver** — `AgentSession` (control protocol) → `Decider` (scripted + `on_unanswered` policy, no silent false-greens) → `Run` (turn loop, sub-agent dispatch tree, `RunRecord`). Multi-turn `chat`, deterministic cassette `record`/`replay` (no token), `run.jsonl`/`trace.json` logging with secret-scrub.

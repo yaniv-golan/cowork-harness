@@ -89,7 +89,7 @@ jobs:
         with: { node-version: "20", cache: npm }
       - run: npm ci && npm run build
       - name: Build agent base image (no Anthropic binary baked in)
-        run: docker build --platform linux/arm64 -t cowork-agent-base:1 -f docker/Dockerfile.agent .
+        run: docker build --platform linux/arm64 -t cowork-agent-base:2 -f docker/Dockerfile.agent .
       - name: Prove the sandbox enforces Cowork's limitations (self-contained sidecar)
         run: node dist/cli.js boundary-check
       - name: Live contract tests — guard the binary assumptions (no token needed)
@@ -126,7 +126,7 @@ jobs:
           fi
       - name: Build agent base image (per-run egress sidecar is self-managed)
         if: steps.guard.outputs.live == 'true'
-        run: docker build --platform linux/arm64 -t cowork-agent-base:1 -f docker/Dockerfile.agent .
+        run: docker build --platform linux/arm64 -t cowork-agent-base:2 -f docker/Dockerfile.agent .
       - name: Run example scenarios (L1 container — the user-facing worked examples)
         if: steps.guard.outputs.live == 'true'
         env:

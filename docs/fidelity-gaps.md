@@ -38,9 +38,9 @@ The live VM hot-mount path uses `@ant/claude-swift` (`swift_addon.node`), a nati
 
 **Real Cowork behaviour:** The "add folder" button is disabled for chat sessions. `mountFolderForSession` returns `{ok: false, error: "Folder access isn't available in chat sessions."}` at the IPC layer.
 
-**Harness behaviour:** Same — `chat` does not support `--folder` or mid-session folder injection today.
+**Harness behaviour:** Same shape. Both `chat` and `skill` accept a *startup* `--folder <dir>` (a live bind mount; agent writes propagate back to the host — see Workarounds above). What neither supports — matching Cowork — is *mid-session* / hot-plug folder injection after the session has started.
 
-This is **not a harness gap**. It is faithful reproduction of Cowork's own limit. The distinction in Cowork is between `sessionType === "chat"` (blocked) and `sessionType === "agent"` (allowed). The harness `chat` command maps to the former.
+This is **not a harness gap**. Startup folder access works in both commands; the only missing piece is mid-session injection, a faithful reproduction of Cowork's own limit (attaching a folder at session creation is allowed; adding one to a live session is blocked).
 
 ---
 

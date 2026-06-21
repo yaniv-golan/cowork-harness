@@ -159,6 +159,15 @@ All notable changes to this project are documented here. The format is based on
     `choose`+`answer` and inert `grant` are rejected at schema time; optionless prompt/LLM gates are answerable;
     the Python wrapper returns a `BatchResult` for directory/replay runs so a later failure can't hide behind a
     passing first result.
+- **Documentation audit sweep — stale references corrected, gaps filled.** Bumped the "current baseline" pins
+  across README / DESIGN / SPEC / spawn-contract / skill docs to `desktop-1.14271.0` (agent ELF 2.1.181),
+  re-verified end-to-end against the live staged agent at this baseline; added the missing
+  `tool_result_contains` / `tool_result_not_contains` and `allow_missing_capability` assertion rows plus a
+  verdict-signals (`prompt_asset_missing`) section to the docs; documented `doctor` / `rehash` / `runs gc` and
+  exit code `3` in `llms.txt` and the README command table; corrected the SPEC §11 exit-code table
+  (`boundary` → `3`), the `chat --folder` / `folders[].to` notes, the `trace --view tools` flag, and the
+  skill-bootstrap version floor (`@>=0.7.1`). **CI fix:** the agent-base image build in
+  `.github/workflows/ci.yml` was tagged `:1` while every code path defaults to `:2` — now `:2`.
 
 ## [0.7.1] — 2026-06-20
 
