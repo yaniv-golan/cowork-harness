@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, writeFileSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
+import { VERDICT_MODIFIER_KEYS } from "../src/types.js";
 
 // Exercises the built CLI's --output-format json envelope + exit codes. Token-free and spawn-free
 // (usage/boundary fail before any agent spawn; replay is deterministic). Needs `dist/cli.js`
@@ -215,7 +216,7 @@ describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
   it("replay → {command:'replay', ok:true, results:[1]}, exit 0", () => {
     const r0 = run(["--version"]);
     writeIn(r0.cwd, "c.cassette.json", JSON.stringify(cassette([{ transcript_contains: "hello" }, { result: "success" }])));
-    const r = spawnSync("node", [CLI, "replay", "--cassette", "c.cassette.json", "--output-format", "json"], {
+    const r = spawnSync("node", [CLI, "replay", "c.cassette.json", "--output-format", "json"], {
       encoding: "utf8",
       cwd: r0.cwd,
     });
@@ -229,7 +230,7 @@ describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
   it("replay text mode emits NOTHING to stdout (footer → stderr)", () => {
     const r0 = run(["--version"]);
     writeIn(r0.cwd, "c.cassette.json", JSON.stringify(cassette([{ result: "success" }])));
-    const r = spawnSync("node", [CLI, "replay", "--cassette", "c.cassette.json"], { encoding: "utf8", cwd: r0.cwd });
+    const r = spawnSync("node", [CLI, "replay", "c.cassette.json"], { encoding: "utf8", cwd: r0.cwd });
     expect(r.stdout).toBe("");
     expect(r.stderr).toContain("✓"); // footer on stderr
   });
@@ -295,15 +296,8 @@ describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
     expect(r.stderr).toMatch(/CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_API_KEY/);
   });
 
-  it("replay --cassette with a flag-looking value is a usage error, not a file error (exit 2)", () => {
-    const r = run(["replay", "--cassette", "--output-format", "json"]);
-    expect(r.code).toBe(2);
-    // parseArgs rejects the flag-looking value for the noDashValue flag --cassette.
-    expect(r.stderr).toMatch(/--cassette: missing value/);
-  });
-
   it("an invalid --output-format value is rejected by replay / trace / decide (exit 2)", () => {
-    expect(run(["replay", "--cassette", "x.json", "--output-format", "xml"]).code).toBe(2);
+    expect(run(["replay", "x.json", "--output-format", "xml"]).code).toBe(2);
     expect(run(["trace", "somerun", "--output-format", "xml"]).code).toBe(2);
     expect(run(["decide", "--output-format", "xml"]).code).toBe(2);
   });
@@ -314,17 +308,23 @@ describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
     expect(r.stderr).toMatch(/at most one baseline/);
   });
 
-  it("a standalone allow_permissive_auto_allow assertion replays green with no filesystem-skip warning", () => {
-    const r0 = run(["--version"]); // borrow a temp cwd
-    writeIn(r0.cwd, "c.cassette.json", JSON.stringify(cassette([{ allow_permissive_auto_allow: true }])));
-    const r = spawnSync("node", [CLI, "replay", "--cassette", "c.cassette.json", "--output-format", "json"], {
-      encoding: "utf8",
-      cwd: r0.cwd,
-    });
-    expect(r.status).toBe(0);
-    expect(JSON.parse(r.stdout)?.ok).toBe(true); // no-op verdict modifier → green
-    expect(r.stderr).not.toMatch(/skipped \d+ filesystem/); // not misclassified as a filesystem/egress skip
-  });
+  // Every verdict modifier must (a) pass as a STANDALONE assertion (not "empty assertion") and (b) replay
+  // green without being misclassified as a filesystem/egress skip. Covering all three guards the exact gap
+  // `allow_l0_plugin_divergence` fell through (it had no assert.ts noop branch).
+  it.each([...VERDICT_MODIFIER_KEYS])(
+    "a standalone %s assertion replays green with no filesystem-skip warning",
+    (modifier) => {
+      const r0 = run(["--version"]); // borrow a temp cwd
+      writeIn(r0.cwd, "c.cassette.json", JSON.stringify(cassette([{ [modifier]: true }])));
+      const r = spawnSync("node", [CLI, "replay", "c.cassette.json", "--output-format", "json"], {
+        encoding: "utf8",
+        cwd: r0.cwd,
+      });
+      expect(r.status).toBe(0);
+      expect(JSON.parse(r.stdout)?.ok).toBe(true); // no-op verdict modifier → green
+      expect(r.stderr).not.toMatch(/skipped \d+ filesystem/); // not misclassified as a filesystem/egress skip
+    },
+  );
 
   it("record --dry-run: single scenario prints plan and exits 0", () => {
     const cwd = mkdtempSync(join(tmpdir(), "cc-dryrun-"));
@@ -453,21 +453,21 @@ describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
     expect(r.json?.error?.message).toMatch(/--out requires a file path/);
   });
 
-  it("assert --list rejects an invalid --output-format value (exit 2)", () => {
-    const r = run(["assert", "--list", "--output-format", "xml"]);
+  it("assertions --list rejects an invalid --output-format value (exit 2)", () => {
+    const r = run(["assertions", "--list", "--output-format", "xml"]);
     expect(r.code).toBe(2);
     expect(r.stderr).toMatch(/--output-format must be/);
   });
 
-  it("assert --list rejects extra positionals (exit 2)", () => {
-    const r = run(["assert", "--list", "stray", "--output-format", "json"]);
+  it("assertions --list rejects extra positionals (exit 2)", () => {
+    const r = run(["assertions", "--list", "stray", "--output-format", "json"]);
     expect(r.code).toBe(2);
     expect(r.json?.error?.category).toBe("usage");
     expect(r.json?.error?.message).toMatch(/no positional/);
   });
 
-  it("assert --list rejects an unknown flag (exit 2)", () => {
-    const r = run(["assert", "--list", "--bogus", "--output-format", "json"]);
+  it("assertions --list rejects an unknown flag (exit 2)", () => {
+    const r = run(["assertions", "--list", "--bogus", "--output-format", "json"]);
     expect(r.code).toBe(2);
     expect(r.json?.error?.category).toBe("usage");
     expect(r.json?.error?.message).toMatch(/unknown flag/);

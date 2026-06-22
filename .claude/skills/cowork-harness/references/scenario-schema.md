@@ -199,6 +199,7 @@ passes only if every key passes. Keep one concern per item unless you mean conju
 | `gate_answers_delivered: false` | asserts at least one answered gate's answer did **not** reach the model — for negative-path delivery tests |
 | `allow_permissive_auto_allow: true` | verdict modifier — suppresses the default-fail when the run recorded a cowork-parity permissive auto-allow; for tests that deliberately assert Cowork's permissive behavior |
 | `allow_missing_capability: true` | verdict modifier — suppresses the default-fail when the (partial "core") agent image omits a capability the skill used but real Cowork ships (OCR/LibreOffice/markitdown/opencv/PDF-tables). Assert only when the skill's fallback is genuinely equivalent; otherwise rebuild full parity (`--build-arg COWORK_FULL_PARITY=1`) or use the rootfs `max` tier. Live tiers only |
+| `allow_l0_plugin_divergence: true` | verdict modifier — opt into L0/protocol plugin divergence: suppresses the default-fail when a plugin behaves differently at `protocol` (L0) fidelity than under a sandboxed tier. Live tiers only |
 | `transcript_no_host_path: true` | no host path (`/Users`, `/opt`) leaked into model-visible text |
 | `egress_denied: <host>` | the host was blocked by the egress proxy |
 | `egress_allowed: <host>` | the host was allowed through |
@@ -232,7 +233,8 @@ A cassette (`record`/`replay`) has **no filesystem and no network**. `replay` re
 **content** assertions. The authoritative list is `contentKeys` in `src/run/cassette.ts`.
 
 **Evaluated on replay (content):** `transcript_*`, `tool_*`, `subagent_*`, `dispatch_count_max`,
-`result`.
+`result`. The verdict modifiers `allow_permissive_auto_allow` / `allow_missing_capability` /
+`allow_l0_plugin_divergence` are also kept on replay, evaluated as no-op passes.
 
 **Gate keys — replay only with a `controlOut` cassette:** `question_asked`, `questions_count_max`,
 `gate_answers_delivered`. With `controlOut` present they evaluate; on an old cassette without it, a

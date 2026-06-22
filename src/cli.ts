@@ -266,13 +266,12 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
   record:
     "usage: record <scenario.yaml | dir/> [--out <file>] [--output-format text|json] [--rerecord-stale] [--no-redact] [--allow-failing] [--max-artifact-bytes <n>] [--dry-run]",
   replay:
-    "usage: replay <file.cassette.json | dir/> [--strict] [--output-format text|json]\n       Positional path is the canonical form. --cassette <file> is a legacy alias (providing both is an error).",
+    "usage: replay <file.cassette.json | dir/> [--strict] [--output-format text|json]",
   "verify-cassettes":
     "usage: verify-cassettes <file|dir> [--skip-privacy|--skip-staleness] [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-file <path>]... [--output-format json]",
   trace:
     "usage: trace <run-id | run-dir | events.jsonl> [--view tools|questions|dispatches] [--output-format json]\n       --view tools       tool call / result rows\n       --view questions   gate lifecycle (question → answer → delivered)\n       --view dispatches  sub-agent dispatch tree + dispatch_count_max\n       (default: all views)",
   assertions: "usage: assertions --list [--output-format json]",
-  assert: "usage: assertions --list [--output-format json]   (use 'assertions' — 'assert' is the legacy name)",
   scaffold:
     "usage: scaffold <run-id | run-dir> [--out <file.yaml>]\n       Turns a kept run into a starter scenario YAML (gates→answers, artifacts→file_exists).\n       Positional <run-id | run-dir> is the canonical form.",
   decide:
@@ -300,7 +299,6 @@ const COMMANDS = [
   "verify-run",
   "trace",
   "assertions",
-  "assert",
   "scaffold",
   "decide",
   "gates",
@@ -433,9 +431,6 @@ async function main() {
     case "trace":
       return cmdTrace(rest);
     case "assertions":
-      return cmdAssert(rest);
-    case "assert": // legacy alias — keep working, show deprecation notice
-      log("note: 'assert' has been renamed to 'assertions'; please update your scripts.\n");
       return cmdAssert(rest);
     case "scaffold":
       return cmdScaffold(rest);
@@ -1658,7 +1653,9 @@ async function cmdDecide(args: string[]) {
   } catch (e) {
     if (json) out(jsonError("decide", "runtime", String((e as Error).message)));
     else log(`✗ decider error: ${String((e as Error).message)}`);
-    process.exit(1);
+    // Runtime failure → exit 2, matching the global "usage/runtime → 2" contract (SPEC §11). The JSON
+    // envelope already tags this category "runtime"; the exit code now agrees. No-match/ABSTAIN stays 1.
+    process.exit(2);
   }
 }
 
@@ -1993,22 +1990,22 @@ function cmdVerifyRun(args: string[]) {
   return process.exit(verdict.exitCode);
 }
 
-/** `assert --list` (#8) — enumerate the available assertion keys + one-line semantics, generated from the
+/** `assertions --list` (#8) — enumerate the available assertion keys + one-line semantics, generated from the
  *  Zod `Assertion` schema (`Assertion.shape[k].description`) so the list can NEVER drift from the schema. */
 function cmdAssert(args: string[]) {
   const json = isJsonOutput(args);
   // validate --output-format is text|json (an invalid value was a silent text degrade).
-  ensureOutputFormat("assert", args);
-  if (!args.includes("--list")) return void fail("assert", "usage", "usage: assert --list [--output-format json]", undefined, json);
-  // `assert --list` takes no positionals and no other flags; reject stray ones rather than
-  // silently ignoring them (e.g. `assert --list extra` or `assert --list --bogus`).
+  ensureOutputFormat("assertions", args);
+  if (!args.includes("--list")) return void fail("assertions", "usage", "usage: assertions --list [--output-format json]", undefined, json);
+  // `assertions --list` takes no positionals and no other flags; reject stray ones rather than
+  // silently ignoring them (e.g. `assertions --list extra` or `assertions --list --bogus`).
   const stray = positionals(args, ["--output-format"]);
   if (stray.length)
-    return void fail("assert", "usage", `assert --list takes no positional arguments (got: ${stray.join(", ")})`, undefined, json);
-  rejectUnknownFlags("assert", args, ["--list", "--output-format", "--output-format=json", "--output-format=text"], json);
+    return void fail("assertions", "usage", `assertions --list takes no positional arguments (got: ${stray.join(", ")})`, undefined, json);
+  rejectUnknownFlags("assertions", args, ["--list", "--output-format", "--output-format=json", "--output-format=text"], json);
   const shape = Assertion.shape as Record<string, { description?: string }>;
   const keys = Object.keys(shape).map((k) => ({ key: k, description: shape[k].description ?? "" }));
-  if (json) return void out(JSON.stringify({ tool: "cowork-harness", command: "assert", assertions: keys }));
+  if (json) return void out(JSON.stringify({ tool: "cowork-harness", command: "assertions", assertions: keys }));
   const width = Math.max(...keys.map((k) => k.key.length));
   out(`available assertions (${keys.length}) — use under a scenario's \`assert:\` list:\n`);
   for (const { key, description } of keys) out(`  ${key.padEnd(width)}  ${description}`);

@@ -289,7 +289,7 @@ class Cowork:
 
     def replay(self, cassette: str) -> Union[Result, "BatchResult"]:
         # A cassette/directory replay producing >1 RunResult returns a BatchResult.
-        return self._invoke(["replay", "--cassette", cassette, "--output-format", "json"])
+        return self._invoke(["replay", cassette, "--output-format", "json"])
 
     def trace(self, target: str, tools: bool = False) -> list[dict]:
         """Digest a run's events.jsonl → rows (tool calls, sub-agent dispatches, decisions).

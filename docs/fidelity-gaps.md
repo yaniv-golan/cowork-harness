@@ -4,6 +4,8 @@ This document explains where the harness intentionally diverges from real Claude
 
 > **TL;DR** — Most gaps are caused by one of three things: (1) Docker containers freeze their mount namespace at creation time; (2) real Cowork uses a proprietary native Swift binary (`@ant/claude-swift`) that wraps private Apple VZ APIs; or (3) the gap doesn't exist in real Cowork either — the harness faithfully reproduces a Cowork limitation.
 
+For how the harness *enforces* the limitations it does reproduce (sealed filesystem, default-deny egress, MCP-only crossing, per tier), see [boundary.md](./boundary.md).
+
 ---
 
 ## Mid-session folder addition

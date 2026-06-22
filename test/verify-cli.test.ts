@@ -82,10 +82,10 @@ describe.skipIf(!can)("verify-cassettes CLI gate", () => {
     expect(r.code).toBe(2);
   });
 
-  it("--privacy-only + --staleness-only together → exit 2 (they'd check nothing — no silent green)", () => {
+  it("--skip-privacy + --skip-staleness together → exit 2 (they'd check nothing — no silent green)", () => {
     const d = mkdtempSync(join(tmpdir(), "cwh-vc-"));
     writeFileSync(join(d, "ok.cassette.json"), JSON.stringify(cassette([JSON.stringify({ type: "result", subtype: "success" })])));
-    const r = run(["verify-cassettes", join(d, "ok.cassette.json"), "--privacy-only", "--staleness-only"], d);
+    const r = run(["verify-cassettes", join(d, "ok.cassette.json"), "--skip-privacy", "--skip-staleness"], d);
     expect(r.code).toBe(2);
   });
 

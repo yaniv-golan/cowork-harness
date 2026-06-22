@@ -32,7 +32,7 @@ Use a live `run` for filesystem/egress assertions; use `replay` for the token-fr
     { "path": "outputs/x.json", "bytes": 24, "sha256": "…", "body": "{…}" }, // body inlined ≤ 64 KiB
     { "path": "outputs/big.bin", "bytes": 9e6, "sha256": "…", "truncated": true } // oversized → hash-only
   ],
-  "fingerprint": { "baseline": "1.13576.1", "skillHash": "…", "skillSources": ["…"] } // staleness tripwire
+  "fingerprint": { "baseline": "1.14271.0", "skillHash": "…", "skillSources": ["…"] } // staleness tripwire
 }
 ```
 
@@ -162,7 +162,9 @@ Content keys are evaluated on replay; everything else is skipped.
 | `questions_count_max` | at most N questions asked |
 | `gate_answers_delivered` | answered gates' answers reached the model |
 | `result` | run ended with `success` or `error` |
-| `allow_permissive_auto_allow` | verdict modifier — kept on replay, where it evaluates to a no-op pass |
+| `allow_permissive_auto_allow` | verdict modifier — kept on replay → no-op pass (the live signal it suppresses is zeroed) |
+| `allow_missing_capability` | verdict modifier — kept on replay → no-op pass (the live signal it suppresses is zeroed) |
+| `allow_l0_plugin_divergence` | verdict modifier — kept on replay → no-op pass (the live signal it suppresses is zeroed) |
 
 **`question_asked`, `questions_count_max`, `gate_answers_delivered` require `controlOut`** (full-fidelity
 replay). On an old cassette without `controlOut` these three keys are excluded from evaluation — not

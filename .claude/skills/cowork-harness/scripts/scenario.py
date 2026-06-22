@@ -38,7 +38,11 @@ import re
 import sys
 from pathlib import Path
 
-# --- the replay-class taxonomy (mirrors `contentKeys` in src/run/cassette.ts) ---
+# --- the replay-class taxonomy ---
+# NB: this is NOT a 1:1 mirror of `contentKeys` in src/run/cassette.ts. cassette.ts keeps the verdict
+# modifiers (VERDICT_MODIFIER_KEYS) in its content set so they replay as no-op passes; the linter
+# deliberately keeps them OUT of CONTENT_KEYS so a modifier-only scenario still trips the `replay-noop`
+# warning below (a no-op pass verifies nothing real — exactly what that warning is for).
 CONTENT_KEYS = {
     "result",
     "transcript_contains",
@@ -286,8 +290,9 @@ def lint_doc(doc, path, raw_lines):
                     "WARN",
                     "replay-noop",
                     "every assertion is live-only (egress / no_delete_in_outputs / self_heal_ran / "
-                    "transcript_no_host_path) — on the token-free `replay` lane they are ALL silently "
-                    "skipped, so a replay PR gate would verify nothing.",
+                    "transcript_no_host_path) or a verdict modifier (allow_*, a no-op pass) — on the "
+                    "token-free `replay` lane the live-only ones are silently skipped and the verdict "
+                    "modifiers verify nothing, so a replay PR gate would verify nothing.",
                     "Add a content assertion (result / transcript_* / tool_* / subagent_*) or a "
                     "manifest-backed one (file_exists / user_visible_artifact / artifact_json), or run this "
                     "scenario only on the live (run/record) lane.",
@@ -423,6 +428,30 @@ def _print_findings(findings, n_files):
 
 def cmd_lint(args):
     all_findings = []
+    # Expand directory args to their scenario files — mirrors src/run/inputs.ts `resolveInputs`: a SINGLE
+    # combined-sorted `*.yaml` + `*.yml` listing (non-recursive), a single file kept as-is, and an EMPTY dir
+    # as a loud ERROR (never a vacuous "0 files = clean"). Done in place so the lint loop AND the count below
+    # both see the expanded list.
+    expanded = []
+    for arg in args.files:
+        p = Path(arg)
+        if p.is_dir():
+            matches = sorted(str(q) for q in (list(p.glob("*.yaml")) + list(p.glob("*.yml"))))
+            if matches:
+                expanded.extend(matches)
+            else:
+                all_findings.append(
+                    Finding(
+                        "ERROR",
+                        "no-scenarios",
+                        f"no .yaml/.yml files under {arg} — nothing to do (loud non-zero, not a vacuous pass)",
+                        "Point lint at a scenario file or a directory containing *.yaml / *.yml scenarios.",
+                        arg,
+                    )
+                )
+        else:
+            expanded.append(arg)
+    args.files = expanded
     # Linter self-check (B3): a valid schema key the replay-class sets don't classify can't be linted
     # correctly — surface it as a hard ERROR so it fails the gate (and --strict) until someone classifies it.
     if UNCLASSIFIED_KEYS:
@@ -602,7 +631,7 @@ def main(argv=None):
     sub = ap.add_subparsers(dest="command", required=True)
 
     lp = sub.add_parser("lint", help="lint scenario(s) for silent-false-green invariants")
-    lp.add_argument("files", nargs="+", help="scenario YAML file(s) to lint")
+    lp.add_argument("files", nargs="+", help="scenario YAML file(s) or director(ies) of *.yaml/*.yml to lint")
     lp.add_argument("--json", action="store_true", help="emit findings as JSON")
     lp.add_argument("--strict", action="store_true", help="exit non-zero on WARN/INFO too, not just ERROR")
     lp.set_defaults(func=cmd_lint)

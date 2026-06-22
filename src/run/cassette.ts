@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, existsSync, readdi
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join, dirname, relative, isAbsolute, resolve, sep } from "node:path";
-import { type Scenario, type RunResult, type Assertion, Assertion as AssertionSchema } from "../types.js";
+import { type Scenario, type RunResult, type Assertion, Assertion as AssertionSchema, VERDICT_MODIFIER_KEYS } from "../types.js";
 import { executeScenario, parseScenarioFile, collectArtifacts, parseSessionFile, slugForPath } from "./execute.js";
 import { loadSession, resolveSessionPaths } from "../session.js";
 import { loadBaseline } from "../baseline.js";
@@ -1323,17 +1323,16 @@ function replayErrorResult(file: string): RunResult {
   };
 }
 
-/** `replay <file|dir>` (or `--cassette <file>`) — deterministic protocol-replay; re-evaluates content
- *  assertions. A directory replays every `*.cassette.json` (non-recursive, sorted) and exits on the worst
- *  verdict; an unreadable cassette is a per-file error (never aborts the batch, never a vacuous pass). */
+/** `replay <file|dir>` — deterministic protocol-replay; re-evaluates content assertions. A directory
+ *  replays every `*.cassette.json` (non-recursive, sorted) and exits on the worst verdict; an unreadable
+ *  cassette is a per-file error (never aborts the batch, never a vacuous pass). */
 export async function cmdReplay(args: string[]) {
   let p;
   try {
     p = parseArgs(args, {
       // --quiet/--verbose accepted for flag consistency but currently no-op in replay (renderer plan is fixed).
       booleans: ["--strict", "--quiet", "--verbose"],
-      values: ["--cassette", "--output-format"],
-      noDashValue: ["--cassette"],
+      values: ["--output-format"],
       enums: { "--output-format": ["text", "json"] },
       aliases: { "-q": "--quiet", "-V": "--verbose" },
     });
@@ -1341,14 +1340,7 @@ export async function cmdReplay(args: string[]) {
     log(String((e as Error).message));
     return process.exit(2);
   }
-  // §8.1: reject ambiguous invocation — both positional and --cassette given. Positional is canonical.
-  if (p.options["--cassette"] !== undefined && p.positionals.length > 0) {
-    log(
-      "replay: provide the cassette path as a positional OR via --cassette, not both.\n       --cassette is a legacy alias; prefer: replay <file.cassette.json>",
-    );
-    return process.exit(2);
-  }
-  const target = p.positionals[0] ?? p.options["--cassette"];
+  const target = p.positionals[0];
   if (!target) {
     log("usage: replay <file.cassette.json | dir/> [--strict] [--output-format text|json]");
     return process.exit(2);
@@ -1406,8 +1398,7 @@ export function cmdVerifyCassettes(args: string[]) {
   let p;
   try {
     p = parseArgs(args, {
-      // Q9: --skip-privacy/--skip-staleness are the new canonical names; old --privacy-only/--staleness-only kept as aliases.
-      booleans: ["--skip-privacy", "--skip-staleness", "--privacy-only", "--staleness-only", "--quiet", "--verbose"],
+      booleans: ["--skip-privacy", "--skip-staleness", "--quiet", "--verbose"],
       values: ["--output-format"],
       repeated: ["--allow", "--allow-domain", "--allow-email", "--allow-file"],
       enums: { "--output-format": ["text", "json"] },
@@ -1419,8 +1410,8 @@ export function cmdVerifyCassettes(args: string[]) {
     return process.exit(2);
   }
   const json = p.options["--output-format"] === "json";
-  const skipPrivacy = (p.flags["--skip-privacy"] || p.flags["--privacy-only"]) ?? false;
-  const skipStaleness = (p.flags["--skip-staleness"] || p.flags["--staleness-only"]) ?? false;
+  const skipPrivacy = p.flags["--skip-privacy"] ?? false;
+  const skipStaleness = p.flags["--skip-staleness"] ?? false;
   if (skipPrivacy && skipStaleness) {
     log("verify-cassettes: --skip-privacy and --skip-staleness are mutually exclusive (together they'd check nothing)");
     return process.exit(2);
@@ -1495,8 +1486,8 @@ export function cmdVerifyCassettes(args: string[]) {
   if (json) {
     out(JSON.stringify({ command: "verify-cassettes", ok, coverage, results }));
   } else {
-    if (!doStaleness) log("⚠ cowork-harness: --privacy-only: staleness check was skipped");
-    if (!doPrivacy) log("⚠ cowork-harness: --staleness-only: privacy scan was skipped");
+    if (!doStaleness) log("⚠ cowork-harness: --skip-staleness: staleness check was skipped");
+    if (!doPrivacy) log("⚠ cowork-harness: --skip-privacy: privacy scan was skipped");
     for (const r of results) {
       if (r.error) log(`✗ ${r.file}: [error] ${r.error}`);
       for (const f of r.findings) log(`${f.cls === "unscanned" ? "·" : "✗"} ${r.file}: [${f.cls}] ${f.where} — ${f.sample}`);
@@ -1806,9 +1797,13 @@ export async function replayCassette(
     "subagent_declared_but_unused",
     "dispatch_count_max",
     "result",
-    // A verdict modifier, not a filesystem/egress assertion — keep it on replay (it evaluates to a no-op
-    // pass) so it neither inflates the "filesystem/egress skipped" count nor emits a misleading warning.
-    "allow_permissive_auto_allow",
+    // Verdict modifiers — NOT filesystem/egress assertions. Keep all of them on replay (each evaluates to a
+    // no-op pass via assert.ts) so a standalone modifier neither inflates the "filesystem/egress skipped"
+    // count nor emits a misleading warning, AND so the replay path actually exercises their assert.ts noop
+    // branches. The signal each one suppresses is independently zeroed on replay (handled in computeVerdict,
+    // not here), so keeping the key as a content no-op cannot change a verdict outcome. Single source: the
+    // VERDICT_MODIFIER_KEYS list (types.ts) — a newly-added modifier lands here automatically.
+    ...VERDICT_MODIFIER_KEYS,
   ];
   const questionGateKeys: (keyof Assertion)[] = ["question_asked", "questions_count_max", "gate_answers_delivered"];
   // #1: with an artifact manifest, the filesystem assertions become replay-checkable (materialized below).
@@ -1830,11 +1825,8 @@ export async function replayCassette(
       "self_heal_ran",
       "transcript_no_host_path",
       "replay_protocol_fidelity",
-      "allow_l0_plugin_divergence",
-      // Verdict modifier for a LIVE-only signal (missingCapabilityUse). Classified here (exhaustiveness
-      // set only — NOT alwaysContentKeys), matching allow_l0_plugin_divergence: the signal it suppresses
-      // is zeroed on replay (no live image to probe), so it never needs to reach the replay verdict.
-      "allow_missing_capability",
+      // (verdict modifiers allow_permissive_auto_allow / allow_missing_capability / allow_l0_plugin_divergence
+      //  arrive via ...alwaysContentKeys above — kept on replay as no-op passes.)
     ]);
     for (const key of Object.keys(AssertionSchema.shape) as (keyof Assertion)[]) {
       if (!ALL_CLASSIFICATION_KEYS.has(key))

@@ -14,6 +14,11 @@ npm run ci            # typecheck + build + test
 
 Node ≥ 20. The project is ESM TypeScript; no transpiler magic — `tsc` only.
 
+Two extra prerequisites for specific stages:
+
+- **python3 + PyYAML** — required for `cowork-harness lint` (the scenario linter shells out to `python3`; it hard-fails with exit `127` when `python3` is missing).
+- **Docker** — required for the `boundary-check` stage and the L1+ container/VM fidelity tiers.
+
 CI Stage 1 (the `unit` job in `.github/workflows/ci.yml`) does **not** invoke `npm run ci`. It
 runs those steps individually — `format:check`, `typecheck`, `npm test`, `build` — then a CLI smoke
 (`node dist/cli.js list`) and the token-free `replay` gate. Only `release.yml` calls `npm run ci`.

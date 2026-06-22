@@ -204,6 +204,7 @@ if *every* key passes (don't rely on the first; keep one concern per item unless
 | `gate_answers_delivered: false` | asserts that at least one answered gate's answer did **not** reach the model (unobserved or errored delivery) — useful for negative-path tests of delivery failures |
 | `allow_permissive_auto_allow: true` | verdict modifier — suppresses the default-fail when the run recorded a cowork-parity permissive auto-allow; use this for tests that **deliberately** assert Cowork's permissive behavior rather than strict scripted coverage |
 | `allow_missing_capability: true` | verdict modifier (**live tiers only**) — suppresses the default-fail when the lean/`core` agent image omits a capability the skill used but real Cowork ships (OCR/LibreOffice/markitdown/opencv/PDF-tables); assert only when the skill's fallback is genuinely equivalent, else rebuild full parity (`--build-arg COWORK_FULL_PARITY=1`) or use the rootfs `max` tier |
+| `allow_l0_plugin_divergence: true` | verdict modifier — opts into L0/protocol plugin divergence, suppressing the plugin-fidelity default-fail |
 | `transcript_no_host_path: true` | no host path (`/Users`, `/opt`) leaked into model-visible text |
 | `egress_denied: <host>` | the host was blocked by the egress proxy |
 | `egress_allowed: <host>` | the host was allowed through |
@@ -212,6 +213,9 @@ if *every* key passes (don't rely on the first; keep one concern per item unless
 `expect_denied: [host, …]` is shorthand that adds an `egress_denied` assertion per host.
 
 Run **`cowork-harness assertions --list`** for this table from the live schema (it can't drift).
+
+`replay_protocol_fidelity` is replay-synthesized and **not** authorable in a scenario — writing it
+errors at load. See [docs/cassette.md](./cassette.md) for the O7 guard.
 
 #### Verdict signals
 
@@ -368,7 +372,10 @@ synthetic `AskUserQuestion` and feeds it to whichever decider you point at: `--a
 `--decider-cmd '<helper>'` (shows the exact request the helper received and its answer), or `--decider-llm`
 (a live model answers; flagged non-deterministic). Override the prompt with `--question` and repeat
 `--option` to set the choices. `decide` does **not** accept `--decider-dir` (the file-rendezvous channel
-is a live-run concern) — passing it is a hard usage error (exit 2).
+is a live-run concern) — passing it is a hard usage error (exit 2). The synthetic gate is **single-select
+only** (there is no multiSelect flag), so the printed request shows `options[].label` but never
+`multiSelect:true` — to exercise a helper's array reply path, run a real multiSelect gate or unit-test
+the helper directly.
 
 ```bash
 # Does my answer-policy actually answer the gate I think it does?
@@ -399,6 +406,8 @@ persisted `result.json` + sidecars and uses the **same verdict path as a live re
 `verify-run` refuses rather than reporting a false failure.
 
 ### Debugging with `chat`
+
+> See [chat.md](./chat.md) for the full `chat` reference and flags.
 
 `cowork-harness chat <skill-folder>` is an interactive multi-turn REPL for **hand-debugging** a skill under
 the runtime — reach for it to reproduce a gate/permission flow interactively, poke a stochastic multi-turn

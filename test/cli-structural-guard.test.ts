@@ -21,11 +21,11 @@ const BOGUS = "--zzz-definitely-not-a-real-flag";
 // error path). The bogus flag must flip each to a non-zero exit.
 const CASES: Array<[string, string[]]> = [
   ["record", ["s.yaml"]],
-  ["replay", ["--cassette", "c.cassette.json"]],
+  ["replay", ["c.cassette.json"]],
   ["verify-cassettes", ["somedir"]],
   ["run", ["s.yaml"]],
   ["trace", ["some-run-id"]],
-  ["assert", ["--list"]],
+  ["assertions", ["--list"]],
   ["scaffold", ["--from-run", "some-run-id"]],
   ["decide", ["--question", "confirm?", "--option", "A"]],
   ["gates", ["somedir"]],

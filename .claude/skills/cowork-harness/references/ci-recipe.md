@@ -10,8 +10,9 @@ The split is not just about tokens — it decides **where each lane can run**:
 - **`replay` / `verify-cassettes` (token-free, agent-free).** Replays a recorded cassette
   (`events.jsonl` + `control-out.jsonl`) and lints the committed cassettes. **No model tokens, no
   Docker, no agent binary** — runs on a stock GitHub Actions runner. Evaluates **content** assertions
-  only (`transcript_*`, `tool_*`, `subagent_*`, `dispatch_count_max`, `result`,
-  `allow_permissive_auto_allow`; plus the gate keys `question_asked` / `questions_count_max` /
+  only (`transcript_*`, `tool_*`, `subagent_*`, `dispatch_count_max`, `result`, and the verdict
+  modifiers `allow_permissive_auto_allow` / `allow_missing_capability` / `allow_l0_plugin_divergence`
+  (no-op passes); plus the gate keys `question_asked` / `questions_count_max` /
   `gate_answers_delivered` **if** the cassette has `controlOut`). Filesystem/egress assertions are
   **silently skipped**. This is your **always-on PR gate**.
 - **`run` / `record` (live).** Spawns the real agent in a sandbox: real model tokens + Docker **+ the

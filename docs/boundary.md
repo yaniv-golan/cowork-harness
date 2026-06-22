@@ -81,6 +81,8 @@ For "must use MCP, not a host tool," give the session an MCP server for the capa
 
 ## Known fidelity gaps
 
+For the full catalog of what the harness deliberately does NOT reproduce vs real Cowork, see [fidelity-gaps.md](./fidelity-gaps.md). The gaps most relevant to the limitations model are:
+
 - At `container` tier, stdio **MCP servers run alongside the agent**, whereas Cowork runs them host-side (split execution). This host/VM split is **not reproduced at any tier** — `microvm` runs MCP inside the guest too — so a skill that depends on it (e.g. an MCP server reaching host-only resources) is an unreproduced gap. See [discovery.md](./discovery.md).
 - The `container` **and `microvm`** egress boundary is a proxy + firewall, not a kernel gVisor netstack. Domain allow/deny is identical; raw-packet behavior is not.
 - The sandbox is a **fidelity fixture, not a security boundary** against malicious code — see [SECURITY.md](../SECURITY.md).

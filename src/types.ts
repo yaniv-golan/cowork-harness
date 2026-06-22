@@ -245,6 +245,20 @@ export const Assertion = z.object({
 });
 export type Assertion = z.infer<typeof Assertion>;
 
+/** Verdict modifiers: assertions that verify nothing themselves — each opts into (suppresses) one
+ *  default-fail in `computeVerdict`. They are pure no-op `ok()` passes in `assert.ts` and are kept on
+ *  replay as no-op passes (in `cassette.ts` `alwaysContentKeys`). SINGLE SOURCE OF TRUTH: the `assert.ts`
+ *  noop loop, `cassette.ts` `alwaysContentKeys`, the emitted `assertion-keys.json` (`gen-schema.ts`), and
+ *  the Python linter's parity test all derive from / are checked against this. The `allow_`-prefix
+ *  convention is test-enforced (see the schema invariant test), so a new `allow_*` field can't be added
+ *  without landing here. `verdict.ts` keeps its own three hand-written branches — they are genuinely
+ *  asymmetric (different signal, list-vs-scalar, message) and must NOT be folded into this list. */
+export const VERDICT_MODIFIER_KEYS = [
+  "allow_permissive_auto_allow",
+  "allow_missing_capability",
+  "allow_l0_plugin_divergence",
+] as const satisfies readonly (keyof Assertion)[];
+
 export const ScenarioObject = z
   .object({
     // Optional: defaults to the scenario's filename (sans extension) via parseScenarioFile —

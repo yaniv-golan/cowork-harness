@@ -20,7 +20,7 @@ flowchart TB
     subgraph AGENT["Agent · claude -p · CLAUDE_CODE_IS_COWORK=1"]
         direction TB
         IO["--input-format / --output-format stream-json"]
-        FS["cwd = /sessions/&lt;id&gt;/mnt<br/>mnt/uploads · mnt/.projects/* · plugins"]
+        FS["cwd = /sessions/&lt;id&gt;/mnt<br/>mnt/uploads · mnt/&lt;folder-name&gt; · plugins"]
     end
 
     AGENT -->|"decision control request<br/>(tool · question · dialog · elicitation)"| DRV["AgentSession → Decider → Run<br/>protocol seam · policy seam · turn loop + RunRecord"]
@@ -149,7 +149,7 @@ L1 reproduces this as a **default-deny forward proxy**: the agent's `HTTP(S)_PRO
 | AskUserQuestion answered by question UI | allow + `updatedInput.answers` (Record<questionText, answer>) |
 | `onEvent` live stream | stream-json assistant/tool messages → `events.jsonl` |
 | `getTranscript` | accumulated stream → the `transcript` line in `run.jsonl` |
-| `setDraftSessionFolders` / `addFolderToSession` | bind-mount into `mnt/.projects/*` before launch |
+| `setDraftSessionFolders` / `addFolderToSession` | bind-mount into `mnt/<folder-name>` before launch |
 
 ### Control protocol — VERIFIED end-to-end against the live host CLI (macOS build 2.1.177+; the staged in-VM agent that L1/L2 run is 2.1.181, baseline `desktop-1.14271.0`)
 

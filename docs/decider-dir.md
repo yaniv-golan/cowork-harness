@@ -140,8 +140,8 @@ cowork-harness answer "$GATES" --gate 1 --choose "PDF"
 
 ## See also
 
-- `README.md` — the answer-channels overview (`--decider-llm` / `--answer-policy` / `--decider-cmd` /
+- [`../README.md`](../README.md) — the answer-channels overview (`--decider-llm` / `--answer-policy` / `--decider-cmd` /
   `--decider-dir`).
-- `docs/scenario.md` — scenario answer rules and `on_unanswered` policies.
-- `src/decide/external-channel.ts` — the file-rendezvous implementation (`fileChannel`, `streamGates`,
-  `answerGate`).
+- [`scenario.md`](./scenario.md) — scenario answer rules and `on_unanswered` policies.
+- [`../src/decide/external-channel.ts`](../src/decide/external-channel.ts) — the file-rendezvous
+  implementation (`fileChannel`, `streamGates`, `answerGate`).
