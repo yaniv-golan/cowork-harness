@@ -24,6 +24,57 @@ export interface EgressSidecar {
 
 const PROXY_IMAGE = process.env.COWORK_PROXY_IMAGE ?? "cowork-egress-proxy:1";
 
+// 2a: a process-level cleanup registry so a Ctrl-C (SIGINT/SIGTERM) mid-run reaps in-flight egress resources
+// instead of orphaning them (the per-run `finally` paths don't run when the process is killed by a signal).
+// Entries are PHASED: "container" thunks run BEFORE "network" thunks — `network rm` fails while a container is
+// still attached (the error is swallowed with no retry), so a network-first handler would leak the network.
+type CleanupPhase = "container" | "network";
+interface CleanupEntry {
+  phase: CleanupPhase;
+  run: () => void;
+}
+const cleanupRegistry = new Set<CleanupEntry>();
+let signalHandlerInstalled = false;
+
+/** Register a signal-time cleanup thunk; returns a de-register fn to call from the normal `finally` path
+ *  (so a clean exit doesn't double-run it — and `teardown()`/`rm -f` are idempotent regardless). */
+export function registerCleanup(entry: CleanupEntry): () => void {
+  cleanupRegistry.add(entry);
+  installSignalHandlerOnce();
+  return () => cleanupRegistry.delete(entry);
+}
+
+/** Drain all registered cleanups in phase order — "container" thunks BEFORE "network" thunks (load-bearing:
+ *  `network rm` fails while a container is still attached). Returns the number of thunks run. Exported for
+ *  tests; the signal handler calls this then exits. */
+export function drainCleanups(): number {
+  const entries = [...cleanupRegistry];
+  for (const e of entries) if (e.phase === "container") tryRun(e.run);
+  for (const e of entries) if (e.phase === "network") tryRun(e.run);
+  return entries.length;
+}
+
+function installSignalHandlerOnce() {
+  if (signalHandlerInstalled) return;
+  signalHandlerInstalled = true;
+  const handler = (sig: NodeJS.Signals) => {
+    const n = cleanupRegistry.size;
+    if (n) warn(`::warning:: [cleanup] ${sig} — reaping ${n} in-flight egress resource(s) before exit\n`);
+    drainCleanups();
+    process.exit(sig === "SIGINT" ? 130 : 143);
+  };
+  process.on("SIGINT", handler);
+  process.on("SIGTERM", handler);
+}
+
+function tryRun(fn: () => void) {
+  try {
+    fn();
+  } catch {
+    /* best-effort during signal teardown */
+  }
+}
+
 export function startEgressSidecar(allow: string[], outDir: string, runId: string): EgressSidecar {
   const runner = process.env.COWORK_CONTAINER_RUNTIME ?? "docker";
   const intNet = `cowork-int-${runId}`;
@@ -70,8 +121,20 @@ export function startEgressSidecar(allow: string[], outDir: string, runId: strin
     waitProxyRunning(runner, proxyName);
   } catch (e) {
     for (const undo of rollback.reverse()) undo();
-    throw e;
+    // 6e: re-frame Docker's opaque address-pool-exhaustion error (which surfaces at create, connect, OR
+    // `run --network`) into an actionable diagnosis — it reads as a "leak" but is concurrency pressure;
+    // each run reaps its own networks on exit. Rollback above already ran, so this only changes the message.
+    throw reframeEgressError(e);
   }
+
+  const reap = () => {
+    d(runner, ["rm", "-f", proxyName], true); // proxy container before its networks (attached)
+    d(runner, ["network", "rm", intNet], true);
+    d(runner, ["network", "rm", outNet], true);
+  };
+  // 2a: cover Ctrl-C — reap this run's proxy+networks on a signal too. Registered as the "network" phase so a
+  // caller-registered agent-container reap ("container" phase) runs first (network rm needs the container gone).
+  const deregister = registerCleanup({ phase: "network", run: reap });
 
   return {
     proxyUrl: `http://${proxyName}:8080`,
@@ -86,9 +149,8 @@ export function startEgressSidecar(allow: string[], outDir: string, runId: strin
         .filter((x): x is { host: string; decision: "allow" | "deny" } => x !== null);
     },
     teardown() {
-      d(runner, ["rm", "-f", proxyName], true);
-      d(runner, ["network", "rm", intNet], true);
-      d(runner, ["network", "rm", outNet], true);
+      deregister();
+      reap();
     },
   };
 }
@@ -144,6 +206,26 @@ function ensureProxyImage(runner: string) {
     stdio: "inherit",
   });
   if (build.status !== 0) throw new Error(`failed to build ${PROXY_IMAGE}`);
+}
+
+/** 6e: turn Docker's `all predefined address pools have been fully subnetted` (and its connect/run
+ *  variants) into a self-answering message — it is NOT a leak (each run reaps its own networks on exit),
+ *  it is concurrency pressure against the daemon's address pool. Any non-matching error passes through. */
+export function reframeEgressError(e: unknown): unknown {
+  const msg = e instanceof Error ? e.message : String(e);
+  // Match Docker's two canonical pool-exhaustion messages without over-matching unrelated docker errors:
+  //   "all predefined address pools have been fully subnetted"
+  //   "could not find an available, non-overlapping IPv4 address pool among the defaults to assign ..."
+  const poolExhausted = /address pool/i.test(msg) && /predefined|available|non-overlapping|subnet|defaults|exhaust/i.test(msg);
+  if (poolExhausted) {
+    return new Error(
+      "egress network create failed — Docker address pool exhausted. This is concurrency pressure " +
+        "(live runs × 2 networks each), NOT a leak: each run reaps its own networks on exit. Orphans only " +
+        "persist from SIGKILL'd runs → `docker network prune`. For higher parallelism, widen the daemon " +
+        `\`default-address-pools\`. (original: ${msg.slice(0, 200)})`,
+    );
+  }
+  return e;
 }
 
 function d(runner: string, args: string[], ignoreError = false) {

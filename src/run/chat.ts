@@ -8,7 +8,7 @@ import { spawnContainer } from "../runtime/container.js";
 import { spawnHostLoop } from "../runtime/hostloop.js";
 import { spawnProtocol } from "../runtime/protocol.js";
 import { renderPrompts } from "../prompt.js";
-import { startEgressSidecar } from "../egress/sidecar.js";
+import { startEgressSidecar, registerCleanup } from "../egress/sidecar.js";
 import { Scenario } from "../types.js";
 import { LiveAgentSession } from "../agent/session.js";
 import { Run } from "./run.js";
@@ -214,6 +214,20 @@ export async function cmdChat(args: string[]) {
   const runner = process.env.COWORK_CONTAINER_RUNTIME ?? "docker";
   let containerName: string | undefined;
   let child: { kill?: (s?: NodeJS.Signals) => void } | undefined;
+  // 2a: Ctrl-C — reap the agent container in the "container" phase (before the sidecar's network teardown).
+  const deregisterContainerReap = sidecar
+    ? registerCleanup({
+        phase: "container",
+        run: () => {
+          try {
+            child?.kill?.("SIGKILL");
+          } catch {
+            /* already gone */
+          }
+          if (containerName) spawnSync(runner, ["rm", "-f", containerName], { stdio: "ignore" });
+        },
+      })
+    : undefined;
   // #30: same web_fetch provenance wiring as execute.ts — ref created before spawn, filled after Run.
   const viaApiOn = readGateFlag(baseline, "1978029737", "coworkWebFetchViaApi");
   const promptGateOn = readGateFlag(baseline, "1978029737", "coworkWebFetchPrompt");
@@ -282,6 +296,7 @@ export async function cmdChat(args: string[]) {
     }
   } finally {
     stopHeartbeat?.();
+    deregisterContainerReap?.(); // 2a: normal path owns the reap below
     // Reap the agent container first (mirrors execute.ts F1 hardening — #34).
     try {
       child?.kill?.("SIGKILL");

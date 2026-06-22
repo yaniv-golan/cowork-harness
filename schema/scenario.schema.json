@@ -220,7 +220,7 @@
               },
               "allow_missing_capability": {
                 "type": "boolean",
-                "description": "(verdict modifier) suppress the default-fail when the (partial 'core') agent image omits a capability the skill used but real Cowork ships — assert this only when the skill's fallback is genuinely equivalent (otherwise rebuild full parity / the rootfs `max` tier)"
+                "description": "(verdict modifier) suppress the default-fail when the (partial 'core') agent image omits a capability the skill used but real Cowork ships — assert this only when the skill's fallback is genuinely equivalent (otherwise rebuild full parity, --build-arg COWORK_FULL_PARITY=1)"
               },
               "replay_protocol_fidelity": {
                 "type": "boolean",
@@ -274,6 +274,13 @@
           "default": []
         },
         "skills": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "requires_capabilities": {
           "type": "array",
           "items": {
             "type": "string"

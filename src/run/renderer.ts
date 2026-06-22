@@ -2,7 +2,7 @@ import { writeSync } from "node:fs";
 import type { AgentEvent } from "../agent/session.js";
 import type { RunHooks } from "./run.js";
 import type { RunResult } from "../types.js";
-import { computeVerdict } from "./verdict.js";
+import { computeVerdict, type GuardReport, type GuardStatus } from "./verdict.js";
 
 /**
  * Shared output renderer. The seam is `RunHooks` (attached to `Run` via `executeScenario`): it
@@ -151,6 +151,7 @@ export function renderFooter(
   if (passed) {
     write(`${green(plan, "✓ " + r.result)} ${meta}${nd}${opts.keep ? " · " + r.outDir : ""}\n`);
     if (opts.keep && r.outputsDir) write(`   ${dim(plan, "→ outputs: " + r.outputsDir)}\n`);
+    renderGuards(verdict.guards, plan, write); // 6h: make the safety nets that ran an enumerable, visible fact
     renderAnswerHints(r, plan, write);
     // Q2: scaffold tip — only for skill (exploratory) runs, not automated `run` scenarios.
     // Callers opt in via scaffoldTip: true; run command omits it (you already have a scenario YAML).
@@ -159,8 +160,12 @@ export function renderFooter(
     }
     return;
   }
-  write(`${red(plan, "✗ " + (r.result === "error" ? "error" : "FAIL"))} ${meta}\n`);
+  // Fix 5/6g: a tail-end transport drop renders distinctly from a generic error/FAIL, so a flaky-connection
+  // run doesn't read as a skill defect.
+  const errLabel = r.result === "error" ? (r.resultErrorKind === "transport" ? "transport-error" : "error") : "FAIL";
+  write(`${red(plan, "✗ " + errLabel)} ${meta}\n`);
   for (const s of failSignals) write(`   ${red(plan, "✗ " + s.message)}\n`);
+  renderGuards(verdict.guards, plan, write); // 6h: show which guards ran even on a fail (no silent guards)
   renderAnswerHints(r, plan, write);
   const t = opts.renderer?.dump().trim();
   if (t) {
@@ -183,6 +188,14 @@ export function renderFooter(
  * lines off the footer, paste them back as `--answer …` for a deterministic re-run. Scripted answers
  * are not echoed (they're already in the command). No-op when nothing was auto-answered.
  */
+// 6h: the "guards active this run" roster. ✓ ran clean · ✗ fired · — N/A this lane/tier · ? unverified.
+// The load-bearing rule (no silent-false-green): a guard that didn't run renders — / ?, never ✓.
+function renderGuards(guards: GuardReport[], plan: RenderPlan, write: Sink): void {
+  if (!guards.length) return;
+  const sym = (s: GuardStatus) => (s === "ok" ? "✓" : s === "fired" ? "✗" : s === "unverified" ? "?" : "—");
+  write(`   ${dim(plan, "guards: " + guards.map((g) => `${g.name} ${sym(g.status)}`).join("  "))}\n`);
+}
+
 function renderAnswerHints(r: RunResult, plan: RenderPlan, write: Sink): void {
   const u = r.unanswered ?? [];
   if (!u.length) return;

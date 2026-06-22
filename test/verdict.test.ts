@@ -40,6 +40,90 @@ describe("computeVerdict (SEAM B — the single verdict source)", () => {
     expect(computeVerdict(rr({ scan: { outputsDeletes: [], hostPathLeaked: true, selfHealRan: false } }), "live").pass).toBe(false);
   });
 
+  it("Fix 5 — splits result:error into transport_error vs result_error (both fail; distinct message)", () => {
+    // a generic agent error → result_error
+    const agent = computeVerdict(rr({ result: "error", resultErrorKind: "agent" }), "live");
+    expect(agent.pass).toBe(false);
+    expect(agent.signals.some((s) => s.code === "result_error")).toBe(true);
+
+    // a transport drop with passing assertions → transport_error (still fail, no false-green), distinct msg
+    const transport = computeVerdict(
+      rr({ result: "error", resultErrorKind: "transport", assertions: [assn({ tool_called: "X" }, true)] }),
+      "live",
+    );
+    expect(transport.pass).toBe(false);
+    const ts = transport.signals.find((s) => s.code === "transport_error");
+    expect(ts?.message).toMatch(/artifacts were written/);
+    expect(ts?.message).toMatch(/retry/);
+
+    // assertion-less transport drop → no false comfort
+    const noAssert = computeVerdict(rr({ result: "error", resultErrorKind: "transport" }), "live");
+    expect(noAssert.signals.find((s) => s.code === "transport_error")?.message).toMatch(/NO assertions were defined/);
+
+    // replay lane → lane-aware message (no "artifacts written" claim — replay writes none)
+    const onReplay = computeVerdict(
+      rr({ result: "error", resultErrorKind: "transport", assertions: [assn({ tool_called: "X" }, true)] }),
+      "replay",
+    );
+    const rs = onReplay.signals.find((s) => s.code === "transport_error");
+    expect(rs?.message).toMatch(/re-checked on replay/);
+    expect(rs?.message).not.toMatch(/artifacts were written/);
+
+    // transport classification but a failing assertion → treated as a real failure
+    const alsoFailed = computeVerdict(
+      rr({ result: "error", resultErrorKind: "transport", assertions: [assn({ tool_called: "X" }, false)] }),
+      "live",
+    );
+    expect(alsoFailed.signals.find((s) => s.code === "transport_error")?.message).toMatch(/real failure/);
+  });
+
+  it("Fix 6h — guard roster reflects lane + probe outcome; never ✓ for a guard that didn't run", () => {
+    const g = (v: ReturnType<typeof computeVerdict>, name: string) => v.guards.find((x) => x.name === name)?.status;
+
+    // live + a definitive clean probe → capability-use ran clean (ok); scan guards ok
+    const clean = computeVerdict(rr({ capabilityProbe: "definitive" }), "live");
+    expect(g(clean, "capability-use")).toBe("ok");
+    expect(g(clean, "permissive-auto-allow")).toBe("ok");
+
+    // live but the probe was SKIPPED (e.g. protocol/skip-env) → capability-use is N/A, NOT ok (no false ✓)
+    expect(g(computeVerdict(rr({ capabilityProbe: "skipped" }), "live"), "capability-use")).toBe("na");
+    // probe ran but couldn't conclude → unverified, NOT ok
+    expect(g(computeVerdict(rr({ capabilityProbe: "unverified" }), "live"), "capability-use")).toBe("unverified");
+    // a capability guard that fired → fired
+    expect(g(computeVerdict(rr({ capabilityProbe: "definitive", missingCapabilityUse: ["ocr"] }), "live"), "capability-use")).toBe("fired");
+
+    // replay lane → live-only guards render N/A (a cassette can't reproduce them)
+    const onReplay = computeVerdict(rr({ capabilityProbe: "definitive" }), "replay");
+    expect(g(onReplay, "capability-use")).toBe("na");
+    expect(g(onReplay, "permissive-auto-allow")).toBe("na");
+    expect(g(onReplay, "host-path")).toBe("na");
+  });
+
+  it("Fix 4b — requires_capabilities the tier couldn't satisfy hard-fails (both lanes); opt-out + clean run pass", () => {
+    // declared family omitted by the running image → fail
+    const omitted = computeVerdict(rr({ requiresCapabilityUnmet: { caps: ["office_convert"], reason: "omitted" } }), "live");
+    expect(omitted.pass).toBe(false);
+    expect(omitted.signals.find((s) => s.code === "missing_capability")?.message).toMatch(/omits declared required/);
+
+    // declared but the tier (e.g. protocol) couldn't verify → fail, distinct message
+    const unverifiable = computeVerdict(rr({ requiresCapabilityUnmet: { caps: ["ocr"], reason: "unverifiable" } }), "live");
+    expect(unverifiable.pass).toBe(false);
+    expect(unverifiable.signals.find((s) => s.code === "missing_capability")?.message).toMatch(/could not verify/);
+
+    // fires on the REPLAY lane too (persisted run-time truth, honored by verify-run/replay)
+    expect(computeVerdict(rr({ requiresCapabilityUnmet: { caps: ["ocr"], reason: "unverifiable" } }), "replay").pass).toBe(false);
+
+    // allow_missing_capability opts out
+    const optIn = computeVerdict(
+      rr({ requiresCapabilityUnmet: { caps: ["ocr"], reason: "omitted" }, assertions: [assn({ allow_missing_capability: true })] }),
+      "live",
+    );
+    expect(optIn.pass).toBe(true);
+
+    // a clean run on full parity records nothing here → verify-run never false-fails
+    expect(computeVerdict(rr({ capabilityProbe: "definitive" }), "live").pass).toBe(true);
+  });
+
   it("treats non-determinism as a WARN, never a fail", () => {
     const v = computeVerdict(rr({ nonDeterministic: true }), "live");
     expect(v.pass).toBe(true);
