@@ -54,6 +54,11 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **`doctor --tier microvm` now checks the right prerequisites.** It previously probed the Docker daemon +
+  agent image + egress-proxy image for every live tier, but the `microvm` (L2) tier runs on **Lima / Apple
+  Virtualization.framework**, not Docker — so it could report "not ready" on a Lima-only host, or "ready"
+  with no Lima installed. `microvm` now checks `limactl` (honoring `COWORK_LIMACTL`) + the staged agent
+  binary, and skips the Docker checks; `container`/`hostloop`/`cowork` are unchanged.
 - **A freshly recorded cassette no longer reports `[stale]` immediately** because the OS rewrote a `.DS_Store`
   (or other OS-junk) in the skill tree — OS-junk is excluded from the skill hash. A chronic false-positive
   that pushed consumers to WARN-only (which then masked real drift).
