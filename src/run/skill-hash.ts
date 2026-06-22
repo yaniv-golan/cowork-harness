@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { readdirSync, statSync, lstatSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { gitModeEnabled, gitTrackedSet, gitAccept } from "./skill-files.js";
 
 /**
  * Directory names excluded from the skill-content staleness hash — VCS / language caches that are NEVER
@@ -316,6 +317,10 @@ export interface HashSkillDirsResult {
    *  this as a staleness failure (can't verify ⇒ not green) — a hash computed over partial data is
    *  unreliable. */
   readErrors?: string[];
+  /** Phase C: which boundary the hash used. "git" = git-tracked set (COWORK_HARNESS_GITSET=1 AND every dir
+   *  was a usable repo); "raw" = the legacy filesystem walk (default, or any non-repo dir). Recorded in the
+   *  fingerprint so a mode change between record and verify is itself detectable. */
+  mode: "git" | "raw";
 }
 
 /**
@@ -351,18 +356,28 @@ export function hashSkillDirs(dirs: string[], scopeSkills?: string[], sessionIgn
     }
   }
   const allErrors: string[] = [];
+  // Phase C (gated): when COWORK_HARNESS_GITSET=1, restrict each dir's files to the git-tracked set. A dir
+  // that isn't a usable repo falls back to raw for THAT dir; mode is "git" only if EVERY dir resolved via git.
+  const gitOn = gitModeEnabled();
+  let allGit = gitOn && sorted.length > 0;
   for (const d of sorted) {
     // Consumer-declared ignore for THIS root = the plugin-local .cowork-hashignore + the session-level globs.
     const ignoreRes = [...readHashIgnore(d), ...(sessionIgnore ?? [])].map(compileIgnore).filter((re): re is RegExp => re !== null);
     const scopeFn = keep && isDir(join(d, "skills")) ? scopedAccept(keep) : undefined;
-    // No scope + no ignore → undefined accept → byte-identical to the legacy whole-tree hash.
+    const tracked = gitOn ? gitTrackedSet(d) : null;
+    if (gitOn && tracked === null) allGit = false; // this dir isn't a repo → raw for it → not pure git mode
+    const gitFn = tracked ? gitAccept(tracked) : null; // admits tracked files + their ancestor dirs
+    // No scope + no ignore + no git filter → undefined accept → byte-identical to the legacy whole-tree hash.
     const accept =
-      scopeFn || ignoreRes.length ? (rel: string) => (scopeFn ? scopeFn(rel) : true) && !ignoreRes.some((re) => re.test(rel)) : undefined;
+      scopeFn || ignoreRes.length || gitFn
+        ? (rel: string) => (scopeFn ? scopeFn(rel) : true) && !ignoreRes.some((re) => re.test(rel)) && (gitFn ? gitFn(rel) : true)
+        : undefined;
     hashDir(d, hash, allErrors, "", accept, onFile);
   }
   const scoped = keep !== null;
   const readErrors = allErrors.length > 0 ? allErrors : undefined;
+  const mode: "git" | "raw" = allGit ? "git" : "raw";
   return scoped
-    ? { hash: hash.digest("hex"), scoped: true, ...(readErrors ? { readErrors } : {}) }
-    : { hash: hash.digest("hex"), scoped: false, ...(missedSkills ? { missedSkills } : {}), ...(readErrors ? { readErrors } : {}) };
+    ? { hash: hash.digest("hex"), scoped: true, mode, ...(readErrors ? { readErrors } : {}) }
+    : { hash: hash.digest("hex"), scoped: false, mode, ...(missedSkills ? { missedSkills } : {}), ...(readErrors ? { readErrors } : {}) };
 }

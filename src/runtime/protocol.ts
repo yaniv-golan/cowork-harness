@@ -4,6 +4,7 @@ import { mkdirSync, cpSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import type { PlatformBaseline, Scenario } from "../types.js";
 import type { LaunchPlan } from "../session.js";
+import { gitModeEnabled, gitCpFilter } from "../run/skill-files.js";
 
 /**
  * L0 — protocol-only runtime. Spawns the host `claude` with --cowork and the
@@ -28,7 +29,12 @@ export function spawnProtocol(
     const dest = join(work, m.mountPath);
     mkdirSync(dirname(dest), { recursive: true });
     // preserve symlinks as-is during staging; do not copy out-of-tree content
-    if (existsSync(m.hostPath)) cpSync(m.hostPath, dest, { recursive: true, dereference: false });
+    // Phase C (gated): under COWORK_HARNESS_GITSET, deliver only the git-tracked set (Finding 5). Default-off
+    // ⇒ raw copy, unchanged.
+    if (existsSync(m.hostPath)) {
+      const f = gitModeEnabled() ? gitCpFilter(m.hostPath) : null;
+      cpSync(m.hostPath, dest, { recursive: true, dereference: false, ...(f ? { filter: f } : {}) });
+    }
   }
 
   // NOTE: `--cowork` is a GUEST-ONLY flag — the host `claude` CLI rejects it

@@ -4,6 +4,7 @@ import { join, dirname } from "node:path";
 import type { LaunchPlan } from "../session.js";
 import { resolveDeclaredSource } from "../staging/resolve.js";
 import { containedRealPath } from "../boundary-paths.js";
+import { gitModeEnabled, gitCpFilter } from "../run/skill-files.js";
 
 /** Subdirs the writable session tree always pre-creates under mnt (idempotent). `.local-plugins` (not
  *  `.local-plugins/cache`) so both the gated `marketplaces/<mp>/<plugin>` and legacy `cache/<x>` plugin
@@ -57,7 +58,12 @@ export function stageWorkspace(plan: LaunchPlan, mntHost: string): StageResult {
       if (!containedRealPath(mntHostReal, destParent))
         throw new Error(`cowork-harness: staged mount path "${mt.mountPath}" resolves outside the session tree (symlink escape)`);
       // preserve symlinks as-is during staging; do not copy out-of-tree content
-      if (existsSync(mt.hostPath)) cpSync(mt.hostPath, dest, { recursive: true, dereference: false });
+      // Phase C (gated): under COWORK_HARNESS_GITSET, deliver only the git-tracked set so the mount matches
+      // what the hash covers (Finding 5). Default-off ⇒ raw copy, unchanged.
+      if (existsSync(mt.hostPath)) {
+        const f = gitModeEnabled() ? gitCpFilter(mt.hostPath) : null;
+        cpSync(mt.hostPath, dest, { recursive: true, dereference: false, ...(f ? { filter: f } : {}) });
+      }
     }
     // A declared mcp.config whose source is missing must FAIL on a fresh run (it was silently dropped
     // before — no --mcp-config, no error). Resolved HERE, not in buildLaunchPlan, because resume (the

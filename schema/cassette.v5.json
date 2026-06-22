@@ -76,6 +76,30 @@
         },
         "sharedHash": {
           "type": "string"
+        },
+        "fileSigs": {
+          "type": "array",
+          "description": "v5+: per-file manifest [relpath, contentSha] of files feeding skillHash, for exact-diff staleness reporting. Root-relative paths; scanned+redacted like skillSources.",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 2,
+            "maxItems": 2
+          }
+        },
+        "fileSigsOmitted": {
+          "type": "boolean",
+          "description": "v5+: true when the per-file manifest was omitted because the tree exceeded the size cap (degrades to bucket-level staleness messages)."
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "git",
+            "raw"
+          ],
+          "description": "Phase C: the file-set boundary used for skillHash \u2014 'git' (git-tracked set, COWORK_HARNESS_GITSET=1) or absent/'raw' (legacy walk, default). A record-vs-verify mode flip means hashes aren't comparable \u2192 re-record."
         }
       }
     }

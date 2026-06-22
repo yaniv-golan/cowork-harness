@@ -60,7 +60,19 @@ interface Fingerprint {
   skillScope?: string[]; // F-6: the skills the hash was scoped to (empty/absent = whole-tree); diagnostics
   sharedHash?: string; // G-4: shared-root hash for scoped cassettes; absent on whole-tree or non-plugin-root mounts
   contentSig?: string; // v3+: algorithm-independent content fingerprint; used by `rehash` to verify content is unchanged across format bumps
+  // v5+: per-file manifest [relpath, contentSha] of the exact files feeding skillHash, so a staleness mismatch
+  // names the EXACT changed/added/removed file instead of a bucket. Paths are ROOT-RELATIVE (no host path) and
+  // scanned/redacted like skillSources (privacy). Omitted (with fileSigsOmitted:true) above MANIFEST_MAX_FILES.
+  fileSigs?: Array<[string, string]>;
+  fileSigsOmitted?: boolean;
+  // Phase C: the boundary used for skillHash — "git" (git-tracked set, COWORK_HARNESS_GITSET=1) or "raw"
+  // (legacy walk; default). A record-vs-verify mode flip makes hash comparison meaningless → re-record.
+  mode?: "git" | "raw";
 }
+
+// Cap the per-file manifest so a huge plugin tree doesn't bloat a committed cassette; above this, omit it
+// (fileSigsOmitted:true) and degrade to the bucket-level message — loudly, never silently.
+const MANIFEST_MAX_FILES = 2000;
 
 export interface Cassette {
   $schema?: string; // provenance: schema URL for this cassette format version
@@ -282,6 +294,14 @@ export function buildFingerprint(
     contentSig: computeContentSig(dirs), // v3: algorithm-independent; survives hash-format changes
     skillSources: dirs.sort().map((d) => relative(baseDir, d)),
   };
+  // Phase C: record the boundary mode only when git (the default raw needs no marker → keeps v<5 cassettes and
+  // raw-mode v5 cassettes byte-clean). A recorded "git" vs a live "raw" (or vice-versa) is a mode flip.
+  if (hashResult.mode === "git") fp.mode = "git";
+  // v5: per-file manifest for exact-diff staleness reporting. Reuses the same walk/scope/ignore/OS-junk set as
+  // skillHash (skillHashEntries → hashSkillDirs), so the manifest names exactly what the hash covers. Capped.
+  const entries = skillHashEntries(dirs, scopeSkills, hashIgnore);
+  if (entries.length > MANIFEST_MAX_FILES) fp.fileSigsOmitted = true;
+  else fp.fileSigs = entries.map((e) => [e.path, e.sha] as [string, string]);
   if (scopeSkills && scopeSkills.length) fp.skillScope = [...scopeSkills].sort();
   // G-4: for scoped cassettes, store the shared-root hash separately so checkStaleness can name
   // the changed bucket (skill vs shared root) at verify time.
@@ -361,6 +381,8 @@ export function scanCassette(cassette: Cassette, allow: AllowInput[]): ScanFindi
   findings.push(...scanText(JSON.stringify(cassette.scenario.answers ?? null), "scenario.answers", allow, FULL));
   findings.push(...scanText(JSON.stringify(cassette.scenario.assert ?? null), "scenario.assert", allow, FULL));
   for (const s of cassette.fingerprint?.skillSources ?? []) findings.push(...scanText(s, "fingerprint.skillSources", allow, FULL));
+  // v5: per-file manifest paths are a committed surface — scan them like skillSources (a path can name a customer).
+  for (const [p] of cassette.fingerprint?.fileSigs ?? []) findings.push(...scanText(p, "fingerprint.fileSigs", allow, FULL));
   // human-authored / structural METADATA fields were never scanned, so a customer folder mount name
   // in userVisibleRoots (or a customer name in the scenario name / session path) could leak through `verify-
   // cassettes`. Scan them too, prefixed `metadata:` so a reviewer knows redaction here ALSO rewrites
@@ -423,6 +445,31 @@ function debugSkillHashMismatch(cassette: Cassette, cassetteDir: string, fp: Fin
   );
 }
 
+/** v5: diff two per-file manifests (recorded vs live) into an exact "what changed" SUMMARY — the actionable
+ *  upgrade over the bucket-level "something changed". Returns just the summary (no prefix/suffix), so the
+ *  caller can append it to the bucket/generic message (preserving the G-4 shared-vs-scoped semantic). Samples
+ *  up to 3 paths per category. Null when the manifests are equal (hashes differ but files don't — caller
+ *  falls back to its bucket message). */
+function diffFileSigs(recorded: Array<[string, string]>, live: Array<[string, string]>): string | null {
+  const rec = new Map(recorded);
+  const liv = new Map(live);
+  const added: string[] = [];
+  const removed: string[] = [];
+  const changed: string[] = [];
+  for (const [p, h] of liv) {
+    if (!rec.has(p)) added.push(p);
+    else if (rec.get(p) !== h) changed.push(p);
+  }
+  for (const [p] of rec) if (!liv.has(p)) removed.push(p);
+  if (!added.length && !removed.length && !changed.length) return null;
+  const sample = (a: string[]) => `${a.slice(0, 3).join(", ")}${a.length > 3 ? `, +${a.length - 3} more` : ""}`;
+  const parts: string[] = [];
+  if (changed.length) parts.push(`${changed.length} changed (${sample(changed)})`);
+  if (added.length) parts.push(`${added.length} added (${sample(added)})`);
+  if (removed.length) parts.push(`${removed.length} removed (${sample(removed)})`);
+  return parts.join("; ");
+}
+
 /** B3 staleness GATE: recompute the fingerprint and report drift. Unlike `replayCassette` (which WARNS),
  *  the gate treats an unresolvable skillHash as a failure — can't verify ⇒ not green. No fingerprint → nothing
  *  to check (legacy cassette). */
@@ -445,21 +492,34 @@ export function checkStaleness(cassette: Cassette, cassetteDir: string): string[
   else if (liveBaseline !== fp.baseline) msgs.push(`baseline moved ${fp.baseline} → ${liveBaseline} since record — re-record`);
   if (fp.skillHash) {
     const live = buildFingerprint(cassette.scenario.session, fp.baseline, cassetteDir, cassette.scenario.skills);
+    const recMode = fp.mode ?? "raw";
+    const liveMode = live.mode ?? "raw";
     if (live.skillHash === undefined)
       msgs.push("skill dirs not resolvable from the cassette location — cannot verify staleness (gate fails: can't verify ⇒ not green)");
+    else if (recMode !== liveMode)
+      // Phase C: a hash from a different boundary mode is not comparable — don't emit a misleading content diff.
+      msgs.push(
+        `recorded in '${recMode}' file-set mode, verifying in '${liveMode}' (COWORK_HARNESS_GITSET) — re-record under the same mode`,
+      );
     else if (live.skillHash !== fp.skillHash) {
       debugSkillHashMismatch(cassette, cassetteDir, fp, live); // H9: surface WHICH files drifted (or a hint to enable it)
       const recordedVersion = cassette.cassetteVersion ?? 0;
+      // v5: name the EXACT changed/added/removed file(s) from the per-file manifest, APPENDED to the
+      // bucket/generic message so the G-4 shared-vs-scoped semantic is preserved AND the file is named.
+      const summary = fp.fileSigs && live.fileSigs ? diffFileSigs(fp.fileSigs, live.fileSigs) : null;
+      const detail = summary ? ` [${summary}]` : "";
       if (recordedVersion < CASSETTE_VERSION) {
         msgs.push(`recorded under an older hash format (v${recordedVersion} → v${CASSETTE_VERSION}) — re-record once after upgrading`);
       } else if (fp.sharedHash !== undefined && live.sharedHash !== undefined) {
         // G-4: bucket-level diagnosis — which component of the scoped hash changed?
         const scope = fp.skillScope!.map((s) => `skills/${s}`).join(", ");
         if (live.sharedHash !== fp.sharedHash) {
-          msgs.push(`shared root changed since record (scope: ${scope}) — re-record`);
+          msgs.push(`shared root changed since record (scope: ${scope})${detail} — re-record`);
         } else {
-          msgs.push(`${scope} changed since record — re-record`);
+          msgs.push(`${scope} changed since record${detail} — re-record`);
         }
+      } else if (summary) {
+        msgs.push(`skill files changed since record — ${summary} — re-record`);
       } else {
         msgs.push("local skill/plugin dir contents changed since record — re-record");
       }
@@ -759,7 +819,12 @@ export function redactCassette(cassette: Cassette, policy: RedactionPolicy): Cas
     events: cassette.events.map((l) => redactJsonLine(l, policy)),
     controlOut: cassette.controlOut?.map((l) => redactJsonLine(l, policy)),
     fingerprint: cassette.fingerprint
-      ? { ...cassette.fingerprint, skillSources: cassette.fingerprint.skillSources?.map((s) => redactText(s, policy)) }
+      ? {
+          ...cassette.fingerprint,
+          skillSources: cassette.fingerprint.skillSources?.map((s) => redactText(s, policy)),
+          // v5: redact the manifest's paths too (a path component can carry a customer name); keep the sha.
+          fileSigs: cassette.fingerprint.fileSigs?.map(([p, h]) => [redactText(p, policy), h] as [string, string]),
+        }
       : undefined,
   };
 }

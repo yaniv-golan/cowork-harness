@@ -8,6 +8,7 @@ import { safePathSegment, safeMountSegment, resolveDeclaredSource } from "./stag
 import { assignFolderMountNames, RESERVED_MOUNT_NAMES, type MountTier } from "./staging/mount-naming.js";
 import { MOUNT_BARE_NAME_MIN_VERSION, cmpVersionStrings } from "./baseline.js";
 import { containedRealPath } from "./boundary-paths.js";
+import { gitModeEnabled, gitCpFilter } from "./run/skill-files.js";
 
 /** Clone process env with Cowork's bg-env-strip applied. */
 function strippedEnv(baseline: PlatformBaseline): NodeJS.ProcessEnv {
@@ -243,7 +244,10 @@ export function buildLaunchPlan(
         `duplicate skill destination "skills/${dest}" — two skills.local entries share a basename (they would overwrite). Rename or relocate one.`,
       );
     skillDests.add(dest);
-    cpSync(src, join(configDir, "skills", dest), { recursive: true });
+    // Phase C (gated): under COWORK_HARNESS_GITSET, deliver only the git-tracked set so the sandbox matches
+    // what the hash covers (Finding 5 — no delivered-but-unhashed file). Default-off ⇒ raw copy, unchanged.
+    const skillFilter = gitModeEnabled() ? gitCpFilter(src) : null;
+    cpSync(src, join(configDir, "skills", dest), { recursive: true, ...(skillFilter ? { filter: skillFilter } : {}) });
   }
 
   // 4. mounts: uploads + projects + plugin roots (Cowork mount model). Every basename-derived leaf
