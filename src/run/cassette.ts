@@ -2000,6 +2000,7 @@ export async function replayCassette(
     effectiveFidelity: `replay:${cassette.effectiveFidelity ?? cassette.scenario.fidelity}`,
     baseline: cassette.scenario.baseline,
     result: rec.result,
+    resultErrorKind: rec.resultErrorKind, // Fix 5: re-derived by run.ts during the replay re-drive (same classifier)
     decisions: rec.decisions.map((d) => ({ kind: d.kind, name: d.name, decision: d.decision, by: d.by })),
     toolCounts: rec.toolCounts,
     gateDeliveries: rec.gateDeliveries,

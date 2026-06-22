@@ -40,6 +40,9 @@ export interface DecisionRecord {
 export interface RunRecord {
   runId: string;
   result: "success" | "error";
+  // Fix 5: when result === "error", whether the error looks like a transport drop (connection closed after a
+  // clean result) vs a genuine agent/skill failure. Undefined on success or unclassified errors.
+  resultErrorKind?: "transport" | "agent";
   initTools: string[];
   cwd?: string;
   transcript: string;
@@ -69,6 +72,34 @@ export interface RunHooks {
 }
 
 const DIALOG_AUTOCANCEL_MS = 6000; // request_user_dialog host auto-cancel (Ch25/L108)
+
+// Fix 5: transport-layer signatures. Deliberately NARROW — `API Error`/`terminated` are dropped because they
+// collide with skill-emitted error text and would misclassify genuine failures as transport.
+const TRANSPORT_SIGNATURE = /connection closed|ECONNRESET|socket hang up|fetch failed/i;
+
+/**
+ * Fix 5: classify a `result==="error"` as a tail-end TRANSPORT drop vs a genuine agent/skill failure, so the
+ * verdict can distinguish "the connection dropped after a clean result" from "the skill failed". Satisfiable
+ * by construction (the earlier draft's "prior result THIS turn" gate was empty — a turn has one result):
+ *   - "result" path (SDK wrapped a transport failure into an is_error result): transport iff the signature
+ *     matches. The result IS the signal — no prior-result gate.
+ *   - "exit" path (nonzero child exit): transport iff a clean result already landed this run AND the stderr
+ *     tail matches — the "child dropped after printing a result" case. Otherwise a genuine crash → agent.
+ *   - "spawn"/"protocol": always agent (a real fault).
+ * NOTE: the exact wire envelope of "API Error: Connection closed" is not yet pinned from a captured cassette;
+ * a non-matching signature simply falls back to "agent" (today's behavior) — never a false-green, since
+ * transport_error is itself severity:fail. See the round-2 plan's Fix 5 prerequisite.
+ */
+export function classifyResultError(
+  source: "result" | "exit" | "spawn" | "protocol",
+  signature: string,
+  sawSuccessResult: boolean,
+): "transport" | "agent" {
+  const isTransport = TRANSPORT_SIGNATURE.test(signature);
+  if (source === "result") return isTransport ? "transport" : "agent";
+  if (source === "exit") return sawSuccessResult && isTransport ? "transport" : "agent";
+  return "agent";
+}
 
 /** Seam 3 — Run: the turn loop + decision dispatch + RunRecord building. */
 export class Run {
@@ -115,6 +146,9 @@ export class Run {
   async drive(turns: string | AsyncIterable<string>, startOpts?: Parameters<AgentSession["start"]>[0]): Promise<RunRecord> {
     const turnIter = typeof turns === "string" ? oneShot(turns) : turns[Symbol.asyncIterator]();
     const transcript: string[] = [];
+    // Fix 5: run-level latch — did any turn reach a clean (non-error) result before the child died? Read by
+    // the exit-error path to tell "child dropped after a successful result" (transport) from a crash.
+    let sawSuccessResult = false;
 
     // #45: write the `initialize` control_request BEFORE the first user turn, matching the SPEC wire
     // order (initialize precedes the user turn). Idempotent — `start()` also calls init(), and replay
@@ -190,7 +224,15 @@ export class Run {
             await this.handleDecision(ev.request);
             break;
           case "result":
-            this.rec.result = ev.isError ? "error" : "success";
+            if (ev.isError) {
+              this.rec.result = "error";
+              // path (a): the SDK wrapped a transport failure into an is_error result — the result IS the
+              // signal (no prior-result gate). Classify off the SDK result payload + subtype.
+              this.rec.resultErrorKind = classifyResultError("result", `${ev.subtype ?? ""} ${ev.resultText ?? ""}`, sawSuccessResult);
+            } else {
+              this.rec.result = "success";
+              sawSuccessResult = true;
+            }
             this.rec.usage = ev.usage;
             {
               const next = await turnIter.next();
@@ -215,6 +257,10 @@ export class Run {
             // stderr tail is already embedded in ev.message by LiveAgentSession.
             if (ev.source === "spawn" || ev.source === "protocol" || ev.source === "exit") {
               this.rec.result = "error";
+              // Fix 5 path (b): a nonzero EXIT after a clean result, with a transport stderr tail, is the
+              // "tail-end drop after artifacts written" case → transport. spawn/protocol (and an exit with no
+              // prior success / a non-transport crash tail) stay "agent" — a genuine fault (preserve `:211-217`).
+              this.rec.resultErrorKind = classifyResultError(ev.source, ev.message, sawSuccessResult);
               this.rec.decisions.push({ kind: "tool", name: ev.source, decision: "error", by: "agent", detail: ev.message });
               this.session.close();
               break outerLoop;

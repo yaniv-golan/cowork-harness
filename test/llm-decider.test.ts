@@ -41,6 +41,40 @@ describe("LlmDecider", () => {
     await expect(new LlmDecider(complete).decide(ask("Format?", ["Markdown", "PDF"]), ctx())).rejects.toThrow(UnansweredError);
   });
 
+  it("Fix 1 — supplies free text for an options-bearing gate via the OTHER: directive (Cowork's 'Other' path)", async () => {
+    let seenPrompt = "";
+    const complete: Complete = async (p) => ((seenPrompt = p), "OTHER: Acme Robotics");
+    const d = await new LlmDecider(complete, "name it after the customer").decide(
+      ask("What should I name it?", ["Project Alpha", "Project Beta"]),
+      ctx(),
+    );
+    expect((d as any).response).toEqual({ kind: "question", answers: { "What should I name it?": "Acme Robotics" } });
+    expect((d as any).by).toBe("llm");
+    // the prompt advertises the OTHER affordance
+    expect(seenPrompt).toContain("OTHER:");
+  });
+
+  it("Fix 1 — matches a LABEL first, so a real option whose label starts 'OTHER:' is not hijacked to free text", async () => {
+    const complete: Complete = async () => "OTHER: pick me";
+    const d = await new LlmDecider(complete).decide(ask("Which?", ["OTHER: pick me", "Something else"]), ctx());
+    // selected as the literal label, not parsed as a free-text "pick me"
+    expect((d as any).response.answers).toEqual({ "Which?": "OTHER: pick me" });
+  });
+
+  it("Fix 1 — a bare out-of-set value (no OTHER: prefix, not a label) still FAILS LOUD", async () => {
+    const complete: Complete = async () => "Acme Robotics";
+    await expect(new LlmDecider(complete).decide(ask("Name it?", ["Project Alpha", "Project Beta"]), ctx())).rejects.toThrow(
+      UnansweredError,
+    );
+  });
+
+  it("Fix 1 — an empty OTHER: directive FAILS LOUD (no empty free-text answer)", async () => {
+    const complete: Complete = async () => "OTHER:   ";
+    await expect(new LlmDecider(complete).decide(ask("Name it?", ["Project Alpha", "Project Beta"]), ctx())).rejects.toThrow(
+      UnansweredError,
+    );
+  });
+
   it("abstains on an ORDINARY (optionless) permission request (parity default handles it)", async () => {
     const complete: Complete = async () => "x";
     const r = await new LlmDecider(complete).decide({ id: "p", kind: "permission", tool: "Bash", input: {} }, ctx());

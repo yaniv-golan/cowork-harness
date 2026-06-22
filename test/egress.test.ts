@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import net from "node:net";
 import { compile, startEgressProxy, freePort } from "../src/egress/proxy.js";
-import { parseEgressLine } from "../src/egress/sidecar.js";
+import { parseEgressLine, reframeEgressError, registerCleanup, drainCleanups } from "../src/egress/sidecar.js";
 import { validateBareDomain } from "../src/boundary-paths.js";
 import { Run } from "../src/run/run.js";
 
@@ -257,6 +257,63 @@ describe("#43 — parseEgressLine validates and never coerces unknown decisions 
     expect(warnings.filter((w) => w.startsWith("::warning::"))).toHaveLength(4);
     // The unknown decision must NOT have been silently coerced to "allow".
     expect(warnings.some((w) => w.includes("not coercing to allow"))).toBe(true);
+  });
+});
+
+describe("6e — reframeEgressError turns Docker pool-exhaustion into an actionable, non-leak diagnosis", () => {
+  it("re-frames the address-pool-exhaustion signature (and its connect/run variants)", () => {
+    const reframed = reframeEgressError(
+      new Error(
+        "docker network create failed: could not find an available, non-overlapping IPv4 address pool among the defaults to assign to the network",
+      ),
+    );
+    expect((reframed as Error).message).toMatch(/NOT a leak/);
+    expect((reframed as Error).message).toMatch(/docker network prune/);
+    expect((reframed as Error).message).toMatch(/default-address-pools/);
+
+    const classic = reframeEgressError(new Error("all predefined address pools have been fully subnetted"));
+    expect((classic as Error).message).toMatch(/concurrency pressure/);
+    // original message is preserved for debugging
+    expect((classic as Error).message).toMatch(/all predefined address pools/);
+  });
+
+  it("passes a non-pool error through unchanged (no false re-framing)", () => {
+    const orig = new Error("docker: permission denied while trying to connect to the Docker daemon socket");
+    expect(reframeEgressError(orig)).toBe(orig);
+  });
+});
+
+describe("2a — Ctrl-C cleanup registry (ordered container-before-network)", () => {
+  it("de-registers on the returned fn (a clean exit doesn't leave a thunk) and drains in phase order", () => {
+    const order: string[] = [];
+    const degNet = registerCleanup({ phase: "network", run: () => order.push("net") });
+    const degCon = registerCleanup({ phase: "container", run: () => order.push("con") });
+
+    // both registered → drain runs container BEFORE network (load-bearing ordering)
+    expect(drainCleanups()).toBe(2);
+    expect(order).toEqual(["con", "net"]);
+
+    // de-register both → a subsequent drain runs nothing (no leftover thunks from this run)
+    degNet();
+    degCon();
+    order.length = 0;
+    expect(drainCleanups()).toBe(0);
+    expect(order).toEqual([]);
+  });
+
+  it("a thunk that throws does not abort the drain (best-effort)", () => {
+    const ran: string[] = [];
+    const d1 = registerCleanup({
+      phase: "container",
+      run: () => {
+        throw new Error("boom");
+      },
+    });
+    const d2 = registerCleanup({ phase: "network", run: () => ran.push("net") });
+    expect(() => drainCleanups()).not.toThrow();
+    expect(ran).toEqual(["net"]); // the network thunk still ran despite the container thunk throwing
+    d1();
+    d2();
   });
 });
 

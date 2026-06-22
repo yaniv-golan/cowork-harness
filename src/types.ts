@@ -214,7 +214,7 @@ export const Assertion = z.object({
     .boolean()
     .optional()
     .describe(
-      "(verdict modifier) suppress the default-fail when the (partial 'core') agent image omits a capability the skill used but real Cowork ships — assert this only when the skill's fallback is genuinely equivalent (otherwise rebuild full parity / the rootfs `max` tier)",
+      "(verdict modifier) suppress the default-fail when the (partial 'core') agent image omits a capability the skill used but real Cowork ships — assert this only when the skill's fallback is genuinely equivalent (otherwise rebuild full parity, --build-arg COWORK_FULL_PARITY=1)",
     ),
   replay_protocol_fidelity: z
     .boolean()
@@ -283,6 +283,11 @@ export const ScenarioObject = z
     // re-stales only its own cassettes. Fail-closed: if any named skill is absent, the whole tree is hashed
     // (a typo can't silently narrow the gate).
     skills: z.array(z.string()).default([]),
+    // Fix 4b: capability families this skill's core path NEEDS (e.g. office_convert, ocr, pdf_tables). When
+    // set, the run HARD-FAILS if the running tier omits one (clause a) or cannot verify them — protocol /
+    // replay / COWORK_SKIP_CAPABILITY_PROBE (clause b) — closing the false-green for extraction-heavy skills.
+    // `allow_missing_capability: true` opts out. Validated against the known family list at run time.
+    requires_capabilities: z.array(z.string()).default([]),
   })
   .strict();
 // Back-compat (one minor): accept the deprecated top-level `profile:` key as an alias for `baseline:`,
@@ -308,6 +313,14 @@ export interface RunResult {
   fidelity: string;
   baseline: string;
   result: "success" | "error";
+  resultErrorKind?: "transport" | "agent"; // Fix 5: when result==="error", classify a tail-end transport drop vs a genuine failure
+  // Fix 6h: capability-probe outcome, so the guard roster can show "ran clean" (definitive) distinctly from
+  // "couldn't verify" (unverified) and "didn't run" (skipped) — never a false ✓ for a guard that didn't run.
+  capabilityProbe?: "definitive" | "unverified" | "skipped";
+  // Fix 4b: declared `requires_capabilities` the running tier could not satisfy — computed at run time
+  // (so verify-run/replay honor it without re-deriving). `omitted` = the image lacks them; `unverifiable` =
+  // the tier couldn't probe (protocol/replay/skip). computeVerdict fails on this unless allow_missing_capability.
+  requiresCapabilityUnmet?: { caps: string[]; reason: "omitted" | "unverifiable" };
   decisions: Array<{ kind: string; name: string; decision: string; by?: string; detail?: unknown; rationale?: string }>;
   toolCounts?: Record<string, number>; // O6: truthful per-tool call count (use this, NOT usage.server_tool_use which is host-routed-blind in cowork)
   // Part 3: did each gate's answer reach the model? `reason` distinguishes a `delivered:null` that means

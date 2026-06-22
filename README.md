@@ -300,7 +300,9 @@ prompt: |
 # Scripted answers — the can_use_tool control channel, same as Desktop's question UI
 answers:
   - when_question: "Which output format"   # regex (case-insensitive) on AskUserQuestion
-    choose: "Markdown"
+    choose: "Markdown"                      # by label; or choose: "2" for the 2nd option BY POSITION
+                                            # (index survives regenerated labels; ".*" matches any phrasing —
+                                            # last-resort, single gate/turn, after specific rules)
   - when_tool: Bash                        # tool-permission decisions
     allow_if: "!command.includes('rm -rf')"
     else: deny

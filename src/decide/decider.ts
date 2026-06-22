@@ -362,14 +362,35 @@ export class LlmDecider implements Decider {
         continue;
       }
       const raw = await this.complete(this.prompt(text, q.options, ctx), this.model);
+      // Match a LABEL first (matchLabel is fuzzy=false): keeps the common path unchanged and means a real
+      // option literally named "OTHER: …" is selected as a label, not hijacked by the free-text branch.
       const pick = matchLabel(raw, labels);
-      if (!pick)
-        throw new UnansweredError(
-          `LLM decider answer "${raw.trim().slice(0, 60)}" is not one of the options for "${text}"`,
-          `options were: ${labels.join(" | ")}`,
-        );
-      process.stderr.write(`[llm-decider] "${text}" → "${pick}"${this.intent ? ` (intent: ${this.intent})` : ""}\n`);
-      answers[text] = pick;
+      if (pick) {
+        process.stderr.write(`[llm-decider] "${text}" → "${pick}"${this.intent ? ` (intent: ${this.intent})` : ""}\n`);
+        answers[text] = pick;
+        continue;
+      }
+      // No label matched. Cowork auto-provides a free-text "Other" path on EVERY gate (binary-verified), so
+      // accept an explicit `OTHER: <value>` directive as free text — symmetric with ScriptedDecider's
+      // `answer:` escape hatch — delivered verbatim. A reply that is neither a label nor the explicit OTHER
+      // channel stays a LOUD failure: we do NOT coerce an arbitrary string into free text, or we'd mask a
+      // model that picked a wrong/hallucinated option label.
+      const other = /^\s*OTHER:\s*([\s\S]+)/i.exec(raw);
+      if (other) {
+        const free = other[1].trim();
+        if (free === "")
+          throw new UnansweredError(
+            `LLM decider returned an empty OTHER answer for "${text}"`,
+            "an OTHER free-text directive needs a non-empty value",
+          );
+        process.stderr.write(`[llm-decider] "${text}" → free-text (Other)${this.intent ? ` (intent: ${this.intent})` : ""}\n`);
+        answers[text] = free;
+        continue;
+      }
+      throw new UnansweredError(
+        `LLM decider answer "${raw.trim().slice(0, 60)}" is not one of the options for "${text}"`,
+        `options were: ${labels.join(" | ")}. For a free-text / name gate the model must reply \`OTHER: <value>\` (Cowork's auto-provided "Other" path) — a bare out-of-set value is rejected.`,
+      );
     }
     return { response: { kind: "question", answers }, by: "llm", rationale: this.intent ?? "LLM judgment", model: this.model };
   }
@@ -400,7 +421,9 @@ export class LlmDecider implements Decider {
       tail ? `Recent context (transcript tail):\n${tail}` : "",
       `Question: ${question}`,
       `Options:\n${options.map((o) => `- ${o.label}${o.description ? `: ${o.description}` : ""}`).join("\n")}`,
-      `Reply with ONLY the exact label of the single best option. No explanation, no punctuation — just the label.`,
+      `Reply with ONLY the exact label of the single best option — no explanation, no punctuation. ` +
+        `If none of the options fits and the intent calls for a custom value (the gate always allows a ` +
+        `free-text "Other" entry), reply with exactly \`OTHER: <your value>\` instead.`,
     ]
       .filter(Boolean)
       .join("\n\n");

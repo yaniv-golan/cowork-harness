@@ -4,6 +4,7 @@ export interface VerdictSignal {
   code:
     | "assertion"
     | "result_error"
+    | "transport_error"
     | "permissive_auto_allow"
     | "outputs_delete"
     | "host_path_leak"
@@ -14,10 +15,40 @@ export interface VerdictSignal {
   severity: "fail" | "warn";
   message: string;
 }
+/** Fix 6h: a guard's visibility status this run. `ok` = ran and found nothing; `fired` = caught its failure
+ *  mode; `na` = not applicable on this lane/tier; `unverified` = ran but couldn't conclude. NEVER `ok` for a
+ *  guard that didn't run — a false ✓ would be its own silent-false-green. */
+export type GuardStatus = "ok" | "fired" | "na" | "unverified";
+export interface GuardReport {
+  name: string;
+  status: GuardStatus;
+}
 export interface Verdict {
   pass: boolean;
   exitCode: 0 | 1;
   signals: VerdictSignal[];
+  guards: GuardReport[];
+}
+
+/** Fix 6h: build the "guards active this run" roster from the guards' INPUT PRECONDITIONS (lane + probe
+ *  outcome), not from the signal list — a guard that ran clean pushes no signal, so absence is ambiguous. */
+function guardRoster(result: RunResult, lane: "live" | "replay", signals: VerdictSignal[]): GuardReport[] {
+  const fired = (code: VerdictSignal["code"]) => signals.some((s) => s.code === code);
+  const live = lane === "live";
+  const roster: GuardReport[] = [];
+
+  // capability-use: live built-image tiers, only when the probe ran definitively.
+  let cap: GuardStatus;
+  if (!live || result.capabilityProbe === undefined || result.capabilityProbe === "skipped") cap = "na";
+  else if (result.capabilityProbe === "unverified") cap = "unverified";
+  else cap = fired("missing_capability") ? "fired" : "ok";
+  roster.push({ name: "capability-use", status: cap });
+
+  // fail-when-silent scan guards run on the live lane only; a cassette can't reproduce them.
+  roster.push({ name: "permissive-auto-allow", status: !live ? "na" : fired("permissive_auto_allow") ? "fired" : "ok" });
+  roster.push({ name: "host-path", status: !live ? "na" : fired("host_path_leak") ? "fired" : "ok" });
+  roster.push({ name: "outputs-delete", status: !live ? "na" : fired("outputs_delete") ? "fired" : "ok" });
+  return roster;
 }
 
 /**
@@ -48,7 +79,41 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
 
   for (const a of result.assertions)
     if (!a.pass) signals.push({ code: "assertion", severity: "fail", message: a.message ?? "assertion failed" });
-  if (result.result === "error") signals.push({ code: "result_error", severity: "fail", message: "run result was error" });
+  if (result.result === "error") {
+    // Fix 5: a tail-end TRANSPORT drop (connection closed after a clean result) is still a fail — a run whose
+    // stream didn't cleanly complete is not a faithful green — but distinguish it from a skill failure so the
+    // footer doesn't read as a skill defect. Message is assertion-count-aware (no false comfort on an
+    // unasserted run) and lane-aware (replay/verify-run write no artifacts, so don't claim they were).
+    if (result.resultErrorKind === "transport") {
+      const allPass = result.assertions.every((a) => a.pass);
+      const msg =
+        result.assertions.length === 0
+          ? "transport dropped; NO assertions were defined, so success could not be verified — likely a flaky connection, retry"
+          : !allPass
+            ? "transport dropped after a successful result, but an assertion also failed — treat as a real failure"
+            : lane === "replay"
+              ? "transport dropped after a successful result; assertions re-checked on replay — likely a flaky connection, retry"
+              : "transport dropped after a successful result; assertions passed and artifacts were written — likely a flaky connection, retry";
+      signals.push({ code: "transport_error", severity: "fail", message: msg });
+    } else {
+      signals.push({ code: "result_error", severity: "fail", message: "run result was error" });
+    }
+  }
+
+  // Fix 4b: a declared requires_capabilities the running tier couldn't satisfy is a hard fail on BOTH lanes —
+  // the field is run-time truth persisted to result.json, so verify-run/replay honor it (a clean full-parity
+  // run records nothing here, so this never false-fails a later verify-run). Opt out with allow_missing_capability.
+  if (result.requiresCapabilityUnmet?.caps.length && !result.assertions.some((a) => a.assertion.allow_missing_capability === true)) {
+    const { caps, reason } = result.requiresCapabilityUnmet;
+    signals.push({
+      code: "missing_capability",
+      severity: "fail",
+      message:
+        reason === "omitted"
+          ? `the running image omits declared required capabilit(ies): ${caps.join(", ")} — rebuild full parity (--build-arg COWORK_FULL_PARITY=1), or assert allow_missing_capability: true if the fallback is equivalent.`
+          : `skill declares requires_capabilities [${caps.join(", ")}] but this tier could not verify them — run on a live built-image tier, or assert allow_missing_capability: true.`,
+    });
+  }
 
   if (lane === "live") {
     const authored = result.assertions.map((a) => a.assertion);
@@ -72,8 +137,8 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
         severity: "fail",
         message:
           `the agent image omits capabilit(ies) the skill used: ${result.missingCapabilityUse.join(", ")} — ` +
-          "likely a FALSE NEGATIVE (real Cowork ships them). Rebuild full parity (--build-arg COWORK_FULL_PARITY=1) " +
-          "or use the rootfs `max` tier; or assert allow_missing_capability: true if the fallback is equivalent.",
+          "likely a FALSE NEGATIVE (real Cowork ships them). Rebuild full parity (--build-arg COWORK_FULL_PARITY=1); " +
+          "or assert allow_missing_capability: true if the fallback is equivalent.",
       });
 
     if (result.scan?.outputsDeletes.length && !authored.some((a) => a.no_delete_in_outputs !== undefined))
@@ -120,5 +185,5 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
     });
 
   const pass = !signals.some((s) => s.severity === "fail");
-  return { pass, exitCode: pass ? 0 : 1, signals };
+  return { pass, exitCode: pass ? 0 : 1, signals, guards: guardRoster(result, lane, signals) };
 }
