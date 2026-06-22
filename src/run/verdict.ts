@@ -11,6 +11,7 @@ export interface VerdictSignal {
     | "non_deterministic"
     | "l0_plugin_divergence"
     | "missing_capability"
+    | "stalled"
     | "prompt_asset_missing";
   severity: "fail" | "warn";
   message: string;
@@ -112,6 +113,20 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
         reason === "omitted"
           ? `the running image omits declared required capabilit(ies): ${caps.join(", ")} — rebuild full parity (--build-arg COWORK_FULL_PARITY=1), or assert allow_missing_capability: true if the fallback is equivalent.`
           : `skill declares requires_capabilities [${caps.join(", ")}] but this tier could not verify them — run on a live built-image tier, or assert allow_missing_capability: true.`,
+    });
+  }
+
+  // H2: a run that ended on an unanswered plain-text question is a hard fail on BOTH lanes (the flag is
+  // re-derived by run.ts's detector on the live run AND the replay re-drive, so a recorded stall fails replay
+  // too). `result:"success"` alone is too generous — the SDK turn didn't error, but the agent asked for input
+  // and stopped, so the task did not complete. Opt out with allow_stall when ending on a question is intended.
+  if (result.stalledOnQuestion && !result.assertions.some((a) => a.assertion.allow_stall === true)) {
+    signals.push({
+      code: "stalled",
+      severity: "fail",
+      message:
+        "run ended on an unanswered question — the agent asked for input and stopped; the task did not complete. " +
+        "Script the answer (answer: / --answer / a decider), or assert allow_stall: true if ending on a question is intended.",
     });
   }
 

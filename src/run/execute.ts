@@ -564,6 +564,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     baseline: baseline.appVersion,
     result: record.result,
     resultErrorKind: record.resultErrorKind, // Fix 5: transport vs agent classification of a result:"error"
+    stalledOnQuestion: record.stalledOnQuestion, // H2: run ended on an unanswered plain-text question
     decisions: record.decisions.map((d) => ({
       kind: d.kind,
       name: d.name,

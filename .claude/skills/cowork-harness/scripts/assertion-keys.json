@@ -4,6 +4,7 @@
     "allow_l0_plugin_divergence",
     "allow_missing_capability",
     "allow_permissive_auto_allow",
+    "allow_stall",
     "artifact_json",
     "dispatch_count_max",
     "egress_allowed",
@@ -34,6 +35,7 @@
   "verdictModifierKeys": [
     "allow_l0_plugin_divergence",
     "allow_missing_capability",
-    "allow_permissive_auto_allow"
+    "allow_permissive_auto_allow",
+    "allow_stall"
   ]
 }

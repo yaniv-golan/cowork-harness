@@ -223,6 +223,10 @@
             "description": "(verdict modifier) suppress the default-fail when the (partial 'core') agent image omits a capability the skill used but real Cowork ships — assert this only when the skill's fallback is genuinely equivalent (otherwise rebuild full parity, --build-arg COWORK_FULL_PARITY=1)",
             "type": "boolean"
           },
+          "allow_stall": {
+            "description": "(verdict modifier) suppress the default-fail when a run ends on an unanswered question (the agent asked for input and stopped) — assert this only when ending on a question is the intended terminal state; otherwise script the answer (answer:/--answer/decider)",
+            "type": "boolean"
+          },
           "replay_protocol_fidelity": {
             "description": "(replay-only, NOT authorable) serializeDecision output matched the frozen recording — the token-free O7 guard; synthesized by the replay lane and rejected if written in a scenario",
             "type": "boolean"

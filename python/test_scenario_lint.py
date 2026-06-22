@@ -159,3 +159,17 @@ def test_lint_single_file_still_works(tmp_path):
     _write_scenario(f, body="assert:\n  - result: success\n")
     code, out = _lint_cmd([f], json_out=False)
     assert code == 0
+
+
+def test_positional_choose_emits_order_advisory(tmp_path):
+    # H1: a positional `choose` (index or `first`) is order-dependent → INFO advisory.
+    idx = _rules('answers:\n  - when_question: ".*"\n    choose: "2"\n', tmp_path)
+    assert "positional-choose-order" in idx
+    first = _rules('answers:\n  - when_question: ".*"\n    choose: first\n', tmp_path)
+    assert "positional-choose-order" in first
+
+
+def test_label_choose_no_order_advisory(tmp_path):
+    # by-label is reproducible → no advisory.
+    rules = _rules('answers:\n  - when_question: ".*"\n    choose: "Markdown"\n', tmp_path)
+    assert "positional-choose-order" not in rules

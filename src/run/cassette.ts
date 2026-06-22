@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { warn } from "../io.js";
-import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, existsSync, readdirSync, statSync } from "node:fs";
+import { readFileSync, writeFileSync, renameSync, mkdirSync, mkdtempSync, existsSync, readdirSync, statSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join, dirname, relative, isAbsolute, resolve, sep } from "node:path";
@@ -34,6 +34,15 @@ import { parse as parseYaml } from "yaml";
 
 const out = (s: string) => process.stdout.write(s + "\n");
 const log = (s: string) => process.stderr.write(s + "\n");
+
+/** H5: write a committed cassette atomically — a mid-write crash must never leave a partial/corrupt file at
+ *  the real path. Write to a same-dir temp (pid-suffixed so two concurrent writers can't collide) then
+ *  `renameSync` over the target (atomic on POSIX). Mirrors the external-channel.ts temp+rename pattern. */
+function writeFileAtomic(path: string, data: string): void {
+  const tmp = `${path}.tmp.${process.pid}`;
+  writeFileSync(tmp, data);
+  renameSync(tmp, path);
+}
 
 /** #1: a snapshotted artifact — relative path + size + content hash, plus an inlined raw body for small
  *  files (so `artifact_json`/`file_exists`/`user_visible_artifact` survive token-free replay). A file too
@@ -1429,7 +1438,7 @@ async function recordScenarioObject(
     await assertRedactionVerdictPreserved(base, redacted);
     cassette = redacted;
   }
-  writeFileSync(cassettePath, JSON.stringify(cassette, null, 2));
+  writeFileAtomic(cassettePath, JSON.stringify(cassette, null, 2)); // H5: atomic — no partial cassette on a mid-write crash
   return { result, cassettePath, artifacts: artifacts.length };
 }
 
@@ -1773,7 +1782,7 @@ export function cmdRehash(args: string[]): void {
         cassetteVersion: CASSETTE_VERSION,
         fingerprint: { ...liveFingerprint },
       };
-      writeFileSync(file, JSON.stringify(updated, null, 2));
+      writeFileAtomic(file, JSON.stringify(updated, null, 2)); // H5: atomic in-place rehash write (staleness keys on contentSig, not mtime — rename is safe)
     }
     results.push({
       file,
@@ -2140,6 +2149,7 @@ export async function replayCassette(
     baseline: cassette.scenario.baseline,
     result: rec.result,
     resultErrorKind: rec.resultErrorKind, // Fix 5: re-derived by run.ts during the replay re-drive (same classifier)
+    stalledOnQuestion: rec.stalledOnQuestion, // H2: re-derived by run.ts's detector during the replay re-drive — so a recorded stall fails replay too
     decisions: rec.decisions.map((d) => ({ kind: d.kind, name: d.name, decision: d.decision, by: d.by })),
     toolCounts: rec.toolCounts,
     gateDeliveries: rec.gateDeliveries,

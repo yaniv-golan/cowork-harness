@@ -78,6 +78,7 @@ VERDICT_MODIFIER_KEYS = {
     "allow_permissive_auto_allow",
     "allow_l0_plugin_divergence",
     "allow_missing_capability",
+    "allow_stall",
 }
 
 # Every key the replay-class logic knows how to handle. `replay_protocol_fidelity` is valid-but-not-authorable
@@ -177,6 +178,13 @@ def _all_assert_keys(items):
     for item in items:
         keys |= set(item.keys())
     return keys
+
+
+def _is_positional_choose(choose):
+    """True if a `choose` value selects by POSITION — `first` or a 1-based index (scalar or in a
+    multiSelect list) — as opposed to an exact label. Positional answers are order-dependent (H1)."""
+    vals = choose if isinstance(choose, list) else [choose]
+    return any(isinstance(v, str) and (v == "first" or v.isdigit()) for v in vals)
 
 
 def lint_doc(doc, path, raw_lines):
@@ -328,7 +336,31 @@ def lint_doc(doc, path, raw_lines):
                 f"assertion(s) {manifest_present} evaluate on replay only when the cassette carries an "
                 "`artifacts` manifest (`record` snapshots one). A manifest-less cassette skips them "
                 "(with a loud warning).",
-                "Record with a current harness so the cassette carries the artifacts manifest.",
+                "If the cassette carries no `artifacts` manifest (recorded by an older harness), re-record "
+                "so these assertions evaluate against the captured artifacts; a current cassette already has one.",
+                path,
+            )
+        )
+
+    # I (H1): a positional `choose` (first / 1-based index) is robust to LABEL drift but NOT to option
+    # RE-ORDERING — the gate's option order can vary run-to-run, so the index can land on a different option.
+    # Advisory only: a stable-order gate IS reproducible, and the linter can't tell stable from unstable order.
+    answers = doc.get("answers")
+    positional = []
+    if isinstance(answers, list):  # a scenario's `answers:` is always a bare list of rules
+        for idx, rule in enumerate(answers):
+            if isinstance(rule, dict) and _is_positional_choose(rule.get("choose")):
+                positional.append(idx)
+    if positional:
+        findings.append(
+            Finding(
+                "INFO",
+                "positional-choose-order",
+                f"answer rule(s) {positional} use a positional `choose` (first / index) — robust to label "
+                "drift but NOT to option re-ordering: the gate's option order can vary run-to-run, so the "
+                "index can land on a different option (a silent re-record flake).",
+                'If the gate\'s option order is stable, pin by exact label (choose: "<label>"); use a '
+                "positional index only when labels drift but order holds.",
                 path,
             )
         )

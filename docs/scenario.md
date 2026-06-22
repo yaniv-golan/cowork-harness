@@ -120,7 +120,11 @@ the CLI's `--decider-llm`). It is **non-deterministic** by construction, so a ru
 > - `when_question: ".*"` is a catch-all that matches any phrasing.
 >
 > So `when_question: ".*"` + `choose: "2"` pins a gate whose wording and labels both drift, with no live
-> decider. **Caveat:** rules are evaluated in order and the *first* matching `when_question` wins, so `.*`
+> decider — **but only when the option *order* is stable.** A positional `choose` is robust to label drift,
+> NOT to option *re-ordering*: if the gate can present its options in a different order run-to-run, the index
+> lands on a different option (a silent re-record flake; `lint` flags positional `choose` with an advisory).
+> When the order is stable, prefer an exact label (`choose: "<label>"`); use position only when labels drift
+> but order holds. **Caveat:** rules are evaluated in order and the *first* matching `when_question` wins, so `.*`
 > answers *any* gate — use it only as a **last-resort fallback for a single expected gate per turn**, and
 > always place it *after* more-specific rules. This covers stochastic *labels*; it does **not** cover
 > structural stochasticity (whether/which gate appears), which still needs a live decider as above.
@@ -222,6 +226,7 @@ if *every* key passes (don't rely on the first; keep one concern per item unless
 | `allow_permissive_auto_allow: true` | verdict modifier — suppresses the default-fail when the run recorded a cowork-parity permissive auto-allow; use this for tests that **deliberately** assert Cowork's permissive behavior rather than strict scripted coverage |
 | `allow_missing_capability: true` | verdict modifier (**live tiers only**) — suppresses the default-fail when the lean/`core` agent image omits a capability the skill used but real Cowork ships (OCR/LibreOffice/markitdown/opencv/PDF-tables); assert only when the skill's fallback is genuinely equivalent, else rebuild full parity (`--build-arg COWORK_FULL_PARITY=1`). Also opts out of the `requires_capabilities` declared-need check below. |
 | `allow_l0_plugin_divergence: true` | verdict modifier — opts into L0/protocol plugin divergence, suppressing the plugin-fidelity default-fail |
+| `allow_stall: true` | verdict modifier — suppresses the default-fail when a run ends on an unanswered plain-text question (the agent asked for input and stopped); assert only when ending on a question is the intended terminal state, otherwise script the answer (`answer:` / `--answer` / a decider) |
 | `transcript_no_host_path: true` | no host path (`/Users`, `/opt`) leaked into model-visible text |
 | `egress_denied: <host>` | the host was blocked by the egress proxy |
 | `egress_allowed: <host>` | the host was allowed through |
@@ -390,7 +395,10 @@ in the `--output-format json` envelope.
 **Terminal output.** `run` is verdict-first and prints the **failing transcript inline** on a `FAIL`;
 `--verbose`/`-V` shows the transcript for every scenario, `--quiet` shows only the verdict. `--output-format
 json` emits the machine envelope `{tool, version, command, ok, results[], error}` on stdout (one
-`RunResult` per scenario; overall pass = `result==="success" && assertions.every(pass)`) — full schema
+`RunResult` per scenario; overall pass = `result==="success" && assertions.every(pass)` **AND a clean
+`computeVerdict`** — a verdict signal like `stalled` (ended on an unanswered question), `transport_error`, or a
+missing-capability/boundary signal can still fail a run whose `result` is `success` and whose assertions all
+pass, unless the matching `allow_*` modifier is asserted) — full schema
 in [SPEC §11](../SPEC.md). Human output is stderr; stdout stays machine-only under `--output-format json`.
 
 ## Running

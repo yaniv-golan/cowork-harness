@@ -213,6 +213,12 @@ export const Assertion = z.object({
     .describe(
       "(verdict modifier) suppress the default-fail when the (partial 'core') agent image omits a capability the skill used but real Cowork ships — assert this only when the skill's fallback is genuinely equivalent (otherwise rebuild full parity, --build-arg COWORK_FULL_PARITY=1)",
     ),
+  allow_stall: z
+    .boolean()
+    .optional()
+    .describe(
+      "(verdict modifier) suppress the default-fail when a run ends on an unanswered question (the agent asked for input and stopped) — assert this only when ending on a question is the intended terminal state; otherwise script the answer (answer:/--answer/decider)",
+    ),
   replay_protocol_fidelity: z
     .boolean()
     .optional()
@@ -254,6 +260,7 @@ export const VERDICT_MODIFIER_KEYS = [
   "allow_permissive_auto_allow",
   "allow_missing_capability",
   "allow_l0_plugin_divergence",
+  "allow_stall",
 ] as const satisfies readonly (keyof Assertion)[];
 
 export const ScenarioObject = z.strictObject({
@@ -309,6 +316,11 @@ export interface RunResult {
   baseline: string;
   result: "success" | "error";
   resultErrorKind?: "transport" | "agent"; // Fix 5: when result==="error", classify a tail-end transport drop vs a genuine failure
+  // H2: the run ended on an unanswered plain-text question (the agent asked for input and stopped) while
+  // result==="success". A false-green: the SDK turn didn't error, but the task did not complete. computeVerdict
+  // fails on this (a `stalled` signal) unless the scenario asserts allow_stall. Scenario-lane only; re-derived
+  // by the detector in run.ts on both the live and replay re-drive (NOT a persisted-then-read flag).
+  stalledOnQuestion?: boolean;
   // Fix 6h: capability-probe outcome, so the guard roster can show "ran clean" (definitive) distinctly from
   // "couldn't verify" (unverified) and "didn't run" (skipped) — never a false ✓ for a guard that didn't run.
   capabilityProbe?: "definitive" | "unverified" | "skipped";

@@ -35,3 +35,5 @@ Start with the [project README](../README.md) for the overview and quick start, 
 | AI agent instructions for this repo | [AGENTS.md](../AGENTS.md) |
 | Security & threat model | [../SECURITY.md](../SECURITY.md) |
 | Contributing | [../CONTRIBUTING.md](../CONTRIBUTING.md) |
+| CI recipe — copy-paste GitHub Actions for the token-free PR gate + nightly live lane | [../.claude/skills/cowork-harness/references/ci-recipe.md](../.claude/skills/cowork-harness/references/ci-recipe.md) |
+| Releasing — the branch → PR → tag publish flow | [../RELEASING.md](../RELEASING.md) |
