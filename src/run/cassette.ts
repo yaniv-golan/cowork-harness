@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, existsSync, readdi
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join, dirname, relative, isAbsolute, resolve, sep } from "node:path";
-import { type Scenario, type RunResult, type Assertion, Assertion as AssertionSchema } from "../types.js";
+import { type Scenario, type RunResult, type Assertion, Assertion as AssertionSchema, VERDICT_MODIFIER_KEYS } from "../types.js";
 import { executeScenario, parseScenarioFile, collectArtifacts, parseSessionFile, slugForPath } from "./execute.js";
 import { loadSession, resolveSessionPaths } from "../session.js";
 import { loadBaseline } from "../baseline.js";
@@ -25,7 +25,7 @@ import { jsonEnvelope, parseOutputFormat } from "./envelope.js";
 import { parseArgs } from "../cli-args.js";
 import { resolveInputs } from "./inputs.js";
 import { realProbe } from "./doctor.js";
-import { hashSkillDirs, hashSharedOnly, computeContentSig } from "./skill-hash.js";
+import { hashSkillDirs, hashSharedOnly, computeContentSig, skillHashEntries, OS_JUNK_PATTERN } from "./skill-hash.js";
 import { computeVerdict } from "./verdict.js";
 import { redactJsonLine, redactText, redactStructural, loadRedactionPolicy, type RedactionPolicy } from "../redact.js";
 import { collectSecrets, scrub, scrubField } from "../secrets.js";
@@ -60,7 +60,19 @@ interface Fingerprint {
   skillScope?: string[]; // F-6: the skills the hash was scoped to (empty/absent = whole-tree); diagnostics
   sharedHash?: string; // G-4: shared-root hash for scoped cassettes; absent on whole-tree or non-plugin-root mounts
   contentSig?: string; // v3+: algorithm-independent content fingerprint; used by `rehash` to verify content is unchanged across format bumps
+  // v5+: per-file manifest [relpath, contentSha] of the exact files feeding skillHash, so a staleness mismatch
+  // names the EXACT changed/added/removed file instead of a bucket. Paths are ROOT-RELATIVE (no host path) and
+  // scanned/redacted like skillSources (privacy). Omitted (with fileSigsOmitted:true) above MANIFEST_MAX_FILES.
+  fileSigs?: Array<[string, string]>;
+  fileSigsOmitted?: boolean;
+  // Phase C: the boundary used for skillHash — "git" (git-tracked set, COWORK_HARNESS_GITSET=1) or "raw"
+  // (legacy walk; default). A record-vs-verify mode flip makes hash comparison meaningless → re-record.
+  mode?: "git" | "raw";
 }
+
+// Cap the per-file manifest so a huge plugin tree doesn't bloat a committed cassette; above this, omit it
+// (fileSigsOmitted:true) and degrade to the bucket-level message — loudly, never silently.
+const MANIFEST_MAX_FILES = 2000;
 
 export interface Cassette {
   $schema?: string; // provenance: schema URL for this cassette format version
@@ -97,7 +109,19 @@ export interface Cassette {
 // user_visible_artifact from the real mount set instead of a hardcoded `.projects/` prefix. A folder-
 // artifact cassette recorded pre-v4 has no folder root stored → must be RE-RECORDED, not rehashed
 // (rehash only re-hashes skill fingerprints; it cannot reconstruct folder names).
-export const CASSETTE_VERSION = 4;
+// v5 (H9): `skillHash` EXCLUDES OS-junk files (.DS_Store/Thumbs.db/desktop.ini/…) so an out-of-band OS
+// metadata touch can't re-stale a cassette; per-file manifest (`fileSigs`) added for exact-diff reporting.
+// v6 (staleness redesign — breaking): `contentSig` is UNIFIED onto the `skillHash` walk (same file set:
+// OS-junk/scope/ignore + in-tree-symlink-by-target), and the **git-tracked file set is the DEFAULT boundary**
+// (a dir in a git work tree hashes/delivers only tracked files; non-repo dirs fall back to raw). The
+// `contentSig` algorithm therefore changed → a pre-v6 cassette's `contentSig` is non-comparable, so `rehash`
+// routes pre-v6 cassettes to a re-record (honest "algorithm changed" message, not "content changed").
+export const CASSETTE_VERSION = 6;
+// The contentSig algorithm version. Bumped whenever computeContentSig's INPUT/encoding changes (the v6
+// unification). `rehash` only byte-compares contentSig within the same algo version; across a bump it
+// re-records. Derived from cassetteVersion: < 6 ⇒ algo 1 (legacy), ≥ 6 ⇒ algo 2 (unified).
+const CONTENTSIG_ALGO = 2;
+const contentSigAlgoOf = (cassetteVersion: number) => (cassetteVersion >= 6 ? 2 : 1);
 
 /** Canonical URL of the JSON Schema for this cassette format version.
  *  Appears in every written cassette as `$schema` so editors and unfamiliar readers
@@ -273,9 +297,17 @@ export function buildFingerprint(
   const fp: Fingerprint = {
     baseline: baselineAppVersion,
     skillHash: hashResult.hash,
-    contentSig: computeContentSig(dirs), // v3: algorithm-independent; survives hash-format changes
+    contentSig: computeContentSig(dirs, scopeSkills, hashIgnore), // v6: unified onto the skillHash walk (same set)
     skillSources: dirs.sort().map((d) => relative(baseDir, d)),
   };
+  // Phase C: record the boundary mode only when git (the default raw needs no marker → keeps v<5 cassettes and
+  // raw-mode v5 cassettes byte-clean). A recorded "git" vs a live "raw" (or vice-versa) is a mode flip.
+  if (hashResult.mode === "git") fp.mode = "git";
+  // v5: per-file manifest for exact-diff staleness reporting. Reuses the same walk/scope/ignore/OS-junk set as
+  // skillHash (skillHashEntries → hashSkillDirs), so the manifest names exactly what the hash covers. Capped.
+  const entries = skillHashEntries(dirs, scopeSkills, hashIgnore);
+  if (entries.length > MANIFEST_MAX_FILES) fp.fileSigsOmitted = true;
+  else fp.fileSigs = entries.map((e) => [e.path, e.sha] as [string, string]);
   if (scopeSkills && scopeSkills.length) fp.skillScope = [...scopeSkills].sort();
   // G-4: for scoped cassettes, store the shared-root hash separately so checkStaleness can name
   // the changed bucket (skill vs shared root) at verify time.
@@ -355,6 +387,8 @@ export function scanCassette(cassette: Cassette, allow: AllowInput[]): ScanFindi
   findings.push(...scanText(JSON.stringify(cassette.scenario.answers ?? null), "scenario.answers", allow, FULL));
   findings.push(...scanText(JSON.stringify(cassette.scenario.assert ?? null), "scenario.assert", allow, FULL));
   for (const s of cassette.fingerprint?.skillSources ?? []) findings.push(...scanText(s, "fingerprint.skillSources", allow, FULL));
+  // v5: per-file manifest paths are a committed surface — scan them like skillSources (a path can name a customer).
+  for (const [p] of cassette.fingerprint?.fileSigs ?? []) findings.push(...scanText(p, "fingerprint.fileSigs", allow, FULL));
   // human-authored / structural METADATA fields were never scanned, so a customer folder mount name
   // in userVisibleRoots (or a customer name in the scenario name / session path) could leak through `verify-
   // cassettes`. Scan them too, prefixed `metadata:` so a reviewer knows redaction here ALSO rewrites
@@ -364,6 +398,82 @@ export function scanCassette(cassette: Cassette, allow: AllowInput[]): ScanFindi
   findings.push(...scanText(cassette.scenario.session ?? "", "metadata:scenario.session", allow, FULL));
   if (cassette.scenarioSource) findings.push(...scanText(cassette.scenarioSource, "metadata:scenarioSource", allow, FULL));
   return findings;
+}
+
+const DEBUG_SKILLHASH_ENV = "COWORK_HARNESS_DEBUG_SKILLHASH";
+
+/** H9 debug: dump the per-file entries currently feeding the skill hash for a session (same resolution as
+ *  `buildFingerprint`), so a staleness mismatch shows WHICH files are in the hash — incl. unexpected
+ *  OS-junk / run-generated files that are the usual "stale immediately after record" cause. */
+export function explainSkillHash(
+  sessionPath: string,
+  cassetteDir: string | undefined,
+  scopeSkills?: string[],
+): { path: string; sha: string }[] {
+  const { dirs, hashIgnore } = skillSourceDirs(sessionPath, cassetteDir);
+  if (dirs.length === 0) return [];
+  return skillHashEntries(dirs, scopeSkills, hashIgnore);
+}
+
+/** H9 debug: on a skillHash mismatch, if COWORK_HARNESS_DEBUG_SKILLHASH=1, write the file set the hash sees
+ *  to stderr (flagging OS-junk) plus whether the algorithm-independent contentSig also drifted. When the flag
+ *  is OFF, write a one-line hint so the affordance is discoverable. Diagnostics only — never affects the gate. */
+function debugSkillHashMismatch(cassette: Cassette, cassetteDir: string, fp: Fingerprint, live: Fingerprint): void {
+  if (process.env[DEBUG_SKILLHASH_ENV] !== "1") {
+    process.stderr.write(
+      `cowork-harness: skill-hash: set ${DEBUG_SKILLHASH_ENV}=1 to list the files feeding the hash (find the drift source)\n`,
+    );
+    return;
+  }
+  const scope = cassette.scenario.skills?.length ? cassette.scenario.skills.join(", ") : "whole-tree";
+  let entries: { path: string; sha: string }[] = [];
+  try {
+    entries = explainSkillHash(cassette.scenario.session, cassetteDir, cassette.scenario.skills);
+  } catch (e) {
+    process.stderr.write(`cowork-harness: skill-hash debug: could not enumerate files: ${String((e as Error)?.message ?? e)}\n`);
+    return;
+  }
+  process.stderr.write(`cowork-harness: skill-hash debug — ${entries.length} file(s) feeding the hash (scope: ${scope}):\n`);
+  let junk = 0;
+  for (const e of entries) {
+    const isJunk = OS_JUNK_PATTERN.test(e.path);
+    if (isJunk) junk++;
+    process.stderr.write(
+      `  ${e.sha.slice(0, 12)}  ${e.path}${isJunk ? "   ⚠ OS-junk / non-runtime — add to .cowork-hashignore (or it will keep re-staling)" : ""}\n`,
+    );
+  }
+  const sigVerdict =
+    fp.contentSig === undefined || live.contentSig === undefined ? "n/a" : fp.contentSig === live.contentSig ? "MATCHES" : "DIFFERS";
+  process.stderr.write(
+    `cowork-harness: skill-hash debug — skillHash recorded ${String(fp.skillHash).slice(0, 12)} vs live ${String(live.skillHash).slice(0, 12)}; ` +
+      `contentSig ${sigVerdict}${junk ? ` · ${junk} OS-junk file(s) flagged above` : ""}. ` +
+      `Note: this lists the CURRENT tree; a true per-file diff vs record needs the record-time set (re-record after excluding junk, then compare).\n`,
+  );
+}
+
+/** v5: diff two per-file manifests (recorded vs live) into an exact "what changed" SUMMARY — the actionable
+ *  upgrade over the bucket-level "something changed". Returns just the summary (no prefix/suffix), so the
+ *  caller can append it to the bucket/generic message (preserving the G-4 shared-vs-scoped semantic). Samples
+ *  up to 3 paths per category. Null when the manifests are equal (hashes differ but files don't — caller
+ *  falls back to its bucket message). */
+function diffFileSigs(recorded: Array<[string, string]>, live: Array<[string, string]>): string | null {
+  const rec = new Map(recorded);
+  const liv = new Map(live);
+  const added: string[] = [];
+  const removed: string[] = [];
+  const changed: string[] = [];
+  for (const [p, h] of liv) {
+    if (!rec.has(p)) added.push(p);
+    else if (rec.get(p) !== h) changed.push(p);
+  }
+  for (const [p] of rec) if (!liv.has(p)) removed.push(p);
+  if (!added.length && !removed.length && !changed.length) return null;
+  const sample = (a: string[]) => `${a.slice(0, 3).join(", ")}${a.length > 3 ? `, +${a.length - 3} more` : ""}`;
+  const parts: string[] = [];
+  if (changed.length) parts.push(`${changed.length} changed (${sample(changed)})`);
+  if (added.length) parts.push(`${added.length} added (${sample(added)})`);
+  if (removed.length) parts.push(`${removed.length} removed (${sample(removed)})`);
+  return parts.join("; ");
 }
 
 /** B3 staleness GATE: recompute the fingerprint and report drift. Unlike `replayCassette` (which WARNS),
@@ -388,20 +498,34 @@ export function checkStaleness(cassette: Cassette, cassetteDir: string): string[
   else if (liveBaseline !== fp.baseline) msgs.push(`baseline moved ${fp.baseline} → ${liveBaseline} since record — re-record`);
   if (fp.skillHash) {
     const live = buildFingerprint(cassette.scenario.session, fp.baseline, cassetteDir, cassette.scenario.skills);
+    const recMode = fp.mode ?? "raw";
+    const liveMode = live.mode ?? "raw";
     if (live.skillHash === undefined)
       msgs.push("skill dirs not resolvable from the cassette location — cannot verify staleness (gate fails: can't verify ⇒ not green)");
+    else if (recMode !== liveMode)
+      // Phase C: a hash from a different boundary mode is not comparable — don't emit a misleading content diff.
+      msgs.push(
+        `recorded in '${recMode}' file-set mode, verifying in '${liveMode}' (COWORK_HARNESS_GITSET) — re-record under the same mode`,
+      );
     else if (live.skillHash !== fp.skillHash) {
+      debugSkillHashMismatch(cassette, cassetteDir, fp, live); // H9: surface WHICH files drifted (or a hint to enable it)
       const recordedVersion = cassette.cassetteVersion ?? 0;
+      // v5: name the EXACT changed/added/removed file(s) from the per-file manifest, APPENDED to the
+      // bucket/generic message so the G-4 shared-vs-scoped semantic is preserved AND the file is named.
+      const summary = fp.fileSigs && live.fileSigs ? diffFileSigs(fp.fileSigs, live.fileSigs) : null;
+      const detail = summary ? ` [${summary}]` : "";
       if (recordedVersion < CASSETTE_VERSION) {
         msgs.push(`recorded under an older hash format (v${recordedVersion} → v${CASSETTE_VERSION}) — re-record once after upgrading`);
       } else if (fp.sharedHash !== undefined && live.sharedHash !== undefined) {
         // G-4: bucket-level diagnosis — which component of the scoped hash changed?
         const scope = fp.skillScope!.map((s) => `skills/${s}`).join(", ");
         if (live.sharedHash !== fp.sharedHash) {
-          msgs.push(`shared root changed since record (scope: ${scope}) — re-record`);
+          msgs.push(`shared root changed since record (scope: ${scope})${detail} — re-record`);
         } else {
-          msgs.push(`${scope} changed since record — re-record`);
+          msgs.push(`${scope} changed since record${detail} — re-record`);
         }
+      } else if (summary) {
+        msgs.push(`skill files changed since record — ${summary} — re-record`);
       } else {
         msgs.push("local skill/plugin dir contents changed since record — re-record");
       }
@@ -701,7 +825,12 @@ export function redactCassette(cassette: Cassette, policy: RedactionPolicy): Cas
     events: cassette.events.map((l) => redactJsonLine(l, policy)),
     controlOut: cassette.controlOut?.map((l) => redactJsonLine(l, policy)),
     fingerprint: cassette.fingerprint
-      ? { ...cassette.fingerprint, skillSources: cassette.fingerprint.skillSources?.map((s) => redactText(s, policy)) }
+      ? {
+          ...cassette.fingerprint,
+          skillSources: cassette.fingerprint.skillSources?.map((s) => redactText(s, policy)),
+          // v5: redact the manifest's paths too (a path component can carry a customer name); keep the sha.
+          fileSigs: cassette.fingerprint.fileSigs?.map(([p, h]) => [redactText(p, policy), h] as [string, string]),
+        }
       : undefined,
   };
 }
@@ -1323,17 +1452,16 @@ function replayErrorResult(file: string): RunResult {
   };
 }
 
-/** `replay <file|dir>` (or `--cassette <file>`) — deterministic protocol-replay; re-evaluates content
- *  assertions. A directory replays every `*.cassette.json` (non-recursive, sorted) and exits on the worst
- *  verdict; an unreadable cassette is a per-file error (never aborts the batch, never a vacuous pass). */
+/** `replay <file|dir>` — deterministic protocol-replay; re-evaluates content assertions. A directory
+ *  replays every `*.cassette.json` (non-recursive, sorted) and exits on the worst verdict; an unreadable
+ *  cassette is a per-file error (never aborts the batch, never a vacuous pass). */
 export async function cmdReplay(args: string[]) {
   let p;
   try {
     p = parseArgs(args, {
       // --quiet/--verbose accepted for flag consistency but currently no-op in replay (renderer plan is fixed).
       booleans: ["--strict", "--quiet", "--verbose"],
-      values: ["--cassette", "--output-format"],
-      noDashValue: ["--cassette"],
+      values: ["--output-format"],
       enums: { "--output-format": ["text", "json"] },
       aliases: { "-q": "--quiet", "-V": "--verbose" },
     });
@@ -1341,14 +1469,7 @@ export async function cmdReplay(args: string[]) {
     log(String((e as Error).message));
     return process.exit(2);
   }
-  // §8.1: reject ambiguous invocation — both positional and --cassette given. Positional is canonical.
-  if (p.options["--cassette"] !== undefined && p.positionals.length > 0) {
-    log(
-      "replay: provide the cassette path as a positional OR via --cassette, not both.\n       --cassette is a legacy alias; prefer: replay <file.cassette.json>",
-    );
-    return process.exit(2);
-  }
-  const target = p.positionals[0] ?? p.options["--cassette"];
+  const target = p.positionals[0];
   if (!target) {
     log("usage: replay <file.cassette.json | dir/> [--strict] [--output-format text|json]");
     return process.exit(2);
@@ -1406,8 +1527,7 @@ export function cmdVerifyCassettes(args: string[]) {
   let p;
   try {
     p = parseArgs(args, {
-      // Q9: --skip-privacy/--skip-staleness are the new canonical names; old --privacy-only/--staleness-only kept as aliases.
-      booleans: ["--skip-privacy", "--skip-staleness", "--privacy-only", "--staleness-only", "--quiet", "--verbose"],
+      booleans: ["--skip-privacy", "--skip-staleness", "--quiet", "--verbose"],
       values: ["--output-format"],
       repeated: ["--allow", "--allow-domain", "--allow-email", "--allow-file"],
       enums: { "--output-format": ["text", "json"] },
@@ -1419,8 +1539,8 @@ export function cmdVerifyCassettes(args: string[]) {
     return process.exit(2);
   }
   const json = p.options["--output-format"] === "json";
-  const skipPrivacy = (p.flags["--skip-privacy"] || p.flags["--privacy-only"]) ?? false;
-  const skipStaleness = (p.flags["--skip-staleness"] || p.flags["--staleness-only"]) ?? false;
+  const skipPrivacy = p.flags["--skip-privacy"] ?? false;
+  const skipStaleness = p.flags["--skip-staleness"] ?? false;
   if (skipPrivacy && skipStaleness) {
     log("verify-cassettes: --skip-privacy and --skip-staleness are mutually exclusive (together they'd check nothing)");
     return process.exit(2);
@@ -1495,8 +1615,8 @@ export function cmdVerifyCassettes(args: string[]) {
   if (json) {
     out(JSON.stringify({ command: "verify-cassettes", ok, coverage, results }));
   } else {
-    if (!doStaleness) log("⚠ cowork-harness: --privacy-only: staleness check was skipped");
-    if (!doPrivacy) log("⚠ cowork-harness: --staleness-only: privacy scan was skipped");
+    if (!doStaleness) log("⚠ cowork-harness: --skip-staleness: staleness check was skipped");
+    if (!doPrivacy) log("⚠ cowork-harness: --skip-privacy: privacy scan was skipped");
     for (const r of results) {
       if (r.error) log(`✗ ${r.file}: [error] ${r.error}`);
       for (const f of r.findings) log(`${f.cls === "unscanned" ? "·" : "✗"} ${r.file}: [${f.cls}] ${f.where} — ${f.sample}`);
@@ -1623,7 +1743,19 @@ export function cmdRehash(args: string[]): void {
       continue;
     }
 
-    // The content check: current contentSig must match the recorded one.
+    // v6: contentSig is only comparable WITHIN the same algorithm version. The v6 unification changed the
+    // algorithm, so a pre-v6 cassette's contentSig is apples-to-oranges — route it to a re-record with an
+    // HONEST message (NOT "content changed", which would falsely imply the skill changed).
+    if (contentSigAlgoOf(recordedVersion) !== CONTENTSIG_ALGO) {
+      results.push({
+        file,
+        action: "error",
+        reason: `the content-fingerprint algorithm changed in v${CASSETTE_VERSION} (unified file set / git-tracked) — \`rehash\` cannot bridge an input-set change; re-record to migrate`,
+      });
+      continue;
+    }
+
+    // The content check: current contentSig must match the recorded one (same algo version).
     if (liveFingerprint.contentSig !== cassette.fingerprint.contentSig) {
       results.push({
         file,
@@ -1806,9 +1938,13 @@ export async function replayCassette(
     "subagent_declared_but_unused",
     "dispatch_count_max",
     "result",
-    // A verdict modifier, not a filesystem/egress assertion — keep it on replay (it evaluates to a no-op
-    // pass) so it neither inflates the "filesystem/egress skipped" count nor emits a misleading warning.
-    "allow_permissive_auto_allow",
+    // Verdict modifiers — NOT filesystem/egress assertions. Keep all of them on replay (each evaluates to a
+    // no-op pass via assert.ts) so a standalone modifier neither inflates the "filesystem/egress skipped"
+    // count nor emits a misleading warning, AND so the replay path actually exercises their assert.ts noop
+    // branches. The signal each one suppresses is independently zeroed on replay (handled in computeVerdict,
+    // not here), so keeping the key as a content no-op cannot change a verdict outcome. Single source: the
+    // VERDICT_MODIFIER_KEYS list (types.ts) — a newly-added modifier lands here automatically.
+    ...VERDICT_MODIFIER_KEYS,
   ];
   const questionGateKeys: (keyof Assertion)[] = ["question_asked", "questions_count_max", "gate_answers_delivered"];
   // #1: with an artifact manifest, the filesystem assertions become replay-checkable (materialized below).
@@ -1830,11 +1966,8 @@ export async function replayCassette(
       "self_heal_ran",
       "transcript_no_host_path",
       "replay_protocol_fidelity",
-      "allow_l0_plugin_divergence",
-      // Verdict modifier for a LIVE-only signal (missingCapabilityUse). Classified here (exhaustiveness
-      // set only — NOT alwaysContentKeys), matching allow_l0_plugin_divergence: the signal it suppresses
-      // is zeroed on replay (no live image to probe), so it never needs to reach the replay verdict.
-      "allow_missing_capability",
+      // (verdict modifiers allow_permissive_auto_allow / allow_missing_capability / allow_l0_plugin_divergence
+      //  arrive via ...alwaysContentKeys above — kept on replay as no-op passes.)
     ]);
     for (const key of Object.keys(AssertionSchema.shape) as (keyof Assertion)[]) {
       if (!ALL_CLASSIFICATION_KEYS.has(key))
@@ -2008,6 +2141,7 @@ export async function replayCassette(
     effectiveFidelity: `replay:${cassette.effectiveFidelity ?? cassette.scenario.fidelity}`,
     baseline: cassette.scenario.baseline,
     result: rec.result,
+    resultErrorKind: rec.resultErrorKind, // Fix 5: re-derived by run.ts during the replay re-drive (same classifier)
     decisions: rec.decisions.map((d) => ({ kind: d.kind, name: d.name, decision: d.decision, by: d.by })),
     toolCounts: rec.toolCounts,
     gateDeliveries: rec.gateDeliveries,

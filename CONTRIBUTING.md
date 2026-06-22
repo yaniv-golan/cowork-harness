@@ -14,6 +14,12 @@ npm run ci            # typecheck + build + test
 
 Node ≥ 20. The project is ESM TypeScript; no transpiler magic — `tsc` only.
 
+Extra prerequisites for specific stages:
+
+- **python3 + PyYAML** — required for `cowork-harness lint` (the scenario linter shells out to `python3`; it hard-fails with exit `127` when `python3` is missing).
+- **Docker (arm64)** — required for `boundary-check` and the **L1 `container`** + `hostloop` fidelity tiers (the container sandbox + agent image).
+- **Lima (`limactl`, macOS arm64)** — required only for the **L2 `microvm`** tier and the `vm` commands; the guest runs on Apple Virtualization.framework (`vmType: vz`). `microvm` does **not** use Docker. (`cowork-harness doctor --tier microvm` checks for Lima, not Docker.)
+
 CI Stage 1 (the `unit` job in `.github/workflows/ci.yml`) does **not** invoke `npm run ci`. It
 runs those steps individually — `format:check`, `typecheck`, `npm test`, `build` — then a CLI smoke
 (`node dist/cli.js list`) and the token-free `replay` gate. Only `release.yml` calls `npm run ci`.
@@ -54,7 +60,7 @@ Paths inside a scenario/session resolve relative to that file (see [docs/session
 - **Don't weaken the boundary.** Changes to `runtime/container.ts` or `docker/compose.yml` must keep the default-deny network + sealed FS. Run `cowork-harness boundary-check` and add/adjust a probe in `src/boundary.ts` if you change the model.
 - **Mark unverified code.** Anything not yet run end-to-end against a live agent gets a `// UNVERIFIED` comment so reviewers know.
 - **Add a test.** New schema fields, `Decider` rules, or egress logic need a unit test in `test/`. Examples must validate (`test/examples.test.ts`).
-- **Format.** `npm run format:check` must pass (`npx prettier --write` to fix).
+- **Format.** `npm run format:check` must pass (`npx prettier --write "src/**/*.ts" "test/**/*.ts"` to fix).
 
 ## Extending the sync extractor
 

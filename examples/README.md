@@ -47,14 +47,14 @@ cowork-harness run examples/scenarios/                    # all (CI-ready exit c
 The `container` scenarios above are **live `run`s**: they spawn the staged Cowork agent in a
 sandboxed arm64 container, so they need Docker (arm64) + the agent image, a Claude Desktop agent
 ELF staged once, and an auth token. The full setup (and the resolution order for each) is in the
-README's [Quick start → Prerequisites](../README.md#quick-start) — it isn't duplicated here.
+README's [Prerequisites](../README.md#prerequisites-for-anything-above-protocol-fidelity) — it isn't duplicated here.
 
 **Two paths that need none of that:**
 
 - **Token-free, Docker-free replay.** A committed synthetic cassette replays on a fresh clone:
 
   ```bash
-  cowork-harness replay --cassette examples/replays/example-pdf-skill.cassette.json
+  cowork-harness replay examples/replays/example-pdf-skill.cassette.json
   ```
 
 - **The `protocol` tier — zero infra.** The `protocol` (L0) fidelity tier runs the host control loop

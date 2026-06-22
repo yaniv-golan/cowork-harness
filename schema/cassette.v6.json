@@ -1,0 +1,107 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/yaniv-golan/cowork-harness/main/schema/cassette.v3.json",
+  "title": "cowork-harness cassette v3",
+  "description": "Recorded control-protocol cassette produced by cowork-harness (https://github.com/yaniv-golan/cowork-harness). Contains a frozen scenario, recorded agent event stream, control-protocol responses, artifact manifest, and a staleness fingerprint. v3 adds `contentSig`. v4 persists `userVisibleRoots`. v6 (staleness redesign, breaking): contentSig unified onto the skillHash walk (same file set incl. OS-junk exclusion, in-tree-symlink-by-target); git-tracked file set is the DEFAULT boundary (opt out with COWORK_HARNESS_GITSET=0).",
+  "type": "object",
+  "required": [
+    "scenario",
+    "events"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "format": "uri"
+    },
+    "generator": {
+      "type": "string",
+      "const": "cowork-harness"
+    },
+    "cassetteVersion": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "scenario": {
+      "type": "object",
+      "description": "Embedded scenario snapshot at record time."
+    },
+    "events": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Recorded agent event stream (newline-delimited JSON lines)."
+    },
+    "controlOut": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Driver\u2192agent control_response stream (newline-delimited JSON lines)."
+    },
+    "effectiveFidelity": {
+      "type": "string",
+      "description": "The fidelity tier the live record resolved to."
+    },
+    "artifacts": {
+      "type": "array",
+      "description": "Snapshot of user-visible output files produced by the run."
+    },
+    "fingerprint": {
+      "type": "object",
+      "description": "Staleness tripwire over the skill/baseline inputs that determined the recording.",
+      "properties": {
+        "baseline": {
+          "type": "string"
+        },
+        "skillHash": {
+          "type": "string",
+          "description": "Algorithm-specific hash of skill dir contents (staleness detection)."
+        },
+        "contentSig": {
+          "type": "string",
+          "description": "v3+: Algorithm-independent SHA-256 over sorted relpath:content-sha256 pairs. Used by `rehash` to verify content is unchanged when the staleness algorithm changes."
+        },
+        "skillSources": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "skillScope": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "sharedHash": {
+          "type": "string"
+        },
+        "fileSigs": {
+          "type": "array",
+          "description": "v5+: per-file manifest [relpath, contentSha] of files feeding skillHash, for exact-diff staleness reporting. Root-relative paths; scanned+redacted like skillSources.",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 2,
+            "maxItems": 2
+          }
+        },
+        "fileSigsOmitted": {
+          "type": "boolean",
+          "description": "v5+: true when the per-file manifest was omitted because the tree exceeded the size cap (degrades to bucket-level staleness messages)."
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "git",
+            "raw"
+          ],
+          "description": "Phase C: the file-set boundary used for skillHash \u2014 'git' (git-tracked set, COWORK_HARNESS_GITSET=1) or absent/'raw' (legacy walk, default). A record-vs-verify mode flip means hashes aren't comparable \u2192 re-record."
+        }
+      }
+    }
+  }
+}

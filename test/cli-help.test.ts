@@ -44,7 +44,7 @@ describe.skipIf(!can)("cli --help: parseArgs-direct subcommands print usage (F-7
     ["replay", "usage: replay"],
     ["verify-cassettes", "usage: verify-cassettes"],
     ["trace", "usage: trace"],
-    ["assert", "usage: assert"],
+    ["assertions", "usage: assertions"],
     ["scaffold", "usage: scaffold"],
     ["gates", "usage: gates"],
     ["answer", "usage: answer"],

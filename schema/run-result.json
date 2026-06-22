@@ -13,6 +13,24 @@
     "fidelity": { "type": "string" },
     "baseline": { "type": "string" },
     "result": { "type": "string", "enum": ["success", "error"] },
+    "resultErrorKind": {
+      "type": "string",
+      "enum": ["transport", "agent"],
+      "description": "Fix 5: when result is 'error', whether it was a tail-end transport drop (connection closed after a clean result) vs a genuine agent/skill failure"
+    },
+    "capabilityProbe": {
+      "type": "string",
+      "enum": ["definitive", "unverified", "skipped"],
+      "description": "Fix 6h: capability-probe outcome — definitive (ran, omitted-set known), unverified (probe failed), or skipped (protocol/replay/skip-env). Drives the guard roster's ran-clean vs not-run distinction."
+    },
+    "requiresCapabilityUnmet": {
+      "type": "object",
+      "description": "Fix 4b: declared requires_capabilities the running tier could not satisfy (omitted by the image, or unverifiable on this tier). computeVerdict hard-fails on this unless allow_missing_capability.",
+      "properties": {
+        "caps": { "type": "array", "items": { "type": "string" } },
+        "reason": { "type": "string", "enum": ["omitted", "unverifiable"] }
+      }
+    },
     "decisions": { "type": "array" },
     "toolCounts": { "type": "object" },
     "gateDeliveries": { "type": "array" },

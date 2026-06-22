@@ -6,6 +6,88 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-06-22
+
+### Breaking changes
+
+- **Cassette staleness fingerprint bumped to format v6 (re-record once).** The skill-hash boundary changed,
+  so committed cassettes recorded before this release report `recorded under an older hash format — re-record
+  once`. Drivers: (1) **OS-junk** files (`.DS_Store` / `Thumbs.db` / `desktop.ini`) are excluded from
+  `skillHash` — an out-of-band OS metadata touch can no longer re-stale a cassette (the "fresh cassette is
+  immediately stale" bug); (2) **`contentSig` is unified onto the same walk as `skillHash`** (same file set,
+  plugin.json `version` stripped, in-tree symlinks hashed by target) — `rehash` cannot bridge this algorithm
+  change, so a pre-v6 cassette gets an honest *"algorithm changed — re-record"* (not "content changed"); (3)
+  the **git-tracked file set is the default boundary** (see Added).
+- **Git-tracked staleness/mount boundary is now the DEFAULT.** When a skill/plugin source dir is in a git
+  work tree, both the staleness hash and the sandbox mount use only its **git-tracked** files (untracked
+  scratch / build output / OS-junk are excluded from both, so they can't drift the hash or leak into the
+  sandbox). A dir that isn't a git repo falls back to the raw walk automatically. Opt out with
+  `COWORK_HARNESS_GITSET=0`.
+- **Removed the legacy CLI aliases.** `assert` → use `assertions`; `replay --cassette <file>` → pass the
+  path positionally (`replay <file | dir/>`); `verify-cassettes --privacy-only` / `--staleness-only` →
+  `--skip-privacy` / `--skip-staleness`. (0.8.0 had documented the latter two groups as renamed/removed but
+  the code still accepted the old forms; they are now gone. Each removed alias exits `2` if used.)
+- **`assertions --list --output-format json` now reports `command: "assertions"`** (was the stale
+  `"assert"`) — a JSON-envelope contract fix for anything keying on the `command` field.
+- **`decide` exits `2` (not `1`) on a runtime error**, matching the documented "usage / runtime → `2`"
+  contract. No-match / abstain still exits `1`.
+
+### Added
+
+- **`cowork-harness/secrets` package export** — `scrubField` and `collectSecrets` are now importable as a
+  declared subpath (`import { scrubField, collectSecrets } from "cowork-harness/secrets"`) for custom
+  redaction pipelines, with the documented usage corrected to `scrubField(value, collectSecrets())` (a bare
+  `[token]` array misses secrets embedded in encoded fields). Adding the `exports` map also **bounds the
+  package's public surface to this one subpath** — deep imports into `dist/` (`cowork-harness/dist/...`),
+  previously resolvable by accident, are now private. The CLI (`bin`) is unaffected.
+- **`lint` accepts a directory** — it expands to the directory's `*.yaml` / `*.yml` scenarios
+  (non-recursive, sorted), the same file-or-dir ergonomics as `replay` / `verify-cassettes`. An empty
+  directory is a loud error, never a vacuous "0 files = clean" pass.
+- **Staleness now names the EXACT changed file.** A per-file manifest (`fileSigs`) in the cassette fingerprint
+  lets `verify-cassettes` report e.g. `skill files changed since record — 1 changed (skills/x/SKILL.md)`
+  instead of a coarse bucket message (appended to the existing shared-vs-scoped diagnosis). Manifest paths are
+  root-relative and are scanned + redacted with the same privacy layer as `skillSources`. Omitted (with a
+  loud `fileSigsOmitted`) above an internal size cap.
+- **`COWORK_HARNESS_DEBUG_SKILLHASH=1`** — on a staleness mismatch, dumps the exact file set feeding the hash
+  to stderr and flags OS-junk, so a drift source is one line instead of a black-box hunt (a one-line hint
+  points to it when the flag is off).
+- **`COWORK_HARNESS_GITSET=0`** — opt out of the new default git-tracked boundary (see Breaking) back to the
+  legacy raw filesystem walk for every dir.
+- **`requires_capabilities` scenario assertion** — fail a scenario unless the running tier provides *and can
+  verify* the declared capability families (e.g. `office_convert`, `pdf_tables`). The unmet set is persisted
+  in the run result (`requiresCapabilityUnmet`), so `verify-run` can't false-fail; opt out with the
+  `allow_missing_capability` verdict modifier when the skill's fallback is genuinely equivalent.
+- **LLM decider `OTHER:` free-text directive** — on an options-bearing gate, a decider answer of
+  `OTHER: <text>` is matched to a label first, else passed through as free text; a bare out-of-set value
+  still fails loud.
+
+### Fixed
+
+- **`doctor --tier microvm` now checks the right prerequisites.** It previously probed the Docker daemon +
+  agent image + egress-proxy image for every live tier, but the `microvm` (L2) tier runs on **Lima / Apple
+  Virtualization.framework**, not Docker — so it could report "not ready" on a Lima-only host, or "ready"
+  with no Lima installed. `microvm` now checks `limactl` (honoring `COWORK_LIMACTL`) + the staged agent
+  binary, and skips the Docker checks; `container`/`hostloop`/`cowork` are unchanged.
+- **A freshly recorded cassette no longer reports `[stale]` immediately** because the OS rewrote a `.DS_Store`
+  (or other OS-junk) in the skill tree — OS-junk is excluded from the skill hash. A chronic false-positive
+  that pushed consumers to WARN-only (which then masked real drift).
+- A standalone verdict-modifier assertion (e.g. `allow_l0_plugin_divergence: true`) no longer false-fails
+  as "empty assertion", and verdict modifiers no longer trigger a misleading "filesystem/egress skipped"
+  warning on the replay lane. The verdict modifiers are now single-sourced from one list (`assert.ts`,
+  `cassette.ts`, and the Python linter all derive from / are checked against it), guarded by a convention
+  test against drift.
+- **A tail-end transport drop is no longer conflated with an agent failure.** A connection closed *after* a
+  clean result is classified as `resultErrorKind: "transport"` (vs `"agent"`) and surfaced as a
+  lane/assertion-aware `transport_error` verdict — still a failure (no false-green), but distinguishable from
+  a genuine skill error; a non-matching envelope falls back to the agent classification.
+- **Clearer guard / capability legibility.** The run footer lists only guards that actually ran this lane
+  (`capabilityProbe: definitive | unverified | skipped`) — never a false check-mark for a guard that didn't
+  run; capability notices state their own safety net + all-clear with verdict-impact tags; the unbuilt `max`
+  tier is dropped from capability hints; and Docker pool-exhaustion is reframed as a concurrency limit, not a
+  leak.
+- **Ordered interrupt cleanup.** A `SIGINT` / `SIGTERM` during a live run reaps in-flight egress resources in
+  order (container thunks before network thunks) and announces itself, instead of leaving them dangling.
+
 ## [0.8.0] — 2026-06-21
 
 ### Breaking changes

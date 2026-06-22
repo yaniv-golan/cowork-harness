@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
-import { readdirSync, statSync, lstatSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readdirSync, statSync, lstatSync, readFileSync, readlinkSync } from "node:fs";
+import { join, resolve, dirname, sep, relative } from "node:path";
+import { gitModeEnabled, gitTrackedSet, gitAccept } from "./skill-files.js";
 
 /**
  * Directory names excluded from the skill-content staleness hash — VCS / language caches that are NEVER
@@ -81,7 +82,21 @@ type AcceptFn = (relPath: string) => boolean;
  *  skipped with a warning (same policy as collectArtifacts in execute.ts).
  * push any read error into `errors` rather than silently continuing — the caller treats a
  *  non-empty errors array as a staleness failure (can't verify ⇒ not green). */
-function hashDir(dir: string, hash: ReturnType<typeof createHash>, errors: string[], rel = "", accept?: AcceptFn): void {
+/** Optional per-file sink (H9 diagnostics): called for every file FOLDED INTO the hash, with its
+ *  root-relative path and the sha256 of exactly the content that was hashed (version-stripped for
+ *  plugin.json, raw bytes otherwise). Lets `explainSkillHash` dump the file set the hash sees — so an
+ *  unexpected drift source (a `.DS_Store`, a run-generated file) is one line instead of a black-box hunt. */
+type OnFileFn = (relPath: string, hashedSha: string) => void;
+
+function hashDir(
+  dir: string,
+  hash: ReturnType<typeof createHash>,
+  errors: string[],
+  rel = "",
+  accept?: AcceptFn,
+  onFile?: OnFileFn,
+  root = dir,
+): void {
   let entries: string[];
   try {
     entries = readdirSync(dir).sort();
@@ -105,38 +120,50 @@ function hashDir(dir: string, hash: ReturnType<typeof createHash>, errors: strin
       errors.push(msg);
       continue;
     }
-    // skip symlinks explicitly (both to files and directories) — a symlink can escape the
-    // skill dir tree. Model: collectArtifacts in execute.ts uses lstatSync + skip for the same reason.
+    // S5 (v6): an IN-TREE symlink (target resolves inside the skill root) is hashed by its TARGET STRING —
+    // NOT followed (no out-of-tree content) — so a re-point is detected while the target file's own content
+    // is hashed separately. An ESCAPING symlink (target outside the root) is skipped + warned (as before:
+    // a symlink can otherwise pull in out-of-tree content). Emitted via onFile too, so contentSig/manifest
+    // (entries-based) stay identical to skillHash.
     if (st.isSymbolicLink()) {
-      process.stderr.write(`cowork-harness: skill-hash: skipping symlink ${abs} (not followed)\n`);
+      if (accept && !accept(relPath)) continue;
+      let target: string;
+      try {
+        target = readlinkSync(abs);
+      } catch {
+        process.stderr.write(`cowork-harness: skill-hash: skipping unreadable symlink ${abs}\n`);
+        continue;
+      }
+      const resolvedTarget = resolve(dirname(abs), target);
+      const rootResolved = resolve(root);
+      const inTree = resolvedTarget === rootResolved || resolvedTarget.startsWith(rootResolved + sep);
+      if (!inTree) {
+        process.stderr.write(`cowork-harness: skill-hash: skipping escaping symlink ${abs} -> ${target} (not followed)\n`);
+        continue;
+      }
+      const targetRel = relative(rootResolved, resolvedTarget).split(sep).join("/");
+      hash.update(`L:${relPath} -> ${targetRel}\n`); // link structure; a re-point changes the digest
+      if (onFile) onFile(relPath, `lnk:${targetRel}`);
       continue;
     }
     if (st.isDirectory()) {
       if (SKILL_HASH_DIR_DENYLIST.has(name)) continue; // skip VCS/cache subtrees entirely
       if (accept && !accept(relPath)) continue; // F-6: scoped out (an unlisted skill's subtree)
       hash.update(`D:${relPath}\n`); // structure marker — an empty/renamed dir registers too
-      hashDir(abs, hash, errors, relPath, accept);
+      hashDir(abs, hash, errors, relPath, accept, onFile, root);
     } else if (st.isFile()) {
       if (name.endsWith(".cassette.json")) continue; // a recorded cassette is output, not skill source
       if (relPath === HASH_IGNORE_FILE) continue; // the ignore file is harness metadata, not skill source
+      // H9: OS-junk (.DS_Store / Thumbs.db / desktop.ini / …) is OS metadata the OS rewrites out-of-band (a
+      // .DS_Store touch by Finder must NOT re-stale a cassette). Excluded under the same rationale as the dir
+      // denylist (.git/node_modules) — provably-non-behavioral content the mount still delivers. Cassette
+      // version bumped so existing cassettes get a graceful "older format — re-record once" (not "changed").
+      if (OS_JUNK_PATTERN.test(relPath)) continue;
       if (accept && !accept(relPath)) continue; // F-6: scoped/ignored out
       hash.update(`F:${relPath}\n`); // relative path, not basename — a move changes the digest
-      // F-6: hash the plugin MANIFEST without its `version` — a pure version bump is metadata with no
-      // runtime-behavior impact, yet it would otherwise re-stale every cassette (it flapped 4/6 in a batch).
-      // Every behavior-bearing field (mcpServers, hooks, dependencies, …) still counts. Falls back to raw
-      // bytes if the manifest isn't valid JSON.
-      if (relPath.endsWith(".claude-plugin/plugin.json") || relPath === "plugin.json") {
-        try {
-          const manifest = JSON.parse(readFileSync(abs, "utf8"));
-          delete manifest.version;
-          hash.update(JSON.stringify(manifest));
-          continue;
-        } catch {
-          /* not valid JSON — fall through to raw-byte hashing */
-        }
-      }
+      let bytes: Buffer;
       try {
-        hash.update(readFileSync(abs));
+        bytes = readFileSync(abs);
       } catch (e) {
         // propagate read errors — a temporarily unreadable file would otherwise produce a
         // stale-but-clean hash that silently passes the staleness gate. Push to errors so the caller
@@ -144,7 +171,25 @@ function hashDir(dir: string, hash: ReturnType<typeof createHash>, errors: strin
         const msg = `cowork-harness: skill-hash: cannot read file ${abs}: ${String((e as Error)?.message ?? e)}`;
         process.stderr.write(`${msg} — skipping\n`);
         errors.push(msg);
+        continue;
       }
+      // F-6: hash the plugin MANIFEST without its `version` — a pure version bump is metadata with no
+      // runtime-behavior impact, yet it would otherwise re-stale every cassette (it flapped 4/6 in a batch).
+      // Every behavior-bearing field (mcpServers, hooks, dependencies, …) still counts. Falls back to raw
+      // bytes if the manifest isn't valid JSON. `hashedContent` is EXACTLY what folds into the digest — the
+      // onFile sink reports its sha so the debug dump reflects what the hash actually saw.
+      let hashedContent: Buffer | string = bytes;
+      if (relPath.endsWith(".claude-plugin/plugin.json") || relPath === "plugin.json") {
+        try {
+          const manifest = JSON.parse(bytes.toString("utf8"));
+          delete manifest.version;
+          hashedContent = JSON.stringify(manifest);
+        } catch {
+          /* not valid JSON — fall through to raw-byte hashing */
+        }
+      }
+      hash.update(hashedContent);
+      if (onFile) onFile(relPath, createHash("sha256").update(hashedContent).digest("hex"));
     }
   }
 }
@@ -213,63 +258,33 @@ function scopedAccept(keep: Set<string>): AcceptFn {
   };
 }
 
-/** Algorithm-independent content fingerprint over `dirs`.
- *  SHA-256 over globally-sorted `"dirN/relpath:content-sha256"` entries for every regular file
- *  in every dir, using the same VCS/cache exclusions as `hashDir` but NO hashIgnore rules
- *  (those are staleness-algorithm-specific and change between CASSETTE_VERSIONs).
- *  Does NOT strip plugin.json version — hashes raw file bytes.
- *  Each dir is prefixed by its 0-based sort index (dir0, dir1, …) to prevent collisions
- *  between dirs that share the same basename (e.g. two plugins both named `skills`).
- *  Returns `undefined` for an empty or all-missing dirs list. */
-export function computeContentSig(dirs: string[]): string | undefined {
+/** Content fingerprint over `dirs` — UNIFIED (v6) onto the SAME walk as `skillHash`: it derives from
+ *  `skillHashEntries`, so it covers the EXACT same file set (OS-junk excluded, F-6 scope, `.cowork-hashignore`,
+ *  git-tracked mode, in-tree-symlink policy) instead of the old separate walk that followed symlinks and
+ *  ignored scope/ignore. SHA-256 over globally-sorted `relpath:content-sha256` pairs. Returns `undefined`
+ *  for an empty/all-missing set. (Used by `rehash` to detect content change across a *format-only* hash bump;
+ *  this v6 unification is an algorithm change, so a pre-v6 cassette's contentSig is non-comparable — `rehash`
+ *  routes those to a re-record, see cassette.ts.) */
+export function computeContentSig(dirs: string[], scopeSkills?: string[], sessionIgnore?: string[]): string | undefined {
   if (dirs.length === 0) return undefined;
-  const entries: string[] = [];
-
-  function walkForSig(dir: string, prefix: string, rel: string): void {
-    let names: string[];
-    try {
-      names = readdirSync(dir).sort();
-    } catch {
-      return; // unreadable dir → treat as empty
-    }
-    for (const name of names) {
-      const abs = join(dir, name);
-      const relPath = rel ? `${rel}/${name}` : name;
-      const fullRelPath = `${prefix}/${relPath}`;
-      let st;
-      try {
-        st = statSync(abs);
-      } catch {
-        continue;
-      }
-      if (st.isDirectory()) {
-        if (SKILL_HASH_DIR_DENYLIST.has(name)) continue;
-        walkForSig(abs, prefix, relPath);
-      } else if (st.isFile()) {
-        if (name.endsWith(".cassette.json")) continue;
-        if (name === HASH_IGNORE_FILE) continue;
-        let content: Buffer;
-        try {
-          content = readFileSync(abs);
-        } catch {
-          continue;
-        }
-        const sha = createHash("sha256").update(content).digest("hex");
-        entries.push(`${fullRelPath}:${sha}`);
-      }
-    }
-  }
-
-  // Sort dirs for determinism, then prefix by index to prevent basename collisions
-  // (two dirs with the same basename — e.g. both named `skills` — would otherwise alias).
-  const sorted = [...dirs].sort();
-  for (let i = 0; i < sorted.length; i++) {
-    walkForSig(sorted[i], `dir${i}`, "");
-  }
-
+  const entries = skillHashEntries(dirs, scopeSkills, sessionIgnore).map((e) => `${e.path}:${e.sha}`);
   if (entries.length === 0) return undefined;
-  entries.sort(); // global sort across all dirs
   return createHash("sha256").update(entries.join("\n")).digest("hex");
+}
+
+/** H9 diagnostics: OS-junk / non-runtime files that have no business in a skill hash but (today) ARE hashed
+ *  if present in scope — the classic cause of "stale immediately after record" on macOS (`.DS_Store` is
+ *  rewritten by Finder). Used to flag entries in the debug dump and to nudge `.cowork-hashignore`. */
+export const OS_JUNK_PATTERN = /(^|\/)(\.DS_Store|Thumbs\.db|desktop\.ini|\.AppleDouble|__MACOSX)$/;
+
+/** H9 diagnostics: the per-file entries the skill hash currently folds in — same walk/scope/ignore as
+ *  `hashSkillDirs`, but emitting `{ path, sha }` instead of one digest. Sorted by path. Lets a caller dump
+ *  exactly what the hash sees so an unexpected drift source is visible at a glance. */
+export function skillHashEntries(dirs: string[], scopeSkills?: string[], sessionIgnore?: string[]): { path: string; sha: string }[] {
+  const entries: { path: string; sha: string }[] = [];
+  hashSkillDirs(dirs, scopeSkills, sessionIgnore, (path, sha) => entries.push({ path, sha }));
+  // Code-unit sort (NOT localeCompare) so the dump order matches the hash walk's own `readdirSync().sort()`.
+  return entries.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 }
 
 export interface HashSkillDirsResult {
@@ -285,6 +300,10 @@ export interface HashSkillDirsResult {
    *  this as a staleness failure (can't verify ⇒ not green) — a hash computed over partial data is
    *  unreliable. */
   readErrors?: string[];
+  /** Phase C: which boundary the hash used. "git" = git-tracked set (COWORK_HARNESS_GITSET=1 AND every dir
+   *  was a usable repo); "raw" = the legacy filesystem walk (default, or any non-repo dir). Recorded in the
+   *  fingerprint so a mode change between record and verify is itself detectable. */
+  mode: "git" | "raw";
 }
 
 /**
@@ -302,7 +321,7 @@ export interface HashSkillDirsResult {
  * also returns `readErrors` when any input was unreadable — callers must treat this as a
  * staleness failure.
  */
-export function hashSkillDirs(dirs: string[], scopeSkills?: string[], sessionIgnore?: string[]): HashSkillDirsResult {
+export function hashSkillDirs(dirs: string[], scopeSkills?: string[], sessionIgnore?: string[], onFile?: OnFileFn): HashSkillDirsResult {
   const hash = createHash("sha256");
   const sorted = [...dirs].sort();
   // Resolve F-6 skill scoping fail-closed: only narrow to `keep` when every named skill exists under some
@@ -320,18 +339,28 @@ export function hashSkillDirs(dirs: string[], scopeSkills?: string[], sessionIgn
     }
   }
   const allErrors: string[] = [];
+  // Phase C (gated): when COWORK_HARNESS_GITSET=1, restrict each dir's files to the git-tracked set. A dir
+  // that isn't a usable repo falls back to raw for THAT dir; mode is "git" only if EVERY dir resolved via git.
+  const gitOn = gitModeEnabled();
+  let allGit = gitOn && sorted.length > 0;
   for (const d of sorted) {
     // Consumer-declared ignore for THIS root = the plugin-local .cowork-hashignore + the session-level globs.
     const ignoreRes = [...readHashIgnore(d), ...(sessionIgnore ?? [])].map(compileIgnore).filter((re): re is RegExp => re !== null);
     const scopeFn = keep && isDir(join(d, "skills")) ? scopedAccept(keep) : undefined;
-    // No scope + no ignore → undefined accept → byte-identical to the legacy whole-tree hash.
+    const tracked = gitOn ? gitTrackedSet(d) : null;
+    if (gitOn && tracked === null) allGit = false; // this dir isn't a repo → raw for it → not pure git mode
+    const gitFn = tracked ? gitAccept(tracked) : null; // admits tracked files + their ancestor dirs
+    // No scope + no ignore + no git filter → undefined accept → byte-identical to the legacy whole-tree hash.
     const accept =
-      scopeFn || ignoreRes.length ? (rel: string) => (scopeFn ? scopeFn(rel) : true) && !ignoreRes.some((re) => re.test(rel)) : undefined;
-    hashDir(d, hash, allErrors, "", accept);
+      scopeFn || ignoreRes.length || gitFn
+        ? (rel: string) => (scopeFn ? scopeFn(rel) : true) && !ignoreRes.some((re) => re.test(rel)) && (gitFn ? gitFn(rel) : true)
+        : undefined;
+    hashDir(d, hash, allErrors, "", accept, onFile);
   }
   const scoped = keep !== null;
   const readErrors = allErrors.length > 0 ? allErrors : undefined;
+  const mode: "git" | "raw" = allGit ? "git" : "raw";
   return scoped
-    ? { hash: hash.digest("hex"), scoped: true, ...(readErrors ? { readErrors } : {}) }
-    : { hash: hash.digest("hex"), scoped: false, ...(missedSkills ? { missedSkills } : {}), ...(readErrors ? { readErrors } : {}) };
+    ? { hash: hash.digest("hex"), scoped: true, mode, ...(readErrors ? { readErrors } : {}) }
+    : { hash: hash.digest("hex"), scoped: false, mode, ...(missedSkills ? { missedSkills } : {}), ...(readErrors ? { readErrors } : {}) };
 }

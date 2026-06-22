@@ -30,5 +30,10 @@
     "transcript_not_contains",
     "transcript_not_matches",
     "user_visible_artifact"
+  ],
+  "verdictModifierKeys": [
+    "allow_l0_plugin_divergence",
+    "allow_missing_capability",
+    "allow_permissive_auto_allow"
   ]
 }

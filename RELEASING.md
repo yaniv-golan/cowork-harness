@@ -20,7 +20,7 @@ Phase 1: git checkout -b release/X.Y.Z
   ↓  CI passes
 Phase 2: gh pr merge <number> --merge   (or merge via GitHub UI)
          git checkout main && git pull origin main
-         git push origin main            # fast-forward; CI does NOT re-run (same SHA)
+         git push origin main            # no-op fast-forward — main already advanced (and CI ran) at merge
 Phase 3: git push origin vX.Y.Z         # triggers release workflow → npm publish + GitHub Release
          # closes the skew window
          git push origin --delete release/X.Y.Z   # clean up remote branch
@@ -68,8 +68,12 @@ stricter privacy gate, a changed cassette/staleness hash), are a **minor**.
       A format failure is the most common first-pass CI red.
 - [ ] `npx tsc -p tsconfig.test.json --noEmit` — typecheck including tests.
 - [ ] `npm run ci` (typecheck + build + test) is green locally.
-- [ ] `npm pack --dry-run` — confirm the tarball contains `dist/`, `baselines/`, `docker/`, the
-      skill, and no `docs/internal/`.
+- [ ] `npm pack --dry-run` — confirm the tarball contains `dist/`, `baselines/`, `docker/`, the bundled
+      `scenario.py` + `assertion-keys.json` (the skill itself ships via the marketplace, not npm), and no
+      `docs/internal/`.
+- [ ] Public export resolves: `node --input-type=module -e "import('cowork-harness/secrets').then(m => {
+      if (!m.scrubField || !m.collectSecrets) throw new Error('missing export'); })"` (run from an install of
+      the packed tarball, or via self-reference in-repo). Guards the sole programmatic API subpath.
 - [ ] Commit everything (`chore: bump to X.Y.Z; sync docs, CHANGELOG, and skill`).
 - [ ] **Phase 1 — branch + PR**:
       ```

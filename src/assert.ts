@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, statSync, realpathSync } from "node:fs";
 import { join, resolve, relative, isAbsolute, sep } from "node:path";
 import type { Assertion, RunResult } from "./types.js";
+import { VERDICT_MODIFIER_KEYS } from "./types.js";
 import { compileUserRegex } from "./regex.js";
 import { normalizeHost } from "./boundary-paths.js";
 
@@ -382,11 +383,10 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
           ? ok()
           : fail(`self_heal_ran was ${ctx.selfHealRan}, expected ${a.self_heal_ran}`),
     );
-  // Verdict modifier (consumed by computeVerdict, not here). It always "passes" as an assertion so a
-  // standalone `{allow_permissive_auto_allow: true}` is a valid non-empty assertion, not "empty assertion".
-  if (a.allow_permissive_auto_allow !== undefined) results.push(ok());
-  // Verdict modifier (same pattern): standalone `{allow_missing_capability: true}` must not be "empty".
-  if (a.allow_missing_capability !== undefined) results.push(ok());
+  // Verdict modifiers (consumed by computeVerdict, not here) each always "pass" as an assertion, so a
+  // standalone `{allow_*: true}` is a valid non-empty assertion, not "empty assertion". Derived from the
+  // single VERDICT_MODIFIER_KEYS list so a newly-added modifier can never miss this branch again.
+  for (const k of VERDICT_MODIFIER_KEYS) if (a[k] !== undefined) results.push(ok());
   if (a.transcript_no_host_path !== undefined)
     results.push(
       ctx.scanMissing

@@ -59,7 +59,7 @@ export type AgentEvent =
   | { type: "thinking"; text: string } // F2
   | { type: "metrics"; data: Record<string, unknown> } // F2 (api_metrics → cost)
   | { type: "decision"; request: DecisionRequest }
-  | { type: "result"; isError: boolean; usage?: Record<string, unknown> }
+  | { type: "result"; isError: boolean; usage?: Record<string, unknown>; resultText?: string; subtype?: string } // resultText/subtype carry the SDK result payload so a transport-error result can be classified (Fix 5)
   | { type: "error"; source: "spawn" | "agent" | "protocol" | "exit"; message: string }
   | { type: "raw"; line: string };
 
@@ -677,7 +677,15 @@ export function parseMessage(msg: any): AgentEvent[] {
       }
       break;
     case "result":
-      ev.push({ type: "result", isError: !!msg.is_error, usage: msg.usage });
+      ev.push({
+        type: "result",
+        isError: !!msg.is_error,
+        usage: msg.usage,
+        // Fix 5: preserve the SDK result payload + subtype so run.ts can tell a transport drop
+        // (e.g. "API Error: Connection closed", subtype error_during_execution) from a skill failure.
+        resultText: typeof msg.result === "string" ? msg.result : undefined,
+        subtype: typeof msg.subtype === "string" ? msg.subtype : undefined,
+      });
       break;
   }
   return ev;

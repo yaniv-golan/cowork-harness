@@ -13,11 +13,11 @@ import { spawnProtocol } from "../runtime/protocol.js";
 import { spawnContainer } from "../runtime/container.js";
 import { spawnHostLoop } from "../runtime/hostloop.js";
 import { spawnMicroVm } from "../runtime/microvm.js";
-import { probeImageOmitted, probeMicrovmOmitted, detectCapabilityUse } from "../runtime/image-capabilities.js";
+import { probeImageOmitted, probeMicrovmOmitted, detectCapabilityUse, CAPABILITY_FAMILIES } from "../runtime/image-capabilities.js";
 import { instanceName } from "../runtime/lima.js";
 import { decideLoopFromBaseline, readGateFlag } from "../loop-decision.js";
 import type { WebFetchProvenance } from "../hostloop/workspace-handler.js";
-import { startEgressSidecar, type EgressSidecar } from "../egress/sidecar.js";
+import { startEgressSidecar, registerCleanup, type EgressSidecar } from "../egress/sidecar.js";
 import { startEgressProxy, freePort } from "../egress/proxy.js";
 import { evaluate, hostMatches } from "../assert.js";
 import { compileUserRegex } from "../regex.js";
@@ -308,6 +308,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   let record: RunRecord;
   let child: { kill?: (s?: NodeJS.Signals) => void } | undefined; // hoisted so the finally can reap a crashed/orphaned container (F1)
   let containerName: string | undefined;
+  let deregisterContainerReap: (() => void) | undefined; // 2a: Ctrl-C cleanup for the agent container
   let hostEgress: { host: string; decision: "allow" | "deny" }[] | undefined; // #31: host-routed web_fetch egress
   let l0PluginDivergence = false; // #20: set when protocol mode runs with plugins (failing fidelity signal)
   let promptFidelityWarnings: string[] | undefined; // #49: structured prompt warnings collected by renderPrompts
@@ -326,6 +327,21 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       // #43: thread proxy/network EXPLICITLY into spawn opts — no process.env mutation so
       // concurrent executeScenario calls don't stomp each other's values.
       sidecar = startEgressSidecar(plan.egressAllow, outDir, runToken);
+      // 2a: on Ctrl-C, reap the agent container in the "container" PHASE so it runs BEFORE the sidecar's
+      // network teardown (network rm fails while the container is still attached). The thunk reads `child`/
+      // `containerName` at call time (assigned below). De-registered in the finally so a clean exit doesn't
+      // double-run it (and the reap is idempotent regardless).
+      deregisterContainerReap = registerCleanup({
+        phase: "container",
+        run: () => {
+          try {
+            child?.kill?.("SIGKILL");
+          } catch {
+            /* already gone */
+          }
+          if (containerName) spawnSync(runner, ["rm", "-f", containerName], { stdio: "ignore" });
+        },
+      });
     } else if (effectiveFidelity === "microvm") {
       // allocate a free host port per run unless explicitly pinned, so concurrent microVM runs don't
       // collide on the fixed 8899. The SAME port is threaded into spawnMicroVm below, so the guest firewall
@@ -402,6 +418,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // Reap the agent container FIRST (before the sidecar networks), so a crashed/unanswered run can't
     // orphan a running container holding the network (F1). On the success path the child has already
     // exited (--rm), so these are no-ops.
+    deregisterContainerReap?.(); // 2a: normal path owns the reap below; drop the signal-time thunk
     try {
       child?.kill?.("SIGKILL");
     } catch {
@@ -466,6 +483,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // fail-open. container/hostloop → Docker image probe; microvm → `limactl shell` guest probe. Skipped on
   // protocol/replay (no live runtime to probe) and via COWORK_SKIP_CAPABILITY_PROBE.
   let missingCapabilityUse: string[] | undefined;
+  let capabilityProbe: RunResult["capabilityProbe"] = "skipped"; // Fix 6h: default — probe didn't run this tier/lane
+  let omittedFamilies: string[] | null = null; // Fix 4b: the probe's omitted-set (null = not run / unverified)
   if (
     (effectiveFidelity === "container" || effectiveFidelity === "hostloop" || effectiveFidelity === "microvm") &&
     process.env.COWORK_SKIP_CAPABILITY_PROBE !== "1"
@@ -478,24 +497,61 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
             image: process.env.COWORK_AGENT_IMAGE ?? "cowork-agent-base:2",
             tier: effectiveFidelity,
           });
+    omittedFamilies = omitted;
+    capabilityProbe = omitted === null ? "unverified" : "definitive"; // Fix 6h: ran → definitive; failed → unverified
     if (omitted === null) {
       const w =
         "agent runtime could not be probed for capabilities — capability fidelity unverified (capability false-negatives won't be caught this run)";
-      warn(`::warning:: [capability] ${w}\n`);
+      warn(`::warning:: [capability] (informational, unverified) ${w}\n`);
       promptFidelityWarnings = [...(promptFidelityWarnings ?? []), w];
     } else if (omitted.length) {
+      // 6a/6c: state the safety net the notice is otherwise silent about — an omitted family that the skill
+      // actually USES hard-fails the run below (no silent false-pass). Tag the verdict impact so an observer
+      // never reads an informational line as a failure cause (or vice-versa).
       warn(
-        `::notice:: [capability] this agent runtime omits: ${omitted.join(", ")} — a skill that uses these may false-negative; ` +
-          `rebuild full parity (--build-arg COWORK_FULL_PARITY=1) or use the rootfs \`max\` tier to verify.\n`,
+        `::notice:: [capability] (informational, guarded) this image omits: ${omitted.join(", ")} — ` +
+          `if a skill actually USES one, this run HARD-FAILS (no silent false-pass). ` +
+          `Only rebuild full parity (--build-arg COWORK_FULL_PARITY=1) if your skill needs them.\n`,
       );
       const used = detectCapabilityUse(join(outDir, "events.jsonl"), omitted, workRoot);
       if (used.length) {
         missingCapabilityUse = used;
         warn(
-          `::warning:: [capability] the skill USED omitted capabilit(ies) [${used.join(", ")}] — likely a FALSE NEGATIVE, ` +
-            `not a skill bug. Rebuild full parity / use the \`max\` tier, or assert allow_missing_capability: true if the fallback is equivalent.\n`,
+          `::warning:: [capability] (FAILED THIS RUN) the skill USED omitted capabilit(ies) [${used.join(", ")}] — likely a FALSE NEGATIVE, ` +
+            `not a skill bug. Rebuild full parity (--build-arg COWORK_FULL_PARITY=1), or assert allow_missing_capability: true if the fallback is equivalent.\n`,
         );
+      } else {
+        // 6b: close the loop — the bare omits-notice + a green run reads as a false-green RISK unless we say
+        // the guard ran and found nothing. Emit ONLY here (probe ran, families omitted), never in the
+        // omitted===null unverified branch (which has no basis to claim "not used").
+        warn(`::notice:: [capability] (informational, guarded) omitted families were not used this run → no false-negative.\n`);
       }
+    }
+  }
+
+  // Fix 4b: a skill can DECLARE the capability families its core path needs. If the running tier omits one
+  // (clause a) or can't verify them — protocol/replay/skip (clause b) — the run hard-fails (computeVerdict),
+  // closing the false-green for extraction-heavy skills. Computed at run time so verify-run/replay honor the
+  // recorded outcome (a clean full-parity run records nothing → no false-fail on later verify-run).
+  let requiresCapabilityUnmet: RunResult["requiresCapabilityUnmet"];
+  const requiredCaps = scenario.requires_capabilities ?? [];
+  if (requiredCaps.length) {
+    const known = new Set(Object.keys(CAPABILITY_FAMILIES));
+    const unknown = requiredCaps.filter((c) => !known.has(c));
+    if (unknown.length)
+      warn(
+        `::warning:: [capability] requires_capabilities lists unknown famil(ies): ${unknown.join(", ")} — known: ${[...known].join(", ")}\n`,
+      );
+    if (capabilityProbe === "definitive") {
+      const missing = requiredCaps.filter((c) => omittedFamilies?.includes(c));
+      if (missing.length) requiresCapabilityUnmet = { caps: missing, reason: "omitted" };
+    } else {
+      // skipped (protocol/replay/skip-env) or unverified — cannot confirm the declared caps are present.
+      requiresCapabilityUnmet = { caps: requiredCaps, reason: "unverifiable" };
+      warn(
+        `::warning:: [capability] (FAILED THIS RUN) skill declares requires_capabilities [${requiredCaps.join(", ")}] but this tier ` +
+          `cannot verify them (${capabilityProbe}) — run on a live built-image tier, or assert allow_missing_capability: true.\n`,
+      );
     }
   }
 
@@ -507,6 +563,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     fidelity: scenario.fidelity,
     baseline: baseline.appVersion,
     result: record.result,
+    resultErrorKind: record.resultErrorKind, // Fix 5: transport vs agent classification of a result:"error"
     decisions: record.decisions.map((d) => ({
       kind: d.kind,
       name: d.name,
@@ -542,6 +599,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     fidelityWarnings: promptFidelityWarnings, // #49: structured prompt warnings visible to JSON callers
     l0PluginDivergence: l0PluginDivergence || undefined, // #20: failing fidelity signal for protocol+plugins
     missingCapabilityUse, // capability fidelity (§8.8 D6): omitted-capability families the skill used (live built-image tiers) — computeVerdict fails unless allow_missing_capability
+    capabilityProbe, // Fix 6h: probe outcome (definitive | unverified | skipped) for the guard roster
+    requiresCapabilityUnmet, // Fix 4b: declared requires_capabilities the tier couldn't satisfy → computeVerdict fails unless allow_missing_capability
   };
 
   // Artifacts (C3): the harness-observability log `run.jsonl` REPLACES transcript.json/decisions.jsonl.

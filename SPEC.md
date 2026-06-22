@@ -43,12 +43,12 @@ Given a session + baseline, returns:
 | field | value |
 |---|---|
 | `configDir` | managed host dir (or `session.plugins.config_dir`); contains `settings.json`, `cowork_settings.json`, `skills/` |
-| `mounts[]` | `{hostPath, mountPath, mode}`, `mountPath` **relative to mnt**: `uploads/<f>`, `.projects/<id>`, `.local-plugins/cache/<marketplace>/<plugin>/<version>` (marketplace-resolved, verified shape), `.local-plugins/cache/<name>` (direct `local_plugins`), `.remote-plugins/<name>` |
+| `mounts[]` | `{hostPath, mountPath, mode}`, `mountPath` **relative to mnt**: `uploads/<f>`, `<collision-resolved-basename>` (work folders), `.local-plugins/marketplaces/<marketplace>/<plugin>` (marketplace-resolved), `.local-plugins/cache/<name>` (direct `local_plugins`), `.remote-plugins/<name>`. (≥1.14271.0; older baselines mount work folders at `.projects/<id>`, which is now a reserved name.) |
 | `pluginDirs[]` | mnt-relative plugin roots → `--plugin-dir` (incl. marketplace-resolved plugins) |
 | `model/effort/extendedThinking/permissionMode/permissionParity` | from session |
 | `egressAllow[]` | `baseline.network.allowDomains` + `session.egress.extra_allow` (or `["*"]` if unrestricted) |
 
-**Marketplace resolution (required):** for each `local_marketplaces` dir, parse `.claude-plugin/marketplace.json`; for each `session.plugins.enabled` entry `name@mkt` matching `manifest.name`, resolve `manifest.plugins[name].source` → a `.local-plugins/cache/<marketplace>/<plugin>/<version>` mount + pluginDir, where `<version>` is the marketplace entry's `version` or the plugin's `.claude-plugin/plugin.json` `version` (fallback `0.0.0`). This reproduces the real desktop spawn argv (`--plugin-dir …/cache/<mp>/<plugin>/<version>`, verified 2026-06-13). (Cowork loads plugins via `--plugin-dir`; the registry is inert in-VM — §6.)
+**Marketplace resolution (required):** for each `local_marketplaces` dir, parse `.claude-plugin/marketplace.json`; for each `session.plugins.enabled` entry `name@mkt` matching `manifest.name`, resolve `manifest.plugins[name].source` → a `.local-plugins/marketplaces/<marketplace>/<plugin>` mount + pluginDir. This reproduces the real desktop spawn argv (`--plugin-dir …/marketplaces/<mp>/<plugin>`). (Cowork loads plugins via `--plugin-dir`; the registry is inert in-VM — §6.)
 
 ## 3. Spawn argv + env (contract layer) — what each tier MUST emit
 
@@ -59,9 +59,10 @@ Resolved inputs: `sessionRoot=/sessions/<id>`, `mntRoot=/sessions/<id>/mnt`, `co
 claude -p --verbose
   --input-format stream-json --output-format stream-json
   --permission-prompt-tool stdio
-  --permission-mode default
+  --permission-mode <session.permissionMode ?? baseline.spawn.permissionMode ?? default>
   --setting-sources user
   --effort <session.effort ?? baseline.spawn.effortDefault>
+  --max-thinking-tokens <resolved budget>        # always emitted (never 0)
   [--append-system-prompt <rendered cowork sections>]
   [--model <session.model>]
   [--mcp-config <configGuest>/mcp.json]         # if session.mcp.config set — HONORED in plain cowork mode (§6)
@@ -142,7 +143,7 @@ Each line is one stream-json message. The message types that carry signal:
 - `{type:"result", is_error, usage}` — turn end.
 
 **Sub-agent dispatch recognition (binary fact):** the real cowork dispatch tool is **`Agent`** (agent
-ELF 2.1.177 as of baseline desktop-1.13576.1: `{name:"Agent", aliases:["Task"], description:"Launch a new agent",
+ELF 2.1.181 as of baseline desktop-1.14271.0: `{name:"Agent", aliases:["Task"], description:"Launch a new agent",
 inputSchema:{description, subagent_type, prompt}}`). `parseMessage` synthesizes a `subagent_dispatch`
 for a `tool_use` whose `name` is `Agent` **or** `Task` (the alias) **or** whose `input` carries
 `subagent_type`. The cowork **`TaskCreate`/`TaskUpdate`** tools are the *todo list*
@@ -193,8 +194,9 @@ server-side (`/v1/sessions`), but the agent's *behavior* depends only on (a) the
 the expected path and (b) the session being resumable. The harness models both **locally**:
 
 - **Files** — `session.uploads` / `--upload <file>` → `mnt/uploads/<name>`; `session.folders` /
-  `--folder <dir>` → `mnt/.projects/<id>` (the `register_repo_root` analog). Behaviorally faithful: the
-  agent `Read`s the file at the same path it would in Desktop.
+  `--folder <dir>` → `mnt/<collision-resolved-basename>` (the `register_repo_root` analog; ≥1.14271.0,
+  older baselines `.projects/<id>`). Behaviorally faithful: the agent `Read`s the file at the same path
+  it would in Desktop.
 - **Persistence** — `--session-id <id>` derives a stable cwd (`/sessions/sess-<id>`) + run dir and pins
   the agent's native session UUID (persisted in `<outDir>/session.json`). The agent writes its session to
   `CLAUDE_CONFIG_DIR/projects/<encoded-cwd>/<uuid>.jsonl` (= `mnt/.claude/projects/…` on the host). The
@@ -311,19 +313,22 @@ token-free lane. `replay_protocol_fidelity` is synthesized-only; it is not in `c
 never user-authored.
 
 `run`, `skill`, and `replay` emit a single JSON object on **stdout** under `--output-format json` (nothing
-else hits stdout in that mode — the renderer/footer/`[env]`/`[input]` all go to stderr). One shape for
-every command:
+else hits stdout in that mode — the renderer/footer/`[env]`/`[input]` all go to stderr). The
+`run`/`skill`/`replay` shape:
 
 ```jsonc
 {
   "tool": "cowork-harness",
-  "version": "0.3.0",
+  "version": "<pkg version>",  // populated from package.json at runtime
   "command": "run" | "skill" | "replay",
   "ok": true,                 // false if any result failed OR an error occurred
   "results": [ RunResult ],   // one per scenario; skill/replay = array of 1
   "error": null               // or the error envelope (below) when a run THREW
 }
 ```
+
+Other commands use dedicated envelopes — `verify-cassettes` (§11.1), and `decide` / `boundary-check`
+each emit their own shape — so this is not a single universal envelope across every command.
 
 `ok = error===null && results.length>0 && results.every(r => r.result==="success" && r.assertions.every(a=>a.pass))`.
 
@@ -370,6 +375,10 @@ Categories come from TYPED errors (`UnansweredError`→`unanswered`, `BoundaryEr
 unanswered-under-`fail` / runtime · `3` boundary/integrity. (`--output-format json` writes via `writeSync` so the envelope
 is never truncated by `process.exit` on a pipe.)
 
+**Per-command exceptions:** `lint` exits `127` when `python3` is missing (spawn error); `replay` exits
+`2` on a malformed/unreadable cassette (distinct from the `0`/`1` verdict); `sync` exits `2` on a
+non-macOS platform (the platform guard, alongside the `sync` hard-failure → `1` note below).
+
 > The `3` "boundary" category here is the **typed `BoundaryError`** raised during a `run`/`skill` (e.g.
 > asserting egress behavior at `protocol` fidelity). It is distinct from the **`boundary-check` command**,
 > whose own probe failures follow the assertion convention and exit **`1`** (a failed sandbox probe is a
@@ -399,9 +408,9 @@ catalog + MCP-server names a regex can't distinguish from customer data). `email
 registry `account` field can carry the dev's email). `ok = no finding with cls!="unscanned"  &&  no staleness message  &&  no error`. An `unscanned` finding (a
 `>64 KiB`/unreadable artifact body, which is hash-only — nothing committed to leak) is reported but does NOT
 fail the gate. **Exit codes:** `0` clean · `1` any finding/staleness/error · `2` usage (e.g.
-`--privacy-only`+`--staleness-only` together, or zero cassettes under a dir — a loud non-zero, never a
+`--skip-privacy`+`--skip-staleness` together, or zero cassettes under a dir — a loud non-zero, never a
 vacuous pass). The `in:` assert operator (§ scenario schema) and `record <dir>`/`--rerecord-stale` batch
-recording are also part of 0.3.0; see `docs/scenario.md` and `docs/cassette.md`.
+recording are also part of 0.8.0; see `docs/scenario.md` and `docs/cassette.md`.
 
 **CB-3/CB-4 — `chat` REPL flags and `/help`:** The `chat` subcommand accepts `[--plugin <dir>]…`
 (repeatable; CB-3) — each `<dir>` is appended to `localPlugins` and injected alongside the default

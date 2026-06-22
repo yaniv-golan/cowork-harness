@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildSchemas, buildAssertionKeys, SCHEMA_DIR, ASSERTION_KEYS_PATH } from "../scripts/gen-schema.js";
-import { AnswerRule, Assertion } from "../src/types.js";
+import { AnswerRule, Assertion, VERDICT_MODIFIER_KEYS } from "../src/types.js";
 
 describe("AnswerRule rejects inert rules, accepts valid shapes", () => {
   it("rejects a matcher-less or action-less rule", () => {
@@ -87,5 +87,17 @@ describe("scenario.py assertion-keys.json is in sync with the zod Assertion sche
   it("the generated key set equals Object.keys(Assertion.shape) (no silent filtering)", () => {
     const keys = JSON.parse(buildAssertionKeys()).keys as string[];
     expect([...keys].sort()).toEqual([...Object.keys(Assertion.shape)].sort());
+  });
+  it("verdictModifierKeys matches VERDICT_MODIFIER_KEYS", () => {
+    const gen = JSON.parse(buildAssertionKeys()).verdictModifierKeys as string[];
+    expect([...gen].sort()).toEqual([...VERDICT_MODIFIER_KEYS].sort());
+  });
+  // The single-source guard: VERDICT_MODIFIER_KEYS must equal EXACTLY the `allow_`-prefixed Assertion keys.
+  // Catches both directions — a new `allow_*` schema field not added to the list, and a list entry with no
+  // field. (Every verdict modifier is `allow_<thing>`; if a future modifier breaks that convention, update
+  // this test deliberately.) This is what prevents the "added a modifier but forgot a touch-point" class.
+  it("VERDICT_MODIFIER_KEYS equals the allow_-prefixed Assertion keys (single-source convention)", () => {
+    const allowKeys = Object.keys(Assertion.shape).filter((k) => k.startsWith("allow_"));
+    expect([...VERDICT_MODIFIER_KEYS].sort()).toEqual(allowKeys.sort());
   });
 });

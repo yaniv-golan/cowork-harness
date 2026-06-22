@@ -9,7 +9,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { zodToJsonSchema } from "zod-to-json-schema";
-import { ScenarioObject, Assertion } from "../src/types.js";
+import { ScenarioObject, Assertion, VERDICT_MODIFIER_KEYS } from "../src/types.js";
 import { SessionConfig } from "../src/session.js";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -28,6 +28,9 @@ export function buildAssertionKeys(): string {
         $comment:
           "GENERATED from the Zod Assertion schema (src/types.ts) by scripts/gen-schema.ts — do not edit; run `npm run schema`.",
         keys: Object.keys(Assertion.shape).sort(),
+        // The verdict-modifier subset (no-op assertions that suppress a default-fail). scenario.py keeps a
+        // hardcoded copy parity-tested against this; see VERDICT_MODIFIER_KEYS in src/types.ts.
+        verdictModifierKeys: [...VERDICT_MODIFIER_KEYS].sort(),
       },
       null,
       2,

@@ -144,16 +144,16 @@ describe.skipIf(!canCli)("#58 — value-taking flags require a value (exit 2)", 
 });
 
 // CLI smokes for the new commands (built binary). Skipped when dist/ isn't built.
-describe.skipIf(!canCli)("assert --list / scaffold (CLI smokes)", () => {
+describe.skipIf(!canCli)("assertions --list / scaffold (CLI smokes)", () => {
   const run = (args: string[]) => spawnSync("node", [CLI, ...args], { encoding: "utf8" });
-  it("assert --list prints the schema-generated assertion keys", () => {
-    const r = run(["assert", "--list"]);
+  it("assertions --list prints the schema-generated assertion keys", () => {
+    const r = run(["assertions", "--list"]);
     expect(r.status).toBe(0);
     expect(r.stdout).toMatch(/artifact_json/);
     expect(r.stdout).toMatch(/dispatch_count_max/);
   });
-  it("assert --list --output-format json emits a machine envelope", () => {
-    const r = run(["assert", "--list", "--output-format", "json"]);
+  it("assertions --list --output-format json emits a machine envelope", () => {
+    const r = run(["assertions", "--list", "--output-format", "json"]);
     expect(r.status).toBe(0);
     const env = JSON.parse(r.stdout.trim().split("\n").filter(Boolean).pop()!);
     expect(env.assertions.some((a: any) => a.key === "file_exists" && a.description)).toBe(true);
@@ -162,5 +162,15 @@ describe.skipIf(!canCli)("assert --list / scaffold (CLI smokes)", () => {
     const r = run(["scaffold"]);
     expect(r.status).toBe(2);
     expect(r.stderr).toMatch(/scaffold <run-id/);
+  });
+  it("lint accepts a directory (expands to *.yaml/*.yml; empty dir is a loud error)", () => {
+    const dirRun = run(["lint", "examples/scenarios/"]);
+    if (dirRun.status === 127) return; // python3/PyYAML unavailable in this env — lint can't run
+    expect(dirRun.status).toBe(0); // dir expanded + all committed example scenarios clean
+    expect(dirRun.stdout + dirRun.stderr).not.toMatch(/file not found/i); // not rejected as a missing path
+    const empty = mkdtempSync(join(tmpdir(), "cwh-lint-empty-"));
+    const emptyRun = run(["lint", empty]);
+    expect(emptyRun.status).toBe(1); // no *.yaml/*.yml under the dir → loud non-zero, never a vacuous pass
+    expect(emptyRun.stdout + emptyRun.stderr).toMatch(/no-scenarios|nothing to do/);
   });
 });

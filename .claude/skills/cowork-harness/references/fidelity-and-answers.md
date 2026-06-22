@@ -1,6 +1,6 @@
 # Fidelity tiers & answer paths
 
-Self-contained reference. Tracks `cowork-harness 0.8.0` (baseline `desktop-1.14271.0`).
+Self-contained reference. Tracks `cowork-harness 0.9.0` (baseline `desktop-1.14271.0`).
 
 ## Fidelity tiers (`fidelity:` in the scenario)
 
@@ -16,7 +16,7 @@ Self-contained reference. Tracks `cowork-harness 0.8.0` (baseline `desktop-1.142
 - Boundary assertions (`egress_*`, `expect_denied`) are enforced at `container`, `microvm`, and
   `hostloop` (all share the container sandbox + egress proxy). Only `protocol` is rejected.
 - **Set the tier in the scenario's `fidelity:` field — not a flag.** `--fidelity` is accepted only by
-  `skill` (any tier) and `chat` (`container`/`hostloop` only); `run` rejects an extra `--fidelity`
+  `skill` (any tier) and `chat` (`protocol`/`container`/`hostloop`; only `microvm`/`cowork` unsupported); `run` rejects an extra `--fidelity`
   positional ("Fidelity is set by the scenario's `fidelity:` field, not a flag").
 
 ### `microvm` prerequisites & lifecycle
@@ -61,6 +61,26 @@ selections as a **JSON array** (`{"answers":{"<q>":["Auth","Billing"]}}`) — a 
 is read as one label and fails; a scalar is one selection; an array on a single-select gate fails loud.
 All paths deliver the binary-verified `", "`-joined wire shape.
 
+### The request envelope a `--decider-cmd` / `--decider-dir` helper parses
+
+Both external channels write the **same** self-describing request line per gate, so a helper can read
+valid labels off the wire instead of guessing. For a `question` gate it is shaped:
+
+```json
+{"type":"decision_request","id":"req_…","kind":"question",
+ "questions":[{"question":"Which output format?","header":"Format",
+              "options":[{"label":"Markdown"},{"label":"PDF"}],"multiSelect":false}],
+ "reply_with":"{\"id\":\"req_…\",\"answers\":{\"Which output format?\":\"<label or 1-based index>\"}}"}
+```
+
+So a helper keys its answer on `questions[N].question`, enumerates choices from
+`questions[N].options[].label`, and checks `questions[N].multiSelect` to decide scalar-vs-array reply.
+The `reply_with` field is a literal fill-in template for the reply shape (array placeholder when
+multiSelect). Notes: `options` is *optional* — a free-text / header-only gate arrives with no
+`options`; key off `question` (falling back to `header`). This is the shared wire model for both
+channels — `docs/decider-dir.md` shows the same shape, and the Python `serve_decider(fn)` adapter
+hands `fn` exactly this dict.
+
 ### `--on-unanswered` accepted values (precise)
 
 - On `skill`: `fail | prompt | first`.
@@ -100,6 +120,9 @@ cowork-harness decide \
 
 It works with `--answer`/`--answer-policy` (reports which rule matched, or exits non-zero if none),
 `--decider-cmd` (shows the exact request + answer), or `--decider-llm` (a live model answers).
+Caveat: `decide` only builds a **single-select** sample (set choices with `--option`; there is no
+multiSelect flag), so its printed request shows `options[].label` but never `multiSelect:true` — to
+exercise the array reply path, run a real multiSelect gate or unit-test the helper directly.
 
 ## Relevant environment variables
 
@@ -113,5 +136,5 @@ It works with `--answer`/`--answer-policy` (reports which rule matched, or exits
   redact from logs (beyond the auth tokens + `ANTHROPIC_CUSTOM_HEADERS`).
 - `COWORK_HARNESS_SOFT_MISSING` — downgrade a missing mount source from hard-error to warn-and-skip.
 - `COWORK_VM_GATEWAY` / `COWORK_VM_PROXY_PORT` / `COWORK_LIMA_INSTANCE` — L2 (microVM) knobs.
-- `COWORK_LOCKDOWN=on` — **aborts loudly** if the L2 guest firewall fails to apply (no silent
-  unprotected run).
+- `COWORK_LOCKDOWN` — default `on`: **aborts loudly** if the L2 guest firewall fails to apply (no
+  silent unprotected run). Set `=off` to opt out and run without isolation deliberately.

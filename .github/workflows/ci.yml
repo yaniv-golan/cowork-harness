@@ -58,7 +58,7 @@ jobs:
       - name: Validate CLI wiring
         run: node dist/cli.js list
       - name: Token-free replay gate (example-pdf-skill fixture)
-        run: node dist/cli.js replay --cassette examples/replays/example-pdf-skill.cassette.json --output-format json
+        run: node dist/cli.js replay examples/replays/example-pdf-skill.cassette.json --output-format json
       - name: Cassette privacy + staleness scan (committed fixtures)
         run: node dist/cli.js verify-cassettes examples/replays/
       - name: Lint example scenarios (no-silent-false-green invariants)

@@ -74,12 +74,15 @@ describe("computeContentSig", () => {
     expect(withTest).not.toBe(withoutTest);
   });
 
-  it("does NOT strip plugin.json version (unlike skillHash)", () => {
+  it("v6: STRIPS plugin.json version (unified with skillHash — a version-only bump is not a content change)", () => {
     const plugin = JSON.stringify({ name: "my-plugin", version: "1.0.0", mcpServers: {} });
     const d1 = makeSkillDir({ "plugin.json": plugin });
     const d2 = makeSkillDir({ "plugin.json": plugin.replace('"1.0.0"', '"2.0.0"') });
-    // contentSig should differ because raw content differs
-    expect(computeContentSig([d1])).not.toBe(computeContentSig([d2]));
+    // contentSig now ignores the version (matches skillHash) → a pure version bump does NOT block rehash.
+    expect(computeContentSig([d1])).toBe(computeContentSig([d2]));
+    // a real behavior field (mcpServers) still changes it
+    const d3 = makeSkillDir({ "plugin.json": JSON.stringify({ name: "my-plugin", version: "1.0.0", mcpServers: { x: {} } }) });
+    expect(computeContentSig([d1])).not.toBe(computeContentSig([d3]));
   });
 });
 

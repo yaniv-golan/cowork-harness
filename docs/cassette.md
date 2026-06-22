@@ -22,17 +22,16 @@ Use a live `run` for filesystem/egress assertions; use `replay` for the token-fr
 
 ```jsonc
 {
-  "cassetteVersion": 4,                  // format version; ABSENT = legacy (0); a FUTURE version warns
-                                         //   (v4 adds userVisibleRoots — the actual visible mount set)
+  "cassetteVersion": 6,                  // format version; ABSENT = legacy (0); a FUTURE version warns
   "scenario": { /* Scenario object — same schema as the .yaml */ },
   "events": [ /* JSON lines from events.jsonl (child→driver stdout) */ ],
   "controlOut": [ /* JSON lines from control-out.jsonl (driver→child control_responses) */ ],
-  "userVisibleRoots": ["outputs/", "project/"], // visible roots = outputs/ + each connected folder's mount name
+  "userVisibleRoots": ["outputs", ".projects"], // visible roots = outputs + each connected folder's mount name
   "artifacts": [                         // snapshot of outputs/ + connected folders (optional)
     { "path": "outputs/x.json", "bytes": 24, "sha256": "…", "body": "{…}" }, // body inlined ≤ 64 KiB
     { "path": "outputs/big.bin", "bytes": 9e6, "sha256": "…", "truncated": true } // oversized → hash-only
   ],
-  "fingerprint": { "baseline": "1.13576.1", "skillHash": "…", "skillSources": ["…"] } // staleness tripwire
+  "fingerprint": { "baseline": "1.14271.0", "skillHash": "…", "mode": "git", "contentSig": "…", "fileSigs": [["skills/x/SKILL.md", "…"]], "skillSources": ["…"] } // staleness tripwire (v5 manifest: fileSigs; v6: mode + git default)
 }
 ```
 
@@ -124,17 +123,27 @@ consistent with the actual stored body.
 
 ### scrubField utility
 
-`scrubField` is exported from `src/secrets.ts` for use outside the cassette pipeline:
+`scrubField` and `collectSecrets` are published as the package's only programmatic export — the supported
+subpath `cowork-harness/secrets` (everything else under `dist/` is private). Use it to apply the same
+redaction outside the cassette pipeline:
 
 ```ts
-import { scrubField } from "cowork-harness/secrets";
+import { scrubField, collectSecrets } from "cowork-harness/secrets";
 
-const safe = scrubField(rawValue, [process.env.ANTHROPIC_API_KEY!]);
+// collectSecrets() reads the known auth-token env vars (CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY, …)
+// plus COWORK_HARNESS_SCRUB_KEYS / _VALUES, and PRE-EXPANDS each secret into its base64 / URI /
+// "Bearer …" variants — which is what lets scrubField catch a secret embedded in an encoded field.
+const safe = scrubField(rawValue, collectSecrets());
 ```
 
-Pass the raw field value and an array of secret strings to redact. Returns the original string
-(unchanged) if no hit is found, or a `"[REDACTED:base64]"` / `"[REDACTED:uri]"` marker if the
-whole-field decode pass triggered, or a scrubbed string from the direct pass.
+`scrubField(value, secrets)` takes the raw field value and an array of secret strings to redact, and
+returns: the original string if no hit is found; a `"[REDACTED:base64]"` / `"[REDACTED:uri]"` marker if the
+whole-field decode pass triggered; or a scrubbed string from the direct pass.
+
+> **Pass `collectSecrets()`, not a bare `[token]`.** The direct pass only matches occurrences literally
+> present in your array — a bare `[ANTHROPIC_API_KEY]` catches the raw token and a whole-field base64 blob,
+> but **not** a secret embedded inside a larger encoded field (`base64(prefix + TOKEN)`). That coverage comes
+> from the variants `collectSecrets()` adds. If you supply your own list, pre-expand the encodings yourself.
 
 ## Assertion table
 
@@ -162,7 +171,9 @@ Content keys are evaluated on replay; everything else is skipped.
 | `questions_count_max` | at most N questions asked |
 | `gate_answers_delivered` | answered gates' answers reached the model |
 | `result` | run ended with `success` or `error` |
-| `allow_permissive_auto_allow` | verdict modifier — kept on replay, where it evaluates to a no-op pass |
+| `allow_permissive_auto_allow` | verdict modifier — kept on replay → no-op pass (the live signal it suppresses is zeroed) |
+| `allow_missing_capability` | verdict modifier — kept on replay → no-op pass (the live signal it suppresses is zeroed) |
+| `allow_l0_plugin_divergence` | verdict modifier — kept on replay → no-op pass (the live signal it suppresses is zeroed) |
 
 **`question_asked`, `questions_count_max`, `gate_answers_delivered` require `controlOut`** (full-fidelity
 replay). On an old cassette without `controlOut` these three keys are excluded from evaluation — not
@@ -273,7 +284,7 @@ Re-record a cassette when:
 On every **harness major** (x.0.0) version bump, re-record AND re-verify all cassettes:
 
 ```bash
-cowork-harness record scenarios/ --out cassettes/   # or: record cassettes/ --rerecord-stale
+cowork-harness record scenarios/                    # or: record cassettes/ --rerecord-stale
 cowork-harness verify-cassettes cassettes/
 ```
 
@@ -282,12 +293,24 @@ which can shift recorded behavior. Structural assertions (`artifact_json`, `file
 stable across these shifts; prose-level `transcript_matches` is not. Prefer structural asserts where
 possible.
 
-`verify-cassettes` reports three distinct staleness causes:
-- **`recorded under an older hash format (v1 → v2)`** — format upgrade; re-record once and the message
-  goes away.
-- **`skills/<name> changed since record`** — the scoped skill was edited; re-record that cassette.
-- **`shared root changed since record`** — a shared dependency (scripts/, references/) was edited;
-  re-record all cassettes in that scope.
+`verify-cassettes` reports these staleness causes:
+- **`recorded under an older hash format (vN → vM)`** — format upgrade; re-record once and the message
+  goes away. (Cassettes recorded before format **v6** all need one re-record — see the boundary note below.)
+- **`skill files changed since record — N changed (path, …)`** — the **exact** changed/added/removed file(s),
+  from the per-file manifest (`fileSigs`). For a scoped cassette it is prefixed with the bucket diagnosis
+  (`shared root changed (scope: skills/x) [N changed (…)]`) so you still see whether the change was in your
+  scoped skill or a shared dependency.
+- **`recorded in '<mode>' file-set mode, verifying in '<mode>'`** — the staleness boundary differs between
+  record and verify (e.g. recorded in a git work tree but verified from a non-repo copy); the hashes are not
+  comparable, so re-record under the same mode.
+
+**The skill-hash boundary (v6+):** by default the hash covers the **git-tracked** files of each skill/plugin
+source dir (a dir not in a git repo falls back to a raw filesystem walk). **OS-junk** (`.DS_Store` /
+`Thumbs.db` / `desktop.ini`) is always excluded, so a Finder touch never re-stales a cassette. Opt out of git
+mode with `COWORK_HARNESS_GITSET=0`. Set `COWORK_HARNESS_DEBUG_SKILLHASH=1` to dump the exact file set on a
+mismatch. Declare per-plugin non-runtime paths in `.cowork-hashignore` / the session `staleness.hash_ignore`.
+Note `rehash` cannot migrate a pre-v6 cassette (the hash *input set* changed, not just the digest format) —
+re-record those.
 
 ## Batch recording
 
@@ -397,4 +420,5 @@ the [README Testing section](../README.md#testing--cicd).
 - [SPEC.md](../SPEC.md) — the replay-fidelity contract clause (§11 / RunResult shape).
 - `src/run/cassette.ts` — the implementation: `contentKeys`, `replayCassette`, `CassetteAgentSession`.
 - `src/agent/session.ts` — `serializeDecision` (and its declared inverse `deserializeDecision`).
-- `src/secrets.ts` — `scrubField` (exported standalone utility for custom scrubbing pipelines).
+- `src/secrets.ts` — `scrubField` + `collectSecrets`, published as the `cowork-harness/secrets` subpath
+  export for custom scrubbing pipelines.

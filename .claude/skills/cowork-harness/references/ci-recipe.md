@@ -1,6 +1,6 @@
 # CI recipe — replay vs live lanes
 
-Self-contained reference. Tracks `cowork-harness 0.8.0` (baseline `desktop-1.14271.0`).
+Self-contained reference. Tracks `cowork-harness 0.9.0` (baseline `desktop-1.14271.0`).
 
 ## The core split: token-free PR gate + live nightly (self-hosted)
 
@@ -10,8 +10,9 @@ The split is not just about tokens — it decides **where each lane can run**:
 - **`replay` / `verify-cassettes` (token-free, agent-free).** Replays a recorded cassette
   (`events.jsonl` + `control-out.jsonl`) and lints the committed cassettes. **No model tokens, no
   Docker, no agent binary** — runs on a stock GitHub Actions runner. Evaluates **content** assertions
-  only (`transcript_*`, `tool_*`, `subagent_*`, `dispatch_count_max`, `result`,
-  `allow_permissive_auto_allow`; plus the gate keys `question_asked` / `questions_count_max` /
+  only (`transcript_*`, `tool_*`, `subagent_*`, `dispatch_count_max`, `result`, and the verdict
+  modifiers `allow_permissive_auto_allow` / `allow_missing_capability` / `allow_l0_plugin_divergence`
+  (no-op passes); plus the gate keys `question_asked` / `questions_count_max` /
   `gate_answers_delivered` **if** the cassette has `controlOut`). Filesystem/egress assertions are
   **silently skipped**. This is your **always-on PR gate**.
 - **`run` / `record` (live).** Spawns the real agent in a sandbox: real model tokens + Docker **+ the
@@ -77,7 +78,9 @@ A typical skill repo runs four stages, fastest/cheapest first:
 1. **Unit** — your skill's own tests (pytest/vitest of its scripts). Not the harness's job.
 2. **Boundary / lint** — `cowork-harness lint scenarios/*.yaml` (no-silent-false-green invariants; needs
    python3 + PyYAML) + `cowork-harness verify-cassettes cassettes/` (privacy scan + staleness) +
-   `cowork-harness boundary-check` where relevant. Token-free, agent-free.
+   `cowork-harness boundary-check` where relevant. Token-free, agent-free. **Don't `|| true` the lint
+   step** — a missing PyYAML makes `scenario.py` exit non-zero, and swallowing that turns the
+   false-green guard itself into a silent no-op.
 3. **Scenarios (replay)** — `cowork-harness replay cassettes/` on every PR (the committed `*.cassette.json`).
    Token-free; content + structure + gate delivery.
 4. **Parity / live (nightly, self-hosted)** — `cowork-harness run scenarios/` with a token + Docker +
@@ -98,6 +101,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: '20' }
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.x' }
+      - run: pip install pyyaml                                                # lint shells out to scenario.py (needs PyYAML)
       - run: npm i -g cowork-harness
       - run: cowork-harness lint scenarios/*.yaml                              # no-silent-false-green (needs python3 + PyYAML)
       - run: cowork-harness verify-cassettes cassettes/ --output-format json   # privacy + staleness gate

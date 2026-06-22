@@ -14,13 +14,13 @@ replay path end-to-end, including:
 Run it with:
 
 ```sh
-cowork-harness replay --cassette examples/replays/example-pdf-skill.cassette.json
+cowork-harness replay examples/replays/example-pdf-skill.cassette.json
 ```
 
 Or with JSON output (for CI):
 
 ```sh
-cowork-harness replay --cassette examples/replays/example-pdf-skill.cassette.json --output-format json
+cowork-harness replay examples/replays/example-pdf-skill.cassette.json --output-format json
 ```
 
 > From a source checkout you can skip the `npm link` and call the CLI directly:

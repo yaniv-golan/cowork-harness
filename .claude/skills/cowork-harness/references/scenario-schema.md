@@ -1,6 +1,6 @@
 # Scenario & session schema, assertion catalog, web_fetch, full gotchas
 
-Self-contained reference for authoring `cowork-harness` scenarios. Tracks `cowork-harness 0.8.0`
+Self-contained reference for authoring `cowork-harness` scenarios. Tracks `cowork-harness 0.9.0`
 (baseline `desktop-1.14271.0`). If your checkout is newer, prefer the live `docs/scenario.md`,
 `docs/session.md`, and `SPEC.md`.
 
@@ -105,6 +105,12 @@ staleness:
                                  # staleness hash; composes with a plugin-local .cowork-hashignore file
 ```
 
+The staleness hash uses each skill/plugin source dir's **git-tracked** file set by default (a non-repo dir
+falls back to a raw walk; `COWORK_HARNESS_GITSET=0` opts out). **OS-junk** (`.DS_Store`/`Thumbs.db`/
+`desktop.ini`) is always excluded, so a Finder touch can't re-stale a cassette; run-generated files a skill
+writes into its own dir should be declared in `hash_ignore` / `.cowork-hashignore`. On a mismatch,
+`verify-cassettes` names the exact changed file; `COWORK_HARNESS_DEBUG_SKILLHASH=1` dumps the full hashed set.
+
 **Mounting the skill under test:** put the skill folder in `plugins.local_plugins` and enable it via
 `plugins.enabled: [<plugin>@local]`. The folder is copied fresh each run. For an ad-hoc `skill` run
 with no session file, the CLI flags `--folder <dir>` and `--upload <file>` are the equivalents of
@@ -198,7 +204,8 @@ passes only if every key passes. Keep one concern per item unless you mean conju
 | `gate_answers_delivered: true` | every answered gate's answer reached the model (observed `tool_result`; unobserved = fail) |
 | `gate_answers_delivered: false` | asserts at least one answered gate's answer did **not** reach the model — for negative-path delivery tests |
 | `allow_permissive_auto_allow: true` | verdict modifier — suppresses the default-fail when the run recorded a cowork-parity permissive auto-allow; for tests that deliberately assert Cowork's permissive behavior |
-| `allow_missing_capability: true` | verdict modifier — suppresses the default-fail when the (partial "core") agent image omits a capability the skill used but real Cowork ships (OCR/LibreOffice/markitdown/opencv/PDF-tables). Assert only when the skill's fallback is genuinely equivalent; otherwise rebuild full parity (`--build-arg COWORK_FULL_PARITY=1`) or use the rootfs `max` tier. Live tiers only |
+| `allow_missing_capability: true` | verdict modifier — suppresses the default-fail when the (partial "core") agent image omits a capability the skill used but real Cowork ships (OCR/LibreOffice/markitdown/opencv/PDF-tables). Assert only when the skill's fallback is genuinely equivalent; otherwise rebuild full parity (`--build-arg COWORK_FULL_PARITY=1`). Also opts out of the `requires_capabilities` declared-need check. Live tiers only |
+| `allow_l0_plugin_divergence: true` | verdict modifier — opt into L0/protocol plugin divergence: suppresses the default-fail when a plugin behaves differently at `protocol` (L0) fidelity than under a sandboxed tier. Live tiers only |
 | `transcript_no_host_path: true` | no host path (`/Users`, `/opt`) leaked into model-visible text |
 | `egress_denied: <host>` | the host was blocked by the egress proxy |
 | `egress_allowed: <host>` | the host was allowed through |
@@ -232,7 +239,8 @@ A cassette (`record`/`replay`) has **no filesystem and no network**. `replay` re
 **content** assertions. The authoritative list is `contentKeys` in `src/run/cassette.ts`.
 
 **Evaluated on replay (content):** `transcript_*`, `tool_*`, `subagent_*`, `dispatch_count_max`,
-`result`.
+`result`. The verdict modifiers `allow_permissive_auto_allow` / `allow_missing_capability` /
+`allow_l0_plugin_divergence` are also kept on replay, evaluated as no-op passes.
 
 **Gate keys — replay only with a `controlOut` cassette:** `question_asked`, `questions_count_max`,
 `gate_answers_delivered`. With `controlOut` present they evaluate; on an old cassette without it, a
@@ -316,7 +324,7 @@ at the top of this file.
    the stochastic path flags the run `nonDeterministic`. The LLM decider is one mechanism, two
    spellings: `on_unanswered: llm` (YAML) and `--decider-llm` (CLI). The bare `--on-unanswered llm`
    is rejected (use `--decider-llm`). `agent` is **retired** — `on_unanswered: agent` is rejected by
-   the schema. (`src/types.ts:121`; `src/cli.ts:390`.)
+   the schema. (`src/types.ts:276`; `src/cli.ts:652`.)
 
 4. **`--on-unanswered first` is non-deterministic too** — it picks option 1 and is flagged
    `nonDeterministic`; not a deterministic substitute for scripted answers.

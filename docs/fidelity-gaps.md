@@ -4,6 +4,8 @@ This document explains where the harness intentionally diverges from real Claude
 
 > **TL;DR** — Most gaps are caused by one of three things: (1) Docker containers freeze their mount namespace at creation time; (2) real Cowork uses a proprietary native Swift binary (`@ant/claude-swift`) that wraps private Apple VZ APIs; or (3) the gap doesn't exist in real Cowork either — the harness faithfully reproduces a Cowork limitation.
 
+For how the harness *enforces* the limitations it does reproduce (sealed filesystem, default-deny egress, MCP-only crossing, per tier), see [boundary.md](./boundary.md).
+
 ---
 
 ## Mid-session folder addition
@@ -78,4 +80,4 @@ The harness `--fidelity` flag selects how closely the execution environment matc
 | `hostloop` | Docker + host-side agent loop | Matches Cowork's host-loop mode; agent file tools run on host |
 | `cowork` | Auto-picks `hostloop` or `container` via the same gate as real Cowork | Highest fidelity for automated tests |
 
-The `chat` command accepts `protocol`, `container`, and `hostloop`. `microvm` and `cowork` are omitted — `microvm` has a slow boot (~20s) that makes interactive use painful, and `cowork` requires porting the `decideLoopFromBaseline` gate logic from `execute.ts`.
+The `chat` command accepts `protocol`, `container`, and `hostloop`. `microvm` and `cowork` are omitted — `microvm` has a slow boot (~20s) that makes interactive use painful, and `cowork` would require replicating the cowork-tier wiring line (`execute.ts:241`), which resolves the tier via the shared `decideLoopFromBaseline` gate logic (`loop-decision.ts`).

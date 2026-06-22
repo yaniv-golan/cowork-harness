@@ -109,6 +109,21 @@ the CLI's `--decider-llm`). It is **non-deterministic** by construction, so a ru
 > gate it didn't anticipate (correct, but flaky for that skill). For that case answer live instead —
 > `--decider-llm` (a model answers, run flagged non-deterministic) or `--decider-dir` (you answer in-band)
 > — accepting the run is then no longer a deterministic regression.
+>
+> **Stochastic option *labels* (distinct from stochastic *structure*).** If a skill regenerates both the
+> question wording *and* the option labels each run, you can still pin the gate **deterministically** —
+> match on **position**, not text:
+>
+> - `choose:` accepts a **1-based index** (`choose: "2"` selects the second option), which survives
+>   regenerated labels. (Index applies only when `choose` is *entirely* digits; a pure-digit option *label*
+>   collides with index semantics — use `answer:` for that rare gate.)
+> - `when_question: ".*"` is a catch-all that matches any phrasing.
+>
+> So `when_question: ".*"` + `choose: "2"` pins a gate whose wording and labels both drift, with no live
+> decider. **Caveat:** rules are evaluated in order and the *first* matching `when_question` wins, so `.*`
+> answers *any* gate — use it only as a **last-resort fallback for a single expected gate per turn**, and
+> always place it *after* more-specific rules. This covers stochastic *labels*; it does **not** cover
+> structural stochasticity (whether/which gate appears), which still needs a live decider as above.
 
 > **Batched gates are answered atomically.** A gate with several sub-questions is answered (and delivered)
 > as one unit. If your scripted rules match only *some* sub-questions, the **whole gate** falls through to
@@ -129,6 +144,8 @@ block uses — a bare list of `{ when_question, choose }` rules, or an `{ answer
   choose: "Markdown"                             # the option label to select
 - when_question: "confirm.*stage"
   choose: "Looks right"
+- when_question: ".*"                            # catch-all — LAST, after specific rules; single gate/turn
+  choose: "2"                                    # 1-based position — survives regenerated option labels
 ```
 
 A missing, unparseable, or non-list policy file **fails loud** at load time — a malformed policy is never
@@ -197,13 +214,14 @@ if *every* key passes (don't rely on the first; keep one concern per item unless
 | `subagent_tool_absent: <Tool>` | no sub-agent used the tool |
 | `subagent_dispatched: <regex>` | a sub-agent whose `agentType` **or dispatch `description`** matches was dispatched (skills often dispatch with only a `description` and no `subagent_type` → `agentType:"unknown"`, so match by description, e.g. `subagent_dispatched: "TOP_DOWN"`) |
 | `subagent_declared_but_unused: <Tool>` | fails if a sub-agent declared the tool but never used **that** tool (even if it used others) — the v0.3.0 fabrication proxy |
-| `dispatch_count_max: <N>` | at most N sub-agents were dispatched (real Cowork caps at `{global:3}`; the harness **records** the count and asserts on it but does **not** itself enforce Cowork's skip-on-cap — that enforcement is DEFERRED, see SPEC §10) |
+| `dispatch_count_max: <N>` | at most N sub-agents were dispatched (real Cowork caps at `{perTask:1, global:3}`; the harness **records** the count and asserts on it but does **not** itself enforce Cowork's skip-on-cap — that enforcement is DEFERRED, see SPEC §10) |
 | `question_asked: <regex>` | the agent asked an AskUserQuestion whose text matches |
 | `questions_count_max: <N>` | the agent asked at most N questions |
 | `gate_answers_delivered: true` | every answered AskUserQuestion gate's answer actually reached the model — requires a positive, observed `tool_result` (an **unobserved** delivery fails too, not only an errored one — no silent false-green) |
 | `gate_answers_delivered: false` | asserts that at least one answered gate's answer did **not** reach the model (unobserved or errored delivery) — useful for negative-path tests of delivery failures |
 | `allow_permissive_auto_allow: true` | verdict modifier — suppresses the default-fail when the run recorded a cowork-parity permissive auto-allow; use this for tests that **deliberately** assert Cowork's permissive behavior rather than strict scripted coverage |
-| `allow_missing_capability: true` | verdict modifier (**live tiers only**) — suppresses the default-fail when the lean/`core` agent image omits a capability the skill used but real Cowork ships (OCR/LibreOffice/markitdown/opencv/PDF-tables); assert only when the skill's fallback is genuinely equivalent, else rebuild full parity (`--build-arg COWORK_FULL_PARITY=1`) or use the rootfs `max` tier |
+| `allow_missing_capability: true` | verdict modifier (**live tiers only**) — suppresses the default-fail when the lean/`core` agent image omits a capability the skill used but real Cowork ships (OCR/LibreOffice/markitdown/opencv/PDF-tables); assert only when the skill's fallback is genuinely equivalent, else rebuild full parity (`--build-arg COWORK_FULL_PARITY=1`). Also opts out of the `requires_capabilities` declared-need check below. |
+| `allow_l0_plugin_divergence: true` | verdict modifier — opts into L0/protocol plugin divergence, suppressing the plugin-fidelity default-fail |
 | `transcript_no_host_path: true` | no host path (`/Users`, `/opt`) leaked into model-visible text |
 | `egress_denied: <host>` | the host was blocked by the egress proxy |
 | `egress_allowed: <host>` | the host was allowed through |
@@ -211,7 +229,32 @@ if *every* key passes (don't rely on the first; keep one concern per item unless
 
 `expect_denied: [host, …]` is shorthand that adds an `egress_denied` assertion per host.
 
-Run **`cowork-harness assertions --list`** for this table from the live schema (it can't drift).
+### Declaring required capabilities (`requires_capabilities`)
+
+A scenario-level `requires_capabilities: [<family>, …]` declares the capability families the skill's core
+path **needs** (e.g. `office_convert`, `ocr`, `pdf_tables`, `ml_extract`, `cv`, `magick`). The run
+**hard-fails** if the running tier:
+
+- **omits** a declared family (the lean `core` image lacks it), or
+- **cannot verify** it — `protocol`/`replay` or `COWORK_SKIP_CAPABILITY_PROBE=1`, where no live probe runs.
+
+This closes the false-green for extraction-heavy skills: a PDF/Excel-ingestion skill that silently fell back
+to manual parsing on a tier without the deps now fails loudly instead of passing. Unlike the *use*-detection
+fail (which catches an omitted family the skill was observed using), this is a *declared-need* check, so it
+fires even when the skill's fallback masks the gap. The check is computed at run time and persisted, so
+`verify-run`/`replay` honor the recorded outcome — a clean full-parity run records nothing and never
+false-fails later. Opt out with `allow_missing_capability: true` when the fallback is genuinely equivalent.
+
+```yaml
+requires_capabilities: [office_convert, pdf_tables]   # fail unless the tier provides (and can verify) these
+```
+
+Run **`cowork-harness assertions --list`** for the authoritative *assertion* set from the live schema (it
+can't drift) — that list covers `assert:` keys only, so the scenario *fields* that also appear above
+(`expect_denied`, `requires_capabilities`) are not in it.
+
+`replay_protocol_fidelity` is replay-synthesized and **not** authorable in a scenario — writing it
+errors at load. See [docs/cassette.md](./cassette.md) for the O7 guard.
 
 #### Verdict signals
 
@@ -368,7 +411,10 @@ synthetic `AskUserQuestion` and feeds it to whichever decider you point at: `--a
 `--decider-cmd '<helper>'` (shows the exact request the helper received and its answer), or `--decider-llm`
 (a live model answers; flagged non-deterministic). Override the prompt with `--question` and repeat
 `--option` to set the choices. `decide` does **not** accept `--decider-dir` (the file-rendezvous channel
-is a live-run concern) — passing it is a hard usage error (exit 2).
+is a live-run concern) — passing it is a hard usage error (exit 2). The synthetic gate is **single-select
+only** (there is no multiSelect flag), so the printed request shows `options[].label` but never
+`multiSelect:true` — to exercise a helper's array reply path, run a real multiSelect gate or unit-test
+the helper directly.
 
 ```bash
 # Does my answer-policy actually answer the gate I think it does?
@@ -399,6 +445,8 @@ persisted `result.json` + sidecars and uses the **same verdict path as a live re
 `verify-run` refuses rather than reporting a false failure.
 
 ### Debugging with `chat`
+
+> See [chat.md](./chat.md) for the full `chat` reference and flags.
 
 `cowork-harness chat <skill-folder>` is an interactive multi-turn REPL for **hand-debugging** a skill under
 the runtime — reach for it to reproduce a gate/permission flow interactively, poke a stochastic multi-turn
