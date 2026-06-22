@@ -32,7 +32,7 @@ Use a live `run` for filesystem/egress assertions; use `replay` for the token-fr
     { "path": "outputs/x.json", "bytes": 24, "sha256": "…", "body": "{…}" }, // body inlined ≤ 64 KiB
     { "path": "outputs/big.bin", "bytes": 9e6, "sha256": "…", "truncated": true } // oversized → hash-only
   ],
-  "fingerprint": { "baseline": "1.14271.0", "skillHash": "…", "skillSources": ["…"] } // staleness tripwire
+  "fingerprint": { "baseline": "1.14271.0", "skillHash": "…", "mode": "git", "contentSig": "…", "fileSigs": [["skills/x/SKILL.md", "…"]], "skillSources": ["…"] } // staleness tripwire (v6: mode + per-file manifest)
 }
 ```
 
@@ -284,12 +284,24 @@ which can shift recorded behavior. Structural assertions (`artifact_json`, `file
 stable across these shifts; prose-level `transcript_matches` is not. Prefer structural asserts where
 possible.
 
-`verify-cassettes` reports three distinct staleness causes:
-- **`recorded under an older hash format (v1 → v2)`** — format upgrade; re-record once and the message
-  goes away.
-- **`skills/<name> changed since record`** — the scoped skill was edited; re-record that cassette.
-- **`shared root changed since record`** — a shared dependency (scripts/, references/) was edited;
-  re-record all cassettes in that scope.
+`verify-cassettes` reports these staleness causes:
+- **`recorded under an older hash format (vN → vM)`** — format upgrade; re-record once and the message
+  goes away. (Cassettes recorded before format **v6** all need one re-record — see the boundary note below.)
+- **`skill files changed since record — N changed (path, …)`** — the **exact** changed/added/removed file(s),
+  from the per-file manifest (`fileSigs`). For a scoped cassette it is prefixed with the bucket diagnosis
+  (`shared root changed (scope: skills/x) [N changed (…)]`) so you still see whether the change was in your
+  scoped skill or a shared dependency.
+- **`recorded in '<mode>' file-set mode, verifying in '<mode>'`** — the staleness boundary differs between
+  record and verify (e.g. recorded in a git work tree but verified from a non-repo copy); the hashes are not
+  comparable, so re-record under the same mode.
+
+**The skill-hash boundary (v6+):** by default the hash covers the **git-tracked** files of each skill/plugin
+source dir (a dir not in a git repo falls back to a raw filesystem walk). **OS-junk** (`.DS_Store` /
+`Thumbs.db` / `desktop.ini`) is always excluded, so a Finder touch never re-stales a cassette. Opt out of git
+mode with `COWORK_HARNESS_GITSET=0`. Set `COWORK_HARNESS_DEBUG_SKILLHASH=1` to dump the exact file set on a
+mismatch. Declare per-plugin non-runtime paths in `.cowork-hashignore` / the session `staleness.hash_ignore`.
+Note `rehash` cannot migrate a pre-v6 cassette (the hash *input set* changed, not just the digest format) —
+re-record those.
 
 ## Batch recording
 

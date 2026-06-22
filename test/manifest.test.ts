@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildFingerprint, checkStaleness, scanCassette, redactCassette, type Cassette } from "../src/run/cassette.js";
+import { buildFingerprint, checkStaleness, scanCassette, redactCassette, CASSETTE_VERSION, type Cassette } from "../src/run/cassette.js";
 import { type RedactionPolicy } from "../src/redact.js";
 
 // v5 per-file manifest (fileSigs): exact-diff staleness reporting + privacy (scan/redact of paths).
@@ -19,7 +19,7 @@ function tree(skillName = "cap-table"): { root: string; session: string; skillFi
 
 const mkCassette = (fp: ReturnType<typeof buildFingerprint>): Cassette =>
   ({
-    cassetteVersion: 5,
+    cassetteVersion: CASSETTE_VERSION,
     scenario: {
       name: "t",
       baseline: "1.14271.0",

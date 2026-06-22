@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { readdirSync, statSync, lstatSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readdirSync, statSync, lstatSync, readFileSync, readlinkSync } from "node:fs";
+import { join, resolve, dirname, sep, relative } from "node:path";
 import { gitModeEnabled, gitTrackedSet, gitAccept } from "./skill-files.js";
 
 /**
@@ -88,7 +88,15 @@ type AcceptFn = (relPath: string) => boolean;
  *  unexpected drift source (a `.DS_Store`, a run-generated file) is one line instead of a black-box hunt. */
 type OnFileFn = (relPath: string, hashedSha: string) => void;
 
-function hashDir(dir: string, hash: ReturnType<typeof createHash>, errors: string[], rel = "", accept?: AcceptFn, onFile?: OnFileFn): void {
+function hashDir(
+  dir: string,
+  hash: ReturnType<typeof createHash>,
+  errors: string[],
+  rel = "",
+  accept?: AcceptFn,
+  onFile?: OnFileFn,
+  root = dir,
+): void {
   let entries: string[];
   try {
     entries = readdirSync(dir).sort();
@@ -112,17 +120,37 @@ function hashDir(dir: string, hash: ReturnType<typeof createHash>, errors: strin
       errors.push(msg);
       continue;
     }
-    // skip symlinks explicitly (both to files and directories) — a symlink can escape the
-    // skill dir tree. Model: collectArtifacts in execute.ts uses lstatSync + skip for the same reason.
+    // S5 (v6): an IN-TREE symlink (target resolves inside the skill root) is hashed by its TARGET STRING —
+    // NOT followed (no out-of-tree content) — so a re-point is detected while the target file's own content
+    // is hashed separately. An ESCAPING symlink (target outside the root) is skipped + warned (as before:
+    // a symlink can otherwise pull in out-of-tree content). Emitted via onFile too, so contentSig/manifest
+    // (entries-based) stay identical to skillHash.
     if (st.isSymbolicLink()) {
-      process.stderr.write(`cowork-harness: skill-hash: skipping symlink ${abs} (not followed)\n`);
+      if (accept && !accept(relPath)) continue;
+      let target: string;
+      try {
+        target = readlinkSync(abs);
+      } catch {
+        process.stderr.write(`cowork-harness: skill-hash: skipping unreadable symlink ${abs}\n`);
+        continue;
+      }
+      const resolvedTarget = resolve(dirname(abs), target);
+      const rootResolved = resolve(root);
+      const inTree = resolvedTarget === rootResolved || resolvedTarget.startsWith(rootResolved + sep);
+      if (!inTree) {
+        process.stderr.write(`cowork-harness: skill-hash: skipping escaping symlink ${abs} -> ${target} (not followed)\n`);
+        continue;
+      }
+      const targetRel = relative(rootResolved, resolvedTarget).split(sep).join("/");
+      hash.update(`L:${relPath} -> ${targetRel}\n`); // link structure; a re-point changes the digest
+      if (onFile) onFile(relPath, `lnk:${targetRel}`);
       continue;
     }
     if (st.isDirectory()) {
       if (SKILL_HASH_DIR_DENYLIST.has(name)) continue; // skip VCS/cache subtrees entirely
       if (accept && !accept(relPath)) continue; // F-6: scoped out (an unlisted skill's subtree)
       hash.update(`D:${relPath}\n`); // structure marker — an empty/renamed dir registers too
-      hashDir(abs, hash, errors, relPath, accept, onFile);
+      hashDir(abs, hash, errors, relPath, accept, onFile, root);
     } else if (st.isFile()) {
       if (name.endsWith(".cassette.json")) continue; // a recorded cassette is output, not skill source
       if (relPath === HASH_IGNORE_FILE) continue; // the ignore file is harness metadata, not skill source
@@ -230,62 +258,17 @@ function scopedAccept(keep: Set<string>): AcceptFn {
   };
 }
 
-/** Algorithm-independent content fingerprint over `dirs`.
- *  SHA-256 over globally-sorted `"dirN/relpath:content-sha256"` entries for every regular file
- *  in every dir, using the same VCS/cache exclusions as `hashDir` but NO hashIgnore rules
- *  (those are staleness-algorithm-specific and change between CASSETTE_VERSIONs).
- *  Does NOT strip plugin.json version — hashes raw file bytes.
- *  Each dir is prefixed by its 0-based sort index (dir0, dir1, …) to prevent collisions
- *  between dirs that share the same basename (e.g. two plugins both named `skills`).
- *  Returns `undefined` for an empty or all-missing dirs list. */
-export function computeContentSig(dirs: string[]): string | undefined {
+/** Content fingerprint over `dirs` — UNIFIED (v6) onto the SAME walk as `skillHash`: it derives from
+ *  `skillHashEntries`, so it covers the EXACT same file set (OS-junk excluded, F-6 scope, `.cowork-hashignore`,
+ *  git-tracked mode, in-tree-symlink policy) instead of the old separate walk that followed symlinks and
+ *  ignored scope/ignore. SHA-256 over globally-sorted `relpath:content-sha256` pairs. Returns `undefined`
+ *  for an empty/all-missing set. (Used by `rehash` to detect content change across a *format-only* hash bump;
+ *  this v6 unification is an algorithm change, so a pre-v6 cassette's contentSig is non-comparable — `rehash`
+ *  routes those to a re-record, see cassette.ts.) */
+export function computeContentSig(dirs: string[], scopeSkills?: string[], sessionIgnore?: string[]): string | undefined {
   if (dirs.length === 0) return undefined;
-  const entries: string[] = [];
-
-  function walkForSig(dir: string, prefix: string, rel: string): void {
-    let names: string[];
-    try {
-      names = readdirSync(dir).sort();
-    } catch {
-      return; // unreadable dir → treat as empty
-    }
-    for (const name of names) {
-      const abs = join(dir, name);
-      const relPath = rel ? `${rel}/${name}` : name;
-      const fullRelPath = `${prefix}/${relPath}`;
-      let st;
-      try {
-        st = statSync(abs);
-      } catch {
-        continue;
-      }
-      if (st.isDirectory()) {
-        if (SKILL_HASH_DIR_DENYLIST.has(name)) continue;
-        walkForSig(abs, prefix, relPath);
-      } else if (st.isFile()) {
-        if (name.endsWith(".cassette.json")) continue;
-        if (name === HASH_IGNORE_FILE) continue;
-        let content: Buffer;
-        try {
-          content = readFileSync(abs);
-        } catch {
-          continue;
-        }
-        const sha = createHash("sha256").update(content).digest("hex");
-        entries.push(`${fullRelPath}:${sha}`);
-      }
-    }
-  }
-
-  // Sort dirs for determinism, then prefix by index to prevent basename collisions
-  // (two dirs with the same basename — e.g. both named `skills` — would otherwise alias).
-  const sorted = [...dirs].sort();
-  for (let i = 0; i < sorted.length; i++) {
-    walkForSig(sorted[i], `dir${i}`, "");
-  }
-
+  const entries = skillHashEntries(dirs, scopeSkills, sessionIgnore).map((e) => `${e.path}:${e.sha}`);
   if (entries.length === 0) return undefined;
-  entries.sort(); // global sort across all dirs
   return createHash("sha256").update(entries.join("\n")).digest("hex");
 }
 

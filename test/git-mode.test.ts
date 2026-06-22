@@ -89,11 +89,25 @@ describe("Phase C — hashSkillDirs in git mode", () => {
     });
   });
 
-  it("default-OFF (no flag) ignores git entirely — untracked files ARE hashed (mode raw)", () => {
+  it("git mode is ON by DEFAULT (v6) — a repo dir hashes tracked-only with no flag set", () => {
     const { dir } = gitRepo();
-    const r = hashSkillDirs([dir]); // flag off
-    expect(r.mode).toBe("raw");
-    const paths = skillHashEntries([dir]).map((e) => e.path);
-    expect(paths).toContain("skills/cap-table/scratch.tmp"); // untracked IS hashed in raw mode
+    delete process.env[GITSET_ENV]; // no flag → default git mode
+    const r = hashSkillDirs([dir]);
+    expect(r.mode).toBe("git");
+    expect(skillHashEntries([dir]).map((e) => e.path)).toEqual(["skills/cap-table/SKILL.md"]);
+  });
+
+  it("OPT-OUT with COWORK_HARNESS_GITSET=0 → raw walk (untracked files ARE hashed)", () => {
+    const { dir } = gitRepo();
+    const prev = process.env[GITSET_ENV];
+    process.env[GITSET_ENV] = "0";
+    try {
+      const r = hashSkillDirs([dir]);
+      expect(r.mode).toBe("raw");
+      expect(skillHashEntries([dir]).map((e) => e.path)).toContain("skills/cap-table/scratch.tmp"); // untracked hashed in raw
+    } finally {
+      if (prev === undefined) delete process.env[GITSET_ENV];
+      else process.env[GITSET_ENV] = prev;
+    }
   });
 });

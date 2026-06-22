@@ -15,9 +15,11 @@ import { relative, sep } from "node:path";
  */
 export const GITSET_ENV = "COWORK_HARNESS_GITSET";
 
-/** True when git-tracked mode is opted into. Read at the seam so tests can toggle it. */
+/** v6: git-tracked mode is the DEFAULT (the portable boundary). A dir that isn't a usable git work tree
+ *  falls back to raw automatically (gitTrackedSet → null), so non-repo skills are unaffected. Opt OUT with
+ *  COWORK_HARNESS_GITSET=0 (legacy raw walk for every dir). Read at the seam so tests can toggle it. */
 export function gitModeEnabled(): boolean {
-  return process.env[GITSET_ENV] === "1";
+  return process.env[GITSET_ENV] !== "0";
 }
 
 function git(args: string[], cwd: string): { ok: boolean; stdout: string } {

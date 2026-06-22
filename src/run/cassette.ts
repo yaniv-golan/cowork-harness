@@ -109,13 +109,19 @@ export interface Cassette {
 // user_visible_artifact from the real mount set instead of a hardcoded `.projects/` prefix. A folder-
 // artifact cassette recorded pre-v4 has no folder root stored → must be RE-RECORDED, not rehashed
 // (rehash only re-hashes skill fingerprints; it cannot reconstruct folder names).
-// v5 (H9): `skillHash` now EXCLUDES OS-junk files (.DS_Store/Thumbs.db/desktop.ini/…) so an out-of-band OS
-// metadata touch can't re-stale a cassette. A cassette recorded with OS-junk present in its skill tree gets
-// a new skillHash → checkStaleness emits the graceful "older format v4→v5 — re-record once". `contentSig` is
-// deliberately UNCHANGED (still junk-inclusive), so `rehash` keeps working and can migrate a non-junk-drifted
-// cassette without a full re-record. (The fuller resolver-unification + per-file manifest + git-tracked
-// boundary remain planned follow-ups — see docs/internal/2026-06-22-staleness-redesign-plan.md.)
-export const CASSETTE_VERSION = 5;
+// v5 (H9): `skillHash` EXCLUDES OS-junk files (.DS_Store/Thumbs.db/desktop.ini/…) so an out-of-band OS
+// metadata touch can't re-stale a cassette; per-file manifest (`fileSigs`) added for exact-diff reporting.
+// v6 (staleness redesign — breaking): `contentSig` is UNIFIED onto the `skillHash` walk (same file set:
+// OS-junk/scope/ignore + in-tree-symlink-by-target), and the **git-tracked file set is the DEFAULT boundary**
+// (a dir in a git work tree hashes/delivers only tracked files; non-repo dirs fall back to raw). The
+// `contentSig` algorithm therefore changed → a pre-v6 cassette's `contentSig` is non-comparable, so `rehash`
+// routes pre-v6 cassettes to a re-record (honest "algorithm changed" message, not "content changed").
+export const CASSETTE_VERSION = 6;
+// The contentSig algorithm version. Bumped whenever computeContentSig's INPUT/encoding changes (the v6
+// unification). `rehash` only byte-compares contentSig within the same algo version; across a bump it
+// re-records. Derived from cassetteVersion: < 6 ⇒ algo 1 (legacy), ≥ 6 ⇒ algo 2 (unified).
+const CONTENTSIG_ALGO = 2;
+const contentSigAlgoOf = (cassetteVersion: number) => (cassetteVersion >= 6 ? 2 : 1);
 
 /** Canonical URL of the JSON Schema for this cassette format version.
  *  Appears in every written cassette as `$schema` so editors and unfamiliar readers
@@ -291,7 +297,7 @@ export function buildFingerprint(
   const fp: Fingerprint = {
     baseline: baselineAppVersion,
     skillHash: hashResult.hash,
-    contentSig: computeContentSig(dirs), // v3: algorithm-independent; survives hash-format changes
+    contentSig: computeContentSig(dirs, scopeSkills, hashIgnore), // v6: unified onto the skillHash walk (same set)
     skillSources: dirs.sort().map((d) => relative(baseDir, d)),
   };
   // Phase C: record the boundary mode only when git (the default raw needs no marker → keeps v<5 cassettes and
@@ -1737,7 +1743,19 @@ export function cmdRehash(args: string[]): void {
       continue;
     }
 
-    // The content check: current contentSig must match the recorded one.
+    // v6: contentSig is only comparable WITHIN the same algorithm version. The v6 unification changed the
+    // algorithm, so a pre-v6 cassette's contentSig is apples-to-oranges — route it to a re-record with an
+    // HONEST message (NOT "content changed", which would falsely imply the skill changed).
+    if (contentSigAlgoOf(recordedVersion) !== CONTENTSIG_ALGO) {
+      results.push({
+        file,
+        action: "error",
+        reason: `the content-fingerprint algorithm changed in v${CASSETTE_VERSION} (unified file set / git-tracked) — \`rehash\` cannot bridge an input-set change; re-record to migrate`,
+      });
+      continue;
+    }
+
+    // The content check: current contentSig must match the recorded one (same algo version).
     if (liveFingerprint.contentSig !== cassette.fingerprint.contentSig) {
       results.push({
         file,
