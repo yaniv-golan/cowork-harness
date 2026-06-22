@@ -1,0 +1,30 @@
+# Keeps dependencies and pinned GitHub Actions current. Actions are SHA-pinned in the
+# workflows (with `# vX.Y.Z` comments); Dependabot reads those comments and bumps the SHA.
+version: 2
+updates:
+  # GitHub Actions used by ci.yml / release.yml
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # npm package (root)
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      npm-minor-patch:
+        update-types: ["minor", "patch"]
+
+  # Python helper test deps
+  - package-ecosystem: pip
+    directory: /python
+    schedule:
+      interval: weekly
+    groups:
+      pip:
+        patterns: ["*"]

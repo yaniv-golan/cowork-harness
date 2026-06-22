@@ -1,0 +1,4 @@
+# Default owner for everything in the repo. Auto-requests review on PRs.
+# The owner is a bypass actor on the `main` ruleset, so this never blocks the owner's
+# own pushes — it only attaches a reviewer to incoming contributor PRs.
+* @yaniv-golan

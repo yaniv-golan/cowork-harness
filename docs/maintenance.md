@@ -176,3 +176,45 @@ accidentally pushed ahead of npm) surfaces as a clear "no matching version" inst
 command." When a skill bump starts depending on new CLI features, bump this floor (in `SKILL.md` Preflight)
 together with `tracks-harness:` so the two can't drift — both name the minimum harness version the skill
 needs.
+
+## Abuse & moderation runbook
+
+The repo's standing protections live in GitHub settings and `.github/` (branch ruleset with
+the owner as bypass actor, fork-PR workflow approval, SHA-pinned actions + Dependabot, secret
+scanning + push protection). Those are always-on. The controls below are **break-glass** —
+turn them on only while an abuse wave is active, then turn them back off so the repo stays
+welcoming.
+
+### Spam / drive-by issue & PR floods
+
+Temporarily limit interactions to existing users (GitHub caps each call's duration — re-run to
+extend):
+
+```sh
+# Limit to existing users for 7 days (one_day | three_days | one_week | one_month | six_months).
+gh api -X PUT repos/yaniv-golan/cowork-harness/interaction-limits \
+  -f limit=existing_users -f expiry=one_week
+# Inspect / clear:
+gh api repos/yaniv-golan/cowork-harness/interaction-limits
+gh api -X DELETE repos/yaniv-golan/cowork-harness/interaction-limits
+```
+
+Other levers: `collaborators_only` (hardest), `contributors_only` (only past contributors).
+
+### A malicious PR is opened
+
+Fork PRs already require approval before any workflow runs (so untrusted code never touches
+CI minutes or — guarded separately — secrets). Don't click **Approve and run** on a PR you
+haven't read. Close + lock + report the PR; block the account if needed:
+
+```sh
+gh pr close <N> -R yaniv-golan/cowork-harness
+gh api -X PUT repos/yaniv-golan/cowork-harness/issues/<N>/lock -f lock_reason=spam
+gh api -X PUT user/blocks/<username>   # block the account
+```
+
+### A secret may have leaked
+
+Push protection blocks known secret formats on push. If something slipped through: rotate the
+credential first (the local `.env` OAuth token / `ANTHROPIC_API_KEY`), then purge history. The
+GitHub **Secret scanning** alerts tab lists detections.
