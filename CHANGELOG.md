@@ -51,6 +51,13 @@ All notable changes to this project are documented here. The format is based on
   points to it when the flag is off).
 - **`COWORK_HARNESS_GITSET=0`** — opt out of the new default git-tracked boundary (see Breaking) back to the
   legacy raw filesystem walk for every dir.
+- **`requires_capabilities` scenario assertion** — fail a scenario unless the running tier provides *and can
+  verify* the declared capability families (e.g. `office_convert`, `pdf_tables`). The unmet set is persisted
+  in the run result (`requiresCapabilityUnmet`), so `verify-run` can't false-fail; opt out with the
+  `allow_missing_capability` verdict modifier when the skill's fallback is genuinely equivalent.
+- **LLM decider `OTHER:` free-text directive** — on an options-bearing gate, a decider answer of
+  `OTHER: <text>` is matched to a label first, else passed through as free text; a bare out-of-set value
+  still fails loud.
 
 ### Fixed
 
@@ -67,6 +74,17 @@ All notable changes to this project are documented here. The format is based on
   warning on the replay lane. The verdict modifiers are now single-sourced from one list (`assert.ts`,
   `cassette.ts`, and the Python linter all derive from / are checked against it), guarded by a convention
   test against drift.
+- **A tail-end transport drop is no longer conflated with an agent failure.** A connection closed *after* a
+  clean result is classified as `resultErrorKind: "transport"` (vs `"agent"`) and surfaced as a
+  lane/assertion-aware `transport_error` verdict — still a failure (no false-green), but distinguishable from
+  a genuine skill error; a non-matching envelope falls back to the agent classification.
+- **Clearer guard / capability legibility.** The run footer lists only guards that actually ran this lane
+  (`capabilityProbe: definitive | unverified | skipped`) — never a false check-mark for a guard that didn't
+  run; capability notices state their own safety net + all-clear with verdict-impact tags; the unbuilt `max`
+  tier is dropped from capability hints; and Docker pool-exhaustion is reframed as a concurrency limit, not a
+  leak.
+- **Ordered interrupt cleanup.** A `SIGINT` / `SIGTERM` during a live run reaps in-flight egress resources in
+  order (container thunks before network thunks) and announces itself, instead of leaving them dangling.
 
 ## [0.8.0] — 2026-06-21
 
