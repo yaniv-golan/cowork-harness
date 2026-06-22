@@ -265,8 +265,7 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
   chat: "usage: chat <skill-folder> [prompt] [--fidelity protocol|container|hostloop] [--model <id>]\n              [--upload <file>]... [--folder <dir>]... [--plugin <dir>]... [--verbose] [--raw]\n       --raw: native cowork mode via docker run -it; egress sandbox NOT applied; rejects --upload/--folder/--plugin/--fidelity (only --model applies)\n       --fidelity: protocol/container/hostloop only (no microvm/cowork); protocol = no Docker, no sandbox",
   record:
     "usage: record <scenario.yaml | dir/> [--out <file>] [--output-format text|json] [--rerecord-stale] [--no-redact] [--allow-failing] [--max-artifact-bytes <n>] [--dry-run]",
-  replay:
-    "usage: replay <file.cassette.json | dir/> [--strict] [--output-format text|json]",
+  replay: "usage: replay <file.cassette.json | dir/> [--strict] [--output-format text|json]",
   "verify-cassettes":
     "usage: verify-cassettes <file|dir> [--skip-privacy|--skip-staleness] [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-file <path>]... [--output-format json]",
   trace:

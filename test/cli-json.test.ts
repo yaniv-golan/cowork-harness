@@ -311,20 +311,17 @@ describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
   // Every verdict modifier must (a) pass as a STANDALONE assertion (not "empty assertion") and (b) replay
   // green without being misclassified as a filesystem/egress skip. Covering all three guards the exact gap
   // `allow_l0_plugin_divergence` fell through (it had no assert.ts noop branch).
-  it.each([...VERDICT_MODIFIER_KEYS])(
-    "a standalone %s assertion replays green with no filesystem-skip warning",
-    (modifier) => {
-      const r0 = run(["--version"]); // borrow a temp cwd
-      writeIn(r0.cwd, "c.cassette.json", JSON.stringify(cassette([{ [modifier]: true }])));
-      const r = spawnSync("node", [CLI, "replay", "c.cassette.json", "--output-format", "json"], {
-        encoding: "utf8",
-        cwd: r0.cwd,
-      });
-      expect(r.status).toBe(0);
-      expect(JSON.parse(r.stdout)?.ok).toBe(true); // no-op verdict modifier → green
-      expect(r.stderr).not.toMatch(/skipped \d+ filesystem/); // not misclassified as a filesystem/egress skip
-    },
-  );
+  it.each([...VERDICT_MODIFIER_KEYS])("a standalone %s assertion replays green with no filesystem-skip warning", (modifier) => {
+    const r0 = run(["--version"]); // borrow a temp cwd
+    writeIn(r0.cwd, "c.cassette.json", JSON.stringify(cassette([{ [modifier]: true }])));
+    const r = spawnSync("node", [CLI, "replay", "c.cassette.json", "--output-format", "json"], {
+      encoding: "utf8",
+      cwd: r0.cwd,
+    });
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout)?.ok).toBe(true); // no-op verdict modifier → green
+    expect(r.stderr).not.toMatch(/skipped \d+ filesystem/); // not misclassified as a filesystem/egress skip
+  });
 
   it("record --dry-run: single scenario prints plan and exits 0", () => {
     const cwd = mkdtempSync(join(tmpdir(), "cc-dryrun-"));
