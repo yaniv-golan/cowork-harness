@@ -70,12 +70,14 @@ staleness:
                                  #   **/tests  — explicit any-depth (same as bare `tests`)
                                  #   **/*.md   — any .md at any depth
                                  # The cassette-staleness hash skips ignored paths,
-                                 # so editing them no longer re-stales cassettes. The harness only hard-
-                                 # excludes universally-non-runtime paths (VCS/caches/cassettes + the
-                                 # plugin.json `version` field); a plugin's own runtime boundary is yours
-                                 # to declare here. Composes with a plugin-local `.cowork-hashignore` file
-                                 # at the mount root. (For per-skill scoping in a multi-skill plugin, set
-                                 # `skills: [<name>]` on the SCENARIO — see scenario.md / cassette.md.)
+                                 # so editing them no longer re-stales cassettes. The harness hard-excludes
+                                 # universally-non-runtime paths: VCS/caches/cassettes, the plugin.json
+                                 # `version` field, and (v5+) OS-junk files (.DS_Store / Thumbs.db /
+                                 # desktop.ini) — so a Finder touch can't re-stale a cassette. A plugin's own
+                                 # runtime boundary (and any RUN-GENERATED files a skill writes into its own
+                                 # dir) are yours to declare here or in a plugin-local `.cowork-hashignore`
+                                 # file at the mount root. (For per-skill scoping in a multi-skill plugin,
+                                 # set `skills: [<name>]` on the SCENARIO — see scenario.md / cassette.md.)
 ```
 
 ## Field reference

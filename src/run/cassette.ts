@@ -25,7 +25,7 @@ import { jsonEnvelope, parseOutputFormat } from "./envelope.js";
 import { parseArgs } from "../cli-args.js";
 import { resolveInputs } from "./inputs.js";
 import { realProbe } from "./doctor.js";
-import { hashSkillDirs, hashSharedOnly, computeContentSig } from "./skill-hash.js";
+import { hashSkillDirs, hashSharedOnly, computeContentSig, skillHashEntries, OS_JUNK_PATTERN } from "./skill-hash.js";
 import { computeVerdict } from "./verdict.js";
 import { redactJsonLine, redactText, redactStructural, loadRedactionPolicy, type RedactionPolicy } from "../redact.js";
 import { collectSecrets, scrub, scrubField } from "../secrets.js";
@@ -97,7 +97,13 @@ export interface Cassette {
 // user_visible_artifact from the real mount set instead of a hardcoded `.projects/` prefix. A folder-
 // artifact cassette recorded pre-v4 has no folder root stored → must be RE-RECORDED, not rehashed
 // (rehash only re-hashes skill fingerprints; it cannot reconstruct folder names).
-export const CASSETTE_VERSION = 4;
+// v5 (H9): `skillHash` now EXCLUDES OS-junk files (.DS_Store/Thumbs.db/desktop.ini/…) so an out-of-band OS
+// metadata touch can't re-stale a cassette. A cassette recorded with OS-junk present in its skill tree gets
+// a new skillHash → checkStaleness emits the graceful "older format v4→v5 — re-record once". `contentSig` is
+// deliberately UNCHANGED (still junk-inclusive), so `rehash` keeps working and can migrate a non-junk-drifted
+// cassette without a full re-record. (The fuller resolver-unification + per-file manifest + git-tracked
+// boundary remain planned follow-ups — see docs/internal/2026-06-22-staleness-redesign-plan.md.)
+export const CASSETTE_VERSION = 5;
 
 /** Canonical URL of the JSON Schema for this cassette format version.
  *  Appears in every written cassette as `$schema` so editors and unfamiliar readers
@@ -366,6 +372,57 @@ export function scanCassette(cassette: Cassette, allow: AllowInput[]): ScanFindi
   return findings;
 }
 
+const DEBUG_SKILLHASH_ENV = "COWORK_HARNESS_DEBUG_SKILLHASH";
+
+/** H9 debug: dump the per-file entries currently feeding the skill hash for a session (same resolution as
+ *  `buildFingerprint`), so a staleness mismatch shows WHICH files are in the hash — incl. unexpected
+ *  OS-junk / run-generated files that are the usual "stale immediately after record" cause. */
+export function explainSkillHash(
+  sessionPath: string,
+  cassetteDir: string | undefined,
+  scopeSkills?: string[],
+): { path: string; sha: string }[] {
+  const { dirs, hashIgnore } = skillSourceDirs(sessionPath, cassetteDir);
+  if (dirs.length === 0) return [];
+  return skillHashEntries(dirs, scopeSkills, hashIgnore);
+}
+
+/** H9 debug: on a skillHash mismatch, if COWORK_HARNESS_DEBUG_SKILLHASH=1, write the file set the hash sees
+ *  to stderr (flagging OS-junk) plus whether the algorithm-independent contentSig also drifted. When the flag
+ *  is OFF, write a one-line hint so the affordance is discoverable. Diagnostics only — never affects the gate. */
+function debugSkillHashMismatch(cassette: Cassette, cassetteDir: string, fp: Fingerprint, live: Fingerprint): void {
+  if (process.env[DEBUG_SKILLHASH_ENV] !== "1") {
+    process.stderr.write(
+      `cowork-harness: skill-hash: set ${DEBUG_SKILLHASH_ENV}=1 to list the files feeding the hash (find the drift source)\n`,
+    );
+    return;
+  }
+  const scope = cassette.scenario.skills?.length ? cassette.scenario.skills.join(", ") : "whole-tree";
+  let entries: { path: string; sha: string }[] = [];
+  try {
+    entries = explainSkillHash(cassette.scenario.session, cassetteDir, cassette.scenario.skills);
+  } catch (e) {
+    process.stderr.write(`cowork-harness: skill-hash debug: could not enumerate files: ${String((e as Error)?.message ?? e)}\n`);
+    return;
+  }
+  process.stderr.write(`cowork-harness: skill-hash debug — ${entries.length} file(s) feeding the hash (scope: ${scope}):\n`);
+  let junk = 0;
+  for (const e of entries) {
+    const isJunk = OS_JUNK_PATTERN.test(e.path);
+    if (isJunk) junk++;
+    process.stderr.write(
+      `  ${e.sha.slice(0, 12)}  ${e.path}${isJunk ? "   ⚠ OS-junk / non-runtime — add to .cowork-hashignore (or it will keep re-staling)" : ""}\n`,
+    );
+  }
+  const sigVerdict =
+    fp.contentSig === undefined || live.contentSig === undefined ? "n/a" : fp.contentSig === live.contentSig ? "MATCHES" : "DIFFERS";
+  process.stderr.write(
+    `cowork-harness: skill-hash debug — skillHash recorded ${String(fp.skillHash).slice(0, 12)} vs live ${String(live.skillHash).slice(0, 12)}; ` +
+      `contentSig ${sigVerdict}${junk ? ` · ${junk} OS-junk file(s) flagged above` : ""}. ` +
+      `Note: this lists the CURRENT tree; a true per-file diff vs record needs the record-time set (re-record after excluding junk, then compare).\n`,
+  );
+}
+
 /** B3 staleness GATE: recompute the fingerprint and report drift. Unlike `replayCassette` (which WARNS),
  *  the gate treats an unresolvable skillHash as a failure — can't verify ⇒ not green. No fingerprint → nothing
  *  to check (legacy cassette). */
@@ -391,6 +448,7 @@ export function checkStaleness(cassette: Cassette, cassetteDir: string): string[
     if (live.skillHash === undefined)
       msgs.push("skill dirs not resolvable from the cassette location — cannot verify staleness (gate fails: can't verify ⇒ not green)");
     else if (live.skillHash !== fp.skillHash) {
+      debugSkillHashMismatch(cassette, cassetteDir, fp, live); // H9: surface WHICH files drifted (or a hint to enable it)
       const recordedVersion = cassette.cassetteVersion ?? 0;
       if (recordedVersion < CASSETTE_VERSION) {
         msgs.push(`recorded under an older hash format (v${recordedVersion} → v${CASSETTE_VERSION}) — re-record once after upgrading`);
