@@ -105,6 +105,12 @@ staleness:
                                  # staleness hash; composes with a plugin-local .cowork-hashignore file
 ```
 
+The staleness hash uses each skill/plugin source dir's **git-tracked** file set by default (a non-repo dir
+falls back to a raw walk; `COWORK_HARNESS_GITSET=0` opts out). **OS-junk** (`.DS_Store`/`Thumbs.db`/
+`desktop.ini`) is always excluded, so a Finder touch can't re-stale a cassette; run-generated files a skill
+writes into its own dir should be declared in `hash_ignore` / `.cowork-hashignore`. On a mismatch,
+`verify-cassettes` names the exact changed file; `COWORK_HARNESS_DEBUG_SKILLHASH=1` dumps the full hashed set.
+
 **Mounting the skill under test:** put the skill folder in `plugins.local_plugins` and enable it via
 `plugins.enabled: [<plugin>@local]`. The folder is copied fresh each run. For an ad-hoc `skill` run
 with no session file, the CLI flags `--folder <dir>` and `--upload <file>` are the equivalents of

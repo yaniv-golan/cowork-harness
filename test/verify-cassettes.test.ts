@@ -351,11 +351,12 @@ describe("checkStaleness — mixed-mount falls back to generic message", () => {
       fingerprint: fp,
     } as unknown as Cassette;
     const msgs = checkStaleness(c, root);
-    const staleMsg = msgs.find((m) => /skill|plugin dir/.test(m));
+    const staleMsg = msgs.find((m) => /changed since record/.test(m));
     expect(staleMsg).toBeDefined();
-    // Must not name a specific bucket — the mixed layout makes that unreliable
-    expect(staleMsg).not.toMatch(/skills\/alpha/);
+    // v5: the per-file manifest names the EXACT changed file (better than the old generic fallback), and
+    // still avoids a MISLEADING scoped-bucket label for the mixed-mount layout.
+    expect(staleMsg).toMatch(/skill files changed since record/);
+    expect(staleMsg).toMatch(/SKILL\.md/); // the changed individual-skill-mount file is named
     expect(staleMsg).not.toMatch(/shared root/);
-    expect(staleMsg).toMatch(/local skill\/plugin dir contents changed/);
   });
 });

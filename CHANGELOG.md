@@ -8,6 +8,19 @@ All notable changes to this project are documented here. The format is based on
 
 ### Breaking changes
 
+- **Cassette staleness fingerprint bumped to format v6 (re-record once).** The skill-hash boundary changed,
+  so committed cassettes recorded before this release report `recorded under an older hash format — re-record
+  once`. Drivers: (1) **OS-junk** files (`.DS_Store` / `Thumbs.db` / `desktop.ini`) are excluded from
+  `skillHash` — an out-of-band OS metadata touch can no longer re-stale a cassette (the "fresh cassette is
+  immediately stale" bug); (2) **`contentSig` is unified onto the same walk as `skillHash`** (same file set,
+  plugin.json `version` stripped, in-tree symlinks hashed by target) — `rehash` cannot bridge this algorithm
+  change, so a pre-v6 cassette gets an honest *"algorithm changed — re-record"* (not "content changed"); (3)
+  the **git-tracked file set is the default boundary** (see Added).
+- **Git-tracked staleness/mount boundary is now the DEFAULT.** When a skill/plugin source dir is in a git
+  work tree, both the staleness hash and the sandbox mount use only its **git-tracked** files (untracked
+  scratch / build output / OS-junk are excluded from both, so they can't drift the hash or leak into the
+  sandbox). A dir that isn't a git repo falls back to the raw walk automatically. Opt out with
+  `COWORK_HARNESS_GITSET=0`.
 - **Removed the legacy CLI aliases.** `assert` → use `assertions`; `replay --cassette <file>` → pass the
   path positionally (`replay <file | dir/>`); `verify-cassettes --privacy-only` / `--staleness-only` →
   `--skip-privacy` / `--skip-staleness`. (0.8.0 had documented the latter two groups as renamed/removed but
@@ -22,9 +35,22 @@ All notable changes to this project are documented here. The format is based on
 - **`lint` accepts a directory** — it expands to the directory's `*.yaml` / `*.yml` scenarios
   (non-recursive, sorted), the same file-or-dir ergonomics as `replay` / `verify-cassettes`. An empty
   directory is a loud error, never a vacuous "0 files = clean" pass.
+- **Staleness now names the EXACT changed file.** A per-file manifest (`fileSigs`) in the cassette fingerprint
+  lets `verify-cassettes` report e.g. `skill files changed since record — 1 changed (skills/x/SKILL.md)`
+  instead of a coarse bucket message (appended to the existing shared-vs-scoped diagnosis). Manifest paths are
+  root-relative and are scanned + redacted with the same privacy layer as `skillSources`. Omitted (with a
+  loud `fileSigsOmitted`) above an internal size cap.
+- **`COWORK_HARNESS_DEBUG_SKILLHASH=1`** — on a staleness mismatch, dumps the exact file set feeding the hash
+  to stderr and flags OS-junk, so a drift source is one line instead of a black-box hunt (a one-line hint
+  points to it when the flag is off).
+- **`COWORK_HARNESS_GITSET=0`** — opt out of the new default git-tracked boundary (see Breaking) back to the
+  legacy raw filesystem walk for every dir.
 
 ### Fixed
 
+- **A freshly recorded cassette no longer reports `[stale]` immediately** because the OS rewrote a `.DS_Store`
+  (or other OS-junk) in the skill tree — OS-junk is excluded from the skill hash. A chronic false-positive
+  that pushed consumers to WARN-only (which then masked real drift).
 - A standalone verdict-modifier assertion (e.g. `allow_l0_plugin_divergence: true`) no longer false-fails
   as "empty assertion", and verdict modifiers no longer trigger a misleading "filesystem/egress skipped"
   warning on the replay lane. The verdict modifiers are now single-sourced from one list (`assert.ts`,
