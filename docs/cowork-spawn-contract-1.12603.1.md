@@ -1,4 +1,4 @@
-# Cowork spawn contract — app.asar 1.12603.1 / agent ELF 2.1.177
+# Cowork spawn contract — app.asar 1.12603.1 / agent ELF 2.1.170
 
 > **Applicability note:** verified on `desktop-1.12603.1`. The current baseline is `desktop-1.14271.0`
 > (agent ELF 2.1.181). Control-protocol fields documented here (spawn flags, handshake envelope,

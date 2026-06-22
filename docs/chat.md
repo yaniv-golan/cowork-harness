@@ -92,8 +92,8 @@ transcript directory.
 To read the transcript as a digest (tool calls, sub-agent dispatches, decisions):
 
 ```bash
-cowork-harness trace <session-id>            # the run-id form resolves under the runs root, from any dir
-cowork-harness trace <session-id> --tools    # include full tool inputs
+cowork-harness trace <session-id>               # the run-id form resolves under the runs root, from any dir
+cowork-harness trace <session-id> --view tools  # tool calls with summarized inputs (≤100 chars; full inputs live in events.jsonl)
 ```
 
 There is no `--keep` flag — `chat` always writes the transcript and always keeps it.

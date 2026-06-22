@@ -214,7 +214,7 @@ if *every* key passes (don't rely on the first; keep one concern per item unless
 | `subagent_tool_absent: <Tool>` | no sub-agent used the tool |
 | `subagent_dispatched: <regex>` | a sub-agent whose `agentType` **or dispatch `description`** matches was dispatched (skills often dispatch with only a `description` and no `subagent_type` → `agentType:"unknown"`, so match by description, e.g. `subagent_dispatched: "TOP_DOWN"`) |
 | `subagent_declared_but_unused: <Tool>` | fails if a sub-agent declared the tool but never used **that** tool (even if it used others) — the v0.3.0 fabrication proxy |
-| `dispatch_count_max: <N>` | at most N sub-agents were dispatched (real Cowork caps at `{global:3}`; the harness **records** the count and asserts on it but does **not** itself enforce Cowork's skip-on-cap — that enforcement is DEFERRED, see SPEC §10) |
+| `dispatch_count_max: <N>` | at most N sub-agents were dispatched (real Cowork caps at `{perTask:1, global:3}`; the harness **records** the count and asserts on it but does **not** itself enforce Cowork's skip-on-cap — that enforcement is DEFERRED, see SPEC §10) |
 | `question_asked: <regex>` | the agent asked an AskUserQuestion whose text matches |
 | `questions_count_max: <N>` | the agent asked at most N questions |
 | `gate_answers_delivered: true` | every answered AskUserQuestion gate's answer actually reached the model — requires a positive, observed `tool_result` (an **unobserved** delivery fails too, not only an errored one — no silent false-green) |
@@ -249,7 +249,9 @@ false-fails later. Opt out with `allow_missing_capability: true` when the fallba
 requires_capabilities: [office_convert, pdf_tables]   # fail unless the tier provides (and can verify) these
 ```
 
-Run **`cowork-harness assertions --list`** for this table from the live schema (it can't drift).
+Run **`cowork-harness assertions --list`** for the authoritative *assertion* set from the live schema (it
+can't drift) — that list covers `assert:` keys only, so the scenario *fields* that also appear above
+(`expect_denied`, `requires_capabilities`) are not in it.
 
 `replay_protocol_fidelity` is replay-synthesized and **not** authorable in a scenario — writing it
 errors at load. See [docs/cassette.md](./cassette.md) for the O7 guard.

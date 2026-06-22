@@ -29,6 +29,7 @@ section below is the highest-value part. Read it.
 
 Before the first command, confirm the CLI is reachable and **fail loud** (never fake a pass) when a tier's dependencies are missing:
 
+- **One-shot check.** Run `cowork-harness doctor [--tier <tier>]` first — a read-only prerequisite check that inspects Docker, the staged agent, the token, and the baseline in one pass. The bullets below explain each thing it checks (and how to fix it).
 - **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 0.8.0** (the commands/assertions it teaches: `assertions --list`, `scaffold <run-id>`, `trace --view dispatches`, `artifact_json` incl. the `in:` operator, `verify-cassettes`, batch `record <dir>`/`--rerecord-stale`, record-time redaction, multiSelect/`answer:`, `verify-run`, `record --max-artifact-bytes`, `verify-cassettes --allow-domain`/`--allow-email`/`--allow-file`, scenario `skills:` staleness scoping, `chat --plugin`, and `/help` in the chat REPL). If it's missing *or older than 0.8.0*, prefix every command with `npx` using a version floor: `npx cowork-harness@>=0.8.0 <cmd>` (Node ≥ 20). The floor matters — plain `@latest` would silently fetch an older CLI and the new commands would fail as "unknown command"; `@>=0.8.0` instead **fails loud** if no compatible version is published. To install once instead: `npm i -g cowork-harness@latest`.
 - **Agent binary (every tier).** The staged Claude Code agent is **bind-mounted** from a local Claude Desktop install, or point `COWORK_AGENT_BINARY` at a `claude-code-vm/<ver>/claude` ELF. Nothing is bundled. No agent → no run; report that, don't skip silently.
 - **Docker / Lima.** Only `--fidelity protocol` (L0) runs without them. `container` / `microvm` / `hostloop` / `cowork` need Docker (Lima for L2). If they're absent, drop to `--fidelity protocol` and **say so** — a green that never exercised the sandbox is not a sandbox pass.
@@ -43,8 +44,9 @@ Before the first command, confirm the CLI is reachable and **fail loud** (never 
 - **Multi-turn debugging** → `cowork-harness chat` (interactive; gates answered at the TTY, **not** an
   asserted test — see *Debugging with `chat`* in `docs/scenario.md`).
 
-Full command set: `skill · run · chat · record · replay · verify-cassettes · verify-run · trace ·
-decide · gates · answer · scaffold · assertions (assert deprecated) · sync · list · boundary-check · vm <init|status|delete|prune>`. Always check `cowork-harness <cmd> --help`.
+Full command set: `skill · run · chat · record · replay · verify-cassettes · rehash · runs gc · lint ·
+verify-run · trace · decide · gates · answer · scaffold · assertions --list · sync · list ·
+boundary-check · vm <init|status|delete|prune> · doctor`. Always check `cowork-harness <cmd> --help`.
 
 ## 2. Two files: session vs scenario
 

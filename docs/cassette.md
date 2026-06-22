@@ -22,17 +22,16 @@ Use a live `run` for filesystem/egress assertions; use `replay` for the token-fr
 
 ```jsonc
 {
-  "cassetteVersion": 4,                  // format version; ABSENT = legacy (0); a FUTURE version warns
-                                         //   (v4 adds userVisibleRoots — the actual visible mount set)
+  "cassetteVersion": 6,                  // format version; ABSENT = legacy (0); a FUTURE version warns
   "scenario": { /* Scenario object — same schema as the .yaml */ },
   "events": [ /* JSON lines from events.jsonl (child→driver stdout) */ ],
   "controlOut": [ /* JSON lines from control-out.jsonl (driver→child control_responses) */ ],
-  "userVisibleRoots": ["outputs/", "project/"], // visible roots = outputs/ + each connected folder's mount name
+  "userVisibleRoots": ["outputs", ".projects"], // visible roots = outputs + each connected folder's mount name
   "artifacts": [                         // snapshot of outputs/ + connected folders (optional)
     { "path": "outputs/x.json", "bytes": 24, "sha256": "…", "body": "{…}" }, // body inlined ≤ 64 KiB
     { "path": "outputs/big.bin", "bytes": 9e6, "sha256": "…", "truncated": true } // oversized → hash-only
   ],
-  "fingerprint": { "baseline": "1.14271.0", "skillHash": "…", "mode": "git", "contentSig": "…", "fileSigs": [["skills/x/SKILL.md", "…"]], "skillSources": ["…"] } // staleness tripwire (v6: mode + per-file manifest)
+  "fingerprint": { "baseline": "1.14271.0", "skillHash": "…", "mode": "git", "contentSig": "…", "fileSigs": [["skills/x/SKILL.md", "…"]], "skillSources": ["…"] } // staleness tripwire (v5 manifest: fileSigs; v6: mode + git default)
 }
 ```
 
@@ -285,7 +284,7 @@ Re-record a cassette when:
 On every **harness major** (x.0.0) version bump, re-record AND re-verify all cassettes:
 
 ```bash
-cowork-harness record scenarios/ --out cassettes/   # or: record cassettes/ --rerecord-stale
+cowork-harness record scenarios/                    # or: record cassettes/ --rerecord-stale
 cowork-harness verify-cassettes cassettes/
 ```
 

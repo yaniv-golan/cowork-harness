@@ -16,7 +16,7 @@ Self-contained reference. Tracks `cowork-harness 0.8.0` (baseline `desktop-1.142
 - Boundary assertions (`egress_*`, `expect_denied`) are enforced at `container`, `microvm`, and
   `hostloop` (all share the container sandbox + egress proxy). Only `protocol` is rejected.
 - **Set the tier in the scenario's `fidelity:` field — not a flag.** `--fidelity` is accepted only by
-  `skill` (any tier) and `chat` (`container`/`hostloop` only); `run` rejects an extra `--fidelity`
+  `skill` (any tier) and `chat` (`protocol`/`container`/`hostloop`; only `microvm`/`cowork` unsupported); `run` rejects an extra `--fidelity`
   positional ("Fidelity is set by the scenario's `fidelity:` field, not a flag").
 
 ### `microvm` prerequisites & lifecycle
@@ -136,5 +136,5 @@ exercise the array reply path, run a real multiSelect gate or unit-test the help
   redact from logs (beyond the auth tokens + `ANTHROPIC_CUSTOM_HEADERS`).
 - `COWORK_HARNESS_SOFT_MISSING` — downgrade a missing mount source from hard-error to warn-and-skip.
 - `COWORK_VM_GATEWAY` / `COWORK_VM_PROXY_PORT` / `COWORK_LIMA_INSTANCE` — L2 (microVM) knobs.
-- `COWORK_LOCKDOWN=on` — **aborts loudly** if the L2 guest firewall fails to apply (no silent
-  unprotected run).
+- `COWORK_LOCKDOWN` — default `on`: **aborts loudly** if the L2 guest firewall fails to apply (no
+  silent unprotected run). Set `=off` to opt out and run without isolation deliberately.
