@@ -100,7 +100,7 @@ export function requireRequestId(msg: any): string {
  *  so a malformed control frame (questions not an array, options missing, label not a string) flowed into
  *  the deciders as trusted data and could crash or fabricate answers. Validate the supported question body
  *  shape at protocol ingress and convert a malformed frame into a typed protocol error. */
-const OptionSchema = z.object({ label: z.string(), description: z.string().optional() }).passthrough();
+const OptionSchema = z.looseObject({ label: z.string(), description: z.string().optional() });
 // `question` and `options` are OPTIONAL here ON PURPOSE. The runtime already tolerates both being absent:
 // optionless / free-text gates are handled by the deciders (`q.options?.map(...) ?? []`), and a
 // header-only gate with no `question` text gets a SPECIFIC loud diagnostic in Run (run.ts). Requiring them
@@ -108,14 +108,12 @@ const OptionSchema = z.object({ label: z.string(), description: z.string().optio
 // (a real optionless / header-only frame would crash the live run or false-fail replay). Its job is to
 // reject TRULY malformed bodies — `questions` not an array, or an option present but missing a string
 // `label` — not to be stricter than the protocol the deciders already accept.
-const QSpecSchema = z
-  .object({
-    question: z.string().optional(),
-    header: z.string().optional(),
-    options: z.array(OptionSchema).optional(),
-    multiSelect: z.boolean().optional(),
-  })
-  .passthrough();
+const QSpecSchema = z.looseObject({
+  question: z.string().optional(),
+  header: z.string().optional(),
+  options: z.array(OptionSchema).optional(),
+  multiSelect: z.boolean().optional(),
+});
 const QuestionsSchema = z.array(QSpecSchema);
 
 // ---- Control-response envelopes (verified zod shape; the inner `response` nesting is load-bearing) ----

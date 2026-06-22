@@ -8,7 +8,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { zodToJsonSchema } from "zod-to-json-schema";
+import { z } from "zod";
 import { ScenarioObject, Assertion, VERDICT_MODIFIER_KEYS } from "../src/types.js";
 import { SessionConfig } from "../src/session.js";
 
@@ -25,8 +25,7 @@ export function buildAssertionKeys(): string {
   return (
     JSON.stringify(
       {
-        $comment:
-          "GENERATED from the Zod Assertion schema (src/types.ts) by scripts/gen-schema.ts — do not edit; run `npm run schema`.",
+        $comment: "GENERATED from the Zod Assertion schema (src/types.ts) by scripts/gen-schema.ts — do not edit; run `npm run schema`.",
         keys: Object.keys(Assertion.shape).sort(),
         // The verdict-modifier subset (no-op assertions that suppress a default-fail). scenario.py keeps a
         // hardcoded copy parity-tested against this; see VERDICT_MODIFIER_KEYS in src/types.ts.
@@ -42,28 +41,41 @@ const TARGETS = [
   {
     file: "scenario.schema.json",
     schema: ScenarioObject,
-    name: "CoworkHarnessScenario",
-    description:
-      "cowork-harness scenario YAML — prompt + scripted answers + assert:. See docs/scenario.md.",
+    description: "cowork-harness scenario YAML — prompt + scripted answers + assert:. See docs/scenario.md.",
   },
   {
     file: "session.schema.json",
     schema: SessionConfig,
-    name: "CoworkHarnessSession",
-    description:
-      "cowork-harness session YAML — pre-prompt setup (model, mounts, discovery). See docs/session.md.",
+    description: "cowork-harness session YAML — pre-prompt setup (model, mounts, discovery). See docs/session.md.",
   },
 ] as const;
+
+/** zod 4's `z.toJSONSchema` lists every `.default()` field in `required` (at EVERY nesting level — the old
+ *  `zod-to-json-schema` did not). For an authoring schema a defaulted field is NOT author-required, so strip
+ *  defaulted keys from `required` everywhere. Do NOT swap this for `{ io: "input" }`: that drops the same
+ *  `required` entries but ALSO strips `additionalProperties:false` from nested objects, silently disabling
+ *  the strict-object fail-closed. */
+function stripDefaultedRequired(node: unknown): void {
+  if (Array.isArray(node)) {
+    node.forEach(stripDefaultedRequired);
+    return;
+  }
+  if (!node || typeof node !== "object") return;
+  const obj = node as Record<string, unknown>;
+  const props = obj.properties as Record<string, { default?: unknown }> | undefined;
+  if (props && Array.isArray(obj.required)) {
+    obj.required = (obj.required as string[]).filter((k) => !(props[k] && "default" in props[k]));
+    if ((obj.required as string[]).length === 0) delete obj.required;
+  }
+  for (const v of Object.values(obj)) stripDefaultedRequired(v);
+}
 
 /** Build { filename: pretty-printed-JSON } for every schema. Pure; no I/O. */
 export function buildSchemas(): Record<string, string> {
   const out: Record<string, string> = {};
   for (const t of TARGETS) {
-    const json = zodToJsonSchema(t.schema, {
-      name: t.name,
-      $refStrategy: "none",
-      target: "jsonSchema7",
-    }) as Record<string, unknown>;
+    const json = z.toJSONSchema(t.schema, { target: "draft-7" }) as Record<string, unknown>;
+    stripDefaultedRequired(json);
     json.description = t.description;
     out[t.file] = JSON.stringify(json, null, 2) + "\n";
   }

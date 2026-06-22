@@ -6,6 +6,23 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+
+- Upgraded to **zod 4** (runtime dependency). Scenario/session validation behaviour is unchanged.
+- Regenerated `schema/scenario.schema.json` and `schema/session.schema.json` with zod 4's native JSON Schema
+  generator. The published schemas are now flat draft-07: the `#/definitions/CoworkHarnessScenario` /
+  `CoworkHarnessSession` wrapper is gone; nullable fields render as `anyOf: [{string}, {null}]` rather than
+  `type: ["string", "null"]`; loose objects use `additionalProperties: {}`. `required` still lists only
+  genuinely-required fields (defaulted fields excluded), and strict objects keep `additionalProperties: false`.
+- Retired deprecated zod-3 APIs internally (`.passthrough()` → `z.looseObject`, `.strict()` → `z.strictObject`,
+  `z.ZodIssueCode.custom` → `"custom"`). No behavioural change.
+
+### Security
+
+- Cleared 5 Dependabot advisories in the dev toolchain by upgrading vitest (2 → 4); also bumped the build
+  toolchain (typescript 5 → 6, @types/node 22 → 26, actions/checkout 6 → 7). All dev/CI-only — not shipped in
+  the published package.
+
 ## [0.9.0] — 2026-06-22
 
 ### Breaking changes

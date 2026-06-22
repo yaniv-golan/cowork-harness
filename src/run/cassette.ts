@@ -966,14 +966,12 @@ export function discoverScenarios(dir: string): ScenarioDiscovery {
 
 /** LENIENT structural schema for a cassette — guards exactly the fields the replay/scan/staleness paths
  *  dereference (`events`, `scenario.prompt`, `scenario.session`, `scenario.assert`) so a malformed-but-valid
- *  JSON cassette is a clean error instead of a runtime crash. Deliberately `.passthrough()` (NOT the strict
- *  authoring-time ScenarioObject) so a forward-compatible cassette carrying unknown keys still replays. */
-const CassetteShape = z
-  .object({
-    events: z.array(z.string()),
-    scenario: z.object({ prompt: z.string(), session: z.string(), assert: z.array(z.unknown()).optional() }).passthrough(),
-  })
-  .passthrough();
+ *  JSON cassette is a clean error instead of a runtime crash. Deliberately loose (`z.looseObject`, NOT the
+ *  strict authoring-time ScenarioObject) so a forward-compatible cassette carrying unknown keys still replays. */
+const CassetteShape = z.looseObject({
+  events: z.array(z.string()),
+  scenario: z.looseObject({ prompt: z.string(), session: z.string(), assert: z.array(z.unknown()).optional() }),
+});
 
 /** the ONE place the default cassette path is computed from a scenario name. Both `record --dry-run`
  *  and live `recordScenarioObject` route through this so the dry-run report can't print a different path than
@@ -1005,7 +1003,7 @@ export function readCassette(path: string): { cassette: Cassette } | { error: st
   const scn = cassette.scenario as { assert?: unknown[] };
   if (!Array.isArray(scn.assert)) scn.assert = [];
   // validate each `scenario.assert` element against the assertion schema — but VALIDATE-AND-WARN,
-  // never reject. CassetteShape is deliberately `.passthrough()`; a strict-by-default load would hard-reject
+  // never reject. CassetteShape is deliberately `z.looseObject`; a strict-by-default load would hard-reject
   // cassettes recorded by a NEWER harness that added an assertion key this build doesn't know (a forward-compat
   // regression). So a malformed/unknown assert element is surfaced as a loud warning, not a load error.
   scn.assert.forEach((a, i) => {

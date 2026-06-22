@@ -36,89 +36,87 @@ const Folder = z.object({
   mode: z.enum(["r", "rw", "rwd"]).default("rw"),
 });
 
-export const SessionConfig = z
-  .object({
-    // --- model & reasoning (Cowork model picker + toggles) ---
-    model: z.string().optional(), // setModel
-    effort: z.enum(["low", "medium", "high", "xhigh"]).optional(), // setEffort
-    // Thinking budget. Binary-verified against app.asar 1.12603.1: Cowork's config field is
-    // `maxThinkingTokens` — a flat NUMBER or a per-model map `{ default, <model>: <n> }` — resolved
-    // per-model by f7e() and emitted on BOTH channels: the `--max-thinking-tokens` CLI flag (agentArgs)
-    // and the `MAX_THINKING_TOKENS` env (spawnEnv). The ELF honors the env and env wins (V1), so the
-    // two agree. There is NO "extended thinking" boolean; DEFAULT_MAX_THINKING_TOKENS (hre) = 31999.
-    // #33: a positive integer (or a per-model map of them) — reject 0 / negative, which would
-    // contradict the "never 0" budget invariant if it reached the CLI flag / env.
-    max_thinking_tokens: z.union([z.number().int().positive(), z.record(z.string(), z.number().int().positive())]).optional(),
-    extended_thinking: z.boolean().optional(), // DEPRECATED + inert: not a real Cowork toggle — use max_thinking_tokens.
-    permission_mode: z.enum(["default", "acceptEdits", "plan", "bypassPermissions"]).default("default"), // setPermissionMode
-    // cowork = pre-approve built-ins (like real Cowork's allowedTools) + auto-allow unscripted
-    // tools with a finding; strict = deny unmatched (for adversarial tests).
-    permission_parity: z.enum(["cowork", "strict"]).default("cowork"),
+export const SessionConfig = z.strictObject({
+  // --- model & reasoning (Cowork model picker + toggles) ---
+  model: z.string().optional(), // setModel
+  effort: z.enum(["low", "medium", "high", "xhigh"]).optional(), // setEffort
+  // Thinking budget. Binary-verified against app.asar 1.12603.1: Cowork's config field is
+  // `maxThinkingTokens` — a flat NUMBER or a per-model map `{ default, <model>: <n> }` — resolved
+  // per-model by f7e() and emitted on BOTH channels: the `--max-thinking-tokens` CLI flag (agentArgs)
+  // and the `MAX_THINKING_TOKENS` env (spawnEnv). The ELF honors the env and env wins (V1), so the
+  // two agree. There is NO "extended thinking" boolean; DEFAULT_MAX_THINKING_TOKENS (hre) = 31999.
+  // #33: a positive integer (or a per-model map of them) — reject 0 / negative, which would
+  // contradict the "never 0" budget invariant if it reached the CLI flag / env.
+  max_thinking_tokens: z.union([z.number().int().positive(), z.record(z.string(), z.number().int().positive())]).optional(),
+  extended_thinking: z.boolean().optional(), // DEPRECATED + inert: not a real Cowork toggle — use max_thinking_tokens.
+  permission_mode: z.enum(["default", "acceptEdits", "plan", "bypassPermissions"]).default("default"), // setPermissionMode
+  // cowork = pre-approve built-ins (like real Cowork's allowedTools) + auto-allow unscripted
+  // tools with a finding; strict = deny unmatched (for adversarial tests).
+  permission_parity: z.enum(["cowork", "strict"]).default("cowork"),
 
-    // --- work folders (Cowork "add folder" / Spaces) -> mnt/<name> (>=1.14271.0) or mnt/.projects/<name> (legacy) ---
-    folders: z.array(Folder).default([]),
-    trusted_folders: z.array(z.string()).default([]), // localAgentModeTrustedFolders
-    auto_mount_folders: z.boolean().default(false), // autoMountFolders
+  // --- work folders (Cowork "add folder" / Spaces) -> mnt/<name> (>=1.14271.0) or mnt/.projects/<name> (legacy) ---
+  folders: z.array(Folder).default([]),
+  trusted_folders: z.array(z.string()).default([]), // localAgentModeTrustedFolders
+  auto_mount_folders: z.boolean().default(false), // autoMountFolders
 
-    // --- files uploaded before first prompt -> mnt/uploads ---
-    uploads: z.array(z.string()).default([]),
+  // --- files uploaded before first prompt -> mnt/uploads ---
+  uploads: z.array(z.string()).default([]),
 
-    // --- discovery: marketplaces / plugins / skills / mcp ---
-    // Faithful default = same roots the in-VM claude-code agent uses; override for tests.
-    plugins: z
-      .object({
-        config_dir: z.string().nullable().default(null), // CLAUDE_CONFIG_DIR; null = harness-managed clean dir
-        marketplaces: z.array(z.string()).default([]), // plugin_marketplaces (git URLs / paths)
-        local_marketplaces: z.array(z.string()).default([]), // LOCAL marketplace dirs -> registered via `claude plugin marketplace add`
-        enabled: z.array(z.string()).default([]), // enabledPlugins (name@marketplace)
-        local_plugins: z.array(z.string()).default([]), // host plugin dirs -> mnt/.local-plugins/cache (--plugin-dir)
-        remote_plugins: z.array(z.string()).default([]), // host plugin dirs -> mnt/.remote-plugins
-      })
-      .default({ config_dir: null, marketplaces: [], local_marketplaces: [], enabled: [], local_plugins: [], remote_plugins: [] }),
+  // --- discovery: marketplaces / plugins / skills / mcp ---
+  // Faithful default = same roots the in-VM claude-code agent uses; override for tests.
+  plugins: z
+    .object({
+      config_dir: z.string().nullable().default(null), // CLAUDE_CONFIG_DIR; null = harness-managed clean dir
+      marketplaces: z.array(z.string()).default([]), // plugin_marketplaces (git URLs / paths)
+      local_marketplaces: z.array(z.string()).default([]), // LOCAL marketplace dirs -> registered via `claude plugin marketplace add`
+      enabled: z.array(z.string()).default([]), // enabledPlugins (name@marketplace)
+      local_plugins: z.array(z.string()).default([]), // host plugin dirs -> mnt/.local-plugins/cache (--plugin-dir)
+      remote_plugins: z.array(z.string()).default([]), // host plugin dirs -> mnt/.remote-plugins
+    })
+    .default({ config_dir: null, marketplaces: [], local_marketplaces: [], enabled: [], local_plugins: [], remote_plugins: [] }),
 
-    skills: z
-      .object({
-        local: z.array(z.string()).default([]), // host skill dirs -> CLAUDE_CONFIG_DIR/skills
-      })
-      .default({ local: [] }),
+  skills: z
+    .object({
+      local: z.array(z.string()).default([]), // host skill dirs -> CLAUDE_CONFIG_DIR/skills
+    })
+    .default({ local: [] }),
 
-    mcp: z
-      .object({
-        config: z.string().nullable().default(null), // --mcp-config file (mcpServers map)
-        enabled: z.array(z.string()).default([]), // enabledMcpjsonServers
-      })
-      .default({ config: null, enabled: [] }),
+  mcp: z
+    .object({
+      config: z.string().nullable().default(null), // --mcp-config file (mcpServers map)
+      enabled: z.array(z.string()).default([]), // enabledMcpjsonServers
+    })
+    .default({ config: null, enabled: [] }),
 
-    // --- network (Cowork egress, pre-prompt) ---
-    egress: z
-      .object({
-        extra_allow: z.array(z.string()).default([]), // coworkEgressAllowedHosts additions
-        unrestricted: z.boolean().default(false), // "*"
-      })
-      .default({ extra_allow: [], unrestricted: false }),
-    web_fetch: z
-      .object({
-        // TEST CONVENIENCE (not a real Cowork setting): pre-approve these hosts for the run, as if the
-        // user had clicked "Allow all for website" earlier this session. Seeds Run.approvedDomains so a
-        // web_fetch to them raises no gate. Cowork has no persistent pre-approval — this is per-run only.
-        approved_domains: z.array(z.string()).default([]),
-      })
-      .default({ approved_domains: [] }),
+  // --- network (Cowork egress, pre-prompt) ---
+  egress: z
+    .object({
+      extra_allow: z.array(z.string()).default([]), // coworkEgressAllowedHosts additions
+      unrestricted: z.boolean().default(false), // "*"
+    })
+    .default({ extra_allow: [], unrestricted: false }),
+  web_fetch: z
+    .object({
+      // TEST CONVENIENCE (not a real Cowork setting): pre-approve these hosts for the run, as if the
+      // user had clicked "Allow all for website" earlier this session. Seeds Run.approvedDomains so a
+      // web_fetch to them raises no gate. Cowork has no persistent pre-approval — this is per-run only.
+      approved_domains: z.array(z.string()).default([]),
+    })
+    .default({ approved_domains: [] }),
 
-    // --- staleness fingerprint scope (F-6) ---
-    // The cassette-staleness hash covers the mounted skill/plugin tree. The harness only hard-excludes what
-    // is UNIVERSALLY non-runtime (VCS/caches/recorded cassettes); the runtime boundary of a SPECIFIC plugin
-    // is the consumer's to declare. `hash_ignore` is a list of gitignore-style globs (matched against each
-    // mounted dir's root-relative POSIX path) for paths that don't affect recorded behavior — e.g. `tests/`,
-    // `docs/`, `**/*.md`. Composes with (and adds to) a plugin-local `.cowork-hashignore` file at a mount
-    // root. Editing an ignored path no longer re-stales cassettes.
-    staleness: z
-      .object({
-        hash_ignore: z.array(z.string()).default([]),
-      })
-      .default({ hash_ignore: [] }),
-  })
-  .strict();
+  // --- staleness fingerprint scope (F-6) ---
+  // The cassette-staleness hash covers the mounted skill/plugin tree. The harness only hard-excludes what
+  // is UNIVERSALLY non-runtime (VCS/caches/recorded cassettes); the runtime boundary of a SPECIFIC plugin
+  // is the consumer's to declare. `hash_ignore` is a list of gitignore-style globs (matched against each
+  // mounted dir's root-relative POSIX path) for paths that don't affect recorded behavior — e.g. `tests/`,
+  // `docs/`, `**/*.md`. Composes with (and adds to) a plugin-local `.cowork-hashignore` file at a mount
+  // root. Editing an ignored path no longer re-stales cassettes.
+  staleness: z
+    .object({
+      hash_ignore: z.array(z.string()).default([]),
+    })
+    .default({ hash_ignore: [] }),
+});
 export type SessionConfig = z.infer<typeof SessionConfig>;
 
 /** A concrete mount the runtime should create (path relative to mnt cwd). */

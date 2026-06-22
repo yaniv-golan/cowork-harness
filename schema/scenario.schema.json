@@ -1,299 +1,296 @@
 {
-  "$ref": "#/definitions/CoworkHarnessScenario",
-  "definitions": {
-    "CoworkHarnessScenario": {
-      "type": "object",
-      "properties": {
-        "name": {
-          "type": "string",
-          "default": ""
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "name": {
+      "default": "",
+      "type": "string"
+    },
+    "baseline": {
+      "default": "latest",
+      "type": "string"
+    },
+    "session": {
+      "default": "(inline)",
+      "type": "string"
+    },
+    "fidelity": {
+      "default": "container",
+      "type": "string",
+      "enum": [
+        "protocol",
+        "container",
+        "microvm",
+        "hostloop",
+        "cowork"
+      ]
+    },
+    "prompt": {
+      "type": "string"
+    },
+    "answers": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "when_question": {
+            "type": "string"
+          },
+          "choose": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            ]
+          },
+          "answer": {
+            "type": "string"
+          },
+          "when_tool": {
+            "type": "string"
+          },
+          "decide": {
+            "type": "string",
+            "enum": [
+              "allow",
+              "deny"
+            ]
+          },
+          "allow_if": {
+            "type": "string"
+          },
+          "else": {
+            "type": "string",
+            "enum": [
+              "allow",
+              "deny"
+            ]
+          },
+          "grant": {
+            "type": "string",
+            "enum": [
+              "once",
+              "domain"
+            ]
+          }
         },
-        "baseline": {
-          "type": "string",
-          "default": "latest"
-        },
-        "session": {
-          "type": "string",
-          "default": "(inline)"
-        },
-        "fidelity": {
-          "type": "string",
-          "enum": [
-            "protocol",
-            "container",
-            "microvm",
-            "hostloop",
-            "cowork"
-          ],
-          "default": "container"
-        },
-        "prompt": {
-          "type": "string"
-        },
-        "answers": {
-          "type": "array",
-          "items": {
+        "additionalProperties": false
+      }
+    },
+    "on_unanswered": {
+      "type": "string",
+      "enum": [
+        "fail",
+        "prompt",
+        "llm",
+        "first"
+      ]
+    },
+    "expect_denied": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "assert": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "transcript_contains": {
+            "description": "the transcript contains this literal substring",
+            "type": "string"
+          },
+          "transcript_not_contains": {
+            "description": "the transcript does NOT contain this literal substring",
+            "type": "string"
+          },
+          "transcript_matches": {
+            "description": "regex (case-insensitive) over the transcript — fuzzy content for stochastic prose",
+            "type": "string"
+          },
+          "transcript_not_matches": {
+            "description": "regex (case-insensitive) that must NOT match the transcript",
+            "type": "string"
+          },
+          "tool_result_contains": {
+            "description": "at least one tool result contains this literal substring (per-result match, not concatenated; 10 KB cap per result)",
+            "type": "string"
+          },
+          "tool_result_not_contains": {
+            "description": "no tool result contains this literal substring (per-result match, not concatenated; 10 KB cap per result)",
+            "type": "string"
+          },
+          "file_exists": {
+            "description": "a file exists at this path under the agent's work root",
+            "type": "string"
+          },
+          "user_visible_artifact": {
+            "description": "a file exists AND is under a user-visible prefix (mnt/outputs or mnt/.projects — Cowork-promoted)",
+            "type": "string"
+          },
+          "tool_called": {
+            "description": "a tool with this name was called",
+            "type": "string"
+          },
+          "tool_not_called": {
+            "description": "a tool with this name was NOT called",
+            "type": "string"
+          },
+          "subagent_tool_used": {
+            "description": "a sub-agent used this tool",
+            "type": "string"
+          },
+          "subagent_tool_absent": {
+            "description": "no sub-agent used this tool",
+            "type": "string"
+          },
+          "subagent_dispatched": {
+            "description": "a sub-agent matching this regex (by agentType or description) was dispatched",
+            "type": "string"
+          },
+          "subagent_declared_but_unused": {
+            "description": "a sub-agent declared this tool but never used it (the fabrication proxy)",
+            "type": "string"
+          },
+          "dispatch_count_max": {
+            "description": "total sub-agent dispatches ≤ N (the {global:3} ceiling)",
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "egress_denied": {
+            "description": "egress to this host was denied",
+            "type": "string"
+          },
+          "egress_allowed": {
+            "description": "egress to this host was allowed",
+            "type": "string"
+          },
+          "no_delete_in_outputs": {
+            "description": "fails if a delete touching mnt/outputs is DETECTED (post-run bash-command scan, not FUSE-level enforcement — a green means none was detected); only `true` is valid (writing `false` is a rejected footgun — omit to allow deletes)",
+            "type": "boolean",
+            "const": true
+          },
+          "self_heal_ran": {
+            "description": "skill resolved scripts via /sessions (plugin-root self-heal)",
+            "type": "boolean"
+          },
+          "transcript_no_host_path": {
+            "description": "no /Users//opt host path leaked into model-visible text",
+            "type": "boolean"
+          },
+          "question_asked": {
+            "description": "a question matching this regex was asked",
+            "type": "string"
+          },
+          "questions_count_max": {
+            "description": "at most N questions were asked",
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "gate_answers_delivered": {
+            "description": "every answered AskUserQuestion gate's tool_result was non-error (the answer reached the model)",
+            "type": "boolean"
+          },
+          "result": {
+            "description": "the run's final result was success | error",
+            "type": "string",
+            "enum": [
+              "success",
+              "error"
+            ]
+          },
+          "allow_permissive_auto_allow": {
+            "description": "(verdict modifier) suppress the default-fail when the run recorded a cowork-parity permissive auto-allow — for tests that deliberately assert Cowork's permissive behavior",
+            "type": "boolean"
+          },
+          "allow_l0_plugin_divergence": {
+            "description": "(verdict modifier) suppress the default-fail when L0 (protocol) runs with plugins that load via --settings/managed config instead of --plugin-dir — for tests that deliberately test at L0 with plugins",
+            "type": "boolean"
+          },
+          "allow_missing_capability": {
+            "description": "(verdict modifier) suppress the default-fail when the (partial 'core') agent image omits a capability the skill used but real Cowork ships — assert this only when the skill's fallback is genuinely equivalent (otherwise rebuild full parity, --build-arg COWORK_FULL_PARITY=1)",
+            "type": "boolean"
+          },
+          "replay_protocol_fidelity": {
+            "description": "(replay-only, NOT authorable) serializeDecision output matched the frozen recording — the token-free O7 guard; synthesized by the replay lane and rejected if written in a scenario",
+            "type": "boolean"
+          },
+          "artifact_json": {
+            "description": "assert over a JSON artifact's contents (dotted path + equals|in|gt|exists|absent|is_null)",
             "type": "object",
             "properties": {
-              "when_question": {
-                "type": "string"
-              },
-              "choose": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "array",
-                    "items": {
-                      "type": "string"
-                    }
-                  }
-                ]
-              },
-              "answer": {
-                "type": "string"
-              },
-              "when_tool": {
-                "type": "string"
-              },
-              "decide": {
+              "artifact": {
                 "type": "string",
-                "enum": [
-                  "allow",
-                  "deny"
-                ]
+                "description": "relative path to a JSON artifact under the work root (e.g. outputs/cap_state.json)"
               },
-              "allow_if": {
+              "path": {
+                "description": "dotted path into the JSON (e.g. me.run_id); omit to target the whole document",
                 "type": "string"
               },
-              "else": {
-                "type": "string",
-                "enum": [
-                  "allow",
-                  "deny"
-                ]
+              "equals": {
+                "description": "the resolved value deep-equals this"
               },
-              "grant": {
-                "type": "string",
-                "enum": [
-                  "once",
-                  "domain"
-                ]
+              "in": {
+                "description": "the resolved value deep-equals one of these (stable for stochastic/LLM-extracted values where equals churns)",
+                "type": "array",
+                "items": {}
+              },
+              "gt": {
+                "description": "the resolved value is a number greater than this",
+                "type": "number"
+              },
+              "exists": {
+                "description": "the path resolves to a present (non-absent) value",
+                "type": "boolean"
+              },
+              "absent": {
+                "description": "the final key is absent from its (resolved) parent — the anti-hallucination negative",
+                "type": "boolean"
+              },
+              "is_null": {
+                "description": "the resolved value is JSON null (distinct from absent)",
+                "type": "boolean"
               }
             },
+            "required": [
+              "artifact"
+            ],
             "additionalProperties": false
-          },
-          "default": []
+          }
         },
-        "on_unanswered": {
-          "type": "string",
-          "enum": [
-            "fail",
-            "prompt",
-            "llm",
-            "first"
-          ]
-        },
-        "expect_denied": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "default": []
-        },
-        "assert": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "properties": {
-              "transcript_contains": {
-                "type": "string",
-                "description": "the transcript contains this literal substring"
-              },
-              "transcript_not_contains": {
-                "type": "string",
-                "description": "the transcript does NOT contain this literal substring"
-              },
-              "transcript_matches": {
-                "type": "string",
-                "description": "regex (case-insensitive) over the transcript — fuzzy content for stochastic prose"
-              },
-              "transcript_not_matches": {
-                "type": "string",
-                "description": "regex (case-insensitive) that must NOT match the transcript"
-              },
-              "tool_result_contains": {
-                "type": "string",
-                "description": "at least one tool result contains this literal substring (per-result match, not concatenated; 10 KB cap per result)"
-              },
-              "tool_result_not_contains": {
-                "type": "string",
-                "description": "no tool result contains this literal substring (per-result match, not concatenated; 10 KB cap per result)"
-              },
-              "file_exists": {
-                "type": "string",
-                "description": "a file exists at this path under the agent's work root"
-              },
-              "user_visible_artifact": {
-                "type": "string",
-                "description": "a file exists AND is under a user-visible prefix (mnt/outputs or mnt/.projects — Cowork-promoted)"
-              },
-              "tool_called": {
-                "type": "string",
-                "description": "a tool with this name was called"
-              },
-              "tool_not_called": {
-                "type": "string",
-                "description": "a tool with this name was NOT called"
-              },
-              "subagent_tool_used": {
-                "type": "string",
-                "description": "a sub-agent used this tool"
-              },
-              "subagent_tool_absent": {
-                "type": "string",
-                "description": "no sub-agent used this tool"
-              },
-              "subagent_dispatched": {
-                "type": "string",
-                "description": "a sub-agent matching this regex (by agentType or description) was dispatched"
-              },
-              "subagent_declared_but_unused": {
-                "type": "string",
-                "description": "a sub-agent declared this tool but never used it (the fabrication proxy)"
-              },
-              "dispatch_count_max": {
-                "type": "integer",
-                "minimum": 0,
-                "description": "total sub-agent dispatches ≤ N (the {global:3} ceiling)"
-              },
-              "egress_denied": {
-                "type": "string",
-                "description": "egress to this host was denied"
-              },
-              "egress_allowed": {
-                "type": "string",
-                "description": "egress to this host was allowed"
-              },
-              "no_delete_in_outputs": {
-                "type": "boolean",
-                "const": true,
-                "description": "fails if a delete touching mnt/outputs is DETECTED (post-run bash-command scan, not FUSE-level enforcement — a green means none was detected); only `true` is valid (writing `false` is a rejected footgun — omit to allow deletes)"
-              },
-              "self_heal_ran": {
-                "type": "boolean",
-                "description": "skill resolved scripts via /sessions (plugin-root self-heal)"
-              },
-              "transcript_no_host_path": {
-                "type": "boolean",
-                "description": "no /Users//opt host path leaked into model-visible text"
-              },
-              "question_asked": {
-                "type": "string",
-                "description": "a question matching this regex was asked"
-              },
-              "questions_count_max": {
-                "type": "integer",
-                "minimum": 0,
-                "description": "at most N questions were asked"
-              },
-              "gate_answers_delivered": {
-                "type": "boolean",
-                "description": "every answered AskUserQuestion gate's tool_result was non-error (the answer reached the model)"
-              },
-              "result": {
-                "type": "string",
-                "enum": [
-                  "success",
-                  "error"
-                ],
-                "description": "the run's final result was success | error"
-              },
-              "allow_permissive_auto_allow": {
-                "type": "boolean",
-                "description": "(verdict modifier) suppress the default-fail when the run recorded a cowork-parity permissive auto-allow — for tests that deliberately assert Cowork's permissive behavior"
-              },
-              "allow_l0_plugin_divergence": {
-                "type": "boolean",
-                "description": "(verdict modifier) suppress the default-fail when L0 (protocol) runs with plugins that load via --settings/managed config instead of --plugin-dir — for tests that deliberately test at L0 with plugins"
-              },
-              "allow_missing_capability": {
-                "type": "boolean",
-                "description": "(verdict modifier) suppress the default-fail when the (partial 'core') agent image omits a capability the skill used but real Cowork ships — assert this only when the skill's fallback is genuinely equivalent (otherwise rebuild full parity, --build-arg COWORK_FULL_PARITY=1)"
-              },
-              "replay_protocol_fidelity": {
-                "type": "boolean",
-                "description": "(replay-only, NOT authorable) serializeDecision output matched the frozen recording — the token-free O7 guard; synthesized by the replay lane and rejected if written in a scenario"
-              },
-              "artifact_json": {
-                "type": "object",
-                "properties": {
-                  "artifact": {
-                    "type": "string",
-                    "description": "relative path to a JSON artifact under the work root (e.g. outputs/cap_state.json)"
-                  },
-                  "path": {
-                    "type": "string",
-                    "description": "dotted path into the JSON (e.g. me.run_id); omit to target the whole document"
-                  },
-                  "equals": {
-                    "description": "the resolved value deep-equals this"
-                  },
-                  "in": {
-                    "type": "array",
-                    "items": {},
-                    "description": "the resolved value deep-equals one of these (stable for stochastic/LLM-extracted values where equals churns)"
-                  },
-                  "gt": {
-                    "type": "number",
-                    "description": "the resolved value is a number greater than this"
-                  },
-                  "exists": {
-                    "type": "boolean",
-                    "description": "the path resolves to a present (non-absent) value"
-                  },
-                  "absent": {
-                    "type": "boolean",
-                    "description": "the final key is absent from its (resolved) parent — the anti-hallucination negative"
-                  },
-                  "is_null": {
-                    "type": "boolean",
-                    "description": "the resolved value is JSON null (distinct from absent)"
-                  }
-                },
-                "required": [
-                  "artifact"
-                ],
-                "additionalProperties": false,
-                "description": "assert over a JSON artifact's contents (dotted path + equals|in|gt|exists|absent|is_null)"
-              }
-            },
-            "additionalProperties": false
-          },
-          "default": []
-        },
-        "skills": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "default": []
-        },
-        "requires_capabilities": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "default": []
-        }
-      },
-      "required": [
-        "prompt"
-      ],
-      "additionalProperties": false
+        "additionalProperties": false
+      }
+    },
+    "skills": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "requires_capabilities": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
     }
   },
-  "$schema": "http://json-schema.org/draft-07/schema#",
+  "required": [
+    "prompt"
+  ],
+  "additionalProperties": false,
   "description": "cowork-harness scenario YAML — prompt + scripted answers + assert:. See docs/scenario.md."
 }

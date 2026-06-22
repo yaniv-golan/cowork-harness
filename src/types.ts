@@ -13,52 +13,49 @@ export const MountSpec = z.object({
   purpose: z.string().optional(),
 });
 
-export const PlatformBaseline = z
-  .object({
-    baselineVersion: z.number(),
-    appVersion: z.string(),
-    agentVersion: z.string(),
-    agentBinary: z.object({
-      stagedPath: z.string().optional(),
-      format: z.string().optional(),
-      // npmPackage/preferReuseStaged removed (Q1): there is NO npm path — the Linux/arm64 ELF is
-      // bind-mounted from the staged Desktop install (or COWORK_AGENT_BINARY). Tolerated-but-ignored
-      // if present in an old baseline (z.object strips unknown keys).
-    }),
-    guest: z.object({ os: z.string(), arch: z.string(), baseImage: z.string().optional() }).passthrough(),
-    spawn: z
-      .object({
-        configDirInGuest: z.string().default("mnt/.claude"),
-        settingSources: z.array(z.string()).default(["user"]),
-        permissionMode: z.string().default("default"),
-        maxThinkingTokens: z.number().default(DEFAULT_MAX_THINKING_TOKENS),
-        effortDefault: z.string().default("medium"),
-        tools: z.array(z.string()).default([]),
-        allowedTools: z.array(z.string()).default([]),
-        env: z.record(z.string(), z.string()).default({}),
-        promptTemplate: z.string().optional(),
-        subagentAppend: z.string().optional(),
-      })
-      .partial()
-      .passthrough()
-      .optional(),
-    mountLayout: z.object({
-      sessionRoot: z.string(),
-      cwd: z.string(),
-      mntRoot: z.string().optional(),
-      mounts: z.array(MountSpec),
-    }),
-    network: z.object({
-      mode: z.string(),
-      allowKind: z.enum(["allowlist", "unrestricted"]),
-      allowDomains: z.array(z.string()),
-    }),
-    bgEnvStrip: z
-      .object({ knownVars: z.array(z.string()) })
-      .partial()
-      .optional(),
-  })
-  .passthrough();
+export const PlatformBaseline = z.looseObject({
+  baselineVersion: z.number(),
+  appVersion: z.string(),
+  agentVersion: z.string(),
+  agentBinary: z.object({
+    stagedPath: z.string().optional(),
+    format: z.string().optional(),
+    // npmPackage/preferReuseStaged removed (Q1): there is NO npm path — the Linux/arm64 ELF is
+    // bind-mounted from the staged Desktop install (or COWORK_AGENT_BINARY). Tolerated-but-ignored
+    // if present in an old baseline (z.object strips unknown keys).
+  }),
+  guest: z.looseObject({ os: z.string(), arch: z.string(), baseImage: z.string().optional() }),
+  spawn: z
+    .looseObject({
+      configDirInGuest: z.string().default("mnt/.claude"),
+      settingSources: z.array(z.string()).default(["user"]),
+      permissionMode: z.string().default("default"),
+      maxThinkingTokens: z.number().default(DEFAULT_MAX_THINKING_TOKENS),
+      effortDefault: z.string().default("medium"),
+      tools: z.array(z.string()).default([]),
+      allowedTools: z.array(z.string()).default([]),
+      env: z.record(z.string(), z.string()).default({}),
+      promptTemplate: z.string().optional(),
+      subagentAppend: z.string().optional(),
+    })
+    .partial()
+    .optional(),
+  mountLayout: z.object({
+    sessionRoot: z.string(),
+    cwd: z.string(),
+    mntRoot: z.string().optional(),
+    mounts: z.array(MountSpec),
+  }),
+  network: z.object({
+    mode: z.string(),
+    allowKind: z.enum(["allowlist", "unrestricted"]),
+    allowDomains: z.array(z.string()),
+  }),
+  bgEnvStrip: z
+    .object({ knownVars: z.array(z.string()) })
+    .partial()
+    .optional(),
+});
 export type PlatformBaseline = z.infer<typeof PlatformBaseline>;
 
 /** @deprecated Renamed to `PlatformBaseline`. Kept as a re-export for one minor; remove next minor. */
@@ -94,35 +91,35 @@ export const AnswerRule = z
     const hasQuestion = r.when_question !== undefined;
     const hasTool = r.when_tool !== undefined;
     if (!hasQuestion && !hasTool) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "answer rule has no matcher — set `when_question` or `when_tool`" });
+      ctx.addIssue({ code: "custom", message: "answer rule has no matcher — set `when_question` or `when_tool`" });
       return;
     }
     // reject rules that set both matcher families — their precedence is undefined and the rule
     // would silently act as either a question rule or a tool rule depending on which branch runs first.
     if (hasQuestion && hasTool)
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message: "answer rule sets both `when_question` and `when_tool` — use exactly one matcher family per rule",
       });
     if (hasQuestion && r.choose === undefined && r.answer === undefined)
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "a `when_question` rule needs an action — set `choose` or `answer`" });
+      ctx.addIssue({ code: "custom", message: "a `when_question` rule needs an action — set `choose` or `answer`" });
     // `choose` and `answer` are mutually exclusive (the field comment at the top of the schema
     // promises this). Runtime rejects the combination only on a MATCHING rule (decider.ts), so a malformed
     // rule that never matches sits unnoticed. Reject it at schema time so the author sees it regardless.
     if (r.choose !== undefined && r.answer !== undefined)
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message:
           "answer rule sets both `choose` and `answer` — use exactly one: `choose` for an offered option, or `answer` for a free-text 'Other'",
       });
     if (hasTool && r.decide === undefined && r.allow_if === undefined)
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "a `when_tool` rule needs an action — set `decide` or `allow_if`" });
+      ctx.addIssue({ code: "custom", message: "a `when_tool` rule needs an action — set `decide` or `allow_if`" });
     // reject rules that set both `allow_if` and `decide` — `decide` silently takes precedence
     // over `allow_if` in the runtime's if/else-if chain, making `allow_if` unreachable and the author's
     // intent opaque. Require exactly one action field.
     if (r.allow_if !== undefined && r.decide !== undefined)
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message:
           "answer rule sets both `allow_if` and `decide` — use exactly one: `decide` for a static outcome, `allow_if` for a predicate",
       });
@@ -133,17 +130,17 @@ export const AnswerRule = z
     if (r.grant !== undefined) {
       if (!hasTool)
         ctx.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: "custom",
           message: "`grant` is only valid on a `when_tool` web_fetch rule — it is inert on a question rule",
         });
       else if (!r.when_tool!.startsWith("webfetch:"))
         ctx.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: "custom",
           message: "`grant` is only consumed for a `webfetch:<domain>` tool rule — it is inert on any other tool",
         });
       else if (r.decide === "deny")
         ctx.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: "custom",
           message: "`grant` is only meaningful on an ALLOW outcome — it is inert on a `decide: deny` rule",
         });
     }
@@ -259,39 +256,37 @@ export const VERDICT_MODIFIER_KEYS = [
   "allow_l0_plugin_divergence",
 ] as const satisfies readonly (keyof Assertion)[];
 
-export const ScenarioObject = z
-  .object({
-    // Optional: defaults to the scenario's filename (sans extension) via parseScenarioFile —
-    // the file IS the identity. An explicit `name:` is an override (keys the run dir + cassette).
-    name: z.string().default(""),
-    baseline: z.string().default("latest"), // platform baseline (auto-synced; `profile:` is a deprecated alias)
-    session: z.string().default("(inline)"), // session setup (hand-authored); default = an all-defaults inline session
-    // cowork = auto-pick host-loop vs container via Cowork's own decision logic (the gate);
-    // hostloop = force host-loop; container/microvm = force VM-loop; protocol = L0.
-    fidelity: z.enum(["protocol", "container", "microvm", "hostloop", "cowork"]).default("container"),
-    prompt: z.string(),
-    answers: z.array(AnswerRule).default([]),
-    // input policy when an AskUserQuestion/dialog/elicit arrives unscripted (input-and-interactivity plan).
-    // `run` default is `fail` (deterministic); `prompt` is rejected for `run` (would break determinism).
-    on_unanswered: z.enum(["fail", "prompt", "llm", "first"]).optional(),
-    expect_denied: z.array(z.string()).default([]), // shorthand: egress hosts asserted to be DENIED (one egress_denied assertion per host)
-    assert: z.array(Assertion).default([]),
-    // F-6 (opt-in): scope the skill-staleness hash to the skill(s) this scenario actually exercises, named by
-    // their `skills/<name>` dir under a mounted plugin-root. Empty/omitted = hash the WHOLE mounted tree (the
-    // default — so an unrelated skill edit re-stales every cassette). When set, only the named skill dirs plus
-    // the plugin's SHARED roots (everything not under `skills/<x>/`) feed the hash, so editing one skill
-    // re-stales only its own cassettes. Fail-closed: if any named skill is absent, the whole tree is hashed
-    // (a typo can't silently narrow the gate).
-    skills: z.array(z.string()).default([]),
-    // Fix 4b: capability families this skill's core path NEEDS (e.g. office_convert, ocr, pdf_tables). When
-    // set, the run HARD-FAILS if the running tier omits one (clause a) or cannot verify them — protocol /
-    // replay / COWORK_SKIP_CAPABILITY_PROBE (clause b) — closing the false-green for extraction-heavy skills.
-    // `allow_missing_capability: true` opts out. Validated against the known family list at run time.
-    requires_capabilities: z.array(z.string()).default([]),
-  })
-  .strict();
+export const ScenarioObject = z.strictObject({
+  // Optional: defaults to the scenario's filename (sans extension) via parseScenarioFile —
+  // the file IS the identity. An explicit `name:` is an override (keys the run dir + cassette).
+  name: z.string().default(""),
+  baseline: z.string().default("latest"), // platform baseline (auto-synced; `profile:` is a deprecated alias)
+  session: z.string().default("(inline)"), // session setup (hand-authored); default = an all-defaults inline session
+  // cowork = auto-pick host-loop vs container via Cowork's own decision logic (the gate);
+  // hostloop = force host-loop; container/microvm = force VM-loop; protocol = L0.
+  fidelity: z.enum(["protocol", "container", "microvm", "hostloop", "cowork"]).default("container"),
+  prompt: z.string(),
+  answers: z.array(AnswerRule).default([]),
+  // input policy when an AskUserQuestion/dialog/elicit arrives unscripted (input-and-interactivity plan).
+  // `run` default is `fail` (deterministic); `prompt` is rejected for `run` (would break determinism).
+  on_unanswered: z.enum(["fail", "prompt", "llm", "first"]).optional(),
+  expect_denied: z.array(z.string()).default([]), // shorthand: egress hosts asserted to be DENIED (one egress_denied assertion per host)
+  assert: z.array(Assertion).default([]),
+  // F-6 (opt-in): scope the skill-staleness hash to the skill(s) this scenario actually exercises, named by
+  // their `skills/<name>` dir under a mounted plugin-root. Empty/omitted = hash the WHOLE mounted tree (the
+  // default — so an unrelated skill edit re-stales every cassette). When set, only the named skill dirs plus
+  // the plugin's SHARED roots (everything not under `skills/<x>/`) feed the hash, so editing one skill
+  // re-stales only its own cassettes. Fail-closed: if any named skill is absent, the whole tree is hashed
+  // (a typo can't silently narrow the gate).
+  skills: z.array(z.string()).default([]),
+  // Fix 4b: capability families this skill's core path NEEDS (e.g. office_convert, ocr, pdf_tables). When
+  // set, the run HARD-FAILS if the running tier omits one (clause a) or cannot verify them — protocol /
+  // replay / COWORK_SKIP_CAPABILITY_PROBE (clause b) — closing the false-green for extraction-heavy skills.
+  // `allow_missing_capability: true` opts out. Validated against the known family list at run time.
+  requires_capabilities: z.array(z.string()).default([]),
+});
 // Back-compat (one minor): accept the deprecated top-level `profile:` key as an alias for `baseline:`,
-// remapping it BEFORE `.strict()` rejects the unknown key. Remove next minor.
+// remapping it BEFORE `z.strictObject` rejects the unknown key. Remove next minor.
 export const Scenario = z.preprocess((raw) => {
   if (raw && typeof raw === "object" && !Array.isArray(raw)) {
     const o = raw as Record<string, unknown>;

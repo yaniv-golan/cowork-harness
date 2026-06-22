@@ -1,253 +1,261 @@
 {
-  "$ref": "#/definitions/CoworkHarnessSession",
-  "definitions": {
-    "CoworkHarnessSession": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "model": {
+      "type": "string"
+    },
+    "effort": {
+      "type": "string",
+      "enum": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    "max_thinking_tokens": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          }
+        }
+      ]
+    },
+    "extended_thinking": {
+      "type": "boolean"
+    },
+    "permission_mode": {
+      "default": "default",
+      "type": "string",
+      "enum": [
+        "default",
+        "acceptEdits",
+        "plan",
+        "bypassPermissions"
+      ]
+    },
+    "permission_parity": {
+      "default": "cowork",
+      "type": "string",
+      "enum": [
+        "cowork",
+        "strict"
+      ]
+    },
+    "folders": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "string"
+          },
+          "mode": {
+            "default": "rw",
+            "type": "string",
+            "enum": [
+              "r",
+              "rw",
+              "rwd"
+            ]
+          }
+        },
+        "required": [
+          "from"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "trusted_folders": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "auto_mount_folders": {
+      "default": false,
+      "type": "boolean"
+    },
+    "uploads": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "plugins": {
+      "default": {
+        "config_dir": null,
+        "marketplaces": [],
+        "local_marketplaces": [],
+        "enabled": [],
+        "local_plugins": [],
+        "remote_plugins": []
+      },
       "type": "object",
       "properties": {
-        "model": {
-          "type": "string"
-        },
-        "effort": {
-          "type": "string",
-          "enum": [
-            "low",
-            "medium",
-            "high",
-            "xhigh"
-          ]
-        },
-        "max_thinking_tokens": {
+        "config_dir": {
+          "default": null,
           "anyOf": [
             {
-              "type": "integer",
-              "exclusiveMinimum": 0
+              "type": "string"
             },
             {
-              "type": "object",
-              "additionalProperties": {
-                "type": "integer",
-                "exclusiveMinimum": 0
-              }
+              "type": "null"
             }
           ]
         },
-        "extended_thinking": {
+        "marketplaces": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "local_marketplaces": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "enabled": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "local_plugins": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "remote_plugins": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "skills": {
+      "default": {
+        "local": []
+      },
+      "type": "object",
+      "properties": {
+        "local": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "mcp": {
+      "default": {
+        "config": null,
+        "enabled": []
+      },
+      "type": "object",
+      "properties": {
+        "config": {
+          "default": null,
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "enabled": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "egress": {
+      "default": {
+        "extra_allow": [],
+        "unrestricted": false
+      },
+      "type": "object",
+      "properties": {
+        "extra_allow": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "unrestricted": {
+          "default": false,
           "type": "boolean"
-        },
-        "permission_mode": {
-          "type": "string",
-          "enum": [
-            "default",
-            "acceptEdits",
-            "plan",
-            "bypassPermissions"
-          ],
-          "default": "default"
-        },
-        "permission_parity": {
-          "type": "string",
-          "enum": [
-            "cowork",
-            "strict"
-          ],
-          "default": "cowork"
-        },
-        "folders": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "properties": {
-              "from": {
-                "type": "string"
-              },
-              "mode": {
-                "type": "string",
-                "enum": [
-                  "r",
-                  "rw",
-                  "rwd"
-                ],
-                "default": "rw"
-              }
-            },
-            "required": [
-              "from"
-            ],
-            "additionalProperties": false
-          },
-          "default": []
-        },
-        "trusted_folders": {
+        }
+      },
+      "additionalProperties": false
+    },
+    "web_fetch": {
+      "default": {
+        "approved_domains": []
+      },
+      "type": "object",
+      "properties": {
+        "approved_domains": {
+          "default": [],
           "type": "array",
           "items": {
             "type": "string"
-          },
-          "default": []
-        },
-        "auto_mount_folders": {
-          "type": "boolean",
-          "default": false
-        },
-        "uploads": {
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "staleness": {
+      "default": {
+        "hash_ignore": []
+      },
+      "type": "object",
+      "properties": {
+        "hash_ignore": {
+          "default": [],
           "type": "array",
           "items": {
             "type": "string"
-          },
-          "default": []
-        },
-        "plugins": {
-          "type": "object",
-          "properties": {
-            "config_dir": {
-              "type": [
-                "string",
-                "null"
-              ],
-              "default": null
-            },
-            "marketplaces": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              },
-              "default": []
-            },
-            "local_marketplaces": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              },
-              "default": []
-            },
-            "enabled": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              },
-              "default": []
-            },
-            "local_plugins": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              },
-              "default": []
-            },
-            "remote_plugins": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              },
-              "default": []
-            }
-          },
-          "additionalProperties": false,
-          "default": {
-            "config_dir": null,
-            "marketplaces": [],
-            "local_marketplaces": [],
-            "enabled": [],
-            "local_plugins": [],
-            "remote_plugins": []
-          }
-        },
-        "skills": {
-          "type": "object",
-          "properties": {
-            "local": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              },
-              "default": []
-            }
-          },
-          "additionalProperties": false,
-          "default": {
-            "local": []
-          }
-        },
-        "mcp": {
-          "type": "object",
-          "properties": {
-            "config": {
-              "type": [
-                "string",
-                "null"
-              ],
-              "default": null
-            },
-            "enabled": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              },
-              "default": []
-            }
-          },
-          "additionalProperties": false,
-          "default": {
-            "config": null,
-            "enabled": []
-          }
-        },
-        "egress": {
-          "type": "object",
-          "properties": {
-            "extra_allow": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              },
-              "default": []
-            },
-            "unrestricted": {
-              "type": "boolean",
-              "default": false
-            }
-          },
-          "additionalProperties": false,
-          "default": {
-            "extra_allow": [],
-            "unrestricted": false
-          }
-        },
-        "web_fetch": {
-          "type": "object",
-          "properties": {
-            "approved_domains": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              },
-              "default": []
-            }
-          },
-          "additionalProperties": false,
-          "default": {
-            "approved_domains": []
-          }
-        },
-        "staleness": {
-          "type": "object",
-          "properties": {
-            "hash_ignore": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              },
-              "default": []
-            }
-          },
-          "additionalProperties": false,
-          "default": {
-            "hash_ignore": []
           }
         }
       },
       "additionalProperties": false
     }
   },
-  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
   "description": "cowork-harness session YAML — pre-prompt setup (model, mounts, discovery). See docs/session.md."
 }
