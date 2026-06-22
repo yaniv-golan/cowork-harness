@@ -124,17 +124,27 @@ consistent with the actual stored body.
 
 ### scrubField utility
 
-`scrubField` is exported from `src/secrets.ts` for use outside the cassette pipeline:
+`scrubField` and `collectSecrets` are published as the package's only programmatic export — the supported
+subpath `cowork-harness/secrets` (everything else under `dist/` is private). Use it to apply the same
+redaction outside the cassette pipeline:
 
 ```ts
-import { scrubField } from "cowork-harness/secrets";
+import { scrubField, collectSecrets } from "cowork-harness/secrets";
 
-const safe = scrubField(rawValue, [process.env.ANTHROPIC_API_KEY!]);
+// collectSecrets() reads the known auth-token env vars (CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY, …)
+// plus COWORK_HARNESS_SCRUB_KEYS / _VALUES, and PRE-EXPANDS each secret into its base64 / URI /
+// "Bearer …" variants — which is what lets scrubField catch a secret embedded in an encoded field.
+const safe = scrubField(rawValue, collectSecrets());
 ```
 
-Pass the raw field value and an array of secret strings to redact. Returns the original string
-(unchanged) if no hit is found, or a `"[REDACTED:base64]"` / `"[REDACTED:uri]"` marker if the
-whole-field decode pass triggered, or a scrubbed string from the direct pass.
+`scrubField(value, secrets)` takes the raw field value and an array of secret strings to redact, and
+returns: the original string if no hit is found; a `"[REDACTED:base64]"` / `"[REDACTED:uri]"` marker if the
+whole-field decode pass triggered; or a scrubbed string from the direct pass.
+
+> **Pass `collectSecrets()`, not a bare `[token]`.** The direct pass only matches occurrences literally
+> present in your array — a bare `[ANTHROPIC_API_KEY]` catches the raw token and a whole-field base64 blob,
+> but **not** a secret embedded inside a larger encoded field (`base64(prefix + TOKEN)`). That coverage comes
+> from the variants `collectSecrets()` adds. If you supply your own list, pre-expand the encodings yourself.
 
 ## Assertion table
 
@@ -411,4 +421,5 @@ the [README Testing section](../README.md#testing--cicd).
 - [SPEC.md](../SPEC.md) — the replay-fidelity contract clause (§11 / RunResult shape).
 - `src/run/cassette.ts` — the implementation: `contentKeys`, `replayCassette`, `CassetteAgentSession`.
 - `src/agent/session.ts` — `serializeDecision` (and its declared inverse `deserializeDecision`).
-- `src/secrets.ts` — `scrubField` (exported standalone utility for custom scrubbing pipelines).
+- `src/secrets.ts` — `scrubField` + `collectSecrets`, published as the `cowork-harness/secrets` subpath
+  export for custom scrubbing pipelines.
