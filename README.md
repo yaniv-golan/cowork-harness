@@ -88,7 +88,7 @@ Skill testing is the headline use, but the tool is a general harness over the Co
 | `skill <folder> "<prompt>"` | Run a local skill/plugin folder once against the staged agent | ad-hoc "is the skill alive / does it do X?" — the fast inner loop |
 | `run <scenario.yaml \| dir/>` | Run authored scenarios with `assert:` + a CI-ready exit code | you want a repeatable, **asserted regression test** |
 | `chat <folder> [prompt]` | Interactive multi-turn REPL against a skill (TTY); optional seed prompt is sent as the first turn. `--upload <file>` / `--folder <dir>` (repeatable) attach files/project folders; `--verbose` / `-V` shows thinking blocks + tool inputs; `--fidelity protocol\|container\|hostloop` | debugging a multi-turn flow by hand |
-| `record` / `replay` | `record` saves a control-protocol cassette (one scenario, or batch a `dir/`; `--rerecord-stale` refreshes only drifted ones; `--max-artifact-bytes` raises the 64 KiB inline-body cap); `replay <file.cassette.json \| dir/>` runs a cassette **file or a `dir/` of `*.cassette.json`** deterministically (`--strict` fails on a stale one; exits on the worst verdict) | **token-free, Docker-free CI** from a once-recorded run |
+| `record` / `replay` | `record` saves a control-protocol cassette (one scenario, or batch a `dir/`; `--rerecord-stale` refreshes only drifted ones; `--max-artifact-bytes` raises the 64 KiB inline-body cap; `--dry-run` previews the scenarios + token/binary checks without recording); `replay <file.cassette.json \| dir/>` runs a cassette **file or a `dir/` of `*.cassette.json`** deterministically (`--strict` fails on a stale one; exits on the worst verdict) | **token-free, Docker-free CI** from a once-recorded run |
 | `verify-cassettes <file\|dir>` | Token-free CI gate over committed cassettes: a privacy scan (email/currency/domain → exit 1; whole-token allows via `--allow` / class-scoped `--allow-domain` / `--allow-email` / `--allow-file`) + a staleness check (`--skip-privacy` or `--skip-staleness` to run only one half). A dir argument scans `*.cassette.json` in that dir only (**non-recursive**) | gating **committed cassettes** against PII leaks + "edited the skill, forgot to re-record" |
 | `verify-run <run-dir> <scenario.yaml>` | Re-evaluate a scenario's `assert:` against an already-kept run dir — **no live agent, no tokens, no Docker** (~1s) | iterating on a wrong assertion without a full live re-record |
 | `trace <run-id>` | Digest a run's `events.jsonl` (`--view tools\|questions\|dispatches`; legacy `--tools` / `--gates` / `--dispatches` aliases still accepted) | "how many sub-agents *actually* dispatched, and which?" |
@@ -245,7 +245,8 @@ cowork-harness replay examples/replays/example-pdf-skill.cassette.json
 cowork-harness verify-cassettes examples/replays/   # privacy scan (email/currency/domain) + staleness; exit 1 on a finding
 
 # 5. Lint scenarios before committing (catches silent false-greens in assertion placement)
-cowork-harness lint scenarios/*.yaml
+#    Needs python3 + PyYAML (the linter shells out to the bundled scenario.py; exit 127 if missing).
+cowork-harness lint examples/scenarios/*.yaml
 ```
 
 > **Privacy:** a cassette snapshots the transcript and the `outputs/` JSON bodies, so it's committed PII
@@ -260,7 +261,7 @@ cowork-harness lint scenarios/*.yaml
 > `serializeDecision` as a token-free O7 guard (the AskUserQuestion `{questions,answers}` answer-shape
 > invariant). Evaluated on replay: `transcript_*`, `tool_*`, `subagent_*`, `dispatch_count_max`,
 > `result`, and the verdict modifiers `allow_permissive_auto_allow` / `allow_missing_capability` /
-`allow_l0_plugin_divergence` (no-op passes, kept on replay). **`question_asked`,
+`allow_l0_plugin_divergence` / `allow_stall` (no-op passes, kept on replay). **`question_asked`,
 > `questions_count_max`, and `gate_answers_delivered` are also evaluated —
 > but only when the cassette carries `controlOut` (full-fidelity)**; old cassettes without it get a
 > loud warning and those three keys are excluded (not vacuously passed). **Filesystem assertions
@@ -301,8 +302,9 @@ prompt: |
 answers:
   - when_question: "Which output format"   # regex (case-insensitive) on AskUserQuestion
     choose: "Markdown"                      # by label; or choose: "2" for the 2nd option BY POSITION
-                                            # (index survives regenerated labels; ".*" matches any phrasing —
-                                            # last-resort, single gate/turn, after specific rules)
+                                            # (index survives label drift but NOT option re-ordering — prefer a
+                                            # label when order is stable; `lint` advises on positional choose;
+                                            # ".*" matches any phrasing — last-resort, single gate/turn, after specific rules)
   - when_tool: Bash                        # tool-permission decisions
     allow_if: "!command.includes('rm -rf')"
     else: deny
@@ -470,6 +472,7 @@ Unit tests cover the scripted-answer logic, the egress allowlist matcher, the se
 - **Networking / loop:** `COWORK_EGRESS_PROXY` overrides the egress-proxy URL injected into the sandbox; `COWORK_PROXY_IMAGE` overrides the egress proxy Docker image name (default `cowork-egress-proxy:1`); `COWORK_DOCKER_NETWORK` pins the Docker network the agent container joins; `CLAUDE_FORCE_HOST_LOOP=1` forces the host-loop path regardless of the baseline's loop decision (the `cowork` tier's auto-pick). `COWORK_LIMACTL` overrides the `limactl` binary path (default `/opt/homebrew/bin/limactl`).
 - **Strictness escape hatches** (the harness fails loud by default): `COWORK_HARNESS_SOFT_MISSING=1` downgrades a missing mount source from a hard error to warn-and-exclude; `COWORK_HARNESS_ALLOW_CONFIG_DIR_WRITE=1` permits writing into an existing pinned `plugins.config_dir` (otherwise refused, to avoid clobbering a real Claude config).
 - **Staleness boundary:** the cassette-staleness skill hash uses the **git-tracked** file set of each skill/plugin source dir by default (a non-repo dir falls back to a raw walk; OS-junk like `.DS_Store` is always excluded). `COWORK_HARNESS_GITSET=0` opts out to the legacy raw walk for every dir. `COWORK_HARNESS_DEBUG_SKILLHASH=1` dumps the exact file set feeding the hash on a staleness mismatch (and flags OS-junk) so a drift source is one line. Declare per-plugin non-runtime paths in a `.cowork-hashignore` file (or the session `staleness.hash_ignore`).
+- **`skill` / `chat` defaults:** `COWORK_HARNESS_FIDELITY` sets the default fidelity tier for ad-hoc `skill`/`chat` runs (a `--fidelity` flag or a scenario's `fidelity:` still wins); `COWORK_HARNESS_MODEL` sets the default model; `COWORK_HARNESS_OUTPUT_FORMAT` (`text`|`json`) sets the default output format. Each is overridden by the matching explicit flag.
 - **Secret scrubbing:** `COWORK_HARNESS_SCRUB_KEYS=<KEY1,KEY2>` adds extra env-var names whose values are redacted from logs (beyond the known auth tokens + `ANTHROPIC_CUSTOM_HEADERS`); `COWORK_HARNESS_SCRUB_VALUES=<v1,v2>` redacts literal values regardless of env. **Committed-cassette redaction:** `COWORK_HARNESS_REDACT_PATTERNS=<rx1,rx2>` / `COWORK_HARNESS_REDACT_KEYS=<k1,k2>` extend the privacy layer that scrubs recorded `controlOut` before a cassette is written for commit.
 - L2 microVM: `COWORK_VM_GATEWAY` overrides the Lima host-proxy gateway IP (default `192.168.5.2`); `COWORK_VM_PROXY_PORT` the proxy port. The Lima instance is named `cowork-vm-<config-hash>` (a config change → a fresh VM); `COWORK_LIMA_INSTANCE` pins a fixed name, and `vm prune` removes orphaned ones.
 - Pin `baseline: desktop-<ver>` and `model:` in a session for byte-stable runs; use `latest` to track.

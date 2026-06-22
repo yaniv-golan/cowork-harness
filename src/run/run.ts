@@ -43,6 +43,9 @@ export interface RunRecord {
   // Fix 5: when result === "error", whether the error looks like a transport drop (connection closed after a
   // clean result) vs a genuine agent/skill failure. Undefined on success or unclassified errors.
   resultErrorKind?: "transport" | "agent";
+  // H2: set true when the run ended on an unanswered plain-text question (see the post-loop detector in
+  // drive()). Mapped into RunResult by execute.ts (live) and cassette.ts (replay re-drive).
+  stalledOnQuestion?: boolean;
   initTools: string[];
   cwd?: string;
   transcript: string;
@@ -277,6 +280,19 @@ export class Run {
     }
 
     this.rec.transcript = transcript.join("\n");
+    // H2: stall-on-question detection. A turn that ends on a plain-text re-ask ("which file?") gets
+    // is_error:false → result:"success" (a false-green — the SDK turn didn't error, but the task didn't
+    // complete). Flag it (computeVerdict turns it into a `stalled` fail unless allow_stall). Conservative
+    // conjunction to keep the default-fail safe: (1) the run cleanly succeeded, (2) the FINAL top-level
+    // assistant message is a question, (3) the agent took NO action the whole run (no tool_use — a Write/Bash
+    // that produced an artifact is in toolLog, so this subsumes "wrote nothing"), and (4) NO structured
+    // AskUserQuestion gate ever occurred (those are already on_unanswered's job — `rec.questions` is the
+    // reliable signal, NOT event adjacency). Reads only `rec`/local state, so it re-derives identically on the
+    // replay re-drive. Scenario-lane only (a single oneShot turn); not exercised by the multi-turn chat driver.
+    const lastText = transcript.length > 0 ? transcript[transcript.length - 1].trim() : "";
+    if (this.rec.result === "success" && lastText.endsWith("?") && this.toolLog.length === 0 && this.rec.questions.length === 0) {
+      this.rec.stalledOnQuestion = true;
+    }
     // Part 3: pair each answered gate with its tool_result (by toolUseId). delivered=true iff a non-error
     // result was observed; false iff it errored (O7 class); null if no result was observed (e.g. protocol
     // fidelity, or the run ended before the tool ran) — null is neutral for `gate_answers_delivered`.

@@ -18,6 +18,10 @@
       "enum": ["transport", "agent"],
       "description": "Fix 5: when result is 'error', whether it was a tail-end transport drop (connection closed after a clean result) vs a genuine agent/skill failure"
     },
+    "stalledOnQuestion": {
+      "type": "boolean",
+      "description": "H2: the run ended on an unanswered plain-text question (the agent asked for input and stopped) while result==='success'. computeVerdict fails on this (a 'stalled' signal) unless the scenario asserts allow_stall."
+    },
     "capabilityProbe": {
       "type": "string",
       "enum": ["definitive", "unverified", "skipped"],

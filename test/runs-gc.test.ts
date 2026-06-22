@@ -82,4 +82,28 @@ describe.skipIf(!can)("runs gc", () => {
     expect(remaining).not.toContain("local_b");
     expect(remaining.length).toBe(2);
   });
+
+  // H6: a COMPLETED run (has result.json) outranks a newer EMPTY scaffold dir for a keep slot. The completed
+  // run's name sorts LAST by the name-desc tiebreaker, so under the old pure-mtime+name ranking the empty dir
+  // would have won the single slot — the real-run-first ranking flips that. keep-last stays a hard cap (1 kept).
+  it("prefers a completed run over a newer empty (no result.json/events.jsonl) dir", () => {
+    const runsRoot = mkdtempSync(join(tmpdir(), "cwh-runs-"));
+    makeRunDir(runsRoot, "s", "local_aaa"); // completed (result.json); sorts LAST by name-desc
+    mkdirSync(join(runsRoot, "s", "local_zzz"), { recursive: true }); // newer EMPTY scaffold; sorts FIRST by name-desc
+    const r = spawnSync("node", [CLI, "runs", "gc", "--keep-last", "1", runsRoot], { encoding: "utf8" });
+    expect(r.status).toBe(0);
+    expect(readdirSync(join(runsRoot, "s"))).toEqual(["local_aaa"]); // completed survived; empty pruned; count == keep-last
+  });
+
+  // H6: a real-but-THREW run (no result.json, but a session started so events.jsonl exists) is a real run.
+  it("retains a run with events.jsonl but no result.json (a threw/in-flight run) over an empty dir", () => {
+    const runsRoot = mkdtempSync(join(tmpdir(), "cwh-runs-"));
+    const threw = join(runsRoot, "s", "local_aaa");
+    mkdirSync(threw, { recursive: true });
+    writeFileSync(join(threw, "events.jsonl"), '{"type":"init"}\n'); // started; no result.json
+    mkdirSync(join(runsRoot, "s", "local_zzz"), { recursive: true }); // empty scaffold
+    const r = spawnSync("node", [CLI, "runs", "gc", "--keep-last", "1", runsRoot], { encoding: "utf8" });
+    expect(r.status).toBe(0);
+    expect(readdirSync(join(runsRoot, "s"))).toEqual(["local_aaa"]);
+  });
 });

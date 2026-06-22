@@ -160,4 +160,14 @@ describe("computeVerdict (SEAM B — the single verdict source)", () => {
     expect(computeVerdict(r, "live").pass).toBe(false);
     expect(computeVerdict(r, "replay").pass).toBe(true);
   });
+
+  it("H2 — a stalled run fails on BOTH lanes (re-derived on replay), unless allow_stall opts out", () => {
+    const stalled = rr({ stalledOnQuestion: true });
+    expect(computeVerdict(stalled, "live").pass).toBe(false);
+    expect(computeVerdict(stalled, "live").signals.some((s) => s.code === "stalled")).toBe(true);
+    expect(computeVerdict(stalled, "replay").pass).toBe(false); // the detector re-runs on the replay re-drive → fails there too
+    const optIn = rr({ stalledOnQuestion: true, assertions: [assn({ allow_stall: true })] });
+    expect(computeVerdict(optIn, "live").pass).toBe(true); // allow_stall suppresses the stall (standalone modifier)
+    expect(computeVerdict(rr({}), "live").signals.some((s) => s.code === "stalled")).toBe(false); // not stalled → no signal
+  });
 });

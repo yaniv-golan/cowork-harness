@@ -295,6 +295,19 @@ are the ones that bite hardest.
     signals section after every run; a run that greened with this signal ran against an incomplete
     prompt. *Fix:* treat `prompt_asset_missing` as a blocking error in CI by checking the signals
     array.
+13. **`result: success` means the agent didn't error, NOT that the task completed — always assert on
+    artifacts/content.** A turn that ends on a plain-text re-ask ("which file did you mean?") still
+    reports `result: success`. The harness now catches the obvious case: a run that ends on an
+    unanswered question with no tool calls fails with a **`stalled`** verdict signal (suppress with
+    `allow_stall: true` if ending on a question is intended). But the broad guard is YOUR assertions —
+    assert the deliverable (`file_exists` / `artifact_json` / `transcript_matches`), never just
+    `result: success`. Note: `on_unanswered` governs **structured `AskUserQuestion` gates only**, not a
+    plain-text trailing question; and a "type-it-in-notes" option has **no scripted deterministic
+    answer** today (the `OTHER:` directive works only on the LLM-decider path, not scripted `choose:`).
+14. **A positional `choose` (`first` / index) is order-dependent.** `choose: "2"` survives label drift
+    but NOT option *re-ordering* — if the gate presents its options in a different order run-to-run, the
+    index lands on a different option (a silent re-record flake). Prefer an exact label when order is
+    stable; `lint` flags positional `choose` with an advisory.
 
 For the complete gotcha list, the assertion catalog, the YAML schema, the fidelity/answer tables,
 and the CI recipe, read the files in `references/`.

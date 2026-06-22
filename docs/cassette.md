@@ -174,6 +174,7 @@ Content keys are evaluated on replay; everything else is skipped.
 | `allow_permissive_auto_allow` | verdict modifier — kept on replay → no-op pass (the live signal it suppresses is zeroed) |
 | `allow_missing_capability` | verdict modifier — kept on replay → no-op pass (the live signal it suppresses is zeroed) |
 | `allow_l0_plugin_divergence` | verdict modifier — kept on replay → no-op pass (the live signal it suppresses is zeroed) |
+| `allow_stall` | verdict modifier — kept on replay → no-op pass (suppresses the `stalled` default-fail; the stall is re-derived on the replay re-drive) |
 
 **`question_asked`, `questions_count_max`, `gate_answers_delivered` require `controlOut`** (full-fidelity
 replay). On an old cassette without `controlOut` these three keys are excluded from evaluation — not
@@ -284,6 +285,7 @@ Re-record a cassette when:
 On every **harness major** (x.0.0) version bump, re-record AND re-verify all cassettes:
 
 ```bash
+cowork-harness record scenarios/ --dry-run          # preview the scenarios + token/binary checks, write nothing
 cowork-harness record scenarios/                    # or: record cassettes/ --rerecord-stale
 cowork-harness verify-cassettes cassettes/
 ```
