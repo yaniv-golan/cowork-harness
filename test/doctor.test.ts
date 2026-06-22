@@ -8,6 +8,7 @@ const OK_PROBE: DoctorProbe = {
   runtimeName: () => "docker",
   runtimeAvailable: () => true,
   runtimeDaemonUp: () => true,
+  limaAvailable: () => true,
   imageName: () => "cowork-agent-base:2",
   imagePresent: () => true,
   proxyImageName: () => "cowork-egress-proxy:1",
@@ -67,6 +68,33 @@ describe("doctor — runDoctorChecks", () => {
     expect(get(runDoctorChecks("microvm", linux), "os").required).toBe(true);
     expect(get(runDoctorChecks("container", linux), "os").status).toBe("warn");
     expect(get(runDoctorChecks("container", linux), "os").required).toBe(false);
+  });
+
+  it("microvm checks Lima (limactl), NOT the Docker runtime/image/proxy", () => {
+    const cs = runDoctorChecks("microvm", OK_PROBE);
+    const ids = cs.map((c) => c.id);
+    expect(ids).toContain("lima"); // L2 prerequisite is Lima
+    expect(ids).not.toContain("runtime"); // no Docker daemon check
+    expect(ids).not.toContain("image"); // no agent IMAGE — the microVM uses its own rootfs
+    expect(ids).not.toContain("proxy"); // host-side proxy, not the Docker egress-proxy image
+    expect(ids).toContain("agent"); // the staged ELF is still bind-mounted into the guest
+    expect(get(cs, "lima").status).toBe("ok");
+    expect(blocking(cs)).toEqual([]);
+  });
+
+  it("microvm blocks when limactl is missing (and a Docker outage does NOT affect it)", () => {
+    const noLima = runDoctorChecks("microvm", probe({ limaAvailable: () => false }));
+    expect(get(noLima, "lima").status).toBe("fail");
+    expect(get(noLima, "lima").remedy).toMatch(/Lima|limactl|COWORK_LIMACTL/);
+    expect(blocking(noLima)).toContain("lima");
+    // Docker being down is irrelevant to the microvm verdict (it never probes the runtime).
+    expect(blocking(runDoctorChecks("microvm", probe({ runtimeAvailable: () => false, runtimeDaemonUp: () => false })))).toEqual([]);
+  });
+
+  it("microvm still blocks on a missing staged agent binary (bind-mounted into the guest)", () => {
+    const cs = runDoctorChecks("microvm", probe({ agentBinary: () => ({ ok: false, error: "Staged agent binary not found" }) }));
+    expect(get(cs, "agent").status).toBe("fail");
+    expect(blocking(cs)).toContain("agent");
   });
 
   it("Node < 20 fails", () => {

@@ -3,6 +3,7 @@ import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "../cli-args.js";
 import { resolveAgentBinary, loadBaseline } from "../baseline.js";
+import { limaPath } from "../runtime/lima.js";
 import { pkgVersion } from "./envelope.js";
 
 // Synchronous fd writes (match cli.ts): machine→stdout, human→stderr.
@@ -32,6 +33,7 @@ export interface DoctorProbe {
   runtimeName(): string;
   runtimeAvailable(): boolean;
   runtimeDaemonUp(): boolean;
+  limaAvailable(): boolean; // microvm (L2) only — `limactl` present (Lima / Apple Virtualization.framework)
   imageName(): string;
   imagePresent(): boolean;
   proxyImageName(): string;
@@ -60,6 +62,10 @@ export const realProbe: DoctorProbe = {
   },
   runtimeDaemonUp() {
     const r = spawnSync(this.runtimeName(), ["info"], { stdio: "ignore" });
+    return !r.error && r.status === 0;
+  },
+  limaAvailable() {
+    const r = spawnSync(limaPath(), ["--version"], { stdio: "ignore" });
     return !r.error && r.status === 0;
   },
   imageName: () => process.env.COWORK_AGENT_IMAGE ?? "cowork-agent-base:2",
@@ -124,11 +130,40 @@ export function runDoctorChecks(tier: Tier, probe: DoctorProbe = realProbe): Doc
     required: tier === "microvm",
   });
 
+  // The staged agent ELF is bind-mounted into the sandbox at every live tier (container guest AND the
+  // Lima microVM guest), so this check is shared by both live paths.
+  const agentCheck = (): DoctorCheck => {
+    const agent = probe.agentBinary();
+    return {
+      id: "agent",
+      title: "Staged agent binary",
+      status: agent.ok ? "ok" : "fail",
+      detail: agent.ok ? agent.path : agent.error.split("\n")[0],
+      remedy: agent.ok
+        ? undefined
+        : "open Claude Cowork once to stage the agent, or set COWORK_AGENT_BINARY=<path> (put it in your .env so --dotenv covers it, like the token)",
+      required: true,
+    };
+  };
+
   const runtime = probe.runtimeName();
   if (!live) {
     checks.push({ id: "runtime", title: "Container runtime", status: "skip", detail: `not needed for ${tier}`, required: false });
     checks.push({ id: "image", title: "Agent image", status: "skip", detail: `not needed for ${tier}`, required: false });
     checks.push({ id: "agent", title: "Staged agent binary", status: "skip", detail: `not needed for ${tier}`, required: false });
+  } else if (tier === "microvm") {
+    // L2 runs on Lima + Apple Virtualization.framework — NOT Docker. Check `limactl`, not the container
+    // runtime / agent image / egress-proxy image (the microVM uses its own rootfs and a host-side proxy).
+    const limaOk = probe.limaAvailable();
+    checks.push({
+      id: "lima",
+      title: "Lima (limactl)",
+      status: limaOk ? "ok" : "fail",
+      detail: limaOk ? `${limaPath()} found` : `limactl not found (${limaPath()})`,
+      remedy: limaOk ? undefined : "install Lima (`brew install lima`) or set COWORK_LIMACTL=<path>",
+      required: true,
+    });
+    checks.push(agentCheck());
   } else {
     const avail = probe.runtimeAvailable();
     const up = avail && probe.runtimeDaemonUp();
@@ -156,17 +191,7 @@ export function runDoctorChecks(tier: Tier, probe: DoctorProbe = realProbe): Doc
       required: up, // only gate on the image once the runtime is actually reachable
     });
 
-    const agent = probe.agentBinary();
-    checks.push({
-      id: "agent",
-      title: "Staged agent binary",
-      status: agent.ok ? "ok" : "fail",
-      detail: agent.ok ? agent.path : agent.error.split("\n")[0],
-      remedy: agent.ok
-        ? undefined
-        : "open Claude Cowork once to stage the agent, or set COWORK_AGENT_BINARY=<path> (put it in your .env so --dotenv covers it, like the token)",
-      required: true,
-    });
+    checks.push(agentCheck());
 
     // Egress proxy image — informational, never blocking: the egress sidecar builds it on the fly
     // (ensureProxyImage) when absent, so report status but don't gate the verdict on it.

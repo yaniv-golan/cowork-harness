@@ -14,10 +14,11 @@ npm run ci            # typecheck + build + test
 
 Node ≥ 20. The project is ESM TypeScript; no transpiler magic — `tsc` only.
 
-Two extra prerequisites for specific stages:
+Extra prerequisites for specific stages:
 
 - **python3 + PyYAML** — required for `cowork-harness lint` (the scenario linter shells out to `python3`; it hard-fails with exit `127` when `python3` is missing).
-- **Docker** — required for the `boundary-check` stage and the L1+ container/VM fidelity tiers.
+- **Docker (arm64)** — required for `boundary-check` and the **L1 `container`** + `hostloop` fidelity tiers (the container sandbox + agent image).
+- **Lima (`limactl`, macOS arm64)** — required only for the **L2 `microvm`** tier and the `vm` commands; the guest runs on Apple Virtualization.framework (`vmType: vz`). `microvm` does **not** use Docker. (`cowork-harness doctor --tier microvm` checks for Lima, not Docker.)
 
 CI Stage 1 (the `unit` job in `.github/workflows/ci.yml`) does **not** invoke `npm run ci`. It
 runs those steps individually — `format:check`, `typecheck`, `npm test`, `build` — then a CLI smoke

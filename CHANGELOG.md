@@ -32,6 +32,12 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **`cowork-harness/secrets` package export** — `scrubField` and `collectSecrets` are now importable as a
+  declared subpath (`import { scrubField, collectSecrets } from "cowork-harness/secrets"`) for custom
+  redaction pipelines, with the documented usage corrected to `scrubField(value, collectSecrets())` (a bare
+  `[token]` array misses secrets embedded in encoded fields). Adding the `exports` map also **bounds the
+  package's public surface to this one subpath** — deep imports into `dist/` (`cowork-harness/dist/...`),
+  previously resolvable by accident, are now private. The CLI (`bin`) is unaffected.
 - **`lint` accepts a directory** — it expands to the directory's `*.yaml` / `*.yml` scenarios
   (non-recursive, sorted), the same file-or-dir ergonomics as `replay` / `verify-cassettes`. An empty
   directory is a loud error, never a vacuous "0 files = clean" pass.
@@ -48,6 +54,11 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **`doctor --tier microvm` now checks the right prerequisites.** It previously probed the Docker daemon +
+  agent image + egress-proxy image for every live tier, but the `microvm` (L2) tier runs on **Lima / Apple
+  Virtualization.framework**, not Docker — so it could report "not ready" on a Lima-only host, or "ready"
+  with no Lima installed. `microvm` now checks `limactl` (honoring `COWORK_LIMACTL`) + the staged agent
+  binary, and skips the Docker checks; `container`/`hostloop`/`cowork` are unchanged.
 - **A freshly recorded cassette no longer reports `[stale]` immediately** because the OS rewrote a `.DS_Store`
   (or other OS-junk) in the skill tree — OS-junk is excluded from the skill hash. A chronic false-positive
   that pushed consumers to WARN-only (which then masked real drift).
