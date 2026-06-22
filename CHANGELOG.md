@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-06-22
+
 ### Breaking changes
 
 - **Cassette staleness fingerprint bumped to format v6 (re-record once).** The skill-hash boundary changed,
