@@ -6,6 +6,31 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Breaking changes
+
+- **Removed the legacy CLI aliases.** `assert` → use `assertions`; `replay --cassette <file>` → pass the
+  path positionally (`replay <file | dir/>`); `verify-cassettes --privacy-only` / `--staleness-only` →
+  `--skip-privacy` / `--skip-staleness`. (0.8.0 had documented the latter two groups as renamed/removed but
+  the code still accepted the old forms; they are now gone. Each removed alias exits `2` if used.)
+- **`assertions --list --output-format json` now reports `command: "assertions"`** (was the stale
+  `"assert"`) — a JSON-envelope contract fix for anything keying on the `command` field.
+- **`decide` exits `2` (not `1`) on a runtime error**, matching the documented "usage / runtime → `2`"
+  contract. No-match / abstain still exits `1`.
+
+### Added
+
+- **`lint` accepts a directory** — it expands to the directory's `*.yaml` / `*.yml` scenarios
+  (non-recursive, sorted), the same file-or-dir ergonomics as `replay` / `verify-cassettes`. An empty
+  directory is a loud error, never a vacuous "0 files = clean" pass.
+
+### Fixed
+
+- A standalone verdict-modifier assertion (e.g. `allow_l0_plugin_divergence: true`) no longer false-fails
+  as "empty assertion", and verdict modifiers no longer trigger a misleading "filesystem/egress skipped"
+  warning on the replay lane. The verdict modifiers are now single-sourced from one list (`assert.ts`,
+  `cassette.ts`, and the Python linter all derive from / are checked against it), guarded by a convention
+  test against drift.
+
 ## [0.8.0] — 2026-06-21
 
 ### Breaking changes
