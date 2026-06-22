@@ -5,12 +5,15 @@ A core design goal is that keeping up with Claude Desktop is **cheap and visible
 ## The seam
 
 ```
-STABLE (in code, rarely changes)        VOLATILE (in baselines/, regenerated per release)
+STABLE (in code, rarely changes)        VOLATILE (in baselines/, sync-regenerated per release)
   - stream-json control protocol          - agentVersion
-  - scenario / session schemas            - egress allowDomains + networkMode
-  - runtime selector, egress proxy        - bg-env-strip list
-                                          - mountLayout
+  - scenario / session schemas            - network.allowDomains + network.mode
+  - runtime selector, egress proxy        - gates
                                           - asarFingerprint (drift tripwire)
+
+HAND-AUTHORED (in baselines/, drift-guarded — sync does NOT extract these)
+  - mountLayout (mount modes)
+  - bg-env-strip list
 ```
 
 ## Per-release runbook
@@ -26,7 +29,8 @@ cowork-harness sync --diff      # show what moved vs the committed baseline
 ```
 === diff vs committed baseline ===
   appVersion: "1.11847.5" -> "1.12603.1"
-  network.allowDomains: [...] -> [... +newhost.anthropic.com]
+  agentVersion: "2.1.170" -> "2.1.177"
+  network: {...} -> {...}
 ```
 
 Then commit:
@@ -38,12 +42,12 @@ git commit -m "parity: sync to Desktop <new>"
 cowork-harness run examples/scenarios/   # regression — drift now shows as test diffs (this repo's scenarios live under examples/)
 ```
 
-If the agent version bumped, the container image rebuilds against the new pin automatically (CI derives `AGENT_VERSION` from the baseline).
+If the agent version bumped, there is no image rebuild: the agent ELF is bind-mounted at runtime from the staged Desktop install (`resolveAgentBinary`, `src/baseline.ts`), not baked into the container image. A bumped `agentVersion` only updates `agentBinary.stagedPath` in the baseline (`src/cli.ts`); the container picks up the new binary from that path.
 
-`sync` **refuses to write an empty `allowDomains`** allowlist — an empty egress allowlist is a safety tripwire (it would silently produce a baseline that permits nothing/everything rather than the real Desktop set). Override the refusal with `--allow-empty` only when an empty allowlist is genuinely correct:
+`sync` refuses to write a baseline in **two** cases: (a) an empty `allowDomains` allowlist — an empty egress allowlist is a safety tripwire (it would silently produce a baseline that permits nothing/everything rather than the real Desktop set); and (b) `⚠ unknown deltas` (see below). `--allow-empty` (alias `--force`) overrides **both** refusals and force-writes the baseline anyway — use it only when you understand the impact:
 
 ```bash
-cowork-harness sync --allow-empty   # force-write a baseline even when allowDomains is empty
+cowork-harness sync --allow-empty   # force-write past an empty allowlist or unknown deltas
 ```
 
 **Hard-failure exit codes (for CI scripts):** `sync` exits **1** (not 2) on its hard failures — specifically (a) a missing required version field in the Desktop install it derives from, and (b) a refused empty allowlist (when `--allow-empty` is not passed).
@@ -82,8 +86,9 @@ cowork-harness sync          # write baselines/desktop-<newver>.json from your i
 ```
 
 The new file becomes `latest` automatically, so `baseline: latest` scenarios pick it up immediately.
-**If `sync` prints `⚠ unknown deltas`** the synced baseline is partial (e.g. an empty `allowDomains`) —
-until a maintainer extends the extractor, bridge it temporarily:
+**If `sync` prints `⚠ unknown deltas`** it refuses to write and exits 1 — nothing is committed. To get a
+working baseline before a maintainer extends the extractor, either pin the last-good baseline (below), or
+force the partial write with `--allow-empty` and then bridge the missing field:
 - add any now-missing hosts via `session.egress.extra_allow` (additive), **or**
 - hand-edit the one wrong field in `baselines/desktop-<newver>.json` (plain JSON — e.g. copy
   `network.allowDomains` from the prior baseline), **or**

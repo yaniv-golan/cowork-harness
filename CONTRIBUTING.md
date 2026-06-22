@@ -60,7 +60,7 @@ Paths inside a scenario/session resolve relative to that file (see [docs/session
 - **Don't weaken the boundary.** Changes to `runtime/container.ts` or `docker/compose.yml` must keep the default-deny network + sealed FS. Run `cowork-harness boundary-check` and add/adjust a probe in `src/boundary.ts` if you change the model.
 - **Mark unverified code.** Anything not yet run end-to-end against a live agent gets a `// UNVERIFIED` comment so reviewers know.
 - **Add a test.** New schema fields, `Decider` rules, or egress logic need a unit test in `test/`. Examples must validate (`test/examples.test.ts`).
-- **Format.** `npm run format:check` must pass (`npx prettier --write` to fix).
+- **Format.** `npm run format:check` must pass (`npx prettier --write "src/**/*.ts" "test/**/*.ts"` to fix).
 
 ## Extending the sync extractor
 

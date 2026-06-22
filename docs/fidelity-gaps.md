@@ -80,4 +80,4 @@ The harness `--fidelity` flag selects how closely the execution environment matc
 | `hostloop` | Docker + host-side agent loop | Matches Cowork's host-loop mode; agent file tools run on host |
 | `cowork` | Auto-picks `hostloop` or `container` via the same gate as real Cowork | Highest fidelity for automated tests |
 
-The `chat` command accepts `protocol`, `container`, and `hostloop`. `microvm` and `cowork` are omitted — `microvm` has a slow boot (~20s) that makes interactive use painful, and `cowork` requires porting the `decideLoopFromBaseline` gate logic from `execute.ts`.
+The `chat` command accepts `protocol`, `container`, and `hostloop`. `microvm` and `cowork` are omitted — `microvm` has a slow boot (~20s) that makes interactive use painful, and `cowork` would require replicating the cowork-tier wiring line (`execute.ts:241`), which resolves the tier via the shared `decideLoopFromBaseline` gate logic (`loop-decision.ts`).

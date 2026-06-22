@@ -20,7 +20,7 @@ Phase 1: git checkout -b release/X.Y.Z
   ↓  CI passes
 Phase 2: gh pr merge <number> --merge   (or merge via GitHub UI)
          git checkout main && git pull origin main
-         git push origin main            # fast-forward; CI does NOT re-run (same SHA)
+         git push origin main            # no-op fast-forward — main already advanced (and CI ran) at merge
 Phase 3: git push origin vX.Y.Z         # triggers release workflow → npm publish + GitHub Release
          # closes the skew window
          git push origin --delete release/X.Y.Z   # clean up remote branch

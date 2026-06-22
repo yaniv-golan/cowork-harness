@@ -59,9 +59,10 @@ Resolved inputs: `sessionRoot=/sessions/<id>`, `mntRoot=/sessions/<id>/mnt`, `co
 claude -p --verbose
   --input-format stream-json --output-format stream-json
   --permission-prompt-tool stdio
-  --permission-mode default
+  --permission-mode <session.permissionMode ?? baseline.spawn.permissionMode ?? default>
   --setting-sources user
   --effort <session.effort ?? baseline.spawn.effortDefault>
+  --max-thinking-tokens <resolved budget>        # always emitted (never 0)
   [--append-system-prompt <rendered cowork sections>]
   [--model <session.model>]
   [--mcp-config <configGuest>/mcp.json]         # if session.mcp.config set — HONORED in plain cowork mode (§6)

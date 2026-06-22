@@ -1,12 +1,12 @@
 # Discovery: marketplaces, plugins, skills, MCP
 
-The agent the harness runs **is** `claude-code` — the same binary Claude Desktop stages at `claude-code-vm/<ver>/claude` and launches in cowork mode via `CLAUDE_CODE_IS_COWORK=1` (there is no `--cowork` flag). So it discovers extensions from the same roots. The harness's job is to *populate those roots* the way Cowork does, while giving you override knobs for tests. The roots below were verified against the staged agent binary.
+The agent the harness runs **is** `claude-code` — the same binary Claude Desktop stages at `claude-code-vm/<ver>/claude` and launches in cowork mode via `CLAUDE_CODE_IS_COWORK=1` (the `--cowork` flag exists only in the staged in-VM binary; the harness uses the env var). So it discovers extensions from the same roots. The harness's job is to *populate those roots* the way Cowork does, while giving you override knobs for tests. The roots below were verified against the staged agent binary.
 
 ## Discovery roots
 
 | Kind | Real roots | Populated from (session setup) |
 |---|---|---|
-| **Plugins / marketplaces** | `CLAUDE_CONFIG_DIR/plugins`, `plugin_marketplaces` in settings, + Cowork mounts `mnt/.local-plugins/marketplaces/<marketplace>/<plugin>`, `mnt/.remote-plugins` (≥1.14271.0; older baselines use `.local-plugins/cache`) | `plugins.local_plugins[]` → `.local-plugins/marketplaces/<marketplace>/<plugin>`; `plugins.remote_plugins[]` → `.remote-plugins`; `plugins.marketplaces[]` → `extraKnownMarketplaces`; `plugins.enabled[]` → `enabledPlugins` |
+| **Plugins / marketplaces** | `CLAUDE_CONFIG_DIR/plugins`, `plugin_marketplaces` in settings, + Cowork mounts `mnt/.local-plugins/marketplaces/<marketplace>/<plugin>`, `mnt/.remote-plugins` (≥1.14271.0; older baselines use `.local-plugins/cache`) | `plugins.local_plugins[]` → `.local-plugins/marketplaces/<marketplace>/<plugin>`; `plugins.remote_plugins[]` → `.remote-plugins`; `plugins.marketplaces[]` → `extraKnownMarketplaces`; `plugins.local_marketplaces[]` → local marketplace dirs registered via `claude plugin marketplace add`; `plugins.enabled[]` → `enabledPlugins` |
 | **Skills** | `CLAUDE_CONFIG_DIR/skills`, + skills inside plugins | `skills.local[]` staged into the config dir; plugin skills discovered at the mounts |
 | **MCP servers** | `--mcp-config <file>` / `.mcp.json`, `enabledMcpjsonServers` in settings | `mcp.config` → `--mcp-config`; `mcp.enabled[]` → `enabledMcpjsonServers` |
 
@@ -30,7 +30,7 @@ Plugins are bind-mounted at the Cowork paths; the MCP config is passed via `--mc
 
 | Goal | How |
 |---|---|
-| Test a single local skill in isolation | `plugins.local_plugins: ["./skills/my-skill"]`, nothing else |
+| Test a single local **skill** dir in isolation | `skills.local: ["./skills/my-skill"]` (staged into the config dir's `skills/`). Use `plugins.local_plugins` instead only for a **plugin** root — a dir with `.claude-plugin/plugin.json` — mounted via `--plugin-dir`. |
 | Reproduce a real `~/.claude` setup | `plugins.config_dir: ~/.claude` (pins the real dir instead of a clean one) [^configdir] |
 | Swap an MCP server for a stub | point `mcp.config` at a test `mcp.json` (see `examples/data/mcp.json`) |
 | Exercise an org-remote plugin | `plugins.remote_plugins: ["./fixtures/org-plugin"]` |
