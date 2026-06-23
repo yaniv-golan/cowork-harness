@@ -18,7 +18,8 @@ import {
   type AgentEvent,
   type DecisionRequest,
 } from "../agent/session.js";
-import { ABSTAIN, UnansweredError, type Decider } from "../decide/decider.js";
+import { ABSTAIN, UnansweredError, type Decider, type OnUnanswered } from "../decide/decider.js";
+import { fileChannel, type DecisionChannel } from "../decide/external-channel.js";
 import { evaluate } from "../assert.js";
 import { makeRenderer, renderFooter, type RenderPlan } from "./renderer.js";
 import { jsonEnvelope, parseOutputFormat } from "./envelope.js";
@@ -106,6 +107,12 @@ export interface Cassette {
   // guess so an authored `name:` that differs from the filename still re-records from the edited YAML rather
   // than silently re-recording the embedded snapshot. ABSENT when recorded from an in-memory/inline scenario.
   scenarioSource?: string;
+  // provenance: how this cassette's gate answers were authored. PRESENT with nonDeterministic:true means a
+  // live decider actually answered ≥1 gate during recording (a driving agent via `--decider-dir`, a model
+  // via `--decider-llm`, or an `--on-unanswered first` auto-pick) — so RE-recording may drift. The cassette
+  // itself still REPLAYS deterministically (the answers are frozen). ABSENT = fully scripted/deterministic
+  // authoring. Pure metadata: readers (replay/verify-cassettes) ignore it; no cassetteVersion bump needed.
+  authoring?: { nonDeterministic: boolean; channel?: "decider-dir" | "decider-llm" };
 }
 
 /** Current cassette format version. Readers tolerate ABSENT (legacy → 0) and warn on a FUTURE version. */
@@ -1048,6 +1055,13 @@ interface RecordOpts {
   cassettePath?: string; // explicit --out (single); otherwise cassettes/<name>.cassette.json
   maxArtifactBytes?: number; // F-9: override the inline-body cap (else env / 64 KiB default)
   scenarioSourceFile?: string; // the on-disk scenario YAML this was recorded from (for --rerecord-stale)
+  // Live-decider plumbing: answer gates DURING the recording instead of pre-scripting them.
+  // `onUnanswered` = --on-unanswered fail|first ("llm" when --decider-llm); `externalChannel` = --decider-dir
+  // file rendezvous; `llmIntent` = --decider-llm one-line intent; `deciderChannel` labels the authoring stamp.
+  onUnanswered?: OnUnanswered;
+  externalChannel?: DecisionChannel;
+  llmIntent?: string;
+  deciderChannel?: "decider-dir" | "decider-llm";
 }
 
 /** F-9: return the `artifact_json.artifact` paths a scenario asserts that ended up TRUNCATED in the manifest
@@ -1122,10 +1136,10 @@ export async function cmdRecord(args: string[]) {
   try {
     p = parseArgs(args, {
       // --quiet/--verbose accepted for flag consistency but currently no-op in record (renderer plan is fixed).
-      booleans: ["--no-redact", "--allow-failing", "--rerecord-stale", "--quiet", "--verbose", "--dry-run"],
-      values: ["--out", "--output-format", "--max-artifact-bytes"],
-      noDashValue: ["--out"],
-      enums: { "--output-format": ["text", "json"] },
+      booleans: ["--no-redact", "--allow-failing", "--rerecord-stale", "--quiet", "--verbose", "--dry-run", "--decider-llm"],
+      values: ["--out", "--output-format", "--max-artifact-bytes", "--decider-dir", "--intent", "--on-unanswered"],
+      noDashValue: ["--out", "--decider-dir"],
+      enums: { "--output-format": ["text", "json"], "--on-unanswered": ["fail", "first"] },
       aliases: { "-q": "--quiet", "-V": "--verbose" },
     });
   } catch (e) {
@@ -1146,11 +1160,17 @@ export async function cmdRecord(args: string[]) {
   if (noRedact) log("record: --no-redact — content redaction is OFF; the cassette is written verbatim, so ensure inputs are synthetic.");
   const allowFailing = p.flags["--allow-failing"] ?? false;
   const rerecordStale = p.flags["--rerecord-stale"] ?? false;
+  // Live-decider flags: answer gates during the recording instead of pre-scripting them.
+  const deciderDir = p.options["--decider-dir"];
+  const deciderLlm = p.flags["--decider-llm"] ?? false;
+  const intent = p.options["--intent"];
+  const onUnansweredOpt = p.options["--on-unanswered"] as OnUnanswered | undefined;
   const asJson = p.options["--output-format"] === "json";
   const target = p.positionals[0];
   if (!target) {
     log(
-      "usage: record <scenario.yaml | dir/> [--out <file>] [--output-format text|json] [--rerecord-stale] [--no-redact] [--allow-failing] [--max-artifact-bytes <n>]",
+      "usage: record <scenario.yaml | dir/> [--out <file>] [--output-format text|json] [--rerecord-stale] [--no-redact] [--allow-failing] [--max-artifact-bytes <n>]\n" +
+        '       answer gates live during the recording: [--decider-dir <dir>] (single scenario) | [--decider-llm [--intent "…"]] | [--on-unanswered fail|first]',
     );
     return process.exit(2);
   }
@@ -1162,6 +1182,35 @@ export async function cmdRecord(args: string[]) {
   // `--out` names ONE cassette; it has no meaning for a directory batch — reject rather than silently ignore.
   if (isDir && p.options["--out"] !== undefined) {
     log("record: --out names a single cassette file and is not valid for a directory batch");
+    return process.exit(2);
+  }
+
+  // Live-decider validation. Reuse the run/skill rules; reject ambiguous/unsupported combos
+  // up front so a paid record never starts under a mis-specified policy.
+  if (intent !== undefined && !deciderLlm) {
+    log("record: --intent requires --decider-llm (it states the test intent for the model answering live questions)");
+    return process.exit(2);
+  }
+  if (deciderLlm && deciderDir !== undefined) {
+    log("record: --decider-llm and --decider-dir are mutually exclusive terminals (a model vs a driving agent). Drop one.");
+    return process.exit(2);
+  }
+  if (deciderLlm && onUnansweredOpt !== undefined) {
+    log(`record: --decider-llm conflicts with --on-unanswered ${onUnansweredOpt} (it forces the model terminal). Drop one.`);
+    return process.exit(2);
+  }
+  // --rerecord-stale re-records committed cassettes at the DEFAULT policy; a live decider there is undefined.
+  if (rerecordStale && (deciderDir !== undefined || deciderLlm || onUnansweredOpt !== undefined)) {
+    log(
+      "record: --rerecord-stale cannot be combined with --decider-dir/--decider-llm/--on-unanswered (it re-records existing cassettes at the default policy)",
+    );
+    return process.exit(2);
+  }
+  // --decider-dir answers ONE interactive run in-band; a directory batch would interleave gates across N
+  // cassettes on a single channel — bad UX. Restrict to a single scenario. (--decider-llm has no human, so a
+  // batch is fine.)
+  if (deciderDir !== undefined && isDir) {
+    log("record: --decider-dir answers a single interactive recording; use it with one scenario, not a directory batch");
     return process.exit(2);
   }
 
@@ -1233,6 +1282,14 @@ export async function cmdRecord(args: string[]) {
     );
     return process.exit(2);
   }
+
+  // Shared live-decider opts for the B1 (dir-batch) and single-scenario record paths. (--rerecord-stale is
+  // excluded above, so it never sees these.) A plain `record` leaves every field undefined → no behavior change.
+  const liveDecider: Pick<RecordOpts, "onUnanswered" | "llmIntent" | "deciderChannel"> = {
+    onUnanswered: deciderLlm ? "llm" : onUnansweredOpt,
+    llmIntent: deciderLlm ? intent : undefined,
+    deciderChannel: deciderDir !== undefined ? "decider-dir" : deciderLlm ? "decider-llm" : undefined,
+  };
 
   // B2: re-record only the drifted cassettes in a committed cassette dir.
   if (rerecordStale) {
@@ -1306,7 +1363,7 @@ export async function cmdRecord(args: string[]) {
       const f = disc.scenarios[i];
       log(`[${i + 1}/${total}] recording ${f}…`);
       try {
-        const r = await recordScenarioFile(f, { noRedact, allowFailing, maxArtifactBytes });
+        const r = await recordScenarioFile(f, { noRedact, allowFailing, maxArtifactBytes, ...liveDecider });
         log(`  ✓ → ${r.cassettePath} (${r.result.result})`);
       } catch (e) {
         failures++;
@@ -1321,16 +1378,35 @@ export async function cmdRecord(args: string[]) {
     return process.exit(failures > 0 ? 1 : 0);
   }
 
-  // Single scenario file.
+  // Single scenario file. `--decider-dir` opens an in-band file rendezvous for the driving agent; close it
+  // after the run (mirrors `run`'s one-channel lifecycle).
+  const channel = deciderDir !== undefined ? fileChannel(deciderDir) : undefined;
   try {
     const cassettePath = p.options["--out"];
-    const r = await recordScenarioFile(target, { noRedact, allowFailing, cassettePath, maxArtifactBytes });
+    const r = await recordScenarioFile(target, {
+      noRedact,
+      allowFailing,
+      cassettePath,
+      maxArtifactBytes,
+      externalChannel: channel,
+      ...liveDecider,
+    });
     if (asJson) out(JSON.stringify({ command: "record", result: r.result.result, artifacts: r.artifacts, cassette: r.cassettePath }));
     else log(`✓ recorded ${r.result.result} · ${r.artifacts} artifact(s) → ${r.cassettePath}`);
   } catch (e) {
     log(`record: ${(e as Error).message}`);
     return process.exit(1);
+  } finally {
+    channel?.close?.();
   }
+}
+
+/** Build the cassette `authoring` provenance stamp. Returns undefined for a deterministic
+ *  record (no live-decider decision actually fired — `result.nonDeterministic` is usage-based, so a
+ *  present-but-unused decider leaves it false); otherwise flags non-determinism + the channel that authored
+ *  it. Pure → unit-testable without a live run. Exported for tests; not part of the public API. */
+export function cassetteAuthoring(nonDeterministic: boolean | undefined, channel?: "decider-dir" | "decider-llm"): Cassette["authoring"] {
+  return nonDeterministic ? { nonDeterministic: true, channel } : undefined;
 }
 
 /** The live-record TAIL shared by the file (B1/single) and in-memory (B2 re-record) paths: run live, refuse
@@ -1341,7 +1417,24 @@ async function recordScenarioObject(
   opts: RecordOpts,
   extraPolicyDirs: string[] = [],
 ): Promise<{ result: RunResult; cassettePath: string; artifacts: number }> {
-  const result = await executeScenario(scenario);
+  // Thread the live-decider opts. All undefined for a plain `record` → identical to the
+  // previous opt-less call (executeScenario defaults onUnanswered to scenario.on_unanswered ?? "fail").
+  const result = await executeScenario(scenario, {
+    onUnanswered: opts.onUnanswered,
+    externalChannel: opts.externalChannel,
+    llmIntent: opts.llmIntent,
+  });
+  // Provenance: stamp from the RESULT, not the flag. result.nonDeterministic (execute.ts) is
+  // usage-based — true only if a decision actually came back by:"llm"|"external"|"human"|"first". So a
+  // present-but-unused --decider-dir (scripted answers covered every gate) stays deterministic and is NOT
+  // stamped. The cassette still REPLAYS deterministically (frozen answers); we only flag re-record drift.
+  const authoring = cassetteAuthoring(result.nonDeterministic, opts.deciderChannel);
+  if (authoring) {
+    warn(
+      `::warning:: record: cassette authored via ${opts.deciderChannel ?? "a live decider"} (≥1 gate answered live) — ` +
+        `re-recording may drift. The cassette itself replays deterministically (answers are frozen).\n`,
+    );
+  }
   const safeName = slugForPath(scenario.name);
   // shared default-path helper (slugForPath) — identical to the `record --dry-run` report.
   const cassettePath = opts.cassettePath ?? defaultCassettePath(scenario.name);
@@ -1426,6 +1519,7 @@ async function recordScenarioObject(
     // absolute host path) so `--rerecord-stale` re-records from the edited YAML even when name ≠ filename.
     scenarioSource: opts.scenarioSourceFile ? relative(dirname(cassettePath), opts.scenarioSourceFile) : undefined,
     fingerprint: buildFingerprint(scenario.session, result.baseline, undefined, scenario.skills),
+    authoring,
   };
   // A1 (opt-in) content redaction over the whole surface (C1). Empty policy → no-op. Non-empty → must be
   // VERDICT-PRESERVING (A3): replay both and refuse to write on divergence (a manufactured green).

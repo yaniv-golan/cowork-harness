@@ -4,9 +4,54 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The project uses
 [Semantic Versioning](https://semver.org/); pre-1.0 minor versions may include breaking changes.
 
-## [Unreleased]
+## [0.10.0] — 2026-06-23
+
+### Added
+
+- **Stall-on-question verdict axis.** A run that ends on an unanswered plain-text question (final
+  assistant turn ends with `?`, no tool calls, no structured `AskUserQuestion`) previously reported
+  `result: "success"` — a false green. Runs now carry `stalledOnQuestion`, and a new **`stalled`**
+  verdict signal (both the live and replay lanes) fails such runs by default. The detector re-derives on
+  the replay re-drive, so cassettes stay consistent. Opt out per scenario with the **`allow_stall`**
+  verdict modifier when a trailing question is the expected, acceptable ending. ⚠️ This can flip a
+  scenario that was previously green to red — set `allow_stall: true` to restore the prior verdict. The
+  published contract is updated accordingly: `schema/run-result.json`, `schema/scenario.schema.json`, the
+  `assertion-keys.json` modifier list, `SPEC.md`, and the `docs/scenario.md` success formula now document
+  the verdict-signal layer.
+- **`lint` advisory for order-dependent positional `choose`.** `scenario.py` now parses `answers:` and
+  flags a positional `choose` (`first` / index) as order-dependent — reconciled with `docs/scenario.md`'s
+  guidance to prefer positional `choose` when option labels drift. Advisory only; it does not fail the lint.
+- **Documentation completeness:** `record --dry-run`; the `COWORK_HARNESS_FIDELITY` / `_MODEL` /
+  `_OUTPUT_FORMAT` environment variables; the `examples/scenarios/` lint path and its `python3`
+  prerequisite; and links to `RELEASING.md` and the CI recipe.
+- **`record` can answer gates live** instead of pre-scripting every answer: `--decider-dir <dir>`
+  (a driving agent answers in-band; single scenario), `--decider-llm [--intent "…"]` (a model answers),
+  and `--on-unanswered fail|first`. This removes the discovery-run → encode-answers → record dance for
+  cassette authoring. When a gate is actually answered by a live decider (or an `--on-unanswered first`
+  auto-pick), the cassette is stamped with an `authoring.nonDeterministic` provenance field and a warning
+  notes that re-recording may drift — the cassette itself still **replays deterministically** (the answers
+  are frozen). `--decider-*` flags are rejected with `--rerecord-stale`, and `--decider-dir` with a
+  directory batch. The `record` help also clarifies that `--allow-failing` only relaxes the post-run
+  verdict gate — it does **not** salvage an unanswered gate.
+- **`verify-run` now also checks answer coverage.** When a scenario declares `answers:`, `verify-run`
+  validates that each scripted answer still matches a gate the kept run actually fired (parsed from the
+  run's `events.jsonl`, which retains the offered option labels). A drifted `when_question` or a `choose:`
+  that names an option the run never offered now fails in ~1s instead of on a paid re-record. ⚠️ This
+  **changes verify-run's exit-code contract**: a run green on `assert:` can now exit `1` on an answer
+  mismatch. A scenario with no `answers:` is unaffected (assert-only, exactly as before); if a scenario
+  declares answers but the kept run dir has no `events.jsonl`, `verify-run` refuses (exit `2`) rather than
+  vacuously passing.
+- **`doctor` detects the macOS Keychain first-run trap.** A Claude Code login writes the OAuth token to the
+  login Keychain, but the in-Docker agent can only read env / `.env`. When the env has no token **but** a
+  `Claude Code-credentials` Keychain entry exists, `doctor` now points you straight at copying it into
+  `./.env` instead of a dead-end "set a token" remedy. Read-only probe (status only; the secret is never
+  read or printed).
 
 ### Changed
+
+- **`lint` no longer requires a separately-installed PyYAML.** A pure-Python copy of PyYAML is bundled with
+  the linter (`scenario.py`), so `cowork-harness lint` works on a stock `python3` with no `pip install`
+  (npm consumers / bare CI). A system PyYAML is still preferred when present.
 
 - Upgraded to **zod 4** (runtime dependency). Scenario/session validation behaviour is unchanged.
 - Regenerated `schema/scenario.schema.json` and `schema/session.schema.json` with zod 4's native JSON Schema
@@ -16,6 +61,18 @@ All notable changes to this project are documented here. The format is based on
   genuinely-required fields (defaulted fields excluded), and strict objects keep `additionalProperties: false`.
 - Retired deprecated zod-3 APIs internally (`.passthrough()` → `z.looseObject`, `.strict()` → `z.strictObject`,
   `z.ZodIssueCode.custom` → `"custom"`). No behavioural change.
+
+### Fixed
+
+- **Cassette writes are now atomic** (temp file + rename) at the `record` and `rehash` sites, so an
+  interrupted write can no longer leave a truncated or corrupt cassette on disk.
+- **`runs gc` ranks real runs ahead of empty scaffold dirs.** A run with a `result.json` or `events.jsonl`
+  is retained ahead of a newer empty scaffold directory, so a completed run no longer loses a keep slot to a
+  newer empty one. `--keep-last` remains a hard cap.
+- **Reworded the `manifest-needs-snapshot` lint message** to a conditional caveat — the linter is static and
+  cannot read the cassette, so the message no longer asserts a snapshot is missing when it may not be.
+- **Corrected the `lint` help text's exit-code note.** `127` means `python3` itself is missing; a
+  PyYAML-missing failure exits `2`. The previous help conflated the two (and PyYAML is now bundled anyway).
 
 ### Security
 

@@ -452,6 +452,16 @@ persisted `result.json` + sidecars and uses the **same verdict path as a live re
 `user_visible_artifact` / `artifact_json`) need the run's work dir still on disk — if it has been torn down,
 `verify-run` refuses rather than reporting a false failure.
 
+**Answer-coverage (when the scenario declares `answers:`).** verify-run additionally checks that each
+scripted `answer` still matches a gate the run actually fired — parsed from the kept run's `events.jsonl`,
+which retains the offered option labels. An answer whose `when_question` no longer matches, or whose `choose:`
+names an option the run never offered (the LLM reworded the gate), fails verify-run — so this drift surfaces
+in ~1s instead of on a paid re-record. This **changes the exit-code contract**: a run that is green on
+`assert:` can now exit `1` on an answer mismatch. If the scenario declares answers but the kept run dir has no
+`events.jsonl`, verify-run **refuses** (exit `2`, "can't verify ⇒ not green") rather than vacuously passing.
+A scenario with no `answers:` is unaffected (assert-only, exactly as before). Scenarios using
+`on_unanswered: first`/`llm` treat an unmatched gate as an acceptable auto-answer, not a failure.
+
 ### Debugging with `chat`
 
 > See [chat.md](./chat.md) for the full `chat` reference and flags.

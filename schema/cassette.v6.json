@@ -102,6 +102,25 @@
           "description": "Phase C: the file-set boundary used for skillHash \u2014 'git' (git-tracked set, COWORK_HARNESS_GITSET=1) or absent/'raw' (legacy walk, default). A record-vs-verify mode flip means hashes aren't comparable \u2192 re-record."
         }
       }
+    },
+    "authoring": {
+      "type": "object",
+      "description": "Provenance of how the gate answers were authored. PRESENT with nonDeterministic:true only when a live decider answered at least one gate during recording (a driving agent via --decider-dir, a model via --decider-llm, or an --on-unanswered first auto-pick), so RE-recording may drift. The cassette itself still replays deterministically (the answers are frozen). ABSENT means fully scripted/deterministic authoring.",
+      "properties": {
+        "nonDeterministic": {
+          "type": "boolean"
+        },
+        "channel": {
+          "type": "string",
+          "enum": [
+            "decider-dir",
+            "decider-llm"
+          ]
+        }
+      },
+      "required": [
+        "nonDeterministic"
+      ]
     }
   }
 }

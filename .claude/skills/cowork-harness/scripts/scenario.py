@@ -28,7 +28,8 @@ lint flags (see references/scenario-schema.md for the why of each):
 Designed for agents and CI: non-interactive, --help, --json, meaningful exit codes,
 idempotent. `lint` exits 1 on any ERROR (or any finding with --strict); else 0.
 
-Requires PyYAML (`pip install pyyaml`).
+Uses PyYAML — a pure-Python copy is bundled under `_vendor/`, so no separate install is needed; a
+system PyYAML is preferred when present.
 """
 from __future__ import annotations
 
@@ -410,13 +411,24 @@ def _lint_regex_quoting(path, raw_lines):
 
 
 def _require_yaml():
+    # Prefer a system PyYAML (uses the faster libyaml build when present); otherwise fall back to the
+    # pure-Python copy bundled under _vendor/ so `lint` works on a stock python3 with no pip install
+    # (npm consumers / bare CI runners that lack site-packages).
     try:
         import yaml  # type: ignore
 
         return yaml
     except ImportError:
-        print("scenario.py requires PyYAML. Install it: pip install pyyaml", file=sys.stderr)
-        sys.exit(2)
+        vendor = str(Path(__file__).resolve().parent / "_vendor")
+        if vendor not in sys.path:
+            sys.path.insert(0, vendor)
+        try:
+            import yaml  # type: ignore
+
+            return yaml
+        except ImportError:
+            print("scenario.py needs PyYAML and the bundled copy could not be loaded. Install it: pip install pyyaml", file=sys.stderr)
+            sys.exit(2)
 
 
 def lint_file(path):

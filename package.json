@@ -40,6 +40,7 @@
     "scripts",
     ".claude/skills/cowork-harness/scripts/scenario.py",
     ".claude/skills/cowork-harness/scripts/assertion-keys.json",
+    ".claude/skills/cowork-harness/scripts/_vendor",
     ".env.example",
     "README.md",
     "CHANGELOG.md",
@@ -66,6 +67,7 @@
     "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.ts\"",
     "smoke:cli": "node dist/cli.js list",
     "ci": "npm run typecheck && npm run build && npm run test",
+    "prepack": "find .claude/skills/cowork-harness/scripts/_vendor -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true",
     "prepublishOnly": "npm run ci",
     "check:versions": "tsx scripts/check-versions.ts"
   },

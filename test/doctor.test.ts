@@ -15,6 +15,7 @@ const OK_PROBE: DoctorProbe = {
   proxyImagePresent: () => true,
   agentBinary: () => ({ ok: true, path: "/x/claude-code-vm/2.1.177/claude" }),
   hasToken: () => true,
+  hasKeychainToken: () => false,
   baseline: () => ({ ok: true, version: "1.13576.1" }),
 };
 const probe = (over: Partial<DoctorProbe>): DoctorProbe => ({ ...OK_PROBE, ...over });
@@ -122,5 +123,33 @@ describe("doctor — runDoctorChecks", () => {
     expect(line).toContain("myimage:1");
     expect(line).toContain("docker/Dockerfile.agent");
     expect(line).toContain("--platform linux/arm64");
+  });
+
+  // A Claude Code login writes the token to the macOS Keychain, but the in-Docker agent reads
+  // only env/.env. doctor should detect the Keychain-only situation and point at .env instead of a dead-end
+  // "set a token" remedy.
+  it("no env token but a Keychain credential (macOS) → remedy points at copying into .env", () => {
+    const tok = get(runDoctorChecks("container", probe({ hasToken: () => false, hasKeychainToken: () => true })), "token");
+    expect(tok.status).toBe("fail");
+    expect(tok.detail).toMatch(/Keychain/i);
+    expect(tok.remedy).toMatch(/\.env/);
+    expect(tok.remedy).toMatch(/keychain token/i);
+  });
+
+  it("no env token and NO Keychain credential → the generic 'set a token' remedy (no Keychain mention)", () => {
+    const tok = get(runDoctorChecks("container", probe({ hasToken: () => false, hasKeychainToken: () => false })), "token");
+    expect(tok.status).toBe("fail");
+    expect(tok.detail).not.toMatch(/Keychain/i);
+    expect(tok.remedy).toMatch(/setup-token/);
+  });
+
+  it("non-macOS host never shows the Keychain remedy (gated on darwin)", () => {
+    // Even if a (hypothetical) probe reported a keychain entry, a linux host must get the generic remedy.
+    const tok = get(
+      runDoctorChecks("container", probe({ platform: () => "linux", hasToken: () => false, hasKeychainToken: () => true })),
+      "token",
+    );
+    expect(tok.detail).not.toMatch(/Keychain/i);
+    expect(tok.remedy).toMatch(/setup-token/);
   });
 });
