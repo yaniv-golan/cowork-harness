@@ -21,7 +21,8 @@ export function resolveScenarioScript(): string {
 
 /** `cowork-harness lint <files…>` → `python3 scenario.py lint <files…>` (npm-consumer ergonomics; skill
  *  authors can still invoke python3 on the bundled script directly). Inherits stdio, exits with the child
- *  code; a missing python3 is a clear, actionable error (PyYAML-missing surfaces from scenario.py itself). */
+ *  code. A missing python3 is exit 127 (the only thing the wrapper guards); PyYAML is bundled alongside
+ *  scenario.py, so the linter no longer needs a separate install. */
 export function cmdLint(args: string[]): never {
   const script = resolveScenarioScript();
   const py = process.env.PYTHON ?? "python3";
@@ -29,9 +30,8 @@ export function cmdLint(args: string[]): never {
   if (r.error) {
     const enoent = (r.error as NodeJS.ErrnoException).code === "ENOENT";
     process.stderr.write(
-      (enoent
-        ? `${py} not found — \`lint\` needs Python 3 (+ PyYAML: pip install pyyaml). Set $PYTHON or install Python.`
-        : String(r.error.message)) + "\n",
+      (enoent ? `${py} not found — \`lint\` needs Python 3 (PyYAML is bundled). Set $PYTHON or install Python.` : String(r.error.message)) +
+        "\n",
     );
     return process.exit(127);
   }

@@ -7,9 +7,17 @@ import { Scenario, AnswerRule, Assertion, type RunResult, type PlatformBaseline 
 import { loadBaseline, BASELINES_DIR, cmpVersionStrings } from "./baseline.js";
 import { loadSession, resolveSessionPaths } from "./session.js";
 import { executeScenario, parseScenarioFile, UnansweredError, BoundaryError, type ExecuteOptions } from "./run/execute.js";
-import { ScriptedDecider, ExternalDecider, LlmDecider, ABSTAIN, coerceLabel, type OnUnanswered } from "./decide/decider.js";
+import {
+  ScriptedDecider,
+  ExternalDecider,
+  LlmDecider,
+  ABSTAIN,
+  coerceLabel,
+  type OnUnanswered,
+  type RunContext,
+} from "./decide/decider.js";
 import { claudeCliComplete } from "./decide/llm-transport.js";
-import type { DecisionRequest } from "./agent/session.js";
+import { toDecisionRequest, type DecisionRequest } from "./agent/session.js";
 import { vmInit, vmDelete, vmStatus, vmPrune, instanceName } from "./runtime/lima.js";
 import { sync } from "./sync/cowork-sync.js";
 import { runBoundaryChecks, formatBoundary } from "./boundary.js";
@@ -75,6 +83,10 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
   record <scenario.yaml>       run + save a control-protocol cassette
       [--out <file>]           cassette path (default: cassettes/<scenario-name>.cassette.json)
       [--max-artifact-bytes <n>]  inline-body cap (default 65536 / $COWORK_HARNESS_MAX_ARTIFACT_BYTES)
+      [--decider-dir <dir>]    answer gates LIVE in-band during the recording (single scenario; then use
+                               'gates'/'answer' to stream/respond) — one pass, no scripted-answer guesswork
+      [--decider-llm [--intent "…"]] | [--on-unanswered fail|first]   answer live via a model / auto-pick
+                               (a live decider flags the cassette non-deterministic; it still replays deterministically)
   replay <file|dir>            deterministic protocol-replay of a cassette or a dir of them (no token, no Docker)
       [--strict]               fail (exit 1) on a stale cassette instead of warning
       [--output-format json]
@@ -85,9 +97,9 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
   runs gc [--keep-last <n>]    prune accumulated run dirs, keeping N most recent per scenario (default: 5)
 
 ── CI lint + assertion reference ──────────────────────────────────────────────
-  lint <scenario.yaml>…        check scenarios for silent false-greens (bundled scenario.py; needs python3 + PyYAML)
+  lint <scenario.yaml>…        check scenarios for silent false-greens (bundled scenario.py; needs python3 — PyYAML is bundled)
       [--strict]               escalate cassette-staleness warning to failure
-      NOTE: exit 127 (python3/PyYAML missing) must be treated as failure in CI — do not swallow it.
+      NOTE: exit 127 means python3 itself is missing — treat any non-zero exit as a CI failure, do not swallow it.
   assertions --list            list available scenario assertions (generated from Zod schema)
       [--output-format json]
 
@@ -264,7 +276,10 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
   vm: "usage: vm <init|status|delete|prune> [--output-format text|json]   (macOS arm64 only)\n  init    create the L2 Apple-VZ microVM\n  status  show running VM state\n  delete  remove a named VM\n  prune   drop all orphaned VMs",
   chat: "usage: chat <skill-folder> [prompt] [--fidelity protocol|container|hostloop] [--model <id>]\n              [--upload <file>]... [--folder <dir>]... [--plugin <dir>]... [--verbose] [--raw]\n       --raw: native cowork mode via docker run -it; egress sandbox NOT applied; rejects --upload/--folder/--plugin/--fidelity (only --model applies)\n       --fidelity: protocol/container/hostloop only (no microvm/cowork); protocol = no Docker, no sandbox",
   record:
-    "usage: record <scenario.yaml | dir/> [--out <file>] [--output-format text|json] [--rerecord-stale] [--no-redact] [--allow-failing] [--max-artifact-bytes <n>] [--dry-run]",
+    "usage: record <scenario.yaml | dir/> [--out <file>] [--output-format text|json] [--rerecord-stale] [--no-redact] [--allow-failing] [--max-artifact-bytes <n>] [--dry-run]\n" +
+    '       answer gates LIVE: [--decider-dir <dir>] (single scenario only) | [--decider-llm [--intent "<one line>"]] | [--on-unanswered fail|first]\n' +
+    "       (a live decider flags the cassette non-deterministic — re-recording may drift; replay stays deterministic. --rerecord-stale rejects these flags.)\n" +
+    "       NOTE: --allow-failing only relaxes the post-run VERDICT gate; it does NOT salvage an unanswered gate (that throws before any cassette is written — use --on-unanswered first / a decider).",
   replay: "usage: replay <file.cassette.json | dir/> [--strict] [--output-format text|json]",
   "verify-cassettes":
     "usage: verify-cassettes <file|dir> [--skip-privacy|--skip-staleness] [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-file <path>]... [--output-format json]",
@@ -1853,6 +1868,47 @@ function readQuestionsSidecar(file: string): string[] | null {
   }
 }
 
+/** Reconstruct the AskUserQuestion gates (WITH their offered options) a kept run actually fired,
+ *  from its `events.jsonl` (the verbatim child→driver stream — the only sidecar that retains options; the
+ *  distilled trace.json drops them). Returns the question-kind DecisionRequests, or `null` if events.jsonl is
+ *  absent/unreadable (distinct from "present but zero gates" → `[]`). A malformed frame is skipped, not fatal —
+ *  these are harness-written and should be well-formed; `toDecisionRequest` throws on a bad frame, so guard it. */
+function parseGatesFromEvents(file: string): DecisionRequest[] | null {
+  let text: string;
+  try {
+    text = readFileSync(file, "utf8");
+  } catch {
+    return null;
+  }
+  const gates: DecisionRequest[] = [];
+  for (const line of text.split("\n")) {
+    const t = line.trim();
+    if (!t) continue;
+    let msg: unknown;
+    try {
+      msg = JSON.parse(t);
+    } catch {
+      continue;
+    }
+    if ((msg as { type?: string })?.type !== "control_request") continue;
+    let req: DecisionRequest | null = null;
+    try {
+      req = toDecisionRequest(msg);
+    } catch {
+      continue; // malformed AskUserQuestion frame — not the linter's job to fail on; skip
+    }
+    if (req && req.kind === "question") gates.push(req);
+  }
+  return gates;
+}
+
+/** The question text used to label a gate in answer-coverage output. */
+function gateQuestionLabel(req: DecisionRequest): string {
+  if (req.kind !== "question") return "(gate)";
+  const q0 = req.questions[0];
+  return q0?.question ?? q0?.header ?? "(question)";
+}
+
 /**
  * F-1: `verify-run <run-dir> <scenario.yaml>` — re-evaluate a scenario's `assert:` block against an
  * already-kept run dir, WITHOUT a live agent (no tokens, no Docker). Fixing a wrong assertion was previously
@@ -1866,7 +1922,7 @@ function readQuestionsSidecar(file: string): string[] | null {
  * `user_visible_artifact`) need the run's `workDir` to still exist on disk — if it's gone (container/microvm
  * teardown), verify-run refuses rather than false-failing them.
  */
-function cmdVerifyRun(args: string[]) {
+async function cmdVerifyRun(args: string[]) {
   let p;
   try {
     p = parseArgs(args, { values: ["--output-format"], enums: { "--output-format": ["text", "json"] } });
@@ -1961,8 +2017,62 @@ function cmdVerifyRun(args: string[]) {
     });
   }
 
+  // Answer-COVERAGE check — does the scenario's scripted `answers` actually match the gates the
+  // run fired? This is invisible to the assert-only path, so a fragile answer (label/question drift) only
+  // surfaced on a paid record. PRECONDITION: gated on `scenario.answers.length` — an answer-less scenario
+  // behaves EXACTLY as before (assert-only; events.jsonl irrelevant; no refusal), preserving existing runs.
+  let answerCoverage: { matched: number; total: number } | undefined;
+  if (scenario.answers.length > 0) {
+    const gates = parseGatesFromEvents(join(runDir, "events.jsonl"));
+    if (gates === null) {
+      log(
+        `verify-run: scenario declares answers but ${runDir} has no events.jsonl — cannot verify answer coverage ` +
+          `(re-keep the run with the gates, or drop answers). (can't verify ⇒ not green)`,
+      );
+      return process.exit(2);
+    }
+    const decider = new ScriptedDecider(scenario.answers);
+    const stubCtx: RunContext = {
+      task: scenario.prompt ?? "",
+      transcript: () => sidecarTranscript ?? "",
+      toolLog: () => [],
+      runId: "verify-run",
+    };
+    const softFallback = scenario.on_unanswered === "first" || scenario.on_unanswered === "llm";
+    let matched = 0;
+    for (const gate of gates) {
+      const q = gateQuestionLabel(gate);
+      try {
+        const d = await decider.decide(gate, stubCtx);
+        if (d === ABSTAIN) {
+          // No scripted rule matched this gate. If on_unanswered would auto-answer (first/llm), it's not a
+          // coverage failure; otherwise the live run would fall to fail — flag it (the false-green we guard).
+          if (!softFallback)
+            assertions.push({
+              assertion: { answer_coverage: q } as unknown as Assertion,
+              pass: false,
+              message: `no answer rule matched gate "${q}" (on_unanswered=${scenario.on_unanswered ?? "fail"})`,
+            });
+        } else {
+          matched++;
+        }
+      } catch (e) {
+        // ScriptedDecider throws (UnansweredError) when a `choose:` label matches no offered option, or the
+        // single/multi shape is wrong — the answer is INVALID against what the run actually offered. A miss.
+        assertions.push({
+          assertion: { answer_coverage: q } as unknown as Assertion,
+          pass: false,
+          message: `answer for gate "${q}" is invalid against the offered options: ${(e as Error).message}`,
+        });
+      }
+    }
+    answerCoverage = { matched, total: gates.length };
+  }
+
   // Verdict via the SAME path as a live record (the run dir is a live run, so the "live" lane honors the
-  // scan/parity signals already persisted in result.json).
+  // scan/parity signals already persisted in result.json). Synthetic answer_coverage failures (above) flow
+  // through here as `code:"assertion"` fails — so verify-run can now exit 1 on an answer miss, not just an
+  // assert miss. Answer-less scenarios never add any, so their exit code is unchanged.
   const verdict = computeVerdict({ ...result, assertions }, "live");
   const failed = assertions.filter((a) => !a.pass);
 
@@ -1973,6 +2083,7 @@ function cmdVerifyRun(args: string[]) {
         pass: verdict.pass,
         assertions: assertions.map((a) => ({ assertion: a.assertion, pass: a.pass, message: a.message })),
         signals: verdict.signals,
+        answerCoverage,
       }),
     );
   } else {
@@ -1980,6 +2091,7 @@ function cmdVerifyRun(args: string[]) {
       log(`${a.pass ? "✓" : "✗"} ${Object.keys(a.assertion).join("+") || "(assertion)"}${a.message ? ` — ${a.message}` : ""}`);
     for (const s of verdict.signals.filter((s) => s.code !== "assertion"))
       log(`${s.severity === "fail" ? "✗" : "·"} ${s.code}: ${s.message}`);
+    if (answerCoverage) log(`· answer coverage: ${answerCoverage.matched}/${answerCoverage.total} gate(s) matched a scripted answer`);
     log(
       verdict.pass
         ? `✓ verify-run: all ${assertions.length} assertion(s) pass (no live agent)`

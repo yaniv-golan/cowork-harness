@@ -31,7 +31,8 @@ Use a live `run` for filesystem/egress assertions; use `replay` for the token-fr
     { "path": "outputs/x.json", "bytes": 24, "sha256": "…", "body": "{…}" }, // body inlined ≤ 64 KiB
     { "path": "outputs/big.bin", "bytes": 9e6, "sha256": "…", "truncated": true } // oversized → hash-only
   ],
-  "fingerprint": { "baseline": "1.14271.0", "skillHash": "…", "mode": "git", "contentSig": "…", "fileSigs": [["skills/x/SKILL.md", "…"]], "skillSources": ["…"] } // staleness tripwire (v5 manifest: fileSigs; v6: mode + git default)
+  "fingerprint": { "baseline": "1.14271.0", "skillHash": "…", "mode": "git", "contentSig": "…", "fileSigs": [["skills/x/SKILL.md", "…"]], "skillSources": ["…"] }, // staleness tripwire (v5 manifest: fileSigs; v6: mode + git default)
+  "authoring": { "nonDeterministic": true, "channel": "decider-dir" } // present ONLY when a live decider answered ≥1 gate (see §Answering gates during recording); re-record may drift, replay is still deterministic
 }
 ```
 
@@ -62,6 +63,26 @@ The generated cassette bundles the scenario, the event stream, and the decision 
 time — safe to commit for synthetic fixtures (see §Committed fixture below).
 
 Without `--out`, the cassette is named after the scenario's `name:` (or the YAML filename).
+
+## Answering gates during recording
+
+By default `record` answers gates from the scenario's scripted `answers:` and falls to `on_unanswered`
+(default `fail`) for anything unmatched — so an unanticipated gate aborts the record. Instead of a
+separate discovery run to learn the gates, then encoding answers, then recording, you can answer them
+**live during the recording**:
+
+- `--decider-dir <dir>` — a driving agent answers in-band (pair with `gates`/`answer`). Single scenario
+  only (not a `dir/` batch).
+- `--decider-llm [--intent "<one line>"]` — a model answers the gates.
+- `--on-unanswered first` — auto-pick option 1 for any unmatched gate.
+
+These are rejected together with `--rerecord-stale` (it re-records committed cassettes at the default
+policy). When a gate is actually answered by a live decider (or `--on-unanswered first`), the cassette
+gains an `authoring: { nonDeterministic: true, channel }` stamp and `record` warns that **re-recording
+may drift** — but the cassette itself **replays deterministically**, because the chosen answers are
+frozen into it. A `--decider-dir` that goes unused (your scripted `answers:` covered every gate) leaves
+the cassette unstamped. (Note: `--allow-failing` only relaxes the post-run *verdict* gate — it does not
+salvage an unanswered gate.)
 
 ## Artifact scrubbing at record time
 

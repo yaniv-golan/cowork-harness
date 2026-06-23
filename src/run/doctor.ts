@@ -40,6 +40,9 @@ export interface DoctorProbe {
   proxyImagePresent(): boolean;
   agentBinary(): { ok: true; path: string } | { ok: false; error: string };
   hasToken(): boolean;
+  // macOS only: is there a Claude Code OAuth credential in the login Keychain? Used purely to improve the
+  // "no token" remedy — the in-Docker agent can't read the Keychain, so doctor points the user at .env.
+  hasKeychainToken(): boolean;
   baseline(): { ok: true; version: string } | { ok: false; error: string };
 }
 
@@ -86,6 +89,14 @@ export const realProbe: DoctorProbe = {
     }
   },
   hasToken: () => !!(process.env.CLAUDE_CODE_OAUTH_TOKEN || process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN),
+  // Read-only presence probe (macOS only). `-w` is deliberately OMITTED so the secret is never printed/
+  // captured — we only care about the exit status (0 = a "Claude Code-credentials" entry exists). A locked
+  // keychain returns non-zero → treated as "absent" (best-effort hint; harmless false-negative).
+  hasKeychainToken: () => {
+    if (process.platform !== "darwin") return false;
+    const r = spawnSync("security", ["find-generic-password", "-s", "Claude Code-credentials"], { stdio: "ignore" });
+    return r.status === 0;
+  },
   baseline() {
     try {
       return { ok: true, version: loadBaseline("latest").appVersion };
@@ -211,12 +222,24 @@ export function runDoctorChecks(tier: Tier, probe: DoctorProbe = realProbe): Doc
   }
 
   const token = probe.hasToken();
+  // First-run trap: a Claude Code login writes the OAuth token to the macOS Keychain, but the
+  // in-Docker agent can't read the Keychain — only env / .env. If the env is empty BUT a Keychain credential
+  // exists, the generic "set a token" remedy is a dead end; point the user straight at the .env copy instead.
+  const keychainOnly = !token && plat === "darwin" && probe.hasKeychainToken();
   checks.push({
     id: "token",
     title: "Auth token",
     status: token ? "ok" : "fail",
-    detail: token ? "found (env / .env)" : "no CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_API_KEY",
-    remedy: token ? undefined : "export CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token) or put it in .env",
+    detail: token
+      ? "found (env / .env)"
+      : keychainOnly
+        ? "found a 'Claude Code-credentials' Keychain entry, but the in-Docker agent can't read the Keychain"
+        : "no CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_API_KEY",
+    remedy: token
+      ? undefined
+      : keychainOnly
+        ? "copy your Keychain token into ./.env so the in-Docker agent can read it: echo CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token) >> .env"
+        : "export CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token) or put it in .env",
     required: true, // every doctor tier calls a real model (only a committed-cassette replay needs none)
   });
 
