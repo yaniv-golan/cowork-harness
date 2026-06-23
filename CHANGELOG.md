@@ -52,7 +52,6 @@ All notable changes to this project are documented here. The format is based on
 - **`lint` no longer requires a separately-installed PyYAML.** A pure-Python copy of PyYAML is bundled with
   the linter (`scenario.py`), so `cowork-harness lint` works on a stock `python3` with no `pip install`
   (npm consumers / bare CI). A system PyYAML is still preferred when present.
-
 - Upgraded to **zod 4** (runtime dependency). Scenario/session validation behaviour is unchanged.
 - Regenerated `schema/scenario.schema.json` and `schema/session.schema.json` with zod 4's native JSON Schema
   generator. The published schemas are now flat draft-07: the `#/definitions/CoworkHarnessScenario` /
