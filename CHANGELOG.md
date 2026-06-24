@@ -4,6 +4,34 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The project uses
 [Semantic Versioning](https://semver.org/); pre-1.0 minor versions may include breaking changes.
 
+## [0.11.0] — 2026-06-24
+
+### Added
+
+- **`record --concurrency <N>` — parallel fleet re-records.** A directory batch (or `--rerecord-stale`) can
+  now record N cassettes at a time (`record cassettes/ --rerecord-stale --concurrency 3`) instead of one ~7–8
+  min run after another. Every run is already fully isolated (its own per-run Docker networks + egress proxy,
+  its own session dir), so parallelism is safe; `--concurrency` is purely a **bound** against Docker's address
+  pool and model API rate limits. Default `1` (unchanged behavior + ordered output), max `8`. A dir batch
+  where two scenarios' `name:` slugify to the same cassette path is now rejected up front (they would clobber
+  each other — a pre-existing footgun parallelism would have surfaced).
+- **Opt-in per-skill agent scoping for cassette staleness (`COWORK_HARNESS_AGENT_SCOPE=skill`).** By default a
+  plugin's `agents/` directory is a fleet-wide staleness root, so editing one skill's sub-agent contract
+  (`agents/cap-table.md`) re-stales *every* cassette. With this env set, a **skill-named** `agents/<name>.md`
+  is treated as skill `<name>`'s private input (refining a scenario's `skills:` scope), so it re-stales only
+  that skill's cassettes; generic (non-skill-named) agents stay shared. The setting is stamped into the
+  cassette fingerprint (`agentScope`), so flipping it is an honest one-time "re-record under the same setting"
+  (like `COWORK_HARNESS_GITSET`); cassettes recorded without it are unaffected. Caveat: assumes an agent named
+  after a skill belongs to that skill — keep it off if you share a skill-named agent across skills.
+
+### Fixed
+
+- **Clarified `verify-run` answer-coverage docs (gate-centric, not rule-centric).** `verify-run` checks that
+  every gate the run *actually fired* is covered by a matching `answer`; it does **not** penalize answer rules
+  that no fired gate matched (e.g. rules for conditional gates that didn't fire). The behavior was always
+  correct; `docs/scenario.md` now states it precisely (a scenario with 5 rules whose run fired 2 gates passes
+  at "2/2 matched").
+
 ## [0.10.0] — 2026-06-23
 
 ### Added

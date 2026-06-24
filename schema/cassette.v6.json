@@ -100,6 +100,11 @@
             "raw"
           ],
           "description": "Phase C: the file-set boundary used for skillHash \u2014 'git' (git-tracked set, COWORK_HARNESS_GITSET=1) or absent/'raw' (legacy walk, default). A record-vs-verify mode flip means hashes aren't comparable \u2192 re-record."
+        },
+        "agentScope": {
+          "type": "string",
+          "enum": ["skill"],
+          "description": "Opt-in per-skill agent scoping (COWORK_HARNESS_AGENT_SCOPE=skill) was active for this scoped hash: a skill-named agents/<n> was treated as skill <n>'s private input, not a fleet-wide shared root. ABSENT = the default (agents/ is shared). A record-vs-verify flip \u2192 re-record under the same setting."
         }
       }
     },

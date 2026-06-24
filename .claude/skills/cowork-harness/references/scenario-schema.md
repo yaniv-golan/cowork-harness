@@ -110,6 +110,9 @@ falls back to a raw walk; `COWORK_HARNESS_GITSET=0` opts out). **OS-junk** (`.DS
 `desktop.ini`) is always excluded, so a Finder touch can't re-stale a cassette; run-generated files a skill
 writes into its own dir should be declared in `hash_ignore` / `.cowork-hashignore`. On a mismatch,
 `verify-cassettes` names the exact changed file; `COWORK_HARNESS_DEBUG_SKILLHASH=1` dumps the full hashed set.
+For a multi-skill plugin, scope a scenario's hash with `skills: [<name>]`; the opt-in
+`COWORK_HARNESS_AGENT_SCOPE=skill` further treats a skill-named `agents/<name>.md` as that skill's private
+input (instead of a fleet-wide shared root) so editing one skill's sub-agent contract re-stales only its cassettes.
 
 **Mounting the skill under test:** put the skill folder in `plugins.local_plugins` and enable it via
 `plugins.enabled: [<plugin>@local]`. The folder is copied fresh each run. For an ad-hoc `skill` run

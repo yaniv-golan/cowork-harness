@@ -211,14 +211,34 @@ function skillDirNames(root: string): string[] {
   }
 }
 
-/** Accept function for shared-root-only hashing: include everything EXCEPT `skills/<name>/` subtrees.
- *  Used by `hashSharedOnly` to isolate the shared-root contribution for bucket-level diagnostics. */
-function sharedOnlyAccept(): AcceptFn {
+/** Opt-in (default OFF): treat `agents/<skillname>.md` as that skill's PRIVATE input rather than a fleet-wide
+ *  shared root, so editing one skill's sub-agent contract re-stales only that skill's cassettes. Only takes
+ *  effect for `skills:`-scoped scenarios (it refines that scope). Sets a fingerprint `agentScope` marker so a
+ *  record/verify env mismatch is an honest "re-record under the same mode" (mirrors COWORK_HARNESS_GITSET). */
+function agentScopeEnabled(): boolean {
+  return process.env.COWORK_HARNESS_AGENT_SCOPE === "skill";
+}
+
+/** Map the first path segment under `agents/` to the skill name it would belong to: a FILE strips its
+ *  extension (`agents/cap-table.md` → `cap-table`), a DIR is used as-is (`agents/cap-table/x.md` → `cap-table`).
+ *  Returns null for non-`agents/` paths or a bare `agents` marker. */
+function agentSkillName(parts: string[]): string | null {
+  if (parts[0] !== "agents" || parts.length < 2) return null;
+  return parts.length === 2 ? parts[1].replace(/\.[^.]+$/, "") : parts[1];
+}
+
+/** Accept function for shared-root-only hashing: include everything EXCEPT `skills/<name>/` subtrees. With
+ *  agent scoping ON, a skill-named `agents/<n>` also LEAVES the shared bucket (it's attributed to the skill in
+ *  the main walk), so a change there is named "skill changed", not "shared root changed". */
+function sharedOnlyAccept(dirSkills: Set<string>, scopeAgents: boolean): AcceptFn {
   return (relPath) => {
     const parts = relPath.split("/");
-    if (parts[0] !== "skills") return true; // shared content + plugin root files
-    if (parts.length === 1) return true; // the `skills` dir marker itself
-    return false; // exclude ALL skills/<name>/… subtrees
+    if (parts[0] === "skills") return parts.length === 1; // keep the `skills` marker dir; exclude subtrees
+    if (scopeAgents) {
+      const an = agentSkillName(parts);
+      if (an !== null && dirSkills.has(an)) return false; // skill-named agent → not shared
+    }
+    return true; // shared content + plugin root files
   };
 }
 
@@ -232,9 +252,11 @@ export function hashSharedOnly(dirs: string[], sessionIgnore?: string[]): string
   const sorted = [...dirs].sort();
   const pluginRoots = sorted.filter((d) => isDir(join(d, "skills")));
   if (pluginRoots.length === 0) return null;
-  const accept = sharedOnlyAccept();
+  const scopeAgents = agentScopeEnabled();
   const hash = createHash("sha256");
   for (const d of pluginRoots) {
+    // Per-root skill names so a skill-named agent under THIS root leaves THIS root's shared bucket.
+    const accept = sharedOnlyAccept(scopeAgents ? new Set(skillDirNames(d)) : new Set(), scopeAgents);
     const ignoreRes = [...readHashIgnore(d), ...(sessionIgnore ?? [])].map(compileIgnore).filter((re): re is RegExp => re !== null);
     const combinedAccept: AcceptFn = ignoreRes.length ? (rel) => accept(rel) && !ignoreRes.some((re) => re.test(rel)) : accept;
     const errors: string[] = [];
@@ -249,12 +271,20 @@ export function hashSharedOnly(dirs: string[], sessionIgnore?: string[]): string
  *  `skills/<name>` subtrees whose name is in `keep`. This hashes the plugin's shared roots (agents/, scripts/,
  *  references/, plugin.json, …) PLUS the named skills — so editing one skill re-stales only its cassettes,
  *  while a shared-dependency change still re-stales everything (no false-fresh). */
-function scopedAccept(keep: Set<string>): AcceptFn {
+function scopedAccept(keep: Set<string>, dirSkills: Set<string>, scopeAgents: boolean): AcceptFn {
   return (relPath) => {
     const parts = relPath.split("/");
-    if (parts[0] !== "skills") return true; // shared content
-    if (parts.length === 1) return true; // the `skills` dir marker itself
-    return keep.has(parts[1]); // skills/<name>/… — only the kept skills
+    if (parts[0] === "skills") {
+      if (parts.length === 1) return true; // the `skills` dir marker itself
+      return keep.has(parts[1]); // skills/<name>/… — only the kept skills
+    }
+    // Agent scoping (opt-in): a skill-named `agents/<n>` is private to skill <n> — hash it only when <n> is
+    // kept; a NON-skill-named agent (generic/shared) stays fleet-wide. OFF by default → the old whole-shared rule.
+    if (scopeAgents) {
+      const an = agentSkillName(parts);
+      if (an !== null && dirSkills.has(an)) return keep.has(an);
+    }
+    return true; // shared content (incl. non-skill-named agents)
   };
 }
 
@@ -304,6 +334,9 @@ export interface HashSkillDirsResult {
    *  was a usable repo); "raw" = the legacy filesystem walk (default, or any non-repo dir). Recorded in the
    *  fingerprint so a mode change between record and verify is itself detectable. */
   mode: "git" | "raw";
+  /** Opt-in agent scoping was applied (COWORK_HARNESS_AGENT_SCOPE=skill AND this hash was skill-scoped).
+   *  Recorded in the fingerprint so a record/verify env mismatch is detectable, like `mode`. */
+  agentScoped: boolean;
 }
 
 /**
@@ -342,11 +375,14 @@ export function hashSkillDirs(dirs: string[], scopeSkills?: string[], sessionIgn
   // Phase C (gated): when COWORK_HARNESS_GITSET=1, restrict each dir's files to the git-tracked set. A dir
   // that isn't a usable repo falls back to raw for THAT dir; mode is "git" only if EVERY dir resolved via git.
   const gitOn = gitModeEnabled();
+  const scopeAgents = agentScopeEnabled();
   let allGit = gitOn && sorted.length > 0;
   for (const d of sorted) {
     // Consumer-declared ignore for THIS root = the plugin-local .cowork-hashignore + the session-level globs.
     const ignoreRes = [...readHashIgnore(d), ...(sessionIgnore ?? [])].map(compileIgnore).filter((re): re is RegExp => re !== null);
-    const scopeFn = keep && isDir(join(d, "skills")) ? scopedAccept(keep) : undefined;
+    // Per-root skill names so a skill-named agent under THIS root scopes to THIS root's skill.
+    const dirSkills = keep && scopeAgents ? new Set(skillDirNames(d)) : new Set<string>();
+    const scopeFn = keep && isDir(join(d, "skills")) ? scopedAccept(keep, dirSkills, scopeAgents) : undefined;
     const tracked = gitOn ? gitTrackedSet(d) : null;
     if (gitOn && tracked === null) allGit = false; // this dir isn't a repo → raw for it → not pure git mode
     const gitFn = tracked ? gitAccept(tracked) : null; // admits tracked files + their ancestor dirs
@@ -358,9 +394,20 @@ export function hashSkillDirs(dirs: string[], scopeSkills?: string[], sessionIgn
     hashDir(d, hash, allErrors, "", accept, onFile);
   }
   const scoped = keep !== null;
+  // Agent scoping is applied only when env-on AND the hash was skill-scoped (it refines `skills:` scoping).
+  // Like `mode`, this is recorded even if no skill-named agent happens to exist, so flipping the env is an
+  // honest "re-record under the same mode" rather than a silent hash change.
+  const agentScoped = scopeAgents && scoped;
   const readErrors = allErrors.length > 0 ? allErrors : undefined;
   const mode: "git" | "raw" = allGit ? "git" : "raw";
   return scoped
-    ? { hash: hash.digest("hex"), scoped: true, mode, ...(readErrors ? { readErrors } : {}) }
-    : { hash: hash.digest("hex"), scoped: false, mode, ...(missedSkills ? { missedSkills } : {}), ...(readErrors ? { readErrors } : {}) };
+    ? { hash: hash.digest("hex"), scoped: true, mode, agentScoped, ...(readErrors ? { readErrors } : {}) }
+    : {
+        hash: hash.digest("hex"),
+        scoped: false,
+        mode,
+        agentScoped,
+        ...(missedSkills ? { missedSkills } : {}),
+        ...(readErrors ? { readErrors } : {}),
+      };
 }
