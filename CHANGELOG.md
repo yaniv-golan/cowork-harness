@@ -67,6 +67,15 @@ All notable changes to this project are documented here. The format is based on
   first` elsewhere"; the keep-going batch semantics (`record <dir>`/`--rerecord-stale` record all and report
   at the end — no one-at-a-time wrapper needed); and the git-worktree `.env` gotcha.
 
+### Security
+
+- **Hardened HTML-comment stripping in prompt assets (CodeQL `js/incomplete-multi-character-sanitization`).**
+  A one-shot `.replace(/<!--[\s\S]*?-->/g, "")` is incomplete multi-character sanitization: removing an inner
+  comment can recombine surrounding fragments into a fresh `<!--` the single pass leaves behind (e.g.
+  `<!<!-- -->-- x -->` → `<!-- x -->`). `stripComments` now loops until the string stabilizes and is shared
+  from `prompt.ts`; `hostloop.ts` reuses it instead of a duplicated inline regex. Resolves the finding at both
+  call sites; a regression test covers the recombination case.
+
 ## [0.11.0] — 2026-06-24
 
 ### Added
