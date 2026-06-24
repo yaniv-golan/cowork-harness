@@ -74,6 +74,16 @@ export function renderPrompts(
   };
 }
 
-function stripComments(s: string): string {
-  return s.replace(/<!--[\s\S]*?-->/g, "");
+/**
+ * Strip HTML comments from a prompt asset. Repeats until the string stabilizes so that
+ * nested / overlapping markers (e.g. `<!--<!-- -->-->`) can't leave a residual `<!--`
+ * behind after a single pass — a one-shot `.replace` is incomplete sanitization.
+ */
+export function stripComments(s: string): string {
+  let prev: string;
+  do {
+    prev = s;
+    s = s.replace(/<!--[\s\S]*?-->/g, "");
+  } while (s !== prev);
+  return s;
 }

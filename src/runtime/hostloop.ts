@@ -20,6 +20,7 @@ import { makeWorkspaceHandler, type McpHandler, type EgressEntry, type WebFetchP
 import { agentArgs, spawnEnv, dockerRunArgv, resolveMaxThinkingTokens } from "./argv.js";
 import { runtimeAuthEnv } from "./host-env.js";
 import { stageWorkspace } from "./stage.js";
+import { stripComments } from "../prompt.js";
 
 /**
  * HOST-LOOP runtime — reproduces Cowork's host-loop mode: the agent loop runs "on the
@@ -183,8 +184,7 @@ function hostLoopShellSection(baseline: PlatformBaseline, sessionRoot: string, m
     }
     throw new Error(`cowork-harness: missing host-loop shell prompt asset: ${dir}. Set COWORK_HARNESS_ALLOW_MISSING_PROMPT=1 to skip.`);
   }
-  return content
-    .replace(/<!--[\s\S]*?-->/g, "")
+  return stripComments(content)
     .split("{{vmMnt}}")
     .join(vmMnt)
     .trim();
