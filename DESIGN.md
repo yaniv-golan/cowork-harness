@@ -1,6 +1,6 @@
 # DESIGN — parity model, deltas, and the maintenance contract
 
-This document is the reference for *how faithful* each tier is, *what we deliberately don't reproduce*, and *why the chosen seams keep parity cheap to maintain*. Everything here is grounded in analysis of the live Claude Desktop `app.asar` (spawn contract and gates first verified at build 1.12603.1; updated through build 1.14271.0 — volatile fields tracked in `baselines/desktop-1.14271.0.json`) and the on-disk runtime state on macOS.
+This document is the reference for *how faithful* each tier is, *what we deliberately don't reproduce*, and *why the chosen seams keep parity cheap to maintain*. Everything here is grounded in analysis of the live Claude Desktop `app.asar` (spawn contract and gates first verified at build 1.12603.1; updated through build 1.15200.0 — volatile fields tracked in `baselines/desktop-1.15200.0.json`) and the on-disk runtime state on macOS.
 
 ## Architecture at a glance
 
@@ -156,7 +156,9 @@ L1 reproduces this as a **default-deny forward proxy**: the agent's `HTTP(S)_PRO
 
 The policy that produces those `allow`/`deny` responses is the **Decider** seam (see the architecture diagram); to smoke-test a decider against a sample question without a full run, use `cowork-harness decide`.
 
-### Control protocol — VERIFIED end-to-end against the live host CLI (macOS build 2.1.177+; the staged in-VM agent that L1/L2 run is 2.1.181, baseline `desktop-1.14271.0`)
+### Control protocol — VERIFIED end-to-end against the live host CLI (macOS build 2.1.177+; the staged in-VM agent that L1/L2 run is 2.1.181, baseline `desktop-1.15200.0`)
+
+> The staged agent ELF is unchanged (2.1.181) across the 1.14271.0→1.15200.0 asar bump; the live scenario suite (`protocol` + `container` tiers) was re-run against the 1.15200.0 baseline, and the host-side asar deltas (egress/gates/prompt appends) were re-verified via `sync` + asar inspection.
 
 The handshake and shapes below were confirmed empirically with an end-to-end run, not inferred:
 
@@ -168,7 +170,7 @@ The handshake and shapes below were confirmed empirically with an end-to-end run
 
 > **Cowork mode is enabled by env, not a flag.** In the staged agent (2.1.181) `--cowork` is a *plugin-scope* flag ("can only be used with user scope") and is rejected by the agent invocation; cowork mode is entered via **`CLAUDE_CODE_IS_COWORK=1`**. (Do **not** also set `CLAUDE_CODE_USE_COWORK_PLUGINS` — Desktop doesn't, and it flips the agent's userSettings filename to `cowork_settings.json` and plugin cache to `cowork_plugins/` via `TSO()`; plugins are delivered via `--plugin-dir`.) The host CLI is a different (macOS) build, so L0 runs plain (control-loop validation only); L1/L2 run the staged **Linux/arm64** binary — bind-mounted from the user's own install.
 
-### Spawn contract + host-loop vs VM-loop (binary-verified through asar 1.14271.0)
+### Spawn contract + host-loop vs VM-loop (binary-verified through asar 1.15200.0)
 
 The full Desktop→agent spawn contract (cwd `/sessions/<id>`, `CLAUDE_CONFIG_DIR=mnt/.claude`, the env object, `--tools`/`--allowedTools`/`--plugin-dir`/`--effort`/`--setting-sources`, permission layers, prompt templates) is documented in [docs/cowork-spawn-contract-1.12603.1.md](./docs/cowork-spawn-contract-1.12603.1.md) and encoded in `baseline.spawn`.
 

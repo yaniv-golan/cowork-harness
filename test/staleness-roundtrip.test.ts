@@ -3,6 +3,12 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildFingerprint, checkStaleness, type Cassette } from "../src/run/cassette.js";
+import { loadBaseline } from "../src/baseline.js";
+
+// Source the version dynamically so a baseline bump (new latest desktop-*.json) keeps these
+// round-trip tests green instead of re-staling on the absolute version string. checkStaleness
+// compares the record's baseline to loadBaseline("latest").appVersion, so record AT latest.
+const LIVE_BASELINE = loadBaseline("latest").appVersion;
 
 // L1 INVARIANT (staleness redesign, Phase A): record → verify the SAME tree ⇒ GREEN, and an out-of-band
 // OS-junk touch must NOT re-stale (the H9 fix). This is the durable backstop: if any future change makes a
@@ -24,13 +30,13 @@ const cassetteFor = (fp: ReturnType<typeof buildFingerprint>, skills?: string[])
 describe("staleness round-trip invariant (L1)", () => {
   it("record → verify the unchanged tree ⇒ GREEN (no staleness messages)", () => {
     const { root, session } = skillTree();
-    const fp = buildFingerprint(session, "1.14271.0", root);
+    const fp = buildFingerprint(session, LIVE_BASELINE, root);
     expect(checkStaleness(cassetteFor(fp), root)).toEqual([]); // unchanged ⇒ fresh
   });
 
   it("H9 — an OS-junk touch (.DS_Store created, then rewritten) does NOT re-stale", () => {
     const { root, session, pluginDir } = skillTree();
-    const fp = buildFingerprint(session, "1.14271.0", root);
+    const fp = buildFingerprint(session, LIVE_BASELINE, root);
     // Finder writes a .DS_Store after record…
     writeFileSync(join(pluginDir, ".DS_Store"), "\x00\x01finder");
     expect(checkStaleness(cassetteFor(fp), root)).toEqual([]); // still fresh — the H9 fix
@@ -41,7 +47,7 @@ describe("staleness round-trip invariant (L1)", () => {
 
   it("a REAL source change still re-stales (the fix didn't weaken detection)", () => {
     const { root, session, pluginDir } = skillTree();
-    const fp = buildFingerprint(session, "1.14271.0", root);
+    const fp = buildFingerprint(session, LIVE_BASELINE, root);
     writeFileSync(join(pluginDir, "skills", "cap-table", "SKILL.md"), "# v2 — behavior changed\n");
     const msgs = checkStaleness(cassetteFor(fp), root);
     expect(msgs.length).toBeGreaterThan(0);
@@ -50,7 +56,7 @@ describe("staleness round-trip invariant (L1)", () => {
 
   it("holds under F-6 skill scoping too (scoped record → scoped verify ⇒ green; OS-junk drift ⇒ green)", () => {
     const { root, session, pluginDir } = skillTree();
-    const fp = buildFingerprint(session, "1.14271.0", root, ["cap-table"]);
+    const fp = buildFingerprint(session, LIVE_BASELINE, root, ["cap-table"]);
     expect(checkStaleness(cassetteFor(fp, ["cap-table"]), root)).toEqual([]);
     writeFileSync(join(pluginDir, ".DS_Store"), "\x00\x01finder");
     writeFileSync(join(pluginDir, "skills", "cap-table", ".DS_Store"), "\x00\x01finder");

@@ -4,6 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildFingerprint, checkStaleness, scanCassette, redactCassette, CASSETTE_VERSION, type Cassette } from "../src/run/cassette.js";
 import { type RedactionPolicy } from "../src/redact.js";
+import { loadBaseline } from "../src/baseline.js";
+
+// Dynamic so a baseline bump keeps the green/exact-diff assertions stable (checkStaleness compares
+// the record's baseline to loadBaseline("latest").appVersion — record AT latest).
+const LIVE_BASELINE = loadBaseline("latest").appVersion;
 
 // v5 per-file manifest (fileSigs): exact-diff staleness reporting + privacy (scan/redact of paths).
 
@@ -22,7 +27,7 @@ const mkCassette = (fp: ReturnType<typeof buildFingerprint>): Cassette =>
     cassetteVersion: CASSETTE_VERSION,
     scenario: {
       name: "t",
-      baseline: "1.14271.0",
+      baseline: LIVE_BASELINE,
       session: "session.yaml",
       fidelity: "container",
       prompt: "hi",
@@ -37,7 +42,7 @@ const mkCassette = (fp: ReturnType<typeof buildFingerprint>): Cassette =>
 describe("v5 manifest — fileSigs", () => {
   it("is populated in the fingerprint with root-relative paths (never absolute)", () => {
     const { root, session } = tree();
-    const fp = buildFingerprint(session, "1.14271.0", root);
+    const fp = buildFingerprint(session, LIVE_BASELINE, root);
     expect(fp.fileSigs).toBeDefined();
     expect(fp.fileSigs!.map(([p]) => p)).toEqual(["skills/cap-table/SKILL.md"]);
     for (const [p] of fp.fileSigs!) expect(p.startsWith("/")).toBe(false); // no host path
@@ -45,7 +50,7 @@ describe("v5 manifest — fileSigs", () => {
 
   it("checkStaleness names the EXACT changed file from the manifest", () => {
     const { root, session, skillFile } = tree();
-    const fp = buildFingerprint(session, "1.14271.0", root);
+    const fp = buildFingerprint(session, LIVE_BASELINE, root);
     const c = mkCassette(fp);
     expect(checkStaleness(c, root)).toEqual([]); // unchanged → green
     writeFileSync(skillFile, "# skill v2\n");
@@ -57,7 +62,7 @@ describe("v5 manifest — fileSigs", () => {
 
   it("names added and removed files distinctly", () => {
     const { root, session } = tree();
-    const fp = buildFingerprint(session, "1.14271.0", root);
+    const fp = buildFingerprint(session, LIVE_BASELINE, root);
     const c = mkCassette(fp);
     writeFileSync(join(root, "plugin", "skills", "cap-table", "helper.py"), "x=1\n"); // add
     const msg = checkStaleness(c, root).join(" ");
@@ -67,7 +72,7 @@ describe("v5 manifest — fileSigs", () => {
 
   it("PRIVACY — scanCassette flags a PII-class token in a fileSigs path", () => {
     const { root, session } = tree("acme.com-export"); // a skill dir whose name embeds a domain
-    const fp = buildFingerprint(session, "1.14271.0", root);
+    const fp = buildFingerprint(session, LIVE_BASELINE, root);
     const c = mkCassette(fp);
     const findings = scanCassette(c, []);
     // the domain in the manifest path is surfaced under the fingerprint.fileSigs `where` (so a review catches it)
@@ -76,7 +81,7 @@ describe("v5 manifest — fileSigs", () => {
 
   it("PRIVACY — redactCassette rewrites a customer-named fileSigs path (keeps the sha)", () => {
     const { root, session } = tree("acme-onboarding");
-    const fp = buildFingerprint(session, "1.14271.0", root);
+    const fp = buildFingerprint(session, LIVE_BASELINE, root);
     const c = mkCassette(fp);
     const recordedSha = fp.fileSigs![0][1];
     const policy: RedactionPolicy = { patterns: [{ re: /acme-onboarding/gi, label: "cust" }], keyNames: [] };

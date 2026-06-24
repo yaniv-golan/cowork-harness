@@ -9,6 +9,11 @@ import { dirname } from "node:path";
  * conditional outputs/skills/uploads lines and a "no folders connected" branch. A static file can
  * no longer be faithful, so we reproduce the generator and populate it from the run's REAL mounts.
  *
+ * Re-verified against app.asar (Desktop 1.15200.0, fingerprint 636f468d72f314f7), block
+ * `F("host_loop_shell", …)` at byte offset ~9,304,411: every UNCONDITIONAL fragment below is still
+ * byte-for-byte identical. The only delta is one ADDITIVE conditional sentence (`QA.length>0`) — see
+ * the `ie`/`QA` note near the end of generateHostLoopShellSection — which we still omit by design.
+ *
  * Wording is reproduced verbatim (note `→` U+2192 and `—` U+2014). The output begins at
  * "## Shell access" (the asar's leading "\n\n" is supplied by the caller's join), mirroring how the
  * legacy static-file path is combined.
@@ -86,7 +91,11 @@ export function generateHostLoopShellSection(inp: HostLoopShellInputs): string {
 
   // asar `ie` branch (host-only/unmounted folders) is ALWAYS empty here: the harness runs a single
   // container where every mount is visible to both file tools and workspace-bash, so there is no
-  // "file-tool-reachable but not bash-mounted" set. Omit the branch.
+  // "file-tool-reachable but not bash-mounted" set. Omit the branch. In 1.15200.0 this branch is the
+  // literal `QA.length>0` sentence ("Folders annotated 'bash ... cannot see this path' in the
+  // workspace section above are not mounted here; use Read/Write/Edit/Grep/Glob for those.") — `QA` is
+  // the set of non-empty folder copyHint annotations, which is empty in our single-container topology,
+  // so the real generator would emit nothing here too. Still correct to omit.
 
   const skillSuffix = skillsPresent ? " Skill scripts can be run via bash using the VM path above." : "";
 

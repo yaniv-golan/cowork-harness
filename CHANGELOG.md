@@ -27,8 +27,33 @@ All notable changes to this project are documented here. The format is based on
   re-eval (no `answers:`) is unaffected; a kept run recorded by an older harness (no fingerprint) → a warning,
   not a refusal. `RunResult.fingerprint` is the new persisted field.
 
+### Parity
+
+- **Synced the platform baseline to Claude Desktop 1.15200.0** (`baselines/desktop-1.15200.0.json`). The
+  staged agent ELF is **unchanged (2.1.181)** — the bump is host-side: `sync` re-derived egress / gates /
+  mount / web_fetch facts (no `unknown delta`; only the `asarFingerprint` moved). Re-verified end-to-end —
+  the live scenario suite (`protocol` + `container` tiers) passes against the new baseline.
+- **Re-paraphrased the reconstructed system-prompt + subagent appends for 1.15200.0**
+  (`baselines/prompts/desktop-1.15200.0/`). Cowork's identity constant was rewritten **first→third person**
+  (it no longer says "powering Cowork mode"; the load-bearing "is NOT Claude Code" correction is kept);
+  `file_handling` became a scratchpad-vs-workspace split, and `working_with_user_files` / `product_information`
+  blocks were added; the subagent-append VM clause changed to "not on the user's real computer." Host-only
+  affordances (`request_cowork_directory`, `computer://` links) are described as behavior, **not** injected as
+  instructions, so they don't induce dead tool calls on the container / microvm / protocol tiers. The host-loop
+  `## Shell access` generator was re-verified **byte-identical** (one new conditional sentence stays omitted —
+  our single-container topology never triggers it; comment + verification stamp refreshed).
+
+### Fixed
+
+- **Baseline-bump-stable staleness tests.** `staleness-roundtrip`, `manifest`, and `agent-scope` round-trip
+  tests hardcoded the baseline version (`1.14271.0`), so adding a new latest baseline re-staled them; they now
+  source it from `loadBaseline("latest")`, so a parity bump no longer breaks the green round-trips.
+
 ### Docs
 
+- **Baseline-pin sweep to `desktop-1.15200.0`** across README / DESIGN / SPEC / spawn-contract / skill docs
+  (agent ELF still 2.1.181). The `≥1.14271.0` mount/bare-name gate-boundary references are intentionally left
+  as-is — that boundary did not move.
 - Skill + scenario docs: the gate-centric answer-coverage currency rule; the cheap `--keep` → `trace
   --view questions`/`verify-run` authoring loop (no token-free gate probe exists — gates are model-decided);
   the mismatch-vs-unanswered hard-fail gotcha; "anchor only assert-relevant gates, prefer `on_unanswered:

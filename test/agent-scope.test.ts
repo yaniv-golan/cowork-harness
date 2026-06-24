@@ -4,6 +4,11 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { hashSkillDirs, hashSharedOnly } from "../src/run/skill-hash.js";
 import { buildFingerprint, checkStaleness, type Cassette } from "../src/run/cassette.js";
+import { loadBaseline } from "../src/baseline.js";
+
+// Dynamic so a baseline bump keeps the green round-trip stable (checkStaleness compares the record's
+// baseline to loadBaseline("latest").appVersion — record AT latest).
+const LIVE_BASELINE = loadBaseline("latest").appVersion;
 
 // Opt-in per-skill agent scoping (COWORK_HARNESS_AGENT_SCOPE=skill): a skill-named `agents/<n>.md` is treated
 // as skill <n>'s private hash input rather than a fleet-wide shared root. OFF by default → byte-identical to
@@ -112,15 +117,15 @@ describe("agentScope fingerprint marker (migration)", () => {
   it("records the marker only when env-on (existing env-off cassettes stay byte-clean)", () => {
     const { root, session } = sessionTree();
     delete process.env.COWORK_HARNESS_AGENT_SCOPE;
-    expect(buildFingerprint(session, "1.14271.0", root, ["cap-table"]).agentScope).toBeUndefined();
+    expect(buildFingerprint(session, LIVE_BASELINE, root, ["cap-table"]).agentScope).toBeUndefined();
     process.env.COWORK_HARNESS_AGENT_SCOPE = "skill";
-    expect(buildFingerprint(session, "1.14271.0", root, ["cap-table"]).agentScope).toBe("skill");
+    expect(buildFingerprint(session, LIVE_BASELINE, root, ["cap-table"]).agentScope).toBe("skill");
   });
 
   it("an env flip between record and verify is an honest re-record (not a misleading content diff)", () => {
     const { root, session } = sessionTree();
     process.env.COWORK_HARNESS_AGENT_SCOPE = "skill";
-    const recorded = buildFingerprint(session, "1.14271.0", root, ["cap-table"]); // record env-ON
+    const recorded = buildFingerprint(session, LIVE_BASELINE, root, ["cap-table"]); // record env-ON
     delete process.env.COWORK_HARNESS_AGENT_SCOPE; // verify env-OFF
     const msgs = checkStaleness(cassetteFor(recorded), root);
     expect(msgs.join(" ")).toMatch(/agent-scope .* re-record under the same setting/);
@@ -129,7 +134,7 @@ describe("agentScope fingerprint marker (migration)", () => {
   it("same env on both sides + unchanged tree ⇒ green", () => {
     const { root, session } = sessionTree();
     process.env.COWORK_HARNESS_AGENT_SCOPE = "skill";
-    const fp = buildFingerprint(session, "1.14271.0", root, ["cap-table"]);
+    const fp = buildFingerprint(session, LIVE_BASELINE, root, ["cap-table"]);
     expect(checkStaleness(cassetteFor(fp), root)).toEqual([]);
   });
 });
