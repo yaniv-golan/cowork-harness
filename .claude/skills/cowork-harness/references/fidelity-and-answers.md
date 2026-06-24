@@ -124,6 +124,11 @@ Caveat: `decide` only builds a **single-select** sample (set choices with `--opt
 multiSelect flag), so its printed request shows `options[].label` but never `multiSelect:true` — to
 exercise the array reply path, run a real multiSelect gate or unit-test the helper directly.
 
+LLM-decider free-text goes via `OTHER: <value>` on an **options-bearing** gate; a bare out-of-set
+answer (no matching label, no `OTHER:`) fails loud (`UnansweredError` → exit 2) — it never stalls or
+guesses an option. Open-ended (no-option) gates need no `OTHER:` prefix: free text is delivered
+verbatim. (Scripted scenarios use the separate `answer:` escape hatch.)
+
 ## Relevant environment variables
 
 - `COWORK_HARNESS_RUNS_DIR` (or `--run-dir <path>`) — override the default run-output root `~/.cowork-harness/runs` (out of any working tree). flag > env > default.
