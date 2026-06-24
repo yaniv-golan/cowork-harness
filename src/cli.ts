@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, writeSync, existsSync } from "node:fs";
-import { join, basename, resolve, isAbsolute } from "node:path";
+import { join, basename, resolve, isAbsolute, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
 import { Scenario, AnswerRule, Assertion, type RunResult, type PlatformBaseline } from "./types.js";
@@ -41,6 +41,7 @@ import {
   noteRunsLocation,
 } from "./run/trace-view.js";
 import { buildScaffold } from "./run/scaffold.js";
+import { buildInspectView } from "./run/inspect-view.js";
 import { pkgVersion, jsonEnvelope, jsonError, parseOutputFormat, type ErrCategory } from "./run/envelope.js";
 import { computeVerdict } from "./run/verdict.js";
 import { evaluate, hostMatches, type AssertContext } from "./assert.js";
@@ -111,6 +112,8 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
       [--output-format json]   structured rows
   verify-run <run-dir> <scenario.yaml>   re-evaluate assert: against a kept run dir (no live agent, ~1s)
       [--output-format json]
+  inspect <run-id | run-dir>   show what a run produced: artifacts + a shallow field preview of each JSON artifact
+      [--output-format json]   structured digest
   scaffold <run-id | run-dir>  turn a kept run into a starter scenario YAML (gates→answers, artifacts→file_exists)
       [--out <file.yaml>]      write to a file (default: stdout)
 
@@ -298,6 +301,8 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
     'usage: answer <dir> --gate <N> (--choose <label> [--choose <label>…] | --answer "<q>=<label>")   (write an in-band gate reply atomically; repeat --choose for a multiSelect gate)',
   "verify-run":
     "usage: verify-run <run-dir> <scenario.yaml> [--output-format json]   (re-evaluate a scenario's assert: against a kept run dir; no live agent)",
+  inspect:
+    "usage: inspect <run-id | run-dir> [--output-format json]   (show what a run produced: artifacts + a shallow preview of each JSON artifact's fields)",
   doctor: "usage: doctor [--tier protocol|container|microvm|hostloop|cowork] [--output-format json]   (read-only prerequisite check)",
   rehash:
     "usage: rehash <dir/> [--dry-run] [--output-format text|json]   (migrate cassettes across format bumps using contentSig verification; no re-record needed)",
@@ -315,6 +320,7 @@ const COMMANDS = [
   "verify-cassettes",
   "verify-run",
   "trace",
+  "inspect",
   "assertions",
   "scaffold",
   "decide",
@@ -447,6 +453,8 @@ async function main() {
       return cmdVerifyRun(rest);
     case "trace":
       return cmdTrace(rest);
+    case "inspect":
+      return cmdInspect(rest);
     case "assertions":
       return cmdAssert(rest);
     case "scaffold":
@@ -1955,6 +1963,16 @@ async function cmdVerifyRun(args: string[]) {
     log(`verify-run: cannot read ${resultPath}: ${(e as Error).message}`);
     return process.exit(2);
   }
+  // A partial run did NOT complete (it exited on an unanswered gate). Its assertion outcome is empty and its
+  // artifacts are pre-failure, so re-evaluating asserts against it would vouch for a run that never finished.
+  // Refuse rather than false-fail or false-pass.
+  if (result.partial) {
+    log(
+      `verify-run: ${runDir} is a PARTIAL run — it did not complete (exited on an unanswered gate). ` +
+        `Re-run to completion before verifying. (can't verify ⇒ not green)`,
+    );
+    return process.exit(2);
+  }
   let scenario;
   try {
     scenario = parseScenarioFile(scenarioFile);
@@ -2236,6 +2254,29 @@ function cmdTrace(args: string[]) {
   const rows = buildTrace(file, { tools: view === "tools" });
   if (json) out(JSON.stringify({ tool: "cowork-harness", command: "trace", file, rows }));
   else out(formatTrace(rows));
+}
+
+function cmdInspect(args: string[]) {
+  if (hasHelp(args)) return void log(SUBCOMMAND_USAGE.inspect);
+  ensureOutputFormat("inspect", args);
+  const json = isJsonOutput(args);
+  rejectUnknownFlags("inspect", args, ["--output-format", "--output-format=json", "--output-format=text"], json);
+  const allPositionals = positionals(args, ["--output-format"]);
+  if (allPositionals.length !== 1) return void fail("inspect", "usage", SUBCOMMAND_USAGE.inspect, undefined, json);
+  // Resolve a run-id or run-dir to its dir. A run dir already holding result.json is used directly; otherwise
+  // reuse trace's resolver (run-id → events.jsonl) and take the parent.
+  const target = allPositionals[0];
+  let runDir: string;
+  try {
+    runDir = existsSync(join(target, "result.json")) ? target : dirname(resolveEventsFile(target));
+  } catch (e) {
+    return void fail("inspect", "usage", String((e as Error).message), undefined, json);
+  }
+  try {
+    out(buildInspectView(runDir, { json }));
+  } catch (e) {
+    return void fail("inspect", "usage", String((e as Error).message), undefined, json);
+  }
 }
 
 function diff(a: any, b: any, path: string) {

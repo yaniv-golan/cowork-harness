@@ -178,6 +178,33 @@ launched from a repo root never drops sensitive skill inputs/outputs into it. Pa
 `COWORK_HARNESS_RUNS_DIR`) to relocate; in CI point it at a workspace path so an artifact-upload step can
 collect the runs.
 
+### Validate a skill against real documents (not a cassette)
+
+The loops above build **deterministic regressions**. A different job — drive a skill against *real* input
+documents to judge whether it actually does the work (extraction, analysis), with no intent to record a
+cassette — has its own recipe:
+
+1. **Explore with the LLM decider.** `cowork-harness skill <dir> --decider-llm --intent "<one line of what
+   this run is testing>"` lets a small model answer each gate steered by your intent. This is exploration,
+   **not** a deterministic regression — the run is flagged non-deterministic and a green here is not a
+   scripted pass.
+2. **Script the load-bearing gates — especially binary confirm gates.** Once you know which gates fire
+   (`trace <run-dir> --view questions`), pin the ones whose choice drives the outcome with
+   `--answer "<q>=<label>"` / `--answer-policy <yaml>`. **A "Confirm | Different"-style confirm gate is worth
+   scripting** rather than leaving to `--decider-llm`: a generic decider may answer it with free text instead
+   of selecting the label. Scripting it removes that variance.
+3. **Budget ~1 re-run per file.** If a gate whiffs, the run no longer vanishes — it exits non-zero but
+   **salvages a PARTIAL run** (the extraction the agent already did is written to disk). So the cost of a
+   missed gate is one re-run with a better `--intent` or a scripted answer, not a lost paid run.
+4. **Inspect the outputs to judge correctness.** `cowork-harness inspect <run-dir>` shows what the run
+   produced — the artifacts plus a shallow field preview of each JSON artifact (e.g. the extracted figures).
+   It works on a salvaged partial run too. (A partial run is marked `PARTIAL`; `verify-run` and `scaffold`
+   refuse to treat its half-finished output as a passing result.)
+5. **For image-only / scanned PDFs, use the full-parity image.** The default agent image omits OCR and
+   PDF-table tooling; if a skill declares `requires_capabilities`, the harness now warns **before** the run
+   when the image lacks them. Rebuild with `--build-arg COWORK_FULL_PARITY=1` and point `COWORK_AGENT_IMAGE`
+   at it for those skills.
+
 ### Interpreting verdict signals
 
 The run verdict may include `WARN`-severity signals in addition to pass/fail. One to watch for:

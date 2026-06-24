@@ -49,6 +49,8 @@
     "workDir": { "type": "string" },
     "outputsDir": { "type": "string" },
     "artifacts": { "type": "array" },
+    "partial": { "type": "boolean" },
+    "unansweredGate": { "type": "object" },
     "nonDeterministic": { "type": "boolean" },
     "nonDeterministicTerminal": { "type": "boolean" },
     "permissiveAutoAllow": {

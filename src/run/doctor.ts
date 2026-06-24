@@ -212,7 +212,11 @@ export function runDoctorChecks(tier: Tier, probe: DoctorProbe = realProbe): Doc
       id: "image",
       title: "Agent image",
       status: present ? "ok" : up ? "fail" : "skip",
-      detail: present ? `${image} present` : up ? `${image} missing` : `(skipped — ${runtime} not reachable)`,
+      detail: present
+        ? `${image} present — lean core; OCR / PDF-table skills need the full-parity image (--build-arg COWORK_FULL_PARITY=1)`
+        : up
+          ? `${image} missing`
+          : `(skipped — ${runtime} not reachable)`,
       remedy: present || !up ? undefined : `build it: ${agentBuildLine(runtime, image)}`,
       required: up, // only gate on the image once the runtime is actually reachable
     });

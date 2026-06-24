@@ -18,7 +18,13 @@ import { spawnProtocol } from "../runtime/protocol.js";
 import { spawnContainer } from "../runtime/container.js";
 import { spawnHostLoop } from "../runtime/hostloop.js";
 import { spawnMicroVm } from "../runtime/microvm.js";
-import { probeImageOmitted, probeMicrovmOmitted, detectCapabilityUse, CAPABILITY_FAMILIES } from "../runtime/image-capabilities.js";
+import {
+  probeImageOmitted,
+  probeMicrovmOmitted,
+  detectCapabilityUse,
+  capabilityPreflightWarning,
+  CAPABILITY_FAMILIES,
+} from "../runtime/image-capabilities.js";
 import { instanceName } from "../runtime/lima.js";
 import { decideLoopFromBaseline, readGateFlag } from "../loop-decision.js";
 import type { WebFetchProvenance } from "../hostloop/workspace-handler.js";
@@ -311,6 +317,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   let hostProxy: ReturnType<typeof startEgressProxy> | undefined;
   let microvmProxyPort: number | undefined;
   let record: RunRecord;
+  let unansweredErr: UnansweredError | undefined; // set when a gate whiffs — drives the salvage branch below
   let child: { kill?: (s?: NodeJS.Signals) => void } | undefined; // hoisted so the finally can reap a crashed/orphaned container (F1)
   let containerName: string | undefined;
   let deregisterContainerReap: (() => void) | undefined; // 2a: Ctrl-C cleanup for the agent container
@@ -323,6 +330,27 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   const viaApiOn = readGateFlag(baseline, "1978029737", "coworkWebFetchViaApi");
   const promptGateOn = readGateFlag(baseline, "1978029737", "coworkWebFetchPrompt");
   const provenanceRef: { current?: WebFetchProvenance } = {};
+
+  // Pre-flight: if the skill DECLARES required capabilities and the image omits one, warn BEFORE the paid
+  // run — the post-run guard would otherwise only surface it after the agent finishes. The image probe is
+  // digest-cached, so this shares its result with the post-run capability check (no second container spawn).
+  const declaredCaps = scenario.requires_capabilities ?? [];
+  if (
+    declaredCaps.length &&
+    (effectiveFidelity === "container" || effectiveFidelity === "hostloop" || effectiveFidelity === "microvm") &&
+    process.env.COWORK_SKIP_CAPABILITY_PROBE !== "1"
+  ) {
+    const omitted =
+      effectiveFidelity === "microvm"
+        ? probeMicrovmOmitted(instanceName(baseline))
+        : probeImageOmitted({
+            runtime: process.env.COWORK_CONTAINER_RUNTIME ?? "docker",
+            image: process.env.COWORK_AGENT_IMAGE ?? "cowork-agent-base:2",
+            tier: effectiveFidelity,
+          });
+    const preflight = capabilityPreflightWarning(declaredCaps, omitted);
+    if (preflight) warn(`::warning:: [capability] (pre-flight) ${preflight}\n`);
+  }
   try {
     // acquire the egress sidecar / host proxy INSIDE the protected try so a throw in resource
     // acquisition OR in renderPrompts below can't leak a Docker network / a bound proxy port — the `finally`
@@ -415,10 +443,19 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         permissiveMode: plan.permissionMode === "bypassPermissions",
       };
     }
-    record = await run.drive(scenario.prompt, {
-      subagentAppend: prompts.subagentAppend,
-      sdkMcp,
-    });
+    try {
+      record = await run.drive(scenario.prompt, {
+        subagentAppend: prompts.subagentAppend,
+        sdkMcp,
+      });
+    } catch (e) {
+      // An unanswered gate is recoverable: grab the in-progress record so the work done before the whiff can
+      // be salvaged to disk below. Any other error is a genuine fault — keep today's fail-fast behavior.
+      if (e instanceof UnansweredError) {
+        unansweredErr = e;
+        record = run.partial();
+      } else throw e;
+    }
   } finally {
     // Reap the agent container FIRST (before the sidecar networks), so a crashed/unanswered run can't
     // orphan a running container holding the network (F1). On the success path the child has already
@@ -451,6 +488,39 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // are read-only inputs and are NOT visible roots. Persisted to RunResult so the plan-less lanes
   // (verify reads result.json; replay reads the cassette) match this without rebuilding a LaunchPlan.
   const userVisibleRoots = ["outputs", ...plan.mounts.filter((m) => m.kind === "folder").map((m) => m.mountPath)];
+
+  // Salvage path: the run exited on an unanswered gate. Persist a PARTIAL result.json (+ run.jsonl/trace) so
+  // the artifacts the agent wrote before the whiff survive for inspection, then re-throw so the CLI still
+  // exits 2. Skip assertion eval and the capability probe (a real container spawn) — a partial run has no
+  // meaningful assertion or verdict outcome.
+  if (unansweredErr) {
+    const partialResult = buildPartialResult({
+      scenarioName: scenario.name,
+      prompt: scenario.prompt,
+      fidelity: scenario.fidelity,
+      baseline: baseline.appVersion,
+      record,
+      outDir,
+      workRoot,
+      userVisibleRoots,
+      effectiveFidelity,
+      egress,
+      durationMs: Date.now() - startedAt,
+      unanswered: { message: unansweredErr.message, hint: unansweredErr.hint },
+      fingerprint: buildFingerprint(scenario.session, baseline.appVersion, undefined, scenario.skills),
+    });
+    writeFileSync(join(outDir, "result.json"), scrub(JSON.stringify(partialResult, null, 2), secrets));
+    writeRunJsonl(outDir, scenario, effectiveFidelity, record, egress, secrets);
+    writeTrace(outDir, record, egress, secrets, partialResult.durationMs);
+    scrubFileInPlace(join(outDir, "events.jsonl"), secrets);
+    scrubFileInPlace(join(outDir, "control-out.jsonl"), secrets);
+    // Loud PARTIAL marker so the populated artifacts are never misread as success (the no-false-green rule).
+    warn(
+      `::notice:: [partial] run did NOT complete (unanswered gate) — salvaged the pre-failure work to:\n` +
+        `  ${outDir}\n  inspect it: cowork-harness inspect ${outDir}\n`,
+    );
+    throw unansweredErr;
+  }
 
   const assertions = evaluate(scenario.assert, {
     transcript: record.transcript,
@@ -705,6 +775,66 @@ function writeRunJsonl(
     { t: "cost", usage: rec.usage, metrics: rec.cost },
   ];
   writeFileSync(join(outDir, "run.jsonl"), scrub(lines.map((l) => JSON.stringify(l)).join("\n"), secrets));
+}
+
+/** Assemble a RunResult for a run that did NOT complete — it exited on an unanswered gate. The work the
+ *  agent did before the whiff (artifacts on disk, the partial transcript, decisions/tool counts so far) is
+ *  salvaged so the paid run is still inspectable instead of vanishing. Deliberately reduced: no assertion
+ *  outcome (a partial run has none) and no capability/verdict fields (those would need a probe we skip).
+ *  `partial:true` is the signal that lets consumers (verify-run, scaffold, the footer) refuse to read its
+ *  populated `artifacts[]` as a passing run. */
+export function buildPartialResult(args: {
+  scenarioName: string;
+  prompt: string;
+  fidelity: string;
+  baseline: string;
+  record: RunRecord;
+  outDir: string;
+  workRoot: string;
+  userVisibleRoots: string[];
+  effectiveFidelity: string;
+  egress: { host: string; decision: "allow" | "deny" }[];
+  durationMs: number;
+  unanswered: { message: string; hint?: string };
+  fingerprint?: RunResult["fingerprint"];
+}): RunResult {
+  const { record } = args;
+  return {
+    $schema: RUN_RESULT_SCHEMA_URL,
+    generator: "cowork-harness",
+    scenario: args.scenarioName,
+    prompt: args.prompt,
+    fidelity: args.fidelity,
+    baseline: args.baseline,
+    result: "error",
+    partial: true,
+    unansweredGate: { message: args.unanswered.message, ...(args.unanswered.hint ? { hint: args.unanswered.hint } : {}) },
+    decisions: record.decisions.map((d) => ({
+      kind: d.kind,
+      name: d.name,
+      decision: d.decision,
+      by: d.by,
+      detail: d.detail,
+      rationale: d.rationale,
+    })),
+    toolCounts: record.toolCounts,
+    gateDeliveries: record.gateDeliveries,
+    egress: args.egress,
+    assertions: [],
+    toolResults: record.toolResults,
+    subagents: record.subagents,
+    unanswered: record.unanswered,
+    usage: record.usage,
+    cost: record.cost,
+    durationMs: args.durationMs,
+    outDir: args.outDir,
+    workDir: args.workRoot,
+    outputsDir: join(args.workRoot, "outputs"),
+    userVisibleRoots: args.userVisibleRoots,
+    artifacts: collectArtifacts(args.workRoot, args.userVisibleRoots),
+    effectiveFidelity: args.effectiveFidelity,
+    ...(args.fingerprint ? { fingerprint: args.fingerprint } : {}),
+  };
 }
 
 /** B3: the structured run trace. */

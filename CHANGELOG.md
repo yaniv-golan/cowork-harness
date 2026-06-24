@@ -6,6 +6,30 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **`inspect <run-id | run-dir>` — see what a run produced.** Lists the run's artifacts and prints a shallow
+  field preview of each JSON artifact (scalars inline, arrays as a count, nested objects collapsed), so
+  "did it do the job?" is a first-class check instead of hand-parsing `…/mnt/outputs/...`. `--output-format
+  json` emits a structured digest. When the work dir was torn down (a non-`--keep` container/microvm run),
+  the artifact manifest still prints from `result.json` and the preview notes it's unavailable.
+- **A whiffed gate no longer discards the paid run.** When a run exits on an unanswered gate
+  (`on_unanswered: fail`), the harness now salvages a **PARTIAL** `result.json` (+ `run.jsonl`/`trace.json`)
+  with the artifacts the agent wrote before the whiff, then still exits 2. The run dir is printed so you can
+  `inspect` it. `partial` and `unansweredGate` are new `RunResult` fields; `verify-run` and `scaffold`
+  refuse to treat a partial run's half-finished output as a passing result (scaffold still emits the gates,
+  drops the artifact/result asserts, and warns loudly).
+- **Capability pre-flight warning.** A skill that declares `requires_capabilities` against an image that
+  omits them is now warned **before** the (paid) run, not only on the post-run hard-fail. `doctor` also
+  surfaces the full-parity remedy on its agent-image line.
+
+### Changed
+
+- **LLM decider tolerates a near-miss label.** `--decider-llm` now binds a reply like `Confirmed.` or
+  `"Confirmed"` to the label `Confirmed` (trailing sentence punctuation / surrounding quotes trimmed before
+  matching) instead of failing loud — common on binary confirm gates. The `:` of the `OTHER:` free-text
+  sentinel is never stripped, and fuzzy substring matching stays off, so the change can't mis-bind.
+
 ### Fixed
 
 - **Session-protocol over-cap test no longer flakes.** The over-cap control-out test read
@@ -21,6 +45,10 @@ All notable changes to this project are documented here. The format is based on
   (`UnansweredError` → exit 2), never stalling or guessing, and open-ended (no-option) gates need no
   prefix. Noted in the decider section of `fidelity-and-answers.md` and cross-referenced from the lone
   `OTHER:` mention in `SKILL.md` so the two don't drift.
+- **Documented the live real-document validation workflow.** A new SKILL.md section covers driving a skill
+  against real input documents (not recording a cassette): explore with `--decider-llm --intent`, script the
+  load-bearing and binary-confirm gates, budget ~1 re-run per file (a whiffed gate now salvages a partial
+  run), and `inspect` the outputs to judge correctness.
 
 ## [0.12.0] — 2026-06-24
 

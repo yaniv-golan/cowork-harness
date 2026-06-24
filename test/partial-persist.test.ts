@@ -1,0 +1,89 @@
+import { describe, it, expect } from "vitest";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { buildPartialResult } from "../src/run/execute.js";
+import type { RunRecord } from "../src/run/run.js";
+
+/** A minimal in-progress RunRecord, as `Run.partial()` would return after a gate throw. */
+function partialRecord(over: Partial<RunRecord> = {}): RunRecord {
+  return {
+    runId: "run-x",
+    result: "error",
+    initTools: [],
+    transcript: "I read the PDF and extracted the cap table.",
+    toolsCalled: new Set(["Read"]),
+    toolCounts: { Read: 1 },
+    subagentTools: new Set(),
+    subagents: [],
+    questions: [],
+    decisions: [{ kind: "tool", name: "Read", decision: "allow", by: "parity" }],
+    permissiveAutoAllow: [],
+    unanswered: [],
+    toolResults: [],
+    gateAnswers: [],
+    gateDeliveries: [],
+    ...over,
+  };
+}
+
+/** A run dir whose work tree already holds one artifact the agent wrote before the gate whiffed. */
+function runDirWithArtifact(): { outDir: string; workRoot: string } {
+  const outDir = mkdtempSync(join(tmpdir(), "cwh-partial-"));
+  const workRoot = join(outDir, "work", "session", "mnt");
+  mkdirSync(join(workRoot, "outputs"), { recursive: true });
+  writeFileSync(join(workRoot, "outputs", "actions.md"), "# pre-failure deliverable\n");
+  return { outDir, workRoot };
+}
+
+describe("buildPartialResult — salvage a whiffed run", () => {
+  it("marks the run partial, records the unanswered gate, and keeps the pre-failure artifacts", () => {
+    const { outDir, workRoot } = runDirWithArtifact();
+    const result = buildPartialResult({
+      scenarioName: "cap-table",
+      prompt: "extract the cap table",
+      fidelity: "container",
+      baseline: "desktop-1.13576.1",
+      record: partialRecord(),
+      outDir,
+      workRoot,
+      userVisibleRoots: ["outputs"],
+      effectiveFidelity: "container",
+      egress: [],
+      durationMs: 1234,
+      unanswered: { message: 'unscripted AskUserQuestion (on_unanswered=fail):\n  • "Confirm?"', hint: "add --answer" },
+    });
+
+    expect(result.partial).toBe(true);
+    expect(result.result).toBe("error");
+    expect(result.unansweredGate?.message).toContain("Confirm?");
+    expect(result.unansweredGate?.hint).toBe("add --answer");
+    // the work done before the whiff is salvaged, not discarded
+    expect(result.artifacts?.map((a) => a.path)).toEqual(["outputs/actions.md"]);
+    expect(result.artifacts?.[0].bytes).toBeGreaterThan(0);
+    // a partial run has no meaningful assertion outcome
+    expect(result.assertions).toEqual([]);
+    // forensic context survives
+    expect(result.workDir).toBe(workRoot);
+    expect(result.toolCounts).toEqual({ Read: 1 });
+  });
+
+  it("omits the hint key when the gate carried none", () => {
+    const { outDir, workRoot } = runDirWithArtifact();
+    const result = buildPartialResult({
+      scenarioName: "s",
+      prompt: "p",
+      fidelity: "container",
+      baseline: "b",
+      record: partialRecord(),
+      outDir,
+      workRoot,
+      userVisibleRoots: ["outputs"],
+      effectiveFidelity: "container",
+      egress: [],
+      durationMs: 1,
+      unanswered: { message: "m" },
+    });
+    expect(result.unansweredGate).toEqual({ message: "m" });
+  });
+});

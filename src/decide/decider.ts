@@ -400,7 +400,21 @@ export class LlmDecider implements Decider {
       const raw = await this.complete(this.prompt(text, q.options, ctx), this.model);
       // Match a LABEL first (matchLabel is fuzzy=false): keeps the common path unchanged and means a real
       // option literally named "OTHER: …" is selected as a label, not hijacked by the free-text branch.
-      const pick = matchLabel(raw, labels);
+      let pick = matchLabel(raw, labels);
+      // Tolerate a near-miss label wrapped in quotes or trailing sentence punctuation — e.g. a model that
+      // replies `Confirmed.` or `"Confirmed"` for the label `Confirmed` (common on binary confirm gates).
+      // Strip surrounding quotes + trailing `.!,;`/whitespace and retry — but NEVER strip `:` (the `OTHER:`
+      // sentinel below) and NEVER enable fuzzy substring matching (matchLabel's documented No/Notation
+      // ambiguity). Only fires after an exact/case-insensitive miss, so it can't change a currently-passing
+      // match.
+      if (!pick) {
+        const trimmed = raw
+          .trim()
+          .replace(/^["'`]+/, "")
+          .replace(/["'`]+$/, "")
+          .replace(/[.!,;\s]+$/, "");
+        if (trimmed) pick = matchLabel(trimmed, labels);
+      }
       if (pick) {
         process.stderr.write(`[llm-decider] "${text}" → "${pick}"${this.intent ? ` (intent: ${this.intent})` : ""}\n`);
         answers[text] = pick;

@@ -129,6 +129,11 @@ answer (no matching label, no `OTHER:`) fails loud (`UnansweredError` → exit 2
 guesses an option. Open-ended (no-option) gates need no `OTHER:` prefix: free text is delivered
 verbatim. (Scripted scenarios use the separate `answer:` escape hatch.)
 
+A gate that fails loud (`on_unanswered: fail`, the default) still **salvages a PARTIAL run**: the harness
+writes a `result.json` (marked `partial: true`) with the artifacts the agent produced before the whiff, so
+the work isn't discarded — then exits 2. Inspect it with `cowork-harness inspect <run-dir>`. `verify-run`
+and `scaffold` refuse to treat a partial run's half-finished output as a passing result.
+
 ## Relevant environment variables
 
 - `COWORK_HARNESS_RUNS_DIR` (or `--run-dir <path>`) — override the default run-output root `~/.cowork-harness/runs` (out of any working tree). flag > env > default.

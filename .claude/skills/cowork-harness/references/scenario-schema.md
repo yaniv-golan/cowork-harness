@@ -302,7 +302,8 @@ for portable, declarative regression suites with no Python toolchain (CI exit co
 boundary, and coarse-content checks. Use the **pytest `cowork` lane** (`python/`) when you need a
 real predicate over a skill's **structured JSON output**:
 `r.assert_artifact_json("artifacts/<slug>/sizing.json", lambda d: d["top_down"]["som"]["value"] > 0)`.
-Find an artifact's real field paths by running once with `--keep` and inspecting the JSON.
+Find an artifact's real field paths by running once with `--keep`, then `cowork-harness inspect <run-dir>`
+(a shallow field preview of each JSON artifact) or by reading the JSON directly.
 
 ## Full gotcha list
 
