@@ -48,6 +48,40 @@ function escapeRx(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+/** Case-insensitive Levenshtein distance (small, dependency-free) — used only to suggest the nearest offered
+ *  option when a scripted `choose:` matched none, so the author can fix the anchor without digging. */
+function levenshtein(a: string, b: string): number {
+  a = a.toLowerCase();
+  b = b.toLowerCase();
+  const prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    let diag = prev[0];
+    prev[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const tmp = prev[j];
+      prev[j] = a[i - 1] === b[j - 1] ? diag : 1 + Math.min(prev[j], prev[j - 1], diag);
+      diag = tmp;
+    }
+  }
+  return prev[b.length];
+}
+
+/** The offered label closest to `input`, when it's near enough to be a likely typo/rewording (distance within
+ *  ⅓ of the longer string). Returns null when nothing is close — better to say nothing than mis-suggest. */
+function nearestLabel(input: string, labels: string[]): string | null {
+  let best: string | null = null;
+  let bestD = Infinity;
+  for (const l of labels) {
+    const d = levenshtein(input, l);
+    if (d < bestD) {
+      bestD = d;
+      best = l;
+    }
+  }
+  if (best === null) return null;
+  return bestD <= Math.ceil(Math.max(input.length, best.length) / 3) ? best : null;
+}
+
 export function Chain(...deciders: Decider[]): Decider {
   return {
     async decide(req, ctx) {
@@ -125,11 +159,13 @@ export class ScriptedDecider implements Decider {
         // fail loud, symmetric with the external/LLM terminals.
         const resolved = picks.map((p) => {
           const coerced = coerceLabel(p, labels);
-          if (!coerced.matched)
+          if (!coerced.matched) {
+            const near = nearestLabel(p, labels);
             throw new UnansweredError(
               `scripted answer "${p}" for "${text}" matched no offered option`,
-              `valid labels: ${labels.map((l) => JSON.stringify(l)).join(", ")}`,
+              `valid labels: ${labels.map((l) => JSON.stringify(l)).join(", ")}` + (near ? ` — closest: ${JSON.stringify(near)}` : ""),
             );
+          }
           return coerced.value;
         });
         // MULTISELECT comma-in-label hazard: the wire joins members with ", " WITHOUT escaping (binary-

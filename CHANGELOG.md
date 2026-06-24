@@ -4,6 +4,37 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The project uses
 [Semantic Versioning](https://semver.org/); pre-1.0 minor versions may include breaking changes.
 
+## [0.12.0] — 2026-06-24
+
+### Added
+
+- **`record` now shows the offered options when a scripted answer matches none.** A `choose:` that names no
+  offered option previously failed with just "matched no offered option" — you had to dig through
+  `events.jsonl` for the real labels. The error now lists the **valid labels** and suggests the **closest
+  match**, so you can fix the anchor from the error alone. (The labels were already on the error object; the
+  record path just wasn't printing them — `run`/`skill` already did.)
+- **`doctor` detects the git-worktree `.env` trap.** Running from a git worktree where `./.env` is gitignored
+  (so absent) yields "no token"; when the **main checkout** has a `.env`, `doctor` now points you at
+  `--dotenv <main>/.env` instead of the generic remedy. (Keychain hint still takes precedence on macOS.)
+
+### Changed
+
+- **`verify-run` answer-coverage now refuses against a *stale* kept run.** Every run persists a skill
+  fingerprint in `result.json`; on the answer-coverage path (`answers:` declared), `verify-run` recomputes it
+  live and, if the skill source changed since the run was kept, **exits 2** ("the kept run predates the current
+  skill") instead of vouching for answers against a stale gate snapshot. ⚠️ This closes a false-green: a
+  reworded/moved gate after `--keep` would previously green against the old labels. The plain `assert:`-only
+  re-eval (no `answers:`) is unaffected; a kept run recorded by an older harness (no fingerprint) → a warning,
+  not a refusal. `RunResult.fingerprint` is the new persisted field.
+
+### Docs
+
+- Skill + scenario docs: the gate-centric answer-coverage currency rule; the cheap `--keep` → `trace
+  --view questions`/`verify-run` authoring loop (no token-free gate probe exists — gates are model-decided);
+  the mismatch-vs-unanswered hard-fail gotcha; "anchor only assert-relevant gates, prefer `on_unanswered:
+  first` elsewhere"; the keep-going batch semantics (`record <dir>`/`--rerecord-stale` record all and report
+  at the end — no one-at-a-time wrapper needed); and the git-worktree `.env` gotcha.
+
 ## [0.11.0] — 2026-06-24
 
 ### Added

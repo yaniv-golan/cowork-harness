@@ -16,6 +16,7 @@ const OK_PROBE: DoctorProbe = {
   agentBinary: () => ({ ok: true, path: "/x/claude-code-vm/2.1.177/claude" }),
   hasToken: () => true,
   hasKeychainToken: () => false,
+  worktreeEnv: () => null,
   baseline: () => ({ ok: true, version: "1.13576.1" }),
 };
 const probe = (over: Partial<DoctorProbe>): DoctorProbe => ({ ...OK_PROBE, ...over });
@@ -151,5 +152,25 @@ describe("doctor — runDoctorChecks", () => {
     );
     expect(tok.detail).not.toMatch(/Keychain/i);
     expect(tok.remedy).toMatch(/setup-token/);
+  });
+
+  // Finding B4/A4: running from a git worktree where ./.env is gitignored → no token; point at the main .env.
+  it("no token but the main checkout has a .env (git worktree) → remedy points at --dotenv <main .env>", () => {
+    const tok = get(
+      runDoctorChecks("container", probe({ hasToken: () => false, hasKeychainToken: () => false, worktreeEnv: () => "/main/repo/.env" })),
+      "token",
+    );
+    expect(tok.status).toBe("fail");
+    expect(tok.detail).toMatch(/worktree/i);
+    expect(tok.remedy).toMatch(/--dotenv \/main\/repo\/\.env/);
+  });
+
+  it("Keychain remedy takes precedence over the worktree remedy when both apply", () => {
+    const tok = get(
+      runDoctorChecks("container", probe({ hasToken: () => false, hasKeychainToken: () => true, worktreeEnv: () => "/main/.env" })),
+      "token",
+    );
+    expect(tok.remedy).toMatch(/Keychain token into \.\/\.env/);
+    expect(tok.remedy).not.toMatch(/--dotenv/);
   });
 });

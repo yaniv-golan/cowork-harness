@@ -465,6 +465,19 @@ verify-run **refuses** (exit `2`, "can't verify ⇒ not green") rather than vacu
 A scenario with no `answers:` is unaffected (assert-only, exactly as before). Scenarios using
 `on_unanswered: first`/`llm` treat an unmatched gate as an acceptable auto-answer, not a failure.
 
+**Currency — the kept run must be current vs the skill.** Answer-coverage validates against the kept run's
+gate **snapshot** (its `events.jsonl`). If the skill changed *after* the run was kept — e.g. you reworded a
+gate or moved its options — those recorded gates are stale, and a green here would be false confidence. Every
+run persists a skill fingerprint in `result.json`; on the answer-coverage path `verify-run` recomputes it live
+and, if the skill source drifted, **refuses** (exit `2`, "the kept run predates the current skill") instead of
+vouching against stale labels — re-`--keep` a fresh run (or re-record). The plain `assert:`-only re-eval (no
+`answers:`) is unaffected. A kept run recorded by an older harness (no fingerprint) → a warning, not a refusal.
+
+> **The cheapest authoring loop:** `--keep` ONE run, then `trace --view questions` / `verify-run` read the
+> gates + offered labels out of that run's `events.jsonl` for free — fix your `answers:` without re-paying for
+> a record. Just re-`--keep` after a skill change that moves gate phrasing (per the currency rule above). A
+> mismatched `choose:` is reported with the **offered options** so you can fix the anchor from the error alone.
+
 ### Debugging with `chat`
 
 > See [chat.md](./chat.md) for the full `chat` reference and flags.

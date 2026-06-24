@@ -3,8 +3,8 @@ name: cowork-harness
 description: Test or debug a Claude Code skill/plugin under Claude Cowork's runtime — sandboxed agent, default-deny egress, the can_use_tool permission/question protocol — using the cowork-harness CLI. Use when validating or regression-testing a skill, authoring or debugging a scenario YAML (prompt + scripted answers + assert:), choosing a fidelity tier, scripting AskUserQuestion / tool-permission answers, or asserting artifacts, egress, or sub-agent dispatch. Especially when a harness run no-ops an assertion, fails on an unanswered gate, false-greens, a steered answer never reaches the model, or a web_fetch is unexpectedly denied or gated. NOT for generic unit testing (pytest/vitest of your own scripts) or non-Cowork CI. Covers the skill / run / chat / record / replay / trace / decide / assertions / scaffold commands and the session-vs-scenario split.
 metadata:
   author: cowork-harness
-  version: 0.11.0
-  tracks-harness: cowork-harness 0.11.0 (baseline desktop-1.14271.0)
+  version: 0.12.0
+  tracks-harness: cowork-harness 0.12.0 (baseline desktop-1.14271.0)
 ---
 
 # cowork-harness
@@ -21,7 +21,7 @@ several ways to *silently* no-op a check (skip an assertion on replay, auto-answ
 an empty egress allowlist). This skill exists mostly to keep you out of those traps — the Gotchas
 section below is the highest-value part. Read it.
 
-> **Version note:** the facts and `file:line` pointers here track `cowork-harness 0.11.0` (baseline
+> **Version note:** the facts and `file:line` pointers here track `cowork-harness 0.12.0` (baseline
 > `desktop-1.14271.0`). If your checkout is newer, prefer the live `--help`, `SPEC.md`, and
 > `docs/*.md` over this snapshot, and re-run the bundled linter.
 
@@ -30,7 +30,7 @@ section below is the highest-value part. Read it.
 Before the first command, confirm the CLI is reachable and **fail loud** (never fake a pass) when a tier's dependencies are missing:
 
 - **One-shot check.** Run `cowork-harness doctor [--tier <tier>]` first — a read-only prerequisite check that inspects Docker, the staged agent, the token, and the baseline in one pass. The bullets below explain each thing it checks (and how to fix it).
-- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 0.11.0** (the commands/assertions it teaches: `assertions --list`, `scaffold <run-id>`, `trace --view dispatches`, `artifact_json` incl. the `in:` operator, `verify-cassettes`, batch `record <dir>`/`--rerecord-stale`, parallel batch re-records (`record --concurrency <N>`), record-time redaction, multiSelect/`answer:`, `verify-run` (incl. answer-coverage when a scenario declares `answers:`), `record --max-artifact-bytes`, answering gates live during a recording (`record --decider-dir`/`--decider-llm`/`--on-unanswered first`), `verify-cassettes --allow-domain`/`--allow-email`/`--allow-file`, scenario `skills:` staleness scoping (refinable with `COWORK_HARNESS_AGENT_SCOPE=skill` so a skill-named `agents/<name>.md` re-stales only that skill), `chat --plugin`, and `/help` in the chat REPL). If it's missing *or older than 0.11.0*, prefix every command with `npx` using a version floor: `npx cowork-harness@>=0.11.0 <cmd>` (Node ≥ 20). The floor matters — plain `@latest` would silently fetch an older CLI and the new commands would fail as "unknown command"; `@>=0.11.0` instead **fails loud** if no compatible version is published. To install once instead: `npm i -g cowork-harness@latest`.
+- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 0.12.0** (the commands/assertions it teaches: `assertions --list`, `scaffold <run-id>`, `trace --view dispatches`, `artifact_json` incl. the `in:` operator, `verify-cassettes`, batch `record <dir>`/`--rerecord-stale`, parallel batch re-records (`record --concurrency <N>`), record-time redaction, multiSelect/`answer:`, `verify-run` (incl. answer-coverage when a scenario declares `answers:`), `record --max-artifact-bytes`, answering gates live during a recording (`record --decider-dir`/`--decider-llm`/`--on-unanswered first`), `verify-cassettes --allow-domain`/`--allow-email`/`--allow-file`, scenario `skills:` staleness scoping (refinable with `COWORK_HARNESS_AGENT_SCOPE=skill` so a skill-named `agents/<name>.md` re-stales only that skill), `chat --plugin`, and `/help` in the chat REPL). If it's missing *or older than 0.12.0*, prefix every command with `npx` using a version floor: `npx cowork-harness@>=0.12.0 <cmd>` (Node ≥ 20). The floor matters — plain `@latest` would silently fetch an older CLI and the new commands would fail as "unknown command"; `@>=0.12.0` instead **fails loud** if no compatible version is published. To install once instead: `npm i -g cowork-harness@latest`.
 - **Agent binary (every tier).** The staged Claude Code agent is **bind-mounted** from a local Claude Desktop install, or point `COWORK_AGENT_BINARY` at a `claude-code-vm/<ver>/claude` ELF. Nothing is bundled. No agent → no run; report that, don't skip silently.
 - **Docker / Lima.** Only `--fidelity protocol` (L0) runs without them. `container` / `microvm` / `hostloop` / `cowork` need Docker (Lima for L2). If they're absent, drop to `--fidelity protocol` and **say so** — a green that never exercised the sandbox is not a sandbox pass.
 - **Auth.** `CLAUDE_CODE_OAUTH_TOKEN` (preferred) or `ANTHROPIC_API_KEY`, via env or `.env`.
@@ -99,6 +99,15 @@ The word `agent` is **retired** — do not write `on_unanswered: agent` (the sch
 `--on-unanswered first` is itself flagged `nonDeterministic` — it is *not* a deterministic stand-in
 for scripted answers. See `references/fidelity-and-answers.md`.
 
+**Which gates to anchor (re-record robustness).** The model rewords option labels (and sometimes the
+question) every run, so a brittle exact-label `choose:` is itself a re-record-fragility source — it drifts and
+forces a re-record. The practical rule: **label-anchor only the gates whose choice drives an `assert:`** (or
+materially changes behavior); for gates whose answer is immaterial to your assertions, `on_unanswered: first`
+is the more re-record-robust choice — accept the `nonDeterministic` flag rather than trade it for a flaky
+anchor. (When label *order* is stable but the text drifts, a positional `choose` is the middle option — the
+linter flags positional `choose` as order-dependent, so use it deliberately.) The caution stands: `first`
+*masks* an unanswered gate, so don't use it for a gate you actually need answered a specific way.
+
 ### External deciders and the "first" shorthand
 
 When using `--decider-cmd` or `--decider-dir`, the helper's output is passed through
@@ -155,6 +164,14 @@ When the scenario declares `answers:`, verify-run **also** checks they still mat
 reworded gate or a `choose:` the run never offered fails here in ~1s instead of on a paid re-record). Or skip
 the discovery/encode/record dance entirely and answer gates **live during the recording** with
 `record --decider-dir`/`--decider-llm` (the cassette is flagged non-deterministic but replays deterministically).
+
+**Author answers WITHOUT re-paying — the cheap loop.** You don't need a fresh paid record to discover a
+scenario's gates or their labels: `--keep` ONE run, then `cowork-harness trace <run-dir> --view questions`
+(and `verify-run`) read the gates + offered option labels out of that run's `events.jsonl` for free. Iterate
+your `answers:` against that kept run, then record once. **But the kept run is a snapshot:** if you change the
+skill's gate phrasing afterward, re-`--keep` — verify-run's answer-coverage *refuses* (exit 2, "predates the
+current skill") rather than vouch against stale labels, but the trace/inspect path can't warn you, so re-keep
+deliberately. (A token-free probe of "which gates fire" isn't possible — gates are model-decided per run.)
 
 Run artifacts are written to `~/.cowork-harness/runs/…` by default — **outside any working tree**, so a run
 launched from a repo root never drops sensitive skill inputs/outputs into it. Pass `--run-dir <path>` (or set
@@ -279,7 +296,9 @@ are the ones that bite hardest.
 
 9. **Keep `.env` out of any mounted folder** — it is copied into the sandbox and the token could
    leak. Put it at a working-dir or install root (token resolution: env > `--dotenv` > `./.env` >
-   install `.env`).
+   install `.env`). **Inverse footgun — running from a git worktree:** a worktree's `./.env` is gitignored, so
+   it's **absent** there and you'll get "no model credentials." *Fix:* pass `--dotenv <main-checkout>/.env`
+   (or set the env var) — that's exactly what `--dotenv` is for.
 
 10. **A base64 artifact that was scrubbed at record time will fail artifact assertions at replay.**
     When `record` detects a secret embedded in a base64 artifact, it replaces the entire artifact
@@ -312,6 +331,18 @@ are the ones that bite hardest.
     but NOT option *re-ordering* — if the gate presents its options in a different order run-to-run, the
     index lands on a different option (a silent re-record flake). Prefer an exact label when order is
     stable; `lint` flags positional `choose` with an advisory.
+15. **A scripted `choose:` matching no offered option HARD-fails the run — `on_unanswered: first` does NOT
+    backstop it.** This is distinct from an *unanswered* gate (no rule matched → falls to `on_unanswered`): a
+    rule that DID match the gate but whose `choose:` names a label the gate never offered (the model reworded
+    it) is treated as an authoring bug and fails loud — `first`/`llm` won't absorb it. The error now prints the
+    **offered options** (and a closest-match suggestion), so fix the anchor from the error alone — no need to
+    dig through `events.jsonl`. (This is exactly the drift `verify-run` answer-coverage catches in ~1s; use it
+    before a paid record.)
+16. **Batch record keeps going — you don't need a one-at-a-time wrapper.** `record <dir>` and `record <dir>
+    --rerecord-stale` run **every** scenario, collect failures, and report them at the end (non-zero exit on
+    any failure) — a failing scenario does NOT abort the batch. So a single `cowork-harness record cassettes/
+    --rerecord-stale` surfaces ALL stale anchors in one pass (add `--concurrency <N>` to parallelize); a shell
+    wrapper that loops one cassette at a time with `set -e` defeats this and rediscovers stale anchors serially.
 
 For the complete gotcha list, the assertion catalog, the YAML schema, the fidelity/answer tables,
 and the CI recipe, read the files in `references/`.

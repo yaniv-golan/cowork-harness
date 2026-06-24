@@ -22,7 +22,7 @@ import { vmInit, vmDelete, vmStatus, vmPrune, instanceName } from "./runtime/lim
 import { sync } from "./sync/cowork-sync.js";
 import { runBoundaryChecks, formatBoundary } from "./boundary.js";
 import { cmdChat } from "./run/chat.js";
-import { cmdRecord, cmdReplay, cmdVerifyCassettes, cmdRehash } from "./run/cassette.js";
+import { cmdRecord, cmdReplay, cmdVerifyCassettes, cmdRehash, buildFingerprint, fingerprintSkillDrift } from "./run/cassette.js";
 import { cmdRunsGc } from "./run/runs-gc.js";
 import { resolveInputs } from "./run/inputs.js";
 import { cmdLint } from "./run/scenario-tool.js";
@@ -2026,6 +2026,27 @@ async function cmdVerifyRun(args: string[]) {
   // behaves EXACTLY as before (assert-only; events.jsonl irrelevant; no refusal), preserving existing runs.
   let answerCoverage: { matched: number; total: number } | undefined;
   if (scenario.answers.length > 0) {
+    // CURRENCY: answer-coverage validates against the kept run's gate SNAPSHOT (its events.jsonl). If the skill
+    // changed since the run was kept, those gates are stale and a green here is false confidence — the real
+    // gates moved. Refuse rather than vouch (can't verify ⇒ not green). Every run as of this version persists a
+    // fingerprint; an older run without one → warn (can't check). A run with no skill dirs → nothing to drift.
+    const recFp = result.fingerprint;
+    if (recFp === undefined) {
+      log(
+        `verify-run: ::warning:: this kept run carries no skill fingerprint (recorded by an older harness) — ` +
+          `cannot confirm it is current vs the skill; re-keep a fresh run to be sure answer-coverage is against live gates.`,
+      );
+    } else if (recFp.skillHash !== undefined) {
+      const liveFp = buildFingerprint(scenario.session, recFp.baseline, undefined, scenario.skills);
+      const drift = fingerprintSkillDrift(recFp, liveFp);
+      if (drift) {
+        log(
+          `verify-run: the kept run predates the current skill — ${drift}. Its gate snapshot is stale, so ` +
+            `answer-coverage can't be trusted; re-keep a fresh run (or re-record). (can't verify ⇒ not green)`,
+        );
+        return process.exit(2);
+      }
+    }
     const gates = parseGatesFromEvents(join(runDir, "events.jsonl"));
     if (gates === null) {
       log(

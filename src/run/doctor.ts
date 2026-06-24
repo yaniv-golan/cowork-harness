@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { dirname } from "node:path";
+import { existsSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "../cli-args.js";
 import { resolveAgentBinary, loadBaseline } from "../baseline.js";
@@ -43,6 +44,9 @@ export interface DoctorProbe {
   // macOS only: is there a Claude Code OAuth credential in the login Keychain? Used purely to improve the
   // "no token" remedy — the in-Docker agent can't read the Keychain, so doctor points the user at .env.
   hasKeychainToken(): boolean;
+  // When cwd is a git WORKTREE with no local ./.env but the main checkout has one, returns that .env path —
+  // the gitignored .env doesn't travel to a worktree, a common "no token" first-run trap. null otherwise.
+  worktreeEnv(): string | null;
   baseline(): { ok: true; version: string } | { ok: false; error: string };
 }
 
@@ -96,6 +100,17 @@ export const realProbe: DoctorProbe = {
     if (process.platform !== "darwin") return false;
     const r = spawnSync("security", ["find-generic-password", "-s", "Claude Code-credentials"], { stdio: "ignore" });
     return r.status === 0;
+  },
+  worktreeEnv: () => {
+    if (existsSync(join(process.cwd(), ".env"))) return null; // a local .env exists → not the worktree trap
+    const gitDir = spawnSync("git", ["rev-parse", "--git-dir"], { encoding: "utf8" });
+    const commonDir = spawnSync("git", ["rev-parse", "--git-common-dir"], { encoding: "utf8" });
+    if (gitDir.status !== 0 || commonDir.status !== 0) return null; // not a git repo
+    const gd = resolve(gitDir.stdout.trim());
+    const cd = resolve(commonDir.stdout.trim());
+    if (gd === cd) return null; // not a worktree (git-dir === common-dir in the main checkout)
+    const mainEnv = join(dirname(cd), ".env"); // common-dir is <main>/.git → its parent is the main checkout
+    return existsSync(mainEnv) ? mainEnv : null;
   },
   baseline() {
     try {
@@ -226,6 +241,10 @@ export function runDoctorChecks(tier: Tier, probe: DoctorProbe = realProbe): Doc
   // in-Docker agent can't read the Keychain — only env / .env. If the env is empty BUT a Keychain credential
   // exists, the generic "set a token" remedy is a dead end; point the user straight at the .env copy instead.
   const keychainOnly = !token && plat === "darwin" && probe.hasKeychainToken();
+  // Worktree trap: a git worktree's gitignored ./.env is absent there, so a token in the main checkout's
+  // .env doesn't apply. Point at it via --dotenv. (Keychain takes precedence — it's the "you have a token,
+  // just unreadable in-Docker" case.)
+  const worktreeEnv = !token && !keychainOnly ? probe.worktreeEnv() : null;
   checks.push({
     id: "token",
     title: "Auth token",
@@ -234,12 +253,16 @@ export function runDoctorChecks(tier: Tier, probe: DoctorProbe = realProbe): Doc
       ? "found (env / .env)"
       : keychainOnly
         ? "found a 'Claude Code-credentials' Keychain entry, but the in-Docker agent can't read the Keychain"
-        : "no CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_API_KEY",
+        : worktreeEnv
+          ? "no token in this git worktree (its ./.env is gitignored, so it's absent here)"
+          : "no CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_API_KEY",
     remedy: token
       ? undefined
       : keychainOnly
         ? "copy your Keychain token into ./.env so the in-Docker agent can read it: echo CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token) >> .env"
-        : "export CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token) or put it in .env",
+        : worktreeEnv
+          ? `the main checkout has a .env — point at it: cowork-harness <cmd> --dotenv ${worktreeEnv} (or set CLAUDE_CODE_OAUTH_TOKEN)`
+          : "export CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token) or put it in .env",
     required: true, // every doctor tier calls a real model (only a committed-cassette replay needs none)
   });
 
