@@ -184,8 +184,5 @@ function hostLoopShellSection(baseline: PlatformBaseline, sessionRoot: string, m
     }
     throw new Error(`cowork-harness: missing host-loop shell prompt asset: ${dir}. Set COWORK_HARNESS_ALLOW_MISSING_PROMPT=1 to skip.`);
   }
-  return stripComments(content)
-    .split("{{vmMnt}}")
-    .join(vmMnt)
-    .trim();
+  return stripComments(content).split("{{vmMnt}}").join(vmMnt).trim();
 }
