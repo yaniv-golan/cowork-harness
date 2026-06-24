@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { PassThrough } from "node:stream";
 import { EventEmitter } from "node:events";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { LiveAgentSession, hookOutput, type AgentEvent } from "../src/agent/session.js";
@@ -320,8 +320,12 @@ describe("session protocol loud-failure fixes", () => {
     const { value } = await nextP;
     expect(value).toMatchObject({ type: "error" });
     expect((value as any).message).toMatch(/control-out frame too large/);
-    // The unreplayable truncation marker must NEVER have been written to control-out.jsonl.
-    const controlOut = readFileSync(join(outDir, "control-out.jsonl"), "utf8");
+    // The unreplayable truncation marker must NEVER have been written to control-out.jsonl. The
+    // over-cap frame is rejected BEFORE any write, so the file stays empty — and the stream opens the
+    // file ASYNCHRONOUSLY (createWriteStream, flags "a"), so under load it may not exist yet at this
+    // synchronous read (was a flaky ENOENT). A missing file ⇒ nothing was written ⇒ no marker; treat as "".
+    const controlOutPath = join(outDir, "control-out.jsonl");
+    const controlOut = existsSync(controlOutPath) ? readFileSync(controlOutPath, "utf8") : "";
     expect(controlOut).not.toContain("control_out_truncated");
     proc.stdout.end();
     await drain(it).catch(() => {});
