@@ -26,7 +26,12 @@ answers:
 
 assert:
   - result: success
-  - file_exists: outputs/actions.md
+  # The session (default.yaml) connects a folder (../data/project -> mnt/project), so
+  # {{workspaceFolder}} = mnt/project and the model writes the deliverable INTO that folder
+  # (mnt/project/outputs/actions.md), NOT mnt/outputs. `user_visible_artifact` is the right
+  # primitive for a workspace deliverable: it spans the user-visible roots (outputs + each
+  # connected folder's mount). `file_exists` anchors only at mnt/, so it would miss this.
+  - user_visible_artifact: project/outputs/actions.md
   - transcript_contains: "action items"
   - tool_called: Write
   - tool_not_called: WebFetch
