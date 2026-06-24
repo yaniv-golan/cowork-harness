@@ -4,7 +4,14 @@ import { readFileSync, writeFileSync, renameSync, mkdirSync, mkdtempSync, exists
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join, dirname, relative, isAbsolute, resolve, sep } from "node:path";
-import { type Scenario, type RunResult, type Assertion, Assertion as AssertionSchema, VERDICT_MODIFIER_KEYS } from "../types.js";
+import {
+  type Scenario,
+  type RunResult,
+  type Assertion,
+  type Fingerprint,
+  Assertion as AssertionSchema,
+  VERDICT_MODIFIER_KEYS,
+} from "../types.js";
 import { executeScenario, parseScenarioFile, collectArtifacts, parseSessionFile, slugForPath } from "./execute.js";
 import { loadSession, resolveSessionPaths } from "../session.js";
 import { loadBaseline } from "../baseline.js";
@@ -41,6 +48,18 @@ import { parse as parseYaml } from "yaml";
 const out = (s: string) => process.stdout.write(s + "\n");
 const log = (s: string) => process.stderr.write(s + "\n");
 
+/** Format a record error for the user. An `UnansweredError` carries the offered labels (and a closest-match
+ *  suggestion) in `.hint`; the record catch sites historically printed only `.message`, so a scripted-answer
+ *  mismatch hid what WAS offered. Surface the hint — guarded by `!message.includes(hint)` so the
+ *  `on_unanswered: fail` terminal (which duplicates its option lines into BOTH message and hint) doesn't
+ *  double-print. The mismatch throw keeps the labels solely in the hint, so they get appended. Exported for
+ *  tests. */
+export function recordErrorText(e: unknown): string {
+  const msg = (e as Error).message;
+  if (e instanceof UnansweredError && e.hint && !msg.includes(e.hint)) return `${msg}\n    ${e.hint}`;
+  return msg;
+}
+
 /** H5: write a committed cassette atomically — a mid-write crash must never leave a partial/corrupt file at
  *  the real path. Write to a same-dir temp (pid-suffixed so two concurrent writers can't collide) then
  *  `renameSync` over the target (atomic on POSIX). Mirrors the external-channel.ts temp+rename pattern. */
@@ -68,27 +87,6 @@ interface ManifestEntry {
 /** #1b: a staleness tripwire over the inputs that determine the recording — mirrors `asarFingerprint`
  *  (warn-don't-fail; `--strict` hardens). `baseline` is the canonical staleness cause (a Cowork bump);
  *  `skillHash` covers local skill/plugin edits (the dev-loop case). */
-interface Fingerprint {
-  baseline: string; // appVersion at record time
-  skillHash?: string; // hash of the session's local skill/plugin/marketplace dir contents (if any)
-  skillSources?: string[]; // the local dirs that fed skillHash (for the replay recompute + diagnostics)
-  skillScope?: string[]; // F-6: the skills the hash was scoped to (empty/absent = whole-tree); diagnostics
-  sharedHash?: string; // G-4: shared-root hash for scoped cassettes; absent on whole-tree or non-plugin-root mounts
-  contentSig?: string; // v3+: algorithm-independent content fingerprint; used by `rehash` to verify content is unchanged across format bumps
-  // v5+: per-file manifest [relpath, contentSha] of the exact files feeding skillHash, so a staleness mismatch
-  // names the EXACT changed/added/removed file instead of a bucket. Paths are ROOT-RELATIVE (no host path) and
-  // scanned/redacted like skillSources (privacy). Omitted (with fileSigsOmitted:true) above MANIFEST_MAX_FILES.
-  fileSigs?: Array<[string, string]>;
-  fileSigsOmitted?: boolean;
-  // Phase C: the boundary used for skillHash — "git" (git-tracked set, COWORK_HARNESS_GITSET=1) or "raw"
-  // (legacy walk; default). A record-vs-verify mode flip makes hash comparison meaningless → re-record.
-  mode?: "git" | "raw";
-  // Opt-in per-skill agent scoping was active (COWORK_HARNESS_AGENT_SCOPE=skill) when this scoped hash was
-  // computed — a skill-named `agents/<n>` was treated as skill <n>'s private input rather than a shared root.
-  // ABSENT = the default (agents/ is a fleet-wide shared root). A record-vs-verify mismatch → re-record.
-  agentScope?: "skill";
-}
-
 // Cap the per-file manifest so a huge plugin tree doesn't bloat a committed cassette; above this, omit it
 // (fileSigsOmitted:true) and degrade to the bucket-level message — loudly, never silently.
 const MANIFEST_MAX_FILES = 2000;
@@ -356,6 +354,22 @@ export function buildFingerprint(
     }
   }
   return fp;
+}
+
+/** Compare a fingerprint recorded at run time (`rec`) against a freshly-recomputed live one (`live`). Returns
+ *  a re-record reason if the skill state drifted or is no longer comparable (a `mode`/`agentScope` flip), else
+ *  null. A focused mirror of `checkStaleness`'s skillHash comparison, for `verify-run` to detect a kept run
+ *  that predates a skill change (so it won't vouch for answer-coverage against stale gate labels). Compares
+ *  skillHash only — `baseline` drift is intentionally NOT a reason here (it doesn't move skillHash). */
+export function fingerprintSkillDrift(rec: Fingerprint, live: Fingerprint): string | null {
+  if (rec.skillHash === undefined) return null; // the recorded run had no skill dirs → nothing to re-verify
+  if (live.skillHash === undefined) return "skill dirs are no longer resolvable from the run's session";
+  const recMode = rec.mode ?? "raw";
+  const liveMode = live.mode ?? "raw";
+  if (recMode !== liveMode) return `recorded in '${recMode}' file-set mode, now '${liveMode}' (COWORK_HARNESS_GITSET)`;
+  if ((rec.agentScope ?? "off") !== (live.agentScope ?? "off")) return "agent-scope changed (COWORK_HARNESS_AGENT_SCOPE)";
+  if (live.skillHash !== rec.skillHash) return "the skill/plugin source changed since this run was recorded";
+  return null;
 }
 
 /** A2: scan the WHOLE cassette surface for PII (default classes: email/currency/domain). A `truncated`
@@ -1380,7 +1394,7 @@ export async function cmdRecord(args: string[]) {
         log(`  ✓ ${tag} ${cp} (${r.result.result})`);
         return true;
       } catch (e) {
-        log(`  ✗ ${tag} ${cp}: ${(e as Error).message}`);
+        log(`  ✗ ${tag} ${cp}: ${recordErrorText(e)}`);
         return false;
       }
     });
@@ -1434,7 +1448,7 @@ export async function cmdRecord(args: string[]) {
         log(`  ✓ ${tag} → ${r.cassettePath} (${r.result.result})`);
         return true;
       } catch (e) {
-        log(`  ✗ ${tag} ${(e as Error).message}`);
+        log(`  ✗ ${tag} ${recordErrorText(e)}`);
         return false;
       }
     });
@@ -1463,7 +1477,7 @@ export async function cmdRecord(args: string[]) {
     if (asJson) out(JSON.stringify({ command: "record", result: r.result.result, artifacts: r.artifacts, cassette: r.cassettePath }));
     else log(`✓ recorded ${r.result.result} · ${r.artifacts} artifact(s) → ${r.cassettePath}`);
   } catch (e) {
-    log(`record: ${(e as Error).message}`);
+    log(`record: ${recordErrorText(e)}`);
     return process.exit(1);
   } finally {
     channel?.close?.();

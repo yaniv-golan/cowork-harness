@@ -307,6 +307,30 @@ export const Scenario = z.preprocess((raw) => {
 }, ScenarioObject);
 export type Scenario = z.infer<typeof ScenarioObject>;
 
+/** Skill/plugin staleness fingerprint, recorded at run time. Stamped into a cassette (staleness tripwire)
+ *  AND into a kept run's result.json (so `verify-run` can detect a kept run that predates a skill change and
+ *  refuse to vouch for answer-coverage against stale gate labels). */
+export interface Fingerprint {
+  baseline: string; // appVersion at record time
+  skillHash?: string; // hash of the session's local skill/plugin/marketplace dir contents (if any)
+  skillSources?: string[]; // the local dirs that fed skillHash (for the replay recompute + diagnostics)
+  skillScope?: string[]; // F-6: the skills the hash was scoped to (empty/absent = whole-tree); diagnostics
+  sharedHash?: string; // G-4: shared-root hash for scoped cassettes; absent on whole-tree or non-plugin-root mounts
+  contentSig?: string; // v3+: algorithm-independent content fingerprint; used by `rehash` to verify content is unchanged across format bumps
+  // v5+: per-file manifest [relpath, contentSha] of the exact files feeding skillHash, so a staleness mismatch
+  // names the EXACT changed/added/removed file instead of a bucket. Paths are ROOT-RELATIVE (no host path) and
+  // scanned/redacted like skillSources (privacy). Omitted (with fileSigsOmitted:true) above MANIFEST_MAX_FILES.
+  fileSigs?: Array<[string, string]>;
+  fileSigsOmitted?: boolean;
+  // Phase C: the boundary used for skillHash — "git" (git-tracked set, COWORK_HARNESS_GITSET=1) or "raw"
+  // (legacy walk; default). A record-vs-verify mode flip makes hash comparison meaningless → re-record.
+  mode?: "git" | "raw";
+  // Opt-in per-skill agent scoping was active (COWORK_HARNESS_AGENT_SCOPE=skill) when this scoped hash was
+  // computed — a skill-named `agents/<n>` was treated as skill <n>'s private input rather than a shared root.
+  // ABSENT = the default (agents/ is a fleet-wide shared root). A record-vs-verify mismatch → re-record.
+  agentScope?: "skill";
+}
+
 export interface RunResult {
   $schema?: string;
   generator?: string;
@@ -358,6 +382,9 @@ export interface RunResult {
   usage?: Record<string, unknown>;
   cost?: Record<string, unknown>;
   durationMs?: number;
+  // Skill/plugin staleness fingerprint at run time. Persisted so `verify-run` can detect a kept run that
+  // predates a skill change (its gate snapshot is stale → don't vouch for answer-coverage against it).
+  fingerprint?: Fingerprint;
   outDir: string;
   workDir?: string; // the agent's working root (mnt/) inside the run dir — where the agent's FS lives
   outputsDir?: string; // the user-visible deliverable mount (mnt/outputs) — where a skill's artifacts land

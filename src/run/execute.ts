@@ -7,6 +7,11 @@ import { join, dirname, resolve, basename, isAbsolute, sep } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { Scenario } from "../types.js";
 import type { RunResult } from "../types.js";
+// Runtime-only circular import: cassette.ts imports executeScenario from here, and we import buildFingerprint
+// from there. Both bindings are used only inside function bodies (call time), never at module load, so the
+// ESM live-binding cycle is safe. buildFingerprint's deps (skillSourceDirs → parseSessionFile) live here, so
+// the cycle is intrinsic — kept runtime-only rather than refactored.
+import { buildFingerprint } from "./cassette.js";
 import { loadBaseline } from "../baseline.js";
 import { loadSession, resolveSessionPaths, buildLaunchPlan } from "../session.js";
 import { spawnProtocol } from "../runtime/protocol.js";
@@ -602,6 +607,10 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     missingCapabilityUse, // capability fidelity (§8.8 D6): omitted-capability families the skill used (live built-image tiers) — computeVerdict fails unless allow_missing_capability
     capabilityProbe, // Fix 6h: probe outcome (definitive | unverified | skipped) for the guard roster
     requiresCapabilityUnmet, // Fix 4b: declared requires_capabilities the tier couldn't satisfy → computeVerdict fails unless allow_missing_capability
+    // Skill staleness fingerprint, persisted on EVERY run (runs are always kept on disk) so `verify-run` can
+    // detect a kept run that predates a skill change and refuse to vouch for answer-coverage. Same call the
+    // record path uses for the cassette (cassette.ts) — `(inline)`/no-skill sessions yield a {baseline}-only fp.
+    fingerprint: buildFingerprint(scenario.session, baseline.appVersion, undefined, scenario.skills),
   };
 
   // Artifacts (C3): the harness-observability log `run.jsonl` REPLACES transcript.json/decisions.jsonl.
