@@ -43,6 +43,16 @@ describe("matchLabel — exact-only by default; substring is opt-in via fuzzy=tr
     expect(matchLabel("pdf", ["Markdown", "PDF"], true)).toBe("PDF"); // case-insensitive exact with fuzzy
   });
 
+  it("tolerates surrounding quotes and trailing sentence punctuation (a near-miss label), case-insensitively", () => {
+    expect(matchLabel("Confirmed.", ["Confirmed", "Different"])).toBe("Confirmed"); // trailing period
+    expect(matchLabel('"Confirmed"', ["Confirmed"])).toBe("Confirmed"); // surrounding quotes
+    expect(matchLabel("confirmed!", ["Confirmed"])).toBe("Confirmed"); // punctuation + case
+  });
+
+  it("never strips a colon — preserves the OTHER: sentinel so a near-miss can't swallow it", () => {
+    expect(matchLabel("Confirmed:", ["Confirmed"])).toBe(null); // ':' is NOT trailing punctuation we strip
+  });
+
   it("no match at all → null (both modes)", () => {
     expect(matchLabel("CSV", ["Markdown", "PDF"])).toBe(null);
     expect(matchLabel("CSV", ["Markdown", "PDF"], true)).toBe(null);

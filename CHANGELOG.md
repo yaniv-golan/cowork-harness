@@ -19,16 +19,23 @@ All notable changes to this project are documented here. The format is based on
   `inspect` it. `partial` and `unansweredGate` are new `RunResult` fields; `verify-run` and `scaffold`
   refuse to treat a partial run's half-finished output as a passing result (scaffold still emits the gates,
   drops the artifact/result asserts, and warns loudly).
-- **Capability pre-flight warning.** A skill that declares `requires_capabilities` against an image that
-  omits them is now warned **before** the (paid) run, not only on the post-run hard-fail. `doctor` also
-  surfaces the full-parity remedy on its agent-image line.
+- **Capability pre-flight — fail fast.** A skill that declares `requires_capabilities` against an image that
+  provably omits them now **aborts before the (paid) run** (`exit 3`) instead of running ~12 min to a verdict
+  that's already known — unless the scenario asserts `allow_missing_capability: true`, which downgrades it to
+  a notice and proceeds. `doctor` also surfaces the full-parity remedy on its agent-image line.
 
 ### Changed
 
 - **LLM decider tolerates a near-miss label.** `--decider-llm` now binds a reply like `Confirmed.` or
   `"Confirmed"` to the label `Confirmed` (trailing sentence punctuation / surrounding quotes trimmed before
   matching) instead of failing loud — common on binary confirm gates. The `:` of the `OTHER:` free-text
-  sentinel is never stripped, and fuzzy substring matching stays off, so the change can't mis-bind.
+  sentinel is never stripped, and fuzzy substring matching stays off, so the change can't mis-bind. The
+  tolerance lives in `matchLabel` itself, so the web_fetch-approval path gets it too (a `Deny.` reply now
+  binds `Deny`).
+- **`runs gc` → top-level `prune`; the `runs` namespace is dropped.** Pruning accumulated run dirs is now
+  `cowork-harness prune [--keep-last <n>] [--dry-run] [<runs-dir>]` (same flags). `runs` was a namespace with
+  a single member and collided confusingly with `run` (execute); removing it leaves `run` = execute,
+  inspection verbs (`trace`/`inspect`/`verify-run`/`scaffold`) top-level, and `prune` for cleanup.
 
 ### Fixed
 

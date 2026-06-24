@@ -10,7 +10,7 @@ import { parseMessage, type AgentEvent, type DecisionRequest } from "../agent/se
  * convention used by the VM work dir (`lima.ts` `VM_WORK_HOST`). FLAT (shared across all projects on the
  * machine): ephemeral `local_*` run dirs carry a unique hrtime id so they never path-collide; pinned
  * `sess-*` dirs are deterministic, so a cross-project collision is guarded in `execute.ts` (the writer
- * errors rather than overwriting another project's session) and `runs gc` never prunes them.
+ * errors rather than overwriting another project's session) and `prune` never prunes them.
  */
 export function defaultRunsHome(): string {
   return join(homedir(), ".cowork-harness", "runs");

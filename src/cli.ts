@@ -97,7 +97,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
       [--skip-privacy|--skip-staleness]  skip one check
       [--allow <regex>]... [--allow-domain/-email <regex>]... [--allow-file <path>]... [--output-format json]
   rehash <dir/>                migrate cassette fingerprints to current version when content is provably unchanged (requires contentSig from v3+)
-  runs gc [--keep-last <n>]    prune accumulated run dirs, keeping N most recent per scenario (default: 5)
+  prune [--keep-last <n>]      prune accumulated run dirs, keeping N most recent per scenario (default: 5)
 
 ── CI lint + assertion reference ──────────────────────────────────────────────
   lint <scenario.yaml | dir/>…  check scenarios for silent false-greens (bundled scenario.py; needs python3 — PyYAML is bundled)
@@ -290,7 +290,7 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
   "verify-cassettes":
     "usage: verify-cassettes <file|dir> [--skip-privacy|--skip-staleness] [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-file <path>]... [--output-format json]",
   trace:
-    "usage: trace <run-id | run-dir | events.jsonl> [--view tools|questions|dispatches] [--output-format json]\n       --view tools       tool call / result rows\n       --view questions   gate lifecycle (question → answer → delivered)\n       --view dispatches  sub-agent dispatch tree + dispatch_count_max\n       (default: all views)",
+    "usage: trace <run-id | run-dir | events.jsonl> [--view tools|questions|dispatches] [--output-format json]\n       --view tools       tool call / result rows\n       --view questions   gate lifecycle (question → answer → delivered)\n       --view dispatches  sub-agent dispatch tree + dispatch_count_max\n       (default: all views)\n       (for what the run PRODUCED — artifacts — use `inspect`)",
   assertions: "usage: assertions --list [--output-format json]",
   scaffold:
     "usage: scaffold <run-id | run-dir> [--out <file.yaml>]\n       Turns a kept run into a starter scenario YAML (gates→answers, artifacts→file_exists).\n       Positional <run-id | run-dir> is the canonical form.",
@@ -302,11 +302,11 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
   "verify-run":
     "usage: verify-run <run-dir> <scenario.yaml> [--output-format json]   (re-evaluate a scenario's assert: against a kept run dir; no live agent)",
   inspect:
-    "usage: inspect <run-id | run-dir> [--output-format json]   (show what a run produced: artifacts + a shallow preview of each JSON artifact's fields)",
+    "usage: inspect <run-id | run-dir> [--output-format json]   (show what a run PRODUCED: artifacts + a shallow preview of each JSON artifact's fields; for what HAPPENED — tools/decisions — use `trace`)",
   doctor: "usage: doctor [--tier protocol|container|microvm|hostloop|cowork] [--output-format json]   (read-only prerequisite check)",
   rehash:
     "usage: rehash <dir/> [--dry-run] [--output-format text|json]   (migrate cassettes across format bumps using contentSig verification; no re-record needed)",
-  runs: "usage: runs gc [--keep-last <n>] [--dry-run] [<runs-dir>]   (prune accumulated run dirs; default --keep-last 5)",
+  prune: "usage: prune [--keep-last <n>] [--dry-run] [<runs-dir>]   (prune accumulated run dirs; default --keep-last 5)",
 };
 
 // Known subcommands — used by the global value-flag parsers (`--dotenv`, `--run-dir`) to reject a command
@@ -333,7 +333,7 @@ const COMMANDS = [
   "lint",
   "doctor",
   "rehash",
-  "runs",
+  "prune",
 ];
 
 async function main() {
@@ -465,12 +465,8 @@ async function main() {
       return cmdGates(rest);
     case "answer":
       return cmdAnswer(rest);
-    case "runs": {
-      const sub = rest[0];
-      if (sub === "gc") return cmdRunsGc(rest.slice(1));
-      log(`runs: unknown subcommand "${sub ?? ""}" — available: gc`);
-      return process.exit(2);
-    }
+    case "prune":
+      return cmdRunsGc(rest); // top-level: no `gc` token to strip, so pass `rest` whole (NOT rest.slice(1))
     default:
       log(`unknown command: ${cmd}\n`);
       printHelp();
@@ -718,7 +714,7 @@ function resolveExternal(command: string, flags: CommonFlags): DecisionChannel |
   return flags.deciderCmd != null ? spawnChannel(flags.deciderCmd) : undefined;
 }
 
-/** The single error exit used by commands + the top-level catch. Every category → exit 2. */
+/** The single error exit used by commands + the top-level catch. boundary → exit 3, every other category → exit 2. */
 function fail(command: string, category: ErrCategory, message: string, hint: string | undefined, json: boolean): never {
   if (json) out(jsonError(command, category, message, hint));
   else {

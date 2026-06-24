@@ -22,7 +22,7 @@ import {
   probeImageOmitted,
   probeMicrovmOmitted,
   detectCapabilityUse,
-  capabilityPreflightWarning,
+  capabilityPreflightDecision,
   CAPABILITY_FAMILIES,
 } from "../runtime/image-capabilities.js";
 import { instanceName } from "../runtime/lima.js";
@@ -331,9 +331,11 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   const promptGateOn = readGateFlag(baseline, "1978029737", "coworkWebFetchPrompt");
   const provenanceRef: { current?: WebFetchProvenance } = {};
 
-  // Pre-flight: if the skill DECLARES required capabilities and the image omits one, warn BEFORE the paid
-  // run — the post-run guard would otherwise only surface it after the agent finishes. The image probe is
-  // digest-cached, so this shares its result with the post-run capability check (no second container spawn).
+  // Pre-flight: if the skill DECLARES required capabilities and the image provably omits one, FAIL FAST here
+  // — before any paid agent run — instead of burning ~12 min to reach a verdict the post-run guard already
+  // knows. The author can opt out with `allow_missing_capability: true` (the fallback is equivalent), which
+  // downgrades to a notice. The image probe is digest-cached, so it's shared with the post-run check (no
+  // second container spawn), and it spawns a throwaway `--network none` container with no model — zero tokens.
   const declaredCaps = scenario.requires_capabilities ?? [];
   if (
     declaredCaps.length &&
@@ -348,8 +350,10 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
             image: process.env.COWORK_AGENT_IMAGE ?? "cowork-agent-base:2",
             tier: effectiveFidelity,
           });
-    const preflight = capabilityPreflightWarning(declaredCaps, omitted);
-    if (preflight) warn(`::warning:: [capability] (pre-flight) ${preflight}\n`);
+    const allowMissing = scenario.assert.some((a) => a.allow_missing_capability === true);
+    const { abort, message } = capabilityPreflightDecision(declaredCaps, omitted, allowMissing);
+    if (abort) throw new BoundaryError(`[capability] ${message}`);
+    if (message) warn(`::notice:: [capability] (pre-flight) ${message} (allow_missing_capability asserted — proceeding)\n`);
   }
   try {
     // acquire the egress sidecar / host proxy INSIDE the protected try so a throw in resource

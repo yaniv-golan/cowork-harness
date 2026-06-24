@@ -261,9 +261,12 @@ fires even when the skill's fallback masks the gap. The check is computed at run
 `verify-run`/`replay` honor the recorded outcome — a clean full-parity run records nothing and never
 false-fails later. Opt out with `allow_missing_capability: true` when the fallback is genuinely equivalent.
 
-When `requires_capabilities` is declared, the harness also probes the image **before** driving and warns up
-front if a declared family is omitted — so you learn to rebuild full parity
-(`--build-arg COWORK_FULL_PARITY=1`) before paying for the run, not only on the post-run hard-fail.
+When `requires_capabilities` is declared, the harness probes the image **before** driving and, if a declared
+family is omitted, **fails fast — it aborts the run (exit 3) before spending a single token**, instead of
+running ~12 min to a post-run hard-fail that's already known. Rebuild full parity
+(`--build-arg COWORK_FULL_PARITY=1`) and point `COWORK_AGENT_IMAGE` at it, or assert
+`allow_missing_capability: true` (which downgrades the abort to a notice and proceeds, same as it opts out of
+the post-run check).
 
 ```yaml
 requires_capabilities: [office_convert, pdf_tables]   # fail unless the tier provides (and can verify) these

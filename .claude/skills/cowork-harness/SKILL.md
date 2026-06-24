@@ -44,8 +44,8 @@ Before the first command, confirm the CLI is reachable and **fail loud** (never 
 - **Multi-turn debugging** → `cowork-harness chat` (interactive; gates answered at the TTY, **not** an
   asserted test — see *Debugging with `chat`* in `docs/scenario.md`).
 
-Full command set: `skill · run · chat · record · replay · verify-cassettes · rehash · runs gc · lint ·
-verify-run · trace · decide · gates · answer · scaffold · assertions --list · sync · list ·
+Full command set: `skill · run · chat · record · replay · verify-cassettes · rehash · prune · lint ·
+verify-run · trace · inspect · decide · gates · answer · scaffold · assertions --list · sync · list ·
 boundary-check · vm <init|status|delete|prune> · doctor`. Always check `cowork-harness <cmd> --help`.
 
 ## 2. Two files: session vs scenario

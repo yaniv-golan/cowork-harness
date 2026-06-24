@@ -301,8 +301,9 @@ export class FirstOptionDecider implements Decider {
 /** Pluggable model-completion transport (so LlmDecider is unit-testable without a real model call). */
 export type Complete = (prompt: string, model: string) => Promise<string>;
 
-/** Strict label match: exact → case-insensitive. NULL on no match (caller fails loud — we deliberately
- *  do NOT fall back to option 1 like `coerceLabel`, which would silently mis-answer).
+/** Strict label match: exact → case-insensitive → near-miss (surrounding quotes / trailing sentence
+ *  punctuation trimmed). NULL on no match (caller fails loud — we deliberately do NOT fall back to option 1
+ *  like `coerceLabel`, which would silently mis-answer).
  *  When `fuzzy` is true, also accept a substring match (ONLY when exactly one label appears in the reply
  *  to avoid ambiguity). Callers that consume human or LLM output should leave `fuzzy` at its default
  *  (false) to require an exact answer — the substring heuristic is opt-in only. */
@@ -310,6 +311,18 @@ export function matchLabel(raw: string, labels: string[], fuzzy = false): string
   const r = raw.trim();
   const exact = labels.find((l) => l === r) ?? labels.find((l) => l.toLowerCase() === r.toLowerCase());
   if (exact) return exact;
+  // Near-miss tier: a model (or human) often replies `Confirmed.` or `"Confirmed"` for the label
+  // `Confirmed`, especially on binary confirm gates. Strip surrounding quotes + trailing `.!,;`/whitespace
+  // and re-run the exact/ci match. NEVER strip `:` — it is the `OTHER:` free-text sentinel callers rely on,
+  // and the trim must not let a near-miss swallow it. Strict (not fuzzy), so it can't mis-bind a substring.
+  const norm = r
+    .replace(/^["'`]+/, "")
+    .replace(/["'`]+$/, "")
+    .replace(/[.!,;\s]+$/, "");
+  if (norm && norm !== r) {
+    const near = labels.find((l) => l === norm) ?? labels.find((l) => l.toLowerCase() === norm.toLowerCase());
+    if (near) return near;
+  }
   if (!fuzzy) return null;
   // fuzzy=true: the substring tier fires ONLY when EXACTLY ONE label is contained in the reply. With
   // labels ["No","Notation"] and reply "Notation", both the apex match and the contains-check used to
@@ -398,23 +411,11 @@ export class LlmDecider implements Decider {
         continue;
       }
       const raw = await this.complete(this.prompt(text, q.options, ctx), this.model);
-      // Match a LABEL first (matchLabel is fuzzy=false): keeps the common path unchanged and means a real
-      // option literally named "OTHER: …" is selected as a label, not hijacked by the free-text branch.
-      let pick = matchLabel(raw, labels);
-      // Tolerate a near-miss label wrapped in quotes or trailing sentence punctuation — e.g. a model that
-      // replies `Confirmed.` or `"Confirmed"` for the label `Confirmed` (common on binary confirm gates).
-      // Strip surrounding quotes + trailing `.!,;`/whitespace and retry — but NEVER strip `:` (the `OTHER:`
-      // sentinel below) and NEVER enable fuzzy substring matching (matchLabel's documented No/Notation
-      // ambiguity). Only fires after an exact/case-insensitive miss, so it can't change a currently-passing
-      // match.
-      if (!pick) {
-        const trimmed = raw
-          .trim()
-          .replace(/^["'`]+/, "")
-          .replace(/["'`]+$/, "")
-          .replace(/[.!,;\s]+$/, "");
-        if (trimmed) pick = matchLabel(trimmed, labels);
-      }
+      // Match a LABEL first (matchLabel is fuzzy=false, but tolerates a quoted / trailing-punctuation
+      // near-miss): keeps the common path unchanged and means a real option literally named "OTHER: …" is
+      // selected as a label (exact match wins; the trim never strips `:`), not hijacked by the free-text
+      // branch below.
+      const pick = matchLabel(raw, labels);
       if (pick) {
         process.stderr.write(`[llm-decider] "${text}" → "${pick}"${this.intent ? ` (intent: ${this.intent})` : ""}\n`);
         answers[text] = pick;

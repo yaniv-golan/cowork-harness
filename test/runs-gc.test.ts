@@ -15,24 +15,24 @@ function makeRunDir(runsRoot: string, scenario: string, runId: string): string {
   return dir;
 }
 
-describe.skipIf(!can)("runs gc", () => {
+describe.skipIf(!can)("prune", () => {
   it("usage: --keep-last 0 exits 2 with a clear message", () => {
-    const r = spawnSync("node", [CLI, "runs", "gc", "--keep-last", "0"], { encoding: "utf8" });
+    const r = spawnSync("node", [CLI, "prune", "--keep-last", "0"], { encoding: "utf8" });
     expect(r.status).toBe(2);
     expect(r.stderr).toMatch(/--keep-last must be a positive integer/);
   });
 
-  it("runs gc on a non-existent directory exits 0", () => {
-    const r = spawnSync("node", [CLI, "runs", "gc", "/tmp/does-not-exist-cwh-test"], { encoding: "utf8" });
+  it("prune on a non-existent directory exits 0", () => {
+    const r = spawnSync("node", [CLI, "prune", "/tmp/does-not-exist-cwh-test"], { encoding: "utf8" });
     expect(r.status).toBe(0);
   });
 
-  it("runs gc --dry-run does not delete any directories", () => {
+  it("prune --dry-run does not delete any directories", () => {
     const runsRoot = mkdtempSync(join(tmpdir(), "cwh-runs-"));
     makeRunDir(runsRoot, "my-scenario", "run-a");
     makeRunDir(runsRoot, "my-scenario", "run-b");
     makeRunDir(runsRoot, "my-scenario", "run-c");
-    const r = spawnSync("node", [CLI, "runs", "gc", "--keep-last", "1", "--dry-run", runsRoot], {
+    const r = spawnSync("node", [CLI, "prune", "--keep-last", "1", "--dry-run", runsRoot], {
       encoding: "utf8",
     });
     expect(r.status).toBe(0);
@@ -42,24 +42,24 @@ describe.skipIf(!can)("runs gc", () => {
     expect(remaining.length).toBe(3);
   });
 
-  it("runs gc --keep-last 1 leaves exactly 1 run dir per scenario", () => {
+  it("prune --keep-last 1 leaves exactly 1 run dir per scenario", () => {
     const runsRoot = mkdtempSync(join(tmpdir(), "cwh-runs-"));
     // Three run dirs; the mtime tiebreaker sorts alphabetically descending,
     // so "run-c" is "newest" and will be kept.
     makeRunDir(runsRoot, "s", "run-a");
     makeRunDir(runsRoot, "s", "run-b");
     makeRunDir(runsRoot, "s", "run-c");
-    const r = spawnSync("node", [CLI, "runs", "gc", "--keep-last", "1", runsRoot], { encoding: "utf8" });
+    const r = spawnSync("node", [CLI, "prune", "--keep-last", "1", runsRoot], { encoding: "utf8" });
     expect(r.status).toBe(0);
     const remaining = readdirSync(join(runsRoot, "s"));
     expect(remaining.length).toBe(1);
   });
 
-  it("runs gc --keep-last N ≥ count leaves all dirs intact", () => {
+  it("prune --keep-last N ≥ count leaves all dirs intact", () => {
     const runsRoot = mkdtempSync(join(tmpdir(), "cwh-runs-"));
     makeRunDir(runsRoot, "s", "run-a");
     makeRunDir(runsRoot, "s", "run-b");
-    const r = spawnSync("node", [CLI, "runs", "gc", "--keep-last", "5", runsRoot], { encoding: "utf8" });
+    const r = spawnSync("node", [CLI, "prune", "--keep-last", "5", runsRoot], { encoding: "utf8" });
     expect(r.status).toBe(0);
     expect(readdirSync(join(runsRoot, "s")).length).toBe(2);
   });
@@ -73,7 +73,7 @@ describe.skipIf(!can)("runs gc", () => {
     makeRunDir(runsRoot, "s", "local_a");
     makeRunDir(runsRoot, "s", "local_b");
     makeRunDir(runsRoot, "s", "local_c"); // newest ephemeral by name-desc tiebreaker — must survive
-    const r = spawnSync("node", [CLI, "runs", "gc", "--keep-last", "1", runsRoot], { encoding: "utf8" });
+    const r = spawnSync("node", [CLI, "prune", "--keep-last", "1", runsRoot], { encoding: "utf8" });
     expect(r.status).toBe(0);
     const remaining = readdirSync(join(runsRoot, "s")).sort();
     expect(remaining).toContain("sess-ci"); // pinned retained
@@ -90,7 +90,7 @@ describe.skipIf(!can)("runs gc", () => {
     const runsRoot = mkdtempSync(join(tmpdir(), "cwh-runs-"));
     makeRunDir(runsRoot, "s", "local_aaa"); // completed (result.json); sorts LAST by name-desc
     mkdirSync(join(runsRoot, "s", "local_zzz"), { recursive: true }); // newer EMPTY scaffold; sorts FIRST by name-desc
-    const r = spawnSync("node", [CLI, "runs", "gc", "--keep-last", "1", runsRoot], { encoding: "utf8" });
+    const r = spawnSync("node", [CLI, "prune", "--keep-last", "1", runsRoot], { encoding: "utf8" });
     expect(r.status).toBe(0);
     expect(readdirSync(join(runsRoot, "s"))).toEqual(["local_aaa"]); // completed survived; empty pruned; count == keep-last
   });
@@ -102,7 +102,7 @@ describe.skipIf(!can)("runs gc", () => {
     mkdirSync(threw, { recursive: true });
     writeFileSync(join(threw, "events.jsonl"), '{"type":"init"}\n'); // started; no result.json
     mkdirSync(join(runsRoot, "s", "local_zzz"), { recursive: true }); // empty scaffold
-    const r = spawnSync("node", [CLI, "runs", "gc", "--keep-last", "1", runsRoot], { encoding: "utf8" });
+    const r = spawnSync("node", [CLI, "prune", "--keep-last", "1", runsRoot], { encoding: "utf8" });
     expect(r.status).toBe(0);
     expect(readdirSync(join(runsRoot, "s"))).toEqual(["local_aaa"]);
   });

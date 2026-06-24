@@ -240,11 +240,25 @@ export function capabilityPreflightWarning(declared: string[], omitted: string[]
   if (!declared.length || !omitted) return null;
   const missing = declared.filter((c) => omitted.includes(c));
   if (!missing.length) return null;
+  // State the gap + remedy only; the caller frames the consequence (abort pre-run, or a notice when
+  // allow_missing_capability is asserted) — so this string stays accurate in both contexts.
   return (
     `skill declares requires_capabilities [${missing.join(", ")}] but the agent image omits them — ` +
-    `rebuild full parity (--build-arg COWORK_FULL_PARITY=1) and point COWORK_AGENT_IMAGE at it, ` +
-    `or this run will hard-fail after the agent finishes.`
+    `rebuild full parity (--build-arg COWORK_FULL_PARITY=1) and point COWORK_AGENT_IMAGE at it.`
   );
+}
+
+/** The pre-run capability decision: a DEFINITE gap (a declared family the image omits) **fails fast** before
+ *  the paid run, unless the scenario opted out with `allow_missing_capability: true` (then it's a notice and
+ *  the run proceeds — the author has declared the fallback equivalent). No gap / indefinite probe → no
+ *  action. Keeping this a pure function makes the fail-fast-by-default policy unit-testable. */
+export function capabilityPreflightDecision(
+  declared: string[],
+  omitted: string[] | null,
+  allowMissing: boolean,
+): { abort: boolean; message: string | null } {
+  const message = capabilityPreflightWarning(declared, omitted);
+  return { abort: message !== null && !allowMissing, message };
 }
 
 export function detectCapabilityUse(eventsFile: string, omitted: CapabilityFamily[], workRoot?: string): CapabilityFamily[] {
