@@ -4,6 +4,24 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The project uses
 [Semantic Versioning](https://semver.org/); pre-1.0 minor versions may include breaking changes.
 
+## [Unreleased]
+
+### Fixed
+
+- **Session-protocol over-cap test no longer flakes.** The over-cap control-out test read
+  `control-out.jsonl` synchronously, but the stream opens it asynchronously (`createWriteStream`, flags
+  `"a"`), so under load the file may not exist yet at the read — a flaky ENOENT. The over-cap frame is
+  rejected before any write, so a missing file means nothing was written; the test now treats absence as
+  empty.
+
+### Docs
+
+- **Documented the LLM-decider free-text path.** `--decider-llm` supplies free text via `OTHER: <value>`
+  on an options-bearing gate; a bare out-of-set answer (no matching label, no `OTHER:`) fails loud
+  (`UnansweredError` → exit 2), never stalling or guessing, and open-ended (no-option) gates need no
+  prefix. Noted in the decider section of `fidelity-and-answers.md` and cross-referenced from the lone
+  `OTHER:` mention in `SKILL.md` so the two don't drift.
+
 ## [0.12.0] — 2026-06-24
 
 ### Added
