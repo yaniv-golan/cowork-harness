@@ -48,6 +48,13 @@ All notable changes to this project are documented here. The format is based on
 - **Baseline-bump-stable staleness tests.** `staleness-roundtrip`, `manifest`, and `agent-scope` round-trip
   tests hardcoded the baseline version (`1.14271.0`), so adding a new latest baseline re-staled them; they now
   source it from `loadBaseline("latest")`, so a parity bump no longer breaks the green round-trips.
+- **`example-pdf-skill` asserts the workspace deliverable correctly.** The scenario connects a folder, so
+  `{{workspaceFolder}} = mnt/project` and the model writes the deliverable into the folder
+  (`mnt/project/outputs/actions.md`), not `mnt/outputs` — but the assert was `file_exists: outputs/actions.md`
+  (anchored at `mnt/`), so it failed. Switched to `user_visible_artifact: project/outputs/actions.md` (spans
+  the user-visible roots). A pre-existing scenario bug (fails identically on the old prompt), not a parity
+  regression; the `{{workspaceFolder}}` resolution is faithful to the Desktop builder `y8r`. Docs + skill now
+  teach `user_visible_artifact` vs `file_exists` for folder-connected deliverables.
 
 ### Docs
 

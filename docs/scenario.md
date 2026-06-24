@@ -199,6 +199,13 @@ without actually running the agent. For **content correctness**, match the asser
   (`assert_artifact_json(path, lambda d: …)`, a full Python predicate over the parsed object) only when the
   check is too complex for a dotted path + single operator. Either way, prefer a structured-field assert over
   a transcript substring for anything the skill writes to an artifact.
+- a skill whose output is a **written file** (a report, a deliverable on disk) → `user_visible_artifact: <path>`,
+  **not** `file_exists`, for the user-facing deliverable. When the session connects a folder, the deliverable
+  lands in `mnt/<folder>` (that folder is `{{workspaceFolder}}`), **not** `mnt/outputs` — so a model told to
+  write "outputs/foo" writes `mnt/<folder>/outputs/foo`. `user_visible_artifact` spans both visible roots
+  (`outputs/` + each connected folder), while `file_exists` only checks `mnt/<path>` and silently misses a
+  folder-relative deliverable. Reserve `file_exists` for a known fixed sandbox path (e.g. a folder-less session
+  where `{{workspaceFolder}} = mnt/outputs`).
 
 Each list item under `assert:` is one assertion. An item with **multiple keys is an AND** — it passes only
 if *every* key passes (don't rely on the first; keep one concern per item unless you mean conjunction).
