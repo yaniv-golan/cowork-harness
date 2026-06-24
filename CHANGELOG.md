@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.13.0] — 2026-06-25
+
 ### Added
 
 - **`inspect <run-id | run-dir>` — see what a run produced.** Lists the run's artifacts and prints a shallow
