@@ -11,6 +11,9 @@
 //   3. floor === tracks:       SKILL.md bootstrap floor `@>=X.Y.Z` === `tracks-harness:` version.
 //   4. floor <= package:       the harness version the skill demands must be one this repo
 //                              can publish (else the skill ships ahead of npm).
+//   5. README floor === floor: every `cowork-harness@>=X.Y.Z` in README.md matches the SKILL.md floor
+//                              (README is not version-controlled by the package; it drifts silently otherwise).
+//   6. ref stamps === tracks:  each `references/*.md` "Tracks `cowork-harness X.Y.Z`" matches tracks-harness.
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -72,7 +75,30 @@ export function checkVersions(): { ok: boolean; errors: string[]; values: Record
     errors.push(`bootstrap floor "@>=${floor}" is ahead of package.json "${pkg}" — skill would lead npm`);
   }
 
-  return { ok: errors.length === 0, errors, values };
+  // 5. README bootstrap floor(s) must match the SKILL.md floor (README is not under any other version check,
+  //    so it drifts silently — this is the guard that would have caught the @>=0.9.0-while-package-0.12.0 gap).
+  const readme = r("README.md");
+  const readmeFloors = [...readme.matchAll(/cowork-harness@>=(\d+\.\d+\.\d+)/g)].map((m) => m[1]);
+  if (floor) {
+    if (readmeFloors.length === 0) errors.push(`README.md has no "cowork-harness@>=X.Y.Z" floor to verify against SKILL.md "@>=${floor}"`);
+    for (const f of readmeFloors) if (f !== floor) errors.push(`README.md floor "@>=${f}" != SKILL.md floor "@>=${floor}"`);
+  }
+
+  // 6. Each reference doc's "Tracks `cowork-harness X.Y.Z`" stamp must match tracks-harness.
+  const refFiles = [
+    ".claude/skills/cowork-harness/references/ci-recipe.md",
+    ".claude/skills/cowork-harness/references/scenario-schema.md",
+    ".claude/skills/cowork-harness/references/fidelity-and-answers.md",
+  ];
+  if (tracks) {
+    for (const f of refFiles) {
+      const stamp = r(f).match(/Tracks\s+`cowork-harness\s+(\d+\.\d+\.\d+)`/)?.[1];
+      if (!stamp) errors.push(`${f} has no "Tracks \`cowork-harness X.Y.Z\`" stamp`);
+      else if (stamp !== tracks) errors.push(`${f} stamp "${stamp}" != tracks-harness "${tracks}"`);
+    }
+  }
+
+  return { ok: errors.length === 0, errors, values: { ...values, readmeFloors: readmeFloors.join(",") } };
 }
 
 function main(): void {

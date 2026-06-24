@@ -26,7 +26,7 @@ Use a live `run` for filesystem/egress assertions; use `replay` for the token-fr
   "scenario": { /* Scenario object — same schema as the .yaml */ },
   "events": [ /* JSON lines from events.jsonl (child→driver stdout) */ ],
   "controlOut": [ /* JSON lines from control-out.jsonl (driver→child control_responses) */ ],
-  "userVisibleRoots": ["outputs", ".projects"], // visible roots = outputs + each connected folder's mount name
+  "userVisibleRoots": ["outputs", "myproject"], // visible roots = outputs + each connected folder's mount name (its basename; `.projects` is the pre-1.14271.0 legacy fallback)
   "artifacts": [                         // snapshot of outputs/ + connected folders (optional)
     { "path": "outputs/x.json", "bytes": 24, "sha256": "…", "body": "{…}" }, // body inlined ≤ 64 KiB
     { "path": "outputs/big.bin", "bytes": 9e6, "sha256": "…", "truncated": true } // oversized → hash-only

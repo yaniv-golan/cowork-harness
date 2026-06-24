@@ -35,6 +35,7 @@
       ]
     },
     "extended_thinking": {
+      "description": "Inert / no-op — not a real Cowork toggle. Use max_thinking_tokens instead.",
       "type": "boolean"
     },
     "permission_mode": {

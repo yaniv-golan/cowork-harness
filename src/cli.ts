@@ -99,7 +99,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
   runs gc [--keep-last <n>]    prune accumulated run dirs, keeping N most recent per scenario (default: 5)
 
 ── CI lint + assertion reference ──────────────────────────────────────────────
-  lint <scenario.yaml>…        check scenarios for silent false-greens (bundled scenario.py; needs python3 — PyYAML is bundled)
+  lint <scenario.yaml | dir/>…  check scenarios for silent false-greens (bundled scenario.py; needs python3 — PyYAML is bundled)
       [--strict]               escalate cassette-staleness warning to failure
       NOTE: exit 127 means python3 itself is missing — treat any non-zero exit as a CI failure, do not swallow it.
   assertions --list            list available scenario assertions (generated from Zod schema)
@@ -139,7 +139,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
   --version                    print version        --help, -h    print this help
 
   Env-var defaults (CLI flags take precedence):
-    COWORK_HARNESS_FIDELITY        default --fidelity tier (skill/run/chat)
+    COWORK_HARNESS_FIDELITY        default --fidelity tier (skill/chat; run takes fidelity from the scenario)
     COWORK_HARNESS_OUTPUT_FORMAT   default --output-format (text|json)
     COWORK_HARNESS_MODEL           default --model
     NO_COLOR=1                     disable ANSI output`;

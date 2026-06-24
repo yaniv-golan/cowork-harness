@@ -5,7 +5,8 @@
 
 A test harness that drives the **real** staged Claude Code agent — bind-mounted from the user's Claude
 Desktop install at run time (nothing Anthropic-owned is bundled or distributed) — over the Agent SDK
-**stream-json control protocol**, inside sandboxes of five fidelity tiers, to test Claude Code **skills**
+**stream-json control protocol**, inside sandboxes of three isolation tiers + two loop-mode overlays (five
+`fidelity:` values), to test Claude Code **skills**
 the way Cowork runs them. It is a *fidelity fixture*, not the Desktop runtime.
 
 **Architecture — route a change to the right seam:** `AgentSession` (the protocol, `src/agent/session.ts`)
@@ -25,8 +26,8 @@ protocol layer or run-loop bookkeeping in the CLI.
 - `cowork-harness sync` is **local-only** (needs Desktop + `app.asar`; not on CI). The committed
   `baselines/*.json` are CI's source of truth — never hand-edit release facts into source; they come from
   `sync` (see `docs/maintenance.md`).
-- **`cowork-harness lint` exit 127 is a hard failure** (python3 or PyYAML not installed). CI scripts MUST
-  NOT swallow this exit code — treat it as a missing gate, not a vacuous pass.
+- **`cowork-harness lint` exit 127 is a hard failure** (python3 not installed — PyYAML is bundled, so it's
+  never the cause). CI scripts MUST NOT swallow this exit code — treat it as a missing gate, not a vacuous pass.
 
 ## Invariants — do NOT break (each one cost a real bug)
 - **AskUserQuestion answer shape.** `serializeDecision` (`src/agent/session.ts`) MUST emit

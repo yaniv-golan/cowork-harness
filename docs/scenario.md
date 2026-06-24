@@ -35,6 +35,9 @@ skills: [report-gen]                     # OPTIONAL — scope cassette-staleness
                                          # (each is a `skills/<name>` dir under a mounted plugin-root);
                                          # fail-closed to whole-tree on an unknown name. Omit = whole tree.
 
+requires_capabilities: [pdf]             # OPTIONAL — capability families the skill needs (a scenario FIELD,
+                                         # not an assert key); a tier missing one fails unless allow_missing_capability
+
 assert:                                  # pass/fail checks (see below)
   - result: success
   - file_exists: outputs/actions.md
@@ -58,7 +61,8 @@ assert:                                  # pass/fail checks (see below)
 | `cowork` | auto-picks `hostloop` vs `container` the way Cowork itself does (gate `1143815894`, decoded from the synced baseline) | "do what real Cowork does for this release" |
 
 `hostloop`/`cowork` are the production-faithful path (see [DESIGN.md](../DESIGN.md)); `container` is the
-practical default. Boundary assertions are enforced at `container`, `microvm`, and `hostloop`.
+practical default. Boundary assertions are enforced at `container`, `microvm`, `hostloop`, and `cowork`
+(`cowork` auto-resolves to a sandboxed tier — `hostloop` or `container` — never `protocol`).
 
 ## Scripted answers
 
@@ -295,7 +299,7 @@ dependency-free and side-effect-free.)
 > deterministically (ids, counts, enums). This pairs with record-time redaction: redaction rewrites the
 > very strings an `equals` would pin, so `equals` on a redacted field would break on re-record anyway.
 
-> **Boundary assertions** (`egress_*`, `expect_denied`) require a sandboxed fidelity — `container`, `microvm`, or `hostloop` (all share the container sandbox + egress proxy). Only `protocol` is rejected, to avoid a false pass — see [boundary.md](./boundary.md).
+> **Boundary assertions** (`egress_*`, `expect_denied`) require a sandboxed fidelity — `container`, `microvm`, `hostloop`, or `cowork` (all share the container sandbox + egress proxy; `cowork` resolves to one of them). Only `protocol` is rejected, to avoid a false pass — see [boundary.md](./boundary.md).
 
 ### Which assertions survive `replay` (CI placement)
 
@@ -306,7 +310,8 @@ and re-evaluates the **content** assertions. The authoritative list of content k
 
 **Evaluated on replay (content assertions):**
 `transcript_*` (incl. `transcript_matches`), `tool_*`, `subagent_*`, `dispatch_count_max`,
-`result`.
+`result`, and the verdict modifiers `allow_permissive_auto_allow` / `allow_missing_capability` /
+`allow_l0_plugin_divergence` / `allow_stall` (kept on replay as no-op passes).
 
 **`question_asked`, `questions_count_max`, and `gate_answers_delivered`** are also content
 assertions, but they require the cassette to carry `controlOut` (full-fidelity replay). When

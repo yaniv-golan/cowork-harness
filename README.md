@@ -24,12 +24,17 @@ Scriptable, CI-friendly test harness that reproduces **Claude Cowork's observabl
 
 > **What this is and isn't.** This is an *emulator of the contract*, not the Desktop runtime. Cowork's real session control plane lives behind the Desktop renderer's IPC (per-build UUID + `senderFrame` origin checks) and the app ships with remote debugging disabled (verified: `--remote-debugging-port` opens no listener; Electron `EnableNodeCliInspectArguments` fuse is OFF). So you **cannot** drive the real Apple Virtualization.framework microVM from a script. What you *can* faithfully reproduce is everything that actually changes how a **skill** behaves: the same agent binary in **cowork mode** (`CLAUDE_CODE_IS_COWORK=1` — there is no `--cowork` flag), the same mount layout, the same egress allowlist, and the same permission/question protocol. That's what this project does.
 
-**Zero-friction preview — no token, no Docker.** A committed cassette replays on a fresh clone:
+**Zero-friction preview — no token, no Docker.** A committed cassette replays from a fresh clone (the example
+cassette ships in the repo; just Node ≥ 20):
 
 ```bash
-npm install -g cowork-harness
-cowork-harness replay examples/replays/example-pdf-skill.cassette.json
+git clone https://github.com/yaniv-golan/cowork-harness && cd cowork-harness
+npm ci && npm run build
+node dist/cli.js replay examples/replays/example-pdf-skill.cassette.json
 ```
+
+(Installing globally — `npm install -g cowork-harness` — gives you the `cowork-harness` CLI for your own
+scenarios and cassettes; the bundled example above is replayed from a checkout.)
 
 Full setup → [Quick start](#quick-start).
 
@@ -95,7 +100,7 @@ Skill testing is the headline use, but the tool is a general harness over the Co
 | `scaffold <run-id>` | Turn a kept run into a starter scenario YAML (gates→answers, artifacts→`file_exists`); `--from-run <id>` is a deprecated alias for the positional | authoring a scenario from a real run instead of guessing |
 | `python3 …/scenario.py scaffold --name <name> --skill <dir>` | Generate a starter scenario skeleton from scratch (the `…` is `.claude/skills/cowork-harness/scripts/`) | starting a new scenario when you have no prior run |
 | `lint <scenario.yaml \| dir/>…` | Check scenarios for silent false-greens — assertions placed on the wrong CI lane, mixed content/live keys, missing `controlOut`-required keys (files or a directory of `*.yaml`/`*.yml`; bundled `scenario.py`; needs python3 — PyYAML is bundled) | before committing a new scenario or after changing assertions |
-| `assertions --list` | List the available scenario assertions (generated from the schema); `assert` is a deprecated alias | "what can I assert?" without grepping the source |
+| `assertions --list` | List the available scenario assertions (generated from the schema) | "what can I assert?" without grepping the source |
 | `decide` | Validate a decider against a sample question in ~2 s (no run) | sanity-check a `--decider-*` / `--answer` wiring before a long run |
 | `gates` / `answer` | Stream / answer in-band gates for `--decider-dir` | a **driving agent** answers live questions via a Monitor |
 | `boundary-check [baseline] [--session <file>]` | Prove the sandbox enforces Cowork's limitations; `--session` folds a session's `egress.extra_allow` into the probe allowlist | verifying the harness's own fidelity |
@@ -202,7 +207,7 @@ This repo ships a **companion skill** (`.claude/skills/cowork-harness/`) that te
 /plugin install cowork-harness@cowork-harness
 ```
 
-The skill **self-bootstraps the CLI**: if `cowork-harness` isn't on your PATH it falls back to `npx cowork-harness@>=0.9.0` (a version floor that fails loud rather than silently fetching a too-old CLI; Node ≥ 20). Tiers above `protocol` still need Docker/Lima and a Claude Desktop agent binary — see the prerequisites below.
+The skill **self-bootstraps the CLI**: if `cowork-harness` isn't on your PATH it falls back to `npx cowork-harness@>=0.12.0` (a version floor that fails loud rather than silently fetching a too-old CLI; Node ≥ 20). Tiers above `protocol` still need Docker/Lima and a Claude Desktop agent binary — see the prerequisites below.
 
 It also follows the open [Agent Skills](https://github.com/vercel-labs/skills) spec, so it installs cross-editor (Cursor, Codex, OpenCode, …) by pointing the `npx skills` CLI at `.claude/skills/cowork-harness` in this repo. (Working *inside* this repo, the skill auto-loads as a project skill — no install needed.)
 
@@ -261,7 +266,7 @@ cowork-harness lint examples/scenarios/*.yaml
 > `serializeDecision` as a token-free O7 guard (the AskUserQuestion `{questions,answers}` answer-shape
 > invariant). Evaluated on replay: `transcript_*`, `tool_*`, `subagent_*`, `dispatch_count_max`,
 > `result`, and the verdict modifiers `allow_permissive_auto_allow` / `allow_missing_capability` /
-`allow_l0_plugin_divergence` / `allow_stall` (no-op passes, kept on replay). **`question_asked`,
+> `allow_l0_plugin_divergence` / `allow_stall` (no-op passes, kept on replay). **`question_asked`,
 > `questions_count_max`, and `gate_answers_delivered` are also evaluated —
 > but only when the cassette carries `controlOut` (full-fidelity)**; old cassettes without it get a
 > loud warning and those three keys are excluded (not vacuously passed). **Filesystem assertions
@@ -293,7 +298,7 @@ Configuration splits the way Cowork itself splits — *what you set up before th
 # scenarios/pdf.yaml   ← the filename is the test's identity (name: is an optional override)
 baseline: latest                       # platform baseline (auto-synced from Desktop)
 session: ../sessions/default.yaml     # pre-prompt setup, resolved relative to THIS file
-fidelity: container                   # protocol | container | microvm
+fidelity: container                   # protocol | container | microvm | hostloop | cowork
 
 prompt: |
   Summarize report.pdf and write the action items to outputs/actions.md

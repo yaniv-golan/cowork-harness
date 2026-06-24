@@ -48,7 +48,7 @@ export const SessionConfig = z.strictObject({
   // #33: a positive integer (or a per-model map of them) — reject 0 / negative, which would
   // contradict the "never 0" budget invariant if it reached the CLI flag / env.
   max_thinking_tokens: z.union([z.number().int().positive(), z.record(z.string(), z.number().int().positive())]).optional(),
-  extended_thinking: z.boolean().optional(), // DEPRECATED + inert: not a real Cowork toggle — use max_thinking_tokens.
+  extended_thinking: z.boolean().optional().describe("Inert / no-op — not a real Cowork toggle. Use max_thinking_tokens instead."), // inert: not a real Cowork toggle — use max_thinking_tokens.
   permission_mode: z.enum(["default", "acceptEdits", "plan", "bypassPermissions"]).default("default"), // setPermissionMode
   // cowork = pre-approve built-ins (like real Cowork's allowedTools) + auto-allow unscripted
   // tools with a finding; strict = deny unmatched (for adversarial tests).
