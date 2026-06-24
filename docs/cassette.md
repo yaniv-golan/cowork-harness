@@ -350,6 +350,37 @@ to parse is a **failure**, never a silent skip. Zero scenarios discovered → lo
 also **refuses to freeze a failing live run** into a cassette (`--allow-failing` overrides) — a committed
 red cassette is a latent false-signal.
 
+### Parallel re-records (`--concurrency`)
+
+A fleet re-record is sequential by default (one ~7–8 min live run at a time). `--concurrency <N>` records a
+dir batch (or `--rerecord-stale`) **N at a time**:
+
+```bash
+cowork-harness record cassettes/ --rerecord-stale --concurrency 3
+```
+
+This is **safe**: every run is fully isolated — its own per-run Docker networks + egress proxy and its own
+session run dir, reaped by name on exit — so parallel records never collide on resources or output (each
+`--rerecord-stale` item also targets its own committed cassette). The flag is purely a **bound**, not a
+correctness switch; the limits it guards against are:
+
+- **Docker's address pool** — each run creates two networks; too many at once exhausts the default pool. The
+  error is reframed actionably; widen the daemon address pool or `docker network prune` SIGKILL'd orphans.
+- **Model API rate limits** + host CPU/RAM — N concurrent live agents.
+- **microVM only:** a parallel batch that includes `fidelity: microvm` scenarios can occasionally race on
+  host-port reuse (a brief allocate/bind window); it's rare and retriable. The default `container`/`hostloop`
+  tiers are unaffected.
+
+Default is `1` (ordered output); `2–3` is a good fleet-refresh setting; max is `8`. A dir batch where two
+scenarios' `name:` slugify to the same cassette path is rejected up front (they'd clobber each other).
+
+> **Note on separate processes.** Running multiple *separate* `cowork-harness record <file>` invocations in
+> parallel (e.g. `xargs -P`) is also safe at steady state, but on a **cold** machine they can race to build the
+> egress-proxy image (each would run `npm run build` + `docker build`). `--concurrency` avoids this — the
+> in-process pool builds the image once (the build is synchronous, so the first worker completes it before any
+> other starts). Build the proxy image once first if you must use `xargs -P` cold (`cowork-harness doctor`
+> reports the build line).
+
 ## Privacy: cassettes are committed fixtures
 
 A cassette snapshots the transcript **and** the `outputs/` JSON bodies (names, dollar figures, share
@@ -389,6 +420,15 @@ counts) — committed PII surface. Two layers, distinct from secret-scrub (which
   - **`skills: [<name>, …]`** on a *scenario* — hash only those skills' `skills/<name>/` dirs plus the
     plugin's shared roots (everything not under `skills/<x>/`). Fail-closed: an unknown skill name falls back
     to hashing the whole tree. Omit it → whole-tree (default).
+  - **`COWORK_HARNESS_AGENT_SCOPE=skill`** (opt-in env, default off) — refines `skills:` scoping so a
+    **skill-named** sub-agent contract `agents/<name>.md` counts as skill `<name>`'s **private** input rather
+    than a fleet-wide shared root. With it set, editing `agents/cap-table.md` re-stales only the `cap-table`
+    cassettes, not the whole fleet. A `agents/<n>.md` whose `<n>` is **not** a skill name (a generic/shared
+    agent) stays shared. **Convention + caveat:** this assumes "an agent named after a skill belongs to that
+    skill" — if you genuinely share a *skill-named* agent across skills, leave this off (or rename it to a
+    non-skill name so it stays fleet-wide). The setting is stamped into the cassette fingerprint (`agentScope`),
+    so flipping it is an honest one-time "re-record under the same setting" (like `COWORK_HARNESS_GITSET`);
+    existing cassettes recorded without it are unaffected until you opt in.
   - **`hash_ignore`** — gitignore-style globs for paths that don't affect recorded behavior (`tests/`,
     `docs/`, `**/*.md`). Declare them in the *session* under `staleness.hash_ignore: [...]`, and/or in a
     plugin-local **`.cowork-hashignore`** file at the mount root (the two compose). The harness does NOT

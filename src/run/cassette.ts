@@ -20,6 +20,11 @@ import {
 } from "../agent/session.js";
 import { ABSTAIN, UnansweredError, type Decider, type OnUnanswered } from "../decide/decider.js";
 import { fileChannel, type DecisionChannel } from "../decide/external-channel.js";
+import { pMapBounded } from "../async-pool.js";
+
+/** Upper bound for `record --concurrency`. Above a handful, concurrent runs exhaust Docker's default address
+ *  pool (each run creates two networks) and press model API rate limits — both surface as actionable errors. */
+const MAX_RECORD_CONCURRENCY = 8;
 import { evaluate } from "../assert.js";
 import { makeRenderer, renderFooter, type RenderPlan } from "./renderer.js";
 import { jsonEnvelope, parseOutputFormat } from "./envelope.js";
@@ -78,6 +83,10 @@ interface Fingerprint {
   // Phase C: the boundary used for skillHash — "git" (git-tracked set, COWORK_HARNESS_GITSET=1) or "raw"
   // (legacy walk; default). A record-vs-verify mode flip makes hash comparison meaningless → re-record.
   mode?: "git" | "raw";
+  // Opt-in per-skill agent scoping was active (COWORK_HARNESS_AGENT_SCOPE=skill) when this scoped hash was
+  // computed — a skill-named `agents/<n>` was treated as skill <n>'s private input rather than a shared root.
+  // ABSENT = the default (agents/ is a fleet-wide shared root). A record-vs-verify mismatch → re-record.
+  agentScope?: "skill";
 }
 
 // Cap the per-file manifest so a huge plugin tree doesn't bloat a committed cassette; above this, omit it
@@ -319,6 +328,9 @@ export function buildFingerprint(
   // Phase C: record the boundary mode only when git (the default raw needs no marker → keeps v<5 cassettes and
   // raw-mode v5 cassettes byte-clean). A recorded "git" vs a live "raw" (or vice-versa) is a mode flip.
   if (hashResult.mode === "git") fp.mode = "git";
+  // Agent scoping marker — recorded only when active (the default OFF needs no marker → existing cassettes stay
+  // byte-clean). A record-vs-verify mismatch is detected in checkStaleness as an honest re-record (like `mode`).
+  if (hashResult.agentScoped) fp.agentScope = "skill";
   // v5: per-file manifest for exact-diff staleness reporting. Reuses the same walk/scope/ignore/OS-junk set as
   // skillHash (skillHashEntries → hashSkillDirs), so the manifest names exactly what the hash covers. Capped.
   const entries = skillHashEntries(dirs, scopeSkills, hashIgnore);
@@ -522,6 +534,12 @@ export function checkStaleness(cassette: Cassette, cassetteDir: string): string[
       // Phase C: a hash from a different boundary mode is not comparable — don't emit a misleading content diff.
       msgs.push(
         `recorded in '${recMode}' file-set mode, verifying in '${liveMode}' (COWORK_HARNESS_GITSET) — re-record under the same mode`,
+      );
+    else if ((fp.agentScope ?? "off") !== (live.agentScope ?? "off"))
+      // Agent-scoping flip (COWORK_HARNESS_AGENT_SCOPE): the scoped hash covers a different file set, so it's
+      // not comparable — re-record under the same setting (mirrors the GITSET mode flip above).
+      msgs.push(
+        `recorded with agent-scope '${fp.agentScope ?? "off"}', verifying with '${live.agentScope ?? "off"}' (COWORK_HARNESS_AGENT_SCOPE) — re-record under the same setting`,
       );
     else if (live.skillHash !== fp.skillHash) {
       debugSkillHashMismatch(cassette, cassetteDir, fp, live); // H9: surface WHICH files drifted (or a hint to enable it)
@@ -1137,7 +1155,7 @@ export async function cmdRecord(args: string[]) {
     p = parseArgs(args, {
       // --quiet/--verbose accepted for flag consistency but currently no-op in record (renderer plan is fixed).
       booleans: ["--no-redact", "--allow-failing", "--rerecord-stale", "--quiet", "--verbose", "--dry-run", "--decider-llm"],
-      values: ["--out", "--output-format", "--max-artifact-bytes", "--decider-dir", "--intent", "--on-unanswered"],
+      values: ["--out", "--output-format", "--max-artifact-bytes", "--decider-dir", "--intent", "--on-unanswered", "--concurrency"],
       noDashValue: ["--out", "--decider-dir"],
       enums: { "--output-format": ["text", "json"], "--on-unanswered": ["fail", "first"] },
       aliases: { "-q": "--quiet", "-V": "--verbose" },
@@ -1165,11 +1183,24 @@ export async function cmdRecord(args: string[]) {
   const deciderLlm = p.flags["--decider-llm"] ?? false;
   const intent = p.options["--intent"];
   const onUnansweredOpt = p.options["--on-unanswered"] as OnUnanswered | undefined;
+  // Bounded batch parallelism (dir-batch / --rerecord-stale). Each record is already fully isolated per run
+  // (unique sidecar networks + proxy, per-session run dir), so concurrency is safe — the bound exists to stay
+  // under Docker's address pool + model API rate limits. Default 1 (sequential, ordered output).
+  let concurrency = 1;
+  const concRaw = p.options["--concurrency"];
+  if (concRaw !== undefined) {
+    const n = Number(concRaw);
+    if (!Number.isInteger(n) || n < 1 || n > MAX_RECORD_CONCURRENCY) {
+      log(`record: --concurrency must be an integer 1..${MAX_RECORD_CONCURRENCY} (got ${concRaw})`);
+      return process.exit(2);
+    }
+    concurrency = n;
+  }
   const asJson = p.options["--output-format"] === "json";
   const target = p.positionals[0];
   if (!target) {
     log(
-      "usage: record <scenario.yaml | dir/> [--out <file>] [--output-format text|json] [--rerecord-stale] [--no-redact] [--allow-failing] [--max-artifact-bytes <n>]\n" +
+      "usage: record <scenario.yaml | dir/> [--out <file>] [--output-format text|json] [--rerecord-stale] [--no-redact] [--allow-failing] [--max-artifact-bytes <n>] [--concurrency <N>]\n" +
         '       answer gates live during the recording: [--decider-dir <dir>] (single scenario) | [--decider-llm [--intent "…"]] | [--on-unanswered fail|first]',
     );
     return process.exit(2);
@@ -1211,6 +1242,12 @@ export async function cmdRecord(args: string[]) {
   // batch is fine.)
   if (deciderDir !== undefined && isDir) {
     log("record: --decider-dir answers a single interactive recording; use it with one scenario, not a directory batch");
+    return process.exit(2);
+  }
+  // --concurrency only applies to a batch (dir-batch or --rerecord-stale over a dir); a single scenario has
+  // nothing to parallelize. (--decider-dir is already dir-rejected above, so it can't co-occur with a batch.)
+  if (concurrency > 1 && !isDir) {
+    log("record: --concurrency applies to a directory batch (or --rerecord-stale <dir>); a single scenario records one cassette");
     return process.exit(2);
   }
 
@@ -1302,15 +1339,16 @@ export async function cmdRecord(args: string[]) {
       log(`✓ record --rerecord-stale: all cassettes under ${target} are fresh — nothing to re-record`);
       return process.exit(0);
     }
-    let failures = 0;
     const staleTotal = stale.length;
-    for (let i = 0; i < staleTotal; i++) {
-      const { path: cp, staleness } = stale[i];
+    // Each item targets a DISTINCT committed cassette path (`cassettePath: cp`), so a parallel re-record can
+    // never collide on output. Runs are fully isolated (unique sidecar networks/proxy per run), so the only
+    // bound is --concurrency. Output lines are index-tagged so interleaved completions stay readable.
+    const outcomes = await pMapBounded(stale, concurrency, async ({ path: cp, staleness }, i) => {
+      const tag = `[${i + 1}/${staleTotal}]`;
       const rc = readCassette(cp);
       if ("error" in rc) {
-        failures++;
-        log(`  ✗ [${i + 1}/${staleTotal}] ${cp}: ${rc.error} — cannot re-record`);
-        continue;
+        log(`  ✗ ${tag} ${cp}: ${rc.error} — cannot re-record`);
+        return false;
       }
       const cassette = rc.cassette;
       // PREFER the persisted authored-source path (robust to an authored `name:` ≠ filename — the
@@ -1318,10 +1356,10 @@ export async function cmdRecord(args: string[]) {
       const src = _resolveRerecordSource(cp, cassette);
       if (src.persistedMissing)
         log(
-          `  ⚠ persisted scenario source "${src.persistedMissing}" not found — falling back to name lookup for "${cassette.scenario.name}"`,
+          `  ⚠ ${tag} persisted scenario source "${src.persistedMissing}" not found — falling back to name lookup for "${cassette.scenario.name}"`,
         );
       const diskScenario = src.path;
-      log(`[${i + 1}/${staleTotal}] ↻ re-recording ${cp} (stale: ${staleness.join("; ")})`);
+      log(`${tag} ↻ re-recording ${cp} (stale: ${staleness.join("; ")})`);
       try {
         let r: { result: RunResult };
         if (diskScenario) {
@@ -1331,7 +1369,7 @@ export async function cmdRecord(args: string[]) {
           // No on-disk scenario found — fall back to the embedded snapshot (original behavior).
           // The user should pass the scenario file directly (`record <scenario.yaml>`) to pick up edits.
           log(
-            `  ⚠ no on-disk scenario found for "${cassette.scenario.name}" — re-recording from embedded snapshot (edits to the scenario YAML won't apply; use \`record <scenario.yaml>\` to re-record from disk)`,
+            `  ⚠ ${tag} no on-disk scenario found for "${cassette.scenario.name}" — re-recording from embedded snapshot (edits to the scenario YAML won't apply; use \`record <scenario.yaml>\` to re-record from disk)`,
           );
           const sessionRef = cassette.scenario.session === "(inline)" ? "(inline)" : join(dirname(cp), cassette.scenario.session);
           r = await recordScenarioObject(
@@ -1339,12 +1377,14 @@ export async function cmdRecord(args: string[]) {
             { noRedact, allowFailing, cassettePath: cp, maxArtifactBytes },
           );
         }
-        log(`  ✓ ${cp} (${r.result.result})`);
+        log(`  ✓ ${tag} ${cp} (${r.result.result})`);
+        return true;
       } catch (e) {
-        failures++;
-        log(`  ✗ ${cp}: ${(e as Error).message}`);
+        log(`  ✗ ${tag} ${cp}: ${(e as Error).message}`);
+        return false;
       }
-    }
+    });
+    const failures = outcomes.filter((ok) => !ok).length;
     return process.exit(failures > 0 ? 1 : 0);
   }
 
@@ -1357,19 +1397,48 @@ export async function cmdRecord(args: string[]) {
       log(`record: no scenarios discovered under ${target} (loud non-zero — not a vacuous "0 failures = green")`);
       return process.exit(2);
     }
-    let failures = disc.broken.length;
+    // Guard: two scenarios whose `name:` slugifies to the SAME default cassette path would clobber each other
+    // (last-wins sequentially; a write RACE under --concurrency). Detect up front and fail loud — applies at
+    // any concurrency since the sequential clobber is itself a latent bug. (`--out` is dir-rejected above, so
+    // every item uses its default path.)
+    const targets = new Map<string, string>();
+    const dupes: string[] = [];
+    for (const f of disc.scenarios) {
+      let cp: string;
+      try {
+        cp = defaultCassettePath(parseScenarioFile(f).name);
+      } catch {
+        continue; // unparseable here would have been classified `broken`; let the record path report it
+      }
+      const prev = targets.get(cp);
+      if (prev) dupes.push(`${f} ↔ ${prev} → ${cp}`);
+      else targets.set(cp, f);
+    }
+    if (dupes.length) {
+      log(
+        `record: ${dupes.length} scenario(s) share a cassette output path (their \`name:\` slugifies identically) — would clobber/race; give them distinct \`name:\`:`,
+      );
+      for (const d of dupes) log(`  ✗ ${d}`);
+      return process.exit(2);
+    }
+
     const total = disc.scenarios.length;
-    for (let i = 0; i < total; i++) {
-      const f = disc.scenarios[i];
-      log(`[${i + 1}/${total}] recording ${f}…`);
+    // Runs are fully isolated (unique sidecar networks/proxy per run, per-session run dir), so concurrency is
+    // safe; --concurrency only bounds it (Docker address pool + API rate limits). Index-tag the lines so
+    // interleaved completions stay readable.
+    const outcomes = await pMapBounded(disc.scenarios, concurrency, async (f, i) => {
+      const tag = `[${i + 1}/${total}]`;
+      log(`${tag} recording ${f}…`);
       try {
         const r = await recordScenarioFile(f, { noRedact, allowFailing, maxArtifactBytes, ...liveDecider });
-        log(`  ✓ → ${r.cassettePath} (${r.result.result})`);
+        log(`  ✓ ${tag} → ${r.cassettePath} (${r.result.result})`);
+        return true;
       } catch (e) {
-        failures++;
-        log(`  ✗ ${(e as Error).message}`);
+        log(`  ✗ ${tag} ${(e as Error).message}`);
+        return false;
       }
-    }
+    });
+    const failures = disc.broken.length + outcomes.filter((ok) => !ok).length;
     log(
       failures > 0
         ? `✗ record: ${failures} of ${disc.scenarios.length + disc.broken.length} failed`

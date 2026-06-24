@@ -452,13 +452,16 @@ persisted `result.json` + sidecars and uses the **same verdict path as a live re
 `user_visible_artifact` / `artifact_json`) need the run's work dir still on disk — if it has been torn down,
 `verify-run` refuses rather than reporting a false failure.
 
-**Answer-coverage (when the scenario declares `answers:`).** verify-run additionally checks that each
-scripted `answer` still matches a gate the run actually fired — parsed from the kept run's `events.jsonl`,
-which retains the offered option labels. An answer whose `when_question` no longer matches, or whose `choose:`
-names an option the run never offered (the LLM reworded the gate), fails verify-run — so this drift surfaces
-in ~1s instead of on a paid re-record. This **changes the exit-code contract**: a run that is green on
-`assert:` can now exit `1` on an answer mismatch. If the scenario declares answers but the kept run dir has no
-`events.jsonl`, verify-run **refuses** (exit `2`, "can't verify ⇒ not green") rather than vacuously passing.
+**Answer-coverage (when the scenario declares `answers:`).** The check is **gate-centric**: verify-run
+confirms that **every gate the run actually fired** (parsed from the kept run's `events.jsonl`, which retains
+the offered option labels) is covered by a matching `answer`, and that the answer's `choose:` named an option
+the gate actually offered. It does **not** penalize answer rules that no fired gate matched — e.g. rules for
+*conditional* gates that didn't fire this run. So a scenario with 5 answer rules whose run fired only 2 gates
+passes at "2/2 gates matched". A **failure** means a *fired* gate had no matching answer, or a matched answer's
+`choose:` named an option the run never offered (the model reworded the gate) — surfacing the drift in ~1s
+instead of on a paid re-record. This **changes the exit-code contract**: a run that is green on `assert:` can
+now exit `1` on such a mismatch. If the scenario declares answers but the kept run dir has no `events.jsonl`,
+verify-run **refuses** (exit `2`, "can't verify ⇒ not green") rather than vacuously passing.
 A scenario with no `answers:` is unaffected (assert-only, exactly as before). Scenarios using
 `on_unanswered: first`/`llm` treat an unmatched gate as an acceptable auto-answer, not a failure.
 

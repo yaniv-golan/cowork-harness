@@ -77,7 +77,9 @@ staleness:
                                  # runtime boundary (and any RUN-GENERATED files a skill writes into its own
                                  # dir) are yours to declare here or in a plugin-local `.cowork-hashignore`
                                  # file at the mount root. (For per-skill scoping in a multi-skill plugin,
-                                 # set `skills: [<name>]` on the SCENARIO — see scenario.md / cassette.md.)
+                                 # set `skills: [<name>]` on the SCENARIO — see scenario.md / cassette.md.
+                                 # Opt-in `COWORK_HARNESS_AGENT_SCOPE=skill` further scopes a skill-named
+                                 # `agents/<name>.md` to that skill instead of the shared root.)
 ```
 
 ## Field reference
