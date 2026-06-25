@@ -6,6 +6,32 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.14.0] — 2026-06-25
+
+### Added
+
+- **`replay` surfaces staleness + skipped assertions in JSON.** Each `--output-format json` result now carries
+  `staleness[]` (class-tagged: `baseline` / `skill` / `shared-root` / `format` / `unverifiable-baseline` /
+  `unverifiable-skill`) and `skippedAssertions` (`{full, partial}`), so a token-free CI gate can see a stale
+  cassette or live-only assertions it didn't evaluate WITHOUT the verdict changing — a stale but otherwise
+  passing replay stays `ok:true` by default. Previously these were stderr-only `::warning::` lines invisible
+  to a JSON consumer.
+- **`replay --fail-on-skill-drift`.** A narrower release gate than `--strict`: fails only on skill-source drift
+  (`skill` / `shared-root` / `unverifiable-skill` — "can't verify the skill ⇒ not green"), while baseline /
+  format / environment-level staleness stays a non-failing warning. `--strict` remains the superset (fails on
+  every class).
+
+### Fixed
+
+- **Linter no longer false-flags `requires_capabilities`.** `cowork-harness lint` warned `unknown-top-key` on
+  the valid scenario field `requires_capabilities` (its hand-maintained top-level-key list had drifted from the
+  schema). The list is now generated from the Zod `ScenarioObject` schema (like the assertion-key list), so it
+  can't drift; a parity test guards it.
+- **SKILL.md capability pre-flight wording corrected.** It described `requires_capabilities` as skill-declared
+  and said the harness "warns before the run"; it is a **scenario field** and the harness **aborts before the
+  paid run (exit 3)** when the image omits a required capability (unless `allow_missing_capability: true`). The
+  authoritative `docs/scenario.md` was already correct.
+
 ## [0.13.0] — 2026-06-25
 
 ### Added

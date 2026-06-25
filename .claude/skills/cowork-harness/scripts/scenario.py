@@ -116,8 +116,11 @@ if UNCLASSIFIED_KEYS:
         "— add them to the linter's CONTENT/GATE/MANIFEST/LIVE_ONLY/VERDICT_MODIFIER sets.",
         file=sys.stderr,
     )
-# every valid top-level scenario key
-TOP_LEVEL_KEYS = {
+# Embedded fallback for the top-level scenario keys — kept EQUAL to the generated `topLevelKeys`
+# (test-enforced, like _CLASSIFIED_KEYS for assert keys) so a missing assertion-keys.json can't silently
+# reintroduce key drift. `profile`/`assertions` are NOT here — they are deprecated aliases handled by the
+# special-cases in the unknown-key check below (`k != "assertions" and k != "profile"`).
+_EMBEDDED_TOP_LEVEL_KEYS = {
     "name",
     "baseline",
     "session",
@@ -128,7 +131,32 @@ TOP_LEVEL_KEYS = {
     "expect_denied",
     "assert",
     "skills",  # F-6: opt-in skill-staleness hash scope
+    "requires_capabilities",  # Fix 4b: scenario-level required-capability declaration (pre-flight gate)
 }
+
+
+def _load_top_level_keys():
+    """The authoritative top-level scenario-key set, generated from the Zod ScenarioObject schema into
+    `assertion-keys.json` (so the unknown-key check can't drift and false-flag a valid key). Falls back to
+    the embedded `_EMBEDDED_TOP_LEVEL_KEYS` (kept equal to the generated list) with a loud warning if the
+    file is missing or predates the `topLevelKeys` field."""
+    p = Path(__file__).resolve().parent / "assertion-keys.json"
+    try:
+        keys = json.loads(p.read_text(encoding="utf-8")).get("topLevelKeys")
+        if not keys:
+            raise KeyError("topLevelKeys")
+        return set(keys)
+    except Exception:
+        print(
+            f"::warning:: assertion-keys.json missing or has no topLevelKeys next to scenario.py ({p}) — "
+            "using a built-in top-level-key list that may be stale (run `npm run schema`).",
+            file=sys.stderr,
+        )
+        return set(_EMBEDDED_TOP_LEVEL_KEYS)
+
+
+# every valid top-level scenario key (generated from the zod ScenarioObject schema; see _load_top_level_keys)
+TOP_LEVEL_KEYS = _load_top_level_keys()
 REGEX_KEYS = {
     "transcript_matches",
     "transcript_not_matches",

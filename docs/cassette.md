@@ -211,8 +211,9 @@ with `record --max-artifact-bytes <n>` (or `COWORK_HARNESS_MAX_ARTIFACT_BYTES`) 
 stays replay-checkable, and `record` fails fast if an `artifact_json` targets an artifact it had to truncate (that
 would pass at record but fail at replay). Without a manifest (older
 cassettes), these are skipped. A green replay re-confirms *record-time* artifacts, **not** that the current
-skill still produces them — `replay --strict` fails the run when the `fingerprint` shows the skill/baseline
-drifted.
+skill still produces them — `replay --strict` fails the run when the `fingerprint` shows ANY skill/baseline
+drift, or `replay --fail-on-skill-drift` fails only on skill-source drift (leaving baseline drift a warning).
+Either way, every replay result also reports the drift in `staleness[]` (class-tagged) for a JSON gate to read.
 
 ### Still skipped on replay (no filesystem/network in a cassette)
 

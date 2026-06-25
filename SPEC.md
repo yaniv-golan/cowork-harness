@@ -298,7 +298,15 @@ states in `baseline.provenance.gates`). A skill that ignores these behaves diffe
   materializes it token-free — `artifact_json` needs the small JSON body inlined). On older,
   manifest-less cassettes they are skipped (loud) — absent from `assertions[]`, not present-and-passing.
 - **Egress / live-only assertions** (`no_delete_in_outputs`, `self_heal_ran`, `transcript_no_host_path`,
-  `egress_*`, `expect_denied`) are always skipped on replay — absent from `assertions[]`.
+  `egress_*`, `expect_denied`) are always skipped on replay — absent from `assertions[]`. The count of
+  skipped (full / partial) assertions is reported in `RunResult.skippedAssertions`, so a JSON consumer
+  doesn't read a green replay as having evaluated everything.
+
+**Staleness (replay):** a stale cassette (skill/baseline drift) WARNS but stays `ok:true` by default — a
+green replay does not imply the recording is still valid. Each finding is surfaced class-tagged in
+`RunResult.staleness[]` for a token-free gate to act on. `replay --strict` fails on any class;
+`replay --fail-on-skill-drift` fails only on skill-source classes (`skill` / `shared-root` /
+`unverifiable-skill`). Both realize the gate as failing `assertions[]` entries (so `ok`/exit stay consistent).
 - **`question_asked` / `questions_count_max` / `gate_answers_delivered`** additionally require
   `controlOut`. Without it, a loud `::warning::` fires and these keys are excluded (not vacuously
   passed). The authoritative list is `contentKeys` in `src/run/cassette.ts`; `docs/cassette.md` mirrors
@@ -358,7 +366,9 @@ each suppressible only by the matching `allow_*` modifier. `result` means "the a
   "outputsDir?": "string",                       // the user-visible deliverable mount (mnt/outputs)
   "effectiveFidelity?": "string",                // tier actually used (differs from `fidelity` when "cowork" resolved)
   "nonDeterministic?": bool,                      // true if any decision came from a non-deterministic source → not reproducible
-  "permissiveAutoAllow?": ["string"]              // tools auto-allowed by cowork parity that real Cowork BLOCKS → green is NOT faithful
+  "permissiveAutoAllow?": ["string"],             // tools auto-allowed by cowork parity that real Cowork BLOCKS → green is NOT faithful
+  "staleness?": [{ "class": "baseline|skill|shared-root|format|unverifiable-baseline|unverifiable-skill", "message" }], // replay only; cassette-staleness findings, surfaced for a JSON gate. Non-failing by default (a stale but passing replay stays ok:true); `--strict` fails on every class, `--fail-on-skill-drift` on skill/shared-root/unverifiable-skill only.
+  "skippedAssertions?": { "full": number, "partial": number } // replay only; count of live-only assertions NOT evaluated (full = whole assertion skipped; partial = content half ran, fs/egress half dropped). The skipped ones are absent from `assertions[]`.
 }
 ```
 

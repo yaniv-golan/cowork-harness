@@ -1,8 +1,23 @@
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { buildSchemas, buildAssertionKeys, SCHEMA_DIR, ASSERTION_KEYS_PATH } from "../scripts/gen-schema.js";
-import { AnswerRule, Assertion, VERDICT_MODIFIER_KEYS } from "../src/types.js";
+import { AnswerRule, Assertion, ScenarioObject, VERDICT_MODIFIER_KEYS } from "../src/types.js";
+
+const SCENARIO_PY = resolve(".claude/skills/cowork-harness/scripts/scenario.py");
+const PY = process.env.PYTHON ?? "python3";
+const HAVE_PY = spawnSync(PY, ["--version"], { stdio: "ignore" }).status === 0;
+/** Import scenario.py by path and print one of its module-level key sets as sorted JSON (stdout). */
+function pyKeySet(name: string): string[] {
+  const code = `import importlib.util,json,sys
+s=importlib.util.spec_from_file_location('scn',${JSON.stringify(SCENARIO_PY)})
+m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
+print(json.dumps(sorted(getattr(m,${JSON.stringify(name)}))))`;
+  const r = spawnSync(PY, ["-c", code], { encoding: "utf8" });
+  if (r.status !== 0) throw new Error(`python extract of ${name} failed: ${r.stderr}`);
+  return JSON.parse(r.stdout.trim());
+}
 
 describe("AnswerRule rejects inert rules, accepts valid shapes", () => {
   it("rejects a matcher-less or action-less rule", () => {
@@ -88,6 +103,17 @@ describe("scenario.py assertion-keys.json is in sync with the zod Assertion sche
     const keys = JSON.parse(buildAssertionKeys()).keys as string[];
     expect([...keys].sort()).toEqual([...Object.keys(Assertion.shape)].sort());
   });
+  // Guard: the linter's TOP-LEVEL key list must match the zod ScenarioObject schema — the bug that
+  // false-flagged a valid `requires_capabilities` as unknown was a hand-maintained list drifting from the
+  // schema. Generate from `ScenarioObject.shape` (the strictObject, NOT the `Scenario` preprocess wrapper).
+  it("topLevelKeys equals Object.keys(ScenarioObject.shape) (no silent filtering)", () => {
+    const keys = JSON.parse(buildAssertionKeys()).topLevelKeys as string[];
+    expect([...keys].sort()).toEqual([...Object.keys(ScenarioObject.shape)].sort());
+  });
+  it("requires_capabilities is in topLevelKeys (regression: the drift that false-flagged it)", () => {
+    const keys = JSON.parse(buildAssertionKeys()).topLevelKeys as string[];
+    expect(keys).toContain("requires_capabilities");
+  });
   it("verdictModifierKeys matches VERDICT_MODIFIER_KEYS", () => {
     const gen = JSON.parse(buildAssertionKeys()).verdictModifierKeys as string[];
     expect([...gen].sort()).toEqual([...VERDICT_MODIFIER_KEYS].sort());
@@ -99,5 +125,16 @@ describe("scenario.py assertion-keys.json is in sync with the zod Assertion sche
   it("VERDICT_MODIFIER_KEYS equals the allow_-prefixed Assertion keys (single-source convention)", () => {
     const allowKeys = Object.keys(Assertion.shape).filter((k) => k.startsWith("allow_"));
     expect([...VERDICT_MODIFIER_KEYS].sort()).toEqual(allowKeys.sort());
+  });
+  // scenario.py keeps EMBEDDED fallbacks (used only when assertion-keys.json is missing). They must equal the
+  // generated lists, else a missing-file run reintroduces the very drift these fixes target. The runtime file
+  // is generated (can't drift); these guard the in-code fallbacks. Skipped if python3 is unavailable.
+  it.skipIf(!HAVE_PY)("scenario.py _EMBEDDED_TOP_LEVEL_KEYS equals the generated topLevelKeys", () => {
+    const gen = (JSON.parse(buildAssertionKeys()).topLevelKeys as string[]).slice().sort();
+    expect(pyKeySet("_EMBEDDED_TOP_LEVEL_KEYS")).toEqual(gen);
+  });
+  it.skipIf(!HAVE_PY)("scenario.py _CLASSIFIED_KEYS equals the generated assert keys", () => {
+    const gen = (JSON.parse(buildAssertionKeys()).keys as string[]).slice().sort();
+    expect(pyKeySet("_CLASSIFIED_KEYS")).toEqual(gen);
   });
 });

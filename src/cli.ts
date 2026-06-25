@@ -91,7 +91,8 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
       [--decider-llm [--intent "…"]] | [--on-unanswered fail|first]   answer live via a model / auto-pick
                                (a live decider flags the cassette non-deterministic; it still replays deterministically)
   replay <file|dir>            deterministic protocol-replay of a cassette or a dir of them (no token, no Docker)
-      [--strict]               fail (exit 1) on a stale cassette instead of warning
+      [--strict]               fail (exit 1) on ANY stale cassette instead of warning
+      [--fail-on-skill-drift]  fail only on skill-source drift (skill/shared-root); baseline drift stays a warning
       [--output-format json]
   verify-cassettes <file|dir>  CI gate (no token): privacy scan + staleness — exit 1 on finding or drift
       [--skip-privacy|--skip-staleness]  skip one check
@@ -286,7 +287,7 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
     '       answer gates LIVE: [--decider-dir <dir>] (single scenario only) | [--decider-llm [--intent "<one line>"]] | [--on-unanswered fail|first]\n' +
     "       (a live decider flags the cassette non-deterministic — re-recording may drift; replay stays deterministic. --rerecord-stale rejects these flags.)\n" +
     "       NOTE: --allow-failing only relaxes the post-run VERDICT gate; it does NOT salvage an unanswered gate (that throws before any cassette is written — use --on-unanswered first / a decider).",
-  replay: "usage: replay <file.cassette.json | dir/> [--strict] [--output-format text|json]",
+  replay: "usage: replay <file.cassette.json | dir/> [--strict] [--fail-on-skill-drift] [--output-format text|json]",
   "verify-cassettes":
     "usage: verify-cassettes <file|dir> [--skip-privacy|--skip-staleness] [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-file <path>]... [--output-format json]",
   trace:

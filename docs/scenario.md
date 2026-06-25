@@ -340,7 +340,9 @@ small JSON bodies) into the cassette, and `replay` materializes that snapshot to
 `artifact_json` needs the JSON body inlined (small files); a hash-only (oversized) entry still satisfies
 `file_exists` but not `artifact_json`. Without a manifest (older cassettes), they are **skipped** (loud).
 A green `replay` re-confirms *record-time* artifacts, **not** that the current skill still produces them —
-that needs a live `run` (the cassette's `--strict` staleness fingerprint warns when the skill/baseline drifted).
+that needs a live `run` (the cassette's staleness fingerprint warns when the skill/baseline drifted; `replay
+--strict` fails on any drift, `--fail-on-skill-drift` on skill-source drift only, and every result reports it
+in `staleness[]` for a JSON gate).
 
 **Egress + other filesystem** assertions (`no_delete_in_outputs`, `self_heal_ran`,
 `transcript_no_host_path`, `egress_*`/`expect_denied`) are still **skipped** on `replay` — they only run on

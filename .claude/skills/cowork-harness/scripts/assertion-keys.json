@@ -1,5 +1,5 @@
 {
-  "$comment": "GENERATED from the Zod Assertion schema (src/types.ts) by scripts/gen-schema.ts — do not edit; run `npm run schema`.",
+  "$comment": "GENERATED from the Zod schemas (src/types.ts) by scripts/gen-schema.ts — do not edit; run `npm run schema`.",
   "keys": [
     "allow_l0_plugin_divergence",
     "allow_missing_capability",
@@ -31,6 +31,19 @@
     "transcript_not_contains",
     "transcript_not_matches",
     "user_visible_artifact"
+  ],
+  "topLevelKeys": [
+    "answers",
+    "assert",
+    "baseline",
+    "expect_denied",
+    "fidelity",
+    "name",
+    "on_unanswered",
+    "prompt",
+    "requires_capabilities",
+    "session",
+    "skills"
   ],
   "verdictModifierKeys": [
     "allow_l0_plugin_divergence",
