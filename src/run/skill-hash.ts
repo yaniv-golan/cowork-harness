@@ -221,8 +221,9 @@ function agentScopeEnabled(): boolean {
 
 /** Map the first path segment under `agents/` to the skill name it would belong to: a FILE strips its
  *  extension (`agents/cap-table.md` → `cap-table`), a DIR is used as-is (`agents/cap-table/x.md` → `cap-table`).
- *  Returns null for non-`agents/` paths or a bare `agents` marker. */
-function agentSkillName(parts: string[]): string | null {
+ *  Returns null for non-`agents/` paths or a bare `agents` marker. Exported so staleness attribution can
+ *  classify a changed `agents/<name>.md` exactly as the hash walk does (agent-scoped → skill-private). */
+export function agentSkillName(parts: string[]): string | null {
   if (parts[0] !== "agents" || parts.length < 2) return null;
   return parts.length === 2 ? parts[1].replace(/\.[^.]+$/, "") : parts[1];
 }

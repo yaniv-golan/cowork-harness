@@ -321,9 +321,12 @@ possible.
 - **`recorded under an older hash format (vN → vM)`** — format upgrade; re-record once and the message
   goes away. (Cassettes recorded before format **v6** all need one re-record — see the boundary note below.)
 - **`skill files changed since record — N changed (path, …)`** — the **exact** changed/added/removed file(s),
-  from the per-file manifest (`fileSigs`). For a scoped cassette it is prefixed with the bucket diagnosis
-  (`shared root changed (scope: skills/x) [N changed (…)]`) so you still see whether the change was in your
-  scoped skill or a shared dependency.
+  from the per-file manifest (`fileSigs`). For a scoped cassette the drift is attributed **per bucket** by the
+  actual changed paths: a `shared root changed (scope: skills/x) [N changed (…)]` message for shared-dependency
+  changes and a `skills/x changed since record [N changed (…)]` message for the scoped skill's own files. When
+  **both** buckets change you get **both** messages — a co-occurring shared change no longer masks the skill's
+  own drift. (With `COWORK_HARNESS_AGENT_SCOPE=skill`, a changed `agents/<x>.md` is attributed to skill `x`,
+  matching the hash boundary.)
 - **`recorded in '<mode>' file-set mode, verifying in '<mode>'`** — the staleness boundary differs between
   record and verify (e.g. recorded in a git work tree but verified from a non-repo copy); the hashes are not
   comparable, so re-record under the same mode.

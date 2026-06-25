@@ -6,6 +6,28 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.15.0] — 2026-06-25
+
+### Fixed
+
+- **Staleness no longer masks a scoped skill's own drift behind a co-occurring shared change.** For a
+  `skills:`-scoped cassette, when BOTH the shared roots AND the scoped skill's own files changed, the
+  diagnosis previously reported only `shared root changed` and never the skill — the two buckets were
+  mutually exclusive (shared tested first). It now attributes drift per-bucket by the actual changed paths and
+  emits BOTH a `shared-root` and a `skill` finding when both moved, each naming its own files. The same
+  diagnosis (per-file `[N changed (…)]` detail and the `COWORK_HARNESS_DEBUG_SKILLHASH` hook) now also runs on
+  the `replay` lane, which previously had a separate, less-detailed copy. With `COWORK_HARNESS_AGENT_SCOPE=skill`
+  a changed `agents/<skill>.md` is attributed to that skill, matching the hash boundary.
+
+### Changed
+
+- **`replay --fail-on-skill-drift` no longer fails on a `COWORK_HARNESS_GITSET` / `COWORK_HARNESS_AGENT_SCOPE`
+  flip.** A record-vs-verify mismatch in either setting is now classed `format` ("re-record under the same
+  mode") rather than misattributed to skill/shared drift, so it is a non-failing warning under
+  `--fail-on-skill-drift` (which targets skill-source drift only). It still fails under `--strict` and still
+  reds `verify-cassettes`. Previously the `replay` lane mislabeled such a flip as `shared-root`/`skill` and
+  failed the skill-drift gate.
+
 ## [0.14.0] — 2026-06-25
 
 ### Added
