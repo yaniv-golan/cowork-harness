@@ -42,7 +42,8 @@ Before the first command, confirm the CLI is reachable and **fail loud** (never 
 - **Repeatable, asserted regression** → author a `scenarios/*.yaml` and run `cowork-harness run`.
   This is the CI-grade path and most of this skill.
 - **Multi-turn debugging** → `cowork-harness chat` (interactive; gates answered at the TTY, **not** an
-  asserted test — see *Debugging with `chat`* in `docs/scenario.md`).
+  asserted test — see *Debugging with `chat`* in `docs/scenario.md`, or `docs/debugging.md` for the full
+  debugging map).
 
 Full command set: `skill · run · chat · record · replay · verify-cassettes · rehash · prune · lint ·
 verify-run · trace · inspect · decide · gates · answer · scaffold · assertions --list · sync · list ·
