@@ -39,7 +39,7 @@ import { jsonEnvelope, parseOutputFormat } from "./envelope.js";
 import { parseArgs } from "../cli-args.js";
 import { resolveInputs } from "./inputs.js";
 import { realProbe } from "./doctor.js";
-import { hashSkillDirs, hashSharedOnly, computeContentSig, skillHashEntries, OS_JUNK_PATTERN } from "./skill-hash.js";
+import { hashSkillDirs, hashSharedOnly, computeContentSig, skillHashEntries, OS_JUNK_PATTERN, agentSkillName } from "./skill-hash.js";
 import { computeVerdict } from "./verdict.js";
 import { redactJsonLine, redactText, redactStructural, loadRedactionPolicy, type RedactionPolicy } from "../redact.js";
 import { collectSecrets, scrub, scrubField } from "../secrets.js";
@@ -494,12 +494,15 @@ function debugSkillHashMismatch(cassette: Cassette, cassetteDir: string, fp: Fin
   );
 }
 
-/** v5: diff two per-file manifests (recorded vs live) into an exact "what changed" SUMMARY — the actionable
- *  upgrade over the bucket-level "something changed". Returns just the summary (no prefix/suffix), so the
- *  caller can append it to the bucket/generic message (preserving the G-4 shared-vs-scoped semantic). Samples
- *  up to 3 paths per category. Null when the manifests are equal (hashes differ but files don't — caller
- *  falls back to its bucket message). */
-function diffFileSigs(recorded: Array<[string, string]>, live: Array<[string, string]>): string | null {
+/** A per-file manifest diff split into the three change categories (paths only, unsampled). */
+interface FileSigDiff {
+  added: string[];
+  removed: string[];
+  changed: string[];
+}
+
+/** v5: diff two per-file manifests (recorded vs live) into the exact changed/added/removed path lists. */
+function diffFileSigsPaths(recorded: Array<[string, string]>, live: Array<[string, string]>): FileSigDiff {
   const rec = new Map(recorded);
   const liv = new Map(live);
   const added: string[] = [];
@@ -510,77 +513,171 @@ function diffFileSigs(recorded: Array<[string, string]>, live: Array<[string, st
     else if (rec.get(p) !== h) changed.push(p);
   }
   for (const [p] of rec) if (!liv.has(p)) removed.push(p);
-  if (!added.length && !removed.length && !changed.length) return null;
+  return { added, removed, changed };
+}
+
+/** Format a {@link FileSigDiff} into an actionable summary (samples up to 3 paths per category). Null when
+ *  the diff is empty (hashes differ but files don't — a structure-only change; caller falls back to its
+ *  bucket message). */
+function summarizeFileSigDiff(diff: FileSigDiff): string | null {
+  if (!diff.added.length && !diff.removed.length && !diff.changed.length) return null;
   const sample = (a: string[]) => `${a.slice(0, 3).join(", ")}${a.length > 3 ? `, +${a.length - 3} more` : ""}`;
   const parts: string[] = [];
-  if (changed.length) parts.push(`${changed.length} changed (${sample(changed)})`);
-  if (added.length) parts.push(`${added.length} added (${sample(added)})`);
-  if (removed.length) parts.push(`${removed.length} removed (${sample(removed)})`);
+  if (diff.changed.length) parts.push(`${diff.changed.length} changed (${sample(diff.changed)})`);
+  if (diff.added.length) parts.push(`${diff.added.length} added (${sample(diff.added)})`);
+  if (diff.removed.length) parts.push(`${diff.removed.length} removed (${sample(diff.removed)})`);
   return parts.join("; ");
 }
 
-/** B3 staleness GATE: recompute the fingerprint and report drift. Unlike `replayCassette` (which WARNS),
- *  the gate treats an unresolvable skillHash as a failure — can't verify ⇒ not green. No fingerprint → nothing
- *  to check (legacy cassette). */
-export function checkStaleness(cassette: Cassette, cassetteDir: string): string[] {
+/** Convenience: diff + summarize in one call (the non-scoped/whole-tree caller wants only the summary). */
+function diffFileSigs(recorded: Array<[string, string]>, live: Array<[string, string]>): string | null {
+  return summarizeFileSigDiff(diffFileSigsPaths(recorded, live));
+}
+
+/** Finding 1 (G-4, path-accurate): partition a manifest diff into the shared-root bucket vs the
+ *  skill-private bucket, EXACTLY mirroring `scopedAccept`/`sharedOnlyAccept` in skill-hash.ts so attribution
+ *  matches the hash boundary. A path under `skills/<name>/` is skill-private when `<name>` is in scope; with
+ *  agent-scoping ON, a skill-named `agents/<name>.md` is also skill-private. Everything else is shared. This
+ *  lets `computeStaleness` emit a `skill` finding AND a `shared-root` finding when BOTH buckets drift, so a
+ *  co-occurring shared change can no longer mask the skill's own drift (the original bug). */
+function partitionDriftBuckets(diff: FileSigDiff, scope: Set<string>, scopeAgents: boolean): { shared: FileSigDiff; skill: FileSigDiff } {
+  const shared: FileSigDiff = { added: [], removed: [], changed: [] };
+  const skill: FileSigDiff = { added: [], removed: [], changed: [] };
+  const isSkillPrivate = (relPath: string): boolean => {
+    const parts = relPath.split("/");
+    if (parts[0] === "skills" && parts.length >= 2) return scope.has(parts[1]);
+    if (scopeAgents) {
+      const an = agentSkillName(parts);
+      if (an !== null && scope.has(an)) return true;
+    }
+    return false;
+  };
+  for (const cat of ["added", "removed", "changed"] as const) for (const p of diff[cat]) (isSkillPrivate(p) ? skill : shared)[cat].push(p);
+  return { shared, skill };
+}
+
+/** The SINGLE staleness diagnosis (unifies what used to be two divergent copies: `checkStaleness` and the
+ *  inline block in `replayCassette`). Recompute the fingerprint and report drift as class-tagged findings;
+ *  each CALLER applies its own gate-vs-warn policy:
+ *   - `verify-cassettes` / the re-record work-list go through the `checkStaleness` string adapter and treat
+ *     ANY finding as "stale ⇒ re-record" (so `unverifiable-*` stays a hard fail there — can't verify ⇒ not
+ *     green). The adapter MUST be class-blind (forward every finding) or that gate false-greens.
+ *   - `replayCassette` consumes the findings directly: warn by default, `--strict` fails on all,
+ *     `--fail-on-skill-drift` fails only on `SKILL_DRIFT_CLASSES`.
+ *  No fingerprint → nothing to check (legacy cassette). */
+export function computeStaleness(cassette: Cassette, cassetteDir: string | undefined): StalenessFinding[] {
   const fp = cassette.fingerprint;
   if (!fp) return [];
-  const msgs: string[] = [];
+  const findings: StalenessFinding[] = [];
   let liveBaseline: string | undefined;
   try {
     liveBaseline = loadBaseline("latest").appVersion;
   } catch {
     /* baseline not loadable */
   }
-  // Gate mode: can't verify ⇒ not green. The cassette carries a baseline-of-record but we can't load the
-  // current one to compare — a fail, not a silent skip (baselines ship with the package, so this is rare).
+  // The cassette carries a baseline-of-record but we can't load the current one to compare. Surfaced as
+  // `unverifiable-baseline` (env/platform, not skill drift): a non-failing warning on the default replay gate,
+  // but a hard fail for `verify-cassettes`/the work-list via the class-blind string adapter (can't verify ⇒
+  // not green). baselines ship with the package, so this is rare.
   if (liveBaseline === undefined)
-    msgs.push(
-      "cannot load the latest baseline to verify staleness — run `cowork-harness sync` or ship baselines/ (can't verify ⇒ not green)",
-    );
-  else if (liveBaseline !== fp.baseline) msgs.push(`baseline moved ${fp.baseline} → ${liveBaseline} since record — re-record`);
+    findings.push({
+      class: "unverifiable-baseline",
+      message:
+        "cannot load the latest baseline to verify staleness — run `cowork-harness sync` or ship baselines/ (env/platform, not skill drift; can't verify ⇒ not green)",
+    });
+  else if (liveBaseline !== fp.baseline)
+    findings.push({ class: "baseline", message: `baseline moved ${fp.baseline} → ${liveBaseline} since record — re-record` });
   if (fp.skillHash) {
     const live = buildFingerprint(cassette.scenario.session, fp.baseline, cassetteDir, cassette.scenario.skills);
     const recMode = fp.mode ?? "raw";
     const liveMode = live.mode ?? "raw";
     if (live.skillHash === undefined)
-      msgs.push("skill dirs not resolvable from the cassette location — cannot verify staleness (gate fails: can't verify ⇒ not green)");
+      findings.push({
+        class: "unverifiable-skill",
+        message: "skill dirs not resolvable from the cassette location — cannot verify skill staleness (can't verify ⇒ not green)",
+      });
     else if (recMode !== liveMode)
-      // Phase C: a hash from a different boundary mode is not comparable — don't emit a misleading content diff.
-      msgs.push(
-        `recorded in '${recMode}' file-set mode, verifying in '${liveMode}' (COWORK_HARNESS_GITSET) — re-record under the same mode`,
-      );
+      // Phase C: a hash from a different boundary mode is not comparable — re-record, don't emit a misleading
+      // content diff. Classed `format` (not skill drift): a mode flip is an env/config mismatch, not source drift.
+      findings.push({
+        class: "format",
+        message: `recorded in '${recMode}' file-set mode, verifying in '${liveMode}' (COWORK_HARNESS_GITSET) — re-record under the same mode`,
+      });
     else if ((fp.agentScope ?? "off") !== (live.agentScope ?? "off"))
       // Agent-scoping flip (COWORK_HARNESS_AGENT_SCOPE): the scoped hash covers a different file set, so it's
       // not comparable — re-record under the same setting (mirrors the GITSET mode flip above).
-      msgs.push(
-        `recorded with agent-scope '${fp.agentScope ?? "off"}', verifying with '${live.agentScope ?? "off"}' (COWORK_HARNESS_AGENT_SCOPE) — re-record under the same setting`,
-      );
+      findings.push({
+        class: "format",
+        message: `recorded with agent-scope '${fp.agentScope ?? "off"}', verifying with '${live.agentScope ?? "off"}' (COWORK_HARNESS_AGENT_SCOPE) — re-record under the same setting`,
+      });
     else if (live.skillHash !== fp.skillHash) {
-      debugSkillHashMismatch(cassette, cassetteDir, fp, live); // H9: surface WHICH files drifted (or a hint to enable it)
+      debugSkillHashMismatch(cassette, cassetteDir ?? "", fp, live); // H9 (D2): surface WHICH files drifted
       const recordedVersion = cassette.cassetteVersion ?? 0;
-      // v5: name the EXACT changed/added/removed file(s) from the per-file manifest, APPENDED to the
-      // bucket/generic message so the G-4 shared-vs-scoped semantic is preserved AND the file is named.
-      const summary = fp.fileSigs && live.fileSigs ? diffFileSigs(fp.fileSigs, live.fileSigs) : null;
-      const detail = summary ? ` [${summary}]` : "";
       if (recordedVersion < CASSETTE_VERSION) {
-        msgs.push(`recorded under an older hash format (v${recordedVersion} → v${CASSETTE_VERSION}) — re-record once after upgrading`);
+        findings.push({
+          class: "format",
+          message: `recorded under an older hash format (v${recordedVersion} → v${CASSETTE_VERSION}) — re-record once after upgrading`,
+        });
       } else if (fp.sharedHash !== undefined && live.sharedHash !== undefined) {
-        // G-4: bucket-level diagnosis — which component of the scoped hash changed?
-        const scope = fp.skillScope!.map((s) => `skills/${s}`).join(", ");
-        if (live.sharedHash !== fp.sharedHash) {
-          msgs.push(`shared root changed since record (scope: ${scope})${detail} — re-record`);
+        // G-4 + Finding 1: attribute drift to the shared and/or skill bucket(s). D6: `skillScope` is always
+        // non-empty when `sharedHash` is set (single assignment site under the same guard in buildFingerprint);
+        // the `?? []` is a defensive guard only — the on-disk cassette shape is not schema-validated.
+        const scopeArr = fp.skillScope ?? [];
+        const scopeLabel = scopeArr.map((s) => `skills/${s}`).join(", ") || "skill";
+        const scopeSet = new Set(scopeArr);
+        const scopeAgents = (live.agentScope ?? "off") === "skill";
+        if (fp.fileSigs && live.fileSigs) {
+          // Path-accurate: emit a finding per bucket that ACTUALLY changed, so a co-occurring shared change can
+          // never mask the skill's own drift (the original bug) and vice-versa.
+          const { shared, skill } = partitionDriftBuckets(diffFileSigsPaths(fp.fileSigs, live.fileSigs), scopeSet, scopeAgents);
+          const sharedSummary = summarizeFileSigDiff(shared);
+          const skillSummary = summarizeFileSigDiff(skill);
+          if (sharedSummary)
+            findings.push({
+              class: "shared-root",
+              message: `shared root changed since record (scope: ${scopeLabel}) [${sharedSummary}] — re-record`,
+            });
+          if (skillSummary) findings.push({ class: "skill", message: `${scopeLabel} changed since record [${skillSummary}] — re-record` });
+          if (!sharedSummary && !skillSummary) {
+            // Hashes differ but the per-file manifest shows no path change (structure-only: an empty dir or a
+            // symlink re-point). Fall back to the hash buckets; emit BOTH classes if the shared hash moved so
+            // neither bucket is masked.
+            if (live.sharedHash !== fp.sharedHash)
+              findings.push({ class: "shared-root", message: `shared root changed since record (scope: ${scopeLabel}) — re-record` });
+            findings.push({ class: "skill", message: `${scopeLabel} changed since record — re-record` });
+          }
         } else {
-          msgs.push(`${scope} changed since record${detail} — re-record`);
+          // Pre-detail cassette (no per-file manifest, e.g. > MANIFEST_MAX_FILES): can't isolate the bucket.
+          // Emit BOTH classes when the shared hash moved so the skill's own drift is never masked (over-warns,
+          // but the gate is already red and both classes are in the fail set).
+          if (live.sharedHash !== fp.sharedHash) {
+            findings.push({ class: "shared-root", message: `shared root changed since record (scope: ${scopeLabel}) — re-record` });
+            findings.push({
+              class: "skill",
+              message: `${scopeLabel} may also have changed since record (no per-file manifest to isolate) — re-record`,
+            });
+          } else {
+            findings.push({ class: "skill", message: `${scopeLabel} changed since record — re-record` });
+          }
         }
-      } else if (summary) {
-        msgs.push(`skill files changed since record — ${summary} — re-record`);
       } else {
-        msgs.push("local skill/plugin dir contents changed since record — re-record");
+        // Non-scoped (whole-tree) cassette: name the changed files when the per-file manifest is present (D5),
+        // else the generic fallback.
+        const summary = fp.fileSigs && live.fileSigs ? diffFileSigs(fp.fileSigs, live.fileSigs) : null;
+        if (summary) findings.push({ class: "skill", message: `skill files changed since record — ${summary} — re-record` });
+        else findings.push({ class: "skill", message: "local skill/plugin dir contents changed since record — re-record" });
       }
     }
   }
-  return msgs;
+  return findings;
+}
+
+/** B3 staleness GATE adapter for the string consumers (`verify-cassettes`, the re-record work-list). Returns
+ *  the unified findings as plain reason strings. MUST stay class-blind (forward EVERY finding) so an
+ *  `unverifiable-baseline` / `unverifiable-skill` still reds those gates — filtering a class here would
+ *  false-green `verify-cassettes` on a cassette it can't verify. */
+export function checkStaleness(cassette: Cassette, cassetteDir: string): string[] {
+  return computeStaleness(cassette, cassetteDir).map((f) => f.message);
 }
 
 /** A minimal RunRecord for a truncated-cassette replay — empty collections so downstream evaluate()/the
@@ -2033,65 +2130,15 @@ export async function replayCassette(
   // unchanged (frozen-structure limit). The skill-hash recompute needs the local skill dirs to be resolvable
   // from the cassette's session path; when they aren't (a moved/committed cassette), we say so rather than
   // silently skipping.
-  // Findings are pushed UNCONDITIONALLY (class-tagged) so they're surfaced in JSON (RunResult.staleness) even
-  // on the default gate — a token-free consumer can then distinguish "verified clean" from "couldn't verify"
-  // (the `unverifiable-*` classes) WITHOUT the verdict changing. The `--strict` / `--fail-on-skill-drift`
-  // gates below are the ONLY place a finding becomes a failing assertion. The single `warn()` loop at the end
-  // is the lone stderr emitter — no per-branch `warn()`, so a non-strict run never double-warns one cause.
-  const staleness: StalenessFinding[] = [];
-  if (cassette.fingerprint) {
-    const fp = cassette.fingerprint;
-    let liveBaseline: string | undefined;
-    let baselineLoadFailed = false;
-    try {
-      liveBaseline = loadBaseline("latest").appVersion;
-    } catch {
-      baselineLoadFailed = true;
-      staleness.push({
-        class: "unverifiable-baseline",
-        message: "baseline could not be loaded — cannot verify staleness (env/platform, not skill drift)",
-      });
-    }
-    if (!baselineLoadFailed && liveBaseline && liveBaseline !== fp.baseline)
-      staleness.push({
-        class: "baseline",
-        message: `baseline moved ${fp.baseline} → ${liveBaseline} since record — re-record before trusting this replay`,
-      });
-    if (fp.skillHash) {
-      const live = buildFingerprint(cassette.scenario.session, fp.baseline, opts.cassetteDir, cassette.scenario.skills);
-      if (live.skillHash === undefined) {
-        staleness.push({
-          class: "unverifiable-skill",
-          message:
-            "skill dirs not resolvable from this cassette location — cannot verify skill staleness (the baseline check still applies)",
-        });
-      } else if (live.skillHash !== fp.skillHash) {
-        const recordedVersion = cassette.cassetteVersion ?? 0;
-        if (recordedVersion < CASSETTE_VERSION) {
-          staleness.push({
-            class: "format",
-            message: `recorded under an older hash format (v${recordedVersion} → v${CASSETTE_VERSION}) — re-record once after upgrading`,
-          });
-        } else if (fp.sharedHash !== undefined && live.sharedHash !== undefined) {
-          const scope = fp.skillScope?.length ? fp.skillScope.map((s) => `skills/${s}`).join(", ") : "skill";
-          if (live.sharedHash !== fp.sharedHash) {
-            staleness.push({
-              class: "shared-root",
-              message: `shared root changed since record (scope: ${scope}) — re-record before trusting this replay`,
-            });
-          } else {
-            staleness.push({ class: "skill", message: `${scope} changed since record — re-record before trusting this replay` });
-          }
-        } else {
-          staleness.push({
-            class: "skill",
-            message: "local skill/plugin dir contents changed since record — re-record before trusting this replay",
-          });
-        }
-      }
-    }
-    for (const s of staleness) warn(`::warning:: [replay] cassette stale: ${s.message}\n`);
-  }
+  // Findings are surfaced UNCONDITIONALLY (class-tagged) in JSON (RunResult.staleness) even on the default
+  // gate — a token-free consumer can distinguish "verified clean" from "couldn't verify" (the `unverifiable-*`
+  // classes) WITHOUT the verdict changing. The `--strict` / `--fail-on-skill-drift` gates below are the ONLY
+  // place a finding becomes a failing assertion. The single `warn()` loop is the lone stderr emitter — no
+  // per-branch `warn()`, so a non-strict run never double-warns one cause. Uses the SHARED `computeStaleness`
+  // (no longer a forked copy), so it inherits the per-file detail, the `debugSkillHashMismatch` hook, the
+  // GITSET/agent-scope flip buckets, and the both-buckets attribution fix for free.
+  const staleness: StalenessFinding[] = computeStaleness(cassette, opts.cassetteDir);
+  for (const s of staleness) warn(`::warning:: [replay] cassette stale: ${s.message}\n`);
 
   // §2.5 backward compat: warn loudly when controlOut is absent so the user knows question/gate
   // assertions are being EXCLUDED (not vacuously evaluated) from this run.

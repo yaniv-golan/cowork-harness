@@ -360,3 +360,143 @@ describe("checkStaleness — mixed-mount falls back to generic message", () => {
     expect(staleMsg).not.toMatch(/shared root/);
   });
 });
+
+describe("checkStaleness — class-blind string adapter forwards unverifiable-* (D7 / RISK 3)", () => {
+  it("unresolvable skill dirs still produce a stale message (verify-cassettes must NOT false-green)", () => {
+    // skillHash set but session is (inline) ⇒ no dirs resolve ⇒ unverifiable-skill. The class-blind adapter
+    // must forward it as a string so `staleAny = staleness.length > 0` keeps the gate red.
+    const c = {
+      cassetteVersion: CASSETTE_VERSION,
+      scenario: scenario([]),
+      events: [],
+      fingerprint: { baseline: "latest", skillHash: "deadbeef" },
+    } as unknown as Cassette;
+    const msgs = checkStaleness(c, undefined as unknown as string);
+    expect(msgs.length).toBeGreaterThan(0);
+    expect(msgs.some((m) => /cannot verify skill staleness/.test(m))).toBe(true);
+  });
+});
+
+describe("checkStaleness — both-buckets attribution (Finding 1: no masking)", () => {
+  function pluginRoot(): { root: string; sessionPath: string } {
+    const root = mkdtempSync(join(tmpdir(), "cwh-both-"));
+    mkdirSync(join(root, "plugin", "skills", "alpha"), { recursive: true });
+    mkdirSync(join(root, "plugin", "scripts"), { recursive: true });
+    writeFileSync(join(root, "plugin", "skills", "alpha", "SKILL.md"), "# alpha v1\n");
+    writeFileSync(join(root, "plugin", "scripts", "shared.py"), "x = 1\n");
+    const sessionPath = join(root, "session.yaml");
+    writeFileSync(sessionPath, `skills:\n  local:\n    - ./plugin\n`);
+    return { root, sessionPath };
+  }
+
+  function cassetteFor(root: string, sessionPath: string): Cassette {
+    const fp = buildFingerprint(sessionPath, "99.0.0", root, ["alpha"]);
+    return {
+      cassetteVersion: CASSETTE_VERSION,
+      scenario: {
+        name: "alpha-smoke",
+        baseline: "99.0.0",
+        session: sessionPath,
+        fidelity: "container" as const,
+        prompt: "hi",
+        answers: [],
+        expect_denied: [],
+        assert: [],
+        skills: ["alpha"],
+      },
+      events: [],
+      fingerprint: fp,
+    } as unknown as Cassette;
+  }
+
+  it("when BOTH the shared root AND the scoped skill change, reports BOTH (skill drift is not masked)", () => {
+    const { root, sessionPath } = pluginRoot();
+    const c = cassetteFor(root, sessionPath);
+    // Change BOTH buckets — the exact condition that used to collapse to "shared-root" only.
+    writeFileSync(join(root, "plugin", "scripts", "shared.py"), "x = 99\n");
+    writeFileSync(join(root, "plugin", "skills", "alpha", "SKILL.md"), "# alpha v2\n");
+
+    const msgs = checkStaleness(c, root);
+    const sharedMsg = msgs.find((m) => /shared root changed/.test(m));
+    const skillMsg = msgs.find((m) => /skills\/alpha changed since record/.test(m));
+    expect(sharedMsg).toBeDefined(); // shared bucket still reported
+    expect(skillMsg).toBeDefined(); // AND the skill's own drift is NO LONGER masked
+    // each names its own files
+    expect(sharedMsg).toMatch(/shared\.py/);
+    expect(skillMsg).toMatch(/SKILL\.md/);
+  });
+
+  it("shared-only change → only shared-root (no spurious skill finding)", () => {
+    const { root, sessionPath } = pluginRoot();
+    const c = cassetteFor(root, sessionPath);
+    writeFileSync(join(root, "plugin", "scripts", "shared.py"), "x = 99\n");
+    const msgs = checkStaleness(c, root);
+    expect(msgs.some((m) => /shared root changed/.test(m))).toBe(true);
+    expect(msgs.some((m) => /skills\/alpha changed since record/.test(m))).toBe(false);
+  });
+});
+
+describe("checkStaleness — agent-scope attribution (RISK 1)", () => {
+  function agentPluginRoot(): { root: string; sessionPath: string } {
+    const root = mkdtempSync(join(tmpdir(), "cwh-agent-"));
+    mkdirSync(join(root, "plugin", "skills", "alpha"), { recursive: true });
+    mkdirSync(join(root, "plugin", "agents"), { recursive: true });
+    writeFileSync(join(root, "plugin", "skills", "alpha", "SKILL.md"), "# alpha\n");
+    writeFileSync(join(root, "plugin", "agents", "alpha.md"), "# alpha agent v1\n");
+    const sessionPath = join(root, "session.yaml");
+    writeFileSync(sessionPath, `skills:\n  local:\n    - ./plugin\n`);
+    return { root, sessionPath };
+  }
+
+  function cassetteFor(root: string, sessionPath: string): Cassette {
+    const fp = buildFingerprint(sessionPath, "99.0.0", root, ["alpha"]);
+    return {
+      cassetteVersion: CASSETTE_VERSION,
+      scenario: {
+        name: "alpha-smoke",
+        baseline: "99.0.0",
+        session: sessionPath,
+        fidelity: "container" as const,
+        prompt: "hi",
+        answers: [],
+        expect_denied: [],
+        assert: [],
+        skills: ["alpha"],
+      },
+      events: [],
+      fingerprint: fp,
+    } as unknown as Cassette;
+  }
+
+  it("agent-scope OFF (default): a changed agents/<skill>.md is attributed to the SHARED root", () => {
+    const prev = process.env.COWORK_HARNESS_AGENT_SCOPE;
+    delete process.env.COWORK_HARNESS_AGENT_SCOPE;
+    try {
+      const { root, sessionPath } = agentPluginRoot();
+      const c = cassetteFor(root, sessionPath);
+      writeFileSync(join(root, "plugin", "agents", "alpha.md"), "# alpha agent v2\n");
+      const msgs = checkStaleness(c, root);
+      expect(msgs.some((m) => /shared root changed/.test(m) && /alpha\.md/.test(m))).toBe(true);
+      expect(msgs.some((m) => /skills\/alpha changed since record/.test(m))).toBe(false);
+    } finally {
+      if (prev === undefined) delete process.env.COWORK_HARNESS_AGENT_SCOPE;
+      else process.env.COWORK_HARNESS_AGENT_SCOPE = prev;
+    }
+  });
+
+  it("agent-scope ON: a changed agents/<skill>.md is attributed to the SKILL (not shared root)", () => {
+    const prev = process.env.COWORK_HARNESS_AGENT_SCOPE;
+    process.env.COWORK_HARNESS_AGENT_SCOPE = "skill";
+    try {
+      const { root, sessionPath } = agentPluginRoot();
+      const c = cassetteFor(root, sessionPath);
+      writeFileSync(join(root, "plugin", "agents", "alpha.md"), "# alpha agent v2\n");
+      const msgs = checkStaleness(c, root);
+      expect(msgs.some((m) => /skills\/alpha changed since record/.test(m) && /alpha\.md/.test(m))).toBe(true);
+      expect(msgs.some((m) => /shared root changed/.test(m))).toBe(false);
+    } finally {
+      if (prev === undefined) delete process.env.COWORK_HARNESS_AGENT_SCOPE;
+      else process.env.COWORK_HARNESS_AGENT_SCOPE = prev;
+    }
+  });
+});
