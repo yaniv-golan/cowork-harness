@@ -399,6 +399,14 @@ export interface RunResult {
   // + sizes. Paths only (no content snapshot — that is the cassette manifest, #1). Kills path-guessing and
   // makes an all-or-nothing truncated run (empty manifest) detectable. NOT sufficient for mid-write truncation.
   artifacts?: { path: string; bytes: number }[];
+  /** True when the run did NOT complete because it exited on an unanswered gate, but its work (artifacts,
+   *  events, partial transcript) was salvaged to disk anyway so it's still inspectable. A partial run still
+   *  exits non-zero; consumers (verify-run, scaffold) must NOT treat its artifacts/result as a passing
+   *  outcome. Absent on a normal run. */
+  partial?: boolean;
+  /** On a `partial` run, the unanswered gate that ended it — `message` is the decider's failure text (the
+   *  question is embedded in it) and `hint` is the actionable remedy. */
+  unansweredGate?: { message: string; hint?: string };
   nonDeterministic?: boolean; // true if any decision was made by a non-deterministic source (by:"llm"|"external"|"human"|"first") — a green run is NOT reproducible (#47)
   /** True when the CONFIGURED terminal (on_unanswered: llm/prompt, or an external channel) could answer
    *  non-deterministically — even if THIS run was fully scripted and didn't hit it. `nonDeterministic`

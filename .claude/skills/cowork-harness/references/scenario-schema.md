@@ -1,6 +1,6 @@
 # Scenario & session schema, assertion catalog, web_fetch, full gotchas
 
-Self-contained reference for authoring `cowork-harness` scenarios. Tracks `cowork-harness 0.12.0`
+Self-contained reference for authoring `cowork-harness` scenarios. Tracks `cowork-harness 0.13.0`
 (baseline `desktop-1.15200.0`). If your checkout is newer, prefer the live `docs/scenario.md`,
 `docs/session.md`, and `SPEC.md`.
 
@@ -302,7 +302,8 @@ for portable, declarative regression suites with no Python toolchain (CI exit co
 boundary, and coarse-content checks. Use the **pytest `cowork` lane** (`python/`) when you need a
 real predicate over a skill's **structured JSON output**:
 `r.assert_artifact_json("artifacts/<slug>/sizing.json", lambda d: d["top_down"]["som"]["value"] > 0)`.
-Find an artifact's real field paths by running once with `--keep` and inspecting the JSON.
+Find an artifact's real field paths by running once with `--keep`, then `cowork-harness inspect <run-dir>`
+(a shallow field preview of each JSON artifact) or by reading the JSON directly.
 
 ## Full gotcha list
 

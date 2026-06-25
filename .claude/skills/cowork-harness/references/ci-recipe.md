@@ -1,6 +1,6 @@
 # CI recipe — replay vs live lanes
 
-Self-contained reference. Tracks `cowork-harness 0.12.0` (baseline `desktop-1.15200.0`).
+Self-contained reference. Tracks `cowork-harness 0.13.0` (baseline `desktop-1.15200.0`).
 
 ## The core split: token-free PR gate + live nightly (self-hosted)
 

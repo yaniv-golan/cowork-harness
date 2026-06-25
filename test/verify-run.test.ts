@@ -139,6 +139,21 @@ describe.skipIf(!can)("F-1: verify-run re-asserts a kept run dir without a live 
     expect(code).toBe(0);
   });
 
+  it("refuses a PARTIAL run (did not complete) rather than verifying its half-finished output", () => {
+    const run = keptRun();
+    const fs = require("node:fs");
+    const result = JSON.parse(fs.readFileSync(join(run, "result.json"), "utf8"));
+    result.partial = true;
+    result.result = "error";
+    fs.writeFileSync(join(run, "result.json"), JSON.stringify(result, null, 2));
+    // An assertion that WOULD pass on this kept run, so a non-zero exit can only come from the partial
+    // guard — not an assertion miss.
+    const sc = scenarioFile(run, "  - transcript_matches: 'flagged the blank'\n");
+    const { code, text } = verifyRun(run, sc);
+    expect(text).toMatch(/PARTIAL/);
+    expect(code).toBe(2);
+  });
+
   it("verify lane: user_visible_artifact under a BARE folder name passes via persisted userVisibleRoots", () => {
     const run = keptRunWithFolder(true);
     const sc = scenarioFile(run, "  - user_visible_artifact: project/summary.md");

@@ -3,8 +3,8 @@ name: cowork-harness
 description: Test or debug a Claude Code skill/plugin under Claude Cowork's runtime — sandboxed agent, default-deny egress, the can_use_tool permission/question protocol — using the cowork-harness CLI. Use when validating or regression-testing a skill, authoring or debugging a scenario YAML (prompt + scripted answers + assert:), choosing a fidelity tier, scripting AskUserQuestion / tool-permission answers, or asserting artifacts, egress, or sub-agent dispatch. Especially when a harness run no-ops an assertion, fails on an unanswered gate, false-greens, a steered answer never reaches the model, or a web_fetch is unexpectedly denied or gated. NOT for generic unit testing (pytest/vitest of your own scripts) or non-Cowork CI. Covers the skill / run / chat / record / replay / trace / decide / assertions / scaffold commands and the session-vs-scenario split.
 metadata:
   author: cowork-harness
-  version: 0.12.0
-  tracks-harness: cowork-harness 0.12.0 (baseline desktop-1.15200.0)
+  version: 0.13.0
+  tracks-harness: cowork-harness 0.13.0 (baseline desktop-1.15200.0)
 ---
 
 # cowork-harness
@@ -21,7 +21,7 @@ several ways to *silently* no-op a check (skip an assertion on replay, auto-answ
 an empty egress allowlist). This skill exists mostly to keep you out of those traps — the Gotchas
 section below is the highest-value part. Read it.
 
-> **Version note:** the facts and `file:line` pointers here track `cowork-harness 0.12.0` (baseline
+> **Version note:** the facts and `file:line` pointers here track `cowork-harness 0.13.0` (baseline
 > `desktop-1.15200.0`). If your checkout is newer, prefer the live `--help`, `SPEC.md`, and
 > `docs/*.md` over this snapshot, and re-run the bundled linter.
 
@@ -30,7 +30,7 @@ section below is the highest-value part. Read it.
 Before the first command, confirm the CLI is reachable and **fail loud** (never fake a pass) when a tier's dependencies are missing:
 
 - **One-shot check.** Run `cowork-harness doctor [--tier <tier>]` first — a read-only prerequisite check that inspects Docker, the staged agent, the token, and the baseline in one pass. The bullets below explain each thing it checks (and how to fix it).
-- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 0.12.0** (the commands/assertions it teaches: `assertions --list`, `scaffold <run-id>`, `trace --view dispatches`, `artifact_json` incl. the `in:` operator, `verify-cassettes`, batch `record <dir>`/`--rerecord-stale`, parallel batch re-records (`record --concurrency <N>`), record-time redaction, multiSelect/`answer:`, `verify-run` (incl. answer-coverage when a scenario declares `answers:`), `record --max-artifact-bytes`, answering gates live during a recording (`record --decider-dir`/`--decider-llm`/`--on-unanswered first`), `verify-cassettes --allow-domain`/`--allow-email`/`--allow-file`, scenario `skills:` staleness scoping (refinable with `COWORK_HARNESS_AGENT_SCOPE=skill` so a skill-named `agents/<name>.md` re-stales only that skill), `chat --plugin`, and `/help` in the chat REPL). If it's missing *or older than 0.12.0*, prefix every command with `npx` using a version floor: `npx cowork-harness@>=0.12.0 <cmd>` (Node ≥ 20). The floor matters — plain `@latest` would silently fetch an older CLI and the new commands would fail as "unknown command"; `@>=0.12.0` instead **fails loud** if no compatible version is published. To install once instead: `npm i -g cowork-harness@>=0.12.0` (pin the floor here too — for the same reason, don't use `@latest`).
+- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 0.13.0** (the commands/assertions it teaches: `assertions --list`, `scaffold <run-id>`, `trace --view dispatches`, `artifact_json` incl. the `in:` operator, `verify-cassettes`, batch `record <dir>`/`--rerecord-stale`, parallel batch re-records (`record --concurrency <N>`), record-time redaction, multiSelect/`answer:`, `verify-run` (incl. answer-coverage when a scenario declares `answers:`), `record --max-artifact-bytes`, answering gates live during a recording (`record --decider-dir`/`--decider-llm`/`--on-unanswered first`), `verify-cassettes --allow-domain`/`--allow-email`/`--allow-file`, scenario `skills:` staleness scoping (refinable with `COWORK_HARNESS_AGENT_SCOPE=skill` so a skill-named `agents/<name>.md` re-stales only that skill), `chat --plugin`, and `/help` in the chat REPL). If it's missing *or older than 0.13.0*, prefix every command with `npx` using a version floor: `npx cowork-harness@>=0.13.0 <cmd>` (Node ≥ 20). The floor matters — plain `@latest` would silently fetch an older CLI and the new commands would fail as "unknown command"; `@>=0.13.0` instead **fails loud** if no compatible version is published. To install once instead: `npm i -g cowork-harness@>=0.13.0` (pin the floor here too — for the same reason, don't use `@latest`).
 - **Agent binary (every tier).** The staged Claude Code agent is **bind-mounted** from a local Claude Desktop install, or point `COWORK_AGENT_BINARY` at a `claude-code-vm/<ver>/claude` ELF. Nothing is bundled. No agent → no run; report that, don't skip silently.
 - **Docker / Lima.** Only `--fidelity protocol` (L0) runs without them. `container` / `microvm` / `hostloop` / `cowork` need Docker (Lima for L2). If they're absent, drop to `--fidelity protocol` and **say so** — a green that never exercised the sandbox is not a sandbox pass.
 - **Auth.** `CLAUDE_CODE_OAUTH_TOKEN` (preferred) or `ANTHROPIC_API_KEY`, via env or `.env`.
@@ -44,8 +44,8 @@ Before the first command, confirm the CLI is reachable and **fail loud** (never 
 - **Multi-turn debugging** → `cowork-harness chat` (interactive; gates answered at the TTY, **not** an
   asserted test — see *Debugging with `chat`* in `docs/scenario.md`).
 
-Full command set: `skill · run · chat · record · replay · verify-cassettes · rehash · runs gc · lint ·
-verify-run · trace · decide · gates · answer · scaffold · assertions --list · sync · list ·
+Full command set: `skill · run · chat · record · replay · verify-cassettes · rehash · prune · lint ·
+verify-run · trace · inspect · decide · gates · answer · scaffold · assertions --list · sync · list ·
 boundary-check · vm <init|status|delete|prune> · doctor`. Always check `cowork-harness <cmd> --help`.
 
 ## 2. Two files: session vs scenario
@@ -177,6 +177,33 @@ Run artifacts are written to `~/.cowork-harness/runs/…` by default — **outsi
 launched from a repo root never drops sensitive skill inputs/outputs into it. Pass `--run-dir <path>` (or set
 `COWORK_HARNESS_RUNS_DIR`) to relocate; in CI point it at a workspace path so an artifact-upload step can
 collect the runs.
+
+### Validate a skill against real documents (not a cassette)
+
+The loops above build **deterministic regressions**. A different job — drive a skill against *real* input
+documents to judge whether it actually does the work (extraction, analysis), with no intent to record a
+cassette — has its own recipe:
+
+1. **Explore with the LLM decider.** `cowork-harness skill <dir> --decider-llm --intent "<one line of what
+   this run is testing>"` lets a small model answer each gate steered by your intent. This is exploration,
+   **not** a deterministic regression — the run is flagged non-deterministic and a green here is not a
+   scripted pass.
+2. **Script the load-bearing gates — especially binary confirm gates.** Once you know which gates fire
+   (`trace <run-dir> --view questions`), pin the ones whose choice drives the outcome with
+   `--answer "<q>=<label>"` / `--answer-policy <yaml>`. **A "Confirm | Different"-style confirm gate is worth
+   scripting** rather than leaving to `--decider-llm`: a generic decider may answer it with free text instead
+   of selecting the label. Scripting it removes that variance.
+3. **Budget ~1 re-run per file.** If a gate whiffs, the run no longer vanishes — it exits non-zero but
+   **salvages a PARTIAL run** (the extraction the agent already did is written to disk). So the cost of a
+   missed gate is one re-run with a better `--intent` or a scripted answer, not a lost paid run.
+4. **Inspect the outputs to judge correctness.** `cowork-harness inspect <run-dir>` shows what the run
+   produced — the artifacts plus a shallow field preview of each JSON artifact (e.g. the extracted figures).
+   It works on a salvaged partial run too. (A partial run is marked `PARTIAL`; `verify-run` and `scaffold`
+   refuse to treat its half-finished output as a passing result.)
+5. **For image-only / scanned PDFs, use the full-parity image.** The default agent image omits OCR and
+   PDF-table tooling; if a skill declares `requires_capabilities`, the harness now warns **before** the run
+   when the image lacks them. Rebuild with `--build-arg COWORK_FULL_PARITY=1` and point `COWORK_AGENT_IMAGE`
+   at it for those skills.
 
 ### Interpreting verdict signals
 
@@ -326,7 +353,9 @@ are the ones that bite hardest.
     assert the deliverable (`file_exists` / `artifact_json` / `transcript_matches`), never just
     `result: success`. Note: `on_unanswered` governs **structured `AskUserQuestion` gates only**, not a
     plain-text trailing question; and a "type-it-in-notes" option has **no scripted deterministic
-    answer** today (the `OTHER:` directive works only on the LLM-decider path, not scripted `choose:`).
+    answer** today (the `OTHER:` directive works only on the LLM-decider path, not scripted `choose:`;
+    on an options-bearing gate a bare out-of-set LLM answer fails loud (exit 2) — see the LLM-decider
+    free-text note in `references/fidelity-and-answers.md`).
 14. **A positional `choose` (`first` / index) is order-dependent.** `choose: "2"` survives label drift
     but NOT option *re-ordering* — if the gate presents its options in a different order run-to-run, the
     index lands on a different option (a silent re-record flake). Prefer an exact label when order is

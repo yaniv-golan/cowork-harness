@@ -145,6 +145,15 @@ export class Run {
     return { task: this.rec.transcript, transcript: () => this.rec.transcript, toolLog: () => this.toolLog, runId: this.rec.runId };
   }
 
+  /** The in-progress record. When `drive()` throws on an unanswered gate, this holds everything accumulated
+   *  up to the whiff (transcript, decisions, tool counts, artifacts-on-disk are separate) — the caller uses
+   *  it to salvage a partial run instead of discarding the work. Fully initialized in the constructor, so
+   *  it's a usable shell even on a very-early throw. The post-loop gate-delivery pairing has NOT run on the
+   *  throw path, so `gateDeliveries` is empty here. */
+  partial(): RunRecord {
+    return this.rec;
+  }
+
   /** Drive one-shot (string) or multi-turn (async iterable) and return the record. */
   async drive(turns: string | AsyncIterable<string>, startOpts?: Parameters<AgentSession["start"]>[0]): Promise<RunRecord> {
     const turnIter = typeof turns === "string" ? oneShot(turns) : turns[Symbol.asyncIterator]();

@@ -14,16 +14,16 @@ const DEFAULT_KEEP_LAST = 5;
  *  in-flight run is protected without a wall-clock guard. */
 const isRealRun = (dir: string) => existsSync(join(dir, "result.json")) || existsSync(join(dir, "events.jsonl"));
 
-/** `cowork-harness runs gc [--keep-last <n>] [--dry-run] [<runs-dir>]`
+/** `cowork-harness prune [--keep-last <n>] [--dry-run] [<runs-dir>]`
  *
  *  For each scenario directory under the runs root, ranks EPHEMERAL run dirs by (1) real-run first (has
  *  result.json OR events.jsonl), (2) mtime descending, (3) name — then keeps the N most recent of that order
  *  and removes the rest. So an older COMPLETED run beats a newer empty scaffold dir for a keep slot, but
  *  `--keep-last` stays a HARD CAP (the ranking only decides WHICH N survive — never grows the kept count).
- *  Do NOT run `runs gc` against an actively-writing runs root.
+ *  Do NOT run `prune` against an actively-writing runs root.
  *  Pinned `sess-*` dirs (persisted, resumable `--session-id` sessions) are retained unconditionally.
  *  The default root is the flat, machine-global `~/.cowork-harness/runs` (shared across projects), so a
- *  bare `runs gc` prunes ephemeral runs from ALL projects; pass an explicit <runs-dir> to scope it.
+ *  bare `prune` prunes ephemeral runs from ALL projects; pass an explicit <runs-dir> to scope it.
  *  Safe by default (dry-run-able). */
 export function cmdRunsGc(args: string[]): void {
   let p;
@@ -37,14 +37,14 @@ export function cmdRunsGc(args: string[]): void {
     return process.exit(2);
   }
   if (p.positionals.length > 1) {
-    log(`runs gc takes an optional <runs-dir> (got ${p.positionals.length}: ${p.positionals.join(", ")})`);
+    log(`prune takes an optional <runs-dir> (got ${p.positionals.length}: ${p.positionals.join(", ")})`);
     return process.exit(2);
   }
 
   const rawKeep = p.options["--keep-last"];
   const keepLast = rawKeep !== undefined ? Number(rawKeep) : DEFAULT_KEEP_LAST;
   if (!Number.isInteger(keepLast) || keepLast < 1) {
-    log(`runs gc: --keep-last must be a positive integer (got ${rawKeep})`);
+    log(`prune: --keep-last must be a positive integer (got ${rawKeep})`);
     return process.exit(2);
   }
 
@@ -52,7 +52,7 @@ export function cmdRunsGc(args: string[]): void {
   const runsRoot = p.positionals[0] ?? runsWriteRoot();
 
   if (!existsSync(runsRoot)) {
-    log(`✓ runs gc: ${runsRoot} does not exist — nothing to prune`);
+    log(`✓ prune: ${runsRoot} does not exist — nothing to prune`);
     return process.exit(0);
   }
 
@@ -123,8 +123,8 @@ export function cmdRunsGc(args: string[]): void {
 
   log(
     deleted > 0
-      ? `✓ runs gc: pruned ${deleted} run dir(s), kept ${kept}${dryRun ? " (dry-run — nothing deleted)" : ""}`
-      : `✓ runs gc: nothing to prune (${kept} run dir(s) within --keep-last ${keepLast})`,
+      ? `✓ prune: pruned ${deleted} run dir(s), kept ${kept}${dryRun ? " (dry-run — nothing deleted)" : ""}`
+      : `✓ prune: nothing to prune (${kept} run dir(s) within --keep-last ${keepLast})`,
   );
   return process.exit(0);
 }

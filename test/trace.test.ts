@@ -343,4 +343,60 @@ describe("scaffold --from-run (SCAFFOLD-FROM-RUN)", () => {
     const parsed = parseYaml(out);
     expect(parsed.answers[0].choose).toBe("Auth, Billing");
   });
+
+  it("degrades on a partial (did-not-complete) run: keeps gates, drops artifact/result asserts, warns loud", () => {
+    const reqId = "r1";
+    const tuid = "toolu_P1";
+    const dir = mkdtempSync(join(tmpdir(), "cwh-scaffold-partial-"));
+    const eventsFilePath = join(dir, "events.jsonl");
+    const events = [
+      { type: "system", subtype: "init", tools: ["AskUserQuestion"] },
+      {
+        type: "control_request",
+        request_id: reqId,
+        request: {
+          subtype: "can_use_tool",
+          tool_name: "AskUserQuestion",
+          tool_use_id: tuid,
+          input: { questions: [{ question: "Which format?", options: [{ label: "PDF" }] }] },
+        },
+      },
+      { type: "user", message: { content: [{ type: "tool_result", tool_use_id: tuid, is_error: false, content: "PDF" }] } },
+    ];
+    writeFileSync(eventsFilePath, events.map((e) => JSON.stringify(e)).join("\n"));
+    writeFileSync(
+      join(dir, "control-out.jsonl"),
+      JSON.stringify({
+        type: "control_response",
+        response: {
+          subtype: "success",
+          request_id: reqId,
+          response: {
+            behavior: "allow",
+            updatedInput: { questions: [{ question: "Which format?", options: [{ label: "PDF" }] }], answers: { "Which format?": "PDF" } },
+          },
+        },
+      }),
+    );
+    writeFileSync(
+      join(dir, "result.json"),
+      JSON.stringify({
+        prompt: "make a report",
+        fidelity: "container",
+        result: "error",
+        partial: true,
+        unansweredGate: { message: "unscripted AskUserQuestion" },
+        artifacts: [{ path: "outputs/partial.pdf", bytes: 3 }],
+        subagents: [],
+      }),
+    );
+    const out = buildScaffold(eventsFilePath);
+    expect(out).toMatch(/PARTIAL/);
+    const parsed = parseYaml(out);
+    // gates still scaffolded so the author can lock the answers...
+    expect(parsed.answers[0].choose).toBe("PDF");
+    // ...but the pre-failure artifacts and the error result must NOT become asserts.
+    expect((parsed.assert ?? []).some((a: any) => a.file_exists)).toBe(false);
+    expect((parsed.assert ?? []).some((a: any) => a.result)).toBe(false);
+  });
 });

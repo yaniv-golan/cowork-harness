@@ -75,6 +75,20 @@ describe("LlmDecider", () => {
     );
   });
 
+  it("binds a near-miss label with trailing punctuation (e.g. 'Confirmed.') instead of failing loud", async () => {
+    const complete: Complete = async () => "Confirmed.";
+    const d = await new LlmDecider(complete).decide(ask("Use the extracted cap table?", ["Confirmed", "Different"]), ctx());
+    expect((d as any).response.answers).toEqual({ "Use the extracted cap table?": "Confirmed" });
+    expect((d as any).by).toBe("llm");
+  });
+
+  it("the trailing-punctuation trim does NOT swallow the OTHER: sentinel (colon is preserved)", async () => {
+    // A 2-option gate still honors OTHER: free text — the dropped suppression must not regress.
+    const complete: Complete = async () => "OTHER: CSV";
+    const d = await new LlmDecider(complete).decide(ask("Format?", ["PDF", "DOCX"]), ctx());
+    expect((d as any).response.answers).toEqual({ "Format?": "CSV" });
+  });
+
   it("abstains on an ORDINARY (optionless) permission request (parity default handles it)", async () => {
     const complete: Complete = async () => "x";
     const r = await new LlmDecider(complete).decide({ id: "p", kind: "permission", tool: "Bash", input: {} }, ctx());

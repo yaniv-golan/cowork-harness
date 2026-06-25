@@ -261,6 +261,13 @@ fires even when the skill's fallback masks the gap. The check is computed at run
 `verify-run`/`replay` honor the recorded outcome — a clean full-parity run records nothing and never
 false-fails later. Opt out with `allow_missing_capability: true` when the fallback is genuinely equivalent.
 
+When `requires_capabilities` is declared, the harness probes the image **before** driving and, if a declared
+family is omitted, **fails fast — it aborts the run (exit 3) before spending a single token**, instead of
+running ~12 min to a post-run hard-fail that's already known. Rebuild full parity
+(`--build-arg COWORK_FULL_PARITY=1`) and point `COWORK_AGENT_IMAGE` at it, or assert
+`allow_missing_capability: true` (which downgrades the abort to a notice and proceeds, same as it opts out of
+the post-run check).
+
 ```yaml
 requires_capabilities: [office_convert, pdf_tables]   # fail unless the tier provides (and can verify) these
 ```
@@ -382,7 +389,8 @@ are) or need a real predicate over a skill's **structured JSON output**:
 full Python callable with autocomplete and `print(d)`, strictly richer than anything a YAML string can
 express. **If you're checking structured JSON content and already write Python, prefer the pytest lambda**
 (a YAML content-predicate would be equal power with worse tooling). Find an artifact's real field paths by
-running once with `--keep` and inspecting the JSON under the run's `…/mnt/artifacts/…`.
+running once with `--keep`, then `cowork-harness inspect <run-dir>` (a shallow field preview of each JSON
+artifact) or by reading the JSON under the run's `…/mnt/outputs/…` directly.
 
 ## Output
 
