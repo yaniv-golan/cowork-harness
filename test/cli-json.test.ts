@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, writeFileSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { VERDICT_MODIFIER_KEYS } from "../src/types.js";
+import { loadBaseline } from "../src/baseline.js";
 
 // Exercises the built CLI's --output-format json envelope + exit codes. Token-free and spawn-free
 // (usage/boundary fail before any agent spawn; replay is deterministic). Needs `dist/cli.js`
@@ -621,5 +622,34 @@ describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
     writeIn(cwd, "s.cassette.json", JSON.stringify(body));
     const r = spawnSync("node", [CLI, "replay", "s.cassette.json"], { encoding: "utf8", cwd });
     expect(r.status).toBe(0);
+  });
+});
+
+// Fix 1/2 at the CLI seam: the unit test calls replayCassette() directly, so it can't catch a missing
+// cmdReplay→replayCassette opt wiring (a real bug caught only at the binary). These spawn the built CLI.
+describe.skipIf(!can)("replay staleness JSON + --fail-on-skill-drift (CLI wiring)", () => {
+  const LIVE = loadBaseline("latest").appVersion;
+  const staleCassette = (fingerprint: object) => ({ cassetteVersion: 6, fingerprint, ...cassette([{ result: "success" }]) });
+
+  it("default replay surfaces class-tagged staleness[] but stays ok:true (exit 0)", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "cc-stale-"));
+    writeIn(cwd, "b.cassette.json", JSON.stringify(staleCassette({ baseline: "0.0.0-stale-not-live" })));
+    const r = spawnSync("node", [CLI, "replay", "b.cassette.json", "--output-format", "json"], { encoding: "utf8", cwd });
+    expect(r.status).toBe(0);
+    const j = JSON.parse(r.stdout);
+    expect(j.ok).toBe(true);
+    expect(j.results[0].staleness).toEqual([expect.objectContaining({ class: "baseline" })]);
+    expect(j.results[0].skippedAssertions).toEqual({ full: 0, partial: 0 });
+  });
+
+  it("--fail-on-skill-drift fails on a skill class (exit 1) but not a baseline-only drift (exit 0)", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "cc-stale-"));
+    writeIn(cwd, "b.cassette.json", JSON.stringify(staleCassette({ baseline: "0.0.0-stale-not-live" })));
+    // skillHash set + unresolvable (inline) session + live baseline ⇒ a sole `unverifiable-skill` finding.
+    writeIn(cwd, "s.cassette.json", JSON.stringify(staleCassette({ baseline: LIVE, skillHash: "deadbeef" })));
+    const baselineOnly = spawnSync("node", [CLI, "replay", "b.cassette.json", "--fail-on-skill-drift"], { encoding: "utf8", cwd });
+    expect(baselineOnly.status).toBe(0); // baseline drift is not skill-source drift
+    const skillDrift = spawnSync("node", [CLI, "replay", "s.cassette.json", "--fail-on-skill-drift"], { encoding: "utf8", cwd });
+    expect(skillDrift.status).toBe(1); // skill staleness unverifiable ⇒ not green under this gate
   });
 });

@@ -151,4 +151,29 @@ Secrets are scrubbed from every persisted log by value.
 
 On `replay`, skipped assertions are **absent** from `results[].assertions[]` (filtered before
 evaluation), not present-and-passing. A CI script that counts assertions will see a different count
-on replay vs live — compare by assertion identity / pass-fail, not by total count.
+on replay vs live — compare by assertion identity / pass-fail, not by total count. The count of
+skipped live-only assertions is reported on each replay result as `skippedAssertions: {full, partial}`.
+
+## Staleness does NOT fail a replay by default — read it from the JSON
+
+A plain `replay` **warns** on a stale cassette (skill/baseline drift) but stays `ok:true` — a green replay
+does **not** imply the recording is still valid. Each replay result carries `staleness[]`, an array of
+`{class, message}`, so a token-free gate can act on it without `ok` being the whole story:
+
+| `class` | meaning | concern |
+|---|---|---|
+| `baseline` | platform baseline moved since record | low (format-compatible) |
+| `skill` / `shared-root` | the skill source the assertions validate drifted | **high** (assertions may validate dead code) |
+| `format` | recorded under an older hash format | re-record once |
+| `unverifiable-baseline` | the latest baseline couldn't be loaded | couldn't verify (env, not skill) |
+| `unverifiable-skill` | skill dirs unresolvable — skill staleness couldn't be checked | couldn't verify the skill |
+
+To gate in CI, pick the severity you want:
+
+- `replay --strict` — fail (exit 1) on **any** staleness class.
+- `replay --fail-on-skill-drift` — fail only on skill-source drift (`skill` / `shared-root` / `unverifiable-skill`);
+  baseline / format / `unverifiable-baseline` stay non-failing warnings.
+- Or read `results[].staleness[].class` yourself and decide.
+
+Both flags realize the gate as failing assertions, so the verdict / `ok` / exit code stay consistent with the
+plain run.

@@ -331,6 +331,18 @@ export interface Fingerprint {
   agentScope?: "skill";
 }
 
+/** The cause-class of a replay staleness finding. `unverifiable-baseline` (env/platform: the latest baseline
+ *  couldn't be loaded — says nothing about the skill) is split from `unverifiable-skill` (the harness could
+ *  not check skill staleness) so the `--fail-on-skill-drift` gate can fail-closed on the latter while leaving
+ *  the former a non-failing surfaced notice. `baseline` = platform bump (format-compatible, low concern);
+ *  `skill`/`shared-root` = the skill source the assertions validate drifted (high concern); `format` = an
+ *  older hash-format recording. */
+export type StalenessClass = "baseline" | "skill" | "shared-root" | "format" | "unverifiable-baseline" | "unverifiable-skill";
+export interface StalenessFinding {
+  class: StalenessClass;
+  message: string;
+}
+
 export interface RunResult {
   $schema?: string;
   generator?: string;
@@ -422,6 +434,18 @@ export interface RunResult {
   /** #49: structured fidelity warnings (prompt asset gaps, version mismatches) — visible to JSON callers,
    *  not just stderr. Populated when a non-fatal prompt warning is emitted during a run. */
   fidelityWarnings?: string[];
+  /** Replay-lane only: class-tagged cassette-staleness findings, surfaced to JSON callers so a token-free CI
+   *  gate can see staleness WITHOUT it changing the verdict (a stale, otherwise-passing replay stays `ok:true`
+   *  by default). Populated on every replay that runs the staleness check — incl. `unverifiable-*` when the
+   *  check couldn't complete, so a consumer can distinguish "verified clean" from "couldn't verify". The
+   *  `--strict` / `--fail-on-skill-drift` gates turn selected classes into failing assertions; this field
+   *  itself is pure data. Absent on the live lane (no cassette to compare). */
+  staleness?: StalenessFinding[];
+  /** Replay-lane only: count of assertions NOT evaluated on replay because they are live-only (filesystem /
+   *  egress / expect_denied). `full` = the whole assertion was skipped; `partial` = its content half ran but a
+   *  filesystem/egress half was dropped. Surfaced so a CI script doesn't read a green replay as having checked
+   *  everything. The skipped assertions are absent from `assertions[]` (filtered before evaluation). */
+  skippedAssertions?: { full: number; partial: number };
   /** Tool-result text at assertion-fidelity cap (10 KB per result). Used by `tool_result_contains` /
    *  `tool_result_not_contains`. `assertText` is preferred when present; falls back to `text` (500-char
    *  display cap) for cassettes recorded before this field was added. */

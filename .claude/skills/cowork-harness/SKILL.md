@@ -201,9 +201,11 @@ cassette — has its own recipe:
    It works on a salvaged partial run too. (A partial run is marked `PARTIAL`; `verify-run` and `scaffold`
    refuse to treat its half-finished output as a passing result.)
 5. **For image-only / scanned PDFs, use the full-parity image.** The default agent image omits OCR and
-   PDF-table tooling; if a skill declares `requires_capabilities`, the harness now warns **before** the run
-   when the image lacks them. Rebuild with `--build-arg COWORK_FULL_PARITY=1` and point `COWORK_AGENT_IMAGE`
-   at it for those skills.
+   PDF-table tooling; if a **scenario** sets `requires_capabilities` (a scenario field — not skill
+   frontmatter) and the image provably omits one, the harness **aborts before the paid run (exit 3)** —
+   unless the scenario asserts `allow_missing_capability: true`, which downgrades it to a notice and
+   proceeds. Rebuild with `--build-arg COWORK_FULL_PARITY=1` and point `COWORK_AGENT_IMAGE` at it for those
+   skills.
 
 ### Interpreting verdict signals
 

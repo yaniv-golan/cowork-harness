@@ -9,6 +9,7 @@ import {
   type RunResult,
   type Assertion,
   type Fingerprint,
+  type StalenessFinding,
   Assertion as AssertionSchema,
   VERDICT_MODIFIER_KEYS,
 } from "../types.js";
@@ -1644,7 +1645,7 @@ export async function cmdReplay(args: string[]) {
   try {
     p = parseArgs(args, {
       // --quiet/--verbose accepted for flag consistency but currently no-op in replay (renderer plan is fixed).
-      booleans: ["--strict", "--quiet", "--verbose"],
+      booleans: ["--strict", "--fail-on-skill-drift", "--quiet", "--verbose"],
       values: ["--output-format"],
       enums: { "--output-format": ["text", "json"] },
       aliases: { "-q": "--quiet", "-V": "--verbose" },
@@ -1655,7 +1656,7 @@ export async function cmdReplay(args: string[]) {
   }
   const target = p.positionals[0];
   if (!target) {
-    log("usage: replay <file.cassette.json | dir/> [--strict] [--output-format text|json]");
+    log("usage: replay <file.cassette.json | dir/> [--strict] [--fail-on-skill-drift] [--output-format text|json]");
     return process.exit(2);
   }
   if (p.positionals.length > 1) {
@@ -1663,7 +1664,10 @@ export async function cmdReplay(args: string[]) {
     return process.exit(2);
   }
   const json = p.options["--output-format"] === "json";
-  const strict = p.flags["--strict"] ?? false; // #1b: escalate staleness warnings to failures (release gate)
+  const strict = p.flags["--strict"] ?? false; // #1b: escalate ALL staleness findings to failures (release gate)
+  const failOnSkillDrift = p.flags["--fail-on-skill-drift"] ?? false; // narrower gate: only skill-source drift fails
+  if (strict && failOnSkillDrift)
+    warn("::notice:: [replay] --strict and --fail-on-skill-drift both passed — --strict is the superset (fails on every class), so --fail-on-skill-drift is redundant here\n");
   const resolved = resolveInputs(target, ".cassette.json");
   if ("error" in resolved) {
     log(`replay: ${resolved.error}`);
@@ -1687,7 +1691,7 @@ export async function cmdReplay(args: string[]) {
     // fine" (false-green by abort). Wrap per-file: turn an unexpected throw into a tallied error result.
     let result: RunResult;
     try {
-      result = await replayCassette(rc.cassette, renderer ? [renderer] : [], { strict, cassetteDir: dirname(f) });
+      result = await replayCassette(rc.cassette, renderer ? [renderer] : [], { strict, failOnSkillDrift, cassetteDir: dirname(f) });
     } catch (e) {
       log(`replay: ${f}: ${(e as Error)?.message ?? String(e)}`);
       results.push(replayErrorResult(f)); // turns the envelope's ok false (no false green)
@@ -1994,11 +1998,14 @@ export function cmdRehash(args: string[]): void {
 
 /** Replay a cassette through Run and re-evaluate the content assertions. With a `cassette.artifacts`
  *  manifest (#1), filesystem assertions (file_exists/user_visible_artifact/artifact_json) ALSO run, against
- *  the materialized snapshot. `opts.strict` (#1b) escalates staleness warnings to failing assertions. */
+ *  the materialized snapshot. `opts.strict` (#1b) escalates ALL staleness findings to failing assertions;
+ *  `opts.failOnSkillDrift` escalates only the skill-source classes (`skill`/`shared-root`/`unverifiable-skill`),
+ *  leaving baseline drift a non-failing warning. Either way the findings are always surfaced in
+ *  `RunResult.staleness` for JSON consumers. */
 export async function replayCassette(
   cassette: Cassette,
   hooks: RunHooks[] = [],
-  opts: { strict?: boolean; cassetteDir?: string } = {},
+  opts: { strict?: boolean; failOnSkillDrift?: boolean; cassetteDir?: string } = {},
 ): Promise<RunResult> {
   // Cassette format version: ABSENT = legacy (0); a FUTURE version means this harness may misread fields
   // it doesn't know about. in strict mode this is a hard failure (future semantics may not be
@@ -2024,7 +2031,12 @@ export async function replayCassette(
   // unchanged (frozen-structure limit). The skill-hash recompute needs the local skill dirs to be resolvable
   // from the cassette's session path; when they aren't (a moved/committed cassette), we say so rather than
   // silently skipping.
-  const staleness: string[] = [];
+  // Findings are pushed UNCONDITIONALLY (class-tagged) so they're surfaced in JSON (RunResult.staleness) even
+  // on the default gate — a token-free consumer can then distinguish "verified clean" from "couldn't verify"
+  // (the `unverifiable-*` classes) WITHOUT the verdict changing. The `--strict` / `--fail-on-skill-drift`
+  // gates below are the ONLY place a finding becomes a failing assertion. The single `warn()` loop at the end
+  // is the lone stderr emitter — no per-branch `warn()`, so a non-strict run never double-warns one cause.
+  const staleness: StalenessFinding[] = [];
   if (cassette.fingerprint) {
     const fp = cassette.fingerprint;
     let liveBaseline: string | undefined;
@@ -2033,47 +2045,50 @@ export async function replayCassette(
       liveBaseline = loadBaseline("latest").appVersion;
     } catch {
       baselineLoadFailed = true;
-      if (opts.strict) {
-        staleness.push("baseline could not be loaded — cannot verify staleness (--strict: treating as stale)");
-      } else {
-        warn("cowork-harness: strict staleness check skipped — baseline could not be loaded\n");
-      }
+      staleness.push({
+        class: "unverifiable-baseline",
+        message: "baseline could not be loaded — cannot verify staleness (env/platform, not skill drift)",
+      });
     }
     if (!baselineLoadFailed && liveBaseline && liveBaseline !== fp.baseline)
-      staleness.push(`baseline moved ${fp.baseline} → ${liveBaseline} since record — re-record before trusting this replay`);
+      staleness.push({
+        class: "baseline",
+        message: `baseline moved ${fp.baseline} → ${liveBaseline} since record — re-record before trusting this replay`,
+      });
     if (fp.skillHash) {
       const live = buildFingerprint(cassette.scenario.session, fp.baseline, opts.cassetteDir, cassette.scenario.skills);
       if (live.skillHash === undefined) {
-        // under --strict, unresolvable skill dirs are a failure (can't verify ⇒ not green).
-        // Without --strict, warn but continue (the baseline check still applies).
-        if (opts.strict) {
-          staleness.push(
-            "skill dirs not resolvable from this cassette location — cannot verify skill staleness (--strict: treating as stale)",
-          );
-        } else {
-          warn(
-            "::warning:: [replay] skill fingerprint not re-checkable (local skill dirs not resolvable from this cassette location) — baseline check still applies\n",
-          );
-        }
+        staleness.push({
+          class: "unverifiable-skill",
+          message:
+            "skill dirs not resolvable from this cassette location — cannot verify skill staleness (the baseline check still applies)",
+        });
       } else if (live.skillHash !== fp.skillHash) {
         const recordedVersion = cassette.cassetteVersion ?? 0;
         if (recordedVersion < CASSETTE_VERSION) {
-          staleness.push(
-            `recorded under an older hash format (v${recordedVersion} → v${CASSETTE_VERSION}) — re-record once after upgrading`,
-          );
+          staleness.push({
+            class: "format",
+            message: `recorded under an older hash format (v${recordedVersion} → v${CASSETTE_VERSION}) — re-record once after upgrading`,
+          });
         } else if (fp.sharedHash !== undefined && live.sharedHash !== undefined) {
           const scope = fp.skillScope?.length ? fp.skillScope.map((s) => `skills/${s}`).join(", ") : "skill";
           if (live.sharedHash !== fp.sharedHash) {
-            staleness.push(`shared root changed since record (scope: ${scope}) — re-record before trusting this replay`);
+            staleness.push({
+              class: "shared-root",
+              message: `shared root changed since record (scope: ${scope}) — re-record before trusting this replay`,
+            });
           } else {
-            staleness.push(`${scope} changed since record — re-record before trusting this replay`);
+            staleness.push({ class: "skill", message: `${scope} changed since record — re-record before trusting this replay` });
           }
         } else {
-          staleness.push("local skill/plugin dir contents changed since record — re-record before trusting this replay");
+          staleness.push({
+            class: "skill",
+            message: "local skill/plugin dir contents changed since record — re-record before trusting this replay",
+          });
         }
       }
     }
-    for (const s of staleness) warn(`::warning:: [replay] cassette stale: ${s}\n`);
+    for (const s of staleness) warn(`::warning:: [replay] cassette stale: ${s.message}\n`);
   }
 
   // §2.5 backward compat: warn loudly when controlOut is absent so the user knows question/gate
@@ -2237,9 +2252,17 @@ export async function replayCassette(
     truncatedPaths: replayTruncatedPaths,
   });
 
-  // #1b: under --strict, a staleness mismatch is a failing assertion (non-zero exit), not just a warning.
+  // #1b: under --strict, EVERY staleness finding becomes a failing assertion (non-zero exit), not just a
+  // warning. --fail-on-skill-drift is the narrower gate: only the skill-source classes fail (incl.
+  // `unverifiable-skill` — can't verify skill staleness ⇒ not green), while baseline / format / env-level
+  // findings stay non-failing. `else if` makes --strict the superset when both are passed.
+  const SKILL_DRIFT_CLASSES: ReadonlySet<StalenessFinding["class"]> = new Set(["skill", "shared-root", "unverifiable-skill"]);
   if (opts.strict)
-    for (const s of staleness) assertions.push({ assertion: {} as Assertion, pass: false, message: `cassette stale (--strict): ${s}` });
+    for (const s of staleness)
+      assertions.push({ assertion: {} as Assertion, pass: false, message: `cassette stale (--strict): ${s.message}` });
+  else if (opts.failOnSkillDrift)
+    for (const s of staleness.filter((s) => SKILL_DRIFT_CLASSES.has(s.class)))
+      assertions.push({ assertion: {} as Assertion, pass: false, message: `skill-source drift (--fail-on-skill-drift): ${s.message}` });
 
   // future cassette version — hard failure under --strict (forward semantics may not be
   // correctly interpreted here, so a green replay would be a false-green).
@@ -2335,6 +2358,10 @@ export async function replayCassette(
     subagents: rec.subagents,
     unanswered: rec.unanswered,
     outDir: "(replay)",
+    // Class-tagged staleness + skip counts, surfaced to JSON callers (the gate decision already happened
+    // above via failing assertions; these fields are pure data so a green stays green by default).
+    staleness: staleness.length ? staleness : undefined,
+    skippedAssertions: { full: fullSkipCount, partial: partialSkipCount },
     // A cassette freezes the answer path: the replay itself is deterministic regardless of how the
     // original run was answered. Always explicit (never undefined) so renderer.ts:146 treats it
     // correctly — undefined would silently render as "deterministic" (#47 C1 [review-2]).

@@ -19,14 +19,21 @@ export const SCHEMA_DIR = join(REPO_ROOT, "schema");
  *  is. Writer + the drift-guard test both reference this one constant. */
 export const ASSERTION_KEYS_PATH = join(REPO_ROOT, ".claude/skills/cowork-harness/scripts/assertion-keys.json");
 
-/** The authoritative assertion-key list, derived from the Zod `Assertion` schema (the same source
- *  `assert --list` reads). Generating it keeps `scenario.py`'s unknown-key check from drifting. */
+/** The authoritative key lists `scenario.py` reads — derived from the Zod schemas (the same source
+ *  `assert --list` reads). Generating them keeps the linter's unknown-key checks from drifting: `keys` is
+ *  the `assert:` catalog, `topLevelKeys` the scenario top-level catalog (an earlier hand-maintained copy
+ *  drifted and false-flagged the valid `requires_capabilities`). `profile`/`assertions` are NOT here — they
+ *  are deprecated aliases handled by scenario.py's special-cases (the Zod `Scenario` preprocess remaps
+ *  `profile`; `assertions` is a hard error), so they are intentionally absent from the schema shape. */
 export function buildAssertionKeys(): string {
   return (
     JSON.stringify(
       {
-        $comment: "GENERATED from the Zod Assertion schema (src/types.ts) by scripts/gen-schema.ts — do not edit; run `npm run schema`.",
+        $comment: "GENERATED from the Zod schemas (src/types.ts) by scripts/gen-schema.ts — do not edit; run `npm run schema`.",
         keys: Object.keys(Assertion.shape).sort(),
+        // Every valid top-level scenario key, from the ScenarioObject strictObject shape (NOT the `Scenario`
+        // preprocess wrapper). scenario.py keeps an embedded fallback parity-tested against this.
+        topLevelKeys: Object.keys(ScenarioObject.shape).sort(),
         // The verdict-modifier subset (no-op assertions that suppress a default-fail). scenario.py keeps a
         // hardcoded copy parity-tested against this; see VERDICT_MODIFIER_KEYS in src/types.ts.
         verdictModifierKeys: [...VERDICT_MODIFIER_KEYS].sort(),

@@ -255,7 +255,9 @@ A cassette (`record`/`replay`) has **no filesystem and no network**. `replay` re
 `outputs/` + connected folders; `replay` materializes it). `artifact_json` needs the small-file JSON `body`
 inlined; a hash-only entry still satisfies `file_exists`. Without a manifest (older cassettes) they're
 skipped. A green replay re-confirms *record-time* artifacts, not that the current skill still produces them
-— `replay --strict` fails when the staleness `fingerprint` shows the skill/baseline drifted.
+— `replay --strict` fails when the staleness `fingerprint` shows ANY skill/baseline drift, or
+`replay --fail-on-skill-drift` only on skill-source drift; every replay result also reports it class-tagged
+in `staleness[]` for a JSON gate.
 
 **Egress + other filesystem — still skipped on replay (live-only):** `no_delete_in_outputs`,
 `self_heal_ran`, `transcript_no_host_path`, `egress_*` / `expect_denied`. These run only on a live `run`/`record`.
