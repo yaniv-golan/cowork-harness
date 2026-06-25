@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.15.0] — 2026-06-25
+
 ### Fixed
 
 - **Staleness no longer masks a scoped skill's own drift behind a co-occurring shared change.** For a
