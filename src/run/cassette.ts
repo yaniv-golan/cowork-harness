@@ -1667,7 +1667,9 @@ export async function cmdReplay(args: string[]) {
   const strict = p.flags["--strict"] ?? false; // #1b: escalate ALL staleness findings to failures (release gate)
   const failOnSkillDrift = p.flags["--fail-on-skill-drift"] ?? false; // narrower gate: only skill-source drift fails
   if (strict && failOnSkillDrift)
-    warn("::notice:: [replay] --strict and --fail-on-skill-drift both passed — --strict is the superset (fails on every class), so --fail-on-skill-drift is redundant here\n");
+    warn(
+      "::notice:: [replay] --strict and --fail-on-skill-drift both passed — --strict is the superset (fails on every class), so --fail-on-skill-drift is redundant here\n",
+    );
   const resolved = resolveInputs(target, ".cassette.json");
   if ("error" in resolved) {
     log(`replay: ${resolved.error}`);

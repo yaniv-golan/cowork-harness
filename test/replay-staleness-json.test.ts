@@ -28,7 +28,16 @@ const okEvents = () => [
 // CURRENT version so no future-version assertion confounds the strict cases.
 const cassette = (fingerprint: Fingerprint, assert: unknown[] = [{ result: "success" }]) =>
   ({
-    scenario: { name: "c", baseline: "latest", session: "(inline)", fidelity: "container", prompt: "hi", answers: [], expect_denied: [], assert },
+    scenario: {
+      name: "c",
+      baseline: "latest",
+      session: "(inline)",
+      fidelity: "container",
+      prompt: "hi",
+      answers: [],
+      expect_denied: [],
+      assert,
+    },
     events: okEvents(),
     controlOut: [],
     fingerprint,

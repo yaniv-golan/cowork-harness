@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.14.0] — 2026-06-25
+
 ### Added
 
 - **`replay` surfaces staleness + skipped assertions in JSON.** Each `--output-format json` result now carries
