@@ -166,9 +166,20 @@ describe("buildLaunchPlan", () => {
       mcp: { enabled: ["y"] },
     });
     const settings = JSON.parse(readFileSync(join(p.configDir, "settings.json"), "utf8"));
-    expect(settings.enabledPlugins).toEqual(["x@local"]);
-    expect(settings.extraKnownMarketplaces).toEqual(["https://example.com/m.git"]);
+    expect(settings.enabledPlugins).toEqual({ "x@local": true });
+    expect(settings.extraKnownMarketplaces).toEqual({ m: { source: { source: "git", url: "https://example.com/m.git" } } });
     expect(settings.enabledMcpjsonServers).toEqual(["y"]);
+  });
+
+  it("extraKnownMarketplaces key matches the @marketplace qualifier derived from the git URL (round-trip)", () => {
+    const { plan: p } = plan({
+      plugins: { enabled: ["foo@m"], marketplaces: ["https://example.com/m.git"] },
+    });
+    const settings = JSON.parse(readFileSync(join(p.configDir, "settings.json"), "utf8"));
+    // derived name = basename("https://example.com/m.git").replace(/.git$/, "") = "m"
+    // enabledPlugins key "@m" references "m", which matches the extraKnownMarketplaces key "m"
+    expect(Object.keys(settings.enabledPlugins)).toEqual(["foo@m"]);
+    expect(Object.keys(settings.extraKnownMarketplaces)).toEqual(["m"]);
   });
 
   it("maps model/effort/permission/max-thinking-tokens (#23)", () => {
@@ -265,9 +276,50 @@ describe("SEAM A — fail-loud declared-source staging", () => {
     expect(() => plan({ plugins: { local_marketplaces: [mktDir({ badJson: true })] } })).toThrow(/not valid JSON/);
   });
 
+  it("a manifest with plugins as an object (not array) throws an actionable error (not TypeError)", () => {
+    const mk = mkdtempSync(join(tmpdir(), "cowork-badshape-"));
+    mkdirSync(join(mk, ".claude-plugin"), { recursive: true });
+    writeFileSync(join(mk, ".claude-plugin", "marketplace.json"), JSON.stringify({ name: "mymkt", plugins: {} }));
+    expect(() => plan({ plugins: { local_marketplaces: [mk] } })).toThrow(/invalid shape.*plugins.*must be an array/);
+  });
+
+  it("COWORK_HARNESS_SOFT_MISSING downgrades a plugins-not-array manifest to warn-and-skip", () => {
+    const mk = mkdtempSync(join(tmpdir(), "cowork-badshape-soft-"));
+    mkdirSync(join(mk, ".claude-plugin"), { recursive: true });
+    writeFileSync(join(mk, ".claude-plugin", "marketplace.json"), JSON.stringify({ name: "mymkt", plugins: {} }));
+    const prev = process.env.COWORK_HARNESS_SOFT_MISSING;
+    process.env.COWORK_HARNESS_SOFT_MISSING = "1";
+    try {
+      expect(() => plan({ plugins: { local_marketplaces: [mk] } })).not.toThrow();
+    } finally {
+      if (prev === undefined) delete process.env.COWORK_HARNESS_SOFT_MISSING;
+      else process.env.COWORK_HARNESS_SOFT_MISSING = prev;
+    }
+  });
+
+  it("a manifest with a plugin entry whose source is not a string throws an actionable error", () => {
+    const mk = mkdtempSync(join(tmpdir(), "cowork-badentry-"));
+    mkdirSync(join(mk, ".claude-plugin"), { recursive: true });
+    writeFileSync(
+      join(mk, ".claude-plugin", "marketplace.json"),
+      JSON.stringify({ name: "mymkt", plugins: [{ name: "p", source: 5 }] }),
+    );
+    expect(() => plan({ plugins: { local_marketplaces: [mk] } })).toThrow(/invalid shape.*source.*must be a string/);
+  });
+
   it("rejects ':' in marketplace metadata (it would break the docker -v overlay)", () => {
     const mk = mktDir({ name: "mymkt", withPlugin: true, pluginVersion: "1.0:evil" });
     expect(() => plan({ plugins: { local_marketplaces: [mk], enabled: ["p@mymkt"] } })).toThrow(/unsafe plugin version/);
+  });
+
+  it("version with unsafe chars does NOT throw on modern baseline (>= 1.14271.0) — version is not computed", () => {
+    const modernBaseline = loadBaseline("desktop-1.15200.0");
+    const mk = mktDir({ name: "mymkt", withPlugin: true, pluginVersion: "1.0 beta" });
+    const out = mkdtempSync(join(tmpdir(), "cowork-test-modern-"));
+    const session = loadSession({ plugins: { local_marketplaces: [mk], enabled: ["p@mymkt"] } });
+    expect(() => buildLaunchPlan(session, modernBaseline, out)).not.toThrow();
+    const p = buildLaunchPlan(session, modernBaseline, out);
+    expect(p.pluginDirs).toContain(".local-plugins/marketplaces/mymkt/p");
   });
 
   it("throws when name@<local-mkt> names a declared local marketplace but the plugin is absent there", () => {

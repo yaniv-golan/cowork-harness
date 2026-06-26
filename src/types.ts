@@ -151,19 +151,21 @@ export type AnswerRule = z.infer<typeof AnswerRule>;
 // `cowork-harness assert --list` (which reads `Assertion.shape[k].description`) — the list can never drift
 // from the schema. Keep descriptions one line.
 export const Assertion = z.object({
-  transcript_contains: z.string().optional().describe("the transcript contains this literal substring"),
-  transcript_not_contains: z.string().optional().describe("the transcript does NOT contain this literal substring"),
+  transcript_contains: z.string().min(1).optional().describe("the transcript contains this literal substring"),
+  transcript_not_contains: z.string().min(1).optional().describe("the transcript does NOT contain this literal substring"),
   transcript_matches: z.string().optional().describe("regex (case-insensitive) over the transcript — fuzzy content for stochastic prose"),
   transcript_not_matches: z.string().optional().describe("regex (case-insensitive) that must NOT match the transcript"),
   tool_result_contains: z
     .string()
+    .min(1)
     .optional()
     .describe("at least one tool result contains this literal substring (per-result match, not concatenated; 10 KB cap per result)"),
   tool_result_not_contains: z
     .string()
+    .min(1)
     .optional()
     .describe("no tool result contains this literal substring (per-result match, not concatenated; 10 KB cap per result)"),
-  file_exists: z.string().optional().describe("a file exists at this path under the agent's work root"),
+  file_exists: z.string().min(1).optional().describe("a file exists at this path under the agent's work root"),
   user_visible_artifact: z
     .string()
     .optional()
@@ -187,7 +189,12 @@ export const Assertion = z.object({
       "fails if a delete touching mnt/outputs is DETECTED (post-run bash-command scan, not FUSE-level enforcement — a green means none was detected); only `true` is valid (writing `false` is a rejected footgun — omit to allow deletes)",
     ),
   self_heal_ran: z.boolean().optional().describe("skill resolved scripts via /sessions (plugin-root self-heal)"),
-  transcript_no_host_path: z.boolean().optional().describe("no /Users//opt host path leaked into model-visible text"),
+  transcript_no_host_path: z
+    .literal(true)
+    .optional()
+    .describe(
+      "fails if a host path (/Users, /opt) leaked into model-visible text (post-run scan); only `true` is valid (writing `false` is a rejected footgun — omit to allow or use allow_stall)",
+    ),
   question_asked: z.string().optional().describe("a question matching this regex was asked"),
   questions_count_max: z.number().int().nonnegative().optional().describe("at most N questions were asked"),
   gate_answers_delivered: z

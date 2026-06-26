@@ -1,10 +1,11 @@
 import { warn } from "../io.js";
 import { spawn } from "node:child_process";
-import { mkdirSync, cpSync, existsSync } from "node:fs";
+import { mkdirSync, cpSync, existsSync, realpathSync } from "node:fs";
 import { join, dirname } from "node:path";
 import type { PlatformBaseline, Scenario } from "../types.js";
 import type { LaunchPlan } from "../session.js";
 import { gitModeEnabled, gitCpFilter } from "../run/skill-files.js";
+import { containedRealPath } from "../boundary-paths.js";
 
 /**
  * L0 — protocol-only runtime. Spawns the host `claude` with --cowork and the
@@ -24,13 +25,16 @@ export function spawnProtocol(
   const work = join(outDir, "work");
   mkdirSync(join(work, "uploads"), { recursive: true });
   mkdirSync(join(work, "outputs"), { recursive: true });
+  const workReal = realpathSync(work);
 
   for (const m of plan.mounts) {
     const dest = join(work, m.mountPath);
     mkdirSync(dirname(dest), { recursive: true });
+    if (!containedRealPath(workReal, dirname(dest)))
+      throw new Error(`cowork-harness: staged mount path "${m.mountPath}" resolves outside the work directory (symlink escape)`);
     // preserve symlinks as-is during staging; do not copy out-of-tree content
-    // Phase C (gated): under COWORK_HARNESS_GITSET, deliver only the git-tracked set (Finding 5). Default-off
-    // ⇒ raw copy, unchanged.
+    // Phase C (gated): under COWORK_HARNESS_GITSET, deliver only the git-tracked set (Finding 5). Default-ON;
+    // opt out with COWORK_HARNESS_GITSET=0.
     if (existsSync(m.hostPath)) {
       const f = gitModeEnabled() ? gitCpFilter(m.hostPath) : null;
       cpSync(m.hostPath, dest, { recursive: true, dereference: false, ...(f ? { filter: f } : {}) });

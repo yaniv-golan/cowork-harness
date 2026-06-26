@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { envPositiveNumber } from "../io.js";
 import type { Complete } from "./decider.js";
 
 /**
@@ -13,7 +14,7 @@ export const claudeCliComplete: Complete = (prompt, model) =>
     const bin = process.env.COWORK_HARNESS_CLAUDE_BIN || "claude";
     // #53: bound the `claude -p` spawn — a hung-but-alive child would otherwise block the harness forever.
     // On expiry SIGKILL the child and reject LOUD; clear the timer on close/error so a fast call never leaks it.
-    const timeoutMs = Number(process.env.COWORK_HARNESS_LLM_TIMEOUT_MS) || 600_000;
+    const timeoutMs = envPositiveNumber("COWORK_HARNESS_LLM_TIMEOUT_MS", 600_000);
     const child = spawn(bin, ["-p", prompt, "--model", model], { stdio: ["ignore", "pipe", "ignore"] });
     const timer = setTimeout(() => {
       try {
@@ -25,8 +26,12 @@ export const claudeCliComplete: Complete = (prompt, model) =>
     }, timeoutMs);
     // Bound stdout too — the wall-clock timeout above caps a fully-hung child, but not one that is
     // actively spewing. Past the cap, SIGKILL and reject loud rather than growing the buffer unbounded.
-    const maxBytes = Number(process.env.COWORK_HARNESS_LLM_MAX_BYTES) || 8 * 1024 * 1024;
-    let out = "";
+    const maxBytes = envPositiveNumber("COWORK_HARNESS_LLM_MAX_BYTES", 8 * 1024 * 1024);
+    // #61: collect raw Buffer chunks and decode ONCE at close. The old `out += d` coerced each chunk to
+    // a string independently, so a UTF-8 sequence straddling a chunk boundary (em-dash, accent, emoji)
+    // decoded as U+FFFD in both halves — corrupting the verification-critical decider answer. Byte-identical
+    // for ASCII/single-chunk. The byte cap still sums `d.length` (raw bytes), unaffected by decoding.
+    const chunks: Buffer[] = [];
     let bytes = 0;
     child.stdout.on("data", (d: Buffer) => {
       bytes += d.length;
@@ -40,7 +45,7 @@ export const claudeCliComplete: Complete = (prompt, model) =>
         reject(new Error(`LLM decider transport (${bin} -p) exceeded ${maxBytes} bytes — aborting`));
         return;
       }
-      out += d;
+      chunks.push(d);
     });
     child.on("error", (e) => {
       clearTimeout(timer);
@@ -48,6 +53,10 @@ export const claudeCliComplete: Complete = (prompt, model) =>
     });
     child.on("close", (code) => {
       clearTimeout(timer);
-      code === 0 ? resolve(out) : reject(new Error(`LLM decider transport (${bin} -p) exited ${code}`));
+      // Only the success path decodes — a non-zero exit stays a reject (never resolve a partial buffer),
+      // and after a cap/error reject this fires on an already-settled promise (a no-op, settle-once semantics).
+      code === 0
+        ? resolve(Buffer.concat(chunks).toString("utf8"))
+        : reject(new Error(`LLM decider transport (${bin} -p) exited ${code}`));
     });
   });

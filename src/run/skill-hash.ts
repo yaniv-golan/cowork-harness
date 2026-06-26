@@ -30,11 +30,12 @@ export function compileIgnore(raw: string): RegExp | null {
   if (!p || p.startsWith("#")) return null;
   p = p.replace(/\/+$/, ""); // trailing slash optional (dir matches via subtree prune)
   if (!p) return null;
+  if (p.startsWith("/**/")) p = p.slice(1); // normalize /**/foo -> **/foo
   const leadingGlobstar = p.startsWith("**/");
   if (leadingGlobstar) p = p.slice(3);
   // A leading slash means "anchored to the mount root" (like a leading / in .gitignore).
   // Strip it before further processing; the anchoring is encoded in the regex prefix below.
-  const leadingSlash = p.startsWith("/") && !p.startsWith("/**/");
+  const leadingSlash = p.startsWith("/");
   if (leadingSlash) p = p.slice(1);
   if (!p) return null;
   // anchored: has an internal slash (e.g. docs/api) OR had a leading slash — both anchor to mount root.
@@ -75,7 +76,7 @@ function readHashIgnore(root: string): string[] {
  *  recorded cassette (`*.cassette.json` — output, not skill source). */
 /** Optional per-entry filter (F-6 scoping). Receives a root-relative path; returns false to EXCLUDE that
  *  file or directory subtree from the hash. Absent ⇒ include everything (byte-identical to the legacy hash). */
-type AcceptFn = (relPath: string) => boolean;
+type AcceptFn = (relPath: string, isDirectory: boolean) => boolean;
 
 /** uses lstatSync (does NOT follow symlinks) so an in-tree symlink can't silently include
  *  out-of-tree content. Symlinks to directories are skipped with a warning; symlinks to files are
@@ -126,7 +127,7 @@ function hashDir(
     // a symlink can otherwise pull in out-of-tree content). Emitted via onFile too, so contentSig/manifest
     // (entries-based) stay identical to skillHash.
     if (st.isSymbolicLink()) {
-      if (accept && !accept(relPath)) continue;
+      if (accept && !accept(relPath, false)) continue;
       let target: string;
       try {
         target = readlinkSync(abs);
@@ -142,14 +143,14 @@ function hashDir(
         continue;
       }
       const targetRel = relative(rootResolved, resolvedTarget).split(sep).join("/");
-      hash.update(`L:${relPath} -> ${targetRel}\n`); // link structure; a re-point changes the digest
+      hash.update(`L:${relPath} -> ${targetRel}\0`); // link structure; a re-point changes the digest
       if (onFile) onFile(relPath, `lnk:${targetRel}`);
       continue;
     }
     if (st.isDirectory()) {
-      if (SKILL_HASH_DIR_DENYLIST.has(name)) continue; // skip VCS/cache subtrees entirely
-      if (accept && !accept(relPath)) continue; // F-6: scoped out (an unlisted skill's subtree)
-      hash.update(`D:${relPath}\n`); // structure marker — an empty/renamed dir registers too
+      if (SKILL_HASH_DIR_DENYLIST.has(name) || OS_JUNK_PATTERN.test(relPath)) continue; // skip VCS/cache and OS-junk subtrees entirely
+      if (accept && !accept(relPath, true)) continue; // F-6: scoped out (an unlisted skill's subtree)
+      hash.update(`D:${relPath}\0`); // structure marker — an empty/renamed dir registers too
       hashDir(abs, hash, errors, relPath, accept, onFile, root);
     } else if (st.isFile()) {
       if (name.endsWith(".cassette.json")) continue; // a recorded cassette is output, not skill source
@@ -159,8 +160,8 @@ function hashDir(
       // denylist (.git/node_modules) — provably-non-behavioral content the mount still delivers. Cassette
       // version bumped so existing cassettes get a graceful "older format — re-record once" (not "changed").
       if (OS_JUNK_PATTERN.test(relPath)) continue;
-      if (accept && !accept(relPath)) continue; // F-6: scoped/ignored out
-      hash.update(`F:${relPath}\n`); // relative path, not basename — a move changes the digest
+      if (accept && !accept(relPath, false)) continue; // F-6: scoped/ignored out
+      hash.update(`F:${relPath}\0`); // relative path, not basename — a move changes the digest
       let bytes: Buffer;
       try {
         bytes = readFileSync(abs);
@@ -223,20 +224,20 @@ function agentScopeEnabled(): boolean {
  *  extension (`agents/cap-table.md` → `cap-table`), a DIR is used as-is (`agents/cap-table/x.md` → `cap-table`).
  *  Returns null for non-`agents/` paths or a bare `agents` marker. Exported so staleness attribution can
  *  classify a changed `agents/<name>.md` exactly as the hash walk does (agent-scoped → skill-private). */
-export function agentSkillName(parts: string[]): string | null {
+export function agentSkillName(parts: string[], isDirectory = false): string | null {
   if (parts[0] !== "agents" || parts.length < 2) return null;
-  return parts.length === 2 ? parts[1].replace(/\.[^.]+$/, "") : parts[1];
+  return parts.length === 2 && !isDirectory ? parts[1].replace(/\.[^.]+$/, "") : parts[1];
 }
 
 /** Accept function for shared-root-only hashing: include everything EXCEPT `skills/<name>/` subtrees. With
  *  agent scoping ON, a skill-named `agents/<n>` also LEAVES the shared bucket (it's attributed to the skill in
  *  the main walk), so a change there is named "skill changed", not "shared root changed". */
 function sharedOnlyAccept(dirSkills: Set<string>, scopeAgents: boolean): AcceptFn {
-  return (relPath) => {
+  return (relPath, isDirectory) => {
     const parts = relPath.split("/");
     if (parts[0] === "skills") return parts.length === 1; // keep the `skills` marker dir; exclude subtrees
     if (scopeAgents) {
-      const an = agentSkillName(parts);
+      const an = agentSkillName(parts, isDirectory);
       if (an !== null && dirSkills.has(an)) return false; // skill-named agent → not shared
     }
     return true; // shared content + plugin root files
@@ -259,7 +260,7 @@ export function hashSharedOnly(dirs: string[], sessionIgnore?: string[]): string
     // Per-root skill names so a skill-named agent under THIS root leaves THIS root's shared bucket.
     const accept = sharedOnlyAccept(scopeAgents ? new Set(skillDirNames(d)) : new Set(), scopeAgents);
     const ignoreRes = [...readHashIgnore(d), ...(sessionIgnore ?? [])].map(compileIgnore).filter((re): re is RegExp => re !== null);
-    const combinedAccept: AcceptFn = ignoreRes.length ? (rel) => accept(rel) && !ignoreRes.some((re) => re.test(rel)) : accept;
+    const combinedAccept: AcceptFn = ignoreRes.length ? (rel, isDir) => accept(rel, isDir) && !ignoreRes.some((re) => re.test(rel)) : accept;
     const errors: string[] = [];
     hashDir(d, hash, errors, "", combinedAccept);
     // hashSharedOnly is used only for bucket-level diagnostics; errors are already logged to stderr.
@@ -273,7 +274,7 @@ export function hashSharedOnly(dirs: string[], sessionIgnore?: string[]): string
  *  references/, plugin.json, …) PLUS the named skills — so editing one skill re-stales only its cassettes,
  *  while a shared-dependency change still re-stales everything (no false-fresh). */
 function scopedAccept(keep: Set<string>, dirSkills: Set<string>, scopeAgents: boolean): AcceptFn {
-  return (relPath) => {
+  return (relPath, isDirectory) => {
     const parts = relPath.split("/");
     if (parts[0] === "skills") {
       if (parts.length === 1) return true; // the `skills` dir marker itself
@@ -282,7 +283,7 @@ function scopedAccept(keep: Set<string>, dirSkills: Set<string>, scopeAgents: bo
     // Agent scoping (opt-in): a skill-named `agents/<n>` is private to skill <n> — hash it only when <n> is
     // kept; a NON-skill-named agent (generic/shared) stays fleet-wide. OFF by default → the old whole-shared rule.
     if (scopeAgents) {
-      const an = agentSkillName(parts);
+      const an = agentSkillName(parts, isDirectory);
       if (an !== null && dirSkills.has(an)) return keep.has(an);
     }
     return true; // shared content (incl. non-skill-named agents)
@@ -300,7 +301,7 @@ export function computeContentSig(dirs: string[], scopeSkills?: string[], sessio
   if (dirs.length === 0) return undefined;
   const entries = skillHashEntries(dirs, scopeSkills, sessionIgnore).map((e) => `${e.path}:${e.sha}`);
   if (entries.length === 0) return undefined;
-  return createHash("sha256").update(entries.join("\n")).digest("hex");
+  return createHash("sha256").update(entries.join("\0")).digest("hex");
 }
 
 /** H9 diagnostics: OS-junk / non-runtime files that have no business in a skill hash but (today) ARE hashed
@@ -390,7 +391,7 @@ export function hashSkillDirs(dirs: string[], scopeSkills?: string[], sessionIgn
     // No scope + no ignore + no git filter → undefined accept → byte-identical to the legacy whole-tree hash.
     const accept =
       scopeFn || ignoreRes.length || gitFn
-        ? (rel: string) => (scopeFn ? scopeFn(rel) : true) && !ignoreRes.some((re) => re.test(rel)) && (gitFn ? gitFn(rel) : true)
+        ? (rel: string, isDir: boolean) => (scopeFn ? scopeFn(rel, isDir) : true) && !ignoreRes.some((re) => re.test(rel)) && (gitFn ? gitFn(rel) : true)
         : undefined;
     hashDir(d, hash, allErrors, "", accept, onFile);
   }

@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { VERDICT_MODIFIER_KEYS } from "../src/types.js";
 import { loadBaseline } from "../src/baseline.js";
+import { CASSETTE_VERSION } from "../src/run/cassette.js";
 
 // Exercises the built CLI's --output-format json envelope + exit codes. Token-free and spawn-free
 // (usage/boundary fail before any agent spawn; replay is deterministic). Needs `dist/cli.js`
@@ -629,7 +630,7 @@ describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
 // cmdReplay→replayCassette opt wiring (a real bug caught only at the binary). These spawn the built CLI.
 describe.skipIf(!can)("replay staleness JSON + --fail-on-skill-drift (CLI wiring)", () => {
   const LIVE = loadBaseline("latest").appVersion;
-  const staleCassette = (fingerprint: object) => ({ cassetteVersion: 6, fingerprint, ...cassette([{ result: "success" }]) });
+  const staleCassette = (fingerprint: object) => ({ cassetteVersion: CASSETTE_VERSION, fingerprint, ...cassette([{ result: "success" }]) });
 
   it("default replay surfaces class-tagged staleness[] but stays ok:true (exit 0)", () => {
     const cwd = mkdtempSync(join(tmpdir(), "cc-stale-"));

@@ -28,11 +28,10 @@ export function loadDotenv(file = resolve(process.cwd(), ".env")): string[] {
     if (!m) continue;
     const key = m[1];
     let val = m[2];
-    const quoted = /^["']/.test(val);
-    if (quoted && val.length >= 2 && val[0] === val[val.length - 1]) {
-      val = val.slice(1, -1);
+    const quotedM = val.match(/^(["'])(.*)\1\s*(?:#.*)?$/);
+    if (quotedM) {
+      val = quotedM[2];
     } else {
-      // strip a trailing inline comment from an unquoted value
       val = val.replace(/\s+#.*$/, "").trim();
     }
     // An empty value (`KEY=`) means "not provided" — skip it, so a blank template placeholder is

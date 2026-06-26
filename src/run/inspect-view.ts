@@ -42,7 +42,12 @@ function digestFor(runDir: string): InspectDigest {
   const resultPath = join(runDir, "result.json");
   if (!existsSync(resultPath))
     throw new Error(`no result.json under ${runDir} (is this a kept run dir? e.g. runs/<scenario>/<sessionId>/)`);
-  const result = JSON.parse(readFileSync(resultPath, "utf8")) as RunResult;
+  let result: RunResult;
+  try {
+    result = JSON.parse(readFileSync(resultPath, "utf8")) as RunResult;
+  } catch (e) {
+    throw new Error("failed to parse result.json at " + resultPath + ": " + (e as Error).message);
+  }
   const workDir = result.workDir ?? "";
   const workDirAvailable = !!workDir && existsSync(workDir);
   const artifacts = (result.artifacts ?? []).map((a) => {

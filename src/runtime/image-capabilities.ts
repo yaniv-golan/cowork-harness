@@ -13,6 +13,7 @@ import { readFileSync, writeFileSync, mkdirSync, statSync, existsSync } from "no
 import { isAbsolute, join, resolve } from "node:path";
 import { runsWriteRoot } from "../run/trace-view.js";
 import { warn } from "../io.js";
+import { vmStatus } from "./lima.js";
 
 export type CapabilityFamily = "ocr" | "office_convert" | "ml_extract" | "cv" | "pdf_tables" | "magick";
 
@@ -148,6 +149,7 @@ export function probeMicrovmOmitted(instance: string): CapabilityFamily[] | null
   const key = `microvm:${instance}`;
   const cache = readCache();
   if (cache[key]) return cache[key] as CapabilityFamily[];
+  if (vmStatus(instance) !== "Running") return null;
   const r = spawnSync("limactl", ["shell", "--workdir", "/", instance, "sh", "-c", probeScript()], {
     encoding: "utf8",
     timeout: 120_000,
@@ -186,6 +188,10 @@ function imageIdentity(runtime: string, image: string): ImageIdentity {
 
 /** Interpreters whose first script-file argument we follow into the workspace for a deeper signature scan. */
 const SCRIPT_INTERPRETERS = /(?:^|[;&|]|\s)(?:python3?|node|ruby|bash|sh)\s+/;
+/** A single shell segment split boundary. */
+const SEGMENT_SPLIT_RE = /[;&|]+/;
+/** Matches an interpreter at the START of a segment (after leading whitespace). */
+const SEGMENT_INTERPRETER_RE = /^\s*(?:python3?|node|ruby|bash|sh)\s+/;
 /** A bare script-file token: `foo.py`, `./pkg/run.py`, `scripts/x.js` — NOT a flag and NOT inline `-c "…"`. */
 const SCRIPT_FILE_RE = /(?:^|\s)((?:\.{0,2}\/)?[\w./-]+\.(?:py|js|mjs|cjs|rb|sh))\b/g;
 /** Cap how many distinct workspace files we read per run — best-effort, never an unbounded fan-out. */
@@ -197,7 +203,13 @@ const MAX_SCRIPT_BYTES = 1_000_000;
 function scriptPathsInCommand(cmd: string): string[] {
   if (!SCRIPT_INTERPRETERS.test(cmd)) return [];
   const out: string[] = [];
-  for (const m of cmd.matchAll(SCRIPT_FILE_RE)) out.push(m[1]);
+  for (const segment of cmd.split(SEGMENT_SPLIT_RE)) {
+    if (!SEGMENT_INTERPRETER_RE.test(segment)) continue;
+    SCRIPT_FILE_RE.lastIndex = 0;
+    const m = SCRIPT_FILE_RE.exec(segment);
+    if (m) out.push(m[1]);
+  }
+  SCRIPT_FILE_RE.lastIndex = 0;
   return out;
 }
 

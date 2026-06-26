@@ -149,9 +149,9 @@ describe("ExternalDecider — multiSelect", () => {
     await expect(decide('{"id":"req_3","answers":{"Which format?":["Markdown"]}}', ask)).rejects.toThrow(/array for single-select/);
   });
 
-  it("duplicate selections are kept (no dedup — parity with scripted); whitespace trimmed; '2' and 2 agree", async () => {
+  it("duplicate selections are deduped first-seen (checkbox-faithful — parity with scripted/LLM); whitespace trimmed; '2' and 2 agree", async () => {
     expect(((await decide('{"id":"m1","answers":{"Which to enable?":["Auth","Auth"]}}')) as any).response.answers).toEqual({
-      "Which to enable?": "Auth, Auth",
+      "Which to enable?": "Auth",
     });
     expect(((await decide('{"id":"m1","answers":{"Which to enable?":[" Auth "]}}')) as any).response.answers).toEqual({
       "Which to enable?": "Auth",

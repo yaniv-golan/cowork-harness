@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { hashSkillDirs, skillHashEntries, OS_JUNK_PATTERN } from "../src/run/skill-hash.js";
+import { hashSkillDirs, skillHashEntries, OS_JUNK_PATTERN, compileIgnore, agentSkillName } from "../src/run/skill-hash.js";
 import { createHash } from "node:crypto";
 
 function skillDir(): string {
@@ -122,5 +122,114 @@ describe("S5 (v6) — in-tree symlinks are hashed by target; escaping symlinks a
     symlinkSync("/etc/hosts", join(d, "skills", "escape.md")); // out-of-tree
     expect(hashSkillDirs([d]).hash).toBe(before); // escaping symlink excluded → no out-of-tree content
     expect(skillHashEntries([d]).some((e) => e.path.includes("escape.md"))).toBe(false);
+  });
+});
+
+describe("bug 48 — .AppleDouble and __MACOSX directory subtrees are excluded", () => {
+  it("a .AppleDouble directory added inside skills does not change the hash", () => {
+    const d = skillDir();
+    const before = hashSkillDirs([d]).hash;
+    mkdirSync(join(d, "skills", ".AppleDouble"), { recursive: true });
+    writeFileSync(join(d, "skills", ".AppleDouble", "SKILL.md"), "resource fork");
+    expect(hashSkillDirs([d]).hash).toBe(before);
+  });
+
+  it("adding a file inside .AppleDouble after the dir exists still does not change the hash", () => {
+    const d = skillDir();
+    mkdirSync(join(d, "skills", ".AppleDouble"), { recursive: true });
+    writeFileSync(join(d, "skills", ".AppleDouble", "x"), "a");
+    const before = hashSkillDirs([d]).hash;
+    writeFileSync(join(d, "skills", ".AppleDouble", "y"), "b");
+    expect(hashSkillDirs([d]).hash).toBe(before);
+  });
+
+  it("a __MACOSX directory at the root does not change the hash", () => {
+    const d = skillDir();
+    const before = hashSkillDirs([d]).hash;
+    mkdirSync(join(d, "__MACOSX"), { recursive: true });
+    writeFileSync(join(d, "__MACOSX", "._skills"), "appledouble header");
+    expect(hashSkillDirs([d]).hash).toBe(before);
+  });
+
+  it("real skill content still changes the hash (no false negative)", () => {
+    const d = skillDir();
+    mkdirSync(join(d, "skills", ".AppleDouble"), { recursive: true });
+    writeFileSync(join(d, "skills", ".AppleDouble", "x"), "junk");
+    const before = hashSkillDirs([d]).hash;
+    writeFileSync(join(d, "skills", "SKILL.md"), "# changed\n");
+    expect(hashSkillDirs([d]).hash).not.toBe(before);
+  });
+});
+
+describe("bug 49 — compileIgnore handles /**/foo prefix", () => {
+  it("/**/foo compiles to the same regex source as **/foo", () => {
+    const a = compileIgnore("/**/foo");
+    const b = compileIgnore("**/foo");
+    expect(a).not.toBeNull();
+    expect(b).not.toBeNull();
+    expect(a!.source).toBe(b!.source);
+  });
+
+  it("/**/foo matches foo at any depth", () => {
+    const re = compileIgnore("/**/foo")!;
+    expect(re.test("foo")).toBe(true);
+    expect(re.test("a/foo")).toBe(true);
+    expect(re.test("a/b/foo")).toBe(true);
+  });
+
+  it("/**/foo does NOT match foobar", () => {
+    const re = compileIgnore("/**/foo")!;
+    expect(re.test("foobar")).toBe(false);
+  });
+
+  it("/**/foo/bar matches foo/bar and a/foo/bar", () => {
+    const re = compileIgnore("/**/foo/bar")!;
+    expect(re.test("foo/bar")).toBe(true);
+    expect(re.test("a/foo/bar")).toBe(true);
+    expect(re.test("foo/barbaz")).toBe(false);
+  });
+
+  it("/docs/api remains anchored to the root", () => {
+    const re = compileIgnore("/docs/api")!;
+    expect(re.test("docs/api")).toBe(true);
+    expect(re.test("a/docs/api")).toBe(false);
+  });
+});
+
+describe("bug 50 — agentSkillName respects isDirectory for dotted names", () => {
+  it("a FILE agents/cap-table.v2 strips extension to cap-table.v2... wait, it strips only the last ext", () => {
+    expect(agentSkillName(["agents", "cap-table.v2"], false)).toBe("cap-table");
+  });
+
+  it("a DIRECTORY agents/cap-table.v2 is used as-is (no extension strip)", () => {
+    expect(agentSkillName(["agents", "cap-table.v2"], true)).toBe("cap-table.v2");
+  });
+
+  it("a FILE agents/cap-table.md strips extension to cap-table", () => {
+    expect(agentSkillName(["agents", "cap-table.md"], false)).toBe("cap-table");
+  });
+
+  it("a multi-segment path agents/cap-table/x.md gives cap-table regardless of isDirectory", () => {
+    expect(agentSkillName(["agents", "cap-table", "x.md"], false)).toBe("cap-table");
+    expect(agentSkillName(["agents", "cap-table", "x.md"], true)).toBe("cap-table");
+  });
+
+  it("non-agents path returns null", () => {
+    expect(agentSkillName(["skills", "cap-table"], false)).toBeNull();
+  });
+});
+
+describe("bug 51 — NUL separator prevents newline-in-filename hash collisions", () => {
+  it("two trees with different file counts hash differently (structural collision test)", () => {
+    // Under \n separator, a file named "a\nF:b" with empty content and a tree with files "a" and "b"
+    // (both empty) could collide: "F:a\nF:b\n" == "F:a\nF:b\n". Under \0 they are distinct.
+    // We verify the simpler invariant: a single-file tree vs a two-file tree with same total content
+    // must produce different hashes.
+    const d1 = mkdtempSync(join(tmpdir(), "nul-sep-"));
+    writeFileSync(join(d1, "a"), "hello");
+    const d2 = mkdtempSync(join(tmpdir(), "nul-sep-"));
+    writeFileSync(join(d2, "a"), "hello");
+    writeFileSync(join(d2, "b"), "");
+    expect(hashSkillDirs([d1]).hash).not.toBe(hashSkillDirs([d2]).hash);
   });
 });

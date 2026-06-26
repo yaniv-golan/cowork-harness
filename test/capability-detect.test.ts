@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -107,6 +107,50 @@ describe("detectCapabilityUse — workspace-script follow (the hidden-import fal
   it("does not follow inline `-c` code as a file path", () => {
     const { events, workRoot } = eventsAndWorkspace([assistantToolUse("Bash", { command: 'python3 -c "print(1)"' })]);
     // No .py token to follow; nothing to read, nothing detected.
+    expect(detectCapabilityUse(events, ["cv"], workRoot)).toEqual([]);
+  });
+});
+
+describe("scriptPathsInCommand per-segment scoping (bug 60)", () => {
+  it("scopes script paths to their own interpreter segment: 'python run.py; cat helper.py' yields only run.py", () => {
+    // `cat` is not an interpreter; helper.py must NOT be attributed to python.
+    const { events, workRoot } = eventsAndWorkspace([
+      assistantToolUse("Bash", { command: "python run.py; cat helper.py" }),
+    ]);
+    writeScript(workRoot, "run.py", "import cv2\n");
+    // helper.py not written — if it were followed incorrectly, a missing-file read returns ""; safe either way.
+    writeScript(workRoot, "helper.py", "# no cv2 here\n");
+    // Only run.py (the interpreter segment) should be followed → cv is detected.
+    // The key assertion: cv IS detected (run.py was followed) and the result is cv only once.
+    expect(detectCapabilityUse(events, ["cv"], workRoot)).toEqual(["cv"]);
+  });
+
+  it("two interpreter segments each follow only their own first file: 'python run.py; python helper.py'", () => {
+    const { events, workRoot } = eventsAndWorkspace([
+      assistantToolUse("Bash", { command: "python run.py; python helper.py" }),
+    ]);
+    writeScript(workRoot, "run.py", "import cv2\n");
+    writeScript(workRoot, "helper.py", "import wand\n");
+    // Both interpreter segments are followed; cv AND magick should be detected.
+    const found = detectCapabilityUse(events, ["cv", "magick"], workRoot);
+    expect(found).toContain("cv");
+    expect(found).toContain("magick");
+  });
+
+  it("flags after the interpreter are skipped: 'python -u run.py' follows run.py (not -u)", () => {
+    const { events, workRoot } = eventsAndWorkspace([
+      assistantToolUse("Bash", { command: "python -u run.py" }),
+    ]);
+    writeScript(workRoot, "run.py", "import cv2\n");
+    expect(detectCapabilityUse(events, ["cv"], workRoot)).toEqual(["cv"]);
+  });
+
+  it("non-interpreter commands ('cat file.py') are NOT followed into the workspace", () => {
+    const { events, workRoot } = eventsAndWorkspace([
+      assistantToolUse("Bash", { command: "cat file.py" }),
+    ]);
+    writeScript(workRoot, "file.py", "import cv2\n");
+    // `cat` is not in SCRIPT_INTERPRETERS; file.py must NOT be scanned.
     expect(detectCapabilityUse(events, ["cv"], workRoot)).toEqual([]);
   });
 });

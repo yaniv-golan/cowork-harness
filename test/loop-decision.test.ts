@@ -41,4 +41,9 @@ describe("decideLoopFromBaseline — reads requireFullVmSandbox from the baselin
     expect(decideLoopFromBaseline(structured(true))).toBe("host");
     expect(decideLoopFromBaseline(structured(false))).toBe("vm"); // a bare !!obj would wrongly yield host here
   });
+
+  // bug 69: /on|true|force/i matched "off(force)" via the substring "force", wrongly deciding host-loop.
+  it("off(force) gate string -> vm-loop (substring 'force' must not match)", () => {
+    expect(decideLoopFromBaseline(withGate("off(force)"))).toBe("vm");
+  });
 });

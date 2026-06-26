@@ -73,7 +73,7 @@ export function decideLoopFromBaseline(baseline: PlatformBaseline, over: Partial
     gateRaw && typeof gateRaw === "object"
       ? !!(gateRaw as { on?: boolean }).on
       : typeof gateRaw === "string"
-        ? /on|true|force/i.test(gateRaw)
+        ? /^(?:on|true|force)\b/i.test(gateRaw)
         : !!gateRaw;
   return decideLoop({
     // BUG FIX: a locked-down-org baseline (requireFullVmSandbox:true) must force VM-loop — this was

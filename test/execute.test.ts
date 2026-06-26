@@ -244,6 +244,30 @@ describe("isOutputsDelete — mv direction + opt-in safe-prefix suppression", ()
     expect(isOutputsDelete("rm -rf scratch/* && cp x mnt/outputs/y")).toBe(true);
     expect(isOutputsDelete('rm -rf "$UNDEFINED/data" ; cp a mnt/outputs/b')).toBe(true); // unresolved var
   });
+
+  it("redirect truncation: a statement-leading bare `>` into outputs is a delete", () => {
+    expect(isOutputsDelete("echo > outputs/report.json")).toBe(true);
+    expect(isOutputsDelete("make && > outputs/report.json")).toBe(true);
+    expect(isOutputsDelete("> outputs/report.json")).toBe(true);
+    expect(isOutputsDelete("cat x.csv ; > outputs/data.csv")).toBe(true);
+  });
+  it("redirect truncation: a normal deliverable WRITE / append is NOT a delete", () => {
+    expect(isOutputsDelete("jq '.' input.json > outputs/report.json")).toBe(false);
+    expect(isOutputsDelete('echo "data" > outputs/report.json')).toBe(false);
+    expect(isOutputsDelete("cmd >> outputs/log.txt")).toBe(false); // append, not truncate
+    expect(isOutputsDelete("cmd &> outputs/log.txt")).toBe(false); // single & is not a boundary
+  });
+
+  it("mv N-ary: moving multiple files INTO outputs/ is not a delete", () => {
+    expect(isOutputsDelete("mv a.pdf b.pdf outputs/")).toBe(false);
+  });
+  it("mv N-ary: moving multiple files OUT of outputs is a delete", () => {
+    expect(isOutputsDelete("mv outputs/a.pdf outputs/b.pdf /tmp/")).toBe(true);
+  });
+
+  it("source-order expansion: a later reassignment does not mask an earlier outputs delete", () => {
+    expect(isOutputsDelete('D=outputs; rm "$D/file.txt"; D=/sandbox; echo "$D"')).toBe(true);
+  });
 });
 
 // #45 — dialog timeout parsing (pure function, token-free)

@@ -23,13 +23,17 @@ export function spawnContainer(
   plan: LaunchPlan,
   outDir: string,
   sessionId: string,
-  opts: { systemPromptAppend?: string; egressProxy?: string; dockerNetwork?: string } = {},
+  opts: { systemPromptAppend?: string; egressProxy?: string; dockerNetwork?: string; runToken?: string } = {},
 ) {
   const m = resolveMounts(baseline, sessionId, "proj1");
   const sessionRoot = m.cwd; // /sessions/<id>
   const mntRoot = m.mntRoot; // /sessions/<id>/mnt
   const configGuest = `${sessionRoot}/${baseline.spawn?.configDirInGuest ?? "mnt/.claude"}`;
   const AGENT_IN = "/usr/local/bin/claude";
+  // Name by the per-invocation runToken (NOT sessionId) so a --resume after a failed run doesn't collide
+  // on a leftover same-named container (F1), and so Ctrl-C can force-remove the container by name (the
+  // anonymous `docker run --rm` client can't stop the daemon-managed container — orphan + network leak).
+  const containerName = `cowork-ct-${opts.runToken ?? sessionId}`;
 
   // --- stage a single writable session tree on the host, bound rw at /sessions/<id> ---
   // Shared staging helper honors plan.resume uniformly (skips re-copy on resume — Cowork reuses the
@@ -65,6 +69,7 @@ export function spawnContainer(
   const dockerArgs = dockerRunArgv({
     network,
     lockdown: (process.env.COWORK_LOCKDOWN ?? "on") !== "off",
+    name: containerName,
     sessionRoot,
     sessionHost,
     agentHost,
@@ -75,5 +80,6 @@ export function spawnContainer(
     readOnlyMountPaths: plan.mounts.filter((m) => m.mode === "r").map((m) => m.mountPath), // #23: enforce mode:r as :ro binds
   });
 
-  return spawn(runner, dockerArgs, { stdio: ["pipe", "pipe", "pipe"] });
+  const child = spawn(runner, dockerArgs, { stdio: ["pipe", "pipe", "pipe"] });
+  return { child, containerName };
 }
