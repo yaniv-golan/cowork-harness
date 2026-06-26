@@ -59,7 +59,7 @@ line and one budget. The listing is packed under a shared character budget (~800
 default, ~1536/skill cap); when it overflows, **every** skill collapses to name-only at once
 (no description for any of them). A single bloated `when_to_use` can trigger that global
 collapse. The byte-level budget algorithm and constants are documented in the
-`claude-code-internals` skill (ref `02-agents-intelligence-interface.md`) — not restated here.
+`claude-code-internals` skill (ref `02-agents-intelligence-interface.md`, an external skill not bundled here) — not restated here.
 
 **To verify what a run's model actually received, read the VM session log, not `events.jsonl`:**
 
