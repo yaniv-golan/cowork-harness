@@ -1541,7 +1541,7 @@ function cmdSync(args: string[]) {
   const capturedAt = new Date().toISOString().slice(0, 10);
   const next = {
     ...base,
-    "$comment": `Platform baseline auto-derived by \`cowork-harness sync\` from a live Claude Desktop install + app.asar. VOLATILE per-release facts only. Regenerate per release; review the diff. Captured ${capturedAt} on macOS arm64.`,
+    $comment: `Platform baseline auto-derived by \`cowork-harness sync\` from a live Claude Desktop install + app.asar. VOLATILE per-release facts only. Regenerate per release; review the diff. Captured ${capturedAt} on macOS arm64.`,
     baselineVersion: 1,
     appVersion: res.appVersion,
     capturedAt,
