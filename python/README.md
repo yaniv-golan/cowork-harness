@@ -9,7 +9,7 @@ or Lima for `microvm`).
 
 1. **Build the CLI** — the helper drives `dist/cli.js`:
    ```bash
-   npm install && npm run build        # from the repo root, produces dist/cli.js
+   npm ci && npm run build        # from the repo root, produces dist/cli.js
    ```
    Override the path with `COWORK_HARNESS_CLI=/path/to/cli.js` if it lives elsewhere.
 2. **Docker** + the agent image — for `container`, `hostloop`, and `cowork` (which auto-picks one of those):
@@ -154,6 +154,8 @@ pytest -m 'not cowork'      # the fast loop (skips this lane) — the CI default
   `.results`. A single-file input still returns a plain `Result`.
 - `cowork.trace(run_id_or_dir, tools=False)` → `list[dict]` of trace rows (tool calls, sub-agent
   dispatches, decisions) — for asserting the *real* dispatch count vs. todo items named after sub-agents.
+  Pass `tools=True` to include tool rows (drives the CLI's legacy `--tools`; the canonical CLI form is
+  `--view tools|questions|dispatches`).
 - `Result`: `.assert_success()`, `.assert_transcript_contains(s)`, `.assert_tool_called(name)`,
   `.assert_subagent_dispatched(agent_type)`, `.assert_dispatch_count_max(n)`,
   `.assert_artifact_json(rel_path, predicate)`; plus `.result`, `.out_dir`, `.work_dir`, `.outputs_dir`

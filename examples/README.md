@@ -28,7 +28,7 @@ self-contained and relocatable.
 
 | Scenario | Fidelity | What it demonstrates |
 |---|---|---|
-| `scenarios/protocol-smoke.yaml` | `protocol` | the **zero-infra smoke test** — no Docker, no staged agent, just the host control loop. Asserts only control-loop + skill-logic facts (a scripted answer reaches the model, a file is written); see the `transcript_no_host_path: false` line for what L0 does and does not seal |
+| `scenarios/protocol-smoke.yaml` | `protocol` | the **zero-infra smoke test** — no Docker, no staged agent, just the host control loop. Asserts only control-loop + skill-logic facts (a scripted answer reaches the model, a file is written). L0 does **not** seal the filesystem, so a host-path leak is expected — the YAML's comment explains why `transcript_no_host_path` is **omitted** here (only `true` is a valid value; sandboxed tiers add `- transcript_no_host_path: true`) |
 | `scenarios/example-pdf-skill.yaml` | `container` | the minimal sandboxed shape — prompt + scripted answers + assertions (placeholder skill; harness plumbing only) |
 | `scenarios/csv-metrics.yaml` | `container` | a non-trivial skill running a **bundled producer** end-to-end → structured `outputs/metrics.json` + a `summary.md` (paired with `../python/test_csv_metrics_lane.py` for a JSON-content predicate) |
 | `scenarios/csv-fx-normalize.yaml` | `container` | **graceful degradation** under default-deny egress — the skill's real network step is blocked, so `egress_denied` is backed by genuine behavior and the skill falls back instead of crashing. Its `egress_denied` assertion needs a sandboxed tier (`container`+) and is pre-rejected at `protocol` fidelity (no sandbox to enforce it would be a false pass) |
