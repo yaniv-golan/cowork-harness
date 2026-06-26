@@ -310,7 +310,7 @@ describe("SEAM A — fail-loud declared-source staging", () => {
   });
 
   it("version with unsafe chars does NOT throw on modern baseline (>= 1.14271.0) — version is not computed", () => {
-    const modernBaseline = loadBaseline("desktop-1.15200.0");
+    const modernBaseline = loadBaseline("latest");
     const mk = mktDir({ name: "mymkt", withPlugin: true, pluginVersion: "1.0 beta" });
     const out = mkdtempSync(join(tmpdir(), "cowork-test-modern-"));
     const session = loadSession({ plugins: { local_marketplaces: [mk], enabled: ["p@mymkt"] } });

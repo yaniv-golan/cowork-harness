@@ -566,7 +566,7 @@ This repo is built to be driven by agents, not just read by humans:
 
 ## Status
 
-**Verified end-to-end against the live staged agent (2.1.181 / asar 1.15200.0).** Host-side parity (egress/gates/mount/web_fetch facts + the reconstructed prompt appends) re-derived for 1.15200.0 via `sync` + asar inspection; the live scenario suite passes against this baseline (the staged agent ELF is unchanged at 2.1.181).
+**Verified end-to-end against the live staged agent (2.1.187 / asar 1.15962.0).** Host-side parity (egress/gates/mount/web_fetch facts + the reconstructed prompt appends) re-derived for 1.15962.0 via `sync` + asar inspection; the live scenario suite passes against this baseline (the 1.15962.0 asar content is byte-identical to 1.15200.0 — all runtime-shape fields unchanged).
 
 - ✅ **Three isolation tiers (L0/L1/L2) + two loop-mode overlays** — `protocol` (L0 control loop), `container` (L1 sandboxed arm64 + per-run default-deny egress sidecar), `microvm` (L2 real Apple-VZ Linux microVM + guest firewall); plus the loop-mode overlays `hostloop` (production split-execution: agent loop on host, shell/web via the workspace SDK-MCP server) and `cowork` (auto-picks host-loop vs container the way Cowork does — gate `1143815894`). Egress enforced at container/microvm/hostloop; `boundary-check` reports **ALL CONSTRAINTS ENFORCED**.
 - ✅ **Three-seam driver** — `AgentSession` (control protocol) → `Decider` (scripted + `on_unanswered` policy, no silent false-greens) → `Run` (turn loop, sub-agent dispatch tree, `RunRecord`). Multi-turn `chat`, deterministic cassette `record`/`replay` (no token), `run.jsonl`/`trace.json` logging with secret-scrub.
