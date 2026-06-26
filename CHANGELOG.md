@@ -6,6 +6,26 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+
+- **`--decider-llm` transport now bounded-retries a transient `claude -p` exit and surfaces *why* it
+  failed.** A single `claude -p` decider spawn can exit non-zero on a transient upstream hiccup
+  (rate-limit/overload/network) during a long back-to-back batch — observed 1/8 live runs, not reproducible
+  on demand. The non-zero-exit class is now retried (default 2 attempts, small linear backoff;
+  `COWORK_HARNESS_LLM_RETRIES=0` to disable) so a transient exit doesn't kill a 10-minute paid run at the
+  final gate. Retry never double-answers: the transport has no harness side effects, and a non-zero exit
+  delivers no answer, so the gate is answered exactly once downstream of a successful call. The timeout /
+  `maxBytes`-overflow / spawn-`ENOENT` classes are not transient and still fail loud on the first attempt.
+  (A *deterministic* non-zero exit — bad `--decider-model`, auth — is also retried the full count before
+  failing loud; the cost is bounded and the captured output names the cause.) The exit error now folds in the
+  child's captured **stdout** (where `claude -p` writes its operational diagnosis — verified) and stderr, so
+  `exited 1` is no longer undiagnosable.
+- **`--decider-llm` now binds a markdown-/quote-wrapped `OTHER:` free-text directive.** A model often
+  code-fences a verbatim directive (`` `OTHER: …` ``, `"OTHER: …"`); the leading backtick/quote previously
+  defeated the `^\s*OTHER:` anchor and the gate whiffed → fail-loud stall (observed live). The sentinel now
+  matches on the `trimNearMiss` form (wrapping quotes/backticks stripped, `:` preserved), so a real
+  `OTHER:`-named option label still wins first via the exact-label tier.
+
 ## [0.16.0] — 2026-06-26
 
 ### Fixed

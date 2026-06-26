@@ -536,7 +536,16 @@ export class LlmDecider implements Decider {
       // OTHER: free-text sentinel — AFTER the exact/trim match (so a literal OTHER:-named label wins) and
       // BEFORE the permissive suffix/echo tiers (so a genuine free-text OTHER is never grabbed by the echo tier).
       if (!pick) {
-        const other = /^\s*OTHER:\s*([\s\S]+)/i.exec(raw);
+        // Strip a single MATCHED wrapping code-fence/quote (`` `OTHER: …` ``, `"OTHER: …"`) so the `^\s*OTHER:`
+        // anchor still matches — a model often code-fences a verbatim directive, and a leading backtick/quote on
+        // `raw` would otherwise defeat it (observed live: `` `OTHER: Sector not specified` `` → whiffed → fail-loud
+        // stall). Only a matched same-char PAIR is removed (not a bare trailing quote like trimNearMiss): the
+        // free-text VALUE is delivered verbatim, so `OTHER: Acme Inc.` keeps its period and `OTHER: labeled "X"`
+        // keeps its closing quote. A real `OTHER:`-named option label already bound via matchLabel above (incl.
+        // its own quote-trim), so this can't hijack one.
+        const t = raw.trim();
+        const fenced = /^([`'"])([\s\S]*)\1$/.exec(t);
+        const other = /^\s*OTHER:\s*([\s\S]+)/i.exec(fenced ? fenced[2] : t);
         if (other) {
           const free = other[1].trim();
           if (free === "")

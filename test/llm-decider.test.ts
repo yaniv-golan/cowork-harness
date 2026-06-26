@@ -54,6 +54,48 @@ describe("LlmDecider", () => {
     expect(seenPrompt).toContain("OTHER:");
   });
 
+  it("OTHER directive — a markdown-/quote-wrapped OTHER: still binds (model code-fences the directive)", async () => {
+    // Observed live (amendment-seriesD): the model replied `` `OTHER: Sector not specified in document` ``; the
+    // leading backtick defeated the `^\s*OTHER:` anchor → whiff → fail-loud stall. The wrapping fence is now
+    // stripped before the sentinel test.
+    for (const raw of ["`OTHER: Sector not specified in document`", '"OTHER: Sector not specified"']) {
+      const complete: Complete = async () => raw;
+      const d = await new LlmDecider(complete).decide(ask("What sector?", ["Health tech", "B2B SaaS"]), ctx());
+      expect((d as any).response.answers["What sector?"]).toMatch(/^Sector not specified/);
+    }
+  });
+
+  it("OTHER directive — a wrapping fence is stripped but the value's OWN trailing punctuation is preserved", async () => {
+    // Only the wrapper is removed (not trailing sentence punctuation like trimNearMiss): the free-text VALUE
+    // is delivered verbatim, so a trailing period inside the value must survive.
+    const complete: Complete = async () => "`OTHER: Acme Inc.`";
+    const d = await new LlmDecider(complete).decide(ask("Name it?", ["Project Alpha", "Project Beta"]), ctx());
+    expect((d as any).response.answers["Name it?"]).toBe("Acme Inc.");
+  });
+
+  it("OTHER directive — only a MATCHED wrapping pair is stripped; a value's own trailing quote/backtick survives", async () => {
+    // Regression guard: an unconditional trailing-quote strip would mangle a value that legitimately ends in a
+    // quote. Unfenced replies must pass through verbatim; only a same-char wrapping pair is removed.
+    const cases: [string, string][] = [
+      ['OTHER: the field is labeled "Status"', 'the field is labeled "Status"'], // no wrapper → verbatim
+      ["OTHER: run `ls`", "run `ls`"], // trailing backtick belongs to the value
+      ["`OTHER: code-fenced value`", "code-fenced value"], // matched fence → stripped
+    ];
+    for (const [raw, expected] of cases) {
+      const complete: Complete = async () => raw;
+      const d = await new LlmDecider(complete).decide(ask("Name it?", ["Project Alpha", "Project Beta"]), ctx());
+      expect((d as any).response.answers["Name it?"]).toBe(expected);
+    }
+  });
+
+  it("OTHER directive — a QUOTED real option whose label starts 'OTHER:' still binds as the label (not free text)", async () => {
+    // Ordering guard: matchLabel (which quote-trims internally) must bind the literal label before the OTHER
+    // sentinel is ever reached, even when the model wraps its reply in a code fence.
+    const complete: Complete = async () => "`OTHER: pick me`";
+    const d = await new LlmDecider(complete).decide(ask("Which?", ["OTHER: pick me", "Something else"]), ctx());
+    expect((d as any).response.answers).toEqual({ "Which?": "OTHER: pick me" });
+  });
+
   it("Fix 1 — matches a LABEL first, so a real option whose label starts 'OTHER:' is not hijacked to free text", async () => {
     const complete: Complete = async () => "OTHER: pick me";
     const d = await new LlmDecider(complete).decide(ask("Which?", ["OTHER: pick me", "Something else"]), ctx());
