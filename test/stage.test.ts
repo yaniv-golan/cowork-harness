@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -128,5 +128,70 @@ describe("stageWorkspace — resume staging (fidelity guard)", () => {
     mkdirSync(join(mntHost, ".claude"), { recursive: true });
     symlinkSync(outside, join(mntHost, ".projects")); // dest parent now resolves outside mntHost
     expect(() => stageWorkspace(plan, mntHost)).toThrow(/resolves outside the session tree/);
+  });
+});
+
+describe("stageWorkspace — resume MCP diagnostic (bug 59)", () => {
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    warnSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+  });
+  afterEach(() => {
+    warnSpy.mockRestore();
+  });
+
+  it("warns on --resume when mcp.config is declared but mnt/.claude/mcp.json is absent", () => {
+    // Use a resume fixture so we enter the else branch; ensure looksStaged is TRUE so the
+    // existing empty-tree warning does NOT fire (isolate the new MCP warning).
+    const root = mkdtempSync(join(tmpdir(), "stage-b59-"));
+    const configDir = join(root, "config");
+    mkdirSync(join(configDir, "skills"), { recursive: true });
+    writeFileSync(join(configDir, "settings.json"), '{"v":1}');
+    const mcpSrc = join(root, "mcp.json");
+    writeFileSync(mcpSrc, '{"mcpServers":{}}');
+    const mntHost = join(root, "work", "mnt");
+    // Pre-stage .claude/settings.json so looksStaged = true (suppresses the unrelated empty-tree warning).
+    mkdirSync(join(mntHost, ".claude"), { recursive: true });
+    writeFileSync(join(mntHost, ".claude", "settings.json"), '{"v":1}');
+    // mnt/.claude/mcp.json is intentionally ABSENT.
+
+    const plan = {
+      configDir,
+      mcpConfig: mcpSrc,
+      mounts: [],
+      resume: true,
+    } as unknown as LaunchPlan;
+
+    const res = stageWorkspace(plan, mntHost);
+    expect(res.mcpStaged).toBe(false);
+
+    const written = warnSpy.mock.calls.map((c: any) => String(c[0])).join("");
+    expect(written).toMatch(/--resume/);
+    expect(written).toMatch(/mcp/i);
+  });
+
+  it("does NOT warn on --resume when mnt/.claude/mcp.json is present", () => {
+    const root = mkdtempSync(join(tmpdir(), "stage-b59-ok-"));
+    const configDir = join(root, "config");
+    mkdirSync(join(configDir, "skills"), { recursive: true });
+    writeFileSync(join(configDir, "settings.json"), '{"v":1}');
+    const mcpSrc = join(root, "mcp.json");
+    writeFileSync(mcpSrc, '{"mcpServers":{}}');
+    const mntHost = join(root, "work", "mnt");
+    mkdirSync(join(mntHost, ".claude"), { recursive: true });
+    writeFileSync(join(mntHost, ".claude", "settings.json"), '{"v":1}');
+    writeFileSync(join(mntHost, ".claude", "mcp.json"), '{"mcpServers":{}}');
+
+    const plan = {
+      configDir,
+      mcpConfig: mcpSrc,
+      mounts: [],
+      resume: true,
+    } as unknown as LaunchPlan;
+
+    const res = stageWorkspace(plan, mntHost);
+    expect(res.mcpStaged).toBe(true);
+    const written = warnSpy.mock.calls.map((c: any) => String(c[0])).join("");
+    expect(written).not.toMatch(/--resume.*mcp|mcp.*--resume/i);
   });
 });

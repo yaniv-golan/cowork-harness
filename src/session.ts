@@ -205,9 +205,21 @@ export function buildLaunchPlan(
   // whenever CLAUDE_CODE_USE_COWORK_PLUGINS is truthy (TSO() in the 2.1.170 ELF), and
   // settings.json otherwise — writing both makes either state behave. (Real Cowork
   // delivers plugins via --plugin-dir, not these knobs; kept mainly for L0.)
+  // enabledPlugins: keyed object { "name@marketplace": true } — binary enforces object shape.
+  // extraKnownMarketplaces: keyed by MARKETPLACE NAME (the @marketplace half of enabledPlugins entries),
+  //   value { source: { source: <kind>, url } }. The binary verifies the key equals the @marketplace
+  //   qualifier in enabledPlugins. Name is derived as basename(url).replace(/\.git$/, ""), so enabled[]
+  //   qualifiers must reference this derived name (e.g. "foo@m" for url "https://host/m.git").
   const settings: Record<string, unknown> = {};
-  if (session.plugins.enabled.length) settings.enabledPlugins = session.plugins.enabled;
-  if (session.plugins.marketplaces.length) settings.extraKnownMarketplaces = session.plugins.marketplaces;
+  if (session.plugins.enabled.length)
+    settings.enabledPlugins = Object.fromEntries(session.plugins.enabled.map((e) => [e, true]));
+  if (session.plugins.marketplaces.length)
+    settings.extraKnownMarketplaces = Object.fromEntries(
+      session.plugins.marketplaces.map((url) => {
+        const name = basename(url).replace(/\.git$/, "");
+        return [name, { source: { source: "git", url } }];
+      }),
+    );
   if (session.mcp.enabled.length) settings.enabledMcpjsonServers = session.mcp.enabled;
   settings.localAgentModeTrustedFolders = session.trusted_folders.map(expand);
   settings.autoMountFolders = session.auto_mount_folders;
@@ -243,7 +255,7 @@ export function buildLaunchPlan(
       );
     skillDests.add(dest);
     // Phase C (gated): under COWORK_HARNESS_GITSET, deliver only the git-tracked set so the sandbox matches
-    // what the hash covers (Finding 5 — no delivered-but-unhashed file). Default-off ⇒ raw copy, unchanged.
+    // what the hash covers (Finding 5 — no delivered-but-unhashed file). Default-ON (git-tracked set); opt out with COWORK_HARNESS_GITSET=0 for a raw copy.
     const skillFilter = gitModeEnabled() ? gitCpFilter(src) : null;
     cpSync(src, join(configDir, "skills", dest), { recursive: true, ...(skillFilter ? { filter: skillFilter } : {}) });
   }
@@ -354,6 +366,35 @@ export function buildLaunchPlan(
       warn(`::warning:: [marketplace] manifest unparsable, excluded (COWORK_HARNESS_SOFT_MISSING): ${manifestPath}\n`);
       continue;
     }
+    // Bug 41: validate manifest shape to produce actionable errors instead of TypeErrors.
+    // The plugins-array check is the direct TypeError fix (manifest.plugins.find at the loop below
+    // throws when plugins is an object). The name/source/version string checks are defense-in-depth.
+    if (manifest.plugins !== undefined && !Array.isArray(manifest.plugins)) {
+      const msg = `local marketplace manifest has invalid shape: "plugins" must be an array (got ${typeof manifest.plugins}): ${manifestPath}`;
+      if (!softMissing) throw new Error(msg + " Fix it, or set COWORK_HARNESS_SOFT_MISSING=1 to skip it.");
+      warn(`::warning:: [marketplace] ${msg}, excluded (COWORK_HARNESS_SOFT_MISSING)\n`);
+      continue;
+    }
+    if (manifest.name !== undefined && typeof manifest.name !== "string") {
+      const msg = `local marketplace manifest has invalid shape: "name" must be a string (got ${typeof manifest.name}): ${manifestPath}`;
+      if (!softMissing) throw new Error(msg + " Fix it, or set COWORK_HARNESS_SOFT_MISSING=1 to skip it.");
+      warn(`::warning:: [marketplace] ${msg}, excluded (COWORK_HARNESS_SOFT_MISSING)\n`);
+      continue;
+    }
+    let badEntry = false;
+    for (const entry of manifest.plugins ?? []) {
+      for (const field of ["name", "source", "version"] as const) {
+        if ((entry as any)[field] !== undefined && typeof (entry as any)[field] !== "string") {
+          const msg = `local marketplace manifest has invalid shape: plugin entry "${field}" must be a string (got ${typeof (entry as any)[field]}): ${manifestPath}`;
+          if (!softMissing) throw new Error(msg + " Fix it, or set COWORK_HARNESS_SOFT_MISSING=1 to skip it.");
+          warn(`::warning:: [marketplace] ${msg}, excluded (COWORK_HARNESS_SOFT_MISSING)\n`);
+          badEntry = true;
+          break;
+        }
+      }
+      if (badEntry) break;
+    }
+    if (badEntry) continue;
     // a nameless manifest still has an effective marketplace name (derived from its dir
     // basename) — `mktName` — and plugins resolve under it. Record the DERIVED name so the post-loop
     // typo check (declaredLocalMktNames) recognizes `plugin@<derived>` qualifiers, not only manifests
@@ -406,19 +447,22 @@ export function buildLaunchPlan(
         }
         mountedBareNames.add(pName);
       }
-      const version = entry.version ?? readPluginVersion(pluginSrc) ?? "0.0.0";
       // Each component comes from marketplace/plugin metadata (untrusted) and is interpolated into the
       // cache path that becomes a Docker -v overlay arg — reject traversal AND ":"/control chars.
       // (pName may legitimately nest for a scoped name like "@scope/pkg", so nesting is allowed.)
       safeMountSegment(mktName, "marketplace name");
       safeMountSegment(pName, "plugin name");
-      safeMountSegment(version, "plugin version");
       // Real Cowork (>= MIN): `.local-plugins/marketplaces/<marketplaceName>/<pluginName>` (NO `cache/`, NO
       // version segment — the `<mkt>/<plugin>` pair is the natural collision-free disambiguator). Legacy
       // keeps the harness's synthetic 3-level `cache/<mkt>/<plugin>/<version>` shape (gated).
-      const mountPath = bareNames
-        ? `.local-plugins/marketplaces/${mktName}/${pName}`
-        : `.local-plugins/cache/${mktName}/${pName}/${version}`;
+      let mountPath: string;
+      if (bareNames) {
+        mountPath = `.local-plugins/marketplaces/${mktName}/${pName}`;
+      } else {
+        const version = entry.version ?? readPluginVersion(pluginSrc) ?? "0.0.0";
+        safeMountSegment(version, "plugin version");
+        mountPath = `.local-plugins/cache/${mktName}/${pName}/${version}`;
+      }
       mounts.push({ hostPath: pluginSrc, mountPath, mode: "r", kind: "marketplace-plugin" });
       resolvedEnabled.add(en);
     }

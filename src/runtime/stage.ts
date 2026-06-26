@@ -59,7 +59,7 @@ export function stageWorkspace(plan: LaunchPlan, mntHost: string): StageResult {
         throw new Error(`cowork-harness: staged mount path "${mt.mountPath}" resolves outside the session tree (symlink escape)`);
       // preserve symlinks as-is during staging; do not copy out-of-tree content
       // Phase C (gated): under COWORK_HARNESS_GITSET, deliver only the git-tracked set so the mount matches
-      // what the hash covers (Finding 5). Default-off ⇒ raw copy, unchanged.
+      // what the hash covers (Finding 5). Default-ON; opt out with COWORK_HARNESS_GITSET=0 for a raw copy.
       if (existsSync(mt.hostPath)) {
         const f = gitModeEnabled() ? gitCpFilter(mt.hostPath) : null;
         cpSync(mt.hostPath, dest, { recursive: true, dereference: false, ...(f ? { filter: f } : {}) });
@@ -102,6 +102,11 @@ export function stageWorkspace(plan: LaunchPlan, mntHost: string): StageResult {
         `::warning:: [resume] staged workspace at ${mntHost} looks empty (no prior mounts/config found) — if the prior session's files were removed, re-run WITHOUT --resume to re-stage\n`,
       );
     mcpStaged = !!plan.mcpConfig && existsSync(mcpDest);
+    if (plan.mcpConfig && !existsSync(mcpDest)) {
+      warn(
+        `::warning:: [mcp] --resume: mcp.config declared but mnt/.claude/mcp.json is absent -- --mcp-config will NOT be advertised to the agent; re-run WITHOUT --resume to stage it\n`,
+      );
+    }
   }
 
   return { mcpStaged };

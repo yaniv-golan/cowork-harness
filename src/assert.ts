@@ -149,6 +149,9 @@ export interface AssertContext {
     reason?: "ok" | "errored" | "unobserved" | "no-pairing-metadata";
   }[]; // Part 3: per-gate answer-delivery outcome
   toolResultTexts: string[]; // assertion-fidelity text for each tool result (assertText ?? text, 10 KB cap)
+  /** Parallel to toolResultTexts; true for each entry that fell back to display text (assertText absent).
+   *  Only relevant for old/partial cassettes — live/replay always capture assertText. */
+  toolResultsTruncated?: boolean[];
   /** Set by verify-run only when run.jsonl is absent/unreadable. Prevents negative transcript assertions
    *  from passing vacuously on missing evidence (absent ≠ empty). Undefined/false on live and replay lanes. */
   transcriptMissing?: boolean;
@@ -218,14 +221,28 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
         ? ok()
         : fail(`no tool result contained "${a.tool_result_contains}"`),
     );
-  if (a.tool_result_not_contains !== undefined)
-    results.push(
-      ctx.toolResultsMissing
-        ? fail(`evidence unavailable: tool results absent from result.json — cannot evaluate tool_result_not_contains`)
-        : ctx.toolResultTexts.every((t) => !t.includes(a.tool_result_not_contains!))
-          ? ok()
-          : fail(`a tool result unexpectedly contained "${a.tool_result_not_contains}"`),
-    );
+  if (a.tool_result_not_contains !== undefined) {
+    if (ctx.toolResultsMissing) {
+      results.push(fail(`evidence unavailable: tool results absent from result.json — cannot evaluate tool_result_not_contains`));
+    } else {
+      const forbidden = a.tool_result_not_contains;
+      const positiveHit = ctx.toolResultTexts.some((t) => t.includes(forbidden));
+      if (positiveHit) {
+        results.push(fail(`a tool result unexpectedly contained "${forbidden}"`));
+      } else {
+        const hasTruncatedAbsence =
+          ctx.toolResultsTruncated !== undefined &&
+          ctx.toolResultTexts.some((t, i) => !t.includes(forbidden) && ctx.toolResultsTruncated![i] === true);
+        results.push(
+          hasTruncatedAbsence
+            ? fail(
+                `evidence unavailable: one or more tool results are display-truncated (no assertText) — cannot rule out forbidden substring`,
+              )
+            : ok(),
+        );
+      }
+    }
+  }
   // Fuzzy content for stochastic prose. All regex-building assertions are try/catch-wrapped —
   // `evaluate()` is a bare `.map(check)` with no error boundary, so a malformed pattern must be a
   // clean assertion failure, not an uncaught throw. Case-insensitive ("i").
@@ -501,8 +518,20 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
             }
             if (aj.is_null !== undefined) {
               any = true;
-              const isNull = present && val === null;
-              results.push(isNull === aj.is_null ? ok() : fail(`artifact_json: "${aj.path}" is_null=${isNull}, expected ${aj.is_null}`));
+              if (!present) {
+                results.push(
+                  fail(
+                    `artifact_json: "${aj.path ?? "(root)"}" is_null: path is absent — cannot determine null-ness (use absent: true to assert absence)`,
+                  ),
+                );
+              } else {
+                const isNull = val === null;
+                results.push(
+                  isNull === aj.is_null
+                    ? ok()
+                    : fail(`artifact_json: "${aj.path ?? "(root)"}" is_null=${isNull}, expected ${aj.is_null}`),
+                );
+              }
             }
             if (aj.equals !== undefined) {
               any = true;

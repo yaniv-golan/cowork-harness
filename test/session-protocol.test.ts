@@ -135,23 +135,29 @@ describe("session protocol loud-failure fixes", () => {
     expect(warnings.some((w) => w.includes("unknown decision id") && w.includes("does-not-exist"))).toBe(true);
   });
 
-  it("an mcp_message with a missing request_id throws a typed protocol error (no unaddressable reply)", async () => {
+  it("an mcp_message with a missing request_id yields a typed protocol error event then ends the generator", async () => {
     const { proc, session } = newSession();
     const it = session.start()[Symbol.asyncIterator]();
     const firstP = it.next();
     await tick();
     // request_id omitted — a malformed control frame. The hook/mcp branches must not echo an unchecked id;
-    // on the LIVE path the throw propagates out of the generator (fail-closed), so it.next() rejects.
+    // on the LIVE path the throw is caught by start() and yielded as a typed {type:"error",source:"protocol"}
+    // event; the generator then returns (fail-closed).
     proc.stdout.write(
       JSON.stringify({
         type: "control_request",
         request: { subtype: "mcp_message", server_name: "srv", message: { jsonrpc: "2.0", id: 1, method: "tools/call" } },
       }) + "\n",
     );
-    await expect(firstP).rejects.toThrow(/malformed request_id/);
+    const first = await firstP;
+    expect(first.value).toMatchObject({ type: "error", source: "protocol" });
+    expect((first.value as any).message).toMatch(/malformed request_id/);
+    // the generator must have returned after yielding the error event
+    const second = await it.next();
+    expect(second.done).toBe(true);
   });
 
-  it("a hook_callback with a non-string request_id throws a typed protocol error", async () => {
+  it("a hook_callback with a non-string request_id yields a typed protocol error event then ends the generator", async () => {
     const { proc, session } = newSession();
     const it = session.start()[Symbol.asyncIterator]();
     const firstP = it.next();
@@ -163,7 +169,11 @@ describe("session protocol loud-failure fixes", () => {
         request: { subtype: "hook_callback", callback_id: "x", input: {} },
       }) + "\n",
     );
-    await expect(firstP).rejects.toThrow(/malformed request_id/);
+    const first = await firstP;
+    expect(first.value).toMatchObject({ type: "error", source: "protocol" });
+    expect((first.value as any).message).toMatch(/malformed request_id/);
+    const second = await it.next();
+    expect(second.done).toBe(true);
   });
 
   it("a malformed AskUserQuestion body (option missing label) becomes a typed protocol error, not trusted decider input", async () => {
@@ -183,10 +193,14 @@ describe("session protocol loud-failure fixes", () => {
         },
       }) + "\n",
     );
-    await expect(firstP).rejects.toThrow(/malformed AskUserQuestion questions/);
+    const first = await firstP;
+    expect(first.value).toMatchObject({ type: "error", source: "protocol" });
+    expect((first.value as any).message).toMatch(/malformed AskUserQuestion questions/);
+    const second = await it.next();
+    expect(second.done).toBe(true);
   });
 
-  it("questions not an array is a typed protocol error", async () => {
+  it("questions not an array yields a typed protocol error event then ends the generator", async () => {
     const { proc, session } = newSession();
     const it = session.start()[Symbol.asyncIterator]();
     const firstP = it.next();
@@ -198,7 +212,11 @@ describe("session protocol loud-failure fixes", () => {
         request: { subtype: "can_use_tool", tool_name: "AskUserQuestion", input: { questions: "not-an-array" } },
       }) + "\n",
     );
-    await expect(firstP).rejects.toThrow(/malformed AskUserQuestion questions/);
+    const first = await firstP;
+    expect(first.value).toMatchObject({ type: "error", source: "protocol" });
+    expect((first.value as any).message).toMatch(/malformed AskUserQuestion questions/);
+    const second = await it.next();
+    expect(second.done).toBe(true);
   });
 
   it("a well-formed AskUserQuestion body still yields a decision event (no over-strict regression)", async () => {
@@ -293,7 +311,11 @@ describe("session protocol loud-failure fixes", () => {
         },
       }) + "\n",
     );
-    await expect(firstP).rejects.toThrow(/malformed AskUserQuestion questions/);
+    const first = await firstP;
+    expect(first.value).toMatchObject({ type: "error", source: "protocol" });
+    expect((first.value as any).message).toMatch(/malformed AskUserQuestion questions/);
+    const second = await it.next();
+    expect(second.done).toBe(true);
   });
 
   it("an over-cap control-out frame FAILS the live recording (the unreplayable truncation marker never reaches a cassette)", async () => {

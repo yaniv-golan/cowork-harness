@@ -119,7 +119,10 @@ export function makeRenderer(plan: RenderPlan, write: Sink = stderr): Renderer {
  */
 export function startHeartbeat(renderer: Renderer | undefined, plan: RenderPlan, startMs: number, write: Sink = stderr): () => void {
   if (process.env.COWORK_HARNESS_NO_HEARTBEAT) return () => {};
-  const idleMs = Number(process.env.COWORK_HARNESS_HEARTBEAT_MS) || 30_000;
+  // Reject negative/zero/NaN/non-finite so a bad value can't invert the idle guard (idle is always ≥ 0,
+  // so a negative idleMs would make every tick fire and flood stderr) — fall back to the 30s default.
+  const n = Number(process.env.COWORK_HARNESS_HEARTBEAT_MS);
+  const idleMs = Number.isFinite(n) && n > 0 ? n : 30_000;
   const tick = () => {
     const idle = Date.now() - (renderer?.lastActivity() ?? startMs);
     if (idle < idleMs) return; // recent output — stay quiet

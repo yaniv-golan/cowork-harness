@@ -1,4 +1,4 @@
-import { warn } from "../io.js";
+import { warn, envPositiveNumber } from "../io.js";
 import { mkdirSync, readdirSync, existsSync, readFileSync, writeFileSync, renameSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import readline from "node:readline";
@@ -70,7 +70,7 @@ export function writeDoneMarker(dir: string): void {
  * `{"done":true}` when the run finishes. Resolves when done (or after one pass if `once`).
  */
 export function streamGates(dir: string, write: (line: string) => void, opts: { pollMs?: number; once?: boolean } = {}): Promise<void> {
-  const pollMs = opts.pollMs ?? (Number(process.env.COWORK_HARNESS_DECIDER_DIR_POLL_MS) || 500);
+  const pollMs = opts.pollMs ?? envPositiveNumber("COWORK_HARNESS_DECIDER_DIR_POLL_MS", 500);
   const seen = new Set<string>();
   const tries = new Map<string, number>(); // per-file parse attempts — bound retries so a corrupt file drops loud
   return new Promise<void>((resolve) => {
@@ -150,8 +150,14 @@ export function fileChannel(dir: string): DecisionChannel {
     throw new Error(
       `--decider-dir ${dir} already has gate files (${stale.slice(0, 3).join(", ")}…) — use a fresh, empty directory per run`,
     );
-  const pollMs = Number(process.env.COWORK_HARNESS_DECIDER_DIR_POLL_MS) || 300;
-  const timeoutMs = Number(process.env.COWORK_HARNESS_DECIDER_DIR_TIMEOUT_MS) || 600_000; // 10-min backstop → loud UnansweredError
+  // #21: a clean PRIOR run leaves exactly one leftover — done.json (close() preserves it deliberately;
+  // the stale scan above is REQ/RESP-only, so the common rerun-with-done.json case passes the fresh-dir
+  // check). A `gates --follow` watcher would read that stale marker on tick 1 (streamGates:102) and emit
+  // {done:true} before req-1 is ever written, stranding every gate on the backstop. Auto-clean ONLY
+  // done.json so the live req-*/resp-* concurrent-run detection above stays intact.
+  rmSync(join(dir, "done.json"), { force: true });
+  const pollMs = envPositiveNumber("COWORK_HARNESS_DECIDER_DIR_POLL_MS", 300);
+  const timeoutMs = envPositiveNumber("COWORK_HARNESS_DECIDER_DIR_TIMEOUT_MS", 600_000); // 10-min backstop → loud UnansweredError
   let seq = 0;
   let lastSnapshotSeq = 0; // watermark so a per-scenario snapshot() copies ONLY that scenario's new gates
   // #49: store the handler so it can be removed on close() — otherwise repeated fileChannel() calls in
@@ -239,7 +245,7 @@ export function spawnChannel(cmd: string): DecisionChannel {
   // #53: bound the wait on the helper's stdout — a hung-but-alive helper would otherwise block the harness
   // forever (only fileChannel had a deadline; this mirrors its 10-min backstop). On expiry kill the child
   // (so a wedged process can't linger) and reject LOUD, never a silent hang.
-  const timeoutMs = Number(process.env.COWORK_HARNESS_DECIDER_CMD_TIMEOUT_MS) || 600_000;
+  const timeoutMs = envPositiveNumber("COWORK_HARNESS_DECIDER_CMD_TIMEOUT_MS", 600_000);
   let dead = false;
   child.on("exit", () => (dead = true));
   child.on("error", () => (dead = true));

@@ -37,7 +37,11 @@ function spawnOnce(bin: string, prompt: string, model: string, timeoutMs: number
     }, timeoutMs);
     // Bound stdout too — the wall-clock timeout above caps a fully-hung child, but not one that is
     // actively spewing. Past the cap, SIGKILL and reject loud rather than growing the buffer unbounded.
-    let out = "";
+    // #61: collect raw Buffer chunks and decode ONCE at close. The old `out += d` coerced each chunk to
+    // a string independently, so a UTF-8 sequence straddling a chunk boundary (em-dash, accent, emoji)
+    // decoded as U+FFFD in both halves — corrupting the verification-critical decider answer. Byte-identical
+    // for ASCII/single-chunk. The byte cap still sums `d.length` (raw bytes), unaffected by decoding.
+    const chunks: Buffer[] = [];
     let bytes = 0;
     let err = "";
     child.stdout.on("data", (d: Buffer) => {
@@ -53,7 +57,7 @@ function spawnOnce(bin: string, prompt: string, model: string, timeoutMs: number
         reject(new Error(`LLM decider transport (${bin} -p) exceeded ${maxBytes} bytes — aborting`));
         return;
       }
-      out += d;
+      chunks.push(d);
     });
     // Capture stderr, bounded (claude's stderr is small; cap so a pathological spew can't grow unbounded).
     child.stderr.on("data", (d: Buffer) => {
@@ -67,12 +71,13 @@ function spawnOnce(bin: string, prompt: string, model: string, timeoutMs: number
     child.on("close", (code) => {
       clearTimeout(timer);
       if (code === 0) {
-        resolve(out);
+        // Decode once at close — see chunks comment above (#61).
+        resolve(Buffer.concat(chunks).toString("utf8"));
         return;
       }
       // Non-zero exit: fold the captured output into the message (the diagnosis lives in stdout, not stderr —
       // verified) and mark RETRYABLE so a transient hiccup gets a bounded re-attempt before failing loud.
-      const o = tail(out);
+      const o = tail(Buffer.concat(chunks).toString("utf8"));
       const e = tail(err);
       const diag = [o && `stdout: ${o}`, e && `stderr: ${e}`].filter(Boolean).join(" | ");
       reject(new TransportExit(`LLM decider transport (${bin} -p) exited ${code}${diag ? ` — ${diag}` : " (no output captured)"}`));

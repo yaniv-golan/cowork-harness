@@ -64,25 +64,25 @@ export const realProbe: DoctorProbe = {
   arch: () => process.arch,
   runtimeName: () => process.env.COWORK_CONTAINER_RUNTIME ?? "docker",
   runtimeAvailable() {
-    const r = spawnSync(this.runtimeName(), ["--version"], { stdio: "ignore" });
+    const r = spawnSync(this.runtimeName(), ["--version"], { stdio: "ignore", timeout: 5000 });
     return !r.error && r.status === 0;
   },
   runtimeDaemonUp() {
-    const r = spawnSync(this.runtimeName(), ["info"], { stdio: "ignore" });
+    const r = spawnSync(this.runtimeName(), ["info"], { stdio: "ignore", timeout: 5000 });
     return !r.error && r.status === 0;
   },
   limaAvailable() {
-    const r = spawnSync(limaPath(), ["--version"], { stdio: "ignore" });
+    const r = spawnSync(limaPath(), ["--version"], { stdio: "ignore", timeout: 5000 });
     return !r.error && r.status === 0;
   },
   imageName: () => process.env.COWORK_AGENT_IMAGE ?? "cowork-agent-base:2",
   imagePresent() {
-    const r = spawnSync(this.runtimeName(), ["image", "inspect", this.imageName()], { stdio: "ignore" });
+    const r = spawnSync(this.runtimeName(), ["image", "inspect", this.imageName()], { stdio: "ignore", timeout: 5000 });
     return !r.error && r.status === 0;
   },
   proxyImageName: () => process.env.COWORK_PROXY_IMAGE ?? "cowork-egress-proxy:1",
   proxyImagePresent() {
-    const r = spawnSync(this.runtimeName(), ["image", "inspect", this.proxyImageName()], { stdio: "ignore" });
+    const r = spawnSync(this.runtimeName(), ["image", "inspect", this.proxyImageName()], { stdio: "ignore", timeout: 5000 });
     return !r.error && r.status === 0;
   },
   agentBinary() {

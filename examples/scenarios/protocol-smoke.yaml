@@ -39,7 +39,6 @@ assert:
   - tool_called: Write
   # L0 has NO sealed filesystem: the agent runs on the real host cwd, so the Write tool_result
   # ("File created at /…/work/outputs/note.md") names a host path. That leak is EXPECTED at this
-  # tier — assert `false` to own it. A SANDBOXED tier (container+) seals the FS, where you'd flip
-  # this to `true` and it would hold. This single line is the clearest illustration of what
-  # protocol fidelity does and does not give you.
-  - transcript_no_host_path: false
+  # tier — omit transcript_no_host_path rather than asserting it (the verdict will surface
+  # host_path_leak on a live L0 run, which is the correct signal). A SANDBOXED tier (container+)
+  # seals the FS; there you would add `- transcript_no_host_path: true` and it would pass.

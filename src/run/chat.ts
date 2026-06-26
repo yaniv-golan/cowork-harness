@@ -1,4 +1,5 @@
 import readline from "node:readline";
+import os from "node:os";
 import { spawn, spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { mkdirSync } from "node:fs";
@@ -80,7 +81,8 @@ export async function cmdChat(args: string[]) {
   const seenFlags = new Set<string>();
   // a value reader that rejects a MISSING, EMPTY, or flag-looking value for value-flags (the old
   // code only bounds-checked, so `--upload --folder` took `--folder` as the upload path and `--upload ""`
-  // was accepted). --model already validated; this unifies the policy across --upload/--folder/--plugin too.
+  // was accepted). Used uniformly by --model/--upload/--folder/--plugin so a flag-looking next token
+  // (e.g. `--model --upload x.pdf`) is rejected instead of being swallowed as the value.
   const nextValue = (i: number, flag: string, what: string): string => {
     if (i + 1 >= args.length) {
       log(`chat ${flag} requires ${what}\n`);
@@ -112,16 +114,9 @@ export async function cmdChat(args: string[]) {
       fidelity = v as ChatFidelity;
       seenFlags.add("--fidelity");
     } else if (a === "--model") {
-      // --model keeps its own (already-correct) non-empty validation.
-      if (++i >= args.length) {
-        log(`chat --model requires a value\n`);
-        process.exit(2);
-      }
-      model = args[i];
-      if (!model.trim()) {
-        log(`chat --model requires a non-empty value\n`);
-        process.exit(2);
-      }
+      // Route through nextValue so a flag-looking next token is rejected (not swallowed as the model id),
+      // matching --upload/--folder/--plugin. The `-\d` carve-out keeps valid model ids intact.
+      model = nextValue(i++, "--model", "a model id");
       seenFlags.add("--model");
     } else if (a === "--upload") {
       uploads.push(nextValue(i++, "--upload", "a file path"));
@@ -282,11 +277,14 @@ export async function cmdChat(args: string[]) {
         sdkMcp: hl.sdkMcp,
       });
     } else {
-      child = spawnContainer(scenario, baseline, plan, outDir, sessionId, {
+      const ct = spawnContainer(scenario, baseline, plan, outDir, sessionId, {
         systemPromptAppend: prompts.systemPromptAppend,
         egressProxy: sidecar!.proxyUrl,
         dockerNetwork: sidecar!.network,
+        runToken,
       });
+      child = ct.child;
+      containerName = ct.containerName; // so Ctrl-C / finally reap the agent container by name (#3)
       const agent = new LiveAgentSession(child as any, outDir);
       const decider = Chain(new ScriptedDecider([]), new PermissionDefaultDecider("cowork"), new PromptDecider(ask));
       const renderer = makeRenderer(renderPlan);
@@ -386,7 +384,11 @@ function chatRaw(folder: string, model?: string) {
     ...(model ? ["--model", model] : []),
   ];
   const child = spawn(runner, dockerArgs, { stdio: "inherit" });
-  child.on("exit", (code) => process.exit(code ?? 0));
+  // On signal termination (OOM, daemon restart, external kill) `code` is null; map the signal to the
+  // standard 128+signo so a signal-killed container doesn't report success to a wrapping --raw caller.
+  child.on("exit", (code, signal) =>
+    process.exit(code != null ? code : signal ? 128 + (os.constants.signals[signal] ?? 1) : 1),
+  );
   child.on("error", (e) => {
     log(`--raw failed (native interactive mode may be unavailable): ${e}\n`);
     process.exit(2);

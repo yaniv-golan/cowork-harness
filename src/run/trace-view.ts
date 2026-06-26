@@ -1,6 +1,6 @@
 import { warn } from "../io.js";
 import { readFileSync, existsSync, statSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 import { parseMessage, type AgentEvent, type DecisionRequest } from "../agent/session.js";
 
@@ -115,7 +115,9 @@ export function resolveEventsFile(arg: string): string {
     // Collect ALL fragment matches and warn loudly (with candidates) before picking deterministically.
     for (const scen of readdirSync(root)) {
       const sd = join(root, scen);
-      if (!statSync(sd).isDirectory()) continue;
+      let sdStat;
+      try { sdStat = statSync(sd); } catch { continue; }
+      if (!sdStat.isDirectory()) continue;
       const direct = join(sd, arg, "events.jsonl");
       if (existsSync(direct)) return direct; // exact run-dir name match under scenario dir
     }
@@ -123,7 +125,9 @@ export function resolveEventsFile(arg: string): string {
     const candidates: string[] = [];
     for (const scen of readdirSync(root)) {
       const sd = join(root, scen);
-      if (!statSync(sd).isDirectory()) continue;
+      let sdStat;
+      try { sdStat = statSync(sd); } catch { continue; }
+      if (!sdStat.isDirectory()) continue;
       for (const run of readdirSync(sd)) {
         const f = join(sd, run, "events.jsonl");
         if (!existsSync(f)) continue;
@@ -132,8 +136,12 @@ export function resolveEventsFile(arg: string): string {
     }
     if (candidates.length === 1) return candidates[0];
     if (candidates.length > 1) {
-      // Sort deterministically (most recent first by run dir name, which encodes a timestamp).
-      candidates.sort((a, b) => b.localeCompare(a));
+      candidates.sort((a, b) => {
+        let am = 0, bm = 0;
+        try { am = statSync(dirname(a)).mtimeMs; } catch {}
+        try { bm = statSync(dirname(b)).mtimeMs; } catch {}
+        return bm !== am ? bm - am : b.localeCompare(a);
+      });
       warn(
         `::warning:: ambiguous trace fragment "${arg}" matches ${candidates.length} run dirs:\n` +
           candidates.map((c) => `  ${c}`).join("\n") +

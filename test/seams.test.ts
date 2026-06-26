@@ -1047,6 +1047,56 @@ describe("Cassette — protocol replay", () => {
     expect((deserializeDecision(req, { behavior: "deny", message: "x" }) as any).behavior).toBe("deny");
   });
 
+  // ---- Bug 40: deserializeDecision question branch validates answers instead of blind-casting ----
+  // Cases 1-2: well-formed answers round-trip canon-identically (no spurious O7 fidelity failure).
+  it("round-trip: question with non-empty answers round-trips canon-identically", () => {
+    const req: DecisionRequest = { id: "r1", kind: "question", questions: [{ question: "Q?", options: [{ label: "yes" }, { label: "no" }] }] };
+    const resp: DecisionResponse = { kind: "question", answers: { "Q?": "yes" } };
+    const envelope = serializeDecision(req, resp) as any;
+    const body: Record<string, unknown> = envelope.response.response;
+    const decoded = deserializeDecision(req, body);
+    expect(decoded.kind).toBe("question");
+    expect((decoded as any).answers).toEqual({ "Q?": "yes" });
+    // re-serializing must canon-match the recorded body (no spurious replay_protocol_fidelity failure)
+    const reEncoded = serializeDecision(req, decoded) as any;
+    expect(canon(reEncoded)).toBe(canon(envelope));
+  });
+
+  it("round-trip: question with empty answers round-trips canon-identically (no false-positive on valid empty set)", () => {
+    const req: DecisionRequest = { id: "r1", kind: "question", questions: [{ question: "Q?", options: [{ label: "yes" }] }] };
+    const resp: DecisionResponse = { kind: "question", answers: {} };
+    const envelope = serializeDecision(req, resp) as any;
+    const body: Record<string, unknown> = envelope.response.response;
+    const decoded = deserializeDecision(req, body);
+    expect(decoded.kind).toBe("question");
+    expect((decoded as any).answers).toEqual({});
+    const reEncoded = serializeDecision(req, decoded) as any;
+    expect(canon(reEncoded)).toBe(canon(envelope));
+  });
+
+  // Cases 3-5: corrupt answers coerce to {} — the O7 guard trips rather than silently coercing.
+  it("corrupt question answers: array coerces to {} (trips O7 guard on re-serialize mismatch)", () => {
+    const req: DecisionRequest = { id: "r1", kind: "question", questions: [{ question: "Q?", options: [{ label: "yes" }] }] };
+    const decoded = deserializeDecision(req, { behavior: "allow", updatedInput: { questions: [], answers: ["yes"] } });
+    expect((decoded as any).answers).toEqual({});
+  });
+
+  it("corrupt question answers: non-string value coerces to {} (trips O7 guard on re-serialize mismatch)", () => {
+    const req: DecisionRequest = { id: "r1", kind: "question", questions: [{ question: "Q?", options: [{ label: "yes" }] }] };
+    const decoded = deserializeDecision(req, { behavior: "allow", updatedInput: { questions: [], answers: { "Q?": 42 } } });
+    expect((decoded as any).answers).toEqual({});
+  });
+
+  it("corrupt question answers: missing answers coerces to {} (trips O7 guard on re-serialize mismatch)", () => {
+    const req: DecisionRequest = { id: "r1", kind: "question", questions: [{ question: "Q?", options: [{ label: "yes" }] }] };
+    // answers missing entirely
+    const decoded1 = deserializeDecision(req, { behavior: "allow", updatedInput: { questions: [] } });
+    expect((decoded1 as any).answers).toEqual({});
+    // updatedInput missing entirely
+    const decoded2 = deserializeDecision(req, { behavior: "allow" });
+    expect((decoded2 as any).answers).toEqual({});
+  });
+
   // ---- Old cassette (no controlOut) → warn + question/gate excluded, not false-green ----
   it("old-cassette: no controlOut → question/gate keys excluded (not vacuously passed)", async () => {
     const events = [
