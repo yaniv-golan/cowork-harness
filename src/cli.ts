@@ -1538,11 +1538,13 @@ function cmdSync(args: string[]) {
     log(`note: asarFingerprint changed (${prevFingerprint} → ${res.asarFingerprint}); gates re-synced above.`);
   }
 
+  const capturedAt = new Date().toISOString().slice(0, 10);
   const next = {
     ...base,
+    "$comment": `Platform baseline auto-derived by \`cowork-harness sync\` from a live Claude Desktop install + app.asar. VOLATILE per-release facts only. Regenerate per release; review the diff. Captured ${capturedAt} on macOS arm64.`,
     baselineVersion: 1,
     appVersion: res.appVersion,
-    capturedAt: new Date().toISOString().slice(0, 10),
+    capturedAt,
     agentVersion: res.agentVersion,
     agentBinary: nextAgentBinary,
     network: { ...(base.network as object), mode: res.networkMode ?? "gvisor", allowKind: "allowlist", allowDomains: res.allowDomains },

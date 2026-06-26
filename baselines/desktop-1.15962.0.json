@@ -150,7 +150,7 @@
       "CLAUDE_CODE_SESSION_LOG"
     ]
   },
-  "$comment": "Platform baseline auto-derived by `cowork-harness sync` from a live Claude Desktop install + app.asar. VOLATILE per-release facts only. Regenerate per release; review the diff. Captured 2026-06-12 on macOS arm64.",
+  "$comment": "Platform baseline auto-derived by `cowork-harness sync` from a live Claude Desktop install + app.asar. VOLATILE per-release facts only. Regenerate per release; review the diff. Captured 2026-06-26 on macOS arm64.",
   "capturedAt": "2026-06-26",
   "platform": "darwin-arm64",
   "settings": {

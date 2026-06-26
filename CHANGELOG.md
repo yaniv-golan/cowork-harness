@@ -6,6 +6,19 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+
+- `sync` no longer flags an unknown delta when `coworkEgressAllowedHosts` is absent from
+  `config.json` (the normal state for a fresh install with no user-configured custom egress
+  hosts). Previously the absent key was treated the same as a wrong-typed value and blocked
+  the baseline write entirely.
+
+### Changed
+
+- Baseline bumped to `desktop-1.15962.0` (agent `2.1.187`). Content is unchanged from
+  `1.15200.0` — host-loop generator, system prompt, identity, gates, and egress domains are
+  all byte-identical per asar analysis. Version and fingerprint fields only.
+
 ## [0.17.0] — 2026-06-26
 
 ### Upgrade notes
