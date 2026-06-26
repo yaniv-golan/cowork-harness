@@ -333,6 +333,10 @@ The three states are **distinct**: `absent` (the final key is missing from a par
 that path) — which **fails loud**, never a vacuous pass. (No JSONPath/jq — a dotted path keeps it
 dependency-free and side-effect-free.)
 
+> **`is_null: false` requires the path to be present.** If the path is absent, `is_null: false` fails loud
+> (rather than vacuously passing). To assert "exists and is not null" write `exists: true` on one line and
+> `is_null: false` on another. Use `absent: true` to assert the key does not exist at all.
+
 > **Stable vs brittle asserts on stochastic (LLM-extracted) values.** A cassette freezes ONE stochastic
 > output, so an `equals` on an LLM-extracted string will churn every time you re-record. Prefer **stable**
 > operators for extracted values: `absent` / `exists` (the anti-hallucination negative is rock-stable),
