@@ -26,8 +26,9 @@ export interface EgressProxy extends http.Server {
   actualPort: number;
 }
 
-/** Allocate a free TCP port by binding an ephemeral listener and releasing it. Used to give each microVM
- *  run its own host proxy port so concurrent runs can't collide on a fixed default. */
+/** Bind an ephemeral port, read it back, and immediately close — returns a port number that was
+ *  free at that instant. Useful in tests to get a "dead" upstream port (nothing listening) so the
+ *  proxy can be driven to a 502. NOT used in production proxy startup (use port:0 → actualPort). */
 export function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const srv = net.createServer();
@@ -152,8 +153,8 @@ export function startEgressProxy(opts: ProxyOptions): EgressProxy {
     });
     server.once("error", reject);
   });
-  // `?? 0` is unreachable — every real caller passes an explicit port (execute.ts microvmProxyPort,
-  // Dockerfile.proxy CMD port:Number(PORT||8080)); the default existed only as dead code.
+  // port 0 → OS assigns an ephemeral port; actualPort is populated on "listening" above.
+  // Dockerfile.proxy passes an explicit port via PORT env; execute.ts passes 0 for the microVM path.
   server.listen(opts.port ?? 0);
   (server as EgressProxy).ready = ready;
   return server as EgressProxy;

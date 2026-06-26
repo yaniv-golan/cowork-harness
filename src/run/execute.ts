@@ -29,7 +29,7 @@ import { instanceName } from "../runtime/lima.js";
 import { decideLoopFromBaseline, readGateFlag } from "../loop-decision.js";
 import type { WebFetchProvenance } from "../hostloop/workspace-handler.js";
 import { startEgressSidecar, registerCleanup, type EgressSidecar } from "../egress/sidecar.js";
-import { startEgressProxy, freePort } from "../egress/proxy.js";
+import { startEgressProxy } from "../egress/proxy.js";
 import { evaluate, hostMatches } from "../assert.js";
 import { compileUserRegex } from "../regex.js";
 import { renderPrompts } from "../prompt.js";
@@ -382,17 +382,17 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         },
       });
     } else if (effectiveFidelity === "microvm") {
-      // allocate a free host port per run unless explicitly pinned, so concurrent microVM runs don't
-      // collide on the fixed 8899. The SAME port is threaded into spawnMicroVm below, so the guest firewall
-      // rule and HTTP(S)_PROXY point at the exact host bind.
-      microvmProxyPort = process.env.COWORK_VM_PROXY_PORT ? parseEnvPort("COWORK_VM_PROXY_PORT", 0) : await freePort();
+      // Bind the proxy first (port 0 → OS assigns), then read the actual port back from the live socket.
+      // The firewall rule and HTTP(S)_PROXY (written in spawnMicroVm below) just need the port before the
+      // agent spawns, not before the proxy binds — so proxy-first eliminates the freePort() TOCTOU window.
       hostProxy = startEgressProxy({
         allow: plan.egressAllow,
-        port: microvmProxyPort,
+        port: process.env.COWORK_VM_PROXY_PORT ? parseEnvPort("COWORK_VM_PROXY_PORT", 0) : 0,
         logPath: join(outDir, "egress.log"),
         onDecision: (host, decision) => egress.push({ host, decision }),
       });
       await hostProxy.ready; // don't spawn the agent until the proxy is accepting (or fail loud on a bind error)
+      microvmProxyPort = hostProxy.actualPort; // read from the live, still-bound socket — no TOCTOU gap
     }
 
     const prompts = renderPrompts(baseline, session, sessionId, plan.mounts.find((m) => m.kind === "folder")?.mountPath);

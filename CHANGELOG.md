@@ -8,6 +8,12 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **The microVM egress proxy port is now allocated via bind-port-0 instead of freePort().** The
+  previous approach (bind :0 → read port → close → re-bind real proxy) had a TOCTOU gap: another
+  process could grab the port between the probe close and the proxy bind. The proxy now binds on `:0`
+  directly; `actualPort` is read from the live socket and threaded into the guest firewall rule and
+  `HTTP(S)_PROXY` env after the proxy is already bound. L1 (container/hostloop) was unaffected
+  (uses a fixed port inside Docker's per-run network namespace); L0 (protocol) has no proxy.
 - **Cassette fingerprint format is v7.** The skill-hash uses a NUL byte (`\0`) to delimit entries
   (`F:`, `D:`, `L:`) — unambiguous for all POSIX-valid filenames. `CONTENTSIG_ALGO` is 3.
   `verify-cassettes` reports `recorded under an older hash format (v6 → v7)` for stale cassettes;
