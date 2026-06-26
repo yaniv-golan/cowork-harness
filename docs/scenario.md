@@ -126,19 +126,29 @@ the CLI's `--decider-llm`). It is **non-deterministic** by construction, so a ru
 >
 > **Stochastic option *labels* (distinct from stochastic *structure*).** If a skill regenerates both the
 > question wording *and* the option labels each run, you can still pin the gate **deterministically** —
-> match on **position**, not text:
+> anchor on a stable **leading substring** of the label, or on **position**:
 >
-> - `choose:` accepts a **1-based index** (`choose: "2"` selects the second option), which survives
->   regenerated labels. (Index applies only when `choose` is *entirely* digits; a pure-digit option *label*
->   collides with index semantics — use `answer:` for that rare gate.)
+> - `choose:` (and `--answer`) accept a **stable partial anchor** — a leading substring bound to whichever
+>   single option *starts with it at a word boundary* (the label's next char, after optional whitespace, is
+>   one of `:` `(` `,` `—` `–` or end-of-label; a `/` or a bare space does **not** count, so `Seed` won't
+>   match `Seed / AI/ML`). `choose: "Israeli company"` binds `"Israeli company (IL only)"`; `choose: "2
+>   founders"` binds `"2 founders, ~5M each"`. It is **uniqueness-guarded**: if the anchor matches two
+>   options — or none — it **fails loud** (the error lists the offered options), never a silent mis-pick.
+>   **Prefer this over a positional index** when the leading text is stable: it rides label drift *and*
+>   survives option **re-ordering** (it matches content, not slot).
+> - `choose:` also accepts a **1-based index** (`choose: "2"` selects the second option), which survives
+>   *fully* regenerated labels — the fallback when even the leading text drifts. (Index applies only when
+>   `choose` is *entirely* digits; a pure-digit option *label* collides with index semantics — use
+>   `answer:` for that rare gate.)
 > - `when_question: ".*"` is a catch-all that matches any phrasing.
 >
 > So `when_question: ".*"` + `choose: "2"` pins a gate whose wording and labels both drift, with no live
 > decider — **but only when the option *order* is stable.** A positional `choose` is robust to label drift,
 > NOT to option *re-ordering*: if the gate can present its options in a different order run-to-run, the index
 > lands on a different option (a silent re-record flake; `lint` flags positional `choose` with an advisory).
-> When the order is stable, prefer an exact label (`choose: "<label>"`); use position only when labels drift
-> but order holds. **Caveat:** rules are evaluated in order and the *first* matching `when_question` wins, so `.*`
+> Escalate only as far as you must: an **exact label** (`choose: "<label>"`) when labels are stable → a
+> **partial anchor** (above) when only the label's tail drifts (robust to re-ordering) → a **positional
+> index** only when even the leading text regenerates and the option order holds. **Caveat:** rules are evaluated in order and the *first* matching `when_question` wins, so `.*`
 > answers *any* gate — use it only as a **last-resort fallback for a single expected gate per turn**, and
 > always place it *after* more-specific rules. This covers stochastic *labels*; it does **not** cover
 > structural stochasticity (whether/which gate appears), which still needs a live decider as above.
