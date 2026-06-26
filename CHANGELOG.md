@@ -8,23 +8,14 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
-- **Cassette fingerprint format bumped to v7; all cassettes recorded at v6 (or earlier) need one
-  re-record.** The skill-hash now uses a NUL byte (`\0`) instead of a newline to delimit each entry
-  (`F:`, `D:`, `L:`) in the hash input. The old newline delimiter was ambiguous for file names that
-  contain a newline (unusual but valid); NUL is a reliable separator that is forbidden in POSIX paths.
-  `CONTENTSIG_ALGO` is bumped 2→3. Run `cowork-harness record cassettes/ --rerecord-stale` after
-  upgrading — `verify-cassettes` will report `recorded under an older hash format (v6 → v7)` for any
-  cassette that needs it.
-- **`transcript_no_host_path: false` is now rejected at load time.** The assertion only ever made
-  sense as `true` (the check runs or it is omitted). Writing `false` was silently accepted but
-  produced a false-green (the scan ran, found nothing, and did NOT fail the run even when a leak
-  occurred). The Zod type is now `z.literal(true)` and the JSON schema enforces `const: true`. Omit
-  the key when you do not want to assert host-path cleanliness; use `allow_stall` / nothing for
-  protocol-tier (L0) runs where the leak is expected.
-- **`is_null: false` on an absent path now fails loud** instead of silently passing (a false-green
-  when the path was removed rather than set to null). If you want to assert that a value exists AND
-  is not null, pair with `exists: true`; if you merely want to assert presence, use `exists: true`
-  alone.
+- **Cassette fingerprint format is v7.** The skill-hash uses a NUL byte (`\0`) to delimit entries
+  (`F:`, `D:`, `L:`) — unambiguous for all POSIX-valid filenames. `CONTENTSIG_ALGO` is 3.
+  `verify-cassettes` reports `recorded under an older hash format (v6 → v7)` for stale cassettes;
+  re-record with `--rerecord-stale` to clear.
+- **`transcript_no_host_path` only accepts `true`.** Omit the key to skip the check; `false` is
+  rejected by the schema (`const: true`).
+- **`is_null: false` requires the path to be present.** An absent path fails loud. To assert "exists
+  and is not null", write `exists: true` alongside `is_null: false`.
 - **The egress proxy no longer crashes on a double-end or EPIPE.** When an upstream TLS error
   arrived after the response had already been ended (e.g. the client disconnected mid-stream),
   calling `res.writeHead(502)` on an already-sent response threw, taking down the proxy for the
@@ -45,7 +36,6 @@ All notable changes to this project are documented here. The format is based on
 - **Boundary `/host` probe split into two independent checks.** The previous single-command probe
   could false-pass when the host filesystem was sealed but the `/host` directory existed and was
   empty. The probe now AND-combines a listing check and a no-denial text check.
-
 - **`--decider-llm` transport now bounded-retries a transient `claude -p` exit and surfaces *why* it
   failed.** A single `claude -p` decider spawn can exit non-zero on a transient upstream hiccup
   (rate-limit/overload/network) during a long back-to-back batch — observed 1/8 live runs, not reproducible
