@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.18.0] — 2026-06-27
+
 ### Fixed
 
 - `sync` no longer flags an unknown delta when `coworkEgressAllowedHosts` is absent from
@@ -41,7 +43,9 @@ All notable changes to this project are documented here. The format is based on
   `1.15200.0` — host-loop generator, system prompt, identity, gates, and egress domains are
   all byte-identical per asar analysis. Version and fingerprint fields only. The live-contract
   suite was re-run green against the staged `2.1.187` agent on this baseline, so the
-  "verified end-to-end" claims are earned.
+  "verified end-to-end" claims are earned. Cassettes recorded against the `1.15200.0` baseline will
+  report a non-failing baseline-drift warning on `replay` (a hard fail under `--strict` /
+  `verify-cassettes`); re-record to clear, or ignore it since the asar content is byte-identical.
 
 ### Documentation
 
