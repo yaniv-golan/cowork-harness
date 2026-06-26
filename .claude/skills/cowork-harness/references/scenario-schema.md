@@ -4,6 +4,16 @@ Self-contained reference for authoring `cowork-harness` scenarios. Tracks `cowor
 (baseline `desktop-1.15200.0`). If your checkout is newer, prefer the live `docs/scenario.md`,
 `docs/session.md`, and `SPEC.md`.
 
+**Minimal scenario** — `prompt` is the only required field:
+
+```yaml
+prompt: "Use the my-skill skill to do X."
+assert:
+  - result: success
+```
+
+Everything below is the full field + assertion catalog.
+
 ## Table of contents
 - [Scenario YAML](#scenario-yaml)
 - [Session YAML](#session-yaml)
@@ -205,15 +215,15 @@ passes only if every key passes. Keep one concern per item unless you mean conju
 | `question_asked: <regex>` | the agent asked an AskUserQuestion whose text matches |
 | `questions_count_max: <N>` | the agent asked at most N questions |
 | `gate_answers_delivered: true` | every answered gate's answer reached the model (observed `tool_result`; unobserved = fail) |
-| `gate_answers_delivered: false` | asserts at least one answered gate's answer did **not** reach the model — for negative-path delivery tests |
+| `gate_answers_delivered: false` | asserts at least one answered gate's answer was **confirmed not delivered** (an observed delivery failure); an unobserved/null delivery does **not** satisfy this — for negative-path delivery tests |
 | `allow_permissive_auto_allow: true` | verdict modifier — suppresses the default-fail when the run recorded a cowork-parity permissive auto-allow; for tests that deliberately assert Cowork's permissive behavior |
 | `allow_missing_capability: true` | verdict modifier — suppresses the default-fail when the (partial "core") agent image omits a capability the skill used but real Cowork ships (OCR/LibreOffice/markitdown/opencv/PDF-tables). Assert only when the skill's fallback is genuinely equivalent; otherwise rebuild full parity (`--build-arg COWORK_FULL_PARITY=1`). Also opts out of the `requires_capabilities` declared-need check. Live tiers only |
 | `allow_l0_plugin_divergence: true` | verdict modifier — opt into L0/protocol plugin divergence: suppresses the default-fail when a plugin behaves differently at `protocol` (L0) fidelity than under a sandboxed tier. Live tiers only |
 | `allow_stall: true` | verdict modifier — suppresses the `stalled` default-fail when a run ends on an unanswered plain-text question (the agent asked for input and stopped); assert only when ending on a question is intended, else script the answer (`answer:` / `--answer` / a decider) |
-| `transcript_no_host_path: true` | no host path (`/Users`, `/opt`) leaked into model-visible text |
+| `transcript_no_host_path: true` | no host path (`/Users/`, `/opt/cowork/`, `/home/`, `/root/`) leaked into model-visible text |
 | `egress_denied: <host>` | the host was blocked by the egress proxy |
 | `egress_allowed: <host>` | the host was allowed through |
-| `artifact_json: {artifact, path, …}` | assert a JSON artifact's contents — `equals`/`gt`/`exists`/`absent`/`is_null` over a dotted `path` (`absent` ≠ `is_null`; an unresolved intermediate fails loud) |
+| `artifact_json: {artifact, path, …}` | assert a JSON artifact's contents — `equals`/`gt`/`in`/`exists`/`absent`/`is_null` over a dotted `path` (`in` = membership in a list, for a stochastic/LLM value; `absent` ≠ `is_null`; an unresolved intermediate fails loud) |
 
 `expect_denied: [host, …]` adds one `egress_denied` per host. Run `cowork-harness assertions --list` for this
 table from the live schema. Example: `artifact_json: { artifact: outputs/cap.json, path: me.run_id, equals: "r1" }`.

@@ -27,9 +27,10 @@ cowork-harness chat <skill-folder> [prompt] [options]
 | `--fidelity protocol\|container\|hostloop` | `container` (or `$COWORK_HARNESS_FIDELITY`) | Runtime tier (see below). |
 | `--model <id>` | `$COWORK_HARNESS_MODEL` | Override the model; passed as `--model` to the agent binary. |
 | `--upload <file>` | — | Attach a file (repeatable). Visible at `mnt/uploads/<basename>`. |
-| `--folder <dir>` | — | Connect a project folder (repeatable). Visible at `mnt/<basename>`. Live bind mount — agent writes persist to host. |
+| `--folder <dir>` | — | Connect a project folder (repeatable). Visible at `mnt/<basename>`. Staged as a **fresh copy** — agent writes land in the run's `mnt/<basename>` output, not back in the host original. |
 | `--plugin <dir>` | — | Load an additional local plugin alongside the main skill folder (repeatable). Rejected in `--raw` mode. |
 | `--verbose` / `-V` | off | Show thinking blocks, tool inputs, and the full sub-agent tree. Default: tool call markers only. |
+| `--run-dir <path>` (global) | `$COWORK_HARNESS_RUNS_DIR` or `~/.cowork-harness/runs` | Relocate the run/transcript output dir. A **global** flag (stripped before the chat parser), so it works on `chat` too. |
 | `--raw` | off | Skip the control protocol; spawns `docker run -it` in native cowork mode. Egress sandbox is NOT applied. `--upload`, `--folder`, `--plugin`, and `--fidelity` are **rejected** (they can't be honored in native mode); `--model` is still applied. |
 
 ## Fidelity tiers
@@ -73,8 +74,9 @@ Files and folders are mounted at the same paths the real Cowork client uses:
 | `--upload ~/data/report.pdf` | `mnt/uploads/report.pdf` |
 | `--folder ~/code/myproject` | `mnt/myproject` |
 
-`--folder` mounts are live bind mounts: any files the agent writes under
-`mnt/<basename>` persist to the corresponding host directory.
+`--folder` stages a **fresh copy** of the directory into the session tree (not a live bind mount of the
+original). Files the agent writes under `mnt/<basename>` land in the run's output there, **not** back in
+the corresponding host directory.
 
 ### Adding files mid-session
 
@@ -86,8 +88,8 @@ or folders, restart `chat` with the appropriate `--upload` / `--folder` flags. S
 
 The session transcript is always written to `~/.cowork-harness/runs/chat/<session-id>/` (relocate with
 `--run-dir <path>` or `COWORK_HARNESS_RUNS_DIR`). The path is printed when the session ends. If the
-session crashes before the footer prints, the run ID appears in the startup banner — use it to find the
-transcript directory.
+session crashes before the footer prints, the run ID appears in the startup banner
+(`cowork chat [<fidelity>] — run: <session-id>`) — use it to find the transcript directory.
 
 To read the transcript as a digest (tool calls, sub-agent dispatches, decisions):
 

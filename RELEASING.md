@@ -8,15 +8,16 @@ requires an OTP and is not how this repo ships.
 
 ## The preferred three-phase sequence (branch → PR → merge → tag)
 
-CI only triggers on pushes to `main` **or on pull requests**. Pushing a release branch and opening
-a PR lets CI prove the exact SHA before anything lands on `main`, keeping the "docs skew" window
+CI triggers on pushes to `main`, on pull requests, and via manual `workflow_dispatch`. Pushing a release
+branch and opening a PR lets CI prove the exact SHA before anything lands on `main`, keeping the "docs skew" window
 (main has ≥X.Y.Z docs but npm still has X.Y-1.Z) as short as possible.
 
 ```
 Phase 1: git checkout -b release/X.Y.Z
          git push origin release/X.Y.Z
          gh pr create --base main --head release/X.Y.Z --title "release: X.Y.Z"
-         # CI runs on the PR (unit + boundary stages; scenario stage skipped — no API key on PR)
+         # CI runs on the PR. For a same-repo release branch the live scenario stage ALSO runs
+         #   (the ANTHROPIC_API_KEY secret is available); it is skipped only on fork PRs.
   ↓  CI passes
 Phase 2: gh pr merge <number> --merge   (or merge via GitHub UI)
          git checkout main && git pull origin main
@@ -93,7 +94,7 @@ stricter privacy gate, a changed cassette/staleness hash), are a **minor**.
 - [ ] **Phase 3 — tag and publish**:
       ```
       git push origin vX.Y.Z
-      gh run watch $(gh run list --limit 1 --json databaseId --jq '.[0].databaseId')
+      gh run watch $(gh run list --workflow=release.yml --limit 1 --json databaseId --jq '.[0].databaseId')
       ```
 - [ ] **Clean up**: `git push origin --delete release/X.Y.Z && git branch -d release/X.Y.Z`
 - [ ] Smoke the published artifact: `npx cowork-harness@X.Y.Z --version` and
@@ -106,6 +107,7 @@ stricter privacy gate, a changed cassette/staleness hash), are a **minor**.
 - `docs/internal/` is gitignored and excluded from the npm tarball — keep planning notes there.
 - If the tag was placed on the wrong commit (e.g. a follow-up fix was needed), delete the local tag
   (`git tag -d vX.Y.Z`), re-create it on the correct commit, and push it.
-- The `scenario suite` CI stage is skipped on PRs (no API key available for fork PRs). It runs on
-  pushes to `main`. The `unit` + `boundary` stages are sufficient to gate a release; the scenario
-  suite is a post-merge health check.
+- The live `scenario suite` CI stage runs on **same-repo** PRs (where the `ANTHROPIC_API_KEY` secret is
+  available) and on pushes to `main`; it is skipped only on **fork** PRs (or when the secret is unset). So
+  a same-repo release-branch PR DOES exercise the live suite and spend API budget — the `unit` + `boundary`
+  stages alone are sufficient to gate a release if you'd rather not.

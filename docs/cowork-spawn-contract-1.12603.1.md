@@ -4,8 +4,8 @@
 > (agent ELF 2.1.181). Control-protocol fields documented here (spawn flags, handshake envelope,
 > permission/question shapes) are **unchanged**; the **mount layout changed at ≥1.14271.0** (work folders
 > now mount at `mnt/<name>`, not `mnt/.projects/<id>` — see CHANGELOG). Volatile fields — `agentVersion`,
-> egress `allowDomains`, GrowthBook gate values — have moved and are tracked in
-> `baselines/desktop-1.14271.0.json`.
+> egress `allowDomains`, GrowthBook gate values — have moved and are tracked in the latest baseline,
+> `baselines/desktop-1.15200.0.json`.
 
 Binary-verified this session. Anchors: asar `/tmp/asar-review/.vite/build/index.js` find `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS:"1"` (spawn env), `function TSO(` (settings filename), `{{workspaceContext}}` (prompt template); ELF `strings | grep`.
 
@@ -27,7 +27,7 @@ Binary-verified this session. Anchors: asar `/tmp/asar-review/.vite/build/index.
 - `settingSources:["user"]` → `--setting-sources=user`.
 - `effort:` default `"medium"` → `--effort`. (`CLAUDE_EFFORT` env is a no-op.)
 - `maxThinkingTokens:` default `DEFAULT_MAX_THINKING_TOKENS=31999` → `--max-thinking-tokens` (always passed; never 0).
-- System prompt: the SDK `initConfig.systemPrompt` schema accepts both a full string (replacement) AND a `{type:"preset",preset:"claude_code",append}` shape (plus `appendSystemPrompt` / `appendSubagentSystemPrompt`). **Cowork's two local-agent spawn sites (asar ~12,658,441 fork, ~12,751,439 main) use the PRESET+APPEND form by default** — the agent's built-in `claude_code` base prompt **plus** the cowork append (`y8r`, asar ~9,841,199); full-replacement only fires when a server-pushed `spawnSeed.systemPrompt`/`spVariant.mode==="replace"` is present (the exception). On the wire that is `appendSystemPrompt`, **semantically identical** to the harness's `--append-system-prompt` flag — so the harness's append-onto-preset is faithful (it intentionally does NOT bundle the verbatim prompt; it renders a reconstruction — see `src/prompt.ts` + `baselines/prompts/desktop-1.12603.1/system-prompt-append.md`). *(An earlier reading of this line as "Cowork sends a full `initConfig.systemPrompt` replacement" was wrong — corrected after binary re-verification, 2026-06-16.)* `appendSubagentSystemPrompt` travels over `initialize` (gated by `CLAUDE_CODE_ENABLE_APPEND_SUBAGENT_PROMPT`).
+- System prompt — **TL;DR: Cowork sends preset (`claude_code`) + a cowork append, which is semantically the harness's `--append-system-prompt`; full replacement is the rare server-pushed exception.** In detail: the SDK `initConfig.systemPrompt` schema accepts both a full string (replacement) AND a `{type:"preset",preset:"claude_code",append}` shape (plus `appendSystemPrompt` / `appendSubagentSystemPrompt`). **Cowork's two local-agent spawn sites (asar ~12,658,441 fork, ~12,751,439 main) use the PRESET+APPEND form by default** — the agent's built-in `claude_code` base prompt **plus** the cowork append (`y8r`, asar ~9,841,199); full-replacement only fires when a server-pushed `spawnSeed.systemPrompt`/`spVariant.mode==="replace"` is present (the exception). On the wire that is `appendSystemPrompt`, **semantically identical** to the harness's `--append-system-prompt` flag — so the harness's append-onto-preset is faithful (it intentionally does NOT bundle the verbatim prompt; it renders a reconstruction — see `src/prompt.ts` + `baselines/prompts/desktop-1.12603.1/system-prompt-append.md`). *(An earlier reading of this line as "Cowork sends a full `initConfig.systemPrompt` replacement" was wrong — corrected after binary re-verification, 2026-06-16.)* `appendSubagentSystemPrompt` travels over `initialize` (gated by `CLAUDE_CODE_ENABLE_APPEND_SUBAGENT_PROMPT`).
 
 ## Spawn env object (static keys; literal values)
 ```

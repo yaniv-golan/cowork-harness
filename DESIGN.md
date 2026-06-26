@@ -2,6 +2,10 @@
 
 This document is the reference for *how faithful* each tier is, *what we deliberately don't reproduce*, and *why the chosen seams keep parity cheap to maintain*. Everything here is grounded in analysis of the live Claude Desktop `app.asar` (spawn contract and gates first verified at build 1.12603.1; updated through build 1.15200.0 — volatile fields tracked in `baselines/desktop-1.15200.0.json`) and the on-disk runtime state on macOS.
 
+> **Just want to pick a tier or write a scenario?** This doc is the *why*. For the *how*, start at the
+> [README](./README.md) (tiers, quick start) and [docs/](./docs/README.md) (scenario/session reference).
+> Read on for the parity model, the deliberate deltas, and the maintenance contract.
+
 ## Architecture at a glance
 
 ```mermaid
@@ -46,6 +50,9 @@ A Cowork session is the Desktop app driving an agent that runs **inside an Apple
 > `hostloop` (production split-execution) and `cowork` (auto-picks host-loop vs container) —
 > are overlays on these and are covered in §"Spawn contract + host-loop vs VM-loop" below
 > and the README tier table, not as separate columns here.
+>
+> **L0/L1/L2 are doc shorthand only** — the actual `fidelity:` values you write are `protocol` /
+> `container` / `microvm` (plus the `hostloop` / `cowork` overlays). You never write `L1`.
 
 | Aspect | Real Cowork | L0 protocol | L1 container | L2 microvm |
 |---|---|---|---|---|
@@ -139,7 +146,7 @@ console.anthropic.com  docs.anthropic.com  mcp-proxy.anthropic.com  support.anth
 www.anthropic.com  *.claude.ai (assets / downloads / pivot / preview)  sentry.io
 ```
 
-L1 reproduces this as a **default-deny forward proxy**: the agent's `HTTP(S)_PROXY` points at it, and only allowlisted hosts (baseline + scenario `extra_allow`) get `CONNECT`-through; everything else is refused and logged to `egress.log`. Scenario `expect_denied` asserts denials. This matches what a skill *observes* (a blocked host fails) even though the transport differs from gVisor.
+L1 reproduces this as a **default-deny forward proxy**: the agent's `HTTP(S)_PROXY` points at it, and only allowlisted hosts (baseline + the session's `egress.extra_allow`) get `CONNECT`-through; everything else is refused and logged to `egress.log`. Scenario `expect_denied` asserts denials. This matches what a skill *observes* (a blocked host fails) even though the transport differs from gVisor.
 
 > Security note: the proxy is a **test fixture**, not a security boundary. Don't run untrusted skills against real credentials at L1 expecting VM-grade isolation; use L2 (real VM) for that. L1's job is faithful *behavioral* egress, not adversarial containment.
 
@@ -168,16 +175,16 @@ The handshake and shapes below were confirmed empirically with an end-to-end run
 4. **Response envelope (nested!):** `{type:"control_response", response:{subtype:"success", request_id, response:{behavior:"allow", updatedInput} | {behavior:"deny", message}}}`. The payload sits under an **inner** `response`; missing that nesting yields `ZodError: expected object, received undefined`.
 5. **AskUserQuestion answer:** allow with `updatedInput.answers = Record<questionText, chosenLabel>` (the CLI's own schema is `z.record(z.string(), z.string())`). The model receives the answer and proceeds.
 
-> **Cowork mode is enabled by env, not a flag.** In the staged agent (2.1.181) `--cowork` is a *plugin-scope* flag ("can only be used with user scope") and is rejected by the agent invocation; cowork mode is entered via **`CLAUDE_CODE_IS_COWORK=1`**. (Do **not** also set `CLAUDE_CODE_USE_COWORK_PLUGINS` — Desktop doesn't, and it flips the agent's userSettings filename to `cowork_settings.json` and plugin cache to `cowork_plugins/` via `TSO()`; plugins are delivered via `--plugin-dir`.) The host CLI is a different (macOS) build, so L0 runs plain (control-loop validation only); L1/L2 run the staged **Linux/arm64** binary — bind-mounted from the user's own install.
+> **Cowork mode is enabled by env, not a flag.** In the staged agent (2.1.181) `--cowork` is a *plugin-scope* flag ("can only be used with user scope") and is rejected by the agent invocation; cowork mode is entered via **`CLAUDE_CODE_IS_COWORK=1`**. (Do **not** also set `CLAUDE_CODE_USE_COWORK_PLUGINS` — Desktop doesn't, and it flips the agent's userSettings filename to `cowork_settings.json` and plugin cache to `cowork_plugins/` via `TSO()` — the minified Desktop helper that derives the cowork settings/cache paths; plugins are delivered via `--plugin-dir`.) The host CLI is a different (macOS) build, so L0 runs plain (control-loop validation only); L1/L2 run the staged **Linux/arm64** binary — bind-mounted from the user's own install.
 
 ### Spawn contract + host-loop vs VM-loop (binary-verified through asar 1.15200.0)
 
 The full Desktop→agent spawn contract (cwd `/sessions/<id>`, `CLAUDE_CONFIG_DIR=mnt/.claude`, the env object, `--tools`/`--allowedTools`/`--plugin-dir`/`--effort`/`--setting-sources`, permission layers, prompt templates) is documented in [docs/cowork-spawn-contract-1.12603.1.md](./docs/cowork-spawn-contract-1.12603.1.md) and encoded in `baseline.spawn`.
 
-**Which Cowork? — both are implemented.** Production runs **host-loop** (gate `1143815894`, forced on per the decoded fcache): the agent loop runs on the host, shell is `mcp__workspace__bash` into the VM, `${CLAUDE_PLUGIN_ROOT}` is a host path. VM-loop (gate off / `requireCoworkFullVmSandbox` orgs) runs the whole agent in the sandbox.
+**Which Cowork? — both are implemented.** Production runs **host-loop** (the host-loop GrowthBook gate `1143815894`, forced on per the decoded *fcache* — Desktop's on-disk GrowthBook feature-flag cache): the agent loop runs on the host, shell is `mcp__workspace__bash` into the VM, `${CLAUDE_PLUGIN_ROOT}` is a host path. VM-loop (gate off / `requireCoworkFullVmSandbox` orgs) runs the whole agent in the sandbox.
 
 - `fidelity: container | microvm` → **VM-loop** (the whole agent in the sandbox).
 - `fidelity: hostloop` → **host-loop**: native Bash/WebFetch disabled (`--disallowedTools`), and the agent's shell routed through the **workspace SDK-MCP server** — declared via `sdkMcpServers:["workspace"]` in the `initialize` handshake (verified mechanism), with the driver (`src/agent/session.ts` + `src/hostloop/workspace-handler.ts`) handling `mcp_message` JSON-RPC and executing `bash` via `docker exec` into the agent container at `/sessions/<id>/mnt`. `${CLAUDE_PLUGIN_ROOT}` is set to a `/host/...` path that doesn't exist in bash → a skill must self-heal via `find /sessions/<id>/mnt …`, exactly like production. Verified end-to-end: `mcp_servers:[{workspace,connected}]`, the agent calls `mcp__workspace__bash`, and `[ -d $CLAUDE_PLUGIN_ROOT ]` is false in bash.
-- `fidelity: cowork` → **auto-picks** host-loop vs VM-loop using Cowork's own decision logic (`src/loop-decision.ts`, an exact replica of `f_()`): `requireFullVmSandbox || forceDisableHostLoop ? vm : (dev override ? host : gate 1143815894)`. With the synced gate forced on, `cowork → hostloop`.
+- `fidelity: cowork` → **auto-picks** host-loop vs VM-loop using Cowork's own decision logic (`src/loop-decision.ts`, an exact replica of Desktop's minified `f_()` loop-decision function): `requireFullVmSandbox || forceDisableHostLoop ? vm : (dev override ? host : gate 1143815894)`. With the synced gate forced on, `cowork → hostloop`. (The replicated `f_()` **decision shape** is pinned to asar 1.12603.1 per `src/loop-decision.ts`; the 1.15200.0 sync re-derives only the **gate value** it reads, not the logic.)
 
 The **bash-visible world is identical** in both (`/sessions/<id>/mnt/...`); the agent-loop world differs (`${CLAUDE_PLUGIN_ROOT}` resolution, the shell tool). Use `hostloop` (or `cowork`) for production-faithful skill testing; `container` for fast VM-loop.

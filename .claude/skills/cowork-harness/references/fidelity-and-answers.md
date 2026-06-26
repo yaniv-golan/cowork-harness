@@ -53,10 +53,12 @@ regressions.
 | **Spawned helper** | `--decider-cmd '<helper>'` | depends on the helper |
 | **In-band (driving agent)** | `--decider-dir <dir>` (+ a Monitor that writes responses) | depends |
 
-The answer paths are orthogonal — don't mix them on one run.
+The answer paths are orthogonal — don't mix them on one run. The in-band path's Monitor drives two
+subcommands: `gates <dir>` (stream the pending questions) and `answer <dir> --gate N …` (reply to one).
 
-**multiSelect gates** work on every path. Scripted: `choose:` a list. In-band `--decider-dir`: repeat
-`--choose` (`--choose Auth --choose Billing`). `--decider-cmd` / hand-written `resp-N.json`: send the
+**multiSelect gates** work on every path. Scripted: `choose:` a list. In-band `--decider-dir`: the
+Monitor answers each gate with the `answer` subcommand, repeating its `--choose` flag
+(`answer <dir> --gate N --choose Auth --choose Billing`). `--decider-cmd` / hand-written `resp-N.json`: send the
 selections as a **JSON array** (`{"answers":{"<q>":["Auth","Billing"]}}`) — a bare comma-joined string
 is read as one label and fails; a scalar is one selection; an array on a single-select gate fails loud.
 All paths deliver the binary-verified `", "`-joined wire shape.

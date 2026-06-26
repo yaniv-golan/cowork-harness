@@ -39,8 +39,10 @@ You **do not** hand-write those files. Two CLI subcommands wrap the protocol:
   `--answer "<q>=<label>"` is repeatable for multi-question gates and matches by question text.
   **multiSelect gate:** repeat `--choose` once per selection (`--choose Auth --choose Billing`) — the
   members are written as a JSON array and delivered as the binary-verified `", "`-joined wire shape. A
-  repeated `--choose` on a *single-select* gate is rejected. (`--choose` answers the first
-  sub-question; a multi-*question* multiSelect gate needs `--answer "<q>=<label>"` per sub-question.)
+  repeated `--choose` on a *single-select* gate is rejected. (`--choose` only selects within the **first**
+  sub-question; for a later sub-question, `--answer "<q>=<label>"` delivers exactly **one** selection per
+  question — selecting *multiple* members of a non-first multiSelect needs a hand-written `resp-N.json`
+  with a JSON array of labels.)
 
 ## Recipe
 

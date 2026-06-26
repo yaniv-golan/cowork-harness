@@ -19,9 +19,9 @@ and how to relocate it. The tools below digest them so you rarely hand-parse.
 
 ## The skill misbehaved — investigate the run
 
-A post-hoc loop over a **kept** run dir — one you preserved at run time rather than let the harness clean
-up (see [Commands at a glance](../README.md#commands-at-a-glance) for how). None of these spend tokens or
-need Docker — they read the run that already happened.
+A post-hoc loop over a **kept** run dir — one you preserved with `--keep` (or any `--session-id` run)
+rather than let the harness clean up. None of these spend tokens or need Docker — they read the run that
+already happened.
 
 1. **`inspect` — what did it produce?** The artifacts the run wrote, plus a shallow field preview of each
    JSON artifact. Works on a salvaged `PARTIAL` run too. Reach for it first to confirm whether the job
@@ -54,7 +54,8 @@ empty egress allowlist. A green run is not automatically a correct run.
 - **The "✓ passed ≠ correct" landmines** — the catalog of how a check can pass vacuously (mixed
   content/live assertion items, header-only gates that can't be keyed, replay-skipped egress keys) is in
   the companion skill's **Gotchas** section:
-  [SKILL.md](../.claude/skills/cowork-harness/SKILL.md). Read it before trusting a green you didn't expect.
+  [SKILL.md → Gotchas](../.claude/skills/cowork-harness/SKILL.md#gotchas--the--passed--correct-landmines).
+  Read it before trusting a green you didn't expect.
 - **`lint`** — run it on a scenario before committing: it catches assertions placed on the wrong CI lane,
   mixed content/live keys, and keys the replay lane can't check — the silent false-greens you can't see by
   eye.

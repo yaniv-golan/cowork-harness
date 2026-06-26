@@ -2,6 +2,16 @@
 
 A **scenario** (`scenarios/*.yaml`) is one test: a prompt, scripted answers to the agent's questions/permission requests, and assertions. It references a [session setup](./session.md) for the setup.
 
+**Minimal scenario** — `prompt` is the only required field; everything else has defaults:
+
+```yaml
+prompt: "Use the my-skill skill to do X."
+assert:
+  - result: success
+```
+
+The full schema below documents every optional field.
+
 ## Full schema
 
 > **Machine-readable:** [`schema/scenario.schema.json`](../schema/scenario.schema.json) is generated from the zod source of truth (`npm run schema`) and pinned by a drift-guard test. Editors with a YAML language server validate scenarios against it automatically — the bundled examples carry a `# yaml-language-server: $schema=../../schema/scenario.schema.json` hint.
@@ -223,7 +233,7 @@ if *every* key passes (don't rely on the first; keep one concern per item unless
 | `self_heal_ran: <bool>` | a `/sessions/<id>/mnt` plugin script was (not) invoked — the plugin-root self-heal path |
 | `tool_called: <Tool>` | the agent invoked the tool |
 | `tool_not_called: <Tool>` | the agent never invoked it |
-| `tool_result_contains: <str>` | a tool result includes the literal string (content / replay-checkable — substring match) |
+| `tool_result_contains: <str>` | a tool result includes the literal string (content / replay-checkable — substring match, **per individual result**, each scanned up to a 10 KB cap; a string spanning two separate results won't match) |
 | `tool_result_not_contains: <str>` | no tool result includes the literal string — content / replay-checkable; **fails loud** if tool results are absent from `result.json` (absent ≠ empty) |
 | `subagent_tool_used: <Tool>` | a sub-agent used the tool |
 | `subagent_tool_absent: <Tool>` | no sub-agent used the tool |
@@ -233,12 +243,12 @@ if *every* key passes (don't rely on the first; keep one concern per item unless
 | `question_asked: <regex>` | the agent asked an AskUserQuestion whose text matches |
 | `questions_count_max: <N>` | the agent asked at most N questions |
 | `gate_answers_delivered: true` | every answered AskUserQuestion gate's answer actually reached the model — requires a positive, observed `tool_result` (an **unobserved** delivery fails too, not only an errored one — no silent false-green) |
-| `gate_answers_delivered: false` | asserts that at least one answered gate's answer did **not** reach the model (unobserved or errored delivery) — useful for negative-path tests of delivery failures |
+| `gate_answers_delivered: false` | asserts that at least one answered gate's answer was **confirmed not delivered** (an observed delivery failure); an unobserved/null delivery does **not** satisfy this — useful for negative-path tests of delivery failures |
 | `allow_permissive_auto_allow: true` | verdict modifier — suppresses the default-fail when the run recorded a cowork-parity permissive auto-allow; use this for tests that **deliberately** assert Cowork's permissive behavior rather than strict scripted coverage |
 | `allow_missing_capability: true` | verdict modifier (**live tiers only**) — suppresses the default-fail when the lean/`core` agent image omits a capability the skill used but real Cowork ships (OCR/LibreOffice/markitdown/opencv/PDF-tables); assert only when the skill's fallback is genuinely equivalent, else rebuild full parity (`--build-arg COWORK_FULL_PARITY=1`). Also opts out of the `requires_capabilities` declared-need check below. |
 | `allow_l0_plugin_divergence: true` | verdict modifier — opts into L0/protocol plugin divergence, suppressing the plugin-fidelity default-fail |
 | `allow_stall: true` | verdict modifier — suppresses the default-fail when a run ends on an unanswered plain-text question (the agent asked for input and stopped); assert only when ending on a question is the intended terminal state, otherwise script the answer (`answer:` / `--answer` / a decider) |
-| `transcript_no_host_path: true` | no host path (`/Users`, `/opt`) leaked into model-visible text |
+| `transcript_no_host_path: true` | no host path (`/Users/`, `/opt/cowork/`, `/home/`, `/root/`) leaked into model-visible text |
 | `egress_denied: <host>` | the host was blocked by the egress proxy |
 | `egress_allowed: <host>` | the host was allowed through |
 | `artifact_json: {…}` | assert over a JSON artifact's contents — see below |

@@ -27,13 +27,20 @@ section below is the highest-value part. Read it.
 
 ## 0. Preflight — make sure the harness can actually run
 
+The 10-second inner loop, once the CLI is on PATH:
+
+```bash
+cowork-harness doctor                       # prerequisites OK? (Docker, agent, token, baseline)
+cowork-harness skill ./my-skill "do X"      # run the skill once against the staged agent
+```
+
 Before the first command, confirm the CLI is reachable and **fail loud** (never fake a pass) when a tier's dependencies are missing:
 
 - **One-shot check.** Run `cowork-harness doctor [--tier <tier>]` first — a read-only prerequisite check that inspects Docker, the staged agent, the token, and the baseline in one pass. The bullets below explain each thing it checks (and how to fix it).
-- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 0.15.0** (the commands/assertions it teaches: `assertions --list`, `scaffold <run-id>`, `trace --view dispatches`, `artifact_json` incl. the `in:` operator, `verify-cassettes`, batch `record <dir>`/`--rerecord-stale`, parallel batch re-records (`record --concurrency <N>`), record-time redaction, multiSelect/`answer:`, `verify-run` (incl. answer-coverage when a scenario declares `answers:`), `record --max-artifact-bytes`, answering gates live during a recording (`record --decider-dir`/`--decider-llm`/`--on-unanswered first`), `verify-cassettes --allow-domain`/`--allow-email`/`--allow-file`, scenario `skills:` staleness scoping (refinable with `COWORK_HARNESS_AGENT_SCOPE=skill` so a skill-named `agents/<name>.md` re-stales only that skill), `chat --plugin`, and `/help` in the chat REPL). If it's missing *or older than 0.15.0*, prefix every command with `npx` using a version floor: `npx cowork-harness@>=0.15.0 <cmd>` (Node ≥ 20). The floor matters — plain `@latest` would silently fetch an older CLI and the new commands would fail as "unknown command"; `@>=0.15.0` instead **fails loud** if no compatible version is published. To install once instead: `npm i -g cowork-harness@>=0.15.0` (pin the floor here too — for the same reason, don't use `@latest`).
+- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 0.15.0**. If it's missing or older, prefix every command with the version floor `npx cowork-harness@>=0.15.0 <cmd>` (Node ≥ 20), or install once with `npm i -g cowork-harness@>=0.15.0`. **Pin `@>=0.15.0`, never `@latest`** — `@latest` can silently fetch an older CLI and the new commands fail as "unknown command", whereas the floor **fails loud** if no compatible version is published. (≥ 0.15.0 is what gates the commands/assertions this skill teaches: `assertions --list`, `scaffold <run-id>`, `trace --view dispatches`, `artifact_json` incl. the `in:` operator, `verify-cassettes`, batch `record <dir>`/`--rerecord-stale`, `record --concurrency <N>`, record-time redaction, multiSelect/`answer:`, `verify-run` answer-coverage, `record --max-artifact-bytes`, live record-time deciders, `verify-cassettes --allow-domain`/`--allow-email`/`--allow-file`, scenario `skills:` staleness scoping with `COWORK_HARNESS_AGENT_SCOPE=skill`, `chat --plugin`, and `/help` in the REPL.)
 - **Agent binary (every tier).** The staged Claude Code agent is **bind-mounted** from a local Claude Desktop install, or point `COWORK_AGENT_BINARY` at a `claude-code-vm/<ver>/claude` ELF. Nothing is bundled. No agent → no run; report that, don't skip silently.
 - **Docker / Lima.** Only `--fidelity protocol` (L0) runs without them. `container` / `microvm` / `hostloop` / `cowork` need Docker (Lima for L2). If they're absent, drop to `--fidelity protocol` and **say so** — a green that never exercised the sandbox is not a sandbox pass.
-- **Auth.** `CLAUDE_CODE_OAUTH_TOKEN` (preferred) or `ANTHROPIC_API_KEY`, via env or `.env`.
+- **Auth.** `CLAUDE_CODE_OAUTH_TOKEN` (preferred) or `ANTHROPIC_API_KEY`, via env or `.env`. Minting an OAuth token needs the **`claude` CLI** (`npm i -g @anthropic-ai/claude-code`, then `claude setup-token`).
 
 ## 1. Pick the loop
 

@@ -27,7 +27,7 @@ Start with the [project README](../README.md) for the overview and quick start, 
 
 | Topic | Where |
 |---|---|
-| Commands at a glance (what / when) | [README → Commands at a glance](../README.md#commands-at-a-glance); full flags via `<command> --help` — includes `doctor` (prerequisite check before first live run) |
+| Commands at a glance (what / when) | [README → Commands at a glance](../README.md#commands-at-a-glance) — the **complete** command catalog; full flags via `<command> --help` (includes `doctor`, the prerequisite check before a first live run) |
 | `lint` / `scaffold` (scenario authoring) | [scenario.md](./scenario.md); `cowork-harness lint --help`, `cowork-harness scaffold --help` |
 | `verify-run` (re-assert a kept run, no tokens) · `decide` (smoke-test a decider against a sample question, no run) | `cowork-harness verify-run --help`, `cowork-harness decide --help` |
 | Debugging a run (a misbehaving skill, or a green you don't trust) | [debugging.md](./debugging.md) |

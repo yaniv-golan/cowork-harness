@@ -28,10 +28,14 @@ cowork-harness sync --diff      # show what moved vs the committed baseline
 
 ```
 === diff vs committed baseline ===
+  capturedAt: "2026-06-10" -> "2026-06-25"
   appVersion: "1.11847.5" -> "1.12603.1"
   agentVersion: "2.1.170" -> "2.1.177"
   network: {...} -> {...}
 ```
+
+(`capturedAt` is rewritten to today on every `sync`, so it always shows in the diff even when nothing
+substantive moved — ignore it as noise.)
 
 Then commit:
 
@@ -50,7 +54,7 @@ If the agent version bumped, there is no image rebuild: the agent ELF is bind-mo
 cowork-harness sync --allow-empty   # force-write past an empty allowlist or unknown deltas
 ```
 
-**Hard-failure exit codes (for CI scripts):** `sync` exits **1** (not 2) on its hard failures — specifically (a) a missing required version field in the Desktop install it derives from, and (b) a refused empty allowlist (when `--allow-empty` is not passed).
+**Hard-failure exit codes (for CI scripts):** `sync` exits **1** (not 2) on its hard failures — including (a) a missing required version field in the Desktop install it derives from, (b) a refused empty allowlist, and (c) a `⚠ unknown deltas` refusal. (b) and (c) are overridable with `--allow-empty`.
 
 ## Drift detection — two independent signals
 
@@ -109,6 +113,10 @@ baselines are the source of truth CI builds against.
 The sync extractor currently targets macOS paths (`~/Library/Application Support/Claude`, `/Applications/Claude.app`). Windows/Linux Desktop paths are `TODO` branches in `src/sync/cowork-sync.ts` — contributions welcome.
 
 ## Releasing (npm)
+
+> **Scope:** this section is a short pointer, not the runbook. The full release procedure (version
+> locations, the branch → PR → tag → publish flow, the checklist) lives in [RELEASING.md](../RELEASING.md).
+> The notes here only cover how a *parity sync* relates to versioning.
 
 Versioning follows [SemVer](https://semver.org/); pre-1.0 minor bumps may include breaking changes
 (baseline-schema or CLI-contract changes count as breaking). A parity-baseline *content* update (a new

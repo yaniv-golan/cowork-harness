@@ -2,7 +2,7 @@
 
 > A scriptable, CI-friendly harness that reproduces Claude Cowork's observable runtime contract — staged agent, mount layout, default-deny egress allowlist, and the permission/AskUserQuestion control protocol — so you can test Claude Code **skills** the way Cowork runs them, headless and outside the Desktop app. It reproduces Cowork's *limitations*, so a green test means green in real Cowork.
 
-It is a fidelity fixture, not the Desktop runtime. The CLI binary is `cowork-harness`; commands are `skill · run · chat · record · replay · trace · lint · scaffold · verify-run · verify-cassettes · assertions · decide · gates · answer · sync · list · boundary-check · vm · doctor · rehash · runs gc`. Output is human-readable on stderr with a stable `--output-format json` envelope on stdout; exit codes are `0` pass / `1` failure / `2` usage / `3` boundary/integrity / `127` lint hard-failure (`python3` missing).
+It is a fidelity fixture, not the Desktop runtime. The CLI binary is `cowork-harness`; commands are `skill · run · chat · record · replay · trace · inspect · lint · scaffold · verify-run · verify-cassettes · assertions · decide · gates · answer · sync · list · boundary-check · vm · doctor · rehash · prune`. Output is human-readable on stderr with a stable `--output-format json` envelope on stdout; exit codes are `0` pass / `1` failure / `2` usage / `3` boundary/integrity / `127` lint hard-failure (`python3` missing).
 
 ## Start here
 - [README](README.md): overview, fidelity tiers, quick start, command reference
@@ -16,6 +16,7 @@ It is a fidelity fixture, not the Desktop runtime. The CLI binary is `cowork-har
 - [examples/README.md](examples/README.md): worked, copyable example scenarios + sessions + skills (protocol/container tiers, token-free replay, prerequisites)
 - [schema/scenario.schema.json](schema/scenario.schema.json): JSON Schema for scenario files (machine-readable)
 - [schema/session.schema.json](schema/session.schema.json): JSON Schema for session files (machine-readable)
+- [.claude/skills/cowork-harness/references/ci-recipe.md](.claude/skills/cowork-harness/references/ci-recipe.md): copy-paste GitHub Actions — token-free replay PR gate + nightly live lane
 
 ## Concepts & internals
 - [DESIGN.md](DESIGN.md): parity matrix per tier, deliberate deltas vs. real Cowork, the maintenance contract
@@ -24,6 +25,8 @@ It is a fidelity fixture, not the Desktop runtime. The CLI binary is `cowork-har
 - [docs/cassette.md](docs/cassette.md): record/replay cassettes and the token-free PR gate
 - [docs/decider-dir.md](docs/decider-dir.md): in-band gate answering by a driving agent
 - [docs/maintenance.md](docs/maintenance.md): keeping parity across Claude Desktop releases (`sync`)
+- [docs/cowork-spawn-contract-1.12603.1.md](docs/cowork-spawn-contract-1.12603.1.md): the binary-grounded spawn/control contract (cwd, env, mounts, control-protocol fields) the harness implements
+- [SECURITY.md](SECURITY.md): threat model — the sandbox is a fidelity fixture, not a security boundary
 
 ## Using it from an agent
 - [.claude/skills/cowork-harness/SKILL.md](.claude/skills/cowork-harness/SKILL.md): the companion skill that teaches an agent to drive the harness
