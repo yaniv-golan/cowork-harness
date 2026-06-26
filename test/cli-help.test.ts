@@ -36,6 +36,20 @@ describe.skipIf(!can)("cli --help: on_unanswered value can't regress", () => {
   });
 });
 
+// --run-dir is a GLOBAL, leading-only flag (rejected after the subcommand). skill/run --help must NOT
+// present it as an ordinary skill-local flag, or it tells the user to use a flag the command rejects.
+describe.skipIf(!can)("cli --help: --run-dir is shown as a global/leading flag", () => {
+  for (const cmd of ["skill", "run"]) {
+    it(`\`${cmd} --help\` marks --run-dir as a global flag that precedes the subcommand`, () => {
+      const { code, text } = help(cmd);
+      expect(code).toBe(0);
+      // the --run-dir entry itself must teach the leading position
+      expect(text).toMatch(/--run-dir <path>\s+GLOBAL/);
+      expect(text).toContain("PRECEDE the subcommand");
+    });
+  }
+});
+
 // F-7: the parseArgs-direct subcommands used to answer `--help` with `unknown flag: --help` (exit 2).
 // They now print a usage line and exit 0.
 describe.skipIf(!can)("cli --help: parseArgs-direct subcommands print usage (F-7)", () => {

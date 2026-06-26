@@ -218,8 +218,9 @@ Output:
   --output-format text|json        text = live stream + footer (default); json = one stdout envelope
   --quiet, -q                      verdict footer only            --verbose, -V   + thinking/tool inputs/sub-agent tree
   --keep                           print the run dir + deliverable path (runs are always kept on disk)
-  --run-dir <path>                 write runs/ under <path> (default ~/.cowork-harness/runs) — keeps sensitive
-                                   artifacts out of the working tree. flag > COWORK_HARNESS_RUNS_DIR > default.
+  --run-dir <path>                 GLOBAL flag — must PRECEDE the subcommand (cowork-harness --run-dir <path> skill …);
+                                   relocates runs/ output (default ~/.cowork-harness/runs) out of the working tree.
+                                   flag > COWORK_HARNESS_RUNS_DIR > default. (placed after the subcommand it is rejected.)
   --model <id>                     override the session model
   --dry-run                        preview scenarios, token and binary checks, without recording     NO_COLOR=1   disable ANSI
 
@@ -258,8 +259,9 @@ Input policy:
 Output:
   --output-format text|json        text = verdict + failing transcript (default); json = stdout envelope
   --quiet, -q                      verdict only            --verbose, -V   live stream + per-tool markers
-  --run-dir <path>                 write runs/ under <path> (default ~/.cowork-harness/runs); keeps sensitive
-                                   artifacts out of the working tree. flag > COWORK_HARNESS_RUNS_DIR > default.
+  --run-dir <path>                 GLOBAL flag — must PRECEDE the subcommand (cowork-harness --run-dir <path> run …);
+                                   relocates runs/ output (default ~/.cowork-harness/runs) out of the working tree.
+                                   flag > COWORK_HARNESS_RUNS_DIR > default. (placed after the subcommand it is rejected.)
   NO_COLOR=1                       disable ANSI on stderr
 
 Long runs:  an idle "still running" heartbeat prints on stderr after ~30s of silence
