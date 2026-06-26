@@ -155,6 +155,10 @@ and `scaffold` refuse to treat a partial run's half-finished output as a passing
 - `COWORK_HARNESS_DECIDER_DIR_POLL_MS` / `_TIMEOUT_MS` — the `--decider-dir` rendezvous.
 - `COWORK_HARNESS_DIALOG_TIMEOUT_MS` — dialog auto-cancel (default 6 s).
 - `COWORK_HARNESS_LLM_MAX_BYTES` — stdout bound on `--decider-llm` (default 8 MiB).
+- `COWORK_HARNESS_LLM_RETRIES` — bounded retries for a transient non-zero `claude -p` exit on the
+  `--decider-llm` transport (default 2, clamped 0–10; `0` disables for deterministic CI). Only a non-zero
+  exit retries; a timeout / byte-overflow / spawn failure fails loud on the first attempt. The exit error
+  carries the child's captured stdout/stderr so `exited 1` is diagnosable.
 - `COWORK_HARNESS_SCRUB_KEYS` / `COWORK_HARNESS_SCRUB_VALUES` — extra env names / literal values to
   redact from logs (beyond the auth tokens + `ANTHROPIC_CUSTOM_HEADERS`).
 - `COWORK_HARNESS_SOFT_MISSING` — downgrade a missing mount source from hard-error to warn-and-skip.
