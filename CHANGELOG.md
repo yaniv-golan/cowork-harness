@@ -25,6 +25,15 @@ All notable changes to this project are documented here. The format is based on
   misplaced equals form still gets the plain unknown-flag rejection. (A bare `--dotenv`/`--run-dir`
   token used as another flag's omitted value, e.g. `decide --question --dotenv`, is pre-empted by the
   hint rather than the more specific "requires a value" error; both exit 2.)
+- `doctor`'s no-token remedies now show `--dotenv` in its correct **leading** position
+  (`cowork-harness --dotenv <path> <cmd>`). The git-worktree remedy previously printed the pre-0.17.0
+  `<cmd> --dotenv` form — which the new position hint above now rejects — so `doctor` was suggesting a
+  command the harness refuses. The generic no-token remedy also now advertises the
+  `--dotenv <path> <cmd>` form, so pointing at a non-cwd `.env` is discoverable.
+- `skill --help` / `run --help` now label `--run-dir` as a **GLOBAL** flag that must precede the
+  subcommand. It was listed in each command's local "Output:" flag block, implying
+  `skill … --run-dir <path>`, which the command rejects (`--run-dir` is honored only before the
+  subcommand, like `--dotenv`).
 
 ### Changed
 
