@@ -8,9 +8,10 @@ import { gitModeEnabled, gitCpFilter } from "../run/skill-files.js";
 import { containedRealPath } from "../boundary-paths.js";
 
 /**
- * L0 — protocol-only runtime. Spawns the host `claude` with --cowork and the
- * stream-json control protocol. No VM, no container, no egress control. Fast
- * inner loop for skill logic + scripted-answer validation.
+ * L0 — protocol-only runtime. Spawns the host `claude` with the stream-json
+ * control protocol — WITHOUT `--cowork` (a guest-only flag the host CLI rejects;
+ * see the note in spawnProtocol below). No VM, no container, no egress control.
+ * Fast inner loop for skill logic + scripted-answer validation.
  *
  * Mounts are reproduced as plain directories under work/ so the agent sees the
  * same relative layout (uploads/, .projects/, .local-plugins/) — minus isolation.

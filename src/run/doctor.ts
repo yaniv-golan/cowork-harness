@@ -265,8 +265,8 @@ export function runDoctorChecks(tier: Tier, probe: DoctorProbe = realProbe): Doc
       : keychainOnly
         ? "copy your Keychain token into ./.env so the in-Docker agent can read it: echo CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token) >> .env"
         : worktreeEnv
-          ? `the main checkout has a .env — point at it: cowork-harness <cmd> --dotenv ${worktreeEnv} (or set CLAUDE_CODE_OAUTH_TOKEN)`
-          : "export CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token) or put it in .env",
+          ? `the main checkout has a .env — point at it: cowork-harness --dotenv ${worktreeEnv} <cmd> (or set CLAUDE_CODE_OAUTH_TOKEN)`
+          : "export CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token), put it in ./.env, or point at another file: cowork-harness --dotenv <path> <cmd>",
     required: true, // every doctor tier calls a real model (only a committed-cassette replay needs none)
   });
 

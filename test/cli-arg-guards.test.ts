@@ -218,3 +218,88 @@ describe.skipIf(!can)("skill/common flags accept --flag=value identically to --f
     expect(r.out).toMatch(/scenario path not found/);
   });
 });
+
+// A GLOBAL flag (--dotenv / --run-dir) only works in LEADING position (before the subcommand). Used
+// AFTER the subcommand it's rejected as an unknown flag — but the bare "unknown flag" message sent
+// users hunting for a per-command flag that doesn't exist (the --dotenv-after-doctor footgun behind
+// campaign-2 H-2/H-4). The rejection now carries a position hint pointing at the leading form.
+describe.skipIf(!can)("global-flag position hint", () => {
+  // The check is centralized pre-dispatch, so these commands all hit the SAME code path — the value is
+  // that each previously surfaced a DIFFERENT confusing error for a trailing global flag (doctor →
+  // "unknown flag", run → "unexpected argument(s)", assertions → a positional-count error); the hint now
+  // pre-empts all of them uniformly. That divergence is exactly what makes the cross-command coverage worth
+  // asserting.
+  for (const [label, args] of [
+    ["doctor", ["doctor", "--tier", "protocol", "--dotenv", "/tmp/x.env"]],
+    ["run", ["run", "x.yaml", "--dotenv", "/tmp/x.env"]],
+    ["assertions (--run-dir)", ["assertions", "--list", "--run-dir", "/tmp/r"]],
+    ["decide", ["decide", "--decider-llm", "--dotenv", "/tmp/x.env"]],
+  ] as const) {
+    it(`${label}: a misplaced --dotenv/--run-dir → exit 2 with the leading-position hint`, () => {
+      const d = mkdtempSync(join(tmpdir(), "gf-"));
+      const r = run([...args], d);
+      expect(r.code).toBe(2);
+      expect(r.out).toMatch(/GLOBAL flag and must come BEFORE the subcommand/);
+      // the hint names the actual subcommand, not the flag
+      expect(r.out).toMatch(new RegExp(`cowork-harness --(dotenv|run-dir) <path> ${args[0]}`));
+    });
+  }
+
+  it("a genuinely unknown flag still gets the bare message (no false hint)", () => {
+    const d = mkdtempSync(join(tmpdir(), "gf-"));
+    const r = run(["doctor", "--tier", "protocol", "--bogus"], d);
+    expect(r.code).toBe(2);
+    expect(r.out).toMatch(/unknown flag: --bogus/);
+    expect(r.out).not.toMatch(/GLOBAL flag/);
+  });
+
+  it("the correct leading form is accepted (doctor honors a global --dotenv before the subcommand)", () => {
+    const d = mkdtempSync(join(tmpdir(), "gf-"));
+    writeFileSync(join(d, "tok.env"), "CLAUDE_CODE_OAUTH_TOKEN=sk-ant-test\n");
+    // Leading --dotenv must NOT be rejected; doctor runs and reports (exit 0/1, never the usage-2 path).
+    const r = run(["--dotenv", join(d, "tok.env"), "doctor", "--tier", "protocol"], d);
+    expect(r.code).not.toBe(2);
+    expect(r.out).not.toMatch(/unknown flag/);
+    expect(r.out).not.toMatch(/GLOBAL flag/);
+  });
+
+  // Regression: the check must run AFTER the --help/--version short-circuits, so an explicit help/version
+  // request still wins even with a stray global flag present (it must never become a usage error, and the
+  // hint must never reference `--help`/`--version` as if they were the subcommand).
+  it("--version / --help are NOT pre-empted by a stray global flag", () => {
+    const d = mkdtempSync(join(tmpdir(), "gf-"));
+    // --version wins: exit 0 and the actual version string, not the hint.
+    const v = run(["--version", "--run-dir", "x"], d);
+    expect(v.code).toBe(0);
+    expect(v.out).toMatch(/\d+\.\d+\.\d+/);
+    expect(v.out).not.toMatch(/GLOBAL flag/);
+    // per-subcommand --help wins even when --dotenv precedes it in the args: exit 0 + usage, not the hint.
+    const h = run(["doctor", "--dotenv", "x", "--help"], d);
+    expect(h.code).toBe(0);
+    expect(h.out).toMatch(/usage: doctor/);
+    expect(h.out).not.toMatch(/GLOBAL flag/);
+  });
+
+  it("a junk subcommand + trailing global → the accurate 'unknown command', not a nonsense hint", () => {
+    const d = mkdtempSync(join(tmpdir(), "gf-"));
+    const r = run(["frobnicate", "--dotenv", "x"], d);
+    expect(r.code).toBe(2);
+    expect(r.out).toMatch(/unknown command: frobnicate/);
+    // must NOT suggest `cowork-harness --dotenv <path> frobnicate` as if frobnicate were valid
+    expect(r.out).not.toMatch(/GLOBAL flag/);
+  });
+
+  // Regression: the hint routes through fail(), so under --output-format json it emits the structured
+  // error envelope like every other usage error — not bare text a JSON consumer can't parse.
+  it("emits the json error envelope under --output-format json", () => {
+    const d = mkdtempSync(join(tmpdir(), "gf-"));
+    const r = run(["doctor", "--output-format", "json", "--dotenv", "/tmp/x.env"], d);
+    expect(r.code).toBe(2);
+    const line = r.out.split("\n").find((l) => l.trim().startsWith("{"));
+    expect(line, "expected a JSON envelope line").toBeTruthy();
+    const env = JSON.parse(line!);
+    expect(env.ok).toBe(false);
+    expect(env.error.category).toBe("usage");
+    expect(env.error.message).toMatch(/GLOBAL flag and must come BEFORE the subcommand/);
+  });
+});

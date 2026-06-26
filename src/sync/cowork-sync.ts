@@ -110,13 +110,7 @@ export function sync(): SyncResult {
   const config = readConfigJson(join(SUPPORT, "config.json"), unknown);
   const networkMode = (config["coworkNetworkMode"] as string) ?? null;
   const requireFullVmSandbox = config["lastSeenRequireCoworkFullVmSandbox"] ?? null;
-  const userAllow = Array.isArray(config["coworkEgressAllowedHosts"])
-    ? (config["coworkEgressAllowedHosts"] as string[])
-    : (flag(
-        unknown,
-        "coworkEgressAllowedHosts: expected an array but got " + typeof config["coworkEgressAllowedHosts"] + " — user allow-list ignored",
-      ),
-      []);
+  const userAllow = parseEgressAllowedHosts(config["coworkEgressAllowedHosts"], unknown);
 
   // 4. Egress allowlist from the asar (vmAllowedDomains + firewallAlso), merged with user hosts.
   const { domains, fingerprint } = extractFromAsar(unknown);
@@ -278,6 +272,17 @@ export function readConfigJson(p: string, unknown: string[]): Record<string, unk
     flag(unknown, `config.json: corrupt JSON at ${p} (${(e as Error).message}) — coworkEgressAllowedHosts NOT synced`);
     return {};
   }
+}
+
+/** Parse the `coworkEgressAllowedHosts` value from the user config.
+ *  - array   → pass through as-is (normal user overrides)
+ *  - absent (undefined) → empty; normal for a fresh install, NOT an unknown delta
+ *  - any other type → empty + unknown delta (misconfiguration the user should see) */
+export function parseEgressAllowedHosts(raw: unknown, unknownDeltas: string[]): string[] {
+  if (Array.isArray(raw)) return raw as string[];
+  if (raw === undefined) return [];
+  flag(unknownDeltas, `coworkEgressAllowedHosts: expected an array but got ${typeof raw} — user allow-list ignored`);
+  return [];
 }
 
 const dedupe = <T>(a: T[]) => [...new Set(a)];

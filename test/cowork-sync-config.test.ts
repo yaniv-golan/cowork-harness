@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtempSync, writeFileSync, rmSync, existsSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readConfigJson } from "../src/sync/cowork-sync.js";
+import { readConfigJson, parseEgressAllowedHosts } from "../src/sync/cowork-sync.js";
 
 describe("sync distinguishes missing vs corrupt user config", () => {
   it("returns {} with NO unknown delta when config.json is missing", () => {
@@ -42,16 +42,13 @@ describe("sync distinguishes missing vs corrupt user config", () => {
     }
   });
 
-  it("flags an unknown delta when coworkEgressAllowedHosts is a string (not an array)", () => {
+  it("returns a string value as-is (coercion guard lives in parseEgressAllowedHosts, not here)", () => {
     const dir = mkdtempSync(join(tmpdir(), "sync-cfg-"));
     try {
       const p = join(dir, "config.json");
       writeFileSync(p, JSON.stringify({ coworkEgressAllowedHosts: "not-an-array.example.com" }));
       const unknown: string[] = [];
       const out = readConfigJson(p, unknown);
-      // readConfigJson itself returns the raw value — the string guard lives in sync(); assert the
-      // precondition: a string value is returned as-is (not coerced), and no unknown delta is added here.
-      // The in-sync() guard test below covers the runtime rejection path.
       expect(typeof out["coworkEgressAllowedHosts"]).toBe("string");
       expect(unknown).toEqual([]);
     } finally {
@@ -69,6 +66,41 @@ describe("sync distinguishes missing vs corrupt user config", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("parseEgressAllowedHosts — the sync()-level guard that readConfigJson tests can't reach", () => {
+  it("passes an array through unchanged", () => {
+    const unknown: string[] = [];
+    expect(parseEgressAllowedHosts(["a.example.com", "b.example.com"], unknown)).toEqual(["a.example.com", "b.example.com"]);
+    expect(unknown).toEqual([]);
+  });
+
+  it("returns [] with NO unknown delta when the key is absent (undefined) — the bug case", () => {
+    const unknown: string[] = [];
+    expect(parseEgressAllowedHosts(undefined, unknown)).toEqual([]);
+    expect(unknown).toEqual([]);
+  });
+
+  it("returns [] and flags an unknown delta when the value is a string (misconfiguration)", () => {
+    const unknown: string[] = [];
+    expect(parseEgressAllowedHosts("single-host.example.com", unknown)).toEqual([]);
+    expect(unknown.length).toBe(1);
+    expect(unknown[0]).toMatch(/expected an array but got string/);
+  });
+
+  it("returns [] and flags an unknown delta when the value is null", () => {
+    const unknown: string[] = [];
+    expect(parseEgressAllowedHosts(null, unknown)).toEqual([]);
+    expect(unknown.length).toBe(1);
+    expect(unknown[0]).toMatch(/expected an array but got object/);
+  });
+
+  it("returns [] and flags an unknown delta when the value is a number", () => {
+    const unknown: string[] = [];
+    expect(parseEgressAllowedHosts(42, unknown)).toEqual([]);
+    expect(unknown.length).toBe(1);
+    expect(unknown[0]).toMatch(/expected an array but got number/);
   });
 });
 
