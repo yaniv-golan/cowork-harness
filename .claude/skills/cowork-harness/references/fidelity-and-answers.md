@@ -1,6 +1,6 @@
 # Fidelity tiers & answer paths
 
-Self-contained reference. Tracks `cowork-harness 0.15.0` (baseline `desktop-1.15200.0`).
+Self-contained reference. Tracks `cowork-harness 0.16.0` (baseline `desktop-1.15200.0`).
 
 ## Fidelity tiers (`fidelity:` in the scenario)
 
@@ -53,10 +53,23 @@ regressions.
 | **Spawned helper** | `--decider-cmd '<helper>'` | depends on the helper |
 | **In-band (driving agent)** | `--decider-dir <dir>` (+ a Monitor that writes responses) | depends |
 
-The answer paths are orthogonal — don't mix them on one run.
+The answer paths are orthogonal — don't mix them on one run. The in-band path's Monitor drives two
+subcommands: `gates <dir>` (stream the pending questions) and `answer <dir> --gate N …` (reply to one).
 
-**multiSelect gates** work on every path. Scripted: `choose:` a list. In-band `--decider-dir`: repeat
-`--choose` (`--choose Auth --choose Billing`). `--decider-cmd` / hand-written `resp-N.json`: send the
+**The `--decider-llm` answer protocol.** The answering model is shown the gate's options **numbered** and
+replies with the option **number**; the harness maps that to the exact canonical label, so a model that
+parrots the rendered `label: description` line can't whiff. Backstops bind a `label:`-prefixed echo and the
+`(Recommended)` suffix; a conversational aside or any out-of-set reply **fails loud** (never a guess), and
+the unanswered error names the `closest:` label. A multiSelect gate is answered with a comma-list of
+numbers (`1, 3`); a mixed digit+label reply fails loud. Raise the answering model for genuinely ambiguous
+*judgment* gates with **`--decider-model <id>`** (on `skill`, `decide`, `record`; precedence: flag > env
+`COWORK_HARNESS_DECIDER_MODEL` > the Haiku default; requires `--decider-llm`) — it sharpens judgment but
+won't make an under-specified gate deterministic.
+
+**multiSelect gates** work on every path. Scripted: `choose:` a list. LLM decider (`--decider-llm`): a
+comma-list of option numbers (`1, 3`). In-band `--decider-dir`: the
+Monitor answers each gate with the `answer` subcommand, repeating its `--choose` flag
+(`answer <dir> --gate N --choose Auth --choose Billing`). `--decider-cmd` / hand-written `resp-N.json`: send the
 selections as a **JSON array** (`{"answers":{"<q>":["Auth","Billing"]}}`) — a bare comma-joined string
 is read as one label and fails; a scalar is one selection; an array on a single-select gate fails loud.
 All paths deliver the binary-verified `", "`-joined wire shape.

@@ -13,11 +13,11 @@
 
 Scriptable, CI-friendly test harness that reproduces **Claude Cowork's observable runtime contract** closely enough to test the skills you write — across many scenarios, headless, in CI — without the (locked) Desktop app. It reproduces not just Cowork's *behavior* but its *limitations*: sealed filesystem, default-deny egress, MCP-only cross-boundary — so a green test means green in real Cowork.
 
-**Contents:** [Why it works](#why-this-works-for-skill-testing) · [Fidelity tiers](#fidelity-tiers-pick-per-scenario--per-ci-job) · [Quick start](#quick-start) · [Session + scenario](#two-files-session--scenario) · [Boundary](#sandboxing-container-vs-the-real-vm) · [Discovery](#discovery-marketplaces-plugins-skills-mcp) · [Testing & CI/CD](#testing--cicd) · [Maintenance](#maintenance-parity-between-releases) · [Docs](#documentation)
+**Contents:** [Why it works](#why-this-works-for-skill-testing) · [Fidelity tiers](#fidelity-tiers-pick-per-scenario--per-ci-job) · [Quick start](#quick-start) · [Session + scenario](#two-files-session--scenario) · [Boundary](#sandboxing-container-vs-the-real-vm) · [Discovery](#discovery-marketplaces-plugins-skills-mcp) · [Debugging](./docs/debugging.md) · [Testing & CI/CD](#testing--cicd) · [Maintenance](#maintenance-parity-between-releases) · [Docs](#documentation)
 
 > **Requirements at a glance**
 > - **Free demo (`replay`):** Node ≥ 20 — nothing else (no Docker, token, or Claude Desktop).
-> - **Live tiers**: **Claude Desktop opened once** (stages the agent — nothing is bundled) · a **Claude token** (real per-run cost; runs take minutes) · plus a runtime — **Docker (arm64)** for `container` (default) / `hostloop`, or **Lima (Apple-VZ)** for `microvm`. The `protocol` tier skips the runtime + the staged agent but still calls a real model, so it needs the token. (`doctor --tier <t>` reports exactly what a given tier needs.)
+> - **Live tiers**: **Claude Desktop opened once** (stages the agent — nothing is bundled) · a **Claude token** (real per-run cost; runs take minutes — mint one with `claude setup-token`, which needs the **`claude` CLI**: `npm i -g @anthropic-ai/claude-code`) · plus a runtime — **Docker (arm64)** for `container` (default) / `hostloop`, or **Lima (Apple-VZ)** for `microvm`. The `protocol` tier skips the runtime + the staged agent but still calls a real model, so it needs the token. (`doctor --tier <t>` reports exactly what a given tier needs.)
 > - **Platform:** best on **macOS Apple Silicon**; **Windows is not supported** for the live tiers (use the token-free `replay`); `sync` and `microvm` are **macOS-arm64 only**. Full detail in [Quick start → prerequisites](#quick-start).
 
 > **New here?** Start by running a committed cassette `replay` and browsing [`examples/`](./examples/) (see [examples/README.md](./examples/README.md)) to see green runs before any setup — then read [docs/boundary.md](./docs/boundary.md) (the limitations model) and [docs/session.md](./docs/session.md) (the file you'll author).
@@ -93,7 +93,7 @@ Skill testing is the headline use, but the tool is a general harness over the Co
 | `skill <folder> "<prompt>"` | Run a local skill/plugin folder once against the staged agent | ad-hoc "is the skill alive / does it do X?" — the fast inner loop |
 | `run <scenario.yaml \| dir/>` | Run authored scenarios with `assert:` + a CI-ready exit code | you want a repeatable, **asserted regression test** |
 | `chat <folder> [prompt]` | Interactive multi-turn REPL against a skill (TTY); optional seed prompt is sent as the first turn. `--upload <file>` / `--folder <dir>` (repeatable) attach files/project folders; `--verbose` / `-V` shows thinking blocks + tool inputs; `--fidelity protocol\|container\|hostloop` | debugging a multi-turn flow by hand |
-| `record` / `replay` | `record` saves a control-protocol cassette (one scenario, or batch a `dir/`; `--rerecord-stale` refreshes only drifted ones; `--concurrency <N>` records a batch N at a time — runs are fully isolated, so it just bounds Docker/API pressure; `--max-artifact-bytes` raises the 64 KiB inline-body cap; `--dry-run` previews the scenarios + token/binary checks without recording; answer gates **live during the recording** with `--decider-dir`/`--decider-llm`/`--on-unanswered first` instead of pre-scripting them — a live decider flags the cassette non-deterministic but it still replays deterministically); `replay <file.cassette.json \| dir/>` runs a cassette **file or a `dir/` of `*.cassette.json`** deterministically (`--strict` fails on any stale one, `--fail-on-skill-drift` only on skill-source drift; staleness is also reported per-result in `staleness[]` for a JSON gate; exits on the worst verdict) | **token-free, Docker-free CI** from a once-recorded run |
+| `record` / `replay` | **Record a live run once → replay it token-free, Docker-free thereafter.** `record` saves a control-protocol cassette (one scenario, or batch a `dir/`; `--rerecord-stale` refreshes only drifted ones; `--concurrency <N>` records a batch N at a time — runs are fully isolated, so it just bounds Docker/API pressure; `--max-artifact-bytes` raises the 64 KiB inline-body cap; `--dry-run` previews the scenarios + token/binary checks without recording; answer gates **live during the recording** with `--decider-dir`/`--decider-llm`/`--on-unanswered first` instead of pre-scripting them — a live decider flags the cassette non-deterministic but it still replays deterministically); `replay <file.cassette.json \| dir/>` runs a cassette **file or a `dir/` of `*.cassette.json`** deterministically (`--strict` fails on any stale one, `--fail-on-skill-drift` only on skill-source drift; staleness is also reported per-result in `staleness[]` for a JSON gate; exits on the worst verdict) | **token-free, Docker-free CI** from a once-recorded run |
 | `verify-cassettes <file\|dir>` | Token-free CI gate over committed cassettes: a privacy scan (email/currency/domain → exit 1; whole-token allows via `--allow` / class-scoped `--allow-domain` / `--allow-email` / `--allow-file`) + a staleness check (`--skip-privacy` or `--skip-staleness` to run only one half). A dir argument scans `*.cassette.json` in that dir only (**non-recursive**) | gating **committed cassettes** against PII leaks + "edited the skill, forgot to re-record" |
 | `verify-run <run-dir> <scenario.yaml>` | Re-evaluate a scenario's `assert:` (and, when the scenario declares `answers:`, whether they still match the run's actual gates) against an already-kept run dir — **no live agent, no tokens, no Docker** (~1s) | iterating on a wrong assertion or a drifted `answer` without a full live re-record |
 | `trace <run-id>` | Digest a run's `events.jsonl` (`--view tools\|questions\|dispatches`; legacy `--tools` / `--gates` / `--dispatches` aliases still accepted) | "how many sub-agents *actually* dispatched, and which?" |
@@ -115,66 +115,6 @@ There's also a **Python `cowork` pytest lane** (`python/`) for driving any of th
 
 ---
 
-## Test a local skill in one command
-
-The fastest path — point at a **local folder**, no repo, no `claude plugin install`, no marketplace, no version bump, no cache layers. The folder is copied **fresh into the session on every run**, so you edit and re-run and your changes are live immediately:
-
-```bash
-# Auth once — export it, OR put it in a .env file (resolved: env > --dotenv > ./.env > <install>/.env):
-#   cp .env.example .env   &&   echo "CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token)" >> .env
-export CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token)
-
-cowork-harness skill ~/my-plugin 'Use my-skill to do X'                    # single-quote: no $ expansion
-cowork-harness skill ~/my-plugin --prompt-file ./prompt.txt               # prompt verbatim (raw bytes)
-cowork-harness skill ~/my-plugin "..." --answer "which format=Markdown"   # script AskUserQuestion
-cowork-harness skill ~/my-plugin "..." --fidelity protocol                # fast, no sandbox
-cowork-harness skill ~/my-plugin "..." --dry-run                          # resolve & print the launch plan, don't run
-cowork-harness skill ~/my-plugin "..." --keep                             # print the run dir to inspect
-cowork-harness skill ~/my-plugin "..." --output-format json                      # machine-readable result on stdout
-cowork-harness skill ~/my-plugin "..." --on-unanswered fail               # never fabricate an answer (CI/agents)
-cowork-harness skill ~/my-plugin "..." --decider-cmd 'node answer.js'     # answer LIVE stochastic questions via a helper
-cowork-harness skill ~/my-plugin 'review this deck' --upload deck.pdf      # attach a file → mnt/uploads (deck-review etc.)
-cowork-harness skill ~/my-plugin "..." --session-id s1                     # pin a session…
-cowork-harness skill ~/my-plugin '<next turn>' --session-id s1 --resume    # …then resume it (gated/checkpoint skills)
-cowork-harness skill ~/my-plugin "..." --keep                            # then: trace the run
-cowork-harness trace <run-id> --view tools                                # tool calls + sub-agent dispatches from events.jsonl
-cowork-harness skill --help                                               # full per-command flag reference
-
-cowork-harness chat ~/my-plugin                  # interactive multi-turn REPL (full harness: egress sandbox + control protocol)
-# chat --raw  → native interactive cowork mode via `docker run -it` (needs Docker + the arm64
-#               cowork-agent-base:2 image; the egress sandbox is NOT applied in --raw)
-```
-
-**Input policy — no silent false-greens.** When an AskUserQuestion arrives with no scripted
-`--answer`, the policy is explicit: `fail` (error + the exact `--answer` to add — the default for
-`run`/CI), `prompt` (ask at the TTY — the default for `skill` when interactive), or `first` (pick
-option 1, loudly warn). Pick with `--on-unanswered`; left unset, `skill` is **adaptive** (`prompt` on
-a TTY, `fail` when piped/CI) and `run` is always `fail`. Exit codes: `0`
-pass · `1` assertion/agent failure · `2` usage / unanswered-under-`fail` / runtime · `3` boundary/integrity.
-After a run, the footer **echoes every auto-answered
-question as a copy-pasteable `--answer "<q>=<choice>"` line** — run once exploratorily, then paste them
-back to lock in a deterministic re-run.
-
-**Output.** `skill` **renders the agent's work** (assistant text + tool calls) and a metered footer —
-you see *what it did*, not just a green. `run` is verdict-first but **prints the failing transcript
-inline** on a `FAIL` (no spelunking `runs/…`). Tune with `--quiet` (verdict only) / `--verbose`/`-V`
-(+ thinking, tool inputs, sub-agent tree). `--output-format json` emits a stable machine envelope on stdout
-(`{tool, version, command, ok, results[], error}`; errors are `{ok:false, error:{category,message,hint}}`)
-— see [SPEC §11](./SPEC.md). Human output is stderr, machine output is stdout, so `--output-format json` pipes
-cleanly. Honors `NO_COLOR`.
-
-**Test a specific local plugin version** — just point at the folder at that version (it's copied fresh; no install, no version bump). Add more with `--plugin`:
-```bash
-cowork-harness skill ~/my-plugin "..." --plugin ~/other-plugin
-```
-
-**Test a specific local marketplace version** — point at the marketplace dir (the one with `.claude-plugin/marketplace.json`); it's registered fresh each run via `claude plugin marketplace add`, no clone/cache:
-```bash
-cowork-harness skill --marketplace ~/my-marketplace --enable my-skill@my-marketplace "Use my-skill"
-```
-
-It mounts the folder(s) at the Cowork plugin path, runs the staged agent in cowork mode, and prints PASS/RESULT (add `--keep` to print the run dir, or `--output-format json` for the machine-readable result). No YAML to author. (Author `scenarios/*.yaml` only for repeatable, asserted regression tests.)
-
 ## Quick start
 
 **Install from npm:**
@@ -187,7 +127,7 @@ npm install -g cowork-harness    # puts the `cowork-harness` command on your PAT
 
 ```bash
 git clone https://github.com/yaniv-golan/cowork-harness && cd cowork-harness
-npm install && npm run build && npm link    # puts the `cowork-harness` command on your PATH
+npm ci && npm run build && npm link    # puts the `cowork-harness` command on your PATH
 # …or skip the link and call it directly: node dist/cli.js <cmd>
 ```
 
@@ -201,14 +141,14 @@ Only the committed-cassette `replay` above is fully self-contained. Live `run`/`
 
 ### Drive it from Claude Code (companion skill)
 
-This repo ships a **companion skill** (`.claude/skills/cowork-harness/`) that teaches an agent how to drive the harness — author scenarios, pick a fidelity tier, script answers, place assertions in the right CI lane, and avoid the "✓ passed ≠ correct" traps. Install it into Claude Code via the bundled marketplace:
+This repo ships a **companion skill** (`.claude/skills/cowork-harness/`) that teaches an agent how to drive the harness — author scenarios, pick a fidelity tier, script answers, place assertions in the right CI lane, and avoid the "✓ passed ≠ correct" traps. Install it via the bundled marketplace — run these **in Claude Code** (slash commands, not your shell):
 
 ```bash
 /plugin marketplace add yaniv-golan/cowork-harness
 /plugin install cowork-harness@cowork-harness
 ```
 
-The skill **self-bootstraps the CLI**: if `cowork-harness` isn't on your PATH it falls back to `npx cowork-harness@>=0.15.0` (a version floor that fails loud rather than silently fetching a too-old CLI; Node ≥ 20). Tiers above `protocol` still need Docker/Lima and a Claude Desktop agent binary — see the prerequisites below.
+The skill **self-bootstraps the CLI**: if `cowork-harness` isn't on your PATH it falls back to `npx cowork-harness@>=0.16.0` (a version floor that fails loud rather than silently fetching a too-old CLI; Node ≥ 20). Tiers above `protocol` still need Docker/Lima and a Claude Desktop agent binary — see the prerequisites below.
 
 It also follows the open [Agent Skills](https://github.com/vercel-labs/skills) spec, so it installs cross-editor (Cursor, Codex, OpenCode, …) by pointing the `npx skills` CLI at `.claude/skills/cowork-harness` in this repo. (Working *inside* this repo, the skill auto-loads as a project skill — no install needed.)
 
@@ -219,7 +159,7 @@ It also follows the open [Agent Skills](https://github.com/vercel-labs/skills) s
 (The `protocol` tier skips items 1–2 — no Docker, no staged agent — but still calls a real model via the host `claude`, so it needs item 3, the auth token; only a committed-cassette `replay` needs nothing at all):
 1. **Claude Desktop, opened once.** The Cowork agent binary is **bind-mounted from your own install** at run time — nothing Anthropic-owned is bundled. Open Cowork once so the agent ELF is staged (`…/claude-code-vm/<ver>/claude`); the harness auto-detects it, or set `COWORK_AGENT_BINARY=<path>` to point at it. Without a staged agent, container/cowork runs fail with "Open Cowork once to stage it…".
 2. **Docker (arm64)** + the agent image: `docker build --platform linux/arm64 -t cowork-agent-base:2 -f docker/Dockerfile.agent .` (override the tag with `COWORK_AGENT_IMAGE`). This **core** image mirrors the real Cowork rootfs's document/data toolchain (Node 22, openpyxl/pandas/pdf/docx/pptx, …). For OCR / LibreOffice / markitdown / opencv / PDF-table skills, build the **full-parity** image instead: `docker build --platform linux/arm64 --build-arg COWORK_FULL_PARITY=1 -t cowork-agent-full:2 -f docker/Dockerfile.agent .` and point `COWORK_AGENT_IMAGE` at it. (A run on the core image that uses an omitted capability is flagged — see capability detection.) The `-f docker/Dockerfile.agent .` paths are **repo-relative** — run it from a source checkout, not a global `npm install -g`. (Global install? Run `cowork-harness doctor --tier container` — it prints the exact `docker build` command with the correct package-local Dockerfile path.) The **`microvm` (L2)** tier uses **Lima / Apple-VZ** instead of Docker (`brew install lima`; no agent image to build) — `doctor --tier microvm` checks for that, not Docker.
-3. **An auth token** — either `export CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token)` or a **`.env`** file (copy `.env.example` → `.env`; gitignored). The token resolves in priority order: exported env > `--dotenv <path>` > `./.env` (cwd) > `<install>/.env` (the package root), so a `npm link`ed install works from any directory. Keep `.env` at a working-dir or install root, never inside a mounted skill/project folder. (Use `--dotenv`, not `--env-file` — Node reserves the latter.)
+3. **An auth token** — either `export CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token)` (the `claude setup-token` step needs the **`claude` CLI**: `npm i -g @anthropic-ai/claude-code`) or a **`.env`** file (copy `.env.example` → `.env`; gitignored). The token resolves in priority order: exported env > `--dotenv <path>` > `./.env` (cwd) > `<install>/.env` (the package root), so a `npm link`ed install works from any directory. Keep `.env` at a working-dir or install root, never inside a mounted skill/project folder. (Use `--dotenv`, not `--env-file` — Node reserves the latter.)
 
 > `sync` (below) is **optional for a first run** — the repo ships `baselines/desktop-*.json`, so `baseline: latest` already resolves. Run `sync` only to refresh the platform baseline after Claude Desktop updates. (`sync` is **macOS-only** today; on Linux/Windows use the committed baselines — they work cross-platform.)
 
@@ -281,6 +221,70 @@ cowork-harness lint examples/scenarios/*.yaml
 **Drive it from pytest** — the `cowork` lane (see [`python/README.md`](./python/README.md)):
 `@pytest.mark.cowork` + a `cowork` fixture over the `--output-format json` surface, selectable with
 `-m cowork` (opt-in, beside your fast tests).
+
+## Test a local skill in one command
+
+> **First time here?** The commands below assume the `cowork-harness` CLI is installed and a token is set —
+> see [Quick start](#quick-start) for both, and run `cowork-harness doctor` to check what's missing. For the
+> zero-infra path (no Docker, no token), start with the token-free [`replay` demo](#quick-start).
+
+The fastest path — point at a **local folder**, no repo, no `claude plugin install`, no marketplace, no version bump, no cache layers. The folder is copied **fresh into the session on every run**, so you edit and re-run and your changes are live immediately:
+
+```bash
+# Auth once — export it, OR put it in a .env file (resolved: env > --dotenv > ./.env > <install>/.env):
+#   cp .env.example .env   &&   echo "CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token)" >> .env
+export CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token)
+
+cowork-harness skill ~/my-plugin 'Use my-skill to do X'                    # single-quote: no $ expansion
+cowork-harness skill ~/my-plugin --prompt-file ./prompt.txt               # prompt verbatim (raw bytes)
+cowork-harness skill ~/my-plugin "..." --answer "which format=Markdown"   # script AskUserQuestion
+cowork-harness skill ~/my-plugin "..." --fidelity protocol                # fast, no sandbox
+cowork-harness skill ~/my-plugin "..." --dry-run                          # resolve & print the launch plan, don't run
+cowork-harness skill ~/my-plugin "..." --keep                             # print the run dir to inspect
+cowork-harness skill ~/my-plugin "..." --output-format json                      # machine-readable result on stdout
+cowork-harness skill ~/my-plugin "..." --on-unanswered fail               # never fabricate an answer (CI/agents)
+cowork-harness skill ~/my-plugin "..." --decider-cmd 'node answer.js'     # answer LIVE stochastic questions via a helper
+cowork-harness skill ~/my-plugin 'review this deck' --upload deck.pdf      # attach a file → mnt/uploads (deck-review etc.)
+cowork-harness skill ~/my-plugin "..." --session-id s1                     # pin a session…
+cowork-harness skill ~/my-plugin '<next turn>' --session-id s1 --resume    # …then resume it (gated/checkpoint skills)
+cowork-harness skill ~/my-plugin "..." --keep                            # then: trace the run
+cowork-harness trace <run-id> --view tools                                # tool calls + sub-agent dispatches from events.jsonl
+cowork-harness skill --help                                               # full per-command flag reference
+
+cowork-harness chat ~/my-plugin                  # interactive multi-turn REPL (full harness: egress sandbox + control protocol)
+# chat --raw  → native interactive cowork mode via `docker run -it` (needs Docker + the arm64
+#               cowork-agent-base:2 image; the egress sandbox is NOT applied in --raw)
+```
+
+**Input policy — no silent false-greens.** When an AskUserQuestion arrives with no scripted
+`--answer`, the policy is explicit: `fail` (error + the exact `--answer` to add — the default for
+`run`/CI), `prompt` (ask at the TTY — the default for `skill` when interactive), or `first` (pick
+option 1, loudly warn). Pick with `--on-unanswered`; left unset, `skill` is **adaptive** (`prompt` on
+a TTY, `fail` when piped/CI) and `run` is always `fail`. Exit codes: `0`
+pass · `1` assertion/agent failure · `2` usage / unanswered-under-`fail` / runtime · `3` boundary/integrity.
+After a run, the footer **echoes every auto-answered
+question as a copy-pasteable `--answer "<q>=<choice>"` line** — run once exploratorily, then paste them
+back to lock in a deterministic re-run.
+
+**Output.** `skill` **renders the agent's work** (assistant text + tool calls) and a metered footer —
+you see *what it did*, not just a green. `run` is verdict-first but **prints the failing transcript
+inline** on a `FAIL` (no spelunking `runs/…`). Tune with `--quiet` (verdict only) / `--verbose`/`-V`
+(+ thinking, tool inputs, sub-agent tree). `--output-format json` emits a stable machine envelope on stdout
+(`{tool, version, command, ok, results[], error}`; errors are `{ok:false, error:{category,message,hint}}`)
+— see [SPEC §11](./SPEC.md). Human output is stderr, machine output is stdout, so `--output-format json` pipes
+cleanly. Honors `NO_COLOR`.
+
+**Test a specific local plugin version** — just point at the folder at that version (it's copied fresh; no install, no version bump). Add more with `--plugin`:
+```bash
+cowork-harness skill ~/my-plugin "..." --plugin ~/other-plugin
+```
+
+**Test a specific local marketplace version** — point at the marketplace dir (the one with `.claude-plugin/marketplace.json`); it's registered fresh each run via `claude plugin marketplace add`, no clone/cache:
+```bash
+cowork-harness skill --marketplace ~/my-marketplace --enable my-skill@my-marketplace "Use my-skill"
+```
+
+It mounts the folder(s) at the Cowork plugin path, runs the staged agent in cowork mode, and prints PASS/RESULT (add `--keep` to print the run dir, or `--output-format json` for the machine-readable result). No YAML to author. (Author `scenarios/*.yaml` only for repeatable, asserted regression tests.)
 
 ---
 
@@ -392,6 +396,8 @@ agent.stderr.log    the agent process's stderr (auth errors, flag rejects)
 
 Secrets (the injected OAuth token / API key) are scrubbed from every persisted log by value.
 
+**Debugging a run** — when a run misbehaves or a green looks too good to trust, [docs/debugging.md](./docs/debugging.md) is the map: `inspect` → `trace` → `chat` → `verify-run` for a misbehaving skill, and the false-green hunt for a green you don't trust.
+
 ---
 
 ## Architecture
@@ -469,11 +475,13 @@ Unit tests cover the scripted-answer logic, the egress allowlist matcher, the se
 
 ### Reproducibility knobs
 
+Most runs need **none** of these — the defaults are correct. They're grouped by theme below (container/runtime, networking/loop, strictness, staleness, secret-scrubbing, L2 microVM, `skill`/`chat` defaults); reach for one only when a default doesn't fit. Every var name is `COWORK_*` / `CLAUDE_*`, so a search across this section finds it fast.
+
 - `COWORK_LOCKDOWN=off` — relax container hardening for debugging (default `on`). With it `on`, an L2 microVM whose guest egress firewall fails to apply **aborts loudly** rather than running un-isolated.
 - `COWORK_CONTAINER_RUNTIME=podman` — use Podman instead of Docker.
 - `COWORK_AGENT_IMAGE=<tag>` — override the agent image name (default `cowork-agent-base:2`); `COWORK_AGENT_BINARY=<path>` — override the auto-detected staged agent ELF.
 - `COWORK_SKIP_CAPABILITY_PROBE=1` — skip the per-run capability probe (the harness otherwise probes the agent image/VM for the document/OCR/Office capabilities the real Cowork rootfs ships and **fails a run that uses one the image omits** — a likely false negative; suppress per-scenario with `allow_missing_capability: true`, or rebuild full parity).
-- `COWORK_HARNESS_DECIDER_DIR_POLL_MS` / `_TIMEOUT_MS` — tune the `--decider-dir` rendezvous poll/backstop; `COWORK_HARNESS_DECIDER_CMD_TIMEOUT_MS` / `COWORK_HARNESS_LLM_TIMEOUT_MS` — backstop a hung `--decider-cmd` helper / `--decider-llm` model call (default 600 s, fail loud); `COWORK_HARNESS_DIALOG_TIMEOUT_MS` — override the 6 s dialog auto-cancel.
+- `COWORK_HARNESS_DECIDER_MODEL` — the default `--decider-llm` answering model (overridden by the `--decider-model` flag; falls back to the Haiku default). `COWORK_HARNESS_DECIDER_DIR_POLL_MS` / `_TIMEOUT_MS` — tune the `--decider-dir` rendezvous poll/backstop; `COWORK_HARNESS_DECIDER_CMD_TIMEOUT_MS` / `COWORK_HARNESS_LLM_TIMEOUT_MS` — backstop a hung `--decider-cmd` helper / `--decider-llm` model call (default 600 s, fail loud); `COWORK_HARNESS_DIALOG_TIMEOUT_MS` — override the 6 s dialog auto-cancel.
 - `COWORK_HARNESS_RUNS_DIR` (or the `--run-dir <path>` flag) — override the default run-output root `~/.cowork-harness/runs` (kept out of any working tree so sensitive skill inputs/outputs don't land in a repo). Precedence: `--run-dir` > env > default. The root is flat and machine-global (shared across projects); pinned `--session-id` runs are guarded against cross-project overwrite, and `prune` never prunes them. In CI, set it to a workspace path (e.g. `runs`) so artifact upload can collect the runs. `COWORK_HARNESS_ALLOW_FOREIGN_RESUME=1` overrides the guard that blocks `--resume` onto another project's pinned session.
 - **Networking / loop:** `COWORK_EGRESS_PROXY` overrides the egress-proxy URL injected into the sandbox; `COWORK_PROXY_IMAGE` overrides the egress proxy Docker image name (default `cowork-egress-proxy:1`); `COWORK_DOCKER_NETWORK` pins the Docker network the agent container joins; `CLAUDE_FORCE_HOST_LOOP=1` forces the host-loop path regardless of the baseline's loop decision (the `cowork` tier's auto-pick). `COWORK_LIMACTL` overrides the `limactl` binary path (default `/opt/homebrew/bin/limactl`).
 - **Strictness escape hatches** (the harness fails loud by default): `COWORK_HARNESS_SOFT_MISSING=1` downgrades a missing mount source from a hard error to warn-and-exclude; `COWORK_HARNESS_ALLOW_CONFIG_DIR_WRITE=1` permits writing into an existing pinned `plugins.config_dir` (otherwise refused, to avoid clobbering a real Claude config).
@@ -541,6 +549,7 @@ This repo is built to be driven by agents, not just read by humans:
 | [docs/session.md](./docs/session.md) | Every `sessions/*.yaml` field and its Cowork mapping. |
 | [docs/scenario.md](./docs/scenario.md) | `scenarios/*.yaml` — prompt, scripted answers, assertions. |
 | [docs/chat.md](./docs/chat.md) | The interactive `chat` REPL — multi-turn debugging, flags, attaching files/folders. |
+| [docs/debugging.md](./docs/debugging.md) | Debugging a run — `inspect`/`trace`/`chat`/`verify-run` for a misbehaving skill; the false-green hunt for a green you don't trust. |
 | [docs/cassette.md](./docs/cassette.md) | `record`/`replay` cassettes — what replay checks, which assertions are skipped. |
 | [docs/fidelity-gaps.md](./docs/fidelity-gaps.md) | The known deltas vs. real Cowork — what the harness does and doesn't reproduce. |
 | [docs/decider-dir.md](./docs/decider-dir.md) | The `--decider-dir` recipe — a driving agent answers live gates in-band via `gates`/`answer` + a Monitor. |
@@ -552,6 +561,7 @@ This repo is built to be driven by agents, not just read by humans:
 | [python/README.md](./python/README.md) | The `cowork` pytest lane for driving the harness from Python. |
 | [examples/README.md](./examples/README.md) | The worked examples to copy — sessions, scenarios, and skills you can run end-to-end. |
 | [SECURITY.md](./SECURITY.md) | Threat model — the sandbox is a fidelity fixture, not a security boundary. |
+| [RELEASING.md](./RELEASING.md) | The release flow — branch → PR → tag → npm publish. |
 
 ## Status
 
@@ -559,7 +569,7 @@ This repo is built to be driven by agents, not just read by humans:
 
 - ✅ **Three isolation tiers (L0/L1/L2) + two loop-mode overlays** — `protocol` (L0 control loop), `container` (L1 sandboxed arm64 + per-run default-deny egress sidecar), `microvm` (L2 real Apple-VZ Linux microVM + guest firewall); plus the loop-mode overlays `hostloop` (production split-execution: agent loop on host, shell/web via the workspace SDK-MCP server) and `cowork` (auto-picks host-loop vs container the way Cowork does — gate `1143815894`). Egress enforced at container/microvm/hostloop; `boundary-check` reports **ALL CONSTRAINTS ENFORCED**.
 - ✅ **Three-seam driver** — `AgentSession` (control protocol) → `Decider` (scripted + `on_unanswered` policy, no silent false-greens) → `Run` (turn loop, sub-agent dispatch tree, `RunRecord`). Multi-turn `chat`, deterministic cassette `record`/`replay` (no token), `run.jsonl`/`trace.json` logging with secret-scrub.
-- ✅ **Answering live questions, every way you'd need** — `--decider-llm --intent "<one line>"` (a small model picks per question, steered by your test intent — the ergonomic default; non-determinism is flagged so a green isn't mistaken for a scripted pass), `--answer-policy <yaml>`/`--answer "rx=c"` (declarative regex→label, deterministic CI), `--decider-cmd '<helper>'` (custom logic — the Python `serve_decider(fn)` adapter pre-builds the wire loop so the helper writes only the decision), and **`--decider-dir <dir>`** (the *driving agent* answers each gate **in-band** with full context — it arms a Monitor on `cowork-harness gates <dir> --follow` and replies with `cowork-harness answer <dir> --gate <N> --choose <label>`; the session-under-test stays live, no resume/re-worded question — binary-verified). **multiSelect gates** are answerable on every channel — repeat `--choose` (or send a JSON-array reply from a `--decider-cmd` helper / hand-written `resp-N.json`); all deliver the binary-verified `", "`-joined wire shape. Every channel keeps stdout free, so all compose with `--output-format json`. A question is **never silently answered with option 1** — unhandled fails loud. Validate any decider in ~2s with `cowork-harness decide`.
+- ✅ **Answering live questions, every way you'd need** — `--decider-llm --intent "<one line>"` (a small model picks per question, steered by your test intent — the ergonomic default; it replies with the option **number**, mapped to the exact label, so it can't whiff by parroting the label text, and an out-of-set reply fails loud; raise the answering model for ambiguous judgment gates with **`--decider-model <id>`**; non-determinism is flagged so a green isn't mistaken for a scripted pass), `--answer-policy <yaml>`/`--answer "rx=c"` (declarative regex→label, deterministic CI — accepts a **stable partial anchor** for skills whose labels drift run-to-run), `--decider-cmd '<helper>'` (custom logic — the Python `serve_decider(fn)` adapter pre-builds the wire loop so the helper writes only the decision), and **`--decider-dir <dir>`** (the *driving agent* answers each gate **in-band** with full context — it arms a Monitor on `cowork-harness gates <dir> --follow` and replies with `cowork-harness answer <dir> --gate <N> --choose <label>`; the session-under-test stays live, no resume/re-worded question — binary-verified). **multiSelect gates** are answerable on every channel — repeat `--choose` (or, for `--decider-llm`, a comma-list of option numbers; or a JSON-array reply from a `--decider-cmd` helper / hand-written `resp-N.json`); all deliver the binary-verified `", "`-joined wire shape. Every channel keeps stdout free, so all compose with `--output-format json`. A question is **never silently answered with option 1** — unhandled fails loud. Validate any decider in ~2s with `cowork-harness decide`.
 - ✅ **Sub-agent aggregation + `trace`** — recognizes the real `Agent` dispatch tool (binary-verified; `Task` is its alias) so `subagent_dispatched`/`dispatch_count_max` fire under `--fidelity cowork`, excluding the `TaskCreate` todo list; `cowork-harness trace <id> --view tools` digests `events.jsonl` (each tool row now shows its **result status** `ok`/`error`), and `trace <id> --view questions` shows the gate lifecycle (**question → injected answer → delivered result**); `result.json`/`--keep` surface the deep `mnt/outputs` deliverable path.
 - ✅ **Answer delivery is verified, not assumed** — an AskUserQuestion answer is injected as the binary's full tool input (`{questions, answers}`, ELF-verified), so the answer actually reaches the model; `RunResult.gateDeliveries[]` + the `gate_answers_delivered` assertion catch any delivery failure, and `RunResult.toolCounts` gives the **truthful** per-tool call count (host-routed `WebSearch` shows here, not the always-0 `usage.server_tool_use`).
 - ✅ **Binary-grounded fidelity** — cwd `/sessions/<id>`, the three-channel MCP model (`--mcp-config` honored in plain cowork mode; host/API-routed `web_fetch`; SDK-server delivery), host-loop tool partition, auth-env token-only drop, and production GrowthBook gates pinned per release.

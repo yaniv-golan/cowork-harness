@@ -6,6 +6,51 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.16.0] — 2026-06-26
+
+### Fixed
+
+- **`--decider-llm` no longer whiffs when the answering model echoes the rendered option line (H10).** The
+  model is now prompted to reply with the option **NUMBER** (the prompt renders options numbered, with
+  descriptions on their own line) and the harness maps the number to the exact canonical label — so the
+  reproduced `"Seed / AI/ML: Seed stage…"` (model parroting the `label: description` bullet) and similar
+  whiffs can't occur on the common path. A backstop still binds a `label: description` echo (label is a
+  boundary-prefix of the reply at a `:` boundary, longest-wins) and the `(Recommended)` suffix; conversational
+  asides (`"No, I disagree…"`, `"Seed (probably) but Series A"`) and bare prose stay **loud, never a guess**.
+  The LLM decider's unanswered error now also surfaces the `closest:` label.
+- **`--decider-llm` now answers multi-select gates.** The LLM path had no `multiSelect` branch (a
+  "select all that apply" gate could pick only one option); it now accepts a comma-list of option numbers
+  (`1, 3`) and a mixed digit+label reply fails loud.
+
+### Added
+
+- **`--decider-model <id>`** (on `skill`, `decide`, and `record`) overrides the `--decider-llm` answering
+  model — flag > env `COWORK_HARNESS_DECIDER_MODEL` > the Haiku default. Use a stronger model for genuinely
+  ambiguous *judgment* gates; it does not make an under-specified gate deterministic. Requires `--decider-llm`.
+- **Scripted `choose:` (and `--answer`) accepts a stable partial anchor** for skills whose option labels
+  drift run-to-run: `choose: "Israeli company"` binds whichever single option starts with it (boundary-anchored,
+  uniqueness-guarded). It **fails loud** if the anchor matches two options — drift-tolerance, not strict CI
+  reproducibility (for that, pin a full exact label or use a free-text `answer:`).
+
+### Docs
+
+- **Added a debugging on-ramp (`docs/debugging.md`).** A router for "my skill misbehaved"
+  (`inspect` → `trace` → `chat` → `verify-run`) vs. "I don't trust this green" (the false-green hunt:
+  Gotchas, `lint`, `verify-cassettes`, `COWORK_HARNESS_DEBUG_SKILLHASH`), wired into every doc index
+  (README, `docs/README.md`, `llms.txt`, the companion skill).
+- **Documentation review sweep — doc-vs-code discrepancies corrected, DX/clarity/structure gaps closed
+  (26 files).** Adversarially verified against `src/`. Highlights: startup `--folder` is a **staged fresh
+  copy** (writes land in the run's `mnt/<folder>`, not the host original), not a live bind mount
+  (`fidelity-gaps.md`, `chat.md`); `microvm` is **Lima + Apple-VZ**, not Docker (`python/README.md`);
+  `llms.txt` command list corrected (`prune`/`inspect`, not the non-existent `runs gc`); the
+  `verify-cassettes` JSON envelope documents its `coverage{}` field (`SPEC.md`); the discovery version-gate
+  sits on **local** plugins while `.remote-plugins` is unconditional (`discovery.md`); `extra_allow` is
+  **session-level** (`DESIGN.md`); same-repo release-branch PRs **do** run the live scenario suite
+  (`RELEASING.md`); the `ci-recipe.md` live-lane gate uses a valid guard-step output (the prior
+  `if: ${{ secrets.… }}` is not a valid Actions context); plus assertion-operator (`artifact_json`'s `in`),
+  host-path-set, and exit-code corrections. DX: the `claude` CLI named as a prerequisite, the README
+  reordered to a zero-infra-first ramp, and the three doc indexes reconciled by audience.
+
 ## [0.15.0] — 2026-06-25
 
 ### Fixed

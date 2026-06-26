@@ -1,6 +1,18 @@
 # CI recipe — replay vs live lanes
 
-Self-contained reference. Tracks `cowork-harness 0.15.0` (baseline `desktop-1.15200.0`).
+Self-contained reference. Tracks `cowork-harness 0.16.0` (baseline `desktop-1.15200.0`).
+
+**Minimal token-free PR gate** — the smallest thing worth committing; runs on stock GitHub-hosted runners,
+no token/Docker/agent:
+
+```yaml
+- run: npm i -g cowork-harness
+- run: cowork-harness lint scenarios/*.yaml          # no silent false-greens
+- run: cowork-harness verify-cassettes cassettes/    # privacy + staleness
+- run: cowork-harness replay cassettes/              # token-free content/structure
+```
+
+The rest of this doc explains the lane split, recording, privacy, and the full pipeline + live job.
 
 ## The core split: token-free PR gate + live nightly (self-hosted)
 
@@ -118,14 +130,32 @@ on:
 jobs:
   live:
     runs-on: [self-hosted, macos, arm64]   # a box with Claude Desktop / COWORK_AGENT_BINARY
-    if: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v4
-      - run: npm i -g cowork-harness
-      - run: cowork-harness run scenarios/ --output-format json
+      # GitHub does NOT expose `secrets` in a job-level `if:`. Gate on a guard STEP's output instead.
+      - id: guard
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          if [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
+            echo "::warning::CLAUDE_CODE_OAUTH_TOKEN not set — skipping live scenario suite."
+            echo "live=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "live=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.guard.outputs.live == 'true'
+        run: npm i -g cowork-harness
+      - if: steps.guard.outputs.live == 'true'
+        run: cowork-harness run scenarios/ --output-format json
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          COWORK_HARNESS_RUNS_DIR: runs    # workspace-relative so the upload step can collect them
           # COWORK_AGENT_BINARY: /path/to/claude-code-vm/<ver>/claude   # if not using a Desktop install
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cowork-run-artifacts
+          path: runs/
 ```
 
 A GitHub-**hosted** runner has no agent binary, so `run`/`record` can't work there — that's why the live

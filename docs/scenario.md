@@ -2,6 +2,16 @@
 
 A **scenario** (`scenarios/*.yaml`) is one test: a prompt, scripted answers to the agent's questions/permission requests, and assertions. It references a [session setup](./session.md) for the setup.
 
+**Minimal scenario** — `prompt` is the only required field; everything else has defaults:
+
+```yaml
+prompt: "Use the my-skill skill to do X."
+assert:
+  - result: success
+```
+
+The full schema below documents every optional field.
+
 ## Full schema
 
 > **Machine-readable:** [`schema/scenario.schema.json`](../schema/scenario.schema.json) is generated from the zod source of truth (`npm run schema`) and pinned by a drift-guard test. Editors with a YAML language server validate scenarios against it automatically — the bundled examples carry a `# yaml-language-server: $schema=../../schema/scenario.schema.json` hint.
@@ -116,19 +126,29 @@ the CLI's `--decider-llm`). It is **non-deterministic** by construction, so a ru
 >
 > **Stochastic option *labels* (distinct from stochastic *structure*).** If a skill regenerates both the
 > question wording *and* the option labels each run, you can still pin the gate **deterministically** —
-> match on **position**, not text:
+> anchor on a stable **leading substring** of the label, or on **position**:
 >
-> - `choose:` accepts a **1-based index** (`choose: "2"` selects the second option), which survives
->   regenerated labels. (Index applies only when `choose` is *entirely* digits; a pure-digit option *label*
->   collides with index semantics — use `answer:` for that rare gate.)
+> - `choose:` (and `--answer`) accept a **stable partial anchor** — a leading substring bound to whichever
+>   single option *starts with it at a word boundary* (the label's next char, after optional whitespace, is
+>   one of `:` `(` `,` `—` `–` or end-of-label; a `/` or a bare space does **not** count, so `Seed` won't
+>   match `Seed / AI/ML`). `choose: "Israeli company"` binds `"Israeli company (IL only)"`; `choose: "2
+>   founders"` binds `"2 founders, ~5M each"`. It is **uniqueness-guarded**: if the anchor matches two
+>   options — or none — it **fails loud** (the error lists the offered options), never a silent mis-pick.
+>   **Prefer this over a positional index** when the leading text is stable: it rides label drift *and*
+>   survives option **re-ordering** (it matches content, not slot).
+> - `choose:` also accepts a **1-based index** (`choose: "2"` selects the second option), which survives
+>   *fully* regenerated labels — the fallback when even the leading text drifts. (Index applies only when
+>   `choose` is *entirely* digits; a pure-digit option *label* collides with index semantics — use
+>   `answer:` for that rare gate.)
 > - `when_question: ".*"` is a catch-all that matches any phrasing.
 >
 > So `when_question: ".*"` + `choose: "2"` pins a gate whose wording and labels both drift, with no live
 > decider — **but only when the option *order* is stable.** A positional `choose` is robust to label drift,
 > NOT to option *re-ordering*: if the gate can present its options in a different order run-to-run, the index
 > lands on a different option (a silent re-record flake; `lint` flags positional `choose` with an advisory).
-> When the order is stable, prefer an exact label (`choose: "<label>"`); use position only when labels drift
-> but order holds. **Caveat:** rules are evaluated in order and the *first* matching `when_question` wins, so `.*`
+> Escalate only as far as you must: an **exact label** (`choose: "<label>"`) when labels are stable → a
+> **partial anchor** (above) when only the label's tail drifts (robust to re-ordering) → a **positional
+> index** only when even the leading text regenerates and the option order holds. **Caveat:** rules are evaluated in order and the *first* matching `when_question` wins, so `.*`
 > answers *any* gate — use it only as a **last-resort fallback for a single expected gate per turn**, and
 > always place it *after* more-specific rules. This covers stochastic *labels*; it does **not** cover
 > structural stochasticity (whether/which gate appears), which still needs a live decider as above.
@@ -223,7 +243,7 @@ if *every* key passes (don't rely on the first; keep one concern per item unless
 | `self_heal_ran: <bool>` | a `/sessions/<id>/mnt` plugin script was (not) invoked — the plugin-root self-heal path |
 | `tool_called: <Tool>` | the agent invoked the tool |
 | `tool_not_called: <Tool>` | the agent never invoked it |
-| `tool_result_contains: <str>` | a tool result includes the literal string (content / replay-checkable — substring match) |
+| `tool_result_contains: <str>` | a tool result includes the literal string (content / replay-checkable — substring match, **per individual result**, each scanned up to a 10 KB cap; a string spanning two separate results won't match) |
 | `tool_result_not_contains: <str>` | no tool result includes the literal string — content / replay-checkable; **fails loud** if tool results are absent from `result.json` (absent ≠ empty) |
 | `subagent_tool_used: <Tool>` | a sub-agent used the tool |
 | `subagent_tool_absent: <Tool>` | no sub-agent used the tool |
@@ -233,12 +253,12 @@ if *every* key passes (don't rely on the first; keep one concern per item unless
 | `question_asked: <regex>` | the agent asked an AskUserQuestion whose text matches |
 | `questions_count_max: <N>` | the agent asked at most N questions |
 | `gate_answers_delivered: true` | every answered AskUserQuestion gate's answer actually reached the model — requires a positive, observed `tool_result` (an **unobserved** delivery fails too, not only an errored one — no silent false-green) |
-| `gate_answers_delivered: false` | asserts that at least one answered gate's answer did **not** reach the model (unobserved or errored delivery) — useful for negative-path tests of delivery failures |
+| `gate_answers_delivered: false` | asserts that at least one answered gate's answer was **confirmed not delivered** (an observed delivery failure); an unobserved/null delivery does **not** satisfy this — useful for negative-path tests of delivery failures |
 | `allow_permissive_auto_allow: true` | verdict modifier — suppresses the default-fail when the run recorded a cowork-parity permissive auto-allow; use this for tests that **deliberately** assert Cowork's permissive behavior rather than strict scripted coverage |
 | `allow_missing_capability: true` | verdict modifier (**live tiers only**) — suppresses the default-fail when the lean/`core` agent image omits a capability the skill used but real Cowork ships (OCR/LibreOffice/markitdown/opencv/PDF-tables); assert only when the skill's fallback is genuinely equivalent, else rebuild full parity (`--build-arg COWORK_FULL_PARITY=1`). Also opts out of the `requires_capabilities` declared-need check below. |
 | `allow_l0_plugin_divergence: true` | verdict modifier — opts into L0/protocol plugin divergence, suppressing the plugin-fidelity default-fail |
 | `allow_stall: true` | verdict modifier — suppresses the default-fail when a run ends on an unanswered plain-text question (the agent asked for input and stopped); assert only when ending on a question is the intended terminal state, otherwise script the answer (`answer:` / `--answer` / a decider) |
-| `transcript_no_host_path: true` | no host path (`/Users`, `/opt`) leaked into model-visible text |
+| `transcript_no_host_path: true` | no host path (`/Users/`, `/opt/cowork/`, `/home/`, `/root/`) leaked into model-visible text |
 | `egress_denied: <host>` | the host was blocked by the egress proxy |
 | `egress_allowed: <host>` | the host was allowed through |
 | `artifact_json: {…}` | assert over a JSON artifact's contents — see below |

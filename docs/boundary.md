@@ -4,6 +4,10 @@ The point of this harness is not that a skill *can* do something — it's that a
 
 This page describes the limitations the harness reproduces, how each tier enforces (or doesn't) them, and how to verify it.
 
+> **Verify it in one command:** `cowork-harness boundary-check` proves the sandbox actually enforces these
+> limits (sealed FS, default-deny egress) — no token, no model. The rest of this page is the *why* and the
+> per-tier detail.
+
 ## The three limitations that matter
 
 | Limitation | In Cowork | Why a skill must respect it |
@@ -38,11 +42,13 @@ This page describes the limitations the harness reproduces, how each tier enforc
 > one external network from Docker's address pool, so very high parallelism can hit `all predefined address
 > pools have been fully subnetted` (the harness re-frames that error with this guidance) — widen the daemon
 > `default-address-pools` if you need more. (`microvm` uses a host-port proxy + Lima VM, not Docker
-> networks; see `vm prune` in [scenario.md](./scenario.md) for guest cleanup.)
+> networks; run `cowork-harness vm prune` (see `vm --help`, or the microvm tier section in [scenario.md](./scenario.md)) for guest cleanup.)
 
 **`microvm`** adds VM-grade escape resistance for untrusted code. Its egress is the **same default-deny allowlist proxy as `container`**, enforced by a guest iptables firewall — **no gVisor netstack**. Use it when you're testing isolation of code you don't trust.
 
-**`hostloop`** uses the **same container sandbox** as `container` (the `container` column above applies), but runs the agent loop host-side. `bash` is routed **into the container** (`docker exec`); **`web_fetch` is host-routed** (`curl` on the host), by design — Cowork fetches via the host API (gate `coworkWebFetchViaApi`, binary-verified), not the container egress path. So a web_fetch `egress_*` entry reflects host reachability + the web-fetch allowlist/provenance, **not** the container egress boundary; only `bash` egress exercises the sandbox proxy. (Container fidelity wires no host-routed web_fetch handler at all, so web_fetch provenance is intentionally absent there — it is a host-loop concept.) It reproduces Cowork's production split-execution, not a different isolation level. **`cowork`** is not a sandbox of its own: it resolves at run time to either `hostloop` or `container` — the same choice real Cowork makes, read from the synced baseline's GrowthBook host-loop gate (`1143815894`). (An org policy `requireCoworkFullVmSandbox` forces the VM loop and *overrides* the gate.) Because both of those use the identical container sandbox, **the boundary is the same either way** (the `container` column above); only the host-loop-vs-in-container *execution split* changes, not the isolation.
+**`hostloop`** uses the **same container sandbox** as `container` (the `container` column above applies), but runs the agent loop host-side. `bash` is routed **into the container** (`docker exec`); **`web_fetch` is host-routed** (`curl` on the host), by design — Cowork fetches via the host API (gate `coworkWebFetchViaApi`, binary-verified), not the container egress path. So a web_fetch `egress_*` entry reflects host reachability + the web-fetch allowlist/provenance, **not** the container egress boundary; only `bash` egress exercises the sandbox proxy. (Container fidelity wires no host-routed web_fetch handler at all, so web_fetch provenance is intentionally absent there — it is a host-loop concept.) It reproduces Cowork's production split-execution, not a different isolation level.
+
+**`cowork`** is not a sandbox of its own: it resolves at run time to either `hostloop` or `container` — the same choice real Cowork makes, read from the synced baseline's GrowthBook host-loop gate (`1143815894`). (An org policy `requireCoworkFullVmSandbox` forces the VM loop and *overrides* the gate.) Because both of those use the identical container sandbox, **the boundary is the same either way** (the `container` column above); only the host-loop-vs-in-container *execution split* changes, not the isolation.
 
 ## Verifying the boundary holds
 

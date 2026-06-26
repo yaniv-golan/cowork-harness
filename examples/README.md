@@ -17,6 +17,7 @@ examples/
   sessions/    pre-prompt setup (model, mounts, plugins) — referenced by scenarios via `session:`
   skills/      the example skills under test (each a Claude Code plugin folder)
   data/        sample inputs the scenarios consume (CSVs, a PDF, an mcp.json)
+  replays/     committed synthetic cassettes for token-free, Docker-free `replay`
 ```
 
 Paths inside a scenario/session resolve **relative to that file** (see
@@ -29,7 +30,7 @@ self-contained and relocatable.
 |---|---|---|
 | `scenarios/protocol-smoke.yaml` | `protocol` | the **zero-infra smoke test** — no Docker, no staged agent, just the host control loop. Asserts only control-loop + skill-logic facts (a scripted answer reaches the model, a file is written); see the `transcript_no_host_path: false` line for what L0 does and does not seal |
 | `scenarios/example-pdf-skill.yaml` | `container` | the minimal sandboxed shape — prompt + scripted answers + assertions (placeholder skill; harness plumbing only) |
-| `scenarios/csv-metrics.yaml` | `container` | a non-trivial skill running a **bundled producer** end-to-end → structured `outputs/metrics.json` + a `summary.md` (paired with `python/test_csv_metrics_lane.py` for a JSON-content predicate) |
+| `scenarios/csv-metrics.yaml` | `container` | a non-trivial skill running a **bundled producer** end-to-end → structured `outputs/metrics.json` + a `summary.md` (paired with `../python/test_csv_metrics_lane.py` for a JSON-content predicate) |
 | `scenarios/csv-fx-normalize.yaml` | `container` | **graceful degradation** under default-deny egress — the skill's real network step is blocked, so `egress_denied` is backed by genuine behavior and the skill falls back instead of crashing. Its `egress_denied` assertion needs a sandboxed tier (`container`+) and is pre-rejected at `protocol` fidelity (no sandbox to enforce it would be a false pass) |
 | `scenarios/skill-loads.yaml` | `container` | an acceptance check that a local skill loads and the python toolchain is present |
 

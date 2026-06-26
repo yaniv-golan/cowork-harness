@@ -20,7 +20,7 @@ protocol layer or run-loop bookkeeping in the CLI.
   than via `npm run ci`; see [CONTRIBUTING.md](./CONTRIBUTING.md).)
 - Tests are **token-free & spawn-free** wherever possible (`cli-json` uses usage-errors + cassette replay).
   Don't add a test that needs a live model or Docker to the default suite; that's the `pytest -m cowork` /
-  `npm run test:live` lane. Python fast lane: `pytest -m 'not cowork'`.
+  `npm run test:live` lane. Python fast lane (from `python/`): `pytest -m 'not cowork'`.
 - CLI binary `cowork-harness`; env vars `COWORK_HARNESS_*` (+ `COWORK_AGENT_BINARY` / `COWORK_AGENT_IMAGE`).
   Node ≥ 20.
 - `cowork-harness sync` is **local-only** (needs Desktop + `app.asar`; not on CI). The committed
@@ -49,7 +49,7 @@ protocol layer or run-loop bookkeeping in the CLI.
 - **`evaluate()` (`src/assert.ts`) is synchronous on purpose.** No model-call / LLM-judge assertion without
   an explicit async-refactor decision — it would also break determinism and the replay lane.
 - **Answer paths are orthogonal** — scripted (`--answer` / `--answer-policy`), `--decider-llm`,
-  `--decider-cmd` (Python `serve_decider`), `--decider-dir` (+ `gates` / `answer` + a Monitor), and policies
+  `--decider-cmd` (any spawned shell helper — a Python `serve_decider` adapter is one option), `--decider-dir` (+ `gates` / `answer` + a Monitor), and policies
   `fail | first | prompt`. The LLM decider has two spellings — `--decider-llm` on the CLI and
   `on_unanswered: llm` in scenario YAML (same mechanism); the bare `--on-unanswered llm` CLI flag is
   rejected (redirects to `--decider-llm`) to keep deciders in the `--decider-*` family. Don't reintroduce overlap

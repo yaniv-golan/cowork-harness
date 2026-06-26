@@ -6,10 +6,11 @@ Thanks for helping make Cowork skill-testing reproducible.
 
 ```bash
 npm ci
+npm run format:check  # prettier over src/ + test/ .ts — the most common first-pass CI red
 npm run typecheck     # tsc --noEmit
 npm test              # vitest
 npm run build         # -> dist/
-npm run ci            # typecheck + build + test
+npm run ci            # typecheck + build + test (the full local gate)
 ```
 
 Node ≥ 20. The project is ESM TypeScript; no transpiler magic — `tsc` only.
@@ -20,12 +21,15 @@ Extra prerequisites for specific stages:
 - **Docker (arm64)** — required for `boundary-check` and the **L1 `container`** + `hostloop` fidelity tiers (the container sandbox + agent image).
 - **Lima (`limactl`, macOS arm64)** — required only for the **L2 `microvm`** tier and the `vm` commands; the guest runs on Apple Virtualization.framework (`vmType: vz`). `microvm` does **not** use Docker. (`cowork-harness doctor --tier microvm` checks for Lima, not Docker.)
 
-CI Stage 1 (the `unit` job in `.github/workflows/ci.yml`) does **not** invoke `npm run ci`. It
-runs those steps individually — `format:check`, `typecheck`, `npm test`, `build` — then a CLI smoke
-(`node dist/cli.js list`) and the token-free `replay` gate. Only `release.yml` calls `npm run ci`.
+CI Stage 1 (the `unit` job in `.github/workflows/ci.yml`) does **not** invoke `npm run ci`. It runs the
+gate steps individually — e.g. `format:check`, `typecheck`, `npm test`, `build`, a CLI smoke
+(`node dist/cli.js list`), the token-free `replay` gate, `verify-cassettes`, `lint`, and source-guard
+checks (see `ci.yml` for the authoritative list). Only `release.yml` calls `npm run ci`.
 
 > **Naming:** the repo folder `claude-cowork-headless-emulator`, the npm package + CLI `cowork-harness`,
 > and the GitHub repo `yaniv-golan/cowork-harness` all refer to the same project.
+
+> **Cutting a release?** See [RELEASING.md](./RELEASING.md) for the branch → PR → tag → publish flow.
 
 ## Project layout
 

@@ -3,8 +3,8 @@ name: cowork-harness
 description: Test or debug a Claude Code skill/plugin under Claude Cowork's runtime — sandboxed agent, default-deny egress, the can_use_tool permission/question protocol — using the cowork-harness CLI. Use when validating or regression-testing a skill, authoring or debugging a scenario YAML (prompt + scripted answers + assert:), choosing a fidelity tier, scripting AskUserQuestion / tool-permission answers, or asserting artifacts, egress, or sub-agent dispatch. Especially when a harness run no-ops an assertion, fails on an unanswered gate, false-greens, a steered answer never reaches the model, or a web_fetch is unexpectedly denied or gated. NOT for generic unit testing (pytest/vitest of your own scripts) or non-Cowork CI. Covers the skill / run / chat / record / replay / trace / decide / assertions / scaffold commands and the session-vs-scenario split.
 metadata:
   author: cowork-harness
-  version: 0.15.0
-  tracks-harness: cowork-harness 0.15.0 (baseline desktop-1.15200.0)
+  version: 0.16.0
+  tracks-harness: cowork-harness 0.16.0 (baseline desktop-1.15200.0)
 ---
 
 # cowork-harness
@@ -21,19 +21,26 @@ several ways to *silently* no-op a check (skip an assertion on replay, auto-answ
 an empty egress allowlist). This skill exists mostly to keep you out of those traps — the Gotchas
 section below is the highest-value part. Read it.
 
-> **Version note:** the facts and `file:line` pointers here track `cowork-harness 0.15.0` (baseline
+> **Version note:** the facts and `file:line` pointers here track `cowork-harness 0.16.0` (baseline
 > `desktop-1.15200.0`). If your checkout is newer, prefer the live `--help`, `SPEC.md`, and
 > `docs/*.md` over this snapshot, and re-run the bundled linter.
 
 ## 0. Preflight — make sure the harness can actually run
 
+The 10-second inner loop, once the CLI is on PATH:
+
+```bash
+cowork-harness doctor                       # prerequisites OK? (Docker, agent, token, baseline)
+cowork-harness skill ./my-skill "do X"      # run the skill once against the staged agent
+```
+
 Before the first command, confirm the CLI is reachable and **fail loud** (never fake a pass) when a tier's dependencies are missing:
 
 - **One-shot check.** Run `cowork-harness doctor [--tier <tier>]` first — a read-only prerequisite check that inspects Docker, the staged agent, the token, and the baseline in one pass. The bullets below explain each thing it checks (and how to fix it).
-- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 0.15.0** (the commands/assertions it teaches: `assertions --list`, `scaffold <run-id>`, `trace --view dispatches`, `artifact_json` incl. the `in:` operator, `verify-cassettes`, batch `record <dir>`/`--rerecord-stale`, parallel batch re-records (`record --concurrency <N>`), record-time redaction, multiSelect/`answer:`, `verify-run` (incl. answer-coverage when a scenario declares `answers:`), `record --max-artifact-bytes`, answering gates live during a recording (`record --decider-dir`/`--decider-llm`/`--on-unanswered first`), `verify-cassettes --allow-domain`/`--allow-email`/`--allow-file`, scenario `skills:` staleness scoping (refinable with `COWORK_HARNESS_AGENT_SCOPE=skill` so a skill-named `agents/<name>.md` re-stales only that skill), `chat --plugin`, and `/help` in the chat REPL). If it's missing *or older than 0.15.0*, prefix every command with `npx` using a version floor: `npx cowork-harness@>=0.15.0 <cmd>` (Node ≥ 20). The floor matters — plain `@latest` would silently fetch an older CLI and the new commands would fail as "unknown command"; `@>=0.15.0` instead **fails loud** if no compatible version is published. To install once instead: `npm i -g cowork-harness@>=0.15.0` (pin the floor here too — for the same reason, don't use `@latest`).
+- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 0.16.0**. If it's missing or older, prefix every command with the version floor `npx cowork-harness@>=0.16.0 <cmd>` (Node ≥ 20), or install once with `npm i -g cowork-harness@>=0.16.0`. **Pin `@>=0.16.0`, never `@latest`** — `@latest` can silently fetch an older CLI and the new commands fail as "unknown command", whereas the floor **fails loud** if no compatible version is published. (≥ 0.16.0 is what gates the commands/assertions this skill teaches: `assertions --list`, `scaffold <run-id>`, `trace --view dispatches`, `artifact_json` incl. the `in:` operator, `verify-cassettes`, batch `record <dir>`/`--rerecord-stale`, `record --concurrency <N>`, record-time redaction, multiSelect/`answer:`, `verify-run` answer-coverage, `record --max-artifact-bytes`, live record-time deciders, `verify-cassettes --allow-domain`/`--allow-email`/`--allow-file`, scenario `skills:` staleness scoping with `COWORK_HARNESS_AGENT_SCOPE=skill`, `chat --plugin`, and `/help` in the REPL.)
 - **Agent binary (every tier).** The staged Claude Code agent is **bind-mounted** from a local Claude Desktop install, or point `COWORK_AGENT_BINARY` at a `claude-code-vm/<ver>/claude` ELF. Nothing is bundled. No agent → no run; report that, don't skip silently.
 - **Docker / Lima.** Only `--fidelity protocol` (L0) runs without them. `container` / `microvm` / `hostloop` / `cowork` need Docker (Lima for L2). If they're absent, drop to `--fidelity protocol` and **say so** — a green that never exercised the sandbox is not a sandbox pass.
-- **Auth.** `CLAUDE_CODE_OAUTH_TOKEN` (preferred) or `ANTHROPIC_API_KEY`, via env or `.env`.
+- **Auth.** `CLAUDE_CODE_OAUTH_TOKEN` (preferred) or `ANTHROPIC_API_KEY`, via env or `.env`. Minting an OAuth token needs the **`claude` CLI** (`npm i -g @anthropic-ai/claude-code`, then `claude setup-token`).
 
 ## 1. Pick the loop
 
@@ -42,7 +49,8 @@ Before the first command, confirm the CLI is reachable and **fail loud** (never 
 - **Repeatable, asserted regression** → author a `scenarios/*.yaml` and run `cowork-harness run`.
   This is the CI-grade path and most of this skill.
 - **Multi-turn debugging** → `cowork-harness chat` (interactive; gates answered at the TTY, **not** an
-  asserted test — see *Debugging with `chat`* in `docs/scenario.md`).
+  asserted test — see *Debugging with `chat`* in `docs/scenario.md`, or `docs/debugging.md` for the full
+  debugging map).
 
 Full command set: `skill · run · chat · record · replay · verify-cassettes · rehash · prune · lint ·
 verify-run · trace · inspect · decide · gates · answer · scaffold · assertions --list · sync · list ·
@@ -185,14 +193,19 @@ documents to judge whether it actually does the work (extraction, analysis), wit
 cassette — has its own recipe:
 
 1. **Explore with the LLM decider.** `cowork-harness skill <dir> --decider-llm --intent "<one line of what
-   this run is testing>"` lets a small model answer each gate steered by your intent. This is exploration,
-   **not** a deterministic regression — the run is flagged non-deterministic and a green here is not a
-   scripted pass.
+   this run is testing>"` lets a small model answer each gate steered by your intent. The model replies with
+   the option **number** and the harness maps it to the exact label (so it can't whiff by mis-typing the
+   label text); an out-of-set answer fails loud. This is exploration, **not** a deterministic regression —
+   the run is flagged non-deterministic and a green here is not a scripted pass. For a genuinely ambiguous
+   *judgment* gate, raise the answering model with `--decider-model <id>` (e.g. a Sonnet/Opus id); it
+   improves judgment but won't make an under-specified gate deterministic.
 2. **Script the load-bearing gates — especially binary confirm gates.** Once you know which gates fire
    (`trace <run-dir> --view questions`), pin the ones whose choice drives the outcome with
-   `--answer "<q>=<label>"` / `--answer-policy <yaml>`. **A "Confirm | Different"-style confirm gate is worth
-   scripting** rather than leaving to `--decider-llm`: a generic decider may answer it with free text instead
-   of selecting the label. Scripting it removes that variance.
+   `--answer "<q>=<label>"` / `--answer-policy <yaml>`. When a skill **re-words its option labels run-to-run**
+   (LLM-authored gates), pin a **stable leading substring** instead of the full label — `--answer
+   "<q>=Israeli company"` binds whichever option starts with `Israeli company`. It is uniqueness-guarded and
+   **fails loud** if the anchor ever matches two options (the documented trade: drift-tolerance, not strict
+   CI reproducibility — for that, pin a full exact label or a free-text `answer:`).
 3. **Budget ~1 re-run per file.** If a gate whiffs, the run no longer vanishes — it exits non-zero but
    **salvages a PARTIAL run** (the extraction the agent already did is written to disk). So the cost of a
    missed gate is one re-run with a better `--intent` or a scripted answer, not a lost paid run.

@@ -4,6 +4,17 @@ A **session** (a "session setup", `sessions/*.yaml`) captures everything you con
 
 > One-line mental model: **platform baseline = the release; session = your setup.**
 
+**Minimal session** — the smallest setup that mounts one skill and pins a model; every field is optional
+(a scenario with no `session:` gets an all-defaults inline session):
+
+```yaml
+model: claude-opus-4-8
+skills:
+  local: ["./skills/my-skill"]
+```
+
+The full schema below documents every field.
+
 ## Full schema
 
 ```yaml
@@ -52,35 +63,41 @@ egress:
 
 # ── web_fetch (TEST CONVENIENCE — not a real Cowork setting) ────────────────────
 web_fetch:
-  approved_domains: []           # pre-approve these hosts for the run, as if "Allow all for website" was
-                                 # clicked earlier this session (seeds Run.approvedDomains). Per-run only —
-                                 # Cowork has no persistent pre-approval. A web_fetch to a listed host
-                                 # raises no approval gate. (web_fetch's real gate is the URL provenance
-                                 # set, seeded from URLs you put in the prompt — see boundary.md.)
+  approved_domains: []           # pre-approve these hosts for the run — simulates the in-session effect of
+                                 # clicking "Allow all for website" (seeds Run.approvedDomains), but for THIS
+                                 # run only: the set starts empty every run (Cowork has no persistent
+                                 # pre-approval). A web_fetch to a listed host raises no approval gate.
+                                 # (web_fetch's real gate is the URL provenance set, seeded from URLs you
+                                 # put in the prompt — see boundary.md.)
 
 # ── staleness fingerprint scope ──────────────────────────────────────────────────
 staleness:
-  hash_ignore: []                # gitignore-style globs (matched against each mounted skill/plugin dir's
-                                 # root-relative path) for paths that DON'T affect recorded behavior —
-                                 # e.g. [tests/, docs/, "**/*.md"]. Glob form matrix:
-                                 #   tests     — matches a `tests` entry at ANY depth (bare name, no slash)
-                                 #   tests/    — same as bare name (trailing slash is optional)
-                                 #   /tests    — anchored to mount root only (leading slash = root-relative)
-                                 #   docs/api  — root-anchored path with a slash component
-                                 #   **/tests  — explicit any-depth (same as bare `tests`)
-                                 #   **/*.md   — any .md at any depth
-                                 # The cassette-staleness hash skips ignored paths,
-                                 # so editing them no longer re-stales cassettes. The harness hard-excludes
-                                 # universally-non-runtime paths: VCS/caches/cassettes, the plugin.json
-                                 # `version` field, and (v5+) OS-junk files (.DS_Store / Thumbs.db /
-                                 # desktop.ini) — so a Finder touch can't re-stale a cassette. A plugin's own
-                                 # runtime boundary (and any RUN-GENERATED files a skill writes into its own
-                                 # dir) are yours to declare here or in a plugin-local `.cowork-hashignore`
-                                 # file at the mount root. (For per-skill scoping in a multi-skill plugin,
-                                 # set `skills: [<name>]` on the SCENARIO — see scenario.md / cassette.md.
-                                 # Opt-in `COWORK_HARNESS_AGENT_SCOPE=skill` further scopes a skill-named
-                                 # `agents/<name>.md` to that skill instead of the shared root.)
+  hash_ignore: []                # gitignore-style globs for paths that DON'T affect recorded behavior
+                                 # (e.g. [tests/, docs/, "**/*.md"]) — editing them won't re-stale a
+                                 # cassette. Glob forms, hard-exclusions, and per-skill scoping: see
+                                 # "Staleness hash_ignore globs" below.
 ```
+
+### Staleness `hash_ignore` globs
+
+`hash_ignore` globs are matched against each mounted skill/plugin dir's **root-relative** path:
+
+| Form | Matches |
+|---|---|
+| `tests` / `tests/` | a `tests` entry at ANY depth (bare name; trailing slash optional) |
+| `/tests` | anchored to the mount root only (leading slash = root-relative) |
+| `docs/api` | a root-anchored path with a slash component |
+| `**/tests` | explicit any-depth (same as bare `tests`) |
+| `**/*.md` | any `.md` at any depth |
+
+The cassette-staleness hash skips ignored paths, so editing them no longer re-stales cassettes. The
+harness also **hard-excludes** universally-non-runtime paths: VCS/caches/cassettes, the `plugin.json`
+`version` field, and (v5+) OS-junk (`.DS_Store` / `Thumbs.db` / `desktop.ini`) — so a Finder touch can't
+re-stale a cassette. A plugin's own runtime boundary (and any run-generated files a skill writes into its
+own dir) are yours to declare here or in a plugin-local `.cowork-hashignore` file at the mount root. For
+per-skill scoping in a multi-skill plugin, set `skills: [<name>]` on the **scenario** (see scenario.md /
+cassette.md); opt-in `COWORK_HARNESS_AGENT_SCOPE=skill` further scopes a skill-named `agents/<name>.md` to
+that skill instead of the shared root.
 
 ## Field reference
 
@@ -115,6 +132,7 @@ See [discovery.md](./discovery.md) for the full model. In short: the harness bui
 | `plugins.local_marketplaces[]` | `claude plugin marketplace add` | LOCAL marketplace dirs (each holds a `marketplace.json`); plugins they reference are mounted. The `skill --marketplace` flag is the ad-hoc equivalent. |
 | `plugins.enabled[]` | `enabledPlugins` | `name@marketplace`. |
 | `plugins.local_plugins[]` / `remote_plugins[]` | Cowork plugin mounts | → `mnt/.local-plugins/marketplaces/<marketplace>/<plugin>` (≥1.14271.0; older baselines use `.local-plugins/cache`) / `mnt/.remote-plugins`. |
+| `skills.local[]` | `CLAUDE_CONFIG_DIR/skills` | extra host **skill** dirs (a folder *without* `.claude-plugin/plugin.json`) staged into the config dir's `skills/`. Use this for a single-skill folder; use `plugins.local_plugins` for a plugin root. |
 | `mcp.config` / `mcp.enabled[]` | `--mcp-config` / `enabledMcpjsonServers` | the supported way to attach an MCP server to a session under test. |
 
 ### Egress

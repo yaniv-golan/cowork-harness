@@ -2,6 +2,10 @@
 
 The single source of truth for **what the harness must produce** given its inputs. Golden snapshot tests assert the **contract layer** against this; live contract tests assert the **runtime layer** against the real binary. Anything that contradicts the binary wins over this doc — keep them in sync via `cowork-harness sync` + the [spawn contract](./docs/cowork-spawn-contract-1.12603.1.md).
 
+> **Reading this for how-to?** This is the *contract* (envelopes, exit codes, assertion semantics). To
+> author a scenario or run the harness, start at the [README](./README.md) and [docs/](./docs/README.md);
+> come here when a doc and the code disagree.
+
 ## 0. Model
 
 ```
@@ -223,6 +227,12 @@ Payload sits under an **inner** `response`. Missing the nesting ⇒ `ZodError: e
 
 **Three MCP delivery channels (corrected 2026-06-13 — first-party probe):**
 
+> **At a glance:** channel 1 = SDK servers over the control protocol (the workspace shell + the host's own
+> MCP servers) — and the home of **`web_fetch`**, which runs via a host-API **two-path model** (Path A:
+> provenance-gated, no hostname allowlist; Path B: egress-domain-gated), **decoupled from `bash`/`plan.egressAllow`**.
+> Channels 2-3 = CLI `--mcp-config` / `.mcp.json` servers (honored in plain cowork mode; dropped only in
+> hermetic mode). Details per channel below.
+
 1. **SDK servers over the control protocol** — declared via `sdkMcpServers` in `initialize`; tool calls tunnel as `mcp_message`. This is how the **desktop host** bridges its own servers (incl. `claude_desktop_config.json` `mcpServers`, spawned host-side with full host env) and how the harness delivers the workspace shell. The workspace handler (`src/hostloop/workspace-handler.ts`) implements `initialize`/`tools/list`/`tools/call`; `bash`→`docker exec -w <mntRoot> <container> sh -c <cmd>` (container-egress-gated). **CB-8:** `makeWorkspaceHandler` accepts an `onInfraError?: (message: string) => void` callback at parameter position 6 (after `onEgress`); on infrastructure errors (ETIMEDOUT / killed / no code+stdout+stderr) the handler calls `onInfraError?.(e.message)`, returns a textResult with `"[infrastructure error: …]"`, and `spawnHostLoop` wires `onInfraError` to append `{type:"infra_error", ts, message}` to `events.jsonl`. **`web_fetch` is NOT container-egress-gated:** real Cowork routes it through the host API (gate `1978029737` `coworkWebFetchViaApi:true` → `POST /api/organizations/<org>/cowork/web_fetch`), gated by a **separate web-fetch hostname allowlist** (`getWebFetchAllowedUrls`, `*`=unrestricted) + a **URL-provenance** rule (URL must have appeared in a prior message/result). The harness mirrors this with the **two-path model** (`src/hostloop/workspace-handler.ts`, binary-verified `G1t`/`U1t`): **Path A** (provenance engaged — `coworkWebFetchViaApi` on) gates on the **exact-URL provenance set** ONLY (seeded from user-turn + tool-result URLs; `src/hostloop/provenance.ts`), with **no** hostname allowlist — but still an `http(s)`-scheme + private-address **SSRF backstop re-checked on every redirect hop** (a manual redirect loop, not `curl -L`) — a miss raises a per-domain approval (`webfetch:<domain>` permission with options `Allow once | Allow all for website | Deny`) routed through the Decider; "Allow all for website" approves the host for the rest of the run (`Run.approvedDomains`, per-run/ephemeral). **Path B** (gate off) is a direct host fetch gated by the egress domain list via the same `wen()`/`compile()` matcher container egress uses, with `redirect:"manual"` re-checking `U1t` (scheme + private-address SSRF + allowlist) on **every** redirect hop. web_fetch is thus **decoupled from `plan.egressAllow`** on Path A (egress applies to `bash`/Path B only). An unanswered cold miss is fail-closed (B5); scenarios answer via `--answer "webfetch:<domain>=allow"` (with `grant`), `web_fetch.approved_domains`, or an LLM/external terminal. `bash` stays container-egress-sandboxed.
 2. **CLI-spawned `--mcp-config` / `.mcp.json` servers — HONORED in plain cowork mode** (NOT ignored). **Verified:** a valid `--mcp-config` populates `mcp_servers` (`[{name,status:"pending"|"connected"}]`); these run in-sandbox with the env-allowlist `CLAUDE_CODE_MCP_ALLOWLIST_ENV` (`RW8`/`oG8`/`LU5` = {HOME, LOGNAME, PATH, SHELL, TERM, USER}). The harness MAY use this as a convenience injection path.
 3. **The drop is SAFE/HERMETIC-mode-gated, not cowork-gated.** `--mcp-config` is filtered to SDK-only (`ap5()`) **only when** safe mode (`I5()`) or `xB8()` is true, and `xB8()` requires **both** `CLAUDE_CODE_REMOTE` **and** `CLAUDE_CODE_REMOTE_HERMETIC_MODE`. **Verified:** with both set, `mcp_servers:[]`; without them (plain `SESSION_KIND=bg`), the config is honored. The earlier "cowork ignores `--mcp-config`" was a hermetic-session observation over-generalized.
@@ -410,6 +420,7 @@ verdict logic a finding doesn't have) — it emits its own:
 ```jsonc
 { "command": "verify-cassettes",
   "ok": true,                       // false if any real finding, staleness drift, or unreadable cassette
+  "coverage": { "privacy": true, "staleness": true },  // which scans ran (false under --skip-privacy / --skip-staleness)
   "results": [ { "file": "string",
                  "findings": [ { "where": "string", "cls": "email|currency|domain|unscanned", "sample": "string" } ],
                  "staleness": [ "string" ],   // drift / unresolvable-fingerprint messages (gate failures)

@@ -192,10 +192,14 @@ Questions:
       (to answer LIVE questions, use --decider-llm / --decider-cmd / --decider-dir below)
   --decider-llm [--intent "<one line>"]   answer LIVE questions with a small model (the ergonomic
                                    default for agent-driven runs: state the test's intent once instead of
-                                   writing a helper). Picks an option by label per question; an out-of-set
-                                   answer FAILS LOUD. NON-deterministic — the footer flags the run so a
-                                   green isn't mistaken for a scripted pass; pin with --answer for CI.
-                                   (Uses the host 'claude -p' on a small model — COWORK_HARNESS_DECIDER_MODEL.)
+                                   writing a helper). The model replies with the option NUMBER (code maps it
+                                   to the exact label); an out-of-set answer FAILS LOUD. NON-deterministic —
+                                   the footer flags the run so a green isn't mistaken for a scripted pass;
+                                   pin with --answer for CI.
+  --decider-model <id>             override the --decider-llm answering model (flag > env
+                                   COWORK_HARNESS_DECIDER_MODEL > Haiku default). Use a stronger model for
+                                   genuinely ambiguous judgment gates; it won't make an under-specified gate
+                                   deterministic. Requires --decider-llm.
   --decider-cmd '<helper>'         answer the LIVE question via a spawned helper (for custom logic). The
                                    helper reads a {"type":"decision_request",…} line on stdin and writes
                                    back {"answers":{"<q>":"<label or 1-based index>"}} (MUST flush per
@@ -246,6 +250,9 @@ Input policy:
                                    'answer <dir> --gate N --choose <label>' writes the reply atomically.
   (run omits --decider-llm by design — scenarios pin answers for reproducibility; a scenario may still
    opt into the model with 'on_unanswered: llm' in its YAML, which flags the run non-deterministic)
+  --decider-model <id>             override the answering model for 'on_unanswered: llm' scenarios
+                                   (flag > env COWORK_HARNESS_DECIDER_MODEL > Haiku default); no-op for
+                                   scenarios that don't use the model terminal.
   (per-scenario answers/on_unanswered in the YAML take precedence where set)
 
 Output:
@@ -296,7 +303,7 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
   scaffold:
     "usage: scaffold <run-id | run-dir> [--out <file.yaml>]\n       Turns a kept run into a starter scenario YAML (gates→answers, artifacts→file_exists).\n       Positional <run-id | run-dir> is the canonical form.",
   decide:
-    'usage: decide [--question <q>] [--option <o>]... [--decider-cmd <cmd> | --decider-llm] [--answer "<q>=<label>"]... [--answer-policy <p>] [--intent <s>] [--output-format json]',
+    'usage: decide [--question <q>] [--option <o>]... [--decider-cmd <cmd> | --decider-llm [--intent <s>] [--decider-model <id>]] [--answer "<q>=<label>"]... [--answer-policy <p>] [--output-format json]',
   gates: "usage: gates <dir> [--follow]   (stream pending in-band gates as JSON lines; pair with --decider-dir)",
   answer:
     'usage: answer <dir> --gate <N> (--choose <label> [--choose <label>…] | --answer "<q>=<label>")   (write an in-band gate reply atomically; repeat --choose for a multiSelect gate)',
@@ -812,7 +819,23 @@ async function runOneScenario(p: {
 
 async function cmdRun(rawArgs: string[]) {
   if (hasHelp(rawArgs)) return void log(RUN_HELP);
-  const { rest: args, flags } = takeCommonFlags(rawArgs, "run");
+  // --decider-model overrides the LLM decider's answering model for scenarios that use `on_unanswered: llm`
+  // (flag > env COWORK_HARNESS_DECIDER_MODEL > Haiku default). `takeCommonFlags` doesn't know it (it's not a
+  // common flag), so pull it out of argv first — otherwise it would land as an "unexpected argument".
+  let deciderModel: string | undefined;
+  const preArgs: string[] = [];
+  for (let i = 0; i < rawArgs.length; i++) {
+    const a = rawArgs[i];
+    if (a === "--decider-model") {
+      deciderModel = rawArgs[++i];
+      if (deciderModel === undefined || deciderModel.startsWith("-"))
+        fail("run", "usage", "--decider-model requires a value (a model id)", undefined, isJsonOutput(rawArgs));
+    } else if (a.startsWith("--decider-model=")) {
+      deciderModel = a.slice("--decider-model=".length);
+      if (deciderModel === "") fail("run", "usage", "--decider-model requires a non-empty value", undefined, isJsonOutput(rawArgs));
+    } else preArgs.push(a);
+  }
+  const { rest: args, flags } = takeCommonFlags(preArgs, "run");
   const target = args[0];
   if (!target) fail("run", "usage", "usage: run <scenario.yaml | dir/>", undefined, flags.output === "json");
   // `takeCommonFlags` strips known flags; `run` takes exactly one positional (a scenario file or a
@@ -855,7 +878,18 @@ async function cmdRun(rawArgs: string[]) {
           o.json,
         );
       const label = files.length > 1 ? `[${i + 1}/${files.length}] ${scenario.name}` : scenario.name;
-      results.push(await runOneScenario({ command: "run", scenario, label, flags, policy, externalChannel, o }));
+      results.push(
+        await runOneScenario({
+          command: "run",
+          scenario,
+          label,
+          flags,
+          policy,
+          externalChannel,
+          o,
+          extra: deciderModel ? { llmModel: deciderModel } : undefined,
+        }),
+      );
     }
   } finally {
     externalChannel?.close?.(); // ONE channel reused across the loop — close after ALL scenarios (not per-run)
@@ -894,6 +928,7 @@ async function cmdSkill(rawArgs: string[]) {
   let sessionId: string | undefined;
   let answerPolicy: string | undefined;
   let intent: string | undefined;
+  let deciderModel: string | undefined;
   let deciderLlm = false;
   let resume = false;
   let dryRun = false;
@@ -947,6 +982,7 @@ async function cmdSkill(rawArgs: string[]) {
     else if (a === "--resume") resume = true;
     else if (a === "--decider-llm") deciderLlm = true;
     else if (name === "--intent") intent = nextValStrict();
+    else if (name === "--decider-model") deciderModel = nextValStrict();
     else if (a === "--dry-run") dryRun = true;
     else if (a === "--keep") keep = true;
     else if (name === "--plugin") extraPlugins.push(nextValStrict());
@@ -1056,6 +1092,9 @@ async function cmdSkill(rawArgs: string[]) {
       undefined,
       isJson,
     );
+  // --decider-model only feeds the LLM decider (it picks the answering model); reject it without --decider-llm.
+  if (deciderModel !== undefined && !useLlm)
+    fail("skill", "usage", "--decider-model requires --decider-llm (it sets the model that answers live questions).", undefined, isJson);
   // --decider-llm forces the `llm` terminal; an explicit --on-unanswered would be silently overridden — reject the conflict.
   if (useLlm && flags.onUnanswered !== undefined)
     fail(
@@ -1119,6 +1158,7 @@ async function cmdSkill(rawArgs: string[]) {
         sessionId,
         resume,
         llmIntent: intent,
+        llmModel: deciderModel,
         nonDeterministicHint: flags.deciderDir != null || flags.deciderCmd != null, // driving agent / helper answers → not reproducible (M4; #48)
       },
     });
@@ -1535,6 +1575,7 @@ async function cmdDecide(args: string[]) {
   let policy: string | undefined;
   let deciderLlm = false;
   let intent: string | undefined;
+  let deciderModel: string | undefined;
   const rules: AnswerRule[] = [];
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
@@ -1549,6 +1590,7 @@ async function cmdDecide(args: string[]) {
         fail("decide", "usage", `--decider-cmd: missing value (got flag-looking "${deciderCmd}")`, undefined, json);
     } else if (a === "--decider-llm") deciderLlm = true;
     else if (a === "--intent") intent = flagValueStrict(args, i++, a);
+    else if (a === "--decider-model") deciderModel = flagValueStrict(args, i++, a);
     else if (a === "--answer-policy") policy = flagValueStrict(args, i++, a);
     else if (a === "--answer") {
       const raw = flagValueStrict(args, i++, a);
@@ -1606,6 +1648,8 @@ async function cmdDecide(args: string[]) {
       undefined,
       json,
     );
+  if (deciderModel !== undefined && !deciderLlm)
+    fail("decide", "usage", "--decider-model requires --decider-llm (it sets the model that answers the question).", undefined, json);
   // Q5/§8.5: pre-flight — exit 2 (usage error) when no decider is configured at all. Previously this
   // fell through to ScriptedDecider([]).decide() → ABSTAIN → exit 1 "no rule matched", which implies
   // the user wrote a rule that failed to match rather than that they forgot to configure anything.
@@ -1640,7 +1684,7 @@ async function cmdDecide(args: string[]) {
   log(`sample question: "${question}"  options: [${opts.join(" | ")}]`);
   try {
     if (deciderLlm) {
-      const d = await new LlmDecider(claudeCliComplete, intent).decide(req, ctx);
+      const d = await new LlmDecider(claudeCliComplete, intent, deciderModel || undefined).decide(req, ctx);
       const answer = (d as { response: { answers?: Record<string, string> }; model?: string }).response.answers?.[question];
       if (json) out(JSON.stringify({ tool: "cowork-harness", command: "decide", ok: true, answer, by: "llm" }));
       else log(`✓ LLM decider answered: "${question}" → "${answer}"  (non-deterministic)`);

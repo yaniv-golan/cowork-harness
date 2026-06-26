@@ -4,6 +4,13 @@ A **cassette** is the recorded control-protocol stream from a live run, saved as
 `replay` plays it back deterministically — no token, no model, no Docker — and re-evaluates the content
 assertions. Record once in CI (or locally); replay on every PR for free.
 
+**Minimal loop** — record once (live), then replay for free:
+
+```bash
+cowork-harness record scenarios/my-test.yaml          # live: writes my-test.cassette.json
+cowork-harness replay  scenarios/my-test.cassette.json # token-free re-evaluation of content assertions
+```
+
 ## Mental model
 
 ```
@@ -249,7 +256,7 @@ When the cassette carries `controlOut`, replay consumes **both** recorded direct
 - **`events`** (child→driver): the assistant turns, tool calls, tool results, and decision *requests*.
 - **`controlOut`** (driver→child): the serialized decision *responses* written to the agent's stdin.
 
-On replay, a `ReplayDecider` indexes `controlOut` by `request_id` and serves the recorded response to
+On replay, the replay decider (built by `buildReplayDecider()`) indexes `controlOut` by `request_id` and serves the recorded response to
 the decision pipeline instead of consulting a live decider or asking the user. This makes the full
 `Run.handleDecision` path execute on replay, which populates `rec.questions`, `rec.gateAnswers`, and
 `rec.gateDeliveries` — exactly as in a live run. Consequence: `question_asked`, `questions_count_max`,
@@ -473,6 +480,14 @@ Add this to the **token-free** job in your CI pipeline (no API key needed):
       --output-format json
   # exit 1 if any assertion fails; the json envelope has ok:true on pass
 ```
+
+**`replay` exit-code key** (so a CI script can tell a real failure from a misconfiguration):
+
+| Exit | Meaning |
+|---|---|
+| `0` | pass — every evaluated assertion passed |
+| `1` | an assertion (or a `replay_protocol_fidelity` mismatch) failed |
+| `2` | usage error — bad flags or an unreadable/malformed cassette |
 
 This dogfoods the documented pattern and pins the fixture against future `parseMessage` / assertion /
 `Run` regressions on every PR without spending a token.

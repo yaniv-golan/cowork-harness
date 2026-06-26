@@ -31,8 +31,8 @@ The live VM hot-mount path uses `@ant/claude-swift` (`swift_addon.node`), a nati
 
 ### Workarounds
 
-- **Startup `--folder <dir>`** — a live bind mount; agent writes propagate back to the host. Restart `chat` with this flag if you need the agent to edit your project files.
-- **`docker cp` snapshot** — run `docker cp /local/dir/. <containerName>:/sessions/<id>/mnt/dir/` in a second terminal to inject a read-only snapshot mid-session, then tell the agent the path. Writes stay in the container.
+- **Startup `--folder <dir>`** — stages a **fresh copy** of the dir into the session tree (not a live bind mount of the original). The agent reads and writes that copy, but its writes land in the run's `mnt/<folder>` output, **not** back in your original host directory. Restart `chat` with this flag to give the agent a working copy of your project files, then collect any edits from the run's `mnt/<folder>`.
+- **`docker cp` snapshot** — run `docker cp /local/dir/. <containerName>:/sessions/<id>/mnt/dir/` in a second terminal to inject a one-way snapshot mid-session, then tell the agent the path. Agent writes stay in the container and do not propagate back to the host.
 
 ---
 
@@ -40,7 +40,7 @@ The live VM hot-mount path uses `@ant/claude-swift` (`swift_addon.node`), a nati
 
 **Real Cowork behaviour:** The "add folder" button is disabled for chat sessions. `mountFolderForSession` returns `{ok: false, error: "Folder access isn't available in chat sessions."}` at the IPC layer.
 
-**Harness behaviour:** Same shape. Both `chat` and `skill` accept a *startup* `--folder <dir>` (a live bind mount; agent writes propagate back to the host — see Workarounds above). What neither supports — matching Cowork — is *mid-session* / hot-plug folder injection after the session has started.
+**Harness behaviour:** Same shape. Both `chat` and `skill` accept a *startup* `--folder <dir>` (which stages a fresh copy of the dir; agent writes land in the run's `mnt/<folder>` output, not back in the host original — see Workarounds above). What neither supports — matching Cowork — is *mid-session* / hot-plug folder injection after the session has started.
 
 This is **not a harness gap**. Startup folder access works in both commands; the only missing piece is mid-session injection, a faithful reproduction of Cowork's own limit (attaching a folder at session creation is allowed; adding one to a live session is blocked).
 
@@ -70,14 +70,14 @@ The `skill` command supports `--session-id` + `--resume` for checkpoint-resume s
 
 ## Fidelity tier differences
 
-The harness `--fidelity` flag selects how closely the execution environment matches real Cowork. Each tier trades fidelity for speed.
+The harness `--fidelity` flag selects how closely the execution environment matches real Cowork. Each tier trades fidelity for speed. For the canonical description of each tier (what it runs, when to pick it), see [README → Fidelity tiers](../README.md#fidelity-tiers-pick-per-scenario--per-ci-job) and [boundary.md](./boundary.md); the table below is the *gaps* view — what each tier does **not** reproduce.
 
-| Tier | What runs | Gaps vs. real Cowork |
-|---|---|---|
-| `protocol` | No Docker; control protocol only | No sandbox, no filesystem isolation, no egress — fastest iteration |
-| `container` | Docker container (default) | Egress sandbox applied; no Apple VZ microVM; mount namespace frozen at start |
-| `microvm` | Lima + Apple VZ VM | Closest to real Cowork; slow boot (~20s); macOS arm64 only |
-| `hostloop` | Docker + host-side agent loop | Matches Cowork's host-loop mode; agent file tools run on host |
-| `cowork` | Auto-picks `hostloop` or `container` via the same gate as real Cowork | Highest fidelity for automated tests |
+| Tier | Gaps vs. real Cowork (what it does **not** reproduce) |
+|---|---|
+| `protocol` | No sandbox, no filesystem isolation, no egress boundary. |
+| `container` (default) | No Apple VZ microVM; the container mount namespace is frozen at start (no mid-session mounts). |
+| `microvm` | Slow boot (~20s); macOS arm64 only; egress is the same allowlist proxy as `container`, **not** a gVisor netstack. |
+| `hostloop` | Not an isolation gap — it shares the `container` sandbox; it reproduces Cowork's host-loop *execution split* (agent loop runs host-side). |
+| `cowork` | Resolves to `hostloop` or `container` at run time — inherits whichever tier's gaps. |
 
-The `chat` command accepts `protocol`, `container`, and `hostloop`. `microvm` and `cowork` are omitted — `microvm` has a slow boot (~20s) that makes interactive use painful, and `cowork` would require replicating the cowork-tier wiring line (`execute.ts:241`), which resolves the tier via the shared `decideLoopFromBaseline` gate logic (`loop-decision.ts`).
+The `chat` command accepts `protocol`, `container`, and `hostloop`. `microvm` and `cowork` are omitted — `microvm` has a slow boot (~20s) that makes interactive use painful, and `cowork` would require replicating the cowork-tier wiring, which resolves the tier via the shared `decideLoopFromBaseline` gate logic (`src/run/execute.ts` → `src/loop-decision.ts`).

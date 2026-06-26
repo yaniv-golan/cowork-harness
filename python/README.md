@@ -2,8 +2,8 @@
 
 Drive the cowork-harness from pytest — test your skills in a Cowork-faithful sandbox
 beside your normal Python tests. This is an **opt-in lane** (mark tests `@pytest.mark.cowork`),
-not the fast inner loop: each call spawns the node CLI (and Docker at `container`/`hostloop`/`microvm`
-fidelity).
+not the fast inner loop: each call spawns the node CLI (and Docker at `container`/`hostloop`/`cowork`,
+or Lima for `microvm`).
 
 ## Prerequisites
 
@@ -12,10 +12,12 @@ fidelity).
    npm install && npm run build        # from the repo root, produces dist/cli.js
    ```
    Override the path with `COWORK_HARNESS_CLI=/path/to/cli.js` if it lives elsewhere.
-2. **Docker** + the agent image, for any fidelity above `protocol`:
+2. **Docker** + the agent image — for `container`, `hostloop`, and `cowork` (which auto-picks one of those):
    ```bash
    docker build --platform linux/arm64 -t cowork-agent-base:2 -f docker/Dockerfile.agent .
    ```
+   The `microvm` tier uses **Lima + Apple Virtualization.framework** instead (macOS arm64 only), **not**
+   Docker — `brew install lima`. Run `cowork-harness doctor --tier microvm` to see what's missing.
 3. **An auth token** for runs that actually call the model — export it, or put it in a `.env` file in
    the dir you run `pytest` from (the CLI auto-loads `./.env`; it's gitignored, host-side, never mounted):
    ```bash
@@ -86,6 +88,17 @@ pytest -m 'not cowork'      # the fast loop (skips this lane) — the CI default
 ```
 
 ## API
+
+**At a glance** (full reference in the bullets below):
+
+| Call | Returns | Key params |
+|---|---|---|
+| `cowork.skill(folder).run(prompt, …)` | `Result` | `answers`, `on_unanswered`, `fidelity`, `upload`, `folder`, `session_id`+`resume`, `decider_cmd`, `prompt_file`, `check` |
+| `cowork.run_scenario(path, …)` | `Result` \| `BatchResult` | `on_unanswered`, `check` (fidelity/answers are scenario-authored) |
+| `cowork.replay(cassette, …)` | `Result` \| `BatchResult` | — (deterministic; content assertions only) |
+| `cowork.trace(run_id_or_dir, …)` | `list[dict]` | `tools` |
+
+`check=True` (on `run` / `run_scenario`) raises on a failed/enveloped-error run instead of returning it.
 
 - `cowork.skill(folder).run(...)` → `Result`. Parameters:
   - `prompt` (or `prompt_file=` for a verbatim file — avoids shell `$`-expansion)
@@ -169,7 +182,8 @@ assert len([s for s in r.subagents]) >= 1
   `print(d)`) is the **structured-content** path — strictly richer than a YAML scenario's content
   assertions; prefer it over a YAML predicate when you're already in Python. Use **scenario YAML** instead
   when you want a portable, toolchain-free regression suite run via `cowork-harness run` (see
-  [docs/scenario.md](../docs/scenario.md) → "Scenario YAML vs the pytest lane").
+  [docs/scenario.md](../docs/scenario.md#scenario-yaml-vs-the-pytest-cowork-lane--when-to-use-which) →
+  "Scenario YAML vs the pytest `cowork` lane").
 - **`on_unanswered=` takes `fail | first | prompt`.** `on_unanswered="llm"` is **rejected** by the CLI
   (exit 2) — the LLM terminal isn't exposed through this flag. To answer live questions from the lane, pass
   `decider_cmd=` (e.g. a `serve_decider(fn)` helper, above); to let a scenario use the model, set

@@ -8,7 +8,7 @@ Please report security issues privately via [GitHub Security Advisories](https:/
 
 This project is a **test harness**, and its sandbox is a **fidelity fixture, not a security boundary**. Understanding the distinction matters:
 
-- The harness reproduces Claude Cowork's *limitations* (sealed host filesystem, default-deny egress, MCP-only cross-boundary communication) so that a skill which passes a scenario here is constrained the same way it would be in real Cowork. This is about **catching false passes**, not about containing adversaries.
+- The harness reproduces Claude Cowork's *limitations* (sealed host filesystem, default-deny egress, and MCP-only cross-boundary communication — host resources are reachable only through an MCP server, never via direct host tools) so that a skill which passes a scenario here is constrained the same way it would be in real Cowork. This is about **catching false passes**, not about containing adversaries.
 - The `container` tier uses OS containers. Containers are a real isolation boundary for **trusted code under test**, but they are *not* a hardened boundary against **deliberately malicious** code (container escapes exist). Do **not** run untrusted, adversarial skills against real credentials at the `container` tier.
 - For untrusted-isolation testing, use the `microvm` tier (a real VM — Apple Virtualization.framework via Lima, macOS arm64 only), which provides VM-grade isolation comparable to Cowork itself.
 
@@ -19,6 +19,8 @@ This project is a **test harness**, and its sandbox is a **fidelity fixture, not
 | Testing your own skills' behavior + constraints | `container` (default) | Faithful + CI-native |
 | Testing isolation of untrusted/3rd-party skills | `microvm` | VM-grade escape resistance |
 | Fast logic-only iteration | `protocol` | No sandbox — boundary assertions are refused to avoid false passes |
+
+Set the tier with the scenario's **`fidelity:`** field (see [docs/scenario.md](./docs/scenario.md)); how each tier enforces (or doesn't) the boundary is detailed in [docs/boundary.md](./docs/boundary.md).
 
 ### Input-boundary hardening
 

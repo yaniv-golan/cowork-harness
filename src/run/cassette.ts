@@ -1191,6 +1191,7 @@ interface RecordOpts {
   onUnanswered?: OnUnanswered;
   externalChannel?: DecisionChannel;
   llmIntent?: string;
+  llmModel?: string; // --decider-model: the LLM decider's answering model (flag > env > Haiku default)
   deciderChannel?: "decider-dir" | "decider-llm";
 }
 
@@ -1267,7 +1268,16 @@ export async function cmdRecord(args: string[]) {
     p = parseArgs(args, {
       // --quiet/--verbose accepted for flag consistency but currently no-op in record (renderer plan is fixed).
       booleans: ["--no-redact", "--allow-failing", "--rerecord-stale", "--quiet", "--verbose", "--dry-run", "--decider-llm"],
-      values: ["--out", "--output-format", "--max-artifact-bytes", "--decider-dir", "--intent", "--on-unanswered", "--concurrency"],
+      values: [
+        "--out",
+        "--output-format",
+        "--max-artifact-bytes",
+        "--decider-dir",
+        "--intent",
+        "--decider-model",
+        "--on-unanswered",
+        "--concurrency",
+      ],
       noDashValue: ["--out", "--decider-dir"],
       enums: { "--output-format": ["text", "json"], "--on-unanswered": ["fail", "first"] },
       aliases: { "-q": "--quiet", "-V": "--verbose" },
@@ -1294,6 +1304,7 @@ export async function cmdRecord(args: string[]) {
   const deciderDir = p.options["--decider-dir"];
   const deciderLlm = p.flags["--decider-llm"] ?? false;
   const intent = p.options["--intent"];
+  const deciderModel = p.options["--decider-model"];
   const onUnansweredOpt = p.options["--on-unanswered"] as OnUnanswered | undefined;
   // Bounded batch parallelism (dir-batch / --rerecord-stale). Each record is already fully isolated per run
   // (unique sidecar networks + proxy, per-session run dir), so concurrency is safe — the bound exists to stay
@@ -1313,7 +1324,7 @@ export async function cmdRecord(args: string[]) {
   if (!target) {
     log(
       "usage: record <scenario.yaml | dir/> [--out <file>] [--output-format text|json] [--rerecord-stale] [--no-redact] [--allow-failing] [--max-artifact-bytes <n>] [--concurrency <N>]\n" +
-        '       answer gates live during the recording: [--decider-dir <dir>] (single scenario) | [--decider-llm [--intent "…"]] | [--on-unanswered fail|first]',
+        '       answer gates live during the recording: [--decider-dir <dir>] (single scenario) | [--decider-llm [--intent "…"] [--decider-model <id>]] | [--on-unanswered fail|first]',
     );
     return process.exit(2);
   }
@@ -1332,6 +1343,10 @@ export async function cmdRecord(args: string[]) {
   // up front so a paid record never starts under a mis-specified policy.
   if (intent !== undefined && !deciderLlm) {
     log("record: --intent requires --decider-llm (it states the test intent for the model answering live questions)");
+    return process.exit(2);
+  }
+  if (deciderModel !== undefined && !deciderLlm) {
+    log("record: --decider-model requires --decider-llm (it sets the model that answers live questions)");
     return process.exit(2);
   }
   if (deciderLlm && deciderDir !== undefined) {
@@ -1434,9 +1449,10 @@ export async function cmdRecord(args: string[]) {
 
   // Shared live-decider opts for the B1 (dir-batch) and single-scenario record paths. (--rerecord-stale is
   // excluded above, so it never sees these.) A plain `record` leaves every field undefined → no behavior change.
-  const liveDecider: Pick<RecordOpts, "onUnanswered" | "llmIntent" | "deciderChannel"> = {
+  const liveDecider: Pick<RecordOpts, "onUnanswered" | "llmIntent" | "llmModel" | "deciderChannel"> = {
     onUnanswered: deciderLlm ? "llm" : onUnansweredOpt,
     llmIntent: deciderLlm ? intent : undefined,
+    llmModel: deciderLlm ? deciderModel : undefined,
     deciderChannel: deciderDir !== undefined ? "decider-dir" : deciderLlm ? "decider-llm" : undefined,
   };
 
@@ -1604,6 +1620,7 @@ async function recordScenarioObject(
     onUnanswered: opts.onUnanswered,
     externalChannel: opts.externalChannel,
     llmIntent: opts.llmIntent,
+    llmModel: opts.llmModel,
   });
   // Provenance: stamp from the RESULT, not the flag. result.nonDeterministic (execute.ts) is
   // usage-based — true only if a decision actually came back by:"llm"|"external"|"human"|"first". So a
