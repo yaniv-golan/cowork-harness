@@ -165,6 +165,18 @@ describe("doctor — runDoctorChecks", () => {
     expect(tok.remedy).toMatch(/--dotenv \/main\/repo\/\.env/);
   });
 
+  it("worktree token remedy puts --dotenv BEFORE the subcommand", () => {
+    const cs = runDoctorChecks("protocol", probe({ hasToken: () => false, worktreeEnv: () => "/main/.env" }));
+    const remedy = get(cs, "token").remedy!;
+    expect(remedy).toMatch(/--dotenv \/main\/\.env <cmd>/); // leading form present
+    expect(remedy).not.toMatch(/<cmd> --dotenv/); // broken trailing form gone
+  });
+
+  it("generic no-token remedy advertises the --dotenv leading form", () => {
+    const cs = runDoctorChecks("protocol", probe({ hasToken: () => false }));
+    expect(get(cs, "token").remedy!).toMatch(/--dotenv <path> <cmd>/);
+  });
+
   it("Keychain remedy takes precedence over the worktree remedy when both apply", () => {
     const tok = get(
       runDoctorChecks("container", probe({ hasToken: () => false, hasKeychainToken: () => true, worktreeEnv: () => "/main/.env" })),
