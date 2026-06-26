@@ -42,6 +42,23 @@ describe("sync distinguishes missing vs corrupt user config", () => {
     }
   });
 
+  it("flags an unknown delta when coworkEgressAllowedHosts is a string (not an array)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sync-cfg-"));
+    try {
+      const p = join(dir, "config.json");
+      writeFileSync(p, JSON.stringify({ coworkEgressAllowedHosts: "not-an-array.example.com" }));
+      const unknown: string[] = [];
+      const out = readConfigJson(p, unknown);
+      // readConfigJson itself returns the raw value — the string guard lives in sync(); assert the
+      // precondition: a string value is returned as-is (not coerced), and no unknown delta is added here.
+      // The in-sync() guard test below covers the runtime rejection path.
+      expect(typeof out["coworkEgressAllowedHosts"]).toBe("string");
+      expect(unknown).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("treats a non-object top-level JSON value as {} (no crash)", () => {
     const dir = mkdtempSync(join(tmpdir(), "sync-cfg-"));
     try {

@@ -110,7 +110,13 @@ export function sync(): SyncResult {
   const config = readConfigJson(join(SUPPORT, "config.json"), unknown);
   const networkMode = (config["coworkNetworkMode"] as string) ?? null;
   const requireFullVmSandbox = config["lastSeenRequireCoworkFullVmSandbox"] ?? null;
-  const userAllow = (config["coworkEgressAllowedHosts"] as string[]) ?? [];
+  const userAllow = Array.isArray(config["coworkEgressAllowedHosts"])
+    ? (config["coworkEgressAllowedHosts"] as string[])
+    : (flag(
+        unknown,
+        "coworkEgressAllowedHosts: expected an array but got " + typeof config["coworkEgressAllowedHosts"] + " — user allow-list ignored",
+      ),
+      []);
 
   // 4. Egress allowlist from the asar (vmAllowedDomains + firewallAlso), merged with user hosts.
   const { domains, fingerprint } = extractFromAsar(unknown);
@@ -118,7 +124,14 @@ export function sync(): SyncResult {
 
   // 5. GrowthBook gate states, decoded from the live fcache (#39 — no longer a manual step).
   const gates = decodeFcacheGates();
-  if (!gates) flag(unknown, "gates: fcache missing/unreadable — provenance.gates NOT re-synced");
+  if (!gates) {
+    flag(unknown, "gates: fcache missing/unreadable — provenance.gates NOT re-synced");
+  } else if (Object.keys(gates).length === 0) {
+    flag(
+      unknown,
+      "gates: fcache decoded but NONE of the pinned gate IDs matched — gate IDs may have been re-keyed; update PINNED_GATES in cowork-sync.ts",
+    );
+  }
 
   return {
     appVersion,

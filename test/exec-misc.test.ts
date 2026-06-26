@@ -137,6 +137,31 @@ describe("boundary — isHostFsSealed (#35)", () => {
   });
 });
 
+describe("boundary — isHostFsSealed split-probe AND-semantics (#25)", () => {
+  // The fix in runBoundaryChecks uses TWO independent probes (outUsers, outHost) and requires
+  // BOTH to be sealed (isHostFsSealed(outUsers) && isHostFsSealed(outHost)).
+  // This unit test guards that pure AND-combine so a leak on EITHER path fails the check.
+  // Integration behavior (Docker two-probe split) is live-lane verified.
+
+  it("both sealed => combined AND is true", () => {
+    const outUsers = "ls: /Users: No such file or directory";
+    const outHost = "ls: /host: No such file or directory";
+    expect(isHostFsSealed(outUsers) && isHostFsSealed(outHost)).toBe(true);
+  });
+
+  it("Users leaks (real listing) => AND is false even if /host is sealed", () => {
+    const outUsers = "total 8\ndrwxr-xr-x someone staff";
+    const outHost = "ls: /host: No such file or directory";
+    expect(isHostFsSealed(outUsers) && isHostFsSealed(outHost)).toBe(false);
+  });
+
+  it("/host leaks (real listing) => AND is false even if /Users is sealed", () => {
+    const outUsers = "ls: /Users: No such file or directory";
+    const outHost = "total 8\ndrwxr-xr-x someone staff";
+    expect(isHostFsSealed(outUsers) && isHostFsSealed(outHost)).toBe(false);
+  });
+});
+
 describe("boundary — boundaryAllowList folds in session egress", () => {
   const baseline = loadBaseline("desktop-1.12603.1");
   it("baseline-only when no session is given", () => {

@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
-import { compareBaselineVersions, loadBaseline, resolveAgentBinary } from "../src/baseline.js";
+import { compareBaselineVersions, loadBaseline, resolveAgentBinary, resolveMounts } from "../src/baseline.js";
 import type { PlatformBaseline } from "../src/types.js";
 import { decodeFcacheGates, sync, checkMountModeFacts, checkWebFetchFacts } from "../src/sync/cowork-sync.js";
 
@@ -102,6 +102,18 @@ describe("#39 — decodeFcacheGates (GrowthBook fcache decode, binary-verified f
     const bad = join(dir, "fcache");
     writeFileSync(bad, Buffer.from("NOTCLF and not gzip"));
     expect(decodeFcacheGates(bad)).toBeNull();
+  });
+
+  // bug 71 precondition: a valid CLF fcache whose features contain ONLY non-pinned IDs returns {}
+  // (empty object), NOT null. This is the load-bearing precondition for the sync() else-if guard —
+  // {} is truthy so the !gates branch was silently bypassed, leaving a total GrowthBook re-key invisible.
+  it("returns {} (not null) when the fcache decodes but contains only non-pinned gate IDs", () => {
+    const f = makeFcache({
+      "999999999": { value: true, on: true, off: false, source: "force" }, // not in PINNED_GATES
+    });
+    const result = decodeFcacheGates(f);
+    expect(result).not.toBeNull();
+    expect(result).toEqual({});
   });
 });
 
@@ -203,5 +215,31 @@ describe("resolveAgentBinary newest-sibling fallback", () => {
     const baseline = baselineWith(join(vmRoot, "2.1.999", "claude"));
 
     expect(() => resolveAgentBinary(baseline)).toThrow(/Staged agent binary not found/);
+  });
+});
+
+describe("resolveMounts — mntRoot derivation (bug 65)", () => {
+  const mountLayoutWith = (sessionRoot: string, mntRoot?: string) =>
+    ({
+      mountLayout: { sessionRoot, cwd: sessionRoot, mntRoot, mounts: [] },
+    }) as unknown as PlatformBaseline;
+
+  it("legacy baseline: sessionRoot ending in /mnt + no mntRoot → mntRoot === sessionRoot (no extra /mnt)", () => {
+    const b = mountLayoutWith("/sessions/abc/mnt");
+    const r = resolveMounts(b, "abc");
+    expect(r.mntRoot).toBe("/sessions/abc/mnt");
+    expect(r.configDir).toBe("/sessions/abc/mnt/.claude");
+  });
+
+  it("explicit mntRoot is used verbatim (unaffected baseline)", () => {
+    const b = mountLayoutWith("/sessions/abc", "/sessions/abc/mnt");
+    const r = resolveMounts(b, "abc");
+    expect(r.mntRoot).toBe("/sessions/abc/mnt");
+  });
+
+  it("sessionRoot not ending in /mnt + no mntRoot → sessionRoot + /mnt", () => {
+    const b = mountLayoutWith("/sessions/abc");
+    const r = resolveMounts(b, "abc");
+    expect(r.mntRoot).toBe("/sessions/abc/mnt");
   });
 });

@@ -164,7 +164,10 @@ the terminal is one of:
 - **`LlmDecider`** (CLI `--decider-llm [--intent "…"]`; scenario YAML `on_unanswered: llm`) — per question, a small
   model (host `claude -p`, `COWORK_HARNESS_DECIDER_MODEL`) picks a label; out-of-set → `UnansweredError`
   (loud, no `coerceLabel` fallback). Transport is `claude -p` not a direct `/v1/messages` (the harness
-  process is not behind the egress proxy). The run is flagged `nonDeterministic`.
+  process is not behind the egress proxy); a transient non-zero exit is bounded-retried
+  (`COWORK_HARNESS_LLM_RETRIES`, default 2, clamped 0–10; timeout/byte-overflow/spawn-failure are not
+  retried) and the exit error carries the child's stdout/stderr so the failure is diagnosable. The run is
+  flagged `nonDeterministic`.
 - **`ExternalDecider`** over a `DecisionChannel` (`src/decide/external-channel.ts`) — two transports of
   the SAME wire protocol: **spawn** (`--decider-cmd '<cmd>'` → a `shell:true` helper) and **file
   rendezvous** (`--decider-dir <dir>` → `req-N.json`/`resp-N.json`). For each unscripted decision it emits

@@ -4,7 +4,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadDotenv } from "../src/dotenv.js";
 
-const KEYS = ["CC_TEST_A", "CC_TEST_B", "CC_TEST_QUOTED", "CC_TEST_EXPORT", "CC_TEST_COMMENTHASH"];
+const KEYS = [
+  "CC_TEST_A",
+  "CC_TEST_B",
+  "CC_TEST_QUOTED",
+  "CC_TEST_EXPORT",
+  "CC_TEST_COMMENTHASH",
+  "CC_TEST_QUOTEDCOMMENT",
+  "CC_TEST_QUOTEDCOMMENT_SINGLE",
+];
 afterEach(() => KEYS.forEach((k) => delete process.env[k]));
 
 function envFile(body: string): string {
@@ -45,6 +53,18 @@ describe("loadDotenv", () => {
     const loaded = loadDotenv(envFile("CC_TEST_A=\nCC_TEST_A=real\n"));
     expect(process.env.CC_TEST_A).toBe("real"); // blank line skipped, real value wins
     expect(loaded).toEqual(["CC_TEST_A"]);
+  });
+
+  it("strips a trailing inline comment from a double-quoted value", () => {
+    const f = envFile('CC_TEST_QUOTEDCOMMENT="sk-abc" # a comment\n');
+    loadDotenv(f);
+    expect(process.env.CC_TEST_QUOTEDCOMMENT).toBe("sk-abc");
+  });
+
+  it("strips a trailing inline comment from a single-quoted value", () => {
+    const f = envFile("CC_TEST_QUOTEDCOMMENT_SINGLE='sk-abc' # a comment\n");
+    loadDotenv(f);
+    expect(process.env.CC_TEST_QUOTEDCOMMENT_SINGLE).toBe("sk-abc");
   });
 
   it("returns [] for a missing file", () => {

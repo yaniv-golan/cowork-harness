@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { warn } from "../io.js";
-import { readFileSync, writeFileSync, renameSync, mkdirSync, mkdtempSync, existsSync, readdirSync, statSync } from "node:fs";
+import { readFileSync, writeFileSync, renameSync, mkdirSync, mkdtempSync, existsSync, readdirSync, statSync, rmSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join, dirname, relative, isAbsolute, resolve, sep } from "node:path";
@@ -140,12 +140,15 @@ export interface Cassette {
 // (a dir in a git work tree hashes/delivers only tracked files; non-repo dirs fall back to raw). The
 // `contentSig` algorithm therefore changed → a pre-v6 cassette's `contentSig` is non-comparable, so `rehash`
 // routes pre-v6 cassettes to a re-record (honest "algorithm changed" message, not "content changed").
-export const CASSETTE_VERSION = 6;
+// v7: NUL-byte entry separator in hashDir and computeContentSig (replaces `\n`) to prevent hash collisions
+// for file paths containing newline characters.
+export const CASSETTE_VERSION = 7;
 // The contentSig algorithm version. Bumped whenever computeContentSig's INPUT/encoding changes (the v6
 // unification). `rehash` only byte-compares contentSig within the same algo version; across a bump it
-// re-records. Derived from cassetteVersion: < 6 ⇒ algo 1 (legacy), ≥ 6 ⇒ algo 2 (unified).
-const CONTENTSIG_ALGO = 2;
-const contentSigAlgoOf = (cassetteVersion: number) => (cassetteVersion >= 6 ? 2 : 1);
+// re-records. Derived from cassetteVersion: < 6 ⇒ algo 1 (legacy), ≥ 6 ⇒ algo 2 (unified),
+// ≥ 7 ⇒ algo 3 (NUL-byte separator).
+const CONTENTSIG_ALGO = 3;
+const contentSigAlgoOf = (cassetteVersion: number) => (cassetteVersion >= 7 ? 3 : cassetteVersion >= 6 ? 2 : 1);
 
 /** Canonical URL of the JSON Schema for this cassette format version.
  *  Appears in every written cassette as `$schema` so editors and unfamiliar readers
@@ -404,6 +407,16 @@ export function scanCassette(cassette: Cassette, allow: AllowInput[]): ScanFindi
   const findings: ScanFinding[] = [];
   const FULL = DEFAULT_SCAN_PATTERNS; // email + currency + domain
   const EMAIL = EMAIL_SCAN_PATTERNS; // email only — for the capability-manifest messages
+  // Whole-token allowlist check against an arbitrary string (the artifact PATH), mirroring scan.ts's
+  // `allowed`: an unscoped `--allow` (or one scoped to `cls`) whose regex matches the ENTIRE path
+  // clears the finding. Used to give a committed-but-unscannable binary deliverable a documented
+  // recourse — `--allow <path-regex>` after a manual review — since its body isn't text-matchable (#9).
+  const pathAllowed = (path: string, cls: string): boolean =>
+    allow.some((a) => {
+      const p: AllowPattern = a instanceof RegExp ? { re: a } : a;
+      if (p.cls !== undefined && p.cls !== cls) return false;
+      return new RegExp(`^(?:${p.re.source})$`, p.re.flags.replace("g", "")).test(path);
+    });
   // Transcript: full net EXCEPT the capability-manifest messages (catalog noise), where only email runs.
   cassette.events.forEach((l, i) => findings.push(...scanText(l, `events[${i}]`, allow, isCapabilityManifest(l) ? EMAIL : FULL)));
   cassette.controlOut?.forEach((l, i) => findings.push(...scanText(l, `controlOut[${i}]`, allow, isCapabilityManifest(l) ? EMAIL : FULL)));
@@ -417,8 +430,18 @@ export function scanCassette(cassette: Cassette, allow: AllowInput[]): ScanFindi
         const isText = Buffer.from(asUtf8, "utf8").equals(decoded);
         if (isText) {
           findings.push(...scanText(asUtf8, `artifact ${a.path}`, allow, FULL));
-        } else {
-          findings.push({ where: `artifact ${a.path}`, cls: "unscanned", sample: "(binary body — decoded but not text-scannable)" });
+        } else if (!pathAllowed(a.path, "binary")) {
+          // The body IS committed (base64, ≤ cap) but isn't UTF-8 text, so the scanner can't read it —
+          // yet binary office deliverables (.xlsx/.docx/.pdf) embed customer names/emails in their
+          // zip/DEFLATE streams. Count a COMMITTED binary body as a real finding (cls "binary", NOT the
+          // benign "unscanned" used for a TRUNCATED/uncommitted entry below) so the gate can't greenlight
+          // raw recoverable PII (#9). Recourse: after reviewing the deliverable, clear it with
+          // `--allow <path-regex>` (matched on the artifact path above, since the body is unreadable).
+          findings.push({
+            where: `artifact ${a.path}`,
+            cls: "binary",
+            sample: `(committed binary body — not text-scannable; review and clear with --allow ${a.path})`,
+          });
         }
       } else {
         findings.push(...scanText(a.body, `artifact ${a.path}`, allow, FULL));
@@ -768,10 +791,12 @@ export class CassetteAgentSession implements AgentSession {
         continue;
       }
       // parseMessage → toDecisionRequest THROWS on a malformed control frame (bad request_id /
-      // malformed AskUserQuestion body). On the LIVE path that throw is the right fail-closed behaviour, but
-      // during REPLAY it fires deep inside start() and — re-thrown by replayCassette — aborts the entire
-      // batch (one bad cassette poisons every later file). Catch it per-line, record a typed protocol error
-      // so replayCassette surfaces a failing replay_protocol_fidelity assertion, and CONTINUE.
+      // malformed AskUserQuestion body). On the LIVE path the throw is caught by LiveAgentSession.start()
+      // and surfaced as a typed {type:"error",source:"protocol"} event. On the REPLAY path cassette.start()
+      // calls parseMessage() directly (bypassing that catch), so the throw propagates — re-thrown by
+      // replayCassette — and aborts the entire batch (one bad cassette poisons every later file). Catch it
+      // per-line, record a typed protocol error so replayCassette surfaces a failing
+      // replay_protocol_fidelity assertion, and CONTINUE.
       let parsed: AgentEvent[];
       try {
         parsed = parseMessage(msg);
@@ -934,15 +959,29 @@ export function redactCassette(cassette: Cassette, policy: RedactionPolicy): Cas
   // replay. `redactText` is context-free (same input → same token), so the SAME substring redacts identically
   // in both the root and the path, keeping the prefix relationship intact.
   const redactedRoots = cassette.userVisibleRoots?.map((r) => redactText(r, policy));
-  const redactedArtifacts = cassette.artifacts?.map((a) => ({
-    ...a,
-    path: redactText(a.path, policy), // C1: a filename can name a customer (outputs/Acme-cap-table.json)
+  const redactedArtifacts = cassette.artifacts?.map((a) => {
+    const out: ManifestEntry = { ...a, path: redactText(a.path, policy) }; // C1: a filename can name a customer (outputs/Acme-cap-table.json)
     // a base64 (binary) body has no text PII to redact, and redacting it would corrupt the bytes
     // and then false-fail the replay-time sha256 verify — leave binary bodies untouched.
     // Also skip bodies that are already secret-scrub redaction markers ([REDACTED:*]): rewriting
     // them without recomputing sha256 would produce a misleading "corrupt cassette" error at replay.
-    ...(a.body !== undefined && a.encoding !== "base64" && !a.body.startsWith("[REDACTED") ? { body: redactJsonLine(a.body, policy) } : {}),
-  }));
+    if (a.body !== undefined && a.encoding !== "base64" && !a.body.startsWith("[REDACTED")) {
+      // Redact the body as TEXT, not via redactJsonLine. A deliverable artifact is a plain file with
+      // no replay protocol coupling, and redactText preserves bytes EXACTLY when nothing matches —
+      // redactJsonLine compact-reserializes (JSON.stringify∘JSON.parse), so a pretty-printed or
+      // newline-terminated JSON body changed bytes even on a no-match policy while the spread `...a`
+      // kept the stale sha256, crashing replay's materializeManifest verify (#2/#8).
+      const body = redactText(a.body, policy);
+      if (body !== a.body) {
+        out.body = body;
+        // Recompute sha256 over the redacted utf8 bytes so the replay-time verify passes. When nothing
+        // matched, body === a.body and the spread-in sha256 is still correct — base and redacted stay
+        // byte-identical (no A3 hash-changed-on-a-no-op false-failure).
+        out.sha256 = createHash("sha256").update(Buffer.from(body, "utf8")).digest("hex");
+      }
+    }
+    return out;
+  });
   // Structural consistency check: every redacted artifact path must still map under one of the
   // redacted roots. If a redaction rule rewrote a path but not its containing root (or vice versa), the
   // prefix relationship is broken and replay's user_visible_artifact/materialize would silently mismatch —
@@ -1032,24 +1071,31 @@ export async function assertRedactionVerdictPreserved(base: Cassette, redacted: 
       .map((a) => normalizeMsg(a.message))
       .sort();
 
-  // 3. Artifact SHA-256 hashes for text bodies — compare only non-truncated text-body entries.
-  //    Binary (base64) bodies are excluded since redaction deliberately leaves them unchanged; their
-  //    hash is already protected by the replay-time materializeManifest sha256 verify.
-  const artifactHashes = (cassette: Cassette): string[] =>
+  // 3. INTERNAL sha256 consistency of the REDACTED cassette: every committed body's stored sha256 must
+  //    equal the hash of its actual bytes. A redaction that rewrote a body without recomputing sha256
+  //    (the #2/#8 corruption) makes the redacted cassette throw at replay's materializeManifest verify —
+  //    but that verify only runs when the scenario HAS a file/artifact assertion; without one, a corrupt
+  //    cassette would be written silently. This guard catches it unconditionally, at record.
+  //    (Replaces the old base-vs-redacted `path:sha` compare, which was doubly dead: artifact paths ARE
+  //    redacted so it always benignly "mismatched", and the stale sha256 it compared never reflected the
+  //    rewritten body, so it never caught real corruption.)
+  const bodyShaInconsistent = (cassette: Cassette): string[] =>
     (cassette.artifacts ?? [])
-      .filter((a) => !a.truncated && a.body !== undefined && a.encoding !== "base64" && a.sha256)
-      .map((a) => `${a.path}:${a.sha256}`)
-      .sort();
+      .filter((a) => !a.truncated && a.body !== undefined && a.sha256)
+      .filter((a) => {
+        const raw = a.encoding === "base64" ? Buffer.from(a.body as string, "base64") : Buffer.from(a.body as string, "utf8");
+        return createHash("sha256").update(raw).digest("hex") !== a.sha256;
+      })
+      .map((a) => a.path);
 
-  const baseHashes = artifactHashes(base);
-  const redactedHashes = artifactHashes(redacted);
+  const inconsistentBodies = bodyShaInconsistent(redacted);
 
   const verdictMismatch = vb.pass !== vr.pass;
   const pairsMismatch = basePairs.join("|") !== redactedPairs.join("|");
   const msgsMismatch = failedMsgs(rb).join("|") !== failedMsgs(rr).join("|");
-  const hashesMismatch = baseHashes.join("|") !== redactedHashes.join("|");
+  const bodyShaBroken = inconsistentBodies.length > 0;
 
-  if (verdictMismatch || pairsMismatch || msgsMismatch || hashesMismatch) {
+  if (verdictMismatch || pairsMismatch || msgsMismatch || bodyShaBroken) {
     let detail: string;
     if (verdictMismatch) {
       detail = `pre-redaction pass=${vb.pass} → redacted pass=${vr.pass}`;
@@ -1060,8 +1106,7 @@ export async function assertRedactionVerdictPreserved(base: Cassette, redacted: 
     } else if (msgsMismatch) {
       detail = "failing assertion messages changed unexpectedly after redaction";
     } else {
-      const changed = redactedHashes.filter((h) => !baseHashes.includes(h)).map((h) => h.split(":")[0]);
-      detail = `artifact body hash(es) changed: ${changed.join(", ")}`;
+      detail = `redacted artifact body sha256 no longer matches its bytes (replay would reject as corrupt): ${inconsistentBodies.join(", ")}`;
     }
     throw new Error(
       `cowork-harness: redaction changed assertion failures: ${detail} — redaction altered an ` +
@@ -1686,7 +1731,25 @@ async function recordScenarioObject(
     // whole-field base64 branch only fires when the entire value is a pure base64 blob — ordinary
     // text passes through unchanged. This closes the gap for text artifacts whose content is
     // itself a base64(prefix+TOKEN+suffix) blob (e.g. a .txt file containing an encoded credential).
-    return { ...a, body: scrubField(a.body, secrets) };
+    const scrubbed = scrubField(a.body, secrets);
+    if (scrubbed === a.body) return a;
+    // The body changed (a literal secret was replaced inline, or the whole field was an encoded blob
+    // swapped for a [REDACTED:*] marker). `a.sha256` was computed over the RAW pre-scrub bytes
+    // (buildManifest, ~219), so it is now stale — recompute over the scrubbed utf8 bytes (mirror the
+    // base64 branch above), otherwise replay's materializeManifest verify throws "body does not match
+    // its recorded sha256" (#1/#10). encoding is already undefined on this branch, so the spread keeps it.
+    if (scrubbed === "[REDACTED:base64]" || scrubbed === "[REDACTED:uri]") {
+      // Whole-field marker replacement destroys the deliverable content — artifact_json /
+      // user_visible_artifact assertions on this artifact will fail at replay, exactly like the base64
+      // case above. Warn so the author isn't surprised. (Inline literal scrubs leave the rest of the
+      // body intact, so they stay silent.)
+      warn(
+        `::warning:: record: artifact "${a.path}" contains a secret in whole-field encoded content — ` +
+          `body replaced with redaction marker; artifact_json/user_visible_artifact assertions on this artifact will fail at replay\n`,
+      );
+    }
+    const newSha256 = createHash("sha256").update(Buffer.from(scrubbed, "utf8")).digest("hex");
+    return { ...a, body: scrubbed, sha256: newSha256 };
   });
   // F-9: if an `artifact_json` targets an artifact we had to truncate, it passes here (on-disk) but FAILS
   // replay (no committed body). Surface that record→replay asymmetry NOW, at its cause, instead of letting a
@@ -1899,22 +1962,28 @@ export function cmdVerifyCassettes(args: string[]) {
   const files = resolved.files;
   const results = files.map((f) => {
     const rc = readCassette(f);
-    if ("error" in rc) return { file: f, findings: [], staleness: [], error: rc.error };
+    if ("error" in rc) return { file: f, findings: [], staleness: [], version: [], error: rc.error };
     const findings = doPrivacy ? scanCassette(rc.cassette, allow) : [];
     const staleness = doStaleness ? checkStaleness(rc.cassette, dirname(f)) : [];
-    // a cassette written by a NEWER harness version may carry semantics this version can't
-    // correctly interpret — treat it as a staleness failure in verify-cassettes (can't verify ⇒ not green).
+    // a cassette written by a NEWER harness version may carry semantics this version can't correctly
+    // interpret. This is a FORMAT/version failure, NOT staleness — bucket it under its own `version`
+    // key (#33) so `--skip-staleness` doesn't produce the self-contradiction of coverage.staleness:false
+    // reported alongside a staleness-class ok:false. It is always a hard fail (can't verify ⇒ not green),
+    // independent of the staleness toggle.
     const recordedVersion = rc.cassette.cassetteVersion ?? 0;
-    if (recordedVersion > CASSETTE_VERSION)
-      staleness.push(
-        `cassette format v${recordedVersion} is newer than this harness understands (v${CASSETTE_VERSION}) — upgrade cowork-harness (can't verify ⇒ not green)`,
-      );
-    return { file: f, findings, staleness, error: undefined as string | undefined };
+    const version =
+      recordedVersion > CASSETTE_VERSION
+        ? [
+            `cassette format v${recordedVersion} is newer than this harness understands (v${CASSETTE_VERSION}) — upgrade cowork-harness (can't verify ⇒ not green)`,
+          ]
+        : [];
+    return { file: f, findings, staleness, version, error: undefined as string | undefined };
   });
   const realFindings = results.flatMap((r) => r.findings.filter((x) => x.cls !== "unscanned"));
   const staleAny = results.some((r) => r.staleness.length > 0);
+  const versionAny = results.some((r) => r.version.length > 0);
   const errorAny = results.some((r) => r.error !== undefined);
-  const ok = realFindings.length === 0 && !staleAny && !errorAny;
+  const ok = realFindings.length === 0 && !staleAny && !versionAny && !errorAny;
   const coverage = { privacy: doPrivacy, staleness: doStaleness };
   if (json) {
     out(JSON.stringify({ command: "verify-cassettes", ok, coverage, results }));
@@ -1925,11 +1994,12 @@ export function cmdVerifyCassettes(args: string[]) {
       if (r.error) log(`✗ ${r.file}: [error] ${r.error}`);
       for (const f of r.findings) log(`${f.cls === "unscanned" ? "·" : "✗"} ${r.file}: [${f.cls}] ${f.where} — ${f.sample}`);
       for (const s of r.staleness) log(`✗ ${r.file}: [stale] ${s}`);
+      for (const v of r.version) log(`✗ ${r.file}: [version] ${v}`);
     }
     log(
       ok
         ? `✓ verify-cassettes: ${files.length} cassette(s) clean`
-        : `✗ verify-cassettes: ${realFindings.length} PII finding(s)${staleAny ? " + staleness drift" : ""}${errorAny ? " + unreadable cassette(s)" : ""} across ${files.length} cassette(s)`,
+        : `✗ verify-cassettes: ${realFindings.length} PII finding(s)${staleAny ? " + staleness drift" : ""}${versionAny ? " + version mismatch" : ""}${errorAny ? " + unreadable cassette(s)" : ""} across ${files.length} cassette(s)`,
     );
   }
   return process.exit(ok ? 0 : 1);
@@ -2248,191 +2318,201 @@ export async function replayCassette(
   } = manifestKeys.length
     ? materializeManifest(cassette.artifacts!, cassette.userVisibleRoots ?? ["outputs", ".projects"])
     : { workRoot: "", prefixes: [] as string[], truncatedPaths: new Set<string>() };
-  const contentKeys: (keyof Assertion)[] = [
-    ...(session.hasControlOut ? [...alwaysContentKeys, ...questionGateKeys] : alwaysContentKeys),
-    ...manifestKeys,
-  ];
+  // #32: materializeManifest created a temp dir (`replayWorkRoot`) above; everything below uses it and
+  // then returns. Wrap the rest in try/finally so the temp dir is removed on every exit path (normal
+  // return OR a throw from evaluate/assert building) — otherwise `cwh-replay-*` dirs leak under tmpdir
+  // across repeated replays. `replayWorkRoot` is declared OUTSIDE the try (visible in finally); the
+  // returned object carries no reference into it, so post-return cleanup is safe.
+  try {
+    const contentKeys: (keyof Assertion)[] = [
+      ...(session.hasControlOut ? [...alwaysContentKeys, ...questionGateKeys] : alwaysContentKeys),
+      ...manifestKeys,
+    ];
 
-  // #5: with AND-semantics in check(), we must STRIP each assertion to only its active content keys
-  // before evaluating — otherwise a mixed object (e.g. {question_asked, result} with controlOut
-  // absent, or {transcript_contains, file_exists}) would AND-evaluate a key that cannot be checked
-  // on the replay lane and false-fail. Stripping (rather than a Zod superRefine that bans mixed
-  // objects) keeps each evaluated entry single-replay-class while leaving the live path — where ALL
-  // keys are legitimately checkable — to evaluate the full object. Objects with no active key drop out.
-  const stripToContent = (a: Assertion): Assertion => {
-    const stripped: Assertion = {};
-    for (const k of contentKeys) if (a[k] !== undefined) (stripped as Record<string, unknown>)[k] = a[k];
-    return stripped;
-  };
-  const replayable = cassette.scenario.assert.map(stripToContent).filter((a) => Object.keys(a).length > 0);
+    // #5: with AND-semantics in check(), we must STRIP each assertion to only its active content keys
+    // before evaluating — otherwise a mixed object (e.g. {question_asked, result} with controlOut
+    // absent, or {transcript_contains, file_exists}) would AND-evaluate a key that cannot be checked
+    // on the replay lane and false-fail. Stripping (rather than a Zod superRefine that bans mixed
+    // objects) keeps each evaluated entry single-replay-class while leaving the live path — where ALL
+    // keys are legitimately checkable — to evaluate the full object. Objects with no active key drop out.
+    const stripToContent = (a: Assertion): Assertion => {
+      const stripped: Assertion = {};
+      for (const k of contentKeys) if (a[k] !== undefined) (stripped as Record<string, unknown>)[k] = a[k];
+      return stripped;
+    };
+    const replayable = cassette.scenario.assert.map(stripToContent).filter((a) => Object.keys(a).length > 0);
 
-  // §5 + #1 footgun: replay must be LOUD about anything it can't check, in two distinct classes —
-  // a silent partial false-green is the project's cardinal sin.
-  //  • FULL skip  — an assertion with no evaluated key at all (pure filesystem/egress, or pure
-  //    gate-keys when controlOut is absent) + every `expect_denied` host. Not evaluated on replay.
-  //  • PARTIAL skip — a MIXED assertion whose content half IS evaluated but whose genuine
-  //    filesystem/egress half is silently dropped by stripToContent (e.g. {result, file_exists}).
-  //    Counted separately so a mixed assertion can't green on its content half alone unnoticed.
-  // `contentishKeys` (always-content ∪ question/gate) marks keys that are NEVER filesystem/egress;
-  // a key outside it is genuinely live-only. (Gate keys dropped purely for missing controlOut are
-  // already announced by the controlOut warning above, so they don't count as a PARTIAL drop.)
-  const contentishKeys = new Set<keyof Assertion>([...alwaysContentKeys, ...questionGateKeys, ...manifestKeys]);
-  let fullSkipCount = cassette.scenario.expect_denied?.length ?? 0;
-  let partialSkipCount = 0;
-  for (const a of cassette.scenario.assert) {
-    const defined = (Object.keys(a) as (keyof Assertion)[]).filter((k) => a[k] !== undefined);
-    if (defined.length === 0) continue;
-    const keptContent = defined.some((k) => contentKeys.includes(k));
-    if (!keptContent) {
-      fullSkipCount++; // nothing on this assertion is checkable on replay
-    } else if (defined.some((k) => !contentishKeys.has(k))) {
-      partialSkipCount++; // content half evaluated; a filesystem/egress key was dropped
+    // §5 + #1 footgun: replay must be LOUD about anything it can't check, in two distinct classes —
+    // a silent partial false-green is the project's cardinal sin.
+    //  • FULL skip  — an assertion with no evaluated key at all (pure filesystem/egress, or pure
+    //    gate-keys when controlOut is absent) + every `expect_denied` host. Not evaluated on replay.
+    //  • PARTIAL skip — a MIXED assertion whose content half IS evaluated but whose genuine
+    //    filesystem/egress half is silently dropped by stripToContent (e.g. {result, file_exists}).
+    //    Counted separately so a mixed assertion can't green on its content half alone unnoticed.
+    // `contentishKeys` (always-content ∪ question/gate) marks keys that are NEVER filesystem/egress;
+    // a key outside it is genuinely live-only. (Gate keys dropped purely for missing controlOut are
+    // already announced by the controlOut warning above, so they don't count as a PARTIAL drop.)
+    const contentishKeys = new Set<keyof Assertion>([...alwaysContentKeys, ...questionGateKeys, ...manifestKeys]);
+    let fullSkipCount = cassette.scenario.expect_denied?.length ?? 0;
+    let partialSkipCount = 0;
+    for (const a of cassette.scenario.assert) {
+      const defined = (Object.keys(a) as (keyof Assertion)[]).filter((k) => a[k] !== undefined);
+      if (defined.length === 0) continue;
+      const keptContent = defined.some((k) => contentKeys.includes(k));
+      if (!keptContent) {
+        fullSkipCount++; // nothing on this assertion is checkable on replay
+      } else if (defined.some((k) => !contentishKeys.has(k))) {
+        partialSkipCount++; // content half evaluated; a filesystem/egress key was dropped
+      }
     }
-  }
-  if (fullSkipCount > 0) {
-    warn(
-      `::warning:: [replay] skipped ${fullSkipCount} filesystem/egress/expect_denied assertions (live-only) — not evaluated on replay\n`,
-    );
-  }
-  if (partialSkipCount > 0) {
-    warn(
-      `::warning:: [replay] ${partialSkipCount} mixed assertion(s) had their filesystem/egress half dropped — only the content half was evaluated on replay\n`,
-    );
-  }
+    if (fullSkipCount > 0) {
+      warn(
+        `::warning:: [replay] skipped ${fullSkipCount} filesystem/egress/expect_denied assertions (live-only) — not evaluated on replay\n`,
+      );
+    }
+    if (partialSkipCount > 0) {
+      warn(
+        `::warning:: [replay] ${partialSkipCount} mixed assertion(s) had their filesystem/egress half dropped — only the content half was evaluated on replay\n`,
+      );
+    }
 
-  const assertions = evaluate(replayable, {
-    transcript: rec.transcript,
-    toolsCalled: rec.toolsCalled,
-    subagentTools: rec.subagentTools,
-    egress: [],
-    result: rec.result,
-    workRoot: replayWorkRoot,
-    userVisiblePrefixes: replayPrefixes,
-    outputsDeletes: [],
-    questions: rec.questions,
-    hostPathLeaked: false,
-    selfHealRan: false,
-    subagents: rec.subagents,
-    gateDeliveries: rec.gateDeliveries,
-    toolResultTexts: rec.toolResults.map((r) => r.assertText ?? r.text),
-    truncatedPaths: replayTruncatedPaths,
-  });
-
-  // #1b: under --strict, EVERY staleness finding becomes a failing assertion (non-zero exit), not just a
-  // warning. --fail-on-skill-drift is the narrower gate: only the skill-source classes fail (incl.
-  // `unverifiable-skill` — can't verify skill staleness ⇒ not green), while baseline / format / env-level
-  // findings stay non-failing. `else if` makes --strict the superset when both are passed.
-  const SKILL_DRIFT_CLASSES: ReadonlySet<StalenessFinding["class"]> = new Set(["skill", "shared-root", "unverifiable-skill"]);
-  if (opts.strict)
-    for (const s of staleness)
-      assertions.push({ assertion: {} as Assertion, pass: false, message: `cassette stale (--strict): ${s.message}` });
-  else if (opts.failOnSkillDrift)
-    for (const s of staleness.filter((s) => SKILL_DRIFT_CLASSES.has(s.class)))
-      assertions.push({ assertion: {} as Assertion, pass: false, message: `skill-source drift (--fail-on-skill-drift): ${s.message}` });
-
-  // future cassette version — hard failure under --strict (forward semantics may not be
-  // correctly interpreted here, so a green replay would be a false-green).
-  if (futureVersionMsg && opts.strict)
-    assertions.push({ assertion: {} as Assertion, pass: false, message: `cassette format too new (--strict): ${futureVersionMsg}` });
-
-  // differing duplicate request_ids in control-out are CONTRADICTORY protocol data — an
-  // UNCONDITIONAL cassette-corruption failure (no longer strict-only). --strict stays reserved for
-  // staleness/extra-data, not contradictory protocol data that could replay a corrupt decision history.
-  for (const id of session.duplicateControlOutIds) {
-    assertions.push({
-      assertion: { replay_protocol_fidelity: true },
-      pass: false,
-      message: `control-out.jsonl has duplicate request_id "${id}" with differing bodies — cassette is corrupt; re-record`,
+    const assertions = evaluate(replayable, {
+      transcript: rec.transcript,
+      toolsCalled: rec.toolsCalled,
+      subagentTools: rec.subagentTools,
+      egress: [],
+      result: rec.result,
+      workRoot: replayWorkRoot,
+      userVisiblePrefixes: replayPrefixes,
+      outputsDeletes: [],
+      questions: rec.questions,
+      hostPathLeaked: false,
+      selfHealRan: false,
+      subagents: rec.subagents,
+      gateDeliveries: rec.gateDeliveries,
+      toolResultTexts: rec.toolResults.map((r) => r.assertText ?? r.text),
+      toolResultsTruncated: rec.toolResults.map((r) => r.assertText === undefined),
+      truncatedPaths: replayTruncatedPaths,
     });
-  }
 
-  // a malformed (non-JSON) control-out line is cassette corruption — UNCONDITIONAL failure.
-  // controlOut is part of the replay contract; a corrupt cassette must never green just because the
-  // malformed line happened not to be referenced.
-  for (const idx of session.malformedControlOutLines) {
-    assertions.push({
-      assertion: { replay_protocol_fidelity: true },
-      pass: false,
-      message: `control-out.jsonl line ${idx} is not valid JSON — cassette is corrupt; re-record`,
-    });
-  }
+    // #1b: under --strict, EVERY staleness finding becomes a failing assertion (non-zero exit), not just a
+    // warning. --fail-on-skill-drift is the narrower gate: only the skill-source classes fail (incl.
+    // `unverifiable-skill` — can't verify skill staleness ⇒ not green), while baseline / format / env-level
+    // findings stay non-failing. `else if` makes --strict the superset when both are passed.
+    const SKILL_DRIFT_CLASSES: ReadonlySet<StalenessFinding["class"]> = new Set(["skill", "shared-root", "unverifiable-skill"]);
+    if (opts.strict)
+      for (const s of staleness)
+        assertions.push({ assertion: {} as Assertion, pass: false, message: `cassette stale (--strict): ${s.message}` });
+    else if (opts.failOnSkillDrift)
+      for (const s of staleness.filter((s) => SKILL_DRIFT_CLASSES.has(s.class)))
+        assertions.push({ assertion: {} as Assertion, pass: false, message: `skill-source drift (--fail-on-skill-drift): ${s.message}` });
 
-  // malformed event lines — always surface as a replay_protocol_error result (non-zero exit
-  // in strict; a warning-level result that still appears in output in non-strict). A malformed line
-  // could conceal a failed assertion (false-green risk), so it is never silently swallowed.
-  for (const idx of session.malformedEventLines) {
-    assertions.push({
-      assertion: { replay_protocol_fidelity: true },
-      pass: false,
-      message: `cassette events line ${idx} is not valid JSON — replay_protocol_error (malformed line may conceal a failed assertion)`,
-    });
-  }
+    // future cassette version — hard failure under --strict (forward semantics may not be
+    // correctly interpreted here, so a green replay would be a false-green).
+    if (futureVersionMsg && opts.strict)
+      assertions.push({ assertion: {} as Assertion, pass: false, message: `cassette format too new (--strict): ${futureVersionMsg}` });
 
-  // a per-line PROTOCOL validation failure (valid JSON but a malformed control frame — bad
-  // request_id / malformed AskUserQuestion body) is an unconditional replay_protocol_fidelity failure.
-  // Caught per-line in start() so a single corrupt cassette can't abort the batch (see cmdReplay's
-  // per-file try/catch); surfaced here as a failing assertion (fail-closed, not strict-gated).
-  for (const pe of session.protocolErrorLines) {
-    assertions.push({
-      assertion: { replay_protocol_fidelity: true },
-      pass: false,
-      message: `cassette events line ${pe.line} is a malformed control frame — ${pe.message}`,
-    });
-  }
+    // differing duplicate request_ids in control-out are CONTRADICTORY protocol data — an
+    // UNCONDITIONAL cassette-corruption failure (no longer strict-only). --strict stays reserved for
+    // staleness/extra-data, not contradictory protocol data that could replay a corrupt decision history.
+    for (const id of session.duplicateControlOutIds) {
+      assertions.push({
+        assertion: { replay_protocol_fidelity: true },
+        pass: false,
+        message: `control-out.jsonl has duplicate request_id "${id}" with differing bodies — cassette is corrupt; re-record`,
+      });
+    }
 
-  // §2.4: surface each serializeDecision mismatch as a failing replay_protocol_fidelity assertion.
-  // Shape: { assertion: { replay_protocol_fidelity: true }, pass: false, message } — well-typed via types.ts.
-  for (const m of session.mismatches) {
-    assertions.push({
-      assertion: { replay_protocol_fidelity: true },
-      pass: false,
-      message: `serializeDecision output for ${m.id} != recorded envelope: expected ${m.expected} got ${m.actual}`,
-    });
-  }
+    // a malformed (non-JSON) control-out line is cassette corruption — UNCONDITIONAL failure.
+    // controlOut is part of the replay contract; a corrupt cassette must never green just because the
+    // malformed line happened not to be referenced.
+    for (const idx of session.malformedControlOutLines) {
+      assertions.push({
+        assertion: { replay_protocol_fidelity: true },
+        pass: false,
+        message: `control-out.jsonl line ${idx} is not valid JSON — cassette is corrupt; re-record`,
+      });
+    }
 
-  // #18/#4: a decision present in events.jsonl with NO matching control_response in a full-fidelity
-  // cassette is a truncated recording — fail loud rather than letting a recorded allow replay as a
-  // silent abstain→deny. (Questions with a missing entry already throw UnansweredError upstream.)
-  for (const id of session.missingControlOut) {
-    assertions.push({
-      assertion: { replay_protocol_fidelity: true },
-      pass: false,
-      message: `decision ${id} present in events.jsonl has no matching control_response in control-out.jsonl — cassette is truncated; re-record`,
-    });
-  }
+    // malformed event lines — always surface as a replay_protocol_error result (non-zero exit
+    // in strict; a warning-level result that still appears in output in non-strict). A malformed line
+    // could conceal a failed assertion (false-green risk), so it is never silently swallowed.
+    for (const idx of session.malformedEventLines) {
+      assertions.push({
+        assertion: { replay_protocol_fidelity: true },
+        pass: false,
+        message: `cassette events line ${idx} is not valid JSON — replay_protocol_error (malformed line may conceal a failed assertion)`,
+      });
+    }
 
-  // A truncated QUESTION (no recorded answer) surfaces here too — same exit-1 class as the permission case.
-  if (truncatedMsg) {
-    assertions.push({ assertion: { replay_protocol_fidelity: true }, pass: false, message: truncatedMsg });
-  }
+    // a per-line PROTOCOL validation failure (valid JSON but a malformed control frame — bad
+    // request_id / malformed AskUserQuestion body) is an unconditional replay_protocol_fidelity failure.
+    // Caught per-line in start() so a single corrupt cassette can't abort the batch (see cmdReplay's
+    // per-file try/catch); surfaced here as a failing assertion (fail-closed, not strict-gated).
+    for (const pe of session.protocolErrorLines) {
+      assertions.push({
+        assertion: { replay_protocol_fidelity: true },
+        pass: false,
+        message: `cassette events line ${pe.line} is a malformed control frame — ${pe.message}`,
+      });
+    }
 
-  return {
-    scenario: cassette.scenario.name,
-    fidelity: `replay:${cassette.scenario.fidelity}`,
-    // The tier the LIVE run actually used (cowork → hostloop/container); falls back to authored fidelity
-    // for an older cassette that didn't record it.
-    effectiveFidelity: `replay:${cassette.effectiveFidelity ?? cassette.scenario.fidelity}`,
-    baseline: cassette.scenario.baseline,
-    result: rec.result,
-    resultErrorKind: rec.resultErrorKind, // Fix 5: re-derived by run.ts during the replay re-drive (same classifier)
-    stalledOnQuestion: rec.stalledOnQuestion, // H2: re-derived by run.ts's detector during the replay re-drive — so a recorded stall fails replay too
-    decisions: rec.decisions.map((d) => ({ kind: d.kind, name: d.name, decision: d.decision, by: d.by })),
-    toolCounts: rec.toolCounts,
-    gateDeliveries: rec.gateDeliveries,
-    egress: [],
-    assertions,
-    subagents: rec.subagents,
-    unanswered: rec.unanswered,
-    outDir: "(replay)",
-    // Class-tagged staleness + skip counts, surfaced to JSON callers (the gate decision already happened
-    // above via failing assertions; these fields are pure data so a green stays green by default).
-    staleness: staleness.length ? staleness : undefined,
-    skippedAssertions: { full: fullSkipCount, partial: partialSkipCount },
-    // A cassette freezes the answer path: the replay itself is deterministic regardless of how the
-    // original run was answered. Always explicit (never undefined) so renderer.ts:146 treats it
-    // correctly — undefined would silently render as "deterministic" (#47 C1 [review-2]).
-    nonDeterministic: false,
-  };
+    // §2.4: surface each serializeDecision mismatch as a failing replay_protocol_fidelity assertion.
+    // Shape: { assertion: { replay_protocol_fidelity: true }, pass: false, message } — well-typed via types.ts.
+    for (const m of session.mismatches) {
+      assertions.push({
+        assertion: { replay_protocol_fidelity: true },
+        pass: false,
+        message: `serializeDecision output for ${m.id} != recorded envelope: expected ${m.expected} got ${m.actual}`,
+      });
+    }
+
+    // #18/#4: a decision present in events.jsonl with NO matching control_response in a full-fidelity
+    // cassette is a truncated recording — fail loud rather than letting a recorded allow replay as a
+    // silent abstain→deny. (Questions with a missing entry already throw UnansweredError upstream.)
+    for (const id of session.missingControlOut) {
+      assertions.push({
+        assertion: { replay_protocol_fidelity: true },
+        pass: false,
+        message: `decision ${id} present in events.jsonl has no matching control_response in control-out.jsonl — cassette is truncated; re-record`,
+      });
+    }
+
+    // A truncated QUESTION (no recorded answer) surfaces here too — same exit-1 class as the permission case.
+    if (truncatedMsg) {
+      assertions.push({ assertion: { replay_protocol_fidelity: true }, pass: false, message: truncatedMsg });
+    }
+
+    return {
+      scenario: cassette.scenario.name,
+      fidelity: `replay:${cassette.scenario.fidelity}`,
+      // The tier the LIVE run actually used (cowork → hostloop/container); falls back to authored fidelity
+      // for an older cassette that didn't record it.
+      effectiveFidelity: `replay:${cassette.effectiveFidelity ?? cassette.scenario.fidelity}`,
+      baseline: cassette.scenario.baseline,
+      result: rec.result,
+      resultErrorKind: rec.resultErrorKind, // Fix 5: re-derived by run.ts during the replay re-drive (same classifier)
+      stalledOnQuestion: rec.stalledOnQuestion, // H2: re-derived by run.ts's detector during the replay re-drive — so a recorded stall fails replay too
+      decisions: rec.decisions.map((d) => ({ kind: d.kind, name: d.name, decision: d.decision, by: d.by })),
+      toolCounts: rec.toolCounts,
+      gateDeliveries: rec.gateDeliveries,
+      egress: [],
+      assertions,
+      subagents: rec.subagents,
+      unanswered: rec.unanswered,
+      outDir: "(replay)",
+      // Class-tagged staleness + skip counts, surfaced to JSON callers (the gate decision already happened
+      // above via failing assertions; these fields are pure data so a green stays green by default).
+      staleness: staleness.length ? staleness : undefined,
+      skippedAssertions: { full: fullSkipCount, partial: partialSkipCount },
+      // A cassette freezes the answer path: the replay itself is deterministic regardless of how the
+      // original run was answered. Always explicit (never undefined) so renderer.ts:146 treats it
+      // correctly — undefined would silently render as "deterministic" (#47 C1 [review-2]).
+      nonDeterministic: false,
+    };
+  } finally {
+    if (replayWorkRoot) rmSync(replayWorkRoot, { recursive: true, force: true });
+  }
 }
 
 function safeLines(path: string): string[] {

@@ -2,16 +2,16 @@ import { spawnSync } from "node:child_process";
 import { relative, sep } from "node:path";
 
 /**
- * Git-tracked file-set resolver (staleness redesign, Phase C — gated, default-OFF).
+ * Git-tracked file-set resolver (staleness redesign, Phase C — default-ON).
  *
  * The durable boundary for "what is a skill" is the **git-tracked** set: files committed/staged in the repo,
  * which is exactly what ships to other consumers and to real Cowork. Untracked files (OS-junk, build outputs,
  * scratch, not-yet-`git add`-ed) are excluded — eliminating the H9 drift class at the source.
  *
  * SAFETY (Finding 5): excluding untracked files from the HASH is only safe if every DELIVERY path also
- * excludes them (else a delivered-but-unhashed file is a false-negative). So this is gated behind
- * COWORK_HARNESS_GITSET=1, and the SAME resolver feeds both the hash (skill-hash.ts) and the mount-copy
- * filters (session.ts / stage.ts / protocol.ts). Default-off ⇒ raw behavior, zero change.
+ * excludes them (else a delivered-but-unhashed file is a false-negative). So the SAME resolver feeds both
+ * the hash (skill-hash.ts) and the mount-copy filters (session.ts / stage.ts / protocol.ts).
+ * Enabled by default; opt out with COWORK_HARNESS_GITSET=0.
  */
 export const GITSET_ENV = "COWORK_HARNESS_GITSET";
 

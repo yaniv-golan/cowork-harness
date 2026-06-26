@@ -38,7 +38,7 @@ Use a live `run` for filesystem/egress assertions; use `replay` for the token-fr
     { "path": "outputs/x.json", "bytes": 24, "sha256": "…", "body": "{…}" }, // body inlined ≤ 64 KiB
     { "path": "outputs/big.bin", "bytes": 9e6, "sha256": "…", "truncated": true } // oversized → hash-only
   ],
-  "fingerprint": { "baseline": "1.15200.0", "skillHash": "…", "mode": "git", "contentSig": "…", "fileSigs": [["skills/x/SKILL.md", "…"]], "skillSources": ["…"] }, // staleness tripwire (v5 manifest: fileSigs; v6: mode + git default)
+  "fingerprint": { "baseline": "1.15200.0", "skillHash": "…", "mode": "git", "contentSig": "…", "fileSigs": [["skills/x/SKILL.md", "…"]], "skillSources": ["…"] }, // staleness tripwire (v5: fileSigs only; v6: mode + git default; v7: NUL-delimited hash entries)
   "authoring": { "nonDeterministic": true, "channel": "decider-dir" } // present ONLY when a live decider answered ≥1 gate (see §Answering gates during recording); re-record may drift, replay is still deterministic
 }
 ```
@@ -326,7 +326,9 @@ possible.
 
 `verify-cassettes` reports these staleness causes:
 - **`recorded under an older hash format (vN → vM)`** — format upgrade; re-record once and the message
-  goes away. (Cassettes recorded before format **v6** all need one re-record — see the boundary note below.)
+  goes away. (Cassettes recorded before format **v6** all need one re-record — see the boundary note below.
+  Cassettes recorded at **v6** need one re-record after upgrading to the v7 format, which switched the
+  hash-entry delimiter from `\n` to `\0`.)
 - **`skill files changed since record — N changed (path, …)`** — the **exact** changed/added/removed file(s),
   from the per-file manifest (`fileSigs`). For a scoped cassette the drift is attributed **per bucket** by the
   actual changed paths: a `shared root changed (scope: skills/x) [N changed (…)]` message for shared-dependency

@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir, userInfo, homedir } from "node:os";
 import { join } from "node:path";
 import type { PlatformBaseline } from "./types.js";
@@ -48,7 +48,8 @@ export function runBoundaryChecks(baseline: PlatformBaseline, session?: Boundary
   // Stand up the real per-run boundary (internal network + allowlist proxy), exactly
   // what a container-fidelity scenario uses. Tear it down at the end.
   const runId = `bchk${process.hrtime.bigint().toString(36)}`;
-  const sidecar = startEgressSidecar(boundaryAllowList(baseline, session), mkdtempSync(join(tmpdir(), "cowork-bchk-")), runId);
+  const tmpDir = mkdtempSync(join(tmpdir(), "cowork-bchk-"));
+  const sidecar = startEgressSidecar(boundaryAllowList(baseline, session), tmpDir, runId);
   const network = sidecar.network;
   const proxy = sidecar.proxyUrl;
 
@@ -76,15 +77,20 @@ export function runBoundaryChecks(baseline: PlatformBaseline, session?: Boundary
       );
 
     // 1. Host filesystem is NOT visible (no /Users, no host home bind).
+    // TWO independent probes so a leak on EITHER path fails the check — a combined-string
+    // probe can false-pass when one path leaks (real listing) but the other path's denial
+    // substring satisfies isHostFsSealed's `denied` regex on the joined output.
     {
-      const r = probe(`ls /Users 2>&1 || true; ls /host 2>&1 || true`);
-      const out = (r.stdout ?? "") + (r.stderr ?? "");
-      const blocked = isHostFsSealed(out);
+      const combine = (r: ReturnType<typeof probe>) => (r.stdout ?? "") + (r.stderr ?? "");
+      const outUsers = combine(probe("ls /Users 2>&1 || true"));
+      const outHost = combine(probe("ls /host 2>&1 || true"));
+      const blocked = isHostFsSealed(outUsers) && isHostFsSealed(outHost);
+      const detail = (outUsers + "\n" + outHost).trim().slice(0, 200);
       results.push({
         check: "host-fs-sealed",
         expectation: "host paths (/Users, /host) invisible",
         pass: blocked,
-        detail: out.trim().slice(0, 200),
+        detail,
       });
     }
 
@@ -127,6 +133,11 @@ export function runBoundaryChecks(baseline: PlatformBaseline, session?: Boundary
     return results;
   } finally {
     sidecar.teardown();
+    try {
+      rmSync(tmpDir, { recursive: true, force: true });
+    } catch {
+      /* best-effort: bind-mounted log may be root-owned on Linux */
+    }
   }
 }
 

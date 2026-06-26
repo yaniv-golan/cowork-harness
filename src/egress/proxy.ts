@@ -1,7 +1,7 @@
 import http from "node:http";
 import net from "node:net";
 import { appendFileSync } from "node:fs";
-import { validateBareDomain } from "../boundary-paths.js";
+import { validateBareDomain, normalizeHost } from "../boundary-paths.js";
 
 /**
  * Default-deny forward proxy reproducing Cowork's compiled allowlist behavior.
@@ -23,10 +23,12 @@ export interface ProxyOptions {
  *  on a listen error (e.g. EADDRINUSE) instead of crashing the process via an uncaught server error. */
 export interface EgressProxy extends http.Server {
   ready: Promise<void>;
+  actualPort: number;
 }
 
-/** Allocate a free TCP port by binding an ephemeral listener and releasing it. Used to give each microVM
- *  run its own host proxy port so concurrent runs can't collide on a fixed default. */
+/** Bind an ephemeral port, read it back, and immediately close — returns a port number that was
+ *  free at that instant. Useful in tests to get a "dead" upstream port (nothing listening) so the
+ *  proxy can be driven to a 502. NOT used in production proxy startup (use port:0 → actualPort). */
 export function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const srv = net.createServer();
@@ -46,7 +48,7 @@ export function startEgressProxy(opts: ProxyOptions): EgressProxy {
   };
 
   const server = http.createServer((req, res) => {
-    const host = hostOf(req.url ?? "", req.headers.host).toLowerCase();
+    const host = normalizeHost(hostOf(req.url ?? "", req.headers.host));
     if (!allow(host)) {
       log(host, "deny");
       res.writeHead(403, { "content-type": "text/plain" });
@@ -74,13 +76,19 @@ export function startEgressProxy(opts: ProxyOptions): EgressProxy {
       (proxyRes) => {
         log(host, "allow");
         res.writeHead(proxyRes.statusCode ?? 502, proxyRes.headers);
+        proxyRes.on("error", () => res.end());
         proxyRes.pipe(res);
       },
     );
     proxyReq.on("error", () => {
-      res.writeHead(502);
-      res.end("upstream error");
+      if (!res.headersSent) {
+        res.writeHead(502);
+        res.end("upstream error");
+      } else {
+        res.end();
+      }
     });
+    res.on("error", () => {});
     req.pipe(proxyReq);
   });
 
@@ -93,8 +101,9 @@ export function startEgressProxy(opts: ProxyOptions): EgressProxy {
     // host/port — a bare `split(":")` reads `[` as the host and `2001` as the port. The
     // matcher lowercases, so DNS-case variants of the SNI host match the allowlist too.
     const { host, port } = parseAuthority(req.url ?? "");
-    if (!allow(host)) {
-      log(host, "deny");
+    const normalizedHost = normalizeHost(host);
+    if (!allow(normalizedHost)) {
+      log(normalizedHost, "deny");
       clientSocket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
       clientSocket.end();
       return;
@@ -103,12 +112,16 @@ export function startEgressProxy(opts: ProxyOptions): EgressProxy {
     // host passed the allowlist — otherwise `egress_allowed` false-passes when the connect fails
     // and nothing reached the host. The deny path above is unchanged.
     const upstream = net.connect(port, host, () => {
-      log(host, "allow");
+      log(normalizedHost, "allow");
       clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
       upstream.write(head);
       upstream.pipe(clientSocket);
       clientSocket.pipe(upstream);
+      clientSocket.on("close", () => upstream.destroy());
+      upstream.on("close", () => clientSocket.destroy());
     });
+    // covers client close during the connect handshake (before the callback fires); destroy is idempotent
+    clientSocket.on("close", () => upstream.destroy());
     upstream.on("error", () => clientSocket.destroy());
   });
 
@@ -134,10 +147,15 @@ export function startEgressProxy(opts: ProxyOptions): EgressProxy {
   // `ready` rather than an uncaught server error that crashes the process; callers `await proxy.ready`
   // before routing traffic so the agent never starts before the socket is accepting.
   const ready = new Promise<void>((resolve, reject) => {
-    server.once("listening", () => resolve());
+    server.once("listening", () => {
+      (server as EgressProxy).actualPort = (server.address() as net.AddressInfo).port;
+      resolve();
+    });
     server.once("error", reject);
   });
-  server.listen(opts.port ?? 8080);
+  // port 0 → OS assigns an ephemeral port; actualPort is populated on "listening" above.
+  // Dockerfile.proxy passes an explicit port via PORT env; execute.ts passes 0 for the microVM path.
+  server.listen(opts.port ?? 0);
   (server as EgressProxy).ready = ready;
   return server as EgressProxy;
 }
@@ -156,11 +174,11 @@ export function compile(patterns: string[]): (host: string) => boolean {
     const v = validateBareDomain(p0);
     if (v.kind === "all") return () => true; // unrestricted
     if (v.kind === "suffix")
-      suffixes.push(v.value); // ".claude.ai"
-    else exact.add(v.value);
+      suffixes.push(normalizeHost(v.value)); // ".claude.ai" — normalizeHost strips trailing dot
+    else exact.add(normalizeHost(v.value));
   }
   return (host: string) => {
-    const h = host.toLowerCase();
+    const h = normalizeHost(host);
     return exact.has(h) || suffixes.some((s) => h.endsWith(s));
   };
 }
@@ -185,9 +203,9 @@ function hostOf(url: string, hostHeader?: string): string {
 function parseAuthority(authority: string): { host: string; port: number } {
   try {
     const u = new URL("http://" + authority);
-    const host = u.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+    const host = normalizeHost(u.hostname.replace(/^\[|\]$/g, ""));
     return { host, port: u.port ? Number(u.port) : 443 };
   } catch {
-    return { host: authority.split(":")[0].toLowerCase(), port: 443 };
+    return { host: normalizeHost(authority.split(":")[0]), port: 443 };
   }
 }

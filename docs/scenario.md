@@ -116,6 +116,13 @@ the CLI's `--decider-llm`). It is **non-deterministic** by construction, so a ru
 `nonDeterministic` in the record — keep it out of deterministic CI regressions; prefer scripted answers +
 `fail` there. See the determinism note above and the decider flags in the [README](../README.md).
 
+> **For large unattended batches, script the stable gates.** A pure live decider re-asks a small model
+> once per gate; across a back-to-back batch that is more wall-clock, more paid calls, and more exposure to
+> a transient `claude -p` exit (now bounded-retried, but not free). For unattended multi-doc completion
+> prefer scripted `--answer` / `--answer-policy` on the gates you can name (a stronger `--decider-model`
+> only for the genuinely ambiguous *judgment* gates), and keep `--decider-llm` for exploration. The partial
+> run on a stall already echoes the gate + numbered options — paste them straight into `--answer`.
+
 > **Where scripted answers hold up — and where they don't.** The `when_question` regex absorbs *wording*
 > drift (an LLM phrases "confirm the stage" many ways), so scripting is robust for skills whose gates are
 > structurally stable (the gate reliably appears). It does NOT cover *structural* stochasticity — a skill
@@ -325,6 +332,10 @@ The three states are **distinct**: `absent` (the final key is missing from a par
 `is_null` (present but JSON `null`) vs an **unresolved intermediate** segment (the artifact is malformed for
 that path) — which **fails loud**, never a vacuous pass. (No JSONPath/jq — a dotted path keeps it
 dependency-free and side-effect-free.)
+
+> **`is_null: false` requires the path to be present.** If the path is absent, `is_null: false` fails loud
+> (rather than vacuously passing). To assert "exists and is not null" write `exists: true` on one line and
+> `is_null: false` on another. Use `absent: true` to assert the key does not exist at all.
 
 > **Stable vs brittle asserts on stochastic (LLM-extracted) values.** A cassette freezes ONE stochastic
 > output, so an `equals` on an LLM-extracted string will churn every time you re-record. Prefer **stable**

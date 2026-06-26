@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { hashSkillDirs, hashSharedOnly } from "../src/run/skill-hash.js";
-import { buildFingerprint, checkStaleness, type Cassette } from "../src/run/cassette.js";
+import { buildFingerprint, checkStaleness, CASSETTE_VERSION, type Cassette } from "../src/run/cassette.js";
 import { loadBaseline } from "../src/baseline.js";
 
 // Dynamic so a baseline bump keeps the green round-trip stable (checkStaleness compares the record's
@@ -136,5 +136,81 @@ describe("agentScope fingerprint marker (migration)", () => {
     process.env.COWORK_HARNESS_AGENT_SCOPE = "skill";
     const fp = buildFingerprint(session, LIVE_BASELINE, root, ["cap-table"]);
     expect(checkStaleness(cassetteFor(fp), root)).toEqual([]);
+  });
+});
+
+describe("bug 50 — directory agents/<name> is attributed without extension strip", () => {
+  function pluginWithDirAgent(): string {
+    const root = mkdtempSync(join(tmpdir(), "as-dir-"));
+    for (const s of ["cap-table.v2", "other"]) {
+      mkdirSync(join(root, "skills", s), { recursive: true });
+      writeFileSync(join(root, "skills", s, "SKILL.md"), `# ${s}\n`);
+    }
+    mkdirSync(join(root, "agents", "cap-table.v2"), { recursive: true });
+    writeFileSync(join(root, "agents", "cap-table.v2", "system.md"), "agent v1\n");
+    mkdirSync(join(root, "agents", "other"), { recursive: true });
+    writeFileSync(join(root, "agents", "other", "system.md"), "other agent v1\n");
+    return root;
+  }
+
+  afterEach(() => {
+    delete process.env.COWORK_HARNESS_AGENT_SCOPE;
+  });
+
+  it("with scoping ON, editing agents/cap-table.v2/ re-stales only cap-table.v2 scope, not other", () => {
+    process.env.COWORK_HARNESS_AGENT_SCOPE = "skill";
+    const a = pluginWithDirAgent();
+    const b = pluginWithDirAgent();
+    writeFileSync(join(b, "agents", "cap-table.v2", "system.md"), "agent v2\n");
+    const hashA_ct = hashSkillDirs([a], ["cap-table.v2"]).hash;
+    const hashB_ct = hashSkillDirs([b], ["cap-table.v2"]).hash;
+    const hashA_other = hashSkillDirs([a], ["other"]).hash;
+    const hashB_other = hashSkillDirs([b], ["other"]).hash;
+    expect(hashA_ct).not.toBe(hashB_ct); // cap-table.v2 scope detects the change
+    expect(hashA_other).toBe(hashB_other); // other scope is unaffected
+  });
+
+  it("a FILE agents/cap-table.md still maps to cap-table (no regression)", () => {
+    process.env.COWORK_HARNESS_AGENT_SCOPE = "skill";
+    const root = mkdtempSync(join(tmpdir(), "as-file-"));
+    mkdirSync(join(root, "skills", "cap-table"), { recursive: true });
+    writeFileSync(join(root, "skills", "cap-table", "SKILL.md"), "# cap-table\n");
+    mkdirSync(join(root, "agents"), { recursive: true });
+    writeFileSync(join(root, "agents", "cap-table.md"), "v1\n");
+
+    const a = root;
+    const b = mkdtempSync(join(tmpdir(), "as-file-b-"));
+    mkdirSync(join(b, "skills", "cap-table"), { recursive: true });
+    writeFileSync(join(b, "skills", "cap-table", "SKILL.md"), "# cap-table\n");
+    mkdirSync(join(b, "agents"), { recursive: true });
+    writeFileSync(join(b, "agents", "cap-table.md"), "v2\n");
+
+    const hashA = hashSkillDirs([a], ["cap-table"]).hash;
+    const hashB = hashSkillDirs([b], ["cap-table"]).hash;
+    expect(hashA).not.toBe(hashB); // file agent still scoped to cap-table
+  });
+});
+
+describe("bug 51 — v6 cassette with skillHash mismatch reports older-format message", () => {
+  it("a v6 cassette with a mismatched skillHash surfaces the older-hash-format message, not content-changed", () => {
+    const { root, session } = (() => {
+      const r = mkdtempSync(join(tmpdir(), "v6-mig-"));
+      const plugin = join(r, "plugin");
+      mkdirSync(join(plugin, "skills", "cap-table"), { recursive: true });
+      writeFileSync(join(plugin, "skills", "cap-table", "SKILL.md"), "# cap-table\n");
+      const s = join(r, "session.yaml");
+      writeFileSync(s, "skills:\n  local: [./plugin]\n");
+      return { root: r, session: s };
+    })();
+    // Build a live fingerprint (v7 algo), then wrap it in a v6 cassette to simulate a pre-upgrade cassette.
+    const liveFp = buildFingerprint(session, LIVE_BASELINE, root, ["cap-table"]);
+    const v6Cassette: Cassette = {
+      fingerprint: { ...liveFp, skillHash: "deadbeef00000000" }, // mismatched to trigger drift
+      cassetteVersion: 6, // one version behind
+      scenario: { session: "session.yaml", skills: ["cap-table"], name: "t" },
+    } as unknown as Cassette;
+    const msgs = checkStaleness(v6Cassette, root);
+    // Must say "older hash format" referencing v6 → current, NOT "content changed"
+    expect(msgs.join(" ")).toMatch(new RegExp("older hash format.*v6.*v" + String(CASSETTE_VERSION)));
   });
 });

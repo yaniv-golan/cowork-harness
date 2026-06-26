@@ -157,23 +157,27 @@ export class ScriptedDecider implements Decider {
         // #49: validate EACH chosen label against the offered options and deliver the CANONICAL label(s).
         // A member matching no option is a silent false-green (the run would record an impossible answer) —
         // fail loud, symmetric with the external/LLM terminals.
-        const resolved = picks.map((p) => {
-          // scriptedPrefix=true: enable the opt-in author-anchor tier (a stable partial `choose:` that rides
-          // LLM-authored label drift), uniqueness-guarded; only the scripted path gets it.
-          const coerced = coerceLabel(p, labels, true, true);
-          if (!coerced.matched) {
-            const near = nearestLabel(p, labels);
-            throw new UnansweredError(
-              `scripted answer "${p}" for "${text}" matched no offered option`,
-              `valid labels: ${labels.map((l) => JSON.stringify(l)).join(", ")}` + (near ? ` — closest: ${JSON.stringify(near)}` : ""),
-            );
-          }
-          return coerced.value;
-        });
+        const resolved = dedupeFirstSeen(
+          picks.map((p) => {
+            warnNumericLabelCollision(p, labels, JSON.stringify(text));
+            // scriptedPrefix=true: enable the opt-in author-anchor tier (a stable partial `choose:` that rides
+            // LLM-authored label drift), uniqueness-guarded; only the scripted path gets it.
+            const coerced = coerceLabel(p, labels, true, true);
+            if (!coerced.matched) {
+              const near = nearestLabel(p, labels);
+              throw new UnansweredError(
+                `scripted answer "${p}" for "${text}" matched no offered option`,
+                `valid labels: ${labels.map((l) => JSON.stringify(l)).join(", ")}` + (near ? ` — closest: ${JSON.stringify(near)}` : ""),
+              );
+            }
+            return coerced.value;
+          }),
+        );
         // MULTISELECT comma-in-label hazard: the wire joins members with ", " WITHOUT escaping (binary-
         // verified), so a member label that itself contains a comma can't be unambiguously round-tripped.
         // This is a Cowork limitation, not ours — but silently joining it is a false-green, so warn loud.
-        if (picks.length > 1) {
+        // Gate on the DEDUPED resolved set: a selection collapsing to one member has no inter-member join.
+        if (resolved.length > 1) {
           const commaLabel = resolved.find((l) => l.includes(","));
           if (commaLabel)
             warn(
@@ -261,7 +265,10 @@ export class FailDecider implements Decider {
       const lines = req.questions.map((q) => {
         const text = q.question ?? q.header ?? "";
         const opts = q.options.map((o) => o.label).join(" | ");
-        return `  • "${text}"  options: ${opts}\n    add: --answer "${escapeRx(text).slice(0, 40)}=<choice>"`;
+        // Slice the raw text FIRST, then escape — escaping first and slicing at a fixed index can sever an
+        // escape pair (a special char's `\` lands at index 39, the char drops) leaving a dangling trailing
+        // `\` that makes the suggested `--answer` regex uncompilable. Slicing the source makes that impossible.
+        return `  • "${text}"  options: ${opts}\n    add: --answer "${escapeRx(text.slice(0, 40))}=<choice>"`;
       });
       throw new UnansweredError(`unscripted AskUserQuestion (on_unanswered=fail):\n${lines.join("\n")}`, lines.join("\n"));
     }
@@ -435,6 +442,11 @@ export class LlmDecider implements Decider {
     private complete: Complete,
     private intent?: string,
     private model: string = process.env.COWORK_HARNESS_DECIDER_MODEL || "claude-haiku-4-5-20251001",
+    // #62: the default transport spawns `claude -p <prompt>` with the prompt as ARGV (process-table visible).
+    // The prompt embeds an unscrubbed transcript tail, so without these a tracked secret in the last ~1000
+    // chars lands in `ps`/`/proc/<pid>/cmdline`. Scrub the prompt at each complete() call — symmetric with
+    // ExternalDecider, which scrubs its serialized request before it leaves the process.
+    private secrets: string[] = [],
   ) {}
 
   async decide(req: DecisionRequest, ctx?: RunContext): Promise<Decision | Abstain> {
@@ -443,7 +455,7 @@ export class LlmDecider implements Decider {
     if (req.kind === "permission") {
       if (!req.options) return ABSTAIN;
       const labels = req.options.map((o) => o.label);
-      const raw = await this.complete(this.permPrompt(req, ctx), this.model);
+      const raw = await this.complete(scrub(this.permPrompt(req, ctx), this.secrets), this.model);
       const pick = matchLabel(raw, labels);
       if (!pick)
         throw new UnansweredError(
@@ -476,7 +488,7 @@ export class LlmDecider implements Decider {
       // the pinned AskUserQuestion path) — symmetric with ScriptedDecider/ExternalDecider's labels.length===0
       // passthrough.
       if (labels.length === 0) {
-        const free = (await this.complete(this.freeTextPrompt(text, ctx), this.model)).trim();
+        const free = (await this.complete(scrub(this.freeTextPrompt(text, ctx), this.secrets), this.model)).trim();
         if (free === "")
           throw new UnansweredError(
             `LLM decider returned an empty answer for the open-ended question "${text}"`,
@@ -487,7 +499,7 @@ export class LlmDecider implements Decider {
         continue;
       }
       const multi = q.multiSelect === true;
-      const raw = await this.complete(this.prompt(text, q.options, multi, ctx), this.model);
+      const raw = await this.complete(scrub(this.prompt(text, q.options, multi, ctx), this.secrets), this.model);
       // MULTI-SELECT (the index protocol is the ONLY accepted form): a comma-list of bare, in-range option
       // numbers (e.g. "1, 3"). Anything else — a label echo, or a mixed "1, Seed" — fails loud rather than
       // partial-binding. (Before this branch the LLM path had no multiSelect handling at all, so a multiSelect
@@ -536,7 +548,16 @@ export class LlmDecider implements Decider {
       // OTHER: free-text sentinel — AFTER the exact/trim match (so a literal OTHER:-named label wins) and
       // BEFORE the permissive suffix/echo tiers (so a genuine free-text OTHER is never grabbed by the echo tier).
       if (!pick) {
-        const other = /^\s*OTHER:\s*([\s\S]+)/i.exec(raw);
+        // Strip a single MATCHED wrapping code-fence/quote (`` `OTHER: …` ``, `"OTHER: …"`) so the `^\s*OTHER:`
+        // anchor still matches — a model often code-fences a verbatim directive, and a leading backtick/quote on
+        // `raw` would otherwise defeat it (observed live: `` `OTHER: Sector not specified` `` → whiffed → fail-loud
+        // stall). Only a matched same-char PAIR is removed (not a bare trailing quote like trimNearMiss): the
+        // free-text VALUE is delivered verbatim, so `OTHER: Acme Inc.` keeps its period and `OTHER: labeled "X"`
+        // keeps its closing quote. A real `OTHER:`-named option label already bound via matchLabel above (incl.
+        // its own quote-trim), so this can't hijack one.
+        const t = raw.trim();
+        const fenced = /^([`'"])([\s\S]*)\1$/.exec(t);
+        const other = /^\s*OTHER:\s*([\s\S]+)/i.exec(fenced ? fenced[2] : t);
         if (other) {
           const free = other[1].trim();
           if (free === "")
@@ -705,6 +726,7 @@ export class PromptDecider implements Decider {
             const picks: string[] = [];
             let invalid = false;
             for (const part of parts) {
+              warnNumericLabelCollision(part, optionLabels, JSON.stringify(text));
               // coerceLabel accepts: 1-based index, exact label (case-insensitive), "(Recommended)" suffix
               // tolerance, "recommended" keyword, and "first" keyword (option 1). "last" is NOT a keyword.
               const coerced = coerceLabel(part, optionLabels);
@@ -719,12 +741,15 @@ export class PromptDecider implements Decider {
             }
             if (!invalid) resolved = picks;
           } while (resolved === null);
-          answers[text] = resolved!.join(", ");
+          // Dedupe the resolved set (first-seen) so a human typing "1,1" / "A,A" delivers a checkbox-faithful
+          // distinct set, mirroring the LLM/scripted/external paths.
+          answers[text] = dedupeFirstSeen(resolved!).join(", ");
         } else {
           const optionList = `${text}\n${q.options.map((o, i) => `  ${i + 1}) ${o.label}${o.description ? " — " + o.description : ""}`).join("\n")}\n> `;
           let coerced: { value: string; matched: boolean };
           do {
             const raw = await this.ask(optionList);
+            warnNumericLabelCollision(raw, optionLabels, JSON.stringify(text));
             // coerceLabel accepts: 1-based index, exact label (case-insensitive), "(Recommended)" suffix
             // tolerance, "recommended" keyword, and "first" keyword (option 1). "last" is NOT a keyword.
             coerced = coerceLabel(raw, optionLabels);
@@ -866,24 +891,36 @@ export class ExternalDecider implements Decider {
             );
           if (labels.length === 0) {
             // Degenerate optionless multiSelect gate — pass the member(s) through verbatim (parity with
-            // the free-text branch below; the external helper is the authoritative answerer).
+            // the free-text branch below; the external helper is the authoritative answerer). Guard each
+            // member is a string/number first — a non-scalar (object/null/boolean) would otherwise stringify
+            // to "[object Object]"/"null"/"false" and silently green the run. `bad !== undefined` (not a
+            // truthiness test) so a falsy-but-bad member like boolean `false` still throws.
+            const bad = members.find((m) => typeof m !== "string" && typeof m !== "number");
+            if (bad !== undefined)
+              throw new UnansweredError(
+                `external decider sent a non-string member (${Array.isArray(bad) ? "an array" : bad === null ? "null" : typeof bad}) for the optionless multiSelect ${JSON.stringify(text)}`,
+                `each member must be a string label or a 1-based index`,
+              );
             answers[text] = members.map(String).join(", ");
             continue;
           }
-          const resolved = members.map((m) => {
-            // "first" shorthand stays disabled for externals (a literal "first" must match a real label).
-            const c = coerceLabel(m, labels, false);
-            if (!c.matched)
-              throw new UnansweredError(
-                `external decider member ${JSON.stringify(m)} for ${JSON.stringify(text)} matched no option label`,
-                validLabels,
-              );
-            return c.value;
-          });
-          // Comma-in-label hazard — mirror ScriptedDecider EXACTLY, incl. the `> 1` gate: the wire joins
-          // members with ", " WITHOUT escaping (Cowork limitation), so a member label containing a comma
-          // can't be unambiguously round-tripped. Only meaningful when more than one member is selected.
-          if (members.length > 1) {
+          const resolved = dedupeFirstSeen(
+            members.map((m) => {
+              warnNumericLabelCollision(m, labels, JSON.stringify(text));
+              // "first" shorthand stays disabled for externals (a literal "first" must match a real label).
+              const c = coerceLabel(m, labels, false);
+              if (!c.matched)
+                throw new UnansweredError(
+                  `external decider member ${JSON.stringify(m)} for ${JSON.stringify(text)} matched no option label`,
+                  validLabels,
+                );
+              return c.value;
+            }),
+          );
+          // Comma-in-label hazard — mirror ScriptedDecider EXACTLY: the wire joins members with ", " WITHOUT
+          // escaping (Cowork limitation), so a member label containing a comma can't be unambiguously
+          // round-tripped. Gate on the DEDUPED resolved set (a set collapsing to one member has no join).
+          if (resolved.length > 1) {
             const commaLabel = resolved.find((l) => l.includes(","));
             if (commaLabel)
               warn(
@@ -904,7 +941,15 @@ export class ExternalDecider implements Decider {
           // always returns matched:false for an empty labels array and would throw below. Accept any
           // non-empty string verbatim (the external helper is the authoritative answerer for these gates).
           if (labels.length === 0) {
-            if (!raw || String(raw).trim() === "")
+            // Guard the type BEFORE String(raw): a non-scalar object would stringify to "[object Object]"
+            // and silently green the run (the options-present path routes through coerceLabel's typeof
+            // guard; this optionless branch must enforce the same). Arrays are already rejected above.
+            if (typeof raw !== "string" && typeof raw !== "number")
+              throw new UnansweredError(
+                `external decider sent a non-string answer (${raw === null ? "null" : typeof raw}) for the optionless question "${text}"`,
+                `provide a string (or 1-based index) as the answer`,
+              );
+            if (String(raw).trim() === "")
               throw new UnansweredError(
                 `external decider sent an empty answer for the open-ended question "${text}"`,
                 `provide a non-empty string as the answer`,
@@ -912,6 +957,7 @@ export class ExternalDecider implements Decider {
             answers[text] = String(raw);
             continue;
           }
+          warnNumericLabelCollision(raw, labels, JSON.stringify(text));
           // "first" is a documented shorthand for scripted/human deciders but NOT for external helpers —
           // a helper returning the literal string "first" must match an actual label, not be coerced to option 1.
           const coerced = coerceLabel(raw, labels, false);
@@ -1032,6 +1078,37 @@ function warnDuplicateLabels(labels: string[], context: string): void {
     );
 }
 
+/** Warn when a pure-digit pick is BOTH an exact option label AND a valid 1-based index pointing at a
+ *  DIFFERENT option. coerceLabel resolves such a collision to the literal label (exact-wins, fidelity-
+ *  correct), but the bare-index protocol is ambiguous for numeric-labeled gates. This is a SEPARATE
+ *  render-site helper — kept out of coerceLabel so the pure value-discarding validator (cli.ts write-time)
+ *  never fires it; it is called only at the RESOLVING call sites, which run once at answer-consume time. */
+function warnNumericLabelCollision(pick: string | number, labels: string[], context: string): void {
+  const s = typeof pick === "number" ? String(pick) : typeof pick === "string" ? pick.trim() : "";
+  if (!/^\d+$/.test(s)) return;
+  if (!labels.some((l) => l.toLowerCase() === s.toLowerCase())) return;
+  const n = parseInt(s, 10);
+  if (n >= 1 && n <= labels.length && labels[n - 1].toLowerCase() !== s.toLowerCase())
+    warn(
+      `::warning:: choice ${JSON.stringify(s)} for ${context} matches BOTH the literal option label ${JSON.stringify(s)} and 1-based index ${n} (${JSON.stringify(labels[n - 1])}) — selecting the label. The bare-index protocol is ambiguous for numeric-labeled gates; use a non-numeric anchor to disambiguate.\n`,
+    );
+}
+
+/** Dedupe a resolved (canonical-label) member list in first-seen order — mirrors the LLM path's
+ *  `picks.includes()` guard so scripted/external/human multiSelect deliver a checkbox-faithful set
+ *  (real Cowork's multiSelect always has distinct members; "A, A" is unfaithful). */
+function dedupeFirstSeen(items: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const it of items) {
+    if (!seen.has(it)) {
+      seen.add(it);
+      out.push(it);
+    }
+  }
+  return out;
+}
+
 /** Coerce a raw answer (1-based index OR label, case-insensitive) to a canonical option label.
  *  Returns a discriminated result: `matched` is true when the value was found in `labels`
  *  (by index or case-insensitive name); false when the fallback to `labels[0]` was used.
@@ -1057,13 +1134,19 @@ export function coerceLabel(
     return resolved !== undefined ? { value: resolved, matched: true } : { value: labels[0] ?? String(a), matched: false };
   }
   const s = a.trim();
+  // Exact / case-insensitive label — checked BEFORE the bare-index interpretation so a numeric option
+  // label resolves to the LITERAL label, not labels[index-1]. With options ['5','3','8'] and choose '3',
+  // index-first would return labels[2]='8' with matched:true (a silent wrong answer). On a genuine numeric
+  // collision the label wins (fidelity-correct: the label is what reaches the wire); the resolving call
+  // sites surface the ambiguity loudly via warnNumericLabelCollision (kept OUT of this pure helper so the
+  // value-discarding validator at cli.ts never fires it). This is also a behavior change to the EXTERNAL
+  // machine-helper contract (label-wins on a numeric collision), shipped documented rather than silent.
+  const exact = labels.find((l) => l.toLowerCase() === s.toLowerCase());
+  if (exact !== undefined) return { value: exact, matched: true };
   // #50: only treat the string as an index when it is ENTIRELY digits — `parseInt("1-no")` returns 1,
   // which would silently mis-select option 1. A digit-prefixed *label* falls through to the label match.
   const n = /^\d+$/.test(s) ? parseInt(s, 10) : NaN;
   if (!isNaN(n) && n >= 1 && n <= labels.length) return { value: labels[n - 1], matched: true };
-  // Exact / case-insensitive label.
-  const exact = labels.find((l) => l.toLowerCase() === s.toLowerCase());
-  if (exact !== undefined) return { value: exact, matched: true };
   // CHOOSE-SUFFIX: tolerate the standard `(Recommended)` label suffix — the offered label is e.g.
   // "Approve (Recommended)" but authors write `choose: Approve`. Match ignoring a trailing "(Recommended)"
   // on EITHER side, and ALWAYS return the canonical full label (with the suffix) so the wire stays faithful.

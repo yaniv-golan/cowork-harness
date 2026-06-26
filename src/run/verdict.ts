@@ -163,7 +163,7 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
         message: `unauthorized delete touched mnt/outputs: ${result.scan.outputsDeletes.join("; ")} (assert no_delete_in_outputs to make this explicit)`,
       });
 
-    if (result.scan?.hostPathLeaked && !authored.some((a) => a.transcript_no_host_path !== undefined))
+    if (result.scan?.hostPathLeaked && !authored.some((a) => a.transcript_no_host_path === true))
       signals.push({
         code: "host_path_leak",
         severity: "fail",

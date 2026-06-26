@@ -174,6 +174,116 @@ describe("#40 — execInContainer surfaces infra failures generically (not verba
   });
 });
 
+// ---------------------------------------------------------------------------------------------
+// Bug 15 — spawn failure where e.code is a STRING (e.g. ENOENT, EACCES) must be classified as infra.
+// The old `!e.code` guard fails because a non-empty string is truthy.
+// ---------------------------------------------------------------------------------------------
+describe("#bug15 — isExecInfraError catches string error codes (spawn failures)", () => {
+  it("catches a spawn failure where code is a string (ENOENT)", () => {
+    expect(isExecInfraError({ code: "ENOENT", stdout: "", stderr: "" })).toBe(true);
+  });
+  it("catches EACCES (spawn permission denied)", () => {
+    expect(isExecInfraError({ code: "EACCES", stdout: "", stderr: "" })).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Bug 44 — bare exit-125 (no daemon stderr) must NOT be classified as infra. Real Docker daemon
+// failures that exit 125 still classify via the daemon-stderr arm.
+// ---------------------------------------------------------------------------------------------
+describe("#bug44 — bare exit 125 without daemon stderr is not an infra error", () => {
+  it("does NOT classify a bare exit 125 (no daemon stderr) as infra", () => {
+    expect(isExecInfraError({ code: 125, stdout: "", stderr: "" })).toBe(false);
+    expect(isExecInfraError({ code: 125, stderr: "usage: myprog [options]" })).toBe(false);
+  });
+  it("still classifies exit 125 WITH daemon stderr as infra (via daemon-stderr arm)", () => {
+    expect(isExecInfraError({ code: 125, stderr: "Error response from daemon: No such container: c" })).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Bug 16 — non-stream fallback path (resp.body == null) must append [truncated] when:
+//   (a) the pinned-path flag resp.truncated is true (pinnedRequest capped the buffer), OR
+//   (b) the raw text exceeds LIMIT (over-long fake).
+// ---------------------------------------------------------------------------------------------
+describe("#bug16 — web_fetch non-stream path appends [truncated] marker when response was capped", () => {
+  const WEB_FETCH_BYTE_CAP = 200000;
+  const callPathB = async (rawFetch: RawFetch) => {
+    const h = makeWorkspaceHandler("c", "/mnt", "docker", ["example.com"], undefined, undefined, undefined, rawFetch, async () => [
+      { address: "203.0.113.7" },
+    ]);
+    const out = (await h("workspace", {
+      method: "tools/call",
+      params: { name: "web_fetch", arguments: { url: "http://example.com/x" } },
+    })) as { result: { isError?: boolean; content: { text: string }[] } };
+    return out.result.content[0].text;
+  };
+
+  it("appends [truncated] when resp.truncated is true (pinnedRequest-style fake)", async () => {
+    const rawFetch: RawFetch = async () => ({ status: 200, truncated: true, text: async () => "short", body: null });
+    const text = await callPathB(rawFetch);
+    expect(text.endsWith("\n[truncated]")).toBe(true);
+  });
+
+  it("appends [truncated] when raw text exceeds LIMIT (over-length fake)", async () => {
+    const rawFetch: RawFetch = async () => ({
+      status: 200,
+      text: async () => "x".repeat(WEB_FETCH_BYTE_CAP + 1),
+      body: undefined,
+    });
+    const text = await callPathB(rawFetch);
+    expect(text.endsWith("\n[truncated]")).toBe(true);
+  });
+
+  it("does NOT append [truncated] for a short non-truncated response", async () => {
+    const rawFetch: RawFetch = async () => ({ status: 200, text: async () => "ok", body: null });
+    const text = await callPathB(rawFetch);
+    expect(text).toBe("ok");
+    expect(text).not.toContain("[truncated]");
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Bug 45 — resp.body?.cancel() is called on the redirect hop so undici streams are drained.
+// ---------------------------------------------------------------------------------------------
+describe("#bug45 — followWithRedirects drains the response body stream on redirect hops", () => {
+  it("calls cancel() on a redirect hop body stream and resolves to the final response", async () => {
+    const cancelSpy = { called: false };
+    const fakeStream = {
+      cancel: () => {
+        cancelSpy.called = true;
+        return Promise.resolve();
+      },
+    } as unknown as ReadableStream<Uint8Array>;
+
+    let hop = 0;
+    const rawFetch: RawFetch = async (_url) => {
+      if (hop++ === 0) {
+        return { status: 301, location: "http://second.example/y", body: fakeStream, text: async () => "" };
+      }
+      return { status: 200, text: async () => "FINAL", body: null };
+    };
+    const resolve: Resolver = async (host) => [{ address: host === "first.example" ? "203.0.113.1" : "203.0.113.2" }];
+    const h = makeWorkspaceHandler(
+      "c",
+      "/mnt",
+      "docker",
+      ["first.example", "second.example"],
+      undefined,
+      undefined,
+      undefined,
+      rawFetch,
+      resolve,
+    );
+    const out = (await h("workspace", {
+      method: "tools/call",
+      params: { name: "web_fetch", arguments: { url: "http://first.example/x" } },
+    })) as { result: { isError?: boolean; content: { text: string }[] } };
+    expect(out.result.content[0].text).toBe("FINAL");
+    expect(cancelSpy.called).toBe(true);
+  });
+});
+
 // Keep the provenance/SSRF fakes' shape honest: the WebFetchProvenance/RawFetch contracts compile.
 const _typecheckGuard: WebFetchProvenance = { isAllowed: () => true, markAllowed: () => {}, promptGateOn: false };
 void _typecheckGuard;

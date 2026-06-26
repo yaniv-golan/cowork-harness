@@ -344,6 +344,26 @@ const COMMANDS = [
   "prune",
 ];
 
+// #29: --dotenv / --run-dir are GLOBAL flags honored ONLY in leading position (before the subcommand),
+// so a per-command value beginning with `--dotenv=`/`--run-dir=` (e.g. `skill ./s "p" --answer
+// "--dotenv=x=foo"`) is never hijacked by the pre-dispatch scan. Walk from the front consuming only
+// leading global-flag tokens (and their space-form values); stop at the first token that isn't one —
+// that token is the subcommand. Returns the count of leading tokens; the scans slice argv to it. Because
+// the region is a prefix, an index found within it is the same index into argv (so the later splice/value
+// reads against argv stay aligned). MUST be recomputed after a splice mutates argv.
+function leadingGlobalCount(av: string[]): number {
+  let i = 0;
+  while (i < av.length) {
+    const t = av[i];
+    if (t === "--dotenv" || t === "--run-dir")
+      i += 2; // flag + space-form value
+    else if (t.startsWith("--dotenv=") || t.startsWith("--run-dir="))
+      i += 1; // equals form
+    else break; // first non-global token = subcommand
+  }
+  return i;
+}
+
 async function main() {
   const argv = process.argv.slice(2);
 
@@ -356,8 +376,11 @@ async function main() {
   // form was missed by indexOf("--dotenv") → the whole `--dotenv=...` token fell through to dispatch as
   // the command name ("unknown command"). Find either spelling and apply the SAME existence + command-
   // name guards.
-  const eqIdx = argv.findIndex((a) => a.startsWith("--dotenv="));
-  const spaceIdx = argv.indexOf("--dotenv");
+  // Scan only the leading global-flag region (computed over the not-yet-mutated argv), so a `--dotenv=…`
+  // token sitting AFTER the subcommand (as a per-command flag value) is left for the command parser (#29).
+  const dotenvLead = argv.slice(0, leadingGlobalCount(argv));
+  const eqIdx = dotenvLead.findIndex((a) => a.startsWith("--dotenv="));
+  const spaceIdx = dotenvLead.indexOf("--dotenv");
   const envFileIdx = spaceIdx >= 0 ? spaceIdx : eqIdx;
   const isEquals = spaceIdx < 0 && eqIdx >= 0;
   const explicitEnvFile = isEquals ? argv[eqIdx].slice("--dotenv=".length) : envFileIdx >= 0 ? argv[envFileIdx + 1] : undefined;
@@ -390,8 +413,12 @@ async function main() {
   // shim over COWORK_HARNESS_RUNS_DIR: setting it here makes runsWriteRoot()/runsRoot() pick it up with no
   // writer/reader changes. Precedence: flag > COWORK_HARNESS_RUNS_DIR > ~/.cowork-harness/runs. Unlike
   // --dotenv it does NOT require the path to exist (it's an output dir, created on first write).
-  const rdEq = argv.findIndex((a) => a.startsWith("--run-dir="));
-  const rdSpace = argv.indexOf("--run-dir");
+  // Recompute the leading region over the CURRENT (post-dotenv-splice) argv — the --dotenv strip above may
+  // have shifted token positions, so a lead captured before it would be stale and misalign the indices the
+  // splice below relies on (#29).
+  const runDirLead = argv.slice(0, leadingGlobalCount(argv));
+  const rdEq = runDirLead.findIndex((a) => a.startsWith("--run-dir="));
+  const rdSpace = runDirLead.indexOf("--run-dir");
   const rdIdx = rdSpace >= 0 ? rdSpace : rdEq;
   const rdIsEquals = rdSpace < 0 && rdEq >= 0;
   const runDirVal = rdIsEquals ? argv[rdEq].slice("--run-dir=".length) : rdIdx >= 0 ? argv[rdIdx + 1] : undefined;
@@ -430,6 +457,16 @@ async function main() {
   // F-7: per-subcommand --help for the parseArgs-direct commands (run/skill/lint self-handle, so they're
   // absent from the map and fall through to their own handling).
   if (hasHelp(rest) && cmd in SUBCOMMAND_USAGE) return void log(SUBCOMMAND_USAGE[cmd]);
+  // #27: validate COWORK_HARNESS_OUTPUT_FORMAT here — AFTER the --version/--help/per-subcommand-help
+  // short-circuits above (so `COWORK_HARNESS_OUTPUT_FORMAT=garbage cowork-harness --version|--help` is NOT
+  // a regression-causing usage error, matching the --output-format flag which never blocks --version) and
+  // BEFORE dispatch (so every dispatched command sees a validated env, and #4's env fallback only ever
+  // reads text|json|unset). The --output-format flag rejects an invalid value with exit 2; the env form
+  // silently degraded to text — bring it to parity. An explicit --output-format=json flag still selects the
+  // json error envelope via isJsonOutput (the garbage env value falls back to text there).
+  const envOutFmt = process.env.COWORK_HARNESS_OUTPUT_FORMAT;
+  if (envOutFmt !== undefined && envOutFmt !== "text" && envOutFmt !== "json")
+    fail(cmd, "usage", `COWORK_HARNESS_OUTPUT_FORMAT must be "text" or "json" (got "${envOutFmt}")`, undefined, isJsonOutput(rest));
   switch (cmd) {
     case "run":
       return cmdRun(rest);
@@ -490,13 +527,19 @@ interface CommonFlags {
   deciderCmd?: string; // --decider-cmd: spawn a helper that answers each decision (external channel B)
   deciderDir?: string; // --decider-dir: file-rendezvous for a driving agent's Monitor (external channel C)
 }
-/** Shared json-output predicate so the parser and the top-level catch can never drift. */
+/** Shared json-output predicate so the parser and the top-level catch can never drift. An explicit
+ *  `--output-format text|json` flag (first occurrence wins, matching parseOutputFormat's
+ *  first-occurrence-authoritative semantics) takes precedence; absent any flag, fall back to the
+ *  documented COWORK_HARNESS_OUTPUT_FORMAT env var so an env-only JSON consumer still gets an envelope
+ *  from the top-level catch (#4). */
 function isJsonOutput(args: string[]): boolean {
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--output-format" && args[i + 1] === "json") return true;
     if (args[i] === "--output-format=json") return true;
+    if (args[i] === "--output-format" && args[i + 1] === "text") return false;
+    if (args[i] === "--output-format=text") return false;
   }
-  return false;
+  return process.env.COWORK_HARNESS_OUTPUT_FORMAT === "json";
 }
 /** Validate `--output-format` is text|json for the ad-hoc commands (trace/decide/gates) the way the
  *  common parser already does for run/skill — an invalid value is a usage error, not a silent text degrade. */
@@ -828,7 +871,9 @@ async function cmdRun(rawArgs: string[]) {
     const a = rawArgs[i];
     if (a === "--decider-model") {
       deciderModel = rawArgs[++i];
-      if (deciderModel === undefined || deciderModel.startsWith("-"))
+      // #28: reject "" too — the equals branch below rejects an empty value, so the spaced form must match
+      // (otherwise `--decider-model ""` forwards an empty model id and fails obscurely later).
+      if (deciderModel === undefined || deciderModel === "" || deciderModel.startsWith("-"))
         fail("run", "usage", "--decider-model requires a value (a model id)", undefined, isJsonOutput(rawArgs));
     } else if (a.startsWith("--decider-model=")) {
       deciderModel = a.slice("--decider-model=".length);
@@ -1194,17 +1239,15 @@ function baselineFilePath(name: string): string {
  *  harness understands, guest-image hints, the resolved VM instance + its current status, and any
  *  warnings (e.g. status the VM tooling could not determine). Keep the shape additive — JSON callers
  *  pin field names, so add fields rather than rename/remove. */
-function vmStatusEnvelope(baselineName: string, baseline: PlatformBaseline, instance: string, status: string) {
-  const warnings: string[] = [];
-  // vmStatus returns "Absent" when no Lima VM exists for this config hash (see lima.ts) — surface that
-  // as a warning so a JSON caller doesn't read "Absent" as a running VM.
-  if (status === "Absent") warnings.push(`no VM exists for ${instance} (run \`vm init\` to create it)`);
+// Shared vm JSON envelope shell. Every subcommand (#7: init/delete/prune too, not just status) emits the
+// same tool/command/instance/baseline/image block under a per-subcommand discriminator, with the
+// subcommand-specific outcome spread in by the caller.
+function vmEnvelopeBase(subcommand: string, baselineName: string, baseline: PlatformBaseline, instance: string, warnings: string[]) {
   return {
     tool: "cowork-harness",
     command: "vm",
-    subcommand: "status",
+    subcommand,
     instance,
-    status,
     baseline: {
       name: baselineName,
       path: baselineFilePath(baselineName),
@@ -1220,6 +1263,14 @@ function vmStatusEnvelope(baselineName: string, baseline: PlatformBaseline, inst
     },
     warnings,
   };
+}
+
+function vmStatusEnvelope(baselineName: string, baseline: PlatformBaseline, instance: string, status: string) {
+  const warnings: string[] = [];
+  // vmStatus returns "Absent" when no Lima VM exists for this config hash (see lima.ts) — surface that
+  // as a warning so a JSON caller doesn't read "Absent" as a running VM.
+  if (status === "Absent") warnings.push(`no VM exists for ${instance} (run \`vm init\` to create it)`);
+  return { ...vmEnvelopeBase("status", baselineName, baseline, instance, warnings), status };
 }
 
 const VM_SUB_HELP: Record<string, string> = {
@@ -1288,13 +1339,17 @@ function cmdVm(args: string[]) {
     else log(`${instance}: ${status}`);
   } else if (sub === "init") {
     const { status } = vmInit(baseline);
-    log(`${instance}: ${status}`);
+    // #7: honor --output-format json (init/delete/prune printed text unconditionally; only status did).
+    if (vmJson) out(JSON.stringify({ ...vmEnvelopeBase("init", baselineName, baseline, instance, []), status }));
+    else log(`${instance}: ${status}`);
   } else if (sub === "delete") {
     vmDelete(instance);
-    log(`${instance} deleted`);
+    if (vmJson) out(JSON.stringify({ ...vmEnvelopeBase("delete", baselineName, baseline, instance, []), deleted: true }));
+    else log(`${instance} deleted`);
   } else if (sub === "prune") {
     const pruned = vmPrune(instance);
-    log(pruned.length ? `pruned ${pruned.length} orphaned VM(s): ${pruned.join(", ")}` : `no orphaned VMs (current: ${instance})`);
+    if (vmJson) out(JSON.stringify({ ...vmEnvelopeBase("prune", baselineName, baseline, instance, []), pruned }));
+    else log(pruned.length ? `pruned ${pruned.length} orphaned VM(s): ${pruned.join(", ")}` : `no orphaned VMs (current: ${instance})`);
   } else {
     // #11: an invalid/absent subcommand must exit non-zero — a bare `log` exits 0, so a CI script
     // running `vm typo` would read it as success.
@@ -1450,7 +1505,10 @@ function cmdSync(args: string[]) {
     for (const g of Object.values(res.gates)) {
       const key = `${g.name}:${g.id}`;
       const prev = baseGates[key];
-      const prevOn = typeof prev === "string" ? /on|true|force/i.test(prev) : !!(prev as { on?: boolean } | undefined)?.on;
+      // #30: for a legacy prose entry the authoritative state is the LEADING `on(...)`/`off(...)` token
+      // (the note stripper just below anchors on the same pattern) — a bare substring scan of the whole
+      // string would let a human note containing "on"/"force" mask a real off→on flip.
+      const prevOn = typeof prev === "string" ? /^\s*on\(/i.test(prev) : !!(prev as { on?: boolean } | undefined)?.on;
       // Preserve the human annotation: from a prose string, drop the leading "on(force) " token; from
       // a structured entry, keep its `note`.
       const prevNote =
@@ -1603,6 +1661,11 @@ async function cmdDecide(args: string[]) {
     // --output-format consumes a value in the equals-free form; skip it so its value isn't read as a
     // stray positional (isJsonOutput/ensureOutputFormat handle the actual parsing).
     else if (a === "--output-format") i++;
+    // #5: the equals form is fully supported by the parser; recognize it here as a no-op (it carries its
+    // own value) so it doesn't fall through to the unknown-flag guard below and exit 2 like an outlier.
+    else if (a === "--output-format=json" || a === "--output-format=text") {
+      /* recognized; parsed by isJsonOutput/ensureOutputFormat */
+    }
     // --decider-dir is rejected explicitly below with a redirect message; consume its value here so the
     // value isn't flagged as a stray positional before that guard fires.
     // check that the next token exists and doesn't look like a flag before consuming it.
@@ -1750,7 +1813,10 @@ function cmdAnswer(args: string[]) {
   ensureOutputFormat("answer", args);
   const json = isJsonOutput(args);
   // #15: skip flag values so `answer --gate 1 --choose Yes <dir>` doesn't read `1` as the directory.
-  const dir = positionals(args, ["--gate", "--choose", "--answer", "--output-format"])[0];
+  const answerPositionals = positionals(args, ["--gate", "--choose", "--answer", "--output-format"]);
+  // #31: reject extra positionals rather than silently writing to the first dir (mirrors `gates`).
+  if (answerPositionals.length > 1) return void fail("answer", "usage", "answer takes one <dir>", undefined, json);
+  const dir = answerPositionals[0];
   let seq: number | undefined;
   // --choose accumulates: a single value answers a single-select gate; multiple values answer a
   // multiSelect gate (validated once the gate is read — a multi --choose on a single-select gate is
@@ -1855,21 +1921,39 @@ function cmdScaffold(args: string[]) {
   rejectUnknownFlags("scaffold", args, ["--from-run", "--out", "--output-format", "--output-format=json", "--output-format=text"], json);
 
   // Validate --out FIRST (flag-looking value is a usage error regardless of --from-run presence).
-  const outIdx = args.indexOf("--out");
+  // #6: honor BOTH the spaced (`--out foo`) and equals (`--out=foo`) forms — indexOf("--out") missed the
+  // equals token, so `--out=foo.yaml` was accepted by rejectUnknownFlags then silently ignored (output went
+  // to stdout). The equals value also gets the same flag-looking guard the spaced form has.
+  const outSpaceIdx = args.indexOf("--out");
+  const outEqIdx = args.findIndex((a) => a.startsWith("--out="));
   let outPath: string | undefined;
-  if (outIdx >= 0) {
-    outPath = flagValue(args, outIdx, "--out");
-    if (outPath.startsWith("-"))
-      return void fail("scaffold", "usage", `--out requires a file path, got a flag: ${outPath}`, undefined, json);
-  }
+  if (outSpaceIdx >= 0) outPath = flagValue(args, outSpaceIdx, "--out");
+  else if (outEqIdx >= 0) outPath = args[outEqIdx].slice("--out=".length);
+  if (outPath !== undefined && (outPath === "" || outPath.startsWith("-")))
+    return void fail(
+      "scaffold",
+      "usage",
+      `--out requires a file path${outPath === "" ? " (got empty)" : `, got a flag: ${outPath}`}`,
+      undefined,
+      json,
+    );
 
   // Validate --from-run flag-looking value before computing positionals (so the error is specific).
-  const fromIdx = args.indexOf("--from-run");
+  // #6: same dual-form handling for --from-run (the equals form fell through to a spurious usage failure).
+  const fromSpaceIdx = args.indexOf("--from-run");
+  const fromEqIdx = args.findIndex((a) => a.startsWith("--from-run="));
   let fromRunVal: string | undefined;
-  if (fromIdx >= 0) {
-    fromRunVal = flagValue(args, fromIdx, "--from-run");
-    if (fromRunVal.startsWith("-"))
-      return void fail("scaffold", "usage", `--from-run requires a run id/dir, got a flag: ${fromRunVal}`, undefined, json);
+  if (fromSpaceIdx >= 0) fromRunVal = flagValue(args, fromSpaceIdx, "--from-run");
+  else if (fromEqIdx >= 0) fromRunVal = args[fromEqIdx].slice("--from-run=".length);
+  if (fromRunVal !== undefined) {
+    if (fromRunVal === "" || fromRunVal.startsWith("-"))
+      return void fail(
+        "scaffold",
+        "usage",
+        `--from-run requires a run id/dir${fromRunVal === "" ? " (got empty)" : `, got a flag: ${fromRunVal}`}`,
+        undefined,
+        json,
+      );
     log("note: --from-run is deprecated; prefer: scaffold <run-id | run-dir>\n");
   }
 
@@ -2055,6 +2139,7 @@ async function cmdVerifyRun(args: string[]) {
     subagents: result.subagents ?? [],
     gateDeliveries: result.gateDeliveries ?? [],
     toolResultTexts: (result.toolResults ?? []).map((r) => r.assertText ?? r.text),
+    toolResultsTruncated: (result.toolResults ?? []).map((r) => r.assertText === undefined),
     transcriptMissing: sidecarTranscript === null,
     questionsMissing: sidecarQuestions === null,
     // Evidence-missing flags: set ONLY when the underlying field is undefined (partial/old result.json),

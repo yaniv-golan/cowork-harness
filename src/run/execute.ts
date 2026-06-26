@@ -29,7 +29,7 @@ import { instanceName } from "../runtime/lima.js";
 import { decideLoopFromBaseline, readGateFlag } from "../loop-decision.js";
 import type { WebFetchProvenance } from "../hostloop/workspace-handler.js";
 import { startEgressSidecar, registerCleanup, type EgressSidecar } from "../egress/sidecar.js";
-import { startEgressProxy, freePort } from "../egress/proxy.js";
+import { startEgressProxy } from "../egress/proxy.js";
 import { evaluate, hostMatches } from "../assert.js";
 import { compileUserRegex } from "../regex.js";
 import { renderPrompts } from "../prompt.js";
@@ -382,17 +382,17 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         },
       });
     } else if (effectiveFidelity === "microvm") {
-      // allocate a free host port per run unless explicitly pinned, so concurrent microVM runs don't
-      // collide on the fixed 8899. The SAME port is threaded into spawnMicroVm below, so the guest firewall
-      // rule and HTTP(S)_PROXY point at the exact host bind.
-      microvmProxyPort = process.env.COWORK_VM_PROXY_PORT ? parseEnvPort("COWORK_VM_PROXY_PORT", 0) : await freePort();
+      // Bind the proxy first (port 0 → OS assigns), then read the actual port back from the live socket.
+      // The firewall rule and HTTP(S)_PROXY (written in spawnMicroVm below) just need the port before the
+      // agent spawns, not before the proxy binds — so proxy-first eliminates the freePort() TOCTOU window.
       hostProxy = startEgressProxy({
         allow: plan.egressAllow,
-        port: microvmProxyPort,
+        port: process.env.COWORK_VM_PROXY_PORT ? parseEnvPort("COWORK_VM_PROXY_PORT", 0) : 0,
         logPath: join(outDir, "egress.log"),
         onDecision: (host, decision) => egress.push({ host, decision }),
       });
       await hostProxy.ready; // don't spawn the agent until the proxy is accepting (or fail loud on a bind error)
+      microvmProxyPort = hostProxy.actualPort; // read from the live, still-bound socket — no TOCTOU gap
     }
 
     const prompts = renderPrompts(baseline, session, sessionId, plan.mounts.find((m) => m.kind === "folder")?.mountPath);
@@ -411,11 +411,14 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       containerName = hl.containerName;
       hostEgress = hl.hostEgress;
     } else if (effectiveFidelity === "container") {
-      child = spawnContainer(scenario, baseline, plan, outDir, sessionId, {
+      const ct = spawnContainer(scenario, baseline, plan, outDir, sessionId, {
         systemPromptAppend: prompts.systemPromptAppend,
         egressProxy: sidecar?.proxyUrl,
         dockerNetwork: sidecar?.network,
+        runToken,
       });
+      child = ct.child;
+      containerName = ct.containerName; // so the Ctrl-C / finally reap removes the agent container by name (#3)
     } else if (effectiveFidelity === "microvm") {
       child = spawnMicroVm(scenario, baseline, plan, outDir, sessionId, {
         systemPromptAppend: prompts.systemPromptAppend,
@@ -431,7 +434,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
 
     const sessionT = new LiveAgentSession(child as any, outDir);
     // Terminal decider: an explicit external channel, else the LLM decider when `agent` is selected.
-    const llmTerminal = onUnanswered === "llm" ? new LlmDecider(claudeCliComplete, opts.llmIntent, opts.llmModel || undefined) : undefined;
+    const llmTerminal =
+      onUnanswered === "llm" ? new LlmDecider(claudeCliComplete, opts.llmIntent, opts.llmModel || undefined, secrets) : undefined;
     const externalTerminal = opts.externalChannel ? new ExternalDecider(opts.externalChannel, secrets) : llmTerminal;
     const decider =
       opts.decider ?? buildDecider({ rules: scenario.answers, parity: plan.permissionParity, onUnanswered, external: externalTerminal });
@@ -543,6 +547,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     subagents: record.subagents,
     gateDeliveries: record.gateDeliveries,
     toolResultTexts: record.toolResults.map((r) => r.assertText ?? r.text),
+    toolResultsTruncated: record.toolResults.map((r) => r.assertText === undefined),
   });
 
   if (scenario.fidelity === "protocol" && (record.toolsCalled.has("WebFetch") || record.toolsCalled.has("WebSearch"))) {
@@ -966,19 +971,29 @@ export function hostPathLeaked(text: string): boolean {
   const re = /(^|[\s"'(=:]|file:\/\/[^\s\/]*)(\/Users\/|\/opt\/cowork\/|\/home\/|\/root\/)/;
   if (re.test(text)) return true;
   // also catch URL-encoded (%2FUsers%2F) and backslash (file:\\host\Users) forms by testing a
-  // decoded + backslash-normalized copy. decodeURIComponent throws on a malformed %-escape — guard it.
-  let decoded = text;
-  try {
-    decoded = decodeURIComponent(text);
-  } catch {
-    /* malformed %-escape — keep the raw text */
-  }
+  // decoded + backslash-normalized copy. Decode each `%`-escape RUN independently rather than the
+  // whole string: decodeURIComponent over the entire text throws on ANY stray `%` (e.g. `build 100%
+  // done`), which would silently disable the encoded re-test even when a genuine `%2Fhome%2Fvictim`
+  // is also present. An undecodable run is left verbatim.
+  const decoded = text.replace(/(?:%[0-9A-Fa-f]{2})+/g, (m) => {
+    try {
+      return decodeURIComponent(m);
+    } catch {
+      return m;
+    }
+  });
   const normalized = decoded.replace(/\\/g, "/");
   return normalized !== text && re.test(normalized);
 }
 
+// rm-family deletes PLUS shell empty-truncation idioms that wipe a file as destructively as `rm`:
+// a STATEMENT-LEADING bare `>` (`> outputs/x`, `make && > outputs/x`) and zero-arg `echo >`. The
+// redirect `>` is anchored to a statement boundary (start / `\n` / `;` / `|` / `&&` / `||` — the same
+// boundaries splitStatements splits on) so a normal deliverable WRITE (`jq … > outputs/f`, where `>`
+// follows a command) is NOT flagged; `(?!>)` excludes append (`>>`) and `&>` carries a single `&` that
+// is not in the boundary set.
 const DELETE_TOKEN =
-  /\b(rm|unlink|rmdir|shred|truncate)\b|\bfind\b[^\n]*-delete\b|\bos\.(remove|unlink|rmdir)\b|\bshutil\.rmtree\b|\.unlink\(/;
+  /\b(rm|unlink|rmdir|shred|truncate)\b|\bfind\b[^\n]*-delete\b|\bos\.(remove|unlink|rmdir)\b|\bshutil\.rmtree\b|\.unlink\(|(?:^|[\n;|]|&&|\|\|)\s*>(?!>)|\becho\s*>(?!>)/;
 // `outputs` MENTIONED as a path segment (followed by `/` or a boundary) — broad, used for the conservative
 // rm co-occurrence + ambiguous-mv branch. The negative lookahead avoids `outputs.txt` / `myoutputs`.
 const TOUCHES_OUTPUTS = /(^|[\s"'`(/])(mnt\/)?outputs(?![\w.])/;
@@ -1004,14 +1019,37 @@ function safePrefixes(): string[] {
 function expandSimpleVars(cmd: string): string {
   const vars = new Map<string, string>();
   const assign = /(^|[\s;&|(])([A-Za-z_][A-Za-z0-9_]*)=("[^"]*"|'[^']*'|[^\s;&|]+)/g;
-  let m: RegExpExecArray | null;
-  while ((m = assign.exec(cmd))) {
-    const v = m[3].replace(/^['"]|['"]$/g, "");
-    if (/\$\(|`/.test(v)) continue;
-    vars.set(m[2], v);
+  const record = (part: string): void => {
+    assign.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = assign.exec(part))) {
+      const v = m[3].replace(/^['"]|['"]$/g, "");
+      if (/\$\(|`/.test(v)) continue;
+      vars.set(m[2], v);
+    }
+  };
+  const expand = (part: string): string => {
+    let s = part;
+    // `() => v` (function replacer) inserts the value literally — a raw `String.replace` string would
+    // treat `$&`/`$1` in an agent-controlled value as special and corrupt the expansion.
+    for (const [k, v] of vars) s = s.replace(new RegExp(`\\$\\{${k}\\}|\\$${k}\\b`, "g"), () => v);
+    return s;
+  };
+  // Expand in SOURCE ORDER so a later reassignment cannot retroactively change an earlier `$NAME`
+  // use (`D=outputs; rm "$D/x"; D=/sandbox` must expand the rm to `outputs/x`, not `/sandbox/x`).
+  // Capturing-split keeps the separators verbatim, so concatenation round-trips byte-identically.
+  // Each segment is expanded against the vars known so far, then its OWN assignments are recorded
+  // from the ORIGINAL (un-expanded) text — preserving the single-pass, non-chaining semantics.
+  const parts = cmd.split(/(\n|;|&&|\|\|)/);
+  let out = "";
+  for (let i = 0; i < parts.length; i++) {
+    if (i % 2 === 1) {
+      out += parts[i]; // separator — emit verbatim
+      continue;
+    }
+    out += expand(parts[i]);
+    record(parts[i]);
   }
-  let out = cmd;
-  for (const [k, v] of vars) out = out.replace(new RegExp(`\\$\\{${k}\\}|\\$${k}\\b`, "g"), v);
   return out;
 }
 
@@ -1039,9 +1077,13 @@ function mvDeletesOutputs(stmt: string): boolean {
   if (!/\bmv\b/.test(stmt)) return false;
   if (/(^|\s)(-t|--target-directory)\b/.test(stmt)) return TOUCHES_OUTPUTS.test(stmt);
   const ops = nonFlagArgs(stmt);
-  if (ops.length !== 2) return TOUCHES_OUTPUTS.test(stmt);
-  const [src, dst] = ops;
-  return UNDER_OUTPUTS.test(src) && !UNDER_OUTPUTS.test(dst);
+  if (ops.length < 2) return TOUCHES_OUTPUTS.test(stmt);
+  // N-ary `mv src… dst`: the last operand is the destination, the rest are sources. A delete-from-
+  // outputs is when some source is UNDER outputs and the destination is NOT (reduces to the src/dst
+  // logic at length 2). `mv a.pdf b.pdf outputs/` (moving INTO outputs) is therefore not a delete.
+  const dst = ops[ops.length - 1];
+  const sources = ops.slice(0, -1);
+  return sources.some((src) => UNDER_OUTPUTS.test(src)) && !UNDER_OUTPUTS.test(dst);
 }
 
 /**

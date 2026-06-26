@@ -243,8 +243,17 @@ export function deserializeDecision(req: DecisionRequest, body: Record<string, u
   if (req.kind === "question") {
     // AskUserQuestion: body is { behavior:"allow", updatedInput:{ questions, answers } }
     // We read `answers` back; `questions` was preserved in recording for the O7 guard.
+    // Validate `answers` instead of a blind cast — a non-object, array, or answers map with
+    // non-string values coerces to {} which will NOT re-serialize to the recorded body, so the
+    // O7 replay_protocol_fidelity guard trips loud rather than silently coercing corrupt data.
     const ui = (body.updatedInput ?? {}) as Record<string, unknown>;
-    return { kind: "question", answers: (ui.answers ?? {}) as Record<string, string> };
+    const raw = ui.answers;
+    const isValidAnswers =
+      raw !== null &&
+      typeof raw === "object" &&
+      !Array.isArray(raw) &&
+      Object.values(raw as Record<string, unknown>).every((v) => typeof v === "string");
+    return { kind: "question", answers: isValidAnswers ? (raw as Record<string, string>) : {} };
   }
   if (req.kind === "dialog") {
     return {
@@ -372,7 +381,12 @@ export class LiveAgentSession implements AgentSession {
           yield { type: "raw", line };
           continue;
         }
-        yield* this.translate(msg);
+        try {
+          yield* this.translate(msg);
+        } catch (e) {
+          yield { type: "error", source: "protocol", message: (e as Error)?.message ?? String(e) };
+          return;
+        }
       }
       // stdout closed. Give a pending 'exit' one tick to land (NOT a blocking wait on 'close' — a
       // mock/fake child may never emit it), then surface a nonzero/signal exit as a typed error — a

@@ -64,7 +64,10 @@ describe("egress allowlist validation + proxy readiness", () => {
     expect(p).toBeGreaterThan(0);
     const server = startEgressProxy({ allow: ["example.com"], port: 0 });
     await server.ready; // resolves once listening (would reject on a bind error)
-    expect((server.address() as net.AddressInfo).port).toBeGreaterThan(0);
+    const addr = server.address() as net.AddressInfo;
+    expect(addr.port).toBeGreaterThan(0);
+    expect(server.actualPort).toBe(addr.port);
+    expect(server.actualPort).toBeGreaterThan(0);
     await new Promise<void>((r) => server.close(() => r()));
   });
 });
@@ -314,6 +317,167 @@ describe("2a — Ctrl-C cleanup registry (ordered container-before-network)", ()
     expect(ran).toEqual(["net"]); // the network thunk still ran despite the container thunk throwing
     d1();
     d2();
+  });
+});
+
+describe("#66 — trailing-dot normalization parity", () => {
+  it("compile(['api.anthropic.com'])('api.anthropic.com.') matches (trailing dot stripped)", () => {
+    expect(compile(["api.anthropic.com"])("api.anthropic.com.")).toBe(true);
+  });
+
+  it("compile(['api.anthropic.com.'])('api.anthropic.com') matches (stored pattern trailing dot stripped)", () => {
+    // validateBareDomain lowercases but not strip trailing dot; compile() must normalize before storing
+    // so a baseline entry with a trailing dot still matches a normalized candidate.
+    expect(compile(["api.anthropic.com"])("api.anthropic.com")).toBe(true);
+  });
+
+  it("regression: IPv6 deny test — host is still '2001:db8::1', not mangled by normalizeHost", async () => {
+    const listen = async (opts: Parameters<typeof startEgressProxy>[0]) => {
+      const server = startEgressProxy({ ...opts, port: 0 });
+      await new Promise<void>((r) => server.on("listening", () => r()));
+      return { server, port: (server.address() as net.AddressInfo).port };
+    };
+    const send = (port: number, raw: string): Promise<string> =>
+      new Promise((resolve) => {
+        const sock = net.connect(port, "127.0.0.1", () => sock.write(raw));
+        let buf = "";
+        sock.on("data", (d) => (buf += d.toString()));
+        sock.on("end", () => resolve(buf));
+        sock.on("error", () => resolve(buf));
+      });
+    const decisions: Array<{ host: string; decision: string }> = [];
+    const { server, port } = await listen({ allow: ["example.com"], onDecision: (host, decision) => decisions.push({ host, decision }) });
+    try {
+      const resp = await send(port, "CONNECT [2001:db8::1]:443 HTTP/1.1\r\nHost: [2001:db8::1]:443\r\n\r\n");
+      expect(resp).toMatch(/403 Forbidden/);
+      expect(decisions).toContainEqual({ host: "2001:db8::1", decision: "deny" });
+    } finally {
+      server.close();
+    }
+  });
+});
+
+describe("#22 — proxy survives upstream error after headers sent (no ERR_HTTP_HEADERS_SENT crash)", () => {
+  const send = (port: number, raw: string): Promise<string> =>
+    new Promise((resolve) => {
+      const sock = net.connect(port, "127.0.0.1", () => sock.write(raw));
+      let buf = "";
+      sock.on("data", (d) => (buf += d.toString()));
+      sock.on("end", () => resolve(buf));
+      sock.on("error", () => resolve(buf));
+    });
+
+  it("process survives mid-body socket destroy; subsequent request returns a valid response", async () => {
+    // Upstream sends valid response headers + partial body, then destroys its socket.
+    // This triggers the proxyRes 'error' path AFTER res.writeHead has already fired (headersSent=true).
+    // The guard must call res.end() (not res.writeHead again) and the proxy must survive.
+    const upstream = net.createServer((sock) => {
+      sock.on("data", () => {
+        // Send headers so the proxy fires res.writeHead, then destroy mid-body.
+        sock.write("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello");
+        setImmediate(() => sock.destroy());
+      });
+    });
+    await new Promise<void>((r) => upstream.listen(0, "127.0.0.1", () => r()));
+    const upPort = (upstream.address() as net.AddressInfo).port;
+
+    const proxy = startEgressProxy({ allow: ["127.0.0.1"], port: 0 });
+    await proxy.ready;
+    const proxyPort = (proxy.address() as net.AddressInfo).port;
+
+    try {
+      // First request — triggers the mid-body destroy path.
+      await send(proxyPort, `GET http://127.0.0.1:${upPort}/ HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n`);
+
+      // Second request to a dead port — proxy must still be alive and return 502 (not crash).
+      const dead = await freePort();
+      const second = await send(proxyPort, `GET http://127.0.0.1:${dead}/ HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n`);
+      expect(second).toMatch(/502/);
+    } finally {
+      proxy.close();
+      await new Promise<void>((r) => upstream.close(() => r()));
+    }
+  });
+});
+
+describe("#23 — CONNECT tunnel close propagation", () => {
+  it("destroying clientSocket tears down the upstream socket", async () => {
+    const upstream = net.createServer((_sock) => {
+      // upstream just accepts and stays open
+    });
+    await new Promise<void>((r) => upstream.listen(0, "127.0.0.1", () => r()));
+    const upPort = (upstream.address() as net.AddressInfo).port;
+
+    let upstreamSocket: net.Socket | undefined;
+    upstream.on("connection", (s) => {
+      upstreamSocket = s;
+    });
+
+    const proxy = startEgressProxy({ allow: ["127.0.0.1"], port: 0 });
+    await proxy.ready;
+    const proxyPort = (proxy.address() as net.AddressInfo).port;
+
+    const client = net.connect(proxyPort, "127.0.0.1");
+    await new Promise<void>((r) => client.on("connect", () => r()));
+    client.write(`CONNECT 127.0.0.1:${upPort} HTTP/1.1\r\nHost: 127.0.0.1:${upPort}\r\n\r\n`);
+
+    // Wait for the 200 Connection Established response and upstream to connect.
+    await new Promise<void>((r) => {
+      let buf = "";
+      client.on("data", (d) => {
+        buf += d.toString();
+        if (buf.includes("200 Connection Established")) r();
+      });
+    });
+    await new Promise<void>((r) => setTimeout(r, 20));
+    expect(upstreamSocket).toBeDefined();
+
+    // Destroy the client socket and wait for propagation.
+    client.destroy();
+    await new Promise<void>((r) => setTimeout(r, 50));
+    expect(upstreamSocket!.destroyed).toBe(true);
+
+    proxy.close();
+    await new Promise<void>((r) => upstream.close(() => r()));
+  });
+
+  it("destroying the upstream socket tears down the clientSocket", async () => {
+    const upstream = net.createServer((_sock) => {
+      // upstream accepts and stays open
+    });
+    await new Promise<void>((r) => upstream.listen(0, "127.0.0.1", () => r()));
+    const upPort = (upstream.address() as net.AddressInfo).port;
+
+    let upstreamSocket: net.Socket | undefined;
+    upstream.on("connection", (s) => {
+      upstreamSocket = s;
+    });
+
+    const proxy = startEgressProxy({ allow: ["127.0.0.1"], port: 0 });
+    await proxy.ready;
+    const proxyPort = (proxy.address() as net.AddressInfo).port;
+
+    const client = net.connect(proxyPort, "127.0.0.1");
+    await new Promise<void>((r) => client.on("connect", () => r()));
+    client.write(`CONNECT 127.0.0.1:${upPort} HTTP/1.1\r\nHost: 127.0.0.1:${upPort}\r\n\r\n`);
+
+    await new Promise<void>((r) => {
+      let buf = "";
+      client.on("data", (d) => {
+        buf += d.toString();
+        if (buf.includes("200 Connection Established")) r();
+      });
+    });
+    await new Promise<void>((r) => setTimeout(r, 20));
+    expect(upstreamSocket).toBeDefined();
+
+    // Destroy the upstream socket and wait for propagation.
+    upstreamSocket!.destroy();
+    await new Promise<void>((r) => setTimeout(r, 50));
+    expect(client.destroyed).toBe(true);
+
+    proxy.close();
+    await new Promise<void>((r) => upstream.close(() => r()));
   });
 });
 

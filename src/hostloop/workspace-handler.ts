@@ -159,7 +159,7 @@ export function u1t(u: URL, allow: string[], matcher: (h: string) => boolean): s
 export type RawFetch = (
   url: string,
   pinnedAddresses?: string[],
-) => Promise<{ status: number; location?: string; text(): Promise<string>; body?: ReadableStream<Uint8Array> | null }>;
+) => Promise<{ status: number; location?: string; text(): Promise<string>; body?: ReadableStream<Uint8Array> | null; truncated?: boolean }>;
 
 /** Shared web_fetch response byte cap (#33). The pinned path bounds buffering to this; followWithRedirects
  *  slices/streams to the same value — single source of truth so the two paths can't drift. */
@@ -171,7 +171,7 @@ const WEB_FETCH_BYTE_CAP = 200000;
 function pinnedRequest(
   url: string,
   pinned: string[],
-): Promise<{ status: number; location?: string; text(): Promise<string>; body?: ReadableStream<Uint8Array> | null }> {
+): Promise<{ status: number; location?: string; text(): Promise<string>; body?: ReadableStream<Uint8Array> | null; truncated?: boolean }> {
   const u = new URL(url);
   const mod = u.protocol === "https:" ? https : http;
   const family = net.isIP(pinned[0]); // 4 | 6
@@ -192,6 +192,7 @@ function pinnedRequest(
         const chunks: Buffer[] = [];
         let total = 0;
         let settled = false;
+        let wasCapped = false;
         const finish = () => {
           if (settled) return;
           settled = true;
@@ -201,6 +202,7 @@ function pinnedRequest(
             location: (res.headers.location as string | undefined) ?? undefined,
             text: async () => buf.toString("utf8"),
             body: null,
+            truncated: wasCapped,
           });
         };
         res.on("data", (c: Buffer) => {
@@ -211,6 +213,7 @@ function pinnedRequest(
             total += take;
           }
           if (total >= WEB_FETCH_BYTE_CAP) {
+            wasCapped = true;
             res.destroy(); // stop the transfer once capped
             finish();
           }
@@ -348,9 +351,9 @@ export function clampTimeout(ms: unknown): number {
  * arm matches Cowork's own error-string surface ("Error response from daemon: …").
  */
 export function isExecInfraError(e: { code?: unknown; killed?: boolean; stdout?: string; stderr?: string }): boolean {
+  if (typeof e.code === "string") return true; // spawn failure — e.g. ENOENT, EACCES (also covers ETIMEDOUT)
   if (e.code === "ETIMEDOUT" || e.killed) return true; // timeout / SIGKILL
   if (!e.code && !e.stdout && !e.stderr) return true; // spawn failure (no exec at all)
-  if (e.code === 125) return true; // Docker CLI "couldn't run the container/exec" exit code
   const stderr = (e.stderr ?? "").toLowerCase();
   if (stderr.includes("error response from daemon")) return true; // daemon rejected the exec
   if (stderr.includes("cannot connect to the docker daemon")) return true; // daemon down / socket gone
@@ -465,6 +468,7 @@ async function followWithRedirects(
       } catch {
         return textResult(`Redirect to an invalid URL: ${resp.location}`, true);
       }
+      resp.body?.cancel().catch(() => {}); // drain the undici stream on redirect hops (no-op for body:null pinned/fake responses)
       continue; // re-check the gate on the new host
     }
     onEgress?.({ host: cur.hostname, decision: "allow" });
@@ -495,7 +499,10 @@ async function followWithRedirects(
       const text = chunks.map((c) => decoder.decode(c, { stream: true })).join("") + decoder.decode();
       return textResult(truncated ? text + "\n[truncated]" : text);
     }
-    return textResult((await resp.text()).slice(0, LIMIT));
+    const raw = await resp.text();
+    const sliced = raw.slice(0, LIMIT);
+    const wasTruncated = resp.truncated || sliced.length < raw.length;
+    return textResult(wasTruncated ? sliced + "\n[truncated]" : sliced);
   }
   return textResult(`web_fetch failed: too many redirects (> ${MAX_REDIRECTS}).`, true);
 }

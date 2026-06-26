@@ -6,6 +6,71 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.17.0] — 2026-06-26
+
+### Upgrade notes
+
+- **Re-record all cassettes after upgrading** (`cowork-harness record cassettes/ --rerecord-stale`).
+  The skill-hash delimiter changed (v6 → v7); `verify-cassettes` reports which cassettes need it.
+- **`transcript_no_host_path: false` is now rejected by the schema.** Remove the key or change it
+  to `true`. (It was never meaningful as `false`.)
+- **`is_null: false` on an absent path now fails loud** instead of silently passing. Add
+  `exists: true` if you intend to assert presence before the null check.
+
+### Fixed
+
+- **The microVM egress proxy port is now allocated via bind-port-0 instead of freePort().** The
+  previous approach (bind :0 → read port → close → re-bind real proxy) had a TOCTOU gap: another
+  process could grab the port between the probe close and the proxy bind. The proxy now binds on `:0`
+  directly; `actualPort` is read from the live socket and threaded into the guest firewall rule and
+  `HTTP(S)_PROXY` env after the proxy is already bound. L1 (container/hostloop) was unaffected
+  (uses a fixed port inside Docker's per-run network namespace); L0 (protocol) has no proxy.
+- **Cassette fingerprint format is v7.** The skill-hash uses a NUL byte (`\0`) to delimit entries
+  (`F:`, `D:`, `L:`) — unambiguous for all POSIX-valid filenames. `CONTENTSIG_ALGO` is 3.
+  `verify-cassettes` reports `recorded under an older hash format (v6 → v7)` for stale cassettes;
+  re-record with `--rerecord-stale` to clear.
+- **`transcript_no_host_path` only accepts `true`.** Omit the key to skip the check; `false` is
+  rejected by the schema (`const: true`).
+- **`is_null: false` requires the path to be present.** An absent path fails loud. To assert "exists
+  and is not null", write `exists: true` alongside `is_null: false`.
+- **The egress proxy no longer crashes on a double-end or EPIPE.** When an upstream TLS error
+  arrived after the response had already been ended (e.g. the client disconnected mid-stream),
+  calling `res.writeHead(502)` on an already-sent response threw, taking down the proxy for the
+  remainder of the run. The guard now skips the `writeHead` call when `res.headersSent` is true and
+  swallows the resulting EPIPE.
+- **L0 (protocol) containment check now uses `realpathSync` to guard against symlink escape.** The
+  previous path comparison used the raw strings; a symlinked workspace folder could resolve outside
+  the declared root and the check would miss it.
+- **Session `enabledPlugins` now emits the correct `{ "name@mp": true }` object-map** that
+  `claude --settings` requires, rather than an array of plugin-name strings that is silently ignored.
+  Plugin loading via `--settings` was silently broken for any session with `enabled_plugins:` set.
+- **`probeMicrovmOmitted` no longer issues a `limactl shell` probe when the Lima VM is not Running.**
+  A cold (Absent) or stopped VM cannot be probed; the harness now skips the capability probe
+  entirely and returns `null` rather than trying to shell into a non-running instance.
+- **`is_null: true` on an absent path now directs to `absent: true`** with a clear error rather than
+  silently treating absent-as-null (the two are semantically distinct: absent = the key doesn't
+  exist; null = it exists with a JSON null value).
+- **Boundary `/host` probe split into two independent checks.** The previous single-command probe
+  could false-pass when the host filesystem was sealed but the `/host` directory existed and was
+  empty. The probe now AND-combines a listing check and a no-denial text check.
+- **`--decider-llm` transport now bounded-retries a transient `claude -p` exit and surfaces *why* it
+  failed.** A single `claude -p` decider spawn can exit non-zero on a transient upstream hiccup
+  (rate-limit/overload/network) during a long back-to-back batch — observed 1/8 live runs, not reproducible
+  on demand. The non-zero-exit class is now retried (default 2 attempts, small linear backoff;
+  `COWORK_HARNESS_LLM_RETRIES=0` to disable) so a transient exit doesn't kill a 10-minute paid run at the
+  final gate. Retry never double-answers: the transport has no harness side effects, and a non-zero exit
+  delivers no answer, so the gate is answered exactly once downstream of a successful call. The timeout /
+  `maxBytes`-overflow / spawn-`ENOENT` classes are not transient and still fail loud on the first attempt.
+  (A *deterministic* non-zero exit — bad `--decider-model`, auth — is also retried the full count before
+  failing loud; the cost is bounded and the captured output names the cause.) The exit error now folds in the
+  child's captured **stdout** (where `claude -p` writes its operational diagnosis — verified) and stderr, so
+  `exited 1` is no longer undiagnosable.
+- **`--decider-llm` now binds a markdown-/quote-wrapped `OTHER:` free-text directive.** A model often
+  code-fences a verbatim directive (`` `OTHER: …` ``, `"OTHER: …"`); the leading backtick/quote previously
+  defeated the `^\s*OTHER:` anchor and the gate whiffed → fail-loud stall (observed live). The sentinel now
+  matches on the `trimNearMiss` form (wrapping quotes/backticks stripped, `:` preserved), so a real
+  `OTHER:`-named option label still wins first via the exact-label tier.
+
 ## [0.16.0] — 2026-06-26
 
 ### Fixed

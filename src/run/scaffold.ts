@@ -20,7 +20,16 @@ function escapeRx(s: string): string {
 export function buildScaffold(eventsFile: string): string {
   const runDir = dirname(eventsFile);
   const resultPath = join(runDir, "result.json");
-  const result: Partial<RunResult> = existsSync(resultPath) ? JSON.parse(readFileSync(resultPath, "utf8")) : {};
+  let result: Partial<RunResult>;
+  if (!existsSync(resultPath)) {
+    result = {};
+  } else {
+    try {
+      result = JSON.parse(readFileSync(resultPath, "utf8"));
+    } catch (e) {
+      throw new Error("failed to parse result.json at " + resultPath + ": " + (e as Error).message);
+    }
+  }
 
   // Observed gates → scripted answers (one rule per answered sub-question).
   const answers: { when_question: string; choose: string }[] = [];
@@ -52,7 +61,7 @@ export function buildScaffold(eventsFile: string): string {
   // result is "error", so neither should become an assertion the author trusts — that would scaffold a
   // scenario asserting the half-finished output. Keep the gate answers (still worth locking) but drop the
   // artifact/result asserts and warn loudly.
-  const partial = result.partial === true;
+  const partial = result.partial === true || result.result === undefined;
 
   // Observed artifacts → file_exists; sub-agent count → dispatch_count_max; final result.
   const assert: Record<string, unknown>[] = [];

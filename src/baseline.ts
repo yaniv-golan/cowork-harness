@@ -160,7 +160,11 @@ export function resolveMounts(baseline: PlatformBaseline, sessionId: string, pro
   const subst = (s: string) => s.replace("{sessionId}", sessionId).replace("{projectId}", projectId);
   const cwd = subst(baseline.mountLayout.cwd);
   const sessionRoot = subst(baseline.mountLayout.sessionRoot);
-  const mntRoot = subst(baseline.mountLayout.mntRoot ?? `${baseline.mountLayout.sessionRoot}/mnt`);
+  // TODO: container.ts:31 computes configGuest independently from sessionRoot and is NOT fixed here;
+  // the legacy desktop-1.11847.5 baseline (sessionRoot ending in /mnt, no spawn block) still produces
+  // a double-mnt configGuest path (/sessions/<id>/mnt/mnt/.claude) — that is a separate out-of-scope issue.
+  const rawSessionRoot = baseline.mountLayout.sessionRoot;
+  const mntRoot = subst(baseline.mountLayout.mntRoot ?? (rawSessionRoot.endsWith("/mnt") ? rawSessionRoot : `${rawSessionRoot}/mnt`));
   return {
     cwd,
     sessionRoot,
