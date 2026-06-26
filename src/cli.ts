@@ -467,6 +467,32 @@ async function main() {
   const envOutFmt = process.env.COWORK_HARNESS_OUTPUT_FORMAT;
   if (envOutFmt !== undefined && envOutFmt !== "text" && envOutFmt !== "json")
     fail(cmd, "usage", `COWORK_HARNESS_OUTPUT_FORMAT must be "text" or "json" (got "${envOutFmt}")`, undefined, isJsonOutput(rest));
+  // `--dotenv` / `--run-dir` are GLOBAL flags, honored ONLY in leading position (both stripped above before
+  // dispatch). An exact `--dotenv` / `--run-dir` token surviving in `rest` sits AFTER the subcommand — a
+  // misplaced global, the #1 footgun: the bare per-command "unknown flag: --dotenv" (or, for run/assertions,
+  // an unrelated positional / "unexpected argument" error) sent users hunting for a per-command flag that
+  // doesn't exist (campaign-2 H-2/H-4 — `--dotenv` where the pre-0.17.0 docs put it). Reject with a position
+  // hint. Placed here — AFTER the --version/--help short-circuits (so a `--help`/`-h` request still wins,
+  // matching the #27 precedent above) and routed through fail() so the json envelope + exit-2 path match
+  // every other usage error. Gated on a KNOWN `cmd`, so a junk subcommand (`frobnicate --dotenv x`) falls
+  // through to the more accurate "unknown command" path below rather than getting a hint that implies it was
+  // valid. EXACT-token match only: the `--flag=value` form is intentionally NOT matched, so a per-command
+  // value like `--answer "--dotenv=x=foo"` is never hijacked (a misplaced `--dotenv=x` then falls through to
+  // the command's own unknown-flag rejection). KNOWN trade-off: a bare token used as another flag's value
+  // (e.g. `decide --question --dotenv`, omitting the value) is pre-empted here — it would otherwise get a
+  // more specific "<flag> requires a value" error; both exit 2, and the input is rare (value omitted AND
+  // literally equal to the token).
+  if (!hasHelp(rest) && COMMANDS.includes(cmd)) {
+    const misplacedGlobal = rest.find((t) => t === "--dotenv" || t === "--run-dir");
+    if (misplacedGlobal)
+      fail(
+        cmd,
+        "usage",
+        `${misplacedGlobal} is a GLOBAL flag and must come BEFORE the subcommand (e.g. \`cowork-harness ${misplacedGlobal} <path> ${cmd} …\`)`,
+        undefined,
+        isJsonOutput(rest),
+      );
+  }
   switch (cmd) {
     case "run":
       return cmdRun(rest);

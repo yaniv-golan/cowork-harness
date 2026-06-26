@@ -14,6 +14,17 @@ All notable changes to this project are documented here. The format is based on
   the baseline write entirely.
 - `sync` now regenerates the baseline `$comment` with the current capture date instead of
   carrying the stale string forward from the prior baseline via the `...base` spread.
+- A misplaced GLOBAL flag (the space form `--dotenv <path>` / `--run-dir <path>` placed *after* the
+  subcommand, where the pre-0.17.0 docs put `--dotenv`) now fails with a position hint —
+  `--dotenv is a GLOBAL flag and must come BEFORE the subcommand (e.g. \`cowork-harness --dotenv <path> doctor …\`)`
+  — instead of a bare `unknown flag: --dotenv` (or, for some commands, an unrelated positional /
+  "unexpected argument" error) that sent users hunting for a per-command flag that doesn't exist. The
+  hint honors `--output-format json`, never pre-empts `--version`/`--help`, and only fires for a known
+  subcommand (a junk command still gets the accurate "unknown command"). The `--dotenv=<path>` equals
+  form is not matched — to avoid hijacking a legitimate value like `--answer "--dotenv=x=y"` — so a
+  misplaced equals form still gets the plain unknown-flag rejection. (A bare `--dotenv`/`--run-dir`
+  token used as another flag's omitted value, e.g. `decide --question --dotenv`, is pre-empted by the
+  hint rather than the more specific "requires a value" error; both exit 2.)
 
 ### Changed
 
