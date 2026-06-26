@@ -193,14 +193,19 @@ documents to judge whether it actually does the work (extraction, analysis), wit
 cassette — has its own recipe:
 
 1. **Explore with the LLM decider.** `cowork-harness skill <dir> --decider-llm --intent "<one line of what
-   this run is testing>"` lets a small model answer each gate steered by your intent. This is exploration,
-   **not** a deterministic regression — the run is flagged non-deterministic and a green here is not a
-   scripted pass.
+   this run is testing>"` lets a small model answer each gate steered by your intent. The model replies with
+   the option **number** and the harness maps it to the exact label (so it can't whiff by mis-typing the
+   label text); an out-of-set answer fails loud. This is exploration, **not** a deterministic regression —
+   the run is flagged non-deterministic and a green here is not a scripted pass. For a genuinely ambiguous
+   *judgment* gate, raise the answering model with `--decider-model <id>` (e.g. a Sonnet/Opus id); it
+   improves judgment but won't make an under-specified gate deterministic.
 2. **Script the load-bearing gates — especially binary confirm gates.** Once you know which gates fire
    (`trace <run-dir> --view questions`), pin the ones whose choice drives the outcome with
-   `--answer "<q>=<label>"` / `--answer-policy <yaml>`. **A "Confirm | Different"-style confirm gate is worth
-   scripting** rather than leaving to `--decider-llm`: a generic decider may answer it with free text instead
-   of selecting the label. Scripting it removes that variance.
+   `--answer "<q>=<label>"` / `--answer-policy <yaml>`. When a skill **re-words its option labels run-to-run**
+   (LLM-authored gates), pin a **stable leading substring** instead of the full label — `--answer
+   "<q>=Israeli company"` binds whichever option starts with `Israeli company`. It is uniqueness-guarded and
+   **fails loud** if the anchor ever matches two options (the documented trade: drift-tolerance, not strict
+   CI reproducibility — for that, pin a full exact label or a free-text `answer:`).
 3. **Budget ~1 re-run per file.** If a gate whiffs, the run no longer vanishes — it exits non-zero but
    **salvages a PARTIAL run** (the extraction the agent already did is written to disk). So the cost of a
    missed gate is one re-run with a better `--intent` or a scripted answer, not a lost paid run.

@@ -6,6 +6,30 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+
+- **`--decider-llm` no longer whiffs when the answering model echoes the rendered option line (H10).** The
+  model is now prompted to reply with the option **NUMBER** (the prompt renders options numbered, with
+  descriptions on their own line) and the harness maps the number to the exact canonical label — so the
+  reproduced `"Seed / AI/ML: Seed stage…"` (model parroting the `label: description` bullet) and similar
+  whiffs can't occur on the common path. A backstop still binds a `label: description` echo (label is a
+  boundary-prefix of the reply at a `:` boundary, longest-wins) and the `(Recommended)` suffix; conversational
+  asides (`"No, I disagree…"`, `"Seed (probably) but Series A"`) and bare prose stay **loud, never a guess**.
+  The LLM decider's unanswered error now also surfaces the `closest:` label.
+- **`--decider-llm` now answers multi-select gates.** The LLM path had no `multiSelect` branch (a
+  "select all that apply" gate could pick only one option); it now accepts a comma-list of option numbers
+  (`1, 3`) and a mixed digit+label reply fails loud.
+
+### Added
+
+- **`--decider-model <id>`** (on `skill`, `decide`, and `record`) overrides the `--decider-llm` answering
+  model — flag > env `COWORK_HARNESS_DECIDER_MODEL` > the Haiku default. Use a stronger model for genuinely
+  ambiguous *judgment* gates; it does not make an under-specified gate deterministic. Requires `--decider-llm`.
+- **Scripted `choose:` (and `--answer`) accepts a stable partial anchor** for skills whose option labels
+  drift run-to-run: `choose: "Israeli company"` binds whichever single option starts with it (boundary-anchored,
+  uniqueness-guarded). It **fails loud** if the anchor matches two options — drift-tolerance, not strict CI
+  reproducibility (for that, pin a full exact label or use a free-text `answer:`).
+
 ## [0.15.0] — 2026-06-25
 
 ### Fixed

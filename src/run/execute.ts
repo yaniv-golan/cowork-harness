@@ -57,6 +57,8 @@ export interface ExecuteOptions {
   resume?: boolean;
   /** steering for the LLM decider (`on_unanswered: llm` / `--decider-llm`) — one-line test intent. */
   llmIntent?: string;
+  /** override the LLM decider's answering model (`--decider-model`); falls back to env then the Haiku default. */
+  llmModel?: string;
   /** mark the run non-deterministic even if no `by:"llm"` decision (e.g. a driving agent answers via `--decider-dir`). */
   nonDeterministicHint?: boolean;
   hooks?: RunHooks[];
@@ -429,7 +431,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
 
     const sessionT = new LiveAgentSession(child as any, outDir);
     // Terminal decider: an explicit external channel, else the LLM decider when `agent` is selected.
-    const llmTerminal = onUnanswered === "llm" ? new LlmDecider(claudeCliComplete, opts.llmIntent) : undefined;
+    const llmTerminal = onUnanswered === "llm" ? new LlmDecider(claudeCliComplete, opts.llmIntent, opts.llmModel || undefined) : undefined;
     const externalTerminal = opts.externalChannel ? new ExternalDecider(opts.externalChannel, secrets) : llmTerminal;
     const decider =
       opts.decider ?? buildDecider({ rules: scenario.answers, parity: plan.permissionParity, onUnanswered, external: externalTerminal });

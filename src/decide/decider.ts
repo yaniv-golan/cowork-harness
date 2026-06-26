@@ -158,7 +158,9 @@ export class ScriptedDecider implements Decider {
         // A member matching no option is a silent false-green (the run would record an impossible answer) —
         // fail loud, symmetric with the external/LLM terminals.
         const resolved = picks.map((p) => {
-          const coerced = coerceLabel(p, labels);
+          // scriptedPrefix=true: enable the opt-in author-anchor tier (a stable partial `choose:` that rides
+          // LLM-authored label drift), uniqueness-guarded; only the scripted path gets it.
+          const coerced = coerceLabel(p, labels, true, true);
           if (!coerced.matched) {
             const near = nearestLabel(p, labels);
             throw new UnansweredError(
@@ -315,10 +317,7 @@ export function matchLabel(raw: string, labels: string[], fuzzy = false): string
   // `Confirmed`, especially on binary confirm gates. Strip surrounding quotes + trailing `.!,;`/whitespace
   // and re-run the exact/ci match. NEVER strip `:` — it is the `OTHER:` free-text sentinel callers rely on,
   // and the trim must not let a near-miss swallow it. Strict (not fuzzy), so it can't mis-bind a substring.
-  const norm = r
-    .replace(/^["'`]+/, "")
-    .replace(/["'`]+$/, "")
-    .replace(/[.!,;\s]+$/, "");
+  const norm = trimNearMiss(r);
   if (norm && norm !== r) {
     const near = labels.find((l) => l === norm) ?? labels.find((l) => l.toLowerCase() === norm.toLowerCase());
     if (near) return near;
@@ -331,6 +330,83 @@ export function matchLabel(raw: string, labels: string[], fuzzy = false): string
   const rl = r.toLowerCase();
   const substr = labels.filter((l) => rl.includes(l.toLowerCase()));
   return substr.length === 1 ? substr[0] : null;
+}
+
+// Boundary-prefix separator sets. The ECHO set (LLM reply matched against a label) is `:` ONLY — the label
+// is matched against the model's FREE-TEXT reply, so any extra separator admits a conversational-aside
+// false positive ("No, I disagree…"→No via comma; "Seed (probably) but Series A"→Seed via paren). Both
+// reproduced echoes used `:` (the old `label: description` render). The SCRIPTED set (author anchor matched
+// against a clean, skill-authored OPTION LABEL — no free prose) is richer, so a stable anchor can ride
+// label drift ("Israeli company" → "Israeli company (IL only)" via `(`; "2 founders" → "2 founders, ~5M
+// each" via `,`). em-dash = U+2014, en-dash = U+2013.
+const ECHO_SEPARATORS = ":";
+const SCRIPTED_SEPARATORS = ":(,—–";
+
+/** Strip surrounding quotes + trailing sentence punctuation (`.!,;` + whitespace) — NEVER `:` (the
+ *  `OTHER:` sentinel). The one near-miss normalization, shared by `matchLabel` and the LLM suffix/echo
+ *  backstops so the tiers compose (e.g. `"Approve."` reaches the suffix tier as `Approve`). */
+function trimNearMiss(s: string): string {
+  return s
+    .replace(/^["'`]+/, "")
+    .replace(/["'`]+$/, "")
+    .replace(/[.!,;\s]+$/, "");
+}
+
+/** True when `label` is an index-0 (case-insensitive) prefix of `text`, followed by — skipping optional
+ *  whitespace — a char in `separators` or end-of-string. The single shared boundary predicate behind the
+ *  LLM echo tier (separators=`:`) and the scripted author anchor (richer set); only the terminal set is a
+ *  per-caller parameter, so the boundary/whitespace logic can never fork. `/` and bare whitespace are never
+ *  separators (so "Seed" does not boundary-match "Seed / AI/ML", and prose "Series A is my pick" is rejected). */
+export function isBoundaryPrefix(label: string, text: string, separators: string): boolean {
+  if (!label) return false;
+  const l = label.toLowerCase();
+  const t = text.toLowerCase();
+  if (!t.startsWith(l)) return false;
+  let i = l.length;
+  while (i < t.length && /\s/.test(t[i]!)) i++;
+  return i >= t.length || separators.includes(t[i]!);
+}
+
+/** Echo tier (label ⊑ reply): among labels that are boundary-prefixes of `reply` (echo separator set),
+ *  return the LONGEST — two index-0 prefixes of the same reply are necessarily nested, so the longest is
+ *  unique and most-specific (= the actually-echoed label); null when none. Fixes the `label: description`
+ *  whiff where the model parrots the rendered bullet. */
+export function echoPrefixMatch(reply: string, labels: string[]): string | null {
+  // trimNearMiss strips a leading wrapping quote so a quoted echo (`"Seed / AI/ML: …"`) still matches at
+  // index 0; the trailing strip is harmless (the description tail is past the boundary anyway).
+  const r = trimNearMiss(reply);
+  const cands = labels.filter((l) => isBoundaryPrefix(l, r, ECHO_SEPARATORS));
+  if (cands.length === 0) return null;
+  return cands.reduce((a, b) => (b.length > a.length ? b : a));
+}
+
+/** Strip a trailing ` (Recommended)` (either side) and lowercase+trim — the (Recommended)-suffix
+ *  canonicalization key, shared by `coerceLabel` and `suffixCanonMatch`. */
+function stripRec(x: string): string {
+  return x
+    .toLowerCase()
+    .replace(/\s*\(recommended\)\s*$/i, "")
+    .trim();
+}
+
+/** (Recommended)-suffix canonicalization for the LLM path, uniqueness-guarded: bind iff EXACTLY ONE
+ *  label's stripped form equals the stripped reply; returns the full canonical label or null. */
+export function suffixCanonMatch(raw: string, labels: string[]): string | null {
+  // trimNearMiss first so trim composes with suffix-canon — `"Approve."` binds the `Approve (Recommended)`
+  // option (stripRec alone leaves the trailing `.` and would miss it). The trim never strips `:`.
+  const s = stripRec(trimNearMiss(raw));
+  const cands = labels.filter((l) => stripRec(l) === s);
+  return cands.length === 1 ? cands[0]! : null;
+}
+
+/** The index protocol: an ENTIRELY-digit reply (the `#50` rule) in `[1, n]` → that 1-based index; null
+ *  otherwise (out of range, or any non-bare-digit like "2)", "option 2", "2 and 4" → caller falls to the
+ *  label tiers / fails loud). */
+export function parseIndexReply(raw: string, n: number): number | null {
+  const s = raw.trim();
+  if (!/^\d+$/.test(s)) return null;
+  const v = parseInt(s, 10);
+  return v >= 1 && v <= n ? v : null;
 }
 
 /** Map a web_fetch approval answer (a grant-scope label, shorthand, or 1-based index) → {behavior, grant}.
@@ -410,38 +486,82 @@ export class LlmDecider implements Decider {
         answers[text] = free;
         continue;
       }
-      const raw = await this.complete(this.prompt(text, q.options, ctx), this.model);
-      // Match a LABEL first (matchLabel is fuzzy=false, but tolerates a quoted / trailing-punctuation
-      // near-miss): keeps the common path unchanged and means a real option literally named "OTHER: …" is
-      // selected as a label (exact match wins; the trim never strips `:`), not hijacked by the free-text
-      // branch below.
-      const pick = matchLabel(raw, labels);
-      if (pick) {
-        process.stderr.write(`[llm-decider] "${text}" → "${pick}"${this.intent ? ` (intent: ${this.intent})` : ""}\n`);
-        answers[text] = pick;
-        continue;
-      }
-      // No label matched. Cowork auto-provides a free-text "Other" path on EVERY gate (binary-verified), so
-      // accept an explicit `OTHER: <value>` directive as free text — symmetric with ScriptedDecider's
-      // `answer:` escape hatch — delivered verbatim. A reply that is neither a label nor the explicit OTHER
-      // channel stays a LOUD failure: we do NOT coerce an arbitrary string into free text, or we'd mask a
-      // model that picked a wrong/hallucinated option label.
-      const other = /^\s*OTHER:\s*([\s\S]+)/i.exec(raw);
-      if (other) {
-        const free = other[1].trim();
-        if (free === "")
+      const multi = q.multiSelect === true;
+      const raw = await this.complete(this.prompt(text, q.options, multi, ctx), this.model);
+      // MULTI-SELECT (the index protocol is the ONLY accepted form): a comma-list of bare, in-range option
+      // numbers (e.g. "1, 3"). Anything else — a label echo, or a mixed "1, Seed" — fails loud rather than
+      // partial-binding. (Before this branch the LLM path had no multiSelect handling at all, so a multiSelect
+      // gate could only ever select ONE option.) Members are mapped to canonical labels and ", "-joined.
+      if (multi) {
+        const parts = raw
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean);
+        const picks: string[] = [];
+        for (const p of parts) {
+          const i = parseIndexReply(p, labels.length);
+          if (i === null)
+            throw new UnansweredError(
+              `LLM decider multi-select answer "${raw.trim().slice(0, 60)}" for "${text}" must be option numbers (e.g. "1, 3")`,
+              `options were: ${labels.map((l, n) => `${n + 1}) ${l}`).join("  ")}`,
+            );
+          if (!picks.includes(labels[i - 1]!)) picks.push(labels[i - 1]!);
+        }
+        if (picks.length === 0)
           throw new UnansweredError(
-            `LLM decider returned an empty OTHER answer for "${text}"`,
-            "an OTHER free-text directive needs a non-empty value",
+            `LLM decider returned no selection for the multi-select gate "${text}"`,
+            `reply one or more option numbers, comma-separated (e.g. "1, 3")`,
           );
-        process.stderr.write(`[llm-decider] "${text}" → free-text (Other)${this.intent ? ` (intent: ${this.intent})` : ""}\n`);
-        answers[text] = free;
+        const commaLabel = picks.find((l) => l.includes(","));
+        if (commaLabel)
+          warn(
+            `::warning:: multiSelect member label ${JSON.stringify(commaLabel)} for "${text}" contains a comma — the wire joins members with ", " WITHOUT escaping, so the model may re-read the selected set differently (Cowork limitation). Verify this gate.\n`,
+          );
+        process.stderr.write(`[llm-decider] "${text}" → ${JSON.stringify(picks)}${this.intent ? ` (intent: ${this.intent})` : ""}\n`);
+        answers[text] = picks.join(", ");
         continue;
       }
-      throw new UnansweredError(
-        `LLM decider answer "${raw.trim().slice(0, 60)}" is not one of the options for "${text}"`,
-        `options were: ${labels.join(" | ")}. For a free-text / name gate the model must reply \`OTHER: <value>\` (Cowork's auto-provided "Other" path) — a bare out-of-set value is rejected.`,
-      );
+      // SINGLE-SELECT. PRIMARY — the index protocol: a bare, in-range option number (the model is instructed
+      // to reply a number). Code maps the number → the exact canonical label; the model never types the
+      // matched string, so the `label: description` echo whiff can't occur on the common path.
+      const idx = parseIndexReply(raw, labels.length);
+      if (idx !== null) {
+        process.stderr.write(`[llm-decider] "${text}" → "${labels[idx - 1]}" (#${idx})${this.intent ? ` (intent: ${this.intent})` : ""}\n`);
+        answers[text] = labels[idx - 1]!;
+        continue;
+      }
+      // BACKSTOP (model emitted text, not a number). exact + trailing-trim near-miss FIRST, so a real option
+      // literally named "OTHER: …" binds as a label before the OTHER sentinel (matchLabel never strips `:`).
+      let pick = matchLabel(raw, labels);
+      // OTHER: free-text sentinel — AFTER the exact/trim match (so a literal OTHER:-named label wins) and
+      // BEFORE the permissive suffix/echo tiers (so a genuine free-text OTHER is never grabbed by the echo tier).
+      if (!pick) {
+        const other = /^\s*OTHER:\s*([\s\S]+)/i.exec(raw);
+        if (other) {
+          const free = other[1].trim();
+          if (free === "")
+            throw new UnansweredError(
+              `LLM decider returned an empty OTHER answer for "${text}"`,
+              "an OTHER free-text directive needs a non-empty value",
+            );
+          process.stderr.write(`[llm-decider] "${text}" → free-text (Other)${this.intent ? ` (intent: ${this.intent})` : ""}\n`);
+          answers[text] = free;
+          continue;
+        }
+      }
+      // Permissive label tiers (uniqueness-guarded, return the canonical label): (Recommended)-suffix
+      // canonicalization, then the label-echo fix (label ⊑ reply, `:` boundary, longest-wins).
+      if (!pick) pick = suffixCanonMatch(raw, labels);
+      if (!pick) pick = echoPrefixMatch(raw, labels);
+      if (!pick) {
+        const near = nearestLabel(raw, labels);
+        throw new UnansweredError(
+          `LLM decider answer "${raw.trim().slice(0, 60)}" is not one of the options for "${text}"`,
+          `options were: ${labels.join(" | ")}${near ? ` — closest: ${JSON.stringify(near)}` : ""}. Reply the option NUMBER, or \`OTHER: <value>\` for a custom answer.`,
+        );
+      }
+      process.stderr.write(`[llm-decider] "${text}" → "${pick}"${this.intent ? ` (intent: ${this.intent})` : ""}\n`);
+      answers[text] = pick;
     }
     return { response: { kind: "question", answers }, by: "llm", rationale: this.intent ?? "LLM judgment", model: this.model };
   }
@@ -463,7 +583,10 @@ export class LlmDecider implements Decider {
       .join("\n\n");
   }
 
-  private prompt(question: string, options: { label: string; description?: string }[], ctx?: RunContext): string {
+  // Numbered render + "reply the NUMBER" is the index protocol: the model returns an index and CODE maps it
+  // to the canonical label, so the model never types the label string (the `label: description` echo whiff).
+  // Descriptions go on their OWN line (not `label: description`) so the colon-echo isn't invited.
+  private prompt(question: string, options: { label: string; description?: string }[], multi: boolean, ctx?: RunContext): string {
     const tail = (ctx?.transcript?.() ?? "").slice(-1000);
     return [
       this.intent
@@ -471,10 +594,12 @@ export class LlmDecider implements Decider {
         : `You are answering a question with realistic, sensible judgment (as a typical user would).`,
       tail ? `Recent context (transcript tail):\n${tail}` : "",
       `Question: ${question}`,
-      `Options:\n${options.map((o) => `- ${o.label}${o.description ? `: ${o.description}` : ""}`).join("\n")}`,
-      `Reply with ONLY the exact label of the single best option — no explanation, no punctuation. ` +
-        `If none of the options fits and the intent calls for a custom value (the gate always allows a ` +
-        `free-text "Other" entry), reply with exactly \`OTHER: <your value>\` instead.`,
+      `Options:\n${options.map((o, i) => `${i + 1}) ${o.label}${o.description ? `\n   ${o.description}` : ""}`).join("\n")}`,
+      multi
+        ? `Reply with ONLY the option numbers, comma-separated (e.g. \`1, 3\`) — no label text, no explanation.`
+        : `Reply with ONLY the option number (e.g. \`2\`) — no label text, no explanation. ` +
+          `If none of the options fits and the intent calls for a custom value (the gate always allows a ` +
+          `free-text "Other" entry), reply with exactly \`OTHER: <your value>\` instead.`,
     ]
       .filter(Boolean)
       .join("\n\n");
@@ -911,7 +1036,12 @@ function warnDuplicateLabels(labels: string[], context: string): void {
  *  Returns a discriminated result: `matched` is true when the value was found in `labels`
  *  (by index or case-insensitive name); false when the fallback to `labels[0]` was used.
  *  Shared by the TTY prompt and the external decider so both accept the same lenient forms (Opus L4). */
-export function coerceLabel(a: string | number, labels: string[], enableFirstShorthand = true): { value: string; matched: boolean } {
+export function coerceLabel(
+  a: string | number,
+  labels: string[],
+  enableFirstShorthand = true,
+  scriptedPrefix = false,
+): { value: string; matched: boolean } {
   // A non-string/number answer (e.g. an array or object that slipped past a caller's type guard — the
   // external reply is parsed from arbitrary JSON) used to fall into `a.trim()` and crash with a bare
   // `TypeError: a.trim is not a function`, aborting the run. The module's contract is fail-loud, never
@@ -937,11 +1067,6 @@ export function coerceLabel(a: string | number, labels: string[], enableFirstSho
   // CHOOSE-SUFFIX: tolerate the standard `(Recommended)` label suffix — the offered label is e.g.
   // "Approve (Recommended)" but authors write `choose: Approve`. Match ignoring a trailing "(Recommended)"
   // on EITHER side, and ALWAYS return the canonical full label (with the suffix) so the wire stays faithful.
-  const stripRec = (x: string) =>
-    x
-      .toLowerCase()
-      .replace(/\s*\(recommended\)\s*$/i, "")
-      .trim();
   const suffixMatch = labels.find((l) => stripRec(l) === stripRec(s));
   if (suffixMatch !== undefined) return { value: suffixMatch, matched: true };
   // CHOOSE-SUFFIX keywords (lower priority than any literal label match above, so a real "First"/"Recommended"
@@ -951,6 +1076,17 @@ export function coerceLabel(a: string | number, labels: string[], enableFirstSho
     if (rec !== undefined) return { value: rec, matched: true };
   }
   if (enableFirstShorthand && s.toLowerCase() === "first" && labels.length > 0) return { value: labels[0], matched: true };
+  // SCRIPTED AUTHOR-PREFIX (opt-in; scripted path only) — a stable partial anchor that rides LLM-authored
+  // label drift, e.g. `choose: "Israeli company"` binds whichever option starts with it ("Israeli company
+  // (IL only)"). Uniqueness-guarded against an OPTION LABEL (a clean string, not free prose — no aside
+  // hazard), exactly-one or fall through to loud. Lower than every exact/suffix/keyword tier so it never
+  // shadows a precise pin. Determinism cost (documented): an anchor unique today can match 2 options after
+  // drift → a previously-green pin then fails LOUD (never a false-green). For deterministic CI, pin a full
+  // label or use a free-text `answer:`.
+  if (scriptedPrefix) {
+    const cands = labels.filter((opt) => isBoundaryPrefix(s, opt, SCRIPTED_SEPARATORS));
+    if (cands.length === 1) return { value: cands[0]!, matched: true };
+  }
   return { value: labels[0] ?? s, matched: false };
 }
 

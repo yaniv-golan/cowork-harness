@@ -175,4 +175,46 @@ describe.skipIf(!can)("skill/common flags accept --flag=value identically to --f
     expect(r.code).toBe(2);
     expect(r.out).toMatch(/requires a non-empty value/);
   });
+
+  // --decider-model only feeds the LLM decider; reject it without --decider-llm (mirrors --intent).
+  it("decide: --decider-model without --decider-llm → exit 2", () => {
+    const d = mkdtempSync(join(tmpdir(), "g6-"));
+    const r = run(["decide", "--decider-model", "m", "--question", "Q?", "--option", "A"], d);
+    expect(r.code).toBe(2);
+    expect(r.out).toMatch(/--decider-model requires --decider-llm/);
+  });
+
+  it("record: --decider-model without --decider-llm → exit 2", () => {
+    const d = mkdtempSync(join(tmpdir(), "g6-"));
+    writeFileSync(join(d, "s.yaml"), "prompt: hi\n");
+    const r = run(["record", "s.yaml", "--decider-model", "m"], d);
+    expect(r.code).toBe(2);
+    expect(r.out).toMatch(/--decider-model requires --decider-llm/);
+  });
+
+  it("skill: --decider-model without --decider-llm → exit 2", () => {
+    const d = mkdtempSync(join(tmpdir(), "g6-"));
+    const r = run(["skill", "./plugin", "hi", "--decider-model", "m", "--dry-run"], d);
+    expect(r.code).toBe(2);
+    expect(r.out).toMatch(/--decider-model requires --decider-llm/);
+  });
+
+  // run: --decider-model is a recognized flag (overrides the model for on_unanswered: llm scenarios) — it
+  // must NOT be rejected as an "unexpected argument", and a missing value fails loud.
+  it("run: --decider-model with a missing value → exit 2 (requires a value)", () => {
+    const d = mkdtempSync(join(tmpdir(), "g6-"));
+    writeFileSync(join(d, "s.yaml"), "prompt: hi\n");
+    const r = run(["run", "s.yaml", "--decider-model"], d);
+    expect(r.code).toBe(2);
+    expect(r.out).toMatch(/--decider-model requires a value/);
+  });
+
+  it("run: --decider-model <id> is accepted (not an 'unexpected argument')", () => {
+    const d = mkdtempSync(join(tmpdir(), "g6-"));
+    // a non-existent scenario path: parsing must reach the path check, proving the flag was consumed and did
+    // NOT trip the leftover-positional guard ("unexpected argument(s)").
+    const r = run(["run", "missing.yaml", "--decider-model", "claude-x"], d);
+    expect(r.out).not.toMatch(/unexpected argument/);
+    expect(r.out).toMatch(/scenario path not found/);
+  });
 });
