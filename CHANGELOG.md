@@ -12,12 +12,29 @@ All notable changes to this project are documented here. The format is based on
   `config.json` (the normal state for a fresh install with no user-configured custom egress
   hosts). Previously the absent key was treated the same as a wrong-typed value and blocked
   the baseline write entirely.
+- `sync` now regenerates the baseline `$comment` with the current capture date instead of
+  carrying the stale string forward from the prior baseline via the `...base` spread.
 
 ### Changed
 
 - Baseline bumped to `desktop-1.15962.0` (agent `2.1.187`). Content is unchanged from
   `1.15200.0` — host-loop generator, system prompt, identity, gates, and egress domains are
-  all byte-identical per asar analysis. Version and fingerprint fields only.
+  all byte-identical per asar analysis. Version and fingerprint fields only. The live-contract
+  suite was re-run green against the staged `2.1.187` agent on this baseline, so the
+  "verified end-to-end" claims are earned.
+
+### Documentation
+
+- Audit-validated doc/DX fixes: corrected the `docs/cassette.md` cassette-version example
+  (`6`→`7`); rewrote the `protocol-smoke` row to stop referencing a rejected
+  `transcript_no_host_path: false` line; scoped the SKILL.md "agent binary" prerequisite to the
+  sandboxed live tiers (protocol/replay need none); added `python3` to the README requirements
+  (the `lint` linter shells out to it); moved the `/plugin` slash-command block off the `bash`
+  fence; pinned `cowork-harness@>=0.17.0` in the CI recipe; noted that `chat` excludes
+  `microvm`/`cowork`; and other small corrections (see `docs/internal/2026-06-26-doc-audit-*`).
+- Refreshed all verification/version stamps that still pinned `1.15200.0` / `2.1.181`
+  (README, DESIGN, SPEC, the spawn-contract reference, `docs/cassette.md` fingerprint example,
+  and the `hostloop-prompt.ts` re-verified comment) to `1.15962.0` / `2.1.187`.
 
 ## [0.17.0] — 2026-06-26
 
