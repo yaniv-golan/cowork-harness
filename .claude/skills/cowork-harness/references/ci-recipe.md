@@ -1,6 +1,6 @@
 # CI recipe — replay vs live lanes
 
-Self-contained reference. Tracks `cowork-harness 0.15.0` (baseline `desktop-1.15200.0`).
+Self-contained reference. Tracks `cowork-harness 0.16.0` (baseline `desktop-1.15200.0`).
 
 **Minimal token-free PR gate** — the smallest thing worth committing; runs on stock GitHub-hosted runners,
 no token/Docker/agent:

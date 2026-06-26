@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.16.0] — 2026-06-26
+
 ### Fixed
 
 - **`--decider-llm` no longer whiffs when the answering model echoes the rendered option line (H10).** The
