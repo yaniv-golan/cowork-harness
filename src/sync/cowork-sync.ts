@@ -112,11 +112,13 @@ export function sync(): SyncResult {
   const requireFullVmSandbox = config["lastSeenRequireCoworkFullVmSandbox"] ?? null;
   const userAllow = Array.isArray(config["coworkEgressAllowedHosts"])
     ? (config["coworkEgressAllowedHosts"] as string[])
-    : (flag(
-        unknown,
-        "coworkEgressAllowedHosts: expected an array but got " + typeof config["coworkEgressAllowedHosts"] + " — user allow-list ignored",
-      ),
-      []);
+    : config["coworkEgressAllowedHosts"] === undefined
+      ? [] // key absent = no user overrides; normal for a fresh install
+      : (flag(
+          unknown,
+          "coworkEgressAllowedHosts: expected an array but got " + typeof config["coworkEgressAllowedHosts"] + " — user allow-list ignored",
+        ),
+        []);
 
   // 4. Egress allowlist from the asar (vmAllowedDomains + firewallAlso), merged with user hosts.
   const { domains, fingerprint } = extractFromAsar(unknown);
