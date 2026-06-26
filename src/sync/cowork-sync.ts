@@ -112,7 +112,11 @@ export function sync(): SyncResult {
   const requireFullVmSandbox = config["lastSeenRequireCoworkFullVmSandbox"] ?? null;
   const userAllow = Array.isArray(config["coworkEgressAllowedHosts"])
     ? (config["coworkEgressAllowedHosts"] as string[])
-    : (flag(unknown, "coworkEgressAllowedHosts: expected an array but got " + typeof config["coworkEgressAllowedHosts"] + " — user allow-list ignored"), []);
+    : (flag(
+        unknown,
+        "coworkEgressAllowedHosts: expected an array but got " + typeof config["coworkEgressAllowedHosts"] + " — user allow-list ignored",
+      ),
+      []);
 
   // 4. Egress allowlist from the asar (vmAllowedDomains + firewallAlso), merged with user hosts.
   const { domains, fingerprint } = extractFromAsar(unknown);
@@ -123,7 +127,10 @@ export function sync(): SyncResult {
   if (!gates) {
     flag(unknown, "gates: fcache missing/unreadable — provenance.gates NOT re-synced");
   } else if (Object.keys(gates).length === 0) {
-    flag(unknown, "gates: fcache decoded but NONE of the pinned gate IDs matched — gate IDs may have been re-keyed; update PINNED_GATES in cowork-sync.ts");
+    flag(
+      unknown,
+      "gates: fcache decoded but NONE of the pinned gate IDs matched — gate IDs may have been re-keyed; update PINNED_GATES in cowork-sync.ts",
+    );
   }
 
   return {

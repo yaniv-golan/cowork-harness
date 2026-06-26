@@ -409,7 +409,9 @@ describe("#23 — CONNECT tunnel close propagation", () => {
     const upPort = (upstream.address() as net.AddressInfo).port;
 
     let upstreamSocket: net.Socket | undefined;
-    upstream.on("connection", (s) => { upstreamSocket = s; });
+    upstream.on("connection", (s) => {
+      upstreamSocket = s;
+    });
 
     const proxy = startEgressProxy({ allow: ["127.0.0.1"], port: 0 });
     await proxy.ready;
@@ -447,7 +449,9 @@ describe("#23 — CONNECT tunnel close propagation", () => {
     const upPort = (upstream.address() as net.AddressInfo).port;
 
     let upstreamSocket: net.Socket | undefined;
-    upstream.on("connection", (s) => { upstreamSocket = s; });
+    upstream.on("connection", (s) => {
+      upstreamSocket = s;
+    });
 
     const proxy = startEgressProxy({ allow: ["127.0.0.1"], port: 0 });
     await proxy.ready;

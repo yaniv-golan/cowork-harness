@@ -355,8 +355,10 @@ function leadingGlobalCount(av: string[]): number {
   let i = 0;
   while (i < av.length) {
     const t = av[i];
-    if (t === "--dotenv" || t === "--run-dir") i += 2; // flag + space-form value
-    else if (t.startsWith("--dotenv=") || t.startsWith("--run-dir=")) i += 1; // equals form
+    if (t === "--dotenv" || t === "--run-dir")
+      i += 2; // flag + space-form value
+    else if (t.startsWith("--dotenv=") || t.startsWith("--run-dir="))
+      i += 1; // equals form
     else break; // first non-global token = subcommand
   }
   return i;
@@ -1813,8 +1815,7 @@ function cmdAnswer(args: string[]) {
   // #15: skip flag values so `answer --gate 1 --choose Yes <dir>` doesn't read `1` as the directory.
   const answerPositionals = positionals(args, ["--gate", "--choose", "--answer", "--output-format"]);
   // #31: reject extra positionals rather than silently writing to the first dir (mirrors `gates`).
-  if (answerPositionals.length > 1)
-    return void fail("answer", "usage", "answer takes one <dir>", undefined, json);
+  if (answerPositionals.length > 1) return void fail("answer", "usage", "answer takes one <dir>", undefined, json);
   const dir = answerPositionals[0];
   let seq: number | undefined;
   // --choose accumulates: a single value answers a single-select gate; multiple values answer a
@@ -1929,7 +1930,13 @@ function cmdScaffold(args: string[]) {
   if (outSpaceIdx >= 0) outPath = flagValue(args, outSpaceIdx, "--out");
   else if (outEqIdx >= 0) outPath = args[outEqIdx].slice("--out=".length);
   if (outPath !== undefined && (outPath === "" || outPath.startsWith("-")))
-    return void fail("scaffold", "usage", `--out requires a file path${outPath === "" ? " (got empty)" : `, got a flag: ${outPath}`}`, undefined, json);
+    return void fail(
+      "scaffold",
+      "usage",
+      `--out requires a file path${outPath === "" ? " (got empty)" : `, got a flag: ${outPath}`}`,
+      undefined,
+      json,
+    );
 
   // Validate --from-run flag-looking value before computing positionals (so the error is specific).
   // #6: same dual-form handling for --from-run (the equals form fell through to a spurious usage failure).
@@ -1940,7 +1947,13 @@ function cmdScaffold(args: string[]) {
   else if (fromEqIdx >= 0) fromRunVal = args[fromEqIdx].slice("--from-run=".length);
   if (fromRunVal !== undefined) {
     if (fromRunVal === "" || fromRunVal.startsWith("-"))
-      return void fail("scaffold", "usage", `--from-run requires a run id/dir${fromRunVal === "" ? " (got empty)" : `, got a flag: ${fromRunVal}`}`, undefined, json);
+      return void fail(
+        "scaffold",
+        "usage",
+        `--from-run requires a run id/dir${fromRunVal === "" ? " (got empty)" : `, got a flag: ${fromRunVal}`}`,
+        undefined,
+        json,
+      );
     log("note: --from-run is deprecated; prefer: scaffold <run-id | run-dir>\n");
   }
 

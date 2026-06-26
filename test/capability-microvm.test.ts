@@ -46,7 +46,12 @@ afterEach(() => {
 
 describe("probeMicrovmOmitted — silent vmStatus gate (bug 20)", () => {
   it("returns null WITHOUT spawning limactl shell when vmStatus is 'Absent' (cold run)", () => {
-    spawnSync.mockImplementation(router(() => listResult("Absent"), () => shellProbeResult(["ocr"])));
+    spawnSync.mockImplementation(
+      router(
+        () => listResult("Absent"),
+        () => shellProbeResult(["ocr"]),
+      ),
+    );
     const result = probeMicrovmOmitted(INSTANCE);
     expect(result).toBeNull();
     // The shell probe must NOT have been issued.
@@ -58,7 +63,12 @@ describe("probeMicrovmOmitted — silent vmStatus gate (bug 20)", () => {
   });
 
   it("returns null WITHOUT spawning limactl shell when vmStatus is 'Stopped'", () => {
-    spawnSync.mockImplementation(router(() => listResult("Stopped"), () => shellProbeResult(["ocr"])));
+    spawnSync.mockImplementation(
+      router(
+        () => listResult("Stopped"),
+        () => shellProbeResult(["ocr"]),
+      ),
+    );
     const result = probeMicrovmOmitted(INSTANCE);
     expect(result).toBeNull();
     const shellCalls = spawnSync.mock.calls.filter((c: any) => c[1][0] === "shell");
@@ -68,7 +78,12 @@ describe("probeMicrovmOmitted — silent vmStatus gate (bug 20)", () => {
   });
 
   it("proceeds to probe via limactl shell when vmStatus is 'Running' and returns the omitted set", () => {
-    spawnSync.mockImplementation(router(() => listResult("Running"), () => shellProbeResult(["ocr", "cv"])));
+    spawnSync.mockImplementation(
+      router(
+        () => listResult("Running"),
+        () => shellProbeResult(["ocr", "cv"]),
+      ),
+    );
     const result = probeMicrovmOmitted(INSTANCE);
     // ocr and cv are present → they are NOT in the omitted set; other families are omitted.
     expect(result).not.toBeNull();

@@ -114,9 +114,7 @@ describe("detectCapabilityUse — workspace-script follow (the hidden-import fal
 describe("scriptPathsInCommand per-segment scoping (bug 60)", () => {
   it("scopes script paths to their own interpreter segment: 'python run.py; cat helper.py' yields only run.py", () => {
     // `cat` is not an interpreter; helper.py must NOT be attributed to python.
-    const { events, workRoot } = eventsAndWorkspace([
-      assistantToolUse("Bash", { command: "python run.py; cat helper.py" }),
-    ]);
+    const { events, workRoot } = eventsAndWorkspace([assistantToolUse("Bash", { command: "python run.py; cat helper.py" })]);
     writeScript(workRoot, "run.py", "import cv2\n");
     // helper.py not written — if it were followed incorrectly, a missing-file read returns ""; safe either way.
     writeScript(workRoot, "helper.py", "# no cv2 here\n");
@@ -126,9 +124,7 @@ describe("scriptPathsInCommand per-segment scoping (bug 60)", () => {
   });
 
   it("two interpreter segments each follow only their own first file: 'python run.py; python helper.py'", () => {
-    const { events, workRoot } = eventsAndWorkspace([
-      assistantToolUse("Bash", { command: "python run.py; python helper.py" }),
-    ]);
+    const { events, workRoot } = eventsAndWorkspace([assistantToolUse("Bash", { command: "python run.py; python helper.py" })]);
     writeScript(workRoot, "run.py", "import cv2\n");
     writeScript(workRoot, "helper.py", "import wand\n");
     // Both interpreter segments are followed; cv AND magick should be detected.
@@ -138,17 +134,13 @@ describe("scriptPathsInCommand per-segment scoping (bug 60)", () => {
   });
 
   it("flags after the interpreter are skipped: 'python -u run.py' follows run.py (not -u)", () => {
-    const { events, workRoot } = eventsAndWorkspace([
-      assistantToolUse("Bash", { command: "python -u run.py" }),
-    ]);
+    const { events, workRoot } = eventsAndWorkspace([assistantToolUse("Bash", { command: "python -u run.py" })]);
     writeScript(workRoot, "run.py", "import cv2\n");
     expect(detectCapabilityUse(events, ["cv"], workRoot)).toEqual(["cv"]);
   });
 
   it("non-interpreter commands ('cat file.py') are NOT followed into the workspace", () => {
-    const { events, workRoot } = eventsAndWorkspace([
-      assistantToolUse("Bash", { command: "cat file.py" }),
-    ]);
+    const { events, workRoot } = eventsAndWorkspace([assistantToolUse("Bash", { command: "cat file.py" })]);
     writeScript(workRoot, "file.py", "import cv2\n");
     // `cat` is not in SCRIPT_INTERPRETERS; file.py must NOT be scanned.
     expect(detectCapabilityUse(events, ["cv"], workRoot)).toEqual([]);

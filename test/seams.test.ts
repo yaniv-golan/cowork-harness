@@ -1050,7 +1050,11 @@ describe("Cassette — protocol replay", () => {
   // ---- Bug 40: deserializeDecision question branch validates answers instead of blind-casting ----
   // Cases 1-2: well-formed answers round-trip canon-identically (no spurious O7 fidelity failure).
   it("round-trip: question with non-empty answers round-trips canon-identically", () => {
-    const req: DecisionRequest = { id: "r1", kind: "question", questions: [{ question: "Q?", options: [{ label: "yes" }, { label: "no" }] }] };
+    const req: DecisionRequest = {
+      id: "r1",
+      kind: "question",
+      questions: [{ question: "Q?", options: [{ label: "yes" }, { label: "no" }] }],
+    };
     const resp: DecisionResponse = { kind: "question", answers: { "Q?": "yes" } };
     const envelope = serializeDecision(req, resp) as any;
     const body: Record<string, unknown> = envelope.response.response;

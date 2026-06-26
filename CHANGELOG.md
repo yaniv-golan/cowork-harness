@@ -6,6 +6,17 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.17.0] — 2026-06-26
+
+### Upgrade notes
+
+- **Re-record all cassettes after upgrading** (`cowork-harness record cassettes/ --rerecord-stale`).
+  The skill-hash delimiter changed (v6 → v7); `verify-cassettes` reports which cassettes need it.
+- **`transcript_no_host_path: false` is now rejected by the schema.** Remove the key or change it
+  to `true`. (It was never meaningful as `false`.)
+- **`is_null: false` on an absent path now fails loud** instead of silently passing. Add
+  `exists: true` if you intend to assert presence before the null check.
+
 ### Fixed
 
 - **The microVM egress proxy port is now allocated via bind-port-0 instead of freePort().** The

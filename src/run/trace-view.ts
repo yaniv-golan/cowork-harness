@@ -116,7 +116,11 @@ export function resolveEventsFile(arg: string): string {
     for (const scen of readdirSync(root)) {
       const sd = join(root, scen);
       let sdStat;
-      try { sdStat = statSync(sd); } catch { continue; }
+      try {
+        sdStat = statSync(sd);
+      } catch {
+        continue;
+      }
       if (!sdStat.isDirectory()) continue;
       const direct = join(sd, arg, "events.jsonl");
       if (existsSync(direct)) return direct; // exact run-dir name match under scenario dir
@@ -126,7 +130,11 @@ export function resolveEventsFile(arg: string): string {
     for (const scen of readdirSync(root)) {
       const sd = join(root, scen);
       let sdStat;
-      try { sdStat = statSync(sd); } catch { continue; }
+      try {
+        sdStat = statSync(sd);
+      } catch {
+        continue;
+      }
       if (!sdStat.isDirectory()) continue;
       for (const run of readdirSync(sd)) {
         const f = join(sd, run, "events.jsonl");
@@ -137,9 +145,14 @@ export function resolveEventsFile(arg: string): string {
     if (candidates.length === 1) return candidates[0];
     if (candidates.length > 1) {
       candidates.sort((a, b) => {
-        let am = 0, bm = 0;
-        try { am = statSync(dirname(a)).mtimeMs; } catch {}
-        try { bm = statSync(dirname(b)).mtimeMs; } catch {}
+        let am = 0,
+          bm = 0;
+        try {
+          am = statSync(dirname(a)).mtimeMs;
+        } catch {}
+        try {
+          bm = statSync(dirname(b)).mtimeMs;
+        } catch {}
         return bm !== am ? bm - am : b.localeCompare(a);
       });
       warn(

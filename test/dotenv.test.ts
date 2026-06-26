@@ -4,7 +4,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadDotenv } from "../src/dotenv.js";
 
-const KEYS = ["CC_TEST_A", "CC_TEST_B", "CC_TEST_QUOTED", "CC_TEST_EXPORT", "CC_TEST_COMMENTHASH", "CC_TEST_QUOTEDCOMMENT", "CC_TEST_QUOTEDCOMMENT_SINGLE"];
+const KEYS = [
+  "CC_TEST_A",
+  "CC_TEST_B",
+  "CC_TEST_QUOTED",
+  "CC_TEST_EXPORT",
+  "CC_TEST_COMMENTHASH",
+  "CC_TEST_QUOTEDCOMMENT",
+  "CC_TEST_QUOTEDCOMMENT_SINGLE",
+];
 afterEach(() => KEYS.forEach((k) => delete process.env[k]));
 
 function envFile(body: string): string {

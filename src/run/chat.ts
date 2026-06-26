@@ -386,9 +386,7 @@ function chatRaw(folder: string, model?: string) {
   const child = spawn(runner, dockerArgs, { stdio: "inherit" });
   // On signal termination (OOM, daemon restart, external kill) `code` is null; map the signal to the
   // standard 128+signo so a signal-killed container doesn't report success to a wrapping --raw caller.
-  child.on("exit", (code, signal) =>
-    process.exit(code != null ? code : signal ? 128 + (os.constants.signals[signal] ?? 1) : 1),
-  );
+  child.on("exit", (code, signal) => process.exit(code != null ? code : signal ? 128 + (os.constants.signals[signal] ?? 1) : 1));
   child.on("error", (e) => {
     log(`--raw failed (native interactive mode may be unavailable): ${e}\n`);
     process.exit(2);

@@ -300,10 +300,7 @@ describe("SEAM A — fail-loud declared-source staging", () => {
   it("a manifest with a plugin entry whose source is not a string throws an actionable error", () => {
     const mk = mkdtempSync(join(tmpdir(), "cowork-badentry-"));
     mkdirSync(join(mk, ".claude-plugin"), { recursive: true });
-    writeFileSync(
-      join(mk, ".claude-plugin", "marketplace.json"),
-      JSON.stringify({ name: "mymkt", plugins: [{ name: "p", source: 5 }] }),
-    );
+    writeFileSync(join(mk, ".claude-plugin", "marketplace.json"), JSON.stringify({ name: "mymkt", plugins: [{ name: "p", source: 5 }] }));
     expect(() => plan({ plugins: { local_marketplaces: [mk] } })).toThrow(/invalid shape.*source.*must be a string/);
   });
 

@@ -527,9 +527,7 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
               } else {
                 const isNull = val === null;
                 results.push(
-                  isNull === aj.is_null
-                    ? ok()
-                    : fail(`artifact_json: "${aj.path ?? "(root)"}" is_null=${isNull}, expected ${aj.is_null}`),
+                  isNull === aj.is_null ? ok() : fail(`artifact_json: "${aj.path ?? "(root)"}" is_null=${isNull}, expected ${aj.is_null}`),
                 );
               }
             }

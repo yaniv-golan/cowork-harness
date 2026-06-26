@@ -211,8 +211,7 @@ export function buildLaunchPlan(
   //   qualifier in enabledPlugins. Name is derived as basename(url).replace(/\.git$/, ""), so enabled[]
   //   qualifiers must reference this derived name (e.g. "foo@m" for url "https://host/m.git").
   const settings: Record<string, unknown> = {};
-  if (session.plugins.enabled.length)
-    settings.enabledPlugins = Object.fromEntries(session.plugins.enabled.map((e) => [e, true]));
+  if (session.plugins.enabled.length) settings.enabledPlugins = Object.fromEntries(session.plugins.enabled.map((e) => [e, true]));
   if (session.plugins.marketplaces.length)
     settings.extraKnownMarketplaces = Object.fromEntries(
       session.plugins.marketplaces.map((url) => {

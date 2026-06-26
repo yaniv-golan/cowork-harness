@@ -260,7 +260,9 @@ export function hashSharedOnly(dirs: string[], sessionIgnore?: string[]): string
     // Per-root skill names so a skill-named agent under THIS root leaves THIS root's shared bucket.
     const accept = sharedOnlyAccept(scopeAgents ? new Set(skillDirNames(d)) : new Set(), scopeAgents);
     const ignoreRes = [...readHashIgnore(d), ...(sessionIgnore ?? [])].map(compileIgnore).filter((re): re is RegExp => re !== null);
-    const combinedAccept: AcceptFn = ignoreRes.length ? (rel, isDir) => accept(rel, isDir) && !ignoreRes.some((re) => re.test(rel)) : accept;
+    const combinedAccept: AcceptFn = ignoreRes.length
+      ? (rel, isDir) => accept(rel, isDir) && !ignoreRes.some((re) => re.test(rel))
+      : accept;
     const errors: string[] = [];
     hashDir(d, hash, errors, "", combinedAccept);
     // hashSharedOnly is used only for bucket-level diagnostics; errors are already logged to stderr.
@@ -391,7 +393,8 @@ export function hashSkillDirs(dirs: string[], scopeSkills?: string[], sessionIgn
     // No scope + no ignore + no git filter → undefined accept → byte-identical to the legacy whole-tree hash.
     const accept =
       scopeFn || ignoreRes.length || gitFn
-        ? (rel: string, isDir: boolean) => (scopeFn ? scopeFn(rel, isDir) : true) && !ignoreRes.some((re) => re.test(rel)) && (gitFn ? gitFn(rel) : true)
+        ? (rel: string, isDir: boolean) =>
+            (scopeFn ? scopeFn(rel, isDir) : true) && !ignoreRes.some((re) => re.test(rel)) && (gitFn ? gitFn(rel) : true)
         : undefined;
     hashDir(d, hash, allErrors, "", accept, onFile);
   }
