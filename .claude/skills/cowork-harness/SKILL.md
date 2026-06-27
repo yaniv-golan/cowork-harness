@@ -366,9 +366,12 @@ are the ones that bite hardest.
     work after its last gate** — both the no-gate case ("which file?" with no tool calls) AND the
     *answered-gate-then-re-ask* case (the agent answers an `AskUserQuestion`, then asks again in plain text
     and stops) — with a **`stalled`** verdict signal (suppress with `allow_stall: true` if ending on a
-    question is intended). Limit: a post-gate tool *call* clears the flag whether it **succeeded or errored**
-    (the detector counts tool attempts, not deliverables), so an agent that ran a tool after the gate and
-    *still* stalled is not caught. The broad guard is therefore YOUR assertions — assert the deliverable
+    question is intended). The signal is a **tool-position heuristic**, not deliverable detection, so it is
+    imprecise both ways: (a) a post-gate tool *call* clears the flag whether it **succeeded or errored** (false
+    negative — an agent that ran a tool after the gate and still stalled is not caught); and (b) a deliverable
+    written *before* a final confirmation gate does **not** clear it, so a write-then-confirm-then-question run
+    is flagged (false positive — use `allow_stall: true` for a deliberate confirm-terminal skill). The broad
+    guard is therefore YOUR assertions — assert the deliverable
     (`file_exists` / `artifact_json` / `transcript_matches`), never just `result: success`. Note:
     `on_unanswered` governs **unanswered** `AskUserQuestion` gates; the `stalled` signal covers stalling
     *after* one is answered. A "type-it-in-notes" option has **no scripted deterministic answer** today (the

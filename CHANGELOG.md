@@ -14,9 +14,14 @@ All notable changes to this project are documented here. The format is based on
   catching the case where the agent answers a gate, then re-asks in plain text and stops with the
   deliverable never produced (previously a `result: "success"` false-green). The no-gate case is unchanged.
   Re-derives identically on replay. ⚠️ This can flip a previously-green scenario to red — set
-  `allow_stall: true` to restore the prior verdict if ending on a question is the intended terminal state.
-  Known limit: a post-gate tool *call* (successful or errored) clears the flag, so assert the deliverable
-  (`file_exists`/`artifact_json`) as the broad guard, never `result` alone.
+  `allow_stall: true` to restore the prior verdict if ending on a question is the intended terminal state
+  (e.g. a skill that writes its output and then ends on a confirmation/"anything else?" question). The signal
+  is a *tool-position heuristic*, not deliverable detection, so it is imprecise in both directions: a post-gate
+  tool *call* (successful or errored) clears the flag even if nothing useful was produced (false negative);
+  and a deliverable produced *before* the final gate does NOT clear it, so a write-then-confirm-then-question
+  run is flagged (false positive). Assertions are the real guard — assert the deliverable
+  (`file_exists`/`artifact_json`), never `result` alone — and use `allow_stall` for a deliberate
+  question-terminal skill.
 
 ### Fixed
 

@@ -108,4 +108,46 @@ describe("H2/H3 — stall-on-question detector", () => {
     ]);
     expect(rec.stalledOnQuestion).toBeFalsy();
   });
+
+  // KNOWN LIMIT (documented false positive): the detector is a tool-POSITION heuristic, not deliverable
+  // detection. A deliverable produced BEFORE a final confirmation gate is not credited (it's not "after the
+  // last gate"), so a write-then-confirm-then-question run IS flagged. Pinned so the behavior is intentional
+  // and any future change is deliberate; the escape is `allow_stall` / a deliverable assertion.
+  it("KNOWN FALSE POSITIVE: deliverable written BEFORE a final confirm gate, ends on a question → flagged", async () => {
+    const rec = await drive([
+      { type: "tool_use", name: "Write", input: {} }, // deliverable produced BEFORE the gate
+      gateToolUse(),
+      gateDecision(),
+      { type: "assistant_text", text: "Done — want me to tweak anything else?" },
+      { type: "result", isError: false },
+    ]);
+    expect(rec.result).toBe("success");
+    expect(rec.stalledOnQuestion).toBe(true); // documented limitation, not a bug to "fix" by weakening the trigger
+  });
+
+  // A gate that arrives ONLY via the decision channel (no assistant tool_use block) is NOT in toolLog, so
+  // lastIndexOf === -1 and the run is treated as the no-gate case. Live runs always emit BOTH channels paired,
+  // so this shape is decision-only fixtures/cassettes; pinned so the no-gate reduction is intentional.
+  it("decision-only gate (no tool_use block) ending on a question → treated as no-gate → flagged", async () => {
+    const rec = await drive([
+      gateDecision(), // decision channel only; no gateToolUse() → nothing in toolLog
+      { type: "assistant_text", text: "Which founders did you mean?" },
+      { type: "result", isError: false },
+    ]);
+    expect(rec.result).toBe("success");
+    expect(rec.stalledOnQuestion).toBe(true);
+  });
+
+  // Isolates the §5 safety claim: a PARENTED (subagent) tool entry after the gate, with no top-level tool
+  // after it, still raises productiveAfterGate (run.ts pushes to toolLog unconditionally) → NOT flagged.
+  it("a parented (subagent) tool after the gate alone clears the flag → NOT stalled", async () => {
+    const rec = await drive([
+      gateToolUse(),
+      gateDecision(),
+      { type: "tool_use", name: "Edit", input: {}, parentToolUseId: "tu-some-dispatch" }, // parented entry only
+      { type: "assistant_text", text: "Updated — anything else?" },
+      { type: "result", isError: false },
+    ]);
+    expect(rec.stalledOnQuestion).toBeFalsy();
+  });
 });
