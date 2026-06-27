@@ -135,6 +135,9 @@ describe("doctor — runDoctorChecks", () => {
     expect(tok.detail).toMatch(/Keychain/i);
     expect(tok.remedy).toMatch(/\.env/);
     expect(tok.remedy).toMatch(/keychain token/i);
+    // The Keychain branch must ALSO name --dotenv: a user keeping the token in an alternate file (the
+    // founder-skills H13 confusion) otherwise wrongly concludes doctor can't be pointed at it.
+    expect(tok.remedy).toMatch(/--dotenv <path>/);
   });
 
   it("no env token and NO Keychain credential → the generic 'set a token' remedy (no Keychain mention)", () => {
@@ -183,6 +186,9 @@ describe("doctor — runDoctorChecks", () => {
       "token",
     );
     expect(tok.remedy).toMatch(/Keychain token into \.\/\.env/);
-    expect(tok.remedy).not.toMatch(/--dotenv/);
+    // Precedence = the Keychain branch wins, so the worktree-specific path must NOT leak. (The Keychain
+    // remedy now carries a GENERIC `--dotenv <path>` hint of its own, so assert the absence of the worktree
+    // path specifically, not of `--dotenv` wholesale.)
+    expect(tok.remedy).not.toMatch(/\/main\/\.env/);
   });
 });

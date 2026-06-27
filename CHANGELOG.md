@@ -6,6 +6,15 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+
+- `doctor`'s "no token, but a Claude Code Keychain entry exists" remedy now also names the
+  `--dotenv` workaround. The macOS Keychain branch previously printed only "copy the token into
+  `./.env`", which led an operator whose token lived in a *different* file to conclude `doctor`
+  ignores `--dotenv` — it does not (the global `--dotenv <path>` is honored by `doctor` exactly as
+  by `skill`/`run`, since it loads into `process.env` before dispatch). The remedy now reads
+  "… or, if the token is already in another file, point at it: `cowork-harness --dotenv <path> <cmd>`".
+
 ## [0.18.0] — 2026-06-27
 
 ### Fixed

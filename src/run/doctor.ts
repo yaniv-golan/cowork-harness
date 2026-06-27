@@ -263,7 +263,7 @@ export function runDoctorChecks(tier: Tier, probe: DoctorProbe = realProbe): Doc
     remedy: token
       ? undefined
       : keychainOnly
-        ? "copy your Keychain token into ./.env so the in-Docker agent can read it: echo CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token) >> .env"
+        ? "copy your Keychain token into ./.env so the in-Docker agent can read it: echo CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token) >> .env — or, if the token is already in another file, point at it: cowork-harness --dotenv <path> <cmd> (the global --dotenv is honored by doctor too)"
         : worktreeEnv
           ? `the main checkout has a .env — point at it: cowork-harness --dotenv ${worktreeEnv} <cmd> (or set CLAUDE_CODE_OAUTH_TOKEN)`
           : "export CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token), put it in ./.env, or point at another file: cowork-harness --dotenv <path> <cmd>",
