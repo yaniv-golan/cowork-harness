@@ -33,7 +33,11 @@ function spawnOnce(bin: string, prompt: string, model: string, timeoutMs: number
         /* already gone */
       }
       // NOT a TransportExit → not retried: a child that ate the whole timeout budget is not a quick transient.
-      reject(new Error(`LLM decider transport (${bin} -p) timed out after ${timeoutMs}ms`));
+      reject(
+        new Error(
+          `LLM decider transport (${bin} -p) timed out after ${timeoutMs}ms — raise COWORK_HARNESS_LLM_TIMEOUT_MS to allow a longer gate`,
+        ),
+      );
     }, timeoutMs);
     // Bound stdout too — the wall-clock timeout above caps a fully-hung child, but not one that is
     // actively spewing. Past the cap, SIGKILL and reject loud rather than growing the buffer unbounded.
@@ -54,7 +58,11 @@ function spawnOnce(bin: string, prompt: string, model: string, timeoutMs: number
         }
         clearTimeout(timer);
         // NOT a TransportExit → not retried: a spewing child would just spew again.
-        reject(new Error(`LLM decider transport (${bin} -p) exceeded ${maxBytes} bytes — aborting`));
+        reject(
+          new Error(
+            `LLM decider transport (${bin} -p) exceeded ${maxBytes} bytes — aborting; raise COWORK_HARNESS_LLM_MAX_BYTES if this output is legitimately large`,
+          ),
+        );
         return;
       }
       chunks.push(d);
@@ -66,7 +74,11 @@ function spawnOnce(bin: string, prompt: string, model: string, timeoutMs: number
     child.on("error", (e) => {
       clearTimeout(timer);
       // NOT a TransportExit → not retried: a spawn failure (e.g. ENOENT — `claude` not on PATH) is deterministic.
-      reject(new Error(`LLM decider transport (${bin} -p) failed to spawn: ${e.message}`));
+      reject(
+        new Error(
+          `LLM decider transport (${bin} -p) failed to spawn: ${e.message} — ensure 'claude' is installed and on PATH, or set COWORK_HARNESS_CLAUDE_BIN to its path`,
+        ),
+      );
     });
     child.on("close", (code) => {
       clearTimeout(timer);

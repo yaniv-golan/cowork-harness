@@ -456,7 +456,13 @@ export class LlmDecider implements Decider {
       if (!req.options) return ABSTAIN;
       const labels = req.options.map((o) => o.label);
       const raw = await this.complete(scrub(this.permPrompt(req, ctx), this.secrets), this.model);
-      const pick = matchLabel(raw, labels);
+      // Echo backstop, at parity with the question path's `echoPrefixMatch` tier: the model often
+      // parrots the offered option plus a self-glossed tail past a `:` boundary ("Allow once: fetch
+      // this URL one time"). Bind the echoed label instead of failing loud. The OTHER:/suffix tiers are
+      // inapplicable to a web_fetch grant (a closed set — no free-text, no "(Recommended)" labels), so
+      // only the echo tier is added; the bound value is a bare canonical label coerceWebFetchGrant accepts.
+      let pick = matchLabel(raw, labels);
+      if (!pick) pick = echoPrefixMatch(raw, labels);
       if (!pick)
         throw new UnansweredError(
           `LLM decider answer "${raw.trim().slice(0, 60)}" is not one of the options for "${req.tool}"`,

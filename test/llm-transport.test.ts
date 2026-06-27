@@ -25,6 +25,9 @@ case "$FAKE_MODE" in
   timeout)
     sleep 30
     echo "late"; exit 0 ;;
+  spew)
+    yes 0123456789 | head -c 1000000 2>/dev/null
+    exit 0 ;;
   *)
     echo "OK-ANSWER"; exit 0 ;;
 esac
@@ -48,6 +51,9 @@ afterEach(() => {
   delete process.env.FAKE_COUNTER;
   delete process.env.COWORK_HARNESS_LLM_RETRIES;
   delete process.env.COWORK_HARNESS_LLM_TIMEOUT_MS;
+  delete process.env.COWORK_HARNESS_LLM_MAX_BYTES;
+  // The ENOENT test clobbers the bin path; restore it so later tests still spawn the fake.
+  process.env.COWORK_HARNESS_CLAUDE_BIN = binPath;
 });
 
 afterAll(() => {
@@ -97,5 +103,24 @@ describe("claudeCliComplete — retry transport", () => {
     process.env.COWORK_HARNESS_LLM_TIMEOUT_MS = "1000";
     await expect(claudeCliComplete("q", "m")).rejects.toThrow(/timed out/);
     expect(invocations()).toBe(1); // spawned once, NOT retried
+  });
+
+  it("a timeout error names COWORK_HARNESS_LLM_TIMEOUT_MS as the mitigation", async () => {
+    process.env.FAKE_MODE = "timeout";
+    process.env.FAKE_COUNTER = counterPath;
+    process.env.COWORK_HARNESS_LLM_TIMEOUT_MS = "1000";
+    await expect(claudeCliComplete("q", "m")).rejects.toThrow(/COWORK_HARNESS_LLM_TIMEOUT_MS/);
+  });
+
+  it("a maxBytes overflow names COWORK_HARNESS_LLM_MAX_BYTES as the mitigation", async () => {
+    process.env.FAKE_MODE = "spew";
+    process.env.FAKE_COUNTER = counterPath;
+    process.env.COWORK_HARNESS_LLM_MAX_BYTES = "1000";
+    await expect(claudeCliComplete("q", "m")).rejects.toThrow(/COWORK_HARNESS_LLM_MAX_BYTES/);
+  });
+
+  it("a spawn ENOENT names the PATH / COWORK_HARNESS_CLAUDE_BIN mitigation", async () => {
+    process.env.COWORK_HARNESS_CLAUDE_BIN = join(dir, "does-not-exist");
+    await expect(claudeCliComplete("q", "m")).rejects.toThrow(/PATH|COWORK_HARNESS_CLAUDE_BIN/);
   });
 });

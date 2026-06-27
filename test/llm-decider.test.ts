@@ -153,6 +153,20 @@ describe("LlmDecider", () => {
     expect((d as any).by).toBe("llm");
   });
 
+  it("binds an echoed grant label (option + self-glossed description tail) instead of failing loud", async () => {
+    const req: DecisionRequest = {
+      id: "p",
+      kind: "permission",
+      tool: "webfetch:x.com",
+      input: { domain: "x.com", url: "https://x.com/a" },
+      options: [{ label: "Allow once" }, { label: "Allow all for website" }, { label: "Deny" }],
+    };
+    // The model parrots the option plus a self-glossed description tail past the `:` boundary.
+    const d = await new LlmDecider(async () => "Allow once: fetch this URL one time").decide(req, ctx());
+    expect((d as any).response).toMatchObject({ kind: "permission", behavior: "allow", grant: "once" });
+    expect((d as any).by).toBe("llm");
+  });
+
   it("FAILS LOUD on an out-of-set web_fetch answer", async () => {
     const req: DecisionRequest = {
       id: "p",
