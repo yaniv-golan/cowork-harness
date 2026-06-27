@@ -25,6 +25,17 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **`--decider-llm` now binds an echoed grant label on a `web_fetch` approval gate** instead of failing
+  loud. The web_fetch permission-approval path matched the model's reply with an exact-label check only,
+  so a reply that echoed the option plus a self-glossed tail past a `:` boundary (e.g.
+  `Allow once: fetch this URL one time` against option `Allow once`) aborted the run — the same echo shape
+  the `AskUserQuestion` path already tolerates. The permission path now applies the same `echoPrefixMatch`
+  backstop, so the echoed label binds. Out-of-set replies still fail loud.
+- **The three non-retried `--decider-llm` transport failures now name their mitigation in the error.** A
+  timeout, a `maxBytes` overflow, and a spawn failure (e.g. `ENOENT`) forfeit the run by design — they are
+  not transient — but the surfaced message previously named only the failure. It now points at the lever:
+  `COWORK_HARNESS_LLM_TIMEOUT_MS`, `COWORK_HARNESS_LLM_MAX_BYTES`, and `PATH` / `COWORK_HARNESS_CLAUDE_BIN`
+  respectively. No retry behavior changed.
 - `doctor`'s "no token, but a Claude Code Keychain entry exists" remedy now also names the
   `--dotenv` workaround. The macOS Keychain branch previously printed only "copy the token into
   `./.env`", which led an operator whose token lived in a *different* file to conclude `doctor`
