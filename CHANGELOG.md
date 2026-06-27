@@ -6,6 +6,18 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+
+- **Stall detector now also flags a stall AFTER an answered gate (H3).** The `stalled` verdict signal
+  previously fired only when a run ended on a question having made *no tool calls at all*. It now fires
+  when a run ends on a question and made **no productive tool call after its last `AskUserQuestion` gate** —
+  catching the case where the agent answers a gate, then re-asks in plain text and stops with the
+  deliverable never produced (previously a `result: "success"` false-green). The no-gate case is unchanged.
+  Re-derives identically on replay. ⚠️ This can flip a previously-green scenario to red — set
+  `allow_stall: true` to restore the prior verdict if ending on a question is the intended terminal state.
+  Known limit: a post-gate tool *call* (successful or errored) clears the flag, so assert the deliverable
+  (`file_exists`/`artifact_json`) as the broad guard, never `result` alone.
+
 ### Fixed
 
 - `doctor`'s "no token, but a Claude Code Keychain entry exists" remedy now also names the

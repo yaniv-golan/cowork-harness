@@ -362,15 +362,19 @@ are the ones that bite hardest.
     array.
 13. **`result: success` means the agent didn't error, NOT that the task completed — always assert on
     artifacts/content.** A turn that ends on a plain-text re-ask ("which file did you mean?") still
-    reports `result: success`. The harness now catches the obvious case: a run that ends on an
-    unanswered question with no tool calls fails with a **`stalled`** verdict signal (suppress with
-    `allow_stall: true` if ending on a question is intended). But the broad guard is YOUR assertions —
-    assert the deliverable (`file_exists` / `artifact_json` / `transcript_matches`), never just
-    `result: success`. Note: `on_unanswered` governs **structured `AskUserQuestion` gates only**, not a
-    plain-text trailing question; and a "type-it-in-notes" option has **no scripted deterministic
-    answer** today (the `OTHER:` directive works only on the LLM-decider path, not scripted `choose:`;
-    on an options-bearing gate a bare out-of-set LLM answer fails loud (exit 2) — see the LLM-decider
-    free-text note in `references/fidelity-and-answers.md`).
+    reports `result: success`. The harness catches a run that ends on a question and did **no productive
+    work after its last gate** — both the no-gate case ("which file?" with no tool calls) AND the
+    *answered-gate-then-re-ask* case (the agent answers an `AskUserQuestion`, then asks again in plain text
+    and stops) — with a **`stalled`** verdict signal (suppress with `allow_stall: true` if ending on a
+    question is intended). Limit: a post-gate tool *call* clears the flag whether it **succeeded or errored**
+    (the detector counts tool attempts, not deliverables), so an agent that ran a tool after the gate and
+    *still* stalled is not caught. The broad guard is therefore YOUR assertions — assert the deliverable
+    (`file_exists` / `artifact_json` / `transcript_matches`), never just `result: success`. Note:
+    `on_unanswered` governs **unanswered** `AskUserQuestion` gates; the `stalled` signal covers stalling
+    *after* one is answered. A "type-it-in-notes" option has **no scripted deterministic answer** today (the
+    `OTHER:` directive works only on the LLM-decider path, not scripted `choose:`; on an options-bearing gate
+    a bare out-of-set LLM answer fails loud (exit 2) — see the LLM-decider free-text note in
+    `references/fidelity-and-answers.md`).
 14. **A positional `choose` (`first` / index) is order-dependent.** `choose: "2"` survives label drift
     but NOT option *re-ordering* — if the gate presents its options in a different order run-to-run, the
     index lands on a different option (a silent re-record flake). Prefer an exact label when order is

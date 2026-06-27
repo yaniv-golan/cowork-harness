@@ -289,17 +289,27 @@ export class Run {
     }
 
     this.rec.transcript = transcript.join("\n");
-    // H2: stall-on-question detection. A turn that ends on a plain-text re-ask ("which file?") gets
+    // H2/H3: stall-on-question detection. A turn that ends on a plain-text re-ask ("which file?") gets
     // is_error:false → result:"success" (a false-green — the SDK turn didn't error, but the task didn't
     // complete). Flag it (computeVerdict turns it into a `stalled` fail unless allow_stall). Conservative
     // conjunction to keep the default-fail safe: (1) the run cleanly succeeded, (2) the FINAL top-level
-    // assistant message is a question, (3) the agent took NO action the whole run (no tool_use — a Write/Bash
-    // that produced an artifact is in toolLog, so this subsumes "wrote nothing"), and (4) NO structured
-    // AskUserQuestion gate ever occurred (those are already on_unanswered's job — `rec.questions` is the
-    // reliable signal, NOT event adjacency). Reads only `rec`/local state, so it re-derives identically on the
-    // replay re-drive. Scenario-lane only (a single oneShot turn); not exercised by the multi-turn chat driver.
+    // assistant message is a question, and (3) NO productive tool ran AFTER the last gate.
+    //
+    // (3) is keyed on toolLog position, not "no tools at all": an AskUserQuestion gate arrives as a real
+    // assistant tool_use block (→ toolLog; see toolCounts in any gated result.json), so a naive
+    // `toolLog.length === 0` would miss H3 — the founder repro where the agent answered a gate, then re-asked
+    // in plain text and stalled, having done productive work BEFORE the gate. So we slice toolLog AFTER the
+    // last AskUserQuestion and count non-gate calls: zero ⇒ the agent waited on input and did nothing further.
+    // With no gate, lastIndexOf === -1 → the slice is the whole log → this reduces to H2's exact "no tools at
+    // all" behavior. The count includes parented(subagent)/synthetic entries (toolLog pushes unconditionally)
+    // — they only RAISE the count, never a new false positive. on_unanswered owns the *unanswered* gate; this
+    // owns the agent stalling AFTER an answered one. Reads only local/rec state, so it re-derives identically
+    // on the replay re-drive. Scenario-lane only (one oneShot turn); the chat driver runs it but never reads
+    // the flag (no computeVerdict), so it is inert there.
     const lastText = transcript.length > 0 ? transcript[transcript.length - 1].trim() : "";
-    if (this.rec.result === "success" && lastText.endsWith("?") && this.toolLog.length === 0 && this.rec.questions.length === 0) {
+    const lastGateIdx = this.toolLog.map((t) => t.name).lastIndexOf("AskUserQuestion");
+    const productiveAfterGate = this.toolLog.slice(lastGateIdx + 1).filter((t) => t.name !== "AskUserQuestion").length;
+    if (this.rec.result === "success" && lastText.endsWith("?") && productiveAfterGate === 0) {
       this.rec.stalledOnQuestion = true;
     }
     // Part 3: pair each answered gate with its tool_result (by toolUseId). delivered=true iff a non-error
