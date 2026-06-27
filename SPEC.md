@@ -353,7 +353,7 @@ each emit their own shape — so this is not a single universal envelope across 
 
 `ok = error===null && results.length>0 && results.every(r => r.result==="success" && r.assertions.every(a=>a.pass) && computeVerdict(r).pass)`.
 `result:"success"` and passing assertions are necessary but **not sufficient** — `computeVerdict` adds a
-verdict-signal layer that can still fail a run (e.g. `stalled` on an unanswered question, `transport_error`,
+verdict-signal layer that can still fail a run (e.g. `stalled` — ended on a question with no productive work after its last gate, `transport_error`,
 `missing_capability`, `permissive_auto_allow`, `outputs_delete`, `host_path_leak`, `l0_plugin_divergence`),
 each suppressible only by the matching `allow_*` modifier. `result` means "the agent turn didn't error," NOT
 "the task completed."
@@ -365,7 +365,7 @@ each suppressible only by the matching `allow_*` modifier. `result` means "the a
   "fidelity": "protocol|container|microvm|hostloop|cowork  (replay: \"replay:<f>\")",
   "baseline": "string",                          // platform baseline appVersion
   "result": "success" | "error",                // did the agent turn end without error (NOT "task completed")
-  "stalledOnQuestion?": bool,                     // H2: ended on an unanswered plain-text question → `stalled` verdict fail unless allow_stall
+  "stalledOnQuestion?": bool,                     // H2/H3: ended on a question with no productive tool work after its last gate → `stalled` verdict fail unless allow_stall
   "decisions": [{ "kind","name","decision","by","rationale?","detail?" }],
   "toolCounts?": { "WebSearch": 8, … },          // truthful per-tool call count (top-level; host-routed WebSearch shows HERE, not usage.server_tool_use)
   "gateDeliveries?":[{ "question","delivered": true|false|null, "error?" }], // did each answered gate's answer reach the model (null = unobserved)

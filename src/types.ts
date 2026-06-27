@@ -224,7 +224,7 @@ export const Assertion = z.object({
     .boolean()
     .optional()
     .describe(
-      "(verdict modifier) suppress the default-fail when a run ends on an unanswered question (the agent asked for input and stopped) — assert this only when ending on a question is the intended terminal state; otherwise script the answer (answer:/--answer/decider)",
+      "(verdict modifier) suppress the default-fail when a run ends on a question having done no productive tool work after its last gate (the agent asked for input and stopped — incl. re-asking in plain text after answering an AskUserQuestion) — assert this only when ending on a question is the intended terminal state; otherwise script the answer (answer:/--answer/decider)",
     ),
   replay_protocol_fidelity: z
     .boolean()
@@ -359,10 +359,11 @@ export interface RunResult {
   baseline: string;
   result: "success" | "error";
   resultErrorKind?: "transport" | "agent"; // Fix 5: when result==="error", classify a tail-end transport drop vs a genuine failure
-  // H2: the run ended on an unanswered plain-text question (the agent asked for input and stopped) while
-  // result==="success". A false-green: the SDK turn didn't error, but the task did not complete. computeVerdict
-  // fails on this (a `stalled` signal) unless the scenario asserts allow_stall. Scenario-lane only; re-derived
-  // by the detector in run.ts on both the live and replay re-drive (NOT a persisted-then-read flag).
+  // H2/H3: the run ended on a question having done no productive tool work after its last gate (the agent
+  // asked for input and stopped) while result==="success". A false-green: the SDK turn didn't error, but the
+  // task did not complete. computeVerdict fails on this (a `stalled` signal) unless the scenario asserts
+  // allow_stall. Scenario-lane only; re-derived by the detector in run.ts on both the live and replay
+  // re-drive (NOT a persisted-then-read flag).
   stalledOnQuestion?: boolean;
   // Fix 6h: capability-probe outcome, so the guard roster can show "ran clean" (definitive) distinctly from
   // "couldn't verify" (unverified) and "didn't run" (skipped) — never a false ✓ for a guard that didn't run.
