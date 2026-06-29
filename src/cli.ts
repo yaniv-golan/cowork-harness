@@ -190,7 +190,7 @@ Questions:
       first    pick option 1, loudly warn — then the footer prints the --answer to lock it in
       (the footer always echoes auto-answered questions as copy-pasteable --answer lines)
       (to answer LIVE questions, use --decider-llm / --decider-cmd / --decider-dir below)
-  --decider-llm [--intent "<one line>"]   answer LIVE questions with a small model (the ergonomic
+  --decider-llm [--intent "<one line>"]   answer LIVE questions with a model (Sonnet default; the ergonomic
                                    default for agent-driven runs: state the test's intent once instead of
                                    writing a helper). The model replies with the option NUMBER (code maps it
                                    to the exact label); an out-of-set answer FAILS LOUD. NON-deterministic —

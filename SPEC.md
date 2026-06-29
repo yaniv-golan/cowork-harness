@@ -161,8 +161,9 @@ The chain `Chain(ScriptedDecider, PermissionDefaultDecider, terminal)` resolves 
 the terminal is one of:
 
 - **`FailDecider`/`FirstOptionDecider`/`PromptDecider`** — `--on-unanswered fail|first|prompt`.
-- **`LlmDecider`** (CLI `--decider-llm [--intent "…"]`; scenario YAML `on_unanswered: llm`) — per question, a small
-  model (host `claude -p`, `COWORK_HARNESS_DECIDER_MODEL`) picks a label; out-of-set → `UnansweredError`
+- **`LlmDecider`** (CLI `--decider-llm [--intent "…"]`; scenario YAML `on_unanswered: llm`) — per question, the
+  answering model (host `claude -p`; defaults to Sonnet, override via `--decider-model` / `COWORK_HARNESS_DECIDER_MODEL`)
+  picks a label; out-of-set → `UnansweredError`
   (loud, no `coerceLabel` fallback). Transport is `claude -p` not a direct `/v1/messages` (the harness
   process is not behind the egress proxy); a transient non-zero exit is bounded-retried
   (`COWORK_HARNESS_LLM_RETRIES`, default 2, clamped 0–10; timeout/byte-overflow/spawn-failure are not

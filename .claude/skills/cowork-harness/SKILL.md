@@ -193,7 +193,7 @@ documents to judge whether it actually does the work (extraction, analysis), wit
 cassette — has its own recipe:
 
 1. **Explore with the LLM decider.** `cowork-harness skill <dir> --decider-llm --intent "<one line of what
-   this run is testing>"` lets a small model answer each gate steered by your intent. The model replies with
+   this run is testing>"` lets a model (Sonnet default) answer each gate steered by your intent. The model replies with
    the option **number** and the harness maps it to the exact label (so it can't whiff by mis-typing the
    label text); an out-of-set answer fails loud. This is exploration, **not** a deterministic regression —
    the run is flagged non-deterministic and a green here is not a scripted pass. The answering model

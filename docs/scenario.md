@@ -116,12 +116,14 @@ the CLI's `--decider-llm`). It is **non-deterministic** by construction, so a ru
 `nonDeterministic` in the record — keep it out of deterministic CI regressions; prefer scripted answers +
 `fail` there. See the determinism note above and the decider flags in the [README](../README.md).
 
-> **For large unattended batches, script the stable gates.** A pure live decider re-asks a small model
+> **For large unattended batches, script the stable gates.** A pure live decider re-asks the model
 > once per gate; across a back-to-back batch that is more wall-clock, more paid calls, and more exposure to
 > a transient `claude -p` exit (now bounded-retried, but not free). For unattended multi-doc completion
-> prefer scripted `--answer` / `--answer-policy` on the gates you can name (a stronger `--decider-model`
-> only for the genuinely ambiguous *judgment* gates), and keep `--decider-llm` for exploration. The partial
-> run on a stall already echoes the gate + numbered options — paste them straight into `--answer`.
+> prefer scripted `--answer` / `--answer-policy` on the gates you can name, and keep `--decider-llm` for
+> exploration. **Also script any gate whose answer feeds a *semantic* assertion:** a decided answer can be a
+> confident guess — the decider sees only the transcript tail, not the mounted documents, so it can get a
+> doc-answerable fact wrong (a stronger model included) — and a green run resting on it is a false pass.
+> The partial run on a stall already echoes the gate + numbered options — paste them straight into `--answer`.
 
 > **Where scripted answers hold up — and where they don't.** The `when_question` regex absorbs *wording*
 > drift (an LLM phrases "confirm the stage" many ways), so scripting is robust for skills whose gates are

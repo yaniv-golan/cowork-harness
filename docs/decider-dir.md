@@ -6,7 +6,7 @@ stays live. There is no resume, no re-worded question: the harness blocks on eac
 reads it, writes an answer, and the run continues from exactly where it paused.
 
 This is the fourth answer channel, alongside scripted `--answer`/`--answer-policy` (deterministic),
-`--decider-llm` (a small model picks), and `--decider-cmd '<helper>'` (a spawned helper). Unlike the
+`--decider-llm` (a model picks — defaults to Sonnet), and `--decider-cmd '<helper>'` (a spawned helper). Unlike the
 scripted channels, `--decider-dir` answers questions you don't know in advance — so the harness
 **flags the run non-deterministic** (the footer says so), and a fresh, empty directory is **required**
 per run. Like every channel, it keeps the CLI's stdout free, so it composes with `--output-format json`.

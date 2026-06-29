@@ -17,6 +17,12 @@ All notable changes to this project are documented here. The format is based on
   cheaper model to restore the old cost/behavior: `--decider-model <haiku-id>` or
   `COWORK_HARNESS_DECIDER_MODEL`. (n is small — read this as "Haiku is too weak for judgment-heavy
   gates," not a precise rate.) The whiff error now also names the `--decider-model` lever.
+  ⚠️ **False-green caveat (new guidance, no behavior change):** binding-and-proceeding is the upside,
+  but a *decided* answer is the decider's best guess from the transcript tail — it never sees the
+  mounted documents — so it can fabricate (oracle-less gate) or get a doc-answerable fact wrong, and a
+  green run resting on it is a false pass. **Script any gate whose answer feeds a _semantic_ assertion
+  (`--answer` / `--answer-policy`); reserve `--decider-llm` for structural-assertion runs.** See
+  `references/fidelity-and-answers.md` in the skill.
 - **Stall detector now also flags a stall AFTER an answered gate (H3).** The `stalled` verdict signal
   previously fired only when a run ended on a question having made *no tool calls at all*. It now fires
   when a run ends on a question and made **no productive tool call after its last `AskUserQuestion` gate** —

@@ -102,7 +102,7 @@ function spawnOnce(bin: string, prompt: string, model: string, timeoutMs: number
  * over a direct `POST /v1/messages` (Opus H1): the harness PROCESS is not behind the egress proxy
  * (only the spawned agent child is), so a direct API call would bypass the very allowlist the harness
  * enforces. `claude -p` reuses the run's own auth path and is dogfood-consistent. One short, tool-less
- * call per gate on a small model — bounded cost/latency, no recursion into the harness.
+ * call per gate (one call, no recursion into the harness; model is the decider default or --decider-model).
  *
  * Non-zero-exit retry: a single `claude -p` spawn can exit non-zero on a TRANSIENT upstream hiccup
  * (rate-limit/overload/network) during a long back-to-back batch — observed live, not reproducible on demand.

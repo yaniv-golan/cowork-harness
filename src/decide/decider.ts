@@ -431,7 +431,7 @@ export function coerceWebFetchGrant(answer: string): { behavior: "allow" | "deny
 }
 
 /**
- * `agent` policy — the LLM decider. Per live question, asks a small model to pick ONE option (by label,
+ * `agent` policy — the LLM decider. Per live question, asks the answering model to pick ONE option (by label,
  * never index — options reorder run-to-run), optionally steered by a one-line `--intent`. The ergonomic
  * default for agent-driven runs: state the test's meaning once instead of hand-writing a `--decider-cmd`
  * helper. NON-DETERMINISTIC by nature — `executeScenario` flags the run so a green LLM-steered pass can't
