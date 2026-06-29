@@ -68,15 +68,15 @@ of picking an option), which fails loud. Override with **`--decider-model <id>`*
 `--decider-llm`) — pin a cheaper model for simple gates to cut cost, or a stronger one for hard judgment
 gates; it won't make an under-specified gate deterministic.
 
-⚠️ **A decider can false-green a semantic assertion.** A stronger model binds gates a weaker one
-declines — but on an **oracle-less gate** (one whose answer is *not in the mounted inputs* — a user
-preference, an unstated fact, or a judgment call only the user can make), a confident bind may be a
-**fabrication**. That's fine when your assertions are **structural** (an artifact exists, a section
-renders, JSON has a key) — you only need the run to proceed. It is **NOT** fine when a **semantic**
-assertion sits downstream of that answer: the green run is then a false pass on a made-up premise.
-**Rule: script an oracle-less gate that feeds a semantic assertion (`--answer` / `--answer-policy`),
-don't `--decider-llm` it.** Reserve the live decider for structural-assertion runs and for gates whose
-answer is in the mounted inputs.
+⚠️ **A decider can false-green a semantic assertion.** The decider sees only a short **transcript tail**,
+not the mounted inputs — so its bind can be wrong two ways: a **fabrication** on a gate whose answer
+*nobody can derive* (a user preference, an unstated fact), or a **factual miss on a gate whose answer is
+in a document the decider was never shown** (and a *stronger* model can miss it just as easily). Either
+is fine when your assertions are **structural** (an artifact exists, a section renders, JSON has a key) —
+you only need the run to proceed. It is **NOT** fine when a **semantic** assertion sits downstream of
+that answer: the green run is then a false pass on a wrong premise. **Rule: script *any* gate whose
+answer feeds a semantic assertion (`--answer` / `--answer-policy`); don't `--decider-llm` it.** Reserve
+the live decider for **structural-assertion** runs.
 
 **multiSelect gates** work on every path. Scripted: `choose:` a list. LLM decider (`--decider-llm`): a
 comma-list of option numbers (`1, 3`). In-band `--decider-dir`: the
