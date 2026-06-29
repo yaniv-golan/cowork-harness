@@ -68,6 +68,16 @@ numbers (`1, 3`); a mixed digit+label reply fails loud. The answering model defa
 simple gates to cut cost, or a stronger one for hard judgment gates; it won't make an under-specified
 gate deterministic.
 
+⚠️ **Decider answers can false-green a semantic assertion.** A stronger model binds gates a weaker one
+declines — but on an **oracle-less, founder-only-knowledge gate** (one the *documents don't settle* and
+only the user knows: "did the placeholder SAFE close?", "is the company already flipped?"), a confident
+bind may be a **fabrication**. That's fine when your assertions are **structural** (artifact exists, a
+section renders, JSON has a key) — you only need the run to proceed. It is **NOT** fine when a
+**semantic** assertion sits downstream of that answer: the green run is then a false pass on a made-up
+premise. **Rule: script an oracle-less gate that feeds a semantic assertion (`--answer` /
+`--answer-policy`), don't `--decider-llm` it.** Reserve the live decider for structural-assertion runs
+and for gates whose answer is in the mounted documents.
+
 **multiSelect gates** work on every path. Scripted: `choose:` a list. LLM decider (`--decider-llm`): a
 comma-list of option numbers (`1, 3`). In-band `--decider-dir`: the
 Monitor answers each gate with the `answer` subcommand, repeating its `--choose` flag
