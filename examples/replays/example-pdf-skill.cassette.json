@@ -92,7 +92,7 @@
   ],
   "scenarioSource": "../scenarios/example-pdf-skill.yaml",
   "fingerprint": {
-    "baseline": "1.15962.0",
+    "baseline": "1.15962.1",
     "skillHash": "4db1ddd5d109abc71f9b28807d3e31729f9882d9b85d6d0a9dd7a1980bed3110",
     "contentSig": "e8022822156176fa10e04f0e31d1269719fd09890488db3dfd6351ea8c34431c",
     "skillSources": [
