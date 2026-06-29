@@ -587,7 +587,7 @@ export class LlmDecider implements Decider {
           `options were: ${labels.join(" | ")}${near ? ` — closest: ${JSON.stringify(near)}` : ""}. Reply the option NUMBER, or \`OTHER: <value>\` for a custom answer. ` +
             `If the model declined in prose instead of picking an option, the answering model is set by ` +
             `\`--decider-model\` / \`COWORK_HARNESS_DECIDER_MODEL\` (a different/more capable model may bind it; ` +
-            `on a founder-only-knowledge gate it may guess rather than truly know).`,
+            `on a gate whose answer isn't in the inputs it may guess rather than truly know).`,
         );
       }
       process.stderr.write(`[llm-decider] "${text}" → "${pick}"${this.intent ? ` (intent: ${this.intent})` : ""}\n`);

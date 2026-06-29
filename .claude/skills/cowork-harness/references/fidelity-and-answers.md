@@ -61,22 +61,22 @@ replies with the option **number**; the harness maps that to the exact canonical
 parrots the rendered `label: description` line can't whiff. Backstops bind a `label:`-prefixed echo and the
 `(Recommended)` suffix; a conversational aside or any out-of-set reply **fails loud** (never a guess), and
 the unanswered error names the `closest:` label. A multiSelect gate is answered with a comma-list of
-numbers (`1, 3`); a mixed digit+label reply fails loud. The answering model defaults to a **Sonnet** id
-(a weaker model prose-declines ~50% of founder-judgment gates → fail-loud); override it with
-**`--decider-model <id>`** (on `skill`, `decide`, `record`; precedence: flag > env
-`COWORK_HARNESS_DECIDER_MODEL` > the Sonnet default; requires `--decider-llm`) — pin a cheaper model for
-simple gates to cut cost, or a stronger one for hard judgment gates; it won't make an under-specified
-gate deterministic.
+numbers (`1, 3`); a mixed digit+label reply fails loud. The answering model defaults to a **Sonnet** id —
+a weaker model tends to *prose-decline* a genuinely ambiguous judgment gate (replying in prose instead
+of picking an option), which fails loud. Override with **`--decider-model <id>`** (on `skill`, `decide`,
+`record`; precedence: flag > env `COWORK_HARNESS_DECIDER_MODEL` > the Sonnet default; requires
+`--decider-llm`) — pin a cheaper model for simple gates to cut cost, or a stronger one for hard judgment
+gates; it won't make an under-specified gate deterministic.
 
-⚠️ **Decider answers can false-green a semantic assertion.** A stronger model binds gates a weaker one
-declines — but on an **oracle-less, founder-only-knowledge gate** (one the *documents don't settle* and
-only the user knows: "did the placeholder SAFE close?", "is the company already flipped?"), a confident
-bind may be a **fabrication**. That's fine when your assertions are **structural** (artifact exists, a
-section renders, JSON has a key) — you only need the run to proceed. It is **NOT** fine when a
-**semantic** assertion sits downstream of that answer: the green run is then a false pass on a made-up
-premise. **Rule: script an oracle-less gate that feeds a semantic assertion (`--answer` /
-`--answer-policy`), don't `--decider-llm` it.** Reserve the live decider for structural-assertion runs
-and for gates whose answer is in the mounted documents.
+⚠️ **A decider can false-green a semantic assertion.** A stronger model binds gates a weaker one
+declines — but on an **oracle-less gate** (one whose answer is *not in the mounted inputs* — a user
+preference, an unstated fact, or a judgment call only the user can make), a confident bind may be a
+**fabrication**. That's fine when your assertions are **structural** (an artifact exists, a section
+renders, JSON has a key) — you only need the run to proceed. It is **NOT** fine when a **semantic**
+assertion sits downstream of that answer: the green run is then a false pass on a made-up premise.
+**Rule: script an oracle-less gate that feeds a semantic assertion (`--answer` / `--answer-policy`),
+don't `--decider-llm` it.** Reserve the live decider for structural-assertion runs and for gates whose
+answer is in the mounted inputs.
 
 **multiSelect gates** work on every path. Scripted: `choose:` a list. LLM decider (`--decider-llm`): a
 comma-list of option numbers (`1, 3`). In-band `--decider-dir`: the
