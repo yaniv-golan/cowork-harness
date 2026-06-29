@@ -1236,7 +1236,7 @@ interface RecordOpts {
   onUnanswered?: OnUnanswered;
   externalChannel?: DecisionChannel;
   llmIntent?: string;
-  llmModel?: string; // --decider-model: the LLM decider's answering model (flag > env > Haiku default)
+  llmModel?: string; // --decider-model: the LLM decider's answering model (flag > env > Sonnet default)
   deciderChannel?: "decider-dir" | "decider-llm";
 }
 

@@ -19,6 +19,32 @@ describe("LlmDecider", () => {
     expect((d as any).model).toBe("haiku-test");
   });
 
+  it("defaults the answering model to the validated Sonnet id when none is supplied", async () => {
+    // The default resolves from `process.env.COWORK_HARNESS_DECIDER_MODEL || <literal>`, so unset the
+    // env first or this asserts the env value (false green/red in a CI that sets it).
+    const prev = process.env.COWORK_HARNESS_DECIDER_MODEL;
+    delete process.env.COWORK_HARNESS_DECIDER_MODEL;
+    try {
+      const complete: Complete = async () => "PDF";
+      const d = await new LlmDecider(complete).decide(ask("Format?", ["Markdown", "PDF"]), ctx());
+      expect((d as any).model).toBe("claude-sonnet-4-5");
+    } finally {
+      if (prev === undefined) delete process.env.COWORK_HARNESS_DECIDER_MODEL;
+      else process.env.COWORK_HARNESS_DECIDER_MODEL = prev;
+    }
+  });
+
+  it("a prose decline fails loud with a hint naming the --decider-model lever", async () => {
+    const prose: Complete = async () => "I don't have information about that";
+    try {
+      await new LlmDecider(prose, undefined, "haiku-test").decide(ask("Jurisdiction?", ["Delaware", "Israeli"]), ctx());
+      throw new Error("expected UnansweredError");
+    } catch (e) {
+      expect(e).toBeInstanceOf(UnansweredError);
+      expect((e as UnansweredError).hint).toContain("--decider-model");
+    }
+  });
+
   it("puts the --intent into the model prompt; requires an exact label (not a prose answer) — ", async () => {
     let seenPrompt = "";
     // fix: matchLabel defaults to fuzzy=false, so a prose answer is no longer accepted.

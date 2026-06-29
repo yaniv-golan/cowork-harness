@@ -8,6 +8,15 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed
 
+- **The default `--decider-llm` answering model is now Sonnet (`claude-sonnet-4-5`), not Haiku.** A
+  measurement on a real-doc skill found the prior Haiku default **prose-declined ~50% of
+  founder-judgment gates** (replying "I don't have information…" instead of picking an option → a
+  fail-loud whiff); a Sonnet decider binds those gates and the run proceeds. ⚠️ This **raises per-gate
+  token cost** for every `--decider-llm` run, and a gate a weaker model would have prose-declined (and
+  failed fast) is now more likely to be answered and the run to continue (longer/costlier). Pin a
+  cheaper model to restore the old cost/behavior: `--decider-model <haiku-id>` or
+  `COWORK_HARNESS_DECIDER_MODEL`. (n is small — read this as "Haiku is too weak for judgment-heavy
+  gates," not a precise rate.) The whiff error now also names the `--decider-model` lever.
 - **Stall detector now also flags a stall AFTER an answered gate (H3).** The `stalled` verdict signal
   previously fired only when a run ended on a question having made *no tool calls at all*. It now fires
   when a run ends on a question and made **no productive tool call after its last `AskUserQuestion` gate** —

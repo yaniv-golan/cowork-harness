@@ -441,7 +441,7 @@ export class LlmDecider implements Decider {
   constructor(
     private complete: Complete,
     private intent?: string,
-    private model: string = process.env.COWORK_HARNESS_DECIDER_MODEL || "claude-haiku-4-5-20251001",
+    private model: string = process.env.COWORK_HARNESS_DECIDER_MODEL || "claude-sonnet-4-5",
     // #62: the default transport spawns `claude -p <prompt>` with the prompt as ARGV (process-table visible).
     // The prompt embeds an unscrubbed transcript tail, so without these a tracked secret in the last ~1000
     // chars lands in `ps`/`/proc/<pid>/cmdline`. Scrub the prompt at each complete() call — symmetric with
@@ -584,7 +584,10 @@ export class LlmDecider implements Decider {
         const near = nearestLabel(raw, labels);
         throw new UnansweredError(
           `LLM decider answer "${raw.trim().slice(0, 60)}" is not one of the options for "${text}"`,
-          `options were: ${labels.join(" | ")}${near ? ` — closest: ${JSON.stringify(near)}` : ""}. Reply the option NUMBER, or \`OTHER: <value>\` for a custom answer.`,
+          `options were: ${labels.join(" | ")}${near ? ` — closest: ${JSON.stringify(near)}` : ""}. Reply the option NUMBER, or \`OTHER: <value>\` for a custom answer. ` +
+            `If the model declined in prose instead of picking an option, the answering model is set by ` +
+            `\`--decider-model\` / \`COWORK_HARNESS_DECIDER_MODEL\` (a different/more capable model may bind it; ` +
+            `on a founder-only-knowledge gate it may guess rather than truly know).`,
         );
       }
       process.stderr.write(`[llm-decider] "${text}" → "${pick}"${this.intent ? ` (intent: ${this.intent})` : ""}\n`);

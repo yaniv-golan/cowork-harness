@@ -61,10 +61,12 @@ replies with the option **number**; the harness maps that to the exact canonical
 parrots the rendered `label: description` line can't whiff. Backstops bind a `label:`-prefixed echo and the
 `(Recommended)` suffix; a conversational aside or any out-of-set reply **fails loud** (never a guess), and
 the unanswered error names the `closest:` label. A multiSelect gate is answered with a comma-list of
-numbers (`1, 3`); a mixed digit+label reply fails loud. Raise the answering model for genuinely ambiguous
-*judgment* gates with **`--decider-model <id>`** (on `skill`, `decide`, `record`; precedence: flag > env
-`COWORK_HARNESS_DECIDER_MODEL` > the Haiku default; requires `--decider-llm`) — it sharpens judgment but
-won't make an under-specified gate deterministic.
+numbers (`1, 3`); a mixed digit+label reply fails loud. The answering model defaults to a **Sonnet** id
+(a weaker model prose-declines ~50% of founder-judgment gates → fail-loud); override it with
+**`--decider-model <id>`** (on `skill`, `decide`, `record`; precedence: flag > env
+`COWORK_HARNESS_DECIDER_MODEL` > the Sonnet default; requires `--decider-llm`) — pin a cheaper model for
+simple gates to cut cost, or a stronger one for hard judgment gates; it won't make an under-specified
+gate deterministic.
 
 **multiSelect gates** work on every path. Scripted: `choose:` a list. LLM decider (`--decider-llm`): a
 comma-list of option numbers (`1, 3`). In-band `--decider-dir`: the

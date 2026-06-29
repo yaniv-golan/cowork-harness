@@ -197,9 +197,9 @@ Questions:
                                    the footer flags the run so a green isn't mistaken for a scripted pass;
                                    pin with --answer for CI.
   --decider-model <id>             override the --decider-llm answering model (flag > env
-                                   COWORK_HARNESS_DECIDER_MODEL > Haiku default). Use a stronger model for
-                                   genuinely ambiguous judgment gates; it won't make an under-specified gate
-                                   deterministic. Requires --decider-llm.
+                                   COWORK_HARNESS_DECIDER_MODEL > Sonnet default). Pin a cheaper model
+                                   (e.g. a Haiku id) for simple gates to cut cost; it won't make an
+                                   under-specified gate deterministic. Requires --decider-llm.
   --decider-cmd '<helper>'         answer the LIVE question via a spawned helper (for custom logic). The
                                    helper reads a {"type":"decision_request",…} line on stdin and writes
                                    back {"answers":{"<q>":"<label or 1-based index>"}} (MUST flush per
@@ -252,7 +252,7 @@ Input policy:
   (run omits --decider-llm by design — scenarios pin answers for reproducibility; a scenario may still
    opt into the model with 'on_unanswered: llm' in its YAML, which flags the run non-deterministic)
   --decider-model <id>             override the answering model for 'on_unanswered: llm' scenarios
-                                   (flag > env COWORK_HARNESS_DECIDER_MODEL > Haiku default); no-op for
+                                   (flag > env COWORK_HARNESS_DECIDER_MODEL > Sonnet default); no-op for
                                    scenarios that don't use the model terminal.
   (per-scenario answers/on_unanswered in the YAML take precedence where set)
 
@@ -891,7 +891,7 @@ async function runOneScenario(p: {
 async function cmdRun(rawArgs: string[]) {
   if (hasHelp(rawArgs)) return void log(RUN_HELP);
   // --decider-model overrides the LLM decider's answering model for scenarios that use `on_unanswered: llm`
-  // (flag > env COWORK_HARNESS_DECIDER_MODEL > Haiku default). `takeCommonFlags` doesn't know it (it's not a
+  // (flag > env COWORK_HARNESS_DECIDER_MODEL > Sonnet default). `takeCommonFlags` doesn't know it (it's not a
   // common flag), so pull it out of argv first — otherwise it would land as an "unexpected argument".
   let deciderModel: string | undefined;
   const preArgs: string[] = [];

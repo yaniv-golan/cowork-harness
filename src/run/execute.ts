@@ -57,7 +57,7 @@ export interface ExecuteOptions {
   resume?: boolean;
   /** steering for the LLM decider (`on_unanswered: llm` / `--decider-llm`) — one-line test intent. */
   llmIntent?: string;
-  /** override the LLM decider's answering model (`--decider-model`); falls back to env then the Haiku default. */
+  /** override the LLM decider's answering model (`--decider-model`); falls back to env then the Sonnet default. */
   llmModel?: string;
   /** mark the run non-deterministic even if no `by:"llm"` decision (e.g. a driving agent answers via `--decider-dir`). */
   nonDeterministicHint?: boolean;

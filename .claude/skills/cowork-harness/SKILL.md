@@ -196,9 +196,10 @@ cassette — has its own recipe:
    this run is testing>"` lets a small model answer each gate steered by your intent. The model replies with
    the option **number** and the harness maps it to the exact label (so it can't whiff by mis-typing the
    label text); an out-of-set answer fails loud. This is exploration, **not** a deterministic regression —
-   the run is flagged non-deterministic and a green here is not a scripted pass. For a genuinely ambiguous
-   *judgment* gate, raise the answering model with `--decider-model <id>` (e.g. a Sonnet/Opus id); it
-   improves judgment but won't make an under-specified gate deterministic.
+   the run is flagged non-deterministic and a green here is not a scripted pass. The answering model
+   defaults to a Sonnet id (a weaker model prose-declines ~50% of founder-judgment gates → fail-loud);
+   override it with `--decider-model <id>` — a cheaper model (e.g. Haiku) for simple gates to cut cost,
+   or Opus for the hardest judgment gates; it won't make an under-specified gate deterministic.
 2. **Script the load-bearing gates — especially binary confirm gates.** Once you know which gates fire
    (`trace <run-dir> --view questions`), pin the ones whose choice drives the outcome with
    `--answer "<q>=<label>"` / `--answer-policy <yaml>`. When a skill **re-words its option labels run-to-run**
