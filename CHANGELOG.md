@@ -14,7 +14,10 @@ All notable changes to this project are documented here. The format is based on
   `COWORK_SKIP_CAPABILITY_PROBE=1` which disables the safety net. `--demo` is the shareable preset:
   `--compact` plus suppression of the `runs →` location header. Runs stay in the durable default location
   (no temp redirect), so `scaffold`/`trace`/`inspect <run-id>` still resolve the run afterward; combined
-  with the `$HOME`→`~` collapse, demo output carries no host paths.
+  with the `$HOME`→`~` collapse, demo output carries no host paths. Under `--compact`, `-V` tool inputs
+  also collapse the ephemeral cowork session root (`/sessions/<id>/mnt/` → `mnt/`) — display-only, so the
+  long in-container paths don't clutter shareable verbose output (`run.jsonl` keeps the true paths; the
+  L0/`protocol` tier uses host `work/` paths and is unaffected).
 
 ### Changed
 

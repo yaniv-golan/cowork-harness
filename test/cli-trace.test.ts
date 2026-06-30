@@ -75,7 +75,7 @@ describe("#47 — eventsOf warns loudly on malformed JSON", () => {
 
 // ── #48: answer hints partition scriptable (`first`) vs non-deterministic (`agent`/`external`/`human`) ──
 describe("#48 — renderAnswerHints separates scriptable from non-deterministic answers", () => {
-  const PLAN: RenderPlan = { live: false, progress: false, verbose: false, color: false };
+  const PLAN: RenderPlan = { live: false, progress: false, verbose: false, color: false, compact: false };
 
   function footerOutput(unanswered: RunResult["unanswered"]): string {
     const r: RunResult = {

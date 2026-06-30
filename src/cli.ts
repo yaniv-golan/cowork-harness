@@ -732,15 +732,17 @@ function resolveOutput(
   flags: CommonFlags,
 ): { json: boolean; render: boolean; footer: boolean; plan: RenderPlan } {
   const color = process.stderr.isTTY === true && !process.env.NO_COLOR;
+  const compact = !!(flags.compact || flags.demo); // I2: --demo implies --compact
   if (flags.output === "json")
-    return { json: true, render: false, footer: false, plan: { live: false, progress: false, verbose: false, color: false } };
-  if (flags.quiet) return { json: false, render: false, footer: true, plan: { live: false, progress: false, verbose: false, color } };
+    return { json: true, render: false, footer: false, plan: { live: false, progress: false, verbose: false, color: false, compact } };
+  if (flags.quiet)
+    return { json: false, render: false, footer: true, plan: { live: false, progress: false, verbose: false, color, compact } };
   const verbose = flags.verbose;
   // skill renders live ("show me what it did"); run is verdict-first (renderer buffers for the
   // failure transcript; live/per-tool only under --verbose).
   const live = command === "skill" ? true : verbose;
   const progress = command === "skill" ? true : verbose;
-  return { json: false, render: true, footer: true, plan: { live, progress, verbose, color } };
+  return { json: false, render: true, footer: true, plan: { live, progress, verbose, color, compact } };
 }
 
 /** Resolve the on_unanswered default for a command (input-and-interactivity plan §3). This is the choke

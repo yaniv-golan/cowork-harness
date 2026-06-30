@@ -1941,7 +1941,13 @@ export async function cmdReplay(args: string[]) {
     log(`replay: ${resolved.error}`);
     return process.exit(2);
   }
-  const plan: RenderPlan = { live: false, progress: false, verbose: false, color: process.stderr.isTTY === true && !process.env.NO_COLOR };
+  const plan: RenderPlan = {
+    live: false,
+    progress: false,
+    verbose: false,
+    color: process.stderr.isTTY === true && !process.env.NO_COLOR,
+    compact: false,
+  };
   // Footgun guard: one --assert-from file applied to a whole dir asserts the SAME on-disk block against every
   // cassette (the drift gate protects divergent cassettes, but two with identical shaping fields would be
   // cross-asserted). Use --reassert (per-cassette sibling) for a dir. Warn rather than reject — it's occasionally

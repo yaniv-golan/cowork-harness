@@ -3,7 +3,14 @@ import type { AgentEvent } from "../src/agent/session.js";
 import { makeRenderer, renderFooter, startHeartbeat, type RenderPlan } from "../src/run/renderer.js";
 import type { RunResult } from "../src/types.js";
 
-const plan = (over: Partial<RenderPlan> = {}): RenderPlan => ({ live: true, progress: true, verbose: false, color: false, ...over });
+const plan = (over: Partial<RenderPlan> = {}): RenderPlan => ({
+  live: true,
+  progress: true,
+  verbose: false,
+  color: false,
+  compact: false,
+  ...over,
+});
 function sink() {
   const out: string[] = [];
   return { write: (s: string) => out.push(s), text: () => out.join("") };
