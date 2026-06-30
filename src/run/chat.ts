@@ -180,7 +180,7 @@ export async function cmdChat(args: string[]) {
   const sessionId = `local_${process.hrtime.bigint().toString(36)}`;
   const outDir = join(runsWriteRoot(), "chat", sessionId);
   mkdirSync(outDir, { recursive: true });
-  const plan = buildLaunchPlan(session, baseline, outDir, fidelity);
+  const plan = buildLaunchPlan(session, baseline, outDir, fidelity, false); // chat has no resume concept
   const scenario = Scenario.parse({
     name: "chat",
     baseline: "latest",

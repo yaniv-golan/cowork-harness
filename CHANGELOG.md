@@ -6,6 +6,20 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+
+- **A plugin/skill mounted from an untracked git working copy no longer fails silently.** Staging delivers
+  the git-**tracked** set (the fidelity boundary — real Cowork installs from a repo and sees only committed
+  files), but an all-untracked source used to mount **EMPTY** with no signal: the agent reported "the skill
+  isn't installed" and did the work itself — a green-looking run where the skill never loaded. Now the filter
+  is **visible in both directions**: a would-be-empty plugin/skill mount **hard-fails** with a `BoundaryError`
+  (clean exit 3) naming the dir and the fix (`git add`, or `COWORK_HARNESS_GITSET=0`), and a partially-tracked
+  source emits a loud `::notice:: [stage]` listing the excluded untracked files. The staged-set count and the
+  delivered set now come from one `git ls-files` snapshot (no TOCTOU). The guard is correctly skipped on
+  `--resume` (which re-stages nothing) — which also fixes a latent resume false-fail where a since-removed
+  skill source would throw. The sibling symlink-escape staging errors are now `BoundaryError`s too (clean
+  exit 3 instead of a stack trace).
+
 ### Added
 
 - **`replay --assert-from <scenario.yaml>` / `--reassert` — token-free re-check against on-disk assertions.**

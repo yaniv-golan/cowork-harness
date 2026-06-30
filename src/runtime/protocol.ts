@@ -6,6 +6,7 @@ import type { PlatformBaseline, Scenario } from "../types.js";
 import type { LaunchPlan } from "../session.js";
 import { gitModeEnabled, gitCpFilter } from "../run/skill-files.js";
 import { containedRealPath } from "../boundary-paths.js";
+import { BoundaryError } from "../errors.js";
 
 /**
  * L0 — protocol-only runtime. Spawns the host `claude` with the stream-json
@@ -32,12 +33,12 @@ export function spawnProtocol(
     const dest = join(work, m.mountPath);
     mkdirSync(dirname(dest), { recursive: true });
     if (!containedRealPath(workReal, dirname(dest)))
-      throw new Error(`cowork-harness: staged mount path "${m.mountPath}" resolves outside the work directory (symlink escape)`);
+      throw new BoundaryError(`cowork-harness: staged mount path "${m.mountPath}" resolves outside the work directory (symlink escape)`);
     // preserve symlinks as-is during staging; do not copy out-of-tree content
-    // Phase C (gated): under COWORK_HARNESS_GITSET, deliver only the git-tracked set (Finding 5). Default-ON;
-    // opt out with COWORK_HARNESS_GITSET=0.
+    // F1: prefer the filter precomputed at plan-build (same tracked snapshot used for the staged-set
+    // counts ⇒ delivered == counted). Fall back to a fresh gitCpFilter for non-plugin mounts.
     if (existsSync(m.hostPath)) {
-      const f = gitModeEnabled() ? gitCpFilter(m.hostPath) : null;
+      const f = m.stageFilter ?? (gitModeEnabled() ? gitCpFilter(m.hostPath) : null);
       cpSync(m.hostPath, dest, { recursive: true, dereference: false, ...(f ? { filter: f } : {}) });
     }
   }

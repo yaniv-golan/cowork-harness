@@ -74,9 +74,13 @@ export function gitAccept(tracked: Set<string>): (rel: string) => boolean {
  * mount-copy sites so the delivered set matches the hashed set under git mode — closing the Finding-5
  * false-negative. Symlinks/escaping are handled by the existing containment checks at the call sites.
  */
-export function gitCpFilter(srcRoot: string): ((src: string, dest: string) => boolean) | null {
-  const tracked = gitTrackedSet(srcRoot);
-  if (!tracked) return null;
+/**
+ * Build a `cpSync` filter from an ALREADY-RESOLVED tracked set — so a caller that already paid for
+ * `gitTrackedSet`/`gitStageStats` reuses that one snapshot. This is what keeps the F1 staged-set count
+ * equal to the delivered set: no second `git ls-files`, no TOCTOU between "what we counted" and "what we
+ * copied".
+ */
+export function gitFilterFromSet(srcRoot: string, tracked: Set<string>): (src: string, dest: string) => boolean {
   const accept = gitAccept(tracked);
   return (src: string) => {
     if (src === srcRoot) return true;
@@ -84,4 +88,24 @@ export function gitCpFilter(srcRoot: string): ((src: string, dest: string) => bo
     if (!rel || rel.startsWith("..")) return true; // defensive: never exclude something outside our reckoning
     return accept(rel);
   };
+}
+
+export function gitCpFilter(srcRoot: string): ((src: string, dest: string) => boolean) | null {
+  const tracked = gitTrackedSet(srcRoot);
+  if (!tracked) return null;
+  return gitFilterFromSet(srcRoot, tracked);
+}
+
+/**
+ * The git-tracked set under `dir` PLUS the count of untracked (excluded) files — both from one pair of
+ * `git` calls. Returns `{tracked:null, untracked:0}` when `dir` is not a usable git work tree (caller
+ * falls back to a raw copy). Feeds the F1 staging guard: `tracked.size === 0` ⇒ the plugin/skill would
+ * mount EMPTY (hard-fail); `untracked > 0` ⇒ files excluded that real Cowork won't see (loud notice).
+ */
+export function gitStageStats(dir: string): { tracked: Set<string> | null; untracked: number } {
+  const tracked = gitTrackedSet(dir);
+  if (!tracked) return { tracked: null, untracked: 0 };
+  const others = git(["ls-files", "-z", "--others", "--exclude-standard", "--", "."], dir);
+  const untracked = others.ok ? others.stdout.split("\0").filter(Boolean).length : 0;
+  return { tracked, untracked };
 }

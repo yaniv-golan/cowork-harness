@@ -1,4 +1,5 @@
 import { warn } from "../io.js";
+import { BoundaryError } from "../errors.js";
 import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync, readdirSync, statSync, lstatSync, realpathSync } from "node:fs";
 import { randomUUID, createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
@@ -254,7 +255,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     scenario.fidelity === "cowork" ? (decideLoopFromBaseline(baseline) === "host" ? "hostloop" : "container") : scenario.fidelity;
   if (scenario.fidelity === "cowork") process.stderr.write(`[loop] cowork → ${effectiveFidelity} (per gate 1143815894)\n`);
 
-  const plan = buildLaunchPlan(session, baseline, outDir, effectiveFidelity);
+  const plan = buildLaunchPlan(session, baseline, outDir, effectiveFidelity, !!opts.resume);
   if (agentSessionId) {
     plan.agentSessionId = agentSessionId;
     plan.resume = !!opts.resume;
@@ -1251,12 +1252,4 @@ export function readSessionManifest(path: string, sessionId: string): string {
   return id;
 }
 
-/** Thrown when a scenario asserts boundary behavior at a fidelity that can't enforce it (§5c category). */
-export class BoundaryError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "BoundaryError";
-  }
-}
-
-export { UnansweredError };
+export { UnansweredError, BoundaryError };
