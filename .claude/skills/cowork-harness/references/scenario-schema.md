@@ -125,7 +125,9 @@ For a multi-skill plugin, scope a scenario's hash with `skills: [<name>]`; the o
 input (instead of a fleet-wide shared root) so editing one skill's sub-agent contract re-stales only its cassettes.
 
 **Mounting the skill under test:** put the skill folder in `plugins.local_plugins` and enable it via
-`plugins.enabled: [<plugin>@local]`. The folder is copied fresh each run. For an ad-hoc `skill` run
+`plugins.enabled: [<plugin>@local]`. The folder is copied fresh each run — **git-tracked files** inside a
+repo, so `git add` a new skill (an all-untracked folder hard-fails as a would-be-empty mount;
+`COWORK_HARNESS_GITSET=0` copies untracked). For an ad-hoc `skill` run
 with no session file, the CLI flags `--folder <dir>` and `--upload <file>` are the equivalents of
 `folders[]` / `uploads[]`.
 

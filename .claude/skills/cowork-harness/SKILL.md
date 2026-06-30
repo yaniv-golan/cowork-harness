@@ -75,6 +75,14 @@ The skill is **copied fresh into the sandbox each run**. Wire it via `plugins.lo
 `COWORK_HARNESS_SOFT_MISSING=1` to fall back to warn-and-exclude. Mount names are always derived from
 the folder basename (collision-resolved); there is no `to:` override. See `references/scenario-schema.md`.
 
+> **`git add` a brand-new skill before testing it.** Inside a git repo the harness stages the
+> **git-tracked** files (the fidelity boundary — real Cowork installs from a repo and sees only committed
+> files). An **all-untracked** skill folder used to mount *empty* and the agent reported "the skill isn't
+> installed" then did the work itself — a green-looking run where the skill never loaded. That now
+> **hard-fails** (`BoundaryError`, exit 3) naming the dir, and a partially-tracked folder emits a loud
+> `::notice:: [stage]` listing the excluded files. Fix: `git add` the skill, or `COWORK_HARNESS_GITSET=0`
+> to copy untracked files (won't reflect what ships). A folder **outside** any repo is copied raw (no guard).
+
 ## 4. Choose a fidelity tier
 
 | Tier | What it gives you | Use when |
