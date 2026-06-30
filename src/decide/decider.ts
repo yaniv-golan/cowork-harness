@@ -654,9 +654,30 @@ export class LlmDecider implements Decider {
 
 /** `prompt` policy — ask a human at the TTY. Requires a TTY (else throws). */
 export class PromptDecider implements Decider {
+  private ask: (prompt: string) => Promise<string>;
+  private blockNoticeShown = false;
   // Inject the asker so the chat REPL can route gate prompts through the SAME readline interface it uses
   // for user turns — two interfaces on process.stdin race for input. Defaults to a private askRaw.
-  constructor(private ask: (prompt: string) => Promise<string> = askRaw) {}
+  constructor(ask: (prompt: string) => Promise<string> = askRaw) {
+    // F2: the FIRST blocking wait prints an immediate, unmistakable notice. A `prompt`-policy wait is
+    // otherwise un-releasable (dialog auto-cancel is Infinity under prompt) and the only other signal is
+    // the ~30s heartbeat — a CLI silently blocking on stdin is hostile to recordings/automation. The flag
+    // is PER-INSTANCE (a fresh PromptDecider per run via buildDecider), not module-level, so a
+    // multi-scenario `run dir/` doesn't notify just once for the whole batch. Only the real TTY asker
+    // (askRaw) gets the notice; a custom injected `ask` (chat REPL / tests) is its own interactive
+    // context and is left alone.
+    const interactive = ask === askRaw;
+    this.ask = (prompt) => {
+      if (interactive && !this.blockNoticeShown) {
+        this.blockNoticeShown = true;
+        warn(
+          "::notice:: [input] waiting for an answer at the TTY — this blocks until you respond. " +
+            "Ctrl-C to abort, or re-run with --on-unanswered fail (non-interactive) / first.\n",
+        );
+      }
+      return ask(prompt);
+    };
+  }
   async decide(req: DecisionRequest, _ctx?: RunContext): Promise<Decision | Abstain> {
     // Ordinary permissions → parity default. A web_fetch approval (options present) is prompted like a gate.
     if (req.kind === "permission" && !req.options) return ABSTAIN;

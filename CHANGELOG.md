@@ -15,6 +15,13 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **A blocking `--on-unanswered prompt` wait now announces itself immediately.** When `skill` blocks at
+  the TTY for an unscripted question (the adaptive default when a human is attached), it prints a one-time
+  `::notice:: [input] waiting for an answer…` the instant it blocks — instead of only the ~30 s heartbeat —
+  so a recording/wrapper/automation context isn't left silently hung. The notice is per-run (a fresh
+  decider per scenario, so a `run dir/` batch announces each blocking scenario), and only for the real TTY
+  asker (the `chat` REPL's own prompt is left alone). For non-interactive use, `--on-unanswered fail`
+  remains the way to never block.
 - **Human output no longer prints absolute `$HOME` paths.** The `runs →` location line, the `--keep`
   run-dir/outputs lines, the `scaffold` tip, and the failure `→ full run:` line now collapse a leading
   `$HOME` to `~`, so a screenshot / pasted log / bug report doesn't leak your username and filesystem
