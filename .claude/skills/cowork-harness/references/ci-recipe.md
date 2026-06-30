@@ -26,7 +26,11 @@ The split is not just about tokens — it decides **where each lane can run**:
   modifiers `allow_permissive_auto_allow` / `allow_missing_capability` / `allow_l0_plugin_divergence` /
   `allow_stall` (no-op passes); plus the gate keys `question_asked` / `questions_count_max` /
   `gate_answers_delivered` **if** the cassette has `controlOut`). Filesystem/egress assertions are
-  **silently skipped**. This is your **always-on PR gate**.
+  **silently skipped**. This is your **always-on PR gate**. With `--output-format json`, read each
+  `results[].verdict.{pass,signals}` for **per-cassette** pass/fail and the reason (the top-level `ok`
+  collapses the whole batch) — e.g. a `stalled` signal fails a cassette whose assertions all passed.
+  The PR gate evaluates the assertions **frozen in the cassette**; to re-check against an edited on-disk
+  `assert:` without a paid re-record, use `replay --assert-from <scenario.yaml>` (or `--reassert`).
 - **`run` / `record` (live).** Spawns the real agent in a sandbox: real model tokens + Docker **+ the
   staged Claude Code agent ELF**, bind-mounted from a local Claude Desktop install or pointed to via
   `COWORK_AGENT_BINARY`. Nothing is bundled, and **the agent binary is not redistributable** — a clean

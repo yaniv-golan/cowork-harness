@@ -391,6 +391,30 @@ Two consequences for CI:
 - On `replay`, skipped assertions are **absent** from `results[].assertions[]` (filtered before evaluation),
   not present-and-passing — so a CI script must not assume a fixed assertion count across the two lanes.
 
+#### Where `replay` reads `assert:` from — frozen by default, on-disk by opt-in
+
+By default `replay` evaluates the assertions **frozen inside the cassette** (the copy `record` captured), so a
+plain `replay` is byte-deterministic and independent of the working tree — editing `scenarios/<name>.yaml`'s
+`assert:` does **not** change a default replay. To keep that from being a *silent* trap, when a sibling
+scenario resolves and its `assert:` differs from the frozen copy, replay prints a `::notice::` pointing at the
+opt-in flag.
+
+`--assert-from <scenario.yaml>` (explicit) / `--reassert` (auto-resolve the sibling) re-check the cassette
+against the **on-disk** `assert:` (+`expect_denied:`) — the token-free "edit the assert, re-check without a
+paid re-record" loop. Because re-asserting against frozen events is only sound if the recording still
+corresponds to the scenario, this path is safe by construction:
+- **Recording-shaping drift hard-fails** — if `prompt`, `answers`, `baseline`, `fidelity`, `skills`, or
+  `requires_capabilities` differ from the recording, replay refuses (re-record instead).
+- **The `session` is NOT verified** — it's excluded from the drift check (stored relative in the cassette,
+  resolves absolute on disk) and is **not fingerprinted**, so a change to the **model**, data mounts, or
+  discovery in the session between record and re-assert is **undetected**. The notice says so; re-record if the
+  session changed. (Skill *content* under the session IS guarded — next bullet.)
+- **Skill-content staleness hard-fails** on this path (it implies `--fail-on-skill-drift`), so an edited assert
+  can't green against a skill that no longer produces the frozen events.
+- **Sourcing ≠ evaluation:** `expect_denied` and the filesystem/egress keys are read from the on-disk block but
+  stay **live-only** on replay — editing them re-checks nothing here (replay warns when you do). Use a live
+  `run` to check egress/filesystem.
+
 See [docs/cassette.md](./cassette.md) for the mental model, file shape, and the O7 `replay_protocol_fidelity` guard.
 
 #### Mixed assertions on the replay lane

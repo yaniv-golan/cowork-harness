@@ -36,11 +36,19 @@ export function parseOutputFormat(args: string[]): "text" | "json" {
 
 /** §5a — the standardized machine envelope object (internal: `jsonEnvelope` stringifies it). `ok` is the
  *  same SEAM-B verdict as the process exit code / footer (it cannot diverge). `replay` uses the replay
- *  lane (a cassette can't reproduce the scan/permissive signals); every other command is the live lane. */
+ *  lane (a cassette can't reproduce the scan/permissive signals); every other command is the live lane.
+ *
+ *  Each emitted result carries its own `verdict` ({pass, exitCode, signals[], guards[]}) — a NON-MUTATING
+ *  projection (computeVerdict is pure; RunResult the type stays clean). This lets a consumer read per-result
+ *  pass/fail AND why (the `signals[]` — e.g. an all-green-assertions run that is `pass:false` purely on a
+ *  `stalled` signal) without recomputing from the sibling booleans. The top-level `ok` is derived from the
+ *  SAME per-result verdicts, so it cannot diverge from them (or from the exit code / footer — all route
+ *  computeVerdict). NOTE: this publishes the VerdictSignal.code taxonomy as a de-facto wire contract. */
 function jsonEnvelopeObj(command: string, results: RunResult[]): Record<string, unknown> {
   const lane = command === "replay" ? "replay" : "live";
-  const ok = results.length > 0 && results.every((r) => computeVerdict(r, lane).pass);
-  return { tool: "cowork-harness", version: pkgVersion(), command, ok, results, error: null };
+  const withVerdict = results.map((r) => ({ ...r, verdict: computeVerdict(r, lane) }));
+  const ok = withVerdict.length > 0 && withVerdict.every((r) => r.verdict.pass);
+  return { tool: "cowork-harness", version: pkgVersion(), command, ok, results: withVerdict, error: null };
 }
 
 /** §5a — the standardized machine envelope emitted by every `--output-format json` command. COMPACT

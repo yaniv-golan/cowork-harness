@@ -91,6 +91,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
       [--decider-llm [--intent "…"]] | [--on-unanswered fail|first]   answer live via a model / auto-pick
                                (a live decider flags the cassette non-deterministic; it still replays deterministically)
   replay <file|dir>            deterministic protocol-replay of a cassette or a dir of them (no token, no Docker)
+                               (--assert-from <scenario.yaml> / --reassert: opt-in token-free re-check against on-disk assert:)
       [--strict]               fail (exit 1) on ANY stale cassette instead of warning
       [--fail-on-skill-drift]  fail only on skill-source drift (skill/shared-root); baseline drift stays a warning
       [--output-format json]
@@ -296,7 +297,10 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
     '       answer gates LIVE: [--decider-dir <dir>] (single scenario only) | [--decider-llm [--intent "<one line>"]] | [--on-unanswered fail|first]\n' +
     "       (a live decider flags the cassette non-deterministic — re-recording may drift; replay stays deterministic. --rerecord-stale rejects these flags.)\n" +
     "       NOTE: --allow-failing only relaxes the post-run VERDICT gate; it does NOT salvage an unanswered gate (that throws before any cassette is written — use --on-unanswered first / a decider).",
-  replay: "usage: replay <file.cassette.json | dir/> [--strict] [--fail-on-skill-drift] [--output-format text|json]",
+  replay:
+    "usage: replay <file.cassette.json | dir/> [--strict] [--fail-on-skill-drift] [--assert-from <scenario.yaml> | --reassert] [--output-format text|json]\n" +
+    "       by default the assertions FROZEN in the cassette drive the verdict (deterministic); a sibling scenario whose assert: differs only prints a notice.\n" +
+    "       --assert-from <file> / --reassert: token-free re-check against the on-disk assert:/expect_denied: — recording-shaping drift (prompt/answers/baseline/skills) and skill staleness HARD-FAIL.",
   "verify-cassettes":
     "usage: verify-cassettes <file|dir> [--skip-privacy|--skip-staleness] [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-file <path>]... [--output-format json]",
   trace:
@@ -306,7 +310,8 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
     "usage: scaffold <run-id | run-dir> [--out <file.yaml>] [--output-format text|json]\n       Turns a kept run into a starter scenario YAML (gates→answers, artifacts→file_exists).\n       Positional <run-id | run-dir> is the canonical form.",
   decide:
     'usage: decide [--question <q>] [--option <o>]... [--decider-cmd <cmd> | --decider-llm [--intent <s>] [--decider-model <id>]] [--answer "<q>=<label>"]... [--answer-policy <p>] [--output-format json]',
-  gates: "usage: gates <dir> [--follow] [--output-format text|json]   (stream pending in-band gates as JSON lines; pair with --decider-dir)",
+  gates:
+    "usage: gates <dir> [--follow] [--output-format text|json]   (stream pending in-band gates as JSON lines; pair with --decider-dir)",
   answer:
     'usage: answer <dir> --gate <N> (--choose <label> [--choose <label>…] | --answer "<q>=<label>") [--output-format text|json]   (write an in-band gate reply atomically; repeat --choose for a multiSelect gate)',
   "verify-run":

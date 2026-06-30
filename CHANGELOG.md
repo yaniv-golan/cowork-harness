@@ -6,6 +6,22 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **`replay --assert-from <scenario.yaml>` / `--reassert` — token-free re-check against on-disk assertions.**
+  By default `replay` still evaluates the assertions **frozen in the cassette** (byte-deterministic, ignores the
+  working tree); a plain `replay` now prints a `::notice::` when a sibling scenario's `assert:` differs, instead
+  of silently using the frozen copy. The new flags opt into re-evaluating against the **on-disk** `assert:`
+  (+`expect_denied:`) — the "edit the assert, re-check without a paid re-record" loop. The opt-in path is safe by
+  construction: it **hard-fails** on recording-shaping drift (`prompt`/`baseline`/`fidelity`/`answers`/`skills`/
+  `requires_capabilities`) and on skill-content staleness (it implies `--fail-on-skill-drift`, when a skill
+  fingerprint was recorded), warns on on-disk assert keys that can't be evaluated on replay (filesystem/gate/egress)
+  and on an edited `expect_denied`, and notes that the `session` (model/mounts/discovery) is **not** verified.
+- **Per-result `verdict` in the `--output-format json` envelope.** Each entry in `results[]` now carries
+  `verdict: { pass, exitCode, signals[], guards[] }` (a non-mutating projection of `computeVerdict`), so a consumer
+  can read each result's pass/fail **and why** (e.g. an all-green-assertions run that is `pass:false` purely on a
+  `stalled` signal) without recomputing. The top-level `ok` is derived from the same per-result verdicts.
+
 ### Documentation
 
 - ** Corrected several doc claims that diverged from the implementation.**

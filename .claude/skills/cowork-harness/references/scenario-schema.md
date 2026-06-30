@@ -252,6 +252,15 @@ To detect the signal programmatically, inspect `result.signals[].code` in the ru
 A cassette (`record`/`replay`) has **no filesystem and no network**. `replay` re-evaluates only the
 **content** assertions. The authoritative list is `contentKeys` in `src/run/cassette.ts`.
 
+**Assertion source — frozen by default, on-disk by opt-in.** A plain `replay` evaluates the `assert:` block
+**frozen in the cassette** (byte-deterministic, ignores the working tree); editing `scenarios/<name>.yaml` does
+not change it — replay only prints a `::notice::` when a sibling's `assert:` differs. `replay --assert-from
+<scenario.yaml>` / `--reassert` is the opt-in token-free re-check against the on-disk block; it **hard-fails**
+on recording-shaping drift (`prompt`/`answers`/`baseline`/`skills`) or skill-content staleness (it implies
+`--fail-on-skill-drift`). `expect_denied`/filesystem/egress keys are sourced from on-disk but stay live-only —
+sourcing ≠ evaluation (replay warns when you edit one). `verify-run` is the on-disk-`assert:` path for a kept
+*run dir*; `--assert-from` is the equivalent for a *cassette*.
+
 **Evaluated on replay (content):** `transcript_*`, `tool_*`, `subagent_*`, `dispatch_count_max`,
 `result`. The verdict modifiers `allow_permissive_auto_allow` / `allow_missing_capability` /
 `allow_l0_plugin_divergence` / `allow_stall` are also kept on replay, evaluated as no-op passes.

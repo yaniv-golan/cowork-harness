@@ -397,6 +397,19 @@ are the ones that bite hardest.
     --rerecord-stale` surfaces ALL stale anchors in one pass (add `--concurrency <N>` to parallelize); a shell
     wrapper that loops one cassette at a time with `set -e` defeats this and rediscovers stale anchors serially.
 
+17. **Editing `scenarios/*.yaml` `assert:` does NOT change a plain `replay`.** *Why:* `replay` evaluates the
+    assertions **frozen in the cassette** by default — it is byte-deterministic and ignores the working tree (so
+    a committed cassette can't silently re-interpret against an uncommitted YAML). This used to be a *silent*
+    no-op; now plain `replay` prints a `::notice::` when a sibling's `assert:` differs and points you at the fix.
+    *Fix:* to re-check token-free against the edited block, `replay --assert-from <scenario.yaml>` (or
+    `--reassert`). That opt-in path is safe by construction for the authored fields — it **hard-fails** if
+    `prompt`/`answers`/`baseline`/`fidelity`/`skills`/`requires_capabilities` or the skill content (when a
+    fingerprint exists) drifted from the recording (re-record then), and `expect_denied`/filesystem/egress keys
+    are sourced but stay **live-only** (it warns; they don't move the replay verdict). **Caveat:** the `session`
+    (model / data mounts / discovery) is NOT drift-checked or fingerprinted, so a **model change** between record
+    and re-assert is undetected — the notice flags this; re-record if the session changed. `verify-run` reads
+    on-disk `assert:` against a kept *run dir*; `replay --assert-from` is the equivalent for a *cassette*.
+
 For the complete gotcha list, the assertion catalog, the YAML schema, the fidelity/answer tables,
 and the CI recipe, read the files in `references/`.
 

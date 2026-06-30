@@ -1814,16 +1814,93 @@ function replayErrorResult(file: string): RunResult {
   };
 }
 
+/** Recording-shaping fields that MUST still match the recording for on-disk assertions to be evaluated
+ *  against the frozen events soundly.
+ *
+ *  NOTE on symmetry: `frozen` is the cassette's `scenario`, parsed by `readCassette` through a `z.looseObject`
+ *  PASSTHROUGH (CassetteShape) — NOT the full `Scenario` schema — so it carries whatever was serialized at
+ *  record time and does NOT get fresh Zod defaults. `onDisk` IS fully `Scenario.parse`d. We bridge that
+ *  asymmetry with `?? default` per field (so an absent `answers`/`baseline`/`skills` on either side normalizes
+ *  to the same default), which is exact for prompt/baseline/skills/empty-answers. RESIDUAL LIMITATION: a
+ *  non-empty `answers` array whose nested `AnswerRule` defaults differ between record-time and the current
+ *  schema could produce a spurious drift hard-fail; re-record closes it. (Cassettes are written from a parsed
+ *  scenario, so in practice both sides already carry the same post-Zod shape.)
+ *
+ *  Covers `prompt`/`baseline`/`fidelity`/`answers`/`skills`/`requires_capabilities` — the authored fields that
+ *  shape what the recording is. `session` is DELIBERATELY excluded: the cassette stores it relative-to-cassette-dir
+ *  while parseScenarioFile resolves it absolute, so a string-equal would never match (it'd brick every sessioned
+ *  scenario); and the session is already baked into the frozen events with no cheap content hash to compare. Skill
+ *  *content* drift is policed separately (failOnSkillDrift on the opt-in path) — and only when a skill fingerprint
+ *  was recorded; the caller warns when it wasn't. */
+function recordingShapingDrift(frozen: Scenario, onDisk: Scenario): string[] {
+  const drifted: string[] = [];
+  const norm = (v: unknown) => JSON.stringify(v ?? null);
+  if ((frozen.prompt ?? "") !== (onDisk.prompt ?? "")) drifted.push("prompt");
+  if ((frozen.baseline ?? "latest") !== (onDisk.baseline ?? "latest")) drifted.push("baseline");
+  if ((frozen.fidelity ?? "container") !== (onDisk.fidelity ?? "container")) drifted.push("fidelity");
+  if (norm(frozen.answers ?? []) !== norm(onDisk.answers ?? [])) drifted.push("answers");
+  if (norm(frozen.skills ?? []) !== norm(onDisk.skills ?? [])) drifted.push("skills");
+  if (norm(frozen.requires_capabilities ?? []) !== norm(onDisk.requires_capabilities ?? [])) drifted.push("requires_capabilities");
+  return drifted;
+}
+
+/** Assertion keys (and `expect_denied`) that are NOT evaluated on the replay lane in a given cassette's shape.
+ *  On the `--assert-from` opt-in path (where the author is actively editing) a freshly-added but unevaluable
+ *  key would silently fail to protect anything — warn per key so it can't green by omission. Mirrors
+ *  replayCassette's classification: manifest keys need a recorded `artifacts` manifest; gate keys need
+ *  `controlOut`; egress/filesystem keys are live-only regardless. `expect_denied` is a scenario field (not an
+ *  assert key) that desugars to live-only `egress_denied` checks — an edit to it is sourced but inert on
+ *  replay, so warn when it differs from the frozen copy (closes the one remaining silent no-op). */
+function warnUncheckableOnDiskKeys(cassette: Cassette, frozen: Scenario, onDisk: Scenario): void {
+  const asserts = onDisk.assert ?? [];
+  const hasManifest = !!cassette.artifacts?.length;
+  const hasControlOut = !!cassette.controlOut?.length;
+  const manifestKeys = new Set<keyof Assertion>(["file_exists", "user_visible_artifact", "artifact_json"]);
+  const gateKeys = new Set<keyof Assertion>(["question_asked", "questions_count_max", "gate_answers_delivered"]);
+  const liveOnlyKeys = new Set<keyof Assertion>([
+    "egress_denied",
+    "egress_allowed",
+    "no_delete_in_outputs",
+    "self_heal_ran",
+    "transcript_no_host_path",
+  ]);
+  // expect_denied: sourced from on-disk but live-only on replay — warn if the author changed it expecting effect.
+  if (JSON.stringify(frozen.expect_denied ?? []) !== JSON.stringify(onDisk.expect_denied ?? []))
+    warn(
+      "::warning:: [replay] on-disk `expect_denied:` differs from the cassette but is live-only — it is sourced, NOT evaluated on replay (run a live `run` to check egress)\n",
+    );
+  const seen = new Set<string>();
+  for (const a of asserts) {
+    for (const k of Object.keys(a) as (keyof Assertion)[]) {
+      if (a[k] === undefined || seen.has(k)) continue;
+      let reason = "";
+      if (liveOnlyKeys.has(k)) reason = "live-only";
+      else if (manifestKeys.has(k) && !hasManifest) reason = "no artifact manifest in this cassette";
+      else if (gateKeys.has(k) && !hasControlOut) reason = "no controlOut in this cassette";
+      if (reason) {
+        seen.add(k);
+        warn(`::warning:: [replay] on-disk assert key \`${String(k)}\` is not checkable on replay (${reason}) — skipped\n`);
+      }
+    }
+  }
+}
+
 /** `replay <file|dir>` — deterministic protocol-replay; re-evaluates content assertions. A directory
  *  replays every `*.cassette.json` (non-recursive, sorted) and exits on the worst verdict; an unreadable
- *  cassette is a per-file error (never aborts the batch, never a vacuous pass). */
+ *  cassette is a per-file error (never aborts the batch, never a vacuous pass).
+ *
+ *  Assertion source: by default the assertions FROZEN in the cassette drive the verdict (byte-deterministic,
+ *  no ambient filesystem dependency) — a sibling scenario whose `assert:` differs only triggers a discoverability
+ *  `::notice::`. `--assert-from <file>` / `--reassert` is the explicit opt-in to re-check against the on-disk
+ *  `assert:`+`expect_denied:`; on that path recording-shaping drift (prompt/answers/baseline/skills) and skill
+ *  staleness HARD-FAIL, so on-disk asserts can never green against events a different scenario/skill produced. */
 export async function cmdReplay(args: string[]) {
   let p;
   try {
     p = parseArgs(args, {
       // --quiet/--verbose accepted for flag consistency but currently no-op in replay (renderer plan is fixed).
-      booleans: ["--strict", "--fail-on-skill-drift", "--quiet", "--verbose"],
-      values: ["--output-format"],
+      booleans: ["--strict", "--fail-on-skill-drift", "--reassert", "--quiet", "--verbose"],
+      values: ["--output-format", "--assert-from"],
       enums: { "--output-format": ["text", "json"] },
       aliases: { "-q": "--quiet", "-V": "--verbose" },
     });
@@ -1833,7 +1910,9 @@ export async function cmdReplay(args: string[]) {
   }
   const target = p.positionals[0];
   if (!target) {
-    log("usage: replay <file.cassette.json | dir/> [--strict] [--fail-on-skill-drift] [--output-format text|json]");
+    log(
+      "usage: replay <file.cassette.json | dir/> [--strict] [--fail-on-skill-drift] [--assert-from <scenario.yaml> | --reassert] [--output-format text|json]",
+    );
     return process.exit(2);
   }
   if (p.positionals.length > 1) {
@@ -1842,8 +1921,18 @@ export async function cmdReplay(args: string[]) {
   }
   const json = p.options["--output-format"] === "json";
   const strict = p.flags["--strict"] ?? false; // #1b: escalate ALL staleness findings to failures (release gate)
-  const failOnSkillDrift = p.flags["--fail-on-skill-drift"] ?? false; // narrower gate: only skill-source drift fails
-  if (strict && failOnSkillDrift)
+  // `--assert-from <file>` (explicit path) / `--reassert` (auto-resolve the sibling) opt INTO re-checking against
+  // the on-disk `assert:`; mutually exclusive. On that path skill-content drift MUST hard-fail (else the frozen
+  // events could green an edited assert against a skill that no longer produces them) — so OR in failOnSkillDrift.
+  const assertFrom = p.options["--assert-from"];
+  const reassert = p.flags["--reassert"] ?? false;
+  if (assertFrom !== undefined && reassert) {
+    log("replay: --assert-from and --reassert are mutually exclusive (--assert-from names a file; --reassert auto-resolves the sibling)");
+    return process.exit(2);
+  }
+  const reassertMode = assertFrom !== undefined || reassert;
+  const failOnSkillDrift = (p.flags["--fail-on-skill-drift"] ?? false) || reassertMode; // narrower gate: only skill-source drift fails
+  if (strict && p.flags["--fail-on-skill-drift"])
     warn(
       "::notice:: [replay] --strict and --fail-on-skill-drift both passed — --strict is the superset (fails on every class), so --fail-on-skill-drift is redundant here\n",
     );
@@ -1853,6 +1942,15 @@ export async function cmdReplay(args: string[]) {
     return process.exit(2);
   }
   const plan: RenderPlan = { live: false, progress: false, verbose: false, color: process.stderr.isTTY === true && !process.env.NO_COLOR };
+  // Footgun guard: one --assert-from file applied to a whole dir asserts the SAME on-disk block against every
+  // cassette (the drift gate protects divergent cassettes, but two with identical shaping fields would be
+  // cross-asserted). Use --reassert (per-cassette sibling) for a dir. Warn rather than reject — it's occasionally
+  // intentional (one shared assert block).
+  if (assertFrom !== undefined && resolved.files.length > 1)
+    warn(
+      `::warning:: [replay] --assert-from <one file> applied to ${resolved.files.length} cassettes — the SAME on-disk assert: is checked against each; ` +
+        "use --reassert to resolve each cassette's own sibling\n",
+    );
   const results: RunResult[] = [];
   let worst = 0;
   for (const f of resolved.files) {
@@ -1868,9 +1966,88 @@ export async function cmdReplay(args: string[]) {
     // failures) and re-throws nothing for them, but an UNEXPECTED throw (a harness bug, an OOM on a
     // pathological cassette) must NOT abort the whole batch — a crash mid-walk reads as "the rest were
     // fine" (false-green by abort). Wrap per-file: turn an unexpected throw into a tallied error result.
+    // The on-disk assert resolution/parse/drift below MUST stay INSIDE this try: parseScenarioFile throws on
+    // an invalid YAML, and on the opt-in path that throw should fail THIS cassette (a tallied error), not
+    // escape the loop and abort the batch.
     let result: RunResult;
     try {
-      result = await replayCassette(rc.cassette, renderer ? [renderer] : [], { strict, failOnSkillDrift, cassetteDir: dirname(f) });
+      let cassette = rc.cassette;
+      if (reassertMode) {
+        // --- A-optin: explicit re-check against on-disk assert:/expect_denied: (safe by construction) ---
+        let srcPath: string;
+        if (assertFrom !== undefined) {
+          srcPath = assertFrom;
+        } else {
+          const src = _resolveRerecordSource(f, rc.cassette);
+          if (!src.path)
+            throw new Error(
+              `--reassert: no on-disk scenario found for ${f} (looked via ${src.via}${src.persistedMissing ? `; recorded source '${src.persistedMissing}' is missing` : ""})` +
+                " — pass --assert-from <scenario.yaml> explicitly",
+            );
+          srcPath = src.path;
+        }
+        // parseScenarioFile throws on invalid YAML; its message doesn't name the file, so wrap to attribute the
+        // failure to the path the user pointed at. Still inside the per-file try → this cassette errors, batch continues.
+        let onDisk: Scenario;
+        try {
+          onDisk = parseScenarioFile(srcPath);
+        } catch (e) {
+          throw new Error(`--assert-from: failed to parse ${srcPath}: ${(e as Error).message}`);
+        }
+        const drift = recordingShapingDrift(rc.cassette.scenario, onDisk);
+        if (drift.length)
+          throw new Error(
+            `--assert-from: ${drift.join(", ")} drifted from the recording (${srcPath}); the frozen events no longer correspond to this scenario — re-record instead of re-asserting`,
+          );
+        warnUncheckableOnDiskKeys(rc.cassette, rc.cassette.scenario, onDisk);
+        // Shallow clone — never mutate the parsed cassette in place.
+        cassette = {
+          ...rc.cassette,
+          scenario: { ...rc.cassette.scenario, assert: onDisk.assert ?? [], expect_denied: onDisk.expect_denied ?? [] },
+        };
+        // HONESTY: the skill-drift guard only bites when a skill fingerprint was recorded. computeStaleness
+        // returns [] with no `fingerprint.skillHash`, so failOnSkillDrift has nothing to escalate — claiming
+        // "skill-drift will hard-fail" for a fingerprint-less cassette would be false reassurance (the author
+        // could green an edited assert against a since-changed skill). Word the notice by what's verifiable, and
+        // WARN loudly when it isn't, so the gap is visible rather than papered over.
+        // HONESTY: word the notice by what's ACTUALLY verified — the enumerated authored scenario fields
+        // (recordingShapingDrift) plus skill-CONTENT drift when a fingerprint exists. The SESSION (model, data
+        // mounts, discovery) is the dominant recording-shaping input but lives outside the scenario, is excluded
+        // from the drift set, and is NOT fingerprinted — so a model/mount change between record and re-assert is
+        // structurally undetectable here. Say that, rather than a blanket "recording-shaping fields verified".
+        const skillVerifiable = !!rc.cassette.fingerprint?.skillHash;
+        warn(
+          `::notice:: [replay] re-asserting from on-disk ${srcPath} ` +
+            `(authored fields prompt/baseline/fidelity/answers/skills/requires_capabilities verified unchanged; ` +
+            `skill-content drift ${skillVerifiable ? "will hard-fail" : "NOT verifiable — no skill fingerprint"}; ` +
+            `session model/mounts/discovery is NOT verified — re-record if the session changed)\n`,
+        );
+        if (!skillVerifiable)
+          warn(
+            "::warning:: [replay] this cassette has no skill fingerprint, so skill-content drift can NOT be verified on --assert-from — " +
+              "re-asserting against possibly-stale events; re-record to enable the skill-drift guard\n",
+          );
+      } else {
+        // --- A-default: frozen assertions drive the verdict; only kill the SILENT no-op with a notice ---
+        // Pure decoration — never throws, never changes the verdict. If the sibling resolves and its assert:
+        // differs from the frozen copy, point the user at --assert-from. Wrapped so a bad/mid-edit sibling
+        // (unreadable, invalid YAML) degrades to no notice, not an error on the deterministic default lane.
+        try {
+          const src = _resolveRerecordSource(f, rc.cassette);
+          if (src.path) {
+            const onDisk = parseScenarioFile(src.path);
+            const norm = (a: unknown) => JSON.stringify(a ?? []);
+            if (norm(onDisk.assert) !== norm(rc.cassette.scenario.assert))
+              warn(
+                `::notice:: [replay] ${src.path} has a different \`assert:\` block; replay used the assertions frozen in the cassette. ` +
+                  `Re-record, or \`replay --assert-from ${src.path}\` to re-check against the on-disk block.\n`,
+              );
+          }
+        } catch {
+          /* on-disk file is decoration on the default lane — a parse/read failure must not affect the run */
+        }
+      }
+      result = await replayCassette(cassette, renderer ? [renderer] : [], { strict, failOnSkillDrift, cassetteDir: dirname(f) });
     } catch (e) {
       log(`replay: ${f}: ${(e as Error)?.message ?? String(e)}`);
       results.push(replayErrorResult(f)); // turns the envelope's ok false (no false green)

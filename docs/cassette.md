@@ -25,6 +25,19 @@ replay  (no token, no Docker, no network)
 The cassette is NOT a test in isolation — it replays what the agent did in a past live run.
 Use a live `run` for filesystem/egress assertions; use `replay` for the token-free PR gate.
 
+**The cassette freezes the *interaction*, not your *assertions*.** A plain `replay` evaluates the `assert:`
+block **frozen in the cassette** (deterministic, independent of the working tree) — editing
+`scenarios/<name>.yaml` does not change it; replay only prints a `::notice::` when a sibling's `assert:`
+differs. To iterate on assertions token-free, opt in with `replay --assert-from <scenario.yaml>` (or
+`--reassert`): it re-checks against the on-disk `assert:`, but **hard-fails** if any recording-shaping field
+(`prompt`/`answers`/`baseline`/`skills`) or the skill content drifted from the recording (then you must
+re-record). `expect_denied`/filesystem/egress keys are sourced but stay live-only. See
+[docs/scenario.md](./scenario.md#where-replay-reads-assert-from--frozen-by-default-on-disk-by-opt-in).
+
+> Known limitation: if a redaction policy ran at record time, a frozen `assert:` literal (e.g. a
+> `transcript_contains` matching a secret pattern) is stored redacted while the on-disk block is plaintext, so
+> the default-path "assert differs" notice can fire spuriously. It's a notice only — it never changes a verdict.
+
 ## File shape
 
 ```jsonc

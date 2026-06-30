@@ -326,6 +326,18 @@ green replay does not imply the recording is still valid. Each finding is surfac
   passed). The authoritative list is `contentKeys` in `src/run/cassette.ts`; `docs/cassette.md` mirrors
   it — consult it for the full table.
 
+**Assertion source (replay):** by default `replay` evaluates the `assert:` block **frozen in the cassette**
+— byte-deterministic and independent of the working tree. When a sibling scenario resolves and its `assert:`
+differs from the frozen copy, a `::notice::` points at the opt-in flag (no verdict change). `--assert-from
+<scenario.yaml>` / `--reassert` re-evaluate against the **on-disk** `assert:` (+`expect_denied:`) for a
+token-free assertion-iteration loop. That path is safe by construction: it **hard-fails** on recording-shaping
+drift (`prompt` / `baseline` / `fidelity` / `answers` / `skills` / `requires_capabilities`) and, when a skill
+fingerprint was recorded, on skill-content staleness (it implies `--fail-on-skill-drift`). `expect_denied` and
+the filesystem/egress keys are sourced from on-disk but remain live-only (sourced ≠ evaluated; replay warns on
+such an edit). The `session` (model / data mounts / discovery) is **not** drift-checked or fingerprinted, so a
+model/mount change between record and re-assert is undetected — the notice states this; re-record if the
+session changed.
+
 **`replay_protocol_fidelity` (O7 guard):** after the run, `replay` re-serializes each decision
 response via `serializeDecision` and compares to the frozen `controlOut` envelope (canonical
 key-sorted JSON). A mismatch produces a synthesized `{ assertion: { replay_protocol_fidelity: true },
@@ -344,10 +356,17 @@ else hits stdout in that mode — the renderer/footer/`[env]`/`[input]` all go t
   "version": "<pkg version>",  // populated from package.json at runtime
   "command": "run" | "skill" | "replay",
   "ok": true,                 // false if any result failed OR an error occurred
-  "results": [ RunResult ],   // one per scenario; skill/replay = array of 1
+  "results": [ RunResult & { verdict } ], // one per scenario; skill/replay = array of 1
   "error": null               // or the error envelope (below) when a run THREW
 }
 ```
+
+Each emitted result carries a **`verdict`** — a non-mutating serialization-time projection of `computeVerdict`,
+`{ "pass": bool, "exitCode": 0|1, "signals": [{ "code","severity","message" }], "guards": [{ "name","status" }] }`
+— so a consumer can read each result's pass/fail **and why** (the `signals[]`, e.g. an all-green-assertions run
+that is `pass:false` purely on a `stalled` signal) without recomputing. `verdict` is on the JSON envelope only,
+not on the on-disk `result.json` (which stays the raw `RunResult`). The top-level `ok` is derived from the same
+per-result verdicts, so it cannot diverge from them, the exit code, or the text footer.
 
 Other commands use dedicated envelopes — `verify-cassettes` (§11.1), and `decide` / `boundary-check`
 each emit their own shape — so this is not a single universal envelope across every command.
