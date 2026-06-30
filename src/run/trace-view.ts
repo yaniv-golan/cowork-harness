@@ -19,7 +19,7 @@ export function defaultRunsHome(): string {
 /**
  * Resolve the runs/ root for READS (`trace`/`scaffold`/`verify-run`). `COWORK_HARNESS_RUNS_DIR` override
  * if set, else `defaultRunsHome()`. Both halves are ABSOLUTE, so a `trace <run-id>` resolves from any
- * directory — the absolute default replaces the old cwd-relative / repo-root walk (#45) more simply, and
+ * directory — the absolute default replaces the old cwd-relative / repo-root walk more simply, and
  * makes write/read roots identical so they can't drift. (An env-set *write* followed by a no-env read
  * won't be found — pass the same env/flag, or an explicit run-dir/events.jsonl path.)
  */
@@ -57,10 +57,10 @@ export interface TraceRow {
   detail?: string;
   agentType?: string;
   declaredTools?: string[];
-  description?: string; // dispatch description — identifies an `unknown`-typed dispatch (O1)
+  description?: string; // dispatch description — identifies an `unknown`-typed dispatch
   child?: boolean; // ran inside a sub-agent (had a parentToolUseId)
   toolUseId?: string; // for pairing a tool row with its result
-  resultStatus?: "ok" | "error"; // the tool's outcome (Part 4 — was invisible before)
+  resultStatus?: "ok" | "error"; // the tool's outcome (was invisible before)
   resultText?: string; // first line of the result/error
 }
 
@@ -111,7 +111,7 @@ export function resolveEventsFile(arg: string): string {
   }
   const root = runsRoot(); // COWORK_HARNESS_RUNS_DIR, else the absolute ~/.cowork-harness/runs — not cwd-relative
   if (existsSync(root)) {
-    // E: prefer EXACT match first; only fall through to fragment matching if nothing exact was found.
+    // prefer EXACT match first; only fall through to fragment matching if nothing exact was found.
     // Collect ALL fragment matches and warn loudly (with candidates) before picking deterministically.
     for (const scen of readdirSync(root)) {
       const sd = join(root, scen);
@@ -175,7 +175,7 @@ function eventsOf(file: string): AgentEvent[] {
     try {
       msg = JSON.parse(line);
     } catch {
-      // #47: skip malformed JSON (a truncated final line is normal) but be LOUD — mirror cassette.ts.
+      // skip malformed JSON (a truncated final line is normal) but be LOUD — mirror cassette.ts.
       warn(`::warning:: trace: skipping malformed JSON line in ${file}: ${line.slice(0, 120)}\n`);
       continue;
     }
@@ -186,8 +186,8 @@ function eventsOf(file: string): AgentEvent[] {
 
 export function buildTrace(file: string, opts: { tools?: boolean } = {}): TraceRow[] {
   const events = eventsOf(file);
-  // Pair tool_use ↔ tool_result by toolUseId so each tool row carries its OUTCOME (Part 4) — the single
-  // highest-value forensics fix: a tool error (e.g. the O7 q.map) is now visible in one command.
+  // Pair tool_use ↔ tool_result by toolUseId so each tool row carries its OUTCOME — the single
+  // highest-value forensics fix: a tool error (e.g. the q.map) is now visible in one command.
   const results = new Map<string, { isError: boolean; text: string }>();
   for (const ev of events) if (ev.type === "tool_result" && ev.toolUseId) results.set(ev.toolUseId, { isError: ev.isError, text: ev.text });
   const rows: TraceRow[] = [];
@@ -234,7 +234,7 @@ export function buildGateTrace(file: string): GateTraceRow[] {
         const a = m?.response?.response?.updatedInput?.answers;
         if (rid && a) answers.set(String(rid), JSON.stringify(a));
       } catch {
-        // #47: a malformed control-out line is skipped (truncation is normal) but surfaced loudly.
+        // a malformed control-out line is skipped (truncation is normal) but surfaced loudly.
         warn(`::warning:: trace: skipping malformed JSON line in ${controlOut}: ${line.slice(0, 120)}\n`);
         continue;
       }
@@ -275,7 +275,7 @@ export interface DispatchNode {
 }
 
 /**
- * `trace --dispatches` (#6) — the sub-agent dispatch tree, so an author can read off the REAL total
+ * `trace --dispatches` — the sub-agent dispatch tree, so an author can read off the REAL total
  * dispatch count (what `dispatch_count_max` asserts against) instead of guess-and-check, and see the
  * nesting (a sub-agent that dispatches further). Ordered by appearance; depth derived from
  * `parentToolUseId` chains among the dispatches themselves.

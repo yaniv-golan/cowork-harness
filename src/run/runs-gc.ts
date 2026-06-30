@@ -7,7 +7,7 @@ const log = (s: string) => process.stderr.write(s + "\n");
 
 const DEFAULT_KEEP_LAST = 5;
 
-/** H6: a "real run" — has a `result.json` (completed; success OR a recorded error) OR an `events.jsonl`
+/** A "real run" — has a `result.json` (completed; success OR a recorded error) OR an `events.jsonl`
  *  (a session started, so the run is in-flight or threw — e.g. an unanswered gate under on_unanswered:fail
  *  writes no result.json but DOES leave events.jsonl). A never-started empty `scaffold`/failed-before-session
  *  dir has neither → it is what GC should drop first. `events.jsonl` exists from session start, so an
@@ -69,7 +69,7 @@ export function cmdRunsGc(args: string[]): void {
     }
     if (!st.isDirectory()) continue;
 
-    // Rank run dirs: (1) real-run first (H6 — a completed/in-flight run outranks an empty scaffold dir for a
+    // Rank run dirs: (1) real-run first (a completed/in-flight run outranks an empty scaffold dir for a
     // keep slot), (2) newest first (mtime desc), (3) name desc as a deterministic tiebreaker.
     const sorted = readdirSync(scenarioDir)
       .map((name) => ({ name, path: join(scenarioDir, name) }))

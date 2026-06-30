@@ -44,9 +44,9 @@ export const SessionConfig = z.strictObject({
   // Thinking budget. Binary-verified against app.asar 1.12603.1: Cowork's config field is
   // `maxThinkingTokens` — a flat NUMBER or a per-model map `{ default, <model>: <n> }` — resolved
   // per-model by f7e() and emitted on BOTH channels: the `--max-thinking-tokens` CLI flag (agentArgs)
-  // and the `MAX_THINKING_TOKENS` env (spawnEnv). The ELF honors the env and env wins (V1), so the
+  // and the `MAX_THINKING_TOKENS` env (spawnEnv). The ELF honors the env and env wins, so the
   // two agree. There is NO "extended thinking" boolean; DEFAULT_MAX_THINKING_TOKENS (hre) = 31999.
-  // #33: a positive integer (or a per-model map of them) — reject 0 / negative, which would
+  // A positive integer (or a per-model map of them) — reject 0 / negative, which would
   // contradict the "never 0" budget invariant if it reached the CLI flag / env.
   max_thinking_tokens: z.union([z.number().int().positive(), z.record(z.string(), z.number().int().positive())]).optional(),
   extended_thinking: z.boolean().optional().describe("Inert / no-op — not a real Cowork toggle. Use max_thinking_tokens instead."), // inert: not a real Cowork toggle — use max_thinking_tokens.
@@ -105,7 +105,7 @@ export const SessionConfig = z.strictObject({
     })
     .default({ approved_domains: [] }),
 
-  // --- staleness fingerprint scope (F-6) ---
+  // --- staleness fingerprint scope ---
   // The cassette-staleness hash covers the mounted skill/plugin tree. The harness only hard-excludes what
   // is UNIVERSALLY non-runtime (VCS/caches/recorded cassettes); the runtime boundary of a SPECIFIC plugin
   // is the consumer's to declare. `hash_ignore` is a list of gitignore-style globs (matched against each
@@ -148,7 +148,7 @@ export interface LaunchPlan {
   mcpConfig: string | null; // host path to --mcp-config file, if any
   model?: string;
   effort?: string;
-  maxThinkingTokens?: number | Record<string, number>; // #23: session thinking budget (resolved per-model in spawnEnv)
+  maxThinkingTokens?: number | Record<string, number>; // session thinking budget (resolved per-model in spawnEnv)
   permissionMode: string;
   permissionParity: "cowork" | "strict";
   baseEnv: NodeJS.ProcessEnv; // Cowork bg-env-strip applied; CLAUDE_CONFIG_DIR set by the runtime
@@ -223,7 +223,7 @@ export function buildLaunchPlan(
 
   // 1. CLAUDE_CONFIG_DIR — clean managed dir unless the session pins one.
   const pinnedConfigDir = session.plugins.config_dir ? expand(session.plugins.config_dir) : undefined;
-  // #27: writing settings.json/cowork_settings.json into a user-supplied EXISTING dir would clobber
+  // Writing settings.json/cowork_settings.json into a user-supplied EXISTING dir would clobber
   // their real Claude config. Require an explicit opt-in; a fresh/non-existent pinned dir is fine.
   if (pinnedConfigDir && existsSync(pinnedConfigDir) && (process.env.COWORK_HARNESS_ALLOW_CONFIG_DIR_WRITE ?? "") === "")
     throw new Error(
@@ -260,7 +260,7 @@ export function buildLaunchPlan(
   writeFileSync(join(configDir, "settings.json"), settingsJson);
   writeFileSync(join(configDir, "cowork_settings.json"), settingsJson);
 
-  // SEAM A — fail-loud is the only path for a declared source. A missing source FAILS by default (the
+  // Fail-loud is the only path for a declared source. A missing source FAILS by default (the
   // runtimes existsSync-skip the copy, so the agent silently gets a path that does not exist — a
   // confusing late failure, or a manufactured green). COWORK_HARNESS_SOFT_MISSING=1 downgrades every
   // such case to warn-and-exclude. Defined up here because skills (below) consult it too.
@@ -407,7 +407,7 @@ export function buildLaunchPlan(
       warn(`::warning:: [marketplace] manifest unparsable, excluded (COWORK_HARNESS_SOFT_MISSING): ${manifestPath}\n`);
       continue;
     }
-    // Bug 41: validate manifest shape to produce actionable errors instead of TypeErrors.
+    // Validate manifest shape to produce actionable errors instead of TypeErrors.
     // The plugins-array check is the direct TypeError fix (manifest.plugins.find at the loop below
     // throws when plugins is an object). The name/source/version string checks are defense-in-depth.
     if (manifest.plugins !== undefined && !Array.isArray(manifest.plugins)) {
@@ -556,7 +556,7 @@ export function buildLaunchPlan(
   }
   const presentMounts = softMissing ? mounts.filter((mt) => existsSync(mt.hostPath)) : mounts;
 
-  // #21: two sources mapping to the same destination would silently overwrite during staging. Fail
+  // Two sources mapping to the same destination would silently overwrite during staging. Fail
   // before staging, naming the collision, so a same-basename upload/plugin pair can't clobber.
   // Seed with the RESERVED special-dir names + the harness's fixed staged dirs (`.claude`): under the VM
   // tier `fy` does NOT reserve these, so a user folder literally named e.g. `outputs` resolves to bare
@@ -585,7 +585,7 @@ export function buildLaunchPlan(
   // 6. egress
   const egressAllow = session.egress.unrestricted ? ["*"] : [...baseline.network.allowDomains, ...session.egress.extra_allow];
 
-  // 7. plugin roots (--plugin-dir) as guest-relative paths under mnt. #22: derive from PRESENT mounts
+  // 7. plugin roots (--plugin-dir) as guest-relative paths under mnt. Derive from PRESENT mounts
   // only, so a soft-missing (excluded) plugin source never yields a --plugin-dir to a non-existent path.
   const pluginDirs = presentMounts
     .filter((m) => m.kind === "local-plugin" || m.kind === "remote-plugin" || m.kind === "marketplace-plugin")

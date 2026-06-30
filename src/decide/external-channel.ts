@@ -23,7 +23,7 @@ export interface DecisionChannel {
   readLine(): Promise<string | null>;
   close?(): void;
   /** Copy the gate wire shapes (req/resp/.done) into `destDir` so they survive `close()`'s cleanup —
-   *  the forensic evidence you want after a gate bug (Part 4). Only `fileChannel` has files to snapshot. */
+   *  the forensic evidence you want after a gate bug. Only `fileChannel` has files to snapshot. */
   snapshot?(destDir: string): void;
 }
 
@@ -144,13 +144,13 @@ export function readGate(
  */
 export function fileChannel(dir: string): DecisionChannel {
   mkdirSync(dir, { recursive: true });
-  // H3: do NOT silently clear — fail loud if the dir already holds gate files (forces a fresh dir per run).
+  // Do NOT silently clear — fail loud if the dir already holds gate files (forces a fresh dir per run).
   const stale = readdirSync(dir).filter((f) => REQ.test(f) || RESP.test(f));
   if (stale.length)
     throw new Error(
       `--decider-dir ${dir} already has gate files (${stale.slice(0, 3).join(", ")}…) — use a fresh, empty directory per run`,
     );
-  // #21: a clean PRIOR run leaves exactly one leftover — done.json (close() preserves it deliberately;
+  // A clean PRIOR run leaves exactly one leftover — done.json (close() preserves it deliberately;
   // the stale scan above is REQ/RESP-only, so the common rerun-with-done.json case passes the fresh-dir
   // check). A `gates --follow` watcher would read that stale marker on tick 1 (streamGates:102) and emit
   // {done:true} before req-1 is ever written, stranding every gate on the backstop. Auto-clean ONLY
@@ -160,7 +160,7 @@ export function fileChannel(dir: string): DecisionChannel {
   const timeoutMs = envPositiveNumber("COWORK_HARNESS_DECIDER_DIR_TIMEOUT_MS", 600_000); // 10-min backstop → loud UnansweredError
   let seq = 0;
   let lastSnapshotSeq = 0; // watermark so a per-scenario snapshot() copies ONLY that scenario's new gates
-  // #49: store the handler so it can be removed on close() — otherwise repeated fileChannel() calls in
+  // Store the handler so it can be removed on close() — otherwise repeated fileChannel() calls in
   // one process accumulate "exit" listeners (MaxListenersExceededWarning after >10 channels).
   // Guarantee a completion marker on EVERY exit path (success, fail()/process.exit, throw) so a
   // `gates --follow` watcher always gets its terminal {done:true} and never hangs.
@@ -169,23 +169,23 @@ export function fileChannel(dir: string): DecisionChannel {
   return {
     write: (line) => {
       seq++;
-      // H1: `line` is single-line JSON (ExternalDecider) — one `cat` = one Monitor event. M2: 0600 (it's on disk).
+      // `line` is single-line JSON (ExternalDecider) — one `cat` = one Monitor event. 0600 (it's on disk).
       const tmp = join(dir, `.req-${seq}.json.tmp`);
       writeFileSync(tmp, line.replace(/\n/g, " ") + "\n", { mode: 0o600 });
       renameSync(tmp, join(dir, `req-${seq}.json`)); // atomic — the watcher never sees a partial file
-      process.stderr.write(`[gate] req-${seq} emitted → waiting for resp-${seq}.json\n`); // O2: lifecycle on stderr (even under --output-format json)
+      process.stderr.write(`[gate] req-${seq} emitted → waiting for resp-${seq}.json\n`); // lifecycle on stderr (even under --output-format json)
     },
     readLine: async () => {
       const resp = join(dir, `resp-${seq}.json`);
       const deadline = Date.now() + timeoutMs;
       while (Date.now() < deadline) {
-        // M3: the agent writes resp via temp+rename (atomic) → if it exists, it's complete. Read+parse ONCE
+        // the agent writes resp via temp+rename (atomic) → if it exists, it's complete. Read+parse ONCE
         // (a bad parse fails loud in ExternalDecider — no retry-then-hang).
         if (existsSync(resp)) {
           const body = readFileSync(resp, "utf8");
-          // O4: mark the gate consumed — rename `req-N.json` out of the `req-*.json` glob so the watcher
+          // mark the gate consumed — rename `req-N.json` out of the `req-*.json` glob so the watcher
           // can't re-emit it, and the consumed signal is visible mid-run (distinguishes a re-emit from a
-          // genuine agent re-ask, O3).
+          // genuine agent re-ask).
           try {
             renameSync(join(dir, `req-${seq}.json`), join(dir, `req-${seq}.json.done`));
           } catch {
@@ -199,7 +199,7 @@ export function fileChannel(dir: string): DecisionChannel {
       return null; // timeout → ExternalDecider throws UnansweredError (loud, never silent)
     },
     snapshot: (destDir) => {
-      // Copy THIS scenario's gate wire shapes into the run dir so they survive close()'s cleanup (Part 4).
+      // Copy THIS scenario's gate wire shapes into the run dir so they survive close()'s cleanup.
       // The channel is reused across scenarios in a `run <dir/>` loop (one monotonic seq), so copy only
       // files newer than the last snapshot — otherwise scenario N's snapshot would also contain 1..N-1's.
       try {
@@ -216,7 +216,7 @@ export function fileChannel(dir: string): DecisionChannel {
       }
     },
     close: () => {
-      // #49: remove the exit listener registered for this channel so repeated fileChannel() calls
+      // remove the exit listener registered for this channel so repeated fileChannel() calls
       // in one process don't accumulate listeners past the MaxListenersExceededWarning threshold.
       process.removeListener("exit", exitHandler);
       // That exit listener was the only writer of done.json — a long-lived embedder that close()s but
@@ -236,13 +236,13 @@ export function fileChannel(dir: string): DecisionChannel {
 
 /** A helper spawned once (`shell:true` so `'python answerer.py'` works). Request→its stdin, answer←its stdout. */
 export function spawnChannel(cmd: string): DecisionChannel {
-  // #8: `shell: true` is INTENTIONAL, not an injection surface. `--decider-cmd` is OPERATOR-supplied —
+  // `shell: true` is INTENTIONAL, not an injection surface. `--decider-cmd` is OPERATOR-supplied —
   // the same trust class as the harness process itself (whoever runs the harness wrote this string). Shell
   // interpretation is the documented ergonomic so `'python answerer.py'`, pipelines, and env-var prefixes
   // all work as written. There is no untrusted input here to escape, so we deliberately do NOT parse to argv.
   const child: ChildProcess = spawn(cmd, { shell: true, stdio: ["pipe", "pipe", "inherit"] });
   const reader = lineReader(child.stdout as Readable);
-  // #53: bound the wait on the helper's stdout — a hung-but-alive helper would otherwise block the harness
+  // bound the wait on the helper's stdout — a hung-but-alive helper would otherwise block the harness
   // forever (only fileChannel had a deadline; this mirrors its 10-min backstop). On expiry kill the child
   // (so a wedged process can't linger) and reject LOUD, never a silent hang.
   const timeoutMs = envPositiveNumber("COWORK_HARNESS_DECIDER_CMD_TIMEOUT_MS", 600_000);

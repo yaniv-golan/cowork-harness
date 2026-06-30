@@ -51,10 +51,10 @@ export function spawnProtocol(
   //
   // L0 deliberately DIVERGES from the cowork-fidelity tiers in TWO ways, BY DESIGN — L0
   // keeps the real local config for OAuth and is not a cowork-fidelity tier:
-  //   (#34) It does NOT apply runtimeAuthEnv()'s OAuth/API-key drop. container/microvm/
+  //   - It does NOT apply runtimeAuthEnv()'s OAuth/API-key drop. container/microvm/
   //         host-loop drop the API key when an OAuth token is present (the L1/L2 fidelity
   //         behavior); L0 does not, because a fresh CLAUDE_CONFIG_DIR breaks local login.
-  //   (#12) It does NOT pass --plugin-dir. Declared plugins load via --settings/managed
+  //   - It does NOT pass --plugin-dir. Declared plugins load via --settings/managed
   //         config, NOT the cowork --plugin-dir cache layout. So L0 cannot validate
   //         plugin/skill loading the way Cowork stages it.
   // Both are intentional; use container/microvm for auth+plugin fidelity. The defect this
@@ -90,13 +90,13 @@ export function spawnProtocol(
     ...(plan.model ? ["--model", plan.model] : []),
     ...(plan.permissionMode ? ["--permission-mode", plan.permissionMode] : []),
     ...(plan.mcpConfig ? ["--mcp-config", plan.mcpConfig] : []),
-    // #19: thread the rendered system prompt append into L0, matching container/microvm/host-loop.
+    // Thread the rendered system prompt append into L0, matching container/microvm/host-loop.
     // The host `claude` CLI accepts --append-system-prompt just like the staged binary does, so L0
     // records can carry Cowork framing instead of running with no system prompt extension at all.
     ...(opts.systemPromptAppend ? ["--append-system-prompt", opts.systemPromptAppend] : []),
   ];
 
-  // #34/#12/#20: make the L0 divergence LOUD when the session declares plugins — L0 neither
+  // Make the L0 divergence LOUD when the session declares plugins — L0 neither
   // applies the Cowork auth-env drop nor passes --plugin-dir, so plugin fidelity is not what
   // a cowork tier would give. Mirrors the L0 "network tool ran at L0" warning in execute.ts.
   // this also sets l0PluginDivergence=true so execute.ts can surface a FAILING fidelity

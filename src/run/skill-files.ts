@@ -2,13 +2,13 @@ import { spawnSync } from "node:child_process";
 import { relative, sep } from "node:path";
 
 /**
- * Git-tracked file-set resolver (staleness redesign, Phase C — default-ON).
+ * Git-tracked file-set resolver (staleness redesign, default-ON).
  *
  * The durable boundary for "what is a skill" is the **git-tracked** set: files committed/staged in the repo,
  * which is exactly what ships to other consumers and to real Cowork. Untracked files (OS-junk, build outputs,
- * scratch, not-yet-`git add`-ed) are excluded — eliminating the H9 drift class at the source.
+ * scratch, not-yet-`git add`-ed) are excluded — eliminating this drift class at the source.
  *
- * SAFETY (Finding 5): excluding untracked files from the HASH is only safe if every DELIVERY path also
+ * SAFETY: excluding untracked files from the HASH is only safe if every DELIVERY path also
  * excludes them (else a delivered-but-unhashed file is a false-negative). So the SAME resolver feeds both
  * the hash (skill-hash.ts) and the mount-copy filters (session.ts / stage.ts / protocol.ts).
  * Enabled by default; opt out with COWORK_HARNESS_GITSET=0.
@@ -71,7 +71,7 @@ export function gitAccept(tracked: Set<string>): (rel: string) => boolean {
 /**
  * A `cpSync` `filter` (Node ≥16.7) that admits only git-tracked files under `srcRoot` (plus the ancestor dirs
  * needed to reach them), or `null` when `srcRoot` isn't a usable repo (caller copies raw). Used at the
- * mount-copy sites so the delivered set matches the hashed set under git mode — closing the Finding-5
+ * mount-copy sites so the delivered set matches the hashed set under git mode — closing the
  * false-negative. Symlinks/escaping are handled by the existing containment checks at the call sites.
  */
 /**

@@ -69,7 +69,7 @@ export function stageWorkspace(plan: LaunchPlan, mntHost: string): StageResult {
     // A declared mcp.config whose source is missing must FAIL on a fresh run (it was silently dropped
     // before — no --mcp-config, no error). Resolved HERE, not in buildLaunchPlan, because resume (the
     // else branch) must stay exempt: on resume the source may be gone but the staged copy persists.
-    // Route through SEAM A: a present source is kind-checked (--mcp-config models a single mcpServers
+    // Route through the shared source resolver: a present source is kind-checked (--mcp-config models a single mcpServers
     // FILE; a directory would otherwise reach the no-`recursive` cpSync below and throw an opaque
     // ERR_FS_EISDIR, so a wrong-kind source fails loud regardless of softMissing); a missing source
     // throws by default or, under COWORK_HARNESS_SOFT_MISSING=1, returns null → warn-and-skip.

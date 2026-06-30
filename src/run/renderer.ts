@@ -150,33 +150,33 @@ export function renderFooter(
   opts: { durationMs?: number; renderer?: Renderer; keep?: boolean; write?: Sink; lane?: "live" | "replay"; scaffoldTip?: boolean } = {},
 ): void {
   const write = opts.write ?? stderr;
-  // SEAM B: pass/fail and the failure reasons come from the SAME verdict the exit code / envelope use.
+  // pass/fail and the failure reasons come from the SAME verdict the exit code / envelope use.
   const verdict = computeVerdict(r, opts.lane ?? "live");
   const passed = verdict.pass;
   const failSignals = verdict.signals.filter((s) => s.severity === "fail");
   const sum = opts.renderer?.summary() ?? { tools: 0, subagents: 0 };
   const dur = opts.durationMs != null ? ` · ${(opts.durationMs / 1000).toFixed(1)}s` : "";
-  // H2: an LLM-decided run is NOT reproducible — never let a green read as a deterministic pass.
+  // an LLM-decided run is NOT reproducible — never let a green read as a deterministic pass.
   const nd = r.nonDeterministic ? " " + red(plan, "⚠ non-deterministic (LLM-decided)") : "";
   const meta = `[${r.fidelity}] · ${sum.tools} tools${sum.subagents ? ` · ${sum.subagents} sub-agents` : ""}${dur}`;
   if (passed) {
     write(`${green(plan, "✓ " + r.result)} ${meta}${nd}${opts.keep ? " · " + tildeify(r.outDir) : ""}\n`);
     if (opts.keep && r.outputsDir) write(`   ${dim(plan, "→ outputs: " + tildeify(r.outputsDir))}\n`);
-    renderGuards(verdict.guards, plan, write); // 6h: make the safety nets that ran an enumerable, visible fact
+    renderGuards(verdict.guards, plan, write); // make the safety nets that ran an enumerable, visible fact
     renderAnswerHints(r, plan, write);
-    // Q2: scaffold tip — only for skill (exploratory) runs, not automated `run` scenarios.
+    // scaffold tip — only for skill (exploratory) runs, not automated `run` scenarios.
     // Callers opt in via scaffoldTip: true; run command omits it (you already have a scenario YAML).
     if (opts.scaffoldTip && opts.lane !== "replay" && r.outDir) {
       write(`   ${dim(plan, "Tip: scaffold " + tildeify(r.outDir) + " → turn this run into a starter scenario YAML")}\n`);
     }
     return;
   }
-  // Fix 5/6g: a tail-end transport drop renders distinctly from a generic error/FAIL, so a flaky-connection
+  // a tail-end transport drop renders distinctly from a generic error/FAIL, so a flaky-connection
   // run doesn't read as a skill defect.
   const errLabel = r.result === "error" ? (r.resultErrorKind === "transport" ? "transport-error" : "error") : "FAIL";
   write(`${red(plan, "✗ " + errLabel)} ${meta}\n`);
   for (const s of failSignals) write(`   ${red(plan, "✗ " + s.message)}\n`);
-  renderGuards(verdict.guards, plan, write); // 6h: show which guards ran even on a fail (no silent guards)
+  renderGuards(verdict.guards, plan, write); // show which guards ran even on a fail (no silent guards)
   renderAnswerHints(r, plan, write);
   const t = opts.renderer?.dump().trim();
   if (t) {
@@ -199,7 +199,7 @@ export function renderFooter(
  * lines off the footer, paste them back as `--answer …` for a deterministic re-run. Scripted answers
  * are not echoed (they're already in the command). No-op when nothing was auto-answered.
  */
-// 6h: the "guards active this run" roster. ✓ ran clean · ✗ fired · — N/A this lane/tier · ? unverified.
+// the "guards active this run" roster. ✓ ran clean · ✗ fired · — N/A this lane/tier · ? unverified.
 // The load-bearing rule (no silent-false-green): a guard that didn't run renders — / ?, never ✓.
 function renderGuards(guards: GuardReport[], plan: RenderPlan, write: Sink): void {
   if (!guards.length) return;
@@ -210,7 +210,7 @@ function renderGuards(guards: GuardReport[], plan: RenderPlan, write: Sink): voi
 function renderAnswerHints(r: RunResult, plan: RenderPlan, write: Sink): void {
   const u = r.unanswered ?? [];
   if (!u.length) return;
-  // #48: partition by the REAL `by:` vocabulary (decider.ts:25 — scripted|cowork|strict|human|agent|
+  // partition by the REAL `by:` vocabulary (decider.ts:25 — scripted|cowork|strict|human|agent|
   // external|first|fail|replay; `scripted` answers never reach `unanswered`, see run.ts:256). The old
   // binary split (agent vs everything-else→"scripted") mislabeled `external`/`human` answers — those are
   // marked nonDeterministic by execute.ts (`by` ∈ agent|external|human) and are NOT reproducible via
@@ -223,7 +223,7 @@ function renderAnswerHints(r: RunResult, plan: RenderPlan, write: Sink): void {
     for (const a of scriptable) write(`   ${dim(plan, `--answer ${JSON.stringify(`${a.question}=${a.chosen}`)}`)}\n`);
   }
   if (nondet.length) {
-    // H2: these answers are NON-deterministic (LLM/external/human-decided) — --answer does NOT reproduce
+    // these answers are NON-deterministic (LLM/external/human-decided) — --answer does NOT reproduce
     // them. Surface what was chosen and nudge toward pinning a deterministic answer for reproducibility.
     write(
       `   ${dim(plan, `${nondet.length} question(s) answered non-deterministically (LLM/external/human) — not reproducible via --answer; pin for reproducibility:`)}\n`,

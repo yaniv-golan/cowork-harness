@@ -1,11 +1,11 @@
 /**
- * Content redaction for committed cassettes (#1 / A1). DISTINCT from `secrets.ts` (which scrubs auth
+ * Content redaction for committed cassettes. DISTINCT from `secrets.ts` (which scrubs auth
  * tokens): this redacts author-configured PII patterns out of the cassette surface before it is written.
  *
  * Two hard requirements drive the design:
  *  - STRUCTURAL (not line-level) for JSON protocol lines: events/controlOut are JSON; redacting their raw
  *    text could unbalance the JSON (→ a silently skipped line on replay) or desync the AskUserQuestion
- *    question/answer strings the O7 guard compares across events and controlOut. So JSON is parsed, every
+ *    question/answer strings the guard compares across events and controlOut. So JSON is parsed, every
  *    string LEAF and object KEY is redacted, then re-serialized.
  *  - COLLISION-SAFE deterministic tokens: `[REDACTED:<label>:<hash>]`. The hash (of the matched text) keeps
  *    the token stable across re-records (no churn) AND injective — two distinct names never collapse into a
@@ -45,7 +45,7 @@ function csv(v: string | undefined): string[] {
 
 /** Assemble a redaction policy from `.cowork-redact.json` (searched in `searchDirs`, e.g. cwd then the
  *  scenario/cassette dir) merged with `COWORK_HARNESS_REDACT_PATTERNS`/`_KEYS`. No config + no env →
- *  EMPTY_POLICY (the opt-in default; the A2 scanner is the always-on safety net). A malformed regex throws —
+ *  EMPTY_POLICY (the opt-in default; the scanner is the always-on safety net). A malformed regex throws —
  *  a silently-dropped redaction rule is under-redaction, i.e. a leak. */
 export function loadRedactionPolicy(searchDirs: string[]): RedactionPolicy {
   const patterns: { re: RegExp; label: string }[] = [];
@@ -71,7 +71,7 @@ export function loadRedactionPolicy(searchDirs: string[]): RedactionPolicy {
 
 /** Stable, collision-safe token for a matched span. Depends ONLY on the matched text (context-free), so the
  *  same logical string redacts identically wherever it appears (events question text == controlOut answers
- *  key) — the property the O7 guard relies on. */
+ *  key) — the property the guard relies on. */
 function token(label: string, match: string): string {
   const h = createHash("sha256").update(match).digest("hex").slice(0, 12);
   return `[REDACTED:${label}:${h}]`;
@@ -87,7 +87,7 @@ export function redactText(text: string, policy: RedactionPolicy): string {
   return out;
 }
 
-/** Recursively redact a parsed JSON value: string leaves AND object keys (C3). Numbers/booleans/null pass
+/** Recursively redact a parsed JSON value: string leaves AND object keys. Numbers/booleans/null pass
  *  through. A key collision after redaction (two distinct keys → one) throws — a silent merge would lose data
  *  and (for an `answers` map) break replay. */
 export function redactStructural(value: unknown, policy: RedactionPolicy): unknown {

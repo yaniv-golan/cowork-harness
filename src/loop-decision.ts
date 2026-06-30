@@ -23,9 +23,9 @@ export interface LoopInputs {
 }
 
 /**
- * #30 — read a GrowthBook gate sub-flag (e.g. `coworkWebFetchPrompt`) from the baseline's
+ * Read a GrowthBook gate sub-flag (e.g. `coworkWebFetchPrompt`) from the baseline's
  * provenance.gates. Handles BOTH shapes: the committed prose string ("on(force) coworkWebFetchPrompt=true …")
- * and a #39-decoded structured entry ({on, source, value:{coworkWebFetchPrompt:true}}). CRITICAL: the
+ * and a decoded structured entry ({on, source, value:{coworkWebFetchPrompt:true}}). CRITICAL: the
  * baseline key is prefixed ("coworkRuntimeConfig:1978029737") — try the prefixed key, then bare id
  * (mirrors decideLoopFromBaseline's `gates["hostLoop:…"] ?? gates["…"]`). A missing gate ⇒ false.
  */
@@ -66,7 +66,7 @@ export function decideLoopFromBaseline(baseline: PlatformBaseline, over: Partial
   };
   const gates = p.provenance?.gates ?? {};
   const gateRaw = gates["hostLoop:1143815894"] ?? gates["1143815894"];
-  // Gate value may be a synced structured entry ({on,source,value}, post-#39), an authored prose
+  // Gate value may be a synced structured entry ({on,source,value}), an authored prose
   // string ("on(force) …"), or absent. Read `.on` for objects (a bare `!!obj` would be true even for
   // an OFF gate); the on/true/force test for strings.
   const gateHostLoopOn =

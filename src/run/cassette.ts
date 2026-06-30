@@ -61,7 +61,7 @@ export function recordErrorText(e: unknown): string {
   return msg;
 }
 
-/** H5: write a committed cassette atomically — a mid-write crash must never leave a partial/corrupt file at
+/** Write a committed cassette atomically — a mid-write crash must never leave a partial/corrupt file at
  *  the real path. Write to a same-dir temp (pid-suffixed so two concurrent writers can't collide) then
  *  `renameSync` over the target (atomic on POSIX). Mirrors the external-channel.ts temp+rename pattern. */
 function writeFileAtomic(path: string, data: string): void {
@@ -70,7 +70,7 @@ function writeFileAtomic(path: string, data: string): void {
   renameSync(tmp, path);
 }
 
-/** #1: a snapshotted artifact — relative path + size + content hash, plus an inlined raw body for small
+/** A snapshotted artifact — relative path + size + content hash, plus an inlined raw body for small
  *  files (so `artifact_json`/`file_exists`/`user_visible_artifact` survive token-free replay). A file too
  *  big to inline is hash-only with `truncated:true` (a loud marker — silent truncation reads as "covered"). */
 interface ManifestEntry {
@@ -85,7 +85,7 @@ interface ManifestEntry {
   truncated?: boolean; // too big to inline → hash-only (file_exists/user_visible_artifact PASS — existence proven by path+sha; artifact_json cannot run)
 }
 
-/** #1b: a staleness tripwire over the inputs that determine the recording — mirrors `asarFingerprint`
+/** A staleness tripwire over the inputs that determine the recording — mirrors `asarFingerprint`
  *  (warn-don't-fail; `--strict` hardens). `baseline` is the canonical staleness cause (a Cowork bump);
  *  `skillHash` covers local skill/plugin edits (the dev-loop case). */
 // Cap the per-file manifest so a huge plugin tree doesn't bloat a committed cassette; above this, omit it
@@ -104,8 +104,8 @@ export interface Cassette {
   events: string[]; // recorded child→driver stdout (events.jsonl) — the cassette source
   controlOut?: string[]; // driver→child control_responses (control-out.jsonl) — for full-fidelity replay
   effectiveFidelity?: string; // the tier the live record actually resolved to (e.g. cowork → hostloop)
-  artifacts?: ManifestEntry[]; // #1: user-visible-roots snapshot (paths + hashes + small JSON bodies)
-  fingerprint?: Fingerprint; // #1b: cassette→skill/baseline staleness tripwire
+  artifacts?: ManifestEntry[]; // user-visible-roots snapshot (paths + hashes + small JSON bodies)
+  fingerprint?: Fingerprint; // cassette→skill/baseline staleness tripwire
   // v4: the user-visible mount roots captured at record time (`outputs` + each connected folder's resolved
   // mount name). Replay reads THIS instead of a hardcoded `["outputs",".projects"]` prefix — folder mount
   // names are dynamic/gated. ABSENT on pre-v4 cassettes → replay falls back to the legacy prefix.
@@ -124,8 +124,8 @@ export interface Cassette {
 }
 
 /** Current cassette format version. Readers tolerate ABSENT (legacy → 0) and warn on a FUTURE version. */
-// v2 (F-6): the fingerprint may be SCOPED to a scenario's `skills:` (whole-tree default stays byte-identical
-// to v1). Bumped because a scoped `skillHash` is not reproducible by a pre-F-6 reader — which would recompute
+// v2: the fingerprint may be SCOPED to a scenario's `skills:` (whole-tree default stays byte-identical
+// to v1). Bumped because a scoped `skillHash` is not reproducible by a pre-v2 reader — which would recompute
 // whole-tree and mis-flag a scoped cassette as stale; the version lets such a reader warn instead.
 // v3: adds `contentSig` to Fingerprint — an algorithm-independent content fingerprint that survives
 // hash-algorithm changes, enabling `rehash` to migrate cassettes without a full re-record.
@@ -133,7 +133,7 @@ export interface Cassette {
 // user_visible_artifact from the real mount set instead of a hardcoded `.projects/` prefix. A folder-
 // artifact cassette recorded pre-v4 has no folder root stored → must be RE-RECORDED, not rehashed
 // (rehash only re-hashes skill fingerprints; it cannot reconstruct folder names).
-// v5 (H9): `skillHash` EXCLUDES OS-junk files (.DS_Store/Thumbs.db/desktop.ini/…) so an out-of-band OS
+// v5: `skillHash` EXCLUDES OS-junk files (.DS_Store/Thumbs.db/desktop.ini/…) so an out-of-band OS
 // metadata touch can't re-stale a cassette; per-file manifest (`fileSigs`) added for exact-diff reporting.
 // v6 (staleness redesign — breaking): `contentSig` is UNIFIED onto the `skillHash` walk (same file set:
 // OS-junk/scope/ignore + in-tree-symlink-by-target), and the **git-tracked file set is the DEFAULT boundary**
@@ -166,7 +166,7 @@ export function parseMaxArtifactBytes(raw: string): number | null {
   return Math.floor(n);
 }
 
-/** The effective inline-body cap. Overridable (F-9) so a large structured deliverable can opt into inlining
+/** The effective inline-body cap. Overridable so a large structured deliverable can opt into inlining
  *  rather than silently truncating — which would pass `artifact_json` at record (on-disk) but fail at replay
  *  (no body). Env `COWORK_HARNESS_MAX_ARTIFACT_BYTES`; `record --max-artifact-bytes` takes precedence via the
  *  explicit `cap` argument to buildManifest. An INVALID/non-positive env value now THROWS (fail loud,
@@ -200,7 +200,7 @@ function isLosslessUtf8(buf: Buffer): boolean {
   return Buffer.from(buf.toString("utf8"), "utf8").equals(buf);
 }
 
-/** #1: snapshot the user-visible artifacts under `workRoot` into manifest entries.
+/** Snapshot the user-visible artifacts under `workRoot` into manifest entries.
  *  Exported for token-free record→replay round-trip tests. */
 export function buildManifest(workRoot: string, cap?: number, roots: string[] = ["outputs", ".projects"]): ManifestEntry[] {
   const limit = cap ?? defaultBodyCap();
@@ -234,7 +234,7 @@ function decodeBody(e: ManifestEntry): Buffer {
   return Buffer.from(e.body, e.encoding === "base64" ? "base64" : "utf8");
 }
 
-/** #1: materialize a manifest into a temp work root so replay can run the filesystem assertions against it.
+/** Materialize a manifest into a temp work root so replay can run the filesystem assertions against it.
  *  Small files get their inlined body (decoded per its encoding marker); hash-only (truncated)
  *  files get an empty placeholder. A truncated entry carries path+bytes+sha256 — positive proof the
  *  file existed at record time — so file_exists and user_visible_artifact PASS from the manifest;
@@ -267,9 +267,9 @@ export function materializeManifest(
   return { workRoot, prefixes: roots, truncatedPaths };
 }
 
-/** #1b: the local skill/plugin/marketplace source dirs a session mounts — the "skill dir" hash unit.
+/** The local skill/plugin/marketplace source dirs a session mounts — the "skill dir" hash unit.
  *  Returns ABSOLUTE dirs (for hashing/reading) plus `baseDir`, the session-file dir the relative
- *  `skillSources` are stored against (so the committed fingerprint carries no absolute host path — C1). */
+ *  `skillSources` are stored against (so the committed fingerprint carries no absolute host path). */
 function skillSourceDirs(sessionPath: string, cassetteDir?: string): { dirs: string[]; baseDir: string; hashIgnore: string[] } {
   const resolved = cassetteDir && !isAbsolute(sessionPath) ? join(cassetteDir, sessionPath) : sessionPath;
   const baseDir = dirname(resolved);
@@ -291,7 +291,7 @@ function skillSourceDirs(sessionPath: string, cassetteDir?: string): { dirs: str
     process.stderr.write(`cowork-harness: skill source dir declared in session does not exist: ${d} — skipping from fingerprint\n`);
     return false;
   });
-  // F-6: session-declared ignore globs (added to any plugin-local .cowork-hashignore inside hashSkillDirs).
+  // session-declared ignore globs (added to any plugin-local .cowork-hashignore inside hashSkillDirs).
   return { dirs, baseDir, hashIgnore: cfg.staleness.hash_ignore };
 }
 
@@ -304,7 +304,7 @@ export function buildFingerprint(
   const { dirs, baseDir, hashIgnore } = skillSourceDirs(sessionPath, cassetteDir);
   if (dirs.length === 0) return { baseline: baselineAppVersion };
   // hashSkillDirs excludes recorded cassettes (*.cassette.json) + VCS/cache dirs so a committed cassette
-  // and unrelated VCS noise don't self-invalidate the fingerprint they were recorded under. F-6: when
+  // and unrelated VCS noise don't self-invalidate the fingerprint they were recorded under. When
   // scopeSkills is set, the hash is scoped to those skills' dirs + the plugin's shared roots (fail-closed);
   // hashIgnore (session globs + each mount's .cowork-hashignore) drops consumer-declared non-runtime paths.
   const hashResult = hashSkillDirs(dirs, scopeSkills, hashIgnore);
@@ -327,7 +327,7 @@ export function buildFingerprint(
     contentSig: computeContentSig(dirs, scopeSkills, hashIgnore), // v6: unified onto the skillHash walk (same set)
     skillSources: dirs.sort().map((d) => relative(baseDir, d)),
   };
-  // Phase C: record the boundary mode only when git (the default raw needs no marker → keeps v<5 cassettes and
+  // Record the boundary mode only when git (the default raw needs no marker → keeps v<5 cassettes and
   // raw-mode v5 cassettes byte-clean). A recorded "git" vs a live "raw" (or vice-versa) is a mode flip.
   if (hashResult.mode === "git") fp.mode = "git";
   // Agent scoping marker — recorded only when active (the default OFF needs no marker → existing cassettes stay
@@ -339,7 +339,7 @@ export function buildFingerprint(
   if (entries.length > MANIFEST_MAX_FILES) fp.fileSigsOmitted = true;
   else fp.fileSigs = entries.map((e) => [e.path, e.sha] as [string, string]);
   if (scopeSkills && scopeSkills.length) fp.skillScope = [...scopeSkills].sort();
-  // G-4: for scoped cassettes, store the shared-root hash separately so checkStaleness can name
+  // for scoped cassettes, store the shared-root hash separately so checkStaleness can name
   // the changed bucket (skill vs shared root) at verify time.
   if (scopeSkills && scopeSkills.length) {
     // Only store sharedHash when ALL dirs are plugin-roots; a mix that includes individual-skill-mount dirs
@@ -376,7 +376,7 @@ export function fingerprintSkillDrift(rec: Fingerprint, live: Fingerprint): stri
   return null;
 }
 
-/** A2: scan the WHOLE cassette surface for PII (default classes: email/currency/domain). A `truncated`
+/** Scan the WHOLE cassette surface for PII (default classes: email/currency/domain). A `truncated`
  *  artifact has NO committed body (hash-only) — nothing to leak — but is reported as `unscanned` so coverage
  *  is never silently implied. Real-class findings fail the gate; `unscanned` is informational. */
 /** The agent's CAPABILITY MANIFEST — environment boilerplate, never user data, and the sole concentrated
@@ -410,7 +410,7 @@ export function scanCassette(cassette: Cassette, allow: AllowInput[]): ScanFindi
   // Whole-token allowlist check against an arbitrary string (the artifact PATH), mirroring scan.ts's
   // `allowed`: an unscoped `--allow` (or one scoped to `cls`) whose regex matches the ENTIRE path
   // clears the finding. Used to give a committed-but-unscannable binary deliverable a documented
-  // recourse — `--allow <path-regex>` after a manual review — since its body isn't text-matchable (#9).
+  // recourse — `--allow <path-regex>` after a manual review — since its body isn't text-matchable.
   const pathAllowed = (path: string, cls: string): boolean =>
     allow.some((a) => {
       const p: AllowPattern = a instanceof RegExp ? { re: a } : a;
@@ -435,7 +435,7 @@ export function scanCassette(cassette: Cassette, allow: AllowInput[]): ScanFindi
           // yet binary office deliverables (.xlsx/.docx/.pdf) embed customer names/emails in their
           // zip/DEFLATE streams. Count a COMMITTED binary body as a real finding (cls "binary", NOT the
           // benign "unscanned" used for a TRUNCATED/uncommitted entry below) so the gate can't greenlight
-          // raw recoverable PII (#9). Recourse: after reviewing the deliverable, clear it with
+          // raw recoverable PII. Recourse: after reviewing the deliverable, clear it with
           // `--allow <path-regex>` (matched on the artifact path above, since the body is unreadable).
           findings.push({
             where: `artifact ${a.path}`,
@@ -468,7 +468,7 @@ export function scanCassette(cassette: Cassette, allow: AllowInput[]): ScanFindi
 
 const DEBUG_SKILLHASH_ENV = "COWORK_HARNESS_DEBUG_SKILLHASH";
 
-/** H9 debug: dump the per-file entries currently feeding the skill hash for a session (same resolution as
+/** Debug: dump the per-file entries currently feeding the skill hash for a session (same resolution as
  *  `buildFingerprint`), so a staleness mismatch shows WHICH files are in the hash — incl. unexpected
  *  OS-junk / run-generated files that are the usual "stale immediately after record" cause. */
 export function explainSkillHash(
@@ -481,7 +481,7 @@ export function explainSkillHash(
   return skillHashEntries(dirs, scopeSkills, hashIgnore);
 }
 
-/** H9 debug: on a skillHash mismatch, if COWORK_HARNESS_DEBUG_SKILLHASH=1, write the file set the hash sees
+/** Debug: on a skillHash mismatch, if COWORK_HARNESS_DEBUG_SKILLHASH=1, write the file set the hash sees
  *  to stderr (flagging OS-junk) plus whether the algorithm-independent contentSig also drifted. When the flag
  *  is OFF, write a one-line hint so the affordance is discoverable. Diagnostics only — never affects the gate. */
 function debugSkillHashMismatch(cassette: Cassette, cassetteDir: string, fp: Fingerprint, live: Fingerprint): void {
@@ -557,7 +557,7 @@ function diffFileSigs(recorded: Array<[string, string]>, live: Array<[string, st
   return summarizeFileSigDiff(diffFileSigsPaths(recorded, live));
 }
 
-/** Finding 1 (G-4, path-accurate): partition a manifest diff into the shared-root bucket vs the
+/** Partition a manifest diff into the shared-root bucket vs the
  *  skill-private bucket, EXACTLY mirroring `scopedAccept`/`sharedOnlyAccept` in skill-hash.ts so attribution
  *  matches the hash boundary. A path under `skills/<name>/` is skill-private when `<name>` is in scope; with
  *  agent-scoping ON, a skill-named `agents/<name>.md` is also skill-private. Everything else is shared. This
@@ -620,7 +620,7 @@ export function computeStaleness(cassette: Cassette, cassetteDir: string | undef
         message: "skill dirs not resolvable from the cassette location — cannot verify skill staleness (can't verify ⇒ not green)",
       });
     else if (recMode !== liveMode)
-      // Phase C: a hash from a different boundary mode is not comparable — re-record, don't emit a misleading
+      // A hash from a different boundary mode is not comparable — re-record, don't emit a misleading
       // content diff. Classed `format` (not skill drift): a mode flip is an env/config mismatch, not source drift.
       findings.push({
         class: "format",
@@ -634,7 +634,7 @@ export function computeStaleness(cassette: Cassette, cassetteDir: string | undef
         message: `recorded with agent-scope '${fp.agentScope ?? "off"}', verifying with '${live.agentScope ?? "off"}' (COWORK_HARNESS_AGENT_SCOPE) — re-record under the same setting`,
       });
     else if (live.skillHash !== fp.skillHash) {
-      debugSkillHashMismatch(cassette, cassetteDir ?? "", fp, live); // H9 (D2): surface WHICH files drifted
+      debugSkillHashMismatch(cassette, cassetteDir ?? "", fp, live); // surface WHICH files drifted
       const recordedVersion = cassette.cassetteVersion ?? 0;
       if (recordedVersion < CASSETTE_VERSION) {
         findings.push({
@@ -642,7 +642,7 @@ export function computeStaleness(cassette: Cassette, cassetteDir: string | undef
           message: `recorded under an older hash format (v${recordedVersion} → v${CASSETTE_VERSION}) — re-record once after upgrading`,
         });
       } else if (fp.sharedHash !== undefined && live.sharedHash !== undefined) {
-        // G-4 + Finding 1: attribute drift to the shared and/or skill bucket(s). D6: `skillScope` is always
+        // attribute drift to the shared and/or skill bucket(s). `skillScope` is always
         // non-empty when `sharedHash` is set (single assignment site under the same guard in buildFingerprint);
         // the `?? []` is a defensive guard only — the on-disk cassette shape is not schema-validated.
         const scopeArr = fp.skillScope ?? [];
@@ -684,7 +684,7 @@ export function computeStaleness(cassette: Cassette, cassetteDir: string | undef
           }
         }
       } else {
-        // Non-scoped (whole-tree) cassette: name the changed files when the per-file manifest is present (D5),
+        // Non-scoped (whole-tree) cassette: name the changed files when the per-file manifest is present,
         // else the generic fallback.
         const summary = fp.fileSigs && live.fileSigs ? diffFileSigs(fp.fileSigs, live.fileSigs) : null;
         if (summary) findings.push({ class: "skill", message: `skill files changed since record — ${summary} — re-record` });
@@ -695,7 +695,7 @@ export function computeStaleness(cassette: Cassette, cassetteDir: string | undef
   return findings;
 }
 
-/** B3 staleness GATE adapter for the string consumers (`verify-cassettes`, the re-record work-list). Returns
+/** Staleness GATE adapter for the string consumers (`verify-cassettes`, the re-record work-list). Returns
  *  the unified findings as plain reason strings. MUST stay class-blind (forward EVERY finding) so an
  *  `unverifiable-baseline` / `unverifiable-skill` still reds those gates — filtering a class here would
  *  false-green `verify-cassettes` on a cassette it can't verify. */
@@ -730,7 +730,7 @@ function minimalRec(): RunRecord {
  * no token, no model, no flakiness.
  *
  * When `controlOut` is present (full-fidelity mode): decision events are yielded so Run drives
- * the decision pipeline; respond() re-serializes and compares to the frozen recording (O7 guard).
+ * the decision pipeline; respond() re-serializes and compares to the frozen recording (re-serialization guard).
  *
  * When `controlOut` is absent/empty (legacy events-only mode): decision events are skipped
  * (the decider does not run) — a backward-compat warning is emitted and question/gate assertions
@@ -741,7 +741,7 @@ export class CassetteAgentSession implements AgentSession {
   private reqById = new Map<string, DecisionRequest>();
   /** re-serialize mismatches (request_id → {expected, actual}) — surfaced as failing assertions. */
   readonly mismatches: { id: string; expected: string; actual: string }[] = [];
-  /** #18/#4: decision ids that were yielded (and reached respond) but have NO recorded control_response
+  /** decision ids that were yielded (and reached respond) but have NO recorded control_response
    *  in a full-fidelity cassette — a truncated recording. Surfaced as failing replay_protocol_fidelity
    *  (instead of silently replaying a recorded allow as abstain→deny with no fidelity signal). */
   readonly missingControlOut: string[] = [];
@@ -826,7 +826,7 @@ export class CassetteAgentSession implements AgentSession {
     const req = this.reqById.get(id);
     if (!req) return;
     // Re-serialize the response through serializeDecision (the live path) and compare to the
-    // frozen recording — this is the O7 guard: if serializeDecision regresses (e.g. drops
+    // frozen recording — this is the re-serialization guard: if serializeDecision regresses (e.g. drops
     // `questions` from the AskUserQuestion updatedInput), the mismatch fires token-free.
     const reserializedEnvelope = serializeDecision(req, r);
     const reserializedBody = (reserializedEnvelope as any)?.response?.response ?? reserializedEnvelope;
@@ -838,7 +838,7 @@ export class CassetteAgentSession implements AgentSession {
         this.mismatches.push({ id, expected, actual });
       }
     } else if (!this.missingControlOut.includes(id)) {
-      // #18/#4: a decision was yielded in full-fidelity mode but has no recorded control_response —
+      // a decision was yielded in full-fidelity mode but has no recorded control_response —
       // the cassette is truncated. Record it so replayCassette fails loud (a recorded `allow` would
       // otherwise replay as a silent abstain→deny with no fidelity failure).
       this.missingControlOut.push(id);
@@ -940,8 +940,8 @@ const NOOP_DECIDER: Decider = {
   },
 };
 
-/** Apply CONTENT redaction (the opt-in policy) across the WHOLE cassette surface (C1): events/controlOut
- *  protocol lines (structurally — string leaves AND object keys, keeping JSON valid + the O7 question/answer
+/** Apply CONTENT redaction (the opt-in policy) across the WHOLE cassette surface: events/controlOut
+ *  protocol lines (structurally — string leaves AND object keys, keeping JSON valid + the question/answer
  *  strings in sync), artifact bodies, the scenario prompt/answers/assert metadata, and the diagnostic
  *  skillSources. Identity fields (name/session/fidelity/baseline) are left intact so replay still resolves.
  *  Pure — returns a new cassette. Distinct from secret-scrub (`scrub`), which runs first. */
@@ -960,7 +960,7 @@ export function redactCassette(cassette: Cassette, policy: RedactionPolicy): Cas
   // in both the root and the path, keeping the prefix relationship intact.
   const redactedRoots = cassette.userVisibleRoots?.map((r) => redactText(r, policy));
   const redactedArtifacts = cassette.artifacts?.map((a) => {
-    const out: ManifestEntry = { ...a, path: redactText(a.path, policy) }; // C1: a filename can name a customer (outputs/Acme-cap-table.json)
+    const out: ManifestEntry = { ...a, path: redactText(a.path, policy) }; // a filename can name a customer (outputs/Acme-cap-table.json)
     // a base64 (binary) body has no text PII to redact, and redacting it would corrupt the bytes
     // and then false-fail the replay-time sha256 verify — leave binary bodies untouched.
     // Also skip bodies that are already secret-scrub redaction markers ([REDACTED:*]): rewriting
@@ -970,13 +970,13 @@ export function redactCassette(cassette: Cassette, policy: RedactionPolicy): Cas
       // no replay protocol coupling, and redactText preserves bytes EXACTLY when nothing matches —
       // redactJsonLine compact-reserializes (JSON.stringify∘JSON.parse), so a pretty-printed or
       // newline-terminated JSON body changed bytes even on a no-match policy while the spread `...a`
-      // kept the stale sha256, crashing replay's materializeManifest verify (#2/#8).
+      // kept the stale sha256, crashing replay's materializeManifest verify.
       const body = redactText(a.body, policy);
       if (body !== a.body) {
         out.body = body;
         // Recompute sha256 over the redacted utf8 bytes so the replay-time verify passes. When nothing
         // matched, body === a.body and the spread-in sha256 is still correct — base and redacted stay
-        // byte-identical (no A3 hash-changed-on-a-no-op false-failure).
+        // byte-identical (no hash-changed-on-a-no-op false-failure).
         out.sha256 = createHash("sha256").update(Buffer.from(body, "utf8")).digest("hex");
       }
     }
@@ -1020,7 +1020,7 @@ export function redactCassette(cassette: Cassette, policy: RedactionPolicy): Cas
   };
 }
 
-/** A3 / C4 cardinal-sin guard: redaction must be VERDICT-PRESERVING. Replay both the pre-redaction and the
+/** Cardinal-sin guard: redaction must be VERDICT-PRESERVING. Replay both the pre-redaction and the
  *  redacted cassette (token-free) and compare verdicts; if redaction flipped any replay-checkable assertion
  *  (e.g. stripped a value a `transcript_not_matches` keys on, manufacturing a green), throw — never write a
  *  cassette whose verdict was changed by redaction.
@@ -1073,7 +1073,7 @@ export async function assertRedactionVerdictPreserved(base: Cassette, redacted: 
 
   // 3. INTERNAL sha256 consistency of the REDACTED cassette: every committed body's stored sha256 must
   //    equal the hash of its actual bytes. A redaction that rewrote a body without recomputing sha256
-  //    (the #2/#8 corruption) makes the redacted cassette throw at replay's materializeManifest verify —
+  //    (this corruption) makes the redacted cassette throw at replay's materializeManifest verify —
   //    but that verify only runs when the scenario HAS a file/artifact assertion; without one, a corrupt
   //    cassette would be written silently. This guard catches it unconditionally, at record.
   //    (Replaces the old base-vs-redacted `path:sha` compare, which was doubly dead: artifact paths ARE
@@ -1110,7 +1110,7 @@ export async function assertRedactionVerdictPreserved(base: Cassette, redacted: 
     }
     throw new Error(
       `cowork-harness: redaction changed assertion failures: ${detail} — redaction altered an ` +
-        `asserted observable; refusing to write a cassette whose verdict was manufactured by redaction (A3). ` +
+        `asserted observable; refusing to write a cassette whose verdict was manufactured by redaction. ` +
         `Record against synthetic inputs, or narrow the redaction policy so it doesn't touch asserted values.`,
     );
   }
@@ -1122,7 +1122,7 @@ export interface ScenarioDiscovery {
   broken: { file: string; error: string }[]; // looks like a scenario (has `prompt:`) but unparseable/invalid
 }
 
-/** B1: classify the `*.yaml`/`*.yml` (non-recursive) under `dir` for batch `record`. Classification keys on a
+/** Classify the `*.yaml`/`*.yml` (non-recursive) under `dir` for batch `record`. Classification keys on a
  *  POSITIVE `prompt:` signal — NOT on "Scenario.parse threw", because a session YAML and a broken scenario
  *  both throw the same error. A doc with `prompt:` that fails to parse is BROKEN (a batch failure), never a
  *  silent skip — silently swallowing a broken scenario as a non-scenario is the false-green this guards. */
@@ -1209,7 +1209,7 @@ export function readCassette(path: string): { cassette: Cassette } | { error: st
   return { cassette };
 }
 
-/** B2: the committed cassettes under `dir` whose fingerprint has drifted (baseline/skill) — the re-record
+/** The committed cassettes under `dir` whose fingerprint has drifted (baseline/skill) — the re-record
  *  work-list. Pure + token-free (reuses `checkStaleness`); the actual re-record needs the live agent. A
  *  malformed cassette is surfaced as stale (needs attention) rather than silently dropped. */
 export function selectStaleCassettes(dir: string): { path: string; staleness: string[] }[] {
@@ -1228,7 +1228,7 @@ interface RecordOpts {
   noRedact: boolean;
   allowFailing: boolean;
   cassettePath?: string; // explicit --out (single); otherwise cassettes/<name>.cassette.json
-  maxArtifactBytes?: number; // F-9: override the inline-body cap (else env / 64 KiB default)
+  maxArtifactBytes?: number; // override the inline-body cap (else env / 64 KiB default)
   scenarioSourceFile?: string; // the on-disk scenario YAML this was recorded from (for --rerecord-stale)
   // Live-decider plumbing: answer gates DURING the recording instead of pre-scripting them.
   // `onUnanswered` = --on-unanswered fail|first ("llm" when --decider-llm); `externalChannel` = --decider-dir
@@ -1240,7 +1240,7 @@ interface RecordOpts {
   deciderChannel?: "decider-dir" | "decider-llm";
 }
 
-/** F-9: return the `artifact_json.artifact` paths a scenario asserts that ended up TRUNCATED in the manifest
+/** Return the `artifact_json.artifact` paths a scenario asserts that ended up TRUNCATED in the manifest
  *  (body >cap, hash-only). Such an assertion passes at record (evaluated on the live on-disk file) but FAILS
  *  at replay (the materialized body is empty → "not valid JSON"). Paths are normalized through `resolve` so
  *  `./outputs/x.json` and `outputs/x.json` join cleanly against the manifest's walk paths. */
@@ -1257,7 +1257,7 @@ export function artifactJsonTargetsTruncated(scenario: Scenario, workRoot: strin
   return hits;
 }
 
-/** G-1: probe for an on-disk scenario file at the two conventional locations relative to a cassette.
+/** Probe for an on-disk scenario file at the two conventional locations relative to a cassette.
  *  Sibling layout: <cassetteDir>/../scenarios/<name>.yaml (the standard multi-skill repo layout).
  *  Flat layout:    <cassetteDir>/<name>.yaml (single-dir layout).
  *  Returns the first found path, or null if neither exists.
@@ -1305,7 +1305,7 @@ async function recordScenarioFile(file: string, opts: RecordOpts): Promise<{ res
 }
 
 /** `record <scenario.yaml | dir> [--out <file>] [--rerecord-stale] [--no-redact] [--allow-failing]` —
- *  run live + save a cassette. A single file records one; a dir batches (B1); --rerecord-stale (B2) treats
+ *  run live + save a cassette. A single file records one; a dir batches; --rerecord-stale treats
  *  the dir as committed cassettes and re-records only those whose fingerprint drifted. */
 export async function cmdRecord(args: string[]) {
   let p;
@@ -1445,7 +1445,7 @@ export async function cmdRecord(args: string[]) {
       if (disc.scenarios.length === 0) {
         if (disc.broken.length === 0) {
           log(`record --dry-run: no scenarios discovered under ${target}`);
-          // Exit 2 for "nothing discovered at all" — matches the non-dry-run B1 path.
+          // Exit 2 for "nothing discovered at all" — matches the non-dry-run batch path.
           return process.exit(2);
         }
         // Broken files found but no valid scenarios — exit 1 (broken, not nothing).
@@ -1492,7 +1492,7 @@ export async function cmdRecord(args: string[]) {
     return process.exit(2);
   }
 
-  // Shared live-decider opts for the B1 (dir-batch) and single-scenario record paths. (--rerecord-stale is
+  // Shared live-decider opts for the dir-batch and single-scenario record paths. (--rerecord-stale is
   // excluded above, so it never sees these.) A plain `record` leaves every field undefined → no behavior change.
   const liveDecider: Pick<RecordOpts, "onUnanswered" | "llmIntent" | "llmModel" | "deciderChannel"> = {
     onUnanswered: deciderLlm ? "llm" : onUnansweredOpt,
@@ -1501,7 +1501,7 @@ export async function cmdRecord(args: string[]) {
     deciderChannel: deciderDir !== undefined ? "decider-dir" : deciderLlm ? "decider-llm" : undefined,
   };
 
-  // B2: re-record only the drifted cassettes in a committed cassette dir.
+  // re-record only the drifted cassettes in a committed cassette dir.
   if (rerecordStale) {
     if (!isDir) {
       log("record --rerecord-stale takes a DIRECTORY of committed cassettes");
@@ -1536,7 +1536,7 @@ export async function cmdRecord(args: string[]) {
       try {
         let r: { result: RunResult };
         if (diskScenario) {
-          // G-1: re-record from the on-disk scenario YAML so any edits (e.g. added `skills:`) take effect.
+          // re-record from the on-disk scenario YAML so any edits (e.g. added `skills:`) take effect.
           r = await recordScenarioFile(diskScenario, { noRedact, allowFailing, cassettePath: cp, maxArtifactBytes });
         } else {
           // No on-disk scenario found — fall back to the embedded snapshot (original behavior).
@@ -1561,7 +1561,7 @@ export async function cmdRecord(args: string[]) {
     return process.exit(failures > 0 ? 1 : 0);
   }
 
-  // B1: batch a directory of scenarios.
+  // batch a directory of scenarios.
   if (isDir) {
     const disc = discoverScenarios(target);
     for (const s of disc.skipped) log(`· skipped (not a scenario — no \`prompt:\`): ${s}`);
@@ -1651,9 +1651,9 @@ export function cassetteAuthoring(nonDeterministic: boolean | undefined, channel
   return nonDeterministic ? { nonDeterministic: true, channel } : undefined;
 }
 
-/** The live-record TAIL shared by the file (B1/single) and in-memory (B2 re-record) paths: run live, refuse
- *  a failing run unless opted in (A3), snapshot + secret-scrub bodies (C2), opt-in redact + verdict-preserve
- *  (A1/A3), write. `extraPolicyDirs` adds the scenario-file dir to the .cowork-redact.json search. */
+/** The live-record TAIL shared by the file (batch/single) and in-memory (re-record) paths: run live, refuse
+ *  a failing run unless opted in, snapshot + secret-scrub bodies, opt-in redact + verdict-preserve,
+ *  then write. `extraPolicyDirs` adds the scenario-file dir to the .cowork-redact.json search. */
 async function recordScenarioObject(
   scenario: Scenario,
   opts: RecordOpts,
@@ -1683,8 +1683,8 @@ async function recordScenarioObject(
   const cassettePath = opts.cassettePath ?? defaultCassettePath(scenario.name);
   if (!opts.cassettePath) containedPath("cassettes", `${safeName}.cassette.json`); // path traversal guard
   mkdirSync(dirname(cassettePath), { recursive: true });
-  // A3: a failing live run frozen into a cassette is a latent false-signal — refuse unless opted in.
-  // F-5: separate the run RESULT from the VERDICT (they're distinct — the run can succeed while an assertion
+  // a failing live run frozen into a cassette is a latent false-signal — refuse unless opted in.
+  // separate the run RESULT from the VERDICT (they're distinct — the run can succeed while an assertion
   // or parity check fails) and name which check failed, instead of the misleading "did NOT pass (result=success)".
   const liveVerdict = computeVerdict(result, "live");
   if (!liveVerdict.pass && !opts.allowFailing) {
@@ -1701,10 +1701,10 @@ async function recordScenarioObject(
     ...scenario,
     session: scenario.session === "(inline)" ? "(inline)" : relative(dirname(cassettePath), scenario.session),
   };
-  // C2: buildManifest reads output bodies RAW (executeScenario scrubs result/events/control-out, NOT
+  // buildManifest reads output bodies RAW (executeScenario scrubs result/events/control-out, NOT
   // outputs/) — secret-scrub each body before it is committed.
   const secrets = collectSecrets();
-  // Text bodies are scrubbed in-place (C2). Base64 (binary) bodies cannot be scrubbed with plain
+  // Text bodies are scrubbed in-place. Base64 (binary) bodies cannot be scrubbed with plain
   // `scrub` — text-substitution corrupts the bytes and then false-fails the replay-time sha256 verify.
   // Instead use `scrubField`, which whole-field-decodes first: if the decoded content contains a secret
   // (covering the base64(prefix+TOKEN+suffix) case), the entire body is replaced with a redaction marker,
@@ -1737,7 +1737,7 @@ async function recordScenarioObject(
     // swapped for a [REDACTED:*] marker). `a.sha256` was computed over the RAW pre-scrub bytes
     // (buildManifest, ~219), so it is now stale — recompute over the scrubbed utf8 bytes (mirror the
     // base64 branch above), otherwise replay's materializeManifest verify throws "body does not match
-    // its recorded sha256" (#1/#10). encoding is already undefined on this branch, so the spread keeps it.
+    // its recorded sha256". encoding is already undefined on this branch, so the spread keeps it.
     if (scrubbed === "[REDACTED:base64]" || scrubbed === "[REDACTED:uri]") {
       // Whole-field marker replacement destroys the deliverable content — artifact_json /
       // user_visible_artifact assertions on this artifact will fail at replay, exactly like the base64
@@ -1751,7 +1751,7 @@ async function recordScenarioObject(
     const newSha256 = createHash("sha256").update(Buffer.from(scrubbed, "utf8")).digest("hex");
     return { ...a, body: scrubbed, sha256: newSha256 };
   });
-  // F-9: if an `artifact_json` targets an artifact we had to truncate, it passes here (on-disk) but FAILS
+  // if an `artifact_json` targets an artifact we had to truncate, it passes here (on-disk) but FAILS
   // replay (no committed body). Surface that record→replay asymmetry NOW, at its cause, instead of letting a
   // green record produce a red replay in CI. Honor --allow-failing (warn, don't block) like the verdict gate.
   if (result.workDir) {
@@ -1782,8 +1782,8 @@ async function recordScenarioObject(
     fingerprint: buildFingerprint(scenario.session, result.baseline, undefined, scenario.skills),
     authoring,
   };
-  // A1 (opt-in) content redaction over the whole surface (C1). Empty policy → no-op. Non-empty → must be
-  // VERDICT-PRESERVING (A3): replay both and refuse to write on divergence (a manufactured green).
+  // (opt-in) content redaction over the whole surface. Empty policy → no-op. Non-empty → must be
+  // VERDICT-PRESERVING: replay both and refuse to write on divergence (a manufactured green).
   const policy = opts.noRedact
     ? { patterns: [], keyNames: [] }
     : loadRedactionPolicy([process.cwd(), ...extraPolicyDirs, dirname(cassettePath)]);
@@ -1793,7 +1793,7 @@ async function recordScenarioObject(
     await assertRedactionVerdictPreserved(base, redacted);
     cassette = redacted;
   }
-  writeFileAtomic(cassettePath, JSON.stringify(cassette, null, 2)); // H5: atomic — no partial cassette on a mid-write crash
+  writeFileAtomic(cassettePath, JSON.stringify(cassette, null, 2)); // atomic — no partial cassette on a mid-write crash
   return { result, cassettePath, artifacts: artifacts.length };
 }
 
@@ -1920,7 +1920,7 @@ export async function cmdReplay(args: string[]) {
     return process.exit(2);
   }
   const json = p.options["--output-format"] === "json";
-  const strict = p.flags["--strict"] ?? false; // #1b: escalate ALL staleness findings to failures (release gate)
+  const strict = p.flags["--strict"] ?? false; // escalate ALL staleness findings to failures (release gate)
   // `--assert-from <file>` (explicit path) / `--reassert` (auto-resolve the sibling) opt INTO re-checking against
   // the on-disk `assert:`; mutually exclusive. On that path skill-content drift MUST hard-fail (else the frozen
   // events could green an edited assert against a skill that no longer produces them) — so OR in failOnSkillDrift.
@@ -2060,7 +2060,7 @@ export async function cmdReplay(args: string[]) {
       worst = Math.max(worst, 2);
       continue;
     }
-    // SEAM B: the replay lane evaluates assertions + result only; one verdict source for footer AND exit.
+    // the replay lane evaluates assertions + result only; one verdict source for footer AND exit.
     if (!json) renderFooter(result, plan, { renderer, lane: "replay" });
     results.push(result);
     worst = Math.max(worst, computeVerdict(result, "replay").exitCode);
@@ -2070,8 +2070,8 @@ export async function cmdReplay(args: string[]) {
   return process.exit(worst);
 }
 
-/** `verify-cassettes <file|dir>` — the CI gate (token/agent-free). Runs the privacy scan (A2) and the
- *  staleness check (B3) over one cassette or every `*.cassette.json` in a dir (non-recursive). Exit 1 on any
+/** `verify-cassettes <file|dir>` — the CI gate (token/agent-free). Runs the privacy scan and the
+ *  staleness check over one cassette or every `*.cassette.json` in a dir (non-recursive). Exit 1 on any
  *  real PII finding or staleness drift; `unscanned` notes are informational. Dedicated JSON envelope. */
 export function cmdVerifyCassettes(args: string[]) {
   let p;
@@ -2097,9 +2097,9 @@ export function cmdVerifyCassettes(args: string[]) {
   }
   const doPrivacy = !skipPrivacy;
   const doStaleness = !skipStaleness;
-  // Allow model (F-2): each entry is whole-token anchored + class-scoped. A bare `--allow` applies to every
+  // Allow model: each entry is whole-token anchored + class-scoped. A bare `--allow` applies to every
   // class (back-compat); `--allow-domain`/`--allow-email` scope to one class so a domain allow can't bleed
-  // into the email tripwire. `--allow-file` (F-8) loads bare (all-class) patterns from a version-controlled
+  // into the email tripwire. `--allow-file` loads bare (all-class) patterns from a version-controlled
   // file, one per line, `#` comments and blanks ignored.
   const allow: AllowPattern[] = [];
   const addAllow = (src: string, cls: string | undefined, flag: string): void => {
@@ -2150,7 +2150,7 @@ export function cmdVerifyCassettes(args: string[]) {
     const staleness = doStaleness ? checkStaleness(rc.cassette, dirname(f)) : [];
     // a cassette written by a NEWER harness version may carry semantics this version can't correctly
     // interpret. This is a FORMAT/version failure, NOT staleness — bucket it under its own `version`
-    // key (#33) so `--skip-staleness` doesn't produce the self-contradiction of coverage.staleness:false
+    // key so `--skip-staleness` doesn't produce the self-contradiction of coverage.staleness:false
     // reported alongside a staleness-class ok:false. It is always a hard fail (can't verify ⇒ not green),
     // independent of the staleness toggle.
     const recordedVersion = rc.cassette.cassetteVersion ?? 0;
@@ -2332,7 +2332,7 @@ export function cmdRehash(args: string[]): void {
         cassetteVersion: CASSETTE_VERSION,
         fingerprint: { ...liveFingerprint },
       };
-      writeFileAtomic(file, JSON.stringify(updated, null, 2)); // H5: atomic in-place rehash write (staleness keys on contentSig, not mtime — rename is safe)
+      writeFileAtomic(file, JSON.stringify(updated, null, 2)); // atomic in-place rehash write (staleness keys on contentSig, not mtime — rename is safe)
     }
     results.push({
       file,
@@ -2366,8 +2366,8 @@ export function cmdRehash(args: string[]): void {
 }
 
 /** Replay a cassette through Run and re-evaluate the content assertions. With a `cassette.artifacts`
- *  manifest (#1), filesystem assertions (file_exists/user_visible_artifact/artifact_json) ALSO run, against
- *  the materialized snapshot. `opts.strict` (#1b) escalates ALL staleness findings to failing assertions;
+ *  manifest, filesystem assertions (file_exists/user_visible_artifact/artifact_json) ALSO run, against
+ *  the materialized snapshot. `opts.strict` escalates ALL staleness findings to failing assertions;
  *  `opts.failOnSkillDrift` escalates only the skill-source classes (`skill`/`shared-root`/`unverifiable-skill`),
  *  leaving baseline drift a non-failing warning. Either way the findings are always surfaced in
  *  `RunResult.staleness` for JSON consumers. */
@@ -2395,7 +2395,7 @@ export async function replayCassette(
 
   const session = new CassetteAgentSession(cassette.events, cassette.controlOut);
 
-  // #1b: cassette→skill/baseline staleness tripwire. Mirrors `asarFingerprint` — warn by default; `--strict`
+  // cassette→skill/baseline staleness tripwire. Mirrors `asarFingerprint` — warn by default; `--strict`
   // turns a mismatch into a failing assertion (release gate). A green replay must not imply the skill is
   // unchanged (frozen-structure limit). The skill-hash recompute needs the local skill dirs to be resolvable
   // from the cassette's session path; when they aren't (a moved/committed cassette), we say so rather than
@@ -2410,7 +2410,7 @@ export async function replayCassette(
   const staleness: StalenessFinding[] = computeStaleness(cassette, opts.cassetteDir);
   for (const s of staleness) warn(`::warning:: [replay] cassette stale: ${s.message}\n`);
 
-  // §2.5 backward compat: warn loudly when controlOut is absent so the user knows question/gate
+  // backward compat: warn loudly when controlOut is absent so the user knows question/gate
   // assertions are being EXCLUDED (not vacuously evaluated) from this run.
   if (!session.hasControlOut) {
     warn(
@@ -2418,12 +2418,12 @@ export async function replayCassette(
     );
   }
 
-  // §2.2 ReplayDecider: look up recorded decision body → deserialize → return.
+  // ReplayDecider: look up recorded decision body → deserialize → return.
   // Only constructed (and only drives the decision pipeline) when controlOut is present.
   // Reuse the session's already-parsed controlOut index for the decider (no re-parsing).
   const replayDecider = session.hasControlOut ? buildReplayDecider(session, session.controlOutIndex) : NOOP_DECIDER;
 
-  // §2.6: pass Infinity as dialogTimeoutMs — the synchronous decider resolves before any timer,
+  // pass Infinity as dialogTimeoutMs — the synchronous decider resolves before any timer,
   // and there is no child, so the synchronous respond() is safe here.
   const run = new Run(session, replayDecider, hooks, "replay", Infinity);
   let rec: RunRecord;
@@ -2439,7 +2439,7 @@ export async function replayCassette(
     rec = minimalRec();
   }
 
-  // §2.5: build a conditional contentKeys — omit question/gate keys when controlOut is absent
+  // build a conditional contentKeys — omit question/gate keys when controlOut is absent
   // (they would evaluate vacuously/incorrectly).
   const alwaysContentKeys: (keyof Assertion)[] = [
     "transcript_contains",
@@ -2465,7 +2465,7 @@ export async function replayCassette(
     ...VERDICT_MODIFIER_KEYS,
   ];
   const questionGateKeys: (keyof Assertion)[] = ["question_asked", "questions_count_max", "gate_answers_delivered"];
-  // #1: with an artifact manifest, the filesystem assertions become replay-checkable (materialized below).
+  // with an artifact manifest, the filesystem assertions become replay-checkable (materialized below).
   // Without a manifest they stay live-only (stripped → skip warning), exactly as before.
   const manifestKeys: (keyof Assertion)[] = cassette.artifacts?.length ? ["file_exists", "user_visible_artifact", "artifact_json"] : [];
   // deterministic exhaustiveness check — every key in the Assertion schema must appear in exactly
@@ -2501,7 +2501,7 @@ export async function replayCassette(
   } = manifestKeys.length
     ? materializeManifest(cassette.artifacts!, cassette.userVisibleRoots ?? ["outputs", ".projects"])
     : { workRoot: "", prefixes: [] as string[], truncatedPaths: new Set<string>() };
-  // #32: materializeManifest created a temp dir (`replayWorkRoot`) above; everything below uses it and
+  // materializeManifest created a temp dir (`replayWorkRoot`) above; everything below uses it and
   // then returns. Wrap the rest in try/finally so the temp dir is removed on every exit path (normal
   // return OR a throw from evaluate/assert building) — otherwise `cwh-replay-*` dirs leak under tmpdir
   // across repeated replays. `replayWorkRoot` is declared OUTSIDE the try (visible in finally); the
@@ -2512,7 +2512,7 @@ export async function replayCassette(
       ...manifestKeys,
     ];
 
-    // #5: with AND-semantics in check(), we must STRIP each assertion to only its active content keys
+    // with AND-semantics in check(), we must STRIP each assertion to only its active content keys
     // before evaluating — otherwise a mixed object (e.g. {question_asked, result} with controlOut
     // absent, or {transcript_contains, file_exists}) would AND-evaluate a key that cannot be checked
     // on the replay lane and false-fail. Stripping (rather than a Zod superRefine that bans mixed
@@ -2525,7 +2525,7 @@ export async function replayCassette(
     };
     const replayable = cassette.scenario.assert.map(stripToContent).filter((a) => Object.keys(a).length > 0);
 
-    // §5 + #1 footgun: replay must be LOUD about anything it can't check, in two distinct classes —
+    // #1 footgun: replay must be LOUD about anything it can't check, in two distinct classes —
     // a silent partial false-green is the project's cardinal sin.
     //  • FULL skip  — an assertion with no evaluated key at all (pure filesystem/egress, or pure
     //    gate-keys when controlOut is absent) + every `expect_denied` host. Not evaluated on replay.
@@ -2578,7 +2578,7 @@ export async function replayCassette(
       truncatedPaths: replayTruncatedPaths,
     });
 
-    // #1b: under --strict, EVERY staleness finding becomes a failing assertion (non-zero exit), not just a
+    // under --strict, EVERY staleness finding becomes a failing assertion (non-zero exit), not just a
     // warning. --fail-on-skill-drift is the narrower gate: only the skill-source classes fail (incl.
     // `unverifiable-skill` — can't verify skill staleness ⇒ not green), while baseline / format / env-level
     // findings stay non-failing. `else if` makes --strict the superset when both are passed.
@@ -2640,7 +2640,7 @@ export async function replayCassette(
       });
     }
 
-    // §2.4: surface each serializeDecision mismatch as a failing replay_protocol_fidelity assertion.
+    // surface each serializeDecision mismatch as a failing replay_protocol_fidelity assertion.
     // Shape: { assertion: { replay_protocol_fidelity: true }, pass: false, message } — well-typed via types.ts.
     for (const m of session.mismatches) {
       assertions.push({
@@ -2650,7 +2650,7 @@ export async function replayCassette(
       });
     }
 
-    // #18/#4: a decision present in events.jsonl with NO matching control_response in a full-fidelity
+    // a decision present in events.jsonl with NO matching control_response in a full-fidelity
     // cassette is a truncated recording — fail loud rather than letting a recorded allow replay as a
     // silent abstain→deny. (Questions with a missing entry already throw UnansweredError upstream.)
     for (const id of session.missingControlOut) {
@@ -2674,8 +2674,8 @@ export async function replayCassette(
       effectiveFidelity: `replay:${cassette.effectiveFidelity ?? cassette.scenario.fidelity}`,
       baseline: cassette.scenario.baseline,
       result: rec.result,
-      resultErrorKind: rec.resultErrorKind, // Fix 5: re-derived by run.ts during the replay re-drive (same classifier)
-      stalledOnQuestion: rec.stalledOnQuestion, // H2: re-derived by run.ts's detector during the replay re-drive — so a recorded stall fails replay too
+      resultErrorKind: rec.resultErrorKind, // re-derived by run.ts during the replay re-drive (same classifier)
+      stalledOnQuestion: rec.stalledOnQuestion, // re-derived by run.ts's detector during the replay re-drive — so a recorded stall fails replay too
       decisions: rec.decisions.map((d) => ({ kind: d.kind, name: d.name, decision: d.decision, by: d.by })),
       toolCounts: rec.toolCounts,
       gateDeliveries: rec.gateDeliveries,
@@ -2690,7 +2690,7 @@ export async function replayCassette(
       skippedAssertions: { full: fullSkipCount, partial: partialSkipCount },
       // A cassette freezes the answer path: the replay itself is deterministic regardless of how the
       // original run was answered. Always explicit (never undefined) so renderer.ts:146 treats it
-      // correctly — undefined would silently render as "deterministic" (#47 C1 [review-2]).
+      // correctly — undefined would silently render as "deterministic".
       nonDeterministic: false,
     };
   } finally {

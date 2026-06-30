@@ -7,7 +7,7 @@ import { scrub } from "../secrets.js";
 import { compileUserRegex } from "../regex.js";
 
 /**
- * Seam 2 — Decider: policy for the agent's `decision` events. Deciders return a
+ * Decider: policy for the agent's `decision` events. Deciders return a
  * `DecisionResponse` or `ABSTAIN` (the sentinel — never a throw for "not my job").
  * A real failure throws (e.g. `UnansweredError`). `Chain` walks links until one
  * returns non-ABSTAIN.
@@ -115,7 +115,7 @@ export class ScriptedDecider implements Decider {
   async decide(req: DecisionRequest, _ctx: RunContext): Promise<Decision | Abstain> {
     if (req.kind === "question") {
       const answers: Record<string, string> = {};
-      const unmatched: string[] = []; // #4b: sub-questions no rule answered (named in the fallthrough warning)
+      const unmatched: string[] = []; // sub-questions no rule answered (named in the fallthrough warning)
       for (const q of req.questions) {
         const text = q.question ?? q.header ?? "";
         const rule = this.rules.find((r) => {
@@ -133,9 +133,9 @@ export class ScriptedDecider implements Decider {
             `rule for "${text}" sets both choose and answer`,
             "use exactly one: choose: <label(s)> for an offered option, or answer: <text> for a free-text 'Other'",
           );
-        // FREE-TEXT (#3): a free-text "Other" answer — an arbitrary string delivered verbatim, bypassing
+        // FREE-TEXT: a free-text "Other" answer — an arbitrary string delivered verbatim, bypassing
         // label validation BY AUTHOR INTENT. Cowork auto-provides an "Other" free-text path on every gate
-        // (binary-verified), so this is always faithful; `choose:` keeps the #49 label guard for the common case.
+        // (binary-verified), so this is always faithful; `choose:` keeps the label guard for the common case.
         if (rule.answer !== undefined) {
           answers[text] = rule.answer;
           continue;
@@ -154,7 +154,7 @@ export class ScriptedDecider implements Decider {
           answers[text] = picks.join(", ");
           continue;
         }
-        // #49: validate EACH chosen label against the offered options and deliver the CANONICAL label(s).
+        // validate EACH chosen label against the offered options and deliver the CANONICAL label(s).
         // A member matching no option is a silent false-green (the run would record an impossible answer) —
         // fail loud, symmetric with the external/LLM terminals.
         const resolved = dedupeFirstSeen(
@@ -188,7 +188,7 @@ export class ScriptedDecider implements Decider {
       }
       if (unmatched.length > 0) {
         // A gate's answers are delivered atomically — a partial scripted match cannot answer just one
-        // sub-question, so the WHOLE gate falls through to the fallback. #4b: name the UNMATCHED
+        // sub-question, so the WHOLE gate falls through to the fallback. Name the UNMATCHED
         // sub-questions (not just a count) so the author knows exactly which rule to add.
         if (Object.keys(answers).length > 0)
           warn(
@@ -222,12 +222,12 @@ export class ScriptedDecider implements Decider {
 }
 
 // Read-only safe tools that never prompt. Must be a SUBSET of the Cowork toolset (baseline
-// spawn.tools) — #7: `LS`/`NotebookRead`/`TodoWrite` were dropped (not in the Cowork toolset;
+// spawn.tools) — `LS`/`NotebookRead`/`TodoWrite` were dropped (not in the Cowork toolset;
 // spawn-contract line 17). Do NOT widen this to the full spawn.tools (it includes Bash/Edit/Write/
 // Task), which would make strict parity allow Bash.
 const DEFAULT_ALLOW = new Set(["Read", "Glob", "Grep"]);
 
-/** #6: the rationale a cowork-parity off-registry auto-allow carries. Shared so run.ts can detect a
+/** The rationale a cowork-parity off-registry auto-allow carries. Shared so run.ts can detect a
  *  permissive auto-allow (real Cowork would BLOCK for the user) without string-matching drift. */
 export const PERMISSIVE_AUTOALLOW_RATIONALE = "allow-unscripted (cowork parity)";
 
@@ -406,7 +406,7 @@ export function suffixCanonMatch(raw: string, labels: string[]): string | null {
   return cands.length === 1 ? cands[0]! : null;
 }
 
-/** The index protocol: an ENTIRELY-digit reply (the `#50` rule) in `[1, n]` → that 1-based index; null
+/** The index protocol: an ENTIRELY-digit reply in `[1, n]` → that 1-based index; null
  *  otherwise (out of range, or any non-bare-digit like "2)", "option 2", "2 and 4" → caller falls to the
  *  label tiers / fails loud). */
 export function parseIndexReply(raw: string, n: number): number | null {
@@ -442,7 +442,7 @@ export class LlmDecider implements Decider {
     private complete: Complete,
     private intent?: string,
     private model: string = process.env.COWORK_HARNESS_DECIDER_MODEL || "claude-sonnet-4-5",
-    // #62: the default transport spawns `claude -p <prompt>` with the prompt as ARGV (process-table visible).
+    // the default transport spawns `claude -p <prompt>` with the prompt as ARGV (process-table visible).
     // The prompt embeds an unscrubbed transcript tail, so without these a tracked secret in the last ~1000
     // chars lands in `ps`/`/proc/<pid>/cmdline`. Scrub the prompt at each complete() call — symmetric with
     // ExternalDecider, which scrubs its serialized request before it leaves the process.
@@ -825,7 +825,7 @@ export class ExternalDecider implements Decider {
   async decide(req: DecisionRequest, ctx?: RunContext): Promise<Decision | Abstain> {
     const request = this.emit(req, ctx);
     // Scrub the WHOLE serialized request (context + tool input) before it leaves the process — the
-    // injected token must never reach stdout or the helper (Opus C1).
+    // injected token must never reach stdout or the helper.
     this.channel.write(scrub(JSON.stringify(request), this.secrets));
     const line = await this.channel.readLine();
     if (line == null) throw new UnansweredError("external decider channel closed without a response", request.reply_with);
@@ -899,7 +899,7 @@ export class ExternalDecider implements Decider {
         const validLabels = `valid labels: ${labels.map((l) => JSON.stringify(l)).join(", ")}`;
         const raw = parsed.answers?.[text];
         if (raw === undefined) {
-          // #20: the reply didn't answer THIS question (a key mismatch — the helper must key `answers`
+          // the reply didn't answer THIS question (a key mismatch — the helper must key `answers`
           // by the exact question text). ExternalDecider is the TERMINAL decider, so fabricating option 1
           // here would be a non-reproducible answer that greens the run — the silent false-green the ethos
           // forbids. THROW instead (no key → fail loud), rather than the old default-to-labels[0].
@@ -1064,7 +1064,7 @@ function evalPredicate(expr: string, input: Record<string, unknown>): boolean {
   const namedKeys = Object.keys(input).filter((k) => isIdentifier(k) && k !== "input");
   const params = ["input", ...namedKeys];
   const args: unknown[] = [input, ...namedKeys.map((k) => input[k])];
-  // #7: scenario YAML is author-supplied (same trust class as --decider-cmd), so `new Function` is NOT
+  // scenario YAML is author-supplied (same trust class as --decider-cmd), so `new Function` is NOT
   // sandboxed — an author can run arbitrary code, by design. But a BROKEN predicate must fail LOUD, not
   // silently deny: the old bare `catch { return false }` turned a compile error (bad `new Function`) or
   // an eval-time throw into a fabricated "denied" green. Both now throw with the offending predicate named.
@@ -1142,7 +1142,7 @@ function dedupeFirstSeen(items: string[]): string[] {
 /** Coerce a raw answer (1-based index OR label, case-insensitive) to a canonical option label.
  *  Returns a discriminated result: `matched` is true when the value was found in `labels`
  *  (by index or case-insensitive name); false when the fallback to `labels[0]` was used.
- *  Shared by the TTY prompt and the external decider so both accept the same lenient forms (Opus L4). */
+ *  Shared by the TTY prompt and the external decider so both accept the same lenient forms. */
 export function coerceLabel(
   a: string | number,
   labels: string[],
@@ -1173,7 +1173,7 @@ export function coerceLabel(
   // machine-helper contract (label-wins on a numeric collision), shipped documented rather than silent.
   const exact = labels.find((l) => l.toLowerCase() === s.toLowerCase());
   if (exact !== undefined) return { value: exact, matched: true };
-  // #50: only treat the string as an index when it is ENTIRELY digits — `parseInt("1-no")` returns 1,
+  // only treat the string as an index when it is ENTIRELY digits — `parseInt("1-no")` returns 1,
   // which would silently mis-select option 1. A digit-prefixed *label* falls through to the label match.
   const n = /^\d+$/.test(s) ? parseInt(s, 10) : NaN;
   if (!isNaN(n) && n >= 1 && n <= labels.length) return { value: labels[n - 1], matched: true };

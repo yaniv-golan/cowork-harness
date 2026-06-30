@@ -9,7 +9,7 @@ import { spawnEnv, resolveMaxThinkingTokens, baseAgentArgs } from "./argv.js";
 import { stageWorkspace } from "./stage.js";
 import { runtimeAuthEnv, SECRET_ENV_KEYS } from "./host-env.js";
 
-/** Sentinel terminating the #29 stdin secret prologue (unlikely to collide with env content). */
+/** Sentinel terminating the stdin secret prologue (unlikely to collide with env content). */
 export const MICROVM_SECRET_SENTINEL = "__COWORK_SECRETS_END__";
 
 /** Parse an environment variable as a TCP port (integer in 1..65535). Returns defaultValue when absent/empty. */
@@ -46,7 +46,7 @@ export function spawnMicroVm(
   const configVm = `${sessionVm}/${baseline.spawn?.configDirInGuest ?? "mnt/.claude"}`;
 
   // Stage into the lima-mounted work dir (host VM_WORK_HOST -> guest /cowork-work) via the shared
-  // helper. It honors plan.resume for ALL of .claude + mounts + mcp.json (the #26/I2 .claude guard
+  // helper. It honors plan.resume for ALL of .claude + mounts + mcp.json (the .claude guard
   // generalized): on resume Cowork reuses the same VM and never re-stages, and skipping the mount
   // re-copy also avoids reverting in-session edits to a rw / .projects mount (see stage.ts).
   const sessionHost = join(VM_WORK_HOST, sessionId);
@@ -60,13 +60,13 @@ export function spawnMicroVm(
   // allocated for THIS run's host proxy (so host bind and guest firewall/proxy agree); fall back to the
   // env/8899 default only when spawned without an explicit port.
   const proxyPort = opts.proxyPort ?? parseEnvPortMicroVm("COWORK_VM_PROXY_PORT", 8899);
-  const gatewayIp = vmGatewayIp(); // #39: one resolved value feeds both the firewall rule and proxy URL.
+  const gatewayIp = vmGatewayIp(); // one resolved value feeds both the firewall rule and proxy URL.
   const lockdown = (process.env.COWORK_LOCKDOWN ?? "on") !== "off";
   if (lockdown) {
     try {
       applyGuestFirewall(instance, proxyPort, gatewayIp);
     } catch (err) {
-      // #40: a swallowed firewall failure left L2 running with NO iptables while advertising
+      // A swallowed firewall failure left L2 running with NO iptables while advertising
       // default-deny isolation — a silent false-green (violates the repo's core principle). With
       // lockdown on (the default) this MUST fail loud; COWORK_LOCKDOWN=off is the explicit opt-out.
       if (firewallFailureAction(lockdown) === "throw") {
@@ -91,7 +91,7 @@ export function spawnMicroVm(
       baseline.spawn?.maxThinkingTokens ?? DEFAULT_MAX_THINKING_TOKENS,
     ),
   });
-  // #29: keep SECRET values off the `limactl shell …` argv (host-visible via ps). Public env rides
+  // Keep SECRET values off the `limactl shell …` argv (host-visible via ps). Public env rides
   // argv via `env KEY=value`; secrets are handed to the guest over a stdin PROLOGUE the shell script
   // consumes before exec'ing claude (NOT argv, NOT disk).
   const envPairs = Object.entries(env)
@@ -115,7 +115,7 @@ export function spawnMicroVm(
 }
 
 /**
- * #40: pure policy for what to do when applyGuestFirewall() throws. When lockdown is on
+ * Pure policy for what to do when applyGuestFirewall() throws. When lockdown is on
  * (the default), a firewall failure must fail loud ("throw") — L2 advertises default-deny
  * egress, so running with no iptables is a silent false-green. COWORK_LOCKDOWN=off is the
  * explicit opt-out, deliberately running without isolation ("skip"). Extracted so the
@@ -135,21 +135,21 @@ function shQuote(s: string): string {
 }
 
 /**
- * #63: the in-guest shell script. The work root is mounted directly at /sessions, so `sessionVm`
+ * The in-guest shell script. The work root is mounted directly at /sessions, so `sessionVm`
  * (/sessions/<id>) is a REAL dir — cd into it and exec the agent (no symlink, no mkdir). `set -e` +
  * the explicit cd guard FAIL LOUD if the mount is missing (a stale/un-provisioned VM) instead of
  * silently exec'ing with the wrong cwd and an unwritable CLAUDE_CONFIG_DIR (the old `;`-chained
- * script's silent false-green). The agent + public env ride in argv ($@); #29: SECRET env arrives
+ * script's silent false-green). The agent + public env ride in argv ($@); SECRET env arrives
  * on a stdin PROLOGUE (read up to the sentinel, exported) so the token is never in argv or on disk.
  * Pure + exported so the script shape is unit-testable.
  *
- * #34: sessionVm is shell-quoted via shQuote() so a path with spaces or special characters cannot
+ * sessionVm is shell-quoted via shQuote() so a path with spaces or special characters cannot
  * break out of the cd argument or the error message string.
  */
 export function microvmShellScript(sessionVm: string): string {
   const quotedPath = shQuote(sessionVm);
   const cdFail = `microvm: ${sessionVm} is not mounted — VM not provisioned for this harness config; recreate it (cowork-harness vm delete && vm init)`;
-  // Consume the #29 secret prologue (one KEY=value per line) up to the sentinel, exporting each, then
+  // Consume the secret prologue (one KEY=value per line) up to the sentinel, exporting each, then
   // exec the agent — at which point stdin is positioned at the control-protocol stream for claude.
   // cdFail is embedded in single-quotes so its content is literal (no $-expansion, no quote injection).
   return (

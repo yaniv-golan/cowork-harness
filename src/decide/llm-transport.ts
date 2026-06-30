@@ -22,7 +22,7 @@ function tail(s: string, n = 500): string {
  */
 function spawnOnce(bin: string, prompt: string, model: string, timeoutMs: number, maxBytes: number): Promise<string> {
   return new Promise<string>((resolve, reject) => {
-    // #53: bound the `claude -p` spawn — a hung-but-alive child would otherwise block the harness forever.
+    // bound the `claude -p` spawn — a hung-but-alive child would otherwise block the harness forever.
     // On expiry SIGKILL the child and reject LOUD; clear the timer on close/error so a fast call never leaks it.
     // stderr is PIPED (not "ignore") so the close handler can fold it into the diagnosis.
     const child = spawn(bin, ["-p", prompt, "--model", model], { stdio: ["ignore", "pipe", "pipe"] });
@@ -41,7 +41,7 @@ function spawnOnce(bin: string, prompt: string, model: string, timeoutMs: number
     }, timeoutMs);
     // Bound stdout too — the wall-clock timeout above caps a fully-hung child, but not one that is
     // actively spewing. Past the cap, SIGKILL and reject loud rather than growing the buffer unbounded.
-    // #61: collect raw Buffer chunks and decode ONCE at close. The old `out += d` coerced each chunk to
+    // collect raw Buffer chunks and decode ONCE at close. The old `out += d` coerced each chunk to
     // a string independently, so a UTF-8 sequence straddling a chunk boundary (em-dash, accent, emoji)
     // decoded as U+FFFD in both halves — corrupting the verification-critical decider answer. Byte-identical
     // for ASCII/single-chunk. The byte cap still sums `d.length` (raw bytes), unaffected by decoding.
@@ -83,7 +83,7 @@ function spawnOnce(bin: string, prompt: string, model: string, timeoutMs: number
     child.on("close", (code) => {
       clearTimeout(timer);
       if (code === 0) {
-        // Decode once at close — see chunks comment above (#61).
+        // Decode once at close — see chunks comment above.
         resolve(Buffer.concat(chunks).toString("utf8"));
         return;
       }
@@ -99,7 +99,7 @@ function spawnOnce(bin: string, prompt: string, model: string, timeoutMs: number
 
 /**
  * The default `LlmDecider` transport: shell out to the host `claude -p` (one-shot, headless). Chosen
- * over a direct `POST /v1/messages` (Opus H1): the harness PROCESS is not behind the egress proxy
+ * over a direct `POST /v1/messages`: the harness PROCESS is not behind the egress proxy
  * (only the spawned agent child is), so a direct API call would bypass the very allowlist the harness
  * enforces. `claude -p` reuses the run's own auth path and is dogfood-consistent. One short, tool-less
  * call per gate (one call, no recursion into the harness; model is the decider default or --decider-model).

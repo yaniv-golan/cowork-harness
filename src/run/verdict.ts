@@ -16,7 +16,7 @@ export interface VerdictSignal {
   severity: "fail" | "warn";
   message: string;
 }
-/** Fix 6h: a guard's visibility status this run. `ok` = ran and found nothing; `fired` = caught its failure
+/** a guard's visibility status this run. `ok` = ran and found nothing; `fired` = caught its failure
  *  mode; `na` = not applicable on this lane/tier; `unverified` = ran but couldn't conclude. NEVER `ok` for a
  *  guard that didn't run — a false ✓ would be its own silent-false-green. */
 export type GuardStatus = "ok" | "fired" | "na" | "unverified";
@@ -31,7 +31,7 @@ export interface Verdict {
   guards: GuardReport[];
 }
 
-/** Fix 6h: build the "guards active this run" roster from the guards' INPUT PRECONDITIONS (lane + probe
+/** build the "guards active this run" roster from the guards' INPUT PRECONDITIONS (lane + probe
  *  outcome), not from the signal list — a guard that ran clean pushes no signal, so absence is ambiguous. */
 function guardRoster(result: RunResult, lane: "live" | "replay", signals: VerdictSignal[]): GuardReport[] {
   const fired = (code: VerdictSignal["code"]) => signals.some((s) => s.code === code);
@@ -53,7 +53,7 @@ function guardRoster(result: RunResult, lane: "live" | "replay", signals: Verdic
 }
 
 /**
- * SEAM B — THE single source of a scenario's pass/fail + process exit code. Every verdict site
+ * THE single source of a scenario's pass/fail + process exit code. Every verdict site
  * (the `run`/`skill` exit, the footer ✓/✗, the `replay` exit, and the JSON envelope `ok`) routes
  * through this so they can never diverge.
  *
@@ -81,7 +81,7 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
   for (const a of result.assertions)
     if (!a.pass) signals.push({ code: "assertion", severity: "fail", message: a.message ?? "assertion failed" });
   if (result.result === "error") {
-    // Fix 5: a tail-end TRANSPORT drop (connection closed after a clean result) is still a fail — a run whose
+    // a tail-end TRANSPORT drop (connection closed after a clean result) is still a fail — a run whose
     // stream didn't cleanly complete is not a faithful green — but distinguish it from a skill failure so the
     // footer doesn't read as a skill defect. Message is assertion-count-aware (no false comfort on an
     // unasserted run) and lane-aware (replay/verify-run write no artifacts, so don't claim they were).
@@ -101,7 +101,7 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
     }
   }
 
-  // Fix 4b: a declared requires_capabilities the running tier couldn't satisfy is a hard fail on BOTH lanes —
+  // a declared requires_capabilities the running tier couldn't satisfy is a hard fail on BOTH lanes —
   // the field is run-time truth persisted to result.json, so verify-run/replay honor it (a clean full-parity
   // run records nothing here, so this never false-fails a later verify-run). Opt out with allow_missing_capability.
   if (result.requiresCapabilityUnmet?.caps.length && !result.assertions.some((a) => a.assertion.allow_missing_capability === true)) {
@@ -116,7 +116,7 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
     });
   }
 
-  // H2: a run that ended on an unanswered plain-text question is a hard fail on BOTH lanes (the flag is
+  // a run that ended on an unanswered plain-text question is a hard fail on BOTH lanes (the flag is
   // re-derived by run.ts's detector on the live run AND the replay re-drive, so a recorded stall fails replay
   // too). `result:"success"` alone is too generous — the SDK turn didn't error, but the agent asked for input
   // and stopped, so the task did not complete. Opt out with allow_stall when ending on a question is intended.
@@ -170,7 +170,7 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
         message: "a host path leaked into model-visible text (assert transcript_no_host_path to make this explicit)",
       });
 
-    // #20: L0 (protocol) with plugins diverges from Cowork's --plugin-dir cache layout — fail unless the
+    // L0 (protocol) with plugins diverges from Cowork's --plugin-dir cache layout — fail unless the
     // scenario explicitly opts in via `allow_l0_plugin_divergence: true`. A warn-only let runs appear green
     // even though plugin loading behavior may differ from production Cowork.
     if (result.l0PluginDivergence && !authored.some((a) => a.allow_l0_plugin_divergence === true))

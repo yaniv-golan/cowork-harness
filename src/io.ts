@@ -27,7 +27,7 @@ export function tildeify(p: string): string {
 }
 
 /**
- * Parse a positive-number env knob (#63), replacing the `Number(process.env.X) || dflt` idiom whose
+ * Parse a positive-number env knob, replacing the `Number(process.env.X) || dflt` idiom whose
  * falsy-coalescing silently reverted "0" / NaN to the default while a NEGATIVE slipped through truthy
  * (a past deadline → loop never runs, or setTimeout clamped to ~1ms → instant SIGKILL). Falls back to
  * `dflt` when the var is unset/blank/zero/negative/non-finite, and warns LOUD when it is SET but unusable

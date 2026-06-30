@@ -20,7 +20,7 @@ function isPrivateIPv4Octets(a: number, b: number): boolean {
 }
 
 /**
- * #36: parse the many literal IPv4 host forms a request can carry into canonical octets so the
+ * Parse the many literal IPv4 host forms a request can carry into canonical octets so the
  * private-range guard isn't defeated by an alternate encoding. Handles:
  *  - dotted quad: `127.0.0.1`
  *  - dotted with octal/hex parts: `0177.0.0.1`, `0x7f.0.0.1`
@@ -62,7 +62,7 @@ export function isLocalOrPrivate(host: string): boolean {
   let h = host.toLowerCase().replace(/^\[|\]$/g, "");
   if (h === "localhost" || h.endsWith(".localhost") || h.endsWith(".local")) return true;
 
-  // #36: normalize IPv4-mapped / IPv4-compatible IPv6 (`::ffff:127.0.0.1`, `::ffff:7f00:1`) down to
+  // normalize IPv4-mapped / IPv4-compatible IPv6 (`::ffff:127.0.0.1`, `::ffff:7f00:1`) down to
   // the embedded IPv4 so the v4 private-range checks below apply. net.isIP recognizes the literal.
   if (net.isIP(h) === 6) {
     const mapped = h.match(/^(?:::ffff:|::)(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
@@ -88,7 +88,7 @@ export function isLocalOrPrivate(host: string): boolean {
     return isPrivateIPv4Octets(Number(m[1]), Number(m[2]));
   }
 
-  // #36: integer / octal / hex / short-form IPv4 literals that resolve to a private range
+  // integer / octal / hex / short-form IPv4 literals that resolve to a private range
   // (e.g. `2130706433`, `0x7f000001`, `0177.0.0.1`, `127.1` all == 127.0.0.1).
   const v4 = parseIPv4Literal(h);
   if (v4 !== null) {
@@ -108,7 +108,7 @@ const defaultResolver: Resolver = (host) => lookup(host, { all: true });
  * returned address through the same per-IP check. A literal IP would already have been caught by the
  * synchronous `isLocalOrPrivate` gate, so this is reached only for names that need resolution.
  *
- * #39: also RETURNS the vetted addresses so the caller can PIN the connection to exactly those IPs.
+ * Also RETURNS the vetted addresses so the caller can PIN the connection to exactly those IPs.
  * Resolving in the gate and then letting `fetch` re-resolve independently is a TOCTOU window (DNS
  * rebinding: the name can answer public for the check, private for the fetch). The caller hands these
  * addresses to `rawFetch`, which dials them directly with the original Host header, so the address
@@ -152,7 +152,7 @@ export function u1t(u: URL, allow: string[], matcher: (h: string) => boolean): s
 /**
  * A single redirect-manual network hop — injectable so the token-free suite can drive redirects/SSRF.
  *
- * #39: `pinnedAddresses` carries the IPs the SSRF backstop already vetted for this hop's hostname. The
+ * `pinnedAddresses` carries the IPs the SSRF backstop already vetted for this hop's hostname. The
  * default implementation dials those exact addresses (closing the DNS-rebind TOCTOU); an empty/omitted
  * list means "no pinning required" (literal-IP host, or an injected test fake that ignores it).
  */
@@ -161,7 +161,7 @@ export type RawFetch = (
   pinnedAddresses?: string[],
 ) => Promise<{ status: number; location?: string; text(): Promise<string>; body?: ReadableStream<Uint8Array> | null; truncated?: boolean }>;
 
-/** Shared web_fetch response byte cap (#33). The pinned path bounds buffering to this; followWithRedirects
+/** Shared web_fetch response byte cap. The pinned path bounds buffering to this; followWithRedirects
  *  slices/streams to the same value — single source of truth so the two paths can't drift. */
 const WEB_FETCH_BYTE_CAP = 200000;
 
@@ -186,7 +186,7 @@ function pinnedRequest(
         signal: AbortSignal.timeout(30000),
       },
       (res) => {
-        // #33: bound memory — every resolved (public DNS) host now pins, so this is the common path. Stop
+        // bound memory — every resolved (public DNS) host now pins, so this is the common path. Stop
         // buffering past WEB_FETCH_BYTE_CAP (followWithRedirects slices the returned text to the same cap,
         // so the observable output is unchanged) instead of buffering an arbitrarily large response in RAM.
         const chunks: Buffer[] = [];
@@ -228,7 +228,7 @@ function pinnedRequest(
 }
 
 const defaultRawFetch: RawFetch = async (url, pinnedAddresses) => {
-  // #39: when the SSRF backstop vetted specific addresses for a resolved hostname, dial THOSE addresses
+  // when the SSRF backstop vetted specific addresses for a resolved hostname, dial THOSE addresses
   // (no independent re-resolution) so a rebinding name can't answer public for the check and private for
   // the fetch. Literal-IP hosts have no pinned addresses → the plain fetch path (unchanged).
   if (pinnedAddresses && pinnedAddresses.length) return pinnedRequest(url, pinnedAddresses);
@@ -247,11 +247,11 @@ const defaultRawFetch: RawFetch = async (url, pinnedAddresses) => {
  * The bash tool description is the verbatim Cowork string.
  */
 type McpResult = { result: unknown } | { error: { code: number; message: string } };
-// #30: the handler is async (web_fetch may await a provenance approval through the Decider).
+// the handler is async (web_fetch may await a provenance approval through the Decider).
 export type McpHandler = (server: string, jsonrpc: { id?: unknown; method?: string; params?: any }) => McpResult | Promise<McpResult>;
 
 /**
- * #30 — web_fetch provenance policy, injected by Run (which owns the URL set + the Decider). Omitted
+ * web_fetch provenance policy, injected by Run (which owns the URL set + the Decider). Omitted
  * (ref.current undefined) ⇒ allowlist-only behavior (unchanged). Created in execute.ts/chat.ts.
  */
 export interface WebFetchProvenance {
@@ -276,7 +276,7 @@ export function makeWorkspaceHandler(
   webFetchAllow: string[] = ["*"],
   onEgress?: (entry: EgressEntry) => void,
   onInfraError?: (message: string) => void,
-  provenanceRef?: { current?: WebFetchProvenance }, // #30: Run fills this before the stream starts
+  provenanceRef?: { current?: WebFetchProvenance }, // Run fills this before the stream starts
   rawFetch: RawFetch = defaultRawFetch, // per-hop fetch (redirect:manual) for BOTH paths; injectable
   resolve: Resolver = defaultResolver, // per-hop DNS resolution for the SSRF backstop; injectable
 ): McpHandler {
@@ -329,7 +329,7 @@ function textResult(text: string, isError = false) {
   return r;
 }
 
-// #29: clamp a model-requested bash timeout into a sane range. Guards NaN/negative/missing → the
+// Clamp a model-requested bash timeout into a sane range. Guards NaN/negative/missing → the
 // 120s default; floors at 1s and caps at 10min. This is INFERRED-parity for the bash tool — Cowork's
 // binary-verified timeout_ms honoring is for web_fetch, not bash — but the bash inputSchema advertises
 // timeout_ms, so we honor it rather than silently ignoring the requested value.
@@ -338,7 +338,7 @@ export function clampTimeout(ms: unknown): number {
 }
 
 /**
- * #40: tell a `docker exec` INFRASTRUCTURE failure apart from an ordinary bash non-zero exit.
+ * Tell a `docker exec` INFRASTRUCTURE failure apart from an ordinary bash non-zero exit.
  *
  * The old test (`ETIMEDOUT || killed || (!code && !stdout && !stderr)`) caught timeouts/kills/spawn
  * errors, but a daemon-level failure (container not found, daemon not running, `docker exec` usage
@@ -378,13 +378,13 @@ async function execInContainer(
   try {
     const { stdout, stderr } = await pexec(runner, ["exec", "-w", cwd, container, "sh", "-c", command], {
       encoding: "utf8",
-      timeout: timeoutMs, // #29: honor the model-requested timeout_ms (clamped at the call site)
+      timeout: timeoutMs, // honor the model-requested timeout_ms (clamped at the call site)
       maxBuffer: 8 * 1024 * 1024,
     });
     const out = (stdout ?? "") + (stderr ?? "");
     return textResult(out.length ? out : "(no output)");
   } catch (e: any) {
-    // #40: classify Docker/container INFRASTRUCTURE failures (timeouts, spawn errors, container-not-found,
+    // classify Docker/container INFRASTRUCTURE failures (timeouts, spawn errors, container-not-found,
     // daemon errors, exit 125) before formatting — including the non-zero-WITH-stderr case the old
     // classifier missed. Infra detail is recorded for the run log and a GENERIC error is returned to the
     // model: leaking `[exit 125]\n<docker daemon text>` would both expose the harness and mislabel a
@@ -404,12 +404,12 @@ async function execInContainer(
 // Cowork routes web_fetch through the HOST API (gate 1978029737 `coworkWebFetchViaApi:true` →
 // `POST /api/organizations/<org>/cowork/web_fetch`), NOT the container egress path that `bash` uses
 // (binary-verified 2026-06-13, app.asar 1.12603.1). It is gated by a SEPARATE web-fetch hostname
-// allowlist (`getWebFetchAllowedUrls`, `*` = unrestricted) plus a URL-provenance rule (#30). We mirror
+// allowlist (`getWebFetchAllowedUrls`, `*` = unrestricted) plus a URL-provenance rule. We mirror
 // that: fetch host-side (so a reachable URL is not falsely egress-denied), gated by both.
 /** Path A per-hop gate: scheme + private-address only — NO hostname allowlist (Path A is decoupled
  *  from the egress domain list per SPEC §6; the provenance set gates the initial URL). The SSRF
  *  backstop still applies on every hop so an approved/redirected URL can't reach `file://` or a
- *  private/metadata host (#43/#44). */
+ *  private/metadata host. */
 function schemePrivateGate(u: URL): string | null {
   if (u.protocol !== "http:" && u.protocol !== "https:") return `URL scheme "${u.protocol}" is not allowed. Use http or https.`;
   if (isLocalOrPrivate(u.hostname)) return `Host "${u.hostname}" is a local or private address.`;
@@ -444,7 +444,7 @@ async function followWithRedirects(
       onEgress?.({ host: cur.hostname, decision: "deny" });
       return textResult(hop === 0 ? syncBlocked : `Redirect to ${cur.href} blocked: ${syncBlocked}`, true);
     }
-    // #39: resolve ONCE and pin the fetch to the vetted address — no second, unchecked resolution inside
+    // resolve ONCE and pin the fetch to the vetted address — no second, unchecked resolution inside
     // fetch (the DNS-rebind TOCTOU). `pinned` is empty for literal-IP hosts (already vetted synchronously).
     const vet = await resolveAndVet(cur.hostname, resolve);
     if ("deny" in vet) {
@@ -473,7 +473,7 @@ async function followWithRedirects(
     }
     onEgress?.({ host: cur.hostname, decision: "allow" });
     const LIMIT = WEB_FETCH_BYTE_CAP;
-    // #33: stream via resp.body to avoid buffering the full response before truncation.
+    // stream via resp.body to avoid buffering the full response before truncation.
     // Falls back to resp.text() for injectable test fakes that don't provide a body stream.
     if (resp.body) {
       const reader = resp.body.getReader();
@@ -546,8 +546,8 @@ async function fetchViaHost(
       }
     }
     // Provenance satisfied. Cowork fetches server-side (host API); the hostname allowlist does NOT apply
-    // here (decoupled from egress — the #30 conflation). But scheme + private-address ARE enforced per
-    // hop (#43/#44): follow redirects manually instead of `curl -L`, blocking file:// / SSRF targets.
+    // here (decoupled from egress). But scheme + private-address ARE enforced per
+    // hop: follow redirects manually instead of `curl -L`, blocking file:// / SSRF targets.
     return followWithRedirects(url, rawFetch, schemePrivateGate, resolve, onEgress);
   }
   // PATH B (provenance not enforced — coworkWebFetchViaApi off). Faithful port of U1t re-checked on EVERY

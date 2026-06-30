@@ -13,7 +13,7 @@ import { gitModeEnabled, gitTrackedSet, gitAccept } from "./skill-files.js";
  */
 export const SKILL_HASH_DIR_DENYLIST = new Set([".git", "node_modules", "__pycache__", ".pytest_cache", ".mypy_cache"]);
 
-/** The plugin-local ignore file (F-6): gitignore-style globs the PLUGIN declares as non-runtime, co-located
+/** The plugin-local ignore file: gitignore-style globs the PLUGIN declares as non-runtime, co-located
  *  with the plugin so its hash boundary travels with it. Read per mount root; not itself hashed. */
 export const HASH_IGNORE_FILE = ".cowork-hashignore";
 
@@ -74,7 +74,7 @@ function readHashIgnore(root: string): string[] {
  *  folds in each entry's RELATIVE path (not just its basename) plus a type marker, so a file MOVING within
  *  the tree (`a/x.json` → `a/sub/x.json`, same content) changes the hash. Skips VCS/cache dirs and any
  *  recorded cassette (`*.cassette.json` — output, not skill source). */
-/** Optional per-entry filter (F-6 scoping). Receives a root-relative path; returns false to EXCLUDE that
+/** Optional per-entry filter (scoping). Receives a root-relative path; returns false to EXCLUDE that
  *  file or directory subtree from the hash. Absent ⇒ include everything (byte-identical to the legacy hash). */
 type AcceptFn = (relPath: string, isDirectory: boolean) => boolean;
 
@@ -83,7 +83,7 @@ type AcceptFn = (relPath: string, isDirectory: boolean) => boolean;
  *  skipped with a warning (same policy as collectArtifacts in execute.ts).
  * push any read error into `errors` rather than silently continuing — the caller treats a
  *  non-empty errors array as a staleness failure (can't verify ⇒ not green). */
-/** Optional per-file sink (H9 diagnostics): called for every file FOLDED INTO the hash, with its
+/** Optional per-file sink (diagnostics): called for every file FOLDED INTO the hash, with its
  *  root-relative path and the sha256 of exactly the content that was hashed (version-stripped for
  *  plugin.json, raw bytes otherwise). Lets `explainSkillHash` dump the file set the hash sees — so an
  *  unexpected drift source (a `.DS_Store`, a run-generated file) is one line instead of a black-box hunt. */
@@ -121,7 +121,7 @@ function hashDir(
       errors.push(msg);
       continue;
     }
-    // S5 (v6): an IN-TREE symlink (target resolves inside the skill root) is hashed by its TARGET STRING —
+    // (v6): an IN-TREE symlink (target resolves inside the skill root) is hashed by its TARGET STRING —
     // NOT followed (no out-of-tree content) — so a re-point is detected while the target file's own content
     // is hashed separately. An ESCAPING symlink (target outside the root) is skipped + warned (as before:
     // a symlink can otherwise pull in out-of-tree content). Emitted via onFile too, so contentSig/manifest
@@ -149,18 +149,18 @@ function hashDir(
     }
     if (st.isDirectory()) {
       if (SKILL_HASH_DIR_DENYLIST.has(name) || OS_JUNK_PATTERN.test(relPath)) continue; // skip VCS/cache and OS-junk subtrees entirely
-      if (accept && !accept(relPath, true)) continue; // F-6: scoped out (an unlisted skill's subtree)
+      if (accept && !accept(relPath, true)) continue; // scoped out (an unlisted skill's subtree)
       hash.update(`D:${relPath}\0`); // structure marker — an empty/renamed dir registers too
       hashDir(abs, hash, errors, relPath, accept, onFile, root);
     } else if (st.isFile()) {
       if (name.endsWith(".cassette.json")) continue; // a recorded cassette is output, not skill source
       if (relPath === HASH_IGNORE_FILE) continue; // the ignore file is harness metadata, not skill source
-      // H9: OS-junk (.DS_Store / Thumbs.db / desktop.ini / …) is OS metadata the OS rewrites out-of-band (a
+      // OS-junk (.DS_Store / Thumbs.db / desktop.ini / …) is OS metadata the OS rewrites out-of-band (a
       // .DS_Store touch by Finder must NOT re-stale a cassette). Excluded under the same rationale as the dir
       // denylist (.git/node_modules) — provably-non-behavioral content the mount still delivers. Cassette
       // version bumped so existing cassettes get a graceful "older format — re-record once" (not "changed").
       if (OS_JUNK_PATTERN.test(relPath)) continue;
-      if (accept && !accept(relPath, false)) continue; // F-6: scoped/ignored out
+      if (accept && !accept(relPath, false)) continue; // scoped/ignored out
       hash.update(`F:${relPath}\0`); // relative path, not basename — a move changes the digest
       let bytes: Buffer;
       try {
@@ -174,7 +174,7 @@ function hashDir(
         errors.push(msg);
         continue;
       }
-      // F-6: hash the plugin MANIFEST without its `version` — a pure version bump is metadata with no
+      // hash the plugin MANIFEST without its `version` — a pure version bump is metadata with no
       // runtime-behavior impact, yet it would otherwise re-stale every cassette (it flapped 4/6 in a batch).
       // Every behavior-bearing field (mcpServers, hooks, dependencies, …) still counts. Falls back to raw
       // bytes if the manifest isn't valid JSON. `hashedContent` is EXACTLY what folds into the digest — the
@@ -248,7 +248,7 @@ function sharedOnlyAccept(dirSkills: Set<string>, scopeAgents: boolean): AcceptF
  * Hash ONLY the shared-root content (everything outside `skills/`) of plugin-roots in `dirs`.
  * Returns `null` when none of the dirs have a top-level `skills/` layout (individual-skill mounts,
  * marketplaces) — in that case there's no shared/skill split to report.
- * Used by `checkStaleness` to name the changed bucket in scoped cassettes (G-4).
+ * Used by `checkStaleness` to name the changed bucket in scoped cassettes.
  */
 export function hashSharedOnly(dirs: string[], sessionIgnore?: string[]): string | null {
   const sorted = [...dirs].sort();
@@ -271,7 +271,7 @@ export function hashSharedOnly(dirs: string[], sessionIgnore?: string[]): string
   return hash.digest("hex");
 }
 
-/** F-6 structural accept: under a plugin-root, include everything NOT under `skills/`, plus only the
+/** Structural accept: under a plugin-root, include everything NOT under `skills/`, plus only the
  *  `skills/<name>` subtrees whose name is in `keep`. This hashes the plugin's shared roots (agents/, scripts/,
  *  references/, plugin.json, …) PLUS the named skills — so editing one skill re-stales only its cassettes,
  *  while a shared-dependency change still re-stales everything (no false-fresh). */
@@ -293,7 +293,7 @@ function scopedAccept(keep: Set<string>, dirSkills: Set<string>, scopeAgents: bo
 }
 
 /** Content fingerprint over `dirs` — UNIFIED (v6) onto the SAME walk as `skillHash`: it derives from
- *  `skillHashEntries`, so it covers the EXACT same file set (OS-junk excluded, F-6 scope, `.cowork-hashignore`,
+ *  `skillHashEntries`, so it covers the EXACT same file set (OS-junk excluded, scope, `.cowork-hashignore`,
  *  git-tracked mode, in-tree-symlink policy) instead of the old separate walk that followed symlinks and
  *  ignored scope/ignore. SHA-256 over globally-sorted `relpath:content-sha256` pairs. Returns `undefined`
  *  for an empty/all-missing set. (Used by `rehash` to detect content change across a *format-only* hash bump;
@@ -306,12 +306,12 @@ export function computeContentSig(dirs: string[], scopeSkills?: string[], sessio
   return createHash("sha256").update(entries.join("\0")).digest("hex");
 }
 
-/** H9 diagnostics: OS-junk / non-runtime files that have no business in a skill hash but (today) ARE hashed
+/** Diagnostics: OS-junk / non-runtime files that have no business in a skill hash but (today) ARE hashed
  *  if present in scope — the classic cause of "stale immediately after record" on macOS (`.DS_Store` is
  *  rewritten by Finder). Used to flag entries in the debug dump and to nudge `.cowork-hashignore`. */
 export const OS_JUNK_PATTERN = /(^|\/)(\.DS_Store|Thumbs\.db|desktop\.ini|\.AppleDouble|__MACOSX)$/;
 
-/** H9 diagnostics: the per-file entries the skill hash currently folds in — same walk/scope/ignore as
+/** Diagnostics: the per-file entries the skill hash currently folds in — same walk/scope/ignore as
  *  `hashSkillDirs`, but emitting `{ path, sha }` instead of one digest. Sorted by path. Lets a caller dump
  *  exactly what the hash sees so an unexpected drift source is visible at a glance. */
 export function skillHashEntries(dirs: string[], scopeSkills?: string[], sessionIgnore?: string[]): { path: string; sha: string }[] {
@@ -334,7 +334,7 @@ export interface HashSkillDirsResult {
    *  this as a staleness failure (can't verify ⇒ not green) — a hash computed over partial data is
    *  unreliable. */
   readErrors?: string[];
-  /** Phase C: which boundary the hash used. "git" = git-tracked set (COWORK_HARNESS_GITSET=1 AND every dir
+  /** Which boundary the hash used. "git" = git-tracked set (COWORK_HARNESS_GITSET=1 AND every dir
    *  was a usable repo); "raw" = the legacy filesystem walk (default, or any non-repo dir). Recorded in the
    *  fingerprint so a mode change between record and verify is itself detectable. */
   mode: "git" | "raw";
@@ -346,7 +346,7 @@ export interface HashSkillDirsResult {
 /**
  * Hash a set of skill/plugin source dirs into one sha256 hex digest (sorted for determinism).
  *
- * F-6: when `scopeSkills` is non-empty, scope the hash to those skills under each PLUGIN-ROOT (a mounted dir
+ * When `scopeSkills` is non-empty, scope the hash to those skills under each PLUGIN-ROOT (a mounted dir
  * with a top-level `skills/`): hash the plugin's shared roots plus only the named `skills/<name>` dirs.
  * DEFAULT (no `scopeSkills`) = whole tree, byte-identical to the legacy hash. Fail-closed: if there is no
  * plugin-root, or any named skill is absent from every plugin-root (a typo/rename), hash the WHOLE tree —
@@ -361,7 +361,7 @@ export interface HashSkillDirsResult {
 export function hashSkillDirs(dirs: string[], scopeSkills?: string[], sessionIgnore?: string[], onFile?: OnFileFn): HashSkillDirsResult {
   const hash = createHash("sha256");
   const sorted = [...dirs].sort();
-  // Resolve F-6 skill scoping fail-closed: only narrow to `keep` when every named skill exists under some
+  // Resolve skill scoping fail-closed: only narrow to `keep` when every named skill exists under some
   // plugin-root; otherwise `keep` stays null → whole-tree (a typo can't silently narrow the gate).
   let keep: Set<string> | null = null;
   let missedSkills: string[] | undefined;
@@ -376,7 +376,7 @@ export function hashSkillDirs(dirs: string[], scopeSkills?: string[], sessionIgn
     }
   }
   const allErrors: string[] = [];
-  // Phase C (gated): when COWORK_HARNESS_GITSET=1, restrict each dir's files to the git-tracked set. A dir
+  // Gated: when COWORK_HARNESS_GITSET=1, restrict each dir's files to the git-tracked set. A dir
   // that isn't a usable repo falls back to raw for THAT dir; mode is "git" only if EVERY dir resolved via git.
   const gitOn = gitModeEnabled();
   const scopeAgents = agentScopeEnabled();

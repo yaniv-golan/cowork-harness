@@ -147,7 +147,7 @@ function escapeRegex(s: string): string {
 }
 
 /**
- * #35: host-fs-sealed pass criterion, made environment-agnostic. The old guard hard-coded the repo
+ * Host-fs-sealed pass criterion, made environment-agnostic. The old guard hard-coded the repo
  * owner's username (`yaniv`) in the negative-match, so a real host-path leak on another developer's
  * machine (their username) would not be caught. Build the negative guard from the ACTUAL
  * environment — `os.userInfo().username`, `os.homedir()`, plus the literal host roots `/Users/` and

@@ -1,12 +1,12 @@
 /**
- * #30 — web_fetch URL provenance. Faithful port of Cowork's per-session `webFetchAllowedUrls` set
+ * web_fetch URL provenance. Faithful port of Cowork's per-session `webFetchAllowedUrls` set
  * + URL extractors (binary-verified, app.asar 1.12603.1):
  *   - normalize:  `zG(A){ new URL(A); http/https only; hash=""; strip one trailing slash; → .href }`
  *   - extract:    `Ien` over gen=/https?:\/\/…/ , len=/www\.…/ , uen=/bare domain.tld/, each ZHA-trimmed
  *   - membership: `set.has(zG(url))` (exact, normalized)
  *
  * The harness has no WebSearch tool, so the WebSearch-result seed path (`Een`) is N/A; we seed from
- * user-turn text and tool-result text — the faithful subset for this harness (see the plan).
+ * user-turn text and tool-result text — the faithful subset for this harness.
  */
 
 /** Port of `zG`: parse + http/https-only + drop fragment + strip one trailing slash → normalized href. */

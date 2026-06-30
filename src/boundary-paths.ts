@@ -2,7 +2,7 @@ import { realpathSync } from "node:fs";
 import { resolve, relative, isAbsolute, sep } from "node:path";
 
 /**
- * Shared boundary/path/host helpers (Pattern 3 in the bug review). Several bugs came from
+ * Shared boundary/path/host helpers. Several bugs came from
  * lexical path checks where realpath checks are needed, missing host normalization, or
  * incomplete domain validation. These helpers are the single source of truth so the policies
  * cannot fork across runtime staging, baseline loading, assertions, and egress code.
@@ -80,7 +80,7 @@ export function normalizeHost(host: string): string {
 export type BareDomainKind = { kind: "all" } | { kind: "suffix"; value: string } | { kind: "exact"; value: string };
 export function validateBareDomain(host: string): BareDomainKind {
   // Empty / whitespace-only is invalid — it can never match a real host and used to be stored as a
-  // silent unmatchable exact "" (the fail-loud hardening from).
+  // silent unmatchable exact "" (the fail-loud hardening).
   if (host.trim() === "") throw new Error(`invalid egress allow entry "${host}" — an empty/whitespace host can never match`);
   const p = host.toLowerCase();
   if (p === "*") return { kind: "all" };
