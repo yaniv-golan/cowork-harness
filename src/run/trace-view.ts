@@ -38,8 +38,8 @@ export function runsWriteRoot(): string {
  *  after moving output out of cwd, without polluting `--quiet` or a `--output-format json` stdout
  *  envelope. Gated on env-PRESENCE (the `--run-dir` flag sets that env, so both flag and env suppress it).
  */
-export function noteRunsLocation(opts: { json: boolean; quiet: boolean }): void {
-  if (opts.json || opts.quiet) return;
+export function noteRunsLocation(opts: { json: boolean; quiet: boolean; suppress?: boolean }): void {
+  if (opts.json || opts.quiet || opts.suppress) return; // suppress: --demo wants clean output (runs stay durable)
   if (process.env.COWORK_HARNESS_RUNS_DIR !== undefined) return;
   process.stderr.write(`runs → ${tildeify(runsWriteRoot())} (override with --run-dir / COWORK_HARNESS_RUNS_DIR)\n`);
 }

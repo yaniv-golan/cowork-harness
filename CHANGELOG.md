@@ -6,6 +6,16 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **`--compact` and `--demo` for shareable output** (`skill`/`run`/`chat`). `--compact` drops the
+  informational `[capability]` `::notice::` lines (the pre-flight, the "image omits…", and the "not used"
+  notes) — but the capability probe still runs and a real false-negative still **hard-fails**, unlike
+  `COWORK_SKIP_CAPABILITY_PROBE=1` which disables the safety net. `--demo` is the shareable preset:
+  `--compact` plus suppression of the `runs →` location header. Runs stay in the durable default location
+  (no temp redirect), so `scaffold`/`trace`/`inspect <run-id>` still resolve the run afterward; combined
+  with the `$HOME`→`~` collapse, demo output carries no host paths.
+
 ### Changed
 
 - **`run` now accepts `--keep` as an explicit no-op** instead of erroring. `--keep` is meaningful on

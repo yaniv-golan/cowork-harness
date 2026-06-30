@@ -56,6 +56,9 @@ export interface ExecuteOptions {
   sessionId?: string;
   /** resume a prior session of this id — reuse its persisted work dir + pass the agent's `--resume`. */
   resume?: boolean;
+  /** --compact: suppress the INFORMATIONAL capability `::notice::` lines for shareable output. The
+   *  capability probe still runs and the false-negative hard-fail still fires — only the notices go. */
+  compact?: boolean;
   /** steering for the LLM decider (`on_unanswered: llm` / `--decider-llm`) — one-line test intent. */
   llmIntent?: string;
   /** override the LLM decider's answering model (`--decider-model`); falls back to env then the Sonnet default. */
@@ -355,8 +358,9 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
           });
     const allowMissing = scenario.assert.some((a) => a.allow_missing_capability === true);
     const { abort, message } = capabilityPreflightDecision(declaredCaps, omitted, allowMissing);
-    if (abort) throw new BoundaryError(`[capability] ${message}`);
-    if (message) warn(`::notice:: [capability] (pre-flight) ${message} (allow_missing_capability asserted — proceeding)\n`);
+    if (abort) throw new BoundaryError(`[capability] ${message}`); // never gated — the safety net
+    if (message && !opts.compact)
+      warn(`::notice:: [capability] (pre-flight) ${message} (allow_missing_capability asserted — proceeding)\n`);
   }
   try {
     // acquire the egress sidecar / host proxy INSIDE the protected try so a throw in resource
@@ -595,11 +599,13 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       // 6a/6c: state the safety net the notice is otherwise silent about — an omitted family that the skill
       // actually USES hard-fails the run below (no silent false-pass). Tag the verdict impact so an observer
       // never reads an informational line as a failure cause (or vice-versa).
-      warn(
-        `::notice:: [capability] (informational, guarded) this image omits: ${omitted.join(", ")} — ` +
-          `if a skill actually USES one, this run HARD-FAILS (no silent false-pass). ` +
-          `Only rebuild full parity (--build-arg COWORK_FULL_PARITY=1) if your skill needs them.\n`,
-      );
+      if (!opts.compact)
+        warn(
+          `::notice:: [capability] (informational, guarded) this image omits: ${omitted.join(", ")} — ` +
+            `if a skill actually USES one, this run HARD-FAILS (no silent false-pass). ` +
+            `Only rebuild full parity (--build-arg COWORK_FULL_PARITY=1) if your skill needs them.\n`,
+        );
+      // The probe + hard-fail safety net runs regardless of --compact (only the informational notice above is gated).
       const used = detectCapabilityUse(join(outDir, "events.jsonl"), omitted, workRoot);
       if (used.length) {
         missingCapabilityUse = used;
@@ -611,7 +617,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         // 6b: close the loop — the bare omits-notice + a green run reads as a false-green RISK unless we say
         // the guard ran and found nothing. Emit ONLY here (probe ran, families omitted), never in the
         // omitted===null unverified branch (which has no basis to claim "not used").
-        warn(`::notice:: [capability] (informational, guarded) omitted families were not used this run → no false-negative.\n`);
+        if (!opts.compact)
+          warn(`::notice:: [capability] (informational, guarded) omitted families were not used this run → no false-negative.\n`);
       }
     }
   }

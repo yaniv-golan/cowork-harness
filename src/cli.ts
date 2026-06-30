@@ -218,6 +218,8 @@ Questions:
 Output:
   --output-format text|json        text = live stream + footer (default); json = one stdout envelope
   --quiet, -q                      verdict footer only            --verbose, -V   + thinking/tool inputs/sub-agent tree
+  --compact                        drop the informational capability ::notice:: lines (the probe + hard-fail stay)
+  --demo                           shareable output: --compact + suppress the "runs →" header (runs stay durable)
   --keep                           print the run dir + deliverable path (runs are always kept on disk)
   --run-dir <path>                 GLOBAL flag — must PRECEDE the subcommand (cowork-harness --run-dir <path> skill …);
                                    relocates runs/ output (default ~/.cowork-harness/runs) out of the working tree.
@@ -260,6 +262,8 @@ Input policy:
 Output:
   --output-format text|json        text = verdict + failing transcript (default); json = stdout envelope
   --quiet, -q                      verdict only            --verbose, -V   live stream + per-tool markers
+  --compact                        drop the informational capability ::notice:: lines (the probe + hard-fail stay)
+  --demo                           shareable output: --compact + suppress the "runs →" header (runs stay durable)
   --run-dir <path>                 GLOBAL flag — must PRECEDE the subcommand (cowork-harness --run-dir <path> run …);
                                    relocates runs/ output (default ~/.cowork-harness/runs) out of the working tree.
                                    flag > COWORK_HARNESS_RUNS_DIR > default. (placed after the subcommand it is rejected.)
@@ -557,6 +561,8 @@ interface CommonFlags {
   output: "text" | "json";
   quiet: boolean;
   verbose: boolean;
+  compact?: boolean; // --compact: drop informational capability ::notice:: lines (safety net stays)
+  demo?: boolean; // --demo: shareable output — compact + suppress the runs-location header (runs stay durable)
   deciderCmd?: string; // --decider-cmd: spawn a helper that answers each decision (external channel B)
   deciderDir?: string; // --decider-dir: file-rendezvous for a driving agent's Monitor (external channel C)
 }
@@ -687,7 +693,7 @@ function takeCommonFlags(args: string[], commandName: string = "skill"): { rest:
       return flagValue(args, i++, name);
     };
     // A boolean common flag given an equals value (e.g. `--quiet=1`) is a usage error, mirroring parseArgs.
-    if (eq > 0 && (name === "--quiet" || name === "--verbose")) {
+    if (eq > 0 && (name === "--quiet" || name === "--verbose" || name === "--compact" || name === "--demo")) {
       log(`${name} takes no value`);
       process.exit(2);
     }
@@ -703,6 +709,8 @@ function takeCommonFlags(args: string[], commandName: string = "skill"): { rest:
       flags.output = v;
     } else if (a === "--quiet" || a === "-q") flags.quiet = true;
     else if (a === "--verbose" || a === "-V") flags.verbose = true;
+    else if (a === "--compact") flags.compact = true;
+    else if (a === "--demo") flags.demo = true;
     else if (name === "--decider-cmd") {
       const v = readVal();
       if (eqVal === undefined && v.startsWith("-"))
@@ -876,7 +884,13 @@ async function runOneScenario(p: {
   const stopHeartbeat = o.json || externalChannel ? () => {} : startHeartbeat(renderer, o.plan, start);
   let result: RunResult;
   try {
-    result = await executeScenario(scenario, { ...extra, onUnanswered: policy, externalChannel, hooks: renderer ? [renderer] : [] });
+    result = await executeScenario(scenario, {
+      ...extra,
+      onUnanswered: policy,
+      externalChannel,
+      hooks: renderer ? [renderer] : [],
+      compact: !!(flags.compact || flags.demo), // --demo implies --compact
+    });
   } catch (e) {
     if (e instanceof UnansweredError) {
       const chan = flags.deciderDir ? "decider-dir" : flags.deciderCmd ? "decider-cmd" : policy;
@@ -947,7 +961,7 @@ async function cmdRun(rawArgs: string[]) {
   const externalChannel = resolveExternal("run", flags); // created once; reused across scenarios
   const policy = externalChannel ? "fail" : resolvePolicy("run", flags);
   const o = resolveOutput("run", flags);
-  noteRunsLocation({ json: o.json, quiet: !!flags.quiet });
+  noteRunsLocation({ json: o.json, quiet: !!flags.quiet, suppress: !!flags.demo });
   const results: RunResult[] = [];
   try {
     for (let i = 0; i < files.length; i++) {
@@ -1226,7 +1240,7 @@ async function cmdSkill(rawArgs: string[]) {
   // base policy; an external channel or the LLM decider overrides the terminal in execute.ts
   const policy: OnUnanswered = externalChannel ? "fail" : useLlm ? "llm" : resolvePolicy("skill", flags);
   const o = resolveOutput("skill", flags);
-  noteRunsLocation({ json: o.json, quiet: !!flags.quiet });
+  noteRunsLocation({ json: o.json, quiet: !!flags.quiet, suppress: !!flags.demo });
   let result: RunResult;
   try {
     result = await runOneScenario({
