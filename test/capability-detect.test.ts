@@ -111,7 +111,7 @@ describe("detectCapabilityUse — workspace-script follow (the hidden-import fal
   });
 });
 
-describe("scriptPathsInCommand per-segment scoping (bug 60)", () => {
+describe("scriptPathsInCommand per-segment scoping", () => {
   it("scopes script paths to their own interpreter segment: 'python run.py; cat helper.py' yields only run.py", () => {
     // `cat` is not an interpreter; helper.py must NOT be attributed to python.
     const { events, workRoot } = eventsAndWorkspace([assistantToolUse("Bash", { command: "python run.py; cat helper.py" })]);

@@ -16,19 +16,19 @@ function plan(sessionObj: unknown) {
   return { plan: buildLaunchPlan(session, baseline, out), out };
 }
 
-describe("WS-B — mount / path safety", () => {
-  it("#19 — a folder whose derived name is an unsafe segment is rejected", () => {
+describe("mount / path safety", () => {
+  it("a folder whose derived name is an unsafe segment is rejected", () => {
     // `to:` was removed (no Cowork analog) — names are always derived from the basename. A `from` whose
     // basename is unsafe (e.g. "..") must still be rejected by safePathSegment on the derived name.
     expect(() => plan({ folders: [{ from: "./examples/data/project/.." }] })).toThrow(/unsafe folder/);
   });
-  it("#21 — duplicate mount destinations fail before staging", () => {
+  it("duplicate mount destinations fail before staging", () => {
     expect(() => plan({ uploads: ["./examples/data/report.pdf", "./examples/data/report.pdf"] })).toThrow(/duplicate mount destination/);
   });
-  it("#22 — a missing mount source fails by default (no silent skip)", () => {
+  it("a missing mount source fails by default (no silent skip)", () => {
     expect(() => plan({ uploads: ["./does/not/exist.pdf"] })).toThrow(/source\(s\) not found/);
   });
-  it("#22 — COWORK_HARNESS_SOFT_MISSING downgrades to warn-and-exclude", () => {
+  it("COWORK_HARNESS_SOFT_MISSING downgrades to warn-and-exclude", () => {
     const prev = process.env.COWORK_HARNESS_SOFT_MISSING;
     process.env.COWORK_HARNESS_SOFT_MISSING = "1";
     try {
@@ -42,11 +42,11 @@ describe("WS-B — mount / path safety", () => {
       else process.env.COWORK_HARNESS_SOFT_MISSING = prev;
     }
   });
-  it("#27 — pinning config_dir to an EXISTING dir is rejected without the opt-in", () => {
+  it("pinning config_dir to an EXISTING dir is rejected without the opt-in", () => {
     const existing = mkdtempSync(join(tmpdir(), "cowork-cfg-"));
     expect(() => plan({ plugins: { config_dir: existing } })).toThrow(/COWORK_HARNESS_ALLOW_CONFIG_DIR_WRITE/);
   });
-  it("#33 — rejects a non-positive max_thinking_tokens (scalar and per-model map)", () => {
+  it("rejects a non-positive max_thinking_tokens (scalar and per-model map)", () => {
     expect(() => loadSession({ max_thinking_tokens: 0 })).toThrow();
     expect(() => loadSession({ max_thinking_tokens: -5 })).toThrow();
     expect(() => loadSession({ max_thinking_tokens: { default: 0 } })).toThrow();
@@ -182,7 +182,7 @@ describe("buildLaunchPlan", () => {
     expect(Object.keys(settings.extraKnownMarketplaces)).toEqual(["m"]);
   });
 
-  it("maps model/effort/permission/max-thinking-tokens (#23)", () => {
+  it("maps model/effort/permission/max-thinking-tokens", () => {
     const { plan: p } = plan({
       model: "claude-opus-4-8",
       effort: "high",
@@ -194,7 +194,7 @@ describe("buildLaunchPlan", () => {
     // effort/thinking are plan fields (passed as CLI flags / non-zero env at L1/L2),
     // NOT baseEnv vars (CLAUDE_EFFORT is a no-op; MAX_THINKING_TOKENS is never 0).
     expect(p.effort).toBe("high");
-    // #23: the session's thinking budget reaches the plan (resolved per-model in spawnEnv via f7e).
+    // the session's thinking budget reaches the plan (resolved per-model in spawnEnv via f7e).
     expect(p.maxThinkingTokens).toEqual({ "claude-opus-4-8": 50000, default: 12000 });
     expect(p.baseEnv.MAX_THINKING_TOKENS).toBeUndefined();
   });
@@ -231,7 +231,7 @@ describe("buildLaunchPlan", () => {
   });
 });
 
-describe("SEAM A — fail-loud declared-source staging", () => {
+describe("fail-loud declared-source staging", () => {
   // Build a local marketplace dir; controls let us simulate every failure mode.
   function mktDir(opts: { name?: string; withPlugin?: boolean; pluginVersion?: string; badJson?: boolean; noManifest?: boolean }) {
     const mk = mkdtempSync(join(tmpdir(), "cowork-seamA-mkt-"));

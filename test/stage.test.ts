@@ -131,7 +131,7 @@ describe("stageWorkspace — resume staging (fidelity guard)", () => {
   });
 });
 
-describe("stageWorkspace — resume MCP diagnostic (bug 59)", () => {
+describe("stageWorkspace — resume MCP diagnostic", () => {
   let warnSpy: ReturnType<typeof vi.spyOn>;
   beforeEach(() => {
     warnSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);

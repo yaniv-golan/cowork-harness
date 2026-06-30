@@ -4,23 +4,23 @@ import { firewallFailureAction, microvmShellScript, MICROVM_SECRET_SENTINEL } fr
 import type { PlatformBaseline } from "../src/types.js";
 
 /**
- * Token-free unit tests for the runtime fidelity/isolation fixes (Initiative E:
- * #39, #40, #38, #31). These exercise PURE helpers extracted from the runtimes —
- * the full L2 (Lima microVM) and host-loop (Docker) paths need Lima/Docker to run
- * end-to-end and are covered on the `test:live` / `pytest -m cowork` lane, NOT here.
+ * Token-free unit tests for the runtime fidelity/isolation fixes. These exercise PURE
+ * helpers extracted from the runtimes — the full L2 (Lima microVM) and host-loop (Docker)
+ * paths need Lima/Docker to run end-to-end and are covered on the `test:live` /
+ * `pytest -m cowork` lane, NOT here.
  *
  * What is Docker/Lima-gated (NOT asserted here):
- *  - that applyGuestFirewall() actually installs iptables in a booted VM (#40);
- *  - that the spawn env on a live microVM uses the resolved gateway IP (#39 wiring is
+ *  - that applyGuestFirewall() actually installs iptables in a booted VM;
+ *  - that the spawn env on a live microVM uses the resolved gateway IP (wiring is
  *    asserted indirectly via guestFirewallScript + the proxyUrl construction sharing
  *    vmGatewayIp(), but the live HTTP(S)_PROXY value needs a VM);
- *  - that the symlink in the provisioned guest resolves (#38 — we assert the GENERATED
+ *  - that the symlink in the provisioned guest resolves (we assert the GENERATED
  *    `ln -sf` line, not its effect inside a booted VM);
- *  - that host-loop's CLAUDE_PLUGIN_ROOT is unresolvable in-guest (#31 — we assert the
+ *  - that host-loop's CLAUDE_PLUGIN_ROOT is unresolvable in-guest (we assert the
  *    sentinel string only; the bash self-heal trigger needs a Docker container).
  */
 
-describe("#39 — Lima gateway IP is overridable and threaded into the firewall rule", () => {
+describe("Lima gateway IP is overridable and threaded into the firewall rule", () => {
   const saved = process.env.COWORK_VM_GATEWAY;
   afterEach(() => {
     if (saved === undefined) delete process.env.COWORK_VM_GATEWAY;
@@ -52,7 +52,7 @@ describe("#39 — Lima gateway IP is overridable and threaded into the firewall 
   });
 });
 
-describe("#40 — firewall failure fails loud under lockdown, opt-out skips", () => {
+describe("firewall failure fails loud under lockdown, opt-out skips", () => {
   it("throws when lockdown is on (the default)", () => {
     expect(firewallFailureAction(true)).toBe("throw");
   });
@@ -62,7 +62,7 @@ describe("#40 — firewall failure fails loud under lockdown, opt-out skips", ()
   });
 });
 
-describe("#38 — Lima provision symlink uses the actual staged basename", () => {
+describe("Lima provision symlink uses the actual staged basename", () => {
   it("links the staged claude-linux-arm64 binary to /usr/local/bin/claude", () => {
     const cfg = limaConfig("/Users/me/.cowork/agent/claude-linux-arm64");
     expect(cfg).toContain("ln -sf /opt/cowork/agent/claude-linux-arm64 /usr/local/bin/claude");
@@ -74,7 +74,7 @@ describe("#38 — Lima provision symlink uses the actual staged basename", () =>
   });
 });
 
-describe("#63 — work root is mounted at /sessions (no /cowork-work + symlink)", () => {
+describe("work root is mounted at /sessions (no /cowork-work + symlink)", () => {
   it("limaConfig mounts VM_WORK_HOST at /sessions, not /cowork-work", () => {
     const cfg = limaConfig("/Users/me/.cowork/agent/claude");
     expect(cfg).toContain('mountPoint: "/sessions"');
@@ -92,7 +92,7 @@ describe("#63 — work root is mounted at /sessions (no /cowork-work + symlink)"
     expect(script).toContain("not provisioned for this harness config");
   });
 
-  it("#29 — the script reads the secret prologue from stdin (up to the sentinel) before exec, so the token is never in argv", () => {
+  it("the script reads the secret prologue from stdin (up to the sentinel) before exec, so the token is never in argv", () => {
     const script = microvmShellScript("/sessions/sess-abc");
     expect(script).toContain("read -r"); // consume the prologue line-by-line
     expect(script).toContain(MICROVM_SECRET_SENTINEL); // stop at the sentinel
@@ -102,7 +102,7 @@ describe("#63 — work root is mounted at /sessions (no /cowork-work + symlink)"
   });
 });
 
-describe("#62/#63 — Lima instance name is derived from the config hash", () => {
+describe("Lima instance name is derived from the config hash", () => {
   const saved = process.env.COWORK_LIMA_INSTANCE;
   afterEach(() => {
     if (saved === undefined) delete process.env.COWORK_LIMA_INSTANCE;
@@ -126,7 +126,7 @@ describe("#62/#63 — Lima instance name is derived from the config hash", () =>
   });
 });
 
-describe("#31 — host-loop CLAUDE_PLUGIN_ROOT is a fixed unresolvable sentinel", () => {
+describe("host-loop CLAUDE_PLUGIN_ROOT is a fixed unresolvable sentinel", () => {
   // The full host-loop env is built inside spawnHostLoop, which spawns Docker and is not
   // reachable token-free. Assert the sentinel constant directly — the value spawnHostLoop
   // sets for CLAUDE_PLUGIN_ROOT (kept in sync with src/runtime/hostloop.ts).

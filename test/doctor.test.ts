@@ -135,8 +135,8 @@ describe("doctor — runDoctorChecks", () => {
     expect(tok.detail).toMatch(/Keychain/i);
     expect(tok.remedy).toMatch(/\.env/);
     expect(tok.remedy).toMatch(/keychain token/i);
-    // The Keychain branch must ALSO name --dotenv: a user keeping the token in an alternate file (the
-    // founder-skills H13 confusion) otherwise wrongly concludes doctor can't be pointed at it.
+    // The Keychain branch must ALSO name --dotenv: a user keeping the token in an alternate file
+    // otherwise wrongly concludes doctor can't be pointed at it.
     expect(tok.remedy).toMatch(/--dotenv <path>/);
   });
 
@@ -157,7 +157,7 @@ describe("doctor — runDoctorChecks", () => {
     expect(tok.remedy).toMatch(/setup-token/);
   });
 
-  // Finding B4/A4: running from a git worktree where ./.env is gitignored → no token; point at the main .env.
+  // running from a git worktree where ./.env is gitignored → no token; point at the main .env.
   it("no token but the main checkout has a .env (git worktree) → remedy points at --dotenv <main .env>", () => {
     const tok = get(
       runDoctorChecks("container", probe({ hasToken: () => false, hasKeychainToken: () => false, worktreeEnv: () => "/main/repo/.env" })),

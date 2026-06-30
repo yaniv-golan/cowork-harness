@@ -15,7 +15,7 @@ const scenario = (assert: unknown[], prompt = "hi") => ({
   assert,
 });
 
-describe("scanCassette — whole-surface privacy scan (A2)", () => {
+describe("scanCassette — whole-surface privacy scan", () => {
   it("flags a planted email in events and in an artifact body", () => {
     const c = {
       scenario: scenario([{ result: "success" }]),
@@ -108,7 +108,7 @@ describe("scanCassette — whole-surface privacy scan (A2)", () => {
     expect(scanCassette(c, [/cooley\.com/i]).some((f) => f.cls === "domain")).toBe(false);
   });
 
-  it("F-2: a domain allow does NOT silently clear an email finding (no cross-class bleed)", () => {
+  it("a domain allow does NOT silently clear an email finding (no cross-class bleed)", () => {
     const c = {
       scenario: scenario([{ result: "success" }]),
       events: [JSON.stringify({ text: "reach founder@startup.com or visit startup.com" })],
@@ -120,7 +120,7 @@ describe("scanCassette — whole-surface privacy scan (A2)", () => {
     expect(f.some((x) => x.cls === "domain")).toBe(false); // domain still allowed
   });
 
-  it("F-2: a class-scoped --allow-domain leaves the email class untouched", () => {
+  it("a class-scoped --allow-domain leaves the email class untouched", () => {
     const c = {
       scenario: scenario([{ result: "success" }]),
       events: [JSON.stringify({ text: "reach founder@startup.com or visit startup.com" })],
@@ -130,7 +130,7 @@ describe("scanCassette — whole-surface privacy scan (A2)", () => {
     expect(f.some((x) => x.cls === "email")).toBe(true);
   });
 
-  it("flags PII in an artifact FILENAME / path (C1)", () => {
+  it("flags PII in an artifact FILENAME / path", () => {
     const c = {
       scenario: scenario([{ result: "success" }]),
       events: [JSON.stringify({ type: "result", subtype: "success" })],
@@ -150,7 +150,7 @@ describe("scanCassette — whole-surface privacy scan (A2)", () => {
   });
 });
 
-describe("checkStaleness — B3 gate", () => {
+describe("checkStaleness — gate", () => {
   it("flags a baseline-of-record that drifted from latest", () => {
     const c = {
       scenario: scenario([{ result: "success" }]),
@@ -247,7 +247,7 @@ describe("checkStaleness — staleness message variants", () => {
   });
 });
 
-describe("checkStaleness — bucket-named messages (G-4)", () => {
+describe("checkStaleness — bucket-named messages", () => {
   function pluginSessionRoot(): { root: string; sessionPath: string } {
     const root = mkdtempSync(join(tmpdir(), "cwh-g4-"));
     mkdirSync(join(root, "plugin", "skills", "alpha"), { recursive: true });
@@ -361,7 +361,7 @@ describe("checkStaleness — mixed-mount falls back to generic message", () => {
   });
 });
 
-describe("checkStaleness — class-blind string adapter forwards unverifiable-* (D7 / RISK 3)", () => {
+describe("checkStaleness — class-blind string adapter forwards unverifiable-*", () => {
   it("unresolvable skill dirs still produce a stale message (verify-cassettes must NOT false-green)", () => {
     // skillHash set but session is (inline) ⇒ no dirs resolve ⇒ unverifiable-skill. The class-blind adapter
     // must forward it as a string so `staleAny = staleness.length > 0` keeps the gate red.
@@ -377,7 +377,7 @@ describe("checkStaleness — class-blind string adapter forwards unverifiable-* 
   });
 });
 
-describe("checkStaleness — both-buckets attribution (Finding 1: no masking)", () => {
+describe("checkStaleness — both-buckets attribution (no masking)", () => {
   function pluginRoot(): { root: string; sessionPath: string } {
     const root = mkdtempSync(join(tmpdir(), "cwh-both-"));
     mkdirSync(join(root, "plugin", "skills", "alpha"), { recursive: true });
@@ -436,7 +436,7 @@ describe("checkStaleness — both-buckets attribution (Finding 1: no masking)", 
   });
 });
 
-describe("checkStaleness — agent-scope attribution (RISK 1)", () => {
+describe("checkStaleness — agent-scope attribution", () => {
   function agentPluginRoot(): { root: string; sessionPath: string } {
     const root = mkdtempSync(join(tmpdir(), "cwh-agent-"));
     mkdirSync(join(root, "plugin", "skills", "alpha"), { recursive: true });

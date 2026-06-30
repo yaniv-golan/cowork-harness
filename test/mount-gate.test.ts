@@ -19,7 +19,7 @@ function makeMarketplace(mktName: string, pluginName: string): string {
 }
 
 /**
- * Version-gated, tier-accurate work-folder mount naming (D0/D3/D4). The bare-name scheme applies only to
+ * Version-gated, tier-accurate work-folder mount naming. The bare-name scheme applies only to
  * Desktop >= 1.14271.0 (`MOUNT_BARE_NAME_MIN_VERSION`); older baselines keep `.projects/<basename>`.
  */
 const gated = loadBaseline("desktop-1.14271.0"); // >= MIN → bare names
@@ -31,7 +31,7 @@ const folderMount = (sessionObj: unknown, baseline: ReturnType<typeof loadBaseli
   return plan.mounts.filter((m) => m.kind === "folder").map((m) => m.mountPath);
 };
 
-describe("work-folder mount naming — version gate (D0)", () => {
+describe("work-folder mount naming — version gate", () => {
   it("gated baseline (>=1.14271.0) mounts a folder at the BARE basename, not .projects/", () => {
     const paths = folderMount({ folders: [{ from: "./examples/data/project" }] }, gated, "hostloop");
     expect(paths).toEqual(["project"]);
@@ -50,7 +50,7 @@ describe("tier-accurate naming (gated)", () => {
   });
 });
 
-describe("plugin mount paths — version gate (D8)", () => {
+describe("plugin mount paths — version gate", () => {
   it("gated baseline: a local plugin mounts under marketplaces/local-desktop-app-uploads/<name> (no cache/)", () => {
     const base = mkdtempSync(join(tmpdir(), "cwh-plug-"));
     const pluginDir = join(base, "my-skill");
@@ -101,7 +101,7 @@ describe("plugin mount paths — version gate (D8)", () => {
   });
 });
 
-describe("gate constant alignment (D0)", () => {
+describe("gate constant alignment", () => {
   it("the shipped 1.14271.0 baseline sits exactly at the gate boundary", () => {
     // backstop: if the gate constant and the baseline we ship ever drift, bare-name mounting would apply to
     // the wrong releases. (HOSTLOOP_DYNAMIC_PROMPT_MIN_VERSION aliases this same constant in hostloop.ts.)
@@ -109,7 +109,7 @@ describe("gate constant alignment (D0)", () => {
   });
 });
 
-describe("guard-seeding (D1) — folder named like a reserved dir trips the dup-dest guard", () => {
+describe("guard-seeding — folder named like a reserved dir trips the dup-dest guard", () => {
   it("a VM-tier (fy, no reserved seed) folder resolving to a fixed name throws instead of shadowing", () => {
     // craft a folder whose basename is `outputs` by pointing at examples/data/... is impossible without such a
     // dir; instead rely on the seeded guard: a folder named `outputs` would resolve to bare `outputs` (fy) and

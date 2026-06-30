@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 
-// RISK 3 (D7's sibling): when the baseline can't be loaded, the unified `computeStaleness` emits an
+// When the baseline can't be loaded, the unified `computeStaleness` emits an
 // `unverifiable-baseline` finding, and the class-blind `checkStaleness` string adapter MUST forward it so
 // `verify-cassettes` / the re-record work-list stay RED (can't verify ⇒ not green). Filtering it in the
 // adapter would silently false-green those gates — the exact regression the unification could have introduced.
@@ -36,7 +36,7 @@ const cassette = (): Cassette =>
     fingerprint: { baseline: "1.2.3" },
   }) as unknown as Cassette;
 
-describe("staleness — unloadable baseline forwarded by the class-blind adapter (RISK 3)", () => {
+describe("staleness — unloadable baseline forwarded by the class-blind adapter", () => {
   it("computeStaleness emits an `unverifiable-baseline` finding when the baseline can't load", () => {
     const findings = computeStaleness(cassette(), undefined);
     expect(findings.some((f) => f.class === "unverifiable-baseline")).toBe(true);

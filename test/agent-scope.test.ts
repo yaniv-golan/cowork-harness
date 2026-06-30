@@ -139,7 +139,7 @@ describe("agentScope fingerprint marker (migration)", () => {
   });
 });
 
-describe("bug 50 — directory agents/<name> is attributed without extension strip", () => {
+describe("directory agents/<name> is attributed without extension strip", () => {
   function pluginWithDirAgent(): string {
     const root = mkdtempSync(join(tmpdir(), "as-dir-"));
     for (const s of ["cap-table.v2", "other"]) {
@@ -191,7 +191,7 @@ describe("bug 50 — directory agents/<name> is attributed without extension str
   });
 });
 
-describe("bug 51 — v6 cassette with skillHash mismatch reports older-format message", () => {
+describe("v6 cassette with skillHash mismatch reports older-format message", () => {
   it("a v6 cassette with a mismatched skillHash surfaces the older-hash-format message, not content-changed", () => {
     const { root, session } = (() => {
       const r = mkdtempSync(join(tmpdir(), "v6-mig-"));

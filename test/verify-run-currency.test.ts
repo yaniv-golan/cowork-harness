@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { buildFingerprint } from "../src/run/cassette.js";
 
-// Finding B2: verify-run must NOT vouch for answer-coverage against a kept run that predates a skill change.
+// verify-run must NOT vouch for answer-coverage against a kept run that predates a skill change.
 // Every run persists a skill fingerprint in result.json; verify-run recomputes it live and, on the
 // answer-coverage path, refuses (exit 2) when the skill source drifted — the kept gate snapshot is stale.
 const CLI = resolve("dist/cli.js");
@@ -79,7 +79,7 @@ function verifyRun(runDir: string, scenario: string) {
   return { code: r.status, text: (r.stderr || "") + (r.stdout || "") };
 }
 
-describe.skipIf(!can)("verify-run answer-coverage currency (finding B2)", () => {
+describe.skipIf(!can)("verify-run answer-coverage currency", () => {
   it("unchanged skill + matching answer ⇒ green (currency OK, coverage passes)", () => {
     const f = fixture({ withFingerprint: true });
     const r = verifyRun(join(f.dir, "run"), f.scenario);

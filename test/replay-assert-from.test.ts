@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { loadBaseline } from "../src/baseline.js";
 import { CASSETTE_VERSION } from "../src/run/cassette.js";
 
-// Part A (on-disk re-assert opt-in) + Part B (per-result verdict) — exercised through the BUILT CLI so the
+// On-disk re-assert opt-in + per-result verdict — exercised through the BUILT CLI so the
 // cmdReplay→replayCassette wiring is covered (a unit test on replayCassette can't see the flag plumbing).
 // Token-free and spawn-only: replay needs no agent/Docker. Needs dist/cli.js (the `ci` script builds first).
 const CLI = resolve("dist/cli.js");
@@ -75,7 +75,7 @@ function scenarioYaml(opts: { name?: string; prompt?: string; assert?: string; s
   );
 }
 
-describe.skipIf(!can)("replay A-default — frozen assertions drive; only the SILENT no-op dies", () => {
+describe.skipIf(!can)("replay default — frozen assertions drive; only the SILENT no-op dies", () => {
   it("verdict is UNCHANGED when a sibling YAML's assert: differs (frozen copy still authoritative)", () => {
     const cwd = tmp();
     // Frozen assert passes; the sibling's would FAIL. Default replay must still be green (frozen drives).
@@ -115,7 +115,7 @@ describe.skipIf(!can)("replay A-default — frozen assertions drive; only the SI
   });
 });
 
-describe.skipIf(!can)("replay A-optin — --assert-from / --reassert, safe by construction", () => {
+describe.skipIf(!can)("replay opt-in — --assert-from / --reassert, safe by construction", () => {
   it("the founder loop: --assert-from adding allow_stall flips a stalled run green", () => {
     const cwd = tmp();
     // Frozen run stalled on a question with no allow_stall → default replay FAILS.
@@ -130,7 +130,7 @@ describe.skipIf(!can)("replay A-optin — --assert-from / --reassert, safe by co
     expect(r.json?.ok).toBe(true);
   });
 
-  it("[R3-#2] a sessioned scenario does NOT spuriously hard-fail (session excluded from drift)", () => {
+  it("a sessioned scenario does NOT spuriously hard-fail (session excluded from drift)", () => {
     const cwd = tmp();
     // Frozen session stored cassette-relative; on-disk session resolves absolute — a naive string-equal would
     // brick this. session is excluded from the drift set, so re-assert proceeds.
@@ -226,7 +226,7 @@ describe.skipIf(!can)("replay A-optin — --assert-from / --reassert, safe by co
     expect(r.json?.ok).toBe(true);
   });
 
-  it("[R3-#1] skill staleness HARD-FAILS on the opt-in path WITHOUT --strict (Round-2 regression)", () => {
+  it("skill staleness HARD-FAILS on the opt-in path WITHOUT --strict", () => {
     const cwd = tmp();
     // A recorded skillHash over an unresolvable (inline) session → `unverifiable-skill` staleness (a member of
     // SKILL_DRIFT_CLASSES, same gate as a real `skill` content drift — that real-drift escalation is itself
@@ -270,7 +270,7 @@ describe.skipIf(!can)("replay A-optin — --assert-from / --reassert, safe by co
     expect(r.stderr).not.toMatch(/skill-drift will hard-fail/);
   });
 
-  it("[P1] an invalid --assert-from file is a hard error for that cassette, attributed to the parse", () => {
+  it("an invalid --assert-from file is a hard error for that cassette, attributed to the parse", () => {
     const cwd = tmp();
     write(cwd, "c.cassette.json", cassetteJson({ assert: [{ result: "success" }] }));
     write(cwd, "bad.yaml", "name: c\nprompt: x\nassert:\n  - oops: [");
@@ -293,7 +293,7 @@ describe.skipIf(!can)("replay A-optin — --assert-from / --reassert, safe by co
     expect(r.json?.results?.[0]?.result).toBe("success"); // the swapped-in sibling assert was actually evaluated
   });
 
-  it("[P1] --reassert over a dir keeps going when one sibling is invalid (batch not aborted)", () => {
+  it("--reassert over a dir keeps going when one sibling is invalid (batch not aborted)", () => {
     const cwd = tmp();
     // Names MUST match siblings for auto-resolution. c1 has an invalid sibling → per-cassette parse error;
     // c2 has a valid matching sibling → still evaluated to success (the bad one did not abort the walk).
@@ -327,7 +327,7 @@ describe.skipIf(!can)("replay A-optin — --assert-from / --reassert, safe by co
     expect(r.stderr).toMatch(/skipped \d+ filesystem\/egress/); // replayCassette's own aggregate skip warning still fires post-swap
   });
 
-  it("[#4] warns that an edited on-disk expect_denied is sourced but inert on replay (live-only)", () => {
+  it("warns that an edited on-disk expect_denied is sourced but inert on replay (live-only)", () => {
     const cwd = tmp();
     write(cwd, "c.cassette.json", cassetteJson({ assert: [{ result: "success" }] }));
     write(cwd, "edit.yaml", "name: c\nprompt: do the thing\nexpect_denied:\n  - evil.example.com\nassert:\n  - result: success\n");
@@ -343,7 +343,7 @@ describe.skipIf(!can)("replay A-optin — --assert-from / --reassert, safe by co
   });
 });
 
-describe.skipIf(!can)("replay Part B — per-result verdict in the JSON envelope", () => {
+describe.skipIf(!can)("replay — per-result verdict in the JSON envelope", () => {
   it("each results[] entry carries verdict {pass, signals, guards}", () => {
     const cwd = tmp();
     write(cwd, "c.cassette.json", cassetteJson({ assert: [{ result: "success" }] }));

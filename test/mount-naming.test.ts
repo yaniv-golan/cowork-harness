@@ -5,7 +5,7 @@ import { safePathSegment } from "../src/staging/resolve.js";
 /**
  * Byte-exact fidelity tests for the work-folder mount namers, against the asar-verified worked
  * examples (Desktop 1.14271.0). hL (host-loop) and fy (VM) DIFFER on collisions — they get distinct
- * fixtures. See docs/internal/2026-06-20-mount-path-fidelity-fix-plan.md §6.
+ * fixtures.
  */
 describe("hL (host-loop namer — first of a collision keeps bare)", () => {
   const bZ = [...RESERVED_MOUNT_NAMES];
@@ -67,7 +67,7 @@ describe("fy (VM namer — every member of a collision escalates)", () => {
   });
 });
 
-describe("derived name + safePathSegment composition (D7)", () => {
+describe("derived name + safePathSegment composition", () => {
   it("a derived name with a `:` is rejected post-resolution (resolve THEN validate)", () => {
     expect(() => safePathSegment(wie("/x/a:b", []), "folder mount name")).toThrow(/unsafe/);
   });

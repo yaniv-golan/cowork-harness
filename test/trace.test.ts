@@ -12,8 +12,8 @@ function eventsFile(lines: unknown[], controlOut?: unknown[]): string {
   return f;
 }
 
-// E — resolveEventsFile: exact match preferred over fragment, ambiguous fragment warns loudly
-describe("trace — E resolveEventsFile exact vs fragment resolution", () => {
+// resolveEventsFile: exact match preferred over fragment, ambiguous fragment warns loudly
+describe("trace — resolveEventsFile exact vs fragment resolution", () => {
   // resolveEventsFile resolves under runsRoot(); we point COWORK_HARNESS_RUNS_DIR at a temp runs/ tree
   // (the runs root is now an absolute path, not cwd-relative) and restore the env after each test.
   const origEnv = process.env.COWORK_HARNESS_RUNS_DIR;
@@ -92,7 +92,7 @@ const userResult = (toolUseId: string, isError: boolean, text: string) => ({
   message: { content: [{ type: "tool_result", tool_use_id: toolUseId, is_error: isError, content: text }] },
 });
 
-describe("trace view (item 8)", () => {
+describe("trace view", () => {
   it("dedupes the Agent dispatch (one dispatch row, not also a tool row) and excludes TaskCreate todos", () => {
     const f = eventsFile([
       { type: "system", subtype: "init", tools: ["Agent", "Task"], mcp_servers: [] },
@@ -124,7 +124,7 @@ describe("trace view (item 8)", () => {
     expect(rows.find((r) => r.kind === "text")).toBeUndefined();
   });
 
-  it("Part 4: a tool row carries its result STATUS (ok/error) from the paired tool_result", () => {
+  it("a tool row carries its result STATUS (ok/error) from the paired tool_result", () => {
     const f = eventsFile([
       assistant([{ type: "tool_use", id: "toolu_1", name: "Bash", input: { command: "x" } }]),
       userResult("toolu_1", true, "boom: permission denied"),
@@ -138,7 +138,7 @@ describe("trace view (item 8)", () => {
     expect(formatTrace(buildTrace(f))).toContain("✗ error: boom");
   });
 
-  it("Part 4: --gates pairs question → injected answer → delivered result (bridging UUID↔toolu_ keys)", () => {
+  it("--gates pairs question → injected answer → delivered result (bridging UUID↔toolu_ keys)", () => {
     const f = eventsFile(
       [
         // gate: control_request carries BOTH the UUID request_id AND the toolu_ tool_use_id
@@ -172,7 +172,7 @@ describe("trace view (item 8)", () => {
     expect(gates[0]).toMatchObject({ question: "Proceed?", injectedAnswer: '{"Proceed?":"Yes"}', delivered: "ok" });
   });
 
-  it("Part 4: --gates flags an O7-style delivery failure (errored tool_result)", () => {
+  it("--gates flags a delivery failure (errored tool_result)", () => {
     const f = eventsFile([
       {
         type: "control_request",
@@ -193,9 +193,9 @@ describe("trace view (item 8)", () => {
   });
 });
 
-// #6 — trace --dispatches: the sub-agent dispatch tree + the real total (read off dispatch_count_max).
+// trace --dispatches: the sub-agent dispatch tree + the real total (read off dispatch_count_max).
 import { buildDispatchTree, formatDispatchTree } from "../src/run/trace-view.js";
-describe("trace --dispatches (#6 — dispatch tree + total)", () => {
+describe("trace --dispatches (dispatch tree + total)", () => {
   it("builds the tree with depth from parentToolUseId nesting and a total", () => {
     const f = eventsFile([
       {
@@ -236,10 +236,10 @@ describe("trace --dispatches (#6 — dispatch tree + total)", () => {
   });
 });
 
-// #8 — assert --list is generated from the Zod Assertion schema; every key MUST carry a description so
+// assert --list is generated from the Zod Assertion schema; every key MUST carry a description so
 // the list can never drift (and the published JSON schema is enriched).
 import { Assertion } from "../src/types.js";
-describe("assert --list (#8 — every Assertion key has a description, drift guard)", () => {
+describe("assert --list (every Assertion key has a description, drift guard)", () => {
   it("no Assertion field is missing its .describe()", () => {
     const shape = Assertion.shape as Record<string, { description?: string }>;
     const missing = Object.keys(shape).filter((k) => !shape[k].description);

@@ -59,8 +59,8 @@ describe("matchLabel — exact-only by default; substring is opt-in via fuzzy=tr
   });
 });
 
-// #7 — allow_if predicate errors must THROW (loud), not silently deny. Valid predicates still evaluate.
-describe("evalPredicate via ScriptedDecider (#7 — broken predicate throws, never silent-deny)", () => {
+// allow_if predicate errors must THROW (loud), not silently deny. Valid predicates still evaluate.
+describe("evalPredicate via ScriptedDecider (broken predicate throws, never silent-deny)", () => {
   const rule = (allow_if: string): AnswerRule[] => [{ when_tool: "Bash", allow_if } as AnswerRule];
 
   it("a syntactically broken predicate (compile error) throws", async () => {
@@ -83,7 +83,7 @@ describe("evalPredicate via ScriptedDecider (#7 — broken predicate throws, nev
 
 // evalPredicate exposes a single `input` object (reaching non-identifier keys) AND keeps binding
 // each identifier-shaped key as a bare parameter (the form shipped example scenarios + docs rely on).
-describe("evalPredicate ( — additive input object + bare identifiers)", () => {
+describe("evalPredicate — additive input object + bare identifiers", () => {
   const rule = (allow_if: string): AnswerRule[] => [{ when_tool: "Bash", allow_if } as AnswerRule];
   const permWith = (input: Record<string, unknown>): DecisionRequest => ({ id: "p1", kind: "permission", tool: "Bash", input });
 
@@ -126,7 +126,7 @@ describe("evalPredicate ( — additive input object + bare identifiers)", () => 
 // PromptDecider question paths guard empty option lists (mirrors the permission-path guard and
 // FirstOptionDecider). Single-select/no-options is open-ended free text; multi-select/no-options is a
 // protocol contradiction. WITHOUT the guard the do/while loop spins forever (coerceLabel([]) never matches).
-describe("PromptDecider ( — optionless question guard, no infinite loop)", () => {
+describe("PromptDecider — optionless question guard, no infinite loop", () => {
   const withTTY = async (fn: () => Promise<void>): Promise<void> => {
     const orig = process.stdin.isTTY;
     Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
@@ -169,9 +169,9 @@ describe("PromptDecider ( — optionless question guard, no infinite loop)", () 
   });
 });
 
-// #53 — spawnChannel readLine bounds the wait on a hung-but-alive helper (loud reject, never silent hang).
+// spawnChannel readLine bounds the wait on a hung-but-alive helper (loud reject, never silent hang).
 // Borderline: spawns a real `sh` stub that never answers; env shrinks the timeout to ~50ms.
-describe("spawnChannel readLine timeout (#53 — borderline, spawn-based)", () => {
+describe("spawnChannel readLine timeout (borderline, spawn-based)", () => {
   it("rejects LOUD when the helper never answers within the timeout", async () => {
     const prev = process.env.COWORK_HARNESS_DECIDER_CMD_TIMEOUT_MS;
     process.env.COWORK_HARNESS_DECIDER_CMD_TIMEOUT_MS = "50";
@@ -189,7 +189,7 @@ describe("spawnChannel readLine timeout (#53 — borderline, spawn-based)", () =
   });
 });
 
-// AskUserQuestion answer shapes (binary-verified 2026-06-17): CHOOSE-SUFFIX, MULTISELECT, FREE-TEXT, #4b.
+// AskUserQuestion answer shapes (binary-verified 2026-06-17): CHOOSE-SUFFIX, MULTISELECT, FREE-TEXT.
 const ques = (questions: any[]): DecisionRequest => ({ id: "q1", kind: "question", questions });
 async function answersOf(rules: AnswerRule[], questions: any[]): Promise<Record<string, string> | "abstain"> {
   const r = await new ScriptedDecider(rules).decide(ques(questions), ctx());
@@ -248,7 +248,7 @@ describe("MULTISELECT — list of labels delivered comma-joined (verified wire s
       ),
     ).rejects.toThrow(/single-select/);
   });
-  it("an unknown member label fails loud (per-element #49 guard preserved)", async () => {
+  it("an unknown member label fails loud (per-element guard preserved)", async () => {
     await expect(
       new ScriptedDecider([{ when_question: "pick", choose: ["Auth", "Nope"] }]).decide(
         ques([{ question: "pick?", options: opts, multiSelect: true }]),
@@ -258,7 +258,7 @@ describe("MULTISELECT — list of labels delivered comma-joined (verified wire s
   });
 });
 
-describe("FREE-TEXT (#3) — answer: delivers an arbitrary string, bypassing label validation", () => {
+describe("FREE-TEXT — answer: delivers an arbitrary string, bypassing label validation", () => {
   const opts = [{ label: "Yes" }, { label: "No" }];
   it("answer: is delivered verbatim even though it is not an offered option", async () => {
     expect(await answersOf([{ when_question: "name", answer: "Acme Holdings LLC" }], [{ question: "name?", options: opts }])).toEqual({
@@ -275,7 +275,7 @@ describe("FREE-TEXT (#3) — answer: delivers an arbitrary string, bypassing lab
   });
 });
 
-describe("#4b — a partial batched-gate match names the UNMATCHED sub-questions then abstains", () => {
+describe("a partial batched-gate match names the UNMATCHED sub-questions then abstains", () => {
   it("abstains the whole gate and the warning lists the unmatched question text", async () => {
     const writes: string[] = [];
     const spy = (s: string | Uint8Array): boolean => (writes.push(String(s)), true);

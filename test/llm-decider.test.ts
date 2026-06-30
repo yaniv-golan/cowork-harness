@@ -45,7 +45,7 @@ describe("LlmDecider", () => {
     }
   });
 
-  it("puts the --intent into the model prompt; requires an exact label (not a prose answer) — ", async () => {
+  it("puts the --intent into the model prompt; requires an exact label (not a prose answer)", async () => {
     let seenPrompt = "";
     // fix: matchLabel defaults to fuzzy=false, so a prose answer is no longer accepted.
     // The LLM prompt says "Reply with ONLY the exact label" — a well-behaved model should return the
@@ -67,7 +67,7 @@ describe("LlmDecider", () => {
     await expect(new LlmDecider(complete).decide(ask("Format?", ["Markdown", "PDF"]), ctx())).rejects.toThrow(UnansweredError);
   });
 
-  it("Fix 1 — supplies free text for an options-bearing gate via the OTHER: directive (Cowork's 'Other' path)", async () => {
+  it("supplies free text for an options-bearing gate via the OTHER: directive (Cowork's 'Other' path)", async () => {
     let seenPrompt = "";
     const complete: Complete = async (p) => ((seenPrompt = p), "OTHER: Acme Robotics");
     const d = await new LlmDecider(complete, "name it after the customer").decide(
@@ -81,7 +81,7 @@ describe("LlmDecider", () => {
   });
 
   it("OTHER directive — a markdown-/quote-wrapped OTHER: still binds (model code-fences the directive)", async () => {
-    // Observed live (amendment-seriesD): the model replied `` `OTHER: Sector not specified in document` ``; the
+    // Observed live: the model replied `` `OTHER: Sector not specified in document` ``; the
     // leading backtick defeated the `^\s*OTHER:` anchor → whiff → fail-loud stall. The wrapping fence is now
     // stripped before the sentinel test.
     for (const raw of ["`OTHER: Sector not specified in document`", '"OTHER: Sector not specified"']) {
@@ -122,21 +122,21 @@ describe("LlmDecider", () => {
     expect((d as any).response.answers).toEqual({ "Which?": "OTHER: pick me" });
   });
 
-  it("Fix 1 — matches a LABEL first, so a real option whose label starts 'OTHER:' is not hijacked to free text", async () => {
+  it("matches a LABEL first, so a real option whose label starts 'OTHER:' is not hijacked to free text", async () => {
     const complete: Complete = async () => "OTHER: pick me";
     const d = await new LlmDecider(complete).decide(ask("Which?", ["OTHER: pick me", "Something else"]), ctx());
     // selected as the literal label, not parsed as a free-text "pick me"
     expect((d as any).response.answers).toEqual({ "Which?": "OTHER: pick me" });
   });
 
-  it("Fix 1 — a bare out-of-set value (no OTHER: prefix, not a label) still FAILS LOUD", async () => {
+  it("a bare out-of-set value (no OTHER: prefix, not a label) still FAILS LOUD", async () => {
     const complete: Complete = async () => "Acme Robotics";
     await expect(new LlmDecider(complete).decide(ask("Name it?", ["Project Alpha", "Project Beta"]), ctx())).rejects.toThrow(
       UnansweredError,
     );
   });
 
-  it("Fix 1 — an empty OTHER: directive FAILS LOUD (no empty free-text answer)", async () => {
+  it("an empty OTHER: directive FAILS LOUD (no empty free-text answer)", async () => {
     const complete: Complete = async () => "OTHER:   ";
     await expect(new LlmDecider(complete).decide(ask("Name it?", ["Project Alpha", "Project Beta"]), ctx())).rejects.toThrow(
       UnansweredError,

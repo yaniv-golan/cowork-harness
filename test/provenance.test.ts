@@ -28,7 +28,7 @@ describe("web_fetch provenance-unenforced warning is per-handler (not once-per-p
   });
 });
 
-describe("#30 — normalizeUrl (zG port)", () => {
+describe("normalizeUrl (zG port)", () => {
   it("drops the fragment and a single trailing slash; lowercases host (via URL)", () => {
     expect(normalizeUrl("https://Example.com/a/#frag")).toBe("https://example.com/a");
     expect(normalizeUrl("https://example.com/")).toBe("https://example.com/"); // root slash kept
@@ -47,7 +47,7 @@ describe("#30 — normalizeUrl (zG port)", () => {
   });
 });
 
-describe("#30 — extractUrls (Ien port)", () => {
+describe("extractUrls (Ien port)", () => {
   it("extracts full URLs, www. hosts, and bare domains; ZHA-trims trailing punctuation", () => {
     const urls = extractUrls("see https://a.com/x, and www.b.com! also c.io.");
     expect(urls).toContain("https://a.com/x"); // trailing comma trimmed
@@ -68,7 +68,7 @@ describe("#30 — extractUrls (Ien port)", () => {
   });
 });
 
-describe("#30 — web_fetch provenance gate (G1t port, via the handler)", () => {
+describe("web_fetch provenance gate (G1t port, via the handler)", () => {
   // Drive the handler's web_fetch branch with a fake provenance bundle + an egress collector + a STUB
   // fetcher (spawn-free). On Path A a provenance pass now fetches DIRECTLY (decoupled from the hostname
   // allowlist), so the stub returns a `FETCHED <url>` marker; the allowlist (other.example) is irrelevant
@@ -100,7 +100,7 @@ describe("#30 — web_fetch provenance gate (G1t port, via the handler)", () => 
 
   it("a provenance HIT fetches DIRECTLY — NO hostname allowlist (decoupled from egress)", async () => {
     // denied.example is NOT in the handler's allowlist, yet a provenance hit fetches it: Path A is gated by
-    // the provenance set ONLY, not the egress domain list (the #30 conflation fix).
+    // the provenance set ONLY, not the egress domain list (the conflation fix).
     const r = await callWebFetch(fake({ isAllowed: () => true }), "https://denied.example/x");
     expect(r.text).toMatch(/FETCHED https:\/\/denied\.example\/x/);
     expect(r.egress).toEqual([{ host: "denied.example", decision: "allow" }]);
@@ -145,13 +145,13 @@ describe("#30 — web_fetch provenance gate (G1t port, via the handler)", () => 
     expect(r.text).toMatch(/FETCHED https:\/\/denied\.example\/x/); // bypass → fetched directly
   });
 
-  it("#43 — Path A blocks a non-http scheme even when provenance-approved (no file:// reads)", async () => {
+  it("Path A blocks a non-http scheme even when provenance-approved (no file:// reads)", async () => {
     const r = await callWebFetch(fake({ isAllowed: () => true }), "file:///etc/passwd");
     expect(r.isError).toBe(true);
     expect(r.text).toMatch(/scheme "file:" is not allowed/);
   });
 
-  it("#44 — Path A blocks a redirect to a private address (SSRF), even from an approved URL", async () => {
+  it("Path A blocks a redirect to a private address (SSRF), even from an approved URL", async () => {
     let n = 0;
     const rawFetch: RawFetch = async () =>
       n++ === 0
@@ -162,7 +162,7 @@ describe("#30 — web_fetch provenance gate (G1t port, via the handler)", () => 
     expect(r.text).toMatch(/Redirect to .* blocked: Host "169\.254\.169\.254" is a local or private address/);
   });
 
-  it("#38 — a redirect logs egress for EACH hop, not just the terminal host", async () => {
+  it("a redirect logs egress for EACH hop, not just the terminal host", async () => {
     let n = 0;
     const rawFetch: RawFetch = async () =>
       n++ === 0 ? { status: 302, location: "http://b.example/y", text: async () => "" } : { status: 200, text: async () => "FINAL" };
@@ -177,7 +177,7 @@ describe("#30 — web_fetch provenance gate (G1t port, via the handler)", () => 
   });
 });
 
-describe("#30 — readGateFlag (prefixed key + prose/structured shapes)", () => {
+describe("readGateFlag (prefixed key + prose/structured shapes)", () => {
   const withGates = (gates: Record<string, unknown>) => ({ provenance: { gates } }) as unknown as PlatformBaseline;
 
   it("reads a sub-flag from the committed PROSE string under the prefixed key", () => {
@@ -185,7 +185,7 @@ describe("#30 — readGateFlag (prefixed key + prose/structured shapes)", () => 
     expect(readGateFlag(b, "1978029737", "coworkWebFetchPrompt")).toBe(true);
     expect(readGateFlag(b, "1978029737", "coworkWebFetchViaApi")).toBe(true);
   });
-  it("reads a sub-flag from a #39-decoded STRUCTURED entry", () => {
+  it("reads a sub-flag from a decoded STRUCTURED entry", () => {
     const b = withGates({ "coworkRuntimeConfig:1978029737": { on: true, source: "force", value: { coworkWebFetchPrompt: true } } });
     expect(readGateFlag(b, "1978029737", "coworkWebFetchPrompt")).toBe(true);
     expect(readGateFlag(b, "1978029737", "coworkWebFetchViaApi")).toBe(false); // absent sub-flag
@@ -230,7 +230,7 @@ describe("web_fetch Path B — U1t + manual redirect re-check (provenance off)",
     for (const h of ["example.com", "8.8.8.8", "203.0.113.5"]) expect(isLocalOrPrivate(h)).toBe(false);
   });
 
-  it("#36 isLocalOrPrivate normalizes IPv4-mapped IPv6 + numeric/hex/octal/short IPv4 forms", () => {
+  it("isLocalOrPrivate normalizes IPv4-mapped IPv6 + numeric/hex/octal/short IPv4 forms", () => {
     const local = [
       "::ffff:127.0.0.1", // IPv4-mapped IPv6 loopback
       "[::ffff:127.0.0.1]", // …with brackets (as a URL hostname carries it)

@@ -88,7 +88,7 @@ describe("Decider — fallbacks + chain", () => {
     };
     expect(await new FirstOptionDecider().decide(req, ctx)).toBe(ABSTAIN); // → fail-closed, not allow-once
   });
-  it("#7: DEFAULT_ALLOW is the read-only subset — LS/NotebookRead/TodoWrite (not Cowork tools) now deny under strict", async () => {
+  it("DEFAULT_ALLOW is the read-only subset — LS/NotebookRead/TodoWrite (not Cowork tools) now deny under strict", async () => {
     for (const t of ["LS", "NotebookRead", "TodoWrite"]) {
       expect(((await new PermissionDefaultDecider("strict").decide(perm(t), ctx)) as any).response.behavior).toBe("deny");
     }
@@ -137,7 +137,7 @@ describe("envelope serialization (byte-shape)", () => {
     const req = ask("Q", ["X"]);
     const q = serializeDecision(req, { kind: "question", answers: { Q: "X" } }) as any;
     expect(q.response.response.updatedInput.answers.Q).toBe("X");
-    // O7 regression guard: updatedInput MUST preserve `questions` — the binary's AskUserQuestion handler
+    // regression guard: updatedInput MUST preserve `questions` — the binary's AskUserQuestion handler
     // does `questions.map(…)`; dropping it throws `q.map` and the answer never reaches the model.
     expect(q.response.response.updatedInput.questions).toEqual((req as any).questions);
   });
@@ -165,7 +165,7 @@ class MockSession implements AgentSession {
   close() {}
 }
 
-// ---- Item 6: sub-agent dispatch recognition (real cowork uses the `Agent` tool, not `Task`) ----
+// ---- sub-agent dispatch recognition (real cowork uses the `Agent` tool, not `Task`) ----
 const assistant = (blocks: unknown[], parent?: string) => ({
   type: "assistant",
   ...(parent ? { parent_tool_use_id: parent } : {}),
@@ -173,7 +173,7 @@ const assistant = (blocks: unknown[], parent?: string) => ({
 });
 const dispatches = (msg: unknown) => parseMessage(msg).filter((e) => e.type === "subagent_dispatch");
 
-describe("parseMessage — sub-agent dispatch (item 6)", () => {
+describe("parseMessage — sub-agent dispatch", () => {
   it("recognizes the real cowork `Agent` tool ({description, subagent_type, prompt})", () => {
     const d = dispatches(
       assistant([
@@ -227,7 +227,7 @@ describe("parseMessage — sub-agent dispatch (item 6)", () => {
     expect(dispatches(todoAndMonitor)).toHaveLength(0);
   });
 
-  it("Part 2: parses tool_result blocks from a `user` message (was previously invisible)", () => {
+  it("parses tool_result blocks from a `user` message (was previously invisible)", () => {
     const ev = parseMessage({
       type: "user",
       message: {
@@ -241,7 +241,7 @@ describe("parseMessage — sub-agent dispatch (item 6)", () => {
     expect((ev[0] as any).text).toContain("q.map");
   });
 
-  it("Part 2: tool_use events carry toolUseId + AskUserQuestion decision captures the toolu_ id", () => {
+  it("tool_use events carry toolUseId + AskUserQuestion decision captures the toolu_ id", () => {
     const tu = parseMessage(assistant([{ type: "tool_use", id: "toolu_1", name: "Bash", input: { command: "x" } }]));
     expect(tu.find((e) => e.type === "tool_use")).toMatchObject({ toolUseId: "toolu_1" });
     const dec = parseMessage({
@@ -271,11 +271,11 @@ describe("Run — turn loop + record", () => {
     expect(rec.subagents).toHaveLength(1);
     expect(rec.subagents[0].agentType).toBe("researcher");
     expect(rec.subagents[0].declaredTools).toEqual(["Bash", "Read"]);
-    expect(rec.subagents[0].toolsUsed).toEqual(["Read"]); // declared Bash but never used it → B2 culprit
+    expect(rec.subagents[0].toolsUsed).toEqual(["Read"]); // declared Bash but never used it → the culprit
     expect(rec.result).toBe("success");
   });
 
-  it("#15: subagentTools counts only tools under a RECOGNIZED dispatch, not any parented tool_use", async () => {
+  it("subagentTools counts only tools under a RECOGNIZED dispatch, not any parented tool_use", async () => {
     const ev: AgentEvent[] = [
       { type: "tool_use", name: "Task", input: { subagent_type: "researcher" } },
       { type: "subagent_dispatch", toolUseId: "tu1", agentType: "researcher", declaredTools: [] },
@@ -299,10 +299,10 @@ describe("Run — turn loop + record", () => {
     expect((s.responded[0].r as any).behavior).toBe("allow");
   });
 
-  it("#6: a cowork-parity off-registry auto-allow is machine-flagged (permissiveAutoAllow)", async () => {
+  it("a cowork-parity off-registry auto-allow is machine-flagged (permissiveAutoAllow)", async () => {
     // Assert the CI-gateable record field (the envelope signal). The stderr `::warning::` it also emits
     // is covered by code review — NOT captured here, to avoid the global process.stderr.write monkeypatch
-    // that collides across concurrently-run test files (the #5/session-protocol flake source).
+    // that collides across concurrently-run test files (the session-protocol flake source).
     const ev: AgentEvent[] = [
       { type: "decision", request: { id: "d1", kind: "permission", tool: "Bash", input: { command: "ls" } } },
       { type: "result", isError: false },
@@ -311,7 +311,7 @@ describe("Run — turn loop + record", () => {
     expect(rec.permissiveAutoAllow).toContain("Bash"); // machine-distinguishable in the envelope
   });
 
-  it("#6: a built-in default-allow (Read) is NOT a permissive auto-allow", async () => {
+  it("a built-in default-allow (Read) is NOT a permissive auto-allow", async () => {
     const ev: AgentEvent[] = [
       { type: "decision", request: { id: "d1", kind: "permission", tool: "Read", input: {} } },
       { type: "result", isError: false },
@@ -320,7 +320,7 @@ describe("Run — turn loop + record", () => {
     expect(rec.permissiveAutoAllow).toEqual([]);
   });
 
-  it("O6: toolCounts records TRUTHFUL per-tool call counts (top-level only, subagent tools excluded)", async () => {
+  it("toolCounts records TRUTHFUL per-tool call counts (top-level only, subagent tools excluded)", async () => {
     const ev: AgentEvent[] = [
       { type: "tool_use", name: "WebSearch", input: { q: "a" }, toolUseId: "t1" },
       { type: "tool_use", name: "WebSearch", input: { q: "b" }, toolUseId: "t2" },
@@ -332,7 +332,7 @@ describe("Run — turn loop + record", () => {
     expect(rec.toolCounts).toEqual({ WebSearch: 2, Read: 1 }); // not 3 WebSearch — the subagent one is excluded
   });
 
-  it("Part 3: gateDeliveries pairs an answered gate with its tool_result (delivered vs O7 failure)", async () => {
+  it("gateDeliveries pairs an answered gate with its tool_result (delivered vs failure)", async () => {
     const gate = (id: string, toolUseId: string): AgentEvent => ({
       type: "decision",
       request: { id, kind: "question", toolUseId, questions: [{ question: "Proceed?", options: [{ label: "Yes" }] }] },
@@ -341,7 +341,7 @@ describe("Run — turn loop + record", () => {
       gate("d1", "toolu_ok"),
       gate("d2", "toolu_bad"),
       { type: "tool_result", toolUseId: "toolu_ok", isError: false, text: "" }, // delivered
-      { type: "tool_result", toolUseId: "toolu_bad", isError: true, text: "undefined is not an object (evaluating 'q.map')" }, // O7
+      { type: "tool_result", toolUseId: "toolu_bad", isError: true, text: "undefined is not an object (evaluating 'q.map')" },
       { type: "result", isError: false },
     ];
     const rec = await new Run(new MockSession(ev), new ScriptedDecider([{ when_question: "Proceed", choose: "Yes" }])).drive("go");
@@ -351,7 +351,7 @@ describe("Run — turn loop + record", () => {
     ]);
   });
 
-  it("C1: a question reaching ABSTAIN fails LOUD — never silently answers option 1", async () => {
+  it("a question reaching ABSTAIN fails LOUD — never silently answers option 1", async () => {
     const ev: AgentEvent[] = [
       {
         type: "decision",
@@ -383,8 +383,8 @@ describe("Run — turn loop + record", () => {
     expect(rec.decisions.find((d) => d.by === "external")).toBeTruthy();
   });
 
-  // ---- #47 regression: by:"external" and by:"human" decisions must flag nonDeterministic (#7 residual) ----
-  it("#47: decisions by external/human mark the run non-deterministic (execute.ts predicate)", async () => {
+  // ---- regression: by:"external" and by:"human" decisions must flag nonDeterministic ----
+  it("decisions by external/human mark the run non-deterministic (execute.ts predicate)", async () => {
     // Simulate the predicate used in execute.ts: record.decisions.some(d => d.by === "llm"|"external"|"human")
     // We drive a run through ExternalDecider so it records by:"external", then assert the predicate fires.
     const ev: AgentEvent[] = [
@@ -405,8 +405,8 @@ describe("Run — turn loop + record", () => {
     expect(isNonDet).toBe(true);
   });
 
-  // ---- #13 + #16: spawn error surfaced as typed event terminates the run loop ----
-  it("#13/#16: a spawn-error event (source:spawn) terminates the run with result=error", async () => {
+  // ---- spawn error surfaced as typed event terminates the run loop ----
+  it("a spawn-error event (source:spawn) terminates the run with result=error", async () => {
     // MockSession that yields a typed {type:"error", source:"spawn"} event (as LiveAgentSession
     // now does when proc emits "error"). The Run loop must terminate and set rec.result = "error".
     const ev: AgentEvent[] = [
@@ -441,7 +441,7 @@ describe("Run — turn loop + record", () => {
     expect(rec.result).not.toBe("success");
   });
 
-  it("#13/#16: a protocol-error event (source:protocol) also terminates with result=error", async () => {
+  it("a protocol-error event (source:protocol) also terminates with result=error", async () => {
     const ev: AgentEvent[] = [{ type: "error", source: "protocol", message: "fatal protocol frame" }];
     let closed = false;
     class ProtoErrSession implements AgentSession {
@@ -491,7 +491,7 @@ describe("Run — turn loop + record", () => {
     expect(String(exitDec?.detail)).toContain("OOMKilled");
   });
 
-  it("#13/#16: a non-fatal agent error (source:agent) does NOT terminate the run", async () => {
+  it("a non-fatal agent error (source:agent) does NOT terminate the run", async () => {
     // source:"agent" is non-terminal — the SDK may still emit a recovering result.
     const ev: AgentEvent[] = [
       { type: "error", source: "agent", message: "soft agent error" },
@@ -504,8 +504,8 @@ describe("Run — turn loop + record", () => {
     expect(rec.decisions.find((d) => d.name === "agent")).toBeDefined();
   });
 
-  // ---- #19: withDialogTimeout clears the timer on both resolve AND reject ----
-  it("#19: withDialogTimeout clears the timer on rejection (no dangling setTimeout)", async () => {
+  // ---- withDialogTimeout clears the timer on both resolve AND reject ----
+  it("withDialogTimeout clears the timer on rejection (no dangling setTimeout)", async () => {
     // We test this indirectly: a Run with a dialog decision where the decider rejects. The timer
     // must be cleared (we can't directly observe the timer, but we can assert no unhandled-timer
     // side-effects and that the rejection propagates cleanly).
@@ -635,9 +635,9 @@ describe("Cassette — protocol replay", () => {
     expect(r.result).toBe("success");
   });
 
-  // #1: an artifact manifest makes file_exists + artifact_json replay-checkable (token-free), against the
+  // an artifact manifest makes file_exists + artifact_json replay-checkable (token-free), against the
   // materialized snapshot — instead of being stripped as live-only.
-  it("#1: a cassette artifact manifest makes file_exists + artifact_json replay-checkable", async () => {
+  it("a cassette artifact manifest makes file_exists + artifact_json replay-checkable", async () => {
     const events = [
       JSON.stringify({ type: "system", subtype: "init", tools: ["Write"] }),
       JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "done" }] } }),
@@ -668,8 +668,8 @@ describe("Cassette — protocol replay", () => {
     expect(r.assertions.filter((a) => !a.pass)).toHaveLength(0);
   });
 
-  // #1b: a baseline-of-record mismatch warns by default and FAILS under --strict.
-  it("#1b: --strict escalates a staleness mismatch to a failing assertion", async () => {
+  // a baseline-of-record mismatch warns by default and FAILS under --strict.
+  it("--strict escalates a staleness mismatch to a failing assertion", async () => {
     const events = [
       JSON.stringify({ type: "system", subtype: "init", tools: ["Write"] }),
       JSON.stringify({ type: "result", subtype: "success", is_error: false }),
@@ -706,11 +706,11 @@ describe("Cassette — protocol replay", () => {
     expect((all.match(/is newer than this harness understands/g) ?? []).length).toBe(1); // only the future cassette warned
   });
 
-  // ---- C1 Phase 0: pin the bug BEFORE fixing it. ----
+  // ---- pin the bug BEFORE fixing it. ----
   // This test documents that WITHOUT controlOut, question_asked silently false-fails on events-only replay
   // (the decision event is skipped, ctx.questions stays [], so the question is invisible).
   // After the fix (full-fidelity replay), this test is EXPECTED TO PASS — the bug is fixed.
-  it("C1-fixed: question_asked assertion passes on full-fidelity replay (controlOut present)", async () => {
+  it("fixed: question_asked assertion passes on full-fidelity replay (controlOut present)", async () => {
     const reqId = "req-q1";
     const toolUseId = "toolu_GATE1";
     const events = [
@@ -757,14 +757,14 @@ describe("Cassette — protocol replay", () => {
     const r = await replayCassette(cassette);
     const failed = r.assertions.filter((a) => !a.pass);
     expect(failed).toHaveLength(0);
-    // Also assert delivered===true directly (not just "assertion passed") to guard against C1 vacuous pass
+    // Also assert delivered===true directly (not just "assertion passed") to guard against a vacuous pass
     const deliveries = r.gateDeliveries ?? [];
     expect(deliveries).toHaveLength(1);
     expect(deliveries[0].delivered).toBe(true);
   });
 
-  // ---- #18/#4: truncated full-fidelity cassette (decision present, controlOut entry missing) ----
-  it("#18/#4: a decision with no matching control_response trips replay_protocol_fidelity (not a silent abstain→deny)", async () => {
+  // ---- truncated full-fidelity cassette (decision present, controlOut entry missing) ----
+  it("a decision with no matching control_response trips replay_protocol_fidelity (not a silent abstain→deny)", async () => {
     const events = [
       JSON.stringify({ type: "system", subtype: "init", tools: ["Write"] }),
       // A permission decision for req-p1 — but control-out.jsonl will NOT contain its response.
@@ -826,8 +826,8 @@ describe("Cassette — protocol replay", () => {
     expect(fidelity!.message).toMatch(/truncated|no matching control_response/);
   });
 
-  // ---- C1 documented behaviour without fix: question_asked fails when controlOut absent ----
-  it("C1-bug-documented: question_asked assertion FAILS on legacy events-only replay (no controlOut)", async () => {
+  // ---- documented behaviour without fix: question_asked fails when controlOut absent ----
+  it("bug-documented: question_asked assertion FAILS on legacy events-only replay (no controlOut)", async () => {
     const reqId = "req-q1";
     const toolUseId = "toolu_GATE1";
     const events = [
@@ -863,8 +863,8 @@ describe("Cassette — protocol replay", () => {
     expect(resultAssertion?.pass).toBe(true);
   });
 
-  // ---- O7 tamper test: controlOut with `questions` dropped → replay_protocol_fidelity fails ----
-  it("O7-tamper: controlOut envelope with questions dropped trips replay_protocol_fidelity guard", async () => {
+  // ---- tamper test: controlOut with `questions` dropped → replay_protocol_fidelity fails ----
+  it("tamper: controlOut envelope with questions dropped trips replay_protocol_fidelity guard", async () => {
     const reqId = "req-q1";
     const toolUseId = "toolu_GATE1";
     const events = [
@@ -885,7 +885,7 @@ describe("Cassette — protocol replay", () => {
       }),
       JSON.stringify({ type: "result", subtype: "success", is_error: false }),
     ];
-    // Tampered: `questions` dropped from updatedInput (the O7 regression)
+    // Tampered: `questions` dropped from updatedInput (the regression)
     const controlOut = [
       JSON.stringify({
         type: "control_response",
@@ -1021,10 +1021,10 @@ describe("Cassette — protocol replay", () => {
     expect((decoded as any).content).toEqual({ value: 42 });
   });
 
-  // #22: a corrupt/unrecognized elicit action is mapped to "decline" (a valid value) rather than
+  // a corrupt/unrecognized elicit action is mapped to "decline" (a valid value) rather than
   // passed through via an unchecked cast — so re-serialization (action:"decline") will NOT match the
-  // recorded corrupt body and the O7 guard trips loud instead of silently coercing.
-  it("#22: corrupt elicit action deserializes to a valid 'decline' (not the unchecked literal)", () => {
+  // recorded corrupt body and the guard trips loud instead of silently coercing.
+  it("corrupt elicit action deserializes to a valid 'decline' (not the unchecked literal)", () => {
     const req: DecisionRequest = { id: "r1", kind: "elicit", server: "srv" };
     const decoded = deserializeDecision(req, { action: "garbage-not-a-real-action" });
     expect((decoded as any).action).toBe("decline");
@@ -1035,7 +1035,7 @@ describe("Cassette — protocol replay", () => {
   });
 
   // A permission body that is neither allow nor deny (corrupt/truncated cassette) must NOT replay as a
-  // silent allow — it maps to a deny that will not re-serialize to the recorded body, tripping the O7
+  // silent allow — it maps to a deny that will not re-serialize to the recorded body, tripping the
   // guard loud. Symmetric with the elicit-action validation above.
   it("corrupt permission body deserializes to deny (never a silent allow)", () => {
     const req: DecisionRequest = { id: "r1", kind: "permission", tool: "Bash", input: {} };
@@ -1047,8 +1047,8 @@ describe("Cassette — protocol replay", () => {
     expect((deserializeDecision(req, { behavior: "deny", message: "x" }) as any).behavior).toBe("deny");
   });
 
-  // ---- Bug 40: deserializeDecision question branch validates answers instead of blind-casting ----
-  // Cases 1-2: well-formed answers round-trip canon-identically (no spurious O7 fidelity failure).
+  // ---- deserializeDecision question branch validates answers instead of blind-casting ----
+  // Cases 1-2: well-formed answers round-trip canon-identically (no spurious fidelity failure).
   it("round-trip: question with non-empty answers round-trips canon-identically", () => {
     const req: DecisionRequest = {
       id: "r1",
@@ -1078,20 +1078,20 @@ describe("Cassette — protocol replay", () => {
     expect(canon(reEncoded)).toBe(canon(envelope));
   });
 
-  // Cases 3-5: corrupt answers coerce to {} — the O7 guard trips rather than silently coercing.
-  it("corrupt question answers: array coerces to {} (trips O7 guard on re-serialize mismatch)", () => {
+  // Cases 3-5: corrupt answers coerce to {} — the guard trips rather than silently coercing.
+  it("corrupt question answers: array coerces to {} (trips the guard on re-serialize mismatch)", () => {
     const req: DecisionRequest = { id: "r1", kind: "question", questions: [{ question: "Q?", options: [{ label: "yes" }] }] };
     const decoded = deserializeDecision(req, { behavior: "allow", updatedInput: { questions: [], answers: ["yes"] } });
     expect((decoded as any).answers).toEqual({});
   });
 
-  it("corrupt question answers: non-string value coerces to {} (trips O7 guard on re-serialize mismatch)", () => {
+  it("corrupt question answers: non-string value coerces to {} (trips the guard on re-serialize mismatch)", () => {
     const req: DecisionRequest = { id: "r1", kind: "question", questions: [{ question: "Q?", options: [{ label: "yes" }] }] };
     const decoded = deserializeDecision(req, { behavior: "allow", updatedInput: { questions: [], answers: { "Q?": 42 } } });
     expect((decoded as any).answers).toEqual({});
   });
 
-  it("corrupt question answers: missing answers coerces to {} (trips O7 guard on re-serialize mismatch)", () => {
+  it("corrupt question answers: missing answers coerces to {} (trips the guard on re-serialize mismatch)", () => {
     const req: DecisionRequest = { id: "r1", kind: "question", questions: [{ question: "Q?", options: [{ label: "yes" }] }] };
     // answers missing entirely
     const decoded1 = deserializeDecision(req, { behavior: "allow", updatedInput: { questions: [] } });
@@ -1199,7 +1199,7 @@ describe("Cassette — protocol replay", () => {
       // no controlOut
     } as any;
     const r = await replayCassette(cassette);
-    // #5: with AND-semantics, the mixed object is STRIPPED to its active content keys before
+    // with AND-semantics, the mixed object is STRIPPED to its active content keys before
     // evaluation. controlOut is absent → question_asked is not an active content key → stripped out,
     // leaving only {result}. So exactly one assertion is evaluated and it PASSES (result=success).
     // (Previously first-key-wins evaluated question_asked first and false-failed — the bug this fixes.)
@@ -1207,7 +1207,7 @@ describe("Cassette — protocol replay", () => {
     expect(r.assertions[0].pass).toBe(true);
   });
 
-  // ---- C1 regression: nonDeterministic is explicitly false on replay, never undefined (#47 C1 [review-2/M4]) ----
+  // ---- regression: nonDeterministic is explicitly false on replay, never undefined ----
   it("replayCassette result has nonDeterministic === false (explicit, not undefined)", async () => {
     const events = [
       JSON.stringify({ type: "system", subtype: "init", tools: ["Bash"], cwd: "/sessions/x" }),
@@ -1223,8 +1223,8 @@ describe("Cassette — protocol replay", () => {
     expect(r.nonDeterministic).toBe(false);
   });
 
-  // ---- #5 / #1 footgun: loud warning for skipped filesystem/egress/expect_denied assertions ----
-  it("#5: skipped egress/expect_denied assertions emit a loud stderr warning with correct count", async () => {
+  // ---- footgun: loud warning for skipped filesystem/egress/expect_denied assertions ----
+  it("skipped egress/expect_denied assertions emit a loud stderr warning with correct count", async () => {
     const events = [
       JSON.stringify({ type: "system", subtype: "init" }),
       JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "done" }] } }),
@@ -1261,7 +1261,7 @@ describe("Cassette — protocol replay", () => {
     expect(r.assertions.find((a) => a.assertion.egress_denied !== undefined)).toBeUndefined();
   });
 
-  it("#5: a MIXED assertion (content + filesystem) emits a distinct PARTIAL-skip warning — no silent green", async () => {
+  it("a MIXED assertion (content + filesystem) emits a distinct PARTIAL-skip warning — no silent green", async () => {
     const events = [
       JSON.stringify({ type: "system", subtype: "init" }),
       JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "done" }] } }),
@@ -1291,7 +1291,7 @@ describe("Cassette — protocol replay", () => {
     expect(r.assertions.find((a) => a.assertion.file_exists !== undefined)).toBeUndefined();
   });
 
-  it("#5: no warning emitted when there are no skipped assertions", async () => {
+  it("no warning emitted when there are no skipped assertions", async () => {
     const events = [
       JSON.stringify({ type: "system", subtype: "init" }),
       JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "hi" }] } }),
@@ -1312,8 +1312,8 @@ describe("Cassette — protocol replay", () => {
     expect(stderrChunks.join("")).not.toMatch(/filesystem\/egress\/expect_denied/);
   });
 
-  // ---- #36: malformed events.jsonl lines emit a loud warning (not silent skip) ----
-  it("#36: malformed cassette event line emits a stderr warning naming the line index", async () => {
+  // ---- malformed events.jsonl lines emit a loud warning (not silent skip) ----
+  it("malformed cassette event line emits a stderr warning naming the line index", async () => {
     const events = [
       JSON.stringify({ type: "system", subtype: "init" }),
       "NOT_VALID_JSON{{{ malformed", // line 1: unparseable
@@ -1339,7 +1339,7 @@ describe("Cassette — protocol replay", () => {
     expect(r.assertions.find((a) => a.assertion.transcript_contains !== undefined)?.pass).toBe(true);
   });
 
-  // ---- [review-2/M3] Permission-allow round-trip: no explicit updatedInput → defaults to req.input ----
+  // ---- Permission-allow round-trip: no explicit updatedInput → defaults to req.input ----
   // This pins the serializeDecision default behaviour: when the live decider allows a permission but
   // provides no explicit `updatedInput`, serializeDecision falls back to `req.input`. The
   // deserializeDecision must recover the same value so that a replay of such a cassette produces
@@ -1402,8 +1402,8 @@ describe("canon — recursive key-sorting canonicalizer", () => {
   });
 });
 
-// #18 — multi-question gate label: gateAnswers.question joins ALL questions, not just [0]
-describe("Run — #18 multi-question gate label", () => {
+// multi-question gate label: gateAnswers.question joins ALL questions, not just [0]
+describe("Run — multi-question gate label", () => {
   class MockSession2 implements AgentSession {
     constructor(private events: AgentEvent[]) {}
     sendUserTurn() {}
@@ -1452,7 +1452,7 @@ describe("Run — #18 multi-question gate label", () => {
   });
 });
 
-describe("microvmAgentArgs — session persistence (#26)", () => {
+describe("microvmAgentArgs — session persistence", () => {
   const baseline = { spawn: {} } as any;
   const basePlan = { effort: "medium", pluginDirs: [] } as any;
 
@@ -1477,7 +1477,7 @@ describe("microvmAgentArgs — session persistence (#26)", () => {
   });
 });
 
-describe("resolveMaxThinkingTokens — Cowork f7e port (#23, binary-verified)", () => {
+describe("resolveMaxThinkingTokens — Cowork f7e port (binary-verified)", () => {
   const FALLBACK = 31999; // baseline default = DEFAULT_MAX_THINKING_TOKENS (hre)
 
   it("returns the baseline fallback when unset (goldens unchanged)", () => {
@@ -1498,7 +1498,7 @@ describe("resolveMaxThinkingTokens — Cowork f7e port (#23, binary-verified)", 
   });
 });
 
-describe("Run.requestWebFetchApproval — recorded synthetic permission (#30 C3 guard)", () => {
+describe("Run.requestWebFetchApproval — recorded synthetic permission", () => {
   // drive() returns this.rec by reference; requestWebFetchApproval mutates the same record post-drive.
   const resultOnly = () => new MockSession([{ type: "result", isError: false }]);
 

@@ -7,7 +7,7 @@ import { compareBaselineVersions, loadBaseline, resolveAgentBinary, resolveMount
 import type { PlatformBaseline } from "../src/types.js";
 import { decodeFcacheGates, sync, checkMountModeFacts, checkWebFetchFacts } from "../src/sync/cowork-sync.js";
 
-describe("#40 — compareBaselineVersions (semver-aware baseline sort)", () => {
+describe("compareBaselineVersions (semver-aware baseline sort)", () => {
   it("picks desktop-1.10.json over desktop-1.9.json (lexical sort would fail)", () => {
     const files = ["desktop-1.9.json", "desktop-1.10.json", "desktop-1.2.json"];
     files.sort(compareBaselineVersions);
@@ -71,7 +71,7 @@ describe("loadBaseline — name resolution", () => {
   });
 });
 
-describe("#39 — decodeFcacheGates (GrowthBook fcache decode, binary-verified format)", () => {
+describe("decodeFcacheGates (GrowthBook fcache decode, binary-verified format)", () => {
   // Reproduce the verified container format: "CLF" + version byte + 4-byte field, then a gzip stream.
   const makeFcache = (features: Record<string, unknown>): string => {
     const gz = gzipSync(Buffer.from(JSON.stringify({ timestamp: 1, features }), "utf8"));
@@ -104,7 +104,7 @@ describe("#39 — decodeFcacheGates (GrowthBook fcache decode, binary-verified f
     expect(decodeFcacheGates(bad)).toBeNull();
   });
 
-  // bug 71 precondition: a valid CLF fcache whose features contain ONLY non-pinned IDs returns {}
+  // precondition: a valid CLF fcache whose features contain ONLY non-pinned IDs returns {}
   // (empty object), NOT null. This is the load-bearing precondition for the sync() else-if guard —
   // {} is truthy so the !gates branch was silently bypassed, leaving a total GrowthBook re-key invisible.
   it("returns {} (not null) when the fcache decodes but contains only non-pinned gate IDs", () => {
@@ -117,7 +117,7 @@ describe("#39 — decodeFcacheGates (GrowthBook fcache decode, binary-verified f
   });
 });
 
-describe("#42 — cowork-sync platform guard", () => {
+describe("cowork-sync platform guard", () => {
   it("throws a clear macOS-only error on a non-macOS platform (no silent empty baseline)", () => {
     const orig = process.platform;
     Object.defineProperty(process, "platform", { value: "linux", configurable: true });
@@ -129,7 +129,7 @@ describe("#42 — cowork-sync platform guard", () => {
   });
 });
 
-describe("#9-A — checkMountModeFacts (mount-mode drift guard for the hand-authored baseline)", () => {
+describe("checkMountModeFacts (mount-mode drift guard for the hand-authored baseline)", () => {
   // a synthetic bundle carrying both binary-verified mode facts (the IX delete-deny resolver + uploads ro)
   const ok = 'function IX(A,e,t){return t?"rw":e!=null&&e.includes(A)?"rwd":"rw"} … l[Es("uploads")]={path:wa(i),mode:"ro"}';
   it("returns no flags when both mode facts are present", () => {
@@ -218,7 +218,7 @@ describe("resolveAgentBinary newest-sibling fallback", () => {
   });
 });
 
-describe("resolveMounts — mntRoot derivation (bug 65)", () => {
+describe("resolveMounts — mntRoot derivation", () => {
   const mountLayoutWith = (sessionRoot: string, mntRoot?: string) =>
     ({
       mountLayout: { sessionRoot, cwd: sessionRoot, mntRoot, mounts: [] },

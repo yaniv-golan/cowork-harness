@@ -7,10 +7,10 @@ import { isHostFsSealed, boundaryAllowList } from "../src/boundary.js";
 import { loadBaseline } from "../src/baseline.js";
 import { clampTimeout } from "../src/hostloop/workspace-handler.js";
 
-// Token-free, spawn-free coverage for the misc bug-hunt fixes (#23, #24, #35, #29).
+// Token-free, spawn-free coverage for the misc bug-hunt fixes.
 
-// #23 — readSessionManifest: valid / corrupt-JSON / missing-key.
-describe("execute — readSessionManifest (#23)", () => {
+// readSessionManifest: valid / corrupt-JSON / missing-key.
+describe("execute — readSessionManifest", () => {
   const write = (content: string): string => {
     const dir = mkdtempSync(join(tmpdir(), "cowork-manifest-"));
     const f = join(dir, "session.json");
@@ -39,8 +39,8 @@ describe("execute — readSessionManifest (#23)", () => {
   });
 });
 
-// #24 — hostPathLeaked: broadened to /home/ and /root/ for Linux CI, must NOT flag in-VM paths.
-describe("execute — hostPathLeaked (#24)", () => {
+// hostPathLeaked: broadened to /home/ and /root/ for Linux CI, must NOT flag in-VM paths.
+describe("execute — hostPathLeaked", () => {
   it("flags a Linux host path under /home/", () => {
     expect(hostPathLeaked("/home/runner/work/x")).toBe(true);
   });
@@ -74,7 +74,7 @@ describe("execute — hostPathLeaked (#24)", () => {
     expect(hostPathLeaked("file:///sessions/abc/mnt/outputs/y.md")).toBe(false);
   });
 
-  // #48: URL-encoded and backslash forms are now decoded/normalized before matching.
+  // URL-encoded and backslash forms are now decoded/normalized before matching.
   it("flags a URL-encoded host path (%2FUsers%2F…)", () => {
     expect(hostPathLeaked("link=%2FUsers%2Falice%2Fsecret")).toBe(true);
   });
@@ -87,7 +87,7 @@ describe("execute — hostPathLeaked (#24)", () => {
   });
 });
 
-// #29 — scanEvents output-delete detector, broadened beyond rm/mv to python/find/etc.
+// scanEvents output-delete detector, broadened beyond rm/mv to python/find/etc.
 describe("execute — scanEvents output-delete detection", () => {
   const bash = (command: string) =>
     JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name: "Bash", input: { command } }] } });
@@ -107,7 +107,7 @@ describe("execute — scanEvents output-delete detection", () => {
     expect(scanOf(["cat outputs/report.json"]).length).toBe(0);
     expect(scanOf(["rm /tmp/scratch"]).length).toBe(0); // delete, but not under outputs/
   });
-  it("F-4: the stored finding surfaces the rm itself (resolved), not a leading VAR= assignment block", () => {
+  it("the stored finding surfaces the rm itself (resolved), not a leading VAR= assignment block", () => {
     // A long assignment prefix before the rm used to push the operative command past the 120-char slice,
     // so the finding showed only `ARTIFACTS_ROOT=… ANALYSIS_DIR=…`. The snippet now isolates the delete and
     // resolves $ANALYSIS_DIR.
@@ -121,8 +121,8 @@ describe("execute — scanEvents output-delete detection", () => {
   });
 });
 
-// #35 — isHostFsSealed: environment-agnostic negative guard.
-describe("boundary — isHostFsSealed (#35)", () => {
+// isHostFsSealed: environment-agnostic negative guard.
+describe("boundary — isHostFsSealed", () => {
   it("passes when the probe is a denial with NONE of the host markers", () => {
     expect(isHostFsSealed("ls: /Users: No such file or directory")).toBe(true);
   });
@@ -137,7 +137,7 @@ describe("boundary — isHostFsSealed (#35)", () => {
   });
 });
 
-describe("boundary — isHostFsSealed split-probe AND-semantics (#25)", () => {
+describe("boundary — isHostFsSealed split-probe AND-semantics", () => {
   // The fix in runBoundaryChecks uses TWO independent probes (outUsers, outHost) and requires
   // BOTH to be sealed (isHostFsSealed(outUsers) && isHostFsSealed(outHost)).
   // This unit test guards that pure AND-combine so a leak on EITHER path fails the check.
@@ -176,8 +176,8 @@ describe("boundary — boundaryAllowList folds in session egress", () => {
   });
 });
 
-// #29 — clampTimeout bounds.
-describe("workspace-handler — clampTimeout (#29)", () => {
+// clampTimeout bounds.
+describe("workspace-handler — clampTimeout", () => {
   it("defaults a missing/NaN value to 120000", () => {
     expect(clampTimeout(undefined)).toBe(120000);
     expect(clampTimeout("abc")).toBe(120000);

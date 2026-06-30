@@ -11,15 +11,15 @@ import {
   type WebFetchProvenance,
 } from "../src/hostloop/workspace-handler.js";
 
-// Token-free, network-free coverage for #39 (DNS-rebind TOCTOU / address pinning) and
-// #40 (Docker infra-error classification). Both drive the real handler; #40 uses a fake
+// Token-free, network-free coverage for DNS-rebind TOCTOU / address pinning and
+// Docker infra-error classification. Both drive the real handler; the infra-error path uses a fake
 // `runner` binary so the `docker exec` infra-failure shape is exercised without Docker.
 
 // ---------------------------------------------------------------------------------------------
-// #39 — the SSRF backstop resolves ONCE and PINS the fetch to that vetted address, so a host that
+// The SSRF backstop resolves ONCE and PINS the fetch to that vetted address, so a host that
 // answers public for the check can't be re-resolved to a private address by the fetch (DNS rebind).
 // ---------------------------------------------------------------------------------------------
-describe("#39 — web_fetch pins the fetch to the SSRF-vetted address (no second resolution)", () => {
+describe("web_fetch pins the fetch to the SSRF-vetted address (no second resolution)", () => {
   // Path B (provenance off) driver: inject the per-hop fetch + resolver (spawn-free).
   const callB = async (url: string, allow: string[], rawFetch: RawFetch, resolve: Resolver) => {
     const egress: EgressEntry[] = [];
@@ -97,10 +97,10 @@ describe("#39 — web_fetch pins the fetch to the SSRF-vetted address (no second
 });
 
 // ---------------------------------------------------------------------------------------------
-// #40 — a `docker exec` infra failure that exits NON-ZERO WITH stderr must be classified as infra:
+// A `docker exec` infra failure that exits NON-ZERO WITH stderr must be classified as infra:
 // recorded to the run log, and a GENERIC error returned to the model (no verbatim daemon text).
 // ---------------------------------------------------------------------------------------------
-describe("#40 — isExecInfraError classifier", () => {
+describe("isExecInfraError classifier", () => {
   it("catches timeouts and kills regardless of output (preserved behavior)", () => {
     expect(isExecInfraError({ code: "ETIMEDOUT" })).toBe(true);
     expect(isExecInfraError({ killed: true, stderr: "partial" })).toBe(true);
@@ -120,7 +120,7 @@ describe("#40 — isExecInfraError classifier", () => {
     expect(isExecInfraError({ code: 1, stderr: "bash: nonexistent: command not found" })).toBe(false);
     expect(isExecInfraError({ code: 2, stdout: "", stderr: "grep: no match" })).toBe(false);
   });
-  // Adversarial-review P2: the bare phrases "is not running" / "no such container" must NOT misclassify a
+  // The bare phrases "is not running" / "no such container" must NOT misclassify a
   // legitimate command's own output (e.g. a service status check) as a docker infra failure — they count
   // only on a docker ERROR line, not anywhere in arbitrary stderr.
   it("does NOT misclassify a legit command whose output merely contains the docker phrases", () => {
@@ -131,7 +131,7 @@ describe("#40 — isExecInfraError classifier", () => {
   });
 });
 
-describe("#40 — execInContainer surfaces infra failures generically (not verbatim daemon text)", () => {
+describe("execInContainer surfaces infra failures generically (not verbatim daemon text)", () => {
   // A fake `runner` that mimics `docker exec` against a missing container: exit 125 with the daemon's
   // error on stderr. The handler must NOT relay that text to the model, and must call onInfraError.
   const makeFakeRunner = (script: string): string => {
@@ -175,10 +175,10 @@ describe("#40 — execInContainer surfaces infra failures generically (not verba
 });
 
 // ---------------------------------------------------------------------------------------------
-// Bug 15 — spawn failure where e.code is a STRING (e.g. ENOENT, EACCES) must be classified as infra.
+// Spawn failure where e.code is a STRING (e.g. ENOENT, EACCES) must be classified as infra.
 // The old `!e.code` guard fails because a non-empty string is truthy.
 // ---------------------------------------------------------------------------------------------
-describe("#bug15 — isExecInfraError catches string error codes (spawn failures)", () => {
+describe("isExecInfraError catches string error codes (spawn failures)", () => {
   it("catches a spawn failure where code is a string (ENOENT)", () => {
     expect(isExecInfraError({ code: "ENOENT", stdout: "", stderr: "" })).toBe(true);
   });
@@ -188,10 +188,10 @@ describe("#bug15 — isExecInfraError catches string error codes (spawn failures
 });
 
 // ---------------------------------------------------------------------------------------------
-// Bug 44 — bare exit-125 (no daemon stderr) must NOT be classified as infra. Real Docker daemon
+// Bare exit-125 (no daemon stderr) must NOT be classified as infra. Real Docker daemon
 // failures that exit 125 still classify via the daemon-stderr arm.
 // ---------------------------------------------------------------------------------------------
-describe("#bug44 — bare exit 125 without daemon stderr is not an infra error", () => {
+describe("bare exit 125 without daemon stderr is not an infra error", () => {
   it("does NOT classify a bare exit 125 (no daemon stderr) as infra", () => {
     expect(isExecInfraError({ code: 125, stdout: "", stderr: "" })).toBe(false);
     expect(isExecInfraError({ code: 125, stderr: "usage: myprog [options]" })).toBe(false);
@@ -202,11 +202,11 @@ describe("#bug44 — bare exit 125 without daemon stderr is not an infra error",
 });
 
 // ---------------------------------------------------------------------------------------------
-// Bug 16 — non-stream fallback path (resp.body == null) must append [truncated] when:
+// Non-stream fallback path (resp.body == null) must append [truncated] when:
 //   (a) the pinned-path flag resp.truncated is true (pinnedRequest capped the buffer), OR
 //   (b) the raw text exceeds LIMIT (over-long fake).
 // ---------------------------------------------------------------------------------------------
-describe("#bug16 — web_fetch non-stream path appends [truncated] marker when response was capped", () => {
+describe("web_fetch non-stream path appends [truncated] marker when response was capped", () => {
   const WEB_FETCH_BYTE_CAP = 200000;
   const callPathB = async (rawFetch: RawFetch) => {
     const h = makeWorkspaceHandler("c", "/mnt", "docker", ["example.com"], undefined, undefined, undefined, rawFetch, async () => [
@@ -244,9 +244,9 @@ describe("#bug16 — web_fetch non-stream path appends [truncated] marker when r
 });
 
 // ---------------------------------------------------------------------------------------------
-// Bug 45 — resp.body?.cancel() is called on the redirect hop so undici streams are drained.
+// resp.body?.cancel() is called on the redirect hop so undici streams are drained.
 // ---------------------------------------------------------------------------------------------
-describe("#bug45 — followWithRedirects drains the response body stream on redirect hops", () => {
+describe("followWithRedirects drains the response body stream on redirect hops", () => {
   it("calls cancel() on a redirect hop body stream and resolves to the final response", async () => {
     const cancelSpy = { called: false };
     const fakeStream = {

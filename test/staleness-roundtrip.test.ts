@@ -10,8 +10,8 @@ import { loadBaseline } from "../src/baseline.js";
 // compares the record's baseline to loadBaseline("latest").appVersion, so record AT latest.
 const LIVE_BASELINE = loadBaseline("latest").appVersion;
 
-// L1 INVARIANT (staleness redesign, Phase A): record → verify the SAME tree ⇒ GREEN, and an out-of-band
-// OS-junk touch must NOT re-stale (the H9 fix). This is the durable backstop: if any future change makes a
+// L1 INVARIANT (staleness redesign): record → verify the SAME tree ⇒ GREEN, and an out-of-band
+// OS-junk touch must NOT re-stale. This is the durable backstop: if any future change makes a
 // freshly-recorded cassette report stale, or makes a .DS_Store drift count, this test fails.
 
 function skillTree(): { root: string; session: string; pluginDir: string } {
@@ -34,12 +34,12 @@ describe("staleness round-trip invariant (L1)", () => {
     expect(checkStaleness(cassetteFor(fp), root)).toEqual([]); // unchanged ⇒ fresh
   });
 
-  it("H9 — an OS-junk touch (.DS_Store created, then rewritten) does NOT re-stale", () => {
+  it("an OS-junk touch (.DS_Store created, then rewritten) does NOT re-stale", () => {
     const { root, session, pluginDir } = skillTree();
     const fp = buildFingerprint(session, LIVE_BASELINE, root);
     // Finder writes a .DS_Store after record…
     writeFileSync(join(pluginDir, ".DS_Store"), "\x00\x01finder");
-    expect(checkStaleness(cassetteFor(fp), root)).toEqual([]); // still fresh — the H9 fix
+    expect(checkStaleness(cassetteFor(fp), root)).toEqual([]); // still fresh — the tracked-only fix
     // …and rewrites it later (icon moved)
     writeFileSync(join(pluginDir, ".DS_Store"), "\x00\x02finder-moved");
     expect(checkStaleness(cassetteFor(fp), root)).toEqual([]); // still fresh
@@ -54,7 +54,7 @@ describe("staleness round-trip invariant (L1)", () => {
     expect(msgs.join(" ")).toMatch(/changed since record/);
   });
 
-  it("holds under F-6 skill scoping too (scoped record → scoped verify ⇒ green; OS-junk drift ⇒ green)", () => {
+  it("holds under skill scoping too (scoped record → scoped verify ⇒ green; OS-junk drift ⇒ green)", () => {
     const { root, session, pluginDir } = skillTree();
     const fp = buildFingerprint(session, LIVE_BASELINE, root, ["cap-table"]);
     expect(checkStaleness(cassetteFor(fp, ["cap-table"]), root)).toEqual([]);

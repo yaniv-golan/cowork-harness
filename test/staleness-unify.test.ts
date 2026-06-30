@@ -13,10 +13,11 @@ import {
 import { loadBaseline } from "../src/baseline.js";
 import type { Fingerprint } from "../src/types.js";
 
-// Coverage for the staleness UNIFICATION (computeStaleness): the gaps the §7 plan called out that the first
-// implementation pass left untested — Finding 2 (replay carries the per-file detail), Finding 3 (a GITSET /
-// agent-scope FLIP is classed `format`, not misattributed to skill/shared), D5 on the replay lane, and the D6
-// defensive guard. The both-buckets masking fix + agentScope path attribution live in verify-cassettes.test.ts.
+// Coverage for the staleness UNIFICATION (computeStaleness): the gaps the plan called out that the first
+// implementation pass left untested — replay carries the per-file detail, a GITSET / agent-scope FLIP is
+// classed `format` (not misattributed to skill/shared), non-scoped replay names changed files, and the
+// defensive guard for a corrupt fingerprint. The both-buckets masking fix + agentScope path attribution live
+// in verify-cassettes.test.ts.
 
 const LIVE = loadBaseline("latest").appVersion;
 
@@ -64,7 +65,7 @@ function cassetteFor(sessionPath: string, fp: Fingerprint, skills?: string[]): C
   } as unknown as Cassette;
 }
 
-describe("staleness unification — replay lane inherits the per-file detail (Finding 2)", () => {
+describe("staleness unification — replay lane inherits the per-file detail", () => {
   it("a scoped replay surfaces the `[N changed (paths)]` detail (not just a bucket label)", async () => {
     mute();
     const { root, sessionPath } = scopedRoot();
@@ -73,11 +74,11 @@ describe("staleness unification — replay lane inherits the per-file detail (Fi
     const r = await replayCassette(cassetteFor(sessionPath, fp, ["alpha"]), [], { cassetteDir: root });
     const skillMsg = r.staleness?.find((s) => s.class === "skill");
     expect(skillMsg).toBeDefined();
-    expect(skillMsg!.message).toMatch(/\[\d+ changed/); // Finding 2: detail present on the replay lane
+    expect(skillMsg!.message).toMatch(/\[\d+ changed/); // detail present on the replay lane
     expect(skillMsg!.message).toMatch(/SKILL\.md/);
   });
 
-  it("a NON-scoped replay names the changed files (D5 on the replay lane)", async () => {
+  it("a NON-scoped replay names the changed files (on the replay lane)", async () => {
     mute();
     const { root, sessionPath } = scopedRoot();
     // No `skills:` ⇒ whole-tree (non-scoped) fingerprint.
@@ -91,7 +92,7 @@ describe("staleness unification — replay lane inherits the per-file detail (Fi
   });
 });
 
-describe("staleness unification — flips are classed `format`, not skill drift (Finding 3)", () => {
+describe("staleness unification — flips are classed `format`, not skill drift", () => {
   it("an agent-scope FLIP yields a `format` finding, never shared-root/skill", () => {
     const prev = process.env.COWORK_HARNESS_AGENT_SCOPE;
     delete process.env.COWORK_HARNESS_AGENT_SCOPE; // record with agent-scope OFF
@@ -101,7 +102,7 @@ describe("staleness unification — flips are classed `format`, not skill drift 
       process.env.COWORK_HARNESS_AGENT_SCOPE = "skill"; // verify with agent-scope ON ⇒ flip
       const findings = computeStaleness(cassetteFor(sessionPath, fp, ["alpha"]), root);
       expect(findings.some((f) => f.class === "format" && /agent-scope/.test(f.message))).toBe(true);
-      // Finding 3 regression guard: the flip is NOT misattributed to a skill-source class.
+      // regression guard: the flip is NOT misattributed to a skill-source class.
       expect(findings.some((f) => f.class === "shared-root" || f.class === "skill")).toBe(false);
     } finally {
       if (prev === undefined) delete process.env.COWORK_HARNESS_AGENT_SCOPE;
@@ -112,14 +113,14 @@ describe("staleness unification — flips are classed `format`, not skill drift 
   });
 });
 
-describe("staleness unification — D6 defensive guard", () => {
+describe("staleness unification — defensive guard", () => {
   it("a corrupt fingerprint (sharedHash set, skillScope missing) does not throw", () => {
     mute();
     const { root, sessionPath } = scopedRoot();
     const fp = buildFingerprint(sessionPath, LIVE, root, ["alpha"]) as Fingerprint & { skillScope?: string[] };
     expect(fp.sharedHash).toBeDefined();
     expect(fp.skillScope).toBeDefined();
-    // Simulate a hand-corrupted on-disk cassette: sharedHash present, skillScope absent (the unreachable D6
+    // Simulate a hand-corrupted on-disk cassette: sharedHash present, skillScope absent (the unreachable
     // shape). The `?? []` guard must keep the non-null access sound rather than NPE.
     delete fp.skillScope;
     writeFileSync(join(root, "plugin", "skills", "alpha", "SKILL.md"), "# alpha v2\n"); // force a skillHash diff

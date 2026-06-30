@@ -71,60 +71,60 @@ describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
     expect(r.json?.error?.message).toMatch(/--decider-dir/);
   });
 
-  it("#3 — invalid --on-unanswered value → usage error fail|prompt|first, exit 2", () => {
+  it("invalid --on-unanswered value → usage error fail|prompt|first, exit 2", () => {
     const r = run(["skill", "./x", "hi", "--on-unanswered", "banana", "--output-format", "json"]);
     expect(r.code).toBe(2);
     expect(r.json?.error?.category).toBe("usage");
     expect(r.json?.error?.message).toMatch(/must be fail\|prompt\|first/);
   });
 
-  it("#2 — invalid --output-format value → exit 2 (not silently treated as text)", () => {
+  it("invalid --output-format value → exit 2 (not silently treated as text)", () => {
     const r = run(["skill", "./x", "hi", "--output-format", "xml"]);
     expect(r.code).toBe(2);
     expect(r.stderr).toMatch(/--output-format must be/);
   });
 
-  it("#6 — invalid --fidelity → usage (not internal), exit 2", () => {
+  it("invalid --fidelity → usage (not internal), exit 2", () => {
     const r = run(["skill", "./x", "hi", "--fidelity", "bogus", "--output-format", "json"]);
     expect(r.code).toBe(2);
     expect(r.json?.error?.category).toBe("usage"); // was `internal` (Zod throw → top-level catch)
     expect(r.json?.error?.message).toMatch(/--fidelity must be one of/);
   });
 
-  it("#5 — extra skill positional → usage error, exit 2", () => {
+  it("extra skill positional → usage error, exit 2", () => {
     const r = run(["skill", "./x", "hi", "stray-extra", "--output-format", "json"]);
     expect(r.code).toBe(2);
     expect(r.json?.error?.category).toBe("usage");
     expect(r.json?.error?.message).toMatch(/unexpected extra argument/);
   });
 
-  it("#14 — decide with both --decider-llm and --decider-cmd → usage conflict, exit 2", () => {
+  it("decide with both --decider-llm and --decider-cmd → usage conflict, exit 2", () => {
     const r = run(["decide", "--decider-llm", "--decider-cmd", "cat", "--output-format", "json"]);
     expect(r.code).toBe(2);
     expect(r.json?.error?.category).toBe("usage");
     expect(r.json?.error?.message).toMatch(/conflicts with --decider-cmd/);
   });
 
-  it("#13 — decide rejects --decider-dir loudly (not silently ignored), exit 2", () => {
+  it("decide rejects --decider-dir loudly (not silently ignored), exit 2", () => {
     const r = run(["decide", "--decider-dir", "/tmp/x", "--output-format", "json"]);
     expect(r.code).toBe(2);
     expect(r.json?.error?.category).toBe("usage");
     expect(r.json?.error?.message).toMatch(/does not support --decider-dir/);
   });
 
-  it.skipIf(process.platform !== "darwin")("#11 — vm with an invalid subcommand exits non-zero (not 0)", () => {
+  it.skipIf(process.platform !== "darwin")("vm with an invalid subcommand exits non-zero (not 0)", () => {
     const r = run(["vm", "bogus-subcommand"]);
     expect(r.code).toBe(2);
     expect(r.stderr).toMatch(/usage: vm/);
   });
 
-  it("#4 — --dotenv with a command name as its value is rejected, exit 2", () => {
+  it("--dotenv with a command name as its value is rejected, exit 2", () => {
     const r = run(["--dotenv", "run", "x.yaml"]);
     expect(r.code).toBe(2);
     expect(r.stderr).toMatch(/--dotenv requires a path/);
   });
 
-  it("#4 — --dotenv with a missing file fails (not silently ignored), exit 2", () => {
+  it("--dotenv with a missing file fails (not silently ignored), exit 2", () => {
     const r = run(["--dotenv", "/no/such/file.env", "list"]);
     expect(r.code).toBe(2);
     expect(r.stderr).toMatch(/--dotenv file not found/);
@@ -133,7 +133,7 @@ describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
   it("--on-unanswered llm (the LLM decider's CLI flag is --decider-llm) → usage error redirecting to --decider-llm, exit 2", () => {
     // The LLM decider has two spellings: --decider-llm on the CLI and on_unanswered: llm in scenario YAML.
     // The bare --on-unanswered llm CLI flag is rejected at resolvePolicy to keep deciders in the --decider-*
-    // family (and on `run` it would silently degrade to fail). (Issue 2)
+    // family (and on `run` it would silently degrade to fail).
     const r = run(["skill", "./x", "hi", "--on-unanswered", "llm", "--output-format", "json"]);
     expect(r.code).toBe(2);
     expect(r.json?.error?.category).toBe("usage");
@@ -148,7 +148,7 @@ describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
       "stage|seed|series=Series A",
       "--question",
       "Please confirm the seed stage",
-      // #49: the scripted choice must be an offered option — declare it (a real gate would offer it).
+      // the scripted choice must be an offered option — declare it (a real gate would offer it).
       "--option",
       "Series A",
       "--option",
@@ -172,7 +172,7 @@ describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
     writeIn(cwd, "sess.yaml", "permission_mode: default\n");
     writeIn(cwd, "b.yaml", "name: b\nbaseline: latest\nsession: ./sess.yaml\nfidelity: protocol\nprompt: hi\nexpect_denied: [evil.com]\n");
     const r = spawnSync("node", [CLI, "run", "b.yaml", "--output-format=json"], { encoding: "utf8", cwd });
-    expect(r.status).toBe(3); // R7: boundary violations → exit 3 (integrity, not usage)
+    expect(r.status).toBe(3); // boundary violations → exit 3 (integrity, not usage)
     expect(JSON.parse(r.stdout).error.category).toBe("boundary");
   });
 
@@ -182,7 +182,7 @@ describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
     writeIn(cwd, "sess.yaml", "permission_mode: default\n");
     writeIn(cwd, "b.yaml", "name: b\nprofile: latest\nsession: ./sess.yaml\nfidelity: protocol\nprompt: hi\nexpect_denied: [evil.com]\n");
     const r = spawnSync("node", [CLI, "run", "b.yaml", "--output-format=json"], { encoding: "utf8", cwd });
-    expect(r.status).toBe(3); // R7: boundary → exit 3; alias still mapped profile→baseline
+    expect(r.status).toBe(3); // boundary → exit 3; alias still mapped profile→baseline
     expect(JSON.parse(r.stdout).error.category).toBe("boundary");
     expect(r.stderr).toMatch(/`profile:` is deprecated/); // the deprecation warning fired
   });
@@ -626,7 +626,7 @@ describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
   });
 });
 
-// Fix 1/2 at the CLI seam: the unit test calls replayCassette() directly, so it can't catch a missing
+// At the CLI seam: the unit test calls replayCassette() directly, so it can't catch a missing
 // cmdReplay→replayCassette opt wiring (a real bug caught only at the binary). These spawn the built CLI.
 describe.skipIf(!can)("replay staleness JSON + --fail-on-skill-drift (CLI wiring)", () => {
   const LIVE = loadBaseline("latest").appVersion;

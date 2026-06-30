@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 
-// F-1: verify-run re-evaluates a scenario's assert: against a kept run dir with NO live agent. Spawn-based
+// verify-run re-evaluates a scenario's assert: against a kept run dir with NO live agent. Spawn-based
 // (like cli-help.test.ts); needs dist/cli.js (the `ci` script builds before testing); skips otherwise.
 const CLI = resolve("dist/cli.js");
 const can = existsSync(CLI);
@@ -123,7 +123,7 @@ function verifyRun(runDir: string, scenario: string) {
   return { code: r.status, text: (r.stderr || "") + (r.stdout || "") };
 }
 
-describe.skipIf(!can)("F-1: verify-run re-asserts a kept run dir without a live agent", () => {
+describe.skipIf(!can)("verify-run re-asserts a kept run dir without a live agent", () => {
   it("passes when every assertion holds (transcript + artifact_json + expect_denied)", () => {
     const run = keptRun();
     const sc = scenarioFile(
@@ -227,7 +227,7 @@ describe.skipIf(!can)("F-1: verify-run re-asserts a kept run dir without a live 
     expect(code).toBe(0);
   });
 
-  // Phase B — evidence manifest in the verify-run lane: a partial/old result.json that OMITS an evidence
+  // evidence manifest in the verify-run lane: a partial/old result.json that OMITS an evidence
   // field must FAIL the corresponding negative/absence assertion loud (no false-green), while a field that
   // is present-but-empty (the real proof-of-absence shape) must still GREEN it.
   it("FAILS with 'evidence unavailable' when toolResults is absent and tool_result_not_contains is asserted", () => {

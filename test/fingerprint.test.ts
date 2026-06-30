@@ -17,7 +17,7 @@ function sessionWithSkill(): { sessionPath: string; skillFile: string; root: str
   return { sessionPath, skillFile, root };
 }
 
-describe("B0 — buildFingerprint skillHash", () => {
+describe("buildFingerprint skillHash", () => {
   it("computes a non-empty skillHash for a file-based session with a local skill dir", () => {
     const { sessionPath } = sessionWithSkill();
     const fp = buildFingerprint(sessionPath, "1.0.0");
@@ -33,7 +33,7 @@ describe("B0 — buildFingerprint skillHash", () => {
     expect(after).not.toBe(before);
   });
 
-  it("changes the skillHash when a skill file MOVES to a subdir (relative path, not basename) — S2", () => {
+  it("changes the skillHash when a skill file MOVES to a subdir (relative path, not basename)", () => {
     const { sessionPath, root } = sessionWithSkill();
     const skillDir = join(root, "myskill");
     writeFileSync(join(skillDir, "config.json"), '{"k":1}');
@@ -46,7 +46,7 @@ describe("B0 — buildFingerprint skillHash", () => {
     expect(after).not.toBe(before);
   });
 
-  it("writes skillSources RELATIVE, never absolute host paths — C1", () => {
+  it("writes skillSources RELATIVE, never absolute host paths", () => {
     const { sessionPath } = sessionWithSkill();
     const fp = buildFingerprint(sessionPath, "1.0.0");
     expect(fp.skillSources).toBeDefined();

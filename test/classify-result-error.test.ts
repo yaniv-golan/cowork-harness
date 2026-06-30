@@ -14,7 +14,7 @@ class MockSession implements AgentSession {
   close() {}
 }
 
-describe("Fix 5 — classifyResultError (transport vs agent)", () => {
+describe("classifyResultError (transport vs agent)", () => {
   it("result-is_error path: transport iff the signature matches, NO prior-result gate", () => {
     expect(classifyResultError("result", "error_during_execution API Error: Connection closed", false)).toBe("transport");
     expect(classifyResultError("result", "socket hang up", false)).toBe("transport");
@@ -36,7 +36,7 @@ describe("Fix 5 — classifyResultError (transport vs agent)", () => {
   });
 });
 
-describe("Fix 5 — Run.drive sets rec.resultErrorKind end-to-end", () => {
+describe("Run.drive sets rec.resultErrorKind end-to-end", () => {
   const drive = (events: AgentEvent[]) => new Run(new MockSession(events), new ScriptedDecider([])).drive("go");
 
   it("a transport-signatured is_error result → result:error + resultErrorKind:transport", async () => {

@@ -4,7 +4,7 @@ import { computeVerdict } from "../src/run/verdict.js";
 import { loadBaseline } from "../src/baseline.js";
 import type { Fingerprint } from "../src/types.js";
 
-// Fix 1/2 (founder-skills CI-recipe feedback): replay must surface class-tagged `staleness[]` and
+// (founder-skills CI-recipe feedback): replay must surface class-tagged `staleness[]` and
 // `skippedAssertions` in the RunResult so a token-free JSON gate can see staleness WITHOUT it flipping the
 // verdict by default; `--fail-on-skill-drift` then fails on skill-source classes only.
 
@@ -46,7 +46,7 @@ const cassette = (fingerprint: Fingerprint, assert: unknown[] = [{ result: "succ
 
 const ok = (r: Awaited<ReturnType<typeof replayCassette>>) => computeVerdict(r, "replay").pass;
 
-describe("replay surfaces class-tagged staleness in the JSON RunResult (Fix 1)", () => {
+describe("replay surfaces class-tagged staleness in the JSON RunResult", () => {
   it("a moved baseline → a non-failing `baseline` finding, ok stays true (default gate)", async () => {
     mute();
     const r = await replayCassette(cassette({ baseline: "0.0.0-stale-not-live" }));
@@ -72,7 +72,7 @@ describe("replay surfaces class-tagged staleness in the JSON RunResult (Fix 1)",
   });
 });
 
-describe("--fail-on-skill-drift gates on skill-source classes only (Fix 2)", () => {
+describe("--fail-on-skill-drift gates on skill-source classes only", () => {
   it("fails on a skill/shared-root drift but a baseline-only drift stays green", async () => {
     mute();
     const baselineOnly = await replayCassette(cassette({ baseline: "0.0.0-stale-not-live" }), [], { failOnSkillDrift: true });
