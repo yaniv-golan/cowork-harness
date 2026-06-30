@@ -6,6 +6,13 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+
+- **`run` now accepts `--keep` as an explicit no-op** instead of erroring. `--keep` is meaningful on
+  `skill` (which otherwise discards runs); `run` always keeps runs, so passing `--keep` (muscle memory
+  from `skill`) prints a one-line note that it had no effect rather than the loud "unexpected argument"
+  reject. Exact-token only — a genuinely unexpected flag still rejects loudly.
+
 ### Fixed
 
 - **Human output no longer prints absolute `$HOME` paths.** The `runs →` location line, the `--keep`

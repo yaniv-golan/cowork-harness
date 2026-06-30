@@ -913,7 +913,14 @@ async function cmdRun(rawArgs: string[]) {
       if (deciderModel === "") fail("run", "usage", "--decider-model requires a non-empty value", undefined, isJsonOutput(rawArgs));
     } else preArgs.push(a);
   }
-  const { rest: args, flags } = takeCommonFlags(preArgs, "run");
+  const { rest: rawRest, flags } = takeCommonFlags(preArgs, "run");
+  // F6: `--keep` is meaningful on `skill` (runs are otherwise discarded) but `run` ALWAYS keeps runs.
+  // Accept it as an explicit no-op (EXACT-token only — it takes no value, so an exact match can't
+  // swallow a real arg) instead of the loud reject below, so muscle memory from `skill` doesn't error.
+  // Note it so the no-effect is visible.
+  const keepRequested = rawRest.includes("--keep");
+  const args = rawRest.filter((a) => a !== "--keep");
+  if (keepRequested) log("note: `run` always keeps runs (under the runs root); --keep is a no-op here.");
   const target = args[0];
   if (!target) fail("run", "usage", "usage: run <scenario.yaml | dir/>", undefined, flags.output === "json");
   // `takeCommonFlags` strips known flags; `run` takes exactly one positional (a scenario file or a
