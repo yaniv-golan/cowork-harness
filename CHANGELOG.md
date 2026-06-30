@@ -8,6 +8,10 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **Human output no longer prints absolute `$HOME` paths.** The `runs →` location line, the `--keep`
+  run-dir/outputs lines, the `scaffold` tip, and the failure `→ full run:` line now collapse a leading
+  `$HOME` to `~`, so a screenshot / pasted log / bug report doesn't leak your username and filesystem
+  layout. Display-only (`~` re-expands in a shell); set `COWORK_HARNESS_RUNS_DIR` for full neutralization.
 - **A plugin/skill mounted from an untracked git working copy no longer fails silently.** Staging delivers
   the git-**tracked** set (the fidelity boundary — real Cowork installs from a repo and sees only committed
   files), but an all-untracked source used to mount **EMPTY** with no signal: the agent reported "the skill

@@ -1,4 +1,4 @@
-import { warn } from "../io.js";
+import { warn, tildeify } from "../io.js";
 import { readFileSync, existsSync, statSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
@@ -41,7 +41,7 @@ export function runsWriteRoot(): string {
 export function noteRunsLocation(opts: { json: boolean; quiet: boolean }): void {
   if (opts.json || opts.quiet) return;
   if (process.env.COWORK_HARNESS_RUNS_DIR !== undefined) return;
-  process.stderr.write(`runs → ${runsWriteRoot()} (override with --run-dir / COWORK_HARNESS_RUNS_DIR)\n`);
+  process.stderr.write(`runs → ${tildeify(runsWriteRoot())} (override with --run-dir / COWORK_HARNESS_RUNS_DIR)\n`);
 }
 
 /**

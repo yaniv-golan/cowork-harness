@@ -1,4 +1,5 @@
 import { writeSync } from "node:fs";
+import { tildeify } from "../io.js";
 import type { AgentEvent } from "../agent/session.js";
 import type { RunHooks } from "./run.js";
 import type { RunResult } from "../types.js";
@@ -152,14 +153,14 @@ export function renderFooter(
   const nd = r.nonDeterministic ? " " + red(plan, "⚠ non-deterministic (LLM-decided)") : "";
   const meta = `[${r.fidelity}] · ${sum.tools} tools${sum.subagents ? ` · ${sum.subagents} sub-agents` : ""}${dur}`;
   if (passed) {
-    write(`${green(plan, "✓ " + r.result)} ${meta}${nd}${opts.keep ? " · " + r.outDir : ""}\n`);
-    if (opts.keep && r.outputsDir) write(`   ${dim(plan, "→ outputs: " + r.outputsDir)}\n`);
+    write(`${green(plan, "✓ " + r.result)} ${meta}${nd}${opts.keep ? " · " + tildeify(r.outDir) : ""}\n`);
+    if (opts.keep && r.outputsDir) write(`   ${dim(plan, "→ outputs: " + tildeify(r.outputsDir))}\n`);
     renderGuards(verdict.guards, plan, write); // 6h: make the safety nets that ran an enumerable, visible fact
     renderAnswerHints(r, plan, write);
     // Q2: scaffold tip — only for skill (exploratory) runs, not automated `run` scenarios.
     // Callers opt in via scaffoldTip: true; run command omits it (you already have a scenario YAML).
     if (opts.scaffoldTip && opts.lane !== "replay" && r.outDir) {
-      write(`   ${dim(plan, "Tip: scaffold " + r.outDir + " → turn this run into a starter scenario YAML")}\n`);
+      write(`   ${dim(plan, "Tip: scaffold " + tildeify(r.outDir) + " → turn this run into a starter scenario YAML")}\n`);
     }
     return;
   }
@@ -179,8 +180,8 @@ export function renderFooter(
         .map((l) => "   " + l)
         .join("\n") + "\n",
     );
-    write(`   ${dim(plan, "→ full run: " + r.outDir + "/run.jsonl")}\n`);
-    if (r.outputsDir) write(`   ${dim(plan, "→ outputs:  " + r.outputsDir)}\n`);
+    write(`   ${dim(plan, "→ full run: " + tildeify(r.outDir) + "/run.jsonl")}\n`);
+    if (r.outputsDir) write(`   ${dim(plan, "→ outputs:  " + tildeify(r.outputsDir))}\n`);
   }
 }
 
