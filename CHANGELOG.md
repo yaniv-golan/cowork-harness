@@ -8,7 +8,7 @@ All notable changes to this project are documented here. The format is based on
 
 ### Documentation
 
-- **Doc-vs-code audit — corrected several doc claims that diverged from the implementation.**
+- ** Corrected several doc claims that diverged from the implementation.**
   - **Host-loop tier wording.** README, `docs/boundary.md`, `docs/chat.md`, and the skill `SKILL.md` said
     the `hostloop`/`cowork` "agent loop runs host-side." It does not: the agent process runs **in the
     container** like `container`, but native Bash/WebFetch are disabled and routed host-side via the
