@@ -6,6 +6,41 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Documentation
+
+- **Doc-vs-code audit — corrected several doc claims that diverged from the implementation.**
+  - **Host-loop tier wording.** README, `docs/boundary.md`, `docs/chat.md`, and the skill `SKILL.md` said
+    the `hostloop`/`cowork` "agent loop runs host-side." It does not: the agent process runs **in the
+    container** like `container`, but native Bash/WebFetch are disabled and routed host-side via the
+    workspace SDK-MCP server (bash via `docker exec`, `web_fetch` via host `curl`). Only `protocol` runs
+    the agent on the host. Reworded everywhere to describe the **tool-routing** split, not an agent-loop split.
+  - **Artifact replay.** The skill references (`scenario-schema.md`, `ci-recipe.md`) claimed a replay PR
+    gate "cannot verify an artifact's content." It can — `file_exists` / `user_visible_artifact` /
+    `artifact_json` evaluate on replay **when the cassette carries an `artifacts` manifest** (already
+    correct in `docs/cassette.md`). Fixed the two contradicting copies.
+  - **`boundary-check` scope.** Clarified it probes the **L1 Docker** path only (covers `container` and
+    `hostloop`, which share that sandbox); the `microvm` guest-iptables firewall is not exercised by it.
+  - **`microvm` isolation.** `docs/scenario.md` said microvm "shares the container sandbox"; it actually
+    enforces the same allowlist inside a real Lima/Apple-VZ VM via a guest firewall.
+  - **Egress mechanism.** `docs/boundary.md` cited `docker/compose.yml` as the live enforcer; the runtime
+    creates **per-run** Docker networks in `src/egress/sidecar.ts` and never invokes compose (now marked
+    reference-only).
+  - **Onboarding / DX.** Added a "Which path am I on?" box (replay / protocol / live tiers / invocation)
+    and a three-names note to the README quick start; surfaced `doctor` / `python3` / `vm init` in the
+    docs reading order; aligned `docs/discovery.md` with the worked examples; documented the previously
+    undocumented `COWORK_*` / `PYTHON` env vars; noted the latest baseline is `desktop-1.15962.1`
+    (runtime-identical to `…0`).
+  - **Command/assertion reference.** Documented `doctor --tier cowork`, the `prune [<runs-dir>]`
+    positional, the `sync --force` alias, the `artifact_json` bare-existence mode, the
+    `tool_result_not_contains` fail-loud on truncated evidence, and that `expect_denied` is scenario-level
+    shorthand (not an assertion key).
+
+### Fixed
+
+- **CLI `--help` drift.** The top-level `chat` summary now lists `protocol` (the command already accepted
+  it); `--version` documents its `-v` alias; and the `gates` / `answer` / `scaffold` usage strings now show
+  the `--output-format` flag they already parse.
+
 ## [0.19.0] — 2026-06-30
 
 ### Changed

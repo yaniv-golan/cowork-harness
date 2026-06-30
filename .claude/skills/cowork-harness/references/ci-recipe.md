@@ -39,8 +39,11 @@ The split is not just about tokens — it decides **where each lane can run**:
 > binary. Don't expect a "download the agent in CI" path — there isn't one (it's Anthropic's staged
 > binary, not ours to ship).
 
-The cardinal rule: **a replay PR gate cannot verify an artifact's content or any boundary** — it has
-no filesystem and no network. Don't let a green replay gate convince you the deliverable is correct.
+The cardinal rule: **a replay PR gate cannot verify a boundary** (egress / filesystem-deny) — it has
+no live filesystem and no network — and it verifies an artifact's *content* only when the cassette
+carries an `artifacts` manifest (recorded `outputs/` + connected folders; then `file_exists` /
+`user_visible_artifact` / `artifact_json` evaluate on replay). On a manifest-less cassette the
+deliverable is invisible to the gate. Don't let a green replay gate convince you the deliverable is correct.
 Run `cowork-harness lint` (the bundled `scenario.py lint`) in CI to catch a scenario that put a
 filesystem/egress-only check on the replay lane (a silent no-op). Author new scenarios with
 `scenario.py scaffold` so they start from a valid, self-linted skeleton.

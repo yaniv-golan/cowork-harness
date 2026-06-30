@@ -280,7 +280,9 @@ with the count of pure live-only assertions not evaluated) and a *partial skip* 
 assertion's live-only half was dropped).
 Two CI consequences: skipped assertions are **absent** from `results[].assertions[]` (not
 present-and-passing), so don't assume a fixed assertion count across lanes; and a replay PR gate
-**cannot** verify an artifact's content.
+verifies an artifact's content **only when the cassette carries an `artifacts` manifest** (then
+`file_exists` / `user_visible_artifact` / `artifact_json` evaluate, per the filesystem note above) —
+on a manifest-less cassette those are skipped, so the gate can't see the deliverable.
 
 ## The web_fetch model
 

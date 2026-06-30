@@ -4,6 +4,8 @@ Start with the [project README](../README.md) for the overview and quick start, 
 
 **Reading order (start here):** [../examples/README.md](../examples/README.md) (token-free `replay` + worked examples) → [boundary.md](./boundary.md) (the limitations model) → [session.md](./session.md) + [scenario.md](./scenario.md) (authoring tests) → [cassette.md](./cassette.md) (record/replay deep-dive).
 
+> **Before a first *live* run** (any tier above `replay`/`protocol`): run `cowork-harness doctor` (or `doctor --tier <t>`) to check Docker + staged agent + token. `lint` needs **python3** on PATH; `--fidelity microvm` needs a one-time `cowork-harness vm init`.
+
 ## Guides
 
 | Doc | What it covers |

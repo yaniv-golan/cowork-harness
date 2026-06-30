@@ -39,7 +39,7 @@ cowork-harness chat <skill-folder> [prompt] [options]
 |---|---|---|
 | `protocol` | Agent on the host, no Docker, no sandbox. | Fastest; no egress enforcement. |
 | `container` (default) | Agent in a Docker container with per-session default-deny egress proxy. | Everyday debugging with a real sandbox. |
-| `hostloop` | Agent loop on the host; workspace bash executes in the container via the workspace SDK-MCP server. | Reproducing Cowork's production split-execution model. |
+| `hostloop` | Agent runs in the container (like `container`), but native Bash/WebFetch are disabled and routed host-side via the workspace SDK-MCP server — workspace bash executes in the container via `docker exec`, `web_fetch` via host `curl`. | Reproducing Cowork's production split-execution model. |
 
 `container` is the right default for almost all debugging. Use `protocol` when you need rapid
 iteration and do not care about egress behavior. Use `hostloop` when you are chasing a bug that

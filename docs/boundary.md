@@ -4,9 +4,10 @@ The point of this harness is not that a skill *can* do something — it's that a
 
 This page describes the limitations the harness reproduces, how each tier enforces (or doesn't) them, and how to verify it.
 
-> **Verify it in one command:** `cowork-harness boundary-check` proves the sandbox actually enforces these
-> limits (sealed FS, default-deny egress) — no token, no model. The rest of this page is the *why* and the
-> per-tier detail.
+> **Verify it in one command:** `cowork-harness boundary-check` proves the **L1 Docker** sandbox actually
+> enforces these limits (sealed FS, default-deny egress) — no token, no model. It probes the container path
+> only; `container` and `hostloop` share that sandbox, so it covers them, but the `microvm` guest-iptables
+> firewall is **not** exercised here. The rest of this page is the *why* and the per-tier detail.
 
 ## The three limitations that matter
 
@@ -30,7 +31,7 @@ This page describes the limitations the harness reproduces, how each tier enforc
 **`container` is the default and reproduces all three constraints:**
 
 - *Filesystem*: a container only sees its own image plus explicit bind mounts. It physically cannot read `~/` or `/Users` — the same sealed view as the VM. The harness mounts **only** what the session setup declares.
-- *Egress*: `docker/compose.yml` puts agents on a network marked `internal: true` (no route off-box) and dual-homes only the egress proxy onto an external network. So the agent can reach **only** allowlisted hosts, and **only** through the proxy. Direct/raw egress is impossible — not merely discouraged.
+- *Egress*: each run is placed on a **per-run** Docker network marked `internal: true` (no route off-box; see the lifecycle note below) and only the egress proxy is dual-homed onto an external network. So the agent can reach **only** allowlisted hosts, and **only** through the proxy. Direct/raw egress is impossible — not merely discouraged. (`docker/compose.yml` is a standalone reference for this shape; the live harness creates the networks per-run in `src/egress/sidecar.ts` — it does not invoke compose.)
 - *Privileges*: `--cap-drop ALL`, `--security-opt no-new-privileges`, read-only rootfs + tmpfs. A skill can't escalate or persist outside the mounts. (Toggle with `COWORK_LOCKDOWN=off` for debugging; leave it on for parity.)
 
 > **Egress-network lifecycle (operational).** On `container`/`hostloop`, each run creates a **per-run** pair
@@ -46,7 +47,7 @@ This page describes the limitations the harness reproduces, how each tier enforc
 
 **`microvm`** adds VM-grade escape resistance for untrusted code. Its egress is the **same default-deny allowlist proxy as `container`**, enforced by a guest iptables firewall — **no gVisor netstack**. Use it when you're testing isolation of code you don't trust.
 
-**`hostloop`** uses the **same container sandbox** as `container` (the `container` column above applies), but runs the agent loop host-side. `bash` is routed **into the container** (`docker exec`); **`web_fetch` is host-routed** (`curl` on the host), by design — Cowork fetches via the host API (gate `coworkWebFetchViaApi`, binary-verified), not the container egress path. So a web_fetch `egress_*` entry reflects host reachability + the web-fetch allowlist/provenance, **not** the container egress boundary; only `bash` egress exercises the sandbox proxy. (Container fidelity wires no host-routed web_fetch handler at all, so web_fetch provenance is intentionally absent there — it is a host-loop concept.) It reproduces Cowork's production split-execution, not a different isolation level.
+**`hostloop`** uses the **same container sandbox** as `container` (the `container` column above applies), but routes the agent's shell/web tools host-side — the agent process itself still runs in the container (only `protocol` runs the agent on the host). `bash` is routed **into the container** (`docker exec`); **`web_fetch` is host-routed** (`curl` on the host), by design — Cowork fetches via the host API (gate `coworkWebFetchViaApi`, binary-verified), not the container egress path. So a web_fetch `egress_*` entry reflects host reachability + the web-fetch allowlist/provenance, **not** the container egress boundary; only `bash` egress exercises the sandbox proxy. (Container fidelity wires no host-routed web_fetch handler at all, so web_fetch provenance is intentionally absent there — it is a host-loop concept.) It reproduces Cowork's production split-execution, not a different isolation level.
 
 **`cowork`** is not a sandbox of its own: it resolves at run time to either `hostloop` or `container` — the same choice real Cowork makes, read from the synced baseline's GrowthBook host-loop gate (`1143815894`). (An org policy `requireCoworkFullVmSandbox` forces the VM loop and *overrides* the gate.) Because both of those use the identical container sandbox, **the boundary is the same either way** (the `container` column above); only the host-loop-vs-in-container *execution split* changes, not the isolation.
 

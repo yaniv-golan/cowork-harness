@@ -224,8 +224,9 @@ Either way, every replay result also reports the drift in `staleness[]` (class-t
 
 ### Still skipped on replay (no filesystem/network in a cassette)
 
-`no_delete_in_outputs`, `self_heal_ran`, `transcript_no_host_path`, `egress_denied`, `egress_allowed`,
-`expect_denied`.
+`no_delete_in_outputs`, `self_heal_ran`, `transcript_no_host_path`, `egress_denied`, `egress_allowed`
+(and `expect_denied` — a **scenario-level shorthand** that expands to `egress_denied` assertions, not an
+assertion key in its own right).
 
 Skipped assertions are **absent** from `assertions[]` in the replay result (filtered before evaluation),
 not present-and-passing. A CI script must not assume a fixed assertion count across replay and live lanes.

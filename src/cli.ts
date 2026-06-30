@@ -70,7 +70,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
       (run 'skill --help' for the full flag reference)
 
   chat <folder>                interactive multi-turn REPL against a skill (TTY); --raw for native cowork
-                               (--fidelity container|hostloop only, default container; --model <id>)
+                               (--fidelity protocol|container|hostloop, default container; --model <id>)
 
 ── Automated scenarios ────────────────────────────────────────────────────────
   run <scenario.yaml | dir/>   run one scenario or every *.yaml in a dir (CI-ready exit code)
@@ -140,7 +140,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
            Run 'doctor' to diagnose auth failures.
   Global:  --run-dir <path>    write runs/ output under <path> instead of the default ~/.cowork-harness/runs
            (keeps sensitive inputs/outputs out of the working tree). flag > COWORK_HARNESS_RUNS_DIR > default.
-  --version                    print version        --help, -h    print this help
+  --version, -v                print version        --help, -h    print this help
 
   Env-var defaults (CLI flags take precedence):
     COWORK_HARNESS_FIDELITY        default --fidelity tier (skill/chat; run takes fidelity from the scenario)
@@ -303,12 +303,12 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
     "usage: trace <run-id | run-dir | events.jsonl> [--view tools|questions|dispatches] [--output-format json]\n       --view tools       tool call / result rows\n       --view questions   gate lifecycle (question → answer → delivered)\n       --view dispatches  sub-agent dispatch tree + dispatch_count_max\n       (default: all views)\n       (for what the run PRODUCED — artifacts — use `inspect`)",
   assertions: "usage: assertions --list [--output-format json]",
   scaffold:
-    "usage: scaffold <run-id | run-dir> [--out <file.yaml>]\n       Turns a kept run into a starter scenario YAML (gates→answers, artifacts→file_exists).\n       Positional <run-id | run-dir> is the canonical form.",
+    "usage: scaffold <run-id | run-dir> [--out <file.yaml>] [--output-format text|json]\n       Turns a kept run into a starter scenario YAML (gates→answers, artifacts→file_exists).\n       Positional <run-id | run-dir> is the canonical form.",
   decide:
     'usage: decide [--question <q>] [--option <o>]... [--decider-cmd <cmd> | --decider-llm [--intent <s>] [--decider-model <id>]] [--answer "<q>=<label>"]... [--answer-policy <p>] [--output-format json]',
-  gates: "usage: gates <dir> [--follow]   (stream pending in-band gates as JSON lines; pair with --decider-dir)",
+  gates: "usage: gates <dir> [--follow] [--output-format text|json]   (stream pending in-band gates as JSON lines; pair with --decider-dir)",
   answer:
-    'usage: answer <dir> --gate <N> (--choose <label> [--choose <label>…] | --answer "<q>=<label>")   (write an in-band gate reply atomically; repeat --choose for a multiSelect gate)',
+    'usage: answer <dir> --gate <N> (--choose <label> [--choose <label>…] | --answer "<q>=<label>") [--output-format text|json]   (write an in-band gate reply atomically; repeat --choose for a multiSelect gate)',
   "verify-run":
     "usage: verify-run <run-dir> <scenario.yaml> [--output-format json]   (re-evaluate a scenario's assert: against a kept run dir; no live agent)",
   inspect:

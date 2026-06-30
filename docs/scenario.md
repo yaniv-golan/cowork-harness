@@ -253,7 +253,7 @@ if *every* key passes (don't rely on the first; keep one concern per item unless
 | `tool_called: <Tool>` | the agent invoked the tool |
 | `tool_not_called: <Tool>` | the agent never invoked it |
 | `tool_result_contains: <str>` | a tool result includes the literal string (content / replay-checkable — substring match, **per individual result**, each scanned up to a 10 KB cap; a string spanning two separate results won't match) |
-| `tool_result_not_contains: <str>` | no tool result includes the literal string — content / replay-checkable; **fails loud** if tool results are absent from `result.json` (absent ≠ empty) |
+| `tool_result_not_contains: <str>` | no tool result includes the literal string — content / replay-checkable; **fails loud** if tool results are absent from `result.json` (absent ≠ empty) or display-truncated (no assertable text) — it never vacuously passes when it can't see the evidence |
 | `subagent_tool_used: <Tool>` | a sub-agent used the tool |
 | `subagent_tool_absent: <Tool>` | no sub-agent used the tool |
 | `subagent_dispatched: <regex>` | a sub-agent whose `agentType` **or dispatch `description`** matches was dispatched (skills often dispatch with only a `description` and no `subagent_type` → `agentType:"unknown"`, so match by description, e.g. `subagent_dispatched: "TOP_DOWN"`) |
@@ -329,7 +329,7 @@ dotted `path` selects into the document; one operator decides the check:
 - artifact_json: { artifact: outputs/instruments.json, path: exclusivity_days, absent: true }   # anti-hallucination
 - artifact_json: { artifact: outputs/cap_state.json, path: stage, in: ["seed", "series-a"] }     # one of a stable set
 ```
-Operators: `equals` (deep-equal) · `in: [<set>]` (deep-equal one of) · `gt` (number) · `exists: <bool>` · `absent: <bool>` · `is_null: <bool>`.
+Operators: `equals` (deep-equal) · `in: [<set>]` (deep-equal one of) · `gt` (number) · `exists: <bool>` · `absent: <bool>` · `is_null: <bool>`. **Omit every operator** to assert only that the `path` resolves (a bare existence check).
 The three states are **distinct**: `absent` (the final key is missing from a parent that resolved) vs
 `is_null` (present but JSON `null`) vs an **unresolved intermediate** segment (the artifact is malformed for
 that path) — which **fails loud**, never a vacuous pass. (No JSONPath/jq — a dotted path keeps it
@@ -346,7 +346,7 @@ dependency-free and side-effect-free.)
 > deterministically (ids, counts, enums). This pairs with record-time redaction: redaction rewrites the
 > very strings an `equals` would pin, so `equals` on a redacted field would break on re-record anyway.
 
-> **Boundary assertions** (`egress_*`, `expect_denied`) require a sandboxed fidelity — `container`, `microvm`, `hostloop`, or `cowork` (all share the container sandbox + egress proxy; `cowork` resolves to one of them). Only `protocol` is rejected, to avoid a false pass — see [boundary.md](./boundary.md).
+> **Boundary assertions** (`egress_*`, `expect_denied`) require a sandboxed fidelity — `container`, `microvm`, `hostloop`, or `cowork`. `container`/`hostloop` share the Docker sandbox + egress proxy; `microvm` enforces the **same allowlist** inside a real Lima/Apple-VZ VM via a guest iptables firewall (not the Docker sandbox); `cowork` resolves to `hostloop` or `container`. Only `protocol` is rejected, to avoid a false pass — see [boundary.md](./boundary.md).
 
 ### Which assertions survive `replay` (CI placement)
 
