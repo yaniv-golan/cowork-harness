@@ -50,7 +50,7 @@ function truncate(text: string, verbose: boolean): string {
 export function inputSummary(input: unknown, compact = false): string {
   try {
     let s = JSON.stringify(input);
-    // I2: under --compact, collapse the ephemeral cowork session-root prefix so `-V` tool inputs are
+    // under --compact, collapse the ephemeral cowork session-root prefix so `-V` tool inputs are
     // shareable. Run BEFORE the 80-char slice so a `/mnt/` boundary past char 80 still collapses.
     // Display-only — the agent's real args (and run.jsonl) are untouched. Covers all cowork-tier
     // session-id shapes (`local_*`, pinned `sess-*`); the L0/protocol tier uses host `work/` paths, so

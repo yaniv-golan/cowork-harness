@@ -8,7 +8,7 @@ import { loadSession, buildLaunchPlan } from "../src/session.js";
 import { gitStageStats, GITSET_ENV } from "../src/run/skill-files.js";
 import { BoundaryError } from "../src/errors.js";
 
-// F1: a plugin source that is inside a git work tree delivers only its git-TRACKED files. An ALL-untracked
+// A plugin source that is inside a git work tree delivers only its git-TRACKED files. An ALL-untracked
 // source would mount EMPTY and the skill would not load — that must HARD-FAIL (BoundaryError), not stage
 // silently. A partially-tracked source stages, but emits a loud notice. A non-repo dir copies raw (no
 // guard). Resume re-stages nothing, so the guard must not fire.
@@ -46,7 +46,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("F1 — gitStageStats", () => {
+describe("gitStageStats", () => {
   it("counts tracked + untracked; null tracked for a non-repo dir", () => {
     expect(gitStageStats(gitPlugin("all")).tracked!.size).toBeGreaterThan(0);
     const none = gitStageStats(gitPlugin("none"));
@@ -59,7 +59,7 @@ describe("F1 — gitStageStats", () => {
   });
 });
 
-describe("F1 — buildLaunchPlan empty-mount guard", () => {
+describe("buildLaunchPlan empty-mount guard", () => {
   it("HARD-FAILS (BoundaryError) when a plugin would mount empty (all untracked)", () => {
     expect(() => planFor(gitPlugin("none"))).toThrow(BoundaryError);
     expect(() => planFor(gitPlugin("none"))).toThrow(/0 git-tracked files|mount EMPTY/);

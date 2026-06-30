@@ -59,7 +59,7 @@ export function stageWorkspace(plan: LaunchPlan, mntHost: string): StageResult {
       if (!containedRealPath(mntHostReal, destParent))
         throw new BoundaryError(`cowork-harness: staged mount path "${mt.mountPath}" resolves outside the session tree (symlink escape)`);
       // preserve symlinks as-is during staging; do not copy out-of-tree content
-      // F1: prefer the filter precomputed at plan-build (same tracked snapshot used for the staged-set
+      // prefer the filter precomputed at plan-build (same tracked snapshot used for the staged-set
       // counts ⇒ delivered == counted). Fall back to a fresh gitCpFilter for non-plugin mounts.
       if (existsSync(mt.hostPath)) {
         const f = mt.stageFilter ?? (gitModeEnabled() ? gitCpFilter(mt.hostPath) : null);

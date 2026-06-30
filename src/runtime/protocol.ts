@@ -35,7 +35,7 @@ export function spawnProtocol(
     if (!containedRealPath(workReal, dirname(dest)))
       throw new BoundaryError(`cowork-harness: staged mount path "${m.mountPath}" resolves outside the work directory (symlink escape)`);
     // preserve symlinks as-is during staging; do not copy out-of-tree content
-    // F1: prefer the filter precomputed at plan-build (same tracked snapshot used for the staged-set
+    // prefer the filter precomputed at plan-build (same tracked snapshot used for the staged-set
     // counts ⇒ delivered == counted). Fall back to a fresh gitCpFilter for non-plugin mounts.
     if (existsSync(m.hostPath)) {
       const f = m.stageFilter ?? (gitModeEnabled() ? gitCpFilter(m.hostPath) : null);

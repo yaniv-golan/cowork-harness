@@ -236,7 +236,7 @@ export async function cmdChat(args: string[]) {
     progress: true,
     verbose,
     color: process.stderr.isTTY === true && !process.env.NO_COLOR,
-    compact: false, // chat is an interactive REPL, not shareable-output; I2 scope is skill/run
+    compact: false, // chat is an interactive REPL, not shareable-output (the path-collapse targets skill/run)
   };
   const start = Date.now();
   let stopHeartbeat: (() => void) | undefined;

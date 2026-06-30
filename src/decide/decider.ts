@@ -659,7 +659,7 @@ export class PromptDecider implements Decider {
   // Inject the asker so the chat REPL can route gate prompts through the SAME readline interface it uses
   // for user turns — two interfaces on process.stdin race for input. Defaults to a private askRaw.
   constructor(ask: (prompt: string) => Promise<string> = askRaw) {
-    // F2: the FIRST blocking wait prints an immediate, unmistakable notice. A `prompt`-policy wait is
+    // The FIRST blocking wait prints an immediate, unmistakable notice. A `prompt`-policy wait is
     // otherwise un-releasable (dialog auto-cancel is Infinity under prompt) and the only other signal is
     // the ~30s heartbeat — a CLI silently blocking on stdin is hostile to recordings/automation. The flag
     // is PER-INSTANCE (a fresh PromptDecider per run via buildDecider), not module-level, so a

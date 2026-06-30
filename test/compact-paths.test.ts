@@ -1,11 +1,11 @@
 import { describe, it, expect } from "vitest";
 import { inputSummary } from "../src/run/renderer.js";
 
-// I2: under --compact, `-V` tool inputs collapse the cowork session-root prefix
+// Under --compact, `-V` tool inputs collapse the cowork session-root prefix
 // `/sessions/<id>/mnt/` → `mnt/`. Display-only; covers all session-id shapes; replace runs BEFORE the
 // 80-char truncation so a boundary past char 80 still collapses; L0/protocol `work/` paths are untouched.
 
-describe("I2 — inputSummary compact path collapse", () => {
+describe("inputSummary compact path collapse", () => {
   it("collapses an ephemeral local_<id> session path", () => {
     const out = inputSummary({ command: "cat /sessions/local_abc123/mnt/uploads/x" }, true);
     expect(out).toContain("mnt/uploads/x");

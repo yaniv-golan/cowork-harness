@@ -732,7 +732,7 @@ function resolveOutput(
   flags: CommonFlags,
 ): { json: boolean; render: boolean; footer: boolean; plan: RenderPlan } {
   const color = process.stderr.isTTY === true && !process.env.NO_COLOR;
-  const compact = !!(flags.compact || flags.demo); // I2: --demo implies --compact
+  const compact = !!(flags.compact || flags.demo); // --demo implies --compact
   if (flags.output === "json")
     return { json: true, render: false, footer: false, plan: { live: false, progress: false, verbose: false, color: false, compact } };
   if (flags.quiet)
@@ -930,7 +930,7 @@ async function cmdRun(rawArgs: string[]) {
     } else preArgs.push(a);
   }
   const { rest: rawRest, flags } = takeCommonFlags(preArgs, "run");
-  // F6: `--keep` is meaningful on `skill` (runs are otherwise discarded) but `run` ALWAYS keeps runs.
+  // `--keep` is meaningful on `skill` (runs are otherwise discarded) but `run` ALWAYS keeps runs.
   // Accept it as an explicit no-op (EXACT-token only — it takes no value, so an exact match can't
   // swallow a real arg) instead of the loud reject below, so muscle memory from `skill` doesn't error.
   // Note it so the no-effect is visible.

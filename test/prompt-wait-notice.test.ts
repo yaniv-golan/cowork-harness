@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 
-// F2: the FIRST blocking TTY wait under `prompt` policy emits one immediate `::notice:: [input]` —
+// The FIRST blocking TTY wait under `prompt` policy emits one immediate `::notice:: [input]` —
 // per PromptDecider instance (not module-level), and only for the real TTY asker (not chat's injected one).
 
 // Mock the readline the default askRaw uses so `question()` resolves immediately instead of blocking.
@@ -35,7 +35,7 @@ const withTTY = async (isTTY: boolean, fn: () => Promise<void>) => {
 
 afterEach(() => vi.restoreAllMocks());
 
-describe("F2 — prompt-wait notice", () => {
+describe("prompt-wait notice", () => {
   it("emits the [input] waiting notice exactly ONCE across multiple gates (per instance)", async () => {
     await withTTY(true, async () => {
       const calls = spyStderr();

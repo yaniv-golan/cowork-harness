@@ -131,7 +131,7 @@ export interface Mount {
    */
   kind: "folder" | "upload" | "local-plugin" | "remote-plugin" | "marketplace-plugin";
   /**
-   * Precomputed staging copy filter (F1). When set, the runtime copy sites use it verbatim instead of
+   * Precomputed staging copy filter. When set, the runtime copy sites use it verbatim instead of
    * re-deriving via `gitCpFilter` — so the file count reported at plan-build equals the delivered set
    * (no second `git ls-files`, no TOCTOU). Set for plugin-kind mounts under git mode; undefined for
    * folders/uploads (which keep the at-copy-time fallback).
@@ -192,14 +192,14 @@ export function buildLaunchPlan(
   baseline: PlatformBaseline,
   outDir: string,
   tier: MountTier = "hostloop",
-  // F1: on resume the runtimes SKIP re-staging (the persisted tree survives), so the empty-mount guard
+  // on resume the runtimes SKIP re-staging (the persisted tree survives), so the empty-mount guard
   // and the staged-set notices must not run — the sources may legitimately be gone. The caller threads
   // its resume flag here (set after the plan is built today, so it must be a param, not `plan.resume`).
   resume = false,
 ): LaunchPlan {
   const expand = (p: string) => p.replace(/^~(?=$|\/)/, homedir());
 
-  // F1: a plugin/skill source in a git work tree delivers only its git-TRACKED files (the fidelity
+  // A plugin/skill source in a git work tree delivers only its git-TRACKED files (the fidelity
   // boundary — real Cowork installs from a repo and sees only committed files). Make that VISIBLE in
   // both directions instead of silently surprising: hard-FAIL when it would mount empty, loud-NOTICE
   // when some files are excluded. Returns the cpSync filter built from the SAME tracked snapshot used
@@ -268,7 +268,7 @@ export function buildLaunchPlan(
 
   // 3. stage local skills into CLAUDE_CONFIG_DIR/skills. A missing source fails (like a mount); two
   // skills with the same basename would copy to the same dest and silently clobber — fail on that too.
-  // F1: SKIP entirely on resume — the persisted configDir/skills survives, the sources may be gone, and
+  // SKIP entirely on resume — the persisted configDir/skills survives, the sources may be gone, and
   // re-running the missing-source resolve below would otherwise false-fail a legitimate --resume.
   const skillDests = new Set<string>();
   if (!resume)
@@ -290,7 +290,7 @@ export function buildLaunchPlan(
           `duplicate skill destination "skills/${dest}" — two skills.local entries share a basename (they would overwrite). Rename or relocate one.`,
         );
       skillDests.add(dest);
-      // F1: deliver the git-tracked set (the fidelity boundary), but VISIBLY — hard-fail if it would be
+      // deliver the git-tracked set (the fidelity boundary), but VISIBLY — hard-fail if it would be
       // empty, notice if files are excluded. Filter is built from the same snapshot used for those counts.
       const skillFilter = stageFilterFor(src, `skill '${basename(src)}'`);
       cpSync(src, join(configDir, "skills", dest), { recursive: true, ...(skillFilter ? { filter: skillFilter } : {}) });

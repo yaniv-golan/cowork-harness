@@ -12,7 +12,7 @@ export function warn(message: string): void {
 }
 
 /**
- * Collapse a leading `$HOME` to `~` for DISPLAY only (F3). Human-facing output should never print a
+ * Collapse a leading `$HOME` to `~` for DISPLAY only. Human-facing output should never print a
  * user's absolute home path — it leaks the username + filesystem layout into screenshots / pasted logs /
  * bug reports. `~` re-expands when pasted unquoted into a shell; it does NOT re-expand when quoted or fed
  * to a Node path API, so this is for display strings, not for paths handed back to the tool. A path not

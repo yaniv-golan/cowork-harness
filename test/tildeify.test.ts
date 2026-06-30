@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { tildeify } from "../src/io.js";
 
-// F3: collapse $HOME → ~ for display, so human output never leaks the username / FS layout.
+// collapse $HOME → ~ for display, so human output never leaks the username / FS layout.
 
 const withHome = (home: string | undefined, fn: () => void) => {
   const prev = process.env.HOME;
@@ -19,7 +19,7 @@ afterEach(() => {
   /* withHome restores per-call */
 });
 
-describe("F3 — tildeify", () => {
+describe("tildeify", () => {
   it("collapses a leading $HOME to ~", () => {
     withHome("/Users/someone", () => {
       expect(tildeify("/Users/someone/.cowork-harness/runs/x/local_1")).toBe("~/.cowork-harness/runs/x/local_1");

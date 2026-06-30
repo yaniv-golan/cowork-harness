@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { noteRunsLocation } from "../src/run/trace-view.js";
 
-// F5: --demo passes suppress:true so the "runs →" header is hidden while runs stay in the durable
+// --demo passes suppress:true so the "runs →" header is hidden while runs stay in the durable
 // default (no temp redirect → scaffold/trace still resolve the run later).
 
 const spyStderr = () => {
@@ -25,7 +25,7 @@ const withoutRunsEnv = (fn: () => void) => {
 
 afterEach(() => vi.restoreAllMocks());
 
-describe("F5 — noteRunsLocation suppress", () => {
+describe("noteRunsLocation suppress", () => {
   it("prints the runs→ header by default (no override, not json/quiet)", () => {
     withoutRunsEnv(() => {
       const calls = spyStderr();
