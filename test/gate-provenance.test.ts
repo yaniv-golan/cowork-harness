@@ -11,7 +11,14 @@ describe("summarizeGateProvenance", () => {
     const decisions: Decisions = [
       { kind: "tool", name: "Bash", decision: "allow", by: "cowork" },
       { kind: "question", name: "AskUserQuestion", decision: "answered", by: "scripted", detail: { "Proceed?": "Yes" } },
-      { kind: "question", name: "AskUserQuestion", decision: "answered", by: "llm", model: "claude-sonnet-4-5", detail: { "Stage?": "Series B+" } },
+      {
+        kind: "question",
+        name: "AskUserQuestion",
+        decision: "answered",
+        by: "llm",
+        model: "claude-sonnet-4-5",
+        detail: { "Stage?": "Series B+" },
+      },
       { kind: "dialog", name: "dialog", decision: "accept", by: "cowork" },
     ];
     const s = summarizeGateProvenance(decisions);
@@ -31,7 +38,7 @@ describe("summarizeGateProvenance", () => {
     expect(s.gates[0]).toEqual({ question: "A? / B?", answeredBy: "first", answer: "A?=x; B?=y", model: undefined });
   });
 
-  it("counts a missing `by` as \"unknown\" rather than dropping the gate", () => {
+  it('counts a missing `by` as "unknown" rather than dropping the gate', () => {
     const decisions: Decisions = [{ kind: "question", name: "AskUserQuestion", decision: "answered", by: undefined, detail: {} }];
     const s = summarizeGateProvenance(decisions);
     expect(s.total).toBe(1);

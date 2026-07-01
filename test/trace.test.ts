@@ -414,11 +414,24 @@ describe("buildGateTrace — provenance annotation", () => {
   });
 
   it("annotates each gate row with by/model from the sibling result.json", () => {
-    const f = eventsFile([gate("uuid-1", "toolu_g", "Stage?", "Series B+"), userResult("toolu_g", false, "delivered"), { type: "result", is_error: false }]);
+    const f = eventsFile([
+      gate("uuid-1", "toolu_g", "Stage?", "Series B+"),
+      userResult("toolu_g", false, "delivered"),
+      { type: "result", is_error: false },
+    ]);
     writeFileSync(
       join(f, "..", "result.json"),
       JSON.stringify({
-        decisions: [{ kind: "question", name: "AskUserQuestion", decision: "answered", by: "llm", model: "claude-sonnet-4-5", detail: { "Stage?": "Series B+" } }],
+        decisions: [
+          {
+            kind: "question",
+            name: "AskUserQuestion",
+            decision: "answered",
+            by: "llm",
+            model: "claude-sonnet-4-5",
+            detail: { "Stage?": "Series B+" },
+          },
+        ],
       }),
     );
     const rows = buildGateTrace(f);
@@ -428,7 +441,11 @@ describe("buildGateTrace — provenance annotation", () => {
   });
 
   it("leaves rows unannotated when there is no sibling result.json", () => {
-    const f = eventsFile([gate("uuid-2", "toolu_h", "Proceed?", "Yes"), userResult("toolu_h", false, "delivered"), { type: "result", is_error: false }]);
+    const f = eventsFile([
+      gate("uuid-2", "toolu_h", "Proceed?", "Yes"),
+      userResult("toolu_h", false, "delivered"),
+      { type: "result", is_error: false },
+    ]);
     const rows = buildGateTrace(f);
     expect(rows).toHaveLength(1);
     expect(rows[0].answeredBy).toBeUndefined();

@@ -120,7 +120,9 @@ function spawnOnce(bin: string, prompt: string, model: string, timeoutMs: number
         } catch (e) {
           // NOT a TransportExit → not retried: a malformed/ambiguous envelope on a CLEAN exit is a
           // deterministic contract break (the CLI / its --output-format shape), not a transient hiccup.
-          reject(new Error(`LLM decider transport (${bin} -p --output-format json) returned an unparseable envelope: ${(e as Error).message}`));
+          reject(
+            new Error(`LLM decider transport (${bin} -p --output-format json) returned an unparseable envelope: ${(e as Error).message}`),
+          );
         }
         return;
       }
