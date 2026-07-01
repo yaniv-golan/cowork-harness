@@ -34,6 +34,16 @@ All notable changes to this project are documented here. The format is based on
   `skill` (which otherwise discards runs); `run` always keeps runs, so passing `--keep` (muscle memory
   from `skill`) prints a one-line note that it had no effect rather than the loud "unexpected argument"
   reject. Exact-token only — a genuinely unexpected flag still rejects loudly.
+- **The default `--decider-llm` answering model now floats to the latest Sonnet** (the CLI alias `sonnet`)
+  instead of the id pinned in 0.19.0 (`claude-sonnet-4-5`), so the default keeps tracking Anthropic's
+  current Sonnet without a repo edit. `gateProvenance`/`result.json`'s `decisions[].model` is unaffected —
+  it now records the CONCRETE model the alias resolved to for that run (via `claude -p --output-format
+  json`'s `modelUsage`), never the literal string `"sonnet"`, so per-gate auditability is exactly as precise
+  as it was under the old pinned default; an envelope that doesn't resolve to exactly one concrete model
+  fails loud rather than recording an empty/ambiguous value. `--decider-model <id>` /
+  `COWORK_HARNESS_DECIDER_MODEL` still pin an exact id — the way to get byte-for-byte reproducible decider
+  behavior across runs (as much as a stochastic model allows), since the floating default can answer
+  differently over time as Anthropic ships new Sonnet releases.
 
 ### Fixed
 
