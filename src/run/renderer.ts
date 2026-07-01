@@ -69,15 +69,20 @@ function truncate(text: string, verbose: boolean): string {
   if (t.length > TRUNC_CHARS) t = t.slice(0, TRUNC_CHARS) + " … (truncated)";
   return t;
 }
+// Under --compact, collapse the ephemeral cowork session-root prefix (`/sessions/<id>/mnt/` → `mnt/`)
+// so shareable output isn't cluttered with long in-container paths. Display-only — the agent's real args
+// and run.jsonl are untouched. Covers all cowork-tier session-id shapes (`local_*`, pinned `sess-*`); the
+// L0/protocol tier uses host `work/` paths, so this correctly no-ops there. Applied to BOTH `-V` tool
+// inputs and the tool_result `→`/`✗` outcome lines, so --compact is consistent across them.
+export function collapseSessionRoot(s: string): string {
+  return s.replace(/\/sessions\/[^/]+\/mnt\//g, "mnt/");
+}
+
 export function inputSummary(input: unknown, compact = false): string {
   try {
     let s = JSON.stringify(input);
-    // under --compact, collapse the ephemeral cowork session-root prefix so `-V` tool inputs are
-    // shareable. Run BEFORE the 80-char slice so a `/mnt/` boundary past char 80 still collapses.
-    // Display-only — the agent's real args (and run.jsonl) are untouched. Covers all cowork-tier
-    // session-id shapes (`local_*`, pinned `sess-*`); the L0/protocol tier uses host `work/` paths, so
-    // this correctly no-ops there.
-    if (compact) s = s.replace(/\/sessions\/[^/]+\/mnt\//g, "mnt/");
+    // Run the collapse BEFORE the 80-char slice so a `/mnt/` boundary past char 80 still collapses.
+    if (compact) s = collapseSessionRoot(s);
     if (s.length <= 80) return s;
     // tell the reader HOW MUCH was cut — a bare "…" left you guessing whether you were seeing 90 or
     // 9000 chars of input.
@@ -136,7 +141,11 @@ export function makeRenderer(plan: RenderPlan, write: Sink = stderr): Renderer {
           if (!e.toolUseId || !topLevelToolCalls.has(e.toolUseId)) break; // nested or unpaired — not rendered
           topLevelToolCalls.delete(e.toolUseId);
           if (plan.progress) {
-            const head = e.text.split("\n")[0].slice(0, 80);
+            // collapse the session-root BEFORE the 80-char slice, matching inputSummary, so --compact
+            // is consistent between a tool's input line and its outcome line.
+            let head = e.text.split("\n")[0];
+            if (plan.compact) head = collapseSessionRoot(head);
+            head = head.slice(0, 80);
             write(`    ${e.isError ? red(plan, "✗ " + head) : dim(plan, "→ " + head)}\n`);
           }
           break;

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { inputSummary } from "../src/run/renderer.js";
+import { inputSummary, collapseSessionRoot } from "../src/run/renderer.js";
 
 // Under --compact, `-V` tool inputs collapse the cowork session-root prefix
 // `/sessions/<id>/mnt/` → `mnt/`. Display-only; covers all session-id shapes; replace runs BEFORE the
@@ -36,5 +36,17 @@ describe("inputSummary compact path collapse", () => {
   it("leaves a /sessions/ path WITHOUT a /mnt/ segment untouched", () => {
     const out = inputSummary({ path: "/sessions/data/report" }, true);
     expect(out).toContain("/sessions/data/report");
+  });
+});
+
+// The shared collapse helper backing BOTH `-V` tool inputs and the 0.20.0 tool_result `→`/`✗` outcome
+// lines, so --compact is consistent across them (the outcome line previously bypassed the collapse).
+describe("collapseSessionRoot", () => {
+  it("collapses local_<id> and pinned sess-<id> session roots", () => {
+    expect(collapseSessionRoot("→ /sessions/local_abc/mnt/uploads/x")).toBe("→ mnt/uploads/x");
+    expect(collapseSessionRoot("/sessions/sess-my-run/mnt/outputs/y")).toBe("mnt/outputs/y");
+  });
+  it("leaves a /sessions/ path without a /mnt/ segment untouched", () => {
+    expect(collapseSessionRoot("/sessions/data/report")).toBe("/sessions/data/report");
   });
 });

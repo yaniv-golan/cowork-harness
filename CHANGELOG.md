@@ -15,6 +15,11 @@ All notable changes to this project are documented here. The format is based on
   under `--compact`/`--demo` (a human sharing a clip isn't scripting `status`; a machine/CI caller that
   needs the path doesn't pass `--compact`, or reads `status.json` / `--session-id`). `status.json` is still
   written either way, so `cowork-harness status` is unaffected.
+- **`--compact` now collapses the session-root in tool-result outcome lines too.** 0.20.0's new
+  `tool_result` `→`/`✗` outcome lines (under each top-level tool call) bypassed the `--compact`
+  `/sessions/<id>/mnt/ → mnt/` collapse that already applied to `-V` tool *inputs*, so shareable output
+  showed long in-container paths on the outcome lines only. The collapse is now a shared `collapseSessionRoot`
+  helper applied to both. Display-only; `run.jsonl` keeps the true paths.
 
 ## [0.20.0] — 2026-07-01
 
