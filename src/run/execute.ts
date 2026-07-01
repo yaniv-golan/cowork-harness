@@ -1,4 +1,4 @@
-import { warn } from "../io.js";
+import { warn, tildeify } from "../io.js";
 import { BoundaryError } from "../errors.js";
 import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync, readdirSync, statSync, lstatSync, realpathSync } from "node:fs";
 import { randomUUID, createHash } from "node:crypto";
@@ -8,6 +8,7 @@ import { join, dirname, resolve, basename, isAbsolute, sep } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { Scenario } from "../types.js";
 import type { RunResult } from "../types.js";
+import { writeRunningStatus, startStatusTicker, registerRunForCrashSafety, type RunStatusMeta } from "./run-status.js";
 // Runtime-only circular import: cassette.ts imports executeScenario from here, and we import buildFingerprint
 // from there. Both bindings are used only inside function bodies (call time), never at module load, so the
 // ESM live-binding cycle is safe. buildFingerprint's deps (skillSourceDirs → parseSessionFile) live here, so
@@ -235,6 +236,30 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     mkdirSync(outDir, { recursive: true });
   }
 
+  // status.json: writable/discoverable from the EARLIEST possible moment (right after outDir exists,
+  // before any container/VM spawn), so `cowork-harness status <dir>` works even in the pre-events.jsonl
+  // window `resolveStatusDir` special-cases. Printed to stderr (unconditional — matches the existing
+  // `[loop] cowork → …` precedent a few lines below) so a driving agent capturing this run's stderr can
+  // grab the exact dir without knowing the session id ahead of time.
+  const runStatusMeta: RunStatusMeta = { pid: process.pid, scenario: scenario.name, fidelity: scenario.fidelity, sessionId, startedAt: Date.now() };
+  writeRunningStatus(outDir, runStatusMeta);
+  process.stderr.write(`[status] ${tildeify(outDir)}\n`);
+
+  // Crash-safety net: WITHOUT this, a throw that unwinds past executeScenario without ever reaching
+  // either RunResult assembler (buildPartialResult's call site, or the success-path result below) —
+  // e.g. a plain `throw new Error(...)`/BoundaryError earlier in this function, not the recoverable
+  // UnansweredError path — leaves status.json frozen at "running" forever: a false "still alive" signal,
+  // exactly the failure mode this feature exists to eliminate. `runCrashSafety.finalize(...)` (called at
+  // both normal finalize sites in Step 4) removes this run from tracking so a clean finish is never
+  // double-written; a run that's still tracked when the process actually exits gets swept to "error" by
+  // the ONE shared exit listener `registerRunForCrashSafety` owns (module-level, not per-call — this is
+  // what keeps `record --concurrency` batches safe: a per-call `process.on`/`process.off` pair would leak
+  // a listener for every crashed-but-not-finalized scenario in the batch, since the crash path by
+  // definition never reaches a `.finalize()` call to remove it). Mirrors `writeDoneMarker`'s exit-handler
+  // precedent (`src/decide/external-channel.ts:58-64`); `writeJsonAtomic`'s fs calls are synchronous,
+  // which a Node `"exit"` handler requires.
+  const runCrashSafety = registerRunForCrashSafety(outDir, runStatusMeta);
+
   let agentSessionId: string | undefined;
   if (opts.sessionId || opts.resume) {
     const manifestPath = join(outDir, "session.json");
@@ -459,18 +484,23 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         permissiveMode: plan.permissionMode === "bypassPermissions",
       };
     }
+    const stopStatusTicker = startStatusTicker(outDir, runStatusMeta, () => run.partial());
     try {
-      record = await run.drive(scenario.prompt, {
-        subagentAppend: prompts.subagentAppend,
-        sdkMcp,
-      });
-    } catch (e) {
-      // An unanswered gate is recoverable: grab the in-progress record so the work done before the whiff can
-      // be salvaged to disk below. Any other error is a genuine fault — keep today's fail-fast behavior.
-      if (e instanceof UnansweredError) {
-        unansweredErr = e;
-        record = run.partial();
-      } else throw e;
+      try {
+        record = await run.drive(scenario.prompt, {
+          subagentAppend: prompts.subagentAppend,
+          sdkMcp,
+        });
+      } catch (e) {
+        // An unanswered gate is recoverable: grab the in-progress record so the work done before the whiff can
+        // be salvaged to disk below. Any other error is a genuine fault — keep today's fail-fast behavior.
+        if (e instanceof UnansweredError) {
+          unansweredErr = e;
+          record = run.partial();
+        } else throw e;
+      }
+    } finally {
+      stopStatusTicker();
     }
   } finally {
     // Reap the agent container FIRST (before the sidecar networks), so a crashed/unanswered run can't
@@ -525,6 +555,9 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       unanswered: { message: unansweredErr.message, hint: unansweredErr.hint },
       fingerprint: buildFingerprint(scenario.session, baseline.appVersion, undefined, scenario.skills),
     });
+    // Non-null: `durationMs` is set unconditionally just above (`Date.now() - startedAt`) — the field is
+    // typed optional on RunResult/PartialResult for OTHER (non-execute.ts) producers, not this call site.
+    runCrashSafety.finalize(record, "error", partialResult.durationMs!);
     writeFileSync(join(outDir, "result.json"), scrub(JSON.stringify(partialResult, null, 2), secrets));
     writeRunJsonl(outDir, scenario, effectiveFidelity, record, egress, secrets);
     writeTrace(outDir, record, egress, secrets, partialResult.durationMs);
@@ -710,6 +743,9 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // record path uses for the cassette (cassette.ts) — `(inline)`/no-skill sessions yield a {baseline}-only fp.
     fingerprint: buildFingerprint(scenario.session, baseline.appVersion, undefined, scenario.skills),
   };
+
+  // Non-null: see the matching comment at the partial-result finalize call above.
+  runCrashSafety.finalize(record, result.result, result.durationMs!);
 
   // Artifacts: the harness-observability log `run.jsonl` REPLACES transcript.json/decisions.jsonl.
   writeFileSync(join(outDir, "result.json"), scrub(JSON.stringify(result, null, 2), secrets));
