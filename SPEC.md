@@ -147,7 +147,7 @@ Each line is one stream-json message. The message types that carry signal:
 - `{type:"result", is_error, usage}` — turn end.
 
 **Sub-agent dispatch recognition (binary fact):** the real cowork dispatch tool is **`Agent`** (agent
-ELF 2.1.187 as of baseline desktop-1.15962.1: `{name:"Agent", aliases:["Task"], description:"Launch a new agent",
+ELF 2.1.197 as of baseline desktop-1.17377.1: `{name:"Agent", aliases:["Task"], description:"Launch a new agent",
 inputSchema:{description, subagent_type, prompt}}`). `parseMessage` synthesizes a `subagent_dispatch`
 for a `tool_use` whose `name` is `Agent` **or** `Task` (the alias) **or** whose `input` carries
 `subagent_type`. The cowork **`TaskCreate`/`TaskUpdate`** tools are the *todo list*

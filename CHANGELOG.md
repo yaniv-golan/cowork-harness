@@ -114,6 +114,24 @@ All notable changes to this project are documented here. The format is based on
   it); `--version` documents its `-v` alias; and the `gates` / `answer` / `scaffold` usage strings now show
   the `--output-format` flag they already parse.
 
+### Parity
+
+- **Synced the platform baseline to Claude Desktop 1.17377.1** (`baselines/desktop-1.17377.1.json`). The
+  staged agent ELF moved **2.1.187 → 2.1.197**. `sync` re-derived egress/gates/mount/web_fetch facts — **no
+  unknown deltas**; only `asarFingerprint` moved (the mount-mode and web_fetch drift-guard regexes both
+  still matched) and `api.claude.ai` joined `network.allowDomains`. None of the 6 pinned GrowthBook gates
+  drifted (loop / dispatch-cap / web_fetch-routing / transport / plugin-sync / CLI-plugin-broker all held
+  their prior on/off state). Re-verified end-to-end — the live scenario suite (`protocol` + `container`
+  tiers) passes against the new baseline.
+- **Spot-checked the reconstructed system-prompt / host-loop content against the new asar** (this is
+  hand-authored, not something `sync` extracts): the `<application_details>` identity block — including the
+  load-bearing "is NOT Claude Code" correction — the host-loop `## Shell access` marker, subagent-append
+  gating, the `computer://` scheme, `request_cowork_directory`, and `coworkNativeFilePreview` are all
+  present and substantively unchanged since the `1.15200.0` reconstruction (only non-substantive
+  punctuation-level rewording). No re-authoring of `baselines/prompts/desktop-1.15200.0/` was needed.
+- **Doc-pin sweep to `desktop-1.17377.1` / agent `2.1.197`** across README, DESIGN, SPEC, the spawn-contract
+  doc, and the skill's reference docs.
+
 ## [0.19.0] — 2026-06-30
 
 ### Changed
