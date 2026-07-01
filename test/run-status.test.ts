@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import type { RunRecord } from "../src/run/run.js";
 import type { RunStatus } from "../src/types.js";
 import {
@@ -215,6 +215,18 @@ describe("resolveStatusDir", () => {
     // os.homedir() always exists, so this proves the tilde was expanded prior to the existsSync/statSync
     // check without depending on any specific layout under the real home directory.
     expect(resolveStatusDir("~")).toBe(homedir());
+  });
+
+  it("expands a '~/<subpath>' form to the home directory too — the shape a human would actually paste", () => {
+    // Creates (and cleans up) a real scratch dir under the actual home directory — the only way to
+    // exercise the "~/<subpath>" branch without depending on any pre-existing layout there.
+    const sub = mkdtempSync(join(homedir(), ".cwh-status-test-"));
+    try {
+      const tildePath = join("~", relative(homedir(), sub));
+      expect(resolveStatusDir(tildePath)).toBe(sub);
+    } finally {
+      rmSync(sub, { recursive: true, force: true });
+    }
   });
 });
 
