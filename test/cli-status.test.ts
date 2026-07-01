@@ -166,7 +166,9 @@ describe.skipIf(!can)("cowork-harness status", () => {
     await new Promise((r) => setTimeout(r, 100));
     writeFileSync(join(dir, "status.json"), JSON.stringify({ ...runningStatus(), state: "error", result: "error", durationMs: 42 }));
 
-    const code = await new Promise<number | null>((resolveExit) => child.on("exit", resolveExit));
+    // "close" (not "exit") — fires after stdio streams have fully drained, avoiding a theoretical race
+    // where the last stdout "data" chunk hasn't been delivered yet when "exit" fires.
+    const code = await new Promise<number | null>((resolveExit) => child.on("close", resolveExit));
     expect(code).toBe(1); // not 0 — the run actually errored
     expect(stdout).toContain('"state":"error"');
   });

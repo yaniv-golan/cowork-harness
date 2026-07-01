@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, readFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
 import type { RunRecord } from "../src/run/run.js";
 import type { RunStatus } from "../src/types.js";
@@ -209,6 +209,12 @@ describe("resolveStatusDir", () => {
 
   it("throws for a nonexistent, non-run-id argument", () => {
     expect(() => resolveStatusDir("/no/such/dir/at/all")).toThrow();
+  });
+
+  it("expands a bare '~' to the home directory BEFORE the existsSync check runs (defense-in-depth for a human-pasted tildeified path — the printed [status] line itself is always the raw absolute path)", () => {
+    // os.homedir() always exists, so this proves the tilde was expanded prior to the existsSync/statSync
+    // check without depending on any specific layout under the real home directory.
+    expect(resolveStatusDir("~")).toBe(homedir());
   });
 });
 

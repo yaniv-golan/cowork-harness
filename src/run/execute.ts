@@ -1,4 +1,4 @@
-import { warn, tildeify } from "../io.js";
+import { warn } from "../io.js";
 import { BoundaryError } from "../errors.js";
 import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync, readdirSync, statSync, lstatSync, realpathSync } from "node:fs";
 import { randomUUID, createHash } from "node:crypto";
@@ -249,7 +249,12 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     startedAt: Date.now(),
   };
   writeRunningStatus(outDir, runStatusMeta);
-  process.stderr.write(`[status] ${tildeify(outDir)}\n`);
+  // Raw absolute path (NOT tildeified) — this line is a machine-capture contract: a driving agent/script
+  // parses it and feeds it straight back into `cowork-harness status <path>`, so it must round-trip
+  // exactly. `~` abbreviation is a human-display nicety and Node does not expand it, so tildeifying here
+  // would break the very workflow this line exists for (contrast with the unrelated human-facing
+  // `--keep`/footer paths elsewhere, which DO tildeify).
+  process.stderr.write(`[status] ${outDir}\n`);
 
   // Crash-safety net: WITHOUT this, a throw that unwinds past executeScenario without ever reaching
   // either RunResult assembler (buildPartialResult's call site, or the success-path result below) —
