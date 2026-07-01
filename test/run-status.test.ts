@@ -16,6 +16,7 @@ import {
   hasRunStatus,
   resolveStatusDir,
   followRunStatus,
+  statusLine,
   type RunStatusMeta,
 } from "../src/run/run-status.js";
 
@@ -287,4 +288,14 @@ describe("followRunStatus", () => {
       );
     },
   );
+});
+
+describe("statusLine", () => {
+  const p = "/Users/someone/.cowork-harness/runs/skill-x/local_abc";
+  it("emits the RAW [status] line by default (machine-capture contract — must round-trip verbatim)", () => {
+    expect(statusLine(p, false)).toBe(`[status] ${p}\n`);
+  });
+  it("suppresses it under --compact/--demo so the shareable no-host-path mode can't leak an absolute path", () => {
+    expect(statusLine(p, true)).toBeNull();
+  });
 });

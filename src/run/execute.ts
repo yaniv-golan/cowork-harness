@@ -8,7 +8,13 @@ import { join, dirname, resolve, basename, isAbsolute, sep } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { Scenario } from "../types.js";
 import type { RunResult } from "../types.js";
-import { writeRunningStatus, startStatusTicker, registerRunForCrashSafety, type RunStatusMeta } from "./run-status.js";
+import {
+  writeRunningStatus,
+  startStatusTicker,
+  registerRunForCrashSafety,
+  statusLine,
+  type RunStatusMeta,
+} from "./run-status.js";
 // Runtime-only circular import: cassette.ts imports executeScenario from here, and we import buildFingerprint
 // from there. Both bindings are used only inside function bodies (call time), never at module load, so the
 // ESM live-binding cycle is safe. buildFingerprint's deps (skillSourceDirs → parseSessionFile) live here, so
@@ -249,12 +255,11 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     startedAt: Date.now(),
   };
   writeRunningStatus(outDir, runStatusMeta);
-  // Raw absolute path (NOT tildeified) — this line is a machine-capture contract: a driving agent/script
-  // parses it and feeds it straight back into `cowork-harness status <path>`, so it must round-trip
-  // exactly. `~` abbreviation is a human-display nicety and Node does not expand it, so tildeifying here
-  // would break the very workflow this line exists for (contrast with the unrelated human-facing
-  // `--keep`/footer paths elsewhere, which DO tildeify).
-  process.stderr.write(`[status] ${outDir}\n`);
+  // Raw absolute path by machine-capture contract, but suppressed under --compact/--demo so the
+  // shareable "no host paths" mode doesn't leak one. status.json is still written either way — see
+  // statusLine's contract note. (`--keep`/footer paths elsewhere are human-facing and DO tildeify.)
+  const sLine = statusLine(outDir, !!opts.compact);
+  if (sLine) process.stderr.write(sLine);
 
   // Crash-safety net: WITHOUT this, a throw that unwinds past executeScenario without ever reaching
   // either RunResult assembler (buildPartialResult's call site, or the success-path result below) —

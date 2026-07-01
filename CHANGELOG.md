@@ -6,6 +6,16 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+
+- **`--compact`/`--demo` no longer leak a host path via the `[status]` line.** 0.20.0's run-start
+  `[status] <outDir>` line prints a raw, un-tildeified absolute path by machine-capture contract — but it
+  was emitted unconditionally, so under `--demo` (the "shareable, no host paths" preset) it exposed
+  `/Users/<name>/.cowork-harness/…`, the exact leak `--demo` exists to prevent. The line is now suppressed
+  under `--compact`/`--demo` (a human sharing a clip isn't scripting `status`; a machine/CI caller that
+  needs the path doesn't pass `--compact`, or reads `status.json` / `--session-id`). `status.json` is still
+  written either way, so `cowork-harness status` is unaffected.
+
 ## [0.20.0] — 2026-07-01
 
 ### Added
