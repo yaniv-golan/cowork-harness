@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { AgentEvent } from "../src/agent/session.js";
-import { makeRenderer, renderFooter, startHeartbeat, inputSummary, type RenderPlan } from "../src/run/renderer.js";
+import { makeRenderer, renderFooter, startHeartbeat, inputSummary, toolMarker, type RenderPlan } from "../src/run/renderer.js";
 import type { RunResult } from "../src/types.js";
 
 const plan = (over: Partial<RenderPlan> = {}): RenderPlan => ({
@@ -35,7 +35,7 @@ describe("renderer — makeRenderer", () => {
     const t = s.text();
     expect(t).toContain("claude›");
     expect(t).toContain("I will search");
-    expect(t).toContain("· Bash");
+    expect(t).toContain("! Bash");
     expect(t).not.toContain("thinking");
     expect(t).not.toContain("sub-agent");
     expect(r.summary()).toEqual({ tools: 1, subagents: 1 }); // Bash is the only top-level tool; Read is sub-agent
@@ -59,6 +59,21 @@ describe("renderer — makeRenderer", () => {
     r.onEvent!({ type: "error", source: "agent", message: "boom" });
     expect(s.text()).not.toContain("\x1b[");
     expect(s.text()).toContain("! agent: boom");
+  });
+});
+
+describe("toolMarker", () => {
+  it("categorizes read/mutate/shell/network tools distinctly", () => {
+    expect(toolMarker("Read")).toBe("@");
+    expect(toolMarker("Glob")).toBe("@");
+    expect(toolMarker("Write")).toBe("#");
+    expect(toolMarker("Edit")).toBe("#");
+    expect(toolMarker("Bash")).toBe("!");
+    expect(toolMarker("WebFetch")).toBe("?");
+  });
+  it("falls back to the plain dot for anything uncategorized", () => {
+    expect(toolMarker("Agent")).toBe("·");
+    expect(toolMarker("mcp__workspace__bash")).toBe("·");
   });
 });
 

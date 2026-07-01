@@ -40,6 +40,27 @@ const red = (p: RenderPlan, s: string) => c(p, "31", s);
 const green = (p: RenderPlan, s: string) => c(p, "32", s);
 const bold = (p: RenderPlan, s: string) => c(p, "1", s);
 
+const TOOL_CATEGORY_MARKER: Record<string, string> = {
+  Read: "@",
+  Glob: "@",
+  Grep: "@",
+  LS: "@",
+  NotebookRead: "@",
+  Write: "#",
+  Edit: "#",
+  NotebookEdit: "#",
+  Bash: "!",
+  BashOutput: "!",
+  KillShell: "!",
+  WebFetch: "?",
+  WebSearch: "?",
+};
+/** One-char category prefix for a tool marker line — read (@) / mutate (#) / shell (!) / network (?) /
+ *  uncategorized (·, unchanged default). Purely cosmetic; does not affect what's counted or gated. */
+export function toolMarker(name: string): string {
+  return TOOL_CATEGORY_MARKER[name] ?? "·";
+}
+
 function truncate(text: string, verbose: boolean): string {
   if (verbose) return text;
   let t = text;
@@ -95,7 +116,8 @@ export function makeRenderer(plan: RenderPlan, write: Sink = stderr): Renderer {
         case "tool_use":
           if (!e.parentToolUseId) {
             tools++;
-            if (plan.progress) write(`  ${dim(plan, "· " + e.name + (plan.verbose ? " " + inputSummary(e.input, plan.compact) : ""))}\n`);
+            if (plan.progress)
+              write(`  ${dim(plan, toolMarker(e.name) + " " + e.name + (plan.verbose ? " " + inputSummary(e.input, plan.compact) : ""))}\n`);
           }
           break;
         case "subagent_dispatch":
