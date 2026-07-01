@@ -123,6 +123,14 @@ All notable changes to this project are documented here. The format is based on
 - **CLI `--help` drift.** The top-level `chat` summary now lists `protocol` (the command already accepted
   it); `--version` documents its `-v` alias; and the `gates` / `answer` / `scaffold` usage strings now show
   the `--output-format` flag they already parse.
+- **`sync --diff` no longer goes silent on a genuine Desktop version bump.** It previously diffed `next`
+  against `baselines/desktop-<NEW version>.json` — which doesn't exist yet on a real bump — so it always
+  printed `(no committed baseline yet)` instead of the `appVersion`/`agentVersion`/etc. field diff
+  `docs/maintenance.md` documents. It now diffs against `base` (the latest committed baseline `next` was
+  actually merged onto), which is the previous version on a bump and the exact same content on a
+  same-version re-sync. The diff header now names which baseline it's comparing against. `docs/
+  maintenance.md`'s example output and noise callout (`$comment` also moves alongside `capturedAt` on every
+  run) updated to match.
 
 ### Parity
 
