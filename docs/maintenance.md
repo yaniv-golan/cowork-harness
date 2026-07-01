@@ -27,15 +27,16 @@ cowork-harness sync --diff      # show what moved vs the committed baseline
 `sync` reads the live install (`claude-code-vm/.sdk-version`, `config.json`) and the `app.asar`, re-derives the volatile fields, and **merges them onto the latest committed baseline** so the stable structural fields carry over. Review the diff:
 
 ```
-=== diff vs committed baseline ===
+=== diff vs latest committed baseline (desktop-1.11847.5) ===
+  $comment: "…Captured 2026-06-10…" -> "…Captured 2026-06-25…"
   capturedAt: "2026-06-10" -> "2026-06-25"
   appVersion: "1.11847.5" -> "1.12603.1"
   agentVersion: "2.1.170" -> "2.1.177"
   network: {...} -> {...}
 ```
 
-(`capturedAt` is rewritten to today on every `sync`, so it always shows in the diff even when nothing
-substantive moved — ignore it as noise.)
+(`capturedAt` is rewritten to today on every `sync`, and `$comment` embeds that same date, so both always
+show in the diff even when nothing substantive moved — ignore them as noise.)
 
 Then commit:
 

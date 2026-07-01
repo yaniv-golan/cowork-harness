@@ -1609,13 +1609,17 @@ function cmdSync(args: string[]) {
   };
   const diffFlag = !!syncParsed.flags["--diff"];
   if (diffFlag) {
-    try {
-      const prev = JSON.parse(readFileSync(baselinePath, "utf8"));
-      log("=== diff vs committed baseline ===");
-      diff(prev, next, "");
-    } catch {
-      log(`(no committed ${baselinePath} yet — this would be the first)`);
-    }
+    // Diff against `base` (the latest committed baseline `next` was merged onto), NOT a separate read of
+    // `baselinePath`. On a genuine version bump `baselinePath` (desktop-<NEW version>.json) doesn't exist
+    // yet, so reading it here used to always miss and print "no committed baseline yet" instead of the
+    // appVersion/agentVersion/etc. diff docs/maintenance.md documents — going silent on exactly the
+    // release-bump preview it exists for. `base` already holds the right comparison in both cases: on a
+    // bump it's the previous version (the "old" side of the diff); on a same-version re-sync `baselinePath`
+    // would just be re-reading the same file `base` came from. `base` is a fresh deep clone (`JSON.parse(
+    // JSON.stringify(loadBaseline("latest")))` above) that nothing between here and there mutates in
+    // place, so this surfaces real gate/content drift, not a diff against an already-updated copy.
+    log(`=== diff vs latest committed baseline (desktop-${(base as { appVersion?: string }).appVersion}) ===`);
+    diff(base, next, "");
   }
   if (res.unknownDeltas.length) {
     log("\n⚠ unknown deltas (extend src/sync/cowork-sync.ts):");
