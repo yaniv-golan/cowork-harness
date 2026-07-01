@@ -236,10 +236,10 @@ describe("trace --dispatches (dispatch tree + total)", () => {
   });
 });
 
-// assert --list is generated from the Zod Assertion schema; every key MUST carry a description so
+// assertions --list is generated from the Zod Assertion schema; every key MUST carry a description so
 // the list can never drift (and the published JSON schema is enriched).
 import { Assertion } from "../src/types.js";
-describe("assert --list (every Assertion key has a description, drift guard)", () => {
+describe("assertions --list (every Assertion key has a description, drift guard)", () => {
   it("no Assertion field is missing its .describe()", () => {
     const shape = Assertion.shape as Record<string, { description?: string }>;
     const missing = Object.keys(shape).filter((k) => !shape[k].description);

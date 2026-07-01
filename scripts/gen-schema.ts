@@ -20,7 +20,7 @@ export const SCHEMA_DIR = join(REPO_ROOT, "schema");
 export const ASSERTION_KEYS_PATH = join(REPO_ROOT, ".claude/skills/cowork-harness/scripts/assertion-keys.json");
 
 /** The authoritative key lists `scenario.py` reads — derived from the Zod schemas (the same source
- *  `assert --list` reads). Generating them keeps the linter's unknown-key checks from drifting: `keys` is
+ *  `assertions --list` reads). Generating them keeps the linter's unknown-key checks from drifting: `keys` is
  *  the `assert:` catalog, `topLevelKeys` the scenario top-level catalog (an earlier hand-maintained copy
  *  drifted and false-flagged the valid `requires_capabilities`). `profile`/`assertions` are NOT here — they
  *  are deprecated aliases handled by scenario.py's special-cases (the Zod `Scenario` preprocess remaps

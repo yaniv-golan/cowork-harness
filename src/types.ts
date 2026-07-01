@@ -148,7 +148,7 @@ export const AnswerRule = z
 export type AnswerRule = z.infer<typeof AnswerRule>;
 
 // Each field carries a `.describe()` so it is the SINGLE source for both the published JSON schema and
-// `cowork-harness assert --list` (which reads `Assertion.shape[k].description`) — the list can never drift
+// `cowork-harness assertions --list` (which reads `Assertion.shape[k].description`) — the list can never drift
 // from the schema. Keep descriptions one line.
 export const Assertion = z.object({
   transcript_contains: z.string().min(1).optional().describe("the transcript contains this literal substring"),
