@@ -28,18 +28,18 @@ describe("LlmDecider", () => {
     expect((d as any).model).toBe("claude-sonnet-5");
   });
 
-  it("defaults the answering model to the validated Sonnet id when none is supplied", async () => {
+  it("defaults the answering model to the floating 'sonnet' alias when none is supplied", async () => {
     // The default resolves from `process.env.COWORK_HARNESS_DECIDER_MODEL || <literal>`, so unset the
     // env first or this asserts the env value (false green/red in a CI that sets it). The mock echoes
-    // back whatever `model` it was asked to use, so this proves the DEFAULT REQUEST value, independent of
-    // resolution (Task 2 flips the literal this asserts, once the default itself changes).
+    // back whatever `model` it was asked to use, so this proves the DEFAULT REQUEST value; the SEPARATE
+    // "records the RESOLVED model" test above already proves resolution is recorded, not the alias.
     const prev = process.env.COWORK_HARNESS_DECIDER_MODEL;
     delete process.env.COWORK_HARNESS_DECIDER_MODEL;
     try {
       let requested = "";
       const complete: Complete = async (_p, model) => ((requested = model), reply("PDF", model));
       await new LlmDecider(complete).decide(ask("Format?", ["Markdown", "PDF"]), ctx());
-      expect(requested).toBe("claude-sonnet-4-5");
+      expect(requested).toBe("sonnet");
     } finally {
       if (prev === undefined) delete process.env.COWORK_HARNESS_DECIDER_MODEL;
       else process.env.COWORK_HARNESS_DECIDER_MODEL = prev;

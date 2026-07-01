@@ -450,7 +450,11 @@ export class LlmDecider implements Decider {
   constructor(
     private complete: Complete,
     private intent?: string,
-    private model: string = process.env.COWORK_HARNESS_DECIDER_MODEL || "claude-sonnet-4-5",
+    // "sonnet" is a floating CLI alias (resolves to whatever the latest Sonnet is at call time) — it is
+    // NEVER what gets recorded in Decision.model / gateProvenance; claudeCliComplete's --output-format
+    // json resolves it to a concrete id first (see CompleteResult). Pin --decider-model /
+    // COWORK_HARNESS_DECIDER_MODEL to a dated id for cross-run reproducibility.
+    private model: string = process.env.COWORK_HARNESS_DECIDER_MODEL || "sonnet",
     // the default transport spawns `claude -p <prompt>` with the prompt as ARGV (process-table visible).
     // The prompt embeds an unscrubbed transcript tail, so without these a tracked secret in the last ~1000
     // chars lands in `ps`/`/proc/<pid>/cmdline`. Scrub the prompt at each complete() call — symmetric with
