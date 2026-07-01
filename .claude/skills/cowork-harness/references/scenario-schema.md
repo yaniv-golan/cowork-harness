@@ -335,7 +335,7 @@ Find an artifact's real field paths by running once with `--keep`, then `cowork-
 The "✓ passed ≠ correct" landmines, as *symptom → why → fix*. `file:line` pointers track the version
 at the top of this file.
 
-1. **Replay silently skips filesystem/egress assertions (two shapes).** *Full skip:* a pure
+1. **Replay skips filesystem/egress assertions (two shapes) — with a loud warning.** *Full skip:* a pure
    live-only `egress_*`/`no_delete_in_outputs`/`self_heal_ran`/`transcript_no_host_path` item on a
    `replay` gate is filtered out, not passing. (`file_exists`/`user_visible_artifact`/`artifact_json`
    are replay-checkable **when the cassette carries an `artifacts` manifest**; without one they are

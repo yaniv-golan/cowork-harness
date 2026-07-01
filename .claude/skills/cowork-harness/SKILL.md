@@ -145,7 +145,8 @@ Conflating these is the **biggest landmine**. An assertion key has two independe
   not semantic content the model paraphrases, which re-records red); check structured JSON with YAML
   `artifact_json` (or the pytest lane for complex predicates), not via a transcript substring.
 - **Axis B — survives `replay`?** *Independent of Axis A.* On the token-free `replay` lane, only
-  **content keys** evaluate; filesystem / egress keys are **silently skipped** (live-only). A key
+  **content keys** evaluate; filesystem / egress keys are skipped (live-only) — loudly, via an
+  `::warning::` annotation, not a silent no-op. A key
   being "robust" says nothing about whether it runs on your replay gate.
 
 Getting Axis B wrong means a check that **silently does nothing in CI**. The harness now warns
