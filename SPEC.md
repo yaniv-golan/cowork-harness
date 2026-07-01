@@ -343,8 +343,8 @@ response via `serializeDecision` and compares to the frozen `controlOut` envelop
 key-sorted JSON). A mismatch produces a synthesized `{ assertion: { replay_protocol_fidelity: true },
 pass: false, message }` entry in `assertions[]` and exits 1. This catches regressions in
 `serializeDecision` — e.g. dropping `questions` from the AskUserQuestion `updatedInput` — on the
-token-free lane. `replay_protocol_fidelity` is synthesized-only; it is not in `contentKeys` and is
-never user-authored.
+token-free lane. `replay_protocol_fidelity` is not a user-authored `contentKeys` entry — it is
+synthesized and evaluated automatically on every replay (see the O7 guard above).
 
 `run`, `skill`, and `replay` emit a single JSON object on **stdout** under `--output-format json` (nothing
 else hits stdout in that mode — the renderer/footer/`[env]`/`[input]` all go to stderr). The

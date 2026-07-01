@@ -82,7 +82,10 @@ The generated cassette bundles the scenario, the event stream, and the decision 
 (the injected OAuth token / API key) are scrubbed from the recorded `controlOut` by value at record
 time — safe to commit for synthetic fixtures (see §Committed fixture below).
 
-Without `--out`, the cassette is named after the scenario's `name:` (or the YAML filename).
+Without `--out`, the cassette is named after the scenario's `name:` (or the YAML filename) and written
+under `cassettes/`, which is **gitignored** — this repo's own committed examples live at
+`examples/replays/` instead. Pass `--out examples/replays/<name>.cassette.json` (or your own tracked
+path) if the cassette should be committed.
 
 ## Answering gates during recording
 
@@ -220,6 +223,9 @@ Content keys are evaluated on replay; everything else is skipped.
 **`question_asked`, `questions_count_max`, `gate_answers_delivered` require `controlOut`** (full-fidelity
 replay). On an old cassette without `controlOut` these three keys are excluded from evaluation — not
 vacuously passed — and a loud warning fires (see §Backward compatibility).
+
+`file_exists`, `user_visible_artifact`, and `artifact_json` are **not** in the table above — see the
+next subsection; they're replay-checkable only when the cassette carries an artifacts manifest.
 
 ### Filesystem assertions — replay-checkable WITH an artifact manifest
 

@@ -232,8 +232,8 @@ without actually running the agent. For **content correctness**, match the asser
   **not** `file_exists`, for the user-facing deliverable. When the session connects a folder, the deliverable
   lands in `mnt/<folder>` (that folder is `{{workspaceFolder}}`), **not** `mnt/outputs` — so a model told to
   write "outputs/foo" writes `mnt/<folder>/outputs/foo`. `user_visible_artifact` spans both visible roots
-  (`outputs/` + each connected folder), while `file_exists` only checks `mnt/<path>` and silently misses a
-  folder-relative deliverable. Reserve `file_exists` for a known fixed sandbox path (e.g. a folder-less session
+  (`outputs/` + each connected folder), while `file_exists` only checks `mnt/<path>` and does not check
+  folder-relative deliverables. Reserve `file_exists` for a known fixed sandbox path (e.g. a folder-less session
   where `{{workspaceFolder}} = mnt/outputs`).
 
 Each list item under `assert:` is one assertion. An item with **multiple keys is an AND** — it passes only
