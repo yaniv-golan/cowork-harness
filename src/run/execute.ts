@@ -40,6 +40,7 @@ import { type DecisionChannel } from "../decide/external-channel.js";
 import { claudeCliComplete } from "../decide/llm-transport.js";
 import { Run, type RunRecord, type RunHooks } from "./run.js";
 import { runsWriteRoot } from "./trace-view.js";
+import { summarizeGateProvenance } from "./gate-provenance.js";
 import { collectSecrets, scrub } from "../secrets.js";
 
 const RUN_RESULT_SCHEMA_URL = "https://raw.githubusercontent.com/yaniv-golan/cowork-harness/main/schema/run-result.json";
@@ -649,6 +650,12 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     }
   }
 
+  // Gate provenance: how each AskUserQuestion gate was answered (scripted / decided / first / prompt).
+  // Derived from the same decision log the envelope persists; `undefined` when the run had no gates so
+  // the field self-suppresses. Informational — never affects the verdict. `record.decisions`
+  // (DecisionRecord[], `by: string`) is assignable to the summarizer's `by?: string` param — no re-map.
+  const gateProvenance = summarizeGateProvenance(record.decisions);
+
   const result: RunResult = {
     $schema: RUN_RESULT_SCHEMA_URL,
     generator: "cowork-harness",
@@ -689,6 +696,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       record.decisions.some((d) => d.by === "llm" || d.by === "external" || d.by === "human" || d.by === "first") ||
       !!opts.nonDeterministicHint,
     nonDeterministicTerminal: onUnanswered === "llm" || onUnanswered === "prompt" || !!opts.externalChannel,
+    gateProvenance: gateProvenance.total ? gateProvenance : undefined,
     permissiveAutoAllow: record.permissiveAutoAllow.length ? record.permissiveAutoAllow : undefined, // cowork-parity off-registry auto-allows (real Cowork blocks) — non-empty ⇒ NOT a faithful pass
     scan, // post-run scan signals (delete-in-outputs / host-path-leak / self-heal) — computeVerdict default-fails when unasserted
     effectiveFidelity, // The tier actually used — differs from fidelity when fidelity:"cowork"
@@ -834,6 +842,7 @@ export function buildPartialResult(args: {
       name: d.name,
       decision: d.decision,
       by: d.by,
+      model: d.model,
       detail: d.detail,
       rationale: d.rationale,
     })),
@@ -853,6 +862,10 @@ export function buildPartialResult(args: {
     userVisibleRoots: args.userVisibleRoots,
     artifacts: collectArtifacts(args.workRoot, args.userVisibleRoots),
     effectiveFidelity: args.effectiveFidelity,
+    ...(() => {
+      const gp = summarizeGateProvenance(record.decisions);
+      return gp.total ? { gateProvenance: gp } : {};
+    })(),
     ...(args.fingerprint ? { fingerprint: args.fingerprint } : {}),
   };
 }

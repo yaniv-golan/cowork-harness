@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { summarizeGateProvenance, labelSource, formatGateProvenanceLine } from "../src/run/gate-provenance.js";
 import type { RunResult } from "../src/types.js";
 
@@ -71,5 +73,16 @@ describe("formatGateProvenanceLine", () => {
 
   it("returns null when there are no gates (nothing to say)", () => {
     expect(formatGateProvenanceLine({ total: 0, bySource: {}, gates: [] })).toBeNull();
+  });
+});
+
+describe("run-result schema", () => {
+  it("declares the gateProvenance property (guards schema/type drift)", () => {
+    // `__dirname` is undefined under this project's pure-ESM setup — use the Vitest cwd, which is the
+    // repo root (test/examples.test.ts reads bare relative paths like `readdirSync("baselines")`). Do
+    // NOT use `__dirname` (ReferenceError) or reach for `import.meta` here.
+    const schema = JSON.parse(readFileSync(join(process.cwd(), "schema", "run-result.json"), "utf8"));
+    expect(schema.properties.gateProvenance).toBeDefined();
+    expect(schema.properties.gateProvenance.properties).toHaveProperty("bySource");
   });
 });
