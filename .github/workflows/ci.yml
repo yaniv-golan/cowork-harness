@@ -176,6 +176,6 @@ jobs:
       - name: Note
         run: |
           echo "Platform baselines are synced from a developer's installed Claude Desktop via"
-          echo "\`cowork-harness sync --diff\` (needs the macOS/Windows app — not available on CI runners)."
+          echo "\`cowork-harness sync --diff\` (needs the macOS app — Cowork Desktop is macOS-only; not available on CI runners)."
           echo "This job is a placeholder reminder; run sync locally when Desktop updates."
           echo "See docs/maintenance via README → Maintenance."

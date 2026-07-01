@@ -10,8 +10,10 @@ npm run format:check  # prettier over src/ + test/ .ts — the most common first
 npm run typecheck     # tsc --noEmit
 npm test              # vitest
 npm run build         # -> dist/
-npm run ci            # typecheck + build + test (the full local gate)
+npm run ci            # typecheck + build + test — the core TS gate (CI's `unit` job runs more; see below)
 ```
+
+Before pushing: `npm run format:check` and `npm run ci` (see RELEASING.md's release checklist for the full pre-tag list).
 
 Node ≥ 20. The project is ESM TypeScript; no transpiler magic — `tsc` only.
 
@@ -73,7 +75,7 @@ When a Desktop release moves something `sync` doesn't read, it reports an `unkno
 ## Commit & PR
 
 - Conventional, imperative commit subjects (`add …`, `fix …`, `parity: sync to <ver>`).
-- Open PRs against `main`. CI runs typecheck, tests, build, and (on the repo, not forks) boundary + live scenarios.
+- Open PRs against `main`. CI runs typecheck, tests, build, and boundary parity on every PR including forks (no secrets needed); live scenarios only run on same-repo PRs/pushes with `ANTHROPIC_API_KEY` set.
 - Describe *what changed and why*; link issues.
 
 ## Reporting issues

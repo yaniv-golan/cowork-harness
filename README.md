@@ -481,7 +481,7 @@ The provided [GitHub Actions workflow](.github/workflows/ci.yml) runs a **four-s
 |---|---|---|---|
 | **unit** | format check · typecheck · unit tests · build · CLI smoke · token-free `replay` · `verify-cassettes` · `lint` | nothing | every push/PR |
 | **boundary** | builds the pinned agent image, brings up the default-deny network, runs `boundary-check` | Docker, arm64 runner | proves the sandbox enforces Cowork's limits — **no API key** |
-| **scenarios** | the live scenario suite at `container` fidelity, uploads transcripts/egress logs as artifacts | `ANTHROPIC_API_KEY` (or `CLAUDE_CODE_OAUTH_TOKEN`) | fork PRs: the whole job is skipped (`if:` guard); same-repo without a key: warns and exits 0 |
+| **scenarios** | the live scenario suite (mixed `protocol` + `container` fidelity across `examples/scenarios/`), uploads transcripts/egress logs as artifacts | `ANTHROPIC_API_KEY` | fork PRs: the whole job is skipped (`if:` guard); same-repo without a key: warns and exits 0 |
 | **parity-drift** | reminder to re-`sync` when Desktop updates | nothing | informational, never blocks |
 
 This ordering means cheap checks fail fast, the **boundary parity gate runs without secrets** (so forks get it too), and expensive live runs only happen when a key is present.
