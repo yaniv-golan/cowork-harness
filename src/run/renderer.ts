@@ -98,6 +98,11 @@ export function makeRenderer(plan: RenderPlan, write: Sink = stderr): Renderer {
   const transcript: string[] = [];
   let tools = 0;
   let subagents = 0;
+  // toolUseId -> true for TOP-LEVEL tool calls only, so a tool_result can look up whether its
+  // originating tool_use was ever rendered (nested calls are never shown, so their results aren't
+  // either — same gate `tool_use` itself already applies). Deleted on first matching result: one
+  // result per call, so this can't grow unbounded across a long chat session.
+  const topLevelToolCalls = new Set<string>();
   let last = Date.now();
   let turnStart = Date.now(); // reset on each "result" — drives the turn-boundary separator's elapsed time
   return {
@@ -117,10 +122,20 @@ export function makeRenderer(plan: RenderPlan, write: Sink = stderr): Renderer {
         case "tool_use":
           if (!e.parentToolUseId) {
             tools++;
+            if (e.toolUseId) topLevelToolCalls.add(e.toolUseId);
             if (plan.progress)
               write(`  ${dim(plan, toolMarker(e.name) + " " + e.name + (plan.verbose ? " " + inputSummary(e.input, plan.compact) : ""))}\n`);
           }
           break;
+        case "tool_result": {
+          if (!e.toolUseId || !topLevelToolCalls.has(e.toolUseId)) break; // nested or unpaired — not rendered
+          topLevelToolCalls.delete(e.toolUseId);
+          if (plan.progress) {
+            const head = e.text.split("\n")[0].slice(0, 80);
+            write(`    ${e.isError ? red(plan, "✗ " + head) : dim(plan, "→ " + head)}\n`);
+          }
+          break;
+        }
         case "subagent_dispatch":
           subagents++;
           if (plan.verbose) write(`  ${dim(plan, "└ sub-agent: " + e.agentType + " [" + e.declaredTools.join(",") + "]")}\n`);

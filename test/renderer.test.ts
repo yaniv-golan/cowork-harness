@@ -84,6 +84,37 @@ describe("renderer — turn separator", () => {
   });
 });
 
+describe("renderer — tool_result outcomes", () => {
+  it("renders a one-line outcome for a top-level tool's result (success and error)", () => {
+    const s = sink();
+    const r = makeRenderer(plan(), s.write);
+    r.onEvent!({ type: "tool_use", name: "Bash", input: {}, toolUseId: "tu1" });
+    r.onEvent!({ type: "tool_result", toolUseId: "tu1", isError: false, text: "3 files\nmore output" });
+    r.onEvent!({ type: "tool_use", name: "Bash", input: {}, toolUseId: "tu2" });
+    r.onEvent!({ type: "tool_result", toolUseId: "tu2", isError: true, text: "permission denied" });
+    const t = s.text();
+    expect(t).toContain("→ 3 files");
+    expect(t).toContain("✗ permission denied");
+    expect(t).not.toContain("more output"); // first line only
+  });
+
+  it("does not render a result for a NESTED (sub-agent) tool call — matches tool_use's own visibility rule", () => {
+    const s = sink();
+    const r = makeRenderer(plan(), s.write);
+    r.onEvent!({ type: "tool_use", name: "Read", input: {}, toolUseId: "tu3", parentToolUseId: "parentAgent" });
+    r.onEvent!({ type: "tool_result", toolUseId: "tu3", isError: false, text: "file contents here" });
+    expect(s.text()).not.toContain("file contents here");
+  });
+
+  it("does not render a result when progress is off", () => {
+    const s = sink();
+    const r = makeRenderer(plan({ progress: false }), s.write);
+    r.onEvent!({ type: "tool_use", name: "Bash", input: {}, toolUseId: "tu4" });
+    r.onEvent!({ type: "tool_result", toolUseId: "tu4", isError: false, text: "ok" });
+    expect(s.text()).not.toContain("ok");
+  });
+});
+
 describe("toolMarker", () => {
   it("categorizes read/mutate/shell/network tools distinctly", () => {
     expect(toolMarker("Read")).toBe("@");
