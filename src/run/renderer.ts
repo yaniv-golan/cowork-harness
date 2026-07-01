@@ -127,7 +127,9 @@ export function makeRenderer(plan: RenderPlan, write: Sink = stderr): Renderer {
             tools++;
             if (e.toolUseId) topLevelToolCalls.add(e.toolUseId);
             if (plan.progress)
-              write(`  ${dim(plan, toolMarker(e.name) + " " + e.name + (plan.verbose ? " " + inputSummary(e.input, plan.compact) : ""))}\n`);
+              write(
+                `  ${dim(plan, toolMarker(e.name) + " " + e.name + (plan.verbose ? " " + inputSummary(e.input, plan.compact) : ""))}\n`,
+              );
           }
           break;
         case "tool_result": {

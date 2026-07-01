@@ -808,7 +808,10 @@ export class PromptDecider implements Decider {
           // distinct set, mirroring the LLM/scripted/external paths.
           answers[text] = dedupeFirstSeen(resolved!).join(", ");
         } else {
-          const optionList = boxPrompt([text, ...q.options.map((o, i) => `  ${i + 1}) ${o.label}${o.description ? " — " + o.description : ""}`)]);
+          const optionList = boxPrompt([
+            text,
+            ...q.options.map((o, i) => `  ${i + 1}) ${o.label}${o.description ? " — " + o.description : ""}`),
+          ]);
           let coerced: { value: string; matched: boolean };
           do {
             const raw = await this.ask(optionList);

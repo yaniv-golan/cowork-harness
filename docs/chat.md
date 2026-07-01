@@ -29,9 +29,20 @@ cowork-harness chat <skill-folder> [prompt] [options]
 | `--upload <file>` | — | Attach a file (repeatable). Visible at `mnt/uploads/<basename>`. |
 | `--folder <dir>` | — | Connect a project folder (repeatable). Visible at `mnt/<basename>`. Staged as a **fresh copy** — agent writes land in the run's `mnt/<basename>` output, not back in the host original. |
 | `--plugin <dir>` | — | Load an additional local plugin alongside the main skill folder (repeatable). Rejected in `--raw` mode. |
-| `--verbose` / `-V` | off | Show thinking blocks, tool inputs, and the full sub-agent tree. Default: tool call markers only. |
+| `--verbose` / `-V` | off | Show thinking blocks, tool inputs, and the full sub-agent tree (indented by dispatch depth). Default: tool call markers only. |
 | `--run-dir <path>` (global) | `$COWORK_HARNESS_RUNS_DIR` or `~/.cowork-harness/runs` | Relocate the run/transcript output dir. A **global** flag (stripped before the chat parser), so it works on `chat` too. |
 | `--raw` | off | Skip the control protocol; spawns `docker run -it` in native cowork mode. Egress sandbox is NOT applied. `--upload`, `--folder`, `--plugin`, and `--fidelity` are **rejected** (they can't be honored in native mode); `--model` is still applied. |
+
+## Reading the output
+
+Even without `--verbose`, the REPL shows more than raw assistant text:
+
+- Each tool call gets a category marker: `@` read (Read/Glob/Grep/...), `#` mutate (Write/Edit/...),
+  `!` shell (Bash/...), `?` network (WebFetch/...), `·` for anything uncategorized.
+- A one-line outcome (`→ ...` on success, `✗ ...` on error) prints under each top-level tool call.
+- A `── +N.Ns ──` separator marks each turn boundary, with the elapsed time for that turn.
+- Permission and `AskUserQuestion` gates render inside a `┌─/│/└─` box so they stand out from the
+  progress markers sharing the same terminal.
 
 ## Fidelity tiers
 

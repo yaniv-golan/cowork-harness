@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.20.0] — 2026-07-01
+
 ### Added
 
 - **Gate provenance in run output.** `result.json` now carries a `gateProvenance` block (`total`,
@@ -43,6 +45,18 @@ All notable changes to this project are documented here. The format is based on
   `verdict: { pass, exitCode, signals[], guards[] }` (a non-mutating projection of `computeVerdict`), so a consumer
   can read each result's pass/fail **and why** (e.g. an all-green-assertions run that is `pass:false` purely on a
   `stalled` signal) without recomputing. The top-level `ok` is derived from the same per-result verdicts.
+- **`chat` / `skill` / `run --verbose` live-output legibility pass.** Six small, no-new-dependency
+  improvements to the stderr renderer (`src/run/renderer.ts`) and `PromptDecider`'s TTY gate prompts
+  (`src/decide/decider.ts`) — informational-only, nothing here touches verdicts, `result.json`, or replay.
+  Tool call markers are now category-specific glyphs instead of a uniform `·`: `@` read (Read/Glob/Grep/…),
+  `#` mutate (Write/Edit/…), `!` shell (Bash/…), `?` network (WebFetch/…). Truncated `-V` tool-input
+  summaries now show how much was cut (`… [+N chars]` instead of a bare `…`). Each turn now ends with a
+  `── +N.Ns ──` separator carrying that turn's elapsed time (derived from the SDK's per-turn `result`
+  event, which the renderer previously dropped entirely). `tool_result` events — likewise previously
+  dropped — now render a one-line `→ …` / `✗ …` outcome under each top-level tool call. Nested sub-agent
+  dispatch lines (`--verbose`) now indent proportionally to dispatch depth instead of always rendering
+  flat. And permission / `AskUserQuestion` TTY prompts now render inside a `┌─/│/└─` box so they visually
+  stand out from the progress markers sharing the same stderr stream.
 
 ### Changed
 
