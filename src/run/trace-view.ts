@@ -260,7 +260,9 @@ export function buildGateTrace(file: string): GateTraceRow[] {
   // sibling result.json, in ask order. Missing result.json (bare events.jsonl trace) → left unannotated.
   // Pair against EVERY question-kind decision (answered OR denied), not summarizeGateProvenance's
   // gates[] — that array drops denied/mismatched gates, which would shift every row after one out of
-  // position (rows[] here includes every asked gate, so the index spaces must match).
+  // position (rows[] here includes every asked gate, so the index spaces must match). Still positional,
+  // not keyed by request_id: a duplicated/retried question event in events.jsonl (extra row, no matching
+  // decision) could still misalign later rows — GateTraceRow carries no id to detect that case.
   const resultPath = join(file, "..", "result.json");
   if (existsSync(resultPath)) {
     try {

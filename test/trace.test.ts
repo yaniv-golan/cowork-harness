@@ -505,4 +505,35 @@ describe("buildGateTrace — provenance annotation", () => {
       ["Third?", "llm", "m"],
     ]);
   });
+
+  it("does not misattribute provenance when tool-permission decisions are interleaved with question decisions", () => {
+    // A real run's decisions[] is one shared log — Bash/Read permission decisions (kind: "tool") land
+    // in the SAME array as AskUserQuestion gates (kind: "question"), interleaved in call order. Only
+    // question-kind entries should ever pair with a gate row; a positional pairing against the RAW
+    // (unfiltered-by-kind) decisions array would misattribute both rows here even though neither gate
+    // was denied.
+    const f = eventsFile([
+      gate("uuid-f", "toolu_f", "First?", "1"),
+      userResult("toolu_f", false, "ok"),
+      gate("uuid-g", "toolu_g", "Second?", "2"),
+      userResult("toolu_g", false, "ok"),
+      { type: "result", is_error: false },
+    ]);
+    writeFileSync(
+      join(f, "..", "result.json"),
+      JSON.stringify({
+        decisions: [
+          { kind: "tool", name: "Bash", decision: "allow", by: "cowork" },
+          { kind: "question", name: "AskUserQuestion", decision: "answered", by: "scripted", detail: { "First?": "1" } },
+          { kind: "tool", name: "Read", decision: "allow", by: "cowork" },
+          { kind: "question", name: "AskUserQuestion", decision: "answered", by: "llm", model: "m", detail: { "Second?": "2" } },
+        ],
+      }),
+    );
+    const rows = buildGateTrace(f);
+    expect(rows.map((r) => [r.question, r.answeredBy, r.model])).toEqual([
+      ["First?", "scripted", undefined],
+      ["Second?", "llm", "m"],
+    ]);
+  });
 });
