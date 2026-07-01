@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, writeSyn
 import { join, basename, resolve, isAbsolute, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
-import { Scenario, AnswerRule, Assertion, type RunResult, type PlatformBaseline } from "./types.js";
+import { Scenario, AnswerRule, Assertion, type RunResult, type RunStatus, type PlatformBaseline } from "./types.js";
 import { loadBaseline, BASELINES_DIR, cmpVersionStrings } from "./baseline.js";
 import { loadSession, resolveSessionPaths } from "./session.js";
 import { executeScenario, parseScenarioFile, UnansweredError, BoundaryError, type ExecuteOptions } from "./run/execute.js";
@@ -27,6 +27,7 @@ import { cmdRunsGc } from "./run/runs-gc.js";
 import { resolveInputs } from "./run/inputs.js";
 import { cmdLint } from "./run/scenario-tool.js";
 import { cmdDoctor } from "./run/doctor.js";
+import { readRunStatus, hasRunStatus, followRunStatus, resolveStatusDir, isStatusStale } from "./run/run-status.js";
 import { parseArgs } from "./cli-args.js";
 import { loadDotenv } from "./dotenv.js";
 import { makeRenderer, renderStart, renderFooter, startHeartbeat, type RenderPlan } from "./run/renderer.js";
@@ -118,6 +119,9 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
       [--output-format json]   structured digest
   scaffold <run-id | run-dir>  turn a kept run into a starter scenario YAML (gates→answers, artifacts→file_exists)
       [--out <file.yaml>]      write to a file (default: stdout)
+  status <run-id | run-dir>    check whether a background run is alive (state/elapsed/tool counts) — no ps aux needed
+      [--follow]               stream one line per status change until done/error; arm a Monitor here
+      [--output-format json]   structured status (--follow always emits raw JSON lines, format flag N/A there)
 
 ── In-band gate plumbing (for --decider-dir) ─────────────────────────────────
   gates <dir> [--follow]       stream pending gates as JSON lines + terminal {"done":true}; arm a Monitor here
@@ -312,6 +316,8 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
   assertions: "usage: assertions --list [--output-format json]",
   scaffold:
     "usage: scaffold <run-id | run-dir> [--out <file.yaml>] [--output-format text|json]\n       Turns a kept run into a starter scenario YAML (gates→answers, artifacts→file_exists).\n       Positional <run-id | run-dir> is the canonical form.",
+  status:
+    "usage: status <run-id | run-dir> [--follow] [--output-format text|json]   (check whether a background run is alive, without ps aux — see docs/run-status.md)\n       --follow: stream one line per status change until the run reaches a terminal state (done/error); arm a Monitor here\n       exit codes: 0 healthy (running/done) · 1 the run itself errored, or status.json/dir not found · 2 usage error · 3 stale (probably dead — no exit handler can catch SIGKILL)",
   decide:
     'usage: decide [--question <q>] [--option <o>]... [--decider-cmd <cmd> | --decider-llm [--intent <s>] [--decider-model <id>]] [--answer "<q>=<label>"]... [--answer-policy <p>] [--output-format json]',
   gates:
@@ -342,6 +348,7 @@ const COMMANDS = [
   "inspect",
   "assertions",
   "scaffold",
+  "status",
   "decide",
   "gates",
   "answer",
@@ -541,6 +548,8 @@ async function main() {
       return cmdAssert(rest);
     case "scaffold":
       return cmdScaffold(rest);
+    case "status":
+      return cmdStatus(rest);
     case "decide":
       return cmdDecide(rest);
     case "gates":
@@ -1848,6 +1857,83 @@ async function cmdDecide(args: string[]) {
     // envelope already tags this category "runtime"; the exit code now agrees. No-match/ABSTAIN stays 1.
     process.exit(2);
   }
+}
+
+/** `cowork-harness status <run-id | run-dir> [--follow] [--output-format json]` — read-only check of
+ *  whether a background run is still alive (state/elapsed/tool counts), without relying on `ps aux`
+ *  (unreliable across sandbox/PID-namespace boundaries — see docs/run-status.md). */
+async function cmdStatus(args: string[]) {
+  let p;
+  try {
+    p = parseArgs(args, { booleans: ["--follow"], values: ["--output-format"], enums: { "--output-format": ["text", "json"] } });
+  } catch (e) {
+    log((e as Error).message);
+    return process.exit(2);
+  }
+  if (p.positionals.length !== 1) {
+    log(SUBCOMMAND_USAGE.status);
+    return process.exit(2);
+  }
+  const json = p.options["--output-format"] === "json";
+  let dir: string;
+  try {
+    dir = resolveStatusDir(p.positionals[0]);
+  } catch (e) {
+    log((e as Error).message);
+    return process.exit(2);
+  }
+  if (p.flags["--follow"]) {
+    try {
+      await followRunStatus(dir, (line) => out(line));
+    } catch (e) {
+      // followRunStatus rejects for two distinct reasons — distinguish them by exit code so a script
+      // doesn't have to string-match: exit 3 for "found it, but it's gone stale" (probably a SIGKILL'd
+      // process — see isStatusStale in run-status.ts), exit 1 for "never found status.json at all"
+      // (wrong dir, or the run genuinely never started). Neither is a silent hang.
+      const err = e as Error & { stale?: boolean };
+      log(err.message);
+      return process.exit(err.stale ? 3 : 1);
+    }
+    return process.exit(0);
+  }
+  if (!hasRunStatus(dir)) {
+    log(`no status.json at ${dir} — the run may not have reached its status-writing point yet, or this isn't a cowork-harness run dir`);
+    return process.exit(1);
+  }
+  let status: RunStatus;
+  try {
+    status = readRunStatus(dir);
+  } catch (e) {
+    // readRunStatus's own contract (see run-status.ts) is "throws on missing/malformed — the CLI
+    // translates that into a usage-style message" — this is that translation. writeJsonAtomic makes a
+    // genuinely malformed file rare (a reader can never observe a half-write), but a hand-edited or
+    // externally-corrupted file must still fail clean, not with a raw stack trace.
+    log(`status.json at ${dir} is unreadable/malformed: ${(e as Error).message}`);
+    return process.exit(1);
+  }
+  // A "running" status that's gone STALE means the writer stopped updating altogether — the SIGKILL/OOM
+  // case the crash-safety net (execute.ts's exit handler) structurally cannot catch. Without this check
+  // a hard-killed run would read as alive FOREVER on a one-shot `status` call — the exact false-liveness
+  // conclusion this feature exists to prevent (see docs/run-status.md).
+  const stale = isStatusStale(status);
+  if (json) {
+    out(JSON.stringify({ tool: "cowork-harness", version: pkgVersion(), command: "status", ok: status.state !== "error" && !stale, stale, ...status }));
+  } else {
+    const totalTools = Object.values(status.toolCounts).reduce((a, b) => a + b, 0);
+    const label = stale ? "probably-dead (stale)" : status.state;
+    const glyph = stale ? "?" : status.state === "running" ? "●" : status.state === "done" ? "✓" : "✗";
+    const staleNote = stale
+      ? ` — no update in ${Math.round((Date.now() - Date.parse(status.updatedAt)) / 1000)}s; the process likely died without a clean exit (e.g. SIGKILL/OOM)`
+      : "";
+    log(
+      `${glyph} ${label} — ${status.scenario} [${status.fidelity}] · pid ${status.pid} · ` +
+        `${Math.round(status.elapsedMs / 1000)}s · ${totalTools} tools · ${status.subagentCount} sub-agents${staleNote}`,
+    );
+  }
+  // Exit codes: 0 healthy (running/done, not stale) · 1 the run itself errored · 2 usage error (thrown
+  // earlier) · 3 stale/probably-dead — distinct from 1 so a script can tell "it failed" from "can't
+  // confirm it's alive" without parsing text.
+  return process.exit(stale ? 3 : status.state === "error" ? 1 : 0);
 }
 
 /** `gates <dir> [--follow]` — the gate stream for the in-band `--decider-dir` path. Emits one clean
