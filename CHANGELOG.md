@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.20.0] — 2026-07-01
+
 ### Added
 
 - **`status.json` + `cowork-harness status <dir> [--follow]`.** Every run now writes a lightweight
@@ -20,11 +22,6 @@ All notable changes to this project are documented here. The format is based on
   namespace and is unreliable from inside a sandbox/container. The harness prints `[status] <outDir>` to
   stderr as soon as it's known, so a caller doesn't need `--session-id` to discover the directory. See
   `docs/run-status.md`.
-
-## [0.20.0] — 2026-07-01
-
-### Added
-
 - **Gate provenance in run output.** `result.json` now carries a `gateProvenance` block (`total`,
   `bySource` histogram, per-gate `{question, answeredBy, answer, model?}`) recording how each
   AskUserQuestion gate was answered (scripted / decided(llm|external) / first-option / prompt). The
