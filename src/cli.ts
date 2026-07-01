@@ -122,6 +122,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
   status <run-id | run-dir>    check whether a background run is alive (state/elapsed/tool counts) — no ps aux needed
       [--follow]               stream one line per status change until done/error; arm a Monitor here
       [--output-format json]   structured status (--follow always emits raw JSON lines, format flag N/A there)
+      exit codes: 0 healthy · 1 resolved dir has no/malformed status.json, or the run errored · 2 unresolvable <run-id | run-dir> · 3 stale
 
 ── In-band gate plumbing (for --decider-dir) ─────────────────────────────────
   gates <dir> [--follow]       stream pending gates as JSON lines + terminal {"done":true}; arm a Monitor here
@@ -317,7 +318,7 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
   scaffold:
     "usage: scaffold <run-id | run-dir> [--out <file.yaml>] [--output-format text|json]\n       Turns a kept run into a starter scenario YAML (gates→answers, artifacts→file_exists).\n       Positional <run-id | run-dir> is the canonical form.",
   status:
-    "usage: status <run-id | run-dir> [--follow] [--output-format text|json]   (check whether a background run is alive, without ps aux — see docs/run-status.md)\n       --follow: stream one line per status change until the run reaches a terminal state (done/error); arm a Monitor here\n       exit codes: 0 healthy (running/done) · 1 the run itself errored, or status.json/dir not found · 2 usage error · 3 stale (probably dead — no exit handler can catch SIGKILL)",
+    "usage: status <run-id | run-dir> [--follow] [--output-format text|json]   (check whether a background run is alive, without ps aux — see docs/run-status.md)\n       --follow: stream one line per status change until the run reaches a terminal state (done/error); arm a Monitor here\n       exit codes: 0 healthy (running/done) · 1 the dir resolved but has no status.json yet (or a malformed one), or the run itself ended in state:\"error\" · 2 usage error, including an unresolvable <run-id | run-dir> (matches trace/inspect/scaffold) · 3 stale (probably dead — no exit handler can catch SIGKILL)",
   decide:
     'usage: decide [--question <q>] [--option <o>]... [--decider-cmd <cmd> | --decider-llm [--intent <s>] [--decider-model <id>]] [--answer "<q>=<label>"]... [--answer-policy <p>] [--output-format json]',
   gates:
@@ -1883,8 +1884,12 @@ async function cmdStatus(args: string[]) {
     return process.exit(2);
   }
   if (p.flags["--follow"]) {
+    let lastLine: string | undefined;
     try {
-      await followRunStatus(dir, (line) => out(line));
+      await followRunStatus(dir, (line) => {
+        lastLine = line;
+        out(line);
+      });
     } catch (e) {
       // followRunStatus rejects for two distinct reasons — distinguish them by exit code so a script
       // doesn't have to string-match: exit 3 for "found it, but it's gone stale" (probably a SIGKILL'd
@@ -1894,7 +1899,22 @@ async function cmdStatus(args: string[]) {
       log(err.message);
       return process.exit(err.stale ? 3 : 1);
     }
-    return process.exit(0);
+    // followRunStatus resolved — it only distinguishes "still running" from "reached a terminal state,"
+    // not WHICH terminal state. The last line it wrote via the callback is always the JSON-serialized
+    // RunStatus that made it resolve (the write always precedes the resolve — see followRunStatus's
+    // `tick()`), so parse it to tell "done" from "error" and exit accordingly — matching the one-shot
+    // (non---follow) branch below, which already exits 1 for `state:"error"`. A --follow run that ended
+    // in error must not report a healthy exit 0.
+    let terminalState: RunStatus["state"] | undefined;
+    if (lastLine) {
+      try {
+        terminalState = (JSON.parse(lastLine) as RunStatus).state;
+      } catch {
+        /* malformed last line (shouldn't happen — followRunStatus only ever writes JSON.stringify(status))
+         * — fall through to the healthy default rather than crash the CLI on exit. */
+      }
+    }
+    return process.exit(terminalState === "error" ? 1 : 0);
   }
   if (!hasRunStatus(dir)) {
     log(`no status.json at ${dir} — the run may not have reached its status-writing point yet, or this isn't a cowork-harness run dir`);

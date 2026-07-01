@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
@@ -133,5 +133,33 @@ describe.skipIf(!can)("cowork-harness status", () => {
   it("usage error (exit 2) with no positional argument", () => {
     const { code } = run(["status"]);
     expect(code).toBe(2);
+  });
+
+  it("exits 2 for a genuinely unresolvable path (no such file/dir, and not a resolvable run-id fragment)", () => {
+    const { code } = run(["status", "/some/genuinely/nonexistent/path-cwh-status-test"]);
+    expect(code).toBe(2);
+  });
+
+  it("--follow reports the run's REAL terminal state: exits 1 (not 0) when the run ends in state:\"error\"", async () => {
+    // Regression test: followRunStatus only distinguishes "still running" from "reached a terminal
+    // state" — it does NOT distinguish done from error. Before the fix, cmdStatus's --follow branch
+    // unconditionally exited 0 on resolve, so an errored run would falsely report success. Spawn a LIVE
+    // child (spawnSync can't observe a mutation made mid-run) against a "running" fixture, let it observe
+    // the initial line, then flip the fixture to state:"error" out from under it and confirm the exit
+    // code + emitted line reflect the real terminal state.
+    const dir = fixtureDir(runningStatus());
+    const child = spawn("node", [CLI, "status", dir, "--follow"], {
+      env: { ...process.env, COWORK_HARNESS_STATUS_POLL_MS: "5" }, // fast polling — don't wait out the 1000ms default
+    });
+    let stdout = "";
+    child.stdout.on("data", (d: Buffer) => (stdout += d.toString()));
+
+    // give the child a moment to tick at least once and observe the initial "running" status line.
+    await new Promise((r) => setTimeout(r, 100));
+    writeFileSync(join(dir, "status.json"), JSON.stringify({ ...runningStatus(), state: "error", result: "error", durationMs: 42 }));
+
+    const code = await new Promise<number | null>((resolveExit) => child.on("exit", resolveExit));
+    expect(code).toBe(1); // not 0 — the run actually errored
+    expect(stdout).toContain('"state":"error"');
   });
 });
