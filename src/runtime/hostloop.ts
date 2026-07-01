@@ -23,9 +23,10 @@ import { stageWorkspace } from "./stage.js";
 import { stripComments } from "../prompt.js";
 
 /**
- * HOST-LOOP runtime — reproduces Cowork's host-loop mode: the agent loop runs "on the
- * host" with native Bash/WebFetch DISABLED and replaced by mcp__workspace__bash /
- * mcp__workspace__web_fetch (a workspace MCP server we run), and `${CLAUDE_PLUGIN_ROOT}`
+ * HOST-LOOP runtime — reproduces Cowork's host-loop mode: the agent process runs in the
+ * container (like the CONTAINER runtime), but native Bash/WebFetch are DISABLED and
+ * replaced by mcp__workspace__bash / mcp__workspace__web_fetch (a workspace MCP server we
+ * run), which route those two tools host-side, and `${CLAUDE_PLUGIN_ROOT}`
  * is a HOST path that bash cannot resolve — so a skill's bash that references it must
  * self-heal via `find /sessions/<id>/mnt ...`, exactly like production Cowork.
  *

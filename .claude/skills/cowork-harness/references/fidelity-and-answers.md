@@ -9,7 +9,7 @@ Self-contained reference. Tracks `cowork-harness 0.19.0` (baseline `desktop-1.15
 | `protocol` | L0 — agent on the host, no sandbox, no egress enforcement | Fastest control-loop / answer-shape checks. **Rejected** if the scenario asserts egress / `expect_denied` (would false-pass). |
 | `container` (default) | L1 — agent in a Docker container with a per-run default-deny egress proxy | The everyday tier: real sandbox, real egress allowlist. |
 | `microvm` | L2 — agent in an Apple-VZ Lima microVM with a guest firewall | VM-grade escape **isolation** of untrusted code. macOS arm64 only; needs `cowork-harness vm init`. Network transport **equals `container`** (same allowlist proxy) — *not* better network fidelity. |
-| `hostloop` | Host-loop split-exec: agent loop on the host, shell/web routed into the container via the workspace SDK-MCP server (`mcp__workspace__bash`) | Reproduce Cowork's **production** split-execution model. |
+| `hostloop` | Host-loop split-exec: agent runs in the container; shell/web routed host-side via the workspace SDK-MCP server (`mcp__workspace__bash`) — only `protocol` runs the agent on the host | Reproduce Cowork's **production** split-execution model. |
 | `cowork` | Auto-picks `hostloop` vs `container` the way Cowork itself does for the synced release | "Do what real Cowork does for this release." |
 
 - `hostloop` / `cowork` are the production-faithful path; `container` is the practical default.

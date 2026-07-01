@@ -83,7 +83,10 @@ All notable changes to this project are documented here. The format is based on
     the `hostloop`/`cowork` "agent loop runs host-side." It does not: the agent process runs **in the
     container** like `container`, but native Bash/WebFetch are disabled and routed host-side via the
     workspace SDK-MCP server (bash via `docker exec`, `web_fetch` via host `curl`). Only `protocol` runs
-    the agent on the host. Reworded everywhere to describe the **tool-routing** split, not an agent-loop split.
+    the agent on the host. Reworded to describe the **tool-routing** split, not an agent-loop split, in
+    README, `docs/boundary.md`, `docs/chat.md`, and `SKILL.md` — plus, in a 2026-07-01 follow-up, the three
+    files this pass missed: `docs/scenario.md`, `docs/fidelity-gaps.md`, and the skill's
+    `fidelity-and-answers.md` (and the misleading code comment in `src/runtime/hostloop.ts`).
   - **Artifact replay.** The skill references (`scenario-schema.md`, `ci-recipe.md`) claimed a replay PR
     gate "cannot verify an artifact's content." It can — `file_exists` / `user_visible_artifact` /
     `artifact_json` evaluate on replay **when the cassette carries an `artifacts` manifest** (already
