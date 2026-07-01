@@ -25,7 +25,7 @@ const ask = (q: string, opts: string[], multiSelect = false): DecisionRequest =>
   kind: "question",
   questions: [{ question: q, options: opts.map((label) => ({ label })), multiSelect }],
 });
-const llm = (reply: string) => new LlmDecider(async () => reply);
+const llm = (text: string) => new LlmDecider(async () => ({ text, model: "test-model" }));
 const answersOf = async (d: any, req: DecisionRequest) => ((await d.decide(req, ctx())) as any).response.answers;
 
 const SCRIPTED = ":(,—–"; // mirror SCRIPTED_SEPARATORS (module-private)

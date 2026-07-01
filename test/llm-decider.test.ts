@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { LlmDecider, ABSTAIN, UnansweredError, type RunContext, type Complete } from "../src/decide/decider.js";
+import { LlmDecider, ABSTAIN, UnansweredError, type RunContext, type Complete, type CompleteResult } from "../src/decide/decider.js";
 import type { DecisionRequest } from "../src/agent/session.js";
 
 const ctx = (t = ""): RunContext => ({ task: "", transcript: () => t, toolLog: () => [], runId: "x" });
@@ -8,26 +8,38 @@ const ask = (q: string, opts: string[]): DecisionRequest => ({
   kind: "question",
   questions: [{ question: q, options: opts.map((label) => ({ label })) }],
 });
+// Every mock below reports a fixed "test-model" resolution unless a test specifically cares what model
+// gets recorded — LlmDecider now requires every Complete call to state which model answered.
+const reply = (text: string, model = "test-model"): CompleteResult => ({ text, model });
 
 describe("LlmDecider", () => {
   it("picks the option the model returns; by:'llm' + model recorded", async () => {
-    const complete: Complete = async () => "PDF";
+    const complete: Complete = async () => reply("PDF");
     const d = await new LlmDecider(complete, undefined, "haiku-test").decide(ask("Format?", ["Markdown", "PDF"]), ctx());
     expect(d).not.toBe(ABSTAIN);
     expect((d as any).response).toEqual({ kind: "question", answers: { "Format?": "PDF" } });
     expect((d as any).by).toBe("llm");
-    expect((d as any).model).toBe("haiku-test");
+    expect((d as any).model).toBe("test-model");
+  });
+
+  it("records the RESOLVED model the transport reports — not the requested id", async () => {
+    const complete: Complete = async () => reply("PDF", "claude-sonnet-5");
+    const d = await new LlmDecider(complete, undefined, "sonnet").decide(ask("Format?", ["Markdown", "PDF"]), ctx());
+    expect((d as any).model).toBe("claude-sonnet-5");
   });
 
   it("defaults the answering model to the validated Sonnet id when none is supplied", async () => {
     // The default resolves from `process.env.COWORK_HARNESS_DECIDER_MODEL || <literal>`, so unset the
-    // env first or this asserts the env value (false green/red in a CI that sets it).
+    // env first or this asserts the env value (false green/red in a CI that sets it). The mock echoes
+    // back whatever `model` it was asked to use, so this proves the DEFAULT REQUEST value, independent of
+    // resolution (Task 2 flips the literal this asserts, once the default itself changes).
     const prev = process.env.COWORK_HARNESS_DECIDER_MODEL;
     delete process.env.COWORK_HARNESS_DECIDER_MODEL;
     try {
-      const complete: Complete = async () => "PDF";
-      const d = await new LlmDecider(complete).decide(ask("Format?", ["Markdown", "PDF"]), ctx());
-      expect((d as any).model).toBe("claude-sonnet-4-5");
+      let requested = "";
+      const complete: Complete = async (_p, model) => ((requested = model), reply("PDF", model));
+      await new LlmDecider(complete).decide(ask("Format?", ["Markdown", "PDF"]), ctx());
+      expect(requested).toBe("claude-sonnet-4-5");
     } finally {
       if (prev === undefined) delete process.env.COWORK_HARNESS_DECIDER_MODEL;
       else process.env.COWORK_HARNESS_DECIDER_MODEL = prev;
@@ -35,7 +47,7 @@ describe("LlmDecider", () => {
   });
 
   it("a prose decline fails loud with a hint naming the --decider-model lever", async () => {
-    const prose: Complete = async () => "I don't have information about that";
+    const prose: Complete = async () => reply("I don't have information about that");
     try {
       await new LlmDecider(prose, undefined, "haiku-test").decide(ask("Jurisdiction?", ["Delaware", "Israeli"]), ctx());
       throw new Error("expected UnansweredError");
@@ -50,26 +62,26 @@ describe("LlmDecider", () => {
     // fix: matchLabel defaults to fuzzy=false, so a prose answer is no longer accepted.
     // The LLM prompt says "Reply with ONLY the exact label" — a well-behaved model should return the
     // exact label, not a prose sentence. A prose answer must now fail loud (not silently accept it).
-    const completeProse: Complete = async (p) => ((seenPrompt = p), "I would choose Series A here.");
+    const completeProse: Complete = async (p) => ((seenPrompt = p), reply("I would choose Series A here."));
     await expect(
       new LlmDecider(completeProse, "test the not_ai branch").decide(ask("Confirm the stage?", ["Seed", "Series A"]), ctx()),
     ).rejects.toThrow(UnansweredError);
     expect(seenPrompt).toContain("test the not_ai branch");
 
     // A well-behaved LLM returning the exact label still works.
-    const completeExact: Complete = async () => "Series A";
+    const completeExact: Complete = async () => reply("Series A");
     const d = await new LlmDecider(completeExact, "test the not_ai branch").decide(ask("Confirm the stage?", ["Seed", "Series A"]), ctx());
     expect((d as any).response.answers).toEqual({ "Confirm the stage?": "Series A" });
   });
 
   it("FAILS LOUD on an out-of-set answer — never a silent default to option 1", async () => {
-    const complete: Complete = async () => "Banana";
+    const complete: Complete = async () => reply("Banana");
     await expect(new LlmDecider(complete).decide(ask("Format?", ["Markdown", "PDF"]), ctx())).rejects.toThrow(UnansweredError);
   });
 
   it("supplies free text for an options-bearing gate via the OTHER: directive (Cowork's 'Other' path)", async () => {
     let seenPrompt = "";
-    const complete: Complete = async (p) => ((seenPrompt = p), "OTHER: Acme Robotics");
+    const complete: Complete = async (p) => ((seenPrompt = p), reply("OTHER: Acme Robotics"));
     const d = await new LlmDecider(complete, "name it after the customer").decide(
       ask("What should I name it?", ["Project Alpha", "Project Beta"]),
       ctx(),
@@ -85,7 +97,7 @@ describe("LlmDecider", () => {
     // leading backtick defeated the `^\s*OTHER:` anchor → whiff → fail-loud stall. The wrapping fence is now
     // stripped before the sentinel test.
     for (const raw of ["`OTHER: Sector not specified in document`", '"OTHER: Sector not specified"']) {
-      const complete: Complete = async () => raw;
+      const complete: Complete = async () => reply(raw);
       const d = await new LlmDecider(complete).decide(ask("What sector?", ["Health tech", "B2B SaaS"]), ctx());
       expect((d as any).response.answers["What sector?"]).toMatch(/^Sector not specified/);
     }
@@ -94,7 +106,7 @@ describe("LlmDecider", () => {
   it("OTHER directive — a wrapping fence is stripped but the value's OWN trailing punctuation is preserved", async () => {
     // Only the wrapper is removed (not trailing sentence punctuation like trimNearMiss): the free-text VALUE
     // is delivered verbatim, so a trailing period inside the value must survive.
-    const complete: Complete = async () => "`OTHER: Acme Inc.`";
+    const complete: Complete = async () => reply("`OTHER: Acme Inc.`");
     const d = await new LlmDecider(complete).decide(ask("Name it?", ["Project Alpha", "Project Beta"]), ctx());
     expect((d as any).response.answers["Name it?"]).toBe("Acme Inc.");
   });
@@ -108,7 +120,7 @@ describe("LlmDecider", () => {
       ["`OTHER: code-fenced value`", "code-fenced value"], // matched fence → stripped
     ];
     for (const [raw, expected] of cases) {
-      const complete: Complete = async () => raw;
+      const complete: Complete = async () => reply(raw);
       const d = await new LlmDecider(complete).decide(ask("Name it?", ["Project Alpha", "Project Beta"]), ctx());
       expect((d as any).response.answers["Name it?"]).toBe(expected);
     }
@@ -117,34 +129,34 @@ describe("LlmDecider", () => {
   it("OTHER directive — a QUOTED real option whose label starts 'OTHER:' still binds as the label (not free text)", async () => {
     // Ordering guard: matchLabel (which quote-trims internally) must bind the literal label before the OTHER
     // sentinel is ever reached, even when the model wraps its reply in a code fence.
-    const complete: Complete = async () => "`OTHER: pick me`";
+    const complete: Complete = async () => reply("`OTHER: pick me`");
     const d = await new LlmDecider(complete).decide(ask("Which?", ["OTHER: pick me", "Something else"]), ctx());
     expect((d as any).response.answers).toEqual({ "Which?": "OTHER: pick me" });
   });
 
   it("matches a LABEL first, so a real option whose label starts 'OTHER:' is not hijacked to free text", async () => {
-    const complete: Complete = async () => "OTHER: pick me";
+    const complete: Complete = async () => reply("OTHER: pick me");
     const d = await new LlmDecider(complete).decide(ask("Which?", ["OTHER: pick me", "Something else"]), ctx());
     // selected as the literal label, not parsed as a free-text "pick me"
     expect((d as any).response.answers).toEqual({ "Which?": "OTHER: pick me" });
   });
 
   it("a bare out-of-set value (no OTHER: prefix, not a label) still FAILS LOUD", async () => {
-    const complete: Complete = async () => "Acme Robotics";
+    const complete: Complete = async () => reply("Acme Robotics");
     await expect(new LlmDecider(complete).decide(ask("Name it?", ["Project Alpha", "Project Beta"]), ctx())).rejects.toThrow(
       UnansweredError,
     );
   });
 
   it("an empty OTHER: directive FAILS LOUD (no empty free-text answer)", async () => {
-    const complete: Complete = async () => "OTHER:   ";
+    const complete: Complete = async () => reply("OTHER:   ");
     await expect(new LlmDecider(complete).decide(ask("Name it?", ["Project Alpha", "Project Beta"]), ctx())).rejects.toThrow(
       UnansweredError,
     );
   });
 
   it("binds a near-miss label with trailing punctuation (e.g. 'Confirmed.') instead of failing loud", async () => {
-    const complete: Complete = async () => "Confirmed.";
+    const complete: Complete = async () => reply("Confirmed.");
     const d = await new LlmDecider(complete).decide(ask("Use the extracted cap table?", ["Confirmed", "Different"]), ctx());
     expect((d as any).response.answers).toEqual({ "Use the extracted cap table?": "Confirmed" });
     expect((d as any).by).toBe("llm");
@@ -152,20 +164,20 @@ describe("LlmDecider", () => {
 
   it("the trailing-punctuation trim does NOT swallow the OTHER: sentinel (colon is preserved)", async () => {
     // A 2-option gate still honors OTHER: free text — the dropped suppression must not regress.
-    const complete: Complete = async () => "OTHER: CSV";
+    const complete: Complete = async () => reply("OTHER: CSV");
     const d = await new LlmDecider(complete).decide(ask("Format?", ["PDF", "DOCX"]), ctx());
     expect((d as any).response.answers).toEqual({ "Format?": "CSV" });
   });
 
   it("abstains on an ORDINARY (optionless) permission request (parity default handles it)", async () => {
-    const complete: Complete = async () => "x";
+    const complete: Complete = async () => reply("x");
     const r = await new LlmDecider(complete).decide({ id: "p", kind: "permission", tool: "Bash", input: {} }, ctx());
     expect(r).toBe(ABSTAIN);
   });
 
   it("answers a web_fetch approval (options) with the chosen grant scope", async () => {
     let seenPrompt = "";
-    const complete: Complete = async (p) => ((seenPrompt = p), "Allow all for website");
+    const complete: Complete = async (p) => ((seenPrompt = p), reply("Allow all for website"));
     const req: DecisionRequest = {
       id: "p",
       kind: "permission",
@@ -188,7 +200,7 @@ describe("LlmDecider", () => {
       options: [{ label: "Allow once" }, { label: "Allow all for website" }, { label: "Deny" }],
     };
     // The model parrots the option plus a self-glossed description tail past the `:` boundary.
-    const d = await new LlmDecider(async () => "Allow once: fetch this URL one time").decide(req, ctx());
+    const d = await new LlmDecider(async () => reply("Allow once: fetch this URL one time")).decide(req, ctx());
     expect((d as any).response).toMatchObject({ kind: "permission", behavior: "allow", grant: "once" });
     expect((d as any).by).toBe("llm");
   });
@@ -201,12 +213,12 @@ describe("LlmDecider", () => {
       input: { domain: "x.com", url: "https://x.com/a" },
       options: [{ label: "Allow once" }, { label: "Allow all for website" }, { label: "Deny" }],
     };
-    await expect(new LlmDecider(async () => "Maybe later").decide(req, ctx())).rejects.toThrow(UnansweredError);
+    await expect(new LlmDecider(async () => reply("Maybe later")).decide(req, ctx())).rejects.toThrow(UnansweredError);
   });
 
   it("answers an open-ended (no-option) question with free text via updatedInput:{questions,answers}", async () => {
     let seenPrompt = "";
-    const complete: Complete = async (p) => ((seenPrompt = p), "I'd ship a concise weekly digest.");
+    const complete: Complete = async (p) => ((seenPrompt = p), reply("I'd ship a concise weekly digest."));
     const req: DecisionRequest = {
       id: "r",
       kind: "question",
@@ -225,14 +237,14 @@ describe("LlmDecider", () => {
   });
 
   it("FAILS LOUD when the model returns an empty free-text answer for a no-option question", async () => {
-    const complete: Complete = async () => "   ";
+    const complete: Complete = async () => reply("   ");
     const req: DecisionRequest = { id: "r", kind: "question", questions: [{ question: "Open?", options: [] }] };
     await expect(new LlmDecider(complete).decide(req, ctx())).rejects.toThrow(UnansweredError);
   });
 
   it("answers each question of a multi-question request independently (one call per question)", async () => {
     let calls = 0;
-    const complete: Complete = async () => (calls++, calls === 1 ? "Markdown" : "Deep");
+    const complete: Complete = async () => (calls++, reply(calls === 1 ? "Markdown" : "Deep"));
     const req: DecisionRequest = {
       id: "r",
       kind: "question",

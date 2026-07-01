@@ -307,8 +307,17 @@ export class FirstOptionDecider implements Decider {
   }
 }
 
-/** Pluggable model-completion transport (so LlmDecider is unit-testable without a real model call). */
-export type Complete = (prompt: string, model: string) => Promise<string>;
+/** Pluggable model-completion transport (so LlmDecider is unit-testable without a real model call).
+ *  Every implementation MUST report which CONCRETE model actually answered — `model` is what gets
+ *  recorded for provenance (`Decision.model` → `gateProvenance[].model`), so a test double that doesn't
+ *  care can report any fixed string, but a real transport (`claudeCliComplete`) must resolve a possibly-
+ *  aliased request (e.g. "sonnet") to the concrete id the call actually used. No fallback: `LlmDecider`
+ *  records exactly what it's told. */
+export interface CompleteResult {
+  text: string;
+  model: string;
+}
+export type Complete = (prompt: string, model: string) => Promise<CompleteResult>;
 
 /** Strict label match: exact → case-insensitive → near-miss (surrounding quotes / trailing sentence
  *  punctuation trimmed). NULL on no match (caller fails loud — we deliberately do NOT fall back to option 1
@@ -455,7 +464,7 @@ export class LlmDecider implements Decider {
     if (req.kind === "permission") {
       if (!req.options) return ABSTAIN;
       const labels = req.options.map((o) => o.label);
-      const raw = await this.complete(scrub(this.permPrompt(req, ctx), this.secrets), this.model);
+      const { text: raw, model: permModel } = await this.complete(scrub(this.permPrompt(req, ctx), this.secrets), this.model);
       // Echo backstop, at parity with the question path's `echoPrefixMatch` tier: the model often
       // parrots the offered option plus a self-glossed tail past a `:` boundary ("Allow once: fetch
       // this URL one time"). Bind the echoed label instead of failing loud. The OTHER:/suffix tiers are
@@ -478,11 +487,12 @@ export class LlmDecider implements Decider {
         },
         by: "llm",
         rationale: this.intent ?? "LLM judgment",
-        model: this.model,
+        model: permModel,
       };
     }
     if (req.kind !== "question") return ABSTAIN; // dialog/elicit → fail-closed terminal
     const answers: Record<string, string> = {};
+    let resolvedModel = this.model; // overwritten below by whatever the transport actually reports
     for (const q of req.questions) {
       const text = q.question ?? q.header ?? "";
       const labels = q.options.map((o) => o.label);
@@ -494,7 +504,9 @@ export class LlmDecider implements Decider {
       // the pinned AskUserQuestion path) — symmetric with ScriptedDecider/ExternalDecider's labels.length===0
       // passthrough.
       if (labels.length === 0) {
-        const free = (await this.complete(scrub(this.freeTextPrompt(text, ctx), this.secrets), this.model)).trim();
+        const freeRes = await this.complete(scrub(this.freeTextPrompt(text, ctx), this.secrets), this.model);
+        resolvedModel = freeRes.model;
+        const free = freeRes.text.trim();
         if (free === "")
           throw new UnansweredError(
             `LLM decider returned an empty answer for the open-ended question "${text}"`,
@@ -505,7 +517,9 @@ export class LlmDecider implements Decider {
         continue;
       }
       const multi = q.multiSelect === true;
-      const raw = await this.complete(scrub(this.prompt(text, q.options, multi, ctx), this.secrets), this.model);
+      const labelRes = await this.complete(scrub(this.prompt(text, q.options, multi, ctx), this.secrets), this.model);
+      resolvedModel = labelRes.model;
+      const raw = labelRes.text;
       // MULTI-SELECT (the index protocol is the ONLY accepted form): a comma-list of bare, in-range option
       // numbers (e.g. "1, 3"). Anything else — a label echo, or a mixed "1, Seed" — fails loud rather than
       // partial-binding. (Before this branch the LLM path had no multiSelect handling at all, so a multiSelect
@@ -593,7 +607,7 @@ export class LlmDecider implements Decider {
       process.stderr.write(`[llm-decider] "${text}" → "${pick}"${this.intent ? ` (intent: ${this.intent})` : ""}\n`);
       answers[text] = pick;
     }
-    return { response: { kind: "question", answers }, by: "llm", rationale: this.intent ?? "LLM judgment", model: this.model };
+    return { response: { kind: "question", answers }, by: "llm", rationale: this.intent ?? "LLM judgment", model: resolvedModel };
   }
 
   /** Prompt for a web_fetch approval gate (domain + url + the grant options). */
