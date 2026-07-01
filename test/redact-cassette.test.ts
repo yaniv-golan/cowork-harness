@@ -20,7 +20,7 @@ function cassetteWith(events: string[], assert: unknown[], prompt = "hi"): any {
   return { scenario: scenario(assert, prompt), events };
 }
 
-describe("redactCassette — whole-surface content redaction (C1)", () => {
+describe("redactCassette — whole-surface content redaction", () => {
   it("redacts events, artifact bodies, prompt, and skillSources; events still parse", () => {
     const events = [JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "ping alice@acme.com" }] } })];
     const c: any = {
@@ -34,12 +34,12 @@ describe("redactCassette — whole-surface content redaction (C1)", () => {
     expect(() => JSON.parse(red.events[0])).not.toThrow(); // still valid JSON
     expect(JSON.parse(red.events[0]).type).toBe("assistant");
     expect(red.artifacts[0].body).not.toContain("@");
-    expect(red.artifacts[0].path).not.toContain("@"); // C1: artifact FILENAME redacted too
+    expect(red.artifacts[0].path).not.toContain("@"); // artifact FILENAME redacted too
     expect(red.scenario.prompt).not.toContain("@");
     expect(red.fingerprint.skillSources[0]).not.toContain("@");
   });
 
-  it("redacts an artifact filename that names a customer (C1)", () => {
+  it("redacts an artifact filename that names a customer", () => {
     const c: any = {
       scenario: scenario([{ result: "success" }]),
       events: [JSON.stringify({ type: "result", subtype: "success" })],
@@ -49,7 +49,7 @@ describe("redactCassette — whole-surface content redaction (C1)", () => {
     expect(red.artifacts[0].path).not.toContain("@acme.com");
   });
 
-  it("leaves a [REDACTED:*] marker body unchanged (Issue A fix — marker must not be rewritten without sha256 recompute)", () => {
+  it("leaves a [REDACTED:*] marker body unchanged (marker must not be rewritten without sha256 recompute)", () => {
     // When a base64 artifact body is secret-scrubbed to "[REDACTED:base64]", the encoding is cleared
     // and sha256 is recomputed over the marker. If redactCassette then ran redactJsonLine on the marker,
     // a broad PII policy could rewrite it without updating sha256, causing a "corrupt cassette" error
@@ -68,7 +68,7 @@ describe("redactCassette — whole-surface content redaction (C1)", () => {
   });
 });
 
-describe("O7-preservation — redacting a gated cassette must NOT break the replay protocol-fidelity guard", () => {
+describe("preservation — redacting a gated cassette must NOT break the replay protocol-fidelity guard", () => {
   // Full-fidelity gated cassette: the AskUserQuestion question text carries PII (an email), which appears in
   // THREE places — the events question, the controlOut `questions` copy, and the controlOut `answers` map KEY.
   // Structural + per-match-text-deterministic redaction must rewrite all three identically so serializeDecision
@@ -108,7 +108,7 @@ describe("O7-preservation — redacting a gated cassette must NOT break the repl
     r.assertions.filter((a) => (a.assertion as any).replay_protocol_fidelity && !a.pass);
   const cassette = (): any => ({ scenario: scenario([{ question_asked: "Send the deck" }, { result: "success" }]), events, controlOut });
 
-  it("redaction of the question text preserves O7 (no replay_protocol_fidelity failure) and keeps JSON valid", async () => {
+  it("redaction of the question text preserves protocol fidelity (no replay_protocol_fidelity failure) and keeps JSON valid", async () => {
     const red: any = redactCassette(cassette(), policy);
     expect(JSON.stringify(red)).not.toContain("alice@acme.com"); // the email is gone everywhere
     red.events.forEach((l: string) => expect(() => JSON.parse(l)).not.toThrow());
@@ -117,19 +117,19 @@ describe("O7-preservation — redacting a gated cassette must NOT break the repl
     expect(r.assertions.filter((a) => !a.pass)).toHaveLength(0); // question_asked / result green
   });
 
-  it("CONTROL: the un-redacted gated cassette passes O7 (the cassette really drives the gate)", async () => {
+  it("CONTROL: the un-redacted gated cassette passes the protocol-fidelity guard (the cassette really drives the gate)", async () => {
     expect(o7Fails(await replayCassette(cassette()))).toHaveLength(0);
   });
 
-  it("GUARD-SENSITIVITY: a DESYNCED redaction (events redacted, controlOut not) FAILS O7 — the test isn't vacuous", async () => {
+  it("GUARD-SENSITIVITY: a DESYNCED redaction (events redacted, controlOut not) FAILS the protocol-fidelity guard — the test isn't vacuous", async () => {
     // Redact ONLY the events lines (text-level) → the events question diverges from the controlOut copy +
-    // answers key. serializeDecision re-serialization must now mismatch the recorded controlOut → O7 fails.
+    // answers key. serializeDecision re-serialization must now mismatch the recorded controlOut → the guard fails.
     const desynced: any = { ...cassette(), events: events.map((l) => redactText(l, policy)) };
     expect(o7Fails(await replayCassette(desynced)).length).toBeGreaterThan(0);
   });
 });
 
-describe("assertRedactionVerdictPreserved — A3 / C4 cardinal-sin guard", () => {
+describe("assertRedactionVerdictPreserved — cardinal-sin guard", () => {
   const okEvents = [
     JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "hello acme@x.com world" }] } }),
     JSON.stringify({ type: "result", subtype: "success", is_error: false }),

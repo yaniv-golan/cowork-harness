@@ -56,7 +56,7 @@ function containedRealPath(workRoot: string, abs: string): string | null {
 }
 
 /**
- * #5: resolve a dotted path into a parsed JSON document with THREE distinct outcomes (conflating them
+ * Resolve a dotted path into a parsed JSON document with THREE distinct outcomes (conflating them
  * reintroduces a false-green at the field level):
  *  - `value`      — the path resolves to a present value (which may itself be JSON null);
  *  - `absent`     — the FINAL key is missing from a parent that DID resolve (the anti-hallucination case);
@@ -141,13 +141,13 @@ export interface AssertContext {
   questions: string[]; // AskUserQuestion question texts asked
   hostPathLeaked: boolean; // a host path (/Users//opt) appeared in model-visible text
   selfHealRan: boolean; // a /sessions/<id>/mnt plugin script was invoked (plugin-root self-heal)
-  subagents: { agentType: string; declaredTools: string[]; toolsUsed: string[]; description?: string }[]; // A3 dispatch tree (B2 assertions)
+  subagents: { agentType: string; declaredTools: string[]; toolsUsed: string[]; description?: string }[]; // dispatch tree (sub-agent assertions)
   gateDeliveries: {
     question: string;
     delivered: boolean | null;
     error?: string;
     reason?: "ok" | "errored" | "unobserved" | "no-pairing-metadata";
-  }[]; // Part 3: per-gate answer-delivery outcome
+  }[]; // per-gate answer-delivery outcome
   toolResultTexts: string[]; // assertion-fidelity text for each tool result (assertText ?? text, 10 KB cap)
   /** Parallel to toolResultTexts; true for each entry that fell back to display text (assertText absent).
    *  Only relevant for old/partial cassettes — live/replay always capture assertText. */
@@ -186,7 +186,7 @@ export function evaluate(assertions: Assertion[], ctx: AssertContext): RunResult
 type KeyResult = { pass: true } | { pass: false; message: string };
 
 /**
- * #5: evaluate EVERY present key (AND semantics) — a multi-key assertion passes iff all of its
+ * Evaluate EVERY present key (AND semantics) — a multi-key assertion passes iff all of its
  * keys pass. (The previous first-key-wins `if (a.X) return …` chain silently ignored every key
  * after the first.) The per-key logic is unchanged; each branch now PUSHES its result instead of
  * returning. The first failing key supplies the surfaced message. On the replay lane, keys that
@@ -334,7 +334,7 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
     );
   if (a.subagent_dispatched !== undefined) {
     // Match the agentType OR the description — skills often dispatch with only a `description`
-    // (no subagent_type → agentType "unknown"), so name-matching alone would miss those (O1).
+    // (no subagent_type → agentType "unknown"), so name-matching alone would miss those.
     const c = compileUserRegex(a.subagent_dispatched);
     if ("error" in c) results.push(fail(`subagent_dispatched: bad regex "${a.subagent_dispatched}": ${c.error}`));
     else
@@ -346,7 +346,7 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
   }
   if (a.subagent_declared_but_unused !== undefined) {
     const t = a.subagent_declared_but_unused;
-    // #25 / B2: declared a tool but never USED it — the observable proxy for the v0.3.0 fabrication
+    // Declared a tool but never USED it — the observable proxy for the v0.3.0 fabrication
     // class. Previously also required `toolsUsed.length === 0`, which let "declared Bash, used Read"
     // pass; dropping that clause catches the broader declared-but-unused case.
     if (ctx.subagentsMissing) {
@@ -430,7 +430,7 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
           : fail(`asked ${ctx.questions.length} questions, max ${a.questions_count_max}`),
     );
   if (a.gate_answers_delivered !== undefined) {
-    // #19: passes iff every answered gate's tool_result was OBSERVED and non-error. On a finished
+    // Passes iff every answered gate's tool_result was OBSERVED and non-error. On a finished
     // run/cassette, an unobserved delivery (delivered=null) is NOT neutral — it is absence of the
     // evidence the assertion requires, so it fails loud ("no silent false-greens"). `delivered:
     // false` is a real errored tool_result; `null` is "no tool_result observed for this gate".
@@ -496,7 +496,7 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
         if (parsed) {
           const r = resolveDotPath(doc, aj.path);
           if (r.state === "unresolved") {
-            // Malformed/truncated artifact for this path — fail loud, NOT a vacuous "absent" pass (the H4
+            // Malformed/truncated artifact for this path — fail loud, NOT a vacuous "absent" pass (the
             // false-green at the field level).
             results.push(
               fail(`artifact_json: path "${aj.path}" unresolvable in ${aj.artifact} — intermediate "${r.at}" is missing or not an object`),
@@ -547,7 +547,7 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
                   : fail(`artifact_json: "${aj.path}" = ${JSON.stringify(val)}, expected > ${aj.gt}`),
               );
             }
-            // #4: set membership — the resolved value deep-equals one of a fixed set. Stable for stochastic
+            // Set membership — the resolved value deep-equals one of a fixed set. Stable for stochastic
             // (LLM-extracted) values where `equals` would churn across re-records. `present &&` guard mirrors
             // `equals` so an absent value never vacuously satisfies it.
             if (aj.in !== undefined) {

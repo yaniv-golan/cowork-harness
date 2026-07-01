@@ -65,7 +65,7 @@ GATE_KEYS = {"question_asked", "questions_count_max", "gate_answers_delivered"}
 # manifest-backed: replay-checkable when the cassette carries an `artifacts` manifest (record snapshots one);
 # a manifest-less cassette skips them. Since the 0.3.0 artifact-manifest these are NOT always live-only.
 MANIFEST_KEYS = {"file_exists", "user_visible_artifact", "artifact_json"}
-# live-only: ALWAYS silently skipped on replay (no filesystem, no network on the token-free lane)
+# live-only: ALWAYS skipped on replay, with a loud warning (no filesystem, no network on the token-free lane)
 LIVE_ONLY_KEYS = {
     "egress_denied",
     "egress_allowed",
@@ -328,7 +328,7 @@ def lint_doc(doc, path, raw_lines):
                     "replay-noop",
                     "every assertion is live-only (egress / no_delete_in_outputs / self_heal_ran / "
                     "transcript_no_host_path) or a verdict modifier (allow_*, a no-op pass) — on the "
-                    "token-free `replay` lane the live-only ones are silently skipped and the verdict "
+                    "token-free `replay` lane the live-only ones are skipped (with a loud warning) and the verdict "
                     "modifiers verify nothing, so a replay PR gate would verify nothing.",
                     "Add a content assertion (result / transcript_* / tool_* / subagent_*) or a "
                     "manifest-backed one (file_exists / user_visible_artifact / artifact_json), or run this "
@@ -651,7 +651,7 @@ def build_scenario(args):
     L.append("  # --- content / structure: evaluate on the token-free replay PR gate AND live ---")
     L.extend(content_lines)
     if live_lines:
-        L.append("  # --- filesystem / egress: LIVE-only (silently skipped on replay) ---")
+        L.append("  # --- filesystem / egress: LIVE-only (skipped on replay, with a loud warning) ---")
         L.extend(live_lines)
     else:
         L.append("  # TODO add filesystem/egress checks (file_exists / user_visible_artifact /")

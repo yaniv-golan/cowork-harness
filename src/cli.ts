@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, writeSyn
 import { join, basename, resolve, isAbsolute, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
-import { Scenario, AnswerRule, Assertion, type RunResult, type PlatformBaseline } from "./types.js";
+import { Scenario, AnswerRule, Assertion, type RunResult, type RunStatus, type PlatformBaseline } from "./types.js";
 import { loadBaseline, BASELINES_DIR, cmpVersionStrings } from "./baseline.js";
 import { loadSession, resolveSessionPaths } from "./session.js";
 import { executeScenario, parseScenarioFile, UnansweredError, BoundaryError, type ExecuteOptions } from "./run/execute.js";
@@ -27,6 +27,7 @@ import { cmdRunsGc } from "./run/runs-gc.js";
 import { resolveInputs } from "./run/inputs.js";
 import { cmdLint } from "./run/scenario-tool.js";
 import { cmdDoctor } from "./run/doctor.js";
+import { readRunStatus, hasRunStatus, followRunStatus, resolveStatusDir, isStatusStale } from "./run/run-status.js";
 import { parseArgs } from "./cli-args.js";
 import { loadDotenv } from "./dotenv.js";
 import { makeRenderer, renderStart, renderFooter, startHeartbeat, type RenderPlan } from "./run/renderer.js";
@@ -70,7 +71,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
       (run 'skill --help' for the full flag reference)
 
   chat <folder>                interactive multi-turn REPL against a skill (TTY); --raw for native cowork
-                               (--fidelity container|hostloop only, default container; --model <id>)
+                               (--fidelity protocol|container|hostloop, default container; --model <id>)
 
 ── Automated scenarios ────────────────────────────────────────────────────────
   run <scenario.yaml | dir/>   run one scenario or every *.yaml in a dir (CI-ready exit code)
@@ -91,6 +92,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
       [--decider-llm [--intent "…"]] | [--on-unanswered fail|first]   answer live via a model / auto-pick
                                (a live decider flags the cassette non-deterministic; it still replays deterministically)
   replay <file|dir>            deterministic protocol-replay of a cassette or a dir of them (no token, no Docker)
+                               (--assert-from <scenario.yaml> / --reassert: opt-in token-free re-check against on-disk assert:)
       [--strict]               fail (exit 1) on ANY stale cassette instead of warning
       [--fail-on-skill-drift]  fail only on skill-source drift (skill/shared-root); baseline drift stays a warning
       [--output-format json]
@@ -117,6 +119,10 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
       [--output-format json]   structured digest
   scaffold <run-id | run-dir>  turn a kept run into a starter scenario YAML (gates→answers, artifacts→file_exists)
       [--out <file.yaml>]      write to a file (default: stdout)
+  status <run-id | run-dir>    check whether a background run is alive (state/elapsed/tool counts) — no ps aux needed
+      [--follow]               stream one line per status change until done/error; arm a Monitor here
+      [--output-format json]   structured status (--follow always emits raw JSON lines, format flag N/A there)
+      exit codes: 0 healthy · 1 resolved dir has no/malformed status.json, or the run errored · 2 unresolvable <run-id | run-dir> · 3 stale
 
 ── In-band gate plumbing (for --decider-dir) ─────────────────────────────────
   gates <dir> [--follow]       stream pending gates as JSON lines + terminal {"done":true}; arm a Monitor here
@@ -140,7 +146,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
            Run 'doctor' to diagnose auth failures.
   Global:  --run-dir <path>    write runs/ output under <path> instead of the default ~/.cowork-harness/runs
            (keeps sensitive inputs/outputs out of the working tree). flag > COWORK_HARNESS_RUNS_DIR > default.
-  --version                    print version        --help, -h    print this help
+  --version, -v                print version        --help, -h    print this help
 
   Env-var defaults (CLI flags take precedence):
     COWORK_HARNESS_FIDELITY        default --fidelity tier (skill/chat; run takes fidelity from the scenario)
@@ -217,6 +223,8 @@ Questions:
 Output:
   --output-format text|json        text = live stream + footer (default); json = one stdout envelope
   --quiet, -q                      verdict footer only            --verbose, -V   + thinking/tool inputs/sub-agent tree
+  --compact                        drop the informational capability ::notice:: lines (the probe + hard-fail stay)
+  --demo                           shareable output: --compact + suppress the "runs →" header (runs stay durable)
   --keep                           print the run dir + deliverable path (runs are always kept on disk)
   --run-dir <path>                 GLOBAL flag — must PRECEDE the subcommand (cowork-harness --run-dir <path> skill …);
                                    relocates runs/ output (default ~/.cowork-harness/runs) out of the working tree.
@@ -259,6 +267,8 @@ Input policy:
 Output:
   --output-format text|json        text = verdict + failing transcript (default); json = stdout envelope
   --quiet, -q                      verdict only            --verbose, -V   live stream + per-tool markers
+  --compact                        drop the informational capability ::notice:: lines (the probe + hard-fail stay)
+  --demo                           shareable output: --compact + suppress the "runs →" header (runs stay durable)
   --run-dir <path>                 GLOBAL flag — must PRECEDE the subcommand (cowork-harness --run-dir <path> run …);
                                    relocates runs/ output (default ~/.cowork-harness/runs) out of the working tree.
                                    flag > COWORK_HARNESS_RUNS_DIR > default. (placed after the subcommand it is rejected.)
@@ -296,19 +306,25 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
     '       answer gates LIVE: [--decider-dir <dir>] (single scenario only) | [--decider-llm [--intent "<one line>"]] | [--on-unanswered fail|first]\n' +
     "       (a live decider flags the cassette non-deterministic — re-recording may drift; replay stays deterministic. --rerecord-stale rejects these flags.)\n" +
     "       NOTE: --allow-failing only relaxes the post-run VERDICT gate; it does NOT salvage an unanswered gate (that throws before any cassette is written — use --on-unanswered first / a decider).",
-  replay: "usage: replay <file.cassette.json | dir/> [--strict] [--fail-on-skill-drift] [--output-format text|json]",
+  replay:
+    "usage: replay <file.cassette.json | dir/> [--strict] [--fail-on-skill-drift] [--assert-from <scenario.yaml> | --reassert] [--output-format text|json]\n" +
+    "       by default the assertions FROZEN in the cassette drive the verdict (deterministic); a sibling scenario whose assert: differs only prints a notice.\n" +
+    "       --assert-from <file> / --reassert: token-free re-check against the on-disk assert:/expect_denied: — recording-shaping drift (prompt/answers/baseline/skills) and skill staleness HARD-FAIL.",
   "verify-cassettes":
     "usage: verify-cassettes <file|dir> [--skip-privacy|--skip-staleness] [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-file <path>]... [--output-format json]",
   trace:
     "usage: trace <run-id | run-dir | events.jsonl> [--view tools|questions|dispatches] [--output-format json]\n       --view tools       tool call / result rows\n       --view questions   gate lifecycle (question → answer → delivered)\n       --view dispatches  sub-agent dispatch tree + dispatch_count_max\n       (default: all views)\n       (for what the run PRODUCED — artifacts — use `inspect`)",
   assertions: "usage: assertions --list [--output-format json]",
   scaffold:
-    "usage: scaffold <run-id | run-dir> [--out <file.yaml>]\n       Turns a kept run into a starter scenario YAML (gates→answers, artifacts→file_exists).\n       Positional <run-id | run-dir> is the canonical form.",
+    "usage: scaffold <run-id | run-dir> [--out <file.yaml>] [--output-format text|json]\n       Turns a kept run into a starter scenario YAML (gates→answers, artifacts→file_exists).\n       Positional <run-id | run-dir> is the canonical form.",
+  status:
+    'usage: status <run-id | run-dir> [--follow] [--output-format text|json]   (check whether a background run is alive, without ps aux — see docs/run-status.md)\n       --follow: stream one line per status change until the run reaches a terminal state (done/error); arm a Monitor here\n       exit codes: 0 healthy (running/done) · 1 the dir resolved but has no status.json yet (or a malformed one), or the run itself ended in state:"error" · 2 usage error, including an unresolvable <run-id | run-dir> (matches trace/inspect/scaffold) · 3 stale (probably dead — no exit handler can catch SIGKILL)',
   decide:
     'usage: decide [--question <q>] [--option <o>]... [--decider-cmd <cmd> | --decider-llm [--intent <s>] [--decider-model <id>]] [--answer "<q>=<label>"]... [--answer-policy <p>] [--output-format json]',
-  gates: "usage: gates <dir> [--follow]   (stream pending in-band gates as JSON lines; pair with --decider-dir)",
+  gates:
+    "usage: gates <dir> [--follow] [--output-format text|json]   (stream pending in-band gates as JSON lines; pair with --decider-dir)",
   answer:
-    'usage: answer <dir> --gate <N> (--choose <label> [--choose <label>…] | --answer "<q>=<label>")   (write an in-band gate reply atomically; repeat --choose for a multiSelect gate)',
+    'usage: answer <dir> --gate <N> (--choose <label> [--choose <label>…] | --answer "<q>=<label>") [--output-format text|json]   (write an in-band gate reply atomically; repeat --choose for a multiSelect gate)',
   "verify-run":
     "usage: verify-run <run-dir> <scenario.yaml> [--output-format json]   (re-evaluate a scenario's assert: against a kept run dir; no live agent)",
   inspect:
@@ -333,6 +349,7 @@ const COMMANDS = [
   "inspect",
   "assertions",
   "scaffold",
+  "status",
   "decide",
   "gates",
   "answer",
@@ -346,7 +363,7 @@ const COMMANDS = [
   "prune",
 ];
 
-// #29: --dotenv / --run-dir are GLOBAL flags honored ONLY in leading position (before the subcommand),
+// --dotenv / --run-dir are GLOBAL flags honored ONLY in leading position (before the subcommand),
 // so a per-command value beginning with `--dotenv=`/`--run-dir=` (e.g. `skill ./s "p" --answer
 // "--dotenv=x=foo"`) is never hijacked by the pre-dispatch scan. Walk from the front consuming only
 // leading global-flag tokens (and their space-form values); stop at the first token that isn't one —
@@ -379,14 +396,14 @@ async function main() {
   // the command name ("unknown command"). Find either spelling and apply the SAME existence + command-
   // name guards.
   // Scan only the leading global-flag region (computed over the not-yet-mutated argv), so a `--dotenv=…`
-  // token sitting AFTER the subcommand (as a per-command flag value) is left for the command parser (#29).
+  // token sitting AFTER the subcommand (as a per-command flag value) is left for the command parser.
   const dotenvLead = argv.slice(0, leadingGlobalCount(argv));
   const eqIdx = dotenvLead.findIndex((a) => a.startsWith("--dotenv="));
   const spaceIdx = dotenvLead.indexOf("--dotenv");
   const envFileIdx = spaceIdx >= 0 ? spaceIdx : eqIdx;
   const isEquals = spaceIdx < 0 && eqIdx >= 0;
   const explicitEnvFile = isEquals ? argv[eqIdx].slice("--dotenv=".length) : envFileIdx >= 0 ? argv[envFileIdx + 1] : undefined;
-  // #4: bounds-check the value, reject a command name mistaken as the path (`--dotenv run x.yaml`
+  // bounds-check the value, reject a command name mistaken as the path (`--dotenv run x.yaml`
   // would treat `run` as the dotenv path and dispatch `x.yaml`), and FAIL when an explicitly named
   // file is absent — an explicitly-requested credential file silently ignored is a footgun.
   if (envFileIdx >= 0) {
@@ -417,7 +434,7 @@ async function main() {
   // --dotenv it does NOT require the path to exist (it's an output dir, created on first write).
   // Recompute the leading region over the CURRENT (post-dotenv-splice) argv — the --dotenv strip above may
   // have shifted token positions, so a lead captured before it would be stale and misalign the indices the
-  // splice below relies on (#29).
+  // splice below relies on.
   const runDirLead = argv.slice(0, leadingGlobalCount(argv));
   const rdEq = runDirLead.findIndex((a) => a.startsWith("--run-dir="));
   const rdSpace = runDirLead.indexOf("--run-dir");
@@ -459,10 +476,10 @@ async function main() {
   // F-7: per-subcommand --help for the parseArgs-direct commands (run/skill/lint self-handle, so they're
   // absent from the map and fall through to their own handling).
   if (hasHelp(rest) && cmd in SUBCOMMAND_USAGE) return void log(SUBCOMMAND_USAGE[cmd]);
-  // #27: validate COWORK_HARNESS_OUTPUT_FORMAT here — AFTER the --version/--help/per-subcommand-help
+  // validate COWORK_HARNESS_OUTPUT_FORMAT here — AFTER the --version/--help/per-subcommand-help
   // short-circuits above (so `COWORK_HARNESS_OUTPUT_FORMAT=garbage cowork-harness --version|--help` is NOT
   // a regression-causing usage error, matching the --output-format flag which never blocks --version) and
-  // BEFORE dispatch (so every dispatched command sees a validated env, and #4's env fallback only ever
+  // BEFORE dispatch (so every dispatched command sees a validated env, and the env fallback only ever
   // reads text|json|unset). The --output-format flag rejects an invalid value with exit 2; the env form
   // silently degraded to text — bring it to parity. An explicit --output-format=json flag still selects the
   // json error envelope via isJsonOutput (the garbage env value falls back to text there).
@@ -475,7 +492,7 @@ async function main() {
   // an unrelated positional / "unexpected argument" error) sent users hunting for a per-command flag that
   // doesn't exist (campaign-2 H-2/H-4 — `--dotenv` where the pre-0.17.0 docs put it). Reject with a position
   // hint. Placed here — AFTER the --version/--help short-circuits (so a `--help`/`-h` request still wins,
-  // matching the #27 precedent above) and routed through fail() so the json envelope + exit-2 path match
+  // matching the precedent above) and routed through fail() so the json envelope + exit-2 path match
   // every other usage error. Gated on a KNOWN `cmd`, so a junk subcommand (`frobnicate --dotenv x`) falls
   // through to the more accurate "unknown command" path below rather than getting a hint that implies it was
   // valid. EXACT-token match only: the `--flag=value` form is intentionally NOT matched, so a per-command
@@ -532,6 +549,8 @@ async function main() {
       return cmdAssert(rest);
     case "scaffold":
       return cmdScaffold(rest);
+    case "status":
+      return cmdStatus(rest);
     case "decide":
       return cmdDecide(rest);
     case "gates":
@@ -552,6 +571,8 @@ interface CommonFlags {
   output: "text" | "json";
   quiet: boolean;
   verbose: boolean;
+  compact?: boolean; // --compact: drop informational capability ::notice:: lines (safety net stays)
+  demo?: boolean; // --demo: shareable output — compact + suppress the runs-location header (runs stay durable)
   deciderCmd?: string; // --decider-cmd: spawn a helper that answers each decision (external channel B)
   deciderDir?: string; // --decider-dir: file-rendezvous for a driving agent's Monitor (external channel C)
 }
@@ -559,7 +580,7 @@ interface CommonFlags {
  *  `--output-format text|json` flag (first occurrence wins, matching parseOutputFormat's
  *  first-occurrence-authoritative semantics) takes precedence; absent any flag, fall back to the
  *  documented COWORK_HARNESS_OUTPUT_FORMAT env var so an env-only JSON consumer still gets an envelope
- *  from the top-level catch (#4). */
+ *  from the top-level catch. */
 function isJsonOutput(args: string[]): boolean {
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--output-format" && args[i + 1] === "json") return true;
@@ -579,7 +600,7 @@ function ensureOutputFormat(command: string, args: string[]): void {
   }
 }
 /**
- * #58: bounds-checked reader for value-taking flags. `args[++i]` with no following token silently
+ * bounds-checked reader for value-taking flags. `args[++i]` with no following token silently
  * yields `undefined` (e.g. a trailing `--decider-cmd` at the end of argv), which then becomes a
  * broken flag value. Read the next token explicitly and, when it's absent, fail with the established
  * usage-error exit code (2). takeCommonFlags can run before --output-format json is resolved, so the error
@@ -682,13 +703,13 @@ function takeCommonFlags(args: string[], commandName: string = "skill"): { rest:
       return flagValue(args, i++, name);
     };
     // A boolean common flag given an equals value (e.g. `--quiet=1`) is a usage error, mirroring parseArgs.
-    if (eq > 0 && (name === "--quiet" || name === "--verbose")) {
+    if (eq > 0 && (name === "--quiet" || name === "--verbose" || name === "--compact" || name === "--demo")) {
       log(`${name} takes no value`);
       process.exit(2);
     }
     if (name === "--on-unanswered") flags.onUnanswered = readVal() as OnUnanswered;
     else if (name === "--output-format") {
-      // #2: validate the enum (and bounds-check the value). An invalid/missing value previously fell
+      // validate the enum (and bounds-check the value). An invalid/missing value previously fell
       // back to "text" silently (`--output-format xml` behaved as text; a trailing `--output-format` too).
       const v = readVal();
       if (v !== "text" && v !== "json") {
@@ -698,6 +719,8 @@ function takeCommonFlags(args: string[], commandName: string = "skill"): { rest:
       flags.output = v;
     } else if (a === "--quiet" || a === "-q") flags.quiet = true;
     else if (a === "--verbose" || a === "-V") flags.verbose = true;
+    else if (a === "--compact") flags.compact = true;
+    else if (a === "--demo") flags.demo = true;
     else if (name === "--decider-cmd") {
       const v = readVal();
       if (eqVal === undefined && v.startsWith("-"))
@@ -719,18 +742,20 @@ function resolveOutput(
   flags: CommonFlags,
 ): { json: boolean; render: boolean; footer: boolean; plan: RenderPlan } {
   const color = process.stderr.isTTY === true && !process.env.NO_COLOR;
+  const compact = !!(flags.compact || flags.demo); // --demo implies --compact
   if (flags.output === "json")
-    return { json: true, render: false, footer: false, plan: { live: false, progress: false, verbose: false, color: false } };
-  if (flags.quiet) return { json: false, render: false, footer: true, plan: { live: false, progress: false, verbose: false, color } };
+    return { json: true, render: false, footer: false, plan: { live: false, progress: false, verbose: false, color: false, compact } };
+  if (flags.quiet)
+    return { json: false, render: false, footer: true, plan: { live: false, progress: false, verbose: false, color, compact } };
   const verbose = flags.verbose;
   // skill renders live ("show me what it did"); run is verdict-first (renderer buffers for the
   // failure transcript; live/per-tool only under --verbose).
   const live = command === "skill" ? true : verbose;
   const progress = command === "skill" ? true : verbose;
-  return { json: false, render: true, footer: true, plan: { live, progress, verbose, color } };
+  return { json: false, render: true, footer: true, plan: { live, progress, verbose, color, compact } };
 }
 
-/** Resolve the on_unanswered default for a command (input-and-interactivity plan §3). This is the choke
+/** Resolve the on_unanswered default for a command. This is the choke
  *  point BOTH run and skill pass through, so the removed/internal policy values are rejected here — they
  *  can't silently degrade to `fail` (which would pass a no-gate run green under a bogus policy). */
 function resolvePolicy(command: "run" | "skill", flags: CommonFlags): OnUnanswered {
@@ -754,7 +779,7 @@ function resolvePolicy(command: "run" | "skill", flags: CommonFlags): OnUnanswer
       json,
     );
   if (flags.onUnanswered) {
-    // #3: validate the accepted set. `external`/`llm` are rejected above with redirect messages (the
+    // validate the accepted set. `external`/`llm` are rejected above with redirect messages (the
     // decider-orthogonality invariant); any OTHER bogus value (e.g. "banana") used to fall through here
     // and pass unvalidated, with audit metadata reporting a nonsensical policy. Reject it loudly.
     if (flags.onUnanswered !== "fail" && flags.onUnanswered !== "prompt" && flags.onUnanswered !== "first")
@@ -827,7 +852,7 @@ function loadAnswerPolicy(command: string, path: string, json: boolean): AnswerR
   const rules = Array.isArray(parsed) ? parsed : ((parsed as { answers?: unknown })?.answers ?? []);
   if (!Array.isArray(rules))
     fail(command, "usage", `--answer-policy must be a list of rules (or an {answers: [...]} doc)`, undefined, json);
-  // #7: validate EACH rule against the AnswerRule schema instead of a blind cast. A malformed rule
+  // validate EACH rule against the AnswerRule schema instead of a blind cast. A malformed rule
   // (non-object, wrong field types) must fail loud here, not silently validate as a rule that never
   // matches and surfaces only as an unanswered gate mid-run.
   const out: AnswerRule[] = [];
@@ -871,7 +896,13 @@ async function runOneScenario(p: {
   const stopHeartbeat = o.json || externalChannel ? () => {} : startHeartbeat(renderer, o.plan, start);
   let result: RunResult;
   try {
-    result = await executeScenario(scenario, { ...extra, onUnanswered: policy, externalChannel, hooks: renderer ? [renderer] : [] });
+    result = await executeScenario(scenario, {
+      ...extra,
+      onUnanswered: policy,
+      externalChannel,
+      hooks: renderer ? [renderer] : [],
+      compact: !!(flags.compact || flags.demo), // --demo implies --compact
+    });
   } catch (e) {
     if (e instanceof UnansweredError) {
       const chan = flags.deciderDir ? "decider-dir" : flags.deciderCmd ? "decider-cmd" : policy;
@@ -899,7 +930,7 @@ async function cmdRun(rawArgs: string[]) {
     const a = rawArgs[i];
     if (a === "--decider-model") {
       deciderModel = rawArgs[++i];
-      // #28: reject "" too — the equals branch below rejects an empty value, so the spaced form must match
+      // reject "" too — the equals branch below rejects an empty value, so the spaced form must match
       // (otherwise `--decider-model ""` forwards an empty model id and fails obscurely later).
       if (deciderModel === undefined || deciderModel === "" || deciderModel.startsWith("-"))
         fail("run", "usage", "--decider-model requires a value (a model id)", undefined, isJsonOutput(rawArgs));
@@ -908,7 +939,14 @@ async function cmdRun(rawArgs: string[]) {
       if (deciderModel === "") fail("run", "usage", "--decider-model requires a non-empty value", undefined, isJsonOutput(rawArgs));
     } else preArgs.push(a);
   }
-  const { rest: args, flags } = takeCommonFlags(preArgs, "run");
+  const { rest: rawRest, flags } = takeCommonFlags(preArgs, "run");
+  // `--keep` is meaningful on `skill` (runs are otherwise discarded) but `run` ALWAYS keeps runs.
+  // Accept it as an explicit no-op (EXACT-token only — it takes no value, so an exact match can't
+  // swallow a real arg) instead of the loud reject below, so muscle memory from `skill` doesn't error.
+  // Note it so the no-effect is visible.
+  const keepRequested = rawRest.includes("--keep");
+  const args = rawRest.filter((a) => a !== "--keep");
+  if (keepRequested) log("note: `run` always keeps runs (under the runs root); --keep is a no-op here.");
   const target = args[0];
   if (!target) fail("run", "usage", "usage: run <scenario.yaml | dir/>", undefined, flags.output === "json");
   // `takeCommonFlags` strips known flags; `run` takes exactly one positional (a scenario file or a
@@ -935,7 +973,7 @@ async function cmdRun(rawArgs: string[]) {
   const externalChannel = resolveExternal("run", flags); // created once; reused across scenarios
   const policy = externalChannel ? "fail" : resolvePolicy("run", flags);
   const o = resolveOutput("run", flags);
-  noteRunsLocation({ json: o.json, quiet: !!flags.quiet });
+  noteRunsLocation({ json: o.json, quiet: !!flags.quiet, suppress: !!flags.demo });
   const results: RunResult[] = [];
   try {
     for (let i = 0; i < files.length; i++) {
@@ -1040,8 +1078,8 @@ async function cmdSkill(rawArgs: string[]) {
       fail("skill", "usage", `${name} takes no value`, undefined, isJson0);
     }
     if (name === "--fidelity") {
-      fidelity = nextVal() as typeof fidelity; // #58: bounds-checked
-      // #6: validate at parse time → category `usage`. Previously an invalid value was only rejected
+      fidelity = nextVal() as typeof fidelity; // bounds-checked
+      // validate at parse time → category `usage`. Previously an invalid value was only rejected
       // later by Scenario.parse (a Zod throw), which the top-level catch mapped to `internal` — a user
       // mistake masquerading as a harness bug.
       const FID = ["protocol", "container", "microvm", "hostloop", "cowork"];
@@ -1082,7 +1120,7 @@ async function cmdSkill(rawArgs: string[]) {
   const isJson = flags.output === "json";
   if (resume && !sessionId) fail("skill", "usage", "--resume requires --session-id <id> (the session to resume)", undefined, isJson);
 
-  // #5: reject extra positionals so a shell-quoting slip (an unquoted multi-word prompt) can't silently
+  // reject extra positionals so a shell-quoting slip (an unquoted multi-word prompt) can't silently
   // drop part of the intended prompt. With --prompt-file the only positional is the plugin folder (1);
   // without it, <plugin-folder> "<prompt>" (2). Anything beyond is unexpected.
   const maxPositional = promptFile !== undefined ? 1 : 2;
@@ -1214,7 +1252,7 @@ async function cmdSkill(rawArgs: string[]) {
   // base policy; an external channel or the LLM decider overrides the terminal in execute.ts
   const policy: OnUnanswered = externalChannel ? "fail" : useLlm ? "llm" : resolvePolicy("skill", flags);
   const o = resolveOutput("skill", flags);
-  noteRunsLocation({ json: o.json, quiet: !!flags.quiet });
+  noteRunsLocation({ json: o.json, quiet: !!flags.quiet, suppress: !!flags.demo });
   let result: RunResult;
   try {
     result = await runOneScenario({
@@ -1232,7 +1270,7 @@ async function cmdSkill(rawArgs: string[]) {
         resume,
         llmIntent: intent,
         llmModel: deciderModel,
-        nonDeterministicHint: flags.deciderDir != null || flags.deciderCmd != null, // driving agent / helper answers → not reproducible (M4; #48)
+        nonDeterministicHint: flags.deciderDir != null || flags.deciderCmd != null, // driving agent / helper answers → not reproducible
       },
     });
   } finally {
@@ -1267,7 +1305,7 @@ function baselineFilePath(name: string): string {
  *  harness understands, guest-image hints, the resolved VM instance + its current status, and any
  *  warnings (e.g. status the VM tooling could not determine). Keep the shape additive — JSON callers
  *  pin field names, so add fields rather than rename/remove. */
-// Shared vm JSON envelope shell. Every subcommand (#7: init/delete/prune too, not just status) emits the
+// Shared vm JSON envelope shell. Every subcommand (init/delete/prune too, not just status) emits the
 // same tool/command/instance/baseline/image block under a per-subcommand discriminator, with the
 // subcommand-specific outcome spread in by the caller.
 function vmEnvelopeBase(subcommand: string, baselineName: string, baseline: PlatformBaseline, instance: string, warnings: string[]) {
@@ -1309,7 +1347,7 @@ const VM_SUB_HELP: Record<string, string> = {
 };
 
 function cmdVm(args: string[]) {
-  // R3: macOS arm64 guard — Lima VMs are macOS-only.
+  // macOS arm64 guard — Lima VMs are macOS-only.
   if (process.platform !== "darwin") {
     log("vm is only supported on macOS arm64 (requires Lima + Apple Virtualization Framework)\n");
     process.exit(2);
@@ -1318,7 +1356,7 @@ function cmdVm(args: string[]) {
   const sub = args[0];
   const VM_SUBS = Object.keys(VM_SUB_HELP);
 
-  // R3: per-subcommand --help (e.g. `vm init --help`).
+  // per-subcommand --help (e.g. `vm init --help`).
   if (sub && VM_SUBS.includes(sub) && (args.includes("--help") || args.includes("-h"))) {
     log(VM_SUB_HELP[sub]);
     process.exit(0);
@@ -1357,7 +1395,7 @@ function cmdVm(args: string[]) {
   }
   const baselineName = vmParsed.positionals[0] ?? "latest";
   const baseline = loadBaseline(baselineName);
-  // #62/#63: the instance name is derived from the config hash (see lima.ts instanceName) — a config
+  // the instance name is derived from the config hash (see lima.ts instanceName) — a config
   // change yields a new name, so a stale VM is never silently reused.
   const instance = instanceName(baseline);
   if (sub === "status") {
@@ -1367,7 +1405,7 @@ function cmdVm(args: string[]) {
     else log(`${instance}: ${status}`);
   } else if (sub === "init") {
     const { status } = vmInit(baseline);
-    // #7: honor --output-format json (init/delete/prune printed text unconditionally; only status did).
+    // honor --output-format json (init/delete/prune printed text unconditionally; only status did).
     if (vmJson) out(JSON.stringify({ ...vmEnvelopeBase("init", baselineName, baseline, instance, []), status }));
     else log(`${instance}: ${status}`);
   } else if (sub === "delete") {
@@ -1379,7 +1417,7 @@ function cmdVm(args: string[]) {
     if (vmJson) out(JSON.stringify({ ...vmEnvelopeBase("prune", baselineName, baseline, instance, []), pruned }));
     else log(pruned.length ? `pruned ${pruned.length} orphaned VM(s): ${pruned.join(", ")}` : `no orphaned VMs (current: ${instance})`);
   } else {
-    // #11: an invalid/absent subcommand must exit non-zero — a bare `log` exits 0, so a CI script
+    // an invalid/absent subcommand must exit non-zero — a bare `log` exits 0, so a CI script
     // running `vm typo` would read it as success.
     log("usage: vm <init|status|delete|prune>");
     process.exit(2);
@@ -1435,7 +1473,7 @@ function cmdBoundary(args: string[]) {
 }
 
 function cmdSync(args: string[]) {
-  // Q3: platform guard fires before arg parsing — wrong platform is an environment error, not a usage error.
+  // platform guard fires before arg parsing — wrong platform is an environment error, not a usage error.
   if (process.platform !== "darwin") {
     log("sync requires macOS (the Cowork Desktop app is macOS-only).");
     return process.exit(2);
@@ -1457,7 +1495,7 @@ function cmdSync(args: string[]) {
   const allowEmpty = !!syncParsed.flags["--allow-empty"];
   const res = sync();
 
-  // #37 — refuse to write a baseline with empty version fields. An empty appVersion would produce
+  // refuse to write a baseline with empty version fields. An empty appVersion would produce
   // `desktop-.json` (invalid filename); an empty agentVersion means resolveAgentBinary will fail.
   const versionErrors: string[] = [];
   if (!res.appVersion) versionErrors.push("appVersion (Desktop not found or Info.plist unreadable — install/open Claude Desktop)");
@@ -1469,7 +1507,7 @@ function cmdSync(args: string[]) {
     process.exit(1);
   }
 
-  // #41 — refuse to write a baseline with an empty allowlist unless --allow-empty is passed.
+  // refuse to write a baseline with an empty allowlist unless --allow-empty is passed.
   // An empty allowDomains = default-deny on ALL egress, which silently breaks every scenario.
   if (res.allowDomains.length === 0) {
     log("WARNING: sync produced an empty allowDomains list (asar domain regex matched nothing — asar layout moved).");
@@ -1490,7 +1528,7 @@ function cmdSync(args: string[]) {
     throw new Error("No base baseline in baselines/. Commit one (e.g. desktop-<ver>.json) before sync can merge onto it.");
   }
 
-  // #38 — recompute agentBinary.stagedPath when agentVersion changes.
+  // recompute agentBinary.stagedPath when agentVersion changes.
   // Strategy: derive the path by convention (same layout as in the committed baselines:
   //   ~/Library/Application Support/Claude/claude-code-vm/<agentVersion>/claude)
   // then VERIFY the derived path exists, because resolveAgentBinary (baseline.ts:16) will fail
@@ -1520,7 +1558,7 @@ function cmdSync(args: string[]) {
   }
   const nextAgentBinary = { ...baseAgentBinary, stagedPath: derivedStagedPath };
 
-  // #39 — re-sync GrowthBook gate states from the decoded fcache (was: stale-carry + blanket warning).
+  // re-sync GrowthBook gate states from the decoded fcache (was: stale-carry + blanket warning).
   // Gates drive the cowork loop decision (decideLoopFromBaseline) and the dispatch cap; decoding the
   // fcache here makes a re-sync refresh them and surfaces real drift instead of silently carrying stale.
   const baseProvenance = (base.provenance ?? {}) as Record<string, unknown>;
@@ -1533,7 +1571,7 @@ function cmdSync(args: string[]) {
     for (const g of Object.values(res.gates)) {
       const key = `${g.name}:${g.id}`;
       const prev = baseGates[key];
-      // #30: for a legacy prose entry the authoritative state is the LEADING `on(...)`/`off(...)` token
+      // for a legacy prose entry the authoritative state is the LEADING `on(...)`/`off(...)` token
       // (the note stripper just below anchors on the same pattern) — a bare substring scan of the whole
       // string would let a human note containing "on"/"force" mask a real off→on flip.
       const prevOn = typeof prev === "string" ? /^\s*on\(/i.test(prev) : !!(prev as { on?: boolean } | undefined)?.on;
@@ -1581,13 +1619,17 @@ function cmdSync(args: string[]) {
   };
   const diffFlag = !!syncParsed.flags["--diff"];
   if (diffFlag) {
-    try {
-      const prev = JSON.parse(readFileSync(baselinePath, "utf8"));
-      log("=== diff vs committed baseline ===");
-      diff(prev, next, "");
-    } catch {
-      log(`(no committed ${baselinePath} yet — this would be the first)`);
-    }
+    // Diff against `base` (the latest committed baseline `next` was merged onto), NOT a separate read of
+    // `baselinePath`. On a genuine version bump `baselinePath` (desktop-<NEW version>.json) doesn't exist
+    // yet, so reading it here used to always miss and print "no committed baseline yet" instead of the
+    // appVersion/agentVersion/etc. diff docs/maintenance.md documents — going silent on exactly the
+    // release-bump preview it exists for. `base` already holds the right comparison in both cases: on a
+    // bump it's the previous version (the "old" side of the diff); on a same-version re-sync `baselinePath`
+    // would just be re-reading the same file `base` came from. `base` is a fresh deep clone (`JSON.parse(
+    // JSON.stringify(loadBaseline("latest")))` above) that nothing between here and there mutates in
+    // place, so this surfaces real gate/content drift, not a diff against an already-updated copy.
+    log(`=== diff vs latest committed baseline (desktop-${(base as { appVersion?: string }).appVersion}) ===`);
+    diff(base, next, "");
   }
   if (res.unknownDeltas.length) {
     log("\n⚠ unknown deltas (extend src/sync/cowork-sync.ts):");
@@ -1668,7 +1710,7 @@ async function cmdDecide(args: string[]) {
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === "--question")
-      question = flagValueStrict(args, i++, a); // #58: bounds-checked; rejects flag-looking values
+      question = flagValueStrict(args, i++, a); // bounds-checked; rejects flag-looking values
     else if (a === "--option") options.push(flagValueStrict(args, i++, a));
     else if (a === "--decider-cmd") {
       deciderCmd = flagValue(args, i++, a);
@@ -1691,7 +1733,7 @@ async function cmdDecide(args: string[]) {
     // --output-format consumes a value in the equals-free form; skip it so its value isn't read as a
     // stray positional (isJsonOutput/ensureOutputFormat handle the actual parsing).
     else if (a === "--output-format") i++;
-    // #5: the equals form is fully supported by the parser; recognize it here as a no-op (it carries its
+    // the equals form is fully supported by the parser; recognize it here as a no-op (it carries its
     // own value) so it doesn't fall through to the unknown-flag guard below and exit 2 like an outlier.
     else if (a === "--output-format=json" || a === "--output-format=text") {
       /* recognized; parsed by isJsonOutput/ensureOutputFormat */
@@ -1711,7 +1753,7 @@ async function cmdDecide(args: string[]) {
         );
       i++;
     } else if (a === "--quiet" || a === "-q" || a === "--verbose" || a === "-V") {
-      /* accepted but currently a no-op in decide — wired for flag consistency (§2.1) */
+      /* accepted but currently a no-op in decide — wired for flag consistency */
     }
     // an unrecognized `--`-prefixed token used to be silently ignored (the loop had no else).
     else if (a.startsWith("--") && a !== "--output-format=json" && a !== "--output-format=text")
@@ -1721,7 +1763,7 @@ async function cmdDecide(args: string[]) {
     // decide takes NO positionals (the sample question comes from --question, not a positional).
     else fail("decide", "usage", `decide takes no positional arguments (got: ${a})`, undefined, json);
   }
-  // #13: `decide` does not implement the file-rendezvous channel — reject `--decider-dir` loudly
+  // `decide` does not implement the file-rendezvous channel — reject `--decider-dir` loudly
   // instead of silently ignoring a first-class runtime path.
   if (args.includes("--decider-dir"))
     fail(
@@ -1743,7 +1785,7 @@ async function cmdDecide(args: string[]) {
     );
   if (deciderModel !== undefined && !deciderLlm)
     fail("decide", "usage", "--decider-model requires --decider-llm (it sets the model that answers the question).", undefined, json);
-  // Q5/§8.5: pre-flight — exit 2 (usage error) when no decider is configured at all. Previously this
+  // pre-flight — exit 2 (usage error) when no decider is configured at all. Previously this
   // fell through to ScriptedDecider([]).decide() → ABSTAIN → exit 1 "no rule matched", which implies
   // the user wrote a rule that failed to match rather than that they forgot to configure anything.
   if (!deciderLlm && !deciderCmd && rules.length === 0 && !policy)
@@ -1754,7 +1796,7 @@ async function cmdDecide(args: string[]) {
       undefined,
       json,
     );
-  // #14: reject conflicting terminal deciders — both set, the LLM branch would silently win and the
+  // reject conflicting terminal deciders — both set, the LLM branch would silently win and the
   // helper would never be exercised. Mirrors cmdSkill/resolveExternal's conflict guards.
   if (deciderLlm && deciderCmd)
     fail("decide", "usage", "--decider-llm conflicts with --decider-cmd (one terminal decider).", undefined, json);
@@ -1818,6 +1860,111 @@ async function cmdDecide(args: string[]) {
   }
 }
 
+/** `cowork-harness status <run-id | run-dir> [--follow] [--output-format json]` — read-only check of
+ *  whether a background run is still alive (state/elapsed/tool counts), without relying on `ps aux`
+ *  (unreliable across sandbox/PID-namespace boundaries — see docs/run-status.md). */
+async function cmdStatus(args: string[]) {
+  let p;
+  try {
+    p = parseArgs(args, { booleans: ["--follow"], values: ["--output-format"], enums: { "--output-format": ["text", "json"] } });
+  } catch (e) {
+    log((e as Error).message);
+    return process.exit(2);
+  }
+  if (p.positionals.length !== 1) {
+    log(SUBCOMMAND_USAGE.status);
+    return process.exit(2);
+  }
+  const json = p.options["--output-format"] === "json";
+  let dir: string;
+  try {
+    dir = resolveStatusDir(p.positionals[0]);
+  } catch (e) {
+    log((e as Error).message);
+    return process.exit(2);
+  }
+  if (p.flags["--follow"]) {
+    let lastLine: string | undefined;
+    try {
+      await followRunStatus(dir, (line) => {
+        lastLine = line;
+        out(line);
+      });
+    } catch (e) {
+      // followRunStatus rejects for two distinct reasons — distinguish them by exit code so a script
+      // doesn't have to string-match: exit 3 for "found it, but it's gone stale" (probably a SIGKILL'd
+      // process — see isStatusStale in run-status.ts), exit 1 for "never found status.json at all"
+      // (wrong dir, or the run genuinely never started). Neither is a silent hang.
+      const err = e as Error & { stale?: boolean };
+      log(err.message);
+      return process.exit(err.stale ? 3 : 1);
+    }
+    // followRunStatus resolved — it only distinguishes "still running" from "reached a terminal state,"
+    // not WHICH terminal state. The last line it wrote via the callback is always the JSON-serialized
+    // RunStatus that made it resolve (the write always precedes the resolve — see followRunStatus's
+    // `tick()`), so parse it to tell "done" from "error" and exit accordingly — matching the one-shot
+    // (non---follow) branch below, which already exits 1 for `state:"error"`. A --follow run that ended
+    // in error must not report a healthy exit 0.
+    let terminalState: RunStatus["state"] | undefined;
+    if (lastLine) {
+      try {
+        terminalState = (JSON.parse(lastLine) as RunStatus).state;
+      } catch {
+        /* malformed last line (shouldn't happen — followRunStatus only ever writes JSON.stringify(status))
+         * — fall through to the healthy default rather than crash the CLI on exit. */
+      }
+    }
+    return process.exit(terminalState === "error" ? 1 : 0);
+  }
+  if (!hasRunStatus(dir)) {
+    log(`no status.json at ${dir} — the run may not have reached its status-writing point yet, or this isn't a cowork-harness run dir`);
+    return process.exit(1);
+  }
+  let status: RunStatus;
+  try {
+    status = readRunStatus(dir);
+  } catch (e) {
+    // readRunStatus's own contract (see run-status.ts) is "throws on missing/malformed — the CLI
+    // translates that into a usage-style message" — this is that translation. writeJsonAtomic makes a
+    // genuinely malformed file rare (a reader can never observe a half-write), but a hand-edited or
+    // externally-corrupted file must still fail clean, not with a raw stack trace.
+    log(`status.json at ${dir} is unreadable/malformed: ${(e as Error).message}`);
+    return process.exit(1);
+  }
+  // A "running" status that's gone STALE means the writer stopped updating altogether — the SIGKILL/OOM
+  // case the crash-safety net (execute.ts's exit handler) structurally cannot catch. Without this check
+  // a hard-killed run would read as alive FOREVER on a one-shot `status` call — the exact false-liveness
+  // conclusion this feature exists to prevent (see docs/run-status.md).
+  const stale = isStatusStale(status);
+  if (json) {
+    out(
+      JSON.stringify({
+        tool: "cowork-harness",
+        version: pkgVersion(),
+        command: "status",
+        ok: status.state !== "error" && !stale,
+        stale,
+        ...status,
+      }),
+    );
+  } else {
+    const totalTools = Object.values(status.toolCounts).reduce((a, b) => a + b, 0);
+    const label = stale ? "probably-dead (stale)" : status.state;
+    const glyph = stale ? "?" : status.state === "running" ? "●" : status.state === "done" ? "✓" : "✗";
+    const staleNote = stale
+      ? ` — no update in ${Math.round((Date.now() - Date.parse(status.updatedAt)) / 1000)}s; the process likely died without a clean exit (e.g. SIGKILL/OOM)`
+      : "";
+    log(
+      `${glyph} ${label} — ${status.scenario} [${status.fidelity}] · pid ${status.pid} · ` +
+        `${Math.round(status.elapsedMs / 1000)}s · ${totalTools} tools · ${status.subagentCount} sub-agents${staleNote}`,
+    );
+  }
+  // Exit codes: 0 healthy (running/done, not stale) · 1 the run itself errored · 2 usage error (thrown
+  // earlier) · 3 stale/probably-dead — distinct from 1 so a script can tell "it failed" from "can't
+  // confirm it's alive" without parsing text.
+  return process.exit(stale ? 3 : status.state === "error" ? 1 : 0);
+}
+
 /** `gates <dir> [--follow]` — the gate stream for the in-band `--decider-dir` path. Emits one clean
  *  JSON line per pending gate (`{seq, …decision_request}`) + a terminal `{"done":true}`. Point ONE
  *  Monitor at this (no hand-written zsh/find/seen-set loop). */
@@ -1842,9 +1989,9 @@ function cmdAnswer(args: string[]) {
   // validate --output-format before isJsonOutput so an unrecognized value is a usage error.
   ensureOutputFormat("answer", args);
   const json = isJsonOutput(args);
-  // #15: skip flag values so `answer --gate 1 --choose Yes <dir>` doesn't read `1` as the directory.
+  // skip flag values so `answer --gate 1 --choose Yes <dir>` doesn't read `1` as the directory.
   const answerPositionals = positionals(args, ["--gate", "--choose", "--answer", "--output-format"]);
-  // #31: reject extra positionals rather than silently writing to the first dir (mirrors `gates`).
+  // reject extra positionals rather than silently writing to the first dir (mirrors `gates`).
   if (answerPositionals.length > 1) return void fail("answer", "usage", "answer takes one <dir>", undefined, json);
   const dir = answerPositionals[0];
   let seq: number | undefined;
@@ -1856,7 +2003,7 @@ function cmdAnswer(args: string[]) {
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === "--gate")
-      seq = Number(flagValue(args, i++, a)); // #58: bounds-checked
+      seq = Number(flagValue(args, i++, a)); // bounds-checked
     else if (a === "--choose") {
       chooses.push(flagValueStrict(args, i++, a));
     } else if (a === "--answer") {
@@ -1951,7 +2098,7 @@ function cmdScaffold(args: string[]) {
   rejectUnknownFlags("scaffold", args, ["--from-run", "--out", "--output-format", "--output-format=json", "--output-format=text"], json);
 
   // Validate --out FIRST (flag-looking value is a usage error regardless of --from-run presence).
-  // #6: honor BOTH the spaced (`--out foo`) and equals (`--out=foo`) forms — indexOf("--out") missed the
+  // honor BOTH the spaced (`--out foo`) and equals (`--out=foo`) forms — indexOf("--out") missed the
   // equals token, so `--out=foo.yaml` was accepted by rejectUnknownFlags then silently ignored (output went
   // to stdout). The equals value also gets the same flag-looking guard the spaced form has.
   const outSpaceIdx = args.indexOf("--out");
@@ -1969,7 +2116,7 @@ function cmdScaffold(args: string[]) {
     );
 
   // Validate --from-run flag-looking value before computing positionals (so the error is specific).
-  // #6: same dual-form handling for --from-run (the equals form fell through to a spurious usage failure).
+  // same dual-form handling for --from-run (the equals form fell through to a spurious usage failure).
   const fromSpaceIdx = args.indexOf("--from-run");
   const fromEqIdx = args.findIndex((a) => a.startsWith("--from-run="));
   let fromRunVal: string | undefined;
@@ -2299,7 +2446,7 @@ async function cmdVerifyRun(args: string[]) {
   return process.exit(verdict.exitCode);
 }
 
-/** `assertions --list` (#8) — enumerate the available assertion keys + one-line semantics, generated from the
+/** `assertions --list` — enumerate the available assertion keys + one-line semantics, generated from the
  *  Zod `Assertion` schema (`Assertion.shape[k].description`) so the list can NEVER drift from the schema. */
 function cmdAssert(args: string[]) {
   const json = isJsonOutput(args);
@@ -2324,7 +2471,7 @@ function cmdTrace(args: string[]) {
   ensureOutputFormat("trace", args);
   const json = isJsonOutput(args);
 
-  // R8: --view tools|questions|dispatches replaces the three boolean flags. Legacy flags kept as aliases.
+  // --view tools|questions|dispatches replaces the three boolean flags. Legacy flags kept as aliases.
   const viewIdx = args.indexOf("--view");
   const viewEqMatch = args.find((a) => a.startsWith("--view="));
   let viewArg: string | undefined = viewEqMatch ? viewEqMatch.slice("--view=".length) : viewIdx >= 0 ? args[viewIdx + 1] : undefined;
@@ -2367,7 +2514,7 @@ function cmdTrace(args: string[]) {
     json,
   );
 
-  // #16: skip the `--output-format` and `--view` values so they don't get treated as the target path.
+  // skip the `--output-format` and `--view` values so they don't get treated as the target path.
   const allPositionals = positionals(args, ["--output-format", "--view"]);
   const target = allPositionals[0];
   // trace takes exactly one target; reject stray positionals rather than silently using the first.
@@ -2394,7 +2541,7 @@ function cmdTrace(args: string[]) {
     return fail("trace", "usage", String((e as Error).message), undefined, json);
   }
   if (view === "questions") {
-    // questions view: question → injected answer → delivered result, the full gate lifecycle (Part 4).
+    // questions view: question → injected answer → delivered result, the full gate lifecycle.
     const rows = buildGateTrace(file);
     if (json) out(JSON.stringify({ tool: "cowork-harness", command: "trace", file, gates: rows }));
     else out(formatGateTrace(rows));

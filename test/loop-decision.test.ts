@@ -34,7 +34,7 @@ describe("decideLoopFromBaseline — reads requireFullVmSandbox from the baselin
     expect(decideLoopFromBaseline(withGate("on(force)", { forceDisableHostLoop: true }))).toBe("vm");
   });
 
-  // #39: post-sync gates are STRUCTURED entries ({on,source,value}), not prose strings. Reading `.on`
+  // post-sync gates are STRUCTURED entries ({on,source,value}), not prose strings. Reading `.on`
   // (not a bare `!!obj`, which is truthy even for an off gate) is what makes an off gate force VM-loop.
   it("reads a synced structured gate entry: {on:true} → host, {on:false} → vm", () => {
     const structured = (on: boolean) => ({ provenance: { gates: { "hostLoop:1143815894": { on, source: "force", value: on } } } }) as any;
@@ -42,7 +42,7 @@ describe("decideLoopFromBaseline — reads requireFullVmSandbox from the baselin
     expect(decideLoopFromBaseline(structured(false))).toBe("vm"); // a bare !!obj would wrongly yield host here
   });
 
-  // bug 69: /on|true|force/i matched "off(force)" via the substring "force", wrongly deciding host-loop.
+  // /on|true|force/i matched "off(force)" via the substring "force", wrongly deciding host-loop.
   it("off(force) gate string -> vm-loop (substring 'force' must not match)", () => {
     expect(decideLoopFromBaseline(withGate("off(force)"))).toBe("vm");
   });

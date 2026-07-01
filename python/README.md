@@ -18,8 +18,9 @@ or Lima for `microvm`).
    ```
    The `microvm` tier uses **Lima + Apple Virtualization.framework** instead (macOS arm64 only), **not**
    Docker — `brew install lima`. Run `cowork-harness doctor --tier microvm` to see what's missing.
-3. **An auth token** for runs that actually call the model — export it, or put it in a `.env` file in
-   the dir you run `pytest` from (the CLI auto-loads `./.env`; it's gitignored, host-side, never mounted):
+3. **An auth token** for runs that actually call the model. Precedence: `process.env` > `--dotenv <path>` >
+   `./.env` (auto-loaded from the dir you run `pytest` from) > `<install>/.env`. Simplest: put it in a `.env`
+   file in the dir you run `pytest` from (it's gitignored, host-side, never mounted):
    ```bash
    export CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token)   # or: echo "CLAUDE_CODE_OAUTH_TOKEN=…" >> .env
    ```

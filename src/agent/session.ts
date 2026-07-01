@@ -7,7 +7,7 @@ import type { ChildProcessByStdio } from "node:child_process";
 import type { Readable, Writable } from "node:stream";
 
 /**
- * Seam 1 — AgentSession: the stream-json control protocol over a runtime-provided child.
+ * AgentSession: the stream-json control protocol over a runtime-provided child.
  * Owns ONLY the protocol (not the container, not teardown). Emits a typed `AgentEvent`
  * stream; the consumer answers `decision` events via `respond()` and drives turns via
  * `sendUserTurn()`. `close()` is the sole place stdin ends.
@@ -29,7 +29,7 @@ export type DecisionRequest =
   // answers with for a `webfetch:<domain>` gate. Absent for ordinary agent permissions (binary allow/deny).
   | { id: string; kind: "permission"; tool: string; input: Record<string, unknown>; options?: { label: string; description?: string }[] }
   // toolUseId (the `toolu_…` id, distinct from the UUID `id`/request_id) pairs this gate with its
-  // tool_result for delivery verification + `trace --gates` (Opus-review amendment #1).
+  // tool_result for delivery verification + `trace --gates`.
   | { id: string; kind: "question"; questions: QSpec[]; toolUseId?: string }
   | { id: string; kind: "dialog"; dialogKind: string; payload: unknown } // request_user_dialog (~6s auto-cancel)
   | { id: string; kind: "elicit"; server?: string; prompt?: string; schema?: unknown }; // elicitation / side_question
@@ -46,7 +46,7 @@ export type DecisionResponse =
 export type AgentEvent =
   | { type: "init"; tools: string[]; mcpServers: unknown[]; cwd?: string }
   | { type: "assistant_text"; text: string; parentToolUseId?: string }
-  | { type: "tool_use"; name: string; input: unknown; parentToolUseId?: string; toolUseId?: string; synthetic?: boolean } // toolUseId for tool_use↔tool_result pairing (amendment #2); synthetic = the MCP round-trip echo (trace-only, NOT counted — the real call already arrives as an assistant tool_use block, live-verified)
+  | { type: "tool_use"; name: string; input: unknown; parentToolUseId?: string; toolUseId?: string; synthetic?: boolean } // toolUseId for tool_use↔tool_result pairing; synthetic = the MCP round-trip echo (trace-only, NOT counted — the real call already arrives as an assistant tool_use block, live-verified)
   | { type: "tool_result"; toolUseId?: string; isError: boolean; text: string; provenanceText?: string; assertText?: string } // the OUTCOME of a tool call (from `user`/tool_result blocks). `text` is display-truncated; `provenanceText` is the larger raw value so URLs past the display cap still seed web_fetch provenance; `assertText` is assertion-fidelity cap (10 KB)
   | {
       type: "subagent_dispatch";
@@ -55,17 +55,17 @@ export type AgentEvent =
       agentType: string;
       declaredTools: string[];
       description?: string;
-    } // A3 (parentToolUseId = nesting, for the dispatch tree)
-  | { type: "thinking"; text: string } // F2
-  | { type: "metrics"; data: Record<string, unknown> } // F2 (api_metrics → cost)
+    } // parentToolUseId = nesting, for the dispatch tree
+  | { type: "thinking"; text: string }
+  | { type: "metrics"; data: Record<string, unknown> } // api_metrics → cost
   | { type: "decision"; request: DecisionRequest }
-  | { type: "result"; isError: boolean; usage?: Record<string, unknown>; resultText?: string; subtype?: string } // resultText/subtype carry the SDK result payload so a transport-error result can be classified (Fix 5)
+  | { type: "result"; isError: boolean; usage?: Record<string, unknown>; resultText?: string; subtype?: string } // resultText/subtype carry the SDK result payload so a transport-error result can be classified
   | { type: "error"; source: "spawn" | "agent" | "protocol" | "exit"; message: string }
   | { type: "raw"; line: string };
 
 export type SdkMcp = {
   servers: string[];
-  // #30: handle is async — web_fetch may await a provenance approval through the Decider.
+  // handle is async — web_fetch may await a provenance approval through the Decider.
   handle: (
     server: string,
     jsonrpc: any,
@@ -75,7 +75,7 @@ export type SdkMcp = {
 };
 
 export interface AgentSession {
-  /** #45: write `initialize` before the first user turn (idempotent; `start()` also calls it).
+  /** write `initialize` before the first user turn (idempotent; `start()` also calls it).
    *  Optional — replay sessions (cassette) have no live control channel and omit it. */
   init?(opts?: { subagentAppend?: string; sdkMcp?: SdkMcp }): void;
   start(opts?: { subagentAppend?: string; sdkMcp?: SdkMcp }): AsyncIterable<AgentEvent>;
@@ -137,7 +137,7 @@ export function mcpResponseEnvelope(
 }
 const dialogEnvelope = successEnvelope;
 
-// ---- #8: PreToolUse hooks (the harness mirrors Cowork's host-installed hooks) ----
+// ---- PreToolUse hooks (the harness mirrors Cowork's host-installed hooks) ----
 // Binary-verified (app.asar 1.12603.1): in cowork mode the host installs a PreToolUse `Task` hook that
 // blocks `run_in_background` ("Background agents disabled"). Over the stream-json transport, `initialize`
 // declares `hooks: {PreToolUse:[{matcher, hookCallbackIds:[id]}]}`; when the hook fires the agent sends a
@@ -184,7 +184,7 @@ export function serializeDecision(req: DecisionRequest, r: DecisionResponse): Re
     // updatedInput and does `questions.map(({question}) => answers[question])` to build the tool_result
     // (ELF-verified: `mapToolResultToToolResultBlockParam`). So updatedInput MUST carry the full input —
     // `questions` AND `answers`. Dropping `questions` → `undefined is not an object (evaluating 'q.map')`,
-    // the answer never reaches the model, and gate-steering silently no-ops (O7).
+    // the answer never reaches the model, and gate-steering silently no-ops.
     return allowEnvelope(req.id, { questions: req.questions, answers: r.answers });
   }
   if (req.kind === "dialog" && r.kind === "dialog") {
@@ -197,7 +197,7 @@ export function serializeDecision(req: DecisionRequest, r: DecisionResponse): Re
   return denyEnvelope(req.id, "decider returned a mismatched response kind");
 }
 
-// ---- Canonical-JSON comparator (for the O7 replay guard) ----
+// ---- Canonical-JSON comparator (for the replay guard) ----
 /** Recursively sort object keys then JSON.stringify — normalises insertion-order differences so a
  *  semantically-identical key reorder does NOT produce a false mismatch in the replay guard.
  *  `undefined`-valued keys are dropped by stringify, so absent-vs-undefined still normalises. */
@@ -225,7 +225,7 @@ export function canon(x: unknown): string {
  *  Output = the `DecisionResponse` the live decider originally produced.
  *  Keyed on the LIVE `req.kind` (not the body) to stay consistent with `serializeDecision`.
  *
- *  MUST NOT route through `serializeDecision` — that would make the O7 guard circular (the
+ *  MUST NOT route through `serializeDecision` — that would make the replay guard circular (the
  *  re-serialize-and-compare check in CassetteAgentSession.respond() would always match). */
 export function deserializeDecision(req: DecisionRequest, body: Record<string, unknown>): DecisionResponse {
   if (req.kind === "permission") {
@@ -236,16 +236,16 @@ export function deserializeDecision(req: DecisionRequest, body: Record<string, u
     if (body.behavior === "allow") return { kind: "permission", behavior: "allow", updatedInput: body.updatedInput };
     // Any OTHER permission body ({}, {behavior:"cancelled"}, garbage — a corrupt/truncated cassette) must
     // NOT silently replay as allow. Map to a deny that will NOT re-serialize to the recorded body, so the
-    // O7 guard in respond() trips a loud replay_protocol_fidelity mismatch. Mirrors the elicit branch's
+    // guard in respond() trips a loud replay_protocol_fidelity mismatch. Mirrors the elicit branch's
     // known-action validation below (declared-inverse symmetry).
     return { kind: "permission", behavior: "deny", message: "deserializeDecision: invalid permission behavior" };
   }
   if (req.kind === "question") {
     // AskUserQuestion: body is { behavior:"allow", updatedInput:{ questions, answers } }
-    // We read `answers` back; `questions` was preserved in recording for the O7 guard.
+    // We read `answers` back; `questions` was preserved in recording for the guard.
     // Validate `answers` instead of a blind cast — a non-object, array, or answers map with
     // non-string values coerces to {} which will NOT re-serialize to the recorded body, so the
-    // O7 replay_protocol_fidelity guard trips loud rather than silently coercing corrupt data.
+    // replay_protocol_fidelity guard trips loud rather than silently coercing corrupt data.
     const ui = (body.updatedInput ?? {}) as Record<string, unknown>;
     const raw = ui.answers;
     const isValidAnswers =
@@ -263,9 +263,9 @@ export function deserializeDecision(req: DecisionRequest, body: Record<string, u
     };
   }
   if (req.kind === "elicit") {
-    // #22: validate against the known action set instead of an unchecked `as` cast. A recorded
+    // validate against the known action set instead of an unchecked `as` cast. A recorded
     // action that is missing or unrecognized (a corrupt/truncated cassette) maps to "decline" — a
-    // value that will NOT re-serialize back to the corrupt input, so the O7 guard in respond()
+    // value that will NOT re-serialize back to the corrupt input, so the guard in respond()
     // trips a loud replay_protocol_fidelity mismatch rather than silently coercing. A valid
     // "accept"/"cancel"/"decline" passes through and round-trips byte-identically.
     const raw = body.action;
@@ -314,7 +314,7 @@ export class LiveAgentSession implements AgentSession {
     this.proc.stderr.on("data", (d) => {
       this.stderrTail = (this.stderrTail + d.toString()).slice(-2000);
     });
-    // #15: attach stdin error listener once at construction so dead-child writes don't produce
+    // attach stdin error listener once at construction so dead-child writes don't produce
     // unhandled process errors. Routes to the same error path as spawn errors when possible.
     this.proc.stdin.on("error", (e) => {
       if (this.rejectError) this.rejectError(e);
@@ -324,7 +324,7 @@ export class LiveAgentSession implements AgentSession {
   }
 
   /**
-   * Write the `initialize` control_request (idempotent). #45: `Run.drive` calls this BEFORE the first
+   * Write the `initialize` control_request (idempotent). `Run.drive` calls this BEFORE the first
    * `sendUserTurn` so the wire order matches the SPEC (initialize precedes the user turn); `start()`
    * also calls it so a standalone `start()` (no prior `init`) still initializes. Guarded so the two
    * call sites never double-write init-1.
@@ -336,19 +336,19 @@ export class LiveAgentSession implements AgentSession {
     const initRequest: Record<string, unknown> = { subtype: "initialize" };
     if (opts.subagentAppend) initRequest.appendSubagentSystemPrompt = opts.subagentAppend;
     if (opts.sdkMcp?.servers.length) initRequest.sdkMcpServers = opts.sdkMcp.servers;
-    initRequest.hooks = COWORK_PRETOOLUSE_HOOKS; // #8: block Task run_in_background, mirroring cowork
+    initRequest.hooks = COWORK_PRETOOLUSE_HOOKS; // block Task run_in_background, mirroring cowork
     this.write({ type: "control_request", request_id: "init-1", request: initRequest });
   }
 
   async *start(opts: { subagentAppend?: string; sdkMcp?: SdkMcp } = {}): AsyncIterable<AgentEvent> {
     this.init(opts); // idempotent — a no-op if drive() already wrote init-1 before the first user turn
 
-    // #13: race-approach latch — `errorPromise` rejects when proc emits an error, which is
+    // race-approach latch — `errorPromise` rejects when proc emits an error, which is
     // outside the readline loop. We race each rl.next() against it so the generator yields a
     // typed {type:"error"} event and terminates cleanly instead of silently blocking on stdout.
     let errorPromise = new Promise<never>((_res, rej) => (this.rejectError = rej));
     // Also write the _emu entry for backwards-compat with any tooling that reads events.jsonl.
-    // #9: route the spawn error through `rejectError` (like the stdin handler) so the Promise.race
+    // route the spawn error through `rejectError` (like the stdin handler) so the Promise.race
     // below rejects and the generator yields a typed {type:"error"} event instead of hanging on
     // stdout that will never arrive.
     this.proc.on("error", (e) => {
@@ -406,7 +406,7 @@ export class LiveAgentSession implements AgentSession {
       this.rejectError = undefined; // generator is done; stop routing errors here
       this.closing = true; // discard any late write() from translate()'s async hook/mcp paths
       await this.drainAll(); // queue empty + all callbacks confirmed before ending either stream
-      // #46: AWAIT the stream flush before the generator resolves. executeScenario reads/scans/scrubs
+      // AWAIT the stream flush before the generator resolves. executeScenario reads/scans/scrubs
       // events.jsonl + control-out.jsonl immediately after `drive()` returns; a fire-and-forget end()
       // races the final buffered writes. end(cb) fires the callback on 'finish' (fully flushed).
       await Promise.all([
@@ -417,7 +417,7 @@ export class LiveAgentSession implements AgentSession {
   }
 
   private async *translate(msg: any): AsyncIterable<AgentEvent> {
-    // #8: a PreToolUse hook fired pre-dispatch (side-effecting, like mcp_message). Reply with the
+    // a PreToolUse hook fired pre-dispatch (side-effecting, like mcp_message). Reply with the
     // installed hook's output so the agent blocks/allows; a dropped reply would deadlock the agent.
     if (msg.type === "control_request" && msg.request?.subtype === "hook_callback") {
       // validate request_id BEFORE emitting a response — a malformed id would write an
@@ -435,7 +435,7 @@ export class LiveAgentSession implements AgentSession {
       if (this.sdkMcp) {
         let out: { result?: unknown; error?: { code: number; message: string } };
         try {
-          out = await this.sdkMcp.handle(server, jr); // #30: async (web_fetch may await an approval)
+          out = await this.sdkMcp.handle(server, jr); // async (web_fetch may await an approval)
         } catch (e) {
           // A throw from handle() (e.g. a broken allow_if predicate in the decider) must NOT bypass the
           // reply — an unanswered mcp_message blocks the in-VM agent on the round-trip forever (deadlock).
@@ -458,7 +458,7 @@ export class LiveAgentSession implements AgentSession {
           };
         return;
       }
-      // #10: an mcp_message arrived but no sdkMcp handler is configured. Reply with a JSON-RPC error
+      // an mcp_message arrived but no sdkMcp handler is configured. Reply with a JSON-RPC error
       // (well-formed via mcpResponseEnvelope) instead of silently dropping it — a dropped request
       // leaves the in-VM agent waiting on the round-trip forever (protocol deadlock in host-loop mode).
       warn(
@@ -480,14 +480,14 @@ export class LiveAgentSession implements AgentSession {
   respond(decisionId: string, r: DecisionResponse): void {
     const req = this.reqById.get(decisionId);
     if (!req) {
-      // #13: an id with no matching request_id is a protocol drift. Writing a guessed envelope would
+      // an id with no matching request_id is a protocol drift. Writing a guessed envelope would
       // be worse, but a silent return leaves the agent blocked until timeout (looks like a hang).
       warn(
         `::warning:: respond() for unknown decision id "${decisionId}" — no matching request_id was seen; the agent may block until timeout (protocol drift)\n`,
       );
       return;
     }
-    // #14: serializeDecision returns a safe deny envelope on a kind mismatch (defense in depth). That
+    // serializeDecision returns a safe deny envelope on a kind mismatch (defense in depth). That
     // deny goes to the agent silently today — surface it loudly so the run record can't read "answered"
     // while the agent actually received a deny. (serializeDecision stays a pure declared inverse of
     // deserializeDecision; the warning lives here in the caller, not in the pure function.)
@@ -675,7 +675,7 @@ export function parseMessage(msg: any): AgentEvent[] {
     case "user":
       // Tool OUTCOMES come back as `user` messages carrying tool_result blocks. We never parsed these
       // before, so every tool result — including the AskUserQuestion `q.map` error — was invisible to the
-      // recorder/trace. Capture them for delivery verification + `trace --tools`/`--gates` (Part 2).
+      // recorder/trace. Capture them for delivery verification + `trace --tools`/`--gates`.
       for (const block of msg.message?.content ?? []) {
         if (block.type === "tool_result")
           ev.push({
@@ -693,7 +693,7 @@ export function parseMessage(msg: any): AgentEvent[] {
         type: "result",
         isError: !!msg.is_error,
         usage: msg.usage,
-        // Fix 5: preserve the SDK result payload + subtype so run.ts can tell a transport drop
+        // preserve the SDK result payload + subtype so run.ts can tell a transport drop
         // (e.g. "API Error: Connection closed", subtype error_during_execution) from a skill failure.
         resultText: typeof msg.result === "string" ? msg.result : undefined,
         subtype: typeof msg.subtype === "string" ? msg.subtype : undefined,
@@ -759,7 +759,7 @@ export function toDecisionRequest(msg: any): DecisionRequest | null {
           `control-in: malformed AskUserQuestion questions for request ${id}: ${parsed.error.issues.map((i) => `${i.path.join(".") || "<root>"}: ${i.message}`).join("; ")}`,
         );
       // Capture the `toolu_…` tool_use_id (distinct from the UUID request_id) to pair the gate with its
-      // tool_result later (amendment #1). The SDK puts it on the request envelope.
+      // tool_result later. The SDK puts it on the request envelope.
       return {
         id,
         kind: "question",

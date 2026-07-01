@@ -87,7 +87,7 @@ export function agentArgs(baseline: PlatformBaseline, plan: LaunchPlan, opts: Ag
 }
 
 /**
- * §3.2 / #23 — resolve the thinking-token budget. Faithful port of Cowork's `f7e` resolver
+ * §3.2 — resolve the thinking-token budget. Faithful port of Cowork's `f7e` resolver
  * (binary-verified, app.asar 1.12603.1):
  *   function f7e(A,e){return typeof A=="number"?A : e&&e in A ? A[e] : A.default??hre}   // hre=31999
  * `value` = the session's `max_thinking_tokens` (a flat number or a per-model map), `model` = the
@@ -98,7 +98,7 @@ export function resolveMaxThinkingTokens(
   model: string | undefined,
   fallback: number,
 ): number {
-  // #33: defense-in-depth — resolve, then reject a non-positive budget (the schema enforces positive
+  // Defense-in-depth — resolve, then reject a non-positive budget (the schema enforces positive
   // for YAML, but this guards any other caller/path). "Never 0" is a hard invariant.
   const resolved =
     value === undefined
@@ -120,7 +120,7 @@ export function spawnEnv(
   return {
     ...(baseline.spawn?.env ?? { CLAUDE_CODE_IS_COWORK: "1" }),
     CLAUDE_CONFIG_DIR: opts.configGuest,
-    // #23: session override (resolved per-model) wins; else the synced baseline default (hre=31999). Never 0.
+    // Session override (resolved per-model) wins; else the synced baseline default (hre=31999). Never 0.
     MAX_THINKING_TOKENS: String(opts.maxThinkingTokens ?? baseline.spawn?.maxThinkingTokens ?? DEFAULT_MAX_THINKING_TOKENS),
     HOME: "/tmp",
     HTTP_PROXY: opts.proxyHost,
@@ -154,7 +154,7 @@ export interface DockerRunInput {
   env: Record<string, string>;
   agentArgv: string[];
   name?: string; // host-loop needs a name for `docker exec`
-  readOnlyMountPaths?: string[]; // #23: mnt-relative paths of `mode:r` mounts → nested `:ro` binds
+  readOnlyMountPaths?: string[]; // mnt-relative paths of `mode:r` mounts → nested `:ro` binds
 }
 
 /** §3.3/§3.4 — the full `docker run …` argv. */
@@ -171,7 +171,7 @@ export function dockerRunArgv(i: DockerRunInput): string[] {
     ...(i.lockdown ? HARDENING : []),
     "-w",
     i.sessionRoot,
-    // #28: render SECRET values by NAME only (`-e KEY`) so the token never lands in `docker run`'s
+    // Render SECRET values by NAME only (`-e KEY`) so the token never lands in `docker run`'s
     // argv (visible via ps / /proc/<pid>/cmdline). Docker inherits the value from its own env — the
     // harness process env, where runtimeAuthEnv read it. Non-secret env keeps the explicit KEY=value.
     ...Object.entries(i.env).flatMap(([k, v]) => (SECRET_ENV_KEYS.has(k) ? ["-e", k] : ["-e", `${k}=${v}`])),
@@ -179,9 +179,9 @@ export function dockerRunArgv(i: DockerRunInput): string[] {
     `${i.agentHost}:${i.agentIn}:ro`,
     "-v",
     `${i.sessionHost}:${i.sessionRoot}`,
-    // #23: per-mount read-only enforcement — a nested `:ro` bind over each `mode:r` subpath makes
+    // Per-mount read-only enforcement — a nested `:ro` bind over each `mode:r` subpath makes
     // uploads / plugins unwritable in the guest (matching Cowork: asar uploads = 'ro'), while the rest
-    // of the session tree stays writable. Delete-deny for rw/rwd is the separate #9-A FUSE sub-project.
+    // of the session tree stays writable. Delete-deny for rw/rwd is the separate FUSE sub-project.
     ...(i.readOnlyMountPaths ?? []).flatMap((mp) => ["-v", `${i.sessionHost}/mnt/${mp}:${i.sessionRoot}/mnt/${mp}:ro`]),
     i.image,
     ...i.agentArgv,

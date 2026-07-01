@@ -20,7 +20,7 @@ const cassette = (fingerprint?: unknown, name = "c") => ({
   ...(fingerprint ? { fingerprint } : {}),
 });
 
-describe("selectStaleCassettes — B2 selection", () => {
+describe("selectStaleCassettes — selection", () => {
   it("returns only cassettes whose fingerprint drifted", () => {
     const d = mkdtempSync(join(tmpdir(), "cwh-rrs-"));
     writeFileSync(join(d, "stale.cassette.json"), JSON.stringify(cassette({ baseline: "0.0.0-ancient" })));
@@ -91,7 +91,7 @@ describe("_resolveRerecordSource prefers the persisted scenarioSource over the n
     expect(r.path).toBe(scenarioPath);
   });
 
-  it("with no persisted source, uses the name lookup (back-compat, pre-Bug-33 cassettes)", () => {
+  it("with no persisted source, uses the name lookup (back-compat, older cassettes)", () => {
     const d = mkdtempSync(join(tmpdir(), "cwh-b33c-"));
     const cassettePath = join(d, "my-scenario.cassette.json");
     const scenarioPath = join(d, "my-scenario.yaml");

@@ -8,7 +8,8 @@ import { safePathSegment, safeMountSegment, resolveDeclaredSource } from "./stag
 import { assignFolderMountNames, RESERVED_MOUNT_NAMES, type MountTier } from "./staging/mount-naming.js";
 import { MOUNT_BARE_NAME_MIN_VERSION, cmpVersionStrings } from "./baseline.js";
 import { containedRealPath } from "./boundary-paths.js";
-import { gitModeEnabled, gitCpFilter } from "./run/skill-files.js";
+import { gitModeEnabled, gitFilterFromSet, gitStageStats } from "./run/skill-files.js";
+import { BoundaryError } from "./errors.js";
 
 /** Clone process env with Cowork's bg-env-strip applied. */
 function strippedEnv(baseline: PlatformBaseline): NodeJS.ProcessEnv {
@@ -43,9 +44,9 @@ export const SessionConfig = z.strictObject({
   // Thinking budget. Binary-verified against app.asar 1.12603.1: Cowork's config field is
   // `maxThinkingTokens` — a flat NUMBER or a per-model map `{ default, <model>: <n> }` — resolved
   // per-model by f7e() and emitted on BOTH channels: the `--max-thinking-tokens` CLI flag (agentArgs)
-  // and the `MAX_THINKING_TOKENS` env (spawnEnv). The ELF honors the env and env wins (V1), so the
+  // and the `MAX_THINKING_TOKENS` env (spawnEnv). The ELF honors the env and env wins, so the
   // two agree. There is NO "extended thinking" boolean; DEFAULT_MAX_THINKING_TOKENS (hre) = 31999.
-  // #33: a positive integer (or a per-model map of them) — reject 0 / negative, which would
+  // A positive integer (or a per-model map of them) — reject 0 / negative, which would
   // contradict the "never 0" budget invariant if it reached the CLI flag / env.
   max_thinking_tokens: z.union([z.number().int().positive(), z.record(z.string(), z.number().int().positive())]).optional(),
   extended_thinking: z.boolean().optional().describe("Inert / no-op — not a real Cowork toggle. Use max_thinking_tokens instead."), // inert: not a real Cowork toggle — use max_thinking_tokens.
@@ -104,7 +105,7 @@ export const SessionConfig = z.strictObject({
     })
     .default({ approved_domains: [] }),
 
-  // --- staleness fingerprint scope (F-6) ---
+  // --- staleness fingerprint scope ---
   // The cassette-staleness hash covers the mounted skill/plugin tree. The harness only hard-excludes what
   // is UNIVERSALLY non-runtime (VCS/caches/recorded cassettes); the runtime boundary of a SPECIFIC plugin
   // is the consumer's to declare. `hash_ignore` is a list of gitignore-style globs (matched against each
@@ -129,6 +130,13 @@ export interface Mount {
    * chat labels) keys off the KIND rather than fragile `mountPath` string prefixes like `.projects/`.
    */
   kind: "folder" | "upload" | "local-plugin" | "remote-plugin" | "marketplace-plugin";
+  /**
+   * Precomputed staging copy filter. When set, the runtime copy sites use it verbatim instead of
+   * re-deriving via `gitCpFilter` — so the file count reported at plan-build equals the delivered set
+   * (no second `git ls-files`, no TOCTOU). Set for plugin-kind mounts under git mode; undefined for
+   * folders/uploads (which keep the at-copy-time fallback).
+   */
+  stageFilter?: (src: string, dest: string) => boolean;
 }
 
 /**
@@ -140,7 +148,7 @@ export interface LaunchPlan {
   mcpConfig: string | null; // host path to --mcp-config file, if any
   model?: string;
   effort?: string;
-  maxThinkingTokens?: number | Record<string, number>; // #23: session thinking budget (resolved per-model in spawnEnv)
+  maxThinkingTokens?: number | Record<string, number>; // session thinking budget (resolved per-model in spawnEnv)
   permissionMode: string;
   permissionParity: "cowork" | "strict";
   baseEnv: NodeJS.ProcessEnv; // Cowork bg-env-strip applied; CLAUDE_CONFIG_DIR set by the runtime
@@ -184,12 +192,38 @@ export function buildLaunchPlan(
   baseline: PlatformBaseline,
   outDir: string,
   tier: MountTier = "hostloop",
+  // on resume the runtimes SKIP re-staging (the persisted tree survives), so the empty-mount guard
+  // and the staged-set notices must not run — the sources may legitimately be gone. The caller threads
+  // its resume flag here (set after the plan is built today, so it must be a param, not `plan.resume`).
+  resume = false,
 ): LaunchPlan {
   const expand = (p: string) => p.replace(/^~(?=$|\/)/, homedir());
 
+  // A plugin/skill source in a git work tree delivers only its git-TRACKED files (the fidelity
+  // boundary — real Cowork installs from a repo and sees only committed files). Make that VISIBLE in
+  // both directions instead of silently surprising: hard-FAIL when it would mount empty, loud-NOTICE
+  // when some files are excluded. Returns the cpSync filter built from the SAME tracked snapshot used
+  // for the counts (no second `git ls-files` ⇒ counted == delivered). Skipped on resume.
+  const stageFilterFor = (src: string, label: string): ((s: string, d: string) => boolean) | null => {
+    if (resume || !gitModeEnabled()) return null; // resume re-stages nothing; gitMode off → raw copy
+    const { tracked, untracked } = gitStageStats(src);
+    if (!tracked) return null; // not a git work tree → raw copy (unchanged behavior)
+    if (tracked.size === 0)
+      throw new BoundaryError(
+        `${label} has 0 git-tracked files — staging delivers tracked files only, so it would mount EMPTY and the skill would not load. ` +
+          `Fix: 'git add' it, or set COWORK_HARNESS_GITSET=0 to copy untracked files.`,
+      );
+    if (untracked > 0)
+      warn(
+        `::notice:: [stage] ${label}: ${untracked} untracked file(s) excluded — real Cowork only sees committed files. ` +
+          `'git add' them to test as-published, or COWORK_HARNESS_GITSET=0 to include them.\n`,
+      );
+    return gitFilterFromSet(src, tracked);
+  };
+
   // 1. CLAUDE_CONFIG_DIR — clean managed dir unless the session pins one.
   const pinnedConfigDir = session.plugins.config_dir ? expand(session.plugins.config_dir) : undefined;
-  // #27: writing settings.json/cowork_settings.json into a user-supplied EXISTING dir would clobber
+  // Writing settings.json/cowork_settings.json into a user-supplied EXISTING dir would clobber
   // their real Claude config. Require an explicit opt-in; a fresh/non-existent pinned dir is fine.
   if (pinnedConfigDir && existsSync(pinnedConfigDir) && (process.env.COWORK_HARNESS_ALLOW_CONFIG_DIR_WRITE ?? "") === "")
     throw new Error(
@@ -226,7 +260,7 @@ export function buildLaunchPlan(
   writeFileSync(join(configDir, "settings.json"), settingsJson);
   writeFileSync(join(configDir, "cowork_settings.json"), settingsJson);
 
-  // SEAM A — fail-loud is the only path for a declared source. A missing source FAILS by default (the
+  // Fail-loud is the only path for a declared source. A missing source FAILS by default (the
   // runtimes existsSync-skip the copy, so the agent silently gets a path that does not exist — a
   // confusing late failure, or a manufactured green). COWORK_HARNESS_SOFT_MISSING=1 downgrades every
   // such case to warn-and-exclude. Defined up here because skills (below) consult it too.
@@ -234,30 +268,33 @@ export function buildLaunchPlan(
 
   // 3. stage local skills into CLAUDE_CONFIG_DIR/skills. A missing source fails (like a mount); two
   // skills with the same basename would copy to the same dest and silently clobber — fail on that too.
+  // SKIP entirely on resume — the persisted configDir/skills survives, the sources may be gone, and
+  // re-running the missing-source resolve below would otherwise false-fail a legitimate --resume.
   const skillDests = new Set<string>();
-  for (const s of session.skills.local) {
-    const src = expand(s);
-    // A skill is staged IMMEDIATELY (cpSync'd recursively into CLAUDE_CONFIG_DIR/skills), not via the
-    // mount list, so its missing decision is made here (not deferred to the post-loop batch check). The
-    // resolver kind-checks a present source (a file source would copy as a lone file, diverging from
-    // Cowork's skill-dir model) and honors softMissing: a missing source throws by default, or returns
-    // null (skip) under softMissing.
-    const resolved = resolveDeclaredSource(src, "", "r", "dir", { softMissing, deferMissing: false, what: "skill source" });
-    if (!resolved) {
-      warn(`::warning:: [skill] missing source excluded (COWORK_HARNESS_SOFT_MISSING): ${src}\n`);
-      continue;
+  if (!resume)
+    for (const s of session.skills.local) {
+      const src = expand(s);
+      // A skill is staged IMMEDIATELY (cpSync'd recursively into CLAUDE_CONFIG_DIR/skills), not via the
+      // mount list, so its missing decision is made here (not deferred to the post-loop batch check). The
+      // resolver kind-checks a present source (a file source would copy as a lone file, diverging from
+      // Cowork's skill-dir model) and honors softMissing: a missing source throws by default, or returns
+      // null (skip) under softMissing.
+      const resolved = resolveDeclaredSource(src, "", "r", "dir", { softMissing, deferMissing: false, what: "skill source" });
+      if (!resolved) {
+        warn(`::warning:: [skill] missing source excluded (COWORK_HARNESS_SOFT_MISSING): ${src}\n`);
+        continue;
+      }
+      const dest = safePathSegment(basename(src), "skill basename");
+      if (skillDests.has(dest))
+        throw new Error(
+          `duplicate skill destination "skills/${dest}" — two skills.local entries share a basename (they would overwrite). Rename or relocate one.`,
+        );
+      skillDests.add(dest);
+      // deliver the git-tracked set (the fidelity boundary), but VISIBLY — hard-fail if it would be
+      // empty, notice if files are excluded. Filter is built from the same snapshot used for those counts.
+      const skillFilter = stageFilterFor(src, `skill '${basename(src)}'`);
+      cpSync(src, join(configDir, "skills", dest), { recursive: true, ...(skillFilter ? { filter: skillFilter } : {}) });
     }
-    const dest = safePathSegment(basename(src), "skill basename");
-    if (skillDests.has(dest))
-      throw new Error(
-        `duplicate skill destination "skills/${dest}" — two skills.local entries share a basename (they would overwrite). Rename or relocate one.`,
-      );
-    skillDests.add(dest);
-    // Phase C (gated): under COWORK_HARNESS_GITSET, deliver only the git-tracked set so the sandbox matches
-    // what the hash covers (Finding 5 — no delivered-but-unhashed file). Default-ON (git-tracked set); opt out with COWORK_HARNESS_GITSET=0 for a raw copy.
-    const skillFilter = gitModeEnabled() ? gitCpFilter(src) : null;
-    cpSync(src, join(configDir, "skills", dest), { recursive: true, ...(skillFilter ? { filter: skillFilter } : {}) });
-  }
 
   // 4. mounts: uploads + projects + plugin roots (Cowork mount model). Every basename-derived leaf
   // goes through safePathSegment — basename("..") is ".." (it does NOT collapse), so a `from: ".."`
@@ -309,18 +346,23 @@ export function buildLaunchPlan(
     // version segment. Below MIN, keep the legacy `.local-plugins/cache/<base>` shape (gated, unverified).
     const leaf = safePathSegment(basename(src), "local_plugin basename");
     const mountPath = bareNames ? `.local-plugins/marketplaces/local-desktop-app-uploads/${leaf}` : `.local-plugins/cache/${leaf}`;
+    const stageFilter = existsSync(src) ? (stageFilterFor(src, `local_plugin '${leaf}'`) ?? undefined) : undefined;
     mounts.push({
       ...resolveDeclaredSource(src, mountPath, "r", "dir", { softMissing, deferMissing: true, what: `local_plugin "${p}"` })!,
       kind: "local-plugin",
+      stageFilter,
     });
   }
   for (const p of session.plugins.remote_plugins) {
     const src = expand(p);
     // same as local_plugins — a remote-plugin root is a directory; kind-check when present.
-    const mountPath = `.remote-plugins/${safePathSegment(basename(src), "remote_plugin basename")}`;
+    const remoteLeaf = safePathSegment(basename(src), "remote_plugin basename");
+    const mountPath = `.remote-plugins/${remoteLeaf}`;
+    const stageFilter = existsSync(src) ? (stageFilterFor(src, `remote_plugin '${remoteLeaf}'`) ?? undefined) : undefined;
     mounts.push({
       ...resolveDeclaredSource(src, mountPath, "r", "dir", { softMissing, deferMissing: true, what: `remote_plugin "${p}"` })!,
       kind: "remote-plugin",
+      stageFilter,
     });
   }
   // Local marketplaces: resolve enabled `name@marketplace` plugins to --plugin-dir.
@@ -365,7 +407,7 @@ export function buildLaunchPlan(
       warn(`::warning:: [marketplace] manifest unparsable, excluded (COWORK_HARNESS_SOFT_MISSING): ${manifestPath}\n`);
       continue;
     }
-    // Bug 41: validate manifest shape to produce actionable errors instead of TypeErrors.
+    // Validate manifest shape to produce actionable errors instead of TypeErrors.
     // The plugins-array check is the direct TypeError fix (manifest.plugins.find at the loop below
     // throws when plugins is an object). The name/source/version string checks are defense-in-depth.
     if (manifest.plugins !== undefined && !Array.isArray(manifest.plugins)) {
@@ -462,7 +504,13 @@ export function buildLaunchPlan(
         safeMountSegment(version, "plugin version");
         mountPath = `.local-plugins/cache/${mktName}/${pName}/${version}`;
       }
-      mounts.push({ hostPath: pluginSrc, mountPath, mode: "r", kind: "marketplace-plugin" });
+      mounts.push({
+        hostPath: pluginSrc,
+        mountPath,
+        mode: "r",
+        kind: "marketplace-plugin",
+        stageFilter: stageFilterFor(pluginSrc, `marketplace plugin '${pName}'`) ?? undefined,
+      });
       resolvedEnabled.add(en);
     }
   }
@@ -508,7 +556,7 @@ export function buildLaunchPlan(
   }
   const presentMounts = softMissing ? mounts.filter((mt) => existsSync(mt.hostPath)) : mounts;
 
-  // #21: two sources mapping to the same destination would silently overwrite during staging. Fail
+  // Two sources mapping to the same destination would silently overwrite during staging. Fail
   // before staging, naming the collision, so a same-basename upload/plugin pair can't clobber.
   // Seed with the RESERVED special-dir names + the harness's fixed staged dirs (`.claude`): under the VM
   // tier `fy` does NOT reserve these, so a user folder literally named e.g. `outputs` resolves to bare
@@ -537,7 +585,7 @@ export function buildLaunchPlan(
   // 6. egress
   const egressAllow = session.egress.unrestricted ? ["*"] : [...baseline.network.allowDomains, ...session.egress.extra_allow];
 
-  // 7. plugin roots (--plugin-dir) as guest-relative paths under mnt. #22: derive from PRESENT mounts
+  // 7. plugin roots (--plugin-dir) as guest-relative paths under mnt. Derive from PRESENT mounts
   // only, so a soft-missing (excluded) plugin source never yields a --plugin-dir to a non-existent path.
   const pluginDirs = presentMounts
     .filter((m) => m.kind === "local-plugin" || m.kind === "remote-plugin" || m.kind === "marketplace-plugin")

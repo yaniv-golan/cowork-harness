@@ -147,7 +147,7 @@ Each line is one stream-json message. The message types that carry signal:
 - `{type:"result", is_error, usage}` — turn end.
 
 **Sub-agent dispatch recognition (binary fact):** the real cowork dispatch tool is **`Agent`** (agent
-ELF 2.1.187 as of baseline desktop-1.15962.1: `{name:"Agent", aliases:["Task"], description:"Launch a new agent",
+ELF 2.1.197 as of baseline desktop-1.17377.1: `{name:"Agent", aliases:["Task"], description:"Launch a new agent",
 inputSchema:{description, subagent_type, prompt}}`). `parseMessage` synthesizes a `subagent_dispatch`
 for a `tool_use` whose `name` is `Agent` **or** `Task` (the alias) **or** whose `input` carries
 `subagent_type`. The cowork **`TaskCreate`/`TaskUpdate`** tools are the *todo list*
@@ -326,13 +326,25 @@ green replay does not imply the recording is still valid. Each finding is surfac
   passed). The authoritative list is `contentKeys` in `src/run/cassette.ts`; `docs/cassette.md` mirrors
   it — consult it for the full table.
 
+**Assertion source (replay):** by default `replay` evaluates the `assert:` block **frozen in the cassette**
+— byte-deterministic and independent of the working tree. When a sibling scenario resolves and its `assert:`
+differs from the frozen copy, a `::notice::` points at the opt-in flag (no verdict change). `--assert-from
+<scenario.yaml>` / `--reassert` re-evaluate against the **on-disk** `assert:` (+`expect_denied:`) for a
+token-free assertion-iteration loop. That path is safe by construction: it **hard-fails** on recording-shaping
+drift (`prompt` / `baseline` / `fidelity` / `answers` / `skills` / `requires_capabilities`) and, when a skill
+fingerprint was recorded, on skill-content staleness (it implies `--fail-on-skill-drift`). `expect_denied` and
+the filesystem/egress keys are sourced from on-disk but remain live-only (sourced ≠ evaluated; replay warns on
+such an edit). The `session` (model / data mounts / discovery) is **not** drift-checked or fingerprinted, so a
+model/mount change between record and re-assert is undetected — the notice states this; re-record if the
+session changed.
+
 **`replay_protocol_fidelity` (O7 guard):** after the run, `replay` re-serializes each decision
 response via `serializeDecision` and compares to the frozen `controlOut` envelope (canonical
 key-sorted JSON). A mismatch produces a synthesized `{ assertion: { replay_protocol_fidelity: true },
 pass: false, message }` entry in `assertions[]` and exits 1. This catches regressions in
 `serializeDecision` — e.g. dropping `questions` from the AskUserQuestion `updatedInput` — on the
-token-free lane. `replay_protocol_fidelity` is synthesized-only; it is not in `contentKeys` and is
-never user-authored.
+token-free lane. `replay_protocol_fidelity` is not a user-authored `contentKeys` entry — it is
+synthesized and evaluated automatically on every replay (see the O7 guard above).
 
 `run`, `skill`, and `replay` emit a single JSON object on **stdout** under `--output-format json` (nothing
 else hits stdout in that mode — the renderer/footer/`[env]`/`[input]` all go to stderr). The
@@ -344,10 +356,17 @@ else hits stdout in that mode — the renderer/footer/`[env]`/`[input]` all go t
   "version": "<pkg version>",  // populated from package.json at runtime
   "command": "run" | "skill" | "replay",
   "ok": true,                 // false if any result failed OR an error occurred
-  "results": [ RunResult ],   // one per scenario; skill/replay = array of 1
+  "results": [ RunResult & { verdict } ], // one per scenario; skill/replay = array of 1
   "error": null               // or the error envelope (below) when a run THREW
 }
 ```
+
+Each emitted result carries a **`verdict`** — a non-mutating serialization-time projection of `computeVerdict`,
+`{ "pass": bool, "exitCode": 0|1, "signals": [{ "code","severity","message" }], "guards": [{ "name","status" }] }`
+— so a consumer can read each result's pass/fail **and why** (the `signals[]`, e.g. an all-green-assertions run
+that is `pass:false` purely on a `stalled` signal) without recomputing. `verdict` is on the JSON envelope only,
+not on the on-disk `result.json` (which stays the raw `RunResult`). The top-level `ok` is derived from the same
+per-result verdicts, so it cannot diverge from them, the exit code, or the text footer.
 
 Other commands use dedicated envelopes — `verify-cassettes` (§11.1), and `decide` / `boundary-check`
 each emit their own shape — so this is not a single universal envelope across every command.
@@ -367,7 +386,7 @@ each suppressible only by the matching `allow_*` modifier. `result` means "the a
   "baseline": "string",                          // platform baseline appVersion
   "result": "success" | "error",                // did the agent turn end without error (NOT "task completed")
   "stalledOnQuestion?": bool,                     // H2/H3: ended on a question with no productive tool work after its last gate → `stalled` verdict fail unless allow_stall
-  "decisions": [{ "kind","name","decision","by","rationale?","detail?" }],
+  "decisions": [{ "kind","name","decision","by","model?","rationale?","detail?" }], // model set for by:"llm" gates
   "toolCounts?": { "WebSearch": 8, … },          // truthful per-tool call count (top-level; host-routed WebSearch shows HERE, not usage.server_tool_use)
   "gateDeliveries?":[{ "question","delivered": true|false|null, "error?" }], // did each answered gate's answer reach the model (null = unobserved)
   "egress":    [{ "host","decision":"allow|deny" }],
@@ -380,6 +399,7 @@ each suppressible only by the matching `allow_*` modifier. `result` means "the a
   "outputsDir?": "string",                       // the user-visible deliverable mount (mnt/outputs)
   "effectiveFidelity?": "string",                // tier actually used (differs from `fidelity` when "cowork" resolved)
   "nonDeterministic?": bool,                      // true if any decision came from a non-deterministic source → not reproducible
+  "gateProvenance?": { "total": number, "bySource": {…}, "gates": [{ "question","answeredBy","answer","model?" }] }, // how each AskUserQuestion gate was answered; informational (never fails the verdict); live/partial lane only (absent on replay)
   "permissiveAutoAllow?": ["string"],             // tools auto-allowed by cowork parity that real Cowork BLOCKS → green is NOT faithful
   "staleness?": [{ "class": "baseline|skill|shared-root|format|unverifiable-baseline|unverifiable-skill", "message" }], // replay only; cassette-staleness findings, surfaced for a JSON gate. Non-failing by default (a stale but passing replay stays ok:true); `--strict` fails on every class, `--fail-on-skill-drift` on skill/shared-root/unverifiable-skill only.
   "skippedAssertions?": { "full": number, "partial": number } // replay only; count of live-only assertions NOT evaluated (full = whole assertion skipped; partial = content half ran, fs/egress half dropped). The skipped ones are absent from `assertions[]`.

@@ -3,8 +3,8 @@ name: cowork-harness
 description: Test or debug a Claude Code skill/plugin under Claude Cowork's runtime — sandboxed agent, default-deny egress, the can_use_tool permission/question protocol — using the cowork-harness CLI. Use when validating or regression-testing a skill, authoring or debugging a scenario YAML (prompt + scripted answers + assert:), choosing a fidelity tier, scripting AskUserQuestion / tool-permission answers, or asserting artifacts, egress, or sub-agent dispatch. Especially when a harness run no-ops an assertion, fails on an unanswered gate, false-greens, a steered answer never reaches the model, or a web_fetch is unexpectedly denied or gated. NOT for generic unit testing (pytest/vitest of your own scripts) or non-Cowork CI. Covers the skill / run / chat / record / replay / trace / decide / assertions / scaffold commands and the session-vs-scenario split.
 metadata:
   author: cowork-harness
-  version: 0.19.0
-  tracks-harness: cowork-harness 0.19.0 (baseline desktop-1.15962.1)
+  version: 0.20.0
+  tracks-harness: cowork-harness 0.20.0 (baseline desktop-1.17377.1)
 ---
 
 # cowork-harness
@@ -21,8 +21,8 @@ several ways to *silently* no-op a check (skip an assertion on replay, auto-answ
 an empty egress allowlist). This skill exists mostly to keep you out of those traps — the Gotchas
 section below is the highest-value part. Read it.
 
-> **Version note:** the facts and `file:line` pointers here track `cowork-harness 0.19.0` (baseline
-> `desktop-1.15962.1`). If your checkout is newer, prefer the live `--help`, `SPEC.md`, and
+> **Version note:** the facts and `file:line` pointers here track `cowork-harness 0.20.0` (baseline
+> `desktop-1.17377.1`). If your checkout is newer, prefer the live `--help`, `SPEC.md`, and
 > `docs/*.md` over this snapshot, and re-run the bundled linter.
 
 ## 0. Preflight — make sure the harness can actually run
@@ -37,7 +37,7 @@ cowork-harness skill ./my-skill "do X"      # run the skill once against the sta
 Before the first command, confirm the CLI is reachable and **fail loud** (never fake a pass) when a tier's dependencies are missing:
 
 - **One-shot check.** Run `cowork-harness doctor [--tier <tier>]` first — a read-only prerequisite check that inspects Docker, the staged agent, the token, and the baseline in one pass. The bullets below explain each thing it checks (and how to fix it).
-- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 0.19.0**. If it's missing or older, prefix every command with the version floor `npx cowork-harness@>=0.19.0 <cmd>` (Node ≥ 20), or install once with `npm i -g cowork-harness@>=0.19.0`. **Pin `@>=0.19.0`, never `@latest`** — `@latest` can silently fetch an older CLI and the new commands fail as "unknown command", whereas the floor **fails loud** if no compatible version is published. (≥ 0.19.0 is what gates the commands/assertions this skill teaches: `assertions --list`, `scaffold <run-id>`, `trace --view dispatches`, `artifact_json` incl. the `in:` operator, `verify-cassettes`, batch `record <dir>`/`--rerecord-stale`, `record --concurrency <N>`, record-time redaction, multiSelect/`answer:`, `verify-run` answer-coverage, `record --max-artifact-bytes`, live record-time deciders, `verify-cassettes --allow-domain`/`--allow-email`/`--allow-file`, scenario `skills:` staleness scoping with `COWORK_HARNESS_AGENT_SCOPE=skill`, `chat --plugin`, and `/help` in the REPL.)
+- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 0.20.0**. If it's missing or older, prefix every command with the version floor `npx cowork-harness@>=0.20.0 <cmd>` (Node ≥ 20), or install once with `npm i -g cowork-harness@>=0.20.0`. **Pin `@>=0.20.0`, never `@latest`** — `@latest` can silently fetch an older CLI and the new commands fail as "unknown command", whereas the floor **fails loud** if no compatible version is published. (≥ 0.20.0 is what gates the commands/assertions this skill teaches: `assertions --list`, `scaffold <run-id>`, `trace --view dispatches`, `artifact_json` incl. the `in:` operator, `verify-cassettes`, batch `record <dir>`/`--rerecord-stale`, `record --concurrency <N>`, record-time redaction, multiSelect/`answer:`, `verify-run` answer-coverage, `record --max-artifact-bytes`, live record-time deciders, `verify-cassettes --allow-domain`/`--allow-email`/`--allow-file`, scenario `skills:` staleness scoping with `COWORK_HARNESS_AGENT_SCOPE=skill`, `chat --plugin`, and `/help` in the REPL.)
 - **Agent binary (sandboxed live tiers — `container`/`microvm`/`hostloop`/`cowork`).** The staged Claude Code agent is **bind-mounted** from a local Claude Desktop install, or point `COWORK_AGENT_BINARY` at a `claude-code-vm/<ver>/claude` ELF. Nothing is bundled. `protocol` (L0) and `replay` need no staged agent; for the sandboxed tiers, no agent → no run; report that, don't skip silently.
 - **Docker / Lima.** Only `--fidelity protocol` (L0) runs without them. `container` / `microvm` / `hostloop` / `cowork` need Docker (Lima for L2). If they're absent, drop to `--fidelity protocol` and **say so** — a green that never exercised the sandbox is not a sandbox pass.
 - **Auth.** `CLAUDE_CODE_OAUTH_TOKEN` (preferred) or `ANTHROPIC_API_KEY`, via env or `.env`. Minting an OAuth token needs the **`claude` CLI** (`npm i -g @anthropic-ai/claude-code`, then `claude setup-token`).
@@ -75,6 +75,14 @@ The skill is **copied fresh into the sandbox each run**. Wire it via `plugins.lo
 `COWORK_HARNESS_SOFT_MISSING=1` to fall back to warn-and-exclude. Mount names are always derived from
 the folder basename (collision-resolved); there is no `to:` override. See `references/scenario-schema.md`.
 
+> **`git add` a brand-new skill before testing it.** Inside a git repo the harness stages the
+> **git-tracked** files (the fidelity boundary — real Cowork installs from a repo and sees only committed
+> files). An **all-untracked** skill folder used to mount *empty* and the agent reported "the skill isn't
+> installed" then did the work itself — a green-looking run where the skill never loaded. That now
+> **hard-fails** (`BoundaryError`, exit 3) naming the dir, and a partially-tracked folder emits a loud
+> `::notice:: [stage]` listing the excluded files. Fix: `git add` the skill, or `COWORK_HARNESS_GITSET=0`
+> to copy untracked files (won't reflect what ships). A folder **outside** any repo is copied raw (no guard).
+
 ## 4. Choose a fidelity tier
 
 | Tier | What it gives you | Use when |
@@ -82,7 +90,7 @@ the folder basename (collision-resolved); there is no `to:` override. See `refer
 | `protocol` | Fastest; no sandbox, no egress | Pure protocol/answer-shape tests. **Rejected** if the scenario asserts egress. |
 | `container` | Real sandbox + real default-deny egress (**default**) | Most functional + boundary tests. |
 | `microvm` | VM-grade escape **isolation** (macOS arm64). Egress transport is the *same allowlist proxy as `container`* — not better network fidelity | Testing untrusted code escape, not network behavior. |
-| `hostloop` / `cowork` | Production split-exec (host runs the loop, guest runs tools) | Highest-fidelity / parity runs. |
+| `hostloop` / `cowork` | Production split-exec: the agent still runs in the container, but native Bash/WebFetch are disabled and routed host-side via the workspace SDK-MCP server (only `protocol` runs the agent on the host) | Highest-fidelity / parity runs. |
 
 Set the tier in the **scenario's `fidelity:` field**, not a flag — `run` rejects `--fidelity`
 (it's a `skill`-only flag). See `references/fidelity-and-answers.md`.
@@ -127,6 +135,21 @@ The `"first"` shorthand remains active only for the built-in `--on-unanswered fi
 write an external helper, return a label name or option index — never the bare word `"first"` unless
 your gate actually has a label called `"first"`.
 
+## 5a. Checking whether a background run is alive
+
+Never use `ps aux` to check on a `cowork-harness` run you launched in the background — it only sees
+processes in your OWN PID namespace, which is frequently NOT the harness process's namespace (e.g. when
+you're a sandboxed subagent). An empty `ps aux` match tells you nothing about whether the run is still
+going.
+
+Use **`cowork-harness status <dir> [--follow]`** instead — reads `<outDir>/status.json`, a file the
+harness writes/updates throughout the run's lifecycle (including a crash-safety net for a thrown
+error/`SIGTERM`, AND staleness detection for a hard `SIGKILL`/OOM-kill that no exit handler can catch —
+either way you get `"error"`/`stale` instead of a permanently-trusted `"running"`), so liveness is
+checkable regardless of PID namespace. The harness prints `[status] <outDir>` to stderr as soon as the
+run starts, so capture stderr to get the exact directory. `--follow` fails loud on a timeout/staleness
+rather than hanging forever. See `docs/run-status.md` for the full recipe.
+
 ## 6. Assertions: two orthogonal axes
 
 Conflating these is the **biggest landmine**. An assertion key has two independent properties:
@@ -137,7 +160,8 @@ Conflating these is the **biggest landmine**. An assertion key has two independe
   not semantic content the model paraphrases, which re-records red); check structured JSON with YAML
   `artifact_json` (or the pytest lane for complex predicates), not via a transcript substring.
 - **Axis B — survives `replay`?** *Independent of Axis A.* On the token-free `replay` lane, only
-  **content keys** evaluate; filesystem / egress keys are **silently skipped** (live-only). A key
+  **content keys** evaluate; filesystem / egress keys are skipped (live-only) — loudly, via an
+  `::warning::` annotation, not a silent no-op. A key
   being "robust" says nothing about whether it runs on your replay gate.
 
 Getting Axis B wrong means a check that **silently does nothing in CI**. The harness now warns
@@ -397,6 +421,19 @@ are the ones that bite hardest.
     --rerecord-stale` surfaces ALL stale anchors in one pass (add `--concurrency <N>` to parallelize); a shell
     wrapper that loops one cassette at a time with `set -e` defeats this and rediscovers stale anchors serially.
 
+17. **Editing `scenarios/*.yaml` `assert:` does NOT change a plain `replay`.** *Why:* `replay` evaluates the
+    assertions **frozen in the cassette** by default — it is byte-deterministic and ignores the working tree (so
+    a committed cassette can't silently re-interpret against an uncommitted YAML). This used to be a *silent*
+    no-op; now plain `replay` prints a `::notice::` when a sibling's `assert:` differs and points you at the fix.
+    *Fix:* to re-check token-free against the edited block, `replay --assert-from <scenario.yaml>` (or
+    `--reassert`). That opt-in path is safe by construction for the authored fields — it **hard-fails** if
+    `prompt`/`answers`/`baseline`/`fidelity`/`skills`/`requires_capabilities` or the skill content (when a
+    fingerprint exists) drifted from the recording (re-record then), and `expect_denied`/filesystem/egress keys
+    are sourced but stay **live-only** (it warns; they don't move the replay verdict). **Caveat:** the `session`
+    (model / data mounts / discovery) is NOT drift-checked or fingerprinted, so a **model change** between record
+    and re-assert is undetected — the notice flags this; re-record if the session changed. `verify-run` reads
+    on-disk `assert:` against a kept *run dir*; `replay --assert-from` is the equivalent for a *cassette*.
+
 For the complete gotcha list, the assertion catalog, the YAML schema, the fidelity/answer tables,
 and the CI recipe, read the files in `references/`.
 
@@ -408,3 +445,4 @@ and the CI recipe, read the files in `references/`.
 - `references/ci-recipe.md` — replay-vs-live lane split and the four-stage GitHub Actions pipeline.
 - `scripts/scenario.py` — `scaffold` a valid scenario skeleton and `lint` scenarios for the
   no-silent-false-green invariants (both usable as CI steps).
+- `../../../docs/run-status.md` — checking a background run's status without `ps aux`.

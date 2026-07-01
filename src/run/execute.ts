@@ -1,4 +1,5 @@
 import { warn } from "../io.js";
+import { BoundaryError } from "../errors.js";
 import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync, readdirSync, statSync, lstatSync, realpathSync } from "node:fs";
 import { randomUUID, createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
@@ -7,6 +8,7 @@ import { join, dirname, resolve, basename, isAbsolute, sep } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { Scenario } from "../types.js";
 import type { RunResult } from "../types.js";
+import { writeRunningStatus, startStatusTicker, registerRunForCrashSafety, type RunStatusMeta } from "./run-status.js";
 // Runtime-only circular import: cassette.ts imports executeScenario from here, and we import buildFingerprint
 // from there. Both bindings are used only inside function bodies (call time), never at module load, so the
 // ESM live-binding cycle is safe. buildFingerprint's deps (skillSourceDirs → parseSessionFile) live here, so
@@ -39,6 +41,7 @@ import { type DecisionChannel } from "../decide/external-channel.js";
 import { claudeCliComplete } from "../decide/llm-transport.js";
 import { Run, type RunRecord, type RunHooks } from "./run.js";
 import { runsWriteRoot } from "./trace-view.js";
+import { summarizeGateProvenance } from "./gate-provenance.js";
 import { collectSecrets, scrub } from "../secrets.js";
 
 const RUN_RESULT_SCHEMA_URL = "https://raw.githubusercontent.com/yaniv-golan/cowork-harness/main/schema/run-result.json";
@@ -55,6 +58,9 @@ export interface ExecuteOptions {
   sessionId?: string;
   /** resume a prior session of this id — reuse its persisted work dir + pass the agent's `--resume`. */
   resume?: boolean;
+  /** --compact: suppress the INFORMATIONAL capability `::notice::` lines for shareable output. The
+   *  capability probe still runs and the false-negative hard-fail still fires — only the notices go. */
+  compact?: boolean;
   /** steering for the LLM decider (`on_unanswered: llm` / `--decider-llm`) — one-line test intent. */
   llmIntent?: string;
   /** override the LLM decider's answering model (`--decider-model`); falls back to env then the Sonnet default. */
@@ -65,11 +71,11 @@ export interface ExecuteOptions {
 }
 
 /**
- * The library API (A2): run one scenario end-to-end and return a RunResult. `cli.ts` is a
+ * The library API: run one scenario end-to-end and return a RunResult. `cli.ts` is a
  * thin wrapper over this; the pytest `cowork` lane drives it too. Owns the run boundary
  * (egress sidecar/proxy start+teardown, env mutation, post-run scan, artifact write).
  */
-/** #17: turn a scenario name into a SAFE single directory segment — neutralize path separators and
+/** turn a scenario name into a SAFE single directory segment — neutralize path separators and
  *  ".." so a YAML/filename-derived name can't escape `runs/`. Otherwise human-readable; the display
  *  name (scenario.name) is kept separate and unchanged.
  *
@@ -148,7 +154,7 @@ function readOriginMarker(path: string): OriginMarker | null {
 }
 
 export async function executeScenario(scenario: Scenario, opts: ExecuteOptions = {}): Promise<RunResult> {
-  // #33: mirror the CLI guard (cli.ts:488) — a library caller skipping the CLI would otherwise get
+  // mirror the CLI guard (cli.ts:488) — a library caller skipping the CLI would otherwise get
   // a confusing `cannot resume "undefined"` error deep inside the resume branch.
   if (opts.resume && !opts.sessionId) throw new Error("resume requires sessionId (--session-id was not provided)");
 
@@ -158,7 +164,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // Session identity. Without a stable handle: a fresh ephemeral id (current behavior). WITH one
   // (--session-id / resume): a STABLE cwd id + run dir, so the agent's native sessionFile persists and
   // can be resumed. The agent's own session uses a UUID, persisted in a per-session manifest.
-  // #18: reject a --session-id outside the safe charset rather than collapsing it — distinct ids like
+  // reject a --session-id outside the safe charset rather than collapsing it — distinct ids like
   // "a/b" and "a-b" used to map onto the SAME persisted directory (a silent collision).
   if (opts.sessionId !== undefined && !/^[A-Za-z0-9_-]+$/.test(opts.sessionId))
     throw new Error(
@@ -166,7 +172,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     );
   const stable = opts.sessionId ? `sess-${opts.sessionId}` : undefined;
   const sessionId = stable ?? `local_${process.hrtime.bigint().toString(36)}`;
-  // #17: the scenario name (YAML or filename-derived) is a PATH component — slugify so a name like
+  // the scenario name (YAML or filename-derived) is a PATH component — slugify so a name like
   // "../x" can't place run artifacts outside runs/. The display name (scenario.name) is unchanged.
   const outDir = join(runsWriteRoot(), slugForPath(scenario.name), sessionId);
   // The marker lives at outDir/.origin — ABOVE workRoot (outDir/work/...), so it's invisible to
@@ -204,7 +210,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
               ` — set COWORK_HARNESS_ALLOW_FOREIGN_RESUME=1 to override, or use --run-dir`,
           );
       } else if (sameOrigin) {
-        // #25/#26: a same-project non-resume run must be FRESH — the prior staged tree (uploads, plugins,
+        // a same-project non-resume run must be FRESH — the prior staged tree (uploads, plugins,
         // mnt/.claude agent state, outputs) would otherwise leak in via cpSync's merge semantics, and a
         // new agentSessionId would be written over stale native session files. Clear it first.
         rmSync(outDir, { recursive: true, force: true });
@@ -230,13 +236,48 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     mkdirSync(outDir, { recursive: true });
   }
 
+  // status.json: writable/discoverable from the EARLIEST possible moment (right after outDir exists,
+  // before any container/VM spawn), so `cowork-harness status <dir>` works even in the pre-events.jsonl
+  // window `resolveStatusDir` special-cases. Printed to stderr (unconditional — matches the existing
+  // `[loop] cowork → …` precedent a few lines below) so a driving agent capturing this run's stderr can
+  // grab the exact dir without knowing the session id ahead of time.
+  const runStatusMeta: RunStatusMeta = {
+    pid: process.pid,
+    scenario: scenario.name,
+    fidelity: scenario.fidelity,
+    sessionId,
+    startedAt: Date.now(),
+  };
+  writeRunningStatus(outDir, runStatusMeta);
+  // Raw absolute path (NOT tildeified) — this line is a machine-capture contract: a driving agent/script
+  // parses it and feeds it straight back into `cowork-harness status <path>`, so it must round-trip
+  // exactly. `~` abbreviation is a human-display nicety and Node does not expand it, so tildeifying here
+  // would break the very workflow this line exists for (contrast with the unrelated human-facing
+  // `--keep`/footer paths elsewhere, which DO tildeify).
+  process.stderr.write(`[status] ${outDir}\n`);
+
+  // Crash-safety net: WITHOUT this, a throw that unwinds past executeScenario without ever reaching
+  // either RunResult assembler (buildPartialResult's call site, or the success-path result below) —
+  // e.g. a plain `throw new Error(...)`/BoundaryError earlier in this function, not the recoverable
+  // UnansweredError path — leaves status.json frozen at "running" forever: a false "still alive" signal,
+  // exactly the failure mode this feature exists to eliminate. `runCrashSafety.finalize(...)` (called at
+  // both normal finalize sites in Step 4) removes this run from tracking so a clean finish is never
+  // double-written; a run that's still tracked when the process actually exits gets swept to "error" by
+  // the ONE shared exit listener `registerRunForCrashSafety` owns (module-level, not per-call — this is
+  // what keeps `record --concurrency` batches safe: a per-call `process.on`/`process.off` pair would leak
+  // a listener for every crashed-but-not-finalized scenario in the batch, since the crash path by
+  // definition never reaches a `.finalize()` call to remove it). Mirrors `writeDoneMarker`'s exit-handler
+  // precedent (`src/decide/external-channel.ts:58-64`); `writeJsonAtomic`'s fs calls are synchronous,
+  // which a Node `"exit"` handler requires.
+  const runCrashSafety = registerRunForCrashSafety(outDir, runStatusMeta);
+
   let agentSessionId: string | undefined;
   if (opts.sessionId || opts.resume) {
     const manifestPath = join(outDir, "session.json");
     if (opts.resume) {
       if (!existsSync(manifestPath))
         throw new Error(`cannot resume "${opts.sessionId}": no prior session at ${outDir} (run it once with --session-id first)`);
-      // #23: validate the manifest rather than silently degrading to a fresh session on a corrupt
+      // validate the manifest rather than silently degrading to a fresh session on a corrupt
       // or older-format file — a missing agentSessionId on the resume path is a hard error.
       agentSessionId = readSessionManifest(manifestPath, opts.sessionId ?? "");
     } else {
@@ -254,7 +295,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     scenario.fidelity === "cowork" ? (decideLoopFromBaseline(baseline) === "host" ? "hostloop" : "container") : scenario.fidelity;
   if (scenario.fidelity === "cowork") process.stderr.write(`[loop] cowork → ${effectiveFidelity} (per gate 1143815894)\n`);
 
-  const plan = buildLaunchPlan(session, baseline, outDir, effectiveFidelity);
+  const plan = buildLaunchPlan(session, baseline, outDir, effectiveFidelity, !!opts.resume);
   if (agentSessionId) {
     plan.agentSessionId = agentSessionId;
     plan.resume = !!opts.resume;
@@ -271,7 +312,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
 
   const onUnanswered: OnUnanswered = scenario.on_unanswered ?? opts.onUnanswered ?? "fail";
   // This is a POLICY line (what happens IF an unscripted question arrives), not an outcome — the old
-  // `unanswered questions → fail` wording read as a failure on clean runs (F-5). State it as policy + source.
+  // `unanswered questions → fail` wording read as a failure on clean runs. State it as policy + source.
   process.stderr.write(
     opts.externalChannel
       ? `[input] unscripted-question policy: live decider channel\n`
@@ -279,18 +320,18 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   );
 
   // Secrets are needed BEFORE the decider is built — the external channel emits live, ahead of the
-  // post-run file scrub (Opus C1). Same set is reused for the file scrub at the end.
+  // post-run file scrub. Same set is reused for the file scrub at the end.
   const secrets = collectSecrets();
   // Dialog auto-cancel: faithful 6s by default; relaxed (∞) under the external decider since the
-  // caller is authoritative; `COWORK_HARNESS_DIALOG_TIMEOUT_MS` overrides either way (Opus M1).
-  // #45: parse the dialog timeout env var. The special values "inf", "infinite", and "-1" mean Infinity
+  // caller is authoritative; `COWORK_HARNESS_DIALOG_TIMEOUT_MS` overrides either way.
+  // parse the dialog timeout env var. The special values "inf", "infinite", and "-1" mean Infinity
   // (no timeout), so fail/first policies can also opt out of the 6s auto-cancel. A positive number
   // overrides the policy-based default. 0 or absent → fall through to the policy default below.
   const envDialogMsRaw = process.env.COWORK_HARNESS_DIALOG_TIMEOUT_MS ?? "";
   const envDialogMs = parseDialogTimeout(envDialogMsRaw);
   // Relax the 6s dialog auto-cancel under any deliberate, authoritative terminal: an external channel, the
   // LLM decider (a `claude -p` call would lose the 6s race), or `prompt` (a human can't answer in 6s — the
-  // faithful auto-cancel would make PromptDecider's dialog branch unreachable). fail/first keep 6s. (Opus M2)
+  // faithful auto-cancel would make PromptDecider's dialog branch unreachable). fail/first keep 6s.
   const dialogTimeoutMs =
     envDialogMs !== undefined
       ? envDialogMs
@@ -309,7 +350,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
 
   // Docker resources (sidecar networks/proxy + the host-loop container) are EPHEMERAL per run — name
   // them by a unique per-invocation token, NOT the (now-stable) sessionId, so a `--resume` after a
-  // failed run can't collide with the prior run's leftovers (F1). The persistent state is the work dir.
+  // failed run can't collide with the prior run's leftovers. The persistent state is the work dir.
   const runToken = `r${process.hrtime.bigint().toString(36)}`;
   const runner = process.env.COWORK_CONTAINER_RUNTIME ?? "docker";
 
@@ -320,13 +361,13 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   let microvmProxyPort: number | undefined;
   let record: RunRecord;
   let unansweredErr: UnansweredError | undefined; // set when a gate whiffs — drives the salvage branch below
-  let child: { kill?: (s?: NodeJS.Signals) => void } | undefined; // hoisted so the finally can reap a crashed/orphaned container (F1)
+  let child: { kill?: (s?: NodeJS.Signals) => void } | undefined; // hoisted so the finally can reap a crashed/orphaned container
   let containerName: string | undefined;
-  let deregisterContainerReap: (() => void) | undefined; // 2a: Ctrl-C cleanup for the agent container
-  let hostEgress: { host: string; decision: "allow" | "deny" }[] | undefined; // #31: host-routed web_fetch egress
-  let l0PluginDivergence = false; // #20: set when protocol mode runs with plugins (failing fidelity signal)
-  let promptFidelityWarnings: string[] | undefined; // #49: structured prompt warnings collected by renderPrompts
-  // #30: web_fetch provenance is gate-driven (coworkWebFetchViaApi) and host-loop only. The ref is
+  let deregisterContainerReap: (() => void) | undefined; // Ctrl-C cleanup for the agent container
+  let hostEgress: { host: string; decision: "allow" | "deny" }[] | undefined; // host-routed web_fetch egress
+  let l0PluginDivergence = false; // set when protocol mode runs with plugins (failing fidelity signal)
+  let promptFidelityWarnings: string[] | undefined; // structured prompt warnings collected by renderPrompts
+  // web_fetch provenance is gate-driven (coworkWebFetchViaApi) and host-loop only. The ref is
   // created HERE (before spawnHostLoop builds the handler) and filled with a Run-backed bundle after
   // the Run exists — the handler reads ref.current at call time (strictly after the stream starts).
   const viaApiOn = readGateFlag(baseline, "1978029737", "coworkWebFetchViaApi");
@@ -354,8 +395,9 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
           });
     const allowMissing = scenario.assert.some((a) => a.allow_missing_capability === true);
     const { abort, message } = capabilityPreflightDecision(declaredCaps, omitted, allowMissing);
-    if (abort) throw new BoundaryError(`[capability] ${message}`);
-    if (message) warn(`::notice:: [capability] (pre-flight) ${message} (allow_missing_capability asserted — proceeding)\n`);
+    if (abort) throw new BoundaryError(`[capability] ${message}`); // never gated — the safety net
+    if (message && !opts.compact)
+      warn(`::notice:: [capability] (pre-flight) ${message} (allow_missing_capability asserted — proceeding)\n`);
   }
   try {
     // acquire the egress sidecar / host proxy INSIDE the protected try so a throw in resource
@@ -363,10 +405,10 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // tears down whatever was assigned to sidecar/hostProxy. (Previously these were acquired before the try,
     // so a renderPrompts throw skipped teardown and orphaned the resource.)
     if (containerLike) {
-      // #43: thread proxy/network EXPLICITLY into spawn opts — no process.env mutation so
+      // thread proxy/network EXPLICITLY into spawn opts — no process.env mutation so
       // concurrent executeScenario calls don't stomp each other's values.
       sidecar = startEgressSidecar(plan.egressAllow, outDir, runToken);
-      // 2a: on Ctrl-C, reap the agent container in the "container" PHASE so it runs BEFORE the sidecar's
+      // on Ctrl-C, reap the agent container in the "container" PHASE so it runs BEFORE the sidecar's
       // network teardown (network rm fails while the container is still attached). The thunk reads `child`/
       // `containerName` at call time (assigned below). De-registered in the finally so a clean exit doesn't
       // double-run it (and the reap is idempotent regardless).
@@ -396,7 +438,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     }
 
     const prompts = renderPrompts(baseline, session, sessionId, plan.mounts.find((m) => m.kind === "folder")?.mountPath);
-    promptFidelityWarnings = prompts.fidelityWarnings; // #49: hoist out so RunResult construction (after try) can access it
+    promptFidelityWarnings = prompts.fidelityWarnings; // hoist out so RunResult construction (after try) can access it
     let sdkMcp: SdkMcp | undefined;
     if (effectiveFidelity === "hostloop") {
       const hl = spawnHostLoop(scenario, baseline, plan, outDir, sessionId, {
@@ -418,15 +460,15 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         runToken,
       });
       child = ct.child;
-      containerName = ct.containerName; // so the Ctrl-C / finally reap removes the agent container by name (#3)
+      containerName = ct.containerName; // so the Ctrl-C / finally reap removes the agent container by name
     } else if (effectiveFidelity === "microvm") {
       child = spawnMicroVm(scenario, baseline, plan, outDir, sessionId, {
         systemPromptAppend: prompts.systemPromptAppend,
         proxyPort: microvmProxyPort,
       });
     } else {
-      // #19: pass systemPromptAppend so L0 records carry Cowork framing (matches container/microvm/host-loop).
-      // #20: capture l0PluginDivergence so computeVerdict can fail the run when plugins are configured.
+      // pass systemPromptAppend so L0 records carry Cowork framing (matches container/microvm/host-loop).
+      // capture l0PluginDivergence so computeVerdict can fail the run when plugins are configured.
       const proto = spawnProtocol(scenario, baseline, plan, outDir, { systemPromptAppend: prompts.systemPromptAppend });
       child = proto.child;
       l0PluginDivergence = proto.l0PluginDivergence;
@@ -441,7 +483,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       opts.decider ?? buildDecider({ rules: scenario.answers, parity: plan.permissionParity, onUnanswered, external: externalTerminal });
     const run = new Run(sessionT, decider, opts.hooks ?? [], sessionId, dialogTimeoutMs ?? undefined);
     run.seedApprovedDomains(session.web_fetch.approved_domains); // test convenience: pre-approved web_fetch hosts
-    // #30: fill the provenance bundle (backed by Run's tracker + recorded approval) BEFORE drive().
+    // fill the provenance bundle (backed by Run's tracker + recorded approval) BEFORE drive().
     // Host-loop only, and only when the web_fetch-via-API gate is on; otherwise the handler stays
     // allowlist-only (ref.current undefined). Run seeds the set from turns + tool_results.
     if (effectiveFidelity === "hostloop" && viaApiOn) {
@@ -453,24 +495,29 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         permissiveMode: plan.permissionMode === "bypassPermissions",
       };
     }
+    const stopStatusTicker = startStatusTicker(outDir, runStatusMeta, () => run.partial());
     try {
-      record = await run.drive(scenario.prompt, {
-        subagentAppend: prompts.subagentAppend,
-        sdkMcp,
-      });
-    } catch (e) {
-      // An unanswered gate is recoverable: grab the in-progress record so the work done before the whiff can
-      // be salvaged to disk below. Any other error is a genuine fault — keep today's fail-fast behavior.
-      if (e instanceof UnansweredError) {
-        unansweredErr = e;
-        record = run.partial();
-      } else throw e;
+      try {
+        record = await run.drive(scenario.prompt, {
+          subagentAppend: prompts.subagentAppend,
+          sdkMcp,
+        });
+      } catch (e) {
+        // An unanswered gate is recoverable: grab the in-progress record so the work done before the whiff can
+        // be salvaged to disk below. Any other error is a genuine fault — keep today's fail-fast behavior.
+        if (e instanceof UnansweredError) {
+          unansweredErr = e;
+          record = run.partial();
+        } else throw e;
+      }
+    } finally {
+      stopStatusTicker();
     }
   } finally {
     // Reap the agent container FIRST (before the sidecar networks), so a crashed/unanswered run can't
-    // orphan a running container holding the network (F1). On the success path the child has already
+    // orphan a running container holding the network. On the success path the child has already
     // exited (--rm), so these are no-ops.
-    deregisterContainerReap?.(); // 2a: normal path owns the reap below; drop the signal-time thunk
+    deregisterContainerReap?.(); // normal path owns the reap below; drop the signal-time thunk
     try {
       child?.kill?.("SIGKILL");
     } catch {
@@ -481,12 +528,12 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       egress = sidecar.collect();
       sidecar.teardown();
     }
-    // #31: merge host-routed web_fetch decisions (host-loop) so they're visible to egress assertions.
+    // merge host-routed web_fetch decisions (host-loop) so they're visible to egress assertions.
     if (hostEgress?.length) egress = [...egress, ...hostEgress];
     hostProxy?.close();
   }
 
-  // Part 4: snapshot the gate rendezvous wire shapes (req/resp/.done) into the run dir BEFORE the caller
+  // snapshot the gate rendezvous wire shapes (req/resp/.done) into the run dir BEFORE the caller
   // closes (and wipes) the channel — the forensic evidence you want after a gate bug survives --keep.
   opts.externalChannel?.snapshot?.(join(outDir, "gates"));
 
@@ -519,6 +566,9 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       unanswered: { message: unansweredErr.message, hint: unansweredErr.hint },
       fingerprint: buildFingerprint(scenario.session, baseline.appVersion, undefined, scenario.skills),
     });
+    // Non-null: `durationMs` is set unconditionally just above (`Date.now() - startedAt`) — the field is
+    // typed optional on RunResult/PartialResult for OTHER (non-execute.ts) producers, not this call site.
+    runCrashSafety.finalize(record, "error", partialResult.durationMs!);
     writeFileSync(join(outDir, "result.json"), scrub(JSON.stringify(partialResult, null, 2), secrets));
     writeRunJsonl(outDir, scenario, effectiveFidelity, record, egress, secrets);
     writeTrace(outDir, record, egress, secrets, partialResult.durationMs);
@@ -562,15 +612,15 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     });
   }
 
-  // Capability fidelity (§8.8 D6/D2): on a live sandboxed tier, probe what the runtime OMITS vs the real
+  // Capability fidelity: on a live sandboxed tier, probe what the runtime OMITS vs the real
   // Cowork rootfs, then detect whether the skill USED an omitted family. A non-empty intersection on an
   // otherwise-green run is a likely FALSE NEGATIVE → computeVerdict fails it (unless allow_missing_capability).
   // Probing is structural (the runtime is the source of truth), so an old `:1` / custom image can't silently
   // fail-open. container/hostloop → Docker image probe; microvm → `limactl shell` guest probe. Skipped on
   // protocol/replay (no live runtime to probe) and via COWORK_SKIP_CAPABILITY_PROBE.
   let missingCapabilityUse: string[] | undefined;
-  let capabilityProbe: RunResult["capabilityProbe"] = "skipped"; // Fix 6h: default — probe didn't run this tier/lane
-  let omittedFamilies: string[] | null = null; // Fix 4b: the probe's omitted-set (null = not run / unverified)
+  let capabilityProbe: RunResult["capabilityProbe"] = "skipped"; // default — probe didn't run this tier/lane
+  let omittedFamilies: string[] | null = null; // the probe's omitted-set (null = not run / unverified)
   if (
     (effectiveFidelity === "container" || effectiveFidelity === "hostloop" || effectiveFidelity === "microvm") &&
     process.env.COWORK_SKIP_CAPABILITY_PROBE !== "1"
@@ -584,21 +634,23 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
             tier: effectiveFidelity,
           });
     omittedFamilies = omitted;
-    capabilityProbe = omitted === null ? "unverified" : "definitive"; // Fix 6h: ran → definitive; failed → unverified
+    capabilityProbe = omitted === null ? "unverified" : "definitive"; // ran → definitive; failed → unverified
     if (omitted === null) {
       const w =
         "agent runtime could not be probed for capabilities — capability fidelity unverified (capability false-negatives won't be caught this run)";
       warn(`::warning:: [capability] (informational, unverified) ${w}\n`);
       promptFidelityWarnings = [...(promptFidelityWarnings ?? []), w];
     } else if (omitted.length) {
-      // 6a/6c: state the safety net the notice is otherwise silent about — an omitted family that the skill
+      // state the safety net the notice is otherwise silent about — an omitted family that the skill
       // actually USES hard-fails the run below (no silent false-pass). Tag the verdict impact so an observer
       // never reads an informational line as a failure cause (or vice-versa).
-      warn(
-        `::notice:: [capability] (informational, guarded) this image omits: ${omitted.join(", ")} — ` +
-          `if a skill actually USES one, this run HARD-FAILS (no silent false-pass). ` +
-          `Only rebuild full parity (--build-arg COWORK_FULL_PARITY=1) if your skill needs them.\n`,
-      );
+      if (!opts.compact)
+        warn(
+          `::notice:: [capability] (informational, guarded) this image omits: ${omitted.join(", ")} — ` +
+            `if a skill actually USES one, this run HARD-FAILS (no silent false-pass). ` +
+            `Only rebuild full parity (--build-arg COWORK_FULL_PARITY=1) if your skill needs them.\n`,
+        );
+      // The probe + hard-fail safety net runs regardless of --compact (only the informational notice above is gated).
       const used = detectCapabilityUse(join(outDir, "events.jsonl"), omitted, workRoot);
       if (used.length) {
         missingCapabilityUse = used;
@@ -607,15 +659,16 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
             `not a skill bug. Rebuild full parity (--build-arg COWORK_FULL_PARITY=1), or assert allow_missing_capability: true if the fallback is equivalent.\n`,
         );
       } else {
-        // 6b: close the loop — the bare omits-notice + a green run reads as a false-green RISK unless we say
+        // close the loop — the bare omits-notice + a green run reads as a false-green RISK unless we say
         // the guard ran and found nothing. Emit ONLY here (probe ran, families omitted), never in the
         // omitted===null unverified branch (which has no basis to claim "not used").
-        warn(`::notice:: [capability] (informational, guarded) omitted families were not used this run → no false-negative.\n`);
+        if (!opts.compact)
+          warn(`::notice:: [capability] (informational, guarded) omitted families were not used this run → no false-negative.\n`);
       }
     }
   }
 
-  // Fix 4b: a skill can DECLARE the capability families its core path needs. If the running tier omits one
+  // a skill can DECLARE the capability families its core path needs. If the running tier omits one
   // (clause a) or can't verify them — protocol/replay/skip (clause b) — the run hard-fails (computeVerdict),
   // closing the false-green for extraction-heavy skills. Computed at run time so verify-run/replay honor the
   // recorded outcome (a clean full-parity run records nothing → no false-fail on later verify-run).
@@ -641,6 +694,12 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     }
   }
 
+  // Gate provenance: how each AskUserQuestion gate was answered (scripted / decided / first / prompt).
+  // Derived from the same decision log the envelope persists; `undefined` when the run had no gates so
+  // the field self-suppresses. Informational — never affects the verdict. `record.decisions`
+  // (DecisionRecord[], `by: string`) is assignable to the summarizer's `by?: string` param — no re-map.
+  const gateProvenance = summarizeGateProvenance(record.decisions);
+
   const result: RunResult = {
     $schema: RUN_RESULT_SCHEMA_URL,
     generator: "cowork-harness",
@@ -649,13 +708,14 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     fidelity: scenario.fidelity,
     baseline: baseline.appVersion,
     result: record.result,
-    resultErrorKind: record.resultErrorKind, // Fix 5: transport vs agent classification of a result:"error"
-    stalledOnQuestion: record.stalledOnQuestion, // H2: run ended on an unanswered plain-text question
+    resultErrorKind: record.resultErrorKind, // transport vs agent classification of a result:"error"
+    stalledOnQuestion: record.stalledOnQuestion, // run ended on an unanswered plain-text question
     decisions: record.decisions.map((d) => ({
       kind: d.kind,
       name: d.name,
       decision: d.decision,
       by: d.by,
+      model: d.model,
       detail: d.detail,
       rationale: d.rationale,
     })),
@@ -680,21 +740,25 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       record.decisions.some((d) => d.by === "llm" || d.by === "external" || d.by === "human" || d.by === "first") ||
       !!opts.nonDeterministicHint,
     nonDeterministicTerminal: onUnanswered === "llm" || onUnanswered === "prompt" || !!opts.externalChannel,
-    permissiveAutoAllow: record.permissiveAutoAllow.length ? record.permissiveAutoAllow : undefined, // #6: cowork-parity off-registry auto-allows (real Cowork blocks) — non-empty ⇒ NOT a faithful pass
+    gateProvenance: gateProvenance.total ? gateProvenance : undefined,
+    permissiveAutoAllow: record.permissiveAutoAllow.length ? record.permissiveAutoAllow : undefined, // cowork-parity off-registry auto-allows (real Cowork blocks) — non-empty ⇒ NOT a faithful pass
     scan, // post-run scan signals (delete-in-outputs / host-path-leak / self-heal) — computeVerdict default-fails when unasserted
-    effectiveFidelity, // The tier actually used — differs from fidelity when fidelity:"cowork" (#24)
-    fidelityWarnings: promptFidelityWarnings, // #49: structured prompt warnings visible to JSON callers
-    l0PluginDivergence: l0PluginDivergence || undefined, // #20: failing fidelity signal for protocol+plugins
-    missingCapabilityUse, // capability fidelity (§8.8 D6): omitted-capability families the skill used (live built-image tiers) — computeVerdict fails unless allow_missing_capability
-    capabilityProbe, // Fix 6h: probe outcome (definitive | unverified | skipped) for the guard roster
-    requiresCapabilityUnmet, // Fix 4b: declared requires_capabilities the tier couldn't satisfy → computeVerdict fails unless allow_missing_capability
+    effectiveFidelity, // The tier actually used — differs from fidelity when fidelity:"cowork"
+    fidelityWarnings: promptFidelityWarnings, // structured prompt warnings visible to JSON callers
+    l0PluginDivergence: l0PluginDivergence || undefined, // failing fidelity signal for protocol+plugins
+    missingCapabilityUse, // capability fidelity: omitted-capability families the skill used (live built-image tiers) — computeVerdict fails unless allow_missing_capability
+    capabilityProbe, // probe outcome (definitive | unverified | skipped) for the guard roster
+    requiresCapabilityUnmet, // declared requires_capabilities the tier couldn't satisfy → computeVerdict fails unless allow_missing_capability
     // Skill staleness fingerprint, persisted on EVERY run (runs are always kept on disk) so `verify-run` can
     // detect a kept run that predates a skill change and refuse to vouch for answer-coverage. Same call the
     // record path uses for the cassette (cassette.ts) — `(inline)`/no-skill sessions yield a {baseline}-only fp.
     fingerprint: buildFingerprint(scenario.session, baseline.appVersion, undefined, scenario.skills),
   };
 
-  // Artifacts (C3): the harness-observability log `run.jsonl` REPLACES transcript.json/decisions.jsonl.
+  // Non-null: see the matching comment at the partial-result finalize call above.
+  runCrashSafety.finalize(record, result.result, result.durationMs!);
+
+  // Artifacts: the harness-observability log `run.jsonl` REPLACES transcript.json/decisions.jsonl.
   writeFileSync(join(outDir, "result.json"), scrub(JSON.stringify(result, null, 2), secrets));
   writeRunJsonl(outDir, scenario, effectiveFidelity, record, egress, secrets);
   writeTrace(outDir, record, egress, secrets, result.durationMs);
@@ -721,7 +785,7 @@ export function parseScenarioFile(path: string): Scenario {
   if (!scenario.name) scenario.name = basename(path).replace(/\.ya?ml$/i, "");
   if (isFileRelative(scenario.session)) scenario.session = resolve(dirname(path), scenario.session);
   // Load-time regex validation: fail fast with a clear message rather than letting a malformed pattern
-  // crash the run at evaluate() time. NOTE (M2): CLI-supplied rules (--answer/--answer-policy) do NOT
+  // crash the run at evaluate() time. NOTE: CLI-supplied rules (--answer/--answer-policy) do NOT
   // pass through here — the runtime try/catch in assert.ts and decider.ts is their safety net.
   validateScenarioRegexes(scenario, path);
   return scenario;
@@ -764,7 +828,7 @@ function loadSessionFromFile(sessionRef: string): ReturnType<typeof loadSession>
   return resolveSessionPaths(loadSession(parseSessionFile(sessionRef)), baseDir);
 }
 
-/** C2: the harness-observability JSONL — lifecycle + decisions(by) + subagents + egress + cost. */
+/** the harness-observability JSONL — lifecycle + decisions(by) + subagents + egress + cost. */
 function writeRunJsonl(
   outDir: string,
   scenario: Scenario,
@@ -825,6 +889,7 @@ export function buildPartialResult(args: {
       name: d.name,
       decision: d.decision,
       by: d.by,
+      model: d.model,
       detail: d.detail,
       rationale: d.rationale,
     })),
@@ -844,13 +909,17 @@ export function buildPartialResult(args: {
     userVisibleRoots: args.userVisibleRoots,
     artifacts: collectArtifacts(args.workRoot, args.userVisibleRoots),
     effectiveFidelity: args.effectiveFidelity,
+    ...(() => {
+      const gp = summarizeGateProvenance(record.decisions);
+      return gp.total ? { gateProvenance: gp } : {};
+    })(),
     ...(args.fingerprint ? { fingerprint: args.fingerprint } : {}),
   };
 }
 
-/** B3: the structured run trace. */
+/** the structured run trace. */
 /** ENV-MANIFEST: recursively list files under each user-visible prefix (relative path + byte size).
- *  Paths only — NO content snapshot (that is the cassette manifest, #1).
+ *  Paths only — NO content snapshot (that is the cassette manifest).
  *
  *  use `lstatSync` (does NOT follow symlinks) and SKIP any symlink entry — a symlink could point out
  *  of `workRoot` (inlining out-of-tree content into a committed cassette) or form a cycle. A `visited` set of
@@ -926,14 +995,14 @@ export function collectArtifacts(workRoot: string, prefixes: string[]): { path: 
 function writeTrace(outDir: string, rec: RunRecord, egress: RunResult["egress"], secrets: string[], durationMs?: number) {
   const trace = {
     steps: [...rec.toolsCalled],
-    toolCounts: rec.toolCounts, // O6: truthful per-tool call counts (host-routed WebSearch shows here, not usage.server_tool_use)
+    toolCounts: rec.toolCounts, // truthful per-tool call counts (host-routed WebSearch shows here, not usage.server_tool_use)
     questions: rec.questions,
     subagents: rec.subagents,
-    gateDeliveries: rec.gateDeliveries, // Part 3: per-gate answer delivery
+    gateDeliveries: rec.gateDeliveries, // per-gate answer delivery
     egress,
     decisions: rec.decisions,
     durationMs,
-    cost: rec.cost ?? rec.usage ?? null, // cost comes from api_metrics/usage (F2), not just `result`
+    cost: rec.cost ?? rec.usage ?? null, // cost comes from api_metrics/usage, not just `result`
   };
   writeFileSync(join(outDir, "trace.json"), scrub(JSON.stringify(trace, null, 2), secrets));
 }
@@ -950,7 +1019,7 @@ function scrubFileInPlace(path: string, secrets: string[]) {
 }
 
 /**
- * #24: detect a host filesystem path leaking into agent-visible text. The original regex was
+ * detect a host filesystem path leaking into agent-visible text. The original regex was
  * macOS-centric (`/Users/`, `/opt/cowork/`) and false-passed `transcript_no_host_path` on Linux CI
  * where host paths are under `/home/` or `/root/`.
  *
@@ -1115,7 +1184,7 @@ export function isOutputsDelete(cmd: string): boolean {
   return false; // every rm delete is provably under a safe prefix; outputs ref was non-delete only
 }
 
-/** F-4: the operative delete statement(s) within a command that `isOutputsDelete` flagged — for a readable
+/** the operative delete statement(s) within a command that `isOutputsDelete` flagged — for a readable
  *  finding. The raw `cmd.slice(0,120)` truncated away the actual `rm` when a long `VAR=…` assignment prefix
  *  preceded it (the finding then showed only the assignment block). This surfaces the delete/mv itself, with
  *  simple `VAR=literal` assignments resolved so the real target path is visible. Falls back to the whole
@@ -1151,7 +1220,7 @@ export function scanEvents(file: string): { outputsDeletes: string[]; hostPathLe
     } catch {
       continue;
     }
-    // #32: host-path leaks can appear in tool_result blocks (Bash stdout/stderr) and user messages,
+    // host-path leaks can appear in tool_result blocks (Bash stdout/stderr) and user messages,
     // not just assistant text. Scan both assistant and user messages; keep the Bash delete/self-heal
     // detection assistant-only (those are tool_use blocks the agent emits).
     if (msg.type !== "assistant" && msg.type !== "user" && msg.type !== "system") continue;
@@ -1163,7 +1232,7 @@ export function scanEvents(file: string): { outputsDeletes: string[]; hostPathLe
         const t = block.thinking ?? block.text;
         if (typeof t === "string" && hostPathLeaked(t)) out.hostPathLeaked = true;
       }
-      // #9: delete/self-heal detection must cover BOTH bash surfaces — native `Bash` (container/microvm
+      // delete/self-heal detection must cover BOTH bash surfaces — native `Bash` (container/microvm
       // tiers) AND `mcp__workspace__bash` (host-loop, where native Bash is disabled). Same `command`
       // input shape. Missing the MCP name was a host-loop blind-spot in the post-hoc backstop.
       if (block.type === "tool_use" && (block.name === "Bash" || block.name === "mcp__workspace__bash") && msg.type === "assistant") {
@@ -1187,7 +1256,7 @@ export function scanEvents(file: string): { outputsDeletes: string[]; hostPathLe
 }
 
 /**
- * #45: parse `COWORK_HARNESS_DIALOG_TIMEOUT_MS`. Returns:
+ * parse `COWORK_HARNESS_DIALOG_TIMEOUT_MS`. Returns:
  *  - `Infinity` for "inf", "infinite", or "-1" (explicit no-timeout sentinel)
  *  - a positive integer (milliseconds) for a valid numeric string in 1..3_600_000
  *  - `undefined` for absent / "0" / empty (→ policy-based default applies)
@@ -1222,7 +1291,7 @@ export function parseEnvPort(name: string, defaultValue: number): number {
 }
 
 /**
- * #23: read + validate the resume manifest. Converts a raw JSON `SyntaxError` into a friendly
+ * read + validate the resume manifest. Converts a raw JSON `SyntaxError` into a friendly
  * "corrupt manifest" error, and on the resume path throws a clear error when `agentSessionId` is
  * missing or not a string (corrupt or older-format file) instead of silently degrading to a fresh
  * session. Extracted so it's unit-testable without spawning a run.
@@ -1235,7 +1304,7 @@ export function readSessionManifest(path: string, sessionId: string): string {
   } catch {
     throw new Error(`corrupt manifest at ${path}: not valid JSON`);
   }
-  // #17: if the manifest records a sessionId, verify it matches the requested one so a copied or
+  // if the manifest records a sessionId, verify it matches the requested one so a copied or
   // stale manifest cannot resume the wrong native agent conversation. Legacy manifests without a
   // sessionId field are allowed through for backward compatibility.
   if (parsed?.sessionId !== undefined && sessionId && parsed.sessionId !== sessionId) {
@@ -1251,12 +1320,4 @@ export function readSessionManifest(path: string, sessionId: string): string {
   return id;
 }
 
-/** Thrown when a scenario asserts boundary behavior at a fidelity that can't enforce it (§5c category). */
-export class BoundaryError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "BoundaryError";
-  }
-}
-
-export { UnansweredError };
+export { UnansweredError, BoundaryError };

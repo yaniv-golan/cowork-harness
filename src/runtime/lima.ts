@@ -29,7 +29,7 @@ function stagedHostOf(baseline: PlatformBaseline): string {
 }
 
 /**
- * #62/#63: the Lima instance name is DERIVED from a hash of the full `limaConfig()` (mounts, image,
+ * The Lima instance name is DERIVED from a hash of the full `limaConfig()` (mounts, image,
  * provision, staged-binary version). Because the name encodes the config, a config change yields a
  * NEW instance name → `vmStatus()` is `Absent` → a fresh `create` with the current config, while the
  * old VM is simply orphaned. This makes stale-config reuse impossible BY CONSTRUCTION (no drift
@@ -53,7 +53,7 @@ export function instanceName(baseline: PlatformBaseline): string {
  * NOT live-derive it (brittle). `COWORK_VM_GATEWAY` is the override, mirroring the
  * existing `COWORK_VM_PROXY_PORT` env pattern. The SAME value MUST feed both the iptables
  * allow rule (applyGuestFirewall) and the proxy URL (microvm.ts), so callers thread the
- * result of this one helper into both. (#39)
+ * result of this one helper into both.
  */
 export function vmGatewayIp(): string {
   return process.env.COWORK_VM_GATEWAY ?? "192.168.5.2";
@@ -111,7 +111,7 @@ export function vmPrune(keep: string): string[] {
 export function limaConfig(stagedHost: string): string {
   // Lima mounts must be DIRECTORIES — mount the binary's parent dir, symlink in-guest.
   const stagedDir = dirname(stagedHost);
-  // #38: symlink from the ACTUAL staged basename, not a hard-coded "claude". The mount
+  // Symlink from the ACTUAL staged basename, not a hard-coded "claude". The mount
   // exposes /opt/cowork/agent/<basename(stagedHost)>; a staged binary named e.g.
   // claude-linux-arm64 would otherwise yield a dangling symlink (the `|| true` below
   // hides the failure until exec time). Link TARGET stays /usr/local/bin/claude (the
@@ -180,7 +180,7 @@ networks: []
 
 /**
  * Build the guest default-deny egress iptables script. Pure (no spawn) so the generated
- * rule — including the gateway IP (#39) — is unit-testable token-free. `gatewayIp` is the
+ * rule — including the gateway IP — is unit-testable token-free. `gatewayIp` is the
  * SAME value the caller uses for the proxy URL (threaded from vmGatewayIp()), so the
  * iptables allow rule and HTTP(S)_PROXY provably point at one address.
  */
@@ -206,7 +206,7 @@ export function guestFirewallScript(proxyGatewayPort: number, gatewayIp: string)
 /**
  * Apply a guest default-deny egress firewall, allowing only the host proxy + DNS.
  * `gatewayIp` defaults to vmGatewayIp() but is passed explicitly by callers so the
- * firewall rule and the proxy URL share one resolved value (#39).
+ * firewall rule and the proxy URL share one resolved value.
  */
 export function applyGuestFirewall(instance: string, proxyGatewayPort: number, gatewayIp: string = vmGatewayIp()): void {
   run(["shell", instance, "sh", "-c", guestFirewallScript(proxyGatewayPort, gatewayIp)]);

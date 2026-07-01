@@ -6,6 +6,7 @@ import type { PlatformBaseline, Scenario } from "../types.js";
 import type { LaunchPlan } from "../session.js";
 import { gitModeEnabled, gitCpFilter } from "../run/skill-files.js";
 import { containedRealPath } from "../boundary-paths.js";
+import { BoundaryError } from "../errors.js";
 
 /**
  * L0 — protocol-only runtime. Spawns the host `claude` with the stream-json
@@ -32,12 +33,12 @@ export function spawnProtocol(
     const dest = join(work, m.mountPath);
     mkdirSync(dirname(dest), { recursive: true });
     if (!containedRealPath(workReal, dirname(dest)))
-      throw new Error(`cowork-harness: staged mount path "${m.mountPath}" resolves outside the work directory (symlink escape)`);
+      throw new BoundaryError(`cowork-harness: staged mount path "${m.mountPath}" resolves outside the work directory (symlink escape)`);
     // preserve symlinks as-is during staging; do not copy out-of-tree content
-    // Phase C (gated): under COWORK_HARNESS_GITSET, deliver only the git-tracked set (Finding 5). Default-ON;
-    // opt out with COWORK_HARNESS_GITSET=0.
+    // prefer the filter precomputed at plan-build (same tracked snapshot used for the staged-set
+    // counts ⇒ delivered == counted). Fall back to a fresh gitCpFilter for non-plugin mounts.
     if (existsSync(m.hostPath)) {
-      const f = gitModeEnabled() ? gitCpFilter(m.hostPath) : null;
+      const f = m.stageFilter ?? (gitModeEnabled() ? gitCpFilter(m.hostPath) : null);
       cpSync(m.hostPath, dest, { recursive: true, dereference: false, ...(f ? { filter: f } : {}) });
     }
   }
@@ -50,10 +51,10 @@ export function spawnProtocol(
   //
   // L0 deliberately DIVERGES from the cowork-fidelity tiers in TWO ways, BY DESIGN — L0
   // keeps the real local config for OAuth and is not a cowork-fidelity tier:
-  //   (#34) It does NOT apply runtimeAuthEnv()'s OAuth/API-key drop. container/microvm/
+  //   - It does NOT apply runtimeAuthEnv()'s OAuth/API-key drop. container/microvm/
   //         host-loop drop the API key when an OAuth token is present (the L1/L2 fidelity
   //         behavior); L0 does not, because a fresh CLAUDE_CONFIG_DIR breaks local login.
-  //   (#12) It does NOT pass --plugin-dir. Declared plugins load via --settings/managed
+  //   - It does NOT pass --plugin-dir. Declared plugins load via --settings/managed
   //         config, NOT the cowork --plugin-dir cache layout. So L0 cannot validate
   //         plugin/skill loading the way Cowork stages it.
   // Both are intentional; use container/microvm for auth+plugin fidelity. The defect this
@@ -89,13 +90,13 @@ export function spawnProtocol(
     ...(plan.model ? ["--model", plan.model] : []),
     ...(plan.permissionMode ? ["--permission-mode", plan.permissionMode] : []),
     ...(plan.mcpConfig ? ["--mcp-config", plan.mcpConfig] : []),
-    // #19: thread the rendered system prompt append into L0, matching container/microvm/host-loop.
+    // Thread the rendered system prompt append into L0, matching container/microvm/host-loop.
     // The host `claude` CLI accepts --append-system-prompt just like the staged binary does, so L0
     // records can carry Cowork framing instead of running with no system prompt extension at all.
     ...(opts.systemPromptAppend ? ["--append-system-prompt", opts.systemPromptAppend] : []),
   ];
 
-  // #34/#12/#20: make the L0 divergence LOUD when the session declares plugins — L0 neither
+  // Make the L0 divergence LOUD when the session declares plugins — L0 neither
   // applies the Cowork auth-env drop nor passes --plugin-dir, so plugin fidelity is not what
   // a cowork tier would give. Mirrors the L0 "network tool ran at L0" warning in execute.ts.
   // this also sets l0PluginDivergence=true so execute.ts can surface a FAILING fidelity

@@ -17,7 +17,7 @@ class MockSession implements AgentSession {
 // A live-faithful AskUserQuestion gate arrives on TWO channels: (1) an assistant `tool_use` block named
 // AskUserQuestion (which populates toolLog), and (2) a can_use_tool control_request (the `decision` event the
 // decider answers). Tests MUST inject BOTH — injecting only the decision leaves toolLog empty and exercises a
-// different code path than production (see docs/internal/2026-06-27-h3-stall-after-gate-fix-plan.md §2.1, §6).
+// different code path than production.
 const gateToolUse = (toolUseId = "toolu_g"): AgentEvent => ({
   type: "tool_use",
   name: "AskUserQuestion",
@@ -38,8 +38,8 @@ const gateDecision = (toolUseId = "toolu_g"): AgentEvent => ({
 const decider = () => new ScriptedDecider([{ when_question: "founders", choose: "Use anonymized names" }]);
 const drive = (events: AgentEvent[]) => new Run(new MockSession(events), decider()).drive("go");
 
-describe("H2/H3 — stall-on-question detector", () => {
-  it("H3: answered a gate, did productive work BEFORE it, then re-asked in plain text → stalled", async () => {
+describe("stall-on-question detector", () => {
+  it("answered a gate, did productive work BEFORE it, then re-asked in plain text → stalled", async () => {
     const rec = await drive([
       { type: "tool_use", name: "Read", input: {} }, // productive work BEFORE the gate
       gateToolUse(),
@@ -66,7 +66,7 @@ describe("H2/H3 — stall-on-question detector", () => {
     expect(rec.stalledOnQuestion).toBeFalsy();
   });
 
-  it("H2 unchanged: no gate, no tools, ends on a question → stalled", async () => {
+  it("unchanged: no gate, no tools, ends on a question → stalled", async () => {
     const rec = await drive([
       { type: "assistant_text", text: "Which file did you mean?" },
       { type: "result", isError: false },
@@ -138,7 +138,7 @@ describe("H2/H3 — stall-on-question detector", () => {
     expect(rec.stalledOnQuestion).toBe(true);
   });
 
-  // Isolates the §5 safety claim: a PARENTED (subagent) tool entry after the gate, with no top-level tool
+  // Isolates the safety claim: a PARENTED (subagent) tool entry after the gate, with no top-level tool
   // after it, still raises productiveAfterGate (run.ts pushes to toolLog unconditionally) → NOT flagged.
   it("a parented (subagent) tool after the gate alone clears the flag → NOT stalled", async () => {
     const rec = await drive([

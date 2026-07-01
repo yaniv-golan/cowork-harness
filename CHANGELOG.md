@@ -6,6 +6,182 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.20.0] — 2026-07-01
+
+### Added
+
+- **`status.json` + `cowork-harness status <dir> [--follow]`.** Every run now writes a lightweight
+  `status.json` into its output directory from the moment `outDir` is created through completion
+  (`running` → `done`/`error`), with live tool/sub-agent counts. Two layers keep it from ever getting
+  stuck reporting a dead run as `"running"`: an exit-handler crash-safety net for an uncaught
+  throw/`SIGTERM`, and `updatedAt`-based staleness detection (both in `status` and `status --follow`) for
+  a hard `SIGKILL`/OOM-kill, which no exit handler can catch. `cowork-harness status <run-id | run-dir>`
+  reads it (one-shot, or `--follow` streaming one JSON line per change, bounded by a fail-loud
+  timeout/staleness check rather than a silent hang) so a script or driving agent can check whether a
+  background run is still alive WITHOUT `ps aux` — which only sees processes in the checker's own PID
+  namespace and is unreliable from inside a sandbox/container. The harness prints `[status] <outDir>` to
+  stderr as soon as it's known, so a caller doesn't need `--session-id` to discover the directory. See
+  `docs/run-status.md`.
+- **Gate provenance in run output.** `result.json` now carries a `gateProvenance` block (`total`,
+  `bySource` histogram, per-gate `{question, answeredBy, answer, model?}`) recording how each
+  AskUserQuestion gate was answered (scripted / decided(llm|external) / first-option / prompt). The
+  verdict footer prints a counts-only one-liner (e.g. `gates: 3 · 2 decided(llm), 1 scripted`) and
+  `trace --view questions` annotates each gate with its `by`/`model`. Informational — it never changes
+  the verdict; it makes the residual non-determinism legible so a reviewer sees which assertions sit
+  downstream of a decided (non-reproducible) gate. `bySource` keys are the raw decision sources, so e.g.
+  a replay-lane decision reads `replay`; the block itself is a live/partial-lane surface and is absent on
+  the replay lane (which reports reproducibility via `nonDeterministic: false`).
+- **`--compact` and `--demo` for shareable output** (`skill`/`run` — `chat` has its own flag parser and
+  isn't wired to either yet). `--compact` drops the
+  informational `[capability]` `::notice::` lines (the pre-flight, the "image omits…", and the "not used"
+  notes) — but the capability probe still runs and a real false-negative still **hard-fails**, unlike
+  `COWORK_SKIP_CAPABILITY_PROBE=1` which disables the safety net. `--demo` is the shareable preset:
+  `--compact` plus suppression of the `runs →` location header. Runs stay in the durable default location
+  (no temp redirect), so `scaffold`/`trace`/`inspect <run-id>` still resolve the run afterward; combined
+  with the `$HOME`→`~` collapse, demo output carries no host paths. Under `--compact`, `-V` tool inputs
+  also collapse the ephemeral cowork session root (`/sessions/<id>/mnt/` → `mnt/`) — display-only, so the
+  long in-container paths don't clutter shareable verbose output (`run.jsonl` keeps the true paths; the
+  L0/`protocol` tier uses host `work/` paths and is unaffected).
+- **`replay --assert-from <scenario.yaml>` / `--reassert` — token-free re-check against on-disk assertions.**
+  By default `replay` still evaluates the assertions **frozen in the cassette** (byte-deterministic, ignores the
+  working tree); a plain `replay` now prints a `::notice::` when a sibling scenario's `assert:` differs, instead
+  of silently using the frozen copy. The new flags opt into re-evaluating against the **on-disk** `assert:`
+  (+`expect_denied:`) — the "edit the assert, re-check without a paid re-record" loop. `--assert-from <file>`
+  takes an explicit sibling scenario; `--reassert` auto-discovers it (persisted `scenarioSource`, else a
+  name lookup) — no argument needed. The opt-in path is safe by
+  construction: it **hard-fails** on recording-shaping drift (`prompt`/`baseline`/`fidelity`/`answers`/`skills`/
+  `requires_capabilities`) and on skill-content staleness (it implies `--fail-on-skill-drift`, when a skill
+  fingerprint was recorded), warns on on-disk assert keys that can't be evaluated on replay (filesystem/gate/egress)
+  and on an edited `expect_denied`, and notes that the `session` (model/mounts/discovery) is **not** verified.
+- **Per-result `verdict` in the `--output-format json` envelope.** Each entry in `results[]` now carries
+  `verdict: { pass, exitCode, signals[], guards[] }` (a non-mutating projection of `computeVerdict`), so a consumer
+  can read each result's pass/fail **and why** (e.g. an all-green-assertions run that is `pass:false` purely on a
+  `stalled` signal) without recomputing. The top-level `ok` is derived from the same per-result verdicts.
+- **`chat` / `skill` / `run --verbose` live-output legibility pass.** Six small, no-new-dependency
+  improvements to the stderr renderer (`src/run/renderer.ts`) and `PromptDecider`'s TTY gate prompts
+  (`src/decide/decider.ts`) — informational-only, nothing here touches verdicts, `result.json`, or replay.
+  Tool call markers are now category-specific glyphs instead of a uniform `·`: `@` read (Read/Glob/Grep/…),
+  `#` mutate (Write/Edit/…), `!` shell (Bash/…), `?` network (WebFetch/…). Truncated `-V` tool-input
+  summaries now show how much was cut (`… [+N chars]` instead of a bare `…`). Each turn now ends with a
+  `── +N.Ns ──` separator carrying that turn's elapsed time (derived from the SDK's per-turn `result`
+  event, which the renderer previously dropped entirely). `tool_result` events — likewise previously
+  dropped — now render a one-line `→ …` / `✗ …` outcome under each top-level tool call. Nested sub-agent
+  dispatch lines (`--verbose`) now indent proportionally to dispatch depth instead of always rendering
+  flat. And permission / `AskUserQuestion` TTY prompts now render inside a `┌─/│/└─` box so they visually
+  stand out from the progress markers sharing the same stderr stream.
+
+### Changed
+
+- **`run` now accepts `--keep` as an explicit no-op** instead of erroring. `--keep` is meaningful on
+  `skill` (which otherwise discards runs); `run` always keeps runs, so passing `--keep` (muscle memory
+  from `skill`) prints a one-line note that it had no effect rather than the loud "unexpected argument"
+  reject. Exact-token only — a genuinely unexpected flag still rejects loudly.
+- **The default `--decider-llm` answering model now floats to the latest Sonnet** (the CLI alias `sonnet`)
+  instead of the id pinned in 0.19.0 (`claude-sonnet-4-5`), so the default keeps tracking Anthropic's
+  current Sonnet without a repo edit. `gateProvenance`/`result.json`'s `decisions[].model` is unaffected —
+  it now records the CONCRETE model the alias resolved to for that run (via `claude -p --output-format
+  json`'s `modelUsage`), never the literal string `"sonnet"`, so per-gate auditability is exactly as precise
+  as it was under the old pinned default; an envelope that doesn't resolve to exactly one concrete model
+  fails loud rather than recording an empty/ambiguous value. `--decider-model <id>` /
+  `COWORK_HARNESS_DECIDER_MODEL` still pin an exact id — the way to get byte-for-byte reproducible decider
+  behavior across runs (as much as a stochastic model allows), since the floating default can answer
+  differently over time as Anthropic ships new Sonnet releases.
+
+### Fixed
+
+- **A blocking `--on-unanswered prompt` wait now announces itself immediately.** When `skill` blocks at
+  the TTY for an unscripted question (the adaptive default when a human is attached), it prints a one-time
+  `::notice:: [input] waiting for an answer…` the instant it blocks — instead of only the ~30 s heartbeat —
+  so a recording/wrapper/automation context isn't left silently hung. The notice is per-run (a fresh
+  decider per scenario, so a `run dir/` batch announces each blocking scenario), and only for the real TTY
+  asker (the `chat` REPL's own prompt is left alone). For non-interactive use, `--on-unanswered fail`
+  remains the way to never block.
+- **Human output no longer prints absolute `$HOME` paths.** The `runs →` location line, the `--keep`
+  run-dir/outputs lines, the `scaffold` tip, the failure `→ full run:` line, and the failure branch's
+  own `→ outputs:` line now collapse a leading `$HOME` to `~`, so a screenshot / pasted log / bug report
+  doesn't leak your username and filesystem layout. Display-only (`~` re-expands in a shell); set
+  `COWORK_HARNESS_RUNS_DIR` for full neutralization.
+- **A plugin/skill mounted from an untracked git working copy no longer fails silently.** Staging delivers
+  the git-**tracked** set (the fidelity boundary — real Cowork installs from a repo and sees only committed
+  files), but an all-untracked source used to mount **EMPTY** with no signal: the agent reported "the skill
+  isn't installed" and did the work itself — a green-looking run where the skill never loaded. Now the filter
+  is **visible in both directions**: a would-be-empty plugin/skill mount **hard-fails** with a `BoundaryError`
+  (clean exit 3) naming the dir and the fix (`git add`, or `COWORK_HARNESS_GITSET=0`), and a partially-tracked
+  source emits a loud `::notice:: [stage]` listing the excluded untracked files. The staged-set count and the
+  delivered set now come from one `git ls-files` snapshot (no TOCTOU). The guard is correctly skipped on
+  `--resume` (which re-stages nothing) — which also fixes a latent resume false-fail where a since-removed
+  skill source would throw. The sibling symlink-escape staging errors are now `BoundaryError`s too (clean
+  exit 3 instead of a stack trace).
+- **`trace --view questions` no longer misattributes `by`/`model` after a denied gate.** It paired each
+  gate row with `summarizeGateProvenance(...).gates[i]` by array index — but that array **drops**
+  denied/mismatched gates (`mismatch→deny`), while the trace rows include every gate asked. One denied
+  gate in the middle of a run shifted every later row's `by`/`model` onto the wrong question, and the true
+  owner of that data got none. Now pairs against every question-kind decision (answered **or** denied,
+  interleaved tool-permission decisions excluded), which keeps the common case aligned; a denied gate is
+  correctly left unannotated instead of stealing the next answered gate's provenance. Informational display
+  only — never affected pass/fail.
+- **CLI `--help` drift.** The top-level `chat` summary now lists `protocol` (the command already accepted
+  it); `--version` documents its `-v` alias; and the `gates` / `answer` / `scaffold` usage strings now show
+  the `--output-format` flag they already parse.
+- **`sync --diff` no longer goes silent on a genuine Desktop version bump.** It previously diffed `next`
+  against `baselines/desktop-<NEW version>.json` — which doesn't exist yet on a real bump — so it always
+  printed `(no committed baseline yet)` instead of the `appVersion`/`agentVersion`/etc. field diff
+  `docs/maintenance.md` documents. It now diffs against `base` (the latest committed baseline `next` was
+  actually merged onto), which is the previous version on a bump and the exact same content on a
+  same-version re-sync. The diff header now names which baseline it's comparing against. `docs/
+  maintenance.md`'s example output and noise callout (`$comment` also moves alongside `capturedAt` on every
+  run) updated to match.
+
+### Documentation
+
+- **Doc-vs-code audit — corrected several doc claims that diverged from the implementation.**
+  - **Host-loop tier wording.** README, `docs/boundary.md`, `docs/chat.md`, and the skill `SKILL.md` said
+    the `hostloop`/`cowork` "agent loop runs host-side." It does not: the agent process runs **in the
+    container** like `container`, but native Bash/WebFetch are disabled and routed host-side via the
+    workspace SDK-MCP server (bash via `docker exec`, `web_fetch` via host `curl`). Only `protocol` runs
+    the agent on the host. Reworded to describe the **tool-routing** split, not an agent-loop split, in
+    README, `docs/boundary.md`, `docs/chat.md`, and `SKILL.md` — plus, in a 2026-07-01 follow-up, the three
+    files this pass missed: `docs/scenario.md`, `docs/fidelity-gaps.md`, and the skill's
+    `fidelity-and-answers.md` (and the misleading code comment in `src/runtime/hostloop.ts`).
+  - **Artifact replay.** The skill references (`scenario-schema.md`, `ci-recipe.md`) claimed a replay PR
+    gate "cannot verify an artifact's content." It can — `file_exists` / `user_visible_artifact` /
+    `artifact_json` evaluate on replay **when the cassette carries an `artifacts` manifest** (already
+    correct in `docs/cassette.md`). Fixed the two contradicting copies.
+  - **`boundary-check` scope.** Clarified it probes the **L1 Docker** path only (covers `container` and
+    `hostloop`, which share that sandbox); the `microvm` guest-iptables firewall is not exercised by it.
+  - **`microvm` isolation.** `docs/scenario.md` said microvm "shares the container sandbox"; it actually
+    enforces the same allowlist inside a real Lima/Apple-VZ VM via a guest firewall.
+  - **Egress mechanism.** `docs/boundary.md` cited `docker/compose.yml` as the live enforcer; the runtime
+    creates **per-run** Docker networks in `src/egress/sidecar.ts` and never invokes compose (now marked
+    reference-only).
+  - **Onboarding / DX.** Added a "Which path am I on?" box (replay / protocol / live tiers / invocation)
+    and a three-names note to the README quick start; surfaced `doctor` / `python3` / `vm init` in the
+    docs reading order; aligned `docs/discovery.md` with the worked examples; documented the previously
+    undocumented `COWORK_*` / `PYTHON` env vars; noted the latest baseline is `desktop-1.15962.1`
+    (runtime-identical to `…0`).
+  - **Command/assertion reference.** Documented `doctor --tier cowork`, the `prune [<runs-dir>]`
+    positional, the `sync --force` alias, the `artifact_json` bare-existence mode, the
+    `tool_result_not_contains` fail-loud on truncated evidence, and that `expect_denied` is scenario-level
+    shorthand (not an assertion key).
+
+### Parity
+
+- **Synced the platform baseline to Claude Desktop 1.17377.1** (`baselines/desktop-1.17377.1.json`). The
+  staged agent ELF moved **2.1.187 → 2.1.197**. `sync` re-derived egress/gates/mount/web_fetch facts — **no
+  unknown deltas**; only `asarFingerprint` moved (the mount-mode and web_fetch drift-guard regexes both
+  still matched) and `api.claude.ai` joined `network.allowDomains`. None of the 6 pinned GrowthBook gates
+  drifted (loop / dispatch-cap / web_fetch-routing / transport / plugin-sync / CLI-plugin-broker all held
+  their prior on/off state). Re-verified end-to-end — the live scenario suite (`protocol` + `container`
+  tiers) passes against the new baseline.
+- **Spot-checked the reconstructed system-prompt / host-loop content against the new asar** (this is
+  hand-authored, not something `sync` extracts): the `<application_details>` identity block — including the
+  load-bearing "is NOT Claude Code" correction — the host-loop `## Shell access` marker, subagent-append
+  gating, the `computer://` scheme, `request_cowork_directory`, and `coworkNativeFilePreview` are all
+  present and substantively unchanged since the `1.15200.0` reconstruction (only non-substantive
+  punctuation-level rewording). No re-authoring of `baselines/prompts/desktop-1.15200.0/` was needed.
+- **Doc-pin sweep to `desktop-1.17377.1` / agent `2.1.197`** across README, DESIGN, SPEC, the spawn-contract
+  doc, and the skill's reference docs.
+
 ## [0.19.0] — 2026-06-30
 
 ### Changed

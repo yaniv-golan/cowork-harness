@@ -8,13 +8,12 @@ import { renderFooter } from "../src/run/renderer.js";
 import type { RunResult } from "../src/types.js";
 import type { RenderPlan } from "../src/run/renderer.js";
 
-// Initiative-G regression pins (#45, #47, #48, #58). Token-free & spawn-free: #45/#47/#48 import the
-// source directly; #58 spawns the built CLI for usage-error exit codes (no agent spawn — the parser
-// fails before any run starts).
+// Regression pins. Token-free & spawn-free: most tests import the source directly; the usage-error
+// test spawns the built CLI for exit codes (no agent spawn — the parser fails before any run starts).
 
-// ── #45: runs/ root is resolved via COWORK_HARNESS_RUNS_DIR (else the absolute ~/.cowork-harness/runs
+// ── runs/ root is resolved via COWORK_HARNESS_RUNS_DIR (else the absolute ~/.cowork-harness/runs
 // default — see runs-root.test.ts), NOT cwd-relative — so `trace` resolves from any directory. ──
-describe("#45 — runsRoot resolves from another directory", () => {
+describe("runsRoot resolves from another directory", () => {
   const orig = process.cwd();
   const origEnv = process.env.COWORK_HARNESS_RUNS_DIR;
 
@@ -39,8 +38,8 @@ describe("#45 — runsRoot resolves from another directory", () => {
   });
 });
 
-// ── #47: malformed JSON lines are skipped but warned (not silently dropped) ──
-describe("#47 — eventsOf warns loudly on malformed JSON", () => {
+// ── malformed JSON lines are skipped but warned (not silently dropped) ──
+describe("eventsOf warns loudly on malformed JSON", () => {
   it("parses the good event and fires a ::warning:: for the bad line", () => {
     const dir = mkdtempSync(join(tmpdir(), "cwh-malformed-"));
     const f = join(dir, "events.jsonl");
@@ -73,9 +72,9 @@ describe("#47 — eventsOf warns loudly on malformed JSON", () => {
   });
 });
 
-// ── #48: answer hints partition scriptable (`first`) vs non-deterministic (`agent`/`external`/`human`) ──
-describe("#48 — renderAnswerHints separates scriptable from non-deterministic answers", () => {
-  const PLAN: RenderPlan = { live: false, progress: false, verbose: false, color: false };
+// ── answer hints partition scriptable (`first`) vs non-deterministic (`agent`/`external`/`human`) ──
+describe("renderAnswerHints separates scriptable from non-deterministic answers", () => {
+  const PLAN: RenderPlan = { live: false, progress: false, verbose: false, color: false, compact: false };
 
   function footerOutput(unanswered: RunResult["unanswered"]): string {
     const r: RunResult = {
@@ -113,11 +112,11 @@ describe("#48 — renderAnswerHints separates scriptable from non-deterministic 
   });
 });
 
-// ── #58: a trailing value-less value-taking flag is a usage error (exit 2), not a silent undefined ──
+// ── a trailing value-less value-taking flag is a usage error (exit 2), not a silent undefined ──
 const CLI = resolve("dist/cli.js");
 const canCli = existsSync(CLI);
 
-describe.skipIf(!canCli)("#58 — value-taking flags require a value (exit 2)", () => {
+describe.skipIf(!canCli)("value-taking flags require a value (exit 2)", () => {
   function run(args: string[]) {
     const cwd = mkdtempSync(join(tmpdir(), "cwh-cli58-"));
     const r = spawnSync("node", [CLI, ...args], { encoding: "utf8", cwd });

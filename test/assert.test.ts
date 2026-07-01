@@ -25,7 +25,7 @@ function ctx(over: Partial<AssertContext> = {}): AssertContext {
 }
 const pass = (r: ReturnType<typeof evaluate>) => r.every((x) => x.pass);
 
-describe("#24 — hostMatches normalizes both sides (case + trailing dot), keeps subdomain semantics", () => {
+describe("hostMatches normalizes both sides (case + trailing dot), keeps subdomain semantics", () => {
   it("matches a mixed-case needle against a lowercase host", () => {
     expect(hostMatches("api.anthropic.com", "API.Anthropic.COM")).toBe(true);
     expect(hostMatches("API.ANTHROPIC.COM", "api.anthropic.com")).toBe(true);
@@ -64,7 +64,7 @@ describe("transcript_matches — fuzzy content for stochastic prose", () => {
   });
 });
 
-describe("gate_answers_delivered (Part 3 — catches O7-class delivery failures)", () => {
+describe("gate_answers_delivered (catches delivery failures)", () => {
   it("passes when every answered gate's delivery was OBSERVED and non-error", () => {
     const c = ctx({
       gateDeliveries: [
@@ -74,7 +74,7 @@ describe("gate_answers_delivered (Part 3 — catches O7-class delivery failures)
     });
     expect(pass(evaluate([{ gate_answers_delivered: true }], c))).toBe(true);
   });
-  // #19: an UNOBSERVED delivery (delivered=null) is no longer "neutral" — on a finished run/cassette
+  // an UNOBSERVED delivery (delivered=null) is no longer "neutral" — on a finished run/cassette
   // it is absence of the required evidence, so gate_answers_delivered:true must FAIL loud, not pass.
   it("FAILS when a gate's delivery is unobserved (delivered=null) — no silent false-green", () => {
     const c = ctx({
@@ -87,7 +87,7 @@ describe("gate_answers_delivered (Part 3 — catches O7-class delivery failures)
     expect(pass(r)).toBe(false);
     expect(r[0].message).toContain("unobserved");
   });
-  it("FAILS when a gate's answer errored (the O7 q.map case)", () => {
+  it("FAILS when a gate's answer errored (the q.map case)", () => {
     const c = ctx({
       gateDeliveries: [{ question: "Proceed?", delivered: false, error: "undefined is not an object (evaluating 'q.map')" }],
     });
@@ -97,7 +97,7 @@ describe("gate_answers_delivered (Part 3 — catches O7-class delivery failures)
   });
 });
 
-describe("#5: multi-key assertions evaluate ALL keys (AND), not just the first", () => {
+describe("multi-key assertions evaluate ALL keys (AND), not just the first", () => {
   it("passes only when every present key passes", () => {
     const c = ctx({ transcript: "hello world", toolsCalled: new Set(["Bash"]) });
     expect(pass(evaluate([{ transcript_contains: "hello", tool_called: "Bash" }], c))).toBe(true);
@@ -108,7 +108,7 @@ describe("#5: multi-key assertions evaluate ALL keys (AND), not just the first",
   });
 });
 
-describe("subagent_dispatched matches agentType OR description (O1)", () => {
+describe("subagent_dispatched matches agentType OR description", () => {
   const subs = [
     { agentType: "unknown", declaredTools: [], toolsUsed: [], description: "TOP_DOWN market sizing for Cadence" },
     { agentType: "example-skills:market-sizing", declaredTools: [], toolsUsed: [], description: "coaching" },
@@ -181,11 +181,11 @@ describe("false-green catchers (deterministic)", () => {
   });
 });
 
-// Phase B — assertion evidence manifest: negative/absence assertions must fail loud when their
+// Assertion evidence manifest: negative/absence assertions must fail loud when their
 // verify-run evidence source is ABSENT (undefined in result.json), not pass vacuously. The flags
 // default to "present" (undefined) so the replay/live lanes — which never set them — keep greening
-// an empty-but-present set as proof-of-absence (guards against the P0-1 verify-run-scoping regression).
-describe("Phase B — evidence-missing flags fail negative assertions loud (absent ≠ empty)", () => {
+// an empty-but-present set as proof-of-absence (guards against the verify-run-scoping regression).
+describe("evidence-missing flags fail negative assertions loud (absent ≠ empty)", () => {
   it("tool_result_not_contains: FAILS when toolResultsMissing, but still greens on empty-but-present", () => {
     const r = evaluate([{ tool_result_not_contains: "secret" }], ctx({ toolResultsMissing: true }));
     expect(pass(r)).toBe(false);
@@ -253,7 +253,7 @@ describe("Phase B — evidence-missing flags fail negative assertions loud (abse
   });
 });
 
-// #5 — artifact_json: dotted-path resolver (three states) + operators; live-only (stripped on replay).
+// artifact_json: dotted-path resolver (three states) + operators; live-only (stripped on replay).
 import { resolveDotPath } from "../src/assert.js";
 import { collectArtifacts } from "../src/run/execute.js";
 
@@ -283,7 +283,7 @@ describe("resolveDotPath — three distinct states", () => {
   });
 });
 
-describe("artifact_json assertion (#5)", () => {
+describe("artifact_json assertion", () => {
   const doc = { me: { run_id: "r1", count: 3, note: null } };
   const root = artifactRoot(doc);
   const A = (artifact_json: any) => evaluate([{ artifact_json }], ctx({ workRoot: root }));
@@ -295,7 +295,7 @@ describe("artifact_json assertion (#5)", () => {
     expect(pass(A({ artifact: "outputs/state.json", path: "me.count", gt: 2 }))).toBe(true);
     expect(pass(A({ artifact: "outputs/state.json", path: "me.count", gt: 3 }))).toBe(false);
   });
-  it("in: set membership (stable for stochastic extraction) — #4", () => {
+  it("in: set membership (stable for stochastic extraction)", () => {
     expect(pass(A({ artifact: "outputs/state.json", path: "me.run_id", in: ["r1", "r2"] }))).toBe(true);
     expect(pass(A({ artifact: "outputs/state.json", path: "me.run_id", in: ["x", "y"] }))).toBe(false);
     expect(pass(A({ artifact: "outputs/state.json", path: "me.count", in: [1, 2, 3] }))).toBe(true);

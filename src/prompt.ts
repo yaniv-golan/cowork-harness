@@ -20,7 +20,7 @@ const BASELINES_DIR = join(fileURLToPath(new URL("..", import.meta.url)), "basel
 export interface RenderedPrompts {
   systemPromptAppend?: string;
   subagentAppend?: string;
-  /** #49: structured fidelity warnings collected during prompt rendering — surfaced in RunResult.fidelityWarnings. */
+  /** Structured fidelity warnings collected during prompt rendering — surfaced in RunResult.fidelityWarnings. */
   fidelityWarnings?: string[];
 }
 
@@ -54,13 +54,13 @@ export function renderPrompts(
     if (!rel) return undefined; // no asset configured — not a drift, just absent
     const p = join(BASELINES_DIR, rel);
     if (!existsSync(p)) {
-      // #35/#24: a baseline that REFERENCES a prompt asset which is absent must not silently degrade — the
+      // A baseline that REFERENCES a prompt asset which is absent must not silently degrade — the
       // run would proceed without key Cowork framing. By default this is a fatal error.
       // Set COWORK_HARNESS_ALLOW_MISSING_PROMPT=1 to skip and continue (still emits a warning).
       if (process.env.COWORK_HARNESS_ALLOW_MISSING_PROMPT === "1") {
         const msg = `[prompt] referenced asset not found: ${p} — running WITHOUT this prompt section (fidelity gap)`;
         warn(`::warning:: ${msg}\n`);
-        fidelityWarnings.push(msg); // #49: surface to JSON callers via RunResult.fidelityWarnings
+        fidelityWarnings.push(msg); // surface to JSON callers via RunResult.fidelityWarnings
         return undefined;
       }
       throw new Error(`cowork-harness: missing prompt asset: ${p}. Set COWORK_HARNESS_ALLOW_MISSING_PROMPT=1 to skip.`);

@@ -1,8 +1,10 @@
 import { writeSync } from "node:fs";
+import { tildeify } from "../io.js";
 import type { AgentEvent } from "../agent/session.js";
 import type { RunHooks } from "./run.js";
 import type { RunResult } from "../types.js";
 import { computeVerdict, type GuardReport, type GuardStatus } from "./verdict.js";
+import { formatGateProvenanceLine } from "./gate-provenance.js";
 
 /**
  * Shared output renderer. The seam is `RunHooks` (attached to `Run` via `executeScenario`): it
@@ -16,6 +18,7 @@ export interface RenderPlan {
   progress: boolean; // per-tool-call markers
   verbose: boolean; // + thinking, tool inputs, sub-agent tree
   color: boolean; // ANSI on stderr
+  compact: boolean; // --compact/--demo: collapse /sessions/<id>/mnt/ → mnt/ in rendered tool inputs
 }
 export interface Renderer extends RunHooks {
   dump(): string;
@@ -37,6 +40,27 @@ const red = (p: RenderPlan, s: string) => c(p, "31", s);
 const green = (p: RenderPlan, s: string) => c(p, "32", s);
 const bold = (p: RenderPlan, s: string) => c(p, "1", s);
 
+const TOOL_CATEGORY_MARKER: Record<string, string> = {
+  Read: "@",
+  Glob: "@",
+  Grep: "@",
+  LS: "@",
+  NotebookRead: "@",
+  Write: "#",
+  Edit: "#",
+  NotebookEdit: "#",
+  Bash: "!",
+  BashOutput: "!",
+  KillShell: "!",
+  WebFetch: "?",
+  WebSearch: "?",
+};
+/** One-char category prefix for a tool marker line — read (@) / mutate (#) / shell (!) / network (?) /
+ *  uncategorized (·, unchanged default). Purely cosmetic; does not affect what's counted or gated. */
+export function toolMarker(name: string): string {
+  return TOOL_CATEGORY_MARKER[name] ?? "·";
+}
+
 function truncate(text: string, verbose: boolean): string {
   if (verbose) return text;
   let t = text;
@@ -45,10 +69,19 @@ function truncate(text: string, verbose: boolean): string {
   if (t.length > TRUNC_CHARS) t = t.slice(0, TRUNC_CHARS) + " … (truncated)";
   return t;
 }
-function inputSummary(input: unknown): string {
+export function inputSummary(input: unknown, compact = false): string {
   try {
-    const s = JSON.stringify(input);
-    return s.length > 80 ? s.slice(0, 80) + "…" : s;
+    let s = JSON.stringify(input);
+    // under --compact, collapse the ephemeral cowork session-root prefix so `-V` tool inputs are
+    // shareable. Run BEFORE the 80-char slice so a `/mnt/` boundary past char 80 still collapses.
+    // Display-only — the agent's real args (and run.jsonl) are untouched. Covers all cowork-tier
+    // session-id shapes (`local_*`, pinned `sess-*`); the L0/protocol tier uses host `work/` paths, so
+    // this correctly no-ops there.
+    if (compact) s = s.replace(/\/sessions\/[^/]+\/mnt\//g, "mnt/");
+    if (s.length <= 80) return s;
+    // tell the reader HOW MUCH was cut — a bare "…" left you guessing whether you were seeing 90 or
+    // 9000 chars of input.
+    return `${s.slice(0, 80)}… [+${s.length - 80} chars]`;
   } catch {
     return "";
   }
@@ -65,7 +98,16 @@ export function makeRenderer(plan: RenderPlan, write: Sink = stderr): Renderer {
   const transcript: string[] = [];
   let tools = 0;
   let subagents = 0;
+  // toolUseId -> true for TOP-LEVEL tool calls only, so a tool_result can look up whether its
+  // originating tool_use was ever rendered (nested calls are never shown, so their results aren't
+  // either — same gate `tool_use` itself already applies). Deleted on first matching result: one
+  // result per call, so this can't grow unbounded across a long chat session.
+  const topLevelToolCalls = new Set<string>();
+  // subagent's own toolUseId -> nesting depth (1-based). Read when a NEW subagent_dispatch names a
+  // parentToolUseId, to indent proportionally to how deep the dispatch tree goes.
+  const agentDepth = new Map<string, number>();
   let last = Date.now();
+  let turnStart = Date.now(); // reset on each "result" — drives the turn-boundary separator's elapsed time
   return {
     onEvent(e: AgentEvent) {
       last = Date.now();
@@ -83,19 +125,44 @@ export function makeRenderer(plan: RenderPlan, write: Sink = stderr): Renderer {
         case "tool_use":
           if (!e.parentToolUseId) {
             tools++;
-            if (plan.progress) write(`  ${dim(plan, "· " + e.name + (plan.verbose ? " " + inputSummary(e.input) : ""))}\n`);
+            if (e.toolUseId) topLevelToolCalls.add(e.toolUseId);
+            if (plan.progress)
+              write(
+                `  ${dim(plan, toolMarker(e.name) + " " + e.name + (plan.verbose ? " " + inputSummary(e.input, plan.compact) : ""))}\n`,
+              );
           }
           break;
-        case "subagent_dispatch":
-          subagents++;
-          if (plan.verbose) write(`  ${dim(plan, "└ sub-agent: " + e.agentType + " [" + e.declaredTools.join(",") + "]")}\n`);
+        case "tool_result": {
+          if (!e.toolUseId || !topLevelToolCalls.has(e.toolUseId)) break; // nested or unpaired — not rendered
+          topLevelToolCalls.delete(e.toolUseId);
+          if (plan.progress) {
+            const head = e.text.split("\n")[0].slice(0, 80);
+            write(`    ${e.isError ? red(plan, "✗ " + head) : dim(plan, "→ " + head)}\n`);
+          }
           break;
+        }
+        case "subagent_dispatch": {
+          subagents++;
+          const depth = e.parentToolUseId ? (agentDepth.get(e.parentToolUseId) ?? 0) + 1 : 1;
+          agentDepth.set(e.toolUseId, depth);
+          if (plan.verbose)
+            write(`  ${"  ".repeat(depth - 1)}${dim(plan, "└ sub-agent: " + e.agentType + " [" + e.declaredTools.join(",") + "]")}\n`);
+          break;
+        }
         case "thinking":
           if (plan.verbose && e.text.trim()) write(`  ${dim(plan, "(thinking…)")}\n`);
           break;
         case "error":
           write(`  ${red(plan, "! " + e.source + ": " + e.message)}\n`);
           break;
+        case "result": {
+          if (plan.live) {
+            const elapsed = ((Date.now() - turnStart) / 1000).toFixed(1);
+            write(`${dim(plan, `── +${elapsed}s ──`)}\n`);
+          }
+          turnStart = Date.now();
+          break;
+        }
       }
     },
     dump() {
@@ -142,33 +209,35 @@ export function renderFooter(
   opts: { durationMs?: number; renderer?: Renderer; keep?: boolean; write?: Sink; lane?: "live" | "replay"; scaffoldTip?: boolean } = {},
 ): void {
   const write = opts.write ?? stderr;
-  // SEAM B: pass/fail and the failure reasons come from the SAME verdict the exit code / envelope use.
+  // pass/fail and the failure reasons come from the SAME verdict the exit code / envelope use.
   const verdict = computeVerdict(r, opts.lane ?? "live");
   const passed = verdict.pass;
   const failSignals = verdict.signals.filter((s) => s.severity === "fail");
   const sum = opts.renderer?.summary() ?? { tools: 0, subagents: 0 };
   const dur = opts.durationMs != null ? ` · ${(opts.durationMs / 1000).toFixed(1)}s` : "";
-  // H2: an LLM-decided run is NOT reproducible — never let a green read as a deterministic pass.
+  // an LLM-decided run is NOT reproducible — never let a green read as a deterministic pass.
   const nd = r.nonDeterministic ? " " + red(plan, "⚠ non-deterministic (LLM-decided)") : "";
   const meta = `[${r.fidelity}] · ${sum.tools} tools${sum.subagents ? ` · ${sum.subagents} sub-agents` : ""}${dur}`;
   if (passed) {
-    write(`${green(plan, "✓ " + r.result)} ${meta}${nd}${opts.keep ? " · " + r.outDir : ""}\n`);
-    if (opts.keep && r.outputsDir) write(`   ${dim(plan, "→ outputs: " + r.outputsDir)}\n`);
-    renderGuards(verdict.guards, plan, write); // 6h: make the safety nets that ran an enumerable, visible fact
+    write(`${green(plan, "✓ " + r.result)} ${meta}${nd}${opts.keep ? " · " + tildeify(r.outDir) : ""}\n`);
+    if (opts.keep && r.outputsDir) write(`   ${dim(plan, "→ outputs: " + tildeify(r.outputsDir))}\n`);
+    renderGuards(verdict.guards, plan, write); // make the safety nets that ran an enumerable, visible fact
+    renderGateProvenance(r, plan, write);
     renderAnswerHints(r, plan, write);
-    // Q2: scaffold tip — only for skill (exploratory) runs, not automated `run` scenarios.
+    // scaffold tip — only for skill (exploratory) runs, not automated `run` scenarios.
     // Callers opt in via scaffoldTip: true; run command omits it (you already have a scenario YAML).
     if (opts.scaffoldTip && opts.lane !== "replay" && r.outDir) {
-      write(`   ${dim(plan, "Tip: scaffold " + r.outDir + " → turn this run into a starter scenario YAML")}\n`);
+      write(`   ${dim(plan, "Tip: scaffold " + tildeify(r.outDir) + " → turn this run into a starter scenario YAML")}\n`);
     }
     return;
   }
-  // Fix 5/6g: a tail-end transport drop renders distinctly from a generic error/FAIL, so a flaky-connection
+  // a tail-end transport drop renders distinctly from a generic error/FAIL, so a flaky-connection
   // run doesn't read as a skill defect.
   const errLabel = r.result === "error" ? (r.resultErrorKind === "transport" ? "transport-error" : "error") : "FAIL";
   write(`${red(plan, "✗ " + errLabel)} ${meta}\n`);
   for (const s of failSignals) write(`   ${red(plan, "✗ " + s.message)}\n`);
-  renderGuards(verdict.guards, plan, write); // 6h: show which guards ran even on a fail (no silent guards)
+  renderGuards(verdict.guards, plan, write); // show which guards ran even on a fail (no silent guards)
+  renderGateProvenance(r, plan, write);
   renderAnswerHints(r, plan, write);
   const t = opts.renderer?.dump().trim();
   if (t) {
@@ -179,8 +248,8 @@ export function renderFooter(
         .map((l) => "   " + l)
         .join("\n") + "\n",
     );
-    write(`   ${dim(plan, "→ full run: " + r.outDir + "/run.jsonl")}\n`);
-    if (r.outputsDir) write(`   ${dim(plan, "→ outputs:  " + r.outputsDir)}\n`);
+    write(`   ${dim(plan, "→ full run: " + tildeify(r.outDir) + "/run.jsonl")}\n`);
+    if (r.outputsDir) write(`   ${dim(plan, "→ outputs:  " + tildeify(r.outputsDir))}\n`);
   }
 }
 
@@ -191,7 +260,7 @@ export function renderFooter(
  * lines off the footer, paste them back as `--answer …` for a deterministic re-run. Scripted answers
  * are not echoed (they're already in the command). No-op when nothing was auto-answered.
  */
-// 6h: the "guards active this run" roster. ✓ ran clean · ✗ fired · — N/A this lane/tier · ? unverified.
+// the "guards active this run" roster. ✓ ran clean · ✗ fired · — N/A this lane/tier · ? unverified.
 // The load-bearing rule (no silent-false-green): a guard that didn't run renders — / ?, never ✓.
 function renderGuards(guards: GuardReport[], plan: RenderPlan, write: Sink): void {
   if (!guards.length) return;
@@ -199,10 +268,18 @@ function renderGuards(guards: GuardReport[], plan: RenderPlan, write: Sink): voi
   write(`   ${dim(plan, "guards: " + guards.map((g) => `${g.name} ${sym(g.status)}`).join("  "))}\n`);
 }
 
+// One-line gate-provenance summary ("gates: 3 · 2 decided(llm), 1 scripted"). Counts only — the
+// per-gate answers live in the scrubbed result.json, never on stderr. No-op when the run had no gates.
+function renderGateProvenance(r: RunResult, plan: RenderPlan, write: Sink): void {
+  if (!r.gateProvenance) return;
+  const line = formatGateProvenanceLine(r.gateProvenance);
+  if (line) write(`   ${dim(plan, line)}\n`);
+}
+
 function renderAnswerHints(r: RunResult, plan: RenderPlan, write: Sink): void {
   const u = r.unanswered ?? [];
   if (!u.length) return;
-  // #48: partition by the REAL `by:` vocabulary (decider.ts:25 — scripted|cowork|strict|human|agent|
+  // partition by the REAL `by:` vocabulary (decider.ts:25 — scripted|cowork|strict|human|agent|
   // external|first|fail|replay; `scripted` answers never reach `unanswered`, see run.ts:256). The old
   // binary split (agent vs everything-else→"scripted") mislabeled `external`/`human` answers — those are
   // marked nonDeterministic by execute.ts (`by` ∈ agent|external|human) and are NOT reproducible via
@@ -215,7 +292,7 @@ function renderAnswerHints(r: RunResult, plan: RenderPlan, write: Sink): void {
     for (const a of scriptable) write(`   ${dim(plan, `--answer ${JSON.stringify(`${a.question}=${a.chosen}`)}`)}\n`);
   }
   if (nondet.length) {
-    // H2: these answers are NON-deterministic (LLM/external/human-decided) — --answer does NOT reproduce
+    // these answers are NON-deterministic (LLM/external/human-decided) — --answer does NOT reproduce
     // them. Surface what was chosen and nudge toward pinning a deterministic answer for reproducibility.
     write(
       `   ${dim(plan, `${nondet.length} question(s) answered non-deterministically (LLM/external/human) — not reproducible via --answer; pin for reproducibility:`)}\n`,

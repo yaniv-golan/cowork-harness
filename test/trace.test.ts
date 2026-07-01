@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { buildTrace, formatTrace, buildGateTrace, resolveEventsFile } from "../src/run/trace-view.js";
+import { buildTrace, formatTrace, buildGateTrace, formatGateTrace, resolveEventsFile } from "../src/run/trace-view.js";
 
 function eventsFile(lines: unknown[], controlOut?: unknown[]): string {
   const dir = mkdtempSync(join(tmpdir(), "cwh-trace-"));
@@ -12,8 +12,8 @@ function eventsFile(lines: unknown[], controlOut?: unknown[]): string {
   return f;
 }
 
-// E — resolveEventsFile: exact match preferred over fragment, ambiguous fragment warns loudly
-describe("trace — E resolveEventsFile exact vs fragment resolution", () => {
+// resolveEventsFile: exact match preferred over fragment, ambiguous fragment warns loudly
+describe("trace — resolveEventsFile exact vs fragment resolution", () => {
   // resolveEventsFile resolves under runsRoot(); we point COWORK_HARNESS_RUNS_DIR at a temp runs/ tree
   // (the runs root is now an absolute path, not cwd-relative) and restore the env after each test.
   const origEnv = process.env.COWORK_HARNESS_RUNS_DIR;
@@ -92,7 +92,7 @@ const userResult = (toolUseId: string, isError: boolean, text: string) => ({
   message: { content: [{ type: "tool_result", tool_use_id: toolUseId, is_error: isError, content: text }] },
 });
 
-describe("trace view (item 8)", () => {
+describe("trace view", () => {
   it("dedupes the Agent dispatch (one dispatch row, not also a tool row) and excludes TaskCreate todos", () => {
     const f = eventsFile([
       { type: "system", subtype: "init", tools: ["Agent", "Task"], mcp_servers: [] },
@@ -124,7 +124,7 @@ describe("trace view (item 8)", () => {
     expect(rows.find((r) => r.kind === "text")).toBeUndefined();
   });
 
-  it("Part 4: a tool row carries its result STATUS (ok/error) from the paired tool_result", () => {
+  it("a tool row carries its result STATUS (ok/error) from the paired tool_result", () => {
     const f = eventsFile([
       assistant([{ type: "tool_use", id: "toolu_1", name: "Bash", input: { command: "x" } }]),
       userResult("toolu_1", true, "boom: permission denied"),
@@ -138,7 +138,7 @@ describe("trace view (item 8)", () => {
     expect(formatTrace(buildTrace(f))).toContain("✗ error: boom");
   });
 
-  it("Part 4: --gates pairs question → injected answer → delivered result (bridging UUID↔toolu_ keys)", () => {
+  it("--gates pairs question → injected answer → delivered result (bridging UUID↔toolu_ keys)", () => {
     const f = eventsFile(
       [
         // gate: control_request carries BOTH the UUID request_id AND the toolu_ tool_use_id
@@ -172,7 +172,7 @@ describe("trace view (item 8)", () => {
     expect(gates[0]).toMatchObject({ question: "Proceed?", injectedAnswer: '{"Proceed?":"Yes"}', delivered: "ok" });
   });
 
-  it("Part 4: --gates flags an O7-style delivery failure (errored tool_result)", () => {
+  it("--gates flags a delivery failure (errored tool_result)", () => {
     const f = eventsFile([
       {
         type: "control_request",
@@ -193,9 +193,9 @@ describe("trace view (item 8)", () => {
   });
 });
 
-// #6 — trace --dispatches: the sub-agent dispatch tree + the real total (read off dispatch_count_max).
+// trace --dispatches: the sub-agent dispatch tree + the real total (read off dispatch_count_max).
 import { buildDispatchTree, formatDispatchTree } from "../src/run/trace-view.js";
-describe("trace --dispatches (#6 — dispatch tree + total)", () => {
+describe("trace --dispatches (dispatch tree + total)", () => {
   it("builds the tree with depth from parentToolUseId nesting and a total", () => {
     const f = eventsFile([
       {
@@ -236,10 +236,10 @@ describe("trace --dispatches (#6 — dispatch tree + total)", () => {
   });
 });
 
-// #8 — assert --list is generated from the Zod Assertion schema; every key MUST carry a description so
+// assertions --list is generated from the Zod Assertion schema; every key MUST carry a description so
 // the list can never drift (and the published JSON schema is enriched).
 import { Assertion } from "../src/types.js";
-describe("assert --list (#8 — every Assertion key has a description, drift guard)", () => {
+describe("assertions --list (every Assertion key has a description, drift guard)", () => {
   it("no Assertion field is missing its .describe()", () => {
     const shape = Assertion.shape as Record<string, { description?: string }>;
     const missing = Object.keys(shape).filter((k) => !shape[k].description);
@@ -398,5 +398,142 @@ describe("scaffold --from-run (SCAFFOLD-FROM-RUN)", () => {
     // ...but the pre-failure artifacts and the error result must NOT become asserts.
     expect((parsed.assert ?? []).some((a: any) => a.file_exists)).toBe(false);
     expect((parsed.assert ?? []).some((a: any) => a.result)).toBe(false);
+  });
+});
+
+describe("buildGateTrace — provenance annotation", () => {
+  const gate = (requestId: string, toolUseId: string, question: string, label: string) => ({
+    type: "control_request",
+    request_id: requestId,
+    request: {
+      subtype: "can_use_tool",
+      tool_name: "AskUserQuestion",
+      tool_use_id: toolUseId,
+      input: { questions: [{ question, options: [{ label }] }] },
+    },
+  });
+
+  it("annotates each gate row with by/model from the sibling result.json", () => {
+    const f = eventsFile([
+      gate("uuid-1", "toolu_g", "Stage?", "Series B+"),
+      userResult("toolu_g", false, "delivered"),
+      { type: "result", is_error: false },
+    ]);
+    writeFileSync(
+      join(f, "..", "result.json"),
+      JSON.stringify({
+        decisions: [
+          {
+            kind: "question",
+            name: "AskUserQuestion",
+            decision: "answered",
+            by: "llm",
+            model: "claude-sonnet-4-5",
+            detail: { "Stage?": "Series B+" },
+          },
+        ],
+      }),
+    );
+    const rows = buildGateTrace(f);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ question: "Stage?", answeredBy: "llm", model: "claude-sonnet-4-5" });
+    expect(formatGateTrace(rows)).toContain("by: decided(llm) (claude-sonnet-4-5)");
+  });
+
+  it("leaves rows unannotated when there is no sibling result.json", () => {
+    const f = eventsFile([
+      gate("uuid-2", "toolu_h", "Proceed?", "Yes"),
+      userResult("toolu_h", false, "delivered"),
+      { type: "result", is_error: false },
+    ]);
+    const rows = buildGateTrace(f);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].answeredBy).toBeUndefined();
+  });
+
+  it("pairs provenance to the correct gate by order across multiple gates", () => {
+    const f = eventsFile([
+      gate("uuid-a", "toolu_a", "First?", "1"),
+      userResult("toolu_a", false, "ok"),
+      gate("uuid-b", "toolu_b", "Second?", "2"),
+      userResult("toolu_b", false, "ok"),
+      { type: "result", is_error: false },
+    ]);
+    writeFileSync(
+      join(f, "..", "result.json"),
+      JSON.stringify({
+        decisions: [
+          { kind: "question", name: "AskUserQuestion", decision: "answered", by: "scripted", detail: { "First?": "1" } },
+          { kind: "question", name: "AskUserQuestion", decision: "answered", by: "llm", model: "m", detail: { "Second?": "2" } },
+        ],
+      }),
+    );
+    const rows = buildGateTrace(f);
+    expect(rows.map((r) => [r.question, r.answeredBy])).toEqual([
+      ["First?", "scripted"],
+      ["Second?", "llm"],
+    ]);
+  });
+
+  it("does not misattribute provenance when a middle gate is denied (mismatch→deny)", () => {
+    // decisions[] has only 2 answered entries for 3 asked gates — the middle one was denied and
+    // carries no `by`/`model` a reader should ever see. Positional pairing against the FILTERED
+    // (answered-only) gate list would shift every row after the denial by one index.
+    const f = eventsFile([
+      gate("uuid-c", "toolu_c", "First?", "1"),
+      userResult("toolu_c", false, "ok"),
+      gate("uuid-d", "toolu_d", "Second?", "2"),
+      userResult("toolu_d", true, "denied"),
+      gate("uuid-e", "toolu_e", "Third?", "3"),
+      userResult("toolu_e", false, "ok"),
+      { type: "result", is_error: false },
+    ]);
+    writeFileSync(
+      join(f, "..", "result.json"),
+      JSON.stringify({
+        decisions: [
+          { kind: "question", name: "AskUserQuestion", decision: "answered", by: "scripted", detail: { "First?": "1" } },
+          { kind: "question", name: "AskUserQuestion", decision: "mismatch→deny", by: "llm" },
+          { kind: "question", name: "AskUserQuestion", decision: "answered", by: "llm", model: "m", detail: { "Third?": "3" } },
+        ],
+      }),
+    );
+    const rows = buildGateTrace(f);
+    expect(rows.map((r) => [r.question, r.answeredBy, r.model])).toEqual([
+      ["First?", "scripted", undefined],
+      ["Second?", undefined, undefined],
+      ["Third?", "llm", "m"],
+    ]);
+  });
+
+  it("does not misattribute provenance when tool-permission decisions are interleaved with question decisions", () => {
+    // A real run's decisions[] is one shared log — Bash/Read permission decisions (kind: "tool") land
+    // in the SAME array as AskUserQuestion gates (kind: "question"), interleaved in call order. Only
+    // question-kind entries should ever pair with a gate row; a positional pairing against the RAW
+    // (unfiltered-by-kind) decisions array would misattribute both rows here even though neither gate
+    // was denied.
+    const f = eventsFile([
+      gate("uuid-f", "toolu_f", "First?", "1"),
+      userResult("toolu_f", false, "ok"),
+      gate("uuid-g", "toolu_g", "Second?", "2"),
+      userResult("toolu_g", false, "ok"),
+      { type: "result", is_error: false },
+    ]);
+    writeFileSync(
+      join(f, "..", "result.json"),
+      JSON.stringify({
+        decisions: [
+          { kind: "tool", name: "Bash", decision: "allow", by: "cowork" },
+          { kind: "question", name: "AskUserQuestion", decision: "answered", by: "scripted", detail: { "First?": "1" } },
+          { kind: "tool", name: "Read", decision: "allow", by: "cowork" },
+          { kind: "question", name: "AskUserQuestion", decision: "answered", by: "llm", model: "m", detail: { "Second?": "2" } },
+        ],
+      }),
+    );
+    const rows = buildGateTrace(f);
+    expect(rows.map((r) => [r.question, r.answeredBy, r.model])).toEqual([
+      ["First?", "scripted", undefined],
+      ["Second?", "llm", "m"],
+    ]);
   });
 });

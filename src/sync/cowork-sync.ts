@@ -11,7 +11,7 @@ import { gunzipSync } from "node:zlib";
  * review the diff, commit. Fields the extractor can't resolve are flagged so
  * parity rot becomes a visible diff, not silent drift.
  *
- * macOS-only today: `sync()` throws a clear error on other platforms (#42 guard). Windows/Linux
+ * macOS-only today: `sync()` throws a clear error on other platforms. Windows/Linux
  * Desktop paths are TODO branches (needs those install layouts to verify).
  */
 const SUPPORT = join(homedir(), "Library/Application Support/Claude");
@@ -83,9 +83,9 @@ export function decodeFcacheGates(path = join(SUPPORT, "fcache")): Record<string
 }
 
 export function sync(): SyncResult {
-  // #42 — defensive platform guard. The paths above (SUPPORT/ASAR/Info.plist) are macOS-only; on
+  // defensive platform guard. The paths above (SUPPORT/ASAR/Info.plist) are macOS-only; on
   // Windows/Linux they don't exist, so the extractor would return EMPTY version/allowlist/gate fields
-  // and (without #37/#41's write guards) could persist a garbage baseline. Fail LOUD instead of
+  // and (without the write guards) could persist a garbage baseline. Fail LOUD instead of
   // silently returning a hollow result. Full Windows/Linux support needs those Desktop install layouts
   // (a separate, non-binary task — see webfetch/maintenance docs).
   if (process.platform !== "darwin") {
@@ -116,7 +116,7 @@ export function sync(): SyncResult {
   const { domains, fingerprint } = extractFromAsar(unknown);
   const allowDomains = dedupe([...domains, ...userAllow]);
 
-  // 5. GrowthBook gate states, decoded from the live fcache (#39 — no longer a manual step).
+  // 5. GrowthBook gate states, decoded from the live fcache (no longer a manual step).
   const gates = decodeFcacheGates();
   if (!gates) {
     flag(unknown, "gates: fcache missing/unreadable — provenance.gates NOT re-synced");
@@ -157,7 +157,7 @@ function extractFromAsar(unknown: string[]): { domains: string[]; fingerprint: s
         unknown,
         "egress.allowDomains: the domain regex in extractFromAsar() matched nothing — the asar layout moved, so the synced allowlist is EMPTY. Fix the regex (maintainer), or hand-edit network.allowDomains in the written baseline (bridge)",
       );
-    // #9-A drift guard: mountLayout modes are hand-authored (not synced) — verify the binary-verified
+    // drift guard: mountLayout modes are hand-authored (not synced) — verify the binary-verified
     // mode FACTS still hold so a policy change is a loud flag, not silent baseline rot.
     for (const f of checkMountModeFacts(bundle)) flag(unknown, f);
     for (const f of checkWebFetchFacts(bundle)) flag(unknown, f);
@@ -175,7 +175,7 @@ function extractFromAsar(unknown: string[]): { domains: string[]; fingerprint: s
 }
 
 /**
- * #9-A drift guard. The baseline's `mountLayout.mounts[].mode` is HAND-AUTHORED — `sync` does not
+ * drift guard. The baseline's `mountLayout.mounts[].mode` is HAND-AUTHORED — `sync` does not
  * extract mountLayout — so a Cowork mount-policy change would silently rot the baseline. This verifies
  * the binary-verified mode FACTS still hold in the asar; any miss is flagged loudly (re-derive by hand,
  * see the baselines' `$comment_modes`). Pure over the bundle string → token-free unit-testable.

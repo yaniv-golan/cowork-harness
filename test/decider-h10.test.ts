@@ -15,9 +15,9 @@ import {
 import type { DecisionRequest } from "../src/agent/session.js";
 import type { AnswerRule } from "../src/types.js";
 
-// H10 fix: index protocol (model replies a number; code maps to the canonical label), the `label: description`
+// Index protocol (model replies a number; code maps to the canonical label), the `label: description`
 // echo backstop (label ⊑ reply at a `:` boundary, longest-wins), the scripted author-prefix (drift-tolerant
-// anchor), multi-select on the LLM path, and the OTHER-vs-echo ordering. Evidence: zigi/zigi2/zigi3 runs.
+// anchor), multi-select on the LLM path, and the OTHER-vs-echo ordering.
 
 const ctx = (t = ""): RunContext => ({ task: "", transcript: () => t, toolLog: () => [], runId: "x" });
 const ask = (q: string, opts: string[], multiSelect = false): DecisionRequest => ({
@@ -25,7 +25,7 @@ const ask = (q: string, opts: string[], multiSelect = false): DecisionRequest =>
   kind: "question",
   questions: [{ question: q, options: opts.map((label) => ({ label })), multiSelect }],
 });
-const llm = (reply: string) => new LlmDecider(async () => reply);
+const llm = (text: string) => new LlmDecider(async () => ({ text, model: "test-model" }));
 const answersOf = async (d: any, req: DecisionRequest) => ((await d.decide(req, ctx())) as any).response.answers;
 
 const SCRIPTED = ":(,—–"; // mirror SCRIPTED_SEPARATORS (module-private)
@@ -87,7 +87,7 @@ describe("suffixCanonMatch — (Recommended) canonicalization, uniqueness-guarde
   });
 });
 
-describe("parseIndexReply — bare digits, range-guarded (#50)", () => {
+describe("parseIndexReply — bare digits, range-guarded", () => {
   it("in-range bare digit → index", () => expect(parseIndexReply("2", 3)).toBe(2));
   it("out-of-range bare digit → null (a numeric LABEL falls through to label match)", () => expect(parseIndexReply("2024", 3)).toBe(null));
   it("non-bare-digit forms are not indices", () => {

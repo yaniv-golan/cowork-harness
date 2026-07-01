@@ -31,7 +31,7 @@ export function spawnContainer(
   const configGuest = `${sessionRoot}/${baseline.spawn?.configDirInGuest ?? "mnt/.claude"}`;
   const AGENT_IN = "/usr/local/bin/claude";
   // Name by the per-invocation runToken (NOT sessionId) so a --resume after a failed run doesn't collide
-  // on a leftover same-named container (F1), and so Ctrl-C can force-remove the container by name (the
+  // on a leftover same-named container, and so Ctrl-C can force-remove the container by name (the
   // anonymous `docker run --rm` client can't stop the daemon-managed container — orphan + network leak).
   const containerName = `cowork-ct-${opts.runToken ?? sessionId}`;
 
@@ -45,7 +45,7 @@ export function spawnContainer(
 
   const agentHost = resolveAgentBinary(baseline);
   const image = process.env.COWORK_AGENT_IMAGE ?? "cowork-agent-base:2";
-  // #43: explicit opts take priority over process.env (concurrency-safe); env var is the
+  // Explicit opts take priority over process.env (concurrency-safe); env var is the
   // manual/dev fallback for direct `docker run` invocations that bypass the sidecar.
   const proxyHost = opts.egressProxy ?? process.env.COWORK_EGRESS_PROXY ?? "http://egress-proxy:8080";
   const network = opts.dockerNetwork ?? process.env.COWORK_DOCKER_NETWORK ?? "cowork-net";
@@ -77,7 +77,7 @@ export function spawnContainer(
     image,
     env,
     agentArgv: claudeArgs,
-    readOnlyMountPaths: plan.mounts.filter((m) => m.mode === "r").map((m) => m.mountPath), // #23: enforce mode:r as :ro binds
+    readOnlyMountPaths: plan.mounts.filter((m) => m.mode === "r").map((m) => m.mountPath), // enforce mode:r as :ro binds
   });
 
   const child = spawn(runner, dockerArgs, { stdio: ["pipe", "pipe", "pipe"] });

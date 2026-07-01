@@ -1,6 +1,6 @@
 # Fidelity tiers & answer paths
 
-Self-contained reference. Tracks `cowork-harness 0.19.0` (baseline `desktop-1.15962.1`).
+Self-contained reference. Tracks `cowork-harness 0.20.0` (baseline `desktop-1.17377.1`).
 
 ## Fidelity tiers (`fidelity:` in the scenario)
 
@@ -9,7 +9,7 @@ Self-contained reference. Tracks `cowork-harness 0.19.0` (baseline `desktop-1.15
 | `protocol` | L0 — agent on the host, no sandbox, no egress enforcement | Fastest control-loop / answer-shape checks. **Rejected** if the scenario asserts egress / `expect_denied` (would false-pass). |
 | `container` (default) | L1 — agent in a Docker container with a per-run default-deny egress proxy | The everyday tier: real sandbox, real egress allowlist. |
 | `microvm` | L2 — agent in an Apple-VZ Lima microVM with a guest firewall | VM-grade escape **isolation** of untrusted code. macOS arm64 only; needs `cowork-harness vm init`. Network transport **equals `container`** (same allowlist proxy) — *not* better network fidelity. |
-| `hostloop` | Host-loop split-exec: agent loop on the host, shell/web routed into the container via the workspace SDK-MCP server (`mcp__workspace__bash`) | Reproduce Cowork's **production** split-execution model. |
+| `hostloop` | Host-loop split-exec: agent runs in the container; shell/web routed host-side via the workspace SDK-MCP server (`mcp__workspace__bash`) — only `protocol` runs the agent on the host | Reproduce Cowork's **production** split-execution model. |
 | `cowork` | Auto-picks `hostloop` vs `container` the way Cowork itself does for the synced release | "Do what real Cowork does for this release." |
 
 - `hostloop` / `cowork` are the production-faithful path; `container` is the practical default.
@@ -77,6 +77,13 @@ you only need the run to proceed. It is **NOT** fine when a **semantic** asserti
 that answer: the green run is then a false pass on a wrong premise. **Rule: script *any* gate whose
 answer feeds a semantic assertion (`--answer` / `--answer-policy`); don't `--decider-llm` it.** Reserve
 the live decider for **structural-assertion** runs.
+
+To make this auditable, every run reports **gate provenance** — `result.json` carries a `gateProvenance`
+block (per gate: `answeredBy` = scripted / decided(llm|external) / first-option / prompt, plus `model`),
+the footer prints a counts-only `gates: N · …` line, and `trace --view questions` annotates each gate
+with its `by`/`model`. Use it to see exactly which assertions sit downstream of a *decided* (non-reproducible)
+gate. It is informational — it never changes the verdict. Absent on the replay lane (deterministic by
+construction).
 
 **multiSelect gates** work on every path. Scripted: `choose:` a list. LLM decider (`--decider-llm`): a
 comma-list of option numbers (`1, 3`). In-band `--decider-dir`: the

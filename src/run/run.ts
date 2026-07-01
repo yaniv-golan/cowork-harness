@@ -14,18 +14,18 @@ import { ProvenanceTracker } from "../hostloop/provenance.js";
 import { normalizeHost, validateBareDomain } from "../boundary-paths.js";
 
 // Re-export the shared `normalizeHost` from run.ts's public surface. It used to be a private helper
-// here (/P0-2: assert.ts needs it too); it now lives in boundary-paths.ts as the single source
+// here (assert.ts needs it too); it now lives in boundary-paths.ts as the single source
 // of truth, and is re-exported so existing `run.js` importers keep working.
 export { normalizeHost };
 
-/** A3: the observable sub-agent dispatch tree (single owner = RunRecord). */
+/** the observable sub-agent dispatch tree (single owner = RunRecord). */
 export interface SubagentDispatch {
   toolUseId: string;
   parentToolUseId?: string;
   agentType: string;
   declaredTools: string[];
   toolsUsed: string[];
-  description?: string; // the dispatch's `description` — identifies it when the skill set no subagent_type (O1)
+  description?: string; // the dispatch's `description` — identifies it when the skill set no subagent_type
 }
 
 export interface DecisionRecord {
@@ -33,6 +33,7 @@ export interface DecisionRecord {
   name: string;
   decision: string;
   by: string;
+  model?: string; // decider model for by:"llm" gates — surfaced in gate provenance for auditability
   detail?: unknown;
   rationale?: string;
 }
@@ -40,31 +41,31 @@ export interface DecisionRecord {
 export interface RunRecord {
   runId: string;
   result: "success" | "error";
-  // Fix 5: when result === "error", whether the error looks like a transport drop (connection closed after a
+  // when result === "error", whether the error looks like a transport drop (connection closed after a
   // clean result) vs a genuine agent/skill failure. Undefined on success or unclassified errors.
   resultErrorKind?: "transport" | "agent";
-  // H2: set true when the run ended on an unanswered plain-text question (see the post-loop detector in
+  // set true when the run ended on an unanswered plain-text question (see the post-loop detector in
   // drive()). Mapped into RunResult by execute.ts (live) and cassette.ts (replay re-drive).
   stalledOnQuestion?: boolean;
   initTools: string[];
   cwd?: string;
   transcript: string;
   toolsCalled: Set<string>;
-  toolCounts: Record<string, number>; // O6: TRUTHFUL per-tool call count from the tool_use stream (top-level only)
+  toolCounts: Record<string, number>; // TRUTHFUL per-tool call count from the tool_use stream (top-level only)
   subagentTools: Set<string>;
   subagents: SubagentDispatch[];
   questions: string[];
   decisions: DecisionRecord[];
-  permissiveAutoAllow: string[]; // #6: tools auto-allowed by cowork parity for unscripted/off-registry perms (real Cowork blocks these)
+  permissiveAutoAllow: string[]; // tools auto-allowed by cowork parity for unscripted/off-registry perms (real Cowork blocks these)
   unanswered: { question: string; chosen: string; by: string; rationale?: string; model?: string }[];
-  toolResults: { toolUseId?: string; isError: boolean; text: string; assertText?: string }[]; // Part 2: captured tool OUTCOMES
+  toolResults: { toolUseId?: string; isError: boolean; text: string; assertText?: string }[]; // captured tool OUTCOMES
   gateAnswers: { question: string; toolUseId?: string; answers: Record<string, string> }[]; // answered AskUserQuestion gates
   gateDeliveries: {
     question: string;
     delivered: boolean | null;
     error?: string;
     reason?: "ok" | "errored" | "unobserved" | "no-pairing-metadata";
-  }[]; // Part 3: did the answer reach the model? (null = unobserved or no-pairing-metadata)
+  }[]; // did the answer reach the model? (null = unobserved or no-pairing-metadata)
   usage?: Record<string, unknown>;
   cost?: Record<string, unknown>;
 }
@@ -74,14 +75,14 @@ export interface RunHooks {
   finalize?(r: RunRecord): void;
 }
 
-const DIALOG_AUTOCANCEL_MS = 6000; // request_user_dialog host auto-cancel (Ch25/L108)
+const DIALOG_AUTOCANCEL_MS = 6000; // request_user_dialog host auto-cancel
 
-// Fix 5: transport-layer signatures. Deliberately NARROW — `API Error`/`terminated` are dropped because they
+// transport-layer signatures. Deliberately NARROW — `API Error`/`terminated` are dropped because they
 // collide with skill-emitted error text and would misclassify genuine failures as transport.
 const TRANSPORT_SIGNATURE = /connection closed|ECONNRESET|socket hang up|fetch failed/i;
 
 /**
- * Fix 5: classify a `result==="error"` as a tail-end TRANSPORT drop vs a genuine agent/skill failure, so the
+ * classify a `result==="error"` as a tail-end TRANSPORT drop vs a genuine agent/skill failure, so the
  * verdict can distinguish "the connection dropped after a clean result" from "the skill failed". Satisfiable
  * by construction (the earlier draft's "prior result THIS turn" gate was empty — a turn has one result):
  *   - "result" path (SDK wrapped a transport failure into an is_error result): transport iff the signature
@@ -91,7 +92,7 @@ const TRANSPORT_SIGNATURE = /connection closed|ECONNRESET|socket hang up|fetch f
  *   - "spawn"/"protocol": always agent (a real fault).
  * NOTE: the exact wire envelope of "API Error: Connection closed" is not yet pinned from a captured cassette;
  * a non-matching signature simply falls back to "agent" (today's behavior) — never a false-green, since
- * transport_error is itself severity:fail. See the round-2 plan's Fix 5 prerequisite.
+ * transport_error is itself severity:fail.
  */
 export function classifyResultError(
   source: "result" | "exit" | "spawn" | "protocol",
@@ -104,14 +105,14 @@ export function classifyResultError(
   return "agent";
 }
 
-/** Seam 3 — Run: the turn loop + decision dispatch + RunRecord building. */
+/** Run: the turn loop + decision dispatch + RunRecord building. */
 export class Run {
   private rec: RunRecord;
   private toolLog: { name: string; input: unknown }[] = [];
-  // #30: per-session web_fetch provenance set. Run owns it (it sees user turns + tool_results) and
+  // per-session web_fetch provenance set. Run owns it (it sees user turns + tool_results) and
   // seeds it during drive(); the workspace handler reads membership + escalates misses via the Decider.
   private provenance = new ProvenanceTracker();
-  // web_fetch per-DOMAIN approvals ("Allow all for website"). Per-Run, ephemeral (starts empty) — Phase 0
+  // web_fetch per-DOMAIN approvals ("Allow all for website"). Per-Run, ephemeral (starts empty) —
   // verified the grant is session-scoped, not persistent. An approved host fetches with no re-prompt.
   private approvedDomains = new Set<string>();
 
@@ -158,18 +159,18 @@ export class Run {
   async drive(turns: string | AsyncIterable<string>, startOpts?: Parameters<AgentSession["start"]>[0]): Promise<RunRecord> {
     const turnIter = typeof turns === "string" ? oneShot(turns) : turns[Symbol.asyncIterator]();
     const transcript: string[] = [];
-    // Fix 5: run-level latch — did any turn reach a clean (non-error) result before the child died? Read by
+    // run-level latch — did any turn reach a clean (non-error) result before the child died? Read by
     // the exit-error path to tell "child dropped after a successful result" (transport) from a crash.
     let sawSuccessResult = false;
 
-    // #45: write the `initialize` control_request BEFORE the first user turn, matching the SPEC wire
+    // write the `initialize` control_request BEFORE the first user turn, matching the SPEC wire
     // order (initialize precedes the user turn). Idempotent — `start()` also calls init(), and replay
     // (cassette) sessions omit init() entirely, so this is a no-op there.
     this.session.init?.(startOpts);
     // Prime the first user turn before reading the stream.
     const first = await turnIter.next();
     if (!first.done) {
-      this.provenance.seedFromText(first.value); // #30: seed provenance from the user's prompt
+      this.provenance.seedFromText(first.value); // seed provenance from the user's prompt
       this.session.sendUserTurn(first.value);
     }
 
@@ -186,7 +187,7 @@ export class Run {
             break;
           case "tool_use": {
             if (ev.parentToolUseId) {
-              // #15: only count this as a sub-agent tool when its parent is a RECOGNIZED dispatch
+              // only count this as a sub-agent tool when its parent is a RECOGNIZED dispatch
               // (Agent/Task/subagent_type). Any parented tool_use carries a parentToolUseId, but
               // adding all of them to subagentTools over-counts and produces false positives/negatives
               // on subagent_tool_used / subagent_tool_absent. Scope to the same dispatch the per-subagent
@@ -200,7 +201,7 @@ export class Run {
               // synthetic = the MCP round-trip echo; the real call already arrived as an assistant tool_use
               // block (live-verified), so counting the synthetic too would double-list it / add a bogus name.
               this.rec.toolsCalled.add(ev.name);
-              this.rec.toolCounts[ev.name] = (this.rec.toolCounts[ev.name] ?? 0) + 1; // O6: count top-level calls (subagent tools excluded, matching toolsCalled)
+              this.rec.toolCounts[ev.name] = (this.rec.toolCounts[ev.name] ?? 0) + 1; // count top-level calls (subagent tools excluded, matching toolsCalled)
             }
             this.toolLog.push({ name: ev.name, input: ev.input }); // still logged for provenance/trace
             break;
@@ -209,8 +210,8 @@ export class Run {
             this.rec.toolResults.push({ toolUseId: ev.toolUseId, isError: ev.isError, text: ev.text, assertText: ev.assertText });
             this.provenance.seedFromToolResult(ev.provenanceText ?? ev.text); // seed from the UNtruncated value so URLs past the display cap are still fetchable
             // (matches Cowork's tool_response provenance hook)
-            // Delivery check (Part 3): if this is the result of an answered gate and it ERRORED, the injected
-            // answer never reached the model (the O7 q.map class). Surface it in real time — "resp consumed"
+            // Delivery check: if this is the result of an answered gate and it ERRORED, the injected
+            // answer never reached the model (the q.map class). Surface it in real time — "resp consumed"
             // (file read) is NOT "delivered" (model received).
             if (ev.isError && ev.toolUseId) {
               const gate = this.rec.gateAnswers.find((g) => g.toolUseId === ev.toolUseId);
@@ -250,13 +251,13 @@ export class Run {
               const next = await turnIter.next();
               if (next.done) this.session.close();
               else {
-                this.provenance.seedFromText(next.value); // #30: seed provenance from each new user turn
+                this.provenance.seedFromText(next.value); // seed provenance from each new user turn
                 this.session.sendUserTurn(next.value);
               }
             }
             break;
           case "error":
-            // #16: spawn/protocol errors are fatal — set result, close the session, and stop the loop.
+            // spawn/protocol errors are fatal — set result, close the session, and stop the loop.
             // source:"agent" is non-terminal (the SDK may still emit a recovering `result` event).
             // CRITICAL: set rec.result BEFORE break — gateDeliveries mapping runs after the loop exits.
             //
@@ -269,9 +270,9 @@ export class Run {
             // stderr tail is already embedded in ev.message by LiveAgentSession.
             if (ev.source === "spawn" || ev.source === "protocol" || ev.source === "exit") {
               this.rec.result = "error";
-              // Fix 5 path (b): a nonzero EXIT after a clean result, with a transport stderr tail, is the
+              // path (b): a nonzero EXIT after a clean result, with a transport stderr tail, is the
               // "tail-end drop after artifacts written" case → transport. spawn/protocol (and an exit with no
-              // prior success / a non-transport crash tail) stay "agent" — a genuine fault (preserve `:211-217`).
+              // prior success / a non-transport crash tail) stay "agent" — a genuine fault.
               this.rec.resultErrorKind = classifyResultError(ev.source, ev.message, sawSuccessResult);
               this.rec.decisions.push({ kind: "tool", name: ev.source, decision: "error", by: "agent", detail: ev.message });
               this.session.close();
@@ -289,7 +290,7 @@ export class Run {
     }
 
     this.rec.transcript = transcript.join("\n");
-    // H2/H3: stall-on-question detection. A turn that ends on a plain-text re-ask ("which file?") gets
+    // stall-on-question detection. A turn that ends on a plain-text re-ask ("which file?") gets
     // is_error:false → result:"success" (a false-green — the SDK turn didn't error, but the task didn't
     // complete). Flag it (computeVerdict turns it into a `stalled` fail unless allow_stall). Conservative
     // conjunction to keep the default-fail safe: (1) the run cleanly succeeded, (2) the FINAL top-level
@@ -297,10 +298,10 @@ export class Run {
     //
     // (3) is keyed on toolLog position, not "no tools at all": an AskUserQuestion gate arrives as a real
     // assistant tool_use block (→ toolLog; see toolCounts in any gated result.json), so a naive
-    // `toolLog.length === 0` would miss H3 — the founder repro where the agent answered a gate, then re-asked
+    // `toolLog.length === 0` would miss the founder repro where the agent answered a gate, then re-asked
     // in plain text and stalled, having done productive work BEFORE the gate. So we slice toolLog AFTER the
     // last AskUserQuestion and count non-gate calls: zero ⇒ the agent waited on input and did nothing further.
-    // With no gate, lastIndexOf === -1 → the slice is the whole log → this reduces to H2's exact "no tools at
+    // With no gate, lastIndexOf === -1 → the slice is the whole log → this reduces to the exact "no tools at
     // all" behavior. The count includes parented(subagent)/synthetic entries (toolLog pushes unconditionally)
     // — they only RAISE the count, never a new false positive. on_unanswered owns the *unanswered* gate; this
     // owns the agent stalling AFTER an answered one. Reads only local/rec state, so it re-derives identically
@@ -312,8 +313,8 @@ export class Run {
     if (this.rec.result === "success" && lastText.endsWith("?") && productiveAfterGate === 0) {
       this.rec.stalledOnQuestion = true;
     }
-    // Part 3: pair each answered gate with its tool_result (by toolUseId). delivered=true iff a non-error
-    // result was observed; false iff it errored (O7 class); null if no result was observed (e.g. protocol
+    // pair each answered gate with its tool_result (by toolUseId). delivered=true iff a non-error
+    // result was observed; false iff it errored; null if no result was observed (e.g. protocol
     // fidelity, or the run ended before the tool ran) — null is neutral for `gate_answers_delivered`.
     this.rec.gateDeliveries = this.rec.gateAnswers.map((g) => {
       // No toolUseId = no pairing metadata (distinct from "tool result not observed"). Both report
@@ -335,7 +336,7 @@ export class Run {
   private async handleDecision(req: DecisionRequest) {
     if (req.kind === "question") for (const q of req.questions) this.rec.questions.push(questionLabel(q));
 
-    // #48: an empty `questions` array would be "answered" with `{}` (scripted) and recorded as success —
+    // an empty `questions` array would be "answered" with `{}` (scripted) and recorded as success —
     // a silent false-green. The in-VM schema enforces `questions.min(1)` so the model can't emit this
     // (ELF-verified, asar/ELF 2.1.170), but a hand-crafted cassette / fuzz input could. Fail LOUD.
     if (req.kind === "question" && req.questions.length === 0)
@@ -357,8 +358,7 @@ export class Run {
 
     // multiSelect gates ARE supported (binary-verified 2026-06-17): the answer wire-shape is a comma-joined
     // string (`answers[q]` = "Label A, Label B"). The ScriptedDecider validates each member against the
-    // offered options and joins; fallback terminals answer with a single (valid) member. See MULTISELECT in
-    // docs/internal/harness-improvements-plan-2026-06-16.md.
+    // offered options and joins; fallback terminals answer with a single (valid) member.
 
     const decided = await this.withDialogTimeout(req, this.decider.decide(req, this.ctx()));
     if (decided === ABSTAIN) {
@@ -401,7 +401,7 @@ export class Run {
     if (req.kind !== "dialog" || !isFinite(this.dialogTimeoutMs)) return p;
     let t: ReturnType<typeof setTimeout>;
     const timeout = new Promise<typeof ABSTAIN>((res) => (t = setTimeout(() => res(ABSTAIN), this.dialogTimeoutMs)));
-    // #19: use .finally() so clearTimeout runs on BOTH resolve AND reject, preventing a timer
+    // use .finally() so clearTimeout runs on BOTH resolve AND reject, preventing a timer
     // leak when the decider promise rejects (the race rejects but the setTimeout stays alive).
     return Promise.race([p.finally(() => clearTimeout(t)), timeout]);
   }
@@ -411,7 +411,7 @@ export class Run {
   private recordDecision(req: DecisionRequest, resp: DecisionResponse, by: Decision["by"], rationale?: string, model?: string) {
     if (req.kind === "question") {
       const answers = resp.kind === "question" ? resp.answers : {};
-      this.rec.decisions.push({ kind: "question", name: "AskUserQuestion", decision: "answered", by, detail: answers, rationale });
+      this.rec.decisions.push({ kind: "question", name: "AskUserQuestion", decision: "answered", by, model, detail: answers, rationale });
       // For the human-readable label, include ALL questions — not just questions[0]. Single-question gates
       // produce "<question>"; multi-question gates produce "<q1> / <q2>". The answers map is already complete.
       const label = req.questions.map(questionLabel).filter(Boolean).join(" / ") || "";
@@ -439,7 +439,7 @@ export class Run {
     }
   }
 
-  // ── #30: web_fetch provenance, exposed to the workspace handler (via the bundle execute.ts builds) ──
+  // ── web_fetch provenance, exposed to the workspace handler (via the bundle execute.ts builds) ──
 
   /** Pre-approve web_fetch hosts for this run (test convenience: `web_fetch.approved_domains`) — as if
    *  "Allow all for website" had been clicked earlier this session. Per-run only (no persistence).
@@ -482,7 +482,7 @@ export class Run {
    */
   async requestWebFetchApproval(domain: string, url: string): Promise<boolean> {
     // Per-run "Allow all for website" grant: an already-approved host fetches with NO gate and records
-    // nothing (Phase 0: a 2nd fetch to an approved host does not re-prompt). Checked BEFORE the decider.
+    // nothing (a 2nd fetch to an approved host does not re-prompt). Checked BEFORE the decider.
     // Normalize both sides so "Example.com" and "example.com" match the same stored entry.
     if (this.approvedDomains.has(normalizeHost(domain))) return true;
     const req: DecisionRequest = {
@@ -544,7 +544,7 @@ function denyLike(req: DecisionRequest): any {
   if (req.kind === "permission") return { kind: "permission", behavior: "deny", message: "no decider" };
   if (req.kind === "dialog") return { kind: "dialog", behavior: "cancelled" };
   if (req.kind === "elicit") return { kind: "elicit", action: "decline" };
-  // A question must never reach here — handleDecision fails loud above (C1). Defense in depth: never
+  // A question must never reach here — handleDecision fails loud above. Defense in depth: never
   // fabricate an option-1 answer for a question.
   throw new UnansweredError("internal: a question reached the deny fallback", "this is a bug — a question must be answered or fail loud");
 }

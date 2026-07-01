@@ -2,8 +2,11 @@
 
 The agent the harness runs **is** `claude-code` — the same binary Claude Desktop stages at `claude-code-vm/<ver>/claude` and launches in cowork mode via `CLAUDE_CODE_IS_COWORK=1` (the `--cowork` flag exists only in the staged in-VM binary; the harness uses the env var). So it discovers extensions from the same roots. The harness's job is to *populate those roots* the way Cowork does, while giving you override knobs for tests. The roots below were verified against the staged agent binary.
 
-> **Most common case:** to mount one local skill for a test, put `skills.local: ["./skills/my-skill"]` in
-> your session — that's the whole setup. The rest of this doc is the full discovery model + override knobs.
+> **Most common case:** to mount one local skill for a test you have two equivalent options — put
+> `skills.local: ["./skills/my-skill"]` in your session (stages a bare skill folder into the config dir),
+> **or** wrap the skill in a local plugin folder and list it under `plugins.local_plugins` (what every bundled
+> [worked example](../examples/) does — `examples/sessions/*.yaml`). Either is the whole setup; the rest of
+> this doc is the full discovery model + override knobs.
 
 ## Discovery roots
 

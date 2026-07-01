@@ -24,7 +24,7 @@ export interface EgressSidecar {
 
 const PROXY_IMAGE = process.env.COWORK_PROXY_IMAGE ?? "cowork-egress-proxy:1";
 
-// 2a: a process-level cleanup registry so a Ctrl-C (SIGINT/SIGTERM) mid-run reaps in-flight egress resources
+// A process-level cleanup registry so a Ctrl-C (SIGINT/SIGTERM) mid-run reaps in-flight egress resources
 // instead of orphaning them (the per-run `finally` paths don't run when the process is killed by a signal).
 // Entries are PHASED: "container" thunks run BEFORE "network" thunks — `network rm` fails while a container is
 // still attached (the error is swallowed with no retry), so a network-first handler would leak the network.
@@ -86,7 +86,7 @@ export function startEgressSidecar(allow: string[], outDir: string, runId: strin
 
   ensureProxyImage(runner);
 
-  // #37: create the two networks and the proxy container in sequence, tracking each created
+  // Create the two networks and the proxy container in sequence, tracking each created
   // resource so a mid-sequence failure (image start, network connect) rolls back the rest
   // instead of orphaning networks/containers. Undo runs in reverse (container before networks).
   const rollback: Array<() => void> = [];
@@ -121,7 +121,7 @@ export function startEgressSidecar(allow: string[], outDir: string, runId: strin
     waitProxyRunning(runner, proxyName);
   } catch (e) {
     for (const undo of rollback.reverse()) undo();
-    // 6e: re-frame Docker's opaque address-pool-exhaustion error (which surfaces at create, connect, OR
+    // Re-frame Docker's opaque address-pool-exhaustion error (which surfaces at create, connect, OR
     // `run --network`) into an actionable diagnosis — it reads as a "leak" but is concurrency pressure;
     // each run reaps its own networks on exit. Rollback above already ran, so this only changes the message.
     throw reframeEgressError(e);
@@ -132,7 +132,7 @@ export function startEgressSidecar(allow: string[], outDir: string, runId: strin
     d(runner, ["network", "rm", intNet], true);
     d(runner, ["network", "rm", outNet], true);
   };
-  // 2a: cover Ctrl-C — reap this run's proxy+networks on a signal too. Registered as the "network" phase so a
+  // Cover Ctrl-C — reap this run's proxy+networks on a signal too. Registered as the "network" phase so a
   // caller-registered agent-container reap ("container" phase) runs first (network rm needs the container gone).
   const deregister = registerCleanup({ phase: "network", run: reap });
 
@@ -158,7 +158,7 @@ export function startEgressSidecar(allow: string[], outDir: string, runId: strin
 /**
  * Parse one egress log line into a typed decision, or `null` if it must be dropped.
  *
- * #43: previously this (a) silently swallowed an unparseable line and (b) coerced any
+ * Previously this (a) silently swallowed an unparseable line and (b) coerced any
  * unknown/missing `decision` to "allow" via `o.decision === "deny" ? "deny" : "allow"` —
  * a silent false-green that could mask a real deny. Now both failure modes emit a
  * `::warning::` and DROP the line; we never invent an "allow" from corrupt input.
@@ -192,10 +192,10 @@ export function parseEgressLine(line: string): { host: string; decision: "allow"
 function ensureProxyImage(runner: string) {
   const have = spawnSync(runner, ["image", "inspect", PROXY_IMAGE], { stdio: "ignore" });
   if (have.status === 0) return;
-  // Build from the repo (Dockerfile.proxy). Context is the repo root. #39: use fileURLToPath, not
+  // Build from the repo (Dockerfile.proxy). Context is the repo root. Use fileURLToPath, not
   // `.pathname`, so an install path with spaces / URL-escaped chars yields a valid build context.
   const repoRoot = resolve(fileURLToPath(new URL("../..", import.meta.url)));
-  // #38: Dockerfile.proxy COPYs the SHIPPED dist/egress; running from source (tsx) before
+  // Dockerfile.proxy COPYs the SHIPPED dist/egress; running from source (tsx) before
   // `npm run build` leaves it absent, so the image build would fail confusingly. Build dist/ first.
   if (!existsSync(join(repoRoot, "dist", "egress", "proxy.js"))) {
     warn(`::warning:: [egress] dist/egress missing — running \`npm run build\` before the proxy image build\n`);
@@ -208,7 +208,7 @@ function ensureProxyImage(runner: string) {
   if (build.status !== 0) throw new Error(`failed to build ${PROXY_IMAGE}`);
 }
 
-/** 6e: turn Docker's `all predefined address pools have been fully subnetted` (and its connect/run
+/** Turn Docker's `all predefined address pools have been fully subnetted` (and its connect/run
  *  variants) into a self-answering message — it is NOT a leak (each run reaps its own networks on exit),
  *  it is concurrency pressure against the daemon's address pool. Any non-matching error passes through. */
 export function reframeEgressError(e: unknown): unknown {

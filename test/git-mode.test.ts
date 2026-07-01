@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { gitTrackedSet, gitCpFilter, GITSET_ENV } from "../src/run/skill-files.js";
 import { hashSkillDirs, skillHashEntries } from "../src/run/skill-hash.js";
 
-// Phase C: git-tracked file-set mode (COWORK_HARNESS_GITSET=1). A repo with a tracked file + an untracked
+// git-tracked file-set mode (COWORK_HARNESS_GITSET=1). A repo with a tracked file + an untracked
 // file + OS-junk; the tracked set is the durable boundary.
 
 function gitRepo(): { dir: string; tracked: string } {
@@ -41,7 +41,7 @@ afterEach(() => {
   delete process.env[GITSET_ENV];
 });
 
-describe("Phase C — gitTrackedSet / gitCpFilter", () => {
+describe("gitTrackedSet / gitCpFilter", () => {
   it("lists only tracked files (untracked + OS-junk excluded); null for a non-repo dir", () => {
     const { dir } = gitRepo();
     const set = gitTrackedSet(dir)!;
@@ -63,7 +63,7 @@ describe("Phase C — gitTrackedSet / gitCpFilter", () => {
   });
 });
 
-describe("Phase C — hashSkillDirs in git mode", () => {
+describe("hashSkillDirs in git mode", () => {
   it("hashes ONLY tracked files (an untracked change doesn't drift; a tracked change does)", () => {
     const { dir, tracked } = gitRepo();
     withGit(() => {

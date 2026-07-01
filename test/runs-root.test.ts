@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { runsWriteRoot, runsRoot, defaultRunsHome } from "../src/run/trace-view.js";
 
-// Flat, out-of-tree default runs root + env override. Writer and reader resolve identically (no #45
+// Flat, out-of-tree default runs root + env override. Writer and reader resolve identically (no
 // write/read drift), and the default is the absolute ~/.cowork-harness/runs — never cwd-relative, so a
 // `trace <run-id>` resolves from any directory.
 describe("runs root resolution (flat default; writer == reader)", () => {
@@ -28,7 +28,7 @@ describe("runs root resolution (flat default; writer == reader)", () => {
     expect(runsRoot()).toBe("/tmp/custom-runs");
   });
 
-  it("writer and reader agree in both modes (no #45 drift)", () => {
+  it("writer and reader agree in both modes (no drift)", () => {
     delete process.env.COWORK_HARNESS_RUNS_DIR;
     expect(runsWriteRoot()).toBe(runsRoot());
     process.env.COWORK_HARNESS_RUNS_DIR = "/tmp/drift-check";

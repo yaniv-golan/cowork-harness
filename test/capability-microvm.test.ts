@@ -44,7 +44,7 @@ afterEach(() => {
   warnSpy.mockRestore();
 });
 
-describe("probeMicrovmOmitted — silent vmStatus gate (bug 20)", () => {
+describe("probeMicrovmOmitted — silent vmStatus gate", () => {
   it("returns null WITHOUT spawning limactl shell when vmStatus is 'Absent' (cold run)", () => {
     spawnSync.mockImplementation(
       router(

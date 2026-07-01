@@ -17,7 +17,7 @@ import { loadSession, resolveSessionPaths } from "../src/session.js";
 import { spawnEnv } from "../src/runtime/argv.js";
 import { loadBaseline } from "../src/baseline.js";
 
-describe("#17 — slugForPath keeps the run dir inside runs/", () => {
+describe("slugForPath keeps the run dir inside runs/", () => {
   it("neutralizes traversal and separators, preserves normal names", () => {
     expect(slugForPath("skill-my-skill")).toBe("skill-my-skill"); // normal name unchanged
     expect(slugForPath("v1.2.0")).toBe("v1.2.0"); // single dots kept
@@ -98,11 +98,11 @@ describe("execute — file-relative path resolution", () => {
   });
 });
 
-// #43 regression guard — env-channel race: spawnEnv must use the explicit proxyHost arg, not
+// regression guard — env-channel race: spawnEnv must use the explicit proxyHost arg, not
 // process.env.COWORK_EGRESS_PROXY; the calling layer (execute.ts/chat.ts) must NOT mutate
 // process.env. We test via the pure contract layer (spawnEnv in argv.ts) which is what
 // container.ts/hostloop.ts now delegate to with the explicit opts value.
-describe("execute — #43 no process.env mutation for egress proxy/network", () => {
+describe("execute — no process.env mutation for egress proxy/network", () => {
   it("spawnEnv uses the explicit proxyHost arg (not process.env) so proxy is concurrency-safe", () => {
     const baseline = loadBaseline("desktop-1.12603.1");
     const configGuest = "/sessions/TEST/mnt/.claude";
@@ -141,7 +141,7 @@ describe("execute — #43 no process.env mutation for egress proxy/network", () 
   });
 });
 
-describe("execute — scanEvents host-path leak detection (#32)", () => {
+describe("execute — scanEvents host-path leak detection", () => {
   const writeEvents = (lines: object[]): string => {
     const dir = mkdtempSync(join(tmpdir(), "cowork-scan-"));
     const f = join(dir, "events.jsonl");
@@ -181,7 +181,7 @@ describe("execute — scanEvents host-path leak detection (#32)", () => {
     expect(scanEvents(f).hostPathLeaked).toBe(true);
   });
 
-  // #9 backstop: outputs-delete detection must cover BOTH bash surfaces — native `Bash`
+  // backstop: outputs-delete detection must cover BOTH bash surfaces — native `Bash`
   // (container/microvm) AND `mcp__workspace__bash` (host-loop), where native Bash is disabled.
   it("catches an outputs delete via native Bash", () => {
     const f = writeEvents([
@@ -190,7 +190,7 @@ describe("execute — scanEvents host-path leak detection (#32)", () => {
     expect(scanEvents(f).outputsDeletes.length).toBe(1);
   });
 
-  it("#9: catches an outputs delete via mcp__workspace__bash (host-loop) — not just native Bash", () => {
+  it("catches an outputs delete via mcp__workspace__bash (host-loop) — not just native Bash", () => {
     const f = writeEvents([
       {
         type: "assistant",
@@ -270,8 +270,8 @@ describe("isOutputsDelete — mv direction + opt-in safe-prefix suppression", ()
   });
 });
 
-// #45 — dialog timeout parsing (pure function, token-free)
-describe("execute — #45 parseDialogTimeout", () => {
+// dialog timeout parsing (pure function, token-free)
+describe("execute — parseDialogTimeout", () => {
   it("returns Infinity for 'inf'", () => expect(parseDialogTimeout("inf")).toBe(Infinity));
   it("returns Infinity for 'infinite'", () => expect(parseDialogTimeout("infinite")).toBe(Infinity));
   it("returns Infinity for '-1'", () => expect(parseDialogTimeout("-1")).toBe(Infinity));

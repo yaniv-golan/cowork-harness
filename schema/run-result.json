@@ -81,6 +81,15 @@
       "type": "array",
       "items": { "type": "string" },
       "description": "capability families the agent image omits but the skill used (live built-image tiers) — computeVerdict fails unless allow_missing_capability"
+    },
+    "gateProvenance": {
+      "type": "object",
+      "description": "Per-gate answer provenance (how each AskUserQuestion gate was answered) with a bySource histogram. Informational; never affects the verdict. Absent when the run had no gates, and absent on the replay lane (which reports reproducibility via nonDeterministic:false, not per-gate provenance).",
+      "properties": {
+        "total": { "type": "number" },
+        "bySource": { "type": "object" },
+        "gates": { "type": "array" }
+      }
     }
   }
 }

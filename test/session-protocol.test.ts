@@ -60,7 +60,7 @@ afterEach(() => {
 });
 
 describe("session protocol loud-failure fixes", () => {
-  it("#9: a spawn error makes start() yield a typed {type:'error', source:'spawn'} (no hang)", async () => {
+  it("a spawn error makes start() yield a typed {type:'error', source:'spawn'} (no hang)", async () => {
     const { proc, session } = newSession();
     const it = session.start()[Symbol.asyncIterator]();
     const firstP = it.next();
@@ -70,7 +70,7 @@ describe("session protocol loud-failure fixes", () => {
     expect(value).toEqual({ type: "error", source: "spawn", message: "boom" });
   });
 
-  it("#10: an mcp_message with no sdkMcp handler replies with a JSON-RPC error (not a silent drop)", async () => {
+  it("an mcp_message with no sdkMcp handler replies with a JSON-RPC error (not a silent drop)", async () => {
     const { proc, outDir, session } = newSession();
     const it = session.start()[Symbol.asyncIterator]();
     const firstP = it.next();
@@ -93,7 +93,7 @@ describe("session protocol loud-failure fixes", () => {
     expect(warnings.some((w) => w.includes("no sdkMcp handler"))).toBe(true);
   });
 
-  it("#8: the init request declares the PreToolUse Task hook; a run_in_background callback is BLOCKED", async () => {
+  it("the init request declares the PreToolUse Task hook; a run_in_background callback is BLOCKED", async () => {
     const { proc, outDir, session } = newSession();
     const it = session.start()[Symbol.asyncIterator]();
     const firstP = it.next();
@@ -120,7 +120,7 @@ describe("session protocol loud-failure fixes", () => {
     expect(controlOut).toContain("Background agents disabled");
   });
 
-  it("#8: hookOutput blocks Task run_in_background, allows everything else", () => {
+  it("hookOutput blocks Task run_in_background, allows everything else", () => {
     expect(hookOutput("cowork-task-bg-block", { tool_name: "Task", tool_input: { run_in_background: true } })).toEqual({
       decision: "block",
       reason: "Background agents disabled",
@@ -129,7 +129,7 @@ describe("session protocol loud-failure fixes", () => {
     expect(hookOutput("unknown-id", { tool_input: { run_in_background: true } })).toEqual({}); // unknown id → allow
   });
 
-  it("#13: respond() for an unknown decision id warns loudly (does not silently no-op)", () => {
+  it("respond() for an unknown decision id warns loudly (does not silently no-op)", () => {
     const { session } = newSession();
     session.respond("does-not-exist", { kind: "permission", behavior: "allow" });
     expect(warnings.some((w) => w.includes("unknown decision id") && w.includes("does-not-exist"))).toBe(true);
@@ -243,7 +243,7 @@ describe("session protocol loud-failure fixes", () => {
     await drain(it).catch(() => {});
   });
 
-  // Regression guard for the adversarial-review P0: QSpecSchema must NOT be stricter than the protocol the
+  // Regression guard: QSpecSchema must NOT be stricter than the protocol the
   // deciders already accept. An optionless / free-text gate (no `options`) and a header-only gate (no
   // `question`) are real shapes — the deciders handle optionless gates and Run owns the
   // header-only diagnostic. Both must reach a `decision` event at ingress, NOT throw "malformed" here.
@@ -353,7 +353,7 @@ describe("session protocol loud-failure fixes", () => {
     await drain(it).catch(() => {});
   });
 
-  it("#14: a kind-mismatched decider response warns (agent silently got a deny otherwise)", async () => {
+  it("a kind-mismatched decider response warns (agent silently got a deny otherwise)", async () => {
     const { proc, session } = newSession();
     const it = session.start()[Symbol.asyncIterator]();
     const firstP = it.next(); // resolves with the decision event once we feed the control_request

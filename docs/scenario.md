@@ -67,7 +67,7 @@ assert:                                  # pass/fail checks (see below)
 | `protocol` | L0 — the agent on the host, no sandbox (no egress enforcement) | fastest control-loop checks; **rejected** if the scenario asserts egress/`expect_denied` (would false-pass) |
 | `container` (default) | L1 — agent in a Docker container with a per-run default-deny egress proxy (VM-loop shape) | the everyday tier: real sandbox, real egress allowlist |
 | `microvm` | L2 — agent in an Apple-VZ Lima microVM with a guest firewall | VM-grade escape isolation of untrusted code; network transport **equals `container`** (same allowlist proxy) — not for better network fidelity. macOS arm64 only; needs `cowork-harness vm init` |
-| `hostloop` | host-loop: agent loop on the host, shell/web routed into the container via the workspace SDK-MCP server (`mcp__workspace__bash`) | reproduce Cowork's **production** split-execution model |
+| `hostloop` | host-loop: agent runs in the container; shell/web tool calls are routed host-side via the workspace SDK-MCP server (`mcp__workspace__bash`) — only `protocol` runs the agent on the host | reproduce Cowork's **production** split-execution model |
 | `cowork` | auto-picks `hostloop` vs `container` the way Cowork itself does (gate `1143815894`, decoded from the synced baseline) | "do what real Cowork does for this release" |
 
 `hostloop`/`cowork` are the production-faithful path (see [DESIGN.md](../DESIGN.md)); `container` is the
@@ -232,8 +232,8 @@ without actually running the agent. For **content correctness**, match the asser
   **not** `file_exists`, for the user-facing deliverable. When the session connects a folder, the deliverable
   lands in `mnt/<folder>` (that folder is `{{workspaceFolder}}`), **not** `mnt/outputs` — so a model told to
   write "outputs/foo" writes `mnt/<folder>/outputs/foo`. `user_visible_artifact` spans both visible roots
-  (`outputs/` + each connected folder), while `file_exists` only checks `mnt/<path>` and silently misses a
-  folder-relative deliverable. Reserve `file_exists` for a known fixed sandbox path (e.g. a folder-less session
+  (`outputs/` + each connected folder), while `file_exists` only checks `mnt/<path>` and does not check
+  folder-relative deliverables. Reserve `file_exists` for a known fixed sandbox path (e.g. a folder-less session
   where `{{workspaceFolder}} = mnt/outputs`).
 
 Each list item under `assert:` is one assertion. An item with **multiple keys is an AND** — it passes only
@@ -253,7 +253,7 @@ if *every* key passes (don't rely on the first; keep one concern per item unless
 | `tool_called: <Tool>` | the agent invoked the tool |
 | `tool_not_called: <Tool>` | the agent never invoked it |
 | `tool_result_contains: <str>` | a tool result includes the literal string (content / replay-checkable — substring match, **per individual result**, each scanned up to a 10 KB cap; a string spanning two separate results won't match) |
-| `tool_result_not_contains: <str>` | no tool result includes the literal string — content / replay-checkable; **fails loud** if tool results are absent from `result.json` (absent ≠ empty) |
+| `tool_result_not_contains: <str>` | no tool result includes the literal string — content / replay-checkable; **fails loud** if tool results are absent from `result.json` (absent ≠ empty) or display-truncated (no assertable text) — it never vacuously passes when it can't see the evidence |
 | `subagent_tool_used: <Tool>` | a sub-agent used the tool |
 | `subagent_tool_absent: <Tool>` | no sub-agent used the tool |
 | `subagent_dispatched: <regex>` | a sub-agent whose `agentType` **or dispatch `description`** matches was dispatched (skills often dispatch with only a `description` and no `subagent_type` → `agentType:"unknown"`, so match by description, e.g. `subagent_dispatched: "TOP_DOWN"`) |
@@ -329,7 +329,7 @@ dotted `path` selects into the document; one operator decides the check:
 - artifact_json: { artifact: outputs/instruments.json, path: exclusivity_days, absent: true }   # anti-hallucination
 - artifact_json: { artifact: outputs/cap_state.json, path: stage, in: ["seed", "series-a"] }     # one of a stable set
 ```
-Operators: `equals` (deep-equal) · `in: [<set>]` (deep-equal one of) · `gt` (number) · `exists: <bool>` · `absent: <bool>` · `is_null: <bool>`.
+Operators: `equals` (deep-equal) · `in: [<set>]` (deep-equal one of) · `gt` (number) · `exists: <bool>` · `absent: <bool>` · `is_null: <bool>`. **Omit every operator** to assert only that the `path` resolves (a bare existence check).
 The three states are **distinct**: `absent` (the final key is missing from a parent that resolved) vs
 `is_null` (present but JSON `null`) vs an **unresolved intermediate** segment (the artifact is malformed for
 that path) — which **fails loud**, never a vacuous pass. (No JSONPath/jq — a dotted path keeps it
@@ -346,7 +346,7 @@ dependency-free and side-effect-free.)
 > deterministically (ids, counts, enums). This pairs with record-time redaction: redaction rewrites the
 > very strings an `equals` would pin, so `equals` on a redacted field would break on re-record anyway.
 
-> **Boundary assertions** (`egress_*`, `expect_denied`) require a sandboxed fidelity — `container`, `microvm`, `hostloop`, or `cowork` (all share the container sandbox + egress proxy; `cowork` resolves to one of them). Only `protocol` is rejected, to avoid a false pass — see [boundary.md](./boundary.md).
+> **Boundary assertions** (`egress_*`, `expect_denied`) require a sandboxed fidelity — `container`, `microvm`, `hostloop`, or `cowork`. `container`/`hostloop` share the Docker sandbox + egress proxy; `microvm` enforces the **same allowlist** inside a real Lima/Apple-VZ VM via a guest iptables firewall (not the Docker sandbox); `cowork` resolves to `hostloop` or `container`. Only `protocol` is rejected, to avoid a false pass — see [boundary.md](./boundary.md).
 
 ### Which assertions survive `replay` (CI placement)
 
@@ -390,6 +390,30 @@ Two consequences for CI:
   oversized/hash-only entries satisfy `file_exists` but not `artifact_json`.
 - On `replay`, skipped assertions are **absent** from `results[].assertions[]` (filtered before evaluation),
   not present-and-passing — so a CI script must not assume a fixed assertion count across the two lanes.
+
+#### Where `replay` reads `assert:` from — frozen by default, on-disk by opt-in
+
+By default `replay` evaluates the assertions **frozen inside the cassette** (the copy `record` captured), so a
+plain `replay` is byte-deterministic and independent of the working tree — editing `scenarios/<name>.yaml`'s
+`assert:` does **not** change a default replay. To keep that from being a *silent* trap, when a sibling
+scenario resolves and its `assert:` differs from the frozen copy, replay prints a `::notice::` pointing at the
+opt-in flag.
+
+`--assert-from <scenario.yaml>` (explicit) / `--reassert` (auto-resolve the sibling) re-check the cassette
+against the **on-disk** `assert:` (+`expect_denied:`) — the token-free "edit the assert, re-check without a
+paid re-record" loop. Because re-asserting against frozen events is only sound if the recording still
+corresponds to the scenario, this path is safe by construction:
+- **Recording-shaping drift hard-fails** — if `prompt`, `answers`, `baseline`, `fidelity`, `skills`, or
+  `requires_capabilities` differ from the recording, replay refuses (re-record instead).
+- **The `session` is NOT verified** — it's excluded from the drift check (stored relative in the cassette,
+  resolves absolute on disk) and is **not fingerprinted**, so a change to the **model**, data mounts, or
+  discovery in the session between record and re-assert is **undetected**. The notice says so; re-record if the
+  session changed. (Skill *content* under the session IS guarded — next bullet.)
+- **Skill-content staleness hard-fails** on this path (it implies `--fail-on-skill-drift`), so an edited assert
+  can't green against a skill that no longer produces the frozen events.
+- **Sourcing ≠ evaluation:** `expect_denied` and the filesystem/egress keys are read from the on-disk block but
+  stay **live-only** on replay — editing them re-checks nothing here (replay warns when you do). Use a live
+  `run` to check egress/filesystem.
 
 See [docs/cassette.md](./cassette.md) for the mental model, file shape, and the O7 `replay_protocol_fidelity` guard.
 

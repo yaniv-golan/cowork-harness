@@ -1,4 +1,4 @@
-// Capability fidelity (fix plan §8.8 D6/D2/D3): the "core" agent image is a deliberate partial mirror of
+// Capability fidelity: the "core" agent image is a deliberate partial mirror of
 // the real Cowork rootfs. To never SILENTLY false-negative a skill that uses a capability the core image
 // omits (but real Cowork ships), we (a) PROBE the actual image for which capability families it has —
 // cached by (tier, digest), the image is the source of truth, not a baked label — and (b) detect whether

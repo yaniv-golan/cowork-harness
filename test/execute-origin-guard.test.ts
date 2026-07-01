@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { executeScenario, parseScenarioFile, sessionOriginSources, sessionOriginKey, collectArtifacts } from "../src/run/execute.js";
 import { loadSession } from "../src/session.js";
 
-// §1b — the pinned-session (`sess-<id>`) cross-project overwrite guard. All collision cases throw at the
+// the pinned-session (`sess-<id>`) cross-project overwrite guard. All collision cases throw at the
 // existsSync(outDir) check BEFORE buildLaunchPlan / any runtime spawn, so they're token-free and need no
 // Docker. The guard identifies a run by its mounted-SOURCE content (a `.origin` marker); a foreign or
 // missing marker, or a sourceless (inline) session whose identity can't be confirmed, must error — never
@@ -40,7 +40,7 @@ function seedPinnedDir(root: string, slug: string, id: string, origin?: object):
   return dir;
 }
 
-describe("execute — §1b origin identity (mounted-source, content-stable)", () => {
+describe("execute — origin identity (mounted-source, content-stable)", () => {
   it("distinct source sets → distinct keys; the SAME set → the same key (so a same-project refresh works)", () => {
     const a = mkdtempSync(join(tmpdir(), "cwh-A-"));
     const b = mkdtempSync(join(tmpdir(), "cwh-B-"));
@@ -81,7 +81,7 @@ describe("execute — §1b origin identity (mounted-source, content-stable)", ()
   });
 });
 
-describe("execute — §1b pinned-session cross-project guard", () => {
+describe("execute — pinned-session cross-project guard", () => {
   const prev = process.env.COWORK_HARNESS_RUNS_DIR;
   afterEach(() => {
     if (prev === undefined) delete process.env.COWORK_HARNESS_RUNS_DIR;

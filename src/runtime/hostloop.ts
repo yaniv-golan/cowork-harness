@@ -23,9 +23,10 @@ import { stageWorkspace } from "./stage.js";
 import { stripComments } from "../prompt.js";
 
 /**
- * HOST-LOOP runtime — reproduces Cowork's host-loop mode: the agent loop runs "on the
- * host" with native Bash/WebFetch DISABLED and replaced by mcp__workspace__bash /
- * mcp__workspace__web_fetch (a workspace MCP server we run), and `${CLAUDE_PLUGIN_ROOT}`
+ * HOST-LOOP runtime — reproduces Cowork's host-loop mode: the agent process runs in the
+ * container (like the CONTAINER runtime), but native Bash/WebFetch are DISABLED and
+ * replaced by mcp__workspace__bash / mcp__workspace__web_fetch (a workspace MCP server we
+ * run), which route those two tools host-side, and `${CLAUDE_PLUGIN_ROOT}`
  * is a HOST path that bash cannot resolve — so a skill's bash that references it must
  * self-heal via `find /sessions/<id>/mnt ...`, exactly like production Cowork.
  *
@@ -44,7 +45,7 @@ export function spawnHostLoop(
     runToken?: string;
     egressProxy?: string;
     dockerNetwork?: string;
-    provenanceRef?: { current?: WebFetchProvenance }; // #30: filled by execute.ts/chat.ts (Run-backed)
+    provenanceRef?: { current?: WebFetchProvenance }; // filled by execute.ts/chat.ts (Run-backed)
   } = {},
 ) {
   const m = resolveMounts(baseline, sessionId, "proj1");
@@ -53,9 +54,9 @@ export function spawnHostLoop(
   const configGuest = `${sessionRoot}/${baseline.spawn?.configDirInGuest ?? "mnt/.claude"}`;
   const AGENT_IN = "/usr/local/bin/claude";
   // Name by the per-invocation runToken (NOT sessionId) so a --resume after a failed run doesn't collide
-  // on a leftover same-named container (F1). cwd/work dir stay keyed by sessionId (stable for resume).
+  // on a leftover same-named container. cwd/work dir stay keyed by sessionId (stable for resume).
   const containerName = `cowork-hl-${opts.runToken ?? sessionId}`;
-  // #43: explicit opts take priority over process.env (concurrency-safe); env var is the
+  // Explicit opts take priority over process.env (concurrency-safe); env var is the
   // manual/dev fallback for direct `docker run` invocations that bypass the sidecar.
   const proxyHost = opts.egressProxy ?? process.env.COWORK_EGRESS_PROXY ?? "http://egress-proxy:8080";
   const network = opts.dockerNetwork ?? process.env.COWORK_DOCKER_NETWORK ?? "cowork-net";
@@ -70,7 +71,7 @@ export function spawnHostLoop(
   const mcpGuest = mcpStaged ? `${configGuest}/mcp.json` : undefined;
 
   // CLAUDE_PLUGIN_ROOT = an UNMOUNTED host path -> bash can't resolve it -> self-heal.
-  // #31: a single env var cannot model real Claude Code's per-plugin-hook scoping, and host-loop
+  // A single env var cannot model real Claude Code's per-plugin-hook scoping, and host-loop
   // only needs an UNRESOLVABLE path to trigger the skill's self-heal — the basename is incidental.
   // Picking pluginDirs[0] implied the var tracked a specific (the first) plugin; it does not.
   // Use a fixed sentinel that is deliberately unresolvable in-guest. Do NOT rely on it pointing
@@ -119,11 +120,11 @@ export function spawnHostLoop(
     env,
     agentArgv: claudeArgs,
     name: containerName, // so the driver can `docker exec` workspace-bash into this container
-    readOnlyMountPaths: plan.mounts.filter((m) => m.mode === "r").map((m) => m.mountPath), // #23: enforce mode:r as :ro binds
+    readOnlyMountPaths: plan.mounts.filter((m) => m.mode === "r").map((m) => m.mountPath), // enforce mode:r as :ro binds
   });
 
   const child = spawn(runner, dockerArgs, { stdio: ["pipe", "pipe", "pipe"] });
-  // #31: host-routed web_fetch bypasses the sidecar proxy, so collect its egress decisions here and
+  // Host-routed web_fetch bypasses the sidecar proxy, so collect its egress decisions here and
   // surface them to execute.ts → result.egress, making host-loop web_fetch visible to egress assertions.
   const hostEgress: EgressEntry[] = [];
   const sdkMcp: { servers: string[]; handle: McpHandler } = {
@@ -164,7 +165,7 @@ function hostLoopShellSection(baseline: PlatformBaseline, sessionRoot: string, m
     });
   }
 
-  // Legacy era (< 1.14271.0): read the per-version static asset and substitute {{vmMnt}}. (#27)
+  // Legacy era (< 1.14271.0): read the per-version static asset and substitute {{vmMnt}}.
   // The path must resolve to baselines/prompts/desktop-<appVersion>/host-loop-append.md.
   const vmMnt = mntRoot;
   const dir = fileURLToPath(new URL(`../../baselines/prompts/desktop-${appVersion}/host-loop-append.md`, import.meta.url));
@@ -172,7 +173,7 @@ function hostLoopShellSection(baseline: PlatformBaseline, sessionRoot: string, m
   try {
     content = readFileSync(dir, "utf8");
   } catch (err) {
-    // #25: a missing host-loop prompt asset is a real fidelity gap — the shell-access section would be
+    // A missing host-loop prompt asset is a real fidelity gap — the shell-access section would be
     // silently empty, making the run look green while missing key Cowork framing. By default this is fatal.
     // Set COWORK_HARNESS_ALLOW_MISSING_PROMPT=1 to continue with an empty section (still warns).
     if (process.env.COWORK_HARNESS_ALLOW_MISSING_PROMPT === "1") {

@@ -25,6 +25,19 @@ replay  (no token, no Docker, no network)
 The cassette is NOT a test in isolation — it replays what the agent did in a past live run.
 Use a live `run` for filesystem/egress assertions; use `replay` for the token-free PR gate.
 
+**The cassette freezes the *interaction*, not your *assertions*.** A plain `replay` evaluates the `assert:`
+block **frozen in the cassette** (deterministic, independent of the working tree) — editing
+`scenarios/<name>.yaml` does not change it; replay only prints a `::notice::` when a sibling's `assert:`
+differs. To iterate on assertions token-free, opt in with `replay --assert-from <scenario.yaml>` (or
+`--reassert`): it re-checks against the on-disk `assert:`, but **hard-fails** if any recording-shaping field
+(`prompt`/`answers`/`baseline`/`skills`) or the skill content drifted from the recording (then you must
+re-record). `expect_denied`/filesystem/egress keys are sourced but stay live-only. See
+[docs/scenario.md](./scenario.md#where-replay-reads-assert-from--frozen-by-default-on-disk-by-opt-in).
+
+> Known limitation: if a redaction policy ran at record time, a frozen `assert:` literal (e.g. a
+> `transcript_contains` matching a secret pattern) is stored redacted while the on-disk block is plaintext, so
+> the default-path "assert differs" notice can fire spuriously. It's a notice only — it never changes a verdict.
+
 ## File shape
 
 ```jsonc
@@ -69,7 +82,10 @@ The generated cassette bundles the scenario, the event stream, and the decision 
 (the injected OAuth token / API key) are scrubbed from the recorded `controlOut` by value at record
 time — safe to commit for synthetic fixtures (see §Committed fixture below).
 
-Without `--out`, the cassette is named after the scenario's `name:` (or the YAML filename).
+Without `--out`, the cassette is named after the scenario's `name:` (or the YAML filename) and written
+under `cassettes/`, which is **gitignored** — this repo's own committed examples live at
+`examples/replays/` instead. Pass `--out examples/replays/<name>.cassette.json` (or your own tracked
+path) if the cassette should be committed.
 
 ## Answering gates during recording
 
@@ -208,6 +224,9 @@ Content keys are evaluated on replay; everything else is skipped.
 replay). On an old cassette without `controlOut` these three keys are excluded from evaluation — not
 vacuously passed — and a loud warning fires (see §Backward compatibility).
 
+`file_exists`, `user_visible_artifact`, and `artifact_json` are **not** in the table above — see the
+next subsection; they're replay-checkable only when the cassette carries an artifacts manifest.
+
 ### Filesystem assertions — replay-checkable WITH an artifact manifest
 
 `file_exists`, `user_visible_artifact`, and `artifact_json` run on replay **when the cassette carries an
@@ -224,8 +243,9 @@ Either way, every replay result also reports the drift in `staleness[]` (class-t
 
 ### Still skipped on replay (no filesystem/network in a cassette)
 
-`no_delete_in_outputs`, `self_heal_ran`, `transcript_no_host_path`, `egress_denied`, `egress_allowed`,
-`expect_denied`.
+`no_delete_in_outputs`, `self_heal_ran`, `transcript_no_host_path`, `egress_denied`, `egress_allowed`
+(and `expect_denied` — a **scenario-level shorthand** that expands to `egress_denied` assertions, not an
+assertion key in its own right).
 
 Skipped assertions are **absent** from `assertions[]` in the replay result (filtered before evaluation),
 not present-and-passing. A CI script must not assume a fixed assertion count across replay and live lanes.

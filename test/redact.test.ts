@@ -31,7 +31,7 @@ describe("redactText — deterministic, collision-safe text redaction", () => {
   });
 });
 
-describe("redactStructural — string LEAVES and object KEYS (C3)", () => {
+describe("redactStructural — string LEAVES and object KEYS", () => {
   it("redacts string leaf values, deep, leaving non-strings intact", () => {
     const out = redactStructural({ a: "alice@acme.com", n: 3, nested: { b: ["x", "bob@acme.com"] } }, policy) as any;
     expect(out.a).not.toContain("@");
@@ -46,7 +46,7 @@ describe("redactStructural — string LEAVES and object KEYS (C3)", () => {
     expect(keys.every((k) => !k.includes("@"))).toBe(true);
   });
 
-  it("redacts a value under a configured KEY regardless of TYPE (string, number, object) — #7", () => {
+  it("redacts a value under a configured KEY regardless of TYPE (string, number, object)", () => {
     const p: RedactionPolicy = { patterns: [], keyNames: ["ssn", "amount", "owner"] };
     const out = redactStructural({ ssn: "123-45-6789", amount: 1250000, owner: { name: "Eve" }, note: "fine" }, p) as any;
     expect(out.ssn).toMatch(/REDACTED/);

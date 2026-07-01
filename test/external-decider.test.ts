@@ -41,7 +41,7 @@ describe("ExternalDecider", () => {
     expect((d as any).by).toBe("external");
   });
 
-  it("coerces a 1-based INDEX answer to the option label (Opus L4)", async () => {
+  it("coerces a 1-based INDEX answer to the option label", async () => {
     const { channel } = memChannel(['{"answers":{"Which format?":2}}']); // id optional; 2 → PDF
     const d = await new ExternalDecider(channel).decide(ask, ctx());
     expect((d as any).response.answers).toEqual({ "Which format?": "PDF" });
@@ -67,7 +67,7 @@ describe("ExternalDecider", () => {
     expect((deny as any).response).toMatchObject({ kind: "permission", behavior: "deny" });
   });
 
-  it("SCRUBS injected secrets from the emitted request — no token leak (Opus C1)", async () => {
+  it("SCRUBS injected secrets from the emitted request — no token leak", async () => {
     const TOKEN = "sk-ant-oat01-SECRETVALUE123";
     const { channel, sent } = memChannel(['{"answers":{"Which format?":"Markdown"}}']);
     await new ExternalDecider(channel, [TOKEN]).decide(ask, ctx(`the user said ${TOKEN} earlier`));
@@ -75,9 +75,9 @@ describe("ExternalDecider", () => {
     expect(sent[0]).toContain("[REDACTED]");
   });
 
-  it("a reply that doesn't answer the question (missing key) throws UnansweredError (#20: no fabricated option 1)", async () => {
+  it("a reply that doesn't answer the question (missing key) throws UnansweredError (no fabricated option 1)", async () => {
     const { channel } = memChannel(['{"id":"req_3","answers":{"SOME OTHER KEY":"PDF"}}']); // key mismatch
-    // #20: ExternalDecider is the terminal decider — a missing answer key used to silently default to
+    // ExternalDecider is the terminal decider — a missing answer key used to silently default to
     // option 1 (a non-reproducible false-green). It now fails LOUD instead.
     await expect(new ExternalDecider(channel).decide(ask, ctx())).rejects.toThrow(UnansweredError);
   });
@@ -239,7 +239,7 @@ describe("spawnChannel (channel B — helper round-trip)", () => {
 });
 
 describe("fileChannel (channel C — file rendezvous for the driving agent's Monitor)", () => {
-  it("writes a SINGLE-LINE req file with mode 0600 (H1/M2)", () => {
+  it("writes a SINGLE-LINE req file with mode 0600", () => {
     const dir = tmp();
     fileChannel(dir).write('{"a":1,"b":2}');
     const content = readFileSync(join(dir, "req-1.json"), "utf8");
@@ -248,7 +248,7 @@ describe("fileChannel (channel C — file rendezvous for the driving agent's Mon
     expect(statSync(join(dir, "req-1.json")).mode & 0o777).toBe(0o600);
   });
 
-  it("a non-empty dir FAILS LOUD — no silent clear (H3)", () => {
+  it("a non-empty dir FAILS LOUD — no silent clear", () => {
     const dir = tmp();
     writeFileSync(join(dir, "req-1.json"), "stale");
     expect(() => fileChannel(dir)).toThrow(/already has gate files/);
@@ -278,7 +278,7 @@ describe("fileChannel (channel C — file rendezvous for the driving agent's Mon
     renameSync(t, join(dir, "resp-1.json"));
     const d = await decideP;
     expect((d as any).response.answers).toEqual({ "Which format?": "PDF" });
-    // O4: the consumed gate is renamed out of the req-*.json glob (so a watcher can't re-emit it)
+    // the consumed gate is renamed out of the req-*.json glob (so a watcher can't re-emit it)
     expect(existsSync(join(dir, "req-1.json.done"))).toBe(true);
     expect(existsSync(join(dir, "req-1.json"))).toBe(false);
     delete process.env.COWORK_HARNESS_DECIDER_DIR_POLL_MS;
@@ -345,9 +345,9 @@ describe("gates stream + answer (the in-band transport the harness owns)", () =>
   });
 });
 
-// #49 — fileChannel exit-listener leak: close() must remove the listener so multiple channels
+// fileChannel exit-listener leak: close() must remove the listener so multiple channels
 // in one process don't accumulate "exit" handlers past the MaxListenersExceededWarning threshold.
-describe("fileChannel — #49 exit listener removed on close()", () => {
+describe("fileChannel — exit listener removed on close()", () => {
   it("close() removes the exit listener registered on open, keeping listener count stable", () => {
     const before = process.listenerCount("exit");
     const ch1 = fileChannel(tmp());
@@ -369,8 +369,8 @@ describe("fileChannel — #49 exit listener removed on close()", () => {
   });
 });
 
-describe("decider Phase-5 fixes (#35 elicit cancel, #36 JSON-safe reply_with)", () => {
-  it("#35 — a TTY elicit can return cancel (not just accept/decline)", async () => {
+describe("decider fixes (elicit cancel, JSON-safe reply_with)", () => {
+  it("a TTY elicit can return cancel (not just accept/decline)", async () => {
     const orig = process.stdin.isTTY;
     Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
     try {
@@ -385,7 +385,7 @@ describe("decider Phase-5 fixes (#35 elicit cancel, #36 JSON-safe reply_with)", 
     }
   });
 
-  it("#36 — reply_with builds a JSON-safe key for question text with quotes/newlines/backslashes", async () => {
+  it("reply_with builds a JSON-safe key for question text with quotes/newlines/backslashes", async () => {
     const tricky = 'He said "hi"\npath C:\\x';
     const req: DecisionRequest = { id: "q1", kind: "question", questions: [{ question: tricky, options: [{ label: "Yes" }] }] };
     const { channel, sent } = memChannel([JSON.stringify({ id: "q1", answers: { [tricky]: "Yes" } })]);

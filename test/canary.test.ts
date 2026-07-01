@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadGrantMap, verifyGrants } from "../src/canary/grants.js";
 
-describe("B2 — sub-agent grant canary (runs in the failing `unit` CI lane)", () => {
+describe("sub-agent grant canary (runs in the failing `unit` CI lane)", () => {
   it("the committed grant map is well-formed; any drift is a red snapshot diff", () => {
     const map = loadGrantMap();
     expect(map && typeof map === "object").toBe(true);
@@ -22,7 +22,7 @@ describe("B2 — sub-agent grant canary (runs in the failing `unit` CI lane)", (
     expect(verifyGrants([{ agentType: "unknown-x", declaredTools: [] }], { researcher: ["Bash"] })).toHaveLength(0);
   });
 
-  it("#44 — loadGrantMap THROWS on a corrupt fixture instead of silently disabling drift detection", () => {
+  it("loadGrantMap THROWS on a corrupt fixture instead of silently disabling drift detection", () => {
     const dir = mkdtempSync(join(tmpdir(), "grants-"));
     const bad = join(dir, "subagent-grants.json");
     writeFileSync(bad, "{ not valid json", "utf8");

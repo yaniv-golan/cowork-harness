@@ -7,7 +7,7 @@ import { scrub } from "../secrets.js";
 import { compileUserRegex } from "../regex.js";
 
 /**
- * Seam 2 — Decider: policy for the agent's `decision` events. Deciders return a
+ * Decider: policy for the agent's `decision` events. Deciders return a
  * `DecisionResponse` or `ABSTAIN` (the sentinel — never a throw for "not my job").
  * A real failure throws (e.g. `UnansweredError`). `Chain` walks links until one
  * returns non-ABSTAIN.
@@ -115,7 +115,7 @@ export class ScriptedDecider implements Decider {
   async decide(req: DecisionRequest, _ctx: RunContext): Promise<Decision | Abstain> {
     if (req.kind === "question") {
       const answers: Record<string, string> = {};
-      const unmatched: string[] = []; // #4b: sub-questions no rule answered (named in the fallthrough warning)
+      const unmatched: string[] = []; // sub-questions no rule answered (named in the fallthrough warning)
       for (const q of req.questions) {
         const text = q.question ?? q.header ?? "";
         const rule = this.rules.find((r) => {
@@ -133,9 +133,9 @@ export class ScriptedDecider implements Decider {
             `rule for "${text}" sets both choose and answer`,
             "use exactly one: choose: <label(s)> for an offered option, or answer: <text> for a free-text 'Other'",
           );
-        // FREE-TEXT (#3): a free-text "Other" answer — an arbitrary string delivered verbatim, bypassing
+        // FREE-TEXT: a free-text "Other" answer — an arbitrary string delivered verbatim, bypassing
         // label validation BY AUTHOR INTENT. Cowork auto-provides an "Other" free-text path on every gate
-        // (binary-verified), so this is always faithful; `choose:` keeps the #49 label guard for the common case.
+        // (binary-verified), so this is always faithful; `choose:` keeps the label guard for the common case.
         if (rule.answer !== undefined) {
           answers[text] = rule.answer;
           continue;
@@ -154,7 +154,7 @@ export class ScriptedDecider implements Decider {
           answers[text] = picks.join(", ");
           continue;
         }
-        // #49: validate EACH chosen label against the offered options and deliver the CANONICAL label(s).
+        // validate EACH chosen label against the offered options and deliver the CANONICAL label(s).
         // A member matching no option is a silent false-green (the run would record an impossible answer) —
         // fail loud, symmetric with the external/LLM terminals.
         const resolved = dedupeFirstSeen(
@@ -188,7 +188,7 @@ export class ScriptedDecider implements Decider {
       }
       if (unmatched.length > 0) {
         // A gate's answers are delivered atomically — a partial scripted match cannot answer just one
-        // sub-question, so the WHOLE gate falls through to the fallback. #4b: name the UNMATCHED
+        // sub-question, so the WHOLE gate falls through to the fallback. Name the UNMATCHED
         // sub-questions (not just a count) so the author knows exactly which rule to add.
         if (Object.keys(answers).length > 0)
           warn(
@@ -222,12 +222,12 @@ export class ScriptedDecider implements Decider {
 }
 
 // Read-only safe tools that never prompt. Must be a SUBSET of the Cowork toolset (baseline
-// spawn.tools) — #7: `LS`/`NotebookRead`/`TodoWrite` were dropped (not in the Cowork toolset;
+// spawn.tools) — `LS`/`NotebookRead`/`TodoWrite` were dropped (not in the Cowork toolset;
 // spawn-contract line 17). Do NOT widen this to the full spawn.tools (it includes Bash/Edit/Write/
 // Task), which would make strict parity allow Bash.
 const DEFAULT_ALLOW = new Set(["Read", "Glob", "Grep"]);
 
-/** #6: the rationale a cowork-parity off-registry auto-allow carries. Shared so run.ts can detect a
+/** The rationale a cowork-parity off-registry auto-allow carries. Shared so run.ts can detect a
  *  permissive auto-allow (real Cowork would BLOCK for the user) without string-matching drift. */
 export const PERMISSIVE_AUTOALLOW_RATIONALE = "allow-unscripted (cowork parity)";
 
@@ -307,8 +307,17 @@ export class FirstOptionDecider implements Decider {
   }
 }
 
-/** Pluggable model-completion transport (so LlmDecider is unit-testable without a real model call). */
-export type Complete = (prompt: string, model: string) => Promise<string>;
+/** Pluggable model-completion transport (so LlmDecider is unit-testable without a real model call).
+ *  Every implementation MUST report which CONCRETE model actually answered — `model` is what gets
+ *  recorded for provenance (`Decision.model` → `gateProvenance[].model`), so a test double that doesn't
+ *  care can report any fixed string, but a real transport (`claudeCliComplete`) must resolve a possibly-
+ *  aliased request (e.g. "sonnet") to the concrete id the call actually used. No fallback: `LlmDecider`
+ *  records exactly what it's told. */
+export interface CompleteResult {
+  text: string;
+  model: string;
+}
+export type Complete = (prompt: string, model: string) => Promise<CompleteResult>;
 
 /** Strict label match: exact → case-insensitive → near-miss (surrounding quotes / trailing sentence
  *  punctuation trimmed). NULL on no match (caller fails loud — we deliberately do NOT fall back to option 1
@@ -406,7 +415,7 @@ export function suffixCanonMatch(raw: string, labels: string[]): string | null {
   return cands.length === 1 ? cands[0]! : null;
 }
 
-/** The index protocol: an ENTIRELY-digit reply (the `#50` rule) in `[1, n]` → that 1-based index; null
+/** The index protocol: an ENTIRELY-digit reply in `[1, n]` → that 1-based index; null
  *  otherwise (out of range, or any non-bare-digit like "2)", "option 2", "2 and 4" → caller falls to the
  *  label tiers / fails loud). */
 export function parseIndexReply(raw: string, n: number): number | null {
@@ -441,8 +450,12 @@ export class LlmDecider implements Decider {
   constructor(
     private complete: Complete,
     private intent?: string,
-    private model: string = process.env.COWORK_HARNESS_DECIDER_MODEL || "claude-sonnet-4-5",
-    // #62: the default transport spawns `claude -p <prompt>` with the prompt as ARGV (process-table visible).
+    // "sonnet" is a floating CLI alias (resolves to whatever the latest Sonnet is at call time) — it is
+    // NEVER what gets recorded in Decision.model / gateProvenance; claudeCliComplete's --output-format
+    // json resolves it to a concrete id first (see CompleteResult). Pin --decider-model /
+    // COWORK_HARNESS_DECIDER_MODEL to a dated id for cross-run reproducibility.
+    private model: string = process.env.COWORK_HARNESS_DECIDER_MODEL || "sonnet",
+    // the default transport spawns `claude -p <prompt>` with the prompt as ARGV (process-table visible).
     // The prompt embeds an unscrubbed transcript tail, so without these a tracked secret in the last ~1000
     // chars lands in `ps`/`/proc/<pid>/cmdline`. Scrub the prompt at each complete() call — symmetric with
     // ExternalDecider, which scrubs its serialized request before it leaves the process.
@@ -455,7 +468,7 @@ export class LlmDecider implements Decider {
     if (req.kind === "permission") {
       if (!req.options) return ABSTAIN;
       const labels = req.options.map((o) => o.label);
-      const raw = await this.complete(scrub(this.permPrompt(req, ctx), this.secrets), this.model);
+      const { text: raw, model: permModel } = await this.complete(scrub(this.permPrompt(req, ctx), this.secrets), this.model);
       // Echo backstop, at parity with the question path's `echoPrefixMatch` tier: the model often
       // parrots the offered option plus a self-glossed tail past a `:` boundary ("Allow once: fetch
       // this URL one time"). Bind the echoed label instead of failing loud. The OTHER:/suffix tiers are
@@ -478,11 +491,12 @@ export class LlmDecider implements Decider {
         },
         by: "llm",
         rationale: this.intent ?? "LLM judgment",
-        model: this.model,
+        model: permModel,
       };
     }
     if (req.kind !== "question") return ABSTAIN; // dialog/elicit → fail-closed terminal
     const answers: Record<string, string> = {};
+    let resolvedModel = this.model; // overwritten below by whatever the transport actually reports
     for (const q of req.questions) {
       const text = q.question ?? q.header ?? "";
       const labels = q.options.map((o) => o.label);
@@ -494,7 +508,9 @@ export class LlmDecider implements Decider {
       // the pinned AskUserQuestion path) — symmetric with ScriptedDecider/ExternalDecider's labels.length===0
       // passthrough.
       if (labels.length === 0) {
-        const free = (await this.complete(scrub(this.freeTextPrompt(text, ctx), this.secrets), this.model)).trim();
+        const freeRes = await this.complete(scrub(this.freeTextPrompt(text, ctx), this.secrets), this.model);
+        resolvedModel = freeRes.model;
+        const free = freeRes.text.trim();
         if (free === "")
           throw new UnansweredError(
             `LLM decider returned an empty answer for the open-ended question "${text}"`,
@@ -505,7 +521,9 @@ export class LlmDecider implements Decider {
         continue;
       }
       const multi = q.multiSelect === true;
-      const raw = await this.complete(scrub(this.prompt(text, q.options, multi, ctx), this.secrets), this.model);
+      const labelRes = await this.complete(scrub(this.prompt(text, q.options, multi, ctx), this.secrets), this.model);
+      resolvedModel = labelRes.model;
+      const raw = labelRes.text;
       // MULTI-SELECT (the index protocol is the ONLY accepted form): a comma-list of bare, in-range option
       // numbers (e.g. "1, 3"). Anything else — a label echo, or a mixed "1, Seed" — fails loud rather than
       // partial-binding. (Before this branch the LLM path had no multiSelect handling at all, so a multiSelect
@@ -593,7 +611,7 @@ export class LlmDecider implements Decider {
       process.stderr.write(`[llm-decider] "${text}" → "${pick}"${this.intent ? ` (intent: ${this.intent})` : ""}\n`);
       answers[text] = pick;
     }
-    return { response: { kind: "question", answers }, by: "llm", rationale: this.intent ?? "LLM judgment", model: this.model };
+    return { response: { kind: "question", answers }, by: "llm", rationale: this.intent ?? "LLM judgment", model: resolvedModel };
   }
 
   /** Prompt for a web_fetch approval gate (domain + url + the grant options). */
@@ -652,11 +670,43 @@ export class LlmDecider implements Decider {
   }
 }
 
+/** Frame a multi-line TTY gate prompt in a lightweight box so it visually separates from progress
+ *  markers and streamed assistant text sharing the same stderr. Left-bordered only (no right edge or
+ *  padding) — avoids width/ANSI bookkeeping for a prompt whose lines vary a lot in length. Ends in
+ *  "> " (no trailing newline) so readline.question() keeps the cursor on the same line, matching the
+ *  existing (unboxed) prompts. */
+function boxPrompt(lines: string[]): string {
+  const width = Math.min(76, Math.max(10, ...lines.map((l) => l.length)));
+  const rule = "─".repeat(width);
+  return `┌${rule}\n${lines.map((l) => "│ " + l).join("\n")}\n└${rule}\n> `;
+}
+
 /** `prompt` policy — ask a human at the TTY. Requires a TTY (else throws). */
 export class PromptDecider implements Decider {
+  private ask: (prompt: string) => Promise<string>;
+  private blockNoticeShown = false;
   // Inject the asker so the chat REPL can route gate prompts through the SAME readline interface it uses
   // for user turns — two interfaces on process.stdin race for input. Defaults to a private askRaw.
-  constructor(private ask: (prompt: string) => Promise<string> = askRaw) {}
+  constructor(ask: (prompt: string) => Promise<string> = askRaw) {
+    // The FIRST blocking wait prints an immediate, unmistakable notice. A `prompt`-policy wait is
+    // otherwise un-releasable (dialog auto-cancel is Infinity under prompt) and the only other signal is
+    // the ~30s heartbeat — a CLI silently blocking on stdin is hostile to recordings/automation. The flag
+    // is PER-INSTANCE (a fresh PromptDecider per run via buildDecider), not module-level, so a
+    // multi-scenario `run dir/` doesn't notify just once for the whole batch. Only the real TTY asker
+    // (askRaw) gets the notice; a custom injected `ask` (chat REPL / tests) is its own interactive
+    // context and is left alone.
+    const interactive = ask === askRaw;
+    this.ask = (prompt) => {
+      if (interactive && !this.blockNoticeShown) {
+        this.blockNoticeShown = true;
+        warn(
+          "::notice:: [input] waiting for an answer at the TTY — this blocks until you respond. " +
+            "Ctrl-C to abort, or re-run with --on-unanswered fail (non-interactive) / first.\n",
+        );
+      }
+      return ask(prompt);
+    };
+  }
   async decide(req: DecisionRequest, _ctx?: RunContext): Promise<Decision | Abstain> {
     // Ordinary permissions → parity default. A web_fetch approval (options present) is prompted like a gate.
     if (req.kind === "permission" && !req.options) return ABSTAIN;
@@ -672,7 +722,7 @@ export class PromptDecider implements Decider {
           `protocol error: permission request for "${req.tool}" carries an empty options array`,
           "the protocol guarantees at least one option on an options-bearing permission gate",
         );
-      const permPrompt = `${req.tool}?\n${labels.map((l, i) => `  ${i + 1}) ${l}`).join("\n")}\n> `;
+      const permPrompt = boxPrompt([`${req.tool}?`, ...labels.map((l, i) => `  ${i + 1}) ${l}`)]);
       let coercedPerm: { value: string; matched: boolean };
       do {
         const ans = await this.ask(permPrompt);
@@ -711,7 +761,7 @@ export class PromptDecider implements Decider {
             );
           let free = "";
           do {
-            free = (await this.ask(`${text}\n(open-ended — type your answer)\n> `)).trim();
+            free = (await this.ask(boxPrompt([text, "(open-ended — type your answer)"]))).trim();
             if (free === "") process.stderr.write(`Please enter a non-empty answer.\n`);
           } while (free === "");
           answers[text] = free;
@@ -720,7 +770,11 @@ export class PromptDecider implements Decider {
         if (q.multiSelect) {
           // Multi-select gate: accept comma-separated indices or labels; validate each pick; serialize
           // as a comma-joined string matching the AskUserQuestion wire shape (binary-verified).
-          const optionList = `${text}\n${q.options.map((o, i) => `  ${i + 1}) ${o.label}${o.description ? " — " + o.description : ""}`).join("\n")}\nSelect one or more, comma-separated:\n> `;
+          const optionList = boxPrompt([
+            text,
+            ...q.options.map((o, i) => `  ${i + 1}) ${o.label}${o.description ? " — " + o.description : ""}`),
+            "Select one or more, comma-separated:",
+          ]);
           let resolved: string[] | null = null;
           do {
             const raw = await this.ask(optionList);
@@ -754,7 +808,10 @@ export class PromptDecider implements Decider {
           // distinct set, mirroring the LLM/scripted/external paths.
           answers[text] = dedupeFirstSeen(resolved!).join(", ");
         } else {
-          const optionList = `${text}\n${q.options.map((o, i) => `  ${i + 1}) ${o.label}${o.description ? " — " + o.description : ""}`).join("\n")}\n> `;
+          const optionList = boxPrompt([
+            text,
+            ...q.options.map((o, i) => `  ${i + 1}) ${o.label}${o.description ? " — " + o.description : ""}`),
+          ]);
           let coerced: { value: string; matched: boolean };
           do {
             const raw = await this.ask(optionList);
@@ -804,7 +861,7 @@ export class ExternalDecider implements Decider {
   async decide(req: DecisionRequest, ctx?: RunContext): Promise<Decision | Abstain> {
     const request = this.emit(req, ctx);
     // Scrub the WHOLE serialized request (context + tool input) before it leaves the process — the
-    // injected token must never reach stdout or the helper (Opus C1).
+    // injected token must never reach stdout or the helper.
     this.channel.write(scrub(JSON.stringify(request), this.secrets));
     const line = await this.channel.readLine();
     if (line == null) throw new UnansweredError("external decider channel closed without a response", request.reply_with);
@@ -878,7 +935,7 @@ export class ExternalDecider implements Decider {
         const validLabels = `valid labels: ${labels.map((l) => JSON.stringify(l)).join(", ")}`;
         const raw = parsed.answers?.[text];
         if (raw === undefined) {
-          // #20: the reply didn't answer THIS question (a key mismatch — the helper must key `answers`
+          // the reply didn't answer THIS question (a key mismatch — the helper must key `answers`
           // by the exact question text). ExternalDecider is the TERMINAL decider, so fabricating option 1
           // here would be a non-reproducible answer that greens the run — the silent false-green the ethos
           // forbids. THROW instead (no key → fail loud), rather than the old default-to-labels[0].
@@ -1043,7 +1100,7 @@ function evalPredicate(expr: string, input: Record<string, unknown>): boolean {
   const namedKeys = Object.keys(input).filter((k) => isIdentifier(k) && k !== "input");
   const params = ["input", ...namedKeys];
   const args: unknown[] = [input, ...namedKeys.map((k) => input[k])];
-  // #7: scenario YAML is author-supplied (same trust class as --decider-cmd), so `new Function` is NOT
+  // scenario YAML is author-supplied (same trust class as --decider-cmd), so `new Function` is NOT
   // sandboxed — an author can run arbitrary code, by design. But a BROKEN predicate must fail LOUD, not
   // silently deny: the old bare `catch { return false }` turned a compile error (bad `new Function`) or
   // an eval-time throw into a fabricated "denied" green. Both now throw with the offending predicate named.
@@ -1121,7 +1178,7 @@ function dedupeFirstSeen(items: string[]): string[] {
 /** Coerce a raw answer (1-based index OR label, case-insensitive) to a canonical option label.
  *  Returns a discriminated result: `matched` is true when the value was found in `labels`
  *  (by index or case-insensitive name); false when the fallback to `labels[0]` was used.
- *  Shared by the TTY prompt and the external decider so both accept the same lenient forms (Opus L4). */
+ *  Shared by the TTY prompt and the external decider so both accept the same lenient forms. */
 export function coerceLabel(
   a: string | number,
   labels: string[],
@@ -1152,7 +1209,7 @@ export function coerceLabel(
   // machine-helper contract (label-wins on a numeric collision), shipped documented rather than silent.
   const exact = labels.find((l) => l.toLowerCase() === s.toLowerCase());
   if (exact !== undefined) return { value: exact, matched: true };
-  // #50: only treat the string as an index when it is ENTIRELY digits — `parseInt("1-no")` returns 1,
+  // only treat the string as an index when it is ENTIRELY digits — `parseInt("1-no")` returns 1,
   // which would silently mis-select option 1. A digit-prefixed *label* falls through to the label match.
   const n = /^\d+$/.test(s) ? parseInt(s, 10) : NaN;
   if (!isNaN(n) && n >= 1 && n <= labels.length) return { value: labels[n - 1], matched: true };

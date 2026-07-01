@@ -52,7 +52,7 @@ describe("skill-hash — excludes cassettes/VCS, keeps real source", () => {
   });
 });
 
-describe("H9 — skillHashEntries diagnostics (dump what the hash sees)", () => {
+describe("skillHashEntries diagnostics (dump what the hash sees)", () => {
   it("lists exactly the files the hash folds in, with a content sha that matches per-file", () => {
     const d = skillDir();
     writeFileSync(join(d, "skills", "extra.md"), "more\n");
@@ -74,10 +74,10 @@ describe("H9 — skillHashEntries diagnostics (dump what the hash sees)", () => 
     expect(paths).toEqual(["skills/SKILL.md"]); // no .git, no cassette, no hashignore file
   });
 
-  it("H9 fix (v5) — OS-junk is EXCLUDED from the hash, so an out-of-band touch can't re-stale", () => {
+  it("(v5) OS-junk is EXCLUDED from the hash, so an out-of-band touch can't re-stale", () => {
     const d = skillDir();
     const before = hashSkillDirs([d]).hash;
-    // a .DS_Store appearing (or being rewritten by Finder) must NOT change the skill hash — the H9 fix.
+    // a .DS_Store appearing (or being rewritten by Finder) must NOT change the skill hash.
     writeFileSync(join(d, "skills", ".DS_Store"), "\x00\x01finder-state");
     expect(hashSkillDirs([d]).hash).toBe(before); // excluded → no drift
     writeFileSync(join(d, "skills", ".DS_Store"), "\x00\x02finder-moved-an-icon");
@@ -101,7 +101,7 @@ describe("H9 — skillHashEntries diagnostics (dump what the hash sees)", () => 
   });
 });
 
-describe("S5 (v6) — in-tree symlinks are hashed by target; escaping symlinks are skipped", () => {
+describe("(v6) in-tree symlinks are hashed by target; escaping symlinks are skipped", () => {
   it("an in-tree symlink contributes (and a RE-POINT to a different in-tree file drifts the hash)", () => {
     const d = skillDir(); // skills/SKILL.md
     writeFileSync(join(d, "skills", "OTHER.md"), "# other\n");
@@ -125,7 +125,7 @@ describe("S5 (v6) — in-tree symlinks are hashed by target; escaping symlinks a
   });
 });
 
-describe("bug 48 — .AppleDouble and __MACOSX directory subtrees are excluded", () => {
+describe(".AppleDouble and __MACOSX directory subtrees are excluded", () => {
   it("a .AppleDouble directory added inside skills does not change the hash", () => {
     const d = skillDir();
     const before = hashSkillDirs([d]).hash;
@@ -161,7 +161,7 @@ describe("bug 48 — .AppleDouble and __MACOSX directory subtrees are excluded",
   });
 });
 
-describe("bug 49 — compileIgnore handles /**/foo prefix", () => {
+describe("compileIgnore handles /**/foo prefix", () => {
   it("/**/foo compiles to the same regex source as **/foo", () => {
     const a = compileIgnore("/**/foo");
     const b = compileIgnore("**/foo");
@@ -196,7 +196,7 @@ describe("bug 49 — compileIgnore handles /**/foo prefix", () => {
   });
 });
 
-describe("bug 50 — agentSkillName respects isDirectory for dotted names", () => {
+describe("agentSkillName respects isDirectory for dotted names", () => {
   it("a FILE agents/cap-table.v2 strips extension to cap-table.v2... wait, it strips only the last ext", () => {
     expect(agentSkillName(["agents", "cap-table.v2"], false)).toBe("cap-table");
   });
@@ -219,7 +219,7 @@ describe("bug 50 — agentSkillName respects isDirectory for dotted names", () =
   });
 });
 
-describe("bug 51 — NUL separator prevents newline-in-filename hash collisions", () => {
+describe("NUL separator prevents newline-in-filename hash collisions", () => {
   it("two trees with different file counts hash differently (structural collision test)", () => {
     // Under \n separator, a file named "a\nF:b" with empty content and a tree with files "a" and "b"
     // (both empty) could collide: "F:a\nF:b\n" == "F:a\nF:b\n". Under \0 they are distinct.

@@ -1,5 +1,5 @@
 /**
- * Privacy SCANNER (#1 / A2) — the always-on CI safety net, distinct from the opt-in redactor. Where the
+ * Privacy SCANNER — the always-on CI safety net, distinct from the opt-in redactor. Where the
  * redactor mutates bytes (and is therefore conservative), the scanner only FLAGS, so it runs high-recall and
  * fails the build. A finding means "the redactor's policy has a gap (or wasn't configured)".
  *
@@ -15,7 +15,7 @@ export interface ScanFinding {
 
 /** An allowlist entry. `cls` undefined = applies to every class (a bare `--allow`); `cls` set = scoped to one
  *  finding class (`--allow-domain` → "domain"). Scoping plus whole-token anchoring stops a domain allow from
- *  silently clearing an email finding whose domain it happens to match (F-2). */
+ *  silently clearing an email finding whose domain it happens to match. */
 export interface AllowPattern {
   cls?: string;
   re: RegExp;
@@ -48,7 +48,7 @@ export const EMAIL_SCAN_PATTERNS = DEFAULT_SCAN_PATTERNS.filter((p) => p.cls ===
 
 function allowed(sample: string, cls: string, allow: AllowPattern[]): boolean {
   // An allow suppresses a finding only when (a) it is unscoped OR scoped to this finding's class, AND (b) it
-  // matches the WHOLE finding token. Anchoring with ^(?:…)$ is the F-2 fix: substring matching let a domain
+  // matches the WHOLE finding token. Anchoring with ^(?:…)$ is the fix: substring matching let a domain
   // allow (e.g. `example\.com`) silently clear an EMAIL finding (`alice@example.com`) whose domain matched —
   // a real founder@startup.com could then pass a gate that "has an email class". Test against a non-global
   // clone so a caller's /g regex can't carry lastIndex across calls.

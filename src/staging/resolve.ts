@@ -1,5 +1,5 @@
 /**
- * SEAM A — staging-source validation primitives.
+ * Staging-source validation primitives.
  *
  * The harness's cardinal rule is fail-loud: a declared session source that cannot be honored must
  * raise, never silently no-op (a silent skip manufactures a false-green run). That discipline was
@@ -36,7 +36,7 @@ export interface ResolveDeclaredSourceOptions {
 }
 
 /**
- * The single choke point every declared session source resolves through (SEAM A). Given a host path, a
+ * The single choke point every declared session source resolves through. Given a host path, a
  * mount path, a mode, and a `kind`, it validates the source's existence + kind and returns a validated
  * `ResolvedMount` — or `null` when a declared-but-absent source is being reconciled here (the immediate
  * softMissing-skip case).

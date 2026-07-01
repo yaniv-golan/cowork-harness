@@ -17,7 +17,7 @@ function rr(over: Partial<RunResult>): RunResult {
 }
 const assn = (assertion: Assertion, pass = true): RunResult["assertions"][number] => ({ assertion, pass });
 
-describe("computeVerdict (SEAM B — the single verdict source)", () => {
+describe("computeVerdict (the single verdict source)", () => {
   it("passes a clean success; fails a failed assertion or result:error", () => {
     expect(computeVerdict(rr({}), "live").pass).toBe(true);
     expect(computeVerdict(rr({ assertions: [assn({ tool_called: "X" }, false)] }), "live").pass).toBe(false);
@@ -40,7 +40,7 @@ describe("computeVerdict (SEAM B — the single verdict source)", () => {
     expect(computeVerdict(rr({ scan: { outputsDeletes: [], hostPathLeaked: true, selfHealRan: false } }), "live").pass).toBe(false);
   });
 
-  it("Fix 5 — splits result:error into transport_error vs result_error (both fail; distinct message)", () => {
+  it("splits result:error into transport_error vs result_error (both fail; distinct message)", () => {
     // a generic agent error → result_error
     const agent = computeVerdict(rr({ result: "error", resultErrorKind: "agent" }), "live");
     expect(agent.pass).toBe(false);
@@ -77,7 +77,7 @@ describe("computeVerdict (SEAM B — the single verdict source)", () => {
     expect(alsoFailed.signals.find((s) => s.code === "transport_error")?.message).toMatch(/real failure/);
   });
 
-  it("Fix 6h — guard roster reflects lane + probe outcome; never ✓ for a guard that didn't run", () => {
+  it("guard roster reflects lane + probe outcome; never ✓ for a guard that didn't run", () => {
     const g = (v: ReturnType<typeof computeVerdict>, name: string) => v.guards.find((x) => x.name === name)?.status;
 
     // live + a definitive clean probe → capability-use ran clean (ok); scan guards ok
@@ -99,7 +99,7 @@ describe("computeVerdict (SEAM B — the single verdict source)", () => {
     expect(g(onReplay, "host-path")).toBe("na");
   });
 
-  it("Fix 4b — requires_capabilities the tier couldn't satisfy hard-fails (both lanes); opt-out + clean run pass", () => {
+  it("requires_capabilities the tier couldn't satisfy hard-fails (both lanes); opt-out + clean run pass", () => {
     // declared family omitted by the running image → fail
     const omitted = computeVerdict(rr({ requiresCapabilityUnmet: { caps: ["office_convert"], reason: "omitted" } }), "live");
     expect(omitted.pass).toBe(false);
@@ -161,7 +161,7 @@ describe("computeVerdict (SEAM B — the single verdict source)", () => {
     expect(computeVerdict(r, "replay").pass).toBe(true);
   });
 
-  it("H2 — a stalled run fails on BOTH lanes (re-derived on replay), unless allow_stall opts out", () => {
+  it("a stalled run fails on BOTH lanes (re-derived on replay), unless allow_stall opts out", () => {
     const stalled = rr({ stalledOnQuestion: true });
     expect(computeVerdict(stalled, "live").pass).toBe(false);
     expect(computeVerdict(stalled, "live").signals.some((s) => s.code === "stalled")).toBe(true);

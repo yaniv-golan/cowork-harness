@@ -20,7 +20,7 @@ export const PlatformBaseline = z.looseObject({
   agentBinary: z.object({
     stagedPath: z.string().optional(),
     format: z.string().optional(),
-    // npmPackage/preferReuseStaged removed (Q1): there is NO npm path — the Linux/arm64 ELF is
+    // npmPackage/preferReuseStaged removed: there is NO npm path — the Linux/arm64 ELF is
     // bind-mounted from the staged Desktop install (or COWORK_AGENT_BINARY). Tolerated-but-ignored
     // if present in an old baseline (z.object strips unknown keys).
   }),
@@ -148,7 +148,7 @@ export const AnswerRule = z
 export type AnswerRule = z.infer<typeof AnswerRule>;
 
 // Each field carries a `.describe()` so it is the SINGLE source for both the published JSON schema and
-// `cowork-harness assert --list` (which reads `Assertion.shape[k].description`) — the list can never drift
+// `cowork-harness assertions --list` (which reads `Assertion.shape[k].description`) — the list can never drift
 // from the schema. Keep descriptions one line.
 export const Assertion = z.object({
   transcript_contains: z.string().min(1).optional().describe("the transcript contains this literal substring"),
@@ -230,9 +230,9 @@ export const Assertion = z.object({
     .boolean()
     .optional()
     .describe(
-      "(replay-only, NOT authorable) serializeDecision output matched the frozen recording — the token-free O7 guard; synthesized by the replay lane and rejected if written in a scenario",
+      "(replay-only, NOT authorable) serializeDecision output matched the frozen recording — the token-free re-serialization guard; synthesized by the replay lane and rejected if written in a scenario",
     ),
-  // #5: assert over the CONTENTS of a JSON artifact via a dotted path. `absent` and `is_null` are DISTINCT
+  // assert over the CONTENTS of a JSON artifact via a dotted path. `absent` and `is_null` are DISTINCT
   // (key-missing vs present-null); an unresolved INTERMEDIATE segment fails loud (malformed artifact),
   // never a vacuous pass. Manifest-backed: evaluated on replay when the cassette carries an `artifacts`
   // manifest (`record` snapshots one); a manifest-less cassette skips it (with a loud warning).
@@ -293,7 +293,7 @@ export const ScenarioObject = z.strictObject({
   // re-stales only its own cassettes. Fail-closed: if any named skill is absent, the whole tree is hashed
   // (a typo can't silently narrow the gate).
   skills: z.array(z.string()).default([]),
-  // Fix 4b: capability families this skill's core path NEEDS (e.g. office_convert, ocr, pdf_tables). When
+  // capability families this skill's core path NEEDS (e.g. office_convert, ocr, pdf_tables). When
   // set, the run HARD-FAILS if the running tier omits one (clause a) or cannot verify them — protocol /
   // replay / COWORK_SKIP_CAPABILITY_PROBE (clause b) — closing the false-green for extraction-heavy skills.
   // `allow_missing_capability: true` opts out. Validated against the known family list at run time.
@@ -321,15 +321,15 @@ export interface Fingerprint {
   baseline: string; // appVersion at record time
   skillHash?: string; // hash of the session's local skill/plugin/marketplace dir contents (if any)
   skillSources?: string[]; // the local dirs that fed skillHash (for the replay recompute + diagnostics)
-  skillScope?: string[]; // F-6: the skills the hash was scoped to (empty/absent = whole-tree); diagnostics
-  sharedHash?: string; // G-4: shared-root hash for scoped cassettes; absent on whole-tree or non-plugin-root mounts
+  skillScope?: string[]; // the skills the hash was scoped to (empty/absent = whole-tree); diagnostics
+  sharedHash?: string; // shared-root hash for scoped cassettes; absent on whole-tree or non-plugin-root mounts
   contentSig?: string; // v3+: algorithm-independent content fingerprint; used by `rehash` to verify content is unchanged across format bumps
   // v5+: per-file manifest [relpath, contentSha] of the exact files feeding skillHash, so a staleness mismatch
   // names the EXACT changed/added/removed file instead of a bucket. Paths are ROOT-RELATIVE (no host path) and
   // scanned/redacted like skillSources (privacy). Omitted (with fileSigsOmitted:true) above MANIFEST_MAX_FILES.
   fileSigs?: Array<[string, string]>;
   fileSigsOmitted?: boolean;
-  // Phase C: the boundary used for skillHash — "git" (git-tracked set, COWORK_HARNESS_GITSET=1) or "raw"
+  // the boundary used for skillHash — "git" (git-tracked set, COWORK_HARNESS_GITSET=1) or "raw"
   // (legacy walk; default). A record-vs-verify mode flip makes hash comparison meaningless → re-record.
   mode?: "git" | "raw";
   // Opt-in per-skill agent scoping was active (COWORK_HARNESS_AGENT_SCOPE=skill) when this scoped hash was
@@ -350,6 +350,48 @@ export interface StalenessFinding {
   message: string;
 }
 
+/** How a single AskUserQuestion gate was answered. `answeredBy` is the raw `Decision["by"]` value
+ *  (scripted | first | llm | external | human | …); `answer` is the chosen option(s) flattened as
+ *  "question=choice; question2=choice2"; `model` is the decider model when `answeredBy === "llm"`. */
+export interface GateProvenance {
+  question: string;
+  answeredBy: string;
+  answer: string;
+  model?: string;
+}
+
+/** Run-level rollup of gate provenance: how many gates, a `by`-source histogram, and per-gate detail
+ *  in ask order. Informational — surfaced in result.json / the footer / `trace --view questions` so the
+ *  residual non-determinism is legible; it never changes the verdict. */
+export interface GateProvenanceSummary {
+  total: number;
+  bySource: Record<string, number>;
+  gates: GateProvenance[];
+}
+
+/** The shape persisted to `<outDir>/status.json` — a lightweight, mid-run-readable snapshot of a live
+ *  or finished run, so a checker (script or agent) can answer "is this run still going, and how far
+ *  along" without process-table access (`ps aux` is unreliable across sandbox/PID-namespace boundaries).
+ *  Deliberately NOT a subset/superset of `RunResult` — it must be readable before any `RunResult`
+ *  assembler has run, so it's populated straight from the live `RunRecord`, not from `RunResult`. See
+ *  `docs/run-status.md`. */
+export interface RunStatus {
+  schemaVersion: 1;
+  state: "running" | "done" | "error";
+  pid: number;
+  scenario: string;
+  fidelity: string;
+  sessionId: string;
+  startedAt: string; // ISO-8601
+  updatedAt: string; // ISO-8601 — bumped on every write, incl. terminal
+  elapsedMs: number;
+  toolCounts: Record<string, number>;
+  subagentCount: number;
+  // present only once state !== "running"
+  result?: "success" | "error";
+  durationMs?: number;
+}
+
 export interface RunResult {
   $schema?: string;
   generator?: string;
@@ -358,23 +400,23 @@ export interface RunResult {
   fidelity: string;
   baseline: string;
   result: "success" | "error";
-  resultErrorKind?: "transport" | "agent"; // Fix 5: when result==="error", classify a tail-end transport drop vs a genuine failure
-  // H2/H3: the run ended on a question having done no productive tool work after its last gate (the agent
+  resultErrorKind?: "transport" | "agent"; // when result==="error", classify a tail-end transport drop vs a genuine failure
+  // the run ended on a question having done no productive tool work after its last gate (the agent
   // asked for input and stopped) while result==="success". A false-green: the SDK turn didn't error, but the
   // task did not complete. computeVerdict fails on this (a `stalled` signal) unless the scenario asserts
   // allow_stall. Scenario-lane only; re-derived by the detector in run.ts on both the live and replay
   // re-drive (NOT a persisted-then-read flag).
   stalledOnQuestion?: boolean;
-  // Fix 6h: capability-probe outcome, so the guard roster can show "ran clean" (definitive) distinctly from
+  // capability-probe outcome, so the guard roster can show "ran clean" (definitive) distinctly from
   // "couldn't verify" (unverified) and "didn't run" (skipped) — never a false ✓ for a guard that didn't run.
   capabilityProbe?: "definitive" | "unverified" | "skipped";
-  // Fix 4b: declared `requires_capabilities` the running tier could not satisfy — computed at run time
+  // declared `requires_capabilities` the running tier could not satisfy — computed at run time
   // (so verify-run/replay honor it without re-deriving). `omitted` = the image lacks them; `unverifiable` =
   // the tier couldn't probe (protocol/replay/skip). computeVerdict fails on this unless allow_missing_capability.
   requiresCapabilityUnmet?: { caps: string[]; reason: "omitted" | "unverifiable" };
-  decisions: Array<{ kind: string; name: string; decision: string; by?: string; detail?: unknown; rationale?: string }>;
-  toolCounts?: Record<string, number>; // O6: truthful per-tool call count (use this, NOT usage.server_tool_use which is host-routed-blind in cowork)
-  // Part 3: did each gate's answer reach the model? `reason` distinguishes a `delivered:null` that means
+  decisions: Array<{ kind: string; name: string; decision: string; by?: string; model?: string; detail?: unknown; rationale?: string }>;
+  toolCounts?: Record<string, number>; // truthful per-tool call count (use this, NOT usage.server_tool_use which is host-routed-blind in cowork)
+  // did each gate's answer reach the model? `reason` distinguishes a `delivered:null` that means
   // "no pairing metadata" (no toolUseId) from one that means "tool result not observed".
   gateDeliveries?: Array<{
     question: string;
@@ -396,7 +438,7 @@ export interface RunResult {
    * Decisions answered by a non-deterministic / non-authoritative source (LLM, external helper,
    * human, or the `first`-option fallback). The name is historical — these entries are NOT literally
    * unanswered; they were answered, but by a source that is not reproducible. Scripted answers
-   * (by:"scripted") are excluded because they are authoritative and deterministic. (#20)
+   * (by:"scripted") are excluded because they are authoritative and deterministic.
    */
   unanswered?: Array<{ question: string; chosen: string; by: string; rationale?: string; model?: string }>;
   usage?: Record<string, unknown>;
@@ -416,7 +458,7 @@ export interface RunResult {
    */
   userVisibleRoots?: string[];
   // ENV-MANIFEST: files written under the user-visible roots (outputs/ + connected folders), relative paths
-  // + sizes. Paths only (no content snapshot — that is the cassette manifest, #1). Kills path-guessing and
+  // + sizes. Paths only (no content snapshot — that is the cassette manifest). Kills path-guessing and
   // makes an all-or-nothing truncated run (empty manifest) detectable. NOT sufficient for mid-write truncation.
   artifacts?: { path: string; bytes: number }[];
   /** True when the run did NOT complete because it exited on an unanswered gate, but its work (artifacts,
@@ -427,19 +469,19 @@ export interface RunResult {
   /** On a `partial` run, the unanswered gate that ended it — `message` is the decider's failure text (the
    *  question is embedded in it) and `hint` is the actionable remedy. */
   unansweredGate?: { message: string; hint?: string };
-  nonDeterministic?: boolean; // true if any decision was made by a non-deterministic source (by:"llm"|"external"|"human"|"first") — a green run is NOT reproducible (#47)
+  nonDeterministic?: boolean; // true if any decision was made by a non-deterministic source (by:"llm"|"external"|"human"|"first") — a green run is NOT reproducible
   /** True when the CONFIGURED terminal (on_unanswered: llm/prompt, or an external channel) could answer
    *  non-deterministically — even if THIS run was fully scripted and didn't hit it. `nonDeterministic`
    *  stays execution-truth (what replay relies on); this is config-truth for audit consumers. */
   nonDeterministicTerminal?: boolean;
-  /** #6: tools auto-allowed by cowork parity for unscripted, off-registry permission requests — real Cowork BLOCKS these for the user. A non-empty list means a green is NOT a faithful pass (pin with --answer or permission_parity: strict). */
+  /** tools auto-allowed by cowork parity for unscripted, off-registry permission requests — real Cowork BLOCKS these for the user. A non-empty list means a green is NOT a faithful pass (pin with --answer or permission_parity: strict). */
   permissiveAutoAllow?: string[];
   /** Post-run scan signals (live lane only). computeVerdict default-fails on `outputsDeletes`/`hostPathLeaked`
    *  when the scenario did NOT author the matching assertion. Absent on the replay lane (a cassette can't reproduce them). */
   scan?: { outputsDeletes: string[]; hostPathLeaked: boolean; selfHealRan: boolean };
-  /** The fidelity tier actually used. Equals `fidelity` unless `fidelity:"cowork"` resolved to a specific tier. (#24) */
+  /** The fidelity tier actually used. Equals `fidelity` unless `fidelity:"cowork"` resolved to a specific tier. */
   effectiveFidelity?: string;
-  /** #49: structured fidelity warnings (prompt asset gaps, version mismatches) — visible to JSON callers,
+  /** structured fidelity warnings (prompt asset gaps, version mismatches) — visible to JSON callers,
    *  not just stderr. Populated when a non-fatal prompt warning is emitted during a run. */
   fidelityWarnings?: string[];
   /** Replay-lane only: class-tagged cassette-staleness findings, surfaced to JSON callers so a token-free CI
@@ -458,7 +500,7 @@ export interface RunResult {
    *  `tool_result_not_contains`. `assertText` is preferred when present; falls back to `text` (500-char
    *  display cap) for cassettes recorded before this field was added. */
   toolResults?: { toolUseId?: string; isError: boolean; text: string; assertText?: string }[];
-  /** #20: true when L0 (protocol) ran with plugins that loaded via --settings/managed config instead of
+  /** true when L0 (protocol) ran with plugins that loaded via --settings/managed config instead of
    *  --plugin-dir (the Cowork cache layout). computeVerdict fails on this unless allow_l0_plugin_divergence
    *  is asserted — a warn-only was insufficient since the run could still appear green. */
   l0PluginDivergence?: boolean;
@@ -466,6 +508,12 @@ export interface RunResult {
    *  intersection of the image's probed `omitted` set and capability-usage detected in events.jsonl).
    *  computeVerdict default-fails on a non-empty list unless `allow_missing_capability` is asserted — a
    *  green run that used an omitted capability is a likely FALSE NEGATIVE (real Cowork ships it). Absent on
-   *  replay (no live image to probe). See docs/internal/2026-06-20-founder-skills-bug-validation.md §8.8. */
+   *  replay (no live image to probe). */
   missingCapabilityUse?: string[];
+  /** Per-gate answer provenance: how each AskUserQuestion gate was answered (scripted / decided(llm|external)
+   *  / first-option / prompt), with a `bySource` histogram. Informational — it makes the residual
+   *  non-determinism legible so a reviewer sees which assertions sit downstream of a decided (non-reproducible)
+   *  gate. Absent when the run had no gates, and absent on the replay lane (which reports reproducibility via
+   *  nonDeterministic:false, not per-gate provenance). Derived from `decisions[]` at write time. */
+  gateProvenance?: GateProvenanceSummary;
 }

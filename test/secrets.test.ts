@@ -1,9 +1,9 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { collectSecrets, scrub } from "../src/secrets.js";
 
-// #31 — the scrub set covers the known auth keys + ANTHROPIC_CUSTOM_HEADERS, plus user-configured
+// the scrub set covers the known auth keys + ANTHROPIC_CUSTOM_HEADERS, plus user-configured
 // keys (COWORK_HARNESS_SCRUB_KEYS) and literal values (COWORK_HARNESS_SCRUB_VALUES). Token-free.
-describe("#31 — secret collection covers more than the three auth tokens", () => {
+describe("secret collection covers more than the three auth tokens", () => {
   const saved = { ...process.env };
   afterEach(() => {
     for (const k of [

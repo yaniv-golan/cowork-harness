@@ -17,19 +17,25 @@ n=$((n + 1))
 echo "$n" > "$FAKE_COUNTER"
 case "$FAKE_MODE" in
   always-fail)
-    echo "fake operational error (on stdout, like claude -p)"
+    echo '{"type":"result","is_error":true,"result":"fake operational error (on stdout, like claude -p)","modelUsage":{}}'
     exit 1 ;;
   succeed-after-1)
-    if [ "$n" -le 1 ]; then echo "transient blip"; exit 1; fi
-    echo "OK-ANSWER"; exit 0 ;;
+    if [ "$n" -le 1 ]; then echo '{"type":"result","is_error":true,"result":"transient blip","modelUsage":{}}'; exit 1; fi
+    echo '{"type":"result","is_error":false,"result":"OK-ANSWER","modelUsage":{"claude-sonnet-5":{}}}'; exit 0 ;;
   timeout)
     sleep 30
-    echo "late"; exit 0 ;;
+    echo '{"type":"result","is_error":false,"result":"late","modelUsage":{"claude-sonnet-5":{}}}'; exit 0 ;;
   spew)
     yes 0123456789 | head -c 1000000 2>/dev/null
     exit 0 ;;
+  malformed)
+    echo 'not valid json'
+    exit 0 ;;
+  zero-models)
+    echo '{"type":"result","is_error":false,"result":"OK-ANSWER","modelUsage":{}}'
+    exit 0 ;;
   *)
-    echo "OK-ANSWER"; exit 0 ;;
+    echo '{"type":"result","is_error":false,"result":"OK-ANSWER","modelUsage":{"claude-sonnet-5":{}}}'; exit 0 ;;
 esac
 `;
 
@@ -66,8 +72,27 @@ describe("claudeCliComplete — retry transport", () => {
     process.env.FAKE_MODE = "succeed-after-1";
     process.env.FAKE_COUNTER = counterPath;
     const out = await claudeCliComplete("q", "m");
-    expect(out.trim()).toBe("OK-ANSWER");
+    expect(out.text.trim()).toBe("OK-ANSWER");
+    expect(out.model).toBe("claude-sonnet-5");
     expect(invocations()).toBe(2); // 1 transient failure + 1 success
+  });
+
+  it("propagates the resolved model from --output-format json's modelUsage (not the requested alias)", async () => {
+    process.env.FAKE_COUNTER = counterPath;
+    const out = await claudeCliComplete("q", "sonnet");
+    expect(out.model).toBe("claude-sonnet-5");
+  });
+
+  it("a malformed JSON envelope on a clean exit fails loud (never silently swallowed)", async () => {
+    process.env.FAKE_MODE = "malformed";
+    process.env.FAKE_COUNTER = counterPath;
+    await expect(claudeCliComplete("q", "m")).rejects.toThrow(/unparseable envelope/);
+  });
+
+  it("a clean exit with zero resolved models fails loud (never records an unknown/empty model)", async () => {
+    process.env.FAKE_MODE = "zero-models";
+    process.env.FAKE_COUNTER = counterPath;
+    await expect(claudeCliComplete("q", "m")).rejects.toThrow(/modelUsage has 0 keys/);
   });
 
   it("exhausts the bounded retries then fails loud, with the child's STDOUT folded into the message", async () => {

@@ -71,7 +71,7 @@ export async function cmdChat(args: string[]) {
     process.exit(2);
   }
   let fidelity: ChatFidelity = (envFid as ChatFidelity | undefined) ?? "container";
-  // R4: COWORK_HARNESS_MODEL env var default (CLI --model takes precedence).
+  // COWORK_HARNESS_MODEL env var default (CLI --model takes precedence).
   let model: string | undefined = process.env.COWORK_HARNESS_MODEL;
   let verbose = false;
   const uploads: string[] = [];
@@ -106,7 +106,7 @@ export async function cmdChat(args: string[]) {
       seenFlags.add("--raw");
     } else if (a === "--verbose" || a === "-V") verbose = true;
     else if (a === "--fidelity") {
-      const v = ++i < args.length ? args[i] : undefined; // §8.2: bounds check
+      const v = ++i < args.length ? args[i] : undefined; // bounds check
       if (v === undefined || !(CHAT_FIDELITY_TIERS as readonly string[]).includes(v)) {
         log(`chat --fidelity must be ${CHAT_FIDELITY_TIERS.map((t) => `"${t}"`).join(", ")} (got "${v ?? ""}")\n`);
         process.exit(2);
@@ -180,7 +180,7 @@ export async function cmdChat(args: string[]) {
   const sessionId = `local_${process.hrtime.bigint().toString(36)}`;
   const outDir = join(runsWriteRoot(), "chat", sessionId);
   mkdirSync(outDir, { recursive: true });
-  const plan = buildLaunchPlan(session, baseline, outDir, fidelity);
+  const plan = buildLaunchPlan(session, baseline, outDir, fidelity, false); // chat has no resume concept
   const scenario = Scenario.parse({
     name: "chat",
     baseline: "latest",
@@ -190,10 +190,10 @@ export async function cmdChat(args: string[]) {
     assert: [],
   });
 
-  // #49: name ephemeral docker resources by a per-invocation runToken (not the persistent sessionId),
-  // mirroring execute.ts's F1 hardening so a re-run can't collide on the sidecar container name.
+  // name ephemeral docker resources by a per-invocation runToken (not the persistent sessionId),
+  // mirroring execute.ts's hardening so a re-run can't collide on the sidecar container name.
   const runToken = `r${process.hrtime.bigint().toString(36)}`;
-  // #43: no process.env mutation — pass proxy/network explicitly so concurrent calls don't stomp.
+  // no process.env mutation — pass proxy/network explicitly so concurrent calls don't stomp.
   // protocol tier runs the host claude binary with no Docker sandbox, so no sidecar is needed.
   const sidecar = fidelity !== "protocol" ? startEgressSidecar(plan.egressAllow, outDir, runToken) : null;
   const prompts = renderPrompts(baseline, session, sessionId, plan.mounts.find((m) => m.kind === "folder")?.mountPath);
@@ -209,7 +209,7 @@ export async function cmdChat(args: string[]) {
   const runner = process.env.COWORK_CONTAINER_RUNTIME ?? "docker";
   let containerName: string | undefined;
   let child: { kill?: (s?: NodeJS.Signals) => void } | undefined;
-  // 2a: Ctrl-C — reap the agent container in the "container" phase (before the sidecar's network teardown).
+  // Ctrl-C — reap the agent container in the "container" phase (before the sidecar's network teardown).
   const deregisterContainerReap = sidecar
     ? registerCleanup({
         phase: "container",
@@ -223,11 +223,11 @@ export async function cmdChat(args: string[]) {
         },
       })
     : undefined;
-  // #30: same web_fetch provenance wiring as execute.ts — ref created before spawn, filled after Run.
+  // same web_fetch provenance wiring as execute.ts — ref created before spawn, filled after Run.
   const viaApiOn = readGateFlag(baseline, "1978029737", "coworkWebFetchViaApi");
   const promptGateOn = readGateFlag(baseline, "1978029737", "coworkWebFetchPrompt");
   const provenanceRef: { current?: WebFetchProvenance } = {};
-  // #4: ONE readline interface on process.stdin, shared by the turn reader (ttyTurns) and the gate
+  // ONE readline interface on process.stdin, shared by the turn reader (ttyTurns) and the gate
   // prompter (PromptDecider). Two interfaces would race for the same stdin → undefined input routing.
   const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
   const ask = (prompt: string) => new Promise<string>((resolve) => rl.question(prompt, (a) => resolve(a.trim())));
@@ -236,6 +236,7 @@ export async function cmdChat(args: string[]) {
     progress: true,
     verbose,
     color: process.stderr.isTTY === true && !process.env.NO_COLOR,
+    compact: false, // chat is an interactive REPL, not shareable-output (the path-collapse targets skill/run)
   };
   const start = Date.now();
   let stopHeartbeat: (() => void) | undefined;
@@ -249,7 +250,7 @@ export async function cmdChat(args: string[]) {
       stopHeartbeat = startHeartbeat(renderer, renderPlan, start);
       await run.drive(withSeedPrompt(seedPrompt, ttyTurns(rl)), {});
     } else if (fidelity === "hostloop") {
-      // #25: honor --fidelity hostloop in chat, mirroring execute.ts's branch selection.
+      // honor --fidelity hostloop in chat, mirroring execute.ts's branch selection.
       const hl = spawnHostLoop(scenario, baseline, plan, outDir, sessionId, {
         systemPromptAppend: prompts.systemPromptAppend,
         runToken,
@@ -284,7 +285,7 @@ export async function cmdChat(args: string[]) {
         runToken,
       });
       child = ct.child;
-      containerName = ct.containerName; // so Ctrl-C / finally reap the agent container by name (#3)
+      containerName = ct.containerName; // so Ctrl-C / finally reap the agent container by name
       const agent = new LiveAgentSession(child as any, outDir);
       const decider = Chain(new ScriptedDecider([]), new PermissionDefaultDecider("cowork"), new PromptDecider(ask));
       const renderer = makeRenderer(renderPlan);
@@ -294,8 +295,8 @@ export async function cmdChat(args: string[]) {
     }
   } finally {
     stopHeartbeat?.();
-    deregisterContainerReap?.(); // 2a: normal path owns the reap below
-    // Reap the agent container first (mirrors execute.ts F1 hardening — #34).
+    deregisterContainerReap?.(); // normal path owns the reap below
+    // Reap the agent container first (mirrors execute.ts hardening).
     try {
       child?.kill?.("SIGKILL");
     } catch {
@@ -374,7 +375,7 @@ function chatRaw(folder: string, model?: string) {
     "HOME=/tmp",
     "-e",
     "CLAUDE_CODE_IS_COWORK=1",
-    // #30: pass the token by NAME only — docker inherits the value from its env (this process, via
+    // pass the token by NAME only — docker inherits the value from its env (this process, via
     // stdio:"inherit"), so it never appears in the `docker run` argv (ps/proc).
     ...(process.env.CLAUDE_CODE_OAUTH_TOKEN ? ["-e", "CLAUDE_CODE_OAUTH_TOKEN"] : []),
     image,

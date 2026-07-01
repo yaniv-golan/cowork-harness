@@ -1,8 +1,10 @@
-import { warn } from "../io.js";
+import { warn, tildeify } from "../io.js";
 import { readFileSync, existsSync, statSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 import { parseMessage, type AgentEvent, type DecisionRequest } from "../agent/session.js";
+import { labelSource } from "./gate-provenance.js";
+import type { RunResult } from "../types.js";
 
 /**
  * The default runs root when no override is set: a per-user state dir OUTSIDE any working tree, so run
@@ -19,7 +21,7 @@ export function defaultRunsHome(): string {
 /**
  * Resolve the runs/ root for READS (`trace`/`scaffold`/`verify-run`). `COWORK_HARNESS_RUNS_DIR` override
  * if set, else `defaultRunsHome()`. Both halves are ABSOLUTE, so a `trace <run-id>` resolves from any
- * directory — the absolute default replaces the old cwd-relative / repo-root walk (#45) more simply, and
+ * directory — the absolute default replaces the old cwd-relative / repo-root walk more simply, and
  * makes write/read roots identical so they can't drift. (An env-set *write* followed by a no-env read
  * won't be found — pass the same env/flag, or an explicit run-dir/events.jsonl path.)
  */
@@ -38,10 +40,10 @@ export function runsWriteRoot(): string {
  *  after moving output out of cwd, without polluting `--quiet` or a `--output-format json` stdout
  *  envelope. Gated on env-PRESENCE (the `--run-dir` flag sets that env, so both flag and env suppress it).
  */
-export function noteRunsLocation(opts: { json: boolean; quiet: boolean }): void {
-  if (opts.json || opts.quiet) return;
+export function noteRunsLocation(opts: { json: boolean; quiet: boolean; suppress?: boolean }): void {
+  if (opts.json || opts.quiet || opts.suppress) return; // suppress: --demo wants clean output (runs stay durable)
   if (process.env.COWORK_HARNESS_RUNS_DIR !== undefined) return;
-  process.stderr.write(`runs → ${runsWriteRoot()} (override with --run-dir / COWORK_HARNESS_RUNS_DIR)\n`);
+  process.stderr.write(`runs → ${tildeify(runsWriteRoot())} (override with --run-dir / COWORK_HARNESS_RUNS_DIR)\n`);
 }
 
 /**
@@ -57,10 +59,10 @@ export interface TraceRow {
   detail?: string;
   agentType?: string;
   declaredTools?: string[];
-  description?: string; // dispatch description — identifies an `unknown`-typed dispatch (O1)
+  description?: string; // dispatch description — identifies an `unknown`-typed dispatch
   child?: boolean; // ran inside a sub-agent (had a parentToolUseId)
   toolUseId?: string; // for pairing a tool row with its result
-  resultStatus?: "ok" | "error"; // the tool's outcome (Part 4 — was invisible before)
+  resultStatus?: "ok" | "error"; // the tool's outcome (was invisible before)
   resultText?: string; // first line of the result/error
 }
 
@@ -111,7 +113,7 @@ export function resolveEventsFile(arg: string): string {
   }
   const root = runsRoot(); // COWORK_HARNESS_RUNS_DIR, else the absolute ~/.cowork-harness/runs — not cwd-relative
   if (existsSync(root)) {
-    // E: prefer EXACT match first; only fall through to fragment matching if nothing exact was found.
+    // prefer EXACT match first; only fall through to fragment matching if nothing exact was found.
     // Collect ALL fragment matches and warn loudly (with candidates) before picking deterministically.
     for (const scen of readdirSync(root)) {
       const sd = join(root, scen);
@@ -175,7 +177,7 @@ function eventsOf(file: string): AgentEvent[] {
     try {
       msg = JSON.parse(line);
     } catch {
-      // #47: skip malformed JSON (a truncated final line is normal) but be LOUD — mirror cassette.ts.
+      // skip malformed JSON (a truncated final line is normal) but be LOUD — mirror cassette.ts.
       warn(`::warning:: trace: skipping malformed JSON line in ${file}: ${line.slice(0, 120)}\n`);
       continue;
     }
@@ -186,8 +188,8 @@ function eventsOf(file: string): AgentEvent[] {
 
 export function buildTrace(file: string, opts: { tools?: boolean } = {}): TraceRow[] {
   const events = eventsOf(file);
-  // Pair tool_use ↔ tool_result by toolUseId so each tool row carries its OUTCOME (Part 4) — the single
-  // highest-value forensics fix: a tool error (e.g. the O7 q.map) is now visible in one command.
+  // Pair tool_use ↔ tool_result by toolUseId so each tool row carries its OUTCOME — the single
+  // highest-value forensics fix: a tool error (e.g. the q.map) is now visible in one command.
   const results = new Map<string, { isError: boolean; text: string }>();
   for (const ev of events) if (ev.type === "tool_result" && ev.toolUseId) results.set(ev.toolUseId, { isError: ev.isError, text: ev.text });
   const rows: TraceRow[] = [];
@@ -209,6 +211,8 @@ export interface GateTraceRow {
   injectedAnswer?: string; // what the harness answered (from control-out.jsonl)
   delivered: "ok" | "error" | "unobserved"; // the tool_result outcome
   error?: string; // first line of the error if delivery failed
+  answeredBy?: string; // provenance from the sibling result.json (scripted | llm | external | first | human)
+  model?: string; // decider model when answeredBy === "llm"
 }
 
 /**
@@ -234,7 +238,7 @@ export function buildGateTrace(file: string): GateTraceRow[] {
         const a = m?.response?.response?.updatedInput?.answers;
         if (rid && a) answers.set(String(rid), JSON.stringify(a));
       } catch {
-        // #47: a malformed control-out line is skipped (truncation is normal) but surfaced loudly.
+        // a malformed control-out line is skipped (truncation is normal) but surfaced loudly.
         warn(`::warning:: trace: skipping malformed JSON line in ${controlOut}: ${line.slice(0, 120)}\n`);
         continue;
       }
@@ -252,6 +256,28 @@ export function buildGateTrace(file: string): GateTraceRow[] {
       ...(tr?.isError ? { error: tr.text.split("\n")[0].slice(0, 160) } : {}),
     });
   }
+  // Provenance annotation (best-effort): pair each gate row with its recorded `by`/`model` from the
+  // sibling result.json, in ask order. Missing result.json (bare events.jsonl trace) → left unannotated.
+  // Pair against EVERY question-kind decision (answered OR denied), not summarizeGateProvenance's
+  // gates[] — that array drops denied/mismatched gates, which would shift every row after one out of
+  // position (rows[] here includes every asked gate, so the index spaces must match). Still positional,
+  // not keyed by request_id: a duplicated/retried question event in events.jsonl (extra row, no matching
+  // decision) could still misalign later rows — GateTraceRow carries no id to detect that case.
+  const resultPath = join(file, "..", "result.json");
+  if (existsSync(resultPath)) {
+    try {
+      const persisted = JSON.parse(readFileSync(resultPath, "utf8")) as RunResult;
+      const questionDecisions = (persisted.decisions ?? []).filter((d) => d.kind === "question");
+      for (let i = 0; i < rows.length; i++) {
+        const d = questionDecisions[i];
+        if (!d || d.decision !== "answered") continue;
+        rows[i].answeredBy = d.by;
+        rows[i].model = d.model;
+      }
+    } catch (e) {
+      warn(`::warning:: trace: skipping unparseable ${resultPath}: ${String((e as Error).message)}\n`);
+    }
+  }
   return rows;
 }
 
@@ -259,10 +285,10 @@ export function formatGateTrace(rows: GateTraceRow[]): string {
   if (!rows.length) return "(no AskUserQuestion gates in this run)";
   const mark = { ok: "✓", error: "✗", unobserved: "?" } as const;
   return rows
-    .map(
-      (r) =>
-        `${mark[r.delivered]} gate "${r.question}"\n    answered: ${r.injectedAnswer ?? "(none)"}\n    delivered: ${r.delivered}${r.error ? ` — ${r.error}` : ""}`,
-    )
+    .map((r) => {
+      const prov = r.answeredBy ? `\n    by: ${labelSource(r.answeredBy)}${r.model ? ` (${r.model})` : ""}` : "";
+      return `${mark[r.delivered]} gate "${r.question}"\n    answered: ${r.injectedAnswer ?? "(none)"}\n    delivered: ${r.delivered}${r.error ? ` — ${r.error}` : ""}${prov}`;
+    })
     .join("\n");
 }
 
@@ -275,7 +301,7 @@ export interface DispatchNode {
 }
 
 /**
- * `trace --dispatches` (#6) — the sub-agent dispatch tree, so an author can read off the REAL total
+ * `trace --dispatches` — the sub-agent dispatch tree, so an author can read off the REAL total
  * dispatch count (what `dispatch_count_max` asserts against) instead of guess-and-check, and see the
  * nesting (a sub-agent that dispatches further). Ordered by appearance; depth derived from
  * `parentToolUseId` chains among the dispatches themselves.

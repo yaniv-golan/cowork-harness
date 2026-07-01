@@ -5,6 +5,7 @@ import type { LaunchPlan } from "../session.js";
 import { resolveDeclaredSource } from "../staging/resolve.js";
 import { containedRealPath } from "../boundary-paths.js";
 import { gitModeEnabled, gitCpFilter } from "../run/skill-files.js";
+import { BoundaryError } from "../errors.js";
 
 /** Subdirs the writable session tree always pre-creates under mnt (idempotent). `.local-plugins` (not
  *  `.local-plugins/cache`) so both the gated `marketplaces/<mp>/<plugin>` and legacy `cache/<x>` plugin
@@ -56,19 +57,19 @@ export function stageWorkspace(plan: LaunchPlan, mntHost: string): StageResult {
       // check on the destination's parent closes the symlinked-mount-root gap. Reject out-of-tree
       // targets with a boundary error rather than copying into them.
       if (!containedRealPath(mntHostReal, destParent))
-        throw new Error(`cowork-harness: staged mount path "${mt.mountPath}" resolves outside the session tree (symlink escape)`);
+        throw new BoundaryError(`cowork-harness: staged mount path "${mt.mountPath}" resolves outside the session tree (symlink escape)`);
       // preserve symlinks as-is during staging; do not copy out-of-tree content
-      // Phase C (gated): under COWORK_HARNESS_GITSET, deliver only the git-tracked set so the mount matches
-      // what the hash covers (Finding 5). Default-ON; opt out with COWORK_HARNESS_GITSET=0 for a raw copy.
+      // prefer the filter precomputed at plan-build (same tracked snapshot used for the staged-set
+      // counts ⇒ delivered == counted). Fall back to a fresh gitCpFilter for non-plugin mounts.
       if (existsSync(mt.hostPath)) {
-        const f = gitModeEnabled() ? gitCpFilter(mt.hostPath) : null;
+        const f = mt.stageFilter ?? (gitModeEnabled() ? gitCpFilter(mt.hostPath) : null);
         cpSync(mt.hostPath, dest, { recursive: true, dereference: false, ...(f ? { filter: f } : {}) });
       }
     }
     // A declared mcp.config whose source is missing must FAIL on a fresh run (it was silently dropped
     // before — no --mcp-config, no error). Resolved HERE, not in buildLaunchPlan, because resume (the
     // else branch) must stay exempt: on resume the source may be gone but the staged copy persists.
-    // Route through SEAM A: a present source is kind-checked (--mcp-config models a single mcpServers
+    // Route through the shared source resolver: a present source is kind-checked (--mcp-config models a single mcpServers
     // FILE; a directory would otherwise reach the no-`recursive` cpSync below and throw an opaque
     // ERR_FS_EISDIR, so a wrong-kind source fails loud regardless of softMissing); a missing source
     // throws by default or, under COWORK_HARNESS_SOFT_MISSING=1, returns null → warn-and-skip.

@@ -1,7 +1,7 @@
 # Scenario & session schema, assertion catalog, web_fetch, full gotchas
 
-Self-contained reference for authoring `cowork-harness` scenarios. Tracks `cowork-harness 0.19.0`
-(baseline `desktop-1.15962.1`). If your checkout is newer, prefer the live `docs/scenario.md`,
+Self-contained reference for authoring `cowork-harness` scenarios. Tracks `cowork-harness 0.20.0`
+(baseline `desktop-1.17377.1`). If your checkout is newer, prefer the live `docs/scenario.md`,
 `docs/session.md`, and `SPEC.md`.
 
 **Minimal scenario** — `prompt` is the only required field:
@@ -125,7 +125,9 @@ For a multi-skill plugin, scope a scenario's hash with `skills: [<name>]`; the o
 input (instead of a fleet-wide shared root) so editing one skill's sub-agent contract re-stales only its cassettes.
 
 **Mounting the skill under test:** put the skill folder in `plugins.local_plugins` and enable it via
-`plugins.enabled: [<plugin>@local]`. The folder is copied fresh each run. For an ad-hoc `skill` run
+`plugins.enabled: [<plugin>@local]`. The folder is copied fresh each run — **git-tracked files** inside a
+repo, so `git add` a new skill (an all-untracked folder hard-fails as a would-be-empty mount;
+`COWORK_HARNESS_GITSET=0` copies untracked). For an ad-hoc `skill` run
 with no session file, the CLI flags `--folder <dir>` and `--upload <file>` are the equivalents of
 `folders[]` / `uploads[]`.
 
@@ -252,6 +254,15 @@ To detect the signal programmatically, inspect `result.signals[].code` in the ru
 A cassette (`record`/`replay`) has **no filesystem and no network**. `replay` re-evaluates only the
 **content** assertions. The authoritative list is `contentKeys` in `src/run/cassette.ts`.
 
+**Assertion source — frozen by default, on-disk by opt-in.** A plain `replay` evaluates the `assert:` block
+**frozen in the cassette** (byte-deterministic, ignores the working tree); editing `scenarios/<name>.yaml` does
+not change it — replay only prints a `::notice::` when a sibling's `assert:` differs. `replay --assert-from
+<scenario.yaml>` / `--reassert` is the opt-in token-free re-check against the on-disk block; it **hard-fails**
+on recording-shaping drift (`prompt`/`answers`/`baseline`/`skills`) or skill-content staleness (it implies
+`--fail-on-skill-drift`). `expect_denied`/filesystem/egress keys are sourced from on-disk but stay live-only —
+sourcing ≠ evaluation (replay warns when you edit one). `verify-run` is the on-disk-`assert:` path for a kept
+*run dir*; `--assert-from` is the equivalent for a *cassette*.
+
 **Evaluated on replay (content):** `transcript_*`, `tool_*`, `subagent_*`, `dispatch_count_max`,
 `result`. The verdict modifiers `allow_permissive_auto_allow` / `allow_missing_capability` /
 `allow_l0_plugin_divergence` / `allow_stall` are also kept on replay, evaluated as no-op passes.
@@ -280,7 +291,9 @@ with the count of pure live-only assertions not evaluated) and a *partial skip* 
 assertion's live-only half was dropped).
 Two CI consequences: skipped assertions are **absent** from `results[].assertions[]` (not
 present-and-passing), so don't assume a fixed assertion count across lanes; and a replay PR gate
-**cannot** verify an artifact's content.
+verifies an artifact's content **only when the cassette carries an `artifacts` manifest** (then
+`file_exists` / `user_visible_artifact` / `artifact_json` evaluate, per the filesystem note above) —
+on a manifest-less cassette those are skipped, so the gate can't see the deliverable.
 
 ## The web_fetch model
 
@@ -322,7 +335,7 @@ Find an artifact's real field paths by running once with `--keep`, then `cowork-
 The "✓ passed ≠ correct" landmines, as *symptom → why → fix*. `file:line` pointers track the version
 at the top of this file.
 
-1. **Replay silently skips filesystem/egress assertions (two shapes).** *Full skip:* a pure
+1. **Replay skips filesystem/egress assertions (two shapes) — with a loud warning.** *Full skip:* a pure
    live-only `egress_*`/`no_delete_in_outputs`/`self_heal_ran`/`transcript_no_host_path` item on a
    `replay` gate is filtered out, not passing. (`file_exists`/`user_visible_artifact`/`artifact_json`
    are replay-checkable **when the cassette carries an `artifacts` manifest**; without one they are

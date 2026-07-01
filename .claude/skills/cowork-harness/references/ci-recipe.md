@@ -1,6 +1,6 @@
 # CI recipe — replay vs live lanes
 
-Self-contained reference. Tracks `cowork-harness 0.19.0` (baseline `desktop-1.15962.1`).
+Self-contained reference. Tracks `cowork-harness 0.20.0` (baseline `desktop-1.17377.1`).
 
 **Minimal token-free PR gate** — the smallest thing worth committing; runs on stock GitHub-hosted runners,
 no token/Docker/agent:
@@ -26,7 +26,12 @@ The split is not just about tokens — it decides **where each lane can run**:
   modifiers `allow_permissive_auto_allow` / `allow_missing_capability` / `allow_l0_plugin_divergence` /
   `allow_stall` (no-op passes); plus the gate keys `question_asked` / `questions_count_max` /
   `gate_answers_delivered` **if** the cassette has `controlOut`). Filesystem/egress assertions are
-  **silently skipped**. This is your **always-on PR gate**.
+  skipped on this token-free lane — loudly: replay emits an `::warning::` annotation whenever it drops
+  one (see docs/cassette.md). This is your **always-on PR gate**. With `--output-format json`, read each
+  `results[].verdict.{pass,signals}` for **per-cassette** pass/fail and the reason (the top-level `ok`
+  collapses the whole batch) — e.g. a `stalled` signal fails a cassette whose assertions all passed.
+  The PR gate evaluates the assertions **frozen in the cassette**; to re-check against an edited on-disk
+  `assert:` without a paid re-record, use `replay --assert-from <scenario.yaml>` (or `--reassert`).
 - **`run` / `record` (live).** Spawns the real agent in a sandbox: real model tokens + Docker **+ the
   staged Claude Code agent ELF**, bind-mounted from a local Claude Desktop install or pointed to via
   `COWORK_AGENT_BINARY`. Nothing is bundled, and **the agent binary is not redistributable** — a clean
@@ -39,8 +44,11 @@ The split is not just about tokens — it decides **where each lane can run**:
 > binary. Don't expect a "download the agent in CI" path — there isn't one (it's Anthropic's staged
 > binary, not ours to ship).
 
-The cardinal rule: **a replay PR gate cannot verify an artifact's content or any boundary** — it has
-no filesystem and no network. Don't let a green replay gate convince you the deliverable is correct.
+The cardinal rule: **a replay PR gate cannot verify a boundary** (egress / filesystem-deny) — it has
+no live filesystem and no network — and it verifies an artifact's *content* only when the cassette
+carries an `artifacts` manifest (recorded `outputs/` + connected folders; then `file_exists` /
+`user_visible_artifact` / `artifact_json` evaluate on replay). On a manifest-less cassette the
+deliverable is invisible to the gate. Don't let a green replay gate convince you the deliverable is correct.
 Run `cowork-harness lint` (the bundled `scenario.py lint`) in CI to catch a scenario that put a
 filesystem/egress-only check on the replay lane (a silent no-op). Author new scenarios with
 `scenario.py scaffold` so they start from a valid, self-linted skeleton.

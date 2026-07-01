@@ -16,14 +16,14 @@ describe("egress allowlist validation + proxy readiness", () => {
     expect(compile(["*"])("anything.example")).toBe(true);
   });
 
-  // (P0-C): compile() and the seed path share validateBareDomain, which now also rejects
+  // compile() and the seed path share validateBareDomain, which now also rejects
   // empty/whitespace entries that compile() used to silently store as an unmatchable exact "".
   it("rejects an empty / whitespace-only allow entry (fail-loud hardening)", () => {
     expect(() => compile([""])).toThrow(/can never match/);
     expect(() => compile(["   "])).toThrow(/can never match/);
   });
 
-  describe("#21 — validateBareDomain shared policy classification", () => {
+  describe("validateBareDomain shared policy classification", () => {
     it("classifies `*`, wildcards, and bare hosts; throws on invalid", () => {
       expect(validateBareDomain("*")).toEqual({ kind: "all" });
       expect(validateBareDomain("*.claude.ai")).toEqual({ kind: "suffix", value: ".claude.ai" });
@@ -34,7 +34,7 @@ describe("egress allowlist validation + proxy readiness", () => {
     });
   });
 
-  describe("#21 — seedApprovedDomains validates seeds (same policy as compile())", () => {
+  describe("seedApprovedDomains validates seeds (same policy as compile())", () => {
     // The Run constructor only builds the RunRecord; seedApprovedDomains is synchronous and never
     // touches the session/decider, and requestWebFetchApproval short-circuits true for a seeded host
     // BEFORE consulting the decider — so a null session/decider is safe for these assertions.
@@ -101,7 +101,7 @@ describe("egress allowlist", () => {
     expect(allow("notanthropic.com")).toBe(false);
   });
 
-  it("#40 — matching is case-insensitive (DNS hostnames)", () => {
+  it("matching is case-insensitive (DNS hostnames)", () => {
     const exact = compile(["api.anthropic.com"]);
     expect(exact("API.ANTHROPIC.COM")).toBe(true); // candidate upper-cased
     const mixedPattern = compile(["API.Anthropic.com"]);
@@ -111,7 +111,7 @@ describe("egress allowlist", () => {
   });
 });
 
-describe("#40/#41/#42 — proxy routing fixes", () => {
+describe("proxy routing fixes", () => {
   const listen = async (opts: Parameters<typeof startEgressProxy>[0]) => {
     const server = startEgressProxy({ ...opts, port: 0 });
     await new Promise<void>((r) => server.on("listening", () => r()));
@@ -126,7 +126,7 @@ describe("#40/#41/#42 — proxy routing fixes", () => {
       sock.on("error", () => resolve(buf)); // tolerate reset after the proxy responds
     });
 
-  it("#41 — does not log `allow` for a malformed URL (no false egress_allowed)", async () => {
+  it("does not log `allow` for a malformed URL (no false egress_allowed)", async () => {
     const decisions: Array<{ host: string; decision: string }> = [];
     const { server, port } = await listen({ allow: ["example.com"], onDecision: (host, decision) => decisions.push({ host, decision }) });
     try {
@@ -140,7 +140,7 @@ describe("#40/#41/#42 — proxy routing fixes", () => {
     }
   });
 
-  it("#42 — CONNECT parses a bracketed IPv6 authority (host is not `[`)", async () => {
+  it("CONNECT parses a bracketed IPv6 authority (host is not `[`)", async () => {
     const decisions: Array<{ host: string; decision: string }> = [];
     const { server, port } = await listen({ allow: ["example.com"], onDecision: (host, decision) => decisions.push({ host, decision }) });
     try {
@@ -153,7 +153,7 @@ describe("#40/#41/#42 — proxy routing fixes", () => {
     }
   });
 
-  it("#38 — plain-HTTP Host header with a bracketed IPv6 authority parses to the bare host", async () => {
+  it("plain-HTTP Host header with a bracketed IPv6 authority parses to the bare host", async () => {
     const decisions: Array<{ host: string; decision: string }> = [];
     const { server, port } = await listen({ allow: ["example.com"], onDecision: (host, decision) => decisions.push({ host, decision }) });
     try {
@@ -169,7 +169,7 @@ describe("#40/#41/#42 — proxy routing fixes", () => {
     }
   });
 
-  it("#39 — logs `allow` only after the upstream actually connects, not on allowlist pass", async () => {
+  it("logs `allow` only after the upstream actually connects, not on allowlist pass", async () => {
     // Start an upstream that immediately accepts a connection and replies, so the proxy can forward.
     const upstream = net.createServer((sock) => {
       sock.on("data", () => sock.write("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nhi"));
@@ -189,7 +189,7 @@ describe("#40/#41/#42 — proxy routing fixes", () => {
       expect(okDecisions).toContainEqual({ host: "127.0.0.1", decision: "allow" });
 
       // Allowed host with NO listener on the target port → connect fails (ECONNREFUSED). The host
-      // passed the allowlist, but nothing reached upstream, so NO `allow` may be logged (#39).
+      // passed the allowlist, but nothing reached upstream, so NO `allow` may be logged.
       const dead = await freePort();
       const bad = await send(failProxy.port, `GET http://127.0.0.1:${dead}/ HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n`);
       expect(bad).toMatch(/502/);
@@ -202,7 +202,7 @@ describe("#40/#41/#42 — proxy routing fixes", () => {
   });
 });
 
-describe("#33 — proxy returns 400 on a malformed proxy URL instead of crashing", () => {
+describe("proxy returns 400 on a malformed proxy URL instead of crashing", () => {
   // Send a raw request with a relative path (`GET /foo`) on an allowed host: `hostOf` falls
   // back to the Host header and passes the allow check, but `new URL("/foo")` throws — the
   // callback must respond 400 and the proxy must survive to serve the next request.
@@ -233,7 +233,7 @@ describe("#33 — proxy returns 400 on a malformed proxy URL instead of crashing
   });
 });
 
-describe("#43 — parseEgressLine validates and never coerces unknown decisions to allow", () => {
+describe("parseEgressLine validates and never coerces unknown decisions to allow", () => {
   it("returns one entry for valid lines and warns+drops the rest", () => {
     const warnings: string[] = [];
     const orig = process.stderr.write.bind(process.stderr);
@@ -263,7 +263,7 @@ describe("#43 — parseEgressLine validates and never coerces unknown decisions 
   });
 });
 
-describe("6e — reframeEgressError turns Docker pool-exhaustion into an actionable, non-leak diagnosis", () => {
+describe("reframeEgressError turns Docker pool-exhaustion into an actionable, non-leak diagnosis", () => {
   it("re-frames the address-pool-exhaustion signature (and its connect/run variants)", () => {
     const reframed = reframeEgressError(
       new Error(
@@ -286,7 +286,7 @@ describe("6e — reframeEgressError turns Docker pool-exhaustion into an actiona
   });
 });
 
-describe("2a — Ctrl-C cleanup registry (ordered container-before-network)", () => {
+describe("Ctrl-C cleanup registry (ordered container-before-network)", () => {
   it("de-registers on the returned fn (a clean exit doesn't leave a thunk) and drains in phase order", () => {
     const order: string[] = [];
     const degNet = registerCleanup({ phase: "network", run: () => order.push("net") });
@@ -320,7 +320,7 @@ describe("2a — Ctrl-C cleanup registry (ordered container-before-network)", ()
   });
 });
 
-describe("#66 — trailing-dot normalization parity", () => {
+describe("trailing-dot normalization parity", () => {
   it("compile(['api.anthropic.com'])('api.anthropic.com.') matches (trailing dot stripped)", () => {
     expect(compile(["api.anthropic.com"])("api.anthropic.com.")).toBe(true);
   });
@@ -357,7 +357,7 @@ describe("#66 — trailing-dot normalization parity", () => {
   });
 });
 
-describe("#22 — proxy survives upstream error after headers sent (no ERR_HTTP_HEADERS_SENT crash)", () => {
+describe("proxy survives upstream error after headers sent (no ERR_HTTP_HEADERS_SENT crash)", () => {
   const send = (port: number, raw: string): Promise<string> =>
     new Promise((resolve) => {
       const sock = net.connect(port, "127.0.0.1", () => sock.write(raw));
@@ -400,7 +400,7 @@ describe("#22 — proxy survives upstream error after headers sent (no ERR_HTTP_
   });
 });
 
-describe("#23 — CONNECT tunnel close propagation", () => {
+describe("CONNECT tunnel close propagation", () => {
   it("destroying clientSocket tears down the upstream socket", async () => {
     const upstream = net.createServer((_sock) => {
       // upstream just accepts and stays open
@@ -481,7 +481,7 @@ describe("#23 — CONNECT tunnel close propagation", () => {
   });
 });
 
-describe("#31 — parseEgressLine rejects missing or non-string host (no 'undefined' coercion)", () => {
+describe("parseEgressLine rejects missing or non-string host (no 'undefined' coercion)", () => {
   it("drops lines with missing host, null host, or non-string host — never coerces to 'undefined'", () => {
     const warnings: string[] = [];
     const orig = process.stderr.write.bind(process.stderr);

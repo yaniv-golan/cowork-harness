@@ -56,7 +56,7 @@ export function startEgressProxy(opts: ProxyOptions): EgressProxy {
       return;
     }
     // Minimal HTTP forward (CONNECT covers HTTPS below; this handles plain HTTP).
-    // #33: `hostOf` falls back to the Host header for a relative/malformed req.url, so the
+    // `hostOf` falls back to the Host header for a relative/malformed req.url, so the
     // allow check can pass while `new URL(req.url)` still throws. Fail loud with a clean 400
     // instead of letting the uncaught throw take the callback (and the proxy) down.
     let target: URL;
@@ -67,7 +67,7 @@ export function startEgressProxy(opts: ProxyOptions): EgressProxy {
       res.end("bad request: malformed proxy URL");
       return;
     }
-    // #39: log `allow` only once the upstream actually responds — not merely because the host
+    // Log `allow` only once the upstream actually responds — not merely because the host
     // passed the allowlist. Logging here (before the request reaches an upstream) would false-pass
     // an `egress_allowed` assertion even when DNS/connect/request failed and nothing reached the
     // host. An upstream error logs nothing (the deny path is unaffected: it still logs above).
@@ -108,7 +108,7 @@ export function startEgressProxy(opts: ProxyOptions): EgressProxy {
       clientSocket.end();
       return;
     }
-    // #39: log `allow` only once the upstream socket actually connects, not merely because the
+    // Log `allow` only once the upstream socket actually connects, not merely because the
     // host passed the allowlist — otherwise `egress_allowed` false-passes when the connect fails
     // and nothing reached the host. The deny path above is unchanged.
     const upstream = net.connect(port, host, () => {
@@ -166,7 +166,7 @@ export function compile(patterns: string[]): (host: string) => boolean {
   // DNS hostnames are case-insensitive: store patterns lowercased and lowercase the candidate
   // host in the matcher, so `API.ANTHROPIC.COM` matches an `api.anthropic.com` allow.
   //
-  // (P0-C): the per-entry policy lives in the shared `validateBareDomain` so this proxy and the
+  // The per-entry policy lives in the shared `validateBareDomain` so this proxy and the
   // run-side `seedApprovedDomains` cannot fork. It rejects scheme/path/port/whitespace entries (which
   // could never match a bare host — a silent always-deny) AND, as the intended fail-loud hardening,
   // empty/whitespace-only entries that `compile()` used to store as an unmatchable exact "".
@@ -184,7 +184,7 @@ export function compile(patterns: string[]): (host: string) => boolean {
 }
 
 function hostOf(url: string, hostHeader?: string): string {
-  // #38: a bracketed IPv6 `Host` (e.g. `[2001:db8::1]:80`) must not be split on the first ":",
+  // A bracketed IPv6 `Host` (e.g. `[2001:db8::1]:80`) must not be split on the first ":",
   // which would read `[` as the host. Route the Host header through the same bracket-aware
   // authority parser used for CONNECT so plain-HTTP requests resolve the same bare host.
   const fromHeader = () => (hostHeader ? parseAuthority(hostHeader).host : "");
