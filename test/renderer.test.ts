@@ -115,6 +115,28 @@ describe("renderer — tool_result outcomes", () => {
   });
 });
 
+describe("renderer — sub-agent dispatch nesting", () => {
+  it("indents a nested sub-agent dispatch deeper than its parent", () => {
+    const s = sink();
+    const r = makeRenderer(plan({ verbose: true }), s.write);
+    r.onEvent!({ type: "subagent_dispatch", toolUseId: "a1", agentType: "outer", declaredTools: [] });
+    r.onEvent!({ type: "subagent_dispatch", toolUseId: "a2", parentToolUseId: "a1", agentType: "inner", declaredTools: [] });
+    const dispatchLines = s
+      .text()
+      .split("\n")
+      .filter((l) => l.includes("sub-agent:"));
+    expect(dispatchLines).toHaveLength(2);
+    expect(dispatchLines[1].indexOf("└")).toBeGreaterThan(dispatchLines[0].indexOf("└"));
+  });
+
+  it("a top-level dispatch renders exactly as before (regression guard)", () => {
+    const s = sink();
+    const r = makeRenderer(plan({ verbose: true }), s.write);
+    r.onEvent!({ type: "subagent_dispatch", toolUseId: "a1", agentType: "researcher", declaredTools: ["Read"] });
+    expect(s.text()).toContain("  └ sub-agent: researcher [Read]");
+  });
+});
+
 describe("toolMarker", () => {
   it("categorizes read/mutate/shell/network tools distinctly", () => {
     expect(toolMarker("Read")).toBe("@");

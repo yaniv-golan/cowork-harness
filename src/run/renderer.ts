@@ -103,6 +103,9 @@ export function makeRenderer(plan: RenderPlan, write: Sink = stderr): Renderer {
   // either — same gate `tool_use` itself already applies). Deleted on first matching result: one
   // result per call, so this can't grow unbounded across a long chat session.
   const topLevelToolCalls = new Set<string>();
+  // subagent's own toolUseId -> nesting depth (1-based). Read when a NEW subagent_dispatch names a
+  // parentToolUseId, to indent proportionally to how deep the dispatch tree goes.
+  const agentDepth = new Map<string, number>();
   let last = Date.now();
   let turnStart = Date.now(); // reset on each "result" — drives the turn-boundary separator's elapsed time
   return {
@@ -136,10 +139,14 @@ export function makeRenderer(plan: RenderPlan, write: Sink = stderr): Renderer {
           }
           break;
         }
-        case "subagent_dispatch":
+        case "subagent_dispatch": {
           subagents++;
-          if (plan.verbose) write(`  ${dim(plan, "└ sub-agent: " + e.agentType + " [" + e.declaredTools.join(",") + "]")}\n`);
+          const depth = e.parentToolUseId ? (agentDepth.get(e.parentToolUseId) ?? 0) + 1 : 1;
+          agentDepth.set(e.toolUseId, depth);
+          if (plan.verbose)
+            write(`  ${"  ".repeat(depth - 1)}${dim(plan, "└ sub-agent: " + e.agentType + " [" + e.declaredTools.join(",") + "]")}\n`);
           break;
+        }
         case "thinking":
           if (plan.verbose && e.text.trim()) write(`  ${dim(plan, "(thinking…)")}\n`);
           break;
