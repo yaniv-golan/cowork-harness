@@ -118,6 +118,12 @@
         "mountPath": "outputs",
         "mode": "rw",
         "purpose": "session outputs/artifacts — delete denied by default (asar IX); rwd only when approved"
+      },
+      {
+        "name": "skills",
+        "mountPath": ".claude/skills",
+        "mode": "r",
+        "purpose": "personal/saved skill doc bodies (NOT plugin-bundled skills, which live under local-plugins/remote-plugins above) — real VM confirmed via systemd unit sessions-<name>-mnt-.claude-skills.mount in vm_bundles/claudevm.bundle/rootfs.img. Decorative row like 'projects' above (not consumed for binding — resolveMounts()'s mounts[] is destructured away at every call site); the harness reproduces this via CLAUDE_CONFIG_DIR staging (session.ts skill copy + stage.ts cpSync), not a plan.mounts bind — see hostloop-prompt.ts's asar-verified skills bullet."
       }
     ]
   },
