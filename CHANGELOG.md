@@ -17,7 +17,8 @@ All notable changes to this project are documented here. The format is based on
   downstream of a decided (non-reproducible) gate. `bySource` keys are the raw decision sources, so e.g.
   a replay-lane decision reads `replay`; the block itself is a live/partial-lane surface and is absent on
   the replay lane (which reports reproducibility via `nonDeterministic: false`).
-- **`--compact` and `--demo` for shareable output** (`skill`/`run`/`chat`). `--compact` drops the
+- **`--compact` and `--demo` for shareable output** (`skill`/`run` — `chat` has its own flag parser and
+  isn't wired to either yet). `--compact` drops the
   informational `[capability]` `::notice::` lines (the pre-flight, the "image omits…", and the "not used"
   notes) — but the capability probe still runs and a real false-negative still **hard-fails**, unlike
   `COWORK_SKIP_CAPABILITY_PROBE=1` which disables the safety net. `--demo` is the shareable preset:
@@ -27,6 +28,21 @@ All notable changes to this project are documented here. The format is based on
   also collapse the ephemeral cowork session root (`/sessions/<id>/mnt/` → `mnt/`) — display-only, so the
   long in-container paths don't clutter shareable verbose output (`run.jsonl` keeps the true paths; the
   L0/`protocol` tier uses host `work/` paths and is unaffected).
+- **`replay --assert-from <scenario.yaml>` / `--reassert` — token-free re-check against on-disk assertions.**
+  By default `replay` still evaluates the assertions **frozen in the cassette** (byte-deterministic, ignores the
+  working tree); a plain `replay` now prints a `::notice::` when a sibling scenario's `assert:` differs, instead
+  of silently using the frozen copy. The new flags opt into re-evaluating against the **on-disk** `assert:`
+  (+`expect_denied:`) — the "edit the assert, re-check without a paid re-record" loop. `--assert-from <file>`
+  takes an explicit sibling scenario; `--reassert` auto-discovers it (persisted `scenarioSource`, else a
+  name lookup) — no argument needed. The opt-in path is safe by
+  construction: it **hard-fails** on recording-shaping drift (`prompt`/`baseline`/`fidelity`/`answers`/`skills`/
+  `requires_capabilities`) and on skill-content staleness (it implies `--fail-on-skill-drift`, when a skill
+  fingerprint was recorded), warns on on-disk assert keys that can't be evaluated on replay (filesystem/gate/egress)
+  and on an edited `expect_denied`, and notes that the `session` (model/mounts/discovery) is **not** verified.
+- **Per-result `verdict` in the `--output-format json` envelope.** Each entry in `results[]` now carries
+  `verdict: { pass, exitCode, signals[], guards[] }` (a non-mutating projection of `computeVerdict`), so a consumer
+  can read each result's pass/fail **and why** (e.g. an all-green-assertions run that is `pass:false` purely on a
+  `stalled` signal) without recomputing. The top-level `ok` is derived from the same per-result verdicts.
 
 ### Changed
 
@@ -55,9 +71,10 @@ All notable changes to this project are documented here. The format is based on
   asker (the `chat` REPL's own prompt is left alone). For non-interactive use, `--on-unanswered fail`
   remains the way to never block.
 - **Human output no longer prints absolute `$HOME` paths.** The `runs →` location line, the `--keep`
-  run-dir/outputs lines, the `scaffold` tip, and the failure `→ full run:` line now collapse a leading
-  `$HOME` to `~`, so a screenshot / pasted log / bug report doesn't leak your username and filesystem
-  layout. Display-only (`~` re-expands in a shell); set `COWORK_HARNESS_RUNS_DIR` for full neutralization.
+  run-dir/outputs lines, the `scaffold` tip, the failure `→ full run:` line, and the failure branch's
+  own `→ outputs:` line now collapse a leading `$HOME` to `~`, so a screenshot / pasted log / bug report
+  doesn't leak your username and filesystem layout. Display-only (`~` re-expands in a shell); set
+  `COWORK_HARNESS_RUNS_DIR` for full neutralization.
 - **A plugin/skill mounted from an untracked git working copy no longer fails silently.** Staging delivers
   the git-**tracked** set (the fidelity boundary — real Cowork installs from a repo and sees only committed
   files), but an all-untracked source used to mount **EMPTY** with no signal: the agent reported "the skill
@@ -69,22 +86,17 @@ All notable changes to this project are documented here. The format is based on
   `--resume` (which re-stages nothing) — which also fixes a latent resume false-fail where a since-removed
   skill source would throw. The sibling symlink-escape staging errors are now `BoundaryError`s too (clean
   exit 3 instead of a stack trace).
-
-### Added
-
-- **`replay --assert-from <scenario.yaml>` / `--reassert` — token-free re-check against on-disk assertions.**
-  By default `replay` still evaluates the assertions **frozen in the cassette** (byte-deterministic, ignores the
-  working tree); a plain `replay` now prints a `::notice::` when a sibling scenario's `assert:` differs, instead
-  of silently using the frozen copy. The new flags opt into re-evaluating against the **on-disk** `assert:`
-  (+`expect_denied:`) — the "edit the assert, re-check without a paid re-record" loop. The opt-in path is safe by
-  construction: it **hard-fails** on recording-shaping drift (`prompt`/`baseline`/`fidelity`/`answers`/`skills`/
-  `requires_capabilities`) and on skill-content staleness (it implies `--fail-on-skill-drift`, when a skill
-  fingerprint was recorded), warns on on-disk assert keys that can't be evaluated on replay (filesystem/gate/egress)
-  and on an edited `expect_denied`, and notes that the `session` (model/mounts/discovery) is **not** verified.
-- **Per-result `verdict` in the `--output-format json` envelope.** Each entry in `results[]` now carries
-  `verdict: { pass, exitCode, signals[], guards[] }` (a non-mutating projection of `computeVerdict`), so a consumer
-  can read each result's pass/fail **and why** (e.g. an all-green-assertions run that is `pass:false` purely on a
-  `stalled` signal) without recomputing. The top-level `ok` is derived from the same per-result verdicts.
+- **CLI `--help` drift.** The top-level `chat` summary now lists `protocol` (the command already accepted
+  it); `--version` documents its `-v` alias; and the `gates` / `answer` / `scaffold` usage strings now show
+  the `--output-format` flag they already parse.
+- **`sync --diff` no longer goes silent on a genuine Desktop version bump.** It previously diffed `next`
+  against `baselines/desktop-<NEW version>.json` — which doesn't exist yet on a real bump — so it always
+  printed `(no committed baseline yet)` instead of the `appVersion`/`agentVersion`/etc. field diff
+  `docs/maintenance.md` documents. It now diffs against `base` (the latest committed baseline `next` was
+  actually merged onto), which is the previous version on a bump and the exact same content on a
+  same-version re-sync. The diff header now names which baseline it's comparing against. `docs/
+  maintenance.md`'s example output and noise callout (`$comment` also moves alongside `capturedAt` on every
+  run) updated to match.
 
 ### Documentation
 
@@ -117,20 +129,6 @@ All notable changes to this project are documented here. The format is based on
     positional, the `sync --force` alias, the `artifact_json` bare-existence mode, the
     `tool_result_not_contains` fail-loud on truncated evidence, and that `expect_denied` is scenario-level
     shorthand (not an assertion key).
-
-### Fixed
-
-- **CLI `--help` drift.** The top-level `chat` summary now lists `protocol` (the command already accepted
-  it); `--version` documents its `-v` alias; and the `gates` / `answer` / `scaffold` usage strings now show
-  the `--output-format` flag they already parse.
-- **`sync --diff` no longer goes silent on a genuine Desktop version bump.** It previously diffed `next`
-  against `baselines/desktop-<NEW version>.json` — which doesn't exist yet on a real bump — so it always
-  printed `(no committed baseline yet)` instead of the `appVersion`/`agentVersion`/etc. field diff
-  `docs/maintenance.md` documents. It now diffs against `base` (the latest committed baseline `next` was
-  actually merged onto), which is the previous version on a bump and the exact same content on a
-  same-version re-sync. The diff header now names which baseline it's comparing against. `docs/
-  maintenance.md`'s example output and noise callout (`$comment` also moves alongside `capturedAt` on every
-  run) updated to match.
 
 ### Parity
 
