@@ -670,6 +670,17 @@ export class LlmDecider implements Decider {
   }
 }
 
+/** Frame a multi-line TTY gate prompt in a lightweight box so it visually separates from progress
+ *  markers and streamed assistant text sharing the same stderr. Left-bordered only (no right edge or
+ *  padding) — avoids width/ANSI bookkeeping for a prompt whose lines vary a lot in length. Ends in
+ *  "> " (no trailing newline) so readline.question() keeps the cursor on the same line, matching the
+ *  existing (unboxed) prompts. */
+function boxPrompt(lines: string[]): string {
+  const width = Math.min(76, Math.max(10, ...lines.map((l) => l.length)));
+  const rule = "─".repeat(width);
+  return `┌${rule}\n${lines.map((l) => "│ " + l).join("\n")}\n└${rule}\n> `;
+}
+
 /** `prompt` policy — ask a human at the TTY. Requires a TTY (else throws). */
 export class PromptDecider implements Decider {
   private ask: (prompt: string) => Promise<string>;
@@ -711,7 +722,7 @@ export class PromptDecider implements Decider {
           `protocol error: permission request for "${req.tool}" carries an empty options array`,
           "the protocol guarantees at least one option on an options-bearing permission gate",
         );
-      const permPrompt = `${req.tool}?\n${labels.map((l, i) => `  ${i + 1}) ${l}`).join("\n")}\n> `;
+      const permPrompt = boxPrompt([`${req.tool}?`, ...labels.map((l, i) => `  ${i + 1}) ${l}`)]);
       let coercedPerm: { value: string; matched: boolean };
       do {
         const ans = await this.ask(permPrompt);
@@ -750,7 +761,7 @@ export class PromptDecider implements Decider {
             );
           let free = "";
           do {
-            free = (await this.ask(`${text}\n(open-ended — type your answer)\n> `)).trim();
+            free = (await this.ask(boxPrompt([text, "(open-ended — type your answer)"]))).trim();
             if (free === "") process.stderr.write(`Please enter a non-empty answer.\n`);
           } while (free === "");
           answers[text] = free;
@@ -759,7 +770,11 @@ export class PromptDecider implements Decider {
         if (q.multiSelect) {
           // Multi-select gate: accept comma-separated indices or labels; validate each pick; serialize
           // as a comma-joined string matching the AskUserQuestion wire shape (binary-verified).
-          const optionList = `${text}\n${q.options.map((o, i) => `  ${i + 1}) ${o.label}${o.description ? " — " + o.description : ""}`).join("\n")}\nSelect one or more, comma-separated:\n> `;
+          const optionList = boxPrompt([
+            text,
+            ...q.options.map((o, i) => `  ${i + 1}) ${o.label}${o.description ? " — " + o.description : ""}`),
+            "Select one or more, comma-separated:",
+          ]);
           let resolved: string[] | null = null;
           do {
             const raw = await this.ask(optionList);
@@ -793,7 +808,7 @@ export class PromptDecider implements Decider {
           // distinct set, mirroring the LLM/scripted/external paths.
           answers[text] = dedupeFirstSeen(resolved!).join(", ");
         } else {
-          const optionList = `${text}\n${q.options.map((o, i) => `  ${i + 1}) ${o.label}${o.description ? " — " + o.description : ""}`).join("\n")}\n> `;
+          const optionList = boxPrompt([text, ...q.options.map((o, i) => `  ${i + 1}) ${o.label}${o.description ? " — " + o.description : ""}`)]);
           let coerced: { value: string; matched: boolean };
           do {
             const raw = await this.ask(optionList);

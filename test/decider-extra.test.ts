@@ -169,6 +169,60 @@ describe("PromptDecider — optionless question guard, no infinite loop", () => 
   });
 });
 
+describe("PromptDecider — boxed prompts", () => {
+  // `withTTY` is NOT module-scoped in this file — it's a `const` local to the
+  // "optionless question guard" describe block above, invisible to a sibling describe. Redefine it
+  // here (`ctx()` at module scope IS safely reusable).
+  const withTTY = async (fn: () => Promise<void>): Promise<void> => {
+    const orig = process.stdin.isTTY;
+    Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+    try {
+      await fn();
+    } finally {
+      Object.defineProperty(process.stdin, "isTTY", { value: orig, configurable: true });
+    }
+  };
+
+  it("frames a permission prompt in a box (visually distinct from plain progress lines)", async () => {
+    await withTTY(async () => {
+      let captured = "";
+      const ask = async (p: string) => ((captured = p), "1");
+      // PromptDecider's permission path is web_fetch-approval-only — the coerced label is always run
+      // through coerceWebFetchGrant (decider.ts:724), which accepts ONLY the grant vocabulary
+      // ("allow once"/"once"/"1", "allow all for website"/"all"/"domain"/"2", "deny"/"3") and throws
+      // on anything else (decider.ts:431-440). Options here MUST use real grant labels.
+      const req: DecisionRequest = {
+        id: "p",
+        kind: "permission",
+        tool: "webfetch",
+        input: {},
+        options: [{ label: "Allow once" }, { label: "Allow all for website" }, { label: "Deny" }],
+      };
+      await new PromptDecider(ask).decide(req, ctx());
+      expect(captured).toContain("┌");
+      expect(captured).toContain("└");
+      expect(captured).toContain("webfetch?");
+      expect(captured).toContain("1) Allow once");
+    });
+  });
+
+  it("frames a multi-select question prompt in a box", async () => {
+    await withTTY(async () => {
+      let captured = "";
+      const ask = async (p: string) => ((captured = p), "1");
+      const req: DecisionRequest = {
+        id: "q",
+        kind: "question",
+        questions: [{ question: "Pick one or more", options: [{ label: "A" }, { label: "B" }], multiSelect: true }],
+      };
+      await new PromptDecider(ask).decide(req, ctx());
+      expect(captured).toContain("┌");
+      expect(captured).toContain("Pick one or more");
+      expect(captured).toContain("1) A");
+    });
+  });
+});
+
 // spawnChannel readLine bounds the wait on a hung-but-alive helper (loud reject, never silent hang).
 // Borderline: spawns a real `sh` stub that never answers; env shrinks the timeout to ~50ms.
 describe("spawnChannel readLine timeout (borderline, spawn-based)", () => {
