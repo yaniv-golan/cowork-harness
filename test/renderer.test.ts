@@ -180,3 +180,40 @@ describe("renderer — startHeartbeat", () => {
     delete process.env.COWORK_HARNESS_HEARTBEAT_MS;
   });
 });
+
+describe("renderFooter — gate provenance line", () => {
+  const base: RunResult = {
+    scenario: "s",
+    fidelity: "container",
+    baseline: "p",
+    result: "success",
+    decisions: [],
+    egress: [],
+    assertions: [],
+    outDir: "runs/s/x",
+  };
+
+  it("prints a counts-only gates line on a passing run", () => {
+    const s = sink();
+    renderFooter({ ...base, gateProvenance: { total: 3, bySource: { scripted: 1, llm: 2 }, gates: [] } }, plan({ color: false }), {
+      write: s.write,
+    });
+    expect(s.text()).toContain("gates: 3 · 2 decided(llm), 1 scripted");
+    // smoke check (not a proof): the line is counts + labels only, so no "=" from answer text leaks in.
+    expect(s.text()).not.toContain("=");
+  });
+
+  it("prints the gates line on a failing run too", () => {
+    const s = sink();
+    renderFooter({ ...base, result: "error", gateProvenance: { total: 1, bySource: { llm: 1 }, gates: [] } }, plan({ color: false }), {
+      write: s.write,
+    });
+    expect(s.text()).toContain("gates: 1 · 1 decided(llm)");
+  });
+
+  it("prints no gates line when the run had none", () => {
+    const s = sink();
+    renderFooter({ ...base }, plan({ color: false }), { write: s.write });
+    expect(s.text()).not.toContain("gates:");
+  });
+});

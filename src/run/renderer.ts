@@ -4,6 +4,7 @@ import type { AgentEvent } from "../agent/session.js";
 import type { RunHooks } from "./run.js";
 import type { RunResult } from "../types.js";
 import { computeVerdict, type GuardReport, type GuardStatus } from "./verdict.js";
+import { formatGateProvenanceLine } from "./gate-provenance.js";
 
 /**
  * Shared output renderer. The seam is `RunHooks` (attached to `Run` via `executeScenario`): it
@@ -163,6 +164,7 @@ export function renderFooter(
     write(`${green(plan, "✓ " + r.result)} ${meta}${nd}${opts.keep ? " · " + tildeify(r.outDir) : ""}\n`);
     if (opts.keep && r.outputsDir) write(`   ${dim(plan, "→ outputs: " + tildeify(r.outputsDir))}\n`);
     renderGuards(verdict.guards, plan, write); // make the safety nets that ran an enumerable, visible fact
+    renderGateProvenance(r, plan, write);
     renderAnswerHints(r, plan, write);
     // scaffold tip — only for skill (exploratory) runs, not automated `run` scenarios.
     // Callers opt in via scaffoldTip: true; run command omits it (you already have a scenario YAML).
@@ -177,6 +179,7 @@ export function renderFooter(
   write(`${red(plan, "✗ " + errLabel)} ${meta}\n`);
   for (const s of failSignals) write(`   ${red(plan, "✗ " + s.message)}\n`);
   renderGuards(verdict.guards, plan, write); // show which guards ran even on a fail (no silent guards)
+  renderGateProvenance(r, plan, write);
   renderAnswerHints(r, plan, write);
   const t = opts.renderer?.dump().trim();
   if (t) {
@@ -205,6 +208,14 @@ function renderGuards(guards: GuardReport[], plan: RenderPlan, write: Sink): voi
   if (!guards.length) return;
   const sym = (s: GuardStatus) => (s === "ok" ? "✓" : s === "fired" ? "✗" : s === "unverified" ? "?" : "—");
   write(`   ${dim(plan, "guards: " + guards.map((g) => `${g.name} ${sym(g.status)}`).join("  "))}\n`);
+}
+
+// One-line gate-provenance summary ("gates: 3 · 2 decided(llm), 1 scripted"). Counts only — the
+// per-gate answers live in the scrubbed result.json, never on stderr. No-op when the run had no gates.
+function renderGateProvenance(r: RunResult, plan: RenderPlan, write: Sink): void {
+  if (!r.gateProvenance) return;
+  const line = formatGateProvenanceLine(r.gateProvenance);
+  if (line) write(`   ${dim(plan, line)}\n`);
 }
 
 function renderAnswerHints(r: RunResult, plan: RenderPlan, write: Sink): void {
