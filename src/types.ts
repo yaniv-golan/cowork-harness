@@ -369,6 +369,29 @@ export interface GateProvenanceSummary {
   gates: GateProvenance[];
 }
 
+/** The shape persisted to `<outDir>/status.json` — a lightweight, mid-run-readable snapshot of a live
+ *  or finished run, so a checker (script or agent) can answer "is this run still going, and how far
+ *  along" without process-table access (`ps aux` is unreliable across sandbox/PID-namespace boundaries).
+ *  Deliberately NOT a subset/superset of `RunResult` — it must be readable before any `RunResult`
+ *  assembler has run, so it's populated straight from the live `RunRecord`, not from `RunResult`. See
+ *  `docs/run-status.md`. */
+export interface RunStatus {
+  schemaVersion: 1;
+  state: "running" | "done" | "error";
+  pid: number;
+  scenario: string;
+  fidelity: string;
+  sessionId: string;
+  startedAt: string; // ISO-8601
+  updatedAt: string; // ISO-8601 — bumped on every write, incl. terminal
+  elapsedMs: number;
+  toolCounts: Record<string, number>;
+  subagentCount: number;
+  // present only once state !== "running"
+  result?: "success" | "error";
+  durationMs?: number;
+}
+
 export interface RunResult {
   $schema?: string;
   generator?: string;
