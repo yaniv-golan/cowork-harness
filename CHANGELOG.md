@@ -86,6 +86,14 @@ All notable changes to this project are documented here. The format is based on
   `--resume` (which re-stages nothing) — which also fixes a latent resume false-fail where a since-removed
   skill source would throw. The sibling symlink-escape staging errors are now `BoundaryError`s too (clean
   exit 3 instead of a stack trace).
+- **`trace --view questions` no longer misattributes `by`/`model` after a denied gate.** It paired each
+  gate row with `summarizeGateProvenance(...).gates[i]` by array index — but that array **drops**
+  denied/mismatched gates (`mismatch→deny`), while the trace rows include every gate asked. One denied
+  gate in the middle of a run shifted every later row's `by`/`model` onto the wrong question, and the true
+  owner of that data got none. Now pairs against every question-kind decision (answered **or** denied), so
+  the index spaces actually match; a denied gate is correctly left unannotated instead of stealing the
+  next answered gate's provenance. Found via a doc-audit code review, not a user report — informational
+  display only, never affected pass/fail.
 - **CLI `--help` drift.** The top-level `chat` summary now lists `protocol` (the command already accepted
   it); `--version` documents its `-v` alias; and the `gates` / `answer` / `scaffold` usage strings now show
   the `--output-format` flag they already parse.

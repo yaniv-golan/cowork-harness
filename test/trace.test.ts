@@ -474,4 +474,35 @@ describe("buildGateTrace — provenance annotation", () => {
       ["Second?", "llm"],
     ]);
   });
+
+  it("does not misattribute provenance when a middle gate is denied (mismatch→deny)", () => {
+    // decisions[] has only 2 answered entries for 3 asked gates — the middle one was denied and
+    // carries no `by`/`model` a reader should ever see. Positional pairing against the FILTERED
+    // (answered-only) gate list would shift every row after the denial by one index.
+    const f = eventsFile([
+      gate("uuid-c", "toolu_c", "First?", "1"),
+      userResult("toolu_c", false, "ok"),
+      gate("uuid-d", "toolu_d", "Second?", "2"),
+      userResult("toolu_d", true, "denied"),
+      gate("uuid-e", "toolu_e", "Third?", "3"),
+      userResult("toolu_e", false, "ok"),
+      { type: "result", is_error: false },
+    ]);
+    writeFileSync(
+      join(f, "..", "result.json"),
+      JSON.stringify({
+        decisions: [
+          { kind: "question", name: "AskUserQuestion", decision: "answered", by: "scripted", detail: { "First?": "1" } },
+          { kind: "question", name: "AskUserQuestion", decision: "mismatch→deny", by: "llm" },
+          { kind: "question", name: "AskUserQuestion", decision: "answered", by: "llm", model: "m", detail: { "Third?": "3" } },
+        ],
+      }),
+    );
+    const rows = buildGateTrace(f);
+    expect(rows.map((r) => [r.question, r.answeredBy, r.model])).toEqual([
+      ["First?", "scripted", undefined],
+      ["Second?", undefined, undefined],
+      ["Third?", "llm", "m"],
+    ]);
+  });
 });

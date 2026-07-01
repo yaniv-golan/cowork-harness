@@ -3,7 +3,7 @@ import { readFileSync, existsSync, statSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 import { parseMessage, type AgentEvent, type DecisionRequest } from "../agent/session.js";
-import { labelSource, summarizeGateProvenance } from "./gate-provenance.js";
+import { labelSource } from "./gate-provenance.js";
 import type { RunResult } from "../types.js";
 
 /**
@@ -258,16 +258,19 @@ export function buildGateTrace(file: string): GateTraceRow[] {
   }
   // Provenance annotation (best-effort): pair each gate row with its recorded `by`/`model` from the
   // sibling result.json, in ask order. Missing result.json (bare events.jsonl trace) → left unannotated.
+  // Pair against EVERY question-kind decision (answered OR denied), not summarizeGateProvenance's
+  // gates[] — that array drops denied/mismatched gates, which would shift every row after one out of
+  // position (rows[] here includes every asked gate, so the index spaces must match).
   const resultPath = join(file, "..", "result.json");
   if (existsSync(resultPath)) {
     try {
       const persisted = JSON.parse(readFileSync(resultPath, "utf8")) as RunResult;
-      const prov = summarizeGateProvenance(persisted.decisions ?? []);
+      const questionDecisions = (persisted.decisions ?? []).filter((d) => d.kind === "question");
       for (let i = 0; i < rows.length; i++) {
-        const g = prov.gates[i];
-        if (!g) continue;
-        rows[i].answeredBy = g.answeredBy;
-        rows[i].model = g.model;
+        const d = questionDecisions[i];
+        if (!d || d.decision !== "answered") continue;
+        rows[i].answeredBy = d.by;
+        rows[i].model = d.model;
       }
     } catch (e) {
       warn(`::warning:: trace: skipping unparseable ${resultPath}: ${String((e as Error).message)}\n`);
