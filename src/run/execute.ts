@@ -664,6 +664,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       name: d.name,
       decision: d.decision,
       by: d.by,
+      model: d.model,
       detail: d.detail,
       rationale: d.rationale,
     })),

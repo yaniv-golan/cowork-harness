@@ -350,6 +350,25 @@ export interface StalenessFinding {
   message: string;
 }
 
+/** How a single AskUserQuestion gate was answered. `answeredBy` is the raw `Decision["by"]` value
+ *  (scripted | first | llm | external | human | …); `answer` is the chosen option(s) flattened as
+ *  "question=choice; question2=choice2"; `model` is the decider model when `answeredBy === "llm"`. */
+export interface GateProvenance {
+  question: string;
+  answeredBy: string;
+  answer: string;
+  model?: string;
+}
+
+/** Run-level rollup of gate provenance: how many gates, a `by`-source histogram, and per-gate detail
+ *  in ask order. Informational — surfaced in result.json / the footer / `trace --view questions` so the
+ *  residual non-determinism is legible; it never changes the verdict. */
+export interface GateProvenanceSummary {
+  total: number;
+  bySource: Record<string, number>;
+  gates: GateProvenance[];
+}
+
 export interface RunResult {
   $schema?: string;
   generator?: string;
@@ -372,7 +391,7 @@ export interface RunResult {
   // (so verify-run/replay honor it without re-deriving). `omitted` = the image lacks them; `unverifiable` =
   // the tier couldn't probe (protocol/replay/skip). computeVerdict fails on this unless allow_missing_capability.
   requiresCapabilityUnmet?: { caps: string[]; reason: "omitted" | "unverifiable" };
-  decisions: Array<{ kind: string; name: string; decision: string; by?: string; detail?: unknown; rationale?: string }>;
+  decisions: Array<{ kind: string; name: string; decision: string; by?: string; model?: string; detail?: unknown; rationale?: string }>;
   toolCounts?: Record<string, number>; // truthful per-tool call count (use this, NOT usage.server_tool_use which is host-routed-blind in cowork)
   // did each gate's answer reach the model? `reason` distinguishes a `delivered:null` that means
   // "no pairing metadata" (no toolUseId) from one that means "tool result not observed".
@@ -468,4 +487,10 @@ export interface RunResult {
    *  green run that used an omitted capability is a likely FALSE NEGATIVE (real Cowork ships it). Absent on
    *  replay (no live image to probe). */
   missingCapabilityUse?: string[];
+  /** Per-gate answer provenance: how each AskUserQuestion gate was answered (scripted / decided(llm|external)
+   *  / first-option / prompt), with a `bySource` histogram. Informational — it makes the residual
+   *  non-determinism legible so a reviewer sees which assertions sit downstream of a decided (non-reproducible)
+   *  gate. Absent when the run had no gates, and absent on the replay lane (which reports reproducibility via
+   *  nonDeterministic:false, not per-gate provenance). Derived from `decisions[]` at write time. */
+  gateProvenance?: GateProvenanceSummary;
 }

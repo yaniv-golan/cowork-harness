@@ -33,6 +33,7 @@ export interface DecisionRecord {
   name: string;
   decision: string;
   by: string;
+  model?: string; // decider model for by:"llm" gates — surfaced in gate provenance for auditability
   detail?: unknown;
   rationale?: string;
 }
@@ -410,7 +411,7 @@ export class Run {
   private recordDecision(req: DecisionRequest, resp: DecisionResponse, by: Decision["by"], rationale?: string, model?: string) {
     if (req.kind === "question") {
       const answers = resp.kind === "question" ? resp.answers : {};
-      this.rec.decisions.push({ kind: "question", name: "AskUserQuestion", decision: "answered", by, detail: answers, rationale });
+      this.rec.decisions.push({ kind: "question", name: "AskUserQuestion", decision: "answered", by, model, detail: answers, rationale });
       // For the human-readable label, include ALL questions — not just questions[0]. Single-question gates
       // produce "<question>"; multi-question gates produce "<q1> / <q2>". The answers map is already complete.
       const label = req.questions.map(questionLabel).filter(Boolean).join(" / ") || "";
