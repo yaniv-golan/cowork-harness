@@ -1,0 +1,221 @@
+{
+  "baselineVersion": 1,
+  "appVersion": "1.17377.2",
+  "agentVersion": "2.1.197",
+  "agentBinary": {
+    "stagedPath": "~/Library/Application Support/Claude/claude-code-vm/2.1.197/claude",
+    "format": "elf-aarch64"
+  },
+  "guest": {
+    "os": "linux",
+    "arch": "arm64",
+    "baseImage": "ubuntu:22.04"
+  },
+  "spawn": {
+    "configDirInGuest": "mnt/.claude",
+    "settingSources": [
+      "user"
+    ],
+    "permissionMode": "default",
+    "maxThinkingTokens": 31999,
+    "effortDefault": "medium",
+    "tools": [
+      "Task",
+      "Bash",
+      "Glob",
+      "Grep",
+      "Read",
+      "Edit",
+      "Write",
+      "NotebookEdit",
+      "WebFetch",
+      "TaskCreate",
+      "TaskUpdate",
+      "TaskGet",
+      "TaskList",
+      "TaskStop",
+      "WebSearch",
+      "Skill",
+      "REPL",
+      "JavaScript",
+      "AskUserQuestion",
+      "ToolSearch"
+    ],
+    "allowedTools": [
+      "Task",
+      "Bash",
+      "Glob",
+      "Grep",
+      "Read",
+      "Edit",
+      "Write",
+      "NotebookEdit",
+      "WebFetch",
+      "TaskCreate",
+      "TaskUpdate",
+      "TaskGet",
+      "TaskList",
+      "TaskStop",
+      "WebSearch",
+      "Skill",
+      "REPL",
+      "JavaScript",
+      "ToolSearch"
+    ],
+    "env": {
+      "CLAUDE_CODE_IS_COWORK": "1",
+      "CLAUDE_CODE_ENTRYPOINT": "local-agent",
+      "CLAUDE_CODE_TAGS": "lam_session_type:chat",
+      "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST": "1",
+      "CLAUDE_CODE_ENABLE_ASK_USER_QUESTION_TOOL": "true",
+      "CLAUDE_CODE_DISABLE_CRON": "1",
+      "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
+      "CLAUDE_CODE_DISABLE_AGENTS_FLEET": "1",
+      "CLAUDE_CODE_ENABLE_APPEND_SUBAGENT_PROMPT": "1",
+      "CLAUDE_CODE_ENABLE_TASKS": "true",
+      "CLAUDE_CODE_DISABLE_TERMINAL_TITLE": "1",
+      "ENABLE_PROMPT_CACHING_1H": "1",
+      "DISABLE_MICROCOMPACT": "1",
+      "MCP_CONNECTION_NONBLOCKING": "true"
+    },
+    "promptTemplate": "prompts/desktop-1.15200.0/system-prompt-append.md",
+    "subagentAppend": "prompts/desktop-1.15200.0/subagent-append-vm.md",
+    "$comment": "Binary-verified Desktop->agent spawn contract (asar 1.12603.1). See docs/cowork-spawn-contract-1.12603.1.md.",
+    "$comment_notSet": "Deliberately NOT set: CLAUDE_CODE_USE_COWORK_PLUGINS (Desktop never sets it; would flip the agent to cowork_settings.json/cowork_plugins). Host-derived (TZ, account UUIDs, WORKSPACE_HOST_PATHS, OTEL) injected at runtime, not pinned.",
+    "$comment_prompts": "Reconstructed cowork-specific sections, re-paraphrased from asar 1.15200.0 const MZi (system prompt) + generator CVr (subagent) — not the full base prompt (not cleanly extractable), and excluding the generic refusal/safety tail. The main append is delivered via the --append-system-prompt CLI flag (layered on the agent's built-in base prompt), NOT the initialize handshake; only the subagent append goes over initialize (appendSubagentSystemPrompt), gated on CLAUDE_CODE_ENABLE_APPEND_SUBAGENT_PROMPT."
+  },
+  "mountLayout": {
+    "sessionRoot": "/sessions/{sessionId}",
+    "cwd": "/sessions/{sessionId}",
+    "mntRoot": "/sessions/{sessionId}/mnt",
+    "mounts": [
+      {
+        "name": "uploads",
+        "mountPath": "uploads",
+        "mode": "r",
+        "purpose": "user-uploaded files (read-only — asar 'ro')"
+      },
+      {
+        "name": "projects",
+        "mountPath": ".projects/{projectId}",
+        "mode": "rw",
+        "purpose": "RESERVED namespace (and the separate UUID project-sync feature) — NOT the work-folder path. From Desktop 1.14271.0 selected work folders mount at mnt/<collision-resolved-basename> (dynamic, derived per session by buildLaunchPlan; see MOUNT_BARE_NAME_MIN_VERSION). This decorative row is not consumed for binding (staged paths come from plan.mounts)."
+      },
+      {
+        "name": "local-plugins",
+        "mountPath": ".local-plugins/marketplaces",
+        "mode": "r",
+        "purpose": "marketplace skills/plugins, runtime-discovered"
+      },
+      {
+        "name": "remote-plugins",
+        "mountPath": ".remote-plugins",
+        "mode": "r",
+        "purpose": "org-remote plugins, runtime-discovered"
+      },
+      {
+        "name": "outputs",
+        "mountPath": "outputs",
+        "mode": "rw",
+        "purpose": "session outputs/artifacts — delete denied by default (asar IX); rwd only when approved"
+      }
+    ]
+  },
+  "network": {
+    "mode": "gvisor",
+    "allowKind": "allowlist",
+    "allowDomains": [
+      "sentry.io",
+      "preview.claude.ai",
+      "downloads.claude.ai",
+      "api.anthropic.com",
+      "a-cdn.anthropic.com",
+      "a-api.anthropic.com",
+      "assets.claude.ai",
+      "console.anthropic.com",
+      "api-staging.anthropic.com",
+      "www.anthropic.com",
+      "api.claude.ai",
+      "docs.anthropic.com",
+      "mcp-proxy.anthropic.com",
+      "pivot.claude.ai",
+      "support.anthropic.com"
+    ]
+  },
+  "bgEnvStrip": {
+    "knownVars": [
+      "CLAUDE_CODE_OAUTH_TOKEN",
+      "CLAUDE_CODE_SESSION_KIND",
+      "CLAUDE_CODE_SESSION_ID",
+      "CLAUDE_CODE_SESSION_NAME",
+      "CLAUDE_CODE_SESSION_LOG"
+    ]
+  },
+  "$comment": "Platform baseline auto-derived by `cowork-harness sync` from a live Claude Desktop install + app.asar. VOLATILE per-release facts only. Regenerate per release; review the diff. Captured 2026-07-01 on macOS arm64.",
+  "capturedAt": "2026-07-01",
+  "platform": "darwin-arm64",
+  "settings": {
+    "autoMountFolders": {
+      "key": "autoMountFolders",
+      "default": false
+    },
+    "localAgentModeTrustedFolders": {
+      "key": "localAgentModeTrustedFolders",
+      "default": []
+    }
+  },
+  "provenance": {
+    "asarPath": "/Applications/Claude.app/Contents/Resources/app.asar",
+    "asarFingerprint": "0b2f2fb6b9a1e063",
+    "gates": {
+      "$comment": "Production GrowthBook gate states decoded from ~/Library/Application Support/Claude/fcache (standard interactive Anthropic account, 2026-06-13; binary-verified app.asar 1.12603.1). Pin per release. Behavior-affecting gates the harness models: 1143815894 (loop), 1648655587 (dispatch cap), 1978029737 (web_fetch routing). Telemetry/auth-internal gates omitted.",
+      "bridgeSdkTransport:583857784": {
+        "on": true,
+        "source": "force",
+        "value": true,
+        "note": "— Cowork uses the SDK-based transport (control protocol), confirming the harness's sdkMcpServers/mcp_message path is the production transport."
+      },
+      "hostLoop:1143815894": {
+        "on": true,
+        "source": "force",
+        "value": true
+      },
+      "taskDispatchLimiter:1648655587": {
+        "on": true,
+        "source": "force",
+        "value": {
+          "perTask": 1,
+          "global": 3
+        },
+        "note": "perTask=1 global=3 (host-side SKIP: recordSkipAndEmit/GCA.PerTaskLimit — NOT queue/deny). A dispatch session launches <=1 sub-task; <=3 concurrent globally."
+      },
+      "coworkRuntimeConfig:1978029737": {
+        "on": true,
+        "source": "force",
+        "value": {
+          "sessionsBridgePollBlockMs": 30,
+          "coworkNativeFilePreview": true,
+          "coworkWebFetchViaApi": true,
+          "coworkWebFetchPrompt": true,
+          "workspaceBashWaitLonger": true
+        },
+        "note": "coworkWebFetchViaApi=true coworkWebFetchPrompt=true workspaceBashWaitLonger=true sessionsBridgePollBlockMs=30 — web_fetch is host/API-routed (POST /api/organizations/<org>/cowork/web_fetch), NOT container egress; gated by a separate web-fetch hostname allowlist + URL provenance."
+      },
+      "cliPlugin:2307090146": {
+        "on": false,
+        "source": "defaultValue",
+        "value": false,
+        "note": "— the CLI-plugin credential broker is dark-launched off for standard interactive accounts (Ch23/L106)."
+      },
+      "pluginSyncSparkplug:2340532315": {
+        "on": true,
+        "source": "force",
+        "value": true,
+        "note": "— startup syncPlugins(); plugins load via --plugin-dir (registry inert in-VM)."
+      }
+    },
+    "eipcChannelUuid": "4f426349-8d6f-45f3-ae22-280fef323564",
+    "$comment": "eipcChannelUuid is per-build; recorded for provenance only — the harness does not use Desktop IPC."
+  },
+  "requireFullVmSandbox": null
+}
