@@ -62,6 +62,28 @@ describe("renderer — makeRenderer", () => {
   });
 });
 
+describe("renderer — turn separator", () => {
+  it("prints an elapsed-time separator line when a turn's result event arrives (live mode)", () => {
+    const s = sink();
+    const r = makeRenderer(plan(), s.write); // plan() defaults live:true
+    r.onEvent!({ type: "assistant_text", text: "turn one" });
+    r.onEvent!({ type: "result", isError: false });
+    r.onEvent!({ type: "assistant_text", text: "turn two" });
+    const t = s.text();
+    expect(t).toMatch(/── \+\d+(\.\d+)?s ──/);
+    // the separator sits between the two turns' text
+    expect(t.indexOf("turn one")).toBeLessThan(t.indexOf("── +"));
+    expect(t.indexOf("── +")).toBeLessThan(t.indexOf("turn two"));
+  });
+
+  it("stays silent when live is false (buffered/quiet modes)", () => {
+    const s = sink();
+    const r = makeRenderer(plan({ live: false }), s.write);
+    r.onEvent!({ type: "result", isError: false });
+    expect(s.text()).not.toContain("──");
+  });
+});
+
 describe("toolMarker", () => {
   it("categorizes read/mutate/shell/network tools distinctly", () => {
     expect(toolMarker("Read")).toBe("@");

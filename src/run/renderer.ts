@@ -99,6 +99,7 @@ export function makeRenderer(plan: RenderPlan, write: Sink = stderr): Renderer {
   let tools = 0;
   let subagents = 0;
   let last = Date.now();
+  let turnStart = Date.now(); // reset on each "result" — drives the turn-boundary separator's elapsed time
   return {
     onEvent(e: AgentEvent) {
       last = Date.now();
@@ -130,6 +131,14 @@ export function makeRenderer(plan: RenderPlan, write: Sink = stderr): Renderer {
         case "error":
           write(`  ${red(plan, "! " + e.source + ": " + e.message)}\n`);
           break;
+        case "result": {
+          if (plan.live) {
+            const elapsed = ((Date.now() - turnStart) / 1000).toFixed(1);
+            write(`${dim(plan, `── +${elapsed}s ──`)}\n`);
+          }
+          turnStart = Date.now();
+          break;
+        }
       }
     },
     dump() {
