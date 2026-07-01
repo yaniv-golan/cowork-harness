@@ -56,6 +56,12 @@ empty egress allowlist. A green run is not automatically a correct run.
   the companion skill's **Gotchas** section:
   [SKILL.md → Gotchas](../.claude/skills/cowork-harness/SKILL.md#gotchas--the--passed--correct-landmines).
   Read it before trusting a green you didn't expect.
+- **Gate provenance** — a green run whose premise came from a *decided* (LLM/external) gate is the classic
+  false-green. `result.json`'s `gateProvenance` block, the footer `gates: N · …` line, and
+  `trace <run-dir> --view questions` (which now shows each gate's `by`/`model`) tell you exactly which
+  gates were decided vs scripted — so you can spot a semantic assertion resting on a non-reproducible
+  answer. Pin those gates with `--answer`. (Informational; live/`partial` lane only — see
+  [fidelity-and-answers.md](../.claude/skills/cowork-harness/references/fidelity-and-answers.md).)
 - **`lint`** — run it on a scenario before committing: it catches assertions placed on the wrong CI lane,
   mixed content/live keys, and keys the replay lane can't check — the silent false-greens you can't see by
   eye.

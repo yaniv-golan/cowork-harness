@@ -78,6 +78,13 @@ that answer: the green run is then a false pass on a wrong premise. **Rule: scri
 answer feeds a semantic assertion (`--answer` / `--answer-policy`); don't `--decider-llm` it.** Reserve
 the live decider for **structural-assertion** runs.
 
+To make this auditable, every run reports **gate provenance** — `result.json` carries a `gateProvenance`
+block (per gate: `answeredBy` = scripted / decided(llm|external) / first-option / prompt, plus `model`),
+the footer prints a counts-only `gates: N · …` line, and `trace --view questions` annotates each gate
+with its `by`/`model`. Use it to see exactly which assertions sit downstream of a *decided* (non-reproducible)
+gate. It is informational — it never changes the verdict. Absent on the replay lane (deterministic by
+construction).
+
 **multiSelect gates** work on every path. Scripted: `choose:` a list. LLM decider (`--decider-llm`): a
 comma-list of option numbers (`1, 3`). In-band `--decider-dir`: the
 Monitor answers each gate with the `answer` subcommand, repeating its `--choose` flag

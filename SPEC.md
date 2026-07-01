@@ -386,7 +386,7 @@ each suppressible only by the matching `allow_*` modifier. `result` means "the a
   "baseline": "string",                          // platform baseline appVersion
   "result": "success" | "error",                // did the agent turn end without error (NOT "task completed")
   "stalledOnQuestion?": bool,                     // H2/H3: ended on a question with no productive tool work after its last gate → `stalled` verdict fail unless allow_stall
-  "decisions": [{ "kind","name","decision","by","rationale?","detail?" }],
+  "decisions": [{ "kind","name","decision","by","model?","rationale?","detail?" }], // model set for by:"llm" gates
   "toolCounts?": { "WebSearch": 8, … },          // truthful per-tool call count (top-level; host-routed WebSearch shows HERE, not usage.server_tool_use)
   "gateDeliveries?":[{ "question","delivered": true|false|null, "error?" }], // did each answered gate's answer reach the model (null = unobserved)
   "egress":    [{ "host","decision":"allow|deny" }],
@@ -399,6 +399,7 @@ each suppressible only by the matching `allow_*` modifier. `result` means "the a
   "outputsDir?": "string",                       // the user-visible deliverable mount (mnt/outputs)
   "effectiveFidelity?": "string",                // tier actually used (differs from `fidelity` when "cowork" resolved)
   "nonDeterministic?": bool,                      // true if any decision came from a non-deterministic source → not reproducible
+  "gateProvenance?": { "total": number, "bySource": {…}, "gates": [{ "question","answeredBy","answer","model?" }] }, // how each AskUserQuestion gate was answered; informational (never fails the verdict); live/partial lane only (absent on replay)
   "permissiveAutoAllow?": ["string"],             // tools auto-allowed by cowork parity that real Cowork BLOCKS → green is NOT faithful
   "staleness?": [{ "class": "baseline|skill|shared-root|format|unverifiable-baseline|unverifiable-skill", "message" }], // replay only; cassette-staleness findings, surfaced for a JSON gate. Non-failing by default (a stale but passing replay stays ok:true); `--strict` fails on every class, `--fail-on-skill-drift` on skill/shared-root/unverifiable-skill only.
   "skippedAssertions?": { "full": number, "partial": number } // replay only; count of live-only assertions NOT evaluated (full = whole assertion skipped; partial = content half ran, fs/egress half dropped). The skipped ones are absent from `assertions[]`.

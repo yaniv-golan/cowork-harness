@@ -8,6 +8,15 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **Gate provenance in run output.** `result.json` now carries a `gateProvenance` block (`total`,
+  `bySource` histogram, per-gate `{question, answeredBy, answer, model?}`) recording how each
+  AskUserQuestion gate was answered (scripted / decided(llm|external) / first-option / prompt). The
+  verdict footer prints a counts-only one-liner (e.g. `gates: 3 · 2 decided(llm), 1 scripted`) and
+  `trace --view questions` annotates each gate with its `by`/`model`. Informational — it never changes
+  the verdict; it makes the residual non-determinism legible so a reviewer sees which assertions sit
+  downstream of a decided (non-reproducible) gate. `bySource` keys are the raw decision sources, so e.g.
+  a replay-lane decision reads `replay`; the block itself is a live/partial-lane surface and is absent on
+  the replay lane (which reports reproducibility via `nonDeterministic: false`).
 - **`--compact` and `--demo` for shareable output** (`skill`/`run`/`chat`). `--compact` drops the
   informational `[capability]` `::notice::` lines (the pre-flight, the "image omits…", and the "not used"
   notes) — but the capability probe still runs and a real false-negative still **hard-fails**, unlike

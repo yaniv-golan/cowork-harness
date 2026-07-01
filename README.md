@@ -405,11 +405,21 @@ run.jsonl           harness-observability log: decisions (+who decided), sub-age
 trace.json          structured run trace: steps, questions, sub-agents, egress, decisions, cost
 egress.log          raw allow/deny per outbound connection (microvm: at top level; container: under
                     proxy/ — the allow/deny decisions are also folded into run.jsonl/result.json)
-result.json         assertion results + decisions + sub-agents + cost/usage + exit status
+result.json         assertion results + decisions + sub-agents + cost/usage + exit status +
+                    gate provenance (how each AskUserQuestion gate was answered)
 agent.stderr.log    the agent process's stderr (auth errors, flag rejects)
 ```
 
 Secrets (the injected OAuth token / API key) are scrubbed from every persisted log by value.
+
+**Gate provenance** — `result.json` carries a `gateProvenance` block recording, per AskUserQuestion gate, *how* it was answered — `scripted`, `decided(llm|external)`, `first-option`, or `prompt` — with a `bySource` histogram and per-gate `{question, answeredBy, answer, model?}`. The verdict footer shows a counts-only one-liner and `trace <id> --view questions` annotates each gate with its `by`/`model`, so you can see which assertions sit downstream of a non-reproducible (decided) gate:
+
+```
+✓ success [container] · 4 tools · 12.3s ⚠ non-deterministic (LLM-decided)
+   gates: 3 · 2 decided(llm), 1 scripted
+```
+
+It is informational — it never changes the verdict. The block is a live/`partial`-lane surface (absent on the replay lane, which reports reproducibility via `nonDeterministic: false`).
 
 **Debugging a run** — when a run misbehaves or a green looks too good to trust, [docs/debugging.md](./docs/debugging.md) is the map: `inspect` → `trace` → `chat` → `verify-run` for a misbehaving skill, and the false-green hunt for a green you don't trust.
 
