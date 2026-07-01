@@ -41,7 +41,8 @@ result (`result.json`, exit code, assertions).
 
 - **`cowork-harness status <dir>`** — read the current status once and print a one-line summary (or the
   full JSON with `--output-format json`, which also carries a `stale: boolean` field). Exits `0` for a
-  fresh `running`/`done`, `1` for `error` OR a **stale** `running` (see below) OR a missing `status.json`.
+  fresh `running`/`done`, `1` for `error` or missing/malformed `status.json`, `2` for an unresolvable
+  argument, `3` for a **stale** `running` (see below).
 - **`cowork-harness status <dir> --follow`** — stream one JSON line per status change on stdout, until
   the run reaches a terminal state. The harness owns the poll loop, so a driving agent points **one**
   Monitor at this instead of hand-rolling a poll/read loop. Two things make `--follow` fail loud with a
@@ -59,7 +60,6 @@ result (`result.json`, exit code, assertions).
 ```bash
 # Start the run in the background, capturing stderr so you can read the printed outDir.
 cowork-harness skill ~/my-plugin "Render the report" 2> run.stderr.log &
-RUN_PID=$!
 
 # Grab the outDir the harness printed (poll briefly — it's written within ~1s of starting).
 OUT_DIR=$(grep -m1 '^\[status\] ' run.stderr.log | sed 's/^\[status\] //')
@@ -80,9 +80,9 @@ cowork-harness status "$OUT_DIR" --follow
 | Code | Meaning |
 |---|---|
 | `0` | Healthy — `"running"` (fresh) or `"done"`. |
-| `1` | The run itself failed (`"error"`), OR `status.json`/the dir was never found. |
-| `2` | Usage error (bad flags/args). |
-| `3` | **Stale** — `"running"` but `updatedAt` hasn't advanced; the process likely died without a clean exit (`SIGKILL`/OOM/segfault) and no exit handler could catch it. Distinct from `1` on purpose, so a script can tell "the run failed" from "can't confirm it's alive" without parsing text. (Exit `3` is also `BoundaryError`'s code elsewhere in the CLI, e.g. `run`/`skill` — `src/cli.ts`'s `fail()` maps the `"boundary"` category to `3`. `status` never throws `BoundaryError`, so there's no functional collision; the reuse is deliberate — "stale/can't-confirm" is semantically the same family as an abnormal abort, not a plain content failure.) |
+| `1` | The `<run-id \| run-dir>` argument resolved, but `status.json` is missing or malformed, or the run itself ended in `state:"error"`. |
+| `2` | Usage error (bad flags/args), or an unresolvable `<run-id \| run-dir>` argument (wrong id, directory doesn't exist). Matches the behavior of `trace`, `inspect`, and `scaffold`. |
+| `3` | **Stale** — `"running"` but `updatedAt` hasn't advanced; the process likely died without a clean exit (`SIGKILL`/OOM/segfault) and no exit handler could catch it. Distinct from `1` on purpose, so a script can tell "the run failed" from "can't confirm it's alive" without parsing text. `status` never throws `BoundaryError`, but this code is reused elsewhere in the CLI for the same "abnormal abort" semantic. |
 
 ## Notes and tuning
 
