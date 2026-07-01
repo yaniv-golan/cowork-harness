@@ -63,7 +63,15 @@ describe.skipIf(!can)("cowork-harness status", () => {
     const { code, stdout } = run(["status", dir, "--output-format", "json"]);
     expect(code).toBe(0);
     const parsed = JSON.parse(stdout);
-    expect(parsed).toMatchObject({ tool: "cowork-harness", command: "status", ok: true, stale: false, state: "done", result: "success", durationMs: 12345 });
+    expect(parsed).toMatchObject({
+      tool: "cowork-harness",
+      command: "status",
+      ok: true,
+      stale: false,
+      state: "done",
+      result: "success",
+      durationMs: 12345,
+    });
   });
 
   it("exits 1 (not 0) for state:error", () => {
@@ -140,7 +148,7 @@ describe.skipIf(!can)("cowork-harness status", () => {
     expect(code).toBe(2);
   });
 
-  it("--follow reports the run's REAL terminal state: exits 1 (not 0) when the run ends in state:\"error\"", async () => {
+  it('--follow reports the run\'s REAL terminal state: exits 1 (not 0) when the run ends in state:"error"', async () => {
     // Regression test: followRunStatus only distinguishes "still running" from "reached a terminal
     // state" — it does NOT distinguish done from error. Before the fix, cmdStatus's --follow branch
     // unconditionally exited 0 on resolve, so an errored run would falsely report success. Spawn a LIVE

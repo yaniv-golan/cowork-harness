@@ -241,7 +241,13 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // window `resolveStatusDir` special-cases. Printed to stderr (unconditional — matches the existing
   // `[loop] cowork → …` precedent a few lines below) so a driving agent capturing this run's stderr can
   // grab the exact dir without knowing the session id ahead of time.
-  const runStatusMeta: RunStatusMeta = { pid: process.pid, scenario: scenario.name, fidelity: scenario.fidelity, sessionId, startedAt: Date.now() };
+  const runStatusMeta: RunStatusMeta = {
+    pid: process.pid,
+    scenario: scenario.name,
+    fidelity: scenario.fidelity,
+    sessionId,
+    startedAt: Date.now(),
+  };
   writeRunningStatus(outDir, runStatusMeta);
   process.stderr.write(`[status] ${tildeify(outDir)}\n`);
 

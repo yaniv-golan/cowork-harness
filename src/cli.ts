@@ -318,7 +318,7 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
   scaffold:
     "usage: scaffold <run-id | run-dir> [--out <file.yaml>] [--output-format text|json]\n       Turns a kept run into a starter scenario YAML (gates→answers, artifacts→file_exists).\n       Positional <run-id | run-dir> is the canonical form.",
   status:
-    "usage: status <run-id | run-dir> [--follow] [--output-format text|json]   (check whether a background run is alive, without ps aux — see docs/run-status.md)\n       --follow: stream one line per status change until the run reaches a terminal state (done/error); arm a Monitor here\n       exit codes: 0 healthy (running/done) · 1 the dir resolved but has no status.json yet (or a malformed one), or the run itself ended in state:\"error\" · 2 usage error, including an unresolvable <run-id | run-dir> (matches trace/inspect/scaffold) · 3 stale (probably dead — no exit handler can catch SIGKILL)",
+    'usage: status <run-id | run-dir> [--follow] [--output-format text|json]   (check whether a background run is alive, without ps aux — see docs/run-status.md)\n       --follow: stream one line per status change until the run reaches a terminal state (done/error); arm a Monitor here\n       exit codes: 0 healthy (running/done) · 1 the dir resolved but has no status.json yet (or a malformed one), or the run itself ended in state:"error" · 2 usage error, including an unresolvable <run-id | run-dir> (matches trace/inspect/scaffold) · 3 stale (probably dead — no exit handler can catch SIGKILL)',
   decide:
     'usage: decide [--question <q>] [--option <o>]... [--decider-cmd <cmd> | --decider-llm [--intent <s>] [--decider-model <id>]] [--answer "<q>=<label>"]... [--answer-policy <p>] [--output-format json]',
   gates:
@@ -1937,7 +1937,16 @@ async function cmdStatus(args: string[]) {
   // conclusion this feature exists to prevent (see docs/run-status.md).
   const stale = isStatusStale(status);
   if (json) {
-    out(JSON.stringify({ tool: "cowork-harness", version: pkgVersion(), command: "status", ok: status.state !== "error" && !stale, stale, ...status }));
+    out(
+      JSON.stringify({
+        tool: "cowork-harness",
+        version: pkgVersion(),
+        command: "status",
+        ok: status.state !== "error" && !stale,
+        stale,
+        ...status,
+      }),
+    );
   } else {
     const totalTools = Object.values(status.toolCounts).reduce((a, b) => a + b, 0);
     const label = stale ? "probably-dead (stale)" : status.state;

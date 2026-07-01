@@ -264,7 +264,9 @@ describe("followRunStatus", () => {
         subagentCount: 0,
       };
       writeFileSync(join(dir, "status.json"), JSON.stringify(stale));
-      await expect(followRunStatus(dir, () => {}, { pollMs: 5, firstSeenTimeoutMs: 5_000, staleMs: 1 })).rejects.toThrow(/stopped updating/);
+      await expect(followRunStatus(dir, () => {}, { pollMs: 5, firstSeenTimeoutMs: 5_000, staleMs: 1 })).rejects.toThrow(
+        /stopped updating/,
+      );
     },
   );
 });

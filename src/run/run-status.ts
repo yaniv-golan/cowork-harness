@@ -87,10 +87,15 @@ export function finalizeRunStatus(
 ): void {
   writeStatus(
     outDir,
-    buildStatus(meta, result === "success" ? "done" : "error", { toolCounts: record.toolCounts, subagentCount: record.subagents.length }, {
-      result,
-      durationMs,
-    }),
+    buildStatus(
+      meta,
+      result === "success" ? "done" : "error",
+      { toolCounts: record.toolCounts, subagentCount: record.subagents.length },
+      {
+        result,
+        durationMs,
+      },
+    ),
   );
 }
 
@@ -107,7 +112,10 @@ export function finalizeRunStatus(
  *  `registerRunForCrashSafety` immediately below, which wraps this with the pending-set bookkeeping a
  *  SINGLE shared exit handler needs. */
 export function markRunStatusCrashed(outDir: string, meta: RunStatusMeta): void {
-  writeStatus(outDir, buildStatus(meta, "error", { toolCounts: {}, subagentCount: 0 }, { result: "error", durationMs: Date.now() - meta.startedAt }));
+  writeStatus(
+    outDir,
+    buildStatus(meta, "error", { toolCounts: {}, subagentCount: 0 }, { result: "error", durationMs: Date.now() - meta.startedAt }),
+  );
 }
 
 // Module-level (not per-call) crash-safety bookkeeping. A per-call `process.on("exit", …)` +
@@ -167,7 +175,8 @@ export function registerRunForCrashSafety(
  *  definition — this only ever downgrades a `"running"` read. */
 export function isStatusStale(status: RunStatus, thresholdMs?: number): boolean {
   if (status.state !== "running") return false;
-  const t = thresholdMs ?? envPositiveNumber("COWORK_HARNESS_STATUS_STALE_MS", 3 * envPositiveNumber("COWORK_HARNESS_STATUS_INTERVAL_MS", 5_000));
+  const t =
+    thresholdMs ?? envPositiveNumber("COWORK_HARNESS_STATUS_STALE_MS", 3 * envPositiveNumber("COWORK_HARNESS_STATUS_INTERVAL_MS", 5_000));
   const age = Date.now() - Date.parse(status.updatedAt);
   // Date.parse of a malformed updatedAt (e.g. a hand-corrupted file) yields NaN; NaN > t is false, which
   // would silently read as "not stale" — fail toward SUSPECT, not toward blind trust, matching the
@@ -252,7 +261,11 @@ export function followRunStatus(
           );
         }
       } else if (!sawStatus && Date.now() > deadline) {
-        return reject(new Error(`no status.json ever appeared at ${runDir} within ${firstSeenTimeoutMs}ms — wrong dir, or the run never started/crashed`));
+        return reject(
+          new Error(
+            `no status.json ever appeared at ${runDir} within ${firstSeenTimeoutMs}ms — wrong dir, or the run never started/crashed`,
+          ),
+        );
       }
       if (opts.once) return resolve();
       setTimeout(tick, pollMs);
