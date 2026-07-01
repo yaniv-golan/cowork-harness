@@ -3,6 +3,8 @@ import { readFileSync, existsSync, statSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 import { parseMessage, type AgentEvent, type DecisionRequest } from "../agent/session.js";
+import { labelSource, summarizeGateProvenance } from "./gate-provenance.js";
+import type { RunResult } from "../types.js";
 
 /**
  * The default runs root when no override is set: a per-user state dir OUTSIDE any working tree, so run
@@ -209,6 +211,8 @@ export interface GateTraceRow {
   injectedAnswer?: string; // what the harness answered (from control-out.jsonl)
   delivered: "ok" | "error" | "unobserved"; // the tool_result outcome
   error?: string; // first line of the error if delivery failed
+  answeredBy?: string; // provenance from the sibling result.json (scripted | llm | external | first | human)
+  model?: string; // decider model when answeredBy === "llm"
 }
 
 /**
@@ -252,6 +256,23 @@ export function buildGateTrace(file: string): GateTraceRow[] {
       ...(tr?.isError ? { error: tr.text.split("\n")[0].slice(0, 160) } : {}),
     });
   }
+  // Provenance annotation (best-effort): pair each gate row with its recorded `by`/`model` from the
+  // sibling result.json, in ask order. Missing result.json (bare events.jsonl trace) → left unannotated.
+  const resultPath = join(file, "..", "result.json");
+  if (existsSync(resultPath)) {
+    try {
+      const persisted = JSON.parse(readFileSync(resultPath, "utf8")) as RunResult;
+      const prov = summarizeGateProvenance(persisted.decisions ?? []);
+      for (let i = 0; i < rows.length; i++) {
+        const g = prov.gates[i];
+        if (!g) continue;
+        rows[i].answeredBy = g.answeredBy;
+        rows[i].model = g.model;
+      }
+    } catch (e) {
+      warn(`::warning:: trace: skipping unparseable ${resultPath}: ${String((e as Error).message)}\n`);
+    }
+  }
   return rows;
 }
 
@@ -259,10 +280,10 @@ export function formatGateTrace(rows: GateTraceRow[]): string {
   if (!rows.length) return "(no AskUserQuestion gates in this run)";
   const mark = { ok: "✓", error: "✗", unobserved: "?" } as const;
   return rows
-    .map(
-      (r) =>
-        `${mark[r.delivered]} gate "${r.question}"\n    answered: ${r.injectedAnswer ?? "(none)"}\n    delivered: ${r.delivered}${r.error ? ` — ${r.error}` : ""}`,
-    )
+    .map((r) => {
+      const prov = r.answeredBy ? `\n    by: ${labelSource(r.answeredBy)}${r.model ? ` (${r.model})` : ""}` : "";
+      return `${mark[r.delivered]} gate "${r.question}"\n    answered: ${r.injectedAnswer ?? "(none)"}\n    delivered: ${r.delivered}${r.error ? ` — ${r.error}` : ""}${prov}`;
+    })
     .join("\n");
 }
 

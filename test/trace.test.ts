@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { buildTrace, formatTrace, buildGateTrace, resolveEventsFile } from "../src/run/trace-view.js";
+import { buildTrace, formatTrace, buildGateTrace, formatGateTrace, resolveEventsFile } from "../src/run/trace-view.js";
 
 function eventsFile(lines: unknown[], controlOut?: unknown[]): string {
   const dir = mkdtempSync(join(tmpdir(), "cwh-trace-"));
@@ -398,5 +398,63 @@ describe("scaffold --from-run (SCAFFOLD-FROM-RUN)", () => {
     // ...but the pre-failure artifacts and the error result must NOT become asserts.
     expect((parsed.assert ?? []).some((a: any) => a.file_exists)).toBe(false);
     expect((parsed.assert ?? []).some((a: any) => a.result)).toBe(false);
+  });
+});
+
+describe("buildGateTrace — provenance annotation", () => {
+  const gate = (requestId: string, toolUseId: string, question: string, label: string) => ({
+    type: "control_request",
+    request_id: requestId,
+    request: {
+      subtype: "can_use_tool",
+      tool_name: "AskUserQuestion",
+      tool_use_id: toolUseId,
+      input: { questions: [{ question, options: [{ label }] }] },
+    },
+  });
+
+  it("annotates each gate row with by/model from the sibling result.json", () => {
+    const f = eventsFile([gate("uuid-1", "toolu_g", "Stage?", "Series B+"), userResult("toolu_g", false, "delivered"), { type: "result", is_error: false }]);
+    writeFileSync(
+      join(f, "..", "result.json"),
+      JSON.stringify({
+        decisions: [{ kind: "question", name: "AskUserQuestion", decision: "answered", by: "llm", model: "claude-sonnet-4-5", detail: { "Stage?": "Series B+" } }],
+      }),
+    );
+    const rows = buildGateTrace(f);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ question: "Stage?", answeredBy: "llm", model: "claude-sonnet-4-5" });
+    expect(formatGateTrace(rows)).toContain("by: decided(llm) (claude-sonnet-4-5)");
+  });
+
+  it("leaves rows unannotated when there is no sibling result.json", () => {
+    const f = eventsFile([gate("uuid-2", "toolu_h", "Proceed?", "Yes"), userResult("toolu_h", false, "delivered"), { type: "result", is_error: false }]);
+    const rows = buildGateTrace(f);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].answeredBy).toBeUndefined();
+  });
+
+  it("pairs provenance to the correct gate by order across multiple gates", () => {
+    const f = eventsFile([
+      gate("uuid-a", "toolu_a", "First?", "1"),
+      userResult("toolu_a", false, "ok"),
+      gate("uuid-b", "toolu_b", "Second?", "2"),
+      userResult("toolu_b", false, "ok"),
+      { type: "result", is_error: false },
+    ]);
+    writeFileSync(
+      join(f, "..", "result.json"),
+      JSON.stringify({
+        decisions: [
+          { kind: "question", name: "AskUserQuestion", decision: "answered", by: "scripted", detail: { "First?": "1" } },
+          { kind: "question", name: "AskUserQuestion", decision: "answered", by: "llm", model: "m", detail: { "Second?": "2" } },
+        ],
+      }),
+    );
+    const rows = buildGateTrace(f);
+    expect(rows.map((r) => [r.question, r.answeredBy])).toEqual([
+      ["First?", "scripted"],
+      ["Second?", "llm"],
+    ]);
   });
 });
