@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { AgentEvent } from "../src/agent/session.js";
-import { makeRenderer, renderFooter, startHeartbeat, type RenderPlan } from "../src/run/renderer.js";
+import { makeRenderer, renderFooter, startHeartbeat, inputSummary, type RenderPlan } from "../src/run/renderer.js";
 import type { RunResult } from "../src/types.js";
 
 const plan = (over: Partial<RenderPlan> = {}): RenderPlan => ({
@@ -59,6 +59,22 @@ describe("renderer — makeRenderer", () => {
     r.onEvent!({ type: "error", source: "agent", message: "boom" });
     expect(s.text()).not.toContain("\x1b[");
     expect(s.text()).toContain("! agent: boom");
+  });
+});
+
+describe("inputSummary — truncation hint", () => {
+  it("adds no hint when the input fits in 80 chars", () => {
+    const out = inputSummary({ command: "grep x" });
+    expect(out).not.toContain("chars]");
+  });
+
+  it("appends how many chars were cut when the input is truncated", () => {
+    const input = { text: "x".repeat(200) };
+    const full = JSON.stringify(input);
+    const out = inputSummary(input);
+    const omitted = full.length - 80;
+    expect(out).toContain(`[+${omitted} chars]`);
+    expect(out.startsWith(full.slice(0, 80))).toBe(true);
   });
 });
 

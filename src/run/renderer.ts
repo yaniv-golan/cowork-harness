@@ -57,7 +57,10 @@ export function inputSummary(input: unknown, compact = false): string {
     // session-id shapes (`local_*`, pinned `sess-*`); the L0/protocol tier uses host `work/` paths, so
     // this correctly no-ops there.
     if (compact) s = s.replace(/\/sessions\/[^/]+\/mnt\//g, "mnt/");
-    return s.length > 80 ? s.slice(0, 80) + "…" : s;
+    if (s.length <= 80) return s;
+    // tell the reader HOW MUCH was cut — a bare "…" left you guessing whether you were seeing 90 or
+    // 9000 chars of input.
+    return `${s.slice(0, 80)}… [+${s.length - 80} chars]`;
   } catch {
     return "";
   }
