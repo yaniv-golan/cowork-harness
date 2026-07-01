@@ -17,6 +17,7 @@ Start with the [project README](../README.md) for the overview and quick start, 
 | [debugging.md](./debugging.md) | **Debugging a run** — the post-hoc loop (`inspect` → `trace` → `chat` → `verify-run`) for a misbehaving skill, and how to hunt a false-green (Gotchas, `lint`, `verify-cassettes`). A router into the tools, not a re-doc. |
 | [fidelity-gaps.md](./fidelity-gaps.md) | What the harness deliberately does NOT reproduce vs real Cowork — the known, faithful gaps. |
 | [decider-dir.md](./decider-dir.md) | The `--decider-dir` recipe — answer LIVE questions in-band from a driving agent: the gates/answer file channel (`req-N.json`/`resp-N.json`) plus a Monitor walkthrough. |
+| [run-status.md](./run-status.md) | Checking whether a background run is alive without `ps aux` — the `status.json` file + `cowork-harness status [--follow]`. |
 | [cassette.md](./cassette.md) | Cassette `record`/`replay` — file shape, the assertion table (content vs. skipped), full-fidelity replay (`controlOut` + the O7 guard), backward compat, and the committed CI fixture. |
 | [discovery.md](./discovery.md) | Where the agent finds marketplaces, plugins, skills, MCP servers — and how to override each for tests. |
 | [maintenance.md](./maintenance.md) | Keeping parity across Claude Desktop releases with `cowork-harness sync`. |
@@ -34,6 +35,7 @@ Start with the [project README](../README.md) for the overview and quick start, 
 | `verify-run` (re-assert a kept run, no tokens) · `decide` (smoke-test a decider against a sample question, no run) | `cowork-harness verify-run --help`, `cowork-harness decide --help` |
 | Debugging a run (a misbehaving skill, or a green you don't trust) | [debugging.md](./debugging.md) |
 | In-band gate answering from a driving agent (`gates` / `answer`) | [decider-dir.md](./decider-dir.md) |
+| Checking a background run's liveness (`status`) | [run-status.md](./run-status.md) |
 | Fidelity — three isolation tiers (L0/L1/L2) + two loop overlays (`hostloop`, `cowork`) | [boundary.md](./boundary.md), [README](../README.md) |
 | Control-protocol / spawn contract | [cowork-spawn-contract-1.12603.1.md](./cowork-spawn-contract-1.12603.1.md) (verified on `desktop-1.12603.1`; control-protocol fields unchanged through `desktop-1.13576.1`; mount-layout fork at ≥`1.14271.0`; volatile fields — `agentVersion`, egress allowlist, GrowthBook gates — tracked in `baselines/`); see also [SPEC.md](../SPEC.md) |
 | AI agent instructions for this repo | [AGENTS.md](../AGENTS.md) |

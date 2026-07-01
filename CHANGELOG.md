@@ -6,6 +6,21 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **`status.json` + `cowork-harness status <dir> [--follow]`.** Every run now writes a lightweight
+  `status.json` into its output directory from the moment `outDir` is created through completion
+  (`running` → `done`/`error`), with live tool/sub-agent counts. Two layers keep it from ever getting
+  stuck reporting a dead run as `"running"`: an exit-handler crash-safety net for an uncaught
+  throw/`SIGTERM`, and `updatedAt`-based staleness detection (both in `status` and `status --follow`) for
+  a hard `SIGKILL`/OOM-kill, which no exit handler can catch. `cowork-harness status <run-id | run-dir>`
+  reads it (one-shot, or `--follow` streaming one JSON line per change, bounded by a fail-loud
+  timeout/staleness check rather than a silent hang) so a script or driving agent can check whether a
+  background run is still alive WITHOUT `ps aux` — which only sees processes in the checker's own PID
+  namespace and is unreliable from inside a sandbox/container. The harness prints `[status] <outDir>` to
+  stderr as soon as it's known, so a caller doesn't need `--session-id` to discover the directory. See
+  `docs/run-status.md`.
+
 ## [0.20.0] — 2026-07-01
 
 ### Added

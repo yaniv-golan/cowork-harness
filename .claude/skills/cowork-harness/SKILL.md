@@ -135,6 +135,21 @@ The `"first"` shorthand remains active only for the built-in `--on-unanswered fi
 write an external helper, return a label name or option index — never the bare word `"first"` unless
 your gate actually has a label called `"first"`.
 
+## 5a. Checking whether a background run is alive
+
+Never use `ps aux` to check on a `cowork-harness` run you launched in the background — it only sees
+processes in your OWN PID namespace, which is frequently NOT the harness process's namespace (e.g. when
+you're a sandboxed subagent). An empty `ps aux` match tells you nothing about whether the run is still
+going.
+
+Use **`cowork-harness status <dir> [--follow]`** instead — reads `<outDir>/status.json`, a file the
+harness writes/updates throughout the run's lifecycle (including a crash-safety net for a thrown
+error/`SIGTERM`, AND staleness detection for a hard `SIGKILL`/OOM-kill that no exit handler can catch —
+either way you get `"error"`/`stale` instead of a permanently-trusted `"running"`), so liveness is
+checkable regardless of PID namespace. The harness prints `[status] <outDir>` to stderr as soon as the
+run starts, so capture stderr to get the exact directory. `--follow` fails loud on a timeout/staleness
+rather than hanging forever. See `docs/run-status.md` for the full recipe.
+
 ## 6. Assertions: two orthogonal axes
 
 Conflating these is the **biggest landmine**. An assertion key has two independent properties:
@@ -430,3 +445,4 @@ and the CI recipe, read the files in `references/`.
 - `references/ci-recipe.md` — replay-vs-live lane split and the four-stage GitHub Actions pipeline.
 - `scripts/scenario.py` — `scaffold` a valid scenario skeleton and `lint` scenarios for the
   no-silent-false-green invariants (both usable as CI steps).
+- `../../../docs/run-status.md` — checking a background run's status without `ps aux`.
