@@ -1,3 +1,5 @@
+import { writeFileSync, renameSync } from "node:fs";
+
 /**
  * Emit a structured warning to stderr with the GitHub-actions `::warning::` annotation prefix — the one
  * place warning formatting/severity lives, so call sites pass only the message body. A message that ALREADY
@@ -47,4 +49,17 @@ export function envPositiveNumber(name: string, dflt: number): number {
   if (Number.isFinite(n) && n > 0) return n;
   warn(`${name}=${JSON.stringify(raw)} is not a positive number — using default ${dflt}`);
   return dflt;
+}
+
+/**
+ * Write JSON atomically — a mid-write crash must never leave a partial/corrupt file at the real path.
+ * Write to a same-dir temp (pid-suffixed so two concurrent writers can't collide) then `renameSync` over
+ * the target (atomic on POSIX). Mirrors the existing temp+rename idiom already used independently in
+ * `src/run/cassette.ts` (`writeFileAtomic`) and `src/decide/external-channel.ts` — this is the first
+ * SHARED copy; the two existing call sites are left as-is (see the plan's Non-Goals).
+ */
+export function writeJsonAtomic(path: string, data: unknown): void {
+  const tmp = `${path}.tmp.${process.pid}`;
+  writeFileSync(tmp, JSON.stringify(data));
+  renameSync(tmp, path);
 }
