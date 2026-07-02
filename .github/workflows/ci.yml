@@ -145,7 +145,7 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
-          for s in smoke-askuserquestion smoke-l1-container smoke-l1-egress canary-hostloop; do
+          for s in smoke-askuserquestion smoke-multiselect smoke-multiselect-deciderdir smoke-l1-container smoke-l1-egress canary-hostloop; do
             node dist/cli.js run "e2e/scenarios/$s.yaml" || exit 1
           done
       - name: Verify run artifacts were produced (guards against a silent empty upload)

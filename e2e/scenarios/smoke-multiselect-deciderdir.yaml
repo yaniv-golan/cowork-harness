@@ -1,9 +1,11 @@
 # L0 smoke (manual / --decider-dir): the in-band channel answers a multiSelect gate via repeated
 # --choose. Run with `--decider-dir <dir>` and reply `answer <dir> --gate 1 --choose Auth --choose Audit`.
 # No scripted answers — the gate intentionally falls through to the in-band decider.
+# For CI: defaults to on_unanswered: llm to let the model answer (override with --decider-dir if needed).
 baseline: latest
 session: ../sessions/minimal.yaml
 fidelity: protocol
+on_unanswered: llm
 prompt: |
   Call the AskUserQuestion tool exactly once with a SINGLE multi-select question
   (allow selecting more than one option) asking which features to enable, with these
