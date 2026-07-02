@@ -23,7 +23,15 @@ describe("web_fetch pins the fetch to the SSRF-vetted address (no second resolut
   // Path B (provenance off) driver: inject the per-hop fetch + resolver (spawn-free).
   const callB = async (url: string, allow: string[], rawFetch: RawFetch, resolve: Resolver) => {
     const egress: EgressEntry[] = [];
-    const h = makeWorkspaceHandler("c", "/mnt", "docker", allow, (e) => egress.push(e), undefined, undefined, rawFetch, resolve);
+    const h = makeWorkspaceHandler({
+      containerName: "c",
+      vmMnt: "/mnt",
+      runner: "docker",
+      webFetchAllow: allow,
+      onEgress: (e) => egress.push(e),
+      rawFetch,
+      resolve,
+    });
     const out = (await h("workspace", { method: "tools/call", params: { name: "web_fetch", arguments: { url } } })) as {
       result: { isError?: boolean; content: { text: string }[] };
     };
@@ -144,7 +152,7 @@ describe("execInContainer surfaces infra failures generically (not verbatim daem
 
   const callBash = async (runner: string) => {
     const infra: string[] = [];
-    const h = makeWorkspaceHandler("c", "/mnt", runner, ["*"], undefined, (m) => infra.push(m));
+    const h = makeWorkspaceHandler({ containerName: "c", vmMnt: "/mnt", runner, webFetchAllow: ["*"], onInfraError: (m) => infra.push(m) });
     const out = (await h("workspace", { method: "tools/call", params: { name: "bash", arguments: { command: "echo hi" } } })) as {
       result: { isError?: boolean; content: { text: string }[] };
     };
@@ -209,9 +217,13 @@ describe("bare exit 125 without daemon stderr is not an infra error", () => {
 describe("web_fetch non-stream path appends [truncated] marker when response was capped", () => {
   const WEB_FETCH_BYTE_CAP = 200000;
   const callPathB = async (rawFetch: RawFetch) => {
-    const h = makeWorkspaceHandler("c", "/mnt", "docker", ["example.com"], undefined, undefined, undefined, rawFetch, async () => [
-      { address: "203.0.113.7" },
-    ]);
+    const h = makeWorkspaceHandler({
+      containerName: "c",
+      vmMnt: "/mnt",
+      webFetchAllow: ["example.com"],
+      rawFetch,
+      resolve: async () => [{ address: "203.0.113.7" }],
+    });
     const out = (await h("workspace", {
       method: "tools/call",
       params: { name: "web_fetch", arguments: { url: "http://example.com/x" } },
@@ -264,17 +276,13 @@ describe("followWithRedirects drains the response body stream on redirect hops",
       return { status: 200, text: async () => "FINAL", body: null };
     };
     const resolve: Resolver = async (host) => [{ address: host === "first.example" ? "203.0.113.1" : "203.0.113.2" }];
-    const h = makeWorkspaceHandler(
-      "c",
-      "/mnt",
-      "docker",
-      ["first.example", "second.example"],
-      undefined,
-      undefined,
-      undefined,
+    const h = makeWorkspaceHandler({
+      containerName: "c",
+      vmMnt: "/mnt",
+      webFetchAllow: ["first.example", "second.example"],
       rawFetch,
       resolve,
-    );
+    });
     const out = (await h("workspace", {
       method: "tools/call",
       params: { name: "web_fetch", arguments: { url: "http://first.example/x" } },

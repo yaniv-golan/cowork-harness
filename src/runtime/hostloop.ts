@@ -208,18 +208,16 @@ export function spawnHostLoop(
   const hostEgress: EgressEntry[] = [];
   const sdkMcp: { servers: string[]; handle: McpHandler } = {
     servers: ["workspace"],
-    handle: makeWorkspaceHandler(
+    handle: makeWorkspaceHandler({
       containerName,
-      mntRoot,
+      vmMnt: mntRoot,
       runner,
-      plan.egressAllow,
-      (e) => hostEgress.push(e),
-      logInfra,
-      opts.provenanceRef,
-      undefined,
-      undefined,
+      webFetchAllow: plan.egressAllow,
+      onEgress: (e) => hostEgress.push(e),
+      onInfraError: logInfra,
+      provenanceRef: opts.provenanceRef,
       execCwd,
-    ),
+    }),
   };
   return { child, sdkMcp, hooks, pathGateFired, containerName, hostEgress };
 }
