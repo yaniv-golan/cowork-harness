@@ -1285,7 +1285,7 @@ structural test + CI guard), a centralized staging-source resolver, cassette rep
 - **Aligned stale references:** npx floor `>=0.2.0` → `>=0.3.0`; skill reference headers `0.1.0` → `0.3.0`;
   stale `cassette.ts` line-cites → the `contentKeys` symbol; and the broken `DESIGN.md §1` anchor.
 - **Doc accuracy:** all five fidelity values (vs "L0/L1/L2"), `max_thinking_tokens` over "extended thinking",
-  the `config_dir` write-guard caveat, the `boundary-check` (exit 1) vs `BoundaryError` (exit 2) exit-code
+  the `config_dir` write-guard caveat, the `boundary-check` (exit 1) vs `BoundaryError` (exit 3) exit-code
   distinction, and the `npm run ci` vs CI-Stage-1 gate framing.
 
 ## [0.3.0] — 2026-06-17
