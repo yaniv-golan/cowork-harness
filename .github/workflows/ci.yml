@@ -57,10 +57,10 @@ jobs:
         # New catch blocks must call fail(command, category, message, hint, json[, exitCode]) instead.
         # Sites that legitimately keep a raw process.exit (a custom, non-jsonError wire shape) must carry
         # the `cli-error-envelope-exempt` marker comment on the same line — the guard excludes those.
+        # (fail() itself lives in src/run/envelope.ts, outside this grep's scope, so no self-match to exclude.)
         run: |
           if grep -n "process\.exit([12])" src/cli.ts src/run/doctor.ts \
-             | grep -v "cli-error-envelope-exempt" \
-             | grep -vE "^[^:]+:[0-9]+:function fail\("; then
+             | grep -v "cli-error-envelope-exempt"; then
             echo "::error::Found a bare process.exit(1|2) outside fail() with no cli-error-envelope-exempt marker — route it through fail(...) instead, or add the marker if it's a deliberate custom-shape exception."
             exit 1
           fi
