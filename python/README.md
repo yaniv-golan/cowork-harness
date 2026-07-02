@@ -5,6 +5,11 @@ beside your normal Python tests. This is an **opt-in lane** (mark tests `@pytest
 not the fast inner loop: each call spawns the node CLI (and Docker at `container`/`hostloop`/`cowork`,
 or Lima for `microvm`).
 
+> **Just want to replay a committed cassette via pytest, no Docker/token?** `cowork.replay(cassette_path)`
+> is deterministic and needs neither Docker nor an auth token — see the `cowork.replay(...)` entry under
+> [API](#api) below. You still need Prerequisites 1 (build the CLI), 4 (pytest), and 5 (make
+> `cowork_harness` importable); only 2 (Docker) and 3 (auth token) don't apply to `replay`.
+
 ## Prerequisites
 
 1. **Build the CLI** — the helper drives `dist/cli.js`:
@@ -176,17 +181,20 @@ assert len([s for s in r.subagents]) >= 1
 
 ## Sharp edges
 
-- **`assert_artifact_json(rel_path, …)`** resolves under `.work_dir` — the `mnt/` root the json
-  envelope reports (`workDir`), which is fidelity-correct (sandboxed tiers nest under
-  `work/session/mnt`; `protocol` flattens under `work/`). `rel_path` is e.g.
-  `"artifacts/<slug>/sizing.json"` (a skill's structured output usually lands under `mnt/artifacts/`, while
-  `mnt/outputs/` holds the user-visible deliverable — `rel_path` omits the `mnt/` prefix, so pass
-  `"outputs/metrics.json"`, not `"mnt/outputs/metrics.json"`). This Python predicate (full callable, autocomplete,
-  `print(d)`) is the **structured-content** path — strictly richer than a YAML scenario's content
-  assertions; prefer it over a YAML predicate when you're already in Python. Use **scenario YAML** instead
-  when you want a portable, toolchain-free regression suite run via `cowork-harness run` (see
-  [docs/scenario.md](../docs/scenario.md#scenario-yaml-vs-the-pytest-cowork-lane--when-to-use-which) →
-  "Scenario YAML vs the pytest `cowork` lane").
+- **`assert_artifact_json(rel_path, …)`**:
+  - Resolves under `.work_dir` — the `mnt/` root the json envelope reports (`workDir`).
+  - This is fidelity-correct: sandboxed tiers nest under `work/session/mnt`; `protocol` flattens under
+    `work/`.
+  - `rel_path` is e.g. `"artifacts/<slug>/sizing.json"` — a skill's structured output usually lands under
+    `mnt/artifacts/`, while `mnt/outputs/` holds the user-visible deliverable.
+  - `rel_path` omits the `mnt/` prefix, so pass `"outputs/metrics.json"`, not `"mnt/outputs/metrics.json"`.
+  - This Python predicate (full callable, autocomplete, `print(d)`) is the **structured-content** path —
+    strictly richer than a YAML scenario's content assertions; prefer it over a YAML predicate when
+    you're already in Python.
+  - Use **scenario YAML** instead when you want a portable, toolchain-free regression suite run via
+    `cowork-harness run` (see
+    [docs/scenario.md](../docs/scenario.md#scenario-yaml-vs-the-pytest-cowork-lane--when-to-use-which) →
+    "Scenario YAML vs the pytest `cowork` lane").
 - **`on_unanswered=` takes `fail | first | prompt`.** `on_unanswered="llm"` is **rejected** by the CLI
   (exit 2) — the LLM terminal isn't exposed through this flag. To answer live questions from the lane, pass
   `decider_cmd=` (e.g. a `serve_decider(fn)` helper, above); to let a scenario use the model, set

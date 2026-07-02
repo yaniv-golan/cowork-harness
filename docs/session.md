@@ -138,6 +138,10 @@ See [discovery.md](./discovery.md) for the full model. In short: the harness bui
 | `skills.local[]` | `CLAUDE_CONFIG_DIR/skills` | extra host **skill** dirs (a folder *without* `.claude-plugin/plugin.json`) staged into the config dir's `skills/`. Use this for a single-skill folder; use `plugins.local_plugins` for a plugin root. |
 | `mcp.config` / `mcp.enabled[]` | `--mcp-config` / `enabledMcpjsonServers` | the supported way to attach an MCP server to a session under test. |
 
+> Inside a git repo, `folders[]` and `skills.local[]` stage only **git-tracked** files into the mount (matching
+> real Cowork's install-from-repo behavior) — an untracked skill mounts empty. See
+> [README → Test a local skill in one command](../README.md#test-a-local-skill-in-one-command).
+
 ### Egress
 `extra_allow` adds hosts to the release allowlist for this session; `unrestricted: true` reproduces Cowork's `"*"` (allow-all). The allowlist is enforced at `container`/`microvm`/`hostloop` fidelity (and `cowork`, which resolves to one of those) — only `protocol` has no egress boundary; see [boundary.md](./boundary.md).
 

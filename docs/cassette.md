@@ -11,6 +11,12 @@ cowork-harness record scenarios/my-test.yaml          # live: writes my-test.cas
 cowork-harness replay  scenarios/my-test.cassette.json # token-free re-evaluation of content assertions
 ```
 
+> Without `--out`, this writes to `cassettes/<scenario-name>.cassette.json` — gitignored by default. See
+> [Recording prerequisites](#recording-prerequisites) below for how to commit a cassette instead.
+
+Recording follows whatever `fidelity:` the scenario declares — a `protocol`-fidelity scenario records with
+**no Docker at all** (still needs a token; see [`examples/scenarios/protocol-smoke.yaml`](../examples/scenarios/protocol-smoke.yaml)). The walkthrough below assumes `container` fidelity, the common case.
+
 ## Mental model
 
 ```
@@ -30,7 +36,7 @@ block **frozen in the cassette** (deterministic, independent of the working tree
 `scenarios/<name>.yaml` does not change it; replay only prints a `::notice::` when a sibling's `assert:`
 differs. To iterate on assertions token-free, opt in with `replay --assert-from <scenario.yaml>` (or
 `--reassert`): it re-checks against the on-disk `assert:`, but **hard-fails** if any recording-shaping field
-(`prompt`/`answers`/`baseline`/`skills`) or the skill content drifted from the recording (then you must
+(`prompt`/`answers`/`baseline`/`fidelity`/`skills`/`requires_capabilities`) or the skill content drifted from the recording (then you must
 re-record). `expect_denied`/filesystem/egress keys are sourced but stay live-only. See
 [docs/scenario.md](./scenario.md#where-replay-reads-assert-from--frozen-by-default-on-disk-by-opt-in).
 
@@ -192,7 +198,9 @@ whole-field decode pass triggered; or a scrubbed string from the direct pass.
 ## Assertion table
 
 This table mirrors `src/run/cassette.ts` `contentKeys`, which is **the single source of truth**.
-Content keys are evaluated on replay; everything else is skipped.
+Content keys are evaluated on replay; everything else is skipped. This is the per-key reference; for
+the rules and CI-placement rationale (why each category behaves this way), see
+[docs/scenario.md → Which assertions survive replay](./scenario.md#which-assertions-survive-replay-ci-placement).
 
 ### Evaluated on replay (contentKeys)
 

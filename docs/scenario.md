@@ -500,6 +500,12 @@ cowork-harness run examples/scenarios/                    # every *.yaml in the 
 Exit code is non-zero if any assertion fails or the run errors — CI-ready. (In your own skill repo
 you'd keep these at the root, e.g. `run scenarios/`; the harness ships them under `examples/`.)
 
+Already have a run you like the shape of? `cowork-harness scaffold <run-id | run-dir>` turns a **kept**
+run (`--keep`, or a `--session-id` run) into a starter scenario YAML — auto-filled from what it observed
+(gates→answers, artifacts→file_exists) — instead of copying an existing example by hand and editing it to
+match. Prints to stdout by default; add `--out <file.yaml>` to write it straight to `scenarios/`. Review
+and tighten the generated `when_question` regexes before committing.
+
 ### Dry-running a decider (`decide`)
 
 `cowork-harness decide` validates a decider against a **sample question in ~2s, with no run** — so you

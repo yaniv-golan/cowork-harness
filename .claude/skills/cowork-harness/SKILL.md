@@ -17,9 +17,10 @@ path, place assertions in the right CI lane, and avoid the harness's "✓ passed
 traps.
 
 The single most important idea: **a green run is not automatically a correct run.** The harness has
-several ways to *silently* no-op a check (skip an assertion on replay, auto-answer a gate, observe
-an empty egress allowlist). This skill exists mostly to keep you out of those traps — the Gotchas
-section below is the highest-value part. Read it.
+several ways to no-op a check while still producing a green run (skip an assertion on replay — now
+flagged with a loud `::warning::`, not silent — auto-answer a gate, observe an empty egress
+allowlist). This skill exists mostly to keep you out of those traps — the Gotchas section below is
+the highest-value part. Read it.
 
 > **Version note:** the facts and `file:line` pointers here track `cowork-harness 0.20.0` (baseline
 > `desktop-1.17377.1`). If your checkout is newer, prefer the live `--help`, `SPEC.md`, and
@@ -164,8 +165,9 @@ Conflating these is the **biggest landmine**. An assertion key has two independe
   `::warning::` annotation, not a silent no-op. A key
   being "robust" says nothing about whether it runs on your replay gate.
 
-Getting Axis B wrong means a check that **silently does nothing in CI**. The harness now warns
-loudly when it skips, and the bundled linter catches it before you push — run it (§9).
+Getting Axis B wrong means a check that **does nothing in CI** — the harness warns loudly when it skips
+(an `::warning::` annotation, not a silent no-op — see the Axis B bullet above), and the bundled linter
+catches it before you push — run it (§9).
 
 See `references/scenario-schema.md` for the full assertion catalog with each key's replay class.
 

@@ -48,8 +48,9 @@ already happened.
 
 ## The run was green but you don't trust it — hunt the false-green
 
-The harness can *silently* no-op a check: skip an assertion on replay, auto-answer a gate, observe an
-empty egress allowlist. A green run is not automatically a correct run.
+The harness can no-op a check in ways that still produce a green run: skip an assertion on replay (now
+flagged with a loud `::warning::`, not silent), auto-answer a gate, observe an empty egress allowlist.
+A green run is not automatically a correct run.
 
 - **The "✓ passed ≠ correct" landmines** — the catalog of how a check can pass vacuously (mixed
   content/live assertion items, header-only gates that can't be keyed, replay-skipped egress keys) is in
