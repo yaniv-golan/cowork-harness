@@ -180,8 +180,11 @@ It also follows the open [Agent Skills](https://github.com/vercel-labs/skills) s
 | Runnable worked examples on disk (`examples/scenarios/`, `examples/skills/`, `examples/data/`) | ✗ | ✓ |
 
 A global install is enough for CI `lint`, reading the teaching skill, and replaying the committed cassettes.
-To `run` the worked examples live or copy them as a starting point, use a source checkout (the marketplace
-skill install bundles the same files as npm global — see [above](#drive-it-from-claude-code-companion-skill)).
+To `run` the worked examples live or copy them as a starting point, use a source checkout. (The marketplace
+skill install itself only pulls `.claude/skills/cowork-harness/` — SKILL.md + `references/` + `scenario.py`/
+assertion keys, per `.claude-plugin/marketplace.json`'s `source` — not the rest of this table; the full set
+above becomes available once the skill's first command self-bootstraps `npx cowork-harness@>=0.20.0` — see
+[above](#drive-it-from-claude-code-companion-skill) — which pulls the same npm package as the global-install row.)
 
 ### Prerequisites for anything above `protocol` fidelity
 
