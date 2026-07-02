@@ -374,7 +374,8 @@ states in `baseline.provenance.gates`). A skill that ignores these behaves diffe
 
 **Assertion evaluation on replay:**
 - **Content assertions** (`contentKeys` in `src/run/cassette.ts`) are evaluated — `transcript_*`,
-  `tool_*`, `subagent_*`, `dispatch_count_max`, `result`, and (when `controlOut` is present)
+  `tool_*`, `subagent_*`, `dispatch_count_max`, `result`, the verdict modifiers (`allow_permissive_auto_allow`,
+  `allow_missing_capability`, `allow_l0_plugin_divergence`, `allow_stall`), and (when `controlOut` is present)
   `question_asked`, `questions_count_max`, `gate_answers_delivered`.
 - **Filesystem assertions** (`file_exists`, `user_visible_artifact`, `artifact_json`) are evaluated
   **when the cassette carries an `artifacts` manifest** (`record` snapshots `outputs/`; `replay`
