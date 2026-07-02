@@ -60,6 +60,12 @@ assert:
 skills: [report-gen]                # OPTIONAL — scope the cassette-staleness hash to these skills (each a
                                     # `skills/<name>` dir under a mounted plugin-root) + the plugin's shared
                                     # roots. Fail-closed to whole-tree on an unknown name. Omit = whole tree.
+
+allow_host_writes: true             # OPTIONAL — required to run `hostloop` fidelity with a WRITABLE
+                                    # connected folder (session `mode: rw`/`rwd`): with no container
+                                    # around hostloop's native file tools, that combination gives the
+                                    # agent genuine, software-checked-only host filesystem access.
+                                    # Read-only folders and folder-less runs need no opt-in.
 ```
 
 Relative paths resolve from the file's own directory, so a scenario + session + referenced files
@@ -222,7 +228,7 @@ passes only if every key passes. Keep one concern per item unless you mean conju
 | `allow_missing_capability: true` | verdict modifier — suppresses the default-fail when the (partial "core") agent image omits a capability the skill used but real Cowork ships (OCR/LibreOffice/markitdown/opencv/PDF-tables). Assert only when the skill's fallback is genuinely equivalent; otherwise rebuild full parity (`--build-arg COWORK_FULL_PARITY=1`). Also opts out of the `requires_capabilities` declared-need check. Live tiers only |
 | `allow_l0_plugin_divergence: true` | verdict modifier — opt into L0/protocol plugin divergence: suppresses the default-fail when a plugin behaves differently at `protocol` (L0) fidelity than under a sandboxed tier. Live tiers only |
 | `allow_stall: true` | verdict modifier — suppresses the `stalled` default-fail when a run ends on a question having done no productive tool work after its last gate (the agent asked for input and stopped — incl. re-asking in plain text after answering an `AskUserQuestion`); assert only when ending on a question is intended, else script the answer (`answer:` / `--answer` / a decider) |
-| `transcript_no_host_path: true` | no host path (`/Users/`, `/opt/cowork/`, `/home/`, `/root/`) leaked into model-visible text |
+| `transcript_no_host_path: true` | no host path (`/Users/`, `/opt/cowork/`, `/home/`, `/root/`) leaked into model-visible text — **incompatible with `hostloop`**: its native file tools legitimately expose real host paths, so this fails BY DESIGN there (the harness warns at run start if asserted anyway); use `container`/`microvm` for this check |
 | `egress_denied: <host>` | the host was blocked by the egress proxy |
 | `egress_allowed: <host>` | the host was allowed through |
 | `artifact_json: {artifact, path, …}` | assert a JSON artifact's contents — `equals`/`gt`/`in`/`exists`/`absent`/`is_null` over a dotted `path` (`in` = membership in a list, for a stochastic/LLM value; `absent` ≠ `is_null`; an unresolved intermediate fails loud) |

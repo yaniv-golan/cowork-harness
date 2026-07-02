@@ -90,7 +90,7 @@ the folder basename (collision-resolved); there is no `to:` override. See `refer
 | `protocol` | Fastest; no sandbox, no egress | Pure protocol/answer-shape tests. **Rejected** if the scenario asserts egress. |
 | `container` | Real sandbox + real default-deny egress (**default**) | Most functional + boundary tests. |
 | `microvm` | VM-grade escape **isolation** (macOS arm64). Egress transport is the *same allowlist proxy as `container`* — not better network fidelity | Testing untrusted code escape, not network behavior. |
-| `hostloop` / `cowork` | Production split-exec: the agent still runs in the container, but native Bash/WebFetch are disabled and routed host-side via the workspace SDK-MCP server (only `protocol` runs the agent on the host) | Highest-fidelity / parity runs. |
+| `hostloop` / `cowork` | Production split-exec: the agent loop is a **native process on the host** (no container around the file tools — matching production), with native Bash/WebFetch disabled and routed host-side via the workspace SDK-MCP server into a Docker VM sidecar | Highest-fidelity / parity runs. A writable connected folder needs `allow_host_writes: true` (see scenario-schema.md). |
 
 Set the tier in the **scenario's `fidelity:` field**, not a flag — `run` rejects `--fidelity`
 (it's a `skill`-only flag). See `references/fidelity-and-answers.md`.

@@ -58,7 +58,13 @@ Given a session + baseline, returns:
 
 Resolved inputs: `sessionRoot=/sessions/<id>`, `mntRoot=/sessions/<id>/mnt`, `configGuest=/sessions/<id>/mnt/.claude`.
 
-### 3.1 Common agent args (container, hostloop, microvm)
+### 3.1 Common agent args (container, microvm, and hostloop's native process)
+
+Hostloop's agent process is a NATIVE host spawn (§3.4), not a container occupant — it reuses this exact
+arg-building function (`baseAgentArgs`) but with **HOST paths** for the two guest-relative params
+(`mntRoot`/`mcpGuest` become real host paths to the staged mnt tree/mcp.json), and the argv is passed
+directly to `child_process.spawn(nativeBinary, args, …)` with **no leading `claude` token** (container/
+microvm still prepend it for the `docker run … claude …`/`limactl … claude …` command form).
 ```
 claude -p --verbose
   --input-format stream-json --output-format stream-json
@@ -76,7 +82,10 @@ claude -p --verbose
 ```
 Variadic `--tools`/`--allowedTools` MUST be last (they consume to end-of-args).
 
-### 3.2 Spawn env (container/hostloop/microvm)
+### 3.2 Spawn env (container/microvm)
+
+Hostloop's native process does NOT use this env shape — see §3.4 for its own `hostNativeSpawnEnv`
+(deliberately different: real `HOME`, no forced `/tmp`, no HTTP(S)_PROXY).
 ```
 <baseline.spawn.env …>                  # CLAUDE_CODE_IS_COWORK=1, ENTRYPOINT=local-agent,
                                         # DISABLE_BACKGROUND_TASKS=1, ENABLE_APPEND_SUBAGENT_PROMPT=1, …
@@ -110,12 +119,68 @@ docker run --rm -i --platform linux/arm64 --network <net>
   claude …(§3.1)
 ```
 
-### 3.4 host-loop (`spawnHostLoop`) — deltas vs §3.3
-- `--name cowork-hl-<id>` (so the driver can `docker exec`).
-- `--disallowedTools Bash WebFetch NotebookEdit`; append `mcp__workspace__bash mcp__workspace__web_fetch` to `--tools`/`--allowedTools`. (The asar `HOST_LOOP_EXCLUDED_BUILTIN_TOOLS` = {Bash, NotebookEdit, REPL, JavaScript, WebFetch}; only Bash/NotebookEdit/WebFetch exist in the CLI agent's 26-tool registry — REPL/JavaScript are absent here, verified 2026-06-13.)
-- env `CLAUDE_PLUGIN_ROOT = /host/plugins/<firstPlugin>` (UNMOUNTED ⇒ unresolvable in bash ⇒ self-heal).
-- system-prompt append includes the host-loop "Shell access" section.
-- the driver declares `sdkMcpServers:["workspace"]` and handles `mcp_message` (§4, §5).
+### 3.4 host-loop (`spawnHostLoop`) — a NATIVE host process + a no-agent Docker VM sidecar
+
+Reproduces production's real host-loop architecture: the agent LOOP is a native macOS process spawned
+directly on the host (no container around its file tools), while `bash`/`web_fetch` route into a Docker
+container that never runs an agent at all.
+
+**The native process:**
+```
+child_process.spawn(<resolveHostAgentBinary(baseline)>, [ …§3.1 args, HOST paths … ], {
+  cwd: <mntHost>/outputs,
+  env: { ...process.env, ...hostNativeSpawnEnv(baseline, { configDir: plan.configDir, … }) },
+})
+```
+- `--disallowedTools Bash WebFetch NotebookEdit`; append `mcp__workspace__bash mcp__workspace__web_fetch` to `--tools`/`--allowedTools`. (The asar `HOST_LOOP_EXCLUDED_BUILTIN_TOOLS` = {Bash, NotebookEdit, REPL, JavaScript, WebFetch}; only Bash/NotebookEdit/WebFetch exist in the CLI agent's 26-tool registry — REPL/JavaScript are absent here.)
+- `CLAUDE_PLUGIN_ROOT` / `--plugin-dir` point at the STAGED plugin copy — a REAL host path (`join(mntHost, m.mountPath)`), the same directory the sidecar's bind mount below also targets. (2+ configured plugins keep an unresolvable sentinel for both consumers — a pre-existing per-plugin-hook scoping limitation.)
+- `cwd` = the harness-owned `<mntHost>/outputs` dir — this MUST equal the PreToolUse gate's `hostCwd` (below); a mismatch is cross-checked live via the hook payload's `input.cwd` and warned loudly, never silently trusted.
+- Connected folders are NEVER staged/copied for the native process — they're read directly at their real `Mount.hostPath` (bind-mounted into the sidecar too, so the native tools and `bash` see the same bytes).
+- system-prompt append includes the host-loop "Shell access" section (unchanged generator).
+- the driver declares `sdkMcpServers:["workspace"]` and handles `mcp_message` (§4, §5) — this is unchanged; the workspace MCP server still routes `bash`/`web_fetch` into the sidecar container regardless of who runs the agent loop.
+- a `hooks` bundle (§4a) installs the PreToolUse path-containment gate alongside the always-on Task-bg-block hook.
+
+**The VM sidecar container** (`docker run`, `--name cowork-hl-<id>` so the driver can `docker exec`):
+```
+docker run --rm -i --platform linux/arm64 --network <net>
+  [lockdown flags, same as §3.3]
+  -w /sessions/<id>
+  -e … (NO agent-env — just CLAUDE_PLUGIN_ROOT=/host/plugins/unmounted, the bash-side self-heal sentinel)
+  -v <sessionHost>:/sessions/<id>                                    # outputs/uploads/staged plugins
+  [-v <sessionHost>/mnt/<p>:/sessions/<id>/mnt/<p>:ro]…              # mode:r NON-folder mounts only
+  -v <folder.hostPath>:/sessions/<id>/mnt/<folderMountPath>[:ro]…    # REAL folder paths — never copies
+  -v <configDir>/skills:/sessions/<id>/mnt/.claude/skills:ro
+  -v <configDir>/projects:/sessions/<id>/mnt/.claude/projects:ro
+  cowork-agent-base:2
+  sleep infinity                                                     # NO agent runs here
+```
+No agent binary is bind-mounted into this container and no `claude …` argv runs in it — it exists solely
+as a `docker exec` target. The full `.claude` dir is NOT bound wholesale (that shape is VM-loop only);
+this sidecar sees only `.claude/skills` + `.claude/projects`, matching production. `bash`'s exec cwd is
+`/sessions/<id>/mnt/<firstConnectedFolder ?? "outputs">` (production's real `vmCwd` semantics — never the
+bare session root or bare `mnt/`).
+
+**Caution for a future edit:** `mode:"r"` non-folder mounts get their `:ro` overlay from
+`readOnlyMountPaths`; `mode:"r"` FOLDER mounts get their `:ro` from the folder-bind line above instead —
+composing both for the same folder produces two `-v` flags at one destination, a Docker "duplicate mount
+point" hard failure. `readOnlyMountPaths` MUST exclude `kind:"folder"` mounts.
+
+### 3.4a The PreToolUse path-containment gate (`src/hostloop/pretooluse-path-hook.ts`)
+
+With no container around the native file tools, this gate — a byte-faithful port of production's own
+inline PreToolUse hook body — is hostloop's ENTIRE security boundary for real filesystem access.
+Installed via the `hooks` seam (§4, a caller-supplied `HookBundle` merged onto the always-on
+`COWORK_PRETOOLUSE_HOOKS` in the `initialize` control_request). Denies any `Read`/`Write`/`Edit`/`Glob`/
+`Grep`/`MultiEdit` whose resolved path falls outside the session's allowed roots (outputs, uploads,
+skills, writable connected folders, the staged plugin copy; read-only folders are readable but not
+writable). A `/sessions/...`-shaped path is denied with a distinct "is a VM path, use bash" message. A
+run-end runtime tripwire (`execute.ts`'s `findUngatedPathToolCalls` / `chat.ts`'s inline `tripwireHook`)
+hard-fails the run/session if a gated tool call ever completes successfully with no evidence the gate
+fired for it — version-skew insurance, not doubt about the currently-pinned binary.
+
+A `hostloop` scenario with a WRITABLE connected folder requires the top-level `allow_host_writes: true`
+scenario field (or `--allow-host-writes` for `chat`) — `checkHostLoopWriteConsent` refuses to spawn
+otherwise. Read-only folders and folder-less/scratch hostloop runs need no opt-in.
 
 ### 3.5 L2 microvm (`spawnMicroVm`)
 `limactl shell <inst> sh -c 'set -e; cd /sessions/<id> 2>/dev/null || { echo "<not provisioned>" >&2; exit 1; }; while IFS= read -r __cs; do [ "$__cs" = "__COWORK_SECRETS_END__" ] && break; export "$__cs"; done; exec "$@"' _ env <non-secret pairs> claude …(§3.1)`. The work root (`VM_WORK_HOST`) is mounted **directly at `/sessions`** (not `/cowork-work` + a per-run symlink), so `/sessions/<id>` is a real dir — `getcwd()` = `/sessions/<id>` (§9), the encoded-cwd matches the container tier, and `CLAUDE_CONFIG_DIR` is a writable host-mounted path so the agent persists its session (enabling `--resume`). `set -e` + the explicit `cd` guard make a missing mount FAIL LOUD (a stale/un-provisioned VM) instead of silently exec'ing with the wrong cwd. `<inst>` is **hash-derived** (`cowork-vm-<sha8(limaConfig)>`): a config change (mounts/image/provision/agent-version) yields a new name ⇒ a fresh VM, so a stale-config VM is never silently reused (no drift). Egress: host proxy at `192.168.5.2:<port>` + guest default-deny iptables. **Secrets: the auth token rides a stdin PROLOGUE** (one `KEY=value` per line up to the `__COWORK_SECRETS_END__` sentinel; the shell `read`s + `export`s them, then `exec`s `claude` with stdin positioned at the control stream) — off the host argv (`ps`/`limactl`) AND off disk. Non-secret env still rides argv via `env <pairs>`.
@@ -129,7 +194,7 @@ The protocol seam is `LiveAgentSession` (the old monolithic `src/control/control
 the three seams `AgentSession` (`src/agent/session.ts`) / `Decider` (`src/decide/decider.ts`) / `Run`
 (`src/run/run.ts`)). Golden snapshots are built by the shared envelope builders in `src/run/envelope.ts`.
 
-1. Driver → CLI **first**: `{type:"control_request", request_id:"init-1", request:{subtype:"initialize", [appendSubagentSystemPrompt], [sdkMcpServers]}}`.
+1. Driver → CLI **first**: `{type:"control_request", request_id:"init-1", request:{subtype:"initialize", [appendSubagentSystemPrompt], [sdkMcpServers], hooks:{PreToolUse:[…]}}}`. `hooks.PreToolUse` always includes the Task-`run_in_background`-block entry; a caller-supplied `HookBundle` (opts.hooks — hostloop's path-containment gate, §3.4a) appends its own matcher/callback-id, never replacing the built-in one. A `hook_callback` control_request for an id the driver doesn't recognize as a built-in is dispatched to the bundle's `handle()`; a throw there is treated as `{decision:"block"}` (fail-closed), never silently allowed.
 2. Driver → CLI: the user turn (`sendUserTurn`; multi-turn capable).
 3. CLI → driver `can_use_tool` / `request_user_dialog` / `elicitation` → `Decider` replies (§5); `request_user_dialog` has a ~6 s auto-cancel.
 4. CLI → driver `mcp_message` (host-loop) → driver replies `mcp_response` (§5); both directions recorded (`events.jsonl` + `control-out.jsonl`).
@@ -261,10 +326,14 @@ Assert the **binary** still matches the contract (run on `sync`, skip without to
 - cowork mode ⇒ `cwd:/sessions/<id>`, `TodoWrite` absent from the registry.
 
 ## 9. Invariants (never regress)
-- cwd = `/sessions/<id>`; config = `mnt/.claude`. Holds for ALL sandbox tiers — incl. microVM, which
-  mounts the work root directly at `/sessions` (§3.5) so `getcwd()` is the real `/sessions/<id>` (not a
-  symlink resolving to a `/cowork-work` physical path). A microVM cwd of `/cowork-work/<id>` is a
-  regression (it breaks session persistence + cross-tier encoded-cwd parity).
+- cwd = `/sessions/<id>`; config = `mnt/.claude`. Holds for the AGENT PROCESS on `container`/`microvm`
+  (incl. microVM, which mounts the work root directly at `/sessions` (§3.5) so `getcwd()` is the real
+  `/sessions/<id>`, not a symlink resolving to a `/cowork-work` physical path — a microVM cwd of
+  `/cowork-work/<id>` is a regression, breaking session persistence + cross-tier encoded-cwd parity) — and
+  for hostloop's `bash`/VM-sidecar view (§3.4). **`hostloop`'s NATIVE agent process is the one deliberate
+  exception**: its cwd is the real host `<mntHost>/outputs` path (matching production's own
+  `hostCwd = getOutputsDir(e)`), because it runs directly on the host, not inside `/sessions/<id>`. This
+  divergence is the fidelity-correct choice, not a bug — do not "fix" it to match this invariant.
 - `CLAUDE_CODE_USE_COWORK_PLUGINS` never set; host `CLAUDE_*` never blanket-forwarded.
 - `MAX_THINKING_TOKENS` never `0`.
 - plugins via `--plugin-dir`; marketplaces resolved to plugin dirs.
