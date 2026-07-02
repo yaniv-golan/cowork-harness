@@ -9,17 +9,17 @@
     },
     "baseline": {
       "default": "latest",
-      "description": "platform baseline to run against (auto-synced via `cowork-harness sync`); `profile:` is a retired alias for this field",
+      "description": "platform baseline to run against (auto-synced via `cowork-harness sync`); `profile:` is a deprecated alias for this field",
       "type": "string"
     },
     "session": {
       "default": "(inline)",
-      "description": "session setup file (pre-prompt: model, mounts, discovery); defaults to an all-defaults inline session",
+      "description": "hand-authored session setup file (pre-prompt: model, mounts, discovery); defaults to an all-defaults inline session",
       "type": "string"
     },
     "fidelity": {
       "default": "container",
-      "description": "isolation tier: protocol (L0, no sandbox) · container/microvm (force a VM-loop tier) · hostloop (force host-loop) · cowork (auto-pick host-loop vs. container via Cowork's own gate logic)",
+      "description": "isolation tier: protocol (L0, no sandbox) | container/microvm (force a VM-loop tier) | hostloop (force host-loop) | cowork (auto-pick host-loop vs. container via Cowork's own gate logic)",
       "type": "string",
       "enum": [
         "protocol",
@@ -35,7 +35,7 @@
     },
     "answers": {
       "default": [],
-      "description": "scripted answers for AskUserQuestion/permission gates, matched in order against each gate's question text",
+      "description": "scripted answers, matched in order: AskUserQuestion gates by question-text regex, tool-permission gates by tool name (`when_tool`)",
       "type": "array",
       "items": {
         "type": "object",
@@ -91,7 +91,7 @@
       }
     },
     "on_unanswered": {
-      "description": "policy when a gate arrives with no matching `answers:` rule — `fail` (default for `run`, deterministic) · `first` (pick the first offered option) · `llm` (delegate to a decider LLM) · `prompt` (rejected under `run`; only valid for `chat`)",
+      "description": "policy when a gate arrives with no matching `answers:` rule — `fail` (default for `run`, deterministic) | `first` (pick the first offered option) | `llm` (delegate to a decider LLM) | `prompt` (rejected under `run`; only valid for `chat`)",
       "type": "string",
       "enum": [
         "fail",

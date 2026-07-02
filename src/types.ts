@@ -281,22 +281,27 @@ export const ScenarioObject = z.strictObject({
   // Optional: defaults to the scenario's filename (sans extension) via parseScenarioFile —
   // the file IS the identity. An explicit `name:` is an override (keys the run dir + cassette).
   name: z.string().default("").describe("scenario identity; defaults to the filename (sans extension) if omitted — an explicit value overrides that and keys the run dir + cassette"),
-  baseline: z.string().default("latest").describe("platform baseline to run against (auto-synced via `cowork-harness sync`); `profile:` is a retired alias for this field"),
-  session: z.string().default("(inline)").describe("session setup file (pre-prompt: model, mounts, discovery); defaults to an all-defaults inline session"),
+  baseline: z.string().default("latest").describe("platform baseline to run against (auto-synced via `cowork-harness sync`); `profile:` is a deprecated alias for this field"),
+  session: z.string().default("(inline)").describe("hand-authored session setup file (pre-prompt: model, mounts, discovery); defaults to an all-defaults inline session"),
   // cowork = auto-pick host-loop vs container via Cowork's own decision logic (the gate);
   // hostloop = force host-loop; container/microvm = force VM-loop; protocol = L0.
   fidelity: z
     .enum(["protocol", "container", "microvm", "hostloop", "cowork"])
     .default("container")
-    .describe("isolation tier: protocol (L0, no sandbox) · container/microvm (force a VM-loop tier) · hostloop (force host-loop) · cowork (auto-pick host-loop vs. container via Cowork's own gate logic)"),
+    .describe("isolation tier: protocol (L0, no sandbox) | container/microvm (force a VM-loop tier) | hostloop (force host-loop) | cowork (auto-pick host-loop vs. container via Cowork's own gate logic)"),
   prompt: z.string().describe("the user turn sent to the agent"),
-  answers: z.array(AnswerRule).default([]).describe("scripted answers for AskUserQuestion/permission gates, matched in order against each gate's question text"),
+  answers: z
+    .array(AnswerRule)
+    .default([])
+    .describe(
+      "scripted answers, matched in order: AskUserQuestion gates by question-text regex, tool-permission gates by tool name (`when_tool`)",
+    ),
   // input policy when an AskUserQuestion/dialog/elicit arrives unscripted (input-and-interactivity plan).
   // `run` default is `fail` (deterministic); `prompt` is rejected for `run` (would break determinism).
   on_unanswered: z
     .enum(["fail", "prompt", "llm", "first"])
     .optional()
-    .describe("policy when a gate arrives with no matching `answers:` rule — `fail` (default for `run`, deterministic) · `first` (pick the first offered option) · `llm` (delegate to a decider LLM) · `prompt` (rejected under `run`; only valid for `chat`)"),
+    .describe("policy when a gate arrives with no matching `answers:` rule — `fail` (default for `run`, deterministic) | `first` (pick the first offered option) | `llm` (delegate to a decider LLM) | `prompt` (rejected under `run`; only valid for `chat`)"),
   expect_denied: z.array(z.string()).default([]).describe("shorthand for asserting egress to these hosts was DENIED — expands to one egress_denied assertion per host"),
   assert: z.array(Assertion).default([]).describe("post-run assertions; see each key's own description for what it checks"),
   // F-6 (opt-in): scope the skill-staleness hash to the skill(s) this scenario actually exercises, named by
