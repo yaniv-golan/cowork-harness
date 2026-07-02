@@ -29,6 +29,7 @@ It is a fidelity fixture, not the Desktop runtime. The CLI binary is `cowork-har
 - [docs/chat.md](docs/chat.md): the interactive `chat` command — multi-turn sessions, `--folder`, fidelity tiers
 - [docs/debugging.md](docs/debugging.md): debugging a run — `inspect`/`trace`/`chat`/`verify-run` for a misbehaving skill, and the false-green hunt
 - [docs/fidelity-gaps.md](docs/fidelity-gaps.md): what the harness deliberately does NOT reproduce vs real Cowork
+- [docs/invariants.md](docs/invariants.md): consolidated index of every "do not break" invariant, each with a pointer to its enforcement code and its test
 - [SECURITY.md](SECURITY.md): threat model — the sandbox is a fidelity fixture, not a security boundary
 
 ## Using it from an agent
