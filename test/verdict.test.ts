@@ -40,6 +40,16 @@ describe("computeVerdict (the single verdict source)", () => {
     expect(computeVerdict(rr({ scan: { outputsDeletes: [], hostPathLeaked: true, selfHealRan: false } }), "live").pass).toBe(false);
   });
 
+  it("skips the host_path_leak default-fail at hostloop fidelity (real host paths are expected there), still fails at container", () => {
+    const leak = { outputsDeletes: [], hostPathLeaked: true, selfHealRan: false };
+    const atHostloop = computeVerdict(rr({ scan: leak, effectiveFidelity: "hostloop" }), "live");
+    expect(atHostloop.pass).toBe(true);
+    expect(atHostloop.signals.some((s) => s.code === "host_path_leak")).toBe(false);
+    const atContainer = computeVerdict(rr({ scan: leak, effectiveFidelity: "container" }), "live");
+    expect(atContainer.pass).toBe(false);
+    expect(atContainer.signals.some((s) => s.code === "host_path_leak")).toBe(true);
+  });
+
   it("splits result:error into transport_error vs result_error (both fail; distinct message)", () => {
     // a generic agent error → result_error
     const agent = computeVerdict(rr({ result: "error", resultErrorKind: "agent" }), "live");

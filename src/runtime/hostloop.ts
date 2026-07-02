@@ -5,8 +5,8 @@ import { resolve, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { PlatformBaseline, Scenario } from "../types.js";
 import { DEFAULT_MAX_THINKING_TOKENS } from "../types.js";
-import type { LaunchPlan } from "../session.js";
-import { resolveMounts, resolveAgentBinary, cmpVersionStrings, MOUNT_BARE_NAME_MIN_VERSION } from "../baseline.js";
+import type { LaunchPlan, Mount } from "../session.js";
+import { resolveMounts, resolveAgentBinary, resolveHostAgentBinary, cmpVersionStrings, MOUNT_BARE_NAME_MIN_VERSION } from "../baseline.js";
 import { generateHostLoopShellSection } from "./hostloop-prompt.js";
 
 /**
@@ -17,22 +17,29 @@ import { generateHostLoopShellSection } from "./hostloop-prompt.js";
  */
 const HOSTLOOP_DYNAMIC_PROMPT_MIN_VERSION = MOUNT_BARE_NAME_MIN_VERSION;
 import { makeWorkspaceHandler, type McpHandler, type EgressEntry, type WebFetchProvenance } from "../hostloop/workspace-handler.js";
-import { agentArgs, spawnEnv, dockerRunArgv, resolveMaxThinkingTokens } from "./argv.js";
+import { baseAgentArgs, hostNativeSpawnEnv, dockerRunArgv, resolveMaxThinkingTokens } from "./argv.js";
 import { runtimeAuthEnv } from "./host-env.js";
-import { stageWorkspace } from "./stage.js";
+import { resolveHostLoopBindMounts, stageHostLoopWorkspace } from "./hostloop-stage.js";
+import { checkHostLoopPathGate, PATH_GATE_TOOL_NAMES, type HostLoopPathGateConfig } from "../hostloop/pretooluse-path-hook.js";
+import type { HookBundle } from "../agent/session.js";
 import { stripComments } from "../prompt.js";
 
+const HOSTLOOP_PATH_GATE_ID = "hostloop-path-gate";
+
 /**
- * HOST-LOOP runtime — reproduces Cowork's host-loop mode: the agent process runs in the
- * container (like the CONTAINER runtime), but native Bash/WebFetch are DISABLED and
- * replaced by mcp__workspace__bash / mcp__workspace__web_fetch (a workspace MCP server we
- * run), which route those two tools host-side, and `${CLAUDE_PLUGIN_ROOT}`
- * is a HOST path that bash cannot resolve — so a skill's bash that references it must
- * self-heal via `find /sessions/<id>/mnt ...`, exactly like production Cowork.
+ * HOST-LOOP runtime — reproduces Cowork's REAL host-loop architecture: the agent LOOP is a native macOS
+ * process spawned directly on the host — no Docker sandbox around the file tools, matching production.
+ * Only bash/web_fetch route into a Docker "VM" sidecar (this container has no agent inside it at all; it
+ * exists solely as a `docker exec` target). Connected folders are BIND-MOUNTED into the sidecar and read
+ * directly off the real host path by the native process's file tools — never copied while the agent
+ * runs. This closes a false-green: a skill that hardcodes a VM-absolute path in Read/Edit used to
+ * "succeed" under an earlier copy-into-container design that could never model that path, while failing
+ * the same way in real Cowork.
  *
- * Single container: file/discovery use the mounted vm paths (/sessions/<id>/mnt), bash
- * (the MCP server) runs there too, but CLAUDE_PLUGIN_ROOT points at an UNMOUNTED
- * /host/... path so `[ -d "$CLAUDE_PLUGIN_ROOT" ]` is false in bash → self-heal triggers.
+ * With no OS sandbox around the native file tools, the PreToolUse path-containment gate
+ * (../hostloop/pretooluse-path-hook.ts) is hostloop's ENTIRE security boundary for real filesystem
+ * access — see docs/boundary.md for the full layered safety posture (opt-in for writable folders, the
+ * loud notice, and the runtime tripwire below that catches the gate silently failing to fire).
  */
 export function spawnHostLoop(
   scenario: Scenario,
@@ -51,8 +58,6 @@ export function spawnHostLoop(
   const m = resolveMounts(baseline, sessionId, "proj1");
   const sessionRoot = m.cwd;
   const mntRoot = m.mntRoot;
-  const configGuest = `${sessionRoot}/${baseline.spawn?.configDirInGuest ?? "mnt/.claude"}`;
-  const AGENT_IN = "/usr/local/bin/claude";
   // Name by the per-invocation runToken (NOT sessionId) so a --resume after a failed run doesn't collide
   // on a leftover same-named container. cwd/work dir stay keyed by sessionId (stable for resume).
   const containerName = `cowork-hl-${opts.runToken ?? sessionId}`;
@@ -61,69 +66,143 @@ export function spawnHostLoop(
   const proxyHost = opts.egressProxy ?? process.env.COWORK_EGRESS_PROXY ?? "http://egress-proxy:8080";
   const network = opts.dockerNetwork ?? process.env.COWORK_DOCKER_NETWORK ?? "cowork-net";
 
-  // stage the writable session tree via the shared helper (honors plan.resume — skips re-copy on
-  // resume, matching Cowork's same-VM-no-restage behavior; see stage.ts).
+  // Stage the writable session tree: NO folder copies (bind-mounted real paths instead), uploads/
+  // plugins still staged (copies — same fidelity boundary as before), mcp.json staged into the CONFIG
+  // dir (a host path the native argv can reference directly).
   const sessionHost = join(resolve(outDir), "work", "session");
   const mntHost = join(sessionHost, "mnt");
-  // --mcp-config is HONORED in plain cowork mode (SPEC §6) — staged for host-loop too (was silently
-  // dropped here before).
-  const { mcpStaged } = stageWorkspace(plan, mntHost);
-  const mcpGuest = mcpStaged ? `${configGuest}/mcp.json` : undefined;
+  const { mcpHostPath } = stageHostLoopWorkspace(plan, mntHost);
 
-  // CLAUDE_PLUGIN_ROOT = an UNMOUNTED host path -> bash can't resolve it -> self-heal.
-  // A single env var cannot model real Claude Code's per-plugin-hook scoping, and host-loop
-  // only needs an UNRESOLVABLE path to trigger the skill's self-heal — the basename is incidental.
-  // Picking pluginDirs[0] implied the var tracked a specific (the first) plugin; it does not.
-  // Use a fixed sentinel that is deliberately unresolvable in-guest. Do NOT rely on it pointing
-  // at a real plugin.
-  const hostPluginRoot = "/host/plugins/unmounted";
+  // CLAUDE_PLUGIN_ROOT / --plugin-dir for the NATIVE process point at the staged plugin copy (the
+  // production-analog `installPath`) — a REAL host path the native process can resolve directly, unlike
+  // the pre-split design where the agent ran in-container and needed an intentionally-unresolvable
+  // sentinel. bash's `docker exec` still gets the sentinel (below) so it still self-heals via
+  // `find /sessions/<id>/mnt ...`, exactly like production (2+ configured plugins keep the sentinel for
+  // BOTH consumers — the same pre-existing per-plugin-hook scoping limitation, not a regression here).
+  const claudePluginRootHost = resolveClaudePluginRootHostPath(plan, mntHost);
+  const hostPluginRoot = "/host/plugins/unmounted"; // bash-side sentinel — unresolvable in the VM, triggers self-heal
 
-  const agentHost = resolveAgentBinary(baseline);
+  const agentNativeHost = resolveHostAgentBinary(baseline);
+  const agentVmHost = resolveAgentBinary(baseline); // unchanged — still the sidecar VM image's basis (bash execs into it)
   const image = process.env.COWORK_AGENT_IMAGE ?? "cowork-agent-base:2";
   const runner = process.env.COWORK_CONTAINER_RUNTIME ?? "docker";
 
   // Host-loop deltas: native Bash/WebFetch/NotebookEdit OFF (shell goes through the workspace
   // SDK-MCP server — driver handles mcp_message), the workspace tools pre-approved, the
-  // Shell-access prompt section, and CLAUDE_PLUGIN_ROOT = an UNMOUNTED host path (self-heal).
-  // Host-loop excludes the asar's HOST_LOOP_EXCLUDED_BUILTIN_TOOLS = {Bash, NotebookEdit, REPL,
-  // JavaScript, WebFetch}; of those only Bash/NotebookEdit/WebFetch exist in the CLI agent's
-  // registry (verified 2026-06-13 — REPL/JavaScript are asar names for other surfaces, absent
-  // here), so disallowing the three real ones is the faithful set.
+  // Shell-access prompt section. Host-loop excludes the asar's HOST_LOOP_EXCLUDED_BUILTIN_TOOLS =
+  // {Bash, NotebookEdit, REPL, JavaScript, WebFetch}; of those only Bash/NotebookEdit/WebFetch exist in
+  // the CLI agent's registry, so disallowing the three real ones is the faithful set.
   const systemPromptAppend = [opts.systemPromptAppend, hostLoopShellSection(baseline, m.sessionRoot, mntRoot, plan)]
     .filter(Boolean)
     .join("\n\n");
-  const env = spawnEnv(baseline, {
-    configGuest,
-    proxyHost,
-    extra: { CLAUDE_PLUGIN_ROOT: hostPluginRoot, ...runtimeAuthEnv() },
-    maxThinkingTokens: resolveMaxThinkingTokens(
-      plan.maxThinkingTokens,
-      plan.model,
-      baseline.spawn?.maxThinkingTokens ?? DEFAULT_MAX_THINKING_TOKENS,
-    ),
-  });
-  const claudeArgs = agentArgs(baseline, plan, {
-    mntRoot,
+
+  const maxThinkingTokens = resolveMaxThinkingTokens(
+    plan.maxThinkingTokens,
+    plan.model,
+    baseline.spawn?.maxThinkingTokens ?? DEFAULT_MAX_THINKING_TOKENS,
+  );
+
+  // The native process's argv reuses baseAgentArgs (the SAME pure contract layer container/microvm
+  // use) but with HOST paths for the two guest-relative params: `mntRoot: mntHost` makes every
+  // `--plugin-dir` a real host path to the staged copy, and `mcpGuest: mcpHostPath` makes
+  // `--mcp-config` a real host path (there is no guest config dir for a native process).
+  const nativeArgs = baseAgentArgs(baseline, plan, {
+    mntRoot: mntHost,
+    mcpGuest: mcpHostPath,
     systemPromptAppend,
-    mcpGuest,
     disallowed: ["Bash", "WebFetch", "NotebookEdit"],
     extraTools: ["mcp__workspace__bash", "mcp__workspace__web_fetch"],
   });
-  const dockerArgs = dockerRunArgv({
+  const hostOutputsDir = join(mntHost, "outputs");
+  const nativeEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    ...hostNativeSpawnEnv(baseline, {
+      configDir: plan.configDir,
+      extra: { CLAUDE_PLUGIN_ROOT: claudePluginRootHost ?? "", ...runtimeAuthEnv() },
+      maxThinkingTokens,
+    }),
+  };
+
+  // The PreToolUse path-containment gate config. hostCwd = the harness-owned outputs dir (production's
+  // `hostCwd = getOutputsDir(e)`); scratchRoots = [hostCwd] (hostCwd and hostOutputsDir are the SAME dir
+  // here, so this is one entry, not two).
+  const gateCfg: HostLoopPathGateConfig = {
+    hostCwd: hostOutputsDir,
+    allowedRoots: [
+      hostOutputsDir,
+      join(mntHost, "uploads"),
+      join(plan.configDir, "skills"),
+      ...plan.mounts.filter((mt) => mt.kind === "folder" && mt.mode !== "r").map((mt) => mt.hostPath),
+      ...plan.mounts.filter((mt) => mt.kind !== "folder" && mt.kind !== "upload").map((mt) => join(mntHost, mt.mountPath)),
+    ],
+    readOnlyRoots: plan.mounts.filter((mt) => mt.kind === "folder" && mt.mode === "r").map((mt) => mt.hostPath),
+    scratchRoots: [hostOutputsDir],
+    // Bs === "chat" (asar byte 8079633): scratch ⟺ chat-type session. run/skill lanes (this function's
+    // only current callers) are cowork-type sessions regardless of folder count — stays false here.
+    scratchMode: false,
+    claudePluginRoot: claudePluginRootHost,
+  };
+  const pathGateFired = new Set<string>(); // tool_use_ids the gate actually saw — feeds the runtime tripwire below
+  const hooks: HookBundle = {
+    definitions: {
+      PreToolUse: [{ matcher: [...PATH_GATE_TOOL_NAMES, "MultiEdit"].join("|"), hookCallbackIds: [HOSTLOOP_PATH_GATE_ID] }],
+    },
+    handle: async (id, input) => {
+      if (id !== HOSTLOOP_PATH_GATE_ID) return {};
+      if (typeof input?.tool_use_id === "string") pathGateFired.add(input.tool_use_id);
+      // Wire-cwd cross-check: the hook payload carries input.cwd. The RESOLVER input stays the closure
+      // hostCwd (faithful to production's own resolver, which uses its own cwd variable, not the wire
+      // value), but a mismatch means the native spawn's cwd drifted from the gate's assumption — loud, never silent.
+      if (typeof input?.cwd === "string" && input.cwd !== gateCfg.hostCwd)
+        warn(`::warning:: [hostloop] path-gate cwd mismatch: wire=${input.cwd} spawner=${gateCfg.hostCwd}\n`);
+      return checkHostLoopPathGate(input?.tool_name, input?.tool_input ?? {}, gateCfg);
+    },
+  };
+
+  const child = spawn(agentNativeHost, nativeArgs, { cwd: hostOutputsDir, env: nativeEnv, stdio: ["pipe", "pipe", "pipe"] });
+
+  // The VM sidecar container: bash/web_fetch's `docker exec` target. No agent inside it (the agent is
+  // the native `child` above) — it runs a keep-alive command (dockerRunArgv's default when `agentArgv` is
+  // omitted). Folders are bind-mounted here as REAL host paths (never copied); `.claude/skills`+
+  // `.claude/projects` are the only `.claude` subpaths the VM sees (never the full dir — matching
+  // production, which only mounts the full `.claude` dir for its VM-loop, not host-loop). readOnlyMountPaths
+  // EXCLUDES folders (a `mode:"r"` folder is handled exclusively by extraBinds — including it too would
+  // produce two `-v` flags at the same destination, a Docker "duplicate mount point" hard failure).
+  const sidecarArgs = dockerRunArgv({
     network,
     lockdown: (process.env.COWORK_LOCKDOWN ?? "on") !== "off",
     sessionRoot,
     sessionHost,
-    agentHost,
-    agentIn: AGENT_IN,
+    agentHost: agentVmHost,
+    agentIn: "/usr/local/bin/claude", // kept bind-mounted (unused by any process) for parity/inspection; harmless
     image,
-    env,
-    agentArgv: claudeArgs,
-    name: containerName, // so the driver can `docker exec` workspace-bash into this container
-    readOnlyMountPaths: plan.mounts.filter((m) => m.mode === "r").map((m) => m.mountPath), // enforce mode:r as :ro binds
+    env: { CLAUDE_PLUGIN_ROOT: hostPluginRoot },
+    name: containerName,
+    readOnlyMountPaths: plan.mounts.filter((mt) => mt.mode === "r" && mt.kind !== "folder").map((mt) => mt.mountPath),
+    extraBinds: resolveHostLoopBindMounts(plan, sessionRoot),
+  });
+  const sidecarChild = spawn(runner, sidecarArgs, { stdio: ["ignore", "ignore", "pipe"] });
+  let sidecarStderrTail = "";
+  sidecarChild.stderr?.on("data", (d) => {
+    sidecarStderrTail = (sidecarStderrTail + d.toString()).slice(-4000);
+  });
+  const logInfra = (message: string) => {
+    try {
+      appendFileSync(join(outDir, "events.jsonl"), JSON.stringify({ type: "infra_error", ts: new Date().toISOString(), message }) + "\n");
+    } catch {}
+  };
+  sidecarChild.on("error", (e) => logInfra(`hostloop VM sidecar failed to spawn: ${String(e)}`));
+  sidecarChild.on("exit", (code, signal) => {
+    if (code !== 0 && code !== null)
+      logInfra(`hostloop VM sidecar exited unexpectedly (code=${code} signal=${signal}): ${sidecarStderrTail}`);
   });
 
-  const child = spawn(runner, dockerArgs, { stdio: ["pipe", "pipe", "pipe"] });
+  // Production's vmCwd is the first non-network-drive connected folder's mount name, falling back to
+  // outputs — never the bare session root or bare mnt/. The harness has no network-drive detection; an
+  // unmountable folder fails loud at container start instead (a documented, deliberate divergence).
+  const firstFolder = plan.mounts.find((mt): mt is Mount => mt.kind === "folder");
+  const execCwd = `${sessionRoot}/mnt/${firstFolder ? firstFolder.mountPath : "outputs"}`;
+
   // Host-routed web_fetch bypasses the sidecar proxy, so collect its egress decisions here and
   // surface them to execute.ts → result.egress, making host-loop web_fetch visible to egress assertions.
   const hostEgress: EgressEntry[] = [];
@@ -135,18 +214,26 @@ export function spawnHostLoop(
       runner,
       plan.egressAllow,
       (e) => hostEgress.push(e),
-      (msg) => {
-        try {
-          appendFileSync(
-            join(outDir, "events.jsonl"),
-            JSON.stringify({ type: "infra_error", ts: new Date().toISOString(), message: msg }) + "\n",
-          );
-        } catch {}
-      },
+      logInfra,
       opts.provenanceRef,
+      undefined,
+      undefined,
+      execCwd,
     ),
   };
-  return { child, sdkMcp, containerName, hostEgress };
+  return { child, sdkMcp, hooks, pathGateFired, containerName, hostEgress };
+}
+
+/** The staged plugin copy's host path (production-analog `installPath`): the SAME directory the
+ *  sidecar's extraBinds mounts into the VM and the native `--plugin-dir` argv references. 2+ configured
+ *  plugins keep the unresolvable sentinel for both consumers — a pre-existing per-plugin-hook scoping
+ *  limitation, not something introduced here. */
+function resolveClaudePluginRootHostPath(plan: LaunchPlan, mntHost: string): string | undefined {
+  const pluginMounts = plan.mounts.filter(
+    (mt) => mt.kind === "local-plugin" || mt.kind === "remote-plugin" || mt.kind === "marketplace-plugin",
+  );
+  if (pluginMounts.length !== 1) return undefined;
+  return join(mntHost, pluginMounts[0].mountPath);
 }
 
 function hostLoopShellSection(baseline: PlatformBaseline, sessionRoot: string, mntRoot: string, plan: LaunchPlan): string {

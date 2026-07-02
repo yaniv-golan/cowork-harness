@@ -23,6 +23,13 @@ export const PlatformBaseline = z.looseObject({
     // npmPackage/preferReuseStaged removed: there is NO npm path — the Linux/arm64 ELF is
     // bind-mounted from the staged Desktop install (or COWORK_AGENT_BINARY). Tolerated-but-ignored
     // if present in an old baseline (z.object strips unknown keys).
+    // Desktop ALSO stages a native macOS Mach-O binary (claude-code/<ver>/claude.app/Contents/MacOS/claude)
+    // alongside the Linux/arm64 ELF above — hostloop's agent loop runs on the host directly from this
+    // binary (no container), while only bash/web_fetch route into a VM. The ELF stays the source of
+    // truth for container/microvm and for hostloop's bash/web_fetch VM sidecar image. Optional: a
+    // baseline synced before this field existed has no native binary staged, so hostloop falls back to
+    // resolveHostAgentBinary's loud failure (never a silent tier downgrade).
+    nativeStagedPath: z.string().optional(),
   }),
   guest: z.looseObject({ os: z.string(), arch: z.string(), baseImage: z.string().optional() }),
   spawn: z
@@ -298,6 +305,13 @@ export const ScenarioObject = z.strictObject({
   // replay / COWORK_SKIP_CAPABILITY_PROBE (clause b) — closing the false-green for extraction-heavy skills.
   // `allow_missing_capability: true` opts out. Validated against the known family list at run time.
   requires_capabilities: z.array(z.string()).default([]),
+  // Explicit consent for `hostloop` fidelity with a writable connected folder (mode: rw/rwd): the native
+  // agent process gets genuine, software-checked-only host filesystem access there — no container sandbox
+  // (matches production's own host-loop risk model). A top-level field, NOT an assertion-list entry / a
+  // VERDICT_MODIFIER_KEYS member — this gates whether the run is ATTEMPTED at all (pre-run), not a
+  // post-run default-fail signal (see checkHostLoopWriteConsent, src/hostloop/safety.ts). Read-only
+  // folders and folder-less/scratch hostloop runs need no opt-in.
+  allow_host_writes: z.boolean().optional(),
 });
 // Back-compat (one minor): accept the deprecated top-level `profile:` key as an alias for `baseline:`,
 // remapping it BEFORE `z.strictObject` rejects the unknown key. Remove next minor.

@@ -1556,7 +1556,30 @@ function cmdSync(args: string[]) {
     log(`  (The new agentVersion is ${res.agentVersion}. Open Cowork once to stage the binary, then re-run sync.)`);
     log(`  resolveAgentBinary will fail until the file is present or COWORK_AGENT_BINARY is set.`);
   }
-  const nextAgentBinary = { ...baseAgentBinary, stagedPath: derivedStagedPath };
+  // Same convention-derivation for the NATIVE macOS binary hostloop spawns directly for the agent loop:
+  //   ~/Library/Application Support/Claude/claude-code/<agentVersion>/claude.app/Contents/MacOS/claude
+  const oldNativeStagedPath = (baseAgentBinary.nativeStagedPath as string) ?? "";
+  const nativeVersionRe = /claude-code\/[^/]+\/claude\.app\/Contents\/MacOS\/claude$/;
+  let derivedNativeStagedPath: string;
+  if (nativeVersionRe.test(oldNativeStagedPath)) {
+    derivedNativeStagedPath = oldNativeStagedPath.replace(
+      nativeVersionRe,
+      `claude-code/${res.agentVersion}/claude.app/Contents/MacOS/claude`,
+    );
+  } else {
+    derivedNativeStagedPath = `~/Library/Application Support/Claude/claude-code/${res.agentVersion}/claude.app/Contents/MacOS/claude`;
+    if (oldNativeStagedPath)
+      log(
+        `WARNING: agentBinary.nativeStagedPath layout was unexpected ("${oldNativeStagedPath}") — rewrote to the canonical path for ${res.agentVersion}.`,
+      );
+  }
+  const resolvedNativeDerived = derivedNativeStagedPath.replace(/^~(?=$|\/)/, join(process.env.HOME ?? "~"));
+  if (!existsSync(resolvedNativeDerived)) {
+    log(`WARNING: derived agentBinary.nativeStagedPath does not exist on this machine: ${derivedNativeStagedPath}`);
+    log(`  (The new agentVersion is ${res.agentVersion}. Open Cowork once to stage the binary, then re-run sync.)`);
+    log(`  resolveHostAgentBinary will fail until the file is present or COWORK_HOST_AGENT_BINARY is set.`);
+  }
+  const nextAgentBinary = { ...baseAgentBinary, stagedPath: derivedStagedPath, nativeStagedPath: derivedNativeStagedPath };
 
   // re-sync GrowthBook gate states from the decoded fcache (was: stale-carry + blanket warning).
   // Gates drive the cowork loop decision (decideLoopFromBaseline) and the dispatch cap; decoding the

@@ -114,6 +114,16 @@ describe("scenario.py assertion-keys.json is in sync with the zod Assertion sche
     const keys = JSON.parse(buildAssertionKeys()).topLevelKeys as string[];
     expect(keys).toContain("requires_capabilities");
   });
+  // allow_host_writes is a top-level scenario field (a pre-run consent gate, not a post-run verdict
+  // modifier) — ScenarioObject is a strictObject, so it must round-trip through parse() and appear in
+  // the generated topLevelKeys cascade like any other field, while staying OUT of VERDICT_MODIFIER_KEYS.
+  it("allow_host_writes round-trips through ScenarioObject.parse() and is in topLevelKeys, not VERDICT_MODIFIER_KEYS", () => {
+    const parsed = ScenarioObject.parse({ prompt: "x", allow_host_writes: true });
+    expect(parsed.allow_host_writes).toBe(true);
+    const keys = JSON.parse(buildAssertionKeys()).topLevelKeys as string[];
+    expect(keys).toContain("allow_host_writes");
+    expect([...VERDICT_MODIFIER_KEYS]).not.toContain("allow_host_writes");
+  });
   it("verdictModifierKeys matches VERDICT_MODIFIER_KEYS", () => {
     const gen = JSON.parse(buildAssertionKeys()).verdictModifierKeys as string[];
     expect([...gen].sort()).toEqual([...VERDICT_MODIFIER_KEYS].sort());

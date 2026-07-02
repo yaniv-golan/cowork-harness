@@ -132,6 +132,7 @@ _EMBEDDED_TOP_LEVEL_KEYS = {
     "assert",
     "skills",  # F-6: opt-in skill-staleness hash scope
     "requires_capabilities",  # Fix 4b: scenario-level required-capability declaration (pre-flight gate)
+    "allow_host_writes",  # hostloop native-split: consent for a writable connected folder (pre-run gate)
 }
 
 

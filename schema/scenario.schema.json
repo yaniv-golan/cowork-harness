@@ -296,6 +296,9 @@
       "items": {
         "type": "string"
       }
+    },
+    "allow_host_writes": {
+      "type": "boolean"
     }
   },
   "required": [

@@ -1,3 +1,4 @@
+import { warn } from "../io.js";
 import type { RunResult } from "../types.js";
 
 export interface VerdictSignal {
@@ -163,7 +164,15 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
         message: `unauthorized delete touched mnt/outputs: ${result.scan.outputsDeletes.join("; ")} (assert no_delete_in_outputs to make this explicit)`,
       });
 
-    if (result.scan?.hostPathLeaked && !authored.some((a) => a.transcript_no_host_path === true))
+    // hostloop's native file tools legitimately operate on real host paths (that's the tier's whole
+    // point) — a run at that fidelity is EXPECTED to see /Users/... paths, so the scan is not evidence
+    // of a leak there the way it is for container/microvm/protocol. Gate the default-fail on the tier;
+    // the raw scan result stays recorded in result.json either way (forensics).
+    if (result.scan?.hostPathLeaked && result.effectiveFidelity === "hostloop") {
+      warn(
+        "::notice:: [verdict] host_path_leak signal skipped at hostloop fidelity — real host paths are expected there (see docs/boundary.md)\n",
+      );
+    } else if (result.scan?.hostPathLeaked && !authored.some((a) => a.transcript_no_host_path === true))
       signals.push({
         code: "host_path_leak",
         severity: "fail",

@@ -279,6 +279,12 @@ export function makeWorkspaceHandler(
   provenanceRef?: { current?: WebFetchProvenance }, // Run fills this before the stream starts
   rawFetch: RawFetch = defaultRawFetch, // per-hop fetch (redirect:manual) for BOTH paths; injectable
   resolve: Resolver = defaultResolver, // per-hop DNS resolution for the SSRF backstop; injectable
+  // Production's `vmCwd` is the first non-network-drive connected folder's mount
+  // name, falling back to `outputs` — never the bare mnt root. `vmMnt` above stays the mnt ROOT (used
+  // only for the bash tool's description text, which legitimately describes where ALL folders live);
+  // `execCwd`, appended last (not inserted) so every existing positional call site is unaffected,
+  // defaults to `vmMnt` for callers that don't care about the distinction (e.g. tests).
+  execCwd: string = vmMnt,
 ): McpHandler {
   // Per-handler (per-spawn) latch for the provenance-unenforced warning — was module-level, which
   // silenced the gap after the first run in a long-lived process. Each fresh handler warns once.
@@ -311,7 +317,7 @@ export function makeWorkspaceHandler(
       const a = jr.params?.arguments ?? {};
       if (name === "bash")
         return {
-          result: await execInContainer(runner, containerName, vmMnt, String(a.command ?? ""), clampTimeout(a.timeout_ms), onInfraError),
+          result: await execInContainer(runner, containerName, execCwd, String(a.command ?? ""), clampTimeout(a.timeout_ms), onInfraError),
         };
       if (name === "web_fetch")
         return {

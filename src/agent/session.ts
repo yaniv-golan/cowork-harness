@@ -74,11 +74,23 @@ export type SdkMcp = {
     | { result?: unknown; error?: { code: number; message: string } };
 };
 
+/**
+ * A caller-supplied PreToolUse hook bundle, threaded through `AgentSession.init/start` opts exactly like
+ * `sdkMcp` (mirrors that existing pattern so this protocol layer never learns what "allowedRoots" means
+ * — no policy leaks in here). `definitions` is merged onto the ALWAYS-installed `COWORK_PRETOOLUSE_HOOKS`
+ * in the `initialize` control_request; `handle` is consulted for any `hook_callback` whose `callback_id`
+ * isn't one of the built-in ids. Used by hostloop's path-containment gate — the harness's only current caller.
+ */
+export interface HookBundle {
+  definitions: { PreToolUse: Array<{ matcher: string; hookCallbackIds: string[] }> };
+  handle: (callbackId: string, input: any) => Promise<Record<string, unknown>> | Record<string, unknown>;
+}
+
 export interface AgentSession {
   /** write `initialize` before the first user turn (idempotent; `start()` also calls it).
    *  Optional — replay sessions (cassette) have no live control channel and omit it. */
-  init?(opts?: { subagentAppend?: string; sdkMcp?: SdkMcp }): void;
-  start(opts?: { subagentAppend?: string; sdkMcp?: SdkMcp }): AsyncIterable<AgentEvent>;
+  init?(opts?: { subagentAppend?: string; sdkMcp?: SdkMcp; hooks?: HookBundle }): void;
+  start(opts?: { subagentAppend?: string; sdkMcp?: SdkMcp; hooks?: HookBundle }): AsyncIterable<AgentEvent>;
   sendUserTurn(text: string): void;
   respond(decisionId: string, r: DecisionResponse): void;
   close(): void;
@@ -290,6 +302,7 @@ export class LiveAgentSession implements AgentSession {
   private controlOut: WriteStream;
   private reqById = new Map<string, DecisionRequest>();
   private sdkMcp?: SdkMcp;
+  private hookBundle?: HookBundle;
   private initWritten = false;
   /** Reject function set when proc emits an error — bridges the callback into the async generator.
    *  Set before the generator loop starts; called at most once (the Promise settles once). */
@@ -329,18 +342,23 @@ export class LiveAgentSession implements AgentSession {
    * also calls it so a standalone `start()` (no prior `init`) still initializes. Guarded so the two
    * call sites never double-write init-1.
    */
-  init(opts: { subagentAppend?: string; sdkMcp?: SdkMcp } = {}): void {
+  init(opts: { subagentAppend?: string; sdkMcp?: SdkMcp; hooks?: HookBundle } = {}): void {
     if (this.initWritten) return;
     this.initWritten = true;
     this.sdkMcp = opts.sdkMcp;
+    this.hookBundle = opts.hooks;
     const initRequest: Record<string, unknown> = { subtype: "initialize" };
     if (opts.subagentAppend) initRequest.appendSubagentSystemPrompt = opts.subagentAppend;
     if (opts.sdkMcp?.servers.length) initRequest.sdkMcpServers = opts.sdkMcp.servers;
-    initRequest.hooks = COWORK_PRETOOLUSE_HOOKS; // block Task run_in_background, mirroring cowork
+    // Merge the caller-supplied PreToolUse definitions (e.g. hostloop's path gate) onto the
+    // always-installed COWORK_PRETOOLUSE_HOOKS (Task run_in_background block) — never replace it.
+    initRequest.hooks = opts.hooks
+      ? { PreToolUse: [...COWORK_PRETOOLUSE_HOOKS.PreToolUse, ...opts.hooks.definitions.PreToolUse] }
+      : COWORK_PRETOOLUSE_HOOKS;
     this.write({ type: "control_request", request_id: "init-1", request: initRequest });
   }
 
-  async *start(opts: { subagentAppend?: string; sdkMcp?: SdkMcp } = {}): AsyncIterable<AgentEvent> {
+  async *start(opts: { subagentAppend?: string; sdkMcp?: SdkMcp; hooks?: HookBundle } = {}): AsyncIterable<AgentEvent> {
     this.init(opts); // idempotent — a no-op if drive() already wrote init-1 before the first user turn
 
     // race-approach latch — `errorPromise` rejects when proc emits an error, which is
@@ -423,7 +441,24 @@ export class LiveAgentSession implements AgentSession {
       // validate request_id BEFORE emitting a response — a malformed id would write an
       // unaddressable control_response and leave the in-VM agent blocked on the hook round-trip.
       const reqId = requireRequestId(msg);
-      this.write(successEnvelope(reqId, hookOutput(msg.request.callback_id, msg.request.input)));
+      const callbackId = msg.request.callback_id;
+      // An unknown-to-the-built-ins callback id is routed to the caller-supplied hook bundle
+      // (e.g. hostloop's path gate) instead of falling through hookOutput's unconditional allow —
+      // a configured custom hook whose callback never reaches its real handler would silently un-gate
+      // hostloop's entire security boundary.
+      if (callbackId !== TASK_BG_HOOK_ID && this.hookBundle) {
+        let out: Record<string, unknown>;
+        try {
+          out = await this.hookBundle.handle(callbackId, msg.request.input);
+        } catch (e) {
+          const message = (e as Error)?.message ?? String(e);
+          warn(`::warning:: hook bundle handler threw for callback "${callbackId}" — blocking (fail-closed): ${message}\n`);
+          out = { decision: "block", reason: `hook handler error: ${message}` };
+        }
+        this.write(successEnvelope(reqId, out));
+        return;
+      }
+      this.write(successEnvelope(reqId, hookOutput(callbackId, msg.request.input)));
       return;
     }
     // mcp_message is the only side-effecting branch (the driver computes + writes the response).

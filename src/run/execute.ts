@@ -8,13 +8,7 @@ import { join, dirname, resolve, basename, isAbsolute, sep } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { Scenario } from "../types.js";
 import type { RunResult } from "../types.js";
-import {
-  writeRunningStatus,
-  startStatusTicker,
-  registerRunForCrashSafety,
-  statusLine,
-  type RunStatusMeta,
-} from "./run-status.js";
+import { writeRunningStatus, startStatusTicker, registerRunForCrashSafety, statusLine, type RunStatusMeta } from "./run-status.js";
 // Runtime-only circular import: cassette.ts imports executeScenario from here, and we import buildFingerprint
 // from there. Both bindings are used only inside function bodies (call time), never at module load, so the
 // ESM live-binding cycle is safe. buildFingerprint's deps (skillSourceDirs → parseSessionFile) live here, so
@@ -25,6 +19,9 @@ import { loadSession, resolveSessionPaths, buildLaunchPlan } from "../session.js
 import { spawnProtocol } from "../runtime/protocol.js";
 import { spawnContainer } from "../runtime/container.js";
 import { spawnHostLoop } from "../runtime/hostloop.js";
+import { snapshotHostLoopWorkspace } from "../runtime/hostloop-stage.js";
+import { checkHostLoopWriteConsent, logHostWriteNotice } from "../hostloop/safety.js";
+import { PATH_GATE_TOOL_NAMES } from "../hostloop/pretooluse-path-hook.js";
 import { spawnMicroVm } from "../runtime/microvm.js";
 import {
   probeImageOmitted,
@@ -41,7 +38,7 @@ import { startEgressProxy } from "../egress/proxy.js";
 import { evaluate, hostMatches } from "../assert.js";
 import { compileUserRegex } from "../regex.js";
 import { renderPrompts } from "../prompt.js";
-import { LiveAgentSession, type SdkMcp } from "../agent/session.js";
+import { LiveAgentSession, type SdkMcp, type HookBundle } from "../agent/session.js";
 import { buildDecider, ExternalDecider, LlmDecider, type Decider, type OnUnanswered, UnansweredError } from "../decide/decider.js";
 import { type DecisionChannel } from "../decide/external-channel.js";
 import { claudeCliComplete } from "../decide/llm-transport.js";
@@ -300,6 +297,11 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     scenario.fidelity === "cowork" ? (decideLoopFromBaseline(baseline) === "host" ? "hostloop" : "container") : scenario.fidelity;
   if (scenario.fidelity === "cowork") process.stderr.write(`[loop] cowork → ${effectiveFidelity} (per gate 1143815894)\n`);
 
+  // Safety design layer 1 (the load-bearing layer): hostloop with a writable connected folder gives the
+  // native agent process genuine, software-checked-only host filesystem access — no container sandbox.
+  // Refuse LOUD, before any spawn, unless the scenario opts in via `allow_host_writes: true`.
+  if (effectiveFidelity === "hostloop") checkHostLoopWriteConsent(session, scenario.allow_host_writes ?? false);
+
   const plan = buildLaunchPlan(session, baseline, outDir, effectiveFidelity, !!opts.resume);
   if (agentSessionId) {
     plan.agentSessionId = agentSessionId;
@@ -370,6 +372,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   let containerName: string | undefined;
   let deregisterContainerReap: (() => void) | undefined; // Ctrl-C cleanup for the agent container
   let hostEgress: { host: string; decision: "allow" | "deny" }[] | undefined; // host-routed web_fetch egress
+  let hostloopHooks: HookBundle | undefined; // hostloop's PreToolUse path-gate bundle
+  let hostloopPathGateFired: Set<string> | undefined; // tool_use_ids the path gate actually saw
   let l0PluginDivergence = false; // set when protocol mode runs with plugins (failing fidelity signal)
   let promptFidelityWarnings: string[] | undefined; // structured prompt warnings collected by renderPrompts
   // web_fetch provenance is gate-driven (coworkWebFetchViaApi) and host-loop only. The ref is
@@ -457,6 +461,17 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       sdkMcp = hl.sdkMcp;
       containerName = hl.containerName;
       hostEgress = hl.hostEgress;
+      hostloopHooks = hl.hooks;
+      hostloopPathGateFired = hl.pathGateFired;
+      logHostWriteNotice(
+        plan.mounts.filter((mt) => mt.kind === "folder").map((mt) => ({ from: mt.hostPath, mode: mt.mode })),
+        warn,
+      );
+      if (scenario.assert.some((a) => a.transcript_no_host_path === true) && !opts.compact)
+        warn(
+          `::warning:: [hostloop] scenario asserts transcript_no_host_path — hostloop's native file tools legitimately ` +
+            `expose real host paths to the model, so this assertion will FAIL by design at this fidelity.\n`,
+        );
     } else if (effectiveFidelity === "container") {
       const ct = spawnContainer(scenario, baseline, plan, outDir, sessionId, {
         systemPromptAppend: prompts.systemPromptAppend,
@@ -506,6 +521,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         record = await run.drive(scenario.prompt, {
           subagentAppend: prompts.subagentAppend,
           sdkMcp,
+          hooks: hostloopHooks,
         });
       } catch (e) {
         // An unanswered gate is recoverable: grab the in-progress record so the work done before the whiff can
@@ -542,8 +558,42 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // closes (and wipes) the channel — the forensic evidence you want after a gate bug survives --keep.
   opts.externalChannel?.snapshot?.(join(outDir, "gates"));
 
+  // hostloop never copies connected folders into the run dir while the agent runs (they're bind-mounted
+  // real host paths) — snapshot them NOW so every post-run consumer below (evaluate ctx, collectArtifacts,
+  // verify-run, cassette record, detectCapabilityUse) keeps reading the same frozen tree the copy-based
+  // tiers have always produced. Must run before `workRoot`-relative code below.
+  if (effectiveFidelity === "hostloop") {
+    try {
+      snapshotHostLoopWorkspace(plan, join(outDir, "work", "session", "mnt"));
+    } catch (err) {
+      // On the unanswered-gate salvage path, a snapshot failure here must not replace the original
+      // UnansweredError and skip partial persistence entirely — that would be worse than the folder
+      // artifacts simply being incomplete. Best-effort + loud there; still hard-fail on the success path,
+      // where nothing more important is being masked by throwing.
+      if (unansweredErr) {
+        warn(
+          `::warning:: [hostloop] snapshot failed during salvage — folder artifacts may be missing from this partial result: ${err instanceof Error ? err.message : String(err)}\n`,
+        );
+      } else {
+        throw err;
+      }
+    }
+  }
+
   const scan = scanEvents(join(outDir, "events.jsonl"));
   const workRoot = effectiveFidelity === "protocol" ? join(outDir, "work") : join(outDir, "work", "session", "mnt");
+
+  // The runtime tripwire: if a gated tool call completed successfully with no evidence the path-containment
+  // gate ever ran on it, the run's real-filesystem safety is unverified — hard-fail rather than pass silently.
+  if (effectiveFidelity === "hostloop" && hostloopPathGateFired) {
+    const ungated = findUngatedPathToolCalls(join(outDir, "events.jsonl"), hostloopPathGateFired);
+    if (ungated.length) {
+      warn(
+        `::warning:: [hostloop] path-containment gate did not fire for: ${ungated.join(", ")} — real filesystem access is UNVERIFIED for this run.\n`,
+      );
+      record.result = "error";
+    }
+  }
 
   // User-visible roots = outputs + each connected work folder's RESOLVED mount name (derived from the
   // actual mount set, NOT a hardcoded `.projects/` prefix — folder names are now dynamic/gated). Plugins
@@ -1258,6 +1308,51 @@ export function scanEvents(file: string): { outputsDeletes: string[]; hostPathLe
     }
   }
   return out;
+}
+
+/**
+ * The hostloop runtime tripwire: a working PreToolUse path gate produces an observable hook callback for
+ * every gated tool_use. Walk `events.jsonl`'s assistant tool_use blocks whose name is gated (Read/Write/
+ * Edit/Glob/Grep/MultiEdit); any block whose id is absent from `gateFired` AND whose matching tool_result
+ * was observed non-error means the call completed with NO evidence the gate ever ran on it. This turns a
+ * hypothetical future binary version that silently stops firing hooks for pre-approved tools into a hard
+ * run failure instead of a silent, unverifiable pass — the same check the chat lane's tripwireHook runs
+ * live, applied here to the recorded event stream. Returns the ungated tool names, for the caller's message.
+ */
+export function findUngatedPathToolCalls(file: string, gateFired: Set<string>): string[] {
+  const GATED = new Set(["Read", "Write", "Edit", "Glob", "Grep", "MultiEdit"]);
+  const toolUseIdToName = new Map<string, string>();
+  const toolResultIsError = new Map<string, boolean>();
+  let lines: string[] = [];
+  try {
+    lines = readFileSync(file, "utf8").trim().split("\n");
+  } catch {
+    return [];
+  }
+  for (const l of lines) {
+    let msg: any;
+    try {
+      msg = JSON.parse(l);
+    } catch {
+      continue;
+    }
+    if (msg.type !== "assistant" && msg.type !== "user") continue;
+    for (const block of msg.message?.content ?? []) {
+      if (msg.type === "assistant" && block.type === "tool_use" && block.id && GATED.has(block.name)) {
+        toolUseIdToName.set(String(block.id), block.name);
+      }
+      if (msg.type === "user" && block.type === "tool_result" && block.tool_use_id) {
+        toolResultIsError.set(String(block.tool_use_id), !!block.is_error);
+      }
+    }
+  }
+  const ungated: string[] = [];
+  for (const [id, name] of toolUseIdToName) {
+    if (gateFired.has(id)) continue;
+    const isError = toolResultIsError.get(id);
+    if (isError === false) ungated.push(`${name} (${id})`);
+  }
+  return ungated;
 }
 
 /**

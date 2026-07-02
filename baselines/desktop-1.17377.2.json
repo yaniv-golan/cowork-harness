@@ -4,7 +4,8 @@
   "agentVersion": "2.1.197",
   "agentBinary": {
     "stagedPath": "~/Library/Application Support/Claude/claude-code-vm/2.1.197/claude",
-    "format": "elf-aarch64"
+    "format": "elf-aarch64",
+    "nativeStagedPath": "~/Library/Application Support/Claude/claude-code/2.1.197/claude.app/Contents/MacOS/claude"
   },
   "guest": {
     "os": "linux",

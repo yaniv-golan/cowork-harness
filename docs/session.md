@@ -30,6 +30,9 @@ permission_parity: cowork        # cowork (unscripted tool calls allowed, Cowork
 folders:
   - { from: ~/code/myproject, mode: rw }    # mounted at mnt/myproject; mode default rw (delete denied, like
                                             # Cowork); use rwd only to model a delete-approved mount
+                                            # NOTE: at `fidelity: hostloop`, a rw/rwd folder needs the
+                                            # scenario's `allow_host_writes: true` (see scenario.md) —
+                                            # hostloop's native file tools have no container around them.
 trusted_folders:                 # localAgentModeTrustedFolders (mount without a trust prompt)
   - ~/code/myproject
 auto_mount_folders: false        # autoMountFolders
