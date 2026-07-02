@@ -163,19 +163,42 @@ jobs:
           path: runs/
           retention-days: 14
 
-  # ── Stage 4: parity drift watch (informational; never fails the build) ─────────
+  # ── Stage 4: parity drift watch — can't diff live Desktop on CI (macOS-only app), so this
+  # instead FAILS if the newest committed baseline is stale by wall-clock age, forcing a human
+  # to re-run `sync` periodically rather than letting the baseline silently rot indefinitely. ──
   parity-drift:
     name: parity drift vs upstream Desktop
     runs-on: ubuntu-latest
     needs: unit
-    continue-on-error: true
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Baseline staleness gate (90-day ceiling on the newest committed baseline)
+        run: |
+          node -e '
+            const fs = require("fs");
+            const path = require("path");
+            const dir = "baselines";
+            const files = fs.readdirSync(dir).filter((f) => /^desktop-.*\.json$/.test(f));
+            if (files.length === 0) { console.error("::error::no baselines/desktop-*.json found"); process.exit(1); }
+            let newest = null;
+            for (const f of files) {
+              const b = JSON.parse(fs.readFileSync(path.join(dir, f), "utf8"));
+              const t = Date.parse(b.capturedAt);
+              if (!newest || t > newest.t) newest = { t, f, capturedAt: b.capturedAt };
+            }
+            const ageDays = (Date.now() - newest.t) / 86400000;
+            console.log(`newest baseline: ${newest.f} (capturedAt ${newest.capturedAt}, ${ageDays.toFixed(1)} days ago)`);
+            if (ageDays > 90) {
+              console.error(`::error::newest baseline is ${ageDays.toFixed(0)} days old (>90) — run \`cowork-harness sync --diff\` on macOS against the current Claude Desktop and commit the refreshed baseline.`);
+              process.exit(1);
+            }
+          '
       - name: Note
         run: |
           echo "Platform baselines are synced from a developer's installed Claude Desktop via"
           echo "\`cowork-harness sync --diff\` (needs the macOS app — Cowork Desktop is macOS-only; not available on CI runners)."
-          echo "This job is a placeholder reminder; run sync locally when Desktop updates."
-          echo "See docs/maintenance via README → Maintenance."
+          echo "The staleness gate above catches an ABANDONED baseline; it cannot catch a baseline that is"
+          echo "merely stale relative to a Desktop release from yesterday — a human still has to run sync"
+          echo "after every Desktop update. See docs/maintenance via README → Maintenance."
