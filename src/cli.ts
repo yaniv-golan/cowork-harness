@@ -91,6 +91,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
                                'gates'/'answer' to stream/respond) — one pass, no scripted-answer guesswork
       [--decider-llm [--intent "…"]] | [--on-unanswered fail|first]   answer live via a model / auto-pick
                                (a live decider flags the cassette non-deterministic; it still replays deterministically)
+      [--decider-model <name>]  override the decider's model (requires --decider-llm)
   replay <file|dir>            deterministic protocol-replay of a cassette or a dir of them (no token, no Docker)
                                (--assert-from <scenario.yaml> / --reassert: opt-in token-free re-check against on-disk assert:)
       [--strict]               fail (exit 1) on ANY stale cassette instead of warning
