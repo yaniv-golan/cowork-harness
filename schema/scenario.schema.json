@@ -243,7 +243,7 @@
             "type": "boolean"
           },
           "replay_protocol_fidelity": {
-            "description": "(replay-only, NOT authorable) serializeDecision output matched the frozen recording — the token-free re-serialization guard; synthesized by the replay lane and rejected if written in a scenario",
+            "description": "(replay-only, NOT authorable) serializeDecision output matched the frozen recording — the token-free re-serialization guard; synthesized by the replay lane and rejected if written in a scenario — listed here only so schema-driven editors can display it in read-only contexts; authoring it in a scenario is a load-time error, see src/run/execute.ts",
             "type": "boolean"
           },
           "artifact_json": {
