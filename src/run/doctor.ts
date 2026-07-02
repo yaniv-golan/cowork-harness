@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "../cli-args.js";
 import { resolveAgentBinary, loadBaseline } from "../baseline.js";
 import { limaPath } from "../runtime/lima.js";
-import { pkgVersion } from "./envelope.js";
+import { pkgVersion, fail, isJsonOutput } from "./envelope.js";
 
 // Synchronous fd writes (match cli.ts): machine→stdout, human→stderr.
 const out = (s: string) => process.stdout.write(s + "\n");
@@ -297,16 +297,14 @@ export function cmdDoctor(args: string[]): void {
       },
     });
   } catch (e) {
-    log((e as Error).message);
-    return process.exit(2);
+    fail("doctor", "usage", (e as Error).message, undefined, isJsonOutput(args));
   }
   const tier = (p.options["--tier"] as Tier) ?? "container";
   const json = p.options["--output-format"] === "json";
 
   // reject unexpected positional arguments.
   if (p.positionals.length > 0) {
-    log(`unexpected arguments: ${p.positionals.join(" ")}`);
-    return process.exit(2);
+    fail("doctor", "usage", `unexpected arguments: ${p.positionals.join(" ")}`, undefined, isJsonOutput(args));
   }
 
   const checks = runDoctorChecks(tier);

@@ -51,6 +51,19 @@ jobs:
             echo "::error::resolveAgentBinary must be defined only in src/baseline.ts (import it; don't re-duplicate)."
             exit 1
           fi
+      - name: CLI error-envelope guard (usage/runtime errors must use fail(), not a bare process.exit)
+        # A bare `process.exit(1|2)` in src/cli.ts / src/run/doctor.ts outside fail()'s own definition means
+        # a new command bypassed the shared JSON envelope (the 2026-07 agent-friendliness audit finding).
+        # New catch blocks must call fail(command, category, message, hint, json[, exitCode]) instead.
+        # Sites that legitimately keep a raw process.exit (a custom, non-jsonError wire shape) must carry
+        # the `cli-error-envelope-exempt` marker comment on the same line — the guard excludes those.
+        run: |
+          if grep -n "process\.exit([12])" src/cli.ts src/run/doctor.ts \
+             | grep -v "cli-error-envelope-exempt" \
+             | grep -vE "^[^:]+:[0-9]+:function fail\("; then
+            echo "::error::Found a bare process.exit(1|2) outside fail() with no cli-error-envelope-exempt marker — route it through fail(...) instead, or add the marker if it's a deliberate custom-shape exception."
+            exit 1
+          fi
       - name: Typecheck
         run: npm run typecheck
       - name: Unit tests (schema, answerer, egress, launch plan, example validation)

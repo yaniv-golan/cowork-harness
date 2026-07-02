@@ -43,7 +43,7 @@ import {
 } from "./run/trace-view.js";
 import { buildScaffold } from "./run/scaffold.js";
 import { buildInspectView } from "./run/inspect-view.js";
-import { pkgVersion, jsonEnvelope, jsonError, parseOutputFormat, type ErrCategory } from "./run/envelope.js";
+import { pkgVersion, jsonEnvelope, jsonError, parseOutputFormat, fail, isJsonOutput, type ErrCategory } from "./run/envelope.js";
 import { computeVerdict } from "./run/verdict.js";
 import { evaluate, hostMatches, type AssertContext } from "./assert.js";
 import { spawnChannel, fileChannel, streamGates, answerGate, readGate, type DecisionChannel } from "./decide/external-channel.js";
@@ -410,20 +410,23 @@ async function main() {
     // The space form needs a following token; the equals form carries its value inline (so an empty
     // `--dotenv=` is also "no path provided").
     if (explicitEnvFile === undefined || explicitEnvFile === "") {
-      log("--dotenv requires a path (none provided)");
-      process.exit(2);
+      fail("cowork-harness", "usage", "--dotenv requires a path (none provided)", undefined, isJsonOutput(argv));
     }
     // The command-name footgun only applies to the space form (the equals form can't swallow the next
     // token as its value), but checking both is harmless and keeps the guard uniform.
     if (!isEquals && COMMANDS.includes(explicitEnvFile)) {
-      log(`--dotenv requires a path but got the command "${explicitEnvFile}" — write \`--dotenv <path> ${explicitEnvFile} …\``);
-      process.exit(2);
+      fail(
+        "cowork-harness",
+        "usage",
+        `--dotenv requires a path but got the command "${explicitEnvFile}" — write \`--dotenv <path> ${explicitEnvFile} …\``,
+        undefined,
+        isJsonOutput(argv),
+      );
     }
     // Equals form is a single token; space form is the flag + its value.
     argv.splice(envFileIdx, isEquals ? 1 : 2);
     if (!existsSync(explicitEnvFile)) {
-      log(`--dotenv file not found: ${explicitEnvFile}`);
-      process.exit(2);
+      fail("cowork-harness", "usage", `--dotenv file not found: ${explicitEnvFile}`, undefined, isJsonOutput(argv));
     }
   }
 
@@ -443,12 +446,16 @@ async function main() {
   const runDirVal = rdIsEquals ? argv[rdEq].slice("--run-dir=".length) : rdIdx >= 0 ? argv[rdIdx + 1] : undefined;
   if (rdIdx >= 0) {
     if (runDirVal === undefined || runDirVal === "") {
-      log("--run-dir requires a path (none provided)");
-      process.exit(2);
+      fail("cowork-harness", "usage", "--run-dir requires a path (none provided)", undefined, isJsonOutput(argv));
     }
     if (!rdIsEquals && COMMANDS.includes(runDirVal)) {
-      log(`--run-dir requires a path but got the command "${runDirVal}" — write \`--run-dir <path> ${runDirVal} …\``);
-      process.exit(2);
+      fail(
+        "cowork-harness",
+        "usage",
+        `--run-dir requires a path but got the command "${runDirVal}" — write \`--run-dir <path> ${runDirVal} …\``,
+        undefined,
+        isJsonOutput(argv),
+      );
     }
     argv.splice(rdIdx, rdIsEquals ? 1 : 2);
     process.env.COWORK_HARNESS_RUNS_DIR = resolve(process.cwd(), runDirVal);
@@ -559,10 +566,11 @@ async function main() {
       return cmdAnswer(rest);
     case "prune":
       return cmdRunsGc(rest); // top-level: no `gc` token to strip, so pass `rest` whole (NOT rest.slice(1))
-    default:
-      log(`unknown command: ${cmd}\n`);
-      printHelp();
-      process.exit(2);
+    default: {
+      const jsonOut = isJsonOutput(argv);
+      if (!jsonOut) printHelp(); // full help is stderr-only human context; skip it for a clean json envelope
+      fail("cowork-harness", "usage", `unknown command: ${cmd}`, undefined, jsonOut);
+    }
   }
 }
 
@@ -575,20 +583,6 @@ interface CommonFlags {
   demo?: boolean; // --demo: shareable output — compact + suppress the runs-location header (runs stay durable)
   deciderCmd?: string; // --decider-cmd: spawn a helper that answers each decision (external channel B)
   deciderDir?: string; // --decider-dir: file-rendezvous for a driving agent's Monitor (external channel C)
-}
-/** Shared json-output predicate so the parser and the top-level catch can never drift. An explicit
- *  `--output-format text|json` flag (first occurrence wins, matching parseOutputFormat's
- *  first-occurrence-authoritative semantics) takes precedence; absent any flag, fall back to the
- *  documented COWORK_HARNESS_OUTPUT_FORMAT env var so an env-only JSON consumer still gets an envelope
- *  from the top-level catch. */
-function isJsonOutput(args: string[]): boolean {
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] === "--output-format" && args[i + 1] === "json") return true;
-    if (args[i] === "--output-format=json") return true;
-    if (args[i] === "--output-format" && args[i + 1] === "text") return false;
-    if (args[i] === "--output-format=text") return false;
-  }
-  return process.env.COWORK_HARNESS_OUTPUT_FORMAT === "json";
 }
 /** Validate `--output-format` is text|json for the ad-hoc commands (trace/decide/gates) the way the
  *  common parser already does for run/skill — an invalid value is a usage error, not a silent text degrade. */
@@ -606,16 +600,10 @@ function ensureOutputFormat(command: string, args: string[]): void {
  * usage-error exit code (2). takeCommonFlags can run before --output-format json is resolved, so the error
  * goes to stderr unconditionally (machine callers piping us still see a non-zero exit).
  */
-function flagValue(args: string[], i: number, flag: string): string {
+function flagValue(command: string, args: string[], i: number, flag: string, json: boolean): string {
   const v = args[i + 1];
-  if (v === undefined) {
-    log(`${flag} requires a value (none provided)`); // stderr usage error
-    process.exit(2);
-  }
-  if (v.trim() === "") {
-    log(`${flag} requires a non-empty value`);
-    process.exit(2);
-  }
+  if (v === undefined) fail(command, "usage", `${flag} requires a value (none provided)`, undefined, json);
+  if (v.trim() === "") fail(command, "usage", `${flag} requires a non-empty value`, undefined, json);
   return v;
 }
 
@@ -624,12 +612,10 @@ function flagValue(args: string[], i: number, flag: string): string {
  * excluding negative numbers like "-1"). Use this at call sites that do NOT have a downstream explicit
  * flag-like check. Name the flag and suspicious value in the error.
  */
-function flagValueStrict(args: string[], i: number, flag: string): string {
-  const v = flagValue(args, i, flag);
-  if (v.startsWith("-") && !/^-\d/.test(v)) {
-    log(`${flag} requires a value but got a flag-looking token "${v}" — did you forget the value?`);
-    process.exit(2);
-  }
+function flagValueStrict(command: string, args: string[], i: number, flag: string, json: boolean): string {
+  const v = flagValue(command, args, i, flag, json);
+  if (v.startsWith("-") && !/^-\d/.test(v))
+    fail(command, "usage", `${flag} requires a value but got a flag-looking token "${v}" — did you forget the value?`, undefined, json);
   return v;
 }
 
@@ -694,28 +680,22 @@ function takeCommonFlags(args: string[], commandName: string = "skill"): { rest:
     // flagValue uses for the spaced form.
     const readVal = (): string => {
       if (eqVal !== undefined) {
-        if (eqVal.trim() === "") {
-          log(`${name} requires a non-empty value`);
-          process.exit(2);
-        }
+        if (eqVal.trim() === "") fail(commandName, "usage", `${name} requires a non-empty value`, undefined, isJsonOutput(args));
         return eqVal;
       }
-      return flagValue(args, i++, name);
+      return flagValue(commandName, args, i++, name, isJsonOutput(args));
     };
     // A boolean common flag given an equals value (e.g. `--quiet=1`) is a usage error, mirroring parseArgs.
     if (eq > 0 && (name === "--quiet" || name === "--verbose" || name === "--compact" || name === "--demo")) {
-      log(`${name} takes no value`);
-      process.exit(2);
+      fail(commandName, "usage", `${name} takes no value`, undefined, isJsonOutput(args));
     }
     if (name === "--on-unanswered") flags.onUnanswered = readVal() as OnUnanswered;
     else if (name === "--output-format") {
       // validate the enum (and bounds-check the value). An invalid/missing value previously fell
       // back to "text" silently (`--output-format xml` behaved as text; a trailing `--output-format` too).
       const v = readVal();
-      if (v !== "text" && v !== "json") {
-        log(`--output-format must be "text" or "json" (got "${v}")`);
-        process.exit(2);
-      }
+      if (v !== "text" && v !== "json")
+        fail(commandName, "usage", `--output-format must be "text" or "json" (got "${v}")`, undefined, isJsonOutput(args));
       flags.output = v;
     } else if (a === "--quiet" || a === "-q") flags.quiet = true;
     else if (a === "--verbose" || a === "-V") flags.verbose = true;
@@ -791,8 +771,7 @@ function resolvePolicy(command: "run" | "skill", flags: CommonFlags): OnUnanswer
         json,
       );
     if (command === "run" && flags.onUnanswered === "prompt") {
-      log("run rejects --on-unanswered prompt (would break determinism). Use fail|first.");
-      process.exit(2);
+      fail(command, "usage", "run rejects --on-unanswered prompt (would break determinism). Use fail|first.", undefined, json);
     }
     return flags.onUnanswered;
   }
@@ -816,16 +795,6 @@ function resolveExternal(command: string, flags: CommonFlags): DecisionChannel |
     }
   }
   return flags.deciderCmd != null ? spawnChannel(flags.deciderCmd) : undefined;
-}
-
-/** The single error exit used by commands + the top-level catch. boundary → exit 3, every other category → exit 2. */
-function fail(command: string, category: ErrCategory, message: string, hint: string | undefined, json: boolean): never {
-  if (json) out(jsonError(command, category, message, hint));
-  else {
-    log(message);
-    if (hint) log(hint);
-  }
-  process.exit(category === "boundary" ? 3 : 2);
 }
 
 /** Split a `--answer "<key>=<value>"` arg; the value rejoins on "=" so a choice may itself contain "=".
@@ -1056,21 +1025,22 @@ async function cmdSkill(rawArgs: string[]) {
     // value reader: equals-inline value (non-empty checked) else the next token (via flagValue/Strict).
     const nextVal = (): string => {
       if (eqVal !== undefined) {
-        if (eqVal.trim() === "") {
-          log(`${name} requires a non-empty value`);
-          process.exit(2);
-        }
+        if (eqVal.trim() === "") fail("skill", "usage", `${name} requires a non-empty value`, undefined, isJson0);
         return eqVal;
       }
-      return flagValue(args, i++, name);
+      return flagValue("skill", args, i++, name, isJson0);
     };
     // strict variant additionally rejects a SPACED flag-looking value (the equals form is the escape).
     const nextValStrict = (): string => {
       const v = nextVal();
-      if (eqVal === undefined && v.startsWith("-") && !/^-\d/.test(v)) {
-        log(`${name} requires a value but got a flag-looking token "${v}" — did you forget the value?`);
-        process.exit(2);
-      }
+      if (eqVal === undefined && v.startsWith("-") && !/^-\d/.test(v))
+        fail(
+          "skill",
+          "usage",
+          `${name} requires a value but got a flag-looking token "${v}" — did you forget the value?`,
+          undefined,
+          isJson0,
+        );
       return v;
     };
     // booleans reject an equals value, mirroring parseArgs.
@@ -1349,8 +1319,13 @@ const VM_SUB_HELP: Record<string, string> = {
 function cmdVm(args: string[]) {
   // macOS arm64 guard — Lima VMs are macOS-only.
   if (process.platform !== "darwin") {
-    log("vm is only supported on macOS arm64 (requires Lima + Apple Virtualization Framework)\n");
-    process.exit(2);
+    fail(
+      "vm",
+      "usage",
+      "vm is only supported on macOS arm64 (requires Lima + Apple Virtualization Framework)",
+      undefined,
+      isJsonOutput(args),
+    );
   }
 
   const sub = args[0];
@@ -1366,8 +1341,7 @@ function cmdVm(args: string[]) {
   // otherwise surfaced as a baseline-load error (or, with a stray arg, a confusing baseline message)
   // instead of the clear `usage: vm …`. (A bare `log` then exit-0 was the older footgun, now exit 2.)
   if (!VM_SUBS.includes(sub ?? "")) {
-    log(SUBCOMMAND_USAGE["vm"] ?? "usage: vm <init|status|delete|prune>");
-    process.exit(2);
+    fail("vm", "usage", SUBCOMMAND_USAGE["vm"] ?? "usage: vm <init|status|delete|prune>", undefined, isJsonOutput(args));
   }
   // parse the subcommand args through the shared spec so `--output-format` (and any
   // unknown flag) is handled structurally — NOT peeked positionally. was `loadBaseline(args[1])`
@@ -1419,8 +1393,7 @@ function cmdVm(args: string[]) {
   } else {
     // an invalid/absent subcommand must exit non-zero — a bare `log` exits 0, so a CI script
     // running `vm typo` would read it as success.
-    log("usage: vm <init|status|delete|prune>");
-    process.exit(2);
+    fail("vm", "usage", "usage: vm <init|status|delete|prune>", undefined, isJsonOutput(subArgs));
   }
 }
 
@@ -1439,14 +1412,18 @@ function cmdBoundary(args: string[]) {
       noDashValue: ["--session"],
     });
   } catch (e) {
-    log((e as Error).message);
-    return process.exit(2);
+    return fail("boundary-check", "usage", (e as Error).message, undefined, json);
   }
   const sessionPath = p.options["--session"];
   // Reject extra baseline positionals rather than silently using only the first.
   if (p.positionals.length > 1) {
-    log(`boundary-check takes at most one baseline (got ${p.positionals.length}: ${p.positionals.join(", ")})`);
-    return process.exit(2);
+    return fail(
+      "boundary-check",
+      "usage",
+      `boundary-check takes at most one baseline (got ${p.positionals.length}: ${p.positionals.join(", ")})`,
+      undefined,
+      json,
+    );
   }
   const baseline = loadBaseline(p.positionals[0] ?? "latest");
   let sessionEgress: { extraAllow?: string[]; unrestricted?: boolean } | undefined;
@@ -1475,8 +1452,7 @@ function cmdBoundary(args: string[]) {
 function cmdSync(args: string[]) {
   // platform guard fires before arg parsing — wrong platform is an environment error, not a usage error.
   if (process.platform !== "darwin") {
-    log("sync requires macOS (the Cowork Desktop app is macOS-only).");
-    return process.exit(2);
+    return fail("sync", "usage", "sync requires macOS (the Cowork Desktop app is macOS-only).", undefined, isJsonOutput(args));
   }
   // use parseArgs to reject unknown flags and positionals.
   // accept --force as a canonical alias for --allow-empty; normalize before parsing.
@@ -1485,12 +1461,16 @@ function cmdSync(args: string[]) {
   try {
     syncParsed = parseArgs(normalizedArgs, { booleans: ["--diff", "--allow-empty"] });
   } catch (e) {
-    log((e as Error).message);
-    return process.exit(2);
+    return fail("sync", "usage", (e as Error).message, undefined, isJsonOutput(normalizedArgs));
   }
   if (syncParsed.positionals.length > 0) {
-    log(`sync takes no positional arguments (got: ${syncParsed.positionals.join(", ")})`);
-    return process.exit(2);
+    return fail(
+      "sync",
+      "usage",
+      `sync takes no positional arguments (got: ${syncParsed.positionals.join(", ")})`,
+      undefined,
+      isJsonOutput(normalizedArgs),
+    );
   }
   const allowEmpty = !!syncParsed.flags["--allow-empty"];
   const res = sync();
@@ -1501,10 +1481,14 @@ function cmdSync(args: string[]) {
   if (!res.appVersion) versionErrors.push("appVersion (Desktop not found or Info.plist unreadable — install/open Claude Desktop)");
   if (!res.agentVersion) versionErrors.push("agentVersion (.sdk-version missing — open Cowork once to stage the agent binary)");
   if (versionErrors.length) {
-    log("ERROR: sync could not resolve required version fields — refusing to write baseline:");
-    for (const e of versionErrors) log(`  - ${e}`);
-    log("Fix the above, then re-run `cowork-harness sync`.");
-    process.exit(1);
+    fail(
+      "sync",
+      "runtime",
+      `ERROR: sync could not resolve required version fields — refusing to write baseline:\n${versionErrors.map((e) => `  - ${e}`).join("\n")}`,
+      "Fix the above, then re-run `cowork-harness sync`.",
+      isJsonOutput(normalizedArgs),
+      1,
+    );
   }
 
   // refuse to write a baseline with an empty allowlist unless --allow-empty is passed.
@@ -1512,10 +1496,14 @@ function cmdSync(args: string[]) {
   if (res.allowDomains.length === 0) {
     log("WARNING: sync produced an empty allowDomains list (asar domain regex matched nothing — asar layout moved).");
     if (!allowEmpty) {
-      log("Refusing to write baseline with allowDomains: []. Fix the regex in cowork-sync.ts,");
-      log("or hand-edit network.allowDomains in an existing baseline, then re-run.");
-      log("Pass --allow-empty to force-write anyway (use only if you understand the egress impact).");
-      process.exit(1);
+      fail(
+        "sync",
+        "runtime",
+        "Refusing to write baseline with allowDomains: []. Fix the regex in cowork-sync.ts,\nor hand-edit network.allowDomains in an existing baseline, then re-run.",
+        "Pass --allow-empty to force-write anyway (use only if you understand the egress impact).",
+        isJsonOutput(normalizedArgs),
+        1,
+      );
     }
     log("--allow-empty passed: proceeding with empty allowDomains (egress will be default-deny for ALL domains).");
   }
@@ -1659,8 +1647,14 @@ function cmdSync(args: string[]) {
     for (const d of res.unknownDeltas) log("   - " + d);
     // unknown deltas block the write unless --diff (diagnosis mode) is active.
     if (!diffFlag && !allowEmpty) {
-      log("Refusing to write baseline with unknown deltas. Fix src/sync/cowork-sync.ts or pass --allow-empty to force-write.");
-      process.exit(1);
+      fail(
+        "sync",
+        "runtime",
+        "Refusing to write baseline with unknown deltas. Fix src/sync/cowork-sync.ts or pass --allow-empty to force-write.",
+        undefined,
+        isJsonOutput(normalizedArgs),
+        1,
+      );
     }
   }
   if (!diffFlag) {
@@ -1693,12 +1687,10 @@ function cmdList(args: string[] = []) {
   try {
     listParsed = parseArgs(args, { values: ["--output-format"], enums: { "--output-format": ["text", "json"] } });
   } catch (e) {
-    log((e as Error).message);
-    return process.exit(2);
+    return fail("list", "usage", (e as Error).message, undefined, json);
   }
   if (listParsed.positionals.length > 0) {
-    log(`list takes no positional arguments (got: ${listParsed.positionals.join(", ")})`);
-    return process.exit(2);
+    return fail("list", "usage", `list takes no positional arguments (got: ${listParsed.positionals.join(", ")})`, undefined, json);
   }
   const files = readdirSync(BASELINES_DIR).filter((f) => f.endsWith(".json"));
   if (json) {
@@ -1733,20 +1725,20 @@ async function cmdDecide(args: string[]) {
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === "--question")
-      question = flagValueStrict(args, i++, a); // bounds-checked; rejects flag-looking values
-    else if (a === "--option") options.push(flagValueStrict(args, i++, a));
+      question = flagValueStrict("decide", args, i++, a, json); // bounds-checked; rejects flag-looking values
+    else if (a === "--option") options.push(flagValueStrict("decide", args, i++, a, json));
     else if (a === "--decider-cmd") {
-      deciderCmd = flagValue(args, i++, a);
+      deciderCmd = flagValue("decide", args, i++, a, json);
       // The helper command is never a flag — reject a flag-looking value so `--decider-cmd --question`
       // doesn't silently swallow the next flag as the command.
       if (deciderCmd.startsWith("-"))
         fail("decide", "usage", `--decider-cmd: missing value (got flag-looking "${deciderCmd}")`, undefined, json);
     } else if (a === "--decider-llm") deciderLlm = true;
-    else if (a === "--intent") intent = flagValueStrict(args, i++, a);
-    else if (a === "--decider-model") deciderModel = flagValueStrict(args, i++, a);
-    else if (a === "--answer-policy") policy = flagValueStrict(args, i++, a);
+    else if (a === "--intent") intent = flagValueStrict("decide", args, i++, a, json);
+    else if (a === "--decider-model") deciderModel = flagValueStrict("decide", args, i++, a, json);
+    else if (a === "--answer-policy") policy = flagValueStrict("decide", args, i++, a, json);
     else if (a === "--answer") {
-      const raw = flagValueStrict(args, i++, a);
+      const raw = flagValueStrict("decide", args, i++, a, json);
       const parts = splitEq(raw);
       if (!parts)
         fail("decide", "usage", `--answer requires "question-regex=choice" (got "${raw}" — both sides must be non-empty)`, undefined, json);
@@ -1868,7 +1860,7 @@ async function cmdDecide(args: string[]) {
       if (d === ABSTAIN) {
         if (json) out(JSON.stringify({ tool: "cowork-harness", command: "decide", ok: false, matched: false }));
         else log(`✗ no rule matched — this question would fall to --on-unanswered (add an --answer/--answer-policy rule)`);
-        process.exit(1);
+        process.exit(1); // cli-error-envelope-exempt: emits its own {matched:false} shape above, not jsonError
       }
       const answer = (d as { response: { answers?: Record<string, string> } }).response.answers?.[question];
       if (json) out(JSON.stringify({ tool: "cowork-harness", command: "decide", ok: true, matched: true, answer }));
@@ -1879,7 +1871,7 @@ async function cmdDecide(args: string[]) {
     else log(`✗ decider error: ${String((e as Error).message)}`);
     // Runtime failure → exit 2, matching the global "usage/runtime → 2" contract (SPEC §11). The JSON
     // envelope already tags this category "runtime"; the exit code now agrees. No-match/ABSTAIN stays 1.
-    process.exit(2);
+    process.exit(2); // cli-error-envelope-exempt: emits its own custom envelope shape above, not jsonError
   }
 }
 
@@ -1891,20 +1883,17 @@ async function cmdStatus(args: string[]) {
   try {
     p = parseArgs(args, { booleans: ["--follow"], values: ["--output-format"], enums: { "--output-format": ["text", "json"] } });
   } catch (e) {
-    log((e as Error).message);
-    return process.exit(2);
+    return fail("status", "usage", (e as Error).message, undefined, isJsonOutput(args));
   }
   if (p.positionals.length !== 1) {
-    log(SUBCOMMAND_USAGE.status);
-    return process.exit(2);
+    return fail("status", "usage", SUBCOMMAND_USAGE.status, undefined, isJsonOutput(args));
   }
   const json = p.options["--output-format"] === "json";
   let dir: string;
   try {
     dir = resolveStatusDir(p.positionals[0]);
   } catch (e) {
-    log((e as Error).message);
-    return process.exit(2);
+    return fail("status", "usage", (e as Error).message, undefined, isJsonOutput(args));
   }
   if (p.flags["--follow"]) {
     let lastLine: string | undefined;
@@ -1940,8 +1929,14 @@ async function cmdStatus(args: string[]) {
     return process.exit(terminalState === "error" ? 1 : 0);
   }
   if (!hasRunStatus(dir)) {
-    log(`no status.json at ${dir} — the run may not have reached its status-writing point yet, or this isn't a cowork-harness run dir`);
-    return process.exit(1);
+    return fail(
+      "status",
+      "runtime",
+      `no status.json at ${dir} — the run may not have reached its status-writing point yet, or this isn't a cowork-harness run dir`,
+      undefined,
+      isJsonOutput(args),
+      1,
+    );
   }
   let status: RunStatus;
   try {
@@ -1951,8 +1946,14 @@ async function cmdStatus(args: string[]) {
     // translates that into a usage-style message" — this is that translation. writeJsonAtomic makes a
     // genuinely malformed file rare (a reader can never observe a half-write), but a hand-edited or
     // externally-corrupted file must still fail clean, not with a raw stack trace.
-    log(`status.json at ${dir} is unreadable/malformed: ${(e as Error).message}`);
-    return process.exit(1);
+    return fail(
+      "status",
+      "runtime",
+      `status.json at ${dir} is unreadable/malformed: ${(e as Error).message}`,
+      undefined,
+      isJsonOutput(args),
+      1,
+    );
   }
   // A "running" status that's gone STALE means the writer stopped updating altogether — the SIGKILL/OOM
   // case the crash-safety net (execute.ts's exit handler) structurally cannot catch. Without this check
@@ -2026,11 +2027,11 @@ function cmdAnswer(args: string[]) {
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === "--gate")
-      seq = Number(flagValue(args, i++, a)); // bounds-checked
+      seq = Number(flagValue("answer", args, i++, a, json)); // bounds-checked
     else if (a === "--choose") {
-      chooses.push(flagValueStrict(args, i++, a));
+      chooses.push(flagValueStrict("answer", args, i++, a, json));
     } else if (a === "--answer") {
-      const raw = flagValueStrict(args, i++, a);
+      const raw = flagValueStrict("answer", args, i++, a, json);
       const parts = splitEq(raw);
       if (!parts)
         return void fail(
@@ -2127,7 +2128,7 @@ function cmdScaffold(args: string[]) {
   const outSpaceIdx = args.indexOf("--out");
   const outEqIdx = args.findIndex((a) => a.startsWith("--out="));
   let outPath: string | undefined;
-  if (outSpaceIdx >= 0) outPath = flagValue(args, outSpaceIdx, "--out");
+  if (outSpaceIdx >= 0) outPath = flagValue("scaffold", args, outSpaceIdx, "--out", json);
   else if (outEqIdx >= 0) outPath = args[outEqIdx].slice("--out=".length);
   if (outPath !== undefined && (outPath === "" || outPath.startsWith("-")))
     return void fail(
@@ -2143,7 +2144,7 @@ function cmdScaffold(args: string[]) {
   const fromSpaceIdx = args.indexOf("--from-run");
   const fromEqIdx = args.findIndex((a) => a.startsWith("--from-run="));
   let fromRunVal: string | undefined;
-  if (fromSpaceIdx >= 0) fromRunVal = flagValue(args, fromSpaceIdx, "--from-run");
+  if (fromSpaceIdx >= 0) fromRunVal = flagValue("scaffold", args, fromSpaceIdx, "--from-run", json);
   else if (fromEqIdx >= 0) fromRunVal = args[fromEqIdx].slice("--from-run=".length);
   if (fromRunVal !== undefined) {
     if (fromRunVal === "" || fromRunVal.startsWith("-"))
@@ -2263,47 +2264,62 @@ async function cmdVerifyRun(args: string[]) {
   try {
     p = parseArgs(args, { values: ["--output-format"], enums: { "--output-format": ["text", "json"] } });
   } catch (e) {
-    log((e as Error).message);
-    return process.exit(2);
+    return fail("verify-run", "usage", (e as Error).message, undefined, isJsonOutput(args));
   }
   const json = p.options["--output-format"] === "json";
   const [runDir, scenarioFile] = p.positionals;
   if (!runDir || !scenarioFile) {
-    log("usage: verify-run <run-dir> <scenario.yaml> [--output-format json]");
-    return process.exit(2);
+    return fail("verify-run", "usage", "usage: verify-run <run-dir> <scenario.yaml> [--output-format json]", undefined, isJsonOutput(args));
   }
   if (p.positionals.length > 2) {
-    log(`verify-run takes <run-dir> <scenario.yaml> (got ${p.positionals.length}: ${p.positionals.join(", ")})`);
-    return process.exit(2);
+    return fail(
+      "verify-run",
+      "usage",
+      `verify-run takes <run-dir> <scenario.yaml> (got ${p.positionals.length}: ${p.positionals.join(", ")})`,
+      undefined,
+      isJsonOutput(args),
+    );
   }
   const resultPath = join(runDir, "result.json");
   if (!existsSync(resultPath)) {
-    log(`verify-run: no result.json under ${runDir} (is this a kept run dir? e.g. runs/<scenario>/<sessionId>/)`);
-    return process.exit(2);
+    return fail(
+      "verify-run",
+      "runtime",
+      `verify-run: no result.json under ${runDir} (is this a kept run dir? e.g. runs/<scenario>/<sessionId>/)`,
+      undefined,
+      isJsonOutput(args),
+    );
   }
   let result: RunResult;
   try {
     result = JSON.parse(readFileSync(resultPath, "utf8")) as RunResult;
   } catch (e) {
-    log(`verify-run: cannot read ${resultPath}: ${(e as Error).message}`);
-    return process.exit(2);
+    return fail("verify-run", "runtime", `verify-run: cannot read ${resultPath}: ${(e as Error).message}`, undefined, isJsonOutput(args));
   }
   // A partial run did NOT complete (it exited on an unanswered gate). Its assertion outcome is empty and its
   // artifacts are pre-failure, so re-evaluating asserts against it would vouch for a run that never finished.
   // Refuse rather than false-fail or false-pass.
   if (result.partial) {
-    log(
+    return fail(
+      "verify-run",
+      "runtime",
       `verify-run: ${runDir} is a PARTIAL run — it did not complete (exited on an unanswered gate). ` +
         `Re-run to completion before verifying. (can't verify ⇒ not green)`,
+      undefined,
+      isJsonOutput(args),
     );
-    return process.exit(2);
   }
   let scenario;
   try {
     scenario = parseScenarioFile(scenarioFile);
   } catch (e) {
-    log(`verify-run: cannot load scenario ${scenarioFile}: ${(e as Error).message}`);
-    return process.exit(2);
+    return fail(
+      "verify-run",
+      "runtime",
+      `verify-run: cannot load scenario ${scenarioFile}: ${(e as Error).message}`,
+      undefined,
+      isJsonOutput(args),
+    );
   }
 
   const workRoot = result.workDir ?? "";
@@ -2313,11 +2329,14 @@ async function cmdVerifyRun(args: string[]) {
   const FS_KEYS: (keyof Assertion)[] = ["file_exists", "user_visible_artifact", "artifact_json"];
   const hasFsAssert = scenario.assert.some((a) => FS_KEYS.some((k) => a[k] !== undefined));
   if (hasFsAssert && !existsSync(workRoot)) {
-    log(
+    return fail(
+      "verify-run",
+      "runtime",
       `verify-run: work dir not found (${workRoot || "<unset>"}) — filesystem assertions ` +
         `(file_exists/artifact_json/user_visible_artifact) cannot be re-evaluated from this run dir; re-record. (can't verify ⇒ not green)`,
+      undefined,
+      isJsonOutput(args),
     );
-    return process.exit(2);
   }
 
   const sidecarTranscript = readTranscriptSidecar(join(runDir, "run.jsonl"));
@@ -2384,20 +2403,26 @@ async function cmdVerifyRun(args: string[]) {
       const liveFp = buildFingerprint(scenario.session, recFp.baseline, undefined, scenario.skills);
       const drift = fingerprintSkillDrift(recFp, liveFp);
       if (drift) {
-        log(
+        return fail(
+          "verify-run",
+          "runtime",
           `verify-run: the kept run predates the current skill — ${drift}. Its gate snapshot is stale, so ` +
             `answer-coverage can't be trusted; re-keep a fresh run (or re-record). (can't verify ⇒ not green)`,
+          undefined,
+          isJsonOutput(args),
         );
-        return process.exit(2);
       }
     }
     const gates = parseGatesFromEvents(join(runDir, "events.jsonl"));
     if (gates === null) {
-      log(
+      return fail(
+        "verify-run",
+        "runtime",
         `verify-run: scenario declares answers but ${runDir} has no events.jsonl — cannot verify answer coverage ` +
           `(re-keep the run with the gates, or drop answers). (can't verify ⇒ not green)`,
+        undefined,
+        isJsonOutput(args),
       );
-      return process.exit(2);
     }
     const decider = new ScriptedDecider(scenario.answers);
     const stubCtx: RunContext = {
@@ -2622,5 +2647,5 @@ main().catch((e) => {
   // runtime/unexpected: keep the stack on stderr for humans; a structured envelope on stdout for json.
   if (json) out(jsonError(command, "internal", String(e?.message ?? e)));
   else log(String(e?.stack ?? e));
-  process.exit(2);
+  process.exit(2); // cli-error-envelope-exempt: emits its own jsonError(...) call above (full stack on stderr for text mode), not a fail() plain-message shape
 });
