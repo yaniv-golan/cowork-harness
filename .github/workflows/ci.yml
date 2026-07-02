@@ -131,7 +131,7 @@ jobs:
 
   # ── Stage 3: live scenario suite (needs ANTHROPIC_API_KEY; skipped on forks) ────
   scenarios:
-    name: scenario suite (L1, live inference)
+    name: scenario suite (mixed protocol/container, live inference)
     runs-on: ubuntu-24.04-arm
     needs: boundary
     permissions:
