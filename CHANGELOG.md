@@ -6,6 +6,22 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **Agent-binary provenance in baselines.** Each baseline's `agentBinary` now records the Linux/arm64 ELF's
+  `sha256` plus `shaProvenance` — `measured-local` (hashed from the staged binary at `sync` and cross-checked
+  against the official release manifest) or `official-manifest` (copied from the manifest for a version not
+  staged on the syncing machine; staging-identity unverified) — and, on measured rows, `manifestChecksumMatch`.
+  `sync` computes these and stays offline-capable (an unreachable manifest records `"unknown"` and never fails
+  the sync). All committed baselines back-filled. (No `nativeSha256`: the signed native Mach-O never equals a
+  manifest hash.)
+- **Default-on agent-ELF integrity check.** The resolved ELF is verified against the recorded `sha256` at run
+  time **by default** (opt out with `COWORK_HARNESS_VERIFY_AGENT_SHA=0`; ELF only). Hard-fails only on a
+  `measured-local` mismatch at the baseline's own staged path; intentional substitutions (`COWORK_AGENT_BINARY`
+  / newest-sibling fallback) and `official-manifest` hashes advisory-warn. `doctor` now shows a
+  `[sha256 ✓ vs baseline, …]` provenance line. Old agent versions are re-downloadable and verifiable — recovery
+  runbook in `docs/maintenance.md`.
+
 ## [0.21.0] — 2026-07-03
 
 ### Added
