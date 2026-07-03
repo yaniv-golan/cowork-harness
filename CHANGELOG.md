@@ -24,11 +24,31 @@ All notable changes to this project are documented here. The format is based on
   match, matching the `subagent_dispatched` convention. Fails as evidence-unavailable (never a vacuous pass)
   when the agent's init tool list has no `Skill` tool (agent-version drift) or, for the negative form, when
   invocation data itself is absent (an old run predating this key). Replay-checkable (content key).
-- **`max_cost_usd` / `max_tokens` / `tool_calls_max` budget assertions**, built on Wave 0's cost/turns
-  seam. Each fails as evidence-unavailable (never a vacuous pass) when the underlying telemetry is absent.
-  `max_cost_usd`/`max_tokens` are honest about the replay lane: they assert the *frozen recording's* spend,
-  not fresh spend — a live `run` is where a real budget regression is caught. `tool_calls_max` is
-  meaningfully replay-checkable (the re-drive recomputes `toolCounts` deterministically).
+- **`max_cost_usd` / `max_tokens` / `tool_calls_max` / `max_turns` budget assertions**, built on Wave 0's
+  cost/turns seam. Each fails as evidence-unavailable (never a vacuous pass) when the underlying telemetry
+  is absent. `max_cost_usd`/`max_tokens` are honest about the replay lane: they assert the *frozen
+  recording's* spend, not fresh spend — a live `run` is where a real budget regression is caught.
+  `tool_calls_max`/`max_turns` are meaningfully replay-checkable (the re-drive recomputes `toolCounts`/turn
+  count deterministically).
+- **`diff <a> <b>` command.** Compares two committed platform baselines (`--changelog` renders known-field
+  prose — agent/Desktop version bumps, egress allowlist changes, gate flips — from a proper recursive
+  structural differ, replacing the old one-level diff that dumped a whole subtree on any nested change;
+  `sync --diff` now uses the same differ), two runs, two cassettes, or a run and a cassette (kind
+  auto-detected by CONTENT, not filename — a cassette-shaped file not literally named `*.cassette.json`
+  still detects correctly). Run/cassette mode has four views (`tools`/`transcript`/`artifacts`/`meta`, or
+  `all`) with normalization masking per-run noise (tool-use ids, UUIDs, session-dir markers, timestamps,
+  host paths) so two runs of the *same* scenario diff as identical despite that noise; `--no-normalize`
+  compares raw values for forensics. Token-free — no live Desktop install or Docker needed either way.
+- **`run --repeat N` variance rollup.** Runs each resolved scenario N times (2-100) and aggregates a
+  rollup (pass rate, per-assertion pass/fail attribution, a verdict-signal histogram, cost/token totals,
+  non-deterministic-run count) instead of a single pass/fail. `--min-pass-rate` sets the batch threshold
+  (default 1.0 — no flakiness tolerance); `--stop-on-diverge` stops the loop as soon as both a pass and a
+  fail are observed (that batch always fails — divergence IS the failure being measured for);
+  `--max-budget-usd` stops the loop once cumulative cost would exceed it (an incomplete-but-clean stop is a
+  warning, not a failure by itself). `--repeat` rejects `--decider-dir` (an interactive driving agent × N
+  runs is not a measurement). The JSON envelope gains an optional `rollups[]` array; `ok`/the exit code are
+  redefined for this mode from the rollups, not from `results.every(pass)` — `results[]` still holds every
+  raw run.
 
 ### Parity
 

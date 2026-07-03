@@ -168,20 +168,24 @@ describe("skill_triggered / no_skill_triggered (Wave 1 / E8)", () => {
   });
 });
 
-describe("budgetFields (Wave 1 / E6a) — the single derivation used by live/replay/verify-run", () => {
-  it("computes all three from a fully-populated source", () => {
-    expect(budgetFields({ cost: { usd: 1.5 }, usage: { input_tokens: 100, output_tokens: 50 }, toolCounts: { Read: 2, Write: 1 } })).toEqual(
-      { costUsd: 1.5, tokensTotal: 150, toolCallsTotal: 3 },
-    );
+describe("budgetFields (Wave 1 / E6a + Wave 2 / E6b) — the single derivation used by live/replay/verify-run", () => {
+  it("computes all four from a fully-populated source", () => {
+    expect(
+      budgetFields({ cost: { usd: 1.5 }, usage: { input_tokens: 100, output_tokens: 50, turns: 7 }, toolCounts: { Read: 2, Write: 1 } }),
+    ).toEqual({ costUsd: 1.5, tokensTotal: 150, toolCallsTotal: 3, turns: 7 });
   });
   it("returns undefined for each field when its source is absent (not 0)", () => {
-    expect(budgetFields({})).toEqual({ costUsd: undefined, tokensTotal: undefined, toolCallsTotal: undefined });
+    expect(budgetFields({})).toEqual({ costUsd: undefined, tokensTotal: undefined, toolCallsTotal: undefined, turns: undefined });
   });
   it("toolCallsTotal is 0 (a real value, not undefined) when toolCounts is a populated-but-empty object", () => {
     expect(budgetFields({ toolCounts: {} }).toolCallsTotal).toBe(0);
   });
   it("tokensTotal is undefined when only one of input/output tokens is a number", () => {
     expect(budgetFields({ usage: { input_tokens: 100 } }).tokensTotal).toBeUndefined();
+  });
+  it("turns passes through usage.turns directly (Wave 0 already computed it — no re-derivation here)", () => {
+    expect(budgetFields({ usage: { turns: 4 } }).turns).toBe(4);
+    expect(budgetFields({ usage: { turns: 0 } }).turns).toBe(0); // 0 turns is a real value, not "missing"
   });
 });
 
@@ -212,6 +216,23 @@ describe("max_cost_usd / max_tokens / tool_calls_max (Wave 1 / E6a)", () => {
   });
   it("tool_calls_max fails as evidence-unavailable when tool-count telemetry is absent", () => {
     const r = evaluate([{ tool_calls_max: 3 }], ctx({ toolCallsTotal: undefined }));
+    expect(pass(r)).toBe(false);
+    expect(r[0].message).toContain("evidence unavailable");
+  });
+});
+
+describe("max_turns (Wave 2 / E6b — the last budget key, built on Wave 0's usage.turns)", () => {
+  it("passes at/under the threshold, fails over it", () => {
+    expect(pass(evaluate([{ max_turns: 5 }], ctx({ turns: 5 })))).toBe(true);
+    const r = evaluate([{ max_turns: 5 }], ctx({ turns: 6 }));
+    expect(pass(r)).toBe(false);
+    expect(r[0].message).toContain("6");
+  });
+  it("0 turns is a real value that satisfies any non-negative max_turns, not evidence-unavailable", () => {
+    expect(pass(evaluate([{ max_turns: 0 }], ctx({ turns: 0 })))).toBe(true);
+  });
+  it("fails as evidence-unavailable (not a vacuous pass) when turn telemetry is absent", () => {
+    const r = evaluate([{ max_turns: 5 }], ctx({ turns: undefined }));
     expect(pass(r)).toBe(false);
     expect(r[0].message).toContain("evidence unavailable");
   });

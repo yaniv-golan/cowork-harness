@@ -225,6 +225,7 @@ passes only if every key passes. Keep one concern per item unless you mean conju
 | `max_cost_usd: <N>` | the run's SDK-reported cost is ≤ N USD — evidence-unavailable if cost telemetry is absent. **Replay asserts the frozen recording's cost, not fresh spend** — a real regression needs a live `run` |
 | `max_tokens: <N>` | `usage.input_tokens + usage.output_tokens` ≤ N (cache tokens excluded) — same replay caveat as `max_cost_usd` |
 | `tool_calls_max: <N>` | total top-level tool calls (sum of `toolCounts`) ≤ N — meaningfully replay-checkable (re-drive recomputes `toolCounts` deterministically) |
+| `max_turns: <N>` | the SDK-reported (or fallback-counted) turn count ≤ N — meaningfully replay-checkable (re-drive recounts turns deterministically, same as `tool_calls_max`) |
 | `question_asked: <regex>` | the agent asked an AskUserQuestion whose text matches |
 | `questions_count_max: <N>` | the agent asked at most N questions |
 | `gate_answers_delivered: true` | every answered gate's answer reached the model (observed `tool_result`; unobserved = fail) |
@@ -275,7 +276,7 @@ sourcing ≠ evaluation (replay warns when you edit one). `verify-run` is the on
 *run dir*; `--assert-from` is the equivalent for a *cassette*.
 
 **Evaluated on replay (content):** `transcript_*`, `tool_*`, `subagent_*`, `dispatch_count_max`,
-`skill_triggered`, `no_skill_triggered`, `max_cost_usd`, `max_tokens`, `tool_calls_max`, `result`
+`skill_triggered`, `no_skill_triggered`, `max_cost_usd`, `max_tokens`, `tool_calls_max`, `max_turns`, `result`
 (`max_cost_usd`/`max_tokens` assert the frozen recording's spend on replay, not fresh spend). The verdict
 modifiers `allow_permissive_auto_allow` / `allow_missing_capability` / `allow_l0_plugin_divergence` /
 `allow_stall` are also kept on replay, evaluated as no-op passes.

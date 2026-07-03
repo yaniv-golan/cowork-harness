@@ -64,6 +64,7 @@ CONTENT_KEYS = {
     "max_cost_usd",
     "max_tokens",
     "tool_calls_max",
+    "max_turns",
 }
 # content keys, but only evaluated on replay when the cassette carries controlOut
 GATE_KEYS = {"question_asked", "questions_count_max", "gate_answers_delivered"}

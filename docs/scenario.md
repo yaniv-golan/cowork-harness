@@ -275,6 +275,7 @@ if *every* key passes (don't rely on the first; keep one concern per item unless
 | `max_cost_usd: <N>` | the run's SDK-reported cost is ≤ N USD — fails as **evidence unavailable** when cost telemetry is absent (an old run predating this key). **Live lane only in spirit**: on replay this asserts the *frozen recording's* cost, not fresh spend — a cost regression is caught by a live run, not a token-free replay |
 | `max_tokens: <N>` | `usage.input_tokens + usage.output_tokens` ≤ N (cache-read/creation tokens excluded — priced separately). Same replay caveat as `max_cost_usd`: asserts the recording, not fresh spend |
 | `tool_calls_max: <N>` | total top-level tool calls (sum of `toolCounts`, sub-agent tools excluded) ≤ N — unlike the cost/token keys, this **is** meaningfully replay-checkable (the re-drive recomputes `toolCounts` deterministically from the recorded events) |
+| `max_turns: <N>` | the SDK-reported (or fallback-counted) turn count ≤ N — replay-checkable (the re-drive recounts turns deterministically, same as `tool_calls_max`) |
 | `question_asked: <regex>` | the agent asked an AskUserQuestion whose text matches |
 | `questions_count_max: <N>` | the agent asked at most N questions |
 | `gate_answers_delivered: true` | every answered AskUserQuestion gate's answer actually reached the model — requires a positive, observed `tool_result` (an **unobserved** delivery fails too, not only an errored one — no silent false-green) |
@@ -373,8 +374,10 @@ and re-evaluates the **content** assertions. The authoritative list of content k
 
 **Evaluated on replay (content assertions):**
 `transcript_*` (incl. `transcript_matches`), `tool_*`, `subagent_*`, `dispatch_count_max`,
+`skill_triggered`, `no_skill_triggered`, `max_cost_usd`, `max_tokens`, `tool_calls_max`, `max_turns`,
 `result`, and the verdict modifiers `allow_permissive_auto_allow` / `allow_missing_capability` /
-`allow_l0_plugin_divergence` / `allow_stall` (kept on replay as no-op passes).
+`allow_l0_plugin_divergence` / `allow_stall` (kept on replay as no-op passes). `max_cost_usd`/`max_tokens`
+assert the *frozen recording's* spend on replay, not fresh spend — see their table entries above.
 
 **`question_asked`, `questions_count_max`, and `gate_answers_delivered`** are also content
 assertions, but they require the cassette to carry `controlOut` (full-fidelity replay). When

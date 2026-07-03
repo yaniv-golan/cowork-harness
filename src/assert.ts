@@ -5,15 +5,18 @@ import { VERDICT_MODIFIER_KEYS } from "./types.js";
 import { compileUserRegex } from "./regex.js";
 import { normalizeHost } from "./boundary-paths.js";
 
-/** Derives the three AssertContext budget fields (costUsd/tokensTotal/toolCallsTotal) uniformly from any
- *  RunResult/RunRecord-shaped source — live, replay, and verify-run all read the same shapes (Wave 0's
- *  shared UsageInfo/CostInfo types), so this is one function, not three copies. Each field's own
+/** Derives the four AssertContext budget fields (costUsd/tokensTotal/toolCallsTotal/turns) uniformly from
+ *  any RunResult/RunRecord-shaped source — live, replay, and verify-run all read the same shapes (Wave 0's
+ *  shared UsageInfo/CostInfo types), so this is one function, not four copies. Each field's own
  *  undefined-ness IS the evidence-unavailable signal (see AssertContext's doc comments); no separate
- *  `*Missing` booleans needed for scalars. */
+ *  `*Missing` booleans needed for scalars. `turns` (Wave 2 / E6b) is a pure passthrough of
+ *  `usage.turns` — Wave 0 already did the real extraction/fallback-counting work at the source, so there
+ *  is no re-derivation here, unlike the other three fields which are actually computed from raw parts. */
 export function budgetFields(src: { usage?: UsageInfo; cost?: CostInfo; toolCounts?: Record<string, number> }): {
   costUsd?: number;
   tokensTotal?: number;
   toolCallsTotal?: number;
+  turns?: number;
 } {
   const inTok = src.usage?.input_tokens;
   const outTok = src.usage?.output_tokens;
@@ -21,6 +24,7 @@ export function budgetFields(src: { usage?: UsageInfo; cost?: CostInfo; toolCoun
     costUsd: src.cost?.usd,
     tokensTotal: typeof inTok === "number" && typeof outTok === "number" ? inTok + outTok : undefined,
     toolCallsTotal: src.toolCounts === undefined ? undefined : Object.values(src.toolCounts).reduce((a, b) => a + b, 0),
+    turns: src.usage?.turns,
   };
 }
 
@@ -217,6 +221,10 @@ export interface AssertContext {
    *  undefined (partial/old result.json), never 0 in that case (0 = genuinely zero tool calls, a real
    *  value). Own undefined-ness is the evidence-unavailable signal. */
   toolCallsTotal?: number;
+  /** usage.turns (Wave 0's extraction/fallback-count) — undefined when a run predates that seam or the
+   *  SDK reported neither num_turns nor a countable fallback. Own undefined-ness is the
+   *  evidence-unavailable signal for max_turns (Wave 2 / E6b) — 0 turns is a real, satisfying value. */
+  turns?: number;
 }
 
 export function evaluate(assertions: Assertion[], ctx: AssertContext): RunResult["assertions"] {
@@ -449,6 +457,14 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
         : ctx.toolCallsTotal <= a.tool_calls_max
           ? ok()
           : fail(`${ctx.toolCallsTotal} tool calls exceeds max ${a.tool_calls_max}`),
+    );
+  if (a.max_turns !== undefined)
+    results.push(
+      ctx.turns === undefined
+        ? fail(`evidence unavailable: turn telemetry absent — cannot evaluate max_turns`)
+        : ctx.turns <= a.max_turns
+          ? ok()
+          : fail(`${ctx.turns} turns exceeds max ${a.max_turns}`),
     );
   if (a.no_skill_triggered !== undefined) {
     const c = compileUserRegex(a.no_skill_triggered);

@@ -1,6 +1,7 @@
 import { readFileSync, writeSync } from "node:fs";
 import type { RunResult } from "../types.js";
 import { computeVerdict } from "./verdict.js";
+import { rollupPasses, type RepeatRollup } from "./repeat.js";
 
 // Synchronous fd writes (match cli.ts / doctor.ts). writeSync flushes before process.exit on a pipe.
 const out = (s: string) => writeSync(1, s + "\n");
@@ -45,20 +46,30 @@ export function parseOutputFormat(args: string[]): "text" | "json" {
  *  Each emitted result carries its own `verdict` ({pass, exitCode, signals[], guards[]}) — a NON-MUTATING
  *  projection (computeVerdict is pure; RunResult the type stays clean). This lets a consumer read per-result
  *  pass/fail AND why (the `signals[]` — e.g. an all-green-assertions run that is `pass:false` purely on a
- *  `stalled` signal) without recomputing from the sibling booleans. The top-level `ok` is derived from the
- *  SAME per-result verdicts, so it cannot diverge from them (or from the exit code / footer — all route
- *  computeVerdict). NOTE: this publishes the VerdictSignal.code taxonomy as a de-facto wire contract. */
-function jsonEnvelopeObj(command: string, results: RunResult[]): Record<string, unknown> {
+ *  `stalled` signal) without recomputing from the sibling booleans. NOTE: this publishes the
+ *  VerdictSignal.code taxonomy as a de-facto wire contract.
+ *
+ *  `ok` — E1/§8: for a NON-repeat call (`rollups` omitted), `ok` is derived from the SAME per-result
+ *  verdicts as always (`results.every(pass)`) — unchanged, so it cannot diverge from them or from the
+ *  exit code/footer. For a `--repeat` batch, `ok` is redefined DIRECTLY for that mode — computed from
+ *  `rollups`/`rollupPasses`, not from `results.every(...)` (a raw per-`RunResult` pass/fail is expected to
+ *  vary within a repeat batch; that's the whole point of measuring flakiness). One field, one meaning per
+ *  mode — no parallel `batchVerdict` field, per the plan's revised (no-backward-compat) design. `results[]`
+ *  still holds every raw RunResult either way; nothing is hidden from a `--repeat` caller. */
+function jsonEnvelopeObj(command: string, results: RunResult[], rollups?: RepeatRollup[], minPassRate?: number): Record<string, unknown> {
   const lane = command === "replay" ? "replay" : "live";
   const withVerdict = results.map((r) => ({ ...r, verdict: computeVerdict(r, lane) }));
-  const ok = withVerdict.length > 0 && withVerdict.every((r) => r.verdict.pass);
-  return { tool: "cowork-harness", version: pkgVersion(), command, ok, results: withVerdict, error: null };
+  const ok = rollups ? rollups.every((ru) => rollupPasses(ru, minPassRate)) : withVerdict.length > 0 && withVerdict.every((r) => r.verdict.pass);
+  return { tool: "cowork-harness", version: pkgVersion(), command, ok, results: withVerdict, rollups, error: null };
 }
 
 /** §5a — the standardized machine envelope emitted by every `--output-format json` command. COMPACT
- *  single-line JSON (machine output → trivially parseable; the pretty form lives in result.json). */
-export function jsonEnvelope(command: string, results: RunResult[]): string {
-  return JSON.stringify(jsonEnvelopeObj(command, results));
+ *  single-line JSON (machine output → trivially parseable; the pretty form lives in result.json).
+ *  `rollups`/`minPassRate` are E1's `--repeat` additions — omitted (undefined) for every other command,
+ *  which is why `rollups` doesn't appear in a non-repeat envelope (JSON.stringify drops `undefined`
+ *  properties) rather than showing up as a spurious `null`. */
+export function jsonEnvelope(command: string, results: RunResult[], rollups?: RepeatRollup[], minPassRate?: number): string {
+  return JSON.stringify(jsonEnvelopeObj(command, results, rollups, minPassRate));
 }
 
 /** §5c — the error envelope (compact, single line). */

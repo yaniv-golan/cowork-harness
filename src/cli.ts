@@ -59,6 +59,7 @@ import type { Cassette } from "./run/cassette.js";
 import { buildScaffold } from "./run/scaffold.js";
 import { buildInspectView } from "./run/inspect-view.js";
 import { pkgVersion, jsonEnvelope, jsonError, parseOutputFormat, fail, isJsonOutput, type ErrCategory } from "./run/envelope.js";
+import { buildRepeatRollup, rollupPasses, type RepeatRollup } from "./run/repeat.js";
 import { computeVerdict } from "./run/verdict.js";
 import { evaluate, hostMatches, budgetFields, type AssertContext } from "./assert.js";
 import { spawnChannel, fileChannel, streamGates, answerGate, readGate, type DecisionChannel } from "./decide/external-channel.js";
@@ -283,6 +284,21 @@ Input policy:
                                    (flag > env COWORK_HARNESS_DECIDER_MODEL > Sonnet default); no-op for
                                    scenarios that don't use the model terminal.
   (per-scenario answers/on_unanswered in the YAML take precedence where set)
+
+Repeat / flakiness measurement (E1):
+  --repeat <N>                     run each resolved scenario N times (int, 2-100) and aggregate a variance
+                                   rollup (pass rate, per-assertion attribution, signal histogram). results[]
+                                   still holds every raw run; only the batch verdict (ok/exit code) changes
+                                   for this mode — see --min-pass-rate. Rejects --decider-dir (an interactive
+                                   driving agent × N runs is not a measurement).
+  --min-pass-rate <0..1>           the repeat batch's pass threshold (default 1.0 = no flakiness tolerance).
+                                   Requires --repeat.
+  --stop-on-diverge                stop the repeat loop as soon as BOTH a pass and a fail have been observed
+                                   (saves paid runs once flakiness is proven) — that batch always FAILS
+                                   (divergence observed = flaky = what this flag exists to catch). Requires --repeat.
+  --max-budget-usd <x>             stop the repeat loop once cumulative cost would exceed x. An incomplete-
+                                   but-clean stop is a warning, not a failure by itself; degrades LOUDLY
+                                   (never silently runs all N) if a run reports no cost telemetry. Requires --repeat.
 
 Output:
   --output-format text|json        text = verdict + failing transcript (default); json = stdout envelope
@@ -920,27 +936,89 @@ async function runOneScenario(p: {
   return result;
 }
 
+/** E1: compact text-mode rollup table after a `--repeat N` batch. Renders pass rate, early-stop reason,
+ *  the signal histogram, per-assertion attribution (only rows with at least one failure — an all-passing
+ *  assertion across every iteration doesn't need a line), and cost/token/non-determinism totals when
+ *  present. */
+function formatRepeatRollup(r: RepeatRollup, minPassRate: number): string {
+  const lines: string[] = [];
+  const verdict = rollupPasses(r, minPassRate) ? "PASS" : "FAIL";
+  const stopNote = r.stoppedEarly ? ` (stopped early: ${r.stoppedEarly}, ${r.completed}/${r.requested} completed)` : "";
+  lines.push(`repeat "${r.scenario}": ${verdict} — ${r.passes}/${r.completed} passed (${(r.passRate * 100).toFixed(0)}%)${stopNote}`);
+  const signals = Object.entries(r.signalHistogram);
+  if (signals.length) lines.push(`  signals: ${signals.map(([code, n]) => `${code}×${n}`).join(", ")}`);
+  const failingAssertions = r.perAssertion.filter((a) => a.fails > 0);
+  for (const a of failingAssertions) {
+    lines.push(`  assertion[${a.index}] (${a.key}): ${a.fails} fail / ${a.passes} pass${a.sampleFailure ? ` — e.g. "${a.sampleFailure}"` : ""}`);
+  }
+  if (r.totalCostUsd !== undefined || r.totalTokens !== undefined) {
+    const parts = [
+      r.totalCostUsd !== undefined ? `$${r.totalCostUsd.toFixed(4)} total` : null,
+      r.totalTokens !== undefined ? `${r.totalTokens} tokens total` : null,
+    ].filter(Boolean);
+    lines.push(`  cost: ${parts.join(", ")}`);
+  }
+  if (r.nonDeterministicRuns > 0)
+    lines.push(`  ⚠ ${r.nonDeterministicRuns}/${r.completed} run(s) had a non-deterministic (llm/first/external) decision — flakiness attribution downstream of those is confounded`);
+  return lines.join("\n");
+}
+
 async function cmdRun(rawArgs: string[]) {
   if (hasHelp(rawArgs)) return void log(RUN_HELP);
   // --decider-model overrides the LLM decider's answering model for scenarios that use `on_unanswered: llm`
   // (flag > env COWORK_HARNESS_DECIDER_MODEL > Sonnet default). `takeCommonFlags` doesn't know it (it's not a
   // common flag), so pull it out of argv first — otherwise it would land as an "unexpected argument".
+  // E1: --repeat/--max-budget-usd/--stop-on-diverge/--min-pass-rate are `run`-only the same way — not common
+  // flags, pre-extracted here exactly like --decider-model, cli.ts:897-911 in the plan's own citation.
   let deciderModel: string | undefined;
+  let repeatN: number | undefined;
+  let maxBudgetUsd: number | undefined;
+  let stopOnDiverge = false;
+  let minPassRate = 1.0;
   const preArgs: string[] = [];
   for (let i = 0; i < rawArgs.length; i++) {
     const a = rawArgs[i];
+    const jsonOut = isJsonOutput(rawArgs);
     if (a === "--decider-model") {
       deciderModel = rawArgs[++i];
       // reject "" too — the equals branch below rejects an empty value, so the spaced form must match
       // (otherwise `--decider-model ""` forwards an empty model id and fails obscurely later).
       if (deciderModel === undefined || deciderModel === "" || deciderModel.startsWith("-"))
-        fail("run", "usage", "--decider-model requires a value (a model id)", undefined, isJsonOutput(rawArgs));
+        fail("run", "usage", "--decider-model requires a value (a model id)", undefined, jsonOut);
     } else if (a.startsWith("--decider-model=")) {
       deciderModel = a.slice("--decider-model=".length);
-      if (deciderModel === "") fail("run", "usage", "--decider-model requires a non-empty value", undefined, isJsonOutput(rawArgs));
+      if (deciderModel === "") fail("run", "usage", "--decider-model requires a non-empty value", undefined, jsonOut);
+    } else if (a === "--repeat" || a.startsWith("--repeat=")) {
+      const v = a === "--repeat" ? rawArgs[++i] : a.slice("--repeat=".length);
+      const n = v === undefined ? NaN : Number(v);
+      if (!Number.isInteger(n) || n < 2 || n > 100)
+        fail("run", "usage", `--repeat requires an integer between 2 and 100 (got ${v === undefined ? "nothing" : `"${v}"`})`, undefined, jsonOut);
+      repeatN = n;
+    } else if (a === "--max-budget-usd" || a.startsWith("--max-budget-usd=")) {
+      const v = a === "--max-budget-usd" ? rawArgs[++i] : a.slice("--max-budget-usd=".length);
+      const n = v === undefined ? NaN : Number(v);
+      if (!Number.isFinite(n) || n <= 0)
+        fail("run", "usage", `--max-budget-usd requires a positive number (got ${v === undefined ? "nothing" : `"${v}"`})`, undefined, jsonOut);
+      maxBudgetUsd = n;
+    } else if (a === "--stop-on-diverge") {
+      stopOnDiverge = true;
+    } else if (a === "--min-pass-rate" || a.startsWith("--min-pass-rate=")) {
+      const v = a === "--min-pass-rate" ? rawArgs[++i] : a.slice("--min-pass-rate=".length);
+      const n = v === undefined ? NaN : Number(v);
+      if (!Number.isFinite(n) || n < 0 || n > 1)
+        fail("run", "usage", `--min-pass-rate requires a number between 0 and 1 (got ${v === undefined ? "nothing" : `"${v}"`})`, undefined, jsonOut);
+      minPassRate = n;
     } else preArgs.push(a);
   }
+  if (maxBudgetUsd !== undefined && repeatN === undefined)
+    fail("run", "usage", "--max-budget-usd requires --repeat", undefined, isJsonOutput(rawArgs));
+  if (stopOnDiverge && repeatN === undefined) fail("run", "usage", "--stop-on-diverge requires --repeat", undefined, isJsonOutput(rawArgs));
+  if (minPassRate !== 1.0 && repeatN === undefined) fail("run", "usage", "--min-pass-rate requires --repeat", undefined, isJsonOutput(rawArgs));
   const { rest: rawRest, flags } = takeCommonFlags(preArgs, "run");
+  // An interactive driving agent × N runs is not a measurement — --decider-dir answers gates IN-BAND from
+  // a live driver, which defeats the point of repeating the SAME scenario deterministically N times.
+  if (repeatN !== undefined && flags.deciderDir)
+    fail("run", "usage", "--repeat cannot be combined with --decider-dir (an interactive driving agent × N runs is not a measurement)", undefined, flags.output === "json");
   // `--keep` is meaningful on `skill` (runs are otherwise discarded) but `run` ALWAYS keeps runs.
   // Accept it as an explicit no-op (EXACT-token only — it takes no value, so an exact match can't
   // swallow a real arg) instead of the loud reject below, so muscle memory from `skill` doesn't error.
@@ -976,6 +1054,7 @@ async function cmdRun(rawArgs: string[]) {
   const o = resolveOutput("run", flags);
   noteRunsLocation({ json: o.json, quiet: !!flags.quiet, suppress: !!flags.demo });
   const results: RunResult[] = [];
+  const rollups: RepeatRollup[] = [];
   try {
     for (let i = 0; i < files.length; i++) {
       const scenario = parseScenarioFile(files[i]);
@@ -989,9 +1068,36 @@ async function cmdRun(rawArgs: string[]) {
           undefined,
           o.json,
         );
-      const label = files.length > 1 ? `[${i + 1}/${files.length}] ${scenario.name}` : scenario.name;
-      results.push(
-        await runOneScenario({
+
+      if (repeatN === undefined) {
+        const label = files.length > 1 ? `[${i + 1}/${files.length}] ${scenario.name}` : scenario.name;
+        results.push(
+          await runOneScenario({
+            command: "run",
+            scenario,
+            label,
+            flags,
+            policy,
+            externalChannel,
+            o,
+            extra: deciderModel ? { llmModel: deciderModel } : undefined,
+          }),
+        );
+        continue;
+      }
+
+      // E1: --repeat N — run the SAME scenario N times, coexisting via local_<hrtime> run dirs
+      // (execute.ts:177-180, no collision), aggregate into a RepeatRollup. results[] still gets every
+      // raw RunResult (nothing hidden) — only the exit-code/`ok` formula changes for this mode (§8).
+      const iterationResults: RunResult[] = [];
+      let cumulativeCostUsd = 0;
+      let costTelemetryMissing = false;
+      let stoppedEarly: "budget" | "diverged" | undefined;
+      let sawPass = false;
+      let sawFail = false;
+      for (let n = 0; n < repeatN; n++) {
+        const label = `${files.length > 1 ? `[${i + 1}/${files.length}] ` : ""}${scenario.name} (repeat ${n + 1}/${repeatN})`;
+        const r = await runOneScenario({
           command: "run",
           scenario,
           label,
@@ -1000,17 +1106,42 @@ async function cmdRun(rawArgs: string[]) {
           externalChannel,
           o,
           extra: deciderModel ? { llmModel: deciderModel } : undefined,
-        }),
-      );
+        });
+        iterationResults.push(r);
+        results.push(r);
+        if (computeVerdict(r, "live").pass) sawPass = true;
+        else sawFail = true;
+        if (stopOnDiverge && sawPass && sawFail) {
+          stoppedEarly = "diverged";
+          break;
+        }
+        if (maxBudgetUsd !== undefined) {
+          const b = budgetFields(r);
+          if (b.costUsd === undefined) costTelemetryMissing = true;
+          else cumulativeCostUsd += b.costUsd;
+          if (costTelemetryMissing) {
+            // degrade LOUDLY, never silently run all N as if the cap didn't exist (§4/E1 risk).
+            log(`::warning:: --max-budget-usd unenforceable: run ${n + 1} reported no cost telemetry — continuing without a budget cap for "${scenario.name}"`);
+          } else if (n + 1 < repeatN && cumulativeCostUsd >= maxBudgetUsd) {
+            stoppedEarly = "budget";
+            break;
+          }
+        }
+      }
+      if (stoppedEarly === "budget" && iterationResults.length < repeatN)
+        log(`::warning:: "${scenario.name}": --max-budget-usd stopped the repeat batch early (${iterationResults.length}/${repeatN} completed) — measurement incomplete, not a failure by itself`);
+      rollups.push(buildRepeatRollup(scenario.name, repeatN, iterationResults, stoppedEarly));
     }
   } finally {
     externalChannel?.close?.(); // ONE channel reused across the loop — close after ALL scenarios (not per-run)
   }
   // All channels keep stdout free → the normal output path (envelope under --output-format json, nothing
   // otherwise). No terminal {type:"result"} line — `--decider-cmd`/`--decider-dir` compose with json.
-  if (o.json) out(jsonEnvelope("run", results));
-  const anyFail = results.some((r) => !computeVerdict(r, "live").pass);
-  process.exit(anyFail ? 1 : 0);
+  const usingRepeat = repeatN !== undefined;
+  if (o.json) out(jsonEnvelope("run", results, usingRepeat ? rollups : undefined, usingRepeat ? minPassRate : undefined));
+  else if (usingRepeat && !o.json) for (const r of rollups) out(formatRepeatRollup(r, minPassRate));
+  const ok = usingRepeat ? rollups.every((r) => rollupPasses(r, minPassRate)) : results.every((r) => computeVerdict(r, "live").pass);
+  process.exit(ok ? 0 : 1);
 }
 
 async function cmdSkill(rawArgs: string[]) {

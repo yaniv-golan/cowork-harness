@@ -303,3 +303,77 @@ describe.skipIf(!can)("global-flag position hint", () => {
     expect(env.error.message).toMatch(/GLOBAL flag and must come BEFORE the subcommand/);
   });
 });
+
+describe.skipIf(!can)("CLI arg guards — run --repeat (E1)", () => {
+  it("rejects --repeat below the minimum (1)", () => {
+    const d = mkdtempSync(join(tmpdir(), "g-repeat-"));
+    writeFileSync(join(d, "s.yaml"), "prompt: hi\n");
+    const r = run(["run", "s.yaml", "--repeat", "1"], d);
+    expect(r.code).toBe(2);
+    expect(r.out).toMatch(/--repeat requires an integer between 2 and 100/);
+  });
+
+  it("rejects --repeat above the maximum (101)", () => {
+    const d = mkdtempSync(join(tmpdir(), "g-repeat-"));
+    writeFileSync(join(d, "s.yaml"), "prompt: hi\n");
+    expect(run(["run", "s.yaml", "--repeat", "101"], d).code).toBe(2);
+  });
+
+  it("rejects a non-numeric --repeat value", () => {
+    const d = mkdtempSync(join(tmpdir(), "g-repeat-"));
+    writeFileSync(join(d, "s.yaml"), "prompt: hi\n");
+    const r = run(["run", "s.yaml", "--repeat", "nope"], d);
+    expect(r.code).toBe(2);
+    expect(r.out).toMatch(/--repeat requires an integer/);
+  });
+
+  it("accepts the --repeat=N equals form (parses cleanly, fails fast on the nonexistent path instead — never on --repeat)", () => {
+    // A nonexistent scenario path fails BEFORE any live execution (no auth/spawn needed), so this stays
+    // token-free and fast while still proving --repeat=3 parsed: the error is about the path, not --repeat.
+    const d = mkdtempSync(join(tmpdir(), "g-repeat-"));
+    const r = run(["run", "does-not-exist.yaml", "--repeat=3"], d);
+    expect(r.code).toBe(2);
+    expect(r.out).toMatch(/scenario path not found/);
+    expect(r.out).not.toMatch(/--repeat requires/);
+  });
+
+  it("rejects --repeat combined with --decider-dir (interactive driver × N is not a measurement)", () => {
+    const d = mkdtempSync(join(tmpdir(), "g-repeat-"));
+    writeFileSync(join(d, "s.yaml"), "prompt: hi\n");
+    const r = run(["run", "s.yaml", "--repeat", "3", "--decider-dir", d], d);
+    expect(r.code).toBe(2);
+    expect(r.out).toMatch(/--repeat cannot be combined with --decider-dir/);
+  });
+
+  it("--max-budget-usd without --repeat is a usage error, not a silent no-op", () => {
+    const d = mkdtempSync(join(tmpdir(), "g-repeat-"));
+    writeFileSync(join(d, "s.yaml"), "prompt: hi\n");
+    const r = run(["run", "s.yaml", "--max-budget-usd", "1.0"], d);
+    expect(r.code).toBe(2);
+    expect(r.out).toMatch(/--max-budget-usd requires --repeat/);
+  });
+
+  it("--stop-on-diverge without --repeat is a usage error", () => {
+    const d = mkdtempSync(join(tmpdir(), "g-repeat-"));
+    writeFileSync(join(d, "s.yaml"), "prompt: hi\n");
+    expect(run(["run", "s.yaml", "--stop-on-diverge"], d).code).toBe(2);
+  });
+
+  it("--min-pass-rate without --repeat is a usage error", () => {
+    const d = mkdtempSync(join(tmpdir(), "g-repeat-"));
+    writeFileSync(join(d, "s.yaml"), "prompt: hi\n");
+    expect(run(["run", "s.yaml", "--min-pass-rate", "0.8"], d).code).toBe(2);
+  });
+
+  it("rejects --min-pass-rate outside [0,1]", () => {
+    const d = mkdtempSync(join(tmpdir(), "g-repeat-"));
+    writeFileSync(join(d, "s.yaml"), "prompt: hi\n");
+    expect(run(["run", "s.yaml", "--repeat", "2", "--min-pass-rate", "1.5"], d).code).toBe(2);
+  });
+
+  it("rejects a non-positive --max-budget-usd", () => {
+    const d = mkdtempSync(join(tmpdir(), "g-repeat-"));
+    writeFileSync(join(d, "s.yaml"), "prompt: hi\n");
+    expect(run(["run", "s.yaml", "--repeat", "2", "--max-budget-usd", "0"], d).code).toBe(2);
+  });
+});

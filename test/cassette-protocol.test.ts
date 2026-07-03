@@ -155,6 +155,23 @@ describe("budget assertions evaluate end-to-end on replay (Wave 1 / E6a)", () =>
   });
 });
 
+describe("max_turns evaluates end-to-end on replay (Wave 2 / E6b)", () => {
+  it("passes when the re-drive's turn count is within budget, fails when it exceeds it", async () => {
+    muteStderr();
+    const events = [
+      JSON.stringify({ type: "system", subtype: "init", tools: [] }),
+      JSON.stringify({ type: "result", subtype: "success", is_error: false, num_turns: 3 }),
+    ];
+    const passCassette: any = { scenario: makeScenario([{ max_turns: 5 }]), events, controlOut: [] };
+    const passResult = await replayCassette(passCassette);
+    expect(passResult.assertions.every((a) => a.pass)).toBe(true);
+
+    const failCassette: any = { scenario: makeScenario([{ max_turns: 2 }]), events, controlOut: [] };
+    const failResult = await replayCassette(failCassette);
+    expect(failResult.assertions.some((a) => !a.pass)).toBe(true);
+  });
+});
+
 describe("replay surfaces usage/cost from the re-driven record (Wave 0 seam)", () => {
   it("includes usage.turns and cost.usd on a replayed RunResult when the cassette recorded them", async () => {
     muteStderr();

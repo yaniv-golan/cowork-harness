@@ -13,6 +13,7 @@
     "gate_answers_delivered",
     "max_cost_usd",
     "max_tokens",
+    "max_turns",
     "no_delete_in_outputs",
     "no_skill_triggered",
     "question_asked",

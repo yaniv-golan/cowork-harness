@@ -2467,6 +2467,7 @@ export async function replayCassette(
     "max_cost_usd",
     "max_tokens",
     "tool_calls_max",
+    "max_turns",
     "result",
     // Verdict modifiers — NOT filesystem/egress assertions. Keep all of them on replay (each evaluates to a
     // no-op pass via assert.ts) so a standalone modifier neither inflates the "filesystem/egress skipped"

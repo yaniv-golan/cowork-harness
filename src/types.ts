@@ -225,6 +225,14 @@ export const Assertion = z.object({
     .nonnegative()
     .optional()
     .describe("total top-level tool calls (sum of toolCounts, sub-agent tools excluded) ≤ N"),
+  max_turns: z
+    .number()
+    .int()
+    .nonnegative()
+    .optional()
+    .describe(
+      "the SDK-reported (or fallback-counted) turn count ≤ N — replay-checkable (the re-drive recounts turns deterministically)",
+    ),
   egress_denied: z.string().optional().describe("egress to this host was denied"),
   egress_allowed: z.string().optional().describe("egress to this host was allowed"),
   // Only `true` is accepted: `false` is rejected as a footgun. The assertion is presence-semantic — authoring
