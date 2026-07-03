@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.22.0] — 2026-07-03
+
 ### Added
 
 - **`computer://` link modeling — the prompt now instructs file links exactly as production does.**

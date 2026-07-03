@@ -13,7 +13,7 @@ replay path end-to-end, including:
 
 Run it with:
 
-> Assumes the `cowork-harness` CLI is available — from a source checkout run `npm ci && npm run build && npm link` first, or `npm i -g cowork-harness@>=0.21.0`. (`replay` itself needs nothing else — no token, no Docker.)
+> Assumes the `cowork-harness` CLI is available — from a source checkout run `npm ci && npm run build && npm link` first, or `npm i -g cowork-harness@>=0.22.0`. (`replay` itself needs nothing else — no token, no Docker.)
 
 ```sh
 cowork-harness replay examples/replays/example-pdf-skill.cassette.json
