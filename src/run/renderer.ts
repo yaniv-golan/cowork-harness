@@ -19,6 +19,16 @@ export interface RenderPlan {
   verbose: boolean; // + thinking, tool inputs, sub-agent tree
   color: boolean; // ANSI on stderr
   compact: boolean; // --compact/--demo: collapse /sessions/<id>/mnt/ → mnt/ in rendered tool inputs
+  /** Display-only VM->host path rewrite (see src/run/display-translate.ts — makeDisplayTranslator
+   *  owns the policy of WHEN this runs; the renderer just applies whatever it's handed). Absent
+   *  (undefined) is identity — every call site that doesn't build one (replay's cassette.ts renderer,
+   *  in particular) renders exactly as before. Applied at every surface a human reads: assistant text
+   *  (incl. sub-agent text), tool_use input summaries, and tool_result heads — production deep-walks
+   *  every message block, so translating assistant text alone would show a mix of host and `/sessions/`
+   *  paths in the same transcript. Never applied to RunRecord/run.jsonl/result.json/events — those stay
+   *  the raw, model-visible record.
+   */
+  translate?: (s: string) => string;
 }
 export interface Renderer extends RunHooks {
   dump(): string;
@@ -78,9 +88,14 @@ export function collapseSessionRoot(s: string): string {
   return s.replace(/\/sessions\/[^/]+\/mnt\//g, "mnt/");
 }
 
-export function inputSummary(input: unknown, compact = false): string {
+export function inputSummary(input: unknown, compact = false, translate?: (s: string) => string): string {
   try {
     let s = JSON.stringify(input);
+    // translate (hostloop display rewrite) runs before compact's collapse — the two are mutually
+    // exclusive in practice (shareable output forces translate to identity, see display-translate.ts),
+    // but ordering it first keeps the rule "translate real paths, then apply the shareable transform"
+    // consistent regardless.
+    if (translate) s = translate(s);
     // Run the collapse BEFORE the 80-char slice so a `/mnt/` boundary past char 80 still collapses.
     if (compact) s = collapseSessionRoot(s);
     if (s.length <= 80) return s;
@@ -119,12 +134,19 @@ export function makeRenderer(plan: RenderPlan, write: Sink = stderr): Renderer {
       switch (e.type) {
         case "assistant_text":
           if (!e.parentToolUseId) {
-            transcript.push(e.text);
+            // translate BEFORE pushing to the transcript buffer, so what's DISPLAYED (the live `write`
+            // below) and what's later DUMPED (renderFooter's failure transcript) agree — production
+            // deep-walks every block a human eventually sees, never just the live stream.
+            const text = plan.translate ? plan.translate(e.text) : e.text;
+            transcript.push(text);
             // The assistant message IS the deliverable in skill/chat mode — show it in FULL (no
             // truncation). Truncation only applies to the run failure-transcript dump (renderFooter).
-            if (plan.live) write(`\n${bold(plan, "claude›")} ${e.text}\n`);
+            if (plan.live) write(`\n${bold(plan, "claude›")} ${text}\n`);
           } else if (plan.verbose && e.text.trim()) {
-            write(`  ${dim(plan, "↳ " + e.text)}\n`);
+            // sub-agent/dispatch-child text gets the SAME transform — production translates the whole
+            // message tree, not just the top-level agent's text (plan §P2 "Scope note").
+            const text = plan.translate ? plan.translate(e.text) : e.text;
+            write(`  ${dim(plan, "↳ " + text)}\n`);
           }
           break;
         case "tool_use":
@@ -133,7 +155,7 @@ export function makeRenderer(plan: RenderPlan, write: Sink = stderr): Renderer {
             if (e.toolUseId) topLevelToolCalls.add(e.toolUseId);
             if (plan.progress)
               write(
-                `  ${dim(plan, toolMarker(e.name) + " " + e.name + (plan.verbose ? " " + inputSummary(e.input, plan.compact) : ""))}\n`,
+                `  ${dim(plan, toolMarker(e.name) + " " + e.name + (plan.verbose ? " " + inputSummary(e.input, plan.compact, plan.translate) : ""))}\n`,
               );
           }
           break;
@@ -141,9 +163,10 @@ export function makeRenderer(plan: RenderPlan, write: Sink = stderr): Renderer {
           if (!e.toolUseId || !topLevelToolCalls.has(e.toolUseId)) break; // nested or unpaired — not rendered
           topLevelToolCalls.delete(e.toolUseId);
           if (plan.progress) {
-            // collapse the session-root BEFORE the 80-char slice, matching inputSummary, so --compact
-            // is consistent between a tool's input line and its outcome line.
+            // translate, THEN collapse the session-root, THEN slice to 80 chars — matching inputSummary's
+            // ordering, so --compact stays consistent between a tool's input line and its outcome line.
             let head = e.text.split("\n")[0];
+            if (plan.translate) head = plan.translate(head);
             if (plan.compact) head = collapseSessionRoot(head);
             head = head.slice(0, 80);
             write(`    ${e.isError ? red(plan, "✗ " + head) : dim(plan, "→ " + head)}\n`);

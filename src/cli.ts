@@ -978,7 +978,15 @@ async function runOneScenario(p: {
   rethrowUnanswered?: boolean;
 }): Promise<RunResult> {
   const { command, scenario, label, flags, policy, externalChannel, o, keep, extra, rethrowUnanswered } = p;
-  const renderer = o.render ? makeRenderer(o.plan) : undefined;
+  // The display translator needs the run's LaunchPlan (mount host paths) + resolved fidelity, both of
+  // which are only known INSIDE executeScenario (buildLaunchPlan runs there) — well after this renderer
+  // is constructed. A mutable ref (same pattern as execute.ts's own provenanceRef) lets executeScenario
+  // fill it in once ctx is known, before any AgentEvent can arrive; the renderer reads translateRef.current
+  // fresh on every event via this wrapper closure, so the late assignment is visible without needing to
+  // share the RenderPlan object itself. Default: identity (matches today's behavior at every non-hostloop
+  // tier, and if executeScenario never gets a chance to fill it in).
+  const translateRef: { current: (s: string) => string } = { current: (s) => s };
+  const renderer = o.render ? makeRenderer({ ...o.plan, translate: (s: string) => translateRef.current(s) }) : undefined;
   if (!o.json && !flags.quiet) renderStart(label, scenario.fidelity, o.plan);
   const start = Date.now();
   const stopHeartbeat = o.json || externalChannel ? () => {} : startHeartbeat(renderer, o.plan, start);
@@ -991,6 +999,7 @@ async function runOneScenario(p: {
       externalChannel,
       hooks: renderer ? [renderer] : [],
       compact: !!(flags.compact || flags.demo), // --demo implies --compact
+      translateRef,
     });
   } catch (e) {
     if (e instanceof UnansweredError && !rethrowUnanswered) {

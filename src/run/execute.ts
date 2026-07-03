@@ -38,6 +38,7 @@ import { startEgressProxy } from "../egress/proxy.js";
 import { evaluate, hostMatches, budgetFields } from "../assert.js";
 import { compileUserRegex } from "../regex.js";
 import { renderPrompts } from "../prompt.js";
+import { makeDisplayTranslator, vmPathContextFromPlan } from "./display-translate.js";
 import { LiveAgentSession, type SdkMcp, type HookBundle } from "../agent/session.js";
 import { buildDecider, ExternalDecider, LlmDecider, type Decider, type OnUnanswered, UnansweredError } from "../decide/decider.js";
 import { type DecisionChannel } from "../decide/external-channel.js";
@@ -76,6 +77,15 @@ export interface ExecuteOptions {
    *  their own command name through; `record`'s live execution (cassette.ts) passes "record" explicitly so
    *  a recording session isn't misread as a `run` invocation in `stats`. */
   command?: "run" | "skill" | "record";
+  /** Display-translator wiring for a renderer built BEFORE this scenario's LaunchPlan/effective fidelity
+   *  exist (cli.ts's `run`/`skill` renderer is constructed ahead of `executeScenario`, unlike chat.ts's,
+   *  which builds its own plan first and can call makeDisplayTranslator directly). Same mutable-ref
+   *  pattern as `provenanceRef` below: the caller passes a ref holding the identity function; once `plan`
+   *  and `effectiveFidelity` are known (right after buildLaunchPlan, well before the child spawns or any
+   *  AgentEvent can arrive), this function overwrites `.current` with the real translator. The renderer
+   *  reads `translateRef.current` fresh on every event, so the late assignment is visible without needing
+   *  the RenderPlan object itself to be shared. */
+  translateRef?: { current: (s: string) => string };
 }
 
 /**
@@ -313,6 +323,18 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     plan.resume = !!opts.resume;
   }
 
+  // Fill in the caller's display-translate ref (see ExecuteOptions.translateRef) now that plan +
+  // effectiveFidelity exist — well before the child spawns, so the renderer never sees a stale identity
+  // translator once events start flowing. The translator itself gates on effectiveFidelity/shareable, so
+  // this always resolves ctx unconditionally (harmless at non-hostloop tiers — the closure no-ops there).
+  if (opts.translateRef) {
+    opts.translateRef.current = makeDisplayTranslator({
+      ctx: vmPathContextFromPlan(sessionId, plan, outDir),
+      effectiveFidelity,
+      shareable: !!opts.compact,
+    });
+  }
+
   const startedAt = Date.now();
   const boundaryDeps = scenario.assert.some((a) => a.egress_denied || a.egress_allowed) || scenario.expect_denied.length > 0;
   if (scenario.fidelity === "protocol" && boundaryDeps) {
@@ -451,7 +473,30 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       microvmProxyPort = hostProxy.actualPort; // read from the live, still-bound socket — no TOCTOU gap
     }
 
-    const prompts = renderPrompts(baseline, session, sessionId, plan.mounts.find((m) => m.kind === "folder")?.mountPath);
+    // Host-loop prompt-token substitution (P2a): renderPrompts runs BEFORE spawnHostLoop below, so these
+    // host dirs are recomputed here via the SAME pure joins hostloop's own runtime uses, rather than
+    // restructuring the call order. hostCwd/hostUploadsDir mirror hostOutputsDir's derivation
+    // (src/runtime/hostloop.ts: `mntHost = join(resolve(outDir), "work", "session", "mnt")`) and the
+    // sibling uploads dir stageHostLoopWorkspace creates there (src/runtime/hostloop-stage.ts:39).
+    // hostSkillsDir mirrors hostLoopShellSection's own staged-skills check (same file) — plan.configDir's
+    // skills copy is already materialized by buildLaunchPlan above, so this is a plain existence check,
+    // not a restructuring; undefined (skills absent/unstaged) lets renderPrompts' fallback string stand.
+    const hostLoopOpts =
+      effectiveFidelity === "hostloop"
+        ? (() => {
+            const hostMnt = join(resolve(outDir), "work", "session", "mnt");
+            const skillsDir = join(plan.configDir, "skills");
+            const skillsStaged = existsSync(skillsDir) && readdirSync(skillsDir).length > 0;
+            return {
+              effectiveFidelity,
+              hostCwd: join(hostMnt, "outputs"),
+              hostUploadsDir: join(hostMnt, "uploads"),
+              hostWorkspaceFolder: plan.mounts.find((m) => m.kind === "folder")?.hostPath,
+              hostSkillsDir: skillsStaged ? skillsDir : undefined,
+            };
+          })()
+        : undefined;
+    const prompts = renderPrompts(baseline, session, sessionId, plan.mounts.find((m) => m.kind === "folder")?.mountPath, hostLoopOpts);
     promptFidelityWarnings = prompts.fidelityWarnings; // hoist out so RunResult construction (after try) can access it
     let sdkMcp: SdkMcp | undefined;
     if (effectiveFidelity === "hostloop") {

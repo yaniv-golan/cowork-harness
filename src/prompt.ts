@@ -24,6 +24,28 @@ export interface RenderedPrompts {
   fidelityWarnings?: string[];
 }
 
+/**
+ * Host-loop's prompt-token substitution recipe (production's exact recipe — plan §1.4/P2a). Only
+ * consulted when `effectiveFidelity === "hostloop"`; every other tier keeps today's VM-path tokens
+ * byte-identical. All fields are HOST paths (hostloop is the one tier where the model already speaks
+ * host paths, matching what production substitutes there).
+ */
+export interface HostLoopPromptOpts {
+  effectiveFidelity?: string;
+  /** `{{cwd}}` -> this (production: `hostCwd ?? sessionRoot`). */
+  hostCwd?: string;
+  /** Pre-replacement target for the literal substring `{{cwd}}/mnt/uploads` — MUST be applied before
+   *  the general `{{cwd}}` substitution (see below), or a naive `{{cwd}}`-then-append-`/mnt/uploads`
+   *  join could diverge from where uploads are actually staged. */
+  hostUploadsDir?: string;
+  /** `{{skillsDir}}` -> this, falling back to the verbatim string "(no skills directory — skip skill
+   *  reads)" when absent (binary-verified fallback — grep-anchor `"{{skillsDir}}"`). */
+  hostSkillsDir?: string;
+  /** `{{workspaceFolder}}` -> this, falling back to `hostCwd` (production: the connected folder's host
+   *  path `?? hostCwd`). */
+  hostWorkspaceFolder?: string;
+}
+
 export function renderPrompts(
   baseline: PlatformBaseline,
   session: SessionConfig,
@@ -35,6 +57,7 @@ export function renderPrompts(
    * Undefined when no folder is connected.
    */
   firstFolderMountPath?: string,
+  hostLoopOpts?: HostLoopPromptOpts,
 ): RenderedPrompts {
   const spawn = baseline.spawn;
   if (!spawn) return {};
@@ -49,18 +72,28 @@ export function renderPrompts(
   const pad = (n: number) => String(n).padStart(2, "0");
   const localDateTime =
     `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ` + `${pad(now.getHours())}:${pad(now.getMinutes())}`;
-  const tokens: Record<string, string> = {
-    "{{cwd}}": sessionRoot,
-    "{{skillsDir}}": `${mntRoot}/.claude`,
-    "{{workspaceFolder}}": workspaceFolder,
-    "{{folderSelected}}": firstFolderMountPath ? "true" : "false",
-    "{{modelName}}": session.model ?? "Claude",
-    // <env> tokens (>=1.18286.0 append). The exact Desktop date format is unverified from the asar
-    // (substitution happens host-side); a readable local timestamp keeps the semantic content.
-    "{{currentDateTime}}": localDateTime,
-    "{{currentTimezone}}": Intl.DateTimeFormat().resolvedOptions().timeZone,
-    "{{accountName}}": session.account_name ?? "User",
-  };
+  const isHostLoop = hostLoopOpts?.effectiveFidelity === "hostloop";
+  const tokens: Record<string, string> = {};
+  // Host-loop's uploads pre-replacement MUST be inserted BEFORE the "{{cwd}}" entry below: `subst`
+  // applies tokens in Object.entries insertion order (guaranteed for string keys), each a global
+  // find-replace over the whole string, so this consumes every "{{cwd}}/mnt/uploads" occurrence first
+  // — exactly production's order (1) — leaving the plain "{{cwd}}" substitution (order (2)) to handle
+  // only what's left. Reversing the order would rewrite "{{cwd}}/mnt/uploads" via the generic {{cwd}}
+  // token first, then naively append "/mnt/uploads" to whatever host path that yields — which is only
+  // correct when the uploads dir happens to be a literal `<hostCwd>/mnt/uploads` child, not in general.
+  if (isHostLoop && hostLoopOpts?.hostUploadsDir) tokens["{{cwd}}/mnt/uploads"] = hostLoopOpts.hostUploadsDir;
+  tokens["{{cwd}}"] = isHostLoop ? (hostLoopOpts?.hostCwd ?? sessionRoot) : sessionRoot;
+  tokens["{{skillsDir}}"] = isHostLoop ? (hostLoopOpts?.hostSkillsDir ?? "(no skills directory — skip skill reads)") : `${mntRoot}/.claude`;
+  tokens["{{workspaceFolder}}"] = isHostLoop
+    ? (hostLoopOpts?.hostWorkspaceFolder ?? hostLoopOpts?.hostCwd ?? sessionRoot)
+    : workspaceFolder;
+  tokens["{{folderSelected}}"] = firstFolderMountPath ? "true" : "false";
+  tokens["{{modelName}}"] = session.model ?? "Claude";
+  // <env> tokens (>=1.18286.0 append). The exact Desktop date format is unverified from the asar
+  // (substitution happens host-side); a readable local timestamp keeps the semantic content.
+  tokens["{{currentDateTime}}"] = localDateTime;
+  tokens["{{currentTimezone}}"] = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  tokens["{{accountName}}"] = session.account_name ?? "User";
   const subst = (s: string) => Object.entries(tokens).reduce((acc, [k, v]) => acc.split(k).join(v), s);
   const fidelityWarnings: string[] = [];
   const read = (rel?: string) => {

@@ -1,14 +1,15 @@
 import readline from "node:readline";
 import os from "node:os";
 import { spawn, spawnSync } from "node:child_process";
-import { join } from "node:path";
-import { mkdirSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { mkdirSync, existsSync, readdirSync } from "node:fs";
 import { loadBaseline, resolveAgentBinary } from "../baseline.js";
 import { loadSession, buildLaunchPlan } from "../session.js";
 import { spawnContainer } from "../runtime/container.js";
 import { spawnHostLoop } from "../runtime/hostloop.js";
 import { spawnProtocol } from "../runtime/protocol.js";
 import { renderPrompts } from "../prompt.js";
+import { makeDisplayTranslator, vmPathContextFromPlan } from "./display-translate.js";
 import { startEgressSidecar, registerCleanup } from "../egress/sidecar.js";
 import { Scenario } from "../types.js";
 import { LiveAgentSession, type AgentEvent } from "../agent/session.js";
@@ -208,7 +209,24 @@ export async function cmdChat(args: string[]) {
   // no process.env mutation — pass proxy/network explicitly so concurrent calls don't stomp.
   // protocol tier runs the host claude binary with no Docker sandbox, so no sidecar is needed.
   const sidecar = fidelity !== "protocol" ? startEgressSidecar(plan.egressAllow, outDir, runToken) : null;
-  const prompts = renderPrompts(baseline, session, sessionId, plan.mounts.find((m) => m.kind === "folder")?.mountPath);
+  // Host-loop prompt-token substitution (P2a) — mirrors execute.ts's call site exactly (same pure joins,
+  // same staged-skills check via plan.configDir), so `run`/`skill`/`chat` never diverge on this recipe.
+  const hostLoopOpts =
+    fidelity === "hostloop"
+      ? (() => {
+          const hostMnt = join(resolve(outDir), "work", "session", "mnt");
+          const skillsDir = join(plan.configDir, "skills");
+          const skillsStaged = existsSync(skillsDir) && readdirSync(skillsDir).length > 0;
+          return {
+            effectiveFidelity: fidelity,
+            hostCwd: join(hostMnt, "outputs"),
+            hostUploadsDir: join(hostMnt, "uploads"),
+            hostWorkspaceFolder: plan.mounts.find((m) => m.kind === "folder")?.hostPath,
+            hostSkillsDir: skillsStaged ? skillsDir : undefined,
+          };
+        })()
+      : undefined;
+  const prompts = renderPrompts(baseline, session, sessionId, plan.mounts.find((m) => m.kind === "folder")?.mountPath, hostLoopOpts);
 
   log(`cowork chat [${fidelity}] — run: ${sessionId}\n`);
   // Startup summary: show uploads and project folders so the developer knows what the agent sees.
@@ -243,12 +261,22 @@ export async function cmdChat(args: string[]) {
   // prompter (PromptDecider). Two interfaces would race for the same stdin → undefined input routing.
   const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
   const ask = (prompt: string) => new Promise<string>((resolve) => rl.question(prompt, (a) => resolve(a.trim())));
+  // ONE display translator, shared by all three fidelity branches below (protocol/hostloop/container each
+  // build their own `makeRenderer(renderPlan)` off this SAME plan object) — the hostloop gate lives in the
+  // closure, not at each instantiation site, so wiring all three uniformly costs nothing (the closure
+  // no-ops for protocol/container). `shareable: renderPlan.compact` mirrors the source resolveOutput uses
+  // for `run`/`skill` (compact/--demo); chat has no such flag, hence the fixed `false` below.
   const renderPlan: RenderPlan = {
     live: true,
     progress: true,
     verbose,
     color: process.stderr.isTTY === true && !process.env.NO_COLOR,
     compact: false, // chat is an interactive REPL, not shareable-output (the path-collapse targets skill/run)
+    translate: makeDisplayTranslator({
+      ctx: vmPathContextFromPlan(sessionId, plan, outDir),
+      effectiveFidelity: fidelity,
+      shareable: false,
+    }),
   };
   const start = Date.now();
   let stopHeartbeat: (() => void) | undefined;
