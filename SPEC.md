@@ -463,7 +463,9 @@ each suppressible only by the matching `allow_*` modifier. `result` means "the a
   "assertions":[{ "assertion": <Assertion>, "pass": bool, "message?": "string" }],
   "subagents": [{ "toolUseId","parentToolUseId?","agentType","declaredTools":[],"toolsUsed":[] }],
   "unanswered":[{ "question","chosen","by","rationale?","model?" }],
-  "usage?": {...}, "cost?": {...}, "durationMs?": number,
+  "usage?": { "turns?": number, /* …SDK usage fields (input_tokens, output_tokens, etc.), pass-through */ },
+  "cost?": { "usd?": number, "raw?": {...} }, // usd = SDK's total_cost_usd for this invocation; raw = the api_metrics event payload (independent source)
+  "durationMs?": number,
   "outDir": "string",
   "workDir?": "string",                          // the agent's working root (mnt/) inside the run dir
   "outputsDir?": "string",                       // the user-visible deliverable mount (mnt/outputs)

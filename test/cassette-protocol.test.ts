@@ -85,6 +85,27 @@ describe("conflicting duplicate controlOut IDs are an unconditional corruption f
   });
 });
 
+describe("replay surfaces usage/cost from the re-driven record (Wave 0 seam)", () => {
+  it("includes usage.turns and cost.usd on a replayed RunResult when the cassette recorded them", async () => {
+    muteStderr();
+    const events = [
+      JSON.stringify({ type: "system", subtype: "init", tools: [] }),
+      JSON.stringify({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        usage: { output_tokens: 5 },
+        total_cost_usd: 0.02,
+        num_turns: 3,
+      }),
+    ];
+    const cassette: any = { scenario: makeScenario([{ result: "success" as const }]), events, controlOut: [] };
+    const r = await replayCassette(cassette);
+    expect(r.usage).toMatchObject({ output_tokens: 5, turns: 3 });
+    expect(r.cost).toMatchObject({ usd: 0.02 });
+  });
+});
+
 describe("a malformed control frame in events fails per-cassette (does not throw / abort the batch)", () => {
   it("a non-string request_id on a control_request becomes a replay_protocol_fidelity failure, not a throw", async () => {
     muteStderr();

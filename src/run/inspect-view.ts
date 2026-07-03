@@ -23,7 +23,7 @@ interface InspectDigest {
   partial?: boolean;
   unansweredGate?: { message: string; hint?: string };
   durationMs?: number;
-  cost?: Record<string, unknown>;
+  cost?: RunResult["cost"];
   workDirAvailable: boolean;
   artifacts: { path: string; bytes: number; preview?: Record<string, unknown> | string }[];
 }

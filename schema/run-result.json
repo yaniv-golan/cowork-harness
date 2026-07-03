@@ -42,8 +42,21 @@
     "assertions": { "type": "array" },
     "subagents": { "type": "array" },
     "unanswered": { "type": "array" },
-    "usage": { "type": "object" },
-    "cost": { "type": "object" },
+    "usage": {
+      "type": "object",
+      "description": "SDK usage payload (input_tokens, output_tokens, etc.), pass-through, plus a harness-computed 'turns' field (from the SDK result message's num_turns) when available. Wave 0 seam.",
+      "properties": {
+        "turns": { "type": "number" }
+      }
+    },
+    "cost": {
+      "type": "object",
+      "description": "usd = the SDK result message's total_cost_usd for this invocation, when available (Wave 0 seam). raw = the api_metrics event payload (pre-existing, independent source).",
+      "properties": {
+        "usd": { "type": "number" },
+        "raw": { "type": "object" }
+      }
+    },
     "durationMs": { "type": "number" },
     "outDir": { "type": "string" },
     "workDir": { "type": "string" },

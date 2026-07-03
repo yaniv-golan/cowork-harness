@@ -2688,6 +2688,11 @@ export async function replayCassette(
       assertions,
       subagents: rec.subagents,
       unanswered: rec.unanswered,
+      // Wave 0 seam: the live/success/partial assemblers already passed these through; replay never did,
+      // so a cassette that recorded usage/cost silently dropped it on replay. re-drive (rec) recomputes
+      // them deterministically from the same events, so this is a content key, not a live-only one.
+      usage: rec.usage,
+      cost: rec.cost,
       outDir: "(replay)",
       // Class-tagged staleness + skip counts, surfaced to JSON callers (the gate decision already happened
       // above via failing assertions; these fields are pure data so a green stays green by default).

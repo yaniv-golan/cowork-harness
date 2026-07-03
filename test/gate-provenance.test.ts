@@ -92,4 +92,10 @@ describe("run-result schema", () => {
     expect(schema.properties.gateProvenance).toBeDefined();
     expect(schema.properties.gateProvenance.properties).toHaveProperty("bySource");
   });
+
+  it("declares cost.usd and usage.turns (guards schema/type drift for the Wave 0 seam)", () => {
+    const schema = JSON.parse(readFileSync(join(process.cwd(), "schema", "run-result.json"), "utf8"));
+    expect(schema.properties.cost.properties).toHaveProperty("usd");
+    expect(schema.properties.usage.properties).toHaveProperty("turns");
+  });
 });

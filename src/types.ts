@@ -464,6 +464,18 @@ export interface RunStatus {
   durationMs?: number;
 }
 
+/** SDK usage payload (input_tokens, output_tokens, etc.) — pass-through, shape owned by the SDK, not the
+ *  harness — plus `turns`, harness-computed from the SDK result message's `num_turns` (Wave 0 seam). */
+export type UsageInfo = Record<string, unknown> & { turns?: number };
+
+/** `usd` = the SDK result message's `total_cost_usd` for this invocation, when present (Wave 0 seam).
+ *  `raw` = the `api_metrics` event payload (pre-existing; unrelated source, kept alongside `usd` rather
+ *  than merged into it since the two are independent SDK signals). */
+export interface CostInfo {
+  usd?: number;
+  raw?: Record<string, unknown>;
+}
+
 export interface RunResult {
   $schema?: string;
   generator?: string;
@@ -513,8 +525,8 @@ export interface RunResult {
    * (by:"scripted") are excluded because they are authoritative and deterministic.
    */
   unanswered?: Array<{ question: string; chosen: string; by: string; rationale?: string; model?: string }>;
-  usage?: Record<string, unknown>;
-  cost?: Record<string, unknown>;
+  usage?: UsageInfo;
+  cost?: CostInfo;
   durationMs?: number;
   // Skill/plugin staleness fingerprint at run time. Persisted so `verify-run` can detect a kept run that
   // predates a skill change (its gate snapshot is stale → don't vouch for answer-coverage against it).

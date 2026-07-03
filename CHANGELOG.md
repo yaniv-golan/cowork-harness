@@ -47,6 +47,23 @@ All notable changes to this project are documented here. The format is based on
   `[sha256 ✓ vs baseline, …]` provenance line. Old agent versions are re-downloadable and verifiable — recovery
   runbook in `docs/maintenance.md`.
 
+### Changed
+
+- **`RunResult.cost`/`.usage` retyped** from opaque `Record<string, unknown>` to structured shapes.
+  `cost` is now `{ usd?, raw? }`: `usd` is the SDK result message's `total_cost_usd`, newly extracted (was
+  previously dropped on the floor); `raw` is the pre-existing `api_metrics` payload, now nested under `raw`
+  instead of being the whole `cost` object. `usage` gains a `turns?: number` field, from the SDK's
+  `num_turns` (also newly extracted). Breaking shape change for anything reading `result.json`'s `cost`
+  field directly — see SPEC.md's `RunResult` reference for the new shape. No cassette-format bump (derived
+  reporting, not a stored format change).
+
+### Fixed
+
+- **Replay now surfaces `usage`/`cost` in `result.json`.** `replayCassette` previously omitted both fields
+  entirely from every replayed `RunResult`, regardless of what the cassette recorded — a replay-lane blind
+  spot, not a live-only limitation. Both are now re-derived from the cassette's re-driven record, same as
+  the live/partial-run lanes.
+
 ## [0.21.0] — 2026-07-03
 
 ### Added

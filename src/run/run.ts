@@ -1,6 +1,7 @@
 import { warn } from "../io.js";
 import { randomUUID } from "node:crypto";
 import type { AgentSession, AgentEvent, DecisionRequest, DecisionResponse } from "../agent/session.js";
+import type { UsageInfo, CostInfo } from "../types.js";
 import { questionKey, questionLabel } from "../agent/session.js";
 import {
   ABSTAIN,
@@ -66,8 +67,8 @@ export interface RunRecord {
     error?: string;
     reason?: "ok" | "errored" | "unobserved" | "no-pairing-metadata";
   }[]; // did the answer reach the model? (null = unobserved or no-pairing-metadata)
-  usage?: Record<string, unknown>;
-  cost?: Record<string, unknown>;
+  usage?: UsageInfo;
+  cost?: CostInfo;
 }
 
 export interface RunHooks {
@@ -230,7 +231,8 @@ export class Run {
             });
             break;
           case "metrics":
-            this.rec.cost = ev.data;
+            // merge, don't overwrite — a "result" event may have already set/will later set `usd` (Wave 0 seam)
+            this.rec.cost = { ...this.rec.cost, raw: ev.data };
             break;
           case "decision":
             this.rec.transcript = transcript.join("\n");
@@ -246,7 +248,12 @@ export class Run {
               this.rec.result = "success";
               sawSuccessResult = true;
             }
-            this.rec.usage = ev.usage;
+            // Wave 0 seam: fold the SDK's num_turns into usage as `turns` (there is no dedicated turns
+            // field) — only when there's something to report, so a bare `{isError:false}` result event
+            // (still common in synthetic/older cassette events) leaves usage undefined, not a spurious {}.
+            this.rec.usage =
+              ev.usage || ev.numTurns !== undefined ? { ...ev.usage, ...(ev.numTurns !== undefined ? { turns: ev.numTurns } : {}) } : undefined;
+            if (ev.costUsd !== undefined) this.rec.cost = { ...this.rec.cost, usd: ev.costUsd };
             {
               const next = await turnIter.next();
               if (next.done) this.session.close();
