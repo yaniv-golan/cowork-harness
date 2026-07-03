@@ -514,6 +514,38 @@ run (`--keep`, or a `--session-id` run) into a starter scenario YAML — auto-fi
 match. Prints to stdout by default; add `--out <file.yaml>` to write it straight to `scenarios/`. Review
 and tighten the generated `when_question` regexes before committing.
 
+### Measuring flakiness (`run --repeat`)
+
+A single green run proves the scenario passed *once*. `--repeat <N>` (2–100) runs each resolved scenario N
+times and aggregates a **variance rollup** — pass rate, per-assertion pass/fail attribution, a
+verdict-signal histogram, cost/token totals, and a non-deterministic-run count — instead of a single
+pass/fail. `results` in the JSON envelope still holds every raw run (nothing hidden); only `ok`/the exit
+code are redefined for this mode, computed from the rollup rather than `results.every(pass)`.
+
+```bash
+cowork-harness run examples/scenarios/csv-metrics.yaml --repeat 10 --min-pass-rate 0.9
+```
+
+- `--min-pass-rate <0..1>` (default `1.0` — no flakiness tolerance) sets the batch's pass threshold.
+- `--stop-on-diverge` stops the loop as soon as **both** a pass and a fail have been observed — saves
+  paid runs once flakiness is already proven. That batch always **fails**, regardless of the numeric
+  rate reached: divergence *is* the failure this flag exists to catch.
+- `--max-budget-usd <x>` stops the loop once cumulative cost would exceed it. An incomplete-but-clean stop
+  (every completed run passed, but `N` wasn't reached) is a loud `::warning::`, not a failure by itself —
+  that batch is still judged on its own completed-runs pass rate. If a run reports no cost telemetry, the
+  cap degrades LOUDLY (one warning) instead of silently running all N as if the cap didn't exist.
+- `--repeat` rejects `--decider-dir` — an interactive driving agent answering gates live × N runs isn't a
+  reproducible measurement. `--decider-llm`/`on_unanswered: llm` are allowed, but a decided gate makes
+  `RunResult.nonDeterministic: true`, and the rollup's `nonDeterministicRuns` count flags this: flakiness
+  attribution downstream of a decided gate is confounded, since the gate itself isn't reproducible.
+
+This also composes with `skill_triggered`/`no_skill_triggered` (see [Assertions](#assertions)) for a
+**trigger-accuracy sweep**: a directory of prompt-variant scenarios, each asserting whether the intended
+skill fires, run under `--repeat` to measure how reliably a description/trigger phrase actually invokes the
+skill across repeated tries — see
+[`examples/scenarios/trigger-accuracy-sweep/`](../examples/scenarios/trigger-accuracy-sweep/) for a worked
+example.
+
 ### Dry-running a decider (`decide`)
 
 `cowork-harness decide` validates a decider against a **sample question in ~2s, with no run** — so you

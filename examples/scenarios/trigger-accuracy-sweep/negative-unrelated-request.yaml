@@ -1,0 +1,18 @@
+# yaml-language-server: $schema=../../../schema/scenario.schema.json
+# Trigger-accuracy sweep (E8 recipe) — see docs/scenario.md § Measuring flakiness (`run --repeat`).
+#
+# The negative control, paired with positive-clear-pdf-request.yaml: a prompt with no connection to the
+# skill's description ("summarize a PDF and write action items") should NOT trigger it. Run both under
+# `--repeat` together — a healthy skill description keeps the positive scenario's pass rate near 1.0 AND
+# this one's near 1.0; a description that's too broad shows up here as this scenario's pass rate dropping
+# (the skill fires when it shouldn't) even while the positive scenario stays green.
+baseline: latest
+session: ../../sessions/default.yaml
+fidelity: container
+
+prompt: |
+  What's a good name for a houseplant?
+
+assert:
+  - result: success
+  - no_skill_triggered: "my-pdf-skill"

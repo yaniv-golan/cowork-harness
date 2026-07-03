@@ -1092,6 +1092,7 @@ async function cmdRun(rawArgs: string[]) {
       const iterationResults: RunResult[] = [];
       let cumulativeCostUsd = 0;
       let costTelemetryMissing = false;
+      let costTelemetryMissingWarned = false;
       let stoppedEarly: "budget" | "diverged" | undefined;
       let sawPass = false;
       let sawFail = false;
@@ -1120,8 +1121,12 @@ async function cmdRun(rawArgs: string[]) {
           if (b.costUsd === undefined) costTelemetryMissing = true;
           else cumulativeCostUsd += b.costUsd;
           if (costTelemetryMissing) {
-            // degrade LOUDLY, never silently run all N as if the cap didn't exist (§4/E1 risk).
-            log(`::warning:: --max-budget-usd unenforceable: run ${n + 1} reported no cost telemetry — continuing without a budget cap for "${scenario.name}"`);
+            // degrade LOUDLY, never silently run all N as if the cap didn't exist (§4/E1 risk) — but
+            // only ONCE per batch, not once per remaining iteration (costTelemetryMissing never resets).
+            if (!costTelemetryMissingWarned) {
+              log(`::warning:: --max-budget-usd unenforceable: run ${n + 1} reported no cost telemetry — continuing without a budget cap for "${scenario.name}"`);
+              costTelemetryMissingWarned = true;
+            }
           } else if (n + 1 < repeatN && cumulativeCostUsd >= maxBudgetUsd) {
             stoppedEarly = "budget";
             break;
@@ -1137,9 +1142,11 @@ async function cmdRun(rawArgs: string[]) {
   }
   // All channels keep stdout free → the normal output path (envelope under --output-format json, nothing
   // otherwise). No terminal {type:"result"} line — `--decider-cmd`/`--decider-dir` compose with json.
+  // The rollup table is human output like every other per-run footer (renderFooter), so it goes to
+  // stderr via log() — NOT out()/stdout, which text mode reserves for staying quiet (only json mode uses it).
   const usingRepeat = repeatN !== undefined;
   if (o.json) out(jsonEnvelope("run", results, usingRepeat ? rollups : undefined, usingRepeat ? minPassRate : undefined));
-  else if (usingRepeat && !o.json) for (const r of rollups) out(formatRepeatRollup(r, minPassRate));
+  else if (usingRepeat) for (const r of rollups) log(formatRepeatRollup(r, minPassRate));
   const ok = usingRepeat ? rollups.every((r) => rollupPasses(r, minPassRate)) : results.every((r) => computeVerdict(r, "live").pass);
   process.exit(ok ? 0 : 1);
 }
