@@ -4,7 +4,9 @@
   "agentVersion": "2.1.181",
   "agentBinary": {
     "stagedPath": "~/Library/Application Support/Claude/claude-code-vm/2.1.181/claude",
-    "format": "elf-aarch64"
+    "format": "elf-aarch64",
+    "sha256": "1393f993533e08d5c96245504750a7fcfe37490a5f44eec35b0beac3d709dab9",
+    "shaProvenance": "official-manifest"
   },
   "guest": {
     "os": "linux",

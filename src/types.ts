@@ -30,6 +30,20 @@ export const PlatformBaseline = z.looseObject({
     // baseline synced before this field existed has no native binary staged, so hostloop falls back to
     // resolveHostAgentBinary's loud failure (never a silent tier downgrade).
     nativeStagedPath: z.string().optional(),
+    // Provenance of the Linux/arm64 ELF at stagedPath — shared, non-secret (just hashes), improves
+    // repro/fidelity. `sha256`: hex SHA-256 of the ELF. `shaProvenance`: "measured-local" = hashed from
+    // the staged binary at sync time (the trustworthy point-of-truth); "official-manifest" = copied from
+    // Anthropic's per-version release manifest for a version NOT staged on the syncing machine, so
+    // staging-identity is UNVERIFIED (byte-identity between the staged binary and the official release is
+    // confirmed only for versions actually measured; Desktop could in principle repack what it stages).
+    // `manifestChecksumMatch`: set ONLY on measured-local rows — whether the measured hash equalled the
+    // official manifest checksum ("unknown" if the manifest was unreachable at sync); omitted on
+    // official-manifest rows (there it would compare the manifest hash to itself → tautological).
+    // NO nativeSha256: the signed+notarized inner Mach-O embeds an LC_CODE_SIGNATURE and never equals any
+    // manifest hash, so a manifest-derived native hash would match nothing on the hostloop path.
+    sha256: z.string().optional(),
+    shaProvenance: z.enum(["measured-local", "official-manifest"]).optional(),
+    manifestChecksumMatch: z.union([z.boolean(), z.literal("unknown")]).optional(),
   }),
   guest: z.looseObject({ os: z.string(), arch: z.string(), baseImage: z.string().optional() }),
   spawn: z

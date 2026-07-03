@@ -4,7 +4,7 @@ import { join, basename, resolve, isAbsolute, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
 import { Scenario, AnswerRule, Assertion, type RunResult, type RunStatus, type PlatformBaseline } from "./types.js";
-import { loadBaseline, BASELINES_DIR, cmpVersionStrings } from "./baseline.js";
+import { loadBaseline, BASELINES_DIR, cmpVersionStrings, sha256File } from "./baseline.js";
 import { loadSession, resolveSessionPaths } from "./session.js";
 import { executeScenario, parseScenarioFile, UnansweredError, BoundaryError, type ExecuteOptions } from "./run/execute.js";
 import {
@@ -1450,7 +1450,23 @@ function cmdBoundary(args: string[]) {
   process.exit(results.every((r) => r.pass) ? 0 : 1);
 }
 
-function cmdSync(args: string[]) {
+/** Best-effort fetch of the official per-version linux-arm64 release checksum from Anthropic's release
+ *  channel. Returns undefined on ANY network/parse error so `sync` stays offline-capable (a missing
+ *  manifest never fails the sync — the sha fields just fall back to measured-local or are omitted). */
+async function fetchOfficialElfChecksum(version: string): Promise<string | undefined> {
+  try {
+    const r = await fetch(`https://downloads.claude.ai/claude-code-releases/${version}/manifest.json`, {
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!r.ok) return undefined;
+    const j = (await r.json()) as { platforms?: Record<string, { checksum?: string }> };
+    return j?.platforms?.["linux-arm64"]?.checksum;
+  } catch {
+    return undefined;
+  }
+}
+
+async function cmdSync(args: string[]) {
   // platform guard fires before arg parsing — wrong platform is an environment error, not a usage error.
   if (process.platform !== "darwin") {
     return fail("sync", "usage", "sync requires macOS (the Cowork Desktop app is macOS-only).", undefined, isJsonOutput(args));
@@ -1568,7 +1584,45 @@ function cmdSync(args: string[]) {
     log(`  (The new agentVersion is ${res.agentVersion}. Open Cowork once to stage the binary, then re-run sync.)`);
     log(`  resolveHostAgentBinary will fail until the file is present or COWORK_HOST_AGENT_BINARY is set.`);
   }
-  const nextAgentBinary = { ...baseAgentBinary, stagedPath: derivedStagedPath, nativeStagedPath: derivedNativeStagedPath };
+  // Agent-binary provenance (shared, non-secret): record the ELF sha256 + how we know it. Prefer a
+  // measured-local hash of the staged binary (the point-of-truth) + cross-check against the official
+  // release manifest; if the binary isn't staged on this machine, fall back to the official-manifest hash
+  // (staging-identity unverified); if offline AND this is a re-sync of the SAME version, keep the base's
+  // recorded hash; otherwise drop the fields rather than carry a stale hash from a different version.
+  const officialElfChecksum = await fetchOfficialElfChecksum(res.agentVersion);
+  let shaFields: { sha256?: string; shaProvenance?: string; manifestChecksumMatch?: boolean | "unknown" } = {};
+  if (existsSync(resolvedDerived)) {
+    const measured = sha256File(resolvedDerived);
+    shaFields = {
+      sha256: measured,
+      shaProvenance: "measured-local",
+      manifestChecksumMatch: officialElfChecksum === undefined ? "unknown" : measured === officialElfChecksum,
+    };
+    if (officialElfChecksum !== undefined && measured !== officialElfChecksum) {
+      log(
+        `WARNING: staged agent ELF sha256 (${measured}) != official linux-arm64 manifest checksum (${officialElfChecksum}) for ${res.agentVersion} — the staged binary is NOT the stock release; fidelity may be affected.`,
+      );
+    }
+  } else if (officialElfChecksum !== undefined) {
+    shaFields = { sha256: officialElfChecksum, shaProvenance: "official-manifest" };
+  } else if ((base.agentVersion as string | undefined) === res.agentVersion) {
+    // offline re-sync of the same version — keep what the base recorded rather than dropping it.
+    shaFields = {
+      sha256: baseAgentBinary.sha256 as string | undefined,
+      shaProvenance: baseAgentBinary.shaProvenance as string | undefined,
+      manifestChecksumMatch: baseAgentBinary.manifestChecksumMatch as boolean | "unknown" | undefined,
+    };
+  }
+  // Spread base first, then explicitly set the sha fields (undefined values are dropped by JSON.stringify,
+  // so a version bump we couldn't hash writes no stale sha256/shaProvenance/manifestChecksumMatch).
+  const nextAgentBinary = {
+    ...baseAgentBinary,
+    stagedPath: derivedStagedPath,
+    nativeStagedPath: derivedNativeStagedPath,
+    sha256: shaFields.sha256,
+    shaProvenance: shaFields.shaProvenance,
+    manifestChecksumMatch: shaFields.manifestChecksumMatch,
+  };
 
   // re-sync GrowthBook gate states from the decoded fcache (was: stale-carry + blanket warning).
   // Gates drive the cowork loop decision (decideLoopFromBaseline) and the dispatch cap; decoding the

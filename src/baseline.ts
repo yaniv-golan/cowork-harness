@@ -1,9 +1,52 @@
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { join, resolve, isAbsolute, dirname } from "node:path";
 import { homedir } from "node:os";
+import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { PlatformBaseline } from "./types.js";
 import { safeNamedBaseline } from "./boundary-paths.js";
+
+/** SHA-256 (hex) of a file's bytes. Reads the whole file — fine for the ~240 MB agent ELF (a one-off at
+ *  sync/verify time, never on the hot path). */
+export function sha256File(path: string): string {
+  return createHash("sha256").update(readFileSync(path)).digest("hex");
+}
+
+/**
+ * Point-of-use integrity check for the agent ELF against the baseline's recorded `sha256`. **On by
+ * default** (opt out with `COWORK_HARNESS_VERIFY_AGENT_SHA=0`) — a recorded hash that is never enforced at
+ * the point of use is decorative, and fidelity is the whole point. Cost is one ~240 MB hash per resolve
+ * (once per run), negligible against a real run.
+ *
+ * HARD-FAILS only when ALL of: the path is the baseline's own `stagedPath` (not an intentional
+ * substitution), the recorded hash is `measured-local` (trustworthy), and it mismatches — i.e. the binary
+ * provably is not the one this baseline was synced against. Otherwise ADVISORY-WARNS: against an
+ * `official-manifest` hash (staging-identity unverified — Desktop may repack what it stages), or on ANY
+ * mismatch under an intentional substitution (`COWORK_AGENT_BINARY` override / newest-sibling fallback),
+ * where the user deliberately chose a different binary and a hard stop would be hostile. No-op when opted
+ * out, the baseline has no `sha256`, or the file is unreadable. ELF-only: `resolveHostAgentBinary` does NOT
+ * verify — the signed native Mach-O has no trustworthy baseline hash (see the schema note on `nativeSha256`).
+ */
+function verifiedElf(path: string, baseline: PlatformBaseline, opts: { intentionalSubstitution?: boolean } = {}): string {
+  const p = resolve(path);
+  if (process.env.COWORK_HARNESS_VERIFY_AGENT_SHA === "0") return p;
+  const expected = baseline.agentBinary?.sha256;
+  if (!expected || !existsSync(p)) return p;
+  const actual = sha256File(p);
+  if (actual === expected) return p;
+  const prov = baseline.agentBinary?.shaProvenance;
+  const head = `cowork-harness: agent ELF sha256 mismatch\n  path     ${p}\n  expected ${expected} (${prov ?? "unknown provenance"})\n  actual   ${actual}`;
+  if (prov === "measured-local" && !opts.intentionalSubstitution) {
+    throw new Error(
+      `${head}\n  measured-local baseline hash — hard fail: this is not the binary the baseline was synced against.\n  (Set COWORK_HARNESS_VERIFY_AGENT_SHA=0 to bypass.)`,
+    );
+  }
+  const why = opts.intentionalSubstitution
+    ? "you selected this binary explicitly (override/fallback) — advisory only."
+    : "official-manifest hash — staging-identity unverified; advisory only (Desktop may repack the staged binary).";
+  process.stderr.write(`${head}\n  ${why}\n`);
+  return p;
+}
 
 export const BASELINES_DIR = join(fileURLToPath(new URL("..", import.meta.url)), "baselines");
 
@@ -23,10 +66,10 @@ export function resolveAgentBinary(baseline: PlatformBaseline): string {
   const override = process.env.COWORK_AGENT_BINARY;
   if (override) {
     if (!existsSync(override)) throw new Error(`COWORK_AGENT_BINARY not found: ${override}`);
-    return resolve(override);
+    return verifiedElf(override, baseline, { intentionalSubstitution: true });
   }
   const staged = (baseline.agentBinary?.stagedPath ?? "").replace(/^~(?=$|\/)/, homedir());
-  if (staged && existsSync(staged)) return resolve(staged);
+  if (staged && existsSync(staged)) return verifiedElf(staged, baseline);
   // The baseline's exact version dir is gone (e.g. Claude Desktop updated).
   // By default this is a hard failure — a different agent version can silently change behavior.
   // Set COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1 to opt in to using the newest sibling binary.
@@ -34,7 +77,7 @@ export function resolveAgentBinary(baseline: PlatformBaseline): string {
   const fallback = staged ? newestStagedBinary(staged) : undefined;
   if (fallback && process.env.COWORK_HARNESS_ALLOW_AGENT_FALLBACK === "1") {
     process.stderr.write(`cowork-harness: staged agent binary "${staged}" not found; ` + `falling back to newest sibling "${fallback}".\n`);
-    return fallback;
+    return verifiedElf(fallback, baseline, { intentionalSubstitution: true });
   }
   if (fallback) {
     // A fallback exists but the opt-in env is not set — fail explicitly rather than silently using a

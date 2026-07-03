@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "../cli-args.js";
-import { resolveAgentBinary, resolveHostAgentBinary, loadBaseline } from "../baseline.js";
+import { resolveAgentBinary, resolveHostAgentBinary, loadBaseline, sha256File } from "../baseline.js";
 import { limaPath } from "../runtime/lima.js";
 import { pkgVersion, fail, isJsonOutput } from "./envelope.js";
 
@@ -170,11 +170,25 @@ export function runDoctorChecks(tier: Tier, probe: DoctorProbe = realProbe): Doc
   // Lima microVM guest), so this check is shared by both live paths.
   const agentCheck = (): DoctorCheck => {
     const agent = probe.agentBinary();
+    // Surface the ELF's sha256 provenance so setup is self-explaining (a hard mismatch already fails the
+    // resolve above and lands in agent.error). Best-effort re-hash — doctor is a read-only truth check.
+    let shaNote = "";
+    if (agent.ok) {
+      try {
+        const ab = loadBaseline("latest").agentBinary;
+        if (ab?.sha256) {
+          const match = sha256File(agent.path) === ab.sha256;
+          shaNote = `  [sha256 ${match ? "✓" : "✗"} vs baseline, ${ab.shaProvenance ?? "unknown"}]`;
+        }
+      } catch {
+        /* provenance is a hint; never let it fail the check */
+      }
+    }
     return {
       id: "agent",
       title: "Staged agent binary",
       status: agent.ok ? "ok" : "fail",
-      detail: agent.ok ? agent.path : agent.error.split("\n")[0],
+      detail: agent.ok ? agent.path + shaNote : agent.error.split("\n")[0],
       remedy: agent.ok
         ? undefined
         : "open Claude Cowork once to stage the agent, or set COWORK_AGENT_BINARY=<path> (put it in your .env so --dotenv covers it, like the token)",
