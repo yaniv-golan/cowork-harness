@@ -6,6 +6,17 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **`verify-cassettes`'s privacy scanner gained a `path` class** for local absolute filesystem paths
+  (`/Users/`, `/home/`, `/root/`) — closing a real gap where a committed cassette's capability-manifest
+  (`system/init`, the `initialize` registry) could leak the recording machine's username, plugin-cache
+  paths, and installed-plugin/marketplace names with nothing to catch it (the existing `email`/`currency`/
+  `domain` classes don't match a path shape at all, and `currency`/`domain` are additionally excluded on
+  manifest lines by design). `path` runs on manifest lines too — unlike the noisy classes it isn't
+  excluded there, since a real local path is never legitimate catalog boilerplate. New `--allow-path
+  <regex>` flag, scoped like `--allow-domain`/`--allow-email`.
+
 ### Fixed
 
 - **`hostloop` fidelity now spawns the agent loop as a native host process, matching production, closing a VM-absolute-path false-green.** Previously, `hostloop` ran the entire agent — including its native file tools — inside one Docker container, with connected folders copied in rather than bind-mounted. A skill that hardcoded a VM-absolute path (`/sessions/<id>/mnt/...`) in a `Read`/`Edit`/`Write` call would silently succeed under that design while genuinely failing in real Cowork, where the agent loop is a native macOS process and no such path exists on the host filesystem. `hostloop` now spawns the agent directly on the host (discovered via a second staged Desktop binary, `claude-code/<ver>/claude.app/Contents/MacOS/claude`); only `bash`/`web_fetch` still route into a Docker VM sidecar (which no longer runs an agent at all). Connected folders are bind-mounted — never copied — into both views, with a run-end snapshot preserving the existing artifact-collection pipeline unchanged.
