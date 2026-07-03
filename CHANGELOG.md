@@ -56,12 +56,20 @@ All notable changes to this project are documented here. The format is based on
   agent binary isn't staged), rendered as a distinct `cell error: …` line rather than a fake assertion
   failure. The `skill_dirs` axis substitutes the session's single `plugins.local_plugins` entry; candidates
   must share that entry's directory basename (the mount name derives from it, with no author-chosen
-  override anywhere in the harness) — a mismatch is a loud, explicit usage error. `--matrix` cannot combine
-  with `--repeat`, nor can `--concurrency > 1` combine with `--decider-dir`/`--decider-cmd` (the external
-  decider channel is one shared object across every cell, and every channel implementation is strictly
-  serial over shared mutable state — not safe for concurrent gate answers; `--concurrency 1`, the default,
-  is genuinely serial and fine). The JSON envelope gains an additive `matrix: {cells[]}` field; `ok`/the
-  exit code are `!matrix.anyFail` for this mode.
+  override anywhere in the harness) — a mismatch is a loud, explicit usage error. `--concurrency > 1`
+  cannot combine with `--decider-dir`/`--decider-cmd` (the external decider channel is one shared object
+  across every cell, and every channel implementation is strictly serial over shared mutable state — not
+  safe for concurrent gate answers; `--concurrency 1`, the default, is genuinely serial and fine). The
+  JSON envelope gains an additive `matrix: {cells[]}` field; `ok`/the exit code are `!matrix.anyFail` for
+  this mode.
+- **`--matrix` composes with `--repeat`.** Each cell now runs as its own repeat batch (N iterations of that
+  cell's axes-overridden scenario) through the same `runRepeatBatch` helper standalone `--repeat` uses —
+  same unanswered-gate, error, and budget-cap handling — with `MatrixCellRepeatResult`/`MatrixRepeatRollup`
+  carrying each cell's full `RepeatRollup` (pass rate, per-assertion attribution, signal histogram,
+  stoppedEarly) rather than a single pass/fail. The matrix verdict judges each cell's rollup against
+  `--min-pass-rate`; the JSON envelope gains an additive `matrixRepeat: {cells[]}` field, checked before
+  `matrix`/`rollups` when present. Also closes the previously-ungated `--repeat` + `--decider-cmd`
+  combination (rejected for the same live-decider reasoning as `--decider-dir`).
 - **Packaged GitHub Action** (`uses: yaniv-golan/cowork-harness@v1`, [`action.yml`](./action.yml)) wrapping
   `replay`/`lint`/`verify-cassettes`/`run` with a PR job-summary reporter (verdict table, staleness
   findings, the skipped-live-only-assertions honesty line, cost/turns when available). Token-free lane runs
@@ -101,8 +109,9 @@ All notable changes to this project are documented here. The format is based on
   (default 1.0 — no flakiness tolerance); `--stop-on-diverge` stops the loop as soon as both a pass and a
   fail are observed (that batch always fails — divergence IS the failure being measured for);
   `--max-budget-usd` stops the loop once cumulative cost would exceed it (an incomplete-but-clean stop is a
-  warning, not a failure by itself). `--repeat` rejects `--decider-dir` (an interactive driving agent × N
-  runs is not a measurement). The JSON envelope gains an optional `rollups[]` array; `ok`/the exit code are
+  warning, not a failure by itself). `--repeat` rejects `--decider-dir`/`--decider-cmd` (an interactive
+  driving agent × N runs is not a measurement). The JSON envelope gains an optional `rollups[]` array;
+  `ok`/the exit code are
   redefined for this mode from the rollups, not from `results.every(pass)` — `results[]` still holds every
   raw run.
 - **E9: a hand-authored draft-07 JSON Schema for the harness's own control-channel wire protocol**

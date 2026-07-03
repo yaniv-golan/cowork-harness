@@ -178,7 +178,8 @@ cowork-harness lint examples/scenarios/*.yaml
 > assert the *frozen recording's* spend on replay, not fresh spend; a real budget regression is caught by a
 > live `run` — plus `question_asked`/
 > `questions_count_max`/`gate_answers_delivered` when the cassette carries `controlOut`, and
-> **filesystem assertions** (`file_exists`, `user_visible_artifact`, `artifact_json`) when it carries an
+> **filesystem assertions** (`file_exists`, `user_visible_artifact`, `artifact_json`,
+> `computer_links_resolve`) when it carries an
 > `artifacts` manifest. Genuinely live-only keys (`egress_*`, `expect_denied`, `no_delete_in_outputs`,
 > `self_heal_ran`, `transcript_no_host_path`) are always skipped — keep those in a periodic live `run`.
 > The authoritative list is `contentKeys` in `src/run/cassette.ts`; full per-key reference table in

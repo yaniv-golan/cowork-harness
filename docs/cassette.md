@@ -219,6 +219,12 @@ the rules and CI-placement rationale (why each category behaves this way), see
 | `subagent_dispatched` | a sub-agent matching the regex was dispatched |
 | `subagent_declared_but_unused` | sub-agent declared the tool but never used **that** tool (even if it used others) |
 | `dispatch_count_max` | at most N sub-agents dispatched |
+| `skill_triggered` | the top-level `Skill` tool_use matching the regex was invoked |
+| `no_skill_triggered` | no top-level `Skill` tool_use matching the regex was invoked |
+| `max_cost_usd` | total run cost stayed at or under the USD ceiling — on replay this asserts the *frozen recording's* spend, not fresh spend |
+| `max_tokens` | total token usage stayed at or under the ceiling — same replay caveat as `max_cost_usd` |
+| `tool_calls_max` | at most N tool calls total (re-derived from `toolCounts` on replay) |
+| `max_turns` | at most N conversation turns (re-derived on replay) |
 | `question_asked` | agent asked an AskUserQuestion matching the regex |
 | `questions_count_max` | at most N questions asked |
 | `gate_answers_delivered` | answered gates' answers reached the model |
@@ -232,18 +238,21 @@ the rules and CI-placement rationale (why each category behaves this way), see
 replay). On an old cassette without `controlOut` these three keys are excluded from evaluation — not
 vacuously passed — and a loud warning fires (see §Backward compatibility).
 
-`file_exists`, `user_visible_artifact`, and `artifact_json` are **not** in the table above — see the
-next subsection; they're replay-checkable only when the cassette carries an artifacts manifest.
+`file_exists`, `user_visible_artifact`, `artifact_json`, and `computer_links_resolve` are **not** in the
+table above — see the next subsection; they're replay-checkable only when the cassette carries an
+artifacts manifest.
 
 ### Filesystem assertions — replay-checkable WITH an artifact manifest
 
-`file_exists`, `user_visible_artifact`, and `artifact_json` run on replay **when the cassette carries an
-`artifacts` manifest** — `record` snapshots `outputs/` + connected folders and `replay` materializes that snapshot
-to evaluate them token-free. `artifact_json` needs the JSON `body` inlined (small files); a hash-only
-(`truncated`) entry still satisfies `file_exists` but not `artifact_json`. The inline cap is 64 KiB; raise it
-with `record --max-artifact-bytes <n>` (or `COWORK_HARNESS_MAX_ARTIFACT_BYTES`) so a large structured deliverable
-stays replay-checkable, and `record` fails fast if an `artifact_json` targets an artifact it had to truncate (that
-would pass at record but fail at replay). Without a manifest (older
+`file_exists`, `user_visible_artifact`, `artifact_json`, and `computer_links_resolve` run on replay **when
+the cassette carries an `artifacts` manifest** — `record` snapshots `outputs/` + connected folders and
+`replay` materializes that snapshot to evaluate them token-free. `artifact_json` needs the JSON `body`
+inlined (small files); a hash-only (`truncated`) entry still satisfies `file_exists` but not `artifact_json`.
+The inline cap is 64 KiB; raise it with `record --max-artifact-bytes <n>` (or
+`COWORK_HARNESS_MAX_ARTIFACT_BYTES`) so a large structured deliverable stays replay-checkable, and `record`
+fails fast if an `artifact_json` targets an artifact it had to truncate (that would pass at record but fail
+at replay). `computer_links_resolve` resolves every `computer://` link in the transcript against the same
+manifest, with host-shaped links normalized via the recorded session folders. Without a manifest (older
 cassettes), these are skipped. A green replay re-confirms *record-time* artifacts, **not** that the current
 skill still produces them — `replay --strict` fails the run when the `fingerprint` shows ANY skill/baseline
 drift, or `replay --fail-on-skill-drift` fails only on skill-source drift (leaving baseline drift a warning).
@@ -263,8 +272,9 @@ not present-and-passing. A CI script must not assume a fixed assertion count acr
 A single assertion object may mix a content key with a still-skipped egress/filesystem key, e.g.
 `{ result: "success", egress_denied: "evil.com" }`. On replay the object is **stripped to its
 replay-checkable keys** before evaluation — only `result` is checked; `egress_denied` is dropped. (With an
-artifact manifest, `file_exists`/`user_visible_artifact`/`artifact_json` are no longer dropped — they're
-checkable; only the genuinely live-only keys above are.) To keep "skipped ≠ false-green," replay fires a
+artifact manifest, `file_exists`/`user_visible_artifact`/`artifact_json`/`computer_links_resolve` are no
+longer dropped — they're checkable; only the genuinely live-only keys above are.) To keep "skipped ≠
+false-green," replay fires a
 second loud warning whenever a key is dropped this way:
 
 ```
