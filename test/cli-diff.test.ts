@@ -151,4 +151,27 @@ describe.skipIf(!can)("cli: diff (cassette/run mode, E2)", () => {
     const r = run(["diff", CASSETTE, CASSETTE, "--view", "bogus"]);
     expect(r.code).toBe(2);
   });
+
+  // The plan's open question ("diff over two runs of DIFFERENT scenarios — allow + warn or reject?")
+  // resolved as recommended: allow + warn. The meta view does NOT surface scenario identity (it compares
+  // result/effectiveFidelity/baseline/assertionsPassed only), so without the warning a cross-scenario
+  // comparison is silently indistinguishable from same-scenario drift.
+  it("warns on stderr when the two sides come from DIFFERENT scenarios — allowed, but flagged", () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "cowork-diff-cli-"));
+    const cassette = JSON.parse(readFileSync(CASSETTE, "utf8"));
+    cassette.scenario.name = "a-different-scenario";
+    const renamed = join(tmpDir, "renamed-scenario.cassette.json");
+    writeFileSync(renamed, JSON.stringify(cassette));
+    const r = run(["diff", CASSETTE, renamed]);
+    // the scenario NAME is identity metadata, not diffed content — the comparison itself stays identical
+    expect(r.code).toBe(0);
+    expect(r.stderr).toContain("different scenarios");
+    expect(r.stderr).toContain("a-different-scenario");
+  });
+
+  it("does NOT warn on a same-scenario diff (the self-diff stays clean)", () => {
+    const r = run(["diff", CASSETTE, CASSETTE]);
+    expect(r.code).toBe(0);
+    expect(r.stderr).not.toContain("different scenarios");
+  });
 });

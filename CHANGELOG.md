@@ -38,7 +38,9 @@ All notable changes to this project are documented here. The format is based on
   still detects correctly). Run/cassette mode has four views (`tools`/`transcript`/`artifacts`/`meta`, or
   `all`) with normalization masking per-run noise (tool-use ids, UUIDs, session-dir markers, timestamps,
   host paths) so two runs of the *same* scenario diff as identical despite that noise; `--no-normalize`
-  compares raw values for forensics. Token-free — no live Desktop install or Docker needed either way.
+  compares raw values for forensics. Comparing runs of two *different* scenarios is allowed (useful for
+  skill-variant comparison) but warns on stderr — added/removed rows may then reflect scenario
+  differences, not drift. Token-free — no live Desktop install or Docker needed either way.
 - **`run --repeat N` variance rollup.** Runs each resolved scenario N times (2-100) and aggregates a
   rollup (pass rate, per-assertion pass/fail attribution, a verdict-signal histogram, cost/token totals,
   non-deterministic-run count) instead of a single pass/fail. `--min-pass-rate` sets the batch threshold

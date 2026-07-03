@@ -74,7 +74,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:live": "vitest run --config vitest.config.live.ts",
-    "test:golden:update": "vitest run -u test/golden.test.ts",
+    "test:golden:update": "vitest run -u test/golden.test.ts test/golden-render.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
     "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.ts\"",
     "smoke:cli": "node dist/cli.js list",

@@ -45,6 +45,8 @@ already happened.
    identical despite that noise. Reach for it when "it worked yesterday" needs a concrete answer instead of
    a guess — `cowork-harness diff <old-run> <new-run>`. `--no-normalize` compares raw values for forensics;
    `--view tools|transcript|artifacts|meta` narrows to one section. Token-free (no live re-record needed).
+   Comparing runs of two *different* scenarios is allowed (useful for skill-variant comparison) but warns
+   on stderr — added/removed rows may then reflect scenario differences, not drift.
    The same command also compares two committed platform baselines (`diff desktop-<a> desktop-<b>
    [--changelog]`) — see [maintenance.md](./maintenance.md).
 

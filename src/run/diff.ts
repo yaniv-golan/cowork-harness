@@ -21,8 +21,12 @@ const MASKS: { re: RegExp; token: string }[] = [
 /** Replaces every volatile-but-not-meaningful span (tool-use ids, UUIDs, session-dir markers,
  *  ISO-8601 timestamps, host paths) with a stable placeholder token, so two runs of the SAME scenario
  *  diff as identical despite this per-run noise. Deliberately does NOT touch the redaction vocabulary's
- *  sensitive-value classes (email/currency/domain) — this is about comparison stability, not privacy;
- *  reuses only the host-path regex from src/scan.ts (the plan's explicit instruction), not its machinery. */
+ *  sensitive-value classes (email/currency/domain) — this is about comparison stability, not privacy.
+ *  Host-path source — a DELIBERATE deviation from the plan, which cited src/redact.ts + io.ts's tildeify:
+ *  redact.ts turned out to be a user-policy-driven redactor (`.cowork-redact.json`/env; EMPTY_POLICY by
+ *  default) with NO built-in host-path regex to reuse, and tildeify is a HOME→`~` display formatter, not a
+ *  masker. The one built-in host-path vocabulary in the codebase is src/scan.ts's DEFAULT_SCAN_PATTERNS
+ *  "path" class — so that regex (only the regex, not the scanner machinery) is reused instead. */
 export function maskVolatileText(text: string): string {
   let out = text;
   for (const { re, token } of MASKS) {

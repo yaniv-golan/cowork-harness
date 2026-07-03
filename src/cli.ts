@@ -368,7 +368,7 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
   diff:
     "usage: diff <a> <b> [--changelog] [--view tools|transcript|artifacts|meta|all] [--no-normalize] [--output-format text|json]\n" +
     "       kind is auto-detected by CONTENT (not filename): two baselines (loadBaseline: `latest`, a bare name under baselines/, or an absolute path) | two runs (run-id/run-dir/events.jsonl) | two cassettes (*.cassette.json) | one run + one cassette (cross-comparable).\n" +
-    "       baselines only pair with baselines; mixing a baseline with a run/cassette is a usage error.\n" +
+    "       baselines only pair with baselines; mixing a baseline with a run/cassette is a usage error. Comparing runs of two DIFFERENT scenarios is allowed (skill-variant comparison) but warns on stderr.\n" +
     "       --changelog: BASELINE MODE ONLY — render known-field prose (agent/Desktop version bumps, egress allowlist changes, gate flips) instead of the raw path-diff; unmapped paths still render, generically, never silently dropped.\n" +
     "       --view: RUN/CASSETTE MODE ONLY — restrict text output to one view (default: all). Normalization masks tool-use ids, UUIDs, session-dir markers, timestamps, and host paths so two runs of the SAME scenario diff as identical despite per-run noise; --no-normalize compares raw values (forensics).\n" +
     "       transcript is advisory (model-stochastic prose differs across live re-records no matter what) — tools/artifacts/meta are the gateable signal.\n" +
@@ -2895,6 +2895,10 @@ interface DiffSide {
   transcript: string;
   artifacts?: Array<[string, string]>; // undefined = no manifest available for this side
   meta: Partial<DiffMetaSummary>;
+  // Identity metadata, NOT diffed content: used only for the cross-scenario warning (the plan's
+  // "allow + warn" resolution — comparing two different scenarios is legitimate for skill-variant
+  // comparison, but must be flagged, since the meta view doesn't surface scenario identity).
+  scenarioName?: string;
 }
 
 /** Top-level (non-sub-agent, non-synthetic) tool_use events, canonicalized — the same shape both a run
@@ -2913,9 +2917,11 @@ function loadRunSide(arg: string, normalize: boolean): DiffSide {
   const transcript = readTranscriptSidecar(join(runDir, "run.jsonl")) ?? "";
   let meta: Partial<DiffMetaSummary> = {};
   let artifacts: Array<[string, string]> | undefined;
+  let scenarioName: string | undefined;
   const resultPath = join(runDir, "result.json");
   if (existsSync(resultPath)) {
     const result = JSON.parse(readFileSync(resultPath, "utf8")) as RunResult;
+    scenarioName = result.scenario;
     meta = {
       result: result.result,
       effectiveFidelity: result.effectiveFidelity,
@@ -2936,7 +2942,7 @@ function loadRunSide(arg: string, normalize: boolean): DiffSide {
       });
     }
   }
-  return { tools, transcript, artifacts, meta };
+  return { tools, transcript, artifacts, meta, scenarioName };
 }
 
 function loadCassetteSide(file: string, normalize: boolean): DiffSide {
@@ -2964,7 +2970,7 @@ function loadCassetteSide(file: string, normalize: boolean): DiffSide {
     // when BOTH sides omit it, so this degrades cleanly rather than comparing undefined to a run's real value.
   };
   const artifacts: Array<[string, string]> | undefined = cassette.artifacts?.map((m) => [m.path, m.sha256]);
-  return { tools, transcript, artifacts, meta };
+  return { tools, transcript, artifacts, meta, scenarioName: cassette.scenario?.name };
 }
 
 function loadDiffSide(kind: DiffKind, arg: string, normalize: boolean): DiffSide {
@@ -3092,6 +3098,14 @@ function cmdDiff(args: string[]) {
   } catch (e) {
     return void fail("diff", "usage", String((e as Error).message), undefined, json);
   }
+  // Allow + warn on a cross-scenario comparison (the plan's recommended resolution of its own open
+  // question): comparing runs of two DIFFERENT scenarios is legitimate (skill-variant comparison), but
+  // the meta view doesn't surface scenario identity, so an unflagged mismatch would read as drift.
+  // stderr only — stdout stays machine-clean in both output formats.
+  if (a.scenarioName !== undefined && b.scenarioName !== undefined && a.scenarioName !== b.scenarioName)
+    log(
+      `::warning:: comparing runs of two different scenarios ("${a.scenarioName}" vs "${b.scenarioName}") — allowed, but added/removed rows may reflect scenario differences, not drift`,
+    );
   const result = compareDiffSides(a, b, normalize);
   if (json) {
     out(
