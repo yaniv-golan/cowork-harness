@@ -142,7 +142,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
       [--output-format json]
   verify-cassettes <file|dir>  CI gate (no token): privacy scan + staleness — exit 1 on finding or drift
       [--skip-privacy|--skip-staleness]  skip one check
-      [--allow <regex>]... [--allow-domain/-email/-path <regex>]... [--allow-file <path>]... [--output-format json]
+      [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-path <regex>]... [--allow-file <path>]... [--output-format json]
   rehash <dir/>                migrate cassette fingerprints to current version when content is provably unchanged (requires contentSig from v3+)
   prune [--keep-last <n>]      prune accumulated run dirs, keeping N most recent per scenario (default: 5)
 

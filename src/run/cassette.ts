@@ -2413,6 +2413,51 @@ function buildFolderPrefixMap(cassette: Cassette, cassetteDir?: string): Map<str
   return map;
 }
 
+/** Assertion keys ALWAYS evaluated on replay, independent of controlOut/manifest presence. Exported as the
+ *  single source of truth for anything (docs, tests) that needs to enumerate replay-evaluated keys — see
+ *  `test/cassette-docs-sync.test.ts`, which asserts docs/cassette.md documents every key here. */
+export const ALWAYS_CONTENT_KEYS: (keyof Assertion)[] = [
+  "transcript_contains",
+  "transcript_not_contains",
+  "transcript_matches",
+  "transcript_not_matches",
+  "tool_result_contains",
+  "tool_result_not_contains",
+  "tool_called",
+  "tool_not_called",
+  "subagent_tool_used",
+  "subagent_tool_absent",
+  "subagent_dispatched",
+  "subagent_declared_but_unused",
+  "dispatch_count_max",
+  "skill_triggered",
+  "no_skill_triggered",
+  "max_cost_usd",
+  "max_tokens",
+  "tool_calls_max",
+  "max_turns",
+  "result",
+  // Verdict modifiers — NOT filesystem/egress assertions. Keep all of them on replay (each evaluates to a
+  // no-op pass via assert.ts) so a standalone modifier neither inflates the "filesystem/egress skipped"
+  // count nor emits a misleading warning, AND so the replay path actually exercises their assert.ts noop
+  // branches. The signal each one suppresses is independently zeroed on replay (handled in computeVerdict,
+  // not here), so keeping the key as a content no-op cannot change a verdict outcome. Single source: the
+  // VERDICT_MODIFIER_KEYS list (types.ts) — a newly-added modifier lands here automatically.
+  ...VERDICT_MODIFIER_KEYS,
+];
+
+/** Assertion keys evaluated on replay only when `controlOut` (full-fidelity) is present. */
+export const QUESTION_GATE_KEYS: (keyof Assertion)[] = ["question_asked", "questions_count_max", "gate_answers_delivered"];
+
+/** Assertion keys evaluated on replay only when the cassette carries an `artifacts` manifest.
+ *  `computer_links_resolve` joins this bucket (NOT ALWAYS_CONTENT_KEYS): resolving a NON-empty link set
+ *  needs either a live filesystem (not available on replay) or the cassette's `artifacts` manifest — the
+ *  exact same evidence gate `file_exists`/`user_visible_artifact` already use. A zero-link transcript
+ *  technically wouldn't need the manifest, but gating it identically avoids a live/replay asymmetry where
+ *  "zero links" quietly passes on a manifest-less cassette while any actual link forces the same
+ *  "not checkable, skipped" treatment as the other manifest keys. */
+export const MANIFEST_KEYS: (keyof Assertion)[] = ["file_exists", "user_visible_artifact", "artifact_json", "computer_links_resolve"];
+
 /** Replay a cassette through Run and re-evaluate the content assertions. With a `cassette.artifacts`
  *  manifest, filesystem assertions (file_exists/user_visible_artifact/artifact_json) ALSO run, against
  *  the materialized snapshot. `opts.strict` escalates ALL staleness findings to failing assertions;
@@ -2489,47 +2534,12 @@ export async function replayCassette(
 
   // build a conditional contentKeys — omit question/gate keys when controlOut is absent
   // (they would evaluate vacuously/incorrectly).
-  const alwaysContentKeys: (keyof Assertion)[] = [
-    "transcript_contains",
-    "transcript_not_contains",
-    "transcript_matches",
-    "transcript_not_matches",
-    "tool_result_contains",
-    "tool_result_not_contains",
-    "tool_called",
-    "tool_not_called",
-    "subagent_tool_used",
-    "subagent_tool_absent",
-    "subagent_dispatched",
-    "subagent_declared_but_unused",
-    "dispatch_count_max",
-    "skill_triggered",
-    "no_skill_triggered",
-    "max_cost_usd",
-    "max_tokens",
-    "tool_calls_max",
-    "max_turns",
-    "result",
-    // Verdict modifiers — NOT filesystem/egress assertions. Keep all of them on replay (each evaluates to a
-    // no-op pass via assert.ts) so a standalone modifier neither inflates the "filesystem/egress skipped"
-    // count nor emits a misleading warning, AND so the replay path actually exercises their assert.ts noop
-    // branches. The signal each one suppresses is independently zeroed on replay (handled in computeVerdict,
-    // not here), so keeping the key as a content no-op cannot change a verdict outcome. Single source: the
-    // VERDICT_MODIFIER_KEYS list (types.ts) — a newly-added modifier lands here automatically.
-    ...VERDICT_MODIFIER_KEYS,
-  ];
-  const questionGateKeys: (keyof Assertion)[] = ["question_asked", "questions_count_max", "gate_answers_delivered"];
+  const alwaysContentKeys = ALWAYS_CONTENT_KEYS;
+  const questionGateKeys = QUESTION_GATE_KEYS;
   // with an artifact manifest, the filesystem assertions become replay-checkable (materialized below).
-  // Without a manifest they stay live-only (stripped → skip warning), exactly as before.
-  // `computer_links_resolve` joins this bucket (NOT alwaysContentKeys): resolving a NON-empty link set
-  // needs either a live filesystem (not available on replay) or the cassette's `artifacts` manifest —
-  // the exact same evidence gate `file_exists`/`user_visible_artifact` already use. A zero-link
-  // transcript technically wouldn't need the manifest, but gating it identically avoids a
-  // live/replay asymmetry where "zero links" quietly passes on a manifest-less cassette while any
-  // actual link forces the same "not checkable, skipped" treatment as the other manifest keys.
-  const manifestKeys: (keyof Assertion)[] = cassette.artifacts?.length
-    ? ["file_exists", "user_visible_artifact", "artifact_json", "computer_links_resolve"]
-    : [];
+  // Without a manifest they stay live-only (stripped → skip warning), exactly as before. See
+  // MANIFEST_KEYS' doc comment above for why computer_links_resolve joins this bucket.
+  const manifestKeys: (keyof Assertion)[] = cassette.artifacts?.length ? MANIFEST_KEYS : [];
   // deterministic exhaustiveness check — every key in the Assertion schema must appear in exactly
   // one classification bucket. If a new key is added to the schema but not here, this throws at the first
   // replay, making the oversight impossible to miss in CI.
