@@ -1668,6 +1668,7 @@ async function recordScenarioObject(
   // Thread the live-decider opts. All undefined for a plain `record` → identical to the
   // previous opt-less call (executeScenario defaults onUnanswered to scenario.on_unanswered ?? "fail").
   const result = await executeScenario(scenario, {
+    command: "record",
     onUnanswered: opts.onUnanswered,
     externalChannel: opts.externalChannel,
     llmIntent: opts.llmIntent,

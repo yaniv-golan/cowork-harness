@@ -8,6 +8,17 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **`stats` command + cross-run result index.** Every `run`/`skill` invocation (and `record`'s live
+  execution) now appends one JSON line to `<runsRoot>/index.jsonl` at the same moment it writes
+  `result.json` — a durable, queryable history independent of whether the run dir itself survives a later
+  `prune`. `cowork-harness stats [<scenario>]` reads it back: run count, pass rate, cost/duration/token/turn
+  p50/p95, and the last-green timestamp, filterable by `--since`/`--baseline`/`--branch` and windowable by
+  `--last <n>` (per-scenario, not globally). `--reindex` rebuilds the index from the physical run-dir tree
+  — the migration path for runs that predate the index. `trace`/`inspect`/`scaffold`/`status`'s existing
+  run-id/fragment resolution now checks the index FIRST (faster, and the source of truth going forward),
+  falling through to the pre-index filesystem walk automatically and unchanged for any run that predates
+  the index or was never indexed — same commands, same output, same ambiguity-handling behavior either
+  way. See [docs/stats.md](./docs/stats.md).
 - **`run --matrix` matrix runner.** Runs one scenario across the cross-product of baseline/model/skill_dir
   axes declared in a `matrix.yaml` file (any axis optional; an absent axis contributes one unmodified
   cell) and reports one row per cell instead of a single pass/fail. `--max-cells` caps the cross-product

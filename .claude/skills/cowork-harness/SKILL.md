@@ -54,8 +54,8 @@ Before the first command, confirm the CLI is reachable and **fail loud** (never 
   debugging map).
 
 Full command set: `skill · run · chat · record · replay · verify-cassettes · rehash · prune · lint ·
-verify-run · trace · inspect · diff · decide · gates · answer · scaffold · assertions --list · sync · list ·
-boundary-check · vm <init|status|delete|prune> · doctor`. Always check `cowork-harness <cmd> --help`.
+verify-run · trace · inspect · diff · stats · decide · gates · answer · scaffold · assertions --list · sync ·
+list · boundary-check · vm <init|status|delete|prune> · doctor`. Always check `cowork-harness <cmd> --help`.
 
 ## 2. Two files: session vs scenario
 

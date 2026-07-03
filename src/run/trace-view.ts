@@ -5,6 +5,7 @@ import { homedir } from "node:os";
 import { parseMessage, type AgentEvent, type DecisionRequest } from "../agent/session.js";
 import { labelSource } from "./gate-provenance.js";
 import type { RunResult } from "../types.js";
+import { readIndex, resolveRunsFromIndex } from "./run-index.js";
 
 /**
  * The default runs root when no override is set: a per-user state dir OUTSIDE any working tree, so run
@@ -104,6 +105,31 @@ function rowFor(ev: AgentEvent): TraceRow[] {
   }
 }
 
+/** E4: the index-first path — `resolveEventsFile`'s single choke point (trace/inspect/scaffold/status all
+ *  resolve a run-id/fragment through it), so making IT index-aware migrates all four for free, with full
+ *  behavioral safety: an index MISS (a pre-index-era run, or index.jsonl never built via `--reindex`) falls
+ *  straight through to the existing filesystem walk below, unchanged. Mirrors the walk's own
+ *  exact-then-fragment-with-ambiguity-warning semantics, using the index row's `ts` (the run's actual
+ *  creation time) for the most-recent tie-break instead of a directory's `mtime` (a strictly better signal
+ *  — mtime can be touched by unrelated filesystem operations, `ts` cannot). Returns `undefined` on an
+ *  index miss OR when the index found a row but its `events.jsonl` no longer exists on disk (an index
+ *  entry surviving a `prune` of the physical run dir) — either way, falls through to the walk. */
+function resolveEventsFileViaIndex(arg: string): string | undefined {
+  const root = runsRoot();
+  const rows = resolveRunsFromIndex(readIndex(root), arg);
+  if (rows.length === 0) return undefined;
+  const sorted = rows.length > 1 ? [...rows].sort((a, b) => (a.ts < b.ts ? 1 : -1)) : rows;
+  if (sorted.length > 1) {
+    warn(
+      `::warning:: ambiguous trace fragment "${arg}" matches ${sorted.length} indexed run(s):\n` +
+        sorted.map((r) => `  ${join(r.outDir, "events.jsonl")}`).join("\n") +
+        `\nUsing the most recent: ${join(sorted[0].outDir, "events.jsonl")}\nPass a more specific id or full path to be deterministic.\n`,
+    );
+  }
+  const f = join(sorted[0].outDir, "events.jsonl");
+  return existsSync(f) ? f : undefined;
+}
+
 /** Resolve `arg` to an events.jsonl: a direct file, a run dir, or a run-id/scenario fragment under runs/. */
 export function resolveEventsFile(arg: string): string {
   if (existsSync(arg) && statSync(arg).isFile()) return arg;
@@ -111,6 +137,8 @@ export function resolveEventsFile(arg: string): string {
     const f = join(arg, "events.jsonl");
     if (existsSync(f)) return f;
   }
+  const viaIndex = resolveEventsFileViaIndex(arg);
+  if (viaIndex) return viaIndex;
   const root = runsRoot(); // COWORK_HARNESS_RUNS_DIR, else the absolute ~/.cowork-harness/runs — not cwd-relative
   if (existsSync(root)) {
     // prefer EXACT match first; only fall through to fragment matching if nothing exact was found.

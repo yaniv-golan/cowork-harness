@@ -85,6 +85,11 @@ A green run is not automatically a correct run.
   on its own. Repeat the same scenario N times and read the variance rollup (pass rate, per-assertion
   attribution, the signal histogram) instead of trusting a single green — `--min-pass-rate` sets the batch
   threshold, `--stop-on-diverge` stops as soon as flakiness is proven (that batch always fails).
+- **`stats`** — "is this scenario flaky/expensive *over time*, across many separate `run`s (not just one
+  `--repeat` batch)?" Every `run`/`skill`/`record` invocation is indexed automatically; `stats [<scenario>]`
+  aggregates pass rate, cost/duration percentiles, and last-green timestamp across all of them —
+  `--since`/`--branch` narrow to "since I started this fix" or "on this branch vs. main." See
+  [stats.md](./stats.md).
 
 ---
 

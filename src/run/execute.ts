@@ -46,6 +46,7 @@ import { Run, type RunRecord, type RunHooks } from "./run.js";
 import { runsWriteRoot } from "./trace-view.js";
 import { summarizeGateProvenance } from "./gate-provenance.js";
 import { collectSecrets, scrub } from "../secrets.js";
+import { indexRowFromResult, appendIndexRow } from "./run-index.js";
 
 const RUN_RESULT_SCHEMA_URL = "https://raw.githubusercontent.com/yaniv-golan/cowork-harness/main/schema/run-result.json";
 
@@ -71,6 +72,10 @@ export interface ExecuteOptions {
   /** mark the run non-deterministic even if no `by:"llm"` decision (e.g. a driving agent answers via `--decider-dir`). */
   nonDeterministicHint?: boolean;
   hooks?: RunHooks[];
+  /** E4: tags the run-index row this execution writes. Default "run" — the `run`/`skill` CLI commands pass
+   *  their own command name through; `record`'s live execution (cassette.ts) passes "record" explicitly so
+   *  a recording session isn't misread as a `run` invocation in `stats`. */
+  command?: "run" | "skill" | "record";
 }
 
 /**
@@ -625,6 +630,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // typed optional on RunResult/PartialResult for OTHER (non-execute.ts) producers, not this call site.
     runCrashSafety.finalize(record, "error", partialResult.durationMs!);
     writeFileSync(join(outDir, "result.json"), scrub(JSON.stringify(partialResult, null, 2), secrets));
+    appendIndexRow(runsWriteRoot(), indexRowFromResult(partialResult, { command: opts.command ?? "run", partial: true }));
     writeRunJsonl(outDir, scenario, effectiveFidelity, record, egress, secrets);
     writeTrace(outDir, record, egress, secrets, partialResult.durationMs);
     scrubFileInPlace(join(outDir, "events.jsonl"), secrets);
@@ -820,6 +826,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
 
   // Artifacts: the harness-observability log `run.jsonl` REPLACES transcript.json/decisions.jsonl.
   writeFileSync(join(outDir, "result.json"), scrub(JSON.stringify(result, null, 2), secrets));
+  appendIndexRow(runsWriteRoot(), indexRowFromResult(result, { command: opts.command ?? "run", partial: false }));
   writeRunJsonl(outDir, scenario, effectiveFidelity, record, egress, secrets);
   writeTrace(outDir, record, egress, secrets, result.durationMs);
   scrubFileInPlace(join(outDir, "events.jsonl"), secrets);

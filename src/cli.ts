@@ -42,7 +42,9 @@ import {
   formatDispatchTree,
   noteRunsLocation,
   eventsFromLines,
+  runsRoot,
 } from "./run/trace-view.js";
+import { readIndex, reindexFromRunsTree, buildStats, resolveRunsFromIndex, type RunIndexRow, type StatsSummary } from "./run/run-index.js";
 import {
   canonicalizeInput,
   diffToolSequence,
@@ -150,6 +152,9 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
       [--follow]               stream one line per status change until done/error; arm a Monitor here
       [--output-format json]   structured status (--follow always emits raw JSON lines, format flag N/A there)
       exit codes: 0 healthy · 1 resolved dir has no/malformed status.json, or the run errored · 2 unresolvable <run-id | run-dir> · 3 stale
+  stats [<scenario>]           queryable summary over indexed runs: count, pass rate, cost/duration/token/turn p50/p95
+      [--since <date>] [--baseline <b>] [--branch <b>] [--metric pass-rate|cost|tokens|duration|turns] [--last <n>] [--reindex]
+      (run 'stats --help' for the full flag reference)
 
 ── In-band gate plumbing (for --decider-dir) ─────────────────────────────────
   gates <dir> [--follow]       stream pending gates as JSON lines + terminal {"done":true}; arm a Monitor here
@@ -380,6 +385,12 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
     "usage: scaffold <run-id | run-dir> [--out <file.yaml>] [--output-format text|json]\n       Turns a kept run into a starter scenario YAML (gates→answers, artifacts→file_exists).\n       Positional <run-id | run-dir> is the canonical form.",
   status:
     'usage: status <run-id | run-dir> [--follow] [--output-format text|json]   (check whether a background run is alive, without ps aux — see docs/run-status.md)\n       --follow: stream one line per status change until the run reaches a terminal state (done/error); arm a Monitor here\n       exit codes: 0 healthy (running/done) · 1 the dir resolved but has no status.json yet (or a malformed one), or the run itself ended in state:"error" · 2 usage error, including an unresolvable <run-id | run-dir> (matches trace/inspect/scaffold) · 3 stale (probably dead — no exit handler can catch SIGKILL)',
+  stats:
+    "usage: stats [<scenario>] [--since <ISO date>] [--baseline <b>] [--branch <b>] [--metric pass-rate|cost|tokens|duration|turns] [--last <n>] [--reindex] [--output-format text|json]\n" +
+    "       queryable summary over <runsRoot>/index.jsonl (E4) — per-scenario run count, pass rate, cost/duration/token/turn p50/p95, last-green timestamp.\n" +
+    "       --reindex rebuilds the index from the physical run-dir tree first (one-time migration for pre-index runs, or if index.jsonl is lost/corrupted beyond its own per-line tolerance).\n" +
+    "       --last <n>: the N most recent runs PER SCENARIO (not globally — a global cut would starve a low-frequency scenario out of the window).\n" +
+    "       `run`/`skill` invocations are indexed automatically at every result.json write (live + partial); `record`'s live execution is indexed too, tagged command:\"record\"; replay results are never indexed (they're re-checks, not new evidence).",
   decide:
     'usage: decide [--question <q>] [--option <o>]... [--decider-cmd <cmd> | --decider-llm [--intent <s>] [--decider-model <id>]] [--answer "<q>=<label>"]... [--answer-policy <p>] [--output-format json]',
   gates:
@@ -421,6 +432,7 @@ const COMMANDS = [
   "assertions",
   "scaffold",
   "status",
+  "stats",
   "decide",
   "gates",
   "answer",
@@ -631,6 +643,8 @@ async function main() {
       return cmdScaffold(rest);
     case "status":
       return cmdStatus(rest);
+    case "stats":
+      return cmdStats(rest);
     case "decide":
       return cmdDecide(rest);
     case "gates":
@@ -940,6 +954,7 @@ async function runOneScenario(p: {
   try {
     result = await executeScenario(scenario, {
       ...extra,
+      command,
       onUnanswered: policy,
       externalChannel,
       hooks: renderer ? [renderer] : [],
@@ -2053,6 +2068,100 @@ function cmdList(args: string[] = []) {
   } else {
     for (const f of files) out(f);
   }
+}
+
+/** E4: one text-mode line per scenario. `--metric` narrows to a single focused view; omitted shows
+ *  everything the row has (a metric with no telemetry in the group is simply absent, not "0"). */
+function formatStatsLine(s: StatsSummary, metric?: string): string {
+  const base = `${s.scenario}: ${s.runs} run(s), ${(s.passRate * 100).toFixed(0)}% pass`;
+  const fmtCost = (v?: number) => (v !== undefined ? `$${v.toFixed(4)}` : "n/a");
+  const fmtMs = (v?: number) => (v !== undefined ? `${(v / 1000).toFixed(1)}s` : "n/a");
+  if (metric === "pass-rate") return base;
+  if (metric === "cost") return `${base} — cost p50=${fmtCost(s.p50CostUsd)} p95=${fmtCost(s.p95CostUsd)}`;
+  if (metric === "duration") return `${base} — duration p50=${fmtMs(s.p50DurationMs)} p95=${fmtMs(s.p95DurationMs)}`;
+  if (metric === "tokens") return `${base} — tokens p50=${s.p50Tokens ?? "n/a"} p95=${s.p95Tokens ?? "n/a"}`;
+  if (metric === "turns") return `${base} — turns p50=${s.p50Turns ?? "n/a"} p95=${s.p95Turns ?? "n/a"}`;
+  const parts = [
+    s.p50CostUsd !== undefined ? `cost p50=${fmtCost(s.p50CostUsd)} p95=${fmtCost(s.p95CostUsd)}` : null,
+    s.p50DurationMs !== undefined ? `duration p50=${fmtMs(s.p50DurationMs)} p95=${fmtMs(s.p95DurationMs)}` : null,
+    s.lastGreenTs ? `last green ${s.lastGreenTs}` : "never green",
+    s.prunedRuns > 0 ? `${s.prunedRuns} pruned` : null,
+  ].filter(Boolean);
+  return `${base}${parts.length ? " — " + parts.join(", ") : ""}`;
+}
+
+/** `stats [<scenario>]` — a queryable summary over the run index (E4): per-scenario run count, pass rate,
+ *  cost/duration/token/turn percentiles, last-green timestamp. Reads `<runsRoot>/index.jsonl`; `--reindex`
+ *  rebuilds it from the physical run-dir tree first (the one-time local migration path for runs that
+ *  predate the index, or if index.jsonl was ever lost/corrupted beyond its own per-line tolerance). */
+function cmdStats(args: string[]) {
+  if (hasHelp(args)) return void log(SUBCOMMAND_USAGE.stats);
+  ensureOutputFormat("stats", args);
+  const json = isJsonOutput(args);
+  rejectUnknownFlags(
+    "stats",
+    args,
+    [
+      "--since",
+      "--baseline",
+      "--branch",
+      "--metric",
+      "--last",
+      "--reindex",
+      "--output-format",
+      "--output-format=json",
+      "--output-format=text",
+    ],
+    json,
+  );
+  const reindex = args.includes("--reindex");
+  const sinceIdx = args.indexOf("--since");
+  const since = sinceIdx >= 0 ? flagValue("stats", args, sinceIdx, "--since", json) : undefined;
+  const baselineIdx = args.indexOf("--baseline");
+  const baseline = baselineIdx >= 0 ? flagValue("stats", args, baselineIdx, "--baseline", json) : undefined;
+  const branchIdx = args.indexOf("--branch");
+  const branch = branchIdx >= 0 ? flagValue("stats", args, branchIdx, "--branch", json) : undefined;
+  const metricIdx = args.indexOf("--metric");
+  const metric = metricIdx >= 0 ? flagValue("stats", args, metricIdx, "--metric", json) : undefined;
+  if (metric !== undefined && !["pass-rate", "cost", "tokens", "duration", "turns"].includes(metric))
+    return void fail("stats", "usage", `--metric must be one of pass-rate|cost|tokens|duration|turns (got "${metric}")`, undefined, json);
+  const lastIdx = args.indexOf("--last");
+  const lastRaw = lastIdx >= 0 ? flagValue("stats", args, lastIdx, "--last", json) : undefined;
+  let last: number | undefined;
+  if (lastRaw !== undefined) {
+    const n = Number(lastRaw);
+    if (!Number.isInteger(n) || n < 1) return void fail("stats", "usage", `--last requires a positive integer (got "${lastRaw}")`, undefined, json);
+    last = n;
+  }
+  const allPositionals = positionals(args, ["--output-format", "--since", "--baseline", "--branch", "--metric", "--last"]);
+  if (allPositionals.length > 1) return void fail("stats", "usage", SUBCOMMAND_USAGE.stats, undefined, json);
+  const scenario = allPositionals[0];
+
+  const root = runsRoot();
+  if (reindex) {
+    const { written, skipped } = reindexFromRunsTree(root);
+    log(`stats: reindexed ${written} run(s) from ${root}${skipped ? ` (${skipped} skipped — missing/corrupt result.json)` : ""}`);
+  }
+  let rows = readIndex(root);
+  if (last !== undefined) {
+    // Windowed PER SCENARIO (each scenario's own N most recent), not globally — a global cut would starve
+    // a low-frequency scenario out of the window entirely once a high-frequency one dominates recent rows.
+    const byScenario = new Map<string, RunIndexRow[]>();
+    for (const r of rows) {
+      if (!byScenario.has(r.scenario)) byScenario.set(r.scenario, []);
+      byScenario.get(r.scenario)!.push(r);
+    }
+    rows = [...byScenario.values()].flatMap((group) =>
+      group
+        .slice()
+        .sort((a, b) => (a.ts < b.ts ? 1 : -1))
+        .slice(0, last),
+    );
+  }
+  const stats = buildStats(rows, { scenario, since, baseline, branch });
+  if (json) return void out(JSON.stringify({ tool: "cowork-harness", command: "stats", ok: true, stats }));
+  if (stats.length === 0) return void log("stats: no indexed runs match the given filters.");
+  for (const s of stats) log(formatStatsLine(s, metric));
 }
 
 /** `decide` — validate a decider (helper OR policy) against a sample question in ~2s, so you don't
