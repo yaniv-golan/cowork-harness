@@ -706,6 +706,10 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     toolResultsTruncated: record.toolResults.map((r) => r.assertText === undefined),
     skillsInvoked: record.skillsInvoked,
     skillToolAvailable: record.initTools.includes("Skill"),
+    effectiveFidelity,
+    // Live lane (this run's own machine) — host-shaped computer:// links (hostloop) are checked
+    // DIRECTLY on the filesystem; verify-run shares this same "live" mode (see cli.ts's cmdVerifyRun).
+    linkResolution: { mode: "live" },
     ...budgetFields(record),
   });
 

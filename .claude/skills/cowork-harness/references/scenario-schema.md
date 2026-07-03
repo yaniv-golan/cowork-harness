@@ -238,6 +238,7 @@ passes only if every key passes. Keep one concern per item unless you mean conju
 | `egress_denied: <host>` | the host was blocked by the egress proxy |
 | `egress_allowed: <host>` | the host was allowed through |
 | `artifact_json: {artifact, path, …}` | assert a JSON artifact's contents — `equals`/`gt`/`in`/`exists`/`absent`/`is_null` over a dotted `path` (`in` = membership in a list, for a stochastic/LLM value; `absent` ≠ `is_null`; an unresolved intermediate fails loud) |
+| `computer_links_resolve: true` | every `computer://` link in the model-visible transcript resolves to an artifact that exists in the run's collected outputs/mounts — a dangling link fails, naming which target was checked (a live host path, the collected work tree, or the replay manifest). Zero links in the transcript **passes** (presence-gated separately — pair with `transcript_contains` if you also need a link to show up). **Only `true` is valid** (`false` is rejected by the schema) |
 
 `expect_denied: [host, …]` adds one `egress_denied` per host. Run `cowork-harness assertions --list` for this
 table from the live schema. Example: `artifact_json: { artifact: outputs/cap.json, path: me.run_id, equals: "r1" }`.
@@ -286,13 +287,16 @@ modifiers `allow_permissive_auto_allow` / `allow_missing_capability` / `allow_l0
 **loud warning** fires and they are **excluded** (not vacuously passed). Re-record to enable them.
 
 **Filesystem — replay-checkable WITH an artifact manifest:** `file_exists`, `user_visible_artifact`,
-`artifact_json` run on replay when the cassette carries an `artifacts` snapshot (`record` captures
-`outputs/` + connected folders; `replay` materializes it). `artifact_json` needs the small-file JSON `body`
-inlined; a hash-only entry still satisfies `file_exists`. Without a manifest (older cassettes) they're
-skipped. A green replay re-confirms *record-time* artifacts, not that the current skill still produces them
-— `replay --strict` fails when the staleness `fingerprint` shows ANY skill/baseline drift, or
-`replay --fail-on-skill-drift` only on skill-source drift; every replay result also reports it class-tagged
-in `staleness[]` for a JSON gate.
+`artifact_json`, `computer_links_resolve` run on replay when the cassette carries an `artifacts` snapshot
+(`record` captures `outputs/` + connected folders; `replay` materializes it). `artifact_json` needs the
+small-file JSON `body` inlined; a hash-only entry still satisfies `file_exists`. `computer_links_resolve`
+resolves a `/sessions/…/mnt/…`-shaped link directly against the manifest, and a host-shaped (hostloop) link
+by first normalizing it to a mount-relative path (recorded connected-folder prefixes + the outputs/uploads
+mounts) — replay has no live filesystem to check a host path against directly (that only happens on a live
+`run`/`verify-run`). Without a manifest (older cassettes) all four are skipped. A green replay re-confirms
+*record-time* artifacts, not that the current skill still produces them — `replay --strict` fails when the
+staleness `fingerprint` shows ANY skill/baseline drift, or `replay --fail-on-skill-drift` only on
+skill-source drift; every replay result also reports it class-tagged in `staleness[]` for a JSON gate.
 
 **Egress + other filesystem — still skipped on replay (live-only):** `no_delete_in_outputs`,
 `self_heal_ran`, `transcript_no_host_path`, `egress_*` / `expect_denied`. These run only on a live `run`/`record`.

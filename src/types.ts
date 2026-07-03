@@ -201,7 +201,7 @@ export const Assertion = z.object({
   skill_triggered: z
     .string()
     .optional()
-    .describe("a skill matching this regex (by its invoked skill id, e.g. \"plugin:skill\") was invoked via the Skill tool"),
+    .describe('a skill matching this regex (by its invoked skill id, e.g. "plugin:skill") was invoked via the Skill tool'),
   no_skill_triggered: z
     .string()
     .optional()
@@ -210,7 +210,9 @@ export const Assertion = z.object({
     .number()
     .positive()
     .optional()
-    .describe("the run's SDK-reported total_cost_usd is ≤ N — live lane only; on replay this asserts the frozen recording's cost, not fresh spend"),
+    .describe(
+      "the run's SDK-reported total_cost_usd is ≤ N — live lane only; on replay this asserts the frozen recording's cost, not fresh spend",
+    ),
   max_tokens: z
     .number()
     .int()
@@ -230,9 +232,7 @@ export const Assertion = z.object({
     .int()
     .nonnegative()
     .optional()
-    .describe(
-      "the SDK-reported (or fallback-counted) turn count ≤ N — replay-checkable (the re-drive recounts turns deterministically)",
-    ),
+    .describe("the SDK-reported (or fallback-counted) turn count ≤ N — replay-checkable (the re-drive recounts turns deterministically)"),
   egress_denied: z.string().optional().describe("egress to this host was denied"),
   egress_allowed: z.string().optional().describe("egress to this host was allowed"),
   // Only `true` is accepted: `false` is rejected as a footgun. The assertion is presence-semantic — authoring
@@ -250,6 +250,12 @@ export const Assertion = z.object({
     .optional()
     .describe(
       "fails if a host path (/Users, /opt) leaked into model-visible text (post-run scan); only `true` is valid (writing `false` is a rejected footgun — omit to allow or use allow_stall)",
+    ),
+  computer_links_resolve: z
+    .literal(true)
+    .optional()
+    .describe(
+      "fails if any computer:// link in the model-visible transcript does not resolve to an artifact that exists in the run's collected outputs/mounts (zero links in the transcript passes — combine with transcript_contains to also require presence); only `true` is valid (writing `false` is a rejected footgun — omit to skip the check)",
     ),
   question_asked: z.string().optional().describe("a question matching this regex was asked"),
   questions_count_max: z.number().int().nonnegative().optional().describe("at most N questions were asked"),

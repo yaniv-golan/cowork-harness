@@ -288,6 +288,7 @@ if *every* key passes (don't rely on the first; keep one concern per item unless
 | `egress_denied: <host>` | the host was blocked by the egress proxy |
 | `egress_allowed: <host>` | the host was allowed through |
 | `artifact_json: {…}` | assert over a JSON artifact's contents — see below |
+| `computer_links_resolve: true` | every `computer://` link in the model-visible transcript resolves to an artifact that exists in the run's collected outputs/mounts (a dangling link fails, naming which target was checked — host path, work tree, or replay manifest); zero links in the transcript **passes** (this gates resolution, not presence — combine with `transcript_contains` to also require a link show up) — **only `true` is valid**, writing `false` is rejected by the schema |
 
 `expect_denied: [host, …]` is shorthand that adds an `egress_denied` assertion per host.
 
@@ -386,11 +387,15 @@ assertions, but they require the cassette to carry `controlOut` (full-fidelity r
 When `controlOut` is absent (old cassette), a **loud warning** fires and these keys are **excluded**
 from evaluation (not vacuously passed). Re-record with a current harness to enable them.
 
-**Filesystem assertions** (`file_exists`, `user_visible_artifact`, `artifact_json`) run on `replay` **when
-the cassette carries an artifact manifest** — `record` snapshots `outputs/` + connected folders (paths + hashes +
-small JSON bodies) into the cassette, and `replay` materializes that snapshot to evaluate them token-free.
-`artifact_json` needs the JSON body inlined (small files); a hash-only (oversized) entry still satisfies
-`file_exists` but not `artifact_json`. Without a manifest (older cassettes), they are **skipped** (loud).
+**Filesystem assertions** (`file_exists`, `user_visible_artifact`, `artifact_json`, `computer_links_resolve`)
+run on `replay` **when the cassette carries an artifact manifest** — `record` snapshots `outputs/` + connected
+folders (paths + hashes + small JSON bodies) into the cassette, and `replay` materializes that snapshot to
+evaluate them token-free. `artifact_json` needs the JSON body inlined (small files); a hash-only (oversized)
+entry still satisfies `file_exists` but not `artifact_json`. `computer_links_resolve` resolves BOTH
+`/sessions/…/mnt/…`-shaped links and host-shaped (hostloop) links against the manifest — a host-shaped link
+normalizes to a mount-relative path first (via the recorded connected-folder prefixes + the outputs/uploads
+mounts), since replay has no live filesystem to probe directly (that direct check only happens on a live
+`run`/`verify-run`). Without a manifest (older cassettes), all four are **skipped** (loud).
 A green `replay` re-confirms *record-time* artifacts, **not** that the current skill still produces them —
 that needs a live `run` (the cassette's staleness fingerprint warns when the skill/baseline drifted; `replay
 --strict` fails on any drift, `--fail-on-skill-drift` on skill-source drift only, and every result reports it

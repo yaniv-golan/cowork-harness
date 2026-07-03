@@ -4,6 +4,7 @@ import type { Assertion, RunResult, UsageInfo, CostInfo } from "./types.js";
 import { VERDICT_MODIFIER_KEYS } from "./types.js";
 import { compileUserRegex } from "./regex.js";
 import { normalizeHost } from "./boundary-paths.js";
+import { extractComputerLinks, resolveComputerLink, type LinkResolutionContext } from "./run/computer-links.js";
 
 /** Derives the four AssertContext budget fields (costUsd/tokensTotal/toolCallsTotal/turns) uniformly from
  *  any RunResult/RunRecord-shaped source — live, replay, and verify-run all read the same shapes (Wave 0's
@@ -225,6 +226,16 @@ export interface AssertContext {
    *  SDK reported neither num_turns nor a countable fallback. Own undefined-ness is the
    *  evidence-unavailable signal for max_turns (Wave 2 / E6b) — 0 turns is a real, satisfying value. */
   turns?: number;
+  /** The fidelity tier actually used this run (`RunResult.effectiveFidelity`) — used only to make
+   *  `computer_links_resolve`'s failure message name the tier it checked against; no branching in
+   *  `check()` reads this directly (the mode split lives in `linkResolution.mode`). Undefined on an
+   *  old result/cassette that predates the field; the message just omits the tier then. */
+  effectiveFidelity?: string;
+  /** `computer_links_resolve` (P3) resolution context — see `src/run/computer-links.ts`. Undefined
+   *  means the calling lane hasn't wired this: any `computer://` link found then fails as
+   *  evidence-unavailable rather than silently passing (the evidence-missing convention this file
+   *  follows everywhere else — e.g. `transcriptMissing`, `scanMissing`). */
+  linkResolution?: LinkResolutionContext;
 }
 
 export function evaluate(assertions: Assertion[], ctx: AssertContext): RunResult["assertions"] {
@@ -425,7 +436,9 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
     if ("error" in c) results.push(fail(`skill_triggered: bad regex "${a.skill_triggered}": ${c.error}`));
     else if (!ctx.skillToolAvailable)
       results.push(
-        fail(`evidence unavailable: this agent's init tool list has no "Skill" tool — cannot evaluate skill_triggered (agent-version drift?)`),
+        fail(
+          `evidence unavailable: this agent's init tool list has no "Skill" tool — cannot evaluate skill_triggered (agent-version drift?)`,
+        ),
       );
     else
       results.push(
@@ -522,6 +535,31 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
           ? ok()
           : fail(`host path leaked into model-visible text: ${ctx.hostPathLeaked}`),
     );
+  if (a.computer_links_resolve !== undefined) {
+    if (ctx.transcriptMissing) {
+      results.push(fail(`evidence unavailable: transcript sidecar (run.jsonl) absent — cannot evaluate computer_links_resolve`));
+    } else {
+      const links = extractComputerLinks(ctx.transcript);
+      if (links.length === 0) {
+        // Presence-gated by design (see the schema description): zero links in the transcript passes —
+        // an author combines this with transcript_contains to also require a link be present.
+        results.push(ok());
+      } else if (!ctx.linkResolution) {
+        results.push(
+          fail(
+            `evidence unavailable: no link-resolution context wired for this lane — cannot evaluate computer_links_resolve (${links.length} link(s) found)`,
+          ),
+        );
+      } else {
+        const tierNote = ctx.effectiveFidelity ? ` (tier: ${ctx.effectiveFidelity})` : "";
+        const dangling = links
+          .map((link) => ({ link, outcome: resolveComputerLink(link, ctx.workRoot, ctx.linkResolution!) }))
+          .filter(({ outcome }) => !outcome.resolved)
+          .map(({ link, outcome }) => `computer://${link.raw} — checked ${outcome.checkedDescription}`);
+        results.push(dangling.length === 0 ? ok() : fail(`dangling computer:// link(s)${tierNote}: ${dangling.join("; ")}`));
+      }
+    }
+  }
   if (a.question_asked !== undefined) {
     if (ctx.questionsMissing) {
       results.push(fail(`evidence unavailable: questions sidecar (trace.json) absent — cannot evaluate question_asked`));

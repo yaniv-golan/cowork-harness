@@ -6,6 +6,7 @@
     "allow_permissive_auto_allow",
     "allow_stall",
     "artifact_json",
+    "computer_links_resolve",
     "dispatch_count_max",
     "egress_allowed",
     "egress_denied",
