@@ -8,7 +8,7 @@ export interface RepeatRollup {
   scenario: string;
   requested: number;
   completed: number;
-  stoppedEarly?: "budget" | "diverged";
+  stoppedEarly?: "budget" | "diverged" | "unanswered" | "error";
   passes: number;
   passRate: number;
   signalHistogram: Partial<Record<VerdictSignal["code"], number>>;
@@ -35,7 +35,7 @@ export function buildRepeatRollup(
   scenario: string,
   requested: number,
   results: RunResult[],
-  stoppedEarly?: "budget" | "diverged",
+  stoppedEarly?: "budget" | "diverged" | "unanswered" | "error",
 ): RepeatRollup {
   const verdicts = results.map((r) => computeVerdict(r, "live"));
   const passes = verdicts.filter((v) => v.pass).length;
@@ -93,13 +93,20 @@ export function buildRepeatRollup(
  * The batch verdict formula (§8 of the plan: `ok` is redefined directly per invocation mode, no
  * `batchVerdict` shadow field). Deliberately separate from `buildRepeatRollup` — the rollup is pure
  * OBSERVATION (what happened), this is the POLICY judgment (pass or fail against a threshold), the same
- * split `computeVerdict` draws between recorded facts and pass/fail. `stoppedEarly:"diverged"` always
- * fails regardless of the numeric rate — divergence (both a pass AND a fail observed) IS the failure
- * `--stop-on-diverge` exists to catch; `stoppedEarly:"budget"` is judged on its own completed-runs
- * passRate like any other batch (an incomplete-but-clean run isn't itself a failure — that's a
- * `::warning::` at the call site, not a verdict change).
+ * split `computeVerdict` draws between recorded facts and pass/fail.
+ *
+ * `stoppedEarly:"diverged"` always fails regardless of the numeric rate — divergence (both a pass AND a
+ * fail observed) IS the failure `--stop-on-diverge` exists to catch. `stoppedEarly:"unanswered"` also
+ * always fails — an unanswered gate mid-batch means the scenario itself isn't fully scripted for
+ * deterministic repetition, which is the real problem `--repeat` exists to surface, not noise to average
+ * away against whatever completed cleanly beforehand. `stoppedEarly:"error"` (an uncaught exception —
+ * a BoundaryError or any other error mid-batch) always fails for the same reason: a batch that couldn't
+ * finish because something broke is a real failure, not a clean-but-incomplete measurement.
+ * `stoppedEarly:"budget"` is the one early-stop reason judged on its own completed-runs passRate like any
+ * other batch (an incomplete-but-clean run isn't itself a failure — that's a `::warning::` at the call
+ * site, not a verdict change).
  */
 export function rollupPasses(rollup: RepeatRollup, minPassRate = 1.0): boolean {
-  if (rollup.stoppedEarly === "diverged") return false;
+  if (rollup.stoppedEarly === "diverged" || rollup.stoppedEarly === "unanswered" || rollup.stoppedEarly === "error") return false;
   return rollup.passRate >= minPassRate;
 }

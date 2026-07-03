@@ -1,5 +1,16 @@
 import { describe, it, expect } from "vitest";
-import { MatrixFile, expandMatrix, buildMatrixRollup, formatMatrixRollup, type MatrixCellResult } from "../src/run/matrix.js";
+import {
+  MatrixFile,
+  expandMatrix,
+  buildMatrixRollup,
+  formatMatrixRollup,
+  buildMatrixRepeatRollup,
+  formatMatrixRepeatRollup,
+  type MatrixCellResult,
+  type MatrixCellRepeatResult,
+} from "../src/run/matrix.js";
+import { buildRepeatRollup } from "../src/run/repeat.js";
+import type { RunResult } from "../src/types.js";
 
 describe("MatrixFile schema", () => {
   it("accepts a file with all three optional axes", () => {
@@ -79,7 +90,11 @@ describe("buildMatrixRollup", () => {
   });
 
   it("anyFail is true when any cell has an infra error (agent-binary-unavailable etc), distinct from an assertion failure", () => {
-    const rollup = buildMatrixRollup([cellResult({ pass: false, error: "agent binary unavailable for baseline desktop-1.17377.2" })], 1, false);
+    const rollup = buildMatrixRollup(
+      [cellResult({ pass: false, error: "agent binary unavailable for baseline desktop-1.17377.2" })],
+      1,
+      false,
+    );
     expect(rollup.anyFail).toBe(true);
     expect(rollup.cells[0].error).toContain("agent binary unavailable");
     expect(rollup.cells[0].failedAssertions).toEqual([]); // an infra error is not an assertion failure
@@ -96,7 +111,14 @@ describe("buildMatrixRollup", () => {
 describe("formatMatrixRollup — text rendering", () => {
   it("renders one line per cell with axes, pass/fail, and cost", () => {
     const rollup = buildMatrixRollup(
-      [cellResult({ axes: { baseline: "desktop-1.18286.0", model: "claude-opus-4-8" }, costUsd: 0.05, durationMs: 12000, effectiveFidelity: "container" })],
+      [
+        cellResult({
+          axes: { baseline: "desktop-1.18286.0", model: "claude-opus-4-8" },
+          costUsd: 0.05,
+          durationMs: 12000,
+          effectiveFidelity: "container",
+        }),
+      ],
       1,
       false,
     );
@@ -114,13 +136,124 @@ describe("formatMatrixRollup — text rendering", () => {
     expect(joined).toContain("agent binary unavailable");
   });
 
-  it("does NOT repeat the truncation warning — that's emitted once at expansion time in cli.ts (before " +
-    "any cell runs, so it fires in both --output-format modes), not duplicated here per-render", () => {
-    const rollup = buildMatrixRollup([cellResult({})], 9, true);
-    const joined = formatMatrixRollup(rollup).join("\n");
-    expect(joined).not.toMatch(/truncat/i);
-    // the underlying data the CLI-level warning is built from is still on the rollup itself
-    expect(rollup.truncated).toBe(true);
+  it(
+    "does NOT repeat the truncation warning — that's emitted once at expansion time in cli.ts (before " +
+      "any cell runs, so it fires in both --output-format modes), not duplicated here per-render",
+    () => {
+      const rollup = buildMatrixRollup([cellResult({})], 9, true);
+      const joined = formatMatrixRollup(rollup).join("\n");
+      expect(joined).not.toMatch(/truncat/i);
+      // the underlying data the CLI-level warning is built from is still on the rollup itself
+      expect(rollup.truncated).toBe(true);
+      expect(rollup.requested).toBe(9);
+    },
+  );
+});
+
+// --matrix + --repeat composition: each cell becomes its own repeat batch, not a single run.
+function rr(over: Partial<RunResult>): RunResult {
+  return {
+    scenario: "t",
+    fidelity: "container",
+    baseline: "x",
+    result: "success",
+    decisions: [],
+    egress: [],
+    assertions: [],
+    outDir: "/tmp/x",
+    ...over,
+  };
+}
+function cellRepeatResult(over: Partial<MatrixCellRepeatResult>): MatrixCellRepeatResult {
+  return { index: 0, axes: {}, ...over };
+}
+
+describe("buildMatrixRepeatRollup", () => {
+  it("anyFail is false when every cell's rollup passes at the given minPassRate", () => {
+    const rollup = buildMatrixRepeatRollup(
+      [
+        cellRepeatResult({ rollup: buildRepeatRollup("t", 2, [rr({}), rr({})]) }),
+        cellRepeatResult({ index: 1, rollup: buildRepeatRollup("t", 2, [rr({}), rr({})]) }),
+      ],
+      2,
+      false,
+      1.0,
+    );
+    expect(rollup.anyFail).toBe(false);
+  });
+
+  it("anyFail is true when any cell's rollup fails rollupPasses at the given minPassRate", () => {
+    const rollup = buildMatrixRepeatRollup(
+      [cellRepeatResult({ rollup: buildRepeatRollup("t", 2, [rr({}), rr({ result: "error" })]) })], // 1/2 = 0.5
+      1,
+      false,
+      1.0, // requires 100% — this cell's 50% fails it
+    );
+    expect(rollup.anyFail).toBe(true);
+  });
+
+  it("anyFail is true when any cell has a pre-execution infra error (no rollup at all — never got to run)", () => {
+    const rollup = buildMatrixRepeatRollup(
+      [cellRepeatResult({ error: "skill_dirs axis requires exactly one plugins.local_plugins entry" })],
+      1,
+      false,
+      1.0,
+    );
+    expect(rollup.anyFail).toBe(true);
+    expect(rollup.cells[0].rollup).toBeUndefined();
+  });
+
+  it("respects minPassRate per cell, same as standalone --repeat", () => {
+    const rollup = buildMatrixRepeatRollup(
+      [cellRepeatResult({ rollup: buildRepeatRollup("t", 4, [rr({}), rr({}), rr({}), rr({ result: "error" })]) })], // 3/4 = 0.75
+      1,
+      false,
+      0.75,
+    );
+    expect(rollup.anyFail).toBe(false); // meets the threshold exactly
+  });
+
+  it("carries requested/ranCells/truncated through, same as the plain matrix rollup", () => {
+    const rollup = buildMatrixRepeatRollup([cellRepeatResult({ rollup: buildRepeatRollup("t", 2, [rr({})]) })], 9, true, 1.0);
     expect(rollup.requested).toBe(9);
+    expect(rollup.ranCells).toBe(1);
+    expect(rollup.truncated).toBe(true);
+  });
+});
+
+describe("formatMatrixRepeatRollup — text rendering", () => {
+  it("renders each cell's own repeat rollup summary (pass rate, axes)", () => {
+    const rollup = buildMatrixRepeatRollup(
+      [
+        cellRepeatResult({
+          axes: { model: "claude-opus-4-8" },
+          rollup: buildRepeatRollup("t", 4, [rr({}), rr({}), rr({}), rr({ result: "error" })]),
+        }),
+      ],
+      1,
+      false,
+      0.5,
+    );
+    const joined = formatMatrixRepeatRollup(rollup, 0.5).join("\n");
+    expect(joined).toContain("claude-opus-4-8");
+    expect(joined).toContain("3/4"); // 3 passes out of 4 completed
+  });
+
+  it("renders a distinct 'cell error' line for a pre-execution infra failure, not a fake rollup", () => {
+    const rollup = buildMatrixRepeatRollup([cellRepeatResult({ error: "agent binary unavailable" })], 1, false, 1.0);
+    const joined = formatMatrixRepeatRollup(rollup, 1.0).join("\n");
+    expect(joined).toMatch(/cell error/i);
+    expect(joined).toContain("agent binary unavailable");
+  });
+
+  it("surfaces a stoppedEarly reason (e.g. an unanswered gate mid-batch) per cell", () => {
+    const rollup = buildMatrixRepeatRollup(
+      [cellRepeatResult({ rollup: buildRepeatRollup("t", 10, [rr({})], "unanswered") })],
+      1,
+      false,
+      1.0,
+    );
+    const joined = formatMatrixRepeatRollup(rollup, 1.0).join("\n");
+    expect(joined).toMatch(/unanswered/i);
   });
 });

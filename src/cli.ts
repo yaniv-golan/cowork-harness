@@ -6,7 +6,14 @@ import { parse as parseYaml } from "yaml";
 import { Scenario, AnswerRule, Assertion, type RunResult, type RunStatus, type PlatformBaseline } from "./types.js";
 import { loadBaseline, BASELINES_DIR, cmpVersionStrings, sha256File } from "./baseline.js";
 import { loadSession, resolveSessionPaths, applySessionOverrides } from "./session.js";
-import { executeScenario, parseScenarioFile, loadSessionFromFile, UnansweredError, BoundaryError, type ExecuteOptions } from "./run/execute.js";
+import {
+  executeScenario,
+  parseScenarioFile,
+  loadSessionFromFile,
+  UnansweredError,
+  BoundaryError,
+  type ExecuteOptions,
+} from "./run/execute.js";
 import {
   ScriptedDecider,
   ExternalDecider,
@@ -62,7 +69,19 @@ import { buildScaffold } from "./run/scaffold.js";
 import { buildInspectView } from "./run/inspect-view.js";
 import { pkgVersion, jsonEnvelope, jsonError, parseOutputFormat, fail, isJsonOutput, type ErrCategory } from "./run/envelope.js";
 import { buildRepeatRollup, rollupPasses, type RepeatRollup } from "./run/repeat.js";
-import { MatrixFile, expandMatrix, buildMatrixRollup, formatMatrixRollup, matrixCellResultFromRun, axesLabel, type MatrixCellResult } from "./run/matrix.js";
+import {
+  MatrixFile,
+  expandMatrix,
+  buildMatrixRollup,
+  formatMatrixRollup,
+  matrixCellResultFromRun,
+  axesLabel,
+  buildMatrixRepeatRollup,
+  formatMatrixRepeatRollup,
+  type MatrixCellResult,
+  type MatrixCellRepeatResult,
+  type MatrixCell,
+} from "./run/matrix.js";
 import { pMapBounded } from "./async-pool.js";
 import { computeVerdict } from "./run/verdict.js";
 import { evaluate, hostMatches, budgetFields, type AssertContext } from "./assert.js";
@@ -1030,7 +1049,9 @@ function formatRepeatRollup(r: RepeatRollup, minPassRate: number): string {
   if (signals.length) lines.push(`  signals: ${signals.map(([code, n]) => `${code}×${n}`).join(", ")}`);
   const failingAssertions = r.perAssertion.filter((a) => a.fails > 0);
   for (const a of failingAssertions) {
-    lines.push(`  assertion[${a.index}] (${a.key}): ${a.fails} fail / ${a.passes} pass${a.sampleFailure ? ` — e.g. "${a.sampleFailure}"` : ""}`);
+    lines.push(
+      `  assertion[${a.index}] (${a.key}): ${a.fails} fail / ${a.passes} pass${a.sampleFailure ? ` — e.g. "${a.sampleFailure}"` : ""}`,
+    );
   }
   if (r.totalCostUsd !== undefined || r.totalTokens !== undefined) {
     const parts = [
@@ -1040,8 +1061,90 @@ function formatRepeatRollup(r: RepeatRollup, minPassRate: number): string {
     lines.push(`  cost: ${parts.join(", ")}`);
   }
   if (r.nonDeterministicRuns > 0)
-    lines.push(`  ⚠ ${r.nonDeterministicRuns}/${r.completed} run(s) had a non-deterministic (llm/first/external) decision — flakiness attribution downstream of those is confounded`);
+    lines.push(
+      `  ⚠ ${r.nonDeterministicRuns}/${r.completed} run(s) had a non-deterministic (llm/first/external) decision — flakiness attribution downstream of those is confounded`,
+    );
   return lines.join("\n");
+}
+
+/**
+ * Runs a repeat batch (N iterations of the SAME scenario/session), catching an unanswered gate — or any
+ * other thrown error — PER ITERATION instead of letting it crash the whole batch. Found and fixed while
+ * composing `--matrix` + `--repeat`: the matrix runner's own per-cell catch already did this for a
+ * different failure class (an unavailable agent binary), and repeat batches had the exact same class of
+ * bug the matrix runner had before its own fix — `runOneScenario`'s default UnansweredError handling calls
+ * `fail()`/`process.exit()`, which on iteration 3 of a `--repeat 10` would silently discard the 2
+ * completed iterations' rollup data and exit the whole process instead of recording "the scenario isn't
+ * fully scripted for deterministic repetition" as the real, measurable failure it is. Shared by the
+ * standalone `--repeat` path (one call per scenario) and each matrix cell's own internal repeat loop when
+ * `--matrix`/`--repeat` compose (one call per cell) — the exact same early-stop/budget-cap/error-handling
+ * logic, not reimplemented twice.
+ */
+async function runRepeatBatch(opts: {
+  scenarioName: string;
+  repeatN: number;
+  stopOnDiverge: boolean;
+  maxBudgetUsd: number | undefined;
+  makeLabel: (n: number) => string;
+  runOnce: (label: string) => Promise<RunResult>;
+  onResult: (r: RunResult) => void; // called for every COMPLETED iteration (push into results[] etc.)
+}): Promise<{ iterationResults: RunResult[]; rollup: RepeatRollup }> {
+  const iterationResults: RunResult[] = [];
+  let cumulativeCostUsd = 0;
+  let costTelemetryMissing = false;
+  let costTelemetryMissingWarned = false;
+  let stoppedEarly: "budget" | "diverged" | "unanswered" | "error" | undefined;
+  let sawPass = false;
+  let sawFail = false;
+  for (let n = 0; n < opts.repeatN; n++) {
+    let r: RunResult;
+    try {
+      r = await opts.runOnce(opts.makeLabel(n));
+    } catch (e) {
+      if (e instanceof UnansweredError) {
+        stoppedEarly = "unanswered";
+        log(
+          `::warning:: "${opts.scenarioName}": repeat batch stopped — run ${n + 1} hit an unanswered question (${e.message}) — the scenario isn't fully scripted for deterministic repetition, which is the real failure here.`,
+        );
+      } else {
+        stoppedEarly = "error";
+        log(`::warning:: "${opts.scenarioName}": repeat batch stopped — run ${n + 1} threw: ${(e as Error).message}`);
+      }
+      break;
+    }
+    iterationResults.push(r);
+    opts.onResult(r);
+    if (computeVerdict(r, "live").pass) sawPass = true;
+    else sawFail = true;
+    if (opts.stopOnDiverge && sawPass && sawFail) {
+      stoppedEarly = "diverged";
+      break;
+    }
+    if (opts.maxBudgetUsd !== undefined) {
+      const b = budgetFields(r);
+      if (b.costUsd === undefined) costTelemetryMissing = true;
+      else cumulativeCostUsd += b.costUsd;
+      if (costTelemetryMissing) {
+        // degrade LOUDLY, never silently run all N as if the cap didn't exist (§4/E1 risk) — but
+        // only ONCE per batch, not once per remaining iteration (costTelemetryMissing never resets).
+        if (!costTelemetryMissingWarned) {
+          log(
+            `::warning:: --max-budget-usd unenforceable: run ${n + 1} reported no cost telemetry — continuing without a budget cap for "${opts.scenarioName}"`,
+          );
+          costTelemetryMissingWarned = true;
+        }
+      } else if (n + 1 < opts.repeatN && cumulativeCostUsd >= opts.maxBudgetUsd) {
+        stoppedEarly = "budget";
+        break;
+      }
+    }
+  }
+  if (stoppedEarly === "budget" && iterationResults.length < opts.repeatN)
+    log(
+      `::warning:: "${opts.scenarioName}": --max-budget-usd stopped the repeat batch early (${iterationResults.length}/${opts.repeatN} completed) — measurement incomplete, not a failure by itself`,
+    );
+  const rollup = buildRepeatRollup(opts.scenarioName, opts.repeatN, iterationResults, stoppedEarly);
+  return { iterationResults, rollup };
 }
 
 async function cmdRun(rawArgs: string[]) {
@@ -1076,13 +1179,25 @@ async function cmdRun(rawArgs: string[]) {
       const v = a === "--repeat" ? rawArgs[++i] : a.slice("--repeat=".length);
       const n = v === undefined ? NaN : Number(v);
       if (!Number.isInteger(n) || n < 2 || n > 100)
-        fail("run", "usage", `--repeat requires an integer between 2 and 100 (got ${v === undefined ? "nothing" : `"${v}"`})`, undefined, jsonOut);
+        fail(
+          "run",
+          "usage",
+          `--repeat requires an integer between 2 and 100 (got ${v === undefined ? "nothing" : `"${v}"`})`,
+          undefined,
+          jsonOut,
+        );
       repeatN = n;
     } else if (a === "--max-budget-usd" || a.startsWith("--max-budget-usd=")) {
       const v = a === "--max-budget-usd" ? rawArgs[++i] : a.slice("--max-budget-usd=".length);
       const n = v === undefined ? NaN : Number(v);
       if (!Number.isFinite(n) || n <= 0)
-        fail("run", "usage", `--max-budget-usd requires a positive number (got ${v === undefined ? "nothing" : `"${v}"`})`, undefined, jsonOut);
+        fail(
+          "run",
+          "usage",
+          `--max-budget-usd requires a positive number (got ${v === undefined ? "nothing" : `"${v}"`})`,
+          undefined,
+          jsonOut,
+        );
       maxBudgetUsd = n;
     } else if (a === "--stop-on-diverge") {
       stopOnDiverge = true;
@@ -1090,38 +1205,61 @@ async function cmdRun(rawArgs: string[]) {
       const v = a === "--min-pass-rate" ? rawArgs[++i] : a.slice("--min-pass-rate=".length);
       const n = v === undefined ? NaN : Number(v);
       if (!Number.isFinite(n) || n < 0 || n > 1)
-        fail("run", "usage", `--min-pass-rate requires a number between 0 and 1 (got ${v === undefined ? "nothing" : `"${v}"`})`, undefined, jsonOut);
+        fail(
+          "run",
+          "usage",
+          `--min-pass-rate requires a number between 0 and 1 (got ${v === undefined ? "nothing" : `"${v}"`})`,
+          undefined,
+          jsonOut,
+        );
       minPassRate = n;
     } else if (a === "--matrix" || a.startsWith("--matrix=")) {
       const v = a === "--matrix" ? rawArgs[++i] : a.slice("--matrix=".length);
-      if (v === undefined || v === "" || v.startsWith("-")) fail("run", "usage", "--matrix requires a value (a matrix.yaml path)", undefined, jsonOut);
+      if (v === undefined || v === "" || v.startsWith("-"))
+        fail("run", "usage", "--matrix requires a value (a matrix.yaml path)", undefined, jsonOut);
       matrixFile = v;
     } else if (a === "--max-cells" || a.startsWith("--max-cells=")) {
       const v = a === "--max-cells" ? rawArgs[++i] : a.slice("--max-cells=".length);
       const n = v === undefined ? NaN : Number(v);
-      if (!Number.isInteger(n) || n < 1) fail("run", "usage", `--max-cells requires a positive integer (got ${v === undefined ? "nothing" : `"${v}"`})`, undefined, jsonOut);
+      if (!Number.isInteger(n) || n < 1)
+        fail("run", "usage", `--max-cells requires a positive integer (got ${v === undefined ? "nothing" : `"${v}"`})`, undefined, jsonOut);
       maxCells = n;
     } else if (a === "--concurrency" || a.startsWith("--concurrency=")) {
       const v = a === "--concurrency" ? rawArgs[++i] : a.slice("--concurrency=".length);
       const n = v === undefined ? NaN : Number(v);
       if (!Number.isInteger(n) || n < 1 || n > MAX_MATRIX_CONCURRENCY)
-        fail("run", "usage", `--concurrency requires an integer 1..${MAX_MATRIX_CONCURRENCY} (got ${v === undefined ? "nothing" : `"${v}"`})`, undefined, jsonOut);
+        fail(
+          "run",
+          "usage",
+          `--concurrency requires an integer 1..${MAX_MATRIX_CONCURRENCY} (got ${v === undefined ? "nothing" : `"${v}"`})`,
+          undefined,
+          jsonOut,
+        );
       matrixConcurrency = n;
     } else preArgs.push(a);
   }
   if (maxBudgetUsd !== undefined && repeatN === undefined)
     fail("run", "usage", "--max-budget-usd requires --repeat", undefined, isJsonOutput(rawArgs));
   if (stopOnDiverge && repeatN === undefined) fail("run", "usage", "--stop-on-diverge requires --repeat", undefined, isJsonOutput(rawArgs));
-  if (minPassRate !== 1.0 && repeatN === undefined) fail("run", "usage", "--min-pass-rate requires --repeat", undefined, isJsonOutput(rawArgs));
-  if (matrixFile !== undefined && repeatN !== undefined)
-    fail("run", "usage", "--matrix cannot be combined with --repeat (compose later; the cell table already explodes)", undefined, isJsonOutput(rawArgs));
+  if (minPassRate !== 1.0 && repeatN === undefined)
+    fail("run", "usage", "--min-pass-rate requires --repeat", undefined, isJsonOutput(rawArgs));
   if (maxCells !== 16 && matrixFile === undefined) fail("run", "usage", "--max-cells requires --matrix", undefined, isJsonOutput(rawArgs));
-  if (matrixConcurrency !== 1 && matrixFile === undefined) fail("run", "usage", "--concurrency requires --matrix", undefined, isJsonOutput(rawArgs));
+  if (matrixConcurrency !== 1 && matrixFile === undefined)
+    fail("run", "usage", "--concurrency requires --matrix", undefined, isJsonOutput(rawArgs));
   const { rest: rawRest, flags } = takeCommonFlags(preArgs, "run");
-  // An interactive driving agent × N runs is not a measurement — --decider-dir answers gates IN-BAND from
-  // a live driver, which defeats the point of repeating the SAME scenario deterministically N times.
-  if (repeatN !== undefined && flags.deciderDir)
-    fail("run", "usage", "--repeat cannot be combined with --decider-dir (an interactive driving agent × N runs is not a measurement)", undefined, flags.output === "json");
+  // An interactive driving agent × N runs is not a measurement — --decider-dir/--decider-cmd both answer
+  // gates LIVE (this codebase's own "LIVE questions: --decider-llm / --decider-cmd / --decider-dir"
+  // grouping, RUN_HELP above), which defeats the point of repeating the SAME scenario deterministically N
+  // times — a spawned --decider-cmd helper COULD be internally deterministic, but the harness has no way
+  // to know that, and this fixed guard was previously asymmetric (deciderDir only) — a real gap, closed here.
+  if (repeatN !== undefined && (flags.deciderDir || flags.deciderCmd))
+    fail(
+      "run",
+      "usage",
+      "--repeat cannot be combined with --decider-dir/--decider-cmd (an interactive driving agent × N runs is not a measurement)",
+      undefined,
+      flags.output === "json",
+    );
   // A single external channel (--decider-dir/--decider-cmd) is ONE shared object, reused across every
   // matrix cell (cli.ts creates it once, before the cell loop) — and every channel implementation
   // (fileChannel/spawnChannel, src/decide/external-channel.ts) is documented as "strictly serial: write
@@ -1178,11 +1316,23 @@ async function cmdRun(rawArgs: string[]) {
   // cells, not "N files each run once or N times" — so it's handled as its own early branch and exits.
   if (matrixFile !== undefined) {
     if (files.length !== 1)
-      fail("run", "usage", `--matrix requires exactly one scenario file (got ${files.length}) — matrix a single <scenario.yaml>, not a dir`, undefined, o.json);
+      fail(
+        "run",
+        "usage",
+        `--matrix requires exactly one scenario file (got ${files.length}) — matrix a single <scenario.yaml>, not a dir`,
+        undefined,
+        o.json,
+      );
     if (!existsSync(matrixFile)) fail("run", "usage", `matrix file not found: ${matrixFile}`, undefined, o.json);
     const scenario = parseScenarioFile(files[0]);
     if (scenario.on_unanswered === "prompt")
-      fail("run", "usage", `scenario "${scenario.name}" sets on_unanswered: prompt — rejected on \`run\` (breaks determinism / hangs in CI).`, undefined, o.json);
+      fail(
+        "run",
+        "usage",
+        `scenario "${scenario.name}" sets on_unanswered: prompt — rejected on \`run\` (breaks determinism / hangs in CI).`,
+        undefined,
+        o.json,
+      );
     let matrixDoc: MatrixFile;
     try {
       matrixDoc = MatrixFile.parse(parseYaml(readFileSync(matrixFile, "utf8")));
@@ -1190,7 +1340,8 @@ async function cmdRun(rawArgs: string[]) {
       fail("run", "usage", `invalid matrix file: ${(e as Error).message}`, undefined, o.json);
     }
     const { cells, totalBeforeCap, truncated } = expandMatrix(matrixDoc!, maxCells);
-    if (truncated) log(`::warning:: matrix: ${totalBeforeCap} cells before capping — only the first ${maxCells} ran (raise with --max-cells)`);
+    if (truncated)
+      log(`::warning:: matrix: ${totalBeforeCap} cells before capping — only the first ${maxCells} ran (raise with --max-cells)`);
     let baseSession: ReturnType<typeof loadSessionFromFile>;
     try {
       baseSession = loadSessionFromFile(scenario.session);
@@ -1224,22 +1375,76 @@ async function cmdRun(rawArgs: string[]) {
         );
     }
     const results: RunResult[] = [];
+    // Every cell resolves its own overridden scenario/session first (shared by both branches below) —
+    // an error here (a bad skill_dirs substitution, an unresolvable overridden baseline) is a
+    // PRE-EXECUTION cell error either way, never a rollup.
+    const resolveCell = (
+      cell: MatrixCell,
+    ): { cellScenario: Scenario; session: ReturnType<typeof loadSessionFromFile> } | { error: string } => {
+      const cellScenario = cell.axes.baseline !== undefined ? { ...scenario, baseline: cell.axes.baseline } : scenario;
+      try {
+        const session = applySessionOverrides(baseSession, {
+          model: cell.axes.model,
+          skillDirSubstitution:
+            cell.axes.skillDir !== undefined
+              ? [baseSession.plugins.local_plugins[0], resolvedSkillDirs.get(cell.axes.skillDir)!]
+              : undefined,
+        });
+        return { cellScenario, session };
+      } catch (e) {
+        return { error: (e as Error).message };
+      }
+    };
+
+    if (repeatN !== undefined) {
+      // --matrix + --repeat composed: each cell is its OWN repeat batch (N iterations of that cell's
+      // axes-overridden scenario/session), not a single run — reuses the exact same runRepeatBatch helper
+      // (and therefore the exact same unanswered-gate/error/budget-cap robustness) as standalone --repeat.
+      let cellResults: MatrixCellRepeatResult[];
+      try {
+        cellResults = await pMapBounded(cells, matrixConcurrency, async (cell): Promise<MatrixCellRepeatResult> => {
+          const resolved = resolveCell(cell);
+          if ("error" in resolved) return { index: cell.index, axes: cell.axes, error: resolved.error };
+          const { cellScenario, session } = resolved;
+          const { rollup } = await runRepeatBatch({
+            scenarioName: `${scenario.name} [${axesLabel(cell.axes)}]`,
+            repeatN,
+            stopOnDiverge,
+            maxBudgetUsd,
+            makeLabel: (n) =>
+              `${scenario.name} [${axesLabel(cell.axes)}] (cell ${cell.index + 1}/${cells.length}, repeat ${n + 1}/${repeatN})`,
+            runOnce: (label) =>
+              runOneScenario({
+                command: "run",
+                scenario: cellScenario,
+                label,
+                flags,
+                policy,
+                externalChannel,
+                o,
+                extra: { session, llmModel: deciderModel },
+                rethrowUnanswered: true,
+              }),
+            onResult: (r) => results.push(r),
+          });
+          return { index: cell.index, axes: cell.axes, rollup };
+        });
+      } finally {
+        externalChannel?.close?.();
+      }
+      const matrixRepeat = buildMatrixRepeatRollup(cellResults, totalBeforeCap, truncated, minPassRate);
+      if (o.json) out(jsonEnvelope("run", results, { matrixRepeat }));
+      else for (const line of formatMatrixRepeatRollup(matrixRepeat, minPassRate)) log(line);
+      process.exit(matrixRepeat.anyFail ? 1 : 0);
+    }
+
     let cellResults: MatrixCellResult[];
     try {
       cellResults = await pMapBounded(cells, matrixConcurrency, async (cell): Promise<MatrixCellResult> => {
-        const cellScenario = cell.axes.baseline !== undefined ? { ...scenario, baseline: cell.axes.baseline } : scenario;
-        let session: ReturnType<typeof loadSessionFromFile>;
-        try {
-          session = applySessionOverrides(baseSession, {
-            model: cell.axes.model,
-            skillDirSubstitution:
-              cell.axes.skillDir !== undefined
-                ? [baseSession.plugins.local_plugins[0], resolvedSkillDirs.get(cell.axes.skillDir)!]
-                : undefined,
-          });
-        } catch (e) {
-          return { index: cell.index, axes: cell.axes, pass: false, failedAssertions: [], signals: [], error: (e as Error).message };
-        }
+        const resolved = resolveCell(cell);
+        if ("error" in resolved)
+          return { index: cell.index, axes: cell.axes, pass: false, failedAssertions: [], signals: [], error: resolved.error };
+        const { cellScenario, session } = resolved;
         const label = `${scenario.name} [${axesLabel(cell.axes)}] (cell ${cell.index + 1}/${cells.length})`;
         try {
           const result = await runOneScenario({
@@ -1308,53 +1513,27 @@ async function cmdRun(rawArgs: string[]) {
       // E1: --repeat N — run the SAME scenario N times, coexisting via local_<hrtime> run dirs
       // (execute.ts:177-180, no collision), aggregate into a RepeatRollup. results[] still gets every
       // raw RunResult (nothing hidden) — only the exit-code/`ok` formula changes for this mode (§8).
-      const iterationResults: RunResult[] = [];
-      let cumulativeCostUsd = 0;
-      let costTelemetryMissing = false;
-      let costTelemetryMissingWarned = false;
-      let stoppedEarly: "budget" | "diverged" | undefined;
-      let sawPass = false;
-      let sawFail = false;
-      for (let n = 0; n < repeatN; n++) {
-        const label = `${files.length > 1 ? `[${i + 1}/${files.length}] ` : ""}${scenario.name} (repeat ${n + 1}/${repeatN})`;
-        const r = await runOneScenario({
-          command: "run",
-          scenario,
-          label,
-          flags,
-          policy,
-          externalChannel,
-          o,
-          extra: deciderModel ? { llmModel: deciderModel } : undefined,
-        });
-        iterationResults.push(r);
-        results.push(r);
-        if (computeVerdict(r, "live").pass) sawPass = true;
-        else sawFail = true;
-        if (stopOnDiverge && sawPass && sawFail) {
-          stoppedEarly = "diverged";
-          break;
-        }
-        if (maxBudgetUsd !== undefined) {
-          const b = budgetFields(r);
-          if (b.costUsd === undefined) costTelemetryMissing = true;
-          else cumulativeCostUsd += b.costUsd;
-          if (costTelemetryMissing) {
-            // degrade LOUDLY, never silently run all N as if the cap didn't exist (§4/E1 risk) — but
-            // only ONCE per batch, not once per remaining iteration (costTelemetryMissing never resets).
-            if (!costTelemetryMissingWarned) {
-              log(`::warning:: --max-budget-usd unenforceable: run ${n + 1} reported no cost telemetry — continuing without a budget cap for "${scenario.name}"`);
-              costTelemetryMissingWarned = true;
-            }
-          } else if (n + 1 < repeatN && cumulativeCostUsd >= maxBudgetUsd) {
-            stoppedEarly = "budget";
-            break;
-          }
-        }
-      }
-      if (stoppedEarly === "budget" && iterationResults.length < repeatN)
-        log(`::warning:: "${scenario.name}": --max-budget-usd stopped the repeat batch early (${iterationResults.length}/${repeatN} completed) — measurement incomplete, not a failure by itself`);
-      rollups.push(buildRepeatRollup(scenario.name, repeatN, iterationResults, stoppedEarly));
+      const { rollup } = await runRepeatBatch({
+        scenarioName: scenario.name,
+        repeatN,
+        stopOnDiverge,
+        maxBudgetUsd,
+        makeLabel: (n) => `${files.length > 1 ? `[${i + 1}/${files.length}] ` : ""}${scenario.name} (repeat ${n + 1}/${repeatN})`,
+        runOnce: (label) =>
+          runOneScenario({
+            command: "run",
+            scenario,
+            label,
+            flags,
+            policy,
+            externalChannel,
+            o,
+            extra: deciderModel ? { llmModel: deciderModel } : undefined,
+            rethrowUnanswered: true,
+          }),
+        onResult: (r) => results.push(r),
+      });
+      rollups.push(rollup);
     }
   } finally {
     externalChannel?.close?.(); // ONE channel reused across the loop — close after ALL scenarios (not per-run)
@@ -2207,7 +2386,8 @@ function cmdStats(args: string[]) {
   let last: number | undefined;
   if (lastRaw !== undefined) {
     const n = Number(lastRaw);
-    if (!Number.isInteger(n) || n < 1) return void fail("stats", "usage", `--last requires a positive integer (got "${lastRaw}")`, undefined, json);
+    if (!Number.isInteger(n) || n < 1)
+      return void fail("stats", "usage", `--last requires a positive integer (got "${lastRaw}")`, undefined, json);
     last = n;
   }
   const allPositionals = positionals(args, ["--output-format", "--since", "--baseline", "--branch", "--metric", "--last"]);

@@ -583,7 +583,9 @@ skill_dirs: [../variants/v1/my-skill, ../variants/v2/my-skill]   # optional axis
   failure, OR a cell-level infrastructure error, e.g. the pinned baseline's agent binary isn't staged)
   fails the whole run. An infra failure renders as a distinct `cell error: …` line, never as a fake
   assertion failure, so you can tell "the skill failed" apart from "this cell never got to run the skill
-  at all". `--matrix` cannot be combined with `--repeat` (the cell table already explodes; compose later).
+  at all". `--matrix` composes with `--repeat`: each cell runs as its own repeat batch (N iterations of
+  that cell's axes-overridden scenario), with the same unanswered-gate/budget-cap handling as standalone
+  `--repeat`; the matrix verdict then judges each cell's rollup against `--min-pass-rate`.
 - The `skill_dirs` axis has one constraint worth knowing up front: the session under test must declare
   **exactly one** `plugins.local_plugins` entry (the skill being matrixed), and every candidate directory
   in the axis must share that entry's **basename** — the mount name a plugin gets is derived purely from

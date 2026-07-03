@@ -2,7 +2,7 @@
 // rollup/table substrate. Pure functions only — no I/O, no execution; the CLI loop in cli.ts drives cells
 // through runOneScenario/pMapBounded and hands the results here.
 import { z } from "zod";
-import { firstAssertionKey } from "./repeat.js";
+import { firstAssertionKey, rollupPasses, type RepeatRollup } from "./repeat.js";
 import type { RunResult } from "../types.js";
 import { budgetFields } from "../assert.js";
 import { computeVerdict } from "./verdict.js";
@@ -132,6 +132,75 @@ export function formatMatrixRollup(r: MatrixRollup): string[] {
     // `host_path_leak`) — without this, that cell renders ✗ with no visible reason (E1's rollup surfaces
     // the same signals via its histogram; do the same here per-cell).
     if (!c.pass && c.signals.length) lines.push(`      signals: ${c.signals.join(", ")}`);
+  }
+  return lines;
+}
+
+/** `--matrix` + `--repeat` composed: each cell is its own repeat batch (N iterations of that cell's
+ *  axes-overridden scenario), not a single run. `rollup` is the cell's full `RepeatRollup` — carries the
+ *  richer per-iteration distribution a plain `MatrixCellResult`'s scalar fields can't (percentiles aren't
+ *  meaningful here, but pass rate / signal histogram / per-assertion attribution / stoppedEarly all are).
+ *  `error` is a PRE-EXECUTION infra failure (e.g. a session-override error, or an unavailable agent
+ *  binary before the repeat loop could even start) — same meaning as `MatrixCellResult.error`, mutually
+ *  exclusive with `rollup` (a cell either got far enough to produce a rollup, or it didn't). */
+export interface MatrixCellRepeatResult {
+  index: number;
+  axes: MatrixCellAxes;
+  rollup?: RepeatRollup;
+  error?: string;
+}
+
+export interface MatrixRepeatRollup {
+  cells: MatrixCellRepeatResult[];
+  requested: number; // totalBeforeCap from expandMatrix (cell count, not iteration count)
+  ranCells: number;
+  truncated: boolean;
+  anyFail: boolean; // any cell's rollup fails rollupPasses(minPassRate), OR any cell hit a pre-execution error
+}
+
+/** Reuses `rollupPasses` (E1) for each cell's own pass/fail judgment — a matrix-of-repeats never
+ *  re-implements the batch-verdict formula, it just applies it per cell. */
+export function buildMatrixRepeatRollup(
+  cells: MatrixCellRepeatResult[],
+  requested: number,
+  truncated: boolean,
+  minPassRate: number,
+): MatrixRepeatRollup {
+  return {
+    cells,
+    requested,
+    ranCells: cells.length,
+    truncated,
+    anyFail: cells.some((c) => c.error !== undefined || (c.rollup !== undefined && !rollupPasses(c.rollup, minPassRate))),
+  };
+}
+
+/** Compact text-mode rollup table after a composed `--matrix --repeat` run — one line per cell
+ *  summarizing that cell's OWN repeat batch (reusing `rollupPasses` for the pass/fail verdict, matching
+ *  `formatMatrixRollup`'s truncation-warning convention: emitted once at expansion time in cli.ts, not
+ *  repeated here). */
+export function formatMatrixRepeatRollup(r: MatrixRepeatRollup, minPassRate: number): string[] {
+  const lines: string[] = [];
+  const cellsPassing = r.cells.filter((c) => c.rollup && rollupPasses(c.rollup, minPassRate)).length;
+  lines.push(`matrix: ${cellsPassing}/${r.ranCells} cells passed${r.anyFail ? " — FAIL" : ""}`);
+  for (const c of r.cells) {
+    const label = axesLabel(c.axes);
+    if (c.error || !c.rollup) {
+      lines.push(`  ✗ [${c.index}] ${label} — cell error: ${c.error ?? "no rollup produced"}`);
+      continue;
+    }
+    const passed = rollupPasses(c.rollup, minPassRate);
+    const status = passed ? "✓" : "✗";
+    const stopNote = c.rollup.stoppedEarly
+      ? ` (stopped early: ${c.rollup.stoppedEarly}, ${c.rollup.completed}/${c.rollup.requested} completed)`
+      : "";
+    lines.push(
+      `  ${status} [${c.index}] ${label} — ${c.rollup.passes}/${c.rollup.completed} passed (${(c.rollup.passRate * 100).toFixed(0)}%)${stopNote}`,
+    );
+    if (!passed) {
+      const signals = Object.entries(c.rollup.signalHistogram);
+      if (signals.length) lines.push(`      signals: ${signals.map(([code, n]) => `${code}×${n}`).join(", ")}`);
+    }
   }
   return lines;
 }

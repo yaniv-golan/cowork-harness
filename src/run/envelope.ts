@@ -2,7 +2,7 @@ import { readFileSync, writeSync } from "node:fs";
 import type { RunResult } from "../types.js";
 import { computeVerdict } from "./verdict.js";
 import { rollupPasses, type RepeatRollup } from "./repeat.js";
-import type { MatrixRollup } from "./matrix.js";
+import type { MatrixRollup, MatrixRepeatRollup } from "./matrix.js";
 
 // Synchronous fd writes (match cli.ts / doctor.ts). writeSync flushes before process.exit on a pipe.
 const out = (s: string) => writeSync(1, s + "\n");
@@ -46,6 +46,8 @@ export interface JsonEnvelopeOpts {
   minPassRate?: number;
   /** E3's `--matrix` addition. */
   matrix?: MatrixRollup;
+  /** `--matrix` + `--repeat` composed: each cell is its own repeat batch. */
+  matrixRepeat?: MatrixRepeatRollup;
 }
 
 /** §5a — the standardized machine envelope object (internal: `jsonEnvelope` stringifies it). `ok` is the
@@ -62,22 +64,26 @@ export interface JsonEnvelopeOpts {
  *  always (`results.every(pass)`) — unchanged, so it cannot diverge from them or from the exit code/footer.
  *  For a `--repeat` batch, `ok` is redefined DIRECTLY for that mode — computed from `rollups`/
  *  `rollupPasses`. For a `--matrix` run (E3), `ok` is `!matrix.anyFail` — a matrix is a compatibility gate,
- *  not a survey (any cell failing, an assertion OR an infra error, fails the whole batch). Checked in this
- *  order (matrix, then rollups, then the default) since the two modes are mutually exclusive at the CLI
- *  layer (`--matrix` + `--repeat` is rejected there) — this function doesn't re-enforce that exclusivity,
- *  it just has to pick a deterministic order if a caller ever passed both. One field, one meaning per
- *  mode — no parallel `batchVerdict` field, per the plan's revised (no-backward-compat) design. `results[]`
- *  still holds every raw RunResult either way; nothing is hidden from a `--repeat`/`--matrix` caller. */
+ *  not a survey (any cell failing, an assertion OR an infra error, fails the whole batch). For `--matrix`
+ *  + `--repeat` composed, `ok` is `!matrixRepeat.anyFail` — each cell's own repeat batch judged by
+ *  `rollupPasses`. Checked in this order (matrixRepeat, then matrix, then rollups, then the default) — the
+ *  three batch modes are mutually exclusive at the CLI layer (only one of `rollups`/`matrix`/`matrixRepeat`
+ *  is ever actually passed), this function just needs a deterministic order if a caller somehow passed more
+ *  than one. One field, one meaning per mode — no parallel `batchVerdict` field, per the plan's revised
+ *  (no-backward-compat) design. `results[]` still holds every raw RunResult either way — across every cell
+ *  and every one of its repeat iterations for the composed mode — nothing is hidden from any caller. */
 function jsonEnvelopeObj(command: string, results: RunResult[], opts: JsonEnvelopeOpts = {}): Record<string, unknown> {
-  const { rollups, minPassRate, matrix } = opts;
+  const { rollups, minPassRate, matrix, matrixRepeat } = opts;
   const lane = command === "replay" ? "replay" : "live";
   const withVerdict = results.map((r) => ({ ...r, verdict: computeVerdict(r, lane) }));
-  const ok = matrix
-    ? !matrix.anyFail
-    : rollups
-      ? rollups.every((ru) => rollupPasses(ru, minPassRate))
-      : withVerdict.length > 0 && withVerdict.every((r) => r.verdict.pass);
-  return { tool: "cowork-harness", version: pkgVersion(), command, ok, results: withVerdict, rollups, matrix, error: null };
+  const ok = matrixRepeat
+    ? !matrixRepeat.anyFail
+    : matrix
+      ? !matrix.anyFail
+      : rollups
+        ? rollups.every((ru) => rollupPasses(ru, minPassRate))
+        : withVerdict.length > 0 && withVerdict.every((r) => r.verdict.pass);
+  return { tool: "cowork-harness", version: pkgVersion(), command, ok, results: withVerdict, rollups, matrix, matrixRepeat, error: null };
 }
 
 /** §5a — the standardized machine envelope emitted by every `--output-format json` command. COMPACT

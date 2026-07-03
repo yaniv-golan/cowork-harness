@@ -345,6 +345,18 @@ describe.skipIf(!can)("CLI arg guards — run --repeat (E1)", () => {
     expect(r.out).toMatch(/--repeat cannot be combined with --decider-dir/);
   });
 
+  // Regression: this guard used to check ONLY --decider-dir, even though --decider-cmd is grouped with it
+  // as a "LIVE" decider everywhere else in this CLI's own help text (RUN_HELP: "to answer LIVE questions,
+  // use --decider-llm / --decider-cmd / --decider-dir") — an asymmetric gap, found and closed while
+  // composing --matrix + --repeat.
+  it("rejects --repeat combined with --decider-cmd too (same live-decider reasoning, previously ungated)", () => {
+    const d = mkdtempSync(join(tmpdir(), "g-repeat-"));
+    writeFileSync(join(d, "s.yaml"), "prompt: hi\n");
+    const r = run(["run", "s.yaml", "--repeat", "3", "--decider-cmd", "cat"], d);
+    expect(r.code).toBe(2);
+    expect(r.out).toMatch(/--repeat cannot be combined with --decider-dir\/--decider-cmd/);
+  });
+
   it("--max-budget-usd without --repeat is a usage error, not a silent no-op", () => {
     const d = mkdtempSync(join(tmpdir(), "g-repeat-"));
     writeFileSync(join(d, "s.yaml"), "prompt: hi\n");
@@ -379,13 +391,15 @@ describe.skipIf(!can)("CLI arg guards — run --repeat (E1)", () => {
 });
 
 describe.skipIf(!can)("CLI arg guards — run --matrix (E3)", () => {
-  it("--matrix cannot be combined with --repeat", () => {
+  it("--matrix composes with --repeat (each cell is its own repeat batch) — no usage rejection", () => {
     const d = mkdtempSync(join(tmpdir(), "g-matrix-"));
     writeFileSync(join(d, "s.yaml"), "prompt: hi\n");
     writeFileSync(join(d, "m.yaml"), "baselines: [a, b]\n");
     const r = run(["run", "s.yaml", "--matrix", "m.yaml", "--repeat", "2"], d);
-    expect(r.code).toBe(2);
-    expect(r.out).toMatch(/--matrix cannot be combined with --repeat/);
+    // The combination passes ARG validation (the former v1 rejection is gone). The fake baselines then
+    // fail cell RESOLUTION — a run failure (1), observably distinct from a usage error (2).
+    expect(r.code).toBe(1);
+    expect(r.out).not.toMatch(/--matrix cannot be combined with --repeat/);
   });
 
   it("--max-cells without --matrix is a usage error", () => {

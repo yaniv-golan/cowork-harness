@@ -113,4 +113,19 @@ describe("rollupPasses — the batch verdict formula (§8: ok redefined directly
     const rollup = buildRepeatRollup("t", 10, [rr({}), rr({})], "budget"); // 2/2 completed, all passing
     expect(rollupPasses(rollup, 1.0)).toBe(true);
   });
+
+  it(
+    "a stoppedEarly:'unanswered' batch ALWAYS fails, regardless of passRate — the scenario isn't fully " +
+      "scripted for deterministic repetition, which is itself the problem, not an incomplete-but-clean stop",
+    () => {
+      const rollup = buildRepeatRollup("t", 10, [rr({}), rr({})], "unanswered"); // 2/2 completed, all passing
+      expect(rollupPasses(rollup, 0.1)).toBe(false);
+      expect(rollupPasses(rollup, 1.0)).toBe(false);
+    },
+  );
+
+  it("a stoppedEarly:'error' batch ALWAYS fails — an uncaught exception mid-batch is a real failure, not noise", () => {
+    const rollup = buildRepeatRollup("t", 10, [rr({}), rr({})], "error");
+    expect(rollupPasses(rollup, 0.1)).toBe(false);
+  });
 });
