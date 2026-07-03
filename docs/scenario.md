@@ -570,7 +570,10 @@ skill_dirs: [../variants/v1/my-skill, ../variants/v2/my-skill]   # optional axis
   only the first N; it never silently drops cells without saying so.
 - `--concurrency <n>` (default 1, max 8) runs cells N at a time via the same bounded pool `record
   --concurrency` uses — each cell is a fully isolated run, so the bound exists only to stay under Docker's
-  address pool / the model API's rate limits, not for correctness.
+  address pool / the model API's rate limits, not for correctness. **Exception**: `--concurrency > 1` is
+  rejected together with `--decider-dir`/`--decider-cmd` — the external-decider channel is ONE shared
+  object across every cell, and every channel implementation is strictly serial over shared mutable state,
+  not safe for concurrent gate answers. `--concurrency 1` (the default) with an external decider is fine.
 - Exit code: a matrix is a **compatibility gate**, not a survey — any cell failing (a real assertion
   failure, OR a cell-level infrastructure error, e.g. the pinned baseline's agent binary isn't staged)
   fails the whole run. An infra failure renders as a distinct `cell error: …` line, never as a fake

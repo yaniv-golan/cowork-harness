@@ -458,4 +458,36 @@ describe.skipIf(!can)("CLI arg guards — run --matrix (E3)", () => {
     expect(r.out).toMatch(/failed to load session/);
     expect(r.out).not.toMatch(/at readFileSync|at parseSessionFile|at cmdRun/); // no raw stack trace
   });
+
+  // Final adversarial (Opus) review finding: the ONE external decider channel is shared across every
+  // matrix cell (created once, reused by the whole pMapBounded loop) — every channel implementation
+  // (src/decide/external-channel.ts) is documented as "strictly serial" over shared mutable state (a
+  // `seq` counter / a single read queue), never designed for concurrent callers. Concurrent cells sharing
+  // it would race and silently cross-deliver gate answers between cells. --concurrency 1 (default) is
+  // genuinely serial and safe; only the combination with an external channel at concurrency > 1 is unsafe.
+  it("rejects --matrix --concurrency > 1 combined with --decider-dir (shared channel, not concurrency-safe)", () => {
+    const d = mkdtempSync(join(tmpdir(), "g-matrix-"));
+    writeFileSync(join(d, "s.yaml"), "prompt: hi\n");
+    writeFileSync(join(d, "m.yaml"), "baselines: [a, b]\n");
+    const r = run(["run", "s.yaml", "--matrix", "m.yaml", "--concurrency", "2", "--decider-dir", d], d);
+    expect(r.code).toBe(2);
+    expect(r.out).toMatch(/--matrix --concurrency > 1 cannot be combined with --decider-dir/);
+  });
+
+  it("rejects --matrix --concurrency > 1 combined with --decider-cmd too (same shared-channel risk)", () => {
+    const d = mkdtempSync(join(tmpdir(), "g-matrix-"));
+    writeFileSync(join(d, "s.yaml"), "prompt: hi\n");
+    writeFileSync(join(d, "m.yaml"), "baselines: [a, b]\n");
+    const r = run(["run", "s.yaml", "--matrix", "m.yaml", "--concurrency", "2", "--decider-cmd", "cat"], d);
+    expect(r.code).toBe(2);
+    expect(r.out).toMatch(/--matrix --concurrency > 1 cannot be combined with/);
+  });
+
+  it("allows --matrix --concurrency 1 (the default) combined with --decider-dir — genuinely serial, no race", () => {
+    const d = mkdtempSync(join(tmpdir(), "g-matrix-"));
+    writeFileSync(join(d, "s.yaml"), "prompt: hi\nsession: does-not-exist.yaml\n"); // fails fast, past the guard
+    writeFileSync(join(d, "m.yaml"), "baselines: [a]\n");
+    const r = run(["run", "s.yaml", "--matrix", "m.yaml", "--decider-dir", d], d);
+    expect(r.out).not.toMatch(/cannot be combined with --decider-dir/);
+  });
 });

@@ -29,8 +29,11 @@ All notable changes to this project are documented here. The format is based on
   failure. The `skill_dirs` axis substitutes the session's single `plugins.local_plugins` entry; candidates
   must share that entry's directory basename (the mount name derives from it, with no author-chosen
   override anywhere in the harness) — a mismatch is a loud, explicit usage error. `--matrix` cannot combine
-  with `--repeat`. The JSON envelope gains an additive `matrix: {cells[]}` field; `ok`/the exit code are
-  `!matrix.anyFail` for this mode.
+  with `--repeat`, nor can `--concurrency > 1` combine with `--decider-dir`/`--decider-cmd` (the external
+  decider channel is one shared object across every cell, and every channel implementation is strictly
+  serial over shared mutable state — not safe for concurrent gate answers; `--concurrency 1`, the default,
+  is genuinely serial and fine). The JSON envelope gains an additive `matrix: {cells[]}` field; `ok`/the
+  exit code are `!matrix.anyFail` for this mode.
 - **Packaged GitHub Action** (`uses: yaniv-golan/cowork-harness@v1`, [`action.yml`](./action.yml)) wrapping
   `replay`/`lint`/`verify-cassettes`/`run` with a PR job-summary reporter (verdict table, staleness
   findings, the skipped-live-only-assertions honesty line, cost/turns when available). Token-free lane runs

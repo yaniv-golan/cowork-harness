@@ -322,6 +322,8 @@ Matrix testing (E3) — one scenario × a cross-product of axes, in one run:
                                    first n. Requires --matrix.
   --concurrency <n>                run cells N at a time (default 1, max 8 — each run is fully isolated, the
                                    bound is for Docker address pool / model API rate limits). Requires --matrix.
+                                   Rejected together with --decider-dir/--decider-cmd when > 1 (the external
+                                   decider channel is shared across cells, not safe for concurrent gate answers).
   matrix.yaml:
     baselines: [desktop-1.17377.2, desktop-1.18286.0]   # optional axis; each value must resolve via loadBaseline
     models: [claude-sonnet-4-6, claude-opus-4-8]         # optional axis; overrides the session model per cell
@@ -1110,6 +1112,23 @@ async function cmdRun(rawArgs: string[]) {
   // a live driver, which defeats the point of repeating the SAME scenario deterministically N times.
   if (repeatN !== undefined && flags.deciderDir)
     fail("run", "usage", "--repeat cannot be combined with --decider-dir (an interactive driving agent × N runs is not a measurement)", undefined, flags.output === "json");
+  // A single external channel (--decider-dir/--decider-cmd) is ONE shared object, reused across every
+  // matrix cell (cli.ts creates it once, before the cell loop) — and every channel implementation
+  // (fileChannel/spawnChannel, src/decide/external-channel.ts) is documented as "strictly serial: write
+  // req-N, block for resp-N" over SHARED mutable state (a `seq` counter / a single stdout read queue),
+  // never designed for concurrent callers. Concurrent cells sharing it would race: cell A's write() could
+  // be followed by cell B's write() before cell A's matching readLine() runs, so cell A reads cell B's
+  // answer — silently steering the wrong gate to the wrong cell, the exact class of bug this codebase
+  // treats as its most important invariant. --concurrency 1 (the default) is genuinely serial and safe;
+  // only the combination with an active external channel is rejected.
+  if (matrixFile !== undefined && matrixConcurrency > 1 && (flags.deciderDir || flags.deciderCmd))
+    fail(
+      "run",
+      "usage",
+      "--matrix --concurrency > 1 cannot be combined with --decider-dir/--decider-cmd (the channel is shared across cells and is not safe for concurrent gate answers — use --concurrency 1, or drop the external decider)",
+      undefined,
+      flags.output === "json",
+    );
   // `--keep` is meaningful on `skill` (runs are otherwise discarded) but `run` ALWAYS keeps runs.
   // Accept it as an explicit no-op (EXACT-token only — it takes no value, so an exact match can't
   // swallow a real arg) instead of the loud reject below, so muscle memory from `skill` doesn't error.
