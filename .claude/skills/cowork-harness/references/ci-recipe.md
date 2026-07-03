@@ -2,8 +2,22 @@
 
 Self-contained reference. Tracks `cowork-harness 0.21.0` (baseline `desktop-1.17377.2`).
 
-**Minimal token-free PR gate** — the smallest thing worth committing; runs on stock GitHub-hosted runners,
-no token/Docker/agent:
+**Fastest path: the packaged Action.** One step gets you `replay`/`lint`/`verify-cassettes` plus a PR
+job-summary reporter (verdict table, staleness findings, cost/turns when available):
+
+```yaml
+- uses: yaniv-golan/cowork-harness@v1
+  with:
+    command: replay
+    path: cassettes/
+```
+
+Reach for the manual multi-step form below only when you need per-step control the Action's inputs don't
+cover (a custom flag combination, a different runner matrix per step, or `lint`/`verify-cassettes` gated
+independently instead of as one action run per command).
+
+**Minimal token-free PR gate (manual form)** — the smallest thing worth committing; runs on stock
+GitHub-hosted runners, no token/Docker/agent:
 
 ```yaml
 - run: npm i -g cowork-harness@>=0.21.0
@@ -22,7 +36,8 @@ The split is not just about tokens — it decides **where each lane can run**:
 - **`replay` / `verify-cassettes` (token-free, agent-free).** Replays a recorded cassette
   (`events.jsonl` + `control-out.jsonl`) and lints the committed cassettes. **No model tokens, no
   Docker, no agent binary** — runs on a stock GitHub Actions runner. Evaluates **content** assertions
-  only (`transcript_*`, `tool_*`, `subagent_*`, `dispatch_count_max`, `result`, and the verdict
+  only (`transcript_*`, `tool_*`, `subagent_*`, `dispatch_count_max`, `skill_triggered`,
+  `no_skill_triggered`, `max_cost_usd`, `max_tokens`, `tool_calls_max`, `result`, and the verdict
   modifiers `allow_permissive_auto_allow` / `allow_missing_capability` / `allow_l0_plugin_divergence` /
   `allow_stall` (no-op passes); plus the gate keys `question_asked` / `questions_count_max` /
   `gate_answers_delivered` **if** the cassette has `controlOut`). Filesystem/egress assertions are
@@ -109,6 +124,12 @@ A typical skill repo runs four stages, fastest/cheapest first:
    (needs the ELF). Optionally `cowork-harness sync` drift checks against a new Desktop release.
 
 ## GitHub Actions sketch
+
+The PR gate below is the manual, step-by-step version of what `uses: yaniv-golan/cowork-harness@v1` does
+in one step (see the top of this doc) — reach for this form when you need independent per-command
+gating/annotations rather than one action run per command. The nightly live job has no packaged-Action
+equivalent yet (the Action's `command: run` mode needs a self-hosted runner with Docker + the agent binary
+already provisioned, same as the manual form below).
 
 PR gate (token-free — runs on every push):
 

@@ -288,7 +288,9 @@ keys). Exit code is non-zero on errors (CI-friendly). `scaffold` auto-upgrades t
 for egress on `protocol`, so it never emits a scenario `lint` would reject.
 
 CI placement: a **token-free `replay` PR gate** (content/structure only) + a **nightly live `run`**
-(filesystem/egress). See `references/ci-recipe.md` for the four-stage pipeline.
+(filesystem/egress). Fastest setup: `uses: yaniv-golan/cowork-harness@v1` (a packaged GitHub Action with a
+PR job-summary reporter). See `references/ci-recipe.md` for the Action, the manual step-by-step form, and
+the four-stage pipeline.
 
 ## 10. Debugging with `chat`
 
@@ -444,7 +446,8 @@ and the CI recipe, read the files in `references/`.
 - `references/scenario-schema.md` — scenario/session YAML schema, full assertion catalog (with each
   key's replay class), the web_fetch model, and the complete gotcha list.
 - `references/fidelity-and-answers.md` — fidelity tiers, answer paths, the determinism contract.
-- `references/ci-recipe.md` — replay-vs-live lane split and the four-stage GitHub Actions pipeline.
+- `references/ci-recipe.md` — the packaged GitHub Action, replay-vs-live lane split, and the four-stage
+  GitHub Actions pipeline.
 - `scripts/scenario.py` — `scaffold` a valid scenario skeleton and `lint` scenarios for the
   no-silent-false-green invariants (both usable as CI steps).
 - `../../../docs/run-status.md` — checking a background run's status without `ps aux`.

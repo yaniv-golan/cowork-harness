@@ -220,6 +220,11 @@ passes only if every key passes. Keep one concern per item unless you mean conju
 | `subagent_dispatched: <regex>` | a sub-agent whose `agentType` **or dispatch description** matches |
 | `subagent_declared_but_unused: <Tool>` | a sub-agent declared the tool but never used **that** tool (even if it used others) |
 | `dispatch_count_max: <N>` | at most N sub-agents dispatched (records only — does NOT enforce a cap) |
+| `skill_triggered: <regex>` | a skill matching the regex (invoked id, e.g. `"plugin:skill"`) was invoked via the `Skill` tool — evidence-unavailable (not a normal fail) if the agent's init tools have no `Skill` tool |
+| `no_skill_triggered: <regex>` | no invoked skill id matched — the negative-control / description-collision catcher; evidence-unavailable (never a vacuous pass) if invocation data is absent or the `Skill` tool is unobservable |
+| `max_cost_usd: <N>` | the run's SDK-reported cost is ≤ N USD — evidence-unavailable if cost telemetry is absent. **Replay asserts the frozen recording's cost, not fresh spend** — a real regression needs a live `run` |
+| `max_tokens: <N>` | `usage.input_tokens + usage.output_tokens` ≤ N (cache tokens excluded) — same replay caveat as `max_cost_usd` |
+| `tool_calls_max: <N>` | total top-level tool calls (sum of `toolCounts`) ≤ N — meaningfully replay-checkable (re-drive recomputes `toolCounts` deterministically) |
 | `question_asked: <regex>` | the agent asked an AskUserQuestion whose text matches |
 | `questions_count_max: <N>` | the agent asked at most N questions |
 | `gate_answers_delivered: true` | every answered gate's answer reached the model (observed `tool_result`; unobserved = fail) |
@@ -270,8 +275,10 @@ sourcing ≠ evaluation (replay warns when you edit one). `verify-run` is the on
 *run dir*; `--assert-from` is the equivalent for a *cassette*.
 
 **Evaluated on replay (content):** `transcript_*`, `tool_*`, `subagent_*`, `dispatch_count_max`,
-`result`. The verdict modifiers `allow_permissive_auto_allow` / `allow_missing_capability` /
-`allow_l0_plugin_divergence` / `allow_stall` are also kept on replay, evaluated as no-op passes.
+`skill_triggered`, `no_skill_triggered`, `max_cost_usd`, `max_tokens`, `tool_calls_max`, `result`
+(`max_cost_usd`/`max_tokens` assert the frozen recording's spend on replay, not fresh spend). The verdict
+modifiers `allow_permissive_auto_allow` / `allow_missing_capability` / `allow_l0_plugin_divergence` /
+`allow_stall` are also kept on replay, evaluated as no-op passes.
 
 **Gate keys — replay only with a `controlOut` cassette:** `question_asked`, `questions_count_max`,
 `gate_answers_delivered`. With `controlOut` present they evaluate; on an old cassette without it, a
