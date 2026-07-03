@@ -2,6 +2,7 @@ import { readFileSync, writeSync } from "node:fs";
 import type { RunResult } from "../types.js";
 import { computeVerdict } from "./verdict.js";
 import { rollupPasses, type RepeatRollup } from "./repeat.js";
+import type { MatrixRollup } from "./matrix.js";
 
 // Synchronous fd writes (match cli.ts / doctor.ts). writeSync flushes before process.exit on a pipe.
 const out = (s: string) => writeSync(1, s + "\n");
@@ -39,6 +40,14 @@ export function parseOutputFormat(args: string[]): "text" | "json" {
   return "text";
 }
 
+export interface JsonEnvelopeOpts {
+  /** E1's `--repeat` additions. */
+  rollups?: RepeatRollup[];
+  minPassRate?: number;
+  /** E3's `--matrix` addition. */
+  matrix?: MatrixRollup;
+}
+
 /** §5a — the standardized machine envelope object (internal: `jsonEnvelope` stringifies it). `ok` is the
  *  same SEAM-B verdict as the process exit code / footer (it cannot diverge). `replay` uses the replay
  *  lane (a cassette can't reproduce the scan/permissive signals); every other command is the live lane.
@@ -49,27 +58,35 @@ export function parseOutputFormat(args: string[]): "text" | "json" {
  *  `stalled` signal) without recomputing from the sibling booleans. NOTE: this publishes the
  *  VerdictSignal.code taxonomy as a de-facto wire contract.
  *
- *  `ok` — E1/§8: for a NON-repeat call (`rollups` omitted), `ok` is derived from the SAME per-result
- *  verdicts as always (`results.every(pass)`) — unchanged, so it cannot diverge from them or from the
- *  exit code/footer. For a `--repeat` batch, `ok` is redefined DIRECTLY for that mode — computed from
- *  `rollups`/`rollupPasses`, not from `results.every(...)` (a raw per-`RunResult` pass/fail is expected to
- *  vary within a repeat batch; that's the whole point of measuring flakiness). One field, one meaning per
+ *  `ok` — E1/§8: for a NON-repeat, NON-matrix call, `ok` is derived from the SAME per-result verdicts as
+ *  always (`results.every(pass)`) — unchanged, so it cannot diverge from them or from the exit code/footer.
+ *  For a `--repeat` batch, `ok` is redefined DIRECTLY for that mode — computed from `rollups`/
+ *  `rollupPasses`. For a `--matrix` run (E3), `ok` is `!matrix.anyFail` — a matrix is a compatibility gate,
+ *  not a survey (any cell failing, an assertion OR an infra error, fails the whole batch). Checked in this
+ *  order (matrix, then rollups, then the default) since the two modes are mutually exclusive at the CLI
+ *  layer (`--matrix` + `--repeat` is rejected there) — this function doesn't re-enforce that exclusivity,
+ *  it just has to pick a deterministic order if a caller ever passed both. One field, one meaning per
  *  mode — no parallel `batchVerdict` field, per the plan's revised (no-backward-compat) design. `results[]`
- *  still holds every raw RunResult either way; nothing is hidden from a `--repeat` caller. */
-function jsonEnvelopeObj(command: string, results: RunResult[], rollups?: RepeatRollup[], minPassRate?: number): Record<string, unknown> {
+ *  still holds every raw RunResult either way; nothing is hidden from a `--repeat`/`--matrix` caller. */
+function jsonEnvelopeObj(command: string, results: RunResult[], opts: JsonEnvelopeOpts = {}): Record<string, unknown> {
+  const { rollups, minPassRate, matrix } = opts;
   const lane = command === "replay" ? "replay" : "live";
   const withVerdict = results.map((r) => ({ ...r, verdict: computeVerdict(r, lane) }));
-  const ok = rollups ? rollups.every((ru) => rollupPasses(ru, minPassRate)) : withVerdict.length > 0 && withVerdict.every((r) => r.verdict.pass);
-  return { tool: "cowork-harness", version: pkgVersion(), command, ok, results: withVerdict, rollups, error: null };
+  const ok = matrix
+    ? !matrix.anyFail
+    : rollups
+      ? rollups.every((ru) => rollupPasses(ru, minPassRate))
+      : withVerdict.length > 0 && withVerdict.every((r) => r.verdict.pass);
+  return { tool: "cowork-harness", version: pkgVersion(), command, ok, results: withVerdict, rollups, matrix, error: null };
 }
 
 /** §5a — the standardized machine envelope emitted by every `--output-format json` command. COMPACT
  *  single-line JSON (machine output → trivially parseable; the pretty form lives in result.json).
- *  `rollups`/`minPassRate` are E1's `--repeat` additions — omitted (undefined) for every other command,
- *  which is why `rollups` doesn't appear in a non-repeat envelope (JSON.stringify drops `undefined`
- *  properties) rather than showing up as a spurious `null`. */
-export function jsonEnvelope(command: string, results: RunResult[], rollups?: RepeatRollup[], minPassRate?: number): string {
-  return JSON.stringify(jsonEnvelopeObj(command, results, rollups, minPassRate));
+ *  `opts.rollups`/`opts.minPassRate`/`opts.matrix` are additive (E1's `--repeat`, E3's `--matrix`) —
+ *  omitted (undefined) for every other command, which is why they don't appear in a plain envelope
+ *  (JSON.stringify drops `undefined` properties) rather than showing up as spurious `null`s. */
+export function jsonEnvelope(command: string, results: RunResult[], opts: JsonEnvelopeOpts = {}): string {
+  return JSON.stringify(jsonEnvelopeObj(command, results, opts));
 }
 
 /** §5c — the error envelope (compact, single line). */

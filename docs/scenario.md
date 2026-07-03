@@ -546,6 +546,45 @@ skill across repeated tries — see
 [`examples/scenarios/trigger-accuracy-sweep/`](../examples/scenarios/trigger-accuracy-sweep/) for a worked
 example.
 
+### Matrix testing (`run --matrix`)
+
+One scenario, a cross-product of axes, one command. `--matrix <matrix.yaml>` runs the resolved scenario
+once per cell of a matrix file's declared axes and reports one row per cell, instead of one pass/fail for
+the whole run:
+
+```bash
+cowork-harness run examples/scenarios/csv-metrics.yaml --matrix matrix.yaml --concurrency 2
+```
+
+`matrix.yaml`:
+
+```yaml
+baselines: [desktop-1.17377.2, desktop-1.18286.0]   # optional axis; each value must resolve via loadBaseline
+models: [claude-sonnet-4-6, claude-opus-4-8]         # optional axis; overrides the session model per cell
+skill_dirs: [../variants/v1/my-skill, ../variants/v2/my-skill]   # optional axis; substitutes the skill under test
+```
+
+- Any axis may be omitted; an omitted/empty axis contributes exactly one cell (unmodified), so a matrix
+  file with no axes at all still runs the scenario once.
+- The cross-product is capped at `--max-cells` (default 16) — over the cap, the harness warns and runs
+  only the first N; it never silently drops cells without saying so.
+- `--concurrency <n>` (default 1, max 8) runs cells N at a time via the same bounded pool `record
+  --concurrency` uses — each cell is a fully isolated run, so the bound exists only to stay under Docker's
+  address pool / the model API's rate limits, not for correctness.
+- Exit code: a matrix is a **compatibility gate**, not a survey — any cell failing (a real assertion
+  failure, OR a cell-level infrastructure error, e.g. the pinned baseline's agent binary isn't staged)
+  fails the whole run. An infra failure renders as a distinct `cell error: …` line, never as a fake
+  assertion failure, so you can tell "the skill failed" apart from "this cell never got to run the skill
+  at all". `--matrix` cannot be combined with `--repeat` (the cell table already explodes; compose later).
+- The `skill_dirs` axis has one constraint worth knowing up front: the session under test must declare
+  **exactly one** `plugins.local_plugins` entry (the skill being matrixed), and every candidate directory
+  in the axis must share that entry's **basename** — the mount name a plugin gets is derived purely from
+  its source directory's basename (there's no author-chosen override), so a mismatched basename would
+  silently change the mount name a scenario's assertions reference. Keep skill-dir variants under
+  identically-named leaf directories at different parents, e.g. `variants/v1/my-skill/`,
+  `variants/v2/my-skill/` — the harness rejects a basename mismatch loud rather than renaming anything for
+  you.
+
 ### Dry-running a decider (`decide`)
 
 `cowork-harness decide` validates a decider against a **sample question in ~2s, with no run** — so you

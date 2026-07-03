@@ -1,0 +1,127 @@
+// E3 — matrix runner. Cross-product of baseline/model/skill_dir axes over one scenario, reusing E1's
+// rollup/table substrate. Pure functions only — no I/O, no execution; the CLI loop in cli.ts drives cells
+// through runOneScenario/pMapBounded and hands the results here.
+import { z } from "zod";
+import { firstAssertionKey } from "./repeat.js";
+import type { RunResult } from "../types.js";
+import { budgetFields } from "../assert.js";
+import { computeVerdict } from "./verdict.js";
+
+export const MatrixFile = z.strictObject({
+  baselines: z.array(z.string()).optional(),
+  models: z.array(z.string()).optional(),
+  skill_dirs: z.array(z.string()).optional(),
+});
+export type MatrixFile = z.infer<typeof MatrixFile>;
+
+export interface MatrixCellAxes {
+  baseline?: string;
+  model?: string;
+  skillDir?: string;
+}
+
+export interface MatrixCell {
+  index: number;
+  axes: MatrixCellAxes;
+}
+
+export interface MatrixExpansion {
+  cells: MatrixCell[];
+  totalBeforeCap: number;
+  truncated: boolean;
+}
+
+/** Cross-product of the declared axes, in `baselines × models × skill_dirs` order. An absent/empty axis
+ *  contributes exactly one `undefined` value (not zero) — so a matrix with no axes at all still expands
+ *  to one cell (the base scenario, unmodified), never to zero cells. Capped at `maxCells`; the plan's own
+ *  "no silent caps" principle means callers must surface `truncated`/`totalBeforeCap`, not swallow them. */
+export function expandMatrix(matrix: MatrixFile, maxCells: number): MatrixExpansion {
+  const baselines = matrix.baselines?.length ? matrix.baselines : [undefined];
+  const models = matrix.models?.length ? matrix.models : [undefined];
+  const skillDirs = matrix.skill_dirs?.length ? matrix.skill_dirs : [undefined];
+  const all: MatrixCellAxes[] = [];
+  for (const baseline of baselines) for (const model of models) for (const skillDir of skillDirs) all.push({ baseline, model, skillDir });
+  const totalBeforeCap = all.length;
+  const cells = all.slice(0, maxCells).map((axes, index) => ({ index, axes }));
+  return { cells, totalBeforeCap, truncated: totalBeforeCap > maxCells };
+}
+
+export interface MatrixCellResult {
+  index: number;
+  axes: MatrixCellAxes;
+  pass: boolean;
+  failedAssertions: string[]; // assertion display keys (firstAssertionKey), NOT populated for an `error` cell
+  costUsd?: number;
+  durationMs?: number;
+  effectiveFidelity?: string;
+  /** A cell-level INFRASTRUCTURE failure (e.g. "agent binary unavailable for this baseline") — distinct
+   *  from a skill/assertion failure. Set instead of failedAssertions, never alongside real assertion data,
+   *  so a consumer can tell "the skill failed" apart from "this cell never got to run the skill at all". */
+  error?: string;
+}
+
+/** Turns one cell's real RunResult into a MatrixCellResult — the ONE place that reads RunResult fields for
+ *  the matrix rollup, so cli.ts's cell loop stays a thin driver. Reuses computeVerdict/budgetFields/
+ *  firstAssertionKey rather than re-deriving pass/fail or cost from scratch (§9 lesson: don't re-implement
+ *  verdict logic per-mode). */
+export function matrixCellResultFromRun(cell: MatrixCell, result: RunResult): MatrixCellResult {
+  const verdict = computeVerdict(result, "live");
+  const failedAssertions = result.assertions.filter((a) => !a.pass).map((a) => firstAssertionKey(a.assertion));
+  return {
+    index: cell.index,
+    axes: cell.axes,
+    pass: verdict.pass,
+    failedAssertions,
+    costUsd: budgetFields(result).costUsd,
+    durationMs: result.durationMs,
+    effectiveFidelity: result.effectiveFidelity,
+  };
+}
+
+export interface MatrixRollup {
+  cells: MatrixCellResult[];
+  requested: number; // totalBeforeCap from expandMatrix
+  ranCells: number; // cells actually executed (after the --max-cells cap)
+  truncated: boolean;
+  anyFail: boolean; // a matrix is a compatibility gate, not a survey — any cell failing (assertion OR infra) fails the batch
+}
+
+export function buildMatrixRollup(cells: MatrixCellResult[], requested: number, truncated: boolean): MatrixRollup {
+  return { cells, requested, ranCells: cells.length, truncated, anyFail: cells.some((c) => !c.pass) };
+}
+
+/** A compact human label for one cell's axes — reused for both the per-cell run label (cli.ts, so each
+ *  cell's live footer is distinguishable) and the rollup table row. */
+export function axesLabel(axes: MatrixCellAxes): string {
+  const parts = [
+    axes.baseline !== undefined ? `baseline=${axes.baseline}` : null,
+    axes.model !== undefined ? `model=${axes.model}` : null,
+    axes.skillDir !== undefined ? `skill_dir=${axes.skillDir}` : null,
+  ].filter(Boolean);
+  return parts.length ? parts.join(", ") : "(no axes)";
+}
+
+/** Compact text-mode rollup table after a `--matrix` run. */
+export function formatMatrixRollup(r: MatrixRollup): string[] {
+  const lines: string[] = [];
+  if (r.truncated) lines.push(`::warning:: matrix: ${r.requested} cells before capping — only the first ${r.ranCells} ran (raise with --max-cells)`);
+  lines.push(`matrix: ${r.cells.filter((c) => c.pass).length}/${r.ranCells} cells passed${r.anyFail ? " — FAIL" : ""}`);
+  for (const c of r.cells) {
+    const label = axesLabel(c.axes);
+    if (c.error) {
+      lines.push(`  ✗ [${c.index}] ${label} — cell error: ${c.error}`);
+      continue;
+    }
+    const status = c.pass ? "✓" : "✗";
+    const detail = [
+      c.effectiveFidelity ? `[${c.effectiveFidelity}]` : null,
+      c.costUsd !== undefined ? `$${c.costUsd.toFixed(4)}` : null,
+      c.durationMs !== undefined ? `${(c.durationMs / 1000).toFixed(1)}s` : null,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    lines.push(`  ${status} [${c.index}] ${label}${detail ? " " + detail : ""}`);
+    if (!c.pass && c.failedAssertions.length) lines.push(`      failed: ${c.failedAssertions.join(", ")}`);
+  }
+  return lines;
+}

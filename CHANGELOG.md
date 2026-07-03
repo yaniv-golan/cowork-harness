@@ -8,6 +8,18 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **`run --matrix` matrix runner.** Runs one scenario across the cross-product of baseline/model/skill_dir
+  axes declared in a `matrix.yaml` file (any axis optional; an absent axis contributes one unmodified
+  cell) and reports one row per cell instead of a single pass/fail. `--max-cells` caps the cross-product
+  (default 16, warns and truncates rather than silently dropping cells); `--concurrency` (default 1, max 8)
+  runs cells N at a time via the same bounded pool `record --concurrency` uses. Exit is non-zero if ANY
+  cell fails — a real assertion failure or a cell-level infrastructure error (e.g. the pinned baseline's
+  agent binary isn't staged), rendered as a distinct `cell error: …` line rather than a fake assertion
+  failure. The `skill_dirs` axis substitutes the session's single `plugins.local_plugins` entry; candidates
+  must share that entry's directory basename (the mount name derives from it, with no author-chosen
+  override anywhere in the harness) — a mismatch is a loud, explicit usage error. `--matrix` cannot combine
+  with `--repeat`. The JSON envelope gains an additive `matrix: {cells[]}` field; `ok`/the exit code are
+  `!matrix.anyFail` for this mode.
 - **Packaged GitHub Action** (`uses: yaniv-golan/cowork-harness@v1`, [`action.yml`](./action.yml)) wrapping
   `replay`/`lint`/`verify-cassettes`/`run` with a PR job-summary reporter (verdict table, staleness
   findings, the skipped-live-only-assertions honesty line, cost/turns when available). Token-free lane runs

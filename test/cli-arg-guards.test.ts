@@ -377,3 +377,85 @@ describe.skipIf(!can)("CLI arg guards — run --repeat (E1)", () => {
     expect(run(["run", "s.yaml", "--repeat", "2", "--max-budget-usd", "0"], d).code).toBe(2);
   });
 });
+
+describe.skipIf(!can)("CLI arg guards — run --matrix (E3)", () => {
+  it("--matrix cannot be combined with --repeat", () => {
+    const d = mkdtempSync(join(tmpdir(), "g-matrix-"));
+    writeFileSync(join(d, "s.yaml"), "prompt: hi\n");
+    writeFileSync(join(d, "m.yaml"), "baselines: [a, b]\n");
+    const r = run(["run", "s.yaml", "--matrix", "m.yaml", "--repeat", "2"], d);
+    expect(r.code).toBe(2);
+    expect(r.out).toMatch(/--matrix cannot be combined with --repeat/);
+  });
+
+  it("--max-cells without --matrix is a usage error", () => {
+    const d = mkdtempSync(join(tmpdir(), "g-matrix-"));
+    writeFileSync(join(d, "s.yaml"), "prompt: hi\n");
+    expect(run(["run", "s.yaml", "--max-cells", "4"], d).code).toBe(2);
+  });
+
+  it("--concurrency without --matrix is a usage error", () => {
+    const d = mkdtempSync(join(tmpdir(), "g-matrix-"));
+    writeFileSync(join(d, "s.yaml"), "prompt: hi\n");
+    expect(run(["run", "s.yaml", "--concurrency", "2"], d).code).toBe(2);
+  });
+
+  it("rejects --concurrency outside 1..8", () => {
+    const d = mkdtempSync(join(tmpdir(), "g-matrix-"));
+    writeFileSync(join(d, "s.yaml"), "prompt: hi\n");
+    writeFileSync(join(d, "m.yaml"), "baselines: [a]\n");
+    expect(run(["run", "s.yaml", "--matrix", "m.yaml", "--concurrency", "9"], d).code).toBe(2);
+  });
+
+  it("rejects a non-positive --max-cells", () => {
+    const d = mkdtempSync(join(tmpdir(), "g-matrix-"));
+    writeFileSync(join(d, "s.yaml"), "prompt: hi\n");
+    writeFileSync(join(d, "m.yaml"), "baselines: [a]\n");
+    expect(run(["run", "s.yaml", "--matrix", "m.yaml", "--max-cells", "0"], d).code).toBe(2);
+  });
+
+  it("rejects a nonexistent --matrix file", () => {
+    const d = mkdtempSync(join(tmpdir(), "g-matrix-"));
+    writeFileSync(join(d, "s.yaml"), "prompt: hi\n");
+    const r = run(["run", "s.yaml", "--matrix", "does-not-exist.yaml"], d);
+    expect(r.code).toBe(2);
+    expect(r.out).toMatch(/matrix file not found/);
+  });
+
+  it("rejects a matrix file with an unknown top-level key (schema validation, not silently ignored)", () => {
+    const d = mkdtempSync(join(tmpdir(), "g-matrix-"));
+    writeFileSync(join(d, "s.yaml"), "prompt: hi\n");
+    writeFileSync(join(d, "m.yaml"), "baseline: [a]\n"); // typo: singular
+    const r = run(["run", "s.yaml", "--matrix", "m.yaml"], d);
+    expect(r.code).toBe(2);
+    expect(r.out).toMatch(/invalid matrix file/);
+  });
+
+  it("rejects --matrix against a directory target (requires exactly one scenario file)", () => {
+    const d = mkdtempSync(join(tmpdir(), "g-matrix-"));
+    writeFileSync(join(d, "a.yaml"), "prompt: hi\n");
+    writeFileSync(join(d, "b.yaml"), "prompt: hi\n");
+    writeFileSync(join(d, "m.yaml"), "baselines: [a]\n");
+    const r = run(["run", ".", "--matrix", "m.yaml"], d);
+    expect(r.code).toBe(2);
+    expect(r.out).toMatch(/--matrix requires exactly one scenario file/);
+  });
+
+  it("accepts the --matrix=<file> equals form (parses cleanly, fails fast on session loading instead — never on --matrix parsing)", () => {
+    const d = mkdtempSync(join(tmpdir(), "g-matrix-"));
+    writeFileSync(join(d, "s.yaml"), "prompt: hi\nsession: does-not-exist.yaml\n");
+    writeFileSync(join(d, "m.yaml"), "baselines: [a]\n");
+    const r = run(["run", "s.yaml", "--matrix=m.yaml"], d);
+    expect(r.out).not.toMatch(/--matrix requires/);
+  });
+
+  it("a bad session ref reads as a clean usage error, not a raw ENOENT stack trace", () => {
+    const d = mkdtempSync(join(tmpdir(), "g-matrix-"));
+    writeFileSync(join(d, "s.yaml"), "prompt: hi\nsession: does-not-exist.yaml\n");
+    writeFileSync(join(d, "m.yaml"), "baselines: [a]\n");
+    const r = run(["run", "s.yaml", "--matrix", "m.yaml"], d);
+    expect(r.code).toBe(2);
+    expect(r.out).toMatch(/failed to load session/);
+    expect(r.out).not.toMatch(/at readFileSync|at parseSessionFile|at cmdRun/); // no raw stack trace
+  });
+});

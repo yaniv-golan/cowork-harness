@@ -882,8 +882,10 @@ function validateScenarioRegexes(scenario: Scenario, scenarioPath: string): void
 }
 
 /** Load a session from a file and resolve its internal host paths relative to the session
- * file's own directory (see {@link resolveSessionPaths}). */
-function loadSessionFromFile(sessionRef: string): ReturnType<typeof loadSession> {
+ * file's own directory (see {@link resolveSessionPaths}). Exported for E3 (matrix runner) — cli.ts loads
+ * the base session ONCE per matrix run, then applies per-cell overrides (applySessionOverrides,
+ * session.ts) on top of the SAME loaded+resolved object, rather than re-resolving paths per cell. */
+export function loadSessionFromFile(sessionRef: string): ReturnType<typeof loadSession> {
   const baseDir = sessionRef === "(inline)" ? process.cwd() : dirname(resolve(sessionRef));
   return resolveSessionPaths(loadSession(parseSessionFile(sessionRef)), baseDir);
 }

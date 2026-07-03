@@ -5,8 +5,8 @@ import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
 import { Scenario, AnswerRule, Assertion, type RunResult, type RunStatus, type PlatformBaseline } from "./types.js";
 import { loadBaseline, BASELINES_DIR, cmpVersionStrings, sha256File } from "./baseline.js";
-import { loadSession, resolveSessionPaths } from "./session.js";
-import { executeScenario, parseScenarioFile, UnansweredError, BoundaryError, type ExecuteOptions } from "./run/execute.js";
+import { loadSession, resolveSessionPaths, applySessionOverrides } from "./session.js";
+import { executeScenario, parseScenarioFile, loadSessionFromFile, UnansweredError, BoundaryError, type ExecuteOptions } from "./run/execute.js";
 import {
   ScriptedDecider,
   ExternalDecider,
@@ -60,6 +60,8 @@ import { buildScaffold } from "./run/scaffold.js";
 import { buildInspectView } from "./run/inspect-view.js";
 import { pkgVersion, jsonEnvelope, jsonError, parseOutputFormat, fail, isJsonOutput, type ErrCategory } from "./run/envelope.js";
 import { buildRepeatRollup, rollupPasses, type RepeatRollup } from "./run/repeat.js";
+import { MatrixFile, expandMatrix, buildMatrixRollup, formatMatrixRollup, matrixCellResultFromRun, axesLabel, type MatrixCellResult } from "./run/matrix.js";
+import { pMapBounded } from "./async-pool.js";
 import { computeVerdict } from "./run/verdict.js";
 import { evaluate, hostMatches, budgetFields, type AssertContext } from "./assert.js";
 import { spawnChannel, fileChannel, streamGates, answerGate, readGate, type DecisionChannel } from "./decide/external-channel.js";
@@ -68,6 +70,10 @@ import { spawnChannel, fileChannel, streamGates, answerGate, readGate, type Deci
 // would lose the json envelope for any agent/CI that pipes us. writeSync flushes before exit.
 const out = (s: string) => writeSync(1, s + "\n"); // machine (stdout)
 const log = (s: string) => writeSync(2, s + "\n"); // human (stderr)
+
+// E3 (matrix runner) — mirrors record's own MAX_RECORD_CONCURRENCY bound (cassette.ts): above a handful,
+// concurrent runs exhaust Docker's default address pool / model API rate limits.
+const MAX_MATRIX_CONCURRENCY = 8;
 
 const HELP = `cowork-harness <command>   (v${"$VERSION"})
 
@@ -299,6 +305,25 @@ Repeat / flakiness measurement (E1):
   --max-budget-usd <x>             stop the repeat loop once cumulative cost would exceed x. An incomplete-
                                    but-clean stop is a warning, not a failure by itself; degrades LOUDLY
                                    (never silently runs all N) if a run reports no cost telemetry. Requires --repeat.
+
+Matrix testing (E3) — one scenario × a cross-product of axes, in one run:
+  --matrix <matrix.yaml>           run <scenario.yaml> across the cross-product of a matrix file's axes
+                                   (baselines/models/skill_dirs — see docs/scenario.md). Requires exactly
+                                   one scenario file (not a dir). Cannot combine with --repeat. Exit 1 if
+                                   any cell fails (assertion OR a cell-level infra error, e.g. the pinned
+                                   baseline's agent binary isn't staged) — a matrix is a compatibility gate,
+                                   not a survey. The JSON envelope gains an additive "matrix: {cells[]}" field.
+  --max-cells <n>                  cap the cross-product (default 16); over the cap warns and runs only the
+                                   first n. Requires --matrix.
+  --concurrency <n>                run cells N at a time (default 1, max 8 — each run is fully isolated, the
+                                   bound is for Docker address pool / model API rate limits). Requires --matrix.
+  matrix.yaml:
+    baselines: [desktop-1.17377.2, desktop-1.18286.0]   # optional axis; each value must resolve via loadBaseline
+    models: [claude-sonnet-4-6, claude-opus-4-8]         # optional axis; overrides the session model per cell
+    skill_dirs: [../variants/v1/my-skill, ../variants/v2/my-skill]  # optional axis; substitutes the session's
+                                                          # single plugins.local_plugins entry — candidates MUST
+                                                          # share one basename (the mount name derives from it;
+                                                          # a mismatched basename is rejected, not silently renamed)
 
 Output:
   --output-format text|json        text = verdict + failing transcript (default); json = stdout envelope
@@ -975,6 +1000,9 @@ async function cmdRun(rawArgs: string[]) {
   let maxBudgetUsd: number | undefined;
   let stopOnDiverge = false;
   let minPassRate = 1.0;
+  let matrixFile: string | undefined;
+  let maxCells = 16;
+  let matrixConcurrency = 1;
   const preArgs: string[] = [];
   for (let i = 0; i < rawArgs.length; i++) {
     const a = rawArgs[i];
@@ -1008,12 +1036,31 @@ async function cmdRun(rawArgs: string[]) {
       if (!Number.isFinite(n) || n < 0 || n > 1)
         fail("run", "usage", `--min-pass-rate requires a number between 0 and 1 (got ${v === undefined ? "nothing" : `"${v}"`})`, undefined, jsonOut);
       minPassRate = n;
+    } else if (a === "--matrix" || a.startsWith("--matrix=")) {
+      const v = a === "--matrix" ? rawArgs[++i] : a.slice("--matrix=".length);
+      if (v === undefined || v === "" || v.startsWith("-")) fail("run", "usage", "--matrix requires a value (a matrix.yaml path)", undefined, jsonOut);
+      matrixFile = v;
+    } else if (a === "--max-cells" || a.startsWith("--max-cells=")) {
+      const v = a === "--max-cells" ? rawArgs[++i] : a.slice("--max-cells=".length);
+      const n = v === undefined ? NaN : Number(v);
+      if (!Number.isInteger(n) || n < 1) fail("run", "usage", `--max-cells requires a positive integer (got ${v === undefined ? "nothing" : `"${v}"`})`, undefined, jsonOut);
+      maxCells = n;
+    } else if (a === "--concurrency" || a.startsWith("--concurrency=")) {
+      const v = a === "--concurrency" ? rawArgs[++i] : a.slice("--concurrency=".length);
+      const n = v === undefined ? NaN : Number(v);
+      if (!Number.isInteger(n) || n < 1 || n > MAX_MATRIX_CONCURRENCY)
+        fail("run", "usage", `--concurrency requires an integer 1..${MAX_MATRIX_CONCURRENCY} (got ${v === undefined ? "nothing" : `"${v}"`})`, undefined, jsonOut);
+      matrixConcurrency = n;
     } else preArgs.push(a);
   }
   if (maxBudgetUsd !== undefined && repeatN === undefined)
     fail("run", "usage", "--max-budget-usd requires --repeat", undefined, isJsonOutput(rawArgs));
   if (stopOnDiverge && repeatN === undefined) fail("run", "usage", "--stop-on-diverge requires --repeat", undefined, isJsonOutput(rawArgs));
   if (minPassRate !== 1.0 && repeatN === undefined) fail("run", "usage", "--min-pass-rate requires --repeat", undefined, isJsonOutput(rawArgs));
+  if (matrixFile !== undefined && repeatN !== undefined)
+    fail("run", "usage", "--matrix cannot be combined with --repeat (compose later; the cell table already explodes)", undefined, isJsonOutput(rawArgs));
+  if (maxCells !== 16 && matrixFile === undefined) fail("run", "usage", "--max-cells requires --matrix", undefined, isJsonOutput(rawArgs));
+  if (matrixConcurrency !== 1 && matrixFile === undefined) fail("run", "usage", "--concurrency requires --matrix", undefined, isJsonOutput(rawArgs));
   const { rest: rawRest, flags } = takeCommonFlags(preArgs, "run");
   // An interactive driving agent × N runs is not a measurement — --decider-dir answers gates IN-BAND from
   // a live driver, which defeats the point of repeating the SAME scenario deterministically N times.
@@ -1053,6 +1100,81 @@ async function cmdRun(rawArgs: string[]) {
   const policy = externalChannel ? "fail" : resolvePolicy("run", flags);
   const o = resolveOutput("run", flags);
   noteRunsLocation({ json: o.json, quiet: !!flags.quiet, suppress: !!flags.demo });
+
+  // E3: --matrix is a completely separate mode from the per-file/--repeat loop below — one scenario, N
+  // cells, not "N files each run once or N times" — so it's handled as its own early branch and exits.
+  if (matrixFile !== undefined) {
+    if (files.length !== 1)
+      fail("run", "usage", `--matrix requires exactly one scenario file (got ${files.length}) — matrix a single <scenario.yaml>, not a dir`, undefined, o.json);
+    if (!existsSync(matrixFile)) fail("run", "usage", `matrix file not found: ${matrixFile}`, undefined, o.json);
+    const scenario = parseScenarioFile(files[0]);
+    if (scenario.on_unanswered === "prompt")
+      fail("run", "usage", `scenario "${scenario.name}" sets on_unanswered: prompt — rejected on \`run\` (breaks determinism / hangs in CI).`, undefined, o.json);
+    let matrixDoc: MatrixFile;
+    try {
+      matrixDoc = MatrixFile.parse(parseYaml(readFileSync(matrixFile, "utf8")));
+    } catch (e) {
+      fail("run", "usage", `invalid matrix file: ${(e as Error).message}`, undefined, o.json);
+    }
+    const { cells, totalBeforeCap, truncated } = expandMatrix(matrixDoc!, maxCells);
+    if (truncated) log(`::warning:: matrix: ${totalBeforeCap} cells before capping — only the first ${maxCells} ran (raise with --max-cells)`);
+    let baseSession: ReturnType<typeof loadSessionFromFile>;
+    try {
+      baseSession = loadSessionFromFile(scenario.session);
+    } catch (e) {
+      // A bad session ref (missing file, invalid YAML) must read as a clean usage error, matching the
+      // scenario-path check above — not a raw ENOENT + stack trace.
+      fail("run", "usage", `failed to load session "${scenario.session}": ${(e as Error).message}`, undefined, o.json);
+    }
+    const results: RunResult[] = [];
+    let cellResults: MatrixCellResult[];
+    try {
+      cellResults = await pMapBounded(cells, matrixConcurrency, async (cell): Promise<MatrixCellResult> => {
+        const cellScenario = cell.axes.baseline !== undefined ? { ...scenario, baseline: cell.axes.baseline } : scenario;
+        let session: ReturnType<typeof loadSessionFromFile>;
+        try {
+          session = applySessionOverrides(baseSession, {
+            model: cell.axes.model,
+            skillDirSubstitution:
+              cell.axes.skillDir !== undefined ? [baseSession.plugins.local_plugins[0], cell.axes.skillDir] : undefined,
+          });
+          if (cell.axes.skillDir !== undefined && baseSession.plugins.local_plugins.length !== 1)
+            throw new Error(
+              `skill_dirs axis requires the session to declare exactly one plugins.local_plugins entry to substitute ` +
+                `(found ${baseSession.plugins.local_plugins.length})`,
+            );
+        } catch (e) {
+          return { index: cell.index, axes: cell.axes, pass: false, failedAssertions: [], error: (e as Error).message };
+        }
+        const label = `${scenario.name} [${axesLabel(cell.axes)}] (cell ${cell.index + 1}/${cells.length})`;
+        try {
+          const result = await runOneScenario({
+            command: "run",
+            scenario: cellScenario,
+            label,
+            flags,
+            policy,
+            externalChannel,
+            o,
+            extra: { session },
+          });
+          results.push(result);
+          return matrixCellResultFromRun(cell, result);
+        } catch (e) {
+          // A cell-level infra failure (e.g. the pinned baseline's agent binary isn't staged) must not
+          // crash the whole matrix — render it as a distinct "cell error", not a fake assertion failure.
+          return { index: cell.index, axes: cell.axes, pass: false, failedAssertions: [], error: (e as Error).message };
+        }
+      });
+    } finally {
+      externalChannel?.close?.();
+    }
+    const matrix = buildMatrixRollup(cellResults, totalBeforeCap, truncated);
+    if (o.json) out(jsonEnvelope("run", results, { matrix }));
+    else for (const line of formatMatrixRollup(matrix)) log(line);
+    process.exit(matrix.anyFail ? 1 : 0);
+  }
+
   const results: RunResult[] = [];
   const rollups: RepeatRollup[] = [];
   try {
@@ -1145,7 +1267,7 @@ async function cmdRun(rawArgs: string[]) {
   // The rollup table is human output like every other per-run footer (renderFooter), so it goes to
   // stderr via log() — NOT out()/stdout, which text mode reserves for staying quiet (only json mode uses it).
   const usingRepeat = repeatN !== undefined;
-  if (o.json) out(jsonEnvelope("run", results, usingRepeat ? rollups : undefined, usingRepeat ? minPassRate : undefined));
+  if (o.json) out(jsonEnvelope("run", results, usingRepeat ? { rollups, minPassRate } : {}));
   else if (usingRepeat) for (const r of rollups) log(formatRepeatRollup(r, minPassRate));
   const ok = usingRepeat ? rollups.every((r) => rollupPasses(r, minPassRate)) : results.every((r) => computeVerdict(r, "live").pass);
   process.exit(ok ? 0 : 1);

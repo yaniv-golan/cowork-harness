@@ -20,8 +20,9 @@ export interface RepeatRollup {
 
 /** The first DEFINED field name on an assertion object — the same "one behavior name" convention the
  *  CLI/docs already use to describe a multi-key assertion (e.g. `{result, tool_called}` displays as
- *  "result", its first key). Falls back to a positional label if somehow no key is set. */
-function firstAssertionKey(a: Assertion): string {
+ *  "result", its first key). Falls back to a positional label if somehow no key is set. Exported — E3's
+ *  matrix rollup reuses this exact convention for its `failedAssertions` labels, not a re-derivation. */
+export function firstAssertionKey(a: Assertion): string {
   for (const k of Object.keys(a)) if ((a as Record<string, unknown>)[k] !== undefined) return k;
   return "(empty assertion)";
 }

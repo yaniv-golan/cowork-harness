@@ -622,6 +622,44 @@ export function loadSession(parsed: unknown): SessionConfig {
 }
 
 /**
+ * E3 (matrix runner) — the session-loading override seam. Pure: returns a new SessionConfig, never
+ * mutates `session`. `model` is a plain scalar overwrite. `skillDirSubstitution: [from, to]` swaps ONE
+ * `plugins.local_plugins` entry — chosen by exact match on `from` — for `to`, leaving every other entry
+ * untouched.
+ *
+ * The mount name a plugin gets (`.local-plugins/.../<basename(src)>`, see the `local_plugins` mounting
+ * loop above) is derived PURELY from the source directory's basename — there is no author-chosen name
+ * override anywhere in this codebase. So substituting a directory with a DIFFERENT basename would silently
+ * change the mount name the agent sees, invalidating any scenario assertion that references it (e.g. a
+ * `skill_triggered` regex keyed on the old plugin id). Rather than build new plumbing to pin an arbitrary
+ * mount name (real complexity the plan flags as having "no precedent in the codebase today"), this enforces
+ * same-basename substitution and fails loud otherwise — a `skill_dirs` matrix axis's candidate directories
+ * must all share one basename (e.g. `variants/v1/my-pdf-skill/`, `variants/v2/my-pdf-skill/`).
+ */
+export function applySessionOverrides(
+  session: SessionConfig,
+  overrides: { model?: string; skillDirSubstitution?: [string, string] },
+): SessionConfig {
+  let next = session;
+  if (overrides.model !== undefined) next = { ...next, model: overrides.model };
+  if (overrides.skillDirSubstitution) {
+    const [from, to] = overrides.skillDirSubstitution;
+    const idx = next.plugins.local_plugins.indexOf(from);
+    if (idx === -1)
+      throw new Error(`skill_dirs substitution: the session's plugins.local_plugins does not contain "${from}" to substitute`);
+    if (basename(to) !== basename(from))
+      throw new Error(
+        `skill_dirs substitution: "${to}" has a different directory basename than "${from}" — the mount name is derived from the ` +
+          `basename and must stay stable for scenario assertions to remain valid across matrix cells; give the candidate the same basename`,
+      );
+    const local_plugins = [...next.plugins.local_plugins];
+    local_plugins[idx] = to;
+    next = { ...next, plugins: { ...next.plugins, local_plugins } };
+  }
+  return next;
+}
+
+/**
  * Resolve a session's relative host paths against `baseDir` (the session file's own
  * directory), so a scenario+session bundle is relocatable and `run` behaves the same
  * from any working directory. `~` and already-absolute paths pass through untouched.
