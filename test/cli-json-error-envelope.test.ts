@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 
 // This repo is pure ESM ("type": "module") — __dirname is undefined here and would throw a
@@ -7,6 +8,9 @@ import { resolve } from "node:path";
 // own comment on it). Use a cwd-relative resolve instead, matching test/cli-json.test.ts /
 // test/cli-status.test.ts — vitest's cwd is the repo root.
 const CLI = resolve("dist/cli.js");
+// CI's unit-test step runs before the build step, so dist/ may not exist yet — skip like
+// test/cli-json.test.ts / test/cli-status.test.ts do (`npm run ci` builds first and does run these).
+const can = existsSync(CLI);
 
 /** Run the built CLI and capture stdout/stderr/exit code without throwing on nonzero exit. */
 function run(args: string[]): { stdout: string; stderr: string; status: number } {
@@ -19,7 +23,7 @@ function run(args: string[]): { stdout: string; stderr: string; status: number }
   }
 }
 
-describe("cli usage errors respect --output-format json", () => {
+describe.skipIf(!can)("cli usage errors respect --output-format json", () => {
   it("doctor: bad --tier value emits a JSON error envelope, not bare stderr text", () => {
     const r = run(["doctor", "--tier", "nonsense", "--output-format", "json"]);
     expect(r.status).toBe(2);
