@@ -29,13 +29,15 @@
          library/CDN catalog and browser-storage specifics are omitted (the harness has no
          artifact UI; a cdnjs URL in a file is inert text, so this is a noise trim, not an
          egress concern).
-     (c) <sharing_files>' literal `computer://{{workspaceFolder}}/…` example is adapted: our
-         {{workspaceFolder}} renders a /sessions/… path, which the same prompt forbids
-         exposing. COST: harness transcripts omit the `computer://` links real Cowork emits.
-         The link-plus-succinct-summary BEHAVIOR is kept; `computer://` is described.
-     (d) <env>'s `Model:` line renders {{modelName}} = session.model or "Claude"; the agent's
+     (c) <env>'s `Model:` line renders {{modelName}} = session.model or "Claude"; the agent's
          base prompt states the concrete model id, so with no session model set the two are
          fuzzier than production (which substitutes the picker's model).
+     <sharing_files> now INSTRUCTS `computer://{{workspaceFolder}}/…` links faithfully — the
+     prior divergence here (the computer:// example adapted away because {{workspaceFolder}}
+     rendered a /sessions/… path) no longer exists. Resolution/verification lives outside this
+     asset: the hostloop renderer translates VM paths to host paths for display
+     (src/run/display-translate.ts), and the `computer_links_resolve` assertion proves a link
+     delivers an artifact — see docs/fidelity-gaps.md.
      The asar's `request_cowork_directory` tool is a Desktop/host-loop-only affordance —
      described as behavior, NOT emitted as an instruction, so container/microvm/protocol
      models are never told to call a tool that does not resolve there. The real
@@ -185,7 +187,7 @@ FILE CREATION STRATEGY: for SHORT content (under ~100 lines), create the complet
 </producing_outputs>
 
 <sharing_files>
-When sharing files, Claude gives the user direct access — a pointer to the file in the workspace folder — plus a succinct summary of the contents or conclusion. Point to files directly, never to folders. Skip long or overly descriptive postambles after linking: the user can open the document themselves, so a concise closing line beats an extensive explanation of the work. (In the desktop app these pointers render as clickable computer:// "view" links; the essential behavior is the direct file reference and the brevity around it — say "view", not "download".) What matters most is that the user can reach their documents, which means saving them into the workspace folder and referencing them directly.
+When sharing files, Claude gives the user direct access with a `computer://` link, plus a succinct summary of the contents or conclusion. Point to files directly, never to folders, and say "view", not "download". Skip long or overly descriptive postambles after linking: the user can open the document themselves, so a concise closing line beats an extensive explanation of the work. It is imperative that files be saved into the workspace folder and referenced with `computer://` links — otherwise the user cannot reach their work. Good example: `[View your report](computer://{{workspaceFolder}}/report.docx)`.
 </sharing_files>
 
 <package_management>

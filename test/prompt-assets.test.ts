@@ -59,13 +59,30 @@ describe("renderPrompts — desktop-1.18286.0 reconstruction", () => {
     expect(systemPromptAppend).toContain("NOT Claude Code");
   });
 
-  it("never leaks a /sessions/ backend path through a computer:// link", () => {
-    // sharing_files is deliberately adapted: our {{workspaceFolder}} renders /sessions/…, which the
-    // prompt itself forbids exposing — so no rendered computer:// link may embed it.
+  it("the rendered (non-hostloop) asset contains the instructed computer:// link form", () => {
+    // sharing_files now INSTRUCTS computer:// links faithfully. At non-hostloop fidelity
+    // {{workspaceFolder}} renders a VM path — that's the production-faithful un-rewritten model
+    // context (production's model context keeps /sessions/… forever; only the DISPLAY layer, at
+    // hostloop, rewrites it — see src/run/display-translate.ts + the computer_links_resolve
+    // assertion in test/computer-links-resolve.test.ts). No leak: this is model-visible text.
     const session = SessionConfig.parse({});
     const { systemPromptAppend } = renderPrompts(baseline, session, sessionId, "project");
-    expect(systemPromptAppend).not.toMatch(/computer:\/\/\/?sessions\//);
-    expect(systemPromptAppend).not.toContain("computer://{{");
+    expect(systemPromptAppend).toContain(`computer:///sessions/${sessionId}/mnt/project/report.docx`);
+  });
+
+  it("the rendered HOSTLOOP asset's computer:// link carries the HOST workspace path, with no /sessions/ remnant", () => {
+    const session = SessionConfig.parse({});
+    const { systemPromptAppend } = renderPrompts(baseline, session, sessionId, "project", {
+      effectiveFidelity: "hostloop",
+      hostCwd: "/Users/me/.cowork-harness/runs/scenario/vm_test123/work/session/mnt/outputs",
+      hostUploadsDir: "/Users/me/uploads-staging/vm_test123",
+      hostWorkspaceFolder: "/Users/me/Project",
+      hostSkillsDir: "/Users/me/.cowork-harness/config/skills",
+    });
+    const rendered = systemPromptAppend!;
+    const link = "computer:///Users/me/Project/report.docx";
+    expect(rendered).toContain(link);
+    expect(link).not.toMatch(/\/sessions\//);
   });
 
   it("renders both with and without a connected folder", () => {
