@@ -1,0 +1,27 @@
+{
+  "request": {
+    "type": "control_request",
+    "request_id": "req-hook-1",
+    "request": {
+      "subtype": "hook_callback",
+      "callback_id": "cowork-task-bg-block",
+      "input": {
+        "tool_input": {
+          "run_in_background": true
+        }
+      },
+      "tool_use_id": "toolu_01SyntheticTask"
+    }
+  },
+  "response": {
+    "type": "control_response",
+    "response": {
+      "subtype": "success",
+      "request_id": "req-hook-1",
+      "response": {
+        "decision": "block",
+        "reason": "Background agents disabled"
+      }
+    }
+  }
+}

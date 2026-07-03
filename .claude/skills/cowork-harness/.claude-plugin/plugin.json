@@ -1,7 +1,7 @@
 {
   "name": "cowork-harness",
   "description": "Test or debug a Claude Code skill/plugin under Claude Cowork's runtime — sandboxed agent, default-deny egress, the can_use_tool permission/question protocol — using the cowork-harness CLI. Author scenario YAML, pick a fidelity tier, script AskUserQuestion / tool-permission answers, and assert artifacts, egress, or sub-agent dispatch.",
-  "version": "0.21.0",
+  "version": "0.22.0",
   "author": { "name": "Yaniv Golan" },
   "homepage": "https://github.com/yaniv-golan/cowork-harness",
   "license": "MIT"

@@ -270,6 +270,12 @@ if *every* key passes (don't rely on the first; keep one concern per item unless
 | `subagent_dispatched: <regex>` | a sub-agent whose `agentType` **or dispatch `description`** matches was dispatched (skills often dispatch with only a `description` and no `subagent_type` → `agentType:"unknown"`, so match by description, e.g. `subagent_dispatched: "TOP_DOWN"`) |
 | `subagent_declared_but_unused: <Tool>` | fails if a sub-agent declared the tool but never used **that** tool (even if it used others) — the v0.3.0 fabrication proxy |
 | `dispatch_count_max: <N>` | at most N sub-agents were dispatched (real Cowork caps at `{perTask:1, global:3}`; the harness **records** the count and asserts on it but does **not** itself enforce Cowork's skip-on-cap — that enforcement is DEFERRED, see SPEC §10) |
+| `skill_triggered: <regex>` | a skill matching the regex (by its invoked id, e.g. `"plugin:skill"`) was invoked via the `Skill` tool — fails as **evidence unavailable** (not a normal fail) when the agent's init tool list has no `Skill` tool at all, since that means invocation can't be observed on this agent version |
+| `no_skill_triggered: <regex>` | no invoked skill id matched the regex — the negative-control / description-collision catcher; fails as **evidence unavailable** (never a vacuous pass) when skill-invocation data is absent (an old `result.json` predating this key) or the `Skill` tool itself is unobservable |
+| `max_cost_usd: <N>` | the run's SDK-reported cost is ≤ N USD — fails as **evidence unavailable** when cost telemetry is absent (an old run predating this key). **Live lane only in spirit**: on replay this asserts the *frozen recording's* cost, not fresh spend — a cost regression is caught by a live run, not a token-free replay |
+| `max_tokens: <N>` | `usage.input_tokens + usage.output_tokens` ≤ N (cache-read/creation tokens excluded — priced separately). Same replay caveat as `max_cost_usd`: asserts the recording, not fresh spend |
+| `tool_calls_max: <N>` | total top-level tool calls (sum of `toolCounts`, sub-agent tools excluded) ≤ N — unlike the cost/token keys, this **is** meaningfully replay-checkable (the re-drive recomputes `toolCounts` deterministically from the recorded events) |
+| `max_turns: <N>` | the SDK-reported (or fallback-counted) turn count ≤ N — replay-checkable (the re-drive recounts turns deterministically, same as `tool_calls_max`) |
 | `question_asked: <regex>` | the agent asked an AskUserQuestion whose text matches |
 | `questions_count_max: <N>` | the agent asked at most N questions |
 | `gate_answers_delivered: true` | every answered AskUserQuestion gate's answer actually reached the model — requires a positive, observed `tool_result` (an **unobserved** delivery fails too, not only an errored one — no silent false-green) |
@@ -282,6 +288,7 @@ if *every* key passes (don't rely on the first; keep one concern per item unless
 | `egress_denied: <host>` | the host was blocked by the egress proxy |
 | `egress_allowed: <host>` | the host was allowed through |
 | `artifact_json: {…}` | assert over a JSON artifact's contents — see below |
+| `computer_links_resolve: true` | every `computer://` link in the model-visible transcript resolves to an artifact that exists in the run's collected outputs/mounts (a dangling link fails, naming which target was checked — host path, work tree, or replay manifest); zero links in the transcript **passes** (this gates resolution, not presence — combine with `transcript_contains` to also require a link show up) — **only `true` is valid**, writing `false` is rejected by the schema |
 
 `expect_denied: [host, …]` is shorthand that adds an `egress_denied` assertion per host.
 
@@ -368,8 +375,10 @@ and re-evaluates the **content** assertions. The authoritative list of content k
 
 **Evaluated on replay (content assertions):**
 `transcript_*` (incl. `transcript_matches`), `tool_*`, `subagent_*`, `dispatch_count_max`,
+`skill_triggered`, `no_skill_triggered`, `max_cost_usd`, `max_tokens`, `tool_calls_max`, `max_turns`,
 `result`, and the verdict modifiers `allow_permissive_auto_allow` / `allow_missing_capability` /
-`allow_l0_plugin_divergence` / `allow_stall` (kept on replay as no-op passes).
+`allow_l0_plugin_divergence` / `allow_stall` (kept on replay as no-op passes). `max_cost_usd`/`max_tokens`
+assert the *frozen recording's* spend on replay, not fresh spend — see their table entries above.
 
 **`question_asked`, `questions_count_max`, and `gate_answers_delivered`** are also content
 assertions, but they require the cassette to carry `controlOut` (full-fidelity replay). When
@@ -378,11 +387,15 @@ assertions, but they require the cassette to carry `controlOut` (full-fidelity r
 When `controlOut` is absent (old cassette), a **loud warning** fires and these keys are **excluded**
 from evaluation (not vacuously passed). Re-record with a current harness to enable them.
 
-**Filesystem assertions** (`file_exists`, `user_visible_artifact`, `artifact_json`) run on `replay` **when
-the cassette carries an artifact manifest** — `record` snapshots `outputs/` + connected folders (paths + hashes +
-small JSON bodies) into the cassette, and `replay` materializes that snapshot to evaluate them token-free.
-`artifact_json` needs the JSON body inlined (small files); a hash-only (oversized) entry still satisfies
-`file_exists` but not `artifact_json`. Without a manifest (older cassettes), they are **skipped** (loud).
+**Filesystem assertions** (`file_exists`, `user_visible_artifact`, `artifact_json`, `computer_links_resolve`)
+run on `replay` **when the cassette carries an artifact manifest** — `record` snapshots `outputs/` + connected
+folders (paths + hashes + small JSON bodies) into the cassette, and `replay` materializes that snapshot to
+evaluate them token-free. `artifact_json` needs the JSON body inlined (small files); a hash-only (oversized)
+entry still satisfies `file_exists` but not `artifact_json`. `computer_links_resolve` resolves BOTH
+`/sessions/…/mnt/…`-shaped links and host-shaped (hostloop) links against the manifest — a host-shaped link
+normalizes to a mount-relative path first (via the recorded connected-folder prefixes + the outputs/uploads
+mounts), since replay has no live filesystem to probe directly (that direct check only happens on a live
+`run`/`verify-run`). Without a manifest (older cassettes), all four are **skipped** (loud).
 A green `replay` re-confirms *record-time* artifacts, **not** that the current skill still produces them —
 that needs a live `run` (the cassette's staleness fingerprint warns when the skill/baseline drifted; `replay
 --strict` fails on any drift, `--fail-on-skill-drift` on skill-source drift only, and every result reports it
@@ -505,6 +518,82 @@ run (`--keep`, or a `--session-id` run) into a starter scenario YAML — auto-fi
 (gates→answers, artifacts→file_exists) — instead of copying an existing example by hand and editing it to
 match. Prints to stdout by default; add `--out <file.yaml>` to write it straight to `scenarios/`. Review
 and tighten the generated `when_question` regexes before committing.
+
+### Measuring flakiness (`run --repeat`)
+
+A single green run proves the scenario passed *once*. `--repeat <N>` (2–100) runs each resolved scenario N
+times and aggregates a **variance rollup** — pass rate, per-assertion pass/fail attribution, a
+verdict-signal histogram, cost/token totals, and a non-deterministic-run count — instead of a single
+pass/fail. `results` in the JSON envelope still holds every raw run (nothing hidden); only `ok`/the exit
+code are redefined for this mode, computed from the rollup rather than `results.every(pass)`.
+
+```bash
+cowork-harness run examples/scenarios/csv-metrics.yaml --repeat 10 --min-pass-rate 0.9
+```
+
+- `--min-pass-rate <0..1>` (default `1.0` — no flakiness tolerance) sets the batch's pass threshold.
+- `--stop-on-diverge` stops the loop as soon as **both** a pass and a fail have been observed — saves
+  paid runs once flakiness is already proven. That batch always **fails**, regardless of the numeric
+  rate reached: divergence *is* the failure this flag exists to catch.
+- `--max-budget-usd <x>` stops the loop once cumulative cost would exceed it. An incomplete-but-clean stop
+  (every completed run passed, but `N` wasn't reached) is a loud `::warning::`, not a failure by itself —
+  that batch is still judged on its own completed-runs pass rate. If a run reports no cost telemetry, the
+  cap degrades LOUDLY (one warning) instead of silently running all N as if the cap didn't exist.
+- `--repeat` rejects `--decider-dir` — an interactive driving agent answering gates live × N runs isn't a
+  reproducible measurement. `--decider-llm`/`on_unanswered: llm` are allowed, but a decided gate makes
+  `RunResult.nonDeterministic: true`, and the rollup's `nonDeterministicRuns` count flags this: flakiness
+  attribution downstream of a decided gate is confounded, since the gate itself isn't reproducible.
+
+This also composes with `skill_triggered`/`no_skill_triggered` (see [Assertions](#assertions)) for a
+**trigger-accuracy sweep**: a directory of prompt-variant scenarios, each asserting whether the intended
+skill fires, run under `--repeat` to measure how reliably a description/trigger phrase actually invokes the
+skill across repeated tries — see
+[`examples/scenarios/trigger-accuracy-sweep/`](../examples/scenarios/trigger-accuracy-sweep/) for a worked
+example.
+
+### Matrix testing (`run --matrix`)
+
+One scenario, a cross-product of axes, one command. `--matrix <matrix.yaml>` runs the resolved scenario
+once per cell of a matrix file's declared axes and reports one row per cell, instead of one pass/fail for
+the whole run:
+
+```bash
+cowork-harness run examples/scenarios/csv-metrics.yaml --matrix matrix.yaml --concurrency 2
+```
+
+`matrix.yaml`:
+
+```yaml
+baselines: [desktop-1.17377.2, desktop-1.18286.0]   # optional axis; each value must resolve via loadBaseline
+models: [claude-sonnet-4-6, claude-opus-4-8]         # optional axis; overrides the session model per cell
+skill_dirs: [../variants/v1/my-skill, ../variants/v2/my-skill]   # optional axis; substitutes the skill under test
+```
+
+- Any axis may be omitted; an omitted/empty axis contributes exactly one cell (unmodified), so a matrix
+  file with no axes at all still runs the scenario once.
+- The cross-product is capped at `--max-cells` (default 16) — over the cap, the harness warns and runs
+  only the first N; it never silently drops cells without saying so.
+- `--concurrency <n>` (default 1, max 8) runs cells N at a time via the same bounded pool `record
+  --concurrency` uses — each cell is a fully isolated run, so the bound exists only to stay under Docker's
+  address pool / the model API's rate limits, not for correctness. **Exception**: `--concurrency > 1` is
+  rejected together with `--decider-dir`/`--decider-cmd` — the external-decider channel is ONE shared
+  object across every cell, and every channel implementation is strictly serial over shared mutable state,
+  not safe for concurrent gate answers. `--concurrency 1` (the default) with an external decider is fine.
+- Exit code: a matrix is a **compatibility gate**, not a survey — any cell failing (a real assertion
+  failure, OR a cell-level infrastructure error, e.g. the pinned baseline's agent binary isn't staged)
+  fails the whole run. An infra failure renders as a distinct `cell error: …` line, never as a fake
+  assertion failure, so you can tell "the skill failed" apart from "this cell never got to run the skill
+  at all". `--matrix` composes with `--repeat`: each cell runs as its own repeat batch (N iterations of
+  that cell's axes-overridden scenario), with the same unanswered-gate/budget-cap handling as standalone
+  `--repeat`; the matrix verdict then judges each cell's rollup against `--min-pass-rate`.
+- The `skill_dirs` axis has one constraint worth knowing up front: the session under test must declare
+  **exactly one** `plugins.local_plugins` entry (the skill being matrixed), and every candidate directory
+  in the axis must share that entry's **basename** — the mount name a plugin gets is derived purely from
+  its source directory's basename (there's no author-chosen override), so a mismatched basename would
+  silently change the mount name a scenario's assertions reference. Keep skill-dir variants under
+  identically-named leaf directories at different parents, e.g. `variants/v1/my-skill/`,
+  `variants/v2/my-skill/` — the harness rejects a basename mismatch loud rather than renaming anything for
+  you.
 
 ### Dry-running a decider (`decide`)
 

@@ -93,6 +93,83 @@ jobs:
       - name: Lint example scenarios (no-silent-false-green invariants)
         run: node dist/cli.js lint examples/scenarios/*.yaml
 
+  # ── Stage 1a: packaged Action self-test (uses: ./ against THIS commit, packed as a tarball —
+  # never against whatever's currently published on npm) ─────────────────────────
+  action-self-test:
+    name: "Action self-test (uses: ./)"
+    runs-on: ubuntu-latest
+    needs: unit
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with: { node-version: "20", cache: npm }
+      - run: npm ci && npm run build
+      - name: Pack this commit (the action must install THIS code, not the last npm publish)
+        id: pack
+        run: |
+          npm pack --pack-destination /tmp >/dev/null
+          echo "tarball=$(ls /tmp/cowork-harness-*.tgz)" >> "$GITHUB_OUTPUT"
+      - name: Run the action against the committed pass-case fixture
+        id: passcase
+        uses: ./
+        with:
+          command: replay
+          path: examples/replays/example-pdf-skill.cassette.json
+          version: ${{ steps.pack.outputs.tarball }}
+      - name: Verify the reporter actually ran
+        # $GITHUB_STEP_SUMMARY is scoped to THIS action invocation's own steps (all composite
+        # sub-steps share one file), so a later, separate workflow step gets a fresh, empty file and
+        # can never read back what the action wrote — check the summary-md OUTPUT instead.
+        run: |
+          if [ -z "${{ steps.passcase.outputs.summary-md }}" ]; then
+            echo "::error::action-self-test: summary-md output is empty — the reporter didn't write anything."
+            exit 1
+          fi
+      - name: Run the action against a nonexistent path (must fail — proves exit-code propagation)
+        id: failcase
+        continue-on-error: true
+        uses: ./
+        with:
+          command: replay
+          path: examples/replays/this-cassette-does-not-exist.json
+          version: ${{ steps.pack.outputs.tarball }}
+      - name: Verify the failing case actually failed
+        # continue-on-error above masks the step's own exit code so this job can inspect it instead
+        # of dying immediately — this assertion is the point of the whole failing-case step.
+        run: |
+          if [ "${{ steps.failcase.outcome }}" != "failure" ]; then
+            echo "::error::action-self-test: expected the nonexistent-path invocation to fail, got outcome='${{ steps.failcase.outcome }}'"
+            exit 1
+          fi
+      - name: Run the action against a deliberately-failing ASSERTION (distinct from the usage
+          error above — proves exit 1 / verdict-fail propagates, not just exit 2 / usage errors)
+        id: assertfailcase
+        continue-on-error: true
+        uses: ./
+        with:
+          command: replay
+          path: examples/replays/example-pdf-skill.cassette.json
+          version: ${{ steps.pack.outputs.tarball }}
+          extra-args: "--assert-from examples/replays/example-pdf-skill-ci-selftest-failing.yaml"
+      - name: Verify the assertion-failure case actually failed, and the reporter rendered a fail row
+        env:
+          # steps.assertfailcase.outputs.summary-md, not $GITHUB_STEP_SUMMARY — that file is scoped
+          # to the assertfailcase step's own invocation; this (separate) step would see a fresh, empty one.
+          SUMMARY_MD: ${{ steps.assertfailcase.outputs.summary-md }}
+        run: |
+          if [ "${{ steps.assertfailcase.outcome }}" != "failure" ]; then
+            echo "::error::action-self-test: expected the deliberately-failing assertion to fail, got outcome='${{ steps.assertfailcase.outcome }}'"
+            exit 1
+          fi
+          # This step's summary-md is just the assertfailcase invocation's own row (not cumulative
+          # across the job's earlier steps — each action invocation renders only its own run).
+          if ! grep -qE "example-pdf-skill.*❌ fail" <<< "$SUMMARY_MD"; then
+            echo "::error::action-self-test: reporter output doesn't show a failing verdict row for example-pdf-skill — the reporter may not be rendering assertion failures correctly."
+            exit 1
+          fi
+
   # ── Stage 1b: pytest `cowork` lane — helper self-checks (no Docker/token; -m 'not cowork') ──
   python:
     name: pytest cowork-lane (helper self-checks)

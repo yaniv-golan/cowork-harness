@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { evaluate, hostMatches, type AssertContext } from "../src/assert.js";
+import { evaluate, hostMatches, budgetFields, type AssertContext } from "../src/assert.js";
 
 function ctx(over: Partial<AssertContext> = {}): AssertContext {
   return {
@@ -20,6 +20,8 @@ function ctx(over: Partial<AssertContext> = {}): AssertContext {
     subagents: [],
     gateDeliveries: [],
     toolResultTexts: [],
+    skillsInvoked: [],
+    skillToolAvailable: true,
     ...over,
   };
 }
@@ -121,6 +123,118 @@ describe("subagent_dispatched matches agentType OR description", () => {
   });
   it("fails when neither type nor description matches", () => {
     expect(pass(evaluate([{ subagent_dispatched: "SLIDE_REVIEWS" }], ctx({ subagents: subs })))).toBe(false);
+  });
+});
+
+describe("skill_triggered / no_skill_triggered (Wave 1 / E8)", () => {
+  const invoked = ["my-pdf-skill:my-pdf-skill", "other-plugin:helper"];
+
+  it("skill_triggered matches an invoked skill id by regex", () => {
+    expect(pass(evaluate([{ skill_triggered: "my-pdf-skill" }], ctx({ skillsInvoked: invoked })))).toBe(true);
+  });
+  it("skill_triggered fails when no invoked skill matches", () => {
+    const r = evaluate([{ skill_triggered: "nonexistent" }], ctx({ skillsInvoked: invoked }));
+    expect(pass(r)).toBe(false);
+    expect(r[0].message).toContain("no invoked skill matched");
+  });
+  it("no_skill_triggered passes when no invoked skill matches", () => {
+    expect(pass(evaluate([{ no_skill_triggered: "nonexistent" }], ctx({ skillsInvoked: invoked })))).toBe(true);
+  });
+  it("no_skill_triggered fails when a skill DID match (negative-assertion catch)", () => {
+    expect(pass(evaluate([{ no_skill_triggered: "my-pdf-skill" }], ctx({ skillsInvoked: invoked })))).toBe(false);
+  });
+  it("both keys fail as evidence-unavailable when the agent's init tool list has no Skill tool", () => {
+    const r1 = evaluate([{ skill_triggered: "x" }], ctx({ skillToolAvailable: false }));
+    expect(pass(r1)).toBe(false);
+    expect(r1[0].message).toContain("evidence unavailable");
+    const r2 = evaluate([{ no_skill_triggered: "x" }], ctx({ skillToolAvailable: false }));
+    expect(pass(r2)).toBe(false);
+    expect(r2[0].message).toContain("evidence unavailable");
+  });
+  it("no_skill_triggered fails as evidence-unavailable (not vacuously passes) when skillsInvoked data is absent", () => {
+    const r = evaluate([{ no_skill_triggered: "x" }], ctx({ skillsInvokedMissing: true }));
+    expect(pass(r)).toBe(false);
+    expect(r[0].message).toContain("evidence unavailable");
+  });
+  it("skill_triggered on missing skillsInvoked data fails normally (no vacuous-pass risk for a positive claim)", () => {
+    // mirrors subagent_dispatched's convention: a positive assertion over an empty/absent collection just
+    // fails naturally — only the NEGATIVE assertion needs the evidence-unavailable guard.
+    const r = evaluate([{ skill_triggered: "x" }], ctx({ skillsInvokedMissing: true, skillsInvoked: [] }));
+    expect(pass(r)).toBe(false);
+  });
+  it("a malformed regex fails cleanly on both keys (no throw)", () => {
+    expect(pass(evaluate([{ skill_triggered: "(" }], ctx()))).toBe(false);
+    expect(pass(evaluate([{ no_skill_triggered: "(" }], ctx()))).toBe(false);
+  });
+});
+
+describe("budgetFields (Wave 1 / E6a + Wave 2 / E6b) — the single derivation used by live/replay/verify-run", () => {
+  it("computes all four from a fully-populated source", () => {
+    expect(
+      budgetFields({ cost: { usd: 1.5 }, usage: { input_tokens: 100, output_tokens: 50, turns: 7 }, toolCounts: { Read: 2, Write: 1 } }),
+    ).toEqual({ costUsd: 1.5, tokensTotal: 150, toolCallsTotal: 3, turns: 7 });
+  });
+  it("returns undefined for each field when its source is absent (not 0)", () => {
+    expect(budgetFields({})).toEqual({ costUsd: undefined, tokensTotal: undefined, toolCallsTotal: undefined, turns: undefined });
+  });
+  it("toolCallsTotal is 0 (a real value, not undefined) when toolCounts is a populated-but-empty object", () => {
+    expect(budgetFields({ toolCounts: {} }).toolCallsTotal).toBe(0);
+  });
+  it("tokensTotal is undefined when only one of input/output tokens is a number", () => {
+    expect(budgetFields({ usage: { input_tokens: 100 } }).tokensTotal).toBeUndefined();
+  });
+  it("turns passes through usage.turns directly (Wave 0 already computed it — no re-derivation here)", () => {
+    expect(budgetFields({ usage: { turns: 4 } }).turns).toBe(4);
+    expect(budgetFields({ usage: { turns: 0 } }).turns).toBe(0); // 0 turns is a real value, not "missing"
+  });
+});
+
+describe("max_cost_usd / max_tokens / tool_calls_max (Wave 1 / E6a)", () => {
+  it("max_cost_usd passes at/under the threshold, fails over it", () => {
+    expect(pass(evaluate([{ max_cost_usd: 0.5 }], ctx({ costUsd: 0.5 })))).toBe(true);
+    const r = evaluate([{ max_cost_usd: 0.5 }], ctx({ costUsd: 0.51 }));
+    expect(pass(r)).toBe(false);
+    expect(r[0].message).toContain("0.51");
+  });
+  it("max_cost_usd fails as evidence-unavailable (not a vacuous pass) when cost telemetry is absent", () => {
+    const r = evaluate([{ max_cost_usd: 0.5 }], ctx({ costUsd: undefined }));
+    expect(pass(r)).toBe(false);
+    expect(r[0].message).toContain("evidence unavailable");
+  });
+  it("max_tokens passes at/under the threshold, fails over it", () => {
+    expect(pass(evaluate([{ max_tokens: 1000 }], ctx({ tokensTotal: 1000 })))).toBe(true);
+    expect(pass(evaluate([{ max_tokens: 1000 }], ctx({ tokensTotal: 1001 })))).toBe(false);
+  });
+  it("max_tokens fails as evidence-unavailable when token telemetry is absent", () => {
+    const r = evaluate([{ max_tokens: 1000 }], ctx({ tokensTotal: undefined }));
+    expect(pass(r)).toBe(false);
+    expect(r[0].message).toContain("evidence unavailable");
+  });
+  it("tool_calls_max passes at/under the threshold, fails over it", () => {
+    expect(pass(evaluate([{ tool_calls_max: 3 }], ctx({ toolCallsTotal: 3 })))).toBe(true);
+    expect(pass(evaluate([{ tool_calls_max: 3 }], ctx({ toolCallsTotal: 4 })))).toBe(false);
+  });
+  it("tool_calls_max fails as evidence-unavailable when tool-count telemetry is absent", () => {
+    const r = evaluate([{ tool_calls_max: 3 }], ctx({ toolCallsTotal: undefined }));
+    expect(pass(r)).toBe(false);
+    expect(r[0].message).toContain("evidence unavailable");
+  });
+});
+
+describe("max_turns (Wave 2 / E6b — the last budget key, built on Wave 0's usage.turns)", () => {
+  it("passes at/under the threshold, fails over it", () => {
+    expect(pass(evaluate([{ max_turns: 5 }], ctx({ turns: 5 })))).toBe(true);
+    const r = evaluate([{ max_turns: 5 }], ctx({ turns: 6 }));
+    expect(pass(r)).toBe(false);
+    expect(r[0].message).toContain("6");
+  });
+  it("0 turns is a real value that satisfies any non-negative max_turns, not evidence-unavailable", () => {
+    expect(pass(evaluate([{ max_turns: 0 }], ctx({ turns: 0 })))).toBe(true);
+  });
+  it("fails as evidence-unavailable (not a vacuous pass) when turn telemetry is absent", () => {
+    const r = evaluate([{ max_turns: 5 }], ctx({ turns: undefined }));
+    expect(pass(r)).toBe(false);
+    expect(r[0].message).toContain("evidence unavailable");
   });
 });
 

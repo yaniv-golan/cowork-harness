@@ -23,6 +23,7 @@ function partialRecord(over: Partial<RunRecord> = {}): RunRecord {
     toolResults: [],
     gateAnswers: [],
     gateDeliveries: [],
+    skillsInvoked: [],
     ...over,
   };
 }

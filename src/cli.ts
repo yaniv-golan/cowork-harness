@@ -4,9 +4,16 @@ import { join, basename, resolve, isAbsolute, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
 import { Scenario, AnswerRule, Assertion, type RunResult, type RunStatus, type PlatformBaseline } from "./types.js";
-import { loadBaseline, BASELINES_DIR, cmpVersionStrings } from "./baseline.js";
-import { loadSession, resolveSessionPaths } from "./session.js";
-import { executeScenario, parseScenarioFile, UnansweredError, BoundaryError, type ExecuteOptions } from "./run/execute.js";
+import { loadBaseline, BASELINES_DIR, cmpVersionStrings, sha256File } from "./baseline.js";
+import { loadSession, resolveSessionPaths, applySessionOverrides } from "./session.js";
+import {
+  executeScenario,
+  parseScenarioFile,
+  loadSessionFromFile,
+  UnansweredError,
+  BoundaryError,
+  type ExecuteOptions,
+} from "./run/execute.js";
 import {
   ScriptedDecider,
   ExternalDecider,
@@ -20,6 +27,7 @@ import { claudeCliComplete } from "./decide/llm-transport.js";
 import { toDecisionRequest, type DecisionRequest } from "./agent/session.js";
 import { vmInit, vmDelete, vmStatus, vmPrune, instanceName } from "./runtime/lima.js";
 import { sync } from "./sync/cowork-sync.js";
+import { diffBaselines, formatDiffLines, renderChangelog } from "./sync/baseline-diff.js";
 import { runBoundaryChecks, formatBoundary } from "./boundary.js";
 import { cmdChat } from "./run/chat.js";
 import { cmdRecord, cmdReplay, cmdVerifyCassettes, cmdRehash, buildFingerprint, fingerprintSkillDrift } from "./run/cassette.js";
@@ -40,18 +48,53 @@ import {
   buildDispatchTree,
   formatDispatchTree,
   noteRunsLocation,
+  eventsFromLines,
+  runsRoot,
 } from "./run/trace-view.js";
+import { readIndex, reindexFromRunsTree, buildStats, resolveRunsFromIndex, type RunIndexRow, type StatsSummary } from "./run/run-index.js";
+import {
+  canonicalizeInput,
+  diffToolSequence,
+  diffTranscript,
+  diffMeta,
+  diffArtifacts,
+  type NormalizedToolRow,
+  type DiffMetaSummary,
+  type ToolDiffOp,
+  type TranscriptDiffLine,
+  type MetaDiffEntry,
+} from "./run/diff.js";
+import type { Cassette } from "./run/cassette.js";
 import { buildScaffold } from "./run/scaffold.js";
 import { buildInspectView } from "./run/inspect-view.js";
 import { pkgVersion, jsonEnvelope, jsonError, parseOutputFormat, fail, isJsonOutput, type ErrCategory } from "./run/envelope.js";
+import { buildRepeatRollup, rollupPasses, type RepeatRollup } from "./run/repeat.js";
+import {
+  MatrixFile,
+  expandMatrix,
+  buildMatrixRollup,
+  formatMatrixRollup,
+  matrixCellResultFromRun,
+  axesLabel,
+  buildMatrixRepeatRollup,
+  formatMatrixRepeatRollup,
+  type MatrixCellResult,
+  type MatrixCellRepeatResult,
+  type MatrixCell,
+} from "./run/matrix.js";
+import { pMapBounded } from "./async-pool.js";
 import { computeVerdict } from "./run/verdict.js";
-import { evaluate, hostMatches, type AssertContext } from "./assert.js";
+import { evaluate, hostMatches, budgetFields, type AssertContext } from "./assert.js";
 import { spawnChannel, fileChannel, streamGates, answerGate, readGate, type DecisionChannel } from "./decide/external-channel.js";
 
 // Synchronous writes (fd 1/2): `process.stdout.write` + `process.exit()` truncates on a PIPE, which
 // would lose the json envelope for any agent/CI that pipes us. writeSync flushes before exit.
 const out = (s: string) => writeSync(1, s + "\n"); // machine (stdout)
 const log = (s: string) => writeSync(2, s + "\n"); // human (stderr)
+
+// E3 (matrix runner) — mirrors record's own MAX_RECORD_CONCURRENCY bound (cassette.ts): above a handful,
+// concurrent runs exhaust Docker's default address pool / model API rate limits.
+const MAX_MATRIX_CONCURRENCY = 8;
 
 const HELP = `cowork-harness <command>   (v${"$VERSION"})
 
@@ -118,12 +161,19 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
       [--output-format json]
   inspect <run-id | run-dir>   show what a run produced: artifacts + a shallow field preview of each JSON artifact
       [--output-format json]   structured digest
+  diff <a> <b>                 compare two baselines, two runs, two cassettes, or a run+cassette (kind auto-detected by content)
+      [--changelog]            baseline mode: render known-field prose instead of the raw path-diff
+      [--view tools|transcript|artifacts|meta|all] [--no-normalize]   run/cassette mode (see 'diff --help')
+      [--output-format json]   exit codes: 0 identical · 1 differing · 2 usage
   scaffold <run-id | run-dir>  turn a kept run into a starter scenario YAML (gates→answers, artifacts→file_exists)
       [--out <file.yaml>]      write to a file (default: stdout)
   status <run-id | run-dir>    check whether a background run is alive (state/elapsed/tool counts) — no ps aux needed
       [--follow]               stream one line per status change until done/error; arm a Monitor here
       [--output-format json]   structured status (--follow always emits raw JSON lines, format flag N/A there)
       exit codes: 0 healthy · 1 resolved dir has no/malformed status.json, or the run errored · 2 unresolvable <run-id | run-dir> · 3 stale
+  stats [<scenario>]           queryable summary over indexed runs: count, pass rate, cost/duration/token/turn p50/p95
+      [--since <date>] [--baseline <b>] [--branch <b>] [--metric pass-rate|cost|tokens|duration|turns] [--last <n>] [--reindex]
+      (run 'stats --help' for the full flag reference)
 
 ── In-band gate plumbing (for --decider-dir) ─────────────────────────────────
   gates <dir> [--follow]       stream pending gates as JSON lines + terminal {"done":true}; arm a Monitor here
@@ -265,6 +315,42 @@ Input policy:
                                    scenarios that don't use the model terminal.
   (per-scenario answers/on_unanswered in the YAML take precedence where set)
 
+Repeat / flakiness measurement (E1):
+  --repeat <N>                     run each resolved scenario N times (int, 2-100) and aggregate a variance
+                                   rollup (pass rate, per-assertion attribution, signal histogram). results[]
+                                   still holds every raw run; only the batch verdict (ok/exit code) changes
+                                   for this mode — see --min-pass-rate. Rejects --decider-dir (an interactive
+                                   driving agent × N runs is not a measurement).
+  --min-pass-rate <0..1>           the repeat batch's pass threshold (default 1.0 = no flakiness tolerance).
+                                   Requires --repeat.
+  --stop-on-diverge                stop the repeat loop as soon as BOTH a pass and a fail have been observed
+                                   (saves paid runs once flakiness is proven) — that batch always FAILS
+                                   (divergence observed = flaky = what this flag exists to catch). Requires --repeat.
+  --max-budget-usd <x>             stop the repeat loop once cumulative cost would exceed x. An incomplete-
+                                   but-clean stop is a warning, not a failure by itself; degrades LOUDLY
+                                   (never silently runs all N) if a run reports no cost telemetry. Requires --repeat.
+
+Matrix testing (E3) — one scenario × a cross-product of axes, in one run:
+  --matrix <matrix.yaml>           run <scenario.yaml> across the cross-product of a matrix file's axes
+                                   (baselines/models/skill_dirs — see docs/scenario.md). Requires exactly
+                                   one scenario file (not a dir). Cannot combine with --repeat. Exit 1 if
+                                   any cell fails (assertion OR a cell-level infra error, e.g. the pinned
+                                   baseline's agent binary isn't staged) — a matrix is a compatibility gate,
+                                   not a survey. The JSON envelope gains an additive "matrix: {cells[]}" field.
+  --max-cells <n>                  cap the cross-product (default 16); over the cap warns and runs only the
+                                   first n. Requires --matrix.
+  --concurrency <n>                run cells N at a time (default 1, max 8 — each run is fully isolated, the
+                                   bound is for Docker address pool / model API rate limits). Requires --matrix.
+                                   Rejected together with --decider-dir/--decider-cmd when > 1 (the external
+                                   decider channel is shared across cells, not safe for concurrent gate answers).
+  matrix.yaml:
+    baselines: [desktop-1.17377.2, desktop-1.18286.0]   # optional axis; each value must resolve via loadBaseline
+    models: [claude-sonnet-4-6, claude-opus-4-8]         # optional axis; overrides the session model per cell
+    skill_dirs: [../variants/v1/my-skill, ../variants/v2/my-skill]  # optional axis; substitutes the session's
+                                                          # single plugins.local_plugins entry — candidates MUST
+                                                          # share one basename (the mount name derives from it;
+                                                          # a mismatched basename is rejected, not silently renamed)
+
 Output:
   --output-format text|json        text = verdict + failing transcript (default); json = stdout envelope
   --quiet, -q                      verdict only            --verbose, -V   live stream + per-tool markers
@@ -320,6 +406,13 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
     "usage: scaffold <run-id | run-dir> [--out <file.yaml>] [--output-format text|json]\n       Turns a kept run into a starter scenario YAML (gates→answers, artifacts→file_exists).\n       Positional <run-id | run-dir> is the canonical form.",
   status:
     'usage: status <run-id | run-dir> [--follow] [--output-format text|json]   (check whether a background run is alive, without ps aux — see docs/run-status.md)\n       --follow: stream one line per status change until the run reaches a terminal state (done/error); arm a Monitor here\n       exit codes: 0 healthy (running/done) · 1 the dir resolved but has no status.json yet (or a malformed one), or the run itself ended in state:"error" · 2 usage error, including an unresolvable <run-id | run-dir> (matches trace/inspect/scaffold) · 3 stale (probably dead — no exit handler can catch SIGKILL)',
+  stats:
+    "usage: stats [<scenario>] [--since <ISO date>] [--baseline <b>] [--branch <b>] [--metric pass-rate|cost|tokens|duration|turns] [--last <n>] [--reindex] [--output-format text|json]\n" +
+    "       queryable summary over <runsRoot>/index.jsonl (E4) — per-scenario run count, pass rate, cost/duration/token/turn p50/p95, last-green timestamp.\n" +
+    "       --reindex rebuilds the index from the physical run-dir tree first (one-time migration for pre-index runs, or if index.jsonl is lost/corrupted beyond its own per-line tolerance).\n" +
+    "       --last <n>: the N most recent runs PER SCENARIO (not globally — a global cut would starve a low-frequency scenario out of the window).\n" +
+    "       --metric narrows the TEXT line to one view; --output-format json always returns every field regardless (same convention as --quiet/--verbose — machine output stays full, only the human render narrows).\n" +
+    "       `run`/`skill` invocations are indexed automatically at every result.json write (live + partial); `record`'s live execution is indexed too, tagged command:\"record\"; replay results are never indexed (they're re-checks, not new evidence).",
   decide:
     'usage: decide [--question <q>] [--option <o>]... [--decider-cmd <cmd> | --decider-llm [--intent <s>] [--decider-model <id>]] [--answer "<q>=<label>"]... [--answer-policy <p>] [--output-format json]',
   gates:
@@ -330,6 +423,15 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
     "usage: verify-run <run-dir> <scenario.yaml> [--output-format json]   (re-evaluate a scenario's assert: against a kept run dir; no live agent)",
   inspect:
     "usage: inspect <run-id | run-dir> [--output-format json]   (show what a run PRODUCED: artifacts + a shallow preview of each JSON artifact's fields; for what HAPPENED — tools/decisions — use `trace`)",
+  diff:
+    "usage: diff <a> <b> [--changelog] [--view tools|transcript|artifacts|meta|all] [--no-normalize] [--output-format text|json]\n" +
+    "       kind is auto-detected by CONTENT (not filename): two baselines (loadBaseline: `latest`, a bare name under baselines/, or an absolute path) | two runs (run-id/run-dir/events.jsonl) | two cassettes (*.cassette.json) | one run + one cassette (cross-comparable).\n" +
+    "       baselines only pair with baselines; mixing a baseline with a run/cassette is a usage error. Comparing runs of two DIFFERENT scenarios is allowed (skill-variant comparison) but warns on stderr.\n" +
+    "       --changelog: BASELINE MODE ONLY — render known-field prose (agent/Desktop version bumps, egress allowlist changes, gate flips) instead of the raw path-diff; unmapped paths still render, generically, never silently dropped.\n" +
+    "       --view: RUN/CASSETTE MODE ONLY — restrict text output to one view (default: all). Normalization masks tool-use ids, UUIDs, session-dir markers, timestamps, and host paths so two runs of the SAME scenario diff as identical despite per-run noise; --no-normalize compares raw values (forensics).\n" +
+    "       transcript is advisory (model-stochastic prose differs across live re-records no matter what) — tools/artifacts/meta are the gateable signal.\n" +
+    "       runs anywhere (reads committed JSON / cassette files only — no live Desktop install needed for baseline mode, unlike `sync --diff`; no Docker/token needed for run/cassette mode).\n" +
+    "       exit codes: 0 identical · 1 differing · 2 usage (e.g. an unresolvable baseline name, or a run/cassette with no matching side).",
   doctor: "usage: doctor [--tier protocol|container|microvm|hostloop|cowork] [--output-format json]   (read-only prerequisite check)",
   rehash:
     "usage: rehash <dir/> [--dry-run] [--output-format text|json]   (migrate cassettes across format bumps using contentSig verification; no re-record needed)",
@@ -348,9 +450,11 @@ const COMMANDS = [
   "verify-run",
   "trace",
   "inspect",
+  "diff",
   "assertions",
   "scaffold",
   "status",
+  "stats",
   "decide",
   "gates",
   "answer",
@@ -553,12 +657,16 @@ async function main() {
       return cmdTrace(rest);
     case "inspect":
       return cmdInspect(rest);
+    case "diff":
+      return cmdDiff(rest);
     case "assertions":
       return cmdAssert(rest);
     case "scaffold":
       return cmdScaffold(rest);
     case "status":
       return cmdStatus(rest);
+    case "stats":
+      return cmdStats(rest);
     case "decide":
       return cmdDecide(rest);
     case "gates":
@@ -618,6 +726,29 @@ function flagValueStrict(command: string, args: string[], i: number, flag: strin
   if (v.startsWith("-") && !/^-\d/.test(v))
     fail(command, "usage", `${flag} requires a value but got a flag-looking token "${v}" — did you forget the value?`, undefined, json);
   return v;
+}
+
+/**
+ * Reads a value-flag that may appear as EITHER `--flag value` OR `--flag=value` — unlike `flagValue`
+ * (spaced form only), used at call sites (`stats`) that don't pre-extract flags the way `cmdRun`'s pre-args
+ * loop does. `rejectUnknownFlags` already strips `=value` before its allowlist check (its own comment says
+ * so), so an equals-form token silently PASSES that check — if the value-read here only looked for the
+ * exact spaced-form token, the flag would be silently accepted-but-ignored, not a "unknown flag" usage
+ * error. Returns `undefined` when the flag isn't present at all (never for a present-but-empty value —
+ * that's a usage error via the delegated `flagValue` call, or an explicit empty-value check for the
+ * equals form).
+ */
+function readValueFlag(command: string, args: string[], flag: string, json: boolean): string | undefined {
+  const eqPrefix = flag + "=";
+  const eqToken = args.find((a) => a.startsWith(eqPrefix));
+  if (eqToken !== undefined) {
+    const v = eqToken.slice(eqPrefix.length);
+    if (v.trim() === "") fail(command, "usage", `${flag} requires a non-empty value`, undefined, json);
+    return v;
+  }
+  const i = args.indexOf(flag);
+  if (i === -1) return undefined;
+  return flagValue(command, args, i, flag, json);
 }
 
 /**
@@ -858,9 +989,23 @@ async function runOneScenario(p: {
   o: ReturnType<typeof resolveOutput>;
   keep?: boolean;
   extra?: Partial<ExecuteOptions>; // skill-only opts: session/sessionId/resume/llmIntent/nonDeterministicHint
+  /** E3: --matrix drives N cells from ONE process — a single cell's UnansweredError must never
+   *  process.exit() the whole matrix (the default `fail()` mapping below does exactly that). When true,
+   *  re-throw UnansweredError like any other error instead, so the matrix cell loop's own per-cell catch
+   *  can convert it into a distinct `cell error` — same shape as an agent-binary-unavailable failure,
+   *  never silently conflated with a real assertion failure. */
+  rethrowUnanswered?: boolean;
 }): Promise<RunResult> {
-  const { command, scenario, label, flags, policy, externalChannel, o, keep, extra } = p;
-  const renderer = o.render ? makeRenderer(o.plan) : undefined;
+  const { command, scenario, label, flags, policy, externalChannel, o, keep, extra, rethrowUnanswered } = p;
+  // The display translator needs the run's LaunchPlan (mount host paths) + resolved fidelity, both of
+  // which are only known INSIDE executeScenario (buildLaunchPlan runs there) — well after this renderer
+  // is constructed. A mutable ref (same pattern as execute.ts's own provenanceRef) lets executeScenario
+  // fill it in once ctx is known, before any AgentEvent can arrive; the renderer reads translateRef.current
+  // fresh on every event via this wrapper closure, so the late assignment is visible without needing to
+  // share the RenderPlan object itself. Default: identity (matches today's behavior at every non-hostloop
+  // tier, and if executeScenario never gets a chance to fill it in).
+  const translateRef: { current: (s: string) => string } = { current: (s) => s };
+  const renderer = o.render ? makeRenderer({ ...o.plan, translate: (s: string) => translateRef.current(s) }) : undefined;
   if (!o.json && !flags.quiet) renderStart(label, scenario.fidelity, o.plan);
   const start = Date.now();
   const stopHeartbeat = o.json || externalChannel ? () => {} : startHeartbeat(renderer, o.plan, start);
@@ -868,18 +1013,20 @@ async function runOneScenario(p: {
   try {
     result = await executeScenario(scenario, {
       ...extra,
+      command,
       onUnanswered: policy,
       externalChannel,
       hooks: renderer ? [renderer] : [],
       compact: !!(flags.compact || flags.demo), // --demo implies --compact
+      translateRef,
     });
   } catch (e) {
-    if (e instanceof UnansweredError) {
+    if (e instanceof UnansweredError && !rethrowUnanswered) {
       const chan = flags.deciderDir ? "decider-dir" : flags.deciderCmd ? "decider-cmd" : policy;
       const prefix = command === "run" ? `${scenario.name}: ` : ""; // run names the scenario; skill is single
       fail(command, "unanswered", `${prefix}unanswered question (on_unanswered=${chan})`, e.hint, o.json);
     }
-    throw e; // BoundaryError + generic → top-level catch (categorized there)
+    throw e; // BoundaryError + generic → top-level catch (categorized there); also UnansweredError when rethrowUnanswered
   } finally {
     stopHeartbeat();
   }
@@ -889,27 +1036,247 @@ async function runOneScenario(p: {
   return result;
 }
 
+/** E1: compact text-mode rollup table after a `--repeat N` batch. Renders pass rate, early-stop reason,
+ *  the signal histogram, per-assertion attribution (only rows with at least one failure — an all-passing
+ *  assertion across every iteration doesn't need a line), and cost/token/non-determinism totals when
+ *  present. */
+function formatRepeatRollup(r: RepeatRollup, minPassRate: number): string {
+  const lines: string[] = [];
+  const verdict = rollupPasses(r, minPassRate) ? "PASS" : "FAIL";
+  const stopNote = r.stoppedEarly ? ` (stopped early: ${r.stoppedEarly}, ${r.completed}/${r.requested} completed)` : "";
+  lines.push(`repeat "${r.scenario}": ${verdict} — ${r.passes}/${r.completed} passed (${(r.passRate * 100).toFixed(0)}%)${stopNote}`);
+  const signals = Object.entries(r.signalHistogram);
+  if (signals.length) lines.push(`  signals: ${signals.map(([code, n]) => `${code}×${n}`).join(", ")}`);
+  const failingAssertions = r.perAssertion.filter((a) => a.fails > 0);
+  for (const a of failingAssertions) {
+    lines.push(
+      `  assertion[${a.index}] (${a.key}): ${a.fails} fail / ${a.passes} pass${a.sampleFailure ? ` — e.g. "${a.sampleFailure}"` : ""}`,
+    );
+  }
+  if (r.totalCostUsd !== undefined || r.totalTokens !== undefined) {
+    const parts = [
+      r.totalCostUsd !== undefined ? `$${r.totalCostUsd.toFixed(4)} total` : null,
+      r.totalTokens !== undefined ? `${r.totalTokens} tokens total` : null,
+    ].filter(Boolean);
+    lines.push(`  cost: ${parts.join(", ")}`);
+  }
+  if (r.nonDeterministicRuns > 0)
+    lines.push(
+      `  ⚠ ${r.nonDeterministicRuns}/${r.completed} run(s) had a non-deterministic (llm/first/external) decision — flakiness attribution downstream of those is confounded`,
+    );
+  return lines.join("\n");
+}
+
+/**
+ * Runs a repeat batch (N iterations of the SAME scenario/session), catching an unanswered gate — or any
+ * other thrown error — PER ITERATION instead of letting it crash the whole batch. Found and fixed while
+ * composing `--matrix` + `--repeat`: the matrix runner's own per-cell catch already did this for a
+ * different failure class (an unavailable agent binary), and repeat batches had the exact same class of
+ * bug the matrix runner had before its own fix — `runOneScenario`'s default UnansweredError handling calls
+ * `fail()`/`process.exit()`, which on iteration 3 of a `--repeat 10` would silently discard the 2
+ * completed iterations' rollup data and exit the whole process instead of recording "the scenario isn't
+ * fully scripted for deterministic repetition" as the real, measurable failure it is. Shared by the
+ * standalone `--repeat` path (one call per scenario) and each matrix cell's own internal repeat loop when
+ * `--matrix`/`--repeat` compose (one call per cell) — the exact same early-stop/budget-cap/error-handling
+ * logic, not reimplemented twice.
+ */
+async function runRepeatBatch(opts: {
+  scenarioName: string;
+  repeatN: number;
+  stopOnDiverge: boolean;
+  maxBudgetUsd: number | undefined;
+  makeLabel: (n: number) => string;
+  runOnce: (label: string) => Promise<RunResult>;
+  onResult: (r: RunResult) => void; // called for every COMPLETED iteration (push into results[] etc.)
+}): Promise<{ iterationResults: RunResult[]; rollup: RepeatRollup }> {
+  const iterationResults: RunResult[] = [];
+  let cumulativeCostUsd = 0;
+  let costTelemetryMissing = false;
+  let costTelemetryMissingWarned = false;
+  let stoppedEarly: "budget" | "diverged" | "unanswered" | "error" | undefined;
+  let sawPass = false;
+  let sawFail = false;
+  for (let n = 0; n < opts.repeatN; n++) {
+    let r: RunResult;
+    try {
+      r = await opts.runOnce(opts.makeLabel(n));
+    } catch (e) {
+      if (e instanceof UnansweredError) {
+        stoppedEarly = "unanswered";
+        log(
+          `::warning:: "${opts.scenarioName}": repeat batch stopped — run ${n + 1} hit an unanswered question (${e.message}) — the scenario isn't fully scripted for deterministic repetition, which is the real failure here.`,
+        );
+      } else {
+        stoppedEarly = "error";
+        log(`::warning:: "${opts.scenarioName}": repeat batch stopped — run ${n + 1} threw: ${(e as Error).message}`);
+      }
+      break;
+    }
+    iterationResults.push(r);
+    opts.onResult(r);
+    if (computeVerdict(r, "live").pass) sawPass = true;
+    else sawFail = true;
+    if (opts.stopOnDiverge && sawPass && sawFail) {
+      stoppedEarly = "diverged";
+      break;
+    }
+    if (opts.maxBudgetUsd !== undefined) {
+      const b = budgetFields(r);
+      if (b.costUsd === undefined) costTelemetryMissing = true;
+      else cumulativeCostUsd += b.costUsd;
+      if (costTelemetryMissing) {
+        // degrade LOUDLY, never silently run all N as if the cap didn't exist (§4/E1 risk) — but
+        // only ONCE per batch, not once per remaining iteration (costTelemetryMissing never resets).
+        if (!costTelemetryMissingWarned) {
+          log(
+            `::warning:: --max-budget-usd unenforceable: run ${n + 1} reported no cost telemetry — continuing without a budget cap for "${opts.scenarioName}"`,
+          );
+          costTelemetryMissingWarned = true;
+        }
+      } else if (n + 1 < opts.repeatN && cumulativeCostUsd >= opts.maxBudgetUsd) {
+        stoppedEarly = "budget";
+        break;
+      }
+    }
+  }
+  if (stoppedEarly === "budget" && iterationResults.length < opts.repeatN)
+    log(
+      `::warning:: "${opts.scenarioName}": --max-budget-usd stopped the repeat batch early (${iterationResults.length}/${opts.repeatN} completed) — measurement incomplete, not a failure by itself`,
+    );
+  const rollup = buildRepeatRollup(opts.scenarioName, opts.repeatN, iterationResults, stoppedEarly);
+  return { iterationResults, rollup };
+}
+
 async function cmdRun(rawArgs: string[]) {
   if (hasHelp(rawArgs)) return void log(RUN_HELP);
   // --decider-model overrides the LLM decider's answering model for scenarios that use `on_unanswered: llm`
   // (flag > env COWORK_HARNESS_DECIDER_MODEL > Sonnet default). `takeCommonFlags` doesn't know it (it's not a
   // common flag), so pull it out of argv first — otherwise it would land as an "unexpected argument".
+  // E1: --repeat/--max-budget-usd/--stop-on-diverge/--min-pass-rate are `run`-only the same way — not common
+  // flags, pre-extracted here exactly like --decider-model, cli.ts:897-911 in the plan's own citation.
   let deciderModel: string | undefined;
+  let repeatN: number | undefined;
+  let maxBudgetUsd: number | undefined;
+  let stopOnDiverge = false;
+  let minPassRate = 1.0;
+  let matrixFile: string | undefined;
+  let maxCells = 16;
+  let matrixConcurrency = 1;
   const preArgs: string[] = [];
   for (let i = 0; i < rawArgs.length; i++) {
     const a = rawArgs[i];
+    const jsonOut = isJsonOutput(rawArgs);
     if (a === "--decider-model") {
       deciderModel = rawArgs[++i];
       // reject "" too — the equals branch below rejects an empty value, so the spaced form must match
       // (otherwise `--decider-model ""` forwards an empty model id and fails obscurely later).
       if (deciderModel === undefined || deciderModel === "" || deciderModel.startsWith("-"))
-        fail("run", "usage", "--decider-model requires a value (a model id)", undefined, isJsonOutput(rawArgs));
+        fail("run", "usage", "--decider-model requires a value (a model id)", undefined, jsonOut);
     } else if (a.startsWith("--decider-model=")) {
       deciderModel = a.slice("--decider-model=".length);
-      if (deciderModel === "") fail("run", "usage", "--decider-model requires a non-empty value", undefined, isJsonOutput(rawArgs));
+      if (deciderModel === "") fail("run", "usage", "--decider-model requires a non-empty value", undefined, jsonOut);
+    } else if (a === "--repeat" || a.startsWith("--repeat=")) {
+      const v = a === "--repeat" ? rawArgs[++i] : a.slice("--repeat=".length);
+      const n = v === undefined ? NaN : Number(v);
+      if (!Number.isInteger(n) || n < 2 || n > 100)
+        fail(
+          "run",
+          "usage",
+          `--repeat requires an integer between 2 and 100 (got ${v === undefined ? "nothing" : `"${v}"`})`,
+          undefined,
+          jsonOut,
+        );
+      repeatN = n;
+    } else if (a === "--max-budget-usd" || a.startsWith("--max-budget-usd=")) {
+      const v = a === "--max-budget-usd" ? rawArgs[++i] : a.slice("--max-budget-usd=".length);
+      const n = v === undefined ? NaN : Number(v);
+      if (!Number.isFinite(n) || n <= 0)
+        fail(
+          "run",
+          "usage",
+          `--max-budget-usd requires a positive number (got ${v === undefined ? "nothing" : `"${v}"`})`,
+          undefined,
+          jsonOut,
+        );
+      maxBudgetUsd = n;
+    } else if (a === "--stop-on-diverge") {
+      stopOnDiverge = true;
+    } else if (a === "--min-pass-rate" || a.startsWith("--min-pass-rate=")) {
+      const v = a === "--min-pass-rate" ? rawArgs[++i] : a.slice("--min-pass-rate=".length);
+      const n = v === undefined ? NaN : Number(v);
+      if (!Number.isFinite(n) || n < 0 || n > 1)
+        fail(
+          "run",
+          "usage",
+          `--min-pass-rate requires a number between 0 and 1 (got ${v === undefined ? "nothing" : `"${v}"`})`,
+          undefined,
+          jsonOut,
+        );
+      minPassRate = n;
+    } else if (a === "--matrix" || a.startsWith("--matrix=")) {
+      const v = a === "--matrix" ? rawArgs[++i] : a.slice("--matrix=".length);
+      if (v === undefined || v === "" || v.startsWith("-"))
+        fail("run", "usage", "--matrix requires a value (a matrix.yaml path)", undefined, jsonOut);
+      matrixFile = v;
+    } else if (a === "--max-cells" || a.startsWith("--max-cells=")) {
+      const v = a === "--max-cells" ? rawArgs[++i] : a.slice("--max-cells=".length);
+      const n = v === undefined ? NaN : Number(v);
+      if (!Number.isInteger(n) || n < 1)
+        fail("run", "usage", `--max-cells requires a positive integer (got ${v === undefined ? "nothing" : `"${v}"`})`, undefined, jsonOut);
+      maxCells = n;
+    } else if (a === "--concurrency" || a.startsWith("--concurrency=")) {
+      const v = a === "--concurrency" ? rawArgs[++i] : a.slice("--concurrency=".length);
+      const n = v === undefined ? NaN : Number(v);
+      if (!Number.isInteger(n) || n < 1 || n > MAX_MATRIX_CONCURRENCY)
+        fail(
+          "run",
+          "usage",
+          `--concurrency requires an integer 1..${MAX_MATRIX_CONCURRENCY} (got ${v === undefined ? "nothing" : `"${v}"`})`,
+          undefined,
+          jsonOut,
+        );
+      matrixConcurrency = n;
     } else preArgs.push(a);
   }
+  if (maxBudgetUsd !== undefined && repeatN === undefined)
+    fail("run", "usage", "--max-budget-usd requires --repeat", undefined, isJsonOutput(rawArgs));
+  if (stopOnDiverge && repeatN === undefined) fail("run", "usage", "--stop-on-diverge requires --repeat", undefined, isJsonOutput(rawArgs));
+  if (minPassRate !== 1.0 && repeatN === undefined)
+    fail("run", "usage", "--min-pass-rate requires --repeat", undefined, isJsonOutput(rawArgs));
+  if (maxCells !== 16 && matrixFile === undefined) fail("run", "usage", "--max-cells requires --matrix", undefined, isJsonOutput(rawArgs));
+  if (matrixConcurrency !== 1 && matrixFile === undefined)
+    fail("run", "usage", "--concurrency requires --matrix", undefined, isJsonOutput(rawArgs));
   const { rest: rawRest, flags } = takeCommonFlags(preArgs, "run");
+  // An interactive driving agent × N runs is not a measurement — --decider-dir/--decider-cmd both answer
+  // gates LIVE (this codebase's own "LIVE questions: --decider-llm / --decider-cmd / --decider-dir"
+  // grouping, RUN_HELP above), which defeats the point of repeating the SAME scenario deterministically N
+  // times — a spawned --decider-cmd helper COULD be internally deterministic, but the harness has no way
+  // to know that, and this fixed guard was previously asymmetric (deciderDir only) — a real gap, closed here.
+  if (repeatN !== undefined && (flags.deciderDir || flags.deciderCmd))
+    fail(
+      "run",
+      "usage",
+      "--repeat cannot be combined with --decider-dir/--decider-cmd (an interactive driving agent × N runs is not a measurement)",
+      undefined,
+      flags.output === "json",
+    );
+  // A single external channel (--decider-dir/--decider-cmd) is ONE shared object, reused across every
+  // matrix cell (cli.ts creates it once, before the cell loop) — and every channel implementation
+  // (fileChannel/spawnChannel, src/decide/external-channel.ts) is documented as "strictly serial: write
+  // req-N, block for resp-N" over SHARED mutable state (a `seq` counter / a single stdout read queue),
+  // never designed for concurrent callers. Concurrent cells sharing it would race: cell A's write() could
+  // be followed by cell B's write() before cell A's matching readLine() runs, so cell A reads cell B's
+  // answer — silently steering the wrong gate to the wrong cell, the exact class of bug this codebase
+  // treats as its most important invariant. --concurrency 1 (the default) is genuinely serial and safe;
+  // only the combination with an active external channel is rejected.
+  if (matrixFile !== undefined && matrixConcurrency > 1 && (flags.deciderDir || flags.deciderCmd))
+    fail(
+      "run",
+      "usage",
+      "--matrix --concurrency > 1 cannot be combined with --decider-dir/--decider-cmd (the channel is shared across cells and is not safe for concurrent gate answers — use --concurrency 1, or drop the external decider)",
+      undefined,
+      flags.output === "json",
+    );
   // `--keep` is meaningful on `skill` (runs are otherwise discarded) but `run` ALWAYS keeps runs.
   // Accept it as an explicit no-op (EXACT-token only — it takes no value, so an exact match can't
   // swallow a real arg) instead of the loud reject below, so muscle memory from `skill` doesn't error.
@@ -944,7 +1311,174 @@ async function cmdRun(rawArgs: string[]) {
   const policy = externalChannel ? "fail" : resolvePolicy("run", flags);
   const o = resolveOutput("run", flags);
   noteRunsLocation({ json: o.json, quiet: !!flags.quiet, suppress: !!flags.demo });
+
+  // E3: --matrix is a completely separate mode from the per-file/--repeat loop below — one scenario, N
+  // cells, not "N files each run once or N times" — so it's handled as its own early branch and exits.
+  if (matrixFile !== undefined) {
+    if (files.length !== 1)
+      fail(
+        "run",
+        "usage",
+        `--matrix requires exactly one scenario file (got ${files.length}) — matrix a single <scenario.yaml>, not a dir`,
+        undefined,
+        o.json,
+      );
+    if (!existsSync(matrixFile)) fail("run", "usage", `matrix file not found: ${matrixFile}`, undefined, o.json);
+    const scenario = parseScenarioFile(files[0]);
+    if (scenario.on_unanswered === "prompt")
+      fail(
+        "run",
+        "usage",
+        `scenario "${scenario.name}" sets on_unanswered: prompt — rejected on \`run\` (breaks determinism / hangs in CI).`,
+        undefined,
+        o.json,
+      );
+    let matrixDoc: MatrixFile;
+    try {
+      matrixDoc = MatrixFile.parse(parseYaml(readFileSync(matrixFile, "utf8")));
+    } catch (e) {
+      fail("run", "usage", `invalid matrix file: ${(e as Error).message}`, undefined, o.json);
+    }
+    const { cells, totalBeforeCap, truncated } = expandMatrix(matrixDoc!, maxCells);
+    if (truncated)
+      log(`::warning:: matrix: ${totalBeforeCap} cells before capping — only the first ${maxCells} ran (raise with --max-cells)`);
+    let baseSession: ReturnType<typeof loadSessionFromFile>;
+    try {
+      baseSession = loadSessionFromFile(scenario.session);
+    } catch (e) {
+      // A bad session ref (missing file, invalid YAML) must read as a clean usage error, matching the
+      // scenario-path check above — not a raw ENOENT + stack trace.
+      fail("run", "usage", `failed to load session "${scenario.session}": ${(e as Error).message}`, undefined, o.json);
+    }
+    // skill_dirs candidates are resolved relative to the MATRIX FILE's own directory (the same
+    // relocatability convention resolveSessionPaths already applies to a session file's own paths — a
+    // matrix.yaml checked into a repo alongside its scenario must not depend on the invoker's cwd) and
+    // existence-checked up front — fail loud before spending a single live run, not per-cell as a
+    // confusing runtime "cell error" for what's actually a typo in the matrix file.
+    const matrixBaseDir = dirname(resolve(matrixFile));
+    const skillDirAxis = matrixDoc!.skill_dirs;
+    const resolvedSkillDirs = new Map<string, string>(); // declared value -> resolved absolute path
+    if (skillDirAxis) {
+      for (const d of skillDirAxis) {
+        const resolved = d.startsWith("~") || isAbsolute(d) ? d : resolve(matrixBaseDir, d);
+        if (!existsSync(resolved))
+          fail("run", "usage", `matrix skill_dirs: "${d}" (resolved: ${resolved}) does not exist`, undefined, o.json);
+        resolvedSkillDirs.set(d, resolved);
+      }
+      if (baseSession.plugins.local_plugins.length !== 1)
+        fail(
+          "run",
+          "usage",
+          `matrix skill_dirs axis requires the session to declare exactly one plugins.local_plugins entry to substitute (found ${baseSession.plugins.local_plugins.length})`,
+          undefined,
+          o.json,
+        );
+    }
+    const results: RunResult[] = [];
+    // Every cell resolves its own overridden scenario/session first (shared by both branches below) —
+    // an error here (a bad skill_dirs substitution, an unresolvable overridden baseline) is a
+    // PRE-EXECUTION cell error either way, never a rollup.
+    const resolveCell = (
+      cell: MatrixCell,
+    ): { cellScenario: Scenario; session: ReturnType<typeof loadSessionFromFile> } | { error: string } => {
+      const cellScenario = cell.axes.baseline !== undefined ? { ...scenario, baseline: cell.axes.baseline } : scenario;
+      try {
+        const session = applySessionOverrides(baseSession, {
+          model: cell.axes.model,
+          skillDirSubstitution:
+            cell.axes.skillDir !== undefined
+              ? [baseSession.plugins.local_plugins[0], resolvedSkillDirs.get(cell.axes.skillDir)!]
+              : undefined,
+        });
+        return { cellScenario, session };
+      } catch (e) {
+        return { error: (e as Error).message };
+      }
+    };
+
+    if (repeatN !== undefined) {
+      // --matrix + --repeat composed: each cell is its OWN repeat batch (N iterations of that cell's
+      // axes-overridden scenario/session), not a single run — reuses the exact same runRepeatBatch helper
+      // (and therefore the exact same unanswered-gate/error/budget-cap robustness) as standalone --repeat.
+      let cellResults: MatrixCellRepeatResult[];
+      try {
+        cellResults = await pMapBounded(cells, matrixConcurrency, async (cell): Promise<MatrixCellRepeatResult> => {
+          const resolved = resolveCell(cell);
+          if ("error" in resolved) return { index: cell.index, axes: cell.axes, error: resolved.error };
+          const { cellScenario, session } = resolved;
+          const { rollup } = await runRepeatBatch({
+            scenarioName: `${scenario.name} [${axesLabel(cell.axes)}]`,
+            repeatN,
+            stopOnDiverge,
+            maxBudgetUsd,
+            makeLabel: (n) =>
+              `${scenario.name} [${axesLabel(cell.axes)}] (cell ${cell.index + 1}/${cells.length}, repeat ${n + 1}/${repeatN})`,
+            runOnce: (label) =>
+              runOneScenario({
+                command: "run",
+                scenario: cellScenario,
+                label,
+                flags,
+                policy,
+                externalChannel,
+                o,
+                extra: { session, llmModel: deciderModel },
+                rethrowUnanswered: true,
+              }),
+            onResult: (r) => results.push(r),
+          });
+          return { index: cell.index, axes: cell.axes, rollup };
+        });
+      } finally {
+        externalChannel?.close?.();
+      }
+      const matrixRepeat = buildMatrixRepeatRollup(cellResults, totalBeforeCap, truncated, minPassRate);
+      if (o.json) out(jsonEnvelope("run", results, { matrixRepeat }));
+      else for (const line of formatMatrixRepeatRollup(matrixRepeat, minPassRate)) log(line);
+      process.exit(matrixRepeat.anyFail ? 1 : 0);
+    }
+
+    let cellResults: MatrixCellResult[];
+    try {
+      cellResults = await pMapBounded(cells, matrixConcurrency, async (cell): Promise<MatrixCellResult> => {
+        const resolved = resolveCell(cell);
+        if ("error" in resolved)
+          return { index: cell.index, axes: cell.axes, pass: false, failedAssertions: [], signals: [], error: resolved.error };
+        const { cellScenario, session } = resolved;
+        const label = `${scenario.name} [${axesLabel(cell.axes)}] (cell ${cell.index + 1}/${cells.length})`;
+        try {
+          const result = await runOneScenario({
+            command: "run",
+            scenario: cellScenario,
+            label,
+            flags,
+            policy,
+            externalChannel,
+            o,
+            extra: { session, llmModel: deciderModel },
+            rethrowUnanswered: true,
+          });
+          results.push(result);
+          return matrixCellResultFromRun(cell, result);
+        } catch (e) {
+          // A cell-level failure — an infra problem (e.g. the pinned baseline's agent binary isn't
+          // staged) OR an unanswered gate (rethrowUnanswered above) — must never crash the whole matrix;
+          // render it as a distinct "cell error", never conflated with a real assertion failure.
+          const message = e instanceof UnansweredError ? `unanswered question: ${e.message}` : (e as Error).message;
+          return { index: cell.index, axes: cell.axes, pass: false, failedAssertions: [], signals: [], error: message };
+        }
+      });
+    } finally {
+      externalChannel?.close?.();
+    }
+    const matrix = buildMatrixRollup(cellResults, totalBeforeCap, truncated);
+    if (o.json) out(jsonEnvelope("run", results, { matrix }));
+    else for (const line of formatMatrixRollup(matrix)) log(line);
+    process.exit(matrix.anyFail ? 1 : 0);
+  }
+
   const results: RunResult[] = [];
+  const rollups: RepeatRollup[] = [];
   try {
     for (let i = 0; i < files.length; i++) {
       const scenario = parseScenarioFile(files[i]);
@@ -958,28 +1492,61 @@ async function cmdRun(rawArgs: string[]) {
           undefined,
           o.json,
         );
-      const label = files.length > 1 ? `[${i + 1}/${files.length}] ${scenario.name}` : scenario.name;
-      results.push(
-        await runOneScenario({
-          command: "run",
-          scenario,
-          label,
-          flags,
-          policy,
-          externalChannel,
-          o,
-          extra: deciderModel ? { llmModel: deciderModel } : undefined,
-        }),
-      );
+
+      if (repeatN === undefined) {
+        const label = files.length > 1 ? `[${i + 1}/${files.length}] ${scenario.name}` : scenario.name;
+        results.push(
+          await runOneScenario({
+            command: "run",
+            scenario,
+            label,
+            flags,
+            policy,
+            externalChannel,
+            o,
+            extra: deciderModel ? { llmModel: deciderModel } : undefined,
+          }),
+        );
+        continue;
+      }
+
+      // E1: --repeat N — run the SAME scenario N times, coexisting via local_<hrtime> run dirs
+      // (execute.ts:177-180, no collision), aggregate into a RepeatRollup. results[] still gets every
+      // raw RunResult (nothing hidden) — only the exit-code/`ok` formula changes for this mode (§8).
+      const { rollup } = await runRepeatBatch({
+        scenarioName: scenario.name,
+        repeatN,
+        stopOnDiverge,
+        maxBudgetUsd,
+        makeLabel: (n) => `${files.length > 1 ? `[${i + 1}/${files.length}] ` : ""}${scenario.name} (repeat ${n + 1}/${repeatN})`,
+        runOnce: (label) =>
+          runOneScenario({
+            command: "run",
+            scenario,
+            label,
+            flags,
+            policy,
+            externalChannel,
+            o,
+            extra: deciderModel ? { llmModel: deciderModel } : undefined,
+            rethrowUnanswered: true,
+          }),
+        onResult: (r) => results.push(r),
+      });
+      rollups.push(rollup);
     }
   } finally {
     externalChannel?.close?.(); // ONE channel reused across the loop — close after ALL scenarios (not per-run)
   }
   // All channels keep stdout free → the normal output path (envelope under --output-format json, nothing
   // otherwise). No terminal {type:"result"} line — `--decider-cmd`/`--decider-dir` compose with json.
-  if (o.json) out(jsonEnvelope("run", results));
-  const anyFail = results.some((r) => !computeVerdict(r, "live").pass);
-  process.exit(anyFail ? 1 : 0);
+  // The rollup table is human output like every other per-run footer (renderFooter), so it goes to
+  // stderr via log() — NOT out()/stdout, which text mode reserves for staying quiet (only json mode uses it).
+  const usingRepeat = repeatN !== undefined;
+  if (o.json) out(jsonEnvelope("run", results, usingRepeat ? { rollups, minPassRate } : {}));
+  else if (usingRepeat) for (const r of rollups) log(formatRepeatRollup(r, minPassRate));
+  const ok = usingRepeat ? rollups.every((r) => rollupPasses(r, minPassRate)) : results.every((r) => computeVerdict(r, "live").pass);
+  process.exit(ok ? 0 : 1);
 }
 
 async function cmdSkill(rawArgs: string[]) {
@@ -1450,7 +2017,23 @@ function cmdBoundary(args: string[]) {
   process.exit(results.every((r) => r.pass) ? 0 : 1);
 }
 
-function cmdSync(args: string[]) {
+/** Best-effort fetch of the official per-version linux-arm64 release checksum from Anthropic's release
+ *  channel. Returns undefined on ANY network/parse error so `sync` stays offline-capable (a missing
+ *  manifest never fails the sync — the sha fields just fall back to measured-local or are omitted). */
+async function fetchOfficialElfChecksum(version: string): Promise<string | undefined> {
+  try {
+    const r = await fetch(`https://downloads.claude.ai/claude-code-releases/${version}/manifest.json`, {
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!r.ok) return undefined;
+    const j = (await r.json()) as { platforms?: Record<string, { checksum?: string }> };
+    return j?.platforms?.["linux-arm64"]?.checksum;
+  } catch {
+    return undefined;
+  }
+}
+
+async function cmdSync(args: string[]) {
   // platform guard fires before arg parsing — wrong platform is an environment error, not a usage error.
   if (process.platform !== "darwin") {
     return fail("sync", "usage", "sync requires macOS (the Cowork Desktop app is macOS-only).", undefined, isJsonOutput(args));
@@ -1568,7 +2151,45 @@ function cmdSync(args: string[]) {
     log(`  (The new agentVersion is ${res.agentVersion}. Open Cowork once to stage the binary, then re-run sync.)`);
     log(`  resolveHostAgentBinary will fail until the file is present or COWORK_HOST_AGENT_BINARY is set.`);
   }
-  const nextAgentBinary = { ...baseAgentBinary, stagedPath: derivedStagedPath, nativeStagedPath: derivedNativeStagedPath };
+  // Agent-binary provenance (shared, non-secret): record the ELF sha256 + how we know it. Prefer a
+  // measured-local hash of the staged binary (the point-of-truth) + cross-check against the official
+  // release manifest; if the binary isn't staged on this machine, fall back to the official-manifest hash
+  // (staging-identity unverified); if offline AND this is a re-sync of the SAME version, keep the base's
+  // recorded hash; otherwise drop the fields rather than carry a stale hash from a different version.
+  const officialElfChecksum = await fetchOfficialElfChecksum(res.agentVersion);
+  let shaFields: { sha256?: string; shaProvenance?: string; manifestChecksumMatch?: boolean | "unknown" } = {};
+  if (existsSync(resolvedDerived)) {
+    const measured = sha256File(resolvedDerived);
+    shaFields = {
+      sha256: measured,
+      shaProvenance: "measured-local",
+      manifestChecksumMatch: officialElfChecksum === undefined ? "unknown" : measured === officialElfChecksum,
+    };
+    if (officialElfChecksum !== undefined && measured !== officialElfChecksum) {
+      log(
+        `WARNING: staged agent ELF sha256 (${measured}) != official linux-arm64 manifest checksum (${officialElfChecksum}) for ${res.agentVersion} — the staged binary is NOT the stock release; fidelity may be affected.`,
+      );
+    }
+  } else if (officialElfChecksum !== undefined) {
+    shaFields = { sha256: officialElfChecksum, shaProvenance: "official-manifest" };
+  } else if ((base.agentVersion as string | undefined) === res.agentVersion) {
+    // offline re-sync of the same version — keep what the base recorded rather than dropping it.
+    shaFields = {
+      sha256: baseAgentBinary.sha256 as string | undefined,
+      shaProvenance: baseAgentBinary.shaProvenance as string | undefined,
+      manifestChecksumMatch: baseAgentBinary.manifestChecksumMatch as boolean | "unknown" | undefined,
+    };
+  }
+  // Spread base first, then explicitly set the sha fields (undefined values are dropped by JSON.stringify,
+  // so a version bump we couldn't hash writes no stale sha256/shaProvenance/manifestChecksumMatch).
+  const nextAgentBinary = {
+    ...baseAgentBinary,
+    stagedPath: derivedStagedPath,
+    nativeStagedPath: derivedNativeStagedPath,
+    sha256: shaFields.sha256,
+    shaProvenance: shaFields.shaProvenance,
+    manifestChecksumMatch: shaFields.manifestChecksumMatch,
+  };
 
   // re-sync GrowthBook gate states from the decoded fcache (was: stale-carry + blanket warning).
   // Gates drive the cowork loop decision (decideLoopFromBaseline) and the dispatch cap; decoding the
@@ -1641,7 +2262,9 @@ function cmdSync(args: string[]) {
     // JSON.stringify(loadBaseline("latest")))` above) that nothing between here and there mutates in
     // place, so this surfaces real gate/content drift, not a diff against an already-updated copy.
     log(`=== diff vs latest committed baseline (desktop-${(base as { appVersion?: string }).appVersion}) ===`);
-    diff(base, next, "");
+    // E7: structured recursive diff, replacing the one-level diff() that printed a whole subtree on
+    // any nested change (e.g. a single gate flip three levels deep used to dump all of `provenance`).
+    for (const line of formatDiffLines(diffBaselines(base, next))) log(`  ${line}`);
   }
   if (res.unknownDeltas.length) {
     log("\n⚠ unknown deltas (extend src/sync/cowork-sync.ts):");
@@ -1706,6 +2329,81 @@ function cmdList(args: string[] = []) {
   } else {
     for (const f of files) out(f);
   }
+}
+
+/** E4: one text-mode line per scenario. `--metric` narrows to a single focused view; omitted shows
+ *  everything the row has (a metric with no telemetry in the group is simply absent, not "0"). */
+function formatStatsLine(s: StatsSummary, metric?: string): string {
+  const base = `${s.scenario}: ${s.runs} run(s), ${(s.passRate * 100).toFixed(0)}% pass`;
+  const fmtCost = (v?: number) => (v !== undefined ? `$${v.toFixed(4)}` : "n/a");
+  const fmtMs = (v?: number) => (v !== undefined ? `${(v / 1000).toFixed(1)}s` : "n/a");
+  if (metric === "pass-rate") return base;
+  if (metric === "cost") return `${base} — cost p50=${fmtCost(s.p50CostUsd)} p95=${fmtCost(s.p95CostUsd)}`;
+  if (metric === "duration") return `${base} — duration p50=${fmtMs(s.p50DurationMs)} p95=${fmtMs(s.p95DurationMs)}`;
+  if (metric === "tokens") return `${base} — tokens p50=${s.p50Tokens ?? "n/a"} p95=${s.p95Tokens ?? "n/a"}`;
+  if (metric === "turns") return `${base} — turns p50=${s.p50Turns ?? "n/a"} p95=${s.p95Turns ?? "n/a"}`;
+  const parts = [
+    s.p50CostUsd !== undefined ? `cost p50=${fmtCost(s.p50CostUsd)} p95=${fmtCost(s.p95CostUsd)}` : null,
+    s.p50DurationMs !== undefined ? `duration p50=${fmtMs(s.p50DurationMs)} p95=${fmtMs(s.p95DurationMs)}` : null,
+    s.lastGreenTs ? `last green ${s.lastGreenTs}` : "never green",
+    s.prunedRuns > 0 ? `${s.prunedRuns} pruned` : null,
+  ].filter(Boolean);
+  return `${base}${parts.length ? " — " + parts.join(", ") : ""}`;
+}
+
+/** `stats [<scenario>]` — a queryable summary over the run index (E4): per-scenario run count, pass rate,
+ *  cost/duration/token/turn percentiles, last-green timestamp. Reads `<runsRoot>/index.jsonl`; `--reindex`
+ *  rebuilds it from the physical run-dir tree first (the one-time local migration path for runs that
+ *  predate the index, or if index.jsonl was ever lost/corrupted beyond its own per-line tolerance). */
+function cmdStats(args: string[]) {
+  if (hasHelp(args)) return void log(SUBCOMMAND_USAGE.stats);
+  ensureOutputFormat("stats", args);
+  const json = isJsonOutput(args);
+  rejectUnknownFlags(
+    "stats",
+    args,
+    [
+      "--since",
+      "--baseline",
+      "--branch",
+      "--metric",
+      "--last",
+      "--reindex",
+      "--output-format",
+      "--output-format=json",
+      "--output-format=text",
+    ],
+    json,
+  );
+  const reindex = args.includes("--reindex");
+  const since = readValueFlag("stats", args, "--since", json);
+  const baseline = readValueFlag("stats", args, "--baseline", json);
+  const branch = readValueFlag("stats", args, "--branch", json);
+  const metric = readValueFlag("stats", args, "--metric", json);
+  if (metric !== undefined && !["pass-rate", "cost", "tokens", "duration", "turns"].includes(metric))
+    return void fail("stats", "usage", `--metric must be one of pass-rate|cost|tokens|duration|turns (got "${metric}")`, undefined, json);
+  const lastRaw = readValueFlag("stats", args, "--last", json);
+  let last: number | undefined;
+  if (lastRaw !== undefined) {
+    const n = Number(lastRaw);
+    if (!Number.isInteger(n) || n < 1)
+      return void fail("stats", "usage", `--last requires a positive integer (got "${lastRaw}")`, undefined, json);
+    last = n;
+  }
+  const allPositionals = positionals(args, ["--output-format", "--since", "--baseline", "--branch", "--metric", "--last"]);
+  if (allPositionals.length > 1) return void fail("stats", "usage", SUBCOMMAND_USAGE.stats, undefined, json);
+  const scenario = allPositionals[0];
+
+  const root = runsRoot();
+  if (reindex) {
+    const { written, skipped } = reindexFromRunsTree(root);
+    log(`stats: reindexed ${written} run(s) from ${root}${skipped ? ` (${skipped} skipped — missing/corrupt result.json)` : ""}`);
+  }
+  const rows = readIndex(root);
+  const stats = buildStats(rows, { scenario, since, baseline, branch, last });
+  if (json) return void out(JSON.stringify({ tool: "cowork-harness", command: "stats", ok: true, stats }));
+  if (stats.length === 0) return void log("stats: no indexed runs match the given filters.");
+  for (const s of stats) log(formatStatsLine(s, metric));
 }
 
 /** `decide` — validate a decider (helper OR policy) against a sample question in ~2s, so you don't
@@ -2372,6 +3070,17 @@ async function cmdVerifyRun(args: string[]) {
     // Derive from `result.scan` directly — NOT the `scan` local, which already collapsed undefined into
     // the `{outputsDeletes:[],hostPathLeaked:false,selfHealRan:false}` default above.
     scanMissing: result.scan === undefined,
+    skillsInvoked: result.skillsInvoked ?? [],
+    skillsInvokedMissing: result.skillsInvoked === undefined,
+    // `skillToolAvailable` predates being persisted on older result.json too; default true rather than
+    // false so an old run's skill_triggered doesn't spuriously read as evidence-unavailable for the WRONG
+    // reason (agent-tool-drift) when the real reason is just "this field didn't exist yet".
+    skillToolAvailable: result.skillToolAvailable ?? true,
+    effectiveFidelity: result.effectiveFidelity,
+    // verify-run re-checks a kept run dir on the SAME machine that ran it — the plan groups this
+    // with the live execute.ts lane (both check a host-shaped computer:// link's path directly).
+    linkResolution: { mode: "live" },
+    ...budgetFields(result),
   };
 
   const assertions = evaluate(scenario.assert, ctx);
@@ -2608,6 +3317,293 @@ function cmdTrace(args: string[]) {
   else out(formatTrace(rows));
 }
 
+type DiffKind = "baseline" | "run" | "cassette";
+
+// Every message type parseMessage/the SDK stream can emit at top level — used only to recognize a
+// single-line events.jsonl (see detectDiffKind); not a schema, just a disambiguation signal.
+const SDK_MESSAGE_TYPES = new Set(["system", "assistant", "user", "result", "control_request", "control_response"]);
+
+/** Kind detection by CONTENT, not filename or `resolveEventsFile` alone. Two real bugs, found only by
+ *  actually running the command against real files (not synthetic unit tests — §9 lesson 1/2), forced
+ *  this design:
+ *  1. A first attempt checked `arg.endsWith(".cassette.json")` for cassette, else `resolveEventsFile`
+ *     for run. `resolveEventsFile` accepts ANY existing file path UNCONDITIONALLY (it's built for
+ *     `trace`, which assumes its argument already IS an events.jsonl) — so a cassette file not literally
+ *     named `*.cassette.json` silently became "run": the whole cassette object, read as one "event
+ *     line", matched no known message type and produced a SILENTLY EMPTY tool list instead of an error.
+ *  2. The fix (content-sniff for `scenario`+`events` before falling to `resolveEventsFile`) then broke
+ *     the SAME way in the other direction: a baseline JSON file is *also* an existing file
+ *     `resolveEventsFile` accepts unconditionally, so it fell through to "run" instead of "baseline"
+ *     the moment cassette-sniffing said no.
+ *  The fix for both: for any existing FILE (baselines/cassettes/events.jsonl are all single files —
+ *  directories and run-ids/fragments have no such ambiguity, `resolveEventsFile`'s own directory-walk
+ *  and fragment-matching handle those safely), decide purely from content: cassette-shaped (has
+ *  `scenario`+`events`) → cassette; a single JSON object whose `type` is a real SDK message type → run
+ *  (a single-line events.jsonl); any other single JSON document → baseline (PlatformBaseline.parse is
+ *  the real validator at load time); doesn't parse as ONE JSON document at all → genuine multi-line
+ *  NDJSON → run. */
+function detectDiffKind(arg: string): DiffKind {
+  if (existsSync(arg) && statSync(arg).isFile()) {
+    let whole: unknown;
+    try {
+      whole = JSON.parse(readFileSync(arg, "utf8"));
+    } catch {
+      whole = undefined; // not a single JSON document — genuine multi-line NDJSON
+    }
+    if (whole && typeof whole === "object") {
+      const w = whole as Record<string, unknown>;
+      if (Array.isArray(w.events) && w.scenario) return "cassette";
+      if (typeof w.type === "string" && SDK_MESSAGE_TYPES.has(w.type)) return "run";
+      return "baseline";
+    }
+    return "run";
+  }
+  try {
+    resolveEventsFile(arg);
+    return "run";
+  } catch {
+    /* not a resolvable run either — fall through */
+  }
+  return "baseline"; // validated for real by loadBaseline() at load time; unresolvable throws there
+}
+
+interface DiffSide {
+  tools: NormalizedToolRow[];
+  transcript: string;
+  artifacts?: Array<[string, string]>; // undefined = no manifest available for this side
+  meta: Partial<DiffMetaSummary>;
+  // Identity metadata, NOT diffed content: used only for the cross-scenario warning (the plan's
+  // "allow + warn" resolution — comparing two different scenarios is legitimate for skill-variant
+  // comparison, but must be flagged, since the meta view doesn't surface scenario identity).
+  scenarioName?: string;
+}
+
+/** Top-level (non-sub-agent, non-synthetic) tool_use events, canonicalized — the same shape both a run
+ *  dir's events.jsonl and a cassette's events[] reduce to. */
+function topLevelToolRows(lines: string[], source: string, normalize: boolean): NormalizedToolRow[] {
+  return eventsFromLines(lines, source)
+    .filter((e): e is Extract<typeof e, { type: "tool_use" }> => e.type === "tool_use" && !e.parentToolUseId && !e.synthetic)
+    .map((e) => ({ name: e.name, canon: canonicalizeInput(e.input, normalize) }));
+}
+
+function loadRunSide(arg: string, normalize: boolean): DiffSide {
+  const eventsFile = resolveEventsFile(arg);
+  const runDir = dirname(eventsFile);
+  const lines = readFileSync(eventsFile, "utf8").split("\n");
+  const tools = topLevelToolRows(lines, eventsFile, normalize);
+  const transcript = readTranscriptSidecar(join(runDir, "run.jsonl")) ?? "";
+  let meta: Partial<DiffMetaSummary> = {};
+  let artifacts: Array<[string, string]> | undefined;
+  let scenarioName: string | undefined;
+  const resultPath = join(runDir, "result.json");
+  if (existsSync(resultPath)) {
+    const result = JSON.parse(readFileSync(resultPath, "utf8")) as RunResult;
+    scenarioName = result.scenario;
+    meta = {
+      result: result.result,
+      effectiveFidelity: result.effectiveFidelity,
+      baseline: result.baseline,
+      assertionsPassed: (result.assertions ?? []).every((a) => a.pass),
+    };
+    // Hash on-disk if the workDir is still there (fresh/kept run); degrade to a size-based pseudo-hash,
+    // clearly distinguishable ("size:N"), when it's torn down — never silently claim byte-verified
+    // equality we can't back. A real cassette-side manifest always has a genuine sha256 (below).
+    if (result.artifacts && result.workDir) {
+      artifacts = result.artifacts.map(({ path, bytes }) => {
+        const abs = join(result.workDir!, path);
+        try {
+          return [path, sha256File(abs)] as [string, string];
+        } catch {
+          return [path, `size:${bytes}`] as [string, string];
+        }
+      });
+    }
+  }
+  return { tools, transcript, artifacts, meta, scenarioName };
+}
+
+function loadCassetteSide(file: string, normalize: boolean): DiffSide {
+  const cassette = JSON.parse(readFileSync(file, "utf8")) as Cassette;
+  const events = eventsFromLines(cassette.events, file);
+  const tools = events
+    .filter((e): e is Extract<typeof e, { type: "tool_use" }> => e.type === "tool_use" && !e.parentToolUseId && !e.synthetic)
+    .map((e) => ({ name: e.name, canon: canonicalizeInput(e.input, normalize) }));
+  // Mirror Run.drive()'s own transcript construction (non-parented assistant_text, joined) rather than
+  // invoking the full replay engine just to get a transcript — replay's staleness/controlOut machinery
+  // is unrelated overhead for a diff.
+  const transcript = events
+    .filter((e): e is Extract<typeof e, { type: "assistant_text" }> => e.type === "assistant_text" && !e.parentToolUseId)
+    .map((e) => e.text)
+    .join("\n");
+  // Mirror Run.drive()'s own result classification (the last "result" event's isError) — same reasoning.
+  const resultEvents = events.filter((e): e is Extract<typeof e, { type: "result" }> => e.type === "result");
+  const lastResult = resultEvents[resultEvents.length - 1];
+  const meta: Partial<DiffMetaSummary> = {
+    result: lastResult ? (lastResult.isError ? "error" : "success") : undefined,
+    effectiveFidelity: cassette.effectiveFidelity,
+    baseline: cassette.scenario?.baseline,
+    // assertionsPassed intentionally omitted: comparing frozen-vs-frozen assertion pass/fail needs a real
+    // replay (staleness/controlOut-aware), out of scope for a structural diff — diffMeta skips a field
+    // when BOTH sides omit it, so this degrades cleanly rather than comparing undefined to a run's real value.
+  };
+  const artifacts: Array<[string, string]> | undefined = cassette.artifacts?.map((m) => [m.path, m.sha256]);
+  return { tools, transcript, artifacts, meta, scenarioName: cassette.scenario?.name };
+}
+
+function loadDiffSide(kind: DiffKind, arg: string, normalize: boolean): DiffSide {
+  return kind === "cassette" ? loadCassetteSide(arg, normalize) : loadRunSide(arg, normalize);
+}
+
+interface DiffViewResult {
+  tools: ToolDiffOp[];
+  transcript: TranscriptDiffLine[];
+  artifacts?: import("./run/cassette.js").FileSigDiff;
+  meta: MetaDiffEntry[];
+  identical: boolean;
+}
+
+function compareDiffSides(a: DiffSide, b: DiffSide, normalize: boolean): DiffViewResult {
+  const tools = diffToolSequence(a.tools, b.tools);
+  const transcript = diffTranscript(a.transcript, b.transcript, normalize);
+  const artifacts = a.artifacts && b.artifacts ? diffArtifacts(a.artifacts, b.artifacts) : undefined;
+  const meta = diffMeta(a.meta, b.meta);
+  const identical =
+    tools.every((o) => o.op === "same") &&
+    transcript.every((o) => o.op === "same") &&
+    (!artifacts || (artifacts.added.length === 0 && artifacts.removed.length === 0 && artifacts.changed.length === 0)) &&
+    meta.length === 0;
+  return { tools, transcript, artifacts, meta, identical };
+}
+
+function renderDiffText(r: DiffViewResult, view: string): string[] {
+  const lines: string[] = [];
+  if (view === "tools" || view === "all") {
+    const changed = r.tools.filter((o) => o.op !== "same");
+    if (changed.length === 0) lines.push("tools: identical");
+    else {
+      lines.push("tools:");
+      for (const op of changed) {
+        if (op.op === "added") lines.push(`  + ${op.b.name} ${op.b.canon}`);
+        else if (op.op === "removed") lines.push(`  - ${op.a.name} ${op.a.canon}`);
+        else lines.push(`  ~ ${op.a.name}: ${op.a.canon} -> ${op.b.canon}`);
+      }
+    }
+  }
+  if (view === "transcript" || view === "all") {
+    const changed = r.transcript.filter((o) => o.op !== "same");
+    if (changed.length === 0) lines.push("transcript: identical");
+    else {
+      lines.push("transcript:");
+      for (const op of changed) lines.push(`  ${op.op === "added" ? "+" : "-"} ${op.text}`);
+    }
+  }
+  if (view === "artifacts" || view === "all") {
+    if (!r.artifacts) lines.push("artifacts: no manifest on one or both sides — not compared");
+    else if (r.artifacts.added.length === 0 && r.artifacts.removed.length === 0 && r.artifacts.changed.length === 0)
+      lines.push("artifacts: identical");
+    else {
+      lines.push("artifacts:");
+      for (const p of r.artifacts.added) lines.push(`  + ${p}`);
+      for (const p of r.artifacts.removed) lines.push(`  - ${p}`);
+      for (const p of r.artifacts.changed) lines.push(`  ~ ${p}`);
+    }
+  }
+  if (view === "meta" || view === "all") {
+    if (r.meta.length === 0) lines.push("meta: identical");
+    else {
+      lines.push("meta:");
+      for (const e of r.meta) lines.push(`  ${e.field}: ${JSON.stringify(e.from)} -> ${JSON.stringify(e.to)}`);
+    }
+  }
+  return lines;
+}
+
+/** E7 (baseline) + E2 (run/cassette, cross-comparable; baselines only pair with baselines). */
+function cmdDiff(args: string[]) {
+  if (hasHelp(args)) return void log(SUBCOMMAND_USAGE.diff);
+  ensureOutputFormat("diff", args);
+  const json = isJsonOutput(args);
+  rejectUnknownFlags(
+    "diff",
+    args,
+    ["--changelog", "--view", "--no-normalize", "--output-format", "--output-format=json", "--output-format=text"],
+    json,
+  );
+  const changelog = args.includes("--changelog");
+  const viewIdx = args.indexOf("--view");
+  const view = viewIdx >= 0 ? flagValue("diff", args, viewIdx, "--view", json) : "all";
+  if (!["tools", "transcript", "artifacts", "meta", "all"].includes(view))
+    return void fail("diff", "usage", `--view must be one of tools|transcript|artifacts|meta|all (got "${view}")`, undefined, json);
+  const allPositionals = positionals(args, ["--output-format", "--view"]);
+  if (allPositionals.length !== 2) return void fail("diff", "usage", SUBCOMMAND_USAGE.diff, undefined, json);
+  const [aName, bName] = allPositionals;
+
+  const aKind = detectDiffKind(aName);
+  const bKind = detectDiffKind(bName);
+  if (aKind === "baseline" || bKind === "baseline") {
+    if (aKind !== bKind)
+      return void fail(
+        "diff",
+        "usage",
+        `cannot compare a baseline against a ${aKind === "baseline" ? bKind : aKind} — baselines only pair with baselines`,
+        undefined,
+        json,
+      );
+    let a: PlatformBaseline, b: PlatformBaseline;
+    try {
+      a = loadBaseline(aName);
+      b = loadBaseline(bName);
+    } catch (e) {
+      return void fail("diff", "usage", String((e as Error).message), undefined, json);
+    }
+    const entries = diffBaselines(a, b);
+    const identical = entries.length === 0;
+    if (json) out(JSON.stringify({ tool: "cowork-harness", command: "diff", kind: "baseline", a: aName, b: bName, identical, entries }));
+    else if (changelog) out(renderChangelog(entries));
+    else if (identical) out("No differences.");
+    else for (const line of formatDiffLines(entries)) out(line);
+    process.exit(identical ? 0 : 1);
+  }
+
+  // run/cassette — cross-comparable
+  if (changelog) return void fail("diff", "usage", "--changelog is baseline-mode only", undefined, json);
+  const normalize = !args.includes("--no-normalize");
+  let a: DiffSide, b: DiffSide;
+  try {
+    a = loadDiffSide(aKind, aName, normalize);
+    b = loadDiffSide(bKind, bName, normalize);
+  } catch (e) {
+    return void fail("diff", "usage", String((e as Error).message), undefined, json);
+  }
+  // Allow + warn on a cross-scenario comparison (the plan's recommended resolution of its own open
+  // question): comparing runs of two DIFFERENT scenarios is legitimate (skill-variant comparison), but
+  // the meta view doesn't surface scenario identity, so an unflagged mismatch would read as drift.
+  // stderr only — stdout stays machine-clean in both output formats.
+  if (a.scenarioName !== undefined && b.scenarioName !== undefined && a.scenarioName !== b.scenarioName)
+    log(
+      `::warning:: comparing runs of two different scenarios ("${a.scenarioName}" vs "${b.scenarioName}") — allowed, but added/removed rows may reflect scenario differences, not drift`,
+    );
+  const result = compareDiffSides(a, b, normalize);
+  if (json) {
+    out(
+      JSON.stringify({
+        tool: "cowork-harness",
+        command: "diff",
+        kinds: [aKind, bKind],
+        a: aName,
+        b: bName,
+        identical: result.identical,
+        views: { tools: result.tools, transcript: result.transcript, artifacts: result.artifacts, meta: result.meta },
+      }),
+    );
+  } else if (result.identical) {
+    out("identical");
+  } else {
+    for (const line of renderDiffText(result, view)) out(line);
+  }
+  process.exit(result.identical ? 0 : 1);
+}
+
 function cmdInspect(args: string[]) {
   if (hasHelp(args)) return void log(SUBCOMMAND_USAGE.inspect);
   ensureOutputFormat("inspect", args);
@@ -2628,15 +3624,6 @@ function cmdInspect(args: string[]) {
     out(buildInspectView(runDir, { json }));
   } catch (e) {
     return void fail("inspect", "usage", String((e as Error).message), undefined, json);
-  }
-}
-
-function diff(a: any, b: any, path: string) {
-  const keys = new Set([...Object.keys(a ?? {}), ...Object.keys(b ?? {})]);
-  for (const k of keys) {
-    const pa = JSON.stringify(a?.[k]);
-    const pb = JSON.stringify(b?.[k]);
-    if (pa !== pb) log(`  ${path}${k}: ${pa} -> ${pb}`);
   }
 }
 

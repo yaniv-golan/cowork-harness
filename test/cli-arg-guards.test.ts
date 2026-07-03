@@ -303,3 +303,205 @@ describe.skipIf(!can)("global-flag position hint", () => {
     expect(env.error.message).toMatch(/GLOBAL flag and must come BEFORE the subcommand/);
   });
 });
+
+describe.skipIf(!can)("CLI arg guards — run --repeat (E1)", () => {
+  it("rejects --repeat below the minimum (1)", () => {
+    const d = mkdtempSync(join(tmpdir(), "g-repeat-"));
+    writeFileSync(join(d, "s.yaml"), "prompt: hi\n");
+    const r = run(["run", "s.yaml", "--repeat", "1"], d);
+    expect(r.code).toBe(2);
+    expect(r.out).toMatch(/--repeat requires an integer between 2 and 100/);
+  });
+
+  it("rejects --repeat above the maximum (101)", () => {
+    const d = mkdtempSync(join(tmpdir(), "g-repeat-"));
+    writeFileSync(join(d, "s.yaml"), "prompt: hi\n");
+    expect(run(["run", "s.yaml", "--repeat", "101"], d).code).toBe(2);
+  });
+
+  it("rejects a non-numeric --repeat value", () => {
+    const d = mkdtempSync(join(tmpdir(), "g-repeat-"));
+    writeFileSync(join(d, "s.yaml"), "prompt: hi\n");
+    const r = run(["run", "s.yaml", "--repeat", "nope"], d);
+    expect(r.code).toBe(2);
+    expect(r.out).toMatch(/--repeat requires an integer/);
+  });
+
+  it("accepts the --repeat=N equals form (parses cleanly, fails fast on the nonexistent path instead — never on --repeat)", () => {
+    // A nonexistent scenario path fails BEFORE any live execution (no auth/spawn needed), so this stays
+    // token-free and fast while still proving --repeat=3 parsed: the error is about the path, not --repeat.
+    const d = mkdtempSync(join(tmpdir(), "g-repeat-"));
+    const r = run(["run", "does-not-exist.yaml", "--repeat=3"], d);
+    expect(r.code).toBe(2);
+    expect(r.out).toMatch(/scenario path not found/);
+    expect(r.out).not.toMatch(/--repeat requires/);
+  });
+
+  it("rejects --repeat combined with --decider-dir (interactive driver × N is not a measurement)", () => {
+    const d = mkdtempSync(join(tmpdir(), "g-repeat-"));
+    writeFileSync(join(d, "s.yaml"), "prompt: hi\n");
+    const r = run(["run", "s.yaml", "--repeat", "3", "--decider-dir", d], d);
+    expect(r.code).toBe(2);
+    expect(r.out).toMatch(/--repeat cannot be combined with --decider-dir/);
+  });
+
+  // Regression: this guard used to check ONLY --decider-dir, even though --decider-cmd is grouped with it
+  // as a "LIVE" decider everywhere else in this CLI's own help text (RUN_HELP: "to answer LIVE questions,
+  // use --decider-llm / --decider-cmd / --decider-dir") — an asymmetric gap, found and closed while
+  // composing --matrix + --repeat.
+  it("rejects --repeat combined with --decider-cmd too (same live-decider reasoning, previously ungated)", () => {
+    const d = mkdtempSync(join(tmpdir(), "g-repeat-"));
+    writeFileSync(join(d, "s.yaml"), "prompt: hi\n");
+    const r = run(["run", "s.yaml", "--repeat", "3", "--decider-cmd", "cat"], d);
+    expect(r.code).toBe(2);
+    expect(r.out).toMatch(/--repeat cannot be combined with --decider-dir\/--decider-cmd/);
+  });
+
+  it("--max-budget-usd without --repeat is a usage error, not a silent no-op", () => {
+    const d = mkdtempSync(join(tmpdir(), "g-repeat-"));
+    writeFileSync(join(d, "s.yaml"), "prompt: hi\n");
+    const r = run(["run", "s.yaml", "--max-budget-usd", "1.0"], d);
+    expect(r.code).toBe(2);
+    expect(r.out).toMatch(/--max-budget-usd requires --repeat/);
+  });
+
+  it("--stop-on-diverge without --repeat is a usage error", () => {
+    const d = mkdtempSync(join(tmpdir(), "g-repeat-"));
+    writeFileSync(join(d, "s.yaml"), "prompt: hi\n");
+    expect(run(["run", "s.yaml", "--stop-on-diverge"], d).code).toBe(2);
+  });
+
+  it("--min-pass-rate without --repeat is a usage error", () => {
+    const d = mkdtempSync(join(tmpdir(), "g-repeat-"));
+    writeFileSync(join(d, "s.yaml"), "prompt: hi\n");
+    expect(run(["run", "s.yaml", "--min-pass-rate", "0.8"], d).code).toBe(2);
+  });
+
+  it("rejects --min-pass-rate outside [0,1]", () => {
+    const d = mkdtempSync(join(tmpdir(), "g-repeat-"));
+    writeFileSync(join(d, "s.yaml"), "prompt: hi\n");
+    expect(run(["run", "s.yaml", "--repeat", "2", "--min-pass-rate", "1.5"], d).code).toBe(2);
+  });
+
+  it("rejects a non-positive --max-budget-usd", () => {
+    const d = mkdtempSync(join(tmpdir(), "g-repeat-"));
+    writeFileSync(join(d, "s.yaml"), "prompt: hi\n");
+    expect(run(["run", "s.yaml", "--repeat", "2", "--max-budget-usd", "0"], d).code).toBe(2);
+  });
+});
+
+describe.skipIf(!can)("CLI arg guards — run --matrix (E3)", () => {
+  it("--matrix composes with --repeat (each cell is its own repeat batch) — no usage rejection", () => {
+    const d = mkdtempSync(join(tmpdir(), "g-matrix-"));
+    writeFileSync(join(d, "s.yaml"), "prompt: hi\n");
+    writeFileSync(join(d, "m.yaml"), "baselines: [a, b]\n");
+    const r = run(["run", "s.yaml", "--matrix", "m.yaml", "--repeat", "2"], d);
+    // The combination passes ARG validation (the former v1 rejection is gone). The fake baselines then
+    // fail cell RESOLUTION — a run failure (1), observably distinct from a usage error (2).
+    expect(r.code).toBe(1);
+    expect(r.out).not.toMatch(/--matrix cannot be combined with --repeat/);
+  });
+
+  it("--max-cells without --matrix is a usage error", () => {
+    const d = mkdtempSync(join(tmpdir(), "g-matrix-"));
+    writeFileSync(join(d, "s.yaml"), "prompt: hi\n");
+    expect(run(["run", "s.yaml", "--max-cells", "4"], d).code).toBe(2);
+  });
+
+  it("--concurrency without --matrix is a usage error", () => {
+    const d = mkdtempSync(join(tmpdir(), "g-matrix-"));
+    writeFileSync(join(d, "s.yaml"), "prompt: hi\n");
+    expect(run(["run", "s.yaml", "--concurrency", "2"], d).code).toBe(2);
+  });
+
+  it("rejects --concurrency outside 1..8", () => {
+    const d = mkdtempSync(join(tmpdir(), "g-matrix-"));
+    writeFileSync(join(d, "s.yaml"), "prompt: hi\n");
+    writeFileSync(join(d, "m.yaml"), "baselines: [a]\n");
+    expect(run(["run", "s.yaml", "--matrix", "m.yaml", "--concurrency", "9"], d).code).toBe(2);
+  });
+
+  it("rejects a non-positive --max-cells", () => {
+    const d = mkdtempSync(join(tmpdir(), "g-matrix-"));
+    writeFileSync(join(d, "s.yaml"), "prompt: hi\n");
+    writeFileSync(join(d, "m.yaml"), "baselines: [a]\n");
+    expect(run(["run", "s.yaml", "--matrix", "m.yaml", "--max-cells", "0"], d).code).toBe(2);
+  });
+
+  it("rejects a nonexistent --matrix file", () => {
+    const d = mkdtempSync(join(tmpdir(), "g-matrix-"));
+    writeFileSync(join(d, "s.yaml"), "prompt: hi\n");
+    const r = run(["run", "s.yaml", "--matrix", "does-not-exist.yaml"], d);
+    expect(r.code).toBe(2);
+    expect(r.out).toMatch(/matrix file not found/);
+  });
+
+  it("rejects a matrix file with an unknown top-level key (schema validation, not silently ignored)", () => {
+    const d = mkdtempSync(join(tmpdir(), "g-matrix-"));
+    writeFileSync(join(d, "s.yaml"), "prompt: hi\n");
+    writeFileSync(join(d, "m.yaml"), "baseline: [a]\n"); // typo: singular
+    const r = run(["run", "s.yaml", "--matrix", "m.yaml"], d);
+    expect(r.code).toBe(2);
+    expect(r.out).toMatch(/invalid matrix file/);
+  });
+
+  it("rejects --matrix against a directory target (requires exactly one scenario file)", () => {
+    const d = mkdtempSync(join(tmpdir(), "g-matrix-"));
+    writeFileSync(join(d, "a.yaml"), "prompt: hi\n");
+    writeFileSync(join(d, "b.yaml"), "prompt: hi\n");
+    writeFileSync(join(d, "m.yaml"), "baselines: [a]\n");
+    const r = run(["run", ".", "--matrix", "m.yaml"], d);
+    expect(r.code).toBe(2);
+    expect(r.out).toMatch(/--matrix requires exactly one scenario file/);
+  });
+
+  it("accepts the --matrix=<file> equals form (parses cleanly, fails fast on session loading instead — never on --matrix parsing)", () => {
+    const d = mkdtempSync(join(tmpdir(), "g-matrix-"));
+    writeFileSync(join(d, "s.yaml"), "prompt: hi\nsession: does-not-exist.yaml\n");
+    writeFileSync(join(d, "m.yaml"), "baselines: [a]\n");
+    const r = run(["run", "s.yaml", "--matrix=m.yaml"], d);
+    expect(r.out).not.toMatch(/--matrix requires/);
+  });
+
+  it("a bad session ref reads as a clean usage error, not a raw ENOENT stack trace", () => {
+    const d = mkdtempSync(join(tmpdir(), "g-matrix-"));
+    writeFileSync(join(d, "s.yaml"), "prompt: hi\nsession: does-not-exist.yaml\n");
+    writeFileSync(join(d, "m.yaml"), "baselines: [a]\n");
+    const r = run(["run", "s.yaml", "--matrix", "m.yaml"], d);
+    expect(r.code).toBe(2);
+    expect(r.out).toMatch(/failed to load session/);
+    expect(r.out).not.toMatch(/at readFileSync|at parseSessionFile|at cmdRun/); // no raw stack trace
+  });
+
+  // Final adversarial (Opus) review finding: the ONE external decider channel is shared across every
+  // matrix cell (created once, reused by the whole pMapBounded loop) — every channel implementation
+  // (src/decide/external-channel.ts) is documented as "strictly serial" over shared mutable state (a
+  // `seq` counter / a single read queue), never designed for concurrent callers. Concurrent cells sharing
+  // it would race and silently cross-deliver gate answers between cells. --concurrency 1 (default) is
+  // genuinely serial and safe; only the combination with an external channel at concurrency > 1 is unsafe.
+  it("rejects --matrix --concurrency > 1 combined with --decider-dir (shared channel, not concurrency-safe)", () => {
+    const d = mkdtempSync(join(tmpdir(), "g-matrix-"));
+    writeFileSync(join(d, "s.yaml"), "prompt: hi\n");
+    writeFileSync(join(d, "m.yaml"), "baselines: [a, b]\n");
+    const r = run(["run", "s.yaml", "--matrix", "m.yaml", "--concurrency", "2", "--decider-dir", d], d);
+    expect(r.code).toBe(2);
+    expect(r.out).toMatch(/--matrix --concurrency > 1 cannot be combined with --decider-dir/);
+  });
+
+  it("rejects --matrix --concurrency > 1 combined with --decider-cmd too (same shared-channel risk)", () => {
+    const d = mkdtempSync(join(tmpdir(), "g-matrix-"));
+    writeFileSync(join(d, "s.yaml"), "prompt: hi\n");
+    writeFileSync(join(d, "m.yaml"), "baselines: [a, b]\n");
+    const r = run(["run", "s.yaml", "--matrix", "m.yaml", "--concurrency", "2", "--decider-cmd", "cat"], d);
+    expect(r.code).toBe(2);
+    expect(r.out).toMatch(/--matrix --concurrency > 1 cannot be combined with/);
+  });
+
+  it("allows --matrix --concurrency 1 (the default) combined with --decider-dir — genuinely serial, no race", () => {
+    const d = mkdtempSync(join(tmpdir(), "g-matrix-"));
+    writeFileSync(join(d, "s.yaml"), "prompt: hi\nsession: does-not-exist.yaml\n"); // fails fast, past the guard
+    writeFileSync(join(d, "m.yaml"), "baselines: [a]\n");
+    const r = run(["run", "s.yaml", "--matrix", "m.yaml", "--decider-dir", d], d);
+    expect(r.out).not.toMatch(/cannot be combined with --decider-dir/);
+  });
+});

@@ -1,0 +1,48 @@
+name: publish-image
+
+# On a release tag, build + push the prebuilt agent-base image to GHCR so consumers (and this repo's
+# own ci.yml, which currently `docker build`s from scratch every run) can `docker pull` instead.
+# Contains NO Anthropic binary — see docker/Dockerfile.agent's header; publishing it is clean.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: {} # manual republish of the current default-branch Dockerfile without cutting a release
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04-arm # linux/arm64 native build, matching Cowork's guest architecture
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Resolve the package version (tags float on `:2`, this pins an immutable co-tag)
+        id: pkg
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@5f4866a30a54f16a52d2ecb4a3898e9e424939cf # v3.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build + push cowork-agent-base (lean/core image — the default COWORK_AGENT_IMAGE)
+        run: |
+          docker build --platform linux/arm64 -f docker/Dockerfile.agent \
+            -t ghcr.io/${{ github.repository_owner }}/cowork-agent-base:2 \
+            -t ghcr.io/${{ github.repository_owner }}/cowork-agent-base:2-${{ steps.pkg.outputs.version }} \
+            .
+          docker push ghcr.io/${{ github.repository_owner }}/cowork-agent-base:2
+          docker push ghcr.io/${{ github.repository_owner }}/cowork-agent-base:2-${{ steps.pkg.outputs.version }}
+
+      - name: Build + push cowork-agent-full (COWORK_FULL_PARITY=1 — OCR/Office/markitdown/opencv/table-extraction)
+        run: |
+          docker build --platform linux/arm64 --build-arg COWORK_FULL_PARITY=1 -f docker/Dockerfile.agent \
+            -t ghcr.io/${{ github.repository_owner }}/cowork-agent-full:2 \
+            -t ghcr.io/${{ github.repository_owner }}/cowork-agent-full:2-${{ steps.pkg.outputs.version }} \
+            .
+          docker push ghcr.io/${{ github.repository_owner }}/cowork-agent-full:2
+          docker push ghcr.io/${{ github.repository_owner }}/cowork-agent-full:2-${{ steps.pkg.outputs.version }}

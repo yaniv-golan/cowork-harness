@@ -30,6 +30,9 @@ It is a fidelity fixture, not the Desktop runtime. The CLI binary is `cowork-har
 - [docs/debugging.md](docs/debugging.md): debugging a run — `inspect`/`trace`/`chat`/`verify-run` for a misbehaving skill, and the false-green hunt
 - [docs/fidelity-gaps.md](docs/fidelity-gaps.md): what the harness deliberately does NOT reproduce vs real Cowork
 - [docs/invariants.md](docs/invariants.md): consolidated index of every "do not break" invariant, each with a pointer to its enforcement code and its test
+- [docs/run-status.md](docs/run-status.md): checking whether a background run is alive without `ps aux` — `status.json` + `cowork-harness status [--follow]`
+- [docs/stats.md](docs/stats.md): the `stats` command + `index.jsonl` — pass rate, cost/duration/token/turn percentiles, last-green, filtered/windowed per scenario
+- [docs/protocol.md](docs/protocol.md): the hand-authored control-channel wire-protocol schema (`schema/protocol.v1.json`) — versioning policy, golden vector pack
 - [SECURITY.md](SECURITY.md): threat model — the sandbox is a fidelity fixture, not a security boundary
 
 ## Using it from an agent

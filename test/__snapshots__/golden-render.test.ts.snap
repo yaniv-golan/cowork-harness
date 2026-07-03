@@ -1,0 +1,28 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`golden — E2 diff text rendering (full CLI output) > \`diff <cassette> <mutated-copy>\` renders all four view sections 1`] = `
+"tools:
+  - Skill {"skill":"my-pdf-skill:my-pdf-skill"}
+  + MutatedToolName {"skill":"my-pdf-skill:my-pdf-skill"}
+transcript: identical
+artifacts: identical
+meta: identical
+"
+`;
+
+exports[`golden — E7 changelog rendering (full output) > renderChangelog over the frozen fixture pair 1`] = `
+"- Desktop version bumped: \`1.0.0-fixture-a\` → \`1.0.0-fixture-b\`
+- staged agent bumped: \`1.0.0\` → \`2.0.0\`
+- egress allowlist: added \`b.example.com\`
+- egress allowlist: removed \`a.example.com\`
+- \`requireFullVmSandbox\`: \`false\` → \`true\`
+- cowork-relevant asar regions changed (fingerprint \`fixtureFingerprintA\` → \`fixtureFingerprintB\`)
+- gate \`hostLoop\`.on: \`false\` → \`true\`
+- baseline captured: \`2026-01-01\` → \`2026-02-01\`
+
+<details><summary>Annotations / comments changed</summary>
+
+- \`provenance.gates.hostLoop.note\` (annotation)
+</details>
+"
+`;

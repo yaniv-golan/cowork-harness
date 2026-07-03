@@ -59,7 +59,15 @@ export type AgentEvent =
   | { type: "thinking"; text: string }
   | { type: "metrics"; data: Record<string, unknown> } // api_metrics → cost
   | { type: "decision"; request: DecisionRequest }
-  | { type: "result"; isError: boolean; usage?: Record<string, unknown>; resultText?: string; subtype?: string } // resultText/subtype carry the SDK result payload so a transport-error result can be classified
+  | {
+      type: "result";
+      isError: boolean;
+      usage?: Record<string, unknown>;
+      resultText?: string;
+      subtype?: string; // resultText/subtype carry the SDK result payload so a transport-error result can be classified
+      costUsd?: number; // SDK's total_cost_usd for this invocation (Wave 0 seam — was dropped on the floor before)
+      numTurns?: number; // SDK's num_turns for this invocation (Wave 0 seam — was dropped on the floor before)
+    }
   | { type: "error"; source: "spawn" | "agent" | "protocol" | "exit"; message: string }
   | { type: "raw"; line: string };
 
@@ -130,8 +138,11 @@ const QuestionsSchema = z.array(QSpecSchema);
 
 // ---- Control-response envelopes (verified zod shape; the inner `response` nesting is load-bearing) ----
 /** The one success-envelope shape every control_response shares; the four builders below differ ONLY in
- *  the inner `body`. Keeping a single core stops the wrapper drifting between them. */
-function successEnvelope(requestId: string, body: Record<string, unknown>) {
+ *  the inner `body`. Keeping a single core stops the wrapper drifting between them.
+ *  Exported (in addition to the four builders) so protocol-conformance tooling — e.g. the E9 golden
+ *  vector generator — can wrap `hookOutput()`'s bare body in the real envelope instead of hand-rolling
+ *  a lookalike; it has no other external callers. */
+export function successEnvelope(requestId: string, body: Record<string, unknown>) {
   return { type: "control_response", response: { subtype: "success", request_id: requestId, response: body } };
 }
 export function allowEnvelope(requestId: string, updatedInput: Record<string, unknown>) {
@@ -732,6 +743,8 @@ export function parseMessage(msg: any): AgentEvent[] {
         // (e.g. "API Error: Connection closed", subtype error_during_execution) from a skill failure.
         resultText: typeof msg.result === "string" ? msg.result : undefined,
         subtype: typeof msg.subtype === "string" ? msg.subtype : undefined,
+        costUsd: typeof msg.total_cost_usd === "number" ? msg.total_cost_usd : undefined,
+        numTurns: typeof msg.num_turns === "number" ? msg.num_turns : undefined,
       });
       break;
   }

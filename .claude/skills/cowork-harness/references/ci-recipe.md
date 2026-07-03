@@ -1,12 +1,59 @@
 # CI recipe — replay vs live lanes
 
-Self-contained reference. Tracks `cowork-harness 0.21.0` (baseline `desktop-1.17377.2`).
+Self-contained reference. Tracks `cowork-harness 0.22.0` (baseline `desktop-1.18286.0`).
 
-**Minimal token-free PR gate** — the smallest thing worth committing; runs on stock GitHub-hosted runners,
-no token/Docker/agent:
+**Fastest path: the packaged Action.** One step gets you `replay`/`lint`/`verify-cassettes` plus a PR
+job-summary reporter (verdict table, staleness findings, cost/turns when available):
 
 ```yaml
-- run: npm i -g cowork-harness@>=0.21.0
+- uses: yaniv-golan/cowork-harness@v1
+  with:
+    command: replay
+    path: cassettes/
+```
+
+Reach for the manual multi-step form below only when you need per-step control the Action's inputs don't
+cover (a custom flag combination, a different runner matrix per step, or `lint`/`verify-cassettes` gated
+independently instead of as one action run per command).
+
+**Live lane (`command: run`) with the packaged Action — self-hosted runner, you stage the binary.** The
+Action never downloads or provisions the agent ELF itself — by design, not an oversight (see "the
+realistic CI shape" below for why). Stage it yourself as an explicit step in *your own* workflow, then
+point the Action at it:
+
+```yaml
+jobs:
+  live:
+    runs-on: [self-hosted, linux, arm64]   # needs Docker + this staged ELF; not a stock GitHub-hosted runner
+    steps:
+      - uses: actions/checkout@v4
+      - name: Stage the agent binary (official channel, sha256-verified — see docs/maintenance.md)
+        run: |
+          V=2.1.197   # match your scenario's pinned baseline's agentVersion
+          curl -fSL "https://downloads.claude.ai/claude-code-releases/$V/linux-arm64/claude" -o "$RUNNER_TEMP/claude-$V"
+          chmod +x "$RUNNER_TEMP/claude-$V"
+          # verify against the committed baseline's sha256 (baselines/desktop-*.json → agentBinary.sha256)
+          # before trusting it — see docs/maintenance.md's "Agent-binary provenance" section.
+          echo "COWORK_AGENT_BINARY=$RUNNER_TEMP/claude-$V" >> "$GITHUB_ENV"
+      - uses: yaniv-golan/cowork-harness@v1
+        with:
+          command: run
+          path: scenarios/
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+```
+
+Why this is a step *you* write, not an Action input the harness provides for you: pulling Anthropic's
+binary is a call about your own relationship with their distribution terms — keeping it in your own
+version-controlled workflow keeps that decision and its execution yours, auditable, and outside any
+third-party action's code. See the [agent-binary provenance runbook](../../../../docs/maintenance.md) for
+the full recovery/verification story (including why `COWORK_AGENT_BINARY` substitutions are
+sha256-*checked* but not hard-blocking on mismatch — it's advisory for an intentional substitution).
+
+**Minimal token-free PR gate (manual form)** — the smallest thing worth committing; runs on stock
+GitHub-hosted runners, no token/Docker/agent:
+
+```yaml
+- run: npm i -g cowork-harness@>=0.22.0
 - run: cowork-harness lint scenarios/*.yaml          # no silent false-greens
 - run: cowork-harness verify-cassettes cassettes/    # privacy + staleness
 - run: cowork-harness replay cassettes/              # token-free content/structure
@@ -22,7 +69,8 @@ The split is not just about tokens — it decides **where each lane can run**:
 - **`replay` / `verify-cassettes` (token-free, agent-free).** Replays a recorded cassette
   (`events.jsonl` + `control-out.jsonl`) and lints the committed cassettes. **No model tokens, no
   Docker, no agent binary** — runs on a stock GitHub Actions runner. Evaluates **content** assertions
-  only (`transcript_*`, `tool_*`, `subagent_*`, `dispatch_count_max`, `result`, and the verdict
+  only (`transcript_*`, `tool_*`, `subagent_*`, `dispatch_count_max`, `skill_triggered`,
+  `no_skill_triggered`, `max_cost_usd`, `max_tokens`, `tool_calls_max`, `result`, and the verdict
   modifiers `allow_permissive_auto_allow` / `allow_missing_capability` / `allow_l0_plugin_divergence` /
   `allow_stall` (no-op passes); plus the gate keys `question_asked` / `questions_count_max` /
   `gate_answers_delivered` **if** the cassette has `controlOut`). Filesystem/egress assertions are
@@ -110,6 +158,12 @@ A typical skill repo runs four stages, fastest/cheapest first:
 
 ## GitHub Actions sketch
 
+The PR gate below is the manual, step-by-step version of what `uses: yaniv-golan/cowork-harness@v1` does
+in one step (see the top of this doc) — reach for this form when you need independent per-command
+gating/annotations rather than one action run per command. The nightly live job has no packaged-Action
+equivalent yet (the Action's `command: run` mode needs a self-hosted runner with Docker + the agent binary
+already provisioned, same as the manual form below).
+
 PR gate (token-free — runs on every push):
 
 ```yaml
@@ -124,7 +178,7 @@ jobs:
         with: { node-version: '20' }
       - uses: actions/setup-python@v5
         with: { python-version: '3.x' }                                       # python3 only — PyYAML is bundled with the linter
-      - run: npm i -g cowork-harness@>=0.21.0
+      - run: npm i -g cowork-harness@>=0.22.0
       - run: cowork-harness lint scenarios/*.yaml                              # no-silent-false-green (needs python3; PyYAML bundled)
       - run: cowork-harness verify-cassettes cassettes/ --output-format json   # privacy + staleness gate
       - run: cowork-harness replay cassettes/ --output-format json             # token-free content/structure
@@ -153,7 +207,7 @@ jobs:
             echo "live=true" >> "$GITHUB_OUTPUT"
           fi
       - if: steps.guard.outputs.live == 'true'
-        run: npm i -g cowork-harness@>=0.21.0
+        run: npm i -g cowork-harness@>=0.22.0
       - if: steps.guard.outputs.live == 'true'
         run: cowork-harness run scenarios/ --output-format json
         env:

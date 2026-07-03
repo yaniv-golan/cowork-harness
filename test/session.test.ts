@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, mkdirSync, writeFileSync, symlinkSync } from
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { loadBaseline } from "../src/baseline.js";
-import { loadSession, buildLaunchPlan, resolveSessionPaths } from "../src/session.js";
+import { loadSession, buildLaunchPlan, resolveSessionPaths, applySessionOverrides } from "../src/session.js";
 import { parseSessionFile } from "../src/run/execute.js";
 import { agentArgs } from "../src/runtime/argv.js";
 import { Scenario } from "../src/types.js";
@@ -448,5 +448,56 @@ describe("fail-loud declared-source staging", () => {
     writeFileSync(join(mk, "p", ".claude-plugin", "plugin.json"), JSON.stringify({ name: "p" })); // valid, no version
     const { plan: p } = plan({ plugins: { local_marketplaces: [mk], enabled: ["p@mymkt"] } });
     expect(p.pluginDirs).toContain(".local-plugins/cache/mymkt/p/0.0.0");
+  });
+});
+
+describe("applySessionOverrides (E3 — matrix runner's session-loading override seam)", () => {
+  it("overrides model, leaving everything else untouched", () => {
+    const base = loadSession({ model: "claude-sonnet-4-6" });
+    const next = applySessionOverrides(base, { model: "claude-opus-4-8" });
+    expect(next.model).toBe("claude-opus-4-8");
+    expect(next.permission_mode).toBe(base.permission_mode);
+  });
+
+  it("is a no-op when no overrides are given (same values, per-field, not necessarily same reference)", () => {
+    const base = loadSession({ model: "claude-sonnet-4-6" });
+    const next = applySessionOverrides(base, {});
+    expect(next).toEqual(base);
+  });
+
+  it("skillDirSubstitution swaps the matching local_plugins entry, keeping others untouched", () => {
+    const base = loadSession({ plugins: { local_plugins: ["../a/my-pdf-skill", "../other/unrelated-skill"] } });
+    const next = applySessionOverrides(base, { skillDirSubstitution: ["../a/my-pdf-skill", "../b/my-pdf-skill"] });
+    expect(next.plugins.local_plugins).toEqual(["../b/my-pdf-skill", "../other/unrelated-skill"]);
+  });
+
+  it("does NOT mutate the original session object (pure function)", () => {
+    const base = loadSession({ plugins: { local_plugins: ["../a/my-pdf-skill"] } });
+    applySessionOverrides(base, { skillDirSubstitution: ["../a/my-pdf-skill", "../b/my-pdf-skill"] });
+    expect(base.plugins.local_plugins).toEqual(["../a/my-pdf-skill"]);
+  });
+
+  it("throws when the substitution's `from` isn't actually in local_plugins — never silently no-ops", () => {
+    const base = loadSession({ plugins: { local_plugins: ["../a/my-pdf-skill"] } });
+    expect(() => applySessionOverrides(base, { skillDirSubstitution: ["../does-not-match", "../b/my-pdf-skill"] })).toThrow(
+      /does not contain/,
+    );
+  });
+
+  it("throws when the substitute directory has a DIFFERENT basename — the mount name must stay stable", () => {
+    const base = loadSession({ plugins: { local_plugins: ["../a/my-pdf-skill"] } });
+    expect(() => applySessionOverrides(base, { skillDirSubstitution: ["../a/my-pdf-skill", "../b/a-totally-different-name"] })).toThrow(
+      /basename|mount name/i,
+    );
+  });
+
+  it("composes model + skillDirSubstitution together in one call", () => {
+    const base = loadSession({ model: "claude-sonnet-4-6", plugins: { local_plugins: ["../a/my-pdf-skill"] } });
+    const next = applySessionOverrides(base, {
+      model: "claude-opus-4-8",
+      skillDirSubstitution: ["../a/my-pdf-skill", "../b/my-pdf-skill"],
+    });
+    expect(next.model).toBe("claude-opus-4-8");
+    expect(next.plugins.local_plugins).toEqual(["../b/my-pdf-skill"]);
   });
 });

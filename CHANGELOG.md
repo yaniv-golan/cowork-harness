@@ -6,6 +6,186 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.22.0] — 2026-07-03
+
+### Added
+
+- **`computer://` link modeling — the prompt now instructs file links exactly as production does.**
+  Four pieces landed together (design + binary research in
+  `docs/internal/2026-07-03-computer-link-scheme-research-and-plan.md`):
+  - `src/vm-paths.ts` — a faithful port of Desktop's display-side VM→host path transform
+    (`deepTranslateVMPaths` / `mapVMPathToHostPath` / `encodeComputerUrlsForHostLoop`): markdown-link,
+    backtick, bare-token, and prose rewrite positions; per-segment percent-encoding; traversal
+    rejection; dormant `.host-home` / `.auto-memory` mount branches.
+  - **Hostloop display translation** (`src/run/display-translate.ts`): at hostloop fidelity the
+    `run`/`chat` renderer shows production-identical host paths in assistant text and tool lines.
+    Hostloop-only by design (container staging paths would be less faithful than VM paths), identity on
+    replay (no live ctx), suppressed in `--compact`/`--demo` (the shareable no-host-paths contract).
+    Hostloop prompt tokens now render HOST paths (`{{cwd}}` / `{{workspaceFolder}}` / `{{skillsDir}}` +
+    the dedicated `{{cwd}}/mnt/uploads` pre-replacement), matching the Desktop builder's own host-loop
+    substitution recipe.
+  - **New assertion `computer_links_resolve: true`** — every `computer://` link in the transcript must
+    resolve to an artifact that exists (live/verify-run: filesystem; replay: the cassette's artifact
+    manifest, with host-shaped links normalized via the recorded session folders). Zero links pass;
+    dangling links report which target was checked. Assert links with this key, not literal link text.
+  - The `sharing_files` prompt section now instructs `[View your X](computer://{{workspaceFolder}}/x.ext)`
+    links faithfully — the prompt-reconstruction divergence for links is retired (docs/fidelity-gaps.md
+    updated).
+- **Dark-feature gate sentinels.** Four newly discovered GrowthBook gates pinned in the baseline
+  (host-fs skeleton `2614807392`, standard-session auto-memory `123929380`, memory-guidelines env
+  `1696890383`, memory extra-guidelines `2860753854`) — all dark or inert-default for standard cowork
+  sessions today; pinned so a production flip surfaces as a `sync --diff` delta. Absent-from-fcache
+  dark gates record an explicit `source:"absent"` marker (the fcache re-key guard's semantics are
+  preserved).
+
+- **`stats` command + cross-run result index.** Every `run`/`skill` invocation (and `record`'s live
+  execution) now appends one JSON line to `<runsRoot>/index.jsonl` at the same moment it writes
+  `result.json` — a durable, queryable history independent of whether the run dir itself survives a later
+  `prune`. `cowork-harness stats [<scenario>]` reads it back: run count, pass rate, cost/duration/token/turn
+  p50/p95, and the last-green timestamp, filterable by `--since`/`--baseline`/`--branch` and windowable by
+  `--last <n>` (per-scenario, not globally). `--reindex` rebuilds the index from the physical run-dir tree
+  — the migration path for runs that predate the index. `trace`/`inspect`/`scaffold`/`status`'s existing
+  run-id/fragment resolution now checks the index FIRST (faster, and the source of truth going forward),
+  falling through to the pre-index filesystem walk automatically and unchanged for any run that predates
+  the index or was never indexed — same commands, same output, same ambiguity-handling behavior either
+  way. See [docs/stats.md](./docs/stats.md).
+- **`run --matrix` matrix runner.** Runs one scenario across the cross-product of baseline/model/skill_dir
+  axes declared in a `matrix.yaml` file (any axis optional; an absent axis contributes one unmodified
+  cell) and reports one row per cell instead of a single pass/fail. `--max-cells` caps the cross-product
+  (default 16, warns and truncates rather than silently dropping cells); `--concurrency` (default 1, max 8)
+  runs cells N at a time via the same bounded pool `record --concurrency` uses. Exit is non-zero if ANY
+  cell fails — a real assertion failure or a cell-level infrastructure error (e.g. the pinned baseline's
+  agent binary isn't staged), rendered as a distinct `cell error: …` line rather than a fake assertion
+  failure. The `skill_dirs` axis substitutes the session's single `plugins.local_plugins` entry; candidates
+  must share that entry's directory basename (the mount name derives from it, with no author-chosen
+  override anywhere in the harness) — a mismatch is a loud, explicit usage error. `--concurrency > 1`
+  cannot combine with `--decider-dir`/`--decider-cmd` (the external decider channel is one shared object
+  across every cell, and every channel implementation is strictly serial over shared mutable state — not
+  safe for concurrent gate answers; `--concurrency 1`, the default, is genuinely serial and fine). The
+  JSON envelope gains an additive `matrix: {cells[]}` field; `ok`/the exit code are `!matrix.anyFail` for
+  this mode.
+- **`--matrix` composes with `--repeat`.** Each cell now runs as its own repeat batch (N iterations of that
+  cell's axes-overridden scenario) through the same `runRepeatBatch` helper standalone `--repeat` uses —
+  same unanswered-gate, error, and budget-cap handling — with `MatrixCellRepeatResult`/`MatrixRepeatRollup`
+  carrying each cell's full `RepeatRollup` (pass rate, per-assertion attribution, signal histogram,
+  stoppedEarly) rather than a single pass/fail. The matrix verdict judges each cell's rollup against
+  `--min-pass-rate`; the JSON envelope gains an additive `matrixRepeat: {cells[]}` field, checked before
+  `matrix`/`rollups` when present. Also closes the previously-ungated `--repeat` + `--decider-cmd`
+  combination (rejected for the same live-decider reasoning as `--decider-dir`).
+- **Packaged GitHub Action** (`uses: yaniv-golan/cowork-harness@v1`, [`action.yml`](./action.yml)) wrapping
+  `replay`/`lint`/`verify-cassettes`/`run` with a PR job-summary reporter (verdict table, staleness
+  findings, the skipped-live-only-assertions honesty line, cost/turns when available). Token-free lane runs
+  on any `ubuntu-latest` runner; `run` (live lane) needs a self-hosted runner with Docker + the agent binary
+  already provisioned — the action does not stage either, by design (staging Anthropic's binary is a call
+  about your own distribution-terms relationship, so it stays a step in your own workflow, not something a
+  third-party action automates for you). README and the companion skill's `ci-recipe.md` both carry a
+  worked self-hosted-runner example for the live lane. Self-tested in CI (`uses: ./` against a packed
+  tarball of the current commit, a passing case, a usage-error case, and a genuine assertion-failure case).
+  A `publish-image.yml` workflow pushes `ghcr.io/yaniv-golan/cowork-agent-base:2`/`cowork-agent-full:2` on
+  release tags for consumers (and this repo's own CI) to `docker pull` instead of building from scratch.
+- **`skill_triggered` / `no_skill_triggered` assertions.** Skill invocation (the top-level `Skill` tool_use)
+  is now a first-class assertable event, recorded as `RunResult.skillsInvoked[]` and evaluated as a regex
+  match, matching the `subagent_dispatched` convention. Fails as evidence-unavailable (never a vacuous pass)
+  when the agent's init tool list has no `Skill` tool (agent-version drift) or, for the negative form, when
+  invocation data itself is absent (an old run predating this key). Replay-checkable (content key).
+- **`max_cost_usd` / `max_tokens` / `tool_calls_max` / `max_turns` budget assertions**, built on Wave 0's
+  cost/turns seam. Each fails as evidence-unavailable (never a vacuous pass) when the underlying telemetry
+  is absent. `max_cost_usd`/`max_tokens` are honest about the replay lane: they assert the *frozen
+  recording's* spend, not fresh spend — a live `run` is where a real budget regression is caught.
+  `tool_calls_max`/`max_turns` are meaningfully replay-checkable (the re-drive recomputes `toolCounts`/turn
+  count deterministically).
+- **`diff <a> <b>` command.** Compares two committed platform baselines (`--changelog` renders known-field
+  prose — agent/Desktop version bumps, egress allowlist changes, gate flips — from a proper recursive
+  structural differ, replacing the old one-level diff that dumped a whole subtree on any nested change;
+  `sync --diff` now uses the same differ), two runs, two cassettes, or a run and a cassette (kind
+  auto-detected by CONTENT, not filename — a cassette-shaped file not literally named `*.cassette.json`
+  still detects correctly). Run/cassette mode has four views (`tools`/`transcript`/`artifacts`/`meta`, or
+  `all`) with normalization masking per-run noise (tool-use ids, UUIDs, session-dir markers, timestamps,
+  host paths) so two runs of the *same* scenario diff as identical despite that noise; `--no-normalize`
+  compares raw values for forensics. Comparing runs of two *different* scenarios is allowed (useful for
+  skill-variant comparison) but warns on stderr — added/removed rows may then reflect scenario
+  differences, not drift. Token-free — no live Desktop install or Docker needed either way.
+- **`run --repeat N` variance rollup.** Runs each resolved scenario N times (2-100) and aggregates a
+  rollup (pass rate, per-assertion pass/fail attribution, a verdict-signal histogram, cost/token totals,
+  non-deterministic-run count) instead of a single pass/fail. `--min-pass-rate` sets the batch threshold
+  (default 1.0 — no flakiness tolerance); `--stop-on-diverge` stops the loop as soon as both a pass and a
+  fail are observed (that batch always fails — divergence IS the failure being measured for);
+  `--max-budget-usd` stops the loop once cumulative cost would exceed it (an incomplete-but-clean stop is a
+  warning, not a failure by itself). `--repeat` rejects `--decider-dir`/`--decider-cmd` (an interactive
+  driving agent × N runs is not a measurement). The JSON envelope gains an optional `rollups[]` array;
+  `ok`/the exit code are
+  redefined for this mode from the rollups, not from `results.every(pass)` — `results[]` still holds every
+  raw run.
+- **E9: a hand-authored draft-07 JSON Schema for the harness's own control-channel wire protocol**
+  (`schema/protocol.v1.json`) — the `initialize` handshake, `can_use_tool` permission/question gates
+  (incl. AskUserQuestion's `questions[]`), `hook_callback`/`mcp_message` round-trips, and the nested
+  `control_response` envelope + the `answers` wire-shape — formalizing the prose in DESIGN.md §6/SPEC.md
+  §4-5. Deliberately does NOT schema the Claude Agent SDK's own event stream (Anthropic's surface).
+  Ships with a golden vector pack (`fixtures/protocol/v1/*.json` — real cassette-extracted where
+  possible, synthetic-via-the-real-`session.ts`-envelope-builders otherwise) and conformance tests
+  (`test/protocol-schema.test.ts`) that validate every committed cassette's control-channel lines plus
+  the real envelope-builder functions' actual output, and guard the schema/vector-pack lockstep. See
+  [docs/protocol.md](./docs/protocol.md) for the versioning policy and the explicit
+  descriptive-not-normative scope statement.
+
+### Parity
+
+- **Synced the platform baseline to Claude Desktop 1.18286.0** (`baselines/desktop-1.18286.0.json`).
+  The staged agent ELF is unchanged (`2.1.197`; measured sha256 matches the official release manifest).
+  `sync` re-derived egress/gates/mount/web_fetch facts — no unknown deltas; the egress allowlist (15
+  domains) and all 6 pinned GrowthBook gates held. `asarFingerprint` moved (`0b2f2fb6 → edff6926`);
+  the host-loop `## Shell access` generator and the subagent append were re-verified against the new
+  asar (unconditional fragments still byte-faithful).
+- **Re-authored the system-prompt append reconstruction for 1.18286.0**
+  (`baselines/prompts/desktop-1.18286.0/system-prompt-append.md`). The real append was RESTRUCTURED
+  at this release (constant `aui`, 37.9KB): a new `<claude_behavior>` wrapper plus new
+  behavior-driving sections — AskUserQuestion-before-work, task-list/verification, citation,
+  file-creation/computer-use guidance, web-fetch no-fallback restrictions, sharing/package/examples,
+  an `<env>` block — and the skills/file-handling sections moved inside `<computer_use>`. The
+  reconstruction (paraphrased per the no-bundling rule) now carries these; generic refusal/safety
+  policy stays elided, and the deliberate divergences (artifacts renderer catalog trimmed,
+  `computer://` links described-not-instructed) are logged in the asset header. New `<env>` tokens
+  `{{currentDateTime}}` / `{{currentTimezone}}` / `{{accountName}}` (session `account_name`,
+  default `"User"`) render in `src/prompt.ts`. New tests guard baseline→asset references, token
+  hygiene, and the `/sessions/` link-leak trade.
+- **Annotated `desktop-1.17377.2` as append-unverified** (`$comment_prompts_unverified`): its own
+  asar was never prompt-spot-checked and is no longer obtainable locally, so whether the 1.18286.0
+  restructure landed there or later is unverifiable; the pin carries the last-verified 1.15200.0
+  reconstruction.
+
+### Added
+
+- **Agent-binary provenance in baselines.** Each baseline's `agentBinary` now records the Linux/arm64 ELF's
+  `sha256` plus `shaProvenance` — `measured-local` (hashed from the staged binary at `sync` and cross-checked
+  against the official release manifest) or `official-manifest` (copied from the manifest for a version not
+  staged on the syncing machine; staging-identity unverified) — and, on measured rows, `manifestChecksumMatch`.
+  `sync` computes these and stays offline-capable (an unreachable manifest records `"unknown"` and never fails
+  the sync). All committed baselines back-filled. (No `nativeSha256`: the signed native Mach-O never equals a
+  manifest hash.)
+- **Default-on agent-ELF integrity check.** The resolved ELF is verified against the recorded `sha256` at run
+  time **by default** (opt out with `COWORK_HARNESS_VERIFY_AGENT_SHA=0`; ELF only). Hard-fails only on a
+  `measured-local` mismatch at the baseline's own staged path; intentional substitutions (`COWORK_AGENT_BINARY`
+  / newest-sibling fallback) and `official-manifest` hashes advisory-warn. `doctor` now shows a
+  `[sha256 ✓ vs baseline, …]` provenance line. Old agent versions are re-downloadable and verifiable — recovery
+  runbook in `docs/maintenance.md`.
+
+### Changed
+
+- **`RunResult.cost`/`.usage` retyped** from opaque `Record<string, unknown>` to structured shapes.
+  `cost` is now `{ usd?, raw? }`: `usd` is the SDK result message's `total_cost_usd`, newly extracted (was
+  previously dropped on the floor); `raw` is the pre-existing `api_metrics` payload, now nested under `raw`
+  instead of being the whole `cost` object. `usage` gains a `turns?: number` field, from the SDK's
+  `num_turns` (also newly extracted). Breaking shape change for anything reading `result.json`'s `cost`
+  field directly — see SPEC.md's `RunResult` reference for the new shape. No cassette-format bump (derived
+  reporting, not a stored format change).
+
+### Fixed
+
+- **Replay now surfaces `usage`/`cost` in `result.json`.** `replayCassette` previously omitted both fields
+  entirely from every replayed `RunResult`, regardless of what the cassette recorded — a replay-lane blind
+  spot, not a live-only limitation. Both are now re-derived from the cassette's re-driven record, same as
+  the live/partial-run lanes.
+
 ## [0.21.0] — 2026-07-03
 
 ### Added

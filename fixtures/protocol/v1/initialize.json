@@ -1,0 +1,18 @@
+{
+  "type": "control_request",
+  "request_id": "init-1",
+  "request": {
+    "subtype": "initialize",
+    "appendSubagentSystemPrompt": "## Cowork environment\n\nYou are running as a subagent inside a Cowork session. Shell commands execute in an isolated Linux sandbox rooted at /sessions/local_94v9zwdeo — files created there (or under /tmp) exist only in the sandbox, not on the user's real computer. User-attached folders are mounted under /sessions/local_94v9zwdeo/mnt/.",
+    "hooks": {
+      "PreToolUse": [
+        {
+          "matcher": "Task",
+          "hookCallbackIds": [
+            "cowork-task-bg-block"
+          ]
+        }
+      ]
+    }
+  }
+}

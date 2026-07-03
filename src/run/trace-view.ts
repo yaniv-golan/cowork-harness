@@ -5,6 +5,7 @@ import { homedir } from "node:os";
 import { parseMessage, type AgentEvent, type DecisionRequest } from "../agent/session.js";
 import { labelSource } from "./gate-provenance.js";
 import type { RunResult } from "../types.js";
+import { readIndex, resolveRunsExactFromIndex, resolveRunsFragmentFromIndex, type RunIndexRow } from "./run-index.js";
 
 /**
  * The default runs root when no override is set: a per-user state dir OUTSIDE any working tree, so run
@@ -104,7 +105,40 @@ function rowFor(ev: AgentEvent): TraceRow[] {
   }
 }
 
-/** Resolve `arg` to an events.jsonl: a direct file, a run dir, or a run-id/scenario fragment under runs/. */
+/** E4: resolves `arg` against a set of already-tiered index rows (exact OR fragment — caller picks the
+ *  tier), tie-breaking on the index row's `ts` (the run's actual creation time — a strictly better signal
+ *  than a directory's `mtime`, which the filesystem walk uses and which can be touched by unrelated
+ *  filesystem operations). Returns `undefined` on no rows, OR when the winning row's `events.jsonl` no
+ *  longer exists on disk (an index entry surviving a `prune` of the physical run dir) — either way, the
+ *  caller falls through to the next tier. */
+function resolveViaIndexRows(rows: RunIndexRow[], arg: string): string | undefined {
+  if (rows.length === 0) return undefined;
+  const sorted = rows.length > 1 ? [...rows].sort((a, b) => (a.ts < b.ts ? 1 : -1)) : rows;
+  if (sorted.length > 1) {
+    warn(
+      `::warning:: ambiguous trace fragment "${arg}" matches ${sorted.length} indexed run(s):\n` +
+        sorted.map((r) => `  ${join(r.outDir, "events.jsonl")}`).join("\n") +
+        `\nUsing the most recent: ${join(sorted[0].outDir, "events.jsonl")}\nPass a more specific id or full path to be deterministic.\n`,
+    );
+  }
+  const f = join(sorted[0].outDir, "events.jsonl");
+  return existsSync(f) ? f : undefined;
+}
+
+/** Resolve `arg` to an events.jsonl: a direct file, a run dir, or a run-id/scenario fragment under runs/.
+ *  `resolveEventsFile` is the single choke point trace/inspect/scaffold/status all resolve a run-id/
+ *  fragment through — making it index-aware (E4) migrates all four for free, with full behavioral safety:
+ *  an index MISS (a pre-index-era run, or index.jsonl never built via `--reindex`) falls straight through
+ *  to the filesystem walk, unchanged.
+ *
+ *  Tier order is index-EXACT → filesystem-EXACT → index-FRAGMENT → filesystem-FRAGMENT, deliberately
+ *  interleaved rather than "try the whole index, then the whole walk" — an EARLIER version tried the
+ *  index's exact-then-fragment fallback as one block before the walk, which meant an index FRAGMENT hit
+ *  could shadow a filesystem EXACT hit for a run that predates the index (e.g. an on-disk `sess-a` run
+ *  dir + an indexed `sess-abc` run: `resolveEventsFile("sess-a")` would silently resolve to `sess-abc`'s
+ *  events.jsonl instead of `sess-a`'s own, no warning — `sess-*` ids are user-chosen, so this collision is
+ *  realistic, not hypothetical). Interleaving preserves the walk's own "exact always wins over any
+ *  fragment, regardless of source" invariant exactly. */
 export function resolveEventsFile(arg: string): string {
   if (existsSync(arg) && statSync(arg).isFile()) return arg;
   if (existsSync(arg) && statSync(arg).isDirectory()) {
@@ -112,6 +146,9 @@ export function resolveEventsFile(arg: string): string {
     if (existsSync(f)) return f;
   }
   const root = runsRoot(); // COWORK_HARNESS_RUNS_DIR, else the absolute ~/.cowork-harness/runs — not cwd-relative
+  const indexRows = readIndex(root);
+  const viaIndexExact = resolveViaIndexRows(resolveRunsExactFromIndex(indexRows, arg), arg);
+  if (viaIndexExact) return viaIndexExact;
   if (existsSync(root)) {
     // prefer EXACT match first; only fall through to fragment matching if nothing exact was found.
     // Collect ALL fragment matches and warn loudly (with candidates) before picking deterministically.
@@ -127,6 +164,10 @@ export function resolveEventsFile(arg: string): string {
       const direct = join(sd, arg, "events.jsonl");
       if (existsSync(direct)) return direct; // exact run-dir name match under scenario dir
     }
+  }
+  const viaIndexFragment = resolveViaIndexRows(resolveRunsFragmentFromIndex(indexRows, arg), arg);
+  if (viaIndexFragment) return viaIndexFragment;
+  if (existsSync(root)) {
     // Fragment matching: collect all candidates so ambiguity is surfaced, not silently resolved.
     const candidates: string[] = [];
     for (const scen of readdirSync(root)) {
@@ -168,17 +209,19 @@ export function resolveEventsFile(arg: string): string {
   throw new Error(`no events.jsonl for "${arg}" — pass a run dir, an events.jsonl path, or a run id under runs/`);
 }
 
-/** Parse every event from an events.jsonl (the shared first pass for the trace views). */
-function eventsOf(file: string): AgentEvent[] {
+/** Parse every event from a pre-read array of raw JSONL lines — the shared core both `eventsOf` (a run
+ *  dir's events.jsonl on disk) and E2's diff engine (a cassette's `events[]`, already in memory, no file
+ *  to read) build on. `source` is only used in the malformed-line warning. */
+export function eventsFromLines(lines: string[], source = "<lines>"): AgentEvent[] {
   const events: AgentEvent[] = [];
-  for (const line of readFileSync(file, "utf8").split("\n")) {
+  for (const line of lines) {
     if (!line.trim()) continue;
     let msg: unknown;
     try {
       msg = JSON.parse(line);
     } catch {
       // skip malformed JSON (a truncated final line is normal) but be LOUD — mirror cassette.ts.
-      warn(`::warning:: trace: skipping malformed JSON line in ${file}: ${line.slice(0, 120)}\n`);
+      warn(`::warning:: trace: skipping malformed JSON line in ${source}: ${line.slice(0, 120)}\n`);
       continue;
     }
     events.push(...parseMessage(msg));
@@ -186,8 +229,15 @@ function eventsOf(file: string): AgentEvent[] {
   return events;
 }
 
-export function buildTrace(file: string, opts: { tools?: boolean } = {}): TraceRow[] {
-  const events = eventsOf(file);
+/** Parse every event from an events.jsonl (the shared first pass for the trace views). */
+function eventsOf(file: string): AgentEvent[] {
+  return eventsFromLines(readFileSync(file, "utf8").split("\n"), file);
+}
+
+/** Core trace-row building over an already-parsed event array — the part of `buildTrace` that doesn't
+ *  care whether the events came from a file (run dir) or were passed in directly (E2's diff engine,
+ *  cassette `events[]`). `buildTrace` is the file-path convenience wrapper over this. */
+export function buildTraceFromEvents(events: AgentEvent[], opts: { tools?: boolean } = {}): TraceRow[] {
   // Pair tool_use ↔ tool_result by toolUseId so each tool row carries its OUTCOME — the single
   // highest-value forensics fix: a tool error (e.g. the q.map) is now visible in one command.
   const results = new Map<string, { isError: boolean; text: string }>();
@@ -204,6 +254,10 @@ export function buildTrace(file: string, opts: { tools?: boolean } = {}): TraceR
     }
   }
   return opts.tools ? rows.filter((r) => r.kind === "tool" || r.kind === "dispatch") : rows;
+}
+
+export function buildTrace(file: string, opts: { tools?: boolean } = {}): TraceRow[] {
+  return buildTraceFromEvents(eventsOf(file), opts);
 }
 
 export interface GateTraceRow {

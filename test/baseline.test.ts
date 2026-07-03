@@ -3,7 +3,8 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
-import { compareBaselineVersions, loadBaseline, resolveAgentBinary, resolveMounts } from "../src/baseline.js";
+import { compareBaselineVersions, loadBaseline, resolveAgentBinary, resolveMounts, sha256File } from "../src/baseline.js";
+import { createHash } from "node:crypto";
 import type { PlatformBaseline } from "../src/types.js";
 import { decodeFcacheGates, sync, checkMountModeFacts, checkWebFetchFacts } from "../src/sync/cowork-sync.js";
 
@@ -104,16 +105,44 @@ describe("decodeFcacheGates (GrowthBook fcache decode, binary-verified format)",
     expect(decodeFcacheGates(bad)).toBeNull();
   });
 
-  // precondition: a valid CLF fcache whose features contain ONLY non-pinned IDs returns {}
-  // (empty object), NOT null. This is the load-bearing precondition for the sync() else-if guard —
-  // {} is truthy so the !gates branch was silently bypassed, leaving a total GrowthBook re-key invisible.
-  it("returns {} (not null) when the fcache decodes but contains only non-pinned gate IDs", () => {
+  // precondition: a valid CLF fcache whose features contain ONLY non-pinned IDs returns an object
+  // containing ONLY the DARK_GATES absent-marker(s), NOT null and NOT truly empty. This is the
+  // load-bearing precondition for the sync() else-if guard: the guard must count only
+  // source!=="absent" entries, or the always-present dark-gate marker would mask a total
+  // GrowthBook re-key (every pinned id missing) as if something had matched.
+  it("returns only the skeletonHome absent-marker (source:'absent') when the fcache decodes but contains only non-pinned gate IDs", () => {
     const f = makeFcache({
       "999999999": { value: true, on: true, off: false, source: "force" }, // not in PINNED_GATES
     });
     const result = decodeFcacheGates(f);
     expect(result).not.toBeNull();
-    expect(result).toEqual({});
+    expect(result).toEqual({
+      "2614807392": { id: "2614807392", name: "skeletonHome", on: false, source: "absent", value: undefined },
+    });
+  });
+
+  it("the re-key guard still fires when only the absent-source dark-gate marker is present (no other pinned id matched)", () => {
+    const f = makeFcache({
+      "999999999": { value: true, on: true, off: false, source: "force" }, // not in PINNED_GATES
+    });
+    const gates = decodeFcacheGates(f)!;
+    // Mirrors the sync() else-if guard: count only gates whose source !== "absent".
+    const liveMatches = Object.values(gates).filter((g) => g.source !== "absent");
+    expect(liveMatches).toEqual([]);
+  });
+
+  it("decodes a normal (non-absent) entry when the dark gate 2614807392 IS present in the fcache", () => {
+    const f = makeFcache({
+      "2614807392": { value: true, on: true, off: false, source: "force" },
+    });
+    const gates = decodeFcacheGates(f)!;
+    expect(gates["2614807392"]).toEqual({
+      id: "2614807392",
+      name: "skeletonHome",
+      on: true,
+      source: "force",
+      value: true,
+    });
   });
 });
 
@@ -215,6 +244,90 @@ describe("resolveAgentBinary newest-sibling fallback", () => {
     const baseline = baselineWith(join(vmRoot, "2.1.999", "claude"));
 
     expect(() => resolveAgentBinary(baseline)).toThrow(/Staged agent binary not found/);
+  });
+});
+
+describe("sha256File", () => {
+  it("returns the hex SHA-256 of the file's bytes", () => {
+    const dir = mkdtempSync(join(tmpdir(), "cwh-sha-"));
+    const f = join(dir, "blob");
+    writeFileSync(f, "hello world\n");
+    const expected = createHash("sha256").update("hello world\n").digest("hex");
+    expect(sha256File(f)).toBe(expected);
+  });
+});
+
+describe("resolveAgentBinary — COWORK_HARNESS_VERIFY_AGENT_SHA integrity check (ELF, default-ON)", () => {
+  const stageBinary = (content = "#!/bin/sh\n") => {
+    const dir = mkdtempSync(join(tmpdir(), "cwh-elf-"));
+    const f = join(dir, "claude");
+    writeFileSync(f, content);
+    return f;
+  };
+  // A baseline whose OWN stagedPath is `bin` (the primary path — hard-fail applies here).
+  const stagedBaseline = (bin: string, sha256?: string, shaProvenance?: string) =>
+    ({ agentBinary: { stagedPath: bin, sha256, shaProvenance } }) as unknown as PlatformBaseline;
+
+  afterEach(() => {
+    delete process.env.COWORK_AGENT_BINARY;
+    delete process.env.COWORK_HARNESS_VERIFY_AGENT_SHA;
+    vi.restoreAllMocks();
+  });
+
+  it("verifies by default (no env) and passes silently when the staged hash matches", () => {
+    const bin = stageBinary();
+    expect(resolveAgentBinary(stagedBaseline(bin, sha256File(bin), "measured-local"))).toBe(bin);
+  });
+
+  it("HARD-FAILS by default on a measured-local mismatch at the primary staged path", () => {
+    const bin = stageBinary();
+    expect(() => resolveAgentBinary(stagedBaseline(bin, "deadbeef", "measured-local"))).toThrow(/sha256 mismatch/);
+  });
+
+  it("opt-out with COWORK_HARNESS_VERIFY_AGENT_SHA=0 disables the check (no throw)", () => {
+    const bin = stageBinary();
+    process.env.COWORK_HARNESS_VERIFY_AGENT_SHA = "0";
+    expect(resolveAgentBinary(stagedBaseline(bin, "deadbeef", "measured-local"))).toBe(bin);
+  });
+
+  it("ADVISORY-WARNS (no throw) on an official-manifest mismatch", () => {
+    const bin = stageBinary();
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    expect(resolveAgentBinary(stagedBaseline(bin, "deadbeef", "official-manifest"))).toBe(bin);
+    expect(stderr).toHaveBeenCalled();
+  });
+
+  it("an intentional COWORK_AGENT_BINARY override WARNS but does not hard-fail, even on measured-local mismatch", () => {
+    const bin = stageBinary();
+    process.env.COWORK_AGENT_BINARY = bin;
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    // baseline stagedPath is a different (nonexistent) path; override wins and is an intentional substitution
+    expect(resolveAgentBinary(stagedBaseline("/nope/claude", "deadbeef", "measured-local"))).toBe(bin); // no throw
+    expect(stderr).toHaveBeenCalled();
+  });
+
+  it("no-op when the baseline has no recorded sha256", () => {
+    const bin = stageBinary();
+    expect(resolveAgentBinary(stagedBaseline(bin, undefined, undefined))).toBe(bin);
+  });
+});
+
+describe("committed baselines carry agent-binary provenance", () => {
+  // desktop-1.18286.0 is the FIRST baseline written by the new sync code path (a real-world sample, not a
+  // synthetic fixture): measured-local hash of the staged ELF + a boolean manifestChecksumMatch from the
+  // live official-manifest cross-check.
+  it("desktop-1.18286.0 (sync-produced) has a measured-local sha256 + boolean manifestChecksumMatch", () => {
+    const ab = loadBaseline("desktop-1.18286.0").agentBinary;
+    expect(ab.sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(ab.shaProvenance).toBe("measured-local");
+    expect(typeof ab.manifestChecksumMatch).toBe("boolean");
+    expect(ab.manifestChecksumMatch).toBe(true);
+  });
+  it("an absent-version baseline carries an official-manifest sha256 (staging-identity unverified, no match field)", () => {
+    const ab = loadBaseline("desktop-1.13576.1").agentBinary;
+    expect(ab.sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(ab.shaProvenance).toBe("official-manifest");
+    expect(ab.manifestChecksumMatch).toBeUndefined();
   });
 });
 

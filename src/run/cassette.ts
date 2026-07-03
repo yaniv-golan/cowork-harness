@@ -33,7 +33,7 @@ import { pMapBounded } from "../async-pool.js";
 /** Upper bound for `record --concurrency`. Above a handful, concurrent runs exhaust Docker's default address
  *  pool (each run creates two networks) and press model API rate limits — both surface as actionable errors. */
 const MAX_RECORD_CONCURRENCY = 8;
-import { evaluate } from "../assert.js";
+import { evaluate, budgetFields } from "../assert.js";
 import { makeRenderer, renderFooter, type RenderPlan } from "./renderer.js";
 import { jsonEnvelope, parseOutputFormat } from "./envelope.js";
 import { parseArgs } from "../cli-args.js";
@@ -73,7 +73,7 @@ function writeFileAtomic(path: string, data: string): void {
 /** A snapshotted artifact — relative path + size + content hash, plus an inlined raw body for small
  *  files (so `artifact_json`/`file_exists`/`user_visible_artifact` survive token-free replay). A file too
  *  big to inline is hash-only with `truncated:true` (a loud marker — silent truncation reads as "covered"). */
-interface ManifestEntry {
+export interface ManifestEntry {
   path: string; // relative to the work root, e.g. "outputs/cap_state.json"
   bytes: number;
   sha256: string;
@@ -522,14 +522,15 @@ function debugSkillHashMismatch(cassette: Cassette, cassetteDir: string, fp: Fin
 }
 
 /** A per-file manifest diff split into the three change categories (paths only, unsampled). */
-interface FileSigDiff {
+export interface FileSigDiff {
   added: string[];
   removed: string[];
   changed: string[];
 }
 
-/** v5: diff two per-file manifests (recorded vs live) into the exact changed/added/removed path lists. */
-function diffFileSigsPaths(recorded: Array<[string, string]>, live: Array<[string, string]>): FileSigDiff {
+/** v5: diff two per-file manifests (recorded vs live) into the exact changed/added/removed path lists.
+ *  Exported for E2's diff engine (artifacts view) — the exact same [path, sha256] shape it needs. */
+export function diffFileSigsPaths(recorded: Array<[string, string]>, live: Array<[string, string]>): FileSigDiff {
   const rec = new Map(recorded);
   const liv = new Map(live);
   const added: string[] = [];
@@ -726,6 +727,7 @@ function minimalRec(): RunRecord {
     toolResults: [],
     gateAnswers: [],
     gateDeliveries: [],
+    skillsInvoked: [],
   };
 }
 
@@ -1666,6 +1668,7 @@ async function recordScenarioObject(
   // Thread the live-decider opts. All undefined for a plain `record` → identical to the
   // previous opt-less call (executeScenario defaults onUnanswered to scenario.on_unanswered ?? "fail").
   const result = await executeScenario(scenario, {
+    command: "record",
     onUnanswered: opts.onUnanswered,
     externalChannel: opts.externalChannel,
     llmIntent: opts.llmIntent,
@@ -2370,6 +2373,46 @@ export function cmdRehash(args: string[]): void {
   return process.exit(errors > 0 ? 1 : 0);
 }
 
+/**
+ * Best-effort: recover the recorded scenario's connected-folder host paths (`session.folders[].from`)
+ * for `computer_links_resolve`'s replay-lane host-shaped normalization (P3 plan). Mirrors
+ * `skillSourceDirs`' own session-file resolution above (`cassetteDir` substitutes for the scenario's
+ * original directory — the re-record-clean colocation convention this repo already relies on for
+ * staleness fingerprinting). Returns `[]` (never throws) when the session file can't be read — a
+ * folder-shaped host link then correctly reports "no recorded prefix matched" instead of crashing replay.
+ */
+function loadCassetteSessionFolders(sessionPath: string, cassetteDir?: string): { from: string }[] {
+  if (sessionPath === "(inline)") return [];
+  const resolved = cassetteDir && !isAbsolute(sessionPath) ? join(cassetteDir, sessionPath) : sessionPath;
+  if (!existsSync(resolved)) return [];
+  try {
+    return resolveSessionPaths(loadSession(parseSessionFile(resolved)), dirname(resolved)).folders;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Build the replay-lane `folderPrefixes` map (recorded connected-folder host path -> its resolved
+ * mount name) for `computer_links_resolve`. `userVisibleRoots` (persisted at record time, v4+) lists
+ * `["outputs", ...folder mount names]` in the SAME order `buildLaunchPlan` pushes folder mounts — one
+ * per `session.folders` entry, in that array's order (see `session.ts`'s mount-building loop). Zipping
+ * the two positionally reproduces the host-path -> mount-name correspondence without re-deriving
+ * `assignFolderMountNames` (which needs realpath-canonicalized paths that may not exist on THIS
+ * machine at replay time). Only zips when the lengths agree — a legacy cassette without
+ * `userVisibleRoots`, or one whose session file changed folder count since recording, yields an empty
+ * map (host-shaped folder links then fall through to "no recorded prefix matched", never a wrong match).
+ */
+function buildFolderPrefixMap(cassette: Cassette, cassetteDir?: string): Map<string, string> {
+  const map = new Map<string, string>();
+  const roots = (cassette.userVisibleRoots ?? []).filter((r) => r !== "outputs");
+  const folders = loadCassetteSessionFolders(cassette.scenario.session, cassetteDir);
+  if (roots.length === folders.length) {
+    for (let i = 0; i < roots.length; i++) map.set(folders[i].from, roots[i]);
+  }
+  return map;
+}
+
 /** Replay a cassette through Run and re-evaluate the content assertions. With a `cassette.artifacts`
  *  manifest, filesystem assertions (file_exists/user_visible_artifact/artifact_json) ALSO run, against
  *  the materialized snapshot. `opts.strict` escalates ALL staleness findings to failing assertions;
@@ -2460,6 +2503,12 @@ export async function replayCassette(
     "subagent_dispatched",
     "subagent_declared_but_unused",
     "dispatch_count_max",
+    "skill_triggered",
+    "no_skill_triggered",
+    "max_cost_usd",
+    "max_tokens",
+    "tool_calls_max",
+    "max_turns",
     "result",
     // Verdict modifiers — NOT filesystem/egress assertions. Keep all of them on replay (each evaluates to a
     // no-op pass via assert.ts) so a standalone modifier neither inflates the "filesystem/egress skipped"
@@ -2472,7 +2521,15 @@ export async function replayCassette(
   const questionGateKeys: (keyof Assertion)[] = ["question_asked", "questions_count_max", "gate_answers_delivered"];
   // with an artifact manifest, the filesystem assertions become replay-checkable (materialized below).
   // Without a manifest they stay live-only (stripped → skip warning), exactly as before.
-  const manifestKeys: (keyof Assertion)[] = cassette.artifacts?.length ? ["file_exists", "user_visible_artifact", "artifact_json"] : [];
+  // `computer_links_resolve` joins this bucket (NOT alwaysContentKeys): resolving a NON-empty link set
+  // needs either a live filesystem (not available on replay) or the cassette's `artifacts` manifest —
+  // the exact same evidence gate `file_exists`/`user_visible_artifact` already use. A zero-link
+  // transcript technically wouldn't need the manifest, but gating it identically avoids a
+  // live/replay asymmetry where "zero links" quietly passes on a manifest-less cassette while any
+  // actual link forces the same "not checkable, skipped" treatment as the other manifest keys.
+  const manifestKeys: (keyof Assertion)[] = cassette.artifacts?.length
+    ? ["file_exists", "user_visible_artifact", "artifact_json", "computer_links_resolve"]
+    : [];
   // deterministic exhaustiveness check — every key in the Assertion schema must appear in exactly
   // one classification bucket. If a new key is added to the schema but not here, this throws at the first
   // replay, making the oversight impossible to miss in CI.
@@ -2483,6 +2540,7 @@ export async function replayCassette(
       "file_exists",
       "user_visible_artifact",
       "artifact_json",
+      "computer_links_resolve",
       "egress_denied",
       "egress_allowed",
       "no_delete_in_outputs",
@@ -2581,6 +2639,13 @@ export async function replayCassette(
       toolResultTexts: rec.toolResults.map((r) => r.assertText ?? r.text),
       toolResultsTruncated: rec.toolResults.map((r) => r.assertText === undefined),
       truncatedPaths: replayTruncatedPaths,
+      skillsInvoked: rec.skillsInvoked,
+      skillToolAvailable: rec.initTools.includes("Skill"),
+      effectiveFidelity: cassette.effectiveFidelity,
+      // Replay has no live filesystem — computer_links_resolve normalizes both link shapes against the
+      // manifest instead (see the manifestKeys comment above + src/run/computer-links.ts).
+      linkResolution: { mode: "replay", folderPrefixes: buildFolderPrefixMap(cassette, opts.cassetteDir) },
+      ...budgetFields(rec),
     });
 
     // under --strict, EVERY staleness finding becomes a failing assertion (non-zero exit), not just a
@@ -2688,6 +2753,13 @@ export async function replayCassette(
       assertions,
       subagents: rec.subagents,
       unanswered: rec.unanswered,
+      // Wave 0 seam: the live/success/partial assemblers already passed these through; replay never did,
+      // so a cassette that recorded usage/cost silently dropped it on replay. re-drive (rec) recomputes
+      // them deterministically from the same events, so this is a content key, not a live-only one.
+      usage: rec.usage,
+      cost: rec.cost,
+      skillsInvoked: rec.skillsInvoked,
+      skillToolAvailable: rec.initTools.includes("Skill"),
       outDir: "(replay)",
       // Class-tagged staleness + skip counts, surfaced to JSON callers (the gate decision already happened
       // above via failing assertions; these fields are pure data so a green stays green by default).

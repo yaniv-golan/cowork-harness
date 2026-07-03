@@ -1,0 +1,42 @@
+{
+  "request": {
+    "type": "control_request",
+    "request_id": "req-mcp-1",
+    "request": {
+      "subtype": "mcp_message",
+      "server_name": "workspace",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": 7,
+        "method": "tools/call",
+        "params": {
+          "name": "bash",
+          "arguments": {
+            "command": "pwd"
+          }
+        }
+      }
+    }
+  },
+  "response": {
+    "type": "control_response",
+    "response": {
+      "subtype": "success",
+      "request_id": "req-mcp-1",
+      "response": {
+        "mcp_response": {
+          "jsonrpc": "2.0",
+          "id": 7,
+          "result": {
+            "content": [
+              {
+                "type": "text",
+                "text": "/sessions/x"
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}

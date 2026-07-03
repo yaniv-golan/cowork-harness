@@ -1,6 +1,6 @@
 {
   "name": "cowork-harness",
-  "version": "0.21.0",
+  "version": "0.22.0",
   "description": "Scriptable, CI-friendly harness for Claude Cowork's runtime contract for testing skills across scenarios — same agent, mounts, egress allowlist, permission protocol, and sandbox limitations.",
   "license": "MIT",
   "type": "module",
@@ -74,7 +74,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:live": "vitest run --config vitest.config.live.ts",
-    "test:golden:update": "vitest run -u test/golden.test.ts",
+    "test:golden:update": "vitest run -u test/golden.test.ts test/golden-render.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
     "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.ts\"",
     "smoke:cli": "node dist/cli.js list",

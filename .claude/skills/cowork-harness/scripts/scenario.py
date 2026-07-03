@@ -59,12 +59,20 @@ CONTENT_KEYS = {
     "subagent_dispatched",
     "subagent_declared_but_unused",
     "dispatch_count_max",
+    "skill_triggered",
+    "no_skill_triggered",
+    "max_cost_usd",
+    "max_tokens",
+    "tool_calls_max",
+    "max_turns",
 }
 # content keys, but only evaluated on replay when the cassette carries controlOut
 GATE_KEYS = {"question_asked", "questions_count_max", "gate_answers_delivered"}
 # manifest-backed: replay-checkable when the cassette carries an `artifacts` manifest (record snapshots one);
 # a manifest-less cassette skips them. Since the 0.3.0 artifact-manifest these are NOT always live-only.
-MANIFEST_KEYS = {"file_exists", "user_visible_artifact", "artifact_json"}
+# computer_links_resolve joins this bucket (not CONTENT_KEYS): resolving a non-empty link set needs
+# either a live filesystem or the cassette's artifacts manifest — see cassette.ts's manifestKeys comment.
+MANIFEST_KEYS = {"file_exists", "user_visible_artifact", "artifact_json", "computer_links_resolve"}
 # live-only: ALWAYS skipped on replay, with a loud warning (no filesystem, no network on the token-free lane)
 LIVE_ONLY_KEYS = {
     "egress_denied",

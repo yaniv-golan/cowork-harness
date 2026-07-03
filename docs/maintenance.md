@@ -49,6 +49,31 @@ cowork-harness run examples/scenarios/   # regression — drift now shows as tes
 
 If the agent version bumped, there is no image rebuild: the agent ELF is bind-mounted at runtime from the staged Desktop install (`resolveAgentBinary`, `src/baseline.ts`), not baked into the container image. A bumped `agentVersion` only updates `agentBinary.stagedPath` in the baseline (`src/cli.ts`); the container picks up the new binary from that path.
 
+### Agent-binary provenance (`sha256`)
+
+`sync` records the Linux/arm64 ELF's SHA-256 in the baseline's `agentBinary`:
+
+- `sha256` + `shaProvenance: "measured-local"` — hashed from the staged binary on the syncing machine (the trustworthy point-of-truth), plus `manifestChecksumMatch` (whether it equalled Anthropic's official per-version release checksum; `"unknown"` if the manifest was unreachable). `sync` stays offline-capable — a missing manifest never fails it.
+- `sha256` + `shaProvenance: "official-manifest"` — for a version **not** staged on this machine (e.g. a back-filled older baseline), copied from Anthropic's release manifest. Staging-identity is **unverified**: it's the official release hash, not confirmed byte-identical to what Cowork stages for that version (byte-identity is confirmed only for versions actually measured).
+
+There is deliberately **no `nativeSha256`**: the signed+notarized native `.app` inner Mach-O embeds an `LC_CODE_SIGNATURE` and never equals any manifest hash.
+
+The resolved ELF is verified against the recorded `sha256` at run time **by default** (ELF only; opt out with `COWORK_HARNESS_VERIFY_AGENT_SHA=0`). A mismatch **hard-fails** only at the baseline's own staged path against a `measured-local` hash (the binary provably isn't what the baseline was synced against); it **advisory-warns** against an `official-manifest` hash (Desktop may repack what it stages) or when you deliberately supplied the binary via `COWORK_AGENT_BINARY` / the newest-sibling fallback (an intentional substitution is never hard-stopped). The check costs one hash per resolve (once per run) and no-ops when the baseline has no `sha256`.
+
+### Recovering an old agent version
+
+Old staged binaries are re-downloadable from Anthropic's own release channel. For the **container/microvm** tiers the harness needs the **Linux/arm64 ELF**, so download it directly and point the resolver at it:
+
+```bash
+V=2.1.181   # the baseline's agentVersion
+curl -fSL "https://downloads.claude.ai/claude-code-releases/$V/linux-arm64/claude" -o "claude-$V"
+# verify against the committed baseline sha256 (== manifest platforms["linux-arm64"].checksum):
+shasum -a 256 "claude-$V"
+COWORK_AGENT_BINARY="$PWD/claude-$V" cowork-harness run <scenario>.yaml   # scenario baseline pins $V
+```
+
+Note: `install.sh <version>` installs the **host CLI for the running platform** into `~/.local/bin` (clobbering an existing one) — it does **not** produce the Linux ELF the container tier bind-mounts, so recovering the ELF is the direct download above.
+
 `sync` refuses to write a baseline in **two** cases: (a) an empty `allowDomains` allowlist — an empty egress allowlist is a safety tripwire (it would silently produce a baseline that permits nothing/everything rather than the real Desktop set); and (b) `⚠ unknown deltas` (see below). `--allow-empty` (alias `--force`) overrides **both** refusals and force-writes the baseline anyway — use it only when you understand the impact:
 
 ```bash

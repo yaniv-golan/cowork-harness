@@ -21,6 +21,9 @@ Start with the [project README](../README.md) for the overview and quick start, 
 | [cassette.md](./cassette.md) | Cassette `record`/`replay` — file shape, the assertion table (content vs. skipped), full-fidelity replay (`controlOut` + the O7 guard), backward compat, and the committed CI fixture. |
 | [discovery.md](./discovery.md) | Where the agent finds marketplaces, plugins, skills, MCP servers — and how to override each for tests. |
 | [maintenance.md](./maintenance.md) | Keeping parity across Claude Desktop releases with `cowork-harness sync`. |
+| [stats.md](./stats.md) | The `stats` command + `index.jsonl` — querying pass rate, cost/duration/token/turn percentiles, and last-green across every past run, filtered/windowed per scenario. |
+| [protocol.md](./protocol.md) | The hand-authored `schema/protocol.v1.json` control-channel wire-protocol schema — versioning policy, golden vector pack, and its explicit descriptive-not-normative scope. |
+| [invariants.md](./invariants.md) | A consolidated index of the harness's cross-cutting invariants, one row per invariant with its enforcement point and test anchor. |
 | [../python/README.md](../python/README.md) | The **`cowork` pytest lane** — drive any of the above from `pytest` (incl. `serve_decider` for live-question helpers). |
 | [../DESIGN.md](../DESIGN.md) | Architecture deep-dive + the full parity matrix + why scripting the real Desktop runtime is closed. |
 | [../SPEC.md](../SPEC.md) | **The authoritative contract** — the precise behavior the harness implements (persistence/resume, control-response envelopes, dispatch caps, …). Read this when a doc and the code disagree. |

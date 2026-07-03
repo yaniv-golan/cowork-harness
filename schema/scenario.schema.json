@@ -182,6 +182,37 @@
             "minimum": 0,
             "maximum": 9007199254740991
           },
+          "skill_triggered": {
+            "description": "a skill matching this regex (by its invoked skill id, e.g. \"plugin:skill\") was invoked via the Skill tool",
+            "type": "string"
+          },
+          "no_skill_triggered": {
+            "description": "no invoked skill id matched this regex — the negative-control / description-collision catcher",
+            "type": "string"
+          },
+          "max_cost_usd": {
+            "description": "the run's SDK-reported total_cost_usd is ≤ N — live lane only; on replay this asserts the frozen recording's cost, not fresh spend",
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "max_tokens": {
+            "description": "usage.input_tokens + usage.output_tokens ≤ N (cache-read/creation tokens excluded — priced separately) — live lane only; on replay this asserts the frozen recording's usage, not fresh spend",
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "tool_calls_max": {
+            "description": "total top-level tool calls (sum of toolCounts, sub-agent tools excluded) ≤ N",
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "max_turns": {
+            "description": "the SDK-reported (or fallback-counted) turn count ≤ N — replay-checkable (the re-drive recounts turns deterministically)",
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
           "egress_denied": {
             "description": "egress to this host was denied",
             "type": "string"
@@ -201,6 +232,11 @@
           },
           "transcript_no_host_path": {
             "description": "fails if a host path (/Users, /opt) leaked into model-visible text (post-run scan); only `true` is valid (writing `false` is a rejected footgun — omit to allow or use allow_stall)",
+            "type": "boolean",
+            "const": true
+          },
+          "computer_links_resolve": {
+            "description": "fails if any computer:// link in the model-visible transcript does not resolve to an artifact that exists in the run's collected outputs/mounts (zero links in the transcript passes — combine with transcript_contains to also require presence); only `true` is valid (writing `false` is a rejected footgun — omit to skip the check)",
             "type": "boolean",
             "const": true
           },

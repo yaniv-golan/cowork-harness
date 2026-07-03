@@ -35,9 +35,10 @@ import { decideLoopFromBaseline, readGateFlag } from "../loop-decision.js";
 import type { WebFetchProvenance } from "../hostloop/workspace-handler.js";
 import { startEgressSidecar, registerCleanup, type EgressSidecar } from "../egress/sidecar.js";
 import { startEgressProxy } from "../egress/proxy.js";
-import { evaluate, hostMatches } from "../assert.js";
+import { evaluate, hostMatches, budgetFields } from "../assert.js";
 import { compileUserRegex } from "../regex.js";
 import { renderPrompts } from "../prompt.js";
+import { makeDisplayTranslator, vmPathContextFromPlan } from "./display-translate.js";
 import { LiveAgentSession, type SdkMcp, type HookBundle } from "../agent/session.js";
 import { buildDecider, ExternalDecider, LlmDecider, type Decider, type OnUnanswered, UnansweredError } from "../decide/decider.js";
 import { type DecisionChannel } from "../decide/external-channel.js";
@@ -46,6 +47,7 @@ import { Run, type RunRecord, type RunHooks } from "./run.js";
 import { runsWriteRoot } from "./trace-view.js";
 import { summarizeGateProvenance } from "./gate-provenance.js";
 import { collectSecrets, scrub } from "../secrets.js";
+import { indexRowFromResult, appendIndexRow } from "./run-index.js";
 
 const RUN_RESULT_SCHEMA_URL = "https://raw.githubusercontent.com/yaniv-golan/cowork-harness/main/schema/run-result.json";
 
@@ -71,6 +73,19 @@ export interface ExecuteOptions {
   /** mark the run non-deterministic even if no `by:"llm"` decision (e.g. a driving agent answers via `--decider-dir`). */
   nonDeterministicHint?: boolean;
   hooks?: RunHooks[];
+  /** E4: tags the run-index row this execution writes. Default "run" — the `run`/`skill` CLI commands pass
+   *  their own command name through; `record`'s live execution (cassette.ts) passes "record" explicitly so
+   *  a recording session isn't misread as a `run` invocation in `stats`. */
+  command?: "run" | "skill" | "record";
+  /** Display-translator wiring for a renderer built BEFORE this scenario's LaunchPlan/effective fidelity
+   *  exist (cli.ts's `run`/`skill` renderer is constructed ahead of `executeScenario`, unlike chat.ts's,
+   *  which builds its own plan first and can call makeDisplayTranslator directly). Same mutable-ref
+   *  pattern as `provenanceRef` below: the caller passes a ref holding the identity function; once `plan`
+   *  and `effectiveFidelity` are known (right after buildLaunchPlan, well before the child spawns or any
+   *  AgentEvent can arrive), this function overwrites `.current` with the real translator. The renderer
+   *  reads `translateRef.current` fresh on every event, so the late assignment is visible without needing
+   *  the RenderPlan object itself to be shared. */
+  translateRef?: { current: (s: string) => string };
 }
 
 /**
@@ -308,6 +323,18 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     plan.resume = !!opts.resume;
   }
 
+  // Fill in the caller's display-translate ref (see ExecuteOptions.translateRef) now that plan +
+  // effectiveFidelity exist — well before the child spawns, so the renderer never sees a stale identity
+  // translator once events start flowing. The translator itself gates on effectiveFidelity/shareable, so
+  // this always resolves ctx unconditionally (harmless at non-hostloop tiers — the closure no-ops there).
+  if (opts.translateRef) {
+    opts.translateRef.current = makeDisplayTranslator({
+      ctx: vmPathContextFromPlan(sessionId, plan, outDir),
+      effectiveFidelity,
+      shareable: !!opts.compact,
+    });
+  }
+
   const startedAt = Date.now();
   const boundaryDeps = scenario.assert.some((a) => a.egress_denied || a.egress_allowed) || scenario.expect_denied.length > 0;
   if (scenario.fidelity === "protocol" && boundaryDeps) {
@@ -446,7 +473,30 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       microvmProxyPort = hostProxy.actualPort; // read from the live, still-bound socket — no TOCTOU gap
     }
 
-    const prompts = renderPrompts(baseline, session, sessionId, plan.mounts.find((m) => m.kind === "folder")?.mountPath);
+    // Host-loop prompt-token substitution (P2a): renderPrompts runs BEFORE spawnHostLoop below, so these
+    // host dirs are recomputed here via the SAME pure joins hostloop's own runtime uses, rather than
+    // restructuring the call order. hostCwd/hostUploadsDir mirror hostOutputsDir's derivation
+    // (src/runtime/hostloop.ts: `mntHost = join(resolve(outDir), "work", "session", "mnt")`) and the
+    // sibling uploads dir stageHostLoopWorkspace creates there (src/runtime/hostloop-stage.ts:39).
+    // hostSkillsDir mirrors hostLoopShellSection's own staged-skills check (same file) — plan.configDir's
+    // skills copy is already materialized by buildLaunchPlan above, so this is a plain existence check,
+    // not a restructuring; undefined (skills absent/unstaged) lets renderPrompts' fallback string stand.
+    const hostLoopOpts =
+      effectiveFidelity === "hostloop"
+        ? (() => {
+            const hostMnt = join(resolve(outDir), "work", "session", "mnt");
+            const skillsDir = join(plan.configDir, "skills");
+            const skillsStaged = existsSync(skillsDir) && readdirSync(skillsDir).length > 0;
+            return {
+              effectiveFidelity,
+              hostCwd: join(hostMnt, "outputs"),
+              hostUploadsDir: join(hostMnt, "uploads"),
+              hostWorkspaceFolder: plan.mounts.find((m) => m.kind === "folder")?.hostPath,
+              hostSkillsDir: skillsStaged ? skillsDir : undefined,
+            };
+          })()
+        : undefined;
+    const prompts = renderPrompts(baseline, session, sessionId, plan.mounts.find((m) => m.kind === "folder")?.mountPath, hostLoopOpts);
     promptFidelityWarnings = prompts.fidelityWarnings; // hoist out so RunResult construction (after try) can access it
     let sdkMcp: SdkMcp | undefined;
     if (effectiveFidelity === "hostloop") {
@@ -625,6 +675,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // typed optional on RunResult/PartialResult for OTHER (non-execute.ts) producers, not this call site.
     runCrashSafety.finalize(record, "error", partialResult.durationMs!);
     writeFileSync(join(outDir, "result.json"), scrub(JSON.stringify(partialResult, null, 2), secrets));
+    appendIndexRow(runsWriteRoot(), indexRowFromResult(partialResult, { command: opts.command ?? "run", partial: true }));
     writeRunJsonl(outDir, scenario, effectiveFidelity, record, egress, secrets);
     writeTrace(outDir, record, egress, secrets, partialResult.durationMs);
     scrubFileInPlace(join(outDir, "events.jsonl"), secrets);
@@ -653,6 +704,20 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     gateDeliveries: record.gateDeliveries,
     toolResultTexts: record.toolResults.map((r) => r.assertText ?? r.text),
     toolResultsTruncated: record.toolResults.map((r) => r.assertText === undefined),
+    skillsInvoked: record.skillsInvoked,
+    skillToolAvailable: record.initTools.includes("Skill"),
+    effectiveFidelity,
+    // Live lane (this run's own machine) — host-shaped computer:// links (hostloop) are checked
+    // DIRECTLY on the filesystem, contained to the run's real workspace roots; verify-run shares
+    // this same "live" mode without hostRoots (see cli.ts's cmdVerifyRun).
+    linkResolution: {
+      mode: "live",
+      hostRoots: [
+        join(resolve(outDir), "work", "session", "mnt"),
+        ...plan.mounts.filter((m) => m.kind === "folder").map((m) => m.hostPath),
+      ],
+    },
+    ...budgetFields(record),
   });
 
   if (scenario.fidelity === "protocol" && (record.toolsCalled.has("WebFetch") || record.toolsCalled.has("WebSearch"))) {
@@ -783,6 +848,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     unanswered: record.unanswered,
     usage: record.usage,
     cost: record.cost,
+    skillsInvoked: record.skillsInvoked,
+    skillToolAvailable: record.initTools.includes("Skill"),
     durationMs: Date.now() - startedAt,
     outDir,
     workDir: workRoot,
@@ -815,6 +882,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
 
   // Artifacts: the harness-observability log `run.jsonl` REPLACES transcript.json/decisions.jsonl.
   writeFileSync(join(outDir, "result.json"), scrub(JSON.stringify(result, null, 2), secrets));
+  appendIndexRow(runsWriteRoot(), indexRowFromResult(result, { command: opts.command ?? "run", partial: false }));
   writeRunJsonl(outDir, scenario, effectiveFidelity, record, egress, secrets);
   writeTrace(outDir, record, egress, secrets, result.durationMs);
   scrubFileInPlace(join(outDir, "events.jsonl"), secrets);
@@ -877,8 +945,10 @@ function validateScenarioRegexes(scenario: Scenario, scenarioPath: string): void
 }
 
 /** Load a session from a file and resolve its internal host paths relative to the session
- * file's own directory (see {@link resolveSessionPaths}). */
-function loadSessionFromFile(sessionRef: string): ReturnType<typeof loadSession> {
+ * file's own directory (see {@link resolveSessionPaths}). Exported for E3 (matrix runner) — cli.ts loads
+ * the base session ONCE per matrix run, then applies per-cell overrides (applySessionOverrides,
+ * session.ts) on top of the SAME loaded+resolved object, rather than re-resolving paths per cell. */
+export function loadSessionFromFile(sessionRef: string): ReturnType<typeof loadSession> {
   const baseDir = sessionRef === "(inline)" ? process.cwd() : dirname(resolve(sessionRef));
   return resolveSessionPaths(loadSession(parseSessionFile(sessionRef)), baseDir);
 }
@@ -957,6 +1027,8 @@ export function buildPartialResult(args: {
     unanswered: record.unanswered,
     usage: record.usage,
     cost: record.cost,
+    skillsInvoked: record.skillsInvoked,
+    skillToolAvailable: record.initTools.includes("Skill"),
     durationMs: args.durationMs,
     outDir: args.outDir,
     workDir: args.workRoot,

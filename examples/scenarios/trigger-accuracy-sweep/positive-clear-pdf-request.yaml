@@ -1,0 +1,29 @@
+# yaml-language-server: $schema=../../../schema/scenario.schema.json
+# Trigger-accuracy sweep (E8 recipe) — see docs/scenario.md § Measuring flakiness (`run --repeat`).
+#
+# A directory of prompt-variant scenarios against the SAME skill+session, each asserting whether the
+# intended skill fires. Run the whole directory under `--repeat` to measure how reliably a phrasing
+# actually triggers the skill across repeated tries, not just once:
+#
+#   cowork-harness run examples/scenarios/trigger-accuracy-sweep/ --repeat 5 --min-pass-rate 0.8
+#
+# This file: a prompt that unambiguously names the task the skill's description covers ("summarize a PDF
+# and write action items") — should trigger `my-pdf-skill` reliably. Paired with
+# negative-unrelated-request.yaml, the negative control.
+baseline: latest
+session: ../../sessions/default.yaml
+fidelity: container
+
+prompt: |
+  Read report.pdf from your uploads, summarize it, and write the action items
+  to outputs/actions.md as a markdown checklist.
+
+answers:
+  - when_question: "format|markdown|output style"
+    choose: "Markdown checklist"
+  - when_tool: Write
+    decide: allow
+
+assert:
+  - result: success
+  - skill_triggered: "my-pdf-skill"

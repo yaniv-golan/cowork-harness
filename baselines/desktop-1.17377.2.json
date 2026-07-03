@@ -5,6 +5,9 @@
   "agentBinary": {
     "stagedPath": "~/Library/Application Support/Claude/claude-code-vm/2.1.197/claude",
     "format": "elf-aarch64",
+    "sha256": "fb48473c467c27615ac799a754f4ef0b68c363e4596cefbb59c3815d51a0cc8a",
+    "shaProvenance": "measured-local",
+    "manifestChecksumMatch": true,
     "nativeStagedPath": "~/Library/Application Support/Claude/claude-code/2.1.197/claude.app/Contents/MacOS/claude"
   },
   "guest": {
@@ -83,7 +86,8 @@
     "subagentAppend": "prompts/desktop-1.15200.0/subagent-append-vm.md",
     "$comment": "Binary-verified Desktop->agent spawn contract (asar 1.12603.1). See docs/cowork-spawn-contract-1.12603.1.md.",
     "$comment_notSet": "Deliberately NOT set: CLAUDE_CODE_USE_COWORK_PLUGINS (Desktop never sets it; would flip the agent to cowork_settings.json/cowork_plugins). Host-derived (TZ, account UUIDs, WORKSPACE_HOST_PATHS, OTEL) injected at runtime, not pinned.",
-    "$comment_prompts": "Reconstructed cowork-specific sections, re-paraphrased from asar 1.15200.0 const MZi (system prompt) + generator CVr (subagent) — not the full base prompt (not cleanly extractable), and excluding the generic refusal/safety tail. The main append is delivered via the --append-system-prompt CLI flag (layered on the agent's built-in base prompt), NOT the initialize handshake; only the subagent append goes over initialize (appendSubagentSystemPrompt), gated on CLAUDE_CODE_ENABLE_APPEND_SUBAGENT_PROMPT."
+    "$comment_prompts": "Reconstructed cowork-specific sections, re-paraphrased from asar 1.15200.0 const MZi (system prompt) + generator CVr (subagent) — not the full base prompt (not cleanly extractable), and excluding the generic refusal/safety tail. The main append is delivered via the --append-system-prompt CLI flag (layered on the agent's built-in base prompt), NOT the initialize handshake; only the subagent append goes over initialize (appendSubagentSystemPrompt), gated on CLAUDE_CODE_ENABLE_APPEND_SUBAGENT_PROMPT.",
+    "$comment_prompts_unverified": "This release's own append content was NOT spot-checked at sync time (unlike 1.17377.1, which was verified substantively unchanged vs 1.15200.0 — see CHANGELOG 0.20.0 Parity). The 1.17377.2 asar is gone (Desktop updates in place), and 1.18286.0's append is RESTRUCTURED — so whether the restructure landed at 1.17377.2 or 1.18286.0 is unverifiable locally. This pin carries the last-VERIFIED reconstruction (1.15200.0), which may under-represent this release. Recovery for a real diff: obtain the 1.17377.2 asar from an archived Desktop DMG/auto-update feed."
   },
   "mountLayout": {
     "sessionRoot": "/sessions/{sessionId}",

@@ -253,6 +253,25 @@ describe("parseMessage — sub-agent dispatch", () => {
   });
 });
 
+describe("parseMessage — result event cost/turns (Wave 0 seam)", () => {
+  it("extracts costUsd/numTurns from the SDK result message when both are present", () => {
+    const ev = parseMessage({ type: "result", is_error: false, total_cost_usd: 0.0123, num_turns: 4 });
+    expect(ev[0]).toMatchObject({ type: "result", costUsd: 0.0123, numTurns: 4 });
+  });
+
+  it("omits costUsd/numTurns when the SDK result message doesn't carry numeric values", () => {
+    const ev = parseMessage({ type: "result", is_error: false });
+    expect((ev[0] as any).costUsd).toBeUndefined();
+    expect((ev[0] as any).numTurns).toBeUndefined();
+  });
+
+  it("omits costUsd/numTurns when present but non-numeric (defensive against a malformed/future SDK shape)", () => {
+    const ev = parseMessage({ type: "result", is_error: false, total_cost_usd: "0.01", num_turns: null });
+    expect((ev[0] as any).costUsd).toBeUndefined();
+    expect((ev[0] as any).numTurns).toBeUndefined();
+  });
+});
+
 describe("Run — turn loop + record", () => {
   it("builds transcript, toolsCalled, and the sub-agent dispatch tree", async () => {
     const ev: AgentEvent[] = [
@@ -273,6 +292,60 @@ describe("Run — turn loop + record", () => {
     expect(rec.subagents[0].declaredTools).toEqual(["Bash", "Read"]);
     expect(rec.subagents[0].toolsUsed).toEqual(["Read"]); // declared Bash but never used it → the culprit
     expect(rec.result).toBe("success");
+  });
+
+  it("threads a result event's costUsd/numTurns into rec.cost.usd/rec.usage.turns (Wave 0 seam)", async () => {
+    const ev: AgentEvent[] = [{ type: "result", isError: false, usage: { output_tokens: 5 }, costUsd: 0.02, numTurns: 3 } as AgentEvent];
+    const rec = await new Run(new MockSession(ev), new ScriptedDecider([])).drive("do it");
+    expect(rec.usage).toMatchObject({ output_tokens: 5, turns: 3 });
+    expect(rec.cost).toMatchObject({ usd: 0.02 });
+  });
+
+  it("merges metrics-derived cost.raw with result-derived cost.usd instead of overwriting (Wave 0 seam)", async () => {
+    const ev: AgentEvent[] = [
+      { type: "metrics", data: { some_metric: 1 } },
+      { type: "result", isError: false, costUsd: 0.05 } as AgentEvent,
+    ];
+    const rec = await new Run(new MockSession(ev), new ScriptedDecider([])).drive("do it");
+    expect(rec.cost).toMatchObject({ raw: { some_metric: 1 }, usd: 0.05 });
+  });
+
+  it("leaves rec.usage undefined when a result event carries neither usage nor numTurns (no spurious {})", async () => {
+    const ev: AgentEvent[] = [{ type: "result", isError: false }];
+    const rec = await new Run(new MockSession(ev), new ScriptedDecider([])).drive("do it");
+    expect(rec.usage).toBeUndefined();
+  });
+
+  it("captures a top-level Skill tool_use into rec.skillsInvoked (Wave 1 / E8)", async () => {
+    const ev: AgentEvent[] = [
+      { type: "init", tools: ["Skill"], mcpServers: [] },
+      { type: "tool_use", name: "Skill", input: { skill: "my-pdf-skill:my-pdf-skill" } },
+      { type: "result", isError: false },
+    ];
+    const rec = await new Run(new MockSession(ev), new ScriptedDecider([])).drive("do it");
+    expect(rec.skillsInvoked).toEqual(["my-pdf-skill:my-pdf-skill"]);
+  });
+
+  it("keeps duplicate Skill invocations (re-triggering is signal) and preserves call order", async () => {
+    const ev: AgentEvent[] = [
+      { type: "tool_use", name: "Skill", input: { skill: "a:a" } },
+      { type: "tool_use", name: "Skill", input: { skill: "b:b" } },
+      { type: "tool_use", name: "Skill", input: { skill: "a:a" } },
+      { type: "result", isError: false },
+    ];
+    const rec = await new Run(new MockSession(ev), new ScriptedDecider([])).drive("do it");
+    expect(rec.skillsInvoked).toEqual(["a:a", "b:b", "a:a"]);
+  });
+
+  it("does NOT capture a sub-agent-parented Skill tool_use (not a top-level invocation)", async () => {
+    const ev: AgentEvent[] = [
+      { type: "tool_use", name: "Task", input: { subagent_type: "researcher" } },
+      { type: "subagent_dispatch", toolUseId: "tu1", agentType: "researcher", declaredTools: [] },
+      { type: "tool_use", name: "Skill", input: { skill: "nested:nested" }, parentToolUseId: "tu1" },
+      { type: "result", isError: false },
+    ];
+    const rec = await new Run(new MockSession(ev), new ScriptedDecider([])).drive("do it");
+    expect(rec.skillsInvoked).toEqual([]);
   });
 
   it("subagentTools counts only tools under a RECOGNIZED dispatch, not any parented tool_use", async () => {

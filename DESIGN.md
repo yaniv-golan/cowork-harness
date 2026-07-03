@@ -38,7 +38,7 @@ flowchart TB
 A Cowork session is the Desktop app driving an agent that runs **inside an Apple Virtualization.framework microVM**:
 
 - VM bundle: `~/Library/Application Support/Claude/vm_bundles/claudevm.bundle/` (`rootfs.img`, `sessiondata.img`, `efivars.fd`, `machineIdentifier`, `gvisorMacAddress`, `vmIP`); a warm pool at `vm_bundles/warm/<sha>/`.
-- In-VM agent: `~/Library/Application Support/Claude/claude-code-vm/<ver>/claude` (currently **2.1.197**, an **ELF aarch64** binary), spawned by the host **in cowork mode via the `CLAUDE_CODE_IS_COWORK=1` env var** — *not* a `--cowork` flag (that flag is plugin-scope and the staged agent rejects it; see the control-protocol note below).
+- In-VM agent: `~/Library/Application Support/Claude/claude-code-vm/<ver>/claude` (currently **2.1.197**, an **ELF aarch64** binary), spawned by the host **in cowork mode via the `CLAUDE_CODE_IS_COWORK=1` env var** — *not* a `--cowork` flag (that flag is plugin-scope and the staged agent rejects it; see the control-protocol note below). Each baseline records this ELF's `sha256` (`agentBinary.sha256`/`shaProvenance`), and the resolver integrity-checks the binary it's about to run against that hash by default (opt out `COWORK_HARNESS_VERIFY_AGENT_SHA=0`), so "the same pinned agent" is enforced, not just asserted. Old versions are re-downloadable + verifiable from the official release channel (see `docs/maintenance.md`).
 - Network: `vm_network_mode: "gvisor"`, egress through a userspace netstack with a **compiled domain allowlist**; off-list partners rejected (`partner rejected: entry not on compiled allowlist`).
 - Control plane: Electron renderer→main typed IPC on channels named `$eipc_message$_<per-build-UUID>_$_claude.web_$_<Class>_$_<method>`, every handler validating `event.senderFrame.url` against a trusted-origin allowlist. The session manager is `LocalAgentModeSessions` (80 methods: `start`, `sendMessage`, `setDraftSessionFolders`, `onToolPermissionRequest`, `respondToToolPermission`, `getTranscript`, `onEvent`, …), bridged to the renderer as `window.cowork`.
 
@@ -162,6 +162,8 @@ L1 reproduces this as a **default-deny forward proxy**: the agent's `HTTP(S)_PRO
 | `setDraftSessionFolders` / `addFolderToSession` | bind-mount into `mnt/<folder-name>` before launch |
 
 The policy that produces those `allow`/`deny` responses is the **Decider** seam (see the architecture diagram); to smoke-test a decider against a sample question without a full run, use `cowork-harness decide`.
+
+> **Machine-readable form:** the five shapes below are schema'd as `schema/protocol.v1.json`, with a golden vector pack at `fixtures/protocol/v1/` — see [docs/protocol.md](./docs/protocol.md) for scope, versioning, and how to conformance-test against them.
 
 ### Control protocol — VERIFIED end-to-end against the live host CLI (macOS build 2.1.177+; the staged in-VM agent that L1/L2 run is 2.1.197, baseline `desktop-1.17377.1`)
 

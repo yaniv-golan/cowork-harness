@@ -1,6 +1,8 @@
 import { readFileSync, writeSync } from "node:fs";
 import type { RunResult } from "../types.js";
 import { computeVerdict } from "./verdict.js";
+import { rollupPasses, type RepeatRollup } from "./repeat.js";
+import type { MatrixRollup, MatrixRepeatRollup } from "./matrix.js";
 
 // Synchronous fd writes (match cli.ts / doctor.ts). writeSync flushes before process.exit on a pipe.
 const out = (s: string) => writeSync(1, s + "\n");
@@ -38,6 +40,16 @@ export function parseOutputFormat(args: string[]): "text" | "json" {
   return "text";
 }
 
+export interface JsonEnvelopeOpts {
+  /** E1's `--repeat` additions. */
+  rollups?: RepeatRollup[];
+  minPassRate?: number;
+  /** E3's `--matrix` addition. */
+  matrix?: MatrixRollup;
+  /** `--matrix` + `--repeat` composed: each cell is its own repeat batch. */
+  matrixRepeat?: MatrixRepeatRollup;
+}
+
 /** §5a — the standardized machine envelope object (internal: `jsonEnvelope` stringifies it). `ok` is the
  *  same SEAM-B verdict as the process exit code / footer (it cannot diverge). `replay` uses the replay
  *  lane (a cassette can't reproduce the scan/permissive signals); every other command is the live lane.
@@ -45,20 +57,42 @@ export function parseOutputFormat(args: string[]): "text" | "json" {
  *  Each emitted result carries its own `verdict` ({pass, exitCode, signals[], guards[]}) — a NON-MUTATING
  *  projection (computeVerdict is pure; RunResult the type stays clean). This lets a consumer read per-result
  *  pass/fail AND why (the `signals[]` — e.g. an all-green-assertions run that is `pass:false` purely on a
- *  `stalled` signal) without recomputing from the sibling booleans. The top-level `ok` is derived from the
- *  SAME per-result verdicts, so it cannot diverge from them (or from the exit code / footer — all route
- *  computeVerdict). NOTE: this publishes the VerdictSignal.code taxonomy as a de-facto wire contract. */
-function jsonEnvelopeObj(command: string, results: RunResult[]): Record<string, unknown> {
+ *  `stalled` signal) without recomputing from the sibling booleans. NOTE: this publishes the
+ *  VerdictSignal.code taxonomy as a de-facto wire contract.
+ *
+ *  `ok` — E1/§8: for a NON-repeat, NON-matrix call, `ok` is derived from the SAME per-result verdicts as
+ *  always (`results.every(pass)`) — unchanged, so it cannot diverge from them or from the exit code/footer.
+ *  For a `--repeat` batch, `ok` is redefined DIRECTLY for that mode — computed from `rollups`/
+ *  `rollupPasses`. For a `--matrix` run (E3), `ok` is `!matrix.anyFail` — a matrix is a compatibility gate,
+ *  not a survey (any cell failing, an assertion OR an infra error, fails the whole batch). For `--matrix`
+ *  + `--repeat` composed, `ok` is `!matrixRepeat.anyFail` — each cell's own repeat batch judged by
+ *  `rollupPasses`. Checked in this order (matrixRepeat, then matrix, then rollups, then the default) — the
+ *  three batch modes are mutually exclusive at the CLI layer (only one of `rollups`/`matrix`/`matrixRepeat`
+ *  is ever actually passed), this function just needs a deterministic order if a caller somehow passed more
+ *  than one. One field, one meaning per mode — no parallel `batchVerdict` field, per the plan's revised
+ *  (no-backward-compat) design. `results[]` still holds every raw RunResult either way — across every cell
+ *  and every one of its repeat iterations for the composed mode — nothing is hidden from any caller. */
+function jsonEnvelopeObj(command: string, results: RunResult[], opts: JsonEnvelopeOpts = {}): Record<string, unknown> {
+  const { rollups, minPassRate, matrix, matrixRepeat } = opts;
   const lane = command === "replay" ? "replay" : "live";
   const withVerdict = results.map((r) => ({ ...r, verdict: computeVerdict(r, lane) }));
-  const ok = withVerdict.length > 0 && withVerdict.every((r) => r.verdict.pass);
-  return { tool: "cowork-harness", version: pkgVersion(), command, ok, results: withVerdict, error: null };
+  const ok = matrixRepeat
+    ? !matrixRepeat.anyFail
+    : matrix
+      ? !matrix.anyFail
+      : rollups
+        ? rollups.every((ru) => rollupPasses(ru, minPassRate))
+        : withVerdict.length > 0 && withVerdict.every((r) => r.verdict.pass);
+  return { tool: "cowork-harness", version: pkgVersion(), command, ok, results: withVerdict, rollups, matrix, matrixRepeat, error: null };
 }
 
 /** §5a — the standardized machine envelope emitted by every `--output-format json` command. COMPACT
- *  single-line JSON (machine output → trivially parseable; the pretty form lives in result.json). */
-export function jsonEnvelope(command: string, results: RunResult[]): string {
-  return JSON.stringify(jsonEnvelopeObj(command, results));
+ *  single-line JSON (machine output → trivially parseable; the pretty form lives in result.json).
+ *  `opts.rollups`/`opts.minPassRate`/`opts.matrix` are additive (E1's `--repeat`, E3's `--matrix`) —
+ *  omitted (undefined) for every other command, which is why they don't appear in a plain envelope
+ *  (JSON.stringify drops `undefined` properties) rather than showing up as spurious `null`s. */
+export function jsonEnvelope(command: string, results: RunResult[], opts: JsonEnvelopeOpts = {}): string {
+  return JSON.stringify(jsonEnvelopeObj(command, results, opts));
 }
 
 /** §5c — the error envelope (compact, single line). */

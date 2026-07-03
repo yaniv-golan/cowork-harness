@@ -1,7 +1,7 @@
 # Scenario & session schema, assertion catalog, web_fetch, full gotchas
 
-Self-contained reference for authoring `cowork-harness` scenarios. Tracks `cowork-harness 0.21.0`
-(baseline `desktop-1.17377.2`). If your checkout is newer, prefer the live `docs/scenario.md`,
+Self-contained reference for authoring `cowork-harness` scenarios. Tracks `cowork-harness 0.22.0`
+(baseline `desktop-1.18286.0`). If your checkout is newer, prefer the live `docs/scenario.md`,
 `docs/session.md`, and `SPEC.md`.
 
 **Minimal scenario** — `prompt` is the only required field:
@@ -220,6 +220,12 @@ passes only if every key passes. Keep one concern per item unless you mean conju
 | `subagent_dispatched: <regex>` | a sub-agent whose `agentType` **or dispatch description** matches |
 | `subagent_declared_but_unused: <Tool>` | a sub-agent declared the tool but never used **that** tool (even if it used others) |
 | `dispatch_count_max: <N>` | at most N sub-agents dispatched (records only — does NOT enforce a cap) |
+| `skill_triggered: <regex>` | a skill matching the regex (invoked id, e.g. `"plugin:skill"`) was invoked via the `Skill` tool — evidence-unavailable (not a normal fail) if the agent's init tools have no `Skill` tool |
+| `no_skill_triggered: <regex>` | no invoked skill id matched — the negative-control / description-collision catcher; evidence-unavailable (never a vacuous pass) if invocation data is absent or the `Skill` tool is unobservable |
+| `max_cost_usd: <N>` | the run's SDK-reported cost is ≤ N USD — evidence-unavailable if cost telemetry is absent. **Replay asserts the frozen recording's cost, not fresh spend** — a real regression needs a live `run` |
+| `max_tokens: <N>` | `usage.input_tokens + usage.output_tokens` ≤ N (cache tokens excluded) — same replay caveat as `max_cost_usd` |
+| `tool_calls_max: <N>` | total top-level tool calls (sum of `toolCounts`) ≤ N — meaningfully replay-checkable (re-drive recomputes `toolCounts` deterministically) |
+| `max_turns: <N>` | the SDK-reported (or fallback-counted) turn count ≤ N — meaningfully replay-checkable (re-drive recounts turns deterministically, same as `tool_calls_max`) |
 | `question_asked: <regex>` | the agent asked an AskUserQuestion whose text matches |
 | `questions_count_max: <N>` | the agent asked at most N questions |
 | `gate_answers_delivered: true` | every answered gate's answer reached the model (observed `tool_result`; unobserved = fail) |
@@ -232,6 +238,7 @@ passes only if every key passes. Keep one concern per item unless you mean conju
 | `egress_denied: <host>` | the host was blocked by the egress proxy |
 | `egress_allowed: <host>` | the host was allowed through |
 | `artifact_json: {artifact, path, …}` | assert a JSON artifact's contents — `equals`/`gt`/`in`/`exists`/`absent`/`is_null` over a dotted `path` (`in` = membership in a list, for a stochastic/LLM value; `absent` ≠ `is_null`; an unresolved intermediate fails loud) |
+| `computer_links_resolve: true` | every `computer://` link in the model-visible transcript resolves to an artifact that exists in the run's collected outputs/mounts — a dangling link fails, naming which target was checked (a live host path, the collected work tree, or the replay manifest). Zero links in the transcript **passes** (presence-gated separately — pair with `transcript_contains` if you also need a link to show up). **Only `true` is valid** (`false` is rejected by the schema) |
 
 `expect_denied: [host, …]` adds one `egress_denied` per host. Run `cowork-harness assertions --list` for this
 table from the live schema. Example: `artifact_json: { artifact: outputs/cap.json, path: me.run_id, equals: "r1" }`.
@@ -270,21 +277,26 @@ sourcing ≠ evaluation (replay warns when you edit one). `verify-run` is the on
 *run dir*; `--assert-from` is the equivalent for a *cassette*.
 
 **Evaluated on replay (content):** `transcript_*`, `tool_*`, `subagent_*`, `dispatch_count_max`,
-`result`. The verdict modifiers `allow_permissive_auto_allow` / `allow_missing_capability` /
-`allow_l0_plugin_divergence` / `allow_stall` are also kept on replay, evaluated as no-op passes.
+`skill_triggered`, `no_skill_triggered`, `max_cost_usd`, `max_tokens`, `tool_calls_max`, `max_turns`, `result`
+(`max_cost_usd`/`max_tokens` assert the frozen recording's spend on replay, not fresh spend). The verdict
+modifiers `allow_permissive_auto_allow` / `allow_missing_capability` / `allow_l0_plugin_divergence` /
+`allow_stall` are also kept on replay, evaluated as no-op passes.
 
 **Gate keys — replay only with a `controlOut` cassette:** `question_asked`, `questions_count_max`,
 `gate_answers_delivered`. With `controlOut` present they evaluate; on an old cassette without it, a
 **loud warning** fires and they are **excluded** (not vacuously passed). Re-record to enable them.
 
 **Filesystem — replay-checkable WITH an artifact manifest:** `file_exists`, `user_visible_artifact`,
-`artifact_json` run on replay when the cassette carries an `artifacts` snapshot (`record` captures
-`outputs/` + connected folders; `replay` materializes it). `artifact_json` needs the small-file JSON `body`
-inlined; a hash-only entry still satisfies `file_exists`. Without a manifest (older cassettes) they're
-skipped. A green replay re-confirms *record-time* artifacts, not that the current skill still produces them
-— `replay --strict` fails when the staleness `fingerprint` shows ANY skill/baseline drift, or
-`replay --fail-on-skill-drift` only on skill-source drift; every replay result also reports it class-tagged
-in `staleness[]` for a JSON gate.
+`artifact_json`, `computer_links_resolve` run on replay when the cassette carries an `artifacts` snapshot
+(`record` captures `outputs/` + connected folders; `replay` materializes it). `artifact_json` needs the
+small-file JSON `body` inlined; a hash-only entry still satisfies `file_exists`. `computer_links_resolve`
+resolves a `/sessions/…/mnt/…`-shaped link directly against the manifest, and a host-shaped (hostloop) link
+by first normalizing it to a mount-relative path (recorded connected-folder prefixes + the outputs/uploads
+mounts) — replay has no live filesystem to check a host path against directly (that only happens on a live
+`run`/`verify-run`). Without a manifest (older cassettes) all four are skipped. A green replay re-confirms
+*record-time* artifacts, not that the current skill still produces them — `replay --strict` fails when the
+staleness `fingerprint` shows ANY skill/baseline drift, or `replay --fail-on-skill-drift` only on
+skill-source drift; every replay result also reports it class-tagged in `staleness[]` for a JSON gate.
 
 **Egress + other filesystem — still skipped on replay (live-only):** `no_delete_in_outputs`,
 `self_heal_ran`, `transcript_no_host_path`, `egress_*` / `expect_denied`. These run only on a live `run`/`record`.

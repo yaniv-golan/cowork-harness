@@ -5,6 +5,8 @@
   "agentBinary": {
     "stagedPath": "~/Library/Application Support/Claude/claude-code-vm/2.1.170/claude",
     "format": "elf-aarch64",
+    "sha256": "1bb9d032440a75532f7dd4cafbc687f220aaf16c63eba17e192dfbec2f04bd25",
+    "shaProvenance": "official-manifest",
     "$comment": "There is NO npm path — the Linux/arm64 ELF is bind-mounted from this staged Desktop install (or COWORK_AGENT_BINARY). npmPackage/preferReuseStaged removed (Q1)."
   },
   "guest": {

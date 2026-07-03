@@ -30,6 +30,20 @@ export const PlatformBaseline = z.looseObject({
     // baseline synced before this field existed has no native binary staged, so hostloop falls back to
     // resolveHostAgentBinary's loud failure (never a silent tier downgrade).
     nativeStagedPath: z.string().optional(),
+    // Provenance of the Linux/arm64 ELF at stagedPath — shared, non-secret (just hashes), improves
+    // repro/fidelity. `sha256`: hex SHA-256 of the ELF. `shaProvenance`: "measured-local" = hashed from
+    // the staged binary at sync time (the trustworthy point-of-truth); "official-manifest" = copied from
+    // Anthropic's per-version release manifest for a version NOT staged on the syncing machine, so
+    // staging-identity is UNVERIFIED (byte-identity between the staged binary and the official release is
+    // confirmed only for versions actually measured; Desktop could in principle repack what it stages).
+    // `manifestChecksumMatch`: set ONLY on measured-local rows — whether the measured hash equalled the
+    // official manifest checksum ("unknown" if the manifest was unreachable at sync); omitted on
+    // official-manifest rows (there it would compare the manifest hash to itself → tautological).
+    // NO nativeSha256: the signed+notarized inner Mach-O embeds an LC_CODE_SIGNATURE and never equals any
+    // manifest hash, so a manifest-derived native hash would match nothing on the hostloop path.
+    sha256: z.string().optional(),
+    shaProvenance: z.enum(["measured-local", "official-manifest"]).optional(),
+    manifestChecksumMatch: z.union([z.boolean(), z.literal("unknown")]).optional(),
   }),
   guest: z.looseObject({ os: z.string(), arch: z.string(), baseImage: z.string().optional() }),
   spawn: z
@@ -184,6 +198,41 @@ export const Assertion = z.object({
   subagent_dispatched: z.string().optional().describe("a sub-agent matching this regex (by agentType or description) was dispatched"),
   subagent_declared_but_unused: z.string().optional().describe("a sub-agent declared this tool but never used it (the fabrication proxy)"),
   dispatch_count_max: z.number().int().nonnegative().optional().describe("total sub-agent dispatches ≤ N (the {global:3} ceiling)"),
+  skill_triggered: z
+    .string()
+    .optional()
+    .describe('a skill matching this regex (by its invoked skill id, e.g. "plugin:skill") was invoked via the Skill tool'),
+  no_skill_triggered: z
+    .string()
+    .optional()
+    .describe("no invoked skill id matched this regex — the negative-control / description-collision catcher"),
+  max_cost_usd: z
+    .number()
+    .positive()
+    .optional()
+    .describe(
+      "the run's SDK-reported total_cost_usd is ≤ N — live lane only; on replay this asserts the frozen recording's cost, not fresh spend",
+    ),
+  max_tokens: z
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .describe(
+      "usage.input_tokens + usage.output_tokens ≤ N (cache-read/creation tokens excluded — priced separately) — live lane only; on replay this asserts the frozen recording's usage, not fresh spend",
+    ),
+  tool_calls_max: z
+    .number()
+    .int()
+    .nonnegative()
+    .optional()
+    .describe("total top-level tool calls (sum of toolCounts, sub-agent tools excluded) ≤ N"),
+  max_turns: z
+    .number()
+    .int()
+    .nonnegative()
+    .optional()
+    .describe("the SDK-reported (or fallback-counted) turn count ≤ N — replay-checkable (the re-drive recounts turns deterministically)"),
   egress_denied: z.string().optional().describe("egress to this host was denied"),
   egress_allowed: z.string().optional().describe("egress to this host was allowed"),
   // Only `true` is accepted: `false` is rejected as a footgun. The assertion is presence-semantic — authoring
@@ -201,6 +250,12 @@ export const Assertion = z.object({
     .optional()
     .describe(
       "fails if a host path (/Users, /opt) leaked into model-visible text (post-run scan); only `true` is valid (writing `false` is a rejected footgun — omit to allow or use allow_stall)",
+    ),
+  computer_links_resolve: z
+    .literal(true)
+    .optional()
+    .describe(
+      "fails if any computer:// link in the model-visible transcript does not resolve to an artifact that exists in the run's collected outputs/mounts (zero links in the transcript passes — combine with transcript_contains to also require presence); only `true` is valid (writing `false` is a rejected footgun — omit to skip the check)",
     ),
   question_asked: z.string().optional().describe("a question matching this regex was asked"),
   questions_count_max: z.number().int().nonnegative().optional().describe("at most N questions were asked"),
@@ -450,6 +505,18 @@ export interface RunStatus {
   durationMs?: number;
 }
 
+/** SDK usage payload (input_tokens, output_tokens, etc.) — pass-through, shape owned by the SDK, not the
+ *  harness — plus `turns`, harness-computed from the SDK result message's `num_turns` (Wave 0 seam). */
+export type UsageInfo = Record<string, unknown> & { turns?: number };
+
+/** `usd` = the SDK result message's `total_cost_usd` for this invocation, when present (Wave 0 seam).
+ *  `raw` = the `api_metrics` event payload (pre-existing; unrelated source, kept alongside `usd` rather
+ *  than merged into it since the two are independent SDK signals). */
+export interface CostInfo {
+  usd?: number;
+  raw?: Record<string, unknown>;
+}
+
 export interface RunResult {
   $schema?: string;
   generator?: string;
@@ -499,8 +566,8 @@ export interface RunResult {
    * (by:"scripted") are excluded because they are authoritative and deterministic.
    */
   unanswered?: Array<{ question: string; chosen: string; by: string; rationale?: string; model?: string }>;
-  usage?: Record<string, unknown>;
-  cost?: Record<string, unknown>;
+  usage?: UsageInfo;
+  cost?: CostInfo;
   durationMs?: number;
   // Skill/plugin staleness fingerprint at run time. Persisted so `verify-run` can detect a kept run that
   // predates a skill change (its gate snapshot is stale → don't vouch for answer-coverage against it).
@@ -574,4 +641,13 @@ export interface RunResult {
    *  gate. Absent when the run had no gates, and absent on the replay lane (which reports reproducibility via
    *  nonDeterministic:false, not per-gate provenance). Derived from `decisions[]` at write time. */
   gateProvenance?: GateProvenanceSummary;
+  /** Skill/plugin ids invoked via the Skill tool_use event (`{plugin}:{skill}`), in call order, duplicates
+   *  kept (re-triggering is signal). Backs `skill_triggered`/`no_skill_triggered`. Absent on a run that
+   *  predates E8 (old result.json) — `no_skill_triggered` treats absence as evidence-unavailable, never a
+   *  vacuous pass. */
+  skillsInvoked?: string[];
+  /** Whether the agent's init tool list included "Skill" — false means this runtime/agent version can't be
+   *  observed invoking a skill through the recognized channel, so `skill_triggered`/`no_skill_triggered`
+   *  fail as evidence-unavailable rather than risk a false negative on an agent-version tool rename. */
+  skillToolAvailable?: boolean;
 }

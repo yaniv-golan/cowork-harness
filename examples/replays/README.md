@@ -13,7 +13,7 @@ replay path end-to-end, including:
 
 Run it with:
 
-> Assumes the `cowork-harness` CLI is available — from a source checkout run `npm ci && npm run build && npm link` first, or `npm i -g cowork-harness@>=0.21.0`. (`replay` itself needs nothing else — no token, no Docker.)
+> Assumes the `cowork-harness` CLI is available — from a source checkout run `npm ci && npm run build && npm link` first, or `npm i -g cowork-harness@>=0.22.0`. (`replay` itself needs nothing else — no token, no Docker.)
 
 ```sh
 cowork-harness replay examples/replays/example-pdf-skill.cassette.json
@@ -27,6 +27,15 @@ cowork-harness replay examples/replays/example-pdf-skill.cassette.json --output-
 
 > From a source checkout you can skip the `npm link` and call the CLI directly:
 > `node dist/cli.js replay …`. The commands below use the installed `cowork-harness` binary.
+
+## example-pdf-skill-ci-selftest-failing.yaml
+
+A deliberately-failing sibling scenario for `example-pdf-skill.cassette.json`, used only by the
+packaged Action's CI self-test (`.github/workflows/ci.yml`, job `action-self-test`) via
+`replay --assert-from` to prove the Action propagates a real *assertion* failure (exit 1) end to
+end — not just a usage error (exit 2, e.g. a nonexistent path). Its `assert:` block asserts
+`tool_not_called: Skill`, which is permanently false against this cassette. Not a template to
+copy for your own scenarios.
 
 ## Re-recording
 

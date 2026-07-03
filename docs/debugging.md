@@ -39,6 +39,16 @@ already happened.
    re-check the scenario's assertions against the kept run dir with no live re-record (~1s). When the
    scenario scripts answers, it also re-checks they still match the run's actual gates — so a reworded gate
    or a chosen option the run never offered fails here in a second instead of on a paid re-record.
+5. **`diff` — what changed between two runs (or a run and a cassette)?** Compares tool sequence,
+   transcript, artifacts, and result/fidelity/baseline meta, with normalization masking per-run noise
+   (tool-use ids, timestamps, session-dir markers, host paths) so two runs of the *same* scenario diff as
+   identical despite that noise. Reach for it when "it worked yesterday" needs a concrete answer instead of
+   a guess — `cowork-harness diff <old-run> <new-run>`. `--no-normalize` compares raw values for forensics;
+   `--view tools|transcript|artifacts|meta` narrows to one section. Token-free (no live re-record needed).
+   Comparing runs of two *different* scenarios is allowed (useful for skill-variant comparison) but warns
+   on stderr — added/removed rows may then reflect scenario differences, not drift.
+   The same command also compares two committed platform baselines (`diff desktop-<a> desktop-<b>
+   [--changelog]`) — see [maintenance.md](./maintenance.md).
 
 > The cheap authoring loop falls out of this: keep **one** run, then iterate answers and assertions
 > against it with `trace` + `verify-run` for free. Re-keep after a skill change that moves gate phrasing —
@@ -71,6 +81,15 @@ A green run is not automatically a correct run.
 - **`COWORK_HARNESS_DEBUG_SKILLHASH`** — when a cassette is flagged stale and you can't see why, this env
   var dumps the exact file set feeding the skill hash (and flags OS-junk like `.DS_Store`) so the drift
   source is one line. See [README → Reproducibility knobs](../README.md#reproducibility-knobs).
+- **`run --repeat N`** — "did it pass, or did it pass once?" A green run proves nothing about reliability
+  on its own. Repeat the same scenario N times and read the variance rollup (pass rate, per-assertion
+  attribution, the signal histogram) instead of trusting a single green — `--min-pass-rate` sets the batch
+  threshold, `--stop-on-diverge` stops as soon as flakiness is proven (that batch always fails).
+- **`stats`** — "is this scenario flaky/expensive *over time*, across many separate `run`s (not just one
+  `--repeat` batch)?" Every `run`/`skill`/`record` invocation is indexed automatically; `stats [<scenario>]`
+  aggregates pass rate, cost/duration percentiles, and last-green timestamp across all of them —
+  `--since`/`--branch` narrow to "since I started this fix" or "on this branch vs. main." See
+  [stats.md](./stats.md).
 
 ---
 
