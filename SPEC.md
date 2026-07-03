@@ -516,17 +516,19 @@ verdict logic a finding doesn't have) — it emits its own:
   "ok": true,                       // false if any real finding, staleness drift, or unreadable cassette
   "coverage": { "privacy": true, "staleness": true },  // which scans ran (false under --skip-privacy / --skip-staleness)
   "results": [ { "file": "string",
-                 "findings": [ { "where": "string", "cls": "email|currency|domain|unscanned", "sample": "string" } ],
+                 "findings": [ { "where": "string", "cls": "email|currency|domain|path|unscanned", "sample": "string" } ],
                  "staleness": [ "string" ],   // drift / unresolvable-fingerprint messages (gate failures)
                  "error?": "string" } ] }     // a malformed cassette is TALLIED here, never crashes the batch
 ```
 
-The full net (email/currency/domain) runs over the WHOLE cassette (deliverable bodies/filenames,
+The full net (email/currency/domain/path) runs over the WHOLE cassette (deliverable bodies/filenames,
 `prompt`/`answers`/`assert`, and the agent's reasoning + tool I/O), with one structural exception: the
 agent **capability-manifest** messages — the `system/init` event and the `initialize` registry
-`control_response` (`request_id:"init-1"`) — are excluded from the noisy classes (they carry the tool/skill
-catalog + MCP-server names a regex can't distinguish from customer data). `email` still scans them (the
-registry `account` field can carry the dev's email). `ok = no finding with cls!="unscanned"  &&  no staleness message  &&  no error`. An `unscanned` finding (a
+`control_response` (`request_id:"init-1"`) — get `email` + `path` only (they carry the tool/skill
+catalog + MCP-server names a regex can't distinguish from customer data, so `currency`/`domain` are
+excluded there). `email` and `path` still scan them: the registry `account` field can carry the dev's
+email, and those same messages' own structural fields (`cwd`/`plugins[].path`/`memory_paths`) are
+exactly where a real local filesystem path lives. `ok = no finding with cls!="unscanned"  &&  no staleness message  &&  no error`. An `unscanned` finding (a
 `>64 KiB`/unreadable artifact body, which is hash-only — nothing committed to leak) is reported but does NOT
 fail the gate. **Exit codes:** `0` clean · `1` any finding/staleness/error · `2` usage (e.g.
 `--skip-privacy`+`--skip-staleness` together, or zero cassettes under a dir — a loud non-zero, never a

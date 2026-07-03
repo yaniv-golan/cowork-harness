@@ -436,21 +436,24 @@ counts) — committed PII surface. Two layers, distinct from secret-scrub (which
   `--no-redact` skips it for known-synthetic inputs.
 - **Always-on scan gate** — `verify-cassettes <file|dir>` scans the committed cassettes and **exits
   non-zero** on a finding, so "no leak" is a gate, not discipline. The full net (`email` + `currency` +
-  bare-`domain`) runs over the **whole cassette** — the deliverable (`outputs/` bodies + filenames), the
+  bare-`domain` + `path`) runs over the **whole cassette** — the deliverable (`outputs/` bodies + filenames), the
   author-written `prompt`/`answers`/`assert`, AND the agent's reasoning + tool I/O — with **one structural
   exception**: the agent's **capability-manifest** messages (the `system/init` event and the `initialize`
-  registry `control_response`, `request_id:"init-1"`) are excluded from the noisy classes. Those two carry
+  registry `control_response`, `request_id:"init-1"`) get `email` + `path` only, not the full net. Those two carry
   the tool/skill catalog (slash-command descriptions naming `docsend.com`, `Pitch.com`, …) and the MCP-server
   names (`claude.ai Gmail`, …) — environment boilerplate a regex can't tell apart from customer data, and the
-  sole concentrated source of false positives. They are excluded **as a unit**, not by domain — but `email`
-  still scans them (the registry's `account` field can carry the developer's own email). `--allow <regex>`
-  suppresses synthetic / public reference names (e.g. `NVCA`, `Cooley GO`, `Acme`); each allow must match the
-  **whole** finding token (so a bare-domain allow no longer silently clears an email whose domain it matches), and
-  `--allow-domain` / `--allow-email` scope an allow to a single finding class, while `--allow-file <path>` loads
-  allows from a version-controlled file (one regex per line, `#` comments). Multi-word proper names are **not** a
-  default class (too noisy). `verify-cassettes` also runs the **staleness** check (both checks run by
-  default; scope to one with `--skip-privacy` or `--skip-staleness`): a drifted `skillHash` (you edited
-  the skill but didn't re-record) fails the gate.
+  sole concentrated source of false positives — so `currency`/`domain` are excluded **as a unit**, not by domain.
+  `email` and `path` still scan them: the registry's `account` field can carry the developer's own email, and
+  those same messages' own structural fields (`cwd`, `plugins[].path`, `memory_paths`) are exactly where a real
+  local filesystem path — leaking a username, plugin-cache layout, or private marketplace name — lives; neither
+  a real address nor a real absolute path is ever legitimate catalog boilerplate the way a skill description is.
+  `--allow <regex>` suppresses synthetic / public reference names (e.g. `NVCA`, `Cooley GO`, `Acme`); each allow
+  must match the **whole** finding token (so a bare-domain allow no longer silently clears an email whose domain
+  it matches), and `--allow-domain` / `--allow-email` / `--allow-path` scope an allow to a single finding class,
+  while `--allow-file <path>` loads allows from a version-controlled file (one regex per line, `#` comments).
+  Multi-word proper names are **not** a default class (too noisy). `verify-cassettes` also runs the **staleness**
+  check (both checks run by default; scope to one with `--skip-privacy` or `--skip-staleness`): a drifted
+  `skillHash` (you edited the skill but didn't re-record) fails the gate.
   The `skillHash` hard-excludes only what is UNIVERSALLY non-runtime — recorded cassettes (`*.cassette.json`,
   by extension, so writing a cassette under the hashed tree doesn't self-invalidate the fingerprint it just
   recorded), VCS/cache dirs (`.git`, `node_modules`, `__pycache__`, …), and the `version` field of a

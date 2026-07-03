@@ -80,10 +80,11 @@ dollar figures). In a skill repo these cassettes get **committed**. So:
   `_KEYS`); empty by default. Redaction is **verdict-preserving** — `record` refuses to write if
   redaction would flip an assertion (a manufactured green). `--no-redact` skips it for known-synthetic
   inputs.
-- **Always-on scan gate** — `verify-cassettes` flags email / currency / bare-domain matches it finds in
-  the committed cassettes and **exits non-zero**, so "no leak" is a gate, not discipline. Suppress
-  synthetic / public reference names (NVCA, Cooley GO, …) with `--allow <regex>`. (Multi-word proper
-  names are NOT a default class — too noisy to gate on; add a pattern via config if your corpus needs it.)
+- **Always-on scan gate** — `verify-cassettes` flags email / currency / bare-domain / local-path matches
+  it finds in the committed cassettes and **exits non-zero**, so "no leak" is a gate, not discipline.
+  Suppress synthetic / public reference names (NVCA, Cooley GO, …) with `--allow <regex>`. (Multi-word
+  proper names are NOT a default class — too noisy to gate on; add a pattern via config if your corpus
+  needs it.)
 
 ```bash
 cowork-harness verify-cassettes cassettes/                       # privacy scan + staleness, exit 1 on a finding
