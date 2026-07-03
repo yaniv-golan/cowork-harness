@@ -1,0 +1,13 @@
+{
+  "type": "control_response",
+  "response": {
+    "subtype": "success",
+    "request_id": "req-perm-1",
+    "response": {
+      "behavior": "allow",
+      "updatedInput": {
+        "command": "ls -la"
+      }
+    }
+  }
+}

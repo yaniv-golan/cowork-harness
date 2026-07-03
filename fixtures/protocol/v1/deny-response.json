@@ -1,0 +1,11 @@
+{
+  "type": "control_response",
+  "response": {
+    "subtype": "success",
+    "request_id": "req-perm-1",
+    "response": {
+      "behavior": "deny",
+      "message": "not allowed"
+    }
+  }
+}

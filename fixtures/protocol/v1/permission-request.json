@@ -1,0 +1,13 @@
+{
+  "type": "control_request",
+  "request_id": "req-perm-1",
+  "request": {
+    "subtype": "can_use_tool",
+    "tool_name": "Bash",
+    "display_name": "Bash",
+    "input": {
+      "command": "ls -la"
+    },
+    "tool_use_id": "toolu_01SyntheticBash"
+  }
+}

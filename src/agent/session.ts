@@ -138,8 +138,11 @@ const QuestionsSchema = z.array(QSpecSchema);
 
 // ---- Control-response envelopes (verified zod shape; the inner `response` nesting is load-bearing) ----
 /** The one success-envelope shape every control_response shares; the four builders below differ ONLY in
- *  the inner `body`. Keeping a single core stops the wrapper drifting between them. */
-function successEnvelope(requestId: string, body: Record<string, unknown>) {
+ *  the inner `body`. Keeping a single core stops the wrapper drifting between them.
+ *  Exported (in addition to the four builders) so protocol-conformance tooling — e.g. the E9 golden
+ *  vector generator — can wrap `hookOutput()`'s bare body in the real envelope instead of hand-rolling
+ *  a lookalike; it has no other external callers. */
+export function successEnvelope(requestId: string, body: Record<string, unknown>) {
   return { type: "control_response", response: { subtype: "success", request_id: requestId, response: body } };
 }
 export function allowEnvelope(requestId: string, updatedInput: Record<string, unknown>) {

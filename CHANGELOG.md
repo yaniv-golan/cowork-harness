@@ -63,6 +63,17 @@ All notable changes to this project are documented here. The format is based on
   runs is not a measurement). The JSON envelope gains an optional `rollups[]` array; `ok`/the exit code are
   redefined for this mode from the rollups, not from `results.every(pass)` — `results[]` still holds every
   raw run.
+- **E9: a hand-authored draft-07 JSON Schema for the harness's own control-channel wire protocol**
+  (`schema/protocol.v1.json`) — the `initialize` handshake, `can_use_tool` permission/question gates
+  (incl. AskUserQuestion's `questions[]`), `hook_callback`/`mcp_message` round-trips, and the nested
+  `control_response` envelope + the `answers` wire-shape — formalizing the prose in DESIGN.md §6/SPEC.md
+  §4-5. Deliberately does NOT schema the Claude Agent SDK's own event stream (Anthropic's surface).
+  Ships with a golden vector pack (`fixtures/protocol/v1/*.json` — real cassette-extracted where
+  possible, synthetic-via-the-real-`session.ts`-envelope-builders otherwise) and conformance tests
+  (`test/protocol-schema.test.ts`) that validate every committed cassette's control-channel lines plus
+  the real envelope-builder functions' actual output, and guard the schema/vector-pack lockstep. See
+  [docs/protocol.md](./docs/protocol.md) for the versioning policy and the explicit
+  descriptive-not-normative scope statement.
 
 ### Parity
 

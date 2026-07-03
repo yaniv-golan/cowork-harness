@@ -1,0 +1,36 @@
+{
+  "type": "control_response",
+  "response": {
+    "subtype": "success",
+    "request_id": "c47ef77b-1336-4c94-b011-a834ed0a9032",
+    "response": {
+      "behavior": "allow",
+      "updatedInput": {
+        "questions": [
+          {
+            "question": "Which features do you want to enable?",
+            "header": "Features",
+            "options": [
+              {
+                "label": "Auth",
+                "description": "Enable authentication"
+              },
+              {
+                "label": "Billing",
+                "description": "Enable billing"
+              },
+              {
+                "label": "Audit",
+                "description": "Enable audit logging"
+              }
+            ],
+            "multiSelect": true
+          }
+        ],
+        "answers": {
+          "Which features do you want to enable?": "Auth, Audit"
+        }
+      }
+    }
+  }
+}
