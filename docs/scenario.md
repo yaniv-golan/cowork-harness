@@ -48,6 +48,11 @@ skills: [report-gen]                     # OPTIONAL — scope cassette-staleness
 requires_capabilities: [pdf]             # OPTIONAL — capability families the skill needs (a scenario FIELD,
                                          # not an assert key); a tier missing one fails unless allow_missing_capability
 
+allow_host_writes: true                  # OPTIONAL — required consent to run `hostloop` with a WRITABLE
+                                         # connected folder (session `folders:` mode rw/rwd): the native
+                                         # agent process gets genuine host filesystem access there, gated
+                                         # only by a software check, not a container/VM wall. See below.
+
 assert:                                  # pass/fail checks (see below)
   - result: success
   - file_exists: outputs/actions.md
@@ -67,12 +72,18 @@ assert:                                  # pass/fail checks (see below)
 | `protocol` | L0 — the agent on the host, no sandbox (no egress enforcement) | fastest control-loop checks; **rejected** if the scenario asserts egress/`expect_denied` (would false-pass) |
 | `container` (default) | L1 — agent in a Docker container with a per-run default-deny egress proxy (VM-loop shape) | the everyday tier: real sandbox, real egress allowlist |
 | `microvm` | L2 — agent in an Apple-VZ Lima microVM with a guest firewall | VM-grade escape isolation of untrusted code; network transport **equals `container`** (same allowlist proxy) — not for better network fidelity. macOS arm64 only; needs `cowork-harness vm init` |
-| `hostloop` | host-loop: agent runs in the container; shell/web tool calls are routed host-side via the workspace SDK-MCP server (`mcp__workspace__bash`) — only `protocol` runs the agent on the host | reproduce Cowork's **production** split-execution model |
+| `hostloop` | host-loop: the agent LOOP is a native process spawned directly on the host (no container around the file tools — matching production); shell/web tool calls route host-side into a Docker VM sidecar via the workspace SDK-MCP server (`mcp__workspace__bash`) | reproduce Cowork's **production** split-execution model |
 | `cowork` | auto-picks `hostloop` vs `container` the way Cowork itself does (gate `1143815894`, decoded from the synced baseline) | "do what real Cowork does for this release" |
 
 `hostloop`/`cowork` are the production-faithful path (see [DESIGN.md](../DESIGN.md)); `container` is the
 practical default. Boundary assertions are enforced at `container`, `microvm`, `hostloop`, and `cowork`
 (`cowork` auto-resolves to a sandboxed tier — `hostloop` or `container` — never `protocol`).
+
+**`hostloop` with a writable connected folder needs `allow_host_writes: true`.** With no container around
+the native file tools, a `mode: rw`/`rwd` folder (see [session.md](./session.md)) gives the agent genuine,
+software-checked-only host filesystem access at this tier — the scenario refuses to run (loud, before any
+spawn) without this explicit opt-in. Read-only folders and folder-less/scratch `hostloop` runs need no
+opt-in. See [boundary.md](./boundary.md) for the full safety posture.
 
 ## Scripted answers
 
@@ -267,7 +278,7 @@ if *every* key passes (don't rely on the first; keep one concern per item unless
 | `allow_missing_capability: true` | verdict modifier (**live tiers only**) — suppresses the default-fail when the lean/`core` agent image omits a capability the skill used but real Cowork ships (OCR/LibreOffice/markitdown/opencv/PDF-tables); assert only when the skill's fallback is genuinely equivalent, else rebuild full parity (`--build-arg COWORK_FULL_PARITY=1`). Also opts out of the `requires_capabilities` declared-need check below. |
 | `allow_l0_plugin_divergence: true` | verdict modifier — opts into L0/protocol plugin divergence, suppressing the plugin-fidelity default-fail |
 | `allow_stall: true` | verdict modifier — suppresses the default-fail when a run ends on a question having done no productive tool work after its last gate (the agent asked for input and stopped — incl. re-asking in plain text *after* answering an `AskUserQuestion`); assert only when ending on a question is the intended terminal state, otherwise script the answer (`answer:` / `--answer` / a decider) |
-| `transcript_no_host_path: true` | no host path (`/Users/`, `/opt/cowork/`, `/home/`, `/root/`) leaked into model-visible text |
+| `transcript_no_host_path: true` | no host path (`/Users/`, `/opt/cowork/`, `/home/`, `/root/`) leaked into model-visible text — **incompatible with `hostloop`**: its native file tools legitimately expose real host paths (that's the tier's whole point), so this assertion fails BY DESIGN there (the harness warns loud at run start if you assert it anyway); use `container`/`microvm` for this check |
 | `egress_denied: <host>` | the host was blocked by the egress proxy |
 | `egress_allowed: <host>` | the host was allowed through |
 | `artifact_json: {…}` | assert over a JSON artifact's contents — see below |
@@ -346,7 +357,7 @@ dependency-free and side-effect-free.)
 > deterministically (ids, counts, enums). This pairs with record-time redaction: redaction rewrites the
 > very strings an `equals` would pin, so `equals` on a redacted field would break on re-record anyway.
 
-> **Boundary assertions** (`egress_*`, `expect_denied`) require a sandboxed fidelity — `container`, `microvm`, `hostloop`, or `cowork`. `container`/`hostloop` share the Docker sandbox + egress proxy; `microvm` enforces the **same allowlist** inside a real Lima/Apple-VZ VM via a guest iptables firewall (not the Docker sandbox); `cowork` resolves to `hostloop` or `container`. Only `protocol` is rejected, to avoid a false pass — see [boundary.md](./boundary.md).
+> **Boundary assertions** (`egress_*`, `expect_denied`) require a sandboxed fidelity — `container`, `microvm`, `hostloop`, or `cowork`. `container`'s and `hostloop`'s `bash` share the same Docker sandbox + egress proxy (though `hostloop`'s native file tools run with no container at all — see [boundary.md](./boundary.md)); `microvm` enforces the **same allowlist** inside a real Lima/Apple-VZ VM via a guest iptables firewall; `cowork` resolves to `hostloop` or `container`. Only `protocol` is rejected, to avoid a false pass — see [boundary.md](./boundary.md).
 
 ### Which assertions survive `replay` (CI placement)
 
@@ -488,6 +499,12 @@ cowork-harness run examples/scenarios/                    # every *.yaml in the 
 ```
 Exit code is non-zero if any assertion fails or the run errors — CI-ready. (In your own skill repo
 you'd keep these at the root, e.g. `run scenarios/`; the harness ships them under `examples/`.)
+
+Already have a run you like the shape of? `cowork-harness scaffold <run-id | run-dir>` turns a **kept**
+run (`--keep`, or a `--session-id` run) into a starter scenario YAML — auto-filled from what it observed
+(gates→answers, artifacts→file_exists) — instead of copying an existing example by hand and editing it to
+match. Prints to stdout by default; add `--out <file.yaml>` to write it straight to `scenarios/`. Review
+and tighten the generated `when_question` regexes before committing.
 
 ### Dry-running a decider (`decide`)
 

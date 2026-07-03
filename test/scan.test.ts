@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { scanText, DEFAULT_SCAN_PATTERNS } from "../src/scan.js";
 
-describe("scanText — default PII heuristics (email + currency + domain)", () => {
+describe("scanText — default PII heuristics (email + currency + domain + path)", () => {
   it("flags an email", () => {
     const f = scanText("reach alice@acme.com today", "transcript", []);
     expect(f.some((x) => x.cls === "email")).toBe(true);
@@ -44,6 +44,42 @@ describe("scanText — default PII heuristics (email + currency + domain)", () =
     expect(eml.some((x) => x.cls === "domain")).toBe(true);
   });
   it("each default pattern carries a class label", () => {
-    expect(DEFAULT_SCAN_PATTERNS.map((p) => p.cls).sort()).toEqual(["currency", "domain", "email"]);
+    expect(DEFAULT_SCAN_PATTERNS.map((p) => p.cls).sort()).toEqual(["currency", "domain", "email", "path"]);
+  });
+  it("flags a macOS host path", () => {
+    const f = scanText("see /Users/alice/project/notes.md for details", "transcript", []);
+    expect(f.some((x) => x.cls === "path" && x.sample.includes("/Users/alice"))).toBe(true);
+  });
+  it("flags a Linux host path under /home/", () => {
+    const f = scanText("logs at /home/bob/.cache/thing", "transcript", []);
+    expect(f.some((x) => x.cls === "path")).toBe(true);
+  });
+  it("flags a root-owned path under /root/", () => {
+    const f = scanText("config in /root/.config/app", "transcript", []);
+    expect(f.some((x) => x.cls === "path")).toBe(true);
+  });
+  it("does NOT flag an in-VM /sessions/ mount path (not a host root)", () => {
+    const f = scanText("mounted at /sessions/abc123/mnt/outputs/x.json", "transcript", []);
+    expect(f.some((x) => x.cls === "path")).toBe(false);
+  });
+  it("does NOT flag a bare word containing 'home' or 'users' as a substring (anchored to the path root)", () => {
+    // "whatever/home/x" and "myusers/database" must not match — the root must be preceded by a boundary,
+    // matching hostPathLeaked's proven anchoring approach in src/run/execute.ts.
+    const f = scanText("see whatever/home/x and myusers/database for the schema", "transcript", []);
+    expect(f.some((x) => x.cls === "path")).toBe(false);
+  });
+  it("path sample has no leading boundary junk (lookbehind, not a capturing group)", () => {
+    const f = scanText('"cwd":"/Users/alice/x"', "events[17]", []);
+    expect(f.find((x) => x.cls === "path")?.sample).toBe("/Users/alice/x");
+  });
+  it("allowlist suppresses a specific path finding (--allow-path equivalent)", () => {
+    const f = scanText("see /Users/alice/project", "transcript", [{ cls: "path", re: /\/Users\/alice\/project/ }]);
+    expect(f.some((x) => x.cls === "path")).toBe(false);
+  });
+  it("class-scoped path allow does not bleed into other classes", () => {
+    const text = "contact alice@acme.com, path /Users/alice/x";
+    const f = scanText(text, "transcript", [{ cls: "path", re: /\/Users\/alice\/x/ }]);
+    expect(f.some((x) => x.cls === "email")).toBe(true); // email survives — path allow is scoped
+    expect(f.some((x) => x.cls === "path")).toBe(false);
   });
 });

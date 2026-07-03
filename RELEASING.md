@@ -57,6 +57,9 @@ stricter privacy gate, a changed cassette/staleness hash), are a **minor**.
    "Tracks `cowork-harness X.Y.Z`" line.
 7. The baseline these track (`tracks-harness … (baseline desktop-<ver>)`) — keep in sync with the
    newest `baselines/desktop-*.json`.
+8. `.claude/skills/cowork-harness/references/ci-recipe.md` → all `npm i -g cowork-harness@>=X.Y.Z` floors
+   (currently 3 occurrences).
+9. `examples/replays/README.md` → the `npm i -g cowork-harness@>=X.Y.Z` floor.
 
 ## Checklist
 

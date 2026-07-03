@@ -77,7 +77,7 @@ The harness `--fidelity` flag selects how closely the execution environment matc
 | `protocol` | No sandbox, no filesystem isolation, no egress boundary. |
 | `container` (default) | No Apple VZ microVM; the container mount namespace is frozen at start (no mid-session mounts). |
 | `microvm` | Slow boot (~20s); macOS arm64 only; egress is the same allowlist proxy as `container`, **not** a gVisor netstack. |
-| `hostloop` | Not an isolation gap — it shares the `container` sandbox; it reproduces Cowork's host-loop *tool-routing split* (shell/web run host-side; the agent process itself still runs in the container). |
+| `hostloop` | Not an isolation gap — it reproduces Cowork's real host-loop split: the agent loop is a native host process (no container around the file tools, matching production's own risk model — see [docs/boundary.md](./boundary.md)); only shell/web route through a Docker VM sidecar. |
 | `cowork` | Resolves to `hostloop` or `container` at run time — inherits whichever tier's gaps. |
 
 The `chat` command accepts `protocol`, `container`, and `hostloop`. `microvm` and `cowork` are omitted — `microvm` has a slow boot (~20s) that makes interactive use painful, and `cowork` would require replicating the cowork-tier wiring, which resolves the tier via the shared `decideLoopFromBaseline` gate logic (`src/run/execute.ts` → `src/loop-decision.ts`).

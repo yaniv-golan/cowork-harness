@@ -3,9 +3,9 @@ import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "../cli-args.js";
-import { resolveAgentBinary, loadBaseline } from "../baseline.js";
+import { resolveAgentBinary, resolveHostAgentBinary, loadBaseline } from "../baseline.js";
 import { limaPath } from "../runtime/lima.js";
-import { pkgVersion } from "./envelope.js";
+import { pkgVersion, fail, isJsonOutput } from "./envelope.js";
 
 // Synchronous fd writes (match cli.ts): machine→stdout, human→stderr.
 const out = (s: string) => process.stdout.write(s + "\n");
@@ -40,6 +40,9 @@ export interface DoctorProbe {
   proxyImageName(): string;
   proxyImagePresent(): boolean;
   agentBinary(): { ok: true; path: string } | { ok: false; error: string };
+  // Native macOS agent binary that `hostloop`/`cowork` spawn directly (distinct from the Linux ELF
+  // `agentBinary()` resolves — see resolveHostAgentBinary in baseline.ts). Not meaningful for other tiers.
+  hostAgentBinary(): { ok: true; path: string } | { ok: false; error: string };
   hasToken(): boolean;
   // macOS only: is there a Claude Code OAuth credential in the login Keychain? Used purely to improve the
   // "no token" remedy — the in-Docker agent can't read the Keychain, so doctor points the user at .env.
@@ -88,6 +91,13 @@ export const realProbe: DoctorProbe = {
   agentBinary() {
     try {
       return { ok: true, path: resolveAgentBinary(loadBaseline("latest")) };
+    } catch (e) {
+      return { ok: false, error: (e as Error).message };
+    }
+  },
+  hostAgentBinary() {
+    try {
+      return { ok: true, path: resolveHostAgentBinary(loadBaseline("latest")) };
     } catch (e) {
       return { ok: false, error: (e as Error).message };
     }
@@ -223,6 +233,20 @@ export function runDoctorChecks(tier: Tier, probe: DoctorProbe = realProbe): Doc
 
     checks.push(agentCheck());
 
+    if (tier === "hostloop" || tier === "cowork") {
+      const hostAgent = probe.hostAgentBinary();
+      checks.push({
+        id: "hostAgent",
+        title: "Staged native agent binary (hostloop)",
+        status: hostAgent.ok ? "ok" : "fail",
+        detail: hostAgent.ok ? hostAgent.path : hostAgent.error.split("\n")[0],
+        remedy: hostAgent.ok
+          ? undefined
+          : "open Claude Cowork once to stage the native macOS binary, or set COWORK_HOST_AGENT_BINARY=<path>",
+        required: true,
+      });
+    }
+
     // Egress proxy image — informational, never blocking: the egress sidecar builds it on the fly
     // (ensureProxyImage) when absent, so report status but don't gate the verdict on it.
     const proxy = probe.proxyImageName();
@@ -297,16 +321,14 @@ export function cmdDoctor(args: string[]): void {
       },
     });
   } catch (e) {
-    log((e as Error).message);
-    return process.exit(2);
+    fail("doctor", "usage", (e as Error).message, undefined, isJsonOutput(args));
   }
   const tier = (p.options["--tier"] as Tier) ?? "container";
   const json = p.options["--output-format"] === "json";
 
   // reject unexpected positional arguments.
   if (p.positionals.length > 0) {
-    log(`unexpected arguments: ${p.positionals.join(" ")}`);
-    return process.exit(2);
+    fail("doctor", "usage", `unexpected arguments: ${p.positionals.join(" ")}`, undefined, isJsonOutput(args));
   }
 
   const checks = runDoctorChecks(tier);

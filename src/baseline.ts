@@ -55,9 +55,16 @@ export function resolveAgentBinary(baseline: PlatformBaseline): string {
  * binary by numeric version sort. Returns undefined if none exist.
  */
 function newestStagedBinary(stagedPath: string): string | undefined {
-  const root = dirname(dirname(stagedPath)); // .../claude-code-vm
-  if (!existsSync(root)) return undefined;
-  // Numeric/semver-aware sort matching compareBaselineVersions: parseInt each dot-segment, NaN→0.
+  return newestStagedSibling(dirname(dirname(stagedPath)), "claude");
+}
+
+/**
+ * Shared version-dir scanner behind both `newestStagedBinary` (VM ELF: `<versionRoot>/<ver>/claude`) and
+ * `newestStagedHostBinary` (native Mach-O: `<versionRoot>/<ver>/claude.app/Contents/MacOS/claude`) — `leaf`
+ * is the path segment(s) AFTER the version dir. Numeric/semver-aware sort matching compareBaselineVersions.
+ */
+function newestStagedSibling(versionRoot: string, leaf: string): string | undefined {
+  if (!existsSync(versionRoot)) return undefined;
   const seg = (v: string) =>
     v.split(".").map((s) => {
       const n = parseInt(s, 10);
@@ -75,13 +82,57 @@ function newestStagedBinary(stagedPath: string): string | undefined {
   };
   let dirs: string[];
   try {
-    dirs = readdirSync(root);
+    dirs = readdirSync(versionRoot);
   } catch {
     return undefined;
   }
-  const versions = dirs.filter((d) => existsSync(join(root, d, "claude"))).sort(cmp);
+  const versions = dirs.filter((d) => existsSync(join(versionRoot, d, leaf))).sort(cmp);
   if (versions.length === 0) return undefined;
-  return resolve(join(root, versions[versions.length - 1], "claude"));
+  return resolve(join(versionRoot, versions[versions.length - 1], leaf));
+}
+
+/** Strip `n` trailing path segments via repeated `dirname`. */
+function nthParentDir(p: string, n: number): string {
+  let out = p;
+  for (let i = 0; i < n; i++) out = dirname(out);
+  return out;
+}
+
+/**
+ * Resolve the host path to the staged NATIVE macOS agent binary (COWORK_HOST_AGENT_BINARY override >
+ * baseline.agentBinary.nativeStagedPath). Desktop stages a native macOS Mach-O binary alongside the
+ * Linux/arm64 ELF — `claude-code/<ver>/claude.app/Contents/MacOS/claude`. This is what hostloop spawns
+ * directly (no Docker) for the agent loop; the ELF (`resolveAgentBinary`) stays the source of truth for
+ * container/microvm and for hostloop's bash/web_fetch VM sidecar image.
+ */
+export function resolveHostAgentBinary(baseline: PlatformBaseline): string {
+  const override = process.env.COWORK_HOST_AGENT_BINARY;
+  if (override) {
+    if (!existsSync(override)) throw new Error(`COWORK_HOST_AGENT_BINARY not found: ${override}`);
+    return resolve(override);
+  }
+  const staged = (baseline.agentBinary?.nativeStagedPath ?? "").replace(/^~(?=$|\/)/, homedir());
+  if (staged && existsSync(staged)) return resolve(staged);
+  const exactPath = staged || "(unknown)";
+  // .../claude-code/<ver>/claude.app/Contents/MacOS/claude -> versionRoot = .../claude-code (5 segments:
+  // the 4-segment leaf below PLUS the <ver> dir itself).
+  const NATIVE_LEAF = "claude.app/Contents/MacOS/claude";
+  const fallback = staged ? newestStagedSibling(nthParentDir(staged, NATIVE_LEAF.split("/").length + 1), NATIVE_LEAF) : undefined;
+  if (fallback && process.env.COWORK_HARNESS_ALLOW_AGENT_FALLBACK === "1") {
+    process.stderr.write(
+      `cowork-harness: staged NATIVE agent binary "${staged}" not found; falling back to newest sibling "${fallback}".\n`,
+    );
+    return fallback;
+  }
+  if (fallback) {
+    throw new Error(
+      `cowork-harness: baseline NATIVE agent binary not found: ${exactPath}. Set COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1 to use the newest available.`,
+    );
+  }
+  throw new Error(
+    `Staged NATIVE agent binary not found at "${staged}". It is extracted from your Claude Desktop install ` +
+      `(claude-code/<ver>/claude.app/Contents/MacOS/claude). Open Cowork once to stage it, or set COWORK_HOST_AGENT_BINARY to its path.`,
+  );
 }
 
 /**

@@ -11,13 +11,15 @@ import { spawnProtocol } from "../runtime/protocol.js";
 import { renderPrompts } from "../prompt.js";
 import { startEgressSidecar, registerCleanup } from "../egress/sidecar.js";
 import { Scenario } from "../types.js";
-import { LiveAgentSession } from "../agent/session.js";
-import { Run } from "./run.js";
+import { LiveAgentSession, type AgentEvent } from "../agent/session.js";
+import { Run, type RunHooks } from "./run.js";
 import { makeRenderer, startHeartbeat, type RenderPlan } from "./renderer.js";
 import { runsWriteRoot } from "./trace-view.js";
 import { Chain, ScriptedDecider, PermissionDefaultDecider, PromptDecider } from "../decide/decider.js";
 import { readGateFlag } from "../loop-decision.js";
 import type { WebFetchProvenance } from "../hostloop/workspace-handler.js";
+import { checkHostLoopWriteConsent, logHostWriteNotice } from "../hostloop/safety.js";
+import { PATH_GATE_TOOL_NAMES } from "../hostloop/pretooluse-path-hook.js";
 
 const log = (s: string) => process.stderr.write(s);
 
@@ -40,6 +42,7 @@ const CHAT_OPTIONS = [
   { flag: "--upload", kind: "value", usage: "[--upload <file>]..." },
   { flag: "--folder", kind: "value", usage: "[--folder <dir>]..." },
   { flag: "--plugin", kind: "value", usage: "[--plugin <dir>]..." },
+  { flag: "--allow-host-writes", kind: "boolean", usage: "[--allow-host-writes]" },
 ] as const;
 
 /** Build the chat usage string from CHAT_OPTIONS so every parsed flag is documented. */
@@ -74,6 +77,7 @@ export async function cmdChat(args: string[]) {
   // COWORK_HARNESS_MODEL env var default (CLI --model takes precedence).
   let model: string | undefined = process.env.COWORK_HARNESS_MODEL;
   let verbose = false;
+  let allowHostWrites = false;
   const uploads: string[] = [];
   const folders: Array<{ from: string; mode: "rw" }> = [];
   const localPlugins: string[] = [];
@@ -105,7 +109,10 @@ export async function cmdChat(args: string[]) {
       raw = true;
       seenFlags.add("--raw");
     } else if (a === "--verbose" || a === "-V") verbose = true;
-    else if (a === "--fidelity") {
+    else if (a === "--allow-host-writes") {
+      allowHostWrites = true;
+      seenFlags.add("--allow-host-writes");
+    } else if (a === "--fidelity") {
       const v = ++i < args.length ? args[i] : undefined; // bounds check
       if (v === undefined || !(CHAT_FIDELITY_TIERS as readonly string[]).includes(v)) {
         log(`chat --fidelity must be ${CHAT_FIDELITY_TIERS.map((t) => `"${t}"`).join(", ")} (got "${v ?? ""}")\n`);
@@ -153,7 +160,7 @@ export async function cmdChat(args: string[]) {
     // protocol, so every file/sandbox-fidelity option is meaningless there. Previously only --plugin
     // warned; uploads/folders/fidelity were silently dropped. Reject the file/sandbox options loudly
     // (they imply mounts/fidelity --raw cannot honor), and warn on the rest.
-    const rawRejected = ["--upload", "--folder", "--plugin", "--fidelity"].filter((f) => seenFlags.has(f));
+    const rawRejected = ["--upload", "--folder", "--plugin", "--fidelity", "--allow-host-writes"].filter((f) => seenFlags.has(f));
     if (rawRejected.length > 0) {
       log(
         `chat --raw does not support ${rawRejected.join(", ")} — --raw mounts ONE skill folder in native cowork ` +
@@ -176,6 +183,11 @@ export async function cmdChat(args: string[]) {
     permission_parity: "cowork",
     plugins: { local_plugins: [folder, ...localPlugins] },
   });
+  // hostloop with a writable connected folder gives the native agent process genuine, software-checked-
+  // only host filesystem access — no container sandbox. Refuse loud, before any spawn, unless the caller
+  // opts in with --allow-host-writes (chat sessions are ad-hoc, not committed YAML, so there's no
+  // scenario field to set — this is the CLI-flag equivalent).
+  if (fidelity === "hostloop") checkHostLoopWriteConsent(session, allowHostWrites);
   const baseline = loadBaseline("latest");
   const sessionId = `local_${process.hrtime.bigint().toString(36)}`;
   const outDir = join(runsWriteRoot(), "chat", sessionId);
@@ -260,10 +272,38 @@ export async function cmdChat(args: string[]) {
       });
       child = hl.child;
       containerName = hl.containerName;
+      logHostWriteNotice(
+        plan.mounts.filter((mt) => mt.kind === "folder").map((mt) => ({ from: mt.hostPath, mode: mt.mode })),
+        (msg) => log(msg),
+      );
       const agent = new LiveAgentSession(hl.child as any, outDir);
       const decider = Chain(new ScriptedDecider([]), new PermissionDefaultDecider("cowork"), new PromptDecider(ask));
       const renderer = makeRenderer(renderPlan);
-      const run = new Run(agent, decider, [renderer], sessionId);
+      // The path-containment gate's runtime tripwire: a gated tool call that completed successfully
+      // with no evidence the gate ran on it means real filesystem access is unverified for this
+      // session — abort rather than continue silently. Mirrors execute.ts's post-run check, but as a
+      // live per-event observer (chat has no events.jsonl post-run scan pass).
+      const seenGatedToolUse = new Map<string, string>(); // toolUseId -> tool name, awaiting its tool_result
+      const CHAT_PATH_GATE_TOOLS = new Set<string>([...PATH_GATE_TOOL_NAMES, "MultiEdit"]);
+      const tripwireHook: RunHooks = {
+        onEvent(ev: AgentEvent) {
+          if (ev.type === "tool_use" && !ev.synthetic && ev.toolUseId && CHAT_PATH_GATE_TOOLS.has(ev.name)) {
+            seenGatedToolUse.set(ev.toolUseId, ev.name);
+          }
+          if (ev.type === "tool_result" && ev.toolUseId && seenGatedToolUse.has(ev.toolUseId)) {
+            const name = seenGatedToolUse.get(ev.toolUseId)!;
+            seenGatedToolUse.delete(ev.toolUseId);
+            if (!ev.isError && !hl.pathGateFired.has(ev.toolUseId)) {
+              log(
+                `::warning:: [hostloop] path-containment gate did not fire for ${name} (${ev.toolUseId}) — ` +
+                  `real filesystem access is UNVERIFIED for this session. Aborting.\n`,
+              );
+              throw new Error(`[hostloop] path gate did not fire for ${name} — aborting as unsafe/unverified.`);
+            }
+          }
+        },
+      };
+      const run = new Run(agent, decider, [renderer, tripwireHook], sessionId);
       stopHeartbeat = startHeartbeat(renderer, renderPlan, start);
       if (viaApiOn) {
         provenanceRef.current = {
@@ -276,6 +316,7 @@ export async function cmdChat(args: string[]) {
       }
       await run.drive(withSeedPrompt(seedPrompt, ttyTurns(rl)), {
         sdkMcp: hl.sdkMcp,
+        hooks: hl.hooks,
       });
     } else {
       const ct = spawnContainer(scenario, baseline, plan, outDir, sessionId, {

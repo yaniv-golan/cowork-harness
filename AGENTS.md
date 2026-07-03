@@ -30,6 +30,9 @@ protocol layer or run-loop bookkeeping in the CLI.
   never the cause). CI scripts MUST NOT swallow this exit code — treat it as a missing gate, not a vacuous pass.
 
 ## Invariants — do NOT break (each one cost a real bug)
+> Full index (enforcement + test anchors for every invariant, including the CI-grep-only ones not
+> repeated below): [docs/invariants.md](docs/invariants.md).
+
 - **AskUserQuestion answer shape.** `serializeDecision` (`src/agent/session.ts`) MUST emit
   `updatedInput: { questions, answers }` — never `{ answers }` alone. The in-VM binary's handler does
   `questions.map(...)`; dropping `questions` throws `q.map`, the answer never reaches the model, and

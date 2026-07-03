@@ -131,6 +131,28 @@ export function spawnEnv(
   };
 }
 
+/**
+ * The NATIVE spawn env for hostloop's agent process — a real macOS process, not a container occupant.
+ * Deliberately NOT `spawnEnv`: no forced `HOME=/tmp` (this process runs on the actual host, so its own
+ * state dirs must resolve against the real HOME, not a container-hardening fake one), and no
+ * HTTP(S)_PROXY (production's native agent process does not proxy its own Anthropic API traffic —
+ * bash/web_fetch already route around this process entirely via the workspace MCP handler, so nothing
+ * here needs the sidecar proxy; this is the least-verified assumption in this design, flagged for
+ * re-verification if a future Desktop release changes the native binary's egress behavior).
+ * `configDir` is a REAL HOST PATH (CLAUDE_CONFIG_DIR), not a guest path — unlike `spawnEnv`.
+ */
+export function hostNativeSpawnEnv(
+  baseline: PlatformBaseline,
+  opts: { configDir: string; extra?: Record<string, string>; maxThinkingTokens?: number },
+): Record<string, string> {
+  return {
+    ...(baseline.spawn?.env ?? { CLAUDE_CODE_IS_COWORK: "1" }),
+    CLAUDE_CONFIG_DIR: opts.configDir,
+    MAX_THINKING_TOKENS: String(opts.maxThinkingTokens ?? baseline.spawn?.maxThinkingTokens ?? DEFAULT_MAX_THINKING_TOKENS),
+    ...(opts.extra ?? {}),
+  };
+}
+
 export const HARDENING = [
   "--cap-drop",
   "ALL",
@@ -143,21 +165,36 @@ export const HARDENING = [
   "1024",
 ];
 
+/** One nested bind layered over the session-tree bind, for hostloop's real (never-copied) folder mounts
+ *  and the two `.claude/{skills,projects}` ro binds. `guestPath` is absolute in-container. */
+export interface HostLoopBindMount {
+  hostPath: string;
+  guestPath: string;
+  ro: boolean;
+}
+
 export interface DockerRunInput {
   network: string;
   lockdown: boolean;
   sessionRoot: string;
   sessionHost: string;
-  agentHost: string;
-  agentIn: string;
+  // Absent for hostloop's VM sidecar: the agent process is a native macOS spawn, not a container
+  // occupant, so there is no agent binary to bind-mount and no `claude …` argv to run — the sidecar
+  // exists solely as a `docker exec` target for bash/web_fetch. container/microvm always pass both
+  // (unchanged behavior — this is purely additive).
+  agentHost?: string;
+  agentIn?: string;
   image: string;
   env: Record<string, string>;
-  agentArgv: string[];
+  agentArgv?: string[];
   name?: string; // host-loop needs a name for `docker exec`
   readOnlyMountPaths?: string[]; // mnt-relative paths of `mode:r` mounts → nested `:ro` binds
+  extraBinds?: HostLoopBindMount[]; // real (never-copied) folder mounts + `.claude/{skills,projects}`
 }
 
-/** §3.3/§3.4 — the full `docker run …` argv. */
+/** §3.3/§3.4 — the full `docker run …` argv. When `agentArgv` is omitted (hostloop's VM-sidecar-only
+ *  container), the container runs a keep-alive command instead of the agent — the agent process itself
+ *  is spawned natively on the host and never occupies this container. */
 export function dockerRunArgv(i: DockerRunInput): string[] {
   return [
     "run",
@@ -175,16 +212,18 @@ export function dockerRunArgv(i: DockerRunInput): string[] {
     // argv (visible via ps / /proc/<pid>/cmdline). Docker inherits the value from its own env — the
     // harness process env, where runtimeAuthEnv read it. Non-secret env keeps the explicit KEY=value.
     ...Object.entries(i.env).flatMap(([k, v]) => (SECRET_ENV_KEYS.has(k) ? ["-e", k] : ["-e", `${k}=${v}`])),
-    "-v",
-    `${i.agentHost}:${i.agentIn}:ro`,
+    ...(i.agentHost && i.agentIn ? ["-v", `${i.agentHost}:${i.agentIn}:ro`] : []),
     "-v",
     `${i.sessionHost}:${i.sessionRoot}`,
     // Per-mount read-only enforcement — a nested `:ro` bind over each `mode:r` subpath makes
     // uploads / plugins unwritable in the guest (matching Cowork: asar uploads = 'ro'), while the rest
     // of the session tree stays writable. Delete-deny for rw/rwd is the separate FUSE sub-project.
     ...(i.readOnlyMountPaths ?? []).flatMap((mp) => ["-v", `${i.sessionHost}/mnt/${mp}:${i.sessionRoot}/mnt/${mp}:ro`]),
+    // Real folder mounts + `.claude/{skills,projects}`, layered AFTER the overlays above so they
+    // correctly shadow the (now-absent, for folders) staged-copy destination.
+    ...(i.extraBinds ?? []).flatMap((b) => ["-v", `${b.hostPath}:${b.guestPath}${b.ro ? ":ro" : ""}`]),
     i.image,
-    ...i.agentArgv,
+    ...(i.agentArgv ?? ["sleep", "infinity"]),
   ];
 }
 

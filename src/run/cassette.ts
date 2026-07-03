@@ -43,7 +43,7 @@ import { hashSkillDirs, hashSharedOnly, computeContentSig, skillHashEntries, OS_
 import { computeVerdict } from "./verdict.js";
 import { redactJsonLine, redactText, redactStructural, loadRedactionPolicy, type RedactionPolicy } from "../redact.js";
 import { collectSecrets, scrub, scrubField } from "../secrets.js";
-import { scanText, DEFAULT_SCAN_PATTERNS, EMAIL_SCAN_PATTERNS, type ScanFinding, type AllowInput, type AllowPattern } from "../scan.js";
+import { scanText, DEFAULT_SCAN_PATTERNS, MANIFEST_SCAN_PATTERNS, type ScanFinding, type AllowInput, type AllowPattern } from "../scan.js";
 import { parse as parseYaml } from "yaml";
 
 const out = (s: string) => process.stdout.write(s + "\n");
@@ -384,8 +384,10 @@ export function fingerprintSkillDrift(rec: Fingerprint, live: Fingerprint): stri
  *  can't tell apart from customer data). Two stable structural forms:
  *   - the `system/init` event (tools/mcp_servers/skills/cwd registry), and
  *   - the `initialize` `control_response` (`request_id: "init-1"`; body = commands/agents/models/account).
- *  These get `email`-only scanning (email is universal — the `account` field can carry the dev's own email);
- *  the noisy classes are suppressed only here. */
+ *  These get `email` + `path` scanning (email is universal — the `account` field can carry the dev's own
+ *  email; path is universal too — these messages' own structural fields, `cwd`/`plugins[].path`/
+ *  `memory_paths`, are exactly where a real local filesystem path lives, unlike the noisy classes which
+ *  are suppressed only here). */
 function isCapabilityManifest(line: string): boolean {
   let m: { type?: string; subtype?: string; response?: { request_id?: string; response?: Record<string, unknown> } };
   try {
@@ -405,8 +407,8 @@ function isCapabilityManifest(line: string): boolean {
 
 export function scanCassette(cassette: Cassette, allow: AllowInput[]): ScanFinding[] {
   const findings: ScanFinding[] = [];
-  const FULL = DEFAULT_SCAN_PATTERNS; // email + currency + domain
-  const EMAIL = EMAIL_SCAN_PATTERNS; // email only — for the capability-manifest messages
+  const FULL = DEFAULT_SCAN_PATTERNS; // email + currency + domain + path
+  const MANIFEST = MANIFEST_SCAN_PATTERNS; // email + path — for the capability-manifest messages
   // Whole-token allowlist check against an arbitrary string (the artifact PATH), mirroring scan.ts's
   // `allowed`: an unscoped `--allow` (or one scoped to `cls`) whose regex matches the ENTIRE path
   // clears the finding. Used to give a committed-but-unscannable binary deliverable a documented
@@ -417,9 +419,11 @@ export function scanCassette(cassette: Cassette, allow: AllowInput[]): ScanFindi
       if (p.cls !== undefined && p.cls !== cls) return false;
       return new RegExp(`^(?:${p.re.source})$`, p.re.flags.replace("g", "")).test(path);
     });
-  // Transcript: full net EXCEPT the capability-manifest messages (catalog noise), where only email runs.
-  cassette.events.forEach((l, i) => findings.push(...scanText(l, `events[${i}]`, allow, isCapabilityManifest(l) ? EMAIL : FULL)));
-  cassette.controlOut?.forEach((l, i) => findings.push(...scanText(l, `controlOut[${i}]`, allow, isCapabilityManifest(l) ? EMAIL : FULL)));
+  // Transcript: full net EXCEPT the capability-manifest messages (catalog noise), where only email + path run.
+  cassette.events.forEach((l, i) => findings.push(...scanText(l, `events[${i}]`, allow, isCapabilityManifest(l) ? MANIFEST : FULL)));
+  cassette.controlOut?.forEach((l, i) =>
+    findings.push(...scanText(l, `controlOut[${i}]`, allow, isCapabilityManifest(l) ? MANIFEST : FULL)),
+  );
   // Deliverable + author-written fields — full net (a real cap table's figures/domains live here).
   for (const a of cassette.artifacts ?? []) {
     findings.push(...scanText(a.path, `artifact path ${a.path}`, allow, FULL)); // a filename can name a customer
@@ -2079,7 +2083,7 @@ export function cmdVerifyCassettes(args: string[]) {
     p = parseArgs(args, {
       booleans: ["--skip-privacy", "--skip-staleness", "--quiet", "--verbose"],
       values: ["--output-format"],
-      repeated: ["--allow", "--allow-domain", "--allow-email", "--allow-file"],
+      repeated: ["--allow", "--allow-domain", "--allow-email", "--allow-path", "--allow-file"],
       enums: { "--output-format": ["text", "json"] },
       noDashValue: ["--allow-file"],
       aliases: { "-q": "--quiet", "-V": "--verbose" },
@@ -2098,9 +2102,9 @@ export function cmdVerifyCassettes(args: string[]) {
   const doPrivacy = !skipPrivacy;
   const doStaleness = !skipStaleness;
   // Allow model: each entry is whole-token anchored + class-scoped. A bare `--allow` applies to every
-  // class (back-compat); `--allow-domain`/`--allow-email` scope to one class so a domain allow can't bleed
-  // into the email tripwire. `--allow-file` loads bare (all-class) patterns from a version-controlled
-  // file, one per line, `#` comments and blanks ignored.
+  // class (back-compat); `--allow-domain`/`--allow-email`/`--allow-path` scope to one class so a domain
+  // allow can't bleed into the email tripwire. `--allow-file` loads bare (all-class) patterns from a
+  // version-controlled file, one per line, `#` comments and blanks ignored.
   const allow: AllowPattern[] = [];
   const addAllow = (src: string, cls: string | undefined, flag: string): void => {
     try {
@@ -2113,6 +2117,7 @@ export function cmdVerifyCassettes(args: string[]) {
   for (const src of p.repeated["--allow"] ?? []) addAllow(src, undefined, "--allow");
   for (const src of p.repeated["--allow-domain"] ?? []) addAllow(src, "domain", "--allow-domain");
   for (const src of p.repeated["--allow-email"] ?? []) addAllow(src, "email", "--allow-email");
+  for (const src of p.repeated["--allow-path"] ?? []) addAllow(src, "path", "--allow-path");
   for (const file of p.repeated["--allow-file"] ?? []) {
     let body: string;
     try {
@@ -2129,7 +2134,7 @@ export function cmdVerifyCassettes(args: string[]) {
   const target = p.positionals[0];
   if (!target) {
     log(
-      "usage: verify-cassettes <file|dir> [--skip-privacy|--skip-staleness] [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-file <path>]... [--output-format json]",
+      "usage: verify-cassettes <file|dir> [--skip-privacy|--skip-staleness] [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-path <regex>]... [--allow-file <path>]... [--output-format json]",
     );
     return process.exit(2);
   }

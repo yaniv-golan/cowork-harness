@@ -17,7 +17,7 @@ describe("web_fetch provenance-unenforced warning is per-handler (not once-per-p
   it("each freshly-built handler warns when provenance is unenforced", async () => {
     const spy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     // allow=[] → after the unenforced warning, the fetch hard-denies (no curl, no network call).
-    const mk = () => makeWorkspaceHandler("c", "/mnt", "docker", []);
+    const mk = () => makeWorkspaceHandler({ containerName: "c", vmMnt: "/mnt", webFetchAllow: [] });
     const call = (h: ReturnType<typeof makeWorkspaceHandler>) =>
       h("workspace", { method: "tools/call", params: { name: "web_fetch", arguments: { url: "https://x.example/y" } } });
     await call(mk());
@@ -85,7 +85,15 @@ describe("web_fetch provenance gate (G1t port, via the handler)", () => {
   ) => {
     const egress: EgressEntry[] = [];
     const ref = { current: prov };
-    const h = makeWorkspaceHandler("c", "/mnt", "docker", ["other.example"], (e) => egress.push(e), undefined, ref, rawFetch, resolve);
+    const h = makeWorkspaceHandler({
+      containerName: "c",
+      vmMnt: "/mnt",
+      webFetchAllow: ["other.example"],
+      onEgress: (e) => egress.push(e),
+      provenanceRef: ref,
+      rawFetch,
+      resolve,
+    });
     const out = (await h("workspace", { method: "tools/call", params: { name: "web_fetch", arguments: { url } } })) as {
       result: { isError?: boolean; content: { text: string }[] };
     };
@@ -205,7 +213,14 @@ describe("web_fetch Path B — U1t + manual redirect re-check (provenance off)",
     const egress: EgressEntry[] = [];
     // provenanceRef + fetchImpl undefined → Path B; inject rawFetch for the redirect loop (spawn-free).
     // A network-free DNS stub keeps the SSRF backstop from NXDOMAIN-denying the synthetic test hosts.
-    const h = makeWorkspaceHandler("c", "/mnt", "docker", allow, (e) => egress.push(e), undefined, undefined, rawFetch, resolve);
+    const h = makeWorkspaceHandler({
+      containerName: "c",
+      vmMnt: "/mnt",
+      webFetchAllow: allow,
+      onEgress: (e) => egress.push(e),
+      rawFetch,
+      resolve,
+    });
     const out = (await h("workspace", { method: "tools/call", params: { name: "web_fetch", arguments: { url } } })) as {
       result: { isError?: boolean; content: { text: string }[] };
     };
@@ -327,7 +342,15 @@ describe("web_fetch DNS-rebind SSRF backstop — Path A (provenance), and litera
   const run = async (url: string, resolve: Resolver, rawFetch: RawFetch = ok("BODY")) => {
     const egress: EgressEntry[] = [];
     const ref = { current: fake({}) };
-    const h = makeWorkspaceHandler("c", "/mnt", "docker", ["other.example"], (e) => egress.push(e), undefined, ref, rawFetch, resolve);
+    const h = makeWorkspaceHandler({
+      containerName: "c",
+      vmMnt: "/mnt",
+      webFetchAllow: ["other.example"],
+      onEgress: (e) => egress.push(e),
+      provenanceRef: ref,
+      rawFetch,
+      resolve,
+    });
     const out = (await h("workspace", { method: "tools/call", params: { name: "web_fetch", arguments: { url } } })) as {
       result: { isError?: boolean; content: { text: string }[] };
     };

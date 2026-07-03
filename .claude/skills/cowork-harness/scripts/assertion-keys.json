@@ -33,6 +33,7 @@
     "user_visible_artifact"
   ],
   "topLevelKeys": [
+    "allow_host_writes",
     "answers",
     "assert",
     "baseline",

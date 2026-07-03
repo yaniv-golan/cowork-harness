@@ -1,6 +1,10 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, writeSync } from "node:fs";
 import type { RunResult } from "../types.js";
 import { computeVerdict } from "./verdict.js";
+
+// Synchronous fd writes (match cli.ts / doctor.ts). writeSync flushes before process.exit on a pipe.
+const out = (s: string) => writeSync(1, s + "\n");
+const log = (s: string) => writeSync(2, s + "\n");
 
 /** Package version (for the json envelope + `--version`). Resolved package-relative. */
 export function pkgVersion(): string {
@@ -67,4 +71,41 @@ export function jsonError(command: string, category: ErrCategory, message: strin
     results: [],
     error: { category, message, ...(hint ? { hint } : {}) },
   });
+}
+
+/** Shared json-output predicate so the parser and the top-level catch can never drift. An explicit
+ *  `--output-format text|json` flag (first occurrence wins, matching parseOutputFormat's
+ *  first-occurrence-authoritative semantics) takes precedence; absent any flag, fall back to the
+ *  documented COWORK_HARNESS_OUTPUT_FORMAT env var so an env-only JSON consumer still gets an envelope
+ *  from the top-level catch. */
+export function isJsonOutput(args: string[]): boolean {
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--output-format" && args[i + 1] === "json") return true;
+    if (args[i] === "--output-format=json") return true;
+    if (args[i] === "--output-format" && args[i + 1] === "text") return false;
+    if (args[i] === "--output-format=text") return false;
+  }
+  return process.env.COWORK_HARNESS_OUTPUT_FORMAT === "json";
+}
+
+/** The single error exit used by every command + the top-level catch, in both `cli.ts` and `doctor.ts`.
+ *  boundary → exit 3, every other category → exit 2, UNLESS `exitCode` overrides it — SPEC.md's exit-code
+ *  contract names two exceptions that exit `1` instead of the general `2`: `sync` hard-failures (missing
+ *  baseline version fields, a refused empty allowlist, unknown deltas) and a `status`/`verify-run` runtime
+ *  failure reading a prior run's output (SPEC.md:428-436). Every EXISTING call site omits `exitCode` and
+ *  keeps its current behavior exactly. */
+export function fail(
+  command: string,
+  category: ErrCategory,
+  message: string,
+  hint: string | undefined,
+  json: boolean,
+  exitCode?: 1 | 2 | 3,
+): never {
+  if (json) out(jsonError(command, category, message, hint));
+  else {
+    log(message);
+    if (hint) log(hint);
+  }
+  process.exit(exitCode ?? (category === "boundary" ? 3 : 2));
 }

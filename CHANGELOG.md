@@ -6,6 +6,99 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.21.0] — 2026-07-03
+
+### Added
+
+- **`verify-cassettes`'s privacy scanner gained a `path` class** for local absolute filesystem paths
+  (`/Users/`, `/home/`, `/root/`) — closing a real gap where a committed cassette's capability-manifest
+  (`system/init`, the `initialize` registry) could leak the recording machine's username, plugin-cache
+  paths, and installed-plugin/marketplace names with nothing to catch it (the existing `email`/`currency`/
+  `domain` classes don't match a path shape at all, and `currency`/`domain` are additionally excluded on
+  manifest lines by design). `path` runs on manifest lines too — unlike the noisy classes it isn't
+  excluded there, since a real local path is never legitimate catalog boilerplate. New `--allow-path
+  <regex>` flag, scoped like `--allow-domain`/`--allow-email`.
+- **A default `.cowork-redact.json` recording-redaction policy at the repo root** (two pattern rules:
+  local absolute paths — `/Users`, `/home`, `/root`, matching the scanner's `path` class roots so
+  redaction and detection stay aligned — and email addresses). `record` has always applied content
+  redaction uniformly to every event, including capability-manifest lines, but with no policy file
+  anywhere in the repo it ran as a structural no-op; cassettes recorded here now get those classes
+  redacted at the source, complementing the scanner's after-the-fact check. (Repo-local — the policy
+  file is not part of the npm package.)
+- **A committed synthetic multiSelect cassette** (`examples/replays/example-multiselect-gate.cassette.json`)
+  covering the multiSelect AskUserQuestion gate / `controlOut` answer path on the replay lane, wired into
+  CI. Its capability-manifest is a small synthetic catalog, not a live-recorded environment.
+
+### Fixed
+
+- **`hostloop` fidelity now spawns the agent loop as a native host process, matching production, closing a VM-absolute-path false-green.** Previously, `hostloop` ran the entire agent — including its native file tools — inside one Docker container, with connected folders copied in rather than bind-mounted. A skill that hardcoded a VM-absolute path (`/sessions/<id>/mnt/...`) in a `Read`/`Edit`/`Write` call would silently succeed under that design while genuinely failing in real Cowork, where the agent loop is a native macOS process and no such path exists on the host filesystem. `hostloop` now spawns the agent directly on the host (discovered via a second staged Desktop binary, `claude-code/<ver>/claude.app/Contents/MacOS/claude`); only `bash`/`web_fetch` still route into a Docker VM sidecar (which no longer runs an agent at all). Connected folders are bind-mounted — never copied — into both views, with a run-end snapshot preserving the existing artifact-collection pipeline unchanged.
+
+  With no container around the native file tools, a new byte-faithful port of production's own PreToolUse path-containment hook (`src/hostloop/pretooluse-path-hook.ts`) is the security boundary, backed by a runtime tripwire that hard-fails a run if a gated tool call ever completes with no evidence the hook fired. Because this gives the agent genuine, software-checked-only host filesystem access when a connected folder is writable, that combination now requires explicit consent: a new **`allow_host_writes: true`** scenario field (and `--allow-host-writes` for `chat`) — the harness refuses to spawn otherwise. `docs/boundary.md` documents the full safety posture; see also `docs/scenario.md` and `docs/session.md`.
+
+  `computeVerdict`'s `host_path_leak` default-fail is now skipped at `hostloop` fidelity (real host paths there are expected, not a leak); `transcript_no_host_path` is consequently incompatible with `hostloop` and the harness warns loud if a scenario asserts it there anyway. Live-verified end-to-end against the real staged native binary and Docker: the gate blocks a VM-path `Read` with the expected denial (and the model self-heals via `bash`), and allows/executes a real `Read`/`Write` against the actual host path, with the PreToolUse hook firing for both calls.
+
+- **`--compact`/`--demo` no longer leak a host path via the `[status]` line.** 0.20.0's run-start
+  `[status] <outDir>` line prints a raw, un-tildeified absolute path by machine-capture contract — but it
+  was emitted unconditionally, so under `--demo` (the "shareable, no host paths" preset) it exposed
+  `/Users/<name>/.cowork-harness/…`, the exact leak `--demo` exists to prevent. The line is now suppressed
+  under `--compact`/`--demo` (a human sharing a clip isn't scripting `status`; a machine/CI caller that
+  needs the path doesn't pass `--compact`, or reads `status.json` / `--session-id`). `status.json` is still
+  written either way, so `cowork-harness status` is unaffected.
+- **`--compact` now collapses the session-root in tool-result outcome lines too.** 0.20.0's new
+  `tool_result` `→`/`✗` outcome lines (under each top-level tool call) bypassed the `--compact`
+  `/sessions/<id>/mnt/ → mnt/` collapse that already applied to `-V` tool *inputs*, so shareable output
+  showed long in-container paths on the outcome lines only. The collapse is now a shared `collapseSessionRoot`
+  helper applied to both. Display-only; `run.jsonl` keeps the true paths.
+- **All CLI usage/runtime errors now honor `--output-format json`.** Dozens of error sites in
+  `cli.ts`/`doctor.ts` bypassed the shared JSON envelope and emitted plain stderr text even when JSON
+  output was requested. Every remaining `log()`+`process.exit()` site now routes through the shared
+  `fail()` helper (relocated to `src/run/envelope.ts`), preserving every existing exit code exactly.
+  The two sites that legitimately keep a custom wire shape (`decide`'s ABSTAIN/catch and `main()`'s
+  top-level catch) are explicitly marked, and a new CI guard bans any other bare `process.exit(1|2)`
+  in those two files so the fix can't silently regress.
+- **`doctor --tier hostloop` now validates the native macOS agent binary the tier actually spawns.**
+  It only checked the Linux/arm64 agent ELF (`resolveAgentBinary`), never the separate native host
+  binary (`resolveHostAgentBinary`) that `hostloop`'s agent loop runs directly on the host — so
+  `doctor` could report ready while the one binary that tier needs was missing. New `hostAgent`
+  check for the `hostloop`/`cowork` tiers, gated the same way as the existing agent check.
+- **The npm package now ships `AGENTS.md`, `SPEC.md`, `DESIGN.md`, `llms.txt`, `SECURITY.md`, and
+  `CONTRIBUTING.md`** — previously absent from the tarball's `files` allowlist, so links to them from
+  the packaged `README.md`/`llms.txt` dangled in an installed copy.
+
+### Parity
+
+- **Synced the platform baseline to Claude Desktop 1.17377.2** (`baselines/desktop-1.17377.2.json`).
+  The staged agent ELF is unchanged (`2.1.197`). `sync` re-derived egress/gates/mount/web_fetch facts —
+  no unknown deltas; only `asarFingerprint` moved (`290341ff → 0b2f2fb6`), and none of the 6 pinned
+  GrowthBook gates drifted. Re-verified: the live container-tier scenarios pass against the new
+  baseline.
+- **Added the missing `.claude/skills` row to the `1.17377.2` `mountLayout`.** VM-rootfs forensics
+  (the `sessions-<name>-mnt-.claude-skills.mount` systemd unit in `rootfs.img`, reproduced across two
+  independent investigations) show the real VM mounts skills as a dedicated read-only row; the original
+  mount-fidelity plan had folded skills into the plugin mounts and never added one.
+
+### Docs
+
+- **`docs/invariants.md`** — a consolidated index of the harness's cross-cutting invariants, one row
+  per invariant with its enforcement point and test anchor.
+- **Scenario-schema description pass.** Every top-level scenario field in `schema/scenario.schema.json`
+  now carries a description (for schema-driven editor tooling/autocomplete), including why the
+  replay-only `replay_protocol_fidelity` is listed despite being rejected at load time; the `answers`
+  and `baseline` descriptions were corrected (the tool-permission `when_tool` matcher was omitted;
+  `baseline`'s `profile:` alias is deprecated, not retired).
+- Doc-audit sweep (2026-07-03): stale `>=0.19.0` version floors bumped, wrong `BoundaryError` exit
+  code (2 → 3), stale CI job name, `--decider-model` / `--allow-path` help-text coverage, the
+  marketplace-install-bundles-same-files claim, and stale "not yet landed" notes.
+
+### Internal
+
+- CI's `parity-drift` job now fails if the newest committed baseline exceeds a 90-day staleness
+  ceiling, so the parity promise can't silently rot.
+- The multiselect decider smoke scenarios run in the live CI scenario suite.
+- `npm pack`'s `files` array explicitly negates local gitignored cruft (`docs/superpowers`,
+  `__pycache__`, `egg-info`) so the pre-tag `npm pack --dry-run` check is trustworthy regardless of
+  working-directory state (published tarballs were never affected).
+
 ## [0.20.0] — 2026-07-01
 
 ### Added
@@ -1264,7 +1357,7 @@ structural test + CI guard), a centralized staging-source resolver, cassette rep
 - **Aligned stale references:** npx floor `>=0.2.0` → `>=0.3.0`; skill reference headers `0.1.0` → `0.3.0`;
   stale `cassette.ts` line-cites → the `contentKeys` symbol; and the broken `DESIGN.md §1` anchor.
 - **Doc accuracy:** all five fidelity values (vs "L0/L1/L2"), `max_thinking_tokens` over "extended thinking",
-  the `config_dir` write-guard caveat, the `boundary-check` (exit 1) vs `BoundaryError` (exit 2) exit-code
+  the `config_dir` write-guard caveat, the `boundary-check` (exit 1) vs `BoundaryError` (exit 3) exit-code
   distinction, and the `npm run ci` vs CI-Stage-1 gate framing.
 
 ## [0.3.0] — 2026-06-17

@@ -14,6 +14,7 @@ const OK_PROBE: DoctorProbe = {
   proxyImageName: () => "cowork-egress-proxy:1",
   proxyImagePresent: () => true,
   agentBinary: () => ({ ok: true, path: "/x/claude-code-vm/2.1.177/claude" }),
+  hostAgentBinary: () => ({ ok: true, path: "/x/claude-code/2.1.177/claude.app/Contents/MacOS/claude" }),
   hasToken: () => true,
   hasKeychainToken: () => false,
   worktreeEnv: () => null,
@@ -190,5 +191,29 @@ describe("doctor — runDoctorChecks", () => {
     // remedy now carries a GENERIC `--dotenv <path>` hint of its own, so assert the absence of the worktree
     // path specifically, not of `--dotenv` wholesale.)
     expect(tok.remedy).not.toMatch(/\/main\/\.env/);
+  });
+});
+
+describe("doctor --tier hostloop — native agent binary", () => {
+  it("fails when the native macOS binary is missing, even if the VM ELF resolves", () => {
+    const cs = runDoctorChecks("hostloop", probe({ hostAgentBinary: () => ({ ok: false, error: "COWORK_HOST_AGENT_BINARY not found" }) }));
+    expect(get(cs, "hostAgent").status).toBe("fail");
+    expect(get(cs, "hostAgent").required).toBe(true);
+    expect(blocking(cs)).toContain("hostAgent");
+  });
+
+  it("passes when the native binary resolves", () => {
+    const cs = runDoctorChecks("hostloop", OK_PROBE);
+    expect(get(cs, "hostAgent").status).toBe("ok");
+  });
+
+  it("also checks the native binary for the cowork tier", () => {
+    const cs = runDoctorChecks("cowork", probe({ hostAgentBinary: () => ({ ok: false, error: "not found" }) }));
+    expect(get(cs, "hostAgent").status).toBe("fail");
+  });
+
+  it("is absent (not just skipped) for container tier — the check doesn't apply there", () => {
+    const cs = runDoctorChecks("container", OK_PROBE);
+    expect(cs.find((c) => c.id === "hostAgent")).toBeUndefined();
   });
 });

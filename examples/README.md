@@ -18,7 +18,10 @@ examples/
   skills/      the example skills under test (each a Claude Code plugin folder)
   data/        sample inputs the scenarios consume (CSVs, a PDF, an mcp.json)
   replays/     committed synthetic cassettes for token-free, Docker-free `replay`
+  answer-policies/  reusable scripted-answer YAML fragments, referenced via `answers: !include` — see docs/scenario.md
 ```
+
+`replays/` has its own [README](./replays/README.md) explaining what each committed cassette covers.
 
 Paths inside a scenario/session resolve **relative to that file** (see
 [../docs/session.md](../docs/session.md#path-expansion)), so this whole `examples/` tree is
@@ -28,7 +31,7 @@ self-contained and relocatable.
 
 | Scenario | Fidelity | What it demonstrates |
 |---|---|---|
-| `scenarios/protocol-smoke.yaml` | `protocol` | the **zero-infra smoke test** — no Docker, no staged agent, just the host control loop. Asserts only control-loop + skill-logic facts (a scripted answer reaches the model, a file is written). L0 does **not** seal the filesystem, so a host-path leak is expected — the YAML's comment explains why `transcript_no_host_path` is **omitted** here (only `true` is a valid value; sandboxed tiers add `- transcript_no_host_path: true`) |
+| `scenarios/protocol-smoke.yaml` | `protocol` | the **smoke test with no Docker, no staged agent (still needs a token)** — just the host control loop. Asserts only control-loop + skill-logic facts (a scripted answer reaches the model, a file is written). L0 does **not** seal the filesystem, so a host-path leak is expected — the YAML's comment explains why `transcript_no_host_path` is **omitted** here (only `true` is a valid value; sandboxed tiers add `- transcript_no_host_path: true`) |
 | `scenarios/example-pdf-skill.yaml` | `container` | the minimal sandboxed shape — prompt + scripted answers + assertions (placeholder skill; harness plumbing only) |
 | `scenarios/csv-metrics.yaml` | `container` | a non-trivial skill running a **bundled producer** end-to-end → structured `outputs/metrics.json` + a `summary.md` (paired with `../python/test_csv_metrics_lane.py` for a JSON-content predicate) |
 | `scenarios/csv-fx-normalize.yaml` | `container` | **graceful degradation** under default-deny egress — the skill's real network step is blocked, so `egress_denied` is backed by genuine behavior and the skill falls back instead of crashing. Its `egress_denied` assertion needs a sandboxed tier (`container`+) and is pre-rejected at `protocol` fidelity (no sandbox to enforce it would be a false pass) |
@@ -36,21 +39,8 @@ self-contained and relocatable.
 
 ## Run them
 
-```bash
-cowork-harness run examples/scenarios/csv-metrics.yaml   # one
-cowork-harness run examples/scenarios/                    # all (CI-ready exit code)
-```
-
-> From a source checkout, `node dist/cli.js run …` works too (skip the `npm link`).
-
-### Prerequisites
-
-The `container` scenarios above are **live `run`s**: they spawn the staged Cowork agent in a
-sandboxed arm64 container, so they need Docker (arm64) + the agent image, a Claude Desktop agent
-ELF staged once, and an auth token. The full setup (and the resolution order for each) is in the
-README's [Prerequisites](../README.md#prerequisites-for-anything-above-protocol-fidelity) — it isn't duplicated here.
-
-**Two paths that need none of that:**
+**Two paths need neither Docker nor a staged agent** — the live `container` examples below need
+both, plus an auth token:
 
 - **Token-free, Docker-free replay.** A committed synthetic cassette replays on a fresh clone:
 
@@ -58,7 +48,7 @@ README's [Prerequisites](../README.md#prerequisites-for-anything-above-protocol-
   cowork-harness replay examples/replays/example-pdf-skill.cassette.json
   ```
 
-- **The `protocol` tier — zero infra.** The `protocol` (L0) fidelity tier runs the host control loop
+- **The `protocol` tier — no Docker, no staged agent (still needs a token).** The `protocol` (L0) fidelity tier runs the host control loop
   directly: no Docker, no staged agent. `scenarios/protocol-smoke.yaml` is authored at this tier.
   To run a different scenario at L0, set `fidelity: protocol` in its YAML (fidelity is a scenario
   field, not a CLI flag on `run`):
@@ -71,3 +61,17 @@ README's [Prerequisites](../README.md#prerequisites-for-anything-above-protocol-
   sandbox** — egress/`expect_denied` assertions are pre-rejected here, and a host path naturally
   leaks into tool output (the FS isn't sealed). Use it for fast logic iteration; graduate to
   `container` for boundary fidelity.
+
+### Running the live examples
+
+```bash
+cowork-harness run examples/scenarios/csv-metrics.yaml   # one
+cowork-harness run examples/scenarios/                    # all (CI-ready exit code)
+```
+
+> From a source checkout, `node dist/cli.js run …` works too (skip the `npm link`).
+
+The `container` scenarios above are **live `run`s**: they spawn the staged Cowork agent in a
+sandboxed arm64 container, so they need Docker (arm64) + the agent image, a Claude Desktop agent
+ELF staged once, and an auth token. The full setup (and the resolution order for each) is in the
+README's [Prerequisites](../README.md#prerequisites-for-anything-above-protocol-fidelity) — it isn't duplicated here.

@@ -3,8 +3,8 @@ name: cowork-harness
 description: Test or debug a Claude Code skill/plugin under Claude Cowork's runtime — sandboxed agent, default-deny egress, the can_use_tool permission/question protocol — using the cowork-harness CLI. Use when validating or regression-testing a skill, authoring or debugging a scenario YAML (prompt + scripted answers + assert:), choosing a fidelity tier, scripting AskUserQuestion / tool-permission answers, or asserting artifacts, egress, or sub-agent dispatch. Especially when a harness run no-ops an assertion, fails on an unanswered gate, false-greens, a steered answer never reaches the model, or a web_fetch is unexpectedly denied or gated. NOT for generic unit testing (pytest/vitest of your own scripts) or non-Cowork CI. Covers the skill / run / chat / record / replay / trace / decide / assertions / scaffold commands and the session-vs-scenario split.
 metadata:
   author: cowork-harness
-  version: 0.20.0
-  tracks-harness: cowork-harness 0.20.0 (baseline desktop-1.17377.1)
+  version: 0.21.0
+  tracks-harness: cowork-harness 0.21.0 (baseline desktop-1.17377.2)
 ---
 
 # cowork-harness
@@ -17,12 +17,13 @@ path, place assertions in the right CI lane, and avoid the harness's "✓ passed
 traps.
 
 The single most important idea: **a green run is not automatically a correct run.** The harness has
-several ways to *silently* no-op a check (skip an assertion on replay, auto-answer a gate, observe
-an empty egress allowlist). This skill exists mostly to keep you out of those traps — the Gotchas
-section below is the highest-value part. Read it.
+several ways to no-op a check while still producing a green run (skip an assertion on replay — now
+flagged with a loud `::warning::`, not silent — auto-answer a gate, observe an empty egress
+allowlist). This skill exists mostly to keep you out of those traps — the Gotchas section below is
+the highest-value part. Read it.
 
-> **Version note:** the facts and `file:line` pointers here track `cowork-harness 0.20.0` (baseline
-> `desktop-1.17377.1`). If your checkout is newer, prefer the live `--help`, `SPEC.md`, and
+> **Version note:** the facts and `file:line` pointers here track `cowork-harness 0.21.0` (baseline
+> `desktop-1.17377.2`). If your checkout is newer, prefer the live `--help`, `SPEC.md`, and
 > `docs/*.md` over this snapshot, and re-run the bundled linter.
 
 ## 0. Preflight — make sure the harness can actually run
@@ -37,7 +38,7 @@ cowork-harness skill ./my-skill "do X"      # run the skill once against the sta
 Before the first command, confirm the CLI is reachable and **fail loud** (never fake a pass) when a tier's dependencies are missing:
 
 - **One-shot check.** Run `cowork-harness doctor [--tier <tier>]` first — a read-only prerequisite check that inspects Docker, the staged agent, the token, and the baseline in one pass. The bullets below explain each thing it checks (and how to fix it).
-- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 0.20.0**. If it's missing or older, prefix every command with the version floor `npx cowork-harness@>=0.20.0 <cmd>` (Node ≥ 20), or install once with `npm i -g cowork-harness@>=0.20.0`. **Pin `@>=0.20.0`, never `@latest`** — `@latest` can silently fetch an older CLI and the new commands fail as "unknown command", whereas the floor **fails loud** if no compatible version is published. (≥ 0.20.0 is what gates the commands/assertions this skill teaches: `assertions --list`, `scaffold <run-id>`, `trace --view dispatches`, `artifact_json` incl. the `in:` operator, `verify-cassettes`, batch `record <dir>`/`--rerecord-stale`, `record --concurrency <N>`, record-time redaction, multiSelect/`answer:`, `verify-run` answer-coverage, `record --max-artifact-bytes`, live record-time deciders, `verify-cassettes --allow-domain`/`--allow-email`/`--allow-file`, scenario `skills:` staleness scoping with `COWORK_HARNESS_AGENT_SCOPE=skill`, `chat --plugin`, and `/help` in the REPL.)
+- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 0.21.0**. If it's missing or older, prefix every command with the version floor `npx cowork-harness@>=0.21.0 <cmd>` (Node ≥ 20), or install once with `npm i -g cowork-harness@>=0.21.0`. **Pin `@>=0.21.0`, never `@latest`** — `@latest` can silently fetch an older CLI and the new commands fail as "unknown command", whereas the floor **fails loud** if no compatible version is published. (≥ 0.21.0 is what gates the commands/assertions this skill teaches: `assertions --list`, `scaffold <run-id>`, `trace --view dispatches`, `artifact_json` incl. the `in:` operator, `verify-cassettes`, batch `record <dir>`/`--rerecord-stale`, `record --concurrency <N>`, record-time redaction, multiSelect/`answer:`, `verify-run` answer-coverage, `record --max-artifact-bytes`, live record-time deciders, `verify-cassettes --allow-domain`/`--allow-email`/`--allow-path`/`--allow-file` (`path` — local absolute filesystem paths — is the scanner's 4th class, new in 0.21.0), scenario `skills:` staleness scoping with `COWORK_HARNESS_AGENT_SCOPE=skill`, `chat --plugin`, `/help` in the REPL, and `hostloop`'s native host/VM process split with its `allow_host_writes:` consent field.)
 - **Agent binary (sandboxed live tiers — `container`/`microvm`/`hostloop`/`cowork`).** The staged Claude Code agent is **bind-mounted** from a local Claude Desktop install, or point `COWORK_AGENT_BINARY` at a `claude-code-vm/<ver>/claude` ELF. Nothing is bundled. `protocol` (L0) and `replay` need no staged agent; for the sandboxed tiers, no agent → no run; report that, don't skip silently.
 - **Docker / Lima.** Only `--fidelity protocol` (L0) runs without them. `container` / `microvm` / `hostloop` / `cowork` need Docker (Lima for L2). If they're absent, drop to `--fidelity protocol` and **say so** — a green that never exercised the sandbox is not a sandbox pass.
 - **Auth.** `CLAUDE_CODE_OAUTH_TOKEN` (preferred) or `ANTHROPIC_API_KEY`, via env or `.env`. Minting an OAuth token needs the **`claude` CLI** (`npm i -g @anthropic-ai/claude-code`, then `claude setup-token`).
@@ -90,7 +91,7 @@ the folder basename (collision-resolved); there is no `to:` override. See `refer
 | `protocol` | Fastest; no sandbox, no egress | Pure protocol/answer-shape tests. **Rejected** if the scenario asserts egress. |
 | `container` | Real sandbox + real default-deny egress (**default**) | Most functional + boundary tests. |
 | `microvm` | VM-grade escape **isolation** (macOS arm64). Egress transport is the *same allowlist proxy as `container`* — not better network fidelity | Testing untrusted code escape, not network behavior. |
-| `hostloop` / `cowork` | Production split-exec: the agent still runs in the container, but native Bash/WebFetch are disabled and routed host-side via the workspace SDK-MCP server (only `protocol` runs the agent on the host) | Highest-fidelity / parity runs. |
+| `hostloop` / `cowork` | Production split-exec: the agent loop is a **native process on the host** (no container around the file tools — matching production), with native Bash/WebFetch disabled and routed host-side via the workspace SDK-MCP server into a Docker VM sidecar | Highest-fidelity / parity runs. A writable connected folder needs `allow_host_writes: true` (see scenario-schema.md). |
 
 Set the tier in the **scenario's `fidelity:` field**, not a flag — `run` rejects `--fidelity`
 (it's a `skill`-only flag). See `references/fidelity-and-answers.md`.
@@ -164,8 +165,9 @@ Conflating these is the **biggest landmine**. An assertion key has two independe
   `::warning::` annotation, not a silent no-op. A key
   being "robust" says nothing about whether it runs on your replay gate.
 
-Getting Axis B wrong means a check that **silently does nothing in CI**. The harness now warns
-loudly when it skips, and the bundled linter catches it before you push — run it (§9).
+Getting Axis B wrong means a check that **does nothing in CI** — the harness warns loudly when it skips
+(an `::warning::` annotation, not a silent no-op — see the Axis B bullet above), and the bundled linter
+catches it before you push — run it (§9).
 
 See `references/scenario-schema.md` for the full assertion catalog with each key's replay class.
 

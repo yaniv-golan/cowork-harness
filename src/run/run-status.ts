@@ -63,6 +63,19 @@ export function writeRunningStatus(outDir: string, meta: RunStatusMeta): void {
   writeStatus(outDir, buildStatus(meta, "running", { toolCounts: {}, subagentCount: 0 }));
 }
 
+/** The run-start `[status] <outDir>` stderr line, or `null` when it must be withheld.
+ *
+ *  The path is RAW/un-tildeified by contract: a driving agent/script parses this line and feeds it
+ *  straight back into `cowork-harness status <path>`, so it must round-trip exactly (`~` is a display
+ *  nicety Node won't expand). But an un-tildeified absolute path is a host-path leak — exactly what
+ *  `--compact`/`--demo` (the shareable / "no host paths" mode) exists to prevent. So it is suppressed
+ *  under `compact`: a human sharing a clip isn't scripting `status`, and a machine/CI caller that needs
+ *  the path simply doesn't pass `--compact` (or reads `status.json` / `--session-id`). Suppressing the
+ *  LINE only — `status.json` is still written either way, so `cowork-harness status` still works. */
+export function statusLine(outDir: string, compact: boolean): string | null {
+  return compact ? null : `[status] ${outDir}\n`;
+}
+
 /** Start a ticker that periodically overwrites status.json with live counts pulled from `record()`
  *  (bind this to `run.partial`). Mirrors `startHeartbeat`'s shape (`src/run/renderer.ts:187-203`):
  *  unref'd `setInterval`, env-tunable via `COWORK_HARNESS_STATUS_INTERVAL_MS`, returns a stop function. */

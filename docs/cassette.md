@@ -11,6 +11,12 @@ cowork-harness record scenarios/my-test.yaml          # live: writes my-test.cas
 cowork-harness replay  scenarios/my-test.cassette.json # token-free re-evaluation of content assertions
 ```
 
+> Without `--out`, this writes to `cassettes/<scenario-name>.cassette.json` — gitignored by default. See
+> [Recording prerequisites](#recording-prerequisites) below for how to commit a cassette instead.
+
+Recording follows whatever `fidelity:` the scenario declares — a `protocol`-fidelity scenario records with
+**no Docker at all** (still needs a token; see [`examples/scenarios/protocol-smoke.yaml`](../examples/scenarios/protocol-smoke.yaml)). The walkthrough below assumes `container` fidelity, the common case.
+
 ## Mental model
 
 ```
@@ -30,7 +36,7 @@ block **frozen in the cassette** (deterministic, independent of the working tree
 `scenarios/<name>.yaml` does not change it; replay only prints a `::notice::` when a sibling's `assert:`
 differs. To iterate on assertions token-free, opt in with `replay --assert-from <scenario.yaml>` (or
 `--reassert`): it re-checks against the on-disk `assert:`, but **hard-fails** if any recording-shaping field
-(`prompt`/`answers`/`baseline`/`skills`) or the skill content drifted from the recording (then you must
+(`prompt`/`answers`/`baseline`/`fidelity`/`skills`/`requires_capabilities`) or the skill content drifted from the recording (then you must
 re-record). `expect_denied`/filesystem/egress keys are sourced but stay live-only. See
 [docs/scenario.md](./scenario.md#where-replay-reads-assert-from--frozen-by-default-on-disk-by-opt-in).
 
@@ -192,7 +198,9 @@ whole-field decode pass triggered; or a scrubbed string from the direct pass.
 ## Assertion table
 
 This table mirrors `src/run/cassette.ts` `contentKeys`, which is **the single source of truth**.
-Content keys are evaluated on replay; everything else is skipped.
+Content keys are evaluated on replay; everything else is skipped. This is the per-key reference; for
+the rules and CI-placement rationale (why each category behaves this way), see
+[docs/scenario.md → Which assertions survive replay](./scenario.md#which-assertions-survive-replay-ci-placement).
 
 ### Evaluated on replay (contentKeys)
 
@@ -428,21 +436,24 @@ counts) — committed PII surface. Two layers, distinct from secret-scrub (which
   `--no-redact` skips it for known-synthetic inputs.
 - **Always-on scan gate** — `verify-cassettes <file|dir>` scans the committed cassettes and **exits
   non-zero** on a finding, so "no leak" is a gate, not discipline. The full net (`email` + `currency` +
-  bare-`domain`) runs over the **whole cassette** — the deliverable (`outputs/` bodies + filenames), the
+  bare-`domain` + `path`) runs over the **whole cassette** — the deliverable (`outputs/` bodies + filenames), the
   author-written `prompt`/`answers`/`assert`, AND the agent's reasoning + tool I/O — with **one structural
   exception**: the agent's **capability-manifest** messages (the `system/init` event and the `initialize`
-  registry `control_response`, `request_id:"init-1"`) are excluded from the noisy classes. Those two carry
+  registry `control_response`, `request_id:"init-1"`) get `email` + `path` only, not the full net. Those two carry
   the tool/skill catalog (slash-command descriptions naming `docsend.com`, `Pitch.com`, …) and the MCP-server
   names (`claude.ai Gmail`, …) — environment boilerplate a regex can't tell apart from customer data, and the
-  sole concentrated source of false positives. They are excluded **as a unit**, not by domain — but `email`
-  still scans them (the registry's `account` field can carry the developer's own email). `--allow <regex>`
-  suppresses synthetic / public reference names (e.g. `NVCA`, `Cooley GO`, `Acme`); each allow must match the
-  **whole** finding token (so a bare-domain allow no longer silently clears an email whose domain it matches), and
-  `--allow-domain` / `--allow-email` scope an allow to a single finding class, while `--allow-file <path>` loads
-  allows from a version-controlled file (one regex per line, `#` comments). Multi-word proper names are **not** a
-  default class (too noisy). `verify-cassettes` also runs the **staleness** check (both checks run by
-  default; scope to one with `--skip-privacy` or `--skip-staleness`): a drifted `skillHash` (you edited
-  the skill but didn't re-record) fails the gate.
+  sole concentrated source of false positives — so `currency`/`domain` are excluded **as a unit**, not by domain.
+  `email` and `path` still scan them: the registry's `account` field can carry the developer's own email, and
+  those same messages' own structural fields (`cwd`, `plugins[].path`, `memory_paths`) are exactly where a real
+  local filesystem path — leaking a username, plugin-cache layout, or private marketplace name — lives; neither
+  a real address nor a real absolute path is ever legitimate catalog boilerplate the way a skill description is.
+  `--allow <regex>` suppresses synthetic / public reference names (e.g. `NVCA`, `Cooley GO`, `Acme`); each allow
+  must match the **whole** finding token (so a bare-domain allow no longer silently clears an email whose domain
+  it matches), and `--allow-domain` / `--allow-email` / `--allow-path` scope an allow to a single finding class,
+  while `--allow-file <path>` loads allows from a version-controlled file (one regex per line, `#` comments).
+  Multi-word proper names are **not** a default class (too noisy). `verify-cassettes` also runs the **staleness**
+  check (both checks run by default; scope to one with `--skip-privacy` or `--skip-staleness`): a drifted
+  `skillHash` (you edited the skill but didn't re-record) fails the gate.
   The `skillHash` hard-excludes only what is UNIVERSALLY non-runtime — recorded cassettes (`*.cassette.json`,
   by extension, so writing a cassette under the hashed tree doesn't self-invalidate the fingerprint it just
   recorded), VCS/cache dirs (`.git`, `node_modules`, `__pycache__`, …), and the `version` field of a
@@ -474,6 +485,16 @@ cowork-harness verify-cassettes cassettes/ --allow 'NVCA|Cooley GO|Acme'
 
 The cardinal rule still holds: record against **synthetic** inputs (e.g. "Cadence / Acme", made-up
 numbers) — redaction and the scan are belt-and-suspenders, not a license to record real customer data.
+
+**If a scan finding surfaces on a cassette headed for `examples/replays/`** (the "safe to publish"
+tier), the correct response is to **re-record against a clean/synthetic environment or hand-review the
+whole cassette** — not to `--allow` the finding and commit. An allow only suppresses the one class the
+scanner happened to check; it says nothing about classes the scanner doesn't cover (a plugin catalog, an
+MCP-server list, a marketplace name) that may be sitting right next to it in the same real recording. A
+finding is a prompt to ask "why is real data in a fixture that's supposed to be synthetic at all?", not a
+checkbox to clear. This repo's own `.cowork-redact.json` (repo root) redacts local absolute paths and
+email addresses at record time by default — extend its `patterns`/`keys` rather than reaching for
+`--allow` first when a new class of real data shows up in a recording.
 
 ## Committed fixture
 

@@ -51,6 +51,19 @@ jobs:
             echo "::error::resolveAgentBinary must be defined only in src/baseline.ts (import it; don't re-duplicate)."
             exit 1
           fi
+      - name: CLI error-envelope guard (usage/runtime errors must use fail(), not a bare process.exit)
+        # A bare `process.exit(1|2)` in src/cli.ts / src/run/doctor.ts outside fail()'s own definition means
+        # a new command bypassed the shared JSON envelope (the 2026-07 agent-friendliness audit finding).
+        # New catch blocks must call fail(command, category, message, hint, json[, exitCode]) instead.
+        # Sites that legitimately keep a raw process.exit (a custom, non-jsonError wire shape) must carry
+        # the `cli-error-envelope-exempt` marker comment on the same line — the guard excludes those.
+        # (fail() itself lives in src/run/envelope.ts, outside this grep's scope, so no self-match to exclude.)
+        run: |
+          if grep -n "process\.exit([12])" src/cli.ts src/run/doctor.ts \
+             | grep -v "cli-error-envelope-exempt"; then
+            echo "::error::Found a bare process.exit(1|2) outside fail() with no cli-error-envelope-exempt marker — route it through fail(...) instead, or add the marker if it's a deliberate custom-shape exception."
+            exit 1
+          fi
       - name: Typecheck
         run: npm run typecheck
       - name: Unit tests (schema, answerer, egress, launch plan, example validation)
@@ -61,8 +74,22 @@ jobs:
         run: node dist/cli.js list
       - name: Token-free replay gate (example-pdf-skill fixture)
         run: node dist/cli.js replay examples/replays/example-pdf-skill.cassette.json --output-format json
+      - name: Token-free replay gate (multiselect gate/controlOut fixture)
+        run: node dist/cli.js replay examples/replays/example-multiselect-gate.cassette.json --output-format json
       - name: Cassette privacy + staleness scan (committed fixtures)
-        run: node dist/cli.js verify-cassettes examples/replays/
+        # --allow-email covers the one expected email finding: the init-1 capability-manifest
+        # `account.email` field the harness bakes into every REAL recording (docs/cassette.md's
+        # "Privacy: cassettes are committed fixtures" section calls this out by name). This cassette
+        # was scrubbed post-hoc (the real recording account's email, MCP-server list, plugin cache
+        # paths, and private marketplace name were replaced with synthetic placeholders — see git
+        # history for examples/replays/example-multiselect-gate.cassette.json) — the placeholder
+        # `synthetic-user@example.com` in that same field is what's allow-listed here now. A NEW
+        # email finding elsewhere still fails the gate. The scanner's `path` class (added in
+        # docs/internal/2026-07-03-cassette-path-scan-class-plan.md) also runs on this cassette's
+        # capability-manifest and passes clean with NO --allow-path needed — its synthetic paths use
+        # a /tmp/ prefix specifically so they don't collide with that class, rather than being
+        # allow-listed (see that plan's Design Decision 3).
+        run: node dist/cli.js verify-cassettes examples/replays/ --allow-email 'synthetic-user@example\.com'
       - name: Lint example scenarios (no-silent-false-green invariants)
         run: node dist/cli.js lint examples/scenarios/*.yaml
 
@@ -104,7 +131,7 @@ jobs:
 
   # ── Stage 3: live scenario suite (needs ANTHROPIC_API_KEY; skipped on forks) ────
   scenarios:
-    name: scenario suite (L1, live inference)
+    name: scenario suite (mixed protocol/container, live inference)
     runs-on: ubuntu-24.04-arm
     needs: boundary
     permissions:
@@ -145,7 +172,7 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
-          for s in smoke-askuserquestion smoke-l1-container smoke-l1-egress canary-hostloop; do
+          for s in smoke-askuserquestion smoke-multiselect smoke-multiselect-deciderdir smoke-l1-container smoke-l1-egress canary-hostloop; do
             node dist/cli.js run "e2e/scenarios/$s.yaml" || exit 1
           done
       - name: Verify run artifacts were produced (guards against a silent empty upload)
@@ -163,19 +190,42 @@ jobs:
           path: runs/
           retention-days: 14
 
-  # ── Stage 4: parity drift watch (informational; never fails the build) ─────────
+  # ── Stage 4: parity drift watch — can't diff live Desktop on CI (macOS-only app), so this
+  # instead FAILS if the newest committed baseline is stale by wall-clock age, forcing a human
+  # to re-run `sync` periodically rather than letting the baseline silently rot indefinitely. ──
   parity-drift:
     name: parity drift vs upstream Desktop
     runs-on: ubuntu-latest
     needs: unit
-    continue-on-error: true
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Baseline staleness gate (90-day ceiling on the newest committed baseline)
+        run: |
+          node -e '
+            const fs = require("fs");
+            const path = require("path");
+            const dir = "baselines";
+            const files = fs.readdirSync(dir).filter((f) => /^desktop-.*\.json$/.test(f));
+            if (files.length === 0) { console.error("::error::no baselines/desktop-*.json found"); process.exit(1); }
+            let newest = null;
+            for (const f of files) {
+              const b = JSON.parse(fs.readFileSync(path.join(dir, f), "utf8"));
+              const t = Date.parse(b.capturedAt);
+              if (!newest || t > newest.t) newest = { t, f, capturedAt: b.capturedAt };
+            }
+            const ageDays = (Date.now() - newest.t) / 86400000;
+            console.log(`newest baseline: ${newest.f} (capturedAt ${newest.capturedAt}, ${ageDays.toFixed(1)} days ago)`);
+            if (ageDays > 90) {
+              console.error(`::error::newest baseline is ${ageDays.toFixed(0)} days old (>90) — run \`cowork-harness sync --diff\` on macOS against the current Claude Desktop and commit the refreshed baseline.`);
+              process.exit(1);
+            }
+          '
       - name: Note
         run: |
           echo "Platform baselines are synced from a developer's installed Claude Desktop via"
           echo "\`cowork-harness sync --diff\` (needs the macOS app — Cowork Desktop is macOS-only; not available on CI runners)."
-          echo "This job is a placeholder reminder; run sync locally when Desktop updates."
-          echo "See docs/maintenance via README → Maintenance."
+          echo "The staleness gate above catches an ABANDONED baseline; it cannot catch a baseline that is"
+          echo "merely stale relative to a Desktop release from yesterday — a human still has to run sync"
+          echo "after every Desktop update. See docs/maintenance via README → Maintenance."

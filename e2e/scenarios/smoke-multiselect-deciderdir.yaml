@@ -1,9 +1,12 @@
-# L0 smoke (manual / --decider-dir): the in-band channel answers a multiSelect gate via repeated
-# --choose. Run with `--decider-dir <dir>` and reply `answer <dir> --gate 1 --choose Auth --choose Audit`.
-# No scripted answers — the gate intentionally falls through to the in-band decider.
+# L0 smoke: no scripted answers — the multiSelect gate intentionally falls through to on_unanswered.
+# In CI (no --decider-dir passed) that means the LLM decider answers it. For manual/decider-dir
+# fidelity testing, run with `--decider-dir <dir>` instead: it always takes precedence over
+# on_unanswered when supplied (see docs/decider-dir.md), so the in-band file channel still gets
+# exercised end-to-end — reply `answer <dir> --gate 1 --choose Auth --choose Audit`.
 baseline: latest
 session: ../sessions/minimal.yaml
 fidelity: protocol
+on_unanswered: llm
 prompt: |
   Call the AskUserQuestion tool exactly once with a SINGLE multi-select question
   (allow selecting more than one option) asking which features to enable, with these

@@ -23,6 +23,13 @@ export const PlatformBaseline = z.looseObject({
     // npmPackage/preferReuseStaged removed: there is NO npm path — the Linux/arm64 ELF is
     // bind-mounted from the staged Desktop install (or COWORK_AGENT_BINARY). Tolerated-but-ignored
     // if present in an old baseline (z.object strips unknown keys).
+    // Desktop ALSO stages a native macOS Mach-O binary (claude-code/<ver>/claude.app/Contents/MacOS/claude)
+    // alongside the Linux/arm64 ELF above — hostloop's agent loop runs on the host directly from this
+    // binary (no container), while only bash/web_fetch route into a VM. The ELF stays the source of
+    // truth for container/microvm and for hostloop's bash/web_fetch VM sidecar image. Optional: a
+    // baseline synced before this field existed has no native binary staged, so hostloop falls back to
+    // resolveHostAgentBinary's loud failure (never a silent tier downgrade).
+    nativeStagedPath: z.string().optional(),
   }),
   guest: z.looseObject({ os: z.string(), arch: z.string(), baseImage: z.string().optional() }),
   spawn: z
@@ -230,7 +237,7 @@ export const Assertion = z.object({
     .boolean()
     .optional()
     .describe(
-      "(replay-only, NOT authorable) serializeDecision output matched the frozen recording — the token-free re-serialization guard; synthesized by the replay lane and rejected if written in a scenario",
+      "(replay-only, NOT authorable) serializeDecision output matched the frozen recording — the token-free re-serialization guard; synthesized by the replay lane and rejected if written in a scenario — listed here only so schema-driven editors can display it in read-only contexts; authoring it in a scenario is a load-time error, see src/run/execute.ts",
     ),
   // assert over the CONTENTS of a JSON artifact via a dotted path. `absent` and `is_null` are DISTINCT
   // (key-missing vs present-null); an unresolved INTERMEDIATE segment fails loud (malformed artifact),
@@ -273,31 +280,82 @@ export const VERDICT_MODIFIER_KEYS = [
 export const ScenarioObject = z.strictObject({
   // Optional: defaults to the scenario's filename (sans extension) via parseScenarioFile —
   // the file IS the identity. An explicit `name:` is an override (keys the run dir + cassette).
-  name: z.string().default(""),
-  baseline: z.string().default("latest"), // platform baseline (auto-synced; `profile:` is a deprecated alias)
-  session: z.string().default("(inline)"), // session setup (hand-authored); default = an all-defaults inline session
+  name: z
+    .string()
+    .default("")
+    .describe(
+      "scenario identity; defaults to the filename (sans extension) if omitted — an explicit value overrides that and keys the run dir + cassette",
+    ),
+  baseline: z
+    .string()
+    .default("latest")
+    .describe("platform baseline to run against (auto-synced via `cowork-harness sync`); `profile:` is a deprecated alias for this field"),
+  session: z
+    .string()
+    .default("(inline)")
+    .describe("hand-authored session setup file (pre-prompt: model, mounts, discovery); defaults to an all-defaults inline session"),
   // cowork = auto-pick host-loop vs container via Cowork's own decision logic (the gate);
   // hostloop = force host-loop; container/microvm = force VM-loop; protocol = L0.
-  fidelity: z.enum(["protocol", "container", "microvm", "hostloop", "cowork"]).default("container"),
-  prompt: z.string(),
-  answers: z.array(AnswerRule).default([]),
+  fidelity: z
+    .enum(["protocol", "container", "microvm", "hostloop", "cowork"])
+    .default("container")
+    .describe(
+      "isolation tier: protocol (L0, no sandbox) | container/microvm (force a VM-loop tier) | hostloop (force host-loop) | cowork (auto-pick host-loop vs. container via Cowork's own gate logic)",
+    ),
+  prompt: z.string().describe("the user turn sent to the agent"),
+  answers: z
+    .array(AnswerRule)
+    .default([])
+    .describe(
+      "scripted answers, matched in order: AskUserQuestion gates by question-text regex, tool-permission gates by tool name (`when_tool`)",
+    ),
   // input policy when an AskUserQuestion/dialog/elicit arrives unscripted (input-and-interactivity plan).
   // `run` default is `fail` (deterministic); `prompt` is rejected for `run` (would break determinism).
-  on_unanswered: z.enum(["fail", "prompt", "llm", "first"]).optional(),
-  expect_denied: z.array(z.string()).default([]), // shorthand: egress hosts asserted to be DENIED (one egress_denied assertion per host)
-  assert: z.array(Assertion).default([]),
+  on_unanswered: z
+    .enum(["fail", "prompt", "llm", "first"])
+    .optional()
+    .describe(
+      "policy when a gate arrives with no matching `answers:` rule — `fail` (default for `run`, deterministic) | `first` (pick the first offered option) | `llm` (delegate to a decider LLM) | `prompt` (rejected under `run`; only valid for `chat`)",
+    ),
+  expect_denied: z
+    .array(z.string())
+    .default([])
+    .describe("shorthand for asserting egress to these hosts was DENIED — expands to one egress_denied assertion per host"),
+  assert: z.array(Assertion).default([]).describe("post-run assertions; see each key's own description for what it checks"),
   // F-6 (opt-in): scope the skill-staleness hash to the skill(s) this scenario actually exercises, named by
   // their `skills/<name>` dir under a mounted plugin-root. Empty/omitted = hash the WHOLE mounted tree (the
   // default — so an unrelated skill edit re-stales every cassette). When set, only the named skill dirs plus
   // the plugin's SHARED roots (everything not under `skills/<x>/`) feed the hash, so editing one skill
   // re-stales only its own cassettes. Fail-closed: if any named skill is absent, the whole tree is hashed
   // (a typo can't silently narrow the gate).
-  skills: z.array(z.string()).default([]),
+  skills: z
+    .array(z.string())
+    .default([])
+    .describe(
+      "named `skills/<name>` dirs this scenario exercises, scoping the cassette-staleness hash to just those (+ shared plugin roots); omitted/empty hashes the whole mounted tree",
+    ),
   // capability families this skill's core path NEEDS (e.g. office_convert, ocr, pdf_tables). When
   // set, the run HARD-FAILS if the running tier omits one (clause a) or cannot verify them — protocol /
   // replay / COWORK_SKIP_CAPABILITY_PROBE (clause b) — closing the false-green for extraction-heavy skills.
   // `allow_missing_capability: true` opts out. Validated against the known family list at run time.
-  requires_capabilities: z.array(z.string()).default([]),
+  requires_capabilities: z
+    .array(z.string())
+    .default([])
+    .describe(
+      "capability families (e.g. office_convert, ocr, pdf_tables) this scenario's core path needs; the run hard-fails if the tier omits or can't verify one, unless `allow_missing_capability: true` is set on the relevant assertion",
+    ),
+  // Explicit consent for `hostloop` fidelity with a writable connected folder (mode: rw/rwd): the native
+  // agent process gets genuine, software-checked-only host filesystem access there — no container sandbox
+  // (matches production's own host-loop risk model). A top-level field, NOT an assertion-list entry / a
+  // VERDICT_MODIFIER_KEYS member — this gates whether the run is ATTEMPTED at all (pre-run), not a
+  // post-run default-fail signal (see checkHostLoopWriteConsent, src/hostloop/safety.ts). Read-only
+  // folders and folder-less/scratch hostloop runs need no opt-in.
+  allow_host_writes: z
+    .boolean()
+    .optional()
+    .describe(
+      "required consent for `fidelity: hostloop` with a writable connected folder (mode rw/rwd) — the agent gets real, software-checked-only host filesystem access there, no container sandbox; read-only/folder-less hostloop runs need no opt-in",
+    ),
 });
 // Back-compat (one minor): accept the deprecated top-level `profile:` key as an alias for `baseline:`,
 // remapping it BEFORE `z.strictObject` rejects the unknown key. Remove next minor.

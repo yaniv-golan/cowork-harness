@@ -269,17 +269,40 @@ const FETCH_DESC =
 
 export type EgressEntry = { host: string; decision: "allow" | "deny" };
 
-export function makeWorkspaceHandler(
-  containerName: string,
-  vmMnt: string,
-  runner = "docker",
-  webFetchAllow: string[] = ["*"],
-  onEgress?: (entry: EgressEntry) => void,
-  onInfraError?: (message: string) => void,
-  provenanceRef?: { current?: WebFetchProvenance }, // Run fills this before the stream starts
-  rawFetch: RawFetch = defaultRawFetch, // per-hop fetch (redirect:manual) for BOTH paths; injectable
-  resolve: Resolver = defaultResolver, // per-hop DNS resolution for the SSRF backstop; injectable
-): McpHandler {
+export interface WorkspaceHandlerOptions {
+  containerName: string;
+  /** Mnt ROOT — used only for the bash tool's description text (which legitimately describes where
+   *  ALL connected folders live), not as the exec cwd (see `execCwd`). */
+  vmMnt: string;
+  runner?: string;
+  webFetchAllow?: string[];
+  onEgress?: (entry: EgressEntry) => void;
+  onInfraError?: (message: string) => void;
+  /** Run fills this before the stream starts. */
+  provenanceRef?: { current?: WebFetchProvenance };
+  /** Per-hop fetch (redirect:manual) for BOTH web_fetch paths; injectable for tests. */
+  rawFetch?: RawFetch;
+  /** Per-hop DNS resolution for the SSRF backstop; injectable for tests. */
+  resolve?: Resolver;
+  /** Production's `vmCwd`: the first non-network-drive connected folder's mount name, falling back to
+   *  `outputs` — never the bare mnt root. Defaults to `vmMnt` for callers that don't care about the
+   *  distinction (e.g. tests exercising a single generic mount). */
+  execCwd?: string;
+}
+
+export function makeWorkspaceHandler(opts: WorkspaceHandlerOptions): McpHandler {
+  const {
+    containerName,
+    vmMnt,
+    runner = "docker",
+    webFetchAllow = ["*"],
+    onEgress,
+    onInfraError,
+    provenanceRef,
+    rawFetch = defaultRawFetch,
+    resolve = defaultResolver,
+    execCwd = vmMnt,
+  } = opts;
   // Per-handler (per-spawn) latch for the provenance-unenforced warning — was module-level, which
   // silenced the gap after the first run in a long-lived process. Each fresh handler warns once.
   const provWarned = { value: false };
@@ -311,7 +334,7 @@ export function makeWorkspaceHandler(
       const a = jr.params?.arguments ?? {};
       if (name === "bash")
         return {
-          result: await execInContainer(runner, containerName, vmMnt, String(a.command ?? ""), clampTimeout(a.timeout_ms), onInfraError),
+          result: await execInContainer(runner, containerName, execCwd, String(a.command ?? ""), clampTimeout(a.timeout_ms), onInfraError),
         };
       if (name === "web_fetch")
         return {

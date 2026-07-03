@@ -27,7 +27,7 @@ cowork-harness chat <skill-folder> [prompt] [options]
 | `--fidelity protocol\|container\|hostloop` | `container` (or `$COWORK_HARNESS_FIDELITY`) | Runtime tier (see below). |
 | `--model <id>` | `$COWORK_HARNESS_MODEL` | Override the model; passed as `--model` to the agent binary. |
 | `--upload <file>` | — | Attach a file (repeatable). Visible at `mnt/uploads/<basename>`. |
-| `--folder <dir>` | — | Connect a project folder (repeatable). Visible at `mnt/<basename>`. Staged as a **fresh copy** — agent writes land in the run's `mnt/<basename>` output, not back in the host original. |
+| `--folder <dir>` | — | Connect a project folder (repeatable). Visible at `mnt/<basename>`. At `protocol`/`container`/`microvm` fidelity, staged as a **fresh copy** — agent writes land in the run's `mnt/<basename>` output, not back in the host original. At `hostloop` fidelity, it's a **bind mount** instead (see [Mount paths](#mount-paths) below). |
 | `--plugin <dir>` | — | Load an additional local plugin alongside the main skill folder (repeatable). Rejected in `--raw` mode. |
 | `--verbose` / `-V` | off | Show thinking blocks, tool inputs, and the full sub-agent tree (indented by dispatch depth). Default: tool call markers only. |
 | `--run-dir <path>` (global) | `$COWORK_HARNESS_RUNS_DIR` or `~/.cowork-harness/runs` | Relocate the run/transcript output dir. A **global** flag (stripped before the chat parser), so it works on `chat` too. |
@@ -50,7 +50,7 @@ Even without `--verbose`, the REPL shows more than raw assistant text:
 |---|---|---|
 | `protocol` | Agent on the host, no Docker, no sandbox. | Fastest; no egress enforcement. |
 | `container` (default) | Agent in a Docker container with per-session default-deny egress proxy. | Everyday debugging with a real sandbox. |
-| `hostloop` | Agent runs in the container (like `container`), but native Bash/WebFetch are disabled and routed host-side via the workspace SDK-MCP server — workspace bash executes in the container via `docker exec`, `web_fetch` via host `curl`. | Reproducing Cowork's production split-execution model. |
+| `hostloop` | Agent loop runs as a **native macOS process** on the host (no container around the file tools) — matching production's own risk model. Only `bash`/`web_fetch` route into a Docker sidecar via `docker exec`; that sidecar has no agent inside it. | Reproducing Cowork's production split-execution model. |
 
 `container` is the right default for almost all debugging. Use `protocol` when you need rapid
 iteration and do not care about egress behavior. Use `hostloop` when you are chasing a bug that
@@ -85,9 +85,16 @@ Files and folders are mounted at the same paths the real Cowork client uses:
 | `--upload ~/data/report.pdf` | `mnt/uploads/report.pdf` |
 | `--folder ~/code/myproject` | `mnt/myproject` |
 
-`--folder` stages a **fresh copy** of the directory into the session tree (not a live bind mount of the
-original). Files the agent writes under `mnt/<basename>` land in the run's output there, **not** back in
-the corresponding host directory.
+At `protocol`/`container`/`microvm` fidelity, `--folder` stages a **fresh copy** of the directory into the
+session tree (not a live bind mount of the original); files the agent writes under `mnt/<basename>` land in
+the run's output there, **not** back in the corresponding host directory.
+
+At `hostloop` fidelity, connected folders are **bind-mounted** from the real host path — one set of bytes,
+matching production — into both the native process's view and the Docker sidecar's view. A **writable**
+connected folder therefore gives the native process genuine host filesystem access and requires explicit
+consent: `allow_host_writes: true` in the scenario, or `--allow-host-writes` for `chat` (the same consent a
+real user gives by clicking "connect folder" in Desktop). See [boundary.md](./boundary.md) for the
+enforcement mechanism (a PreToolUse hook, not a container wall).
 
 ### Adding files mid-session
 

@@ -2,7 +2,7 @@
 
 Start with the [project README](../README.md) for the overview and quick start, then dig in here.
 
-**Reading order (start here):** [../examples/README.md](../examples/README.md) (token-free `replay` + worked examples) → [boundary.md](./boundary.md) (the limitations model) → [session.md](./session.md) + [scenario.md](./scenario.md) (authoring tests) → [cassette.md](./cassette.md) (record/replay deep-dive).
+**Reading order (start here):** [../examples/README.md](../examples/README.md) (token-free `replay` + worked examples) → [boundary.md](./boundary.md) (the limitations model) → [session.md](./session.md) + [scenario.md](./scenario.md) (authoring tests) → [chat.md](./chat.md) (interactive debugging) → [cassette.md](./cassette.md) (record/replay deep-dive) → [debugging.md](./debugging.md) (when a run misbehaves or you don't trust a green).
 
 > **Before a first *live* run** (any tier above `replay`/`protocol`): run `cowork-harness doctor` (or `doctor --tier <t>`) to check Docker + staged agent + token. `lint` needs **python3** on PATH; `--fidelity microvm` needs a one-time `cowork-harness vm init`.
 
@@ -25,6 +25,7 @@ Start with the [project README](../README.md) for the overview and quick start, 
 | [../DESIGN.md](../DESIGN.md) | Architecture deep-dive + the full parity matrix + why scripting the real Desktop runtime is closed. |
 | [../SPEC.md](../SPEC.md) | **The authoritative contract** — the precise behavior the harness implements (persistence/resume, control-response envelopes, dispatch caps, …). Read this when a doc and the code disagree. |
 | [../CHANGELOG.md](../CHANGELOG.md) | Release notes + the binary-grounding (asar / agent-ELF version) each entry was verified against. |
+| [gotchas.md](./gotchas.md) | Setup troubleshooting FAQ — exit 127, empty skill mount, arm64 Docker issues, git-worktree token traps, egress-proxy races. |
 
 ## Reference
 
@@ -43,3 +44,4 @@ Start with the [project README](../README.md) for the overview and quick start, 
 | Contributing | [../CONTRIBUTING.md](../CONTRIBUTING.md) |
 | CI recipe — copy-paste GitHub Actions for the token-free PR gate + nightly live lane | [../.claude/skills/cowork-harness/references/ci-recipe.md](../.claude/skills/cowork-harness/references/ci-recipe.md) |
 | Releasing — the branch → PR → tag publish flow | [../RELEASING.md](../RELEASING.md) |
+| Machine-readable project summary | [../llms.txt](../llms.txt) |
