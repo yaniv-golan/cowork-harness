@@ -493,7 +493,10 @@ describe("applySessionOverrides (E3 — matrix runner's session-loading override
 
   it("composes model + skillDirSubstitution together in one call", () => {
     const base = loadSession({ model: "claude-sonnet-4-6", plugins: { local_plugins: ["../a/my-pdf-skill"] } });
-    const next = applySessionOverrides(base, { model: "claude-opus-4-8", skillDirSubstitution: ["../a/my-pdf-skill", "../b/my-pdf-skill"] });
+    const next = applySessionOverrides(base, {
+      model: "claude-opus-4-8",
+      skillDirSubstitution: ["../a/my-pdf-skill", "../b/my-pdf-skill"],
+    });
     expect(next.model).toBe("claude-opus-4-8");
     expect(next.plugins.local_plugins).toEqual(["../b/my-pdf-skill"]);
   });

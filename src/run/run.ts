@@ -256,7 +256,9 @@ export class Run {
             // field) — only when there's something to report, so a bare `{isError:false}` result event
             // (still common in synthetic/older cassette events) leaves usage undefined, not a spurious {}.
             this.rec.usage =
-              ev.usage || ev.numTurns !== undefined ? { ...ev.usage, ...(ev.numTurns !== undefined ? { turns: ev.numTurns } : {}) } : undefined;
+              ev.usage || ev.numTurns !== undefined
+                ? { ...ev.usage, ...(ev.numTurns !== undefined ? { turns: ev.numTurns } : {}) }
+                : undefined;
             if (ev.costUsd !== undefined) this.rec.cost = { ...this.rec.cost, usd: ev.costUsd };
             {
               const next = await turnIter.next();

@@ -63,18 +63,21 @@ describe("protocol.v1.json — conformance against COMMITTED cassettes", () => {
     expect(cassettePaths.length).toBeGreaterThan(0);
   });
 
-  it("the sweep as a WHOLE actually validates at least one real control-protocol line — guards a silent " +
-    "future regression where every individual per-cassette check legitimately passes at checked:0 (a " +
-    "cassette with no gates is a real, allowed case) but the AGGREGATE conformance coverage vanished " +
-    "(e.g. a re-record that accidentally drops control_request/controlOut lines from every fixture)", () => {
-    let totalChecked = 0;
-    for (const path of cassettePaths) {
-      const cassette = JSON.parse(readFileSync(path, "utf8"));
-      for (const line of cassette.events ?? []) if ((JSON.parse(line) as { type?: string }).type === "control_request") totalChecked++;
-      for (const line of cassette.controlOut ?? []) if ((JSON.parse(line) as { type?: string }).type !== "user") totalChecked++;
-    }
-    expect(totalChecked).toBeGreaterThan(0);
-  });
+  it(
+    "the sweep as a WHOLE actually validates at least one real control-protocol line — guards a silent " +
+      "future regression where every individual per-cassette check legitimately passes at checked:0 (a " +
+      "cassette with no gates is a real, allowed case) but the AGGREGATE conformance coverage vanished " +
+      "(e.g. a re-record that accidentally drops control_request/controlOut lines from every fixture)",
+    () => {
+      let totalChecked = 0;
+      for (const path of cassettePaths) {
+        const cassette = JSON.parse(readFileSync(path, "utf8"));
+        for (const line of cassette.events ?? []) if ((JSON.parse(line) as { type?: string }).type === "control_request") totalChecked++;
+        for (const line of cassette.controlOut ?? []) if ((JSON.parse(line) as { type?: string }).type !== "user") totalChecked++;
+      }
+      expect(totalChecked).toBeGreaterThan(0);
+    },
+  );
 
   for (const path of cassettePaths) {
     const name = path.split("/").pop()!;
@@ -112,7 +115,9 @@ describe("protocol.v1.json — conformance against COMMITTED cassettes", () => {
 
   it("the multiselect-gate fixture specifically exercises the AskUserQuestion can_use_tool + multiSelect answer shapes", () => {
     const cassette = JSON.parse(readFileSync(join(CASSETTES_DIR, "example-multiselect-gate.cassette.json"), "utf8"));
-    const askEvent = (cassette.events as string[]).map((l) => JSON.parse(l)).find((o) => o.type === "control_request" && o.request?.subtype === "can_use_tool");
+    const askEvent = (cassette.events as string[])
+      .map((l) => JSON.parse(l))
+      .find((o) => o.type === "control_request" && o.request?.subtype === "can_use_tool");
     expect(askEvent).toBeDefined();
     expect(askEvent.request.tool_name).toBe("AskUserQuestion");
     expect(compileDef("AskUserQuestionInput")(askEvent.request.input)).toBe(true);
@@ -254,8 +259,7 @@ describe("protocol.v1.json — golden vector pack lockstep (fixtures/protocol/v1
       const vector = JSON.parse(readFileSync(join(VECTORS_DIR, file), "utf8"));
       expect(validateMessage(vector)).toBe(true);
       expect(compileDef("ControlResponse")(vector)).toBe(true);
-      const body =
-        defName === "QuestionAnswerUpdatedInput" ? vector.response.response.updatedInput : vector.response.response;
+      const body = defName === "QuestionAnswerUpdatedInput" ? vector.response.response.updatedInput : vector.response.response;
       expect(compileDef(defName)(body)).toBe(true);
     });
   }

@@ -80,35 +80,39 @@ describe.skipIf(!CAN)("live: run --matrix (E3's own live e2e + a regression pin)
     expect(envelope.results).toHaveLength(2); // both cells' raw RunResults are present, nothing hidden
   }, 180_000);
 
-  it("REGRESSION PIN: a matrix cell that hits a genuinely unanswered gate does not crash the whole " +
-    "matrix — renders as a distinct cell error, sibling cells still complete, exit 1 with a full rollup " +
-    "(not a process crash / bare jsonError envelope)", () => {
-    const dir = mkdtempSync(join(tmpdir(), "live-matrix-unanswered-"));
-    const sessionPath = leanSession(dir);
-    // NO `answers:` entries at all + the default on_unanswered:"fail" — the explicit imperative
-    // instruction reliably makes the model call AskUserQuestion, which then has nothing to answer it.
-    writeFileSync(
-      join(dir, "s.yaml"),
-      `baseline: latest\nsession: ${sessionPath}\nfidelity: protocol\nprompt: |\n  Call the AskUserQuestion tool right now, asking me to choose between "Option A" and "Option B". Do not do anything else first.\nassert:\n  - result: success\n`,
-    );
-    writeFileSync(join(dir, "m.yaml"), "baselines: [desktop-1.17377.2, desktop-1.18286.0]\n");
+  it(
+    "REGRESSION PIN: a matrix cell that hits a genuinely unanswered gate does not crash the whole " +
+      "matrix — renders as a distinct cell error, sibling cells still complete, exit 1 with a full rollup " +
+      "(not a process crash / bare jsonError envelope)",
+    () => {
+      const dir = mkdtempSync(join(tmpdir(), "live-matrix-unanswered-"));
+      const sessionPath = leanSession(dir);
+      // NO `answers:` entries at all + the default on_unanswered:"fail" — the explicit imperative
+      // instruction reliably makes the model call AskUserQuestion, which then has nothing to answer it.
+      writeFileSync(
+        join(dir, "s.yaml"),
+        `baseline: latest\nsession: ${sessionPath}\nfidelity: protocol\nprompt: |\n  Call the AskUserQuestion tool right now, asking me to choose between "Option A" and "Option B". Do not do anything else first.\nassert:\n  - result: success\n`,
+      );
+      writeFileSync(join(dir, "m.yaml"), "baselines: [desktop-1.17377.2, desktop-1.18286.0]\n");
 
-    // --concurrency 1 (sequential, the default) so cell ordering is deterministic — if the bug this
-    // pins ever regressed, cell 1's UnansweredError would process.exit() before cell 2 ever ran.
-    const r = run(["run", "s.yaml", "--matrix", "m.yaml", "--output-format", "json"], dir);
-    expect(r.code, `expected exit 1 (both cells hit the unanswered gate); stderr:\n${r.stderr}\nstdout:\n${r.stdout}`).toBe(1);
-    const line = r.stdout.split("\n").find((l) => l.trim().startsWith("{"));
-    expect(line, "expected a full matrix JSON envelope on stdout — a crash would emit a bare jsonError instead").toBeTruthy();
-    const envelope = JSON.parse(line!);
-    expect(envelope.command).toBe("run"); // not the error envelope's {ok:false, error:{category:"unanswered",...}} shape
-    expect(envelope.matrix).toBeDefined();
-    expect(envelope.matrix.cells).toHaveLength(2); // BOTH cells completed — proves cell 1 didn't abort cell 2
-    expect(envelope.matrix.anyFail).toBe(true);
-    for (const cell of envelope.matrix.cells) {
-      expect(cell.pass).toBe(false);
-      expect(cell.error).toBeDefined();
-      expect(cell.error).toMatch(/unanswered/i);
-      expect(cell.failedAssertions).toEqual([]); // an infra/gate error is never conflated with a real assertion failure
-    }
-  }, 180_000);
+      // --concurrency 1 (sequential, the default) so cell ordering is deterministic — if the bug this
+      // pins ever regressed, cell 1's UnansweredError would process.exit() before cell 2 ever ran.
+      const r = run(["run", "s.yaml", "--matrix", "m.yaml", "--output-format", "json"], dir);
+      expect(r.code, `expected exit 1 (both cells hit the unanswered gate); stderr:\n${r.stderr}\nstdout:\n${r.stdout}`).toBe(1);
+      const line = r.stdout.split("\n").find((l) => l.trim().startsWith("{"));
+      expect(line, "expected a full matrix JSON envelope on stdout — a crash would emit a bare jsonError instead").toBeTruthy();
+      const envelope = JSON.parse(line!);
+      expect(envelope.command).toBe("run"); // not the error envelope's {ok:false, error:{category:"unanswered",...}} shape
+      expect(envelope.matrix).toBeDefined();
+      expect(envelope.matrix.cells).toHaveLength(2); // BOTH cells completed — proves cell 1 didn't abort cell 2
+      expect(envelope.matrix.anyFail).toBe(true);
+      for (const cell of envelope.matrix.cells) {
+        expect(cell.pass).toBe(false);
+        expect(cell.error).toBeDefined();
+        expect(cell.error).toMatch(/unanswered/i);
+        expect(cell.failedAssertions).toEqual([]); // an infra/gate error is never conflated with a real assertion failure
+      }
+    },
+    180_000,
+  );
 });

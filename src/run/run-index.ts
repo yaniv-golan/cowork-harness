@@ -121,7 +121,10 @@ export function readIndex(runsRoot: string): RunIndexRow[] {
       // concurrent-write interleaving bug (or manual file corruption), and silently vanishing it would
       // mask exactly the risk this module's own docs call out. Warn, don't stay quiet.
       const isTrailing = lines.slice(i + 1).every((l) => !l.trim());
-      if (!isTrailing) warn(`::warning:: stats: skipping corrupt line ${i + 1} of ${indexPath(runsRoot)} (not the trailing line — investigate, don't just --reindex over it): ${line.slice(0, 120)}\n`);
+      if (!isTrailing)
+        warn(
+          `::warning:: stats: skipping corrupt line ${i + 1} of ${indexPath(runsRoot)} (not the trailing line — investigate, don't just --reindex over it): ${line.slice(0, 120)}\n`,
+        );
     }
   }
   return rows;
@@ -273,7 +276,10 @@ export function buildStats(
   const summaries: StatsSummary[] = [];
   for (const [scenario, group] of byScenario) {
     const numbers = (pick: (r: RunIndexRow) => number | undefined) =>
-      group.map(pick).filter((v): v is number => v !== undefined).sort((a, b) => a - b);
+      group
+        .map(pick)
+        .filter((v): v is number => v !== undefined)
+        .sort((a, b) => a - b);
     const costs = numbers((r) => r.costUsd);
     const durations = numbers((r) => r.durationMs);
     const tokens = numbers((r) => r.tokens);

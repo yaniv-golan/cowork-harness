@@ -95,17 +95,20 @@ describe.skipIf(!can)("cli: diff (cassette/run mode, E2)", () => {
     expect(envelope.views).toHaveProperty("meta");
   });
 
-  it("detects kind by CONTENT, not just the .cassette.json filename suffix — regression for a real bug " +
-    "found during manual smoke-testing: a cassette-shaped file with a different name used to be silently " +
-    "misread as a run's events.jsonl (one giant malformed line), producing an empty tool list instead of " +
-    "an error", () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "cowork-diff-cli-"));
-    const renamed = join(tmpDir, "not-named-like-a-cassette.json");
-    copyFileSync(CASSETTE, renamed);
-    const r = run(["diff", CASSETTE, renamed]);
-    expect(r.code).toBe(0);
-    expect(r.stdout).toContain("identical");
-  });
+  it(
+    "detects kind by CONTENT, not just the .cassette.json filename suffix — regression for a real bug " +
+      "found during manual smoke-testing: a cassette-shaped file with a different name used to be silently " +
+      "misread as a run's events.jsonl (one giant malformed line), producing an empty tool list instead of " +
+      "an error",
+    () => {
+      const tmpDir = mkdtempSync(join(tmpdir(), "cowork-diff-cli-"));
+      const renamed = join(tmpDir, "not-named-like-a-cassette.json");
+      copyFileSync(CASSETTE, renamed);
+      const r = run(["diff", CASSETTE, renamed]);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain("identical");
+    },
+  );
 
   it("detects a genuinely mutated tool call (renamed tool) as a real removed+added pair, not a false-identical", () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "cowork-diff-cli-"));

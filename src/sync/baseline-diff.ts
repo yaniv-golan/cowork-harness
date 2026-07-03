@@ -115,9 +115,7 @@ export function renderChangelog(entries: BaselineDiffEntry[]): string {
     } else if (e.kind === "scalar") {
       lines.push(`- \`${e.path}\`: \`${JSON.stringify(e.from)}\` → \`${JSON.stringify(e.to)}\``);
     } else {
-      lines.push(
-        `- \`${e.path}\`: added ${JSON.stringify(e.added)}, removed ${JSON.stringify(e.removed)}`,
-      );
+      lines.push(`- \`${e.path}\`: added ${JSON.stringify(e.added)}, removed ${JSON.stringify(e.removed)}`);
     }
   }
 

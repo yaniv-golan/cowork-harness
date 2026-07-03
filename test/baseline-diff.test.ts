@@ -24,14 +24,19 @@ describe("diffBaselines — scalar changes", () => {
 
 describe("diffBaselines — recursion into nested objects", () => {
   it("recurses and produces a dotted path for a nested scalar change", () => {
-    const d = diffBaselines({ network: { mode: "gvisor", allowKind: "allowlist" } }, { network: { mode: "userspace", allowKind: "allowlist" } });
+    const d = diffBaselines(
+      { network: { mode: "gvisor", allowKind: "allowlist" } },
+      { network: { mode: "userspace", allowKind: "allowlist" } },
+    );
     expect(d).toEqual([{ path: "network.mode", kind: "scalar", from: "gvisor", to: "userspace", annotation: false }]);
   });
 
   it("recurses arbitrarily deep (provenance.gates.<name>.value.<field>)", () => {
     const a = { provenance: { gates: { hostLoop: { on: false } } } };
     const b = { provenance: { gates: { hostLoop: { on: true } } } };
-    expect(diffBaselines(a, b)).toEqual([{ path: "provenance.gates.hostLoop.on", kind: "scalar", from: false, to: true, annotation: false }]);
+    expect(diffBaselines(a, b)).toEqual([
+      { path: "provenance.gates.hostLoop.on", kind: "scalar", from: false, to: true, annotation: false },
+    ]);
   });
 });
 
@@ -47,7 +52,12 @@ describe("diffBaselines — array fields (added/removed, not a scalar dump)", ()
 
   it("diffs an array of objects (MountSpec[]) by structural membership", () => {
     const a = { mounts: [{ name: "outputs", mode: "rw" }] };
-    const b = { mounts: [{ name: "outputs", mode: "rw" }, { name: "uploads", mode: "r" }] };
+    const b = {
+      mounts: [
+        { name: "outputs", mode: "rw" },
+        { name: "uploads", mode: "r" },
+      ],
+    };
     const d = diffBaselines(a, b);
     expect(d).toEqual([{ path: "mounts", kind: "array", added: [{ name: "uploads", mode: "r" }], removed: [], annotation: false }]);
   });
@@ -87,7 +97,9 @@ describe("renderChangelog — known-field prose", () => {
   });
 
   it("renders a gate flip as prose naming the gate and field", () => {
-    const md = renderChangelog(diffBaselines({ provenance: { gates: { hostLoop: { on: false } } } }, { provenance: { gates: { hostLoop: { on: true } } } }));
+    const md = renderChangelog(
+      diffBaselines({ provenance: { gates: { hostLoop: { on: false } } } }, { provenance: { gates: { hostLoop: { on: true } } } }),
+    );
     expect(md).toContain("hostLoop");
     expect(md).toContain("on");
   });
@@ -151,6 +163,12 @@ describe("diffBaselines — a field introduced in a newer baseline is 'added', n
     const newer = { appVersion: "1.18286.0", requireFullVmSandbox: true };
     const d = diffBaselines(older, newer);
     expect(d).toContainEqual({ path: "requireFullVmSandbox", kind: "added", to: true, annotation: false });
-    expect(d.find((e) => e.path === "appVersion")).toEqual({ path: "appVersion", kind: "scalar", from: "1.15200.0", to: "1.18286.0", annotation: false });
+    expect(d.find((e) => e.path === "appVersion")).toEqual({
+      path: "appVersion",
+      kind: "scalar",
+      from: "1.15200.0",
+      to: "1.18286.0",
+      annotation: false,
+    });
   });
 });

@@ -80,9 +80,7 @@ describe("renderSummary (Wave 1 / E5 reporter)", () => {
   });
 
   it("ignores unknown envelope fields (rollups/matrix, added by later waves) without throwing", () => {
-    expect(() =>
-      renderSummary(envelope({ rollups: [{ scenario: "x", passRate: 0.9 }], matrix: { axes: {}, cells: [] } })),
-    ).not.toThrow();
+    expect(() => renderSummary(envelope({ rollups: [{ scenario: "x", passRate: 0.9 }], matrix: { axes: {}, cells: [] } }))).not.toThrow();
   });
 });
 
