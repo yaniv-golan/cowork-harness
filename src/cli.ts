@@ -45,7 +45,7 @@ import { buildScaffold } from "./run/scaffold.js";
 import { buildInspectView } from "./run/inspect-view.js";
 import { pkgVersion, jsonEnvelope, jsonError, parseOutputFormat, fail, isJsonOutput, type ErrCategory } from "./run/envelope.js";
 import { computeVerdict } from "./run/verdict.js";
-import { evaluate, hostMatches, type AssertContext } from "./assert.js";
+import { evaluate, hostMatches, budgetFields, type AssertContext } from "./assert.js";
 import { spawnChannel, fileChannel, streamGates, answerGate, readGate, type DecisionChannel } from "./decide/external-channel.js";
 
 // Synchronous writes (fd 1/2): `process.stdout.write` + `process.exit()` truncates on a PIPE, which
@@ -2426,6 +2426,13 @@ async function cmdVerifyRun(args: string[]) {
     // Derive from `result.scan` directly — NOT the `scan` local, which already collapsed undefined into
     // the `{outputsDeletes:[],hostPathLeaked:false,selfHealRan:false}` default above.
     scanMissing: result.scan === undefined,
+    skillsInvoked: result.skillsInvoked ?? [],
+    skillsInvokedMissing: result.skillsInvoked === undefined,
+    // `skillToolAvailable` predates being persisted on older result.json too; default true rather than
+    // false so an old run's skill_triggered doesn't spuriously read as evidence-unavailable for the WRONG
+    // reason (agent-tool-drift) when the real reason is just "this field didn't exist yet".
+    skillToolAvailable: result.skillToolAvailable ?? true,
+    ...budgetFields(result),
   };
 
   const assertions = evaluate(scenario.assert, ctx);

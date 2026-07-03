@@ -6,6 +6,27 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **Packaged GitHub Action** (`uses: yaniv-golan/cowork-harness@v1`, [`action.yml`](./action.yml)) wrapping
+  `replay`/`lint`/`verify-cassettes`/`run` with a PR job-summary reporter (verdict table, staleness
+  findings, the skipped-live-only-assertions honesty line, cost/turns when available). Token-free lane runs
+  on any `ubuntu-latest` runner; `run` (live lane) needs a self-hosted runner with Docker + the agent binary
+  already provisioned — the action does not stage either. Self-tested in CI (`uses: ./` against a packed
+  tarball of the current commit, both a passing and a deliberately-failing invocation). A
+  `publish-image.yml` workflow pushes `ghcr.io/yaniv-golan/cowork-agent-base:2`/`cowork-agent-full:2` on
+  release tags for consumers (and this repo's own CI) to `docker pull` instead of building from scratch.
+- **`skill_triggered` / `no_skill_triggered` assertions.** Skill invocation (the top-level `Skill` tool_use)
+  is now a first-class assertable event, recorded as `RunResult.skillsInvoked[]` and evaluated as a regex
+  match, matching the `subagent_dispatched` convention. Fails as evidence-unavailable (never a vacuous pass)
+  when the agent's init tool list has no `Skill` tool (agent-version drift) or, for the negative form, when
+  invocation data itself is absent (an old run predating this key). Replay-checkable (content key).
+- **`max_cost_usd` / `max_tokens` / `tool_calls_max` budget assertions**, built on Wave 0's cost/turns
+  seam. Each fails as evidence-unavailable (never a vacuous pass) when the underlying telemetry is absent.
+  `max_cost_usd`/`max_tokens` are honest about the replay lane: they assert the *frozen recording's* spend,
+  not fresh spend — a live `run` is where a real budget regression is caught. `tool_calls_max` is
+  meaningfully replay-checkable (the re-drive recomputes `toolCounts` deterministically).
+
 ### Parity
 
 - **Synced the platform baseline to Claude Desktop 1.18286.0** (`baselines/desktop-1.18286.0.json`).

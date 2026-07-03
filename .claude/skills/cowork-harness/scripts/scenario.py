@@ -59,6 +59,11 @@ CONTENT_KEYS = {
     "subagent_dispatched",
     "subagent_declared_but_unused",
     "dispatch_count_max",
+    "skill_triggered",
+    "no_skill_triggered",
+    "max_cost_usd",
+    "max_tokens",
+    "tool_calls_max",
 }
 # content keys, but only evaluated on replay when the cassette carries controlOut
 GATE_KEYS = {"question_asked", "questions_count_max", "gate_answers_delivered"}

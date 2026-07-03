@@ -182,6 +182,31 @@
             "minimum": 0,
             "maximum": 9007199254740991
           },
+          "skill_triggered": {
+            "description": "a skill matching this regex (by its invoked skill id, e.g. \"plugin:skill\") was invoked via the Skill tool",
+            "type": "string"
+          },
+          "no_skill_triggered": {
+            "description": "no invoked skill id matched this regex — the negative-control / description-collision catcher",
+            "type": "string"
+          },
+          "max_cost_usd": {
+            "description": "the run's SDK-reported total_cost_usd is ≤ N — live lane only; on replay this asserts the frozen recording's cost, not fresh spend",
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "max_tokens": {
+            "description": "usage.input_tokens + usage.output_tokens ≤ N (cache-read/creation tokens excluded — priced separately) — live lane only; on replay this asserts the frozen recording's usage, not fresh spend",
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "tool_calls_max": {
+            "description": "total top-level tool calls (sum of toolCounts, sub-agent tools excluded) ≤ N",
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
           "egress_denied": {
             "description": "egress to this host was denied",
             "type": "string"

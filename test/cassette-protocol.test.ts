@@ -85,6 +85,76 @@ describe("conflicting duplicate controlOut IDs are an unconditional corruption f
   });
 });
 
+describe("skill_triggered / no_skill_triggered evaluate end-to-end on replay (Wave 1 / E8)", () => {
+  it("skill_triggered passes when the cassette's re-drive shows the skill invoked", async () => {
+    muteStderr();
+    const events = [
+      JSON.stringify({ type: "system", subtype: "init", tools: ["Skill"] }),
+      JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "tool_use", id: "toolu_1", name: "Skill", input: { skill: "my-pdf-skill:my-pdf-skill" } }] },
+      }),
+      JSON.stringify({ type: "result", subtype: "success", is_error: false }),
+    ];
+    const cassette: any = { scenario: makeScenario([{ skill_triggered: "my-pdf-skill" }]), events, controlOut: [] };
+    const r = await replayCassette(cassette);
+    expect(r.assertions.every((a) => a.pass)).toBe(true);
+  });
+
+  it("no_skill_triggered fails end-to-end when the cassette's re-drive shows a matching skill invoked", async () => {
+    muteStderr();
+    const events = [
+      JSON.stringify({ type: "system", subtype: "init", tools: ["Skill"] }),
+      JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "tool_use", id: "toolu_1", name: "Skill", input: { skill: "my-pdf-skill:my-pdf-skill" } }] },
+      }),
+      JSON.stringify({ type: "result", subtype: "success", is_error: false }),
+    ];
+    const cassette: any = { scenario: makeScenario([{ no_skill_triggered: "my-pdf-skill" }]), events, controlOut: [] };
+    const r = await replayCassette(cassette);
+    expect(r.assertions.some((a) => !a.pass)).toBe(true);
+  });
+});
+
+describe("budget assertions evaluate end-to-end on replay (Wave 1 / E6a)", () => {
+  it("max_cost_usd/max_tokens/tool_calls_max pass against a recorded cassette within budget", async () => {
+    muteStderr();
+    const events = [
+      JSON.stringify({ type: "system", subtype: "init", tools: ["Write"] }),
+      JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "tool_use", id: "toolu_1", name: "Write", input: { path: "x" } }] },
+      }),
+      JSON.stringify({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        usage: { input_tokens: 100, output_tokens: 50 },
+        total_cost_usd: 0.02,
+      }),
+    ];
+    const cassette: any = {
+      scenario: makeScenario([{ max_cost_usd: 0.05 }, { max_tokens: 200 }, { tool_calls_max: 5 }]),
+      events,
+      controlOut: [],
+    };
+    const r = await replayCassette(cassette);
+    expect(r.assertions.every((a) => a.pass)).toBe(true);
+  });
+
+  it("max_cost_usd fails end-to-end when the cassette's re-drive exceeds budget", async () => {
+    muteStderr();
+    const events = [
+      JSON.stringify({ type: "system", subtype: "init", tools: [] }),
+      JSON.stringify({ type: "result", subtype: "success", is_error: false, total_cost_usd: 1.5 }),
+    ];
+    const cassette: any = { scenario: makeScenario([{ max_cost_usd: 0.5 }]), events, controlOut: [] };
+    const r = await replayCassette(cassette);
+    expect(r.assertions.some((a) => !a.pass)).toBe(true);
+  });
+});
+
 describe("replay surfaces usage/cost from the re-driven record (Wave 0 seam)", () => {
   it("includes usage.turns and cost.usd on a replayed RunResult when the cassette recorded them", async () => {
     muteStderr();

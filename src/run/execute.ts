@@ -35,7 +35,7 @@ import { decideLoopFromBaseline, readGateFlag } from "../loop-decision.js";
 import type { WebFetchProvenance } from "../hostloop/workspace-handler.js";
 import { startEgressSidecar, registerCleanup, type EgressSidecar } from "../egress/sidecar.js";
 import { startEgressProxy } from "../egress/proxy.js";
-import { evaluate, hostMatches } from "../assert.js";
+import { evaluate, hostMatches, budgetFields } from "../assert.js";
 import { compileUserRegex } from "../regex.js";
 import { renderPrompts } from "../prompt.js";
 import { LiveAgentSession, type SdkMcp, type HookBundle } from "../agent/session.js";
@@ -653,6 +653,9 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     gateDeliveries: record.gateDeliveries,
     toolResultTexts: record.toolResults.map((r) => r.assertText ?? r.text),
     toolResultsTruncated: record.toolResults.map((r) => r.assertText === undefined),
+    skillsInvoked: record.skillsInvoked,
+    skillToolAvailable: record.initTools.includes("Skill"),
+    ...budgetFields(record),
   });
 
   if (scenario.fidelity === "protocol" && (record.toolsCalled.has("WebFetch") || record.toolsCalled.has("WebSearch"))) {
@@ -783,6 +786,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     unanswered: record.unanswered,
     usage: record.usage,
     cost: record.cost,
+    skillsInvoked: record.skillsInvoked,
+    skillToolAvailable: record.initTools.includes("Skill"),
     durationMs: Date.now() - startedAt,
     outDir,
     workDir: workRoot,
@@ -957,6 +962,8 @@ export function buildPartialResult(args: {
     unanswered: record.unanswered,
     usage: record.usage,
     cost: record.cost,
+    skillsInvoked: record.skillsInvoked,
+    skillToolAvailable: record.initTools.includes("Skill"),
     durationMs: args.durationMs,
     outDir: args.outDir,
     workDir: args.workRoot,

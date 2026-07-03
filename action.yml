@@ -1,0 +1,108 @@
+name: "cowork-harness"
+description: >-
+  Run cowork-harness (replay/lint/verify-cassettes/run) against a scenario or cassette and report the
+  verdict as a PR job summary. The token-free lane (replay/lint/verify-cassettes) runs on any
+  ubuntu-latest runner — no Docker, no API key, no agent binary. `run` (the live lane) additionally
+  needs Docker + a provisioned agent binary; this action does not provision either — see the
+  cowork-harness README's CI section for what a self-hosted live-lane runner needs.
+author: "Yaniv Golan"
+
+inputs:
+  command:
+    description: 'cowork-harness subcommand to run: replay | lint | verify-cassettes | run'
+    required: false
+    default: "replay"
+  path:
+    description: "Cassette/scenario file or directory to check (positional argument to the command)"
+    required: true
+  version:
+    description: "npm version or dist-tag of cowork-harness to install"
+    required: false
+    default: "latest"
+  strict:
+    description: 'Pass --strict (replay only — fail on any cassette-staleness finding, not just skill/shared-root drift)'
+    required: false
+    default: "false"
+  fail-on-skill-drift:
+    description: "Pass --fail-on-skill-drift (replay only — fail on skill/shared-root staleness classes)"
+    required: false
+    default: "false"
+  extra-args:
+    description: "Additional raw CLI arguments, space-separated, appended verbatim after the standard flags"
+    required: false
+    default: ""
+  summary:
+    description: "Write the verdict table to $GITHUB_STEP_SUMMARY"
+    required: false
+    default: "true"
+  anthropic-api-key:
+    description: >-
+      API key for the live `run` lane. Unused by replay/lint/verify-cassettes. This action does NOT
+      stage the agent binary or build the Docker image for you — a live `run` needs both already
+      available on the runner (see README). Pulling Anthropic's agent binary in CI carries the same
+      licensing/ToS caveat documented in this repo's README Limitations section.
+    required: false
+    default: ""
+
+outputs:
+  ok:
+    description: '"true"/"false" — the envelope-level pass/fail (mirrors the command''s exit code)'
+    value: ${{ steps.run.outputs.ok }}
+  envelope-path:
+    description: "Path to the raw JSON envelope file, for a caller that wants to post-process it further"
+    value: ${{ steps.run.outputs.envelope-path }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Node
+      uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+      with:
+        node-version: "20"
+
+    - name: Install cowork-harness
+      shell: bash
+      # `version` is normally an npm dist-tag/version ("latest", "0.22.0"); it also accepts a local
+      # tarball/path/URL directly (used by this repo's own ci.yml self-test, which packs the current
+      # commit and installs THAT instead of whatever's published) — detected by shape, no separate input.
+      run: |
+        v="${{ inputs.version }}"
+        case "$v" in
+          /*|file:*|*.tgz|http://*|https://*|git+*) target="$v" ;;
+          *) target="cowork-harness@$v" ;;
+        esac
+        npm install --global "$target"
+
+    - name: Run cowork-harness
+      id: run
+      shell: bash
+      env:
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+      run: |
+        set +e
+        args=("${{ inputs.command }}" "${{ inputs.path }}" "--output-format" "json")
+        [ "${{ inputs.strict }}" = "true" ] && args+=("--strict")
+        [ "${{ inputs.fail-on-skill-drift }}" = "true" ] && args+=("--fail-on-skill-drift")
+        if [ -n "${{ inputs.extra-args }}" ]; then
+          # deliberately word-split: extra-args is documented as space-separated raw flags
+          read -ra extra <<< "${{ inputs.extra-args }}"
+          args+=("${extra[@]}")
+        fi
+        cowork-harness "${args[@]}" > cowork-harness-envelope.json
+        exit_code=$?
+        ok=$(node -e 'try{process.stdout.write(String(JSON.parse(require("fs").readFileSync("cowork-harness-envelope.json","utf8")).ok))}catch{process.stdout.write("false")}')
+        echo "ok=$ok" >> "$GITHUB_OUTPUT"
+        echo "envelope-path=cowork-harness-envelope.json" >> "$GITHUB_OUTPUT"
+        echo "exit-code=$exit_code" >> "$GITHUB_OUTPUT"
+
+    - name: Report
+      if: always()
+      shell: bash
+      run: |
+        summary_flag=""
+        [ "${{ inputs.summary }}" = "true" ] && summary_flag="--summary"
+        node "${{ github.action_path }}/report/render.js" cowork-harness-envelope.json $summary_flag
+
+    - name: Propagate exit code
+      shell: bash
+      run: exit ${{ steps.run.outputs.exit-code }}

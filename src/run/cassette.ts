@@ -33,7 +33,7 @@ import { pMapBounded } from "../async-pool.js";
 /** Upper bound for `record --concurrency`. Above a handful, concurrent runs exhaust Docker's default address
  *  pool (each run creates two networks) and press model API rate limits — both surface as actionable errors. */
 const MAX_RECORD_CONCURRENCY = 8;
-import { evaluate } from "../assert.js";
+import { evaluate, budgetFields } from "../assert.js";
 import { makeRenderer, renderFooter, type RenderPlan } from "./renderer.js";
 import { jsonEnvelope, parseOutputFormat } from "./envelope.js";
 import { parseArgs } from "../cli-args.js";
@@ -726,6 +726,7 @@ function minimalRec(): RunRecord {
     toolResults: [],
     gateAnswers: [],
     gateDeliveries: [],
+    skillsInvoked: [],
   };
 }
 
@@ -2460,6 +2461,11 @@ export async function replayCassette(
     "subagent_dispatched",
     "subagent_declared_but_unused",
     "dispatch_count_max",
+    "skill_triggered",
+    "no_skill_triggered",
+    "max_cost_usd",
+    "max_tokens",
+    "tool_calls_max",
     "result",
     // Verdict modifiers — NOT filesystem/egress assertions. Keep all of them on replay (each evaluates to a
     // no-op pass via assert.ts) so a standalone modifier neither inflates the "filesystem/egress skipped"
@@ -2581,6 +2587,9 @@ export async function replayCassette(
       toolResultTexts: rec.toolResults.map((r) => r.assertText ?? r.text),
       toolResultsTruncated: rec.toolResults.map((r) => r.assertText === undefined),
       truncatedPaths: replayTruncatedPaths,
+      skillsInvoked: rec.skillsInvoked,
+      skillToolAvailable: rec.initTools.includes("Skill"),
+      ...budgetFields(rec),
     });
 
     // under --strict, EVERY staleness finding becomes a failing assertion (non-zero exit), not just a
@@ -2693,6 +2702,8 @@ export async function replayCassette(
       // them deterministically from the same events, so this is a content key, not a live-only one.
       usage: rec.usage,
       cost: rec.cost,
+      skillsInvoked: rec.skillsInvoked,
+      skillToolAvailable: rec.initTools.includes("Skill"),
       outDir: "(replay)",
       // Class-tagged staleness + skip counts, surfaced to JSON callers (the gate decision already happened
       // above via failing assertions; these fields are pure data so a green stays green by default).

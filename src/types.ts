@@ -198,6 +198,33 @@ export const Assertion = z.object({
   subagent_dispatched: z.string().optional().describe("a sub-agent matching this regex (by agentType or description) was dispatched"),
   subagent_declared_but_unused: z.string().optional().describe("a sub-agent declared this tool but never used it (the fabrication proxy)"),
   dispatch_count_max: z.number().int().nonnegative().optional().describe("total sub-agent dispatches ≤ N (the {global:3} ceiling)"),
+  skill_triggered: z
+    .string()
+    .optional()
+    .describe("a skill matching this regex (by its invoked skill id, e.g. \"plugin:skill\") was invoked via the Skill tool"),
+  no_skill_triggered: z
+    .string()
+    .optional()
+    .describe("no invoked skill id matched this regex — the negative-control / description-collision catcher"),
+  max_cost_usd: z
+    .number()
+    .positive()
+    .optional()
+    .describe("the run's SDK-reported total_cost_usd is ≤ N — live lane only; on replay this asserts the frozen recording's cost, not fresh spend"),
+  max_tokens: z
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .describe(
+      "usage.input_tokens + usage.output_tokens ≤ N (cache-read/creation tokens excluded — priced separately) — live lane only; on replay this asserts the frozen recording's usage, not fresh spend",
+    ),
+  tool_calls_max: z
+    .number()
+    .int()
+    .nonnegative()
+    .optional()
+    .describe("total top-level tool calls (sum of toolCounts, sub-agent tools excluded) ≤ N"),
   egress_denied: z.string().optional().describe("egress to this host was denied"),
   egress_allowed: z.string().optional().describe("egress to this host was allowed"),
   // Only `true` is accepted: `false` is rejected as a footgun. The assertion is presence-semantic — authoring
@@ -600,4 +627,13 @@ export interface RunResult {
    *  gate. Absent when the run had no gates, and absent on the replay lane (which reports reproducibility via
    *  nonDeterministic:false, not per-gate provenance). Derived from `decisions[]` at write time. */
   gateProvenance?: GateProvenanceSummary;
+  /** Skill/plugin ids invoked via the Skill tool_use event (`{plugin}:{skill}`), in call order, duplicates
+   *  kept (re-triggering is signal). Backs `skill_triggered`/`no_skill_triggered`. Absent on a run that
+   *  predates E8 (old result.json) — `no_skill_triggered` treats absence as evidence-unavailable, never a
+   *  vacuous pass. */
+  skillsInvoked?: string[];
+  /** Whether the agent's init tool list included "Skill" — false means this runtime/agent version can't be
+   *  observed invoking a skill through the recognized channel, so `skill_triggered`/`no_skill_triggered`
+   *  fail as evidence-unavailable rather than risk a false negative on an agent-version tool rename. */
+  skillToolAvailable?: boolean;
 }

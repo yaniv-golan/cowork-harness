@@ -103,6 +103,15 @@
         "bySource": { "type": "object" },
         "gates": { "type": "array" }
       }
+    },
+    "skillsInvoked": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Wave 1 / E8: skill/plugin ids invoked via the Skill tool_use event, in call order, duplicates kept. Backs skill_triggered/no_skill_triggered. Absent on a run predating E8."
+    },
+    "skillToolAvailable": {
+      "type": "boolean",
+      "description": "Wave 1 / E8: whether the agent's init tool list included \"Skill\" — false means skill_triggered/no_skill_triggered cannot be evaluated (agent-version tool-name drift)."
     }
   }
 }

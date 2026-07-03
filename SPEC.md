@@ -374,9 +374,11 @@ states in `baseline.provenance.gates`). A skill that ignores these behaves diffe
 
 **Assertion evaluation on replay:**
 - **Content assertions** (`contentKeys` in `src/run/cassette.ts`) are evaluated — `transcript_*`,
-  `tool_*`, `subagent_*`, `dispatch_count_max`, `result`, the verdict modifiers (`allow_permissive_auto_allow`,
+  `tool_*`, `subagent_*`, `dispatch_count_max`, `skill_triggered`, `no_skill_triggered`, `max_cost_usd`,
+  `max_tokens`, `tool_calls_max`, `result`, the verdict modifiers (`allow_permissive_auto_allow`,
   `allow_missing_capability`, `allow_l0_plugin_divergence`, `allow_stall`), and (when `controlOut` is present)
-  `question_asked`, `questions_count_max`, `gate_answers_delivered`.
+  `question_asked`, `questions_count_max`, `gate_answers_delivered`. `max_cost_usd`/`max_tokens` are
+  evaluated against the *frozen recording's* usage/cost on replay, not fresh spend.
 - **Filesystem assertions** (`file_exists`, `user_visible_artifact`, `artifact_json`) are evaluated
   **when the cassette carries an `artifacts` manifest** (`record` snapshots `outputs/`; `replay`
   materializes it token-free — `artifact_json` needs the small JSON body inlined). On older,
@@ -474,7 +476,9 @@ each suppressible only by the matching `allow_*` modifier. `result` means "the a
   "gateProvenance?": { "total": number, "bySource": {…}, "gates": [{ "question","answeredBy","answer","model?" }] }, // how each AskUserQuestion gate was answered; informational (never fails the verdict); live/partial lane only (absent on replay)
   "permissiveAutoAllow?": ["string"],             // tools auto-allowed by cowork parity that real Cowork BLOCKS → green is NOT faithful
   "staleness?": [{ "class": "baseline|skill|shared-root|format|unverifiable-baseline|unverifiable-skill", "message" }], // replay only; cassette-staleness findings, surfaced for a JSON gate. Non-failing by default (a stale but passing replay stays ok:true); `--strict` fails on every class, `--fail-on-skill-drift` on skill/shared-root/unverifiable-skill only.
-  "skippedAssertions?": { "full": number, "partial": number } // replay only; count of live-only assertions NOT evaluated (full = whole assertion skipped; partial = content half ran, fs/egress half dropped). The skipped ones are absent from `assertions[]`.
+  "skippedAssertions?": { "full": number, "partial": number }, // replay only; count of live-only assertions NOT evaluated (full = whole assertion skipped; partial = content half ran, fs/egress half dropped). The skipped ones are absent from `assertions[]`.
+  "skillsInvoked?": ["string"],                  // Wave 1: skill/plugin ids invoked via the Skill tool_use event, call order, duplicates kept. Backs skill_triggered/no_skill_triggered.
+  "skillToolAvailable?": bool                     // Wave 1: whether the agent's init tool list included "Skill" — false ⇒ skill_triggered/no_skill_triggered fail as evidence-unavailable (agent-version drift)
 }
 ```
 

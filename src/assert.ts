@@ -1,9 +1,28 @@
 import { existsSync, readFileSync, statSync, realpathSync } from "node:fs";
 import { join, resolve, relative, isAbsolute, sep } from "node:path";
-import type { Assertion, RunResult } from "./types.js";
+import type { Assertion, RunResult, UsageInfo, CostInfo } from "./types.js";
 import { VERDICT_MODIFIER_KEYS } from "./types.js";
 import { compileUserRegex } from "./regex.js";
 import { normalizeHost } from "./boundary-paths.js";
+
+/** Derives the three AssertContext budget fields (costUsd/tokensTotal/toolCallsTotal) uniformly from any
+ *  RunResult/RunRecord-shaped source — live, replay, and verify-run all read the same shapes (Wave 0's
+ *  shared UsageInfo/CostInfo types), so this is one function, not three copies. Each field's own
+ *  undefined-ness IS the evidence-unavailable signal (see AssertContext's doc comments); no separate
+ *  `*Missing` booleans needed for scalars. */
+export function budgetFields(src: { usage?: UsageInfo; cost?: CostInfo; toolCounts?: Record<string, number> }): {
+  costUsd?: number;
+  tokensTotal?: number;
+  toolCallsTotal?: number;
+} {
+  const inTok = src.usage?.input_tokens;
+  const outTok = src.usage?.output_tokens;
+  return {
+    costUsd: src.cost?.usd,
+    tokensTotal: typeof inTok === "number" && typeof outTok === "number" ? inTok + outTok : undefined,
+    toolCallsTotal: src.toolCounts === undefined ? undefined : Object.values(src.toolCounts).reduce((a, b) => a + b, 0),
+  };
+}
 
 /** Resolve a user-authored assertion path under `workRoot`, rejecting absolute paths and any `..` that
  *  escapes the root. Returns the absolute path, or null if it would leave `workRoot`. Assertion paths are
@@ -177,6 +196,27 @@ export interface AssertContext {
   /** Relative paths of artifacts written as 0-byte placeholders in the cassette (truncated: true entries).
    *  Set by replay lane from materializeManifest(); empty set on live and verify-run lanes. */
   truncatedPaths?: Set<string>;
+  /** Skill/plugin ids invoked via the Skill tool_use event, in call order (duplicates kept). */
+  skillsInvoked: string[];
+  /** Whether the agent's init tool list included "Skill". False/never-observed means
+   *  skill_triggered/no_skill_triggered cannot be evaluated (agent-version tool-name drift) and must fail
+   *  as evidence-unavailable rather than risk a false negative. */
+  skillToolAvailable: boolean;
+  /** Set by verify-run only when `result.skillsInvoked` is undefined in result.json (a run predating E8).
+   *  Prevents no_skill_triggered from passing vacuously (absent ≠ no skills invoked). Undefined/false on
+   *  live/replay. */
+  skillsInvokedMissing?: boolean;
+  /** RunResult.cost.usd — undefined when cost telemetry wasn't recorded for this run (a run predating
+   *  Wave 0, or the SDK didn't report total_cost_usd for this invocation). Its own undefined-ness IS the
+   *  evidence-unavailable signal for max_cost_usd — a real cost is always a defined number, including 0. */
+  costUsd?: number;
+  /** usage.input_tokens + usage.output_tokens — undefined when either isn't a number (a run predating
+   *  Wave 0, or a partial/old result.json). Own undefined-ness is the evidence-unavailable signal. */
+  tokensTotal?: number;
+  /** Sum of toolCounts values (top-level calls only) — undefined when result.toolCounts itself is
+   *  undefined (partial/old result.json), never 0 in that case (0 = genuinely zero tool calls, a real
+   *  value). Own undefined-ness is the evidence-unavailable signal. */
+  toolCallsTotal?: number;
 }
 
 export function evaluate(assertions: Assertion[], ctx: AssertContext): RunResult["assertions"] {
@@ -372,6 +412,60 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
           ? ok()
           : fail(`dispatched ${ctx.subagents.length} sub-agents, max ${a.dispatch_count_max} (SPEC §10 cap {global:3})`),
     );
+  if (a.skill_triggered !== undefined) {
+    const c = compileUserRegex(a.skill_triggered);
+    if ("error" in c) results.push(fail(`skill_triggered: bad regex "${a.skill_triggered}": ${c.error}`));
+    else if (!ctx.skillToolAvailable)
+      results.push(
+        fail(`evidence unavailable: this agent's init tool list has no "Skill" tool — cannot evaluate skill_triggered (agent-version drift?)`),
+      );
+    else
+      results.push(
+        ctx.skillsInvoked.some((s) => c.re.test(s))
+          ? ok()
+          : fail(`no invoked skill matched "${a.skill_triggered}" (invoked: ${ctx.skillsInvoked.join(", ") || "none"})`),
+      );
+  }
+  if (a.max_cost_usd !== undefined)
+    results.push(
+      ctx.costUsd === undefined
+        ? fail(`evidence unavailable: cost telemetry absent — cannot evaluate max_cost_usd`)
+        : ctx.costUsd <= a.max_cost_usd
+          ? ok()
+          : fail(`cost $${ctx.costUsd} exceeds max $${a.max_cost_usd}`),
+    );
+  if (a.max_tokens !== undefined)
+    results.push(
+      ctx.tokensTotal === undefined
+        ? fail(`evidence unavailable: token telemetry absent — cannot evaluate max_tokens`)
+        : ctx.tokensTotal <= a.max_tokens
+          ? ok()
+          : fail(`${ctx.tokensTotal} tokens exceeds max ${a.max_tokens}`),
+    );
+  if (a.tool_calls_max !== undefined)
+    results.push(
+      ctx.toolCallsTotal === undefined
+        ? fail(`evidence unavailable: tool-count telemetry absent — cannot evaluate tool_calls_max`)
+        : ctx.toolCallsTotal <= a.tool_calls_max
+          ? ok()
+          : fail(`${ctx.toolCallsTotal} tool calls exceeds max ${a.tool_calls_max}`),
+    );
+  if (a.no_skill_triggered !== undefined) {
+    const c = compileUserRegex(a.no_skill_triggered);
+    if ("error" in c) results.push(fail(`no_skill_triggered: bad regex "${a.no_skill_triggered}": ${c.error}`));
+    else if (!ctx.skillToolAvailable)
+      results.push(
+        fail(
+          `evidence unavailable: this agent's init tool list has no "Skill" tool — cannot evaluate no_skill_triggered (agent-version drift?)`,
+        ),
+      );
+    else if (ctx.skillsInvokedMissing)
+      results.push(fail(`evidence unavailable: skill invocation list absent from result.json — cannot evaluate no_skill_triggered`));
+    else
+      results.push(
+        !ctx.skillsInvoked.some((s) => c.re.test(s)) ? ok() : fail(`skill unexpectedly triggered matching "${a.no_skill_triggered}"`),
+      );
+  }
   if (a.egress_denied !== undefined)
     results.push(
       ctx.egress.some((e) => hostMatches(e.host, a.egress_denied!) && e.decision === "deny")

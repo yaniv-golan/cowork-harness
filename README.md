@@ -173,7 +173,10 @@ cowork-harness lint examples/scenarios/*.yaml
 > [docs/cassette.md](./docs/cassette.md).
 
 > **What replay checks.** `replay` re-evaluates **content assertions** (`transcript_*`, `tool_*`,
-> `subagent_*`, `dispatch_count_max`, `result`, the verdict modifiers) always, plus `question_asked`/
+> `subagent_*`, `dispatch_count_max`, `skill_triggered`/`no_skill_triggered`, `max_cost_usd`/`max_tokens`/
+> `tool_calls_max`, `result`, the verdict modifiers) always — note `max_cost_usd`/`max_tokens` assert the
+> *frozen recording's* spend on replay, not fresh spend; a real budget regression is caught by a live `run`
+> — plus `question_asked`/
 > `questions_count_max`/`gate_answers_delivered` when the cassette carries `controlOut`, and
 > **filesystem assertions** (`file_exists`, `user_visible_artifact`, `artifact_json`) when it carries an
 > `artifacts` manifest. Genuinely live-only keys (`egress_*`, `expect_denied`, `no_delete_in_outputs`,
@@ -494,6 +497,24 @@ Author scenarios in your own `scenarios/` dir, run the lot, get a non-zero exit 
 ```bash
 cowork-harness run scenarios/            # your repo's scenarios; runs every *.yaml, CI-ready exit code
 ```
+
+### Packaged GitHub Action
+
+The fastest path to CI: a composite action wrapping the token-free lane, with a PR job-summary reporter.
+
+```yaml
+- uses: yaniv-golan/cowork-harness@v1
+  with:
+    command: replay              # replay | lint | verify-cassettes | run
+    path: cassettes/my-skill.cassette.json
+```
+
+| Lane | Commands | Runner requirements | What you get |
+|---|---|---|---|
+| **Token-free** (the headline lane) | `replay`, `lint`, `verify-cassettes` | any `ubuntu-latest` | deterministic, no Docker, no API key, no agent binary — this is what most skill repos want |
+| **Live** (`command: run`) | `run` | Docker + a provisioned agent binary + `anthropic-api-key` input | real inference against a live scenario — the action does **not** provision the agent binary or build the image for you (see [Fidelity tiers](#fidelity-tiers-pick-per-scenario--per-ci-job) below and the agent-binary provenance runbook in [`docs/maintenance.md`](./docs/maintenance.md)); this is for a self-hosted runner that already has both staged, not a stock GitHub-hosted runner |
+
+Every run writes a Markdown verdict table (scenario, pass/fail, signals, cost/turns when available, staleness findings, and the replay-skipped-assertions honesty line) to the job summary. Inputs: `command`, `path` (required), `version` (npm dist-tag/version, default `latest`), `strict`, `fail-on-skill-drift`, `extra-args`, `summary` (default `true`), `anthropic-api-key` (live lane only). See [`action.yml`](./action.yml) for the full input reference.
 
 The provided [GitHub Actions workflow](.github/workflows/ci.yml) runs a **five-stage pipeline**. The **unit** stage is the token-free gate you can copy into your skill repo; the `python`, `boundary`, `scenarios`, and `parity-drift` stages are this repo's own fidelity self-tests and are not directly portable (they build the harness's Docker image and run harness-specific e2e scenarios — see [`ci-recipe.md`](./.claude/skills/cowork-harness/references/ci-recipe.md) for the skill-repo template):
 

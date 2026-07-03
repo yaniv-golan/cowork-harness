@@ -316,6 +316,38 @@ describe("Run — turn loop + record", () => {
     expect(rec.usage).toBeUndefined();
   });
 
+  it("captures a top-level Skill tool_use into rec.skillsInvoked (Wave 1 / E8)", async () => {
+    const ev: AgentEvent[] = [
+      { type: "init", tools: ["Skill"], mcpServers: [] },
+      { type: "tool_use", name: "Skill", input: { skill: "my-pdf-skill:my-pdf-skill" } },
+      { type: "result", isError: false },
+    ];
+    const rec = await new Run(new MockSession(ev), new ScriptedDecider([])).drive("do it");
+    expect(rec.skillsInvoked).toEqual(["my-pdf-skill:my-pdf-skill"]);
+  });
+
+  it("keeps duplicate Skill invocations (re-triggering is signal) and preserves call order", async () => {
+    const ev: AgentEvent[] = [
+      { type: "tool_use", name: "Skill", input: { skill: "a:a" } },
+      { type: "tool_use", name: "Skill", input: { skill: "b:b" } },
+      { type: "tool_use", name: "Skill", input: { skill: "a:a" } },
+      { type: "result", isError: false },
+    ];
+    const rec = await new Run(new MockSession(ev), new ScriptedDecider([])).drive("do it");
+    expect(rec.skillsInvoked).toEqual(["a:a", "b:b", "a:a"]);
+  });
+
+  it("does NOT capture a sub-agent-parented Skill tool_use (not a top-level invocation)", async () => {
+    const ev: AgentEvent[] = [
+      { type: "tool_use", name: "Task", input: { subagent_type: "researcher" } },
+      { type: "subagent_dispatch", toolUseId: "tu1", agentType: "researcher", declaredTools: [] },
+      { type: "tool_use", name: "Skill", input: { skill: "nested:nested" }, parentToolUseId: "tu1" },
+      { type: "result", isError: false },
+    ];
+    const rec = await new Run(new MockSession(ev), new ScriptedDecider([])).drive("do it");
+    expect(rec.skillsInvoked).toEqual([]);
+  });
+
   it("subagentTools counts only tools under a RECOGNIZED dispatch, not any parented tool_use", async () => {
     const ev: AgentEvent[] = [
       { type: "tool_use", name: "Task", input: { subagent_type: "researcher" } },

@@ -69,6 +69,7 @@ export interface RunRecord {
   }[]; // did the answer reach the model? (null = unobserved or no-pairing-metadata)
   usage?: UsageInfo;
   cost?: CostInfo;
+  skillsInvoked: string[]; // top-level Skill tool_use ids, in call order, duplicates kept (Wave 1 / E8 seam)
 }
 
 export interface RunHooks {
@@ -140,6 +141,7 @@ export class Run {
       toolResults: [],
       gateAnswers: [],
       gateDeliveries: [],
+      skillsInvoked: [],
     };
   }
 
@@ -203,6 +205,8 @@ export class Run {
               // block (live-verified), so counting the synthetic too would double-list it / add a bogus name.
               this.rec.toolsCalled.add(ev.name);
               this.rec.toolCounts[ev.name] = (this.rec.toolCounts[ev.name] ?? 0) + 1; // count top-level calls (subagent tools excluded, matching toolsCalled)
+              // Wave 1 / E8: a top-level Skill invocation — duplicates kept (re-triggering is signal).
+              if (ev.name === "Skill") this.rec.skillsInvoked.push(String((ev.input as Record<string, unknown> | undefined)?.skill ?? ""));
             }
             this.toolLog.push({ name: ev.name, input: ev.input }); // still logged for provenance/trace
             break;
