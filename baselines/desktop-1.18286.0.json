@@ -82,11 +82,11 @@
       "DISABLE_MICROCOMPACT": "1",
       "MCP_CONNECTION_NONBLOCKING": "true"
     },
-    "promptTemplate": "prompts/desktop-1.15200.0/system-prompt-append.md",
+    "promptTemplate": "prompts/desktop-1.18286.0/system-prompt-append.md",
     "subagentAppend": "prompts/desktop-1.15200.0/subagent-append-vm.md",
     "$comment": "Binary-verified Desktop->agent spawn contract (asar 1.12603.1). See docs/cowork-spawn-contract-1.12603.1.md.",
     "$comment_notSet": "Deliberately NOT set: CLAUDE_CODE_USE_COWORK_PLUGINS (Desktop never sets it; would flip the agent to cowork_settings.json/cowork_plugins). Host-derived (TZ, account UUIDs, WORKSPACE_HOST_PATHS, OTEL) injected at runtime, not pinned.",
-    "$comment_prompts": "Reconstructed cowork-specific sections, re-paraphrased from asar 1.15200.0 const MZi (system prompt) + generator CVr (subagent) — not the full base prompt (not cleanly extractable), and excluding the generic refusal/safety tail. The main append is delivered via the --append-system-prompt CLI flag (layered on the agent's built-in base prompt), NOT the initialize handshake; only the subagent append goes over initialize (appendSubagentSystemPrompt), gated on CLAUDE_CODE_ENABLE_APPEND_SUBAGENT_PROMPT."
+    "$comment_prompts": "Reconstructed cowork-specific sections, re-paraphrased from asar 1.18286.0 const aui (system prompt; RESTRUCTURED at this release — see the asset header + docs/internal/2026-07-03-prompt-append-1.18286.0-reconstruction-plan.md) and 1.15200.0 generator CVr (subagent; verified unchanged in the 1.18286.0 asar, generator Zgn). Not the full base prompt (not cleanly extractable); generic refusal/safety policy elided. Delivered via --append-system-prompt (layered on the agent's built-in base prompt), NOT the initialize handshake; only the subagent append goes over initialize (appendSubagentSystemPrompt), gated on CLAUDE_CODE_ENABLE_APPEND_SUBAGENT_PROMPT."
   },
   "mountLayout": {
     "sessionRoot": "/sessions/{sessionId}",

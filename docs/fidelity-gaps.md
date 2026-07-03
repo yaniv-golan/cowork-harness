@@ -68,6 +68,20 @@ The `skill` command supports `--session-id` + `--resume` for checkpoint-resume s
 
 ---
 
+## System-prompt reconstruction
+
+**Real Cowork behaviour:** Desktop appends a large cowork system prompt (identity, behavior policy, computer-use/file rules) on top of the agent's built-in base prompt.
+
+**Harness behaviour:** The append is a per-baseline **paraphrased reconstruction** (`baselines/prompts/desktop-<ver>/system-prompt-append.md`) — behaviorally equivalent, not byte-identical (verbatim shipping of Anthropic's prompt text is deliberately avoided). Three intentional divergences, each logged in the asset header:
+
+- **Generic refusal/safety policy is elided** — the agent's base prompt already carries safety; only cowork-behavior-driving sections are reconstructed. (Formatting/tone guidance *is* included as of the 1.18286.0 asset — the base prompt does not carry it.)
+- **`computer://` links are described, not instructed.** Real Cowork's model ends file deliveries with `[View your report](computer://…)` links; the harness's workspace token renders a `/sessions/…` path the prompt itself forbids exposing, so harness transcripts reference files directly instead of emitting `computer://` URIs. Don't assert on `computer://` in transcripts.
+- **The Desktop artifact renderer's library/CDN catalog is trimmed** from the artifacts section — the harness has no artifact UI; the file-behavior rules (single-file HTML/React, .md-vs-.docx choice) are kept.
+
+**Why:** paraphrase is a licensing/bundling constraint; the other two follow from tokens and UI surfaces that don't exist off-Desktop.
+
+---
+
 ## Fidelity tier differences
 
 The harness `--fidelity` flag selects how closely the execution environment matches real Cowork. Each tier trades fidelity for speed. For the canonical description of each tier (what it runs, when to pick it), see [README → Fidelity tiers](../README.md#fidelity-tiers-pick-per-scenario--per-ci-job) and [boundary.md](./boundary.md); the table below is the *gaps* view — what each tier does **not** reproduce.

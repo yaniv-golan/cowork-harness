@@ -41,6 +41,9 @@ export const SessionConfig = z.strictObject({
   // --- model & reasoning (Cowork model picker + toggles) ---
   model: z.string().optional(), // setModel
   effort: z.enum(["low", "medium", "high", "xhigh"]).optional(), // setEffort
+  // Rendered into the prompt append's <env> "User name:" line ({{accountName}}, >=1.18286.0
+  // reconstruction). Real Cowork uses the signed-in account's name; default "User".
+  account_name: z.string().optional(),
   // Thinking budget. Binary-verified against app.asar 1.12603.1: Cowork's config field is
   // `maxThinkingTokens` — a flat NUMBER or a per-model map `{ default, <model>: <n> }` — resolved
   // per-model by f7e() and emitted on BOTH channels: the `--max-thinking-tokens` CLI flag (agentArgs)

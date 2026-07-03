@@ -6,6 +6,31 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Parity
+
+- **Synced the platform baseline to Claude Desktop 1.18286.0** (`baselines/desktop-1.18286.0.json`).
+  The staged agent ELF is unchanged (`2.1.197`; measured sha256 matches the official release manifest).
+  `sync` re-derived egress/gates/mount/web_fetch facts — no unknown deltas; the egress allowlist (15
+  domains) and all 6 pinned GrowthBook gates held. `asarFingerprint` moved (`0b2f2fb6 → edff6926`);
+  the host-loop `## Shell access` generator and the subagent append were re-verified against the new
+  asar (unconditional fragments still byte-faithful).
+- **Re-authored the system-prompt append reconstruction for 1.18286.0**
+  (`baselines/prompts/desktop-1.18286.0/system-prompt-append.md`). The real append was RESTRUCTURED
+  at this release (constant `aui`, 37.9KB): a new `<claude_behavior>` wrapper plus new
+  behavior-driving sections — AskUserQuestion-before-work, task-list/verification, citation,
+  file-creation/computer-use guidance, web-fetch no-fallback restrictions, sharing/package/examples,
+  an `<env>` block — and the skills/file-handling sections moved inside `<computer_use>`. The
+  reconstruction (paraphrased per the no-bundling rule) now carries these; generic refusal/safety
+  policy stays elided, and the deliberate divergences (artifacts renderer catalog trimmed,
+  `computer://` links described-not-instructed) are logged in the asset header. New `<env>` tokens
+  `{{currentDateTime}}` / `{{currentTimezone}}` / `{{accountName}}` (session `account_name`,
+  default `"User"`) render in `src/prompt.ts`. New tests guard baseline→asset references, token
+  hygiene, and the `/sessions/` link-leak trade.
+- **Annotated `desktop-1.17377.2` as append-unverified** (`$comment_prompts_unverified`): its own
+  asar was never prompt-spot-checked and is no longer obtainable locally, so whether the 1.18286.0
+  restructure landed there or later is unverifiable; the pin carries the last-verified 1.15200.0
+  reconstruction.
+
 ### Added
 
 - **Agent-binary provenance in baselines.** Each baseline's `agentBinary` now records the Linux/arm64 ELF's

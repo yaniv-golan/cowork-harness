@@ -41,12 +41,25 @@ export function renderPrompts(
   const sessionRoot = `/sessions/${sessionId}`;
   const mntRoot = `${sessionRoot}/mnt`;
   const workspaceFolder = firstFolderMountPath ? `${mntRoot}/${firstFolderMountPath}` : `${mntRoot}/outputs`;
+  // {{currentDateTime}}/{{currentTimezone}} are deliberately render-time-impure (wall clock, host
+  // TZ) — that's what the real Desktop builder substitutes, and the rendered append never enters a
+  // cassette (fingerprint hashes baseline+skillHash only), so replay determinism is unaffected. Do
+  // not freeze these for testability; snapshot tests of the full rendered prompt would flake by design.
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const localDateTime =
+    `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ` + `${pad(now.getHours())}:${pad(now.getMinutes())}`;
   const tokens: Record<string, string> = {
     "{{cwd}}": sessionRoot,
     "{{skillsDir}}": `${mntRoot}/.claude`,
     "{{workspaceFolder}}": workspaceFolder,
     "{{folderSelected}}": firstFolderMountPath ? "true" : "false",
     "{{modelName}}": session.model ?? "Claude",
+    // <env> tokens (>=1.18286.0 append). The exact Desktop date format is unverified from the asar
+    // (substitution happens host-side); a readable local timestamp keeps the semantic content.
+    "{{currentDateTime}}": localDateTime,
+    "{{currentTimezone}}": Intl.DateTimeFormat().resolvedOptions().timeZone,
+    "{{accountName}}": session.account_name ?? "User",
   };
   const subst = (s: string) => Object.entries(tokens).reduce((acc, [k, v]) => acc.split(k).join(v), s);
   const fidelityWarnings: string[] = [];
