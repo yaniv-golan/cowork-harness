@@ -13,7 +13,7 @@
 
 Scriptable, CI-friendly test harness that reproduces **Claude Cowork's observable runtime contract** closely enough to test the skills you write — across many scenarios, headless, in CI — without the (locked) Desktop app. It reproduces not just Cowork's *behavior* but its *limitations*: sealed filesystem, default-deny egress, MCP-only cross-boundary — so a green test means green in real Cowork.
 
-**Contents:** [Why it works](#why-this-works-for-skill-testing) · [Fidelity tiers](#fidelity-tiers-pick-per-scenario--per-ci-job) · [Quick start](#quick-start) · [Session + scenario](#two-files-session--scenario) · [Boundary](#sandboxing-container-vs-the-real-vm) · [Discovery](#discovery-marketplaces-plugins-skills-mcp) · [Debugging](./docs/debugging.md) · [Testing & CI/CD](#testing--cicd) · [Maintenance](#maintenance-parity-between-releases) · [Docs](#documentation)
+**Contents:** [Why it works](#why-this-works-for-skill-testing) · [Quick start](#quick-start) · [Fidelity tiers](#fidelity-tiers-pick-per-scenario--per-ci-job) · [Session + scenario](#two-files-session--scenario) · [Boundary](#sandboxing-container-vs-the-real-vm) · [Discovery](#discovery-marketplaces-plugins-skills-mcp) · [Debugging](./docs/debugging.md) · [Testing & CI/CD](#testing--cicd) · [Maintenance](#maintenance-parity-between-releases) · [Docs](#documentation)
 
 > **Requirements at a glance**
 > - **Free demo (`replay`):** Node ≥ 20 — nothing else (no Docker, token, or Claude Desktop).
