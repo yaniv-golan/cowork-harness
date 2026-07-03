@@ -47,7 +47,23 @@ const PINNED_GATES: Record<string, string> = {
   "583857784": "bridgeSdkTransport", // SDK control-protocol transport
   "2340532315": "pluginSyncSparkplug", // startup syncPlugins()
   "2307090146": "cliPlugin", // CLI-plugin credential broker (dark)
+  // Dormant drift-sentinels (§1.6/§1.7): the harness models these as OFF or inert-default for a
+  // standard interactive cowork session; pinned so a production flip surfaces as a sync diff.
+  "2614807392": "skeletonHome", // mnt/.host-home discovery index — absent from fcache (dark, default false)
+  "123929380": "autoMemoryStandardSessions", // auto-memory dir for a plain (non-Spaces) cowork session (off)
+  "1696890383": "memoryGuidelinesEnv", // CLAUDE_COWORK_MEMORY_GUIDELINES env for auto-memory (off)
+  "2860753854": "memoryExtraGuidelines", // CLAUDE_COWORK_MEMORY_EXTRA_GUIDELINES PII block (on, but inert-default)
 };
+
+/**
+ * Gate ids that are DARK for a standard account — absent from the fcache entirely, not merely
+ * off. `decodeFcacheGates` normally skips ids missing from `features` (they're not gates it can
+ * report a state for); for this allowlist it instead emits an explicit `source:"absent"` marker
+ * so the pin round-trips through sync/baseline and an absent→present flip becomes a visible diff.
+ * The re-key guard below excludes `source:"absent"` entries from its "did anything match" count,
+ * so this marker can't mask a wholesale GrowthBook id re-key (see test/baseline.test.ts).
+ */
+const DARK_GATES = new Set(["2614807392"]);
 
 /**
  * Decode the Claude Desktop GrowthBook feature cache (`~/Library/Application Support/Claude/fcache`).
@@ -76,7 +92,12 @@ export function decodeFcacheGates(path = join(SUPPORT, "fcache")): Record<string
   const out: Record<string, GateState> = {};
   for (const [id, name] of Object.entries(PINNED_GATES)) {
     const f = feats[id];
-    if (!f) continue;
+    if (!f) {
+      // Dark gates are pinned even when absent (see DARK_GATES doc comment); everything else
+      // absent from this fcache is skipped, same as always.
+      if (DARK_GATES.has(id)) out[id] = { id, name, on: false, source: "absent", value: undefined };
+      continue;
+    }
     out[id] = { id, name, on: !!f.on, source: String(f.source ?? "defaultValue"), value: f.value };
   }
   return out;
@@ -120,7 +141,9 @@ export function sync(): SyncResult {
   const gates = decodeFcacheGates();
   if (!gates) {
     flag(unknown, "gates: fcache missing/unreadable — provenance.gates NOT re-synced");
-  } else if (Object.keys(gates).length === 0) {
+  } else if (Object.values(gates).filter((g) => g.source !== "absent").length === 0) {
+    // DARK_GATES markers (source:"absent") are always present and must not mask a real re-key —
+    // only count gates that actually matched a live fcache feature.
     flag(
       unknown,
       "gates: fcache decoded but NONE of the pinned gate IDs matched — gate IDs may have been re-keyed; update PINNED_GATES in cowork-sync.ts",

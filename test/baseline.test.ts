@@ -105,16 +105,44 @@ describe("decodeFcacheGates (GrowthBook fcache decode, binary-verified format)",
     expect(decodeFcacheGates(bad)).toBeNull();
   });
 
-  // precondition: a valid CLF fcache whose features contain ONLY non-pinned IDs returns {}
-  // (empty object), NOT null. This is the load-bearing precondition for the sync() else-if guard —
-  // {} is truthy so the !gates branch was silently bypassed, leaving a total GrowthBook re-key invisible.
-  it("returns {} (not null) when the fcache decodes but contains only non-pinned gate IDs", () => {
+  // precondition: a valid CLF fcache whose features contain ONLY non-pinned IDs returns an object
+  // containing ONLY the DARK_GATES absent-marker(s), NOT null and NOT truly empty. This is the
+  // load-bearing precondition for the sync() else-if guard: the guard must count only
+  // source!=="absent" entries, or the always-present dark-gate marker would mask a total
+  // GrowthBook re-key (every pinned id missing) as if something had matched.
+  it("returns only the skeletonHome absent-marker (source:'absent') when the fcache decodes but contains only non-pinned gate IDs", () => {
     const f = makeFcache({
       "999999999": { value: true, on: true, off: false, source: "force" }, // not in PINNED_GATES
     });
     const result = decodeFcacheGates(f);
     expect(result).not.toBeNull();
-    expect(result).toEqual({});
+    expect(result).toEqual({
+      "2614807392": { id: "2614807392", name: "skeletonHome", on: false, source: "absent", value: undefined },
+    });
+  });
+
+  it("the re-key guard still fires when only the absent-source dark-gate marker is present (no other pinned id matched)", () => {
+    const f = makeFcache({
+      "999999999": { value: true, on: true, off: false, source: "force" }, // not in PINNED_GATES
+    });
+    const gates = decodeFcacheGates(f)!;
+    // Mirrors the sync() else-if guard: count only gates whose source !== "absent".
+    const liveMatches = Object.values(gates).filter((g) => g.source !== "absent");
+    expect(liveMatches).toEqual([]);
+  });
+
+  it("decodes a normal (non-absent) entry when the dark gate 2614807392 IS present in the fcache", () => {
+    const f = makeFcache({
+      "2614807392": { value: true, on: true, off: false, source: "force" },
+    });
+    const gates = decodeFcacheGates(f)!;
+    expect(gates["2614807392"]).toEqual({
+      id: "2614807392",
+      name: "skeletonHome",
+      on: true,
+      source: "force",
+      value: true,
+    });
   });
 });
 
