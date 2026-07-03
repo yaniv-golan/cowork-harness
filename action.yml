@@ -53,6 +53,13 @@ outputs:
   envelope-path:
     description: "Path to the raw JSON envelope file, for a caller that wants to post-process it further"
     value: ${{ steps.run.outputs.envelope-path }}
+  summary-md:
+    description: >-
+      The rendered markdown verdict table (same content appended to $GITHUB_STEP_SUMMARY when
+      `summary: true`). Exposed as an output — not just the step summary file — because
+      $GITHUB_STEP_SUMMARY is scoped to this action's own invocation; a caller's later step gets a
+      fresh, empty file and can't read back what this step wrote.
+    value: ${{ steps.report.outputs.summary-md }}
 
 runs:
   using: "composite"
@@ -98,12 +105,20 @@ runs:
         echo "exit-code=$exit_code" >> "$GITHUB_OUTPUT"
 
     - name: Report
+      id: report
       if: always()
       shell: bash
       run: |
         summary_flag=""
         [ "${{ inputs.summary }}" = "true" ] && summary_flag="--summary"
-        node "${{ github.action_path }}/.github/actions/report/render.js" cowork-harness-envelope.json $summary_flag
+        md="$(node "${{ github.action_path }}/.github/actions/report/render.js" cowork-harness-envelope.json $summary_flag)"
+        echo "$md"
+        delim="cowork_harness_summary_$(date +%s%N)"
+        {
+          echo "summary-md<<$delim"
+          echo "$md"
+          echo "$delim"
+        } >> "$GITHUB_OUTPUT"
 
     - name: Propagate exit code
       shell: bash

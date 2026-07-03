@@ -112,15 +112,19 @@ jobs:
           npm pack --pack-destination /tmp >/dev/null
           echo "tarball=$(ls /tmp/cowork-harness-*.tgz)" >> "$GITHUB_OUTPUT"
       - name: Run the action against the committed pass-case fixture
+        id: passcase
         uses: ./
         with:
           command: replay
           path: examples/replays/example-pdf-skill.cassette.json
           version: ${{ steps.pack.outputs.tarball }}
-      - name: Verify the step summary was written (the reporter actually ran)
+      - name: Verify the reporter actually ran
+        # $GITHUB_STEP_SUMMARY is scoped to THIS action invocation's own steps (all composite
+        # sub-steps share one file), so a later, separate workflow step gets a fresh, empty file and
+        # can never read back what the action wrote — check the summary-md OUTPUT instead.
         run: |
-          if [ -z "$(cat "$GITHUB_STEP_SUMMARY" 2>/dev/null)" ]; then
-            echo "::error::action-self-test: GITHUB_STEP_SUMMARY is empty — the reporter didn't write anything."
+          if [ -z "${{ steps.passcase.outputs.summary-md }}" ]; then
+            echo "::error::action-self-test: summary-md output is empty — the reporter didn't write anything."
             exit 1
           fi
       - name: Run the action against a nonexistent path (must fail — proves exit-code propagation)
@@ -150,16 +154,19 @@ jobs:
           version: ${{ steps.pack.outputs.tarball }}
           extra-args: "--assert-from examples/replays/example-pdf-skill-ci-selftest-failing.yaml"
       - name: Verify the assertion-failure case actually failed, and the reporter rendered a fail row
+        env:
+          # steps.assertfailcase.outputs.summary-md, not $GITHUB_STEP_SUMMARY — that file is scoped
+          # to the assertfailcase step's own invocation; this (separate) step would see a fresh, empty one.
+          SUMMARY_MD: ${{ steps.assertfailcase.outputs.summary-md }}
         run: |
           if [ "${{ steps.assertfailcase.outcome }}" != "failure" ]; then
             echo "::error::action-self-test: expected the deliberately-failing assertion to fail, got outcome='${{ steps.assertfailcase.outcome }}'"
             exit 1
           fi
-          # The summary is cumulative across this job's steps — the earlier pass-case already put an
-          # "example-pdf-skill | ✅ pass" row in there, so match the fail row specifically (same
-          # scenario name, "❌ fail" verdict), not just the scenario name appearing anywhere.
-          if ! grep -qE "example-pdf-skill.*❌ fail" "$GITHUB_STEP_SUMMARY" 2>/dev/null; then
-            echo "::error::action-self-test: job summary doesn't show a failing verdict row for example-pdf-skill — the reporter may not be rendering assertion failures correctly."
+          # This step's summary-md is just the assertfailcase invocation's own row (not cumulative
+          # across the job's earlier steps — each action invocation renders only its own run).
+          if ! grep -qE "example-pdf-skill.*❌ fail" <<< "$SUMMARY_MD"; then
+            echo "::error::action-self-test: reporter output doesn't show a failing verdict row for example-pdf-skill — the reporter may not be rendering assertion failures correctly."
             exit 1
           fi
 
