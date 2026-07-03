@@ -231,10 +231,12 @@ function percentile(sorted: number[], p: number): number {
   return sorted[idx];
 }
 
-/** Pure aggregation over already-loaded rows (filters applied first). `since` compares ISO-string
- *  timestamps lexically (both are ISO 8601, so this is safe and avoids a Date-parsing dependency). A row
- *  whose `outDir` no longer exists on disk (deleted by `prune`) still counts toward every stat — the index
- *  is the durable history — but is flagged `prunedRuns` so a consumer can tell "no evidence left to
+/** Aggregation over already-loaded rows (filters applied first). NOT pure — `prunedRuns` below calls
+ *  `existsSync(r.outDir)` per row, real filesystem I/O, so the same rows can produce a different
+ *  `prunedRuns` count if the caller re-runs this after a `prune` in between. Every other field IS a pure
+ *  function of `rows`/`filters`. `since` compares ISO-string timestamps lexically (both are ISO 8601, so
+ *  this is safe and avoids a Date-parsing dependency). A row whose `outDir` no longer exists on disk
+ *  (deleted by `prune`) still counts toward every stat — the index is the durable history — but is flagged `prunedRuns` so a consumer can tell "no evidence left to
  *  re-inspect" apart from "still on disk". */
 export function buildStats(
   rows: RunIndexRow[],

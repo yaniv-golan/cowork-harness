@@ -392,6 +392,7 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
     "       queryable summary over <runsRoot>/index.jsonl (E4) — per-scenario run count, pass rate, cost/duration/token/turn p50/p95, last-green timestamp.\n" +
     "       --reindex rebuilds the index from the physical run-dir tree first (one-time migration for pre-index runs, or if index.jsonl is lost/corrupted beyond its own per-line tolerance).\n" +
     "       --last <n>: the N most recent runs PER SCENARIO (not globally — a global cut would starve a low-frequency scenario out of the window).\n" +
+    "       --metric narrows the TEXT line to one view; --output-format json always returns every field regardless (same convention as --quiet/--verbose — machine output stays full, only the human render narrows).\n" +
     "       `run`/`skill` invocations are indexed automatically at every result.json write (live + partial); `record`'s live execution is indexed too, tagged command:\"record\"; replay results are never indexed (they're re-checks, not new evidence).",
   decide:
     'usage: decide [--question <q>] [--option <o>]... [--decider-cmd <cmd> | --decider-llm [--intent <s>] [--decider-model <id>]] [--answer "<q>=<label>"]... [--answer-policy <p>] [--output-format json]',

@@ -36,6 +36,12 @@ most recent **passing** run's timestamp (`lastGreenTs` — absent if the scenari
 windows to the N most recent runs **per scenario** (not globally — a global cut would starve a
 low-frequency scenario out of the window entirely once a high-frequency one dominates recent rows).
 
+`--metric` is a text-mode-only view narrower — `--output-format json` always returns every field for every
+scenario regardless of `--metric`, the same convention `--quiet`/`--verbose` already follow elsewhere in
+this CLI (machine output stays fully populated; only the human-readable render narrows). A JSON consumer
+that only wants cost data filters client-side (`jq '.stats[].p50CostUsd'`) rather than losing the other
+fields to a server-side narrowing it didn't ask for.
+
 ## `--reindex`: the migration path
 
 `index.jsonl` only exists going forward from the version that introduced it. If you have an existing
