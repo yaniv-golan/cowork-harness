@@ -1,0 +1,13 @@
+# Worked example: a real, runnable `run --matrix` file for examples/scenarios/csv-metrics.yaml.
+#
+# Matrixes one scenario across the two most recent shipped baselines — a real compatibility
+# check ("does the csv-metrics skill still work under both of these Desktop builds?"), not a
+# synthetic demo. No `models:` or `skill_dirs:` axis: the scenario's session already pins a model
+# (see examples/sessions/csv-metrics.yaml), and this repo doesn't ship a second variant of the
+# csv-metrics skill to matrix a `skill_dirs` axis against — inventing one would just be a fake path.
+# An omitted axis contributes exactly one (unmodified) cell, so this still runs 2 cells total
+# (one per baseline), not a bloated cross-product.
+#
+# Run:  cowork-harness run examples/scenarios/csv-metrics.yaml \
+#         --matrix examples/matrices/csv-metrics-matrix.yaml --concurrency 2
+baselines: [desktop-1.17377.2, desktop-1.18286.0]

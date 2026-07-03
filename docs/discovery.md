@@ -74,6 +74,12 @@ collapse. The byte-level budget algorithm and constants are documented in the
 Grepping `events.jsonl` for skill-listing content (e.g. a `when_to_use` phrase) yields a
 **false negative** — the text is there in the model's context, just not in that reconstruction.
 
+`<proj-slug>` is the project-slug directory name Claude Code's own CLI derives from its cwd when
+writing session transcripts — this repo only bind-mounts the parent `projects/` dir
+(`src/runtime/hostloop-stage.ts`) and never computes or names that subdirectory itself. Don't try
+to compute it: `ls runs/<scenario>/<run>/work/session/mnt/.claude/projects/` — there's normally
+exactly one entry, so use whatever name is actually there.
+
 ## MCP and the host/VM split — a fidelity note
 
 In **real Cowork**, stdio MCP servers run **host-side** (the VM shell is sealed; host MCP servers get the full host env), and the agent reaches them across the VM boundary. This is *the* mechanism for cross-boundary work — a skill that needs a host resource must go through an MCP server.

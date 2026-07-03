@@ -2,7 +2,7 @@
 
 > A scriptable, CI-friendly harness that reproduces Claude Cowork's observable runtime contract — staged agent, mount layout, default-deny egress allowlist, and the permission/AskUserQuestion control protocol — so you can test Claude Code **skills** the way Cowork runs them, headless and outside the Desktop app. It reproduces Cowork's *limitations*, so a green test means green in real Cowork.
 
-It is a fidelity fixture, not the Desktop runtime. The CLI binary is `cowork-harness`; commands are `skill · run · chat · record · replay · trace · inspect · lint · scaffold · verify-run · verify-cassettes · assertions · decide · gates · answer · sync · list · boundary-check · vm · doctor · rehash · prune`. Output is human-readable on stderr with a stable `--output-format json` envelope on stdout; exit codes are `0` pass / `1` failure / `2` usage / `3` boundary/integrity / `127` lint hard-failure (`python3` missing).
+It is a fidelity fixture, not the Desktop runtime. The CLI binary is `cowork-harness`; commands are `skill · run · chat · record · replay · trace · diff · inspect · lint · scaffold · status · stats · verify-run · verify-cassettes · assertions · decide · gates · answer · sync · list · boundary-check · vm · doctor · rehash · prune`. Output is human-readable on stderr with a stable `--output-format json` envelope on stdout; exit codes are `0` pass / `1` failure / `2` usage / `3` boundary/integrity / `127` lint hard-failure (`python3` missing).
 
 ## Start here
 - [README](README.md): overview, fidelity tiers, quick start, command reference

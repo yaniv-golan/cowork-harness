@@ -197,7 +197,8 @@ whole-field decode pass triggered; or a scrubbed string from the direct pass.
 
 ## Assertion table
 
-This table mirrors `src/run/cassette.ts` `contentKeys`, which is **the single source of truth**.
+This table mirrors the union of `alwaysContentKeys`/`questionGateKeys`/`manifestKeys` in
+`src/run/cassette.ts`, which is **the single source of truth**.
 Content keys are evaluated on replay; everything else is skipped. This is the per-key reference; for
 the rules and CI-placement rationale (why each category behaves this way), see
 [docs/scenario.md → Which assertions survive replay](./scenario.md#which-assertions-survive-replay-ci-placement).
@@ -219,12 +220,12 @@ the rules and CI-placement rationale (why each category behaves this way), see
 | `subagent_dispatched` | a sub-agent matching the regex was dispatched |
 | `subagent_declared_but_unused` | sub-agent declared the tool but never used **that** tool (even if it used others) |
 | `dispatch_count_max` | at most N sub-agents dispatched |
-| `skill_triggered` | the top-level `Skill` tool_use matching the regex was invoked |
-| `no_skill_triggered` | no top-level `Skill` tool_use matching the regex was invoked |
-| `max_cost_usd` | total run cost stayed at or under the USD ceiling — on replay this asserts the *frozen recording's* spend, not fresh spend |
-| `max_tokens` | total token usage stayed at or under the ceiling — same replay caveat as `max_cost_usd` |
-| `tool_calls_max` | at most N tool calls total (re-derived from `toolCounts` on replay) |
-| `max_turns` | at most N conversation turns (re-derived on replay) |
+| `skill_triggered` | a skill matching the regex was invoked via the `Skill` tool — evidence-unavailable (not a normal fail) when the agent's init tool list has no `Skill` tool |
+| `no_skill_triggered` | no invoked skill id matched the regex — evidence-unavailable (never a vacuous pass) when skill-invocation data or the `Skill` tool itself is unobservable |
+| `max_cost_usd` | run's SDK-reported cost ≤ N USD — on replay this asserts the *frozen recording's* cost, not fresh spend |
+| `max_tokens` | `usage.input_tokens + usage.output_tokens` ≤ N (cache tokens excluded) — same frozen-recording caveat as `max_cost_usd` |
+| `tool_calls_max` | total top-level tool calls (sub-agent tools excluded) ≤ N — meaningfully replay-checkable; the re-drive recomputes `toolCounts` deterministically |
+| `max_turns` | SDK-reported (or fallback-counted) turn count ≤ N — replay-checkable, recounted deterministically same as `tool_calls_max` |
 | `question_asked` | agent asked an AskUserQuestion matching the regex |
 | `questions_count_max` | at most N questions asked |
 | `gate_answers_delivered` | answered gates' answers reached the model |

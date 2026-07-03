@@ -555,18 +555,23 @@ example.
 
 One scenario, a cross-product of axes, one command. `--matrix <matrix.yaml>` runs the resolved scenario
 once per cell of a matrix file's declared axes and reports one row per cell, instead of one pass/fail for
-the whole run:
+the whole run. For a real, runnable starting point (not just the illustrative snippet below), see
+[`examples/matrices/csv-metrics-matrix.yaml`](../examples/matrices/csv-metrics-matrix.yaml) — it matrixes
+`examples/scenarios/csv-metrics.yaml` across the two most recent shipped baselines:
 
 ```bash
-cowork-harness run examples/scenarios/csv-metrics.yaml --matrix matrix.yaml --concurrency 2
+cowork-harness run examples/scenarios/csv-metrics.yaml --matrix examples/matrices/csv-metrics-matrix.yaml --concurrency 2
 ```
 
-`matrix.yaml`:
+A `matrix.yaml` can declare any/all of three axes:
 
 ```yaml
 baselines: [desktop-1.17377.2, desktop-1.18286.0]   # optional axis; each value must resolve via loadBaseline
 models: [claude-sonnet-4-6, claude-opus-4-8]         # optional axis; overrides the session model per cell
-skill_dirs: [../variants/v1/my-skill, ../variants/v2/my-skill]   # optional axis; substitutes the skill under test
+# skill_dirs: [<path-to-variant-A>, <path-to-variant-B>]   # optional axis; substitutes the skill under test —
+#   point this at real alternate skill directories in your own repo. This repo doesn't ship a second variant
+#   of csv-metrics to matrix against, so the shipped example (examples/matrices/csv-metrics-matrix.yaml) omits
+#   this axis rather than inventing fake paths.
 ```
 
 - Any axis may be omitted; an omitted/empty axis contributes exactly one cell (unmodified), so a matrix

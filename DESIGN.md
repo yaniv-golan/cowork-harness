@@ -1,6 +1,6 @@
 # DESIGN — parity model, deltas, and the maintenance contract
 
-This document is the reference for *how faithful* each tier is, *what we deliberately don't reproduce*, and *why the chosen seams keep parity cheap to maintain*. Everything here is grounded in analysis of the live Claude Desktop `app.asar` (spawn contract and gates first verified at build 1.12603.1; updated through build 1.17377.1 — volatile fields tracked in `baselines/desktop-1.17377.1.json`) and the on-disk runtime state on macOS.
+This document is the reference for *how faithful* each tier is, *what we deliberately don't reproduce*, and *why the chosen seams keep parity cheap to maintain*. Everything here is grounded in analysis of the live Claude Desktop `app.asar` (spawn contract and gates first verified at build 1.12603.1; updated through build 1.18286.0 — volatile fields tracked in `baselines/desktop-1.18286.0.json`) and the on-disk runtime state on macOS.
 
 > **Just want to pick a tier or write a scenario?** This doc is the *why*. For the *how*, start at the
 > [README](./README.md) (tiers, quick start) and [docs/](./docs/README.md) (scenario/session reference).
