@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { parseMessage, type AgentEvent, type DecisionRequest } from "../agent/session.js";
 import { labelSource } from "./gate-provenance.js";
 import type { RunResult } from "../types.js";
-import { readIndex, resolveRunsFromIndex } from "./run-index.js";
+import { readIndex, resolveRunsExactFromIndex, resolveRunsFragmentFromIndex, type RunIndexRow } from "./run-index.js";
 
 /**
  * The default runs root when no override is set: a per-user state dir OUTSIDE any working tree, so run
@@ -105,18 +105,13 @@ function rowFor(ev: AgentEvent): TraceRow[] {
   }
 }
 
-/** E4: the index-first path — `resolveEventsFile`'s single choke point (trace/inspect/scaffold/status all
- *  resolve a run-id/fragment through it), so making IT index-aware migrates all four for free, with full
- *  behavioral safety: an index MISS (a pre-index-era run, or index.jsonl never built via `--reindex`) falls
- *  straight through to the existing filesystem walk below, unchanged. Mirrors the walk's own
- *  exact-then-fragment-with-ambiguity-warning semantics, using the index row's `ts` (the run's actual
- *  creation time) for the most-recent tie-break instead of a directory's `mtime` (a strictly better signal
- *  — mtime can be touched by unrelated filesystem operations, `ts` cannot). Returns `undefined` on an
- *  index miss OR when the index found a row but its `events.jsonl` no longer exists on disk (an index
- *  entry surviving a `prune` of the physical run dir) — either way, falls through to the walk. */
-function resolveEventsFileViaIndex(arg: string): string | undefined {
-  const root = runsRoot();
-  const rows = resolveRunsFromIndex(readIndex(root), arg);
+/** E4: resolves `arg` against a set of already-tiered index rows (exact OR fragment — caller picks the
+ *  tier), tie-breaking on the index row's `ts` (the run's actual creation time — a strictly better signal
+ *  than a directory's `mtime`, which the filesystem walk uses and which can be touched by unrelated
+ *  filesystem operations). Returns `undefined` on no rows, OR when the winning row's `events.jsonl` no
+ *  longer exists on disk (an index entry surviving a `prune` of the physical run dir) — either way, the
+ *  caller falls through to the next tier. */
+function resolveViaIndexRows(rows: RunIndexRow[], arg: string): string | undefined {
   if (rows.length === 0) return undefined;
   const sorted = rows.length > 1 ? [...rows].sort((a, b) => (a.ts < b.ts ? 1 : -1)) : rows;
   if (sorted.length > 1) {
@@ -130,16 +125,30 @@ function resolveEventsFileViaIndex(arg: string): string | undefined {
   return existsSync(f) ? f : undefined;
 }
 
-/** Resolve `arg` to an events.jsonl: a direct file, a run dir, or a run-id/scenario fragment under runs/. */
+/** Resolve `arg` to an events.jsonl: a direct file, a run dir, or a run-id/scenario fragment under runs/.
+ *  `resolveEventsFile` is the single choke point trace/inspect/scaffold/status all resolve a run-id/
+ *  fragment through — making it index-aware (E4) migrates all four for free, with full behavioral safety:
+ *  an index MISS (a pre-index-era run, or index.jsonl never built via `--reindex`) falls straight through
+ *  to the filesystem walk, unchanged.
+ *
+ *  Tier order is index-EXACT → filesystem-EXACT → index-FRAGMENT → filesystem-FRAGMENT, deliberately
+ *  interleaved rather than "try the whole index, then the whole walk" — an EARLIER version tried the
+ *  index's exact-then-fragment fallback as one block before the walk, which meant an index FRAGMENT hit
+ *  could shadow a filesystem EXACT hit for a run that predates the index (e.g. an on-disk `sess-a` run
+ *  dir + an indexed `sess-abc` run: `resolveEventsFile("sess-a")` would silently resolve to `sess-abc`'s
+ *  events.jsonl instead of `sess-a`'s own, no warning — `sess-*` ids are user-chosen, so this collision is
+ *  realistic, not hypothetical). Interleaving preserves the walk's own "exact always wins over any
+ *  fragment, regardless of source" invariant exactly. */
 export function resolveEventsFile(arg: string): string {
   if (existsSync(arg) && statSync(arg).isFile()) return arg;
   if (existsSync(arg) && statSync(arg).isDirectory()) {
     const f = join(arg, "events.jsonl");
     if (existsSync(f)) return f;
   }
-  const viaIndex = resolveEventsFileViaIndex(arg);
-  if (viaIndex) return viaIndex;
   const root = runsRoot(); // COWORK_HARNESS_RUNS_DIR, else the absolute ~/.cowork-harness/runs — not cwd-relative
+  const indexRows = readIndex(root);
+  const viaIndexExact = resolveViaIndexRows(resolveRunsExactFromIndex(indexRows, arg), arg);
+  if (viaIndexExact) return viaIndexExact;
   if (existsSync(root)) {
     // prefer EXACT match first; only fall through to fragment matching if nothing exact was found.
     // Collect ALL fragment matches and warn loudly (with candidates) before picking deterministically.
@@ -155,6 +164,10 @@ export function resolveEventsFile(arg: string): string {
       const direct = join(sd, arg, "events.jsonl");
       if (existsSync(direct)) return direct; // exact run-dir name match under scenario dir
     }
+  }
+  const viaIndexFragment = resolveViaIndexRows(resolveRunsFragmentFromIndex(indexRows, arg), arg);
+  if (viaIndexFragment) return viaIndexFragment;
+  if (existsSync(root)) {
     // Fragment matching: collect all candidates so ambiguity is surfaced, not silently resolved.
     const candidates: string[] = [];
     for (const scen of readdirSync(root)) {

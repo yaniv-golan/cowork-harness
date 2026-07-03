@@ -50,8 +50,8 @@ describe("jsonEnvelope — E3's matrix addition (ok redefined from matrix.anyFai
     const results = [rr({}), rr({})];
     const matrix = buildMatrixRollup(
       [
-        { index: 0, axes: {}, pass: true, failedAssertions: [] },
-        { index: 1, axes: {}, pass: true, failedAssertions: [] },
+        { index: 0, axes: {}, pass: true, failedAssertions: [], signals: [] },
+        { index: 1, axes: {}, pass: true, failedAssertions: [], signals: [] },
       ],
       2,
       false,
@@ -63,7 +63,7 @@ describe("jsonEnvelope — E3's matrix addition (ok redefined from matrix.anyFai
 
   it("ok is false when any matrix cell fails (assertion OR infra error)", () => {
     const results = [rr({})];
-    const matrix = buildMatrixRollup([{ index: 0, axes: {}, pass: false, failedAssertions: [], error: "agent binary unavailable" }], 1, false);
+    const matrix = buildMatrixRollup([{ index: 0, axes: {}, pass: false, failedAssertions: [], signals: [], error: "agent binary unavailable" }], 1, false);
     const envelope = JSON.parse(jsonEnvelope("run", results, { matrix }));
     expect(envelope.ok).toBe(false);
   });
@@ -71,7 +71,7 @@ describe("jsonEnvelope — E3's matrix addition (ok redefined from matrix.anyFai
   it("matrix and rollups are mutually exclusive in practice but the envelope doesn't enforce it structurally — matrix wins if both given", () => {
     const results = [rr({})];
     const rollup = buildRepeatRollup("t", 1, results); // would say ok:true
-    const matrix = buildMatrixRollup([{ index: 0, axes: {}, pass: false, failedAssertions: [] }], 1, false); // says ok:false
+    const matrix = buildMatrixRollup([{ index: 0, axes: {}, pass: false, failedAssertions: [], signals: [] }], 1, false); // says ok:false
     const envelope = JSON.parse(jsonEnvelope("run", results, { rollups: [rollup], matrix }));
     expect(envelope.ok).toBe(false);
   });

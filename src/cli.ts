@@ -707,6 +707,29 @@ function flagValueStrict(command: string, args: string[], i: number, flag: strin
 }
 
 /**
+ * Reads a value-flag that may appear as EITHER `--flag value` OR `--flag=value` — unlike `flagValue`
+ * (spaced form only), used at call sites (`stats`) that don't pre-extract flags the way `cmdRun`'s pre-args
+ * loop does. `rejectUnknownFlags` already strips `=value` before its allowlist check (its own comment says
+ * so), so an equals-form token silently PASSES that check — if the value-read here only looked for the
+ * exact spaced-form token, the flag would be silently accepted-but-ignored, not a "unknown flag" usage
+ * error. Returns `undefined` when the flag isn't present at all (never for a present-but-empty value —
+ * that's a usage error via the delegated `flagValue` call, or an explicit empty-value check for the
+ * equals form).
+ */
+function readValueFlag(command: string, args: string[], flag: string, json: boolean): string | undefined {
+  const eqPrefix = flag + "=";
+  const eqToken = args.find((a) => a.startsWith(eqPrefix));
+  if (eqToken !== undefined) {
+    const v = eqToken.slice(eqPrefix.length);
+    if (v.trim() === "") fail(command, "usage", `${flag} requires a non-empty value`, undefined, json);
+    return v;
+  }
+  const i = args.indexOf(flag);
+  if (i === -1) return undefined;
+  return flagValue(command, args, i, flag, json);
+}
+
+/**
  * Extract true positionals — args that are neither a flag nor the value consumed by a known
  * value-taking flag. Replaces the naive first-non-dash-token scan, which mistook a flag's value
  * (e.g. the `1` in `--gate 1`, the `json` in `--output-format json`) for the positional.
@@ -944,8 +967,14 @@ async function runOneScenario(p: {
   o: ReturnType<typeof resolveOutput>;
   keep?: boolean;
   extra?: Partial<ExecuteOptions>; // skill-only opts: session/sessionId/resume/llmIntent/nonDeterministicHint
+  /** E3: --matrix drives N cells from ONE process — a single cell's UnansweredError must never
+   *  process.exit() the whole matrix (the default `fail()` mapping below does exactly that). When true,
+   *  re-throw UnansweredError like any other error instead, so the matrix cell loop's own per-cell catch
+   *  can convert it into a distinct `cell error` — same shape as an agent-binary-unavailable failure,
+   *  never silently conflated with a real assertion failure. */
+  rethrowUnanswered?: boolean;
 }): Promise<RunResult> {
-  const { command, scenario, label, flags, policy, externalChannel, o, keep, extra } = p;
+  const { command, scenario, label, flags, policy, externalChannel, o, keep, extra, rethrowUnanswered } = p;
   const renderer = o.render ? makeRenderer(o.plan) : undefined;
   if (!o.json && !flags.quiet) renderStart(label, scenario.fidelity, o.plan);
   const start = Date.now();
@@ -961,12 +990,12 @@ async function runOneScenario(p: {
       compact: !!(flags.compact || flags.demo), // --demo implies --compact
     });
   } catch (e) {
-    if (e instanceof UnansweredError) {
+    if (e instanceof UnansweredError && !rethrowUnanswered) {
       const chan = flags.deciderDir ? "decider-dir" : flags.deciderCmd ? "decider-cmd" : policy;
       const prefix = command === "run" ? `${scenario.name}: ` : ""; // run names the scenario; skill is single
       fail(command, "unanswered", `${prefix}unanswered question (on_unanswered=${chan})`, e.hint, o.json);
     }
-    throw e; // BoundaryError + generic → top-level catch (categorized there)
+    throw e; // BoundaryError + generic → top-level catch (categorized there); also UnansweredError when rethrowUnanswered
   } finally {
     stopHeartbeat();
   }
@@ -1141,6 +1170,30 @@ async function cmdRun(rawArgs: string[]) {
       // scenario-path check above — not a raw ENOENT + stack trace.
       fail("run", "usage", `failed to load session "${scenario.session}": ${(e as Error).message}`, undefined, o.json);
     }
+    // skill_dirs candidates are resolved relative to the MATRIX FILE's own directory (the same
+    // relocatability convention resolveSessionPaths already applies to a session file's own paths — a
+    // matrix.yaml checked into a repo alongside its scenario must not depend on the invoker's cwd) and
+    // existence-checked up front — fail loud before spending a single live run, not per-cell as a
+    // confusing runtime "cell error" for what's actually a typo in the matrix file.
+    const matrixBaseDir = dirname(resolve(matrixFile));
+    const skillDirAxis = matrixDoc!.skill_dirs;
+    const resolvedSkillDirs = new Map<string, string>(); // declared value -> resolved absolute path
+    if (skillDirAxis) {
+      for (const d of skillDirAxis) {
+        const resolved = d.startsWith("~") || isAbsolute(d) ? d : resolve(matrixBaseDir, d);
+        if (!existsSync(resolved))
+          fail("run", "usage", `matrix skill_dirs: "${d}" (resolved: ${resolved}) does not exist`, undefined, o.json);
+        resolvedSkillDirs.set(d, resolved);
+      }
+      if (baseSession.plugins.local_plugins.length !== 1)
+        fail(
+          "run",
+          "usage",
+          `matrix skill_dirs axis requires the session to declare exactly one plugins.local_plugins entry to substitute (found ${baseSession.plugins.local_plugins.length})`,
+          undefined,
+          o.json,
+        );
+    }
     const results: RunResult[] = [];
     let cellResults: MatrixCellResult[];
     try {
@@ -1151,15 +1204,12 @@ async function cmdRun(rawArgs: string[]) {
           session = applySessionOverrides(baseSession, {
             model: cell.axes.model,
             skillDirSubstitution:
-              cell.axes.skillDir !== undefined ? [baseSession.plugins.local_plugins[0], cell.axes.skillDir] : undefined,
+              cell.axes.skillDir !== undefined
+                ? [baseSession.plugins.local_plugins[0], resolvedSkillDirs.get(cell.axes.skillDir)!]
+                : undefined,
           });
-          if (cell.axes.skillDir !== undefined && baseSession.plugins.local_plugins.length !== 1)
-            throw new Error(
-              `skill_dirs axis requires the session to declare exactly one plugins.local_plugins entry to substitute ` +
-                `(found ${baseSession.plugins.local_plugins.length})`,
-            );
         } catch (e) {
-          return { index: cell.index, axes: cell.axes, pass: false, failedAssertions: [], error: (e as Error).message };
+          return { index: cell.index, axes: cell.axes, pass: false, failedAssertions: [], signals: [], error: (e as Error).message };
         }
         const label = `${scenario.name} [${axesLabel(cell.axes)}] (cell ${cell.index + 1}/${cells.length})`;
         try {
@@ -1171,14 +1221,17 @@ async function cmdRun(rawArgs: string[]) {
             policy,
             externalChannel,
             o,
-            extra: { session },
+            extra: { session, llmModel: deciderModel },
+            rethrowUnanswered: true,
           });
           results.push(result);
           return matrixCellResultFromRun(cell, result);
         } catch (e) {
-          // A cell-level infra failure (e.g. the pinned baseline's agent binary isn't staged) must not
-          // crash the whole matrix — render it as a distinct "cell error", not a fake assertion failure.
-          return { index: cell.index, axes: cell.axes, pass: false, failedAssertions: [], error: (e as Error).message };
+          // A cell-level failure — an infra problem (e.g. the pinned baseline's agent binary isn't
+          // staged) OR an unanswered gate (rethrowUnanswered above) — must never crash the whole matrix;
+          // render it as a distinct "cell error", never conflated with a real assertion failure.
+          const message = e instanceof UnansweredError ? `unanswered question: ${e.message}` : (e as Error).message;
+          return { index: cell.index, axes: cell.axes, pass: false, failedAssertions: [], signals: [], error: message };
         }
       });
     } finally {
@@ -2115,18 +2168,13 @@ function cmdStats(args: string[]) {
     json,
   );
   const reindex = args.includes("--reindex");
-  const sinceIdx = args.indexOf("--since");
-  const since = sinceIdx >= 0 ? flagValue("stats", args, sinceIdx, "--since", json) : undefined;
-  const baselineIdx = args.indexOf("--baseline");
-  const baseline = baselineIdx >= 0 ? flagValue("stats", args, baselineIdx, "--baseline", json) : undefined;
-  const branchIdx = args.indexOf("--branch");
-  const branch = branchIdx >= 0 ? flagValue("stats", args, branchIdx, "--branch", json) : undefined;
-  const metricIdx = args.indexOf("--metric");
-  const metric = metricIdx >= 0 ? flagValue("stats", args, metricIdx, "--metric", json) : undefined;
+  const since = readValueFlag("stats", args, "--since", json);
+  const baseline = readValueFlag("stats", args, "--baseline", json);
+  const branch = readValueFlag("stats", args, "--branch", json);
+  const metric = readValueFlag("stats", args, "--metric", json);
   if (metric !== undefined && !["pass-rate", "cost", "tokens", "duration", "turns"].includes(metric))
     return void fail("stats", "usage", `--metric must be one of pass-rate|cost|tokens|duration|turns (got "${metric}")`, undefined, json);
-  const lastIdx = args.indexOf("--last");
-  const lastRaw = lastIdx >= 0 ? flagValue("stats", args, lastIdx, "--last", json) : undefined;
+  const lastRaw = readValueFlag("stats", args, "--last", json);
   let last: number | undefined;
   if (lastRaw !== undefined) {
     const n = Number(lastRaw);
@@ -2142,23 +2190,8 @@ function cmdStats(args: string[]) {
     const { written, skipped } = reindexFromRunsTree(root);
     log(`stats: reindexed ${written} run(s) from ${root}${skipped ? ` (${skipped} skipped — missing/corrupt result.json)` : ""}`);
   }
-  let rows = readIndex(root);
-  if (last !== undefined) {
-    // Windowed PER SCENARIO (each scenario's own N most recent), not globally — a global cut would starve
-    // a low-frequency scenario out of the window entirely once a high-frequency one dominates recent rows.
-    const byScenario = new Map<string, RunIndexRow[]>();
-    for (const r of rows) {
-      if (!byScenario.has(r.scenario)) byScenario.set(r.scenario, []);
-      byScenario.get(r.scenario)!.push(r);
-    }
-    rows = [...byScenario.values()].flatMap((group) =>
-      group
-        .slice()
-        .sort((a, b) => (a.ts < b.ts ? 1 : -1))
-        .slice(0, last),
-    );
-  }
-  const stats = buildStats(rows, { scenario, since, baseline, branch });
+  const rows = readIndex(root);
+  const stats = buildStats(rows, { scenario, since, baseline, branch, last });
   if (json) return void out(JSON.stringify({ tool: "cowork-harness", command: "stats", ok: true, stats }));
   if (stats.length === 0) return void log("stats: no indexed runs match the given filters.");
   for (const s of stats) log(formatStatsLine(s, metric));

@@ -64,7 +64,7 @@ describe("expandMatrix — cross-product cell generation", () => {
 });
 
 function cellResult(over: Partial<MatrixCellResult>): MatrixCellResult {
-  return { index: 0, axes: {}, pass: true, failedAssertions: [], ...over };
+  return { index: 0, axes: {}, pass: true, failedAssertions: [], signals: [], ...over };
 }
 
 describe("buildMatrixRollup", () => {
@@ -114,10 +114,13 @@ describe("formatMatrixRollup — text rendering", () => {
     expect(joined).toContain("agent binary unavailable");
   });
 
-  it("warns in the output when the matrix was truncated by --max-cells", () => {
+  it("does NOT repeat the truncation warning — that's emitted once at expansion time in cli.ts (before " +
+    "any cell runs, so it fires in both --output-format modes), not duplicated here per-render", () => {
     const rollup = buildMatrixRollup([cellResult({})], 9, true);
     const joined = formatMatrixRollup(rollup).join("\n");
-    expect(joined).toMatch(/truncat|max-cells|capped/i);
-    expect(joined).toContain("9");
+    expect(joined).not.toMatch(/truncat/i);
+    // the underlying data the CLI-level warning is built from is still on the rollup itself
+    expect(rollup.truncated).toBe(true);
+    expect(rollup.requested).toBe(9);
   });
 });

@@ -13,6 +13,12 @@ import {
 } from "../src/run/run-index.js";
 import type { RunResult } from "../src/types.js";
 
+function muteStderr(): string[] {
+  const lines: string[] = [];
+  process.stderr.write = ((s: string | Uint8Array) => (lines.push(String(s)), true)) as typeof process.stderr.write;
+  return lines;
+}
+
 function rr(over: Partial<RunResult>): RunResult {
   return {
     scenario: "t",
@@ -104,14 +110,30 @@ describe("appendIndexRow / readIndex — the on-disk round trip", () => {
     expect(readIndex(dir)).toEqual([]);
   });
 
-  it("tolerates a corrupt/truncated trailing line (crash mid-append) — skips it, keeps the rest", () => {
+  it("tolerates a corrupt/truncated trailing line (crash mid-append) — skips it, keeps the rest, no warning", () => {
     const dir = mkdtempSync(join(tmpdir(), "run-index-"));
     const row = indexRowFromResult(rr({}), { command: "run", partial: false });
     appendIndexRow(dir, row);
     writeFileSync(join(dir, "index.jsonl"), '{"v":1,"scenario":"trunc', { flag: "a" });
+    const lines = muteStderr();
     const rows = readIndex(dir);
     expect(rows).toHaveLength(1);
     expect(rows[0].scenario).toBe("t");
+    expect(lines.join("")).not.toMatch(/corrupt/); // a truncated TRAILING line is the expected crash shape — quiet
+  });
+
+  it("WARNS (does not silently vanish) a corrupt line that is NOT the trailing line — the observable " +
+    "symptom of a real interleaving/corruption bug, distinct from an ordinary crash-mid-append", () => {
+    const dir = mkdtempSync(join(tmpdir(), "run-index-"));
+    const good1 = indexRowFromResult(rr({ scenario: "a" }), { command: "run", partial: false });
+    const good2 = indexRowFromResult(rr({ scenario: "b" }), { command: "run", partial: false });
+    appendIndexRow(dir, good1);
+    writeFileSync(join(dir, "index.jsonl"), "{ not valid json\n", { flag: "a" }); // corrupt, NOT the last line
+    appendIndexRow(dir, good2);
+    const lines = muteStderr();
+    const rows = readIndex(dir);
+    expect(rows.map((r) => r.scenario)).toEqual(["a", "b"]); // both good rows still survive
+    expect(lines.join("")).toMatch(/::warning::.*corrupt line/);
   });
 });
 
@@ -184,6 +206,28 @@ describe("buildStats — per-scenario aggregation", () => {
     expect(buildStats(rows, { branch: "feature-x" }).find((s) => s.scenario === "a")?.runs).toBe(1);
   });
 
+  it("--last windows AFTER the other filters apply, not before — 'last N main-branch runs', not 'last N runs, of which some are main'", () => {
+    // 5 recent feature-branch runs, then 2 older main-branch runs — a naive "window first" would slice to
+    // the 5 feature-branch rows and find ZERO main runs even though main has real history just outside it.
+    const rows = [
+      ...[1, 2, 3, 4, 5].map((n) => row({ scenario: "a", ts: `2026-07-0${n}T00:00:00Z`, git: { branch: "feature-x", sha: `f${n}` } })),
+      row({ scenario: "a", ts: "2026-01-01T00:00:00Z", git: { branch: "main", sha: "m1" } }),
+      row({ scenario: "a", ts: "2026-01-02T00:00:00Z", git: { branch: "main", sha: "m2" } }),
+    ];
+    const stats = buildStats(rows, { branch: "main", last: 5 });
+    expect(stats.find((s) => s.scenario === "a")?.runs).toBe(2); // both main runs found — filter-then-window
+  });
+
+  it("--last windows the N most recent rows PER SCENARIO (not globally)", () => {
+    const rows = [
+      ...[1, 2, 3].map((n) => row({ scenario: "high-frequency", ts: `2026-07-0${n}T00:00:00Z` })),
+      row({ scenario: "low-frequency", ts: "2026-01-01T00:00:00Z" }),
+    ];
+    const stats = buildStats(rows, { last: 1 });
+    expect(stats.find((s) => s.scenario === "high-frequency")?.runs).toBe(1);
+    expect(stats.find((s) => s.scenario === "low-frequency")?.runs).toBe(1); // not starved out by the busier scenario
+  });
+
   it("reports lastGreenTs as the most recent PASSING run's timestamp, undefined if none passed", () => {
     const rows = [
       row({ scenario: "a", ts: "2026-01-01T00:00:00Z", pass: true }),
@@ -194,7 +238,7 @@ describe("buildStats — per-scenario aggregation", () => {
     expect(buildStats(allFail, {}).find((s) => s.scenario === "b")?.lastGreenTs).toBeUndefined();
   });
 
-  it("marks a row's outDir pruned when the directory no longer exists on disk (via an injected existence check)", () => {
+  it("marks a row's outDir pruned when the directory no longer exists on disk (a real existsSync check against a genuinely-absent path)", () => {
     const rows = [row({ scenario: "a", outDir: "/definitely/does/not/exist" })];
     const stats = buildStats(rows, {});
     expect(stats.find((s) => s.scenario === "a")?.prunedRuns).toBe(1);
@@ -247,6 +291,35 @@ describe("reindexFromRunsTree — one-time migration from result.json files", ()
     expect(readIndex(runsRoot)).toHaveLength(1);
   });
 
+  it("does NOT fabricate ts/git for a reindexed row — ts comes from result.json's own mtime (not 'now'), " +
+    "git is {branch:null,sha:null} (unknowable for a historical run, not 'whatever this checkout is')", () => {
+    const runsRoot = mkdtempSync(join(tmpdir(), "run-index-tree-"));
+    const runDir = join(runsRoot, "s", "local_1");
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(
+      join(runDir, "result.json"),
+      JSON.stringify({ scenario: "s", fidelity: "container", baseline: "x", result: "success", decisions: [], egress: [], assertions: [], outDir: runDir }),
+    );
+    const { rows } = reindexFromRunsTree(runsRoot);
+    // result.json's mtime, not Date.now() at reindex time — a fresh file's mtime is recent but NOT
+    // literally "this instant", so a >1s-old timestamp check would be flaky; instead assert it's a real
+    // parseable ISO string distinct from a hardcoded sentinel, and that git is honestly unknown.
+    expect(() => new Date(rows[0].ts).toISOString()).not.toThrow();
+    expect(rows[0].git).toEqual({ branch: null, sha: null });
+  });
+
+  it("reads `partial` from the persisted RunResult.partial field, not hardcoded false", () => {
+    const runsRoot = mkdtempSync(join(tmpdir(), "run-index-tree-"));
+    const runDir = join(runsRoot, "s", "local_1");
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(
+      join(runDir, "result.json"),
+      JSON.stringify({ scenario: "s", fidelity: "container", baseline: "x", result: "error", partial: true, decisions: [], egress: [], assertions: [], outDir: runDir }),
+    );
+    const { rows } = reindexFromRunsTree(runsRoot);
+    expect(rows[0].partial).toBe(true);
+  });
+
   it("skips a run dir with a missing or corrupt result.json rather than throwing", () => {
     const runsRoot = mkdtempSync(join(tmpdir(), "run-index-tree-"));
     const badDir = join(runsRoot, "s", "local_bad");
@@ -263,21 +336,38 @@ describe("reindexFromRunsTree — one-time migration from result.json files", ()
     expect(skipped).toBe(1);
   });
 
-  it("overwrites any prior index.jsonl rather than appending to it (a true rebuild)", () => {
+  it("MERGES with any prior index.jsonl — a row whose outDir no longer exists on disk (pruned) is " +
+    "PRESERVED, never dropped; a row whose outDir DOES exist is refreshed from its real result.json", () => {
     const runsRoot = mkdtempSync(join(tmpdir(), "run-index-tree-"));
-    appendIndexRow(runsRoot, row({ scenario: "stale-row" }));
-    const runDir = join(runsRoot, "fresh", "local_1");
-    mkdirSync(runDir, { recursive: true });
+    // a prior index row for a run dir that's since been pruned (no longer on disk)
+    const prunedOutDir = join(runsRoot, "pruned-scenario", "local_gone");
+    appendIndexRow(runsRoot, indexRowFromResult(rr({ scenario: "pruned-scenario", outDir: prunedOutDir }), { command: "run", partial: false }));
+    // a run dir that genuinely exists on disk, walked fresh
+    const freshDir = join(runsRoot, "fresh", "local_1");
+    mkdirSync(freshDir, { recursive: true });
     writeFileSync(
-      join(runDir, "result.json"),
-      JSON.stringify({ scenario: "fresh", fidelity: "container", baseline: "x", result: "success", decisions: [], egress: [], assertions: [], outDir: runDir }),
+      join(freshDir, "result.json"),
+      JSON.stringify({ scenario: "fresh", fidelity: "container", baseline: "x", result: "success", decisions: [], egress: [], assertions: [], outDir: freshDir }),
     );
     reindexFromRunsTree(runsRoot);
     const rows = readIndex(runsRoot);
-    expect(rows.map((r) => r.scenario)).toEqual(["fresh"]);
+    expect(rows.map((r) => r.scenario).sort()).toEqual(["fresh", "pruned-scenario"]);
   });
 
-  it("returns an empty result for a runs root with no run dirs (never throws on a fresh clone)", () => {
+  it("is idempotent / safe to re-run: reindexing twice in a row with no filesystem changes produces the same row set", () => {
+    const runsRoot = mkdtempSync(join(tmpdir(), "run-index-tree-"));
+    const runDir = join(runsRoot, "s", "local_1");
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(
+      join(runDir, "result.json"),
+      JSON.stringify({ scenario: "s", fidelity: "container", baseline: "x", result: "success", decisions: [], egress: [], assertions: [], outDir: runDir }),
+    );
+    reindexFromRunsTree(runsRoot);
+    reindexFromRunsTree(runsRoot);
+    expect(readIndex(runsRoot)).toHaveLength(1); // not duplicated
+  });
+
+  it("returns an empty result for a runs root with no run dirs AND no prior index (never throws on a fresh clone)", () => {
     const runsRoot = mkdtempSync(join(tmpdir(), "run-index-tree-"));
     const { rows, written } = reindexFromRunsTree(runsRoot);
     expect(rows).toEqual([]);

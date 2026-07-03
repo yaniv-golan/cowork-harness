@@ -51,12 +51,15 @@ export interface MatrixCellResult {
   axes: MatrixCellAxes;
   pass: boolean;
   failedAssertions: string[]; // assertion display keys (firstAssertionKey), NOT populated for an `error` cell
+  signals: string[]; // VerdictSignal["code"][] — WHY pass is false beyond assertions (e.g. "stalled", "host_path_leak"); [] for an `error` cell
   costUsd?: number;
   durationMs?: number;
   effectiveFidelity?: string;
-  /** A cell-level INFRASTRUCTURE failure (e.g. "agent binary unavailable for this baseline") — distinct
-   *  from a skill/assertion failure. Set instead of failedAssertions, never alongside real assertion data,
-   *  so a consumer can tell "the skill failed" apart from "this cell never got to run the skill at all". */
+  outDir?: string; // the cell's own run dir — lets a JSON consumer join cells[] back to results[]/artifacts on disk; absent for an `error` cell (never ran to a persisted result)
+  /** A cell-level INFRASTRUCTURE failure (e.g. "agent binary unavailable for this baseline", or an
+   *  unanswered gate) — distinct from a skill/assertion failure. Set instead of failedAssertions/signals,
+   *  never alongside real assertion data, so a consumer can tell "the skill failed" apart from "this cell
+   *  never got to run the skill at all". */
   error?: string;
 }
 
@@ -72,9 +75,11 @@ export function matrixCellResultFromRun(cell: MatrixCell, result: RunResult): Ma
     axes: cell.axes,
     pass: verdict.pass,
     failedAssertions,
+    signals: verdict.signals.map((s) => s.code),
     costUsd: budgetFields(result).costUsd,
     durationMs: result.durationMs,
     effectiveFidelity: result.effectiveFidelity,
+    outDir: result.outDir,
   };
 }
 
@@ -101,10 +106,11 @@ export function axesLabel(axes: MatrixCellAxes): string {
   return parts.length ? parts.join(", ") : "(no axes)";
 }
 
-/** Compact text-mode rollup table after a `--matrix` run. */
+/** Compact text-mode rollup table after a `--matrix` run. The truncation warning itself is emitted once,
+ *  at expansion time in cli.ts (before any cell runs, so it fires in BOTH --output-format modes) —
+ *  not repeated here, so a truncated matrix doesn't print the same `::warning::` twice in text mode. */
 export function formatMatrixRollup(r: MatrixRollup): string[] {
   const lines: string[] = [];
-  if (r.truncated) lines.push(`::warning:: matrix: ${r.requested} cells before capping — only the first ${r.ranCells} ran (raise with --max-cells)`);
   lines.push(`matrix: ${r.cells.filter((c) => c.pass).length}/${r.ranCells} cells passed${r.anyFail ? " — FAIL" : ""}`);
   for (const c of r.cells) {
     const label = axesLabel(c.axes);
@@ -122,6 +128,10 @@ export function formatMatrixRollup(r: MatrixRollup): string[] {
       .join(" · ");
     lines.push(`  ${status} [${c.index}] ${label}${detail ? " " + detail : ""}`);
     if (!c.pass && c.failedAssertions.length) lines.push(`      failed: ${c.failedAssertions.join(", ")}`);
+    // A cell can fail on a verdict signal with NO failing assertion at all (e.g. `stalled`,
+    // `host_path_leak`) — without this, that cell renders ✗ with no visible reason (E1's rollup surfaces
+    // the same signals via its histogram; do the same here per-cell).
+    if (!c.pass && c.signals.length) lines.push(`      signals: ${c.signals.join(", ")}`);
   }
   return lines;
 }

@@ -104,4 +104,20 @@ describe("resolveEventsFile — index-first (E4), filesystem-walk fallback prese
       expect(f).toBe(join(outB, "events.jsonl")); // rowB has the later ts
     });
   });
+
+  it("a filesystem EXACT match wins over an index FRAGMENT match — an index fragment hit must never " +
+    "shadow an un-indexed run's own exact dirname (regression: sess-* ids are user-chosen, so a prefix " +
+    "collision like sess-a vs. an indexed sess-abc is realistic, not hypothetical)", () => {
+    const runsDir = mkdtempSync(join(tmpdir(), "resolve-idx-"));
+    // an UN-INDEXED run dir named EXACTLY "sess-a" — predates the index, only findable by the walk
+    const exactOutDir = seedRunDir(runsDir, "scenario-x", "sess-a");
+    // a DIFFERENT, indexed run whose runId merely CONTAINS "sess-a" as a fragment
+    const fragmentOutDir = seedRunDir(runsDir, "scenario-x", "sess-abc");
+    appendIndexRow(runsDir, indexRowFromResult(rr({ scenario: "scenario-x", outDir: fragmentOutDir }), { command: "run", partial: false }));
+
+    withRunsDir(runsDir, () => {
+      const f = resolveEventsFile("sess-a");
+      expect(f).toBe(join(exactOutDir, "events.jsonl")); // the EXACT dirname match, not the indexed fragment
+    });
+  });
 });
