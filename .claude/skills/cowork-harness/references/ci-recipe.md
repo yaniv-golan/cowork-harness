@@ -1,12 +1,12 @@
 # CI recipe — replay vs live lanes
 
-Self-contained reference. Tracks `cowork-harness 0.20.0` (baseline `desktop-1.17377.1`).
+Self-contained reference. Tracks `cowork-harness 0.21.0` (baseline `desktop-1.17377.2`).
 
 **Minimal token-free PR gate** — the smallest thing worth committing; runs on stock GitHub-hosted runners,
 no token/Docker/agent:
 
 ```yaml
-- run: npm i -g cowork-harness@>=0.20.0
+- run: npm i -g cowork-harness@>=0.21.0
 - run: cowork-harness lint scenarios/*.yaml          # no silent false-greens
 - run: cowork-harness verify-cassettes cassettes/    # privacy + staleness
 - run: cowork-harness replay cassettes/              # token-free content/structure
@@ -124,7 +124,7 @@ jobs:
         with: { node-version: '20' }
       - uses: actions/setup-python@v5
         with: { python-version: '3.x' }                                       # python3 only — PyYAML is bundled with the linter
-      - run: npm i -g cowork-harness@>=0.20.0
+      - run: npm i -g cowork-harness@>=0.21.0
       - run: cowork-harness lint scenarios/*.yaml                              # no-silent-false-green (needs python3; PyYAML bundled)
       - run: cowork-harness verify-cassettes cassettes/ --output-format json   # privacy + staleness gate
       - run: cowork-harness replay cassettes/ --output-format json             # token-free content/structure
@@ -153,7 +153,7 @@ jobs:
             echo "live=true" >> "$GITHUB_OUTPUT"
           fi
       - if: steps.guard.outputs.live == 'true'
-        run: npm i -g cowork-harness@>=0.20.0
+        run: npm i -g cowork-harness@>=0.21.0
       - if: steps.guard.outputs.live == 'true'
         run: cowork-harness run scenarios/ --output-format json
         env:
