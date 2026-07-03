@@ -56,70 +56,6 @@ The permission/question protocol is the backbone, and it's the *most stable* sur
 
 ---
 
-## Fidelity tiers (pick per scenario / per CI job)
-
-```
-L0  protocol-only     claude -p stream-json on the host. No sandbox, no egress control.
-                      Fastest. Pure-logic / inner-loop assertions.
-
-L1  container parity  Pinned agent in cowork mode inside an arm64 Linux container with the real
-   (recommended)      mount layout and a default-deny egress proxy enforcing the synced allowlist.
-                      Reproducible, CI-native (Docker/Podman). The faithful-yet-maintainable sweet spot.
-
-L2  microvm parity    Optional. Agent inside a real Linux microVM (Lima/Apple-VZ) with a guest
-   (opt-in, heavy)    default-deny iptables firewall funnelling to the same allowlist proxy as L1.
-                      VM-grade escape isolation; egress transport equals L1's HTTP-CONNECT proxy —
-                      no gVisor netstack reproduced. Not for CI; periodic high-fidelity checks only.
-
-    ─── loop-mode overlays (orthogonal to L0/L1/L2: they pick WHERE the loop runs, not isolation) ───
-
-    hostloop          Cowork's PRODUCTION split-execution. The agent loop is a NATIVE process spawned
-                      directly on the host (no container around the file tools, matching production) —
-                      native Bash/WebFetch are disabled and routed host-side via the workspace SDK-MCP
-                      server (mcp__workspace__bash into a Docker VM sidecar; web_fetch via host curl).
-                      A PreToolUse path-containment hook is the security boundary for real filesystem
-                      access at this tier — see docs/boundary.md.
-
-    cowork            Auto-picks hostloop vs container the way Cowork itself does, from GrowthBook
-                      gate 1143815894 decoded in the synced baseline. "Do what real Cowork does."
-```
-
-Most skill testing runs **L1 (`container`)**. Use **L0 (`protocol`)** for fast inner-loop and pure-logic assertions; **L2 (`microvm`)** for VM-grade escape isolation of untrusted code (rare — it does **not** improve network-transport fidelity over L1); **`hostloop`/`cowork`** to reproduce Cowork's production split-execution model. Set the tier with `fidelity:` in a scenario or `--fidelity` on `skill` or `chat`.
-
----
-
-## Commands at a glance
-
-Skill testing is the headline use, but the tool is a general harness over the Cowork runtime. Run any command with `--help` for its full flag reference.
-
-| Command | What it does | Reach for it when… |
-|---|---|---|
-| `skill <folder> "<prompt>"` | Run a local skill/plugin folder once against the staged agent | ad-hoc "is the skill alive / does it do X?" — the fast inner loop |
-| `run <scenario.yaml \| dir/>` | Run authored scenarios with `assert:` + a CI-ready exit code; a decider (`--decider-cmd`/`--decider-dir`, or a scenario's `on_unanswered: llm`) can answer unscripted gates | you want a repeatable, **asserted regression test** |
-| `chat <folder> [prompt]` | Interactive multi-turn REPL against a skill (TTY); optional seed prompt is sent as the first turn. `--upload <file>` / `--folder <dir>` (repeatable) attach files/project folders; `--verbose` / `-V` shows thinking blocks + tool inputs; `--fidelity protocol\|container\|hostloop` (no `microvm`/`cowork` in the REPL) | debugging a multi-turn flow by hand |
-| `record` / `replay` | **Record a live run once → replay it token-free, Docker-free thereafter.** Key flags: `--decider-llm`/`--decider-dir` (answer gates live during recording), `--rerecord-stale`/`--concurrency <N>` (batch re-recording), `--assert-from <scenario.yaml>`/`--reassert` (re-check the on-disk `assert:` instead of the frozen one), `--strict`/`--fail-on-skill-drift` (staleness handling on replay). Full flag list: `cowork-harness record --help` / `replay --help`. | **token-free, Docker-free CI** from a once-recorded run |
-| `verify-cassettes <file\|dir>` | Token-free CI gate over committed cassettes: a privacy scan (email/currency/domain/path → exit 1; whole-token allows via `--allow` / class-scoped `--allow-domain` / `--allow-email` / `--allow-path` / `--allow-file`) + a staleness check (`--skip-privacy` or `--skip-staleness` to run only one half). A dir argument scans `*.cassette.json` in that dir only (**non-recursive**) | gating **committed cassettes** against PII leaks + "edited the skill, forgot to re-record" |
-| `verify-run <run-dir> <scenario.yaml>` | Re-evaluate a scenario's `assert:` (and, when the scenario declares `answers:`, whether they still match the run's actual gates) against an already-kept run dir — **no live agent, no tokens, no Docker** (~1s) | iterating on a wrong assertion or a drifted `answer` without a full live re-record |
-| `trace <run-id>` | Digest a run's `events.jsonl` (`--view tools\|questions\|dispatches`; legacy `--tools` / `--gates` / `--dispatches` aliases still accepted) | "how many sub-agents *actually* dispatched, and which?" |
-| `inspect <run-id>` | Show what a run **produced**: the artifacts + a shallow field preview of each JSON artifact (`--output-format json` for a digest). Works on a salvaged partial run too | "did it do the job?" — without hand-parsing `…/mnt/outputs/…` |
-| `scaffold <run-id>` | Turn a kept run into a starter scenario YAML (gates→answers, artifacts→`file_exists`); `--from-run <id>` is a deprecated alias for the positional | authoring a scenario from a real run instead of guessing |
-| `python3 …/scenario.py scaffold --name <name> --skill <dir>` | Generate a starter scenario skeleton from scratch (the `…` is `.claude/skills/cowork-harness/scripts/`) | starting a new scenario when you have no prior run |
-| `lint <scenario.yaml \| dir/>…` | Check scenarios for silent false-greens — assertions placed on the wrong CI lane, mixed content/live keys, missing `controlOut`-required keys (files or a directory of `*.yaml`/`*.yml`; bundled `scenario.py`; needs python3 — PyYAML is bundled) | before committing a new scenario or after changing assertions |
-| `assertions --list` | List the available scenario assertions (generated from the schema) | "what can I assert?" without grepping the source |
-| `decide` | Validate a decider against a sample question in ~2 s (no run) | sanity-check a `--decider-*` / `--answer` wiring before a long run |
-| `gates` / `answer` | Stream / answer in-band gates for `--decider-dir` | a **driving agent** answers live questions via a Monitor |
-| `status <run-id \| run-dir> [--follow]` | Check whether a background run is alive (state/elapsed/tool counts) by reading `status.json` — no `ps aux` needed (unreliable across sandbox/PID-namespace boundaries). `--follow` streams one line per change until done/error; staleness detection catches a `SIGKILL`'d process | a **driving agent** (or script) checking on a run it launched in the background |
-| `boundary-check [baseline] [--session <file>]` | Prove the **L1 Docker** sandbox enforces Cowork's limitations (sealed FS + default-deny egress; `container`/`hostloop` share this sandbox — `microvm`'s guest firewall is not probed here); `--session` folds a session's `egress.extra_allow` into the probe allowlist | verifying the harness's own fidelity |
-| `sync` / `list` | Derive/refresh (`sync [--diff] [--allow-empty\|--force]`) & list platform baselines from the Desktop install | after Claude Desktop updates (baselines ship, so it's optional otherwise) |
-| `doctor [--tier <t>]` | Read-only prerequisite check, per tier (Docker + agent image for `container`/`hostloop`/`cowork`; **Lima** for `microvm`; plus staged agent, token, baseline); prints the exact `docker build` line if the agent image is missing | "can I run the live tiers — what's missing?" before a first live run |
-| `prune [<runs-dir>] [--keep-last <n>]` | Prune accumulated run dirs (keeps the N most recent per scenario; pinned `--session-id` runs are never pruned); the optional positional overrides the runs root; `--dry-run` | the machine-global runs root has grown and you want space back |
-| `rehash <dir/>` | Migrate cassette fingerprints to the current format version when the content is provably unchanged (`--dry-run`); no re-record needed | a cassette-format bump flagged committed fixtures as stale |
-| `vm <init\|status\|delete\|prune>` | Manage the L2 Apple-VZ / Lima microVM (`prune` removes orphaned VMs left by config/agent-version changes) | running `--fidelity microvm` |
-
-There's also a **Python `cowork` pytest lane** (`python/`) for driving any of this from `pytest` beside your normal tests — see [`python/README.md`](./python/README.md).
-
----
-
 ## Quick start
 
 **Install from npm:**
@@ -320,6 +256,70 @@ cowork-harness skill --marketplace ~/my-marketplace --enable my-skill@my-marketp
 ```
 
 It mounts the folder(s) at the Cowork plugin path, runs the staged agent in cowork mode, and prints PASS/RESULT (add `--keep` to print the run dir, or `--output-format json` for the machine-readable result). No YAML to author. (Author `scenarios/*.yaml` only for repeatable, asserted regression tests.)
+
+---
+
+## Fidelity tiers (pick per scenario / per CI job)
+
+```
+L0  protocol-only     claude -p stream-json on the host. No sandbox, no egress control.
+                      Fastest. Pure-logic / inner-loop assertions.
+
+L1  container parity  Pinned agent in cowork mode inside an arm64 Linux container with the real
+   (recommended)      mount layout and a default-deny egress proxy enforcing the synced allowlist.
+                      Reproducible, CI-native (Docker/Podman). The faithful-yet-maintainable sweet spot.
+
+L2  microvm parity    Optional. Agent inside a real Linux microVM (Lima/Apple-VZ) with a guest
+   (opt-in, heavy)    default-deny iptables firewall funnelling to the same allowlist proxy as L1.
+                      VM-grade escape isolation; egress transport equals L1's HTTP-CONNECT proxy —
+                      no gVisor netstack reproduced. Not for CI; periodic high-fidelity checks only.
+
+    ─── loop-mode overlays (orthogonal to L0/L1/L2: they pick WHERE the loop runs, not isolation) ───
+
+    hostloop          Cowork's PRODUCTION split-execution. The agent loop is a NATIVE process spawned
+                      directly on the host (no container around the file tools, matching production) —
+                      native Bash/WebFetch are disabled and routed host-side via the workspace SDK-MCP
+                      server (mcp__workspace__bash into a Docker VM sidecar; web_fetch via host curl).
+                      A PreToolUse path-containment hook is the security boundary for real filesystem
+                      access at this tier — see docs/boundary.md.
+
+    cowork            Auto-picks hostloop vs container the way Cowork itself does, from GrowthBook
+                      gate 1143815894 decoded in the synced baseline. "Do what real Cowork does."
+```
+
+Most skill testing runs **L1 (`container`)**. Use **L0 (`protocol`)** for fast inner-loop and pure-logic assertions; **L2 (`microvm`)** for VM-grade escape isolation of untrusted code (rare — it does **not** improve network-transport fidelity over L1); **`hostloop`/`cowork`** to reproduce Cowork's production split-execution model. Set the tier with `fidelity:` in a scenario or `--fidelity` on `skill` or `chat`.
+
+---
+
+## Commands at a glance
+
+Skill testing is the headline use, but the tool is a general harness over the Cowork runtime. Run any command with `--help` for its full flag reference.
+
+| Command | What it does | Reach for it when… |
+|---|---|---|
+| `skill <folder> "<prompt>"` | Run a local skill/plugin folder once against the staged agent | ad-hoc "is the skill alive / does it do X?" — the fast inner loop |
+| `run <scenario.yaml \| dir/>` | Run authored scenarios with `assert:` + a CI-ready exit code; a decider (`--decider-cmd`/`--decider-dir`, or a scenario's `on_unanswered: llm`) can answer unscripted gates | you want a repeatable, **asserted regression test** |
+| `chat <folder> [prompt]` | Interactive multi-turn REPL against a skill (TTY); optional seed prompt is sent as the first turn. `--upload <file>` / `--folder <dir>` (repeatable) attach files/project folders; `--verbose` / `-V` shows thinking blocks + tool inputs; `--fidelity protocol\|container\|hostloop` (no `microvm`/`cowork` in the REPL) | debugging a multi-turn flow by hand |
+| `record` / `replay` | **Record a live run once → replay it token-free, Docker-free thereafter.** Key flags: `--decider-llm`/`--decider-dir` (answer gates live during recording), `--rerecord-stale`/`--concurrency <N>` (batch re-recording), `--assert-from <scenario.yaml>`/`--reassert` (re-check the on-disk `assert:` instead of the frozen one), `--strict`/`--fail-on-skill-drift` (staleness handling on replay). Full flag list: `cowork-harness record --help` / `replay --help`. | **token-free, Docker-free CI** from a once-recorded run |
+| `verify-cassettes <file\|dir>` | Token-free CI gate over committed cassettes: a privacy scan (email/currency/domain/path → exit 1; whole-token allows via `--allow` / class-scoped `--allow-domain` / `--allow-email` / `--allow-path` / `--allow-file`) + a staleness check (`--skip-privacy` or `--skip-staleness` to run only one half). A dir argument scans `*.cassette.json` in that dir only (**non-recursive**) | gating **committed cassettes** against PII leaks + "edited the skill, forgot to re-record" |
+| `verify-run <run-dir> <scenario.yaml>` | Re-evaluate a scenario's `assert:` (and, when the scenario declares `answers:`, whether they still match the run's actual gates) against an already-kept run dir — **no live agent, no tokens, no Docker** (~1s) | iterating on a wrong assertion or a drifted `answer` without a full live re-record |
+| `trace <run-id>` | Digest a run's `events.jsonl` (`--view tools\|questions\|dispatches`; legacy `--tools` / `--gates` / `--dispatches` aliases still accepted) | "how many sub-agents *actually* dispatched, and which?" |
+| `inspect <run-id>` | Show what a run **produced**: the artifacts + a shallow field preview of each JSON artifact (`--output-format json` for a digest). Works on a salvaged partial run too | "did it do the job?" — without hand-parsing `…/mnt/outputs/…` |
+| `scaffold <run-id>` | Turn a kept run into a starter scenario YAML (gates→answers, artifacts→`file_exists`); `--from-run <id>` is a deprecated alias for the positional | authoring a scenario from a real run instead of guessing |
+| `python3 …/scenario.py scaffold --name <name> --skill <dir>` | Generate a starter scenario skeleton from scratch (the `…` is `.claude/skills/cowork-harness/scripts/`) | starting a new scenario when you have no prior run |
+| `lint <scenario.yaml \| dir/>…` | Check scenarios for silent false-greens — assertions placed on the wrong CI lane, mixed content/live keys, missing `controlOut`-required keys (files or a directory of `*.yaml`/`*.yml`; bundled `scenario.py`; needs python3 — PyYAML is bundled) | before committing a new scenario or after changing assertions |
+| `assertions --list` | List the available scenario assertions (generated from the schema) | "what can I assert?" without grepping the source |
+| `decide` | Validate a decider against a sample question in ~2 s (no run) | sanity-check a `--decider-*` / `--answer` wiring before a long run |
+| `gates` / `answer` | Stream / answer in-band gates for `--decider-dir` | a **driving agent** answers live questions via a Monitor |
+| `status <run-id \| run-dir> [--follow]` | Check whether a background run is alive (state/elapsed/tool counts) by reading `status.json` — no `ps aux` needed (unreliable across sandbox/PID-namespace boundaries). `--follow` streams one line per change until done/error; staleness detection catches a `SIGKILL`'d process | a **driving agent** (or script) checking on a run it launched in the background |
+| `boundary-check [baseline] [--session <file>]` | Prove the **L1 Docker** sandbox enforces Cowork's limitations (sealed FS + default-deny egress; `container`/`hostloop` share this sandbox — `microvm`'s guest firewall is not probed here); `--session` folds a session's `egress.extra_allow` into the probe allowlist | verifying the harness's own fidelity |
+| `sync` / `list` | Derive/refresh (`sync [--diff] [--allow-empty\|--force]`) & list platform baselines from the Desktop install | after Claude Desktop updates (baselines ship, so it's optional otherwise) |
+| `doctor [--tier <t>]` | Read-only prerequisite check, per tier (Docker + agent image for `container`/`hostloop`/`cowork`; **Lima** for `microvm`; plus staged agent, token, baseline); prints the exact `docker build` line if the agent image is missing | "can I run the live tiers — what's missing?" before a first live run |
+| `prune [<runs-dir>] [--keep-last <n>]` | Prune accumulated run dirs (keeps the N most recent per scenario; pinned `--session-id` runs are never pruned); the optional positional overrides the runs root; `--dry-run` | the machine-global runs root has grown and you want space back |
+| `rehash <dir/>` | Migrate cassette fingerprints to the current format version when the content is provably unchanged (`--dry-run`); no re-record needed | a cassette-format bump flagged committed fixtures as stale |
+| `vm <init\|status\|delete\|prune>` | Manage the L2 Apple-VZ / Lima microVM (`prune` removes orphaned VMs left by config/agent-version changes) | running `--fidelity microvm` |
+
+There's also a **Python `cowork` pytest lane** (`python/`) for driving any of this from `pytest` beside your normal tests — see [`python/README.md`](./python/README.md).
 
 ---
 
