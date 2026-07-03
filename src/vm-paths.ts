@@ -24,8 +24,9 @@ export interface VmPathContext {
   folders: Map<string, string>;
   /**
    * Resolves `mnt/.host-home/<sub>` to a host path (dormant feature — see plan §1.8). Called with
-   * `sub` exactly as it appears after `.host-home/`, decoded per the `decodeSegments` option; an
-   * empty `sub` means "the host-home root" and the resolver is expected to return `"/"` for it.
+   * `sub` exactly as it appears after `.host-home/`, decoded per the `decodeSegments` option. A bare
+   * `mnt/.host-home` (empty sub) is unmappable and never reaches the resolver, matching the
+   * production resolver's own non-empty-sub guard.
    */
   hostHomeResolver?: (sub: string) => string;
   /** Host directory backing `mnt/.auto-memory/...` (dormant feature — see plan §1.8). */
@@ -90,7 +91,7 @@ export function mapVMPathToHostPath(vmPath: string, ctx: VmPathContext, opts?: M
 
   if (mountName === "outputs") return ctx.outputsHostDir ? join(ctx.outputsHostDir, subPath) : null;
   if (mountName === "uploads") return ctx.uploadsHostDir ? join(ctx.uploadsHostDir, subPath) : null;
-  if (mountName === HOST_HOME_MOUNT_NAME) return ctx.hostHomeResolver ? ctx.hostHomeResolver(subPath) : null;
+  if (mountName === HOST_HOME_MOUNT_NAME) return subPath && ctx.hostHomeResolver ? ctx.hostHomeResolver(subPath) : null;
   if (mountName === AUTO_MEMORY_MOUNT_NAME) return ctx.autoMemoryHostDir ? join(ctx.autoMemoryHostDir, subPath) : null;
 
   const hostDir = ctx.folders.get(mountName);

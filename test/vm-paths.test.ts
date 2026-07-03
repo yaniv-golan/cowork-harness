@@ -46,9 +46,9 @@ describe("mapVMPathToHostPath — mount routing", () => {
     expect(mapVMPathToHostPath("/sessions/sess1/mnt/.host-home/Users/me", ctx)).toBe("/Users/me");
   });
 
-  it("routes bare mnt/.host-home (empty sub) through hostHomeResolver as the host root", () => {
+  it("returns null for bare mnt/.host-home (empty sub) — production guards on a non-empty sub", () => {
     const ctx = baseCtx();
-    expect(mapVMPathToHostPath("/sessions/sess1/mnt/.host-home", ctx)).toBe("/");
+    expect(mapVMPathToHostPath("/sessions/sess1/mnt/.host-home", ctx)).toBeNull();
   });
 
   it("returns null for outputs/uploads/.auto-memory when the corresponding host dir is not configured", () => {

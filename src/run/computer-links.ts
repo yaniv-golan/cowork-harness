@@ -102,7 +102,11 @@ export function extractComputerLinks(text: string): ComputerLink[] {
         out.push(makeLink(text.slice(contentStart, end)));
         re.lastIndex = end + 1;
       } else {
-        re.lastIndex = contentStart; // unterminated — don't extract, resume right after the opener
+        // Unterminated `](computer://…` — don't extract, resume right after the opener. Known lenient
+        // divergence from the display transform: its BARE-token pass still rewrites the URL inside a
+        // malformed link (matching the production rewriter), so a link the display shows can go
+        // unasserted here. Lenient direction only (never a false "resolved"), malformed input only.
+        re.lastIndex = contentStart;
       }
     } else if (bare !== undefined) {
       const contentStart = m.index + whole.length;
@@ -172,6 +176,12 @@ export interface LinkResolutionContext {
    *  checked directly there, no normalization needed) and on any cassette whose session folders
    *  couldn't be recovered from disk. */
   folderPrefixes?: Map<string, string>;
+  /** Live-only, optional: the run's real host roots (outputs/uploads host dirs + each connected
+   *  folder's host source). When present, a host-shaped link must live INSIDE one of them — a link
+   *  to an existing but out-of-workspace host path (e.g. computer:///etc/hosts) is a dangling link,
+   *  not a delivered artifact. When absent (verify-run, which cannot reconstruct folder host paths
+   *  from a kept run dir), host-shaped links fall back to a direct existence check. */
+  hostRoots?: string[];
 }
 
 export interface LinkCheckOutcome {
@@ -195,12 +205,28 @@ export interface LinkCheckOutcome {
  */
 export function resolveComputerLink(link: ComputerLink, workRoot: string, resolution: LinkResolutionContext): LinkCheckOutcome {
   if (link.vmShaped) {
+    // The work tree covers every tier: container/microvm collect there, and hostloop's post-run
+    // folder snapshot (snapshotHostLoopWorkspace, which runs BEFORE assertion evaluation) copies each
+    // connected folder's real host contents under the same root — so a VM-shaped folder link emitted
+    // at hostloop resolves here too.
     const rel = link.raw.replace(VM_MOUNT_RE, "");
     const abs = safeJoin(workRoot, rel);
     if (!abs) return { resolved: false, checkedDescription: `unsafe path (escapes the work root): ${rel}` };
     return { resolved: existsSync(abs), checkedDescription: `work tree: ${abs}` };
   }
   if (resolution.mode === "live") {
+    if (resolution.hostRoots?.length) {
+      const base = resolve(link.raw);
+      const inside = resolution.hostRoots.some((root) => {
+        const r = resolve(root);
+        return base === r || base.startsWith(r + sep);
+      });
+      if (!inside)
+        return {
+          resolved: false,
+          checkedDescription: `host path outside the run's workspace roots (not a delivered artifact): ${link.raw}`,
+        };
+    }
     return { resolved: existsSync(link.raw), checkedDescription: `host path (direct): ${link.raw}` };
   }
   const rel = normalizeHostShapedForReplay(link.raw, resolution.folderPrefixes);

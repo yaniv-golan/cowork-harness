@@ -708,8 +708,15 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     skillToolAvailable: record.initTools.includes("Skill"),
     effectiveFidelity,
     // Live lane (this run's own machine) — host-shaped computer:// links (hostloop) are checked
-    // DIRECTLY on the filesystem; verify-run shares this same "live" mode (see cli.ts's cmdVerifyRun).
-    linkResolution: { mode: "live" },
+    // DIRECTLY on the filesystem, contained to the run's real workspace roots; verify-run shares
+    // this same "live" mode without hostRoots (see cli.ts's cmdVerifyRun).
+    linkResolution: {
+      mode: "live",
+      hostRoots: [
+        join(resolve(outDir), "work", "session", "mnt"),
+        ...plan.mounts.filter((m) => m.kind === "folder").map((m) => m.hostPath),
+      ],
+    },
     ...budgetFields(record),
   });
 

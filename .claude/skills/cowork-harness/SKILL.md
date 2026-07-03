@@ -328,7 +328,8 @@ are the ones that bite hardest.
    `replay` skips filesystem/egress keys (`file_exists`, `user_visible_artifact`, `artifact_json`,
    `egress_*`, `no_delete_in_outputs`, `self_heal_ran`, `transcript_no_host_path`); a *mixed* item like
    `{result, egress_denied}` greens on `result` while its `egress_denied` half is dropped. (`record`
-   snapshots an `artifacts` manifest, which makes `file_exists`/`user_visible_artifact`/`artifact_json`
+   snapshots an `artifacts` manifest, which makes
+   `file_exists`/`user_visible_artifact`/`artifact_json`/`computer_links_resolve`
    replay-checkable — but the live-only egress keys stay skipped.) *Fix:* put egress/live-only checks on
    a live gate; keep one concern per `assert:` item; run the linter. The harness warns loudly on skip.
 

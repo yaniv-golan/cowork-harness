@@ -8,6 +8,34 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **`computer://` link modeling — the prompt now instructs file links exactly as production does.**
+  Four pieces landed together (design + binary research in
+  `docs/internal/2026-07-03-computer-link-scheme-research-and-plan.md`):
+  - `src/vm-paths.ts` — a faithful port of Desktop's display-side VM→host path transform
+    (`deepTranslateVMPaths` / `mapVMPathToHostPath` / `encodeComputerUrlsForHostLoop`): markdown-link,
+    backtick, bare-token, and prose rewrite positions; per-segment percent-encoding; traversal
+    rejection; dormant `.host-home` / `.auto-memory` mount branches.
+  - **Hostloop display translation** (`src/run/display-translate.ts`): at hostloop fidelity the
+    `run`/`chat` renderer shows production-identical host paths in assistant text and tool lines.
+    Hostloop-only by design (container staging paths would be less faithful than VM paths), identity on
+    replay (no live ctx), suppressed in `--compact`/`--demo` (the shareable no-host-paths contract).
+    Hostloop prompt tokens now render HOST paths (`{{cwd}}` / `{{workspaceFolder}}` / `{{skillsDir}}` +
+    the dedicated `{{cwd}}/mnt/uploads` pre-replacement), matching the Desktop builder's own host-loop
+    substitution recipe.
+  - **New assertion `computer_links_resolve: true`** — every `computer://` link in the transcript must
+    resolve to an artifact that exists (live/verify-run: filesystem; replay: the cassette's artifact
+    manifest, with host-shaped links normalized via the recorded session folders). Zero links pass;
+    dangling links report which target was checked. Assert links with this key, not literal link text.
+  - The `sharing_files` prompt section now instructs `[View your X](computer://{{workspaceFolder}}/x.ext)`
+    links faithfully — the prompt-reconstruction divergence for links is retired (docs/fidelity-gaps.md
+    updated).
+- **Dark-feature gate sentinels.** Four newly discovered GrowthBook gates pinned in the baseline
+  (host-fs skeleton `2614807392`, standard-session auto-memory `123929380`, memory-guidelines env
+  `1696890383`, memory extra-guidelines `2860753854`) — all dark or inert-default for standard cowork
+  sessions today; pinned so a production flip surfaces as a `sync --diff` delta. Absent-from-fcache
+  dark gates record an explicit `source:"absent"` marker (the fcache re-key guard's semantics are
+  preserved).
+
 - **`stats` command + cross-run result index.** Every `run`/`skill` invocation (and `record`'s live
   execution) now appends one JSON line to `<runsRoot>/index.jsonl` at the same moment it writes
   `result.json` — a durable, queryable history independent of whether the run dir itself survives a later

@@ -149,6 +149,33 @@ describe("resolveComputerLink — live mode", () => {
     const outcome = resolveComputerLink(link, root, { mode: "live" });
     expect(outcome.resolved).toBe(false);
   });
+
+  it("host-shaped with hostRoots: a link inside a workspace root resolves", () => {
+    const realFile = join(root, "outputs", "report.pdf");
+    const link = extractComputerLinks(`computer://${realFile}`)[0];
+    const outcome = resolveComputerLink(link, "/some/unrelated/workroot", { mode: "live", hostRoots: [root] });
+    expect(outcome.resolved).toBe(true);
+  });
+
+  it("host-shaped with hostRoots: an EXISTING but out-of-workspace path is dangling, not delivered", () => {
+    const outside = mkdtempSync(join(tmpdir(), "cwh-links-outside-"));
+    const realFile = join(outside, "secret.txt");
+    writeFileSync(realFile, "x");
+    const link = extractComputerLinks(`computer://${realFile}`)[0];
+    const outcome = resolveComputerLink(link, root, { mode: "live", hostRoots: [root] });
+    expect(outcome.resolved).toBe(false);
+    expect(outcome.checkedDescription).toMatch(/outside the run's workspace roots/);
+  });
+
+  it("host-shaped with hostRoots: a sibling-prefix path does not sneak in (root vs root-extra)", () => {
+    const sibling = root + "-extra";
+    mkdirSync(sibling, { recursive: true });
+    const realFile = join(sibling, "f.txt");
+    writeFileSync(realFile, "x");
+    const link = extractComputerLinks(`computer://${realFile}`)[0];
+    const outcome = resolveComputerLink(link, root, { mode: "live", hostRoots: [root] });
+    expect(outcome.resolved).toBe(false);
+  });
 });
 
 describe("resolveComputerLink — replay mode (no filesystem probe of host-shaped links)", () => {
