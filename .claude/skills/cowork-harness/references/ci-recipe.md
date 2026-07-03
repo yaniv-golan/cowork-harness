@@ -16,6 +16,39 @@ Reach for the manual multi-step form below only when you need per-step control t
 cover (a custom flag combination, a different runner matrix per step, or `lint`/`verify-cassettes` gated
 independently instead of as one action run per command).
 
+**Live lane (`command: run`) with the packaged Action — self-hosted runner, you stage the binary.** The
+Action never downloads or provisions the agent ELF itself — by design, not an oversight (see "the
+realistic CI shape" below for why). Stage it yourself as an explicit step in *your own* workflow, then
+point the Action at it:
+
+```yaml
+jobs:
+  live:
+    runs-on: [self-hosted, linux, arm64]   # needs Docker + this staged ELF; not a stock GitHub-hosted runner
+    steps:
+      - uses: actions/checkout@v4
+      - name: Stage the agent binary (official channel, sha256-verified — see docs/maintenance.md)
+        run: |
+          V=2.1.197   # match your scenario's pinned baseline's agentVersion
+          curl -fSL "https://downloads.claude.ai/claude-code-releases/$V/linux-arm64/claude" -o "$RUNNER_TEMP/claude-$V"
+          chmod +x "$RUNNER_TEMP/claude-$V"
+          # verify against the committed baseline's sha256 (baselines/desktop-*.json → agentBinary.sha256)
+          # before trusting it — see docs/maintenance.md's "Agent-binary provenance" section.
+          echo "COWORK_AGENT_BINARY=$RUNNER_TEMP/claude-$V" >> "$GITHUB_ENV"
+      - uses: yaniv-golan/cowork-harness@v1
+        with:
+          command: run
+          path: scenarios/
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+```
+
+Why this is a step *you* write, not an Action input the harness provides for you: pulling Anthropic's
+binary is a call about your own relationship with their distribution terms — keeping it in your own
+version-controlled workflow keeps that decision and its execution yours, auditable, and outside any
+third-party action's code. See the [agent-binary provenance runbook](../../../../docs/maintenance.md) for
+the full recovery/verification story (including why `COWORK_AGENT_BINARY` substitutions are
+sha256-*checked* but not hard-blocking on mismatch — it's advisory for an intentional substitution).
+
 **Minimal token-free PR gate (manual form)** — the smallest thing worth committing; runs on stock
 GitHub-hosted runners, no token/Docker/agent:
 

@@ -12,9 +12,12 @@ All notable changes to this project are documented here. The format is based on
   `replay`/`lint`/`verify-cassettes`/`run` with a PR job-summary reporter (verdict table, staleness
   findings, the skipped-live-only-assertions honesty line, cost/turns when available). Token-free lane runs
   on any `ubuntu-latest` runner; `run` (live lane) needs a self-hosted runner with Docker + the agent binary
-  already provisioned — the action does not stage either. Self-tested in CI (`uses: ./` against a packed
-  tarball of the current commit, both a passing and a deliberately-failing invocation). A
-  `publish-image.yml` workflow pushes `ghcr.io/yaniv-golan/cowork-agent-base:2`/`cowork-agent-full:2` on
+  already provisioned — the action does not stage either, by design (staging Anthropic's binary is a call
+  about your own distribution-terms relationship, so it stays a step in your own workflow, not something a
+  third-party action automates for you). README and the companion skill's `ci-recipe.md` both carry a
+  worked self-hosted-runner example for the live lane. Self-tested in CI (`uses: ./` against a packed
+  tarball of the current commit, a passing case, a usage-error case, and a genuine assertion-failure case).
+  A `publish-image.yml` workflow pushes `ghcr.io/yaniv-golan/cowork-agent-base:2`/`cowork-agent-full:2` on
   release tags for consumers (and this repo's own CI) to `docker pull` instead of building from scratch.
 - **`skill_triggered` / `no_skill_triggered` assertions.** Skill invocation (the top-level `Skill` tool_use)
   is now a first-class assertable event, recorded as `RunResult.skillsInvoked[]` and evaluated as a regex

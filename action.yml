@@ -38,9 +38,11 @@ inputs:
   anthropic-api-key:
     description: >-
       API key for the live `run` lane. Unused by replay/lint/verify-cassettes. This action does NOT
-      stage the agent binary or build the Docker image for you — a live `run` needs both already
-      available on the runner (see README). Pulling Anthropic's agent binary in CI carries the same
-      licensing/ToS caveat documented in this repo's README Limitations section.
+      stage the agent binary or build the Docker image for you, by design, not an oversight — a live
+      `run` needs both already available on the runner. Staging the binary is a call about your own
+      relationship with Anthropic's distribution terms, so it stays a step in YOUR workflow, not
+      something this action automates on your behalf. See the README's "Packaged GitHub Action"
+      section for a worked self-hosted-runner example.
     required: false
     default: ""
 

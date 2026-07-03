@@ -514,6 +514,30 @@ The fastest path to CI: a composite action wrapping the token-free lane, with a 
 | **Token-free** (the headline lane) | `replay`, `lint`, `verify-cassettes` | any `ubuntu-latest` | deterministic, no Docker, no API key, no agent binary — this is what most skill repos want |
 | **Live** (`command: run`) | `run` | Docker + a provisioned agent binary + `anthropic-api-key` input | real inference against a live scenario — the action does **not** provision the agent binary or build the image for you (see [Fidelity tiers](#fidelity-tiers-pick-per-scenario--per-ci-job) below and the agent-binary provenance runbook in [`docs/maintenance.md`](./docs/maintenance.md)); this is for a self-hosted runner that already has both staged, not a stock GitHub-hosted runner |
 
+**Live lane, by design not oversight:** the action never downloads or stages the agent ELF itself.
+Pulling Anthropic's binary is a call about your own relationship with their distribution terms, so it
+stays a step in *your* workflow, not something a third-party action automates for you. A self-hosted-runner
+example:
+
+```yaml
+jobs:
+  live:
+    runs-on: [self-hosted, linux, arm64]   # needs Docker + the ELF staged below; not stock GitHub-hosted
+    steps:
+      - uses: actions/checkout@v4
+      - name: Stage the agent binary (official channel, sha256-verified — see docs/maintenance.md)
+        run: |
+          V=2.1.197   # match your scenario's pinned baseline's agentVersion
+          curl -fSL "https://downloads.claude.ai/claude-code-releases/$V/linux-arm64/claude" -o "$RUNNER_TEMP/claude-$V"
+          chmod +x "$RUNNER_TEMP/claude-$V"
+          echo "COWORK_AGENT_BINARY=$RUNNER_TEMP/claude-$V" >> "$GITHUB_ENV"
+      - uses: yaniv-golan/cowork-harness@v1
+        with:
+          command: run
+          path: scenarios/
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+```
+
 Every run writes a Markdown verdict table (scenario, pass/fail, signals, cost/turns when available, staleness findings, and the replay-skipped-assertions honesty line) to the job summary. Inputs: `command`, `path` (required), `version` (npm dist-tag/version, default `latest`), `strict`, `fail-on-skill-drift`, `extra-args`, `summary` (default `true`), `anthropic-api-key` (live lane only). See [`action.yml`](./action.yml) for the full input reference.
 
 The provided [GitHub Actions workflow](.github/workflows/ci.yml) runs a **five-stage pipeline**. The **unit** stage is the token-free gate you can copy into your skill repo; the `python`, `boundary`, `scenarios`, and `parity-drift` stages are this repo's own fidelity self-tests and are not directly portable (they build the harness's Docker image and run harness-specific e2e scenarios — see [`ci-recipe.md`](./.claude/skills/cowork-harness/references/ci-recipe.md) for the skill-repo template):
