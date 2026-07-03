@@ -70,6 +70,44 @@ describe("scanCassette — whole-surface privacy scan", () => {
     expect(scanCassette(c, []).some((f) => f.cls === "email")).toBe(true);
   });
 
+  it("path IS scanned on capability-manifest lines (unlike currency/domain)", () => {
+    const c = {
+      scenario: scenario([{ result: "success" }]),
+      events: [JSON.stringify({ type: "system", subtype: "init", tools: [], mcp_servers: [], cwd: "/Users/alice/project/work" })],
+    } as unknown as Cassette;
+    const findings = scanCassette(c, []);
+    expect(findings.some((f) => f.cls === "path" && f.sample.includes("/Users/alice"))).toBe(true);
+  });
+
+  it("currency/domain are still suppressed on capability-manifest lines (path didn't regress the existing exclusion)", () => {
+    const c = {
+      scenario: scenario([{ result: "success" }]),
+      events: [JSON.stringify({ type: "system", subtype: "init", tools: [], mcp_servers: [{ name: "claude.ai Gmail" }] })],
+    } as unknown as Cassette;
+    const findings = scanCassette(c, []);
+    expect(findings.some((f) => f.cls === "domain")).toBe(false);
+  });
+
+  it("a class-scoped --allow-path leaves the email class untouched", () => {
+    const c = {
+      scenario: scenario([{ result: "success" }]),
+      events: [
+        JSON.stringify({
+          type: "control_response",
+          response: {
+            request_id: "init-1",
+            subtype: "success",
+            response: { commands: [], agents: [], account: { email: "dev@company.com" } },
+          },
+        }),
+        JSON.stringify({ type: "system", subtype: "init", tools: [], mcp_servers: [], cwd: "/Users/dev/work" }),
+      ],
+    } as unknown as Cassette;
+    const f = scanCassette(c, [{ cls: "path", re: /\/Users\/dev\/work/i }]);
+    expect(f.some((x) => x.cls === "path")).toBe(false);
+    expect(f.some((x) => x.cls === "email")).toBe(true);
+  });
+
   it("a customer folder mount name in userVisibleRoots is scanned and flagged (metadata-marked)", () => {
     const c = {
       scenario: scenario([{ result: "success" }]),
