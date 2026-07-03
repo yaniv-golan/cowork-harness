@@ -486,6 +486,16 @@ cowork-harness verify-cassettes cassettes/ --allow 'NVCA|Cooley GO|Acme'
 The cardinal rule still holds: record against **synthetic** inputs (e.g. "Cadence / Acme", made-up
 numbers) — redaction and the scan are belt-and-suspenders, not a license to record real customer data.
 
+**If a scan finding surfaces on a cassette headed for `examples/replays/`** (the "safe to publish"
+tier), the correct response is to **re-record against a clean/synthetic environment or hand-review the
+whole cassette** — not to `--allow` the finding and commit. An allow only suppresses the one class the
+scanner happened to check; it says nothing about classes the scanner doesn't cover (a plugin catalog, an
+MCP-server list, a marketplace name) that may be sitting right next to it in the same real recording. A
+finding is a prompt to ask "why is real data in a fixture that's supposed to be synthetic at all?", not a
+checkbox to clear. This repo's own `.cowork-redact.json` (repo root) redacts local absolute paths and
+email addresses at record time by default — extend its `patterns`/`keys` rather than reaching for
+`--allow` first when a new class of real data shows up in a recording.
+
 ## Committed fixture
 
 `examples/replays/example-pdf-skill.cassette.json` is a **synthetic** cassette committed to the repo
