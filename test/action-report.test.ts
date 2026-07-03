@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { renderSummary } from "../.github/actions/report/render.js";
+import { renderSummary, renderFromRaw } from "../.github/actions/report/render.js";
 
 function envelope(over: Record<string, unknown> = {}) {
   return {
@@ -83,5 +83,33 @@ describe("renderSummary (Wave 1 / E5 reporter)", () => {
     expect(() =>
       renderSummary(envelope({ rollups: [{ scenario: "x", passRate: 0.9 }], matrix: { axes: {}, cells: [] } })),
     ).not.toThrow();
+  });
+});
+
+describe("renderFromRaw — tolerates a harness invocation that produced no valid JSON", () => {
+  // Real case this guards: `replay <nonexistent path>` writes NOTHING to stdout (a plain-text error
+  // to stderr instead, bypassing the JSON envelope entirely) and exits 2 — the action's
+  // `> envelope.json` redirect still creates the file, just empty. A naive JSON.parse throws an
+  // uncaught exception here, which would crash the reporter step itself rather than let the
+  // harness's own (already-correct) exit code be the sole source of pass/fail.
+  it("renders a fallback block instead of throwing on empty input", () => {
+    expect(() => renderFromRaw("")).not.toThrow();
+    expect(renderFromRaw("")).toContain("no parseable");
+  });
+
+  it("renders a fallback block instead of throwing on non-JSON text (a stray error message)", () => {
+    const md = renderFromRaw("replay: path not found: examples/replays/does-not-exist.json");
+    expect(md).not.toBe("");
+    expect(md).toContain("path not found");
+  });
+
+  it("renders the normal summary for valid JSON (the common case still works)", () => {
+    const md = renderFromRaw(JSON.stringify(envelope({ ok: true })));
+    expect(md).toContain("pass");
+  });
+
+  it("truncates a very long raw blob in the fallback (never dumps an unbounded stack trace into the summary)", () => {
+    const md = renderFromRaw("x".repeat(10_000));
+    expect(md.length).toBeLessThan(3000);
   });
 });

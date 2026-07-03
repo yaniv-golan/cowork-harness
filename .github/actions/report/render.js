@@ -56,14 +56,40 @@ export function renderSummary(envelope) {
   return lines.join("\n") + "\n";
 }
 
+/**
+ * Parses `raw` as the JSON envelope and renders it; falls back to a short, bounded fallback block
+ * instead of throwing when `raw` isn't valid JSON. Real case this guards: a `cowork-harness`
+ * invocation that fails before ever reaching its own JSON-envelope machinery (e.g. `replay` on a
+ * path it can't resolve prints a plain-text error to stderr and writes NOTHING to stdout — the
+ * action's `> envelope.json` redirect still creates the file, just empty). The reporter's job is to
+ * inform, never to be a second source of failure on top of the harness's own (already-correct) exit
+ * code — so this never throws, and the caller always gets a string to write out.
+ * @param {string} raw
+ */
+export function renderFromRaw(raw) {
+  try {
+    return renderSummary(JSON.parse(raw));
+  } catch {
+    const snippet = raw.trim().slice(0, 500) || "(empty output)";
+    return (
+      `## cowork-harness\n\n` +
+      `⚠️ The harness produced no parseable JSON envelope (it likely failed before reaching its ` +
+      `output stage — check the "Run cowork-harness" step's log above for the real error).\n\n` +
+      "```\n" +
+      snippet +
+      (raw.length > 500 ? "\n… (truncated)" : "") +
+      "\n```\n"
+    );
+  }
+}
+
 function main() {
   const [, , file, ...flags] = process.argv;
   if (!file) {
     process.stderr.write("usage: render.js <envelope.json> [--summary]\n");
     process.exit(2);
   }
-  const envelope = JSON.parse(readFileSync(file, "utf8"));
-  const md = renderSummary(envelope);
+  const md = renderFromRaw(readFileSync(file, "utf8"));
   process.stdout.write(md);
   if (flags.includes("--summary") && process.env.GITHUB_STEP_SUMMARY) {
     appendFileSync(process.env.GITHUB_STEP_SUMMARY, md);

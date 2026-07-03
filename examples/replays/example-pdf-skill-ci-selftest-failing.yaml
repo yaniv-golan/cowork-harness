@@ -1,0 +1,30 @@
+# yaml-language-server: $schema=../../schema/scenario.schema.json
+# Deliberately-failing sibling of ../scenarios/example-pdf-skill.yaml, used ONLY by the packaged
+# Action's self-test (.github/workflows/ci.yml, job `action-self-test`) via
+# `replay --assert-from` to prove the Action propagates a real ASSERTION failure (exit 1) end
+# to end, not just a usage error (exit 2 — the separate nonexistent-path case in that job proves
+# that path). prompt/answers/baseline/session are IDENTICAL to example-pdf-skill.yaml (so
+# --assert-from's recording-shaping-drift check passes) — only the assert: block differs, with
+# one assertion that is PERMANENTLY false against this cassette regardless of future
+# re-recording (the skill unconditionally invokes the Skill tool — verified by this cassette's
+# own toolCounts).
+baseline: latest
+session: ../sessions/default.yaml
+fidelity: container
+
+prompt: |
+  Read report.pdf from your uploads, summarize it, and write the action items
+  to outputs/actions.md as a markdown checklist.
+
+answers:
+  - when_question: "format|markdown|output style"
+    choose: "Markdown checklist"
+  - when_tool: Write
+    decide: allow
+  - when_tool: Bash
+    allow_if: "!command.includes('rm') && !command.includes('curl')"
+    else: deny
+
+assert:
+  - result: success
+  - tool_not_called: Skill # ALWAYS false — this cassette's recorded run invokes the Skill tool
