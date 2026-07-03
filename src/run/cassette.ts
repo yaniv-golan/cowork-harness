@@ -73,7 +73,7 @@ function writeFileAtomic(path: string, data: string): void {
 /** A snapshotted artifact — relative path + size + content hash, plus an inlined raw body for small
  *  files (so `artifact_json`/`file_exists`/`user_visible_artifact` survive token-free replay). A file too
  *  big to inline is hash-only with `truncated:true` (a loud marker — silent truncation reads as "covered"). */
-interface ManifestEntry {
+export interface ManifestEntry {
   path: string; // relative to the work root, e.g. "outputs/cap_state.json"
   bytes: number;
   sha256: string;
@@ -522,14 +522,15 @@ function debugSkillHashMismatch(cassette: Cassette, cassetteDir: string, fp: Fin
 }
 
 /** A per-file manifest diff split into the three change categories (paths only, unsampled). */
-interface FileSigDiff {
+export interface FileSigDiff {
   added: string[];
   removed: string[];
   changed: string[];
 }
 
-/** v5: diff two per-file manifests (recorded vs live) into the exact changed/added/removed path lists. */
-function diffFileSigsPaths(recorded: Array<[string, string]>, live: Array<[string, string]>): FileSigDiff {
+/** v5: diff two per-file manifests (recorded vs live) into the exact changed/added/removed path lists.
+ *  Exported for E2's diff engine (artifacts view) — the exact same [path, sha256] shape it needs. */
+export function diffFileSigsPaths(recorded: Array<[string, string]>, live: Array<[string, string]>): FileSigDiff {
   const rec = new Map(recorded);
   const liv = new Map(live);
   const added: string[] = [];

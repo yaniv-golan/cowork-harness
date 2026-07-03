@@ -20,6 +20,7 @@ import { claudeCliComplete } from "./decide/llm-transport.js";
 import { toDecisionRequest, type DecisionRequest } from "./agent/session.js";
 import { vmInit, vmDelete, vmStatus, vmPrune, instanceName } from "./runtime/lima.js";
 import { sync } from "./sync/cowork-sync.js";
+import { diffBaselines, formatDiffLines, renderChangelog } from "./sync/baseline-diff.js";
 import { runBoundaryChecks, formatBoundary } from "./boundary.js";
 import { cmdChat } from "./run/chat.js";
 import { cmdRecord, cmdReplay, cmdVerifyCassettes, cmdRehash, buildFingerprint, fingerprintSkillDrift } from "./run/cassette.js";
@@ -40,7 +41,21 @@ import {
   buildDispatchTree,
   formatDispatchTree,
   noteRunsLocation,
+  eventsFromLines,
 } from "./run/trace-view.js";
+import {
+  canonicalizeInput,
+  diffToolSequence,
+  diffTranscript,
+  diffMeta,
+  diffArtifacts,
+  type NormalizedToolRow,
+  type DiffMetaSummary,
+  type ToolDiffOp,
+  type TranscriptDiffLine,
+  type MetaDiffEntry,
+} from "./run/diff.js";
+import type { Cassette } from "./run/cassette.js";
 import { buildScaffold } from "./run/scaffold.js";
 import { buildInspectView } from "./run/inspect-view.js";
 import { pkgVersion, jsonEnvelope, jsonError, parseOutputFormat, fail, isJsonOutput, type ErrCategory } from "./run/envelope.js";
@@ -118,6 +133,10 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
       [--output-format json]
   inspect <run-id | run-dir>   show what a run produced: artifacts + a shallow field preview of each JSON artifact
       [--output-format json]   structured digest
+  diff <a> <b>                 compare two baselines, two runs, two cassettes, or a run+cassette (kind auto-detected by content)
+      [--changelog]            baseline mode: render known-field prose instead of the raw path-diff
+      [--view tools|transcript|artifacts|meta|all] [--no-normalize]   run/cassette mode (see 'diff --help')
+      [--output-format json]   exit codes: 0 identical · 1 differing · 2 usage
   scaffold <run-id | run-dir>  turn a kept run into a starter scenario YAML (gates→answers, artifacts→file_exists)
       [--out <file.yaml>]      write to a file (default: stdout)
   status <run-id | run-dir>    check whether a background run is alive (state/elapsed/tool counts) — no ps aux needed
@@ -330,6 +349,15 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
     "usage: verify-run <run-dir> <scenario.yaml> [--output-format json]   (re-evaluate a scenario's assert: against a kept run dir; no live agent)",
   inspect:
     "usage: inspect <run-id | run-dir> [--output-format json]   (show what a run PRODUCED: artifacts + a shallow preview of each JSON artifact's fields; for what HAPPENED — tools/decisions — use `trace`)",
+  diff:
+    "usage: diff <a> <b> [--changelog] [--view tools|transcript|artifacts|meta|all] [--no-normalize] [--output-format text|json]\n" +
+    "       kind is auto-detected by CONTENT (not filename): two baselines (loadBaseline: `latest`, a bare name under baselines/, or an absolute path) | two runs (run-id/run-dir/events.jsonl) | two cassettes (*.cassette.json) | one run + one cassette (cross-comparable).\n" +
+    "       baselines only pair with baselines; mixing a baseline with a run/cassette is a usage error.\n" +
+    "       --changelog: BASELINE MODE ONLY — render known-field prose (agent/Desktop version bumps, egress allowlist changes, gate flips) instead of the raw path-diff; unmapped paths still render, generically, never silently dropped.\n" +
+    "       --view: RUN/CASSETTE MODE ONLY — restrict text output to one view (default: all). Normalization masks tool-use ids, UUIDs, session-dir markers, timestamps, and host paths so two runs of the SAME scenario diff as identical despite per-run noise; --no-normalize compares raw values (forensics).\n" +
+    "       transcript is advisory (model-stochastic prose differs across live re-records no matter what) — tools/artifacts/meta are the gateable signal.\n" +
+    "       runs anywhere (reads committed JSON / cassette files only — no live Desktop install needed for baseline mode, unlike `sync --diff`; no Docker/token needed for run/cassette mode).\n" +
+    "       exit codes: 0 identical · 1 differing · 2 usage (e.g. an unresolvable baseline name, or a run/cassette with no matching side).",
   doctor: "usage: doctor [--tier protocol|container|microvm|hostloop|cowork] [--output-format json]   (read-only prerequisite check)",
   rehash:
     "usage: rehash <dir/> [--dry-run] [--output-format text|json]   (migrate cassettes across format bumps using contentSig verification; no re-record needed)",
@@ -348,6 +376,7 @@ const COMMANDS = [
   "verify-run",
   "trace",
   "inspect",
+  "diff",
   "assertions",
   "scaffold",
   "status",
@@ -553,6 +582,8 @@ async function main() {
       return cmdTrace(rest);
     case "inspect":
       return cmdInspect(rest);
+    case "diff":
+      return cmdDiff(rest);
     case "assertions":
       return cmdAssert(rest);
     case "scaffold":
@@ -1695,7 +1726,9 @@ async function cmdSync(args: string[]) {
     // JSON.stringify(loadBaseline("latest")))` above) that nothing between here and there mutates in
     // place, so this surfaces real gate/content drift, not a diff against an already-updated copy.
     log(`=== diff vs latest committed baseline (desktop-${(base as { appVersion?: string }).appVersion}) ===`);
-    diff(base, next, "");
+    // E7: structured recursive diff, replacing the one-level diff() that printed a whole subtree on
+    // any nested change (e.g. a single gate flip three levels deep used to dump all of `provenance`).
+    for (const line of formatDiffLines(diffBaselines(base, next))) log(`  ${line}`);
   }
   if (res.unknownDeltas.length) {
     log("\n⚠ unknown deltas (extend src/sync/cowork-sync.ts):");
@@ -2669,6 +2702,279 @@ function cmdTrace(args: string[]) {
   else out(formatTrace(rows));
 }
 
+type DiffKind = "baseline" | "run" | "cassette";
+
+// Every message type parseMessage/the SDK stream can emit at top level — used only to recognize a
+// single-line events.jsonl (see detectDiffKind); not a schema, just a disambiguation signal.
+const SDK_MESSAGE_TYPES = new Set(["system", "assistant", "user", "result", "control_request", "control_response"]);
+
+/** Kind detection by CONTENT, not filename or `resolveEventsFile` alone. Two real bugs, found only by
+ *  actually running the command against real files (not synthetic unit tests — §9 lesson 1/2), forced
+ *  this design:
+ *  1. A first attempt checked `arg.endsWith(".cassette.json")` for cassette, else `resolveEventsFile`
+ *     for run. `resolveEventsFile` accepts ANY existing file path UNCONDITIONALLY (it's built for
+ *     `trace`, which assumes its argument already IS an events.jsonl) — so a cassette file not literally
+ *     named `*.cassette.json` silently became "run": the whole cassette object, read as one "event
+ *     line", matched no known message type and produced a SILENTLY EMPTY tool list instead of an error.
+ *  2. The fix (content-sniff for `scenario`+`events` before falling to `resolveEventsFile`) then broke
+ *     the SAME way in the other direction: a baseline JSON file is *also* an existing file
+ *     `resolveEventsFile` accepts unconditionally, so it fell through to "run" instead of "baseline"
+ *     the moment cassette-sniffing said no.
+ *  The fix for both: for any existing FILE (baselines/cassettes/events.jsonl are all single files —
+ *  directories and run-ids/fragments have no such ambiguity, `resolveEventsFile`'s own directory-walk
+ *  and fragment-matching handle those safely), decide purely from content: cassette-shaped (has
+ *  `scenario`+`events`) → cassette; a single JSON object whose `type` is a real SDK message type → run
+ *  (a single-line events.jsonl); any other single JSON document → baseline (PlatformBaseline.parse is
+ *  the real validator at load time); doesn't parse as ONE JSON document at all → genuine multi-line
+ *  NDJSON → run. */
+function detectDiffKind(arg: string): DiffKind {
+  if (existsSync(arg) && statSync(arg).isFile()) {
+    let whole: unknown;
+    try {
+      whole = JSON.parse(readFileSync(arg, "utf8"));
+    } catch {
+      whole = undefined; // not a single JSON document — genuine multi-line NDJSON
+    }
+    if (whole && typeof whole === "object") {
+      const w = whole as Record<string, unknown>;
+      if (Array.isArray(w.events) && w.scenario) return "cassette";
+      if (typeof w.type === "string" && SDK_MESSAGE_TYPES.has(w.type)) return "run";
+      return "baseline";
+    }
+    return "run";
+  }
+  try {
+    resolveEventsFile(arg);
+    return "run";
+  } catch {
+    /* not a resolvable run either — fall through */
+  }
+  return "baseline"; // validated for real by loadBaseline() at load time; unresolvable throws there
+}
+
+interface DiffSide {
+  tools: NormalizedToolRow[];
+  transcript: string;
+  artifacts?: Array<[string, string]>; // undefined = no manifest available for this side
+  meta: Partial<DiffMetaSummary>;
+}
+
+/** Top-level (non-sub-agent, non-synthetic) tool_use events, canonicalized — the same shape both a run
+ *  dir's events.jsonl and a cassette's events[] reduce to. */
+function topLevelToolRows(lines: string[], source: string, normalize: boolean): NormalizedToolRow[] {
+  return eventsFromLines(lines, source)
+    .filter((e): e is Extract<typeof e, { type: "tool_use" }> => e.type === "tool_use" && !e.parentToolUseId && !e.synthetic)
+    .map((e) => ({ name: e.name, canon: canonicalizeInput(e.input, normalize) }));
+}
+
+function loadRunSide(arg: string, normalize: boolean): DiffSide {
+  const eventsFile = resolveEventsFile(arg);
+  const runDir = dirname(eventsFile);
+  const lines = readFileSync(eventsFile, "utf8").split("\n");
+  const tools = topLevelToolRows(lines, eventsFile, normalize);
+  const transcript = readTranscriptSidecar(join(runDir, "run.jsonl")) ?? "";
+  let meta: Partial<DiffMetaSummary> = {};
+  let artifacts: Array<[string, string]> | undefined;
+  const resultPath = join(runDir, "result.json");
+  if (existsSync(resultPath)) {
+    const result = JSON.parse(readFileSync(resultPath, "utf8")) as RunResult;
+    meta = {
+      result: result.result,
+      effectiveFidelity: result.effectiveFidelity,
+      baseline: result.baseline,
+      assertionsPassed: (result.assertions ?? []).every((a) => a.pass),
+    };
+    // Hash on-disk if the workDir is still there (fresh/kept run); degrade to a size-based pseudo-hash,
+    // clearly distinguishable ("size:N"), when it's torn down — never silently claim byte-verified
+    // equality we can't back. A real cassette-side manifest always has a genuine sha256 (below).
+    if (result.artifacts && result.workDir) {
+      artifacts = result.artifacts.map(({ path, bytes }) => {
+        const abs = join(result.workDir!, path);
+        try {
+          return [path, sha256File(abs)] as [string, string];
+        } catch {
+          return [path, `size:${bytes}`] as [string, string];
+        }
+      });
+    }
+  }
+  return { tools, transcript, artifacts, meta };
+}
+
+function loadCassetteSide(file: string, normalize: boolean): DiffSide {
+  const cassette = JSON.parse(readFileSync(file, "utf8")) as Cassette;
+  const events = eventsFromLines(cassette.events, file);
+  const tools = events
+    .filter((e): e is Extract<typeof e, { type: "tool_use" }> => e.type === "tool_use" && !e.parentToolUseId && !e.synthetic)
+    .map((e) => ({ name: e.name, canon: canonicalizeInput(e.input, normalize) }));
+  // Mirror Run.drive()'s own transcript construction (non-parented assistant_text, joined) rather than
+  // invoking the full replay engine just to get a transcript — replay's staleness/controlOut machinery
+  // is unrelated overhead for a diff.
+  const transcript = events
+    .filter((e): e is Extract<typeof e, { type: "assistant_text" }> => e.type === "assistant_text" && !e.parentToolUseId)
+    .map((e) => e.text)
+    .join("\n");
+  // Mirror Run.drive()'s own result classification (the last "result" event's isError) — same reasoning.
+  const resultEvents = events.filter((e): e is Extract<typeof e, { type: "result" }> => e.type === "result");
+  const lastResult = resultEvents[resultEvents.length - 1];
+  const meta: Partial<DiffMetaSummary> = {
+    result: lastResult ? (lastResult.isError ? "error" : "success") : undefined,
+    effectiveFidelity: cassette.effectiveFidelity,
+    baseline: cassette.scenario?.baseline,
+    // assertionsPassed intentionally omitted: comparing frozen-vs-frozen assertion pass/fail needs a real
+    // replay (staleness/controlOut-aware), out of scope for a structural diff — diffMeta skips a field
+    // when BOTH sides omit it, so this degrades cleanly rather than comparing undefined to a run's real value.
+  };
+  const artifacts: Array<[string, string]> | undefined = cassette.artifacts?.map((m) => [m.path, m.sha256]);
+  return { tools, transcript, artifacts, meta };
+}
+
+function loadDiffSide(kind: DiffKind, arg: string, normalize: boolean): DiffSide {
+  return kind === "cassette" ? loadCassetteSide(arg, normalize) : loadRunSide(arg, normalize);
+}
+
+interface DiffViewResult {
+  tools: ToolDiffOp[];
+  transcript: TranscriptDiffLine[];
+  artifacts?: import("./run/cassette.js").FileSigDiff;
+  meta: MetaDiffEntry[];
+  identical: boolean;
+}
+
+function compareDiffSides(a: DiffSide, b: DiffSide, normalize: boolean): DiffViewResult {
+  const tools = diffToolSequence(a.tools, b.tools);
+  const transcript = diffTranscript(a.transcript, b.transcript, normalize);
+  const artifacts = a.artifacts && b.artifacts ? diffArtifacts(a.artifacts, b.artifacts) : undefined;
+  const meta = diffMeta(a.meta, b.meta);
+  const identical =
+    tools.every((o) => o.op === "same") &&
+    transcript.every((o) => o.op === "same") &&
+    (!artifacts || (artifacts.added.length === 0 && artifacts.removed.length === 0 && artifacts.changed.length === 0)) &&
+    meta.length === 0;
+  return { tools, transcript, artifacts, meta, identical };
+}
+
+function renderDiffText(r: DiffViewResult, view: string): string[] {
+  const lines: string[] = [];
+  if (view === "tools" || view === "all") {
+    const changed = r.tools.filter((o) => o.op !== "same");
+    if (changed.length === 0) lines.push("tools: identical");
+    else {
+      lines.push("tools:");
+      for (const op of changed) {
+        if (op.op === "added") lines.push(`  + ${op.b.name} ${op.b.canon}`);
+        else if (op.op === "removed") lines.push(`  - ${op.a.name} ${op.a.canon}`);
+        else lines.push(`  ~ ${op.a.name}: ${op.a.canon} -> ${op.b.canon}`);
+      }
+    }
+  }
+  if (view === "transcript" || view === "all") {
+    const changed = r.transcript.filter((o) => o.op !== "same");
+    if (changed.length === 0) lines.push("transcript: identical");
+    else {
+      lines.push("transcript:");
+      for (const op of changed) lines.push(`  ${op.op === "added" ? "+" : "-"} ${op.text}`);
+    }
+  }
+  if (view === "artifacts" || view === "all") {
+    if (!r.artifacts) lines.push("artifacts: no manifest on one or both sides — not compared");
+    else if (r.artifacts.added.length === 0 && r.artifacts.removed.length === 0 && r.artifacts.changed.length === 0)
+      lines.push("artifacts: identical");
+    else {
+      lines.push("artifacts:");
+      for (const p of r.artifacts.added) lines.push(`  + ${p}`);
+      for (const p of r.artifacts.removed) lines.push(`  - ${p}`);
+      for (const p of r.artifacts.changed) lines.push(`  ~ ${p}`);
+    }
+  }
+  if (view === "meta" || view === "all") {
+    if (r.meta.length === 0) lines.push("meta: identical");
+    else {
+      lines.push("meta:");
+      for (const e of r.meta) lines.push(`  ${e.field}: ${JSON.stringify(e.from)} -> ${JSON.stringify(e.to)}`);
+    }
+  }
+  return lines;
+}
+
+/** E7 (baseline) + E2 (run/cassette, cross-comparable; baselines only pair with baselines). */
+function cmdDiff(args: string[]) {
+  if (hasHelp(args)) return void log(SUBCOMMAND_USAGE.diff);
+  ensureOutputFormat("diff", args);
+  const json = isJsonOutput(args);
+  rejectUnknownFlags(
+    "diff",
+    args,
+    ["--changelog", "--view", "--no-normalize", "--output-format", "--output-format=json", "--output-format=text"],
+    json,
+  );
+  const changelog = args.includes("--changelog");
+  const viewIdx = args.indexOf("--view");
+  const view = viewIdx >= 0 ? flagValue("diff", args, viewIdx, "--view", json) : "all";
+  if (!["tools", "transcript", "artifacts", "meta", "all"].includes(view))
+    return void fail("diff", "usage", `--view must be one of tools|transcript|artifacts|meta|all (got "${view}")`, undefined, json);
+  const allPositionals = positionals(args, ["--output-format", "--view"]);
+  if (allPositionals.length !== 2) return void fail("diff", "usage", SUBCOMMAND_USAGE.diff, undefined, json);
+  const [aName, bName] = allPositionals;
+
+  const aKind = detectDiffKind(aName);
+  const bKind = detectDiffKind(bName);
+  if (aKind === "baseline" || bKind === "baseline") {
+    if (aKind !== bKind)
+      return void fail(
+        "diff",
+        "usage",
+        `cannot compare a baseline against a ${aKind === "baseline" ? bKind : aKind} — baselines only pair with baselines`,
+        undefined,
+        json,
+      );
+    let a: PlatformBaseline, b: PlatformBaseline;
+    try {
+      a = loadBaseline(aName);
+      b = loadBaseline(bName);
+    } catch (e) {
+      return void fail("diff", "usage", String((e as Error).message), undefined, json);
+    }
+    const entries = diffBaselines(a, b);
+    const identical = entries.length === 0;
+    if (json) out(JSON.stringify({ tool: "cowork-harness", command: "diff", kind: "baseline", a: aName, b: bName, identical, entries }));
+    else if (changelog) out(renderChangelog(entries));
+    else if (identical) out("No differences.");
+    else for (const line of formatDiffLines(entries)) out(line);
+    process.exit(identical ? 0 : 1);
+  }
+
+  // run/cassette — cross-comparable
+  if (changelog) return void fail("diff", "usage", "--changelog is baseline-mode only", undefined, json);
+  const normalize = !args.includes("--no-normalize");
+  let a: DiffSide, b: DiffSide;
+  try {
+    a = loadDiffSide(aKind, aName, normalize);
+    b = loadDiffSide(bKind, bName, normalize);
+  } catch (e) {
+    return void fail("diff", "usage", String((e as Error).message), undefined, json);
+  }
+  const result = compareDiffSides(a, b, normalize);
+  if (json) {
+    out(
+      JSON.stringify({
+        tool: "cowork-harness",
+        command: "diff",
+        kinds: [aKind, bKind],
+        a: aName,
+        b: bName,
+        identical: result.identical,
+        views: { tools: result.tools, transcript: result.transcript, artifacts: result.artifacts, meta: result.meta },
+      }),
+    );
+  } else if (result.identical) {
+    out("identical");
+  } else {
+    for (const line of renderDiffText(result, view)) out(line);
+  }
+  process.exit(result.identical ? 0 : 1);
+}
+
 function cmdInspect(args: string[]) {
   if (hasHelp(args)) return void log(SUBCOMMAND_USAGE.inspect);
   ensureOutputFormat("inspect", args);
@@ -2689,15 +2995,6 @@ function cmdInspect(args: string[]) {
     out(buildInspectView(runDir, { json }));
   } catch (e) {
     return void fail("inspect", "usage", String((e as Error).message), undefined, json);
-  }
-}
-
-function diff(a: any, b: any, path: string) {
-  const keys = new Set([...Object.keys(a ?? {}), ...Object.keys(b ?? {})]);
-  for (const k of keys) {
-    const pa = JSON.stringify(a?.[k]);
-    const pb = JSON.stringify(b?.[k]);
-    if (pa !== pb) log(`  ${path}${k}: ${pa} -> ${pb}`);
   }
 }
 

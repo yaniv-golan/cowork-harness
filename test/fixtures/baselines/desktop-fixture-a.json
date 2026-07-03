@@ -1,0 +1,16 @@
+{
+  "$comment": "Minimal fixture baseline for diff/changelog tests — NOT a real committed baseline (test/baseline-diff.test.ts + test/cli-diff.test.ts). Do not use for anything else.",
+  "baselineVersion": 1,
+  "appVersion": "1.0.0-fixture-a",
+  "agentVersion": "1.0.0",
+  "agentBinary": { "stagedPath": "/fixture/claude" },
+  "guest": { "os": "linux", "arch": "arm64" },
+  "mountLayout": { "sessionRoot": "/sessions", "cwd": "mnt", "mounts": [] },
+  "network": { "mode": "gvisor", "allowKind": "allowlist", "allowDomains": ["a.example.com", "shared.example.com"] },
+  "requireFullVmSandbox": false,
+  "provenance": {
+    "asarFingerprint": "fixtureFingerprintA",
+    "gates": { "hostLoop": { "on": false, "source": "gate", "note": "old note" } }
+  },
+  "capturedAt": "2026-01-01"
+}

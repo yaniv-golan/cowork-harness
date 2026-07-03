@@ -25,6 +25,7 @@ const CASES: Array<[string, string[]]> = [
   ["verify-cassettes", ["somedir"]],
   ["run", ["s.yaml"]],
   ["trace", ["some-run-id"]],
+  ["diff", ["desktop-a", "desktop-b"]],
   ["assertions", ["--list"]],
   ["scaffold", ["--from-run", "some-run-id"]],
   ["decide", ["--question", "confirm?", "--option", "A"]],

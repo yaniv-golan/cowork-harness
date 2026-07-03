@@ -168,17 +168,19 @@ export function resolveEventsFile(arg: string): string {
   throw new Error(`no events.jsonl for "${arg}" — pass a run dir, an events.jsonl path, or a run id under runs/`);
 }
 
-/** Parse every event from an events.jsonl (the shared first pass for the trace views). */
-function eventsOf(file: string): AgentEvent[] {
+/** Parse every event from a pre-read array of raw JSONL lines — the shared core both `eventsOf` (a run
+ *  dir's events.jsonl on disk) and E2's diff engine (a cassette's `events[]`, already in memory, no file
+ *  to read) build on. `source` is only used in the malformed-line warning. */
+export function eventsFromLines(lines: string[], source = "<lines>"): AgentEvent[] {
   const events: AgentEvent[] = [];
-  for (const line of readFileSync(file, "utf8").split("\n")) {
+  for (const line of lines) {
     if (!line.trim()) continue;
     let msg: unknown;
     try {
       msg = JSON.parse(line);
     } catch {
       // skip malformed JSON (a truncated final line is normal) but be LOUD — mirror cassette.ts.
-      warn(`::warning:: trace: skipping malformed JSON line in ${file}: ${line.slice(0, 120)}\n`);
+      warn(`::warning:: trace: skipping malformed JSON line in ${source}: ${line.slice(0, 120)}\n`);
       continue;
     }
     events.push(...parseMessage(msg));
@@ -186,8 +188,15 @@ function eventsOf(file: string): AgentEvent[] {
   return events;
 }
 
-export function buildTrace(file: string, opts: { tools?: boolean } = {}): TraceRow[] {
-  const events = eventsOf(file);
+/** Parse every event from an events.jsonl (the shared first pass for the trace views). */
+function eventsOf(file: string): AgentEvent[] {
+  return eventsFromLines(readFileSync(file, "utf8").split("\n"), file);
+}
+
+/** Core trace-row building over an already-parsed event array — the part of `buildTrace` that doesn't
+ *  care whether the events came from a file (run dir) or were passed in directly (E2's diff engine,
+ *  cassette `events[]`). `buildTrace` is the file-path convenience wrapper over this. */
+export function buildTraceFromEvents(events: AgentEvent[], opts: { tools?: boolean } = {}): TraceRow[] {
   // Pair tool_use ↔ tool_result by toolUseId so each tool row carries its OUTCOME — the single
   // highest-value forensics fix: a tool error (e.g. the q.map) is now visible in one command.
   const results = new Map<string, { isError: boolean; text: string }>();
@@ -204,6 +213,10 @@ export function buildTrace(file: string, opts: { tools?: boolean } = {}): TraceR
     }
   }
   return opts.tools ? rows.filter((r) => r.kind === "tool" || r.kind === "dispatch") : rows;
+}
+
+export function buildTrace(file: string, opts: { tools?: boolean } = {}): TraceRow[] {
+  return buildTraceFromEvents(eventsOf(file), opts);
 }
 
 export interface GateTraceRow {
