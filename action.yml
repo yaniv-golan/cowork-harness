@@ -103,7 +103,7 @@ runs:
       run: |
         summary_flag=""
         [ "${{ inputs.summary }}" = "true" ] && summary_flag="--summary"
-        node "${{ github.action_path }}/report/render.js" cowork-harness-envelope.json $summary_flag
+        node "${{ github.action_path }}/.github/actions/report/render.js" cowork-harness-envelope.json $summary_flag
 
     - name: Propagate exit code
       shell: bash
