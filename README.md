@@ -673,6 +673,15 @@ a global install has them locally too, not just on GitHub.
 | [SECURITY.md](./SECURITY.md) | Threat model — the sandbox is a fidelity fixture, not a security boundary. |
 | [RELEASING.md](./RELEASING.md) | The release flow — branch → PR → tag → npm publish. |
 
+## Versioning
+
+From `1.0.0` this project follows [semver](https://semver.org/). What that covers is enumerated in
+**[SPEC.md §12](./SPEC.md#12-versioning--the-10-compatibility-contract)** — the CLI commands/flags and
+exit codes, the scenario/session/baseline/`RunResult`/cassette/protocol schemas, the documented
+`COWORK_HARNESS_*` (+ `COWORK_AGENT_BINARY`/`COWORK_AGENT_IMAGE`) env vars, and the packaged Action's
+inputs/outputs. Human-readable terminal text is explicitly **not** part of the contract — parse the
+`--output-format json` envelope, not stdout. Pre-1.0, minor versions may still break any surface.
+
 ## Status
 
 **Verified end-to-end against the live staged agent (2.1.197 / asar 1.17377.1).** Host-side parity (egress/gates/mount/web_fetch facts) re-derived via `sync` — no unknown deltas; only `asarFingerprint` moved, plus `api.claude.ai` joining `network.allowDomains`. The reconstructed prompt appends (`prompts/desktop-1.15200.0/`) were spot-checked against the new asar: substantively unchanged (minor punctuation-level rewording only) — the load-bearing "is NOT Claude Code" correction, the host-loop `## Shell access` generator, and the web_fetch/mount facts all still hold. The live scenario suite (`protocol` + `container` tiers) passes against this baseline. The latest shipped baseline — what `baseline: latest` resolves to (`cowork-harness list`) — is **`desktop-1.18286.0`** (the committed baseline file and version-lockstep checks already track it; the "verified end-to-end" pass above is pinned to `1.17377.1` pending a fresh live re-run against `1.18286.0`).

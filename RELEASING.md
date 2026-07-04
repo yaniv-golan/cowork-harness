@@ -43,6 +43,11 @@ Pre-1.0: **minor** (`0.N+1.0`) = new features and/or behavior changes; **patch**
 backwards-compatible bug fixes only. New commands/flags, or changes to existing behavior (e.g. a
 stricter privacy gate, a changed cassette/staleness hash), are a **minor**.
 
+From `1.0.0`, semver is enforced against the **covered surfaces enumerated in
+[SPEC.md §12](./SPEC.md#12-versioning--the-10-compatibility-contract)** (CLI + exit codes, the
+scenario/session/baseline/run-result/cassette/protocol schemas, the documented env vars, and the
+packaged Action's inputs/outputs). Human-readable text output is explicitly NOT covered.
+
 ## Version locations — bump ALL of these to the same `X.Y.Z`
 
 1. `package.json` → `"version"` (then run `npm install` to update `package-lock.json`).

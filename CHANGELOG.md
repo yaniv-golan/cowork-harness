@@ -31,6 +31,12 @@ All notable changes to this project are documented here. The format is based on
   scoped `--allow-machine-inventory <regex>` to whitelist provably-synthetic values. Tightening the
   privacy gate before the 1.0 contract freezes keeps it from becoming a breaking change to consumers'
   committed cassettes later.
+- **The 1.0 compatibility contract (SPEC.md §12).** Enumerates the surfaces semver covers from `1.0.0` —
+  CLI commands/flags + exit codes, the scenario/session/baseline/`RunResult`/cassette(v7)/protocol
+  schemas, the documented `COWORK_HARNESS_*` (+ `COWORK_AGENT_BINARY`/`COWORK_AGENT_IMAGE`) env vars, and
+  the packaged Action's inputs/outputs — and states what is explicitly NOT covered (human-readable
+  terminal text, `trace` row shapes, the paraphrased prompt append). Cross-linked from README and
+  RELEASING.md.
 - **First committed `hostloop`-tier replay cassette + live two-tier `computer_links_resolve`
   coverage.** `examples/replays/hostloop-computer-links.cassette.json` (from a new purpose-built
   `fidelity: hostloop` scenario) is the first committed cassette at the newest/headline tier — the one

@@ -589,3 +589,42 @@ text passes unchanged unless the entire value is a base64 blob). A guard in `red
 already-redacted markers. The TLD list used by the domain scanner was also extended from 22 to 51
 entries (CB-5), adding major European, Asian, and Latin American ccTLDs
 (`ch|nl|se|no|it|jp|br|nz|in|sg|kr|mx|es|pt|pl|be|at|dk|fi|ie|ru|cn|tw|hu|cz|ro|il|za|ar|cl|pe|tr`).
+
+## 12. Versioning & the 1.0 compatibility contract
+
+From `1.0.0` the project follows [semver](https://semver.org/). The surfaces below are the **covered
+contract**: a backwards-incompatible change to any of them is a MAJOR bump. Everything else — most
+importantly human-readable text — is explicitly NOT covered and may change in any release. (Pre-1.0,
+nothing here is guaranteed; minor versions may break any surface — see [RELEASING.md](./RELEASING.md).)
+
+**Covered (semver-guaranteed):**
+
+- **CLI surface** — command names, their accepted flags, and the **per-command** exit codes (§11).
+  Exit codes are per-command, not global: `run`/`skill` use `0` pass / `1` assertion-or-agent fail /
+  `2` usage / `3` boundary-integrity, with `4` reserved (§11). Removing a command or flag, or changing
+  an exit-code meaning, is breaking.
+- **Scenario & session schemas** — `schema/scenario.schema.json`, `schema/session.schema.json` (the
+  authored-input contract). Tightening validation on a previously-valid document is breaking.
+- **Baseline JSON shape** — the `baselines/desktop-*.json` field structure (CI's committed source of
+  truth; consumers commit and diff these).
+- **RunResult envelope** — `schema/run-result.json` under `--output-format json` (§11): the
+  `ok` / `results[]` / `error` shape and the verdict-signal codes (§11.0).
+- **Cassette format** — the current `cassetteVersion` (**7**) and its verdict-modifier assertion keys.
+  Older-version cassettes (the retained `schema/cassette.v2…v6.json`) stay replayable; dropping a
+  still-emitted version's readability is breaking.
+- **Control protocol** — `schema/protocol.v1.json` + the golden control-response vectors (§5).
+- **Environment variables** — the documented `COWORK_HARNESS_*` knobs plus `COWORK_AGENT_BINARY` and
+  `COWORK_AGENT_IMAGE`. Renaming a documented var or changing its meaning is breaking.
+- **Packaged GitHub Action** — `action.yml` inputs (`command`, `path`, `version`, `strict`,
+  `fail-on-skill-drift`, `extra-args`, `summary`, `anthropic-api-key`) and outputs (`ok`,
+  `envelope-path`, `summary-md`).
+
+**NOT covered (may change in any release — do NOT depend on):**
+
+- **Human-readable renderer output** — verdict footers, `::notice::` / `::warning::` lines, transcript
+  formatting, and the exact text of log/error messages. **Grep-stability of human-readable text is
+  explicitly NOT a contract** — assert against the JSON envelope, not stdout text.
+- **`trace` row shapes** and other debug/diagnostic output.
+- **`docs/internal/**`** — untracked working notes.
+- **The reconstructed system-prompt append text** — a paraphrase by design (see
+  [docs/fidelity-gaps.md](./docs/fidelity-gaps.md)); behaviorally equivalent, not byte-stable.
