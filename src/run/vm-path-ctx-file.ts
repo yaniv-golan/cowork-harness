@@ -8,9 +8,8 @@ import type { VmPathContext } from "../vm-paths.js";
  * `display-translate.ts`'s module header) to `<outDir>/mounts.json`, a sibling of `status.json`. The
  * live process already has this ctx in memory (built once, at `buildLaunchPlan` time, and reused for
  * the live display translator); this module is what lets a LATER process — `trace` reading a kept run
- * dir after the writer has exited, or the future TUI run-browser (see
- * docs/internal/2026-07-03-computer-link-scheme-research-and-plan.md, "Forward-compatibility — a
- * future full TUI") — rebuild the SAME ctx instead of degrading to raw VM paths (today's replay rule).
+ * dir after the writer has exited, or a future TUI run-browser — rebuild the SAME ctx instead of
+ * degrading to raw VM paths (today's replay rule).
  *
  * A sibling file, not a `display-translate.ts` export, so this can be authored/reviewed independently
  * of that module's own policy-seam contract work.

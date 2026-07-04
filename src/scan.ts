@@ -46,8 +46,8 @@ export const DEFAULT_SCAN_PATTERNS: { re: RegExp; cls: string }[] = [
     // genuine path-like "/home/...". Modeled on the boundary approach in src/run/execute.ts's
     // hostPathLeaked — deliberately NOT sharing code with it: that function is an encoding-aware
     // boolean check over an agent's free-form output at run time, this is a plain match-extraction
-    // over structured JSON at scan time (see docs/internal/2026-07-03-cassette-path-scan-class-plan.md
-    // Design Decision 2). Unix-only by scope — a Windows path (C:\Users\...) does not match; this repo
+    // over structured JSON at scan time (a deliberate design decision: structured extraction beats
+    // a boolean over free-form text here). Unix-only by scope — a Windows path (C:\Users\...) does not match; this repo
     // records via Docker/Lima on macOS/Linux.
     re: /(?<![^\s"'(=:])(\/Users\/|\/home\/|\/root\/)[^\s"')]+/gi,
     cls: "path",

@@ -8,8 +8,7 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
-- **TUI forward-compatibility set** (plan:
-  `docs/internal/2026-07-04-tui-forward-compat-completion-plan.md`; three items):
+- **TUI forward-compatibility set** (three items hardening the display seam for future frontends):
   - **The display-policy seam is now an explicit contract.** `src/run/display-translate.ts`'s header
     states it is the single policy seam for translating model-visible VM paths for human display
     (hostloop-only / identity-without-ctx / identity-when-shareable), locked by a 20-row table-driven
@@ -102,8 +101,7 @@ All notable changes to this project are documented here. The format is based on
 ### Added
 
 - **`computer://` link modeling — the prompt now instructs file links exactly as production does.**
-  Four pieces landed together (design + binary research in
-  `docs/internal/2026-07-03-computer-link-scheme-research-and-plan.md`):
+  Four pieces landed together, grounded in binary research against the Desktop app:
   - `src/vm-paths.ts` — a faithful port of Desktop's display-side VM→host path transform
     (`deepTranslateVMPaths` / `mapVMPathToHostPath` / `encodeComputerUrlsForHostLoop`): markdown-link,
     backtick, bare-token, and prose rewrite positions; per-segment percent-encoding; traversal
@@ -649,7 +647,7 @@ All notable changes to this project are documented here. The format is based on
   sandboxed live tiers (protocol/replay need none); added `python3` to the README requirements
   (the `lint` linter shells out to it); moved the `/plugin` slash-command block off the `bash`
   fence; pinned `cowork-harness@>=0.17.0` in the CI recipe; noted that `chat` excludes
-  `microvm`/`cowork`; and other small corrections (see `docs/internal/2026-06-26-doc-audit-*`).
+  `microvm`/`cowork`; and other small corrections from a full documentation audit.
 - Refreshed all verification/version stamps that still pinned `1.15200.0` / `2.1.181`
   (README, DESIGN, SPEC, the spawn-contract reference, `docs/cassette.md` fingerprint example,
   and the `hostloop-prompt.ts` re-verified comment) to `1.15962.0` / `2.1.187`.
@@ -1509,7 +1507,7 @@ All notable changes to this project are documented here. The format is based on
 
 ### Internal
 
-- The npm tarball no longer ships `docs/internal/` (internal planning docs were being published).
+- The npm tarball no longer ships internal planning notes that were accidentally being published.
 
 ### Added
 

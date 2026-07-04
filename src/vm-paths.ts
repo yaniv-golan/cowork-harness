@@ -2,9 +2,8 @@
  * VM-path <-> host-path resolution and the `computer://`/`file://` text transform that goes with
  * it. This mirrors the link-translation subsystem in real Claude Desktop: the agent's own context
  * only ever sees VM paths (`/sessions/<id>/mnt/...`); a separate outbound transform rewrites those
- * into host paths for anything a human reads (rendered chat text, clickable links). See
- * docs/internal/2026-07-03-computer-link-scheme-research-and-plan.md §1.2-1.4 and §1.8 for the
- * research behind this module's shape.
+ * into host paths for anything a human reads (rendered chat text, clickable links). The module's
+ * shape mirrors the production implementation, verified against the Desktop app's bundle.
  *
  * This file is the transform in isolation — nothing in the harness calls it yet. Wiring it into
  * the renderer/execute path is a later phase.

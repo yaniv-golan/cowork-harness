@@ -7,8 +7,7 @@ import { deepTranslateVMPaths, normalizeEncodePath } from "../vm-paths.js";
  * human-displayed paths. The closure here decides WHETHER a run's display surfaces (the live renderer
  * today; any future consumer of the same `AgentEvent` stream — a TUI, a web view — tomorrow) rewrite VM
  * paths to host paths, and performs the rewrite when they do. It is deliberately factored OUT of the
- * renderer (see docs/internal/2026-07-03-computer-link-scheme-research-and-plan.md, "Forward-
- * compatibility — a future full TUI", for the full rationale) so the policy can't drift between
+ * renderer so the policy can't drift between
  * consumers: any future frontend MUST consume `makeDisplayTranslator` + `vmPathContextFromPlan` rather
  * than re-deriving these rules against its own copy of the gate condition.
  *
@@ -234,7 +233,11 @@ export function linkifyForTerminal(text: string): string {
       }
     } else if (bare !== undefined) {
       // A bare token immediately preceded by our own OSC 8 opening terminator is already wrapped —
-      // skip it rather than wrap (or re-encode) it a second time.
+      // skip it rather than wrap (or re-encode) it a second time. Known limitation: OSC8_CLOSE also
+      // ends with the ST terminator, so a plain link ABUTTING an already-wrapped one (zero characters
+      // between them) is conservatively skipped too. The failure direction is safe (plain text, never
+      // corruption), the live path applies this decorator exactly once, and any whitespace/punctuation
+      // between links restores linkification — accepted for a reused-decorator (TUI) edge.
       const alreadyWrapped = text.slice(0, m.index).endsWith(OSC8_SEP);
       const contentStart = m.index + whole.length;
       const end = scanTokenEnd(text, contentStart, BARE_TOKEN_DELIMITERS);

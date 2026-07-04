@@ -295,3 +295,27 @@ describe("mounts.json cannot leak into a recorded cassette (structural — build
     expect(manifest.some((e) => e.path === "outputs/result.txt")).toBe(true);
   });
 });
+
+describe("cassette output shape — mounts can never enter a cassette", () => {
+  // Guards the assembler itself, not just buildManifest's walk scope: if a future edit to the
+  // cassette literal adds a mounts-bearing field, the committed corpus (a REAL recorded cassette)
+  // catches it here without needing a live re-record in the test.
+  it("the committed cassette's top-level key set is closed and mount-free", () => {
+    const cassette = JSON.parse(readFileSync(join(process.cwd(), "examples", "replays", "example-pdf-skill.cassette.json"), "utf8"));
+    const keys = Object.keys(cassette).sort();
+    expect(keys).toEqual([
+      "$schema",
+      "artifacts",
+      "cassetteVersion",
+      "controlOut",
+      "effectiveFidelity",
+      "events",
+      "fingerprint",
+      "generator",
+      "scenario",
+      "scenarioSource",
+      "userVisibleRoots",
+    ]);
+    expect(keys.some((k) => /mount/i.test(k))).toBe(false);
+  });
+});

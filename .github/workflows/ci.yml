@@ -84,8 +84,7 @@ jobs:
         # paths, and private marketplace name were replaced with synthetic placeholders — see git
         # history for examples/replays/example-multiselect-gate.cassette.json) — the placeholder
         # `synthetic-user@example.com` in that same field is what's allow-listed here now. A NEW
-        # email finding elsewhere still fails the gate. The scanner's `path` class (added in
-        # docs/internal/2026-07-03-cassette-path-scan-class-plan.md) also runs on this cassette's
+        # email finding elsewhere still fails the gate. The scanner's `path` class also runs on this cassette's
         # capability-manifest and passes clean with NO --allow-path needed — its synthetic paths use
         # a /tmp/ prefix specifically so they don't collide with that class, rather than being
         # allow-listed (see that plan's Design Decision 3).
