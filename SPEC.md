@@ -33,7 +33,6 @@ Two layers, tested differently:
 ```
 decideLoop(i):
   if i.requireFullVmSandbox === true   → "vm"      # HeA()
-  if i.forceDisableHostLoop  === true  → "vm"      # iX()
   if i.devForceHostLoop      === true  → "host"    # CLAUDE_FORCE_HOST_LOOP=1 + dev-approved
   return i.gateHostLoopOn ? "host" : "vm"          # gate 1143815894
 ```

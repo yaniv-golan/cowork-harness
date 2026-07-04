@@ -37,6 +37,9 @@ All notable changes to this project are documented here. The format is based on
 - **The `-V` short form for `--verbose`.** `-v` (version, per `node -v`/`npm -v`) and `-V` (verbose)
   were a shift-key-typo collision that silently flipped meaning. `--verbose` is now long-only across
   `run`/`skill`/`chat`/`decide`; `-v` still prints the version and `-q` still means `--quiet`.
+- **The dead `forceDisableHostLoop` loop-decision key.** It was never populated by `sync` and its
+  branch could never fire — a config key that silently does nothing is a trap in a 1.0 schema. The
+  field and its branch are removed (re-add with real semantics if `sync` ever derives it).
 
 ### Fixed
 

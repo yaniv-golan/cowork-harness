@@ -7,7 +7,8 @@ import type { PlatformBaseline } from "./types.js";
  *                : (isDeveloperApprovedDevUrlOverrideEnabled && CLAUDE_FORCE_HOST_LOOP==="1") ? true  // host-loop
  *                : cPt() }                                                      // gate 1143815894
  *   HeA() = requireCoworkFullVmSandbox === true      // org policy
- *   iX()  = settings.forceDisableHostLoop === true   // local setting
+ *   iX()  = a local Desktop setting with no synced source in this tool's baseline
+ *           pipeline — never populated, so not modeled as a `decideLoop` input
  *   cPt() = growthbook gate "1143815894"
  *
  * `true` (host-loop) means the agent loop runs on the host with shell shipped into the
@@ -17,7 +18,6 @@ export type Loop = "host" | "vm";
 
 export interface LoopInputs {
   requireFullVmSandbox?: boolean; // HeA — org policy
-  forceDisableHostLoop?: boolean; // iX — local setting
   devForceHostLoop?: boolean; // dev override (CLAUDE_FORCE_HOST_LOOP=1 + approved)
   gateHostLoopOn?: boolean; // cPt — gate 1143815894 state (synced from fcache)
 }
@@ -52,7 +52,6 @@ export function readGateFlag(baseline: PlatformBaseline, id: string, flag: strin
 
 export function decideLoop(inputs: LoopInputs): Loop {
   if (inputs.requireFullVmSandbox === true) return "vm"; // HeA()
-  if (inputs.forceDisableHostLoop === true) return "vm"; // iX()
   if (inputs.devForceHostLoop === true) return "host"; // dev override
   return inputs.gateHostLoopOn ? "host" : "vm"; // cPt()
 }
@@ -62,7 +61,6 @@ export function decideLoopFromBaseline(baseline: PlatformBaseline, over: Partial
   const p = baseline as unknown as {
     provenance?: { gates?: Record<string, unknown> };
     requireFullVmSandbox?: unknown;
-    forceDisableHostLoop?: unknown;
   };
   const gates = p.provenance?.gates ?? {};
   const gateRaw = gates["hostLoop:1143815894"] ?? gates["1143815894"];
@@ -79,7 +77,6 @@ export function decideLoopFromBaseline(baseline: PlatformBaseline, over: Partial
     // BUG FIX: a locked-down-org baseline (requireFullVmSandbox:true) must force VM-loop — this was
     // previously ignored, so such a baseline would wrongly run host-loop.
     requireFullVmSandbox: p.requireFullVmSandbox === true,
-    forceDisableHostLoop: p.forceDisableHostLoop === true,
     gateHostLoopOn,
     devForceHostLoop: process.env.CLAUDE_FORCE_HOST_LOOP === "1",
     ...over,
