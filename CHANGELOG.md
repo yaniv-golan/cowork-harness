@@ -68,6 +68,15 @@ All notable changes to this project are documented here. The format is based on
   branch could never fire — a config key that silently does nothing is a trap in a 1.0 schema. The
   field and its branch are removed (re-add with real semantics if `sync` ever derives it).
 
+### Changed
+
+- **CI's boundary job now pulls the published GHCR agent image the packaged Action pins**, retagging it
+  for the sandbox probes so a bad publish surfaces in our own CI instead of only in a consumer's runner
+  (it previously only ever `docker build`t the image locally). Falls back to a local build when the
+  image is unavailable (fork / pre-publish). _Note: the pull path is not yet verified in a real CI run;
+  a pull failure currently warns-and-rebuilds and should be hardened to a hard failure on the canonical
+  repo once verified._
+
 ### Fixed
 
 - **The `protocol-smoke` example no longer fails by design on a live run.** `protocol` (L0) runs the
