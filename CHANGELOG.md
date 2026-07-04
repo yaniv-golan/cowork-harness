@@ -31,6 +31,22 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **Gate `1648655587` was mislabeled as a Task-dispatch cap; it is the scheduled-task session
+  limiter (readiness-plan D4 forensic pass, from founder-skills consumer feedback R5).** A
+  binary-verified forensic pass (asar 1.18286.0, `class L9t "[ScheduledTasks]"`) plus one
+  adversarial-review round established that gate `1648655587` (`{perTask:1, global:3}`) governs
+  Cowork's **scheduled/recurring (cron) task** session scheduler — ≤1 concurrent session per
+  scheduled task, ≤3 concurrent scheduled-task sessions globally — **not** the in-conversation
+  `Task` tool. The Desktop imposes **no** cap on `Task`-tool sub-agent fan-out at all (the `Task`
+  PreToolUse hook only blocks `run_in_background`). SPEC §10, `docs/fidelity-gaps.md`,
+  `docs/scenario.md`, the skill (SKILL.md gotcha 6 + `references/scenario-schema.md`), the
+  1.18286.0 baseline gate note, and `dispatch_count_max`'s failure message are all corrected;
+  `dispatch_count_max` is now described as an author-chosen budget assertion, not enforcement of a
+  (non-existent) production Task cap. The `PINNED_GATES` name rename
+  (`taskDispatchLimiter → scheduledTaskSessionLimiter`) is a synced release fact deferred to the
+  next `sync`. This supersedes the earlier "faithful Task-dispatch runtime limiter is planned"
+  language — there is no production behavior to mirror.
+
 - **`schema/cassette.v7.json` was missing `userVisibleRoots` and `scenarioSource`** — both fields
   are written by `record` (since format v4 / 0.8.0 and 0.20.0 respectively); `userVisibleRoots` was
   even named in the schema's prose `description` while absent from `properties`. Found by the new
