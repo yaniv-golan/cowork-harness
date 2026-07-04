@@ -39,6 +39,7 @@ import { evaluate, hostMatches, budgetFields } from "../assert.js";
 import { compileUserRegex } from "../regex.js";
 import { renderPrompts } from "../prompt.js";
 import { makeDisplayTranslator, vmPathContextFromPlan } from "./display-translate.js";
+import { writeVmPathContextFile } from "./vm-path-ctx-file.js";
 import { LiveAgentSession, type SdkMcp, type HookBundle } from "../agent/session.js";
 import { buildDecider, ExternalDecider, LlmDecider, type Decider, type OnUnanswered, UnansweredError } from "../decide/decider.js";
 import { type DecisionChannel } from "../decide/external-channel.js";
@@ -327,9 +328,17 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // effectiveFidelity exist — well before the child spawns, so the renderer never sees a stale identity
   // translator once events start flowing. The translator itself gates on effectiveFidelity/shareable, so
   // this always resolves ctx unconditionally (harmless at non-hostloop tiers — the closure no-ops there).
+  //
+  // Item 2 (mounts.json — see vm-path-ctx-file.ts's header): persist this SAME ctx to <outDir>/mounts.json,
+  // unconditionally and for EVERY tier/lane (not gated on opts.translateRef — `record` calls executeScenario
+  // directly with no translateRef, and still needs a ctx file for a later `trace --translate-paths`/replay
+  // reader). Reusing this one `vmPathContextFromPlan(...)` call (rather than a second, independent one)
+  // guarantees the write-site and the live-translator derivations can never drift apart.
+  const vmPathCtx = vmPathContextFromPlan(sessionId, plan, outDir);
+  writeVmPathContextFile(outDir, vmPathCtx, effectiveFidelity);
   if (opts.translateRef) {
     opts.translateRef.current = makeDisplayTranslator({
-      ctx: vmPathContextFromPlan(sessionId, plan, outDir),
+      ctx: vmPathCtx,
       effectiveFidelity,
       shareable: !!opts.compact,
     });

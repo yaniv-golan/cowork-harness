@@ -10,6 +10,7 @@ import { spawnHostLoop } from "../runtime/hostloop.js";
 import { spawnProtocol } from "../runtime/protocol.js";
 import { renderPrompts } from "../prompt.js";
 import { makeDisplayTranslator, vmPathContextFromPlan } from "./display-translate.js";
+import { writeVmPathContextFile } from "./vm-path-ctx-file.js";
 import { startEgressSidecar, registerCleanup } from "../egress/sidecar.js";
 import { Scenario } from "../types.js";
 import { LiveAgentSession, type AgentEvent } from "../agent/session.js";
@@ -194,6 +195,11 @@ export async function cmdChat(args: string[]) {
   const outDir = join(runsWriteRoot(), "chat", sessionId);
   mkdirSync(outDir, { recursive: true });
   const plan = buildLaunchPlan(session, baseline, outDir, fidelity, false); // chat has no resume concept
+  // Item 2 (mounts.json — see vm-path-ctx-file.ts's header): mirror execute.ts's unconditional write.
+  // Chat's `fidelity` is fixed at CLI-parse time (no "cowork" gate resolution here, unlike execute.ts's
+  // effectiveFidelity), so it IS the effective tier this session actually runs at. Best-effort; never
+  // fails the chat session.
+  writeVmPathContextFile(outDir, vmPathContextFromPlan(sessionId, plan, outDir), fidelity);
   const scenario = Scenario.parse({
     name: "chat",
     baseline: "latest",

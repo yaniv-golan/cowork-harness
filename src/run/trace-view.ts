@@ -71,9 +71,13 @@ function isDispatchTool(name: string, input: unknown): boolean {
   return name === "Agent" || name === "Task" || (typeof input === "object" && input !== null && "subagent_type" in input);
 }
 
-function summarize(input: unknown): string {
+/** `translate` runs BEFORE the 100-char slice — a translated (VM->host) path is a different length
+ *  than the VM path it replaced, so translating a slice would risk cutting mid-path or leaving a
+ *  dangling fragment. Defaults to identity (the `--translate-paths` consumer, `cli.ts`, is the only
+ *  caller that ever passes something else). */
+function summarize(input: unknown, translate: (s: string) => string): string {
   try {
-    const s = JSON.stringify(input);
+    const s = translate(JSON.stringify(input));
     return s.length > 100 ? s.slice(0, 100) + "…" : s;
   } catch {
     return "";
@@ -87,15 +91,19 @@ function decisionDetail(req: DecisionRequest): string {
   return req.prompt ?? req.server ?? "";
 }
 
-function rowFor(ev: AgentEvent): TraceRow[] {
+/** Same pre-slice ordering as `summarize`: `translate` runs on the full text, THEN the 120-char
+ *  assistant-text slice is taken — see `summarize`'s doc comment for why the order matters. */
+function rowFor(ev: AgentEvent, translate: (s: string) => string): TraceRow[] {
   switch (ev.type) {
     case "tool_use":
       if (isDispatchTool(ev.name, ev.input)) return []; // covered by the paired subagent_dispatch row
-      return [{ kind: "tool", name: ev.name, detail: summarize(ev.input), child: !!ev.parentToolUseId, toolUseId: ev.toolUseId }];
+      return [
+        { kind: "tool", name: ev.name, detail: summarize(ev.input, translate), child: !!ev.parentToolUseId, toolUseId: ev.toolUseId },
+      ];
     case "subagent_dispatch":
       return [{ kind: "dispatch", name: "Agent", agentType: ev.agentType, declaredTools: ev.declaredTools, description: ev.description }];
     case "assistant_text":
-      return ev.parentToolUseId || !ev.text.trim() ? [] : [{ kind: "text", detail: ev.text.replace(/\s+/g, " ").slice(0, 120) }];
+      return ev.parentToolUseId || !ev.text.trim() ? [] : [{ kind: "text", detail: translate(ev.text.replace(/\s+/g, " ")).slice(0, 120) }];
     case "decision":
       return [{ kind: "decision", name: ev.request.kind, detail: decisionDetail(ev.request) }];
     case "result":
@@ -234,21 +242,33 @@ function eventsOf(file: string): AgentEvent[] {
   return eventsFromLines(readFileSync(file, "utf8").split("\n"), file);
 }
 
+/** Options shared by `buildTrace`/`buildTraceFromEvents`. `translate` (Item 2's `trace --translate-paths`
+ *  consumer) rewrites VM paths to host paths in row TEXT — summaries, assistant text, tool-result heads —
+ *  BEFORE any of it is sliced to its ~100/120-char display length (see `summarize`/`rowFor`'s doc
+ *  comments for why the order matters). Defaults to identity, matching every caller before this option
+ *  existed (E2's diff engine and cassette replay both get untranslated rows unless they opt in). */
+export interface BuildTraceOptions {
+  tools?: boolean;
+  translate?: (text: string) => string;
+}
+
 /** Core trace-row building over an already-parsed event array — the part of `buildTrace` that doesn't
  *  care whether the events came from a file (run dir) or were passed in directly (E2's diff engine,
  *  cassette `events[]`). `buildTrace` is the file-path convenience wrapper over this. */
-export function buildTraceFromEvents(events: AgentEvent[], opts: { tools?: boolean } = {}): TraceRow[] {
+export function buildTraceFromEvents(events: AgentEvent[], opts: BuildTraceOptions = {}): TraceRow[] {
+  const translate = opts.translate ?? ((s: string) => s);
   // Pair tool_use ↔ tool_result by toolUseId so each tool row carries its OUTCOME — the single
   // highest-value forensics fix: a tool error (e.g. the q.map) is now visible in one command.
   const results = new Map<string, { isError: boolean; text: string }>();
   for (const ev of events) if (ev.type === "tool_result" && ev.toolUseId) results.set(ev.toolUseId, { isError: ev.isError, text: ev.text });
   const rows: TraceRow[] = [];
   for (const ev of events) {
-    for (const row of rowFor(ev)) {
+    for (const row of rowFor(ev, translate)) {
       if (row.kind === "tool" && row.toolUseId && results.has(row.toolUseId)) {
         const r = results.get(row.toolUseId)!;
         row.resultStatus = r.isError ? "error" : "ok";
-        row.resultText = r.text.split("\n")[0].slice(0, 120);
+        // translate the first line BEFORE slicing (same ordering rule as summarize/rowFor above).
+        row.resultText = translate(r.text.split("\n")[0]).slice(0, 120);
       }
       rows.push(row);
     }
@@ -256,7 +276,7 @@ export function buildTraceFromEvents(events: AgentEvent[], opts: { tools?: boole
   return opts.tools ? rows.filter((r) => r.kind === "tool" || r.kind === "dispatch") : rows;
 }
 
-export function buildTrace(file: string, opts: { tools?: boolean } = {}): TraceRow[] {
+export function buildTrace(file: string, opts: BuildTraceOptions = {}): TraceRow[] {
   return buildTraceFromEvents(eventsOf(file), opts);
 }
 

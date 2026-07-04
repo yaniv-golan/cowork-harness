@@ -51,6 +51,8 @@ import {
   eventsFromLines,
   runsRoot,
 } from "./run/trace-view.js";
+import { loadVmPathContext } from "./run/vm-path-ctx-file.js";
+import { makeDisplayTranslator } from "./run/display-translate.js";
 import { readIndex, reindexFromRunsTree, buildStats, resolveRunsFromIndex, type RunIndexRow, type StatsSummary } from "./run/run-index.js";
 import {
   canonicalizeInput,
@@ -400,7 +402,7 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
   "verify-cassettes":
     "usage: verify-cassettes <file|dir> [--skip-privacy|--skip-staleness] [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-path <regex>]... [--allow-file <path>]... [--output-format json]",
   trace:
-    "usage: trace <run-id | run-dir | events.jsonl> [--view tools|questions|dispatches] [--output-format json]\n       --view tools       tool call / result rows\n       --view questions   gate lifecycle (question → answer → delivered)\n       --view dispatches  sub-agent dispatch tree + dispatch_count_max\n       (default: all views)\n       (for what the run PRODUCED — artifacts — use `inspect`)",
+    "usage: trace <run-id | run-dir | events.jsonl> [--view tools|questions|dispatches] [--translate-paths] [--output-format json]\n       --view tools       tool call / result rows\n       --view questions   gate lifecycle (question → answer → delivered)\n       --view dispatches  sub-agent dispatch tree + dispatch_count_max\n       --translate-paths  rewrite VM paths to host paths in TEXT rows (needs a sibling mounts.json + an effective hostloop run; --output-format json always stays raw)\n       (default: all views)\n       (for what the run PRODUCED — artifacts — use `inspect`)",
   assertions: "usage: assertions --list [--output-format json]",
   scaffold:
     "usage: scaffold <run-id | run-dir> [--out <file.yaml>] [--output-format text|json]\n       Turns a kept run into a starter scenario YAML (gates→answers, artifacts→file_exists).\n       Positional <run-id | run-dir> is the canonical form.",
@@ -3256,6 +3258,11 @@ function cmdTrace(args: string[]) {
 
   const view = viewArg as View | undefined;
 
+  // --translate-paths (Item 2's trace consumer): rewrite VM paths to host paths in TEXT output only —
+  // `--output-format json` stays the raw machine record (see cli.ts's gating below and
+  // vm-path-ctx-file.ts's module header for the full rationale).
+  const translatePaths = args.includes("--translate-paths");
+
   // reject unknown flags (typos like --ouput-format silently fell through before).
   rejectUnknownFlags(
     "trace",
@@ -3268,6 +3275,7 @@ function cmdTrace(args: string[]) {
       "--tools",
       "--gates",
       "--dispatches", // legacy aliases
+      "--translate-paths",
     ],
     json,
   );
@@ -3288,7 +3296,7 @@ function cmdTrace(args: string[]) {
     fail(
       "trace",
       "usage",
-      "usage: trace <run-id | run-dir | events.jsonl> [--view tools|questions|dispatches] [--output-format json]",
+      "usage: trace <run-id | run-dir | events.jsonl> [--view tools|questions|dispatches] [--translate-paths] [--output-format json]",
       undefined,
       json,
     );
@@ -3312,7 +3320,18 @@ function cmdTrace(args: string[]) {
     else out(formatDispatchTree(tree));
     return;
   }
-  const rows = buildTrace(file, { tools: view === "tools" });
+  // Build the translator, if any, ONLY for text output — json is the raw machine record and must stay
+  // untranslated. Gate (all three must hold): the flag was passed, a sibling mounts.json exists and
+  // parses as a recognized (v1) ctx, and the run's EFFECTIVE fidelity was "hostloop" — the one tier
+  // where the resolved host path is production-identical (see display-translate.ts's module header).
+  let translate: ((text: string) => string) | undefined;
+  if (translatePaths && !json) {
+    const loaded = loadVmPathContext(dirname(file));
+    if (loaded && loaded.effectiveFidelity === "hostloop") {
+      translate = makeDisplayTranslator({ ctx: loaded.ctx, effectiveFidelity: loaded.effectiveFidelity, shareable: false });
+    }
+  }
+  const rows = buildTrace(file, { tools: view === "tools", translate });
   if (json) out(JSON.stringify({ tool: "cowork-harness", command: "trace", file, rows }));
   else out(formatTrace(rows));
 }
