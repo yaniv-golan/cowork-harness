@@ -58,6 +58,13 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **The `protocol-smoke` example no longer fails by design on a live run.** `protocol` (L0) runs the
+  agent's file tools on the real host cwd with no sealed filesystem — exactly like `hostloop` — so a
+  host path in a tool result is expected there, not a leak. The `host_path_leak` default-fail is now
+  exempted at `protocol` as well as `hostloop` (emitting a notice), so the flagship example passes its
+  own assertions on every advertised lane. The signal stays a hard fail at the sandboxed
+  `container`/`microvm` tiers (where a host path IS a regression), and an explicit
+  `transcript_no_host_path` assertion still enforces cleanliness at any tier.
 - **The LLM decider prompt no longer travels via `argv`.** `claude -p <prompt>` put the gate/skill
   text in the process's argument vector, world-readable via `ps` on shared hosts. The prompt is now
   delivered on stdin (the same channel the microvm auth-token uses); argv carries only
