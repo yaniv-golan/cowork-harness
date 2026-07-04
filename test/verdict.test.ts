@@ -46,7 +46,7 @@ describe("computeVerdict (the single verdict source)", () => {
     expect(atHostloop.pass).toBe(true);
     expect(atHostloop.signals.some((s) => s.code === "host_path_leak")).toBe(false);
     // protocol (L0) runs the agent on the real host cwd with no sealed FS, exactly like hostloop —
-    // so a host path in a tool_result is expected there, not a leak (readiness B4).
+    // so a host path in a tool_result is expected there, not a leak.
     const atProtocol = computeVerdict(rr({ scan: leak, effectiveFidelity: "protocol" }), "live");
     expect(atProtocol.pass).toBe(true);
     expect(atProtocol.signals.some((s) => s.code === "host_path_leak")).toBe(false);

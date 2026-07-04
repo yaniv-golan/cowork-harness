@@ -33,7 +33,7 @@ export interface SyncResult {
   requireFullVmSandbox: unknown;
   asarFingerprint: string;
   gates: Record<string, GateState> | null; // decoded GrowthBook gate states (null = fcache absent/unreadable)
-  spawnEnv: Record<string, string> | null; // derived spawn.env (readiness A5); null = a hard-fail flag blocked it (carry base env forward)
+  spawnEnv: Record<string, string> | null; // derived spawn.env; null = a hard-fail flag blocked it (carry base env forward)
   unknownDeltas: string[];
 }
 
@@ -54,7 +54,7 @@ const PINNED_GATES: Record<string, string> = {
   "123929380": "autoMemoryStandardSessions", // auto-memory dir for a plain (non-Spaces) cowork session (off)
   "1696890383": "memoryGuidelinesEnv", // CLAUDE_COWORK_MEMORY_GUIDELINES env for auto-memory (off)
   "2860753854": "memoryExtraGuidelines", // CLAUDE_COWORK_MEMORY_EXTRA_GUIDELINES PII block (on, but inert-default)
-  // Spawn-env conditional gates (readiness A5): each controls a key in the Desktop→agent spawn env
+  // Spawn-env conditional gates: each controls a key in the Desktop→agent spawn env
   // (SPAWN_GATES). Pinned so a production flip surfaces BOTH as a provenance.gates diff AND as the
   // corresponding spawn.env value diff (deriveSpawnEnv resolves the pin from the same decoded state).
   "434204418": "mcpConnectionNonblockingOff", // gate on → MCP_CONNECTION_NONBLOCKING:"0" + MCP_CONNECT_TIMEOUT_MS:"10000"
@@ -149,7 +149,7 @@ export function sync(): SyncResult {
 
   // 4. GrowthBook gate states, decoded from the live fcache (no longer a manual step). Decoded BEFORE the
   // asar step so the spawn-env generator can resolve gate-conditional pins against the ACTUAL gate state
-  // (readiness A5) — a production flip then shows up coherently as both a provenance.gates diff and the
+  // — a production flip then shows up coherently as both a provenance.gates diff and the
   // corresponding spawn.env value diff.
   const gates = decodeFcacheGates();
 
@@ -207,7 +207,7 @@ function extractFromAsar(
     // mode FACTS still hold so a policy change is a loud flag, not silent baseline rot.
     for (const f of checkMountModeFacts(bundle)) flag(unknown, f);
     for (const f of checkWebFetchFacts(bundle)) flag(unknown, f);
-    // Spawn contract (readiness A5): S-tier structural sentinels + the generated spawn.env. Non-NOTE flags
+    // Spawn contract: S-tier structural sentinels + the generated spawn.env. Non-NOTE flags
     // become unknown deltas (hard-fail); a NOTE (stale-allowlist prune hint) is surfaced but not a delta.
     for (const f of checkSpawnContractFacts(bundle)) flag(unknown, f);
     const spawn = deriveSpawnEnv(bundle, gates);
@@ -271,7 +271,7 @@ export function checkWebFetchFacts(bundle: string): string[] {
 }
 
 // ==========================================================================================
-// Spawn-contract verification + spawn.env generation (readiness A5).
+// Spawn-contract verification + spawn.env generation.
 //
 // The Desktop→agent spawn env is constructed in the asar across THREE windows (W1 the inline spawn
 // literal, W2 the OnA base-env helper, W3 the Zrn shared-env helper OnA spreads). Every ALL-CAPS key
@@ -352,7 +352,7 @@ export const SPAWN_ENV_ALLOWLIST: Record<string, string> = {
  * The keys deriveSpawnEnv generates. A constructed key that is neither here nor in SPAWN_ENV_ALLOWLIST is
  * an ADDITION to the spawn contract → hard-fail (classify it: add here to pin, or allowlist with a
  * reason). This explicit set is what makes an injected literal a LOUD signal rather than a silent auto-pin
- * (the F0 drift class this whole check exists to kill). Value resolution is structural (from the asar
+ * (the drift class this whole check exists to kill). Value resolution is structural (from the asar
  * window), so a value CHANGE on any pinned key still shows as a --diff line.
  */
 export const SPAWN_PIN_KEYS: readonly string[] = [
@@ -405,7 +405,7 @@ const SPAWN_KEY_RE = /[{,](TZ|[A-Z][A-Z0-9_]{2,}):/g;
 /**
  * Two-step identifier resolver (§4.7). Finds `<id>`'s definition and returns its literal value, following
  * identifier→identifier aliases up to 3 hops. The declaration-preamble class admits `,;{(` AND
- * `const|let|var ` (the O1 fix — `kGt`/`Sde` are `const `-preceded live, which the narrower `[,;{(]` form
+ * `const|let|var ` (`kGt`/`Sde` are `const `-preceded live, which the narrower `[,;{(]` form
  * would miss and hard-fail on). Returns null on: not found, >3 hops, or a non-literal terminal.
  */
 export function resolveConst(bundle: string, id: string, hops = 0): string | null {
@@ -545,7 +545,7 @@ function enumSpawnKeys(text: string): { key: string; valueStart: number }[] {
 }
 
 /**
- * Derive the Desktop→agent spawn env (the generated tier, readiness A5). Pure over the bundle string +
+ * Derive the Desktop→agent spawn env (the generated tier). Pure over the bundle string +
  * decoded gate states. Returns the merged env map, or `env:null` whenever ANY hard-fail flag is pushed
  * (unknown key, unknown spawn gate, missing REQUIRED key, degenerate/unfound window, unresolvable value)
  * — the all-or-nothing contract that keeps a truncated partial from ever reaching the baseline.
@@ -570,12 +570,12 @@ export function deriveSpawnEnv(
   for (const [name, w] of named) {
     if (w == null) {
       flags.push(
-        `spawn.env: ${name} window not found (start/end anchor missing or W3 brace/nested-template scan failed) — the env construction moved; re-derive its anchors (see A5 §4); ${SPAWN_NO_BYPASS}`,
+        `spawn.env: ${name} window not found (start/end anchor missing or W3 brace/nested-template scan failed) — the env construction moved; re-derive its anchors; ${SPAWN_NO_BYPASS}`,
       );
       degenerate = true;
     } else if (w.length < 200 || w.length > 20000) {
       flags.push(
-        `spawn.env: ${name} window length ${w.length} is outside the 200–20000 sanity band — likely a mis-anchored slice; re-derive (see A5 §4); ${SPAWN_NO_BYPASS}`,
+        `spawn.env: ${name} window length ${w.length} is outside the 200–20000 sanity band — likely a mis-anchored slice; re-derive; ${SPAWN_NO_BYPASS}`,
       );
       degenerate = true;
     }
@@ -598,12 +598,12 @@ export function deriveSpawnEnv(
 
   const flagUnresolvable = (rawKey: string, expr: string) => {
     flags.push(
-      `spawn.env: pinned key ${rawKey} has an unrecognized value expression \`${expr.slice(0, 60)}\` — its construction changed; re-derive its resolution (see A5 §4.6/§4.7); ${SPAWN_NO_BYPASS}`,
+      `spawn.env: pinned key ${rawKey} has an unrecognized value expression \`${expr.slice(0, 60)}\` — its construction changed; re-derive its resolution; ${SPAWN_NO_BYPASS}`,
     );
     hardFail = true;
   };
   // Top-level / non-gate-spread key: allowlist-first, then it MUST be a registered pin (an unregistered
-  // key here is an ADDITION → hard-fail so it is classified, never silently auto-pinned — the F0 fix).
+  // key here is an ADDITION → hard-fail so it is classified, never silently auto-pinned).
   const resolveInto = (rawKey: string, expr: string, target: Record<string, string>) => {
     if (SPAWN_ENV_ALLOWLIST[rawKey] !== undefined) return; // deliberately not pinned
     if ((SPAWN_PIN_KEYS as readonly string[]).includes(rawKey)) {
@@ -659,7 +659,7 @@ export function deriveSpawnEnv(
   for (const req of REQUIRED_SPAWN_KEYS) {
     if (!enumerated.has(req)) {
       flags.push(
-        `spawn.env: REQUIRED key ${req} is no longer constructed in W1∪W2∪W3 — the extraction seam broke or Cowork changed fundamentally; re-derive (see A5 §6); ${SPAWN_NO_BYPASS}`,
+        `spawn.env: REQUIRED key ${req} is no longer constructed in W1∪W2∪W3 — the extraction seam broke or Cowork changed fundamentally; re-derive; ${SPAWN_NO_BYPASS}`,
       );
       hardFail = true;
     }
@@ -678,7 +678,7 @@ export function deriveSpawnEnv(
 /**
  * S-tier sentinel: the structural/curated spawn facts the generator does NOT produce (scalar options,
  * tools/allowedTools heads + tail-guards, the FnA delete def+application, the negative invariant, the
- * two prompt-asset delivery shapes). Any anchor miss → a flag naming the field (re-derive per A5 §5).
+ * two prompt-asset delivery shapes). Any anchor miss → a flag naming the field (re-derive the anchor).
  * Pure over the bundle string, mirroring checkMountModeFacts.
  */
 export function checkSpawnContractFacts(bundle: string): string[] {
@@ -686,8 +686,7 @@ export function checkSpawnContractFacts(bundle: string): string[] {
   const w1 = twoAnchorWindow(bundle, "env:{CLAUDE_CONFIG_DIR", ",systemPrompt:");
   const w2 = twoAnchorWindow(bundle, "return{CLAUDE_CODE_ENTRYPOINT", ".sessionEnvVars()}");
   const has = (re: RegExp, s = bundle) => re.test(s);
-  const miss = (field: string, why: string) =>
-    flags.push(`spawn: ${field} anchor missing — ${why} (re-derive per A5 §5); ${SPAWN_NO_BYPASS}`);
+  const miss = (field: string, why: string) => flags.push(`spawn: ${field} anchor missing — ${why}; ${SPAWN_NO_BYPASS}`);
 
   if (!has(/settingSources:\["user"\]/)) miss("S2 settingSources", 'settingSources:["user"] is gone');
   if (!has(/permissionMode:.{0,24}\?"default"/)) miss("S3 permissionMode", "the default-permissionMode ternary is gone");
@@ -733,7 +732,7 @@ export function checkSpawnContractFacts(bundle: string): string[] {
     miss("S16 subagentAppend generator", "the per-session subagent-append generator call shape is gone");
   if (has(/CLAUDE_CODE_USE_COWORK_PLUGINS\s*:/))
     flags.push(
-      `spawn: NEGATIVE INVARIANT S17 broken — CLAUDE_CODE_USE_COWORK_PLUGINS is now SET; it would flip the agent to cowork_settings.json/cowork_plugins (re-verify per A5 §5); ${SPAWN_NO_BYPASS}`,
+      `spawn: NEGATIVE INVARIANT S17 broken — CLAUDE_CODE_USE_COWORK_PLUGINS is now SET; it would flip the agent to cowork_settings.json/cowork_plugins; ${SPAWN_NO_BYPASS}`,
     );
   if (!w1 || !has(/CLAUDE_CODE_EMIT_TOOL_USE_SUMMARIES:At\("66187241"\)\?"true":""/, w1))
     miss("S18 EMIT_TOOL_USE_SUMMARIES gate-ternary", "the gate-id↔key association changed");
@@ -743,7 +742,7 @@ export function checkSpawnContractFacts(bundle: string): string[] {
 }
 
 /**
- * O6 canonical env key order: keys present in the previous baseline keep their base order; genuinely new
+ * Canonical env key order: keys present in the previous baseline keep their base order; genuinely new
  * keys are appended alphabetically after them. A pure Cowork source-reorder then yields a zero-line git
  * diff, an added key is one clean +line at a deterministic spot, and a value change is a single -/+ pair.
  */

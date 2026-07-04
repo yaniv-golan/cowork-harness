@@ -1,5 +1,5 @@
 {
-  "$comment": "GOLDEN spawn.env cross-check oracle for deriveSpawnEnv (readiness A5). HAND-TRANSCRIBED by a human reading the live app.asar env windows (Desktop 1.18286.0) — NOT copied from deriveSpawnEnv output (that would be circular; see the A5 design test 10 / O2). Each value below was read directly from the W1/W2/W3 window text and resolved by hand against the live fcache gate states. Update this file each release by re-reading the asar, then reconcile any divergence from generator output BEFORE committing. Provenance per key is in the sibling comment keys.",
+  "$comment": "GOLDEN spawn.env cross-check oracle for deriveSpawnEnv. HAND-TRANSCRIBED by a human reading the live app.asar env windows (Desktop 1.18286.0) — NOT copied from deriveSpawnEnv output, so the cross-check stays a genuine two-source check rather than a circular one. Each value below was read directly from the W1/W2/W3 window text and resolved by hand against the live fcache gate states. Update this file each release by re-reading the asar, then reconcile any divergence from generator output BEFORE committing. Provenance per key is in the sibling comment keys.",
   "$provenance": {
     "W1_env_literal": "env:{CLAUDE_CONFIG_DIR ... ,systemPrompt: — the local-agent spawn options env object",
     "W2_OnA": "return{CLAUDE_CODE_ENTRYPOINT ... .sessionEnvVars()} — the base-env helper",

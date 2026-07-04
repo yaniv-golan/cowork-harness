@@ -47,10 +47,10 @@ const dockerInput = (agentArgv: string[], name?: string) => ({
 
 const lastFlag = (args: string[]) => args.filter((a) => a.startsWith("--")).pop();
 
-// CLAUDE_CODE_HOST_PLATFORM is `process.platform`-derived by design (C5) — real on macOS dev, "linux"
+// CLAUDE_CODE_HOST_PLATFORM is `process.platform`-derived by design — real on macOS dev, "linux"
 // on CI (ubuntu-latest). Golden snapshots must stay reproducible across both, so redact it to a fixed
 // placeholder before snapshotting; the actual live value is pinned by an inline assertion instead
-// (below, and in test/execute.test.ts's C5 suite) so a regression to the wrong var/shape still fails loud.
+// (below, and in test/execute.test.ts's host-identity suite) so a regression to the wrong var/shape still fails loud.
 const HOST_PLATFORM_PLACEHOLDER = "<host-platform>";
 const redactHostPlatformEnv = (env: Record<string, string>): Record<string, string> => ({
   ...env,
@@ -95,7 +95,7 @@ describe("golden — container (VM-loop)", () => {
     expect(env.CLAUDE_CODE_IS_COWORK).toBe("1");
     expect(env.CLAUDE_CODE_USE_COWORK_PLUGINS).toBeUndefined(); // never set
     expect(env.MAX_THINKING_TOKENS).toBe("31999"); // never 0
-    expect(env.CLAUDE_CODE_HOST_PLATFORM).toBe(process.platform); // C5 — win32|darwin|linux, ELF-validated
+    expect(env.CLAUDE_CODE_HOST_PLATFORM).toBe(process.platform); // win32|darwin|linux, ELF-validated
   });
 });
 

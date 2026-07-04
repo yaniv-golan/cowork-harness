@@ -369,7 +369,7 @@ describe("resolveMounts — mntRoot derivation", () => {
 });
 
 // ==========================================================================================
-// Spawn-contract verification + spawn.env generation (readiness A5). The synthetic fixture uses FAKE
+// Spawn-contract verification + spawn.env generation The synthetic fixture uses FAKE
 // minified names (FKa/FKb/FKc/FKd/FKe/FKtt/FKzrn/FKgen/FKu) so the tests exercise the ALGORITHM, not the
 // real anchors — real env key names / tool names / property names are stable and kept verbatim. The
 // real-bundle cross-checks live in the golden-map + structural-regression tests further down.
@@ -570,7 +570,7 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
     expect(flags.some((f) => f.startsWith("NOTE:") && f.includes("CLAUDE_CODE_HOST_AUTH_ENV_VAR"))).toBe(true);
   });
 
-  // 10. Golden-map correctness oracle (O2, non-circular): the generator over the REAL asar must deep-equal
+  // 10. Golden-map correctness oracle (non-circular): the generator over the REAL asar must deep-equal
   //     the hand-transcribed golden map. Skips gracefully off-macOS / without a live Desktop install.
   it("golden oracle: deriveSpawnEnv(real asar) deep-equals the hand-transcribed golden map", () => {
     const golden = JSON.parse(readFileSync(join(process.cwd(), "test", "fixtures", "spawn-env.golden.json"), "utf8")).env as Record<
@@ -599,7 +599,7 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
     for (const k of REQUIRED_SPAWN_KEYS) expect(k in b.spawn.env).toBe(true);
   });
 
-  // 13. Canonical order (O6): a reordered-but-equal env yields identical JSON; a new key appends at its
+  // 13. Canonical order: a reordered-but-equal env yields identical JSON; a new key appends at its
   //     deterministic alpha position after the base-order keys.
   it("canonicalizeEnv: a pure reorder is a zero-line diff; a new key is appended alphabetically", () => {
     const base = { B: "1", A: "2", C: "3" };
@@ -609,7 +609,7 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
     expect(Object.keys(canonicalizeEnv(withNew, base))).toEqual(["B", "A", "C", "AA", "ZZ"]);
   });
 
-  // 14. Null contract (O3): any single hard-fail injection → env === null AND the flag is present.
+  // 14. Null contract: any single hard-fail injection → env === null AND the flag is present.
   it("null contract: an unresolvable const chain returns env null with the flag (never a partial env)", () => {
     // Break the MCP_TOOL_TIMEOUT const chain: FKe's ??-fallback id no longer resolves.
     const broken = fixture().replace("??FKc}", "??UNDEFINED_ID}").replace("const FKc=FKb,", "");
@@ -618,7 +618,7 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
     expect(flags.some((f) => f.includes("MCP_TOOL_TIMEOUT"))).toBe(true);
   });
 
-  it("resolveConst follows const/let/var + comma preambles and aliases (the O1 fix)", () => {
+  it("resolveConst follows const/let/var + comma preambles and aliases", () => {
     const b = "x=>{}}const kGt=6e4,zae=kGt;let Sde=9e5;{,Zae=31999,";
     expect(resolveConst(b, "kGt")).toBe("6e4");
     expect(resolveConst(b, "zae")).toBe("6e4"); // alias hop

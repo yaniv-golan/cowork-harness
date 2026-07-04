@@ -206,14 +206,14 @@ jobs:
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with: { node-version: "20", cache: npm }
       - run: npm ci && npm run build
-      - name: Agent base image — pull the published GHCR image the Action pins (C4), else build
+      - name: Agent base image — pull the published GHCR image the Action pins, else build
         # Packaged-Action consumers PULL this image; our CI otherwise only ever `docker build`s it, so a
         # bad publish is invisible until a consumer hits it. Pull the pinned image and retag it to the
         # local tag the probes use, so the boundary-check below runs against the ACTUAL published image
         # — exercising the consumer path. Falls back to a local build when the image is unavailable (a
         # fork without package read, or before the first publish).
         #
-        # NOTE (readiness C4): written but NOT verified headless — the pull path (image name / arch /
+        # NOTE: written but NOT verified headless — the pull path (image name / arch /
         # GHCR read permission for the CI token) needs a real CI run to confirm. Once green on main, the
         # `::warning::`+fallback on the canonical repo should be hardened to a loud `exit 1` so a bad
         # publish fails the gate rather than silently rebuilding.
@@ -223,7 +223,7 @@ jobs:
             docker tag "$IMG" cowork-agent-base:2
             echo "pulled and retagged $IMG → cowork-agent-base:2 (Action-pinned image exercised)"
           else
-            echo "::warning::GHCR pull of $IMG failed (fork/pre-publish, or a bad publish) — building locally as a fallback. See readiness C4: harden to a hard failure on the canonical repo once the pull path is verified."
+            echo "::warning::GHCR pull of $IMG failed (fork/pre-publish, or a bad publish) — building locally as a fallback. Harden to a hard failure on the canonical repo once the pull path is verified."
             docker build --platform linux/arm64 -t cowork-agent-base:2 -f docker/Dockerfile.agent .
           fi
       - name: Prove the sandbox enforces Cowork's limitations (self-contained sidecar)

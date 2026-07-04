@@ -2257,10 +2257,10 @@ async function cmdSync(args: string[]) {
     agentBinary: nextAgentBinary,
     network: { ...(base.network as object), mode: res.networkMode ?? "gvisor", allowKind: "allowlist", allowDomains: res.allowDomains },
     requireFullVmSandbox: res.requireFullVmSandbox,
-    // spawn.env is the GENERATED tier (readiness A5): re-derived from the asar each sync, canonically
+    // spawn.env is the GENERATED tier: re-derived from the asar each sync, canonically
     // ordered so a benign source-reorder is a zero-line diff. All the hand-curated spawn fields (tools,
     // allowedTools, scalars, prompt pointers, $comment*) carry forward from base untouched. On a hard-fail
-    // deriveSpawnEnv returns null and the base env is preserved (the O3 all-or-nothing contract).
+    // deriveSpawnEnv returns null and the base env is preserved (the all-or-nothing contract).
     spawn: {
       ...(base.spawn as object),
       env: canonicalizeEnv(

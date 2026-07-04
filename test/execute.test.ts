@@ -141,14 +141,14 @@ describe("execute — no process.env mutation for egress proxy/network", () => {
   });
 });
 
-// Readiness item C5 — pin the exact host-identity env vars binary-verified as faithfully derivable
+// Pin the exact host-identity env vars binary-verified as faithfully derivable
 // headless (docs/cowork-spawn-contract-1.12603.1.md). CLAUDE_CODE_HOST_PLATFORM is emitted at BOTH
 // the container/microvm seam (spawnEnv) and the hostloop seam (hostNativeSpawnEnv);
 // CLAUDE_CODE_WORKSPACE_HOST_PATHS is hostloop-only and only when connected folders are present —
 // container/microvm stage folders as copies with no real host path to disclose. The account-identity
 // (CLAUDE_CODE_ACCOUNT_UUID/_USER_EMAIL/_ORGANIZATION_UUID) and OTEL_* vars require live Desktop
 // state the harness never has, and must stay absent — a drift toward fabricating them should fail loud.
-describe("execute — C5 host-identity env vars (spawnEnv / hostNativeSpawnEnv)", () => {
+describe("execute — host-identity env vars (spawnEnv / hostNativeSpawnEnv)", () => {
   const baseline = loadBaseline("desktop-1.12603.1");
   const NOT_EMITTED = [
     "CLAUDE_CODE_ACCOUNT_UUID",
