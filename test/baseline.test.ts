@@ -103,7 +103,7 @@ describe("decodeFcacheGates (GrowthBook fcache decode, binary-verified format)",
     });
     const gates = decodeFcacheGates(f)!;
     expect(gates["1143815894"]).toMatchObject({ name: "hostLoop", on: true, source: "force", value: true });
-    expect(gates["1648655587"]).toMatchObject({ name: "taskDispatchLimiter", on: true, value: { perTask: 1, global: 3 } });
+    expect(gates["1648655587"]).toMatchObject({ name: "scheduledTaskSessionLimiter", on: true, value: { perTask: 1, global: 3 } });
     expect(gates["2307090146"]).toMatchObject({ name: "cliPlugin", on: false, source: "defaultValue" });
     expect(gates["999999999"]).toBeUndefined(); // only pinned gates are returned
   });

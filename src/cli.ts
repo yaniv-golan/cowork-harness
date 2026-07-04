@@ -2218,9 +2218,17 @@ async function cmdSync(args: string[]) {
     nextGates = {};
     // Preserve authored $comment / any non-pinned keys from the base.
     for (const [k, v] of Object.entries(baseGates)) if (k.startsWith("$")) nextGates[k] = v;
+    // Gate keys are `name:id` (legacy bases may use a bare id). The id is the stable half — the name
+    // comes from PINNED_GATES and can be renamed (e.g. a mislabel corrected), so the previous entry is
+    // looked up by id when the exact key misses; its note/on-state carry across the rename instead of
+    // being lost, and the carry-forward loop below must not resurrect the old key as a duplicate.
+    const idOf = (k: string): string => (k.includes(":") ? k.slice(k.lastIndexOf(":") + 1) : k);
     for (const g of Object.values(res.gates)) {
       const key = `${g.name}:${g.id}`;
-      const prev = baseGates[key];
+      const prevKey = key in baseGates ? key : Object.keys(baseGates).find((k) => !k.startsWith("$") && idOf(k) === g.id);
+      const prev = prevKey !== undefined ? baseGates[prevKey] : undefined;
+      if (prevKey !== undefined && prevKey !== key)
+        log(`note: gate ${g.id} renamed in PINNED_GATES: ${prevKey} → ${key} (note/state carried over).`);
       // for a legacy prose entry the authoritative state is the LEADING `on(...)`/`off(...)` token
       // (the note stripper just below anchors on the same pattern) — a bare substring scan of the whole
       // string would let a human note containing "on"/"force" mask a real off→on flip.
@@ -2240,8 +2248,15 @@ async function cmdSync(args: string[]) {
     }
     // A pinned gate absent from THIS fcache (partial cache) would otherwise vanish from provenance,
     // silently dropping a loop/dispatch-driving gate. Carry it forward from the base and flag it.
+    // Match by gate ID, not exact key — after a PINNED_GATES rename the fresh entry lives under the
+    // new `name:id` key, and an exact-key check would resurrect the old-named entry as a duplicate.
+    const nextIds = new Set(
+      Object.keys(nextGates)
+        .filter((k) => !k.startsWith("$"))
+        .map(idOf),
+    );
     for (const [k, v] of Object.entries(baseGates)) {
-      if (k.startsWith("$") || k in nextGates) continue;
+      if (k.startsWith("$") || nextIds.has(idOf(k))) continue;
       nextGates[k] = v;
       log(`WARNING: gate ${k} not present in fcache this sync — carried forward from base (may be stale).`);
     }

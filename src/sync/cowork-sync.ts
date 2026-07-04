@@ -44,14 +44,12 @@ export interface SyncResult {
  */
 const PINNED_GATES: Record<string, string> = {
   "1143815894": "hostLoop", // loop decision (decideLoopFromBaseline)
-  // NOTE: this name is a MISLABEL — binary-verified 2026-07-04 (asar 1.18286.0, class L9t
-  // "[ScheduledTasks]") this gate is the SCHEDULED-TASK (cron) session limiter (<=1 concurrent
-  // session per scheduled task, <=3 concurrent scheduled-task sessions globally), NOT an
-  // in-conversation Task-tool dispatch cap; the Desktop imposes no cap on Task-tool fan-out at all.
-  // The rename to `scheduledTaskSessionLimiter` is deferred to the next `sync` (the name is a synced
-  // release fact written into every baseline's provenance.gates + asserted in test/baseline.test.ts;
-  // synced facts must never be hand-edited, so it must regenerate via sync, not a source-only edit).
-  "1648655587": "taskDispatchLimiter", // scheduled-task session limiter (perTask/global) — see NOTE above
+  // Binary-verified 2026-07-04 (asar 1.18286.0, class L9t "[ScheduledTasks]"): the SCHEDULED-TASK
+  // (cron) session limiter (<=1 concurrent session per scheduled task, <=3 concurrent scheduled-task
+  // sessions globally), NOT an in-conversation Task-tool dispatch cap; the Desktop imposes no cap on
+  // Task-tool fan-out at all. Formerly mislabeled `taskDispatchLimiter` — baselines captured before
+  // the rename keep the old label in their provenance.gates as a historical release fact.
+  "1648655587": "scheduledTaskSessionLimiter",
   "1978029737": "coworkRuntimeConfig", // web_fetch routing + workspace knobs
   "583857784": "bridgeSdkTransport", // SDK control-protocol transport
   "2340532315": "pluginSyncSparkplug", // startup syncPlugins()

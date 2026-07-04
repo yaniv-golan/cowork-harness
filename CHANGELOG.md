@@ -54,10 +54,14 @@ All notable changes to this project are documented here. The format is based on
   `docs/scenario.md`, the skill (SKILL.md gotcha 6 + `references/scenario-schema.md`), the
   1.18286.0 baseline gate note, and `dispatch_count_max`'s failure message are all corrected;
   `dispatch_count_max` is now described as an author-chosen budget assertion, not enforcement of a
-  (non-existent) production Task cap. The `PINNED_GATES` name rename
-  (`taskDispatchLimiter → scheduledTaskSessionLimiter`) is a synced release fact deferred to the
-  next `sync`. This supersedes the earlier "faithful Task-dispatch runtime limiter is planned"
-  language — there is no production behavior to mirror.
+  (non-existent) production Task cap. The `PINNED_GATES` rename
+  (`taskDispatchLimiter → scheduledTaskSessionLimiter`) also landed, regenerated through `sync`
+  against the same Desktop 1.18286.0 install (never hand-edited): the 1.18286.0 baseline now
+  carries the corrected gate key, older baselines keep the historical label, and the sync
+  gate-merge now matches previous entries by gate **id** (not exact `name:id` key) so a rename
+  carries the note/state across and can't resurrect the old key as a stale duplicate. This
+  supersedes the earlier "faithful Task-dispatch runtime limiter is planned" language — there is
+  no production behavior to mirror.
 
 - **`schema/cassette.v7.json` was missing `userVisibleRoots` and `scenarioSource`** — both fields
   are written by `record` (since format v4 / 0.8.0 and 0.20.0 respectively); `userVisibleRoots` was
