@@ -546,16 +546,19 @@ non-macOS platform (the platform guard, alongside the `sync` hard-failure → `1
 
 `verify-cassettes <file|dir>` is the token/agent-free CI gate over committed cassettes (privacy scan +
 staleness). It does **not** reuse the `run/skill/replay` envelope (that routes `ok` through live-lane
-verdict logic a finding doesn't have) — it emits its own:
+verdict logic a finding doesn't have) — it emits its own, published as
+**`schema/verify-cassettes.json`** (a §12-covered contract surface, pinned by
+`test/verify-envelope-schema.test.ts`):
 
 ```jsonc
 { "command": "verify-cassettes",
-  "ok": true,                       // false if any real finding, staleness drift, or unreadable cassette
+  "ok": true,                       // false if any real finding, staleness drift, version mismatch, or unreadable cassette
   "coverage": { "privacy": true, "staleness": true },  // which scans ran (false under --skip-privacy / --skip-staleness)
   "results": [ { "file": "string",
                  "findings": [ { "where": "string", "cls": "email|currency|domain|path|machine-inventory|unscanned", "sample": "string" } ],
                  "staleness": [ "string" ],   // drift / unresolvable-fingerprint messages (gate failures)
                  "notes": [ "string" ],       // NON-failing informational channel (never affects ok/exit) — e.g. a pre-effectiveFidelity cassette with an explicit tier: statically knowable, nothing baseline-dependent to verify. Text output: a `·`-prefixed row.
+                 "version": [ "string" ],     // cassette written by a NEWER harness than this one understands — always a hard fail (can't verify ⇒ not green), independent of --skip-staleness
                  "error?": "string" } ] }     // a malformed cassette is TALLIED here, never crashes the batch
 ```
 
@@ -568,9 +571,9 @@ distinguish from customer data, so `currency`/`domain` are excluded there). `ema
 `machine-inventory` still scan them: the registry `account` field can carry the dev's email, those
 same messages' own structural fields (`cwd`/`plugins[].path`/`memory_paths`) are exactly where a real
 local filesystem path lives, and a live-enumerated app/process inventory sentinel is never legitimate
-catalog boilerplate either. `ok = no finding with cls!="unscanned"  &&  no staleness message  &&  no error`. An `unscanned` finding (a
+catalog boilerplate either. `ok = no finding with cls!="unscanned"  &&  no staleness message  &&  no version message  &&  no error`. An `unscanned` finding (a
 `>64 KiB`/unreadable artifact body, which is hash-only — nothing committed to leak) is reported but does NOT
-fail the gate. **Exit codes:** `0` clean · `1` any finding/staleness/error · `2` usage (e.g.
+fail the gate. **Exit codes:** `0` clean · `1` any finding/staleness/version/error · `2` usage (e.g.
 `--skip-privacy`+`--skip-staleness` together, or zero cassettes under a dir — a loud non-zero, never a
 vacuous pass). The `in:` assert operator (§ scenario schema) and `record <dir>`/`--rerecord-stale` batch
 recording are also part of 0.8.0; see `docs/scenario.md` and `docs/cassette.md`.
@@ -618,6 +621,11 @@ nothing here is guaranteed; minor versions may break any surface — see [RELEAS
   truth; consumers commit and diff these).
 - **RunResult envelope** — `schema/run-result.json` under `--output-format json` (§11): the
   `ok` / `results[]` / `error` shape and the verdict-signal codes (§11.0).
+- **`verify-cassettes` envelope** — `schema/verify-cassettes.json` under `--output-format json`
+  (§11.1): the `command` / `ok` / `coverage` / `results[]` shape with the per-file
+  `findings` / `staleness` / `notes` / `version` / `error` channels. This is the machine output the
+  CI recipes and the packaged Action steer consumers to parse; renaming or removing a key is
+  breaking, adding one is not.
 - **Cassette format** — the current `cassetteVersion` (**7**) and its verdict-modifier assertion keys.
   Older-version cassettes (the retained `schema/cassette.v2/v3/v5/v6.json` — no v4 schema was ever
   published) stay replayable; dropping a still-emitted version's readability is breaking.

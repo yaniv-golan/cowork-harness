@@ -1,0 +1,70 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/yaniv-golan/cowork-harness/main/schema/verify-cassettes.json",
+  "title": "VerifyCassettesEnvelope",
+  "description": "Structured stdout of `cowork-harness verify-cassettes --output-format json` (SPEC \u00a711.1) \u2014 the token-free CI gate over committed cassettes (privacy scan + staleness). A covered surface of the 1.0 compatibility contract (SPEC \u00a712): parse this, not the human-readable text output.",
+  "type": "object",
+  "required": ["command", "ok", "coverage", "results"],
+  "properties": {
+    "command": { "const": "verify-cassettes" },
+    "ok": {
+      "type": "boolean",
+      "description": "false if any real privacy finding (cls != 'unscanned'), staleness message, version mismatch, or unreadable cassette. Mirrors the exit code (0 clean / 1 not-ok)."
+    },
+    "coverage": {
+      "type": "object",
+      "description": "Which scans actually ran \u2014 false under --skip-privacy / --skip-staleness. A consumer gating on ok:true should also assert the coverage it expects (a skipped scan can't fail).",
+      "required": ["privacy", "staleness"],
+      "properties": {
+        "privacy": { "type": "boolean" },
+        "staleness": { "type": "boolean" }
+      }
+    },
+    "results": {
+      "type": "array",
+      "description": "One entry per cassette file, including unreadable ones (tallied via `error`, never a crash that aborts the batch).",
+      "items": {
+        "type": "object",
+        "required": ["file", "findings", "staleness", "notes", "version"],
+        "properties": {
+          "file": { "type": "string" },
+          "findings": {
+            "type": "array",
+            "description": "Privacy-scan findings. cls 'unscanned' (a hash-only >cap artifact body \u2014 nothing committed to leak) is reported but does NOT fail the gate; every other class does.",
+            "items": {
+              "type": "object",
+              "required": ["where", "cls", "sample"],
+              "properties": {
+                "where": { "type": "string" },
+                "cls": {
+                  "type": "string",
+                  "enum": ["email", "currency", "domain", "path", "machine-inventory", "unscanned"]
+                },
+                "sample": { "type": "string" }
+              }
+            }
+          },
+          "staleness": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Drift / unresolvable-fingerprint messages \u2014 each one fails the gate. Empty under --skip-staleness."
+          },
+          "notes": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "NON-failing informational channel (never affects ok / the exit code) \u2014 e.g. a pre-effectiveFidelity cassette with an explicit tier: statically knowable, nothing baseline-dependent to verify. Text output renders these as `\u00b7` rows."
+          },
+          "version": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Format/version failures: the cassette was written by a NEWER harness than this one understands. Always fails the gate (can't verify \u21d2 not green), independent of --skip-staleness."
+          },
+          "error": {
+            "type": "string",
+            "description": "Present when the cassette file itself is malformed/unreadable; the file is tallied as a gate failure and the batch continues."
+          }
+        }
+      }
+    }
+  }
+}

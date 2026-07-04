@@ -243,6 +243,11 @@ scenario = `result === "success" && assertions.every(pass)`. Exit code is non-ze
 fails or a run errors, so a plain `cowork-harness run scenarios/` is already CI-ready without parsing
 JSON.
 
+`verify-cassettes` emits its **own** envelope (`{command, ok, coverage, results[]}` with per-file
+`findings`/`staleness`/`notes`/`version`/`error`), published as `schema/verify-cassettes.json` in the
+npm package. Both envelope schemas are covered 1.0 contract surfaces (SPEC §12) — parse the JSON, not
+the human-readable text (which is explicitly NOT stable).
+
 A run writes to `~/.cowork-harness/runs/<name>/<sessionId>/` by default — outside any working tree. In CI,
 set `COWORK_HARNESS_RUNS_DIR` (or pass `--run-dir`) to a workspace-relative path (e.g. `runs`) so an
 artifact-upload step can collect them. Each run dir holds `events.jsonl`, `control-out.jsonl`, `run.jsonl`,

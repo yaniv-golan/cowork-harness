@@ -8,6 +8,19 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **The `verify-cassettes` JSON envelope is now a published, 1.0-covered contract surface.**
+  SPEC §12's covered list previously named the RunResult envelope but was silent on §11.1's
+  `verify-cassettes` envelope — even though the CI recipe and the packaged GitHub Action steer
+  consumers to parse exactly that output, and an uncovered machine-output shape can rot a consumer's
+  `jq` gate silently (a renamed key yields `null`, and the gate stops gating). The envelope is now:
+  listed in §12 (rename/removal = MAJOR; additive growth stays MINOR), published as
+  `schema/verify-cassettes.json` in the npm package, and pinned by
+  `test/verify-envelope-schema.test.ts`, which validates real CLI output against the schema in both
+  directions (a required key the CLI stops emitting fails, and — via a strictened copy — a key the
+  CLI starts emitting without a schema update also fails). Writing the schema immediately caught one
+  doc drift: the per-file `version[]` channel (newer-harness cassette → hard fail) was emitted but
+  missing from §11.1's envelope block; the SPEC block, `ok` formula, and exit-code line now include it.
+
 - **Skill-effectiveness workstream.** Three deliverables, all targeting the same failure mode
   observed in real skill adoption: the facts existed across the docs, but nothing composed them
   into the task a scenario author actually faces:
