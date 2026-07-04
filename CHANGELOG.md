@@ -8,6 +8,20 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **Redaction preflight + `init-redact` (readiness-plan D3, from founder-skills consumer feedback S3).**
+  `record` now warns (`::warning::`) **before the agent spawns** when a scenario about to record at a
+  host-path-bearing tier (`hostloop`, or `protocol`) has an EMPTY assembled redaction policy — that
+  combination commits real host paths, which `verify-cassettes`' `path` scanner then hard-fails; the
+  empty-policy discovery used to happen only at the post-run policy load, after the run was paid for.
+  Batch `record <dir>` and `--rerecord-stale` preflight ONCE for the whole batch, before the first
+  spawn (never N interleaved duplicates). A malformed `.cowork-redact.json` now also fails pre-spawn.
+  The reference `.cowork-redact.json` (generic local-path prefixes + email regex) now ships in the npm
+  package, and the new `cowork-harness init-redact [--force]` copies it into the cwd — the copy is
+  load-bearing, since the policy search set (now documented in `docs/cassette.md` and the skill's
+  ci-recipe) is cwd → scenario dir → cassette dir (+ `COWORK_HARNESS_REDACT_*` env), never the package
+  dir. The always-on privacy scanner remains the universal net — container-tier recordings can trip it
+  too.
+
 - **Lint catches fidelity/assert combinations that fail by design (readiness-plan D2).**
   `scenario.py lint` (and the `cowork-harness lint` wrapper) now ERRORs on
   `transcript_no_host_path` + `fidelity: hostloop` or `protocol` (the agent legitimately runs on real

@@ -1352,6 +1352,10 @@ interface RecordOpts {
   cassettePath?: string; // explicit --out (single); otherwise cassettes/<name>.cassette.json
   maxArtifactBytes?: number; // override the inline-body cap (else env / 64 KiB default)
   scenarioSourceFile?: string; // the on-disk scenario YAML this was recorded from (for --rerecord-stale)
+  // D3: the batch paths (`record <dir>`, `--rerecord-stale`) run ONE preflight before the first spawn
+  // (a per-scenario warning under pMapBounded fires after siblings already paid, and a shared empty
+  // policy would emit N interleaved duplicates) — they set this so the per-record preflight doesn't re-fire.
+  skipRedactionPreflight?: boolean;
   // Live-decider plumbing: answer gates DURING the recording instead of pre-scripting them.
   // `onUnanswered` = --on-unanswered fail|first ("llm" when --decider-llm); `externalChannel` = --decider-dir
   // file rendezvous; `llmIntent` = --decider-llm one-line intent; `deciderChannel` labels the authoring stamp.
@@ -1360,6 +1364,46 @@ interface RecordOpts {
   llmIntent?: string;
   llmModel?: string; // --decider-model: the LLM decider's answering model (flag > env > Sonnet default)
   deciderChannel?: "decider-dir" | "decider-llm";
+}
+
+/** D3: resolve the tier a record run WILL use, for the redaction preflight. Mirrors execute.ts's live
+ *  resolution (env-INCLUSIVE — this is a live run, unlike D1's verify-time check which pins env off).
+ *  An unresolvable baseline returns "unresolvable" and the preflight stays quiet — the record itself
+ *  will fail loudly on the same load moments later, and a guessed tier could mis-warn. */
+export function resolvePreflightTier(scenario: Scenario): string {
+  if (scenario.fidelity !== "cowork") return scenario.fidelity;
+  try {
+    return decideLoopFromBaseline(loadBaseline(scenario.baseline)) === "host" ? "hostloop" : "container";
+  } catch {
+    return "unresolvable";
+  }
+}
+
+/** D3 redaction preflight (consumer feedback S3: the empty-policy discovery used to happen AFTER the paid
+ *  run, at the post-run policy load). Returns a `::warning::` line when any scenario about to record at a
+ *  host-path-bearing tier (hostloop — native host paths; protocol — no sandbox, real cwd) has an EMPTY
+ *  assembled redaction policy — the committed cassette would then embed real host paths and
+ *  `verify-cassettes`' `path` scanner hard-fails them. `::warning::` (not `::notice::`): the condition
+ *  predicts a future hard gate failure, the same severity the sibling tier/assert run-start warnings use.
+ *  Callers emit it BEFORE the agent spawns (that timing is the point). Returns null when nothing is risky.
+ *  A malformed .cowork-redact.json THROWS here — pre-spawn, before the run is paid for (strictly earlier
+ *  than the post-run load that would throw anyway). */
+export function redactionPreflightMessage(items: Array<{ scenario: Scenario; policyDirs: string[] }>): string | null {
+  const risky: string[] = [];
+  for (const it of items) {
+    const tier = resolvePreflightTier(it.scenario);
+    if (tier !== "hostloop" && tier !== "protocol") continue;
+    const policy = loadRedactionPolicy(it.policyDirs);
+    if (policy.patterns.length === 0 && policy.keyNames.length === 0) risky.push(`${it.scenario.name} (${tier})`);
+  }
+  if (risky.length === 0) return null;
+  return (
+    `::warning:: record: recording at a host-path-bearing tier with NO redaction policy — ${risky.join(", ")}. ` +
+    `The cassette will embed real host paths, and verify-cassettes' \`path\` scanner will HARD-FAIL them at commit time. ` +
+    `Add a .cowork-redact.json (\`cowork-harness init-redact\` copies the reference template) or set ` +
+    `COWORK_HARNESS_REDACT_PATTERNS. (The always-on privacy scanner remains the universal net — ` +
+    `container-tier recordings can trip it too.)\n`
+  );
 }
 
 /** Return the `artifact_json.artifact` paths a scenario asserts that ended up TRUNCATED in the manifest
@@ -1636,6 +1680,17 @@ export async function cmdRecord(args: string[]) {
       return process.exit(0);
     }
     const staleTotal = stale.length;
+    // D3: ONE redaction preflight for the whole re-record batch, before the first spawn (same rationale
+    // as the dir-batch path below). Policy dirs per item = cwd + the cassette's own dir (its write target).
+    if (!noRedact) {
+      const preflightItems: Array<{ scenario: Scenario; policyDirs: string[] }> = [];
+      for (const { path: cp } of stale) {
+        const rc = readCassette(cp);
+        if (!("error" in rc)) preflightItems.push({ scenario: rc.cassette.scenario, policyDirs: [process.cwd(), dirname(cp)] });
+      }
+      const preflight = redactionPreflightMessage(preflightItems);
+      if (preflight) warn(preflight);
+    }
     // Each item targets a DISTINCT committed cassette path (`cassettePath: cp`), so a parallel re-record can
     // never collide on output. Runs are fully isolated (unique sidecar networks/proxy per run), so the only
     // bound is --concurrency. Output lines are index-tagged so interleaved completions stay readable.
@@ -1660,7 +1715,13 @@ export async function cmdRecord(args: string[]) {
         let r: { result: RunResult };
         if (diskScenario) {
           // re-record from the on-disk scenario YAML so any edits (e.g. added `skills:`) take effect.
-          r = await recordScenarioFile(diskScenario, { noRedact, allowFailing, cassettePath: cp, maxArtifactBytes });
+          r = await recordScenarioFile(diskScenario, {
+            noRedact,
+            allowFailing,
+            cassettePath: cp,
+            maxArtifactBytes,
+            skipRedactionPreflight: true,
+          });
         } else {
           // No on-disk scenario found — fall back to the embedded snapshot (original behavior).
           // The user should pass the scenario file directly (`record <scenario.yaml>`) to pick up edits.
@@ -1670,7 +1731,7 @@ export async function cmdRecord(args: string[]) {
           const sessionRef = cassette.scenario.session === "(inline)" ? "(inline)" : join(dirname(cp), cassette.scenario.session);
           r = await recordScenarioObject(
             { ...cassette.scenario, session: sessionRef },
-            { noRedact, allowFailing, cassettePath: cp, maxArtifactBytes },
+            { noRedact, allowFailing, cassettePath: cp, maxArtifactBytes, skipRedactionPreflight: true },
           );
         }
         log(`  ✓ ${tag} ${cp} (${r.result.result})`);
@@ -1719,6 +1780,22 @@ export async function cmdRecord(args: string[]) {
     }
 
     const total = disc.scenarios.length;
+    // D3: ONE preflight for the whole batch, BEFORE the first spawn — a per-scenario warning under
+    // pMapBounded would fire for scenario N after 1…N−1 already paid, and a shared empty policy would
+    // emit N interleaved duplicates. Same policy search set as each scenario's own record path.
+    if (!noRedact) {
+      const preflightItems: Array<{ scenario: Scenario; policyDirs: string[] }> = [];
+      for (const f of disc.scenarios) {
+        try {
+          const sc = parseScenarioFile(f);
+          preflightItems.push({ scenario: sc, policyDirs: [process.cwd(), dirname(f), dirname(defaultCassettePath(sc.name))] });
+        } catch {
+          /* unparseable → the record path reports it below */
+        }
+      }
+      const preflight = redactionPreflightMessage(preflightItems);
+      if (preflight) warn(preflight);
+    }
     // Runs are fully isolated (unique sidecar networks/proxy per run, per-session run dir), so concurrency is
     // safe; --concurrency only bounds it (Docker address pool + API rate limits). Index-tag the lines so
     // interleaved completions stay readable.
@@ -1726,7 +1803,7 @@ export async function cmdRecord(args: string[]) {
       const tag = `[${i + 1}/${total}]`;
       log(`${tag} recording ${f}…`);
       try {
-        const r = await recordScenarioFile(f, { noRedact, allowFailing, maxArtifactBytes, ...liveDecider });
+        const r = await recordScenarioFile(f, { noRedact, allowFailing, maxArtifactBytes, skipRedactionPreflight: true, ...liveDecider });
         log(`  ✓ ${tag} → ${r.cassettePath} (${r.result.result})`);
         return true;
       } catch (e) {
@@ -1782,6 +1859,17 @@ async function recordScenarioObject(
   opts: RecordOpts,
   extraPolicyDirs: string[] = [],
 ): Promise<{ result: RunResult; cassettePath: string; artifacts: number }> {
+  // D3 redaction preflight — MUST fire BEFORE the (paid) agent spawn below; the historical policy-load
+  // point after the live run is exactly the after-the-fact discovery this exists to prevent. Same search
+  // set as the post-run load. `--no-redact` skips it (explicit known-synthetic opt-out); the batch paths
+  // skip it here because they preflight once for the whole batch (skipRedactionPreflight).
+  if (!opts.skipRedactionPreflight && !opts.noRedact) {
+    const plannedCassettePath = opts.cassettePath ?? defaultCassettePath(scenario.name);
+    const preflight = redactionPreflightMessage([
+      { scenario, policyDirs: [process.cwd(), ...extraPolicyDirs, dirname(plannedCassettePath)] },
+    ]);
+    if (preflight) warn(preflight);
+  }
   // Thread the live-decider opts. All undefined for a plain `record` → identical to the
   // previous opt-less call (executeScenario defaults onUnanswered to scenario.on_unanswered ?? "fail").
   const result = await executeScenario(scenario, {

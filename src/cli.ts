@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, writeSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, writeSync, existsSync, copyFileSync } from "node:fs";
 import { join, basename, resolve, isAbsolute, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
@@ -147,6 +147,8 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
       [--skip-privacy|--skip-staleness]  skip one check
       [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-path <regex>]... [--allow-machine-inventory <regex>]... [--allow-file <path>]... [--output-format json]
   rehash <dir/>                migrate cassette fingerprints to current version when content is provably unchanged (requires contentSig from v3+)
+  init-redact [--force]        copy the packaged reference .cowork-redact.json into the cwd (redaction starter
+                               for hostloop/protocol recordings; review + tailor the patterns before recording)
   prune [--keep-last <n>]      prune accumulated run dirs, keeping N most recent per scenario (default: 5)
 
 ── CI lint + assertion reference ──────────────────────────────────────────────
@@ -439,6 +441,8 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
   rehash:
     "usage: rehash <dir/> [--dry-run] [--output-format text|json]   (migrate cassettes across format bumps using contentSig verification; no re-record needed)",
   prune: "usage: prune [--keep-last <n>] [--dry-run] [<runs-dir>]   (prune accumulated run dirs; default --keep-last 5)",
+  "init-redact":
+    "usage: init-redact [--force] [--output-format json]   (copy the packaged reference .cowork-redact.json into the cwd; refuses to overwrite an existing one without --force)",
 };
 
 // Known subcommands — used by the global value-flag parsers (`--dotenv`, `--run-dir`) to reject a command
@@ -468,6 +472,7 @@ const COMMANDS = [
   "lint",
   "doctor",
   "rehash",
+  "init-redact",
   "prune",
 ];
 
@@ -654,6 +659,8 @@ async function main() {
       return cmdVerifyCassettes(rest);
     case "rehash":
       return cmdRehash(rest);
+    case "init-redact":
+      return cmdInitRedact(rest);
     case "verify-run":
       return cmdVerifyRun(rest);
     case "trace":
@@ -2326,6 +2333,48 @@ async function cmdSync(args: string[]) {
         );
       }
     }
+  }
+}
+
+/** `cowork-harness init-redact [--force]` — copy the packaged reference `.cowork-redact.json` into the
+ *  cwd (D3). The copy is load-bearing: `loadRedactionPolicy` searches cwd/scenario-dir/cassette-dir and
+ *  never the package dir, so shipping the template alone does nothing until it's copied next to the
+ *  scenarios. The reference policy is generic (host-path prefixes + a generic email regex) — a starting
+ *  point to review and tailor, not a guarantee. Refuses to overwrite an existing policy without --force
+ *  (silently replacing a tailored policy would be an under-redaction hazard). */
+function cmdInitRedact(args: string[]) {
+  const json = isJsonOutput(args);
+  let p;
+  try {
+    p = parseArgs(args, { booleans: ["--force"], values: ["--output-format"], enums: { "--output-format": ["text", "json"] } });
+  } catch (e) {
+    return fail("init-redact", "usage", (e as Error).message, SUBCOMMAND_USAGE["init-redact"], json);
+  }
+  if (p.positionals.length > 0) {
+    return fail("init-redact", "usage", `init-redact takes no positional arguments (got: ${p.positionals.join(", ")})`, undefined, json);
+  }
+  // dist/cli.js → <install>/.cowork-redact.json (shipped in the npm package "files").
+  const src = fileURLToPath(new URL("../.cowork-redact.json", import.meta.url));
+  const dest = resolve(process.cwd(), ".cowork-redact.json");
+  if (!existsSync(src)) {
+    // A missing template is a packaging bug — fail loud, never a vacuous "nothing to copy" success.
+    return fail("init-redact", "runtime", `packaged redaction template not found at ${src} — reinstall cowork-harness`, undefined, json);
+  }
+  if (existsSync(dest) && !p.flags["--force"]) {
+    return fail(
+      "init-redact",
+      "usage",
+      `.cowork-redact.json already exists in ${process.cwd()} — refusing to overwrite a possibly-tailored policy`,
+      "Pass --force to overwrite, or edit the existing file.",
+      json,
+    );
+  }
+  copyFileSync(src, dest);
+  if (json) out(JSON.stringify({ command: "init-redact", ok: true, path: dest }));
+  else {
+    out(`✓ wrote ${dest} (reference template: local-path prefixes + a generic email regex)`);
+    out("  Review and tailor the patterns before recording — the template is a starting point, not a guarantee.");
+    out("  Policy search set at record time: cwd → the scenario's dir → the cassette's dir (+ COWORK_HARNESS_REDACT_* env).");
   }
 }
 

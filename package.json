@@ -29,6 +29,7 @@
   "author": "Yaniv Golan",
   "files": [
     "dist",
+    ".cowork-redact.json",
     "baselines",
     "examples/replays",
     "fixtures",

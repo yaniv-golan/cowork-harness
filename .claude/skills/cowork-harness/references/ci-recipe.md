@@ -125,9 +125,17 @@ dollar figures). In a skill repo these cassettes get **committed**. So:
   customer's cap table.
 - **Opt-in redaction** rewrites configured PII out of the cassette at record time. Drop a
   `.cowork-redact.json` next to your scenarios (or set `COWORK_HARNESS_REDACT_PATTERNS` /
-  `_KEYS`); empty by default. Redaction is **verdict-preserving** — `record` refuses to write if
+  `_KEYS`); empty by default. The policy is searched in **cwd → the scenario's dir → the cassette's
+  dir** (first file found per dir; env vars merge on top). `cowork-harness init-redact` copies the
+  packaged reference template (local-path prefixes + a generic email regex) into the cwd as a starting
+  point — review and tailor it. Redaction is **verdict-preserving** — `record` refuses to write if
   redaction would flip an assertion (a manufactured green). `--no-redact` skips it for known-synthetic
   inputs.
+- **Pre-spawn preflight**: `record` warns (`::warning::`, before the paid run starts — once per batch
+  for `record <dir>` / `--rerecord-stale`) when a scenario about to record at a host-path-bearing tier
+  (`hostloop`, `protocol`) has an **empty** redaction policy — that combination commits real host paths
+  the `path` scanner then hard-fails at `verify-cassettes` time. The always-on scanner remains the
+  universal net (container-tier recordings can trip it too).
 - **Always-on scan gate** — `verify-cassettes` flags email / currency / bare-domain / local-path /
   machine-inventory matches it finds in the committed cassettes and **exits non-zero**, so "no leak" is
   a gate, not discipline.

@@ -439,7 +439,15 @@ A cassette snapshots the transcript **and** the `outputs/` JSON bodies (names, d
 counts) — committed PII surface. Two layers, distinct from secret-scrub (which only strips auth tokens):
 
 - **Opt-in redaction** (the mutation). Drop a `.cowork-redact.json` next to your scenarios, or set
-  `COWORK_HARNESS_REDACT_PATTERNS` / `COWORK_HARNESS_REDACT_KEYS`. At record time it rewrites matching PII
+  `COWORK_HARNESS_REDACT_PATTERNS` / `COWORK_HARNESS_REDACT_KEYS`. The policy file is searched in
+  **cwd → the scenario file's dir → the cassette's dir** (each dir's file merges once; the env vars
+  merge on top), and `cowork-harness init-redact` copies the packaged reference template into the cwd
+  as a reviewed-and-tailored starting point. `record` also runs a **pre-spawn preflight**: when the
+  resolved tier is host-path-bearing (`hostloop`, `protocol`) and the assembled policy is EMPTY, it
+  emits a `::warning::` *before* the paid run starts (once per batch for `record <dir>` /
+  `--rerecord-stale`) — that combination commits real host paths, which `verify-cassettes`' `path`
+  scanner then hard-fails; the always-on scanner remains the universal net (container can trip it
+  too). At record time it rewrites matching PII
   across the whole cassette surface (transcript, artifact bodies + filenames, prompt/answers/assert,
   skillSources) **structurally** — JSON stays valid and the AskUserQuestion question/answer strings stay in
   sync, so the O7 guard still passes. Redaction is **verdict-preserving**: `record` replays before/after and

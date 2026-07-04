@@ -124,8 +124,8 @@ pinned as a sync drift-sentinel only (`src/sync/cowork-sync.ts`), not enforced.
 
 **Mitigation:** the `dispatch_count_max` assertion (`src/assert.ts`; its failure message cites the
 SPEC §10 `{global:3}` cap) lets a scenario catch dispatch overage post-hoc, so the divergence is
-detectable even though the runtime behaviour differs. A faithful runtime limiter is deferred post-1.0
-(additive behaviour-fidelity work, no consumer demand); this entry documents the current gap.
+detectable even though the runtime behaviour differs. A faithful runtime limiter is planned
+(consumer demand exists); this entry documents the gap until it lands.
 
 ---
 
