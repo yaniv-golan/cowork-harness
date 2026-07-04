@@ -36,7 +36,7 @@ Start with the [project README](../README.md) for the overview and quick start, 
 |---|---|
 | Commands at a glance (what / when) | [README → Commands at a glance](../README.md#commands-at-a-glance) — the **complete** command catalog; full flags via `<command> --help` (includes `doctor`, the prerequisite check before a first live run) |
 | `lint` / `scaffold` (scenario authoring) | [scenario.md](./scenario.md); `cowork-harness lint --help`, `cowork-harness scaffold --help` |
-| `verify-run` (re-assert a kept run, no tokens) · `decide` (smoke-test a decider against a sample question, no run) | `cowork-harness verify-run --help`, `cowork-harness decide --help` |
+| `verify-run` (re-assert a kept run, no tokens) · `decide` (smoke-test a decider against a sample question, no run) | `cowork-harness verify-run --help`, `cowork-harness decide --help`, [scenario.md → Dry-running a decider](./scenario.md#dry-running-a-decider-decide) |
 | Debugging a run (a misbehaving skill, or a green you don't trust) | [debugging.md](./debugging.md) |
 | In-band gate answering from a driving agent (`gates` / `answer`) | [decider-dir.md](./decider-dir.md) |
 | Checking a background run's liveness (`status`) | [run-status.md](./run-status.md) |

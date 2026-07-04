@@ -15,6 +15,16 @@ Every run writes to `~/.cowork-harness/runs/<scenario>/<sessionId>/` (relocatabl
 evidence; see [README → What you get out](../README.md#what-you-get-out-inspectable-output) for the layout
 and how to relocate it. The tools below digest them so you rarely hand-parse.
 
+**Why paths look different at different fidelity tiers:** at `hostloop`, `computer://` links and tool
+arguments render as real host paths (`/Users/…`) because hostloop's file tools run natively against your
+machine — the displayed path is the one the model actually touched. At `container`/`microvm`/`protocol`,
+the same content stays VM-shaped (`/sessions/<id>/mnt/…`) because a mount's "host" side there is
+harness-internal staging, not a real user directory — translating it would be *less* faithful, not more.
+This isn't scattered per-command logic: the gate and the rewrite both live in one place,
+`makeDisplayTranslator` in `src/run/display-translate.ts`, with one exception carved out — `--compact`/
+`--demo` (shareable) output stays untranslated even at hostloop, so a shared transcript never leaks a real
+host path.
+
 ---
 
 ## The skill misbehaved — investigate the run

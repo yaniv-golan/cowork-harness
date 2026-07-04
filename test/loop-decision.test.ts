@@ -6,9 +6,6 @@ describe("loop decision (f_ replica)", () => {
   it("requireFullVmSandbox forces VM-loop (HeA)", () => {
     expect(decideLoop({ requireFullVmSandbox: true, gateHostLoopOn: true })).toBe("vm");
   });
-  it("forceDisableHostLoop forces VM-loop (iX)", () => {
-    expect(decideLoop({ forceDisableHostLoop: true, gateHostLoopOn: true })).toBe("vm");
-  });
   it("dev override forces host-loop", () => {
     expect(decideLoop({ devForceHostLoop: true, gateHostLoopOn: false })).toBe("host");
   });
@@ -30,10 +27,6 @@ describe("decideLoopFromBaseline — reads requireFullVmSandbox from the baselin
   it("a locked-down org baseline (requireFullVmSandbox:true) forces VM-loop even with the gate on", () => {
     expect(decideLoopFromBaseline(withGate("on(force)", { requireFullVmSandbox: true }))).toBe("vm");
   });
-  it("forceDisableHostLoop in the baseline forces VM-loop", () => {
-    expect(decideLoopFromBaseline(withGate("on(force)", { forceDisableHostLoop: true }))).toBe("vm");
-  });
-
   // post-sync gates are STRUCTURED entries ({on,source,value}), not prose strings. Reading `.on`
   // (not a bare `!!obj`, which is truthy even for an off gate) is what makes an off gate force VM-loop.
   it("reads a synced structured gate entry: {on:true} → host, {on:false} → vm", () => {

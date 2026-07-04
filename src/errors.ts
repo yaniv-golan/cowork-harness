@@ -14,3 +14,16 @@ export class BoundaryError extends Error {
     this.name = "BoundaryError";
   }
 }
+
+/**
+ * Thrown for a user-input mistake detected past the flag parser (e.g. a scenario file that fails
+ * schema validation). `main().catch` (cli.ts) maps it to a clean category-`usage` exit 2 — without
+ * this, a Zod throw from a scenario typo surfaced as category `internal` (a user mistake
+ * masquerading as a harness bug).
+ */
+export class UsageError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "UsageError";
+  }
+}

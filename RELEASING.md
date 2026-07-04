@@ -43,6 +43,11 @@ Pre-1.0: **minor** (`0.N+1.0`) = new features and/or behavior changes; **patch**
 backwards-compatible bug fixes only. New commands/flags, or changes to existing behavior (e.g. a
 stricter privacy gate, a changed cassette/staleness hash), are a **minor**.
 
+From `1.0.0`, semver is enforced against the **covered surfaces enumerated in
+[SPEC.md §12](./SPEC.md#12-versioning--the-10-compatibility-contract)** (CLI + exit codes, the
+scenario/session/baseline/run-result/cassette/protocol schemas, the documented env vars, and the
+packaged Action's inputs/outputs). Human-readable text output is explicitly NOT covered.
+
 ## Version locations — bump ALL of these to the same `X.Y.Z`
 
 1. `package.json` → `"version"` (then run `npm install` to update `package-lock.json`).
@@ -74,7 +79,7 @@ stricter privacy gate, a changed cassette/staleness hash), are a **minor**.
 - [ ] `npm run ci` (typecheck + build + test) is green locally.
 - [ ] `npm pack --dry-run` — confirm the tarball contains `dist/`, `baselines/`, `docker/`, the bundled
       `scenario.py` + `assertion-keys.json` (the skill itself ships via the marketplace, not npm), and no
-      `docs/internal/`.
+      internal planning notes.
 - [ ] Public export resolves: `node --input-type=module -e "import('cowork-harness/secrets').then(m => {
       if (!m.scrubField || !m.collectSecrets) throw new Error('missing export'); })"` (run from an install of
       the packed tarball, or via self-reference in-repo). Guards the sole programmatic API subpath.
@@ -107,7 +112,7 @@ stricter privacy gate, a changed cassette/staleness hash), are a **minor**.
 
 - "Merge is not push." Local merges/commits never imply a release — the steps above are the only
   ones that make anything public; run them only on an explicit decision to release.
-- `docs/internal/` is gitignored and excluded from the npm tarball — keep planning notes there.
+- Planning notes belong in a gitignored location excluded from the npm tarball; never commit or publish them.
 - If the tag was placed on the wrong commit (e.g. a follow-up fix was needed), delete the local tag
   (`git tag -d vX.Y.Z`), re-create it on the correct commit, and push it.
 - The live `scenario suite` CI stage runs on **same-repo** PRs (where the `ANTHROPIC_API_KEY` secret is

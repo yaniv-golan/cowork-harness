@@ -33,7 +33,6 @@ Two layers, tested differently:
 ```
 decideLoop(i):
   if i.requireFullVmSandbox === true   → "vm"      # HeA()
-  if i.forceDisableHostLoop  === true  → "vm"      # iX()
   if i.devForceHostLoop      === true  → "host"    # CLAUDE_FORCE_HOST_LOOP=1 + dev-approved
   return i.gateHostLoopOn ? "host" : "vm"          # gate 1143815894
 ```
@@ -212,7 +211,7 @@ Each line is one stream-json message. The message types that carry signal:
 - `{type:"result", is_error, usage}` — turn end.
 
 **Sub-agent dispatch recognition (binary fact):** the real cowork dispatch tool is **`Agent`** (agent
-ELF 2.1.197 as of baseline desktop-1.17377.1: `{name:"Agent", aliases:["Task"], description:"Launch a new agent",
+ELF 2.1.197 as of baseline desktop-1.18286.0: `{name:"Agent", aliases:["Task"], description:"Launch a new agent",
 inputSchema:{description, subagent_type, prompt}}`). `parseMessage` synthesizes a `subagent_dispatch`
 for a `tool_use` whose `name` is `Agent` **or** `Task` (the alias) **or** whose `input` carries
 `subagent_type`. The cowork **`TaskCreate`/`TaskUpdate`** tools are the *todo list*
@@ -302,7 +301,7 @@ Payload sits under an **inner** `response`. Missing the nesting ⇒ `ZodError: e
 > Channels 2-3 = CLI `--mcp-config` / `.mcp.json` servers (honored in plain cowork mode; dropped only in
 > hermetic mode). Details per channel below.
 
-1. **SDK servers over the control protocol** — declared via `sdkMcpServers` in `initialize`; tool calls tunnel as `mcp_message`. This is how the **desktop host** bridges its own servers (incl. `claude_desktop_config.json` `mcpServers`, spawned host-side with full host env) and how the harness delivers the workspace shell. The workspace handler (`src/hostloop/workspace-handler.ts`) implements `initialize`/`tools/list`/`tools/call`; `bash`→`docker exec -w <mntRoot> <container> sh -c <cmd>` (container-egress-gated). **CB-8:** `makeWorkspaceHandler` accepts an `onInfraError?: (message: string) => void` callback at parameter position 6 (after `onEgress`); on infrastructure errors (ETIMEDOUT / killed / no code+stdout+stderr) the handler calls `onInfraError?.(e.message)`, returns a textResult with `"[infrastructure error: …]"`, and `spawnHostLoop` wires `onInfraError` to append `{type:"infra_error", ts, message}` to `events.jsonl`. **`web_fetch` is NOT container-egress-gated:** real Cowork routes it through the host API (gate `1978029737` `coworkWebFetchViaApi:true` → `POST /api/organizations/<org>/cowork/web_fetch`), gated by a **separate web-fetch hostname allowlist** (`getWebFetchAllowedUrls`, `*`=unrestricted) + a **URL-provenance** rule (URL must have appeared in a prior message/result). The harness mirrors this with the **two-path model** (`src/hostloop/workspace-handler.ts`, binary-verified `G1t`/`U1t`): **Path A** (provenance engaged — `coworkWebFetchViaApi` on) gates on the **exact-URL provenance set** ONLY (seeded from user-turn + tool-result URLs; `src/hostloop/provenance.ts`), with **no** hostname allowlist — but still an `http(s)`-scheme + private-address **SSRF backstop re-checked on every redirect hop** (a manual redirect loop, not `curl -L`) — a miss raises a per-domain approval (`webfetch:<domain>` permission with options `Allow once | Allow all for website | Deny`) routed through the Decider; "Allow all for website" approves the host for the rest of the run (`Run.approvedDomains`, per-run/ephemeral). **Path B** (gate off) is a direct host fetch gated by the egress domain list via the same `wen()`/`compile()` matcher container egress uses, with `redirect:"manual"` re-checking `U1t` (scheme + private-address SSRF + allowlist) on **every** redirect hop. web_fetch is thus **decoupled from `plan.egressAllow`** on Path A (egress applies to `bash`/Path B only). An unanswered cold miss is fail-closed (B5); scenarios answer via `--answer "webfetch:<domain>=allow"` (with `grant`), `web_fetch.approved_domains`, or an LLM/external terminal. `bash` stays container-egress-sandboxed.
+1. **SDK servers over the control protocol** — declared via `sdkMcpServers` in `initialize`; tool calls tunnel as `mcp_message`. This is how the **desktop host** bridges its own servers (incl. `claude_desktop_config.json` `mcpServers`, spawned host-side with full host env) and how the harness delivers the workspace shell. The workspace handler (`src/hostloop/workspace-handler.ts`) implements `initialize`/`tools/list`/`tools/call`; `bash`→`docker exec -w <mntRoot> <container> sh -c <cmd>` (container-egress-gated). **CB-8:** `makeWorkspaceHandler` accepts an `onInfraError?: (message: string) => void` callback at parameter position 6 (after `onEgress`); on infrastructure errors (ETIMEDOUT / killed / no code+stdout+stderr) the handler calls `onInfraError?.(e.message)`, returns a textResult with `"[infrastructure error: …]"`, and `spawnHostLoop` wires `onInfraError` to append `{type:"infra_error", ts, message}` to `events.jsonl`. **`web_fetch` is NOT container-egress-gated:** real Cowork routes it through the host API (gate `1978029737` `coworkWebFetchViaApi:true` → `POST /api/organizations/<org>/cowork/web_fetch`), gated by a **separate web-fetch hostname allowlist** (`getWebFetchAllowedUrls`, `*`=unrestricted) + a **URL-provenance** rule (URL must have appeared in a prior message/result). The harness mirrors this with the **two-path model** (`src/hostloop/workspace-handler.ts`, binary-verified `G1t`/`U1t`): **Path A** (provenance engaged — `coworkWebFetchViaApi` on) gates on the **exact-URL provenance set** ONLY (seeded from user-turn + tool-result URLs; `src/hostloop/provenance.ts`), with **no** hostname allowlist — but still an `http(s)`-scheme + private-address **SSRF backstop re-checked on every redirect hop** (a manual redirect loop, not `curl -L`) — a miss raises a per-domain approval (`webfetch:<domain>` permission with options `Allow once | Allow all for website | Deny`) routed through the Decider; "Allow all for website" approves the host for the rest of the run (`Run.approvedDomains`, per-run/ephemeral). **Path B** (gate off) is a direct host fetch gated by the egress domain list via the same `wen()`/`compile()` matcher container egress uses, with `redirect:"manual"` re-checking `U1t` (scheme + private-address SSRF + allowlist) on **every** redirect hop. web_fetch is thus **decoupled from `plan.egressAllow`** on Path A (egress applies to `bash`/Path B only). An unanswered cold miss is fail-closed; scenarios answer via `--answer "webfetch:<domain>=allow"` (with `grant`), `web_fetch.approved_domains`, or an LLM/external terminal. `bash` stays container-egress-sandboxed.
 2. **CLI-spawned `--mcp-config` / `.mcp.json` servers — HONORED in plain cowork mode** (NOT ignored). **Verified:** a valid `--mcp-config` populates `mcp_servers` (`[{name,status:"pending"|"connected"}]`); these run in-sandbox with the env-allowlist `CLAUDE_CODE_MCP_ALLOWLIST_ENV` (`RW8`/`oG8`/`LU5` = {HOME, LOGNAME, PATH, SHELL, TERM, USER}). The harness MAY use this as a convenience injection path.
 3. **The drop is SAFE/HERMETIC-mode-gated, not cowork-gated.** `--mcp-config` is filtered to SDK-only (`ap5()`) **only when** safe mode (`I5()`) or `xB8()` is true, and `xB8()` requires **both** `CLAUDE_CODE_REMOTE` **and** `CLAUDE_CODE_REMOTE_HERMETIC_MODE`. **Verified:** with both set, `mcp_servers:[]`; without them (plain `SESSION_KIND=bg`), the config is honored. The earlier "cowork ignores `--mcp-config`" was a hermetic-session observation over-generalized.
 
@@ -350,8 +349,8 @@ states in `baseline.provenance.gates`). A skill that ignores these behaves diffe
 - **Task-dispatch rate-limiter** (gate `1648655587`, `{perTask:1, global:3}`). The desktop host
   **SKIPS** a Task dispatch that would exceed the cap (`recordSkipAndEmit`/`GCA.PerTaskLimit` —
   **not** queue, not error): a dispatch session launches **≤1 sub-task per task** and **≤3 concurrent
-  globally**. Enforcement in the harness is **DEFERRED** to the planned sub-agent dispatch tree
-  (architecture plan §A3/§B2); until then the harness **does not** cap, so a multi-sub-agent skill that
+  globally**. Enforcement in the harness is **DEFERRED** to a planned sub-agent dispatch tree;
+  until then the harness **does not** cap, so a multi-sub-agent skill that
   passes here may throttle in real Cowork. SPEC records the constraint; the planned trace/canary must
   surface dispatch counts against `{perTask:1, global:3}`.
 - **`web_fetch` routing** (gate `1978029737`, `coworkWebFetchViaApi:true`) — see §6; implemented.
@@ -451,8 +450,8 @@ verdict-signal layer that can still fail a run (e.g. `stalled` — ended on a qu
 each suppressible only by the matching `allow_*` modifier. `result` means "the agent turn didn't error," NOT
 "the task completed."
 
-**`run --repeat N`** (E1) redefines `ok` for that invocation only — no parallel `batchVerdict` field, per
-the project's no-backward-compat stance (§8 of the internal enablers plan). The envelope gains an optional
+**`run --repeat N`** redefines `ok` for that invocation only — no parallel `batchVerdict` field, per
+the project's no-backward-compat stance. The envelope gains an optional
 `"rollups": [RepeatRollup]` array (one entry per scenario file; `src/run/repeat.ts`), and:
 
 ```
@@ -519,6 +518,12 @@ Categories come from TYPED errors (`UnansweredError`→`unanswered`, `BoundaryEr
 unanswered-under-`fail` / runtime · `3` boundary/integrity. (`--output-format json` writes via `writeSync` so the envelope
 is never truncated by `process.exit` on a pipe.)
 
+**Reserved:** exit `4` on the `run`/`skill` family is reserved for a future "needs input / surfaced
+question" outcome (the deferred `on_unanswered: surface` / `needs_input` Track 2). It is currently
+unused — reserving it now keeps a later addition additive rather than a renumbering of the burned
+`0`/`1`/`2`/`3` space. Exit-code space is **per-command**, not global (`status` uses `0`/`1`/`2`/`3`
+with its own meanings); this reservation applies only to the `run`/`skill` family.
+
 **Per-command exceptions:** `lint` exits `127` when `python3` is missing (spawn error); `replay` exits
 `2` on a malformed/unreadable cassette (distinct from the `0`/`1` verdict); `sync` exits `2` on a
 non-macOS platform (the platform guard, alongside the `sync` hard-failure → `1` note below).
@@ -540,19 +545,21 @@ verdict logic a finding doesn't have) — it emits its own:
   "ok": true,                       // false if any real finding, staleness drift, or unreadable cassette
   "coverage": { "privacy": true, "staleness": true },  // which scans ran (false under --skip-privacy / --skip-staleness)
   "results": [ { "file": "string",
-                 "findings": [ { "where": "string", "cls": "email|currency|domain|path|unscanned", "sample": "string" } ],
+                 "findings": [ { "where": "string", "cls": "email|currency|domain|path|machine-inventory|unscanned", "sample": "string" } ],
                  "staleness": [ "string" ],   // drift / unresolvable-fingerprint messages (gate failures)
                  "error?": "string" } ] }     // a malformed cassette is TALLIED here, never crashes the batch
 ```
 
-The full net (email/currency/domain/path) runs over the WHOLE cassette (deliverable bodies/filenames,
-`prompt`/`answers`/`assert`, and the agent's reasoning + tool I/O), with one structural exception: the
-agent **capability-manifest** messages — the `system/init` event and the `initialize` registry
-`control_response` (`request_id:"init-1"`) — get `email` + `path` only (they carry the tool/skill
-catalog + MCP-server names a regex can't distinguish from customer data, so `currency`/`domain` are
-excluded there). `email` and `path` still scan them: the registry `account` field can carry the dev's
-email, and those same messages' own structural fields (`cwd`/`plugins[].path`/`memory_paths`) are
-exactly where a real local filesystem path lives. `ok = no finding with cls!="unscanned"  &&  no staleness message  &&  no error`. An `unscanned` finding (a
+The full net (email/currency/domain/path/machine-inventory) runs over the WHOLE cassette (deliverable
+bodies/filenames, `prompt`/`answers`/`assert`, and the agent's reasoning + tool I/O), with one
+structural exception: the agent **capability-manifest** messages — the `system/init` event and the
+`initialize` registry `control_response` (`request_id:"init-1"`) — get `email` + `path` +
+`machine-inventory` only (they carry the tool/skill catalog + MCP-server names a regex can't
+distinguish from customer data, so `currency`/`domain` are excluded there). `email`, `path`, and
+`machine-inventory` still scan them: the registry `account` field can carry the dev's email, those
+same messages' own structural fields (`cwd`/`plugins[].path`/`memory_paths`) are exactly where a real
+local filesystem path lives, and a live-enumerated app/process inventory sentinel is never legitimate
+catalog boilerplate either. `ok = no finding with cls!="unscanned"  &&  no staleness message  &&  no error`. An `unscanned` finding (a
 `>64 KiB`/unreadable artifact body, which is hash-only — nothing committed to leak) is reported but does NOT
 fail the gate. **Exit codes:** `0` clean · `1` any finding/staleness/error · `2` usage (e.g.
 `--skip-privacy`+`--skip-staleness` together, or zero cassettes under a dir — a loud non-zero, never a
@@ -582,3 +589,42 @@ text passes unchanged unless the entire value is a base64 blob). A guard in `red
 already-redacted markers. The TLD list used by the domain scanner was also extended from 22 to 51
 entries (CB-5), adding major European, Asian, and Latin American ccTLDs
 (`ch|nl|se|no|it|jp|br|nz|in|sg|kr|mx|es|pt|pl|be|at|dk|fi|ie|ru|cn|tw|hu|cz|ro|il|za|ar|cl|pe|tr`).
+
+## 12. Versioning & the 1.0 compatibility contract
+
+From `1.0.0` the project follows [semver](https://semver.org/). The surfaces below are the **covered
+contract**: a backwards-incompatible change to any of them is a MAJOR bump. Everything else — most
+importantly human-readable text — is explicitly NOT covered and may change in any release. (Pre-1.0,
+nothing here is guaranteed; minor versions may break any surface — see [RELEASING.md](./RELEASING.md).)
+
+**Covered (semver-guaranteed):**
+
+- **CLI surface** — command names, their accepted flags, and the **per-command** exit codes (§11).
+  Exit codes are per-command, not global: `run`/`skill` use `0` pass / `1` assertion-or-agent fail /
+  `2` usage / `3` boundary-integrity, with `4` reserved (§11). Removing a command or flag, or changing
+  an exit-code meaning, is breaking.
+- **Scenario & session schemas** — `schema/scenario.schema.json`, `schema/session.schema.json` (the
+  authored-input contract). Tightening validation on a previously-valid document is breaking.
+- **Baseline JSON shape** — the `baselines/desktop-*.json` field structure (CI's committed source of
+  truth; consumers commit and diff these).
+- **RunResult envelope** — `schema/run-result.json` under `--output-format json` (§11): the
+  `ok` / `results[]` / `error` shape and the verdict-signal codes (§11.0).
+- **Cassette format** — the current `cassetteVersion` (**7**) and its verdict-modifier assertion keys.
+  Older-version cassettes (the retained `schema/cassette.v2/v3/v5/v6.json` — no v4 schema was ever
+  published) stay replayable; dropping a still-emitted version's readability is breaking.
+- **Control protocol** — `schema/protocol.v1.json` + the golden control-response vectors (§5).
+- **Environment variables** — the documented `COWORK_HARNESS_*` knobs plus `COWORK_AGENT_BINARY` and
+  `COWORK_AGENT_IMAGE`. Renaming a documented var or changing its meaning is breaking.
+- **Packaged GitHub Action** — `action.yml` inputs (`command`, `path`, `version`, `strict`,
+  `fail-on-skill-drift`, `extra-args`, `summary`, `anthropic-api-key`) and outputs (`ok`,
+  `envelope-path`, `summary-md`).
+
+**NOT covered (may change in any release — do NOT depend on):**
+
+- **Human-readable renderer output** — verdict footers, `::notice::` / `::warning::` lines, transcript
+  formatting, and the exact text of log/error messages. **Grep-stability of human-readable text is
+  explicitly NOT a contract** — assert against the JSON envelope, not stdout text.
+- **`trace` row shapes** and other debug/diagnostic output.
+- **`docs/internal/**`** — untracked working notes.
+- **The reconstructed system-prompt append text** — a paraphrase by design (see
+  [docs/fidelity-gaps.md](./docs/fidelity-gaps.md)); behaviorally equivalent, not byte-stable.

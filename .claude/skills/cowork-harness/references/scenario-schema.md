@@ -1,6 +1,6 @@
 # Scenario & session schema, assertion catalog, web_fetch, full gotchas
 
-Self-contained reference for authoring `cowork-harness` scenarios. Tracks `cowork-harness 0.22.0`
+Self-contained reference for authoring `cowork-harness` scenarios. Tracks `cowork-harness 0.23.0`
 (baseline `desktop-1.18286.0`). If your checkout is newer, prefer the live `docs/scenario.md`,
 `docs/session.md`, and `SPEC.md`.
 
@@ -61,6 +61,12 @@ skills: [report-gen]                # OPTIONAL — scope the cassette-staleness 
                                     # `skills/<name>` dir under a mounted plugin-root) + the plugin's shared
                                     # roots. Fail-closed to whole-tree on an unknown name. Omit = whole tree.
 
+requires_capabilities: [ocr]        # OPTIONAL — declare a capability the skill needs (e.g. office_convert,
+                                    # ocr, pdf_tables, opencv). If the running agent image provably omits
+                                    # one, the harness ABORTS before the paid run (exit 3) — unless the
+                                    # scenario also asserts `allow_missing_capability: true`, which downgrades
+                                    # the abort to a notice and proceeds. Live tiers only.
+
 allow_host_writes: true             # OPTIONAL — required to run `hostloop` fidelity with a WRITABLE
                                     # connected folder (session `mode: rw`/`rwd`): with no container
                                     # around hostloop's native file tools, that combination gives the
@@ -80,8 +86,10 @@ session = your setup.**
 ```yaml
 # model & reasoning
 model: claude-opus-4-8           # omit for the agent default
+account_name: my-account         # OPTIONAL — which configured account/credential set to run as
 effort: high                     # low | medium | high | xhigh
 max_thinking_tokens: 31999       # positive int, or per-model map {default, <model>: <n>}; default 31999
+extended_thinking: true          # INERT — not a real Cowork toggle; use max_thinking_tokens instead
 permission_mode: default         # default | acceptEdits | plan | bypassPermissions
 permission_parity: cowork        # cowork (unscripted tool calls allowed) | strict (deny unscripted)
 
@@ -97,8 +105,9 @@ plugins:
   marketplaces: []               # plugin_marketplaces (git URLs or local paths)
   local_marketplaces: []         # local marketplace dirs (each has a marketplace.json)
   enabled: [my-skill@local]      # enabledPlugins (name@marketplace)
-  local_plugins: [./skills/my-skill]   # host plugin dirs → mnt/.local-plugins/marketplaces/<marketplace>/<plugin>
-                                       #   (≥1.14271.0; older baselines use mnt/.local-plugins/cache)
+  local_plugins: [./skills/my-skill]   # host plugin dirs → mnt/.local-plugins/marketplaces/local-desktop-app-uploads/<plugin>
+                                       #   (the marketplace segment is that fixed synthetic name; ≥1.14271.0 —
+                                       #   older baselines use mnt/.local-plugins/cache)
   remote_plugins: []
 skills:
   local: []                      # extra host skill dirs
@@ -234,7 +243,7 @@ passes only if every key passes. Keep one concern per item unless you mean conju
 | `allow_missing_capability: true` | verdict modifier — suppresses the default-fail when the (partial "core") agent image omits a capability the skill used but real Cowork ships (OCR/LibreOffice/markitdown/opencv/PDF-tables). Assert only when the skill's fallback is genuinely equivalent; otherwise rebuild full parity (`--build-arg COWORK_FULL_PARITY=1`). Also opts out of the `requires_capabilities` declared-need check. Live tiers only |
 | `allow_l0_plugin_divergence: true` | verdict modifier — opt into L0/protocol plugin divergence: suppresses the default-fail when a plugin behaves differently at `protocol` (L0) fidelity than under a sandboxed tier. Live tiers only |
 | `allow_stall: true` | verdict modifier — suppresses the `stalled` default-fail when a run ends on a question having done no productive tool work after its last gate (the agent asked for input and stopped — incl. re-asking in plain text after answering an `AskUserQuestion`); assert only when ending on a question is intended, else script the answer (`answer:` / `--answer` / a decider) |
-| `transcript_no_host_path: true` | no host path (`/Users/`, `/opt/cowork/`, `/home/`, `/root/`) leaked into model-visible text — **incompatible with `hostloop`**: its native file tools legitimately expose real host paths, so this fails BY DESIGN there (the harness warns at run start if asserted anyway); use `container`/`microvm` for this check |
+| `transcript_no_host_path: true` | no host path (`/Users/`, `/opt/cowork/`, `/home/`, `/root/`) leaked into model-visible text — **incompatible with `hostloop` AND `protocol`**: hostloop's native file tools legitimately expose real host paths, and protocol (L0) runs the agent's file tools on the real host cwd with no sealed filesystem, so this fails BY DESIGN on both (the harness warns at run start if asserted anyway); use `container`/`microvm` for this check |
 | `egress_denied: <host>` | the host was blocked by the egress proxy |
 | `egress_allowed: <host>` | the host was allowed through |
 | `artifact_json: {artifact, path, …}` | assert a JSON artifact's contents — `equals`/`gt`/`in`/`exists`/`absent`/`is_null` over a dotted `path` (`in` = membership in a list, for a stochastic/LLM value; `absent` ≠ `is_null`; an unresolved intermediate fails loud) |
@@ -372,7 +381,8 @@ at the top of this file.
    the stochastic path flags the run `nonDeterministic`. The LLM decider is one mechanism, two
    spellings: `on_unanswered: llm` (YAML) and `--decider-llm` (CLI). The bare `--on-unanswered llm`
    is rejected (use `--decider-llm`). `agent` is **retired** — `on_unanswered: agent` is rejected by
-   the schema. (`src/types.ts:276`; `src/cli.ts:652`.)
+   the schema. (`src/types.ts:365` — the `on_unanswered` enum; `src/cli.ts:899` — the CLI-side
+   `--on-unanswered` value check.)
 
 4. **`--on-unanswered first` is non-deterministic too** — it picks option 1 and is flagged
    `nonDeterministic`; not a deterministic substitute for scripted answers.

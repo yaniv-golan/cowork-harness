@@ -40,11 +40,16 @@ describe("computeVerdict (the single verdict source)", () => {
     expect(computeVerdict(rr({ scan: { outputsDeletes: [], hostPathLeaked: true, selfHealRan: false } }), "live").pass).toBe(false);
   });
 
-  it("skips the host_path_leak default-fail at hostloop fidelity (real host paths are expected there), still fails at container", () => {
+  it("skips the host_path_leak default-fail at hostloop AND protocol (real host paths expected — neither seals the FS), still fails at container/microvm", () => {
     const leak = { outputsDeletes: [], hostPathLeaked: true, selfHealRan: false };
     const atHostloop = computeVerdict(rr({ scan: leak, effectiveFidelity: "hostloop" }), "live");
     expect(atHostloop.pass).toBe(true);
     expect(atHostloop.signals.some((s) => s.code === "host_path_leak")).toBe(false);
+    // protocol (L0) runs the agent on the real host cwd with no sealed FS, exactly like hostloop —
+    // so a host path in a tool_result is expected there, not a leak.
+    const atProtocol = computeVerdict(rr({ scan: leak, effectiveFidelity: "protocol" }), "live");
+    expect(atProtocol.pass).toBe(true);
+    expect(atProtocol.signals.some((s) => s.code === "host_path_leak")).toBe(false);
     const atContainer = computeVerdict(rr({ scan: leak, effectiveFidelity: "container" }), "live");
     expect(atContainer.pass).toBe(false);
     expect(atContainer.signals.some((s) => s.code === "host_path_leak")).toBe(true);

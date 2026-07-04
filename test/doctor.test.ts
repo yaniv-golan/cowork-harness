@@ -9,6 +9,7 @@ const OK_PROBE: DoctorProbe = {
   runtimeAvailable: () => true,
   runtimeDaemonUp: () => true,
   limaAvailable: () => true,
+  vmInstanceStatus: () => "Running",
   imageName: () => "cowork-agent-base:2",
   imagePresent: () => true,
   proxyImageName: () => "cowork-egress-proxy:1",
@@ -98,6 +99,34 @@ describe("doctor — runDoctorChecks", () => {
     const cs = runDoctorChecks("microvm", probe({ agentBinary: () => ({ ok: false, error: "Staged agent binary not found" }) }));
     expect(get(cs, "agent").status).toBe("fail");
     expect(blocking(cs)).toContain("agent");
+  });
+
+  it("microvm vm-instance check is ok and non-blocking when the Lima instance is Running or Stopped", () => {
+    for (const status of ["Running", "Stopped"]) {
+      const cs = runDoctorChecks("microvm", probe({ vmInstanceStatus: () => status }));
+      const vm = get(cs, "vm-instance");
+      expect(vm.status).toBe("ok");
+      expect(blocking(cs)).not.toContain("vm-instance");
+    }
+  });
+
+  it("microvm vm-instance check warns (not fails) when the Lima instance is Absent — self-provisions on first run", () => {
+    const cs = runDoctorChecks("microvm", probe({ vmInstanceStatus: () => "Absent" }));
+    const vm = get(cs, "vm-instance");
+    expect(vm.status).toBe("warn");
+    expect(vm.required).toBe(false);
+    expect(blocking(cs)).not.toContain("vm-instance");
+    expect(vm.remedy).toMatch(/vm init/);
+  });
+
+  it("microvm vm-instance check is skipped when limactl itself is missing, regardless of vmInstanceStatus", () => {
+    const cs = runDoctorChecks("microvm", probe({ limaAvailable: () => false, vmInstanceStatus: () => "Running" }));
+    expect(get(cs, "vm-instance").status).toBe("skip");
+    expect(blocking(cs)).not.toContain("vm-instance");
+  });
+
+  it("non-microvm tiers never include a vm-instance check", () => {
+    expect(runDoctorChecks("container", OK_PROBE).find((c) => c.id === "vm-instance")).toBeUndefined();
   });
 
   it("Node < 20 fails", () => {

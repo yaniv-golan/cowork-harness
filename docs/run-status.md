@@ -108,8 +108,41 @@ cowork-harness status "$OUT_DIR" --follow
     box). Raise it if you deliberately run with a longer `COWORK_HARNESS_STATUS_INTERVAL_MS` and don't
     want staleness to trip prematurely.
 
+## `mounts.json` — a run's VM-path resolution context
+
+`status.json`'s sibling `mounts.json` records the mount/host-path resolution context a run used —
+which mount name (`mnt/<name>/...`) maps to which real host directory, plus the resolved `outputs`/
+`uploads` staging dirs and the tier the run actually resolved to. It exists so a process reading a KEPT
+run dir later (after the writer has exited) can rebuild that context instead of only seeing raw VM
+paths (`/sessions/<id>/mnt/...`) — the same information the live run already showed a human via
+host-path translation at `hostloop`, but which would otherwise be lost the moment the process exits.
+
+Written unconditionally, at every fidelity tier, right after the run's launch plan is built — same
+convention as `status.json`: best-effort (a write failure warns and never fails the run), and purely
+diagnostic (nothing reads it to decide a verdict).
+
+```json
+{ "v": 1, "sessionId": "…", "effectiveFidelity": "hostloop",
+  "outputsHostDir": "/Users/you/.cowork-harness/runs/.../work/session/mnt/outputs",
+  "uploadsHostDir": "/Users/you/.cowork-harness/runs/.../work/session/mnt/uploads",
+  "folders": { "myproject": "/Users/you/code/myproject" } }
+```
+
+The first consumer is `cowork-harness trace --translate-paths` (text output only — `--output-format
+json` always stays the raw machine record): when a run's `mounts.json` is present and its
+`effectiveFidelity` was `"hostloop"` (the one tier where the resolved host path is
+production-identical — see `src/run/display-translate.ts`'s module header), `trace`'s tool/text rows
+show host paths instead of VM paths. Absent, corrupt, or a future-major-version `mounts.json` all
+degrade silently to the untranslated VM-path rows you'd see today.
+
+`mounts.json` never reaches a `record`ed cassette — a cassette snapshots exactly `events.jsonl` +
+`control-out.jsonl` + the run's user-visible-roots subtree under `<outDir>/work/...`, and `mounts.json`
+lives at the `outDir` ROOT, a sibling of `work/`, so it is structurally unreachable from that walk.
+
 ## See also
 
 - [`decider-dir.md`](./decider-dir.md) — the closest existing precedent (`gates --follow` + `done.json`)
   for polling a file for run state.
 - [`../src/run/run-status.ts`](../src/run/run-status.ts) — the implementation.
+- [`../src/run/vm-path-ctx-file.ts`](../src/run/vm-path-ctx-file.ts) — the `mounts.json`
+  serializer/reader implementation.

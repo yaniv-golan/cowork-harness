@@ -24,7 +24,7 @@ When Claude Desktop updates (on a machine that has the app installed):
 cowork-harness sync --diff      # show what moved vs the committed baseline
 ```
 
-`sync` reads the live install (`claude-code-vm/.sdk-version`, `config.json`) and the `app.asar`, re-derives the volatile fields, and **merges them onto the latest committed baseline** so the stable structural fields carry over. Review the diff:
+`sync` reads the live install (`claude-code-vm/.sdk-version`, `config.json`) and the `app.asar`, re-derives the volatile fields, and **merges them onto the latest committed baseline** so the stable structural fields carry over. Review the diff — this is an actual historical `sync --diff` output kept only to illustrate the format; a run today would diff against the repo's current latest baseline, not these two, which are now the oldest on record:
 
 ```
 === diff vs latest committed baseline (desktop-1.11847.5) ===

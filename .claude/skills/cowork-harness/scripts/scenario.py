@@ -126,8 +126,9 @@ if UNCLASSIFIED_KEYS:
     )
 # Embedded fallback for the top-level scenario keys — kept EQUAL to the generated `topLevelKeys`
 # (test-enforced, like _CLASSIFIED_KEYS for assert keys) so a missing assertion-keys.json can't silently
-# reintroduce key drift. `profile`/`assertions` are NOT here — they are deprecated aliases handled by the
-# special-cases in the unknown-key check below (`k != "assertions" and k != "profile"`).
+# reintroduce key drift. `assertions` is NOT here — it's a hard error handled by its own special-case
+# in the unknown-key check below (`k != "assertions"`). `profile` is retired vocabulary and now falls
+# through to that same unknown-key check like any other typo — no special-case for it.
 _EMBEDDED_TOP_LEVEL_KEYS = {
     "name",
     "baseline",
@@ -260,7 +261,7 @@ def lint_doc(doc, path, raw_lines):
 
     # W: unknown top-level keys (typo or hallucinated schema)
     for k in doc:
-        if k not in TOP_LEVEL_KEYS and k != "assertions" and k != "profile":
+        if k not in TOP_LEVEL_KEYS and k != "assertions":
             findings.append(
                 Finding(
                     "WARN",
@@ -426,19 +427,28 @@ def lint_doc(doc, path, raw_lines):
 _DQ_REGEX_LINE = re.compile(
     r'^\s*-?\s*(' + "|".join(sorted(REGEX_KEYS)) + r')\s*:\s*"([^"]*\\[^"]*)"'
 )
+# A run of an EVEN number of consecutive backslashes in a double-quoted YAML scalar is a properly
+# paired escape (`\\` -> a literal `\`), so e.g. "\\d+ items" decodes to the valid regex `\d+ items` —
+# not a mistake. An ODD run leaves one backslash unpaired, which is the actual footgun (YAML either
+# eats it or errors, depending on what follows). Only flag the odd case.
+_ODD_BACKSLASH_RUN = re.compile(r"\\+")
+
+
+def _has_unpaired_backslash(s):
+    return any(len(m.group(0)) % 2 == 1 for m in _ODD_BACKSLASH_RUN.finditer(s))
 
 
 def _lint_regex_quoting(path, raw_lines):
     out = []
     for i, line in enumerate(raw_lines, start=1):
         m = _DQ_REGEX_LINE.match(line)
-        if m:
+        if m and _has_unpaired_backslash(m.group(2)):
             out.append(
                 Finding(
                     "WARN",
                     "regex-double-quoted",
-                    f"`{m.group(1)}` uses a DOUBLE-quoted regex containing a backslash "
-                    f'("{m.group(2)}") — YAML strips the backslash, so the regex is wrong.',
+                    f"`{m.group(1)}` uses a DOUBLE-quoted regex containing an unescaped backslash "
+                    f'("{m.group(2)}") — YAML strips it, so the regex is wrong.',
                     "Single-quote the regex (e.g. '\\d+') or use a block scalar. Use [\\s\\S] not . to span turns.",
                     path,
                     i,

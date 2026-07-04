@@ -39,8 +39,8 @@ protocol layer or run-loop bookkeeping in the CLI.
   gate-steering silently no-ops (the O7 bug). ELF-verified; a regression test pins it.
 - **"profile" is retired vocabulary.** Synced release ground truth = **`PlatformBaseline`** (`baseline:` /
   `baselines/`); authored setup = **`SessionConfig`** (`session:` / `sessions/`). The `profile:`
-  scenario key is retired vocabulary — still accepted as an alias for `baseline:` with a warning — do not
-  reintroduce the term.
+  scenario key is retired vocabulary — the alias is gone and it is now rejected as an unknown key — do
+  not reintroduce the term.
 - **A new assertion must pick its replay class.** *Content* assertions (read only `ctx.transcript` / the
   record) go in `src/run/cassette.ts` `contentKeys` so they run on the token-free `replay` PR gate;
   *filesystem / egress* assertions do NOT — they are excluded **by omission** from `contentKeys`, so they

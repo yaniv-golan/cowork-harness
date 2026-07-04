@@ -173,3 +173,24 @@ def test_label_choose_no_order_advisory(tmp_path):
     # by-label is reproducible → no advisory.
     rules = _rules('answers:\n  - when_question: ".*"\n    choose: "Markdown"\n', tmp_path)
     assert "positional-choose-order" not in rules
+
+
+# --- regex-quoting: odd vs even backslash runs (a correctly-escaped "\\d" is NOT a mistake) ---
+
+
+def test_double_quoted_odd_backslash_is_flagged(tmp_path):
+    # a single backslash in a double-quoted regex is a real footgun — YAML eats/mangles it.
+    rules = _rules('assert:\n  - transcript_matches: "\\d+ items"\n', tmp_path)
+    assert "regex-double-quoted" in rules
+
+
+def test_double_quoted_even_backslash_is_not_flagged(tmp_path):
+    # "\\d+ items" is a CORRECTLY double-quote-escaped regex (YAML decodes it to `\d+ items`) — the
+    # linter must not false-positive on properly paired backslashes.
+    rules = _rules('assert:\n  - transcript_matches: "\\\\d+ items"\n', tmp_path)
+    assert "regex-double-quoted" not in rules
+
+
+def test_single_quoted_regex_never_flagged(tmp_path):
+    rules = _rules("assert:\n  - transcript_matches: '\\d+ items'\n", tmp_path)
+    assert "regex-double-quoted" not in rules

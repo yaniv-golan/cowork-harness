@@ -1,6 +1,6 @@
 # Fidelity tiers & answer paths
 
-Self-contained reference. Tracks `cowork-harness 0.22.0` (baseline `desktop-1.18286.0`).
+Self-contained reference. Tracks `cowork-harness 0.23.0` (baseline `desktop-1.18286.0`).
 
 ## Fidelity tiers (`fidelity:` in the scenario)
 
@@ -187,5 +187,6 @@ and `scaffold` refuse to treat a partial run's half-finished output as a passing
   redact from logs (beyond the auth tokens + `ANTHROPIC_CUSTOM_HEADERS`).
 - `COWORK_HARNESS_SOFT_MISSING` — downgrade a missing mount source from hard-error to warn-and-skip.
 - `COWORK_VM_GATEWAY` / `COWORK_VM_PROXY_PORT` / `COWORK_LIMA_INSTANCE` — L2 (microVM) knobs.
-- `COWORK_LOCKDOWN` — default `on`: **aborts loudly** if the L2 guest firewall fails to apply (no
-  silent unprotected run). Set `=off` to opt out and run without isolation deliberately.
+- `COWORK_LOCKDOWN` — default `on`: gates sandbox hardening on every isolated tier — **aborts loudly**
+  if the L2 guest firewall fails to apply (no silent unprotected run), and also gates the
+  `container`/`hostloop` Docker hardening. Set `=off` to opt out and run without isolation deliberately.

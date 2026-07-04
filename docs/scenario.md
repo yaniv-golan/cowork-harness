@@ -61,9 +61,8 @@ assert:                                  # pass/fail checks (see below)
   - egress_denied: evil.example.com
 ```
 
-> **Use `baseline:`, not `profile:`.** `profile:` was an earlier name for this key; the harness still
-> remaps a top-level `profile:` to `baseline:` and emits a `::warning::` if it sees one, but write
-> `baseline:`.
+> **Use `baseline:`, not `profile:`.** `profile:` was an earlier name for this key; it is retired —
+> a scenario carrying `profile:` now errors as an unknown key, so write `baseline:`.
 
 ## Fidelity tiers (`fidelity:`)
 
@@ -284,7 +283,7 @@ if *every* key passes (don't rely on the first; keep one concern per item unless
 | `allow_missing_capability: true` | verdict modifier (**live tiers only**) — suppresses the default-fail when the lean/`core` agent image omits a capability the skill used but real Cowork ships (OCR/LibreOffice/markitdown/opencv/PDF-tables); assert only when the skill's fallback is genuinely equivalent, else rebuild full parity (`--build-arg COWORK_FULL_PARITY=1`). Also opts out of the `requires_capabilities` declared-need check below. |
 | `allow_l0_plugin_divergence: true` | verdict modifier — opts into L0/protocol plugin divergence, suppressing the plugin-fidelity default-fail |
 | `allow_stall: true` | verdict modifier — suppresses the default-fail when a run ends on a question having done no productive tool work after its last gate (the agent asked for input and stopped — incl. re-asking in plain text *after* answering an `AskUserQuestion`); assert only when ending on a question is the intended terminal state, otherwise script the answer (`answer:` / `--answer` / a decider) |
-| `transcript_no_host_path: true` | no host path (`/Users/`, `/opt/cowork/`, `/home/`, `/root/`) leaked into model-visible text — **incompatible with `hostloop`**: its native file tools legitimately expose real host paths (that's the tier's whole point), so this assertion fails BY DESIGN there (the harness warns loud at run start if you assert it anyway); use `container`/`microvm` for this check |
+| `transcript_no_host_path: true` | no host path (`/Users/`, `/opt/cowork/`, `/home/`, `/root/`) leaked into model-visible text — **incompatible with `hostloop` AND `protocol`**: hostloop's native file tools legitimately expose real host paths (that's the tier's whole point), and protocol (L0) runs the agent's file tools on the real host cwd with no sealed filesystem, so this assertion fails BY DESIGN at both (the harness warns loud at run start if you assert it anyway); use `container`/`microvm` for this check |
 | `egress_denied: <host>` | the host was blocked by the egress proxy |
 | `egress_allowed: <host>` | the host was allowed through |
 | `artifact_json: {…}` | assert over a JSON artifact's contents — see below |
@@ -496,7 +495,7 @@ The deliverable a skill produces lands at the `outputsDir` (`…/mnt/outputs`), 
 in the `--output-format json` envelope.
 
 **Terminal output.** `run` is verdict-first and prints the **failing transcript inline** on a `FAIL`;
-`--verbose`/`-V` shows the transcript for every scenario, `--quiet` shows only the verdict. `--output-format
+`--verbose` shows the transcript for every scenario, `--quiet` shows only the verdict. `--output-format
 json` emits the machine envelope `{tool, version, command, ok, results[], error}` on stdout (one
 `RunResult` per scenario; overall pass = `result==="success" && assertions.every(pass)` **AND a clean
 `computeVerdict`** — a verdict signal like `stalled` (ended on a question with no productive work after its last gate), `transport_error`, or a
@@ -555,18 +554,23 @@ example.
 
 One scenario, a cross-product of axes, one command. `--matrix <matrix.yaml>` runs the resolved scenario
 once per cell of a matrix file's declared axes and reports one row per cell, instead of one pass/fail for
-the whole run:
+the whole run. For a real, runnable starting point (not just the illustrative snippet below), see
+[`examples/matrices/csv-metrics-matrix.yaml`](../examples/matrices/csv-metrics-matrix.yaml) — it matrixes
+`examples/scenarios/csv-metrics.yaml` across the two most recent shipped baselines:
 
 ```bash
-cowork-harness run examples/scenarios/csv-metrics.yaml --matrix matrix.yaml --concurrency 2
+cowork-harness run examples/scenarios/csv-metrics.yaml --matrix examples/matrices/csv-metrics-matrix.yaml --concurrency 2
 ```
 
-`matrix.yaml`:
+A `matrix.yaml` can declare any/all of three axes:
 
 ```yaml
 baselines: [desktop-1.17377.2, desktop-1.18286.0]   # optional axis; each value must resolve via loadBaseline
 models: [claude-sonnet-4-6, claude-opus-4-8]         # optional axis; overrides the session model per cell
-skill_dirs: [../variants/v1/my-skill, ../variants/v2/my-skill]   # optional axis; substitutes the skill under test
+# skill_dirs: [<path-to-variant-A>, <path-to-variant-B>]   # optional axis; substitutes the skill under test —
+#   point this at real alternate skill directories in your own repo. This repo doesn't ship a second variant
+#   of csv-metrics to matrix against, so the shipped example (examples/matrices/csv-metrics-matrix.yaml) omits
+#   this axis rather than inventing fake paths.
 ```
 
 - Any axis may be omitted; an omitted/empty axis contributes exactly one cell (unmodified), so a matrix

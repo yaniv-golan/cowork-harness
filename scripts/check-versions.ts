@@ -14,7 +14,13 @@
 //   5. README floor === floor: every `cowork-harness@>=X.Y.Z` in README.md matches the SKILL.md floor
 //                              (README is not version-controlled by the package; it drifts silently otherwise).
 //   6. ref stamps === tracks:  each `references/*.md` "Tracks `cowork-harness X.Y.Z`" matches tracks-harness.
-import { readFileSync } from "node:fs";
+//   7. baseline pins agree:    SKILL.md's `(baseline desktop-X.Y.Z)`, README.md's "latest shipped baseline"
+//                              sentence, and docs/cowork-spawn-contract-*.md's "current baseline is" sentence
+//                              all agree with each other AND are not behind the max version present in
+//                              baselines/desktop-*.json. (DESIGN.md is deliberately NOT checked here — its
+//                              baseline mentions are point-in-time verification stamps, not "current" pins,
+//                              and are allowed to lag until a real re-verification pass.)
+import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -48,7 +54,38 @@ export function checkVersions(): { ok: boolean; errors: string[]; values: Record
   const tracks = skillMd.match(/tracks-harness:\s*cowork-harness\s+(\d+\.\d+\.\d+)/)?.[1];
   const floor = skillMd.match(/cowork-harness@>=(\d+\.\d+\.\d+)/)?.[1];
 
-  const values = { pkg, lockRoot, lockPkg, market, plugin, skillVer, tracks, floor };
+  // Baseline pins (invariant 7) — extracted here so they can ride in `values` alongside the rest.
+  const skillBaseline = skillMd.match(
+    /tracks-harness:\s*cowork-harness\s+\d+\.\d+\.\d+\s*\(baseline\s+desktop-(\d+\.\d+\.\d+)\)/,
+  )?.[1];
+  const readmeText = r("README.md");
+  const readmeBaseline = readmeText.match(
+    /latest shipped baseline[^.]*?is\s+\*\*`desktop-(\d+\.\d+\.\d+)`\*\*/,
+  )?.[1];
+  const spawnContractPath = "docs/cowork-spawn-contract-1.12603.1.md";
+  const spawnContractBaseline = r(spawnContractPath).match(
+    /current baseline is\s+`desktop-(\d+\.\d+\.\d+)`/,
+  )?.[1];
+  const baselineFiles = readdirSync(join(REPO_ROOT, "baselines")).filter((f) =>
+    /^desktop-\d+\.\d+\.\d+\.json$/.test(f),
+  );
+  const baselineVersions = baselineFiles.map((f) => f.match(/^desktop-(\d+\.\d+\.\d+)\.json$/)![1]);
+  const maxBaseline = baselineVersions.reduce((max, v) => (cmp(v, max) > 0 ? v : max), baselineVersions[0]);
+
+  const values = {
+    pkg,
+    lockRoot,
+    lockPkg,
+    market,
+    plugin,
+    skillVer,
+    tracks,
+    floor,
+    skillBaseline,
+    readmeBaseline,
+    spawnContractBaseline,
+    maxBaseline,
+  };
 
   // 1. npm self-consistency
   if (!SEMVER.test(pkg)) errors.push(`package.json version "${pkg}" is not X.Y.Z`);
@@ -98,7 +135,47 @@ export function checkVersions(): { ok: boolean; errors: string[]; values: Record
     }
   }
 
-  return { ok: errors.length === 0, errors, values: { ...values, readmeFloors: readmeFloors.join(",") } };
+  // 7. baseline pins agree with each other, and none is behind the max baseline file on disk.
+  if (!skillBaseline) {
+    errors.push(`could not find "(baseline desktop-X.Y.Z)" on the tracks-harness line in SKILL.md`);
+  }
+  if (!readmeBaseline) {
+    errors.push(`could not find the "latest shipped baseline ... is **\`desktop-X.Y.Z\`**" sentence in README.md`);
+  }
+  if (!spawnContractBaseline) {
+    errors.push(`could not find "current baseline is \`desktop-X.Y.Z\`" in ${spawnContractPath}`);
+  }
+  if (baselineVersions.length === 0) {
+    errors.push(`no baselines/desktop-*.json files found — cannot compute max baseline`);
+  }
+  const pins: Array<{ label: string; version: string | undefined }> = [
+    { label: "SKILL.md tracks-harness baseline", version: skillBaseline },
+    { label: "README.md latest-shipped-baseline", version: readmeBaseline },
+    { label: `${spawnContractPath} current-baseline`, version: spawnContractBaseline },
+  ];
+  const presentPins = pins.filter((p): p is { label: string; version: string } => p.version !== undefined);
+  for (let i = 1; i < presentPins.length; i++) {
+    if (presentPins[i].version !== presentPins[0].version) {
+      errors.push(
+        `baseline pin mismatch — ${presentPins[0].label}="${presentPins[0].version}" != ${presentPins[i].label}="${presentPins[i].version}"`,
+      );
+    }
+  }
+  if (maxBaseline) {
+    for (const p of presentPins) {
+      if (cmp(p.version, maxBaseline) < 0) {
+        errors.push(
+          `${p.label}="${p.version}" is behind the max baselines/desktop-*.json version "${maxBaseline}"`,
+        );
+      }
+    }
+  }
+
+  return {
+    ok: errors.length === 0,
+    errors,
+    values: { ...values, readmeFloors: readmeFloors.join(","), baselineVersions: baselineVersions.join(",") },
+  };
 }
 
 function main(): void {

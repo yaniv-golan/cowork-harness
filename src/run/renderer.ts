@@ -29,6 +29,19 @@ export interface RenderPlan {
    *  the raw, model-visible record.
    */
   translate?: (s: string) => string;
+  /** OSC 8 hyperlink decoration (see src/run/display-translate.ts — `linkifyForTerminal` +
+   *  `shouldLinkify`, which owns the TTY/CI/env/shareable gate; the renderer just applies whatever
+   *  it's handed, same pattern as `translate`). Absent (undefined) is identity. Applied AFTER
+   *  `translate`, and ONLY on the live-sink write path for ASSISTANT TEXT (top-level and sub-agent) —
+   *  it is never truncated live, and it's where a deliverable `computer://` link actually shows up.
+   *  Deliberately NOT applied to tool_use input summaries or tool_result heads: both are hard-sliced
+   *  to ~80 chars BEFORE any decoration could run (see `inputSummary` / the tool_result branch
+   *  below), and a sliced `computer://` URL wrapped post-slice would be a silently wrong-target link
+   *  — plain text is strictly better there than a link to the wrong path. NEVER applied to the
+   *  transcript buffer (`dump()`/the failure-footer path) — that stays escape-free, translated-but-
+   *  plain text, since it may be piped or copied verbatim.
+   */
+  linkify?: (s: string) => string;
 }
 export interface Renderer extends RunHooks {
   dump(): string;
@@ -138,21 +151,24 @@ export function makeRenderer(plan: RenderPlan, write: Sink = stderr): Renderer {
             // below) and what's later DUMPED (renderFooter's failure transcript) agree — production
             // deep-walks every block a human eventually sees, never just the live stream.
             const text = plan.translate ? plan.translate(e.text) : e.text;
-            transcript.push(text);
+            transcript.push(text); // buffer stays escape-free: linkify is a LIVE-sink-only decoration
             // The assistant message IS the deliverable in skill/chat mode — show it in FULL (no
             // truncation). Truncation only applies to the run failure-transcript dump (renderFooter).
-            if (plan.live) write(`\n${bold(plan, "claude›")} ${text}\n`);
+            if (plan.live) write(`\n${bold(plan, "claude›")} ${plan.linkify ? plan.linkify(text) : text}\n`);
           } else if (plan.verbose && e.text.trim()) {
             // sub-agent/dispatch-child text gets the SAME transform — production translates the whole
             // message tree, not just the top-level agent's text (plan §P2 "Scope note").
             const text = plan.translate ? plan.translate(e.text) : e.text;
-            write(`  ${dim(plan, "↳ " + text)}\n`);
+            write(`  ${dim(plan, "↳ " + (plan.linkify ? plan.linkify(text) : text))}\n`);
           }
           break;
         case "tool_use":
           if (!e.parentToolUseId) {
             tools++;
             if (e.toolUseId) topLevelToolCalls.add(e.toolUseId);
+            // No `plan.linkify` here, deliberately: `inputSummary` hard-slices to ~80 chars, and a
+            // `computer://` URL linkified AFTER that slice would be a silently wrong-target link (see
+            // the `linkify` doc on `RenderPlan` above).
             if (plan.progress)
               write(
                 `  ${dim(plan, toolMarker(e.name) + " " + e.name + (plan.verbose ? " " + inputSummary(e.input, plan.compact, plan.translate) : ""))}\n`,
@@ -165,6 +181,8 @@ export function makeRenderer(plan: RenderPlan, write: Sink = stderr): Renderer {
           if (plan.progress) {
             // translate, THEN collapse the session-root, THEN slice to 80 chars — matching inputSummary's
             // ordering, so --compact stays consistent between a tool's input line and its outcome line.
+            // No `plan.linkify` here either, same reason as the tool_use branch above: this line is
+            // hard-sliced to 80 chars, so linkifying it could wrap a truncated (wrong-target) URL.
             let head = e.text.split("\n")[0];
             if (plan.translate) head = plan.translate(head);
             if (plan.compact) head = collapseSessionRoot(head);

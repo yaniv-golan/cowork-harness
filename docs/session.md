@@ -24,6 +24,7 @@ effort: high                     # setEffort: low | medium | high | xhigh
 max_thinking_tokens: 31999       # thinking budget: a number, or a per-model map {default, <model>: <n>}; default 31999
 permission_mode: default         # setPermissionMode: default | acceptEdits | plan | bypassPermissions
 permission_parity: cowork        # cowork (unscripted tool calls allowed, Cowork default) | strict (deny unscripted)
+account_name: Ada Lovelace       # {{accountName}} in the prompt append's <env> "User name:" line; default "User" (>=1.18286.0 reconstruction)
 
 # ── work folders / projects (Cowork "add folder" / Spaces) → mnt/<folder-name> ──
 #    (mount name = collision-resolved folder basename; ≥1.14271.0, older baselines use mnt/.projects/<id>)
@@ -112,6 +113,7 @@ that skill instead of the shared root.
 | `max_thinking_tokens` | number \| map | thinking budget | a flat **positive integer**, or a per-model map `{ default, <model>: <n> }` of them (0/negative are rejected), resolved per-model (Cowork's `f7e`) and emitted as `MAX_THINKING_TOKENS`. Default `31999` (binary-verified `DEFAULT_MAX_THINKING_TOKENS`). The `extended_thinking` bool is inert — not a real Cowork toggle; use this field. |
 | `permission_mode` | enum | permission mode | `default` \| `acceptEdits` \| `plan` \| `bypassPermissions` → `--permission-mode`. |
 | `permission_parity` | enum | (harness policy) | `cowork` (default) \| `strict`. `cowork` mirrors Cowork's permission default — unscripted tool calls are allowed; `strict` denies any tool call that no scripted answer / decider covers. Affects the harness `Decider`, not a Cowork control. |
+| `account_name` | string | signed-in account name | Rendered into the prompt append's `<env>` "User name:" line (`{{accountName}}`, ≥1.18286.0 reconstruction). Real Cowork uses the signed-in account's name; defaults to `"User"` when unset. |
 
 ### Folders, projects, uploads
 | Field | Maps to | Mounted at |

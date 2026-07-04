@@ -87,7 +87,7 @@ export function fy(paths: string[]): Map<string, string> {
     segsByPath.set(p, reversedSegments(p));
     out.set(p, basename(p));
   }
-  for (let i = 20; i-- > 0; ) {
+  for (let i = 20; i-- > 0;) {
     const byName = new Map<string, string[]>();
     for (const [p, name] of out) {
       const group = byName.get(name);

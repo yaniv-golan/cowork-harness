@@ -34,6 +34,7 @@ import { pMapBounded } from "../async-pool.js";
  *  pool (each run creates two networks) and press model API rate limits — both surface as actionable errors. */
 const MAX_RECORD_CONCURRENCY = 8;
 import { evaluate, budgetFields } from "../assert.js";
+import { extractComputerLinks } from "./computer-links.js";
 import { makeRenderer, renderFooter, type RenderPlan } from "./renderer.js";
 import { jsonEnvelope, parseOutputFormat } from "./envelope.js";
 import { parseArgs } from "../cli-args.js";
@@ -384,10 +385,11 @@ export function fingerprintSkillDrift(rec: Fingerprint, live: Fingerprint): stri
  *  can't tell apart from customer data). Two stable structural forms:
  *   - the `system/init` event (tools/mcp_servers/skills/cwd registry), and
  *   - the `initialize` `control_response` (`request_id: "init-1"`; body = commands/agents/models/account).
- *  These get `email` + `path` scanning (email is universal — the `account` field can carry the dev's own
- *  email; path is universal too — these messages' own structural fields, `cwd`/`plugins[].path`/
- *  `memory_paths`, are exactly where a real local filesystem path lives, unlike the noisy classes which
- *  are suppressed only here). */
+ *  These get `email` + `path` + `machine-inventory` scanning (email is universal — the `account` field
+ *  can carry the dev's own email; path is universal too — these messages' own structural fields,
+ *  `cwd`/`plugins[].path`/`memory_paths`, are exactly where a real local filesystem path lives;
+ *  machine-inventory is universal too — a live-enumerated app/process inventory sentinel is never
+ *  legitimate manifest boilerplate, unlike the noisy classes which are suppressed only here). */
 function isCapabilityManifest(line: string): boolean {
   let m: { type?: string; subtype?: string; response?: { request_id?: string; response?: Record<string, unknown> } };
   try {
@@ -407,8 +409,8 @@ function isCapabilityManifest(line: string): boolean {
 
 export function scanCassette(cassette: Cassette, allow: AllowInput[]): ScanFinding[] {
   const findings: ScanFinding[] = [];
-  const FULL = DEFAULT_SCAN_PATTERNS; // email + currency + domain + path
-  const MANIFEST = MANIFEST_SCAN_PATTERNS; // email + path — for the capability-manifest messages
+  const FULL = DEFAULT_SCAN_PATTERNS; // email + currency + domain + path + machine-inventory
+  const MANIFEST = MANIFEST_SCAN_PATTERNS; // email + path + machine-inventory — for the capability-manifest messages
   // Whole-token allowlist check against an arbitrary string (the artifact PATH), mirroring scan.ts's
   // `allowed`: an unscoped `--allow` (or one scoped to `cls`) whose regex matches the ENTIRE path
   // clears the finding. Used to give a committed-but-unscannable binary deliverable a documented
@@ -419,7 +421,8 @@ export function scanCassette(cassette: Cassette, allow: AllowInput[]): ScanFindi
       if (p.cls !== undefined && p.cls !== cls) return false;
       return new RegExp(`^(?:${p.re.source})$`, p.re.flags.replace("g", "")).test(path);
     });
-  // Transcript: full net EXCEPT the capability-manifest messages (catalog noise), where only email + path run.
+  // Transcript: full net EXCEPT the capability-manifest messages (catalog noise), where only
+  // email + path + machine-inventory run.
   cassette.events.forEach((l, i) => findings.push(...scanText(l, `events[${i}]`, allow, isCapabilityManifest(l) ? MANIFEST : FULL)));
   cassette.controlOut?.forEach((l, i) =>
     findings.push(...scanText(l, `controlOut[${i}]`, allow, isCapabilityManifest(l) ? MANIFEST : FULL)),
@@ -1026,6 +1029,31 @@ export function redactCassette(cassette: Cassette, policy: RedactionPolicy): Cas
   };
 }
 
+/** The model-visible TEXT surfaces of a cassette's raw event lines: assistant text blocks + the final
+ *  `result` string. Used ONLY for base-vs-redacted comparison in the guard below, so it needn't replicate
+ *  run.ts's exact transcript assembly (e.g. subagent filtering) — both sides go through the SAME
+ *  extraction and only the DIFFERENCE matters. */
+function modelVisibleText(events: string[]): string {
+  const parts: string[] = [];
+  for (const line of events) {
+    let e: unknown;
+    try {
+      e = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (typeof e !== "object" || e === null) continue;
+    const ev = e as { type?: string; result?: unknown; message?: { content?: unknown } };
+    if (ev.type === "assistant" && Array.isArray(ev.message?.content)) {
+      for (const b of ev.message.content as { type?: string; text?: unknown }[])
+        if (b?.type === "text" && typeof b.text === "string") parts.push(b.text);
+    } else if (ev.type === "result" && typeof ev.result === "string") {
+      parts.push(ev.result);
+    }
+  }
+  return parts.join("\n");
+}
+
 /** Cardinal-sin guard: redaction must be VERDICT-PRESERVING. Replay both the pre-redaction and the
  *  redacted cassette (token-free) and compare verdicts; if redaction flipped any replay-checkable assertion
  *  (e.g. stripped a value a `transcript_not_matches` keys on, manufacturing a green), throw — never write a
@@ -1037,7 +1065,12 @@ export function redactCassette(cassette: Cassette, policy: RedactionPolicy): Cas
  *  2. Failing assertion messages, normalized so [REDACTED] substitutions are tolerated while unexpected
  *     message mutations (e.g. a body swap that changes which value triggered the failure) are caught.
  *  3. Artifact SHA-256 hashes for text bodies — a redaction that replaces a body while keeping the
- *     assertion passing would corrupt the cassette's replay-time sha256 verify; catch it here first. */
+ *     assertion passing would corrupt the cassette's replay-time sha256 verify; catch it here first.
+ *  4. `computer://` link COUNTS over the model-visible text. A redaction pattern that eats a link's
+ *     closing delimiter (e.g. a path class that doesn't exclude `)`) destroys the link at extraction
+ *     time — `computer_links_resolve` then passes VACUOUSLY on replay (zero links = presence-gated
+ *     pass) while the verdict compare above sees pass==pass. A dropped link is a manufactured green,
+ *     not a privacy fix. (The first committed hostloop cassette shipped exactly this bug.) */
 export async function assertRedactionVerdictPreserved(base: Cassette, redacted: Cassette): Promise<void> {
   const [rb, rr] = await Promise.all([replayCassette(base), replayCassette(redacted)]);
   const vb = computeVerdict(rb, "replay");
@@ -1096,12 +1129,17 @@ export async function assertRedactionVerdictPreserved(base: Cassette, redacted: 
 
   const inconsistentBodies = bodyShaInconsistent(redacted);
 
+  // 4. computer:// link structure must survive redaction (see the doc comment).
+  const baseLinkCount = extractComputerLinks(modelVisibleText(base.events)).length;
+  const redactedLinkCount = extractComputerLinks(modelVisibleText(redacted.events)).length;
+
   const verdictMismatch = vb.pass !== vr.pass;
   const pairsMismatch = basePairs.join("|") !== redactedPairs.join("|");
   const msgsMismatch = failedMsgs(rb).join("|") !== failedMsgs(rr).join("|");
   const bodyShaBroken = inconsistentBodies.length > 0;
+  const linksDestroyed = baseLinkCount !== redactedLinkCount;
 
-  if (verdictMismatch || pairsMismatch || msgsMismatch || bodyShaBroken) {
+  if (verdictMismatch || pairsMismatch || msgsMismatch || bodyShaBroken || linksDestroyed) {
     let detail: string;
     if (verdictMismatch) {
       detail = `pre-redaction pass=${vb.pass} → redacted pass=${vr.pass}`;
@@ -1111,8 +1149,13 @@ export async function assertRedactionVerdictPreserved(base: Cassette, redacted: 
       detail = `assertion failures changed: [${bf.join(", ")}] → [${rf.join(", ")}]`;
     } else if (msgsMismatch) {
       detail = "failing assertion messages changed unexpectedly after redaction";
-    } else {
+    } else if (bodyShaBroken) {
       detail = `redacted artifact body sha256 no longer matches its bytes (replay would reject as corrupt): ${inconsistentBodies.join(", ")}`;
+    } else {
+      detail =
+        `redaction destroyed computer:// link structure: ${baseLinkCount} link(s) pre-redaction → ${redactedLinkCount} after — ` +
+        `computer_links_resolve would pass vacuously on replay (zero links = pass). Fix the redaction pattern to preserve ` +
+        `link delimiters (exclude \`)\`/\`]\`/backtick from path character classes), or redact only the machine-specific path prefix`;
     }
     throw new Error(
       `cowork-harness: redaction changed assertion failures: ${detail} — redaction altered an ` +
@@ -1331,7 +1374,8 @@ export async function cmdRecord(args: string[]) {
       ],
       noDashValue: ["--out", "--decider-dir"],
       enums: { "--output-format": ["text", "json"], "--on-unanswered": ["fail", "first"] },
-      aliases: { "-q": "--quiet", "-V": "--verbose" },
+      // no `-V`: verbose is long-only everywhere (`-v` is version at the top level; the A3 shift-key-typo fix).
+      aliases: { "-q": "--quiet" },
     });
   } catch (e) {
     log((e as Error).message);
@@ -1909,7 +1953,7 @@ export async function cmdReplay(args: string[]) {
       booleans: ["--strict", "--fail-on-skill-drift", "--reassert", "--quiet", "--verbose"],
       values: ["--output-format", "--assert-from"],
       enums: { "--output-format": ["text", "json"] },
-      aliases: { "-q": "--quiet", "-V": "--verbose" },
+      aliases: { "-q": "--quiet" },
     });
   } catch (e) {
     log(String((e as Error).message));
@@ -2086,10 +2130,10 @@ export function cmdVerifyCassettes(args: string[]) {
     p = parseArgs(args, {
       booleans: ["--skip-privacy", "--skip-staleness", "--quiet", "--verbose"],
       values: ["--output-format"],
-      repeated: ["--allow", "--allow-domain", "--allow-email", "--allow-path", "--allow-file"],
+      repeated: ["--allow", "--allow-domain", "--allow-email", "--allow-path", "--allow-machine-inventory", "--allow-file"],
       enums: { "--output-format": ["text", "json"] },
       noDashValue: ["--allow-file"],
-      aliases: { "-q": "--quiet", "-V": "--verbose" },
+      aliases: { "-q": "--quiet" },
     });
   } catch (e) {
     log(String((e as Error).message));
@@ -2105,9 +2149,9 @@ export function cmdVerifyCassettes(args: string[]) {
   const doPrivacy = !skipPrivacy;
   const doStaleness = !skipStaleness;
   // Allow model: each entry is whole-token anchored + class-scoped. A bare `--allow` applies to every
-  // class (back-compat); `--allow-domain`/`--allow-email`/`--allow-path` scope to one class so a domain
-  // allow can't bleed into the email tripwire. `--allow-file` loads bare (all-class) patterns from a
-  // version-controlled file, one per line, `#` comments and blanks ignored.
+  // class (back-compat); `--allow-domain`/`--allow-email`/`--allow-path`/`--allow-machine-inventory`
+  // scope to one class so a domain allow can't bleed into the email tripwire. `--allow-file` loads bare
+  // (all-class) patterns from a version-controlled file, one per line, `#` comments and blanks ignored.
   const allow: AllowPattern[] = [];
   const addAllow = (src: string, cls: string | undefined, flag: string): void => {
     try {
@@ -2121,6 +2165,7 @@ export function cmdVerifyCassettes(args: string[]) {
   for (const src of p.repeated["--allow-domain"] ?? []) addAllow(src, "domain", "--allow-domain");
   for (const src of p.repeated["--allow-email"] ?? []) addAllow(src, "email", "--allow-email");
   for (const src of p.repeated["--allow-path"] ?? []) addAllow(src, "path", "--allow-path");
+  for (const src of p.repeated["--allow-machine-inventory"] ?? []) addAllow(src, "machine-inventory", "--allow-machine-inventory");
   for (const file of p.repeated["--allow-file"] ?? []) {
     let body: string;
     try {
@@ -2137,7 +2182,7 @@ export function cmdVerifyCassettes(args: string[]) {
   const target = p.positionals[0];
   if (!target) {
     log(
-      "usage: verify-cassettes <file|dir> [--skip-privacy|--skip-staleness] [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-path <regex>]... [--allow-file <path>]... [--output-format json]",
+      "usage: verify-cassettes <file|dir> [--skip-privacy|--skip-staleness] [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-path <regex>]... [--allow-machine-inventory <regex>]... [--allow-file <path>]... [--output-format json]",
     );
     return process.exit(2);
   }
@@ -2413,6 +2458,51 @@ function buildFolderPrefixMap(cassette: Cassette, cassetteDir?: string): Map<str
   return map;
 }
 
+/** Assertion keys ALWAYS evaluated on replay, independent of controlOut/manifest presence. Exported as the
+ *  single source of truth for anything (docs, tests) that needs to enumerate replay-evaluated keys — see
+ *  `test/cassette-docs-sync.test.ts`, which asserts docs/cassette.md documents every key here. */
+export const ALWAYS_CONTENT_KEYS: (keyof Assertion)[] = [
+  "transcript_contains",
+  "transcript_not_contains",
+  "transcript_matches",
+  "transcript_not_matches",
+  "tool_result_contains",
+  "tool_result_not_contains",
+  "tool_called",
+  "tool_not_called",
+  "subagent_tool_used",
+  "subagent_tool_absent",
+  "subagent_dispatched",
+  "subagent_declared_but_unused",
+  "dispatch_count_max",
+  "skill_triggered",
+  "no_skill_triggered",
+  "max_cost_usd",
+  "max_tokens",
+  "tool_calls_max",
+  "max_turns",
+  "result",
+  // Verdict modifiers — NOT filesystem/egress assertions. Keep all of them on replay (each evaluates to a
+  // no-op pass via assert.ts) so a standalone modifier neither inflates the "filesystem/egress skipped"
+  // count nor emits a misleading warning, AND so the replay path actually exercises their assert.ts noop
+  // branches. The signal each one suppresses is independently zeroed on replay (handled in computeVerdict,
+  // not here), so keeping the key as a content no-op cannot change a verdict outcome. Single source: the
+  // VERDICT_MODIFIER_KEYS list (types.ts) — a newly-added modifier lands here automatically.
+  ...VERDICT_MODIFIER_KEYS,
+];
+
+/** Assertion keys evaluated on replay only when `controlOut` (full-fidelity) is present. */
+export const QUESTION_GATE_KEYS: (keyof Assertion)[] = ["question_asked", "questions_count_max", "gate_answers_delivered"];
+
+/** Assertion keys evaluated on replay only when the cassette carries an `artifacts` manifest.
+ *  `computer_links_resolve` joins this bucket (NOT ALWAYS_CONTENT_KEYS): resolving a NON-empty link set
+ *  needs either a live filesystem (not available on replay) or the cassette's `artifacts` manifest — the
+ *  exact same evidence gate `file_exists`/`user_visible_artifact` already use. A zero-link transcript
+ *  technically wouldn't need the manifest, but gating it identically avoids a live/replay asymmetry where
+ *  "zero links" quietly passes on a manifest-less cassette while any actual link forces the same
+ *  "not checkable, skipped" treatment as the other manifest keys. */
+export const MANIFEST_KEYS: (keyof Assertion)[] = ["file_exists", "user_visible_artifact", "artifact_json", "computer_links_resolve"];
+
 /** Replay a cassette through Run and re-evaluate the content assertions. With a `cassette.artifacts`
  *  manifest, filesystem assertions (file_exists/user_visible_artifact/artifact_json) ALSO run, against
  *  the materialized snapshot. `opts.strict` escalates ALL staleness findings to failing assertions;
@@ -2489,47 +2579,12 @@ export async function replayCassette(
 
   // build a conditional contentKeys — omit question/gate keys when controlOut is absent
   // (they would evaluate vacuously/incorrectly).
-  const alwaysContentKeys: (keyof Assertion)[] = [
-    "transcript_contains",
-    "transcript_not_contains",
-    "transcript_matches",
-    "transcript_not_matches",
-    "tool_result_contains",
-    "tool_result_not_contains",
-    "tool_called",
-    "tool_not_called",
-    "subagent_tool_used",
-    "subagent_tool_absent",
-    "subagent_dispatched",
-    "subagent_declared_but_unused",
-    "dispatch_count_max",
-    "skill_triggered",
-    "no_skill_triggered",
-    "max_cost_usd",
-    "max_tokens",
-    "tool_calls_max",
-    "max_turns",
-    "result",
-    // Verdict modifiers — NOT filesystem/egress assertions. Keep all of them on replay (each evaluates to a
-    // no-op pass via assert.ts) so a standalone modifier neither inflates the "filesystem/egress skipped"
-    // count nor emits a misleading warning, AND so the replay path actually exercises their assert.ts noop
-    // branches. The signal each one suppresses is independently zeroed on replay (handled in computeVerdict,
-    // not here), so keeping the key as a content no-op cannot change a verdict outcome. Single source: the
-    // VERDICT_MODIFIER_KEYS list (types.ts) — a newly-added modifier lands here automatically.
-    ...VERDICT_MODIFIER_KEYS,
-  ];
-  const questionGateKeys: (keyof Assertion)[] = ["question_asked", "questions_count_max", "gate_answers_delivered"];
+  const alwaysContentKeys = ALWAYS_CONTENT_KEYS;
+  const questionGateKeys = QUESTION_GATE_KEYS;
   // with an artifact manifest, the filesystem assertions become replay-checkable (materialized below).
-  // Without a manifest they stay live-only (stripped → skip warning), exactly as before.
-  // `computer_links_resolve` joins this bucket (NOT alwaysContentKeys): resolving a NON-empty link set
-  // needs either a live filesystem (not available on replay) or the cassette's `artifacts` manifest —
-  // the exact same evidence gate `file_exists`/`user_visible_artifact` already use. A zero-link
-  // transcript technically wouldn't need the manifest, but gating it identically avoids a
-  // live/replay asymmetry where "zero links" quietly passes on a manifest-less cassette while any
-  // actual link forces the same "not checkable, skipped" treatment as the other manifest keys.
-  const manifestKeys: (keyof Assertion)[] = cassette.artifacts?.length
-    ? ["file_exists", "user_visible_artifact", "artifact_json", "computer_links_resolve"]
-    : [];
+  // Without a manifest they stay live-only (stripped → skip warning), exactly as before. See
+  // MANIFEST_KEYS' doc comment above for why computer_links_resolve joins this bucket.
+  const manifestKeys: (keyof Assertion)[] = cassette.artifacts?.length ? MANIFEST_KEYS : [];
   // deterministic exhaustiveness check — every key in the Assertion schema must appear in exactly
   // one classification bucket. If a new key is added to the schema but not here, this throws at the first
   // replay, making the oversight impossible to miss in CI.

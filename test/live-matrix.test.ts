@@ -7,8 +7,8 @@ import { loadBaseline, resolveAgentBinary } from "../src/baseline.js";
 
 /**
  * Live matrix tests (E3's own "optional live e2e", plus a regression pin for the Fable/Opus-found
- * "one cell's unanswered gate must not crash the whole matrix" bug — see docs/internal's Wave 3+4 build
- * notes for why a live test for that specific bug was originally deferred, then built here on request).
+ * "one cell's unanswered gate must not crash the whole matrix" bug; a live test for that specific bug
+ * was originally deferred, then built here on request).
  *
  * `fidelity: protocol` (L0) needs NO Docker/staged agent — just the host `claude` CLI + a live token — so
  * gating is token-only, unlike test/live-contract.test.ts (which needs Docker + the staged binary too).

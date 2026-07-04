@@ -1,4 +1,3 @@
-import { warn } from "./io.js";
 import { z } from "zod";
 
 /** Cowork's `DEFAULT_MAX_THINKING_TOKENS` (the ELF's `hre`), binary-verified = 31999. The single source
@@ -78,11 +77,6 @@ export const PlatformBaseline = z.looseObject({
     .optional(),
 });
 export type PlatformBaseline = z.infer<typeof PlatformBaseline>;
-
-/** @deprecated Renamed to `PlatformBaseline`. Kept as a re-export for one minor; remove next minor. */
-export const Profile = PlatformBaseline;
-/** @deprecated Renamed to `PlatformBaseline`. */
-export type Profile = PlatformBaseline;
 
 /** Scenario — what the user authors. */
 export const AnswerRule = z
@@ -341,10 +335,7 @@ export const ScenarioObject = z.strictObject({
     .describe(
       "scenario identity; defaults to the filename (sans extension) if omitted — an explicit value overrides that and keys the run dir + cassette",
     ),
-  baseline: z
-    .string()
-    .default("latest")
-    .describe("platform baseline to run against (auto-synced via `cowork-harness sync`); `profile:` is a deprecated alias for this field"),
+  baseline: z.string().default("latest").describe("platform baseline to run against (auto-synced via `cowork-harness sync`)"),
   session: z
     .string()
     .default("(inline)")
@@ -412,19 +403,7 @@ export const ScenarioObject = z.strictObject({
       "required consent for `fidelity: hostloop` with a writable connected folder (mode rw/rwd) — the agent gets real, software-checked-only host filesystem access there, no container sandbox; read-only/folder-less hostloop runs need no opt-in",
     ),
 });
-// Back-compat (one minor): accept the deprecated top-level `profile:` key as an alias for `baseline:`,
-// remapping it BEFORE `z.strictObject` rejects the unknown key. Remove next minor.
-export const Scenario = z.preprocess((raw) => {
-  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
-    const o = raw as Record<string, unknown>;
-    if ("profile" in o && !("baseline" in o)) {
-      const { profile, ...rest } = o;
-      warn("::warning:: scenario field `profile:` is deprecated — rename it to `baseline:` (accepted for now; removed next minor).\n");
-      return { ...rest, baseline: profile };
-    }
-  }
-  return raw;
-}, ScenarioObject);
+export const Scenario = ScenarioObject;
 export type Scenario = z.infer<typeof ScenarioObject>;
 
 /** Skill/plugin staleness fingerprint, recorded at run time. Stamped into a cassette (staleness tripwire)
@@ -521,7 +500,7 @@ export interface RunResult {
   $schema?: string;
   generator?: string;
   scenario: string;
-  prompt?: string; // the prompt that was run — persisted so `scaffold --from-run` can reconstruct the scenario
+  prompt?: string; // the prompt that was run — persisted so `scaffold <run-dir>` can reconstruct the scenario
   fidelity: string;
   baseline: string;
   result: "success" | "error";

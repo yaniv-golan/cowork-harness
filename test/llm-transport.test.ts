@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, afterEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from "vitest";
 import { claudeCliComplete } from "../src/decide/llm-transport.js";
 import { mkdtempSync, writeFileSync, rmSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -15,6 +15,11 @@ const FAKE = `#!/bin/sh
 n=$(cat "$FAKE_COUNTER" 2>/dev/null || echo 0)
 n=$((n + 1))
 echo "$n" > "$FAKE_COUNTER"
+# Dump argv and stdin so a test can assert WHERE the prompt travels (stdin, never argv — a ps-readable
+# argv leaks the prompt for the life of the child). Consume stdin unconditionally (even when no dump file
+# is requested) so the parent's write+end never blocks on an unread pipe.
+if [ -n "$FAKE_ARGV_FILE" ]; then printf '%s\\n' "$@" > "$FAKE_ARGV_FILE"; fi
+if [ -n "$FAKE_STDIN_FILE" ]; then cat > "$FAKE_STDIN_FILE"; else cat > /dev/null; fi
 case "$FAKE_MODE" in
   always-fail)
     echo '{"type":"result","is_error":true,"result":"fake operational error (on stdout, like claude -p)","modelUsage":{}}'
@@ -55,6 +60,8 @@ afterEach(() => {
   if (existsSync(counterPath)) rmSync(counterPath);
   delete process.env.FAKE_MODE;
   delete process.env.FAKE_COUNTER;
+  delete process.env.FAKE_ARGV_FILE;
+  delete process.env.FAKE_STDIN_FILE;
   delete process.env.COWORK_HARNESS_LLM_RETRIES;
   delete process.env.COWORK_HARNESS_LLM_TIMEOUT_MS;
   delete process.env.COWORK_HARNESS_LLM_MAX_BYTES;
@@ -147,5 +154,51 @@ describe("claudeCliComplete — retry transport", () => {
   it("a spawn ENOENT names the PATH / COWORK_HARNESS_CLAUDE_BIN mitigation", async () => {
     process.env.COWORK_HARNESS_CLAUDE_BIN = join(dir, "does-not-exist");
     await expect(claudeCliComplete("q", "m")).rejects.toThrow(/PATH|COWORK_HARNESS_CLAUDE_BIN/);
+  });
+
+  it("delivers the prompt on STDIN, never on argv (argv is world-readable via `ps`)", async () => {
+    process.env.FAKE_COUNTER = counterPath;
+    const argvFile = join(dir, "argv.out");
+    const stdinFile = join(dir, "stdin.out");
+    process.env.FAKE_ARGV_FILE = argvFile;
+    process.env.FAKE_STDIN_FILE = stdinFile;
+    const secret = "SECRET-PROMPT-CONTENTS-9f3a";
+    await claudeCliComplete(secret, "m");
+    const argv = readFileSync(argvFile, "utf8");
+    const stdin = readFileSync(stdinFile, "utf8");
+    expect(stdin).toContain(secret);
+    expect(argv).not.toContain(secret);
+  });
+
+  it("a malformed COWORK_HARNESS_LLM_TIMEOUT_MS is rejected loud, not silently reverted", async () => {
+    process.env.FAKE_COUNTER = counterPath;
+    process.env.COWORK_HARNESS_LLM_TIMEOUT_MS = "5m";
+    const warnings: string[] = [];
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation((chunk: unknown) => {
+      warnings.push(String(chunk));
+      return true;
+    });
+    try {
+      await claudeCliComplete("q", "m");
+    } finally {
+      spy.mockRestore();
+    }
+    expect(warnings.join("")).toMatch(/COWORK_HARNESS_LLM_TIMEOUT_MS.*not a positive number/s);
+  });
+
+  it("a malformed COWORK_HARNESS_LLM_MAX_BYTES (explicit 0) is rejected loud, not silently reverted", async () => {
+    process.env.FAKE_COUNTER = counterPath;
+    process.env.COWORK_HARNESS_LLM_MAX_BYTES = "0";
+    const warnings: string[] = [];
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation((chunk: unknown) => {
+      warnings.push(String(chunk));
+      return true;
+    });
+    try {
+      await claudeCliComplete("q", "m");
+    } finally {
+      spy.mockRestore();
+    }
+    expect(warnings.join("")).toMatch(/COWORK_HARNESS_LLM_MAX_BYTES.*not a positive number/s);
   });
 });

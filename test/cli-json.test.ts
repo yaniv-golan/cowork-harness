@@ -176,15 +176,19 @@ describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
     expect(JSON.parse(r.stdout).error.category).toBe("boundary");
   });
 
-  it("deprecated scenario field `profile:` still parses (back-compat alias) + warns on stderr", () => {
-    // `profile:` was renamed to `baseline:`; the preprocess alias accepts it for one minor with a warning.
+  it("retired scenario field `profile:` is rejected as an unknown key (no alias)", () => {
+    // `profile:` was renamed to `baseline:` and the alias is gone — it now falls through to the
+    // strictObject's unknown-key rejection. parseScenarioFile wraps the Zod throw in a UsageError,
+    // so a scenario typo surfaces as category `usage` (a user mistake), not `internal` (a harness bug).
     const { cwd } = run(["--version"]);
     writeIn(cwd, "sess.yaml", "permission_mode: default\n");
     writeIn(cwd, "b.yaml", "name: b\nprofile: latest\nsession: ./sess.yaml\nfidelity: protocol\nprompt: hi\nexpect_denied: [evil.com]\n");
     const r = spawnSync("node", [CLI, "run", "b.yaml", "--output-format=json"], { encoding: "utf8", cwd });
-    expect(r.status).toBe(3); // boundary → exit 3; alias still mapped profile→baseline
-    expect(JSON.parse(r.stdout).error.category).toBe("boundary");
-    expect(r.stderr).toMatch(/`profile:` is deprecated/); // the deprecation warning fired
+    expect(r.status).toBe(2);
+    expect(JSON.parse(r.stdout).error.category).toBe("usage");
+    expect(JSON.parse(r.stdout).error.message).toMatch(/unrecognized_keys/);
+    expect(JSON.parse(r.stdout).error.message).toMatch(/"profile"/);
+    expect(JSON.parse(r.stdout).error.message).toMatch(/b\.yaml/); // the message names the offending file
   });
 
   it("run on a non-existent scenario path → clean usage error, exit 2 (not a raw ENOENT stack)", () => {
@@ -433,20 +437,20 @@ describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
   });
 
   it("scaffold rejects an invalid --output-format value (exit 2)", () => {
-    const r = run(["scaffold", "--from-run", "someid", "--output-format", "xml"]);
+    const r = run(["scaffold", "someid", "--output-format", "xml"]);
     expect(r.code).toBe(2);
     expect(r.stderr).toMatch(/--output-format must be/);
   });
 
-  it("scaffold --from-run with a flag-looking value is a usage error (exit 2)", () => {
-    const r = run(["scaffold", "--from-run", "--out", "x.yaml", "--output-format", "json"]);
+  it("scaffold --from-run is a removed alias — now an unknown flag (exit 2)", () => {
+    const r = run(["scaffold", "--from-run", "someid", "--output-format", "json"]);
     expect(r.code).toBe(2);
     expect(r.json?.error?.category).toBe("usage");
-    expect(r.json?.error?.message).toMatch(/--from-run requires a run id/);
+    expect(r.json?.error?.message).toMatch(/unknown flag: --from-run/);
   });
 
   it("scaffold --out with a flag-looking value is a usage error (exit 2)", () => {
-    const r = run(["scaffold", "--from-run", "someid", "--out", "--output-format", "json"]);
+    const r = run(["scaffold", "someid", "--out", "--output-format", "json"]);
     expect(r.code).toBe(2);
     expect(r.json?.error?.category).toBe("usage");
     expect(r.json?.error?.message).toMatch(/--out requires a file path/);

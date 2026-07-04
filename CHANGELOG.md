@@ -6,13 +6,223 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.23.0] — 2026-07-04
+
+### Added
+
+- **The baseline `spawn.env` is now binary-derived and drift-alarmed, not hand-transcribed.** `sync`
+  enumerates the Desktop→agent spawn env directly from the `app.asar` construction (three windows +
+  gate/const value resolution) and writes the resolved map into the baseline, guarded by a
+  `checkSpawnContractFacts` sentinel over the scalar options/tools/prompt structure. Additions,
+  removals, and value changes in the spawn contract now surface as loud `sync`-time signals instead of
+  drifting silently. This closed real, already-present drift: seven env keys the production agent
+  receives (`MCP_TOOL_TIMEOUT`, `API_TIMEOUT_MS`, `CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING`,
+  `DISABLE_AUTOUPDATER`, `CLAUDE_CODE_EMIT_TOOL_USE_SUMMARIES`, `USE_STAGING_OAUTH`, `USE_LOCAL_OAUTH`)
+  were missing from the committed baseline and are now pinned. A hand-transcribed golden fixture
+  cross-checks the generator so a resolver bug can't silently rewrite the contract.
+- **`sync` surfaces stale-allowlist prune hints instead of discarding them.** When a
+  `SPAWN_ENV_ALLOWLIST` entry is no longer constructed anywhere in the asar, `partitionSpawnFlags`
+  routes it into `SyncResult.notes` (distinct from the hard-fail deltas above) and the CLI prints it
+  under a non-blocking `notes (non-blocking):` line — a prune candidate to review, not a drift alarm.
+- **TUI forward-compatibility set** (three items hardening the display seam for future frontends):
+  - **The display-policy seam is now an explicit contract.** `src/run/display-translate.ts`'s header
+    states it is the single policy seam for translating model-visible VM paths for human display
+    (hostloop-only / identity-without-ctx / identity-when-shareable), locked by a 20-row table-driven
+    contract test; `docs/debugging.md` explains why hostloop shows `/Users/…` while other tiers show
+    `/sessions/…`.
+  - **Per-run `mounts.json`.** Every run dir now records the VM-path context (`{v:1, sessionId,
+    effectiveFidelity, outputsHostDir, uploadsHostDir, folders}`) — best-effort, never load-bearing,
+    derived from the same call that feeds the live display translator. `loadVmPathContext` lets any
+    historical-run consumer rebuild the context (null → degrade to identity). First consumer:
+    `trace --translate-paths` (text output only) renders hostloop runs with host paths, threaded into
+    row construction pre-slice. Cassettes structurally cannot carry the file.
+  - **OSC 8 terminal hyperlinks.** On a real TTY (not CI, not `--compact`/`--demo`, opt-out
+    `COWORK_HARNESS_NO_HYPERLINKS=1`), host-shaped `computer://` links in assistant text render as
+    clickable `file://` hyperlinks (`normalizeEncodePath`, decode-then-re-encode; backtick code spans
+    and VM-shaped links pass through; tool lines are excluded — they truncate at ~80 chars and a
+    sliced URL would link to a wrong target). Piped/non-TTY output stays byte-identical.
+
+- **`machine-inventory` cassette privacy scan class.** `verify-cassettes` now flags the sentinel
+  phrases a capability-manifest recording leaks ("applications on this machine", "installed
+  integrations/apps/extensions", …) — prose mentions of an app never trip it — with a scoped
+  `--allow-machine-inventory <regex>` to whitelist provably-synthetic values. The capability-manifest
+  filter line is recognized so the manifest itself doesn't false-trip the other classes. Tightening the
+  privacy gate before the 1.0 contract freezes keeps it from becoming a breaking change to consumers'
+  committed cassettes later.
+- **The 1.0 compatibility contract (SPEC.md §12).** Enumerates the surfaces semver covers from `1.0.0` —
+  CLI commands/flags + exit codes, the scenario/session/baseline/`RunResult`/cassette(v7)/protocol
+  schemas, the documented `COWORK_HARNESS_*` (+ `COWORK_AGENT_BINARY`/`COWORK_AGENT_IMAGE`) env vars, and
+  the packaged Action's inputs/outputs — and states what is explicitly NOT covered (human-readable
+  terminal text, `trace` row shapes, the paraphrased prompt append). Cross-linked from README and
+  RELEASING.md.
+- **First committed `hostloop`-tier replay cassette + live two-tier `computer_links_resolve`
+  coverage.** `examples/replays/hostloop-computer-links.cassette.json` (from a new purpose-built
+  `fidelity: hostloop` scenario) is the first committed cassette at the newest/headline tier — the one
+  the token-free replay lane never exercised — and asserts that a `computer://` link the model shares
+  resolves to its real collected artifact. Verified live at both `container` (VM-shaped link) and
+  `hostloop` (host-shaped link); wired into CI's replay + privacy-scan gates.
+- **Host-platform / workspace-host-paths identity env vars.** The spawn env now emits
+  `CLAUDE_CODE_HOST_PLATFORM` (`process.platform`, on every tier that assembles the Cowork spawn env —
+  container/microvm/hostloop; protocol (L0) spawns with the plain base env) and `CLAUDE_CODE_WORKSPACE_HOST_PATHS`
+  (connected-folder host paths, hostloop only when folders are present) — matching what the real Cowork
+  spawn sets, binary-verified against the in-VM ELF and Desktop asar. The account-identity and `OTEL_*`
+  vars stay unset (they need live Desktop account state the headless harness can't know; documented in
+  `docs/fidelity-gaps.md`).
+- **Reserved exit code `4` on the `run`/`skill` family** for a future "needs input / surfaced question"
+  outcome — documented in SPEC.md so a later addition is additive rather than a renumbering of the
+  burned `0`/`1`/`2`/`3` space.
+
+### Removed
+
+- **The `profile:` scenario-field alias.** The top-level `profile:` key (an earlier name for
+  `baseline:`) is no longer accepted — it was silently remapped with a deprecation warning; it now
+  errors as an unknown key. Use `baseline:`.
+- **The deprecated `Profile` re-export (library API).** The `Profile` const/type in `src/types.ts` was
+  renamed to `PlatformBaseline` with a "remove next minor" promise that never fired; removed now so the
+  1.0 API contract doesn't freeze retired vocabulary in. Import `PlatformBaseline`.
+- **The `scaffold --from-run <id>` flag.** `scaffold` had two spellings for one thing; the canonical
+  positional `scaffold <run-id | run-dir>` stays, and `--from-run` now errors as an unknown flag
+  (exit 2) with the usage string pointing at the positional form.
+- **The `-V` short form for `--verbose`.** `-v` (version, per `node -v`/`npm -v`) and `-V` (verbose)
+  were a shift-key-typo collision that silently flipped meaning. `--verbose` is now long-only on every
+  command that accepts it (`run`/`skill`/`chat`/`decide`/`record`/`replay`/`verify-cassettes`); `-v`
+  still prints the version and `-q` still means `--quiet`.
+- **The dead `forceDisableHostLoop` loop-decision key.** It was never populated by `sync` and its
+  branch could never fire — a config key that silently does nothing is a trap in a 1.0 schema. The
+  field and its branch are removed (re-add with real semantics if `sync` ever derives it).
+
+### Changed
+
+- **CI's boundary job now pulls the published GHCR agent image the packaged Action pins**, retagging it
+  for the sandbox probes so a bad publish surfaces in our own CI instead of only in a consumer's runner
+  (it previously only ever `docker build`t the image locally). A pull failure now hard-fails
+  (`::error::` + `exit 1`) on the canonical repo instead of silently rebuilding; forks and pre-publish
+  runs (no GHCR read access yet) keep the local-build fallback with a warning. Live-verified on the
+  0.23.0 release PR's CI run: `docker pull ghcr.io/yaniv-golan/cowork-agent-base:2` resolved and
+  retagged successfully (image name, `linux/arm64` platform, and the default `GITHUB_TOKEN`'s GHCR
+  read access are all confirmed working, not just implemented).
+
+### Fixed
+
+- **Redaction could destroy a `computer://` link and manufacture a VACUOUS `computer_links_resolve`
+  pass on replay.** The repo's local-path redaction pattern didn't exclude `)` from its character
+  class, so it ate a markdown link's closing paren — replay's extractor then saw an unterminated link,
+  found zero links, and the presence-gated assertion passed while checking nothing (the first committed
+  hostloop cassette shipped exactly this). Three-part fix: the redaction patterns now redact only the
+  machine-specific path prefix (stopping before `/mnt/`, so replay's structural-marker resolution still
+  works) and exclude link delimiters; `record`'s verdict-preservation guard gained a fourth check that
+  compares `computer://` link counts pre/post redaction and refuses to write a cassette whose links
+  redaction destroyed; and the hostloop cassette was re-recorded — its replay now extracts and resolves
+  the link for real.
+- **Scenario-schema violations now surface as category `usage`, not `internal`.** A typo'd or retired
+  key (e.g. `profile:`) threw an uncaught Zod error that the top-level catch labeled `internal` — a
+  user mistake masquerading as a harness bug. `parseScenarioFile` now wraps schema errors in a
+  `UsageError` that names the offending file; exit stays 2.
+- **The `protocol-smoke` example no longer fails by design on a live run.** `protocol` (L0) runs the
+  agent's file tools on the real host cwd with no sealed filesystem — exactly like `hostloop` — so a
+  host path in a tool result is expected there, not a leak. The `host_path_leak` default-fail is now
+  exempted at `protocol` as well as `hostloop` (emitting a notice), so the flagship example passes its
+  own assertions on every advertised lane. The signal stays a hard fail at the sandboxed
+  `container`/`microvm` tiers (where a host path IS a regression), and an explicit
+  `transcript_no_host_path` assertion still enforces cleanliness at any tier.
+- **The LLM decider prompt no longer travels via `argv`.** `claude -p <prompt>` put the gate/skill
+  text in the process's argument vector, world-readable via `ps` on shared hosts. The prompt is now
+  delivered on stdin (the same channel the microvm auth-token uses); argv carries only
+  `-p --model … --output-format json`. Off-brand for a tool that privacy-scans its own cassettes.
+- **Malformed decider env knobs now fail loud instead of silently reverting.**
+  `COWORK_HARNESS_LLM_TIMEOUT_MS` / `COWORK_HARNESS_LLM_MAX_BYTES` went through `Number(…) || default`,
+  so a typo (`5m`) or an explicit `0` silently became the default. Both now route through
+  `envPositiveNumber`, which warns loud on a set-but-unparseable/non-positive value (an unset var still
+  uses the same default).
+- **The bundled `cowork-harness` skill's CI recipe no longer breaks under bash/zsh.** The recommended
+  `npm i -g cowork-harness@>=0.22.0` was unquoted — `>=` is a shell redirection, so the snippet failed
+  as written in bash (GitHub Actions' default `run:` shell) and zsh alike. Now quoted at all sites. Same pass corrected the skill's command inventory (`status` was
+  missing), a wrong `CLAUDE_PLUGIN_ROOT` scaffold path, missing `requires_capabilities` /
+  `extended_thinking` / `account_name` schema docs, stale gotcha citations, a `scenario.py` regex-lint
+  false-positive, and thin eval coverage.
+- **`doctor --tier microvm` now detects an unprovisioned Lima instance.** It previously checked only
+  for `limactl` itself, not whether `vm init` had actually provisioned the instance for the current
+  config — a missing VM image could slip past `doctor` and only surface as first-run VM-boot latency
+  on the next live `microvm` run (which self-provisions). New `vm-instance` check is advisory (`warn`,
+  non-blocking, matching `microvm.ts`'s self-provisioning behavior), skipped when `limactl` itself is
+  already the reported problem. Live-verified against a real, unprovisioned Lima install.
+- **Top-level `--help` printed an invalid combined flag shorthand.** `--allow-domain/-email/-path
+  <regex>` is not something the parser accepts — the three flags are independent and parsed
+  separately (`verify-cassettes`'s own usage string already had this right). Fixed to list the three
+  flags separately, matching the dedicated usage string.
+
+### Documentation
+
+- **Documented the Task-dispatch cap divergence in `docs/fidelity-gaps.md`.** Real Cowork skips agent
+  Task dispatches beyond `{perTask:1, global:3}` (a binary-verified gate); the harness does not cap at
+  runtime, mitigated by the `dispatch_count_max` assertion. The faithful runtime limiter is deferred
+  post-1.0.
+- **Doc-vs-code audit (post-0.22.0) — corrected several doc claims that had drifted from the
+  implementation, found by a systematic docs-and-skill sweep.**
+  - **Baseline pin staleness.** README, DESIGN.md, SPEC.md, the companion skill's `SKILL.md`, and
+    `docs/cowork-spawn-contract-1.12603.1.md` all still pinned `desktop-1.17377.1`/`.2` after the
+    platform baseline had moved on to `desktop-1.18286.0`. Reconciled the plain "current baseline"
+    pins; deliberately left DESIGN.md's point-in-time verification stamps (§ Control protocol /
+    Spawn contract) untouched, since bumping those would assert re-verification work that hasn't
+    actually happened. README's "Status" paragraph had the same unresolved tension one section
+    down (claiming `1.18286.0` is latest two sentences after a `1.17377.1` verification stamp) —
+    added a clarifying parenthetical instead of silently picking one number.
+  - **`docs/chat.md` self-contradiction.** Its `--folder` behavior rows named `protocol`/`container`/
+    `microvm` in two places despite `chat` never accepting `microvm` (already correctly excluded
+    elsewhere in the same file).
+  - **`docs/cassette.md`'s assertion table** was missing six replay-evaluated keys (`skill_triggered`,
+    `no_skill_triggered`, `max_cost_usd`, `max_tokens`, `tool_calls_max`, `max_turns`) despite already
+    documenting all six correctly in `docs/scenario.md`.
+  - **`docs/session.md`** never documented the real, live `account_name` session field.
+  - **`docs/scenario.md`'s `run --matrix` example** pointed `skill_dirs` at a fabricated
+    `../variants/v1/…` path that doesn't exist anywhere in the repo. Repointed the section at the new
+    `examples/matrices/csv-metrics-matrix.yaml` fixture (baselines-only axis — this repo has no second
+    `csv-metrics` variant to matrix against, so the shipped example omits `skill_dirs` rather than
+    inventing fake paths).
+  - **`docs/discovery.md`** left the `<proj-slug>` placeholder in its "find the VM session log" path
+    unexplained. Documented what it is (Claude Code's own project-slug derivation, opaque to this
+    repo) and gave a practical `ls`-based workaround instead of guessing at undocumented CLI internals.
+  - **Doc-index and cross-link gaps.** `docs/README.md`'s guide table and `llms.txt`'s command list
+    were both missing `stats`/`status`/`diff`; the `decide` reference row cited only `decide --help`
+    despite a full worked "dry-running a decider" subsection already existing in `docs/scenario.md`;
+    the README architecture diagram had no `hostloop` representation; `docs/maintenance.md`'s
+    `sync --diff` example (real but the two oldest baseline files in the repo) wasn't flagged as
+    illustrative; and README's `doctor` section read as if bare `doctor` were more general than
+    `--tier container`, when bare `doctor` **is** `--tier container` by default.
+  - **README command-table / flag-reference gaps.** `--compact`/`--demo` (output trimmed for
+    shareable screenshots/GIFs) were undocumented in the `skill`/`run` command-table rows;
+    `record`'s row omitted `--no-redact`/`--allow-failing`/`--dry-run`; the reproducibility-knobs
+    section omitted `COWORK_HARNESS_VERIFY_AGENT_SHA`; the exit-code summary claimed a uniform
+    `0`/`1`/`2`/`3` "on every command" when `diff`/`lint` have documented per-command exceptions
+    (SPEC.md already had the accurate table — README's summary now points at it instead of
+    overstating); and a note was added near the Prerequisites block that the worked
+    `examples/scenarios/...` commands need a source checkout, not a global `npm install -g`.
+  - Added **`examples/matrices/csv-metrics-matrix.yaml`**, a worked example for `run --matrix` (no
+    prior fixture existed) — live-verified: both baseline cells pass.
+
+### Internal
+
+- **`scripts/check-versions.ts`'s version-lockstep guard now also cross-checks the `(baseline
+  desktop-X)` pins** across README/`SKILL.md`/the spawn-contract doc against the newest committed
+  `baselines/*.json`, closing the exact class of drift the doc audit above found so it can't silently
+  recur. Deliberately excludes DESIGN.md's verification-stamp lines (see above).
+  - `alwaysContentKeys`/`questionGateKeys`/`manifestKeys` in `src/run/cassette.ts` are now exported
+    (previously function-local); `test/cassette-docs-sync.test.ts` asserts `docs/cassette.md`'s
+    assertion table stays in sync with their union.
+  - `test/cli-help.test.ts` gained a check that every CLI command appears in README's "Commands at a
+    glance" table, on the same "doc can't silently drift from code" principle.
+- **`test/vm-path-ctx-file.test.ts` gained a structural cassette-privacy regression test.** Asserts
+  the committed `examples/replays/example-pdf-skill.cassette.json`'s top-level key set is closed and
+  contains no `mount`-named field — guards the cassette assembler itself (not just `buildManifest`'s
+  walk scope), so a future edit that adds a mounts-bearing field to the cassette literal is caught
+  without needing a live re-record.
+
 ## [0.22.0] — 2026-07-03
 
 ### Added
 
 - **`computer://` link modeling — the prompt now instructs file links exactly as production does.**
-  Four pieces landed together (design + binary research in
-  `docs/internal/2026-07-03-computer-link-scheme-research-and-plan.md`):
+  Four pieces landed together, grounded in binary research against the Desktop app:
   - `src/vm-paths.ts` — a faithful port of Desktop's display-side VM→host path transform
     (`deepTranslateVMPaths` / `mapVMPathToHostPath` / `encodeComputerUrlsForHostLoop`): markdown-link,
     backtick, bare-token, and prose rewrite positions; per-segment percent-encoding; traversal
@@ -558,7 +768,7 @@ All notable changes to this project are documented here. The format is based on
   sandboxed live tiers (protocol/replay need none); added `python3` to the README requirements
   (the `lint` linter shells out to it); moved the `/plugin` slash-command block off the `bash`
   fence; pinned `cowork-harness@>=0.17.0` in the CI recipe; noted that `chat` excludes
-  `microvm`/`cowork`; and other small corrections (see `docs/internal/2026-06-26-doc-audit-*`).
+  `microvm`/`cowork`; and other small corrections from a full documentation audit.
 - Refreshed all verification/version stamps that still pinned `1.15200.0` / `2.1.181`
   (README, DESIGN, SPEC, the spawn-contract reference, `docs/cassette.md` fingerprint example,
   and the `hostloop-prompt.ts` re-verified comment) to `1.15962.0` / `2.1.187`.
@@ -1418,7 +1628,7 @@ All notable changes to this project are documented here. The format is based on
 
 ### Internal
 
-- The npm tarball no longer ships `docs/internal/` (internal planning docs were being published).
+- The npm tarball no longer ships internal planning notes that were accidentally being published.
 
 ### Added
 

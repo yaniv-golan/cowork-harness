@@ -164,13 +164,15 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
         message: `unauthorized delete touched mnt/outputs: ${result.scan.outputsDeletes.join("; ")} (assert no_delete_in_outputs to make this explicit)`,
       });
 
-    // hostloop's native file tools legitimately operate on real host paths (that's the tier's whole
-    // point) — a run at that fidelity is EXPECTED to see /Users/... paths, so the scan is not evidence
-    // of a leak there the way it is for container/microvm/protocol. Gate the default-fail on the tier;
-    // the raw scan result stays recorded in result.json either way (forensics).
-    if (result.scan?.hostPathLeaked && result.effectiveFidelity === "hostloop") {
+    // hostloop AND protocol (L0) run the agent's native file tools on the REAL host cwd — neither
+    // seals the filesystem — so a run at either fidelity is EXPECTED to see /Users/... paths; the scan
+    // is not evidence of a leak there the way it is for the sandboxed container/microvm tiers (which
+    // seal the FS and show the model /sessions/... paths). Gate the default-fail on the tier; the raw
+    // scan result stays recorded in result.json either way (forensics), and an explicit
+    // `transcript_no_host_path` assertion still enforces cleanliness at ANY tier via assert.ts.
+    if (result.scan?.hostPathLeaked && (result.effectiveFidelity === "hostloop" || result.effectiveFidelity === "protocol")) {
       warn(
-        "::notice:: [verdict] host_path_leak signal skipped at hostloop fidelity — real host paths are expected there (see docs/boundary.md)\n",
+        `::notice:: [verdict] host_path_leak signal skipped at ${result.effectiveFidelity} fidelity — the agent runs on real host paths there, so they are expected (see docs/boundary.md)\n`,
       );
     } else if (result.scan?.hostPathLeaked && !authored.some((a) => a.transcript_no_host_path === true))
       signals.push({

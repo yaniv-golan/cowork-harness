@@ -23,9 +23,10 @@ export type ArgSpec = {
   /** Value-flag → allowed values, e.g. {"--output-format": ["text","json"]}. */
   enums?: Record<string, string[]>;
   /**
-   * Short-flag aliases → canonical `--name`, e.g. {"-q":"--quiet","-V":"--verbose"}. A single-dash token
+   * Short-flag aliases → canonical `--name`, e.g. {"-q":"--quiet"}. A single-dash token
    * not listed here is an unknown-flag error (fail loud). Declare only on commands that actually expose the
    * short flag (run/skill). Global -v/-h are consumed pre-dispatch in main() and never reach a command.
+   * (No command declares `-V`: verbose is long-only — the `-v`/`-V` shift-key-typo collision fix.)
    */
   aliases?: Record<string, string>;
   /**
@@ -71,7 +72,7 @@ export function parseArgs(argv: string[], spec: ArgSpec): ParsedArgs {
     const eq = a.startsWith("--") ? a.indexOf("=") : -1; // equals form only on long flags
     let name = eq > 0 ? a.slice(0, eq) : a;
     if (!a.startsWith("--")) {
-      // short flag: resolve via aliases or fail loud (preserves -q/-V)
+      // short flag: resolve via aliases or fail loud (preserves -q)
       if (!(name in aliases)) throw new ArgError(`unknown flag: ${name}`);
       name = aliases[name];
     }

@@ -12,6 +12,7 @@ import {
   loadSessionFromFile,
   UnansweredError,
   BoundaryError,
+  UsageError,
   type ExecuteOptions,
 } from "./run/execute.js";
 import {
@@ -26,7 +27,7 @@ import {
 import { claudeCliComplete } from "./decide/llm-transport.js";
 import { toDecisionRequest, type DecisionRequest } from "./agent/session.js";
 import { vmInit, vmDelete, vmStatus, vmPrune, instanceName } from "./runtime/lima.js";
-import { sync } from "./sync/cowork-sync.js";
+import { sync, canonicalizeEnv } from "./sync/cowork-sync.js";
 import { diffBaselines, formatDiffLines, renderChangelog } from "./sync/baseline-diff.js";
 import { runBoundaryChecks, formatBoundary } from "./boundary.js";
 import { cmdChat } from "./run/chat.js";
@@ -51,6 +52,8 @@ import {
   eventsFromLines,
   runsRoot,
 } from "./run/trace-view.js";
+import { loadVmPathContext } from "./run/vm-path-ctx-file.js";
+import { makeDisplayTranslator, linkifyForTerminal, shouldLinkify } from "./run/display-translate.js";
 import { readIndex, reindexFromRunsTree, buildStats, resolveRunsFromIndex, type RunIndexRow, type StatsSummary } from "./run/run-index.js";
 import {
   canonicalizeInput,
@@ -110,7 +113,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
       [--decider-dir <dir>]   …or in-band from the driving agent; then use 'gates'/'answer' to stream/respond
       [--upload <file>]… [--folder <dir>]…   attach files / connect folders (mnt/uploads, mnt/<folder-name>)
       [--session-id <id> [--resume]]   pin + resume a session (for gated, checkpoint-and-resume skills)
-      [--output-format text|json] [--quiet|-q] [--verbose|-V] [--model <id>] [--keep] [--dry-run]
+      [--output-format text|json] [--quiet|-q] [--verbose] [--model <id>] [--keep] [--dry-run]
       (run 'skill --help' for the full flag reference)
 
   chat <folder>                interactive multi-turn REPL against a skill (TTY); --raw for native cowork
@@ -121,7 +124,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
       [--on-unanswered fail|first]   ('prompt' rejected — breaks determinism)
       [--decider-cmd '<helper>']   answer live questions via a spawned helper
       [--decider-dir <dir>]   answer live questions in-band; then use 'gates'/'answer' to stream/respond
-      [--output-format text|json] [--quiet|-q] [--verbose|-V]
+      [--output-format text|json] [--quiet|-q] [--verbose]
       (run 'run --help' for the full flag reference)
 
 ── Cassette lifecycle ─────────────────────────────────────────────────────────
@@ -142,7 +145,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
       [--output-format json]
   verify-cassettes <file|dir>  CI gate (no token): privacy scan + staleness — exit 1 on finding or drift
       [--skip-privacy|--skip-staleness]  skip one check
-      [--allow <regex>]... [--allow-domain/-email/-path <regex>]... [--allow-file <path>]... [--output-format json]
+      [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-path <regex>]... [--allow-machine-inventory <regex>]... [--allow-file <path>]... [--output-format json]
   rehash <dir/>                migrate cassette fingerprints to current version when content is provably unchanged (requires contentSig from v3+)
   prune [--keep-last <n>]      prune accumulated run dirs, keeping N most recent per scenario (default: 5)
 
@@ -273,7 +276,7 @@ Questions:
 
 Output:
   --output-format text|json        text = live stream + footer (default); json = one stdout envelope
-  --quiet, -q                      verdict footer only            --verbose, -V   + thinking/tool inputs/sub-agent tree
+  --quiet, -q                      verdict footer only            --verbose       + thinking/tool inputs/sub-agent tree
   --compact                        drop the informational capability ::notice:: lines (the probe + hard-fail stay)
   --demo                           shareable output: --compact + suppress the "runs →" header (runs stay durable)
   --keep                           print the run dir + deliverable path (runs are always kept on disk)
@@ -353,7 +356,7 @@ Matrix testing (E3) — one scenario × a cross-product of axes, in one run:
 
 Output:
   --output-format text|json        text = verdict + failing transcript (default); json = stdout envelope
-  --quiet, -q                      verdict only            --verbose, -V   live stream + per-tool markers
+  --quiet, -q                      verdict only            --verbose       live stream + per-tool markers
   --compact                        drop the informational capability ::notice:: lines (the probe + hard-fail stay)
   --demo                           shareable output: --compact + suppress the "runs →" header (runs stay durable)
   --run-dir <path>                 GLOBAL flag — must PRECEDE the subcommand (cowork-harness --run-dir <path> run …);
@@ -398,9 +401,9 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
     "       by default the assertions FROZEN in the cassette drive the verdict (deterministic); a sibling scenario whose assert: differs only prints a notice.\n" +
     "       --assert-from <file> / --reassert: token-free re-check against the on-disk assert:/expect_denied: — recording-shaping drift (prompt/answers/baseline/skills) and skill staleness HARD-FAIL.",
   "verify-cassettes":
-    "usage: verify-cassettes <file|dir> [--skip-privacy|--skip-staleness] [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-path <regex>]... [--allow-file <path>]... [--output-format json]",
+    "usage: verify-cassettes <file|dir> [--skip-privacy|--skip-staleness] [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-path <regex>]... [--allow-machine-inventory <regex>]... [--allow-file <path>]... [--output-format json]",
   trace:
-    "usage: trace <run-id | run-dir | events.jsonl> [--view tools|questions|dispatches] [--output-format json]\n       --view tools       tool call / result rows\n       --view questions   gate lifecycle (question → answer → delivered)\n       --view dispatches  sub-agent dispatch tree + dispatch_count_max\n       (default: all views)\n       (for what the run PRODUCED — artifacts — use `inspect`)",
+    "usage: trace <run-id | run-dir | events.jsonl> [--view tools|questions|dispatches] [--translate-paths] [--output-format json]\n       --view tools       tool call / result rows\n       --view questions   gate lifecycle (question → answer → delivered)\n       --view dispatches  sub-agent dispatch tree + dispatch_count_max\n       --translate-paths  rewrite VM paths to host paths in the tools/default TEXT views only (needs a sibling mounts.json + an effective hostloop run; questions/dispatches views and --output-format json are unaffected)\n       (default: all views)\n       (for what the run PRODUCED — artifacts — use `inspect`)",
   assertions: "usage: assertions --list [--output-format json]",
   scaffold:
     "usage: scaffold <run-id | run-dir> [--out <file.yaml>] [--output-format text|json]\n       Turns a kept run into a starter scenario YAML (gates→answers, artifacts→file_exists).\n       Positional <run-id | run-dir> is the canonical form.",
@@ -830,7 +833,7 @@ function takeCommonFlags(args: string[], commandName: string = "skill"): { rest:
         fail(commandName, "usage", `--output-format must be "text" or "json" (got "${v}")`, undefined, isJsonOutput(args));
       flags.output = v;
     } else if (a === "--quiet" || a === "-q") flags.quiet = true;
-    else if (a === "--verbose" || a === "-V") flags.verbose = true;
+    else if (a === "--verbose") flags.verbose = true;
     else if (a === "--compact") flags.compact = true;
     else if (a === "--demo") flags.demo = true;
     else if (name === "--decider-cmd") {
@@ -1005,7 +1008,14 @@ async function runOneScenario(p: {
   // share the RenderPlan object itself. Default: identity (matches today's behavior at every non-hostloop
   // tier, and if executeScenario never gets a chance to fill it in).
   const translateRef: { current: (s: string) => string } = { current: (s) => s };
-  const renderer = o.render ? makeRenderer({ ...o.plan, translate: (s: string) => translateRef.current(s) }) : undefined;
+  // OSC 8 hyperlink decoration gate: decided HERE, at plan construction — not inside makeRenderer,
+  // whose Sink is injectable and shouldn't sniff process.* itself. `process.stderr.isTTY` mirrors the
+  // renderer's own sink target; `!process.env.CI` mirrors the existing TTY gate at the
+  // --on-unanswered default just above (~line 914); `COWORK_HARNESS_NO_HYPERLINKS` is an explicit
+  // opt-out (same naming precedent as `COWORK_HARNESS_NO_HEARTBEAT`, renderer.ts); `o.plan.compact`
+  // covers --compact/--demo (shareable output stays escape-free, same leg `shouldLinkify` documents).
+  const linkify = o.render && shouldLinkify(process.env, process.stderr.isTTY === true, o.plan.compact) ? linkifyForTerminal : undefined;
+  const renderer = o.render ? makeRenderer({ ...o.plan, translate: (s: string) => translateRef.current(s), linkify }) : undefined;
   if (!o.json && !flags.quiet) renderStart(label, scenario.fidelity, o.plan);
   const start = Date.now();
   const stopHeartbeat = o.json || externalChannel ? () => {} : startHeartbeat(renderer, o.plan, start);
@@ -2248,6 +2258,17 @@ async function cmdSync(args: string[]) {
     agentBinary: nextAgentBinary,
     network: { ...(base.network as object), mode: res.networkMode ?? "gvisor", allowKind: "allowlist", allowDomains: res.allowDomains },
     requireFullVmSandbox: res.requireFullVmSandbox,
+    // spawn.env is the GENERATED tier: re-derived from the asar each sync, canonically
+    // ordered so a benign source-reorder is a zero-line diff. All the hand-curated spawn fields (tools,
+    // allowedTools, scalars, prompt pointers, $comment*) carry forward from base untouched. On a hard-fail
+    // deriveSpawnEnv returns null and the base env is preserved (the all-or-nothing contract).
+    spawn: {
+      ...(base.spawn as object),
+      env: canonicalizeEnv(
+        res.spawnEnv ?? (base.spawn as { env?: Record<string, string> })?.env,
+        (base.spawn as { env?: Record<string, string> })?.env,
+      ),
+    },
     provenance: { ...baseProvenance, gates: nextGates, asarFingerprint: res.asarFingerprint },
   };
   const diffFlag = !!syncParsed.flags["--diff"];
@@ -2265,6 +2286,12 @@ async function cmdSync(args: string[]) {
     // E7: structured recursive diff, replacing the one-level diff() that printed a whole subtree on
     // any nested change (e.g. a single gate flip three levels deep used to dump all of `provenance`).
     for (const line of formatDiffLines(diffBaselines(base, next))) log(`  ${line}`);
+  }
+  // Non-blocking informational hints (e.g. stale SPAWN_ENV_ALLOWLIST prune NOTEs): surfaced so they
+  // get acted on, but they are NOT deltas and never block the write.
+  if (res.notes.length) {
+    log("\nℹ notes (non-blocking):");
+    for (const n of res.notes) log("   - " + n);
   }
   if (res.unknownDeltas.length) {
     log("\n⚠ unknown deltas (extend src/sync/cowork-sync.ts):");
@@ -2466,13 +2493,13 @@ async function cmdDecide(args: string[]) {
           json,
         );
       i++;
-    } else if (a === "--quiet" || a === "-q" || a === "--verbose" || a === "-V") {
+    } else if (a === "--quiet" || a === "-q" || a === "--verbose") {
       /* accepted but currently a no-op in decide — wired for flag consistency */
     }
     // an unrecognized `--`-prefixed token used to be silently ignored (the loop had no else).
     else if (a.startsWith("--") && a !== "--output-format=json" && a !== "--output-format=text")
       fail("decide", "usage", `unknown flag: ${a}`, undefined, json);
-    // single-dash flags other than -q/-V are unknown; reject them explicitly (don't silently swallow -x etc.)
+    // single-dash flags other than -q are unknown; reject them explicitly (don't silently swallow -x etc.)
     else if (a.startsWith("-")) fail("decide", "usage", `unknown flag: ${a}`, undefined, json);
     // decide takes NO positionals (the sample question comes from --question, not a positional).
     else fail("decide", "usage", `decide takes no positional arguments (got: ${a})`, undefined, json);
@@ -2810,17 +2837,21 @@ function cmdAnswer(args: string[]) {
   else log(`✓ answered gate ${seq}: ${JSON.stringify(answers)}`);
 }
 
-/** `scaffold --from-run <id>` — turn a kept run into a starter scenario YAML (observed gates → answers,
+/** `scaffold <run-id | run-dir>` — turn a kept run into a starter scenario YAML (observed gates → answers,
  *  artifacts → file_exists, the prompt). Authoring becomes explore→lock instead of guess-and-re-run. */
 function cmdScaffold(args: string[]) {
   const json = isJsonOutput(args);
   // validate --output-format is text|json — an invalid value was a silent text degrade (only
   // isJsonOutput was consulted), unlike decide/gates/trace.
   ensureOutputFormat("scaffold", args);
+  // The retired `--from-run` alias gets a targeted hint (it had users pre-1.0); any other unknown
+  // flag falls through to the generic loud rejection below.
+  if (args.some((a) => a === "--from-run" || a.startsWith("--from-run=")))
+    fail("scaffold", "usage", "unknown flag: --from-run (removed — use the positional form)", SUBCOMMAND_USAGE.scaffold, json);
   // Reject unknown flags rather than silently ignoring a typo (e.g. `--form-run`).
-  rejectUnknownFlags("scaffold", args, ["--from-run", "--out", "--output-format", "--output-format=json", "--output-format=text"], json);
+  rejectUnknownFlags("scaffold", args, ["--out", "--output-format", "--output-format=json", "--output-format=text"], json);
 
-  // Validate --out FIRST (flag-looking value is a usage error regardless of --from-run presence).
+  // Validate --out FIRST (flag-looking value is a usage error).
   // honor BOTH the spaced (`--out foo`) and equals (`--out=foo`) forms — indexOf("--out") missed the
   // equals token, so `--out=foo.yaml` was accepted by rejectUnknownFlags then silently ignored (output went
   // to stdout). The equals value also gets the same flag-looking guard the spaced form has.
@@ -2838,30 +2869,8 @@ function cmdScaffold(args: string[]) {
       json,
     );
 
-  // Validate --from-run flag-looking value before computing positionals (so the error is specific).
-  // same dual-form handling for --from-run (the equals form fell through to a spurious usage failure).
-  const fromSpaceIdx = args.indexOf("--from-run");
-  const fromEqIdx = args.findIndex((a) => a.startsWith("--from-run="));
-  let fromRunVal: string | undefined;
-  if (fromSpaceIdx >= 0) fromRunVal = flagValue("scaffold", args, fromSpaceIdx, "--from-run", json);
-  else if (fromEqIdx >= 0) fromRunVal = args[fromEqIdx].slice("--from-run=".length);
-  if (fromRunVal !== undefined) {
-    if (fromRunVal === "" || fromRunVal.startsWith("-"))
-      return void fail(
-        "scaffold",
-        "usage",
-        `--from-run requires a run id/dir${fromRunVal === "" ? " (got empty)" : `, got a flag: ${fromRunVal}`}`,
-        undefined,
-        json,
-      );
-    log("note: --from-run is deprecated; prefer: scaffold <run-id | run-dir>\n");
-  }
-
-  // Positional is canonical; --from-run is a backward-compatible alias.
-  const positional = positionals(args, ["--from-run", "--out", "--output-format"])[0];
-  if (positional && fromRunVal && positional !== fromRunVal)
-    return void fail("scaffold", "usage", "provide the run id as a positional OR via --from-run, not both", undefined, json);
-  const target = positional ?? fromRunVal;
+  // Positional is the only (canonical) form for the run id/dir.
+  const target = positionals(args, ["--out", "--output-format"])[0];
   if (!target) return void fail("scaffold", "usage", "usage: scaffold <run-id | run-dir> [--out <file.yaml>]", undefined, json);
   let file: string;
   try {
@@ -3256,6 +3265,11 @@ function cmdTrace(args: string[]) {
 
   const view = viewArg as View | undefined;
 
+  // --translate-paths (Item 2's trace consumer): rewrite VM paths to host paths in TEXT output only —
+  // `--output-format json` stays the raw machine record (see cli.ts's gating below and
+  // vm-path-ctx-file.ts's module header for the full rationale).
+  const translatePaths = args.includes("--translate-paths");
+
   // reject unknown flags (typos like --ouput-format silently fell through before).
   rejectUnknownFlags(
     "trace",
@@ -3268,6 +3282,7 @@ function cmdTrace(args: string[]) {
       "--tools",
       "--gates",
       "--dispatches", // legacy aliases
+      "--translate-paths",
     ],
     json,
   );
@@ -3288,7 +3303,7 @@ function cmdTrace(args: string[]) {
     fail(
       "trace",
       "usage",
-      "usage: trace <run-id | run-dir | events.jsonl> [--view tools|questions|dispatches] [--output-format json]",
+      "usage: trace <run-id | run-dir | events.jsonl> [--view tools|questions|dispatches] [--translate-paths] [--output-format json]",
       undefined,
       json,
     );
@@ -3312,7 +3327,18 @@ function cmdTrace(args: string[]) {
     else out(formatDispatchTree(tree));
     return;
   }
-  const rows = buildTrace(file, { tools: view === "tools" });
+  // Build the translator, if any, ONLY for text output — json is the raw machine record and must stay
+  // untranslated. Gate (all three must hold): the flag was passed, a sibling mounts.json exists and
+  // parses as a recognized (v1) ctx, and the run's EFFECTIVE fidelity was "hostloop" — the one tier
+  // where the resolved host path is production-identical (see display-translate.ts's module header).
+  let translate: ((text: string) => string) | undefined;
+  if (translatePaths && !json) {
+    const loaded = loadVmPathContext(dirname(file));
+    if (loaded && loaded.effectiveFidelity === "hostloop") {
+      translate = makeDisplayTranslator({ ctx: loaded.ctx, effectiveFidelity: loaded.effectiveFidelity, shareable: false });
+    }
+  }
+  const rows = buildTrace(file, { tools: view === "tools", translate });
   if (json) out(JSON.stringify({ tool: "cowork-harness", command: "trace", file, rows }));
   else out(formatTrace(rows));
 }
@@ -3632,6 +3658,7 @@ main().catch((e) => {
   const json = isJsonOutput(process.argv.slice(2));
   if (e instanceof UnansweredError) fail(command, "unanswered", e.message, e.hint, json);
   if (e instanceof BoundaryError) fail(command, "boundary", e.message, undefined, json);
+  if (e instanceof UsageError) fail(command, "usage", e.message, undefined, json);
   // runtime/unexpected: keep the stack on stderr for humans; a structured envelope on stdout for json.
   if (json) out(jsonError(command, "internal", String(e?.message ?? e)));
   else log(String(e?.stack ?? e));

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { scanText, DEFAULT_SCAN_PATTERNS } from "../src/scan.js";
 
-describe("scanText — default PII heuristics (email + currency + domain + path)", () => {
+describe("scanText — default PII heuristics (email + currency + domain + path + machine-inventory)", () => {
   it("flags an email", () => {
     const f = scanText("reach alice@acme.com today", "transcript", []);
     expect(f.some((x) => x.cls === "email")).toBe(true);
@@ -44,7 +44,7 @@ describe("scanText — default PII heuristics (email + currency + domain + path)
     expect(eml.some((x) => x.cls === "domain")).toBe(true);
   });
   it("each default pattern carries a class label", () => {
-    expect(DEFAULT_SCAN_PATTERNS.map((p) => p.cls).sort()).toEqual(["currency", "domain", "email", "path"]);
+    expect(DEFAULT_SCAN_PATTERNS.map((p) => p.cls).sort()).toEqual(["currency", "domain", "email", "machine-inventory", "path"]);
   });
   it("flags a macOS host path", () => {
     const f = scanText("see /Users/alice/project/notes.md for details", "transcript", []);
@@ -81,5 +81,45 @@ describe("scanText — default PII heuristics (email + currency + domain + path)
     const f = scanText(text, "transcript", [{ cls: "path", re: /\/Users\/alice\/x/ }]);
     expect(f.some((x) => x.cls === "email")).toBe(true); // email survives — path allow is scoped
     expect(f.some((x) => x.cls === "path")).toBe(false);
+  });
+  it("flags the machine-inventory sentinel, sample bounded at the phrase (not the app list)", () => {
+    // SYNTHETIC app list only — never a real captured one, per the pattern's own comment.
+    const f = scanText("Available applications on this machine: AppOne, AppTwo, AppThree, DevTool, NoteApp", "transcript", []);
+    const hit = f.find((x) => x.cls === "machine-inventory");
+    expect(hit).toBeDefined();
+    expect(hit?.sample).toBe("Available applications on this machine:");
+    expect(hit?.sample.includes("AppOne")).toBe(false);
+  });
+  it("flags a machine-inventory phrasing variant: 'installed on this system'", () => {
+    const f = scanText("Applications installed on this system: FooApp, BarApp", "transcript", []);
+    expect(f.some((x) => x.cls === "machine-inventory")).toBe(true);
+  });
+  it("flags a machine-inventory phrasing variant: 'running processes on this machine'", () => {
+    const f = scanText("running processes on this machine", "transcript", []);
+    expect(f.some((x) => x.cls === "machine-inventory")).toBe(true);
+  });
+  it("does NOT flag prose app mentions", () => {
+    const f = scanText("use Slack and 1Password to share credentials", "transcript", []);
+    expect(f.some((x) => x.cls === "machine-inventory")).toBe(false);
+  });
+  it("does NOT flag an enumerated integration list without the sentinel", () => {
+    const f = scanText("integrates with Slack, Notion, Google Drive, Linear, and Airtable", "transcript", []);
+    expect(f.some((x) => x.cls === "machine-inventory")).toBe(false);
+  });
+  it("does NOT flag near-miss prose ('install the app on this machine')", () => {
+    const f = scanText("install the app on this machine", "transcript", []);
+    expect(f.some((x) => x.cls === "machine-inventory")).toBe(false);
+  });
+  it("allowlist suppresses a machine-inventory finding (--allow-machine-inventory equivalent)", () => {
+    const f = scanText("Available applications on this machine: AppOne, AppTwo", "transcript", [
+      { cls: "machine-inventory", re: /Available applications on this machine:/ },
+    ]);
+    expect(f.some((x) => x.cls === "machine-inventory")).toBe(false);
+  });
+  it("class-scoped machine-inventory allow does not bleed into other classes", () => {
+    const text = "contact alice@acme.com. Available applications on this machine: AppOne, AppTwo";
+    const f = scanText(text, "transcript", [{ cls: "machine-inventory", re: /Available applications on this machine:/ }]);
+    expect(f.some((x) => x.cls === "email")).toBe(true); // email survives — machine-inventory allow is scoped
+    expect(f.some((x) => x.cls === "machine-inventory")).toBe(false);
   });
 });

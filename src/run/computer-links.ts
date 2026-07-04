@@ -2,8 +2,7 @@ import { existsSync } from "node:fs";
 import { resolve, relative, isAbsolute, sep } from "node:path";
 
 /**
- * `computer_links_resolve` support (P3 of
- * docs/internal/2026-07-03-computer-link-scheme-research-and-plan.md). Extracts every `computer://`
+ * `computer_links_resolve` support. Extracts every `computer://`
  * link payload from a model-visible transcript and resolves it against whatever evidence the calling
  * lane (live run / verify-run / replay) actually has, WITHOUT touching `src/vm-paths.ts` (that module
  * is the production-mirroring outbound DISPLAY transform; this one is the assertion-side consumer of

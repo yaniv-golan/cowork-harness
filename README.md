@@ -84,7 +84,7 @@ Only the committed-cassette `replay` above is fully self-contained. Live `run`/`
 > - **Replay only (zero setup):** `cowork-harness replay <cassette>` — no token, no Docker, no agent. The command above.
 > - **`protocol` (real model, no Docker):** needs only the auth token (item 3 below).
 > - **Live `container` / `microvm` / `hostloop` / `cowork`:** needs Docker (or Lima for `microvm`), a staged agent, and the token — run `cowork-harness doctor` first.
-> - **Invocation:** from a source checkout, `node dist/cli.js <cmd>` (or `npm link` to get the `cowork-harness` command); from a global install, `cowork-harness <cmd>`; the companion skill falls back to `npx cowork-harness@>=0.22.0`.
+> - **Invocation:** from a source checkout, `node dist/cli.js <cmd>` (or `npm link` to get the `cowork-harness` command); from a global install, `cowork-harness <cmd>`; the companion skill falls back to `npx cowork-harness@>=0.23.0`.
 >
 > *(One project, three names: the repo folder is `claude-cowork-headless-emulator`; the npm package, the CLI command, and the GitHub repo are all `cowork-harness`.)*
 
@@ -104,7 +104,7 @@ This repo ships a **companion skill** (`.claude/skills/cowork-harness/`) that te
 /plugin install cowork-harness@cowork-harness
 ```
 
-The skill **self-bootstraps the CLI**: if `cowork-harness` isn't on your PATH it falls back to `npx cowork-harness@>=0.22.0` (a version floor that fails loud rather than silently fetching a too-old CLI; Node ≥ 20). Tiers above `protocol` still need Docker/Lima and a Claude Desktop agent binary — see the prerequisites below.
+The skill **self-bootstraps the CLI**: if `cowork-harness` isn't on your PATH it falls back to `npx cowork-harness@>=0.23.0` (a version floor that fails loud rather than silently fetching a too-old CLI; Node ≥ 20). Tiers above `protocol` still need Docker/Lima and a Claude Desktop agent binary — see the prerequisites below.
 
 It also follows the open [Agent Skills](https://github.com/vercel-labs/skills) spec, so it installs cross-editor (Cursor, Codex, OpenCode, …) by pointing the `npx skills` CLI at `.claude/skills/cowork-harness` in this repo. (Working *inside* this repo, the skill auto-loads as a project skill — no install needed.)
 
@@ -119,14 +119,14 @@ A global install is enough for CI `lint`, reading the teaching skill, and replay
 To `run` the worked examples live or copy them as a starting point, use a source checkout. (The marketplace
 skill install itself only pulls `.claude/skills/cowork-harness/` — SKILL.md + `references/` + `scenario.py`/
 assertion keys, per `.claude-plugin/marketplace.json`'s `source` — not the rest of this table; the full set
-above becomes available once the skill's first command self-bootstraps `npx cowork-harness@>=0.22.0` — see
+above becomes available once the skill's first command self-bootstraps `npx cowork-harness@>=0.23.0` — see
 [above](#drive-it-from-claude-code-companion-skill) — which pulls the same npm package as the global-install row.)
 
 ### Prerequisites for anything above `protocol` fidelity
 
 (The `protocol` tier skips items 1–2 — no Docker, no staged agent — but still calls a real model via the host `claude`, so it needs item 3, the auth token; only a committed-cassette `replay` needs nothing at all):
 1. **Claude Desktop, opened once.** The Cowork agent binary is **bind-mounted from your own install** at run time — nothing Anthropic-owned is bundled. Open Cowork once so the agent ELF is staged (`…/claude-code-vm/<ver>/claude`); the harness auto-detects it, or set `COWORK_AGENT_BINARY=<path>` to point at it. Without a staged agent, the sandboxed live tiers (container/microvm/hostloop/cowork) fail with "Open Cowork once to stage it…". (`protocol` and a committed-cassette `replay` need no staged agent.) For the `hostloop` tier specifically, a **second, separate native macOS binary** is required (`…/claude-code/<ver>/claude.app/Contents/MacOS/claude` — distinct from the container ELF above); the same "open Cowork once" step stages both, and `cowork-harness doctor --tier hostloop` checks for it explicitly.
-2. **Docker (arm64)** + the agent image: `docker build --platform linux/arm64 -t cowork-agent-base:2 -f docker/Dockerfile.agent .` (override the tag with `COWORK_AGENT_IMAGE`). This **core** image mirrors the real Cowork rootfs's document/data toolchain (Node 22, openpyxl/pandas/pdf/docx/pptx, …). For OCR / LibreOffice / markitdown / opencv / PDF-table skills, build the **full-parity** image instead: `docker build --platform linux/arm64 --build-arg COWORK_FULL_PARITY=1 -t cowork-agent-full:2 -f docker/Dockerfile.agent .` and point `COWORK_AGENT_IMAGE` at it. (A run on the core image that uses an omitted capability is flagged — see capability detection.) The `-f docker/Dockerfile.agent .` paths are **repo-relative** — run it from a source checkout, not a global `npm install -g`. (Global install? Run `cowork-harness doctor --tier container` — it prints the exact `docker build` command with the correct package-local Dockerfile path.) The **`microvm` (L2)** tier uses **Lima / Apple-VZ** instead of Docker (`brew install lima`; no agent image to build) — `doctor --tier microvm` checks for that, not Docker. `microvm` also needs a one-time `cowork-harness vm init` before its first run (provisions the Lima VM image); `doctor --tier microvm` currently checks for `limactl` but not whether `vm init` has actually been run, so a missing VM image can still slip past `doctor` — run `vm init` once regardless of what `doctor` reports.
+2. **Docker (arm64)** + the agent image: `docker build --platform linux/arm64 -t cowork-agent-base:2 -f docker/Dockerfile.agent .` (override the tag with `COWORK_AGENT_IMAGE`). This **core** image mirrors the real Cowork rootfs's document/data toolchain (Node 22, openpyxl/pandas/pdf/docx/pptx, …). For OCR / LibreOffice / markitdown / opencv / PDF-table skills, build the **full-parity** image instead: `docker build --platform linux/arm64 --build-arg COWORK_FULL_PARITY=1 -t cowork-agent-full:2 -f docker/Dockerfile.agent .` and point `COWORK_AGENT_IMAGE` at it. (A run on the core image that uses an omitted capability is flagged — see capability detection.) The `-f docker/Dockerfile.agent .` paths are **repo-relative** — run it from a source checkout, not a global `npm install -g`. (Global install? Run `cowork-harness doctor --tier container` — it prints the exact `docker build` command with the correct package-local Dockerfile path.) The **`microvm` (L2)** tier uses **Lima / Apple-VZ** instead of Docker (`brew install lima`; no agent image to build) — `doctor --tier microvm` checks for that, not Docker. `microvm` also needs a one-time `cowork-harness vm init` before its first run (provisions the Lima VM image); `doctor --tier microvm` now also checks whether that Lima instance has been provisioned and warns (non-fatally — a live run self-provisions on first use, just with extra VM-boot latency) if `vm init` hasn't been run yet.
 
 > The `pytest` lane (`python/README.md`) has its own, slightly different prerequisite list (adds `pytest`
 > + package importability) — see there if you're driving tests via `pytest` instead of the CLI directly.
@@ -134,10 +134,12 @@ above becomes available once the skill's first command self-bootstraps `npx cowo
 
 > `sync` (below) is **optional for a first run** — the repo ships `baselines/desktop-*.json`, so `baseline: latest` already resolves. Run `sync` only to refresh the platform baseline after Claude Desktop updates. (`sync` is **macOS-only** today; on Linux/Windows use the committed baselines — they work cross-platform.)
 
+> The `examples/scenarios/...` paths below need a source checkout — a global `npm install -g` doesn't ship them (see the table above).
+
 ```bash
 # 0. Before the first live run: check prerequisites (Docker, staged agent, token, baseline).
-cowork-harness doctor                      # read-only: what's present, what's missing
-cowork-harness doctor --tier container     # scope the check to a specific tier
+cowork-harness doctor                      # read-only: what's present, what's missing (defaults to --tier container)
+cowork-harness doctor --tier container     # same as bare `doctor` above — spell it out, or pick a different tier (microvm/hostloop/cowork)
 
 # 1. (Optional · macOS-only) Sync a platform baseline from your installed Claude Desktop.
 #    Skippable on a first run — the repo ships baselines; `baseline: latest` already resolves.
@@ -159,7 +161,7 @@ cowork-harness record examples/scenarios/example-pdf-skill.yaml --out examples/r
 cowork-harness replay examples/replays/example-pdf-skill.cassette.json
 
 # Cassettes are COMMITTED fixtures — record against synthetic data, and gate them in CI:
-cowork-harness verify-cassettes examples/replays/   # privacy scan (email/currency/domain/path) + staleness; exit 1 on a finding
+cowork-harness verify-cassettes examples/replays/   # privacy scan (email/currency/domain/path/machine-inventory) + staleness; exit 1 on a finding
 
 # 5. Lint scenarios before committing (catches silent false-greens in assertion placement)
 #    Needs python3 (the linter shells out to the bundled scenario.py; PyYAML is bundled. exit 127 if python3 is missing).
@@ -238,7 +240,7 @@ back to lock in a deterministic re-run.
 
 **Output.** `skill` **renders the agent's work** (assistant text + tool calls) and a metered footer —
 you see *what it did*, not just a green. `run` is verdict-first but **prints the failing transcript
-inline** on a `FAIL` (no spelunking `runs/…`). Tune with `--quiet` (verdict only) / `--verbose`/`-V`
+inline** on a `FAIL` (no spelunking `runs/…`). Tune with `--quiet` (verdict only) / `--verbose`
 (+ thinking, tool inputs, sub-agent tree). For **shareable** output (screenshots, GIFs, README clips),
 `--compact` drops the informational `[capability]` notices (the probe + its hard-fail safety net stay)
 and `--demo` adds `--compact` + hides the `runs →` host-path header (runs stay in the durable location, so
@@ -301,15 +303,15 @@ Skill testing is the headline use, but the tool is a general harness over the Co
 
 | Command | What it does | Reach for it when… |
 |---|---|---|
-| `skill <folder> "<prompt>"` | Run a local skill/plugin folder once against the staged agent | ad-hoc "is the skill alive / does it do X?" — the fast inner loop |
-| `run <scenario.yaml \| dir/>` | Run authored scenarios with `assert:` + a CI-ready exit code; a decider (`--decider-cmd`/`--decider-dir`, or a scenario's `on_unanswered: llm`) can answer unscripted gates. `--repeat N` (2-100) runs each scenario N times and aggregates a variance rollup instead of a single pass/fail — `--min-pass-rate`, `--stop-on-diverge`, `--max-budget-usd` tune the batch verdict/loop. `--matrix <matrix.yaml>` runs ONE scenario across the cross-product of baseline/model/skill_dir axes — `--max-cells`/`--concurrency` tune the cap/pool; any cell failing (assertion or infra) fails the run | you want a repeatable, **asserted regression test** — to **measure flakiness** instead of trusting one green — or to **test a compatibility matrix** (multiple baselines/models/skill variants) in one run |
-| `chat <folder> [prompt]` | Interactive multi-turn REPL against a skill (TTY); optional seed prompt is sent as the first turn. `--upload <file>` / `--folder <dir>` (repeatable) attach files/project folders; `--verbose` / `-V` shows thinking blocks + tool inputs; `--fidelity protocol\|container\|hostloop` (no `microvm`/`cowork` in the REPL) | debugging a multi-turn flow by hand |
-| `record` / `replay` | **Record a live run once → replay it token-free, Docker-free thereafter.** Key flags: `--decider-llm`/`--decider-dir` (answer gates live during recording), `--rerecord-stale`/`--concurrency <N>` (batch re-recording), `--assert-from <scenario.yaml>`/`--reassert` (re-check the on-disk `assert:` instead of the frozen one), `--strict`/`--fail-on-skill-drift` (staleness handling on replay). Full flag list: `cowork-harness record --help` / `replay --help`. | **token-free, Docker-free CI** from a once-recorded run |
-| `verify-cassettes <file\|dir>` | Token-free CI gate over committed cassettes: a privacy scan (email/currency/domain/path → exit 1; whole-token allows via `--allow` / class-scoped `--allow-domain` / `--allow-email` / `--allow-path` / `--allow-file`) + a staleness check (`--skip-privacy` or `--skip-staleness` to run only one half). A dir argument scans `*.cassette.json` in that dir only (**non-recursive**) | gating **committed cassettes** against PII leaks + "edited the skill, forgot to re-record" |
+| `skill <folder> "<prompt>"` | Run a local skill/plugin folder once against the staged agent; `--compact`/`--demo` trim output for shareable screenshots/GIFs | ad-hoc "is the skill alive / does it do X?" — the fast inner loop |
+| `run <scenario.yaml \| dir/>` | Run authored scenarios with `assert:` + a CI-ready exit code; a decider (`--decider-cmd`/`--decider-dir`, or a scenario's `on_unanswered: llm`) can answer unscripted gates. `--repeat N` (2-100) runs each scenario N times and aggregates a variance rollup instead of a single pass/fail — `--min-pass-rate`, `--stop-on-diverge`, `--max-budget-usd` tune the batch verdict/loop. `--matrix <matrix.yaml>` runs ONE scenario across the cross-product of baseline/model/skill_dir axes (worked example: `examples/matrices/csv-metrics-matrix.yaml`) — `--max-cells`/`--concurrency` tune the cap/pool; any cell failing (assertion or infra) fails the run; `--compact`/`--demo` trim output for shareable screenshots/GIFs (shared with `skill`, below) | you want a repeatable, **asserted regression test** — to **measure flakiness** instead of trusting one green — or to **test a compatibility matrix** (multiple baselines/models/skill variants) in one run |
+| `chat <folder> [prompt]` | Interactive multi-turn REPL against a skill (TTY); optional seed prompt is sent as the first turn. `--upload <file>` / `--folder <dir>` (repeatable) attach files/project folders; `--verbose` shows thinking blocks + tool inputs; `--fidelity protocol\|container\|hostloop` (no `microvm`/`cowork` in the REPL) | debugging a multi-turn flow by hand |
+| `record` / `replay` | **Record a live run once → replay it token-free, Docker-free thereafter.** Key flags: `--decider-llm`/`--decider-dir` (answer gates live during recording), `--rerecord-stale`/`--concurrency <N>` (batch re-recording), `--assert-from <scenario.yaml>`/`--reassert` (re-check the on-disk `assert:` instead of the frozen one), `--strict`/`--fail-on-skill-drift` (staleness handling on replay), `--no-redact` (skip record-time redaction), `--allow-failing` (relax the post-run verdict gate), `--dry-run` (resolve without recording). Full flag list: `cowork-harness record --help` / `replay --help`. | **token-free, Docker-free CI** from a once-recorded run |
+| `verify-cassettes <file\|dir>` | Token-free CI gate over committed cassettes: a privacy scan (email/currency/domain/path/machine-inventory → exit 1; whole-token allows via `--allow` / class-scoped `--allow-domain` / `--allow-email` / `--allow-path` / `--allow-machine-inventory` / `--allow-file`) + a staleness check (`--skip-privacy` or `--skip-staleness` to run only one half). A dir argument scans `*.cassette.json` in that dir only (**non-recursive**) | gating **committed cassettes** against PII leaks + "edited the skill, forgot to re-record" |
 | `verify-run <run-dir> <scenario.yaml>` | Re-evaluate a scenario's `assert:` (and, when the scenario declares `answers:`, whether they still match the run's actual gates) against an already-kept run dir — **no live agent, no tokens, no Docker** (~1s) | iterating on a wrong assertion or a drifted `answer` without a full live re-record |
 | `trace <run-id>` | Digest a run's `events.jsonl` (`--view tools\|questions\|dispatches`; legacy `--tools` / `--gates` / `--dispatches` aliases still accepted) | "how many sub-agents *actually* dispatched, and which?" |
 | `inspect <run-id>` | Show what a run **produced**: the artifacts + a shallow field preview of each JSON artifact (`--output-format json` for a digest). Works on a salvaged partial run too | "did it do the job?" — without hand-parsing `…/mnt/outputs/…` |
-| `scaffold <run-id>` | Turn a kept run into a starter scenario YAML (gates→answers, artifacts→`file_exists`); `--from-run <id>` is a deprecated alias for the positional | authoring a scenario from a real run instead of guessing |
+| `scaffold <run-id>` | Turn a kept run into a starter scenario YAML (gates→answers, artifacts→`file_exists`) | authoring a scenario from a real run instead of guessing |
 | `python3 …/scenario.py scaffold --name <name> --skill <dir>` | Generate a starter scenario skeleton from scratch (the `…` is `.claude/skills/cowork-harness/scripts/`) | starting a new scenario when you have no prior run |
 | `lint <scenario.yaml \| dir/>…` | Check scenarios for silent false-greens — assertions placed on the wrong CI lane, mixed content/live keys, missing `controlOut`-required keys (files or a directory of `*.yaml`/`*.yml`; bundled `scenario.py`; needs python3 — PyYAML is bundled) | before committing a new scenario or after changing assertions |
 | `assertions --list` | List the available scenario assertions (generated from the schema) | "what can I assert?" without grepping the source |
@@ -476,6 +478,10 @@ It is informational — it never changes the verdict. The block is a live/`parti
                       └────────────────────────────────────┘    └────────────────────────┘
 ```
 
+> The diagram above shows the VM-loop path (`container`/`microvm`). At `hostloop` fidelity the agent loop
+> instead runs as a native host process with no container around it, routing shell/file access through a
+> workspace SDK-MCP server into a VM sidecar — see the Spawn contract section in DESIGN.md for detail.
+
 - **AgentSession** speaks the Agent SDK control protocol over stream-json, emitting a typed event
   stream. When the agent emits a decision request (a tool permission, an `AskUserQuestion`, or a
   `request_user_dialog`/`elicitation`), the **Decider** resolves it — scripted `answers:` first, then
@@ -577,7 +583,7 @@ Most runs need **none** of these — the defaults are correct. They're grouped b
 
 - `COWORK_LOCKDOWN=off` — relax container hardening for debugging (default `on`). With it `on`, an L2 microVM whose guest egress firewall fails to apply **aborts loudly** rather than running un-isolated.
 - `COWORK_CONTAINER_RUNTIME=podman` — use Podman instead of Docker.
-- `COWORK_AGENT_IMAGE=<tag>` — override the agent image name (default `cowork-agent-base:2`); `COWORK_AGENT_BINARY=<path>` — override the auto-detected staged agent ELF.
+- `COWORK_AGENT_IMAGE=<tag>` — override the agent image name (default `cowork-agent-base:2`); `COWORK_AGENT_BINARY=<path>` — override the auto-detected staged agent ELF. `COWORK_HARNESS_VERIFY_AGENT_SHA=0` — skip the default sha256 integrity check of the resolved agent ELF against the baseline's recorded hash (on by default).
 - `COWORK_SKIP_CAPABILITY_PROBE=1` — skip the per-run capability probe (the harness otherwise probes the agent image/VM for the document/OCR/Office capabilities the real Cowork rootfs ships and **fails a run that uses one the image omits** — a likely false negative; suppress per-scenario with `allow_missing_capability: true`, or rebuild full parity).
 - `COWORK_HARNESS_DECIDER_MODEL` — the default `--decider-llm` answering model (overridden by the `--decider-model` flag; falls back to the Sonnet default — pin a cheaper model for simple gates to cut cost). `COWORK_HARNESS_DECIDER_DIR_POLL_MS` / `_TIMEOUT_MS` — tune the `--decider-dir` rendezvous poll/backstop; `COWORK_HARNESS_DECIDER_CMD_TIMEOUT_MS` / `COWORK_HARNESS_LLM_TIMEOUT_MS` — backstop a hung `--decider-cmd` helper / `--decider-llm` model call (default 600 s, fail loud); `COWORK_HARNESS_LLM_RETRIES` — bounded retries for a transient non-zero `claude -p` exit in the `--decider-llm` transport (default 2, clamped to 0–10; set `0` to disable, e.g. deterministic CI); `COWORK_HARNESS_LLM_MAX_BYTES` — stdout cap on a `--decider-llm` model call (default 8 MiB, fail loud past it); `COWORK_HARNESS_DIALOG_TIMEOUT_MS` — override the 6 s dialog auto-cancel.
 - `COWORK_HARNESS_RUNS_DIR` (or the `--run-dir <path>` flag — a **global** flag that must precede the subcommand, like `--dotenv`) — override the default run-output root `~/.cowork-harness/runs` (kept out of any working tree so sensitive skill inputs/outputs don't land in a repo). Precedence: `--run-dir` > env > default. The root is flat and machine-global (shared across projects); pinned `--session-id` runs are guarded against cross-project overwrite, and `prune` never prunes them. In CI, set it to a workspace path (e.g. `runs`) so artifact upload can collect the runs. `COWORK_HARNESS_ALLOW_FOREIGN_RESUME=1` overrides the guard that blocks `--resume` onto another project's pinned session.
@@ -634,7 +640,7 @@ This repo is built to be driven by agents, not just read by humans:
 
 - **[AGENTS.md](./AGENTS.md)** — the canonical agent-instructions file (architecture seams, the build gate, invariants, ethos). Read it before changing code. Also indexed in **[llms.txt](./llms.txt)**.
 - **Companion skill** — [`.claude/skills/cowork-harness/`](./.claude/skills/cowork-harness/SKILL.md) teaches an agent to drive the harness; install it via the marketplace (see [above](#drive-it-from-claude-code-companion-skill)).
-- **Machine-readable interfaces** — stable `--output-format json` envelope on stdout, deterministic exit codes (`0`/`1`/`2`/`3`), and `--help` on every command.
+- **Machine-readable interfaces** — stable `--output-format json` envelope on stdout, deterministic exit codes (`0`/`1`/`2`/`3`, with a couple of documented per-command exceptions — see [SPEC.md](./SPEC.md) for the full table), and `--help` on every command.
 - **JSON Schemas** — [`schema/scenario.schema.json`](./schema/scenario.schema.json) and [`schema/session.schema.json`](./schema/session.schema.json) describe every field of the YAML you author (generated from the source schemas; `npm run schema`). [`schema/protocol.v1.json`](./schema/protocol.v1.json) (hand-authored) schemas the harness's own control-channel wire protocol, with a golden vector pack at [`fixtures/protocol/v1/`](./fixtures/protocol/v1/) — see [docs/protocol.md](./docs/protocol.md).
 
 `AGENTS.md`, `SPEC.md`, and `DESIGN.md` **are** shipped in the npm package (see `package.json` `files`) —
@@ -667,9 +673,18 @@ a global install has them locally too, not just on GitHub.
 | [SECURITY.md](./SECURITY.md) | Threat model — the sandbox is a fidelity fixture, not a security boundary. |
 | [RELEASING.md](./RELEASING.md) | The release flow — branch → PR → tag → npm publish. |
 
+## Versioning
+
+From `1.0.0` this project follows [semver](https://semver.org/). What that covers is enumerated in
+**[SPEC.md §12](./SPEC.md#12-versioning--the-10-compatibility-contract)** — the CLI commands/flags and
+exit codes, the scenario/session/baseline/`RunResult`/cassette/protocol schemas, the documented
+`COWORK_HARNESS_*` (+ `COWORK_AGENT_BINARY`/`COWORK_AGENT_IMAGE`) env vars, and the packaged Action's
+inputs/outputs. Human-readable terminal text is explicitly **not** part of the contract — parse the
+`--output-format json` envelope, not stdout. Pre-1.0, minor versions may still break any surface.
+
 ## Status
 
-**Verified end-to-end against the live staged agent (2.1.197 / asar 1.17377.1).** Host-side parity (egress/gates/mount/web_fetch facts) re-derived via `sync` — no unknown deltas; only `asarFingerprint` moved, plus `api.claude.ai` joining `network.allowDomains`. The reconstructed prompt appends (`prompts/desktop-1.15200.0/`) were spot-checked against the new asar: substantively unchanged (minor punctuation-level rewording only) — the load-bearing "is NOT Claude Code" correction, the host-loop `## Shell access` generator, and the web_fetch/mount facts all still hold. The live scenario suite (`protocol` + `container` tiers) passes against this baseline. The latest shipped baseline — what `baseline: latest` resolves to (`cowork-harness list`) — is **`desktop-1.17377.1`**.
+**Verified end-to-end against the live staged agent (2.1.197 / asar 1.17377.1).** Host-side parity (egress/gates/mount/web_fetch facts) re-derived via `sync` — no unknown deltas; only `asarFingerprint` moved, plus `api.claude.ai` joining `network.allowDomains`. The reconstructed prompt appends (`prompts/desktop-1.15200.0/`) were spot-checked against the new asar: substantively unchanged (minor punctuation-level rewording only) — the load-bearing "is NOT Claude Code" correction, the host-loop `## Shell access` generator, and the web_fetch/mount facts all still hold. The live scenario suite (`protocol` + `container` tiers) passes against this baseline. The latest shipped baseline — what `baseline: latest` resolves to (`cowork-harness list`) — is **`desktop-1.18286.0`** (the committed baseline file and version-lockstep checks already track it; the "verified end-to-end" pass above is pinned to `1.17377.1` pending a fresh live re-run against `1.18286.0`).
 
 - ✅ **Three isolation tiers (L0/L1/L2) + two loop-mode overlays** — `protocol` (L0 control loop), `container` (L1 sandboxed arm64 + per-run default-deny egress sidecar), `microvm` (L2 real Apple-VZ Linux microVM + guest firewall); plus the loop-mode overlays `hostloop` (production split-execution: the agent loop is a native host process with no container around the file tools — matching production — and native Bash/WebFetch disabled and routed host-side via the workspace SDK-MCP server into a Docker VM sidecar) and `cowork` (auto-picks host-loop vs container the way Cowork does — gate `1143815894`). Egress enforced at container/microvm/hostloop; `boundary-check` reports **ALL CONSTRAINTS ENFORCED**.
 - ✅ **Three-seam driver** — `AgentSession` (control protocol) → `Decider` (scripted + `on_unanswered` policy, no silent false-greens) → `Run` (turn loop, sub-agent dispatch tree, `RunRecord`). Multi-turn `chat`, deterministic cassette `record`/`replay` (no token), `run.jsonl`/`trace.json` logging with secret-scrub.

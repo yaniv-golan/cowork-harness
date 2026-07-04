@@ -1,0 +1,8 @@
+# Session for the hostloop cassette + computer_links_resolve two-tier check (readiness C1/C3).
+# hostloop runs the real agent binary NATIVELY on the host; only shell/web route through the
+# Docker sidecar. No connected folder → no `allow_host_writes` consent needed (the agent writes to
+# the run's scratch outputs/, not a host folder).
+model: claude-opus-4-8
+effort: high
+permission_mode: default
+permission_parity: cowork
