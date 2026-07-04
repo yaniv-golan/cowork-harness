@@ -95,6 +95,11 @@ All notable changes to this project are documented here. The format is based on
     assertion table stays in sync with their union.
   - `test/cli-help.test.ts` gained a check that every CLI command appears in README's "Commands at a
     glance" table, on the same "doc can't silently drift from code" principle.
+- **`test/vm-path-ctx-file.test.ts` gained a structural cassette-privacy regression test.** Asserts
+  the committed `examples/replays/example-pdf-skill.cassette.json`'s top-level key set is closed and
+  contains no `mount`-named field — guards the cassette assembler itself (not just `buildManifest`'s
+  walk scope), so a future edit that adds a mounts-bearing field to the cassette literal is caught
+  without needing a live re-record.
 
 ## [0.22.0] — 2026-07-03
 
