@@ -140,8 +140,14 @@ export function spawnHostLoop(
     ],
     readOnlyRoots: plan.mounts.filter((mt) => mt.kind === "folder" && mt.mode === "r").map((mt) => mt.hostPath),
     scratchRoots: [hostOutputsDir],
-    // Bs === "chat" (asar byte 8079633): scratch ⟺ chat-type session. run/skill lanes (this function's
-    // only current callers) are cowork-type sessions regardless of folder count — stays false here.
+    // Bs === "chat" (asar byte 8079633): scratch ⟺ chat-type session. This function serves BOTH the
+    // run/skill lanes AND `chat` (chat.ts). All are treated as cowork-type sessions regardless of folder
+    // count, so scratchMode stays false: connected-folder writes are gated only by `allow_host_writes`
+    // consent, NOT additionally restricted to the outputs dir the way a production chat-type session would
+    // be. Chat here already requires explicit `--allow-host-writes` for an rw folder (safety.ts), and a
+    // connected folder in chat is an operator-constructed fixture, not a production chat topology — so this
+    // is a known, consented fidelity gap (docs/internal/2026-07-04-hostloop-security-review.md B3), not a
+    // safety break. Revisit if chat hostloop should thread session-type scratchMode for closer fidelity.
     scratchMode: false,
     claudePluginRoot: claudePluginRootHost,
   };
