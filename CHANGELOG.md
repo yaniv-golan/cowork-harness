@@ -8,6 +8,17 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **Lint catches fidelity/assert combinations that fail by design (readiness-plan D2).**
+  `scenario.py lint` (and the `cowork-harness lint` wrapper) now ERRORs on
+  `transcript_no_host_path` + `fidelity: hostloop` or `protocol` (the agent legitimately runs on real
+  host paths at those tiers — the assertion can never be a meaningful check there; lint is
+  deliberately stricter than the runtime's run-start warning), WARNs on `transcript_no_host_path` +
+  `fidelity: cowork` naming the host-loop gate-resolution dependency (the linter stays offline — the
+  message carries gate id `1143815894` instead of reading a baseline, pinned against the
+  `cowork-sync.ts` gate table by a sync test so a Desktop re-key can't rot it), and ERRORs on
+  non-empty `requires_capabilities` + `fidelity: protocol` without `allow_missing_capability` (the
+  capability probe can't run at protocol tier, so the run hard-fails as unverifiable).
+
 - **Resolved-tier staleness (readiness-plan D1, from founder-skills consumer feedback).** A
   `fidelity: cowork` cassette records the tier the loop-decision gate resolved to
   (`effectiveFidelity`); `verify-cassettes` / `replay` now detect when the current baseline resolves

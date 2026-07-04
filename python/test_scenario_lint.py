@@ -194,3 +194,74 @@ def test_double_quoted_even_backslash_is_not_flagged(tmp_path):
 def test_single_quoted_regex_never_flagged(tmp_path):
     rules = _rules("assert:\n  - transcript_matches: '\\d+ items'\n", tmp_path)
     assert "regex-double-quoted" not in rules
+
+
+# --- D2: fidelity/assert compatibility rules (readiness plan D2) ---
+
+
+def _rules_at(tier, yaml_body, tmp_path):
+    """Like _rules but with an explicit fidelity tier."""
+    f = tmp_path / "sc.yaml"
+    f.write_text(
+        "name: t\nbaseline: latest\nsession: (inline)\n"
+        f"fidelity: {tier}\nprompt: hi\n" + yaml_body,
+        encoding="utf-8",
+    )
+    return {fnd.rule for fnd in scenario.lint_file(str(f))}
+
+
+def test_host_path_assert_on_hostloop_is_error(tmp_path):
+    body = "assert:\n  - transcript_no_host_path: true\n"
+    assert "host-path-assert-tier" in _rules_at("hostloop", body, tmp_path)
+    assert "host-path-assert-tier" in _rules_at("protocol", body, tmp_path)
+
+
+def test_host_path_assert_on_container_is_clean(tmp_path):
+    body = "assert:\n  - transcript_no_host_path: true\n"
+    rules = _rules_at("container", body, tmp_path)
+    assert "host-path-assert-tier" not in rules
+    assert "host-path-assert-cowork" not in rules
+
+
+def test_host_path_assert_on_cowork_is_warn_naming_the_gate(tmp_path):
+    f = tmp_path / "sc.yaml"
+    f.write_text(
+        "name: t\nbaseline: latest\nsession: (inline)\nfidelity: cowork\n"
+        "prompt: hi\nassert:\n  - transcript_no_host_path: true\n",
+        encoding="utf-8",
+    )
+    findings = scenario.lint_file(str(f))
+    hit = [x for x in findings if x.rule == "host-path-assert-cowork"]
+    assert len(hit) == 1
+    assert hit[0].severity == "WARN"
+    # offline gate fact: the message carries the gate id instead of reading a baseline
+    assert scenario.HOST_LOOP_GATE_ID in hit[0].message
+
+
+def test_requires_capabilities_on_protocol_is_error(tmp_path):
+    rules = _rules_at(
+        "protocol", "requires_capabilities: [ocr]\nassert:\n  - result: success\n", tmp_path
+    )
+    assert "capabilities-on-protocol" in rules
+
+
+def test_requires_capabilities_on_protocol_with_optout_is_clean(tmp_path):
+    body = (
+        "requires_capabilities: [ocr]\n"
+        "assert:\n  - {result: success, allow_missing_capability: true}\n"
+    )
+    assert "capabilities-on-protocol" not in _rules_at("protocol", body, tmp_path)
+
+
+def test_requires_capabilities_on_container_is_clean(tmp_path):
+    rules = _rules_at(
+        "container", "requires_capabilities: [ocr]\nassert:\n  - result: success\n", tmp_path
+    )
+    assert "capabilities-on-protocol" not in rules
+
+
+def test_empty_requires_capabilities_on_protocol_is_clean(tmp_path):
+    rules = _rules_at(
+        "protocol", "requires_capabilities: []\nassert:\n  - result: success\n", tmp_path
+    )
+    assert "capabilities-on-protocol" not in rules

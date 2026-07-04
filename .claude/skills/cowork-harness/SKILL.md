@@ -288,10 +288,14 @@ cowork-harness lint scenarios/*.yaml
 ```
 
 `lint` flags: filesystem/egress-only assertions on a `replay` gate (silent no-op), bad regex
-quoting, an egress assert on `protocol` fidelity, a `controlOut`-gated key on a non-`controlOut`
-replay, mixed-class assertion items, and hallucinated schema (`assertions:` vs `assert:`, unknown
-keys). Exit code is non-zero on errors (CI-friendly). `scaffold` auto-upgrades the tier if you ask
-for egress on `protocol`, so it never emits a scenario `lint` would reject.
+quoting, an egress assert on `protocol` fidelity, `transcript_no_host_path` on `hostloop`/`protocol`
+(ERROR — fails by design at those tiers; WARN on `fidelity: cowork`, whose tier resolves per the
+baseline's host-loop gate), non-empty `requires_capabilities` on `protocol` without
+`allow_missing_capability` (ERROR — the capability probe can't run there, so the run hard-fails as
+unverifiable), a `controlOut`-gated key on a non-`controlOut` replay, mixed-class assertion items,
+and hallucinated schema (`assertions:` vs `assert:`, unknown keys). Exit code is non-zero on errors
+(CI-friendly). `scaffold` auto-upgrades the tier if you ask for egress on `protocol`, so it never
+emits a scenario `lint` would reject.
 
 CI placement: a **token-free `replay` PR gate** (content/structure only) + a **nightly live `run`**
 (filesystem/egress). Fastest setup: `uses: yaniv-golan/cowork-harness@v1` (a packaged GitHub Action with a

@@ -16,9 +16,14 @@ Two subcommands:
 
 lint flags (see references/scenario-schema.md for the why of each):
   E  egress assertion on `fidelity: protocol`        (the harness rejects this run)
+  E  `transcript_no_host_path` on hostloop/protocol  (fails BY DESIGN at those tiers)
+  E  `requires_capabilities` on `fidelity: protocol` (probe can't run → hard-fails
+                                                      unless allow_missing_capability)
   E  on_unanswered: agent / invalid value            (schema rejects `agent`)
   E  authored `replay_protocol_fidelity` assertion   (replay-synthesized only)
   E  `assertions:` instead of `assert:`              (block ignored → every check no-ops)
+  W  `transcript_no_host_path` on `fidelity: cowork` (tier resolves per baseline gate —
+                                                      incompatible if it lands hostloop)
   W  no content assertion → no-op on a replay gate    (every assertion is fs/egress)
   W  mixed-class assert item → fs/egress half dropped on replay
   W  unknown top-level / assertion key                (typo or hallucinated schema)
@@ -177,6 +182,13 @@ REGEX_KEYS = {
 VALID_ON_UNANSWERED = {"fail", "prompt", "first", "llm"}
 VALID_TIERS = ("protocol", "container", "microvm", "hostloop", "cowork")
 
+# D2 gate-id tripwire: the `host-path-assert-cowork` WARN below embeds Cowork's
+# host-loop gate id in offline Python (the linter never reads a baseline). The
+# id is pinned by test/scenario-lint-gate-id.test.ts against the PINNED_GATES
+# entry in src/sync/cowork-sync.ts, so a Desktop gate re-key fails loud there
+# instead of silently rotting this message.
+HOST_LOOP_GATE_ID = "1143815894"
+
 
 class Finding:
     __slots__ = ("severity", "rule", "message", "fix", "file", "line")
@@ -299,6 +311,60 @@ def lint_doc(doc, path, raw_lines):
                 path,
             )
         )
+
+    # E/W (D2): transcript_no_host_path is tier-incompatible with hostloop/protocol — the agent
+    # legitimately runs on real host paths there, so the assertion fails BY DESIGN (the runtime only
+    # warns at run start, after authoring). Lint is deliberately STRICTER than the runtime: the docs
+    # declare the combination incompatible, so authoring it is a bug even if a tool-free run could
+    # accidentally pass. `cowork` gets a WARN naming the baseline-gate resolution dependency (the
+    # linter stays offline — the message carries the gate fact instead of reading a baseline).
+    if "transcript_no_host_path" in assert_keys:
+        if fidelity in ("hostloop", "protocol"):
+            findings.append(
+                Finding(
+                    "ERROR",
+                    "host-path-assert-tier",
+                    f"`transcript_no_host_path` on `fidelity: {fidelity}` — the agent runs on real "
+                    "host paths at this tier, so this assertion FAILS BY DESIGN (it can never be a "
+                    "meaningful check here).",
+                    "Run this assertion at fidelity: container (or microvm), or drop it for this tier.",
+                    path,
+                )
+            )
+        elif fidelity == "cowork":
+            findings.append(
+                Finding(
+                    "WARN",
+                    "host-path-assert-cowork",
+                    "`transcript_no_host_path` on `fidelity: cowork` — the tier resolves per the "
+                    f"baseline's host-loop gate ({HOST_LOOP_GATE_ID}); if it resolves to hostloop "
+                    "this assertion fails by design (and a later gate flip re-stales the cassette).",
+                    "Pin fidelity: container if the assertion is load-bearing; keep cowork only if "
+                    "you accept the gate-resolution dependency.",
+                    path,
+                )
+            )
+
+    # E (D2): requires_capabilities on protocol — the capability probe cannot run at protocol tier
+    # (clause b of the requires_capabilities contract), so the run HARD-FAILS unless an assert item
+    # opts out via allow_missing_capability: true. Offline-detectable fails-by-design, same class as
+    # the tier/assert rules above.
+    req_caps = doc.get("requires_capabilities")
+    if req_caps and fidelity == "protocol":
+        opted_out = any(item.get("allow_missing_capability") is True for item in items)
+        if not opted_out:
+            findings.append(
+                Finding(
+                    "ERROR",
+                    "capabilities-on-protocol",
+                    "non-empty `requires_capabilities` on `fidelity: protocol` — the capability "
+                    "probe cannot run at protocol tier, so the run hard-fails as unverifiable "
+                    "(fails by design).",
+                    "Use a sandboxed tier (container/microvm/hostloop), or add "
+                    "`allow_missing_capability: true` to an assert item to opt out explicitly.",
+                    path,
+                )
+            )
 
     # E: retired/invalid on_unanswered
     ou = doc.get("on_unanswered")
