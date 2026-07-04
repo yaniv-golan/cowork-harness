@@ -50,6 +50,11 @@ import { runsWriteRoot } from "./trace-view.js";
 import { summarizeGateProvenance } from "./gate-provenance.js";
 import { collectSecrets, scrub } from "../secrets.js";
 import { indexRowFromResult, appendIndexRow } from "./run-index.js";
+import { collectArtifacts } from "./artifacts.js";
+
+// Moved to ./artifacts.ts so assert.ts can use it without an assert→execute import cycle;
+// re-exported here for the existing importers (cassette.ts, tests).
+export { collectArtifacts } from "./artifacts.js";
 
 const RUN_RESULT_SCHEMA_URL = "https://raw.githubusercontent.com/yaniv-golan/cowork-harness/main/schema/run-result.json";
 
@@ -1069,79 +1074,6 @@ export function buildPartialResult(args: {
 }
 
 /** the structured run trace. */
-/** ENV-MANIFEST: recursively list files under each user-visible prefix (relative path + byte size).
- *  Paths only — NO content snapshot (that is the cassette manifest).
- *
- *  use `lstatSync` (does NOT follow symlinks) and SKIP any symlink entry — a symlink could point out
- *  of `workRoot` (inlining out-of-tree content into a committed cassette) or form a cycle. A `visited` set of
- *  resolved real directory paths breaks cycles among real directories too. Only regular files are recorded. */
-export function collectArtifacts(workRoot: string, prefixes: string[]): { path: string; bytes: number }[] {
-  const out: { path: string; bytes: number }[] = [];
-  const visited = new Set<string>();
-  // Resolve workRoot once — used in the containment assertion inside walk().
-  let workRootReal: string;
-  try {
-    workRootReal = realpathSync(workRoot);
-  } catch {
-    return out; // workRoot itself absent/unreadable
-  }
-  const walk = (abs: string, rel: string) => {
-    // Cycle guard: resolve the real path of this directory; if we've already walked it, stop.
-    let real: string;
-    try {
-      real = realpathSync(abs);
-    } catch {
-      return; // prefix dir absent / unreadable — not an error
-    }
-    // Containment: reject any entry whose realpath escapes workRoot. Catches prefix-level symlinks
-    // (not caught by the child lstatSync below) and any other realpath-diverging construct.
-    if (real !== workRootReal && !real.startsWith(workRootReal + sep)) {
-      warn(`::warning:: collectArtifacts: skipping "${rel}" — real path escapes work root\n`);
-      return;
-    }
-    if (visited.has(real)) return;
-    visited.add(real);
-    let entries: string[];
-    try {
-      entries = readdirSync(abs);
-    } catch {
-      return; // prefix dir absent (skill wrote nothing there) — not an error
-    }
-    for (const name of entries.sort()) {
-      const childAbs = join(abs, name);
-      const childRel = rel ? `${rel}/${name}` : name;
-      let st;
-      try {
-        st = lstatSync(childAbs); // lstat: does NOT follow symlinks
-      } catch {
-        continue;
-      }
-      if (st.isSymbolicLink()) {
-        // Skip symlinks: they can escape workRoot or cycle. (Recording-side; the agent's own outputs are
-        // real files, so this loses nothing in practice while closing the escape/cycle hole.)
-        warn(`::warning:: collectArtifacts: skipping symlink ${childRel} (not followed)\n`);
-        continue;
-      }
-      if (st.isDirectory()) walk(childAbs, childRel);
-      else if (st.isFile()) {
-        // a HARDLINK to an out-of-root host file reads as an ordinary regular file (the symlink
-        // and realpath-containment guards above CANNOT catch it — a hardlink is a second name for an
-        // inode, not path indirection, so `realpathSync` returns the path unchanged inside workRoot).
-        // Reject any file with nlink > 1 so a hardlinked out-of-root file's content can't be read into a
-        // committed cassette. Residual fidelity tradeoff: legitimate in-root hardlinks (cp -l / git / build
-        // tooling) are conservatively dropped — enumerating all links of an inode is not feasible from
-        // artifact-walk state, so reject + warn + document is the only correct posture.
-        if (st.nlink > 1) {
-          warn(`::warning:: collectArtifacts: skipping ${childRel} (hardlink, nlink=${st.nlink}) — may reference out-of-root content\n`);
-          continue;
-        }
-        out.push({ path: childRel, bytes: st.size });
-      }
-    }
-  };
-  for (const prefix of prefixes) walk(join(workRoot, prefix), prefix);
-  return out;
-}
 
 function writeTrace(outDir: string, rec: RunRecord, egress: RunResult["egress"], secrets: string[], durationMs?: number) {
   const trace = {
