@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { warn } from "../io.js";
+import { warn, envPositiveNumber } from "../io.js";
 import type { Complete, CompleteResult } from "./decider.js";
 
 /** A spawn rejection the retry wrapper may re-attempt: a TRANSIENT non-zero exit. Timeout / maxBytes /
@@ -55,7 +55,19 @@ function spawnOnce(bin: string, prompt: string, model: string, timeoutMs: number
     // bound the `claude -p` spawn — a hung-but-alive child would otherwise block the harness forever.
     // On expiry SIGKILL the child and reject LOUD; clear the timer on close/error so a fast call never leaks it.
     // stderr is PIPED (not "ignore") so the close handler can fold it into the diagnosis.
-    const child = spawn(bin, ["-p", prompt, "--model", model, "--output-format", "json"], { stdio: ["ignore", "pipe", "pipe"] });
+    // The prompt is delivered on STDIN, not argv: an argv prompt is world-readable via `ps` for the life of
+    // the child (verified: `echo '...' | claude -p --output-format json` with no positional prompt reads
+    // from stdin and returns the identical success envelope) — stdin is process-private.
+    const child = spawn(bin, ["-p", "--model", model, "--output-format", "json"], { stdio: ["pipe", "pipe", "pipe"] });
+    // A child that exits/errors before consuming stdin (e.g. ENOENT, or a fake bin that exits immediately)
+    // delivers EPIPE asynchronously as an `error` event on stdin — without a listener Node escalates it to
+    // an uncaughtException. The child's own "error"/"close" handlers below already reject loud, so swallow
+    // the redundant async EPIPE here rather than let it crash the process.
+    child.stdin.on("error", () => {
+      /* surfaced via the child's own error/close handlers */
+    });
+    child.stdin.write(prompt);
+    child.stdin.end();
     const timer = setTimeout(() => {
       try {
         child.kill("SIGKILL");
@@ -161,8 +173,11 @@ function spawnOnce(bin: string, prompt: string, model: string, timeoutMs: number
  */
 export const claudeCliComplete: Complete = async (prompt, model) => {
   const bin = process.env.COWORK_HARNESS_CLAUDE_BIN || "claude";
-  const timeoutMs = Number(process.env.COWORK_HARNESS_LLM_TIMEOUT_MS) || 600_000;
-  const maxBytes = Number(process.env.COWORK_HARNESS_LLM_MAX_BYTES) || 8 * 1024 * 1024;
+  // envPositiveNumber warns LOUD (not a silent revert) when the var is SET but unparseable/non-positive
+  // (e.g. "5m", "0", "-1") — the old `Number(...) || dflt` idiom swallowed a typo'd knob with no signal.
+  // An UNSET var still falls back to the same defaults as before.
+  const timeoutMs = envPositiveNumber("COWORK_HARNESS_LLM_TIMEOUT_MS", 600_000);
+  const maxBytes = envPositiveNumber("COWORK_HARNESS_LLM_MAX_BYTES", 8 * 1024 * 1024);
   // Parse the retry count defensively: unset/blank/unparseable → the default 2 (NOT 0 — a typo must not
   // silently disable retries); a valid number is floored and clamped to [0, 10] (so "2.9"→2, "-1"→0, "0"
   // disables, and a fat-fingered "1e2"/"100" can't spin up a multi-minute backoff against a hard failure).

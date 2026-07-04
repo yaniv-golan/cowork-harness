@@ -34,6 +34,15 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **The LLM decider prompt no longer travels via `argv`.** `claude -p <prompt>` put the gate/skill
+  text in the process's argument vector, world-readable via `ps` on shared hosts. The prompt is now
+  delivered on stdin (the same channel the microvm auth-token uses); argv carries only
+  `-p --model … --output-format json`. Off-brand for a tool that privacy-scans its own cassettes.
+- **Malformed decider env knobs now fail loud instead of silently reverting.**
+  `COWORK_HARNESS_LLM_TIMEOUT_MS` / `COWORK_HARNESS_LLM_MAX_BYTES` went through `Number(…) || default`,
+  so a typo (`5m`) or an explicit `0` silently became the default. Both now route through
+  `envPositiveNumber`, which warns loud on a set-but-unparseable/non-positive value (an unset var still
+  uses the same default).
 - **`doctor --tier microvm` now detects an unprovisioned Lima instance.** It previously checked only
   for `limactl` itself, not whether `vm init` had actually provisioned the instance for the current
   config — a missing VM image could slip past `doctor` and only surface as first-run VM-boot latency
