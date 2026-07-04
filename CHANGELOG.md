@@ -6,6 +6,27 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **TUI forward-compatibility set** (plan:
+  `docs/internal/2026-07-04-tui-forward-compat-completion-plan.md`; three items):
+  - **The display-policy seam is now an explicit contract.** `src/run/display-translate.ts`'s header
+    states it is the single policy seam for translating model-visible VM paths for human display
+    (hostloop-only / identity-without-ctx / identity-when-shareable), locked by a 20-row table-driven
+    contract test; `docs/debugging.md` explains why hostloop shows `/Users/…` while other tiers show
+    `/sessions/…`.
+  - **Per-run `mounts.json`.** Every run dir now records the VM-path context (`{v:1, sessionId,
+    effectiveFidelity, outputsHostDir, uploadsHostDir, folders}`) — best-effort, never load-bearing,
+    derived from the same call that feeds the live display translator. `loadVmPathContext` lets any
+    historical-run consumer rebuild the context (null → degrade to identity). First consumer:
+    `trace --translate-paths` (text output only) renders hostloop runs with host paths, threaded into
+    row construction pre-slice. Cassettes structurally cannot carry the file.
+  - **OSC 8 terminal hyperlinks.** On a real TTY (not CI, not `--compact`/`--demo`, opt-out
+    `COWORK_HARNESS_NO_HYPERLINKS=1`), host-shaped `computer://` links in assistant text render as
+    clickable `file://` hyperlinks (`normalizeEncodePath`, decode-then-re-encode; backtick code spans
+    and VM-shaped links pass through; tool lines are excluded — they truncate at ~80 chars and a
+    sliced URL would link to a wrong target). Piped/non-TTY output stays byte-identical.
+
 ### Fixed
 
 - **`doctor --tier microvm` now detects an unprovisioned Lima instance.** It previously checked only
