@@ -18,6 +18,10 @@ All notable changes to this project are documented here. The format is based on
   `DISABLE_AUTOUPDATER`, `CLAUDE_CODE_EMIT_TOOL_USE_SUMMARIES`, `USE_STAGING_OAUTH`, `USE_LOCAL_OAUTH`)
   were missing from the committed baseline and are now pinned. A hand-transcribed golden fixture
   cross-checks the generator so a resolver bug can't silently rewrite the contract.
+- **`sync` surfaces stale-allowlist prune hints instead of discarding them.** When a
+  `SPAWN_ENV_ALLOWLIST` entry is no longer constructed anywhere in the asar, `partitionSpawnFlags`
+  routes it into `SyncResult.notes` (distinct from the hard-fail deltas above) and the CLI prints it
+  under a non-blocking `notes (non-blocking):` line — a prune candidate to review, not a drift alarm.
 - **TUI forward-compatibility set** (three items hardening the display seam for future frontends):
   - **The display-policy seam is now an explicit contract.** `src/run/display-translate.ts`'s header
     states it is the single policy seam for translating model-visible VM paths for human display
@@ -89,10 +93,11 @@ All notable changes to this project are documented here. The format is based on
 
 - **CI's boundary job now pulls the published GHCR agent image the packaged Action pins**, retagging it
   for the sandbox probes so a bad publish surfaces in our own CI instead of only in a consumer's runner
-  (it previously only ever `docker build`t the image locally). Falls back to a local build when the
-  image is unavailable (fork / pre-publish). _Note: the pull path is not yet verified in a real CI run;
-  a pull failure currently warns-and-rebuilds and should be hardened to a hard failure on the canonical
-  repo once verified._
+  (it previously only ever `docker build`t the image locally). A pull failure now hard-fails
+  (`::error::` + `exit 1`) on the canonical repo instead of silently rebuilding; forks and pre-publish
+  runs (no GHCR read access yet) keep the local-build fallback with a warning. _Note: the pull path
+  itself is not yet confirmed by a real green CI run — the image name/arch/GHCR read permission for the
+  CI token still need live verification._
 
 ### Fixed
 
