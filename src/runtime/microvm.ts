@@ -52,6 +52,11 @@ export function spawnMicroVm(
   const sessionHost = join(VM_WORK_HOST, sessionId);
   const mntHost = join(sessionHost, "mnt");
   const { mcpStaged } = stageWorkspace(plan, mntHost);
+  // DELIBERATELY no capturePreRunManifest here: microvm stages into VM_WORK_HOST/<id>/mnt, a
+  // different tree from the outDir/work/session/mnt that execute.ts's post-run collectArtifacts
+  // walks (a pre-existing microvm artifact-collection gap) — a pre/post diff would be vacuously
+  // empty, silently false-greening no_unexpected_files. Absent manifest ⇒ the assertion fails
+  // LOUD as evidence-unavailable at this tier (use container/hostloop for it).
   const mcpVm = mcpStaged ? `${configVm}/mcp.json` : undefined;
   // (Local marketplaces are resolved to --plugin-dir in buildLaunchPlan; the registry
   // is inert in cowork mode — SPEC §6. No registration step.)

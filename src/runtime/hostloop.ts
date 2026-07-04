@@ -20,6 +20,7 @@ import { makeWorkspaceHandler, type McpHandler, type EgressEntry, type WebFetchP
 import { baseAgentArgs, hostNativeSpawnEnv, dockerRunArgv, resolveMaxThinkingTokens } from "./argv.js";
 import { runtimeAuthEnv } from "./host-env.js";
 import { resolveHostLoopBindMounts, stageHostLoopWorkspace } from "./hostloop-stage.js";
+import { capturePreRunManifest } from "../run/pre-run-manifest.js";
 import { checkHostLoopPathGate, PATH_GATE_TOOL_NAMES, type HostLoopPathGateConfig } from "../hostloop/pretooluse-path-hook.js";
 import type { HookBundle } from "../agent/session.js";
 import { stripComments } from "../prompt.js";
@@ -72,6 +73,9 @@ export function spawnHostLoop(
   const sessionHost = join(resolve(outDir), "work", "session");
   const mntHost = join(sessionHost, "mnt");
   const { mcpHostPath } = stageHostLoopWorkspace(plan, mntHost);
+  // no_unexpected_files baseline: staged outputs + each bind-mounted folder SOURCE (never staged
+  // at this tier) walked at its mountPath — the path space snapshotHostLoopWorkspace produces post-run.
+  capturePreRunManifest(plan, mntHost, outDir, "hostloop");
 
   // CLAUDE_PLUGIN_ROOT / --plugin-dir for the NATIVE process point at the staged plugin copy (the
   // production-analog `installPath`) — a REAL host path the native process can resolve directly, unlike

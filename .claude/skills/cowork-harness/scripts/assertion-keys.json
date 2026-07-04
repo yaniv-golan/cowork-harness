@@ -17,6 +17,7 @@
     "max_turns",
     "no_delete_in_outputs",
     "no_skill_triggered",
+    "no_unexpected_files",
     "question_asked",
     "questions_count_max",
     "replay_protocol_fidelity",

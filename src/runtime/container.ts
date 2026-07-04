@@ -7,6 +7,7 @@ import { resolveMounts, resolveAgentBinary } from "../baseline.js";
 import { agentArgs, spawnEnv, dockerRunArgv, resolveMaxThinkingTokens } from "./argv.js";
 import { runtimeAuthEnv } from "./host-env.js";
 import { stageWorkspace } from "./stage.js";
+import { capturePreRunManifest } from "../run/pre-run-manifest.js";
 
 /**
  * L1 — container parity runtime. Runs the staged in-VM agent in a sandboxed arm64
@@ -41,6 +42,8 @@ export function spawnContainer(
   const sessionHost = join(resolve(outDir), "work", "session");
   const mntHost = join(sessionHost, "mnt");
   const { mcpStaged } = stageWorkspace(plan, mntHost);
+  // no_unexpected_files baseline: snapshot the user-visible roots' paths post-staging, pre-spawn.
+  capturePreRunManifest(plan, mntHost, outDir, "container");
   const mcpGuest = mcpStaged ? `${configGuest}/mcp.json` : undefined;
 
   const agentHost = resolveAgentBinary(baseline);

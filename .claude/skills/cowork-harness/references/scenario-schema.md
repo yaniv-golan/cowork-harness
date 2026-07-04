@@ -219,6 +219,7 @@ passes only if every key passes. Keep one concern per item unless you mean conju
 | `file_exists: <path>` | the path exists under the run's `work/` (anchored at `mnt/`, e.g. `outputs/x.md`). For a user-facing deliverable prefer `user_visible_artifact` — with a connected folder the file lands in `mnt/<folder>` (= `{{workspaceFolder}}`), not `mnt/outputs`, so `file_exists: outputs/x.md` misses it |
 | `user_visible_artifact: <path>` | exists **and** under a user-visible root (`outputs/` + each connected folder's mount name) — the right primitive for a workspace deliverable when a folder is connected |
 | `no_delete_in_outputs: true` | no delete op touched `mnt/outputs` — **only `true` is valid**; `false` is rejected (omit to allow deletes) |
+| `no_unexpected_files: [<glob>, …]` | every **newly created** file under a user-visible root matches ≥1 glob (workRoot-relative paths; `**` = whole path segment for any depth — use `outputs/handoff/**` for per-run subdirs); `[]` = no new files; **new-files-only** — overwriting a pre-existing file in place is invisible (use content-level producer stamping); live/verify-run without a pre-run manifest ⇒ evidence-unavailable hard-fail (live runs capture the baseline only when this key is asserted; recordings always capture); **microvm cannot capture** (use container/hostloop); replay needs `cassette.preRunPaths` (≥0.24 container/hostloop recordings) — cassettes without it **exclude** the key with a loud warning |
 | `self_heal_ran: <bool>` | a plugin-root self-heal script was (not) invoked |
 | `tool_called: <Tool>` | the agent invoked the tool (actually ran it) |
 | `tool_not_called: <Tool>` | the agent never invoked it |
@@ -302,7 +303,9 @@ small-file JSON `body` inlined; a hash-only entry still satisfies `file_exists`.
 resolves a `/sessions/…/mnt/…`-shaped link directly against the manifest, and a host-shaped (hostloop) link
 by first normalizing it to a mount-relative path (recorded connected-folder prefixes + the outputs/uploads
 mounts) — replay has no live filesystem to check a host path against directly (that only happens on a live
-`run`/`verify-run`). Without a manifest (older cassettes) all four are skipped. A green replay re-confirms
+`run`/`verify-run`). Without a manifest (older cassettes) all five are skipped; `no_unexpected_files` also
+needs `preRunPaths` (≥0.24 recordings) — without it the key is excluded with a loud warning (live/verify-run
+hard-fails evidence-unavailable instead). A green replay re-confirms
 *record-time* artifacts, not that the current skill still produces them — `replay --strict` fails when the
 staleness `fingerprint` shows ANY skill/baseline drift, or `replay --fail-on-skill-drift` only on
 skill-source drift; every replay result also reports it class-tagged in `staleness[]` for a JSON gate.

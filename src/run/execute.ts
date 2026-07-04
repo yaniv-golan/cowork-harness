@@ -16,7 +16,7 @@ import { writeRunningStatus, startStatusTicker, registerRunForCrashSafety, statu
 // the cycle is intrinsic — kept runtime-only rather than refactored.
 import { buildFingerprint } from "./cassette.js";
 import { loadBaseline } from "../baseline.js";
-import { loadSession, resolveSessionPaths, buildLaunchPlan } from "../session.js";
+import { loadSession, resolveSessionPaths, buildLaunchPlan, userVisibleRootsFromPlan } from "../session.js";
 import { spawnProtocol } from "../runtime/protocol.js";
 import { spawnContainer } from "../runtime/container.js";
 import { spawnHostLoop } from "../runtime/hostloop.js";
@@ -51,6 +51,7 @@ import { summarizeGateProvenance } from "./gate-provenance.js";
 import { collectSecrets, scrub } from "../secrets.js";
 import { indexRowFromResult, appendIndexRow } from "./run-index.js";
 import { collectArtifacts } from "./artifacts.js";
+import { readPreRunManifest } from "./pre-run-manifest.js";
 
 // Moved to ./artifacts.ts so assert.ts can use it without an assert→execute import cycle;
 // re-exported here for the existing importers (cassette.ts, tests).
@@ -329,6 +330,11 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     plan.agentSessionId = agentSessionId;
     plan.resume = !!opts.resume;
   }
+  // Pre-run baseline capture: only when something will consume it — the scenario asserts
+  // no_unexpected_files, or this is a recording (cassettes always carry the baseline so a later
+  // assert-add stays replayable without re-record). Skipping keeps the pre-spawn walk (potentially a
+  // large live connected folder on hostloop) off runs that never look at it; absence stays loud.
+  plan.capturePreRun = scenario.assert.some((a) => a.no_unexpected_files !== undefined) || opts.command === "record";
 
   // Fill in the caller's display-translate ref (see ExecuteOptions.translateRef) now that plan +
   // effectiveFidelity exist — well before the child spawns, so the renderer never sees a stale identity
@@ -669,7 +675,11 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // actual mount set, NOT a hardcoded `.projects/` prefix — folder names are now dynamic/gated). Plugins
   // are read-only inputs and are NOT visible roots. Persisted to RunResult so the plan-less lanes
   // (verify reads result.json; replay reads the cassette) match this without rebuilding a LaunchPlan.
-  const userVisibleRoots = ["outputs", ...plan.mounts.filter((m) => m.kind === "folder").map((m) => m.mountPath)];
+  // Shared with the pre-run baseline walk (userVisibleRootsFromPlan) — pre and post MUST agree.
+  const userVisibleRoots = userVisibleRootsFromPlan(plan);
+  // Read the pre-run baseline ONCE: the evaluate ctx and the persisted RunResult must see the same
+  // value — two reads could disagree if the file were touched mid-run.
+  const preRunPaths = readPreRunManifest(outDir);
 
   // Salvage path: the run exited on an unanswered gate. Persist a PARTIAL result.json (+ run.jsonl/trace) so
   // the artifacts the agent wrote before the whiff survive for inspection, then re-throw so the CLI still
@@ -716,6 +726,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     result: record.result,
     workRoot,
     userVisiblePrefixes: userVisibleRoots,
+    preRunPaths,
     outputsDeletes: scan.outputsDeletes,
     questions: record.questions,
     hostPathLeaked: scan.hostPathLeaked,
@@ -876,6 +887,10 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     outputsDir: join(workRoot, "outputs"),
     userVisibleRoots,
     artifacts: collectArtifacts(workRoot, userVisibleRoots), // ENV-MANIFEST: observed user-visible files
+    // The pre-spawn baseline no_unexpected_files diffs against (same single read the evaluate ctx got).
+    // undefined = the run didn't capture (key not asserted, microvm, pre-seam) — the assertion then
+    // fails evidence-unavailable, loud.
+    preRunPaths,
     nonDeterministic:
       // LLM-, external-, human-, or first-option-decided → not reproducible. `first` picks options[0] and
       // option order can vary run-to-run; it's already pushed to unanswered[], so include it here to agree.
@@ -1064,6 +1079,7 @@ export function buildPartialResult(args: {
     outputsDir: join(args.workRoot, "outputs"),
     userVisibleRoots: args.userVisibleRoots,
     artifacts: collectArtifacts(args.workRoot, args.userVisibleRoots),
+    preRunPaths: readPreRunManifest(args.outDir),
     effectiveFidelity: args.effectiveFidelity,
     ...(() => {
       const gp = summarizeGateProvenance(record.decisions);

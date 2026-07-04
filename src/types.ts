@@ -238,6 +238,12 @@ export const Assertion = z.object({
     .describe(
       "fails if a delete touching mnt/outputs is DETECTED (post-run bash-command scan, not FUSE-level enforcement — a green means none was detected); only `true` is valid (writing `false` is a rejected footgun — omit to allow deletes)",
     ),
+  no_unexpected_files: z
+    .array(z.string().min(1))
+    .optional()
+    .describe(
+      "fails if the run CREATED a file under a user-visible root whose workRoot-relative path (e.g. outputs/x.md) matches none of these globs (** = whole path segment for any depth, * within a segment, ? one char); [] = no new files allowed; new-files-only — overwriting a pre-existing file in place is invisible (use content-level producer stamping); needs a pre-run manifest (harness ≥0.24 recordings) — absence fails loud on live/verify-run; microvm cannot capture (use container/hostloop)",
+    ),
   self_heal_ran: z.boolean().optional().describe("skill resolved scripts via /sessions (plugin-root self-heal)"),
   transcript_no_host_path: z
     .literal(true)
@@ -571,6 +577,11 @@ export interface RunResult {
   // + sizes. Paths only (no content snapshot — that is the cassette manifest). Kills path-guessing and
   // makes an all-or-nothing truncated run (empty manifest) detectable. NOT sufficient for mid-write truncation.
   artifacts?: { path: string; bytes: number }[];
+  /** workRoot-relative paths that existed under the user-visible roots BEFORE the agent ran (captured
+   *  post-staging, pre-spawn; `pre-run-manifest.json`) — the baseline `no_unexpected_files` diffs
+   *  against. undefined = the tier didn't capture (microvm) or the run predates the seam; the
+   *  assertion then fails evidence-unavailable, never vacuous-passes. */
+  preRunPaths?: string[];
   /** True when the run did NOT complete because it exited on an unanswered gate, but its work (artifacts,
    *  events, partial transcript) was salvaged to disk anyway so it's still inspectable. A partial run still
    *  exits non-zero; consumers (verify-run, scaffold) must NOT treat its artifacts/result as a passing

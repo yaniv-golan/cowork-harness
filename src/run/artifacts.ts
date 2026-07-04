@@ -11,7 +11,7 @@ import { warn } from "../io.js";
  *
  *  Moved here from execute.ts (and re-exported there) so `assert.ts` can evaluate
  *  `no_unexpected_files` without an assert→execute import cycle. */
-export function collectArtifacts(workRoot: string, prefixes: string[]): { path: string; bytes: number }[] {
+export function collectArtifacts(workRoot: string, prefixes: string[], opts?: WalkOpts): { path: string; bytes: number }[] {
   const out: { path: string; bytes: number }[] = [];
   const visited = new Set<string>();
   // Resolve workRoot once — used in the containment assertion inside walk().
@@ -21,8 +21,17 @@ export function collectArtifacts(workRoot: string, prefixes: string[]): { path: 
   } catch {
     return out; // workRoot itself absent/unreadable
   }
-  for (const prefix of prefixes) walkInto(join(workRoot, prefix), prefix, workRootReal, visited, out);
+  for (const prefix of prefixes) walkInto(join(workRoot, prefix), prefix, workRootReal, visited, out, opts);
   return out;
+}
+
+/** Walk options. `includeHardlinkPaths` lifts the nlink>1 rejection for PATHS-ONLY walks (the
+ *  `no_unexpected_files` pre-run baseline): the guard exists to keep hardlinked out-of-root CONTENT out
+ *  of committed cassettes, which a path listing never reads. The baseline must include them — the
+ *  post-run side walks a cpSync copy where every file is nlink=1 (the guard can't fire), so skipping
+ *  them pre-run would report a pre-existing hardlinked file as agent-"created" (false stray). */
+export interface WalkOpts {
+  includeHardlinkPaths?: boolean;
 }
 
 /** Walk an ARBITRARY directory (containment-rooted at itself), emitting `prefix/<rel>` paths — the
@@ -30,7 +39,7 @@ export function collectArtifacts(workRoot: string, prefixes: string[]): { path: 
  *  (never staged), so the pre-run snapshot walks each folder SOURCE mapped to its mountPath, mirroring
  *  the path space snapshotHostLoopWorkspace's post-run copy produces. Same symlink-skip /
  *  hardlink-reject / realpath-containment guards. */
-export function collectArtifactsAt(dir: string, prefix: string): string[] {
+export function collectArtifactsAt(dir: string, prefix: string, opts?: WalkOpts): string[] {
   const out: { path: string; bytes: number }[] = [];
   let dirReal: string;
   try {
@@ -38,7 +47,7 @@ export function collectArtifactsAt(dir: string, prefix: string): string[] {
   } catch {
     return []; // source dir absent/unreadable — nothing pre-existing
   }
-  walkInto(dir, prefix, dirReal, new Set<string>(), out);
+  walkInto(dir, prefix, dirReal, new Set<string>(), out, opts);
   return out.map((f) => f.path);
 }
 
@@ -51,6 +60,7 @@ function walkInto(
   containReal: string,
   visited: Set<string>,
   out: { path: string; bytes: number }[],
+  opts?: WalkOpts,
 ): void {
   const walk = (abs: string, rel: string) => {
     // Cycle guard: resolve the real path of this directory; if we've already walked it, stop.
@@ -98,7 +108,7 @@ function walkInto(
         // committed cassette. Residual fidelity tradeoff: legitimate in-root hardlinks (cp -l / git / build
         // tooling) are conservatively dropped — enumerating all links of an inode is not feasible from
         // artifact-walk state, so reject + warn + document is the only correct posture.
-        if (st.nlink > 1) {
+        if (st.nlink > 1 && !opts?.includeHardlinkPaths) {
           warn(`::warning:: collectArtifacts: skipping ${childRel} (hardlink, nlink=${st.nlink}) — may reference out-of-root content\n`);
           continue;
         }

@@ -3097,15 +3097,17 @@ async function cmdVerifyRun(args: string[]) {
   const workRoot = result.workDir ?? "";
   const scan = result.scan ?? { outputsDeletes: [], hostPathLeaked: false, selfHealRan: false };
   // FS-class assertions resolve under workRoot; if it's gone we can't faithfully re-check them — refuse
-  // rather than report a false fail. Content-only re-asserts stay valid without it.
-  const FS_KEYS: (keyof Assertion)[] = ["file_exists", "user_visible_artifact", "artifact_json"];
+  // rather than report a false fail. Content-only re-asserts stay valid without it. no_unexpected_files
+  // belongs here too: on a missing workRoot its post-run walk returns [] → zero created files → a vacuous
+  // PASS (the other FS keys false-FAIL safe-direction; this one false-GREENS, the worse failure mode).
+  const FS_KEYS: (keyof Assertion)[] = ["file_exists", "user_visible_artifact", "artifact_json", "no_unexpected_files"];
   const hasFsAssert = scenario.assert.some((a) => FS_KEYS.some((k) => a[k] !== undefined));
   if (hasFsAssert && !existsSync(workRoot)) {
     return fail(
       "verify-run",
       "runtime",
       `verify-run: work dir not found (${workRoot || "<unset>"}) — filesystem assertions ` +
-        `(file_exists/artifact_json/user_visible_artifact) cannot be re-evaluated from this run dir; re-record. (can't verify ⇒ not green)`,
+        `(file_exists/artifact_json/user_visible_artifact/no_unexpected_files) cannot be re-evaluated from this run dir; re-record. (can't verify ⇒ not green)`,
       undefined,
       isJsonOutput(args),
     );
@@ -3123,6 +3125,10 @@ async function cmdVerifyRun(args: string[]) {
     // Read the roots persisted at run time (folder mount names are dynamic/gated, not a fixed prefix).
     // Fall back to the legacy prefix for old result.json that predates the field.
     userVisiblePrefixes: result.userVisibleRoots ?? ["outputs", ".projects"],
+    // result.json is the single source: every writer populates the field from the run's own
+    // pre-run-manifest.json, so a missing field means the baseline genuinely doesn't exist
+    // (pre-field run, or the run never captured) — evidence-unavailable, loud.
+    preRunPaths: result.preRunPaths,
     outputsDeletes: scan.outputsDeletes,
     questions: sidecarQuestions ?? [],
     hostPathLeaked: scan.hostPathLeaked,

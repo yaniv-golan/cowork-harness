@@ -43,6 +43,38 @@ function keptRun(): string {
   return root;
 }
 
+/** Build a kept-run dir for `no_unexpected_files`: one pre-existing artifact (carried in `preRunPaths`,
+ *  so it does not count as newly created) plus one stray file the pre-run manifest never saw. */
+function keptRunForUnexpectedFiles(): string {
+  const root = mkdtempSync(join(tmpdir(), "cwh-vr-nuf-"));
+  const workDir = join(root, "work", "session", "mnt");
+  mkdirSync(join(workDir, "outputs"), { recursive: true });
+  writeFileSync(join(workDir, "outputs", "report.json"), JSON.stringify({ ok: true }));
+  writeFileSync(join(workDir, "outputs", "stray.txt"), "unexpected");
+  const result = {
+    scenario: "smoke",
+    fidelity: "container",
+    baseline: "desktop-1.13576.1",
+    result: "success",
+    decisions: [],
+    toolCounts: { Read: 1 },
+    gateDeliveries: [],
+    egress: [],
+    assertions: [],
+    subagents: [],
+    outDir: root,
+    workDir,
+    durationMs: 1,
+    scan: { outputsDeletes: [], hostPathLeaked: false, selfHealRan: false },
+    userVisibleRoots: ["outputs"],
+    preRunPaths: ["outputs/report.json"],
+  };
+  writeFileSync(join(root, "result.json"), JSON.stringify(result, null, 2));
+  writeFileSync(join(root, "run.jsonl"), JSON.stringify({ t: "run", scenario: "smoke" }) + "\n");
+  writeFileSync(join(root, "trace.json"), JSON.stringify({ questions: [], steps: ["Read"] }));
+  return root;
+}
+
 /** Build a kept-run dir that is missing one sidecar file. */
 function keptRunWithout(sidecar: "transcript" | "questions"): string {
   const root = keptRun();
@@ -322,5 +354,34 @@ describe.skipIf(!can)("verify-run re-asserts a kept run dir without a live agent
       ["  - no_delete_in_outputs: true", "  - transcript_no_host_path: true", "  - self_heal_ran: false"].join("\n"),
     );
     expect(verifyRun(run, sc).code).toBe(0);
+  });
+
+  it("verify-run evaluates no_unexpected_files live on a kept run", () => {
+    const run = keptRunForUnexpectedFiles();
+    // Empty allowlist: the pre-existing report.json is carried in preRunPaths (not "created"), but
+    // stray.txt is not — it must fail, naming the stray file.
+    const bad = scenarioFile(run, "  - no_unexpected_files: []\n");
+    const fail = verifyRun(run, bad);
+    expect(fail.code).toBe(1);
+    expect(fail.text).toContain("stray.txt");
+    // Widen the allowlist to cover the stray file — same kept run dir, no re-record — and it flips green.
+    const good = scenarioFile(run, "  - no_unexpected_files: ['outputs/stray.txt']\n");
+    const pass = verifyRun(run, good);
+    expect(pass.code).toBe(0);
+  });
+
+  it("refuses (exit 2) no_unexpected_files when the work dir is gone (no vacuous pass)", () => {
+    const run = keptRunForUnexpectedFiles();
+    // Point result.workDir at a non-existent path to simulate container teardown. Without this refusal,
+    // a missing workRoot would walk to [] created files and vacuously PASS an empty allowlist — the
+    // worse failure mode (false-green), unlike the other FS keys which false-fail safe.
+    const fs = require("node:fs");
+    const result = JSON.parse(fs.readFileSync(join(run, "result.json"), "utf8"));
+    result.workDir = join(run, "gone", "work");
+    fs.writeFileSync(join(run, "result.json"), JSON.stringify(result));
+    const sc = scenarioFile(run, "  - no_unexpected_files: []\n");
+    const { code, text } = verifyRun(run, sc);
+    expect(code).toBe(2);
+    expect(text).toContain("work dir not found");
   });
 });

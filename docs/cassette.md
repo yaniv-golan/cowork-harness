@@ -239,15 +239,19 @@ the rules and CI-placement rationale (why each category behaves this way), see
 replay). On an old cassette without `controlOut` these three keys are excluded from evaluation — not
 vacuously passed — and a loud warning fires (see §Backward compatibility).
 
-`file_exists`, `user_visible_artifact`, `artifact_json`, and `computer_links_resolve` are **not** in the
+`file_exists`, `user_visible_artifact`, `artifact_json`, `computer_links_resolve`, and `no_unexpected_files` are **not** in the
 table above — see the next subsection; they're replay-checkable only when the cassette carries an
-artifacts manifest.
+artifacts manifest (`no_unexpected_files` also requires `preRunPaths`, recorded since 0.24 on
+container/hostloop — microvm cannot capture the baseline).
 
 ### Filesystem assertions — replay-checkable WITH an artifact manifest
 
-`file_exists`, `user_visible_artifact`, `artifact_json`, and `computer_links_resolve` run on replay **when
+`file_exists`, `user_visible_artifact`, `artifact_json`, `computer_links_resolve`, and `no_unexpected_files` run on replay **when
 the cassette carries an `artifacts` manifest** — `record` snapshots `outputs/` + connected folders and
-`replay` materializes that snapshot to evaluate them token-free. `artifact_json` needs the JSON `body`
+`replay` materializes that snapshot to evaluate them token-free. `no_unexpected_files` additionally requires
+`preRunPaths` (the pre-run path baseline, optional cassette metadata since 0.24 — no version bump); without
+it the key is **excluded with a loud warning**, not a vacuous pass (live/verify-run without a pre-run manifest
+hard-fails evidence-unavailable instead — deliberate asymmetry). `artifact_json` needs the JSON `body`
 inlined (small files); a hash-only (`truncated`) entry still satisfies `file_exists` but not `artifact_json`.
 The inline cap is 64 KiB; raise it with `record --max-artifact-bytes <n>` (or
 `COWORK_HARNESS_MAX_ARTIFACT_BYTES`) so a large structured deliverable stays replay-checkable, and `record`

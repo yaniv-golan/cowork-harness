@@ -160,6 +160,17 @@ export interface LaunchPlan {
   egressAllow: string[]; // baseline allowlist + session extra (or ["*"] if unrestricted)
   agentSessionId?: string; // the agent's native --session-id (pinned for resume); set by executeScenario
   resume?: boolean; // pass --resume <agentSessionId> instead of --session-id (continue a prior session)
+  /** capture the `no_unexpected_files` pre-run baseline before spawning. Set by executeScenario when the
+   *  scenario asserts the key (the walk has a real cost on big connected folders) or the run is a
+   *  recording (cassettes always carry the baseline so a later assert-add replays without re-record). */
+  capturePreRun?: boolean;
+}
+
+/** The user-visible roots derived from a plan: `outputs` + each connected folder's RESOLVED mount name.
+ *  Single owner for the derivation — the pre-run baseline walk and the post-run artifact walk MUST
+ *  enumerate the same root set, or the `no_unexpected_files` diff reports phantom "created" files. */
+export function userVisibleRootsFromPlan(plan: LaunchPlan): string[] {
+  return ["outputs", ...plan.mounts.filter((m) => m.kind === "folder").map((m) => m.mountPath)];
 }
 
 /**

@@ -387,10 +387,14 @@ states in `baseline.provenance.gates`). A skill that ignores these behaves diffe
   `question_asked`, `questions_count_max`, `gate_answers_delivered`. `max_cost_usd`/`max_tokens` are
   evaluated against the *frozen recording's* usage/cost on replay, not fresh spend; `tool_calls_max`/
   `max_turns` are meaningfully replay-checkable (the re-drive recomputes both deterministically).
-- **Filesystem assertions** (`file_exists`, `user_visible_artifact`, `artifact_json`) are evaluated
-  **when the cassette carries an `artifacts` manifest** (`record` snapshots `outputs/`; `replay`
-  materializes it token-free — `artifact_json` needs the small JSON body inlined). On older,
-  manifest-less cassettes they are skipped (loud) — absent from `assertions[]`, not present-and-passing.
+- **Filesystem assertions** (`file_exists`, `user_visible_artifact`, `artifact_json`, `computer_links_resolve`,
+  `no_unexpected_files`) are evaluated **when the cassette carries an `artifacts` manifest** (`record`
+  snapshots `outputs/` + connected folders; `replay` materializes it token-free — `artifact_json` needs the
+  small JSON body inlined). `no_unexpected_files` additionally requires `preRunPaths` (optional cassette
+  metadata since 0.24; container/hostloop recordings only — microvm cannot capture the baseline); without it
+  replay **excludes** the key with a loud warning (live/verify-run without a
+  pre-run manifest hard-fails evidence-unavailable). On older, manifest-less cassettes they are skipped
+  (loud) — absent from `assertions[]`, not present-and-passing.
 - **Egress / live-only assertions** (`no_delete_in_outputs`, `self_heal_ran`, `transcript_no_host_path`,
   `egress_*`, `expect_denied`) are always skipped on replay — absent from `assertions[]`. The count of
   skipped (full / partial) assertions is reported in `RunResult.skippedAssertions`, so a JSON consumer

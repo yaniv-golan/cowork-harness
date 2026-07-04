@@ -117,6 +117,14 @@ export interface Cassette {
   // guess so an authored `name:` that differs from the filename still re-records from the edited YAML rather
   // than silently re-recording the embedded snapshot. ABSENT when recorded from an in-memory/inline scenario.
   scenarioSource?: string;
+  // workRoot-relative paths that existed under the user-visible roots BEFORE the agent ran — the baseline
+  // `no_unexpected_files` diffs against on replay. Optional metadata following the `authoring` precedent:
+  // NO cassetteVersion bump (CassetteShape is a looseObject and cassette.v7.json has no
+  // additionalProperties:false, so older readers pass it through; readers here branch LOUDLY on absence —
+  // a pre-field cassette EXCLUDES the key from replay with a warning, never a vacuous pass). Always
+  // co-present with `userVisibleRoots` (both written by the same record assembly below), so the legacy
+  // `["outputs",".projects"]` replay-roots fallback can never apply to a cassette that carries this field.
+  preRunPaths?: string[];
   // provenance: how this cassette's gate answers were authored. PRESENT with nonDeterministic:true means a
   // live decider actually answered ≥1 gate during recording (a driving agent via `--decider-dir`, a model
   // via `--decider-llm`, or an `--on-unanswered first` auto-pick) — so RE-recording may drift. The cassette
@@ -1084,11 +1092,13 @@ export function redactCassette(cassette: Cassette, policy: RedactionPolicy): Cas
         );
     }
   }
+  const redactedPreRunPaths = cassette.preRunPaths?.map((p) => redactText(p, policy));
   return {
     ...cassette,
     scenario,
     userVisibleRoots: redactedRoots,
     artifacts: redactedArtifacts,
+    preRunPaths: redactedPreRunPaths,
     events: cassette.events.map((l) => redactJsonLine(l, policy)),
     controlOut: cassette.controlOut?.map((l) => redactJsonLine(l, policy)),
     fingerprint: cassette.fingerprint
@@ -1988,6 +1998,9 @@ async function recordScenarioObject(
     effectiveFidelity: result.effectiveFidelity,
     artifacts,
     userVisibleRoots: recordRoots,
+    // co-present with userVisibleRoots by construction (see the Cassette field comment) — a cassette
+    // carrying preRunPaths never hits replay's legacy-roots fallback.
+    preRunPaths: result.preRunPaths,
     // persist the authored scenario source file RELATIVE to the cassette dir (relocatable, no
     // absolute host path) so `--rerecord-stale` re-records from the edited YAML even when name ≠ filename.
     scenarioSource: opts.scenarioSourceFile ? relative(dirname(cassettePath), opts.scenarioSourceFile) : undefined,
@@ -2067,7 +2080,9 @@ function warnUncheckableOnDiskKeys(cassette: Cassette, frozen: Scenario, onDisk:
   const asserts = onDisk.assert ?? [];
   const hasManifest = !!cassette.artifacts?.length;
   const hasControlOut = !!cassette.controlOut?.length;
-  const manifestKeys = new Set<keyof Assertion>(["file_exists", "user_visible_artifact", "artifact_json"]);
+  // Reuse the exported classification constant — this local copy drifted once already (it was
+  // missing computer_links_resolve), silently suppressing the on-disk warning for that key.
+  const manifestKeys = new Set<keyof Assertion>(MANIFEST_KEYS);
   const gateKeys = new Set<keyof Assertion>(["question_asked", "questions_count_max", "gate_answers_delivered"]);
   const liveOnlyKeys = new Set<keyof Assertion>([
     "egress_denied",
@@ -2076,6 +2091,7 @@ function warnUncheckableOnDiskKeys(cassette: Cassette, frozen: Scenario, onDisk:
     "self_heal_ran",
     "transcript_no_host_path",
   ]);
+  const hasPreRun = cassette.preRunPaths !== undefined;
   // expect_denied: sourced from on-disk but live-only on replay — warn if the author changed it expecting effect.
   if (JSON.stringify(frozen.expect_denied ?? []) !== JSON.stringify(onDisk.expect_denied ?? []))
     warn(
@@ -2087,7 +2103,13 @@ function warnUncheckableOnDiskKeys(cassette: Cassette, frozen: Scenario, onDisk:
       if (a[k] === undefined || seen.has(k)) continue;
       let reason = "";
       if (liveOnlyKeys.has(k)) reason = "live-only";
-      else if (manifestKeys.has(k) && !hasManifest) reason = "no artifact manifest in this cassette";
+      // no_unexpected_files mirrors replayCassette's presence-gating: an artifacts field that exists
+      // (even empty) + preRunPaths ⇒ checkable (no reason); missing baseline ⇒ its dedicated reason,
+      // never the generic manifest one (which would misdiagnose an empty-but-present manifest).
+      else if (k === "no_unexpected_files" && cassette.artifacts === undefined) reason = "no artifact manifest in this cassette";
+      else if (k === "no_unexpected_files" && !hasPreRun)
+        reason = "no pre-run manifest in this cassette (recorded pre-0.24 or on microvm) — re-record on harness ≥0.24 (container/hostloop)";
+      else if (k !== "no_unexpected_files" && manifestKeys.has(k) && !hasManifest) reason = "no artifact manifest in this cassette";
       else if (gateKeys.has(k) && !hasControlOut) reason = "no controlOut in this cassette";
       if (reason) {
         seen.add(k);
@@ -2669,7 +2691,13 @@ export const QUESTION_GATE_KEYS: (keyof Assertion)[] = ["question_asked", "quest
  *  technically wouldn't need the manifest, but gating it identically avoids a live/replay asymmetry where
  *  "zero links" quietly passes on a manifest-less cassette while any actual link forces the same
  *  "not checkable, skipped" treatment as the other manifest keys. */
-export const MANIFEST_KEYS: (keyof Assertion)[] = ["file_exists", "user_visible_artifact", "artifact_json", "computer_links_resolve"];
+export const MANIFEST_KEYS: (keyof Assertion)[] = [
+  "file_exists",
+  "user_visible_artifact",
+  "artifact_json",
+  "computer_links_resolve",
+  "no_unexpected_files",
+];
 
 /** Replay a cassette through Run and re-evaluate the content assertions. With a `cassette.artifacts`
  *  manifest, filesystem assertions (file_exists/user_visible_artifact/artifact_json) ALSO run, against
@@ -2755,7 +2783,27 @@ export async function replayCassette(
   // with an artifact manifest, the filesystem assertions become replay-checkable (materialized below).
   // Without a manifest they stay live-only (stripped → skip warning), exactly as before. See
   // MANIFEST_KEYS' doc comment above for why computer_links_resolve joins this bucket.
-  const manifestKeys: (keyof Assertion)[] = cassette.artifacts?.length ? MANIFEST_KEYS : [];
+  const hasPreRun = cassette.preRunPaths !== undefined;
+  // no_unexpected_files gates on manifest PRESENCE (`artifacts !== undefined`), not length: its green
+  // case is exactly "nothing created", so an empty-but-present manifest (a clean recording) is fully
+  // evaluable against an empty materialized tree. The other manifest keys keep length-gating — an
+  // empty manifest can never satisfy file_exists/artifact_json, so exclusion is harmless there.
+  const nufReplayable = cassette.artifacts !== undefined && hasPreRun;
+  // Excluded-but-LOUD: the manifest exists but the baseline doesn't (pre-0.24 or microvm recording —
+  // record always captures on capture-capable tiers). The dedicated warning below announces the drop,
+  // so — and only then — the skip tallies don't double-report it (gate-key precedent).
+  const nufExcludedLoudly = cassette.artifacts !== undefined && !hasPreRun;
+  const manifestKeys: (keyof Assertion)[] = [
+    ...(cassette.artifacts?.length ? MANIFEST_KEYS.filter((k) => k !== "no_unexpected_files") : []),
+    ...(nufReplayable ? (["no_unexpected_files"] as (keyof Assertion)[]) : []),
+  ];
+  // DELIBERATE asymmetry (live vs replay): live/verify-run without preRunPaths ⇒ evidence-unavailable
+  // HARD-FAIL; replay of a baseline-less cassette ⇒ loud EXCLUDE here (same contract as gate keys
+  // without controlOut) — the recording cannot support the key, not a vacuous pass.
+  if (cassette.scenario.assert.some((a) => a.no_unexpected_files !== undefined) && nufExcludedLoudly)
+    warn(
+      "::warning:: [replay] no_unexpected_files: cassette has no pre-run manifest (recorded pre-0.24 or on microvm) — key skipped on replay; re-record on harness ≥0.24 (container/hostloop)\n",
+    );
   // deterministic exhaustiveness check — every key in the Assertion schema must appear in exactly
   // one classification bucket. If a new key is added to the schema but not here, this throws at the first
   // replay, making the oversight impossible to miss in CI.
@@ -2767,6 +2815,7 @@ export async function replayCassette(
       "user_visible_artifact",
       "artifact_json",
       "computer_links_resolve",
+      "no_unexpected_files",
       "egress_denied",
       "egress_allowed",
       "no_delete_in_outputs",
@@ -2833,7 +2882,10 @@ export async function replayCassette(
       const keptContent = defined.some((k) => contentKeys.includes(k));
       if (!keptContent) {
         fullSkipCount++; // nothing on this assertion is checkable on replay
-      } else if (defined.some((k) => !contentishKeys.has(k))) {
+      } else if (defined.some((k) => !contentishKeys.has(k) && !(k === "no_unexpected_files" && nufExcludedLoudly))) {
+        // Suppress the tally for no_unexpected_files ONLY when its dedicated warning fired
+        // (nufExcludedLoudly) — on a manifest-less cassette that warning can't fire, so the drop
+        // must count here like any other filesystem key or it would be fully silent.
         partialSkipCount++; // content half evaluated; a filesystem/egress key was dropped
       }
     }
@@ -2856,6 +2908,7 @@ export async function replayCassette(
       result: rec.result,
       workRoot: replayWorkRoot,
       userVisiblePrefixes: replayPrefixes,
+      preRunPaths: cassette.preRunPaths,
       outputsDeletes: [],
       questions: rec.questions,
       hostPathLeaked: false,

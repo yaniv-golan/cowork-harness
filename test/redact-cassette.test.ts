@@ -255,6 +255,31 @@ describe("redaction keeps userVisibleRoots structurally consistent with redacted
   });
 });
 
+describe("redaction rewrites preRunPaths entries", () => {
+  const CUSTOMER_POLICY: RedactionPolicy = { patterns: [{ re: /AcmeCorp/g, label: "cust" }], keyNames: [] };
+
+  it("redacts a customer-named path inside preRunPaths and keeps the path shape", () => {
+    const c: any = {
+      scenario: scenario([{ result: "success" }]),
+      events: [JSON.stringify({ type: "result", subtype: "success" })],
+      preRunPaths: [".projects/AcmeCorp/input.pdf"],
+    };
+    const red: any = redactCassette(c, CUSTOMER_POLICY);
+    expect(red.preRunPaths[0]).not.toContain("AcmeCorp");
+    // path shape preserved: directory segments + extension survive, only the customer term is tokenized
+    expect(red.preRunPaths[0]).toMatch(/^\.projects\/\[REDACTED:cust:[0-9a-f]{12}\]\/input\.pdf$/);
+  });
+
+  it("absent preRunPaths stays absent through redaction and serialization (no field, not null/empty)", () => {
+    const c: any = {
+      scenario: scenario([{ result: "success" }]),
+      events: [JSON.stringify({ type: "result", subtype: "success" })],
+    };
+    const red: any = redactCassette(c, CUSTOMER_POLICY);
+    expect(JSON.stringify(red)).not.toContain('"preRunPaths"');
+  });
+});
+
 // ── Cassette manifest safety — token-free, spawn-free ───────────────────────────────
 import { buildManifest, materializeManifest } from "../src/run/cassette.js";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";

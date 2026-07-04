@@ -7,6 +7,7 @@ import type { LaunchPlan } from "../session.js";
 import { gitModeEnabled, gitCpFilter } from "../run/skill-files.js";
 import { containedRealPath } from "../boundary-paths.js";
 import { BoundaryError } from "../errors.js";
+import { capturePreRunManifest } from "../run/pre-run-manifest.js";
 
 /**
  * L0 — protocol-only runtime. Spawns the host `claude` with the stream-json
@@ -42,6 +43,9 @@ export function spawnProtocol(
       cpSync(m.hostPath, dest, { recursive: true, dereference: false, ...(f ? { filter: f } : {}) });
     }
   }
+
+  // no_unexpected_files baseline: snapshot the user-visible roots' paths post-staging, pre-spawn.
+  capturePreRunManifest(plan, work, outDir, "protocol");
 
   // NOTE: `--cowork` is a GUEST-ONLY flag — the host `claude` CLI rejects it
   // ("unknown option '--cowork'"); it exists only in the staged in-VM binary

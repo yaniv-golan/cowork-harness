@@ -54,6 +54,13 @@
       },
       "description": "v4+: the user-visible mount roots captured at record time (`outputs` + each connected folder's resolved mount name). Replay reads THIS instead of a hardcoded prefix. ABSENT on pre-v4 cassettes → replay falls back to the legacy prefix."
     },
+    "preRunPaths": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "workRoot-relative paths under userVisibleRoots that existed BEFORE the agent ran — the baseline `no_unexpected_files` diffs against on replay. Optional metadata (no cassetteVersion bump); ABSENT on pre-0.24 and microvm recordings → replay EXCLUDES `no_unexpected_files` with a loud warning. Always co-present with `userVisibleRoots` when present."
+    },
     "scenarioSource": {
       "type": "string",
       "description": "The authored scenario SOURCE file this cassette was recorded from, RELATIVE to the cassette dir (relocatable, no absolute host path). `record --rerecord-stale` prefers this over a slug guess. ABSENT when recorded from an in-memory/inline scenario."

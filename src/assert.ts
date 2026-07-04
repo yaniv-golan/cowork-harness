@@ -5,6 +5,8 @@ import { VERDICT_MODIFIER_KEYS } from "./types.js";
 import { compileUserRegex } from "./regex.js";
 import { normalizeHost } from "./boundary-paths.js";
 import { extractComputerLinks, resolveComputerLink, type LinkResolutionContext } from "./run/computer-links.js";
+import { collectArtifacts } from "./run/artifacts.js";
+import { anyGlobMatches } from "./glob.js";
 
 /** Derives the four AssertContext budget fields (costUsd/tokensTotal/toolCallsTotal/turns) uniformly from
  *  any RunResult/RunRecord-shaped source — live, replay, and verify-run all read the same shapes (Wave 0's
@@ -161,6 +163,10 @@ export interface AssertContext {
   result: "success" | "error";
   workRoot: string; // dir under which file_exists paths resolve (L0: work/, L1/L2: work/session/mnt)
   userVisiblePrefixes: string[]; // path prefixes promoted to the user (e.g. outputs, .projects)
+  /** workRoot-relative paths under userVisiblePrefixes BEFORE the agent ran (RunResult.preRunPaths /
+   *  cassette.preRunPaths). undefined = no pre-run manifest (older run/cassette, or microvm) —
+   *  no_unexpected_files then fails evidence-unavailable, never vacuous-passes. */
+  preRunPaths?: string[];
   outputsDeletes: string[]; // delete ops that touched mnt/outputs (post-run scan)
   questions: string[]; // AskUserQuestion question texts asked
   hostPathLeaked: boolean; // a host path (/Users//opt) appeared in model-visible text
@@ -517,6 +523,27 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
           ? ok()
           : fail(`delete op(s) touched outputs (forbidden in Cowork): ${ctx.outputsDeletes.slice(0, 3).join("; ")}`),
     );
+  if (a.no_unexpected_files !== undefined) {
+    if (ctx.preRunPaths === undefined) {
+      results.push(
+        fail(
+          "evidence unavailable: no pre-run manifest for this run/cassette (predates 0.24 or tier cannot capture — microvm) — cannot compute created files; re-run/re-record on container/hostloop",
+        ),
+      );
+    } else {
+      const pre = new Set(ctx.preRunPaths.map((p) => p.replace(/\\/g, "/")));
+      const post = collectArtifacts(ctx.workRoot, ctx.userVisiblePrefixes).map((f) => f.path);
+      const created = post.filter((p) => !pre.has(p.replace(/\\/g, "/")));
+      const stray = created.filter((p) => !anyGlobMatches(a.no_unexpected_files!, p));
+      results.push(
+        stray.length === 0
+          ? ok()
+          : fail(
+              `unexpected file(s) created outside the allowlist: ${stray.join(", ")} (allow: ${a.no_unexpected_files!.join(", ") || "(none)"})`,
+            ),
+      );
+    }
+  }
   if (a.self_heal_ran !== undefined)
     results.push(
       ctx.scanMissing

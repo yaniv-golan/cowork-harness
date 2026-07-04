@@ -226,6 +226,14 @@
             "type": "boolean",
             "const": true
           },
+          "no_unexpected_files": {
+            "description": "fails if the run CREATED a file under a user-visible root whose workRoot-relative path (e.g. outputs/x.md) matches none of these globs (** = whole path segment for any depth, * within a segment, ? one char); [] = no new files allowed; new-files-only — overwriting a pre-existing file in place is invisible (use content-level producer stamping); needs a pre-run manifest (harness ≥0.24 recordings) — absence fails loud on live/verify-run; microvm cannot capture (use container/hostloop)",
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
           "self_heal_ran": {
             "description": "skill resolved scripts via /sessions (plugin-root self-heal)",
             "type": "boolean"

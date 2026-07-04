@@ -59,6 +59,7 @@ Top-level fields of a `*.cassette.json` (schema `schema/cassette.v7.json`):
 | `artifacts` | Output-file manifest (paths + hashes + small inlined bodies) — unlocks `file_exists`/`artifact_json` on replay |
 | `fingerprint` | Skill/baseline staleness tripwire |
 | `userVisibleRoots` | The user-visible mount roots captured at record time |
+| `preRunPaths` | Pre-run file-path baseline for `no_unexpected_files` (workRoot-relative; co-present with `userVisibleRoots`) |
 | `scenarioSource` | Relative path to the authored YAML this was recorded from |
 | `authoring` | Present iff a live decider answered ≥1 gate during recording (`nonDeterministic: true`) |
 

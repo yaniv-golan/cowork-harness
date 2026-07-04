@@ -259,6 +259,7 @@ if *every* key passes (don't rely on the first; keep one concern per item unless
 | `file_exists: <path>` | the path exists under the run's `work/` (e.g. `outputs/x.md`) |
 | `user_visible_artifact: <path>` | the path exists **and** is under a user-visible root (`outputs/` + each connected folder's mount name) — i.e. the deliverable the user actually sees in Cowork |
 | `no_delete_in_outputs: true` | no delete op (`rm`/`mv`/…) touched `mnt/outputs` (forbidden in Cowork) — **only `true` is valid**; writing `false` is rejected by the schema (omit the key entirely to allow deletes in the test) |
+| `no_unexpected_files: [<glob>, …]` | every **newly created** file under a user-visible root matches ≥1 workRoot-relative glob (`**` matches any depth — e.g. `outputs/handoff/**` for per-run subdirs); `[]` = no new files allowed; **new-files-only** (overwrite-in-place is invisible — pair with `artifact_json` / producer stamping); post-hoc detection like `no_delete_in_outputs`, not mount enforcement; live/verify-run without pre-run manifest ⇒ evidence-unavailable (live runs capture the baseline only when this key is asserted; recordings always capture, so a later assert-add replays without re-record); microvm tier cannot capture; replay-checkable when the cassette carries `artifacts` **and** `preRunPaths` |
 | `self_heal_ran: <bool>` | a `/sessions/<id>/mnt` plugin script was (not) invoked — the plugin-root self-heal path |
 | `tool_called: <Tool>` | the agent invoked the tool |
 | `tool_not_called: <Tool>` | the agent never invoked it |

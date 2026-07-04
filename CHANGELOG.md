@@ -8,6 +8,16 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **`no_unexpected_files` assertion** — per-scenario glob allowlist over **newly created** files under the
+  user-visible roots (workRoot-relative paths; `**` matches any depth). Post-hoc stray-file / fabricated-
+  artifact detection for the founder-skills hand-off contract (consumer ask, 2026-07-04); pairs with their
+  script-side `_produced_by` / `UNVALIDATED_ARTIFACT` check for overwrite-in-place bypasses this key cannot
+  see. Records a pre-run path baseline (`preRunPaths` on the cassette + `pre-run-manifest.json` on kept runs;
+  optional field, no cassetteVersion bump). **Live/verify-run** without a baseline ⇒ evidence-unavailable
+  hard-fail; **replay** without `preRunPaths` ⇒ loud exclude (pre-0.24 cassettes). **Microvm** does not
+  capture (existing artifact-tree gap) — use container/hostloop. Live runs capture the baseline when the
+  scenario asserts the key; recordings always capture it, so a later assert-add replays without re-record.
+
 - **Two new documented fidelity gaps: guest runtime identity and session-slug shape.**
   Runtime forensics over a local install's Cowork VM disk images (coworkd's own logs) established
   that production provisions a **dedicated Unix user per session** inside the VM (`useradd`,
