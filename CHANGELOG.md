@@ -6,6 +6,76 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+
+- **`doctor --tier microvm` now detects an unprovisioned Lima instance.** It previously checked only
+  for `limactl` itself, not whether `vm init` had actually provisioned the instance for the current
+  config — a missing VM image could slip past `doctor` and only surface as first-run VM-boot latency
+  on the next live `microvm` run (which self-provisions). New `vm-instance` check is advisory (`warn`,
+  non-blocking, matching `microvm.ts`'s self-provisioning behavior), skipped when `limactl` itself is
+  already the reported problem. Live-verified against a real, unprovisioned Lima install.
+- **Top-level `--help` printed an invalid combined flag shorthand.** `--allow-domain/-email/-path
+  <regex>` is not something the parser accepts — the three flags are independent and parsed
+  separately (`verify-cassettes`'s own usage string already had this right). Fixed to list the three
+  flags separately, matching the dedicated usage string.
+
+### Documentation
+
+- **Doc-vs-code audit (post-0.22.0) — corrected several doc claims that had drifted from the
+  implementation, found by a systematic docs-and-skill sweep.**
+  - **Baseline pin staleness.** README, DESIGN.md, SPEC.md, the companion skill's `SKILL.md`, and
+    `docs/cowork-spawn-contract-1.12603.1.md` all still pinned `desktop-1.17377.1`/`.2` after the
+    platform baseline had moved on to `desktop-1.18286.0`. Reconciled the plain "current baseline"
+    pins; deliberately left DESIGN.md's point-in-time verification stamps (§ Control protocol /
+    Spawn contract) untouched, since bumping those would assert re-verification work that hasn't
+    actually happened. README's "Status" paragraph had the same unresolved tension one section
+    down (claiming `1.18286.0` is latest two sentences after a `1.17377.1` verification stamp) —
+    added a clarifying parenthetical instead of silently picking one number.
+  - **`docs/chat.md` self-contradiction.** Its `--folder` behavior rows named `protocol`/`container`/
+    `microvm` in two places despite `chat` never accepting `microvm` (already correctly excluded
+    elsewhere in the same file).
+  - **`docs/cassette.md`'s assertion table** was missing six replay-evaluated keys (`skill_triggered`,
+    `no_skill_triggered`, `max_cost_usd`, `max_tokens`, `tool_calls_max`, `max_turns`) despite already
+    documenting all six correctly in `docs/scenario.md`.
+  - **`docs/session.md`** never documented the real, live `account_name` session field.
+  - **`docs/scenario.md`'s `run --matrix` example** pointed `skill_dirs` at a fabricated
+    `../variants/v1/…` path that doesn't exist anywhere in the repo. Repointed the section at the new
+    `examples/matrices/csv-metrics-matrix.yaml` fixture (baselines-only axis — this repo has no second
+    `csv-metrics` variant to matrix against, so the shipped example omits `skill_dirs` rather than
+    inventing fake paths).
+  - **`docs/discovery.md`** left the `<proj-slug>` placeholder in its "find the VM session log" path
+    unexplained. Documented what it is (Claude Code's own project-slug derivation, opaque to this
+    repo) and gave a practical `ls`-based workaround instead of guessing at undocumented CLI internals.
+  - **Doc-index and cross-link gaps.** `docs/README.md`'s guide table and `llms.txt`'s command list
+    were both missing `stats`/`status`/`diff`; the `decide` reference row cited only `decide --help`
+    despite a full worked "dry-running a decider" subsection already existing in `docs/scenario.md`;
+    the README architecture diagram had no `hostloop` representation; `docs/maintenance.md`'s
+    `sync --diff` example (real but the two oldest baseline files in the repo) wasn't flagged as
+    illustrative; and README's `doctor` section read as if bare `doctor` were more general than
+    `--tier container`, when bare `doctor` **is** `--tier container` by default.
+  - **README command-table / flag-reference gaps.** `--compact`/`--demo` (output trimmed for
+    shareable screenshots/GIFs) were undocumented in the `skill`/`run` command-table rows;
+    `record`'s row omitted `--no-redact`/`--allow-failing`/`--dry-run`; the reproducibility-knobs
+    section omitted `COWORK_HARNESS_VERIFY_AGENT_SHA`; the exit-code summary claimed a uniform
+    `0`/`1`/`2`/`3` "on every command" when `diff`/`lint` have documented per-command exceptions
+    (SPEC.md already had the accurate table — README's summary now points at it instead of
+    overstating); and a note was added near the Prerequisites block that the worked
+    `examples/scenarios/...` commands need a source checkout, not a global `npm install -g`.
+  - Added **`examples/matrices/csv-metrics-matrix.yaml`**, a worked example for `run --matrix` (no
+    prior fixture existed) — live-verified: both baseline cells pass.
+
+### Internal
+
+- **`scripts/check-versions.ts`'s version-lockstep guard now also cross-checks the `(baseline
+  desktop-X)` pins** across README/`SKILL.md`/the spawn-contract doc against the newest committed
+  `baselines/*.json`, closing the exact class of drift the doc audit above found so it can't silently
+  recur. Deliberately excludes DESIGN.md's verification-stamp lines (see above).
+  - `alwaysContentKeys`/`questionGateKeys`/`manifestKeys` in `src/run/cassette.ts` are now exported
+    (previously function-local); `test/cassette-docs-sync.test.ts` asserts `docs/cassette.md`'s
+    assertion table stays in sync with their union.
+  - `test/cli-help.test.ts` gained a check that every CLI command appears in README's "Commands at a
+    glance" table, on the same "doc can't silently drift from code" principle.
+
 ## [0.22.0] — 2026-07-03
 
 ### Added
