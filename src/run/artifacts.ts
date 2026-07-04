@@ -45,7 +45,13 @@ export function collectArtifactsAt(dir: string, prefix: string): string[] {
 /** The shared walk. `containReal` is the realpath every visited directory must stay under;
  *  `visited` is caller-owned so collectArtifacts shares one cycle-set across all its prefixes
  *  (identical to the pre-move behavior). */
-function walkInto(startAbs: string, startRel: string, containReal: string, visited: Set<string>, out: { path: string; bytes: number }[]): void {
+function walkInto(
+  startAbs: string,
+  startRel: string,
+  containReal: string,
+  visited: Set<string>,
+  out: { path: string; bytes: number }[],
+): void {
   const walk = (abs: string, rel: string) => {
     // Cycle guard: resolve the real path of this directory; if we've already walked it, stop.
     let real: string;
