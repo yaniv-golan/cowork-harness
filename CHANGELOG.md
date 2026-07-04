@@ -97,9 +97,10 @@ All notable changes to this project are documented here. The format is based on
   for the sandbox probes so a bad publish surfaces in our own CI instead of only in a consumer's runner
   (it previously only ever `docker build`t the image locally). A pull failure now hard-fails
   (`::error::` + `exit 1`) on the canonical repo instead of silently rebuilding; forks and pre-publish
-  runs (no GHCR read access yet) keep the local-build fallback with a warning. _Note: the pull path
-  itself is not yet confirmed by a real green CI run — the image name/arch/GHCR read permission for the
-  CI token still need live verification._
+  runs (no GHCR read access yet) keep the local-build fallback with a warning. Live-verified on the
+  0.23.0 release PR's CI run: `docker pull ghcr.io/yaniv-golan/cowork-agent-base:2` resolved and
+  retagged successfully (image name, `linux/arm64` platform, and the default `GITHUB_TOKEN`'s GHCR
+  read access are all confirmed working, not just implemented).
 
 ### Fixed
 
