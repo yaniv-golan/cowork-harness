@@ -99,7 +99,8 @@ the folder basename (collision-resolved); there is no `to:` override. See `refer
 | `hostloop` / `cowork` | Production split-exec: the agent loop is a **native process on the host** (no container around the file tools — matching production), with native Bash/WebFetch disabled and routed host-side via the workspace SDK-MCP server into a Docker VM sidecar | Highest-fidelity / parity runs. A writable connected folder needs `allow_host_writes: true` (see scenario-schema.md). |
 
 Set the tier in the **scenario's `fidelity:` field**, not a flag — `run` rejects `--fidelity`
-(it's a `skill`-only flag). See `references/fidelity-and-answers.md`.
+(it's a `skill`/`chat` flag; `run` takes fidelity only from the scenario). See
+`references/fidelity-and-answers.md`.
 
 ## 5. Choose an answer path (gates: AskUserQuestion + tool-permission)
 

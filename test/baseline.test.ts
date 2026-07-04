@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { describe, it, expect, vi, afterEach, afterAll } from "vitest";
+import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
@@ -11,6 +11,7 @@ import {
   deriveSpawnEnv,
   checkSpawnContractFacts,
   canonicalizeEnv,
+  partitionSpawnFlags,
   resolveConst,
   REQUIRED_SPAWN_KEYS,
   type GateState,
@@ -570,6 +571,16 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
     expect(flags.some((f) => f.startsWith("NOTE:") && f.includes("CLAUDE_CODE_HOST_AUTH_ENV_VAR"))).toBe(true);
   });
 
+  // 9b. The NOTE is SURFACED, not swallowed: partitionSpawnFlags (the seam extractFromAsar feeds through)
+  //     routes it to `notes` (→ SyncResult.notes → the sync CLI's ℹ lines) and NEVER to the hard-fail deltas.
+  it("partitionSpawnFlags surfaces a stale-allowlist NOTE as a note (prefix stripped), never as a delta", () => {
+    const { flags } = deriveSpawnEnv(fixture(), greenGates());
+    const { deltas, notes } = partitionSpawnFlags(flags);
+    expect(deltas).toEqual([]); // NOTEs must not block the baseline write
+    expect(notes.some((n) => n.includes("CLAUDE_CODE_HOST_AUTH_ENV_VAR") && n.includes("prune"))).toBe(true);
+    expect(notes.every((n) => !n.startsWith("NOTE:"))).toBe(true);
+  });
+
   // 10. Golden-map correctness oracle (non-circular): the generator over the REAL asar must deep-equal
   //     the hand-transcribed golden map. Skips gracefully off-macOS / without a live Desktop install.
   it("golden oracle: deriveSpawnEnv(real asar) deep-equals the hand-transcribed golden map", () => {
@@ -628,24 +639,44 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
 });
 
 // Read the extracted real asar bundle if available; return null (skip) otherwise. Prefer an env override.
+// One extraction per test-file run (module-level memo — two tests share it), tmp dir cleaned up in
+// afterAll, and a skip is a single LOUD console.warn naming why (repo ethos: no silent no-op).
+const LIVE_ASAR = "/Applications/Claude.app/Contents/Resources/app.asar";
+let realBundleMemo: string | null | undefined;
+let realBundleTmpDir: string | null = null;
+
+function skipRealBundle(reason: string): null {
+  console.warn(`skipping live-asar oracle tests: ${reason}`);
+  return null;
+}
+
 function readRealBundleOrSkip(): string | null {
-  const candidates = [process.env.COWORK_ASAR_BUNDLE].filter(Boolean) as string[];
-  for (const p of candidates) {
+  if (realBundleMemo === undefined) realBundleMemo = extractRealBundle();
+  return realBundleMemo;
+}
+
+function extractRealBundle(): string | null {
+  const override = process.env.COWORK_ASAR_BUNDLE;
+  if (override) {
     try {
-      return readFileSync(p, "utf8");
+      return readFileSync(override, "utf8");
     } catch {
-      /* try next */
+      /* fall through to the live-install path */
     }
   }
-  if (process.platform !== "darwin") return null;
-  // Extract on demand from the live install (best-effort; skip if unavailable).
+  if (process.platform !== "darwin") return skipRealBundle("not macOS");
+  // Guard on the asar's existence BEFORE spawning npx — on a Mac without Claude Desktop the npx
+  // `--yes` fetch would otherwise touch the network just to fail on a missing input file.
+  if (!existsSync(LIVE_ASAR)) return skipRealBundle(`no Claude Desktop install (${LIVE_ASAR} missing)`);
   try {
-    const dir = mkdtempSync(join(tmpdir(), "cowork-asar-test-"));
-    execFileSync("npx", ["--yes", "@electron/asar", "extract", "/Applications/Claude.app/Contents/Resources/app.asar", dir], {
-      stdio: "ignore",
-    });
-    return readFileSync(join(dir, ".vite/build/index.js"), "utf8");
-  } catch {
-    return null;
+    realBundleTmpDir = mkdtempSync(join(tmpdir(), "cowork-asar-test-"));
+    execFileSync("npx", ["--yes", "@electron/asar", "extract", LIVE_ASAR, realBundleTmpDir], { stdio: "ignore" });
+    return readFileSync(join(realBundleTmpDir, ".vite/build/index.js"), "utf8");
+  } catch (e) {
+    return skipRealBundle(`asar extraction failed: ${(e as Error).message}`);
   }
 }
+
+afterAll(() => {
+  if (realBundleTmpDir) rmSync(realBundleTmpDir, { recursive: true, force: true });
+});

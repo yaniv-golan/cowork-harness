@@ -36,9 +36,11 @@ All notable changes to this project are documented here. The format is based on
     and VM-shaped links pass through; tool lines are excluded — they truncate at ~80 chars and a
     sliced URL would link to a wrong target). Piped/non-TTY output stays byte-identical.
 
-- **`machine-inventory` cassette privacy scan class.** `verify-cassettes` now flags
-  machine-inventory / host-fingerprint sentinel phrases (mirroring the shipped `path` class), with a
-  scoped `--allow-machine-inventory <regex>` to whitelist provably-synthetic values. Tightening the
+- **`machine-inventory` cassette privacy scan class.** `verify-cassettes` now flags the sentinel
+  phrases a capability-manifest recording leaks ("applications on this machine", "installed
+  integrations/apps/extensions", …) — prose mentions of an app never trip it — with a scoped
+  `--allow-machine-inventory <regex>` to whitelist provably-synthetic values. The capability-manifest
+  filter line is recognized so the manifest itself doesn't false-trip the other classes. Tightening the
   privacy gate before the 1.0 contract freezes keeps it from becoming a breaking change to consumers'
   committed cassettes later.
 - **The 1.0 compatibility contract (SPEC.md §12).** Enumerates the surfaces semver covers from `1.0.0` —
@@ -54,7 +56,8 @@ All notable changes to this project are documented here. The format is based on
   resolves to its real collected artifact. Verified live at both `container` (VM-shaped link) and
   `hostloop` (host-shaped link); wired into CI's replay + privacy-scan gates.
 - **Host-platform / workspace-host-paths identity env vars.** The spawn env now emits
-  `CLAUDE_CODE_HOST_PLATFORM` (`process.platform`, every tier) and `CLAUDE_CODE_WORKSPACE_HOST_PATHS`
+  `CLAUDE_CODE_HOST_PLATFORM` (`process.platform`, on every tier that assembles the Cowork spawn env —
+  container/microvm/hostloop; protocol (L0) spawns with the plain base env) and `CLAUDE_CODE_WORKSPACE_HOST_PATHS`
   (connected-folder host paths, hostloop only when folders are present) — matching what the real Cowork
   spawn sets, binary-verified against the in-VM ELF and Desktop asar. The account-identity and `OTEL_*`
   vars stay unset (they need live Desktop account state the headless harness can't know; documented in
@@ -68,12 +71,16 @@ All notable changes to this project are documented here. The format is based on
 - **The `profile:` scenario-field alias.** The top-level `profile:` key (an earlier name for
   `baseline:`) is no longer accepted — it was silently remapped with a deprecation warning; it now
   errors as an unknown key. Use `baseline:`.
+- **The deprecated `Profile` re-export (library API).** The `Profile` const/type in `src/types.ts` was
+  renamed to `PlatformBaseline` with a "remove next minor" promise that never fired; removed now so the
+  1.0 API contract doesn't freeze retired vocabulary in. Import `PlatformBaseline`.
 - **The `scaffold --from-run <id>` flag.** `scaffold` had two spellings for one thing; the canonical
   positional `scaffold <run-id | run-dir>` stays, and `--from-run` now errors as an unknown flag
   (exit 2) with the usage string pointing at the positional form.
 - **The `-V` short form for `--verbose`.** `-v` (version, per `node -v`/`npm -v`) and `-V` (verbose)
-  were a shift-key-typo collision that silently flipped meaning. `--verbose` is now long-only across
-  `run`/`skill`/`chat`/`decide`; `-v` still prints the version and `-q` still means `--quiet`.
+  were a shift-key-typo collision that silently flipped meaning. `--verbose` is now long-only on every
+  command that accepts it (`run`/`skill`/`chat`/`decide`/`record`/`replay`/`verify-cassettes`); `-v`
+  still prints the version and `-q` still means `--quiet`.
 - **The dead `forceDisableHostLoop` loop-decision key.** It was never populated by `sync` and its
   branch could never fire — a config key that silently does nothing is a trap in a 1.0 schema. The
   field and its branch are removed (re-add with real semantics if `sync` ever derives it).
@@ -89,6 +96,20 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **Redaction could destroy a `computer://` link and manufacture a VACUOUS `computer_links_resolve`
+  pass on replay.** The repo's local-path redaction pattern didn't exclude `)` from its character
+  class, so it ate a markdown link's closing paren — replay's extractor then saw an unterminated link,
+  found zero links, and the presence-gated assertion passed while checking nothing (the first committed
+  hostloop cassette shipped exactly this). Three-part fix: the redaction patterns now redact only the
+  machine-specific path prefix (stopping before `/mnt/`, so replay's structural-marker resolution still
+  works) and exclude link delimiters; `record`'s verdict-preservation guard gained a fourth check that
+  compares `computer://` link counts pre/post redaction and refuses to write a cassette whose links
+  redaction destroyed; and the hostloop cassette was re-recorded — its replay now extracts and resolves
+  the link for real.
+- **Scenario-schema violations now surface as category `usage`, not `internal`.** A typo'd or retired
+  key (e.g. `profile:`) threw an uncaught Zod error that the top-level catch labeled `internal` — a
+  user mistake masquerading as a harness bug. `parseScenarioFile` now wraps schema errors in a
+  `UsageError` that names the offending file; exit stays 2.
 - **The `protocol-smoke` example no longer fails by design on a live run.** `protocol` (L0) runs the
   agent's file tools on the real host cwd with no sealed filesystem — exactly like `hostloop` — so a
   host path in a tool result is expected there, not a leak. The `host_path_leak` default-fail is now
@@ -105,9 +126,9 @@ All notable changes to this project are documented here. The format is based on
   so a typo (`5m`) or an explicit `0` silently became the default. Both now route through
   `envPositiveNumber`, which warns loud on a set-but-unparseable/non-positive value (an unset var still
   uses the same default).
-- **The bundled `cowork-harness` skill's CI recipe no longer breaks under zsh.** The recommended
+- **The bundled `cowork-harness` skill's CI recipe no longer breaks under bash/zsh.** The recommended
   `npm i -g cowork-harness@>=0.22.0` was unquoted — `>=` is a shell redirection, so the snippet failed
-  as written. Now quoted at all sites. Same pass corrected the skill's command inventory (`status` was
+  as written in bash (GitHub Actions' default `run:` shell) and zsh alike. Now quoted at all sites. Same pass corrected the skill's command inventory (`status` was
   missing), a wrong `CLAUDE_PLUGIN_ROOT` scaffold path, missing `requires_capabilities` /
   `extended_thinking` / `account_name` schema docs, stale gotcha citations, a `scenario.py` regex-lint
   false-positive, and thin eval coverage.

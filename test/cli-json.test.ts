@@ -178,15 +178,17 @@ describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
 
   it("retired scenario field `profile:` is rejected as an unknown key (no alias)", () => {
     // `profile:` was renamed to `baseline:` and the alias is gone — it now falls through to the
-    // strictObject's unknown-key rejection instead of silently remapping to `baseline:`.
+    // strictObject's unknown-key rejection. parseScenarioFile wraps the Zod throw in a UsageError,
+    // so a scenario typo surfaces as category `usage` (a user mistake), not `internal` (a harness bug).
     const { cwd } = run(["--version"]);
     writeIn(cwd, "sess.yaml", "permission_mode: default\n");
     writeIn(cwd, "b.yaml", "name: b\nprofile: latest\nsession: ./sess.yaml\nfidelity: protocol\nprompt: hi\nexpect_denied: [evil.com]\n");
     const r = spawnSync("node", [CLI, "run", "b.yaml", "--output-format=json"], { encoding: "utf8", cwd });
-    expect(r.status).toBe(2); // uncaught Zod throw → top-level catch → category `internal`, exit 2
-    expect(JSON.parse(r.stdout).error.category).toBe("internal");
+    expect(r.status).toBe(2);
+    expect(JSON.parse(r.stdout).error.category).toBe("usage");
     expect(JSON.parse(r.stdout).error.message).toMatch(/unrecognized_keys/);
     expect(JSON.parse(r.stdout).error.message).toMatch(/"profile"/);
+    expect(JSON.parse(r.stdout).error.message).toMatch(/b\.yaml/); // the message names the offending file
   });
 
   it("run on a non-existent scenario path → clean usage error, exit 2 (not a raw ENOENT stack)", () => {

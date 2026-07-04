@@ -213,17 +213,20 @@ jobs:
         # — exercising the consumer path. Falls back to a local build when the image is unavailable (a
         # fork without package read, or before the first publish).
         #
-        # NOTE: written but NOT verified headless — the pull path (image name / arch /
-        # GHCR read permission for the CI token) needs a real CI run to confirm. Once green on main, the
-        # `::warning::`+fallback on the canonical repo should be hardened to a loud `exit 1` so a bad
-        # publish fails the gate rather than silently rebuilding.
+        # NOTE: the pull path is exercised here and HARD-FAILS on the canonical repo — a bad publish
+        # breaks this gate instead of silently rebuilding. Forks (no package read / pre-publish) keep
+        # the local-build fallback with a warning. Written but not yet verified headless: the image
+        # name / arch / GHCR read permission for the CI token still need a real green run to confirm.
         run: |
           IMG="ghcr.io/${{ github.repository_owner }}/cowork-agent-base:2"
           if docker pull --platform linux/arm64 "$IMG"; then
             docker tag "$IMG" cowork-agent-base:2
             echo "pulled and retagged $IMG → cowork-agent-base:2 (Action-pinned image exercised)"
+          elif [ "$GITHUB_REPOSITORY" = "yaniv-golan/cowork-harness" ]; then
+            echo "::error::GHCR pull of $IMG failed on the canonical repo — a bad publish must fail this gate, not silently rebuild."
+            exit 1
           else
-            echo "::warning::GHCR pull of $IMG failed (fork/pre-publish, or a bad publish) — building locally as a fallback. Harden to a hard failure on the canonical repo once the pull path is verified."
+            echo "::warning::GHCR pull of $IMG failed (fork/pre-publish) — building locally as a fallback."
             docker build --platform linux/arm64 -t cowork-agent-base:2 -f docker/Dockerfile.agent .
           fi
       - name: Prove the sandbox enforces Cowork's limitations (self-contained sidecar)

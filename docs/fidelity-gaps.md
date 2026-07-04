@@ -91,10 +91,15 @@ vars (binary-verified against `app.asar` 1.18286.0 and the in-VM ELF): `CLAUDE_C
 `CLAUDE_CODE_ORGANIZATION_UUID`, and the `OTEL_*` telemetry config.
 
 **Harness behaviour:** The two that are derivable headlessly **are now emitted** at the spawn-env seam
-(`src/runtime/argv.ts`): `CLAUDE_CODE_HOST_PLATFORM` (= `process.platform`, on every tier, matching
-production) and `CLAUDE_CODE_WORKSPACE_HOST_PATHS` (the real host paths of connected folders, `"|"`-
-joined, **hostloop only** — the only tier where connected folders keep a real host path rather than a
-staged copy). The remainder are **intentionally not emitted**:
+(`src/runtime/argv.ts`): `CLAUDE_CODE_HOST_PLATFORM` (= `process.platform`, on every tier that assembles
+the Cowork spawn env — container/microvm/hostloop; protocol (L0) spawns with the plain base env) and
+`CLAUDE_CODE_WORKSPACE_HOST_PATHS` (the real host paths of connected folders, `"|"`-joined, **hostloop
+only**). The hostloop-only scoping is a **deliberate, documented divergence**: production stages folders
+into the VM as copies and still sets the var with real host paths, and the harness knows the mount-source
+host paths at container/microvm too — but emitting them there would bake machine-specific `/Users/…` paths
+into cassettes (breaking machine-independent replay) and would let a model that runs `env` in the guest
+trip the harness's own container-tier `host_path_leak` default-fail. The remainder are **intentionally
+not emitted**:
 
 | Var | Why not emitted |
 |---|---|

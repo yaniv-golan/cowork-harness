@@ -170,6 +170,44 @@ describe("assertRedactionVerdictPreserved — cardinal-sin guard", () => {
   });
 });
 
+describe("redaction must preserve computer:// link structure (guard check 4 — the vacuous-pass bug)", () => {
+  const LINK = "Done. [View report.md](computer:///Users/tester/runs/r1/work/session/mnt/outputs/report.md)";
+  const linkEvents = [
+    JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: LINK }] } }),
+    JSON.stringify({ type: "result", subtype: "success", is_error: false }),
+  ];
+  // The exact bug class the first committed hostloop cassette shipped: a path pattern whose character
+  // class does not exclude ")" eats the markdown link's closing paren — extraction then sees an
+  // unterminated link and finds ZERO links, so `computer_links_resolve` passes VACUOUSLY on replay
+  // while the verdict compare sees pass==pass (a false green invisible to checks 1–3).
+  const GREEDY: RedactionPolicy = { patterns: [{ re: /\/Users\/[^\s"'\\]+/g, label: "local-path" }], keyNames: [] };
+  // The fixed shape (mirrors this repo's .cowork-redact.json): redact only the machine-specific prefix
+  // (stop before /mnt/) and exclude link delimiters from the fallback's character class.
+  const PREFIX: RedactionPolicy = {
+    patterns: [
+      { re: /\/Users\/[^\s"'\\)\]`]+?(?=\/mnt\/)/g, label: "local-path" },
+      { re: /\/Users\/[^\s"'\\)\]`]+/g, label: "local-path" },
+    ],
+    keyNames: [],
+  };
+
+  it("FAILS LOUD when a greedy path pattern destroys the link (count 1 → 0)", async () => {
+    const base = cassetteWith(linkEvents, [{ result: "success" }]);
+    const red = redactCassette(base, GREEDY);
+    await expect(assertRedactionVerdictPreserved(base, red)).rejects.toThrow(/destroyed computer:\/\/ link structure/);
+  });
+
+  it("passes with a structure-preserving prefix redaction (link survives, count 1 → 1) and keeps the /mnt/ marker", async () => {
+    const base = cassetteWith(linkEvents, [{ result: "success" }]);
+    const red = redactCassette(base, PREFIX);
+    expect(JSON.stringify(red)).not.toContain("/Users/tester"); // the machine-specific prefix is gone
+    expect(JSON.parse(red.events[0]).message.content[0].text).toMatch(
+      /computer:\/\/\[REDACTED:local-path:[0-9a-f]{12}\]\/mnt\/outputs\/report\.md\)/,
+    );
+    await expect(assertRedactionVerdictPreserved(base, red)).resolves.toBeUndefined();
+  });
+});
+
 describe("redaction keeps userVisibleRoots structurally consistent with redacted artifact paths", () => {
   const ROOT_POLICY: RedactionPolicy = { patterns: [{ re: /Acme/g, label: "cust" }], keyNames: [] };
 

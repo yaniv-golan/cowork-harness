@@ -443,7 +443,11 @@ counts) — committed PII surface. Two layers, distinct from secret-scrub (which
   across the whole cassette surface (transcript, artifact bodies + filenames, prompt/answers/assert,
   skillSources) **structurally** — JSON stays valid and the AskUserQuestion question/answer strings stay in
   sync, so the O7 guard still passes. Redaction is **verdict-preserving**: `record` replays before/after and
-  **refuses to write** if redaction would flip an assertion (a manufactured green is the cardinal sin).
+  **refuses to write** if redaction would flip an assertion (a manufactured green is the cardinal sin) — or
+  if it changes the number of `computer://` links extractable from the model-visible text (a pattern that
+  eats a link's closing delimiter destroys the link, and `computer_links_resolve` would then pass
+  **vacuously** on replay). Write path patterns to redact only the machine-specific prefix (stop before
+  `/mnt/`) and exclude `)`/`]`/backtick from their character classes — see this repo's `.cowork-redact.json`.
   `--no-redact` skips it for known-synthetic inputs.
 - **Always-on scan gate** — `verify-cassettes <file|dir>` scans the committed cassettes and **exits
   non-zero** on a finding, so "no leak" is a gate, not discipline. The full net (`email` + `currency` +

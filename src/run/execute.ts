@@ -1,5 +1,6 @@
 import { warn } from "../io.js";
-import { BoundaryError } from "../errors.js";
+import { BoundaryError, UsageError } from "../errors.js";
+import { ZodError } from "zod";
 import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync, readdirSync, statSync, lstatSync, realpathSync } from "node:fs";
 import { randomUUID, createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
@@ -551,6 +552,11 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       const proto = spawnProtocol(scenario, baseline, plan, outDir, { systemPromptAppend: prompts.systemPromptAppend });
       child = proto.child;
       l0PluginDivergence = proto.l0PluginDivergence;
+      if (scenario.assert.some((a) => a.transcript_no_host_path === true) && !opts.compact)
+        warn(
+          `::warning:: [protocol] scenario asserts transcript_no_host_path — protocol (L0) runs the agent's file tools ` +
+            `on the real host cwd with no sealed filesystem, so this assertion will FAIL by design at this fidelity.\n`,
+        );
     }
 
     const sessionT = new LiveAgentSession(child as any, outDir);
@@ -912,7 +918,16 @@ const isFileRelative = (p: string) => p !== "(inline)" && !isAbsolute(p) && !p.s
  * relocatable. Use this everywhere a scenario is read from disk (`run`, `record`).
  */
 export function parseScenarioFile(path: string): Scenario {
-  const scenario = Scenario.parse(parseYaml(readFileSync(path, "utf8")));
+  let scenario: Scenario;
+  try {
+    scenario = Scenario.parse(parseYaml(readFileSync(path, "utf8")));
+  } catch (e) {
+    // A schema violation is a USER mistake (a typo'd/retired key like `profile:`, a bad enum value),
+    // not a harness bug — rethrow as UsageError so main().catch maps it to category `usage`, not
+    // `internal`. The Zod issue list stays in the message (it names the offending key/value).
+    if (e instanceof ZodError) throw new UsageError(`invalid scenario ${path}: ${e.message}`);
+    throw e;
+  }
   // `name` defaults to the filename (sans extension) — the file is the identity.
   if (!scenario.name) scenario.name = basename(path).replace(/\.ya?ml$/i, "");
   if (isFileRelative(scenario.session)) scenario.session = resolve(dirname(path), scenario.session);
@@ -1501,4 +1516,4 @@ export function readSessionManifest(path: string, sessionId: string): string {
   return id;
 }
 
-export { UnansweredError, BoundaryError };
+export { UnansweredError, BoundaryError, UsageError };

@@ -34,6 +34,7 @@ import { pMapBounded } from "../async-pool.js";
  *  pool (each run creates two networks) and press model API rate limits — both surface as actionable errors. */
 const MAX_RECORD_CONCURRENCY = 8;
 import { evaluate, budgetFields } from "../assert.js";
+import { extractComputerLinks } from "./computer-links.js";
 import { makeRenderer, renderFooter, type RenderPlan } from "./renderer.js";
 import { jsonEnvelope, parseOutputFormat } from "./envelope.js";
 import { parseArgs } from "../cli-args.js";
@@ -1028,6 +1029,31 @@ export function redactCassette(cassette: Cassette, policy: RedactionPolicy): Cas
   };
 }
 
+/** The model-visible TEXT surfaces of a cassette's raw event lines: assistant text blocks + the final
+ *  `result` string. Used ONLY for base-vs-redacted comparison in the guard below, so it needn't replicate
+ *  run.ts's exact transcript assembly (e.g. subagent filtering) — both sides go through the SAME
+ *  extraction and only the DIFFERENCE matters. */
+function modelVisibleText(events: string[]): string {
+  const parts: string[] = [];
+  for (const line of events) {
+    let e: unknown;
+    try {
+      e = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (typeof e !== "object" || e === null) continue;
+    const ev = e as { type?: string; result?: unknown; message?: { content?: unknown } };
+    if (ev.type === "assistant" && Array.isArray(ev.message?.content)) {
+      for (const b of ev.message.content as { type?: string; text?: unknown }[])
+        if (b?.type === "text" && typeof b.text === "string") parts.push(b.text);
+    } else if (ev.type === "result" && typeof ev.result === "string") {
+      parts.push(ev.result);
+    }
+  }
+  return parts.join("\n");
+}
+
 /** Cardinal-sin guard: redaction must be VERDICT-PRESERVING. Replay both the pre-redaction and the
  *  redacted cassette (token-free) and compare verdicts; if redaction flipped any replay-checkable assertion
  *  (e.g. stripped a value a `transcript_not_matches` keys on, manufacturing a green), throw — never write a
@@ -1039,7 +1065,12 @@ export function redactCassette(cassette: Cassette, policy: RedactionPolicy): Cas
  *  2. Failing assertion messages, normalized so [REDACTED] substitutions are tolerated while unexpected
  *     message mutations (e.g. a body swap that changes which value triggered the failure) are caught.
  *  3. Artifact SHA-256 hashes for text bodies — a redaction that replaces a body while keeping the
- *     assertion passing would corrupt the cassette's replay-time sha256 verify; catch it here first. */
+ *     assertion passing would corrupt the cassette's replay-time sha256 verify; catch it here first.
+ *  4. `computer://` link COUNTS over the model-visible text. A redaction pattern that eats a link's
+ *     closing delimiter (e.g. a path class that doesn't exclude `)`) destroys the link at extraction
+ *     time — `computer_links_resolve` then passes VACUOUSLY on replay (zero links = presence-gated
+ *     pass) while the verdict compare above sees pass==pass. A dropped link is a manufactured green,
+ *     not a privacy fix. (The first committed hostloop cassette shipped exactly this bug.) */
 export async function assertRedactionVerdictPreserved(base: Cassette, redacted: Cassette): Promise<void> {
   const [rb, rr] = await Promise.all([replayCassette(base), replayCassette(redacted)]);
   const vb = computeVerdict(rb, "replay");
@@ -1098,12 +1129,17 @@ export async function assertRedactionVerdictPreserved(base: Cassette, redacted: 
 
   const inconsistentBodies = bodyShaInconsistent(redacted);
 
+  // 4. computer:// link structure must survive redaction (see the doc comment).
+  const baseLinkCount = extractComputerLinks(modelVisibleText(base.events)).length;
+  const redactedLinkCount = extractComputerLinks(modelVisibleText(redacted.events)).length;
+
   const verdictMismatch = vb.pass !== vr.pass;
   const pairsMismatch = basePairs.join("|") !== redactedPairs.join("|");
   const msgsMismatch = failedMsgs(rb).join("|") !== failedMsgs(rr).join("|");
   const bodyShaBroken = inconsistentBodies.length > 0;
+  const linksDestroyed = baseLinkCount !== redactedLinkCount;
 
-  if (verdictMismatch || pairsMismatch || msgsMismatch || bodyShaBroken) {
+  if (verdictMismatch || pairsMismatch || msgsMismatch || bodyShaBroken || linksDestroyed) {
     let detail: string;
     if (verdictMismatch) {
       detail = `pre-redaction pass=${vb.pass} → redacted pass=${vr.pass}`;
@@ -1113,8 +1149,13 @@ export async function assertRedactionVerdictPreserved(base: Cassette, redacted: 
       detail = `assertion failures changed: [${bf.join(", ")}] → [${rf.join(", ")}]`;
     } else if (msgsMismatch) {
       detail = "failing assertion messages changed unexpectedly after redaction";
-    } else {
+    } else if (bodyShaBroken) {
       detail = `redacted artifact body sha256 no longer matches its bytes (replay would reject as corrupt): ${inconsistentBodies.join(", ")}`;
+    } else {
+      detail =
+        `redaction destroyed computer:// link structure: ${baseLinkCount} link(s) pre-redaction → ${redactedLinkCount} after — ` +
+        `computer_links_resolve would pass vacuously on replay (zero links = pass). Fix the redaction pattern to preserve ` +
+        `link delimiters (exclude \`)\`/\`]\`/backtick from path character classes), or redact only the machine-specific path prefix`;
     }
     throw new Error(
       `cowork-harness: redaction changed assertion failures: ${detail} — redaction altered an ` +
@@ -1333,7 +1374,8 @@ export async function cmdRecord(args: string[]) {
       ],
       noDashValue: ["--out", "--decider-dir"],
       enums: { "--output-format": ["text", "json"], "--on-unanswered": ["fail", "first"] },
-      aliases: { "-q": "--quiet", "-V": "--verbose" },
+      // no `-V`: verbose is long-only everywhere (`-v` is version at the top level; the A3 shift-key-typo fix).
+      aliases: { "-q": "--quiet" },
     });
   } catch (e) {
     log((e as Error).message);
@@ -1911,7 +1953,7 @@ export async function cmdReplay(args: string[]) {
       booleans: ["--strict", "--fail-on-skill-drift", "--reassert", "--quiet", "--verbose"],
       values: ["--output-format", "--assert-from"],
       enums: { "--output-format": ["text", "json"] },
-      aliases: { "-q": "--quiet", "-V": "--verbose" },
+      aliases: { "-q": "--quiet" },
     });
   } catch (e) {
     log(String((e as Error).message));
@@ -2091,7 +2133,7 @@ export function cmdVerifyCassettes(args: string[]) {
       repeated: ["--allow", "--allow-domain", "--allow-email", "--allow-path", "--allow-machine-inventory", "--allow-file"],
       enums: { "--output-format": ["text", "json"] },
       noDashValue: ["--allow-file"],
-      aliases: { "-q": "--quiet", "-V": "--verbose" },
+      aliases: { "-q": "--quiet" },
     });
   } catch (e) {
     log(String((e as Error).message));

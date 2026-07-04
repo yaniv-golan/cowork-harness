@@ -1,8 +1,11 @@
 {
   "patterns": [
-    { "regex": "/Users/[^\\s\"'\\\\]+", "label": "local-path", "flags": "g" },
-    { "regex": "/home/[^\\s\"'\\\\]+", "label": "local-path", "flags": "g" },
-    { "regex": "/root/[^\\s\"'\\\\]+", "label": "local-path", "flags": "g" },
+    { "regex": "/Users/[^\\s\"'\\\\)\\]`]+?(?=/mnt/)", "label": "local-path", "flags": "g" },
+    { "regex": "/home/[^\\s\"'\\\\)\\]`]+?(?=/mnt/)", "label": "local-path", "flags": "g" },
+    { "regex": "/root/[^\\s\"'\\\\)\\]`]+?(?=/mnt/)", "label": "local-path", "flags": "g" },
+    { "regex": "/Users/[^\\s\"'\\\\)\\]`]+", "label": "local-path", "flags": "g" },
+    { "regex": "/home/[^\\s\"'\\\\)\\]`]+", "label": "local-path", "flags": "g" },
+    { "regex": "/root/[^\\s\"'\\\\)\\]`]+", "label": "local-path", "flags": "g" },
     { "regex": "[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}", "label": "email", "flags": "g" }
   ]
 }

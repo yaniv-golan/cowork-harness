@@ -12,6 +12,7 @@ import {
   loadSessionFromFile,
   UnansweredError,
   BoundaryError,
+  UsageError,
   type ExecuteOptions,
 } from "./run/execute.js";
 import {
@@ -2286,6 +2287,12 @@ async function cmdSync(args: string[]) {
     // any nested change (e.g. a single gate flip three levels deep used to dump all of `provenance`).
     for (const line of formatDiffLines(diffBaselines(base, next))) log(`  ${line}`);
   }
+  // Non-blocking informational hints (e.g. stale SPAWN_ENV_ALLOWLIST prune NOTEs): surfaced so they
+  // get acted on, but they are NOT deltas and never block the write.
+  if (res.notes.length) {
+    log("\nℹ notes (non-blocking):");
+    for (const n of res.notes) log("   - " + n);
+  }
   if (res.unknownDeltas.length) {
     log("\n⚠ unknown deltas (extend src/sync/cowork-sync.ts):");
     for (const d of res.unknownDeltas) log("   - " + d);
@@ -2837,6 +2844,10 @@ function cmdScaffold(args: string[]) {
   // validate --output-format is text|json — an invalid value was a silent text degrade (only
   // isJsonOutput was consulted), unlike decide/gates/trace.
   ensureOutputFormat("scaffold", args);
+  // The retired `--from-run` alias gets a targeted hint (it had users pre-1.0); any other unknown
+  // flag falls through to the generic loud rejection below.
+  if (args.some((a) => a === "--from-run" || a.startsWith("--from-run=")))
+    fail("scaffold", "usage", "unknown flag: --from-run (removed — use the positional form)", SUBCOMMAND_USAGE.scaffold, json);
   // Reject unknown flags rather than silently ignoring a typo (e.g. `--form-run`).
   rejectUnknownFlags("scaffold", args, ["--out", "--output-format", "--output-format=json", "--output-format=text"], json);
 
@@ -3647,6 +3658,7 @@ main().catch((e) => {
   const json = isJsonOutput(process.argv.slice(2));
   if (e instanceof UnansweredError) fail(command, "unanswered", e.message, e.hint, json);
   if (e instanceof BoundaryError) fail(command, "boundary", e.message, undefined, json);
+  if (e instanceof UsageError) fail(command, "usage", e.message, undefined, json);
   // runtime/unexpected: keep the stack on stderr for humans; a structured envelope on stdout for json.
   if (json) out(jsonError(command, "internal", String(e?.message ?? e)));
   else log(String(e?.stack ?? e));

@@ -35,6 +35,7 @@ export interface SyncResult {
   gates: Record<string, GateState> | null; // decoded GrowthBook gate states (null = fcache absent/unreadable)
   spawnEnv: Record<string, string> | null; // derived spawn.env; null = a hard-fail flag blocked it (carry base env forward)
   unknownDeltas: string[];
+  notes: string[]; // non-blocking informational hints (e.g. stale SPAWN_ENV_ALLOWLIST prune NOTEs) — surfaced by the CLI, never a delta
 }
 
 /**
@@ -155,7 +156,7 @@ export function sync(): SyncResult {
 
   // 5. Egress allowlist + spawn contract from the asar (vmAllowedDomains + firewallAlso + spawn.env),
   // merged with user hosts.
-  const { domains, fingerprint, spawnEnv } = extractFromAsar(unknown, gates);
+  const { domains, fingerprint, spawnEnv, notes } = extractFromAsar(unknown, gates);
   const allowDomains = dedupe([...domains, ...userAllow]);
 
   if (!gates) {
@@ -179,6 +180,7 @@ export function sync(): SyncResult {
     gates,
     spawnEnv,
     unknownDeltas: unknown,
+    notes,
   };
 }
 
@@ -186,10 +188,10 @@ export function sync(): SyncResult {
 function extractFromAsar(
   unknown: string[],
   gates: Record<string, GateState> | null,
-): { domains: string[]; fingerprint: string; spawnEnv: Record<string, string> | null } {
+): { domains: string[]; fingerprint: string; spawnEnv: Record<string, string> | null; notes: string[] } {
   if (!existsSync(ASAR)) {
     flag(unknown, `asar not found at ${ASAR} — install/open Claude Desktop once, or fix ASAR in cowork-sync.ts`);
-    return { domains: [], fingerprint: "", spawnEnv: null };
+    return { domains: [], fingerprint: "", spawnEnv: null, notes: [] };
   }
   const tmp = mkdtempSync(join(tmpdir(), "cowork-sync-"));
   try {
@@ -208,20 +210,19 @@ function extractFromAsar(
     for (const f of checkMountModeFacts(bundle)) flag(unknown, f);
     for (const f of checkWebFetchFacts(bundle)) flag(unknown, f);
     // Spawn contract: S-tier structural sentinels + the generated spawn.env. Non-NOTE flags
-    // become unknown deltas (hard-fail); a NOTE (stale-allowlist prune hint) is surfaced but not a delta.
+    // become unknown deltas (hard-fail); NOTEs (stale-allowlist prune hints) are collected into
+    // `notes` and printed by the sync CLI as informational lines — never a delta, never write-blocking.
     for (const f of checkSpawnContractFacts(bundle)) flag(unknown, f);
     const spawn = deriveSpawnEnv(bundle, gates);
-    for (const f of spawn.flags) {
-      if (f.startsWith("NOTE:")) continue;
-      flag(unknown, f);
-    }
+    const { deltas: spawnDeltas, notes } = partitionSpawnFlags(spawn.flags);
+    for (const f of spawnDeltas) flag(unknown, f);
     // Fingerprint over the cowork-relevant slices for "unknown delta" detection.
     const slice = sliceCowork(bundle);
     const fingerprint = createHash("sha256").update(slice).digest("hex").slice(0, 16);
-    return { domains, fingerprint, spawnEnv: spawn.env };
+    return { domains, fingerprint, spawnEnv: spawn.env, notes };
   } catch (e) {
     flag(unknown, `asar extract failed (npx @electron/asar): ${(e as Error).message} — check network/npx, or unpack ${ASAR} manually`);
-    return { domains: [], fingerprint: "", spawnEnv: null };
+    return { domains: [], fingerprint: "", spawnEnv: null, notes: [] };
   } finally {
     // mkdtempSync extraction dir is otherwise leaked under $TMPDIR on every invocation.
     rmSync(tmp, { recursive: true, force: true });
@@ -305,7 +306,7 @@ export const SPAWN_GATES: Record<string, string> = {
  * Env keys the generator deliberately does NOT pin, each with WHY. Checked before value resolution, so a
  * key here is skipped regardless of its construct shape (this is what keeps the messy host-derived / 3p /
  * session ternaries out of the generated env). A stale entry (allowlisted but no longer constructed
- * anywhere) emits a non-blocking NOTE for pruning.
+ * anywhere) emits a non-blocking NOTE for pruning, surfaced as SyncResult.notes in the sync output.
  */
 export const SPAWN_ENV_ALLOWLIST: Record<string, string> = {
   CLAUDE_CONFIG_DIR: "modeled as spawn.configDirInGuest; injected per-session by spawnEnv() (src/runtime/argv.ts)",
@@ -673,6 +674,21 @@ export function deriveSpawnEnv(
 
   if (hardFail) return { env: null, flags };
   return { env, flags };
+}
+
+/**
+ * Split deriveSpawnEnv flags into the two severities: "NOTE:"-prefixed prune hints become non-blocking
+ * `notes` (prefix stripped; surfaced as SyncResult.notes in the sync output), everything else is a
+ * hard-fail `delta` (→ unknownDeltas, blocking the baseline write).
+ */
+export function partitionSpawnFlags(flags: string[]): { deltas: string[]; notes: string[] } {
+  const deltas: string[] = [];
+  const notes: string[] = [];
+  for (const f of flags) {
+    if (f.startsWith("NOTE:")) notes.push(f.replace(/^NOTE:\s*/, ""));
+    else deltas.push(f);
+  }
+  return { deltas, notes };
 }
 
 /**

@@ -610,8 +610,8 @@ nothing here is guaranteed; minor versions may break any surface — see [RELEAS
 - **RunResult envelope** — `schema/run-result.json` under `--output-format json` (§11): the
   `ok` / `results[]` / `error` shape and the verdict-signal codes (§11.0).
 - **Cassette format** — the current `cassetteVersion` (**7**) and its verdict-modifier assertion keys.
-  Older-version cassettes (the retained `schema/cassette.v2…v6.json`) stay replayable; dropping a
-  still-emitted version's readability is breaking.
+  Older-version cassettes (the retained `schema/cassette.v2/v3/v5/v6.json` — no v4 schema was ever
+  published) stay replayable; dropping a still-emitted version's readability is breaking.
 - **Control protocol** — `schema/protocol.v1.json` + the golden control-response vectors (§5).
 - **Environment variables** — the documented `COWORK_HARNESS_*` knobs plus `COWORK_AGENT_BINARY` and
   `COWORK_AGENT_IMAGE`. Renaming a documented var or changing its meaning is breaking.

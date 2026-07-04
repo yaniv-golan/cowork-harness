@@ -165,8 +165,10 @@ export function hostNativeSpawnEnv(
     CLAUDE_CODE_HOST_PLATFORM: process.platform,
     // Binary-verified (asar @12473150): production sets this only when connected folders are present
     // (`userSelectedFolders?.length && …`), joined with "|" — the agent reads it as an OTEL attribute
-    // split on "|" (ELF @226793812). Container/microvm tiers stage folders as copies with no real host
-    // path, so this is hostloop-only; omit entirely (not an empty string) when no folders are connected.
+    // split on "|" (ELF @226793812). Hostloop-only by deliberate choice (production sets it even for
+    // staged copies): emitting host paths at container/microvm would bake machine-specific /Users/…
+    // paths into cassettes (breaking machine-independent replay) and let an in-guest `env` trip the
+    // container-tier host_path_leak default-fail. Omit entirely (not "") when no folders are connected.
     ...(opts.folderHostPaths?.length ? { CLAUDE_CODE_WORKSPACE_HOST_PATHS: opts.folderHostPaths.join("|") } : {}),
     ...(opts.extra ?? {}),
   };

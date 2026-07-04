@@ -6,7 +6,9 @@ const SPEC = {
   values: ["--out", "--output-format", "--decider-cmd"],
   repeated: ["--allow"],
   enums: { "--output-format": ["text", "json"] },
-  aliases: { "-q": "--quiet", "-V": "--verbose" },
+  // "-s" is a synthetic alias for the mechanism test below — no real command declares it (and none
+  // declares `-V`, which was retired; verbose is long-only).
+  aliases: { "-q": "--quiet", "-s": "--strict" },
   noDashValue: ["--out", "--decider-cmd"],
 };
 
@@ -35,9 +37,11 @@ describe("parseArgs", () => {
   });
 
   it("resolves short-flag aliases and fails loud on an unknown short flag", () => {
-    const p = parseArgs(["a", "-q", "-V"], { ...SPEC, booleans: ["--strict", "--quiet", "--verbose"] });
+    const p = parseArgs(["a", "-q", "-s"], { ...SPEC, booleans: ["--strict", "--quiet"] });
     expect(p.flags["--quiet"]).toBe(true);
-    expect(p.flags["--verbose"]).toBe(true);
+    expect(p.flags["--strict"]).toBe(true);
+    // `-V` is retired everywhere (verbose is long-only) — undeclared, so it must fail loud, not alias.
+    expect(() => parseArgs(["-V"], SPEC)).toThrow(/unknown flag/);
     expect(() => parseArgs(["-z"], SPEC)).toThrow(/unknown flag/);
   });
 

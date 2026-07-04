@@ -78,11 +78,6 @@ export const PlatformBaseline = z.looseObject({
 });
 export type PlatformBaseline = z.infer<typeof PlatformBaseline>;
 
-/** @deprecated Renamed to `PlatformBaseline`. Kept as a re-export for one minor; remove next minor. */
-export const Profile = PlatformBaseline;
-/** @deprecated Renamed to `PlatformBaseline`. */
-export type Profile = PlatformBaseline;
-
 /** Scenario — what the user authors. */
 export const AnswerRule = z
   .object({
