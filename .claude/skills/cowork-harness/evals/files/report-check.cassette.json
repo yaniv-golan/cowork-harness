@@ -1,0 +1,35 @@
+{
+  "$schema": "https://raw.githubusercontent.com/yaniv-golan/cowork-harness/main/schema/cassette.v7.json",
+  "generator": "cowork-harness",
+  "cassetteVersion": 7,
+  "scenario": {
+    "name": "report-check",
+    "fidelity": "cowork",
+    "prompt": "Generate the weekly report to outputs/report.md",
+    "on_unanswered": "fail",
+    "assert": [
+      { "result": "success" },
+      { "transcript_contains": "weekly report" }
+    ]
+  },
+  "events": [
+    "{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"synthetic-eval-fixture\"}",
+    "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"I wrote the weekly report to outputs/report.md.\"}]}}",
+    "{\"type\":\"result\",\"subtype\":\"success\",\"num_turns\":2,\"total_cost_usd\":0.01,\"usage\":{\"input_tokens\":100,\"output_tokens\":50}}"
+  ],
+  "controlOut": [],
+  "effectiveFidelity": "hostloop",
+  "artifacts": [
+    {
+      "path": "outputs/report.md",
+      "bytes": 24,
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "body": "# Weekly report (stub)\n"
+    }
+  ],
+  "fingerprint": {
+    "baseline": "desktop-1.18286.0",
+    "skillHash": "sha256:synthetic-eval-fixture"
+  },
+  "scenarioSource": "report-check.yaml"
+}

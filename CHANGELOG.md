@@ -8,6 +8,34 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **Skill-effectiveness workstream (readiness-plan B3 remainder, from the founder-skills adoption
+  analysis R3).** Three deliverables, all targeting "the facts existed but no doc composed them into
+  the consumer's actual task":
+  - **`references/task-recipes.md`** — four end-to-end recipes the adoption report had to
+    reverse-engineer: evolve a cassette's `assert:` block (usually token-free via
+    `replay --assert-from`; the recording-shaping-drift caveat spelled out), audit a fleet for tier
+    drift (`effectiveFidelity` + the new `resolved-tier`/`unverifiable-tier` classes + a cassette
+    anatomy table), set up redaction before the first hostloop/protocol record (`init-redact`,
+    search set, scanner relationship, `--allow-*` scoping idioms), and derive budget assertions
+    from an existing run instead of a two-pass record.
+  - **Four consumer-derived eval cases** (`evals/evals.json` 5 → 9, ids 6–9), each a question the
+    consumer actually hit, passing iff the agent reaches the cheap path: assert evolution without a
+    fleet re-record, reading a cassette's recorded tier (with a fixture cassette via `files[]`),
+    the exact `--allow-file` format (and its all-class scope trade-off), and batch `record`
+    atomicity semantics.
+  - **Doc-drift tripwire** (`test/skill-docs-sync.test.ts`), scoped to the kinds of drift that
+    actually happened (NOT a naive new-CLI-flag gate, which would have caught neither motivating
+    example): extends the `cassette-docs-sync` pattern to pin the skill's assertion catalog against
+    `schema/scenario.schema.json` and the skill docs against the current cassette schema's
+    top-level field list. Plus a CONTRIBUTING checklist line for consumer-visible workflow changes.
+
+### Fixed
+
+- **`schema/cassette.v7.json` was missing `userVisibleRoots` and `scenarioSource`** — both fields
+  are written by `record` (since format v4 / 0.8.0 and 0.20.0 respectively); `userVisibleRoots` was
+  even named in the schema's prose `description` while absent from `properties`. Found by the new
+  skill-docs tripwire while pinning the field list.
+
 - **Redaction preflight + `init-redact` (readiness-plan D3, from founder-skills consumer feedback S3).**
   `record` now warns (`::warning::`) **before the agent spawns** when a scenario about to record at a
   host-path-bearing tier (`hostloop`, or `protocol`) has an EMPTY assembled redaction policy — that

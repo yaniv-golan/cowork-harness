@@ -460,6 +460,10 @@ and the CI recipe, read the files in `references/`.
 
 ## References
 
+- `references/task-recipes.md` — end-to-end recipes for the four jobs fleet owners actually hit:
+  evolve a cassette's `assert:` (usually no re-record), audit a fleet for tier drift, set up
+  redaction before the first hostloop/protocol record, derive budget assertions without a
+  two-pass record. Start here when the question is "how do I do X", not "what does flag Y mean".
 - `references/scenario-schema.md` — scenario/session YAML schema, full assertion catalog (with each
   key's replay class), the web_fetch model, and the complete gotcha list.
 - `references/fidelity-and-answers.md` — fidelity tiers, answer paths, the determinism contract.
