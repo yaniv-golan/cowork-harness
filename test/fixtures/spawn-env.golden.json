@@ -1,0 +1,34 @@
+{
+  "$comment": "GOLDEN spawn.env cross-check oracle for deriveSpawnEnv (readiness A5). HAND-TRANSCRIBED by a human reading the live app.asar env windows (Desktop 1.18286.0) — NOT copied from deriveSpawnEnv output (that would be circular; see the A5 design test 10 / O2). Each value below was read directly from the W1/W2/W3 window text and resolved by hand against the live fcache gate states. Update this file each release by re-reading the asar, then reconcile any divergence from generator output BEFORE committing. Provenance per key is in the sibling comment keys.",
+  "$provenance": {
+    "W1_env_literal": "env:{CLAUDE_CONFIG_DIR ... ,systemPrompt: — the local-agent spawn options env object",
+    "W2_OnA": "return{CLAUDE_CODE_ENTRYPOINT ... .sessionEnvVars()} — the base-env helper",
+    "W3_Zrn": "return{DISABLE_AUTOUPDATER:\"1\" ...} — the shared-env helper spread by OnA",
+    "gates_live": "66187241 off, 714014285 ON(force), 434204418 off, 1936081873 ON, 1129419822 dark, 451382573 dark, 4153934152 off",
+    "consts": "MCP_TOOL_TIMEOUT=String(Zv()) -> Zv body ??zae -> zae=kGt -> kGt=6e4 -> 60000; API_TIMEOUT_MS=String(Sde) -> Sde=9e5 -> 900000",
+    "session_model": "standard 1p prod chat localAgent session (t.type!=3p, oauth env=prod, disableCron=true, localAgent=true, sessionType=chat)"
+  },
+  "env": {
+    "CLAUDE_CODE_IS_COWORK": "1",
+    "CLAUDE_CODE_ENTRYPOINT": "local-agent",
+    "CLAUDE_CODE_TAGS": "lam_session_type:chat",
+    "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST": "1",
+    "CLAUDE_CODE_ENABLE_ASK_USER_QUESTION_TOOL": "true",
+    "CLAUDE_CODE_DISABLE_CRON": "1",
+    "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
+    "CLAUDE_CODE_DISABLE_AGENTS_FLEET": "1",
+    "CLAUDE_CODE_ENABLE_APPEND_SUBAGENT_PROMPT": "1",
+    "CLAUDE_CODE_ENABLE_TASKS": "true",
+    "CLAUDE_CODE_DISABLE_TERMINAL_TITLE": "1",
+    "ENABLE_PROMPT_CACHING_1H": "1",
+    "DISABLE_MICROCOMPACT": "1",
+    "MCP_CONNECTION_NONBLOCKING": "true",
+    "API_TIMEOUT_MS": "900000",
+    "CLAUDE_CODE_EMIT_TOOL_USE_SUMMARIES": "",
+    "CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING": "1",
+    "DISABLE_AUTOUPDATER": "1",
+    "MCP_TOOL_TIMEOUT": "60000",
+    "USE_LOCAL_OAUTH": "",
+    "USE_STAGING_OAUTH": ""
+  }
+}

@@ -8,6 +8,16 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **The baseline `spawn.env` is now binary-derived and drift-alarmed, not hand-transcribed.** `sync`
+  enumerates the Desktop→agent spawn env directly from the `app.asar` construction (three windows +
+  gate/const value resolution) and writes the resolved map into the baseline, guarded by a
+  `checkSpawnContractFacts` sentinel over the scalar options/tools/prompt structure. Additions,
+  removals, and value changes in the spawn contract now surface as loud `sync`-time signals instead of
+  drifting silently. This closed real, already-present drift: seven env keys the production agent
+  receives (`MCP_TOOL_TIMEOUT`, `API_TIMEOUT_MS`, `CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING`,
+  `DISABLE_AUTOUPDATER`, `CLAUDE_CODE_EMIT_TOOL_USE_SUMMARIES`, `USE_STAGING_OAUTH`, `USE_LOCAL_OAUTH`)
+  were missing from the committed baseline and are now pinned. A hand-transcribed golden fixture
+  cross-checks the generator so a resolver bug can't silently rewrite the contract.
 - **TUI forward-compatibility set** (three items hardening the display seam for future frontends):
   - **The display-policy seam is now an explicit contract.** `src/run/display-translate.ts`'s header
     states it is the single policy seam for translating model-visible VM paths for human display

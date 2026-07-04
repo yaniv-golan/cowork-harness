@@ -26,7 +26,7 @@ import {
 import { claudeCliComplete } from "./decide/llm-transport.js";
 import { toDecisionRequest, type DecisionRequest } from "./agent/session.js";
 import { vmInit, vmDelete, vmStatus, vmPrune, instanceName } from "./runtime/lima.js";
-import { sync } from "./sync/cowork-sync.js";
+import { sync, canonicalizeEnv } from "./sync/cowork-sync.js";
 import { diffBaselines, formatDiffLines, renderChangelog } from "./sync/baseline-diff.js";
 import { runBoundaryChecks, formatBoundary } from "./boundary.js";
 import { cmdChat } from "./run/chat.js";
@@ -2257,6 +2257,17 @@ async function cmdSync(args: string[]) {
     agentBinary: nextAgentBinary,
     network: { ...(base.network as object), mode: res.networkMode ?? "gvisor", allowKind: "allowlist", allowDomains: res.allowDomains },
     requireFullVmSandbox: res.requireFullVmSandbox,
+    // spawn.env is the GENERATED tier (readiness A5): re-derived from the asar each sync, canonically
+    // ordered so a benign source-reorder is a zero-line diff. All the hand-curated spawn fields (tools,
+    // allowedTools, scalars, prompt pointers, $comment*) carry forward from base untouched. On a hard-fail
+    // deriveSpawnEnv returns null and the base env is preserved (the O3 all-or-nothing contract).
+    spawn: {
+      ...(base.spawn as object),
+      env: canonicalizeEnv(
+        res.spawnEnv ?? (base.spawn as { env?: Record<string, string> })?.env,
+        (base.spawn as { env?: Record<string, string> })?.env,
+      ),
+    },
     provenance: { ...baseProvenance, gates: nextGates, asarFingerprint: res.asarFingerprint },
   };
   const diffFlag = !!syncParsed.flags["--diff"];

@@ -7,6 +7,16 @@ import { compareBaselineVersions, loadBaseline, resolveAgentBinary, resolveMount
 import { createHash } from "node:crypto";
 import type { PlatformBaseline } from "../src/types.js";
 import { decodeFcacheGates, sync, checkMountModeFacts, checkWebFetchFacts } from "../src/sync/cowork-sync.js";
+import {
+  deriveSpawnEnv,
+  checkSpawnContractFacts,
+  canonicalizeEnv,
+  resolveConst,
+  REQUIRED_SPAWN_KEYS,
+  type GateState,
+} from "../src/sync/cowork-sync.js";
+import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 
 describe("compareBaselineVersions (semver-aware baseline sort)", () => {
   it("picks desktop-1.10.json over desktop-1.9.json (lexical sort would fail)", () => {
@@ -110,7 +120,7 @@ describe("decodeFcacheGates (GrowthBook fcache decode, binary-verified format)",
   // load-bearing precondition for the sync() else-if guard: the guard must count only
   // source!=="absent" entries, or the always-present dark-gate marker would mask a total
   // GrowthBook re-key (every pinned id missing) as if something had matched.
-  it("returns only the skeletonHome absent-marker (source:'absent') when the fcache decodes but contains only non-pinned gate IDs", () => {
+  it("returns only the DARK_GATES absent-markers (source:'absent') when the fcache decodes but contains only non-pinned gate IDs", () => {
     const f = makeFcache({
       "999999999": { value: true, on: true, off: false, source: "force" }, // not in PINNED_GATES
     });
@@ -118,6 +128,7 @@ describe("decodeFcacheGates (GrowthBook fcache decode, binary-verified format)",
     expect(result).not.toBeNull();
     expect(result).toEqual({
       "2614807392": { id: "2614807392", name: "skeletonHome", on: false, source: "absent", value: undefined },
+      "1129419822": { id: "1129419822", name: "enableToolSearchAuto", on: false, source: "absent", value: undefined },
     });
   });
 
@@ -356,3 +367,285 @@ describe("resolveMounts — mntRoot derivation", () => {
     expect(r.mntRoot).toBe("/sessions/abc/mnt");
   });
 });
+
+// ==========================================================================================
+// Spawn-contract verification + spawn.env generation (readiness A5). The synthetic fixture uses FAKE
+// minified names (FKa/FKb/FKc/FKd/FKe/FKtt/FKzrn/FKgen/FKu) so the tests exercise the ALGORITHM, not the
+// real anchors — real env key names / tool names / property names are stable and kept verbatim. The
+// real-bundle cross-checks live in the golden-map + structural-regression tests further down.
+// ==========================================================================================
+describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => {
+  const mkGate = (id: string, on: boolean): GateState => ({ id, name: id, on, source: on ? "force" : "defaultValue", value: on });
+  // Green-path gates: 714014285 + 1936081873 ON, everything else off (mirrors the live fcache profile).
+  const greenGates = (): Record<string, GateState> => ({
+    "714014285": mkGate("714014285", true),
+    "1936081873": mkGate("1936081873", true),
+    "66187241": mkGate("66187241", false),
+    "434204418": mkGate("434204418", false),
+    "1129419822": mkGate("1129419822", false),
+    "4153934152": mkGate("4153934152", false),
+  });
+
+  // A synthetic mini-bundle with W3 (FKzrn) → W2 (OnA) → W1 (spawn literal) + a const table + the S-tier
+  // structural tokens. `${...}` and backticks in the TAGS template are escaped so the fixture is literal.
+  const W3 =
+    'function FKzrn(){var q;return{DISABLE_AUTOUPDATER:"1",...A.workspace.disableBundledSkills&&{CLAUDE_CODE_DISABLE_BUNDLED_SKILLS:"1"},' +
+    '...t&&{CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL:"1"},...A.route&&{CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST:"1"},' +
+    '...t&&{DISABLE_GROWTHBOOK:"1",DISABLE_TELEMETRY:A.tel?"1":"",DISABLE_FEEDBACK_COMMAND:"1",CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS:"1",' +
+    'DISABLE_ERROR_REPORTING:A.err?"1":"",CLAUDE_CODE_ENABLE_AUTO_MODE:A.auto?"1":""}}}';
+  const W2 =
+    'return{CLAUDE_CODE_ENTRYPOINT:t.type==="3p"?"claude-desktop-3p":"claude-desktop",ANTHROPIC_BASE_URL:A.apiHost,' +
+    'USE_STAGING_OAUTH:t.type!=="3p"&&e==="staging"?"1":"",USE_LOCAL_OAUTH:t.type!=="3p"&&e==="local"?"1":"",' +
+    'ANTHROPIC_API_KEY:"",ANTHROPIC_AUTH_TOKEN:"",ANTHROPIC_CUSTOM_HEADERS:"",CLAUDE_CODE_OAUTH_TOKEN:A.oauthToken,...FKzrn(),' +
+    '...A.localAgent&&{CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST:"1"},CLAUDE_CODE_ENABLE_ASK_USER_QUESTION_TOOL:"true",' +
+    'CLAUDE_CODE_EMIT_TOOL_USE_SUMMARIES:"false",MCP_CONNECTION_NONBLOCKING:"true",API_TIMEOUT_MS:String(FKd),' +
+    'CLAUDE_CODE_DISABLE_CRON:A.disableCron?"1":"",...t.type==="3p"&&{CLAUDE_CODE_ATTRIBUTION_HEADER:"1"},...t.sessionEnvVars()}';
+  const W1 =
+    'env:{CLAUDE_CONFIG_DIR:N,...OnA({oauthToken:n,disableCron:!0,localAgent:!0}),...g.env,...l,CLAUDE_CODE_ENTRYPOINT:"local-agent",' +
+    '...v&&{CLAUDE_PROJECT_UUID:v,CLAUDE_PROJECT_TOOL:"1"},...At("1936081873")&&{CLAUDE_CODE_OAUTH_SCOPES:o.scope},' +
+    '...At("434204418")&&{MCP_CONNECTION_NONBLOCKING:"0",MCP_CONNECT_TIMEOUT_MS:"10000"},...At("1129419822")&&{ENABLE_TOOL_SEARCH:"auto"},' +
+    'CLAUDE_CODE_EMIT_TOOL_USE_SUMMARIES:At("66187241")?"true":"",CLAUDE_CODE_TAGS:`lam_session_type:${r.sessionType??"chat"}`,' +
+    'CLAUDE_CODE_DISABLE_BACKGROUND_TASKS:"1",MCP_TOOL_TIMEOUT:String(FKe()),CLAUDE_CODE_IS_COWORK:"1",CLAUDE_CODE_ENABLE_APPEND_SUBAGENT_PROMPT:"1",' +
+    '...r.sessionType===FKu&&{CLAUDE_CODE_BRIEF_UPLOAD:"1",CLAUDE_CODE_BRIEF:"1",...At("451382573")&&{DISABLE_BRIEF_MODE_STOP_HOOK:"1"}},' +
+    "CLAUDE_CODE_HOST_PLATFORM:process.platform,TZ:Intl.DateTimeFormat().resolvedOptions().timeZone," +
+    '...At("714014285")&&{CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING:"1"},...At("4153934152")&&{CLAUDE_CODE_SKIP_PRECOMPACT_LOAD:"1"},' +
+    'CLAUDE_CODE_ENABLE_TASKS:"true"},systemPrompt:c,';
+  const STIER =
+    "const FKa=31999,FKb=6e4;const FKc=FKb,FKd=9e5;function FKe(){var z;return((z=q())==null?void 0:z.mcpToolTimeoutMs)??FKc}" +
+    'const FKtt=["TaskCreate","TaskUpdate","TaskGet","TaskList","TaskStop"];' +
+    'sessionPath:`/sessions/${sid}/mnt/.claude`,settingSources:["user"],permissionMode:S?"default":(I==null?void 0:I.permissionMode)??"default",' +
+    'maxThinkingTokens:r.extendedThinkingEnabled??!mOt()?FKa:0},effortCfg:{level:z.effort,fallback:"medium"},' +
+    'tools:["Task","Bash","Glob","Grep","Read","Edit","Write","NotebookEdit","WebFetch",...FKtt,"WebSearch","Skill","REPL","JavaScript","AskUserQuestion","ToolSearch",...z.sessionType===FKu?[]:[]],' +
+    'allowedTools:["Task","Bash","Glob","Grep","Read","Edit","Write","NotebookEdit","WebFetch",...FKtt,"WebSearch","Skill","REPL","JavaScript","ToolSearch","mcp__srv__tool"],' +
+    'function FnA(V){for(const q of ["ANTHROPIC_API_KEY","ANTHROPIC_AUTH_TOKEN","ANTHROPIC_CUSTOM_HEADERS"])V[q]===""&&delete V[q]}' +
+    "V.env={...V.env,ANTHROPIC_CUSTOM_HEADERS:jXe(V.env,pf)},FnA(V.env)," +
+    'sysP:{type:"preset",preset:"claude_code",append:ap},appendSubagentSystemPrompt:FKgen({vm:i,hostLoopMode:E})';
+  const fixture = () => `HEADER;${W3};${W2};${W1}${STIER};TAIL`;
+
+  const EXPECTED_GREEN: Record<string, string> = {
+    CLAUDE_CODE_IS_COWORK: "1",
+    CLAUDE_CODE_ENTRYPOINT: "local-agent",
+    CLAUDE_CODE_TAGS: "lam_session_type:chat",
+    CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: "1",
+    CLAUDE_CODE_ENABLE_ASK_USER_QUESTION_TOOL: "true",
+    CLAUDE_CODE_DISABLE_CRON: "1",
+    CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1",
+    CLAUDE_CODE_ENABLE_APPEND_SUBAGENT_PROMPT: "1",
+    CLAUDE_CODE_ENABLE_TASKS: "true",
+    MCP_CONNECTION_NONBLOCKING: "true",
+    API_TIMEOUT_MS: "900000",
+    CLAUDE_CODE_EMIT_TOOL_USE_SUMMARIES: "",
+    CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING: "1",
+    DISABLE_AUTOUPDATER: "1",
+    MCP_TOOL_TIMEOUT: "60000",
+    USE_LOCAL_OAUTH: "",
+    USE_STAGING_OAUTH: "",
+  };
+
+  // 1. Green path — the fixture resolves to the exact expected pin map; the S-tier returns [].
+  it("green path: derives the full pin map (gates off except 714014285/1936081873) and no HARD-FAIL flags", () => {
+    const { env, flags } = deriveSpawnEnv(fixture(), greenGates());
+    // NOTEs (stale-allowlist prune hints) are non-blocking and expected here: the minimal fixture doesn't
+    // construct every allowlisted key. The green path is the absence of any HARD-FAIL flag.
+    expect(flags.filter((f) => !f.startsWith("NOTE:"))).toEqual([]);
+    expect(env).toEqual(EXPECTED_GREEN);
+    expect(checkSpawnContractFacts(fixture())).toEqual([]);
+  });
+
+  // 2. Per-fact mutation table: mutate/drop each token → exactly the matching flag names the field.
+  const STRUCT_MUT: [string, string, string][] = [
+    ['settingSources:["user"]', 'settingSources:["admin"]', "S2"],
+    ['permissionMode:S?"default"', 'permissionMode:S?"plan"', "S3"],
+    ["FKa=31999", "FKa=41999", "S4"],
+    ['fallback:"medium"', 'fallback:"high"', "S5"],
+    ["/sessions/${sid}/mnt/.claude", "/elsewhere", "S1"],
+    ['NotebookEdit","WebFetch",...FKtt,"WebSearch","Skill","REPL","JavaScript","AskUserQuestion","ToolSearch"', '"nope"', "S6"],
+    ['FKtt=["TaskCreate","TaskUpdate","TaskGet","TaskList","TaskStop"]', "FKtt=[]", "S7"],
+    ['"ToolSearch",...z.sessionType===', '"ToolSearch",...NOPE===', "S8"],
+    ['...FKtt,"WebSearch","Skill","REPL","JavaScript","ToolSearch","mcp__srv__tool"', '...FKtt,"nope"]', "S9"],
+    ['"ToolSearch","mcp__srv__tool"', '"ToolSearch","builtin__x"', "S10"],
+    ['CLAUDE_CODE_ENTRYPOINT:"local-agent"', 'CLAUDE_CODE_ENTRYPOINT:"other"', "S11"],
+    ["disableCron:!0,localAgent:!0", "wrong:!0", "S12"],
+    ['CLAUDE_CODE_DISABLE_CRON:A.disableCron?"1":""', 'CLAUDE_CODE_DISABLE_CRON:"x"', "S13"],
+    ['"ANTHROPIC_API_KEY","ANTHROPIC_AUTH_TOKEN","ANTHROPIC_CUSTOM_HEADERS"', '"OTHER"', "S14a"],
+    ["},FnA(V.env)", "},noop(x)", "S14b"],
+    ['preset:"claude_code"', 'preset:"other"', "S15"],
+    ["appendSubagentSystemPrompt:FKgen({", "appendSubagentSystemPrompt:x", "S16"],
+    ['CLAUDE_CODE_EMIT_TOOL_USE_SUMMARIES:At("66187241")?"true":""', "EMIT_X:1", "S18"],
+    ["CLAUDE_CODE_TAGS:`lam_session_type:${", "CLAUDE_CODE_TAGS:`other:${", "S19"],
+  ];
+  for (const [from, to, field] of STRUCT_MUT) {
+    it(`structural mutation flags ${field}`, () => {
+      const mutated = fixture().replace(from, to);
+      expect(mutated).not.toBe(fixture()); // the mutation actually applied
+      const flags = checkSpawnContractFacts(mutated);
+      // Word-boundary match, not substring: `f.includes("S1")` would also match "S10".."S19" and let a
+      // mutation false-pass by tripping a same-prefix sibling check instead of its own target.
+      expect(flags.some((f) => new RegExp(String.raw`\b${field}\b`).test(f))).toBe(true);
+    });
+  }
+
+  it("S17 negative invariant fires when CLAUDE_CODE_USE_COWORK_PLUGINS is set as a key", () => {
+    const mutated = fixture().replace('CLAUDE_CODE_IS_COWORK:"1"', 'CLAUDE_CODE_USE_COWORK_PLUGINS:"1",CLAUDE_CODE_IS_COWORK:"1"');
+    expect(checkSpawnContractFacts(mutated).some((f) => f.includes("S17"))).toBe(true);
+  });
+
+  // Per generated pin: dropping/mutating a pinned value shows in the env (change) or triggers removal path.
+  it("a pinned value change is reflected in the generated env (diff-visible)", () => {
+    const mutated = fixture().replace('CLAUDE_CODE_ENABLE_TASKS:"true"', 'CLAUDE_CODE_ENABLE_TASKS:"false"');
+    expect(deriveSpawnEnv(mutated, greenGates()).env!.CLAUDE_CODE_ENABLE_TASKS).toBe("false");
+  });
+
+  // 3. Addition detection — a new top-level key in each window hard-fails with the classify message.
+  for (const [where, from, inject] of [
+    ["W1", 'CLAUDE_CODE_IS_COWORK:"1"', 'NEW_SPAWN_KEY:"1",CLAUDE_CODE_IS_COWORK:"1"'],
+    ["W2", 'MCP_CONNECTION_NONBLOCKING:"true"', 'NEW_SPAWN_KEY:"1",MCP_CONNECTION_NONBLOCKING:"true"'],
+    ["W3", 'DISABLE_AUTOUPDATER:"1"', 'DISABLE_AUTOUPDATER:"1",NEW_SPAWN_KEY:"1"'],
+  ] as const) {
+    it(`addition detection: an unknown key in ${where} hard-fails (env null + classify message)`, () => {
+      const { env, flags } = deriveSpawnEnv(fixture().replace(from, inject), greenGates());
+      expect(env).toBeNull();
+      expect(flags.some((f) => f.includes("NEW_SPAWN_KEY") && f.includes("--allow-empty"))).toBe(true);
+    });
+  }
+
+  // 4. Gate addition — an unknown gate id in a W1 conditional is caught at introduction.
+  it("gate addition: an unknown spawn gate id in W1 hard-fails", () => {
+    const mutated = fixture().replace('...At("714014285")&&{', '...At("999999999")&&{X_KEY:"1"},...At("714014285")&&{');
+    const { env, flags } = deriveSpawnEnv(mutated, greenGates());
+    expect(env).toBeNull();
+    expect(flags.some((f) => f.includes("999999999") && f.includes("unknown gate"))).toBe(true);
+  });
+
+  // 5. Removal — a REQUIRED key drop hard-fails; a non-required key drop is silent (absent from env).
+  it("removal: dropping a REQUIRED key hard-fails; dropping a non-required pin just omits it", () => {
+    const reqDropped = fixture().replace('CLAUDE_CODE_IS_COWORK:"1",', "");
+    const r1 = deriveSpawnEnv(reqDropped, greenGates());
+    expect(r1.env).toBeNull();
+    expect(r1.flags.some((f) => f.includes("REQUIRED") && f.includes("CLAUDE_CODE_IS_COWORK"))).toBe(true);
+
+    const nonReqDropped = fixture().replace('CLAUDE_CODE_DISABLE_BACKGROUND_TASKS:"1",', "");
+    const r2 = deriveSpawnEnv(nonReqDropped, greenGates());
+    expect(r2.flags.filter((f) => !f.startsWith("NOTE:"))).toEqual([]); // no hard-fail — removal is diff-visible, not blocking
+    expect(r2.env).not.toBeNull();
+    expect("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS" in r2.env!).toBe(false);
+  });
+
+  // 6. Gate resolution — 434204418 ON flips NONBLOCKING to "0" + auto-pins MCP_CONNECT_TIMEOUT_MS; 66187241 ON → "true".
+  it("gate resolution: 434204418 ON pins MCP_CONNECTION_NONBLOCKING:'0' + MCP_CONNECT_TIMEOUT_MS:'10000'; 66187241 ON → EMIT 'true'", () => {
+    const g = greenGates();
+    g["434204418"] = mkGate("434204418", true);
+    g["66187241"] = mkGate("66187241", true);
+    const { env } = deriveSpawnEnv(fixture(), g);
+    expect(env!.MCP_CONNECTION_NONBLOCKING).toBe("0");
+    expect(env!.MCP_CONNECT_TIMEOUT_MS).toBe("10000");
+    expect(env!.CLAUDE_CODE_EMIT_TOOL_USE_SUMMARIES).toBe("true");
+  });
+
+  // 7. Degenerate windows — a missing anchor and a W3 scanner hitting a nested `${` both flag (never guess).
+  it("degenerate windows: a missing W1 anchor flags and returns env null", () => {
+    const noW1 = fixture().replace("env:{CLAUDE_CONFIG_DIR", "env:{OTHER_FIRST_KEY");
+    const { env, flags } = deriveSpawnEnv(noW1, greenGates());
+    expect(env).toBeNull();
+    expect(flags.some((f) => f.includes("W1") && f.includes("window not found"))).toBe(true);
+  });
+  it("degenerate windows: a nested template `${` inside W3 makes the brace scan flag rather than guess", () => {
+    const nested = fixture().replace('DISABLE_AUTOUPDATER:"1"', "DISABLE_AUTOUPDATER:`x${y}`");
+    const { env, flags } = deriveSpawnEnv(nested, greenGates());
+    expect(env).toBeNull();
+    expect(flags.some((f) => f.includes("W3"))).toBe(true);
+  });
+
+  // 8. gates:null — env null, and NO spurious spawn flags (the fcache flag covers it).
+  it("gates null: env null with no spurious spawn flags", () => {
+    expect(deriveSpawnEnv(fixture(), null)).toEqual({ env: null, flags: [] });
+  });
+
+  // 9. Stale allowlist NOTE — an allowlist key absent from all windows emits a non-blocking NOTE.
+  it("stale allowlist entry (never constructed) emits a NOTE, not a hard-fail", () => {
+    // CLAUDE_CODE_HOST_AUTH_ENV_VAR is allowlisted but only appears inside the fixture's 3p Zrn branch text
+    // as a spread condition — remove any trace so it is 'never constructed', then expect a prune NOTE.
+    const noHost = fixture(); // the fixture never constructs CLAUDE_CODE_HOST_AUTH_ENV_VAR as a key
+    const { flags } = deriveSpawnEnv(noHost, greenGates());
+    expect(flags.some((f) => f.startsWith("NOTE:") && f.includes("CLAUDE_CODE_HOST_AUTH_ENV_VAR"))).toBe(true);
+  });
+
+  // 10. Golden-map correctness oracle (O2, non-circular): the generator over the REAL asar must deep-equal
+  //     the hand-transcribed golden map. Skips gracefully off-macOS / without a live Desktop install.
+  it("golden oracle: deriveSpawnEnv(real asar) deep-equals the hand-transcribed golden map", () => {
+    const golden = JSON.parse(readFileSync(join(process.cwd(), "test", "fixtures", "spawn-env.golden.json"), "utf8")).env as Record<
+      string,
+      string
+    >;
+    const bundle = readRealBundleOrSkip();
+    if (!bundle) return;
+    const gates = decodeFcacheGates();
+    if (!gates) return; // no live fcache on this machine
+    const { env, flags } = deriveSpawnEnv(bundle, gates);
+    expect(flags).toEqual([]);
+    expect(env).toEqual(golden);
+  });
+
+  // 11. Structural-regression (non-circular): checkSpawnContractFacts over the REAL asar returns [] today.
+  it("structural regression: checkSpawnContractFacts(real asar) is clean", () => {
+    const bundle = readRealBundleOrSkip();
+    if (!bundle) return;
+    expect(checkSpawnContractFacts(bundle)).toEqual([]);
+  });
+
+  // 12. Baseline lockstep: REQUIRED_SPAWN_KEYS ⊆ keys(latest committed baseline spawn.env).
+  it("baseline lockstep: every REQUIRED_SPAWN_KEYS is present in the latest committed baseline spawn.env", () => {
+    const b = loadBaseline("latest") as unknown as { spawn: { env: Record<string, string> } };
+    for (const k of REQUIRED_SPAWN_KEYS) expect(k in b.spawn.env).toBe(true);
+  });
+
+  // 13. Canonical order (O6): a reordered-but-equal env yields identical JSON; a new key appends at its
+  //     deterministic alpha position after the base-order keys.
+  it("canonicalizeEnv: a pure reorder is a zero-line diff; a new key is appended alphabetically", () => {
+    const base = { B: "1", A: "2", C: "3" };
+    const reordered = { C: "3", A: "2", B: "1" };
+    expect(JSON.stringify(canonicalizeEnv(reordered, base))).toBe(JSON.stringify(base));
+    const withNew = { B: "1", A: "2", C: "3", ZZ: "9", AA: "0" };
+    expect(Object.keys(canonicalizeEnv(withNew, base))).toEqual(["B", "A", "C", "AA", "ZZ"]);
+  });
+
+  // 14. Null contract (O3): any single hard-fail injection → env === null AND the flag is present.
+  it("null contract: an unresolvable const chain returns env null with the flag (never a partial env)", () => {
+    // Break the MCP_TOOL_TIMEOUT const chain: FKe's ??-fallback id no longer resolves.
+    const broken = fixture().replace("??FKc}", "??UNDEFINED_ID}").replace("const FKc=FKb,", "");
+    const { env, flags } = deriveSpawnEnv(broken, greenGates());
+    expect(env).toBeNull();
+    expect(flags.some((f) => f.includes("MCP_TOOL_TIMEOUT"))).toBe(true);
+  });
+
+  it("resolveConst follows const/let/var + comma preambles and aliases (the O1 fix)", () => {
+    const b = "x=>{}}const kGt=6e4,zae=kGt;let Sde=9e5;{,Zae=31999,";
+    expect(resolveConst(b, "kGt")).toBe("6e4");
+    expect(resolveConst(b, "zae")).toBe("6e4"); // alias hop
+    expect(resolveConst(b, "Sde")).toBe("9e5");
+    expect(resolveConst(b, "Zae")).toBe("31999");
+  });
+});
+
+// Read the extracted real asar bundle if available; return null (skip) otherwise. Prefer an env override.
+function readRealBundleOrSkip(): string | null {
+  const candidates = [process.env.COWORK_ASAR_BUNDLE].filter(Boolean) as string[];
+  for (const p of candidates) {
+    try {
+      return readFileSync(p, "utf8");
+    } catch {
+      /* try next */
+    }
+  }
+  if (process.platform !== "darwin") return null;
+  // Extract on demand from the live install (best-effort; skip if unavailable).
+  try {
+    const dir = mkdtempSync(join(tmpdir(), "cowork-asar-test-"));
+    execFileSync("npx", ["--yes", "@electron/asar", "extract", "/Applications/Claude.app/Contents/Resources/app.asar", dir], {
+      stdio: "ignore",
+    });
+    return readFileSync(join(dir, ".vite/build/index.js"), "utf8");
+  } catch {
+    return null;
+  }
+}
