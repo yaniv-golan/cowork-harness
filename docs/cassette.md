@@ -447,22 +447,25 @@ counts) — committed PII surface. Two layers, distinct from secret-scrub (which
   `--no-redact` skips it for known-synthetic inputs.
 - **Always-on scan gate** — `verify-cassettes <file|dir>` scans the committed cassettes and **exits
   non-zero** on a finding, so "no leak" is a gate, not discipline. The full net (`email` + `currency` +
-  bare-`domain` + `path`) runs over the **whole cassette** — the deliverable (`outputs/` bodies + filenames), the
-  author-written `prompt`/`answers`/`assert`, AND the agent's reasoning + tool I/O — with **one structural
-  exception**: the agent's **capability-manifest** messages (the `system/init` event and the `initialize`
-  registry `control_response`, `request_id:"init-1"`) get `email` + `path` only, not the full net. Those two carry
-  the tool/skill catalog (slash-command descriptions naming `docsend.com`, `Pitch.com`, …) and the MCP-server
-  names (`claude.ai Gmail`, …) — environment boilerplate a regex can't tell apart from customer data, and the
-  sole concentrated source of false positives — so `currency`/`domain` are excluded **as a unit**, not by domain.
-  `email` and `path` still scan them: the registry's `account` field can carry the developer's own email, and
+  bare-`domain` + `path` + `machine-inventory`) runs over the **whole cassette** — the deliverable (`outputs/`
+  bodies + filenames), the author-written `prompt`/`answers`/`assert`, AND the agent's reasoning + tool I/O —
+  with **one structural exception**: the agent's **capability-manifest** messages (the `system/init` event and
+  the `initialize` registry `control_response`, `request_id:"init-1"`) get `email` + `path` +
+  `machine-inventory` only, not the full net. Those two carry the tool/skill catalog (slash-command
+  descriptions naming `docsend.com`, `Pitch.com`, …) and the MCP-server names (`claude.ai Gmail`, …) —
+  environment boilerplate a regex can't tell apart from customer data, and the sole concentrated source of
+  false positives — so `currency`/`domain` are excluded **as a unit**, not by domain. `email`, `path`, and
+  `machine-inventory` still scan them: the registry's `account` field can carry the developer's own email,
   those same messages' own structural fields (`cwd`, `plugins[].path`, `memory_paths`) are exactly where a real
-  local filesystem path — leaking a username, plugin-cache layout, or private marketplace name — lives; neither
-  a real address nor a real absolute path is ever legitimate catalog boilerplate the way a skill description is.
-  `--allow <regex>` suppresses synthetic / public reference names (e.g. `NVCA`, `Cooley GO`, `Acme`); each allow
-  must match the **whole** finding token (so a bare-domain allow no longer silently clears an email whose domain
-  it matches), and `--allow-domain` / `--allow-email` / `--allow-path` scope an allow to a single finding class,
-  while `--allow-file <path>` loads allows from a version-controlled file (one regex per line, `#` comments).
-  Multi-word proper names are **not** a default class (too noisy). `verify-cassettes` also runs the **staleness**
+  local filesystem path — leaking a username, plugin-cache layout, or private marketplace name — lives, and a
+  live-enumerated app/process inventory sentinel (e.g. a computer-use tool schema's "Available applications on
+  this machine: …") is never legitimate catalog boilerplate either; none of the three share the ambiguity that
+  gets `currency`/`domain` excluded there. `--allow <regex>` suppresses synthetic / public reference names
+  (e.g. `NVCA`, `Cooley GO`, `Acme`); each allow must match the **whole** finding token (so a bare-domain allow
+  no longer silently clears an email whose domain it matches), and `--allow-domain` / `--allow-email` /
+  `--allow-path` / `--allow-machine-inventory` scope an allow to a single finding class, while `--allow-file
+  <path>` loads allows from a version-controlled file (one regex per line, `#` comments). Multi-word proper
+  names are **not** a default class (too noisy). `verify-cassettes` also runs the **staleness**
   check (both checks run by default; scope to one with `--skip-privacy` or `--skip-staleness`): a drifted
   `skillHash` (you edited the skill but didn't re-record) fails the gate.
   The `skillHash` hard-excludes only what is UNIVERSALLY non-runtime — recorded cassettes (`*.cassette.json`,

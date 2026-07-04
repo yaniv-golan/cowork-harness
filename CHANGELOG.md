@@ -26,6 +26,12 @@ All notable changes to this project are documented here. The format is based on
     and VM-shaped links pass through; tool lines are excluded — they truncate at ~80 chars and a
     sliced URL would link to a wrong target). Piped/non-TTY output stays byte-identical.
 
+- **`machine-inventory` cassette privacy scan class.** `verify-cassettes` now flags
+  machine-inventory / host-fingerprint sentinel phrases (mirroring the shipped `path` class), with a
+  scoped `--allow-machine-inventory <regex>` to whitelist provably-synthetic values. Tightening the
+  privacy gate before the 1.0 contract freezes keeps it from becoming a breaking change to consumers'
+  committed cassettes later.
+
 ### Removed
 
 - **The `profile:` scenario-field alias.** The top-level `profile:` key (an earlier name for
@@ -52,6 +58,12 @@ All notable changes to this project are documented here. The format is based on
   so a typo (`5m`) or an explicit `0` silently became the default. Both now route through
   `envPositiveNumber`, which warns loud on a set-but-unparseable/non-positive value (an unset var still
   uses the same default).
+- **The bundled `cowork-harness` skill's CI recipe no longer breaks under zsh.** The recommended
+  `npm i -g cowork-harness@>=0.22.0` was unquoted — `>=` is a shell redirection, so the snippet failed
+  as written. Now quoted at all sites. Same pass corrected the skill's command inventory (`status` was
+  missing), a wrong `CLAUDE_PLUGIN_ROOT` scaffold path, missing `requires_capabilities` /
+  `extended_thinking` / `account_name` schema docs, stale gotcha citations, a `scenario.py` regex-lint
+  false-positive, and thin eval coverage.
 - **`doctor --tier microvm` now detects an unprovisioned Lima instance.** It previously checked only
   for `limactl` itself, not whether `vm init` had actually provisioned the instance for the current
   config — a missing VM image could slip past `doctor` and only surface as first-run VM-boot latency

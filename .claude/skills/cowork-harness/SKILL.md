@@ -38,7 +38,7 @@ cowork-harness skill ./my-skill "do X"      # run the skill once against the sta
 Before the first command, confirm the CLI is reachable and **fail loud** (never fake a pass) when a tier's dependencies are missing:
 
 - **One-shot check.** Run `cowork-harness doctor [--tier <tier>]` first — a read-only prerequisite check that inspects Docker, the staged agent, the token, and the baseline in one pass. The bullets below explain each thing it checks (and how to fix it).
-- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 0.22.0**. If it's missing or older, prefix every command with the version floor `npx cowork-harness@>=0.22.0 <cmd>` (Node ≥ 20), or install once with `npm i -g cowork-harness@>=0.22.0`. **Pin `@>=0.22.0`, never `@latest`** — `@latest` can silently fetch an older CLI and the new commands fail as "unknown command", whereas the floor **fails loud** if no compatible version is published. (≥ 0.22.0 is what gates the commands/assertions this skill teaches: `assertions --list`, `scaffold <run-id>`, `trace --view dispatches`, `artifact_json` incl. the `in:` operator, `verify-cassettes`, batch `record <dir>`/`--rerecord-stale`, `record --concurrency <N>`, record-time redaction, multiSelect/`answer:`, `verify-run` answer-coverage, `record --max-artifact-bytes`, live record-time deciders, `verify-cassettes --allow-domain`/`--allow-email`/`--allow-path`/`--allow-file` (`path` — local absolute filesystem paths — is the scanner's 4th class, new in 0.21.0), scenario `skills:` staleness scoping with `COWORK_HARNESS_AGENT_SCOPE=skill`, `chat --plugin`, `/help` in the REPL, `hostloop`'s native host/VM process split with its `allow_host_writes:` consent field, and `computer_links_resolve` (new in 0.22.0).)
+- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 0.22.0**. If it's missing or older, prefix every command with the version floor `npx "cowork-harness@>=0.22.0" <cmd>` (Node ≥ 20), or install once with `npm i -g "cowork-harness@>=0.22.0"`. **Pin `@>=0.22.0`, never `@latest`** — `@latest` can silently fetch an older CLI and the new commands fail as "unknown command", whereas the floor **fails loud** if no compatible version is published. (≥ 0.22.0 is what gates the commands/assertions this skill teaches: `assertions --list`, `scaffold <run-id>`, `trace --view dispatches`, `artifact_json` incl. the `in:` operator, `verify-cassettes`, batch `record <dir>`/`--rerecord-stale`, `record --concurrency <N>`, record-time redaction, multiSelect/`answer:`, `verify-run` answer-coverage, `record --max-artifact-bytes`, live record-time deciders, `verify-cassettes --allow-domain`/`--allow-email`/`--allow-path`/`--allow-file` (`path` — local absolute filesystem paths — is the scanner's 4th class, new in 0.21.0), scenario `skills:` staleness scoping with `COWORK_HARNESS_AGENT_SCOPE=skill`, `chat --plugin`, `/help` in the REPL, `hostloop`'s native host/VM process split with its `allow_host_writes:` consent field, and `computer_links_resolve` (new in 0.22.0).)
 - **Agent binary (sandboxed live tiers — `container`/`microvm`/`hostloop`/`cowork`).** The staged Claude Code agent is **bind-mounted** from a local Claude Desktop install, or point `COWORK_AGENT_BINARY` at a `claude-code-vm/<ver>/claude` ELF. Nothing is bundled. `protocol` (L0) and `replay` need no staged agent; for the sandboxed tiers, no agent → no run; report that, don't skip silently.
 - **Docker / Lima.** Only `--fidelity protocol` (L0) runs without them. `container` / `microvm` / `hostloop` / `cowork` need Docker (Lima for L2). If they're absent, drop to `--fidelity protocol` and **say so** — a green that never exercised the sandbox is not a sandbox pass.
 - **Auth.** `CLAUDE_CODE_OAUTH_TOKEN` (preferred) or `ANTHROPIC_API_KEY`, via env or `.env`. Minting an OAuth token needs the **`claude` CLI** (`npm i -g @anthropic-ai/claude-code`, then `claude setup-token`).
@@ -55,7 +55,12 @@ Before the first command, confirm the CLI is reachable and **fail loud** (never 
 
 Full command set: `skill · run · chat · record · replay · verify-cassettes · rehash · prune · lint ·
 verify-run · trace · inspect · diff · stats · decide · gates · answer · scaffold · assertions --list · sync ·
-list · boundary-check · vm <init|status|delete|prune> · doctor`. Always check `cowork-harness <cmd> --help`.
+list · boundary-check · status · vm <init|status|delete|prune> · doctor`. Always check `cowork-harness <cmd> --help`.
+
+**Two different `scaffold` tools — don't confuse them.** The native `cowork-harness scaffold <run-id>`
+above turns an already-*recorded* run into a scenario (needs a run to exist first). The bundled
+`scripts/scenario.py scaffold --name … --skill …` in §9 builds a scenario from flags alone, no run
+required. Passing §9's flag set to the native command fails with `unknown flag: --name` (exit 2).
 
 ## 2. Two files: session vs scenario
 
@@ -265,7 +270,7 @@ known-good skeleton (right tier, scripted `answers:` + `on_unanswered: fail`, co
 separated from live-only ones, one concern per item) and **self-lints its own output**:
 
 ```bash
-S="${CLAUDE_PLUGIN_ROOT}/skills/cowork-harness/scripts/scenario.py"
+S="${CLAUDE_PLUGIN_ROOT}/scripts/scenario.py"
 # Working from a repo checkout instead of an installed plugin?
 # S=".claude/skills/cowork-harness/scripts/scenario.py"
 python3 "$S" scaffold --name report-check --skill ./skills/report-gen \
@@ -392,23 +397,29 @@ are the ones that bite hardest.
     prompt. *Fix:* treat `prompt_asset_missing` as a blocking error in CI by checking the signals
     array.
 13. **`result: success` means the agent didn't error, NOT that the task completed — always assert on
-    artifacts/content.** A turn that ends on a plain-text re-ask ("which file did you mean?") still
-    reports `result: success`. The harness catches a run that ends on a question and did **no productive
-    work after its last gate** — both the no-gate case ("which file?" with no tool calls) AND the
-    *answered-gate-then-re-ask* case (the agent answers an `AskUserQuestion`, then asks again in plain text
-    and stops) — with a **`stalled`** verdict signal (suppress with `allow_stall: true` if ending on a
-    question is intended). The signal is a **tool-position heuristic**, not deliverable detection, so it is
-    imprecise both ways: (a) a post-gate tool *call* clears the flag whether it **succeeded or errored** (false
-    negative — an agent that ran a tool after the gate and still stalled is not caught); and (b) a deliverable
-    written *before* a final confirmation gate does **not** clear it, so a write-then-confirm-then-question run
-    is flagged (false positive — use `allow_stall: true` for a deliberate confirm-terminal skill). The broad
-    guard is therefore YOUR assertions — assert the deliverable
-    (`file_exists` / `artifact_json` / `transcript_matches`), never just `result: success`. Note:
-    `on_unanswered` governs **unanswered** `AskUserQuestion` gates; the `stalled` signal covers stalling
-    *after* one is answered. A "type-it-in-notes" option has **no scripted deterministic answer** today (the
-    `OTHER:` directive works only on the LLM-decider path, not scripted `choose:`; on an options-bearing gate
-    a bare out-of-set LLM answer fails loud (exit 2) — see the LLM-decider free-text note in
-    `references/fidelity-and-answers.md`).
+    artifacts/content.**
+    - A turn that ends on a plain-text re-ask ("which file did you mean?") still reports
+      `result: success`.
+    - The harness catches this with a **`stalled`** verdict signal: a run that ends on a question and
+      did **no productive work after its last gate** — both the no-gate case ("which file?" with no
+      tool calls) AND the *answered-gate-then-re-ask* case (the agent answers an `AskUserQuestion`,
+      then asks again in plain text and stops). Suppress with `allow_stall: true` if ending on a
+      question is intended.
+    - The signal is a **tool-position heuristic**, not deliverable detection, so it is imprecise both
+      ways:
+      - **False negative:** a post-gate tool *call* clears the flag whether it **succeeded or
+        errored** — an agent that ran a tool after the gate and still stalled is not caught.
+      - **False positive:** a deliverable written *before* a final confirmation gate does **not**
+        clear it, so a write-then-confirm-then-question run is flagged — use `allow_stall: true` for a
+        deliberate confirm-terminal skill.
+    - The broad guard is therefore YOUR assertions — assert the deliverable (`file_exists` /
+      `artifact_json` / `transcript_matches`), never just `result: success`.
+    - `on_unanswered` governs **unanswered** `AskUserQuestion` gates; the `stalled` signal covers
+      stalling *after* one is answered — two different failure modes.
+    - **Free-text aside:** a "type-it-in-notes" option has **no scripted deterministic answer** today
+      (the `OTHER:` directive works only on the LLM-decider path, not scripted `choose:`; on an
+      options-bearing gate a bare out-of-set LLM answer fails loud (exit 2) — see the LLM-decider
+      free-text note in `references/fidelity-and-answers.md`).
 14. **A positional `choose` (`first` / index) is order-dependent.** `choose: "2"` survives label drift
     but NOT option *re-ordering* — if the gate presents its options in a different order run-to-run, the
     index lands on a different option (a silent re-record flake). Prefer an exact label when order is

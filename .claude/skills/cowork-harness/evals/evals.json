@@ -21,6 +21,20 @@
       "prompt": "My cowork-harness `run` keeps failing with an 'unanswered question' error because the skill asks the user to pick an output format. I tried `--on-unanswered llm` but the CLI rejected it, and when I used `--on-unanswered first` the run got flagged nonDeterministic. What's the correct way to make this a deterministic CI regression test?",
       "expected_output": "Recommends scripted answers (a `when_question` regex -> `choose` rule in the scenario's answers:) plus on_unanswered: fail as the deterministic path. Explains that `llm` is not an --on-unanswered value (use --decider-llm, or on_unanswered: llm in YAML — both flag nonDeterministic), and that `first` is also flagged nonDeterministic so it is not a deterministic substitute. Should land on scripted answers for CI.",
       "files": []
+    },
+    {
+      "id": 4,
+      "name": "green-run-that-actually-stalled",
+      "prompt": "My cowork-harness scenario asserts only `result: success` and it's green, but when I look at the transcript the agent ended the turn by asking in plain text 'which file did you mean?' after already answering one AskUserQuestion gate earlier in the run — it never actually produced the deliverable. Why did this pass, and what should I check or assert instead?",
+      "expected_output": "Explains that `result: success` only means the agent didn't error, not that the task completed — a turn ending on a plain-text re-ask still reports success. Identifies the `stalled` verdict signal as the mechanism meant to catch exactly this (a run that ends on a question with no productive tool work after its last gate, including the answered-gate-then-re-ask case), and that the signal is a tool-position heuristic: a post-gate tool call (even one that errored) clears the flag (false negative), and a deliverable written before a final confirmation gate does not clear it (false positive, expected to use allow_stall: true there). Recommends asserting the actual deliverable (file_exists / artifact_json / transcript_matches) rather than relying on result: success or the stalled signal alone, and checking the verdict signals array for `stalled`.",
+      "files": []
+    },
+    {
+      "id": 5,
+      "name": "web-fetch-egress-allowlist-noop",
+      "prompt": "I added `weather.example.com` to my session's `egress.extra_allow` list because my skill calls `web_fetch` on a URL from that domain that isn't in the prompt — but the harness still raises an unanswered `webfetch:weather.example.com` approval gate and the run fails. I thought extra_allow was supposed to let this through. What's actually gating this, and how do I fix it deterministically?",
+      "expected_output": "Correctly explains that web_fetch is gated by URL *provenance* (did the URL appear in the prompt or a prior web_fetch result?), not the egress hostname allowlist — adding a host to egress.extra_allow is a no-op for a provenanced fetch and does nothing for a provenance-miss gate either, because the gate is orthogonal to the allowlist. States the two real fixes for a provenance miss: put the URL in the prompt (making it provenanced, skipping the gate and the allowlist entirely), or answer the `webfetch:<domain>` approval gate deterministically via a scripted rule (`when_tool: \"webfetch:<domain>\"` + `grant: domain|once`) or a session `web_fetch.approved_domains` entry. Notes the gate is fail-closed (not auto-allowed, and `--on-unanswered first` does not allow it).",
+      "files": []
     }
   ]
 }

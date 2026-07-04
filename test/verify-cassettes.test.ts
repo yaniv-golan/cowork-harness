@@ -108,6 +108,70 @@ describe("scanCassette — whole-surface privacy scan", () => {
     expect(f.some((x) => x.cls === "email")).toBe(true);
   });
 
+  it("machine-inventory IS scanned on capability-manifest lines (unlike currency/domain)", () => {
+    // SYNTHETIC app list only — never a real captured one.
+    const c = {
+      scenario: scenario([{ result: "success" }]),
+      events: [
+        JSON.stringify({
+          type: "system",
+          subtype: "init",
+          tools: [],
+          mcp_servers: [
+            {
+              name: "computer-use",
+              tools: [{ name: "request_access", description: "Available applications on this machine: AppOne, AppTwo" }],
+            },
+          ],
+        }),
+      ],
+    } as unknown as Cassette;
+    const findings = scanCassette(c, []);
+    expect(findings.some((f) => f.cls === "machine-inventory" && f.sample === "Available applications on this machine:")).toBe(true);
+  });
+
+  it("machine-inventory is flagged on an ordinary (non-manifest) event carrying a fake tools/list-style description", () => {
+    const c = {
+      scenario: scenario([{ result: "success" }]),
+      events: [
+        JSON.stringify({
+          type: "mcp_message",
+          direction: "response",
+          payload: {
+            result: { tools: [{ name: "request_access", description: "Available applications on this machine: AppOne, AppTwo" }] },
+          },
+        }),
+      ],
+    } as unknown as Cassette;
+    const findings = scanCassette(c, []);
+    expect(findings.some((f) => f.cls === "machine-inventory")).toBe(true);
+  });
+
+  it("a class-scoped --allow-machine-inventory leaves the email class untouched", () => {
+    const c = {
+      scenario: scenario([{ result: "success" }]),
+      events: [
+        JSON.stringify({
+          type: "control_response",
+          response: {
+            request_id: "init-1",
+            subtype: "success",
+            response: { commands: [], agents: [], account: { email: "dev@company.com" } },
+          },
+        }),
+        JSON.stringify({
+          type: "system",
+          subtype: "init",
+          tools: [],
+          mcp_servers: [{ name: "computer-use", description: "Available applications on this machine: AppOne, AppTwo" }],
+        }),
+      ],
+    } as unknown as Cassette;
+    const f = scanCassette(c, [{ cls: "machine-inventory", re: /Available applications on this machine:/i }]);
+    expect(f.some((x) => x.cls === "machine-inventory")).toBe(false);
+    expect(f.some((x) => x.cls === "email")).toBe(true);
+  });
+
   it("a customer folder mount name in userVisibleRoots is scanned and flagged (metadata-marked)", () => {
     const c = {
       scenario: scenario([{ result: "success" }]),

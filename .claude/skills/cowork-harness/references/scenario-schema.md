@@ -61,6 +61,12 @@ skills: [report-gen]                # OPTIONAL — scope the cassette-staleness 
                                     # `skills/<name>` dir under a mounted plugin-root) + the plugin's shared
                                     # roots. Fail-closed to whole-tree on an unknown name. Omit = whole tree.
 
+requires_capabilities: [ocr]        # OPTIONAL — declare a capability the skill needs (e.g. office_convert,
+                                    # ocr, pdf_tables, opencv). If the running agent image provably omits
+                                    # one, the harness ABORTS before the paid run (exit 3) — unless the
+                                    # scenario also asserts `allow_missing_capability: true`, which downgrades
+                                    # the abort to a notice and proceeds. Live tiers only.
+
 allow_host_writes: true             # OPTIONAL — required to run `hostloop` fidelity with a WRITABLE
                                     # connected folder (session `mode: rw`/`rwd`): with no container
                                     # around hostloop's native file tools, that combination gives the
@@ -80,8 +86,10 @@ session = your setup.**
 ```yaml
 # model & reasoning
 model: claude-opus-4-8           # omit for the agent default
+account_name: my-account         # OPTIONAL — which configured account/credential set to run as
 effort: high                     # low | medium | high | xhigh
 max_thinking_tokens: 31999       # positive int, or per-model map {default, <model>: <n>}; default 31999
+extended_thinking: true          # INERT — not a real Cowork toggle; use max_thinking_tokens instead
 permission_mode: default         # default | acceptEdits | plan | bypassPermissions
 permission_parity: cowork        # cowork (unscripted tool calls allowed) | strict (deny unscripted)
 
@@ -372,7 +380,8 @@ at the top of this file.
    the stochastic path flags the run `nonDeterministic`. The LLM decider is one mechanism, two
    spellings: `on_unanswered: llm` (YAML) and `--decider-llm` (CLI). The bare `--on-unanswered llm`
    is rejected (use `--decider-llm`). `agent` is **retired** — `on_unanswered: agent` is rejected by
-   the schema. (`src/types.ts:276`; `src/cli.ts:652`.)
+   the schema. (`src/types.ts:365` — the `on_unanswered` enum; `src/cli.ts:899` — the CLI-side
+   `--on-unanswered` value check.)
 
 4. **`--on-unanswered first` is non-deterministic too** — it picks option 1 and is flagged
    `nonDeterministic`; not a deterministic substitute for scripted answers.

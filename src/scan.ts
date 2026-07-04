@@ -5,13 +5,16 @@
  *
  * Default classes (chosen for a low false-positive rate): email, currency, bare domain, local
  * absolute path (the recording machine's own filesystem — /Users, /home, /root — not the in-VM
- * /sessions mount tree). Multi-word proper names are deliberately NOT a default — too noisy (NVCA,
- * Cap Table, Cooley GO) to gate on; add them via config when a corpus warrants it. The allowlist
- * suppresses known-synthetic / public reference names.
+ * /sessions mount tree), machine-inventory (the sentinel boilerplate a tool emits when it has
+ * LIVE-ENUMERATED local environment state — installed apps, running processes — into its
+ * schema/description/output; matches the introducer phrase only, never app names or list shapes).
+ * Multi-word proper names are deliberately NOT a default — too noisy (NVCA, Cap Table, Cooley GO)
+ * to gate on; add them via config when a corpus warrants it. The allowlist suppresses
+ * known-synthetic / public reference names.
  */
 export interface ScanFinding {
   where: string; // a human locator, e.g. "events[3]" or "artifact outputs/x.json"
-  cls: string; // matched class: email | currency | domain | <custom>
+  cls: string; // matched class: email | currency | domain | path | machine-inventory | <custom>
   sample: string; // the matched text (already redaction-survived, so safe to surface)
 }
 
@@ -52,19 +55,43 @@ export const DEFAULT_SCAN_PATTERNS: { re: RegExp; cls: string }[] = [
     re: /(?<![^\s"'(=:])(\/Users\/|\/home\/|\/root\/)[^\s"')]+/gi,
     cls: "path",
   },
+  {
+    // Machine-inventory sentinel: the introducer boilerplate a tool emits when it has LIVE-ENUMERATED
+    // local environment state (installed apps, running processes) into its schema/description/output —
+    // e.g. computer-use's request_access description: "Available applications on this machine:
+    // AppOne, AppTwo, AppThree, …" (see docs/internal/2026-07-04-machine-inventory-scan-class-plan.md).
+    // NOTE: use a synthetic app list in this comment and in any test fixture — never a real captured one
+    // (the class this comment documents exists specifically to stop that kind of leak from being committed).
+    // Matches the PHRASE ONLY (bounded at the optional colon), not the trailing list — the sample stays
+    // machine-independent and short, so a reviewed --allow-machine-inventory regex can whole-token match
+    // it (allowed() anchors ^(?:…)$ against the WHOLE sample; a machine-varying list tail would make
+    // every allow brittle — same lesson as the path class's lookbehind fix). The class deliberately does
+    // NOT pattern-match app names or list shapes: enumerated Title-Case lists are ubiquitous legitimate
+    // catalog content here (the same noise that got currency/domain excluded from manifest lines), while
+    // this boilerplate is never legitimate synthetic-fixture content. Multiple entries may share this cls
+    // (scanText loops entries, not classes) — extend by adding sibling regexes, not by widening this one.
+    re: /\b(?:(?:available|installed|running)\s+(?:applications?|apps|processes)|(?:applications?|apps|processes)\s+(?:currently\s+)?(?:available|installed|running))\s+on\s+(?:this|the|your)\s+(?:machine|computer|system|device|mac|host)\b\s*:?/gi,
+    cls: "machine-inventory",
+  },
 ];
 
 /** The high-precision subset scanned UNIVERSALLY — even on the agent capability-manifest messages
  *  (the `system/init` event and the `initialize` registry `control_response`). `email` because the
  *  registry's `account` field can carry the developer's own email (a real leak); `path` because those
  *  same messages' structural fields (`cwd`, `plugins[].path`, `memory_paths`) are exactly where a real
- *  local filesystem path — leaking a username, plugin-cache layout, or private marketplace name — lives.
- *  The noisy classes (`currency`/`domain`) are the ones suppressed on those two manifest messages, where
- *  every hit is the agent's tool/skill catalog or MCP-server names — environment boilerplate a regex
- *  can't tell apart from customer data. Neither `email` nor `path` share that ambiguity: a real address
- *  or a real absolute path is never legitimate catalog boilerplate. Everywhere else (assistant reasoning,
- *  tool I/O, decisions, the deliverable) gets the full net. */
-export const MANIFEST_SCAN_PATTERNS = DEFAULT_SCAN_PATTERNS.filter((p) => p.cls === "email" || p.cls === "path");
+ *  local filesystem path — leaking a username, plugin-cache layout, or private marketplace name — lives;
+ *  `machine-inventory` because a future capability-manifest variant that inlines MCP tool
+ *  descriptions (plausible: `system/init` already lists `mcp_servers`) could carry a live-enumerated
+ *  app/process inventory in a structural field, and the sentinel is never legitimate catalog boilerplate
+ *  the way a skill/tool description's prose can be. The noisy classes (`currency`/`domain`) are the ones
+ *  suppressed on those two manifest messages, where every hit is the agent's tool/skill catalog or
+ *  MCP-server names — environment boilerplate a regex can't tell apart from customer data. None of
+ *  `email`/`path`/`machine-inventory` share that ambiguity: a real address, a real absolute path, or the
+ *  live-inventory sentinel are never legitimate catalog boilerplate. Everywhere else (assistant
+ *  reasoning, tool I/O, decisions, the deliverable) gets the full net. */
+export const MANIFEST_SCAN_PATTERNS = DEFAULT_SCAN_PATTERNS.filter(
+  (p) => p.cls === "email" || p.cls === "path" || p.cls === "machine-inventory",
+);
 
 function allowed(sample: string, cls: string, allow: AllowPattern[]): boolean {
   // An allow suppresses a finding only when (a) it is unscoped OR scoped to this finding's class, AND (b) it
