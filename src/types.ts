@@ -435,8 +435,14 @@ export interface Fingerprint {
  *  not check skill staleness) so the `--fail-on-skill-drift` gate can fail-closed on the latter while leaving
  *  the former a non-failing surfaced notice. `baseline` = platform bump (format-compatible, low concern);
  *  `skill`/`shared-root` = the skill source the assertions validate drifted (high concern); `format` = an
- *  older hash-format recording. */
-export type StalenessClass = "baseline" | "skill" | "shared-root" | "format" | "unverifiable-baseline" | "unverifiable-skill";
+ *  older hash-format recording. D1 (resolved-tier staleness): `resolved-tier` = a `fidelity: cowork`
+ *  cassette's recorded `effectiveFidelity` no longer matches the tier the scenario's baseline resolves to
+ *  today (gate 1143815894 flipped since record — the recording exercises the WRONG tier);
+ *  `unverifiable-tier` = the tier check could not run for a baseline-dependent (`fidelity: cowork`)
+ *  cassette (no recorded `effectiveFidelity`, or the scenario's pinned baseline failed to load) —
+ *  can't verify ⇒ not green on the verify-cassettes gate. */
+export type StalenessClass =
+  "baseline" | "skill" | "shared-root" | "format" | "unverifiable-baseline" | "unverifiable-skill" | "resolved-tier" | "unverifiable-tier";
 export interface StalenessFinding {
   class: StalenessClass;
   message: string;

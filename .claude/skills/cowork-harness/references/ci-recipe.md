@@ -261,6 +261,13 @@ does **not** imply the recording is still valid. Each replay result carries `sta
 | `format` | recorded under an older hash format | re-record once |
 | `unverifiable-baseline` | the latest baseline couldn't be loaded | couldn't verify (env, not skill) |
 | `unverifiable-skill` | skill dirs unresolvable — skill staleness couldn't be checked | couldn't verify the skill |
+| `resolved-tier` | a `fidelity: cowork` cassette's recorded `effectiveFidelity` no longer matches what the baseline resolves to today (the host-loop gate flipped) | **high** (the recording exercises the wrong tier) |
+| `unverifiable-tier` | tier check couldn't run for a `fidelity: cowork` cassette (no recorded `effectiveFidelity`, or its pinned baseline failed to load) | couldn't verify the tier — re-record |
+
+(A pre-`effectiveFidelity` cassette with an **explicit** tier is statically knowable — it passes the tier
+check with a non-failing informational note in the `verify-cassettes` envelope's per-file `notes[]`, a
+`·`-prefixed row in text output. On `verify-cassettes` every staleness *finding* above is a hard fail —
+the gate is class-blind; notes never fail it.)
 
 To gate in CI, pick the severity you want:
 

@@ -89,6 +89,30 @@ describe.skipIf(!can)("verify-cassettes CLI gate", () => {
     expect(r.code).toBe(2);
   });
 
+  // D1: the non-failing `notes` channel. A pre-effectiveFidelity cassette with an EXPLICIT tier is
+  // statically knowable → exit 0 with an informational note in the envelope (never a silent skip,
+  // never a spurious red). A `fidelity: cowork` one is baseline-dependent → loud unverifiable-tier, exit 1.
+  it("pre-effectiveFidelity + explicit tier → exit 0, note surfaced in the JSON envelope", () => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-vc-"));
+    writeFileSync(join(d, "old.cassette.json"), JSON.stringify(cassette([JSON.stringify({ type: "result", subtype: "success" })])));
+    const r = run(["verify-cassettes", join(d, "old.cassette.json"), "--output-format", "json"], d);
+    expect(r.code).toBe(0);
+    expect(r.json.ok).toBe(true);
+    expect(r.json.results[0].notes).toHaveLength(1);
+    expect(r.json.results[0].notes[0]).toMatch(/statically knowable/);
+  });
+
+  it("pre-effectiveFidelity + fidelity: cowork → unverifiable-tier staleness, exit 1", () => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-vc-"));
+    const c = cassette([JSON.stringify({ type: "result", subtype: "success" })]);
+    (c.scenario as { fidelity: string }).fidelity = "cowork";
+    writeFileSync(join(d, "cw.cassette.json"), JSON.stringify(c));
+    const r = run(["verify-cassettes", join(d, "cw.cassette.json"), "--output-format", "json"], d);
+    expect(r.code).toBe(1);
+    expect(r.json.ok).toBe(false);
+    expect(r.json.results[0].staleness.join(" ")).toMatch(/predates effectiveFidelity/);
+  });
+
   it("a malformed cassette is TALLIED (exit 1), not a crash — clean siblings still verified", () => {
     const d = mkdtempSync(join(tmpdir(), "cwh-vc-"));
     writeFileSync(join(d, "ok.cassette.json"), JSON.stringify(cassette([JSON.stringify({ type: "result", subtype: "success" })])));

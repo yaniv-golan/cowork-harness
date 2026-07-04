@@ -112,6 +112,38 @@
     "skillToolAvailable": {
       "type": "boolean",
       "description": "Wave 1 / E8: whether the agent's init tool list included \"Skill\" — false means skill_triggered/no_skill_triggered cannot be evaluated (agent-version tool-name drift)."
+    },
+    "staleness": {
+      "type": "array",
+      "description": "Replay only: class-tagged cassette-staleness findings, surfaced for a token-free JSON gate. Non-failing by default (a stale but passing replay stays ok:true); --strict fails on every class, --fail-on-skill-drift on skill/shared-root/unverifiable-skill only. See SPEC \u00a711 for per-class semantics (D1 added resolved-tier + unverifiable-tier).",
+      "items": {
+        "type": "object",
+        "required": ["class", "message"],
+        "properties": {
+          "class": {
+            "type": "string",
+            "enum": [
+              "baseline",
+              "skill",
+              "shared-root",
+              "format",
+              "unverifiable-baseline",
+              "unverifiable-skill",
+              "resolved-tier",
+              "unverifiable-tier"
+            ]
+          },
+          "message": { "type": "string" }
+        }
+      }
+    },
+    "skippedAssertions": {
+      "type": "object",
+      "description": "Replay only: count of live-only assertions NOT evaluated (full = whole assertion skipped; partial = content half ran, fs/egress half dropped). The skipped ones are absent from assertions[].",
+      "properties": {
+        "full": { "type": "number" },
+        "partial": { "type": "number" }
+      }
     }
   }
 }

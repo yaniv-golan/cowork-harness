@@ -355,9 +355,13 @@ states in `baseline.provenance.gates`). A skill that ignores these behaves diffe
   surface dispatch counts against `{perTask:1, global:3}`.
 - **`web_fetch` routing** (gate `1978029737`, `coworkWebFetchViaApi:true`) — see §6; implemented.
 - **Env vars that DON'T affect skill behavior** (documented as not-needed, per the fidelity filter):
-  `CLAUDE_CODE_WORKSPACE_HOST_PATHS` (telemetry only — `workspace.host_paths`), `CLAUDE_CODE_DONT_INHERIT_ENV`
-  (moot under host-loop, which disables native Bash), the bg auth-handshake vars (`CLAUDE_BG_CLAIM_AUTH`
-  etc., single-use host↔worker), `CLAUDE_CODE_ENVIRONMENT_KIND`, `CLAUDE_CODE_WORKER_EPOCH`. Not set.
+  `CLAUDE_CODE_DONT_INHERIT_ENV` (moot under host-loop, which disables native Bash), the bg
+  auth-handshake vars (`CLAUDE_BG_CLAIM_AUTH` etc., single-use host↔worker),
+  `CLAUDE_CODE_ENVIRONMENT_KIND`, `CLAUDE_CODE_WORKER_EPOCH`. Not set.
+  (`CLAUDE_CODE_WORKSPACE_HOST_PATHS` moved out of this list in 0.23.0: it IS now emitted —
+  hostloop only, when connected folders are present — alongside `CLAUDE_CODE_HOST_PLATFORM`,
+  which is set on every cowork-spawn tier; binary-verified, see `docs/fidelity-gaps.md` and the
+  0.23.0 CHANGELOG entry.)
 
 ## 11. Machine output (`--output-format json`)
 
@@ -492,7 +496,7 @@ and a fail observed) always fails that batch, regardless of the numeric rate.
   "nonDeterministic?": bool,                      // true if any decision came from a non-deterministic source → not reproducible
   "gateProvenance?": { "total": number, "bySource": {…}, "gates": [{ "question","answeredBy","answer","model?" }] }, // how each AskUserQuestion gate was answered; informational (never fails the verdict); live/partial lane only (absent on replay)
   "permissiveAutoAllow?": ["string"],             // tools auto-allowed by cowork parity that real Cowork BLOCKS → green is NOT faithful
-  "staleness?": [{ "class": "baseline|skill|shared-root|format|unverifiable-baseline|unverifiable-skill", "message" }], // replay only; cassette-staleness findings, surfaced for a JSON gate. Non-failing by default (a stale but passing replay stays ok:true); `--strict` fails on every class, `--fail-on-skill-drift` on skill/shared-root/unverifiable-skill only.
+  "staleness?": [{ "class": "baseline|skill|shared-root|format|unverifiable-baseline|unverifiable-skill|resolved-tier|unverifiable-tier", "message" }], // replay only; cassette-staleness findings, surfaced for a JSON gate. Non-failing by default (a stale but passing replay stays ok:true); `--strict` fails on every class, `--fail-on-skill-drift` on skill/shared-root/unverifiable-skill only. `resolved-tier` = a `fidelity: cowork` cassette's recorded effectiveFidelity no longer matches the tier the scenario's baseline (pinned `baseline:` or `latest`) resolves to today — the recording exercises the wrong tier; `unverifiable-tier` = the tier check couldn't run for a baseline-dependent (`fidelity: cowork`) cassette (no recorded effectiveFidelity, or its pinned baseline failed to load). Tier resolution is baseline-only (the CLAUDE_FORCE_HOST_LOOP env override is suppressed) so verify results can't differ across machines.
   "skippedAssertions?": { "full": number, "partial": number }, // replay only; count of live-only assertions NOT evaluated (full = whole assertion skipped; partial = content half ran, fs/egress half dropped). The skipped ones are absent from `assertions[]`.
   "skillsInvoked?": ["string"],                  // Wave 1: skill/plugin ids invoked via the Skill tool_use event, call order, duplicates kept. Backs skill_triggered/no_skill_triggered.
   "skillToolAvailable?": bool                     // Wave 1: whether the agent's init tool list included "Skill" — false ⇒ skill_triggered/no_skill_triggered fail as evidence-unavailable (agent-version drift)
@@ -547,6 +551,7 @@ verdict logic a finding doesn't have) — it emits its own:
   "results": [ { "file": "string",
                  "findings": [ { "where": "string", "cls": "email|currency|domain|path|machine-inventory|unscanned", "sample": "string" } ],
                  "staleness": [ "string" ],   // drift / unresolvable-fingerprint messages (gate failures)
+                 "notes": [ "string" ],       // NON-failing informational channel (never affects ok/exit) — e.g. a pre-effectiveFidelity cassette with an explicit tier: statically knowable, nothing baseline-dependent to verify. Text output: a `·`-prefixed row.
                  "error?": "string" } ] }     // a malformed cassette is TALLIED here, never crashes the batch
 ```
 

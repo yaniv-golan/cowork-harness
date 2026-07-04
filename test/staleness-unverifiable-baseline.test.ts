@@ -38,7 +38,7 @@ const cassette = (): Cassette =>
 
 describe("staleness — unloadable baseline forwarded by the class-blind adapter", () => {
   it("computeStaleness emits an `unverifiable-baseline` finding when the baseline can't load", () => {
-    const findings = computeStaleness(cassette(), undefined);
+    const { findings } = computeStaleness(cassette(), undefined);
     expect(findings.some((f) => f.class === "unverifiable-baseline")).toBe(true);
   });
 

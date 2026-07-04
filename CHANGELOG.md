@@ -6,6 +6,24 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **Resolved-tier staleness (readiness-plan D1, from founder-skills consumer feedback).** A
+  `fidelity: cowork` cassette records the tier the loop-decision gate resolved to
+  (`effectiveFidelity`); `verify-cassettes` / `replay` now detect when the current baseline resolves
+  that scenario differently (gate `1143815894` flipped since record) and emit a new `resolved-tier`
+  staleness finding — the recording exercises the wrong tier. Resolution is baseline-only (the
+  scenario's pinned `baseline:` when present, else `latest`; the `CLAUDE_FORCE_HOST_LOOP` env override
+  is suppressed) so verify results can't differ across machines. A `cowork` cassette whose tier can't
+  be verified (predates `effectiveFidelity`, or its pinned baseline fails to load) gets a loud
+  `unverifiable-tier` finding — never a silent skip, never an aborted sweep. Both classes hard-fail
+  `verify-cassettes` (class-blind gate) and warn-by-default on `replay` (`--strict` escalates;
+  `--fail-on-skill-drift` ignores them — they are not skill-source drift). A pre-`effectiveFidelity`
+  cassette with an *explicit* tier is statically knowable: it passes with a non-failing informational
+  note in the new per-file `notes[]` of the `verify-cassettes` envelope (a `·` row in text output).
+  `schema/run-result.json` now also declares `staleness` (full class enum) and `skippedAssertions`,
+  closing a pre-existing gap vs SPEC §11.
+
 ## [0.23.0] — 2026-07-04
 
 ### Added

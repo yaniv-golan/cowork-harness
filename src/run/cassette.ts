@@ -16,6 +16,7 @@ import {
 import { executeScenario, parseScenarioFile, collectArtifacts, parseSessionFile, slugForPath } from "./execute.js";
 import { loadSession, resolveSessionPaths } from "../session.js";
 import { loadBaseline } from "../baseline.js";
+import { decideLoopFromBaseline } from "../loop-decision.js";
 import { Run, type RunHooks, type RunRecord } from "./run.js";
 import {
   parseMessage,
@@ -587,6 +588,69 @@ function partitionDriftBuckets(diff: FileSigDiff, scope: Set<string>, scopeAgent
   return { shared, skill };
 }
 
+/** D1 resolved-tier check: does a `fidelity: cowork` cassette's recorded `effectiveFidelity` still match
+ *  the tier the scenario's baseline resolves to TODAY? Baseline-only inputs — the env override
+ *  (`CLAUDE_FORCE_HOST_LOOP`) is suppressed via `decideLoopFromBaseline`'s `over` param so verify results
+ *  can't differ across machines. Resolution consults the scenario's pinned `baseline:` when present
+ *  (`latest` otherwise); a `cowork` scenario whose baseline fails to load yields a LOUD `unverifiable-tier`
+ *  finding, never a throw (a bad pin must not abort a verify sweep). An explicit-tier scenario never
+ *  consults the baseline for its tier, so it can only produce the informational pre-field NOTE — findings
+ *  are reserved for the baseline-dependent case (decision 8's loud-not-silent intent). */
+function computeTierStaleness(cassette: Cassette): { findings: StalenessFinding[]; notes: string[] } {
+  const authored = cassette.scenario.fidelity;
+  const eff = cassette.effectiveFidelity;
+  if (authored !== "cowork") {
+    // Statically knowable from the embedded scenario — a pre-effectiveFidelity cassette passes the tier
+    // check with a non-failing informational note (never a silent skip, never a spurious red).
+    if (eff === undefined)
+      return {
+        findings: [],
+        notes: [
+          `cassette predates effectiveFidelity, but the scenario pins an explicit tier ('${authored}') — tier statically knowable; nothing baseline-dependent to verify`,
+        ],
+      };
+    return { findings: [], notes: [] };
+  }
+  if (eff === undefined)
+    return {
+      findings: [
+        {
+          class: "unverifiable-tier",
+          message: "fidelity: cowork cassette predates effectiveFidelity — cannot verify tier stability; re-record",
+        },
+      ],
+      notes: [],
+    };
+  const baselineName = cassette.scenario.baseline ?? "latest";
+  let baseline;
+  try {
+    baseline = loadBaseline(baselineName);
+  } catch (e) {
+    return {
+      findings: [
+        {
+          class: "unverifiable-tier",
+          message: `fidelity: cowork cassette's baseline '${baselineName}' failed to load (${(e as Error).message}) — cannot verify tier stability (can't verify ⇒ not green)`,
+        },
+      ],
+      notes: [],
+    };
+  }
+  // Mirrors execute.ts's live resolution (cowork → hostloop|container) with the env input pinned off.
+  const resolved = decideLoopFromBaseline(baseline, { devForceHostLoop: false }) === "host" ? "hostloop" : "container";
+  if (resolved !== eff)
+    return {
+      findings: [
+        {
+          class: "resolved-tier",
+          message: `fidelity: cowork now resolves to '${resolved}' (baseline ${baseline.appVersion}, gate 1143815894) but the cassette was recorded at '${eff}' — the recording exercises the wrong tier; re-record`,
+        },
+      ],
+      notes: [],
+    };
+  return { findings: [], notes: [] };
+}
+
 /** The SINGLE staleness diagnosis (unifies what used to be two divergent copies: `checkStaleness` and the
  *  inline block in `replayCassette`). Recompute the fingerprint and report drift as class-tagged findings;
  *  each CALLER applies its own gate-vs-warn policy:
@@ -595,11 +659,18 @@ function partitionDriftBuckets(diff: FileSigDiff, scope: Set<string>, scopeAgent
  *     green). The adapter MUST be class-blind (forward every finding) or that gate false-greens.
  *   - `replayCassette` consumes the findings directly: warn by default, `--strict` fails on all,
  *     `--fail-on-skill-drift` fails only on `SKILL_DRIFT_CLASSES`.
- *  No fingerprint → nothing to check (legacy cassette). */
-export function computeStaleness(cassette: Cassette, cassetteDir: string | undefined): StalenessFinding[] {
+ *  Returns `{ findings, notes }`: findings gate; `notes` is the NON-failing informational channel (today:
+ *  the pre-effectiveFidelity explicit-tier note) — it must never red a gate, and must never be dropped
+ *  silently (verify-cassettes surfaces it in the envelope + a `·` text row).
+ *  The D1 tier check runs BEFORE the fingerprint guard on purpose: it needs only the embedded scenario +
+ *  `effectiveFidelity`, and the oldest cassettes (no fingerprint, no effectiveFidelity, `fidelity: cowork`)
+ *  must NOT get a silent legacy-skip. No fingerprint → no further (fingerprint-based) checks. */
+export function computeStaleness(cassette: Cassette, cassetteDir: string | undefined): { findings: StalenessFinding[]; notes: string[] } {
+  const tier = computeTierStaleness(cassette);
+  const findings: StalenessFinding[] = [...tier.findings];
+  const notes: string[] = [...tier.notes];
   const fp = cassette.fingerprint;
-  if (!fp) return [];
-  const findings: StalenessFinding[] = [];
+  if (!fp) return { findings, notes };
   let liveBaseline: string | undefined;
   try {
     liveBaseline = loadBaseline("latest").appVersion;
@@ -700,15 +771,17 @@ export function computeStaleness(cassette: Cassette, cassetteDir: string | undef
       }
     }
   }
-  return findings;
+  return { findings, notes };
 }
 
 /** Staleness GATE adapter for the string consumers (`verify-cassettes`, the re-record work-list). Returns
- *  the unified findings as plain reason strings. MUST stay class-blind (forward EVERY finding) so an
- *  `unverifiable-baseline` / `unverifiable-skill` still reds those gates — filtering a class here would
- *  false-green `verify-cassettes` on a cassette it can't verify. */
+ *  the unified FINDINGS as plain reason strings. MUST stay class-blind (forward EVERY finding) so an
+ *  `unverifiable-baseline` / `unverifiable-skill` / `unverifiable-tier` still reds those gates — filtering
+ *  a class here would false-green `verify-cassettes` on a cassette it can't verify. Notes (the non-failing
+ *  channel) deliberately do NOT travel through this adapter — a note explicitly means "nothing to
+ *  re-record"; consumers that surface notes (`cmdVerifyCassettes`) call `computeStaleness` directly. */
 export function checkStaleness(cassette: Cassette, cassetteDir: string): string[] {
-  return computeStaleness(cassette, cassetteDir).map((f) => f.message);
+  return computeStaleness(cassette, cassetteDir).findings.map((f) => f.message);
 }
 
 /** A minimal RunRecord for a truncated-cassette replay — empty collections so downstream evaluate()/the
@@ -2198,9 +2271,14 @@ export function cmdVerifyCassettes(args: string[]) {
   const files = resolved.files;
   const results = files.map((f) => {
     const rc = readCassette(f);
-    if ("error" in rc) return { file: f, findings: [], staleness: [], version: [], error: rc.error };
+    if ("error" in rc) return { file: f, findings: [], staleness: [], notes: [], version: [], error: rc.error };
     const findings = doPrivacy ? scanCassette(rc.cassette, allow) : [];
-    const staleness = doStaleness ? checkStaleness(rc.cassette, dirname(f)) : [];
+    // Direct computeStaleness call (not the checkStaleness string adapter) so the NON-failing `notes`
+    // channel reaches the envelope — a note (e.g. pre-effectiveFidelity explicit-tier) must be surfaced,
+    // never dropped, and must never red the gate.
+    const stale = doStaleness ? computeStaleness(rc.cassette, dirname(f)) : { findings: [], notes: [] };
+    const staleness = stale.findings.map((s) => s.message);
+    const notes = stale.notes;
     // a cassette written by a NEWER harness version may carry semantics this version can't correctly
     // interpret. This is a FORMAT/version failure, NOT staleness — bucket it under its own `version`
     // key so `--skip-staleness` doesn't produce the self-contradiction of coverage.staleness:false
@@ -2213,7 +2291,7 @@ export function cmdVerifyCassettes(args: string[]) {
             `cassette format v${recordedVersion} is newer than this harness understands (v${CASSETTE_VERSION}) — upgrade cowork-harness (can't verify ⇒ not green)`,
           ]
         : [];
-    return { file: f, findings, staleness, version, error: undefined as string | undefined };
+    return { file: f, findings, staleness, notes, version, error: undefined as string | undefined };
   });
   const realFindings = results.flatMap((r) => r.findings.filter((x) => x.cls !== "unscanned"));
   const staleAny = results.some((r) => r.staleness.length > 0);
@@ -2230,6 +2308,8 @@ export function cmdVerifyCassettes(args: string[]) {
       if (r.error) log(`✗ ${r.file}: [error] ${r.error}`);
       for (const f of r.findings) log(`${f.cls === "unscanned" ? "·" : "✗"} ${r.file}: [${f.cls}] ${f.where} — ${f.sample}`);
       for (const s of r.staleness) log(`✗ ${r.file}: [stale] ${s}`);
+      // Informational, never fails the gate (the `·` row mirrors the privacy channel's `unscanned` precedent).
+      for (const n of r.notes) log(`· ${r.file}: [note] ${n}`);
       for (const v of r.version) log(`✗ ${r.file}: [version] ${v}`);
     }
     log(
@@ -2545,8 +2625,11 @@ export async function replayCassette(
   // per-branch `warn()`, so a non-strict run never double-warns one cause. Uses the SHARED `computeStaleness`
   // (no longer a forked copy), so it inherits the per-file detail, the `debugSkillHashMismatch` hook, the
   // GITSET/agent-scope flip buckets, and the both-buckets attribution fix for free.
-  const staleness: StalenessFinding[] = computeStaleness(cassette, opts.cassetteDir);
+  const { findings: staleness, notes: stalenessNotes } = computeStaleness(cassette, opts.cassetteDir);
   for (const s of staleness) warn(`::warning:: [replay] cassette stale: ${s.message}\n`);
+  // Notes are the non-failing informational channel (pre-effectiveFidelity explicit-tier) — surfaced so
+  // they're never a silent drop, but plain-info (no ::warning::) and never escalated by --strict.
+  for (const n of stalenessNotes) warn(`[replay] cassette note: ${n}\n`);
 
   // backward compat: warn loudly when controlOut is absent so the user knows question/gate
   // assertions are being EXCLUDED (not vacuously evaluated) from this run.

@@ -100,7 +100,7 @@ describe("staleness unification — flips are classed `format`, not skill drift"
       const { root, sessionPath } = scopedRoot();
       const fp = buildFingerprint(sessionPath, LIVE, root, ["alpha"]);
       process.env.COWORK_HARNESS_AGENT_SCOPE = "skill"; // verify with agent-scope ON ⇒ flip
-      const findings = computeStaleness(cassetteFor(sessionPath, fp, ["alpha"]), root);
+      const { findings } = computeStaleness(cassetteFor(sessionPath, fp, ["alpha"]), root);
       expect(findings.some((f) => f.class === "format" && /agent-scope/.test(f.message))).toBe(true);
       // regression guard: the flip is NOT misattributed to a skill-source class.
       expect(findings.some((f) => f.class === "shared-root" || f.class === "skill")).toBe(false);
