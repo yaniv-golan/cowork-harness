@@ -1,0 +1,43 @@
+# yaml-language-server: $schema=../../schema/scenario.schema.json
+# The hostloop tier's token-free replay fixture (readiness C1) AND the live two-tier check for the
+# `computer_links_resolve` assertion (readiness C3). hostloop is the newest / headline fidelity tier:
+# the agent loop is a native host process (its file tools run on the real host, no container), and
+# only shell/web route through a Docker sidecar. This is the one tier the token-free replay lane never
+# exercised — this cassette closes that gap.
+#
+# What this asserts: the agent writes an output file and shares it back as a `computer://` link, and
+# that link RESOLVES to the real collected artifact (`computer_links_resolve`). At hostloop the "host"
+# side of a mount is production's own real host path, so this is where link resolution is most load-
+# bearing. The SAME scenario also passes at `container` (verified live during authoring — the model
+# emits a VM-shaped `/sessions/.../mnt/outputs/...` link there; both shapes resolve).
+#
+# Run:     cowork-harness run    examples/scenarios/hostloop-computer-links.yaml   (live, needs the staged Desktop agent)
+# Record:  cowork-harness record examples/scenarios/hostloop-computer-links.yaml --out examples/replays/hostloop-computer-links.cassette.json
+# Replay:  cowork-harness replay examples/replays/hostloop-computer-links.cassette.json   (token-free)
+baseline: latest
+session: ../sessions/hostloop-computer-links.yaml
+fidelity: hostloop # native host agent loop + Docker sidecar for shell/web
+
+prompt: |
+  Write a file at outputs/report.md whose contents are exactly the line: hostloop smoke.
+  Then, in your reply, share that file with me as a computer:// link so I can open it.
+
+# Deterministic answers over the same can_use_tool channel Desktop's UI uses. The task needs only
+# Write; deny Bash so no shell output echoes host state and the run stays deterministic.
+answers:
+  - when_tool: Write
+    decide: allow
+  - when_tool: Bash
+    decide: deny
+
+assert:
+  - result: success
+  - file_exists: outputs/report.md
+  # `computer://` must appear in the model-visible transcript — this guarantees a link IS present so
+  # the resolve check below is non-vacuous (it passes trivially on zero links). The model shares the
+  # file as `[View report.md](computer://…/outputs/report.md)` per its `<sharing_files>` instructions.
+  - transcript_contains: "computer://"
+  # The headline check (readiness C3): every computer:// link the model emits must resolve to a real
+  # collected artifact. At hostloop the "host" side is production's own real host path, so this is
+  # where link resolution is most load-bearing.
+  - computer_links_resolve: true

@@ -76,6 +76,11 @@ jobs:
         run: node dist/cli.js replay examples/replays/example-pdf-skill.cassette.json --output-format json
       - name: Token-free replay gate (multiselect gate/controlOut fixture)
         run: node dist/cli.js replay examples/replays/example-multiselect-gate.cassette.json --output-format json
+      - name: Token-free replay gate (hostloop computer-links fixture)
+        # The ONLY committed cassette at effectiveFidelity:hostloop — the newest/headline tier, which
+        # the token-free replay lane otherwise never exercises. Also the replay-side check that a
+        # computer:// link resolves (computer_links_resolve) at hostloop.
+        run: node dist/cli.js replay examples/replays/hostloop-computer-links.cassette.json --output-format json
       - name: Cassette privacy + staleness scan (committed fixtures)
         # --allow-email covers the one expected email finding: the init-1 capability-manifest
         # `account.email` field the harness bakes into every REAL recording (docs/cassette.md's
@@ -88,7 +93,11 @@ jobs:
         # capability-manifest and passes clean with NO --allow-path needed — its synthetic paths use
         # a /tmp/ prefix specifically so they don't collide with that class, rather than being
         # allow-listed (see that plan's Design Decision 3).
-        run: node dist/cli.js verify-cassettes examples/replays/ --allow-email 'synthetic-user@example\.com'
+        # --allow-domain covers `claude.com`: the hostloop-computer-links cassette records the
+        # workspace MCP `initialize` handshake, whose clientInfo.websiteUrl is
+        # `https://claude.com/claude-code` — the agent's own public product URL, identical in every
+        # real recording, not PII. A NEW/different domain finding still fails the gate.
+        run: node dist/cli.js verify-cassettes examples/replays/ --allow-email 'synthetic-user@example\.com' --allow-domain 'claude\.com'
       - name: Lint example scenarios (no-silent-false-green invariants)
         run: node dist/cli.js lint examples/scenarios/*.yaml
 

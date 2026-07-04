@@ -31,6 +31,12 @@ All notable changes to this project are documented here. The format is based on
   scoped `--allow-machine-inventory <regex>` to whitelist provably-synthetic values. Tightening the
   privacy gate before the 1.0 contract freezes keeps it from becoming a breaking change to consumers'
   committed cassettes later.
+- **First committed `hostloop`-tier replay cassette + live two-tier `computer_links_resolve`
+  coverage.** `examples/replays/hostloop-computer-links.cassette.json` (from a new purpose-built
+  `fidelity: hostloop` scenario) is the first committed cassette at the newest/headline tier — the one
+  the token-free replay lane never exercised — and asserts that a `computer://` link the model shares
+  resolves to its real collected artifact. Verified live at both `container` (VM-shaped link) and
+  `hostloop` (host-shaped link); wired into CI's replay + privacy-scan gates.
 - **Host-platform / workspace-host-paths identity env vars.** The spawn env now emits
   `CLAUDE_CODE_HOST_PLATFORM` (`process.platform`, every tier) and `CLAUDE_CODE_WORKSPACE_HOST_PATHS`
   (connected-folder host paths, hostloop only when folders are present) — matching what the real Cowork
