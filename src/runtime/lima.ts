@@ -148,7 +148,7 @@ provision:
       set -e
       # BLOCK 1 — REQUIRED tools + the agent symlink. Fail loudly; MUST be self-contained and must NOT depend
       # on the (best-effort) toolchain block below — a toolchain install failure can never strand the agent
-      # (a regression the P5 boot-verification caught: a failed pip pin had aborted set -e BEFORE this symlink).
+      # (a regression boot-verification caught: a failed pip pin had aborted set -e BEFORE this symlink).
       apt-get update -y && apt-get install -y --no-install-recommends iptables curl ca-certificates ripgrep git gnupg
       # Put the staged agent on PATH (mounted read-only from the host) and verify it resolves to an
       # executable — a masked symlink failure would leave 'claude' missing while vm init still succeeded.
@@ -157,10 +157,10 @@ provision:
   - mode: system
     script: |
       #!/bin/sh
-      # BLOCK 2 — document/data toolchain parity with the container Layer-A (fix plan §8.4-P5). BEST-EFFORT:
+      # BLOCK 2 — document/data toolchain parity with the container Layer-A. BEST-EFFORT:
       # a separate provision block (Block 1 already secured the agent), and intentionally NOT set -e — a
       # single drifted pin must not strand the rest. NB the L2 guest is Ubuntu 24.04 / python 3.12 (NOT the
-      # container's 22.04 / 3.10 — intentional), so versions DRIFT from the 22.04 set; that's accepted (§8.8 D5),
+      # container's 22.04 / 3.10 — intentional), so versions DRIFT from the 22.04 set; that's accepted drift,
       # and the capability probe reports whatever didn't land. Order: apt then node then env then npm then pip
       # (pip last and tolerant). --ignore-installed avoids the "cannot uninstall pkg installed by debian"
       # PEP-668 clash; jsonschema is dropped (apt ships 4.x on 24.04 and pip can't downgrade it — drift).

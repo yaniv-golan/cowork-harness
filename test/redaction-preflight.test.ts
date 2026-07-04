@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { redactionPreflightMessage, resolvePreflightTier } from "../src/run/cassette.js";
 import type { Scenario } from "../src/types.js";
 
-// D3 (consumer feedback S3): the empty-redaction-policy discovery used to happen AFTER the paid live
+// Redaction preflight: the empty-redaction-policy discovery used to happen AFTER the paid live
 // run (recordScenarioObject's post-run policy load). The preflight computes the same tier+policy facts
 // pre-spawn; these tests pin the message conditions. Policy dirs are always explicit tmp dirs here —
 // the repo's own .cowork-redact.json (cwd) must not leak into the fixtures.

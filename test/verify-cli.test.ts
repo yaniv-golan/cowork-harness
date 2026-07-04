@@ -56,7 +56,7 @@ describe.skipIf(!can)("verify-cassettes CLI gate", () => {
     const d = mkdtempSync(join(tmpdir(), "cwh-vc-"));
     const c = cassette([JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "mail eve@evil.com" }] } })]);
     writeFileSync(join(d, "leak.cassette.json"), JSON.stringify(c));
-    // F-2: an allow must match the WHOLE finding token. `eve@evil.com` yields BOTH an email token
+    // An allow must match the WHOLE finding token. `eve@evil.com` yields BOTH an email token
     // (`eve@evil.com`) and a domain token (`evil.com`), so suppressing the cassette needs a whole-token
     // allow for each class.
     const r = run(
@@ -66,7 +66,7 @@ describe.skipIf(!can)("verify-cassettes CLI gate", () => {
     expect(r.code).toBe(0);
   });
 
-  it("F-2: a bare-DOMAIN allow does NOT suppress an EMAIL finding (no cross-class bleed) → still exit 1", () => {
+  it("a bare-DOMAIN allow does NOT suppress an EMAIL finding (no cross-class bleed) → still exit 1", () => {
     const d = mkdtempSync(join(tmpdir(), "cwh-vc-"));
     const c = cassette([JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "mail eve@evil.com" }] } })]);
     writeFileSync(join(d, "leak.cassette.json"), JSON.stringify(c));
@@ -89,7 +89,7 @@ describe.skipIf(!can)("verify-cassettes CLI gate", () => {
     expect(r.code).toBe(2);
   });
 
-  // D1: the non-failing `notes` channel. A pre-effectiveFidelity cassette with an EXPLICIT tier is
+  // The non-failing `notes` channel. A pre-effectiveFidelity cassette with an EXPLICIT tier is
   // statically knowable → exit 0 with an informational note in the envelope (never a silent skip,
   // never a spurious red). A `fidelity: cowork` one is baseline-dependent → loud unverifiable-tier, exit 1.
   it("pre-effectiveFidelity + explicit tier → exit 0, note surfaced in the JSON envelope", () => {

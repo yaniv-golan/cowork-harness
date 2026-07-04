@@ -3,8 +3,8 @@ import { readFileSync, readdirSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { CASSETTE_VERSION } from "../src/run/cassette";
 
-// Anti-drift tripwire for the SKILL's bundled docs (B3 remainder, from the founder-skills adoption
-// analysis R3). Scoped to the surfaces that actually rotted and the KINDS that rot — machine-readable
+// Anti-drift tripwire for the SKILL's bundled docs.
+// Scoped to the surfaces that actually rotted and the KINDS that rot — machine-readable
 // field lists the docs claim to cover — NOT a naive "new CLI flag must appear in a doc" gate (which
 // would have caught neither motivating example: `--allow-file` WAS documented outside the skill, and
 // `effectiveFidelity` isn't a flag). Extends the test/cassette-docs-sync.test.ts pattern:

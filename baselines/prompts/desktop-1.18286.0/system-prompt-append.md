@@ -4,8 +4,7 @@
      source:"defaultValue", ruleId:null}` — the shipped DEFAULT in a server-overridable
      envelope. Delivered via `--append-system-prompt` (layered on the agent's base prompt),
      NOT the initialize handshake. Tokens substituted by src/prompt.ts mirroring the Desktop
-     builder. Supersedes the 1.15200.0 reconstruction; scope/decision log in
-     docs/internal/2026-07-03-prompt-append-1.18286.0-reconstruction-plan.md (Opus-reviewed).
+     builder. Supersedes the 1.15200.0 reconstruction.
 
      1.15200.0 → 1.18286.0 drift folded in: the append was RESTRUCTURED — a new
      <claude_behavior> wrapper (product info + generic behavior policy), new behavior-driving

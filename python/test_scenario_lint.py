@@ -196,7 +196,7 @@ def test_single_quoted_regex_never_flagged(tmp_path):
     assert "regex-double-quoted" not in rules
 
 
-# --- D2: fidelity/assert compatibility rules (readiness plan D2) ---
+# --- fidelity/assert compatibility rules ---
 
 
 def _rules_at(tier, yaml_body, tmp_path):

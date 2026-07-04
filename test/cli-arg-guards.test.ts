@@ -473,7 +473,7 @@ describe.skipIf(!can)("CLI arg guards — run --matrix (E3)", () => {
     expect(r.out).not.toMatch(/at readFileSync|at parseSessionFile|at cmdRun/); // no raw stack trace
   });
 
-  // Final adversarial (Opus) review finding: the ONE external decider channel is shared across every
+  // The ONE external decider channel is shared across every
   // matrix cell (created once, reused by the whole pMapBounded loop) — every channel implementation
   // (src/decide/external-channel.ts) is documented as "strictly serial" over shared mutable state (a
   // `seq` counter / a single read queue), never designed for concurrent callers. Concurrent cells sharing

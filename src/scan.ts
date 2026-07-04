@@ -59,7 +59,7 @@ export const DEFAULT_SCAN_PATTERNS: { re: RegExp; cls: string }[] = [
     // Machine-inventory sentinel: the introducer boilerplate a tool emits when it has LIVE-ENUMERATED
     // local environment state (installed apps, running processes) into its schema/description/output —
     // e.g. computer-use's request_access description: "Available applications on this machine:
-    // AppOne, AppTwo, AppThree, …" (see docs/internal/2026-07-04-machine-inventory-scan-class-plan.md).
+    // AppOne, AppTwo, AppThree, …".
     // NOTE: use a synthetic app list in this comment and in any test fixture — never a real captured one
     // (the class this comment documents exists specifically to stop that kind of leak from being committed).
     // Matches the PHRASE ONLY (bounded at the optional colon), not the trailing list — the sample stays

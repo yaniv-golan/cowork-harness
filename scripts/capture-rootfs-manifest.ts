@@ -1,4 +1,4 @@
-// Drift gate (fix plan §8.8 / P6): capture the real Cowork rootfs's PROVISIONED toolchain into a committed
+// Drift gate: capture the real Cowork rootfs's PROVISIONED toolchain into a committed
 // manifest, and (--check) diff a built agent image against it so a future rootfs that adds packages surfaces
 // as a TRACKED drift instead of a silent fidelity gap.
 //

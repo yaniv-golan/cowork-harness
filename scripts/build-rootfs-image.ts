@@ -1,4 +1,4 @@
-// P8a — the rootfs `max` tier (fix plan §7a Route 2 / §8.4-P8): build a Docker image FROM the user's OWN
+// The rootfs `max` tier: build a Docker image FROM the user's OWN
 // Cowork rootfs.img — true byte-for-byte parity, zero reconstruction/drift. This is the definitive
 // full-parity path for anyone running locally against their own Claude Desktop install.
 //

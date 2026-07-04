@@ -8,18 +8,18 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
-- **Skill-effectiveness workstream (readiness-plan B3 remainder, from the founder-skills adoption
-  analysis R3).** Three deliverables, all targeting "the facts existed but no doc composed them into
-  the consumer's actual task":
-  - **`references/task-recipes.md`** — four end-to-end recipes the adoption report had to
-    reverse-engineer: evolve a cassette's `assert:` block (usually token-free via
+- **Skill-effectiveness workstream.** Three deliverables, all targeting the same failure mode
+  observed in real skill adoption: the facts existed across the docs, but nothing composed them
+  into the task a scenario author actually faces:
+  - **`references/task-recipes.md`** — four end-to-end recipes that consumers previously had to
+    reverse-engineer from scattered reference docs: evolve a cassette's `assert:` block (usually token-free via
     `replay --assert-from`; the recording-shaping-drift caveat spelled out), audit a fleet for tier
     drift (`effectiveFidelity` + the new `resolved-tier`/`unverifiable-tier` classes + a cassette
     anatomy table), set up redaction before the first hostloop/protocol record (`init-redact`,
     search set, scanner relationship, `--allow-*` scoping idioms), and derive budget assertions
     from an existing run instead of a two-pass record.
-  - **Four consumer-derived eval cases** (`evals/evals.json` 5 → 9, ids 6–9), each a question the
-    consumer actually hit, passing iff the agent reaches the cheap path: assert evolution without a
+  - **Four new eval cases** (`evals/evals.json` 5 → 9, ids 6–9), each a question a real consumer
+    hit, passing iff the agent reaches the cheap path: assert evolution without a
     fleet re-record, reading a cassette's recorded tier (with a fixture cassette via `files[]`),
     the exact `--allow-file` format (and its all-class scope trade-off), and batch `record`
     atomicity semantics.
@@ -32,8 +32,7 @@ All notable changes to this project are documented here. The format is based on
 ### Fixed
 
 - **Gate `1648655587` was mislabeled as a Task-dispatch cap; it is the scheduled-task session
-  limiter (readiness-plan D4 forensic pass, from founder-skills consumer feedback R5).** A
-  binary-verified forensic pass (asar 1.18286.0, `class L9t "[ScheduledTasks]"`) plus one
+  limiter.** A binary-verified forensic pass (asar 1.18286.0, `class L9t "[ScheduledTasks]"`) plus one
   adversarial-review round established that gate `1648655587` (`{perTask:1, global:3}`) governs
   Cowork's **scheduled/recurring (cron) task** session scheduler — ≤1 concurrent session per
   scheduled task, ≤3 concurrent scheduled-task sessions globally — **not** the in-conversation
@@ -52,7 +51,7 @@ All notable changes to this project are documented here. The format is based on
   even named in the schema's prose `description` while absent from `properties`. Found by the new
   skill-docs tripwire while pinning the field list.
 
-- **Redaction preflight + `init-redact` (readiness-plan D3, from founder-skills consumer feedback S3).**
+- **Redaction preflight + `init-redact`.**
   `record` now warns (`::warning::`) **before the agent spawns** when a scenario about to record at a
   host-path-bearing tier (`hostloop`, or `protocol`) has an EMPTY assembled redaction policy — that
   combination commits real host paths, which `verify-cassettes`' `path` scanner then hard-fails; the
@@ -66,7 +65,7 @@ All notable changes to this project are documented here. The format is based on
   dir. The always-on privacy scanner remains the universal net — container-tier recordings can trip it
   too.
 
-- **Lint catches fidelity/assert combinations that fail by design (readiness-plan D2).**
+- **Lint catches fidelity/assert combinations that fail by design.**
   `scenario.py lint` (and the `cowork-harness lint` wrapper) now ERRORs on
   `transcript_no_host_path` + `fidelity: hostloop` or `protocol` (the agent legitimately runs on real
   host paths at those tiers — the assertion can never be a meaningful check there; lint is
@@ -77,7 +76,7 @@ All notable changes to this project are documented here. The format is based on
   non-empty `requires_capabilities` + `fidelity: protocol` without `allow_missing_capability` (the
   capability probe can't run at protocol tier, so the run hard-fails as unverifiable).
 
-- **Resolved-tier staleness (readiness-plan D1, from founder-skills consumer feedback).** A
+- **Resolved-tier staleness detection.** A
   `fidelity: cowork` cassette records the tier the loop-decision gate resolved to
   (`effectiveFidelity`); `verify-cassettes` / `replay` now detect when the current baseline resolves
   that scenario differently (gate `1143815894` flipped since record) and emit a new `resolved-tier`

@@ -19,13 +19,13 @@
 # node doc-gen globals. NOTE on openpyxl: pypi is off the runtime egress allowlist (so a skill
 # can't `pip install` it at run time — faithful), BUT the real rootfs SHIPS it preinstalled —
 # so omitting it here was an infidelity (a false negative). We preinstall the rootfs stack,
-# pinned to the rootfs's versions. See docs/internal/2026-06-20-founder-skills-bug-validation.md.
+# pinned to the rootfs's versions.
 
 FROM --platform=linux/arm64 ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Layer split (see the fix plan §3): Layer A (this default) covers the document/data stack
+# Layer split: Layer A (this default) covers the document/data stack
 # ~90% of skills use; Layer B (heavy: OCR/LibreOffice/opencv/onnxruntime) is opt-in.
 ARG COWORK_FULL_PARITY=0
 

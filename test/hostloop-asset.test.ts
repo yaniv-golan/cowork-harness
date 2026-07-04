@@ -16,10 +16,10 @@ const HOSTLOOP_ASSET_MIN = "1.12603.1";
 const isLegacy = (appVersion: string) => cmpVersionStrings(appVersion, DYNAMIC_MIN) < 0;
 const inStaticAssetRange = (appVersion: string) => cmpVersionStrings(appVersion, HOSTLOOP_ASSET_MIN) >= 0 && isLegacy(appVersion);
 
-/** F-3: for static-asset-era baselines ([1.12603.1, 1.14271.0)) the host-loop shell-access section is
+/** For static-asset-era baselines ([1.12603.1, 1.14271.0)) the host-loop shell-access section is
  *  read from baselines/prompts/desktop-<appVersion>/host-loop-append.md and appended to the system prompt
  *  in the host-loop tier. A missing asset means an EMPTY shell section — a silent fidelity gap. Guard it. */
-describe("F-3: host-loop prompt asset for static-asset-era baselines", () => {
+describe("host-loop prompt asset for static-asset-era baselines", () => {
   const staticAssetBaselines = readdirSync(BASELINES_DIR)
     .filter((f) => f.startsWith("desktop-") && f.endsWith(".json"))
     .map((f) => f.replace(/^desktop-/, "").replace(/\.json$/, ""))

@@ -1,4 +1,4 @@
-# Session for the hostloop cassette + computer_links_resolve two-tier check (readiness C1/C3).
+# Session for the hostloop cassette + computer_links_resolve two-tier check.
 # hostloop runs the real agent binary NATIVELY on the host; only shell/web route through the
 # Docker sidecar. No connected folder → no `allow_host_writes` consent needed (the agent writes to
 # the run's scratch outputs/, not a host folder).

@@ -4,7 +4,7 @@ import { computeVerdict } from "../src/run/verdict.js";
 import { loadBaseline } from "../src/baseline.js";
 import type { Fingerprint } from "../src/types.js";
 
-// (founder-skills CI-recipe feedback): replay must surface class-tagged `staleness[]` and
+// Replay must surface class-tagged `staleness[]` and
 // `skippedAssertions` in the RunResult so a token-free JSON gate can see staleness WITHOUT it flipping the
 // verdict by default; `--fail-on-skill-drift` then fails on skill-source classes only.
 

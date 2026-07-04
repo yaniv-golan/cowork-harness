@@ -381,7 +381,7 @@ function hasHelp(args: string[]): boolean {
   return args.includes("--help") || args.includes("-h");
 }
 
-// F-7: per-subcommand `--help`. `run`/`skill` already print their own help via hasHelp(); `lint` delegates
+// Per-subcommand `--help`. `run`/`skill` already print their own help via hasHelp(); `lint` delegates
 // to the Python argparse path (which has its own --help). Every OTHER subcommand goes straight to parseArgs,
 // where `--help` was an "unknown flag" error — so you could only discover flags by triggering a bad
 // invocation. Intercept `--help`/`-h` at dispatch and print the command's usage (exit 0). One concise line
@@ -593,7 +593,7 @@ async function main() {
   const [cmd, ...rest] = argv;
   if (cmd === "--version" || cmd === "-v") return void out(pkgVersion());
   if (cmd === undefined || cmd === "--help" || cmd === "-h" || cmd === "help") return printHelp();
-  // F-7: per-subcommand --help for the parseArgs-direct commands (run/skill/lint self-handle, so they're
+  // Per-subcommand --help for the parseArgs-direct commands (run/skill/lint self-handle, so they're
   // absent from the map and fall through to their own handling).
   if (hasHelp(rest) && cmd in SUBCOMMAND_USAGE) return void log(SUBCOMMAND_USAGE[cmd]);
   // validate COWORK_HARNESS_OUTPUT_FORMAT here — AFTER the --version/--help/per-subcommand-help
@@ -2319,7 +2319,7 @@ async function cmdSync(args: string[]) {
     mkdirSync(BASELINES_DIR, { recursive: true });
     writeFileSync(baselinePath, JSON.stringify(next, null, 2));
     log(`wrote ${baselinePath}`);
-    // F-3: the host-loop prompt asset is hand-authored (not extracted), so a new LEGACY baseline silently
+    // The host-loop prompt asset is hand-authored (not extracted), so a new LEGACY baseline silently
     // lands WITHOUT it — and every host-loop record then runs with an EMPTY shell-access section. Warn loudly
     // here, tying the missing asset to the baseline just synced (mirrors the agentBinary.stagedPath warn).
     // Generator-era versions (>= 1.14271.0) build the section dynamically from mount state and ship NO static
@@ -2337,7 +2337,7 @@ async function cmdSync(args: string[]) {
 }
 
 /** `cowork-harness init-redact [--force]` — copy the packaged reference `.cowork-redact.json` into the
- *  cwd (D3). The copy is load-bearing: `loadRedactionPolicy` searches cwd/scenario-dir/cassette-dir and
+ *  cwd. The copy is load-bearing: `loadRedactionPolicy` searches cwd/scenario-dir/cassette-dir and
  *  never the package dir, so shipping the template alone does nothing until it's copied next to the
  *  scenarios. The reference policy is generic (host-path prefixes + a generic email regex) — a starting
  *  point to review and tailor, not a guarantee. Refuses to overwrite an existing policy without --force
@@ -3004,7 +3004,7 @@ function gateQuestionLabel(req: DecisionRequest): string {
 }
 
 /**
- * F-1: `verify-run <run-dir> <scenario.yaml>` — re-evaluate a scenario's `assert:` block against an
+ * `verify-run <run-dir> <scenario.yaml>` — re-evaluate a scenario's `assert:` block against an
  * already-kept run dir, WITHOUT a live agent (no tokens, no Docker). Fixing a wrong assertion was previously
  * a full live re-record (~17 min); this turns it into ~1s. Reconstructs the AssertContext from the run dir's
  * persisted `result.json` + the `run.jsonl`/`trace.json` sidecars (transcript + questions live there, not in

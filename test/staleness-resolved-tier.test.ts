@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { computeVerdict } from "../src/run/verdict.js";
 
-// D1 (resolved-tier staleness class): a `fidelity: cowork` cassette records the tier the loop-decision
+// Resolved-tier staleness class: a `fidelity: cowork` cassette records the tier the loop-decision
 // gate resolved to at record time (`effectiveFidelity`); if the current baseline resolves differently
 // today, the recording exercises the WRONG tier and must red `verify-cassettes` (class-blind adapter)
 // while staying warn-by-default on replay (`resolved-tier` is NOT a skill-drift class; `--strict`
@@ -116,7 +116,7 @@ describe("resolved-tier — pinned-baseline resolution", () => {
   });
 });
 
-describe("unverifiable-tier — missing effectiveFidelity (decision 8: loud, never a silent legacy-skip)", () => {
+describe("unverifiable-tier — missing effectiveFidelity (loud, never a silent legacy-skip)", () => {
   it("cowork + missing field → unverifiable-tier, EVEN on a fingerprint-less cassette (guard independence)", () => {
     const { findings } = computeStaleness(cassette({}), undefined); // no fingerprint, no effectiveFidelity
     expect(findings).toEqual([expect.objectContaining({ class: "unverifiable-tier" })]);
@@ -132,7 +132,7 @@ describe("unverifiable-tier — missing effectiveFidelity (decision 8: loud, nev
 });
 
 describe("class-blind string adapter (verify-cassettes gate semantics)", () => {
-  it("forwards resolved-tier and unverifiable-tier findings (hard fail — decision 7)", () => {
+  it("forwards resolved-tier and unverifiable-tier findings (hard fail on the class-blind gate)", () => {
     expect(checkStaleness(cassette({ effectiveFidelity: "container" }), "")).toHaveLength(1);
     expect(checkStaleness(cassette({}), "")).toHaveLength(1);
   });

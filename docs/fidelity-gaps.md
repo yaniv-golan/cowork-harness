@@ -119,10 +119,8 @@ cannot know; emitting fabricated values would be a worse divergence than their d
 (`{perTask:1, global:3}`) governs Cowork's **scheduled/recurring (cron) task** scheduler (`class
 L9t` "[ScheduledTasks]"), NOT the in-conversation `Task` tool. It skips launching a scheduled-task
 *session* beyond **≤1 concurrent session per scheduled task** / **≤3 concurrent scheduled-task
-sessions globally**. Forensic write-up + one adversarial-review round (CONFIRMED):
-[`docs/internal/2026-07-04-d4-dispatch-limiter-forensic.md`](./internal/2026-07-04-d4-dispatch-limiter-forensic.md).
-This corrects an earlier mislabeling of this gate as an in-conversation "Task-dispatch
-rate-limiter."
+sessions globally**. This corrects an earlier mislabeling of this gate as an in-conversation
+"Task-dispatch rate-limiter."
 
 **Real Cowork behaviour for the `Task` tool:** none of the above applies — the Desktop imposes **no
 concurrency cap** on in-conversation `Task`-tool sub-agent fan-out (the `Task` PreToolUse hook only

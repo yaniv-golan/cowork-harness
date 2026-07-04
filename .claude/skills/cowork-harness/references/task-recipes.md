@@ -1,8 +1,7 @@
 # Task recipes — end-to-end paths for the four jobs consumers actually reverse-engineer
 
 Each recipe composes facts that live scattered across SKILL.md and the other references into one
-decision path. They were derived from a real consumer's adoption report — every one answers a
-question a fleet owner had to work out the hard way. Facts track the harness version in SKILL.md's
+decision path. Every one answers a question a real fleet owner had to work out the hard way. Facts track the harness version in SKILL.md's
 front-matter; the `resolved-tier`/`unverifiable-tier` staleness classes (Recipe 2) and
 `init-redact` (Recipe 3) are new in the release AFTER 0.23.0.
 

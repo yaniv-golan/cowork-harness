@@ -144,7 +144,7 @@ _EMBEDDED_TOP_LEVEL_KEYS = {
     "answers",
     "expect_denied",
     "assert",
-    "skills",  # F-6: opt-in skill-staleness hash scope
+    "skills",  # opt-in skill-staleness hash scope
     "requires_capabilities",  # Fix 4b: scenario-level required-capability declaration (pre-flight gate)
     "allow_host_writes",  # hostloop native-split: consent for a writable connected folder (pre-run gate)
 }
@@ -182,7 +182,7 @@ REGEX_KEYS = {
 VALID_ON_UNANSWERED = {"fail", "prompt", "first", "llm"}
 VALID_TIERS = ("protocol", "container", "microvm", "hostloop", "cowork")
 
-# D2 gate-id tripwire: the `host-path-assert-cowork` WARN below embeds Cowork's
+# Gate-id tripwire: the `host-path-assert-cowork` WARN below embeds Cowork's
 # host-loop gate id in offline Python (the linter never reads a baseline). The
 # id is pinned by test/scenario-lint-gate-id.test.ts against the PINNED_GATES
 # entry in src/sync/cowork-sync.ts, so a Desktop gate re-key fails loud there
@@ -312,7 +312,7 @@ def lint_doc(doc, path, raw_lines):
             )
         )
 
-    # E/W (D2): transcript_no_host_path is tier-incompatible with hostloop/protocol — the agent
+    # E/W: transcript_no_host_path is tier-incompatible with hostloop/protocol — the agent
     # legitimately runs on real host paths there, so the assertion fails BY DESIGN (the runtime only
     # warns at run start, after authoring). Lint is deliberately STRICTER than the runtime: the docs
     # declare the combination incompatible, so authoring it is a bug even if a tool-free run could
@@ -345,7 +345,7 @@ def lint_doc(doc, path, raw_lines):
                 )
             )
 
-    # E (D2): requires_capabilities on protocol — the capability probe cannot run at protocol tier
+    # E: requires_capabilities on protocol — the capability probe cannot run at protocol tier
     # (clause b of the requires_capabilities contract), so the run HARD-FAILS unless an assert item
     # opts out via allow_missing_capability: true. Offline-detectable fails-by-design, same class as
     # the tier/assert rules above.
@@ -609,7 +609,7 @@ def cmd_lint(args):
         else:
             expanded.append(arg)
     args.files = expanded
-    # Linter self-check (B3): a valid schema key the replay-class sets don't classify can't be linted
+    # Linter self-check: a valid schema key the replay-class sets don't classify can't be linted
     # correctly — surface it as a hard ERROR so it fails the gate (and --strict) until someone classifies it.
     if UNCLASSIFIED_KEYS:
         all_findings.append(

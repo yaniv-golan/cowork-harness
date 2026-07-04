@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 
-// D3: `init-redact` copies the packaged reference .cowork-redact.json into the cwd — the copy is
+// `init-redact` copies the packaged reference .cowork-redact.json into the cwd — the copy is
 // load-bearing (loadRedactionPolicy never searches the package dir). Token/agent-free; needs dist/cli.js
 // (the `ci` script builds before testing); skips cleanly otherwise.
 const CLI = resolve("dist/cli.js");

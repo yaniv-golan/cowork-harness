@@ -146,8 +146,8 @@ export function spawnHostLoop(
     // consent, NOT additionally restricted to the outputs dir the way a production chat-type session would
     // be. Chat here already requires explicit `--allow-host-writes` for an rw folder (safety.ts), and a
     // connected folder in chat is an operator-constructed fixture, not a production chat topology — so this
-    // is a known, consented fidelity gap (docs/internal/2026-07-04-hostloop-security-review.md B3), not a
-    // safety break. Revisit if chat hostloop should thread session-type scratchMode for closer fidelity.
+    // is a known, consented fidelity gap, not a safety break (security-reviewed 2026-07-04). Revisit if
+    // chat hostloop should thread session-type scratchMode for closer fidelity.
     scratchMode: false,
     claudePluginRoot: claudePluginRootHost,
   };

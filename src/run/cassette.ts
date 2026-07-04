@@ -588,14 +588,14 @@ function partitionDriftBuckets(diff: FileSigDiff, scope: Set<string>, scopeAgent
   return { shared, skill };
 }
 
-/** D1 resolved-tier check: does a `fidelity: cowork` cassette's recorded `effectiveFidelity` still match
+/** Resolved-tier check: does a `fidelity: cowork` cassette's recorded `effectiveFidelity` still match
  *  the tier the scenario's baseline resolves to TODAY? Baseline-only inputs — the env override
  *  (`CLAUDE_FORCE_HOST_LOOP`) is suppressed via `decideLoopFromBaseline`'s `over` param so verify results
  *  can't differ across machines. Resolution consults the scenario's pinned `baseline:` when present
  *  (`latest` otherwise); a `cowork` scenario whose baseline fails to load yields a LOUD `unverifiable-tier`
  *  finding, never a throw (a bad pin must not abort a verify sweep). An explicit-tier scenario never
  *  consults the baseline for its tier, so it can only produce the informational pre-field NOTE — findings
- *  are reserved for the baseline-dependent case (decision 8's loud-not-silent intent). */
+ *  are reserved for the baseline-dependent case, where a silent skip could hide real drift. */
 function computeTierStaleness(cassette: Cassette): { findings: StalenessFinding[]; notes: string[] } {
   const authored = cassette.scenario.fidelity;
   const eff = cassette.effectiveFidelity;
@@ -662,7 +662,7 @@ function computeTierStaleness(cassette: Cassette): { findings: StalenessFinding[
  *  Returns `{ findings, notes }`: findings gate; `notes` is the NON-failing informational channel (today:
  *  the pre-effectiveFidelity explicit-tier note) — it must never red a gate, and must never be dropped
  *  silently (verify-cassettes surfaces it in the envelope + a `·` text row).
- *  The D1 tier check runs BEFORE the fingerprint guard on purpose: it needs only the embedded scenario +
+ *  The tier check runs BEFORE the fingerprint guard on purpose: it needs only the embedded scenario +
  *  `effectiveFidelity`, and the oldest cassettes (no fingerprint, no effectiveFidelity, `fidelity: cowork`)
  *  must NOT get a silent legacy-skip. No fingerprint → no further (fingerprint-based) checks. */
 export function computeStaleness(cassette: Cassette, cassetteDir: string | undefined): { findings: StalenessFinding[]; notes: string[] } {
@@ -1352,7 +1352,7 @@ interface RecordOpts {
   cassettePath?: string; // explicit --out (single); otherwise cassettes/<name>.cassette.json
   maxArtifactBytes?: number; // override the inline-body cap (else env / 64 KiB default)
   scenarioSourceFile?: string; // the on-disk scenario YAML this was recorded from (for --rerecord-stale)
-  // D3: the batch paths (`record <dir>`, `--rerecord-stale`) run ONE preflight before the first spawn
+  // The batch paths (`record <dir>`, `--rerecord-stale`) run ONE redaction preflight before the first spawn
   // (a per-scenario warning under pMapBounded fires after siblings already paid, and a shared empty
   // policy would emit N interleaved duplicates) — they set this so the per-record preflight doesn't re-fire.
   skipRedactionPreflight?: boolean;
@@ -1366,8 +1366,8 @@ interface RecordOpts {
   deciderChannel?: "decider-dir" | "decider-llm";
 }
 
-/** D3: resolve the tier a record run WILL use, for the redaction preflight. Mirrors execute.ts's live
- *  resolution (env-INCLUSIVE — this is a live run, unlike D1's verify-time check which pins env off).
+/** Resolve the tier a record run WILL use, for the redaction preflight. Mirrors execute.ts's live
+ *  resolution (env-INCLUSIVE — this is a live run, unlike the verify-time resolved-tier check, which pins env off).
  *  An unresolvable baseline returns "unresolvable" and the preflight stays quiet — the record itself
  *  will fail loudly on the same load moments later, and a guessed tier could mis-warn. */
 export function resolvePreflightTier(scenario: Scenario): string {
@@ -1379,8 +1379,8 @@ export function resolvePreflightTier(scenario: Scenario): string {
   }
 }
 
-/** D3 redaction preflight (consumer feedback S3: the empty-policy discovery used to happen AFTER the paid
- *  run, at the post-run policy load). Returns a `::warning::` line when any scenario about to record at a
+/** Redaction preflight. Historically the empty-policy discovery happened only AFTER the paid
+ *  run, at the post-run policy load. Returns a `::warning::` line when any scenario about to record at a
  *  host-path-bearing tier (hostloop — native host paths; protocol — no sandbox, real cwd) has an EMPTY
  *  assembled redaction policy — the committed cassette would then embed real host paths and
  *  `verify-cassettes`' `path` scanner hard-fails them. `::warning::` (not `::notice::`): the condition
@@ -1680,7 +1680,7 @@ export async function cmdRecord(args: string[]) {
       return process.exit(0);
     }
     const staleTotal = stale.length;
-    // D3: ONE redaction preflight for the whole re-record batch, before the first spawn (same rationale
+    // ONE redaction preflight for the whole re-record batch, before the first spawn (same rationale
     // as the dir-batch path below). Policy dirs per item = cwd + the cassette's own dir (its write target).
     if (!noRedact) {
       const preflightItems: Array<{ scenario: Scenario; policyDirs: string[] }> = [];
@@ -1780,7 +1780,7 @@ export async function cmdRecord(args: string[]) {
     }
 
     const total = disc.scenarios.length;
-    // D3: ONE preflight for the whole batch, BEFORE the first spawn — a per-scenario warning under
+    // ONE redaction preflight for the whole batch, BEFORE the first spawn — a per-scenario warning under
     // pMapBounded would fire for scenario N after 1…N−1 already paid, and a shared empty policy would
     // emit N interleaved duplicates. Same policy search set as each scenario's own record path.
     if (!noRedact) {
@@ -1859,7 +1859,7 @@ async function recordScenarioObject(
   opts: RecordOpts,
   extraPolicyDirs: string[] = [],
 ): Promise<{ result: RunResult; cassettePath: string; artifacts: number }> {
-  // D3 redaction preflight — MUST fire BEFORE the (paid) agent spawn below; the historical policy-load
+  // Redaction preflight — MUST fire BEFORE the (paid) agent spawn below; the historical policy-load
   // point after the live run is exactly the after-the-fact discovery this exists to prevent. Same search
   // set as the post-run load. `--no-redact` skips it (explicit known-synthetic opt-out); the batch paths
   // skip it here because they preflight once for the whole batch (skipRedactionPreflight).

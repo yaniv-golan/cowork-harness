@@ -50,9 +50,9 @@ describe.skipIf(!can)("cli --help: --run-dir is shown as a global/leading flag",
   }
 });
 
-// F-7: the parseArgs-direct subcommands used to answer `--help` with `unknown flag: --help` (exit 2).
+// The parseArgs-direct subcommands used to answer `--help` with `unknown flag: --help` (exit 2).
 // They now print a usage line and exit 0.
-describe.skipIf(!can)("cli --help: parseArgs-direct subcommands print usage (F-7)", () => {
+describe.skipIf(!can)("cli --help: parseArgs-direct subcommands print usage", () => {
   const cases: [string, string][] = [
     ["record", "usage: record"],
     ["replay", "usage: replay"],

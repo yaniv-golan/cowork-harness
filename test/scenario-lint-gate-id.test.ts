@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-// D2 gate-id drift tripwire (the cassette-docs-sync pattern): scenario.py's `host-path-assert-cowork`
+// Gate-id drift tripwire (the cassette-docs-sync pattern): scenario.py's `host-path-assert-cowork`
 // WARN embeds the host-loop gate id in offline Python — the linter never reads a baseline, so the
 // message carries the gate fact. If Desktop re-keys the gate, PINNED_GATES in cowork-sync.ts is the
 // binary-verified pin that gets updated; this test forces the Python copy to move with it instead of

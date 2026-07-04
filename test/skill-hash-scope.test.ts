@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { hashSkillDirs, hashSharedOnly, compileIgnore } from "../src/run/skill-hash.js";
 
-/** A plugin-root with two skills + shared roots (scripts/, .claude-plugin/plugin.json) — the founder-skills
- *  shape that F-6 scoping targets. */
+/** A plugin-root with two skills + shared roots (scripts/, .claude-plugin/plugin.json) — the
+ *  multi-skill plugin-repo shape that shared-root hash scoping targets. */
 function pluginRoot(): string {
   const d = mkdtempSync(join(tmpdir(), "plugin-"));
   mkdirSync(join(d, "skills", "alpha"), { recursive: true });
@@ -19,13 +19,13 @@ function pluginRoot(): string {
   return d;
 }
 
-describe("F-6: scoped skill hashing", () => {
+describe("scoped skill hashing", () => {
   it("default (no scope) is byte-identical to an explicitly-empty scope (whole tree)", () => {
     const d = pluginRoot();
     expect(hashSkillDirs([d]).hash).toBe(hashSkillDirs([d], []).hash);
   });
 
-  it("whole-tree (default) re-stales on ANY skill edit — the F-6 problem it fixes when scoped", () => {
+  it("whole-tree (default) re-stales on ANY skill edit — the over-staling problem scoping fixes", () => {
     const d = pluginRoot();
     const before = hashSkillDirs([d]).hash;
     writeFileSync(join(d, "skills", "beta", "SKILL.md"), "# beta v2\n");
@@ -104,7 +104,7 @@ describe("F-6: scoped skill hashing", () => {
   });
 });
 
-describe("F-6: consumer-declared hash_ignore (session globs + plugin-local .cowork-hashignore)", () => {
+describe("consumer-declared hash_ignore (session globs + plugin-local .cowork-hashignore)", () => {
   it("a session-level ignore glob drops a non-runtime dir from the hash", () => {
     const d = pluginRoot();
     mkdirSync(join(d, "tests"), { recursive: true });

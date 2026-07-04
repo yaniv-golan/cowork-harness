@@ -25,7 +25,7 @@ describe("scanText — default PII heuristics (email + currency + domain + path 
     const f = scanText("contact us at hello@acme.com", "transcript", [/hello@acme\.com/i]);
     expect(f.some((x) => x.cls === "email")).toBe(false);
   });
-  it("F-2: a bare-domain allow does NOT bleed into the email class (substring no longer suppresses)", () => {
+  it("a bare-domain allow does NOT bleed into the email class (substring no longer suppresses)", () => {
     // `acme\.com` is a substring of the email token `hello@acme.com`; under the old substring matcher this
     // silently cleared the email finding. Anchored whole-token matching keeps the email tripwire live.
     const f = scanText("contact us at hello@acme.com and see acme.com", "transcript", [/acme\.com/i]);

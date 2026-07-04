@@ -368,7 +368,7 @@ export const ScenarioObject = z.strictObject({
     .default([])
     .describe("shorthand for asserting egress to these hosts was DENIED — expands to one egress_denied assertion per host"),
   assert: z.array(Assertion).default([]).describe("post-run assertions; see each key's own description for what it checks"),
-  // F-6 (opt-in): scope the skill-staleness hash to the skill(s) this scenario actually exercises, named by
+  // Opt-in: scope the skill-staleness hash to the skill(s) this scenario actually exercises, named by
   // their `skills/<name>` dir under a mounted plugin-root. Empty/omitted = hash the WHOLE mounted tree (the
   // default — so an unrelated skill edit re-stales every cassette). When set, only the named skill dirs plus
   // the plugin's SHARED roots (everything not under `skills/<x>/`) feed the hash, so editing one skill
@@ -435,7 +435,7 @@ export interface Fingerprint {
  *  not check skill staleness) so the `--fail-on-skill-drift` gate can fail-closed on the latter while leaving
  *  the former a non-failing surfaced notice. `baseline` = platform bump (format-compatible, low concern);
  *  `skill`/`shared-root` = the skill source the assertions validate drifted (high concern); `format` = an
- *  older hash-format recording. D1 (resolved-tier staleness): `resolved-tier` = a `fidelity: cowork`
+ *  older hash-format recording. `resolved-tier` = a `fidelity: cowork`
  *  cassette's recorded `effectiveFidelity` no longer matches the tier the scenario's baseline resolves to
  *  today (gate 1143815894 flipped since record — the recording exercises the WRONG tier);
  *  `unverifiable-tier` = the tier check could not run for a baseline-dependent (`fidelity: cowork`)

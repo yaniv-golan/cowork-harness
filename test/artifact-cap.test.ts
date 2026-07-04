@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { buildManifest, artifactJsonTargetsTruncated } from "../src/run/cassette.js";
 import type { Scenario } from "../src/types.js";
 
-/** F-9: the inline-body cap is configurable, and a `record` truncates a body over the cap to hash-only. */
+/** The inline-body cap is configurable, and a `record` truncates a body over the cap to hash-only. */
 function workRootWith(files: Record<string, string>): string {
   const root = mkdtempSync(join(tmpdir(), "cwh-cap-"));
   for (const [rel, body] of Object.entries(files)) {
@@ -16,7 +16,7 @@ function workRootWith(files: Record<string, string>): string {
   return root;
 }
 
-describe("F-9: configurable artifact body cap + record-time truncation guard", () => {
+describe("configurable artifact body cap + record-time truncation guard", () => {
   it("buildManifest inlines a body at/under the cap and truncates (hash-only) over it", () => {
     const root = workRootWith({ "outputs/small.json": "{}", "outputs/big.json": JSON.stringify({ x: "y".repeat(200) }) });
     const m = buildManifest(root, 64); // cap = 64 bytes

@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=../../schema/scenario.schema.json
-# The hostloop tier's token-free replay fixture (readiness C1) AND the live two-tier check for the
-# `computer_links_resolve` assertion (readiness C3). hostloop is the newest / headline fidelity tier:
+# The hostloop tier's token-free replay fixture AND the live two-tier check for the
+# `computer_links_resolve` assertion. hostloop is the newest / headline fidelity tier:
 # the agent loop is a native host process (its file tools run on the real host, no container), and
 # only shell/web route through a Docker sidecar. This is the one tier the token-free replay lane never
 # exercised — this cassette closes that gap.
@@ -37,7 +37,7 @@ assert:
   # the resolve check below is non-vacuous (it passes trivially on zero links). The model shares the
   # file as `[View report.md](computer://…/outputs/report.md)` per its `<sharing_files>` instructions.
   - transcript_contains: "computer://"
-  # The headline check (readiness C3): every computer:// link the model emits must resolve to a real
+  # The headline check: every computer:// link the model emits must resolve to a real
   # collected artifact. At hostloop the "host" side is production's own real host path, so this is
   # where link resolution is most load-bearing.
   - computer_links_resolve: true

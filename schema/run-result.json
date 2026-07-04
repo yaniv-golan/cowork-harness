@@ -115,7 +115,7 @@
     },
     "staleness": {
       "type": "array",
-      "description": "Replay only: class-tagged cassette-staleness findings, surfaced for a token-free JSON gate. Non-failing by default (a stale but passing replay stays ok:true); --strict fails on every class, --fail-on-skill-drift on skill/shared-root/unverifiable-skill only. See SPEC \u00a711 for per-class semantics (D1 added resolved-tier + unverifiable-tier).",
+      "description": "Replay only: class-tagged cassette-staleness findings, surfaced for a token-free JSON gate. Non-failing by default (a stale but passing replay stays ok:true); --strict fails on every class, --fail-on-skill-drift on skill/shared-root/unverifiable-skill only. See SPEC \u00a711 for per-class semantics.",
       "items": {
         "type": "object",
         "required": ["class", "message"],

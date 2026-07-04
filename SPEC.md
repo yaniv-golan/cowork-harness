@@ -347,8 +347,7 @@ Behaviors real Cowork enforces via server-side GrowthBook gates (binary-verified
 states in `baseline.provenance.gates`). A skill that ignores these behaves differently in real Cowork.
 
 - **Scheduled-task session limiter** (gate `1648655587`, `{perTask:1, global:3}`). Binary-verified
-  2026-07-04 (asar 1.18286.0, `class L9t` "[ScheduledTasks]"; see
-  `docs/internal/2026-07-04-d4-dispatch-limiter-forensic.md`): this gate governs Cowork's
+  2026-07-04 (asar 1.18286.0, `class L9t` "[ScheduledTasks]"): this gate governs Cowork's
   **scheduled/recurring (cron) task** scheduler, NOT the in-conversation `Task` tool. The desktop
   host **SKIPS** launching a scheduled-task *session* that would exceed the cap
   (`recordSkipAndEmit`/`PerTaskLimit`|`GlobalLimit` — not queue, not error): **≤1 concurrent session
