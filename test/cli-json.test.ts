@@ -176,15 +176,17 @@ describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
     expect(JSON.parse(r.stdout).error.category).toBe("boundary");
   });
 
-  it("deprecated scenario field `profile:` still parses (back-compat alias) + warns on stderr", () => {
-    // `profile:` was renamed to `baseline:`; the preprocess alias accepts it for one minor with a warning.
+  it("retired scenario field `profile:` is rejected as an unknown key (no alias)", () => {
+    // `profile:` was renamed to `baseline:` and the alias is gone — it now falls through to the
+    // strictObject's unknown-key rejection instead of silently remapping to `baseline:`.
     const { cwd } = run(["--version"]);
     writeIn(cwd, "sess.yaml", "permission_mode: default\n");
     writeIn(cwd, "b.yaml", "name: b\nprofile: latest\nsession: ./sess.yaml\nfidelity: protocol\nprompt: hi\nexpect_denied: [evil.com]\n");
     const r = spawnSync("node", [CLI, "run", "b.yaml", "--output-format=json"], { encoding: "utf8", cwd });
-    expect(r.status).toBe(3); // boundary → exit 3; alias still mapped profile→baseline
-    expect(JSON.parse(r.stdout).error.category).toBe("boundary");
-    expect(r.stderr).toMatch(/`profile:` is deprecated/); // the deprecation warning fired
+    expect(r.status).toBe(2); // uncaught Zod throw → top-level catch → category `internal`, exit 2
+    expect(JSON.parse(r.stdout).error.category).toBe("internal");
+    expect(JSON.parse(r.stdout).error.message).toMatch(/unrecognized_keys/);
+    expect(JSON.parse(r.stdout).error.message).toMatch(/"profile"/);
   });
 
   it("run on a non-existent scenario path → clean usage error, exit 2 (not a raw ENOENT stack)", () => {

@@ -61,9 +61,8 @@ assert:                                  # pass/fail checks (see below)
   - egress_denied: evil.example.com
 ```
 
-> **Use `baseline:`, not `profile:`.** `profile:` was an earlier name for this key; the harness still
-> remaps a top-level `profile:` to `baseline:` and emits a `::warning::` if it sees one, but write
-> `baseline:`.
+> **Use `baseline:`, not `profile:`.** `profile:` was an earlier name for this key; it is retired —
+> a scenario carrying `profile:` now errors as an unknown key, so write `baseline:`.
 
 ## Fidelity tiers (`fidelity:`)
 

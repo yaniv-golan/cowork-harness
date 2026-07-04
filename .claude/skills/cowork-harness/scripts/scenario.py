@@ -126,8 +126,9 @@ if UNCLASSIFIED_KEYS:
     )
 # Embedded fallback for the top-level scenario keys — kept EQUAL to the generated `topLevelKeys`
 # (test-enforced, like _CLASSIFIED_KEYS for assert keys) so a missing assertion-keys.json can't silently
-# reintroduce key drift. `profile`/`assertions` are NOT here — they are deprecated aliases handled by the
-# special-cases in the unknown-key check below (`k != "assertions" and k != "profile"`).
+# reintroduce key drift. `assertions` is NOT here — it's a hard error handled by its own special-case
+# in the unknown-key check below (`k != "assertions"`). `profile` is retired vocabulary and now falls
+# through to that same unknown-key check like any other typo — no special-case for it.
 _EMBEDDED_TOP_LEVEL_KEYS = {
     "name",
     "baseline",
@@ -260,7 +261,7 @@ def lint_doc(doc, path, raw_lines):
 
     # W: unknown top-level keys (typo or hallucinated schema)
     for k in doc:
-        if k not in TOP_LEVEL_KEYS and k != "assertions" and k != "profile":
+        if k not in TOP_LEVEL_KEYS and k != "assertions":
             findings.append(
                 Finding(
                     "WARN",

@@ -9,7 +9,7 @@
     },
     "baseline": {
       "default": "latest",
-      "description": "platform baseline to run against (auto-synced via `cowork-harness sync`); `profile:` is a deprecated alias for this field",
+      "description": "platform baseline to run against (auto-synced via `cowork-harness sync`)",
       "type": "string"
     },
     "session": {

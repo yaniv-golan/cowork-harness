@@ -26,6 +26,12 @@ All notable changes to this project are documented here. The format is based on
     and VM-shaped links pass through; tool lines are excluded — they truncate at ~80 chars and a
     sliced URL would link to a wrong target). Piped/non-TTY output stays byte-identical.
 
+### Removed
+
+- **The `profile:` scenario-field alias.** The top-level `profile:` key (an earlier name for
+  `baseline:`) is no longer accepted — it was silently remapped with a deprecation warning; it now
+  errors as an unknown key. Use `baseline:`.
+
 ### Fixed
 
 - **`doctor --tier microvm` now detects an unprovisioned Lima instance.** It previously checked only
