@@ -113,6 +113,52 @@ cannot know; emitting fabricated values would be a worse divergence than their d
 
 ---
 
+## Guest runtime identity — per-session Unix user, uid/gid, and HOME
+
+**Real Cowork behaviour (runtime-verified 2026-07-04 against coworkd's own logs, recovered from a
+local install's VM disk images, Desktop 1.18286.0-era):** inside the VM, Cowork's init (`coworkd`)
+provisions a **dedicated Unix account per session** at session start —
+`useradd -u <uid> -g <gid> -M -d /sessions/<slug> -s /bin/bash <slug>` — and spawns both the agent
+process (`/usr/local/bin/claude`) and every `bash` tool call as that user, via per-command
+`oneshot-<uuid>` supervisor jobs that also perform the session's mounts. Username = the session
+slug; uid = gid, allocated sequentially upward per session (observed 1014–1455 on one long-lived
+image); `HOME=/sessions/<slug>` — the **writable session root**, not a throwaway dir. (Internal
+service sessions get the same treatment under other names, e.g. `office-convert-<hex8>` for
+LibreOffice conversions.)
+
+**Harness behaviour:** the container/microvm agent runs as the image's **static uid-1000 `ubuntu`**
+user (`docker/Dockerfile.agent`) with a forced **`HOME=/tmp`** (`spawnEnv`,
+`src/runtime/argv.ts`). The hostloop *native* agent runs as the real macOS user — faithful, since
+production's host-loop process does too — but its VM sidecar (bash/web) shares the container-tier
+identity. Observable divergences for a skill: `whoami` (slug vs `ubuntu`), `id -u` (per-session
+value ≥1014 vs 1000), `~`/`$HOME` resolution (`/sessions/<slug>` vs `/tmp` — a `~`-relative write
+lands in the session tree in production but in the container tmpfs here), and file ownership as
+shown by `ls -l`.
+
+**Why:** the uid-1000 choice predates this evidence — "the real rootfs does" described the image's
+static `/etc/passwd`, not the runtime account coworkd creates. Currently a documented divergence;
+the HOME value is a cheap env fix, and username/uid parity is feasible (a generated passwd bind +
+`--user`) but unimplemented. Matters only to skills that read their own identity or write under
+`~`.
+
+---
+
+## Session slug shape
+
+**Real Cowork behaviour (same forensic source):** VM session slugs are Docker-style name triples
+`<adjective>-<adjective>-<noun>` (e.g. `beautiful-bold-planck`, `friendly-laughing-bell`) —
+hundreds observed, zero UUID-shaped. A `local_<uuid>` shape *does* exist in production, but only
+**host-side**, as Desktop's session-record filenames (`claude-code-sessions/…/local_<uuid>.json`),
+never as the in-VM `/sessions/<slug>` path.
+
+**Harness behaviour:** `local_<hrtime-base36>` (e.g. `local_9hldogcxp`; `src/run/execute.ts`), or
+`sess-<id>` under `--session-id` — coincidentally shaped like production's *host-side* record id,
+in the guest position where production puts a name triple. Nothing in the harness or its scanners
+parses slug shape (they match on the `/sessions/` prefix), so this is cosmetic — visible only to a
+skill that echoes or pattern-matches its own cwd.
+
+---
+
 ## Gate `1648655587` is the scheduled-task session limiter — no in-conversation Task cap exists
 
 **What the gate actually is (binary-verified 2026-07-04, asar 1.18286.0):** gate `1648655587`

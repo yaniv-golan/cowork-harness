@@ -8,6 +8,19 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **Two new documented fidelity gaps: guest runtime identity and session-slug shape.**
+  Runtime forensics over a local install's Cowork VM disk images (coworkd's own logs) established
+  that production provisions a **dedicated Unix user per session** inside the VM (`useradd`,
+  name = session slug, uid=gid sequential ≥1014, `HOME=/sessions/<slug>`) and spawns the agent and
+  every bash call as that user via `oneshot-<uuid>` supervisor jobs — where the harness's
+  container/microvm tiers run static uid-1000 `ubuntu` with `HOME=/tmp`. Production's in-VM slugs
+  are Docker-style name triples (`beautiful-bold-planck`), not the harness's `local_<hrtime36>`;
+  the `local_<uuid>` shape exists in production only as Desktop's host-side session-record
+  filenames. Both are recorded in `docs/fidelity-gaps.md` with observable consequences (`whoami`,
+  `id -u`, `~`-relative writes, cwd shape); the `Dockerfile.agent` uid-1000 comment no longer
+  claims runtime parity. Initial lead credit: the founder-skills project's journald forensics,
+  independently re-verified here against this machine's own VM images before documenting.
+
 - **The `verify-cassettes` JSON envelope is now a published, 1.0-covered contract surface.**
   SPEC §12's covered list previously named the RunResult envelope but was silent on §11.1's
   `verify-cassettes` envelope — even though the CI recipe and the packaged GitHub Action steer

@@ -106,8 +106,12 @@ RUN if [ "$COWORK_FULL_PARITY" = "1" ]; then \
         unoserver==3.6 pyoo==1.4 ; \
     fi
 
-# --- Run as uid 1000 `ubuntu` (the real rootfs does; the ubuntu:22.04 *docker* base has no
-#     uid-1000 user, so we create it). Privileged steps above run as root; USER is set LAST. ---
+# --- Run as uid 1000 `ubuntu` (the rootfs image's static /etc/passwd user; the ubuntu:22.04
+#     *docker* base has no uid-1000 user, so we create it). NB this is a KNOWN divergence: at
+#     runtime production's coworkd useradd's a dedicated per-session account (name = session slug,
+#     uid=gid sequential >=1014, HOME=/sessions/<slug>) and spawns the agent as it — see
+#     docs/fidelity-gaps.md "Guest runtime identity". Privileged steps above run as root; USER is
+#     set LAST. ---
 RUN useradd -u 1000 -m -s /bin/bash ubuntu \
     && mkdir -p /workspace /opt/cowork/cli-wrapper /smol/bin \
     && chown 1000:1000 /workspace \
