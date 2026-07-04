@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.24.0] — 2026-07-05
+
 ### Added
 
 - **`no_unexpected_files` assertion** — per-scenario glob allowlist over **newly created** files under the
