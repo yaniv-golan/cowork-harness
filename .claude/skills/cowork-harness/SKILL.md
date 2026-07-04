@@ -366,9 +366,12 @@ are the ones that bite hardest.
    sub-agent used other tools. And `subagent_dispatched` matches by dispatch **description** too —
    skills often dispatch with no `subagent_type` (`agentType:"unknown"`), so match the description.
 
-6. **`dispatch_count_max` asserts but does NOT enforce.** The harness records the count; it does not
-   reproduce Cowork's skip-on-cap (`{perTask:1, global:3}`, deferred). Passing means "happened to
-   dispatch ≤N this run," not "the harness capped it." Don't read enforcement into the assert.
+6. **`dispatch_count_max` is an author-chosen budget, not a production cap.** It's a post-hoc count
+   assertion: passing means "happened to dispatch ≤N this run," nothing more. Cowork imposes **no**
+   in-conversation `Task`-dispatch cap — gate `1648655587`'s `{perTask:1, global:3}` governs the
+   separate scheduled/cron-task session scheduler, not the `Task` tool (binary-verified; see SPEC
+   §10). So there is no "skip-on-cap" for the harness to reproduce; use this key only to catch a
+   fan-out you don't want.
 
 7. **`protocol` is rejected (not silently passed) if the scenario asserts egress** — boundary
    assertions need a sandboxed tier (`container`+). Good: this one fails loud by design.

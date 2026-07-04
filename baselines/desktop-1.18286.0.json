@@ -238,7 +238,7 @@
           "perTask": 1,
           "global": 3
         },
-        "note": "perTask=1 global=3 (host-side SKIP: recordSkipAndEmit/GCA.PerTaskLimit — NOT queue/deny). A dispatch session launches <=1 sub-task; <=3 concurrent globally."
+        "note": "SCHEDULED-TASK (cron) session limiter — NOT an in-conversation Task-tool cap (binary-verified 2026-07-04, asar 1.18286.0 class L9t [ScheduledTasks]; see docs/internal/2026-07-04-d4-dispatch-limiter-forensic.md). perTask=1: <=1 concurrent session PER SCHEDULED TASK; global=3: <=3 concurrent scheduled-task sessions globally (+_pendingTaskDispatches). Host-side SKIP (recordSkipAndEmit/PerTaskLimit|GlobalLimit — NOT queue/deny). Cowork imposes no cap on Task-tool sub-agent fan-out; the harness has no scheduled-task scheduler, so this gate has no applicable surface — pinned as a sync drift-sentinel only."
       },
       "memoryGuidelinesEnv:1696890383": {
         "on": false,

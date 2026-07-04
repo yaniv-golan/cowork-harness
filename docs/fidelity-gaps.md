@@ -113,19 +113,27 @@ cannot know; emitting fabricated values would be a worse divergence than their d
 
 ---
 
-## Task-dispatch cap not enforced at runtime
+## Gate `1648655587` is the scheduled-task session limiter — no in-conversation Task cap exists
 
-**Real Cowork behaviour:** Desktop enforces a Task-dispatch rate limit — it **skips** agent Task
-dispatches beyond `{perTask: 1, global: 3}` (binary-verified gate `1648655587`).
+**What the gate actually is (binary-verified 2026-07-04, asar 1.18286.0):** gate `1648655587`
+(`{perTask:1, global:3}`) governs Cowork's **scheduled/recurring (cron) task** scheduler (`class
+L9t` "[ScheduledTasks]"), NOT the in-conversation `Task` tool. It skips launching a scheduled-task
+*session* beyond **≤1 concurrent session per scheduled task** / **≤3 concurrent scheduled-task
+sessions globally**. Forensic write-up + one adversarial-review round (CONFIRMED):
+[`docs/internal/2026-07-04-d4-dispatch-limiter-forensic.md`](./internal/2026-07-04-d4-dispatch-limiter-forensic.md).
+This corrects an earlier mislabeling of this gate as an in-conversation "Task-dispatch
+rate-limiter."
 
-**Harness behaviour:** The harness does **not** cap Task dispatches at runtime — a skill that fans out
-more than three sub-agents runs all of them, where production would skip the overflow. The gate is
-pinned as a sync drift-sentinel only (`src/sync/cowork-sync.ts`), not enforced.
+**Real Cowork behaviour for the `Task` tool:** none of the above applies — the Desktop imposes **no
+concurrency cap** on in-conversation `Task`-tool sub-agent fan-out (the `Task` PreToolUse hook only
+blocks `run_in_background`). So a skill that fans out many sub-agents in one conversation is not
+throttled in production either.
 
-**Mitigation:** the `dispatch_count_max` assertion (`src/assert.ts`; its failure message cites the
-SPEC §10 `{global:3}` cap) lets a scenario catch dispatch overage post-hoc, so the divergence is
-detectable even though the runtime behaviour differs. A faithful runtime limiter is planned
-(consumer demand exists); this entry documents the gap until it lands.
+**Harness behaviour:** the harness runs a single foreground session and has no scheduled-task
+scheduler, so gate `1648655587` has **no applicable surface** to reproduce; it is pinned only as a
+sync drift-sentinel (`src/sync/cowork-sync.ts`). There is no production Task-fan-out cap to be
+unfaithful to. `dispatch_count_max` (`src/assert.ts`) remains a useful **author-chosen** budget
+assertion — catch a fan-out you don't want — not enforcement of a production cap.
 
 ---
 

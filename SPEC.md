@@ -346,13 +346,18 @@ Assert the **binary** still matches the contract (run on `sync`, skip without to
 Behaviors real Cowork enforces via server-side GrowthBook gates (binary-verified, app.asar 1.12603.1;
 states in `baseline.provenance.gates`). A skill that ignores these behaves differently in real Cowork.
 
-- **Task-dispatch rate-limiter** (gate `1648655587`, `{perTask:1, global:3}`). The desktop host
-  **SKIPS** a Task dispatch that would exceed the cap (`recordSkipAndEmit`/`GCA.PerTaskLimit` —
-  **not** queue, not error): a dispatch session launches **≤1 sub-task per task** and **≤3 concurrent
-  globally**. Enforcement in the harness is **DEFERRED** to a planned sub-agent dispatch tree;
-  until then the harness **does not** cap, so a multi-sub-agent skill that
-  passes here may throttle in real Cowork. SPEC records the constraint; the planned trace/canary must
-  surface dispatch counts against `{perTask:1, global:3}`.
+- **Scheduled-task session limiter** (gate `1648655587`, `{perTask:1, global:3}`). Binary-verified
+  2026-07-04 (asar 1.18286.0, `class L9t` "[ScheduledTasks]"; see
+  `docs/internal/2026-07-04-d4-dispatch-limiter-forensic.md`): this gate governs Cowork's
+  **scheduled/recurring (cron) task** scheduler, NOT the in-conversation `Task` tool. The desktop
+  host **SKIPS** launching a scheduled-task *session* that would exceed the cap
+  (`recordSkipAndEmit`/`PerTaskLimit`|`GlobalLimit` — not queue, not error): **≤1 concurrent session
+  per scheduled task** and **≤3 concurrent scheduled-task sessions globally** (`_pendingTaskDispatches`
+  included). It does **not** cap in-conversation `Task`-tool sub-agent fan-out — the Desktop imposes
+  no such cap at all (the `Task` PreToolUse hook only blocks `run_in_background`). The harness runs a
+  single foreground session with no scheduled-task scheduler, so this gate has **no applicable
+  surface** to reproduce; it is pinned only as a sync drift-sentinel. `dispatch_count_max` remains an
+  author-chosen budget assertion, not enforcement of this gate.
 - **`web_fetch` routing** (gate `1978029737`, `coworkWebFetchViaApi:true`) — see §6; implemented.
 - **Env vars that DON'T affect skill behavior** (documented as not-needed, per the fidelity filter):
   `CLAUDE_CODE_DONT_INHERIT_ENV` (moot under host-loop, which disables native Bash), the bg

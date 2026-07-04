@@ -429,7 +429,9 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
         ? fail(`evidence unavailable: sub-agent dispatch tree absent from result.json — cannot evaluate dispatch_count_max`)
         : ctx.subagents.length <= a.dispatch_count_max
           ? ok()
-          : fail(`dispatched ${ctx.subagents.length} sub-agents, max ${a.dispatch_count_max} (SPEC §10 cap {global:3})`),
+          : fail(
+              `dispatched ${ctx.subagents.length} sub-agents, max ${a.dispatch_count_max} (author-chosen budget; Cowork imposes no in-conversation Task-dispatch cap — see SPEC §10)`,
+            ),
     );
   if (a.skill_triggered !== undefined) {
     const c = compileUserRegex(a.skill_triggered);

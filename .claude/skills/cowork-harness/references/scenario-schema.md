@@ -228,7 +228,7 @@ passes only if every key passes. Keep one concern per item unless you mean conju
 | `subagent_tool_absent: <Tool>` | no sub-agent used the tool |
 | `subagent_dispatched: <regex>` | a sub-agent whose `agentType` **or dispatch description** matches |
 | `subagent_declared_but_unused: <Tool>` | a sub-agent declared the tool but never used **that** tool (even if it used others) |
-| `dispatch_count_max: <N>` | at most N sub-agents dispatched (records only — does NOT enforce a cap) |
+| `dispatch_count_max: <N>` | at most N sub-agents dispatched — an author-chosen budget (Cowork imposes no in-conversation Task-dispatch cap; records only, enforces nothing — see gotcha 12) |
 | `skill_triggered: <regex>` | a skill matching the regex (invoked id, e.g. `"plugin:skill"`) was invoked via the `Skill` tool — evidence-unavailable (not a normal fail) if the agent's init tools have no `Skill` tool |
 | `no_skill_triggered: <regex>` | no invoked skill id matched — the negative-control / description-collision catcher; evidence-unavailable (never a vacuous pass) if invocation data is absent or the `Skill` tool is unobservable |
 | `max_cost_usd: <N>` | the run's SDK-reported cost is ≤ N USD — evidence-unavailable if cost telemetry is absent. **Replay asserts the frozen recording's cost, not fresh spend** — a real regression needs a live `run` |
@@ -410,9 +410,11 @@ at the top of this file.
 11. **`subagent_declared_but_unused` fires on declared-but-didn't-use-THAT-tool**, even if the
     sub-agent used other tools.
 
-12. **`dispatch_count_max` asserts but does NOT enforce.** It records the count; it does not
-    reproduce Cowork's skip-on-cap (`{perTask:1, global:3}`, deferred). Passing means "dispatched ≤N
-    this run," not "the harness capped it."
+12. **`dispatch_count_max` is an author-chosen budget, not a production cap.** It records the count
+    and asserts on it; passing means "dispatched ≤N this run," not "the harness capped it." Cowork
+    imposes no in-conversation Task-dispatch cap to reproduce — gate `1648655587`'s
+    `{perTask:1, global:3}` is the scheduled/cron-task session limiter, a different mechanism
+    (binary-verified; SPEC §10).
 
 13. **`protocol` is rejected (not silently passed) if the scenario asserts egress** — boundary
     assertions need `container`+. Fails loud by design.
