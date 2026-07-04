@@ -58,6 +58,41 @@ describe("makeDisplayTranslator — policy gate", () => {
   });
 });
 
+// CONTRACT test: this is the table a future frontend (TUI, web view) copies wholesale instead of
+// re-deriving the gate. It enumerates the full space named in the module header's three invariants —
+// fidelity as a STRING axis (not collapsed to a hostloop/non-hostloop boolean) × ctx-present/absent ×
+// shareable true/false — and asserts translate-vs-identity for every combination. The per-fidelity
+// `describe` block above stays: it pins the exact translated OUTPUT for two individual tiers, which this
+// table (deliberately) does not re-check per row.
+describe("makeDisplayTranslator — CONTRACT: gate space (fidelity × ctx × shareable)", () => {
+  const vmText = "see /sessions/sess1/mnt/outputs/report.pdf";
+  const hostText = "see /host/outputs/report.pdf";
+
+  const fidelities: Array<string | undefined> = ["hostloop", "container", "protocol", "microvm", undefined];
+
+  const rows: Array<{ fidelity: string | undefined; ctxPresent: boolean; shareable: boolean }> = [];
+  for (const fidelity of fidelities) {
+    for (const ctxPresent of [true, false]) {
+      for (const shareable of [true, false]) {
+        rows.push({ fidelity, ctxPresent, shareable });
+      }
+    }
+  }
+
+  it.each(rows)(
+    "fidelity=$fidelity ctx=$ctxPresent shareable=$shareable -> translate iff hostloop && ctx && !shareable",
+    ({ fidelity, ctxPresent, shareable }) => {
+      const t = makeDisplayTranslator({
+        ctx: ctxPresent ? baseCtx() : undefined,
+        effectiveFidelity: fidelity,
+        shareable,
+      });
+      const expectTranslate = fidelity === "hostloop" && ctxPresent && !shareable;
+      expect(t(vmText)).toBe(expectTranslate ? hostText : vmText);
+    },
+  );
+});
+
 describe("makeDisplayTranslator — hostloop mode: computer:// link percent-encoding", () => {
   it("percent-encodes a host path with a space in markdown-link position", () => {
     const t = makeDisplayTranslator({ ctx: baseCtx(), effectiveFidelity: "hostloop", shareable: false });

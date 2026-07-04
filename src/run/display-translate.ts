@@ -3,12 +3,28 @@ import type { VmPathContext } from "../vm-paths.js";
 import { deepTranslateVMPaths } from "../vm-paths.js";
 
 /**
- * The single policy closure that decides WHETHER a run's display surfaces (the live renderer today;
- * any future consumer of the same `AgentEvent` stream — a TUI, a web view — tomorrow) rewrite VM paths
- * to host paths, and performs the rewrite when they do. This is deliberately factored OUT of the
+ * CONTRACT: this module is the SINGLE policy seam for translating model-visible VM paths into
+ * human-displayed paths. The closure here decides WHETHER a run's display surfaces (the live renderer
+ * today; any future consumer of the same `AgentEvent` stream — a TUI, a web view — tomorrow) rewrite VM
+ * paths to host paths, and performs the rewrite when they do. It is deliberately factored OUT of the
  * renderer (see docs/internal/2026-07-03-computer-link-scheme-research-and-plan.md, "Forward-
- * compatibility — a future full TUI") so the policy can't drift between consumers: every frontend gets
- * this same closure, never its own copy of the gate condition.
+ * compatibility — a future full TUI", for the full rationale) so the policy can't drift between
+ * consumers: any future frontend MUST consume `makeDisplayTranslator` + `vmPathContextFromPlan` rather
+ * than re-deriving these rules against its own copy of the gate condition.
+ *
+ * Three invariants make up the gate (each enforced by a dedicated CONTRACT test in
+ * test/display-translate.test.ts — copy that table, don't hand-roll a new gate check):
+ *   1. **hostloop-only** — translate iff `effectiveFidelity === "hostloop"`. WHY: that's the one tier
+ *      where the resolved host path is production-identical; at container/microvm/protocol a mount's
+ *      "host" side is harness-internal staging, so translating there would be LESS faithful than the
+ *      VM-shaped path production's own model also emits.
+ *   2. **identity-without-ctx** — translate iff a `VmPathContext` was supplied. WHY: replay has no
+ *      LaunchPlan/run-dir to resolve against — there is nothing to translate against, so identity is the
+ *      only correct behavior, matching today's raw-VM-path replay rendering.
+ *   3. **identity-when-shareable** — translate iff NOT `shareable` (e.g. `--compact`/`--demo`, or a
+ *      future frontend's own export/share mode). WHY: shareable output must never leak a real host path
+ *      (`/Users/…`) into something meant to be handed to someone else; this suppression wins even at
+ *      hostloop with a ctx present.
  */
 export interface DisplayTranslateOptions {
   /** The run's VM-path resolution context (mounts + run dirs). Absent for replay (a cassette has no
