@@ -1,6 +1,6 @@
 import { join, resolve } from "node:path";
 import type { VmPathContext } from "../vm-paths.js";
-import { deepTranslateVMPaths } from "../vm-paths.js";
+import { deepTranslateVMPaths, normalizeEncodePath } from "../vm-paths.js";
 
 /**
  * CONTRACT: this module is the SINGLE policy seam for translating model-visible VM paths into
@@ -91,4 +91,178 @@ export function vmPathContextFromPlan(
     uploadsHostDir: join(mntHost, "uploads"),
     folders,
   };
+}
+
+// --- linkifyForTerminal: OSC 8 hyperlink decoration ---------------------------------------------
+//
+// This is a PRESENTATION decorator, not policy — it is the sibling of the closure above, not part of
+// it. `makeDisplayTranslator` decides WHAT a path says (VM path vs. host path); `linkifyForTerminal`
+// decides how a TERMINAL shows a `computer://` occurrence that's already there (a clickable OSC 8
+// escape, on terminals that render it; invisible escapes around unchanged plain text on ones that
+// don't). It never rewrites path content, so unlike `makeDisplayTranslator` it needs no
+// `VmPathContext` and no fidelity/shareable gate of its own — the caller applies it only when that's
+// appropriate (see `shouldLinkify` below), and, independent of that, it only ever wraps HOST-shaped
+// payloads: a VM-shaped `/sessions/<id>/...` link has nothing on the host filesystem to resolve to,
+// so it is always left exactly as written regardless of caller gating.
+
+const OSC8_START = "\x1b]8;;";
+const OSC8_SEP = "\x1b\\"; // ST (String Terminator) — closes the OSC 8 URI param before the display text
+const OSC8_CLOSE = `${OSC8_START}${OSC8_SEP}`; // an empty-URI OSC 8 sequence ends the hyperlink
+
+/** Same three-alternative scan order as vm-paths.ts's `encodeComputerUrlsForHostLoop` / computer-
+ *  links.ts's `extractComputerLinks` (backtick-quoted, then markdown-link-open, then bare token) — a
+ *  verified-safe pattern for telling the three `computer://` positions apart without double-counting
+ *  a markdown/backtick occurrence as a bare token too. Both of those functions' own copies are
+ *  module-private, so this is a small local re-statement of the same regex rather than a shared
+ *  export (promoting it was out of this item's file scope; the three copies are kept in sync by
+ *  inspection — each is ~1 line). */
+const LINK_SCAN_RE = /(`computer:\/\/[^`]+`)|(\]\(computer:\/\/)|(computer:\/\/)/g;
+
+const BARE_TOKEN_DELIMITERS = new Set(['"', "`", "]", "\\"]);
+
+/** Paren-balanced token scanner — a local copy of vm-paths.ts's `scanTokenEnd` (module-private
+ *  there). Scans forward from `start` for the end of a path-ish token: parens are balanced (so
+ *  `report (draft).pdf` isn't cut at its own inner `)`); when `delimiters` is given, scanning also
+ *  stops at the first delimiter char (or whitespace) seen at paren-depth 0. Returns the index one
+ *  past the last token character. */
+function scanTokenEnd(text: string, start: number, delimiters: Set<string> | null): number {
+  let depth = 0;
+  let lastOpenParen = -1;
+  for (let i = start; i < text.length; i++) {
+    const ch = text.charAt(i);
+    if (ch === "(") {
+      if (depth === 0) lastOpenParen = i;
+      depth++;
+    } else if (ch === ")") {
+      if (depth === 0) return i;
+      depth--;
+      if (depth === 0) lastOpenParen = -1;
+    } else if (depth === 0 && delimiters !== null && (delimiters.has(ch) || /\s/.test(ch))) {
+      return i;
+    }
+  }
+  return depth > 0 ? lastOpenParen : text.length;
+}
+
+/** Percent-decode a `/`-delimited payload one segment at a time (mirrors vm-paths.ts's own
+ *  per-segment decode discipline — never a whole-string `decodeURIComponent`, so an already-decoded
+ *  literal `%` in one segment can't corrupt an adjacent one). Used only to classify the payload's
+ *  SHAPE (host vs. VM); the URI itself is built via `normalizeEncodePath`, which does its own
+ *  decode-then-re-encode pass. */
+function decodePathSegments(payload: string): string {
+  return payload
+    .split("/")
+    .map((seg) => {
+      try {
+        return decodeURIComponent(seg);
+      } catch {
+        return seg; // not percent-encoded (or malformed) — keep as given
+      }
+    })
+    .join("/");
+}
+
+/** True for a decoded `computer://` payload that is HOST-shaped: an absolute path (`/`-rooted) that
+ *  is NOT itself VM-shaped (`/sessions/...`). Only host-shaped payloads have a `file://` target that
+ *  resolves on THIS machine — a VM-shaped payload (still `/sessions/<id>/...` because this run never
+ *  translated it: a non-hostloop tier, or hostloop with no ctx) names nothing on the host. */
+function isHostShapedPayload(decoded: string): boolean {
+  return decoded.startsWith("/") && !decoded.startsWith("/sessions/");
+}
+
+/** Wrap `displayText` (the untouched, original `computer://...` substring) in an OSC 8 hyperlink
+ *  whose target is `file://` + the host path, normalized via `normalizeEncodePath` — decode-then-
+ *  re-encode, NEVER a second raw encode pass over `displayPayload` (which may already be percent-
+ *  encoded from the markdown/bare-token translate pass — a second encode would turn `%20` into
+ *  `%2520`). */
+function wrapOSC8(displayText: string, displayPayload: string): string {
+  const uri = "file://" + normalizeEncodePath(displayPayload);
+  return `${OSC8_START}${uri}${OSC8_SEP}${displayText}${OSC8_CLOSE}`;
+}
+
+/**
+ * Decorate every HOST-shaped `computer://<absolute host path>` occurrence in `text` with an OSC 8
+ * hyperlink escape: `\x1b]8;;file://<host, normalize-encoded>\x1b\\<original computer:// text>\x1b]8;;\x1b\\`.
+ * The DISPLAYED text is always the ORIGINAL `computer://...` substring, byte-for-byte — a non-OSC-8-
+ * aware pipe or terminal sees exactly today's plain output (the escapes are invisible or a no-op on
+ * every other terminal). Pure and TUI-reusable: this function does no gating of its own (see
+ * `shouldLinkify`) and touches only the string handed to it.
+ *
+ * Positions (rev 2, binding):
+ *   - Markdown-link (`](computer://...)`) and bare tokens are linkified when host-shaped.
+ *   - Backtick-quoted (`` `computer://...` ``) spans are NEVER linkified — a code span is a
+ *     quotation, not an affordance, and it sidesteps that position's deliberately-unencoded payload.
+ *   - VM-shaped payloads (`/sessions/...`) are left exactly as written at every position — nothing on
+ *     the host resolves them.
+ *
+ * Idempotent: an occurrence already immediately preceded by this function's own OSC 8 opening
+ * terminator (`\x1b\\`) is left untouched rather than wrapped again — this also rules out double-
+ * ENCODING (an already-wrapped occurrence's URI is never re-run through `normalizeEncodePath`), not
+ * just double-wrapping.
+ */
+export function linkifyForTerminal(text: string): string {
+  if (!text.includes("computer://")) return text;
+  const re = new RegExp(LINK_SCAN_RE.source, "g");
+  let out = "";
+  let cursor = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    const whole = m[0];
+    const backtick = m[1];
+    const markdownOpen = m[2];
+    const bare = m[3];
+    out += text.slice(cursor, m.index);
+    if (backtick !== undefined) {
+      // Code spans are quotations, not affordances — never linkified, matching the module doc above.
+      out += backtick;
+      cursor = m.index + whole.length;
+    } else if (markdownOpen !== undefined) {
+      const contentStart = m.index + whole.length;
+      const end = scanTokenEnd(text, contentStart, null);
+      if (text.charAt(end) === ")") {
+        const captured = text.slice(contentStart, end);
+        const decoded = decodePathSegments(captured);
+        out += isHostShapedPayload(decoded)
+          ? markdownOpen.slice(0, 2) + wrapOSC8(`computer://${captured}`, captured)
+          : markdownOpen + captured;
+        out += ")";
+        cursor = end + 1;
+      } else {
+        // Unterminated `](computer://…` — leave verbatim, matching production's own lenient handling.
+        out += markdownOpen;
+        cursor = contentStart;
+      }
+    } else if (bare !== undefined) {
+      // A bare token immediately preceded by our own OSC 8 opening terminator is already wrapped —
+      // skip it rather than wrap (or re-encode) it a second time.
+      const alreadyWrapped = text.slice(0, m.index).endsWith(OSC8_SEP);
+      const contentStart = m.index + whole.length;
+      const end = scanTokenEnd(text, contentStart, BARE_TOKEN_DELIMITERS);
+      const captured = text.slice(contentStart, end);
+      if (!alreadyWrapped && isHostShapedPayload(decodePathSegments(captured))) {
+        out += wrapOSC8(`computer://${captured}`, captured);
+      } else {
+        out += bare + captured;
+      }
+      cursor = end;
+    }
+    re.lastIndex = cursor;
+  }
+  out += text.slice(cursor);
+  return out;
+}
+
+/**
+ * The hyperlink decoration gate (rev 2, item 3.2 — ALL must hold): the sink is a real TTY
+ * (`stderr.isTTY`, since the renderer only ever writes decoration to stderr); `CI` is unset (CI logs
+ * are files, not an interactive terminal someone clicks in — mirrors the existing `!process.env.CI`
+ * TTY gate at the `--on-unanswered` default, cli.ts); `COWORK_HARNESS_NO_HYPERLINKS` is unset (an
+ * explicit opt-out, same naming precedent as `COWORK_HARNESS_NO_HEARTBEAT` in renderer.ts); and the
+ * output isn't `shareable` (`--compact`/`--demo`, or chat's fixed non-shareable `false` — escape
+ * sequences in shareable output are noise, same reasoning `makeDisplayTranslator`'s own `shareable`
+ * leg uses). Exported as a small pure function (rather than gating inline at each call site) so the
+ * gate itself is unit-testable without monkeypatching `process`.
+ */
+export function shouldLinkify(env: Record<string, string | undefined>, isTTY: boolean, shareable: boolean): boolean {
+  return isTTY && !env.CI && !env.COWORK_HARNESS_NO_HYPERLINKS && !shareable;
 }

@@ -131,7 +131,12 @@ function normalizeEncodeSegment(segment: string): string {
   return percentEncodeSegment(decoded);
 }
 
-function normalizeEncodePath(path: string): string {
+/** Decode-then-re-encode a whole `/`-delimited path, one segment at a time (see
+ *  `normalizeEncodeSegment`). Exported for `src/run/display-translate.ts`'s `linkifyForTerminal`,
+ *  which needs the SAME normalization when building a `file://` URI from a `computer://` payload
+ *  that may already be percent-encoded — a second raw `encodeURIComponent` pass there would turn an
+ *  already-encoded `%20` into `%2520`. */
+export function normalizeEncodePath(path: string): string {
   return path.split("/").map(normalizeEncodeSegment).join("/");
 }
 

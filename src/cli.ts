@@ -52,7 +52,7 @@ import {
   runsRoot,
 } from "./run/trace-view.js";
 import { loadVmPathContext } from "./run/vm-path-ctx-file.js";
-import { makeDisplayTranslator } from "./run/display-translate.js";
+import { makeDisplayTranslator, linkifyForTerminal, shouldLinkify } from "./run/display-translate.js";
 import { readIndex, reindexFromRunsTree, buildStats, resolveRunsFromIndex, type RunIndexRow, type StatsSummary } from "./run/run-index.js";
 import {
   canonicalizeInput,
@@ -1007,7 +1007,14 @@ async function runOneScenario(p: {
   // share the RenderPlan object itself. Default: identity (matches today's behavior at every non-hostloop
   // tier, and if executeScenario never gets a chance to fill it in).
   const translateRef: { current: (s: string) => string } = { current: (s) => s };
-  const renderer = o.render ? makeRenderer({ ...o.plan, translate: (s: string) => translateRef.current(s) }) : undefined;
+  // OSC 8 hyperlink decoration gate: decided HERE, at plan construction — not inside makeRenderer,
+  // whose Sink is injectable and shouldn't sniff process.* itself. `process.stderr.isTTY` mirrors the
+  // renderer's own sink target; `!process.env.CI` mirrors the existing TTY gate at the
+  // --on-unanswered default just above (~line 914); `COWORK_HARNESS_NO_HYPERLINKS` is an explicit
+  // opt-out (same naming precedent as `COWORK_HARNESS_NO_HEARTBEAT`, renderer.ts); `o.plan.compact`
+  // covers --compact/--demo (shareable output stays escape-free, same leg `shouldLinkify` documents).
+  const linkify = o.render && shouldLinkify(process.env, process.stderr.isTTY === true, o.plan.compact) ? linkifyForTerminal : undefined;
+  const renderer = o.render ? makeRenderer({ ...o.plan, translate: (s: string) => translateRef.current(s), linkify }) : undefined;
   if (!o.json && !flags.quiet) renderStart(label, scenario.fidelity, o.plan);
   const start = Date.now();
   const stopHeartbeat = o.json || externalChannel ? () => {} : startHeartbeat(renderer, o.plan, start);

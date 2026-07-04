@@ -9,7 +9,7 @@ import { spawnContainer } from "../runtime/container.js";
 import { spawnHostLoop } from "../runtime/hostloop.js";
 import { spawnProtocol } from "../runtime/protocol.js";
 import { renderPrompts } from "../prompt.js";
-import { makeDisplayTranslator, vmPathContextFromPlan } from "./display-translate.js";
+import { makeDisplayTranslator, vmPathContextFromPlan, linkifyForTerminal, shouldLinkify } from "./display-translate.js";
 import { writeVmPathContextFile } from "./vm-path-ctx-file.js";
 import { startEgressSidecar, registerCleanup } from "../egress/sidecar.js";
 import { Scenario } from "../types.js";
@@ -283,6 +283,10 @@ export async function cmdChat(args: string[]) {
       effectiveFidelity: fidelity,
       shareable: false,
     }),
+    // Same TTY/CI/env gate as run/skill's plan construction (cli.ts) — decided HERE at plan
+    // construction, not inside makeRenderer. `shareable: false` mirrors the `makeDisplayTranslator`
+    // call just above (chat has no --compact/--demo equivalent).
+    linkify: shouldLinkify(process.env, process.stderr.isTTY === true, false) ? linkifyForTerminal : undefined,
   };
   const start = Date.now();
   let stopHeartbeat: (() => void) | undefined;
