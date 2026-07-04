@@ -31,6 +31,12 @@ All notable changes to this project are documented here. The format is based on
 - **The `profile:` scenario-field alias.** The top-level `profile:` key (an earlier name for
   `baseline:`) is no longer accepted — it was silently remapped with a deprecation warning; it now
   errors as an unknown key. Use `baseline:`.
+- **The `scaffold --from-run <id>` flag.** `scaffold` had two spellings for one thing; the canonical
+  positional `scaffold <run-id | run-dir>` stays, and `--from-run` now errors as an unknown flag
+  (exit 2) with the usage string pointing at the positional form.
+- **The `-V` short form for `--verbose`.** `-v` (version, per `node -v`/`npm -v`) and `-V` (verbose)
+  were a shift-key-typo collision that silently flipped meaning. `--verbose` is now long-only across
+  `run`/`skill`/`chat`/`decide`; `-v` still prints the version and `-q` still means `--quiet`.
 
 ### Fixed
 

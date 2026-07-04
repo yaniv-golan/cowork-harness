@@ -38,7 +38,7 @@ type ChatFidelity = (typeof CHAT_FIDELITY_TIERS)[number];
  */
 const CHAT_OPTIONS = [
   { flag: "--raw", kind: "boolean", usage: "[--raw]" },
-  { flag: "--verbose", alias: "-V", kind: "boolean", usage: "[--verbose]" },
+  { flag: "--verbose", kind: "boolean", usage: "[--verbose]" },
   { flag: "--fidelity", kind: "value", usage: "[--fidelity protocol|container|hostloop]" },
   { flag: "--model", kind: "value", usage: "[--model <id>]" },
   { flag: "--upload", kind: "value", usage: "[--upload <file>]..." },
@@ -110,7 +110,7 @@ export async function cmdChat(args: string[]) {
     if (a === "--raw") {
       raw = true;
       seenFlags.add("--raw");
-    } else if (a === "--verbose" || a === "-V") verbose = true;
+    } else if (a === "--verbose") verbose = true;
     else if (a === "--allow-host-writes") {
       allowHostWrites = true;
       seenFlags.add("--allow-host-writes");

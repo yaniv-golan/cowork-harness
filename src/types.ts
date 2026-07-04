@@ -505,7 +505,7 @@ export interface RunResult {
   $schema?: string;
   generator?: string;
   scenario: string;
-  prompt?: string; // the prompt that was run — persisted so `scaffold --from-run` can reconstruct the scenario
+  prompt?: string; // the prompt that was run — persisted so `scaffold <run-dir>` can reconstruct the scenario
   fidelity: string;
   baseline: string;
   result: "success" | "error";

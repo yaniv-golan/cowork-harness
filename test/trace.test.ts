@@ -250,7 +250,7 @@ describe("assertions --list (every Assertion key has a description, drift guard)
 // SCAFFOLD-FROM-RUN — turn a kept run into a starter scenario YAML.
 import { buildScaffold } from "../src/run/scaffold.js";
 import { parse as parseYaml } from "yaml";
-describe("scaffold --from-run (SCAFFOLD-FROM-RUN)", () => {
+describe("scaffold (SCAFFOLD-FROM-RUN)", () => {
   it("emits a scenario from observed gates, artifacts, and prompt", () => {
     const reqId = "r1";
     const tuid = "toolu_G1";

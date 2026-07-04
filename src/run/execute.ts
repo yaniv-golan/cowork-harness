@@ -833,7 +833,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     $schema: RUN_RESULT_SCHEMA_URL,
     generator: "cowork-harness",
     scenario: scenario.name,
-    prompt: scenario.prompt, // persisted for `scaffold --from-run`
+    prompt: scenario.prompt, // persisted for `scaffold <run-dir>`
     fidelity: scenario.fidelity,
     baseline: baseline.appVersion,
     result: record.result,

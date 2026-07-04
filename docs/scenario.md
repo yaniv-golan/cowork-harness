@@ -495,7 +495,7 @@ The deliverable a skill produces lands at the `outputsDir` (`…/mnt/outputs`), 
 in the `--output-format json` envelope.
 
 **Terminal output.** `run` is verdict-first and prints the **failing transcript inline** on a `FAIL`;
-`--verbose`/`-V` shows the transcript for every scenario, `--quiet` shows only the verdict. `--output-format
+`--verbose` shows the transcript for every scenario, `--quiet` shows only the verdict. `--output-format
 json` emits the machine envelope `{tool, version, command, ok, results[], error}` on stdout (one
 `RunResult` per scenario; overall pass = `result==="success" && assertions.every(pass)` **AND a clean
 `computeVerdict`** — a verdict signal like `stalled` (ended on a question with no productive work after its last gate), `transport_error`, or a

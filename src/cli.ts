@@ -112,7 +112,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
       [--decider-dir <dir>]   …or in-band from the driving agent; then use 'gates'/'answer' to stream/respond
       [--upload <file>]… [--folder <dir>]…   attach files / connect folders (mnt/uploads, mnt/<folder-name>)
       [--session-id <id> [--resume]]   pin + resume a session (for gated, checkpoint-and-resume skills)
-      [--output-format text|json] [--quiet|-q] [--verbose|-V] [--model <id>] [--keep] [--dry-run]
+      [--output-format text|json] [--quiet|-q] [--verbose] [--model <id>] [--keep] [--dry-run]
       (run 'skill --help' for the full flag reference)
 
   chat <folder>                interactive multi-turn REPL against a skill (TTY); --raw for native cowork
@@ -123,7 +123,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
       [--on-unanswered fail|first]   ('prompt' rejected — breaks determinism)
       [--decider-cmd '<helper>']   answer live questions via a spawned helper
       [--decider-dir <dir>]   answer live questions in-band; then use 'gates'/'answer' to stream/respond
-      [--output-format text|json] [--quiet|-q] [--verbose|-V]
+      [--output-format text|json] [--quiet|-q] [--verbose]
       (run 'run --help' for the full flag reference)
 
 ── Cassette lifecycle ─────────────────────────────────────────────────────────
@@ -275,7 +275,7 @@ Questions:
 
 Output:
   --output-format text|json        text = live stream + footer (default); json = one stdout envelope
-  --quiet, -q                      verdict footer only            --verbose, -V   + thinking/tool inputs/sub-agent tree
+  --quiet, -q                      verdict footer only            --verbose       + thinking/tool inputs/sub-agent tree
   --compact                        drop the informational capability ::notice:: lines (the probe + hard-fail stay)
   --demo                           shareable output: --compact + suppress the "runs →" header (runs stay durable)
   --keep                           print the run dir + deliverable path (runs are always kept on disk)
@@ -355,7 +355,7 @@ Matrix testing (E3) — one scenario × a cross-product of axes, in one run:
 
 Output:
   --output-format text|json        text = verdict + failing transcript (default); json = stdout envelope
-  --quiet, -q                      verdict only            --verbose, -V   live stream + per-tool markers
+  --quiet, -q                      verdict only            --verbose       live stream + per-tool markers
   --compact                        drop the informational capability ::notice:: lines (the probe + hard-fail stay)
   --demo                           shareable output: --compact + suppress the "runs →" header (runs stay durable)
   --run-dir <path>                 GLOBAL flag — must PRECEDE the subcommand (cowork-harness --run-dir <path> run …);
@@ -832,7 +832,7 @@ function takeCommonFlags(args: string[], commandName: string = "skill"): { rest:
         fail(commandName, "usage", `--output-format must be "text" or "json" (got "${v}")`, undefined, isJsonOutput(args));
       flags.output = v;
     } else if (a === "--quiet" || a === "-q") flags.quiet = true;
-    else if (a === "--verbose" || a === "-V") flags.verbose = true;
+    else if (a === "--verbose") flags.verbose = true;
     else if (a === "--compact") flags.compact = true;
     else if (a === "--demo") flags.demo = true;
     else if (name === "--decider-cmd") {
@@ -2475,13 +2475,13 @@ async function cmdDecide(args: string[]) {
           json,
         );
       i++;
-    } else if (a === "--quiet" || a === "-q" || a === "--verbose" || a === "-V") {
+    } else if (a === "--quiet" || a === "-q" || a === "--verbose") {
       /* accepted but currently a no-op in decide — wired for flag consistency */
     }
     // an unrecognized `--`-prefixed token used to be silently ignored (the loop had no else).
     else if (a.startsWith("--") && a !== "--output-format=json" && a !== "--output-format=text")
       fail("decide", "usage", `unknown flag: ${a}`, undefined, json);
-    // single-dash flags other than -q/-V are unknown; reject them explicitly (don't silently swallow -x etc.)
+    // single-dash flags other than -q are unknown; reject them explicitly (don't silently swallow -x etc.)
     else if (a.startsWith("-")) fail("decide", "usage", `unknown flag: ${a}`, undefined, json);
     // decide takes NO positionals (the sample question comes from --question, not a positional).
     else fail("decide", "usage", `decide takes no positional arguments (got: ${a})`, undefined, json);
@@ -2819,7 +2819,7 @@ function cmdAnswer(args: string[]) {
   else log(`✓ answered gate ${seq}: ${JSON.stringify(answers)}`);
 }
 
-/** `scaffold --from-run <id>` — turn a kept run into a starter scenario YAML (observed gates → answers,
+/** `scaffold <run-id | run-dir>` — turn a kept run into a starter scenario YAML (observed gates → answers,
  *  artifacts → file_exists, the prompt). Authoring becomes explore→lock instead of guess-and-re-run. */
 function cmdScaffold(args: string[]) {
   const json = isJsonOutput(args);
@@ -2827,9 +2827,9 @@ function cmdScaffold(args: string[]) {
   // isJsonOutput was consulted), unlike decide/gates/trace.
   ensureOutputFormat("scaffold", args);
   // Reject unknown flags rather than silently ignoring a typo (e.g. `--form-run`).
-  rejectUnknownFlags("scaffold", args, ["--from-run", "--out", "--output-format", "--output-format=json", "--output-format=text"], json);
+  rejectUnknownFlags("scaffold", args, ["--out", "--output-format", "--output-format=json", "--output-format=text"], json);
 
-  // Validate --out FIRST (flag-looking value is a usage error regardless of --from-run presence).
+  // Validate --out FIRST (flag-looking value is a usage error).
   // honor BOTH the spaced (`--out foo`) and equals (`--out=foo`) forms — indexOf("--out") missed the
   // equals token, so `--out=foo.yaml` was accepted by rejectUnknownFlags then silently ignored (output went
   // to stdout). The equals value also gets the same flag-looking guard the spaced form has.
@@ -2847,30 +2847,8 @@ function cmdScaffold(args: string[]) {
       json,
     );
 
-  // Validate --from-run flag-looking value before computing positionals (so the error is specific).
-  // same dual-form handling for --from-run (the equals form fell through to a spurious usage failure).
-  const fromSpaceIdx = args.indexOf("--from-run");
-  const fromEqIdx = args.findIndex((a) => a.startsWith("--from-run="));
-  let fromRunVal: string | undefined;
-  if (fromSpaceIdx >= 0) fromRunVal = flagValue("scaffold", args, fromSpaceIdx, "--from-run", json);
-  else if (fromEqIdx >= 0) fromRunVal = args[fromEqIdx].slice("--from-run=".length);
-  if (fromRunVal !== undefined) {
-    if (fromRunVal === "" || fromRunVal.startsWith("-"))
-      return void fail(
-        "scaffold",
-        "usage",
-        `--from-run requires a run id/dir${fromRunVal === "" ? " (got empty)" : `, got a flag: ${fromRunVal}`}`,
-        undefined,
-        json,
-      );
-    log("note: --from-run is deprecated; prefer: scaffold <run-id | run-dir>\n");
-  }
-
-  // Positional is canonical; --from-run is a backward-compatible alias.
-  const positional = positionals(args, ["--from-run", "--out", "--output-format"])[0];
-  if (positional && fromRunVal && positional !== fromRunVal)
-    return void fail("scaffold", "usage", "provide the run id as a positional OR via --from-run, not both", undefined, json);
-  const target = positional ?? fromRunVal;
+  // Positional is the only (canonical) form for the run id/dir.
+  const target = positionals(args, ["--out", "--output-format"])[0];
   if (!target) return void fail("scaffold", "usage", "usage: scaffold <run-id | run-dir> [--out <file.yaml>]", undefined, json);
   let file: string;
   try {
