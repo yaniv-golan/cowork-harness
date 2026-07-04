@@ -127,6 +127,10 @@ export function spawnEnv(
     HTTPS_PROXY: opts.proxyHost,
     http_proxy: opts.proxyHost,
     https_proxy: opts.proxyHost,
+    // Binary-verified (asar @12472288): production sets this on the container spawn env too. The agent
+    // validates it against win32|darwin|linux (ELF `YPt()`) — derivable headlessly from `process.platform`,
+    // unlike the account-identity/OTEL vars below which need live Desktop state we don't have.
+    CLAUDE_CODE_HOST_PLATFORM: process.platform,
     ...(opts.extra ?? {}),
   };
 }
@@ -143,12 +147,27 @@ export function spawnEnv(
  */
 export function hostNativeSpawnEnv(
   baseline: PlatformBaseline,
-  opts: { configDir: string; extra?: Record<string, string>; maxThinkingTokens?: number },
+  opts: {
+    configDir: string;
+    extra?: Record<string, string>;
+    maxThinkingTokens?: number;
+    // Real HOST filesystem paths of currently-connected folders (Mount[] filtered to kind==="folder"),
+    // not guest/mnt paths — hostloop is the only spawn tier where the agent process runs natively
+    // against the real host tree, so it's the only tier where these are meaningful to emit.
+    folderHostPaths?: string[];
+  },
 ): Record<string, string> {
   return {
     ...(baseline.spawn?.env ?? { CLAUDE_CODE_IS_COWORK: "1" }),
     CLAUDE_CONFIG_DIR: opts.configDir,
     MAX_THINKING_TOKENS: String(opts.maxThinkingTokens ?? baseline.spawn?.maxThinkingTokens ?? DEFAULT_MAX_THINKING_TOKENS),
+    // Binary-verified (asar @12472288): same host-platform identity var as the container spawn env.
+    CLAUDE_CODE_HOST_PLATFORM: process.platform,
+    // Binary-verified (asar @12473150): production sets this only when connected folders are present
+    // (`userSelectedFolders?.length && …`), joined with "|" — the agent reads it as an OTEL attribute
+    // split on "|" (ELF @226793812). Container/microvm tiers stage folders as copies with no real host
+    // path, so this is hostloop-only; omit entirely (not an empty string) when no folders are connected.
+    ...(opts.folderHostPaths?.length ? { CLAUDE_CODE_WORKSPACE_HOST_PATHS: opts.folderHostPaths.join("|") } : {}),
     ...(opts.extra ?? {}),
   };
 }

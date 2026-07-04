@@ -31,6 +31,15 @@ All notable changes to this project are documented here. The format is based on
   scoped `--allow-machine-inventory <regex>` to whitelist provably-synthetic values. Tightening the
   privacy gate before the 1.0 contract freezes keeps it from becoming a breaking change to consumers'
   committed cassettes later.
+- **Host-platform / workspace-host-paths identity env vars.** The spawn env now emits
+  `CLAUDE_CODE_HOST_PLATFORM` (`process.platform`, every tier) and `CLAUDE_CODE_WORKSPACE_HOST_PATHS`
+  (connected-folder host paths, hostloop only when folders are present) — matching what the real Cowork
+  spawn sets, binary-verified against the in-VM ELF and Desktop asar. The account-identity and `OTEL_*`
+  vars stay unset (they need live Desktop account state the headless harness can't know; documented in
+  `docs/fidelity-gaps.md`).
+- **Reserved exit code `4` on the `run`/`skill` family** for a future "needs input / surfaced question"
+  outcome — documented in SPEC.md so a later addition is additive rather than a renumbering of the
+  burned `0`/`1`/`2`/`3` space.
 
 ### Removed
 
@@ -77,6 +86,10 @@ All notable changes to this project are documented here. The format is based on
 
 ### Documentation
 
+- **Documented the Task-dispatch cap divergence in `docs/fidelity-gaps.md`.** Real Cowork skips agent
+  Task dispatches beyond `{perTask:1, global:3}` (a binary-verified gate); the harness does not cap at
+  runtime, mitigated by the `dispatch_count_max` assertion. The faithful runtime limiter is deferred
+  post-1.0.
 - **Doc-vs-code audit (post-0.22.0) — corrected several doc claims that had drifted from the
   implementation, found by a systematic docs-and-skill sweep.**
   - **Baseline pin staleness.** README, DESIGN.md, SPEC.md, the companion skill's `SKILL.md`, and

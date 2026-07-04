@@ -83,6 +83,47 @@ The `skill` command supports `--session-id` + `--resume` for checkpoint-resume s
 
 ---
 
+## Host-derived identity env vars
+
+**Real Cowork behaviour:** The Desktop→agent spawn sets a block of host-derived identity/telemetry env
+vars (binary-verified against `app.asar` 1.18286.0 and the in-VM ELF): `CLAUDE_CODE_HOST_PLATFORM`,
+`CLAUDE_CODE_WORKSPACE_HOST_PATHS`, `CLAUDE_CODE_ACCOUNT_UUID`, `CLAUDE_CODE_USER_EMAIL`,
+`CLAUDE_CODE_ORGANIZATION_UUID`, and the `OTEL_*` telemetry config.
+
+**Harness behaviour:** The two that are derivable headlessly **are now emitted** at the spawn-env seam
+(`src/runtime/argv.ts`): `CLAUDE_CODE_HOST_PLATFORM` (= `process.platform`, on every tier, matching
+production) and `CLAUDE_CODE_WORKSPACE_HOST_PATHS` (the real host paths of connected folders, `"|"`-
+joined, **hostloop only** — the only tier where connected folders keep a real host path rather than a
+staged copy). The remainder are **intentionally not emitted**:
+
+| Var | Why not emitted |
+|---|---|
+| `CLAUDE_CODE_ACCOUNT_UUID` / `_USER_EMAIL` / `_ORGANIZATION_UUID` | Live authenticated Desktop account state (`u.accountId` / `r.emailAddress` / `u.orgId`). The harness holds only an opaque OAuth token — these UUIDs and the account email are not derivable from it. Production even guards the whole block on all three being present, so omitting them together is closer to a real unauthenticated/partial session than emitting fabricated values. |
+| `OTEL_*` | Derived from Desktop's telemetry config and points at Anthropic telemetry infrastructure; no faithful headless value. |
+| `CLAUDE_CODE_SUBAGENT_MODEL` | Gate/config-conditional on a Desktop config function that is normally unset; value not statically determinable. |
+| `ENABLE_TOOL_SEARCH` | Statsig-gated (same dynamic-flag class the sync pins as `DARK_GATES` drift sentinels); emitting unconditionally would overstate production. The `ToolSearch` tool itself is already modeled in the baseline `tools`/`allowedTools`. |
+
+**Why:** the account-identity vars require live Desktop account state the headless harness structurally
+cannot know; emitting fabricated values would be a worse divergence than their documented absence.
+
+---
+
+## Task-dispatch cap not enforced at runtime
+
+**Real Cowork behaviour:** Desktop enforces a Task-dispatch rate limit — it **skips** agent Task
+dispatches beyond `{perTask: 1, global: 3}` (binary-verified gate `1648655587`).
+
+**Harness behaviour:** The harness does **not** cap Task dispatches at runtime — a skill that fans out
+more than three sub-agents runs all of them, where production would skip the overflow. The gate is
+pinned as a sync drift-sentinel only (`src/sync/cowork-sync.ts`), not enforced.
+
+**Mitigation:** the `dispatch_count_max` assertion (`src/assert.ts`; its failure message cites the
+SPEC §10 `{global:3}` cap) lets a scenario catch dispatch overage post-hoc, so the divergence is
+detectable even though the runtime behaviour differs. A faithful runtime limiter is deferred post-1.0
+(additive behaviour-fidelity work, no consumer demand); this entry documents the current gap.
+
+---
+
 ## Fidelity tier differences
 
 The harness `--fidelity` flag selects how closely the execution environment matches real Cowork. Each tier trades fidelity for speed. For the canonical description of each tier (what it runs, when to pick it), see [README → Fidelity tiers](../README.md#fidelity-tiers-pick-per-scenario--per-ci-job) and [boundary.md](./boundary.md); the table below is the *gaps* view — what each tier does **not** reproduce.

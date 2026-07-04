@@ -518,6 +518,12 @@ Categories come from TYPED errors (`UnansweredError`→`unanswered`, `BoundaryEr
 unanswered-under-`fail` / runtime · `3` boundary/integrity. (`--output-format json` writes via `writeSync` so the envelope
 is never truncated by `process.exit` on a pipe.)
 
+**Reserved:** exit `4` on the `run`/`skill` family is reserved for a future "needs input / surfaced
+question" outcome (the deferred `on_unanswered: surface` / `needs_input` Track 2). It is currently
+unused — reserving it now keeps a later addition additive rather than a renumbering of the burned
+`0`/`1`/`2`/`3` space. Exit-code space is **per-command**, not global (`status` uses `0`/`1`/`2`/`3`
+with its own meanings); this reservation applies only to the `run`/`skill` family.
+
 **Per-command exceptions:** `lint` exits `127` when `python3` is missing (spawn error); `replay` exits
 `2` on a malformed/unreadable cassette (distinct from the `0`/`1` verdict); `sync` exits `2` on a
 non-macOS platform (the platform guard, alongside the `sync` hard-failure → `1` note below).

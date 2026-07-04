@@ -120,6 +120,9 @@ export function spawnHostLoop(
       configDir: plan.configDir,
       extra: { CLAUDE_PLUGIN_ROOT: claudePluginRootHost ?? "", ...runtimeAuthEnv() },
       maxThinkingTokens,
+      // Real host paths of connected folders (never staged copies) — the only spawn tier where these
+      // are meaningful, since container/microvm folders are staged as copies with no real host path.
+      folderHostPaths: plan.mounts.filter((mt) => mt.kind === "folder").map((mt) => mt.hostPath),
     }),
   };
 

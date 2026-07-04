@@ -14,7 +14,7 @@ import {
   parseEnvPort,
 } from "../src/run/execute.js";
 import { loadSession, resolveSessionPaths } from "../src/session.js";
-import { spawnEnv } from "../src/runtime/argv.js";
+import { spawnEnv, hostNativeSpawnEnv } from "../src/runtime/argv.js";
 import { loadBaseline } from "../src/baseline.js";
 
 describe("slugForPath keeps the run dir inside runs/", () => {
@@ -138,6 +138,71 @@ describe("execute — no process.env mutation for egress proxy/network", () => {
 
     expect(process.env.COWORK_EGRESS_PROXY).toBe(beforeProxy);
     expect(process.env.COWORK_DOCKER_NETWORK).toBe(beforeNet);
+  });
+});
+
+// Readiness item C5 — pin the exact host-identity env vars binary-verified as faithfully derivable
+// headless (docs/cowork-spawn-contract-1.12603.1.md). CLAUDE_CODE_HOST_PLATFORM is emitted at BOTH
+// the container/microvm seam (spawnEnv) and the hostloop seam (hostNativeSpawnEnv);
+// CLAUDE_CODE_WORKSPACE_HOST_PATHS is hostloop-only and only when connected folders are present —
+// container/microvm stage folders as copies with no real host path to disclose. The account-identity
+// (CLAUDE_CODE_ACCOUNT_UUID/_USER_EMAIL/_ORGANIZATION_UUID) and OTEL_* vars require live Desktop
+// state the harness never has, and must stay absent — a drift toward fabricating them should fail loud.
+describe("execute — C5 host-identity env vars (spawnEnv / hostNativeSpawnEnv)", () => {
+  const baseline = loadBaseline("desktop-1.12603.1");
+  const NOT_EMITTED = [
+    "CLAUDE_CODE_ACCOUNT_UUID",
+    "CLAUDE_CODE_USER_EMAIL",
+    "CLAUDE_CODE_ORGANIZATION_UUID",
+    "OTEL_EXPORTER_OTLP_ENDPOINT",
+    "OTEL_METRICS_EXPORTER",
+  ];
+
+  it("spawnEnv (container/microvm) emits CLAUDE_CODE_HOST_PLATFORM and none of the unknowable identity vars", () => {
+    const env = spawnEnv(baseline, { configGuest: "/sessions/TEST/mnt/.claude", proxyHost: "http://proxy:8080" });
+    expect(env.CLAUDE_CODE_HOST_PLATFORM).toBe(process.platform);
+    expect(env.CLAUDE_CODE_WORKSPACE_HOST_PATHS).toBeUndefined(); // no real host paths at this tier — folders are staged copies
+    for (const key of NOT_EMITTED) expect(env[key]).toBeUndefined();
+  });
+
+  it("spawnEnv: an explicit extra value for CLAUDE_CODE_HOST_PLATFORM still wins (extra is the outermost spread)", () => {
+    const env = spawnEnv(baseline, {
+      configGuest: "/sessions/TEST/mnt/.claude",
+      proxyHost: "http://proxy:8080",
+      extra: { CLAUDE_CODE_HOST_PLATFORM: "custom-override" },
+    });
+    expect(env.CLAUDE_CODE_HOST_PLATFORM).toBe("custom-override");
+  });
+
+  it("hostNativeSpawnEnv emits CLAUDE_CODE_HOST_PLATFORM but omits WORKSPACE_HOST_PATHS with no connected folders", () => {
+    const env = hostNativeSpawnEnv(baseline, { configDir: "/HOST/CFG" });
+    expect(env.CLAUDE_CODE_HOST_PLATFORM).toBe(process.platform);
+    expect(env.CLAUDE_CODE_WORKSPACE_HOST_PATHS).toBeUndefined();
+    for (const key of NOT_EMITTED) expect(env[key]).toBeUndefined();
+  });
+
+  it("hostNativeSpawnEnv: an empty folderHostPaths array also omits WORKSPACE_HOST_PATHS (presence-guarded, like production)", () => {
+    const env = hostNativeSpawnEnv(baseline, { configDir: "/HOST/CFG", folderHostPaths: [] });
+    expect(env.CLAUDE_CODE_WORKSPACE_HOST_PATHS).toBeUndefined();
+  });
+
+  it("hostNativeSpawnEnv joins connected folders' real host paths with '|' when present", () => {
+    const env = hostNativeSpawnEnv(baseline, {
+      configDir: "/HOST/CFG",
+      folderHostPaths: ["/Users/dev/project-a", "/Users/dev/project-b"],
+    });
+    expect(env.CLAUDE_CODE_HOST_PLATFORM).toBe(process.platform);
+    expect(env.CLAUDE_CODE_WORKSPACE_HOST_PATHS).toBe("/Users/dev/project-a|/Users/dev/project-b");
+  });
+
+  it("hostNativeSpawnEnv: an explicit extra value for either new key still wins over the computed value", () => {
+    const env = hostNativeSpawnEnv(baseline, {
+      configDir: "/HOST/CFG",
+      folderHostPaths: ["/Users/dev/project-a"],
+      extra: { CLAUDE_CODE_HOST_PLATFORM: "custom-override", CLAUDE_CODE_WORKSPACE_HOST_PATHS: "custom|paths" },
+    });
+    expect(env.CLAUDE_CODE_HOST_PLATFORM).toBe("custom-override");
+    expect(env.CLAUDE_CODE_WORKSPACE_HOST_PATHS).toBe("custom|paths");
   });
 });
 
