@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.23.0] — 2026-07-04
+
 ### Added
 
 - **The baseline `spawn.env` is now binary-derived and drift-alarmed, not hand-transcribed.** `sync`
