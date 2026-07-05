@@ -541,6 +541,16 @@ export interface RunResult {
   requiresCapabilityUnmet?: { caps: string[]; reason: "omitted" | "unverifiable" };
   decisions: Array<{ kind: string; name: string; decision: string; by?: string; model?: string; detail?: unknown; rationale?: string }>;
   toolCounts?: Record<string, number>; // truthful per-tool call count (use this, NOT usage.server_tool_use which is host-routed-blind in cowork)
+  // per-tool call-count/timing aggregate, folded from the timeline (§4.2, M2). Absent only when no
+  // timeline data exists for this run (replayErrorResult — no run ever happened). Populated for
+  // buildPartialResult too, when the salvaged run made at least one tool call. Wall-gap between
+  // tool_use and tool_result, NOT isolated script CPU time — see foldToolDurations's doc comment
+  // (src/run/timeline-fold.ts) for the honesty caveat.
+  toolDurations?: Record<string, { calls: number; totalMs: number; maxMs: number }>;
+  // distinct model ids seen across assistant_text/tool_use/thinking events, in first-seen order (§4.3, M2).
+  // Absent only when replayErrorResult (no run ever happened). Populated for buildPartialResult too,
+  // when the salvaged run had at least one assistant message.
+  models?: string[];
   // did each gate's answer reach the model? `reason` distinguishes a `delivered:null` that means
   // "no pairing metadata" (no toolUseId) from one that means "tool result not observed".
   gateDeliveries?: Array<{

@@ -37,6 +37,23 @@
     },
     "decisions": { "type": "array" },
     "toolCounts": { "type": "object" },
+    "toolDurations": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "calls": { "type": "number" },
+          "totalMs": { "type": "number" },
+          "maxMs": { "type": "number" }
+        },
+        "required": ["calls", "totalMs", "maxMs"],
+        "additionalProperties": false
+      }
+    },
+    "models": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
     "gateDeliveries": { "type": "array" },
     "egress": { "type": "array" },
     "assertions": { "type": "array" },

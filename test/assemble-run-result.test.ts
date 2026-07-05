@@ -23,6 +23,8 @@ function fullyExplicitFixture(): CompleteRunResult {
     requiresCapabilityUnmet: undefined,
     decisions: [],
     toolCounts: undefined,
+    toolDurations: undefined,
+    models: undefined,
     gateDeliveries: undefined,
     egress: [],
     assertions: [],

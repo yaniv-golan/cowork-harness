@@ -1,6 +1,7 @@
-import { createWriteStream, type WriteStream } from "node:fs";
+import { createWriteStream, readFileSync, type WriteStream } from "node:fs";
 import { join } from "node:path";
 import type { AgentEvent } from "./session.js";
+import { warn } from "../io.js";
 
 /** Written once, as the first line of `timeline.jsonl`. `startedAtMono` is the raw start-time
  *  `process.hrtime.bigint()` value, as a string (JSON cannot serialize BigInt) — every entry's `ts`
@@ -152,4 +153,49 @@ export class TimelineWriter {
   end(callback: () => void): void {
     this.stream.end(callback);
   }
+}
+
+function safeLines(path: string): string[] {
+  try {
+    return readFileSync(path, "utf8")
+      .split("\n")
+      .filter((l) => l.trim());
+  } catch (err: unknown) {
+    // File-not-found is normal (e.g. an older harness build, or a run that predates this feature) —
+    // stay quiet. Any other error (permissions, corrupted inode, etc.) is unexpected and must be loud.
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT") {
+      warn(`::warning:: [timeline] failed to read ${path}: ${String(err)}\n`);
+    }
+    return [];
+  }
+}
+
+/** Reads and parses `timeline.jsonl` (written by `TimelineWriter` above). The first line is the
+ *  header, the rest are entries. Returns `undefined` if the file is missing/empty (an older harness
+ *  build, or a run that predates this feature) or if the header itself doesn't parse — informational
+ *  data, so a partially-corrupt file degrades to "absent" rather than throwing and aborting the whole
+ *  caller. Malformed individual entry lines are dropped (not fatal) rather than aborting the whole read.
+ *  Relocated here (from `src/run/cassette.ts`, where it originated) so both `src/run/execute.ts` and
+ *  `src/run/cassette.ts` can import it from a leaf module with no imports back into `run/`, avoiding an
+ *  import cycle. Exported for direct unit testing (test/cassette-timeline.test.ts). */
+export function readTimeline(outDir: string): { header: TimelineHeader; events: TimelineEvent[] } | undefined {
+  const lines = safeLines(join(outDir, "timeline.jsonl"));
+  if (lines.length === 0) return undefined;
+  let header: TimelineHeader;
+  try {
+    header = JSON.parse(lines[0]);
+  } catch {
+    return undefined;
+  }
+  const events: TimelineEvent[] = [];
+  for (const line of lines.slice(1)) {
+    try {
+      events.push(JSON.parse(line));
+    } catch {
+      // a malformed individual entry is dropped, not fatal — see doc comment above.
+      continue;
+    }
+  }
+  return { header, events };
 }

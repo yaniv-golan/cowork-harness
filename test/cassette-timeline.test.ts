@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readTimeline } from "../src/run/cassette.js";
+import { readTimeline } from "../src/agent/timeline.js";
 
 function tmp(): string {
   return mkdtempSync(join(tmpdir(), "cassette-timeline-"));

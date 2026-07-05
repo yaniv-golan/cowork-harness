@@ -28,7 +28,8 @@ import {
   type AgentEvent,
   type DecisionRequest,
 } from "../agent/session.js";
-import type { TimelineHeader, TimelineEvent } from "../agent/timeline.js";
+import { readTimeline, type TimelineHeader, type TimelineEvent } from "../agent/timeline.js";
+import { foldToolDurations } from "./timeline-fold.js";
 import { ABSTAIN, UnansweredError, type Decider, type OnUnanswered } from "../decide/decider.js";
 import { fileChannel, type DecisionChannel } from "../decide/external-channel.js";
 import { pMapBounded } from "../async-pool.js";
@@ -2101,6 +2102,8 @@ function replayErrorResult(file: string): RunResult {
     capabilityProbe: undefined,
     requiresCapabilityUnmet: undefined,
     toolCounts: undefined,
+    toolDurations: undefined,
+    models: undefined,
     gateDeliveries: undefined,
     subagents: undefined,
     nonReproducibleAnswers: undefined,
@@ -3135,6 +3138,8 @@ export async function replayCassette(
       stalledOnQuestion: rec.stalledOnQuestion, // re-derived by run.ts's detector during the replay re-drive — so a recorded stall fails replay too
       decisions: rec.decisions.map((d) => ({ kind: d.kind, name: d.name, decision: d.decision, by: d.by })),
       toolCounts: rec.toolCounts,
+      toolDurations: cassette.timeline ? foldToolDurations(cassette.timeline) : undefined,
+      models: rec.models.length ? rec.models : undefined,
       gateDeliveries: rec.gateDeliveries,
       egress: [],
       assertions,
@@ -3204,30 +3209,4 @@ function safeLines(path: string): string[] {
   }
 }
 
-/** Reads and parses `timeline.jsonl` (see src/agent/timeline.ts) for the cassette record path. The
- *  first line is the header, the rest are entries. Returns `undefined` if the file is missing/empty
- *  (an older harness build, or a run that predates this feature) or if the header itself doesn't
- *  parse — informational data, so a partially-corrupt file degrades to "absent" rather than throwing
- *  and aborting the whole record. Malformed individual entry lines are dropped (not fatal) rather
- *  than aborting the whole read — the same tolerance `readCassette` already extends to cassette
- *  loading elsewhere in this file. Exported for direct unit testing (test/cassette-timeline.test.ts). */
-export function readTimeline(outDir: string): { header: TimelineHeader; events: TimelineEvent[] } | undefined {
-  const lines = safeLines(join(outDir, "timeline.jsonl"));
-  if (lines.length === 0) return undefined;
-  let header: TimelineHeader;
-  try {
-    header = JSON.parse(lines[0]);
-  } catch {
-    return undefined;
-  }
-  const events: TimelineEvent[] = [];
-  for (const line of lines.slice(1)) {
-    try {
-      events.push(JSON.parse(line));
-    } catch {
-      // a malformed individual entry is dropped, not fatal — see doc comment above.
-      continue;
-    }
-  }
-  return { header, events };
-}
+// readTimeline moved to src/agent/timeline.ts (see that file's doc comment for why) — imported above.

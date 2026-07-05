@@ -43,6 +43,8 @@ import { renderPrompts } from "../prompt.js";
 import { makeDisplayTranslator, vmPathContextFromPlan } from "./display-translate.js";
 import { writeVmPathContextFile } from "./vm-path-ctx-file.js";
 import { LiveAgentSession, type SdkMcp, type HookBundle } from "../agent/session.js";
+import { readTimeline } from "../agent/timeline.js";
+import { foldToolDurations } from "./timeline-fold.js";
 import { buildDecider, ExternalDecider, LlmDecider, type Decider, type OnUnanswered, UnansweredError } from "../decide/decider.js";
 import { type DecisionChannel } from "../decide/external-channel.js";
 import { claudeCliComplete } from "../decide/llm-transport.js";
@@ -863,6 +865,11 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // (DecisionRecord[], `by: string`) is assignable to the summarizer's `by?: string` param — no re-map.
   const gateProvenance = summarizeGateProvenance(record.decisions);
 
+  // The session's TimelineWriter (src/agent/timeline.ts) flushes timeline.jsonl in its `finally` block
+  // during session.start(), which has already fully returned by this point (run.drive() awaited it above) —
+  // same guarantee scanEvents(join(outDir, "events.jsonl")) already relies on a few lines above.
+  const timelineData = readTimeline(outDir);
+
   const result: RunResult = assembleRunResult({
     $schema: RUN_RESULT_SCHEMA_URL,
     generator: "cowork-harness",
@@ -883,6 +890,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       rationale: d.rationale,
     })),
     toolCounts: record.toolCounts,
+    toolDurations: timelineData ? foldToolDurations(timelineData.events) : undefined,
+    models: record.models.length ? record.models : undefined,
     gateDeliveries: record.gateDeliveries,
     egress,
     assertions,
@@ -1085,6 +1094,11 @@ export function buildPartialResult(args: {
       rationale: d.rationale,
     })),
     toolCounts: record.toolCounts,
+    toolDurations: (() => {
+      const t = readTimeline(args.outDir);
+      return t ? foldToolDurations(t.events) : undefined;
+    })(),
+    models: record.models.length ? record.models : undefined,
     gateDeliveries: record.gateDeliveries,
     egress: args.egress,
     assertions: [],
