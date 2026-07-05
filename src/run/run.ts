@@ -70,6 +70,7 @@ export interface RunRecord {
   usage?: UsageInfo;
   cost?: CostInfo;
   skillsInvoked: string[]; // top-level Skill tool_use ids, in call order, duplicates kept (Wave 1 / E8 seam)
+  models: string[]; // distinct model ids seen across assistant_text/tool_use/thinking events, first-seen order, deduped (§4.3, M2)
 }
 
 export interface RunHooks {
@@ -142,7 +143,12 @@ export class Run {
       gateAnswers: [],
       gateDeliveries: [],
       skillsInvoked: [],
+      models: [],
     };
+  }
+
+  private noteModel(model?: string): void {
+    if (model && !this.rec.models.includes(model)) this.rec.models.push(model);
   }
 
   private ctx(): RunContext {
@@ -186,9 +192,11 @@ export class Run {
             this.rec.cwd = ev.cwd;
             break;
           case "assistant_text":
+            this.noteModel(ev.model);
             if (!ev.parentToolUseId) transcript.push(ev.text);
             break;
           case "tool_use": {
+            this.noteModel(ev.model);
             if (ev.parentToolUseId) {
               // only count this as a sub-agent tool when its parent is a RECOGNIZED dispatch
               // (Agent/Task/subagent_type). Any parented tool_use carries a parentToolUseId, but
@@ -225,6 +233,9 @@ export class Run {
             }
             break;
           }
+          case "thinking":
+            this.noteModel(ev.model);
+            break;
           case "subagent_dispatch":
             this.rec.subagents.push({
               toolUseId: ev.toolUseId,

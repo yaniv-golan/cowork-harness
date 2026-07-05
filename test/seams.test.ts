@@ -384,6 +384,20 @@ describe("Run — turn loop + record", () => {
     expect(rec.skillsInvoked).toEqual([]);
   });
 
+  it("accumulates distinct models across assistant_text/tool_use/thinking events, in first-seen order, deduped", async () => {
+    const ev: AgentEvent[] = [
+      { type: "assistant_text", text: "on it", model: "claude-haiku-4-5" },
+      { type: "tool_use", name: "Bash", input: {}, toolUseId: "toolu_1", model: "claude-haiku-4-5" },
+      { type: "tool_result", toolUseId: "toolu_1", isError: false, text: "ok" },
+      { type: "thinking", text: "hmm", model: "claude-sonnet-4-5" },
+      { type: "tool_use", name: "Read", input: {}, toolUseId: "toolu_2", model: "claude-sonnet-4-5" },
+      { type: "tool_result", toolUseId: "toolu_2", isError: false, text: "ok" },
+      { type: "result", isError: false },
+    ];
+    const rec = await new Run(new MockSession(ev), new ScriptedDecider([])).drive("go");
+    expect(rec.models).toEqual(["claude-haiku-4-5", "claude-sonnet-4-5"]);
+  });
+
   it("subagentTools counts only tools under a RECOGNIZED dispatch, not any parented tool_use", async () => {
     const ev: AgentEvent[] = [
       { type: "tool_use", name: "Task", input: { subagent_type: "researcher" } },

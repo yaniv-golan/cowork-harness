@@ -850,6 +850,7 @@ function minimalRec(): RunRecord {
     gateAnswers: [],
     gateDeliveries: [],
     skillsInvoked: [],
+    models: [],
   };
 }
 
