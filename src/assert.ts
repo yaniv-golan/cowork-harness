@@ -36,8 +36,7 @@ export function budgetFields(src: {
     tokensTotal: typeof inTok === "number" && typeof outTok === "number" ? inTok + outTok : undefined,
     toolCallsTotal: src.toolCounts === undefined ? undefined : Object.values(src.toolCounts).reduce((a, b) => a + b, 0),
     turns: src.usage?.turns,
-    toolErrorsTotal:
-      src.toolErrors === undefined ? undefined : Object.values(src.toolErrors).reduce((sum, t) => sum + t.errors, 0),
+    toolErrorsTotal: src.toolErrors === undefined ? undefined : Object.values(src.toolErrors).reduce((sum, t) => sum + t.errors, 0),
     redundantCallsTotal:
       src.redundantToolCalls === undefined ? undefined : src.redundantToolCalls.reduce((sum, g) => sum + (g.count - 1), 0),
   };

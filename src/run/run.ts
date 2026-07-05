@@ -188,7 +188,10 @@ export class Run {
       if (count < 2) continue;
       const sepIdx = key.indexOf(":");
       const name = key.slice(0, sepIdx);
-      const argHash = createHash("sha256").update(key.slice(sepIdx + 1)).digest("hex").slice(0, 16);
+      const argHash = createHash("sha256")
+        .update(key.slice(sepIdx + 1))
+        .digest("hex")
+        .slice(0, 16);
       out.push({ name, argHash, count });
     }
     this.rec.redundantToolCalls = out;
