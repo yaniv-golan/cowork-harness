@@ -97,6 +97,47 @@ describe("gate_answers_delivered (catches delivery failures)", () => {
     expect(pass(r)).toBe(false);
     expect(r[0].message).toContain("q.map");
   });
+  // T1: gate firing is model-dependent, so gate_answers_delivered:true must not hard-fail when no
+  // gate fired at all — that would make the assertion unusable for optional-gate skills. This is
+  // distinct from gateDeliveriesMissing (evidence absent), covered below.
+  it("gate_answers_delivered: true passes VACUOUSLY when zero gates fired (gateDeliveries: [])", () => {
+    const c = ctx({ gateDeliveries: [] });
+    expect(pass(evaluate([{ gate_answers_delivered: true }], c))).toBe(true);
+  });
+});
+
+describe("gate_answer_count_min (presence companion to gate_answers_delivered)", () => {
+  it("fails when zero gates fired", () => {
+    const c = ctx({ gateDeliveries: [] });
+    const r = evaluate([{ gate_answer_count_min: 1 }], c);
+    expect(pass(r)).toBe(false);
+    expect(r[0].message).toContain("need ≥ 1");
+  });
+  it("passes when at least N gates were delivered", () => {
+    const c = ctx({ gateDeliveries: [{ question: "Proceed?", delivered: true }] });
+    expect(pass(evaluate([{ gate_answer_count_min: 1 }], c))).toBe(true);
+  });
+  it("fails when fewer than N gates were delivered (one delivered, need two)", () => {
+    const c = ctx({ gateDeliveries: [{ question: "Proceed?", delivered: true }] });
+    const r = evaluate([{ gate_answer_count_min: 2 }], c);
+    expect(pass(r)).toBe(false);
+    expect(r[0].message).toContain("only 1 gate answer(s)");
+  });
+});
+
+describe("gateDeliveriesMissing — evidence-unavailable guard (bug-#33 regression: absent ≠ zero gates)", () => {
+  it("gate_answers_delivered: true FAILS evidence-unavailable when gate telemetry is missing (NOT vacuous pass)", () => {
+    const c = ctx({ gateDeliveries: [], gateDeliveriesMissing: true });
+    const r = evaluate([{ gate_answers_delivered: true }], c);
+    expect(pass(r)).toBe(false);
+    expect(r[0].message).toContain("evidence unavailable");
+  });
+  it("gate_answer_count_min: 1 FAILS evidence-unavailable when gate telemetry is missing", () => {
+    const c = ctx({ gateDeliveries: [], gateDeliveriesMissing: true });
+    const r = evaluate([{ gate_answer_count_min: 1 }], c);
+    expect(pass(r)).toBe(false);
+    expect(r[0].message).toContain("evidence unavailable");
+  });
 });
 
 describe("multi-key assertions evaluate ALL keys (AND), not just the first", () => {

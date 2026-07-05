@@ -6,8 +6,24 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **`gate_answer_count_min: <N>` assertion** — the presence companion to `gate_answers_delivered`:
+  fails unless at least N `AskUserQuestion` gates fired AND were delivered non-error. Pairs with
+  `gate_answers_delivered`'s new zero-gate vacuous-pass (below) the way `transcript_contains` pairs
+  with `computer_links_resolve`'s zero-link vacuous-pass. Evaluated on replay only with a `controlOut`
+  cassette, like the other gate keys; fails as evidence-unavailable (not vacuous-pass) when
+  gate-delivery telemetry is absent from `result.json`.
+
 ### Changed
 
+- **`gate_answers_delivered: true` now passes vacuously when zero `AskUserQuestion` gates fired**,
+  instead of hard-failing. Whether a gate fires is model-dependent, so any skill with optional gating
+  could not use the assertion under the old hard-fail. The bad-delivery check (an answered gate whose
+  answer wasn't confirmed delivered) is unchanged — it only ever mattered when gates fired. Missing
+  gate-delivery telemetry (an old/partial `result.json` on the verify-run lane) still fails loud as
+  evidence-unavailable, never vacuous-pass — this is NOT the same as "no gate fired" and preserves the
+  bug-#33 false-green fix. Pair with the new `gate_answer_count_min` (below) to also require presence.
 - **`verify-cassettes --allow-file <path>` renamed to `--allow-patterns-file <path>`.** The old name
   read as "allow this file" and was routinely confused with `--allow <regex>` (a pattern matched
   against a finding) — reaching for `--allow-file <artifact-path>` failed with an ENOENT/invalid-regex

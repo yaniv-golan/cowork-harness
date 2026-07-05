@@ -278,8 +278,9 @@ if *every* key passes (don't rely on the first; keep one concern per item unless
 | `max_turns: <N>` | the SDK-reported (or fallback-counted) turn count ≤ N — replay-checkable (the re-drive recounts turns deterministically, same as `tool_calls_max`) |
 | `question_asked: <regex>` | the agent asked an AskUserQuestion whose text matches |
 | `questions_count_max: <N>` | at most N **sub-questions** asked — a bundled `AskUserQuestion` with K sub-questions counts as K, not 1 (this is a decision-load budget, not a per-tool-call count); `trace --view questions`'s footer total is computed the same way, so it always matches what this key compares against |
-| `gate_answers_delivered: true` | every answered AskUserQuestion gate's answer actually reached the model — requires a positive, observed `tool_result` (an **unobserved** delivery fails too, not only an errored one — no silent false-green) |
+| `gate_answers_delivered: true` | every answered AskUserQuestion gate's answer actually reached the model — requires a positive, observed `tool_result` (an **unobserved** delivery fails too, not only an errored one — no silent false-green); **zero gates fired passes vacuously** (gate firing is model-dependent) — pair with `gate_answer_count_min` to also require a gate |
 | `gate_answers_delivered: false` | asserts that at least one answered gate's answer was **confirmed not delivered** (an observed delivery failure); an unobserved/null delivery does **not** satisfy this — useful for negative-path tests of delivery failures |
+| `gate_answer_count_min: <N>` | at least N AskUserQuestion gates fired AND were delivered non-error — the presence companion to `gate_answers_delivered`'s vacuous-pass (mirrors `transcript_contains` pairing with `computer_links_resolve`) |
 | `allow_permissive_auto_allow: true` | verdict modifier — suppresses the default-fail when the run recorded a cowork-parity permissive auto-allow; use this for tests that **deliberately** assert Cowork's permissive behavior rather than strict scripted coverage |
 | `allow_missing_capability: true` | verdict modifier (**live tiers only**) — suppresses the default-fail when the lean/`core` agent image omits a capability the skill used but real Cowork ships (OCR/LibreOffice/markitdown/opencv/PDF-tables); assert only when the skill's fallback is genuinely equivalent, else rebuild full parity (`--build-arg COWORK_FULL_PARITY=1`). Also opts out of the `requires_capabilities` declared-need check below. |
 | `allow_l0_plugin_divergence: true` | verdict modifier — opts into L0/protocol plugin divergence, suppressing the plugin-fidelity default-fail |
@@ -380,10 +381,10 @@ and re-evaluates the **content** assertions. The authoritative list of content k
 `allow_l0_plugin_divergence` / `allow_stall` (kept on replay as no-op passes). `max_cost_usd`/`max_tokens`
 assert the *frozen recording's* spend on replay, not fresh spend — see their table entries above.
 
-**`question_asked`, `questions_count_max`, and `gate_answers_delivered`** are also content
-assertions, but they require the cassette to carry `controlOut` (full-fidelity replay). When
+**`question_asked`, `questions_count_max`, `gate_answers_delivered`, and `gate_answer_count_min`**
+are also content assertions, but they require the cassette to carry `controlOut` (full-fidelity replay). When
 `controlOut` is present, the decision pipeline runs on replay and populates `rec.questions` /
-`rec.gateDeliveries` — so these three keys are genuinely evaluated.
+`rec.gateDeliveries` — so these keys are genuinely evaluated.
 When `controlOut` is absent (old cassette), a **loud warning** fires and these keys are **excluded**
 from evaluation (not vacuously passed). Re-record with a current harness to enable them.
 

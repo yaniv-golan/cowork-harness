@@ -238,8 +238,9 @@ passes only if every key passes. Keep one concern per item unless you mean conju
 | `max_turns: <N>` | the SDK-reported (or fallback-counted) turn count ≤ N — meaningfully replay-checkable (re-drive recounts turns deterministically, same as `tool_calls_max`) |
 | `question_asked: <regex>` | the agent asked an AskUserQuestion whose text matches |
 | `questions_count_max: <N>` | at most N **sub-questions** asked — a bundled `AskUserQuestion` with K sub-questions counts as K, not 1; `trace --view questions`'s footer total uses the same definition |
-| `gate_answers_delivered: true` | every answered gate's answer reached the model (observed `tool_result`; unobserved = fail) |
+| `gate_answers_delivered: true` | every answered gate's answer reached the model (observed `tool_result`; unobserved = fail); **zero gates fired passes vacuously** — pair with `gate_answer_count_min` to also require a gate |
 | `gate_answers_delivered: false` | asserts at least one answered gate's answer was **confirmed not delivered** (an observed delivery failure); an unobserved/null delivery does **not** satisfy this — for negative-path delivery tests |
+| `gate_answer_count_min: <N>` | at least N AskUserQuestion gates fired AND were delivered non-error — presence companion to `gate_answers_delivered`'s vacuous-pass |
 | `allow_permissive_auto_allow: true` | verdict modifier — suppresses the default-fail when the run recorded a cowork-parity permissive auto-allow; for tests that deliberately assert Cowork's permissive behavior |
 | `allow_missing_capability: true` | verdict modifier — suppresses the default-fail when the (partial "core") agent image omits a capability the skill used but real Cowork ships (OCR/LibreOffice/markitdown/opencv/PDF-tables). Assert only when the skill's fallback is genuinely equivalent; otherwise rebuild full parity (`--build-arg COWORK_FULL_PARITY=1`). Also opts out of the `requires_capabilities` declared-need check. Live tiers only |
 | `allow_l0_plugin_divergence: true` | verdict modifier — opt into L0/protocol plugin divergence: suppresses the default-fail when a plugin behaves differently at `protocol` (L0) fidelity than under a sandboxed tier. Live tiers only |
@@ -293,8 +294,8 @@ modifiers `allow_permissive_auto_allow` / `allow_missing_capability` / `allow_l0
 `allow_stall` are also kept on replay, evaluated as no-op passes.
 
 **Gate keys — replay only with a `controlOut` cassette:** `question_asked`, `questions_count_max`,
-`gate_answers_delivered`. With `controlOut` present they evaluate; on an old cassette without it, a
-**loud warning** fires and they are **excluded** (not vacuously passed). Re-record to enable them.
+`gate_answers_delivered`, `gate_answer_count_min`. With `controlOut` present they evaluate; on an old
+cassette without it, a **loud warning** fires and they are **excluded** (not vacuously passed). Re-record to enable them.
 `questions_count_max` counts sub-questions, not gates/tool-calls — see the catalog row above and
 `trace --view questions`.
 
@@ -376,10 +377,12 @@ at the top of this file.
    concern per item; run the linter. (`contentKeys` in `src/run/cassette.ts`.)
 
 2. **Gate keys need a `controlOut` cassette.** `question_asked`, `questions_count_max`,
-   `gate_answers_delivered` only evaluate on replay with `controlOut`; on an old cassette they warn
-   and are excluded (not passed). `gate_answers_delivered` **fails on unobserved delivery**
-   (`delivered: null`) — absence of evidence is failure. A **header-only gate** (empty `question`,
-   only `header`) can never be keyed and is rejected loudly — every gate needs a non-empty `question`.
+   `gate_answers_delivered`, `gate_answer_count_min` only evaluate on replay with `controlOut`; on an
+   old cassette they warn and are excluded (not passed). `gate_answers_delivered` **fails on
+   unobserved delivery** (`delivered: null`) — absence of evidence is failure — but **passes
+   vacuously when zero gates fired**; use `gate_answer_count_min: 1` to also require a gate to have
+   fired. A **header-only gate** (empty `question`, only `header`) can never be keyed and is rejected
+   loudly — every gate needs a non-empty `question`.
    (`contentKeys` in `src/run/cassette.ts`; `src/assert.ts`.)
 
 3. **The LLM-decider's two spellings.** Scripted answers + `on_unanswered: fail` is deterministic;

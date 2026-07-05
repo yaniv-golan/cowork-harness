@@ -228,16 +228,17 @@ the rules and CI-placement rationale (why each category behaves this way), see
 | `max_turns` | SDK-reported (or fallback-counted) turn count ≤ N — replay-checkable, recounted deterministically same as `tool_calls_max` |
 | `question_asked` | agent asked an AskUserQuestion matching the regex |
 | `questions_count_max` | at most N **sub-questions** asked — a bundled `AskUserQuestion` with K sub-questions counts as K, not 1; `trace --view questions`'s footer total uses the same definition |
-| `gate_answers_delivered` | answered gates' answers reached the model |
+| `gate_answers_delivered` | answered gates' answers reached the model — **zero gates fired passes vacuously** (gate firing is model-dependent); pair with `gate_answer_count_min` to also require a gate |
+| `gate_answer_count_min` | at least N AskUserQuestion gates fired AND were delivered non-error — the presence companion to `gate_answers_delivered`'s vacuous-pass |
 | `result` | run ended with `success` or `error` |
 | `allow_permissive_auto_allow` | verdict modifier — kept on replay → no-op pass (the live signal it suppresses is zeroed) |
 | `allow_missing_capability` | verdict modifier — kept on replay → no-op pass (the live signal it suppresses is zeroed) |
 | `allow_l0_plugin_divergence` | verdict modifier — kept on replay → no-op pass (the live signal it suppresses is zeroed) |
 | `allow_stall` | verdict modifier — kept on replay → no-op pass (suppresses the `stalled` default-fail; the stall is re-derived on the replay re-drive) |
 
-**`question_asked`, `questions_count_max`, `gate_answers_delivered` require `controlOut`** (full-fidelity
-replay). On an old cassette without `controlOut` these three keys are excluded from evaluation — not
-vacuously passed — and a loud warning fires (see §Backward compatibility).
+**`question_asked`, `questions_count_max`, `gate_answers_delivered`, `gate_answer_count_min` require
+`controlOut`** (full-fidelity replay). On an old cassette without `controlOut` these keys are excluded
+from evaluation — not vacuously passed — and a loud warning fires (see §Backward compatibility).
 
 `file_exists`, `user_visible_artifact`, `artifact_json`, `computer_links_resolve`, and `no_unexpected_files` are **not** in the
 table above — see the next subsection; they're replay-checkable only when the cassette carries an
@@ -303,12 +304,16 @@ On replay, the replay decider (built by `buildReplayDecider()`) indexes `control
 the decision pipeline instead of consulting a live decider or asking the user. This makes the full
 `Run.handleDecision` path execute on replay, which populates `rec.questions`, `rec.gateAnswers`, and
 `rec.gateDeliveries` — exactly as in a live run. Consequence: `question_asked`, `questions_count_max`,
-and `gate_answers_delivered` are now genuinely evaluated, not silently skipped or vacuously passed.
+`gate_answers_delivered`, and `gate_answer_count_min` are now genuinely evaluated, not silently skipped
+or vacuously passed.
 
 `gate_answers_delivered` accepts a boolean: `: true` asserts the answered gates' answers reached the
-model; `: false` is the **inverse** — it asserts a *confirmed delivery failure* (at least one gate whose
-`delivered === false`), for scenarios that deliberately exercise a non-delivery path. Unobserved delivery
-(`delivered: null`) satisfies neither — absence of evidence is a failure, not a pass.
+model, **passing vacuously when zero gates fired** (gate firing is model-dependent); `: false` is the
+**inverse** — it asserts a *confirmed delivery failure* (at least one gate whose `delivered === false`),
+for scenarios that deliberately exercise a non-delivery path. Unobserved delivery (`delivered: null`)
+satisfies neither — absence of evidence is a failure, not a pass. Pair `gate_answers_delivered: true`
+with `gate_answer_count_min: <N>` when a gate firing at all is part of what you're testing —
+`gate_answer_count_min` fails if fewer than N gates fired AND were delivered non-error.
 
 ### The O7 guard — `replay_protocol_fidelity`
 
@@ -337,8 +342,8 @@ regressing to the prior false-green behavior:
    ::warning:: [replay] cassette has no controlOut (pre-full-fidelity) — question/gate assertions
    are NOT checked; re-record to enable them
    ```
-2. **`question_asked`, `questions_count_max`, `gate_answers_delivered` are excluded** from the evaluated
-   assertion set for that run — not vacuously passed, absent.
+2. **`question_asked`, `questions_count_max`, `gate_answers_delivered`, `gate_answer_count_min` are
+   excluded** from the evaluated assertion set for that run — not vacuously passed, absent.
 3. All other content assertions (transcript, tool, subagent, result) evaluate normally.
 
 This preserves "skipped ≠ false-green." Re-record with a current harness to get the full-fidelity path.

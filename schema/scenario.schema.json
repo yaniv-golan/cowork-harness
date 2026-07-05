@@ -259,8 +259,14 @@
             "maximum": 9007199254740991
           },
           "gate_answers_delivered": {
-            "description": "every answered AskUserQuestion gate's tool_result was non-error (the answer reached the model)",
+            "description": "every answered AskUserQuestion gate's tool_result was non-error (the answer reached the model); zero gates fired passes vacuously — pair with gate_answer_count_min to also require a gate",
             "type": "boolean"
+          },
+          "gate_answer_count_min": {
+            "description": "at least N AskUserQuestion gates fired AND were delivered non-error (presence companion to gate_answers_delivered)",
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
           },
           "result": {
             "description": "the run's final result was success | error",

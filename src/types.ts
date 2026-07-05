@@ -262,7 +262,15 @@ export const Assertion = z.object({
   gate_answers_delivered: z
     .boolean()
     .optional()
-    .describe("every answered AskUserQuestion gate's tool_result was non-error (the answer reached the model)"),
+    .describe(
+      "every answered AskUserQuestion gate's tool_result was non-error (the answer reached the model); zero gates fired passes vacuously — pair with gate_answer_count_min to also require a gate",
+    ),
+  gate_answer_count_min: z
+    .number()
+    .int()
+    .nonnegative()
+    .optional()
+    .describe("at least N AskUserQuestion gates fired AND were delivered non-error (presence companion to gate_answers_delivered)"),
   result: z.enum(["success", "error"]).optional().describe("the run's final result was success | error"),
   allow_permissive_auto_allow: z
     .boolean()

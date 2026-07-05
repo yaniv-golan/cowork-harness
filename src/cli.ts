@@ -3137,6 +3137,7 @@ async function cmdVerifyRun(args: string[]) {
     selfHealRan: scan.selfHealRan,
     subagents: result.subagents ?? [],
     gateDeliveries: result.gateDeliveries ?? [],
+    gateDeliveriesMissing: result.gateDeliveries === undefined,
     toolResultTexts: (result.toolResults ?? []).map((r) => r.assertText ?? r.text),
     toolResultsTruncated: (result.toolResults ?? []).map((r) => r.assertText === undefined),
     transcriptMissing: sidecarTranscript === null,

@@ -204,6 +204,11 @@ export interface AssertContext {
    *  on default-false/empty scan fields (absent ≠ clean scan). Undefined/false on live/replay, where
    *  the scan structure is always populated (empty = proof-of-absence). */
   scanMissing?: boolean;
+  /** Set by verify-run only when `result.gateDeliveries` is undefined in result.json (partial/old run).
+   *  Prevents gate_answers_delivered / gate_answer_count_min from passing vacuously on a collapsed-to-[]
+   *  gateDeliveries; absent ≠ zero gates. Undefined/false on live/replay, where gateDeliveries is always
+   *  populated (empty = genuine zero gates fired). */
+  gateDeliveriesMissing?: boolean;
   /** Relative paths of artifacts written as 0-byte placeholders in the cassette (truncated: true entries).
    *  Set by replay lane from materializeManifest(); empty set on live and verify-run lanes. */
   truncatedPaths?: Set<string>;
@@ -611,14 +616,12 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
     // run/cassette, an unobserved delivery (delivered=null) is NOT neutral — it is absence of the
     // evidence the assertion requires, so it fails loud ("no silent false-greens"). `delivered:
     // false` is a real errored tool_result; `null` is "no tool_result observed for this gate".
-    if (a.gate_answers_delivered) {
-      if (ctx.gateDeliveries.length === 0) {
-        results.push(
-          fail(
-            "gate_answers_delivered: no gates were recorded during this run — either no gate fired, or gate delivery tracking is not wired. Expected at least one delivered gate.",
-          ),
-        );
-      }
+    // Zero gates fired passes vacuously (whether a gate fires is model-dependent) — pair with
+    // gate_answer_count_min to also require presence. Missing telemetry (gateDeliveriesMissing)
+    // is NOT the same as zero gates and must fail evidence-unavailable, not vacuous-pass.
+    if (ctx.gateDeliveriesMissing) {
+      results.push(fail(`evidence unavailable: gate-delivery telemetry absent from result.json — cannot evaluate gate_answers_delivered`));
+    } else if (a.gate_answers_delivered) {
       const bad = ctx.gateDeliveries.filter((g) => g.delivered !== true);
       results.push(
         bad.length === 0
@@ -642,6 +645,18 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
       // inverse: expect a CONFIRMED delivery failure (a real errored tool_result), not merely unobserved.
       const failedConfirmed = ctx.gateDeliveries.filter((g) => g.delivered === false);
       results.push(failedConfirmed.length > 0 ? ok() : fail(`expected a confirmed gate-delivery failure but none was observed`));
+    }
+  }
+  if (a.gate_answer_count_min !== undefined) {
+    if (ctx.gateDeliveriesMissing) {
+      results.push(fail(`evidence unavailable: gate-delivery telemetry absent from result.json — cannot evaluate gate_answer_count_min`));
+    } else {
+      const delivered = ctx.gateDeliveries.filter((g) => g.delivered === true).length;
+      results.push(
+        delivered >= a.gate_answer_count_min
+          ? ok()
+          : fail(`only ${delivered} gate answer(s) confirmed delivered, need ≥ ${a.gate_answer_count_min}`),
+      );
     }
   }
   if (a.artifact_json !== undefined) {

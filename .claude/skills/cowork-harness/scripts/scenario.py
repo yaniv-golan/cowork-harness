@@ -72,7 +72,7 @@ CONTENT_KEYS = {
     "max_turns",
 }
 # content keys, but only evaluated on replay when the cassette carries controlOut
-GATE_KEYS = {"question_asked", "questions_count_max", "gate_answers_delivered"}
+GATE_KEYS = {"question_asked", "questions_count_max", "gate_answers_delivered", "gate_answer_count_min"}
 # manifest-backed: replay-checkable when the cassette carries an `artifacts` manifest (record snapshots one);
 # a manifest-less cassette skips them. Since the 0.3.0 artifact-manifest these are NOT always live-only.
 # computer_links_resolve joins this bucket (not CONTENT_KEYS): resolving a non-empty link set needs

@@ -464,6 +464,11 @@ are the ones that bite hardest.
     sub-question count and a matching footer total — read that off instead of the tool-call count when
     sizing the budget.
 
+19. **`gate_answers_delivered` passes vacuously when no gate fires — use `gate_answer_count_min: 1` to
+    also require a gate.** Whether a gate fires is model-dependent, so `gate_answers_delivered: true`
+    alone can't catch "the gate never fired at all"; pair it with `gate_answer_count_min` when
+    presence matters, not just delivery.
+
 For the complete gotcha list, the assertion catalog, the YAML schema, the fidelity/answer tables,
 and the CI recipe, read the files in `references/`.
 

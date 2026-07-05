@@ -2084,7 +2084,7 @@ function warnUncheckableOnDiskKeys(cassette: Cassette, frozen: Scenario, onDisk:
   // Reuse the exported classification constant — this local copy drifted once already (it was
   // missing computer_links_resolve), silently suppressing the on-disk warning for that key.
   const manifestKeys = new Set<keyof Assertion>(MANIFEST_KEYS);
-  const gateKeys = new Set<keyof Assertion>(["question_asked", "questions_count_max", "gate_answers_delivered"]);
+  const gateKeys = new Set<keyof Assertion>(["question_asked", "questions_count_max", "gate_answers_delivered", "gate_answer_count_min"]);
   const liveOnlyKeys = new Set<keyof Assertion>([
     "egress_denied",
     "egress_allowed",
@@ -2689,7 +2689,12 @@ export const ALWAYS_CONTENT_KEYS: (keyof Assertion)[] = [
 ];
 
 /** Assertion keys evaluated on replay only when `controlOut` (full-fidelity) is present. */
-export const QUESTION_GATE_KEYS: (keyof Assertion)[] = ["question_asked", "questions_count_max", "gate_answers_delivered"];
+export const QUESTION_GATE_KEYS: (keyof Assertion)[] = [
+  "question_asked",
+  "questions_count_max",
+  "gate_answers_delivered",
+  "gate_answer_count_min",
+];
 
 /** Assertion keys evaluated on replay only when the cassette carries an `artifacts` manifest.
  *  `computer_links_resolve` joins this bucket (NOT ALWAYS_CONTENT_KEYS): resolving a NON-empty link set
