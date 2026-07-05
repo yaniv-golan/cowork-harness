@@ -1064,7 +1064,8 @@ export function buildPartialResult(args: {
   fingerprint?: RunResult["fingerprint"];
 }): RunResult {
   const { record } = args;
-  return {
+  const gp = summarizeGateProvenance(record.decisions);
+  return assembleRunResult({
     $schema: RUN_RESULT_SCHEMA_URL,
     generator: "cowork-harness",
     scenario: args.scenarioName,
@@ -1106,12 +1107,24 @@ export function buildPartialResult(args: {
     ),
     preRunPaths: readPreRunManifest(args.outDir),
     effectiveFidelity: args.effectiveFidelity,
-    ...(() => {
-      const gp = summarizeGateProvenance(record.decisions);
-      return gp.total ? { gateProvenance: gp } : {};
-    })(),
-    ...(args.fingerprint ? { fingerprint: args.fingerprint } : {}),
-  };
+    gateProvenance: gp.total ? gp : undefined,
+    fingerprint: args.fingerprint,
+    // Fields this lane deliberately never sets (per this function's own doc comment: "no capability/
+    // verdict fields") — now explicit instead of implicit:
+    resultErrorKind: undefined,
+    stalledOnQuestion: undefined,
+    capabilityProbe: undefined,
+    requiresCapabilityUnmet: undefined,
+    nonDeterministic: undefined,
+    nonDeterministicTerminal: undefined,
+    permissiveAutoAllow: undefined,
+    scan: undefined,
+    fidelityWarnings: undefined,
+    l0PluginDivergence: undefined,
+    missingCapabilityUse: undefined,
+    staleness: undefined,
+    skippedAssertions: undefined,
+  });
 }
 
 /** the structured run trace. */
