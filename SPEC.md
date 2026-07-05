@@ -504,19 +504,25 @@ and a fail observed) always fails that batch, regardless of the numeric rate.
   "egress":    [{ "host","decision":"allow|deny" }],
   "assertions":[{ "assertion": <Assertion>, "pass": bool, "message?": "string" }],
   "subagents": [{ "toolUseId","parentToolUseId?","agentType","declaredTools":[],"toolsUsed":[] }],
-  "unanswered":[{ "question","chosen","by","rationale?","model?" }],
+  "nonReproducibleAnswers?":[{ "question","chosen","by","rationale?","model?" }], // decisions answered by a non-deterministic/non-authoritative source (llm/external/human/first); scripted answers are excluded
   "usage?": { "turns?": number, /* …SDK usage fields (input_tokens, output_tokens, etc.), pass-through */ },
   "cost?": { "usd?": number, "raw?": {...} }, // usd = SDK's total_cost_usd for this invocation; raw = the api_metrics event payload (independent source)
   "durationMs?": number,
+  "fingerprint?": { "baseline", "skillHash?", "skillSources?":[], "skillScope?":[], "sharedHash?", "contentSig?", "fileSigs?":[["relpath","contentSha"]], "fileSigsOmitted?": bool, "mode?": "git|raw", "agentScope?": "skill" }, // skill/plugin staleness fingerprint recorded at run time; lets `verify-run` detect a kept run whose gate snapshot predates a skill change
   "outDir": "string",
   "workDir?": "string",                          // the agent's working root (mnt/) inside the run dir
   "outputsDir?": "string",                       // the user-visible deliverable mount (mnt/outputs)
+  "userVisibleRoots?": ["string"],               // user-visible mount roots (relative to mnt/) — `outputs` plus each connected folder's resolved mount name; plugins excluded
+  "readonlyFolderRoots?": ["string"],            // subset of userVisibleRoots that are read-only (mode:"r") connected-folder mounts — inputs, not deliverables; `artifacts` excludes them
+  "artifacts?": [{ "path","bytes" }],            // files written under the user-visible roots (paths + sizes only — no content snapshot)
+  "preRunPaths?": ["string"],                    // workRoot-relative paths under the user-visible roots that existed BEFORE the agent ran — the `no_unexpected_files` baseline; absent when the tier didn't capture it (microvm) or the run predates the seam
   "effectiveFidelity?": "string",                // tier actually used (differs from `fidelity` when "cowork" resolved)
   "nonDeterministic?": bool,                      // true if any decision came from a non-deterministic source → not reproducible
   "gateProvenance?": { "total": number, "bySource": {…}, "gates": [{ "question","answeredBy","answer","model?" }] }, // how each AskUserQuestion gate was answered; informational (never fails the verdict); live/partial lane only (absent on replay)
   "permissiveAutoAllow?": ["string"],             // tools auto-allowed by cowork parity that real Cowork BLOCKS → green is NOT faithful
   "staleness?": [{ "class": "baseline|skill|shared-root|format|unverifiable-baseline|unverifiable-skill|resolved-tier|unverifiable-tier", "message" }], // replay only; cassette-staleness findings, surfaced for a JSON gate. Non-failing by default (a stale but passing replay stays ok:true); `--strict` fails on every class, `--fail-on-skill-drift` on skill/shared-root/unverifiable-skill only. `resolved-tier` = a `fidelity: cowork` cassette's recorded effectiveFidelity no longer matches the tier the scenario's baseline (pinned `baseline:` or `latest`) resolves to today — the recording exercises the wrong tier; `unverifiable-tier` = the tier check couldn't run for a baseline-dependent (`fidelity: cowork`) cassette (no recorded effectiveFidelity, or its pinned baseline failed to load). Tier resolution is baseline-only (the CLAUDE_FORCE_HOST_LOOP env override is suppressed) so verify results can't differ across machines.
   "skippedAssertions?": { "full": number, "partial": number }, // replay only; count of live-only assertions NOT evaluated (full = whole assertion skipped; partial = content half ran, fs/egress half dropped). The skipped ones are absent from `assertions[]`.
+  "toolResults?": [{ "toolUseId?","isError","text","assertText?" }], // tool-result text at assertion-fidelity cap (10 KB); backs tool_result_contains/tool_result_not_contains
   "skillsInvoked?": ["string"],                  // Wave 1: skill/plugin ids invoked via the Skill tool_use event, call order, duplicates kept. Backs skill_triggered/no_skill_triggered.
   "skillToolAvailable?": bool                     // Wave 1: whether the agent's init tool list included "Skill" — false ⇒ skill_triggered/no_skill_triggered fail as evidence-unavailable (agent-version drift)
 }
@@ -641,9 +647,10 @@ nothing here is guaranteed; minor versions may break any surface — see [RELEAS
   `findings` / `staleness` / `notes` / `version` / `error` channels. This is the machine output the
   CI recipes and the packaged Action steer consumers to parse; renaming or removing a key is
   breaking, adding one is not.
-- **Cassette format** — the current `cassetteVersion` (**7**) and its verdict-modifier assertion keys.
-  Older-version cassettes (the retained `schema/cassette.v2/v3/v5/v6.json` — no v4 schema was ever
-  published) stay replayable; dropping a still-emitted version's readability is breaking.
+- **Cassette format** — the current `cassetteVersion` (**8**, `schema/cassette.v8.json`) and its
+  verdict-modifier assertion keys. Older-version cassettes (the retained
+  `schema/cassette.v2/v3/v5/v6/v7.json` — no v4 schema was ever published) stay replayable; dropping a
+  still-emitted version's readability is breaking.
 - **Control protocol** — `schema/protocol.v1.json` + the golden control-response vectors (§5).
 - **Environment variables** — the documented `COWORK_HARNESS_*` knobs plus `COWORK_AGENT_BINARY` and
   `COWORK_AGENT_IMAGE`. Renaming a documented var or changing its meaning is breaking.
