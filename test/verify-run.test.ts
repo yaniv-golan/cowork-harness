@@ -122,7 +122,7 @@ function keptRunWithFolder(withRoots: boolean): string {
 
 /** Build a kept-run dir whose result.json OMITS one evidence field (simulates a partial/old result.json).
  *  In the verify-run lane an undefined field is "evidence absent", not "empty set". */
-function keptRunWithout_field(field: "toolCounts" | "toolResults" | "subagents" | "scan"): string {
+function keptRunWithout_field(field: "toolCounts" | "toolResults" | "subagents" | "scan" | "gateDeliveries"): string {
   const root = keptRun();
   const fs = require("node:fs");
   const result = JSON.parse(fs.readFileSync(join(root, "result.json"), "utf8"));
@@ -320,6 +320,31 @@ describe.skipIf(!can)("verify-run re-asserts a kept run dir without a live agent
       run,
       ["  - subagent_tool_absent: Bash", "  - dispatch_count_max: 3", "  - subagent_declared_but_unused: Bash"].join("\n"),
     );
+    expect(verifyRun(run, sc).code).toBe(0);
+  });
+
+  // T1 (bug-#33 regression guard): an old/partial result.json with gateDeliveries undefined must NOT
+  // collapse to "zero gates fired" (which would now vacuous-pass) — it must fail evidence-unavailable.
+  // Proves cli.ts's gateDeliveriesMissing wiring reaches the assertion layer.
+  it("FAILS with 'evidence unavailable' when gateDeliveries is absent and gate_answers_delivered is asserted", () => {
+    const run = keptRunWithout_field("gateDeliveries");
+    const sc = scenarioFile(run, "  - gate_answers_delivered: true");
+    const { code, text } = verifyRun(run, sc);
+    expect(code).toBe(1);
+    expect(text).toContain("evidence unavailable");
+    expect(text).toContain("gate_answers_delivered");
+  });
+  it("FAILS with 'evidence unavailable' when gateDeliveries is absent and gate_answer_count_min is asserted", () => {
+    const run = keptRunWithout_field("gateDeliveries");
+    const sc = scenarioFile(run, "  - gate_answer_count_min: 1");
+    const { code, text } = verifyRun(run, sc);
+    expect(code).toBe(1);
+    expect(text).toContain("evidence unavailable");
+    expect(text).toContain("gate_answer_count_min");
+  });
+  it("PASSES (vacuously) when gateDeliveries is present-but-empty and gate_answers_delivered is asserted (absent ≠ zero gates)", () => {
+    const run = keptRun(); // gateDeliveries: [] by default — genuine zero, not missing evidence
+    const sc = scenarioFile(run, "  - gate_answers_delivered: true");
     expect(verifyRun(run, sc).code).toBe(0);
   });
 

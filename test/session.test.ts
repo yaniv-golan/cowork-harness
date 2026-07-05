@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, mkdirSync, writeFileSync, symlinkSync } from
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { loadBaseline } from "../src/baseline.js";
-import { loadSession, buildLaunchPlan, resolveSessionPaths, applySessionOverrides } from "../src/session.js";
+import { loadSession, buildLaunchPlan, resolveSessionPaths, applySessionOverrides, readonlyFolderRootsFromPlan } from "../src/session.js";
 import { parseSessionFile } from "../src/run/execute.js";
 import { agentArgs } from "../src/runtime/argv.js";
 import { Scenario } from "../src/types.js";
@@ -73,6 +73,26 @@ describe("session-id / resume argv (persistence — leverages the agent's native
     const a = agentArgs(baseline, { ...p, agentSessionId: "uuid-1", resume: true }, M);
     expect(a[a.indexOf("--resume") + 1]).toBe("uuid-1");
     expect(a).not.toContain("--session-id");
+  });
+});
+
+describe("readonlyFolderRootsFromPlan (T3 — mode:r inputs get a body-less cassette capture)", () => {
+  it("returns only the mode:r folder's mount path, excluding a rw folder and uploads", () => {
+    const { plan: p } = plan({
+      uploads: ["./examples/data/report.pdf"], // uploads are kind:"upload", never a folder root
+      folders: [{ from: "./examples/data/project", mode: "r" }, { from: "./examples/skills/my-pdf-skill" /* default rw */ }],
+    });
+    const roots = readonlyFolderRootsFromPlan(p);
+    const roFolderMountPath = p.mounts.find((m) => m.hostPath.endsWith("project"))!.mountPath;
+    expect(roots).toEqual([roFolderMountPath]);
+    // sanity: the rw folder and the upload are NOT read-only roots
+    expect(roots).not.toContain(p.mounts.find((m) => m.hostPath.endsWith("my-pdf-skill"))!.mountPath);
+    expect(roots.every((r) => !r.startsWith("uploads/"))).toBe(true);
+  });
+
+  it("is empty when no folder is mode:r", () => {
+    const { plan: p } = plan({ folders: [{ from: "./examples/data/project" }] });
+    expect(readonlyFolderRootsFromPlan(p)).toEqual([]);
   });
 });
 

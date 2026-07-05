@@ -204,9 +204,22 @@ export interface AssertContext {
    *  on default-false/empty scan fields (absent ≠ clean scan). Undefined/false on live/replay, where
    *  the scan structure is always populated (empty = proof-of-absence). */
   scanMissing?: boolean;
+  /** Set by verify-run only when `result.gateDeliveries` is undefined in result.json (partial/old run).
+   *  Prevents gate_answers_delivered / gate_answer_count_min from passing vacuously on a collapsed-to-[]
+   *  gateDeliveries; absent ≠ zero gates. Undefined/false on live/replay, where gateDeliveries is always
+   *  populated (empty = genuine zero gates fired). */
+  gateDeliveriesMissing?: boolean;
   /** Relative paths of artifacts written as 0-byte placeholders in the cassette (truncated: true entries).
    *  Set by replay lane from materializeManifest(); empty set on live and verify-run lanes. */
   truncatedPaths?: Set<string>;
+  /** workRoot-relative mount prefixes of read-only (`mode:r`) connected folders — captured body-less
+   *  (see buildManifest's `bodyLessPrefixes`). On the LIVE/verify-run lanes the real file is on disk, so
+   *  content assertions would evaluate it and PASS, while replay (0-byte placeholder) cannot — a
+   *  green-record/red-replay asymmetry. Content keys (artifact_json) therefore treat a target under one
+   *  of these prefixes as evidence-unavailable on EVERY lane, matching what `truncatedPaths` forces on
+   *  replay. Existence keys (file_exists/user_visible_artifact) are unaffected (existence is provable
+   *  from the recorded hash). Undefined/empty when there is no read-only folder. */
+  readonlyFolderRoots?: string[];
   /** Skill/plugin ids invoked via the Skill tool_use event, in call order (duplicates kept). */
   skillsInvoked: string[];
   /** Whether the agent's init tool list included "Skill". False/never-observed means
@@ -611,14 +624,12 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
     // run/cassette, an unobserved delivery (delivered=null) is NOT neutral — it is absence of the
     // evidence the assertion requires, so it fails loud ("no silent false-greens"). `delivered:
     // false` is a real errored tool_result; `null` is "no tool_result observed for this gate".
-    if (a.gate_answers_delivered) {
-      if (ctx.gateDeliveries.length === 0) {
-        results.push(
-          fail(
-            "gate_answers_delivered: no gates were recorded during this run — either no gate fired, or gate delivery tracking is not wired. Expected at least one delivered gate.",
-          ),
-        );
-      }
+    // Zero gates fired passes vacuously (whether a gate fires is model-dependent) — pair with
+    // gate_answer_count_min to also require presence. Missing telemetry (gateDeliveriesMissing)
+    // is NOT the same as zero gates and must fail evidence-unavailable, not vacuous-pass.
+    if (ctx.gateDeliveriesMissing) {
+      results.push(fail(`evidence unavailable: gate-delivery telemetry absent from result.json — cannot evaluate gate_answers_delivered`));
+    } else if (a.gate_answers_delivered) {
       const bad = ctx.gateDeliveries.filter((g) => g.delivered !== true);
       results.push(
         bad.length === 0
@@ -644,6 +655,18 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
       results.push(failedConfirmed.length > 0 ? ok() : fail(`expected a confirmed gate-delivery failure but none was observed`));
     }
   }
+  if (a.gate_answer_count_min !== undefined) {
+    if (ctx.gateDeliveriesMissing) {
+      results.push(fail(`evidence unavailable: gate-delivery telemetry absent from result.json — cannot evaluate gate_answer_count_min`));
+    } else {
+      const delivered = ctx.gateDeliveries.filter((g) => g.delivered === true).length;
+      results.push(
+        delivered >= a.gate_answer_count_min
+          ? ok()
+          : fail(`only ${delivered} gate answer(s) confirmed delivered, need ≥ ${a.gate_answer_count_min}`),
+      );
+    }
+  }
   if (a.artifact_json !== undefined) {
     const aj = a.artifact_json;
     const file = containedPath(ctx.workRoot, aj.artifact);
@@ -651,10 +674,34 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
     else {
       // verify the real path (after symlink resolution) is still under workRoot.
       const realFile = containedRealPath(ctx.workRoot, file);
+      // A body-less manifest entry (a read-only connected-folder input, or an artifact over the body
+      // cap) has no content in the cassette — artifact_json cannot be evaluated on replay (the 0-byte
+      // placeholder isn't parseable). To keep record/verify-run/replay SYMMETRIC (no green-record →
+      // red-replay), treat such a target as evidence-unavailable on EVERY lane: `truncatedPaths` flags
+      // it on replay; `readonlyFolderRoots` flags the read-only-input case on the live/verify-run lanes
+      // where the real file is still on disk. (Existence keys stay green — existence is provable from
+      // the recorded hash — but content is genuinely absent, so this fails loud, never vacuous.)
+      const rel = relative(resolve(ctx.workRoot), file);
+      const isReadonlyInput = (ctx.readonlyFolderRoots ?? []).some((pre) => rel === pre || rel.startsWith(pre + "/"));
+      const bodyLess = truncated.has(rel) || isReadonlyInput;
       if (!realFile) {
         results.push(fail(`unsafe artifact_json path "${aj.artifact}" — symlink target escapes the work root`));
       } else if (!existsSync(realFile)) {
         results.push(fail(`artifact_json: file not found: ${aj.artifact} (under ${ctx.workRoot})`));
+      } else if (bodyLess) {
+        // Every lane knows WHY the entry is body-less, so the remedy is always precise: live/verify-run
+        // derive `readonlyFolderRoots` from the plan; replay reads the set persisted on the cassette
+        // (v7). A read-only input can't be captured (assert on a deliverable); an over-cap artifact can
+        // (raise the cap). `isReadonlyInput` distinguishes them on all three lanes.
+        results.push(
+          fail(
+            `evidence unavailable: artifact_json target "${aj.artifact}" was captured body-less ` +
+              (isReadonlyInput
+                ? `(read-only connected-folder input — its content is never captured; assert artifact_json on a deliverable instead)`
+                : `(larger than the artifact-body cap — raise --max-artifact-bytes to capture it)`) +
+              ` — content is not in the cassette, so it cannot be evaluated on replay`,
+          ),
+        );
       } else {
         let doc: unknown;
         let parsed = true;

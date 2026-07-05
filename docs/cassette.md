@@ -53,9 +53,11 @@ re-record). `expect_denied`/filesystem/egress keys are sourced but stay live-onl
   "events": [ /* JSON lines from events.jsonl (child→driver stdout) */ ],
   "controlOut": [ /* JSON lines from control-out.jsonl (driver→child control_responses) */ ],
   "userVisibleRoots": ["outputs", "myproject"], // visible roots = outputs + each connected folder's mount name (its basename; `.projects` is the pre-1.14271.0 legacy fallback)
+  "readonlyFolderRoots": ["carta-folder"], // the mode:r subset of userVisibleRoots (body-less); lets replay give artifact_json the precise remedy. Optional; absent when no read-only folder
   "artifacts": [                         // snapshot of outputs/ + connected folders (optional)
     { "path": "outputs/x.json", "bytes": 24, "sha256": "…", "body": "{…}" }, // body inlined ≤ 64 KiB
-    { "path": "outputs/big.bin", "bytes": 9e6, "sha256": "…", "truncated": true } // oversized → hash-only
+    { "path": "outputs/big.bin", "bytes": 9e6, "sha256": "…", "truncated": true }, // oversized → hash-only
+    { "path": "carta-folder/input.xlsx", "bytes": 4096, "sha256": "…", "truncated": true } // mode:r connected-folder INPUT → body-less (see below), regardless of size
   ],
   "fingerprint": { "baseline": "1.15962.1", "skillHash": "…", "mode": "git", "contentSig": "…", "fileSigs": [["skills/x/SKILL.md", "…"]], "skillSources": ["…"] }, // staleness tripwire (v5: fileSigs only; v6: mode + git default; v7: NUL-delimited hash entries)
   "authoring": { "nonDeterministic": true, "channel": "decider-dir" } // present ONLY when a live decider answered ≥1 gate (see §Answering gates during recording); re-record may drift, replay is still deterministic
@@ -227,17 +229,18 @@ the rules and CI-placement rationale (why each category behaves this way), see
 | `tool_calls_max` | total top-level tool calls (sub-agent tools excluded) ≤ N — meaningfully replay-checkable; the re-drive recomputes `toolCounts` deterministically |
 | `max_turns` | SDK-reported (or fallback-counted) turn count ≤ N — replay-checkable, recounted deterministically same as `tool_calls_max` |
 | `question_asked` | agent asked an AskUserQuestion matching the regex |
-| `questions_count_max` | at most N questions asked |
-| `gate_answers_delivered` | answered gates' answers reached the model |
+| `questions_count_max` | at most N **sub-questions** asked — a bundled `AskUserQuestion` with K sub-questions counts as K, not 1; `trace --view questions`'s footer total uses the same definition |
+| `gate_answers_delivered` | answered gates' answers reached the model — **zero gates fired passes vacuously** (gate firing is model-dependent); pair with `gate_answer_count_min` to also require a gate |
+| `gate_answer_count_min` | at least N AskUserQuestion gates fired AND were delivered non-error — the presence companion to `gate_answers_delivered`'s vacuous-pass |
 | `result` | run ended with `success` or `error` |
 | `allow_permissive_auto_allow` | verdict modifier — kept on replay → no-op pass (the live signal it suppresses is zeroed) |
 | `allow_missing_capability` | verdict modifier — kept on replay → no-op pass (the live signal it suppresses is zeroed) |
 | `allow_l0_plugin_divergence` | verdict modifier — kept on replay → no-op pass (the live signal it suppresses is zeroed) |
 | `allow_stall` | verdict modifier — kept on replay → no-op pass (suppresses the `stalled` default-fail; the stall is re-derived on the replay re-drive) |
 
-**`question_asked`, `questions_count_max`, `gate_answers_delivered` require `controlOut`** (full-fidelity
-replay). On an old cassette without `controlOut` these three keys are excluded from evaluation — not
-vacuously passed — and a loud warning fires (see §Backward compatibility).
+**`question_asked`, `questions_count_max`, `gate_answers_delivered`, `gate_answer_count_min` require
+`controlOut`** (full-fidelity replay). On an old cassette without `controlOut` these keys are excluded
+from evaluation — not vacuously passed — and a loud warning fires (see §Backward compatibility).
 
 `file_exists`, `user_visible_artifact`, `artifact_json`, `computer_links_resolve`, and `no_unexpected_files` are **not** in the
 table above — see the next subsection; they're replay-checkable only when the cassette carries an
@@ -258,7 +261,19 @@ The inline cap is 64 KiB; raise it with `record --max-artifact-bytes <n>` (or
 fails fast if an `artifact_json` targets an artifact it had to truncate (that would pass at record but fail
 at replay). `computer_links_resolve` resolves every `computer://` link in the transcript against the same
 manifest, with host-shaped links normalized via the recorded session folders. Without a manifest (older
-cassettes), these are skipped. A green replay re-confirms *record-time* artifacts, **not** that the current
+cassettes), these are skipped.
+
+**Read-only (`mode: r`) connected-folder contents are captured body-less.** A folder mounted `mode: r` in
+`session:` holds pre-existing INPUTS the agent only reads, not deliverables — so `record` snapshots them
+the same way it snapshots an over-cap file: path + `bytes` + `sha256`, `truncated: true`, **no `body`**,
+regardless of size. The entry still lands in `artifacts[]` (unlike a fully-excluded path) so
+`materializeManifest` writes a 0-byte placeholder at replay and `computer_links_resolve`/`file_exists`
+resolve identically live and on replay; only `artifact_json` (which needs the inlined body) can't target
+one. Two side benefits: no cassette bloat from a large input file, and no `binary` privacy finding (the
+scanner only flags a *committed* binary body) — so a `mode: r` input never needs `--allow`. A `mode: rw`/`rwd`
+folder's contents are captured with a full body exactly as `outputs/` is.
+
+A green replay re-confirms *record-time* artifacts, **not** that the current
 skill still produces them — `replay --strict` fails the run when the `fingerprint` shows ANY skill/baseline
 drift, or `replay --fail-on-skill-drift` fails only on skill-source drift (leaving baseline drift a warning).
 Either way, every replay result also reports the drift in `staleness[]` (class-tagged) for a JSON gate to read.
@@ -303,12 +318,16 @@ On replay, the replay decider (built by `buildReplayDecider()`) indexes `control
 the decision pipeline instead of consulting a live decider or asking the user. This makes the full
 `Run.handleDecision` path execute on replay, which populates `rec.questions`, `rec.gateAnswers`, and
 `rec.gateDeliveries` — exactly as in a live run. Consequence: `question_asked`, `questions_count_max`,
-and `gate_answers_delivered` are now genuinely evaluated, not silently skipped or vacuously passed.
+`gate_answers_delivered`, and `gate_answer_count_min` are now genuinely evaluated, not silently skipped
+or vacuously passed.
 
 `gate_answers_delivered` accepts a boolean: `: true` asserts the answered gates' answers reached the
-model; `: false` is the **inverse** — it asserts a *confirmed delivery failure* (at least one gate whose
-`delivered === false`), for scenarios that deliberately exercise a non-delivery path. Unobserved delivery
-(`delivered: null`) satisfies neither — absence of evidence is a failure, not a pass.
+model, **passing vacuously when zero gates fired** (gate firing is model-dependent); `: false` is the
+**inverse** — it asserts a *confirmed delivery failure* (at least one gate whose `delivered === false`),
+for scenarios that deliberately exercise a non-delivery path. Unobserved delivery (`delivered: null`)
+satisfies neither — absence of evidence is a failure, not a pass. Pair `gate_answers_delivered: true`
+with `gate_answer_count_min: <N>` when a gate firing at all is part of what you're testing —
+`gate_answer_count_min` fails if fewer than N gates fired AND were delivered non-error.
 
 ### The O7 guard — `replay_protocol_fidelity`
 
@@ -337,8 +356,8 @@ regressing to the prior false-green behavior:
    ::warning:: [replay] cassette has no controlOut (pre-full-fidelity) — question/gate assertions
    are NOT checked; re-record to enable them
    ```
-2. **`question_asked`, `questions_count_max`, `gate_answers_delivered` are excluded** from the evaluated
-   assertion set for that run — not vacuously passed, absent.
+2. **`question_asked`, `questions_count_max`, `gate_answers_delivered`, `gate_answer_count_min` are
+   excluded** from the evaluated assertion set for that run — not vacuously passed, absent.
 3. All other content assertions (transcript, tool, subagent, result) evaluate normally.
 
 This preserves "skipped ≠ false-green." Re-record with a current harness to get the full-fidelity path.
@@ -477,10 +496,12 @@ counts) — committed PII surface. Two layers, distinct from secret-scrub (which
   live-enumerated app/process inventory sentinel (e.g. a computer-use tool schema's "Available applications on
   this machine: …") is never legitimate catalog boilerplate either; none of the three share the ambiguity that
   gets `currency`/`domain` excluded there. `--allow <regex>` suppresses synthetic / public reference names
-  (e.g. `NVCA`, `Cooley GO`, `Acme`); each allow must match the **whole** finding token (so a bare-domain allow
-  no longer silently clears an email whose domain it matches), and `--allow-domain` / `--allow-email` /
-  `--allow-path` / `--allow-machine-inventory` scope an allow to a single finding class, while `--allow-file
-  <path>` loads allows from a version-controlled file (one regex per line, `#` comments). Multi-word proper
+  (e.g. `NVCA`, `Cooley GO`, `Acme`) — each `--allow` value is a **pattern**, matched against a finding, not a
+  path to allow; each allow must match the **whole** finding token (so a bare-domain allow no longer silently
+  clears an email whose domain it matches), and `--allow-domain` / `--allow-email` / `--allow-path` /
+  `--allow-machine-inventory` scope an allow to a single finding class, while `--allow-patterns-file <path>` is a
+  different thing — it loads allows from a version-controlled **file of patterns** (one regex per line, `#`
+  comments), not a path to allow directly. Multi-word proper
   names are **not** a default class (too noisy). `verify-cassettes` also runs the **staleness**
   check (both checks run by default; scope to one with `--skip-privacy` or `--skip-staleness`): a drifted
   `skillHash` (you edited the skill but didn't re-record) fails the gate.

@@ -66,6 +66,30 @@ describe.skipIf(!can)("verify-cassettes CLI gate", () => {
     expect(r.code).toBe(0);
   });
 
+  it("the old --allow-file spelling is hard-removed → exit 2 unknown-flag error (loud removal, no deprecation window)", () => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-vc-"));
+    const c = cassette([JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "mail eve@evil.com" }] } })]);
+    writeFileSync(join(d, "leak.cassette.json"), JSON.stringify(c));
+    const patternsFile = join(d, "allow.txt");
+    writeFileSync(patternsFile, "eve@evil\\.com\nevil\\.com\n");
+    const r = run(["verify-cassettes", join(d, "leak.cassette.json"), "--allow-file", patternsFile], d);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(/unknown flag: --allow-file/);
+  });
+
+  it("--allow-patterns-file <file> loads all-class patterns from a version-controlled file → exit 0", () => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-vc-"));
+    const c = cassette([JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "mail eve@evil.com" }] } })]);
+    writeFileSync(join(d, "leak.cassette.json"), JSON.stringify(c));
+    const patternsFile = join(d, "allow.txt");
+    // one pattern per line; blank lines and `#` comments are ignored; both the email AND domain
+    // tokens need a whole-token match to clear the cassette (same rule as --allow).
+    writeFileSync(patternsFile, "# reviewed synthetic addresses\neve@evil\\.com\n\nevil\\.com\n");
+    const r = run(["verify-cassettes", join(d, "leak.cassette.json"), "--allow-patterns-file", patternsFile, "--output-format", "json"], d);
+    expect(r.code).toBe(0);
+    expect(r.json.ok).toBe(true);
+  });
+
   it("a bare-DOMAIN allow does NOT suppress an EMAIL finding (no cross-class bleed) → still exit 1", () => {
     const d = mkdtempSync(join(tmpdir(), "cwh-vc-"));
     const c = cassette([JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "mail eve@evil.com" }] } })]);

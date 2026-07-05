@@ -59,6 +59,7 @@ Top-level fields of a `*.cassette.json` (schema `schema/cassette.v7.json`):
 | `artifacts` | Output-file manifest (paths + hashes + small inlined bodies) — unlocks `file_exists`/`artifact_json` on replay |
 | `fingerprint` | Skill/baseline staleness tripwire |
 | `userVisibleRoots` | The user-visible mount roots captured at record time |
+| `readonlyFolderRoots` | The read-only (`mode: r`) subset of `userVisibleRoots` — captured body-less; lets replay give `artifact_json` the precise remedy for a body-less input |
 | `preRunPaths` | Pre-run file-path baseline for `no_unexpected_files` (workRoot-relative; co-present with `userVisibleRoots`) |
 | `scenarioSource` | Relative path to the authored YAML this was recorded from |
 | `authoring` | Present iff a live decider answered ≥1 gate during recording (`nonDeterministic: true`) |
@@ -83,10 +84,11 @@ record — retrofitting means re-recording:
    redaction missed.
 5. **Scoping idioms for scanner findings you've reviewed and accepted:** prefer the class-scoped
    flags — `--allow-domain 'api\.example\.com'`, `--allow-email '.*@yourco\.com'`,
-   `--allow-path '/opt/ci-runner/.*'` — over bare `--allow` (which applies to every class and can
-   let a domain allow swallow an email leak). For a version-controlled allowlist use
-   `--allow-file <path>`: bare all-class patterns, one regex per line, `#` comments and blank
-   lines ignored.
+   `--allow-path '/opt/ci-runner/.*'` — over bare `--allow <regex>` (a single pattern, which
+   applies to every class and can let a domain allow swallow an email leak). For a
+   version-controlled allowlist use `--allow-patterns-file <path>`: a FILE of bare all-class
+   patterns, one regex per line, `#` comments and blank lines ignored — note the flag name is the
+   FILE of patterns, not a path to allow.
 
 ## Recipe 4 — Budget assertions without a two-pass record
 

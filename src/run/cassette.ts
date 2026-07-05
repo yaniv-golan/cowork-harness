@@ -112,6 +112,13 @@ export interface Cassette {
   // mount name). Replay reads THIS instead of a hardcoded `["outputs",".projects"]` prefix — folder mount
   // names are dynamic/gated. ABSENT on pre-v4 cassettes → replay falls back to the legacy prefix.
   userVisibleRoots?: string[];
+  // The subset of `userVisibleRoots` that are READ-ONLY (`mode: r`) connected folders — captured
+  // body-less. Persisted (same optional-metadata pattern as `preRunPaths`, no cassetteVersion bump)
+  // so replay knows WHY a manifest entry is body-less (a read-only input vs. an over-cap artifact) and
+  // can give the precise remediation — the record/verify-run lanes derive the same set from the plan.
+  // ABSENT/empty ⇒ no read-only folder in this run. A subset of `userVisibleRoots`, so it introduces
+  // no new privacy strings.
+  readonlyFolderRoots?: string[];
   // the authored scenario SOURCE file this cassette was recorded from, RELATIVE to the cassette dir
   // (relocatable, no absolute host path). `record --rerecord-stale` prefers this over a `slugForPath(name)`
   // guess so an authored `name:` that differs from the filename still re-records from the edited YAML rather
@@ -212,8 +219,19 @@ function isLosslessUtf8(buf: Buffer): boolean {
 
 /** Snapshot the user-visible artifacts under `workRoot` into manifest entries.
  *  Exported for token-free record→replay round-trip tests. */
-export function buildManifest(workRoot: string, cap?: number, roots: string[] = ["outputs", ".projects"]): ManifestEntry[] {
+export function buildManifest(
+  workRoot: string,
+  cap?: number,
+  roots: string[] = ["outputs", ".projects"],
+  bodyLessPrefixes: string[] = [],
+): ManifestEntry[] {
   const limit = cap ?? defaultBodyCap();
+  // Read-only connected-folder inputs (`bodyLessPrefixes`) are captured path+bytes+sha256 only, same as
+  // an over-cap entry — no body, so no bloat and no `binary` privacy finding (cassette.ts binary scan
+  // only fires on a committed base64 body). The manifest entry SURVIVES (unlike full exclusion) so
+  // `materializeManifest` writes a 0-byte placeholder and `computer_links_resolve` resolves identically
+  // on live and replay (see T3 in the pre-1.0 fix plan).
+  const isBodyLess = (path: string): boolean => bodyLessPrefixes.some((prefix) => path === prefix || path.startsWith(prefix + "/"));
   return collectArtifacts(workRoot, roots).map(({ path, bytes }) => {
     // collectArtifacts paths are derived from a directory walk; even though it already skips symlinks,
     // an entry must not inline content outside the work root. Re-confirm containment before reading the body.
@@ -230,7 +248,7 @@ export function buildManifest(workRoot: string, cap?: number, roots: string[] = 
       return { path, bytes, sha256: "", truncated: true };
     }
     const sha256 = createHash("sha256").update(buf).digest("hex");
-    if (buf.length > limit) return { path, bytes, sha256, truncated: true };
+    if (buf.length > limit || isBodyLess(path)) return { path, bytes, sha256, truncated: true };
     // store an encoding marker. UTF-8-safe bodies stay text (readable cassettes); binary bodies go
     // base64 so the record→replay round-trip is byte-exact and the sha256 verify stays valid.
     if (isLosslessUtf8(buf)) return { path, bytes, sha256, body: buf.toString("utf8") };
@@ -452,11 +470,12 @@ export function scanCassette(cassette: Cassette, allow: AllowInput[]): ScanFindi
           // zip/DEFLATE streams. Count a COMMITTED binary body as a real finding (cls "binary", NOT the
           // benign "unscanned" used for a TRUNCATED/uncommitted entry below) so the gate can't greenlight
           // raw recoverable PII. Recourse: after reviewing the deliverable, clear it with
-          // `--allow <path-regex>` (matched on the artifact path above, since the body is unreadable).
+          // `--allow <path-regex>` (a PATTERN matched on the artifact path above, since the body is
+          // unreadable) — NOT `--allow-patterns-file`, which loads a FILE of patterns, not a path to allow.
           findings.push({
             where: `artifact ${a.path}`,
             cls: "binary",
-            sample: `(committed binary body — not text-scannable; review and clear with --allow ${a.path})`,
+            sample: `(committed binary body — not text-scannable; review and clear with --allow ${a.path} (a pattern matched on this path); note --allow-patterns-file is a FILE of patterns, not this path)`,
           });
         }
       } else {
@@ -476,6 +495,9 @@ export function scanCassette(cassette: Cassette, allow: AllowInput[]): ScanFindi
   // cassettes`. Scan them too, prefixed `metadata:` so a reviewer knows redaction here ALSO rewrites
   // structural paths, distinct from free-text findings in the transcript/deliverable.
   (cassette.userVisibleRoots ?? []).forEach((r, i) => findings.push(...scanText(r, `metadata:userVisibleRoots[${i}]`, allow, FULL)));
+  // readonlyFolderRoots is a subset of userVisibleRoots (same strings), but it's a separately-persisted
+  // field — scan it too so a reviewer can't be surprised by an unscanned persisted string.
+  (cassette.readonlyFolderRoots ?? []).forEach((r, i) => findings.push(...scanText(r, `metadata:readonlyFolderRoots[${i}]`, allow, FULL)));
   findings.push(...scanText(cassette.scenario.name ?? "", "metadata:scenario.name", allow, FULL));
   findings.push(...scanText(cassette.scenario.session ?? "", "metadata:scenario.session", allow, FULL));
   if (cassette.scenarioSource) findings.push(...scanText(cassette.scenarioSource, "metadata:scenarioSource", allow, FULL));
@@ -1093,10 +1115,15 @@ export function redactCassette(cassette: Cassette, policy: RedactionPolicy): Cas
     }
   }
   const redactedPreRunPaths = cassette.preRunPaths?.map((p) => redactText(p, policy));
+  // readonlyFolderRoots is a subset of userVisibleRoots; redact it with the same context-free redactText
+  // so the prefix relationship with the (redacted) artifact paths is preserved. The `...cassette` spread
+  // would otherwise carry the UNREDACTED set through.
+  const redactedReadonly = cassette.readonlyFolderRoots?.map((r) => redactText(r, policy));
   return {
     ...cassette,
     scenario,
     userVisibleRoots: redactedRoots,
+    readonlyFolderRoots: redactedReadonly,
     artifacts: redactedArtifacts,
     preRunPaths: redactedPreRunPaths,
     events: cassette.events.map((l) => redactJsonLine(l, policy)),
@@ -1416,13 +1443,22 @@ export function redactionPreflightMessage(items: Array<{ scenario: Scenario; pol
   );
 }
 
-/** Return the `artifact_json.artifact` paths a scenario asserts that ended up TRUNCATED in the manifest
- *  (body >cap, hash-only). Such an assertion passes at record (evaluated on the live on-disk file) but FAILS
- *  at replay (the materialized body is empty → "not valid JSON"). Paths are normalized through `resolve` so
- *  `./outputs/x.json` and `outputs/x.json` join cleanly against the manifest's walk paths. */
-export function artifactJsonTargetsTruncated(scenario: Scenario, workRoot: string, artifacts: ManifestEntry[]): string[] {
+/** Return the `artifact_json.artifact` paths a scenario asserts that ended up truncated by SIZE (body
+ *  >cap, hash-only) — the genuine green-record/red-replay case whose remedy is "raise the cap". This
+ *  EXCLUDES read-only connected-folder inputs: those are body-less by policy (not size), raising the cap
+ *  can't capture them, and `artifact_json` against one already fails LOUD-and-symmetrically at record,
+ *  verify-run, and replay (evidence-unavailable, see assert.ts) — so they are neither an asymmetry nor a
+ *  "too large" problem. Paths are normalized through `resolve` so `./outputs/x.json` and `outputs/x.json`
+ *  join cleanly against the manifest's walk paths. */
+export function artifactJsonTargetsTruncated(
+  scenario: Scenario,
+  workRoot: string,
+  artifacts: ManifestEntry[],
+  readonlyFolderRoots: string[] = [],
+): string[] {
+  const isReadonly = (p: string): boolean => readonlyFolderRoots.some((pre) => p === pre || p.startsWith(pre + "/"));
   const truncatedAbs = new Set<string>();
-  for (const a of artifacts) if (a.truncated) truncatedAbs.add(resolve(workRoot, a.path));
+  for (const a of artifacts) if (a.truncated && !isReadonly(a.path)) truncatedAbs.add(resolve(workRoot, a.path));
   if (truncatedAbs.size === 0) return [];
   const hits: string[] = [];
   for (const a of scenario.assert ?? []) {
@@ -1935,7 +1971,12 @@ async function recordScenarioObject(
   // Snapshot under the run's REAL user-visible roots (outputs + resolved folder mount names), persisted
   // below as cassette.userVisibleRoots so replay matches — not the legacy hardcoded `.projects/` prefix.
   const recordRoots = result.userVisibleRoots ?? ["outputs", ".projects"];
-  const artifacts = (result.workDir ? buildManifest(result.workDir, opts.maxArtifactBytes, recordRoots) : []).map((a) => {
+  // Read-only connected-folder inputs are captured body-less (path + sha256, no body) — see buildManifest's
+  // `bodyLessPrefixes` doc comment. `recordRoots`/`cassette.userVisibleRoots` stay the FULL set; only the
+  // captured bodies under these prefixes are stripped.
+  const artifacts = (
+    result.workDir ? buildManifest(result.workDir, opts.maxArtifactBytes, recordRoots, result.readonlyFolderRoots ?? []) : []
+  ).map((a) => {
     if (a.body === undefined) return a;
     if (a.encoding === "base64") {
       const scrubbed = scrubField(a.body, secrets);
@@ -1977,7 +2018,7 @@ async function recordScenarioObject(
   // replay (no committed body). Surface that record→replay asymmetry NOW, at its cause, instead of letting a
   // green record produce a red replay in CI. Honor --allow-failing (warn, don't block) like the verdict gate.
   if (result.workDir) {
-    const truncatedAsserted = artifactJsonTargetsTruncated(scenario, result.workDir, artifacts);
+    const truncatedAsserted = artifactJsonTargetsTruncated(scenario, result.workDir, artifacts, result.readonlyFolderRoots ?? []);
     if (truncatedAsserted.length) {
       const cap = opts.maxArtifactBytes ?? defaultBodyCap();
       const msg =
@@ -1998,6 +2039,9 @@ async function recordScenarioObject(
     effectiveFidelity: result.effectiveFidelity,
     artifacts,
     userVisibleRoots: recordRoots,
+    // Persist the read-only subset ONLY when non-empty (keeps cassettes without connected folders
+    // clean); replay reads it to distinguish a body-less read-only input from an over-cap artifact.
+    ...(result.readonlyFolderRoots?.length ? { readonlyFolderRoots: result.readonlyFolderRoots } : {}),
     // co-present with userVisibleRoots by construction (see the Cassette field comment) — a cassette
     // carrying preRunPaths never hits replay's legacy-roots fallback.
     preRunPaths: result.preRunPaths,
@@ -2083,7 +2127,7 @@ function warnUncheckableOnDiskKeys(cassette: Cassette, frozen: Scenario, onDisk:
   // Reuse the exported classification constant — this local copy drifted once already (it was
   // missing computer_links_resolve), silently suppressing the on-disk warning for that key.
   const manifestKeys = new Set<keyof Assertion>(MANIFEST_KEYS);
-  const gateKeys = new Set<keyof Assertion>(["question_asked", "questions_count_max", "gate_answers_delivered"]);
+  const gateKeys = new Set<keyof Assertion>(["question_asked", "questions_count_max", "gate_answers_delivered", "gate_answer_count_min"]);
   const liveOnlyKeys = new Set<keyof Assertion>([
     "egress_denied",
     "egress_allowed",
@@ -2313,9 +2357,9 @@ export function cmdVerifyCassettes(args: string[]) {
     p = parseArgs(args, {
       booleans: ["--skip-privacy", "--skip-staleness", "--quiet", "--verbose"],
       values: ["--output-format"],
-      repeated: ["--allow", "--allow-domain", "--allow-email", "--allow-path", "--allow-machine-inventory", "--allow-file"],
+      repeated: ["--allow", "--allow-domain", "--allow-email", "--allow-path", "--allow-machine-inventory", "--allow-patterns-file"],
       enums: { "--output-format": ["text", "json"] },
-      noDashValue: ["--allow-file"],
+      noDashValue: ["--allow-patterns-file"],
       aliases: { "-q": "--quiet" },
     });
   } catch (e) {
@@ -2331,10 +2375,13 @@ export function cmdVerifyCassettes(args: string[]) {
   }
   const doPrivacy = !skipPrivacy;
   const doStaleness = !skipStaleness;
-  // Allow model: each entry is whole-token anchored + class-scoped. A bare `--allow` applies to every
-  // class (back-compat); `--allow-domain`/`--allow-email`/`--allow-path`/`--allow-machine-inventory`
-  // scope to one class so a domain allow can't bleed into the email tripwire. `--allow-file` loads bare
-  // (all-class) patterns from a version-controlled file, one per line, `#` comments and blanks ignored.
+  // Allow model: each entry is whole-token anchored + class-scoped. A bare `--allow <regex>` is a single
+  // PATTERN applied to every class (back-compat); `--allow-domain`/`--allow-email`/`--allow-path`/
+  // `--allow-machine-inventory` scope a pattern to one class so a domain allow can't bleed into the
+  // email tripwire. `--allow-patterns-file <path>` is a different thing: it loads bare (all-class)
+  // patterns from a version-controlled FILE of patterns, one regex per line, `#` comments and blanks
+  // ignored — not "allow this file" (the flag does not accept a path to allow, it accepts a path to a
+  // patterns list).
   const allow: AllowPattern[] = [];
   const addAllow = (src: string, cls: string | undefined, flag: string): void => {
     try {
@@ -2349,23 +2396,26 @@ export function cmdVerifyCassettes(args: string[]) {
   for (const src of p.repeated["--allow-email"] ?? []) addAllow(src, "email", "--allow-email");
   for (const src of p.repeated["--allow-path"] ?? []) addAllow(src, "path", "--allow-path");
   for (const src of p.repeated["--allow-machine-inventory"] ?? []) addAllow(src, "machine-inventory", "--allow-machine-inventory");
-  for (const file of p.repeated["--allow-file"] ?? []) {
+  for (const file of p.repeated["--allow-patterns-file"] ?? []) {
     let body: string;
     try {
       body = readFileSync(file, "utf8");
     } catch (e) {
-      log(`--allow-file: cannot read ${file}: ${(e as Error).message}`);
+      log(`--allow-patterns-file: cannot read ${file}: ${(e as Error).message}`);
       return process.exit(2);
     }
     for (const raw of body.split("\n")) {
       const line = raw.trim();
-      if (line && !line.startsWith("#")) addAllow(line, undefined, `--allow-file (${file})`);
+      if (line && !line.startsWith("#")) addAllow(line, undefined, `--allow-patterns-file (${file})`);
     }
   }
   const target = p.positionals[0];
   if (!target) {
     log(
-      "usage: verify-cassettes <file|dir> [--skip-privacy|--skip-staleness] [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-path <regex>]... [--allow-machine-inventory <regex>]... [--allow-file <path>]... [--output-format json]",
+      "usage: verify-cassettes <file|dir> [--skip-privacy|--skip-staleness] [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-path <regex>]... [--allow-machine-inventory <regex>]... [--allow-patterns-file <path>]... [--output-format json]",
+    );
+    log(
+      "  --allow <regex> is a PATTERN (matched against a finding); --allow-patterns-file <path> is a FILE of patterns, one regex per line — not a path to allow.",
     );
     return process.exit(2);
   }
@@ -2682,7 +2732,12 @@ export const ALWAYS_CONTENT_KEYS: (keyof Assertion)[] = [
 ];
 
 /** Assertion keys evaluated on replay only when `controlOut` (full-fidelity) is present. */
-export const QUESTION_GATE_KEYS: (keyof Assertion)[] = ["question_asked", "questions_count_max", "gate_answers_delivered"];
+export const QUESTION_GATE_KEYS: (keyof Assertion)[] = [
+  "question_asked",
+  "questions_count_max",
+  "gate_answers_delivered",
+  "gate_answer_count_min",
+];
 
 /** Assertion keys evaluated on replay only when the cassette carries an `artifacts` manifest.
  *  `computer_links_resolve` joins this bucket (NOT ALWAYS_CONTENT_KEYS): resolving a NON-empty link set
@@ -2908,6 +2963,9 @@ export async function replayCassette(
       result: rec.result,
       workRoot: replayWorkRoot,
       userVisiblePrefixes: replayPrefixes,
+      // Persisted on the cassette (v7 optional metadata) so replay tells a body-less read-only input
+      // apart from an over-cap artifact and gives the precise artifact_json remediation.
+      readonlyFolderRoots: cassette.readonlyFolderRoots ?? [],
       preRunPaths: cassette.preRunPaths,
       outputsDeletes: [],
       questions: rec.questions,

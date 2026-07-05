@@ -262,7 +262,15 @@ export const Assertion = z.object({
   gate_answers_delivered: z
     .boolean()
     .optional()
-    .describe("every answered AskUserQuestion gate's tool_result was non-error (the answer reached the model)"),
+    .describe(
+      "every answered AskUserQuestion gate's tool_result was non-error (the answer reached the model); zero gates fired passes vacuously — pair with gate_answer_count_min to also require a gate",
+    ),
+  gate_answer_count_min: z
+    .number()
+    .int()
+    .nonnegative()
+    .optional()
+    .describe("at least N AskUserQuestion gates fired AND were delivered non-error (presence companion to gate_answers_delivered)"),
   result: z.enum(["success", "error"]).optional().describe("the run's final result was success | error"),
   allow_permissive_auto_allow: z
     .boolean()
@@ -573,6 +581,12 @@ export interface RunResult {
    * `["outputs",".projects"]` prefix list. Plugins are NOT here (read-only inputs, never artifact roots).
    */
   userVisibleRoots?: string[];
+  /** Subset of `userVisibleRoots` that are read-only (`mode: "r"`) connected-folder mounts — inputs, not
+   *  deliverables. The cassette recorder strips captured BODIES under these prefixes (path + sha256
+   *  survives, so `computer_links_resolve` still resolves on replay); `RunResult.artifacts` excludes
+   *  them outright so `scaffold` doesn't emit `file_exists` for an input. `userVisibleRoots` itself is
+   *  UNCHANGED — `no_unexpected_files` / `computer_links_resolve` still enumerate every folder. */
+  readonlyFolderRoots?: string[];
   // ENV-MANIFEST: files written under the user-visible roots (outputs/ + connected folders), relative paths
   // + sizes. Paths only (no content snapshot — that is the cassette manifest). Kills path-guessing and
   // makes an all-or-nothing truncated run (empty manifest) detectable. NOT sufficient for mid-write truncation.

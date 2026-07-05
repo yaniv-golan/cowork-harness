@@ -97,6 +97,47 @@ describe("gate_answers_delivered (catches delivery failures)", () => {
     expect(pass(r)).toBe(false);
     expect(r[0].message).toContain("q.map");
   });
+  // T1: gate firing is model-dependent, so gate_answers_delivered:true must not hard-fail when no
+  // gate fired at all — that would make the assertion unusable for optional-gate skills. This is
+  // distinct from gateDeliveriesMissing (evidence absent), covered below.
+  it("gate_answers_delivered: true passes VACUOUSLY when zero gates fired (gateDeliveries: [])", () => {
+    const c = ctx({ gateDeliveries: [] });
+    expect(pass(evaluate([{ gate_answers_delivered: true }], c))).toBe(true);
+  });
+});
+
+describe("gate_answer_count_min (presence companion to gate_answers_delivered)", () => {
+  it("fails when zero gates fired", () => {
+    const c = ctx({ gateDeliveries: [] });
+    const r = evaluate([{ gate_answer_count_min: 1 }], c);
+    expect(pass(r)).toBe(false);
+    expect(r[0].message).toContain("need ≥ 1");
+  });
+  it("passes when at least N gates were delivered", () => {
+    const c = ctx({ gateDeliveries: [{ question: "Proceed?", delivered: true }] });
+    expect(pass(evaluate([{ gate_answer_count_min: 1 }], c))).toBe(true);
+  });
+  it("fails when fewer than N gates were delivered (one delivered, need two)", () => {
+    const c = ctx({ gateDeliveries: [{ question: "Proceed?", delivered: true }] });
+    const r = evaluate([{ gate_answer_count_min: 2 }], c);
+    expect(pass(r)).toBe(false);
+    expect(r[0].message).toContain("only 1 gate answer(s)");
+  });
+});
+
+describe("gateDeliveriesMissing — evidence-unavailable guard (bug-#33 regression: absent ≠ zero gates)", () => {
+  it("gate_answers_delivered: true FAILS evidence-unavailable when gate telemetry is missing (NOT vacuous pass)", () => {
+    const c = ctx({ gateDeliveries: [], gateDeliveriesMissing: true });
+    const r = evaluate([{ gate_answers_delivered: true }], c);
+    expect(pass(r)).toBe(false);
+    expect(r[0].message).toContain("evidence unavailable");
+  });
+  it("gate_answer_count_min: 1 FAILS evidence-unavailable when gate telemetry is missing", () => {
+    const c = ctx({ gateDeliveries: [], gateDeliveriesMissing: true });
+    const r = evaluate([{ gate_answer_count_min: 1 }], c);
+    expect(pass(r)).toBe(false);
+    expect(r[0].message).toContain("evidence unavailable");
+  });
 });
 
 describe("multi-key assertions evaluate ALL keys (AND), not just the first", () => {
@@ -540,17 +581,67 @@ describe("file_exists / user_visible_artifact pass on truncated cassette entries
     expect(r[0].message).toMatch(/file not found/);
   });
 
-  it("artifact_json still fails for a truncated entry (placeholder is empty, not valid JSON)", () => {
-    // materializeManifest writes a 0-byte placeholder for truncated entries; artifact_json parses it
-    // and gets a JSON parse error — not a vacuous pass on the absent body.
+  it("artifact_json fails evidence-unavailable (NOT a cryptic parse error) for a truncated entry", () => {
+    // A truncated entry has no body in the cassette; artifact_json cannot be evaluated on replay. It
+    // must fail LOUD with an actionable evidence-unavailable message (raise --max-artifact-bytes),
+    // not a vacuous pass and not a confusing "not valid JSON" from parsing the 0-byte placeholder.
+    // big.html is over-cap (not under a readonly root, and this replay ctx carries no readonlyFolderRoots),
+    // so the message is the PRECISE over-cap remedy — not the read-only one.
     const r = evaluate([{ artifact_json: { artifact: "outputs/big.html", path: "ok", equals: true } }], base);
     expect(pass(r)).toBe(false);
-    expect(r[0].message).toMatch(/not valid JSON|truncated/i);
+    expect(r[0].message).toMatch(/evidence unavailable.*body-less/i);
+    expect(r[0].message).toMatch(/--max-artifact-bytes/i);
+    expect(r[0].message).not.toMatch(/read-only connected-folder input/i);
+  });
+
+  it("artifact_json on a read-only input is evidence-unavailable with the PRECISE read-only remedy on replay", () => {
+    // Replay knows the read-only set (persisted on the cassette → passed into the ctx), so a body-less
+    // read-only input gets the "assert on a deliverable" remedy, NOT the inert "raise --max-artifact-bytes".
+    const roEntries = [{ path: "carta/input.json", bytes: 40, sha256: smallSha, truncated: true as const }];
+    const ro = materializeManifest(roEntries);
+    const roCtx = ctx({ workRoot: ro.workRoot, truncatedPaths: ro.truncatedPaths, readonlyFolderRoots: ["carta"] });
+    const r = evaluate([{ artifact_json: { artifact: "carta/input.json", path: "x", equals: 1 } }], roCtx);
+    expect(pass(r)).toBe(false);
+    expect(r[0].message).toMatch(/read-only connected-folder input/i);
+    expect(r[0].message).not.toMatch(/--max-artifact-bytes/i);
   });
 
   it("file_exists and artifact_json both pass for a small (inlined) entry", () => {
     expect(pass(evaluate([{ file_exists: "outputs/small.json" }], base))).toBe(true);
     expect(pass(evaluate([{ artifact_json: { artifact: "outputs/small.json", path: "ok", equals: true } }], base))).toBe(true);
+  });
+});
+
+// Read-only connected-folder inputs are captured body-less, so artifact_json cannot be evaluated on
+// replay. To keep the lanes SYMMETRIC (no green-record → red-replay), the live/verify-run lanes must
+// ALSO return evidence-unavailable for a target under a readonly folder root — even though the real
+// (valid-JSON) input is on disk here. Existence keys are unaffected.
+describe("artifact_json: read-only folder inputs are evidence-unavailable on every lane (T3 symmetry)", () => {
+  const root = mkdtempSync(join(tmpdir(), "cwh-ro-input-"));
+  mkdirSync(join(root, "carta"), { recursive: true });
+  writeFileSync(join(root, "carta", "input.json"), JSON.stringify({ instruments: 3 }));
+
+  it("evidence-unavailable when the target is under a readonly folder root (real file present)", () => {
+    const r = evaluate(
+      [{ artifact_json: { artifact: "carta/input.json", path: "instruments", equals: 3 } }],
+      ctx({ workRoot: root, readonlyFolderRoots: ["carta"] }),
+    );
+    expect(pass(r)).toBe(false);
+    expect(r[0].message).toMatch(/evidence unavailable.*body-less/i);
+    expect(r[0].message).toMatch(/read-only connected-folder input/i);
+  });
+
+  it("the SAME file evaluates normally when NOT under a readonly root (rw folder / captured with body)", () => {
+    const r = evaluate(
+      [{ artifact_json: { artifact: "carta/input.json", path: "instruments", equals: 3 } }],
+      ctx({ workRoot: root, readonlyFolderRoots: [] }),
+    );
+    expect(pass(r)).toBe(true);
+  });
+
+  it("file_exists on a readonly input still PASSES (existence is provable; only content is unavailable)", () => {
+    const r = evaluate([{ file_exists: "carta/input.json" }], ctx({ workRoot: root, readonlyFolderRoots: ["carta"] }));
+    expect(pass(r)).toBe(true);
   });
 });
 

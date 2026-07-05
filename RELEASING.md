@@ -65,6 +65,8 @@ packaged Action's inputs/outputs). Human-readable text output is explicitly NOT 
 8. `.claude/skills/cowork-harness/references/ci-recipe.md` → all `npm i -g cowork-harness@>=X.Y.Z` floors
    (currently 3 occurrences).
 9. `examples/replays/README.md` → the `npm i -g cowork-harness@>=X.Y.Z` floor.
+10. `README.md` → the three `npx cowork-harness@>=X.Y.Z` bootstrap-fallback floors. The
+    `check:versions` lockstep guard enforces these match the SKILL.md floor and will red CI otherwise.
 
 ## Checklist
 

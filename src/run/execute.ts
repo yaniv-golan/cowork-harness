@@ -16,7 +16,7 @@ import { writeRunningStatus, startStatusTicker, registerRunForCrashSafety, statu
 // the cycle is intrinsic — kept runtime-only rather than refactored.
 import { buildFingerprint } from "./cassette.js";
 import { loadBaseline } from "../baseline.js";
-import { loadSession, resolveSessionPaths, buildLaunchPlan, userVisibleRootsFromPlan } from "../session.js";
+import { loadSession, resolveSessionPaths, buildLaunchPlan, userVisibleRootsFromPlan, readonlyFolderRootsFromPlan } from "../session.js";
 import { spawnProtocol } from "../runtime/protocol.js";
 import { spawnContainer } from "../runtime/container.js";
 import { spawnHostLoop } from "../runtime/hostloop.js";
@@ -677,6 +677,13 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // (verify reads result.json; replay reads the cassette) match this without rebuilding a LaunchPlan.
   // Shared with the pre-run baseline walk (userVisibleRootsFromPlan) — pre and post MUST agree.
   const userVisibleRoots = userVisibleRootsFromPlan(plan);
+  // Read-only (`mode: "r"`) connected-folder roots — inputs, not deliverables. Persisted so the cassette
+  // recorder strips their captured BODIES (fidelity/no-bloat) and `RunResult.artifacts` excludes them
+  // outright (an input is not a `file_exists` target). Does NOT change `userVisibleRoots` above.
+  const readonlyFolderRoots = readonlyFolderRootsFromPlan(plan);
+  // artifacts (the ENV-MANIFEST) excludes read-only inputs — a deliverable is something the agent wrote,
+  // not a pre-existing input it only read.
+  const captureRoots = userVisibleRoots.filter((r) => !readonlyFolderRoots.includes(r));
   // Read the pre-run baseline ONCE: the evaluate ctx and the persisted RunResult must see the same
   // value — two reads could disagree if the file were touched mid-run.
   const preRunPaths = readPreRunManifest(outDir);
@@ -695,6 +702,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       outDir,
       workRoot,
       userVisibleRoots,
+      readonlyFolderRoots,
       effectiveFidelity,
       egress,
       durationMs: Date.now() - startedAt,
@@ -726,6 +734,9 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     result: record.result,
     workRoot,
     userVisiblePrefixes: userVisibleRoots,
+    // Read-only folder inputs are captured body-less; artifact_json must reach the same
+    // evidence-unavailable verdict here as on replay (see AssertContext.readonlyFolderRoots).
+    readonlyFolderRoots,
     preRunPaths,
     outputsDeletes: scan.outputsDeletes,
     questions: record.questions,
@@ -886,7 +897,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     workDir: workRoot,
     outputsDir: join(workRoot, "outputs"),
     userVisibleRoots,
-    artifacts: collectArtifacts(workRoot, userVisibleRoots), // ENV-MANIFEST: observed user-visible files
+    readonlyFolderRoots,
+    artifacts: collectArtifacts(workRoot, captureRoots), // ENV-MANIFEST: observed user-visible files (excl. read-only inputs)
     // The pre-spawn baseline no_unexpected_files diffs against (same single read the evaluate ctx got).
     // undefined = the run didn't capture (key not asserted, microvm, pre-seam) — the assertion then
     // fails evidence-unavailable, loud.
@@ -1036,6 +1048,7 @@ export function buildPartialResult(args: {
   outDir: string;
   workRoot: string;
   userVisibleRoots: string[];
+  readonlyFolderRoots: string[];
   effectiveFidelity: string;
   egress: { host: string; decision: "allow" | "deny" }[];
   durationMs: number;
@@ -1078,7 +1091,11 @@ export function buildPartialResult(args: {
     workDir: args.workRoot,
     outputsDir: join(args.workRoot, "outputs"),
     userVisibleRoots: args.userVisibleRoots,
-    artifacts: collectArtifacts(args.workRoot, args.userVisibleRoots),
+    readonlyFolderRoots: args.readonlyFolderRoots,
+    artifacts: collectArtifacts(
+      args.workRoot,
+      args.userVisibleRoots.filter((r) => !args.readonlyFolderRoots.includes(r)),
+    ),
     preRunPaths: readPreRunManifest(args.outDir),
     effectiveFidelity: args.effectiveFidelity,
     ...(() => {

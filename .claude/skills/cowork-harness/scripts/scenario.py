@@ -72,7 +72,7 @@ CONTENT_KEYS = {
     "max_turns",
 }
 # content keys, but only evaluated on replay when the cassette carries controlOut
-GATE_KEYS = {"question_asked", "questions_count_max", "gate_answers_delivered"}
+GATE_KEYS = {"question_asked", "questions_count_max", "gate_answers_delivered", "gate_answer_count_min"}
 # manifest-backed: replay-checkable when the cassette carries an `artifacts` manifest (record snapshots one);
 # a manifest-less cassette skips them. Since the 0.3.0 artifact-manifest these are NOT always live-only.
 # computer_links_resolve joins this bucket (not CONTENT_KEYS): resolving a non-empty link set needs
@@ -716,7 +716,15 @@ def build_scenario(args):
     if gates:
         for rx, _ in gates:
             content_lines.append(f"  - question_asked: {_sq(rx)}   # gate key: replay only with a controlOut cassette")
-        content_lines.append(f"  - questions_count_max: {len(gates)}")
+        # questions_count_max counts SUB-questions at runtime (assert.ts/trace-view.ts), but this
+        # scaffold is STATIC — it only knows the number of --gate rules (per-tool-call), never how many
+        # sub-questions each gate bundles. Any number emitted here would be a guess: too low false-reds
+        # on the first run, too high is a dead tripwire. A budget must come from observation, not
+        # fabrication — so emit it COMMENTED OUT with the calibration path, not a made-up value.
+        content_lines.append(
+            "  # - questions_count_max: <N>   # BUDGET — calibrate from a real run: `trace --view "
+            "questions` prints the SUB-question total (what this asserts); set N to that + headroom."
+        )
         content_lines.append("  - gate_answers_delivered: true   # the steered answers actually reached the model")
 
     live_lines = []

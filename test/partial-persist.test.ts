@@ -49,6 +49,7 @@ describe("buildPartialResult — salvage a whiffed run", () => {
       outDir,
       workRoot,
       userVisibleRoots: ["outputs"],
+      readonlyFolderRoots: [],
       effectiveFidelity: "container",
       egress: [],
       durationMs: 1234,
@@ -80,11 +81,41 @@ describe("buildPartialResult — salvage a whiffed run", () => {
       outDir,
       workRoot,
       userVisibleRoots: ["outputs"],
+      readonlyFolderRoots: [],
       effectiveFidelity: "container",
       egress: [],
       durationMs: 1,
       unanswered: { message: "m" },
     });
     expect(result.unansweredGate).toEqual({ message: "m" });
+  });
+
+  // T3: a `mode: r` connected-folder input is an INPUT, not a deliverable — `RunResult.artifacts`
+  // excludes it (so `scaffold` doesn't emit `file_exists` for it) while `userVisibleRoots` still lists
+  // the folder (so `no_unexpected_files` / `computer_links_resolve` keep enumerating it).
+  it("excludes a readonlyFolderRoots entry from `artifacts` while keeping it in `userVisibleRoots`", () => {
+    const { outDir, workRoot } = runDirWithArtifact();
+    mkdirSync(join(workRoot, "carta-folder"), { recursive: true });
+    writeFileSync(join(workRoot, "carta-folder", "synthetic_carta.xlsx"), "input content, not a deliverable");
+    const result = buildPartialResult({
+      scenarioName: "s",
+      prompt: "p",
+      fidelity: "container",
+      baseline: "b",
+      record: partialRecord(),
+      outDir,
+      workRoot,
+      userVisibleRoots: ["outputs", "carta-folder"],
+      readonlyFolderRoots: ["carta-folder"],
+      effectiveFidelity: "container",
+      egress: [],
+      durationMs: 1,
+      unanswered: { message: "m" },
+    });
+    expect(result.userVisibleRoots).toEqual(["outputs", "carta-folder"]);
+    expect(result.readonlyFolderRoots).toEqual(["carta-folder"]);
+    // the read-only input is NOT in artifacts (not a deliverable)...
+    expect(result.artifacts?.map((a) => a.path)).toEqual(["outputs/actions.md"]);
+    expect(result.artifacts?.some((a) => a.path.startsWith("carta-folder/"))).toBe(false);
   });
 });

@@ -6,6 +6,77 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.25.0] — 2026-07-05
+
+> **Upgrade notes.**
+> - **`verify-cassettes --allow-file` was renamed to `--allow-patterns-file`** and the old spelling is
+>   removed (exits 2). Update any CI step or allowlist wiring that passed `--allow-file`.
+> - **`gate_answers_delivered: true` now passes vacuously when zero gates fired.** If you relied on it
+>   as an implicit "a gate must fire" check, add `gate_answer_count_min: 1` alongside it.
+> - **Read-only (`mode: r`) connected-folder inputs are now captured body-less.** Re-record affected
+>   cassettes to drop the `--allow` entries they previously required and shrink them; an `artifact_json`
+>   assertion pointed at a read-only input now reports evidence-unavailable (assert on a deliverable).
+>   This changes committed cassette *contents* (not the staleness hash) — a re-record is cosmetic, not
+>   required for correctness.
+
+### Added
+
+- **`gate_answer_count_min: <N>` assertion** — the presence companion to `gate_answers_delivered`:
+  fails unless at least N `AskUserQuestion` gates fired AND were delivered non-error. Pairs with
+  `gate_answers_delivered`'s new zero-gate vacuous-pass (below) the way `transcript_contains` pairs
+  with `computer_links_resolve`'s zero-link vacuous-pass. Evaluated on replay only with a `controlOut`
+  cassette, like the other gate keys; fails as evidence-unavailable (not vacuous-pass) when
+  gate-delivery telemetry is absent from `result.json`.
+
+### Changed
+
+- **`gate_answers_delivered: true` now passes vacuously when zero `AskUserQuestion` gates fired**,
+  instead of hard-failing. Whether a gate fires is model-dependent, so any skill with optional gating
+  could not use the assertion under the old hard-fail. The bad-delivery check (an answered gate whose
+  answer wasn't confirmed delivered) is unchanged — it only ever mattered when gates fired. Missing
+  gate-delivery telemetry (an old/partial `result.json` on the verify-run lane) still fails loud as
+  evidence-unavailable, never vacuous-pass — this is NOT the same as "no gate fired" and preserves the
+  bug-#33 false-green fix. Pair with the new `gate_answer_count_min` (below) to also require presence.
+- **`verify-cassettes --allow-file <path>` renamed to `--allow-patterns-file <path>`.** The old name
+  read as "allow this file" and was routinely confused with `--allow <regex>` (a pattern matched
+  against a finding) — reaching for `--allow-file <artifact-path>` failed with an ENOENT/invalid-regex
+  error instead of doing what the user meant. `--allow-patterns-file <path>` is self-documenting: the
+  path names a **file of patterns** (one regex per line), not a path to allow. Pre-1.0 rename with **no
+  deprecation window** — the old `--allow-file` spelling is hard-removed and now exits 2 with an
+  unknown-flag error. The binary-finding recourse message and both `--help` texts now spell out the
+  distinction between the two flags.
+
+### Fixed
+
+- **Read-only (`mode: r`) connected-folder inputs are captured body-less (path + hash) instead of as
+  full binary bodies.** `record` used to sweep a `mode: r` folder's files into the cassette
+  `artifacts[]` as full base64 bodies — an input the agent only reads, not a deliverable — causing
+  cassette bloat and a hard `binary` privacy finding that forced `--allow`. The manifest entry now
+  carries `path` + `bytes` + `sha256` with `truncated: true` and no `body`, reusing the same
+  representation the 64-KiB inline cap already produces. The entry still survives in the manifest (it
+  is NOT excluded), so `computer_links_resolve`/`file_exists` resolve identically on live and replay.
+  `artifact_json` against a body-less target (a read-only input, or any artifact over the body cap)
+  reports a clear **evidence-unavailable** on every lane — live, verify-run, and replay all agree, so
+  a cassette can't record green and replay red. The cassette persists the read-only-folder set
+  (`readonlyFolderRoots`, a subset of `userVisibleRoots`), so replay knows *why* an entry is body-less
+  and gives the **precise** remedy — "assert on a deliverable" for a read-only input, "raise
+  `--max-artifact-bytes`" for an over-cap artifact — instead of a cryptic JSON parse error or a
+  guessed hint. A `mode: rw`/`rwd` folder's contents are unaffected and keep their full body.
+- **`trace --view questions` and the `scaffold` helper disagreed with `questions_count_max` on what
+  "a question" counts.** The assertion counts **sub-questions** (one `AskUserQuestion` bundling K
+  sub-questions counts as K — the better spam/burden budget, since per-tool-call counting would miss
+  a 10-in-1 bundle), but `trace --view questions` collapsed a bundle into one row with no count, and
+  the scaffold helper emitted `questions_count_max: <gate count>` — a budget that could start BELOW
+  what the assertion computes and false-red on the first real run. No behavior change to the
+  assertion itself: `trace --view questions` now annotates each gate row with its sub-question count
+  and prints a footer total (`N gate(s), M sub-question(s) total`) that matches what
+  `questions_count_max` compares against. The static `scaffold` helper can't know the sub-question
+  count offline, so instead of fabricating a value it now emits `questions_count_max` **commented
+  out** as a calibration TODO pointing at `trace --view questions` (a budget must come from
+  observation, not a guess — a fabricated one either false-reds or is a dead tripwire). The count
+  definition is now documented in `docs/scenario.md`, `docs/cassette.md`, `SPEC.md`, and the skill's
+  `references/scenario-schema.md` / `SKILL.md` gotcha list.
+
 ## [0.24.0] — 2026-07-05
 
 ### Added

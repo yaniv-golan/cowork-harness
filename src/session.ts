@@ -173,6 +173,15 @@ export function userVisibleRootsFromPlan(plan: LaunchPlan): string[] {
   return ["outputs", ...plan.mounts.filter((m) => m.kind === "folder").map((m) => m.mountPath)];
 }
 
+/** The mount prefixes of read-only (`mode: "r"`) connected folders — inputs, not deliverables. Used to
+ *  strip captured BODIES from the cassette manifest (fidelity/no-bloat) and to exclude them from
+ *  `RunResult.artifacts` (an input is not something `scaffold`/`file_exists` should treat as output).
+ *  Does NOT change `userVisibleRootsFromPlan` — `no_unexpected_files` and `computer_links_resolve`
+ *  still enumerate these roots; only their captured content changes shape. */
+export function readonlyFolderRootsFromPlan(plan: LaunchPlan): string[] {
+  return plan.mounts.filter((m) => m.kind === "folder" && m.mode === "r").map((m) => m.mountPath);
+}
+
 /**
  * Read a plugin's declared version from its `.claude-plugin/plugin.json`.
  *

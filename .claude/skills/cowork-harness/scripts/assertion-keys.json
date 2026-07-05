@@ -11,6 +11,7 @@
     "egress_allowed",
     "egress_denied",
     "file_exists",
+    "gate_answer_count_min",
     "gate_answers_delivered",
     "max_cost_usd",
     "max_tokens",

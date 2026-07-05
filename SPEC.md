@@ -384,7 +384,7 @@ states in `baseline.provenance.gates`). A skill that ignores these behaves diffe
   `tool_*`, `subagent_*`, `dispatch_count_max`, `skill_triggered`, `no_skill_triggered`, `max_cost_usd`,
   `max_tokens`, `tool_calls_max`, `max_turns`, `result`, the verdict modifiers (`allow_permissive_auto_allow`,
   `allow_missing_capability`, `allow_l0_plugin_divergence`, `allow_stall`), and (when `controlOut` is present)
-  `question_asked`, `questions_count_max`, `gate_answers_delivered`. `max_cost_usd`/`max_tokens` are
+  `question_asked`, `questions_count_max`, `gate_answers_delivered`, `gate_answer_count_min`. `max_cost_usd`/`max_tokens` are
   evaluated against the *frozen recording's* usage/cost on replay, not fresh spend; `tool_calls_max`/
   `max_turns` are meaningfully replay-checkable (the re-drive recomputes both deterministically).
 - **Filesystem assertions** (`file_exists`, `user_visible_artifact`, `artifact_json`, `computer_links_resolve`,
@@ -405,10 +405,21 @@ green replay does not imply the recording is still valid. Each finding is surfac
 `RunResult.staleness[]` for a token-free gate to act on. `replay --strict` fails on any class;
 `replay --fail-on-skill-drift` fails only on skill-source classes (`skill` / `shared-root` /
 `unverifiable-skill`). Both realize the gate as failing `assertions[]` entries (so `ok`/exit stay consistent).
-- **`question_asked` / `questions_count_max` / `gate_answers_delivered`** additionally require
-  `controlOut`. Without it, a loud `::warning::` fires and these keys are excluded (not vacuously
-  passed). The authoritative list is `contentKeys` in `src/run/cassette.ts`; `docs/cassette.md` mirrors
-  it — consult it for the full table.
+- **`question_asked` / `questions_count_max` / `gate_answers_delivered` / `gate_answer_count_min`**
+  additionally require `controlOut`. Without it, a loud `::warning::` fires and these keys are
+  excluded (not vacuously passed). The authoritative list is `contentKeys` in `src/run/cassette.ts`;
+  `docs/cassette.md` mirrors it — consult it for the full table.
+- **`gate_answers_delivered: true` passes vacuously when zero `AskUserQuestion` gates fired** (gate
+  firing is model-dependent). Pair it with `gate_answer_count_min: <N>` to also require that at least
+  N gates fired AND were delivered non-error — the presence companion, mirroring
+  `computer_links_resolve` (zero-passes) paired with `transcript_contains` (presence). Both keys fail
+  evidence-unavailable, never vacuous-pass, when gate-delivery telemetry itself is absent from
+  `result.json` (an old/partial run on the verify-run lane).
+- **`questions_count_max` counts sub-questions, not `AskUserQuestion` tool calls/gates.** A bundled
+  gate with K sub-questions counts as K (`src/run/run.ts`'s recorder pushes one `rec.questions` entry
+  per sub-question; `src/assert.ts` compares against that count). `trace --view questions` shows the
+  same per-gate sub-question count and a matching footer total, so the two surfaces agree — see
+  `docs/cassette.md` / `docs/scenario.md`'s `questions_count_max` row.
 
 **Assertion source (replay):** by default `replay` evaluates the `assert:` block **frozen in the cassette**
 — byte-deterministic and independent of the working tree. When a sibling scenario resolves and its `assert:`
