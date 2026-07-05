@@ -1074,6 +1074,7 @@ export function buildPartialResult(args: {
 }): RunResult {
   const { record } = args;
   const gp = summarizeGateProvenance(record.decisions);
+  const timelineData = readTimeline(args.outDir);
   return assembleRunResult({
     $schema: RUN_RESULT_SCHEMA_URL,
     generator: "cowork-harness",
@@ -1094,10 +1095,7 @@ export function buildPartialResult(args: {
       rationale: d.rationale,
     })),
     toolCounts: record.toolCounts,
-    toolDurations: (() => {
-      const t = readTimeline(args.outDir);
-      return t ? foldToolDurations(t.events) : undefined;
-    })(),
+    toolDurations: timelineData ? foldToolDurations(timelineData.events) : undefined,
     models: record.models.length ? record.models : undefined,
     gateDeliveries: record.gateDeliveries,
     egress: args.egress,
