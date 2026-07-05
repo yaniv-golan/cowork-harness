@@ -6,6 +6,17 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+
+- **`verify-cassettes --allow-file <path>` renamed to `--allow-patterns-file <path>`.** The old name
+  read as "allow this file" and was routinely confused with `--allow <regex>` (a pattern matched
+  against a finding) — reaching for `--allow-file <artifact-path>` failed with an ENOENT/invalid-regex
+  error instead of doing what the user meant. `--allow-patterns-file <path>` is self-documenting: the
+  path names a **file of patterns** (one regex per line), not a path to allow. Pre-1.0 rename with **no
+  deprecation window** — the old `--allow-file` spelling is hard-removed and now exits 2 with an
+  unknown-flag error. The binary-finding recourse message and both `--help` texts now spell out the
+  distinction between the two flags.
+
 ### Fixed
 
 - **`trace --view questions` and the `scaffold` helper disagreed with `questions_count_max` on what

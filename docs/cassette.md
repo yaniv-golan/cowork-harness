@@ -477,10 +477,12 @@ counts) — committed PII surface. Two layers, distinct from secret-scrub (which
   live-enumerated app/process inventory sentinel (e.g. a computer-use tool schema's "Available applications on
   this machine: …") is never legitimate catalog boilerplate either; none of the three share the ambiguity that
   gets `currency`/`domain` excluded there. `--allow <regex>` suppresses synthetic / public reference names
-  (e.g. `NVCA`, `Cooley GO`, `Acme`); each allow must match the **whole** finding token (so a bare-domain allow
-  no longer silently clears an email whose domain it matches), and `--allow-domain` / `--allow-email` /
-  `--allow-path` / `--allow-machine-inventory` scope an allow to a single finding class, while `--allow-file
-  <path>` loads allows from a version-controlled file (one regex per line, `#` comments). Multi-word proper
+  (e.g. `NVCA`, `Cooley GO`, `Acme`) — each `--allow` value is a **pattern**, matched against a finding, not a
+  path to allow; each allow must match the **whole** finding token (so a bare-domain allow no longer silently
+  clears an email whose domain it matches), and `--allow-domain` / `--allow-email` / `--allow-path` /
+  `--allow-machine-inventory` scope an allow to a single finding class, while `--allow-patterns-file <path>` is a
+  different thing — it loads allows from a version-controlled **file of patterns** (one regex per line, `#`
+  comments), not a path to allow directly. Multi-word proper
   names are **not** a default class (too noisy). `verify-cassettes` also runs the **staleness**
   check (both checks run by default; scope to one with `--skip-privacy` or `--skip-staleness`): a drifted
   `skillHash` (you edited the skill but didn't re-record) fails the gate.

@@ -52,9 +52,9 @@
     },
     {
       "id": 8,
-      "name": "allow-file-format",
-      "prompt": "Our CI runs `cowork-harness verify-cassettes cassettes/ --allow-domain 'api\\.example\\.com'` with five more --allow-* flags and the command line is getting unwieldy. I heard there's an --allow-file flag — what exactly goes in that file, and is there anything I lose by moving my class-scoped flags into it?",
-      "expected_output": "States the format precisely: a plain text file with one regex pattern per line; blank lines and lines starting with # are ignored; each pattern is matched whole-token and case-insensitively, same as --allow. Must state the real trade-off: --allow-file entries are ALL-CLASS (equivalent to bare --allow), so moving a class-scoped flag like --allow-domain into the file widens its scope — a domain pattern in the file could also suppress a path or email finding it happens to match. Correct guidance: keep class-scoped allows as flags (or scope the file patterns tightly), use the file for the stable version-controlled allowlist. Should not invent a structured (JSON/YAML/class-prefixed) file format.",
+      "name": "allow-patterns-file-format",
+      "prompt": "Our CI runs `cowork-harness verify-cassettes cassettes/ --allow-domain 'api\\.example\\.com'` with five more --allow-* flags and the command line is getting unwieldy. I heard there's an --allow-patterns-file flag — what exactly goes in that file, and is there anything I lose by moving my class-scoped flags into it?",
+      "expected_output": "States the format precisely: a plain text file with one regex pattern per line; blank lines and lines starting with # are ignored; each pattern is matched whole-token and case-insensitively, same as --allow. Must state the real trade-off: --allow-patterns-file entries are ALL-CLASS (equivalent to bare --allow), so moving a class-scoped flag like --allow-domain into the file widens its scope — a domain pattern in the file could also suppress a path or email finding it happens to match. Correct guidance: keep class-scoped allows as flags (or scope the file patterns tightly), use the file for the stable version-controlled allowlist. Should clarify --allow-patterns-file takes a path to a FILE OF PATTERNS, not a path to allow directly. Should not invent a structured (JSON/YAML/class-prefixed) file format, and should not use the old --allow-file spelling (removed pre-1.0).",
       "files": []
     },
     {

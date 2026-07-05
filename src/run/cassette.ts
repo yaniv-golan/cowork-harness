@@ -452,11 +452,12 @@ export function scanCassette(cassette: Cassette, allow: AllowInput[]): ScanFindi
           // zip/DEFLATE streams. Count a COMMITTED binary body as a real finding (cls "binary", NOT the
           // benign "unscanned" used for a TRUNCATED/uncommitted entry below) so the gate can't greenlight
           // raw recoverable PII. Recourse: after reviewing the deliverable, clear it with
-          // `--allow <path-regex>` (matched on the artifact path above, since the body is unreadable).
+          // `--allow <path-regex>` (a PATTERN matched on the artifact path above, since the body is
+          // unreadable) — NOT `--allow-patterns-file`, which loads a FILE of patterns, not a path to allow.
           findings.push({
             where: `artifact ${a.path}`,
             cls: "binary",
-            sample: `(committed binary body — not text-scannable; review and clear with --allow ${a.path})`,
+            sample: `(committed binary body — not text-scannable; review and clear with --allow ${a.path} (a pattern matched on this path); note --allow-patterns-file is a FILE of patterns, not this path)`,
           });
         }
       } else {
@@ -2313,9 +2314,9 @@ export function cmdVerifyCassettes(args: string[]) {
     p = parseArgs(args, {
       booleans: ["--skip-privacy", "--skip-staleness", "--quiet", "--verbose"],
       values: ["--output-format"],
-      repeated: ["--allow", "--allow-domain", "--allow-email", "--allow-path", "--allow-machine-inventory", "--allow-file"],
+      repeated: ["--allow", "--allow-domain", "--allow-email", "--allow-path", "--allow-machine-inventory", "--allow-patterns-file"],
       enums: { "--output-format": ["text", "json"] },
-      noDashValue: ["--allow-file"],
+      noDashValue: ["--allow-patterns-file"],
       aliases: { "-q": "--quiet" },
     });
   } catch (e) {
@@ -2331,10 +2332,13 @@ export function cmdVerifyCassettes(args: string[]) {
   }
   const doPrivacy = !skipPrivacy;
   const doStaleness = !skipStaleness;
-  // Allow model: each entry is whole-token anchored + class-scoped. A bare `--allow` applies to every
-  // class (back-compat); `--allow-domain`/`--allow-email`/`--allow-path`/`--allow-machine-inventory`
-  // scope to one class so a domain allow can't bleed into the email tripwire. `--allow-file` loads bare
-  // (all-class) patterns from a version-controlled file, one per line, `#` comments and blanks ignored.
+  // Allow model: each entry is whole-token anchored + class-scoped. A bare `--allow <regex>` is a single
+  // PATTERN applied to every class (back-compat); `--allow-domain`/`--allow-email`/`--allow-path`/
+  // `--allow-machine-inventory` scope a pattern to one class so a domain allow can't bleed into the
+  // email tripwire. `--allow-patterns-file <path>` is a different thing: it loads bare (all-class)
+  // patterns from a version-controlled FILE of patterns, one regex per line, `#` comments and blanks
+  // ignored — not "allow this file" (the flag does not accept a path to allow, it accepts a path to a
+  // patterns list).
   const allow: AllowPattern[] = [];
   const addAllow = (src: string, cls: string | undefined, flag: string): void => {
     try {
@@ -2349,23 +2353,26 @@ export function cmdVerifyCassettes(args: string[]) {
   for (const src of p.repeated["--allow-email"] ?? []) addAllow(src, "email", "--allow-email");
   for (const src of p.repeated["--allow-path"] ?? []) addAllow(src, "path", "--allow-path");
   for (const src of p.repeated["--allow-machine-inventory"] ?? []) addAllow(src, "machine-inventory", "--allow-machine-inventory");
-  for (const file of p.repeated["--allow-file"] ?? []) {
+  for (const file of p.repeated["--allow-patterns-file"] ?? []) {
     let body: string;
     try {
       body = readFileSync(file, "utf8");
     } catch (e) {
-      log(`--allow-file: cannot read ${file}: ${(e as Error).message}`);
+      log(`--allow-patterns-file: cannot read ${file}: ${(e as Error).message}`);
       return process.exit(2);
     }
     for (const raw of body.split("\n")) {
       const line = raw.trim();
-      if (line && !line.startsWith("#")) addAllow(line, undefined, `--allow-file (${file})`);
+      if (line && !line.startsWith("#")) addAllow(line, undefined, `--allow-patterns-file (${file})`);
     }
   }
   const target = p.positionals[0];
   if (!target) {
     log(
-      "usage: verify-cassettes <file|dir> [--skip-privacy|--skip-staleness] [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-path <regex>]... [--allow-machine-inventory <regex>]... [--allow-file <path>]... [--output-format json]",
+      "usage: verify-cassettes <file|dir> [--skip-privacy|--skip-staleness] [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-path <regex>]... [--allow-machine-inventory <regex>]... [--allow-patterns-file <path>]... [--output-format json]",
+    );
+    log(
+      "  --allow <regex> is a PATTERN (matched against a finding); --allow-patterns-file <path> is a FILE of patterns, one regex per line — not a path to allow.",
     );
     return process.exit(2);
   }
