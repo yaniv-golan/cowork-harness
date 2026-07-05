@@ -28,6 +28,7 @@ import {
   type AgentEvent,
   type DecisionRequest,
 } from "../agent/session.js";
+import type { TimelineHeader, TimelineEvent } from "../agent/timeline.js";
 import { ABSTAIN, UnansweredError, type Decider, type OnUnanswered } from "../decide/decider.js";
 import { fileChannel, type DecisionChannel } from "../decide/external-channel.js";
 import { pMapBounded } from "../async-pool.js";
@@ -140,6 +141,15 @@ export interface Cassette {
   // itself still REPLAYS deterministically (the answers are frozen). ABSENT = fully scripted/deterministic
   // authoring. Pure metadata: readers (replay/verify-cassettes) ignore it; no cassetteVersion bump needed.
   authoring?: { nonDeterministic: boolean; channel?: "decider-dir" | "decider-llm" };
+  // The recorded timeline (see src/agent/timeline.ts) — harness-observation timestamps for every
+  // meaningful in-run event, in total order. `ts` values are wall-clock-observation-time and are
+  // NOT reproducible on a replay re-drive (like `usage`/`cost`, they are frozen, not recomputed), so
+  // they are persisted here rather than regenerated. ABSENT on a cassette recorded before this field
+  // existed, or in the rare case `timeline.jsonl` was empty/unreadable at record time — timing folds
+  // that read this are informational only (no verdict impact), so absence needs no loud warning,
+  // unlike the manifest/gate keys. Additive: CassetteShape is a looseObject, so no version bump.
+  timeline?: TimelineEvent[];
+  timelineHeader?: TimelineHeader;
 }
 
 /** Current cassette format version. Readers tolerate ABSENT (legacy → 0) and warn on a FUTURE version. */
@@ -2029,6 +2039,7 @@ async function recordScenarioObject(
       else throw new Error(msg);
     }
   }
+  const timeline = readTimeline(result.outDir);
   const base: Cassette = {
     $schema: CASSETTE_SCHEMA_URL,
     generator: "cowork-harness",
@@ -2049,6 +2060,8 @@ async function recordScenarioObject(
     scenarioSource: opts.scenarioSourceFile ? relative(dirname(cassettePath), opts.scenarioSourceFile) : undefined,
     fingerprint: buildFingerprint(scenario.session, result.baseline, undefined, scenario.skills),
     authoring,
+    timeline: timeline?.events,
+    timelineHeader: timeline?.header,
   };
   // (opt-in) content redaction over the whole surface. Empty policy → no-op. Non-empty → must be
   // VERDICT-PRESERVING: replay both and refuse to write on divergence (a manufactured green).
@@ -3188,4 +3201,32 @@ function safeLines(path: string): string[] {
     }
     return [];
   }
+}
+
+/** Reads and parses `timeline.jsonl` (see src/agent/timeline.ts) for the cassette record path. The
+ *  first line is the header, the rest are entries. Returns `undefined` if the file is missing/empty
+ *  (an older harness build, or a run that predates this feature) or if the header itself doesn't
+ *  parse — informational data, so a partially-corrupt file degrades to "absent" rather than throwing
+ *  and aborting the whole record. Malformed individual entry lines are dropped (not fatal) rather
+ *  than aborting the whole read — the same tolerance `readCassette` already extends to cassette
+ *  loading elsewhere in this file. Exported for direct unit testing (test/cassette-timeline.test.ts). */
+export function readTimeline(outDir: string): { header: TimelineHeader; events: TimelineEvent[] } | undefined {
+  const lines = safeLines(join(outDir, "timeline.jsonl"));
+  if (lines.length === 0) return undefined;
+  let header: TimelineHeader;
+  try {
+    header = JSON.parse(lines[0]);
+  } catch {
+    return undefined;
+  }
+  const events: TimelineEvent[] = [];
+  for (const line of lines.slice(1)) {
+    try {
+      events.push(JSON.parse(line));
+    } catch {
+      // a malformed individual entry is dropped, not fatal — see doc comment above.
+      continue;
+    }
+  }
+  return { header, events };
 }
