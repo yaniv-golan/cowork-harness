@@ -25,7 +25,13 @@ describe("toTimelineFields", () => {
       toolUseId: "toolu_1",
       model: "claude-sonnet-4-5",
     });
-    expect(fields).toEqual({ type: "tool_use", toolUseId: "toolu_1", name: "Bash", parentToolUseId: undefined, model: "claude-sonnet-4-5" });
+    expect(fields).toEqual({
+      type: "tool_use",
+      toolUseId: "toolu_1",
+      name: "Bash",
+      parentToolUseId: undefined,
+      model: "claude-sonnet-4-5",
+    });
   });
 
   it("omits model from a tool_use event when the AgentEvent has none (undefined, not a dropped key vs a present-but-undefined key — both serialize identically to JSON)", () => {
