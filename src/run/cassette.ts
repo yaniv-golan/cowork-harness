@@ -167,8 +167,7 @@ export const CASSETTE_VERSION = 8;
 // ≥ 7 ⇒ algo 3 (NUL-byte separator), ≥ 8 ⇒ algo 4 (skillHash folds fixed-length content shas +
 // contentSig/link entries are type-prefixed & NUL-framed — closes unframed-concatenation collisions).
 const CONTENTSIG_ALGO = 4;
-const contentSigAlgoOf = (cassetteVersion: number) =>
-  cassetteVersion >= 8 ? 4 : cassetteVersion >= 7 ? 3 : cassetteVersion >= 6 ? 2 : 1;
+const contentSigAlgoOf = (cassetteVersion: number) => (cassetteVersion >= 8 ? 4 : cassetteVersion >= 7 ? 3 : cassetteVersion >= 6 ? 2 : 1);
 
 /** Canonical URL of the JSON Schema for this cassette format version.
  *  Appears in every written cassette as `$schema` so editors and unfamiliar readers
@@ -3089,7 +3088,7 @@ export async function replayCassette(
       egress: [],
       assertions,
       subagents: rec.subagents,
-      unanswered: rec.unanswered,
+      nonReproducibleAnswers: rec.unanswered,
       // Wave 0 seam: the live/success/partial assemblers already passed these through; replay never did,
       // so a cassette that recorded usage/cost silently dropped it on replay. re-drive (rec) recomputes
       // them deterministically from the same events, so this is a content key, not a live-only one.

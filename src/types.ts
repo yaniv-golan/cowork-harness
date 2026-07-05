@@ -561,11 +561,10 @@ export interface RunResult {
   }>;
   /**
    * Decisions answered by a non-deterministic / non-authoritative source (LLM, external helper,
-   * human, or the `first`-option fallback). The name is historical — these entries are NOT literally
-   * unanswered; they were answered, but by a source that is not reproducible. Scripted answers
-   * (by:"scripted") are excluded because they are authoritative and deterministic.
+   * human, or the `first`-option fallback). Scripted answers (by:"scripted") are excluded because
+   * they are authoritative and deterministic.
    */
-  unanswered?: Array<{ question: string; chosen: string; by: string; rationale?: string; model?: string }>;
+  nonReproducibleAnswers?: Array<{ question: string; chosen: string; by: string; rationale?: string; model?: string }>;
   usage?: UsageInfo;
   cost?: CostInfo;
   durationMs?: number;

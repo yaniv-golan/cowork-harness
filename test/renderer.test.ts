@@ -210,7 +210,7 @@ describe("renderer — renderFooter", () => {
       {
         ...base,
         assertions: [{ assertion: {}, pass: true }],
-        unanswered: [
+        nonReproducibleAnswers: [
           { question: "Which format?", chosen: "Markdown", by: "first" },
           { question: "How deep?", chosen: "Thorough", by: "first" },
         ],

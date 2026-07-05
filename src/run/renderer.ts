@@ -327,7 +327,7 @@ function renderGateProvenance(r: RunResult, plan: RenderPlan, write: Sink): void
 }
 
 function renderAnswerHints(r: RunResult, plan: RenderPlan, write: Sink): void {
-  const u = r.unanswered ?? [];
+  const u = r.nonReproducibleAnswers ?? [];
   if (!u.length) return;
   // partition by the REAL `by:` vocabulary (decider.ts:25 — scripted|cowork|strict|human|agent|
   // external|first|fail|replay; `scripted` answers never reach `unanswered`, see run.ts:256). The old
