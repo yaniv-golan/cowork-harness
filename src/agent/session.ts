@@ -694,7 +694,7 @@ export function parseMessage(msg: any): AgentEvent[] {
       // is canonical — prefer it when both exist (block-level is more precise for nested dispatches).
       const msgParentToolUseId = msg.parent_tool_use_id ? String(msg.parent_tool_use_id) : undefined;
       // message.model is present on every real assistant stream-json message (live-confirmed, §4.3) —
-      // read once per message, thread onto assistant_text/tool_use/thinking (NOT subagent_dispatch — M4 scope).
+      // read once per message, thread onto assistant_text/tool_use/thinking/subagent_dispatch.
       const model = typeof msg.message?.model === "string" ? msg.message.model : undefined;
       let blockIndex = 0;
       for (const block of msg.message?.content ?? []) {
