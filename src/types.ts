@@ -556,6 +556,9 @@ export interface RunResult {
   // RunResult, matching the plan's scope: an author reads the tail of reasoning, not a full history).
   // Scrubbed by the same secret-redaction pass as the rest of result.json.
   thinking?: Array<{ text: string }>;
+  // per-tool call/error rollup (§4.6, M3) — same top-level-only scoping as toolCounts (sub-agent-internal
+  // tool calls are tracked separately via subagents[].toolsUsed, not folded in here).
+  toolErrors?: Record<string, { calls: number; errors: number }>;
   // did each gate's answer reach the model? `reason` distinguishes a `delivered:null` that means
   // "no pairing metadata" (no toolUseId) from one that means "tool result not observed".
   gateDeliveries?: Array<{

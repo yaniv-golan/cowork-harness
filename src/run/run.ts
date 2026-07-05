@@ -73,6 +73,7 @@ export interface RunRecord {
   models: string[]; // distinct model ids seen across assistant_text/tool_use/thinking events, first-seen order, deduped (§4.3, M2)
   thinking: { text: string }[]; // reasoning blocks, capped: last 50 × 10KB each (§4.5, M3)
   thinkingElided: number; // count of older thinking blocks dropped past the 50-block cap
+  toolErrors: Record<string, { calls: number; errors: number }>; // per-tool call/error rollup (§4.6, M3)
 }
 
 export interface RunHooks {
@@ -114,6 +115,7 @@ export function classifyResultError(
 export class Run {
   private rec: RunRecord;
   private toolLog: { name: string; input: unknown }[] = [];
+  private toolNameByUseId = new Map<string, string>();
   // per-session web_fetch provenance set. Run owns it (it sees user turns + tool_results) and
   // seeds it during drive(); the workspace handler reads membership + escalates misses via the Decider.
   private provenance = new ProvenanceTracker();
@@ -148,6 +150,7 @@ export class Run {
       models: [],
       thinking: [],
       thinkingElided: 0,
+      toolErrors: {},
     };
   }
 
@@ -231,12 +234,22 @@ export class Run {
               this.rec.toolCounts[ev.name] = (this.rec.toolCounts[ev.name] ?? 0) + 1; // count top-level calls (subagent tools excluded, matching toolsCalled)
               // Wave 1 / E8: a top-level Skill invocation — duplicates kept (re-triggering is signal).
               if (ev.name === "Skill") this.rec.skillsInvoked.push(String((ev.input as Record<string, unknown> | undefined)?.skill ?? ""));
+              if (ev.toolUseId) this.toolNameByUseId.set(ev.toolUseId, ev.name);
             }
             this.toolLog.push({ name: ev.name, input: ev.input }); // still logged for provenance/trace
             break;
           }
           case "tool_result": {
             this.rec.toolResults.push({ toolUseId: ev.toolUseId, isError: ev.isError, text: ev.text, assertText: ev.assertText });
+            if (ev.toolUseId) {
+              const name = this.toolNameByUseId.get(ev.toolUseId);
+              if (name) {
+                const bucket = this.rec.toolErrors[name] ?? { calls: 0, errors: 0 };
+                bucket.calls++;
+                if (ev.isError) bucket.errors++;
+                this.rec.toolErrors[name] = bucket;
+              }
+            }
             this.provenance.seedFromToolResult(ev.provenanceText ?? ev.text); // seed from the UNtruncated value so URLs past the display cap are still fetchable
             // (matches Cowork's tool_response provenance hook)
             // Delivery check: if this is the result of an answered gate and it ERRORED, the injected

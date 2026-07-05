@@ -27,6 +27,7 @@ function partialRecord(over: Partial<RunRecord> = {}): RunRecord {
     models: [],
     thinking: [],
     thinkingElided: 0,
+    toolErrors: {},
     ...over,
   };
 }

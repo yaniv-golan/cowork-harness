@@ -480,6 +480,32 @@ describe("Run — turn loop + record", () => {
     expect(rec.toolCounts).toEqual({ WebSearch: 2, Read: 1 }); // not 3 WebSearch — the subagent one is excluded
   });
 
+  it("accumulates rec.toolErrors keyed by tool name, tracking calls and errors independently", async () => {
+    const ev: AgentEvent[] = [
+      { type: "tool_use", name: "Bash", input: {}, toolUseId: "t1" },
+      { type: "tool_result", toolUseId: "t1", isError: false, text: "ok" },
+      { type: "tool_use", name: "Bash", input: {}, toolUseId: "t2" },
+      { type: "tool_result", toolUseId: "t2", isError: true, text: "boom" },
+      { type: "tool_use", name: "Read", input: {}, toolUseId: "t3" },
+      { type: "tool_result", toolUseId: "t3", isError: false, text: "ok" },
+      { type: "result", isError: false },
+    ];
+    const rec = await new Run(new MockSession(ev), new ScriptedDecider([])).drive("go");
+    expect(rec.toolErrors).toEqual({
+      Bash: { calls: 2, errors: 1 },
+      Read: { calls: 1, errors: 0 },
+    });
+  });
+
+  it("a tool_result with no matching prior tool_use (e.g. subagent-internal calls not top-level-tracked) is silently NOT counted in toolErrors", async () => {
+    const ev: AgentEvent[] = [
+      { type: "tool_result", toolUseId: "orphan", isError: true, text: "boom" },
+      { type: "result", isError: false },
+    ];
+    const rec = await new Run(new MockSession(ev), new ScriptedDecider([])).drive("go");
+    expect(rec.toolErrors).toEqual({});
+  });
+
   it("gateDeliveries pairs an answered gate with its tool_result (delivered vs failure)", async () => {
     const gate = (id: string, toolUseId: string): AgentEvent => ({
       type: "decision",

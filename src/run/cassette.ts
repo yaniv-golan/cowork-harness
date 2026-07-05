@@ -854,6 +854,7 @@ function minimalRec(): RunRecord {
     models: [],
     thinking: [],
     thinkingElided: 0,
+    toolErrors: {},
   };
 }
 
@@ -2107,6 +2108,7 @@ function replayErrorResult(file: string): RunResult {
     toolDurations: undefined,
     models: undefined,
     thinking: undefined,
+    toolErrors: undefined,
     gateDeliveries: undefined,
     subagents: undefined,
     nonReproducibleAnswers: undefined,
@@ -3144,6 +3146,7 @@ export async function replayCassette(
       toolDurations: cassette.timeline ? foldToolDurations(cassette.timeline) : undefined,
       models: rec.models.length ? rec.models : undefined,
       thinking: rec.thinking.length ? rec.thinking : undefined,
+      toolErrors: rec.toolErrors,
       gateDeliveries: rec.gateDeliveries,
       egress: [],
       assertions,

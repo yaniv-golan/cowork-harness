@@ -58,6 +58,15 @@
       "type": "array",
       "items": { "type": "object", "properties": { "text": { "type": "string" } }, "required": ["text"] }
     },
+    "toolErrors": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": { "calls": { "type": "number" }, "errors": { "type": "number" } },
+        "required": ["calls", "errors"],
+        "additionalProperties": false
+      }
+    },
     "gateDeliveries": { "type": "array" },
     "egress": { "type": "array" },
     "assertions": { "type": "array" },
