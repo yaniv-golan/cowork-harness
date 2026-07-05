@@ -41,9 +41,12 @@ All notable changes to this project are documented here. The format is based on
   cassette bloat and a hard `binary` privacy finding that forced `--allow`. The manifest entry now
   carries `path` + `bytes` + `sha256` with `truncated: true` and no `body`, reusing the same
   representation the 64-KiB inline cap already produces. The entry still survives in the manifest (it
-  is NOT excluded), so `computer_links_resolve`/`file_exists` resolve identically on live and replay —
-  only `artifact_json` can no longer target it (no body to read). A `mode: rw`/`rwd` folder's contents
-  are unaffected and keep their full body.
+  is NOT excluded), so `computer_links_resolve`/`file_exists` resolve identically on live and replay.
+  `artifact_json` against a body-less target (a read-only input, or any artifact over the body cap)
+  reports a clear **evidence-unavailable** on every lane — live, verify-run, and replay all agree, so
+  a cassette can't record green and replay red, and the message says how to fix it (assert on a
+  deliverable, or raise `--max-artifact-bytes`) instead of a cryptic JSON parse error. A `mode:
+  rw`/`rwd` folder's contents are unaffected and keep their full body.
 - **`trace --view questions` and the `scaffold` helper disagreed with `questions_count_max` on what
   "a question" counts.** The assertion counts **sub-questions** (one `AskUserQuestion` bundling K
   sub-questions counts as K — the better spam/burden budget, since per-tool-call counting would miss
@@ -52,9 +55,11 @@ All notable changes to this project are documented here. The format is based on
   what the assertion computes and false-red on the first real run. No behavior change to the
   assertion itself: `trace --view questions` now annotates each gate row with its sub-question count
   and prints a footer total (`N gate(s), M sub-question(s) total`) that matches what
-  `questions_count_max` compares against; the scaffold now doubles its emitted budget with a loud
-  comment pointing at `trace --view questions` for the real total. The count definition is now
-  documented in `docs/scenario.md`, `docs/cassette.md`, `SPEC.md`, and the skill's
+  `questions_count_max` compares against. The static `scaffold` helper can't know the sub-question
+  count offline, so instead of fabricating a value it now emits `questions_count_max` **commented
+  out** as a calibration TODO pointing at `trace --view questions` (a budget must come from
+  observation, not a guess — a fabricated one either false-reds or is a dead tripwire). The count
+  definition is now documented in `docs/scenario.md`, `docs/cassette.md`, `SPEC.md`, and the skill's
   `references/scenario-schema.md` / `SKILL.md` gotcha list.
 
 ## [0.24.0] — 2026-07-05

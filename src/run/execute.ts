@@ -734,6 +734,9 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     result: record.result,
     workRoot,
     userVisiblePrefixes: userVisibleRoots,
+    // Read-only folder inputs are captured body-less; artifact_json must reach the same
+    // evidence-unavailable verdict here as on replay (see AssertContext.readonlyFolderRoots).
+    readonlyFolderRoots,
     preRunPaths,
     outputsDeletes: scan.outputsDeletes,
     questions: record.questions,

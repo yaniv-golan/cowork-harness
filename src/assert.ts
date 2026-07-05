@@ -212,6 +212,14 @@ export interface AssertContext {
   /** Relative paths of artifacts written as 0-byte placeholders in the cassette (truncated: true entries).
    *  Set by replay lane from materializeManifest(); empty set on live and verify-run lanes. */
   truncatedPaths?: Set<string>;
+  /** workRoot-relative mount prefixes of read-only (`mode:r`) connected folders — captured body-less
+   *  (see buildManifest's `bodyLessPrefixes`). On the LIVE/verify-run lanes the real file is on disk, so
+   *  content assertions would evaluate it and PASS, while replay (0-byte placeholder) cannot — a
+   *  green-record/red-replay asymmetry. Content keys (artifact_json) therefore treat a target under one
+   *  of these prefixes as evidence-unavailable on EVERY lane, matching what `truncatedPaths` forces on
+   *  replay. Existence keys (file_exists/user_visible_artifact) are unaffected (existence is provable
+   *  from the recorded hash). Undefined/empty when there is no read-only folder. */
+  readonlyFolderRoots?: string[];
   /** Skill/plugin ids invoked via the Skill tool_use event, in call order (duplicates kept). */
   skillsInvoked: string[];
   /** Whether the agent's init tool list included "Skill". False/never-observed means
@@ -666,10 +674,34 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
     else {
       // verify the real path (after symlink resolution) is still under workRoot.
       const realFile = containedRealPath(ctx.workRoot, file);
+      // A body-less manifest entry (a read-only connected-folder input, or an artifact over the body
+      // cap) has no content in the cassette — artifact_json cannot be evaluated on replay (the 0-byte
+      // placeholder isn't parseable). To keep record/verify-run/replay SYMMETRIC (no green-record →
+      // red-replay), treat such a target as evidence-unavailable on EVERY lane: `truncatedPaths` flags
+      // it on replay; `readonlyFolderRoots` flags the read-only-input case on the live/verify-run lanes
+      // where the real file is still on disk. (Existence keys stay green — existence is provable from
+      // the recorded hash — but content is genuinely absent, so this fails loud, never vacuous.)
+      const rel = relative(resolve(ctx.workRoot), file);
+      const isReadonlyInput = (ctx.readonlyFolderRoots ?? []).some((pre) => rel === pre || rel.startsWith(pre + "/"));
+      const bodyLess = truncated.has(rel) || isReadonlyInput;
       if (!realFile) {
         results.push(fail(`unsafe artifact_json path "${aj.artifact}" — symlink target escapes the work root`));
       } else if (!existsSync(realFile)) {
         results.push(fail(`artifact_json: file not found: ${aj.artifact} (under ${ctx.workRoot})`));
+      } else if (bodyLess) {
+        // On live/verify-run `isReadonlyInput` pinpoints the cause (a read-only input) — give the exact
+        // remedy. On replay the cassette records only `truncated:true` (not WHY), so the cause is
+        // ambiguous — name BOTH so the remedy is never wrong (a stale "raise --max-artifact-bytes" hint
+        // for a read-only input would send the author chasing a record loop that can't help).
+        results.push(
+          fail(
+            `evidence unavailable: artifact_json target "${aj.artifact}" was captured body-less ` +
+              (isReadonlyInput
+                ? `(read-only connected-folder input — its content is never captured; assert artifact_json on a deliverable instead)`
+                : `(a read-only connected-folder input, or an artifact larger than the body cap — if an input, assert on a deliverable; if a large deliverable, raise --max-artifact-bytes)`) +
+              ` — content is not in the cassette, so it cannot be evaluated on replay`,
+          ),
+        );
       } else {
         let doc: unknown;
         let parsed = true;

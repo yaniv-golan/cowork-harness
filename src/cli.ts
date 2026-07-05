@@ -3127,6 +3127,9 @@ async function cmdVerifyRun(args: string[]) {
     // Read the roots persisted at run time (folder mount names are dynamic/gated, not a fixed prefix).
     // Fall back to the legacy prefix for old result.json that predates the field.
     userVisiblePrefixes: result.userVisibleRoots ?? ["outputs", ".projects"],
+    // Read-only folder inputs are captured body-less; keep artifact_json's verdict identical to the
+    // replay lane (evidence-unavailable) instead of parsing the real on-disk input here.
+    readonlyFolderRoots: result.readonlyFolderRoots ?? [],
     // result.json is the single source: every writer populates the field from the run's own
     // pre-run-manifest.json, so a missing field means the baseline genuinely doesn't exist
     // (pre-field run, or the run never captured) — evidence-unavailable, loud.

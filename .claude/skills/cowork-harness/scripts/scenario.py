@@ -716,15 +716,14 @@ def build_scenario(args):
     if gates:
         for rx, _ in gates:
             content_lines.append(f"  - question_asked: {_sq(rx)}   # gate key: replay only with a controlOut cassette")
-        # questions_count_max counts SUB-questions at runtime (assert.ts/trace-view.ts), but `gates`
-        # here is per-tool-call (one scripted --gate per when_question rule) — the two definitions
-        # disagree, so a bare len(gates) can start BELOW what the assertion computes and false-red on
-        # the first real run if any gate bundles several sub-questions. Double it for headroom and say
-        # so loudly; the author should tighten it once `trace --view questions` shows the real total.
+        # questions_count_max counts SUB-questions at runtime (assert.ts/trace-view.ts), but this
+        # scaffold is STATIC — it only knows the number of --gate rules (per-tool-call), never how many
+        # sub-questions each gate bundles. Any number emitted here would be a guess: too low false-reds
+        # on the first run, too high is a dead tripwire. A budget must come from observation, not
+        # fabrication — so emit it COMMENTED OUT with the calibration path, not a made-up value.
         content_lines.append(
-            f"  - questions_count_max: {max(1, len(gates)) * 2}   "
-            "# counts SUB-questions at runtime, not gates/tool-calls; raise if a gate bundles several "
-            "(see `trace --view questions` for the real total)"
+            "  # - questions_count_max: <N>   # BUDGET — calibrate from a real run: `trace --view "
+            "questions` prints the SUB-question total (what this asserts); set N to that + headroom."
         )
         content_lines.append("  - gate_answers_delivered: true   # the steered answers actually reached the model")
 

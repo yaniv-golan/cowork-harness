@@ -400,8 +400,9 @@ mounts), since replay has no live filesystem to probe directly (that direct chec
 
 A `mode: r` connected folder (see [session.md](./session.md)) holds pre-existing INPUTS, not deliverables —
 `record` captures its contents **body-less** (path + hash, `truncated: true`, no `body`): `file_exists` and
-`computer_links_resolve` still pass against it (the placeholder materializes on replay), but `artifact_json`
-can't target one (no body to read). This keeps a read-only input out of the cassette's committed content
+`computer_links_resolve` still pass against it (the placeholder materializes on replay), while `artifact_json`
+against it reports a clear evidence-unavailable identically on live, verify-run, and replay (so a cassette
+can't record green and replay red). This keeps a read-only input out of the cassette's committed content
 (no bloat, no `binary` privacy finding) while `no_unexpected_files`/`computer_links_resolve` keep enumerating
 the folder as a user-visible root. A `mode: rw`/`rwd` folder's contents are captured with a full body, same
 as `outputs/`.
