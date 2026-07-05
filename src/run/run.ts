@@ -27,6 +27,9 @@ export interface SubagentDispatch {
   declaredTools: string[];
   toolsUsed: string[];
   description?: string; // the dispatch's `description` — identifies it when the skill set no subagent_type
+  prompt?: string; // dispatch input.prompt, assertText-capped (§4.4, M4)
+  model?: string; // the dispatching message's model (§4.4, M4)
+  output?: string; // the dispatch's own paired tool_result, assertText-capped (§4.4, M4) — populated by a finalize step, not at push time
 }
 
 export interface DecisionRecord {
@@ -310,6 +313,8 @@ export class Run {
               declaredTools: ev.declaredTools,
               toolsUsed: [],
               description: ev.description,
+              prompt: ev.prompt,
+              model: ev.model,
             });
             break;
           case "metrics":
@@ -421,9 +426,19 @@ export class Run {
         ...(tr.isError ? { error: tr.text.split("\n")[0].slice(0, 200) } : {}),
       };
     });
+    this.denormalizeSubagentOutputs();
     this.foldRedundantToolCalls();
     for (const h of this.hooks) h.finalize?.(this.rec);
     return this.rec;
+  }
+
+  /** Pairs each subagent dispatch's toolUseId against rec.toolResults to populate its `output`
+   *  (the dispatch's own return value) — mirrors the gate-delivery pairing pattern above. */
+  private denormalizeSubagentOutputs(): void {
+    for (const sa of this.rec.subagents) {
+      const tr = this.rec.toolResults.find((r) => r.toolUseId === sa.toolUseId);
+      if (tr) sa.output = tr.assertText ?? tr.text;
+    }
   }
 
   private async handleDecision(req: DecisionRequest) {

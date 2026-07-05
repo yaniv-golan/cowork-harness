@@ -56,7 +56,9 @@ export type AgentEvent =
       agentType: string;
       declaredTools: string[];
       description?: string;
-    } // parentToolUseId = nesting, for the dispatch tree. model deliberately NOT added here — M4/§4.4 scope, not M2.
+      prompt?: string; // input.prompt, assertText-capped (§4.4, M4)
+      model?: string; // the dispatching message's model (§4.4, M4)
+    } // parentToolUseId = nesting, for the dispatch tree.
   | { type: "thinking"; text: string; model?: string } // model set only when this thinking block came from an assistant message (not the system-subtype "thinking" event, which has no message.model)
   | { type: "metrics"; data: Record<string, unknown> } // api_metrics → cost
   | { type: "decision"; request: DecisionRequest }
@@ -733,6 +735,8 @@ export function parseMessage(msg: any): AgentEvent[] {
               agentType: String(inp.subagent_type ?? inp.subagentType ?? "unknown"),
               declaredTools: declared,
               description: inp.description != null ? String(inp.description) : undefined,
+              prompt: inp.prompt != null ? toolResultAssertText(String(inp.prompt)) : undefined,
+              model,
             });
           }
         }

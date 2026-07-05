@@ -252,7 +252,7 @@ describe("parseMessage — sub-agent dispatch", () => {
     expect((dec[0] as any).request).toMatchObject({ kind: "question", id: "uuid-1", toolUseId: "toolu_g" });
   });
 
-  it("threads message.model onto assistant_text, tool_use, and thinking events (not onto subagent_dispatch — that's M4 scope)", () => {
+  it("threads message.model onto assistant_text, tool_use, and thinking events", () => {
     const ev = parseMessage(
       assistant(
         [
@@ -269,7 +269,7 @@ describe("parseMessage — sub-agent dispatch", () => {
     expect(ev.find((e) => e.type === "tool_use")).toMatchObject({ model: "claude-sonnet-4-5" });
   });
 
-  it("subagent_dispatch does NOT carry model (deferred to M4)", () => {
+  it("subagent_dispatch DOES carry model, threaded from the enclosing message (M4)", () => {
     const ev = parseMessage(
       assistant(
         [{ type: "tool_use", id: "toolu_1", name: "Agent", input: { subagent_type: "general-purpose", prompt: "go" } }],
@@ -279,7 +279,31 @@ describe("parseMessage — sub-agent dispatch", () => {
     );
     const dispatch = ev.find((e) => e.type === "subagent_dispatch") as any;
     expect(dispatch).toBeDefined();
-    expect(dispatch.model).toBeUndefined();
+    expect(dispatch.model).toBe("claude-sonnet-4-5");
+  });
+
+  it("threads prompt and model onto a subagent_dispatch event (M4)", () => {
+    const d = dispatches(
+      assistant(
+        [
+          {
+            type: "tool_use",
+            id: "toolu_1",
+            name: "Agent",
+            input: { subagent_type: "general-purpose", prompt: "go explore the codebase", description: "explore" },
+          },
+        ],
+        undefined,
+        "claude-sonnet-4-5",
+      ),
+    );
+    expect(d[0]).toMatchObject({ prompt: "go explore the codebase", model: "claude-sonnet-4-5" });
+  });
+
+  it("caps an oversized subagent prompt at the 10KB assertText limit", () => {
+    const bigPrompt = "x".repeat(11_000);
+    const d = dispatches(assistant([{ type: "tool_use", id: "toolu_1", name: "Agent", input: { subagent_type: "x", prompt: bigPrompt } }]));
+    expect(d[0].prompt).toHaveLength(10 * 1024);
   });
 
   it("a system-subtype thinking event (no assistant message) has no model", () => {
@@ -347,6 +371,32 @@ describe("Run — turn loop + record", () => {
     expect(rec.subagents[0].declaredTools).toEqual(["Bash", "Read"]);
     expect(rec.subagents[0].toolsUsed).toEqual(["Read"]); // declared Bash but never used it → the culprit
     expect(rec.result).toBe("success");
+  });
+
+  it("denormalizes a subagent dispatch's paired tool_result onto rec.subagents[].output, assertText-capped (M4)", async () => {
+    const ev: AgentEvent[] = [
+      {
+        type: "subagent_dispatch",
+        toolUseId: "disp1",
+        agentType: "general-purpose",
+        declaredTools: [],
+        prompt: "explore",
+        model: "claude-sonnet-4-5",
+      },
+      { type: "tool_result", toolUseId: "disp1", isError: false, text: "found 3 files", assertText: "found 3 files" },
+      { type: "result", isError: false },
+    ];
+    const rec = await new Run(new MockSession(ev), new ScriptedDecider([])).drive("go");
+    expect(rec.subagents[0]).toMatchObject({ prompt: "explore", model: "claude-sonnet-4-5", output: "found 3 files" });
+  });
+
+  it("leaves rec.subagents[].output undefined when no tool_result matches the dispatch's toolUseId (M4)", async () => {
+    const ev: AgentEvent[] = [
+      { type: "subagent_dispatch", toolUseId: "disp1", agentType: "general-purpose", declaredTools: [] },
+      { type: "result", isError: false },
+    ];
+    const rec = await new Run(new MockSession(ev), new ScriptedDecider([])).drive("go");
+    expect(rec.subagents[0].output).toBeUndefined();
   });
 
   it("threads a result event's costUsd/numTurns into rec.cost.usd/rec.usage.turns (Wave 0 seam)", async () => {

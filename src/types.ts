@@ -619,6 +619,9 @@ export interface RunResult {
     declaredTools: string[];
     toolsUsed: string[];
     description?: string;
+    prompt?: string; // dispatch input.prompt, assertText-capped (§4.4, M4)
+    model?: string; // the dispatching message's model (§4.4, M4)
+    output?: string; // the dispatch's own paired tool_result, assertText-capped (§4.4, M4)
   }>;
   /**
    * Decisions answered by a non-deterministic / non-authoritative source (LLM, external helper,
