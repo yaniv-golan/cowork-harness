@@ -43,26 +43,34 @@ export type TimelineEvent =
   | { seq: number; ts: number; line: number; type: "result"; isError: boolean };
 
 /**
+ * Distributive over `TimelineEvent`'s union: `T extends unknown ? ... : never` forces TypeScript to
+ * apply `Omit` per-member instead of computing `keyof` over the whole union (which would collapse to
+ * only the keys shared by every variant). Without this, `Omit<TimelineEvent, ...>` silently drops all
+ * variant-specific fields from the type `toTimelineFields`'s return literals are checked against.
+ */
+export type TimelineFields<T> = T extends unknown ? Omit<T, "seq" | "ts" | "line"> : never;
+
+/**
  * Pure mapping from an already-translated `AgentEvent` to the type-specific fields of the
  * `TimelineEvent` it becomes (everything except `seq`/`ts`/`line`, which only `TimelineWriter` can
  * assign). Returns `undefined` for event types this milestone doesn't record yet (`init`,
  * `assistant_text`, `metrics`, `error`, `raw` carry no timeline-relevant signal today).
  * Exported and pure (no I/O) so it's testable without a real write stream.
  */
-export function toTimelineFields(ev: AgentEvent): Omit<TimelineEvent, "seq" | "ts" | "line"> | undefined {
+export function toTimelineFields(ev: AgentEvent): TimelineFields<TimelineEvent> | undefined {
   switch (ev.type) {
     case "tool_use":
-      return { type: "tool_use", toolUseId: ev.toolUseId, name: ev.name, parentToolUseId: ev.parentToolUseId } as Omit<TimelineEvent, "seq" | "ts" | "line">;
+      return { type: "tool_use", toolUseId: ev.toolUseId, name: ev.name, parentToolUseId: ev.parentToolUseId };
     case "tool_result":
-      return { type: "tool_result", toolUseId: ev.toolUseId, isError: ev.isError } as Omit<TimelineEvent, "seq" | "ts" | "line">;
+      return { type: "tool_result", toolUseId: ev.toolUseId, isError: ev.isError };
     case "subagent_dispatch":
-      return { type: "subagent_dispatch", toolUseId: ev.toolUseId, parentToolUseId: ev.parentToolUseId, agentType: ev.agentType } as Omit<TimelineEvent, "seq" | "ts" | "line">;
+      return { type: "subagent_dispatch", toolUseId: ev.toolUseId, parentToolUseId: ev.parentToolUseId, agentType: ev.agentType };
     case "thinking":
-      return { type: "thinking" } as Omit<TimelineEvent, "seq" | "ts" | "line">;
+      return { type: "thinking" };
     case "decision":
-      return { type: "decision", kind: ev.request.kind } as Omit<TimelineEvent, "seq" | "ts" | "line">;
+      return { type: "decision", kind: ev.request.kind };
     case "result":
-      return { type: "result", isError: ev.isError } as Omit<TimelineEvent, "seq" | "ts" | "line">;
+      return { type: "result", isError: ev.isError };
     default:
       return undefined;
   }
