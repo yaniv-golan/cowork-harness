@@ -179,7 +179,7 @@ cowork-harness lint examples/scenarios/*.yaml
 > `tool_calls_max`/`max_turns`, `result`, the verdict modifiers) always — note `max_cost_usd`/`max_tokens`
 > assert the *frozen recording's* spend on replay, not fresh spend; a real budget regression is caught by a
 > live `run` — plus `question_asked`/
-> `questions_count_max`/`gate_answers_delivered` when the cassette carries `controlOut`, and
+> `questions_count_max`/`gate_answers_delivered`/`gate_answer_count_min` when the cassette carries `controlOut`, and
 > **filesystem assertions** (`file_exists`, `user_visible_artifact`, `artifact_json`,
 > `computer_links_resolve`) when it carries an
 > `artifacts` manifest. Genuinely live-only keys (`egress_*`, `expect_denied`, `no_delete_in_outputs`,
