@@ -19,8 +19,14 @@ export interface TimelineHeader {
  *   (e.g. a `tool_use` that is also a sub-agent dispatch), each getting a distinct `seq` but sharing
  *   the same `line`.
  * - `ts` — milliseconds elapsed since `TimelineHeader.startedAtMono` (monotonic clock).
- * - `line` — the 0-based `events.jsonl` line index this entry was derived from, for joining back to
- *   the raw SDK bytes.
+ * - `line` — the 0-based ordinal of the Nth real stdout message translated from the child process,
+ *   NOT a raw index into the full persisted `events.jsonl`/`cassette.events[]` array. `events.jsonl`
+ *   also contains harness-injected `_emu`-tagged diagnostic marker lines (`stdin_error`, `spawn_error`,
+ *   `control_undelivered` — written from error-handling and control-frame-delivery code outside the
+ *   main read loop) that are interleaved with real stdout lines but never counted in `line`. A future
+ *   consumer that wants to join `line` back to `cassette.events[]` MUST first filter out any line whose
+ *   parsed JSON has an `_emu` key before indexing by `line`, or the join will silently point at the
+ *   wrong array element once any `_emu` marker has been written.
  *
  * `skill_invoked`, `task_updated`, `file_changed`, `scratchpad_promoted` are declared here (matching
  * the design's named union) but have NO producer yet — nothing in this milestone emits them. They

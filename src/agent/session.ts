@@ -407,9 +407,11 @@ export class LiveAgentSession implements AgentSession {
         const line = next.value;
         if (!line.trim()) continue;
         if (!this.closing) this.events.write(line + "\n");
-        // 0-based events.jsonl line index. Captured once per raw line and reused for every AgentEvent
-        // derived from it — one line commonly yields several (e.g. a tool_use that is also a
-        // sub-agent dispatch), and they must share this same `line` value (see timeline.ts).
+        // Ordinal of the Nth real stdout line consumed here — NOT a raw events.jsonl line index (see
+        // timeline.ts's TimelineEvent doc comment: harness-injected `_emu` markers are written to
+        // events.jsonl outside this loop and are never counted). Captured once per raw line and
+        // reused for every AgentEvent derived from it — one line commonly yields several (e.g. a
+        // tool_use that is also a sub-agent dispatch), and they must share this same `line` value.
         const lineIndex = this.lineIndex++;
         let msg: any;
         try {
