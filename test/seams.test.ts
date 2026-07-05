@@ -533,6 +533,53 @@ describe("Run — turn loop + record", () => {
     expect(rec.modelUsage).toEqual({ "claude-opus-4-8": { inputTokens: 100, outputTokens: 50, costUSD: 0.01 } });
   });
 
+  it("detects redundant tool calls (same name + identical canonicalized input) via a post-drive fold over toolLog", async () => {
+    const events: AgentEvent[] = [
+      { type: "tool_use", name: "Bash", input: { command: "ls" }, toolUseId: "t1" },
+      { type: "tool_result", toolUseId: "t1", isError: false, text: "" },
+      { type: "tool_use", name: "Bash", input: { command: "ls" }, toolUseId: "t2" }, // same input, redundant
+      { type: "tool_result", toolUseId: "t2", isError: false, text: "" },
+      { type: "tool_use", name: "Bash", input: { command: "pwd" }, toolUseId: "t3" }, // different input, not redundant
+      { type: "tool_result", toolUseId: "t3", isError: false, text: "" },
+      { type: "result", isError: false },
+    ];
+    const fakeSession = {
+      async *start() {
+        for (const e of events) yield e;
+      },
+      sendUserTurn() {},
+      respond() {},
+      close() {},
+    } as any;
+    const run = new Run(fakeSession, { decide: async () => ABSTAIN } as any, [], "test-run");
+    const rec = await run.drive("go");
+    expect(rec.redundantToolCalls).toHaveLength(1);
+    expect(rec.redundantToolCalls[0]).toMatchObject({ name: "Bash", count: 2 });
+    expect(rec.redundantToolCalls[0].argHash).toMatch(/^[a-f0-9]{16}$/); // truncated sha256, 8 bytes hex
+  });
+
+  it("key ordering in the input object doesn't defeat redundancy detection (canon sorts keys)", async () => {
+    const events: AgentEvent[] = [
+      { type: "tool_use", name: "Write", input: { path: "a.txt", content: "x" }, toolUseId: "t1" },
+      { type: "tool_result", toolUseId: "t1", isError: false, text: "" },
+      { type: "tool_use", name: "Write", input: { content: "x", path: "a.txt" }, toolUseId: "t2" }, // same, reordered keys
+      { type: "tool_result", toolUseId: "t2", isError: false, text: "" },
+      { type: "result", isError: false },
+    ];
+    const fakeSession = {
+      async *start() {
+        for (const e of events) yield e;
+      },
+      sendUserTurn() {},
+      respond() {},
+      close() {},
+    } as any;
+    const run = new Run(fakeSession, { decide: async () => ABSTAIN } as any, [], "test-run");
+    const rec = await run.drive("go");
+    expect(rec.redundantToolCalls).toHaveLength(1);
+    expect(rec.redundantToolCalls[0].count).toBe(2);
+  });
+
   it("gateDeliveries pairs an answered gate with its tool_result (delivered vs failure)", async () => {
     const gate = (id: string, toolUseId: string): AgentEvent => ({
       type: "decision",

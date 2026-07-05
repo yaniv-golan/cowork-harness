@@ -28,6 +28,7 @@ function fullyExplicitFixture(): CompleteRunResult {
     thinking: undefined,
     toolErrors: undefined,
     modelUsage: undefined,
+    redundantToolCalls: undefined,
     gateDeliveries: undefined,
     egress: [],
     assertions: [],

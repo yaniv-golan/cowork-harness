@@ -14,6 +14,7 @@
     "gate_answer_count_min",
     "gate_answers_delivered",
     "max_cost_usd",
+    "max_redundant_tool_calls",
     "max_tokens",
     "max_tool_errors",
     "max_turns",

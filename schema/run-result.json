@@ -85,6 +85,15 @@
         "additionalProperties": false
       }
     },
+    "redundantToolCalls": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": { "name": { "type": "string" }, "argHash": { "type": "string" }, "count": { "type": "number" } },
+        "required": ["name", "argHash", "count"],
+        "additionalProperties": false
+      }
+    },
     "gateDeliveries": { "type": "array" },
     "egress": { "type": "array" },
     "assertions": { "type": "array" },

@@ -20,12 +20,14 @@ export function budgetFields(src: {
   cost?: CostInfo;
   toolCounts?: Record<string, number>;
   toolErrors?: Record<string, { calls: number; errors: number }>;
+  redundantToolCalls?: Array<{ name: string; argHash: string; count: number }>;
 }): {
   costUsd?: number;
   tokensTotal?: number;
   toolCallsTotal?: number;
   turns?: number;
   toolErrorsTotal?: number;
+  redundantCallsTotal?: number;
 } {
   const inTok = src.usage?.input_tokens;
   const outTok = src.usage?.output_tokens;
@@ -36,6 +38,8 @@ export function budgetFields(src: {
     turns: src.usage?.turns,
     toolErrorsTotal:
       src.toolErrors === undefined ? undefined : Object.values(src.toolErrors).reduce((sum, t) => sum + t.errors, 0),
+    redundantCallsTotal:
+      src.redundantToolCalls === undefined ? undefined : src.redundantToolCalls.reduce((sum, g) => sum + (g.count - 1), 0),
   };
 }
 
@@ -262,6 +266,15 @@ export interface AssertContext {
    *  result.json), never 0 in that case (0 = genuinely zero errors, a real value). Own undefined-ness is
    *  the evidence-unavailable signal for max_tool_errors. */
   toolErrorsTotal?: number;
+  /** Repeated identical tool calls, count>=2 groups only (§4.8, M3) — undefined means no data was
+   *  captured (old/partial run); an empty `[]` is a valid "no redundancy" state and is NOT the same as
+   *  undefined. Not read directly by any `check()` branch today (mirrors toolErrors for parity/future use) —
+   *  `redundantCallsTotal` is the derived scalar `max_redundant_tool_calls` actually evaluates. */
+  redundantToolCalls?: Array<{ name: string; argHash: string; count: number }>;
+  /** Sum of (count-1) across every group in redundantToolCalls — undefined when redundantToolCalls itself
+   *  is undefined (partial/old result.json), never 0 in that case (0 = genuinely zero wasted calls, a real
+   *  value). Own undefined-ness is the evidence-unavailable signal for max_redundant_tool_calls. */
+  redundantCallsTotal?: number;
   /** The fidelity tier actually used this run (`RunResult.effectiveFidelity`) — used only to make
    *  `computer_links_resolve`'s failure message name the tier it checked against; no branching in
    *  `check()` reads this directly (the mode split lives in `linkResolution.mode`). Undefined on an
@@ -531,6 +544,14 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
         : ctx.toolErrorsTotal <= a.max_tool_errors
           ? ok()
           : fail(`${ctx.toolErrorsTotal} tool errors exceeds max ${a.max_tool_errors}`),
+    );
+  if (a.max_redundant_tool_calls !== undefined)
+    results.push(
+      ctx.redundantCallsTotal === undefined
+        ? fail(`evidence unavailable: redundant-call telemetry absent — cannot evaluate max_redundant_tool_calls`)
+        : ctx.redundantCallsTotal <= a.max_redundant_tool_calls
+          ? ok()
+          : fail(`${ctx.redundantCallsTotal} wasted redundant call(s) exceeds max ${a.max_redundant_tool_calls}`),
     );
   if (a.max_turns !== undefined)
     results.push(

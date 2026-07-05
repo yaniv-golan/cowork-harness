@@ -71,6 +71,7 @@ CONTENT_KEYS = {
     "tool_calls_max",
     "tool_no_error",
     "max_tool_errors",
+    "max_redundant_tool_calls",
     "max_turns",
 }
 # content keys, but only evaluated on replay when the cassette carries controlOut

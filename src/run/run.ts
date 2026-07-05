@@ -1,8 +1,8 @@
 import { warn } from "../io.js";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import type { AgentSession, AgentEvent, DecisionRequest, DecisionResponse } from "../agent/session.js";
 import type { UsageInfo, CostInfo } from "../types.js";
-import { questionKey, questionLabel } from "../agent/session.js";
+import { questionKey, questionLabel, canon } from "../agent/session.js";
 import {
   ABSTAIN,
   UnansweredError,
@@ -75,6 +75,7 @@ export interface RunRecord {
   thinkingElided: number; // count of older thinking blocks dropped past the 50-block cap
   toolErrors: Record<string, { calls: number; errors: number }>; // per-tool call/error rollup (§4.6, M3)
   modelUsage?: Record<string, Record<string, unknown>>; // per-model cost/token breakdown, from the SDK's own result-message field (§4.7, M3)
+  redundantToolCalls: Array<{ name: string; argHash: string; count: number }>; // repeated identical calls, count>=2 only (§4.8, M3)
 }
 
 export interface RunHooks {
@@ -152,6 +153,7 @@ export class Run {
       thinking: [],
       thinkingElided: 0,
       toolErrors: {},
+      redundantToolCalls: [],
     };
   }
 
@@ -169,6 +171,27 @@ export class Run {
       this.rec.thinking.shift();
       this.rec.thinkingElided++;
     }
+  }
+
+  /** Fold `toolLog` into `rec.redundantToolCalls` — groups by `name:canon(input)`, keeping only
+   *  groups with count>=2 (repeated identical calls). Runs once at drive-completion (needs the FULL
+   *  toolLog), not per-event. `argHash` is a truncated sha256 of the canonicalized input, so the
+   *  rollup never carries raw args (redaction-safe by construction — see RunResult.redundantToolCalls). */
+  private foldRedundantToolCalls(): void {
+    const groups = new Map<string, number>();
+    for (const { name, input } of this.toolLog) {
+      const key = `${name}:${canon(input)}`;
+      groups.set(key, (groups.get(key) ?? 0) + 1);
+    }
+    const out: { name: string; argHash: string; count: number }[] = [];
+    for (const [key, count] of groups) {
+      if (count < 2) continue;
+      const sepIdx = key.indexOf(":");
+      const name = key.slice(0, sepIdx);
+      const argHash = createHash("sha256").update(key.slice(sepIdx + 1)).digest("hex").slice(0, 16);
+      out.push({ name, argHash, count });
+    }
+    this.rec.redundantToolCalls = out;
   }
 
   private ctx(): RunContext {
@@ -385,6 +408,7 @@ export class Run {
         ...(tr.isError ? { error: tr.text.split("\n")[0].slice(0, 200) } : {}),
       };
     });
+    this.foldRedundantToolCalls();
     for (const h of this.hooks) h.finalize?.(this.rec);
     return this.rec;
   }

@@ -228,6 +228,7 @@ the rules and CI-placement rationale (why each category behaves this way), see
 | `tool_calls_max` | total top-level tool calls (sub-agent tools excluded) ≤ N — meaningfully replay-checkable; the re-drive recomputes `toolCounts` deterministically |
 | `tool_no_error` | no tool matching this regex recorded any error |
 | `max_tool_errors` | total tool errors across all tools ≤ N |
+| `max_redundant_tool_calls` | total WASTED repeated tool calls (sum of (count-1) across every redundant `{name,args}` group in `RunResult.redundantToolCalls`) ≤ N — not the raw count of redundant groups |
 | `max_turns` | SDK-reported (or fallback-counted) turn count ≤ N — replay-checkable, recounted deterministically same as `tool_calls_max` |
 | `question_asked` | agent asked an AskUserQuestion matching the regex |
 | `questions_count_max` | at most N **sub-questions** asked — a bundled `AskUserQuestion` with K sub-questions counts as K, not 1; `trace --view questions`'s footer total uses the same definition |

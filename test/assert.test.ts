@@ -235,6 +235,20 @@ describe("budgetFields (Wave 1 / E6a + Wave 2 / E6b) — the single derivation u
   it("toolErrorsTotal is 0 (a real value, not undefined) when toolErrors is a populated-but-empty object", () => {
     expect(budgetFields({ toolErrors: {} }).toolErrorsTotal).toBe(0);
   });
+  it("redundantCallsTotal (M3) sums (count-1) across every redundant group, undefined when redundantToolCalls is absent", () => {
+    expect(
+      budgetFields({
+        redundantToolCalls: [
+          { name: "Bash", argHash: "a".repeat(16), count: 3 },
+          { name: "Read", argHash: "b".repeat(16), count: 2 },
+        ],
+      }).redundantCallsTotal,
+    ).toBe(3); // (3-1) + (2-1)
+    expect(budgetFields({}).redundantCallsTotal).toBeUndefined();
+  });
+  it("redundantCallsTotal is 0 (a real value, not undefined) when redundantToolCalls is a populated-but-empty array", () => {
+    expect(budgetFields({ redundantToolCalls: [] }).redundantCallsTotal).toBe(0);
+  });
 });
 
 describe("max_cost_usd / max_tokens / tool_calls_max (Wave 1 / E6a)", () => {
@@ -325,6 +339,28 @@ describe("max_tool_errors (M3)", () => {
     const r = evaluate([{ max_tool_errors: 2 }], ctx({ toolErrorsTotal: undefined }));
     expect(pass(r)).toBe(false);
     expect(r[0].message).toContain("evidence unavailable");
+  });
+});
+
+describe("max_redundant_tool_calls (M3)", () => {
+  // max_redundant_tool_calls reads the pre-derived ctx.redundantCallsTotal scalar (mirroring
+  // max_tool_errors's pattern), not ctx.redundantToolCalls directly — budgetFields is what derives it
+  // from redundantToolCalls in the real live/replay/verify-run lanes (covered separately above).
+  it("passes when total wasted redundant calls is <= N", () => {
+    expect(pass(evaluate([{ max_redundant_tool_calls: 2 }], ctx({ redundantCallsTotal: 2 })))).toBe(true);
+  });
+  it("fails when total wasted redundant calls exceeds N", () => {
+    const r = evaluate([{ max_redundant_tool_calls: 2 }], ctx({ redundantCallsTotal: 3 }));
+    expect(pass(r)).toBe(false);
+    expect(r[0].message).toContain("3");
+  });
+  it("fails as evidence-unavailable (not a vacuous pass) when redundantCallsTotal is absent", () => {
+    const r = evaluate([{ max_redundant_tool_calls: 2 }], ctx({ redundantCallsTotal: undefined }));
+    expect(pass(r)).toBe(false);
+    expect(r[0].message).toContain("evidence unavailable");
+  });
+  it("0 wasted calls is a real value that satisfies any non-negative max, not evidence-unavailable", () => {
+    expect(pass(evaluate([{ max_redundant_tool_calls: 0 }], ctx({ redundantCallsTotal: 0 })))).toBe(true);
   });
 });
 

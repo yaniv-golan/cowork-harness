@@ -231,6 +231,14 @@ export const Assertion = z.object({
     .nonnegative()
     .optional()
     .describe("total tool errors across all tools (sum of RunResult.toolErrors[*].errors) ≤ N"),
+  max_redundant_tool_calls: z
+    .number()
+    .int()
+    .nonnegative()
+    .optional()
+    .describe(
+      "total WASTED repeated tool calls (sum of (count-1) across every redundant {name,args} group in RunResult.redundantToolCalls) ≤ N — not the raw count of redundant groups",
+    ),
   max_turns: z
     .number()
     .int()
@@ -590,6 +598,10 @@ export interface RunResult {
    *  SDK payload (empirically confirmed), not a guessed shape. Every field optional since this is a
    *  passthrough of SDK-owned data, not harness-computed. */
   modelUsage?: Record<string, ModelUsageEntry>;
+  // repeated identical tool calls — count>=2 groups only, an optimization signal (§4.8, M3). argHash is a
+  // truncated sha256 of the canonicalized {name,input} pair — no raw args in the rollup (they stay in
+  // toolResults/events, which already carry them); this field is redaction-safe by construction.
+  redundantToolCalls?: Array<{ name: string; argHash: string; count: number }>;
   // did each gate's answer reach the model? `reason` distinguishes a `delivered:null` that means
   // "no pairing metadata" (no toolUseId) from one that means "tool result not observed".
   gateDeliveries?: Array<{

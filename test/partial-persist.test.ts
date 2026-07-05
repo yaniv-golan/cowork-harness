@@ -28,6 +28,7 @@ function partialRecord(over: Partial<RunRecord> = {}): RunRecord {
     thinking: [],
     thinkingElided: 0,
     toolErrors: {},
+    redundantToolCalls: [],
     ...over,
   };
 }

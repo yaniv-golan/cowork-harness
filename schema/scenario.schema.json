@@ -217,6 +217,12 @@
             "minimum": 0,
             "maximum": 9007199254740991
           },
+          "max_redundant_tool_calls": {
+            "description": "total WASTED repeated tool calls (sum of (count-1) across every redundant {name,args} group in RunResult.redundantToolCalls) ≤ N — not the raw count of redundant groups",
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
           "max_turns": {
             "description": "the SDK-reported (or fallback-counted) turn count ≤ N — replay-checkable (the re-drive recounts turns deterministically)",
             "type": "integer",

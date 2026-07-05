@@ -855,6 +855,7 @@ function minimalRec(): RunRecord {
     thinking: [],
     thinkingElided: 0,
     toolErrors: {},
+    redundantToolCalls: [],
   };
 }
 
@@ -2110,6 +2111,7 @@ function replayErrorResult(file: string): RunResult {
     thinking: undefined,
     toolErrors: undefined,
     modelUsage: undefined,
+    redundantToolCalls: undefined,
     gateDeliveries: undefined,
     subagents: undefined,
     nonReproducibleAnswers: undefined,
@@ -2780,6 +2782,7 @@ export const ALWAYS_CONTENT_KEYS: (keyof Assertion)[] = [
   "tool_calls_max",
   "tool_no_error",
   "max_tool_errors",
+  "max_redundant_tool_calls",
   "max_turns",
   "result",
   // Verdict modifiers — NOT filesystem/egress assertions. Keep all of them on replay (each evaluates to a
@@ -3037,6 +3040,7 @@ export async function replayCassette(
       toolResultTexts: rec.toolResults.map((r) => r.assertText ?? r.text),
       toolResultsTruncated: rec.toolResults.map((r) => r.assertText === undefined),
       toolErrors: rec.toolErrors,
+      redundantToolCalls: rec.redundantToolCalls,
       truncatedPaths: replayTruncatedPaths,
       skillsInvoked: rec.skillsInvoked,
       skillToolAvailable: rec.initTools.includes("Skill"),
@@ -3152,6 +3156,7 @@ export async function replayCassette(
       thinking: rec.thinking.length ? rec.thinking : undefined,
       toolErrors: rec.toolErrors,
       modelUsage: rec.modelUsage,
+      redundantToolCalls: rec.redundantToolCalls,
       gateDeliveries: rec.gateDeliveries,
       egress: [],
       assertions,
