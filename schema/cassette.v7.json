@@ -54,6 +54,13 @@
       },
       "description": "v4+: the user-visible mount roots captured at record time (`outputs` + each connected folder's resolved mount name). Replay reads THIS instead of a hardcoded prefix. ABSENT on pre-v4 cassettes → replay falls back to the legacy prefix."
     },
+    "readonlyFolderRoots": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "The subset of `userVisibleRoots` that are read-only (`mode: r`) connected folders — captured body-less (path + hash, no body). Persisted so replay distinguishes a body-less read-only input from an over-cap artifact and gives the precise `artifact_json` remediation. Optional metadata (no cassetteVersion bump); ABSENT/empty ⇒ no read-only folder in the run. A subset of `userVisibleRoots` (no new privacy strings)."
+    },
     "preRunPaths": {
       "type": "array",
       "items": {

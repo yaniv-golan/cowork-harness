@@ -127,4 +127,22 @@ describe("buildManifest — bodyLessPrefixes (T3 read-only connected-folder capt
     const findings = scanCassette(cassette, []);
     expect(findings.some((f) => f.cls === "binary")).toBe(false);
   });
+
+  it("artifactJsonTargetsTruncated: flags an OVER-CAP deliverable but EXCLUDES a read-only input", () => {
+    const root = mkdtempSync(join(tmpdir(), "cwh-cap-ajt-"));
+    mkdirSync(join(root, "outputs"), { recursive: true });
+    mkdirSync(join(root, "carta-folder"), { recursive: true });
+    writeFileSync(join(root, "outputs", "big.json"), JSON.stringify({ x: "y".repeat(200) })); // over the 64B cap
+    writeFileSync(join(root, "carta-folder", "in.json"), JSON.stringify({ a: 1 })); // read-only input
+    const artifacts = buildManifest(root, 64, ["outputs", "carta-folder"], ["carta-folder"]);
+    const scenario = {
+      assert: [
+        { artifact_json: { artifact: "outputs/big.json", path: "x", exists: true } },
+        { artifact_json: { artifact: "carta-folder/in.json", path: "a", equals: 1 } },
+      ],
+    } as unknown as Parameters<typeof artifactJsonTargetsTruncated>[0];
+    // over-cap deliverable IS flagged (raise the cap is the right remedy); the read-only input is NOT
+    // (it's body-less by policy — handled by the symmetric evidence-unavailable, not "too large").
+    expect(artifactJsonTargetsTruncated(scenario, root, artifacts, ["carta-folder"])).toEqual(["outputs/big.json"]);
+  });
 });

@@ -44,9 +44,11 @@ All notable changes to this project are documented here. The format is based on
   is NOT excluded), so `computer_links_resolve`/`file_exists` resolve identically on live and replay.
   `artifact_json` against a body-less target (a read-only input, or any artifact over the body cap)
   reports a clear **evidence-unavailable** on every lane — live, verify-run, and replay all agree, so
-  a cassette can't record green and replay red, and the message says how to fix it (assert on a
-  deliverable, or raise `--max-artifact-bytes`) instead of a cryptic JSON parse error. A `mode:
-  rw`/`rwd` folder's contents are unaffected and keep their full body.
+  a cassette can't record green and replay red. The cassette persists the read-only-folder set
+  (`readonlyFolderRoots`, a subset of `userVisibleRoots`), so replay knows *why* an entry is body-less
+  and gives the **precise** remedy — "assert on a deliverable" for a read-only input, "raise
+  `--max-artifact-bytes`" for an over-cap artifact — instead of a cryptic JSON parse error or a
+  guessed hint. A `mode: rw`/`rwd` folder's contents are unaffected and keep their full body.
 - **`trace --view questions` and the `scaffold` helper disagreed with `questions_count_max` on what
   "a question" counts.** The assertion counts **sub-questions** (one `AskUserQuestion` bundling K
   sub-questions counts as K — the better spam/burden budget, since per-tool-call counting would miss

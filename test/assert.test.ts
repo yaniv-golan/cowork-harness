@@ -585,13 +585,25 @@ describe("file_exists / user_visible_artifact pass on truncated cassette entries
     // A truncated entry has no body in the cassette; artifact_json cannot be evaluated on replay. It
     // must fail LOUD with an actionable evidence-unavailable message (raise --max-artifact-bytes),
     // not a vacuous pass and not a confusing "not valid JSON" from parsing the 0-byte placeholder.
+    // big.html is over-cap (not under a readonly root, and this replay ctx carries no readonlyFolderRoots),
+    // so the message is the PRECISE over-cap remedy — not the read-only one.
     const r = evaluate([{ artifact_json: { artifact: "outputs/big.html", path: "ok", equals: true } }], base);
     expect(pass(r)).toBe(false);
     expect(r[0].message).toMatch(/evidence unavailable.*body-less/i);
-    // Replay can't tell a read-only input from an over-cap artifact (cassette records only
-    // truncated:true), so the message names BOTH remedies — never a misleading single hint.
     expect(r[0].message).toMatch(/--max-artifact-bytes/i);
+    expect(r[0].message).not.toMatch(/read-only connected-folder input/i);
+  });
+
+  it("artifact_json on a read-only input is evidence-unavailable with the PRECISE read-only remedy on replay", () => {
+    // Replay knows the read-only set (persisted on the cassette → passed into the ctx), so a body-less
+    // read-only input gets the "assert on a deliverable" remedy, NOT the inert "raise --max-artifact-bytes".
+    const roEntries = [{ path: "carta/input.json", bytes: 40, sha256: smallSha, truncated: true as const }];
+    const ro = materializeManifest(roEntries);
+    const roCtx = ctx({ workRoot: ro.workRoot, truncatedPaths: ro.truncatedPaths, readonlyFolderRoots: ["carta"] });
+    const r = evaluate([{ artifact_json: { artifact: "carta/input.json", path: "x", equals: 1 } }], roCtx);
+    expect(pass(r)).toBe(false);
     expect(r[0].message).toMatch(/read-only connected-folder input/i);
+    expect(r[0].message).not.toMatch(/--max-artifact-bytes/i);
   });
 
   it("file_exists and artifact_json both pass for a small (inlined) entry", () => {

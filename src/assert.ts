@@ -689,16 +689,16 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
       } else if (!existsSync(realFile)) {
         results.push(fail(`artifact_json: file not found: ${aj.artifact} (under ${ctx.workRoot})`));
       } else if (bodyLess) {
-        // On live/verify-run `isReadonlyInput` pinpoints the cause (a read-only input) — give the exact
-        // remedy. On replay the cassette records only `truncated:true` (not WHY), so the cause is
-        // ambiguous — name BOTH so the remedy is never wrong (a stale "raise --max-artifact-bytes" hint
-        // for a read-only input would send the author chasing a record loop that can't help).
+        // Every lane knows WHY the entry is body-less, so the remedy is always precise: live/verify-run
+        // derive `readonlyFolderRoots` from the plan; replay reads the set persisted on the cassette
+        // (v7). A read-only input can't be captured (assert on a deliverable); an over-cap artifact can
+        // (raise the cap). `isReadonlyInput` distinguishes them on all three lanes.
         results.push(
           fail(
             `evidence unavailable: artifact_json target "${aj.artifact}" was captured body-less ` +
               (isReadonlyInput
                 ? `(read-only connected-folder input — its content is never captured; assert artifact_json on a deliverable instead)`
-                : `(a read-only connected-folder input, or an artifact larger than the body cap — if an input, assert on a deliverable; if a large deliverable, raise --max-artifact-bytes)`) +
+                : `(larger than the artifact-body cap — raise --max-artifact-bytes to capture it)`) +
               ` — content is not in the cassette, so it cannot be evaluated on replay`,
           ),
         );

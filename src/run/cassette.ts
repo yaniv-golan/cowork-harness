@@ -112,6 +112,13 @@ export interface Cassette {
   // mount name). Replay reads THIS instead of a hardcoded `["outputs",".projects"]` prefix — folder mount
   // names are dynamic/gated. ABSENT on pre-v4 cassettes → replay falls back to the legacy prefix.
   userVisibleRoots?: string[];
+  // The subset of `userVisibleRoots` that are READ-ONLY (`mode: r`) connected folders — captured
+  // body-less. Persisted (same optional-metadata pattern as `preRunPaths`, no cassetteVersion bump)
+  // so replay knows WHY a manifest entry is body-less (a read-only input vs. an over-cap artifact) and
+  // can give the precise remediation — the record/verify-run lanes derive the same set from the plan.
+  // ABSENT/empty ⇒ no read-only folder in this run. A subset of `userVisibleRoots`, so it introduces
+  // no new privacy strings.
+  readonlyFolderRoots?: string[];
   // the authored scenario SOURCE file this cassette was recorded from, RELATIVE to the cassette dir
   // (relocatable, no absolute host path). `record --rerecord-stale` prefers this over a `slugForPath(name)`
   // guess so an authored `name:` that differs from the filename still re-records from the edited YAML rather
@@ -488,6 +495,9 @@ export function scanCassette(cassette: Cassette, allow: AllowInput[]): ScanFindi
   // cassettes`. Scan them too, prefixed `metadata:` so a reviewer knows redaction here ALSO rewrites
   // structural paths, distinct from free-text findings in the transcript/deliverable.
   (cassette.userVisibleRoots ?? []).forEach((r, i) => findings.push(...scanText(r, `metadata:userVisibleRoots[${i}]`, allow, FULL)));
+  // readonlyFolderRoots is a subset of userVisibleRoots (same strings), but it's a separately-persisted
+  // field — scan it too so a reviewer can't be surprised by an unscanned persisted string.
+  (cassette.readonlyFolderRoots ?? []).forEach((r, i) => findings.push(...scanText(r, `metadata:readonlyFolderRoots[${i}]`, allow, FULL)));
   findings.push(...scanText(cassette.scenario.name ?? "", "metadata:scenario.name", allow, FULL));
   findings.push(...scanText(cassette.scenario.session ?? "", "metadata:scenario.session", allow, FULL));
   if (cassette.scenarioSource) findings.push(...scanText(cassette.scenarioSource, "metadata:scenarioSource", allow, FULL));
@@ -1105,10 +1115,15 @@ export function redactCassette(cassette: Cassette, policy: RedactionPolicy): Cas
     }
   }
   const redactedPreRunPaths = cassette.preRunPaths?.map((p) => redactText(p, policy));
+  // readonlyFolderRoots is a subset of userVisibleRoots; redact it with the same context-free redactText
+  // so the prefix relationship with the (redacted) artifact paths is preserved. The `...cassette` spread
+  // would otherwise carry the UNREDACTED set through.
+  const redactedReadonly = cassette.readonlyFolderRoots?.map((r) => redactText(r, policy));
   return {
     ...cassette,
     scenario,
     userVisibleRoots: redactedRoots,
+    readonlyFolderRoots: redactedReadonly,
     artifacts: redactedArtifacts,
     preRunPaths: redactedPreRunPaths,
     events: cassette.events.map((l) => redactJsonLine(l, policy)),
@@ -1428,13 +1443,22 @@ export function redactionPreflightMessage(items: Array<{ scenario: Scenario; pol
   );
 }
 
-/** Return the `artifact_json.artifact` paths a scenario asserts that ended up TRUNCATED in the manifest
- *  (body >cap, hash-only). Such an assertion passes at record (evaluated on the live on-disk file) but FAILS
- *  at replay (the materialized body is empty → "not valid JSON"). Paths are normalized through `resolve` so
- *  `./outputs/x.json` and `outputs/x.json` join cleanly against the manifest's walk paths. */
-export function artifactJsonTargetsTruncated(scenario: Scenario, workRoot: string, artifacts: ManifestEntry[]): string[] {
+/** Return the `artifact_json.artifact` paths a scenario asserts that ended up truncated by SIZE (body
+ *  >cap, hash-only) — the genuine green-record/red-replay case whose remedy is "raise the cap". This
+ *  EXCLUDES read-only connected-folder inputs: those are body-less by policy (not size), raising the cap
+ *  can't capture them, and `artifact_json` against one already fails LOUD-and-symmetrically at record,
+ *  verify-run, and replay (evidence-unavailable, see assert.ts) — so they are neither an asymmetry nor a
+ *  "too large" problem. Paths are normalized through `resolve` so `./outputs/x.json` and `outputs/x.json`
+ *  join cleanly against the manifest's walk paths. */
+export function artifactJsonTargetsTruncated(
+  scenario: Scenario,
+  workRoot: string,
+  artifacts: ManifestEntry[],
+  readonlyFolderRoots: string[] = [],
+): string[] {
+  const isReadonly = (p: string): boolean => readonlyFolderRoots.some((pre) => p === pre || p.startsWith(pre + "/"));
   const truncatedAbs = new Set<string>();
-  for (const a of artifacts) if (a.truncated) truncatedAbs.add(resolve(workRoot, a.path));
+  for (const a of artifacts) if (a.truncated && !isReadonly(a.path)) truncatedAbs.add(resolve(workRoot, a.path));
   if (truncatedAbs.size === 0) return [];
   const hits: string[] = [];
   for (const a of scenario.assert ?? []) {
@@ -1994,7 +2018,7 @@ async function recordScenarioObject(
   // replay (no committed body). Surface that record→replay asymmetry NOW, at its cause, instead of letting a
   // green record produce a red replay in CI. Honor --allow-failing (warn, don't block) like the verdict gate.
   if (result.workDir) {
-    const truncatedAsserted = artifactJsonTargetsTruncated(scenario, result.workDir, artifacts);
+    const truncatedAsserted = artifactJsonTargetsTruncated(scenario, result.workDir, artifacts, result.readonlyFolderRoots ?? []);
     if (truncatedAsserted.length) {
       const cap = opts.maxArtifactBytes ?? defaultBodyCap();
       const msg =
@@ -2015,6 +2039,9 @@ async function recordScenarioObject(
     effectiveFidelity: result.effectiveFidelity,
     artifacts,
     userVisibleRoots: recordRoots,
+    // Persist the read-only subset ONLY when non-empty (keeps cassettes without connected folders
+    // clean); replay reads it to distinguish a body-less read-only input from an over-cap artifact.
+    ...(result.readonlyFolderRoots?.length ? { readonlyFolderRoots: result.readonlyFolderRoots } : {}),
     // co-present with userVisibleRoots by construction (see the Cassette field comment) — a cassette
     // carrying preRunPaths never hits replay's legacy-roots fallback.
     preRunPaths: result.preRunPaths,
@@ -2936,6 +2963,9 @@ export async function replayCassette(
       result: rec.result,
       workRoot: replayWorkRoot,
       userVisiblePrefixes: replayPrefixes,
+      // Persisted on the cassette (v7 optional metadata) so replay tells a body-less read-only input
+      // apart from an over-cap artifact and gives the precise artifact_json remediation.
+      readonlyFolderRoots: cassette.readonlyFolderRoots ?? [],
       preRunPaths: cassette.preRunPaths,
       outputsDeletes: [],
       questions: rec.questions,
