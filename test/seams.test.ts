@@ -580,6 +580,56 @@ describe("Run — turn loop + record", () => {
     expect(rec.redundantToolCalls[0].count).toBe(2);
   });
 
+  it("excludes synthetic MCP-echo tool_use events from redundant-call detection (they'd otherwise double-count a real repeated MCP call)", async () => {
+    const events: AgentEvent[] = [
+      { type: "tool_use", name: "mcp__server__tool", input: { command: "x" }, toolUseId: "t1" },
+      { type: "tool_result", toolUseId: "t1", isError: false, text: "" },
+      { type: "tool_use", name: "mcp__server__tool", input: { command: "x" }, toolUseId: "t2" }, // real repeat, SHOULD count
+      { type: "tool_result", toolUseId: "t2", isError: false, text: "" },
+      {
+        type: "tool_use",
+        name: "mcp__server__tool",
+        input: { name: "mcp__server__tool", arguments: { command: "x" } },
+        toolUseId: "t1-echo",
+        synthetic: true,
+      }, // synthetic echo, DIFFERENT input shape, excluded regardless of shape
+      { type: "result", isError: false },
+    ];
+    const fakeSession = {
+      async *start() {
+        for (const e of events) yield e;
+      },
+      sendUserTurn() {},
+      respond() {},
+      close() {},
+    } as any;
+    const run = new Run(fakeSession, { decide: async () => ABSTAIN } as any, [], "test-run");
+    const rec = await run.drive("go");
+    expect(rec.redundantToolCalls).toHaveLength(1);
+    expect(rec.redundantToolCalls[0]).toMatchObject({ name: "mcp__server__tool", count: 2 });
+  });
+
+  it("excludes subagent-parented tool_use events from top-level redundantToolCalls", async () => {
+    const events: AgentEvent[] = [
+      { type: "tool_use", name: "Read", input: { path: "a" }, toolUseId: "t1", parentToolUseId: "dispatch1" },
+      { type: "tool_result", toolUseId: "t1", isError: false, text: "" },
+      { type: "tool_use", name: "Read", input: { path: "a" }, toolUseId: "t2", parentToolUseId: "dispatch1" }, // repeated INSIDE a subagent — should NOT count top-level
+      { type: "tool_result", toolUseId: "t2", isError: false, text: "" },
+      { type: "result", isError: false },
+    ];
+    const fakeSession = {
+      async *start() {
+        for (const e of events) yield e;
+      },
+      sendUserTurn() {},
+      respond() {},
+      close() {},
+    } as any;
+    const run = new Run(fakeSession, { decide: async () => ABSTAIN } as any, [], "test-run");
+    const rec = await run.drive("go");
+    expect(rec.redundantToolCalls).toEqual([]);
+  });
+
   it("gateDeliveries pairs an answered gate with its tool_result (delivered vs failure)", async () => {
     const gate = (id: string, toolUseId: string): AgentEvent => ({
       type: "decision",

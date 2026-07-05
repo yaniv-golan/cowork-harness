@@ -116,7 +116,7 @@ export function classifyResultError(
 /** Run: the turn loop + decision dispatch + RunRecord building. */
 export class Run {
   private rec: RunRecord;
-  private toolLog: { name: string; input: unknown }[] = [];
+  private toolLog: { name: string; input: unknown; synthetic?: boolean; parentToolUseId?: string }[] = [];
   private toolNameByUseId = new Map<string, string>();
   // per-session web_fetch provenance set. Run owns it (it sees user turns + tool_results) and
   // seeds it during drive(); the workspace handler reads membership + escalates misses via the Decider.
@@ -176,10 +176,20 @@ export class Run {
   /** Fold `toolLog` into `rec.redundantToolCalls` — groups by `name:canon(input)`, keeping only
    *  groups with count>=2 (repeated identical calls). Runs once at drive-completion (needs the FULL
    *  toolLog), not per-event. `argHash` is a truncated sha256 of the canonicalized input, so the
-   *  rollup never carries raw args (redaction-safe by construction — see RunResult.redundantToolCalls). */
+   *  rollup never carries raw args (redaction-safe by construction — see RunResult.redundantToolCalls).
+   *
+   *  Scoped to top-level, non-synthetic entries only — matching toolErrors/toolCounts's existing scope
+   *  (see the `else if (!ev.synthetic)` branch in the tool_use case above). toolLog itself stays
+   *  unconditional (the stall detector below relies on that), so the filter lives here instead: a
+   *  synthetic MCP echo carries a DIFFERENT input shape than the real call (raw JSON-RPC params vs. flat
+   *  tool args), so it never collides with the real entry's group — but N real MCP calls would otherwise
+   *  ALSO produce N synthetic echoes, i.e. a second `count:N` group, doubling `redundantCallsTotal` to
+   *  2·(N-1) instead of the true N-1. Subagent-parented entries are excluded for the same reason
+   *  toolCounts excludes them: a subagent's internal repeats aren't a top-level redundancy. */
   private foldRedundantToolCalls(): void {
     const groups = new Map<string, number>();
-    for (const { name, input } of this.toolLog) {
+    for (const { name, input, synthetic, parentToolUseId } of this.toolLog) {
+      if (synthetic || parentToolUseId) continue;
       const key = `${name}:${canon(input)}`;
       groups.set(key, (groups.get(key) ?? 0) + 1);
     }
@@ -263,7 +273,7 @@ export class Run {
               if (ev.name === "Skill") this.rec.skillsInvoked.push(String((ev.input as Record<string, unknown> | undefined)?.skill ?? ""));
               if (ev.toolUseId) this.toolNameByUseId.set(ev.toolUseId, ev.name);
             }
-            this.toolLog.push({ name: ev.name, input: ev.input }); // still logged for provenance/trace
+            this.toolLog.push({ name: ev.name, input: ev.input, synthetic: ev.synthetic, parentToolUseId: ev.parentToolUseId }); // still logged for provenance/trace
             break;
           }
           case "tool_result": {
