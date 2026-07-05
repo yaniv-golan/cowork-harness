@@ -74,6 +74,7 @@ export interface RunRecord {
   thinking: { text: string }[]; // reasoning blocks, capped: last 50 × 10KB each (§4.5, M3)
   thinkingElided: number; // count of older thinking blocks dropped past the 50-block cap
   toolErrors: Record<string, { calls: number; errors: number }>; // per-tool call/error rollup (§4.6, M3)
+  modelUsage?: Record<string, Record<string, unknown>>; // per-model cost/token breakdown, from the SDK's own result-message field (§4.7, M3)
 }
 
 export interface RunHooks {
@@ -301,6 +302,7 @@ export class Run {
                 ? { ...ev.usage, ...(ev.numTurns !== undefined ? { turns: ev.numTurns } : {}) }
                 : undefined;
             if (ev.costUsd !== undefined) this.rec.cost = { ...this.rec.cost, usd: ev.costUsd };
+            if (ev.modelUsage) this.rec.modelUsage = ev.modelUsage;
             {
               const next = await turnIter.next();
               if (next.done) this.session.close();

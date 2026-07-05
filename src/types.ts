@@ -527,6 +527,21 @@ export interface CostInfo {
   raw?: Record<string, unknown>;
 }
 
+/** One model's cost/token entry inside the SDK result message's `modelUsage` field (§4.7, M3). Field
+ *  names match the REAL observed SDK payload (empirically confirmed against a captured stream and
+ *  against committed example cassettes), not a guessed shape. Every field optional since this is a
+ *  passthrough of SDK-owned data, not harness-computed. */
+export interface ModelUsageEntry {
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadInputTokens?: number;
+  cacheCreationInputTokens?: number;
+  costUSD?: number;
+  contextWindow?: number;
+  maxOutputTokens?: number;
+  webSearchRequests?: number;
+}
+
 export interface RunResult {
   $schema?: string;
   generator?: string;
@@ -569,6 +584,12 @@ export interface RunResult {
   // per-tool call/error rollup (§4.6, M3) — same top-level-only scoping as toolCounts (sub-agent-internal
   // tool calls are tracked separately via subagents[].toolsUsed, not folded in here).
   toolErrors?: Record<string, { calls: number; errors: number }>;
+  /** Per-model cost/token breakdown, denormalized from the SDK result message's own `modelUsage` field
+   *  (§4.7, M3) — cumulative for the whole run, NOT per-turn (see the per-message `usage` object noted
+   *  as a Phase-2 opportunity in the M2 plan's §4.3, not built here). Field names match the REAL observed
+   *  SDK payload (empirically confirmed), not a guessed shape. Every field optional since this is a
+   *  passthrough of SDK-owned data, not harness-computed. */
+  modelUsage?: Record<string, ModelUsageEntry>;
   // did each gate's answer reach the model? `reason` distinguishes a `delivered:null` that means
   // "no pairing metadata" (no toolUseId) from one that means "tool result not observed".
   gateDeliveries?: Array<{

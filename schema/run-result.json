@@ -67,6 +67,24 @@
         "additionalProperties": false
       }
     },
+    "modelUsage": {
+      "type": "object",
+      "description": "Per-model cost/token breakdown, denormalized from the SDK result message's own modelUsage field (§4.7, M3) — cumulative for the whole run. Field names match the real observed SDK payload.",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "inputTokens": { "type": "number" },
+          "outputTokens": { "type": "number" },
+          "cacheReadInputTokens": { "type": "number" },
+          "cacheCreationInputTokens": { "type": "number" },
+          "costUSD": { "type": "number" },
+          "contextWindow": { "type": "number" },
+          "maxOutputTokens": { "type": "number" },
+          "webSearchRequests": { "type": "number" }
+        },
+        "additionalProperties": false
+      }
+    },
     "gateDeliveries": { "type": "array" },
     "egress": { "type": "array" },
     "assertions": { "type": "array" },

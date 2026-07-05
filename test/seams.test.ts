@@ -306,6 +306,25 @@ describe("parseMessage — result event cost/turns (Wave 0 seam)", () => {
     expect((ev[0] as any).costUsd).toBeUndefined();
     expect((ev[0] as any).numTurns).toBeUndefined();
   });
+
+  it("extracts modelUsage from the SDK result message (§4.7, M3 — a top-level sibling of usage, not nested inside it)", () => {
+    const ev = parseMessage({
+      type: "result",
+      is_error: false,
+      modelUsage: {
+        "claude-opus-4-8": { inputTokens: 100, outputTokens: 50, cacheReadInputTokens: 200, costUSD: 0.01 },
+      },
+    });
+    expect(ev[0]).toMatchObject({
+      type: "result",
+      modelUsage: { "claude-opus-4-8": { inputTokens: 100, outputTokens: 50, cacheReadInputTokens: 200, costUSD: 0.01 } },
+    });
+  });
+
+  it("modelUsage is undefined when the SDK result message omits it", () => {
+    const ev = parseMessage({ type: "result", is_error: false });
+    expect((ev[0] as any).modelUsage).toBeUndefined();
+  });
 });
 
 describe("Run — turn loop + record", () => {
@@ -504,6 +523,14 @@ describe("Run — turn loop + record", () => {
     ];
     const rec = await new Run(new MockSession(ev), new ScriptedDecider([])).drive("go");
     expect(rec.toolErrors).toEqual({});
+  });
+
+  it("captures rec.modelUsage from the result event's modelUsage payload", async () => {
+    const ev: AgentEvent[] = [
+      { type: "result", isError: false, modelUsage: { "claude-opus-4-8": { inputTokens: 100, outputTokens: 50, costUSD: 0.01 } } },
+    ];
+    const rec = await new Run(new MockSession(ev), new ScriptedDecider([])).drive("go");
+    expect(rec.modelUsage).toEqual({ "claude-opus-4-8": { inputTokens: 100, outputTokens: 50, costUSD: 0.01 } });
   });
 
   it("gateDeliveries pairs an answered gate with its tool_result (delivered vs failure)", async () => {

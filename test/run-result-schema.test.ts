@@ -62,6 +62,7 @@ const full: RunResult = {
   models: ["claude-sonnet-4-5"],
   thinking: [{ text: "considering the approach" }],
   toolErrors: { Bash: { calls: 2, errors: 1 } },
+  modelUsage: { "claude-opus-4-8": { inputTokens: 100, outputTokens: 50, costUSD: 0.01, cacheReadInputTokens: 200 } },
   gateDeliveries: [{ question: "Proceed?", delivered: true, error: undefined, reason: "ok" }],
   egress: [{ host: "api.anthropic.com", decision: "allow" }],
   assertions: [{ assertion: { result: "success" }, pass: true, message: undefined }],

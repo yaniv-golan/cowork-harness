@@ -68,6 +68,10 @@ export type AgentEvent =
       subtype?: string; // resultText/subtype carry the SDK result payload so a transport-error result can be classified
       costUsd?: number; // SDK's total_cost_usd for this invocation (Wave 0 seam — was dropped on the floor before)
       numTurns?: number; // SDK's num_turns for this invocation (Wave 0 seam — was dropped on the floor before)
+      // per-model cost/token breakdown, cumulative for the whole run — a TOP-LEVEL sibling of `usage` on
+      // the raw result message, NOT nested inside it (empirically confirmed against a real captured
+      // stream, §4.7 M3). Opaque per-entry shape (SDK-owned); RunResult types it more precisely.
+      modelUsage?: Record<string, Record<string, unknown>>;
     }
   | { type: "error"; source: "spawn" | "agent" | "protocol" | "exit"; message: string }
   | { type: "raw"; line: string };
@@ -763,6 +767,8 @@ export function parseMessage(msg: any): AgentEvent[] {
         subtype: typeof msg.subtype === "string" ? msg.subtype : undefined,
         costUsd: typeof msg.total_cost_usd === "number" ? msg.total_cost_usd : undefined,
         numTurns: typeof msg.num_turns === "number" ? msg.num_turns : undefined,
+        modelUsage:
+          msg.modelUsage && typeof msg.modelUsage === "object" ? (msg.modelUsage as Record<string, Record<string, unknown>>) : undefined,
       });
       break;
   }
