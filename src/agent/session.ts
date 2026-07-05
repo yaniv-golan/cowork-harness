@@ -46,8 +46,8 @@ export type DecisionResponse =
 
 export type AgentEvent =
   | { type: "init"; tools: string[]; mcpServers: unknown[]; cwd?: string }
-  | { type: "assistant_text"; text: string; parentToolUseId?: string }
-  | { type: "tool_use"; name: string; input: unknown; parentToolUseId?: string; toolUseId?: string; synthetic?: boolean } // toolUseId for tool_use↔tool_result pairing; synthetic = the MCP round-trip echo (trace-only, NOT counted — the real call already arrives as an assistant tool_use block, live-verified)
+  | { type: "assistant_text"; text: string; parentToolUseId?: string; model?: string }
+  | { type: "tool_use"; name: string; input: unknown; parentToolUseId?: string; toolUseId?: string; synthetic?: boolean; model?: string } // toolUseId for tool_use↔tool_result pairing; synthetic = the MCP round-trip echo (trace-only, NOT counted — the real call already arrives as an assistant tool_use block, live-verified); model = the assistant message's model (§4.3, M2)
   | { type: "tool_result"; toolUseId?: string; isError: boolean; text: string; provenanceText?: string; assertText?: string } // the OUTCOME of a tool call (from `user`/tool_result blocks). `text` is display-truncated; `provenanceText` is the larger raw value so URLs past the display cap still seed web_fetch provenance; `assertText` is assertion-fidelity cap (10 KB)
   | {
       type: "subagent_dispatch";
@@ -56,8 +56,8 @@ export type AgentEvent =
       agentType: string;
       declaredTools: string[];
       description?: string;
-    } // parentToolUseId = nesting, for the dispatch tree
-  | { type: "thinking"; text: string }
+    } // parentToolUseId = nesting, for the dispatch tree. model deliberately NOT added here — M4/§4.4 scope, not M2.
+  | { type: "thinking"; text: string; model?: string } // model set only when this thinking block came from an assistant message (not the system-subtype "thinking" event, which has no message.model)
   | { type: "metrics"; data: Record<string, unknown> } // api_metrics → cost
   | { type: "decision"; request: DecisionRequest }
   | {
@@ -687,12 +687,15 @@ export function parseMessage(msg: any): AgentEvent[] {
       // Protocol v1: parentToolUseId is message-level. Block-level parent_tool_use_id (if present)
       // is canonical — prefer it when both exist (block-level is more precise for nested dispatches).
       const msgParentToolUseId = msg.parent_tool_use_id ? String(msg.parent_tool_use_id) : undefined;
+      // message.model is present on every real assistant stream-json message (live-confirmed, §4.3) —
+      // read once per message, thread onto assistant_text/tool_use/thinking (NOT subagent_dispatch — M4 scope).
+      const model = typeof msg.message?.model === "string" ? msg.message.model : undefined;
       let blockIndex = 0;
       for (const block of msg.message?.content ?? []) {
         // Block-level parent wins over message-level when both are present (see comment above).
         const parentToolUseId = block.parent_tool_use_id ? String(block.parent_tool_use_id) : msgParentToolUseId;
-        if (block.type === "text") ev.push({ type: "assistant_text", text: block.text, parentToolUseId });
-        else if (block.type === "thinking") ev.push({ type: "thinking", text: block.thinking ?? block.text ?? "" });
+        if (block.type === "text") ev.push({ type: "assistant_text", text: block.text, parentToolUseId, model });
+        else if (block.type === "thinking") ev.push({ type: "thinking", text: block.thinking ?? block.text ?? "", model });
         else if (block.type === "tool_use") {
           ev.push({
             type: "tool_use",
@@ -700,6 +703,7 @@ export function parseMessage(msg: any): AgentEvent[] {
             input: block.input,
             parentToolUseId,
             toolUseId: block.id ? String(block.id) : undefined,
+            model,
           });
           // Sub-agent dispatch. The real cowork agent uses the `Agent` tool (`{description,
           // subagent_type, prompt}`); older/other surfaces use `Task`. We recognize either name, plus

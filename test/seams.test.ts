@@ -166,10 +166,10 @@ class MockSession implements AgentSession {
 }
 
 // ---- sub-agent dispatch recognition (real cowork uses the `Agent` tool, not `Task`) ----
-const assistant = (blocks: unknown[], parent?: string) => ({
+const assistant = (blocks: unknown[], parent?: string, model?: string) => ({
   type: "assistant",
   ...(parent ? { parent_tool_use_id: parent } : {}),
-  message: { content: blocks },
+  message: { content: blocks, ...(model ? { model } : {}) },
 });
 const dispatches = (msg: unknown) => parseMessage(msg).filter((e) => e.type === "subagent_dispatch");
 
@@ -250,6 +250,42 @@ describe("parseMessage — sub-agent dispatch", () => {
       request: { subtype: "can_use_tool", tool_name: "AskUserQuestion", tool_use_id: "toolu_g", input: { questions: [] } },
     });
     expect((dec[0] as any).request).toMatchObject({ kind: "question", id: "uuid-1", toolUseId: "toolu_g" });
+  });
+
+  it("threads message.model onto assistant_text, tool_use, and thinking events (not onto subagent_dispatch — that's M4 scope)", () => {
+    const ev = parseMessage(
+      assistant(
+        [
+          { type: "text", text: "on it" },
+          { type: "thinking", thinking: "let me check" },
+          { type: "tool_use", id: "toolu_1", name: "Bash", input: { command: "x" } },
+        ],
+        undefined,
+        "claude-sonnet-4-5",
+      ),
+    );
+    expect(ev.find((e) => e.type === "assistant_text")).toMatchObject({ model: "claude-sonnet-4-5" });
+    expect(ev.find((e) => e.type === "thinking")).toMatchObject({ model: "claude-sonnet-4-5" });
+    expect(ev.find((e) => e.type === "tool_use")).toMatchObject({ model: "claude-sonnet-4-5" });
+  });
+
+  it("subagent_dispatch does NOT carry model (deferred to M4)", () => {
+    const ev = parseMessage(
+      assistant(
+        [{ type: "tool_use", id: "toolu_1", name: "Agent", input: { subagent_type: "general-purpose", prompt: "go" } }],
+        undefined,
+        "claude-sonnet-4-5",
+      ),
+    );
+    const dispatch = ev.find((e) => e.type === "subagent_dispatch") as any;
+    expect(dispatch).toBeDefined();
+    expect(dispatch.model).toBeUndefined();
+  });
+
+  it("a system-subtype thinking event (no assistant message) has no model", () => {
+    const ev = parseMessage({ type: "system", subtype: "thinking", content: "internal note" });
+    expect(ev[0]).toMatchObject({ type: "thinking" });
+    expect((ev[0] as any).model).toBeUndefined();
   });
 });
 
