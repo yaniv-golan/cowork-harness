@@ -6,6 +6,19 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.25.0] — 2026-07-05
+
+> **Upgrade notes.**
+> - **`verify-cassettes --allow-file` was renamed to `--allow-patterns-file`** and the old spelling is
+>   removed (exits 2). Update any CI step or allowlist wiring that passed `--allow-file`.
+> - **`gate_answers_delivered: true` now passes vacuously when zero gates fired.** If you relied on it
+>   as an implicit "a gate must fire" check, add `gate_answer_count_min: 1` alongside it.
+> - **Read-only (`mode: r`) connected-folder inputs are now captured body-less.** Re-record affected
+>   cassettes to drop the `--allow` entries they previously required and shrink them; an `artifact_json`
+>   assertion pointed at a read-only input now reports evidence-unavailable (assert on a deliverable).
+>   This changes committed cassette *contents* (not the staleness hash) — a re-record is cosmetic, not
+>   required for correctness.
+
 ### Added
 
 - **`gate_answer_count_min: <N>` assertion** — the presence companion to `gate_answers_delivered`:
