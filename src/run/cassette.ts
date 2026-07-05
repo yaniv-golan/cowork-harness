@@ -2777,6 +2777,8 @@ export const ALWAYS_CONTENT_KEYS: (keyof Assertion)[] = [
   "max_cost_usd",
   "max_tokens",
   "tool_calls_max",
+  "tool_no_error",
+  "max_tool_errors",
   "max_turns",
   "result",
   // Verdict modifiers — NOT filesystem/egress assertions. Keep all of them on replay (each evaluates to a
@@ -3033,6 +3035,7 @@ export async function replayCassette(
       gateDeliveries: rec.gateDeliveries,
       toolResultTexts: rec.toolResults.map((r) => r.assertText ?? r.text),
       toolResultsTruncated: rec.toolResults.map((r) => r.assertText === undefined),
+      toolErrors: rec.toolErrors,
       truncatedPaths: replayTruncatedPaths,
       skillsInvoked: rec.skillsInvoked,
       skillToolAvailable: rec.initTools.includes("Skill"),

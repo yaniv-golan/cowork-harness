@@ -749,6 +749,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     gateDeliveries: record.gateDeliveries,
     toolResultTexts: record.toolResults.map((r) => r.assertText ?? r.text),
     toolResultsTruncated: record.toolResults.map((r) => r.assertText === undefined),
+    toolErrors: record.toolErrors,
     skillsInvoked: record.skillsInvoked,
     skillToolAvailable: record.initTools.includes("Skill"),
     effectiveFidelity,

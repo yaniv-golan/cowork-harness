@@ -15,11 +15,17 @@ import { anyGlobMatches } from "./glob.js";
  *  `*Missing` booleans needed for scalars. `turns` (Wave 2 / E6b) is a pure passthrough of
  *  `usage.turns` — Wave 0 already did the real extraction/fallback-counting work at the source, so there
  *  is no re-derivation here, unlike the other three fields which are actually computed from raw parts. */
-export function budgetFields(src: { usage?: UsageInfo; cost?: CostInfo; toolCounts?: Record<string, number> }): {
+export function budgetFields(src: {
+  usage?: UsageInfo;
+  cost?: CostInfo;
+  toolCounts?: Record<string, number>;
+  toolErrors?: Record<string, { calls: number; errors: number }>;
+}): {
   costUsd?: number;
   tokensTotal?: number;
   toolCallsTotal?: number;
   turns?: number;
+  toolErrorsTotal?: number;
 } {
   const inTok = src.usage?.input_tokens;
   const outTok = src.usage?.output_tokens;
@@ -28,6 +34,8 @@ export function budgetFields(src: { usage?: UsageInfo; cost?: CostInfo; toolCoun
     tokensTotal: typeof inTok === "number" && typeof outTok === "number" ? inTok + outTok : undefined,
     toolCallsTotal: src.toolCounts === undefined ? undefined : Object.values(src.toolCounts).reduce((a, b) => a + b, 0),
     turns: src.usage?.turns,
+    toolErrorsTotal:
+      src.toolErrors === undefined ? undefined : Object.values(src.toolErrors).reduce((sum, t) => sum + t.errors, 0),
   };
 }
 
@@ -246,6 +254,14 @@ export interface AssertContext {
    *  SDK reported neither num_turns nor a countable fallback. Own undefined-ness is the
    *  evidence-unavailable signal for max_turns (Wave 2 / E6b) — 0 turns is a real, satisfying value. */
   turns?: number;
+  /** Per-tool call/error rollup (§4.6, M3) — undefined means no data was captured (old/partial run), the
+   *  evidence-unavailable signal for tool_no_error/max_tool_errors (an empty `{}` is a valid "ran clean"
+   *  state and is NOT the same as undefined). */
+  toolErrors?: Record<string, { calls: number; errors: number }>;
+  /** Sum of toolErrors[*].errors — undefined when result.toolErrors itself is undefined (partial/old
+   *  result.json), never 0 in that case (0 = genuinely zero errors, a real value). Own undefined-ness is
+   *  the evidence-unavailable signal for max_tool_errors. */
+  toolErrorsTotal?: number;
   /** The fidelity tier actually used this run (`RunResult.effectiveFidelity`) — used only to make
    *  `computer_links_resolve`'s failure message name the tier it checked against; no branching in
    *  `check()` reads this directly (the mode split lives in `linkResolution.mode`). Undefined on an
@@ -492,6 +508,29 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
         : ctx.toolCallsTotal <= a.tool_calls_max
           ? ok()
           : fail(`${ctx.toolCallsTotal} tool calls exceeds max ${a.tool_calls_max}`),
+    );
+  if (a.tool_no_error !== undefined) {
+    const c = compileUserRegex(a.tool_no_error);
+    if ("error" in c) results.push(fail(`tool_no_error: bad regex "${a.tool_no_error}": ${c.error}`));
+    else if (ctx.toolErrors === undefined)
+      results.push(fail(`evidence unavailable: tool-error telemetry absent — cannot evaluate tool_no_error`));
+    else {
+      const matching = Object.entries(ctx.toolErrors).filter(([name]) => c.re.test(name));
+      const errored = matching.filter(([, v]) => v.errors > 0);
+      results.push(
+        errored.length === 0
+          ? ok()
+          : fail(`tool(s) matching "${a.tool_no_error}" had errors: ${errored.map(([n, v]) => `${n} (${v.errors})`).join(", ")}`),
+      );
+    }
+  }
+  if (a.max_tool_errors !== undefined)
+    results.push(
+      ctx.toolErrorsTotal === undefined
+        ? fail(`evidence unavailable: tool-error telemetry absent — cannot evaluate max_tool_errors`)
+        : ctx.toolErrorsTotal <= a.max_tool_errors
+          ? ok()
+          : fail(`${ctx.toolErrorsTotal} tool errors exceeds max ${a.max_tool_errors}`),
     );
   if (a.max_turns !== undefined)
     results.push(

@@ -69,6 +69,8 @@ CONTENT_KEYS = {
     "max_cost_usd",
     "max_tokens",
     "tool_calls_max",
+    "tool_no_error",
+    "max_tool_errors",
     "max_turns",
 }
 # content keys, but only evaluated on replay when the cassette carries controlOut

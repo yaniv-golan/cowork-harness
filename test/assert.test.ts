@@ -228,6 +228,13 @@ describe("budgetFields (Wave 1 / E6a + Wave 2 / E6b) — the single derivation u
     expect(budgetFields({ usage: { turns: 4 } }).turns).toBe(4);
     expect(budgetFields({ usage: { turns: 0 } }).turns).toBe(0); // 0 turns is a real value, not "missing"
   });
+  it("toolErrorsTotal (M3) sums errors across all tools, undefined when toolErrors is absent", () => {
+    expect(budgetFields({ toolErrors: { Bash: { calls: 3, errors: 1 }, Read: { calls: 2, errors: 2 } } }).toolErrorsTotal).toBe(3);
+    expect(budgetFields({}).toolErrorsTotal).toBeUndefined();
+  });
+  it("toolErrorsTotal is 0 (a real value, not undefined) when toolErrors is a populated-but-empty object", () => {
+    expect(budgetFields({ toolErrors: {} }).toolErrorsTotal).toBe(0);
+  });
 });
 
 describe("max_cost_usd / max_tokens / tool_calls_max (Wave 1 / E6a)", () => {
@@ -274,6 +281,48 @@ describe("max_turns (Wave 2 / E6b — the last budget key, built on Wave 0's usa
   });
   it("fails as evidence-unavailable (not a vacuous pass) when turn telemetry is absent", () => {
     const r = evaluate([{ max_turns: 5 }], ctx({ turns: undefined }));
+    expect(pass(r)).toBe(false);
+    expect(r[0].message).toContain("evidence unavailable");
+  });
+});
+
+describe("tool_no_error (M3)", () => {
+  it("passes when no tool matching the regex has any errors", () => {
+    const c = ctx({ toolErrors: { Bash: { calls: 3, errors: 0 }, Read: { calls: 1, errors: 0 } } });
+    expect(pass(evaluate([{ tool_no_error: "^Bash$" }], c))).toBe(true);
+  });
+  it("fails when a matching tool has at least one error", () => {
+    const c = ctx({ toolErrors: { Bash: { calls: 3, errors: 1 } } });
+    const r = evaluate([{ tool_no_error: "^Bash$" }], c);
+    expect(pass(r)).toBe(false);
+  });
+  it("fails as evidence-unavailable (not a vacuous pass) when toolErrors is absent", () => {
+    const c = ctx({ toolErrors: undefined });
+    const r = evaluate([{ tool_no_error: "^Bash$" }], c);
+    expect(pass(r)).toBe(false);
+    expect(r[0].message).toContain("evidence unavailable");
+  });
+  it("a malformed regex fails cleanly with a bad-regex message, not a throw", () => {
+    const c = ctx({ toolErrors: {} });
+    const r = evaluate([{ tool_no_error: "[unterminated" }], c);
+    expect(pass(r)).toBe(false);
+    expect(r[0].message).toContain("bad regex");
+  });
+});
+
+describe("max_tool_errors (M3)", () => {
+  // max_tool_errors reads the pre-derived ctx.toolErrorsTotal scalar (mirroring max_cost_usd/
+  // tool_calls_max's existing pattern), not ctx.toolErrors directly — budgetFields is what derives it
+  // from toolErrors in the real live/replay/verify-run lanes (covered separately below).
+  it("passes when total errors across all tools is <= N", () => {
+    expect(pass(evaluate([{ max_tool_errors: 2 }], ctx({ toolErrorsTotal: 2 })))).toBe(true);
+  });
+  it("fails when total errors exceeds N", () => {
+    const r = evaluate([{ max_tool_errors: 2 }], ctx({ toolErrorsTotal: 3 }));
+    expect(pass(r)).toBe(false);
+  });
+  it("fails as evidence-unavailable (not a vacuous pass) when toolErrorsTotal is absent", () => {
+    const r = evaluate([{ max_tool_errors: 2 }], ctx({ toolErrorsTotal: undefined }));
     expect(pass(r)).toBe(false);
     expect(r[0].message).toContain("evidence unavailable");
   });

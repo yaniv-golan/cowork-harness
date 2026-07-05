@@ -221,6 +221,16 @@ export const Assertion = z.object({
     .nonnegative()
     .optional()
     .describe("total top-level tool calls (sum of toolCounts, sub-agent tools excluded) ≤ N"),
+  tool_no_error: z
+    .string()
+    .optional()
+    .describe("no tool whose name matches this regex has recorded any error (RunResult.toolErrors[name].errors === 0 for every match)"),
+  max_tool_errors: z
+    .number()
+    .int()
+    .nonnegative()
+    .optional()
+    .describe("total tool errors across all tools (sum of RunResult.toolErrors[*].errors) ≤ N"),
   max_turns: z
     .number()
     .int()

@@ -207,6 +207,16 @@
             "minimum": 0,
             "maximum": 9007199254740991
           },
+          "tool_no_error": {
+            "description": "no tool whose name matches this regex has recorded any error (RunResult.toolErrors[name].errors === 0 for every match)",
+            "type": "string"
+          },
+          "max_tool_errors": {
+            "description": "total tool errors across all tools (sum of RunResult.toolErrors[*].errors) ≤ N",
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
           "max_turns": {
             "description": "the SDK-reported (or fallback-counted) turn count ≤ N — replay-checkable (the re-drive recounts turns deterministically)",
             "type": "integer",

@@ -3145,6 +3145,7 @@ async function cmdVerifyRun(args: string[]) {
     gateDeliveriesMissing: result.gateDeliveries === undefined,
     toolResultTexts: (result.toolResults ?? []).map((r) => r.assertText ?? r.text),
     toolResultsTruncated: (result.toolResults ?? []).map((r) => r.assertText === undefined),
+    toolErrors: result.toolErrors,
     transcriptMissing: sidecarTranscript === null,
     questionsMissing: sidecarQuestions === null,
     // Evidence-missing flags: set ONLY when the underlying field is undefined (partial/old result.json),
