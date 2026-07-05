@@ -48,6 +48,8 @@ import {
   formatGateTrace,
   buildDispatchTree,
   formatDispatchTree,
+  buildToolDurations,
+  formatToolDurations,
   noteRunsLocation,
   eventsFromLines,
   runsRoot,
@@ -407,7 +409,7 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
     "usage: verify-cassettes <file|dir> [--skip-privacy|--skip-staleness] [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-path <regex>]... [--allow-machine-inventory <regex>]... [--allow-patterns-file <path>]... [--output-format json]\n" +
     "       --allow <regex> is a PATTERN (matched against a finding); --allow-patterns-file <path> is a FILE of patterns, one regex per line — not a path to allow.",
   trace:
-    "usage: trace <run-id | run-dir | events.jsonl> [--view tools|questions|dispatches] [--translate-paths] [--output-format json]\n       --view tools       tool call / result rows\n       --view questions   gate lifecycle (question → answer → delivered)\n       --view dispatches  sub-agent dispatch tree + dispatch_count_max\n       --translate-paths  rewrite VM paths to host paths in the tools/default TEXT views only (needs a sibling mounts.json + an effective hostloop run; questions/dispatches views and --output-format json are unaffected)\n       (default: all views)\n       (for what the run PRODUCED — artifacts — use `inspect`)",
+    "usage: trace <run-id | run-dir | events.jsonl> [--view tools|questions|dispatches|tool-durations] [--translate-paths] [--output-format json]\n       --view tools           tool call / result rows\n       --view questions       gate lifecycle (question → answer → delivered)\n       --view dispatches      sub-agent dispatch tree + dispatch_count_max\n       --view tool-durations  per-tool call-count/timing table, folded from the sibling timeline.jsonl (M1; {} for a pre-M1 run)\n       --translate-paths  rewrite VM paths to host paths in the tools/default TEXT views only (needs a sibling mounts.json + an effective hostloop run; questions/dispatches views and --output-format json are unaffected)\n       (default: all views)\n       (for what the run PRODUCED — artifacts — use `inspect`)",
   assertions: "usage: assertions --list [--output-format json]",
   scaffold:
     "usage: scaffold <run-id | run-dir> [--out <file.yaml>] [--output-format text|json]\n       Turns a kept run into a starter scenario YAML (gates→answers, artifacts→file_exists).\n       Positional <run-id | run-dir> is the canonical form.",
@@ -3319,7 +3321,7 @@ function cmdTrace(args: string[]) {
   const viewEqMatch = args.find((a) => a.startsWith("--view="));
   let viewArg: string | undefined = viewEqMatch ? viewEqMatch.slice("--view=".length) : viewIdx >= 0 ? args[viewIdx + 1] : undefined;
 
-  const VIEWS = ["tools", "questions", "dispatches"] as const;
+  const VIEWS = ["tools", "questions", "dispatches", "tool-durations"] as const;
   type View = (typeof VIEWS)[number];
   if (viewArg !== undefined && !VIEWS.includes(viewArg as View)) {
     fail("trace", "usage", `--view: expected one of ${VIEWS.join("|")}, got "${viewArg}"`, undefined, json);
@@ -3379,7 +3381,7 @@ function cmdTrace(args: string[]) {
     fail(
       "trace",
       "usage",
-      "usage: trace <run-id | run-dir | events.jsonl> [--view tools|questions|dispatches] [--translate-paths] [--output-format json]",
+      "usage: trace <run-id | run-dir | events.jsonl> [--view tools|questions|dispatches|tool-durations] [--translate-paths] [--output-format json]",
       undefined,
       json,
     );
@@ -3401,6 +3403,13 @@ function cmdTrace(args: string[]) {
     const tree = buildDispatchTree(file);
     if (json) out(JSON.stringify({ tool: "cowork-harness", command: "trace", file, dispatches: tree.nodes, total: tree.total }));
     else out(formatDispatchTree(tree));
+    return;
+  }
+  if (view === "tool-durations") {
+    // tool-durations view: per-tool call-count/timing aggregate, folded from the sibling timeline.jsonl.
+    const durations = buildToolDurations(file);
+    if (json) out(JSON.stringify({ tool: "cowork-harness", command: "trace", file, durations }));
+    else out(formatToolDurations(durations));
     return;
   }
   // Build the translator, if any, ONLY for text output — json is the raw machine record and must stay

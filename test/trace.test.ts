@@ -270,6 +270,38 @@ describe("trace --dispatches (dispatch tree + total)", () => {
   });
 });
 
+// trace --view tool-durations: per-tool call-count/timing aggregate, folded from the sibling
+// timeline.jsonl (M1) via foldToolDurations.
+import { buildToolDurations, formatToolDurations } from "../src/run/trace-view.js";
+describe("buildToolDurations / formatToolDurations", () => {
+  it("reads the sibling timeline.jsonl and folds it into a per-tool duration table", () => {
+    const f = eventsFile([]);
+    const header = JSON.stringify({ v: 1, startedAtWall: new Date(0).toISOString(), startedAtMono: "0" });
+    const lines = [
+      header,
+      JSON.stringify({ seq: 0, ts: 0, line: 0, type: "tool_use", toolUseId: "t1", name: "Bash" }),
+      JSON.stringify({ seq: 1, ts: 120, line: 1, type: "tool_result", toolUseId: "t1", isError: false }),
+    ];
+    writeFileSync(join(f, "..", "timeline.jsonl"), lines.join("\n") + "\n");
+    expect(buildToolDurations(f)).toEqual({ Bash: { calls: 1, totalMs: 120, maxMs: 120 } });
+  });
+
+  it("returns {} when no sibling timeline.jsonl exists (a pre-M1 run dir)", () => {
+    const f = eventsFile([]);
+    expect(buildToolDurations(f)).toEqual({});
+  });
+
+  it("formats an empty duration table as a no-data message", () => {
+    expect(formatToolDurations({})).toContain("no tool-duration data");
+  });
+
+  it("formats a populated duration table with a per-tool row and a total footer", () => {
+    const out = formatToolDurations({ Bash: { calls: 2, totalMs: 300, maxMs: 200 } });
+    expect(out).toContain("Bash");
+    expect(out).toContain("2");
+  });
+});
+
 // assertions --list is generated from the Zod Assertion schema; every key MUST carry a description so
 // the list can never drift (and the published JSON schema is enriched).
 import { Assertion } from "../src/types.js";

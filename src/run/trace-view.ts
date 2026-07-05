@@ -6,6 +6,8 @@ import { parseMessage, type AgentEvent, type DecisionRequest } from "../agent/se
 import { labelSource } from "./gate-provenance.js";
 import type { RunResult } from "../types.js";
 import { readIndex, resolveRunsExactFromIndex, resolveRunsFragmentFromIndex, type RunIndexRow } from "./run-index.js";
+import { readTimeline } from "../agent/timeline.js";
+import { foldToolDurations } from "./timeline-fold.js";
 
 /**
  * The default runs root when no override is set: a per-user state dir OUTSIDE any working tree, so run
@@ -426,6 +428,29 @@ export function formatDispatchTree({ nodes, total }: { nodes: DispatchNode[]; to
     return `${indent}└ ${n.agentType}${n.description ? ` (${n.description})` : ""}${tools}`;
   });
   lines.push(`\n${total} sub-agent dispatch(es) total — assert with \`dispatch_count_max: ${total}\``);
+  return lines.join("\n");
+}
+
+/**
+ * `trace --view tool-durations` — per-tool call-count/timing aggregate, folded from the sibling
+ * `timeline.jsonl` (M1). Returns `{}` for a run dir with no timeline (pre-M1 recording, or a run that
+ * genuinely made no tool calls) — same "absent means no data, not an error" convention as the other
+ * `build*` functions in this file.
+ */
+export function buildToolDurations(file: string): Record<string, { calls: number; totalMs: number; maxMs: number }> {
+  const timelineData = readTimeline(join(file, ".."));
+  return timelineData ? foldToolDurations(timelineData.events) : {};
+}
+
+export function formatToolDurations(durations: Record<string, { calls: number; totalMs: number; maxMs: number }>): string {
+  const names = Object.keys(durations);
+  if (!names.length) return "(no tool-duration data for this run — pre-M1 recording, or no tool calls)";
+  const lines = names.map((name) => {
+    const d = durations[name];
+    return `${name} ×${d.calls}, ${(d.totalMs / 1000).toFixed(1)}s total, ${(d.maxMs / 1000).toFixed(1)}s max`;
+  });
+  const totalMs = names.reduce((sum, name) => sum + durations[name].totalMs, 0);
+  lines.push(`\n${names.length} tool(s), ${(totalMs / 1000).toFixed(1)}s combined wall-gap total`);
   return lines.join("\n");
 }
 
