@@ -409,6 +409,11 @@ green replay does not imply the recording is still valid. Each finding is surfac
   `controlOut`. Without it, a loud `::warning::` fires and these keys are excluded (not vacuously
   passed). The authoritative list is `contentKeys` in `src/run/cassette.ts`; `docs/cassette.md` mirrors
   it — consult it for the full table.
+- **`questions_count_max` counts sub-questions, not `AskUserQuestion` tool calls/gates.** A bundled
+  gate with K sub-questions counts as K (`src/run/run.ts`'s recorder pushes one `rec.questions` entry
+  per sub-question; `src/assert.ts` compares against that count). `trace --view questions` shows the
+  same per-gate sub-question count and a matching footer total, so the two surfaces agree — see
+  `docs/cassette.md` / `docs/scenario.md`'s `questions_count_max` row.
 
 **Assertion source (replay):** by default `replay` evaluates the `assert:` block **frozen in the cassette**
 — byte-deterministic and independent of the working tree. When a sibling scenario resolves and its `assert:`

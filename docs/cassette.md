@@ -227,7 +227,7 @@ the rules and CI-placement rationale (why each category behaves this way), see
 | `tool_calls_max` | total top-level tool calls (sub-agent tools excluded) ≤ N — meaningfully replay-checkable; the re-drive recomputes `toolCounts` deterministically |
 | `max_turns` | SDK-reported (or fallback-counted) turn count ≤ N — replay-checkable, recounted deterministically same as `tool_calls_max` |
 | `question_asked` | agent asked an AskUserQuestion matching the regex |
-| `questions_count_max` | at most N questions asked |
+| `questions_count_max` | at most N **sub-questions** asked — a bundled `AskUserQuestion` with K sub-questions counts as K, not 1; `trace --view questions`'s footer total uses the same definition |
 | `gate_answers_delivered` | answered gates' answers reached the model |
 | `result` | run ended with `success` or `error` |
 | `allow_permissive_auto_allow` | verdict modifier — kept on replay → no-op pass (the live signal it suppresses is zeroed) |

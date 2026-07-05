@@ -191,6 +191,40 @@ describe("trace view", () => {
     expect(gates[0]).toMatchObject({ question: "Branch?", delivered: "error" });
     expect(gates[0].error).toContain("q.map");
   });
+
+  // T2: questions_count_max counts sub-questions (src/run/run.ts pushes one rec.questions entry per
+  // sub-question), so a single gate bundling 3 sub-questions must report subQuestionCount: 3 here —
+  // the trace view's total must equal what the assertion would compare against (ctx.questions.length).
+  it("a bundled gate with 3 sub-questions reports subQuestionCount: 3, and the footer total matches questions_count_max's definition", () => {
+    const f = eventsFile([
+      {
+        type: "control_request",
+        request_id: "uuid-3",
+        request: {
+          subtype: "can_use_tool",
+          tool_name: "AskUserQuestion",
+          tool_use_id: "toolu_bundle",
+          input: {
+            questions: [
+              { question: "Stage?", options: [{ label: "Series A" }] },
+              { question: "Sector?", options: [{ label: "AI" }] },
+              { question: "Region?", options: [{ label: "US" }] },
+            ],
+          },
+        },
+      },
+      userResult("toolu_bundle", false, "delivered"),
+      { type: "result", is_error: false },
+    ]);
+    const gates = buildGateTrace(f);
+    expect(gates).toHaveLength(1);
+    expect(gates[0]).toMatchObject({ question: "Stage? / Sector? / Region?", subQuestionCount: 3, delivered: "ok" });
+    const text = formatGateTrace(gates);
+    expect(text).toContain('gate "Stage? / Sector? / Region?" (3 sub-questions)');
+    expect(text).toContain(
+      "1 gate(s), 3 sub-question(s) total — questions_count_max counts sub-questions (assert with `questions_count_max: 3`)",
+    );
+  });
 });
 
 // trace --dispatches: the sub-agent dispatch tree + the real total (read off dispatch_count_max).

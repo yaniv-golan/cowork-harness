@@ -237,7 +237,7 @@ passes only if every key passes. Keep one concern per item unless you mean conju
 | `tool_calls_max: <N>` | total top-level tool calls (sum of `toolCounts`) ≤ N — meaningfully replay-checkable (re-drive recomputes `toolCounts` deterministically) |
 | `max_turns: <N>` | the SDK-reported (or fallback-counted) turn count ≤ N — meaningfully replay-checkable (re-drive recounts turns deterministically, same as `tool_calls_max`) |
 | `question_asked: <regex>` | the agent asked an AskUserQuestion whose text matches |
-| `questions_count_max: <N>` | the agent asked at most N questions |
+| `questions_count_max: <N>` | at most N **sub-questions** asked — a bundled `AskUserQuestion` with K sub-questions counts as K, not 1; `trace --view questions`'s footer total uses the same definition |
 | `gate_answers_delivered: true` | every answered gate's answer reached the model (observed `tool_result`; unobserved = fail) |
 | `gate_answers_delivered: false` | asserts at least one answered gate's answer was **confirmed not delivered** (an observed delivery failure); an unobserved/null delivery does **not** satisfy this — for negative-path delivery tests |
 | `allow_permissive_auto_allow: true` | verdict modifier — suppresses the default-fail when the run recorded a cowork-parity permissive auto-allow; for tests that deliberately assert Cowork's permissive behavior |
@@ -295,6 +295,8 @@ modifiers `allow_permissive_auto_allow` / `allow_missing_capability` / `allow_l0
 **Gate keys — replay only with a `controlOut` cassette:** `question_asked`, `questions_count_max`,
 `gate_answers_delivered`. With `controlOut` present they evaluate; on an old cassette without it, a
 **loud warning** fires and they are **excluded** (not vacuously passed). Re-record to enable them.
+`questions_count_max` counts sub-questions, not gates/tool-calls — see the catalog row above and
+`trace --view questions`.
 
 **Filesystem — replay-checkable WITH an artifact manifest:** `file_exists`, `user_visible_artifact`,
 `artifact_json`, `computer_links_resolve` run on replay when the cassette carries an `artifacts` snapshot

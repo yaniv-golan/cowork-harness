@@ -458,6 +458,12 @@ are the ones that bite hardest.
     and re-assert is undetected — the notice flags this; re-record if the session changed. `verify-run` reads
     on-disk `assert:` against a kept *run dir*; `replay --assert-from` is the equivalent for a *cassette*.
 
+18. **`questions_count_max` counts sub-questions, not gates.** One `AskUserQuestion` tool call can
+    bundle several sub-questions into a single gate; the assertion counts each sub-question, so a
+    3-sub-question bundle counts as 3, not 1. `trace --view questions` shows the same per-gate
+    sub-question count and a matching footer total — read that off instead of the tool-call count when
+    sizing the budget.
+
 For the complete gotcha list, the assertion catalog, the YAML schema, the fidelity/answer tables,
 and the CI recipe, read the files in `references/`.
 

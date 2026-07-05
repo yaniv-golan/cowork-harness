@@ -6,6 +6,21 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+
+- **`trace --view questions` and the `scaffold` helper disagreed with `questions_count_max` on what
+  "a question" counts.** The assertion counts **sub-questions** (one `AskUserQuestion` bundling K
+  sub-questions counts as K — the better spam/burden budget, since per-tool-call counting would miss
+  a 10-in-1 bundle), but `trace --view questions` collapsed a bundle into one row with no count, and
+  the scaffold helper emitted `questions_count_max: <gate count>` — a budget that could start BELOW
+  what the assertion computes and false-red on the first real run. No behavior change to the
+  assertion itself: `trace --view questions` now annotates each gate row with its sub-question count
+  and prints a footer total (`N gate(s), M sub-question(s) total`) that matches what
+  `questions_count_max` compares against; the scaffold now doubles its emitted budget with a loud
+  comment pointing at `trace --view questions` for the real total. The count definition is now
+  documented in `docs/scenario.md`, `docs/cassette.md`, `SPEC.md`, and the skill's
+  `references/scenario-schema.md` / `SKILL.md` gotcha list.
+
 ## [0.24.0] — 2026-07-05
 
 ### Added

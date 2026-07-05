@@ -282,6 +282,7 @@ export function buildTrace(file: string, opts: BuildTraceOptions = {}): TraceRow
 
 export interface GateTraceRow {
   question: string;
+  subQuestionCount: number; // req.questions.length — the number `questions_count_max` counts THIS gate as (a bundled AskUserQuestion with K sub-questions counts as K, not 1)
   injectedAnswer?: string; // what the harness answered (from control-out.jsonl)
   delivered: "ok" | "error" | "unobserved"; // the tool_result outcome
   error?: string; // first line of the error if delivery failed
@@ -295,6 +296,11 @@ export interface GateTraceRow {
  * differing keys: the gate's `decision` (events.jsonl) carries both the UUID `request_id` AND the `toolu_`
  * `toolUseId`; the injected answer lives in `control-out.jsonl` keyed by `request_id`; the delivered result
  * is a `tool_result` keyed by `toolUseId`.
+ *
+ * Each row is one gate (one AskUserQuestion tool call), which may bundle several sub-questions —
+ * `subQuestionCount` carries that count so a reader can reconcile this view against
+ * `questions_count_max`, which counts sub-questions, not gates/tool-calls (see `formatGateTrace`'s
+ * footer total and `docs/scenario.md`/`docs/cassette.md`'s `questions_count_max` row).
  */
 export function buildGateTrace(file: string): GateTraceRow[] {
   const events = eventsOf(file);
@@ -325,6 +331,7 @@ export function buildGateTrace(file: string): GateTraceRow[] {
     const tr = req.toolUseId ? results.get(req.toolUseId) : undefined;
     rows.push({
       question: req.questions.map((q) => q.question ?? q.header ?? "").join(" / "),
+      subQuestionCount: req.questions.length,
       injectedAnswer: answers.get(req.id),
       delivered: tr ? (tr.isError ? "error" : "ok") : "unobserved",
       ...(tr?.isError ? { error: tr.text.split("\n")[0].slice(0, 160) } : {}),
@@ -358,12 +365,18 @@ export function buildGateTrace(file: string): GateTraceRow[] {
 export function formatGateTrace(rows: GateTraceRow[]): string {
   if (!rows.length) return "(no AskUserQuestion gates in this run)";
   const mark = { ok: "✓", error: "✗", unobserved: "?" } as const;
-  return rows
-    .map((r) => {
-      const prov = r.answeredBy ? `\n    by: ${labelSource(r.answeredBy)}${r.model ? ` (${r.model})` : ""}` : "";
-      return `${mark[r.delivered]} gate "${r.question}"\n    answered: ${r.injectedAnswer ?? "(none)"}\n    delivered: ${r.delivered}${r.error ? ` — ${r.error}` : ""}${prov}`;
-    })
-    .join("\n");
+  const lines = rows.map((r) => {
+    const prov = r.answeredBy ? `\n    by: ${labelSource(r.answeredBy)}${r.model ? ` (${r.model})` : ""}` : "";
+    // sub-question count is shown only when the gate bundled more than one — reconciles this row
+    // against questions_count_max, which counts sub-questions, not gates.
+    const subCount = r.subQuestionCount > 1 ? ` (${r.subQuestionCount} sub-questions)` : "";
+    return `${mark[r.delivered]} gate "${r.question}"${subCount}\n    answered: ${r.injectedAnswer ?? "(none)"}\n    delivered: ${r.delivered}${r.error ? ` — ${r.error}` : ""}${prov}`;
+  });
+  const totalSubQuestions = rows.reduce((sum, r) => sum + r.subQuestionCount, 0);
+  lines.push(
+    `\n${rows.length} gate(s), ${totalSubQuestions} sub-question(s) total — questions_count_max counts sub-questions (assert with \`questions_count_max: ${totalSubQuestions}\`)`,
+  );
+  return lines.join("\n");
 }
 
 export interface DispatchNode {
