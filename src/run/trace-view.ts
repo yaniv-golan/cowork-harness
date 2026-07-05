@@ -57,7 +57,7 @@ export function noteRunsLocation(opts: { json: boolean; quiet: boolean; suppress
  * `tool_use` row is suppressed in favor of the richer dispatch row.
  */
 export interface TraceRow {
-  kind: "tool" | "dispatch" | "decision" | "text" | "result";
+  kind: "tool" | "dispatch" | "decision" | "text" | "result" | "thinking";
   name?: string;
   detail?: string;
   agentType?: string;
@@ -106,6 +106,8 @@ function rowFor(ev: AgentEvent, translate: (s: string) => string): TraceRow[] {
       return [{ kind: "dispatch", name: "Agent", agentType: ev.agentType, declaredTools: ev.declaredTools, description: ev.description }];
     case "assistant_text":
       return ev.parentToolUseId || !ev.text.trim() ? [] : [{ kind: "text", detail: translate(ev.text.replace(/\s+/g, " ")).slice(0, 120) }];
+    case "thinking":
+      return !ev.text.trim() ? [] : [{ kind: "thinking", detail: translate(ev.text.replace(/\s+/g, " ")).slice(0, 120) }];
     case "decision":
       return [{ kind: "decision", name: ev.request.kind, detail: decisionDetail(ev.request) }];
     case "result":
@@ -469,6 +471,7 @@ export function formatTrace(rows: TraceRow[]): string {
     else if (r.kind === "decision") lines.push(`? ${r.name}: ${r.detail}`);
     else if (r.kind === "result") lines.push(`= result: ${r.detail}`);
     else if (r.kind === "text") lines.push(`claude› ${r.detail}`);
+    else if (r.kind === "thinking") lines.push(`~ ${r.detail}`);
   }
   const tools = rows.filter((r) => r.kind === "tool").length;
   const dispatched = rows.filter((r) => r.kind === "dispatch").length;

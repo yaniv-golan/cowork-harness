@@ -54,6 +54,10 @@
       "type": "array",
       "items": { "type": "string" }
     },
+    "thinking": {
+      "type": "array",
+      "items": { "type": "object", "properties": { "text": { "type": "string" } }, "required": ["text"] }
+    },
     "gateDeliveries": { "type": "array" },
     "egress": { "type": "array" },
     "assertions": { "type": "array" },

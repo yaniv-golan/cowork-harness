@@ -71,6 +71,8 @@ export interface RunRecord {
   cost?: CostInfo;
   skillsInvoked: string[]; // top-level Skill tool_use ids, in call order, duplicates kept (Wave 1 / E8 seam)
   models: string[]; // distinct model ids seen across assistant_text/tool_use/thinking events, first-seen order, deduped (§4.3, M2)
+  thinking: { text: string }[]; // reasoning blocks, capped: last 50 × 10KB each (§4.5, M3)
+  thinkingElided: number; // count of older thinking blocks dropped past the 50-block cap
 }
 
 export interface RunHooks {
@@ -144,11 +146,25 @@ export class Run {
       gateDeliveries: [],
       skillsInvoked: [],
       models: [],
+      thinking: [],
+      thinkingElided: 0,
     };
   }
 
+  private static readonly THINKING_CAP = 50;
+  private static readonly THINKING_TEXT_CAP_BYTES = 10 * 1024;
+
   private noteModel(model?: string): void {
     if (model && !this.rec.models.includes(model)) this.rec.models.push(model);
+  }
+
+  private noteThinking(text: string): void {
+    const capped = text.length > Run.THINKING_TEXT_CAP_BYTES ? text.slice(0, Run.THINKING_TEXT_CAP_BYTES) : text;
+    this.rec.thinking.push({ text: capped });
+    if (this.rec.thinking.length > Run.THINKING_CAP) {
+      this.rec.thinking.shift();
+      this.rec.thinkingElided++;
+    }
   }
 
   private ctx(): RunContext {
@@ -235,6 +251,7 @@ export class Run {
           }
           case "thinking":
             this.noteModel(ev.model);
+            this.noteThinking(ev.text);
             break;
           case "subagent_dispatch":
             this.rec.subagents.push({

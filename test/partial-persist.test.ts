@@ -25,6 +25,8 @@ function partialRecord(over: Partial<RunRecord> = {}): RunRecord {
     gateDeliveries: [],
     skillsInvoked: [],
     models: [],
+    thinking: [],
+    thinkingElided: 0,
     ...over,
   };
 }

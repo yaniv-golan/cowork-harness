@@ -398,6 +398,31 @@ describe("Run — turn loop + record", () => {
     expect(rec.models).toEqual(["claude-haiku-4-5", "claude-sonnet-4-5"]);
   });
 
+  it("accumulates thinking blocks into rec.thinking, each capped at 10KB", async () => {
+    const bigText = "x".repeat(11000); // over the 10KB cap
+    const ev: AgentEvent[] = [
+      { type: "thinking", text: "short reasoning" },
+      { type: "thinking", text: bigText },
+      { type: "result", isError: false },
+    ];
+    const rec = await new Run(new MockSession(ev), new ScriptedDecider([])).drive("go");
+    expect(rec.thinking).toHaveLength(2);
+    expect(rec.thinking[0].text).toBe("short reasoning");
+    expect(rec.thinking[1].text).toHaveLength(10 * 1024);
+  });
+
+  it("caps rec.thinking at the last 50 blocks, tracking an elision count for the rest", async () => {
+    const ev: AgentEvent[] = [
+      ...Array.from({ length: 55 }, (_, i) => ({ type: "thinking" as const, text: `block-${i}` })),
+      { type: "result", isError: false },
+    ];
+    const rec = await new Run(new MockSession(ev), new ScriptedDecider([])).drive("go");
+    expect(rec.thinking).toHaveLength(50);
+    expect(rec.thinking[0].text).toBe("block-5"); // the oldest 5 were dropped
+    expect(rec.thinking[49].text).toBe("block-54");
+    expect(rec.thinkingElided).toBe(5);
+  });
+
   it("subagentTools counts only tools under a RECOGNIZED dispatch, not any parented tool_use", async () => {
     const ev: AgentEvent[] = [
       { type: "tool_use", name: "Task", input: { subagent_type: "researcher" } },

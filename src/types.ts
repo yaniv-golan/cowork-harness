@@ -551,6 +551,11 @@ export interface RunResult {
   // Absent only when replayErrorResult (no run ever happened). Populated for buildPartialResult too,
   // when the salvaged run had at least one assistant message.
   models?: string[];
+  // reasoning blocks surfaced for debugging (§4.5, M3) — capped at the last 50 blocks (older ones
+  // silently dropped; RunRecord tracks the elided count internally but it is NOT surfaced on
+  // RunResult, matching the plan's scope: an author reads the tail of reasoning, not a full history).
+  // Scrubbed by the same secret-redaction pass as the rest of result.json.
+  thinking?: Array<{ text: string }>;
   // did each gate's answer reach the model? `reason` distinguishes a `delivered:null` that means
   // "no pairing metadata" (no toolUseId) from one that means "tool result not observed".
   gateDeliveries?: Array<{

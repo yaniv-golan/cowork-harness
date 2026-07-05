@@ -227,6 +227,24 @@ describe("trace view", () => {
   });
 });
 
+describe("trace — thinking rows", () => {
+  it("renders a thinking event as a distinct row, truncated to 120 chars", () => {
+    const longThought = "reasoning ".repeat(20); // > 120 chars
+    const f = eventsFile([assistant([{ type: "thinking", thinking: longThought }]), { type: "result", is_error: false }]);
+    const rows = buildTrace(f);
+    const thinkingRow = rows.find((r) => r.kind === "thinking");
+    expect(thinkingRow).toBeDefined();
+    expect(thinkingRow!.detail!.length).toBeLessThanOrEqual(120);
+  });
+
+  it("formatTrace prints thinking rows with a distinct prefix, not confused with assistant text", () => {
+    const rows = [{ kind: "thinking" as const, detail: "let me check the file" }];
+    const out = formatTrace(rows);
+    expect(out).toContain("let me check the file");
+    expect(out).not.toContain("claude›"); // must not reuse the "text" kind's prefix
+  });
+});
+
 // trace --dispatches: the sub-agent dispatch tree + the real total (read off dispatch_count_max).
 import { buildDispatchTree, formatDispatchTree } from "../src/run/trace-view.js";
 describe("trace --dispatches (dispatch tree + total)", () => {

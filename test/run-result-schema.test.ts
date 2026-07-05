@@ -60,6 +60,7 @@ const full: RunResult = {
   toolCounts: { Bash: 1 },
   toolDurations: { Bash: { calls: 1, totalMs: 240, maxMs: 240 } },
   models: ["claude-sonnet-4-5"],
+  thinking: [{ text: "considering the approach" }],
   gateDeliveries: [{ question: "Proceed?", delivered: true, error: undefined, reason: "ok" }],
   egress: [{ host: "api.anthropic.com", decision: "allow" }],
   assertions: [{ assertion: { result: "success" }, pass: true, message: undefined }],
