@@ -2069,7 +2069,7 @@ async function recordScenarioObject(
  *  the JSON envelope's `ok` (results.every(pass)) turns false and can never report ok:true alongside a
  *  non-zero exit (the cardinal no-false-green rule). */
 function replayErrorResult(file: string): RunResult {
-  return {
+  return assembleRunResult({
     scenario: file,
     fidelity: "replay",
     baseline: "",
@@ -2079,7 +2079,43 @@ function replayErrorResult(file: string): RunResult {
     assertions: [],
     outDir: "",
     durationMs: 0,
-  };
+    $schema: undefined,
+    generator: undefined,
+    prompt: undefined,
+    resultErrorKind: undefined,
+    stalledOnQuestion: undefined,
+    capabilityProbe: undefined,
+    requiresCapabilityUnmet: undefined,
+    toolCounts: undefined,
+    gateDeliveries: undefined,
+    subagents: undefined,
+    nonReproducibleAnswers: undefined,
+    usage: undefined,
+    cost: undefined,
+    fingerprint: undefined,
+    workDir: undefined,
+    outputsDir: undefined,
+    userVisibleRoots: undefined,
+    readonlyFolderRoots: undefined,
+    artifacts: undefined,
+    preRunPaths: undefined,
+    partial: undefined,
+    unansweredGate: undefined,
+    nonDeterministic: undefined,
+    nonDeterministicTerminal: undefined,
+    permissiveAutoAllow: undefined,
+    scan: undefined,
+    effectiveFidelity: undefined,
+    fidelityWarnings: undefined,
+    staleness: undefined,
+    skippedAssertions: undefined,
+    toolResults: undefined,
+    l0PluginDivergence: undefined,
+    missingCapabilityUse: undefined,
+    gateProvenance: undefined,
+    skillsInvoked: undefined,
+    skillToolAvailable: undefined,
+  });
 }
 
 /** Recording-shaping fields that MUST still match the recording for on-disk assertions to be evaluated
