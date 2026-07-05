@@ -312,6 +312,7 @@ describe("cassette output shape — mounts can never enter a cassette", () => {
       "events",
       "fingerprint",
       "generator",
+      "preRunPaths",
       "scenario",
       "scenarioSource",
       "userVisibleRoots",
