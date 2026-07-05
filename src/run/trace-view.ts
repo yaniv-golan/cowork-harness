@@ -389,6 +389,9 @@ export interface DispatchNode {
   description?: string;
   declaredTools: string[];
   depth: number; // 0 = top-level dispatch; >0 = dispatched by another sub-agent
+  prompt?: string; // §4.4, M4
+  model?: string; // §4.4, M4
+  output?: string; // §4.4, M4 — paired from a tool_result in the same events file, by toolUseId
 }
 
 /**
@@ -401,6 +404,10 @@ export function buildDispatchTree(file: string): { nodes: DispatchNode[]; total:
   const events = eventsOf(file);
   const dispatches = events.filter((e): e is Extract<AgentEvent, { type: "subagent_dispatch" }> => e.type === "subagent_dispatch");
   const byId = new Map(dispatches.map((d) => [d.toolUseId, d]));
+  // Pair each dispatch's own toolUseId against a tool_result in the SAME events file so `output` is
+  // available without reading RunResult/RunRecord (mirrors buildTraceFromEvents's results.set(...) pairing).
+  const results = new Map<string, string>();
+  for (const ev of events) if (ev.type === "tool_result" && ev.toolUseId) results.set(ev.toolUseId, ev.text);
   const depthOf = (d: Extract<AgentEvent, { type: "subagent_dispatch" }>): number => {
     let depth = 0;
     let cur = d.parentToolUseId;
@@ -418,16 +425,26 @@ export function buildDispatchTree(file: string): { nodes: DispatchNode[]; total:
     description: d.description,
     declaredTools: d.declaredTools,
     depth: depthOf(d),
+    prompt: d.prompt,
+    model: d.model,
+    output: results.get(d.toolUseId),
   }));
   return { nodes, total: nodes.length };
 }
 
 export function formatDispatchTree({ nodes, total }: { nodes: DispatchNode[]; total: number }): string {
   if (!nodes.length) return "(no sub-agent dispatches in this run)";
+  const firstLine = (s?: string) => (s ? s.split("\n")[0] : undefined);
   const lines = nodes.map((n) => {
     const indent = "  ".repeat(n.depth);
     const tools = n.declaredTools.length ? ` [${n.declaredTools.join(",")}]` : "";
-    return `${indent}└ ${n.agentType}${n.description ? ` (${n.description})` : ""}${tools}`;
+    const promptLine = firstLine(n.prompt);
+    const outputLine = firstLine(n.output);
+    const extra = [promptLine ? `prompt: ${promptLine}` : "", outputLine ? `output: ${outputLine}` : ""]
+      .filter(Boolean)
+      .map((s) => `\n${indent}  ${s}`)
+      .join("");
+    return `${indent}└ ${n.agentType}${n.description ? ` (${n.description})` : ""}${tools}${extra}`;
   });
   lines.push(`\n${total} sub-agent dispatch(es) total — assert with \`dispatch_count_max: ${total}\``);
   return lines.join("\n");

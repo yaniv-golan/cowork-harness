@@ -324,6 +324,32 @@ describe("trace --dispatches (dispatch tree + total)", () => {
     const f = eventsFile([{ type: "assistant", message: { content: [{ type: "text", text: "hi" }] } }]);
     expect(formatDispatchTree(buildDispatchTree(f))).toMatch(/no sub-agent dispatches/);
   });
+
+  it("buildDispatchTree pairs each dispatch's own tool_result output, and carries prompt/model", () => {
+    const f = eventsFile([
+      {
+        type: "assistant",
+        message: {
+          model: "claude-sonnet-4-5",
+          content: [{ type: "tool_use", id: "disp1", name: "Agent", input: { subagent_type: "general-purpose", prompt: "go explore" } }],
+        },
+      },
+      { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "disp1", content: "found 3 files" }] } },
+    ]);
+    const { nodes } = buildDispatchTree(f);
+    expect(nodes[0]).toMatchObject({ prompt: "go explore", model: "claude-sonnet-4-5", output: "found 3 files" });
+  });
+
+  it("formatDispatchTree prints the prompt and output first-line per node", () => {
+    const out = formatDispatchTree({
+      nodes: [{ toolUseId: "d1", agentType: "general-purpose", declaredTools: [], depth: 0, prompt: "go explore\nmore detail", output: "found 3 files\nmore output" }],
+      total: 1,
+    });
+    expect(out).toContain("go explore");
+    expect(out).not.toContain("more detail"); // only the first line
+    expect(out).toContain("found 3 files");
+    expect(out).not.toContain("more output");
+  });
 });
 
 // trace --view tool-durations: per-tool call-count/timing aggregate, folded from the sibling
