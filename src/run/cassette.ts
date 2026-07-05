@@ -14,6 +14,7 @@ import {
   VERDICT_MODIFIER_KEYS,
 } from "../types.js";
 import { executeScenario, parseScenarioFile, collectArtifacts, parseSessionFile, slugForPath } from "./execute.js";
+import { assembleRunResult } from "./assemble-run-result.js";
 import { loadSession, resolveSessionPaths } from "../session.js";
 import { loadBaseline } from "../baseline.js";
 import { decideLoopFromBaseline } from "../loop-decision.js";
@@ -3072,7 +3073,7 @@ export async function replayCassette(
       assertions.push({ assertion: { replay_protocol_fidelity: true }, pass: false, message: truncatedMsg });
     }
 
-    return {
+    return assembleRunResult({
       scenario: cassette.scenario.name,
       fidelity: `replay:${cassette.scenario.fidelity}`,
       // The tier the LIVE run actually used (cowork → hostloop/container); falls back to authored fidelity
@@ -3105,7 +3106,33 @@ export async function replayCassette(
       // original run was answered. Always explicit (never undefined) so renderer.ts:146 treats it
       // correctly — undefined would silently render as "deterministic".
       nonDeterministic: false,
-    };
+      // Fields this lane has NEVER set (implicitly undefined before this refactor; explicit now).
+      // `durationMs` in particular is a genuine pre-existing gap — replay reports no run duration
+      // today. Preserve exactly; fixing it is out of scope for this pure refactor.
+      $schema: undefined,
+      generator: undefined,
+      prompt: undefined,
+      capabilityProbe: undefined,
+      requiresCapabilityUnmet: undefined,
+      workDir: undefined,
+      outputsDir: undefined,
+      userVisibleRoots: undefined,
+      readonlyFolderRoots: undefined,
+      artifacts: undefined,
+      preRunPaths: undefined,
+      partial: undefined,
+      unansweredGate: undefined,
+      nonDeterministicTerminal: undefined,
+      permissiveAutoAllow: undefined,
+      scan: undefined,
+      fidelityWarnings: undefined,
+      l0PluginDivergence: undefined,
+      missingCapabilityUse: undefined,
+      gateProvenance: undefined,
+      fingerprint: undefined,
+      toolResults: undefined,
+      durationMs: undefined,
+    });
   } finally {
     if (replayWorkRoot) rmSync(replayWorkRoot, { recursive: true, force: true });
   }
