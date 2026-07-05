@@ -369,8 +369,21 @@ describe("Run — turn loop + record", () => {
     expect(rec.subagents).toHaveLength(1);
     expect(rec.subagents[0].agentType).toBe("researcher");
     expect(rec.subagents[0].declaredTools).toEqual(["Bash", "Read"]);
-    expect(rec.subagents[0].toolsUsed).toEqual(["Read"]); // declared Bash but never used it → the culprit
+    expect(rec.subagents[0].toolsUsed).toEqual([{ name: "Read", count: 1 }]); // declared Bash but never used it → the culprit
     expect(rec.result).toBe("success");
+  });
+
+  it("increments toolsUsed's count for a repeated tool inside the same subagent dispatch (not a duplicate entry)", async () => {
+    const ev: AgentEvent[] = [
+      { type: "subagent_dispatch", toolUseId: "disp1", agentType: "general-purpose", declaredTools: ["Read"] },
+      { type: "tool_use", name: "Read", input: {}, toolUseId: "t1", parentToolUseId: "disp1" },
+      { type: "tool_result", toolUseId: "t1", isError: false, text: "" },
+      { type: "tool_use", name: "Read", input: {}, toolUseId: "t2", parentToolUseId: "disp1" },
+      { type: "tool_result", toolUseId: "t2", isError: false, text: "" },
+      { type: "result", isError: false },
+    ];
+    const rec = await new Run(new MockSession(ev), new ScriptedDecider([])).drive("go");
+    expect(rec.subagents[0].toolsUsed).toEqual([{ name: "Read", count: 2 }]);
   });
 
   it("denormalizes a subagent dispatch's paired tool_result onto rec.subagents[].output, assertText-capped (M4)", async () => {

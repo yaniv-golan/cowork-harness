@@ -617,7 +617,7 @@ export interface RunResult {
     parentToolUseId?: string;
     agentType: string;
     declaredTools: string[];
-    toolsUsed: string[];
+    toolsUsed: Array<{ name: string; count: number }>;
     description?: string;
     prompt?: string; // dispatch input.prompt, assertText-capped (§4.4, M4)
     model?: string; // the dispatching message's model (§4.4, M4)

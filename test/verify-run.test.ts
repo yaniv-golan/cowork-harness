@@ -25,7 +25,7 @@ function keptRun(): string {
     gateDeliveries: [],
     egress: [{ host: "tracker.evil.com", decision: "deny" }],
     assertions: [],
-    subagents: [{ agentType: "x", declaredTools: [], toolsUsed: ["Read"] }],
+    subagents: [{ agentType: "x", declaredTools: [], toolsUsed: [{ name: "Read", count: 1 }] }],
     outDir: root,
     workDir,
     durationMs: 1,

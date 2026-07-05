@@ -73,7 +73,7 @@ const full: RunResult = {
       parentToolUseId: undefined,
       agentType: "general-purpose",
       declaredTools: ["Read"],
-      toolsUsed: ["Read"],
+      toolsUsed: [{ name: "Read", count: 1 }],
       description: "explore",
     },
   ],

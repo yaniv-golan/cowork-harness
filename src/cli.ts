@@ -3131,7 +3131,7 @@ async function cmdVerifyRun(args: string[]) {
   const ctx: AssertContext = {
     transcript: sidecarTranscript ?? "",
     toolsCalled: new Set(Object.keys(result.toolCounts ?? {})),
-    subagentTools: new Set((result.subagents ?? []).flatMap((s) => s.toolsUsed ?? [])),
+    subagentTools: new Set((result.subagents ?? []).flatMap((s) => (s.toolsUsed ?? []).map((d) => d.name))),
     egress: result.egress ?? [],
     result: result.result === "error" ? "error" : "success",
     workRoot,

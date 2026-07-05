@@ -182,7 +182,7 @@ export interface AssertContext {
   questions: string[]; // AskUserQuestion question texts asked
   hostPathLeaked: boolean; // a host path (/Users//opt) appeared in model-visible text
   selfHealRan: boolean; // a /sessions/<id>/mnt plugin script was invoked (plugin-root self-heal)
-  subagents: { agentType: string; declaredTools: string[]; toolsUsed: string[]; description?: string }[]; // dispatch tree (sub-agent assertions)
+  subagents: { agentType: string; declaredTools: string[]; toolsUsed: Array<{ name: string; count: number }>; description?: string }[]; // dispatch tree (sub-agent assertions)
   gateDeliveries: {
     question: string;
     delivered: boolean | null;
@@ -463,10 +463,12 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
         fail(`evidence unavailable: sub-agent dispatch tree absent from result.json — cannot evaluate subagent_declared_but_unused`),
       );
     } else {
-      const culprit = ctx.subagents.find((s) => s.declaredTools.includes(t) && !s.toolsUsed.includes(t));
+      const culprit = ctx.subagents.find((s) => s.declaredTools.includes(t) && !s.toolsUsed.some((d) => d.name === t));
       results.push(
         culprit
-          ? fail(`sub-agent "${culprit.agentType}" declared "${t}" but never used it (used: ${culprit.toolsUsed.join(", ") || "none"})`)
+          ? fail(
+              `sub-agent "${culprit.agentType}" declared "${t}" but never used it (used: ${culprit.toolsUsed.map((d) => d.name).join(", ") || "none"})`,
+            )
           : ok(),
       );
     }

@@ -25,7 +25,7 @@ export interface SubagentDispatch {
   parentToolUseId?: string;
   agentType: string;
   declaredTools: string[];
-  toolsUsed: string[];
+  toolsUsed: Array<{ name: string; count: number }>;
   description?: string; // the dispatch's `description` — identifies it when the skill set no subagent_type
   prompt?: string; // dispatch input.prompt, assertText-capped (§4.4, M4)
   model?: string; // the dispatching message's model (§4.4, M4)
@@ -265,7 +265,9 @@ export class Run {
               const sa = this.rec.subagents.find((s) => s.toolUseId === ev.parentToolUseId);
               if (sa) {
                 this.rec.subagentTools.add(ev.name);
-                if (!sa.toolsUsed.includes(ev.name)) sa.toolsUsed.push(ev.name);
+                const entry = sa.toolsUsed.find((d) => d.name === ev.name);
+                if (entry) entry.count++;
+                else sa.toolsUsed.push({ name: ev.name, count: 1 });
               }
             } else if (!ev.synthetic) {
               // synthetic = the MCP round-trip echo; the real call already arrived as an assistant tool_use
