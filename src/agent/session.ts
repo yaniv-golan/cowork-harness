@@ -5,6 +5,7 @@ import { join } from "node:path";
 import readline from "node:readline";
 import type { ChildProcessByStdio } from "node:child_process";
 import type { Readable, Writable } from "node:stream";
+import { TimelineWriter } from "./timeline.js";
 
 /**
  * AgentSession: the stream-json control protocol over a runtime-provided child.
@@ -311,6 +312,8 @@ export const CONTROL_OUT_MIRROR_CAP = 256 * 1024;
 export class LiveAgentSession implements AgentSession {
   private events: WriteStream;
   private controlOut: WriteStream;
+  private timeline: TimelineWriter;
+  private lineIndex = 0;
   private reqById = new Map<string, DecisionRequest>();
   private sdkMcp?: SdkMcp;
   private hookBundle?: HookBundle;
@@ -331,6 +334,7 @@ export class LiveAgentSession implements AgentSession {
   ) {
     this.events = createWriteStream(join(outDir, "events.jsonl"), { flags: "a" });
     this.controlOut = createWriteStream(join(outDir, "control-out.jsonl"), { flags: "a" });
+    this.timeline = new TimelineWriter(outDir);
     const errLog = createWriteStream(join(outDir, "agent.stderr.log"), { flags: "a" });
     this.proc.stderr.pipe(errLog);
     // keep a bounded stderr tail and capture the exit code/signal so a child that dies nonzero
@@ -403,6 +407,10 @@ export class LiveAgentSession implements AgentSession {
         const line = next.value;
         if (!line.trim()) continue;
         if (!this.closing) this.events.write(line + "\n");
+        // 0-based events.jsonl line index. Captured once per raw line and reused for every AgentEvent
+        // derived from it — one line commonly yields several (e.g. a tool_use that is also a
+        // sub-agent dispatch), and they must share this same `line` value (see timeline.ts).
+        const lineIndex = this.lineIndex++;
         let msg: any;
         try {
           msg = JSON.parse(line);
@@ -411,7 +419,10 @@ export class LiveAgentSession implements AgentSession {
           continue;
         }
         try {
-          yield* this.translate(msg);
+          for await (const ev of this.translate(msg)) {
+            this.timeline.record(ev, lineIndex);
+            yield ev;
+          }
         } catch (e) {
           yield { type: "error", source: "protocol", message: (e as Error)?.message ?? String(e) };
           return;
@@ -441,6 +452,7 @@ export class LiveAgentSession implements AgentSession {
       await Promise.all([
         new Promise<void>((res) => this.events.end(() => res())),
         new Promise<void>((res) => this.controlOut.end(() => res())),
+        new Promise<void>((res) => this.timeline.end(() => res())),
       ]);
     }
   }

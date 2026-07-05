@@ -373,4 +373,51 @@ describe("session protocol loud-failure fixes", () => {
     proc.stdout.end();
     await drain(it);
   });
+
+  it("a single assistant line with one tool_use block writes one timeline.jsonl entry with seq 0, line 0", async () => {
+    const { proc, outDir, session } = newSession();
+    const it = session.start()[Symbol.asyncIterator]();
+    const firstP = it.next();
+    await tick();
+    proc.stdout.write(
+      JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "tool_use", id: "toolu_1", name: "Bash", input: { command: "echo hi" } }] },
+      }) + "\n",
+    );
+    proc.stdout.end();
+    await drain(it);
+    await firstP.catch(() => {});
+    const timelinePath = join(outDir, "timeline.jsonl");
+    const lines = readFileSync(timelinePath, "utf8").trim().split("\n");
+    expect(lines).toHaveLength(2); // header + 1 entry
+    const header = JSON.parse(lines[0]);
+    expect(header.v).toBe(1);
+    const entry = JSON.parse(lines[1]);
+    expect(entry).toMatchObject({ seq: 0, line: 0, type: "tool_use", toolUseId: "toolu_1", name: "Bash" });
+  });
+
+  it("a single line whose tool_use ALSO triggers a subagent_dispatch writes two timeline entries sharing line 0 with consecutive seq", async () => {
+    const { proc, outDir, session } = newSession();
+    const it = session.start()[Symbol.asyncIterator]();
+    const firstP = it.next();
+    await tick();
+    proc.stdout.write(
+      JSON.stringify({
+        type: "assistant",
+        message: {
+          content: [{ type: "tool_use", id: "toolu_2", name: "Agent", input: { subagent_type: "general-purpose", description: "d", prompt: "p" } }],
+        },
+      }) + "\n",
+    );
+    proc.stdout.end();
+    await drain(it);
+    await firstP.catch(() => {});
+    const lines = readFileSync(join(outDir, "timeline.jsonl"), "utf8").trim().split("\n");
+    expect(lines).toHaveLength(3); // header + tool_use + subagent_dispatch
+    const toolUse = JSON.parse(lines[1]);
+    const dispatch = JSON.parse(lines[2]);
+    expect(toolUse).toMatchObject({ seq: 0, line: 0, type: "tool_use", toolUseId: "toolu_2", name: "Agent" });
+    expect(dispatch).toMatchObject({ seq: 1, line: 0, type: "subagent_dispatch", toolUseId: "toolu_2", agentType: "general-purpose" });
+  });
 });
