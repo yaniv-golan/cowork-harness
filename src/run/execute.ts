@@ -15,6 +15,7 @@ import { writeRunningStatus, startStatusTicker, registerRunForCrashSafety, statu
 // ESM live-binding cycle is safe. buildFingerprint's deps (skillSourceDirs → parseSessionFile) live here, so
 // the cycle is intrinsic — kept runtime-only rather than refactored.
 import { buildFingerprint } from "./cassette.js";
+import { assembleRunResult } from "./assemble-run-result.js";
 import { loadBaseline } from "../baseline.js";
 import { loadSession, resolveSessionPaths, buildLaunchPlan, userVisibleRootsFromPlan, readonlyFolderRootsFromPlan } from "../session.js";
 import { spawnProtocol } from "../runtime/protocol.js";
@@ -862,7 +863,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // (DecisionRecord[], `by: string`) is assignable to the summarizer's `by?: string` param — no re-map.
   const gateProvenance = summarizeGateProvenance(record.decisions);
 
-  const result: RunResult = {
+  const result: RunResult = assembleRunResult({
     $schema: RUN_RESULT_SCHEMA_URL,
     generator: "cowork-harness",
     scenario: scenario.name,
@@ -922,7 +923,14 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // detect a kept run that predates a skill change and refuse to vouch for answer-coverage. Same call the
     // record path uses for the cassette (cassette.ts) — `(inline)`/no-skill sessions yield a {baseline}-only fp.
     fingerprint: buildFingerprint(scenario.session, baseline.appVersion, undefined, scenario.skills),
-  };
+    // Fields this lane has NEVER set (were implicitly `undefined` before this refactor; now explicit
+    // per assembleRunResult's contract — this line makes the omission a reviewable, greppable fact
+    // instead of an invisible one):
+    partial: undefined,
+    unansweredGate: undefined,
+    staleness: undefined,
+    skippedAssertions: undefined,
+  });
 
   // Non-null: see the matching comment at the partial-result finalize call above.
   runCrashSafety.finalize(record, result.result, result.durationMs!);
