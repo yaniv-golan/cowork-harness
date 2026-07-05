@@ -53,11 +53,10 @@ re-record). `expect_denied`/filesystem/egress keys are sourced but stay live-onl
   "events": [ /* JSON lines from events.jsonl (child→driver stdout) */ ],
   "controlOut": [ /* JSON lines from control-out.jsonl (driver→child control_responses) */ ],
   "userVisibleRoots": ["outputs", "myproject"], // visible roots = outputs + each connected folder's mount name (its basename; `.projects` is the pre-1.14271.0 legacy fallback)
-  "readonlyFolderRoots": ["carta-folder"], // the mode:r subset of userVisibleRoots (body-less); lets replay give artifact_json the precise remedy. Optional; absent when no read-only folder
   "artifacts": [                         // snapshot of outputs/ + connected folders (optional)
     { "path": "outputs/x.json", "bytes": 24, "sha256": "…", "body": "{…}" }, // body inlined ≤ 64 KiB
-    { "path": "outputs/big.bin", "bytes": 9e6, "sha256": "…", "truncated": true }, // oversized → hash-only
-    { "path": "carta-folder/input.xlsx", "bytes": 4096, "sha256": "…", "truncated": true } // mode:r connected-folder INPUT → body-less (see below), regardless of size
+    { "path": "outputs/big.bin", "bytes": 9e6, "sha256": "…", "truncated": true, "truncationReason": "size" }, // oversized → hash-only (raise --max-artifact-bytes)
+    { "path": "carta-folder/input.xlsx", "bytes": 4096, "sha256": "…", "truncated": true, "truncationReason": "readonly" } // mode:r connected-folder INPUT → body-less (see below), regardless of size
   ],
   "fingerprint": { "baseline": "1.15962.1", "skillHash": "…", "mode": "git", "contentSig": "…", "fileSigs": [["skills/x/SKILL.md", "…"]], "skillSources": ["…"] }, // staleness tripwire (v5: fileSigs only; v6: mode + git default; v7: NUL-delimited hash entries)
   "authoring": { "nonDeterministic": true, "channel": "decider-dir" } // present ONLY when a live decider answered ≥1 gate (see §Answering gates during recording); re-record may drift, replay is still deterministic

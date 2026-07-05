@@ -435,8 +435,9 @@ export interface Fingerprint {
   // scanned/redacted like skillSources (privacy). Omitted (with fileSigsOmitted:true) above MANIFEST_MAX_FILES.
   fileSigs?: Array<[string, string]>;
   fileSigsOmitted?: boolean;
-  // the boundary used for skillHash — "git" (git-tracked set, COWORK_HARNESS_GITSET=1) or "raw"
-  // (legacy walk; default). A record-vs-verify mode flip makes hash comparison meaningless → re-record.
+  // the boundary used for skillHash — "git" (git-tracked set — the DEFAULT unless COWORK_HARNESS_GITSET=0,
+  // and every dir is a git work tree) or "raw" (filesystem walk; used when GITSET=0 OR any dir is not a
+  // repo). A record-vs-verify mode flip makes hash comparison meaningless → re-record.
   mode?: "git" | "raw";
   // Opt-in per-skill agent scoping was active (COWORK_HARNESS_AGENT_SCOPE=skill) when this scoped hash was
   // computed — a skill-named `agents/<n>` was treated as skill <n>'s private input rather than a shared root.

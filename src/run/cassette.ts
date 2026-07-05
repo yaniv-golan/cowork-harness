@@ -85,6 +85,12 @@ export interface ManifestEntry {
    *  sha256 verify, since the hash is over the RAW bytes). */
   encoding?: "utf8" | "base64";
   truncated?: boolean; // too big to inline → hash-only (file_exists/user_visible_artifact PASS — existence proven by path+sha; artifact_json cannot run)
+  /** WHY the body is absent, when `truncated` — so replay gives the precise artifact_json remedy without a
+   *  cassette-level roots list. "size" = over the body cap (raise --max-artifact-bytes); "readonly" = a
+   *  mode:r connected-folder input (assert on a deliverable instead); "unreadable" = a read/containment
+   *  failure at record time (sha256 is ""). ABSENT on pre-v8 cassettes → replay falls back to naming both
+   *  size/readonly causes. v8+. */
+  truncationReason?: "size" | "readonly" | "unreadable";
 }
 
 /** A staleness tripwire over the inputs that determine the recording — mirrors `asarFingerprint`
@@ -112,13 +118,8 @@ export interface Cassette {
   // mount name). Replay reads THIS instead of a hardcoded `["outputs",".projects"]` prefix — folder mount
   // names are dynamic/gated. ABSENT on pre-v4 cassettes → replay falls back to the legacy prefix.
   userVisibleRoots?: string[];
-  // The subset of `userVisibleRoots` that are READ-ONLY (`mode: r`) connected folders — captured
-  // body-less. Persisted (same optional-metadata pattern as `preRunPaths`, no cassetteVersion bump)
-  // so replay knows WHY a manifest entry is body-less (a read-only input vs. an over-cap artifact) and
-  // can give the precise remediation — the record/verify-run lanes derive the same set from the plan.
-  // ABSENT/empty ⇒ no read-only folder in this run. A subset of `userVisibleRoots`, so it introduces
-  // no new privacy strings.
-  readonlyFolderRoots?: string[];
+  // (v8 removed the cassette-level `readonlyFolderRoots` list — replay now reads WHY a body-less entry
+  // is body-less from each `ManifestEntry.truncationReason`, which is self-describing and redaction-immune.)
   // the authored scenario SOURCE file this cassette was recorded from, RELATIVE to the cassette dir
   // (relocatable, no absolute host path). `record --rerecord-stale` prefers this over a `slugForPath(name)`
   // guess so an authored `name:` that differs from the filename still re-records from the edited YAML rather
@@ -159,13 +160,15 @@ export interface Cassette {
 // routes pre-v6 cassettes to a re-record (honest "algorithm changed" message, not "content changed").
 // v7: NUL-byte entry separator in hashDir and computeContentSig (replaces `\n`) to prevent hash collisions
 // for file paths containing newline characters.
-export const CASSETTE_VERSION = 7;
+export const CASSETTE_VERSION = 8;
 // The contentSig algorithm version. Bumped whenever computeContentSig's INPUT/encoding changes (the v6
 // unification). `rehash` only byte-compares contentSig within the same algo version; across a bump it
 // re-records. Derived from cassetteVersion: < 6 ⇒ algo 1 (legacy), ≥ 6 ⇒ algo 2 (unified),
-// ≥ 7 ⇒ algo 3 (NUL-byte separator).
-const CONTENTSIG_ALGO = 3;
-const contentSigAlgoOf = (cassetteVersion: number) => (cassetteVersion >= 7 ? 3 : cassetteVersion >= 6 ? 2 : 1);
+// ≥ 7 ⇒ algo 3 (NUL-byte separator), ≥ 8 ⇒ algo 4 (skillHash folds fixed-length content shas +
+// contentSig/link entries are type-prefixed & NUL-framed — closes unframed-concatenation collisions).
+const CONTENTSIG_ALGO = 4;
+const contentSigAlgoOf = (cassetteVersion: number) =>
+  cassetteVersion >= 8 ? 4 : cassetteVersion >= 7 ? 3 : cassetteVersion >= 6 ? 2 : 1;
 
 /** Canonical URL of the JSON Schema for this cassette format version.
  *  Appears in every written cassette as `$schema` so editors and unfamiliar readers
@@ -239,16 +242,20 @@ export function buildManifest(
     try {
       abs = containedPath(workRoot, path);
     } catch {
-      return { path, bytes, sha256: "", truncated: true };
+      return { path, bytes, sha256: "", truncated: true, truncationReason: "unreadable" };
     }
     let buf: Buffer;
     try {
       buf = readFileSync(abs);
     } catch {
-      return { path, bytes, sha256: "", truncated: true };
+      return { path, bytes, sha256: "", truncated: true, truncationReason: "unreadable" };
     }
     const sha256 = createHash("sha256").update(buf).digest("hex");
-    if (buf.length > limit || isBodyLess(path)) return { path, bytes, sha256, truncated: true };
+    // truncationReason names WHY the body is absent so replay can give the precise remedy without a
+    // cassette-level roots list: "readonly" (a mode:r input — assert on a deliverable) vs "size" (over
+    // the body cap — raise --max-artifact-bytes). "unreadable" is the catch branches above.
+    if (isBodyLess(path)) return { path, bytes, sha256, truncated: true, truncationReason: "readonly" };
+    if (buf.length > limit) return { path, bytes, sha256, truncated: true, truncationReason: "size" };
     // store an encoding marker. UTF-8-safe bodies stay text (readable cassettes); binary bodies go
     // base64 so the record→replay round-trip is byte-exact and the sha256 verify stays valid.
     if (isLosslessUtf8(buf)) return { path, bytes, sha256, body: buf.toString("utf8") };
@@ -272,9 +279,11 @@ function decodeBody(e: ManifestEntry): Buffer {
 export function materializeManifest(
   entries: ManifestEntry[],
   roots: string[] = ["outputs", ".projects"],
-): { workRoot: string; prefixes: string[]; truncatedPaths: Set<string> } {
+): { workRoot: string; prefixes: string[]; truncatedPaths: Map<string, ManifestEntry["truncationReason"]> } {
   const workRoot = mkdtempSync(join(tmpdir(), "cwh-replay-"));
-  const truncatedPaths = new Set<string>();
+  // path → why the body is absent (from the entry's truncationReason; `undefined` on a pre-v8 entry that
+  // had no reason). `.has()` still means "is body-less"; `.get()` gives the reason for the precise remedy.
+  const truncatedPaths = new Map<string, ManifestEntry["truncationReason"]>();
   for (const e of entries) {
     const abs = containedPath(workRoot, e.path); // reject absolute / `..` / out-of-root before writing
     const raw = decodeBody(e); // decode per the encoding marker
@@ -290,7 +299,7 @@ export function materializeManifest(
     }
     mkdirSync(dirname(abs), { recursive: true });
     writeFileSync(abs, raw);
-    if (e.truncated) truncatedPaths.add(relative(resolve(workRoot), abs));
+    if (e.truncated) truncatedPaths.set(relative(resolve(workRoot), abs), e.truncationReason);
   }
   return { workRoot, prefixes: roots, truncatedPaths };
 }
@@ -495,9 +504,6 @@ export function scanCassette(cassette: Cassette, allow: AllowInput[]): ScanFindi
   // cassettes`. Scan them too, prefixed `metadata:` so a reviewer knows redaction here ALSO rewrites
   // structural paths, distinct from free-text findings in the transcript/deliverable.
   (cassette.userVisibleRoots ?? []).forEach((r, i) => findings.push(...scanText(r, `metadata:userVisibleRoots[${i}]`, allow, FULL)));
-  // readonlyFolderRoots is a subset of userVisibleRoots (same strings), but it's a separately-persisted
-  // field — scan it too so a reviewer can't be surprised by an unscanned persisted string.
-  (cassette.readonlyFolderRoots ?? []).forEach((r, i) => findings.push(...scanText(r, `metadata:readonlyFolderRoots[${i}]`, allow, FULL)));
   findings.push(...scanText(cassette.scenario.name ?? "", "metadata:scenario.name", allow, FULL));
   findings.push(...scanText(cassette.scenario.session ?? "", "metadata:scenario.session", allow, FULL));
   if (cassette.scenarioSource) findings.push(...scanText(cassette.scenarioSource, "metadata:scenarioSource", allow, FULL));
@@ -1115,15 +1121,10 @@ export function redactCassette(cassette: Cassette, policy: RedactionPolicy): Cas
     }
   }
   const redactedPreRunPaths = cassette.preRunPaths?.map((p) => redactText(p, policy));
-  // readonlyFolderRoots is a subset of userVisibleRoots; redact it with the same context-free redactText
-  // so the prefix relationship with the (redacted) artifact paths is preserved. The `...cassette` spread
-  // would otherwise carry the UNREDACTED set through.
-  const redactedReadonly = cassette.readonlyFolderRoots?.map((r) => redactText(r, policy));
   return {
     ...cassette,
     scenario,
     userVisibleRoots: redactedRoots,
-    readonlyFolderRoots: redactedReadonly,
     artifacts: redactedArtifacts,
     preRunPaths: redactedPreRunPaths,
     events: cassette.events.map((l) => redactJsonLine(l, policy)),
@@ -1450,15 +1451,14 @@ export function redactionPreflightMessage(items: Array<{ scenario: Scenario; pol
  *  verify-run, and replay (evidence-unavailable, see assert.ts) — so they are neither an asymmetry nor a
  *  "too large" problem. Paths are normalized through `resolve` so `./outputs/x.json` and `outputs/x.json`
  *  join cleanly against the manifest's walk paths. */
-export function artifactJsonTargetsTruncated(
-  scenario: Scenario,
-  workRoot: string,
-  artifacts: ManifestEntry[],
-  readonlyFolderRoots: string[] = [],
-): string[] {
-  const isReadonly = (p: string): boolean => readonlyFolderRoots.some((pre) => p === pre || p.startsWith(pre + "/"));
+export function artifactJsonTargetsTruncated(scenario: Scenario, workRoot: string, artifacts: ManifestEntry[]): string[] {
+  // Flag ONLY size-truncated entries (`truncationReason === "size"`) — the genuine green-record/red-replay
+  // case whose remedy is "raise the cap". "readonly"/"unreadable" are excluded: raising the cap can't
+  // capture them, and artifact_json against one already fails loud-and-symmetrically (evidence-unavailable,
+  // assert.ts). (A pre-v8 entry with no reason is not flagged — this guard only runs at record time, where
+  // buildManifest always sets the reason.)
   const truncatedAbs = new Set<string>();
-  for (const a of artifacts) if (a.truncated && !isReadonly(a.path)) truncatedAbs.add(resolve(workRoot, a.path));
+  for (const a of artifacts) if (a.truncated && a.truncationReason === "size") truncatedAbs.add(resolve(workRoot, a.path));
   if (truncatedAbs.size === 0) return [];
   const hits: string[] = [];
   for (const a of scenario.assert ?? []) {
@@ -2018,7 +2018,7 @@ async function recordScenarioObject(
   // replay (no committed body). Surface that record→replay asymmetry NOW, at its cause, instead of letting a
   // green record produce a red replay in CI. Honor --allow-failing (warn, don't block) like the verdict gate.
   if (result.workDir) {
-    const truncatedAsserted = artifactJsonTargetsTruncated(scenario, result.workDir, artifacts, result.readonlyFolderRoots ?? []);
+    const truncatedAsserted = artifactJsonTargetsTruncated(scenario, result.workDir, artifacts);
     if (truncatedAsserted.length) {
       const cap = opts.maxArtifactBytes ?? defaultBodyCap();
       const msg =
@@ -2039,11 +2039,10 @@ async function recordScenarioObject(
     effectiveFidelity: result.effectiveFidelity,
     artifacts,
     userVisibleRoots: recordRoots,
-    // Persist the read-only subset ONLY when non-empty (keeps cassettes without connected folders
-    // clean); replay reads it to distinguish a body-less read-only input from an over-cap artifact.
-    ...(result.readonlyFolderRoots?.length ? { readonlyFolderRoots: result.readonlyFolderRoots } : {}),
-    // co-present with userVisibleRoots by construction (see the Cassette field comment) — a cassette
-    // carrying preRunPaths never hits replay's legacy-roots fallback.
+    // (v8: no cassette-level readonlyFolderRoots — the read-only reason rides per-entry on
+    // ManifestEntry.truncationReason, set by buildManifest above from RunResult.readonlyFolderRoots.)
+    // co-present with userVisibleRoots by construction — a cassette carrying preRunPaths never hits
+    // replay's legacy-roots fallback.
     preRunPaths: result.preRunPaths,
     // persist the authored scenario source file RELATIVE to the cassette dir (relocatable, no
     // absolute host path) so `--rerecord-stale` re-records from the edited YAML even when name ≠ filename.
@@ -2893,7 +2892,7 @@ export async function replayCassette(
     truncatedPaths: replayTruncatedPaths,
   } = manifestKeys.length
     ? materializeManifest(cassette.artifacts!, cassette.userVisibleRoots ?? ["outputs", ".projects"])
-    : { workRoot: "", prefixes: [] as string[], truncatedPaths: new Set<string>() };
+    : { workRoot: "", prefixes: [] as string[], truncatedPaths: new Map<string, ManifestEntry["truncationReason"]>() };
   // materializeManifest created a temp dir (`replayWorkRoot`) above; everything below uses it and
   // then returns. Wrap the rest in try/finally so the temp dir is removed on every exit path (normal
   // return OR a throw from evaluate/assert building) — otherwise `cwh-replay-*` dirs leak under tmpdir
@@ -2963,9 +2962,10 @@ export async function replayCassette(
       result: rec.result,
       workRoot: replayWorkRoot,
       userVisiblePrefixes: replayPrefixes,
-      // Persisted on the cassette (v7 optional metadata) so replay tells a body-less read-only input
-      // apart from an over-cap artifact and gives the precise artifact_json remediation.
-      readonlyFolderRoots: cassette.readonlyFolderRoots ?? [],
+      // Replay reads the body-less REASON per-entry from the materialized manifest (truncatedPaths, a
+      // Map<path, reason>) — NOT a cassette-level roots list (removed in v8). Live/verify-run alone use
+      // readonlyFolderRoots (they have no manifest at eval time), so it's empty here.
+      readonlyFolderRoots: [],
       preRunPaths: cassette.preRunPaths,
       outputsDeletes: [],
       questions: rec.questions,
