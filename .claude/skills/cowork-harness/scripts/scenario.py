@@ -63,6 +63,7 @@ CONTENT_KEYS = {
     "subagent_tool_absent",
     "subagent_dispatched",
     "subagent_declared_but_unused",
+    "subagent_output_contains",
     "dispatch_count_max",
     "skill_triggered",
     "no_skill_triggered",

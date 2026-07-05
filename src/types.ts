@@ -191,6 +191,13 @@ export const Assertion = z.object({
   subagent_tool_absent: z.string().optional().describe("no sub-agent used this tool"),
   subagent_dispatched: z.string().optional().describe("a sub-agent matching this regex (by agentType or description) was dispatched"),
   subagent_declared_but_unused: z.string().optional().describe("a sub-agent declared this tool but never used it (the fabrication proxy)"),
+  subagent_output_contains: z
+    .object({
+      match: z.string().optional().describe("regex over agentType or description, narrowing to specific dispatch(es); omit to check all"),
+      contains: z.string().describe("substring that must appear in the matched dispatch(es)' output"),
+    })
+    .optional()
+    .describe("a dispatched sub-agent's own output contained this substring (optionally narrowed to dispatches matching `match`)"),
   dispatch_count_max: z.number().int().nonnegative().optional().describe("total sub-agent dispatches ≤ N (the {global:3} ceiling)"),
   skill_triggered: z
     .string()

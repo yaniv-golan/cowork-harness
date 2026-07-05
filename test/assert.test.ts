@@ -167,6 +167,45 @@ describe("subagent_dispatched matches agentType OR description", () => {
   });
 });
 
+describe("subagent_output_contains", () => {
+  it("passes when a dispatch's output contains the substring (no match filter — checks all dispatches)", () => {
+    const c = ctx({ subagents: [{ agentType: "x", declaredTools: [], toolsUsed: [], output: "found 3 files" }] });
+    const result = evaluate([{ subagent_output_contains: { contains: "3 files" } }], c)[0];
+    expect(result.pass).toBe(true);
+  });
+
+  it("fails when no dispatch's output contains the substring", () => {
+    const c = ctx({ subagents: [{ agentType: "x", declaredTools: [], toolsUsed: [], output: "nothing here" }] });
+    const result = evaluate([{ subagent_output_contains: { contains: "3 files" } }], c)[0];
+    expect(result.pass).toBe(false);
+  });
+
+  it("narrows to a specific dispatch via match (regex over agentType/description), then checks only that dispatch's output", () => {
+    const c = ctx({
+      subagents: [
+        { agentType: "general-purpose", declaredTools: [], toolsUsed: [], output: "3 files" },
+        { agentType: "market-sizing", declaredTools: [], toolsUsed: [], output: "no match here" },
+      ],
+    });
+    const result = evaluate([{ subagent_output_contains: { match: "market-sizing", contains: "no match" } }], c)[0];
+    expect(result.pass).toBe(true);
+  });
+
+  it("evidence-unavailable when subagentsMissing", () => {
+    const c = ctx({ subagentsMissing: true });
+    const result = evaluate([{ subagent_output_contains: { contains: "x" } }], c)[0];
+    expect(result.pass).toBe(false);
+    expect(result.message).toContain("evidence unavailable");
+  });
+
+  it("bad match regex fails with a clear message, not a throw", () => {
+    const c = ctx({ subagents: [] });
+    const result = evaluate([{ subagent_output_contains: { match: "[unterminated", contains: "x" } }], c)[0];
+    expect(result.pass).toBe(false);
+    expect(result.message).toContain("bad regex");
+  });
+});
+
 describe("skill_triggered / no_skill_triggered (Wave 1 / E8)", () => {
   const invoked = ["my-pdf-skill:my-pdf-skill", "other-plugin:helper"];
 

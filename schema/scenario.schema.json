@@ -176,6 +176,24 @@
             "description": "a sub-agent declared this tool but never used it (the fabrication proxy)",
             "type": "string"
           },
+          "subagent_output_contains": {
+            "description": "a dispatched sub-agent's own output contained this substring (optionally narrowed to dispatches matching `match`)",
+            "type": "object",
+            "properties": {
+              "match": {
+                "description": "regex over agentType or description, narrowing to specific dispatch(es); omit to check all",
+                "type": "string"
+              },
+              "contains": {
+                "type": "string",
+                "description": "substring that must appear in the matched dispatch(es)' output"
+              }
+            },
+            "required": [
+              "contains"
+            ],
+            "additionalProperties": false
+          },
           "dispatch_count_max": {
             "description": "total sub-agent dispatches ≤ N (the {global:3} ceiling)",
             "type": "integer",

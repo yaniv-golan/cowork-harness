@@ -182,7 +182,13 @@ export interface AssertContext {
   questions: string[]; // AskUserQuestion question texts asked
   hostPathLeaked: boolean; // a host path (/Users//opt) appeared in model-visible text
   selfHealRan: boolean; // a /sessions/<id>/mnt plugin script was invoked (plugin-root self-heal)
-  subagents: { agentType: string; declaredTools: string[]; toolsUsed: Array<{ name: string; count: number }>; description?: string }[]; // dispatch tree (sub-agent assertions)
+  subagents: {
+    agentType: string;
+    declaredTools: string[];
+    toolsUsed: Array<{ name: string; count: number }>;
+    description?: string;
+    output?: string;
+  }[]; // dispatch tree (sub-agent assertions)
   gateDeliveries: {
     question: string;
     delivered: boolean | null;
@@ -450,6 +456,31 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
           ? ok()
           : fail(`no sub-agent matching "${a.subagent_dispatched}" was dispatched (by type or description)`),
       );
+  }
+  if (a.subagent_output_contains !== undefined) {
+    const { match, contains } = a.subagent_output_contains;
+    if (ctx.subagentsMissing) {
+      results.push(fail(`evidence unavailable: sub-agent dispatch tree absent from result.json — cannot evaluate subagent_output_contains`));
+    } else if (match !== undefined) {
+      const c = compileUserRegex(match);
+      if ("error" in c) results.push(fail(`subagent_output_contains: bad regex "${match}": ${c.error}`));
+      else {
+        const candidates = ctx.subagents.filter((s) => c.re.test(s.agentType) || c.re.test(s.description ?? ""));
+        results.push(
+          candidates.some((s) => s.output?.includes(contains))
+            ? ok()
+            : fail(
+                candidates.length === 0
+                  ? `no sub-agent matching "${match}" was dispatched`
+                  : `no sub-agent matching "${match}" had output containing "${contains}"`,
+              ),
+        );
+      }
+    } else {
+      results.push(
+        ctx.subagents.some((s) => s.output?.includes(contains)) ? ok() : fail(`no sub-agent's output contained "${contains}"`),
+      );
+    }
   }
   if (a.subagent_declared_but_unused !== undefined) {
     const t = a.subagent_declared_but_unused;

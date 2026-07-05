@@ -29,6 +29,7 @@
     "skill_triggered",
     "subagent_declared_but_unused",
     "subagent_dispatched",
+    "subagent_output_contains",
     "subagent_tool_absent",
     "subagent_tool_used",
     "tool_called",
