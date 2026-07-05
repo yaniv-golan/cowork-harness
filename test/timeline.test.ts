@@ -17,6 +17,22 @@ describe("toTimelineFields", () => {
     expect(toTimelineFields(ev)).toEqual({ type: "tool_use", toolUseId: "toolu_1", name: "Bash", parentToolUseId: undefined });
   });
 
+  it("carries model onto a tool_use event when the AgentEvent has one", () => {
+    const fields = toTimelineFields({
+      type: "tool_use",
+      name: "Bash",
+      input: { command: "x" },
+      toolUseId: "toolu_1",
+      model: "claude-sonnet-4-5",
+    });
+    expect(fields).toEqual({ type: "tool_use", toolUseId: "toolu_1", name: "Bash", parentToolUseId: undefined, model: "claude-sonnet-4-5" });
+  });
+
+  it("omits model from a tool_use event when the AgentEvent has none (undefined, not a dropped key vs a present-but-undefined key — both serialize identically to JSON)", () => {
+    const fields = toTimelineFields({ type: "tool_use", name: "Bash", input: { command: "x" }, toolUseId: "toolu_1" });
+    expect((fields as any).model).toBeUndefined();
+  });
+
   it("maps a tool_result event", () => {
     const ev: AgentEvent = { type: "tool_result", toolUseId: "toolu_1", isError: false, text: "ok" };
     expect(toTimelineFields(ev)).toEqual({ type: "tool_result", toolUseId: "toolu_1", isError: false });

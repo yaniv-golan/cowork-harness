@@ -97,7 +97,7 @@ export type TimelineFields<T> = T extends unknown ? Omit<T, "seq" | "ts" | "line
 export function toTimelineFields(ev: AgentEvent): TimelineFields<TimelineEvent> | undefined {
   switch (ev.type) {
     case "tool_use":
-      return { type: "tool_use", toolUseId: ev.toolUseId, name: ev.name, parentToolUseId: ev.parentToolUseId };
+      return { type: "tool_use", toolUseId: ev.toolUseId, name: ev.name, parentToolUseId: ev.parentToolUseId, model: ev.model };
     case "tool_result":
       return { type: "tool_result", toolUseId: ev.toolUseId, isError: ev.isError };
     case "subagent_dispatch":
