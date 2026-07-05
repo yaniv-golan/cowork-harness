@@ -406,7 +406,9 @@ describe("session protocol loud-failure fixes", () => {
       JSON.stringify({
         type: "assistant",
         message: {
-          content: [{ type: "tool_use", id: "toolu_2", name: "Agent", input: { subagent_type: "general-purpose", description: "d", prompt: "p" } }],
+          content: [
+            { type: "tool_use", id: "toolu_2", name: "Agent", input: { subagent_type: "general-purpose", description: "d", prompt: "p" } },
+          ],
         },
       }) + "\n",
     );

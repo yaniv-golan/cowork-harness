@@ -31,11 +31,42 @@ export interface TimelineHeader {
  * future SDK build.
  */
 export type TimelineEvent =
-  | { seq: number; ts: number; line: number; type: "tool_use"; toolUseId?: string; name: string; parentToolUseId?: string; skillScope?: string; model?: string }
+  | {
+      seq: number;
+      ts: number;
+      line: number;
+      type: "tool_use";
+      toolUseId?: string;
+      name: string;
+      parentToolUseId?: string;
+      skillScope?: string;
+      model?: string;
+    }
   | { seq: number; ts: number; line: number; type: "tool_result"; toolUseId?: string; isError: boolean }
-  | { seq: number; ts: number; line: number; type: "subagent_dispatch"; toolUseId: string; parentToolUseId?: string; agentType: string; model?: string; skillScope?: string }
+  | {
+      seq: number;
+      ts: number;
+      line: number;
+      type: "subagent_dispatch";
+      toolUseId: string;
+      parentToolUseId?: string;
+      agentType: string;
+      model?: string;
+      skillScope?: string;
+    }
   | { seq: number; ts: number; line: number; type: "skill_invoked"; skillId: string }
-  | { seq: number; ts: number; line: number; type: "task_updated"; taskId: string; status: string; subject?: string; activeForm?: string; description?: string; op: "create" | "update" | "delete" }
+  | {
+      seq: number;
+      ts: number;
+      line: number;
+      type: "task_updated";
+      taskId: string;
+      status: string;
+      subject?: string;
+      activeForm?: string;
+      description?: string;
+      op: "create" | "update" | "delete";
+    }
   | { seq: number; ts: number; line: number; type: "file_changed"; path: string; changeKind: "created" | "modified" | "deleted" }
   | { seq: number; ts: number; line: number; type: "scratchpad_promoted"; from: string; to: string }
   | { seq: number; ts: number; line: number; type: "thinking" }

@@ -7,7 +7,13 @@ import type { AgentEvent } from "../src/agent/session.js";
 
 describe("toTimelineFields", () => {
   it("maps a tool_use event", () => {
-    const ev: AgentEvent = { type: "tool_use", name: "Bash", input: { command: "echo hi" }, toolUseId: "toolu_1", parentToolUseId: undefined };
+    const ev: AgentEvent = {
+      type: "tool_use",
+      name: "Bash",
+      input: { command: "echo hi" },
+      toolUseId: "toolu_1",
+      parentToolUseId: undefined,
+    };
     expect(toTimelineFields(ev)).toEqual({ type: "tool_use", toolUseId: "toolu_1", name: "Bash", parentToolUseId: undefined });
   });
 
@@ -17,8 +23,19 @@ describe("toTimelineFields", () => {
   });
 
   it("maps a subagent_dispatch event", () => {
-    const ev: AgentEvent = { type: "subagent_dispatch", toolUseId: "toolu_2", parentToolUseId: undefined, agentType: "general-purpose", declaredTools: [] };
-    expect(toTimelineFields(ev)).toEqual({ type: "subagent_dispatch", toolUseId: "toolu_2", parentToolUseId: undefined, agentType: "general-purpose" });
+    const ev: AgentEvent = {
+      type: "subagent_dispatch",
+      toolUseId: "toolu_2",
+      parentToolUseId: undefined,
+      agentType: "general-purpose",
+      declaredTools: [],
+    };
+    expect(toTimelineFields(ev)).toEqual({
+      type: "subagent_dispatch",
+      toolUseId: "toolu_2",
+      parentToolUseId: undefined,
+      agentType: "general-purpose",
+    });
   });
 
   it("maps a thinking event", () => {
