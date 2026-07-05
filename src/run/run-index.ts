@@ -25,6 +25,8 @@ export interface RunIndexRow {
   costUsd?: number;
   tokens?: number;
   turns?: number;
+  cacheReadTokens?: number; // summed across all models in RunResult.modelUsage (§4.7 stats surfacing, M3)
+  modelCostUsd?: number; // summed across all models in RunResult.modelUsage
   durationMs?: number;
   partial: boolean;
   nonDeterministic: boolean;
@@ -65,6 +67,14 @@ export function indexRowFromResult(
   const verdict = computeVerdict(result, "live");
   const budget = budgetFields(result);
   const { slug, runId } = slugAndRunIdFromOutDir(result.outDir);
+  // Separate from budgetFields — sums across RunResult.modelUsage's per-model entries (§4.7, M3), a
+  // different data source than the SDK result message's own cost/usage totals.
+  const modelUsageEntries = result.modelUsage ? Object.values(result.modelUsage) : undefined;
+  const cacheReadTokens = modelUsageEntries?.reduce(
+    (sum, m) => sum + (typeof m.cacheReadInputTokens === "number" ? m.cacheReadInputTokens : 0),
+    0,
+  );
+  const modelCostUsd = modelUsageEntries?.reduce((sum, m) => sum + (typeof m.costUSD === "number" ? m.costUSD : 0), 0);
   return {
     v: 1,
     ts: opts.ts ?? new Date().toISOString(),
@@ -81,6 +91,8 @@ export function indexRowFromResult(
     costUsd: budget.costUsd,
     tokens: budget.tokensTotal,
     turns: budget.turns,
+    cacheReadTokens,
+    modelCostUsd,
     durationMs: result.durationMs,
     partial: opts.partial,
     nonDeterministic: !!result.nonDeterministic,
@@ -225,6 +237,10 @@ export interface StatsSummary {
   p95Tokens?: number;
   p50Turns?: number;
   p95Turns?: number;
+  p50CacheReadTokens?: number;
+  p95CacheReadTokens?: number;
+  p50ModelCostUsd?: number;
+  p95ModelCostUsd?: number;
   lastGreenTs?: string;
   prunedRuns: number; // rows whose outDir no longer exists on disk — still aggregated, just flagged
 }
@@ -284,6 +300,8 @@ export function buildStats(
     const durations = numbers((r) => r.durationMs);
     const tokens = numbers((r) => r.tokens);
     const turns = numbers((r) => r.turns);
+    const cacheReadTokensArr = numbers((r) => r.cacheReadTokens);
+    const modelCostArr = numbers((r) => r.modelCostUsd);
     const greens = group.filter((r) => r.pass).sort((a, b) => (a.ts < b.ts ? 1 : -1));
     summaries.push({
       scenario,
@@ -297,6 +315,10 @@ export function buildStats(
       p95Tokens: tokens.length ? percentile(tokens, 0.95) : undefined,
       p50Turns: turns.length ? percentile(turns, 0.5) : undefined,
       p95Turns: turns.length ? percentile(turns, 0.95) : undefined,
+      p50CacheReadTokens: cacheReadTokensArr.length ? percentile(cacheReadTokensArr, 0.5) : undefined,
+      p95CacheReadTokens: cacheReadTokensArr.length ? percentile(cacheReadTokensArr, 0.95) : undefined,
+      p50ModelCostUsd: modelCostArr.length ? percentile(modelCostArr, 0.5) : undefined,
+      p95ModelCostUsd: modelCostArr.length ? percentile(modelCostArr, 0.95) : undefined,
       lastGreenTs: greens[0]?.ts,
       prunedRuns: group.filter((r) => !existsSync(r.outDir)).length,
     });

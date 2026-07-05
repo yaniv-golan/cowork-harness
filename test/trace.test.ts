@@ -245,6 +245,44 @@ describe("trace — thinking rows", () => {
   });
 });
 
+// modelUsage cache-read-ratio footer (§4.7, M3) — formatTrace takes an OPTIONAL second param so every
+// existing one-argument call site (src/cli.ts, and the formatTrace(rows) calls above) keeps compiling.
+describe("formatTrace — cache-read-ratio footer", () => {
+  const rows = [{ kind: "tool" as const, name: "Bash", detail: "ls" }];
+
+  it("includes a cache-read-ratio footer line when opts.modelUsage data is available via the trace context", () => {
+    const out = formatTrace(rows, {
+      modelUsage: {
+        "claude-opus-4-8": { inputTokens: 100, cacheReadInputTokens: 900 },
+      },
+    });
+    expect(out).toContain("cache-read ratio: 90%");
+  });
+
+  it("sums cache-read ratio across multiple models", () => {
+    const out = formatTrace(rows, {
+      modelUsage: {
+        "claude-opus-4-8": { inputTokens: 0, cacheReadInputTokens: 800, cacheCreationInputTokens: 0 },
+        "claude-haiku-4-5": { inputTokens: 0, cacheReadInputTokens: 200, cacheCreationInputTokens: 0 },
+      },
+    });
+    expect(out).toContain("cache-read ratio: 100%");
+  });
+
+  it("omits the footer line entirely when opts is not passed (existing one-arg call sites unaffected)", () => {
+    const out = formatTrace(rows);
+    expect(out).not.toContain("cache-read ratio");
+  });
+
+  it("omits the footer when modelUsage is present but empty/all-zero (guards divide-by-zero, no NaN%/Infinity%)", () => {
+    const out = formatTrace(rows, { modelUsage: {} });
+    expect(out).not.toContain("cache-read ratio");
+    const outZero = formatTrace(rows, { modelUsage: { m: { inputTokens: 0, cacheReadInputTokens: 0 } } });
+    expect(outZero).not.toContain("cache-read ratio");
+    expect(outZero).not.toMatch(/NaN|Infinity/);
+  });
+});
+
 // trace --dispatches: the sub-agent dispatch tree + the real total (read off dispatch_count_max).
 import { buildDispatchTree, formatDispatchTree } from "../src/run/trace-view.js";
 describe("trace --dispatches (dispatch tree + total)", () => {
@@ -619,5 +657,64 @@ describe("buildGateTrace — provenance annotation", () => {
       ["First?", "scripted", undefined],
       ["Second?", "llm", "m"],
     ]);
+  });
+});
+
+// CLI-level: the `trace` command's cache-ratio footer wiring in src/cli.ts — reads the sibling
+// result.json next to the target events.jsonl (same pattern buildGateTrace already uses for gate
+// provenance) and passes its modelUsage through to formatTrace's new opts param.
+import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
+const CLI = resolve("dist/cli.js");
+const canCli = existsSync(CLI);
+
+function runCliTrace(args: string[], runsDir: string) {
+  const cwd = mkdtempSync(join(tmpdir(), "cwh-trace-cli-cwd-"));
+  const r = spawnSync("node", [CLI, ...args], { encoding: "utf8", cwd, env: { ...process.env, COWORK_HARNESS_RUNS_DIR: runsDir } });
+  return { code: r.status, stdout: r.stdout, stderr: r.stderr };
+}
+
+describe.skipIf(!canCli)("cli trace — cache-read-ratio footer (sibling result.json wiring)", () => {
+  it("prints the footer when a sibling result.json carries modelUsage", () => {
+    const runsDir = mkdtempSync(join(tmpdir(), "cwh-trace-cli-runs-"));
+    const outDir = join(runsDir, "a-scenario", "local_1");
+    mkdirSync(outDir, { recursive: true });
+    writeFileSync(
+      join(outDir, "events.jsonl"),
+      [
+        JSON.stringify({
+          type: "assistant",
+          message: { content: [{ type: "tool_use", id: "toolu_1", name: "Bash", input: { command: "ls" } }] },
+        }),
+        JSON.stringify({ type: "result", is_error: false }),
+      ].join("\n"),
+    );
+    writeFileSync(
+      join(outDir, "result.json"),
+      JSON.stringify({ modelUsage: { "claude-opus-4-8": { inputTokens: 100, cacheReadInputTokens: 900 } } }),
+    );
+    const r = runCliTrace(["trace", "local_1"], runsDir);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("cache-read ratio: 90%");
+  });
+
+  it("omits the footer when there is no sibling result.json (no crash)", () => {
+    const runsDir = mkdtempSync(join(tmpdir(), "cwh-trace-cli-runs-nosib-"));
+    const outDir = join(runsDir, "a-scenario", "local_1");
+    mkdirSync(outDir, { recursive: true });
+    writeFileSync(
+      join(outDir, "events.jsonl"),
+      [
+        JSON.stringify({
+          type: "assistant",
+          message: { content: [{ type: "tool_use", id: "toolu_1", name: "Bash", input: { command: "ls" } }] },
+        }),
+        JSON.stringify({ type: "result", is_error: false }),
+      ].join("\n"),
+    );
+    const r = runCliTrace(["trace", "local_1"], runsDir);
+    expect(r.code).toBe(0);
+    expect(r.stdout).not.toContain("cache-read ratio");
   });
 });

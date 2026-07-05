@@ -456,7 +456,30 @@ export function formatToolDurations(durations: Record<string, { calls: number; t
   return lines.join("\n");
 }
 
-export function formatTrace(rows: TraceRow[]): string {
+/**
+ * Combined cache-read ratio across every model in `modelUsage` (§4.7, M3) —
+ * `cacheReadInputTokens / (inputTokens + cacheReadInputTokens + cacheCreationInputTokens)`, summed
+ * per-field across models before dividing (not an average of per-model ratios, which would
+ * mis-weight a low-volume model against a high-volume one). Returns `undefined` when there's no
+ * data or the denominator is zero (guards a NaN/Infinity% footer) — absence means "don't print the
+ * footer line", not "0%".
+ */
+function cacheReadRatio(
+  modelUsage: Record<string, { inputTokens?: number; cacheReadInputTokens?: number; cacheCreationInputTokens?: number }>,
+): number | undefined {
+  let input = 0;
+  let cacheRead = 0;
+  let cacheCreation = 0;
+  for (const m of Object.values(modelUsage)) {
+    input += m.inputTokens ?? 0;
+    cacheRead += m.cacheReadInputTokens ?? 0;
+    cacheCreation += m.cacheCreationInputTokens ?? 0;
+  }
+  const denom = input + cacheRead + cacheCreation;
+  return denom > 0 ? cacheRead / denom : undefined;
+}
+
+export function formatTrace(rows: TraceRow[], opts?: { modelUsage?: RunResult["modelUsage"] }): string {
   const lines: string[] = [];
   for (const r of rows) {
     if (r.kind === "dispatch")
@@ -476,5 +499,9 @@ export function formatTrace(rows: TraceRow[]): string {
   const tools = rows.filter((r) => r.kind === "tool").length;
   const dispatched = rows.filter((r) => r.kind === "dispatch").length;
   lines.push(`\n${tools} tool calls · ${dispatched} sub-agent dispatch(es)`);
+  if (opts?.modelUsage) {
+    const ratio = cacheReadRatio(opts.modelUsage);
+    if (ratio !== undefined) lines.push(`cache-read ratio: ${Math.round(ratio * 100)}%`);
+  }
   return lines.join("\n");
 }

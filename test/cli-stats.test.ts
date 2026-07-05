@@ -122,6 +122,17 @@ describe.skipIf(!can)("cli: stats (E4)", () => {
     expect(r.out).not.toContain("duration p50=");
   });
 
+  it("--metric cache-tokens / model-cost narrow the text line to the modelUsage-derived views", () => {
+    const root = runsRoot();
+    seedRun(root, "s", "local_1", { modelUsage: { "claude-opus-4-8": { cacheReadInputTokens: 1000, costUSD: 0.5 } } });
+    run(["stats", "--reindex"], root);
+    const cacheTokens = run(["stats", "--metric", "cache-tokens"], root);
+    expect(cacheTokens.out).toContain("cache-read-tokens p50=");
+    expect(cacheTokens.out).not.toContain("model-cost p50=");
+    const modelCost = run(["stats", "--metric", "model-cost"], root);
+    expect(modelCost.out).toContain("model-cost p50=");
+  });
+
   it("--reindex is a true rebuild — a run dir removed from disk between reindexes drops out", () => {
     const root = runsRoot();
     seedRun(root, "s", "local_1");

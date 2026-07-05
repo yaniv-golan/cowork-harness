@@ -180,7 +180,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
       [--output-format json]   structured status (--follow always emits raw JSON lines, format flag N/A there)
       exit codes: 0 healthy · 1 resolved dir has no/malformed status.json, or the run errored · 2 unresolvable <run-id | run-dir> · 3 stale
   stats [<scenario>]           queryable summary over indexed runs: count, pass rate, cost/duration/token/turn p50/p95
-      [--since <date>] [--baseline <b>] [--branch <b>] [--metric pass-rate|cost|tokens|duration|turns] [--last <n>] [--reindex]
+      [--since <date>] [--baseline <b>] [--branch <b>] [--metric pass-rate|cost|tokens|duration|turns|cache-tokens|model-cost] [--last <n>] [--reindex]
       (run 'stats --help' for the full flag reference)
 
 ── In-band gate plumbing (for --decider-dir) ─────────────────────────────────
@@ -416,7 +416,7 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
   status:
     'usage: status <run-id | run-dir> [--follow] [--output-format text|json]   (check whether a background run is alive, without ps aux — see docs/run-status.md)\n       --follow: stream one line per status change until the run reaches a terminal state (done/error); arm a Monitor here\n       exit codes: 0 healthy (running/done) · 1 the dir resolved but has no status.json yet (or a malformed one), or the run itself ended in state:"error" · 2 usage error, including an unresolvable <run-id | run-dir> (matches trace/inspect/scaffold) · 3 stale (probably dead — no exit handler can catch SIGKILL)',
   stats:
-    "usage: stats [<scenario>] [--since <ISO date>] [--baseline <b>] [--branch <b>] [--metric pass-rate|cost|tokens|duration|turns] [--last <n>] [--reindex] [--output-format text|json]\n" +
+    "usage: stats [<scenario>] [--since <ISO date>] [--baseline <b>] [--branch <b>] [--metric pass-rate|cost|tokens|duration|turns|cache-tokens|model-cost] [--last <n>] [--reindex] [--output-format text|json]\n" +
     "       queryable summary over <runsRoot>/index.jsonl (E4) — per-scenario run count, pass rate, cost/duration/token/turn p50/p95, last-green timestamp.\n" +
     "       --reindex rebuilds the index from the physical run-dir tree first (one-time migration for pre-index runs, or if index.jsonl is lost/corrupted beyond its own per-line tolerance).\n" +
     "       --last <n>: the N most recent runs PER SCENARIO (not globally — a global cut would starve a low-frequency scenario out of the window).\n" +
@@ -2437,6 +2437,9 @@ function formatStatsLine(s: StatsSummary, metric?: string): string {
   if (metric === "duration") return `${base} — duration p50=${fmtMs(s.p50DurationMs)} p95=${fmtMs(s.p95DurationMs)}`;
   if (metric === "tokens") return `${base} — tokens p50=${s.p50Tokens ?? "n/a"} p95=${s.p95Tokens ?? "n/a"}`;
   if (metric === "turns") return `${base} — turns p50=${s.p50Turns ?? "n/a"} p95=${s.p95Turns ?? "n/a"}`;
+  if (metric === "cache-tokens")
+    return `${base} — cache-read-tokens p50=${s.p50CacheReadTokens ?? "n/a"} p95=${s.p95CacheReadTokens ?? "n/a"}`;
+  if (metric === "model-cost") return `${base} — model-cost p50=${fmtCost(s.p50ModelCostUsd)} p95=${fmtCost(s.p95ModelCostUsd)}`;
   const parts = [
     s.p50CostUsd !== undefined ? `cost p50=${fmtCost(s.p50CostUsd)} p95=${fmtCost(s.p95CostUsd)}` : null,
     s.p50DurationMs !== undefined ? `duration p50=${fmtMs(s.p50DurationMs)} p95=${fmtMs(s.p95DurationMs)}` : null,
@@ -2475,8 +2478,14 @@ function cmdStats(args: string[]) {
   const baseline = readValueFlag("stats", args, "--baseline", json);
   const branch = readValueFlag("stats", args, "--branch", json);
   const metric = readValueFlag("stats", args, "--metric", json);
-  if (metric !== undefined && !["pass-rate", "cost", "tokens", "duration", "turns"].includes(metric))
-    return void fail("stats", "usage", `--metric must be one of pass-rate|cost|tokens|duration|turns (got "${metric}")`, undefined, json);
+  if (metric !== undefined && !["pass-rate", "cost", "tokens", "duration", "turns", "cache-tokens", "model-cost"].includes(metric))
+    return void fail(
+      "stats",
+      "usage",
+      `--metric must be one of pass-rate|cost|tokens|duration|turns|cache-tokens|model-cost (got "${metric}")`,
+      undefined,
+      json,
+    );
   const lastRaw = readValueFlag("stats", args, "--last", json);
   let last: number | undefined;
   if (lastRaw !== undefined) {
@@ -3426,7 +3435,20 @@ function cmdTrace(args: string[]) {
   }
   const rows = buildTrace(file, { tools: view === "tools", translate });
   if (json) out(JSON.stringify({ tool: "cowork-harness", command: "trace", file, rows }));
-  else out(formatTrace(rows));
+  else {
+    // cache-read-ratio footer (§4.7, M3): best-effort read of the sibling result.json, same
+    // "if absent, just omit" tolerance buildGateTrace already uses for gate provenance.
+    let modelUsage: RunResult["modelUsage"] | undefined;
+    const resultPath = join(dirname(file), "result.json");
+    if (existsSync(resultPath)) {
+      try {
+        modelUsage = (JSON.parse(readFileSync(resultPath, "utf8")) as RunResult).modelUsage;
+      } catch (e) {
+        log(`::warning:: trace: skipping unparseable ${resultPath}: ${String((e as Error).message)}`);
+      }
+    }
+    out(formatTrace(rows, { modelUsage }));
+  }
 }
 
 type DiffKind = "baseline" | "run" | "cassette";
