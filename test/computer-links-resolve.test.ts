@@ -444,4 +444,52 @@ describe("replay classification — computer_links_resolve is a manifest key (no
     const replayEntry = result.assertions.find((a) => "computer_links_resolve" in a.assertion);
     expect(replayEntry?.pass).toBe(true);
   });
+
+  // Round-trip guard (adversarial-review §7): the persist→replay wiring — recordScenarioObject writes
+  // `readonlyFolderRoots` onto the cassette, replayCassette reads it into the eval ctx — is what lets
+  // replay give artifact_json the PRECISE remedy for a body-less read-only input. Unit tests that hand
+  // a ctx `readonlyFolderRoots` directly can't catch a regression in that wiring; this drives the real
+  // replayCassette path end-to-end, plus a negative control proving the field (not luck) drives it.
+  it("replayCassette reads the cassette's readonlyFolderRoots → artifact_json gets the read-only remedy", async () => {
+    const root = mkdtempSync(join(tmpdir(), "cwh-replay-ajt-ro-"));
+    mkdirSync(join(root, "carta"), { recursive: true });
+    writeFileSync(join(root, "carta", "input.json"), JSON.stringify({ a: 1 }));
+    const artifacts = buildManifest(root, undefined, ["carta"], ["carta"]);
+    expect(artifacts.find((a) => a.path === "carta/input.json")!.truncated).toBe(true);
+
+    const mk = (readonlyFolderRoots?: string[]): Cassette =>
+      ({
+        cassetteVersion: CASSETTE_VERSION,
+        scenario: {
+          name: "t",
+          baseline: "latest",
+          session: "(inline)",
+          fidelity: "container",
+          prompt: "p",
+          answers: [],
+          expect_denied: [],
+          assert: [{ artifact_json: { artifact: "carta/input.json", path: "a", equals: 1 } }],
+        },
+        events: [],
+        controlOut: [],
+        artifacts,
+        userVisibleRoots: ["outputs", "carta"],
+        ...(readonlyFolderRoots ? { readonlyFolderRoots } : {}),
+      }) as unknown as Cassette;
+
+    // WITH the field: precise read-only remedy.
+    const withField = await replayCassette(mk(["carta"]), []);
+    const ajWith = withField.assertions.find((a) => "artifact_json" in a.assertion)!;
+    expect(ajWith.pass).toBe(false);
+    expect(ajWith.message).toMatch(/read-only connected-folder input/i);
+    expect(ajWith.message).not.toMatch(/--max-artifact-bytes/i);
+
+    // Negative control — WITHOUT the field (an old cassette): the SAME truncated entry falls back to the
+    // over-cap remedy, proving the persisted field (not the truncated flag alone) drives the branch.
+    const without = await replayCassette(mk(undefined), []);
+    const ajWithout = without.assertions.find((a) => "artifact_json" in a.assertion)!;
+    expect(ajWithout.pass).toBe(false);
+    expect(ajWithout.message).toMatch(/--max-artifact-bytes/i);
+    expect(ajWithout.message).not.toMatch(/read-only connected-folder input/i);
+  });
 });
