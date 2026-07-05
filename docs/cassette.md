@@ -55,7 +55,8 @@ re-record). `expect_denied`/filesystem/egress keys are sourced but stay live-onl
   "userVisibleRoots": ["outputs", "myproject"], // visible roots = outputs + each connected folder's mount name (its basename; `.projects` is the pre-1.14271.0 legacy fallback)
   "artifacts": [                         // snapshot of outputs/ + connected folders (optional)
     { "path": "outputs/x.json", "bytes": 24, "sha256": "…", "body": "{…}" }, // body inlined ≤ 64 KiB
-    { "path": "outputs/big.bin", "bytes": 9e6, "sha256": "…", "truncated": true } // oversized → hash-only
+    { "path": "outputs/big.bin", "bytes": 9e6, "sha256": "…", "truncated": true }, // oversized → hash-only
+    { "path": "carta-folder/input.xlsx", "bytes": 4096, "sha256": "…", "truncated": true } // mode:r connected-folder INPUT → body-less (see below), regardless of size
   ],
   "fingerprint": { "baseline": "1.15962.1", "skillHash": "…", "mode": "git", "contentSig": "…", "fileSigs": [["skills/x/SKILL.md", "…"]], "skillSources": ["…"] }, // staleness tripwire (v5: fileSigs only; v6: mode + git default; v7: NUL-delimited hash entries)
   "authoring": { "nonDeterministic": true, "channel": "decider-dir" } // present ONLY when a live decider answered ≥1 gate (see §Answering gates during recording); re-record may drift, replay is still deterministic
@@ -259,7 +260,19 @@ The inline cap is 64 KiB; raise it with `record --max-artifact-bytes <n>` (or
 fails fast if an `artifact_json` targets an artifact it had to truncate (that would pass at record but fail
 at replay). `computer_links_resolve` resolves every `computer://` link in the transcript against the same
 manifest, with host-shaped links normalized via the recorded session folders. Without a manifest (older
-cassettes), these are skipped. A green replay re-confirms *record-time* artifacts, **not** that the current
+cassettes), these are skipped.
+
+**Read-only (`mode: r`) connected-folder contents are captured body-less.** A folder mounted `mode: r` in
+`session:` holds pre-existing INPUTS the agent only reads, not deliverables — so `record` snapshots them
+the same way it snapshots an over-cap file: path + `bytes` + `sha256`, `truncated: true`, **no `body`**,
+regardless of size. The entry still lands in `artifacts[]` (unlike a fully-excluded path) so
+`materializeManifest` writes a 0-byte placeholder at replay and `computer_links_resolve`/`file_exists`
+resolve identically live and on replay; only `artifact_json` (which needs the inlined body) can't target
+one. Two side benefits: no cassette bloat from a large input file, and no `binary` privacy finding (the
+scanner only flags a *committed* binary body) — so a `mode: r` input never needs `--allow`. A `mode: rw`/`rwd`
+folder's contents are captured with a full body exactly as `outputs/` is.
+
+A green replay re-confirms *record-time* artifacts, **not** that the current
 skill still produces them — `replay --strict` fails the run when the `fingerprint` shows ANY skill/baseline
 drift, or `replay --fail-on-skill-drift` fails only on skill-source drift (leaving baseline drift a warning).
 Either way, every replay result also reports the drift in `staleness[]` (class-tagged) for a JSON gate to read.

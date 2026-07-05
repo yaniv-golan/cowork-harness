@@ -397,6 +397,14 @@ entry still satisfies `file_exists` but not `artifact_json`. `computer_links_res
 normalizes to a mount-relative path first (via the recorded connected-folder prefixes + the outputs/uploads
 mounts), since replay has no live filesystem to probe directly (that direct check only happens on a live
 `run`/`verify-run`). Without a manifest (older cassettes), all four are **skipped** (loud).
+
+A `mode: r` connected folder (see [session.md](./session.md)) holds pre-existing INPUTS, not deliverables —
+`record` captures its contents **body-less** (path + hash, `truncated: true`, no `body`): `file_exists` and
+`computer_links_resolve` still pass against it (the placeholder materializes on replay), but `artifact_json`
+can't target one (no body to read). This keeps a read-only input out of the cassette's committed content
+(no bloat, no `binary` privacy finding) while `no_unexpected_files`/`computer_links_resolve` keep enumerating
+the folder as a user-visible root. A `mode: rw`/`rwd` folder's contents are captured with a full body, same
+as `outputs/`.
 A green `replay` re-confirms *record-time* artifacts, **not** that the current skill still produces them —
 that needs a live `run` (the cassette's staleness fingerprint warns when the skill/baseline drifted; `replay
 --strict` fails on any drift, `--fail-on-skill-drift` on skill-source drift only, and every result reports it

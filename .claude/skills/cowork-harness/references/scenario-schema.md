@@ -460,3 +460,13 @@ at the top of this file.
     Consequence: artifact assertions (`artifact_json`) over fields that were redacted will fail at replay
     — the harness emits `::warning::` at record time when this occurs. (`src/secrets.ts:scrubField`;
     `src/run/cassette.ts`.)
+
+21. **A `mode: r` connected folder's contents are recorded body-less, not excluded.** `record` captures a
+    read-only folder's files as `path` + `bytes` + `sha256` only (`truncated: true`, no `body`) — it's an
+    input the agent read, not a deliverable it wrote. `file_exists`/`computer_links_resolve` still pass
+    against it on replay (the hash-only entry still materializes a 0-byte placeholder); `artifact_json`
+    can't (no body to read). This is also why a `mode: r` input never trips the `binary` privacy finding
+    or needs `--allow` in `verify-cassettes` — only a *committed* body is scanned. `scaffold` won't emit
+    `file_exists` for one either, since it isn't in `RunResult.artifacts`. A `mode: rw`/`rwd` folder's
+    contents are captured with a full body, same as `outputs/`. (`src/run/cassette.ts:buildManifest`'s
+    `bodyLessPrefixes`; `src/session.ts:readonlyFolderRootsFromPlan`.)

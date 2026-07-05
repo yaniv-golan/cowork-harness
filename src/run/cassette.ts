@@ -212,8 +212,19 @@ function isLosslessUtf8(buf: Buffer): boolean {
 
 /** Snapshot the user-visible artifacts under `workRoot` into manifest entries.
  *  Exported for token-free record→replay round-trip tests. */
-export function buildManifest(workRoot: string, cap?: number, roots: string[] = ["outputs", ".projects"]): ManifestEntry[] {
+export function buildManifest(
+  workRoot: string,
+  cap?: number,
+  roots: string[] = ["outputs", ".projects"],
+  bodyLessPrefixes: string[] = [],
+): ManifestEntry[] {
   const limit = cap ?? defaultBodyCap();
+  // Read-only connected-folder inputs (`bodyLessPrefixes`) are captured path+bytes+sha256 only, same as
+  // an over-cap entry — no body, so no bloat and no `binary` privacy finding (cassette.ts binary scan
+  // only fires on a committed base64 body). The manifest entry SURVIVES (unlike full exclusion) so
+  // `materializeManifest` writes a 0-byte placeholder and `computer_links_resolve` resolves identically
+  // on live and replay (see T3 in the pre-1.0 fix plan).
+  const isBodyLess = (path: string): boolean => bodyLessPrefixes.some((prefix) => path === prefix || path.startsWith(prefix + "/"));
   return collectArtifacts(workRoot, roots).map(({ path, bytes }) => {
     // collectArtifacts paths are derived from a directory walk; even though it already skips symlinks,
     // an entry must not inline content outside the work root. Re-confirm containment before reading the body.
@@ -230,7 +241,7 @@ export function buildManifest(workRoot: string, cap?: number, roots: string[] = 
       return { path, bytes, sha256: "", truncated: true };
     }
     const sha256 = createHash("sha256").update(buf).digest("hex");
-    if (buf.length > limit) return { path, bytes, sha256, truncated: true };
+    if (buf.length > limit || isBodyLess(path)) return { path, bytes, sha256, truncated: true };
     // store an encoding marker. UTF-8-safe bodies stay text (readable cassettes); binary bodies go
     // base64 so the record→replay round-trip is byte-exact and the sha256 verify stays valid.
     if (isLosslessUtf8(buf)) return { path, bytes, sha256, body: buf.toString("utf8") };
@@ -1936,7 +1947,12 @@ async function recordScenarioObject(
   // Snapshot under the run's REAL user-visible roots (outputs + resolved folder mount names), persisted
   // below as cassette.userVisibleRoots so replay matches — not the legacy hardcoded `.projects/` prefix.
   const recordRoots = result.userVisibleRoots ?? ["outputs", ".projects"];
-  const artifacts = (result.workDir ? buildManifest(result.workDir, opts.maxArtifactBytes, recordRoots) : []).map((a) => {
+  // Read-only connected-folder inputs are captured body-less (path + sha256, no body) — see buildManifest's
+  // `bodyLessPrefixes` doc comment. `recordRoots`/`cassette.userVisibleRoots` stay the FULL set; only the
+  // captured bodies under these prefixes are stripped.
+  const artifacts = (
+    result.workDir ? buildManifest(result.workDir, opts.maxArtifactBytes, recordRoots, result.readonlyFolderRoots ?? []) : []
+  ).map((a) => {
     if (a.body === undefined) return a;
     if (a.encoding === "base64") {
       const scrubbed = scrubField(a.body, secrets);

@@ -391,4 +391,57 @@ describe("replay classification — computer_links_resolve is a manifest key (no
     const entry = result.assertions.find((a) => "computer_links_resolve" in a.assertion);
     expect(entry?.pass).toBe(true);
   });
+
+  // T3 / adversarial-review finding M1 regression guard: a `mode: "r"` connected-folder input is
+  // captured BODY-LESS (buildManifest's bodyLessPrefixes), NOT excluded from the manifest. A
+  // `computer://` link into that input must resolve identically on the LIVE lane (direct filesystem
+  // check against the real host folder) and the REPLAY lane (materializeManifest writes a 0-byte
+  // placeholder for the body-less entry, so existsSync still finds it). If this ever regresses to full
+  // exclusion, replay would dangle while live still resolves — the exact asymmetry MANIFEST_KEYS exists
+  // to prevent.
+  it("a read-only (mode:r) folder input, captured body-less, resolves on BOTH live and replay", async () => {
+    const sessionsRoot = mkdtempSync(join(tmpdir(), "cwh-replay-session-ro-"));
+    const hostFolder = join(sessionsRoot, "myproject-src");
+    mkdirSync(hostFolder, { recursive: true });
+    writeFileSync(join(hostFolder, "notes.md"), "read-only input content");
+    const sessionPath = join(sessionsRoot, "session.yaml");
+    writeFileSync(sessionPath, `folders:\n  - from: ${hostFolder}\n    mode: r\n`);
+
+    const root = mkdtempSync(join(tmpdir(), "cwh-replay-manifest-ro-"));
+    mkdirSync(join(root, "myproject-src"), { recursive: true });
+    writeFileSync(join(root, "myproject-src", "notes.md"), "read-only input content");
+    // Body-less capture: the entry SURVIVES (path + bytes + sha256) but carries no body.
+    const artifacts = buildManifest(root, undefined, ["myproject-src"], ["myproject-src"]);
+    const entry = artifacts.find((a) => a.path === "myproject-src/notes.md")!;
+    expect(entry.body).toBeUndefined();
+    expect(entry.truncated).toBe(true);
+    expect(entry.sha256).toMatch(/^[0-9a-f]{64}$/);
+
+    // LIVE: resolveComputerLink checks the host-shaped path directly on the real filesystem.
+    const link = extractComputerLinks(`computer://${hostFolder}/notes.md`)[0];
+    const liveOutcome = resolveComputerLink(link, root, { mode: "live" });
+    expect(liveOutcome.resolved).toBe(true);
+
+    // REPLAY: no live filesystem — must resolve from the materialized manifest's 0-byte placeholder.
+    const cassette: Cassette = {
+      cassetteVersion: CASSETTE_VERSION,
+      scenario: {
+        name: "t",
+        baseline: "latest",
+        session: "session.yaml",
+        fidelity: "container",
+        prompt: "do the thing",
+        answers: [],
+        expect_denied: [],
+        assert: [{ computer_links_resolve: true }],
+      },
+      events: events(`computer://${hostFolder}/notes.md`),
+      controlOut: [],
+      artifacts,
+      userVisibleRoots: ["outputs", "myproject-src"], // full root set — body-less, not excluded
+    } as unknown as Cassette;
+    const result = await replayCassette(cassette, [], { cassetteDir: sessionsRoot });
+    const replayEntry = result.assertions.find((a) => "computer_links_resolve" in a.assertion);
+    expect(replayEntry?.pass).toBe(true);
+  });
 });

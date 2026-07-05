@@ -35,6 +35,15 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **Read-only (`mode: r`) connected-folder inputs are captured body-less (path + hash) instead of as
+  full binary bodies.** `record` used to sweep a `mode: r` folder's files into the cassette
+  `artifacts[]` as full base64 bodies — an input the agent only reads, not a deliverable — causing
+  cassette bloat and a hard `binary` privacy finding that forced `--allow`. The manifest entry now
+  carries `path` + `bytes` + `sha256` with `truncated: true` and no `body`, reusing the same
+  representation the 64-KiB inline cap already produces. The entry still survives in the manifest (it
+  is NOT excluded), so `computer_links_resolve`/`file_exists` resolve identically on live and replay —
+  only `artifact_json` can no longer target it (no body to read). A `mode: rw`/`rwd` folder's contents
+  are unaffected and keep their full body.
 - **`trace --view questions` and the `scaffold` helper disagreed with `questions_count_max` on what
   "a question" counts.** The assertion counts **sub-questions** (one `AskUserQuestion` bundling K
   sub-questions counts as K — the better spam/burden budget, since per-tool-call counting would miss

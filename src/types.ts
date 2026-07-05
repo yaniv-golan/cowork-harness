@@ -581,6 +581,12 @@ export interface RunResult {
    * `["outputs",".projects"]` prefix list. Plugins are NOT here (read-only inputs, never artifact roots).
    */
   userVisibleRoots?: string[];
+  /** Subset of `userVisibleRoots` that are read-only (`mode: "r"`) connected-folder mounts — inputs, not
+   *  deliverables. The cassette recorder strips captured BODIES under these prefixes (path + sha256
+   *  survives, so `computer_links_resolve` still resolves on replay); `RunResult.artifacts` excludes
+   *  them outright so `scaffold` doesn't emit `file_exists` for an input. `userVisibleRoots` itself is
+   *  UNCHANGED — `no_unexpected_files` / `computer_links_resolve` still enumerate every folder. */
+  readonlyFolderRoots?: string[];
   // ENV-MANIFEST: files written under the user-visible roots (outputs/ + connected folders), relative paths
   // + sizes. Paths only (no content snapshot — that is the cassette manifest). Kills path-guessing and
   // makes an all-or-nothing truncated run (empty manifest) detectable. NOT sufficient for mid-write truncation.

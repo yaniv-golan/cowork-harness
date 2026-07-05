@@ -69,3 +69,62 @@ describe("configurable artifact body cap + record-time truncation guard", () => 
     expect(hits).toEqual([]);
   });
 });
+
+// T3: a `mode: "r"` connected-folder input is captured BODY-LESS (path + bytes + sha256, no body,
+// truncated:true) — the SAME representation the 64-KiB cap already produces — regardless of size,
+// so it neither bloats the cassette nor trips the `binary` privacy finding, but the entry still
+// survives so replay's materializeManifest can write a 0-byte placeholder for `computer_links_resolve`.
+describe("buildManifest — bodyLessPrefixes (T3 read-only connected-folder capture)", () => {
+  it("strips the body for a path under a bodyLessPrefix even though it's well under the size cap", () => {
+    const root = workRootWith({ "carta-folder/synthetic_carta.xlsx": "tiny input content" });
+    const m = buildManifest(root, 1024 * 1024, ["carta-folder"], ["carta-folder"]);
+    const entry = m.find((e) => e.path === "carta-folder/synthetic_carta.xlsx")!;
+    expect(entry.body).toBeUndefined();
+    expect(entry.encoding).toBeUndefined();
+    expect(entry.truncated).toBe(true);
+    expect(entry.sha256).toMatch(/^[0-9a-f]{64}$/); // integrity preserved without leaking content
+    expect(entry.bytes).toBeGreaterThan(0); // positive proof the file existed at record time
+  });
+
+  it("leaves a path OUTSIDE the bodyLessPrefixes fully captured (a mode:rw deliverable keeps its body)", () => {
+    const root = workRootWith({
+      "carta-folder/synthetic_carta.xlsx": "tiny input content",
+      "outputs/report.md": "# generated deliverable",
+    });
+    const m = buildManifest(root, 1024 * 1024, ["carta-folder", "outputs"], ["carta-folder"]);
+    const input = m.find((e) => e.path === "carta-folder/synthetic_carta.xlsx")!;
+    const output = m.find((e) => e.path === "outputs/report.md")!;
+    expect(input.truncated).toBe(true);
+    expect(input.body).toBeUndefined();
+    expect(output.truncated).toBeUndefined();
+    expect(output.body).toBe("# generated deliverable"); // rw output: full body committed, unaffected
+  });
+
+  it("a body-less input raises NO `binary` privacy finding even though its content is non-UTF-8", async () => {
+    const { scanCassette, CASSETTE_VERSION } = await import("../src/run/cassette.js");
+    const root = mkdtempSync(join(tmpdir(), "cwh-cap-bin-"));
+    mkdirSync(join(root, "carta-folder"), { recursive: true });
+    // A raw byte sequence that is NOT valid UTF-8 (a lone 0xff/0xfe pair) — mirrors an .xlsx's binary body.
+    writeFileSync(join(root, "carta-folder", "synthetic_carta.xlsx"), Buffer.from([0x50, 0x4b, 0x03, 0x04, 0xff, 0xfe, 0x00, 0x01]));
+    const artifacts = buildManifest(root, 1024 * 1024, ["carta-folder"], ["carta-folder"]);
+    const cassette = {
+      cassetteVersion: CASSETTE_VERSION,
+      scenario: {
+        name: "t",
+        baseline: "latest",
+        session: "(inline)",
+        fidelity: "container",
+        prompt: "p",
+        answers: [],
+        expect_denied: [],
+        assert: [],
+      },
+      events: [],
+      controlOut: [],
+      artifacts,
+      userVisibleRoots: ["outputs", "carta-folder"], // full root set survives — only the body was stripped
+    } as unknown as Parameters<typeof scanCassette>[0];
+    const findings = scanCassette(cassette, []);
+    expect(findings.some((f) => f.cls === "binary")).toBe(false);
+  });
+});
