@@ -48,7 +48,7 @@ re-record). `expect_denied`/filesystem/egress keys are sourced but stay live-onl
 
 ```jsonc
 {
-  "cassetteVersion": 7,                  // format version; ABSENT = legacy (0); a FUTURE version warns
+  "cassetteVersion": 8,                  // format version; ABSENT = legacy (0); a FUTURE version warns
   "scenario": { /* Scenario object — same schema as the .yaml */ },
   "events": [ /* JSON lines from events.jsonl (child→driver stdout) */ ],
   "controlOut": [ /* JSON lines from control-out.jsonl (driver→child control_responses) */ ],
@@ -58,7 +58,7 @@ re-record). `expect_denied`/filesystem/egress keys are sourced but stay live-onl
     { "path": "outputs/big.bin", "bytes": 9e6, "sha256": "…", "truncated": true, "truncationReason": "size" }, // oversized → hash-only (raise --max-artifact-bytes)
     { "path": "carta-folder/input.xlsx", "bytes": 4096, "sha256": "…", "truncated": true, "truncationReason": "readonly" } // mode:r connected-folder INPUT → body-less (see below), regardless of size
   ],
-  "fingerprint": { "baseline": "1.15962.1", "skillHash": "…", "mode": "git", "contentSig": "…", "fileSigs": [["skills/x/SKILL.md", "…"]], "skillSources": ["…"] }, // staleness tripwire (v5: fileSigs only; v6: mode + git default; v7: NUL-delimited hash entries)
+  "fingerprint": { "baseline": "1.15962.1", "skillHash": "…", "mode": "git", "contentSig": "…", "fileSigs": [["skills/x/SKILL.md", "…"]], "skillSources": ["…"] }, // staleness tripwire (v5: fileSigs only; v6: mode + git default; v7: NUL-delimited hash entries; v8: folds fixed-length content shas + type-prefixed/NUL-framed entries)
   "authoring": { "nonDeterministic": true, "channel": "decider-dir" } // present ONLY when a live decider answered ≥1 gate (see §Answering gates during recording); re-record may drift, replay is still deterministic
 }
 ```
@@ -389,7 +389,10 @@ possible.
 - **`recorded under an older hash format (vN → vM)`** — format upgrade; re-record once and the message
   goes away. (Cassettes recorded before format **v6** all need one re-record — see the boundary note below.
   Cassettes recorded at **v6** need one re-record after upgrading to the v7 format, which switched the
-  hash-entry delimiter from `\n` to `\0`.)
+  hash-entry delimiter from `\n` to `\0`. Cassettes recorded at **v7** need one re-record after upgrading
+  to **v8**, which folds fixed-length content shas and type-prefixes/NUL-frames the hash entries — a v7
+  fingerprint is non-comparable, so `rehash` routes v7 cassettes to re-record. A cassette that carries no
+  `skillHash` is unaffected and keeps replaying.)
 - **`skill files changed since record — N changed (path, …)`** — the **exact** changed/added/removed file(s),
   from the per-file manifest (`fileSigs`). For a scoped cassette the drift is attributed **per bucket** by the
   actual changed paths: a `shared root changed (scope: skills/x) [N changed (…)]` message for shared-dependency
