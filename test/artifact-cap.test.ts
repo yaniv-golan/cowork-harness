@@ -143,6 +143,6 @@ describe("buildManifest — bodyLessPrefixes (T3 read-only connected-folder capt
     } as unknown as Parameters<typeof artifactJsonTargetsTruncated>[0];
     // over-cap deliverable IS flagged (raise the cap is the right remedy); the read-only input is NOT
     // (it's body-less by policy — handled by the symmetric evidence-unavailable, not "too large").
-    expect(artifactJsonTargetsTruncated(scenario, root, artifacts, ["carta-folder"])).toEqual(["outputs/big.json"]);
+    expect(artifactJsonTargetsTruncated(scenario, root, artifacts)).toEqual(["outputs/big.json"]);
   });
 });

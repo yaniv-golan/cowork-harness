@@ -76,7 +76,7 @@ describe("eventsOf warns loudly on malformed JSON", () => {
 describe("renderAnswerHints separates scriptable from non-deterministic answers", () => {
   const PLAN: RenderPlan = { live: false, progress: false, verbose: false, color: false, compact: false };
 
-  function footerOutput(unanswered: RunResult["unanswered"]): string {
+  function footerOutput(nonReproducibleAnswers: RunResult["nonReproducibleAnswers"]): string {
     const r: RunResult = {
       scenario: "s",
       fidelity: "container",
@@ -85,7 +85,7 @@ describe("renderAnswerHints separates scriptable from non-deterministic answers"
       decisions: [],
       egress: [],
       assertions: [],
-      unanswered,
+      nonReproducibleAnswers,
       outDir: "/tmp/run",
     };
     const chunks: string[] = [];

@@ -143,7 +143,8 @@ function hashDir(
         continue;
       }
       const targetRel = relative(rootResolved, resolvedTarget).split(sep).join("/");
-      hash.update(`L:${relPath} -> ${targetRel}\0`); // link structure; a re-point changes the digest
+      hash.update(`L:${relPath}\0${targetRel}\0`); // link structure; a re-point changes the digest. NUL-separate
+      // path from target (not ` -> `): otherwise `a`->`b -> c` and `a -> b`->`c` both fold `L:a -> b -> c\0`.
       if (onFile) onFile(relPath, `lnk:${targetRel}`);
       continue;
     }
@@ -189,8 +190,14 @@ function hashDir(
           /* not valid JSON — fall through to raw-byte hashing */
         }
       }
-      hash.update(hashedContent);
-      if (onFile) onFile(relPath, createHash("sha256").update(hashedContent).digest("hex"));
+      // Fold the fixed-length content SHA, NOT the raw content: raw bytes have no length/terminator, so
+      // `F:a\0<A>F:b\0<B>` would collide with a single file `a` whose content is `<A>F:b\0<B>` (a staleness
+      // false-negative). A 64-hex sha is self-delimiting and its charset is disjoint from the `F:`/`L:`/`D:`
+      // prefixes, closing the unframed-concatenation hole. Hoisted out of `if (onFile)` so the digest is
+      // always folded (the no-sink path must fold the same bytes).
+      const contentSha = createHash("sha256").update(hashedContent).digest("hex");
+      hash.update(contentSha);
+      if (onFile) onFile(relPath, contentSha);
     }
   }
 }
@@ -301,7 +308,12 @@ function scopedAccept(keep: Set<string>, dirSkills: Set<string>, scopeAgents: bo
  *  routes those to a re-record, see cassette.ts.) */
 export function computeContentSig(dirs: string[], scopeSkills?: string[], sessionIgnore?: string[]): string | undefined {
   if (dirs.length === 0) return undefined;
-  const entries = skillHashEntries(dirs, scopeSkills, sessionIgnore).map((e) => `${e.path}:${e.sha}`);
+  // Type-prefix + NUL-separate path from sha: without them, a file named `a:lnk` with content-sha
+  // `<64hex>` collides with a symlink `a` -> target `<64hex>` (both `a:lnk:<64hex>`). `e.sha` starts with
+  // `lnk:` only for links (a 64-hex file sha cannot — l/n/k/: are non-hex), so it disambiguates the kind.
+  const entries = skillHashEntries(dirs, scopeSkills, sessionIgnore).map((e) =>
+    e.sha.startsWith("lnk:") ? `L:${e.path}\0${e.sha}` : `F:${e.path}\0${e.sha}`,
+  );
   if (entries.length === 0) return undefined;
   return createHash("sha256").update(entries.join("\0")).digest("hex");
 }
@@ -334,9 +346,9 @@ export interface HashSkillDirsResult {
    *  this as a staleness failure (can't verify ⇒ not green) — a hash computed over partial data is
    *  unreliable. */
   readErrors?: string[];
-  /** Which boundary the hash used. "git" = git-tracked set (COWORK_HARNESS_GITSET=1 AND every dir
-   *  was a usable repo); "raw" = the legacy filesystem walk (default, or any non-repo dir). Recorded in the
-   *  fingerprint so a mode change between record and verify is itself detectable. */
+  /** Which boundary the hash used. "git" = git-tracked set — the DEFAULT (unless COWORK_HARNESS_GITSET=0)
+   *  AND every dir was a usable git work tree; "raw" = the filesystem walk, used when GITSET=0 OR any dir
+   *  is not a repo. Recorded in the fingerprint so a mode change between record and verify is detectable. */
   mode: "git" | "raw";
   /** Opt-in agent scoping was applied (COWORK_HARNESS_AGENT_SCOPE=skill AND this hash was skill-scoped).
    *  Recorded in the fingerprint so a record/verify env mismatch is detectable, like `mode`. */

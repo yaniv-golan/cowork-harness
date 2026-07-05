@@ -41,7 +41,7 @@
     "egress": { "type": "array" },
     "assertions": { "type": "array" },
     "subagents": { "type": "array" },
-    "unanswered": { "type": "array" },
+    "nonReproducibleAnswers": { "type": "array" },
     "usage": {
       "type": "object",
       "description": "SDK usage payload (input_tokens, output_tokens, etc.), pass-through, plus a harness-computed 'turns' field (from the SDK result message's num_turns) when available. Wave 0 seam.",
@@ -58,10 +58,50 @@
       }
     },
     "durationMs": { "type": "number" },
+    "fingerprint": {
+      "type": "object",
+      "description": "Skill/plugin staleness fingerprint recorded at run time; persisted so `verify-run` can detect a kept run that predates a skill change and refuse to vouch for answer-coverage against stale gate labels.",
+      "required": ["baseline"],
+      "properties": {
+        "baseline": { "type": "string", "description": "appVersion at record time" },
+        "skillHash": { "type": "string", "description": "hash of the session's local skill/plugin/marketplace dir contents (if any)" },
+        "skillSources": { "type": "array", "items": { "type": "string" } },
+        "skillScope": { "type": "array", "items": { "type": "string" } },
+        "sharedHash": { "type": "string", "description": "shared-root hash for scoped cassettes; absent on whole-tree or non-plugin-root mounts" },
+        "contentSig": { "type": "string", "description": "algorithm-independent content fingerprint; used by `rehash` to verify content is unchanged across format bumps" },
+        "fileSigs": {
+          "type": "array",
+          "description": "per-file manifest [relpath, contentSha] of the exact files feeding skillHash",
+          "items": { "type": "array", "items": { "type": "string" }, "minItems": 2, "maxItems": 2 }
+        },
+        "fileSigsOmitted": { "type": "boolean" },
+        "mode": {
+          "type": "string",
+          "enum": ["git", "raw"],
+          "description": "the file-set boundary used for skillHash — \"git\" (git-tracked set — the DEFAULT for a git work tree unless COWORK_HARNESS_GITSET=0) or \"raw\" (filesystem walk; used when GITSET=0 or the dir is not a git work tree)"
+        },
+        "agentScope": { "type": "string", "enum": ["skill"] }
+      }
+    },
     "outDir": { "type": "string" },
     "workDir": { "type": "string" },
     "outputsDir": { "type": "string" },
+    "userVisibleRoots": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "The user-visible mount roots (relative to mnt/) for this run — `outputs` plus each connected work folder's resolved mount name. Plugins are not included (read-only inputs, never artifact roots)."
+    },
+    "readonlyFolderRoots": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Subset of userVisibleRoots that are read-only (mode:\"r\") connected-folder mounts — inputs, not deliverables. `artifacts` excludes them so `scaffold` doesn't emit file_exists for an input."
+    },
     "artifacts": { "type": "array" },
+    "preRunPaths": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "workRoot-relative paths that existed under the user-visible roots BEFORE the agent ran (captured post-staging, pre-spawn) — the baseline `no_unexpected_files` diffs against. Absent when the tier didn't capture it (microvm) or the run predates the seam."
+    },
     "partial": { "type": "boolean" },
     "unansweredGate": { "type": "object" },
     "nonDeterministic": { "type": "boolean" },
@@ -143,6 +183,20 @@
       "properties": {
         "full": { "type": "number" },
         "partial": { "type": "number" }
+      }
+    },
+    "toolResults": {
+      "type": "array",
+      "description": "Tool-result text at assertion-fidelity cap (10 KB per result). Used by tool_result_contains / tool_result_not_contains. `assertText` is preferred when present; falls back to `text` (500-char display cap) for cassettes recorded before this field was added.",
+      "items": {
+        "type": "object",
+        "required": ["isError", "text"],
+        "properties": {
+          "toolUseId": { "type": "string" },
+          "isError": { "type": "boolean" },
+          "text": { "type": "string" },
+          "assertText": { "type": "string" }
+        }
       }
     }
   }

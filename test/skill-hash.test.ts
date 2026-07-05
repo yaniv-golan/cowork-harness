@@ -12,6 +12,26 @@ function skillDir(): string {
   return d;
 }
 
+describe("skill-hash — v8 framing closes the unframed-concatenation collision", () => {
+  // Pre-v8, skillHash folded RAW content after `F:<relPath>\0`, so a two-file tree {p:"A", q:"B"}
+  // folded the identical byte stream as a single file p whose content embeds the q boundary
+  // (`A` + `F:skills/q\0` + `B`) — a staleness FALSE-NEGATIVE. v8 folds the fixed-length content SHA
+  // instead (self-delimiting; sha charset is disjoint from the `F:`/`L:` prefixes), so they differ.
+  // This test FAILS on the old algorithm (identical hashes) and passes on v8.
+  it("a file whose content embeds a fake entry boundary does NOT collide with a two-file tree", () => {
+    const twoFiles = mkdtempSync(join(tmpdir(), "skill-collA-"));
+    mkdirSync(join(twoFiles, "skills"), { recursive: true });
+    writeFileSync(join(twoFiles, "skills", "p"), "A");
+    writeFileSync(join(twoFiles, "skills", "q"), "B");
+
+    const oneFile = mkdtempSync(join(tmpdir(), "skill-collB-"));
+    mkdirSync(join(oneFile, "skills"), { recursive: true });
+    writeFileSync(join(oneFile, "skills", "p"), "A" + "F:skills/q\0" + "B"); // embeds the old boundary marker
+
+    expect(hashSkillDirs([twoFiles]).hash).not.toBe(hashSkillDirs([oneFile]).hash);
+  });
+});
+
 describe("skill-hash — excludes cassettes/VCS, keeps real source", () => {
   it("is unchanged when a recorded cassette is written into an existing cassettes dir (self-invalidation fix)", () => {
     const d = skillDir();

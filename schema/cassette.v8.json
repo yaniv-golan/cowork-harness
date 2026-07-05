@@ -1,0 +1,166 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/yaniv-golan/cowork-harness/main/schema/cassette.v8.json",
+  "title": "cowork-harness cassette v8",
+  "description": "Recorded control-protocol cassette produced by cowork-harness (https://github.com/yaniv-golan/cowork-harness). Contains a frozen scenario, recorded agent event stream, control-protocol responses, artifact manifest, and a staleness fingerprint. v3 adds `contentSig`. v4 persists `userVisibleRoots`. v6 (staleness redesign, breaking): contentSig unified onto the skillHash walk (same file set incl. OS-junk exclusion, in-tree-symlink-by-target); git-tracked file set is the DEFAULT boundary (opt out with COWORK_HARNESS_GITSET=0). v7: NUL-byte entry separator in hashDir and computeContentSig to prevent hash collisions for file paths containing newline characters. v8: skillHash folds fixed-length content shas (not raw bytes) and contentSig/link entries are type-prefixed & NUL-framed (closes unframed-concatenation collisions → a v8 staleness hash is non-comparable with pre-v8, so `rehash` routes pre-v8 cassettes to re-record); `ManifestEntry.truncationReason` names why a body is absent (the cassette-level `readonlyFolderRoots` list is removed).",
+  "type": "object",
+  "required": [
+    "scenario",
+    "events"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "format": "uri"
+    },
+    "generator": {
+      "type": "string",
+      "const": "cowork-harness"
+    },
+    "cassetteVersion": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "scenario": {
+      "type": "object",
+      "description": "Embedded scenario snapshot at record time."
+    },
+    "events": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Recorded agent event stream (newline-delimited JSON lines)."
+    },
+    "controlOut": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Driver→agent control_response stream (newline-delimited JSON lines)."
+    },
+    "effectiveFidelity": {
+      "type": "string",
+      "description": "The fidelity tier the live record resolved to."
+    },
+    "artifacts": {
+      "type": "array",
+      "description": "Snapshot of user-visible output files produced by the run (the manifest). Each entry carries path + bytes + sha256; small text/JSON bodies are inlined, larger ones are hash-only.",
+      "items": {
+        "type": "object",
+        "required": ["path", "bytes", "sha256"],
+        "properties": {
+          "path": { "type": "string", "description": "workRoot-relative path, e.g. outputs/report.json" },
+          "bytes": { "type": "number", "description": "file size in bytes at record time" },
+          "sha256": { "type": "string", "description": "sha256 of the raw bytes (empty string only on an unreadable/containment-failed entry)" },
+          "body": { "type": "string", "description": "inlined body (≤ the artifact-body cap); materialized on replay so artifact_json can parse it. Absent on a truncated entry." },
+          "encoding": { "type": "string", "enum": ["utf8", "base64"], "description": "how `body` is encoded (base64 for non-UTF-8/binary)." },
+          "truncated": { "type": "boolean", "description": "body omitted (hash-only). file_exists/user_visible_artifact still PASS (existence proven by path+sha); artifact_json is evidence-unavailable." },
+          "truncationReason": {
+            "type": "string",
+            "enum": ["size", "readonly", "unreadable"],
+            "description": "v8+: WHY the body is absent, so replay gives the precise artifact_json remedy. `size` = over the body cap (raise --max-artifact-bytes); `readonly` = a mode:r connected-folder input (assert on a deliverable); `unreadable` = a record-time read/containment failure (sha256 is \"\"). ABSENT on pre-v8 entries."
+          }
+        }
+      }
+    },
+    "userVisibleRoots": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "v4+: the user-visible mount roots captured at record time (`outputs` + each connected folder's resolved mount name). Replay reads THIS instead of a hardcoded prefix. ABSENT on pre-v4 cassettes → replay falls back to the legacy prefix."
+    },
+    "preRunPaths": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "workRoot-relative paths under userVisibleRoots that existed BEFORE the agent ran — the baseline `no_unexpected_files` diffs against on replay. Optional metadata (no cassetteVersion bump); ABSENT on pre-0.24 and microvm recordings → replay EXCLUDES `no_unexpected_files` with a loud warning. Always co-present with `userVisibleRoots` when present."
+    },
+    "scenarioSource": {
+      "type": "string",
+      "description": "The authored scenario SOURCE file this cassette was recorded from, RELATIVE to the cassette dir (relocatable, no absolute host path). `record --rerecord-stale` prefers this over a slug guess. ABSENT when recorded from an in-memory/inline scenario."
+    },
+    "fingerprint": {
+      "type": "object",
+      "description": "Staleness tripwire over the skill/baseline inputs that determined the recording.",
+      "properties": {
+        "baseline": {
+          "type": "string"
+        },
+        "skillHash": {
+          "type": "string",
+          "description": "Algorithm-specific hash of skill dir contents (staleness detection)."
+        },
+        "contentSig": {
+          "type": "string",
+          "description": "v3+: Algorithm-independent SHA-256 over sorted relpath:content-sha256 pairs. Used by `rehash` to verify content is unchanged when the staleness algorithm changes."
+        },
+        "skillSources": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "skillScope": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "sharedHash": {
+          "type": "string"
+        },
+        "fileSigs": {
+          "type": "array",
+          "description": "v5+: per-file manifest [relpath, contentSha] of files feeding skillHash, for exact-diff staleness reporting. Root-relative paths; scanned+redacted like skillSources.",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 2,
+            "maxItems": 2
+          }
+        },
+        "fileSigsOmitted": {
+          "type": "boolean",
+          "description": "v5+: true when the per-file manifest was omitted because the tree exceeded the size cap (degrades to bucket-level staleness messages)."
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "git",
+            "raw"
+          ],
+          "description": "Phase C: the file-set boundary used for skillHash — 'git' (git-tracked set — the DEFAULT unless COWORK_HARNESS_GITSET=0, and every dir is a git work tree) or 'raw' (filesystem walk; used when GITSET=0 OR any dir is not a repo). A record-vs-verify mode flip means hashes aren't comparable → re-record."
+        },
+        "agentScope": {
+          "type": "string",
+          "enum": ["skill"],
+          "description": "Opt-in per-skill agent scoping (COWORK_HARNESS_AGENT_SCOPE=skill) was active for this scoped hash: a skill-named agents/<n> was treated as skill <n>'s private input, not a fleet-wide shared root. ABSENT = the default (agents/ is shared). A record-vs-verify flip → re-record under the same setting."
+        }
+      }
+    },
+    "authoring": {
+      "type": "object",
+      "description": "Provenance of how the gate answers were authored. PRESENT with nonDeterministic:true only when a live decider answered at least one gate during recording (a driving agent via --decider-dir, a model via --decider-llm, or an --on-unanswered first auto-pick), so RE-recording may drift. The cassette itself still replays deterministically (the answers are frozen). ABSENT means fully scripted/deterministic authoring.",
+      "properties": {
+        "nonDeterministic": {
+          "type": "boolean"
+        },
+        "channel": {
+          "type": "string",
+          "enum": [
+            "decider-dir",
+            "decider-llm"
+          ]
+        }
+      },
+      "required": [
+        "nonDeterministic"
+      ]
+    }
+  }
+}

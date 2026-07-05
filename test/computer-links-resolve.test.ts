@@ -445,19 +445,22 @@ describe("replay classification — computer_links_resolve is a manifest key (no
     expect(replayEntry?.pass).toBe(true);
   });
 
-  // Round-trip guard (adversarial-review §7): the persist→replay wiring — recordScenarioObject writes
-  // `readonlyFolderRoots` onto the cassette, replayCassette reads it into the eval ctx — is what lets
-  // replay give artifact_json the PRECISE remedy for a body-less read-only input. Unit tests that hand
-  // a ctx `readonlyFolderRoots` directly can't catch a regression in that wiring; this drives the real
-  // replayCassette path end-to-end, plus a negative control proving the field (not luck) drives it.
-  it("replayCassette reads the cassette's readonlyFolderRoots → artifact_json gets the read-only remedy", async () => {
+  // Round-trip guard (v8): the per-entry `truncationReason` → replay wiring. buildManifest stamps a
+  // mode:r input entry `truncationReason: "readonly"`, and replayCassette reads it off the materialized
+  // manifest (truncatedPaths, a Map<path,reason>) to give artifact_json the PRECISE remedy. Unit tests
+  // that hand a ctx directly can't catch a regression in that wiring; this drives replayCassette
+  // end-to-end, plus a "size" control proving the per-entry reason (not the truncated flag alone)
+  // drives the branch.
+  it("replayCassette reads per-entry truncationReason → artifact_json gets the precise remedy", async () => {
     const root = mkdtempSync(join(tmpdir(), "cwh-replay-ajt-ro-"));
     mkdirSync(join(root, "carta"), { recursive: true });
     writeFileSync(join(root, "carta", "input.json"), JSON.stringify({ a: 1 }));
-    const artifacts = buildManifest(root, undefined, ["carta"], ["carta"]);
-    expect(artifacts.find((a) => a.path === "carta/input.json")!.truncated).toBe(true);
+    const roArtifacts = buildManifest(root, undefined, ["carta"], ["carta"]);
+    const entry = roArtifacts.find((a) => a.path === "carta/input.json")!;
+    expect(entry.truncated).toBe(true);
+    expect(entry.truncationReason).toBe("readonly"); // buildManifest stamped the reason
 
-    const mk = (readonlyFolderRoots?: string[]): Cassette =>
+    const mk = (artifacts: typeof roArtifacts): Cassette =>
       ({
         cassetteVersion: CASSETTE_VERSION,
         scenario: {
@@ -474,22 +477,22 @@ describe("replay classification — computer_links_resolve is a manifest key (no
         controlOut: [],
         artifacts,
         userVisibleRoots: ["outputs", "carta"],
-        ...(readonlyFolderRoots ? { readonlyFolderRoots } : {}),
       }) as unknown as Cassette;
 
-    // WITH the field: precise read-only remedy.
-    const withField = await replayCassette(mk(["carta"]), []);
-    const ajWith = withField.assertions.find((a) => "artifact_json" in a.assertion)!;
-    expect(ajWith.pass).toBe(false);
-    expect(ajWith.message).toMatch(/read-only connected-folder input/i);
-    expect(ajWith.message).not.toMatch(/--max-artifact-bytes/i);
+    // truncationReason "readonly" → precise read-only remedy.
+    const ro = await replayCassette(mk(roArtifacts), []);
+    const ajRo = ro.assertions.find((a) => "artifact_json" in a.assertion)!;
+    expect(ajRo.pass).toBe(false);
+    expect(ajRo.message).toMatch(/read-only connected-folder input/i);
+    expect(ajRo.message).not.toMatch(/--max-artifact-bytes/i);
 
-    // Negative control — WITHOUT the field (an old cassette): the SAME truncated entry falls back to the
-    // over-cap remedy, proving the persisted field (not the truncated flag alone) drives the branch.
-    const without = await replayCassette(mk(undefined), []);
-    const ajWithout = without.assertions.find((a) => "artifact_json" in a.assertion)!;
-    expect(ajWithout.pass).toBe(false);
-    expect(ajWithout.message).toMatch(/--max-artifact-bytes/i);
-    expect(ajWithout.message).not.toMatch(/read-only connected-folder input/i);
+    // Control — same truncated entry but reason "size" → over-cap remedy, proving the PER-ENTRY reason
+    // (not the truncated flag alone) drives the branch.
+    const sizeArtifacts = roArtifacts.map((a) => (a.path === "carta/input.json" ? { ...a, truncationReason: "size" as const } : a));
+    const sz = await replayCassette(mk(sizeArtifacts), []);
+    const ajSz = sz.assertions.find((a) => "artifact_json" in a.assertion)!;
+    expect(ajSz.pass).toBe(false);
+    expect(ajSz.message).toMatch(/--max-artifact-bytes/i);
+    expect(ajSz.message).not.toMatch(/read-only connected-folder input/i);
   });
 });

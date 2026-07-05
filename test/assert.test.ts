@@ -554,9 +554,9 @@ describe("file_exists / user_visible_artifact pass on truncated cassette entries
   const smallSha = createHash("sha256").update(smallContent).digest("hex");
 
   const entries = [
-    { path: "outputs/big.html", bytes: bigContent.length, sha256: bigSha, truncated: true as const },
+    { path: "outputs/big.html", bytes: bigContent.length, sha256: bigSha, truncated: true as const, truncationReason: "size" as const },
     { path: "outputs/small.json", bytes: smallContent.length, sha256: smallSha, body: smallContent.toString("utf8") },
-    { path: "outputs/non-visible/internal.log", bytes: 1, sha256: bigSha, truncated: true as const },
+    { path: "outputs/non-visible/internal.log", bytes: 1, sha256: bigSha, truncated: true as const, truncationReason: "size" as const },
   ];
   const { workRoot, truncatedPaths } = materializeManifest(entries);
   const base = ctx({ workRoot, truncatedPaths });

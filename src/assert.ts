@@ -209,16 +209,17 @@ export interface AssertContext {
    *  gateDeliveries; absent ≠ zero gates. Undefined/false on live/replay, where gateDeliveries is always
    *  populated (empty = genuine zero gates fired). */
   gateDeliveriesMissing?: boolean;
-  /** Relative paths of artifacts written as 0-byte placeholders in the cassette (truncated: true entries).
-   *  Set by replay lane from materializeManifest(); empty set on live and verify-run lanes. */
-  truncatedPaths?: Set<string>;
-  /** workRoot-relative mount prefixes of read-only (`mode:r`) connected folders — captured body-less
-   *  (see buildManifest's `bodyLessPrefixes`). On the LIVE/verify-run lanes the real file is on disk, so
-   *  content assertions would evaluate it and PASS, while replay (0-byte placeholder) cannot — a
-   *  green-record/red-replay asymmetry. Content keys (artifact_json) therefore treat a target under one
-   *  of these prefixes as evidence-unavailable on EVERY lane, matching what `truncatedPaths` forces on
-   *  replay. Existence keys (file_exists/user_visible_artifact) are unaffected (existence is provable
-   *  from the recorded hash). Undefined/empty when there is no read-only folder. */
+  /** Body-less artifact paths → WHY (from each entry's `truncationReason`). Set by the REPLAY lane from
+   *  materializeManifest(); empty on live/verify-run. `.has(rel)` = "is body-less"; `.get(rel)` gives the
+   *  reason ("readonly"/"size"/"unreadable", or undefined on a pre-v8 entry) so artifact_json's remedy is
+   *  precise. */
+  truncatedPaths?: Map<string, "size" | "readonly" | "unreadable" | undefined>;
+  /** workRoot-relative mount prefixes of read-only (`mode:r`) connected folders. Used ONLY by the
+   *  LIVE/verify-run lanes (which have no cassette manifest at eval time) to know a target will be
+   *  captured body-less, so artifact_json is evidence-unavailable there too (symmetry with replay, which
+   *  instead reads `truncatedPaths.get(rel) === "readonly"`). Comes from `RunResult.readonlyFolderRoots`
+   *  (NOT a cassette field — the cassette-level list was removed in v8 in favor of per-entry
+   *  `truncationReason`). Empty on replay and when there is no read-only folder. */
   readonlyFolderRoots?: string[];
   /** Skill/plugin ids invoked via the Skill tool_use event, in call order (duplicates kept). */
   skillsInvoked: string[];
@@ -275,7 +276,7 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
   const results: KeyResult[] = [];
   const ok = (): KeyResult => ({ pass: true });
   const fail = (message: string): KeyResult => ({ pass: false, message });
-  const truncated = ctx.truncatedPaths ?? new Set<string>();
+  const truncated = ctx.truncatedPaths ?? new Map<string, "size" | "readonly" | "unreadable" | undefined>();
 
   if (a.transcript_contains !== undefined)
     results.push(
@@ -682,23 +683,31 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
       // where the real file is still on disk. (Existence keys stay green — existence is provable from
       // the recorded hash — but content is genuinely absent, so this fails loud, never vacuous.)
       const rel = relative(resolve(ctx.workRoot), file);
-      const isReadonlyInput = (ctx.readonlyFolderRoots ?? []).some((pre) => rel === pre || rel.startsWith(pre + "/"));
-      const bodyLess = truncated.has(rel) || isReadonlyInput;
+      // Reason sources by lane: LIVE/verify-run derive read-only from the plan's `readonlyFolderRoots`
+      // (no manifest exists at eval time); REPLAY reads the per-entry `truncationReason` off the
+      // materialized manifest (`truncated.get(rel)`). Keeping both is complementary, not redundant.
+      const liveReadonly = (ctx.readonlyFolderRoots ?? []).some((pre) => rel === pre || rel.startsWith(pre + "/"));
+      const replayReason = truncated.get(rel); // undefined if not body-less on replay, or a pre-v8 entry with no reason
+      const isReadonlyInput = liveReadonly || replayReason === "readonly";
+      const isOverCap = replayReason === "size";
+      const bodyLess = truncated.has(rel) || liveReadonly;
       if (!realFile) {
         results.push(fail(`unsafe artifact_json path "${aj.artifact}" — symlink target escapes the work root`));
       } else if (!existsSync(realFile)) {
         results.push(fail(`artifact_json: file not found: ${aj.artifact} (under ${ctx.workRoot})`));
       } else if (bodyLess) {
-        // Every lane knows WHY the entry is body-less, so the remedy is always precise: live/verify-run
-        // derive `readonlyFolderRoots` from the plan; replay reads the set persisted on the cassette
-        // (v7). A read-only input can't be captured (assert on a deliverable); an over-cap artifact can
-        // (raise the cap). `isReadonlyInput` distinguishes them on all three lanes.
+        // Precise remedy when the cause is known (read-only ⇒ assert on a deliverable; over-cap ⇒ raise
+        // the cap). A pre-v8 entry carries no reason ⇒ name both causes (we can't tell). "unreadable"
+        // also falls here — it's a record-time read failure, so the both-causes text is the safe hint.
+        const cause = isReadonlyInput
+          ? `(read-only connected-folder input — its content is never captured; assert artifact_json on a deliverable instead)`
+          : isOverCap
+            ? `(larger than the artifact-body cap — raise --max-artifact-bytes to capture it)`
+            : `(a read-only connected-folder input, or an artifact larger than the body cap — if an input, assert on a deliverable; if a large deliverable, raise --max-artifact-bytes)`;
         results.push(
           fail(
             `evidence unavailable: artifact_json target "${aj.artifact}" was captured body-less ` +
-              (isReadonlyInput
-                ? `(read-only connected-folder input — its content is never captured; assert artifact_json on a deliverable instead)`
-                : `(larger than the artifact-body cap — raise --max-artifact-bytes to capture it)`) +
+              cause +
               ` — content is not in the cassette, so it cannot be evaluated on replay`,
           ),
         );
