@@ -73,10 +73,12 @@ describe("assembleRunResult", () => {
 });
 
 // (CompleteRunResult is already imported at the top of this file for the Step 1 fixture.)
-// Type-level proof that omitting a field is a compile error, not a silent gap. If this stops being a
-// type error (e.g. someone changes assembleRunResult's parameter back to a plain `RunResult`, or an
-// all-optional type), the `@ts-expect-error` directive itself becomes an error ("Unused
-// '@ts-expect-error' directive"), which fails `npm run typecheck` and CI — the regression can't hide.
+// Type-level proof that the `CompleteRunResult` alias itself rejects an incomplete literal — i.e. the
+// mapped type in isolation, independent of anything `assembleRunResult` does with it. This catches a
+// regression to the alias definition (e.g. someone widens `CompleteRunResult` back to an all-optional
+// shape). It does NOT catch a regression to `assembleRunResult`'s parameter type — a variable annotated
+// `: CompleteRunResult` compiles or fails based only on the alias, never on the function's signature.
+// See `assemblerSignaturePinsExhaustiveness` below for the proof that covers the function itself.
 //
 // NOTE: a `delete`-based proof does NOT work here and was removed. `delete x.field` only errors when
 // the property is non-optional AND its type excludes `undefined` (TS2790). CompleteRunResult keeps
@@ -89,3 +91,24 @@ function typeLevelExhaustivenessProof() {
   void _shouldNotCompile;
 }
 void typeLevelExhaustivenessProof; // referenced so it's not flagged as an unused function
+
+// Distinct from the proof above: this one calls `assembleRunResult` itself, so it also guards the
+// function's PARAMETER TYPE, not just the `CompleteRunResult` alias in isolation. If a future edit ever
+// loosens `assembleRunResult`'s signature to accept plain `RunResult` (re-opening the silent-field-
+// omission hole this function exists to close), this literal — which has every REQUIRED field but omits
+// every OPTIONAL one — would silently compile, flipping this `@ts-expect-error` to "unused" and failing
+// `npm run typecheck`/CI. That's the regression this test exists to catch.
+function assemblerSignaturePinsExhaustiveness() {
+  // @ts-expect-error — compiles only if assembleRunResult's parameter is CompleteRunResult, not RunResult.
+  assembleRunResult({
+    scenario: "x",
+    fidelity: "container",
+    baseline: "b",
+    result: "success",
+    decisions: [],
+    egress: [],
+    assertions: [],
+    outDir: "/tmp",
+  });
+}
+void assemblerSignaturePinsExhaustiveness; // referenced so it's not flagged as an unused function
