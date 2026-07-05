@@ -460,7 +460,9 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
   if (a.subagent_output_contains !== undefined) {
     const { match, contains } = a.subagent_output_contains;
     if (ctx.subagentsMissing) {
-      results.push(fail(`evidence unavailable: sub-agent dispatch tree absent from result.json — cannot evaluate subagent_output_contains`));
+      results.push(
+        fail(`evidence unavailable: sub-agent dispatch tree absent from result.json — cannot evaluate subagent_output_contains`),
+      );
     } else if (match !== undefined) {
       const c = compileUserRegex(match);
       if ("error" in c) results.push(fail(`subagent_output_contains: bad regex "${match}": ${c.error}`));
@@ -477,9 +479,7 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
         );
       }
     } else {
-      results.push(
-        ctx.subagents.some((s) => s.output?.includes(contains)) ? ok() : fail(`no sub-agent's output contained "${contains}"`),
-      );
+      results.push(ctx.subagents.some((s) => s.output?.includes(contains)) ? ok() : fail(`no sub-agent's output contained "${contains}"`));
     }
   }
   if (a.subagent_declared_but_unused !== undefined) {

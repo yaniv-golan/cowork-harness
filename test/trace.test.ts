@@ -342,7 +342,16 @@ describe("trace --dispatches (dispatch tree + total)", () => {
 
   it("formatDispatchTree prints the prompt and output first-line per node", () => {
     const out = formatDispatchTree({
-      nodes: [{ toolUseId: "d1", agentType: "general-purpose", declaredTools: [], depth: 0, prompt: "go explore\nmore detail", output: "found 3 files\nmore output" }],
+      nodes: [
+        {
+          toolUseId: "d1",
+          agentType: "general-purpose",
+          declaredTools: [],
+          depth: 0,
+          prompt: "go explore\nmore detail",
+          output: "found 3 files\nmore output",
+        },
+      ],
       total: 1,
     });
     expect(out).toContain("go explore");
