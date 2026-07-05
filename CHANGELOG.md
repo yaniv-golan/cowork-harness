@@ -6,6 +6,46 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.26.0] — 2026-07-05
+
+Cassette/run-result **format-freeze** pass before 1.0 — fixes the parts of these schemas that become
+irreversible once 1.0's semver contract freezes them.
+
+> **Upgrade notes.**
+> - **Staleness-hash framing changed → `cassetteVersion` 8.** A pre-v8 cassette's staleness fingerprint
+>   is non-comparable with v8, so `verify-cassettes`/`rehash` route a pre-v8 cassette to **re-record**
+>   with an honest "algorithm changed" message (not a misleading "content changed"). Re-record your
+>   committed cassettes. (Cassettes without a `skillHash` are unaffected and keep replaying.)
+> - **`RunResult.unanswered` renamed to `nonReproducibleAnswers`.** Consumers reading
+>   `result.unanswered` must switch to `result.nonReproducibleAnswers` (the field never held literally
+>   unanswered gates — it holds gates answered by a non-reproducible source).
+> - **Cassette-level `readonlyFolderRoots` removed** in favor of per-entry
+>   `ManifestEntry.truncationReason`. No consumer action unless you parsed the cassette directly.
+
+### Fixed
+
+- **Two staleness-hash framing collisions (a false-negative — the risk the gate exists to prevent).**
+  `skillHash` folded raw file content after a `F:<path>\0` marker, so a file whose content embedded that
+  marker could hash identically to a two-file tree; it now folds the fixed-length content SHA
+  (self-delimiting, charset disjoint from the `F:`/`L:` prefixes). `contentSig` lacked a type marker and
+  used `:` between path and sha, so a file named `a:lnk` could collide with a symlink `a`; entries are now
+  type-prefixed (`F:`/`L:`) and NUL-framed, and the `L:` link line NUL-separates path from target. Only
+  fixable before the hash algorithm freezes at 1.0.
+
+### Changed
+
+- **Cassette format v7 → v8** (`CONTENTSIG_ALGO` 3 → 4). See the framing fix above and the upgrade note.
+- **`RunResult.unanswered` → `nonReproducibleAnswers`** — a self-admitted misnomer in the frozen
+  run-result envelope, renamed before the 1.0 freeze.
+- **Body-less manifest entries now carry `ManifestEntry.truncationReason`** (`size` | `readonly` |
+  `unreadable`) instead of a cassette-level `readonlyFolderRoots` list — self-describing and
+  redaction-immune. Replay reads the reason to give `artifact_json` the precise remedy on every lane
+  (assert on a deliverable vs. raise `--max-artifact-bytes`).
+- **`schema/run-result.json` completed** (added `fingerprint`, `userVisibleRoots`, `readonlyFolderRoots`,
+  `preRunPaths`, `toolResults`) and now strict-validated by a test, and the `cassette.v8.json`
+  `ManifestEntry` shape is fully described — so the schemas frozen at 1.0 match what ships. Corrected the
+  git-mode-default documentation (git is the default unless `COWORK_HARNESS_GITSET=0`).
+
 ## [0.25.0] — 2026-07-05
 
 > **Upgrade notes.**
