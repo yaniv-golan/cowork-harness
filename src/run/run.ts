@@ -146,6 +146,14 @@ export class Run {
   private rec: RunRecord;
   private toolLog: { name: string; input: unknown; synthetic?: boolean; parentToolUseId?: string }[] = [];
   private toolNameByUseId = new Map<string, string>();
+  // toolUseIds whose children are the MAIN AGENT's own work, not an isolated sub-agent's: a top-level
+  // (or fork-nested) Skill call, or an explicit Agent(subagent_type:"fork") dispatch — both inherit the
+  // main agent's context rather than starting isolated. Seeded as each qualifying tool_use/dispatch is
+  // processed, and since a parent always streams before its children, it's complete by the time any
+  // child needs to check membership. A POSITIVE set: a parented tool only counts as main-agent flow when
+  // its parent is positively confirmed here, so an unrecognized parent stays dropped/sub-agent-attributed
+  // exactly as before — fail-safe toward undercount, never toward overcount.
+  private forkScopedIds = new Set<string>();
   // TaskCreate's tool_use carries no id (only subject/description) — the real id only appears in the
   // paired tool_result text ("Task #<N> created successfully: <subject>"). Keyed by toolUseId so the
   // eventual tool_result can look up which pending create it resolves, mirroring toolNameByUseId's pattern.
@@ -215,18 +223,20 @@ export class Run {
    *  toolLog), not per-event. `argHash` is a truncated sha256 of the canonicalized input, so the
    *  rollup never carries raw args (redaction-safe by construction — see RunResult.redundantToolCalls).
    *
-   *  Scoped to top-level, non-synthetic entries only — matching toolErrors/toolCounts's existing scope
-   *  (see the `else if (!ev.synthetic)` branch in the tool_use case above). toolLog itself stays
+   *  Scoped to main-agent entries only (top-level, plus fork-inner via `forkScopedIds`), non-synthetic —
+   *  matching toolErrors/toolCounts's existing scope (see the tool_use case above). toolLog itself stays
    *  unconditional (the stall detector below relies on that), so the filter lives here instead: a
    *  synthetic MCP echo carries a DIFFERENT input shape than the real call (raw JSON-RPC params vs. flat
    *  tool args), so it never collides with the real entry's group — but N real MCP calls would otherwise
    *  ALSO produce N synthetic echoes, i.e. a second `count:N` group, doubling `redundantCallsTotal` to
-   *  2·(N-1) instead of the true N-1. Subagent-parented entries are excluded for the same reason
-   *  toolCounts excludes them: a subagent's internal repeats aren't a top-level redundancy. */
+   *  2·(N-1) instead of the true N-1. Isolated sub-agent-scoped entries are excluded for the same reason
+   *  toolCounts excludes them: a sub-agent's internal repeats aren't a main-agent redundancy.
+   *  `forkScopedIds` is fully populated by the time this runs (drive-completion, after every tool_use has
+   *  been processed), so a fork-inner repeat lands in the same group as a top-level one would. */
   private foldRedundantToolCalls(): void {
     const groups = new Map<string, number>();
     for (const { name, input, synthetic, parentToolUseId } of this.toolLog) {
-      if (synthetic || parentToolUseId) continue;
+      if (synthetic || (parentToolUseId && !this.forkScopedIds.has(parentToolUseId))) continue;
       const key = `${name}:${canon(input)}`;
       groups.set(key, (groups.get(key) ?? 0) + 1);
     }
@@ -291,27 +301,23 @@ export class Run {
             break;
           case "tool_use": {
             this.noteModel(ev.model);
-            if (ev.parentToolUseId) {
-              // only count this as a sub-agent tool when its parent is a RECOGNIZED dispatch
-              // (Agent/Task/subagent_type). Any parented tool_use carries a parentToolUseId, but
-              // adding all of them to subagentTools over-counts and produces false positives/negatives
-              // on subagent_tool_used / subagent_tool_absent. Scope to the same dispatch the per-subagent
-              // toolsUsed push already uses.
-              const sa = this.rec.subagents.find((s) => s.toolUseId === ev.parentToolUseId);
-              if (sa) {
-                this.rec.subagentTools.add(ev.name);
-                const entry = sa.toolsUsed.find((d) => d.name === ev.name);
-                if (entry) entry.count++;
-                else sa.toolsUsed.push({ name: ev.name, count: 1 });
-              }
-            } else if (!ev.synthetic) {
+            // A parented tool_use is MAIN AGENT flow — and counts exactly like a top-level call — when its
+            // parent is a confirmed fork parent (forkScopedIds): a Skill call, or an Agent(fork) dispatch,
+            // both of which inherit the main agent's context rather than starting isolated. Anything else
+            // parented falls to the sub-agent branch below (attributed if the parent is a recognized
+            // dispatch, dropped otherwise — unchanged from before).
+            const isMainAgentFlow = !ev.parentToolUseId || this.forkScopedIds.has(ev.parentToolUseId);
+            if (isMainAgentFlow && !ev.synthetic) {
               // synthetic = the MCP round-trip echo; the real call already arrived as an assistant tool_use
               // block (live-verified), so counting the synthetic too would double-list it / add a bogus name.
               this.rec.toolsCalled.add(ev.name);
-              this.rec.toolCounts[ev.name] = (this.rec.toolCounts[ev.name] ?? 0) + 1; // count top-level calls (subagent tools excluded, matching toolsCalled)
-              // a top-level Skill invocation — duplicates kept (re-triggering is signal).
+              this.rec.toolCounts[ev.name] = (this.rec.toolCounts[ev.name] ?? 0) + 1; // count main-agent calls (isolated sub-agent tools excluded, matching toolsCalled)
+              // a top-level (or fork-nested) Skill invocation — duplicates kept (re-triggering is signal).
               if (ev.name === "Skill") this.rec.skillsInvoked.push(String((ev.input as Record<string, unknown> | undefined)?.skill ?? ""));
               if (ev.toolUseId) this.toolNameByUseId.set(ev.toolUseId, ev.name);
+              // A Skill call inherits the main agent's context when it runs (fork context) — seed its id so
+              // any children it dispatches are recognized as main-agent flow too, transitively.
+              if (ev.name === "Skill" && ev.toolUseId) this.forkScopedIds.add(ev.toolUseId);
               // Progress panel: TaskCreate's input has no id — stash it, resolved by the
               // paired tool_result below. TaskUpdate's input carries taskId directly, so it applies here.
               if (ev.name === "TaskCreate" && ev.toolUseId) {
@@ -328,6 +334,20 @@ export class Run {
                 const status = inp.status != null ? String(inp.status) : undefined;
                 const existing = taskId ? this.rec.tasks.get(taskId) : undefined;
                 if (existing && status) existing.status = status;
+              }
+            } else if (ev.parentToolUseId) {
+              // isolated sub-agent work — only count this as a sub-agent tool when its parent is a
+              // RECOGNIZED dispatch (Agent/Task/subagent_type). Any parented tool_use carries a
+              // parentToolUseId, but adding all of them to subagentTools over-counts and produces false
+              // positives/negatives on subagent_tool_used / subagent_tool_absent. Scope to the same
+              // dispatch the per-subagent toolsUsed push already uses. (Deep-nesting/unknown parents fall
+              // through here too and are dropped, exactly as before.)
+              const sa = this.rec.subagents.find((s) => s.toolUseId === ev.parentToolUseId);
+              if (sa) {
+                this.rec.subagentTools.add(ev.name);
+                const entry = sa.toolsUsed.find((d) => d.name === ev.name);
+                if (entry) entry.count++;
+                else sa.toolsUsed.push({ name: ev.name, count: 1 });
               }
             }
             this.toolLog.push({ name: ev.name, input: ev.input, synthetic: ev.synthetic, parentToolUseId: ev.parentToolUseId }); // still logged for provenance/trace
@@ -379,6 +399,10 @@ export class Run {
               prompt: ev.prompt,
               model: ev.model,
             });
+            // An explicit Agent(subagent_type:"fork") inherits the main agent's context (unlike every
+            // other dispatch type, which starts isolated) — so its children are main-agent flow. Still
+            // push to rec.subagents unconditionally above, so dispatch_count_max stays unaffected.
+            if (ev.agentType === "fork" && ev.toolUseId) this.forkScopedIds.add(ev.toolUseId);
             break;
           case "metrics":
             // merge, don't overwrite — a "result" event may have already set/will later set `usd`
