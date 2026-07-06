@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { readAvailableSkills } from "../src/run/skill-metadata.js";
 
 function stageSkill(root: string, name: string, frontmatter: string): void {
-  const dir = join(root, ".claude", "skills", name);
+  const dir = join(root, "skills", name);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "SKILL.md"), frontmatter);
 }
@@ -39,14 +39,14 @@ describe("readAvailableSkills", () => {
     expect(skills).toEqual([{ id: "my-skill", whenToUse: undefined }]);
   });
 
-  it("returns [] when no .claude/skills directory exists at all", () => {
+  it("returns [] when no skills directory exists at all", () => {
     const root = mkdtempSync(join(tmpdir(), "cwh-skillmeta-"));
     expect(readAvailableSkills(root)).toEqual([]);
   });
 
   it("skips a skill directory with no SKILL.md, or one with malformed/no frontmatter, rather than throwing", () => {
     const root = mkdtempSync(join(tmpdir(), "cwh-skillmeta-"));
-    mkdirSync(join(root, ".claude", "skills", "no-manifest"), { recursive: true });
+    mkdirSync(join(root, "skills", "no-manifest"), { recursive: true });
     stageSkill(root, "malformed", "not frontmatter at all, just prose\n");
     stageSkill(root, "good", "---\nname: good\ndescription: fine\n---\n");
     const skills = readAvailableSkills(root);

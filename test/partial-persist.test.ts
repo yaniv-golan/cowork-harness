@@ -36,17 +36,18 @@ function partialRecord(over: Partial<RunRecord> = {}): RunRecord {
 }
 
 /** A run dir whose work tree already holds one artifact the agent wrote before the gate whiffed. */
-function runDirWithArtifact(): { outDir: string; workRoot: string } {
+function runDirWithArtifact(): { outDir: string; workRoot: string; configDir: string } {
   const outDir = mkdtempSync(join(tmpdir(), "cwh-partial-"));
   const workRoot = join(outDir, "work", "session", "mnt");
+  const configDir = join(outDir, "claude-config");
   mkdirSync(join(workRoot, "outputs"), { recursive: true });
   writeFileSync(join(workRoot, "outputs", "actions.md"), "# pre-failure deliverable\n");
-  return { outDir, workRoot };
+  return { outDir, workRoot, configDir };
 }
 
 describe("buildPartialResult — salvage a whiffed run", () => {
   it("marks the run partial, records the unanswered gate, and keeps the pre-failure artifacts", () => {
-    const { outDir, workRoot } = runDirWithArtifact();
+    const { outDir, workRoot, configDir } = runDirWithArtifact();
     const result = buildPartialResult({
       scenarioName: "cap-table",
       prompt: "extract the cap table",
@@ -55,6 +56,7 @@ describe("buildPartialResult — salvage a whiffed run", () => {
       record: partialRecord(),
       outDir,
       workRoot,
+      configDir,
       userVisibleRoots: ["outputs"],
       readonlyFolderRoots: [],
       effectiveFidelity: "container",
@@ -78,7 +80,7 @@ describe("buildPartialResult — salvage a whiffed run", () => {
   });
 
   it("omits the hint key when the gate carried none", () => {
-    const { outDir, workRoot } = runDirWithArtifact();
+    const { outDir, workRoot, configDir } = runDirWithArtifact();
     const result = buildPartialResult({
       scenarioName: "s",
       prompt: "p",
@@ -87,6 +89,7 @@ describe("buildPartialResult — salvage a whiffed run", () => {
       record: partialRecord(),
       outDir,
       workRoot,
+      configDir,
       userVisibleRoots: ["outputs"],
       readonlyFolderRoots: [],
       effectiveFidelity: "container",
@@ -101,7 +104,7 @@ describe("buildPartialResult — salvage a whiffed run", () => {
   // excludes it (so `scaffold` doesn't emit `file_exists` for it) while `userVisibleRoots` still lists
   // the folder (so `no_unexpected_files` / `computer_links_resolve` keep enumerating it).
   it("excludes a readonlyFolderRoots entry from `artifacts` while keeping it in `userVisibleRoots`", () => {
-    const { outDir, workRoot } = runDirWithArtifact();
+    const { outDir, workRoot, configDir } = runDirWithArtifact();
     mkdirSync(join(workRoot, "carta-folder"), { recursive: true });
     writeFileSync(join(workRoot, "carta-folder", "synthetic_carta.xlsx"), "input content, not a deliverable");
     const result = buildPartialResult({
@@ -112,6 +115,7 @@ describe("buildPartialResult — salvage a whiffed run", () => {
       record: partialRecord(),
       outDir,
       workRoot,
+      configDir,
       userVisibleRoots: ["outputs", "carta-folder"],
       readonlyFolderRoots: ["carta-folder"],
       effectiveFidelity: "container",

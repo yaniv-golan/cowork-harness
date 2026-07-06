@@ -705,6 +705,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       record,
       outDir,
       workRoot,
+      configDir: plan.configDir,
       userVisibleRoots,
       readonlyFolderRoots,
       effectiveFidelity,
@@ -879,7 +880,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
 
   // Context/Connectors panel (§6.2, M6): the staged skill set, read straight off disk — the child
   // process has already run to completion by this point, so every skill is fully staged.
-  record.context = { ...record.context, availableSkills: readAvailableSkills(workRoot) };
+  record.context = { ...record.context, availableSkills: readAvailableSkills(plan.configDir) };
 
   const result: RunResult = assembleRunResult({
     $schema: RUN_RESULT_SCHEMA_URL,
@@ -1085,6 +1086,7 @@ export function buildPartialResult(args: {
   record: RunRecord;
   outDir: string;
   workRoot: string;
+  configDir: string;
   userVisibleRoots: string[];
   readonlyFolderRoots: string[];
   effectiveFidelity: string;
@@ -1098,8 +1100,8 @@ export function buildPartialResult(args: {
   const timelineData = readTimeline(args.outDir);
   // Context/Connectors panel (§6.2, M6): the staged skill set, read straight off disk — by the time a
   // partial result is built the child process has already exited (on the unanswered gate), so skills
-  // are fully staged. Own wiring, independent of executeScenario's (this function's own args.workRoot).
-  args.record.context = { ...args.record.context, availableSkills: readAvailableSkills(args.workRoot) };
+  // are fully staged. Own wiring, independent of executeScenario's (this function's own args.configDir).
+  args.record.context = { ...args.record.context, availableSkills: readAvailableSkills(args.configDir) };
   return assembleRunResult({
     $schema: RUN_RESULT_SCHEMA_URL,
     generator: "cowork-harness",
