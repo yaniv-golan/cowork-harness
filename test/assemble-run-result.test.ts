@@ -18,6 +18,8 @@ function fullyExplicitFixture(): CompleteRunResult {
     baseline: "latest",
     result: "success",
     resultErrorKind: undefined,
+    errorSource: undefined,
+    stderrLogPath: undefined,
     stalledOnQuestion: undefined,
     capabilityProbe: undefined,
     requiresCapabilityUnmet: undefined,
@@ -80,6 +82,12 @@ describe("assembleRunResult", () => {
     const fields = fullyExplicitFixture();
     const result = assembleRunResult(fields);
     expect(JSON.stringify(result)).toBe(JSON.stringify(fields));
+  });
+
+  it("passes stderrLogPath and errorSource through unchanged", () => {
+    const out = assembleRunResult({ ...fullyExplicitFixture(), stderrLogPath: "/x/agent.stderr.log", errorSource: "exit" });
+    expect(out.stderrLogPath).toBe("/x/agent.stderr.log");
+    expect(out.errorSource).toBe("exit");
   });
 });
 

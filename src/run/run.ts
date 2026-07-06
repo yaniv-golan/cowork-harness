@@ -61,6 +61,9 @@ export interface RunRecord {
   // when result === "error", whether the error looks like a transport drop (connection closed after a
   // clean result) vs a genuine agent/skill failure. Undefined on success or unclassified errors.
   resultErrorKind?: "transport" | "agent";
+  // finer error source than resultErrorKind's binary — the raw `error`-event source, or "result" for
+  // the SDK-wrapped is_error result path. Undefined on success. Optional ⇒ no literal-site churn.
+  errorSource?: "spawn" | "protocol" | "exit" | "agent" | "result";
   // set true when the run ended on an unanswered plain-text question (see the post-loop detector in
   // drive()). Mapped into RunResult by execute.ts (live) and cassette.ts (replay re-drive).
   stalledOnQuestion?: boolean;
@@ -384,6 +387,7 @@ export class Run {
               // path (a): the SDK wrapped a transport failure into an is_error result — the result IS the
               // signal (no prior-result gate). Classify off the SDK result payload + subtype.
               this.rec.resultErrorKind = classifyResultError("result", `${ev.subtype ?? ""} ${ev.resultText ?? ""}`, sawSuccessResult);
+              this.rec.errorSource = "result";
             } else {
               this.rec.result = "success";
               sawSuccessResult = true;
@@ -424,10 +428,12 @@ export class Run {
               // "tail-end drop after artifacts written" case → transport. spawn/protocol (and an exit with no
               // prior success / a non-transport crash tail) stay "agent" — a genuine fault.
               this.rec.resultErrorKind = classifyResultError(ev.source, ev.message, sawSuccessResult);
+              this.rec.errorSource = ev.source;
               this.rec.decisions.push({ kind: "tool", name: ev.source, decision: "error", by: "agent", detail: ev.message });
               this.session.close();
               break outerLoop;
             }
+            this.rec.errorSource ??= ev.source; // keep the first observed source; a later recovering result won't clear it
             this.rec.decisions.push({ kind: "tool", name: ev.source, decision: "error", by: "agent", detail: ev.message });
             break;
         }

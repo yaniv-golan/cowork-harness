@@ -85,4 +85,14 @@ describe("Run.drive sets rec.resultErrorKind end-to-end", () => {
     expect(rec.result).toBe("error");
     expect(rec.resultErrorKind).toBe("agent");
   });
+
+  it("captures errorSource from a fatal spawn error", async () => {
+    const rec = await drive([{ type: "error", source: "spawn", message: "spawn failed" }]);
+    expect(rec.errorSource).toBe("spawn");
+  });
+
+  it("captures errorSource from an is_error result (SDK-wrapped transport)", async () => {
+    const rec = await drive([{ type: "result", isError: true, subtype: "error_during_execution", resultText: "connection closed" }]);
+    expect(rec.errorSource).toBe("result");
+  });
 });

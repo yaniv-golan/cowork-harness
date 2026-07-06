@@ -2163,6 +2163,8 @@ function replayErrorResult(file: string): RunResult {
     generator: undefined,
     prompt: undefined,
     resultErrorKind: undefined,
+    errorSource: undefined, // no rec to read from on this early-bail lane
+    stderrLogPath: undefined, // live path only — no live process on replay
     stalledOnQuestion: undefined,
     capabilityProbe: undefined,
     requiresCapabilityUnmet: undefined,
@@ -3273,6 +3275,8 @@ export async function replayCassette(
       baseline: cassette.scenario.baseline,
       result: rec.result,
       resultErrorKind: rec.resultErrorKind, // re-derived by run.ts during the replay re-drive (same classifier)
+      errorSource: rec.errorSource, // re-derived by run.ts during the replay re-drive, same as resultErrorKind
+      stderrLogPath: undefined, // live path only — no live process on replay
       stalledOnQuestion: rec.stalledOnQuestion, // re-derived by run.ts's detector during the replay re-drive — so a recorded stall fails replay too
       decisions: rec.decisions.map((d) => ({ kind: d.kind, name: d.name, decision: d.decision, by: d.by })),
       toolCounts: rec.toolCounts,

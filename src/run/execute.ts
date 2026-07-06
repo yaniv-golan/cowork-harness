@@ -923,6 +923,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     baseline: baseline.appVersion,
     result: record.result,
     resultErrorKind: record.resultErrorKind, // transport vs agent classification of a result:"error"
+    errorSource: record.errorSource, // finer error-event source, alongside the coarse resultErrorKind
+    stderrLogPath: join(outDir, "agent.stderr.log"), // always written by the live agent process
     stalledOnQuestion: record.stalledOnQuestion, // run ended on an unanswered plain-text question
     decisions: record.decisions.map((d) => ({
       kind: d.kind,
@@ -1203,6 +1205,8 @@ export function buildPartialResult(args: {
     effectiveFidelity: args.effectiveFidelity,
     gateProvenance: gp.total ? gp : undefined,
     fingerprint: args.fingerprint,
+    errorSource: record.errorSource, // finer error-event source, alongside the coarse resultErrorKind
+    stderrLogPath: join(args.outDir, "agent.stderr.log"), // always written by the live agent process
     // Fields this lane deliberately never sets (per this function's own doc comment: "no capability/
     // verdict fields") — now explicit instead of implicit:
     resultErrorKind: undefined,

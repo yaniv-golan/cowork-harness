@@ -607,6 +607,13 @@ export interface RunResult {
   baseline: string;
   result: "success" | "error";
   resultErrorKind?: "transport" | "agent"; // when result==="error", classify a tail-end transport drop vs a genuine failure
+  /** The `error` event's finer source (`spawn`/`protocol`/`exit`/`agent`, or `result` for the
+   *  SDK-wrapped is_error-result path) — additive diagnostic detail alongside the coarse
+   *  verdict-relevant `resultErrorKind`. Absent on a clean run. */
+  errorSource?: "spawn" | "protocol" | "exit" | "agent" | "result";
+  /** Absolute path to the agent's full stderr log (`<outDir>/agent.stderr.log`), surfaced so an
+   *  OOM/crash debugger knows where to look. Live path only — absent on replay (no live process). */
+  stderrLogPath?: string;
   // the run ended on a question having done no productive tool work after its last gate (the agent
   // asked for input and stopped) while result==="success". A false-green: the SDK turn didn't error, but the
   // task did not complete. computeVerdict fails on this (a `stalled` signal) unless the scenario asserts
