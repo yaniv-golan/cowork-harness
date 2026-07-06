@@ -1,8 +1,15 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { it, expect, afterEach } from "vitest";
 import { mkdtempSync, rmSync, readFileSync, existsSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ResourceSampler, foldResources, resolveIntervalMs } from "../src/runtime/resource-sampler.js";
+import {
+  ResourceSampler,
+  foldResources,
+  resolveIntervalMs,
+  parseDockerStats,
+  parsePsLine,
+  parseProcMeminfoStat,
+} from "../src/runtime/resource-sampler.js";
 
 type ResourceSampleT = { ts: number; rssBytes?: number; cpuPct?: number };
 
@@ -56,4 +63,29 @@ it("resolveIntervalMs honors the env override, rejects non-positive", () => {
   expect(resolveIntervalMs()).toBe(250);
   process.env.COWORK_HARNESS_RESOURCE_INTERVAL_MS = "0";
   expect(resolveIntervalMs()).toBe(1000);
+});
+
+it("parseDockerStats reads MemUsage + CPUPerc", () => {
+  const s = parseDockerStats(JSON.stringify({ MemUsage: "123.4MiB / 2GiB", CPUPerc: "12.34%" }))!;
+  expect(s.rssBytes).toBeCloseTo(123.4 * 1024 * 1024, -3);
+  expect(s.cpuPct).toBeCloseTo(12.34, 5);
+});
+it("parseDockerStats returns undefined on garbage / empty object", () => {
+  expect(parseDockerStats("not json")).toBeUndefined();
+  expect(parseDockerStats(JSON.stringify({}))).toBeUndefined();
+});
+it("parsePsLine reads rss(KiB)->bytes and pcpu; undefined on empty", () => {
+  const s = parsePsLine("  20480  7.5")!;
+  expect(s.rssBytes).toBe(20480 * 1024);
+  expect(s.cpuPct).toBeCloseTo(7.5, 5);
+  expect(parsePsLine("")).toBeUndefined();
+});
+it("parseProcMeminfoStat computes RSS from Mem, CPU% from a delta across two ticks", () => {
+  const text = (total: number, avail: number, work: number, idle: number) =>
+    `MemTotal:       ${total} kB\nMemAvailable:   ${avail} kB\n---\ncpu  ${work} 0 0 ${idle} 0 0 0 0`;
+  const first = parseProcMeminfoStat(text(2_000_000, 1_500_000, 100, 900));
+  expect(first.sample!.rssBytes).toBe((2_000_000 - 1_500_000) * 1024);
+  expect(first.sample!.cpuPct).toBeUndefined(); // no prior tick
+  const second = parseProcMeminfoStat(text(2_000_000, 1_400_000, 200, 900), first.cpuState); // +100 work, +0 idle
+  expect(second.sample!.cpuPct).toBeCloseTo(100, 5); // all delta was busy
 });
