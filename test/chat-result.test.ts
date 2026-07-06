@@ -97,4 +97,37 @@ describe("buildChatResult", () => {
     });
     expect(r.thinkingElided).toBe(0);
   });
+
+  it("collapses webSearches to undefined when the run made zero WebSearch calls (matches models/thinking/tasks)", () => {
+    const r = buildChatResult(minimalChatRecord(), {
+      scenario: "(chat)",
+      prompt: "hi",
+      fidelity: "container",
+      baseline: "1.0",
+      outDir: "/tmp/nope",
+      workRoot: "/tmp/nope/work",
+      userVisibleRoots: ["outputs"],
+      readonlyFolderRoots: [],
+      egress: [],
+      durationMs: 5,
+    });
+    expect(r.webSearches).toBeUndefined();
+  });
+
+  it("passes webSearches through unchanged when the run made at least one WebSearch call", () => {
+    const record = { ...minimalChatRecord(), webSearches: [{ toolUseId: "toolu_1", query: "market size", results: [{ title: "Report", url: "https://example.com" }] }] };
+    const r = buildChatResult(record, {
+      scenario: "(chat)",
+      prompt: "hi",
+      fidelity: "container",
+      baseline: "1.0",
+      outDir: "/tmp/nope",
+      workRoot: "/tmp/nope/work",
+      userVisibleRoots: ["outputs"],
+      readonlyFolderRoots: [],
+      egress: [],
+      durationMs: 5,
+    });
+    expect(r.webSearches).toEqual([{ toolUseId: "toolu_1", query: "market size", results: [{ title: "Report", url: "https://example.com" }] }]);
+  });
 });

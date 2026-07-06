@@ -702,10 +702,11 @@ export interface RunResult {
   /** Structured WebSearch calls — query + per-result {title,url}, parsed from the paired tool_result's
    *  "Web search results for query: ...\n\nLinks: [...]" convention (an AGENT-BINARY convention,
    *  verified against a real captured hostloop-fidelity cassette — re-verify the format on agent-version
-   *  bumps). `[]` (not absent) when the run made zero WebSearch calls, or when every call's Links array
-   *  failed to parse (truncated past the assertText cap, or a future format change) — a parse failure
-   *  drops that ONE entry silently, it is never a partial/malformed entry in this array. `undefined`
-   *  only on lanes where no run/record ever existed (e.g. an unreadable-cassette replay bail). */
+   *  bumps). A parse failure (truncated past the assertText cap, or a future format change) drops that
+   *  ONE entry silently — it is never a partial/malformed entry in this array. Collapsed to `undefined`
+   *  (matching `models`/`thinking`/`tasks`) both when the run made zero WebSearch calls AND when every
+   *  call's Links array failed to parse — the two are indistinguishable here by design; cross-reference
+   *  `toolCounts.WebSearch` (the truthful call count) if that distinction ever matters to a consumer. */
   webSearches?: Array<{ toolUseId?: string; query: string; results: Array<{ title: string; url: string }> }>;
   // per-tool call-count/timing aggregate, folded from the timeline. Absent only when no
   // timeline data exists for this run (replayErrorResult — no run ever happened). Populated for

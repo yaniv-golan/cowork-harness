@@ -3425,7 +3425,7 @@ export async function replayCassette(
       stalledOnQuestion: rec.stalledOnQuestion, // re-derived by run.ts's detector during the replay re-drive — so a recorded stall fails replay too
       decisions: rec.decisions.map((d) => ({ kind: d.kind, name: d.name, decision: d.decision, by: d.by, model: d.model, detail: d.detail, rationale: d.rationale, questions: d.questions })),
       toolCounts: rec.toolCounts,
-      webSearches: rec.webSearches,
+      webSearches: rec.webSearches.length ? rec.webSearches : undefined,
       toolDurations: cassette.timeline ? foldToolDurations(cassette.timeline) : undefined,
       skillActivity: cassette.timeline ? foldSkillActivity(cassette.timeline) : undefined,
       models: rec.models.length ? rec.models : undefined,
