@@ -352,6 +352,10 @@ export interface AssertContext {
    *  hook's decision lives only there) — the evidence-unavailable signal for hook_blocked/
    *  no_hook_blocked; an empty `[]` is a valid "no hook fired" state and is NOT the same as undefined. */
   hookEvents?: RunResult["hookEvents"];
+  /** RunResult.resources — resource-usage telemetry sampled while the run executed. Undefined means the
+   *  tier never sampled (protocol/replay, a run shorter than one sample interval, or an unavailable probe
+   *  tool) — the evidence-unavailable signal for max_peak_rss_bytes; never a vacuous pass. */
+  resources?: RunResult["resources"];
 }
 
 export function evaluate(assertions: Assertion[], ctx: AssertContext): RunResult["assertions"] {

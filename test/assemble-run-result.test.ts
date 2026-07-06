@@ -71,6 +71,7 @@ function fullyExplicitFixture(): CompleteRunResult {
     skillToolAvailable: undefined,
     tasks: undefined,
     context: undefined,
+    resources: undefined,
   };
 }
 
@@ -91,6 +92,14 @@ describe("assembleRunResult", () => {
     const out = assembleRunResult({ ...fullyExplicitFixture(), stderrLogPath: "/x/agent.stderr.log", errorSource: "exit" });
     expect(out.stderrLogPath).toBe("/x/agent.stderr.log");
     expect(out.errorSource).toBe("exit");
+  });
+
+  it("passes resources through unchanged", () => {
+    const out = assembleRunResult({
+      ...fullyExplicitFixture(),
+      resources: { tier: "container", sampleCount: 3, intervalMs: 1000, peakRssBytes: 999 },
+    });
+    expect(out.resources).toMatchObject({ tier: "container", peakRssBytes: 999 });
   });
 });
 

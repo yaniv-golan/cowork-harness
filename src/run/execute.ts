@@ -40,6 +40,7 @@ import {
   CAPABILITY_FAMILIES,
 } from "../runtime/image-capabilities.js";
 import { instanceName } from "../runtime/lima.js";
+import { ResourceSampler, makeSampleOnce, foldResources, resolveIntervalMs } from "../runtime/resource-sampler.js";
 import { decideLoopFromBaseline, readGateFlag } from "../loop-decision.js";
 import type { WebFetchProvenance } from "../hostloop/workspace-handler.js";
 import { startEgressSidecar, registerCleanup, type EgressSidecar } from "../egress/sidecar.js";
@@ -426,6 +427,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   let egress: RunResult["egress"] = [];
   let sidecar: EgressSidecar | undefined;
   let hostProxy: ReturnType<typeof startEgressProxy> | undefined;
+  let resourceSampler: ResourceSampler | undefined;
   let microvmProxyPort: number | undefined;
   let record: RunRecord;
   let unansweredErr: UnansweredError | undefined; // set when a gate whiffs — drives the salvage branch below
@@ -583,6 +585,21 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         );
     }
 
+    if (effectiveFidelity === "container" || effectiveFidelity === "hostloop" || effectiveFidelity === "microvm") {
+      // Sample the agent sandbox on an interval. Async probes only (shares the agent's event loop).
+      // hostloop samples the native agent process (child.pid); container samples the container by name;
+      // microvm reads /proc via limactl. A missing id / unavailable tool yields no samples (resources → undefined).
+      const sampleOnce = makeSampleOnce({
+        tier: effectiveFidelity,
+        runner,
+        containerName: effectiveFidelity === "container" ? containerName : undefined,
+        pid: effectiveFidelity === "hostloop" ? (child as { pid?: number } | undefined)?.pid : undefined,
+        instance: effectiveFidelity === "microvm" ? instanceName(baseline) : undefined,
+      });
+      resourceSampler = new ResourceSampler(outDir, effectiveFidelity, sampleOnce, resolveIntervalMs());
+      resourceSampler.start();
+    }
+
     const sessionT = new LiveAgentSession(child as any, outDir);
     // Terminal decider: an explicit external channel, else the LLM decider when `agent` is selected.
     const llmTerminal =
@@ -624,6 +641,9 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       stopStatusTicker();
     }
   } finally {
+    // Stop sampling FIRST — before the container/process teardown below — so a final in-flight probe
+    // can't race (and fail against) a container that's already being removed.
+    resourceSampler?.stop();
     // Reap the agent container FIRST (before the sidecar networks), so a crashed/unanswered run can't
     // orphan a running container holding the network. On the success path the child has already
     // exited (--rm), so these are no-ops.
@@ -759,6 +779,10 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     availableSkills: resolveAvailableSkills(availableSkillIds, plan.configDir, pluginSkillRootsFromPlan(plan)),
   };
 
+  // Fold resources.jsonl ONCE — reused by both the evaluate() ctx below (max_peak_rss_bytes) and the
+  // assembleRunResult call further down. A second read could disagree if the sampler wrote between them.
+  const resources = foldResources(outDir, effectiveFidelity, resolveIntervalMs());
+
   const assertions = evaluate(scenario.assert, {
     transcript: record.transcript,
     toolsCalled: record.toolsCalled,
@@ -813,6 +837,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       ],
     },
     ...budgetFields(record),
+    resources,
   });
 
   if (scenario.fidelity === "protocol" && (record.toolsCalled.has("WebFetch") || record.toolsCalled.has("WebSearch"))) {
@@ -1002,6 +1027,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // detect a kept run that predates a skill change and refuse to vouch for answer-coverage. Same call the
     // record path uses for the cassette (cassette.ts) — `(inline)`/no-skill sessions yield a {baseline}-only fp.
     fingerprint: buildFingerprint(scenario.session, baseline.appVersion, undefined, scenario.skills),
+    resources, // same single fold as the evaluate() ctx above — not re-read
     // Fields this lane has NEVER set (were implicitly `undefined` before this refactor; now explicit
     // per assembleRunResult's contract — this line makes the omission a reviewable, greppable fact
     // instead of an invisible one):
@@ -1220,6 +1246,7 @@ export function buildPartialResult(args: {
     fingerprint: args.fingerprint,
     errorSource: record.errorSource, // finer error-event source, alongside the coarse resultErrorKind
     stderrLogPath: join(args.outDir, "agent.stderr.log"), // always written by the live agent process
+    resources: foldResources(args.outDir, args.effectiveFidelity, resolveIntervalMs()),
     // Fields this lane deliberately never sets (per this function's own doc comment: "no capability/
     // verdict fields") — now explicit instead of implicit:
     resultErrorKind: undefined,

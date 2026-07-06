@@ -860,4 +860,17 @@ export interface RunResult {
    *  `controlOut` (a custom hook's decision lives there, not in the stream) — else the hook assertions
    *  are excluded-loud, never vacuously passed. */
   hookEvents?: Array<{ callbackId: string; decision: "block" | "allow"; reason?: string; tool?: string }>;
+  /** Resource-usage telemetry sampled while the run executed (peak RSS, avg/peak CPU%). Live + tier-
+   *  dependent (container/hostloop/microvm); undefined on protocol/replay, on a run shorter than one
+   *  sample interval, and when the tier's probe tool was unavailable — the `max_peak_rss_bytes`
+   *  assertion then reads evidence-unavailable, never a vacuous pass. microvm RSS is whole-VM (coarser
+   *  than container/hostloop's per-container/per-process figure). */
+  resources?: {
+    tier: string;
+    sampleCount: number;
+    intervalMs: number;
+    peakRssBytes?: number;
+    avgCpuPct?: number;
+    peakCpuPct?: number;
+  };
 }

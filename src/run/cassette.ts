@@ -2215,6 +2215,7 @@ function replayErrorResult(file: string): RunResult {
     skillToolAvailable: undefined,
     tasks: undefined,
     context: undefined,
+    resources: undefined,
   });
 }
 
@@ -3395,6 +3396,7 @@ export async function replayCassette(
       fingerprint: undefined,
       toolResults: undefined,
       durationMs: undefined,
+      resources: undefined, // replay never spawns a sandbox to sample; no live resource telemetry
     });
   } finally {
     if (replayWorkRoot) rmSync(replayWorkRoot, { recursive: true, force: true });
