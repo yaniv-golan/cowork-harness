@@ -26,10 +26,13 @@ export interface ChatResultOpts {
 /**
  * Assemble the informational RunResult for an interactive chat session. A chat carries NO verdict:
  * `assertions` is empty, `mode` is "chat", and every verdict / capability / gate / staleness field is
- * `undefined`. The informational fields (tool counts, models, thinking, tasks, context, timeline folds,
- * workspace files, resources) are populated exactly as the run lane does, so `stats`/`trace`/`scaffold`
- * see a chat session. Routed through `assembleRunResult` so the CompleteRunResult contract forces every
- * future field to be considered here too — chat cannot silently drift.
+ * `undefined`. Most informational fields (tool counts, models, thinking, tasks, timeline folds,
+ * workspace files, resources) are populated the same way the run lane does, so `stats`/`trace`/`scaffold`
+ * see a chat session. `context` is the one exception: it carries the skill IDs the agent had available,
+ * but NOT the `whenToUse` enrichment the run lane adds by reading each skill's SKILL.md frontmatter
+ * (that enrichment needs `configDir`, which isn't plumbed in here) — acceptable for an exploratory chat,
+ * where `whenToUse` is unasserted. Routed through `assembleRunResult` so the CompleteRunResult contract
+ * forces every future field to be considered here too — chat cannot silently drift.
  */
 export function buildChatResult(record: RunRecord, opts: ChatResultOpts): RunResult {
   const timeline = readTimeline(opts.outDir);

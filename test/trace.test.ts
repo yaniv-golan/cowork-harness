@@ -556,6 +556,33 @@ describe("scaffold (SCAFFOLD-FROM-RUN)", () => {
     expect((parsed.assert ?? []).some((a: any) => a.file_exists)).toBe(false);
     expect((parsed.assert ?? []).some((a: any) => a.result)).toBe(false);
   });
+
+  it("scaffolds a scenario from a chat result.json (mode:chat, assertions:[] don't choke it)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "cwh-scaffold-chat-"));
+    const eventsFilePath = join(dir, "events.jsonl");
+    writeFileSync(eventsFilePath, ""); // buildGateTrace reads this with no ENOENT guard — an empty file is valid
+    writeFileSync(
+      join(dir, "result.json"),
+      JSON.stringify({
+        $schema: "x",
+        generator: "cowork-harness",
+        mode: "chat",
+        scenario: "(chat)",
+        prompt: "explore the CSV skill",
+        fidelity: "container",
+        baseline: "1.0",
+        result: "success",
+        assertions: [],
+        toolCounts: { Bash: 2 },
+        egress: [],
+        outDir: dir,
+      }),
+    );
+    const parsed = parseYaml(buildScaffold(eventsFilePath));
+    expect(parsed.prompt).toBe("explore the CSV skill");
+    expect(parsed.fidelity).toBe("container");
+    expect(parsed.assert.some((a: any) => a.result === "success")).toBe(true);
+  });
 });
 
 describe("buildGateTrace — provenance annotation", () => {
