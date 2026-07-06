@@ -3060,9 +3060,12 @@ export async function replayCassette(
       skillActivity: cassette.timeline ? foldSkillActivity(cassette.timeline) : undefined,
       tasks: rec.tasks.size ? Array.from(rec.tasks.values()) : undefined,
       // Context/Connectors panel (§6.2, M6) — backs skill_available/connector_available/tool_available.
-      // rec.context.tools/mcpServers replay from the frozen init event; availableSkills is a live-disk read
-      // (execute.ts) with no cassette-frozen equivalent, so it stays undefined on replay — evidence-unavailable,
-      // never a vacuous pass.
+      // All three replay from the frozen init event: the cassette re-drive runs run.ts's init handler, which
+      // seeds rec.context.{tools,mcpServers,availableSkills} from the recorded init line (availableSkills
+      // id-only — the whenToUse enrichment is a live-disk read in execute.ts with no cassette-frozen
+      // equivalent, but skill_available matches ids only, so id-only is sufficient and these keys are
+      // content-class on replay too). evidence-unavailable only when the re-drive yields no context at all
+      // (a pre-M6 cassette whose init line predates these fields) — never a vacuous pass.
       availableSkills: rec.context?.availableSkills,
       mcpServers: rec.context?.mcpServers as AssertContext["mcpServers"],
       availableTools: rec.context?.tools,
