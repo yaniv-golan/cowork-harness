@@ -225,6 +225,41 @@ describe("input_unmodified on replay", () => {
     expect(a!.message).toMatch(/ref\/in\.md/);
   });
 
+  it("a deleted pre-existing file is caught on replay (present-but-empty manifest, path absent from postRunHashes)", async () => {
+    // The agent DELETED a matched pre-existing file: its path is in preRunHashes (it existed at spawn)
+    // but absent from the cassette manifest (gone at run end). This exercises the replay-lane
+    // `postRunHashes[p] ?? null` branch — a missing key resolves to null ⇒ removed ⇒ content change.
+    // The manifest is present-but-empty, so the presence-gated `iumReplayable` (not length-gated) must
+    // still evaluate the key rather than silently strip it — the same asymmetry no_unexpected_files avoids.
+    mute();
+    const preRunSha = createHash("sha256").update("content that was deleted").digest("hex");
+    const r = await replayCassette({
+      scenario: {
+        name: "c",
+        baseline: "latest",
+        session: "(inline)",
+        fidelity: "container",
+        prompt: "hi",
+        answers: [],
+        expect_denied: [],
+        assert: [{ input_unmodified: ["ref/**"] }],
+      },
+      events: okEvents(),
+      controlOut: [],
+      cassetteVersion: CASSETTE_VERSION,
+      userVisibleRoots: ["outputs"],
+      preRunPaths: ["ref/in.md"],
+      preRunHashes: { "ref/in.md": preRunSha },
+      artifacts: [], // present-but-empty: the file is gone at run end
+      fingerprint: { baseline: LIVE },
+    } as any);
+    const a = r.assertions.find((x) => x.assertion.input_unmodified !== undefined);
+    expect(a).toBeDefined();
+    expect(a!.pass).toBe(false);
+    expect(a!.message).toMatch(/removed/);
+    expect(a!.message).toMatch(/ref\/in\.md/);
+  });
+
   it("excludes the key loudly when preRunHashes is absent (cassette predates the hash manifest)", async () => {
     mute();
     const body = "{}";
