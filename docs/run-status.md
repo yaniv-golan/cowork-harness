@@ -22,7 +22,11 @@ namespace.
 2. While the run is live, `<outDir>/status.json` is overwritten periodically (default every 5s, tunable
    via `COWORK_HARNESS_STATUS_INTERVAL_MS`) with live tool-call and sub-agent counts.
 3. When the run finishes (success, error, or an unanswered-gate partial), `status.json` is written once
-   more with a terminal `state` (`"done"` or `"error"`).
+   more with a terminal `state` (`"done"` or `"error"`). On a terminal **error**, it also carries the
+   terminal-error diagnostics — `errorSource` (`spawn`/`protocol`/`exit`/`agent`/`result`/`no_result`/`timeout`
+   — `no_result` = the stream ended with no result event, i.e. turn/time exhaustion), the SDK `resultSubtype`
+   (e.g. `error_max_turns`), and `stderrLogPath` — so a failure-output reader gets more than a bare `"error"`
+   (these mirror the same fields in `result.json`).
 4. **Crash safety net:** if the process unwinds via an uncaught throw (or receives `SIGTERM`) before
    either normal completion path runs, an `"exit"` handler still writes a terminal `"error"` status —
    `status.json` never gets stuck reporting `"running"` for a process that's actually gone.

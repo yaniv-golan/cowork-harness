@@ -95,6 +95,7 @@ export function buildChatResult(record: RunRecord, opts: ChatResultOpts): RunRes
     resources,
     stderrLogPath: join(opts.outDir, "agent.stderr.log"),
     errorSource: record.errorSource,
+    resultSubtype: record.resultSubtype,
     // ── verdict / capability / gate / staleness: a chat has none ──
     resultErrorKind: undefined,
     stalledOnQuestion: undefined,

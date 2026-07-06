@@ -20,6 +20,7 @@ function fullyExplicitFixture(): CompleteRunResult {
     result: "success",
     resultErrorKind: undefined,
     errorSource: undefined,
+    resultSubtype: undefined,
     stderrLogPath: undefined,
     stalledOnQuestion: undefined,
     capabilityProbe: undefined,

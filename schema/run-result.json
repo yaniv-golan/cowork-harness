@@ -23,6 +23,19 @@
       "enum": ["transport", "agent"],
       "description": "Fix 5: when result is 'error', whether it was a tail-end transport drop (connection closed after a clean result) vs a genuine agent/skill failure"
     },
+    "errorSource": {
+      "type": "string",
+      "enum": ["spawn", "protocol", "exit", "agent", "result", "no_result", "timeout"],
+      "description": "How the run terminated in error — the error event's finer source (spawn/protocol/exit/agent, or 'result' for the SDK-wrapped is_error result), 'no_result' when the stream ended with no terminal event (turn/time exhaustion), or 'timeout' when the harness wall-clock limit killed the run. Additive diagnostic alongside resultErrorKind; not read by the verdict."
+    },
+    "resultSubtype": {
+      "type": "string",
+      "description": "The SDK result message's subtype verbatim (e.g. error_max_turns, error_during_execution, success) — a pass-through diagnostic so a debugger can tell turn-exhaustion from a generic execution error without the harness inventing a taxonomy."
+    },
+    "stderrLogPath": {
+      "type": "string",
+      "description": "Absolute path to the agent's full stderr log (<outDir>/agent.stderr.log), surfaced so an OOM/crash debugger knows where to look. Live path only — absent on replay."
+    },
     "stalledOnQuestion": {
       "type": "boolean",
       "description": "H2/H3: the run ended on a question having done no productive tool work after its last gate (the agent asked for input and stopped — incl. re-asking in plain text after answering an AskUserQuestion) while result==='success'. computeVerdict fails on this (a 'stalled' signal) unless the scenario asserts allow_stall."

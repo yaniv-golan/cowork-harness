@@ -70,7 +70,8 @@
     "prompt",
     "requires_capabilities",
     "session",
-    "skills"
+    "skills",
+    "timeout_ms"
   ],
   "verdictModifierKeys": [
     "allow_l0_plugin_divergence",

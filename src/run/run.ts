@@ -78,9 +78,14 @@ export interface RunRecord {
   // clean result) vs a genuine agent/skill failure. Undefined on success or unclassified errors.
   resultErrorKind?: "transport" | "agent";
   // finer error source than resultErrorKind's binary — the raw `error`-event source, or "result" for
-  // the SDK-wrapped is_error result path. Undefined when no error event fired; a recovered non-fatal
-  // agent error that later succeeds keeps its first source. Optional ⇒ no literal-site churn.
-  errorSource?: "spawn" | "protocol" | "exit" | "agent" | "result";
+  // the SDK-wrapped is_error result path, or "no_result" when the stream closed with no terminal event,
+  // or "timeout" when the harness's wall-clock limit killed the run. Undefined when no error fired; a
+  // recovered non-fatal agent error that later succeeds keeps its first source. Optional ⇒ no literal churn.
+  errorSource?: "spawn" | "protocol" | "exit" | "agent" | "result" | "no_result" | "timeout";
+  // the SDK result message's `subtype` verbatim (error_max_turns / error_during_execution / success / …).
+  // Pass-through diagnostic — captured on the result event, surfaced so a debugger can tell turn-exhaustion
+  // from a generic execution error. Undefined until a result event with a subtype is seen.
+  resultSubtype?: string;
   // set true when the run ended on an unanswered plain-text question (see the post-loop detector in
   // drive()). Mapped into RunResult by execute.ts (live) and cassette.ts (replay re-drive).
   stalledOnQuestion?: boolean;
@@ -200,6 +205,7 @@ export class Run {
     private hooks: RunHooks[] = [],
     runId = "run",
     private dialogTimeoutMs: number = DIALOG_AUTOCANCEL_MS,
+    private runTimeoutMs?: number,
   ) {
     this.rec = {
       runId,
@@ -314,6 +320,19 @@ export class Run {
     if (!first.done) {
       this.provenance.seedFromText(first.value); // seed provenance from the user's prompt
       this.session.sendUserTurn(first.value);
+    }
+
+    // Wall-clock timeout (opt-in). On expiry, KILL the child (not just close stdin — a runaway agent
+    // ignores an stdin close) and latch `timedOut` so the post-loop code labels errorSource:"timeout"
+    // (overriding the "exit" the kill produces). unref so the timer never keeps the process alive.
+    let timedOut = false;
+    let runTimer: ReturnType<typeof setTimeout> | undefined;
+    if (this.runTimeoutMs !== undefined && isFinite(this.runTimeoutMs) && this.runTimeoutMs > 0) {
+      runTimer = setTimeout(() => {
+        timedOut = true;
+        (this.session.kill ?? this.session.close).call(this.session);
+      }, this.runTimeoutMs);
+      runTimer.unref?.();
     }
 
     try {
@@ -449,6 +468,9 @@ export class Run {
             await this.handleDecision(ev.request);
             break;
           case "result":
+            // Pass through the SDK subtype on BOTH branches (a diagnostic, not just an error signal) —
+            // error_max_turns / error_during_execution on failure, success on the clean path.
+            if (ev.subtype !== undefined) this.rec.resultSubtype = ev.subtype;
             if (ev.isError) {
               this.rec.result = "error";
               // path (a): the SDK wrapped a transport failure into an is_error result — the result IS the
@@ -515,6 +537,7 @@ export class Run {
         }
       }
     } finally {
+      if (runTimer) clearTimeout(runTimer);
       // Guarantee stdin ends on EVERY exit path — including a clean EOF or a crash that emits no `result`
       // event (the inline close()s only cover result-done + spawn/protocol error). close() is idempotent
       // (it try/catches stdin.end), so the double-close on the normal paths is a safe no-op.
@@ -522,6 +545,19 @@ export class Run {
     }
 
     this.rec.transcript = transcript.join("\n");
+    // Wall-clock timeout override: the kill above surfaces as an "exit" error (or ends the stream), but the
+    // authoritative reason is the timeout. Set it here so it wins over the exit/no_result labeling below.
+    if (timedOut) {
+      this.rec.result = "error";
+      this.rec.errorSource = "timeout";
+    }
+    // no-terminal-event detection (the reviewer's turn/time-exhaustion black box). This block runs only on
+    // a clean loop-end — an UnansweredError from handleDecision throws PAST it (→ buildPartialResult), and
+    // every terminal path already set errorSource (result → "result", fatal error → its source, non-fatal
+    // agent error → "agent"). So `result` still at the ctor default "error" AND no errorSource means the
+    // stream closed with no result and no error event at all. Diagnostic only; re-derives on replay (reads
+    // only rec state), like the stall detector below.
+    if (this.rec.result === "error" && !this.rec.errorSource) this.rec.errorSource = "no_result";
     // stall-on-question detection. A turn that ends on a plain-text re-ask ("which file?") gets
     // is_error:false → result:"success" (a false-green — the SDK turn didn't error, but the task didn't
     // complete). Flag it (computeVerdict turns it into a `stalled` fail unless allow_stall). Conservative

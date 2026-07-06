@@ -120,6 +120,10 @@ export interface AgentSession {
   sendUserTurn(text: string): void;
   respond(decisionId: string, r: DecisionResponse): void;
   close(): void;
+  /** Forcibly terminate the agent process (wall-clock timeout). Unlike `close()` (which only ends stdin
+   *  and lets a well-behaved agent exit), this SIGTERMs the child — tier-agnostic, since the child is
+   *  whatever was spawned (docker/limactl/native). Optional: replay/mock sessions have no live process. */
+  kill?(): void;
 }
 
 // ---- Protocol ingress validation (fail-closed) ----
@@ -619,6 +623,22 @@ export class LiveAgentSession implements AgentSession {
   close(): void {
     try {
       this.proc.stdin.end();
+    } catch {
+      /* already gone */
+    }
+  }
+
+  kill(): void {
+    try {
+      this.proc.kill("SIGTERM");
+      // Escalate to SIGKILL if the child ignores SIGTERM (unref so the timer can't keep the process alive).
+      setTimeout(() => {
+        try {
+          if (this.proc.exitCode === null && this.proc.signalCode === null) this.proc.kill("SIGKILL");
+        } catch {
+          /* already gone */
+        }
+      }, 2000).unref?.();
     } catch {
       /* already gone */
     }

@@ -64,10 +64,30 @@ verdict on their own. `no_mcp_error` and `max_peak_rss_bytes` are live-only and 
 pre-run hash manifest (container/hostloop — not captured on microvm). All new assertion keys are
 additive: existing cassettes keep replaying with no cassette-version bump.
 
+- **Legible terminal-error reasons.** A failed run no longer reads as a bare `error`. `RunResult` (and,
+  new, `status.json`) now carry `errorSource` — extended with `no_result` (the stream ended with no
+  terminal event, i.e. turn/time exhaustion) and `timeout` — plus `resultSubtype` (the SDK result
+  subtype verbatim, e.g. `error_max_turns`) and `stderrLogPath`. The CLI failure line names the reason
+  (`✗ error (error_max_turns)`, `✗ error (no_result)`, …). Diagnostic only — not read by the verdict.
+- **Turn and wall-clock budgets.** Session `agent_max_turns` raises the agent's turn ceiling via the
+  agent's own `--max-turns` (omitted by default → faithful to interactive Cowork, which passes none);
+  scenario `timeout_ms` (or `skill --timeout <ms>`) sets a wall-clock budget — on expiry the harness
+  kills the agent and the run ends `result:error` / `errorSource:timeout`. Both are distinct from the
+  `max_turns` *assertion* (a post-hoc upper-bound check).
+- **`verify-cassettes` now catches scenario prompt drift.** A committed scenario whose `prompt` diverged
+  from the cassette's frozen prompt (invisible to the skill/baseline fingerprint) is a hard fail, in its
+  own `scenarioDrift` envelope bucket; an unresolvable/unparseable source degrades to a non-failing note.
+  Opt out with `--skip-scenario-drift`. `replay` surfaces the same drift as a non-failing notice.
+
 ### Fixed
 
 - **A non-interactive `chat` session (piped/redirected stdin) no longer crashes with a readline error
   before writing its result.** It now exits cleanly and still writes `result.json`.
+- **`record` no longer prints a spurious `cassette stale: skill dirs not resolvable` warning on every
+  redacted recording.** The redaction verdict-preservation self-check replayed the cassette without its
+  directory, so the relocatable (relative) session path couldn't resolve and the skill-staleness check
+  always reported "can't verify". It now threads the cassette dir through, exactly as `verify-cassettes`
+  does — the warning fires only on genuine drift.
 
 ## [0.26.0] — 2026-07-05
 

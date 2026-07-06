@@ -58,6 +58,10 @@ export function baseAgentArgs(
     // --tools/--allowedTools stay last (golden invariant).
     "--max-thinking-tokens",
     String(resolveMaxThinkingTokens(plan.maxThinkingTokens, plan.model, spawn?.maxThinkingTokens ?? DEFAULT_MAX_THINKING_TOKENS)),
+    // Agent turn budget — emitted ONLY when the session opts in (`agent_max_turns`). Omitted by default so
+    // the agent inherits its own turn ceiling (fidelity: real Cowork passes no --max-turns for interactive
+    // sessions). The flag is verified supported by the staged agent binary.
+    ...(plan.agentMaxTurns !== undefined ? ["--max-turns", String(plan.agentMaxTurns)] : []),
     ...(opts.disallowed?.length ? ["--disallowedTools", ...opts.disallowed] : []),
     ...(opts.systemPromptAppend ? ["--append-system-prompt", opts.systemPromptAppend] : []),
     ...(plan.model ? ["--model", plan.model] : []),

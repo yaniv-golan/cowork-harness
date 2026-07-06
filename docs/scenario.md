@@ -26,6 +26,9 @@ on_unanswered: fail                      # optional: policy for unscripted quest
 prompt: |                                # the user turn
   Summarize report.pdf and write action items to outputs/actions.md
 
+timeout_ms: 600000                       # OPTIONAL wall-clock budget; on expiry the harness kills the agent
+                                         # and the run ends result:error / errorSource:timeout. Omit = no timeout.
+
 answers:                                 # scripted answers (see below)
   - when_question: "Which output format"
     choose: "Markdown"

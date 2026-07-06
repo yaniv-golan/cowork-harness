@@ -1217,8 +1217,11 @@ function modelVisibleText(events: string[]): string {
  *     time — `computer_links_resolve` then passes VACUOUSLY on replay (zero links = presence-gated
  *     pass) while the verdict compare above sees pass==pass. A dropped link is a manufactured green,
  *     not a privacy fix. (The first committed hostloop cassette shipped exactly this bug.) */
-export async function assertRedactionVerdictPreserved(base: Cassette, redacted: Cassette): Promise<void> {
-  const [rb, rr] = await Promise.all([replayCassette(base), replayCassette(redacted)]);
+export async function assertRedactionVerdictPreserved(base: Cassette, redacted: Cassette, cassetteDir?: string): Promise<void> {
+  // Resolve skill dirs against the cassette's dir just like `verify-cassettes` does (`replayCassette` at
+  // the batch site passes `dirname(f)`). Without it, the relocatable relative session path fails to resolve
+  // and every redacted record self-check emitted a spurious `unverifiable-skill` staleness warning.
+  const [rb, rr] = await Promise.all([replayCassette(base, [], { cassetteDir }), replayCassette(redacted, [], { cassetteDir })]);
   const vb = computeVerdict(rb, "replay");
   const vr = computeVerdict(rr, "replay");
 
@@ -2143,7 +2146,7 @@ async function recordScenarioObject(
   let cassette = base;
   if (policy.patterns.length || policy.keyNames.length) {
     const redacted = redactCassette(base, policy);
-    await assertRedactionVerdictPreserved(base, redacted);
+    await assertRedactionVerdictPreserved(base, redacted, dirname(cassettePath));
     cassette = redacted;
   }
   writeFileAtomic(cassettePath, JSON.stringify(cassette, null, 2)); // atomic — no partial cassette on a mid-write crash
@@ -2170,6 +2173,7 @@ function replayErrorResult(file: string): RunResult {
     prompt: undefined,
     resultErrorKind: undefined,
     errorSource: undefined, // no rec to read from on this early-bail lane
+    resultSubtype: undefined, // (same — no result event to read a subtype from)
     stderrLogPath: undefined, // live path only — no live process on replay
     stalledOnQuestion: undefined,
     capabilityProbe: undefined,
@@ -2250,6 +2254,48 @@ function recordingShapingDrift(frozen: Scenario, onDisk: Scenario): string[] {
   if (norm(frozen.skills ?? []) !== norm(onDisk.skills ?? [])) drifted.push("skills");
   if (norm(frozen.requires_capabilities ?? []) !== norm(onDisk.requires_capabilities ?? [])) drifted.push("requires_capabilities");
   return drifted;
+}
+
+/** Scenario-content drift for `verify-cassettes`: has the committed on-disk scenario's PROMPT diverged from
+ *  the cassette's frozen copy? The fingerprint covers skill-dir content + baseline but NOT the scenario's own
+ *  prompt, so an edited-but-not-re-recorded prompt silently diverges — invisible to `replay`/`verify-cassettes`
+ *  and caught only by the opt-in `--assert-from`. Scoped to `prompt` only: baseline/skill drift are policed by
+ *  the fingerprint/staleness path, and `answers` carries a documented default-churn false-positive risk
+ *  (see recordingShapingDrift), so it stays out of the hard-fail bucket. A resolvable+drifted prompt is a
+ *  DEFINITE divergence → hard fail; an unresolvable/unparseable source is "can't compare" → a non-failing
+ *  note, never a false-red (many valid cassettes ship without a committed source). */
+export function scenarioContentDrift(
+  cassette: Pick<Cassette, "scenarioSource" | "scenario">,
+  cassetteFile: string,
+): { verifiable: true; drifted: string[] } | { verifiable: false; reason?: string } {
+  try {
+    const src = _resolveRerecordSource(cassetteFile, cassette);
+    // No on-disk source at all is the NORMAL standalone-cassette case — nothing to compare, and that's
+    // expected, not noteworthy. Return `reason: undefined` so the caller stays silent (no note flood).
+    if (!src.path) return { verifiable: false };
+    let onDisk: Scenario;
+    try {
+      onDisk = parseScenarioFile(src.path);
+    } catch (e) {
+      // A source that DOES resolve but won't parse is a genuine "should be checkable but isn't" — worth a
+      // note. Mirror the default replay lane: a mid-edit/invalid on-disk YAML must NEVER abort verify-cassettes.
+      return { verifiable: false, reason: `on-disk scenario ${src.path} did not parse (${(e as Error).message}) — prompt drift not checked` };
+    }
+    const drifted = recordingShapingDrift(cassette.scenario as Scenario, onDisk).filter((f) => f === "prompt");
+    // Only a PERSISTED (exactly-recorded) source is trustworthy enough to HARD-FAIL on. A name-lookup match
+    // (the recorded scenarioSource is gone, or was never recorded) may be an unrelated same-named sibling —
+    // downgrade any drift it finds to a non-failing note rather than red CI on a guess.
+    if (drifted.length && src.via !== "persisted")
+      return {
+        verifiable: false,
+        reason: `on-disk ${src.path} (resolved by name, not a recorded source) has a different prompt — re-record or \`replay --assert-from\` to confirm`,
+      };
+    return { verifiable: true, drifted };
+  } catch (e) {
+    // Defense-in-depth: any resolution error (e.g. a lenient cassette missing scenario.name, which
+    // `_findScenarioOnDisk` would slug) degrades to "can't check" — NEVER aborts the verify-cassettes batch.
+    return { verifiable: false, reason: `scenario-drift check skipped (${(e as Error).message})` };
+  }
 }
 
 /** Assertion keys (and `expect_denied`) that are NOT evaluated on the replay lane in a given cassette's shape.
@@ -2482,6 +2528,13 @@ export async function cmdReplay(args: string[]) {
                 `::notice:: [replay] ${src.path} has a different \`assert:\` block; replay used the assertions frozen in the cassette. ` +
                   `Re-record, or \`replay --assert-from ${src.path}\` to re-check against the on-disk block.\n`,
               );
+            // Prompt drift is invisible to the fingerprint (see scenarioContentDrift). Surface it as a
+            // non-failing notice here too — the default lane never changes the verdict.
+            if ((onDisk.prompt ?? "") !== (rc.cassette.scenario.prompt ?? ""))
+              warn(
+                `::notice:: [replay] ${src.path} has a different \`prompt:\` than the cassette's frozen prompt; the frozen events reflect the recorded prompt. ` +
+                  `Re-record to sync (verify-cassettes hard-fails this drift).\n`,
+              );
           }
         } catch {
           /* on-disk file is decoration on the default lane — a parse/read failure must not affect the run */
@@ -2511,7 +2564,7 @@ export function cmdVerifyCassettes(args: string[]) {
   let p;
   try {
     p = parseArgs(args, {
-      booleans: ["--skip-privacy", "--skip-staleness", "--quiet", "--verbose"],
+      booleans: ["--skip-privacy", "--skip-staleness", "--skip-scenario-drift", "--quiet", "--verbose"],
       values: ["--output-format"],
       repeated: ["--allow", "--allow-domain", "--allow-email", "--allow-path", "--allow-machine-inventory", "--allow-patterns-file"],
       enums: { "--output-format": ["text", "json"] },
@@ -2531,6 +2584,7 @@ export function cmdVerifyCassettes(args: string[]) {
   }
   const doPrivacy = !skipPrivacy;
   const doStaleness = !skipStaleness;
+  const doScenarioDrift = !(p.flags["--skip-scenario-drift"] ?? false);
   // Allow model: each entry is whole-token anchored + class-scoped. A bare `--allow <regex>` is a single
   // PATTERN applied to every class (back-compat); `--allow-domain`/`--allow-email`/`--allow-path`/
   // `--allow-machine-inventory` scope a pattern to one class so a domain allow can't bleed into the
@@ -2568,7 +2622,7 @@ export function cmdVerifyCassettes(args: string[]) {
   const target = p.positionals[0];
   if (!target) {
     log(
-      "usage: verify-cassettes <file|dir> [--skip-privacy|--skip-staleness] [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-path <regex>]... [--allow-machine-inventory <regex>]... [--allow-patterns-file <path>]... [--output-format json]",
+      "usage: verify-cassettes <file|dir> [--skip-privacy|--skip-staleness] [--skip-scenario-drift] [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-path <regex>]... [--allow-machine-inventory <regex>]... [--allow-patterns-file <path>]... [--output-format json]",
     );
     log(
       "  --allow <regex> is a PATTERN (matched against a finding); --allow-patterns-file <path> is a FILE of patterns, one regex per line — not a path to allow.",
@@ -2587,14 +2641,29 @@ export function cmdVerifyCassettes(args: string[]) {
   const files = resolved.files;
   const results = files.map((f) => {
     const rc = readCassette(f);
-    if ("error" in rc) return { file: f, findings: [], staleness: [], notes: [], version: [], error: rc.error };
+    if ("error" in rc) return { file: f, findings: [], staleness: [], notes: [], version: [], scenarioDrift: [], error: rc.error };
     const findings = doPrivacy ? scanCassette(rc.cassette, allow) : [];
     // Direct computeStaleness call (not the checkStaleness string adapter) so the NON-failing `notes`
     // channel reaches the envelope — a note (e.g. pre-effectiveFidelity explicit-tier) must be surfaced,
     // never dropped, and must never red the gate.
     const stale = doStaleness ? computeStaleness(rc.cassette, dirname(f)) : { findings: [], notes: [] };
     const staleness = stale.findings.map((s) => s.message);
-    const notes = stale.notes;
+    const notes = [...stale.notes];
+    // Scenario-content (prompt) drift: the fingerprint doesn't cover the scenario's own prompt, so an
+    // edited-but-not-re-recorded prompt would otherwise pass clean. A resolvable+drifted prompt is a hard
+    // fail (its own bucket, so --skip-staleness can't mask it); an unresolvable/unparseable source is a
+    // non-failing note (can't compare ⇒ not a false-red).
+    const scenarioDrift: string[] = [];
+    if (doScenarioDrift) {
+      const drift = scenarioContentDrift(rc.cassette, f);
+      if (drift.verifiable) {
+        if (drift.drifted.includes("prompt"))
+          scenarioDrift.push("scenario prompt differs from the cassette's frozen prompt — the frozen events no longer correspond to this scenario; re-record or `replay --assert-from`");
+      } else if (drift.reason) {
+        // Only when a resolvable source failed to parse — the common "no committed source" case is silent.
+        notes.push(`scenario-drift: ${drift.reason}`);
+      }
+    }
     // a cassette written by a NEWER harness version may carry semantics this version can't correctly
     // interpret. This is a FORMAT/version failure, NOT staleness — bucket it under its own `version`
     // key so `--skip-staleness` doesn't produce the self-contradiction of coverage.staleness:false
@@ -2607,23 +2676,26 @@ export function cmdVerifyCassettes(args: string[]) {
             `cassette format v${recordedVersion} is newer than this harness understands (v${CASSETTE_VERSION}) — upgrade cowork-harness (can't verify ⇒ not green)`,
           ]
         : [];
-    return { file: f, findings, staleness, notes, version, error: undefined as string | undefined };
+    return { file: f, findings, staleness, notes, version, scenarioDrift, error: undefined as string | undefined };
   });
   const realFindings = results.flatMap((r) => r.findings.filter((x) => x.cls !== "unscanned"));
   const staleAny = results.some((r) => r.staleness.length > 0);
   const versionAny = results.some((r) => r.version.length > 0);
+  const scenarioDriftAny = results.some((r) => r.scenarioDrift.length > 0);
   const errorAny = results.some((r) => r.error !== undefined);
-  const ok = realFindings.length === 0 && !staleAny && !versionAny && !errorAny;
-  const coverage = { privacy: doPrivacy, staleness: doStaleness };
+  const ok = realFindings.length === 0 && !staleAny && !versionAny && !scenarioDriftAny && !errorAny;
+  const coverage = { privacy: doPrivacy, staleness: doStaleness, scenarioDrift: doScenarioDrift };
   if (json) {
     out(JSON.stringify({ command: "verify-cassettes", ok, coverage, results }));
   } else {
     if (!doStaleness) log("⚠ cowork-harness: --skip-staleness: staleness check was skipped");
     if (!doPrivacy) log("⚠ cowork-harness: --skip-privacy: privacy scan was skipped");
+    if (!doScenarioDrift) log("⚠ cowork-harness: --skip-scenario-drift: scenario prompt-drift check was skipped");
     for (const r of results) {
       if (r.error) log(`✗ ${r.file}: [error] ${r.error}`);
       for (const f of r.findings) log(`${f.cls === "unscanned" ? "·" : "✗"} ${r.file}: [${f.cls}] ${f.where} — ${f.sample}`);
       for (const s of r.staleness) log(`✗ ${r.file}: [stale] ${s}`);
+      for (const d of r.scenarioDrift) log(`✗ ${r.file}: [scenario-drift] ${d}`);
       // Informational, never fails the gate (the `·` row mirrors the privacy channel's `unscanned` precedent).
       for (const n of r.notes) log(`· ${r.file}: [note] ${n}`);
       for (const v of r.version) log(`✗ ${r.file}: [version] ${v}`);
@@ -2631,7 +2703,7 @@ export function cmdVerifyCassettes(args: string[]) {
     log(
       ok
         ? `✓ verify-cassettes: ${files.length} cassette(s) clean`
-        : `✗ verify-cassettes: ${realFindings.length} PII finding(s)${staleAny ? " + staleness drift" : ""}${versionAny ? " + version mismatch" : ""}${errorAny ? " + unreadable cassette(s)" : ""} across ${files.length} cassette(s)`,
+        : `✗ verify-cassettes: ${realFindings.length} PII finding(s)${staleAny ? " + staleness drift" : ""}${scenarioDriftAny ? " + scenario prompt drift" : ""}${versionAny ? " + version mismatch" : ""}${errorAny ? " + unreadable cassette(s)" : ""} across ${files.length} cassette(s)`,
     );
   }
   return process.exit(ok ? 0 : 1);
@@ -3345,6 +3417,7 @@ export async function replayCassette(
       result: rec.result,
       resultErrorKind: rec.resultErrorKind, // re-derived by run.ts during the replay re-drive (same classifier)
       errorSource: rec.errorSource, // re-derived by run.ts during the replay re-drive, same as resultErrorKind
+      resultSubtype: rec.resultSubtype, // re-derived from the frozen result event on the replay re-drive
       stderrLogPath: undefined, // live path only — no live process on replay
       stalledOnQuestion: rec.stalledOnQuestion, // re-derived by run.ts's detector during the replay re-drive — so a recorded stall fails replay too
       decisions: rec.decisions.map((d) => ({ kind: d.kind, name: d.name, decision: d.decision, by: d.by })),

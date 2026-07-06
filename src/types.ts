@@ -463,6 +463,14 @@ export const ScenarioObject = z.strictObject({
       "isolation tier: protocol (L0, no sandbox) | container/microvm (force a VM-loop tier) | hostloop (force host-loop) | cowork (auto-pick host-loop vs. container via Cowork's own gate logic)",
     ),
   prompt: z.string().describe("the user turn sent to the agent"),
+  timeout_ms: z
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .describe(
+      "wall-clock budget for the agent run; on expiry the harness kills the agent and the run ends result:error / errorSource:timeout. Omitted = no timeout (the agent runs to its own completion). Distinct from the max_turns assertion and agent_max_turns (turn budget).",
+    ),
   answers: z
     .array(AnswerRule)
     .default([])
@@ -603,6 +611,11 @@ export interface RunStatus {
   // present only once state !== "running"
   result?: "success" | "error";
   durationMs?: number;
+  // terminal-error diagnostics, surfaced so a failure-output debugger gets more than a bare "error"
+  // (these live in result.json but not status.json before this). Present only on a terminal error write.
+  errorSource?: "spawn" | "protocol" | "exit" | "agent" | "result" | "no_result" | "timeout";
+  resultSubtype?: string;
+  stderrLogPath?: string;
 }
 
 /** SDK usage payload (input_tokens, output_tokens, etc.) — pass-through, shape owned by the SDK, not the
@@ -645,11 +658,17 @@ export interface RunResult {
   baseline: string;
   result: "success" | "error";
   resultErrorKind?: "transport" | "agent"; // when result==="error", classify a tail-end transport drop vs a genuine failure
-  /** The `error` event's finer source (`spawn`/`protocol`/`exit`/`agent`, or `result` for the
-   *  SDK-wrapped is_error-result path) — additive diagnostic detail alongside the coarse
-   *  verdict-relevant `resultErrorKind`. Absent on a run that emitted no error events; a run that
-   *  recovered from a non-fatal `agent` error and then succeeded keeps the first observed source. */
-  errorSource?: "spawn" | "protocol" | "exit" | "agent" | "result";
+  /** How the run terminated in error — the `error` event's finer source (`spawn`/`protocol`/`exit`/`agent`,
+   *  or `result` for the SDK-wrapped is_error-result path), OR `no_result` when the stream ended with no
+   *  terminal event at all (the turn/time-exhaustion case: neither a result nor an error event fired), OR
+   *  `timeout` when the harness's own wall-clock limit killed the run. Additive diagnostic detail alongside
+   *  the coarse verdict-relevant `resultErrorKind`; consumed by nobody in the verdict. Absent on a clean run;
+   *  a run that recovered from a non-fatal `agent` error and then succeeded keeps the first observed source. */
+  errorSource?: "spawn" | "protocol" | "exit" | "agent" | "result" | "no_result" | "timeout";
+  /** The SDK result message's `subtype` verbatim (e.g. `error_max_turns`, `error_during_execution`,
+   *  `success`) — a pass-through diagnostic so a debugger can tell turn-exhaustion from a generic execution
+   *  error without the harness inventing a taxonomy. Present when a result event carried a subtype. */
+  resultSubtype?: string;
   /** Absolute path to the agent's full stderr log (`<outDir>/agent.stderr.log`), surfaced so an
    *  OOM/crash debugger knows where to look. Live path only — absent on replay (no live process). */
   stderrLogPath?: string;

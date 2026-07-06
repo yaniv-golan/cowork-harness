@@ -176,6 +176,20 @@ describe.skipIf(!can)("skill/common flags accept --flag=value identically to --f
     expect(r.out).toMatch(/requires a non-empty value/);
   });
 
+  it("--timeout <ms> is parsed onto the scenario (visible in the dry-run plan)", () => {
+    const d = mkdtempSync(join(tmpdir(), "g5-"));
+    const raw = spawnSync("node", [CLI, "skill", "./plugin", "hi", "--dry-run", "--timeout", "5000"], { encoding: "utf8", cwd: d });
+    expect(raw.status).toBe(0);
+    expect(JSON.parse(raw.stdout).timeout_ms).toBe(5000);
+  });
+
+  it("--timeout with a non-positive-integer value is a usage error, exit 2", () => {
+    const d = mkdtempSync(join(tmpdir(), "g5-"));
+    const r = run(["skill", "./plugin", "hi", "--timeout", "abc", "--dry-run"], d);
+    expect(r.code).toBe(2);
+    expect(r.out).toMatch(/positive integer/);
+  });
+
   // --decider-model only feeds the LLM decider; reject it without --decider-llm (mirrors --intent).
   it("decide: --decider-model without --decider-llm → exit 2", () => {
     const d = mkdtempSync(join(tmpdir(), "g6-"));

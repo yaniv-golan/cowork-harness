@@ -28,7 +28,13 @@ function buildStatus(
   meta: RunStatusMeta,
   state: RunStatus["state"],
   counts: { toolCounts: Record<string, number>; subagentCount: number },
-  terminal?: { result: "success" | "error"; durationMs: number },
+  terminal?: {
+    result: "success" | "error";
+    durationMs: number;
+    errorSource?: RunStatus["errorSource"];
+    resultSubtype?: string;
+    stderrLogPath?: string;
+  },
 ): RunStatus {
   const now = Date.now();
   return {
@@ -43,7 +49,16 @@ function buildStatus(
     elapsedMs: now - meta.startedAt,
     toolCounts: counts.toolCounts,
     subagentCount: counts.subagentCount,
-    ...(terminal ? { result: terminal.result, durationMs: terminal.durationMs } : {}),
+    // undefined-valued keys are dropped by JSON.stringify, so the diagnostics appear only when set.
+    ...(terminal
+      ? {
+          result: terminal.result,
+          durationMs: terminal.durationMs,
+          errorSource: terminal.errorSource,
+          resultSubtype: terminal.resultSubtype,
+          stderrLogPath: terminal.stderrLogPath,
+        }
+      : {}),
   };
 }
 
@@ -108,6 +123,11 @@ export function finalizeRunStatus(
       {
         result,
         durationMs,
+        // Terminal-error diagnostics so a failure-output reader gets more than a bare "error". stderrLogPath
+        // is the live agent log (same path the assembler records); only meaningful on the error terminal.
+        errorSource: result === "error" ? record.errorSource : undefined,
+        resultSubtype: result === "error" ? record.resultSubtype : undefined,
+        stderrLogPath: result === "error" ? join(outDir, "agent.stderr.log") : undefined,
       },
     ),
   );

@@ -53,6 +53,13 @@ export const SessionConfig = z.strictObject({
   // A positive integer (or a per-model map of them) — reject 0 / negative, which would
   // contradict the "never 0" budget invariant if it reached the CLI flag / env.
   max_thinking_tokens: z.union([z.number().int().positive(), z.record(z.string(), z.number().int().positive())]).optional(),
+  // Agent turn budget → the `--max-turns` CLI flag (verified supported by the staged agent binary:
+  // "Maximum number of agentic turns in non-interactive mode"). RAISES the ceiling for a heavy
+  // multi-step/subagent workflow. NAMED DISTINCTLY from the `max_turns` ASSERTION (a post-hoc upper-bound
+  // CHECK under `assert:`) to avoid conflating raise-the-ceiling with check-the-ceiling. Omitted by default
+  // → no flag passed → the agent inherits its own default (faithful: real Cowork passes no --max-turns for
+  // an interactive session, only scheduled tasks default to 100).
+  agent_max_turns: z.number().int().positive().optional(),
   extended_thinking: z.boolean().optional().describe("Inert / no-op — not a real Cowork toggle. Use max_thinking_tokens instead."), // inert: not a real Cowork toggle — use max_thinking_tokens.
   permission_mode: z.enum(["default", "acceptEdits", "plan", "bypassPermissions"]).default("default"), // setPermissionMode
   // cowork = pre-approve built-ins (like real Cowork's allowedTools) + auto-allow unscripted
@@ -153,6 +160,7 @@ export interface LaunchPlan {
   model?: string;
   effort?: string;
   maxThinkingTokens?: number | Record<string, number>; // session thinking budget (resolved per-model in spawnEnv)
+  agentMaxTurns?: number; // session turn budget → --max-turns (omitted ⇒ agent default; distinct from the max_turns assertion)
   permissionMode: string;
   permissionParity: "cowork" | "strict";
   baseEnv: NodeJS.ProcessEnv; // Cowork bg-env-strip applied; CLAUDE_CONFIG_DIR set by the runtime
@@ -650,6 +658,7 @@ export function buildLaunchPlan(
     model: session.model,
     effort: session.effort,
     maxThinkingTokens: session.max_thinking_tokens,
+    agentMaxTurns: session.agent_max_turns,
     permissionMode: session.permission_mode,
     permissionParity: session.permission_parity,
     baseEnv,

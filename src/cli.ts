@@ -293,6 +293,8 @@ Output:
 
 Long runs:  an idle "still running" heartbeat prints on stderr after ~30s of silence.
             COWORK_HARNESS_NO_HEARTBEAT=1 disables it; COWORK_HARNESS_HEARTBEAT_MS tunes the interval.
+  --timeout <ms>                   wall-clock budget; on expiry the agent is killed and the run ends
+                                   result:error / errorSource:timeout (the CLI form of a scenario's timeout_ms).
 
 Auth:  CLAUDE_CODE_OAUTH_TOKEN (or ANTHROPIC_API_KEY) from process.env > --dotenv <path> > ./.env >
        <install>/.env. So you can run from any directory and still pick up the install's credentials.
@@ -1602,6 +1604,7 @@ async function cmdSkill(rawArgs: string[]) {
   let resume = false;
   let dryRun = false;
   let keep = false;
+  let timeoutMs: number | undefined;
   const isJson0 = flags.output === "json";
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
@@ -1672,6 +1675,14 @@ async function cmdSkill(rawArgs: string[]) {
       const [q, choose] = parts!;
       answers.push({ when_question: q, choose });
     } else if (name === "--answer-policy") answerPolicy = nextValStrict();
+    else if (name === "--timeout") {
+      // wall-clock budget (ms) for the ephemeral skill scenario — the CLI override of the scenario
+      // `timeout_ms:` field (skill builds its scenario from flags, so there's no YAML to carry it).
+      const raw = nextValStrict();
+      const n = Number(raw);
+      if (!Number.isInteger(n) || n <= 0) fail("skill", "usage", `--timeout requires a positive integer (ms); got "${raw}"`, undefined, isJson0);
+      timeoutMs = n;
+    }
     // reject unknown flags (any token starting with - or -- that wasn't consumed above)
     else if (a.startsWith("-")) fail("skill", "usage", `unknown flag: ${a}`, undefined, isJson0);
     else positional.push(a);
@@ -1776,7 +1787,7 @@ async function cmdSkill(rawArgs: string[]) {
     );
 
   if (dryRun) {
-    out(JSON.stringify({ fidelity, prompt, localPlugins, marketplaces, enabled: enables, answers }, null, 2));
+    out(JSON.stringify({ fidelity, prompt, localPlugins, marketplaces, enabled: enables, answers, ...(timeoutMs !== undefined ? { timeout_ms: timeoutMs } : {}) }, null, 2));
     return;
   }
 
@@ -1803,6 +1814,7 @@ async function cmdSkill(rawArgs: string[]) {
     session: "(inline)",
     fidelity,
     prompt,
+    ...(timeoutMs !== undefined ? { timeout_ms: timeoutMs } : {}),
     answers,
     assert: [{ result: "success" }],
   });

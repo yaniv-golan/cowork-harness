@@ -13,11 +13,12 @@
     },
     "coverage": {
       "type": "object",
-      "description": "Which scans actually ran \u2014 false under --skip-privacy / --skip-staleness. A consumer gating on ok:true should also assert the coverage it expects (a skipped scan can't fail).",
-      "required": ["privacy", "staleness"],
+      "description": "Which scans actually ran \u2014 false under --skip-privacy / --skip-staleness / --skip-scenario-drift. A consumer gating on ok:true should also assert the coverage it expects (a skipped scan can't fail).",
+      "required": ["privacy", "staleness", "scenarioDrift"],
       "properties": {
         "privacy": { "type": "boolean" },
-        "staleness": { "type": "boolean" }
+        "staleness": { "type": "boolean" },
+        "scenarioDrift": { "type": "boolean" }
       }
     },
     "results": {
@@ -25,7 +26,7 @@
       "description": "One entry per cassette file, including unreadable ones (tallied via `error`, never a crash that aborts the batch).",
       "items": {
         "type": "object",
-        "required": ["file", "findings", "staleness", "notes", "version"],
+        "required": ["file", "findings", "staleness", "notes", "version", "scenarioDrift"],
         "properties": {
           "file": { "type": "string" },
           "findings": {
@@ -58,6 +59,11 @@
             "type": "array",
             "items": { "type": "string" },
             "description": "Format/version failures: the cassette was written by a NEWER harness than this one understands. Always fails the gate (can't verify \u21d2 not green), independent of --skip-staleness."
+          },
+          "scenarioDrift": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Scenario-content (prompt) drift: the committed on-disk scenario's prompt diverged from the cassette's frozen prompt. A definite divergence \u2014 each message fails the gate (own bucket so --skip-staleness can't mask it). Empty under --skip-scenario-drift, or when the source isn't resolvable (that becomes a non-failing `notes` entry instead)."
           },
           "error": {
             "type": "string",

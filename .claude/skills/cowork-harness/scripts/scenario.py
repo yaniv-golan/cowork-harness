@@ -169,6 +169,7 @@ _EMBEDDED_TOP_LEVEL_KEYS = {
     "fidelity",
     "on_unanswered",
     "prompt",
+    "timeout_ms",  # wall-clock budget → kill + errorSource:timeout on expiry
     "answers",
     "expect_denied",
     "assert",

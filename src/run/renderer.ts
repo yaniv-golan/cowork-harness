@@ -282,9 +282,24 @@ export function renderFooter(
     return;
   }
   // a tail-end transport drop renders distinctly from a generic error/FAIL, so a flaky-connection
-  // run doesn't read as a skill defect.
-  const errLabel = r.result === "error" ? (r.resultErrorKind === "transport" ? "transport-error" : "error") : "FAIL";
+  // run doesn't read as a skill defect. Otherwise append the most specific terminal reason we have — the
+  // SDK subtype (error_max_turns / …) if present, else the errorSource (no_result / exit / timeout / …) —
+  // so a failure line names WHY instead of a bare "error" (the reviewer's black-box complaint).
+  // Prefer the SDK subtype ONLY when the terminal error actually came from a result event — otherwise a
+  // stale subtype from an earlier turn's result could mislabel a later exit/timeout/no_result error.
+  const errReason =
+    r.errorSource === "result" && r.resultSubtype && r.resultSubtype !== "success" ? r.resultSubtype : r.errorSource;
+  const errLabel =
+    r.result === "error"
+      ? r.resultErrorKind === "transport"
+        ? "transport-error"
+        : errReason
+          ? `error (${errReason})`
+          : "error"
+      : "FAIL";
   write(`${red(plan, "✗ " + errLabel)} ${meta}\n`);
+  if (r.result === "error" && r.errorSource === "no_result")
+    write(`   ${dim(plan, "no terminal result event (likely turn/time exhaustion) — see " + (r.stderrLogPath ? tildeify(r.stderrLogPath) : "the run's agent.stderr.log"))}\n`);
   for (const s of failSignals) write(`   ${red(plan, "✗ " + s.message)}\n`);
   renderGuards(verdict.guards, plan, write); // show which guards ran even on a fail (no silent guards)
   renderGateProvenance(r, plan, write);

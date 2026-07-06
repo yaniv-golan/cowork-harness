@@ -96,3 +96,33 @@ describe("Run.drive sets rec.resultErrorKind end-to-end", () => {
     expect(rec.errorSource).toBe("result");
   });
 });
+
+describe("WS-B: terminal-reason taxonomy (resultSubtype pass-through + no_result)", () => {
+  const drive = (events: AgentEvent[]) => new Run(new MockSession(events), new ScriptedDecider([])).drive("go");
+
+  it("no terminal event at all (turn/time exhaustion) → errorSource:'no_result'", async () => {
+    // Empty stream: no result event, no error event. result stays the ctor default 'error'.
+    const rec = await drive([]);
+    expect(rec.result).toBe("error");
+    expect(rec.errorSource).toBe("no_result");
+  });
+
+  it("passes through the SDK subtype on an is_error result (error_max_turns is now legible)", async () => {
+    const rec = await drive([{ type: "result", isError: true, subtype: "error_max_turns", resultText: "the model gave up" }]);
+    expect(rec.result).toBe("error");
+    expect(rec.errorSource).toBe("result");
+    expect(rec.resultSubtype).toBe("error_max_turns");
+  });
+
+  it("passes through the SDK subtype on a clean success result too", async () => {
+    const rec = await drive([{ type: "result", isError: false, subtype: "success" }]);
+    expect(rec.result).toBe("success");
+    expect(rec.resultSubtype).toBe("success");
+  });
+
+  it("does NOT relabel a real error event as no_result (a fatal spawn keeps its source)", async () => {
+    const rec = await drive([{ type: "error", source: "spawn", message: "spawn failed" }]);
+    expect(rec.result).toBe("error");
+    expect(rec.errorSource).toBe("spawn"); // not overwritten to no_result
+  });
+});

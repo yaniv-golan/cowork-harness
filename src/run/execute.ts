@@ -608,7 +608,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     const externalTerminal = opts.externalChannel ? new ExternalDecider(opts.externalChannel, secrets) : llmTerminal;
     const decider =
       opts.decider ?? buildDecider({ rules: scenario.answers, parity: plan.permissionParity, onUnanswered, external: externalTerminal });
-    const run = new Run(sessionT, decider, opts.hooks ?? [], sessionId, dialogTimeoutMs ?? undefined);
+    const run = new Run(sessionT, decider, opts.hooks ?? [], sessionId, dialogTimeoutMs ?? undefined, scenario.timeout_ms);
     run.seedApprovedDomains(session.web_fetch.approved_domains); // test convenience: pre-approved web_fetch hosts
     // fill the provenance bundle (backed by Run's tracker + recorded approval) BEFORE drive().
     // Host-loop only, and only when the web_fetch-via-API gate is on; otherwise the handler stays
@@ -961,6 +961,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     result: record.result,
     resultErrorKind: record.resultErrorKind, // transport vs agent classification of a result:"error"
     errorSource: record.errorSource, // finer error-event source, alongside the coarse resultErrorKind
+    resultSubtype: record.resultSubtype, // SDK result subtype pass-through (error_max_turns / …)
     stderrLogPath: join(outDir, "agent.stderr.log"), // always written by the live agent process
     stalledOnQuestion: record.stalledOnQuestion, // run ended on an unanswered plain-text question
     decisions: record.decisions.map((d) => ({
@@ -1253,6 +1254,7 @@ export function buildPartialResult(args: {
     gateProvenance: gp.total ? gp : undefined,
     fingerprint: args.fingerprint,
     errorSource: record.errorSource, // finer error-event source, alongside the coarse resultErrorKind
+    resultSubtype: record.resultSubtype, // SDK result subtype pass-through (error_max_turns / …)
     stderrLogPath: join(args.outDir, "agent.stderr.log"), // always written by the live agent process
     resources: foldResources(args.outDir, args.effectiveFidelity, resolveIntervalMs()),
     // Fields this lane deliberately never sets (per this function's own doc comment: "no capability/
