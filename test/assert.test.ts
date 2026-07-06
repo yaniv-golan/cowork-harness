@@ -452,12 +452,22 @@ describe("skill_tool_used", () => {
 
 describe("all_tasks_completed", () => {
   it("passes when every task is completed", () => {
-    const c = ctx({ tasks: [{ id: "1", subject: "a", status: "completed" }, { id: "2", subject: "b", status: "completed" }] });
+    const c = ctx({
+      tasks: [
+        { id: "1", subject: "a", status: "completed" },
+        { id: "2", subject: "b", status: "completed" },
+      ],
+    });
     expect(evaluate([{ all_tasks_completed: true }], c)[0].pass).toBe(true);
   });
 
   it("fails when any task is not completed", () => {
-    const c = ctx({ tasks: [{ id: "1", subject: "a", status: "completed" }, { id: "2", subject: "b", status: "pending" }] });
+    const c = ctx({
+      tasks: [
+        { id: "1", subject: "a", status: "completed" },
+        { id: "2", subject: "b", status: "pending" },
+      ],
+    });
     expect(evaluate([{ all_tasks_completed: true }], c)[0].pass).toBe(false);
   });
 

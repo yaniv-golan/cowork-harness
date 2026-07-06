@@ -652,12 +652,24 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
     }
   }
   if (a.all_tasks_completed !== undefined) {
-    if (ctx.tasks === undefined) results.push(fail(`evidence unavailable: tasks telemetry absent from result.json — cannot evaluate all_tasks_completed`));
-    else results.push(ctx.tasks.every((t) => t.status === "completed") ? ok() : fail(`not all tasks are completed: ${ctx.tasks.filter((t) => t.status !== "completed").map((t) => `${t.subject} (${t.status})`).join(", ")}`));
+    if (ctx.tasks === undefined)
+      results.push(fail(`evidence unavailable: tasks telemetry absent from result.json — cannot evaluate all_tasks_completed`));
+    else
+      results.push(
+        ctx.tasks.every((t) => t.status === "completed")
+          ? ok()
+          : fail(
+              `not all tasks are completed: ${ctx.tasks
+                .filter((t) => t.status !== "completed")
+                .map((t) => `${t.subject} (${t.status})`)
+                .join(", ")}`,
+            ),
+      );
   }
   if (a.task_status !== undefined) {
     const { match, status } = a.task_status;
-    if (ctx.tasks === undefined) results.push(fail(`evidence unavailable: tasks telemetry absent from result.json — cannot evaluate task_status`));
+    if (ctx.tasks === undefined)
+      results.push(fail(`evidence unavailable: tasks telemetry absent from result.json — cannot evaluate task_status`));
     else {
       const c = compileUserRegex(match);
       if ("error" in c) results.push(fail(`task_status: bad regex "${match}": ${c.error}`));
