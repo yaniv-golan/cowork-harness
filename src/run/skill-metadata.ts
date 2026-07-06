@@ -18,44 +18,68 @@ function parseFrontmatter(content: string): Record<string, unknown> | undefined 
   }
 }
 
+/** A staged plugin's skill-source root, for whenToUse enrichment of `<plugin>:<skill>` ids. */
+export interface PluginSkillRoot {
+  pluginName: string; // the plugin's `.claude-plugin/plugin.json` `name` (the `<plugin>` half of `<plugin>:<skill>`)
+  hostPath: string; // host dir of the plugin root (contains `.claude-plugin/` and the skills subdir)
+  skillsSubdir: string; // relative subdir holding the skill dirs (from plugin.json `skills`, default "skills")
+}
+
 /**
- * Reads every skill's `SKILL.md` frontmatter under `<configDir>/skills/*` (§6.2, O1).
- * `configDir` is `plan.configDir` — the harness's own scenario-authoring-time staging root
- * (session.ts materializes it identically for every fidelity tier), NOT the sandbox-staged
- * `workRoot`: `workRoot`'s on-host layout is tier-dependent (container copies `.claude` under it,
- * but microvm stages to a different tree entirely, hostloop deliberately never copies `.claude`
- * there, and protocol never stages `.claude` under `workRoot` at all) — reading from `workRoot`
- * silently returned `[]` on roughly half of real "cowork"-fidelity runs.
- * `id` is the skill's DIRECTORY basename (not the frontmatter's own `name:` key, which may differ or
- * be absent) — this matches how the skill is actually addressed elsewhere (e.g. the `Skill` tool's
- * `input.skill` value, which the harness's staging step names after the source directory).
- * `whenToUse` prefers `description`, falls back to `when_to_use`, omitted if neither is present.
- * Never throws: a missing `skills` directory, a skill with no `SKILL.md`, or a `SKILL.md`
- * with no/malformed frontmatter are all silently skipped — this is a best-effort listing, not a
- * validation pass (the scenario linter is responsible for validating a skill's own frontmatter).
+ * Resolves the Context/Connectors panel's available-skill listing (§6.2, O1). The SPINE is `ids` — the
+ * authoritative skill-id list from the agent's `init` event (bare `<skill>` for `skills.local`,
+ * `<plugin>:<skill>` for plugin/marketplace skills). Each id is enriched with `whenToUse` read from its
+ * staged `SKILL.md` frontmatter where findable — local skills at `<configDir>/skills/<id>/SKILL.md`,
+ * plugin skills at `<pluginRoot.hostPath>/<skillsSubdir>/<skill>/SKILL.md`. An id whose SKILL.md can't be
+ * found (or has no/malformed frontmatter) still appears, id-only — the init event, not the disk, is the
+ * source of truth for WHICH skills are available; the disk is only consulted to enrich the description.
+ * Never throws (best-effort enrichment). Preserves `ids` order.
  */
-export function readAvailableSkills(configDir: string): Array<{ id: string; whenToUse?: string }> {
-  const skillsDir = join(configDir, "skills");
-  let entries: string[];
-  try {
-    entries = readdirSync(skillsDir, { withFileTypes: true })
-      .filter((e) => e.isDirectory())
-      .map((e) => e.name);
-  } catch {
-    return [];
-  }
-  const out: Array<{ id: string; whenToUse?: string }> = [];
-  for (const id of entries) {
+export function resolveAvailableSkills(
+  ids: string[],
+  configDir: string,
+  pluginRoots: PluginSkillRoot[],
+): Array<{ id: string; whenToUse?: string }> {
+  const whenToUseById = new Map<string, string>();
+  const readWhenToUse = (skillMdPath: string): string | undefined => {
     let content: string;
     try {
-      content = readFileSync(join(skillsDir, id, "SKILL.md"), "utf8");
+      content = readFileSync(skillMdPath, "utf8");
+    } catch {
+      return undefined;
+    }
+    const fm = parseFrontmatter(content);
+    if (!fm) return undefined;
+    return typeof fm.description === "string" ? fm.description : typeof fm.when_to_use === "string" ? fm.when_to_use : undefined;
+  };
+  // Local skills.local: <configDir>/skills/<dir>/SKILL.md, keyed by bare <dir>.
+  try {
+    for (const e of readdirSync(join(configDir, "skills"), { withFileTypes: true })) {
+      if (!e.isDirectory()) continue;
+      const w = readWhenToUse(join(configDir, "skills", e.name, "SKILL.md"));
+      if (w !== undefined) whenToUseById.set(e.name, w);
+    }
+  } catch {
+    /* no configDir/skills — fine */
+  }
+  // Plugin skills: <hostPath>/<skillsSubdir>/<dir>/SKILL.md, keyed by <pluginName>:<dir>.
+  for (const root of pluginRoots) {
+    const skillsDir = join(root.hostPath, root.skillsSubdir);
+    let dirs: string[];
+    try {
+      dirs = readdirSync(skillsDir, { withFileTypes: true })
+        .filter((e) => e.isDirectory())
+        .map((e) => e.name);
     } catch {
       continue;
     }
-    const fm = parseFrontmatter(content);
-    if (!fm) continue;
-    const whenToUse = typeof fm.description === "string" ? fm.description : typeof fm.when_to_use === "string" ? fm.when_to_use : undefined;
-    out.push({ id, whenToUse });
+    for (const dir of dirs) {
+      const w = readWhenToUse(join(skillsDir, dir, "SKILL.md"));
+      if (w !== undefined) whenToUseById.set(`${root.pluginName}:${dir}`, w);
+    }
   }
-  return out;
+  return ids.map((id) => {
+    const w = whenToUseById.get(id);
+    return w !== undefined ? { id, whenToUse: w } : { id };
+  });
 }

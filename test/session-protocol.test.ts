@@ -4,7 +4,7 @@ import { EventEmitter } from "node:events";
 import { mkdtempSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { LiveAgentSession, hookOutput, type AgentEvent } from "../src/agent/session.js";
+import { LiveAgentSession, hookOutput, parseMessage, type AgentEvent } from "../src/agent/session.js";
 
 /** A minimal fake ChildProcessByStdio: EventEmitter + stdin/stdout/stderr PassThroughs. */
 function fakeProc() {
@@ -57,6 +57,18 @@ beforeEach(() => {
 });
 afterEach(() => {
   process.stderr.write = origWrite;
+});
+
+describe("parseMessage — init event skills capture (§6.2, O1 fix)", () => {
+  it("a system/init message carrying a skills array maps onto the init AgentEvent's skills field verbatim (bare + <plugin>:<skill> ids)", () => {
+    const ev = parseMessage({ type: "system", subtype: "init", tools: ["Skill"], mcp_servers: [], skills: ["a", "b:c"], cwd: "/tmp" });
+    expect(ev).toEqual([{ type: "init", tools: ["Skill"], mcpServers: [], skills: ["a", "b:c"], cwd: "/tmp" }]);
+  });
+
+  it("defaults skills to [] when the raw init message carries no skills field", () => {
+    const ev = parseMessage({ type: "system", subtype: "init", tools: [], mcp_servers: [] });
+    expect((ev[0] as { skills: string[] }).skills).toEqual([]);
+  });
 });
 
 describe("session protocol loud-failure fixes", () => {

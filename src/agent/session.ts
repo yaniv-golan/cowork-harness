@@ -45,7 +45,7 @@ export type DecisionResponse =
   | { kind: "elicit"; action: "accept" | "decline" | "cancel"; content?: unknown };
 
 export type AgentEvent =
-  | { type: "init"; tools: string[]; mcpServers: unknown[]; cwd?: string }
+  | { type: "init"; tools: string[]; mcpServers: unknown[]; skills: string[]; cwd?: string }
   | { type: "assistant_text"; text: string; parentToolUseId?: string; model?: string }
   | { type: "tool_use"; name: string; input: unknown; parentToolUseId?: string; toolUseId?: string; synthetic?: boolean; model?: string } // toolUseId for tool_use↔tool_result pairing; synthetic = the MCP round-trip echo (trace-only, NOT counted — the real call already arrives as an assistant tool_use block, live-verified); model = the assistant message's model (§4.3, M2)
   | { type: "tool_result"; toolUseId?: string; isError: boolean; text: string; provenanceText?: string; assertText?: string } // the OUTCOME of a tool call (from `user`/tool_result blocks). `text` is display-truncated; `provenanceText` is the larger raw value so URLs past the display cap still seed web_fetch provenance; `assertText` is assertion-fidelity cap (10 KB)
@@ -680,7 +680,8 @@ export function parseMessage(msg: any): AgentEvent[] {
   const ev: AgentEvent[] = [];
   switch (msg.type) {
     case "system":
-      if (msg.subtype === "init") ev.push({ type: "init", tools: msg.tools ?? [], mcpServers: msg.mcp_servers ?? [], cwd: msg.cwd });
+      if (msg.subtype === "init")
+        ev.push({ type: "init", tools: msg.tools ?? [], mcpServers: msg.mcp_servers ?? [], skills: msg.skills ?? [], cwd: msg.cwd });
       else if (msg.subtype === "api_metrics") ev.push({ type: "metrics", data: msg });
       else if (msg.subtype === "thinking") ev.push({ type: "thinking", text: String(msg.content ?? "") });
       break;

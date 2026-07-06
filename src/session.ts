@@ -10,6 +10,7 @@ import { MOUNT_BARE_NAME_MIN_VERSION, cmpVersionStrings } from "./baseline.js";
 import { containedRealPath } from "./boundary-paths.js";
 import { gitModeEnabled, gitFilterFromSet, gitStageStats } from "./run/skill-files.js";
 import { BoundaryError } from "./errors.js";
+import type { PluginSkillRoot } from "./run/skill-metadata.js";
 
 /** Clone process env with Cowork's bg-env-strip applied. */
 function strippedEnv(baseline: PlatformBaseline): NodeJS.ProcessEnv {
@@ -180,6 +181,28 @@ export function userVisibleRootsFromPlan(plan: LaunchPlan): string[] {
  *  still enumerate these roots; only their captured content changes shape. */
 export function readonlyFolderRootsFromPlan(plan: LaunchPlan): string[] {
   return plan.mounts.filter((m) => m.kind === "folder" && m.mode === "r").map((m) => m.mountPath);
+}
+
+/** Plugin skill-source roots for `resolveAvailableSkills`'s whenToUse enrichment (§6.2, O1). Reads each
+ *  staged plugin mount's `.claude-plugin/plugin.json` for the plugin `name` + `skills` subdir; best-effort,
+ *  never throws (a missing/corrupt manifest falls back to the dir basename + a "skills" subdir). */
+export function pluginSkillRootsFromPlan(plan: LaunchPlan): PluginSkillRoot[] {
+  const out: PluginSkillRoot[] = [];
+  for (const m of plan.mounts) {
+    if (m.kind !== "local-plugin" && m.kind !== "remote-plugin" && m.kind !== "marketplace-plugin") continue;
+    let name = basename(m.hostPath);
+    let skillsSubdir = "skills";
+    const pj = join(m.hostPath, ".claude-plugin", "plugin.json");
+    try {
+      const parsed = JSON.parse(readFileSync(pj, "utf8")) as { name?: unknown; skills?: unknown };
+      if (typeof parsed.name === "string" && parsed.name) name = parsed.name;
+      if (typeof parsed.skills === "string" && parsed.skills) skillsSubdir = parsed.skills.replace(/^\.\//, "");
+    } catch {
+      /* missing/corrupt manifest — best-effort fallback */
+    }
+    out.push({ pluginName: name, hostPath: m.hostPath, skillsSubdir });
+  }
+  return out;
 }
 
 /**

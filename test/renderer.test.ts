@@ -17,7 +17,7 @@ function sink() {
 }
 
 const events: AgentEvent[] = [
-  { type: "init", tools: ["Bash"], mcpServers: [], cwd: "/sessions/x" },
+  { type: "init", tools: ["Bash"], mcpServers: [], skills: [], cwd: "/sessions/x" },
   { type: "thinking", text: "let me think" },
   { type: "assistant_text", text: "I will search" },
   { type: "tool_use", name: "Bash", input: { command: "grep x" } },

@@ -76,7 +76,7 @@ describe("toTimelineFields", () => {
   });
 
   it("returns undefined for event types with no timeline-relevant signal yet (init/assistant_text/metrics/error/raw)", () => {
-    expect(toTimelineFields({ type: "init", tools: [], mcpServers: [] })).toBeUndefined();
+    expect(toTimelineFields({ type: "init", tools: [], mcpServers: [], skills: [] })).toBeUndefined();
     expect(toTimelineFields({ type: "assistant_text", text: "hi" })).toBeUndefined();
     expect(toTimelineFields({ type: "metrics", data: {} })).toBeUndefined();
     expect(toTimelineFields({ type: "error", source: "protocol", message: "x" })).toBeUndefined();

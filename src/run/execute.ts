@@ -17,7 +17,14 @@ import { writeRunningStatus, startStatusTicker, registerRunForCrashSafety, statu
 import { buildFingerprint } from "./cassette.js";
 import { assembleRunResult } from "./assemble-run-result.js";
 import { loadBaseline } from "../baseline.js";
-import { loadSession, resolveSessionPaths, buildLaunchPlan, userVisibleRootsFromPlan, readonlyFolderRootsFromPlan } from "../session.js";
+import {
+  loadSession,
+  resolveSessionPaths,
+  buildLaunchPlan,
+  userVisibleRootsFromPlan,
+  readonlyFolderRootsFromPlan,
+  pluginSkillRootsFromPlan,
+} from "../session.js";
 import { spawnProtocol } from "../runtime/protocol.js";
 import { spawnContainer } from "../runtime/container.js";
 import { spawnHostLoop } from "../runtime/hostloop.js";
@@ -55,7 +62,7 @@ import { collectSecrets, scrub } from "../secrets.js";
 import { indexRowFromResult, appendIndexRow } from "./run-index.js";
 import { classifyWorkspaceFiles } from "./artifacts.js";
 import { readPreRunManifest } from "./pre-run-manifest.js";
-import { readAvailableSkills } from "./skill-metadata.js";
+import { resolveAvailableSkills, type PluginSkillRoot } from "./skill-metadata.js";
 
 // Moved to ./artifacts.ts so assert.ts can use it without an assert→execute import cycle;
 // re-exported here for the existing importers (cassette.ts, tests).
@@ -703,6 +710,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       outDir,
       workRoot,
       configDir: plan.configDir,
+      pluginSkillRoots: pluginSkillRootsFromPlan(plan),
       userVisibleRoots,
       readonlyFolderRoots,
       effectiveFidelity,
@@ -735,11 +743,18 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // (toolDurations/skillActivity/subagents) below — two reads could disagree if the file were touched mid-run.
   const timelineData = readTimeline(outDir);
 
-  // Context/Connectors panel (§6.2, M6): the staged skill set, read straight off disk — the child process
-  // has already run to completion by this point, so every skill is fully staged. Populated HERE (before the
-  // evaluate() ctx below, which needs it for skill_available) rather than only later before assembleRunResult
-  // — reading it twice would be wasteful and out of order; this single assignment feeds both.
-  record.context = { ...record.context, availableSkills: readAvailableSkills(plan.configDir) };
+  // Context/Connectors panel (§6.2, M6): the SPINE is the id-only list run.ts's init handler already seeded
+  // onto record.context.availableSkills from the agent's own init event (authoritative — covers plugin/
+  // marketplace skills, which the disk scan never saw). Here we enrich each id with whenToUse read off
+  // disk, across BOTH delivery trees (skills.local under plan.configDir, plugin skills under each staged
+  // plugin mount). Populated HERE (before the evaluate() ctx below, which needs it for skill_available)
+  // rather than only later before assembleRunResult — reading it twice would be wasteful and out of order;
+  // this single assignment feeds both.
+  const availableSkillIds = record.context?.availableSkills?.map((s) => s.id) ?? [];
+  record.context = {
+    ...record.context,
+    availableSkills: resolveAvailableSkills(availableSkillIds, plan.configDir, pluginSkillRootsFromPlan(plan)),
+  };
 
   const assertions = evaluate(scenario.assert, {
     transcript: record.transcript,
@@ -1103,6 +1118,7 @@ export function buildPartialResult(args: {
   outDir: string;
   workRoot: string;
   configDir: string;
+  pluginSkillRoots: PluginSkillRoot[];
   userVisibleRoots: string[];
   readonlyFolderRoots: string[];
   effectiveFidelity: string;
@@ -1114,10 +1130,15 @@ export function buildPartialResult(args: {
   const { record } = args;
   const gp = summarizeGateProvenance(record.decisions);
   const timelineData = readTimeline(args.outDir);
-  // Context/Connectors panel (§6.2, M6): the staged skill set, read straight off disk — by the time a
-  // partial result is built the child process has already exited (on the unanswered gate), so skills
-  // are fully staged. Own wiring, independent of executeScenario's (this function's own args.configDir).
-  args.record.context = { ...args.record.context, availableSkills: readAvailableSkills(args.configDir) };
+  // Context/Connectors panel (§6.2, M6): the SPINE is the id-only list run.ts's init handler already seeded
+  // (authoritative — covers plugin/marketplace skills). Enrich with whenToUse read off disk across both
+  // delivery trees. Own wiring, independent of executeScenario's (this function's own args.configDir /
+  // args.pluginSkillRoots).
+  const availableSkillIds = args.record.context?.availableSkills?.map((s) => s.id) ?? [];
+  args.record.context = {
+    ...args.record.context,
+    availableSkills: resolveAvailableSkills(availableSkillIds, args.configDir, args.pluginSkillRoots),
+  };
   // Working folder panel's file model (§6.3, M6) — same walk `artifacts` below derives from (Task 7).
   const workspaceFiles = classifyWorkspaceFiles(args.workRoot, args.userVisibleRoots, args.readonlyFolderRoots);
   return assembleRunResult({

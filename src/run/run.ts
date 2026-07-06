@@ -260,7 +260,7 @@ export class Run {
           case "init":
             this.rec.initTools = ev.tools;
             this.rec.cwd = ev.cwd;
-            this.rec.context = { tools: ev.tools, mcpServers: ev.mcpServers };
+            this.rec.context = { tools: ev.tools, mcpServers: ev.mcpServers, availableSkills: ev.skills.map((id) => ({ id })) };
             break;
           case "assistant_text":
             this.noteModel(ev.model);

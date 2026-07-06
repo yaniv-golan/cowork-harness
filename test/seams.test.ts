@@ -354,7 +354,7 @@ describe("parseMessage — result event cost/turns (Wave 0 seam)", () => {
 describe("Run — turn loop + record", () => {
   it("builds transcript, toolsCalled, and the sub-agent dispatch tree", async () => {
     const ev: AgentEvent[] = [
-      { type: "init", tools: ["Task", "Bash"], mcpServers: [], cwd: "/sessions/x" },
+      { type: "init", tools: ["Task", "Bash"], mcpServers: [], skills: [], cwd: "/sessions/x" },
       { type: "assistant_text", text: "working" },
       { type: "tool_use", name: "Task", input: { subagent_type: "researcher", tools: ["Bash", "Read"] } },
       { type: "subagent_dispatch", toolUseId: "tu1", agentType: "researcher", declaredTools: ["Bash", "Read"] },
@@ -375,11 +375,20 @@ describe("Run — turn loop + record", () => {
 
   it("captures mcpServers into rec.context (currently silently dropped by run.ts's init case)", async () => {
     const ev: AgentEvent[] = [
-      { type: "init", tools: ["Read", "Bash"], mcpServers: [{ name: "my-server", status: "connected" }], cwd: "/tmp" },
+      { type: "init", tools: ["Read", "Bash"], mcpServers: [{ name: "my-server", status: "connected" }], skills: [], cwd: "/tmp" },
       { type: "result", isError: false },
     ];
     const rec = await new Run(new MockSession(ev), new ScriptedDecider([])).drive("go");
-    expect(rec.context).toEqual({ tools: ["Read", "Bash"], mcpServers: [{ name: "my-server", status: "connected" }] });
+    expect(rec.context).toEqual({ tools: ["Read", "Bash"], mcpServers: [{ name: "my-server", status: "connected" }], availableSkills: [] });
+  });
+
+  it("seeds rec.context.availableSkills as an id-only list from the init event's skills array (§O1 fix — the authoritative spine, incl. plugin ids)", async () => {
+    const ev: AgentEvent[] = [
+      { type: "init", tools: ["Skill"], mcpServers: [], skills: ["a", "b:c"], cwd: "/tmp" },
+      { type: "result", isError: false },
+    ];
+    const rec = await new Run(new MockSession(ev), new ScriptedDecider([])).drive("go");
+    expect(rec.context?.availableSkills).toEqual([{ id: "a" }, { id: "b:c" }]);
   });
 
   it("increments toolsUsed's count for a repeated tool inside the same subagent dispatch (not a duplicate entry)", async () => {
@@ -445,7 +454,7 @@ describe("Run — turn loop + record", () => {
 
   it("captures a top-level Skill tool_use into rec.skillsInvoked (Wave 1 / E8)", async () => {
     const ev: AgentEvent[] = [
-      { type: "init", tools: ["Skill"], mcpServers: [] },
+      { type: "init", tools: ["Skill"], mcpServers: [], skills: [] },
       { type: "tool_use", name: "Skill", input: { skill: "my-pdf-skill:my-pdf-skill" } },
       { type: "result", isError: false },
     ];
@@ -877,7 +886,7 @@ describe("Run — turn loop + record", () => {
     // MockSession that yields a typed {type:"error", source:"spawn"} event (as LiveAgentSession
     // now does when proc emits "error"). The Run loop must terminate and set rec.result = "error".
     const ev: AgentEvent[] = [
-      { type: "init", tools: ["Bash"], mcpServers: [] },
+      { type: "init", tools: ["Bash"], mcpServers: [], skills: [] },
       { type: "assistant_text", text: "starting up" },
       { type: "error", source: "spawn", message: "ENOENT: binary not found" },
       // A result event that would follow in a healthy run — must NOT be reached:
@@ -932,7 +941,7 @@ describe("Run — turn loop + record", () => {
     // rec.result = "success". A child that crashes nonzero after printing a result is NOT a passing run:
     // the exit error must override result back to "error" and surface the stderr tail.
     const ev: AgentEvent[] = [
-      { type: "init", tools: ["Bash"], mcpServers: [] },
+      { type: "init", tools: ["Bash"], mcpServers: [], skills: [] },
       { type: "result", isError: false },
       { type: "error", source: "exit", message: "agent process exited with code 137 — stderr tail: OOMKilled" },
     ];
