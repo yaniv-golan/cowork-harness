@@ -77,7 +77,8 @@ export type AgentEvent =
     }
   | { type: "error"; source: "spawn" | "agent" | "protocol" | "exit"; message: string }
   | { type: "raw"; line: string }
-  | { type: "system_event"; subtype: string; data: Record<string, unknown> }; // a `system` message we don't special-case (e.g. compact_boundary)
+  | { type: "system_event"; subtype: string; data: Record<string, unknown> } // a `system` message we don't special-case (e.g. compact_boundary)
+  | { type: "mcp_error"; server: string; code?: number; message: string }; // an MCP round-trip the harness answered with a JSON-RPC error
 
 export type SdkMcp = {
   servers: string[];
@@ -510,6 +511,9 @@ export class LiveAgentSession implements AgentSession {
           const message = (e as Error)?.message ?? String(e);
           warn(`::warning:: sdkMcp.handle threw for "${server}" — replying with a JSON-RPC error: ${message}\n`);
           out = { error: { code: -32603, message: `handler error: ${message}` } };
+          this.write(mcpResponseEnvelope(reqId, out as any, jr.id));
+          yield { type: "mcp_error", server, code: -32603, message: `handler error: ${message}` };
+          return;
         }
         this.write(mcpResponseEnvelope(reqId, out as any, jr.id));
         // Echo the MCP round-trip as a SYNTHETIC tool_use for provenance/trace only. The real tool call
@@ -532,6 +536,7 @@ export class LiveAgentSession implements AgentSession {
         `::warning:: mcp_message for server "${server}" arrived but no sdkMcp handler is configured — replying with a JSON-RPC error (would otherwise deadlock)\n`,
       );
       this.write(mcpResponseEnvelope(reqId, { error: { code: -32601, message: "no sdkMcp handler configured" } }, jr.id));
+      yield { type: "mcp_error", server, code: -32601, message: "no sdkMcp handler configured" };
       return;
     }
     for (const ev of parseMessage(msg)) {

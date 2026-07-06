@@ -866,6 +866,7 @@ function minimalRec(): RunRecord {
     tasks: new Map(),
     context: { tools: [], mcpServers: [] },
     contextEvents: [],
+    mcpErrors: [],
   };
 }
 
@@ -2190,6 +2191,7 @@ function replayErrorResult(file: string): RunResult {
     artifacts: undefined,
     workspaceFiles: undefined, // no live filesystem to scan on replay (see the doc note in execute.ts)
     contextEvents: undefined, // no rec to read from on this early-bail lane
+    mcpErrors: undefined, // live-only — this early-bail lane never drives a session
     preRunPaths: undefined,
     preRunHashes: undefined,
     partial: undefined,
@@ -2264,6 +2266,7 @@ function warnUncheckableOnDiskKeys(cassette: Cassette, frozen: Scenario, onDisk:
     "no_delete_in_outputs",
     "self_heal_ran",
     "transcript_no_host_path",
+    "no_mcp_error",
   ]);
   const hasPreRun = cassette.preRunPaths !== undefined;
   const hasPreRunHashes = cassette.preRunHashes !== undefined;
@@ -3042,6 +3045,7 @@ export async function replayCassette(
       "no_delete_in_outputs",
       "self_heal_ran",
       "transcript_no_host_path",
+      "no_mcp_error",
       "replay_protocol_fidelity",
       // (verdict modifiers allow_permissive_auto_allow / allow_missing_capability / allow_l0_plugin_divergence
       //  arrive via ...alwaysContentKeys above — kept on replay as no-op passes.)
@@ -3177,6 +3181,9 @@ export async function replayCassette(
       // The re-drive reproduces `system_event` via parseMessage from the cassette's frozen stdout
       // stream — content-class, same as toolErrors/redundantToolCalls above.
       contextEvents: rec.contextEvents,
+      // live-only — MCP round-trips are harness-computed at drive time, not reproducible from the
+      // cassette's frozen stdout stream (unlike contextEvents/toolErrors above).
+      mcpErrors: undefined,
       effectiveFidelity: cassette.effectiveFidelity,
       // Replay has no live filesystem — computer_links_resolve normalizes both link shapes against the
       // manifest instead (see the manifestKeys comment above + src/run/computer-links.ts).
@@ -3334,6 +3341,7 @@ export async function replayCassette(
       artifacts: undefined,
       workspaceFiles: undefined, // no live filesystem to scan on replay (see the doc note in execute.ts)
       contextEvents: rec.contextEvents, // the re-drive reproduces system_event via parseMessage — powers compaction_occurred
+      mcpErrors: undefined, // live-only — the re-drive never produces mcp_error
       preRunPaths: undefined,
       preRunHashes: undefined,
       partial: undefined,

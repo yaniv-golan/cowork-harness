@@ -32,6 +32,7 @@ function partialRecord(over: Partial<RunRecord> = {}): RunRecord {
     tasks: new Map(),
     context: { tools: [], mcpServers: [] },
     contextEvents: [],
+    mcpErrors: [],
     ...over,
   };
 }

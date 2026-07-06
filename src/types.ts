@@ -292,6 +292,10 @@ export const Assertion = z.object({
     .describe(
       "a context-compaction boundary occurred during the run (a `compact_boundary` system event was recorded); only `true` is valid — omit to not require it",
     ),
+  no_mcp_error: z
+    .literal(true)
+    .optional()
+    .describe("no MCP round-trip failed (RunResult.mcpErrors is empty) — live-only (excluded on replay); only `true` is valid"),
   egress_denied: z.string().optional().describe("egress to this host was denied"),
   egress_allowed: z.string().optional().describe("egress to this host was allowed"),
   // Only `true` is accepted: `false` is rejected as a footgun. The assertion is presence-semantic — authoring
@@ -837,4 +841,8 @@ export interface RunResult {
   /** `system` stream messages the harness doesn't special-case — e.g. `compact_boundary`. In the
    *  stdout stream, so reproduced on replay. Powers `compaction_occurred`. */
   contextEvents?: Array<{ subtype: string; ts?: number; data?: Record<string, unknown> }>;
+  /** MCP round-trips the harness answered with a JSON-RPC error (no handler, or the handler threw).
+   *  Live-only — MCP round-trips are harness-computed, not in the SDK stdout stream, so absent on
+   *  replay (the assertion then fails evidence-unavailable, never vacuously passes). */
+  mcpErrors?: Array<{ server: string; code?: number; message: string }>;
 }

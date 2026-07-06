@@ -101,6 +101,7 @@ export interface RunRecord {
   // rather than accumulating it from live events like tools/mcpServers.
   context: { tools: string[]; mcpServers: unknown[]; availableSkills?: Array<{ id: string; whenToUse?: string }> };
   contextEvents: Array<{ subtype: string; data: Record<string, unknown> }>; // system events we don't special-case (compaction etc.)
+  mcpErrors: Array<{ server: string; code?: number; message: string }>; // MCP round-trips the harness answered with a JSON-RPC error (no handler, or the handler threw)
 }
 
 export interface RunHooks {
@@ -186,6 +187,7 @@ export class Run {
       tasks: new Map(),
       context: { tools: [], mcpServers: [] },
       contextEvents: [],
+      mcpErrors: [],
     };
   }
 
@@ -440,6 +442,9 @@ export class Run {
             break;
           case "system_event":
             this.rec.contextEvents.push({ subtype: ev.subtype, data: ev.data });
+            break;
+          case "mcp_error":
+            this.rec.mcpErrors.push({ server: ev.server, code: ev.code, message: ev.message });
             break;
         }
       }

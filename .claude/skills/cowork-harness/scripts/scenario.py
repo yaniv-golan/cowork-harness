@@ -103,6 +103,7 @@ LIVE_ONLY_KEYS = {
     "no_delete_in_outputs",
     "self_heal_ran",
     "transcript_no_host_path",
+    "no_mcp_error",
 }
 EGRESS_KEYS = {"egress_denied", "egress_allowed"}
 # verdict modifiers — don't verify anything themselves (e.g. suppress a default-fail)

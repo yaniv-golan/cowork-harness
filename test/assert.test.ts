@@ -399,6 +399,23 @@ describe("compaction_occurred", () => {
   });
 });
 
+describe("no_mcp_error", () => {
+  it("passes when mcpErrors is empty", () => {
+    const [r] = evaluate([{ no_mcp_error: true }], ctx({ mcpErrors: [] }));
+    expect(r.pass).toBe(true);
+  });
+  it("fails when an mcp error was recorded", () => {
+    const [r] = evaluate([{ no_mcp_error: true }], ctx({ mcpErrors: [{ server: "x", message: "boom" }] }));
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/x/);
+  });
+  it("is evidence-unavailable when mcpErrors is undefined (replay)", () => {
+    const [r] = evaluate([{ no_mcp_error: true }], ctx({ mcpErrors: undefined }));
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/live-only|not checkable|no mcp/i);
+  });
+});
+
 describe("tool_no_error (M3)", () => {
   it("passes when no tool matching the regex has any errors", () => {
     const c = ctx({ toolErrors: { Bash: { calls: 3, errors: 0 }, Read: { calls: 1, errors: 0 } } });

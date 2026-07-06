@@ -23,6 +23,7 @@
     "max_tool_errors",
     "max_turns",
     "no_delete_in_outputs",
+    "no_mcp_error",
     "no_skill_triggered",
     "no_unexpected_files",
     "question_asked",

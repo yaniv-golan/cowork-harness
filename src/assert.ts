@@ -342,6 +342,11 @@ export interface AssertContext {
    *  evidence-unavailable signal for compaction_occurred; an empty `[]` is a valid "captured, saw
    *  nothing uncaught" state and is NOT the same as undefined. */
   contextEvents?: RunResult["contextEvents"];
+  /** RunResult.mcpErrors — MCP round-trips the harness answered with a JSON-RPC error. Undefined means
+   *  no mcp-error telemetry was recorded for this run (live-only — replay never reproduces it) — the
+   *  evidence-unavailable signal for no_mcp_error; an empty `[]` is a valid "no MCP errors" state and
+   *  is NOT the same as undefined. */
+  mcpErrors?: RunResult["mcpErrors"];
 }
 
 export function evaluate(assertions: Assertion[], ctx: AssertContext): RunResult["assertions"] {
@@ -653,6 +658,14 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
           ? ok()
           : fail(`compaction_occurred: no compact_boundary event was recorded`),
     );
+  if (a.no_mcp_error !== undefined) {
+    if (ctx.mcpErrors === undefined)
+      results.push(fail(`no_mcp_error: live-only — mcp errors are not reconstructible on replay (re-record to check)`));
+    else {
+      const bad = ctx.mcpErrors[0];
+      results.push(ctx.mcpErrors.length === 0 ? ok() : fail(`no_mcp_error: server "${bad!.server}" failed: ${bad!.message}`));
+    }
+  }
   if (a.no_skill_triggered !== undefined) {
     const c = compileUserRegex(a.no_skill_triggered);
     if ("error" in c) results.push(fail(`no_skill_triggered: bad regex "${a.no_skill_triggered}": ${c.error}`));

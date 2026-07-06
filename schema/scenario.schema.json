@@ -307,6 +307,11 @@
             "type": "boolean",
             "const": true
           },
+          "no_mcp_error": {
+            "description": "no MCP round-trip failed (RunResult.mcpErrors is empty) — live-only (excluded on replay); only `true` is valid",
+            "type": "boolean",
+            "const": true
+          },
           "egress_denied": {
             "description": "egress to this host was denied",
             "type": "string"

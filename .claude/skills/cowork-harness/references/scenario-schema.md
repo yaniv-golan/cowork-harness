@@ -260,6 +260,7 @@ passes only if every key passes. Keep one concern per item unless you mean conju
 | `transcript_no_host_path: true` | no host path (`/Users/`, `/opt/cowork/`, `/home/`, `/root/`) leaked into model-visible text — **incompatible with `hostloop` AND `protocol`**: hostloop's native file tools legitimately expose real host paths, and protocol (L0) runs the agent's file tools on the real host cwd with no sealed filesystem, so this fails BY DESIGN on both (the harness warns at run start if asserted anyway); use `container`/`microvm` for this check |
 | `egress_denied: <host>` | the host was blocked by the egress proxy |
 | `egress_allowed: <host>` | the host was allowed through |
+| `no_mcp_error: true` | no MCP round-trip failed (`RunResult.mcpErrors` is empty — no unhandled server, no handler throw) — live-only: MCP round-trips are harness-computed, not in the SDK stdout stream, so evidence-unavailable on replay (never a vacuous pass). **Only `true` is valid** |
 | `artifact_json: {artifact, path, …}` | assert a JSON artifact's contents — `equals`/`gt`/`in`/`exists`/`absent`/`is_null` over a dotted `path` (`in` = membership in a list, for a stochastic/LLM value; `absent` ≠ `is_null`; an unresolved intermediate fails loud) |
 | `computer_links_resolve: true` | every `computer://` link in the model-visible transcript resolves to an artifact that exists in the run's collected outputs/mounts — a dangling link fails, naming which target was checked (a live host path, the collected work tree, or the replay manifest). Zero links in the transcript **passes** (presence-gated separately — pair with `transcript_contains` if you also need a link to show up). **Only `true` is valid** (`false` is rejected by the schema) |
 
@@ -330,7 +331,7 @@ staleness `fingerprint` shows ANY skill/baseline drift, or `replay --fail-on-ski
 skill-source drift; every replay result also reports it class-tagged in `staleness[]` for a JSON gate.
 
 **Egress + other filesystem — still skipped on replay (live-only):** `no_delete_in_outputs`,
-`self_heal_ran`, `transcript_no_host_path`, `egress_*` / `expect_denied`. These run only on a live `run`/`record`.
+`self_heal_ran`, `transcript_no_host_path`, `egress_*` / `expect_denied`, `no_mcp_error`. These run only on a live `run`/`record`.
 
 **Mixed assertions on replay:** before evaluating, `replay` strips each assertion to its replay-checkable
 keys and drops any left empty. So `{result, egress_denied}` evaluates on replay as `{result}` alone — its
