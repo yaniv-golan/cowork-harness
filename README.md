@@ -224,6 +224,7 @@ cowork-harness skill --help                                               # full
 cowork-harness chat ~/my-plugin                  # interactive multi-turn REPL (full harness: egress sandbox + control protocol)
 # chat --raw  → native interactive cowork mode via `docker run -it` (needs Docker + the arm64
 #               cowork-agent-base:2 image; the egress sandbox is NOT applied in --raw)
+# chat also writes a result.json (mode:"chat", no pass/fail verdict) — so a chat session now shows up in `stats`/`trace`/`scaffold` too
 ```
 
 **Input policy — no silent false-greens.** When an AskUserQuestion arrives with no scripted
@@ -435,11 +436,23 @@ trace.json          structured run trace: steps, questions, sub-agents, egress, 
 egress.log          raw allow/deny per outbound connection (microvm: at top level; container: under
                     proxy/ — the allow/deny decisions are also folded into run.jsonl/result.json)
 result.json         assertion results + decisions + sub-agents + cost/usage + exit status +
-                    gate provenance (how each AskUserQuestion gate was answered)
+                    gate provenance + tool/model timing & errors + skill/task/context panels +
+                    workspace file inventory + egress & resource telemetry (see "Observability
+                    fields" below)
 agent.stderr.log    the agent process's stderr (auth errors, flag rejects)
 ```
 
 Secrets (the injected OAuth token / API key) are scrubbed from every persisted log by value.
+
+**Observability fields** — `result.json` carries a lot more than the basics above:
+
+- **Timing & model:** `toolDurations` (per-tool call count / total / max ms), `models` (distinct model ids seen) — `trace <id> --view tool-durations` renders these as a table.
+- **Tool health:** `toolErrors` (per-tool call/error counts), `redundantToolCalls` (wasted repeated `{name,args}` calls), `thinking` (reasoning blocks, capped at the last 50), `modelUsage` (per-model tokens/cost/cache, denormalized from the SDK's own field).
+- **Sub-agents & skills:** `subagents[]` now also carries `prompt`, `model`, `output`, and `attributedSkillId`; `skillActivity[]` attributes tool calls to whichever skill was active when they ran.
+- **Panels:** `context` (available tools/mcpServers/skills), `tasks[]` (the agent's to-do list), `workspaceFiles[]` (every user-visible file, classified `output`/`mount`/`input`, with size + sha256).
+- **Runtime signals:** `hookEvents` (PreToolUse block/allow decisions), `mcpErrors` (failed MCP round-trips), `contextEvents` (incl. context-compaction boundaries), per-request `egress` detail (method/path/port/bytes + deny reason), `resources` (peak RSS, avg/peak CPU% — live lane only), `errorSource`/`stderrLogPath` (crash triage), `preRunHashes` (pre-run file hashes backing in-place-mutation checks).
+
+`cowork-harness assertions --list` is the full, always-current catalog built on these fields (e.g. `input_unmodified`, `tool_no_error`, `max_tool_errors`, `max_redundant_tool_calls`, `skill_tool_used`, `subagent_output_contains`, `all_tasks_completed`, `task_status`, `skill_available`, `connector_available`, `tool_available`, `hook_blocked`, `no_hook_blocked`, `no_mcp_error`, `compaction_occurred`, `max_peak_rss_bytes`); see [docs/scenario.md](./docs/scenario.md) for the same catalog with descriptions.
 
 **Gate provenance** — `result.json` carries a `gateProvenance` block recording, per AskUserQuestion gate, *how* it was answered — `scripted`, `decided(llm|external)`, `first-option`, or `prompt` — with a `bySource` histogram and per-gate `{question, answeredBy, answer, model?}`. The verdict footer shows a counts-only one-liner and `trace <id> --view questions` annotates each gate with its `by`/`model`, so you can see which assertions sit downstream of a non-reproducible (decided) gate:
 
