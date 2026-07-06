@@ -125,6 +125,14 @@ export class TimelineWriter {
   private stream: WriteStream;
   private startMono: bigint;
   private seq = 0;
+  // The sticky ordinal skill-activation window (§5.2). Only a TOP-LEVEL Skill tool_use changes this —
+  // it is deliberately NOT tracked per-toolUseId/frozen-at-dispatch-time: the real agent blocks
+  // synchronously on a dispatch's own tool_result while the sub-agent runs (the dispatching turn
+  // cannot emit a new top-level tool_use, including a Skill call, until the dispatch's result
+  // returns), so `currentSkillId` is provably invariant across the span from any dispatch to all of
+  // its children — a plain live read of this field at each child's arrival already equals whatever
+  // value was current when the dispatch itself opened. No separate per-dispatch snapshot is needed.
+  private currentSkillId = "(root)";
 
   constructor(outDir: string) {
     this.stream = createWriteStream(join(outDir, "timeline.jsonl"), { flags: "a" });
@@ -144,6 +152,20 @@ export class TimelineWriter {
   record(ev: AgentEvent, line: number): TimelineEvent | undefined {
     const fields = toTimelineFields(ev);
     if (!fields) return undefined;
+
+    if (fields.type === "tool_use" || fields.type === "subagent_dispatch") {
+      // Rule 1: a top-level Skill tool_use opens a NEW window before it's stamped, so the Skill call
+      // itself is attributed to the window it opens, not the one it's replacing.
+      if (fields.type === "tool_use" && ev.type === "tool_use" && ev.name === "Skill" && !ev.parentToolUseId) {
+        const skillInput = (ev.input as Record<string, unknown> | undefined)?.skill;
+        this.currentSkillId = typeof skillInput === "string" ? skillInput : "(unknown)";
+      }
+      // Rule 2/3: every top-level call AND every dispatch's children stamp with the live sticky
+      // window — see the field's doc comment above for why a dispatch's children never need a
+      // separately-frozen value.
+      (fields as { skillScope?: string }).skillScope = this.currentSkillId;
+    }
+
     const entry = { seq: this.seq, ts: this.mono(), line, ...fields } as TimelineEvent;
     this.seq++;
     this.stream.write(JSON.stringify(entry) + "\n");
