@@ -8,6 +8,11 @@
   "properties": {
     "$schema": { "type": "string" },
     "generator": { "type": "string" },
+    "mode": {
+      "type": "string",
+      "enum": ["run", "chat"],
+      "description": "Which lane produced this result. 'run' = an asserted run/skill/record/replay (carries a verdict); 'chat' = an interactive exploratory session (no assertions, no verdict). Absent on results written before this field existed — treat absent as 'run'."
+    },
     "scenario": { "type": "string" },
     "prompt": { "type": "string" },
     "fidelity": { "type": "string" },

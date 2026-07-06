@@ -45,6 +45,7 @@ const validateStrict = ajv.compile(strict);
 const full: RunResult = {
   $schema: "https://raw.githubusercontent.com/yaniv-golan/cowork-harness/main/schema/run-result.json",
   generator: "cowork-harness",
+  mode: "run",
   scenario: "example",
   prompt: "do the thing",
   fidelity: "container",

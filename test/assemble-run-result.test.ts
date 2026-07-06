@@ -12,6 +12,7 @@ function fullyExplicitFixture(): CompleteRunResult {
   return {
     $schema: undefined,
     generator: undefined,
+    mode: undefined,
     scenario: "test-scenario",
     prompt: undefined,
     fidelity: "container",
@@ -100,6 +101,10 @@ describe("assembleRunResult", () => {
       resources: { tier: "container", sampleCount: 3, intervalMs: 1000, peakRssBytes: 999 },
     });
     expect(out.resources).toMatchObject({ tier: "container", peakRssBytes: 999 });
+  });
+
+  it("passes mode through unchanged", () => {
+    expect(assembleRunResult({ ...fullyExplicitFixture(), mode: "chat" }).mode).toBe("chat");
   });
 });
 

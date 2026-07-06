@@ -629,6 +629,10 @@ export interface ModelUsageEntry {
 export interface RunResult {
   $schema?: string;
   generator?: string;
+  /** Which lane produced this result. "run" = an asserted run/skill/record/replay (carries a verdict);
+   *  "chat" = an interactive exploratory session (no assertions, no verdict — consumers must NOT read a
+   *  chat result as pass/fail). Absent on results written before this field existed — treat absent as "run". */
+  mode?: "run" | "chat";
   scenario: string;
   prompt?: string; // the prompt that was run — persisted so `scaffold <run-dir>` can reconstruct the scenario
   fidelity: string;

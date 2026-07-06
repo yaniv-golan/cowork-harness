@@ -949,6 +949,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   const result: RunResult = assembleRunResult({
     $schema: RUN_RESULT_SCHEMA_URL,
     generator: "cowork-harness",
+    mode: "run",
     scenario: scenario.name,
     prompt: scenario.prompt, // persisted for `scaffold <run-dir>`
     fidelity: scenario.fidelity,
@@ -1187,6 +1188,7 @@ export function buildPartialResult(args: {
   return assembleRunResult({
     $schema: RUN_RESULT_SCHEMA_URL,
     generator: "cowork-harness",
+    mode: "run",
     scenario: args.scenarioName,
     prompt: args.prompt,
     fidelity: args.fidelity,

@@ -12,7 +12,7 @@ import { warn } from "../io.js";
 export interface RunIndexRow {
   v: 1;
   ts: string; // ISO
-  command: "run" | "skill" | "record";
+  command: "run" | "skill" | "record" | "chat";
   scenario: string;
   slug: string; // the <runsRoot>/<slug>/ path segment (slugForPath(scenario) at write time)
   runId: string; // the <slug>/<runId>/ path segment — local_<hrtime> | sess-<id>
@@ -62,7 +62,12 @@ function slugAndRunIdFromOutDir(outDir: string): { slug: string; runId: string }
  *  provenance — they'd be fabricated, not derived. */
 export function indexRowFromResult(
   result: RunResult,
-  opts: { command: "run" | "skill" | "record"; partial: boolean; ts?: string; git?: { branch: string | null; sha: string | null } },
+  opts: {
+    command: "run" | "skill" | "record" | "chat";
+    partial: boolean;
+    ts?: string;
+    git?: { branch: string | null; sha: string | null };
+  },
 ): RunIndexRow {
   const verdict = computeVerdict(result, "live");
   const budget = budgetFields(result);
@@ -185,7 +190,14 @@ export function reindexFromRunsTree(runsRoot: string): { rows: RunIndexRow[]; wr
         try {
           const result = JSON.parse(readFileSync(resultPath, "utf8")) as RunResult;
           const ts = statSync(resultPath).mtime.toISOString();
-          walked.push(indexRowFromResult(result, { command: "run", partial: !!result.partial, ts, git: { branch: null, sha: null } }));
+          walked.push(
+            indexRowFromResult(result, {
+              command: result.mode === "chat" ? "chat" : "run",
+              partial: !!result.partial,
+              ts,
+              git: { branch: null, sha: null },
+            }),
+          );
           walkedOutDirs.add(outDir);
         } catch {
           skipped++;

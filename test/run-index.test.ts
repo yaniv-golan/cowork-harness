@@ -68,6 +68,11 @@ describe("indexRowFromResult — pure derivation from a RunResult", () => {
     expect(partialRow.partial).toBe(true);
   });
 
+  it("indexRowFromResult accepts a chat command", () => {
+    const row = indexRowFromResult(rr({ mode: "chat" }), { command: "chat", partial: false });
+    expect(row.command).toBe("chat");
+  });
+
   it("derives the scenario slug from outDir's parent-of-runId segment (matches the physical layout)", () => {
     const row = indexRowFromResult(rr({ outDir: "/home/x/.cowork-harness/runs/my-scenario/local_12345" }), {
       command: "run",

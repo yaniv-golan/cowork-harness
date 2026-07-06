@@ -2165,6 +2165,7 @@ function replayErrorResult(file: string): RunResult {
     durationMs: 0,
     $schema: undefined,
     generator: undefined,
+    mode: "run",
     prompt: undefined,
     resultErrorKind: undefined,
     errorSource: undefined, // no rec to read from on this early-bail lane
@@ -3325,6 +3326,7 @@ export async function replayCassette(
 
     return assembleRunResult({
       scenario: cassette.scenario.name,
+      mode: "run",
       fidelity: `replay:${cassette.scenario.fidelity}`,
       // The tier the LIVE run actually used (cowork → hostloop/container); falls back to authored fidelity
       // for an older cassette that didn't record it.
