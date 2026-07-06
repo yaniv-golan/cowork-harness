@@ -856,6 +856,7 @@ function minimalRec(): RunRecord {
     thinkingElided: 0,
     toolErrors: {},
     redundantToolCalls: [],
+    tasks: new Map(),
   };
 }
 
@@ -2141,6 +2142,7 @@ function replayErrorResult(file: string): RunResult {
     gateProvenance: undefined,
     skillsInvoked: undefined,
     skillToolAvailable: undefined,
+    tasks: undefined,
   });
 }
 
@@ -3162,6 +3164,7 @@ export async function replayCassette(
       toolErrors: rec.toolErrors,
       modelUsage: rec.modelUsage,
       redundantToolCalls: rec.redundantToolCalls,
+      tasks: rec.tasks.size ? Array.from(rec.tasks.values()) : undefined,
       gateDeliveries: rec.gateDeliveries,
       egress: [],
       assertions,

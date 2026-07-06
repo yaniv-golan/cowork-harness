@@ -127,6 +127,7 @@ const full: RunResult = {
   staleness: [{ class: "skill", message: "skill content changed since record" }],
   skippedAssertions: { full: 1, partial: 0 },
   toolResults: [{ toolUseId: "tu_1", isError: false, text: "ok", assertText: "ok" }],
+  tasks: [{ id: "1", subject: "step one", status: "completed", description: "d1", activeForm: "doing step one" }],
 };
 
 describe("schema/run-result.json", () => {

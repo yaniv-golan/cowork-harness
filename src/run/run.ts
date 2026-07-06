@@ -79,6 +79,7 @@ export interface RunRecord {
   toolErrors: Record<string, { calls: number; errors: number }>; // per-tool call/error rollup (§4.6, M3)
   modelUsage?: Record<string, Record<string, unknown>>; // per-model cost/token breakdown, from the SDK's own result-message field (§4.7, M3)
   redundantToolCalls: Array<{ name: string; argHash: string; count: number }>; // repeated identical calls, count>=2 only (§4.8, M3)
+  tasks: Map<string, { id: string; subject: string; status: string; description?: string; activeForm?: string }>; // Progress panel (§6.1, M6) — deleted tasks removed from the map, never surfaced
 }
 
 export interface RunHooks {
@@ -121,6 +122,10 @@ export class Run {
   private rec: RunRecord;
   private toolLog: { name: string; input: unknown; synthetic?: boolean; parentToolUseId?: string }[] = [];
   private toolNameByUseId = new Map<string, string>();
+  // TaskCreate's tool_use carries no id (only subject/description) — the real id only appears in the
+  // paired tool_result text ("Task #<N> created successfully: <subject>"). Keyed by toolUseId so the
+  // eventual tool_result can look up which pending create it resolves, mirroring toolNameByUseId's pattern.
+  private pendingTaskCreates = new Map<string, { subject: string; description?: string; activeForm?: string }>();
   // per-session web_fetch provenance set. Run owns it (it sees user turns + tool_results) and
   // seeds it during drive(); the workspace handler reads membership + escalates misses via the Decider.
   private provenance = new ProvenanceTracker();
@@ -157,6 +162,7 @@ export class Run {
       thinkingElided: 0,
       toolErrors: {},
       redundantToolCalls: [],
+      tasks: new Map(),
     };
   }
 
@@ -277,6 +283,23 @@ export class Run {
               // Wave 1 / E8: a top-level Skill invocation — duplicates kept (re-triggering is signal).
               if (ev.name === "Skill") this.rec.skillsInvoked.push(String((ev.input as Record<string, unknown> | undefined)?.skill ?? ""));
               if (ev.toolUseId) this.toolNameByUseId.set(ev.toolUseId, ev.name);
+              // Progress panel (§6.1, M6): TaskCreate's input has no id — stash it, resolved by the
+              // paired tool_result below. TaskUpdate's input carries taskId directly, so it applies here.
+              if (ev.name === "TaskCreate" && ev.toolUseId) {
+                const inp = (ev.input as Record<string, unknown> | undefined) ?? {};
+                this.pendingTaskCreates.set(ev.toolUseId, {
+                  subject: String(inp.subject ?? ""),
+                  description: inp.description != null ? String(inp.description) : undefined,
+                  activeForm: inp.activeForm != null ? String(inp.activeForm) : undefined,
+                });
+              }
+              if (ev.name === "TaskUpdate") {
+                const inp = (ev.input as Record<string, unknown> | undefined) ?? {};
+                const taskId = inp.taskId != null ? String(inp.taskId) : undefined;
+                const status = inp.status != null ? String(inp.status) : undefined;
+                const existing = taskId ? this.rec.tasks.get(taskId) : undefined;
+                if (existing && status) existing.status = status;
+              }
             }
             this.toolLog.push({ name: ev.name, input: ev.input, synthetic: ev.synthetic, parentToolUseId: ev.parentToolUseId }); // still logged for provenance/trace
             break;
@@ -290,6 +313,15 @@ export class Run {
                 bucket.calls++;
                 if (ev.isError) bucket.errors++;
                 this.rec.toolErrors[name] = bucket;
+              }
+              // Progress panel (§6.1, M6): resolve a pending TaskCreate's real id from the tool_result
+              // text — the ONLY place the id appears. A non-matching format (or an errored result) is
+              // silently dropped, not a crash; no TaskDelete/cancel path has ever been observed.
+              const pending = this.pendingTaskCreates.get(ev.toolUseId);
+              if (pending) {
+                this.pendingTaskCreates.delete(ev.toolUseId);
+                const m = /^Task #(\S+) created successfully/.exec(ev.text);
+                if (m) this.rec.tasks.set(m[1], { id: m[1], status: "pending", ...pending });
               }
             }
             this.provenance.seedFromToolResult(ev.provenanceText ?? ev.text); // seed from the UNtruncated value so URLs past the display cap are still fetchable

@@ -693,6 +693,103 @@ describe("Run — turn loop + record", () => {
     expect(rec.redundantToolCalls).toEqual([]);
   });
 
+  it("creates a task from TaskCreate, resolving the real id from the paired tool_result text (no id in the input)", async () => {
+    const events: AgentEvent[] = [
+      { type: "tool_use", name: "TaskCreate", input: { subject: "step one", description: "d1" }, toolUseId: "t1" },
+      { type: "tool_result", toolUseId: "t1", isError: false, text: "Task #1 created successfully: step one" },
+      { type: "result", isError: false },
+    ];
+    const fakeSession = {
+      async *start() {
+        for (const e of events) yield e;
+      },
+      sendUserTurn() {},
+      respond() {},
+      close() {},
+    } as any;
+    const rec = await new Run(fakeSession, new ScriptedDecider([])).drive("go");
+    expect(rec.tasks.get("1")).toEqual({ id: "1", subject: "step one", description: "d1", status: "pending", activeForm: undefined });
+  });
+
+  it("applies a TaskUpdate directly at tool_use time (taskId is already in the input, no correlation needed)", async () => {
+    const events: AgentEvent[] = [
+      { type: "tool_use", name: "TaskCreate", input: { subject: "step one" }, toolUseId: "t1" },
+      { type: "tool_result", toolUseId: "t1", isError: false, text: "Task #1 created successfully: step one" },
+      { type: "tool_use", name: "TaskUpdate", input: { taskId: "1", status: "in_progress" }, toolUseId: "t2" },
+      { type: "tool_result", toolUseId: "t2", isError: false, text: "Updated task #1 status" },
+      { type: "result", isError: false },
+    ];
+    const fakeSession = {
+      async *start() {
+        for (const e of events) yield e;
+      },
+      sendUserTurn() {},
+      respond() {},
+      close() {},
+    } as any;
+    const rec = await new Run(fakeSession, new ScriptedDecider([])).drive("go");
+    expect(rec.tasks.get("1")?.status).toBe("in_progress");
+  });
+
+  it("last-write-wins: a later TaskUpdate to the same taskId overwrites status, doesn't create a duplicate entry", async () => {
+    const events: AgentEvent[] = [
+      { type: "tool_use", name: "TaskCreate", input: { subject: "step one" }, toolUseId: "t1" },
+      { type: "tool_result", toolUseId: "t1", isError: false, text: "Task #1 created successfully: step one" },
+      { type: "tool_use", name: "TaskUpdate", input: { taskId: "1", status: "in_progress" }, toolUseId: "t2" },
+      { type: "tool_result", toolUseId: "t2", isError: false, text: "" },
+      { type: "tool_use", name: "TaskUpdate", input: { taskId: "1", status: "completed" }, toolUseId: "t3" },
+      { type: "tool_result", toolUseId: "t3", isError: false, text: "" },
+      { type: "result", isError: false },
+    ];
+    const fakeSession = {
+      async *start() {
+        for (const e of events) yield e;
+      },
+      sendUserTurn() {},
+      respond() {},
+      close() {},
+    } as any;
+    const rec = await new Run(fakeSession, new ScriptedDecider([])).drive("go");
+    expect(rec.tasks.size).toBe(1);
+    expect(rec.tasks.get("1")?.status).toBe("completed");
+  });
+
+  it("a TaskUpdate for an unknown taskId (no matching TaskCreate observed) is silently ignored, not a crash", async () => {
+    const events: AgentEvent[] = [
+      { type: "tool_use", name: "TaskUpdate", input: { taskId: "999", status: "completed" }, toolUseId: "t1" },
+      { type: "tool_result", toolUseId: "t1", isError: false, text: "" },
+      { type: "result", isError: false },
+    ];
+    const fakeSession = {
+      async *start() {
+        for (const e of events) yield e;
+      },
+      sendUserTurn() {},
+      respond() {},
+      close() {},
+    } as any;
+    const rec = await new Run(fakeSession, new ScriptedDecider([])).drive("go");
+    expect(rec.tasks.size).toBe(0);
+  });
+
+  it("a TaskCreate whose tool_result text doesn't match the expected format is silently dropped, not a crash", async () => {
+    const events: AgentEvent[] = [
+      { type: "tool_use", name: "TaskCreate", input: { subject: "step one" }, toolUseId: "t1" },
+      { type: "tool_result", toolUseId: "t1", isError: false, text: "unexpected format" },
+      { type: "result", isError: false },
+    ];
+    const fakeSession = {
+      async *start() {
+        for (const e of events) yield e;
+      },
+      sendUserTurn() {},
+      respond() {},
+      close() {},
+    } as any;
+    const rec = await new Run(fakeSession, new ScriptedDecider([])).drive("go");
+    expect(rec.tasks.size).toBe(0);
+  });
+
   it("gateDeliveries pairs an answered gate with its tool_result (delivered vs failure)", async () => {
     const gate = (id: string, toolUseId: string): AgentEvent => ({
       type: "decision",

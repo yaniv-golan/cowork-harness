@@ -756,4 +756,9 @@ export interface RunResult {
    *  observed invoking a skill through the recognized channel, so `skill_triggered`/`no_skill_triggered`
    *  fail as evidence-unavailable rather than risk a false negative on an agent-version tool rename. */
   skillToolAvailable?: boolean;
+  // Progress panel (§6.1, M6) — deleted tasks are omitted (never appear here). `status` is a plain
+  // string (NOT a narrow "pending"|"in_progress"|"completed" literal union) deliberately: this milestone's
+  // live verification only observed those 3 + no delete/cancel path; a real but unobserved status value
+  // (e.g. "failed"/"cancelled") should be stored faithfully, not silently coerced or dropped.
+  tasks?: Array<{ id: string; subject: string; status: string; description?: string; activeForm?: string }>;
 }

@@ -271,6 +271,22 @@
           "assertText": { "type": "string" }
         }
       }
+    },
+    "tasks": {
+      "type": "array",
+      "description": "Progress panel (§6.1, M6): TaskCreate/TaskUpdate tool calls folded into structured tasks. Deleted tasks are omitted (never appear here). `status` is a plain string, not a narrow enum — this milestone's live verification only observed pending/in_progress/completed + no delete/cancel path.",
+      "items": {
+        "type": "object",
+        "required": ["id", "subject", "status"],
+        "properties": {
+          "id": { "type": "string" },
+          "subject": { "type": "string" },
+          "status": { "type": "string" },
+          "description": { "type": "string" },
+          "activeForm": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
     }
   }
 }

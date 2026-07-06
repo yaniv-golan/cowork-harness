@@ -62,6 +62,7 @@ function fullyExplicitFixture(): CompleteRunResult {
     gateProvenance: undefined,
     skillsInvoked: undefined,
     skillToolAvailable: undefined,
+    tasks: undefined,
   };
 }
 
