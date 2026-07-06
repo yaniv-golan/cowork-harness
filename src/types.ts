@@ -680,7 +680,16 @@ export interface RunResult {
     error?: string;
     reason?: "ok" | "errored" | "unobserved" | "no-pairing-metadata";
   }>;
-  egress: Array<{ host: string; decision: "allow" | "deny" }>;
+  egress: Array<{
+    host: string;
+    decision: "allow" | "deny";
+    ts?: number; // ms epoch of the decision
+    method?: string;
+    path?: string; // omitted for CONNECT/HTTPS (encrypted)
+    port?: number;
+    bytes?: number; // response/tunnel bytes on an allow
+    reason?: string; // denial reason (e.g. "not on allowlist")
+  }>;
   assertions: Array<{ assertion: Assertion; pass: boolean; message?: string }>;
   subagents?: Array<{
     toolUseId: string;

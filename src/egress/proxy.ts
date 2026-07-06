@@ -42,15 +42,19 @@ export function freePort(): Promise<number> {
 
 export function startEgressProxy(opts: ProxyOptions): EgressProxy {
   const allow = compile(opts.allow);
-  const log = (host: string, decision: "allow" | "deny") => {
+  const log = (
+    host: string,
+    decision: "allow" | "deny",
+    detail?: { method?: string; path?: string; port?: number; bytes?: number; reason?: string },
+  ) => {
     opts.onDecision?.(host, decision);
-    if (opts.logPath) appendFileSync(opts.logPath, JSON.stringify({ ts: Date.now(), host, decision }) + "\n");
+    if (opts.logPath) appendFileSync(opts.logPath, JSON.stringify({ ts: Date.now(), host, decision, ...detail }) + "\n");
   };
 
   const server = http.createServer((req, res) => {
     const host = normalizeHost(hostOf(req.url ?? "", req.headers.host));
     if (!allow(host)) {
-      log(host, "deny");
+      log(host, "deny", { method: req.method, reason: "not on allowlist" });
       res.writeHead(403, { "content-type": "text/plain" });
       res.end(`egress denied: ${host} not on allowlist`);
       return;
@@ -74,7 +78,13 @@ export function startEgressProxy(opts: ProxyOptions): EgressProxy {
     const proxyReq = http.request(
       { host: target.hostname, port: target.port || 80, path: target.pathname + target.search, method: req.method, headers: req.headers },
       (proxyRes) => {
-        log(host, "allow");
+        const clen = Number(proxyRes.headers["content-length"]);
+        log(host, "allow", {
+          method: req.method,
+          path: target.pathname,
+          port: Number(target.port) || 80,
+          bytes: Number.isFinite(clen) ? clen : undefined,
+        });
         res.writeHead(proxyRes.statusCode ?? 502, proxyRes.headers);
         proxyRes.on("error", () => res.end());
         proxyRes.pipe(res);
@@ -103,7 +113,7 @@ export function startEgressProxy(opts: ProxyOptions): EgressProxy {
     const { host, port } = parseAuthority(req.url ?? "");
     const normalizedHost = normalizeHost(host);
     if (!allow(normalizedHost)) {
-      log(normalizedHost, "deny");
+      log(normalizedHost, "deny", { port, reason: "not on allowlist" });
       clientSocket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
       clientSocket.end();
       return;
@@ -112,7 +122,7 @@ export function startEgressProxy(opts: ProxyOptions): EgressProxy {
     // host passed the allowlist — otherwise `egress_allowed` false-passes when the connect fails
     // and nothing reached the host. The deny path above is unchanged.
     const upstream = net.connect(port, host, () => {
-      log(normalizedHost, "allow");
+      log(normalizedHost, "allow", { port });
       clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
       upstream.write(head);
       upstream.pipe(clientSocket);

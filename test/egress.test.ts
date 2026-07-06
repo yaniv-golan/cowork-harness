@@ -481,6 +481,38 @@ describe("CONNECT tunnel close propagation", () => {
   });
 });
 
+describe("parseEgressLine preserves per-request detail fields", () => {
+  it("preserves ts, method, path, port, bytes on an allow line", () => {
+    const line = JSON.stringify({
+      ts: 123,
+      host: "api.example.com",
+      decision: "allow",
+      method: "GET",
+      path: "/v1/x",
+      port: 443,
+      bytes: 2048,
+    });
+    expect(parseEgressLine(line)).toEqual({
+      ts: 123,
+      host: "api.example.com",
+      decision: "allow",
+      method: "GET",
+      path: "/v1/x",
+      port: 443,
+      bytes: 2048,
+    });
+  });
+
+  it("preserves the deny reason", () => {
+    const line = JSON.stringify({ ts: 1, host: "blocked.com", decision: "deny", reason: "not on allowlist" });
+    expect(parseEgressLine(line)).toMatchObject({ host: "blocked.com", decision: "deny", reason: "not on allowlist" });
+  });
+
+  it("still drops a line with a missing host", () => {
+    expect(parseEgressLine(JSON.stringify({ ts: 1, decision: "allow" }))).toBeNull();
+  });
+});
+
 describe("parseEgressLine rejects missing or non-string host (no 'undefined' coercion)", () => {
   it("drops lines with missing host, null host, or non-string host — never coerces to 'undefined'", () => {
     const warnings: string[] = [];

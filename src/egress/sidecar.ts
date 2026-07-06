@@ -3,6 +3,9 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { RunResult } from "../types.js";
+
+type EgressEntry = RunResult["egress"][number];
 
 /**
  * Per-run egress sidecar — the default-deny boundary that the container actually
@@ -18,7 +21,7 @@ import { fileURLToPath } from "node:url";
 export interface EgressSidecar {
   proxyUrl: string; // e.g. http://cowork-proxy-<id>:8080
   network: string; // internal network the agent must join
-  collect(): Array<{ host: string; decision: "allow" | "deny" }>;
+  collect(): EgressEntry[];
   teardown(): void;
 }
 
@@ -146,7 +149,7 @@ export function startEgressSidecar(allow: string[], outDir: string, runId: strin
         .split("\n")
         .filter(Boolean)
         .map(parseEgressLine)
-        .filter((x): x is { host: string; decision: "allow" | "deny" } => x !== null);
+        .filter((x): x is EgressEntry => x !== null);
     },
     teardown() {
       deregister();
@@ -163,7 +166,7 @@ export function startEgressSidecar(allow: string[], outDir: string, runId: strin
  * a silent false-green that could mask a real deny. Now both failure modes emit a
  * `::warning::` and DROP the line; we never invent an "allow" from corrupt input.
  */
-export function parseEgressLine(line: string): { host: string; decision: "allow" | "deny" } | null {
+export function parseEgressLine(line: string): EgressEntry | null {
   let o: any;
   try {
     o = JSON.parse(line);
@@ -186,7 +189,14 @@ export function parseEgressLine(line: string): { host: string; decision: "allow"
     warn(`::warning:: [egress] unknown decision "${o.decision}" for host ${host} — dropping (not coercing to allow)\n`);
     return null;
   }
-  return { host, decision: o.decision };
+  const out: EgressEntry = { host, decision: o.decision };
+  if (typeof o.ts === "number") out.ts = o.ts;
+  if (typeof o.method === "string") out.method = o.method;
+  if (typeof o.path === "string") out.path = o.path;
+  if (typeof o.port === "number") out.port = o.port;
+  if (typeof o.bytes === "number") out.bytes = o.bytes;
+  if (typeof o.reason === "string") out.reason = o.reason;
+  return out;
 }
 
 function ensureProxyImage(runner: string) {
