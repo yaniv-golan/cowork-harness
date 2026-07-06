@@ -6,7 +6,7 @@ import { makeCoworkHandler } from "../src/hostloop/cowork-handler.js";
 
 // Token-free, filesystem-only coverage for the `cowork` sdk-MCP server: present_files scratchpad
 // promotion, collision-safe naming, blocked-extension rejection, mnt/ passthrough, the whole-call
-// pre-check for unmappable paths, and the C1 path-traversal/symlink containment guard.
+// pre-check for unmappable paths, and the path-traversal/symlink containment guard.
 
 const SESSION_ROOT_VM = "/sessions/abc";
 
@@ -127,7 +127,20 @@ describe("makeCoworkHandler", () => {
     expect(readdirSync(outputsHostDir)).toEqual([]); // nothing copied
   });
 
-  it("C1: a scratchpad path that escapes the session root via '..' is rejected, nothing copied", async () => {
+  it("a malformed entry missing file_path returns an invalid-params error instead of throwing", async () => {
+    const { sessionHostDir, outputsHostDir } = makeSessionTree();
+    const h = makeCoworkHandler({ sessionRootVm: SESSION_ROOT_VM, sessionHostDir, outputsHostDir });
+    const out = (await h("cowork", {
+      method: "tools/call",
+      params: { name: "present_files", arguments: { files: [{}] } },
+    })) as ToolsCallResult;
+
+    expect(out.result).toBeUndefined();
+    expect(out.error).toEqual({ code: -32602, message: "present_files: each file requires a string file_path" });
+    expect(readdirSync(outputsHostDir)).toEqual([]);
+  });
+
+  it("rejects a .. path-traversal escape, nothing copied", async () => {
     const { root, sessionHostDir, outputsHostDir } = makeSessionTree();
     // secret.txt sits OUTSIDE sessionHostDir (a sibling), reachable via a single ".." from the mapped
     // host path — the classic path-traversal target this guard must catch.
@@ -149,7 +162,7 @@ describe("makeCoworkHandler", () => {
     expect(readdirSync(outputsHostDir)).toEqual([]);
   });
 
-  it("C1: a symlinked scratchpad source pointing outside the tree is rejected, nothing copied", async () => {
+  it("rejects a symlinked scratchpad source pointing outside the tree, nothing copied", async () => {
     const { root, sessionHostDir, outputsHostDir } = makeSessionTree();
     writeFileSync(join(root, "outside-target.txt"), "OUTSIDE CONTENT");
     symlinkSync(join(root, "outside-target.txt"), join(sessionHostDir, "link-out.txt"));

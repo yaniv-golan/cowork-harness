@@ -173,6 +173,12 @@ export function makeCoworkHandler(opts: {
       if (name !== "present_files") return { error: { code: -32602, message: `unknown tool: ${name}` } };
       const files: { file_path: string }[] = jr.params?.arguments?.files ?? [];
 
+      // Every entry must carry a non-empty string file_path before any path logic runs below — otherwise
+      // a missing/wrong-typed field reaches `.startsWith` further down and throws instead of failing
+      // gracefully back to the agent.
+      const malformed = files.some((f) => typeof f.file_path !== "string" || f.file_path === "");
+      if (malformed) return { error: { code: -32602, message: "present_files: each file requires a string file_path" } };
+
       // Pre-check: every path must be scratchpad OR already under a mount. Any other path is not
       // accessible on the user's computer at all — abort the WHOLE call before copying anything.
       const rejected = files.filter((f) => !isScratchpadVMPath(f.file_path) && !isMountVMPath(f.file_path));
