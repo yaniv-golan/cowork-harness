@@ -622,7 +622,9 @@ export interface RunResult {
   // full honesty caveat in docs/cassette.md / the master plan's §5.4): for INLINE skills, an unrelated
   // top-level tool call after the skill's real work but before the next Skill invocation is still
   // attributed to this window (faithfully reproducing the real agent's own activeSkill no-pop
-  // behavior, not a looser approximation of it). Absent only when no timeline data exists for this run.
+  // behavior, not a looser approximation of it). A window's toolCounts/toolCallCount also include tool
+  // calls made by any sub-agent dispatched during that window, not just literal top-level calls (mirrors
+  // foldToolDurations's same subagent-inclusive scope). Absent only when no timeline data exists for this run.
   skillActivity?: Array<{
     skillId: string;
     invocationSeq: number;

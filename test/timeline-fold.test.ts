@@ -69,9 +69,9 @@ describe("foldToolDurations", () => {
 describe("foldSkillActivity", () => {
   it("groups consecutive same-skillScope entries into one window, tallying toolCounts/toolCallCount/dispatchCount", () => {
     const timeline: TimelineEvent[] = [
-      ev({ type: "tool_use", seq: 0, ts: 0, skillScope: "(root)", name: "Read" }),
-      ev({ type: "tool_use", seq: 1, ts: 10, skillScope: "my-skill", name: "Skill" }),
-      ev({ type: "tool_use", seq: 2, ts: 20, skillScope: "my-skill", name: "Bash" }),
+      ev({ type: "tool_use", seq: 0, ts: 0, skillScope: "(root)", name: "Read", toolUseId: "t0" }),
+      ev({ type: "tool_use", seq: 1, ts: 10, skillScope: "my-skill", name: "Skill", toolUseId: "t1" }),
+      ev({ type: "tool_use", seq: 2, ts: 20, skillScope: "my-skill", name: "Bash", toolUseId: "t2" }),
       ev({ type: "subagent_dispatch", seq: 3, ts: 30, skillScope: "my-skill", toolUseId: "d1", agentType: "x" }),
     ];
     const activity = foldSkillActivity(timeline);
@@ -83,9 +83,9 @@ describe("foldSkillActivity", () => {
 
   it("starts a new window when skillScope changes back to a PREVIOUSLY-seen value (sequential, not merged)", () => {
     const timeline: TimelineEvent[] = [
-      ev({ type: "tool_use", seq: 0, ts: 0, skillScope: "a", name: "Read" }),
-      ev({ type: "tool_use", seq: 1, ts: 10, skillScope: "b", name: "Bash" }),
-      ev({ type: "tool_use", seq: 2, ts: 20, skillScope: "a", name: "Write" }),
+      ev({ type: "tool_use", seq: 0, ts: 0, skillScope: "a", name: "Read", toolUseId: "t0" }),
+      ev({ type: "tool_use", seq: 1, ts: 10, skillScope: "b", name: "Bash", toolUseId: "t1" }),
+      ev({ type: "tool_use", seq: 2, ts: 20, skillScope: "a", name: "Write", toolUseId: "t2" }),
     ];
     const activity = foldSkillActivity(timeline);
     expect(activity).toHaveLength(3); // NOT merged into one "a" window — two separate "a" invocations
@@ -93,13 +93,32 @@ describe("foldSkillActivity", () => {
   });
 
   it("treats entries with no skillScope (e.g. an older pre-M5 timeline) as belonging to '(root)'", () => {
-    const timeline: TimelineEvent[] = [ev({ type: "tool_use", seq: 0, ts: 0, name: "Read" })]; // no skillScope field
+    const timeline: TimelineEvent[] = [ev({ type: "tool_use", seq: 0, ts: 0, name: "Read", toolUseId: "t0" })]; // no skillScope field
     const activity = foldSkillActivity(timeline);
     expect(activity[0].skillId).toBe("(root)");
   });
 
   it("returns [] for an empty timeline", () => {
     expect(foldSkillActivity([])).toEqual([]);
+  });
+
+  it("excludes a tool_use with no toolUseId (synthetic MCP round-trip echo) but still counts a real tool_use with a toolUseId in the same window", () => {
+    const timeline: TimelineEvent[] = [
+      ev({ type: "tool_use", seq: 0, ts: 0, skillScope: "my-skill", name: "mcp__server__thing", toolUseId: "t1" }),
+      ev({ type: "tool_use", seq: 1, ts: 10, skillScope: "my-skill", name: "mcp__server__thing" }), // synthetic echo — no toolUseId
+      ev({ type: "tool_use", seq: 2, ts: 20, skillScope: "my-skill", name: "Bash", toolUseId: "t2" }),
+    ];
+    const activity = foldSkillActivity(timeline);
+    expect(activity).toEqual([
+      {
+        skillId: "my-skill",
+        invocationSeq: 0,
+        toolCounts: { mcp__server__thing: 1, Bash: 1 },
+        toolCallCount: 2,
+        dispatchCount: 0,
+        durationMs: 20,
+      },
+    ]);
   });
 });
 

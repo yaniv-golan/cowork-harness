@@ -50,12 +50,21 @@ export interface SkillActivityEntry {
  * `durationMs` is the window's last-entry-ts minus first-entry-ts; `undefined` is never produced here
  * (every entry always has a `ts`) but the field stays optional to match `RunResult.skillActivity`'s
  * declared shape for parity with `toolDurations`'s convention.
+ * A window's `toolCounts`/`toolCallCount` include tool calls made by any sub-agent dispatched during
+ * that window (parented `tool_use` events inherit the window's `skillScope`), not just literal
+ * top-level calls — matching `foldToolDurations`'s same subagent-inclusive scope above.
+ * A `tool_use` with no `toolUseId` is a synthetic MCP round-trip echo (the real call already arrived
+ * as an assistant `tool_use` block with a `toolUseId`) and is excluded, mirroring `foldToolDurations`'s
+ * de-facto exclusion (it only pairs entries that have a `toolUseId`) and `run.ts`'s top-level
+ * `toolCounts` (`else if (!ev.synthetic)`) — otherwise a bogus `mcp__*` key could appear here that no
+ * other RunResult field shows, and `skill_tool_used` could false-pass against the echo alone.
  */
 export function foldSkillActivity(timeline: TimelineEvent[]): SkillActivityEntry[] {
   const windows: (SkillActivityEntry & { startTs: number; endTs: number })[] = [];
   let current: (SkillActivityEntry & { startTs: number; endTs: number }) | undefined;
   for (const ev of timeline) {
     if (ev.type !== "tool_use" && ev.type !== "subagent_dispatch") continue;
+    if (ev.type === "tool_use" && !ev.toolUseId) continue; // synthetic MCP echo — no toolUseId, already counted via the real tool_use block
     const skillId = ev.skillScope ?? "(root)";
     if (!current || current.skillId !== skillId) {
       current = { skillId, invocationSeq: ev.seq, toolCounts: {}, toolCallCount: 0, dispatchCount: 0, startTs: ev.ts, endTs: ev.ts };
