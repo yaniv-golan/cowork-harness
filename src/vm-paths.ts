@@ -22,13 +22,13 @@ export interface VmPathContext {
   /** Mount name (as it appears under `mnt/<name>/...`) -> real host source directory. */
   folders: Map<string, string>;
   /**
-   * Resolves `mnt/.host-home/<sub>` to a host path (dormant feature — see plan §1.8). Called with
+   * Resolves `mnt/.host-home/<sub>` to a host path (dormant feature). Called with
    * `sub` exactly as it appears after `.host-home/`, decoded per the `decodeSegments` option. A bare
    * `mnt/.host-home` (empty sub) is unmappable and never reaches the resolver, matching the
    * production resolver's own non-empty-sub guard.
    */
   hostHomeResolver?: (sub: string) => string;
-  /** Host directory backing `mnt/.auto-memory/...` (dormant feature — see plan §1.8). */
+  /** Host directory backing `mnt/.auto-memory/...` (dormant feature). */
   autoMemoryHostDir?: string;
 }
 

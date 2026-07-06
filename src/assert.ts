@@ -263,7 +263,7 @@ export interface AssertContext {
    *  SDK reported neither num_turns nor a countable fallback. Own undefined-ness is the
    *  evidence-unavailable signal for max_turns (Wave 2 / E6b) — 0 turns is a real, satisfying value. */
   turns?: number;
-  /** Per-tool call/error rollup (§4.6, M3) — undefined means no data was captured (old/partial run), the
+  /** Per-tool call/error rollup — undefined means no data was captured (old/partial run), the
    *  evidence-unavailable signal for tool_no_error/max_tool_errors (an empty `{}` is a valid "ran clean"
    *  state and is NOT the same as undefined). */
   toolErrors?: Record<string, { calls: number; errors: number }>;
@@ -284,7 +284,7 @@ export interface AssertContext {
     dispatchCount: number;
     durationMs?: number;
   }>;
-  /** Repeated identical tool calls, count>=2 groups only (§4.8, M3) — undefined means no data was
+  /** Repeated identical tool calls, count>=2 groups only — undefined means no data was
    *  captured (old/partial run); an empty `[]` is a valid "no redundancy" state and is NOT the same as
    *  undefined. Not read directly by any `check()` branch today (mirrors toolErrors for parity/future use) —
    *  `redundantCallsTotal` is the derived scalar `max_redundant_tool_calls` actually evaluates. */
@@ -303,24 +303,27 @@ export interface AssertContext {
    *  evidence-unavailable rather than silently passing (the evidence-missing convention this file
    *  follows everywhere else — e.g. `transcriptMissing`, `scanMissing`). */
   linkResolution?: LinkResolutionContext;
-  /** RunResult.tasks[] — Progress panel tasks accumulated from TaskCreate/TaskUpdate (§6.1, M6).
-   *  Undefined means no tasks telemetry was recorded for this run (a run predating M6, or a run/cassette
-   *  that never wired this field) — the evidence-unavailable signal for all_tasks_completed/task_status;
-   *  an empty `[]` is a valid "no tasks" state and is NOT the same as undefined. */
+  /** RunResult.tasks[] — Progress panel tasks accumulated from TaskCreate/TaskUpdate.
+   *  Undefined means no tasks telemetry was recorded for this run (an older run that never captured this
+   *  field, or a run/cassette that never wired this field) — the evidence-unavailable signal for
+   *  all_tasks_completed/task_status; an empty `[]` is a valid "no tasks" state and is NOT the same as
+   *  undefined. */
   tasks?: Array<{ id: string; subject: string; status: string; description?: string; activeForm?: string }>;
   /** RunResult.context.availableSkills — the staged skill set read straight off disk at RunResult-assembly
-   *  time (§6.2, M6). Undefined means this lane never wired the field (a run predating M6, or the replay
-   *  lane, which has no live filesystem to re-stage skills from) — the evidence-unavailable signal for
-   *  skill_available; an empty `[]` is a valid "no skills staged" state and is NOT the same as undefined. */
-  availableSkills?: Array<{ id: string; whenToUse?: string }>;
-  /** RunResult.context.mcpServers — the SDK's init-event MCP server/connector list (§6.2, M6). Undefined
-   *  means no context telemetry was recorded for this run (a run predating M6) — the evidence-unavailable
-   *  signal for connector_available; an empty `[]` is a valid "no connectors" state and is NOT the same as
+   *  time. Undefined means this lane never wired the field (an older run that never captured this field,
+   *  or the replay lane, which has no live filesystem to re-stage skills from) — the evidence-unavailable
+   *  signal for skill_available; an empty `[]` is a valid "no skills staged" state and is NOT the same as
    *  undefined. */
+  availableSkills?: Array<{ id: string; whenToUse?: string }>;
+  /** RunResult.context.mcpServers — the SDK's init-event MCP server/connector list. Undefined means no
+   *  context telemetry was recorded for this run (an older run that never captured this field) — the
+   *  evidence-unavailable signal for connector_available; an empty `[]` is a valid "no connectors" state
+   *  and is NOT the same as undefined. */
   mcpServers?: Array<{ name: string; status?: string; [k: string]: unknown }>;
-  /** RunResult.context.tools — the SDK's init-event tool manifest (§6.2, M6). Undefined means no context
-   *  telemetry was recorded for this run (a run predating M6) — the evidence-unavailable signal for
-   *  tool_available; an empty `[]` is a valid "no tools" state and is NOT the same as undefined. */
+  /** RunResult.context.tools — the SDK's init-event tool manifest. Undefined means no context telemetry
+   *  was recorded for this run (an older run that never captured this field) — the evidence-unavailable
+   *  signal for tool_available; an empty `[]` is a valid "no tools" state and is NOT the same as
+   *  undefined. */
   availableTools?: string[];
 }
 

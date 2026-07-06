@@ -65,7 +65,7 @@ export interface MatrixCellResult {
 
 /** Turns one cell's real RunResult into a MatrixCellResult — the ONE place that reads RunResult fields for
  *  the matrix rollup, so cli.ts's cell loop stays a thin driver. Reuses computeVerdict/budgetFields/
- *  firstAssertionKey rather than re-deriving pass/fail or cost from scratch (§9 lesson: don't re-implement
+ *  firstAssertionKey rather than re-deriving pass/fail or cost from scratch (don't re-implement
  *  verdict logic per-mode). */
 export function matrixCellResultFromRun(cell: MatrixCell, result: RunResult): MatrixCellResult {
   const verdict = computeVerdict(result, "live");

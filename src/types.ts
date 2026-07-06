@@ -576,7 +576,7 @@ export interface CostInfo {
   raw?: Record<string, unknown>;
 }
 
-/** One model's cost/token entry inside the SDK result message's `modelUsage` field (§4.7, M3). Field
+/** One model's cost/token entry inside the SDK result message's `modelUsage` field. Field
  *  names match the REAL observed SDK payload (empirically confirmed against a captured stream and
  *  against committed example cassettes), not a guessed shape. Every field optional since this is a
  *  passthrough of SDK-owned data, not harness-computed. */
@@ -615,36 +615,36 @@ export interface RunResult {
   requiresCapabilityUnmet?: { caps: string[]; reason: "omitted" | "unverifiable" };
   decisions: Array<{ kind: string; name: string; decision: string; by?: string; model?: string; detail?: unknown; rationale?: string }>;
   toolCounts?: Record<string, number>; // truthful per-tool call count (use this, NOT usage.server_tool_use which is host-routed-blind in cowork)
-  // per-tool call-count/timing aggregate, folded from the timeline (§4.2, M2). Absent only when no
+  // per-tool call-count/timing aggregate, folded from the timeline. Absent only when no
   // timeline data exists for this run (replayErrorResult — no run ever happened). Populated for
   // buildPartialResult too, when the salvaged run made at least one tool call. Wall-gap between
   // tool_use and tool_result, NOT isolated script CPU time — see foldToolDurations's doc comment
   // (src/run/timeline-fold.ts) for the honesty caveat.
   toolDurations?: Record<string, { calls: number; totalMs: number; maxMs: number }>;
-  // distinct model ids seen across assistant_text/tool_use/thinking events, in first-seen order (§4.3, M2).
+  // distinct model ids seen across assistant_text/tool_use/thinking events, in first-seen order.
   // Absent only when replayErrorResult (no run ever happened). Populated for buildPartialResult too,
   // when the salvaged run had at least one assistant message.
   models?: string[];
-  // reasoning blocks surfaced for debugging (§4.5, M3) — capped at the last 50 blocks (older ones
+  // reasoning blocks surfaced for debugging — capped at the last 50 blocks (older ones
   // silently dropped; RunRecord tracks the elided count internally but it is NOT surfaced on
   // RunResult, matching the plan's scope: an author reads the tail of reasoning, not a full history).
   // Scrubbed by the same secret-redaction pass as the rest of result.json.
   thinking?: Array<{ text: string }>;
-  // per-tool call/error rollup (§4.6, M3) — same top-level-only scoping as toolCounts (sub-agent-internal
+  // per-tool call/error rollup — same top-level-only scoping as toolCounts (sub-agent-internal
   // tool calls are tracked separately via subagents[].toolsUsed, not folded in here).
   toolErrors?: Record<string, { calls: number; errors: number }>;
-  /** Per-model cost/token breakdown, denormalized from the SDK result message's own `modelUsage` field
-   *  (§4.7, M3) — cumulative for the whole run, NOT per-turn (see the per-message `usage` object noted
-   *  as a Phase-2 opportunity in the M2 plan's §4.3, not built here). Field names match the REAL observed
+  /** Per-model cost/token breakdown, denormalized from the SDK result message's own `modelUsage` field —
+   *  cumulative for the whole run, NOT per-turn (see the per-message `usage` object noted
+   *  as a future opportunity, not built here). Field names match the REAL observed
    *  SDK payload (empirically confirmed), not a guessed shape. Every field optional since this is a
    *  passthrough of SDK-owned data, not harness-computed. */
   modelUsage?: Record<string, ModelUsageEntry>;
-  // repeated identical tool calls — count>=2 groups only, an optimization signal (§4.8, M3). argHash is a
+  // repeated identical tool calls — count>=2 groups only, an optimization signal. argHash is a
   // truncated sha256 of the canonicalized {name,input} pair — no raw args in the rollup (they stay in
   // toolResults/events, which already carry them); this field is redaction-safe by construction.
   redundantToolCalls?: Array<{ name: string; argHash: string; count: number }>;
-  // per-skill-invocation window rollup (§5, M5) — a heuristic, sticky, ordinal window (see the field's
-  // full honesty caveat in docs/cassette.md / the master plan's §5.4): for INLINE skills, an unrelated
+  // per-skill-invocation window rollup — a heuristic, sticky, ordinal window (see the field's
+  // full honesty caveat in docs/cassette.md): for INLINE skills, an unrelated
   // top-level tool call after the skill's real work but before the next Skill invocation is still
   // attributed to this window (faithfully reproducing the real agent's own activeSkill no-pop
   // behavior, not a looser approximation of it). A window's toolCounts/toolCallCount also include tool
@@ -675,10 +675,10 @@ export interface RunResult {
     declaredTools: string[];
     toolsUsed: Array<{ name: string; count: number }>;
     description?: string;
-    prompt?: string; // dispatch input.prompt, assertText-capped (§4.4, M4)
-    model?: string; // the dispatching message's model (§4.4, M4)
-    output?: string; // the dispatch's own paired tool_result, assertText-capped (§4.4, M4)
-    attributedSkillId?: string; // the skill-activation window this dispatch was attributed to (§5, M5) — NOT Fingerprint.skillScope (a different, unrelated field)
+    prompt?: string; // dispatch input.prompt, assertText-capped
+    model?: string; // the dispatching message's model
+    output?: string; // the dispatch's own paired tool_result, assertText-capped
+    attributedSkillId?: string; // the skill-activation window this dispatch was attributed to — NOT Fingerprint.skillScope (a different, unrelated field)
   }>;
   /**
    * Decisions answered by a non-deterministic / non-authoritative source (LLM, external helper,
@@ -781,12 +781,12 @@ export interface RunResult {
    *  observed invoking a skill through the recognized channel, so `skill_triggered`/`no_skill_triggered`
    *  fail as evidence-unavailable rather than risk a false negative on an agent-version tool rename. */
   skillToolAvailable?: boolean;
-  // Progress panel (§6.1, M6) — deleted tasks are omitted (never appear here). `status` is a plain
-  // string (NOT a narrow "pending"|"in_progress"|"completed" literal union) deliberately: this milestone's
-  // live verification only observed those 3 + no delete/cancel path; a real but unobserved status value
+  // Progress panel — deleted tasks are omitted (never appear here). `status` is a plain
+  // string (NOT a narrow "pending"|"in_progress"|"completed" literal union) deliberately: live
+  // verification only observed those 3 + no delete/cancel path; a real but unobserved status value
   // (e.g. "failed"/"cancelled") should be stored faithfully, not silently coerced or dropped.
   tasks?: Array<{ id: string; subject: string; status: string; description?: string; activeForm?: string }>;
-  // Context/Connectors panel (§6.2, M6). mcpServers is loosely typed (SDK-owned per-server shape,
+  // Context/Connectors panel. mcpServers is loosely typed (SDK-owned per-server shape,
   // pass-through). availableSkills is read straight off each staged skill's SKILL.md frontmatter at
   // RunResult-assembly time (src/run/skill-metadata.ts) — it is NOT accumulated on RunRecord like
   // tools/mcpServers, since it needs no live event data, only the on-disk staged skill set.
@@ -795,10 +795,10 @@ export interface RunResult {
     mcpServers: Array<{ name: string; status?: string; [k: string]: unknown }>;
     availableSkills?: Array<{ id: string; whenToUse?: string }>;
   };
-  // Working folder panel's canonical file model (§6.3, M6 — Scratch pad's "scratchpad" class
-  // deliberately not implemented, see Task 6's scope note). `artifacts` (unchanged type, {path,bytes}[])
-  // becomes a DERIVED accessor of this in Task 7 — the class∈{output,mount} subset, computed in the
+  // Working folder panel's canonical file model (Scratch pad's "scratchpad" class
+  // deliberately not implemented). `artifacts` (unchanged type, {path,bytes}[])
+  // becomes a DERIVED accessor of this — the class∈{output,mount} subset, computed in the
   // assembler at read time (no drift risk: nothing stores `artifacts` independently anymore, on the
-  // live lane; replay is unaffected — see Task 7).
+  // live lane; replay is unaffected).
   workspaceFiles?: Array<{ path: string; bytes: number; sha256: string; class: "output" | "mount" | "input" }>;
 }

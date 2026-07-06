@@ -5,7 +5,7 @@
 
 /**
  * Thrown for a boundary/integrity violation that must fail loud and clean (no stack trace):
- * a scenario asserting boundary behavior at a fidelity that can't enforce it (§5c), a symlinked
+ * a scenario asserting boundary behavior at a fidelity that can't enforce it, a symlinked
  * staging path that escapes the session tree, or a plugin/skill source that would mount EMPTY.
  */
 export class BoundaryError extends Error {

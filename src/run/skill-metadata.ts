@@ -26,7 +26,7 @@ export interface PluginSkillRoot {
 }
 
 /**
- * Resolves the Context/Connectors panel's available-skill listing (§6.2, O1). The SPINE is `ids` — the
+ * Resolves the Context/Connectors panel's available-skill listing. The SPINE is `ids` — the
  * authoritative skill-id list from the agent's `init` event (bare `<skill>` for `skills.local`,
  * `<plugin>:<skill>` for plugin/marketplace skills). Each id is enriched with `whenToUse` read from its
  * staged `SKILL.md` frontmatter where findable — local skills at `<configDir>/skills/<id>/SKILL.md`,

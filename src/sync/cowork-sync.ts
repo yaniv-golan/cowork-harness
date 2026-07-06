@@ -54,7 +54,7 @@ const PINNED_GATES: Record<string, string> = {
   "583857784": "bridgeSdkTransport", // SDK control-protocol transport
   "2340532315": "pluginSyncSparkplug", // startup syncPlugins()
   "2307090146": "cliPlugin", // CLI-plugin credential broker (dark)
-  // Dormant drift-sentinels (§1.6/§1.7): the harness models these as OFF or inert-default for a
+  // Dormant drift-sentinels: the harness models these as OFF or inert-default for a
   // standard interactive cowork session; pinned so a production flip surfaces as a sync diff.
   "2614807392": "skeletonHome", // mnt/.host-home discovery index — absent from fcache (dark, default false)
   "123929380": "autoMemoryStandardSessions", // auto-memory dir for a plain (non-Spaces) cowork session (off)
@@ -401,7 +401,7 @@ export const REQUIRED_SPAWN_KEYS: readonly string[] = [
 
 const SPAWN_ADVICE =
   "classify the key (pin via SPAWN_PIN_KEYS or allowlist with a reason via SPAWN_ENV_ALLOWLIST) — do NOT bypass with --allow-empty, which would commit a baseline that no longer matches the live spawn contract";
-// The --allow-empty footgun (§9/F6): --allow-empty force-writes past ALL tripwires, so every spawn flag
+// The --allow-empty footgun: --allow-empty force-writes past ALL tripwires, so every spawn flag
 // ends with this explicit anti-instruction, not just the classify-the-key ones.
 const SPAWN_NO_BYPASS = "do NOT bypass with --allow-empty (it would commit a baseline that no longer matches the live spawn contract)";
 
@@ -409,7 +409,7 @@ const SPAWN_NO_BYPASS = "do NOT bypass with --allow-empty (it would commit a bas
 const SPAWN_KEY_RE = /[{,](TZ|[A-Z][A-Z0-9_]{2,}):/g;
 
 /**
- * Two-step identifier resolver (§4.7). Finds `<id>`'s definition and returns its literal value, following
+ * Two-step identifier resolver. Finds `<id>`'s definition and returns its literal value, following
  * identifier→identifier aliases up to 3 hops. The declaration-preamble class admits `,;{(` AND
  * `const|let|var ` (`kGt`/`Sde` are `const `-preceded live, which the narrower `[,;{(]` form
  * would miss and hard-fail on). Returns null on: not found, >3 hops, or a non-literal terminal.

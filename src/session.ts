@@ -183,7 +183,7 @@ export function readonlyFolderRootsFromPlan(plan: LaunchPlan): string[] {
   return plan.mounts.filter((m) => m.kind === "folder" && m.mode === "r").map((m) => m.mountPath);
 }
 
-/** Plugin skill-source roots for `resolveAvailableSkills`'s whenToUse enrichment (§6.2, O1). Reads each
+/** Plugin skill-source roots for `resolveAvailableSkills`'s whenToUse enrichment. Reads each
  *  staged plugin mount's `.claude-plugin/plugin.json` for the plugin `name` + `skills` subdir; best-effort,
  *  never throws (a missing/corrupt manifest falls back to the dir basename + a "skills" subdir). */
 export function pluginSkillRootsFromPlan(plan: LaunchPlan): PluginSkillRoot[] {

@@ -36,10 +36,10 @@ export interface WorkspaceFile {
 }
 
 /**
- * The Working folder panel's canonical file model (§6.3, M6 — the Scratch pad's `"scratchpad"` class
- * is deliberately NOT implemented here; see this task's scope-correction note in the plan for why).
+ * The Working folder panel's canonical file model (the Scratch pad's `"scratchpad"` class
+ * is deliberately NOT implemented here; that remains out of scope).
  * Classifies every file under the user-visible roots, reusing the SAME `collectArtifacts` walk
- * `artifacts` already used pre-M6 — no second directory-walk implementation. Fingerprints mirror
+ * `artifacts` already used before this view existed — no second directory-walk implementation. Fingerprints mirror
  * `cassette.ts`'s `buildManifest`'s sha256 approach; this file does its OWN read+hash rather than
  * importing from `cassette.ts` (which already imports FROM `execute.ts`, and `execute.ts` imports
  * this file's `collectArtifacts` — importing `cassette.ts` here would close a cycle; the hash itself

@@ -1146,7 +1146,7 @@ async function runRepeatBatch(opts: {
       if (b.costUsd === undefined) costTelemetryMissing = true;
       else cumulativeCostUsd += b.costUsd;
       if (costTelemetryMissing) {
-        // degrade LOUDLY, never silently run all N as if the cap didn't exist (§4/E1 risk) — but
+        // degrade LOUDLY, never silently run all N as if the cap didn't exist — but
         // only ONCE per batch, not once per remaining iteration (costTelemetryMissing never resets).
         if (!costTelemetryMissingWarned) {
           log(
@@ -1533,7 +1533,7 @@ async function cmdRun(rawArgs: string[]) {
 
       // E1: --repeat N — run the SAME scenario N times, coexisting via local_<hrtime> run dirs
       // (execute.ts:177-180, no collision), aggregate into a RepeatRollup. results[] still gets every
-      // raw RunResult (nothing hidden) — only the exit-code/`ok` formula changes for this mode (§8).
+      // raw RunResult (nothing hidden) — only the exit-code/`ok` formula changes for this mode.
       const { rollup } = await runRepeatBatch({
         scenarioName: scenario.name,
         repeatN,
@@ -3175,7 +3175,7 @@ async function cmdVerifyRun(args: string[]) {
     skillToolAvailable: result.skillToolAvailable ?? true,
     skillActivity: result.skillActivity,
     tasks: result.tasks,
-    // Context/Connectors panel (§6.2, M6) — backs skill_available/connector_available/tool_available.
+    // Context/Connectors panel — backs skill_available/connector_available/tool_available.
     // result.json's own `context` was fully populated at RunResult-assembly time, so this is a
     // straight read-through (no timing gap unlike the live evaluate() ctx in execute.ts).
     availableSkills: result.context?.availableSkills,
@@ -3444,7 +3444,7 @@ function cmdTrace(args: string[]) {
   const rows = buildTrace(file, { tools: view === "tools", translate });
   if (json) out(JSON.stringify({ tool: "cowork-harness", command: "trace", file, rows }));
   else {
-    // cache-read-ratio footer (§4.7, M3): best-effort read of the sibling result.json, same
+    // cache-read-ratio footer: best-effort read of the sibling result.json, same
     // "if absent, just omit" tolerance buildGateTrace already uses for gate provenance.
     let modelUsage: RunResult["modelUsage"] | undefined;
     const resultPath = join(dirname(file), "result.json");
@@ -3466,7 +3466,7 @@ type DiffKind = "baseline" | "run" | "cassette";
 const SDK_MESSAGE_TYPES = new Set(["system", "assistant", "user", "result", "control_request", "control_response"]);
 
 /** Kind detection by CONTENT, not filename or `resolveEventsFile` alone. Two real bugs, found only by
- *  actually running the command against real files (not synthetic unit tests — §9 lesson 1/2), forced
+ *  actually running the command against real files (not synthetic unit tests), forced
  *  this design:
  *  1. A first attempt checked `arg.endsWith(".cassette.json")` for cassette, else `resolveEventsFile`
  *     for run. `resolveEventsFile` accepts ANY existing file path UNCONDITIONALLY (it's built for

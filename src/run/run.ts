@@ -27,9 +27,9 @@ export interface SubagentDispatch {
   declaredTools: string[];
   toolsUsed: Array<{ name: string; count: number }>;
   description?: string; // the dispatch's `description` — identifies it when the skill set no subagent_type
-  prompt?: string; // dispatch input.prompt, assertText-capped (§4.4, M4)
-  model?: string; // the dispatching message's model (§4.4, M4)
-  output?: string; // the dispatch's own paired tool_result, assertText-capped (§4.4, M4) — populated by a finalize step, not at push time
+  prompt?: string; // dispatch input.prompt, assertText-capped
+  model?: string; // the dispatching message's model
+  output?: string; // the dispatch's own paired tool_result, assertText-capped — populated by a finalize step, not at push time
 }
 
 export interface DecisionRecord {
@@ -73,14 +73,14 @@ export interface RunRecord {
   usage?: UsageInfo;
   cost?: CostInfo;
   skillsInvoked: string[]; // top-level Skill tool_use ids, in call order, duplicates kept (Wave 1 / E8 seam)
-  models: string[]; // distinct model ids seen across assistant_text/tool_use/thinking events, first-seen order, deduped (§4.3, M2)
-  thinking: { text: string }[]; // reasoning blocks, capped: last 50 × 10KB each (§4.5, M3)
+  models: string[]; // distinct model ids seen across assistant_text/tool_use/thinking events, first-seen order, deduped
+  thinking: { text: string }[]; // reasoning blocks, capped: last 50 × 10KB each
   thinkingElided: number; // count of older thinking blocks dropped past the 50-block cap
-  toolErrors: Record<string, { calls: number; errors: number }>; // per-tool call/error rollup (§4.6, M3)
-  modelUsage?: Record<string, Record<string, unknown>>; // per-model cost/token breakdown, from the SDK's own result-message field (§4.7, M3)
-  redundantToolCalls: Array<{ name: string; argHash: string; count: number }>; // repeated identical calls, count>=2 only (§4.8, M3)
-  tasks: Map<string, { id: string; subject: string; status: string; description?: string; activeForm?: string }>; // Progress panel (§6.1, M6) — deleted tasks removed from the map, never surfaced
-  // Context/Connectors panel (§6.2, M6). availableSkills is optional and NOT set here — it's filled in
+  toolErrors: Record<string, { calls: number; errors: number }>; // per-tool call/error rollup
+  modelUsage?: Record<string, Record<string, unknown>>; // per-model cost/token breakdown, from the SDK's own result-message field
+  redundantToolCalls: Array<{ name: string; argHash: string; count: number }>; // repeated identical calls, count>=2 only
+  tasks: Map<string, { id: string; subject: string; status: string; description?: string; activeForm?: string }>; // Progress panel — deleted tasks removed from the map, never surfaced
+  // Context/Connectors panel. availableSkills is optional and NOT set here — it's filled in
   // by the RunResult assemblers (execute.ts), which read it straight off the staged skill set on disk
   // rather than accumulating it from live events like tools/mcpServers.
   context: { tools: string[]; mcpServers: unknown[]; availableSkills?: Array<{ id: string; whenToUse?: string }> };
@@ -289,7 +289,7 @@ export class Run {
               // Wave 1 / E8: a top-level Skill invocation — duplicates kept (re-triggering is signal).
               if (ev.name === "Skill") this.rec.skillsInvoked.push(String((ev.input as Record<string, unknown> | undefined)?.skill ?? ""));
               if (ev.toolUseId) this.toolNameByUseId.set(ev.toolUseId, ev.name);
-              // Progress panel (§6.1, M6): TaskCreate's input has no id — stash it, resolved by the
+              // Progress panel: TaskCreate's input has no id — stash it, resolved by the
               // paired tool_result below. TaskUpdate's input carries taskId directly, so it applies here.
               if (ev.name === "TaskCreate" && ev.toolUseId) {
                 const inp = (ev.input as Record<string, unknown> | undefined) ?? {};
@@ -320,7 +320,7 @@ export class Run {
                 if (ev.isError) bucket.errors++;
                 this.rec.toolErrors[name] = bucket;
               }
-              // Progress panel (§6.1, M6): resolve a pending TaskCreate's real id from the tool_result
+              // Progress panel: resolve a pending TaskCreate's real id from the tool_result
               // text — the ONLY place the id appears. A non-matching format (or an errored result) is
               // silently dropped, not a crash; no TaskDelete/cancel path has ever been observed.
               const pending = this.pendingTaskCreates.get(ev.toolUseId);

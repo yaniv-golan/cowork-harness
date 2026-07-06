@@ -31,7 +31,7 @@ export interface TimelineHeader {
  *
  * `skill_invoked`, `task_updated`, `file_changed`, `scratchpad_promoted` are declared here (matching
  * the design's named union) but have NO producer yet — nothing in this milestone emits them. They
- * exist so later milestones (M5 skill attribution, M6 panels) extend `toTimelineFields` without
+ * exist so later milestones (skill attribution, panels) extend `toTimelineFields` without
  * needing a second round of type changes. `file_changed` in particular is confirmed dead-on-arrival:
  * the current agent build has zero stream-message producer sites for file-change events (only
  * hook-callback payloads exist, a different mechanism) — kept only for forward-compatibility with a
@@ -125,7 +125,7 @@ export class TimelineWriter {
   private stream: WriteStream;
   private startMono: bigint;
   private seq = 0;
-  // The sticky ordinal skill-activation window (§5.2). Only a TOP-LEVEL Skill tool_use changes this —
+  // The sticky ordinal skill-activation window. Only a TOP-LEVEL Skill tool_use changes this —
   // it is deliberately NOT tracked per-toolUseId/frozen-at-dispatch-time: the real agent blocks
   // synchronously on a dispatch's own tool_result while the sub-agent runs (the dispatching turn
   // cannot emit a new top-level tool_use, including a Skill call, until the dispatch's result
@@ -135,7 +135,7 @@ export class TimelineWriter {
   // not guaranteed: a single assistant message that batches a subagent_dispatch tool_use FOLLOWED by
   // a top-level Skill tool_use in the same turn would shift the window between the dispatch and its
   // later-streamed children — an odd, likely-rare model behavior; skillScope is a documented
-  // best-effort heuristic (§5.4), so this is an accepted imprecision, not a correctness bug to guard
+  // best-effort heuristic, so this is an accepted imprecision, not a correctness bug to guard
   // against with a separate per-dispatch snapshot.)
   private currentSkillId = "(root)";
 

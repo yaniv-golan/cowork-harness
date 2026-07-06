@@ -90,7 +90,7 @@ export function buildRepeatRollup(
 }
 
 /**
- * The batch verdict formula (§8 of the plan: `ok` is redefined directly per invocation mode, no
+ * The batch verdict formula (`ok` is redefined directly per invocation mode, no
  * `batchVerdict` shadow field). Deliberately separate from `buildRepeatRollup` — the rollup is pure
  * OBSERVATION (what happened), this is the POLICY judgment (pass or fail against a threshold), the same
  * split `computeVerdict` draws between recorded facts and pass/fail.

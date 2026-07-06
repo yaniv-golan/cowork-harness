@@ -71,7 +71,7 @@ export function makeDisplayTranslator(opts: DisplayTranslateOptions): (text: str
  *   - folders: every `kind: "folder"` mount's `mountPath -> hostPath` (hostloop bind-mounts folders at
  *     their REAL host path — never a staged copy — so this is also production-identical, unlike the
  *     container/microvm tiers' staged-copy "host" side).
- * `.host-home`/`.auto-memory` are left unset (dormant features — see the plan's §1.8; `mapVMPathToHostPath`
+ * `.host-home`/`.auto-memory` are left unset (dormant features; `mapVMPathToHostPath`
  * already returns null for them without a resolver, which is correct until those gates flip).
  */
 export function vmPathContextFromPlan(

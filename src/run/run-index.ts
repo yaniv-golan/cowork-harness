@@ -25,7 +25,7 @@ export interface RunIndexRow {
   costUsd?: number;
   tokens?: number;
   turns?: number;
-  cacheReadTokens?: number; // summed across all models in RunResult.modelUsage (§4.7 stats surfacing, M3)
+  cacheReadTokens?: number; // summed across all models in RunResult.modelUsage (stats surfacing)
   modelCostUsd?: number; // summed across all models in RunResult.modelUsage
   durationMs?: number;
   partial: boolean;
@@ -67,7 +67,7 @@ export function indexRowFromResult(
   const verdict = computeVerdict(result, "live");
   const budget = budgetFields(result);
   const { slug, runId } = slugAndRunIdFromOutDir(result.outDir);
-  // Separate from budgetFields — sums across RunResult.modelUsage's per-model entries (§4.7, M3), a
+  // Separate from budgetFields — sums across RunResult.modelUsage's per-model entries, a
   // different data source than the SDK result message's own cost/usage totals.
   const modelUsageEntries = result.modelUsage ? Object.values(result.modelUsage) : undefined;
   const cacheReadTokens = modelUsageEntries?.reduce(

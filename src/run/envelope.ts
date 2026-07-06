@@ -50,7 +50,7 @@ export interface JsonEnvelopeOpts {
   matrixRepeat?: MatrixRepeatRollup;
 }
 
-/** §5a — the standardized machine envelope object (internal: `jsonEnvelope` stringifies it). `ok` is the
+/** The standardized machine envelope object (internal: `jsonEnvelope` stringifies it). `ok` is the
  *  same SEAM-B verdict as the process exit code / footer (it cannot diverge). `replay` uses the replay
  *  lane (a cassette can't reproduce the scan/permissive signals); every other command is the live lane.
  *
@@ -60,7 +60,7 @@ export interface JsonEnvelopeOpts {
  *  `stalled` signal) without recomputing from the sibling booleans. NOTE: this publishes the
  *  VerdictSignal.code taxonomy as a de-facto wire contract.
  *
- *  `ok` — E1/§8: for a NON-repeat, NON-matrix call, `ok` is derived from the SAME per-result verdicts as
+ *  `ok` — for a NON-repeat, NON-matrix call, `ok` is derived from the SAME per-result verdicts as
  *  always (`results.every(pass)`) — unchanged, so it cannot diverge from them or from the exit code/footer.
  *  For a `--repeat` batch, `ok` is redefined DIRECTLY for that mode — computed from `rollups`/
  *  `rollupPasses`. For a `--matrix` run (E3), `ok` is `!matrix.anyFail` — a matrix is a compatibility gate,
@@ -69,8 +69,8 @@ export interface JsonEnvelopeOpts {
  *  `rollupPasses`. Checked in this order (matrixRepeat, then matrix, then rollups, then the default) — the
  *  three batch modes are mutually exclusive at the CLI layer (only one of `rollups`/`matrix`/`matrixRepeat`
  *  is ever actually passed), this function just needs a deterministic order if a caller somehow passed more
- *  than one. One field, one meaning per mode — no parallel `batchVerdict` field, per the plan's revised
- *  (no-backward-compat) design. `results[]` still holds every raw RunResult either way — across every cell
+ *  than one. One field, one meaning per mode — no parallel `batchVerdict` field, by design (there's no
+ *  backward-compat constraint to preserve). `results[]` still holds every raw RunResult either way — across every cell
  *  and every one of its repeat iterations for the composed mode — nothing is hidden from any caller. */
 function jsonEnvelopeObj(command: string, results: RunResult[], opts: JsonEnvelopeOpts = {}): Record<string, unknown> {
   const { rollups, minPassRate, matrix, matrixRepeat } = opts;
@@ -86,7 +86,7 @@ function jsonEnvelopeObj(command: string, results: RunResult[], opts: JsonEnvelo
   return { tool: "cowork-harness", version: pkgVersion(), command, ok, results: withVerdict, rollups, matrix, matrixRepeat, error: null };
 }
 
-/** §5a — the standardized machine envelope emitted by every `--output-format json` command. COMPACT
+/** The standardized machine envelope emitted by every `--output-format json` command. COMPACT
  *  single-line JSON (machine output → trivially parseable; the pretty form lives in result.json).
  *  `opts.rollups`/`opts.minPassRate`/`opts.matrix` are additive (E1's `--repeat`, E3's `--matrix`) —
  *  omitted (undefined) for every other command, which is why they don't appear in a plain envelope
@@ -95,7 +95,7 @@ export function jsonEnvelope(command: string, results: RunResult[], opts: JsonEn
   return JSON.stringify(jsonEnvelopeObj(command, results, opts));
 }
 
-/** §5c — the error envelope (compact, single line). */
+/** The error envelope (compact, single line). */
 export function jsonError(command: string, category: ErrCategory, message: string, hint?: string): string {
   return JSON.stringify({
     tool: "cowork-harness",

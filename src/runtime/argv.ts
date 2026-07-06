@@ -19,7 +19,7 @@ export interface AgentArgsOpts {
 }
 
 /**
- * §3.1 — the agent CLI args WITHOUT the leading `claude` token (the microvm exec appends it separately
+ * The agent CLI args WITHOUT the leading `claude` token (the microvm exec appends it separately
  * in the lima argv). The single source for the flag set + order; `agentArgs` (container/hostloop) and
  * `microvmAgentArgs` both delegate here so the two can never drift again (a past divergence dropped
  * `--max-thinking-tokens` from the microvm path). `mntRoot` differs per tier; disallowed/extraTools are
@@ -72,7 +72,7 @@ export function baseAgentArgs(
   ];
 }
 
-/** §3.1 — the full `claude …` args (container/hostloop): the shared base prefixed with the binary token. */
+/** The full `claude …` args (container/hostloop): the shared base prefixed with the binary token. */
 export function agentArgs(baseline: PlatformBaseline, plan: LaunchPlan, opts: AgentArgsOpts): string[] {
   return [
     "claude",
@@ -87,7 +87,7 @@ export function agentArgs(baseline: PlatformBaseline, plan: LaunchPlan, opts: Ag
 }
 
 /**
- * §3.2 — resolve the thinking-token budget. Faithful port of Cowork's `f7e` resolver
+ * Resolve the thinking-token budget. Faithful port of Cowork's `f7e` resolver
  * (binary-verified, app.asar 1.12603.1):
  *   function f7e(A,e){return typeof A=="number"?A : e&&e in A ? A[e] : A.default??hre}   // hre=31999
  * `value` = the session's `max_thinking_tokens` (a flat number or a per-model map), `model` = the
@@ -112,7 +112,7 @@ export function resolveMaxThinkingTokens(
   return resolved;
 }
 
-/** §3.2 — the spawn env object. `extra` carries runtime-provided values (auth, TZ, CLAUDE_PLUGIN_ROOT). */
+/** The spawn env object. `extra` carries runtime-provided values (auth, TZ, CLAUDE_PLUGIN_ROOT). */
 export function spawnEnv(
   baseline: PlatformBaseline,
   opts: { configGuest: string; proxyHost: string; extra?: Record<string, string>; maxThinkingTokens?: number },
@@ -213,7 +213,7 @@ export interface DockerRunInput {
   extraBinds?: HostLoopBindMount[]; // real (never-copied) folder mounts + `.claude/{skills,projects}`
 }
 
-/** §3.3/§3.4 — the full `docker run …` argv. When `agentArgv` is omitted (hostloop's VM-sidecar-only
+/** The full `docker run …` argv. When `agentArgv` is omitted (hostloop's VM-sidecar-only
  *  container), the container runs a keep-alive command instead of the agent — the agent process itself
  *  is spawned natively on the host and never occupies this container. */
 export function dockerRunArgv(i: DockerRunInput): string[] {

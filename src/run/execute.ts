@@ -743,7 +743,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // (toolDurations/skillActivity/subagents) below — two reads could disagree if the file were touched mid-run.
   const timelineData = readTimeline(outDir);
 
-  // Context/Connectors panel (§6.2, M6): the SPINE is the id-only list run.ts's init handler already seeded
+  // Context/Connectors panel: the SPINE is the id-only list run.ts's init handler already seeded
   // onto record.context.availableSkills from the agent's own init event (authoritative — covers plugin/
   // marketplace skills, which the disk scan never saw). Here we enrich each id with whenToUse read off
   // disk, across BOTH delivery trees (skills.local under plan.configDir, plugin skills under each staged
@@ -782,7 +782,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     skillToolAvailable: record.initTools.includes("Skill"),
     skillActivity: timelineData ? foldSkillActivity(timelineData.events) : undefined,
     tasks: record.tasks.size ? Array.from(record.tasks.values()) : undefined,
-    // Context/Connectors panel (§6.2, M6) — backs skill_available/connector_available/tool_available.
+    // Context/Connectors panel — backs skill_available/connector_available/tool_available.
     // record.context is populated above (availableSkills merged in before this ctx literal; tools/mcpServers
     // set at init time in run.ts), so these are already live by the time evaluate() runs.
     availableSkills: record.context?.availableSkills,
@@ -904,7 +904,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // (DecisionRecord[], `by: string`) is assignable to the summarizer's `by?: string` param — no re-map.
   const gateProvenance = summarizeGateProvenance(record.decisions);
 
-  // Working folder panel's file model (§6.3, M6): classify+fingerprint every file under the
+  // Working folder panel's file model: classify+fingerprint every file under the
   // user-visible roots (output/mount/input). Reuses the same walk `artifacts` derives from below, over
   // ALL userVisibleRoots — read-only inputs are still enumerated here, just tagged "input" instead of
   // excluded outright.
@@ -958,10 +958,10 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     outputsDir: join(workRoot, "outputs"),
     userVisibleRoots,
     readonlyFolderRoots,
-    // Task 7 (§6.3, M6): artifacts is a DERIVED VIEW of workspaceFiles — same collectArtifacts walk,
+    // Task 7: artifacts is a DERIVED VIEW of workspaceFiles — same collectArtifacts walk,
     // filtered to the deliverable classes (excludes class:"input" read-only mounts). No second walk.
     artifacts: workspaceFiles.filter((f) => f.class === "output" || f.class === "mount").map((f) => ({ path: f.path, bytes: f.bytes })),
-    workspaceFiles, // Working folder panel's canonical file model (output/mount/input, §6.3, M6) — see comment above
+    workspaceFiles, // Working folder panel's canonical file model (output/mount/input) — see comment above
     // The pre-spawn baseline no_unexpected_files diffs against (same single read the evaluate ctx got).
     // undefined = the run didn't capture (key not asserted, microvm, pre-seam) — the assertion then
     // fails evidence-unavailable, loud.
@@ -1130,7 +1130,7 @@ export function buildPartialResult(args: {
   const { record } = args;
   const gp = summarizeGateProvenance(record.decisions);
   const timelineData = readTimeline(args.outDir);
-  // Context/Connectors panel (§6.2, M6): the SPINE is the id-only list run.ts's init handler already seeded
+  // Context/Connectors panel: the SPINE is the id-only list run.ts's init handler already seeded
   // (authoritative — covers plugin/marketplace skills). Enrich with whenToUse read off disk across both
   // delivery trees. Own wiring, independent of executeScenario's (this function's own args.configDir /
   // args.pluginSkillRoots).
@@ -1139,7 +1139,7 @@ export function buildPartialResult(args: {
     ...args.record.context,
     availableSkills: resolveAvailableSkills(availableSkillIds, args.configDir, args.pluginSkillRoots),
   };
-  // Working folder panel's file model (§6.3, M6) — same walk `artifacts` below derives from (Task 7).
+  // Working folder panel's file model — same walk `artifacts` below derives from (Task 7).
   const workspaceFiles = classifyWorkspaceFiles(args.workRoot, args.userVisibleRoots, args.readonlyFolderRoots);
   return assembleRunResult({
     $schema: RUN_RESULT_SCHEMA_URL,
@@ -1189,10 +1189,10 @@ export function buildPartialResult(args: {
     outputsDir: join(args.workRoot, "outputs"),
     userVisibleRoots: args.userVisibleRoots,
     readonlyFolderRoots: args.readonlyFolderRoots,
-    // Task 7 (§6.3, M6): artifacts is a DERIVED VIEW of workspaceFiles — same collectArtifacts walk,
+    // Task 7: artifacts is a DERIVED VIEW of workspaceFiles — same collectArtifacts walk,
     // filtered to the deliverable classes (excludes class:"input" read-only mounts). No second walk.
     artifacts: workspaceFiles.filter((f) => f.class === "output" || f.class === "mount").map((f) => ({ path: f.path, bytes: f.bytes })),
-    workspaceFiles, // Working folder panel's canonical file model (§6.3, M6)
+    workspaceFiles, // Working folder panel's canonical file model
     preRunPaths: readPreRunManifest(args.outDir),
     effectiveFidelity: args.effectiveFidelity,
     gateProvenance: gp.total ? gp : undefined,

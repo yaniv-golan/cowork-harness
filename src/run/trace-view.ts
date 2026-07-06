@@ -389,9 +389,9 @@ export interface DispatchNode {
   description?: string;
   declaredTools: string[];
   depth: number; // 0 = top-level dispatch; >0 = dispatched by another sub-agent
-  prompt?: string; // §4.4, M4
-  model?: string; // §4.4, M4
-  output?: string; // §4.4, M4 — paired from a tool_result in the same events file, by toolUseId
+  prompt?: string;
+  model?: string;
+  output?: string; // paired from a tool_result in the same events file, by toolUseId
 }
 
 /**
@@ -452,8 +452,8 @@ export function formatDispatchTree({ nodes, total }: { nodes: DispatchNode[]; to
 
 /**
  * `trace --view tool-durations` — per-tool call-count/timing aggregate, folded from the sibling
- * `timeline.jsonl` (M1). Returns `{}` for a run dir with no timeline (pre-M1 recording, or a run that
- * genuinely made no tool calls) — same "absent means no data, not an error" convention as the other
+ * `timeline.jsonl`. Returns `{}` for a run dir with no timeline (an older recording that predates this
+ * file, or a run that genuinely made no tool calls) — same "absent means no data, not an error" convention as the other
  * `build*` functions in this file.
  */
 export function buildToolDurations(file: string): Record<string, { calls: number; totalMs: number; maxMs: number }> {
@@ -474,7 +474,7 @@ export function formatToolDurations(durations: Record<string, { calls: number; t
 }
 
 /**
- * Combined cache-read ratio across every model in `modelUsage` (§4.7, M3) —
+ * Combined cache-read ratio across every model in `modelUsage` —
  * `cacheReadInputTokens / (inputTokens + cacheReadInputTokens + cacheCreationInputTokens)`, summed
  * per-field across models before dividing (not an average of per-model ratios, which would
  * mis-weight a low-volume model against a high-volume one). Returns `undefined` when there's no

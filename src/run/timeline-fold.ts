@@ -6,7 +6,7 @@ import type { TimelineEvent } from "../agent/timeline.js";
  * timeline (e.g. the run ended mid-call), contributes no duration data — it's silently excluded, not
  * an error; the tool's call is still visible via `RunResult.toolCounts`.
  *
- * Honesty caveat (see docs/internal/2026-07-05-full-scope-implementation-plan.md §4.2): this includes
+ * Honesty caveat: this includes
  * model latency between the tool_use emission and the result being observed — a wall gap, not isolated
  * script CPU time. The SDK stream carries no runtime-side exec start/end stamp, so this is the best
  * available signal, not a truer one.
@@ -44,7 +44,7 @@ export interface SkillActivityEntry {
 /**
  * Groups CONSECUTIVE (in seq order) timeline entries sharing the same `skillScope` into one window —
  * NOT a merge-by-value across the whole timeline, since the same skill invoked twice with something
- * else in between is two separate invocations (§5.2 rule 4: windows are sequential, never re-opened).
+ * else in between is two separate invocations (windows are sequential, never re-opened).
  * `invocationSeq` is the seq of the window's first entry (for a real skill window that IS the Skill
  * tool_use itself; for "(root)", it's simply the first entry's seq — there's no literal invocation).
  * `durationMs` is the window's last-entry-ts minus first-entry-ts; `undefined` is never produced here
@@ -81,7 +81,7 @@ export function foldSkillActivity(timeline: TimelineEvent[]): SkillActivityEntry
   return windows.map(({ startTs, endTs, ...rest }) => ({ ...rest, durationMs: endTs - startTs }));
 }
 
-/** Denormalizes each subagent's attributed skill window (§5, M5) from the matching TimelineEvent —
+/** Denormalizes each subagent's attributed skill window from the matching TimelineEvent —
  *  looked up by toolUseId, mirroring the existing tool-result/output pairing pattern in run.ts. Pure,
  *  non-mutating (returns new objects) so callers can use it directly in an assembleRunResult literal. */
 export function attributeSubagentSkills<T extends { toolUseId: string }>(

@@ -47,7 +47,7 @@ export type DecisionResponse =
 export type AgentEvent =
   | { type: "init"; tools: string[]; mcpServers: unknown[]; skills: string[]; cwd?: string }
   | { type: "assistant_text"; text: string; parentToolUseId?: string; model?: string }
-  | { type: "tool_use"; name: string; input: unknown; parentToolUseId?: string; toolUseId?: string; synthetic?: boolean; model?: string } // toolUseId for tool_use↔tool_result pairing; synthetic = the MCP round-trip echo (trace-only, NOT counted — the real call already arrives as an assistant tool_use block, live-verified); model = the assistant message's model (§4.3, M2)
+  | { type: "tool_use"; name: string; input: unknown; parentToolUseId?: string; toolUseId?: string; synthetic?: boolean; model?: string } // toolUseId for tool_use↔tool_result pairing; synthetic = the MCP round-trip echo (trace-only, NOT counted — the real call already arrives as an assistant tool_use block, live-verified); model = the assistant message's model
   | { type: "tool_result"; toolUseId?: string; isError: boolean; text: string; provenanceText?: string; assertText?: string } // the OUTCOME of a tool call (from `user`/tool_result blocks). `text` is display-truncated; `provenanceText` is the larger raw value so URLs past the display cap still seed web_fetch provenance; `assertText` is assertion-fidelity cap (10 KB)
   | {
       type: "subagent_dispatch";
@@ -56,8 +56,8 @@ export type AgentEvent =
       agentType: string;
       declaredTools: string[];
       description?: string;
-      prompt?: string; // input.prompt, assertText-capped (§4.4, M4)
-      model?: string; // the dispatching message's model (§4.4, M4)
+      prompt?: string; // input.prompt, assertText-capped
+      model?: string; // the dispatching message's model
     } // parentToolUseId = nesting, for the dispatch tree.
   | { type: "thinking"; text: string; model?: string } // model set only when this thinking block came from an assistant message (not the system-subtype "thinking" event, which has no message.model)
   | { type: "metrics"; data: Record<string, unknown> } // api_metrics → cost
@@ -72,7 +72,7 @@ export type AgentEvent =
       numTurns?: number; // SDK's num_turns for this invocation (Wave 0 seam — was dropped on the floor before)
       // per-model cost/token breakdown, cumulative for the whole run — a TOP-LEVEL sibling of `usage` on
       // the raw result message, NOT nested inside it (empirically confirmed against a real captured
-      // stream, §4.7 M3). Opaque per-entry shape (SDK-owned); RunResult types it more precisely.
+      // stream). Opaque per-entry shape (SDK-owned); RunResult types it more precisely.
       modelUsage?: Record<string, Record<string, unknown>>;
     }
   | { type: "error"; source: "spawn" | "agent" | "protocol" | "exit"; message: string }
@@ -694,7 +694,7 @@ export function parseMessage(msg: any): AgentEvent[] {
       // Protocol v1: parentToolUseId is message-level. Block-level parent_tool_use_id (if present)
       // is canonical — prefer it when both exist (block-level is more precise for nested dispatches).
       const msgParentToolUseId = msg.parent_tool_use_id ? String(msg.parent_tool_use_id) : undefined;
-      // message.model is present on every real assistant stream-json message (live-confirmed, §4.3) —
+      // message.model is present on every real assistant stream-json message (live-confirmed) —
       // read once per message, thread onto assistant_text/tool_use/thinking/subagent_dispatch.
       const model = typeof msg.message?.model === "string" ? msg.message.model : undefined;
       let blockIndex = 0;
