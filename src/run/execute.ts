@@ -55,6 +55,7 @@ import { collectSecrets, scrub } from "../secrets.js";
 import { indexRowFromResult, appendIndexRow } from "./run-index.js";
 import { collectArtifacts } from "./artifacts.js";
 import { readPreRunManifest } from "./pre-run-manifest.js";
+import { readAvailableSkills } from "./skill-metadata.js";
 
 // Moved to ./artifacts.ts so assert.ts can use it without an assert→execute import cycle;
 // re-exported here for the existing importers (cassette.ts, tests).
@@ -876,6 +877,10 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // (DecisionRecord[], `by: string`) is assignable to the summarizer's `by?: string` param — no re-map.
   const gateProvenance = summarizeGateProvenance(record.decisions);
 
+  // Context/Connectors panel (§6.2, M6): the staged skill set, read straight off disk — the child
+  // process has already run to completion by this point, so every skill is fully staged.
+  record.context = { ...record.context, availableSkills: readAvailableSkills(workRoot) };
+
   const result: RunResult = assembleRunResult({
     $schema: RUN_RESULT_SCHEMA_URL,
     generator: "cowork-harness",
@@ -1091,6 +1096,10 @@ export function buildPartialResult(args: {
   const { record } = args;
   const gp = summarizeGateProvenance(record.decisions);
   const timelineData = readTimeline(args.outDir);
+  // Context/Connectors panel (§6.2, M6): the staged skill set, read straight off disk — by the time a
+  // partial result is built the child process has already exited (on the unanswered gate), so skills
+  // are fully staged. Own wiring, independent of executeScenario's (this function's own args.workRoot).
+  args.record.context = { ...args.record.context, availableSkills: readAvailableSkills(args.workRoot) };
   return assembleRunResult({
     $schema: RUN_RESULT_SCHEMA_URL,
     generator: "cowork-harness",

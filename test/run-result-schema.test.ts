@@ -128,7 +128,11 @@ const full: RunResult = {
   skippedAssertions: { full: 1, partial: 0 },
   toolResults: [{ toolUseId: "tu_1", isError: false, text: "ok", assertText: "ok" }],
   tasks: [{ id: "1", subject: "step one", status: "completed", description: "d1", activeForm: "doing step one" }],
-  context: { tools: ["Read", "Bash"], mcpServers: [{ name: "my-server", status: "connected" }] },
+  context: {
+    tools: ["Read", "Bash"],
+    mcpServers: [{ name: "my-server", status: "connected" }],
+    availableSkills: [{ id: "my-plugin:my-skill", whenToUse: "Use for X" }],
+  },
 };
 
 describe("schema/run-result.json", () => {

@@ -80,7 +80,10 @@ export interface RunRecord {
   modelUsage?: Record<string, Record<string, unknown>>; // per-model cost/token breakdown, from the SDK's own result-message field (§4.7, M3)
   redundantToolCalls: Array<{ name: string; argHash: string; count: number }>; // repeated identical calls, count>=2 only (§4.8, M3)
   tasks: Map<string, { id: string; subject: string; status: string; description?: string; activeForm?: string }>; // Progress panel (§6.1, M6) — deleted tasks removed from the map, never surfaced
-  context: { tools: string[]; mcpServers: unknown[] }; // Context/Connectors panel (§6.2, M6) — availableSkills added by a later task in this same plan
+  // Context/Connectors panel (§6.2, M6). availableSkills is optional and NOT set here — it's filled in
+  // by the RunResult assemblers (execute.ts), which read it straight off the staged skill set on disk
+  // rather than accumulating it from live events like tools/mcpServers.
+  context: { tools: string[]; mcpServers: unknown[]; availableSkills?: Array<{ id: string; whenToUse?: string }> };
 }
 
 export interface RunHooks {
