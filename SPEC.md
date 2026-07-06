@@ -381,33 +381,44 @@ states in `baseline.provenance.gates`). A skill that ignores these behaves diffe
 
 **Assertion evaluation on replay:**
 - **Content assertions** (`contentKeys` in `src/run/cassette.ts`) are evaluated — `transcript_*`,
-  `tool_*`, `subagent_*`, `dispatch_count_max`, `skill_triggered`, `no_skill_triggered`, `max_cost_usd`,
-  `max_tokens`, `tool_calls_max`, `max_turns`, `result`, the verdict modifiers (`allow_permissive_auto_allow`,
-  `allow_missing_capability`, `allow_l0_plugin_divergence`, `allow_stall`), and (when `controlOut` is present)
-  `question_asked`, `questions_count_max`, `gate_answers_delivered`, `gate_answer_count_min`. `max_cost_usd`/`max_tokens` are
-  evaluated against the *frozen recording's* usage/cost on replay, not fresh spend; `tool_calls_max`/
-  `max_turns` are meaningfully replay-checkable (the re-drive recomputes both deterministically).
+  `tool_*` (incl. `tool_no_error`), `max_tool_errors`, `max_redundant_tool_calls`, `subagent_*` (incl.
+  `subagent_output_contains`), `dispatch_count_max`, `skill_triggered`, `no_skill_triggered`,
+  `skill_tool_used`, `skill_available`, `connector_available`, `tool_available`, `all_tasks_completed`,
+  `task_status`, `compaction_occurred`, `max_cost_usd`, `max_tokens`, `tool_calls_max`, `max_turns`,
+  `result`, the verdict modifiers (`allow_permissive_auto_allow`, `allow_missing_capability`,
+  `allow_l0_plugin_divergence`, `allow_stall`), and (when `controlOut` is present) `question_asked`,
+  `questions_count_max`, `gate_answers_delivered`, `gate_answer_count_min`, `hook_blocked`,
+  `no_hook_blocked`. `max_cost_usd`/`max_tokens` are evaluated against the *frozen recording's*
+  usage/cost on replay, not fresh spend; `tool_calls_max`/`max_turns` are meaningfully
+  replay-checkable (the re-drive recomputes both deterministically).
 - **Filesystem assertions** (`file_exists`, `user_visible_artifact`, `artifact_json`, `computer_links_resolve`,
-  `no_unexpected_files`) are evaluated **when the cassette carries an `artifacts` manifest** (`record`
-  snapshots `outputs/` + connected folders; `replay` materializes it token-free — `artifact_json` needs the
+  `no_unexpected_files`, `input_unmodified`) are evaluated **when the cassette carries an `artifacts` manifest**
+  (`record` snapshots `outputs/` + connected folders; `replay` materializes it token-free — `artifact_json` needs the
   small JSON body inlined). `no_unexpected_files` additionally requires `preRunPaths` (optional cassette
   metadata since 0.24; container/hostloop recordings only — microvm cannot capture the baseline); without it
   replay **excludes** the key with a loud warning (live/verify-run without a
-  pre-run manifest hard-fails evidence-unavailable). On older, manifest-less cassettes they are skipped
-  (loud) — absent from `assertions[]`, not present-and-passing.
+  pre-run manifest hard-fails evidence-unavailable). `input_unmodified` (the in-place-mutation detector —
+  every pre-existing file matching a glob keeps an unchanged content hash) mirrors this exactly against its
+  own baseline, `preRunHashes` (the pre-run per-path sha256 manifest, captured alongside `preRunPaths` but a
+  distinct field); without it replay excludes the key with the same loud-warning treatment. On older,
+  manifest-less cassettes they are skipped (loud) — absent from `assertions[]`, not present-and-passing.
 - **Egress / live-only assertions** (`no_delete_in_outputs`, `self_heal_ran`, `transcript_no_host_path`,
-  `egress_*`, `expect_denied`) are always skipped on replay — absent from `assertions[]`. The count of
-  skipped (full / partial) assertions is reported in `RunResult.skippedAssertions`, so a JSON consumer
-  doesn't read a green replay as having evaluated everything.
+  `no_mcp_error`, `max_peak_rss_bytes`, `egress_*`, `expect_denied`) are always skipped on replay — absent
+  from `assertions[]`. The count of skipped (full / partial) assertions is reported in
+  `RunResult.skippedAssertions`, so a JSON consumer doesn't read a green replay as having evaluated
+  everything.
 
 **Staleness (replay):** a stale cassette (skill/baseline drift) WARNS but stays `ok:true` by default — a
 green replay does not imply the recording is still valid. Each finding is surfaced class-tagged in
 `RunResult.staleness[]` for a token-free gate to act on. `replay --strict` fails on any class;
 `replay --fail-on-skill-drift` fails only on skill-source classes (`skill` / `shared-root` /
 `unverifiable-skill`). Both realize the gate as failing `assertions[]` entries (so `ok`/exit stay consistent).
-- **`question_asked` / `questions_count_max` / `gate_answers_delivered` / `gate_answer_count_min`**
-  additionally require `controlOut`. Without it, a loud `::warning::` fires and these keys are
-  excluded (not vacuously passed). The authoritative list is `contentKeys` in `src/run/cassette.ts`;
+- **`question_asked` / `questions_count_max` / `gate_answers_delivered` / `gate_answer_count_min` /
+  `hook_blocked` / `no_hook_blocked`** additionally require `controlOut`. Without it, a loud
+  `::warning::` fires and these keys are excluded (not vacuously passed). The hook keys need
+  `controlOut` for a different reason than the question keys: a custom hook's block/allow decision is
+  an opaque async reply recorded only in `control-out.jsonl`, not in the `events` stream, so it cannot
+  be reconstructed without it. The authoritative list is `contentKeys` in `src/run/cassette.ts`;
   `docs/cassette.md` mirrors it — consult it for the full table.
 - **`gate_answers_delivered: true` passes vacuously when zero `AskUserQuestion` gates fired** (gate
   firing is model-dependent). Pair it with `gate_answer_count_min: <N>` to also require that at least
