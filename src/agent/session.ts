@@ -541,14 +541,15 @@ export class LiveAgentSession implements AgentSession {
           yield { type: "mcp_error", server, code: -32603, message: `handler error: ${message}` };
           return;
         }
-        this.write(mcpResponseEnvelope(reqId, out as any, jr.id));
+        // `notify` is a driver-side follow-up, NOT part of the JSON-RPC response — strip it before
+        // building the wire envelope (otherwise it leaks into the mcp_response the agent receives), then
+        // inject it separately as a synthetic user turn below.
+        const { notify, ...rpc } = out as { result?: unknown; error?: { code: number; message: string }; notify?: string };
+        this.write(mcpResponseEnvelope(reqId, rpc, jr.id));
         // A cowork present_files promotion returns a notifySession follow-up — inject it as a synthetic user
         // turn so the agent learns the promoted outputs path (mirrors the real host's post-promotion notification).
-        if (typeof (out as { notify?: unknown }).notify === "string" && (out as { notify?: string }).notify) {
-          this.write({
-            type: "user",
-            message: { role: "user", content: [{ type: "text", text: (out as { notify: string }).notify }] },
-          });
+        if (typeof notify === "string" && notify) {
+          this.write({ type: "user", message: { role: "user", content: [{ type: "text", text: notify }] } });
         }
         // Echo the MCP round-trip as a SYNTHETIC tool_use for provenance/trace only. The real tool call
         // also arrives as an assistant tool_use block (live-verified: mcp__workspace__bash co-occurs with

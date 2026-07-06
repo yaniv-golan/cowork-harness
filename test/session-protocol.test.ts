@@ -136,13 +136,13 @@ describe("session protocol loud-failure fixes", () => {
     await firstP.catch(() => {});
     const controlOut = await waitForFileContent(join(outDir, "control-out.jsonl"), "NUDGE_TEXT");
     const lines = controlOut.trim().split("\n").filter(Boolean);
-    // The mcp_response envelope's `payload` is spread from the handler's full result (incl. notify), so
-    // "NUDGE_TEXT" also appears inside that frame — distinguish the two frames by their `type`, not by
-    // searching for the notify text itself.
     const mcpIdx = lines.findIndex((l) => l.includes('"type":"control_response"'));
     const userIdx = lines.findIndex((l) => l.includes('"type":"user"'));
     expect(mcpIdx).toBeGreaterThanOrEqual(0);
     expect(userIdx).toBeGreaterThan(mcpIdx); // ordering: mcp_response, then the injected user turn
+    // `notify` is a driver-side follow-up, not part of the JSON-RPC response — it must be stripped from the
+    // mcp_response wire envelope and appear ONLY in the injected user turn.
+    expect(lines[mcpIdx]).not.toContain("NUDGE_TEXT");
     expect(JSON.parse(lines[userIdx])).toEqual({
       type: "user",
       message: { role: "user", content: [{ type: "text", text: "NUDGE_TEXT" }] },
