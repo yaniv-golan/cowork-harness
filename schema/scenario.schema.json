@@ -328,7 +328,8 @@
             "minItems": 1,
             "type": "array",
             "items": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1
             }
           },
           "self_heal_ran": {

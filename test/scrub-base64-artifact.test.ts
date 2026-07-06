@@ -134,7 +134,7 @@ describe("cassette base64 artifact scrub — materializeManifest end-to-end", ()
   });
 });
 
-// The record-time scrub divergence guard (M7 task 2): a bodied, agent-UNMODIFIED, secret-bearing seed
+// The record-time scrub divergence guard: a bodied, agent-UNMODIFIED, secret-bearing seed
 // file gets its `artifacts[].sha256` recomputed over SCRUBBED bytes at record. Left alone, the recorded
 // `preRunHashes[seed]` (the RAW pre-run hash) would then differ from that scrubbed manifest sha256, and
 // replay's future `input_unmodified` check would read that as a false "modified in place" — a silent
