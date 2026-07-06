@@ -44,7 +44,7 @@ import { makeDisplayTranslator, vmPathContextFromPlan } from "./display-translat
 import { writeVmPathContextFile } from "./vm-path-ctx-file.js";
 import { LiveAgentSession, type SdkMcp, type HookBundle } from "../agent/session.js";
 import { readTimeline } from "../agent/timeline.js";
-import { foldToolDurations, foldSkillActivity } from "./timeline-fold.js";
+import { foldToolDurations, foldSkillActivity, attributeSubagentSkills } from "./timeline-fold.js";
 import { buildDecider, ExternalDecider, LlmDecider, type Decider, type OnUnanswered, UnansweredError } from "../decide/decider.js";
 import { type DecisionChannel } from "../decide/external-channel.js";
 import { claudeCliComplete } from "../decide/llm-transport.js";
@@ -903,7 +903,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     egress,
     assertions,
     toolResults: record.toolResults,
-    subagents: record.subagents,
+    subagents: timelineData ? attributeSubagentSkills(record.subagents, timelineData.events) : record.subagents,
     nonReproducibleAnswers: record.unanswered,
     usage: record.usage,
     cost: record.cost,
@@ -1113,7 +1113,7 @@ export function buildPartialResult(args: {
     egress: args.egress,
     assertions: [],
     toolResults: record.toolResults,
-    subagents: record.subagents,
+    subagents: timelineData ? attributeSubagentSkills(record.subagents, timelineData.events) : record.subagents,
     nonReproducibleAnswers: record.unanswered,
     usage: record.usage,
     cost: record.cost,

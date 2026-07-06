@@ -29,7 +29,7 @@ import {
   type DecisionRequest,
 } from "../agent/session.js";
 import { readTimeline, type TimelineHeader, type TimelineEvent } from "../agent/timeline.js";
-import { foldToolDurations, foldSkillActivity } from "./timeline-fold.js";
+import { foldToolDurations, foldSkillActivity, attributeSubagentSkills } from "./timeline-fold.js";
 import { ABSTAIN, UnansweredError, type Decider, type OnUnanswered } from "../decide/decider.js";
 import { fileChannel, type DecisionChannel } from "../decide/external-channel.js";
 import { pMapBounded } from "../async-pool.js";
@@ -3163,7 +3163,7 @@ export async function replayCassette(
       gateDeliveries: rec.gateDeliveries,
       egress: [],
       assertions,
-      subagents: rec.subagents,
+      subagents: cassette.timeline ? attributeSubagentSkills(rec.subagents, cassette.timeline) : rec.subagents,
       nonReproducibleAnswers: rec.unanswered,
       // Wave 0 seam: the live/success/partial assemblers already passed these through; replay never did,
       // so a cassette that recorded usage/cost silently dropped it on replay. re-drive (rec) recomputes

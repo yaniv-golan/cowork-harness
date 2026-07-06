@@ -76,6 +76,7 @@ const full: RunResult = {
       declaredTools: ["Read"],
       toolsUsed: [{ name: "Read", count: 1 }],
       description: "explore",
+      attributedSkillId: "my-plugin:my-skill",
     },
   ],
   nonReproducibleAnswers: [{ question: "Format?", chosen: "PDF", by: "llm", rationale: "best fit", model: "claude-sonnet-4-5" }],

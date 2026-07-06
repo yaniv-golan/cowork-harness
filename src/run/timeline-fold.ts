@@ -71,3 +71,12 @@ export function foldSkillActivity(timeline: TimelineEvent[]): SkillActivityEntry
   }
   return windows.map(({ startTs, endTs, ...rest }) => ({ ...rest, durationMs: endTs - startTs }));
 }
+
+/** Denormalizes each subagent's attributed skill window (§5, M5) from the matching TimelineEvent —
+ *  looked up by toolUseId, mirroring the existing tool-result/output pairing pattern in run.ts. Pure,
+ *  non-mutating (returns new objects) so callers can use it directly in an assembleRunResult literal. */
+export function attributeSubagentSkills<T extends { toolUseId: string }>(subagents: T[], timeline: TimelineEvent[]): (T & { attributedSkillId?: string })[] {
+  const byToolUseId = new Map<string, string | undefined>();
+  for (const ev of timeline) if (ev.type === "subagent_dispatch") byToolUseId.set(ev.toolUseId, ev.skillScope);
+  return subagents.map((sa) => ({ ...sa, attributedSkillId: byToolUseId.get(sa.toolUseId) }));
+}

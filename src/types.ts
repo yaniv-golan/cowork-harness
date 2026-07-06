@@ -642,6 +642,7 @@ export interface RunResult {
     prompt?: string; // dispatch input.prompt, assertText-capped (§4.4, M4)
     model?: string; // the dispatching message's model (§4.4, M4)
     output?: string; // the dispatch's own paired tool_result, assertText-capped (§4.4, M4)
+    attributedSkillId?: string; // the skill-activation window this dispatch was attributed to (§5, M5) — NOT Fingerprint.skillScope (a different, unrelated field)
   }>;
   /**
    * Decisions answered by a non-deterministic / non-authoritative source (LLM, external helper,

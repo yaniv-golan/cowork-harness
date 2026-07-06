@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { foldToolDurations, foldSkillActivity } from "../src/run/timeline-fold.js";
+import { foldToolDurations, foldSkillActivity, attributeSubagentSkills } from "../src/run/timeline-fold.js";
 import type { TimelineEvent } from "../src/agent/timeline.js";
 
 function ev(partial: Partial<TimelineEvent> & Pick<TimelineEvent, "type">): TimelineEvent {
@@ -100,5 +100,32 @@ describe("foldSkillActivity", () => {
 
   it("returns [] for an empty timeline", () => {
     expect(foldSkillActivity([])).toEqual([]);
+  });
+});
+
+describe("attributeSubagentSkills", () => {
+  it("copies each subagent's matching TimelineEvent.subagent_dispatch.skillScope onto attributedSkillId, by toolUseId", () => {
+    const timeline: TimelineEvent[] = [
+      ev({ type: "subagent_dispatch", seq: 0, ts: 0, skillScope: "my-skill", toolUseId: "d1", agentType: "x" }),
+    ];
+    const subagents = [{ toolUseId: "d1", agentType: "x", declaredTools: [], toolsUsed: [] }];
+    const result = attributeSubagentSkills(subagents, timeline);
+    expect(result[0].attributedSkillId).toBe("my-skill");
+  });
+
+  it("leaves attributedSkillId undefined when no matching timeline entry exists (e.g. no timeline data)", () => {
+    const subagents = [{ toolUseId: "d1", agentType: "x", declaredTools: [], toolsUsed: [] }];
+    const result = attributeSubagentSkills(subagents, []);
+    expect(result[0].attributedSkillId).toBeUndefined();
+  });
+
+  it("does not mutate the input array (returns a new array with new objects)", () => {
+    const timeline: TimelineEvent[] = [
+      ev({ type: "subagent_dispatch", seq: 0, ts: 0, skillScope: "x", toolUseId: "d1", agentType: "x" }),
+    ];
+    const subagents = [{ toolUseId: "d1", agentType: "x", declaredTools: [], toolsUsed: [] }];
+    const result = attributeSubagentSkills(subagents, timeline);
+    expect(result).not.toBe(subagents);
+    expect(subagents[0]).not.toHaveProperty("attributedSkillId");
   });
 });
