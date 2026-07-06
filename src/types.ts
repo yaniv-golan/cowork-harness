@@ -629,7 +629,8 @@ export interface RunResult {
   resultErrorKind?: "transport" | "agent"; // when result==="error", classify a tail-end transport drop vs a genuine failure
   /** The `error` event's finer source (`spawn`/`protocol`/`exit`/`agent`, or `result` for the
    *  SDK-wrapped is_error-result path) — additive diagnostic detail alongside the coarse
-   *  verdict-relevant `resultErrorKind`. Absent on a clean run. */
+   *  verdict-relevant `resultErrorKind`. Absent on a run that emitted no error events; a run that
+   *  recovered from a non-fatal `agent` error and then succeeded keeps the first observed source. */
   errorSource?: "spawn" | "protocol" | "exit" | "agent" | "result";
   /** Absolute path to the agent's full stderr log (`<outDir>/agent.stderr.log`), surfaced so an
    *  OOM/crash debugger knows where to look. Live path only — absent on replay (no live process). */

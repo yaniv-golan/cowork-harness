@@ -62,7 +62,8 @@ export interface RunRecord {
   // clean result) vs a genuine agent/skill failure. Undefined on success or unclassified errors.
   resultErrorKind?: "transport" | "agent";
   // finer error source than resultErrorKind's binary — the raw `error`-event source, or "result" for
-  // the SDK-wrapped is_error result path. Undefined on success. Optional ⇒ no literal-site churn.
+  // the SDK-wrapped is_error result path. Undefined when no error event fired; a recovered non-fatal
+  // agent error that later succeeds keeps its first source. Optional ⇒ no literal-site churn.
   errorSource?: "spawn" | "protocol" | "exit" | "agent" | "result";
   // set true when the run ended on an unanswered plain-text question (see the post-loop detector in
   // drive()). Mapped into RunResult by execute.ts (live) and cassette.ts (replay re-drive).
