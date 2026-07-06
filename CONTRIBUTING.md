@@ -28,9 +28,6 @@ gate steps individually — e.g. `format:check`, `typecheck`, `npm test`, `build
 (`node dist/cli.js list`), the token-free `replay` gate, `verify-cassettes`, `lint`, and source-guard
 checks (see `ci.yml` for the authoritative list). Only `release.yml` calls `npm run ci`.
 
-> **Naming:** the repo folder `claude-cowork-headless-emulator`, the npm package + CLI `cowork-harness`,
-> and the GitHub repo `yaniv-golan/cowork-harness` all refer to the same project.
-
 > **Cutting a release?** See [RELEASING.md](./RELEASING.md) for the branch → PR → tag → publish flow.
 
 ## Project layout
