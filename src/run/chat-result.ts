@@ -61,6 +61,7 @@ export function buildChatResult(record: RunRecord, opts: ChatResultOpts): RunRes
       model: d.model,
       detail: d.detail,
       rationale: d.rationale,
+      questions: d.questions,
     })),
     toolCounts: record.toolCounts,
     toolDurations: timeline ? foldToolDurations(timeline.events) : undefined,
