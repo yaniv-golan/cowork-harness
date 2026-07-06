@@ -19,6 +19,19 @@ import { normalizeHost, validateBareDomain } from "../boundary-paths.js";
 // of truth, and is re-exported so existing `run.js` importers keep working.
 export { normalizeHost };
 
+/** Bound a captured decision input so a large tool payload can't bloat the run record. Objects pass
+ *  through structurally (consumers read fields like `.command`); only an over-cap JSON serialization is
+ *  truncated to a marker string. */
+function capDecisionInput(input: unknown): unknown {
+  try {
+    const json = JSON.stringify(input);
+    if (json !== undefined && json.length > 10 * 1024) return { truncated: true, bytes: json.length };
+    return input;
+  } catch {
+    return { unserializable: true };
+  }
+}
+
 /** the observable sub-agent dispatch tree (single owner = RunRecord). */
 export interface SubagentDispatch {
   toolUseId: string;
@@ -571,7 +584,11 @@ export class Run {
       }
     } else if (req.kind === "permission") {
       const behavior = resp.kind === "permission" ? resp.behavior : undefined;
-      this.rec.decisions.push({ kind: "tool", name: req.tool, decision: behavior ?? "?", by, rationale });
+      // On a DENY, surface WHICH invocation was blocked (e.g. the exact Bash command), not just the tool
+      // name. The input rides through the same record-time scrub as every other captured value; cap it so
+      // a large input can't bloat the record. Allow keeps detail unset (the input isn't diagnostic there).
+      const detail = behavior === "deny" ? { input: capDecisionInput(req.input) } : undefined;
+      this.rec.decisions.push({ kind: "tool", name: req.tool, decision: behavior ?? "?", by, rationale, detail });
       // A cowork-parity off-registry auto-allow is a SILENT false-green risk — real Cowork blocks for the
       // user. Make it loud (stderr) AND machine-distinguishable (rec.permissiveAutoAllow → the envelope),
       // so a green carrying one isn't mistaken for a faithful pass.
