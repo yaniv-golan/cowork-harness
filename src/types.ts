@@ -717,6 +717,10 @@ export interface RunResult {
    *  against. undefined = the tier didn't capture (microvm) or the run predates the seam; the
    *  assertion then fails evidence-unavailable, never vacuous-passes. */
   preRunPaths?: string[];
+  /** Per-path sha256 of the user-visible tree BEFORE the agent ran (from pre-run-manifest.json's
+   *  `hashes`). null for a file over the pre-run hash cap. Powers `input_unmodified`. undefined =
+   *  no manifest / an older run without hashes — the assertion then fails evidence-unavailable. */
+  preRunHashes?: Record<string, string | null>;
   /** True when the run did NOT complete because it exited on an unanswered gate, but its work (artifacts,
    *  events, partial transcript) was salvaged to disk anyway so it's still inspectable. A partial run still
    *  exits non-zero; consumers (verify-run, scaffold) must NOT treat its artifacts/result as a passing

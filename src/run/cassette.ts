@@ -136,6 +136,12 @@ export interface Cassette {
   // co-present with `userVisibleRoots` (both written by the same record assembly below), so the legacy
   // `["outputs",".projects"]` replay-roots fallback can never apply to a cassette that carries this field.
   preRunPaths?: string[];
+  // Per-path sha256 of the user-visible tree BEFORE the agent ran (RunResult.preRunHashes). Powers
+  // `input_unmodified` on replay. Nulled out (see buildCassette's post-scrub pass below) for any path
+  // whose recorded artifact body was secret-scrubbed at record time — a scrubbed body's committed
+  // sha256 no longer matches the raw pre-run hash, so a false "modified in place" would otherwise fire on
+  // replay; nulling makes that path report evidence-unavailable instead (loud, never a false verdict).
+  preRunHashes?: Record<string, string | null>;
   // provenance: how this cassette's gate answers were authored. PRESENT with nonDeterministic:true means a
   // live decider actually answered ≥1 gate during recording (a driving agent via `--decider-dir`, a model
   // via `--decider-llm`, or an `--on-unanswered first` auto-pick) — so RE-recording may drift. The cassette
@@ -1139,12 +1145,17 @@ export function redactCassette(cassette: Cassette, policy: RedactionPolicy): Cas
     }
   }
   const redactedPreRunPaths = cassette.preRunPaths?.map((p) => redactText(p, policy));
+  // preRunHashes VALUES are hex sha256 (or null) — no secrets, never redacted. The KEYS are paths (same
+  // privacy surface as preRunPaths entries), so redact each key and keep the value as-is.
+  const redactedPreRunHashes =
+    cassette.preRunHashes && Object.fromEntries(Object.entries(cassette.preRunHashes).map(([k, v]) => [redactText(k, policy), v]));
   return {
     ...cassette,
     scenario,
     userVisibleRoots: redactedRoots,
     artifacts: redactedArtifacts,
     preRunPaths: redactedPreRunPaths,
+    preRunHashes: redactedPreRunHashes,
     events: cassette.events.map((l) => redactJsonLine(l, policy)),
     controlOut: cassette.controlOut?.map((l) => redactJsonLine(l, policy)),
     fingerprint: cassette.fingerprint
@@ -1915,6 +1926,25 @@ export function cassetteAuthoring(nonDeterministic: boolean | undefined, channel
   return nonDeterministic ? { nonDeterministic: true, channel } : undefined;
 }
 
+/** Null out `preRunHashes` entries for paths whose artifact body was secret-scrubbed at record time.
+ *  A scrubbed body's committed sha256 no longer matches the raw pre-run hash — left alone, replay's
+ *  `input_unmodified` would compare the two and report a FALSE "modified in place" for a file the agent
+ *  never touched. Nulling the entry makes that path report evidence-unavailable instead (loud, never a
+ *  false verdict). Pure → unit-testable without a live run. Returns the map unchanged (same reference) when
+ *  nothing needs nulling; `nulledPaths` is the subset actually present (and not already null) in
+ *  `preRunHashes`, used to drive the record-time warning. */
+export function nullOutScrubbedPreRunHashes(
+  preRunHashes: Record<string, string | null> | undefined,
+  scrubbedPaths: string[],
+): { hashes: Record<string, string | null> | undefined; nulledPaths: string[] } {
+  if (!preRunHashes || !scrubbedPaths.length) return { hashes: preRunHashes, nulledPaths: [] };
+  const nulledPaths = scrubbedPaths.filter((p) => Object.hasOwn(preRunHashes, p) && preRunHashes[p] !== null);
+  if (!nulledPaths.length) return { hashes: preRunHashes, nulledPaths: [] };
+  const out = { ...preRunHashes };
+  for (const p of nulledPaths) out[p] = null;
+  return { hashes: out, nulledPaths };
+}
+
 /** The live-record TAIL shared by the file (batch/single) and in-memory (re-record) paths: run live, refuse
  *  a failing run unless opted in, snapshot + secret-scrub bodies, opt-in redact + verdict-preserve,
  *  then write. `extraPolicyDirs` adds the scenario-file dir to the .cowork-redact.json search. */
@@ -1992,9 +2022,10 @@ async function recordScenarioObject(
   // Read-only connected-folder inputs are captured body-less (path + sha256, no body) — see buildManifest's
   // `bodyLessPrefixes` doc comment. `recordRoots`/`cassette.userVisibleRoots` stay the FULL set; only the
   // captured bodies under these prefixes are stripped.
-  const artifacts = (
-    result.workDir ? buildManifest(result.workDir, opts.maxArtifactBytes, recordRoots, result.readonlyFolderRoots ?? []) : []
-  ).map((a) => {
+  const rawManifest = result.workDir
+    ? buildManifest(result.workDir, opts.maxArtifactBytes, recordRoots, result.readonlyFolderRoots ?? [])
+    : [];
+  const artifacts = rawManifest.map((a) => {
     if (a.body === undefined) return a;
     if (a.encoding === "base64") {
       const scrubbed = scrubField(a.body, secrets);
@@ -2032,6 +2063,20 @@ async function recordScenarioObject(
     const newSha256 = createHash("sha256").update(Buffer.from(scrubbed, "utf8")).digest("hex");
     return { ...a, body: scrubbed, sha256: newSha256 };
   });
+  // Record-time scrub divergence guard: any bodied artifact whose sha256 CHANGED above (the scrub pass
+  // recomputed it over scrubbed bytes) had its content redacted — its committed sha256 no longer matches
+  // the raw pre-run hash. Left alone, `preRunHashes[p]` would still be the raw hash and replay's
+  // input_unmodified would compare it against the (different) scrubbed manifest sha256 and report a FALSE
+  // "modified in place" for a file the agent never touched. Body-less entries are unaffected (never
+  // scrubbed — sha256 stays the raw on-disk hash, `artifacts[i].sha256 === rawManifest[i].sha256`).
+  const scrubbedPaths = rawManifest.filter((raw, i) => artifacts[i]!.sha256 !== raw.sha256).map((raw) => raw.path);
+  const { hashes: preRunHashes, nulledPaths } = nullOutScrubbedPreRunHashes(result.preRunHashes, scrubbedPaths);
+  if (nulledPaths.length) {
+    warn(
+      `::warning:: record: pre-run hash nulled for secret-scrubbed path(s): ${nulledPaths.join(", ")} — ` +
+        `content was redacted at record time; input_unmodified will report evidence-unavailable for these paths on replay\n`,
+    );
+  }
   // if an `artifact_json` targets an artifact we had to truncate, it passes here (on-disk) but FAILS
   // replay (no committed body). Surface that record→replay asymmetry NOW, at its cause, instead of letting a
   // green record produce a red replay in CI. Honor --allow-failing (warn, don't block) like the verdict gate.
@@ -2063,6 +2108,9 @@ async function recordScenarioObject(
     // co-present with userVisibleRoots by construction — a cassette carrying preRunPaths never hits
     // replay's legacy-roots fallback.
     preRunPaths: result.preRunPaths,
+    // Nulled (not `result.preRunHashes` verbatim) for any path whose artifact body was secret-scrubbed
+    // above — see the scrubbedPaths/nullOutScrubbedPreRunHashes block.
+    preRunHashes,
     // persist the authored scenario source file RELATIVE to the cassette dir (relocatable, no
     // absolute host path) so `--rerecord-stale` re-records from the edited YAML even when name ≠ filename.
     scenarioSource: opts.scenarioSourceFile ? relative(dirname(cassettePath), opts.scenarioSourceFile) : undefined,
@@ -2128,6 +2176,7 @@ function replayErrorResult(file: string): RunResult {
     artifacts: undefined,
     workspaceFiles: undefined, // no live filesystem to scan on replay (see the doc note in execute.ts)
     preRunPaths: undefined,
+    preRunHashes: undefined,
     partial: undefined,
     unansweredGate: undefined,
     nonDeterministic: undefined,
@@ -3044,6 +3093,14 @@ export async function replayCassette(
       // readonlyFolderRoots (they have no manifest at eval time), so it's empty here.
       readonlyFolderRoots: [],
       preRunPaths: cassette.preRunPaths,
+      preRunHashes: cassette.preRunHashes,
+      // The authoritative post-run per-path sha256 from the manifest — NOT a re-hash of replayWorkRoot,
+      // which materializeManifest fills with 0-byte placeholders for body-less entries (read-only inputs,
+      // over-cap files). Re-hashing that placeholder would false-fail input_unmodified for a large-or-
+      // read-only file that was never modified. Drop empty-sha256 entries (the "unreadable" catch branch
+      // in buildManifest) so an unrecoverable file falls through to the re-hash/absent path honestly
+      // instead of spuriously matching against "".
+      postRunHashes: Object.fromEntries((cassette.artifacts ?? []).flatMap((e) => (e.sha256 ? [[e.path, e.sha256] as const] : []))),
       outputsDeletes: [],
       questions: rec.questions,
       hostPathLeaked: false,
@@ -3224,6 +3281,7 @@ export async function replayCassette(
       artifacts: undefined,
       workspaceFiles: undefined, // no live filesystem to scan on replay (see the doc note in execute.ts)
       preRunPaths: undefined,
+      preRunHashes: undefined,
       partial: undefined,
       unansweredGate: undefined,
       nonDeterministicTerminal: undefined,

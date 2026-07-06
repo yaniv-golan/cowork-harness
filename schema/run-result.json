@@ -185,6 +185,11 @@
       "items": { "type": "string" },
       "description": "workRoot-relative paths that existed under the user-visible roots BEFORE the agent ran (captured post-staging, pre-spawn) — the baseline `no_unexpected_files` diffs against. Absent when the tier didn't capture it (microvm) or the run predates the seam."
     },
+    "preRunHashes": {
+      "type": "object",
+      "additionalProperties": { "type": ["string", "null"] },
+      "description": "Per-path sha256 of the user-visible tree BEFORE the agent ran (null = over the pre-run hash cap). Powers `input_unmodified`. Absent when the tier didn't capture it (microvm) or the run predates the seam."
+    },
     "partial": { "type": "boolean" },
     "unansweredGate": { "type": "object" },
     "nonDeterministic": { "type": "boolean" },

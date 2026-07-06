@@ -3145,6 +3145,7 @@ async function cmdVerifyRun(args: string[]) {
     // pre-run-manifest.json, so a missing field means the baseline genuinely doesn't exist
     // (pre-field run, or the run never captured) — evidence-unavailable, loud.
     preRunPaths: result.preRunPaths,
+    preRunHashes: result.preRunHashes,
     outputsDeletes: scan.outputsDeletes,
     questions: sidecarQuestions ?? [],
     hostPathLeaked: scan.hostPathLeaked,

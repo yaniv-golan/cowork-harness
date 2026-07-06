@@ -112,6 +112,7 @@ const full: RunResult = {
     { path: "reference/doc.md", bytes: 5, sha256: "0".repeat(64), class: "input" },
   ],
   preRunPaths: ["project/existing.txt"],
+  preRunHashes: { "outputs/a.md": "a".repeat(64), "outputs/over-cap.bin": null },
   partial: false,
   unansweredGate: { message: "no rule matched", hint: "add a --answer rule" },
   nonDeterministic: true,

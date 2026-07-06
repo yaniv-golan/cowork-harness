@@ -178,6 +178,14 @@ export interface AssertContext {
    *  cassette.preRunPaths). undefined = no pre-run manifest (older run/cassette, or microvm) —
    *  no_unexpected_files then fails evidence-unavailable, never vacuous-passes. */
   preRunPaths?: string[];
+  /** Pre-run per-path sha256 (RunResult.preRunHashes / cassette.preRunHashes). undefined = no manifest —
+   *  input_unmodified fails evidence-unavailable. */
+  preRunHashes?: Record<string, string | null>;
+  /** Replay-lane ONLY: authoritative post-run per-path sha256 from the cassette manifest
+   *  (cassette.artifacts[].sha256). undefined on live/verify-run (there, input_unmodified re-hashes the
+   *  real tree under workRoot). Needed because replay's materialized tree writes 0-byte placeholders for
+   *  body-less entries, so re-hashing it would be wrong. */
+  postRunHashes?: Record<string, string>;
   outputsDeletes: string[]; // delete ops that touched mnt/outputs (post-run scan)
   questions: string[]; // AskUserQuestion question texts asked
   hostPathLeaked: boolean; // a host path (/Users//opt) appeared in model-visible text

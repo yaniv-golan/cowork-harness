@@ -280,6 +280,65 @@ describe("redaction rewrites preRunPaths entries", () => {
   });
 });
 
+describe("redaction rewrites preRunHashes KEYS (not values)", () => {
+  const CUSTOMER_POLICY: RedactionPolicy = { patterns: [{ re: /AcmeCorp/g, label: "cust" }], keyNames: [] };
+
+  it("redacts a customer-named path key and leaves the hex sha256 value untouched", () => {
+    const sha = "a".repeat(64);
+    const c: any = {
+      scenario: scenario([{ result: "success" }]),
+      events: [JSON.stringify({ type: "result", subtype: "success" })],
+      preRunHashes: { ".projects/AcmeCorp/input.pdf": sha, "outputs/over-cap.bin": null },
+    };
+    const red: any = redactCassette(c, CUSTOMER_POLICY);
+    const keys = Object.keys(red.preRunHashes);
+    expect(keys.some((k) => k.includes("AcmeCorp"))).toBe(false);
+    const redactedKey = keys.find((k) => k.startsWith(".projects/"))!;
+    expect(redactedKey).toMatch(/^\.projects\/\[REDACTED:cust:[0-9a-f]{12}\]\/input\.pdf$/);
+    expect(red.preRunHashes[redactedKey]).toBe(sha); // value (hash) is never redacted
+    expect(red.preRunHashes["outputs/over-cap.bin"]).toBeNull(); // null value passes through as-is
+  });
+
+  it("absent preRunHashes stays absent through redaction and serialization", () => {
+    const c: any = {
+      scenario: scenario([{ result: "success" }]),
+      events: [JSON.stringify({ type: "result", subtype: "success" })],
+    };
+    const red: any = redactCassette(c, CUSTOMER_POLICY);
+    expect(JSON.stringify(red)).not.toContain('"preRunHashes"');
+  });
+});
+
+// preRunHashes wiring: result.json → cassette → replay. `buildCassette`'s record-side assembly (inside
+// the unexported recordScenarioObject) needs a live executeScenario spawn to exercise directly, so this
+// covers the two independently-reachable seams: a cassette literal carrying `preRunHashes` verifies the
+// field survives JSON round-trip untouched (no transform needed — `redactCassette` with an empty policy
+// is exercised elsewhere), and `replayCassette` on that cassette confirms the produced RunResult mirrors
+// `preRunPaths` EXACTLY: `preRunHashes` is undefined in the output (never re-exposed on the RunResult),
+// even though the cassette carried it (it's consumed internally by the replay evaluate() ctx instead —
+// see the `postRunHashes`-adjacent ctx wiring in replayCassette).
+describe("preRunHashes wiring: cassette → replay RunResult", () => {
+  it("replay's produced RunResult.preRunHashes is undefined even when the cassette carries the field (mirrors preRunPaths)", async () => {
+    const body = "seed";
+    const sha = createHash("sha256").update(body).digest("hex");
+    const r = await replayCassette({
+      scenario: scenario([{ result: "success" }]),
+      events: [
+        JSON.stringify({ type: "system", subtype: "init", tools: [] }),
+        JSON.stringify({ type: "result", subtype: "success", is_error: false }),
+      ],
+      controlOut: [],
+      preRunPaths: ["outputs/seed.md"],
+      preRunHashes: { "outputs/seed.md": sha },
+      artifacts: [{ path: "outputs/seed.md", bytes: body.length, sha256: sha, body, encoding: undefined }],
+      userVisibleRoots: ["outputs"],
+      fingerprint: { baseline: "latest" },
+    } as any);
+    expect(r.preRunHashes).toBeUndefined();
+    expect(r.preRunPaths).toBeUndefined();
+  });
+});
+
 // ── Cassette manifest safety — token-free, spawn-free ───────────────────────────────
 import { buildManifest, materializeManifest } from "../src/run/cassette.js";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";

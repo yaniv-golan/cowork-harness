@@ -47,6 +47,7 @@ function fullyExplicitFixture(): CompleteRunResult {
     artifacts: undefined,
     workspaceFiles: undefined,
     preRunPaths: undefined,
+    preRunHashes: undefined,
     partial: undefined,
     unansweredGate: undefined,
     nonDeterministic: undefined,
