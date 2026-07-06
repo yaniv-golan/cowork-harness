@@ -3175,6 +3175,12 @@ async function cmdVerifyRun(args: string[]) {
     skillToolAvailable: result.skillToolAvailable ?? true,
     skillActivity: result.skillActivity,
     tasks: result.tasks,
+    // Context/Connectors panel (§6.2, M6) — backs skill_available/connector_available/tool_available.
+    // result.json's own `context` was fully populated at RunResult-assembly time, so this is a
+    // straight read-through (no timing gap unlike the live evaluate() ctx in execute.ts).
+    availableSkills: result.context?.availableSkills,
+    mcpServers: result.context?.mcpServers,
+    availableTools: result.context?.tools,
     effectiveFidelity: result.effectiveFidelity,
     // verify-run re-checks a kept run dir on the SAME machine that ran it — the plan groups this
     // with the live execute.ts lane (both check a host-shaped computer:// link's path directly).

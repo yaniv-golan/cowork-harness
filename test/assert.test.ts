@@ -248,6 +248,49 @@ describe("skill_triggered / no_skill_triggered (Wave 1 / E8)", () => {
   });
 });
 
+describe("skill_available", () => {
+  it("passes when a staged skill's id matches the regex", () => {
+    const c = ctx({ availableSkills: [{ id: "my-plugin:my-skill" }] });
+    expect(evaluate([{ skill_available: "my-skill" }], c)[0].pass).toBe(true);
+  });
+  it("fails when no staged skill matches", () => {
+    const c = ctx({ availableSkills: [{ id: "other" }] });
+    expect(evaluate([{ skill_available: "my-skill" }], c)[0].pass).toBe(false);
+  });
+  it("evidence-unavailable when availableSkills is absent", () => {
+    const c = ctx({ availableSkills: undefined });
+    const result = evaluate([{ skill_available: "x" }], c)[0];
+    expect(result.pass).toBe(false);
+    expect(result.message).toContain("evidence unavailable");
+  });
+});
+
+describe("connector_available", () => {
+  it("passes when an mcpServer's name matches the regex", () => {
+    const c = ctx({ mcpServers: [{ name: "my-connector" }] });
+    expect(evaluate([{ connector_available: "connector" }], c)[0].pass).toBe(true);
+  });
+  it("evidence-unavailable when mcpServers is absent", () => {
+    const c = ctx({ mcpServers: undefined });
+    const result = evaluate([{ connector_available: "x" }], c)[0];
+    expect(result.pass).toBe(false);
+    expect(result.message).toContain("evidence unavailable");
+  });
+});
+
+describe("tool_available", () => {
+  it("passes when a tool in the init manifest matches the regex", () => {
+    const c = ctx({ availableTools: ["Bash", "Read"] });
+    expect(evaluate([{ tool_available: "Bash" }], c)[0].pass).toBe(true);
+  });
+  it("evidence-unavailable when availableTools is absent", () => {
+    const c = ctx({ availableTools: undefined });
+    const result = evaluate([{ tool_available: "x" }], c)[0];
+    expect(result.pass).toBe(false);
+    expect(result.message).toContain("evidence unavailable");
+  });
+});
+
 describe("budgetFields (Wave 1 / E6a + Wave 2 / E6b) — the single derivation used by live/replay/verify-run", () => {
   it("computes all four from a fully-populated source", () => {
     expect(

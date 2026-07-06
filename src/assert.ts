@@ -308,6 +308,20 @@ export interface AssertContext {
    *  that never wired this field) — the evidence-unavailable signal for all_tasks_completed/task_status;
    *  an empty `[]` is a valid "no tasks" state and is NOT the same as undefined. */
   tasks?: Array<{ id: string; subject: string; status: string; description?: string; activeForm?: string }>;
+  /** RunResult.context.availableSkills — the staged skill set read straight off disk at RunResult-assembly
+   *  time (§6.2, M6). Undefined means this lane never wired the field (a run predating M6, or the replay
+   *  lane, which has no live filesystem to re-stage skills from) — the evidence-unavailable signal for
+   *  skill_available; an empty `[]` is a valid "no skills staged" state and is NOT the same as undefined. */
+  availableSkills?: Array<{ id: string; whenToUse?: string }>;
+  /** RunResult.context.mcpServers — the SDK's init-event MCP server/connector list (§6.2, M6). Undefined
+   *  means no context telemetry was recorded for this run (a run predating M6) — the evidence-unavailable
+   *  signal for connector_available; an empty `[]` is a valid "no connectors" state and is NOT the same as
+   *  undefined. */
+  mcpServers?: Array<{ name: string; status?: string; [k: string]: unknown }>;
+  /** RunResult.context.tools — the SDK's init-event tool manifest (§6.2, M6). Undefined means no context
+   *  telemetry was recorded for this run (a run predating M6) — the evidence-unavailable signal for
+   *  tool_available; an empty `[]` is a valid "no tools" state and is NOT the same as undefined. */
+  availableTools?: string[];
 }
 
 export function evaluate(assertions: Assertion[], ctx: AssertContext): RunResult["assertions"] {
@@ -626,6 +640,28 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
       results.push(
         !ctx.skillsInvoked.some((s) => c.re.test(s)) ? ok() : fail(`skill unexpectedly triggered matching "${a.no_skill_triggered}"`),
       );
+  }
+  if (a.skill_available !== undefined) {
+    const c = compileUserRegex(a.skill_available);
+    if ("error" in c) results.push(fail(`skill_available: bad regex "${a.skill_available}": ${c.error}`));
+    else if (ctx.availableSkills === undefined)
+      results.push(fail(`evidence unavailable: availableSkills absent from result.json — cannot evaluate skill_available`));
+    else results.push(ctx.availableSkills.some((s) => c.re.test(s.id)) ? ok() : fail(`no staged skill matched "${a.skill_available}"`));
+  }
+  if (a.connector_available !== undefined) {
+    const c = compileUserRegex(a.connector_available);
+    if ("error" in c) results.push(fail(`connector_available: bad regex "${a.connector_available}": ${c.error}`));
+    else if (ctx.mcpServers === undefined)
+      results.push(fail(`evidence unavailable: mcpServers absent from result.json — cannot evaluate connector_available`));
+    else
+      results.push(ctx.mcpServers.some((s) => c.re.test(String(s.name))) ? ok() : fail(`no connector matched "${a.connector_available}"`));
+  }
+  if (a.tool_available !== undefined) {
+    const c = compileUserRegex(a.tool_available);
+    if ("error" in c) results.push(fail(`tool_available: bad regex "${a.tool_available}": ${c.error}`));
+    else if (ctx.availableTools === undefined)
+      results.push(fail(`evidence unavailable: availableTools absent from result.json — cannot evaluate tool_available`));
+    else results.push(ctx.availableTools.some((t) => c.re.test(t)) ? ok() : fail(`no available tool matched "${a.tool_available}"`));
   }
   if (a.skill_tool_used !== undefined) {
     const { skill, tool } = a.skill_tool_used;

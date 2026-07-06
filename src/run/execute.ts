@@ -37,7 +37,7 @@ import { decideLoopFromBaseline, readGateFlag } from "../loop-decision.js";
 import type { WebFetchProvenance } from "../hostloop/workspace-handler.js";
 import { startEgressSidecar, registerCleanup, type EgressSidecar } from "../egress/sidecar.js";
 import { startEgressProxy } from "../egress/proxy.js";
-import { evaluate, hostMatches, budgetFields } from "../assert.js";
+import { evaluate, hostMatches, budgetFields, type AssertContext } from "../assert.js";
 import { compileUserRegex } from "../regex.js";
 import { renderPrompts } from "../prompt.js";
 import { makeDisplayTranslator, vmPathContextFromPlan } from "./display-translate.js";
@@ -738,6 +738,12 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // (toolDurations/skillActivity/subagents) below — two reads could disagree if the file were touched mid-run.
   const timelineData = readTimeline(outDir);
 
+  // Context/Connectors panel (§6.2, M6): the staged skill set, read straight off disk — the child process
+  // has already run to completion by this point, so every skill is fully staged. Populated HERE (before the
+  // evaluate() ctx below, which needs it for skill_available) rather than only later before assembleRunResult
+  // — reading it twice would be wasteful and out of order; this single assignment feeds both.
+  record.context = { ...record.context, availableSkills: readAvailableSkills(plan.configDir) };
+
   const assertions = evaluate(scenario.assert, {
     transcript: record.transcript,
     toolsCalled: record.toolsCalled,
@@ -764,6 +770,14 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     skillToolAvailable: record.initTools.includes("Skill"),
     skillActivity: timelineData ? foldSkillActivity(timelineData.events) : undefined,
     tasks: record.tasks.size ? Array.from(record.tasks.values()) : undefined,
+    // Context/Connectors panel (§6.2, M6) — backs skill_available/connector_available/tool_available.
+    // record.context is populated above (availableSkills merged in before this ctx literal; tools/mcpServers
+    // set at init time in run.ts), so these are already live by the time evaluate() runs.
+    availableSkills: record.context?.availableSkills,
+    // mcpServers is unknown[] on the RunRecord (verbatim from the SDK's init event) — cast, not a
+    // transformation, matching the same pass-through cast assembleRunResult uses below.
+    mcpServers: record.context?.mcpServers as AssertContext["mcpServers"],
+    availableTools: record.context?.tools,
     effectiveFidelity,
     // Live lane (this run's own machine) — host-shaped computer:// links (hostloop) are checked
     // DIRECTLY on the filesystem, contained to the run's real workspace roots; verify-run shares
@@ -877,10 +891,6 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // the field self-suppresses. Informational — never affects the verdict. `record.decisions`
   // (DecisionRecord[], `by: string`) is assignable to the summarizer's `by?: string` param — no re-map.
   const gateProvenance = summarizeGateProvenance(record.decisions);
-
-  // Context/Connectors panel (§6.2, M6): the staged skill set, read straight off disk — the child
-  // process has already run to completion by this point, so every skill is fully staged.
-  record.context = { ...record.context, availableSkills: readAvailableSkills(plan.configDir) };
 
   const result: RunResult = assembleRunResult({
     $schema: RUN_RESULT_SCHEMA_URL,

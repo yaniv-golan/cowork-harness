@@ -208,6 +208,18 @@
             "description": "no invoked skill id matched this regex — the negative-control / description-collision catcher",
             "type": "string"
           },
+          "skill_available": {
+            "description": "a staged skill's id matched this regex (offered, not necessarily invoked — see skill_triggered for invocation)",
+            "type": "string"
+          },
+          "connector_available": {
+            "description": "an MCP server/connector's name matched this regex (available, not necessarily used)",
+            "type": "string"
+          },
+          "tool_available": {
+            "description": "a tool in the init manifest matched this regex (available, not necessarily called — see tool_called for invocation)",
+            "type": "string"
+          },
           "max_cost_usd": {
             "description": "the run's SDK-reported total_cost_usd is ≤ N — live lane only; on replay this asserts the frozen recording's cost, not fresh spend",
             "type": "number",

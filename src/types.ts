@@ -207,6 +207,18 @@ export const Assertion = z.object({
     .string()
     .optional()
     .describe("no invoked skill id matched this regex — the negative-control / description-collision catcher"),
+  skill_available: z
+    .string()
+    .optional()
+    .describe("a staged skill's id matched this regex (offered, not necessarily invoked — see skill_triggered for invocation)"),
+  connector_available: z
+    .string()
+    .optional()
+    .describe("an MCP server/connector's name matched this regex (available, not necessarily used)"),
+  tool_available: z
+    .string()
+    .optional()
+    .describe("a tool in the init manifest matched this regex (available, not necessarily called — see tool_called for invocation)"),
   max_cost_usd: z
     .number()
     .positive()

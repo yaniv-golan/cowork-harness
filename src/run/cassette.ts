@@ -37,7 +37,7 @@ import { pMapBounded } from "../async-pool.js";
 /** Upper bound for `record --concurrency`. Above a handful, concurrent runs exhaust Docker's default address
  *  pool (each run creates two networks) and press model API rate limits — both surface as actionable errors. */
 const MAX_RECORD_CONCURRENCY = 8;
-import { evaluate, budgetFields } from "../assert.js";
+import { evaluate, budgetFields, type AssertContext } from "../assert.js";
 import { extractComputerLinks } from "./computer-links.js";
 import { makeRenderer, renderFooter, type RenderPlan } from "./renderer.js";
 import { jsonEnvelope, parseOutputFormat } from "./envelope.js";
@@ -2783,6 +2783,9 @@ export const ALWAYS_CONTENT_KEYS: (keyof Assertion)[] = [
   "dispatch_count_max",
   "skill_triggered",
   "no_skill_triggered",
+  "skill_available",
+  "connector_available",
+  "tool_available",
   "skill_tool_used",
   "max_cost_usd",
   "max_tokens",
@@ -3055,6 +3058,13 @@ export async function replayCassette(
       skillToolAvailable: rec.initTools.includes("Skill"),
       skillActivity: cassette.timeline ? foldSkillActivity(cassette.timeline) : undefined,
       tasks: rec.tasks.size ? Array.from(rec.tasks.values()) : undefined,
+      // Context/Connectors panel (§6.2, M6) — backs skill_available/connector_available/tool_available.
+      // rec.context.tools/mcpServers replay from the frozen init event; availableSkills is a live-disk read
+      // (execute.ts) with no cassette-frozen equivalent, so it stays undefined on replay — evidence-unavailable,
+      // never a vacuous pass.
+      availableSkills: rec.context?.availableSkills,
+      mcpServers: rec.context?.mcpServers as AssertContext["mcpServers"],
+      availableTools: rec.context?.tools,
       effectiveFidelity: cassette.effectiveFidelity,
       // Replay has no live filesystem — computer_links_resolve normalizes both link shapes against the
       // manifest instead (see the manifestKeys comment above + src/run/computer-links.ts).

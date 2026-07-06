@@ -224,6 +224,9 @@ the rules and CI-placement rationale (why each category behaves this way), see
 | `dispatch_count_max` | at most N sub-agents dispatched |
 | `skill_triggered` | a skill matching the regex was invoked via the `Skill` tool — evidence-unavailable (not a normal fail) when the agent's init tool list has no `Skill` tool |
 | `no_skill_triggered` | no invoked skill id matched the regex — evidence-unavailable (never a vacuous pass) when skill-invocation data or the `Skill` tool itself is unobservable |
+| `skill_available` | a staged skill's id matched the regex (offered, not necessarily invoked — see `skill_triggered`) — evidence-unavailable when `RunResult.context.availableSkills` is absent (predates M6, or replay, which has no live disk to re-stage skills from) |
+| `connector_available` | an MCP server/connector's name matched the regex (available, not necessarily used) — evidence-unavailable when `RunResult.context.mcpServers` is absent |
+| `tool_available` | a tool in the init manifest matched the regex (available, not necessarily called — see `tool_called`) — evidence-unavailable when `RunResult.context.tools` is absent |
 | `skill_tool_used` | a tool matching `tool` ran inside a skill-activation window whose `skillId` matches `skill` — evidence-unavailable when `RunResult.skillActivity` is absent; heuristic for inline skills (a sticky, sequential window, not an exact per-tool boundary) |
 | `max_cost_usd` | run's SDK-reported cost ≤ N USD — on replay this asserts the *frozen recording's* cost, not fresh spend |
 | `max_tokens` | `usage.input_tokens + usage.output_tokens` ≤ N (cache tokens excluded) — same frozen-recording caveat as `max_cost_usd` |
