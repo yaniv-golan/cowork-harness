@@ -78,6 +78,7 @@ CONTENT_KEYS = {
     "max_tool_errors",
     "max_redundant_tool_calls",
     "max_turns",
+    "compaction_occurred",
     "all_tasks_completed",
     "task_status",
 }

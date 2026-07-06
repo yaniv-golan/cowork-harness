@@ -302,6 +302,11 @@
             "minimum": 0,
             "maximum": 9007199254740991
           },
+          "compaction_occurred": {
+            "description": "a context-compaction boundary occurred during the run (a `compact_boundary` system event was recorded); only `true` is valid — omit to not require it",
+            "type": "boolean",
+            "const": true
+          },
           "egress_denied": {
             "description": "egress to this host was denied",
             "type": "string"

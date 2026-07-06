@@ -3182,6 +3182,7 @@ async function cmdVerifyRun(args: string[]) {
     availableSkills: result.context?.availableSkills,
     mcpServers: result.context?.mcpServers,
     availableTools: result.context?.tools,
+    contextEvents: result.contextEvents,
     effectiveFidelity: result.effectiveFidelity,
     // verify-run re-checks a kept run dir on the SAME machine that ran it — grouped with the live
     // execute.ts lane (both check a host-shaped computer:// link's path directly).

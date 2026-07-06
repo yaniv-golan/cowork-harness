@@ -76,7 +76,8 @@ export type AgentEvent =
       modelUsage?: Record<string, Record<string, unknown>>;
     }
   | { type: "error"; source: "spawn" | "agent" | "protocol" | "exit"; message: string }
-  | { type: "raw"; line: string };
+  | { type: "raw"; line: string }
+  | { type: "system_event"; subtype: string; data: Record<string, unknown> }; // a `system` message we don't special-case (e.g. compact_boundary)
 
 export type SdkMcp = {
   servers: string[];
@@ -684,6 +685,10 @@ export function parseMessage(msg: any): AgentEvent[] {
         ev.push({ type: "init", tools: msg.tools ?? [], mcpServers: msg.mcp_servers ?? [], skills: msg.skills ?? [], cwd: msg.cwd });
       else if (msg.subtype === "api_metrics") ev.push({ type: "metrics", data: msg });
       else if (msg.subtype === "thinking") ev.push({ type: "thinking", text: String(msg.content ?? "") });
+      else if (typeof msg.subtype === "string")
+        // Any other system subtype (compact_boundary, and anything a future build adds) is surfaced
+        // structurally instead of dropped. `data` carries the raw message minus the type/subtype envelope.
+        ev.push({ type: "system_event", subtype: msg.subtype, data: systemEventData(msg) });
       break;
     case "control_request": {
       const dr = toDecisionRequest(msg);
@@ -778,6 +783,12 @@ export function parseMessage(msg: any): AgentEvent[] {
       break;
   }
   return ev;
+}
+
+/** The raw system message minus its `type`/`subtype` envelope — the event-specific payload. */
+function systemEventData(msg: Record<string, unknown>): Record<string, unknown> {
+  const { type: _t, subtype: _s, ...rest } = msg;
+  return rest as Record<string, unknown>;
 }
 
 /** Flatten a tool_result `content` (a string, or an array of content blocks), capped at

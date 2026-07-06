@@ -865,6 +865,7 @@ function minimalRec(): RunRecord {
     redundantToolCalls: [],
     tasks: new Map(),
     context: { tools: [], mcpServers: [] },
+    contextEvents: [],
   };
 }
 
@@ -2188,6 +2189,7 @@ function replayErrorResult(file: string): RunResult {
     readonlyFolderRoots: undefined,
     artifacts: undefined,
     workspaceFiles: undefined, // no live filesystem to scan on replay (see the doc note in execute.ts)
+    contextEvents: undefined, // no rec to read from on this early-bail lane
     preRunPaths: undefined,
     preRunHashes: undefined,
     partial: undefined,
@@ -2865,6 +2867,7 @@ export const ALWAYS_CONTENT_KEYS: (keyof Assertion)[] = [
   "max_tool_errors",
   "max_redundant_tool_calls",
   "max_turns",
+  "compaction_occurred",
   "all_tasks_completed",
   "task_status",
   "result",
@@ -3171,6 +3174,9 @@ export async function replayCassette(
       availableSkills: rec.context?.availableSkills,
       mcpServers: rec.context?.mcpServers as AssertContext["mcpServers"],
       availableTools: rec.context?.tools,
+      // The re-drive reproduces `system_event` via parseMessage from the cassette's frozen stdout
+      // stream — content-class, same as toolErrors/redundantToolCalls above.
+      contextEvents: rec.contextEvents,
       effectiveFidelity: cassette.effectiveFidelity,
       // Replay has no live filesystem — computer_links_resolve normalizes both link shapes against the
       // manifest instead (see the manifestKeys comment above + src/run/computer-links.ts).
@@ -3327,6 +3333,7 @@ export async function replayCassette(
       readonlyFolderRoots: undefined,
       artifacts: undefined,
       workspaceFiles: undefined, // no live filesystem to scan on replay (see the doc note in execute.ts)
+      contextEvents: rec.contextEvents, // the re-drive reproduces system_event via parseMessage — powers compaction_occurred
       preRunPaths: undefined,
       preRunHashes: undefined,
       partial: undefined,

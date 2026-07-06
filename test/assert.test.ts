@@ -383,6 +383,22 @@ describe("max_turns (Wave 2 / E6b — the last budget key, built on Wave 0's usa
   });
 });
 
+describe("compaction_occurred", () => {
+  it("passes when a compact_boundary event was recorded", () => {
+    const [r] = evaluate([{ compaction_occurred: true }], ctx({ contextEvents: [{ subtype: "compact_boundary" }] }));
+    expect(r.pass).toBe(true);
+  });
+  it("fails when no compaction event was recorded", () => {
+    const [r] = evaluate([{ compaction_occurred: true }], ctx({ contextEvents: [{ subtype: "other" }] }));
+    expect(r.pass).toBe(false);
+  });
+  it("is evidence-unavailable when contextEvents is undefined", () => {
+    const [r] = evaluate([{ compaction_occurred: true }], ctx({ contextEvents: undefined }));
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/no context events/i);
+  });
+});
+
 describe("tool_no_error (M3)", () => {
   it("passes when no tool matching the regex has any errors", () => {
     const c = ctx({ toolErrors: { Bash: { calls: 3, errors: 0 }, Read: { calls: 1, errors: 0 } } });

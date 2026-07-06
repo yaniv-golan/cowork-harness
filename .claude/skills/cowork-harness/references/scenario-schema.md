@@ -245,6 +245,7 @@ passes only if every key passes. Keep one concern per item unless you mean conju
 | `max_tool_errors: <N>` | total tool errors across all tools (sum of `RunResult.toolErrors[*].errors`) ≤ N — evidence-unavailable if tool-error telemetry is absent |
 | `max_redundant_tool_calls: <N>` | total WASTED repeated tool calls (sum of `(count-1)` across every redundant `{name,args}` group in `RunResult.redundantToolCalls`) ≤ N — not the raw count of redundant groups; evidence-unavailable if redundant-call telemetry is absent |
 | `max_turns: <N>` | the SDK-reported (or fallback-counted) turn count ≤ N — meaningfully replay-checkable (re-drive recounts turns deterministically, same as `tool_calls_max`) |
+| `compaction_occurred: true` | a context-compaction boundary occurred (a `compact_boundary` system event was recorded) — lives in the stdout stream, so meaningfully replay-checkable; evidence-unavailable if context-event telemetry is absent. **Only `true` is valid** — omit to not require it |
 | `all_tasks_completed: true` | every task in `RunResult.tasks[]` reached status `"completed"` — vacuously true if there are zero tasks (pair with `task_status` to require at least one); evidence-unavailable if tasks telemetry is absent |
 | `task_status: {match, status}` | a task whose `subject` OR `id` matches the regex `match` reached `status` — evidence-unavailable if tasks telemetry is absent |
 | `question_asked: <regex>` | the agent asked an AskUserQuestion whose text matches |
@@ -301,7 +302,7 @@ sourcing ≠ evaluation (replay warns when you edit one). `verify-run` is the on
 **Evaluated on replay (content):** `transcript_*`, `tool_*`, `subagent_*`, `dispatch_count_max`,
 `skill_triggered`, `no_skill_triggered`, `skill_available`, `connector_available`, `tool_available`,
 `skill_tool_used`, `max_cost_usd`, `max_tokens`, `tool_calls_max`, `tool_no_error`,
-`max_tool_errors`, `max_redundant_tool_calls`, `max_turns`, `all_tasks_completed`, `task_status`, `result`
+`max_tool_errors`, `max_redundant_tool_calls`, `max_turns`, `compaction_occurred`, `all_tasks_completed`, `task_status`, `result`
 (`max_cost_usd`/`max_tokens` assert the frozen recording's spend on replay, not fresh spend). The verdict
 modifiers `allow_permissive_auto_allow` / `allow_missing_capability` / `allow_l0_plugin_divergence` /
 `allow_stall` are also kept on replay, evaluated as no-op passes.

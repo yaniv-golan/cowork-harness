@@ -286,6 +286,12 @@ export const Assertion = z.object({
     .nonnegative()
     .optional()
     .describe("the SDK-reported (or fallback-counted) turn count ≤ N — replay-checkable (the re-drive recounts turns deterministically)"),
+  compaction_occurred: z
+    .literal(true)
+    .optional()
+    .describe(
+      "a context-compaction boundary occurred during the run (a `compact_boundary` system event was recorded); only `true` is valid — omit to not require it",
+    ),
   egress_denied: z.string().optional().describe("egress to this host was denied"),
   egress_allowed: z.string().optional().describe("egress to this host was allowed"),
   // Only `true` is accepted: `false` is rejected as a footgun. The assertion is presence-semantic — authoring
@@ -828,4 +834,7 @@ export interface RunResult {
   // assembler at read time (no drift risk: nothing stores `artifacts` independently anymore, on the
   // live lane; replay is unaffected).
   workspaceFiles?: Array<{ path: string; bytes: number; sha256: string; class: "output" | "mount" | "input" }>;
+  /** `system` stream messages the harness doesn't special-case — e.g. `compact_boundary`. In the
+   *  stdout stream, so reproduced on replay. Powers `compaction_occurred`. */
+  contextEvents?: Array<{ subtype: string; ts?: number; data?: Record<string, unknown> }>;
 }

@@ -794,6 +794,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // transformation, matching the same pass-through cast assembleRunResult uses below.
     mcpServers: record.context?.mcpServers as AssertContext["mcpServers"],
     availableTools: record.context?.tools,
+    contextEvents: record.contextEvents,
     effectiveFidelity,
     // Live lane (this run's own machine) — host-shaped computer:// links (hostloop) are checked
     // DIRECTLY on the filesystem, contained to the run's real workspace roots; verify-run shares
@@ -968,6 +969,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // filtered to the deliverable classes (excludes class:"input" read-only mounts). No second walk.
     artifacts: workspaceFiles.filter((f) => f.class === "output" || f.class === "mount").map((f) => ({ path: f.path, bytes: f.bytes })),
     workspaceFiles, // Working folder panel's canonical file model (output/mount/input) — see comment above
+    contextEvents: record.contextEvents, // system events we don't special-case — powers compaction_occurred
     // The pre-spawn baseline no_unexpected_files diffs against (same single read the evaluate ctx got).
     // undefined = the run didn't capture (key not asserted, microvm, pre-seam) — the assertion then
     // fails evidence-unavailable, loud.
@@ -1200,6 +1202,7 @@ export function buildPartialResult(args: {
     // filtered to the deliverable classes (excludes class:"input" read-only mounts). No second walk.
     artifacts: workspaceFiles.filter((f) => f.class === "output" || f.class === "mount").map((f) => ({ path: f.path, bytes: f.bytes })),
     workspaceFiles, // Working folder panel's canonical file model
+    contextEvents: record.contextEvents, // system events we don't special-case — powers compaction_occurred
     preRunPaths: readPreRunManifest(args.outDir),
     preRunHashes: readPreRunManifestHashes(args.outDir),
     effectiveFidelity: args.effectiveFidelity,

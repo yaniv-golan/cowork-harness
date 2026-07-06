@@ -336,6 +336,12 @@ export interface AssertContext {
    *  signal for tool_available; an empty `[]` is a valid "no tools" state and is NOT the same as
    *  undefined. */
   availableTools?: string[];
+  /** RunResult.contextEvents — `system` stream messages the harness doesn't special-case (e.g.
+   *  `compact_boundary`). Undefined means no context-events telemetry was recorded for this run (an
+   *  older run that never captured this field, or a lane without context events) — the
+   *  evidence-unavailable signal for compaction_occurred; an empty `[]` is a valid "captured, saw
+   *  nothing uncaught" state and is NOT the same as undefined. */
+  contextEvents?: RunResult["contextEvents"];
 }
 
 export function evaluate(assertions: Assertion[], ctx: AssertContext): RunResult["assertions"] {
@@ -638,6 +644,14 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
         : ctx.turns <= a.max_turns
           ? ok()
           : fail(`${ctx.turns} turns exceeds max ${a.max_turns}`),
+    );
+  if (a.compaction_occurred !== undefined)
+    results.push(
+      ctx.contextEvents === undefined
+        ? fail(`compaction_occurred: no context events captured (older run / lane without context events) — cannot verify`)
+        : ctx.contextEvents.some((e) => e.subtype === "compact_boundary")
+          ? ok()
+          : fail(`compaction_occurred: no compact_boundary event was recorded`),
     );
   if (a.no_skill_triggered !== undefined) {
     const c = compileUserRegex(a.no_skill_triggered);

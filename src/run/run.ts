@@ -100,6 +100,7 @@ export interface RunRecord {
   // by the RunResult assemblers (execute.ts), which read it straight off the staged skill set on disk
   // rather than accumulating it from live events like tools/mcpServers.
   context: { tools: string[]; mcpServers: unknown[]; availableSkills?: Array<{ id: string; whenToUse?: string }> };
+  contextEvents: Array<{ subtype: string; data: Record<string, unknown> }>; // system events we don't special-case (compaction etc.)
 }
 
 export interface RunHooks {
@@ -184,6 +185,7 @@ export class Run {
       redundantToolCalls: [],
       tasks: new Map(),
       context: { tools: [], mcpServers: [] },
+      contextEvents: [],
     };
   }
 
@@ -435,6 +437,9 @@ export class Run {
             }
             this.rec.errorSource ??= ev.source; // keep the first observed source; a later recovering result won't clear it
             this.rec.decisions.push({ kind: "tool", name: ev.source, decision: "error", by: "agent", detail: ev.message });
+            break;
+          case "system_event":
+            this.rec.contextEvents.push({ subtype: ev.subtype, data: ev.data });
             break;
         }
       }
