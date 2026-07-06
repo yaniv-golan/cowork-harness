@@ -3,6 +3,7 @@ import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { evaluate, hostMatches, budgetFields, type AssertContext } from "../src/assert.js";
+import { Assertion as AssertionSchema } from "../src/types.js";
 
 function ctx(over: Partial<AssertContext> = {}): AssertContext {
   return {
@@ -944,5 +945,96 @@ describe("replay lane: user_visible_artifact honors the cassette's stored userVi
   it("the SAME file is INVISIBLE under the legacy default roots (proves the stored field is load-bearing)", () => {
     const { workRoot, prefixes } = materializeManifest(entries); // default ["outputs",".projects"]
     expect(pass(evaluate([{ user_visible_artifact: "project/report.md" }], ctx({ workRoot, userVisiblePrefixes: prefixes })))).toBe(false);
+  });
+});
+
+describe("input_unmodified", () => {
+  it("passes when a matched pre-existing file's post-run hash is unchanged", () => {
+    const root = mkdtempSync(join(tmpdir(), "cwh-ium-ok-"));
+    mkdirSync(join(root, "project"), { recursive: true });
+    mkdirSync(join(root, "outputs"), { recursive: true });
+    const content = "original content";
+    writeFileSync(join(root, "project", "in.md"), content);
+    writeFileSync(join(root, "outputs", "out.md"), "unrelated");
+    const preHashes = {
+      "project/in.md": createHash("sha256").update(content).digest("hex"),
+      "outputs/out.md": "irrelevant-since-unmatched",
+    };
+    const [r] = evaluate([{ input_unmodified: ["project/**"] }], ctx({ workRoot: root, preRunHashes: preHashes }));
+    expect(r.pass).toBe(true);
+  });
+
+  it("fails when a matched file's content changed (hash differs)", () => {
+    const root = mkdtempSync(join(tmpdir(), "cwh-ium-changed-"));
+    mkdirSync(join(root, "project"), { recursive: true });
+    writeFileSync(join(root, "project", "in.md"), "mutated content");
+    const preHashes = { "project/in.md": createHash("sha256").update("original content").digest("hex") };
+    const [r] = evaluate([{ input_unmodified: ["project/**"] }], ctx({ workRoot: root, preRunHashes: preHashes }));
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/modified in place/);
+    expect(r.message).toMatch(/project\/in\.md/);
+  });
+
+  it("fails (content change) when a matched pre-existing file was deleted post-run", () => {
+    const root = mkdtempSync(join(tmpdir(), "cwh-ium-deleted-"));
+    mkdirSync(join(root, "project"), { recursive: true });
+    // project/in.md is NOT created on disk — simulates a post-run deletion.
+    const preHashes = { "project/in.md": createHash("sha256").update("original content").digest("hex") };
+    const [r] = evaluate([{ input_unmodified: ["project/**"] }], ctx({ workRoot: root, preRunHashes: preHashes }));
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/removed/);
+    expect(r.message).toMatch(/project\/in\.md/);
+  });
+
+  it("evidence-unavailable when a matched file's pre-run hash is null (over cap)", () => {
+    const root = mkdtempSync(join(tmpdir(), "cwh-ium-null-"));
+    const preHashes: Record<string, string | null> = { "project/big.md": null };
+    const [r] = evaluate([{ input_unmodified: ["project/**"] }], ctx({ workRoot: root, preRunHashes: preHashes }));
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/evidence unavailable/i);
+  });
+
+  it("evidence-unavailable when preRunHashes is absent entirely", () => {
+    const root = mkdtempSync(join(tmpdir(), "cwh-ium-nopre-"));
+    const [r] = evaluate([{ input_unmodified: ["project/**"] }], ctx({ workRoot: root }));
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/evidence unavailable/i);
+  });
+
+  it("rejects an empty glob list at schema validation (.min(1))", () => {
+    expect(AssertionSchema.safeParse({ input_unmodified: [] }).success).toBe(false);
+  });
+
+  it("only checks matched paths (an unmatched changed file does not fail)", () => {
+    const root = mkdtempSync(join(tmpdir(), "cwh-ium-unmatched-"));
+    mkdirSync(join(root, "project"), { recursive: true });
+    mkdirSync(join(root, "outputs"), { recursive: true });
+    const content = "original content";
+    writeFileSync(join(root, "project", "in.md"), content);
+    writeFileSync(join(root, "outputs", "out.md"), "CHANGED on disk");
+    const preHashes = {
+      "project/in.md": createHash("sha256").update(content).digest("hex"),
+      "outputs/out.md": createHash("sha256").update("original out content").digest("hex"), // differs from disk
+    };
+    const [r] = evaluate([{ input_unmodified: ["project/**"] }], ctx({ workRoot: root, preRunHashes: preHashes }));
+    expect(r.pass).toBe(true);
+  });
+
+  it("replay lane: uses postRunHashes, not a re-hash of the materialized placeholder tree", () => {
+    // Simulates the replay lane's materialized tree, where a body-less manifest entry is written as a
+    // 0-byte placeholder. Re-hashing that placeholder would wrongly report "modified in place" — the
+    // check must prefer the authoritative ctx.postRunHashes map instead.
+    const root = mkdtempSync(join(tmpdir(), "cwh-ium-replay-"));
+    mkdirSync(join(root, "ref"), { recursive: true });
+    writeFileSync(join(root, "ref", "in.md"), ""); // 0-byte placeholder, NOT the real content
+    const preRunHashes = { "ref/in.md": "H" };
+    const okCtx = ctx({ workRoot: root, preRunHashes, postRunHashes: { "ref/in.md": "H" } });
+    const [rOk] = evaluate([{ input_unmodified: ["ref/**"] }], okCtx);
+    expect(rOk.pass).toBe(true); // would FAIL against a naive re-hash of the empty placeholder
+
+    const changedCtx = ctx({ workRoot: root, preRunHashes, postRunHashes: { "ref/in.md": "DIFFERENT" } });
+    const [rChanged] = evaluate([{ input_unmodified: ["ref/**"] }], changedCtx);
+    expect(rChanged.pass).toBe(false);
+    expect(rChanged.message).toMatch(/modified in place/);
   });
 });

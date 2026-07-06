@@ -87,7 +87,14 @@ GATE_KEYS = {"question_asked", "questions_count_max", "gate_answers_delivered", 
 # a manifest-less cassette skips them. Since the 0.3.0 artifact-manifest these are NOT always live-only.
 # computer_links_resolve joins this bucket (not CONTENT_KEYS): resolving a non-empty link set needs
 # either a live filesystem or the cassette's artifacts manifest — see cassette.ts's manifestKeys comment.
-MANIFEST_KEYS = {"file_exists", "user_visible_artifact", "artifact_json", "computer_links_resolve", "no_unexpected_files"}
+MANIFEST_KEYS = {
+    "file_exists",
+    "user_visible_artifact",
+    "artifact_json",
+    "computer_links_resolve",
+    "no_unexpected_files",
+    "input_unmodified",
+}
 # live-only: ALWAYS skipped on replay, with a loud warning (no filesystem, no network on the token-free lane)
 LIVE_ONLY_KEYS = {
     "egress_denied",

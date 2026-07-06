@@ -1,4 +1,5 @@
 import { existsSync, readFileSync, statSync, realpathSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join, resolve, relative, isAbsolute, sep } from "node:path";
 import type { Assertion, RunResult, UsageInfo, CostInfo } from "./types.js";
 import { VERDICT_MODIFIER_KEYS } from "./types.js";
@@ -773,6 +774,60 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
               `unexpected file(s) created outside the allowlist: ${stray.join(", ")} (allow: ${a.no_unexpected_files!.join(", ") || "(none)"})`,
             ),
       );
+    }
+  }
+  if (a.input_unmodified !== undefined) {
+    if (ctx.preRunHashes === undefined) {
+      results.push(
+        fail(
+          "evidence unavailable: no pre-run hash manifest for this run/cassette (predates the fingerprinted manifest, or a tier that cannot capture — microvm) — cannot compare content; re-run/re-record on container/hostloop",
+        ),
+      );
+    } else {
+      const globs = a.input_unmodified;
+      const matched = Object.keys(ctx.preRunHashes).filter((p) => anyGlobMatches(globs, p.replace(/\\/g, "/")));
+      const modified: string[] = []; // present post-run with a different hash
+      const removed: string[] = []; // gone post-run (deletion is also a content change)
+      const uncheckable: string[] = [];
+      for (const p of matched) {
+        const pre = ctx.preRunHashes[p];
+        if (pre === null) {
+          uncheckable.push(p);
+          continue;
+        }
+        let post: string | null;
+        if (ctx.postRunHashes !== undefined) {
+          // Replay lane: authoritative post-run hash from the cassette manifest (the materialized tree
+          // has 0-byte placeholders for body-less entries, so re-hashing it would be wrong). Absent ⇒
+          // the file isn't in the post-run tree ⇒ removed.
+          post = ctx.postRunHashes[p] ?? null;
+        } else {
+          // Live / verify-run: re-hash the real file. Throw (gone/unreadable) ⇒ removed.
+          try {
+            post = createHash("sha256")
+              .update(readFileSync(join(ctx.workRoot, p)))
+              .digest("hex");
+          } catch {
+            post = null;
+          }
+        }
+        if (post === null) removed.push(p);
+        else if (post !== pre) modified.push(p);
+      }
+      // uncheckable dominates: if any matched path is unmeasurable, don't imply the rest were fully
+      // checked — surface evidence-unavailable rather than a clean verdict.
+      if (uncheckable.length)
+        results.push(
+          fail(
+            `evidence unavailable: pre-run hash missing (over size cap) for: ${uncheckable.slice(0, 5).join(", ")} — raise COWORK_HARNESS_PRERUN_HASH_CAP or narrow the glob`,
+          ),
+        );
+      else if (modified.length || removed.length) {
+        const parts: string[] = [];
+        if (modified.length) parts.push(`modified in place: ${modified.slice(0, 5).join(", ")}`);
+        if (removed.length) parts.push(`removed: ${removed.slice(0, 5).join(", ")}`);
+        results.push(fail(`pre-existing file(s) changed — ${parts.join("; ")}`));
+      } else results.push(ok());
     }
   }
   if (a.self_heal_ran !== undefined)

@@ -342,18 +342,12 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     plan.resume = !!opts.resume;
   }
   // Pre-run baseline capture: only when something will consume it — the scenario asserts
-  // no_unexpected_files, or this is a recording (cassettes always carry the baseline so a later
-  // assert-add stays replayable without re-record). Skipping keeps the pre-spawn walk (potentially a
-  // large live connected folder on hostloop) off runs that never look at it; absence stays loud.
-  // TODO(M7 task 3): `input_unmodified` (RunResult.preRunHashes-backed) ALSO needs this gate —
-  // `|| a.input_unmodified !== undefined` — else a scenario asserting ONLY input_unmodified on a plain
-  // `run` never captures the manifest and the assertion always fails evidence-unavailable. NOT added
-  // here: `input_unmodified` isn't in the Assertion zod schema yet, and adding the schema key alone
-  // (without its replayCassette classification bucket, which is Task 3's job together with the check())
-  // trips the classification-exhaustiveness throw in replayCassette for EVERY cassette replay in the
-  // suite (verified: adding the bare schema key breaks test/cassette-protocol.test.ts across the board).
-  // The schema key, its classification, the check() branch, and this gate line must land together.
-  plan.capturePreRun = scenario.assert.some((a) => a.no_unexpected_files !== undefined) || opts.command === "record";
+  // no_unexpected_files or input_unmodified, or this is a recording (cassettes always carry the
+  // baseline so a later assert-add stays replayable without re-record). Skipping keeps the pre-spawn
+  // walk (potentially a large live connected folder on hostloop) off runs that never look at it;
+  // absence stays loud.
+  plan.capturePreRun =
+    scenario.assert.some((a) => a.no_unexpected_files !== undefined || a.input_unmodified !== undefined) || opts.command === "record";
 
   // Fill in the caller's display-translate ref (see ExecuteOptions.translateRef) now that plan +
   // effectiveFidelity exist — well before the child spawns, so the renderer never sees a stale identity

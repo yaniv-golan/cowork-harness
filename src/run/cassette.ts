@@ -38,6 +38,7 @@ import { pMapBounded } from "../async-pool.js";
  *  pool (each run creates two networks) and press model API rate limits — both surface as actionable errors. */
 const MAX_RECORD_CONCURRENCY = 8;
 import { evaluate, budgetFields, type AssertContext } from "../assert.js";
+import { anyGlobMatches } from "../glob.js";
 import { extractComputerLinks } from "./computer-links.js";
 import { makeRenderer, renderFooter, type RenderPlan } from "./renderer.js";
 import { jsonEnvelope, parseOutputFormat } from "./envelope.js";
@@ -2071,11 +2072,21 @@ async function recordScenarioObject(
   // scrubbed — sha256 stays the raw on-disk hash, `artifacts[i].sha256 === rawManifest[i].sha256`).
   const scrubbedPaths = rawManifest.filter((raw, i) => artifacts[i]!.sha256 !== raw.sha256).map((raw) => raw.path);
   const { hashes: preRunHashes, nulledPaths } = nullOutScrubbedPreRunHashes(result.preRunHashes, scrubbedPaths);
+  // Gate the warning to when it's actually actionable: only fire when THIS scenario asserts
+  // `input_unmodified` with a glob matching at least one nulled path — mirrors how the replay-side
+  // loud-exclude warnings (nufExcludedLoudly/iumExcludedLoudly, above) check `scenario.assert.some(...)`
+  // rather than warning unconditionally on every scrub. A scenario with no `input_unmodified` assertion
+  // has no use for this warning; noise on every secret-scrubbed recording would drown out the signal.
   if (nulledPaths.length) {
-    warn(
-      `::warning:: record: pre-run hash nulled for secret-scrubbed path(s): ${nulledPaths.join(", ")} — ` +
-        `content was redacted at record time; input_unmodified will report evidence-unavailable for these paths on replay\n`,
+    const affectsInputUnmodified = scenario.assert.some(
+      (a) => a.input_unmodified !== undefined && nulledPaths.some((p) => anyGlobMatches(a.input_unmodified!, p)),
     );
+    if (affectsInputUnmodified) {
+      warn(
+        `::warning:: record: pre-run hash nulled for secret-scrubbed path(s): ${nulledPaths.join(", ")} — ` +
+          `content was redacted at record time; input_unmodified will report evidence-unavailable for these paths on replay\n`,
+      );
+    }
   }
   // if an `artifact_json` targets an artifact we had to truncate, it passes here (on-disk) but FAILS
   // replay (no committed body). Surface that record→replay asymmetry NOW, at its cause, instead of letting a
@@ -2251,6 +2262,7 @@ function warnUncheckableOnDiskKeys(cassette: Cassette, frozen: Scenario, onDisk:
     "transcript_no_host_path",
   ]);
   const hasPreRun = cassette.preRunPaths !== undefined;
+  const hasPreRunHashes = cassette.preRunHashes !== undefined;
   // expect_denied: sourced from on-disk but live-only on replay — warn if the author changed it expecting effect.
   if (JSON.stringify(frozen.expect_denied ?? []) !== JSON.stringify(onDisk.expect_denied ?? []))
     warn(
@@ -2268,7 +2280,14 @@ function warnUncheckableOnDiskKeys(cassette: Cassette, frozen: Scenario, onDisk:
       else if (k === "no_unexpected_files" && cassette.artifacts === undefined) reason = "no artifact manifest in this cassette";
       else if (k === "no_unexpected_files" && !hasPreRun)
         reason = "no pre-run manifest in this cassette (recorded pre-0.24 or on microvm) — re-record on harness ≥0.24 (container/hostloop)";
-      else if (k !== "no_unexpected_files" && manifestKeys.has(k) && !hasManifest) reason = "no artifact manifest in this cassette";
+      // input_unmodified mirrors no_unexpected_files: checkable needs BOTH the artifacts manifest and the
+      // preRunHashes baseline (a different pre-run field than no_unexpected_files' preRunPaths).
+      else if (k === "input_unmodified" && cassette.artifacts === undefined) reason = "no artifact manifest in this cassette";
+      else if (k === "input_unmodified" && !hasPreRunHashes)
+        reason =
+          "no pre-run hash manifest in this cassette (recorded pre-fingerprinted-manifest or on microvm) — re-record on a harness with hash-manifest support (container/hostloop)";
+      else if (k !== "no_unexpected_files" && k !== "input_unmodified" && manifestKeys.has(k) && !hasManifest)
+        reason = "no artifact manifest in this cassette";
       else if (gateKeys.has(k) && !hasControlOut) reason = "no controlOut in this cassette";
       if (reason) {
         seen.add(k);
@@ -2877,6 +2896,7 @@ export const MANIFEST_KEYS: (keyof Assertion)[] = [
   "artifact_json",
   "computer_links_resolve",
   "no_unexpected_files",
+  "input_unmodified",
 ];
 
 /** Replay a cassette through Run and re-evaluate the content assertions. With a `cassette.artifacts`
@@ -2973,9 +2993,20 @@ export async function replayCassette(
   // record always captures on capture-capable tiers). The dedicated warning below announces the drop,
   // so — and only then — the skip tallies don't double-report it (gate-key precedent).
   const nufExcludedLoudly = cassette.artifacts !== undefined && !hasPreRun;
+  // input_unmodified mirrors no_unexpected_files exactly: it's a pre/post DIFF whose green case
+  // ("nothing changed") is valid against an empty-but-present manifest, and whose evidence requirement
+  // is the `preRunHashes` baseline (NOT `preRunPaths` — a different pre-run field, captured together but
+  // logically distinct). The generic length-gated `manifestKeys` bucket below would (a) silently strip it
+  // when the manifest is empty-but-present even though a deletion is fully diagnosable against that empty
+  // tree, and (b) ignore the preRunHashes baseline requirement entirely — the exact live/replay asymmetry
+  // no_unexpected_files was special-cased to avoid.
+  const hasPreRunHashes = cassette.preRunHashes !== undefined;
+  const iumReplayable = cassette.artifacts !== undefined && hasPreRunHashes;
+  const iumExcludedLoudly = cassette.artifacts !== undefined && !hasPreRunHashes;
   const manifestKeys: (keyof Assertion)[] = [
-    ...(cassette.artifacts?.length ? MANIFEST_KEYS.filter((k) => k !== "no_unexpected_files") : []),
+    ...(cassette.artifacts?.length ? MANIFEST_KEYS.filter((k) => k !== "no_unexpected_files" && k !== "input_unmodified") : []),
     ...(nufReplayable ? (["no_unexpected_files"] as (keyof Assertion)[]) : []),
+    ...(iumReplayable ? (["input_unmodified"] as (keyof Assertion)[]) : []),
   ];
   // DELIBERATE asymmetry (live vs replay): live/verify-run without preRunPaths ⇒ evidence-unavailable
   // HARD-FAIL; replay of a baseline-less cassette ⇒ loud EXCLUDE here (same contract as gate keys
@@ -2983,6 +3014,10 @@ export async function replayCassette(
   if (cassette.scenario.assert.some((a) => a.no_unexpected_files !== undefined) && nufExcludedLoudly)
     warn(
       "::warning:: [replay] no_unexpected_files: cassette has no pre-run manifest (recorded pre-0.24 or on microvm) — key skipped on replay; re-record on harness ≥0.24 (container/hostloop)\n",
+    );
+  if (cassette.scenario.assert.some((a) => a.input_unmodified !== undefined) && iumExcludedLoudly)
+    warn(
+      "::warning:: [replay] input_unmodified: cassette has no pre-run hash manifest (recorded pre-fingerprinted-manifest or on microvm) — key skipped on replay; re-record on harness with hash-manifest support (container/hostloop)\n",
     );
   // deterministic exhaustiveness check — every key in the Assertion schema must appear in exactly
   // one classification bucket. If a new key is added to the schema but not here, this throws at the first
@@ -2996,6 +3031,7 @@ export async function replayCassette(
       "artifact_json",
       "computer_links_resolve",
       "no_unexpected_files",
+      "input_unmodified",
       "egress_denied",
       "egress_allowed",
       "no_delete_in_outputs",
@@ -3062,10 +3098,17 @@ export async function replayCassette(
       const keptContent = defined.some((k) => contentKeys.includes(k));
       if (!keptContent) {
         fullSkipCount++; // nothing on this assertion is checkable on replay
-      } else if (defined.some((k) => !contentishKeys.has(k) && !(k === "no_unexpected_files" && nufExcludedLoudly))) {
-        // Suppress the tally for no_unexpected_files ONLY when its dedicated warning fired
-        // (nufExcludedLoudly) — on a manifest-less cassette that warning can't fire, so the drop
-        // must count here like any other filesystem key or it would be fully silent.
+      } else if (
+        defined.some(
+          (k) =>
+            !contentishKeys.has(k) &&
+            !(k === "no_unexpected_files" && nufExcludedLoudly) &&
+            !(k === "input_unmodified" && iumExcludedLoudly),
+        )
+      ) {
+        // Suppress the tally for no_unexpected_files/input_unmodified ONLY when their dedicated warning
+        // fired (nufExcludedLoudly/iumExcludedLoudly) — on a manifest-less/hashless cassette that warning
+        // can't fire, so the drop must count here like any other filesystem key or it would be fully silent.
         partialSkipCount++; // content half evaluated; a filesystem/egress key was dropped
       }
     }

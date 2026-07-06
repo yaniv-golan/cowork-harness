@@ -323,6 +323,14 @@
               "minLength": 1
             }
           },
+          "input_unmodified": {
+            "description": "every pre-existing file whose workRoot-relative path matches a glob has an unchanged content hash after the run (in-place mutation detector)",
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
           "self_heal_ran": {
             "description": "skill resolved scripts via /sessions (plugin-root self-heal)",
             "type": "boolean"
