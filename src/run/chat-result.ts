@@ -69,6 +69,7 @@ export function buildChatResult(record: RunRecord, opts: ChatResultOpts): RunRes
     skillActivity: timeline ? foldSkillActivity(timeline.events) : undefined,
     models: record.models.length ? record.models : undefined,
     thinking: record.thinking.length ? record.thinking : undefined,
+    thinkingElided: record.thinkingElided,
     toolErrors: record.toolErrors,
     modelUsage: record.modelUsage,
     redundantToolCalls: record.redundantToolCalls,

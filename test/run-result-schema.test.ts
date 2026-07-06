@@ -66,6 +66,7 @@ const full: RunResult = {
   toolDurations: { Bash: { calls: 1, totalMs: 240, maxMs: 240 } },
   models: ["claude-sonnet-4-5"],
   thinking: [{ text: "considering the approach" }],
+  thinkingElided: 2,
   toolErrors: { Bash: { calls: 2, errors: 1 } },
   modelUsage: { "claude-opus-4-8": { inputTokens: 100, outputTokens: 50, costUSD: 0.01, cacheReadInputTokens: 200 } },
   redundantToolCalls: [{ name: "Bash", argHash: "a".repeat(16), count: 3 }],

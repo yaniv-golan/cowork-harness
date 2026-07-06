@@ -97,6 +97,7 @@
       "type": "array",
       "items": { "type": "object", "properties": { "text": { "type": "string" } }, "required": ["text"] }
     },
+    "thinkingElided": { "type": "number" },
     "toolErrors": {
       "type": "object",
       "additionalProperties": {

@@ -31,6 +31,7 @@ function fullyExplicitFixture(): CompleteRunResult {
     toolDurations: undefined,
     models: undefined,
     thinking: undefined,
+    thinkingElided: undefined,
     toolErrors: undefined,
     modelUsage: undefined,
     redundantToolCalls: undefined,

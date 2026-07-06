@@ -717,10 +717,15 @@ export interface RunResult {
   // when the salvaged run had at least one assistant message.
   models?: string[];
   // reasoning blocks surfaced for debugging — capped at the last 50 blocks (older ones
-  // silently dropped; RunRecord tracks the elided count internally but it is NOT surfaced on
-  // RunResult, by design: an author reads the tail of reasoning, not a full history).
+  // silently dropped; see `thinkingElided` below for the dropped count). An author reads the
+  // tail of reasoning, not a full history.
   // Scrubbed by the same secret-redaction pass as the rest of result.json.
   thinking?: Array<{ text: string }>;
+  /** Count of reasoning blocks dropped past the 50-block cap on `thinking[]` (see `thinking`'s own doc
+   *  comment) — lets a consumer tell "this is everything" from "this is the tail of a much longer chain
+   *  of reasoning." 0 (not absent) when thinking occurred but never hit the cap; absent only when no
+   *  thinking occurred at all or the run predates this field. */
+  thinkingElided?: number;
   // per-tool call/error rollup — same top-level-only scoping as toolCounts (sub-agent-internal
   // tool calls are tracked separately via subagents[].toolsUsed, not folded in here).
   toolErrors?: Record<string, { calls: number; errors: number }>;

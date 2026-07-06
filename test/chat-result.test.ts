@@ -64,4 +64,37 @@ describe("buildChatResult", () => {
     expect(r.scan).toBeUndefined();
     expect(r.gateProvenance).toBeUndefined();
   });
+
+  it("passes thinkingElided through onto the assembled result", () => {
+    const record = { ...minimalChatRecord(), thinkingElided: 5 };
+    const r = buildChatResult(record, {
+      scenario: "(chat)",
+      prompt: "hi",
+      fidelity: "container",
+      baseline: "1.0",
+      outDir: "/tmp/nope",
+      workRoot: "/tmp/nope/work",
+      userVisibleRoots: ["outputs"],
+      readonlyFolderRoots: [],
+      egress: [],
+      durationMs: 5,
+    });
+    expect(r.thinkingElided).toBe(5);
+  });
+
+  it("leaves thinkingElided at 0 (not undefined) when no thinking was ever capped", () => {
+    const r = buildChatResult(minimalChatRecord(), {
+      scenario: "(chat)",
+      prompt: "hi",
+      fidelity: "container",
+      baseline: "1.0",
+      outDir: "/tmp/nope",
+      workRoot: "/tmp/nope/work",
+      userVisibleRoots: ["outputs"],
+      readonlyFolderRoots: [],
+      egress: [],
+      durationMs: 5,
+    });
+    expect(r.thinkingElided).toBe(0);
+  });
 });
