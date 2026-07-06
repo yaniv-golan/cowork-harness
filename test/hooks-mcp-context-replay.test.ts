@@ -101,6 +101,35 @@ describe("no_mcp_error on replay", () => {
   });
 });
 
+describe("max_peak_rss_bytes on replay", () => {
+  it("is excluded-loud on replay (live-only) and does not vacuously pass", async () => {
+    mute();
+    const events = [
+      JSON.stringify({ type: "system", subtype: "init", tools: [], skills: [] }),
+      JSON.stringify({ type: "result", subtype: "success", is_error: false }),
+    ];
+    const r = await replayCassette({
+      scenario: {
+        name: "c",
+        baseline: "latest",
+        session: "(inline)",
+        fidelity: "container",
+        prompt: "hi",
+        answers: [],
+        expect_denied: [],
+        assert: [{ result: "success" }, { max_peak_rss_bytes: 1000 }],
+      },
+      events,
+      controlOut: [],
+      cassetteVersion: CASSETTE_VERSION,
+      userVisibleRoots: ["outputs"],
+      fingerprint: { baseline: LIVE },
+    } as any);
+    expect(r.assertions.some((a) => a.assertion.max_peak_rss_bytes !== undefined)).toBe(false); // stripped, not evaluated
+    expect(computeVerdict(r, "replay").pass).toBe(true);
+  });
+});
+
 describe("hookEvents reconstruction on replay", () => {
   const hookReqId = "req-hook-1";
   const hookCallbackEvent = JSON.stringify({

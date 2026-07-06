@@ -305,7 +305,8 @@ Either way, every replay result also reports the drift in `staleness[]` (class-t
 
 `no_delete_in_outputs`, `self_heal_ran`, `transcript_no_host_path`, `egress_denied`, `egress_allowed`,
 `no_mcp_error` (MCP round-trips are harness-computed at drive time, not in the cassette's frozen stdout
-stream, so `RunResult.mcpErrors` is absent on replay)
+stream, so `RunResult.mcpErrors` is absent on replay), `max_peak_rss_bytes` (replay never spawns a sandbox
+to sample, so `RunResult.resources` is absent on replay)
 (and `expect_denied` — a **scenario-level shorthand** that expands to `egress_denied` assertions, not an
 assertion key in its own right).
 

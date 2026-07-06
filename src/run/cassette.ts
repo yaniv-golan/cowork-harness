@@ -2278,6 +2278,7 @@ function warnUncheckableOnDiskKeys(cassette: Cassette, frozen: Scenario, onDisk:
     "self_heal_ran",
     "transcript_no_host_path",
     "no_mcp_error",
+    "max_peak_rss_bytes",
   ]);
   const hasPreRun = cassette.preRunPaths !== undefined;
   const hasPreRunHashes = cassette.preRunHashes !== undefined;
@@ -3082,6 +3083,7 @@ export async function replayCassette(
       "self_heal_ran",
       "transcript_no_host_path",
       "no_mcp_error",
+      "max_peak_rss_bytes",
       "replay_protocol_fidelity",
       // (verdict modifiers allow_permissive_auto_allow / allow_missing_capability / allow_l0_plugin_divergence
       //  arrive via ...alwaysContentKeys above — kept on replay as no-op passes.)
@@ -3220,6 +3222,9 @@ export async function replayCassette(
       // live-only — MCP round-trips are harness-computed at drive time, not reproducible from the
       // cassette's frozen stdout stream (unlike contextEvents/toolErrors above).
       mcpErrors: undefined,
+      // live-only — replay never spawns a sandbox to sample; no resource telemetry to fold from a
+      // frozen event stream (same reasoning as mcpErrors above).
+      resources: undefined,
       // reconstructed above from cassette.events + controlOut; undefined when controlOut is absent
       // (excludes hook_blocked/no_hook_blocked loud, never a vacuous pass).
       hookEvents: replayHookEvents,

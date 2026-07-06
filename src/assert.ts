@@ -675,6 +675,14 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
       results.push(ctx.mcpErrors.length === 0 ? ok() : fail(`no_mcp_error: server "${bad!.server}" failed: ${bad!.message}`));
     }
   }
+  if (a.max_peak_rss_bytes !== undefined) {
+    if (ctx.resources === undefined)
+      results.push(fail(`max_peak_rss_bytes: live-only — no resource sampling on this lane (replay/protocol) — cannot verify`));
+    else if (ctx.resources.peakRssBytes === undefined)
+      results.push(fail(`max_peak_rss_bytes: sampling captured no RSS value — cannot verify`));
+    else if (ctx.resources.peakRssBytes <= a.max_peak_rss_bytes) results.push(ok());
+    else results.push(fail(`max_peak_rss_bytes: peak RSS ${ctx.resources.peakRssBytes} > ${a.max_peak_rss_bytes}`));
+  }
   if (a.hook_blocked !== undefined) {
     const c = compileUserRegex(a.hook_blocked);
     if ("error" in c) results.push(fail(`hook_blocked: bad regex "${a.hook_blocked}": ${c.error}`));

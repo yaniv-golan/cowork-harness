@@ -302,6 +302,12 @@
             "minimum": 0,
             "maximum": 9007199254740991
           },
+          "max_peak_rss_bytes": {
+            "description": "peak sampled RSS of the agent sandbox <= N bytes — live-only (container/hostloop/microvm); evidence-unavailable on replay/protocol or when sampling captured no RSS",
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
           "compaction_occurred": {
             "description": "a context-compaction boundary occurred during the run (a `compact_boundary` system event was recorded); only `true` is valid — omit to not require it",
             "type": "boolean",

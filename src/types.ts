@@ -286,6 +286,14 @@ export const Assertion = z.object({
     .nonnegative()
     .optional()
     .describe("the SDK-reported (or fallback-counted) turn count ≤ N — replay-checkable (the re-drive recounts turns deterministically)"),
+  max_peak_rss_bytes: z
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .describe(
+      "peak sampled RSS of the agent sandbox <= N bytes — live-only (container/hostloop/microvm); evidence-unavailable on replay/protocol or when sampling captured no RSS",
+    ),
   compaction_occurred: z
     .literal(true)
     .optional()

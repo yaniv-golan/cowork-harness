@@ -19,6 +19,7 @@
     "hook_blocked",
     "input_unmodified",
     "max_cost_usd",
+    "max_peak_rss_bytes",
     "max_redundant_tool_calls",
     "max_tokens",
     "max_tool_errors",

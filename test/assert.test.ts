@@ -416,6 +416,33 @@ describe("no_mcp_error", () => {
   });
 });
 
+describe("max_peak_rss_bytes", () => {
+  it("passes when peakRssBytes <= N", () => {
+    const [r] = evaluate(
+      [{ max_peak_rss_bytes: 1000 }],
+      ctx({ resources: { tier: "container", sampleCount: 1, intervalMs: 1000, peakRssBytes: 900 } }),
+    );
+    expect(r.pass).toBe(true);
+  });
+  it("fails when peakRssBytes > N", () => {
+    const [r] = evaluate(
+      [{ max_peak_rss_bytes: 1000 }],
+      ctx({ resources: { tier: "container", sampleCount: 1, intervalMs: 1000, peakRssBytes: 1500 } }),
+    );
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/1500|peak/i);
+  });
+  it("is evidence-unavailable when resources is undefined (replay/protocol)", () => {
+    const [r] = evaluate([{ max_peak_rss_bytes: 1000 }], ctx({ resources: undefined }));
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/live-only|no resource|not checkable/i);
+  });
+  it("is evidence-unavailable when peakRssBytes wasn't captured", () => {
+    const [r] = evaluate([{ max_peak_rss_bytes: 1000 }], ctx({ resources: { tier: "container", sampleCount: 1, intervalMs: 1000 } }));
+    expect(r.pass).toBe(false);
+  });
+});
+
 describe("hook_blocked / no_hook_blocked", () => {
   const blocked = [{ callbackId: "cowork-task-bg-block", decision: "block" as const, reason: "bg", tool: "Task" }];
 
