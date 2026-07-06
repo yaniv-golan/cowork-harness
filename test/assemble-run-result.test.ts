@@ -63,6 +63,7 @@ function fullyExplicitFixture(): CompleteRunResult {
     skillsInvoked: undefined,
     skillToolAvailable: undefined,
     tasks: undefined,
+    context: undefined,
   };
 }
 

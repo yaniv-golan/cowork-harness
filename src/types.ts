@@ -774,4 +774,10 @@ export interface RunResult {
   // live verification only observed those 3 + no delete/cancel path; a real but unobserved status value
   // (e.g. "failed"/"cancelled") should be stored faithfully, not silently coerced or dropped.
   tasks?: Array<{ id: string; subject: string; status: string; description?: string; activeForm?: string }>;
+  // Context/Connectors panel (§6.2, M6). mcpServers is loosely typed (SDK-owned per-server shape,
+  // pass-through) — availableSkills is added by a later task in this same plan, not here.
+  context?: {
+    tools: string[];
+    mcpServers: Array<{ name: string; status?: string; [k: string]: unknown }>;
+  };
 }

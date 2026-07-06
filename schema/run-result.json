@@ -140,8 +140,14 @@
         "skillHash": { "type": "string", "description": "hash of the session's local skill/plugin/marketplace dir contents (if any)" },
         "skillSources": { "type": "array", "items": { "type": "string" } },
         "skillScope": { "type": "array", "items": { "type": "string" } },
-        "sharedHash": { "type": "string", "description": "shared-root hash for scoped cassettes; absent on whole-tree or non-plugin-root mounts" },
-        "contentSig": { "type": "string", "description": "algorithm-independent content fingerprint; used by `rehash` to verify content is unchanged across format bumps" },
+        "sharedHash": {
+          "type": "string",
+          "description": "shared-root hash for scoped cassettes; absent on whole-tree or non-plugin-root mounts"
+        },
+        "contentSig": {
+          "type": "string",
+          "description": "algorithm-independent content fingerprint; used by `rehash` to verify content is unchanged across format bumps"
+        },
         "fileSigs": {
           "type": "array",
           "description": "per-file manifest [relpath, contentSha] of the exact files feeding skillHash",
@@ -287,6 +293,16 @@
         },
         "additionalProperties": false
       }
+    },
+    "context": {
+      "type": "object",
+      "description": "Context/Connectors panel (§6.2, M6). mcpServers is SDK-owned pass-through data (loosely typed). availableSkills is a later addition to this same field.",
+      "properties": {
+        "tools": { "type": "array" },
+        "mcpServers": { "type": "array" },
+        "availableSkills": { "type": "array" }
+      },
+      "required": ["tools", "mcpServers"]
     }
   }
 }

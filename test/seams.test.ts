@@ -373,6 +373,15 @@ describe("Run — turn loop + record", () => {
     expect(rec.result).toBe("success");
   });
 
+  it("captures mcpServers into rec.context (currently silently dropped by run.ts's init case)", async () => {
+    const ev: AgentEvent[] = [
+      { type: "init", tools: ["Read", "Bash"], mcpServers: [{ name: "my-server", status: "connected" }], cwd: "/tmp" },
+      { type: "result", isError: false },
+    ];
+    const rec = await new Run(new MockSession(ev), new ScriptedDecider([])).drive("go");
+    expect(rec.context).toEqual({ tools: ["Read", "Bash"], mcpServers: [{ name: "my-server", status: "connected" }] });
+  });
+
   it("increments toolsUsed's count for a repeated tool inside the same subagent dispatch (not a duplicate entry)", async () => {
     const ev: AgentEvent[] = [
       { type: "subagent_dispatch", toolUseId: "disp1", agentType: "general-purpose", declaredTools: ["Read"] },

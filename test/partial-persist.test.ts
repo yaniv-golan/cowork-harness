@@ -30,6 +30,7 @@ function partialRecord(over: Partial<RunRecord> = {}): RunRecord {
     toolErrors: {},
     redundantToolCalls: [],
     tasks: new Map(),
+    context: { tools: [], mcpServers: [] },
     ...over,
   };
 }

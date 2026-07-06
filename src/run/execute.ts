@@ -904,6 +904,10 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     modelUsage: record.modelUsage,
     redundantToolCalls: record.redundantToolCalls,
     tasks: record.tasks.size ? Array.from(record.tasks.values()) : undefined,
+    // mcpServers is unknown[] on the RunRecord (verbatim from the SDK's init event) but RunResult
+    // documents its loose per-server shape ({name, status?, ...}) for consumers — cast, not a
+    // transformation; the underlying array is passed through unchanged.
+    context: record.context as RunResult["context"],
     gateDeliveries: record.gateDeliveries,
     egress,
     assertions,
@@ -1115,6 +1119,10 @@ export function buildPartialResult(args: {
     modelUsage: record.modelUsage,
     redundantToolCalls: record.redundantToolCalls,
     tasks: record.tasks.size ? Array.from(record.tasks.values()) : undefined,
+    // mcpServers is unknown[] on the RunRecord (verbatim from the SDK's init event) but RunResult
+    // documents its loose per-server shape ({name, status?, ...}) for consumers — cast, not a
+    // transformation; the underlying array is passed through unchanged.
+    context: record.context as RunResult["context"],
     gateDeliveries: record.gateDeliveries,
     egress: args.egress,
     assertions: [],

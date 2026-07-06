@@ -857,6 +857,7 @@ function minimalRec(): RunRecord {
     toolErrors: {},
     redundantToolCalls: [],
     tasks: new Map(),
+    context: { tools: [], mcpServers: [] },
   };
 }
 
@@ -2143,6 +2144,7 @@ function replayErrorResult(file: string): RunResult {
     skillsInvoked: undefined,
     skillToolAvailable: undefined,
     tasks: undefined,
+    context: undefined,
   });
 }
 
@@ -3168,6 +3170,10 @@ export async function replayCassette(
       modelUsage: rec.modelUsage,
       redundantToolCalls: rec.redundantToolCalls,
       tasks: rec.tasks.size ? Array.from(rec.tasks.values()) : undefined,
+      // mcpServers is unknown[] on the RunRecord (verbatim from the SDK's init event) but RunResult
+      // documents its loose per-server shape ({name, status?, ...}) for consumers — cast, not a
+      // transformation; the underlying array is passed through unchanged.
+      context: rec.context as RunResult["context"],
       gateDeliveries: rec.gateDeliveries,
       egress: [],
       assertions,
