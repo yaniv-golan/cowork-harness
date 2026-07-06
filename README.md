@@ -224,10 +224,10 @@ cowork-harness lint examples/scenarios/*.yaml
 >
 > | When | Assertions |
 > |---|---|
-> | Always | `transcript_*`, `tool_*`, `subagent_*`, `dispatch_count_max`, `skill_triggered`/`no_skill_triggered`, `max_cost_usd`/`max_tokens`/`tool_calls_max`/`max_turns` (against the *frozen recording's* spend, not fresh spend — a live `run` catches a real budget regression), `result`, the verdict modifiers |
-> | Only if the cassette carries `controlOut` | `question_asked`, `questions_count_max`, `gate_answers_delivered`, `gate_answer_count_min` |
-> | Only if the cassette carries an `artifacts` manifest | `file_exists`, `user_visible_artifact`, `artifact_json`, `computer_links_resolve` |
-> | Always skipped (live-only) | `egress_*`, `expect_denied`, `no_delete_in_outputs`, `self_heal_ran`, `transcript_no_host_path` — keep these in a periodic live `run` |
+> | Always | `transcript_*`, `tool_*`, `subagent_*`, `dispatch_count_max`, `skill_triggered`/`no_skill_triggered`, `max_cost_usd`/`max_tokens`/`tool_calls_max`/`max_turns` (against the *frozen recording's* spend, not fresh spend — a live `run` catches a real budget regression), `max_tool_errors`, `max_redundant_tool_calls`, `skill_available`, `connector_available`, `skill_tool_used`, `compaction_occurred`, `all_tasks_completed`, `task_status`, `no_scratchpad_leak`, `result`, the verdict modifiers |
+> | Only if the cassette carries `controlOut` | `question_asked`, `questions_count_max`, `gate_answers_delivered`, `gate_answer_count_min`, `hook_blocked`, `no_hook_blocked` |
+> | Only if the cassette carries an `artifacts` manifest | `file_exists`, `user_visible_artifact`, `artifact_json`, `computer_links_resolve`, `no_unexpected_files`, `input_unmodified` |
+> | Always skipped (live-only) | `egress_*`, `expect_denied`, `no_delete_in_outputs`, `self_heal_ran`, `transcript_no_host_path`, `no_mcp_error`, `max_peak_rss_bytes` — keep these in a periodic live `run` |
 >
 > Authoritative list: `contentKeys` in `src/run/cassette.ts`. Full per-key reference:
 > [docs/cassette.md → Assertion table](./docs/cassette.md#assertion-table). Full rules/rationale:
@@ -395,7 +395,7 @@ Skill testing is the headline use, but the tool is a general harness over the Co
 **Flags worth knowing** (the full list is always `<command> --help`):
 - `run`: a decider (`--decider-cmd <helper>`/`--decider-dir <dir>`, or a scenario's `on_unanswered: llm`) can answer unscripted gates; `--repeat N` (2-100) runs each scenario N times and aggregates a variance rollup instead of a single pass/fail (`--min-pass-rate`, `--stop-on-diverge`, `--max-budget-usd` tune the batch verdict/loop); `--matrix <matrix.yaml>` runs ONE scenario across the cross-product of baseline/model/skill_dir axes (worked example: `examples/matrices/csv-metrics-matrix.yaml`; `--max-cells`/`--concurrency` tune the cap/pool — any cell failing, assertion or infra, fails the run); `--compact`/`--demo` trim `run`/`skill` output for shareable screenshots/GIFs.
 - `record`/`replay`: `--decider-llm`/`--decider-dir` answer gates live during recording; `--rerecord-stale`/`--concurrency <N>` batch re-record; `--assert-from <scenario.yaml>`/`--reassert` re-check the on-disk `assert:` instead of the frozen one; `--strict`/`--fail-on-skill-drift` control staleness handling on replay; `--no-redact` skips record-time redaction; `--allow-failing` relaxes the post-run verdict gate; `--dry-run` resolves without recording.
-- `verify-cassettes`: privacy scan (email/currency/domain/path/machine-inventory → exit 1) + staleness; whole-token allows via `--allow <regex>` (a pattern) / class-scoped `--allow-domain` / `--allow-email` / `--allow-path` / `--allow-machine-inventory` / `--allow-patterns-file <path>` (a **file** of patterns, one regex per line); `--skip-privacy` or `--skip-staleness` runs only one half of the gate.
+- `verify-cassettes`: privacy scan (email/currency/domain/path/machine-inventory → exit 1) + staleness; whole-token allows via `--allow <regex>` (a pattern) / class-scoped `--allow-domain` / `--allow-email` / `--allow-path` / `--allow-machine-inventory` / `--allow-patterns-file <path>` (a **file** of patterns, one regex per line); `--skip-privacy` or `--skip-staleness` runs only part of the gate; a diverged scenario `prompt` vs. the cassette's frozen prompt is also a hard fail (its own `scenarioDrift` bucket), opt out with `--skip-scenario-drift`.
 - `stats`: reads `<runsRoot>/index.jsonl`, written automatically at every result; `--since`/`--baseline`/`--branch` filter; `--last <n>` windows per-scenario; `--reindex` rebuilds the index from the physical run-dir tree (the migration path for pre-index runs).
 - `diff`: `--changelog` renders known-field prose for a baseline diff; `--view tools|transcript|artifacts|meta` narrows a run/cassette diff to one section; normalization (default on) masks per-run noise (ids/timestamps/session markers/host paths) so two runs of the same scenario diff as identical — `--no-normalize` compares raw values.
 
@@ -744,6 +744,7 @@ a global install has them locally too, not just on GitHub.
 | [docs/debugging.md](./docs/debugging.md) | Debugging a run — `inspect`/`trace`/`chat`/`verify-run` for a misbehaving skill; the false-green hunt for a green you don't trust. |
 | [docs/cassette.md](./docs/cassette.md) | `record`/`replay` cassettes — what replay checks, which assertions are skipped. |
 | [docs/run-status.md](./docs/run-status.md) | Checking whether a background run is alive — the `status.json` file + `cowork-harness status [--follow]`. |
+| [docs/stats.md](./docs/stats.md) | The `stats` command + `index.jsonl` — querying pass rate, cost/duration/token/turn percentiles, and last-green across every past run. |
 | [docs/gotchas.md](./docs/gotchas.md) | Setup troubleshooting FAQ — exit 127, empty skill mount, arm64 Docker issues, git-worktree token traps, egress-proxy races. |
 | [docs/fidelity-gaps.md](./docs/fidelity-gaps.md) | The known deltas vs. real Cowork — what the harness does and doesn't reproduce. |
 | [docs/decider-dir.md](./docs/decider-dir.md) | The `--decider-dir` recipe — a driving agent answers live gates in-band via `gates`/`answer` + a Monitor. |
@@ -751,6 +752,8 @@ a global install has them locally too, not just on GitHub.
 | [docs/maintenance.md](./docs/maintenance.md) | Parity across Desktop releases via `sync`. |
 | [DESIGN.md](./DESIGN.md) | Architecture deep-dive + full parity matrix. |
 | [SPEC.md](./SPEC.md) | The authoritative testable contract (scenario/session schema, `RunResult`, exit codes). |
+| [docs/invariants.md](./docs/invariants.md) | A consolidated index of the harness's cross-cutting invariants, one row per invariant with its enforcement point and test anchor. |
+| [docs/protocol.md](./docs/protocol.md) | The `schema/protocol.v1.json` control-channel wire-protocol schema — versioning policy, golden vector pack, and its descriptive-not-normative scope. |
 | [CHANGELOG.md](./CHANGELOG.md) | Release history. |
 | [python/README.md](./python/README.md) | The `cowork` pytest lane for driving the harness from Python. |
 | [examples/README.md](./examples/README.md) | The worked examples to copy — sessions, scenarios, and skills you can run end-to-end. |

@@ -163,7 +163,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
 
 ── Debugging / inspection ─────────────────────────────────────────────────────
   trace <run-id | dir | path>  digest a run's events.jsonl (tools+result status, dispatches, decisions)
-      [--view tools|questions|dispatches]   focus on one view (default: all); see 'trace --help'
+      [--view tools|questions|dispatches|tool-durations] [--translate-paths]   focus on one view (default: all); see 'trace --help'
       [--output-format json]   structured rows
   verify-run <run-dir> <scenario.yaml>   re-evaluate assert: against a kept run dir (no live agent, ~1s)
       [--output-format json]
@@ -196,7 +196,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
 ── Platform admin ─────────────────────────────────────────────────────────────
   sync [--diff] [--allow-empty|--force]  derive/refresh a platform baseline from the live Desktop install (macOS only)
   list                         list available platform baselines
-  boundary-check [baseline]    prove the sandbox enforces Cowork's limitations
+  boundary-check [baseline] [--session <file>]   prove the sandbox enforces Cowork's limitations
   vm <init|status|delete|prune>  manage the L2 Apple-VZ microVM (fidelity: microvm); macOS arm64 only
   doctor [--tier <tier>]       read-only prerequisite check (Docker, staged agent, token, baseline)
 

@@ -48,7 +48,7 @@ skills: [report-gen]                     # OPTIONAL — scope cassette-staleness
                                          # (each is a `skills/<name>` dir under a mounted plugin-root);
                                          # fail-closed to whole-tree on an unknown name. Omit = whole tree.
 
-requires_capabilities: [pdf]             # OPTIONAL — capability families the skill needs (a scenario FIELD,
+requires_capabilities: [pdf_tables]       # OPTIONAL — capability families the skill needs (a scenario FIELD,
                                          # not an assert key); a tier missing one fails unless allow_missing_capability
 
 allow_host_writes: true                  # OPTIONAL — required consent to run `hostloop` with a WRITABLE
@@ -399,18 +399,22 @@ and re-evaluates the **content** assertions. The authoritative list of content k
 **Evaluated on replay (content assertions):**
 `transcript_*` (incl. `transcript_matches`), `tool_*`, `subagent_*`, `dispatch_count_max`,
 `skill_triggered`, `no_skill_triggered`, `max_cost_usd`, `max_tokens`, `tool_calls_max`, `max_turns`,
+`max_tool_errors`, `max_redundant_tool_calls`, `skill_available`, `connector_available`,
+`skill_tool_used`, `compaction_occurred`, `all_tasks_completed`, `task_status`, `no_scratchpad_leak`,
 `result`, and the verdict modifiers `allow_permissive_auto_allow` / `allow_missing_capability` /
 `allow_l0_plugin_divergence` / `allow_stall` (kept on replay as no-op passes). `max_cost_usd`/`max_tokens`
 assert the *frozen recording's* spend on replay, not fresh spend — see their table entries above.
 
 **`question_asked`, `questions_count_max`, `gate_answers_delivered`, and `gate_answer_count_min`**
-are also content assertions, but they require the cassette to carry `controlOut` (full-fidelity replay). When
+are also content assertions, plus the hook-blocked keys `hook_blocked` and `no_hook_blocked` — all of
+which require the cassette to carry `controlOut` (full-fidelity replay). When
 `controlOut` is present, the decision pipeline runs on replay and populates `rec.questions` /
 `rec.gateDeliveries` — so these keys are genuinely evaluated.
 When `controlOut` is absent (old cassette), a **loud warning** fires and these keys are **excluded**
 from evaluation (not vacuously passed). Re-record with a current harness to enable them.
 
-**Filesystem assertions** (`file_exists`, `user_visible_artifact`, `artifact_json`, `computer_links_resolve`)
+**Filesystem assertions** (`file_exists`, `user_visible_artifact`, `artifact_json`, `computer_links_resolve`,
+`no_unexpected_files`, `input_unmodified`)
 run on `replay` **when the cassette carries an artifact manifest** — `record` snapshots `outputs/` + connected
 folders (paths + hashes + small JSON bodies) into the cassette, and `replay` materializes that snapshot to
 evaluate them token-free. `artifact_json` needs the JSON body inlined (small files); a hash-only (oversized)
@@ -434,8 +438,8 @@ that needs a live `run` (the cassette's staleness fingerprint warns when the ski
 in `staleness[]` for a JSON gate).
 
 **Egress + other filesystem** assertions (`no_delete_in_outputs`, `self_heal_ran`,
-`transcript_no_host_path`, `egress_*`/`expect_denied`) are still **skipped** on `replay` — they only run on
-a live `run`/`record` (token + Docker).
+`transcript_no_host_path`, `egress_*`/`expect_denied`, `no_mcp_error`, `max_peak_rss_bytes`) are still
+**skipped** on `replay` — they only run on a live `run`/`record` (token + Docker).
 
 Two consequences for CI:
 - Put the **always-on PR gate** on `replay` (token-free) and rely on `transcript_matches`/`transcript_*` +

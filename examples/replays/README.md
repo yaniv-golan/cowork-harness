@@ -33,6 +33,28 @@ cowork-harness replay examples/replays/example-pdf-skill.cassette.json --output-
 > From a source checkout you can skip the `npm link` and call the CLI directly:
 > `node dist/cli.js replay …`. The commands below use the installed `cowork-harness` binary.
 
+## example-multiselect-gate.cassette.json
+
+A **synthetic** fixture exercising a **multi-select** `AskUserQuestion` gate — a single question
+that allows choosing more than one option (`choose: [Auth, Audit]`, comma-separated), asserting
+`result: success` and `transcript_contains` for each chosen feature. `protocol`-tier (no
+Docker/agent needed to replay).
+
+```sh
+cowork-harness replay examples/replays/example-multiselect-gate.cassette.json
+```
+
+## hostloop-computer-links.cassette.json
+
+The harness's only `hostloop`-tier replay fixture: the agent writes `outputs/report.md` and shares
+it back as a `computer://` link, asserting `file_exists`, `transcript_contains: computer://`, and
+`computer_links_resolve`. See [`examples/README.md`](../README.md#the-scenarios) for the fuller
+writeup of what this scenario demonstrates about hostloop link resolution.
+
+```sh
+cowork-harness replay examples/replays/hostloop-computer-links.cassette.json
+```
+
 ## example-pdf-skill-ci-selftest-failing.yaml
 
 A deliberately-failing sibling scenario for `example-pdf-skill.cassette.json`, used only by the

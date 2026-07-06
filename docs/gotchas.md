@@ -11,6 +11,16 @@
 - **A live run hangs with no egress activity.** Check the egress-proxy container actually started
   (`docker ps` for `cowork-egress-proxy`); a race on first run can leave it building while the agent already
   attempted a request. Re-run once the image is built (`doctor --tier container` reports proxy-image status).
+- **Reading `doctor`'s output.** Each line is one check: `✓` ok, `✗` fail (blocks the tier), `!` warn
+  (works but worth fixing), `·` skipped (not needed for this tier). A `✗`/`!` line prints a `→ remedy`
+  right after it — that's the fix, not a generic "something's wrong." Common `✗`s: Node < 20, no
+  Docker/container runtime running, the agent image not built, the staged agent binary missing (open
+  Cowork Desktop once to stage it), no auth token resolvable, or no platform baseline on disk (`sync`
+  on macOS, or restore a `baselines/desktop-*.json`).
+- **A `verify-cassettes` run fails on `scenarioDrift` after an intentional scenario edit.** You edited a
+  committed scenario's `prompt` without re-recording — the frozen cassette no longer matches it. Either
+  re-record, or pass `--skip-scenario-drift` if you're intentionally verifying the rest of the gate
+  against an out-of-date recording (see [README → Commands at a glance](../README.md#commands-at-a-glance)).
 
 For the false-green ("✓ passed ≠ correct") landmine catalog, see
 [SKILL.md → Gotchas](../.claude/skills/cowork-harness/SKILL.md#gotchas--the--passed--correct-landmines) or

@@ -2323,15 +2323,7 @@ function warnUncheckableOnDiskKeys(cassette: Cassette, frozen: Scenario, onDisk:
     "hook_blocked",
     "no_hook_blocked",
   ]);
-  const liveOnlyKeys = new Set<keyof Assertion>([
-    "egress_denied",
-    "egress_allowed",
-    "no_delete_in_outputs",
-    "self_heal_ran",
-    "transcript_no_host_path",
-    "no_mcp_error",
-    "max_peak_rss_bytes",
-  ]);
+  const liveOnlyKeys = new Set<keyof Assertion>(LIVE_ONLY_KEYS);
   const hasPreRun = cassette.preRunPaths !== undefined;
   const hasPreRunHashes = cassette.preRunHashes !== undefined;
   // expect_denied: sourced from on-disk but live-only on replay — warn if the author changed it expecting effect.
@@ -3001,6 +2993,21 @@ export const MANIFEST_KEYS: (keyof Assertion)[] = [
   "computer_links_resolve",
   "no_unexpected_files",
   "input_unmodified",
+];
+
+/** Assertion keys evaluated ONLY on a live `run`/`record` — never on `replay` (no filesystem/network
+ *  to probe). Exported as the single source of truth for anything (docs, tests) that needs to
+ *  enumerate live-only keys — mirrors ALWAYS_CONTENT_KEYS/QUESTION_GATE_KEYS/MANIFEST_KEYS above. Does
+ *  NOT include `expect_denied`, which is a scenario field (not an Assertion key) — see
+ *  `warnUncheckableOnDiskKeys`. */
+export const LIVE_ONLY_KEYS: (keyof Assertion)[] = [
+  "egress_denied",
+  "egress_allowed",
+  "no_delete_in_outputs",
+  "self_heal_ran",
+  "transcript_no_host_path",
+  "no_mcp_error",
+  "max_peak_rss_bytes",
 ];
 
 /** Replay a cassette through Run and re-evaluate the content assertions. With a `cassette.artifacts`

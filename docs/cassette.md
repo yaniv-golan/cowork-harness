@@ -548,6 +548,11 @@ counts) — committed PII surface. Two layers, distinct from secret-scrub (which
   names are **not** a default class (too noisy). `verify-cassettes` also runs the **staleness**
   check (both checks run by default; scope to one with `--skip-privacy` or `--skip-staleness`): a drifted
   `skillHash` (you edited the skill but didn't re-record) fails the gate.
+  A third, always-on check compares a committed scenario's `prompt` against the cassette's frozen
+  prompt: a resolvable, drifted prompt is a hard fail in its own `scenarioDrift` bucket (so
+  `--skip-staleness` can't mask it) — the frozen events no longer correspond to the scenario; opt out
+  with `--skip-scenario-drift`. `replay` surfaces the same drift as a non-failing notice rather than a
+  hard fail (it can't tell whether the drift changed the outcome without re-recording).
   The `skillHash` hard-excludes only what is UNIVERSALLY non-runtime — recorded cassettes (`*.cassette.json`,
   by extension, so writing a cassette under the hashed tree doesn't self-invalidate the fingerprint it just
   recorded), VCS/cache dirs (`.git`, `node_modules`, `__pycache__`, …), and the `version` field of a
