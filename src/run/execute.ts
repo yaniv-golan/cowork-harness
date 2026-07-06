@@ -53,7 +53,7 @@ import { runsWriteRoot } from "./trace-view.js";
 import { summarizeGateProvenance } from "./gate-provenance.js";
 import { collectSecrets, scrub } from "../secrets.js";
 import { indexRowFromResult, appendIndexRow } from "./run-index.js";
-import { collectArtifacts, classifyWorkspaceFiles } from "./artifacts.js";
+import { classifyWorkspaceFiles } from "./artifacts.js";
 import { readPreRunManifest } from "./pre-run-manifest.js";
 import { readAvailableSkills } from "./skill-metadata.js";
 
@@ -685,9 +685,6 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // recorder strips their captured BODIES (fidelity/no-bloat) and `RunResult.artifacts` excludes them
   // outright (an input is not a `file_exists` target). Does NOT change `userVisibleRoots` above.
   const readonlyFolderRoots = readonlyFolderRootsFromPlan(plan);
-  // artifacts (the ENV-MANIFEST) excludes read-only inputs — a deliverable is something the agent wrote,
-  // not a pre-existing input it only read.
-  const captureRoots = userVisibleRoots.filter((r) => !readonlyFolderRoots.includes(r));
   // Read the pre-run baseline ONCE: the evaluate ctx and the persisted RunResult must see the same
   // value — two reads could disagree if the file were touched mid-run.
   const preRunPaths = readPreRunManifest(outDir);
@@ -893,9 +890,9 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   const gateProvenance = summarizeGateProvenance(record.decisions);
 
   // Working folder panel's file model (§6.3, M6): classify+fingerprint every file under the
-  // user-visible roots (output/mount/input). Reuses the same walk `artifacts` uses below, over ALL
-  // userVisibleRoots (not captureRoots) — read-only inputs are still enumerated here, just tagged
-  // "input" instead of excluded outright.
+  // user-visible roots (output/mount/input). Reuses the same walk `artifacts` derives from below, over
+  // ALL userVisibleRoots — read-only inputs are still enumerated here, just tagged "input" instead of
+  // excluded outright.
   const workspaceFiles = classifyWorkspaceFiles(workRoot, userVisibleRoots, readonlyFolderRoots);
 
   const result: RunResult = assembleRunResult({
@@ -946,7 +943,9 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     outputsDir: join(workRoot, "outputs"),
     userVisibleRoots,
     readonlyFolderRoots,
-    artifacts: collectArtifacts(workRoot, captureRoots), // ENV-MANIFEST: observed user-visible files (excl. read-only inputs)
+    // Task 7 (§6.3, M6): artifacts is a DERIVED VIEW of workspaceFiles — same collectArtifacts walk,
+    // filtered to the deliverable classes (excludes class:"input" read-only mounts). No second walk.
+    artifacts: workspaceFiles.filter((f) => f.class === "output" || f.class === "mount").map((f) => ({ path: f.path, bytes: f.bytes })),
     workspaceFiles, // Working folder panel's canonical file model (output/mount/input, §6.3, M6) — see comment above
     // The pre-spawn baseline no_unexpected_files diffs against (same single read the evaluate ctx got).
     // undefined = the run didn't capture (key not asserted, microvm, pre-seam) — the assertion then
@@ -1119,6 +1118,8 @@ export function buildPartialResult(args: {
   // partial result is built the child process has already exited (on the unanswered gate), so skills
   // are fully staged. Own wiring, independent of executeScenario's (this function's own args.configDir).
   args.record.context = { ...args.record.context, availableSkills: readAvailableSkills(args.configDir) };
+  // Working folder panel's file model (§6.3, M6) — same walk `artifacts` below derives from (Task 7).
+  const workspaceFiles = classifyWorkspaceFiles(args.workRoot, args.userVisibleRoots, args.readonlyFolderRoots);
   return assembleRunResult({
     $schema: RUN_RESULT_SCHEMA_URL,
     generator: "cowork-harness",
@@ -1167,11 +1168,10 @@ export function buildPartialResult(args: {
     outputsDir: join(args.workRoot, "outputs"),
     userVisibleRoots: args.userVisibleRoots,
     readonlyFolderRoots: args.readonlyFolderRoots,
-    artifacts: collectArtifacts(
-      args.workRoot,
-      args.userVisibleRoots.filter((r) => !args.readonlyFolderRoots.includes(r)),
-    ),
-    workspaceFiles: classifyWorkspaceFiles(args.workRoot, args.userVisibleRoots, args.readonlyFolderRoots), // Working folder panel's canonical file model (§6.3, M6)
+    // Task 7 (§6.3, M6): artifacts is a DERIVED VIEW of workspaceFiles — same collectArtifacts walk,
+    // filtered to the deliverable classes (excludes class:"input" read-only mounts). No second walk.
+    artifacts: workspaceFiles.filter((f) => f.class === "output" || f.class === "mount").map((f) => ({ path: f.path, bytes: f.bytes })),
+    workspaceFiles, // Working folder panel's canonical file model (§6.3, M6)
     preRunPaths: readPreRunManifest(args.outDir),
     effectiveFidelity: args.effectiveFidelity,
     gateProvenance: gp.total ? gp : undefined,

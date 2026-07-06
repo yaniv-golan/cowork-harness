@@ -129,4 +129,45 @@ describe("buildPartialResult — salvage a whiffed run", () => {
     expect(result.artifacts?.map((a) => a.path)).toEqual(["outputs/actions.md"]);
     expect(result.artifacts?.some((a) => a.path.startsWith("carta-folder/"))).toBe(false);
   });
+
+  // Task 7: `artifacts` is now a derived view of `workspaceFiles` (filtered to class "output"/"mount"),
+  // not a separate collectArtifacts(workRoot, captureRoots) call. Regression guard using a MULTI-SEGMENT
+  // readonly root (`.projects/myfolder`) — this would have failed under a naive first-path-segment
+  // classifier (the exact bug Task 6's classifyWorkspaceFiles fix already guards against), confirming
+  // that fix actually flows through to this derived `artifacts` view and not just the raw
+  // `workspaceFiles` field.
+  it("excludes read-only input files (including multi-segment roots) from artifacts, includes outputs and writable mounts", () => {
+    const { outDir, workRoot, configDir } = runDirWithArtifact();
+    mkdirSync(join(workRoot, "project"), { recursive: true });
+    writeFileSync(join(workRoot, "project", "b.md"), "writable mount deliverable");
+    mkdirSync(join(workRoot, ".projects", "myfolder"), { recursive: true });
+    writeFileSync(join(workRoot, ".projects", "myfolder", "c.md"), "read-only input, not a deliverable");
+
+    const result = buildPartialResult({
+      scenarioName: "s",
+      prompt: "p",
+      fidelity: "container",
+      baseline: "b",
+      record: partialRecord(),
+      outDir,
+      workRoot,
+      configDir,
+      userVisibleRoots: ["outputs", "project", ".projects/myfolder"],
+      readonlyFolderRoots: [".projects/myfolder"],
+      effectiveFidelity: "container",
+      egress: [],
+      durationMs: 1,
+      unanswered: { message: "m" },
+    });
+
+    const artifactPaths = result.artifacts?.map((a) => a.path) ?? [];
+    expect(artifactPaths).toContain("outputs/actions.md");
+    expect(artifactPaths).toContain("project/b.md");
+    expect(artifactPaths).not.toContain(".projects/myfolder/c.md");
+    expect(artifactPaths).toHaveLength(2);
+
+    // and workspaceFiles (Task 6) still enumerates the read-only input, just tagged "input"
+    const inputEntry = result.workspaceFiles?.find((f) => f.path === ".projects/myfolder/c.md");
+    expect(inputEntry?.class).toBe("input");
+  });
 });
