@@ -48,6 +48,54 @@ function presentFilesInput(input: unknown): string[] {
     .filter((p): p is string => p !== undefined);
 }
 
+/** Find the JSON array following a WebSearch tool_result's "Links: " marker, respecting quoted-string
+ *  boundaries (a plain bracket-depth count would mis-close on a title containing a literal ']'). Returns
+ *  undefined if the marker is absent or the array's closing bracket is never reached (e.g. the tool_result
+ *  text was truncated past the assertText cap). */
+function extractLinksArray(text: string): string | undefined {
+  const marker = "Links: [";
+  const start = text.indexOf(marker);
+  if (start === -1) return undefined;
+  const arrayStart = start + marker.length - 1; // position of the opening '['
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = arrayStart; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === "[") depth++;
+    else if (ch === "]") {
+      depth--;
+      if (depth === 0) return text.slice(arrayStart, i + 1);
+    }
+  }
+  return undefined; // truncated — no matching close bracket found
+}
+
+/** Parse a WebSearch tool_result's embedded Links array into {title,url} pairs. Returns undefined (never
+ *  throws) on any malformed/truncated input — the caller drops the whole entry rather than storing a
+ *  partial/corrupt one. */
+function parseWebSearchLinks(text: string): Array<{ title: string; url: string }> | undefined {
+  const jsonArray = extractLinksArray(text);
+  if (!jsonArray) return undefined;
+  try {
+    const arr: unknown = JSON.parse(jsonArray);
+    if (!Array.isArray(arr)) return undefined;
+    return arr
+      .filter((r): r is Record<string, unknown> => !!r && typeof r === "object")
+      .map((r) => ({ title: String(r.title ?? ""), url: String(r.url ?? "") }))
+      .filter((r) => r.url);
+  } catch {
+    return undefined;
+  }
+}
+
 /** the observable sub-agent dispatch tree (single owner = RunRecord). */
 export interface SubagentDispatch {
   toolUseId: string;
@@ -138,6 +186,12 @@ export interface RunRecord {
   // handler's copy-failure branch — present_files' own "remains in the scratchpad" case). A path
   // already under a mount (passthrough) is neither promoted nor leaked.
   presentedFiles: Array<{ from: string; to: string; promoted: boolean; leaked: boolean }>;
+  // Structured WebSearch calls: query (from tool_use.input) + per-result {title,url} (parsed from the
+  // paired tool_result's "Web search results for query: ...\n\nLinks: [...]" convention — an
+  // AGENT-BINARY convention, verified against a real captured hostloop-fidelity cassette; re-verify the
+  // format on agent-version bumps). A parse failure drops that ONE call silently (see
+  // parseWebSearchLinks) rather than crashing the run.
+  webSearches: Array<{ toolUseId?: string; query: string; results: Array<{ title: string; url: string }> }>;
 }
 
 export interface RunHooks {
@@ -196,6 +250,10 @@ export class Run {
   // tool_use time and resolved by the matching tool_result (see notePresentedFiles). Same
   // stash-then-resolve pattern as pendingTaskCreates above.
   private pendingPresentFiles = new Map<string, string[]>();
+  // Pending WebSearch calls, keyed by toolUseId — the query, stashed at tool_use time and resolved by
+  // the matching tool_result (see the tool_result case in drive()). Same stash-then-resolve pattern as
+  // pendingTaskCreates/pendingPresentFiles above.
+  private pendingWebSearches = new Map<string, string>();
   // per-session web_fetch provenance set. Run owns it (it sees user turns + tool_results) and
   // seeds it during drive(); the workspace handler reads membership + escalates misses via the Decider.
   private provenance = new ProvenanceTracker();
@@ -239,6 +297,7 @@ export class Run {
       mcpErrors: [],
       hookEvents: [],
       presentedFiles: [],
+      webSearches: [],
     };
   }
 
@@ -388,6 +447,10 @@ export class Run {
                 const existing = taskId ? this.rec.tasks.get(taskId) : undefined;
                 if (existing && status) existing.status = status;
               }
+              if (ev.name === "WebSearch" && ev.toolUseId) {
+                const inp = (ev.input as Record<string, unknown> | undefined) ?? {};
+                this.pendingWebSearches.set(ev.toolUseId, String(inp.query ?? ""));
+              }
             } else if (ev.parentToolUseId) {
               // isolated sub-agent work — only count this as a sub-agent tool when its parent is a
               // RECOGNIZED dispatch (Agent/Task/subagent_type). Any parented tool_use carries a
@@ -430,6 +493,15 @@ export class Run {
                 this.pendingTaskCreates.delete(ev.toolUseId);
                 const m = /^Task #(\S+) created successfully/.exec(ev.text);
                 if (m) this.rec.tasks.set(m[1], { id: m[1], status: "pending", ...pending });
+              }
+              const pendingSearch = this.pendingWebSearches.get(ev.toolUseId);
+              if (pendingSearch !== undefined) {
+                this.pendingWebSearches.delete(ev.toolUseId);
+                // MUST use assertText (10KB cap, src/agent/session.ts's toolResultAssertText), NOT ev.text
+                // (500-char DISPLAY cap, toolResultText) — a real multi-result Links array routinely
+                // exceeds 500 chars, so ev.text alone would silently drop nearly every real search.
+                const results = parseWebSearchLinks(ev.assertText ?? ev.text);
+                if (results) this.rec.webSearches.push({ toolUseId: ev.toolUseId, query: pendingSearch, results });
               }
             }
             this.provenance.seedFromToolResult(ev.provenanceText ?? ev.text); // seed from the UNtruncated value so URLs past the display cap are still fetchable

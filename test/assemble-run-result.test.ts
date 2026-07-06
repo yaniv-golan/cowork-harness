@@ -27,6 +27,7 @@ function fullyExplicitFixture(): CompleteRunResult {
     requiresCapabilityUnmet: undefined,
     decisions: [],
     toolCounts: undefined,
+    webSearches: undefined,
     toolDurations: undefined,
     models: undefined,
     thinking: undefined,

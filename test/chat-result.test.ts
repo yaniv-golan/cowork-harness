@@ -33,6 +33,7 @@ function minimalChatRecord(): RunRecord {
     mcpErrors: [],
     hookEvents: [],
     presentedFiles: [],
+    webSearches: [],
   } as RunRecord;
 }
 

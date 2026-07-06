@@ -55,6 +55,27 @@
     },
     "decisions": { "type": "array" },
     "toolCounts": { "type": "object" },
+    "webSearches": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "toolUseId": { "type": "string" },
+          "query": { "type": "string" },
+          "results": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": { "title": { "type": "string" }, "url": { "type": "string" } },
+              "required": ["title", "url"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["query", "results"],
+        "additionalProperties": false
+      }
+    },
     "toolDurations": {
       "type": "object",
       "additionalProperties": {

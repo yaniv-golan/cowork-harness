@@ -699,6 +699,13 @@ export interface RunResult {
     questions?: Array<{ question: string; header?: string; options: { label: string; description?: string }[]; multiSelect?: boolean }>;
   }>;
   toolCounts?: Record<string, number>; // truthful per-tool call count (use this, NOT usage.server_tool_use which is host-routed-blind in cowork)
+  /** Structured WebSearch calls — query + per-result {title,url}, parsed from the paired tool_result's
+   *  "Web search results for query: ...\n\nLinks: [...]" convention (an AGENT-BINARY convention,
+   *  verified against a real captured hostloop-fidelity cassette — re-verify the format on agent-version
+   *  bumps). Absent when no WebSearch call was made, or when every call's Links array failed to parse
+   *  (truncated past the assertText cap, or a future format change) — a parse failure drops that ONE
+   *  entry silently, it is never a partial/malformed entry in this array. */
+  webSearches?: Array<{ toolUseId?: string; query: string; results: Array<{ title: string; url: string }> }>;
   // per-tool call-count/timing aggregate, folded from the timeline. Absent only when no
   // timeline data exists for this run (replayErrorResult — no run ever happened). Populated for
   // buildPartialResult too, when the salvaged run made at least one tool call. Wall-gap between

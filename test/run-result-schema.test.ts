@@ -62,6 +62,7 @@ const full: RunResult = {
     { kind: "question", name: "AskUserQuestion", decision: "answered", by: "scripted", model: undefined, detail: {}, rationale: undefined },
   ],
   toolCounts: { Bash: 1 },
+  webSearches: [{ toolUseId: "toolu_1", query: "market size", results: [{ title: "Example Report", url: "https://example.com" }] }],
   toolDurations: { Bash: { calls: 1, totalMs: 240, maxMs: 240 } },
   models: ["claude-sonnet-4-5"],
   thinking: [{ text: "considering the approach" }],
