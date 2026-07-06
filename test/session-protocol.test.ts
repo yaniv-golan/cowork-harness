@@ -4,7 +4,7 @@ import { EventEmitter } from "node:events";
 import { mkdtempSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { LiveAgentSession, hookOutput, parseMessage, type AgentEvent } from "../src/agent/session.js";
+import { LiveAgentSession, hookOutput, parseMessage, type AgentEvent, type SdkMcp } from "../src/agent/session.js";
 
 /** A minimal fake ChildProcessByStdio: EventEmitter + stdin/stdout/stderr PassThroughs. */
 function fakeProc() {
@@ -103,6 +103,78 @@ describe("session protocol loud-failure fixes", () => {
     expect(controlOut).toContain("mcp_response");
     expect(controlOut).toContain("no sdkMcp handler configured");
     expect(warnings.some((w) => w.includes("no sdkMcp handler"))).toBe(true);
+  });
+
+  it("an mcp_message whose handler returns a notify string injects a synthetic user turn AFTER the mcp_response (cowork present_files fidelity)", async () => {
+    const { proc, outDir, session } = newSession();
+    // Mirrors the cowork present_files handler's success shape: a promoted-scratchpad-file result
+    // plus a notifySession follow-up nudging the agent onto the new outputs path.
+    const sdkMcp: SdkMcp = {
+      servers: ["cowork"],
+      handle: async () =>
+        ({
+          result: { content: [{ type: "text", text: "/sessions/x/mnt/outputs/deliverable.md" }] },
+          notify: "NUDGE_TEXT",
+        }) as any,
+    };
+    const it = session.start({ sdkMcp })[Symbol.asyncIterator]();
+    const firstP = it.next();
+    await tick();
+    proc.stdout.write(
+      JSON.stringify({
+        type: "control_request",
+        request_id: "mcp-notify",
+        request: {
+          subtype: "mcp_message",
+          server_name: "cowork",
+          message: { jsonrpc: "2.0", id: 9, method: "tools/call", params: { name: "present_files" } },
+        },
+      }) + "\n",
+    );
+    proc.stdout.end();
+    await drain(it);
+    await firstP.catch(() => {});
+    const controlOut = await waitForFileContent(join(outDir, "control-out.jsonl"), "NUDGE_TEXT");
+    const lines = controlOut.trim().split("\n").filter(Boolean);
+    // The mcp_response envelope's `payload` is spread from the handler's full result (incl. notify), so
+    // "NUDGE_TEXT" also appears inside that frame — distinguish the two frames by their `type`, not by
+    // searching for the notify text itself.
+    const mcpIdx = lines.findIndex((l) => l.includes('"type":"control_response"'));
+    const userIdx = lines.findIndex((l) => l.includes('"type":"user"'));
+    expect(mcpIdx).toBeGreaterThanOrEqual(0);
+    expect(userIdx).toBeGreaterThan(mcpIdx); // ordering: mcp_response, then the injected user turn
+    expect(JSON.parse(lines[userIdx])).toEqual({
+      type: "user",
+      message: { role: "user", content: [{ type: "text", text: "NUDGE_TEXT" }] },
+    });
+  });
+
+  it("an mcp_message whose handler returns NO notify writes only the mcp_response (existing workspace-tool behavior unchanged)", async () => {
+    const { proc, outDir, session } = newSession();
+    const sdkMcp: SdkMcp = {
+      servers: ["workspace"],
+      handle: async () => ({ result: { content: [{ type: "text", text: "ok" }] } }),
+    };
+    const it = session.start({ sdkMcp })[Symbol.asyncIterator]();
+    const firstP = it.next();
+    await tick();
+    proc.stdout.write(
+      JSON.stringify({
+        type: "control_request",
+        request_id: "mcp-nonotify",
+        request: {
+          subtype: "mcp_message",
+          server_name: "workspace",
+          message: { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "bash" } },
+        },
+      }) + "\n",
+    );
+    proc.stdout.end();
+    await drain(it);
+    await firstP.catch(() => {});
+    const controlOut = await waitForFileContent(join(outDir, "control-out.jsonl"), "mcp_response");
+    const lines = controlOut.trim().split("\n").filter(Boolean);
+    expect(lines.some((l) => l.includes('"type":"user"'))).toBe(false);
   });
 
   it("the init request declares the PreToolUse Task hook; a run_in_background callback is BLOCKED", async () => {

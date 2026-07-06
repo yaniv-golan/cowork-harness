@@ -542,6 +542,14 @@ export class LiveAgentSession implements AgentSession {
           return;
         }
         this.write(mcpResponseEnvelope(reqId, out as any, jr.id));
+        // A cowork present_files promotion returns a notifySession follow-up — inject it as a synthetic user
+        // turn so the agent learns the promoted outputs path (mirrors the real host's post-promotion notification).
+        if (typeof (out as { notify?: unknown }).notify === "string" && (out as { notify?: string }).notify) {
+          this.write({
+            type: "user",
+            message: { role: "user", content: [{ type: "text", text: (out as { notify: string }).notify }] },
+          });
+        }
         // Echo the MCP round-trip as a SYNTHETIC tool_use for provenance/trace only. The real tool call
         // also arrives as an assistant tool_use block (live-verified: mcp__workspace__bash co-occurs with
         // this mcp_message), which is what gets counted — so this is marked synthetic and excluded from
