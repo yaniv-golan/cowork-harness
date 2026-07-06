@@ -421,7 +421,9 @@ describe("skill_tool_used", () => {
   });
 
   it("fails when no window matches the skill regex at all", () => {
-    const c = ctx({ skillActivity: [{ skillId: "(root)", invocationSeq: 0, toolCounts: { Bash: 1 }, toolCallCount: 1, dispatchCount: 0 }] });
+    const c = ctx({
+      skillActivity: [{ skillId: "(root)", invocationSeq: 0, toolCounts: { Bash: 1 }, toolCallCount: 1, dispatchCount: 0 }],
+    });
     const result = evaluate([{ skill_tool_used: { skill: "no-such-skill", tool: "Bash" } }], c)[0];
     expect(result.pass).toBe(false);
   });

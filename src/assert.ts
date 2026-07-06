@@ -276,7 +276,14 @@ export interface AssertContext {
    *  straight off the record). Undefined means no timeline was available (old/partial run, or a lane that
    *  never wired the timeline read) — the evidence-unavailable signal for skill_tool_used; an empty `[]`
    *  is a valid "no skill windows" state and is NOT the same as undefined. */
-  skillActivity?: Array<{ skillId: string; invocationSeq: number; toolCounts: Record<string, number>; toolCallCount: number; dispatchCount: number; durationMs?: number }>;
+  skillActivity?: Array<{
+    skillId: string;
+    invocationSeq: number;
+    toolCounts: Record<string, number>;
+    toolCallCount: number;
+    dispatchCount: number;
+    durationMs?: number;
+  }>;
   /** Repeated identical tool calls, count>=2 groups only (§4.8, M3) — undefined means no data was
    *  captured (old/partial run); an empty `[]` is a valid "no redundancy" state and is NOT the same as
    *  undefined. Not read directly by any `check()` branch today (mirrors toolErrors for parity/future use) —

@@ -177,10 +177,7 @@ describe("TimelineWriter", () => {
     const outDir = tmp();
     const w = new TimelineWriter(outDir);
     w.record({ type: "tool_use", name: "Skill", input: { skill: "a" }, toolUseId: "t1" }, 0);
-    const dispatch = w.record(
-      { type: "subagent_dispatch", toolUseId: "disp1", agentType: "general-purpose", declaredTools: [] },
-      1,
-    );
+    const dispatch = w.record({ type: "subagent_dispatch", toolUseId: "disp1", agentType: "general-purpose", declaredTools: [] }, 1);
     expect(dispatch).toMatchObject({ skillScope: "a" });
     const child = w.record({ type: "tool_use", name: "Read", input: {}, toolUseId: "t3", parentToolUseId: "disp1" }, 2);
     expect(child).toMatchObject({ skillScope: "a" }); // rule 3: child inherits the sticky window (unchanged since the dispatch opened)
@@ -189,15 +186,9 @@ describe("TimelineWriter", () => {
   it("a Skill tool_use that is itself parented (inside a sub-agent) does NOT change the top-level sticky window", () => {
     const outDir = tmp();
     const w = new TimelineWriter(outDir);
-    const dispatch = w.record(
-      { type: "subagent_dispatch", toolUseId: "disp1", agentType: "general-purpose", declaredTools: [] },
-      0,
-    );
+    const dispatch = w.record({ type: "subagent_dispatch", toolUseId: "disp1", agentType: "general-purpose", declaredTools: [] }, 0);
     expect(dispatch).toMatchObject({ skillScope: "(root)" });
-    w.record(
-      { type: "tool_use", name: "Skill", input: { skill: "nested" }, toolUseId: "t1", parentToolUseId: "disp1" },
-      1,
-    );
+    w.record({ type: "tool_use", name: "Skill", input: { skill: "nested" }, toolUseId: "t1", parentToolUseId: "disp1" }, 1);
     const afterward = w.record({ type: "tool_use", name: "Read", input: {}, toolUseId: "t2" }, 2);
     expect(afterward).toMatchObject({ skillScope: "(root)" }); // top-level window unaffected by a nested Skill call
   });

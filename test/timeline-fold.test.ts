@@ -120,9 +120,7 @@ describe("attributeSubagentSkills", () => {
   });
 
   it("does not mutate the input array (returns a new array with new objects)", () => {
-    const timeline: TimelineEvent[] = [
-      ev({ type: "subagent_dispatch", seq: 0, ts: 0, skillScope: "x", toolUseId: "d1", agentType: "x" }),
-    ];
+    const timeline: TimelineEvent[] = [ev({ type: "subagent_dispatch", seq: 0, ts: 0, skillScope: "x", toolUseId: "d1", agentType: "x" })];
     const subagents = [{ toolUseId: "d1", agentType: "x", declaredTools: [], toolsUsed: [] }];
     const result = attributeSubagentSkills(subagents, timeline);
     expect(result).not.toBe(subagents);
