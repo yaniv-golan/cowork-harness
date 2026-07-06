@@ -271,6 +271,12 @@ export interface AssertContext {
    *  result.json), never 0 in that case (0 = genuinely zero errors, a real value). Own undefined-ness is
    *  the evidence-unavailable signal for max_tool_errors. */
   toolErrorsTotal?: number;
+  /** RunResult.skillActivity — skill-activation windows folded from the timeline (Task 2's
+   *  foldSkillActivity), NOT a RunRecord field (unlike toolErrors/redundantToolCalls above, which are read
+   *  straight off the record). Undefined means no timeline was available (old/partial run, or a lane that
+   *  never wired the timeline read) — the evidence-unavailable signal for skill_tool_used; an empty `[]`
+   *  is a valid "no skill windows" state and is NOT the same as undefined. */
+  skillActivity?: Array<{ skillId: string; invocationSeq: number; toolCounts: Record<string, number>; toolCallCount: number; dispatchCount: number; durationMs?: number }>;
   /** Repeated identical tool calls, count>=2 groups only (§4.8, M3) — undefined means no data was
    *  captured (old/partial run); an empty `[]` is a valid "no redundancy" state and is NOT the same as
    *  undefined. Not read directly by any `check()` branch today (mirrors toolErrors for parity/future use) —
@@ -608,6 +614,30 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
       results.push(
         !ctx.skillsInvoked.some((s) => c.re.test(s)) ? ok() : fail(`skill unexpectedly triggered matching "${a.no_skill_triggered}"`),
       );
+  }
+  if (a.skill_tool_used !== undefined) {
+    const { skill, tool } = a.skill_tool_used;
+    if (ctx.skillActivity === undefined) {
+      results.push(fail(`evidence unavailable: skill-activity telemetry absent from result.json — cannot evaluate skill_tool_used`));
+    } else {
+      const skillRe = compileUserRegex(skill);
+      const toolRe = compileUserRegex(tool);
+      if ("error" in skillRe) results.push(fail(`skill_tool_used: bad regex "${skill}": ${skillRe.error}`));
+      else if ("error" in toolRe) results.push(fail(`skill_tool_used: bad regex "${tool}": ${toolRe.error}`));
+      else {
+        const matchingWindows = ctx.skillActivity.filter((w) => skillRe.re.test(w.skillId));
+        const found = matchingWindows.some((w) => Object.keys(w.toolCounts).some((t) => toolRe.re.test(t)));
+        results.push(
+          found
+            ? ok()
+            : fail(
+                matchingWindows.length === 0
+                  ? `no skill-activation window matched "${skill}"`
+                  : `no tool matching "${tool}" ran inside a window matching "${skill}"`,
+              ),
+        );
+      }
+    }
   }
   if (a.egress_denied !== undefined)
     results.push(

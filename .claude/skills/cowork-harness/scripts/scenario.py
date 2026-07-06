@@ -67,6 +67,7 @@ CONTENT_KEYS = {
     "dispatch_count_max",
     "skill_triggered",
     "no_skill_triggered",
+    "skill_tool_used",
     "max_cost_usd",
     "max_tokens",
     "tool_calls_max",

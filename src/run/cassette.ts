@@ -2779,6 +2779,7 @@ export const ALWAYS_CONTENT_KEYS: (keyof Assertion)[] = [
   "dispatch_count_max",
   "skill_triggered",
   "no_skill_triggered",
+  "skill_tool_used",
   "max_cost_usd",
   "max_tokens",
   "tool_calls_max",
@@ -3046,6 +3047,7 @@ export async function replayCassette(
       truncatedPaths: replayTruncatedPaths,
       skillsInvoked: rec.skillsInvoked,
       skillToolAvailable: rec.initTools.includes("Skill"),
+      skillActivity: cassette.timeline ? foldSkillActivity(cassette.timeline) : undefined,
       effectiveFidelity: cassette.effectiveFidelity,
       // Replay has no live filesystem — computer_links_resolve normalizes both link shapes against the
       // manifest instead (see the manifestKeys comment above + src/run/computer-links.ts).

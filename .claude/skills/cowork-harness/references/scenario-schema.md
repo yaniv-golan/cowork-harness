@@ -233,6 +233,7 @@ passes only if every key passes. Keep one concern per item unless you mean conju
 | `dispatch_count_max: <N>` | at most N sub-agents dispatched — an author-chosen budget (Cowork imposes no in-conversation Task-dispatch cap; records only, enforces nothing — see gotcha 12) |
 | `skill_triggered: <regex>` | a skill matching the regex (invoked id, e.g. `"plugin:skill"`) was invoked via the `Skill` tool — evidence-unavailable (not a normal fail) if the agent's init tools have no `Skill` tool |
 | `no_skill_triggered: <regex>` | no invoked skill id matched — the negative-control / description-collision catcher; evidence-unavailable (never a vacuous pass) if invocation data is absent or the `Skill` tool is unobservable |
+| `skill_tool_used: {skill, tool}` | a tool whose name matches `tool` ran inside a skill-activation window whose `skillId` matches `skill` (`RunResult.skillActivity`) — evidence-unavailable if skill-activity telemetry is absent; heuristic for inline skills (a sticky, sequential window matching the agent's `activeSkill` scope, not an exact per-tool boundary) |
 | `max_cost_usd: <N>` | the run's SDK-reported cost is ≤ N USD — evidence-unavailable if cost telemetry is absent. **Replay asserts the frozen recording's cost, not fresh spend** — a real regression needs a live `run` |
 | `max_tokens: <N>` | `usage.input_tokens + usage.output_tokens` ≤ N (cache tokens excluded) — same replay caveat as `max_cost_usd` |
 | `tool_calls_max: <N>` | total top-level tool calls (sum of `toolCounts`) ≤ N — meaningfully replay-checkable (re-drive recomputes `toolCounts` deterministically) |
@@ -292,7 +293,7 @@ sourcing ≠ evaluation (replay warns when you edit one). `verify-run` is the on
 *run dir*; `--assert-from` is the equivalent for a *cassette*.
 
 **Evaluated on replay (content):** `transcript_*`, `tool_*`, `subagent_*`, `dispatch_count_max`,
-`skill_triggered`, `no_skill_triggered`, `max_cost_usd`, `max_tokens`, `tool_calls_max`, `tool_no_error`,
+`skill_triggered`, `no_skill_triggered`, `skill_tool_used`, `max_cost_usd`, `max_tokens`, `tool_calls_max`, `tool_no_error`,
 `max_tool_errors`, `max_redundant_tool_calls`, `max_turns`, `result`
 (`max_cost_usd`/`max_tokens` assert the frozen recording's spend on replay, not fresh spend). The verdict
 modifiers `allow_permissive_auto_allow` / `allow_missing_capability` / `allow_l0_plugin_divergence` /

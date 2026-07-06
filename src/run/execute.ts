@@ -729,6 +729,13 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     throw unansweredErr;
   }
 
+  // The session's TimelineWriter (src/agent/timeline.ts) flushes timeline.jsonl in its `finally` block
+  // during session.start(), which has already fully returned by this point (run.drive() awaited it above) —
+  // same guarantee scanEvents(join(outDir, "events.jsonl")) already relies on a few lines above. Read ONCE
+  // and reuse for both the evaluate ctx (skill_tool_used) and the later assembleRunResult call
+  // (toolDurations/skillActivity/subagents) below — two reads could disagree if the file were touched mid-run.
+  const timelineData = readTimeline(outDir);
+
   const assertions = evaluate(scenario.assert, {
     transcript: record.transcript,
     toolsCalled: record.toolsCalled,
@@ -753,6 +760,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     redundantToolCalls: record.redundantToolCalls,
     skillsInvoked: record.skillsInvoked,
     skillToolAvailable: record.initTools.includes("Skill"),
+    skillActivity: timelineData ? foldSkillActivity(timelineData.events) : undefined,
     effectiveFidelity,
     // Live lane (this run's own machine) — host-shaped computer:// links (hostloop) are checked
     // DIRECTLY on the filesystem, contained to the run's real workspace roots; verify-run shares
@@ -866,11 +874,6 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // the field self-suppresses. Informational — never affects the verdict. `record.decisions`
   // (DecisionRecord[], `by: string`) is assignable to the summarizer's `by?: string` param — no re-map.
   const gateProvenance = summarizeGateProvenance(record.decisions);
-
-  // The session's TimelineWriter (src/agent/timeline.ts) flushes timeline.jsonl in its `finally` block
-  // during session.start(), which has already fully returned by this point (run.drive() awaited it above) —
-  // same guarantee scanEvents(join(outDir, "events.jsonl")) already relies on a few lines above.
-  const timelineData = readTimeline(outDir);
 
   const result: RunResult = assembleRunResult({
     $schema: RUN_RESULT_SCHEMA_URL,

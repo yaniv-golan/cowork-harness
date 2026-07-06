@@ -246,6 +246,15 @@ export const Assertion = z.object({
     .describe(
       "total WASTED repeated tool calls (sum of (count-1) across every redundant {name,args} group in RunResult.redundantToolCalls) ≤ N — not the raw count of redundant groups",
     ),
+  skill_tool_used: z
+    .object({
+      skill: z.string().describe("regex matched against a skill-activation window's skillId"),
+      tool: z.string().describe("regex matched against a tool name in that window's toolCounts"),
+    })
+    .optional()
+    .describe(
+      "a tool matching `tool` ran inside a skill-activation window whose skillId matches `skill` — heuristic for inline skills (a sticky, sequential window faithfully matching the real agent's activeSkill scope, not an exact per-tool boundary; see RunResult.skillActivity's doc comment)",
+    ),
   max_turns: z
     .number()
     .int()

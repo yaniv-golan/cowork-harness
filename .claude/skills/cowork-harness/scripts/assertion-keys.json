@@ -26,6 +26,7 @@
     "replay_protocol_fidelity",
     "result",
     "self_heal_ran",
+    "skill_tool_used",
     "skill_triggered",
     "subagent_declared_but_unused",
     "subagent_dispatched",

@@ -403,6 +403,51 @@ describe("max_redundant_tool_calls (M3)", () => {
   });
 });
 
+describe("skill_tool_used", () => {
+  it("passes when a window matching the skill regex has a toolCounts key matching the tool regex", () => {
+    const c = ctx({
+      skillActivity: [{ skillId: "my-plugin:my-skill", invocationSeq: 0, toolCounts: { Bash: 2 }, toolCallCount: 2, dispatchCount: 0 }],
+    });
+    const result = evaluate([{ skill_tool_used: { skill: "my-skill", tool: "Bash" } }], c)[0];
+    expect(result.pass).toBe(true);
+  });
+
+  it("fails when no matching window's toolCounts contains a matching tool", () => {
+    const c = ctx({
+      skillActivity: [{ skillId: "my-plugin:my-skill", invocationSeq: 0, toolCounts: { Read: 1 }, toolCallCount: 1, dispatchCount: 0 }],
+    });
+    const result = evaluate([{ skill_tool_used: { skill: "my-skill", tool: "Bash" } }], c)[0];
+    expect(result.pass).toBe(false);
+  });
+
+  it("fails when no window matches the skill regex at all", () => {
+    const c = ctx({ skillActivity: [{ skillId: "(root)", invocationSeq: 0, toolCounts: { Bash: 1 }, toolCallCount: 1, dispatchCount: 0 }] });
+    const result = evaluate([{ skill_tool_used: { skill: "no-such-skill", tool: "Bash" } }], c)[0];
+    expect(result.pass).toBe(false);
+  });
+
+  it("evidence-unavailable when skillActivity is absent", () => {
+    const c = ctx({ skillActivity: undefined });
+    const result = evaluate([{ skill_tool_used: { skill: "x", tool: "y" } }], c)[0];
+    expect(result.pass).toBe(false);
+    expect(result.message).toContain("evidence unavailable");
+  });
+
+  it("bad skill regex fails with a clear message, not a throw", () => {
+    const c = ctx({ skillActivity: [] });
+    const result = evaluate([{ skill_tool_used: { skill: "[unterminated", tool: "Bash" } }], c)[0];
+    expect(result.pass).toBe(false);
+    expect(result.message).toContain("bad regex");
+  });
+
+  it("bad tool regex fails with a clear message, not a throw", () => {
+    const c = ctx({ skillActivity: [{ skillId: "x", invocationSeq: 0, toolCounts: {}, toolCallCount: 0, dispatchCount: 0 }] });
+    const result = evaluate([{ skill_tool_used: { skill: "x", tool: "[unterminated" } }], c)[0];
+    expect(result.pass).toBe(false);
+    expect(result.message).toContain("bad regex");
+  });
+});
+
 describe("false-green catchers (deterministic)", () => {
   it("user_visible_artifact: only files under outputs/.projects count", () => {
     const work = mkdtempSync(join(tmpdir(), "cowork-assert-"));
