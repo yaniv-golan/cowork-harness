@@ -25,7 +25,10 @@ export interface EgressSidecar {
   teardown(): void;
 }
 
-const PROXY_IMAGE = process.env.COWORK_PROXY_IMAGE ?? "cowork-egress-proxy:1";
+// Tag bumped when the proxy's decision-log format changes so `ensureProxyImage` rebuilds instead of
+// reusing a cached image that logs the old shape (the image is built from dist/egress/proxy.js — a
+// cached older build would silently omit the per-request detail the log line now records).
+const PROXY_IMAGE = process.env.COWORK_PROXY_IMAGE ?? "cowork-egress-proxy:2";
 
 // A process-level cleanup registry so a Ctrl-C (SIGINT/SIGTERM) mid-run reaps in-flight egress resources
 // instead of orphaning them (the per-run `finally` paths don't run when the process is killed by a signal).

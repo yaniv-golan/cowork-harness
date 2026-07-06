@@ -91,7 +91,7 @@ export const realProbe: DoctorProbe = {
     const r = spawnSync(this.runtimeName(), ["image", "inspect", this.imageName()], { stdio: "ignore", timeout: 5000 });
     return !r.error && r.status === 0;
   },
-  proxyImageName: () => process.env.COWORK_PROXY_IMAGE ?? "cowork-egress-proxy:1",
+  proxyImageName: () => process.env.COWORK_PROXY_IMAGE ?? "cowork-egress-proxy:2",
   proxyImagePresent() {
     const r = spawnSync(this.runtimeName(), ["image", "inspect", this.proxyImageName()], { stdio: "ignore", timeout: 5000 });
     return !r.error && r.status === 0;
