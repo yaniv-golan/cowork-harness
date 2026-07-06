@@ -232,6 +232,8 @@ the rules and CI-placement rationale (why each category behaves this way), see
 | `max_tool_errors` | total tool errors across all tools ≤ N |
 | `max_redundant_tool_calls` | total WASTED repeated tool calls (sum of (count-1) across every redundant `{name,args}` group in `RunResult.redundantToolCalls`) ≤ N — not the raw count of redundant groups |
 | `max_turns` | SDK-reported (or fallback-counted) turn count ≤ N — replay-checkable, recounted deterministically same as `tool_calls_max` |
+| `all_tasks_completed` | every task in `RunResult.tasks[]` reached status `"completed"` — vacuously passes on zero tasks (pair with `task_status` to require presence); evidence-unavailable when `tasks` telemetry is absent |
+| `task_status` | a task whose `subject` OR `id` matches the `match` regex reached the given `status` — evidence-unavailable when `tasks` telemetry is absent |
 | `question_asked` | agent asked an AskUserQuestion matching the regex |
 | `questions_count_max` | at most N **sub-questions** asked — a bundled `AskUserQuestion` with K sub-questions counts as K, not 1; `trace --view questions`'s footer total uses the same definition |
 | `gate_answers_delivered` | answered gates' answers reached the model — **zero gates fired passes vacuously** (gate firing is model-dependent); pair with `gate_answer_count_min` to also require a gate |

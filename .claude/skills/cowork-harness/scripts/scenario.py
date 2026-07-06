@@ -75,6 +75,8 @@ CONTENT_KEYS = {
     "max_tool_errors",
     "max_redundant_tool_calls",
     "max_turns",
+    "all_tasks_completed",
+    "task_status",
 }
 # content keys, but only evaluated on replay when the cassette carries controlOut
 GATE_KEYS = {"question_asked", "questions_count_max", "gate_answers_delivered", "gate_answer_count_min"}

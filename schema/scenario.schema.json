@@ -260,6 +260,30 @@
             ],
             "additionalProperties": false
           },
+          "all_tasks_completed": {
+            "description": "every task in RunResult.tasks[] reached status \"completed\" — vacuously true if there are zero tasks (pair with task_status to require at least one)",
+            "type": "boolean",
+            "const": true
+          },
+          "task_status": {
+            "description": "a task whose subject or id matches `match` reached `status`",
+            "type": "object",
+            "properties": {
+              "match": {
+                "type": "string",
+                "description": "regex matched against a task's subject OR id"
+              },
+              "status": {
+                "type": "string",
+                "description": "the status the matching task must have reached"
+              }
+            },
+            "required": [
+              "match",
+              "status"
+            ],
+            "additionalProperties": false
+          },
           "max_turns": {
             "description": "the SDK-reported (or fallback-counted) turn count ≤ N — replay-checkable (the re-drive recounts turns deterministically)",
             "type": "integer",

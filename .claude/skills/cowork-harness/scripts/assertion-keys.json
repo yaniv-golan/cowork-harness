@@ -1,6 +1,7 @@
 {
   "$comment": "GENERATED from the Zod schemas (src/types.ts) by scripts/gen-schema.ts — do not edit; run `npm run schema`.",
   "keys": [
+    "all_tasks_completed",
     "allow_l0_plugin_divergence",
     "allow_missing_capability",
     "allow_permissive_auto_allow",
@@ -33,6 +34,7 @@
     "subagent_output_contains",
     "subagent_tool_absent",
     "subagent_tool_used",
+    "task_status",
     "tool_called",
     "tool_calls_max",
     "tool_no_error",

@@ -450,6 +450,66 @@ describe("skill_tool_used", () => {
   });
 });
 
+describe("all_tasks_completed", () => {
+  it("passes when every task is completed", () => {
+    const c = ctx({ tasks: [{ id: "1", subject: "a", status: "completed" }, { id: "2", subject: "b", status: "completed" }] });
+    expect(evaluate([{ all_tasks_completed: true }], c)[0].pass).toBe(true);
+  });
+
+  it("fails when any task is not completed", () => {
+    const c = ctx({ tasks: [{ id: "1", subject: "a", status: "completed" }, { id: "2", subject: "b", status: "pending" }] });
+    expect(evaluate([{ all_tasks_completed: true }], c)[0].pass).toBe(false);
+  });
+
+  it("passes vacuously when there are zero tasks (documented, pair with task_status to require presence)", () => {
+    const c = ctx({ tasks: [] });
+    expect(evaluate([{ all_tasks_completed: true }], c)[0].pass).toBe(true);
+  });
+
+  it("evidence-unavailable when tasks is absent", () => {
+    const c = ctx({ tasks: undefined });
+    const result = evaluate([{ all_tasks_completed: true }], c)[0];
+    expect(result.pass).toBe(false);
+    expect(result.message).toContain("evidence unavailable");
+  });
+});
+
+describe("task_status", () => {
+  it("passes when a task matching the regex (by subject or id) reached the given status", () => {
+    const c = ctx({ tasks: [{ id: "1", subject: "step one", status: "completed" }] });
+    expect(evaluate([{ task_status: { match: "step one", status: "completed" } }], c)[0].pass).toBe(true);
+  });
+
+  it("matches by id too, not just subject", () => {
+    const c = ctx({ tasks: [{ id: "1", subject: "step one", status: "completed" }] });
+    expect(evaluate([{ task_status: { match: "^1$", status: "completed" } }], c)[0].pass).toBe(true);
+  });
+
+  it("fails when the matching task has a different status", () => {
+    const c = ctx({ tasks: [{ id: "1", subject: "step one", status: "pending" }] });
+    expect(evaluate([{ task_status: { match: "step one", status: "completed" } }], c)[0].pass).toBe(false);
+  });
+
+  it("fails when no task matches the regex", () => {
+    const c = ctx({ tasks: [{ id: "1", subject: "step one", status: "completed" }] });
+    expect(evaluate([{ task_status: { match: "no-such-task", status: "completed" } }], c)[0].pass).toBe(false);
+  });
+
+  it("evidence-unavailable when tasks is absent", () => {
+    const c = ctx({ tasks: undefined });
+    const result = evaluate([{ task_status: { match: "x", status: "completed" } }], c)[0];
+    expect(result.pass).toBe(false);
+    expect(result.message).toContain("evidence unavailable");
+  });
+
+  it("bad regex fails with a clear message, not a throw", () => {
+    const c = ctx({ tasks: [] });
+    const result = evaluate([{ task_status: { match: "[unterminated", status: "completed" } }], c)[0];
+    expect(result.pass).toBe(false);
+    expect(result.message).toContain("bad regex");
+  });
+});
+
 describe("false-green catchers (deterministic)", () => {
   it("user_visible_artifact: only files under outputs/.projects count", () => {
     const work = mkdtempSync(join(tmpdir(), "cowork-assert-"));

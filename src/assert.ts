@@ -303,6 +303,11 @@ export interface AssertContext {
    *  evidence-unavailable rather than silently passing (the evidence-missing convention this file
    *  follows everywhere else — e.g. `transcriptMissing`, `scanMissing`). */
   linkResolution?: LinkResolutionContext;
+  /** RunResult.tasks[] — Progress panel tasks accumulated from TaskCreate/TaskUpdate (§6.1, M6).
+   *  Undefined means no tasks telemetry was recorded for this run (a run predating M6, or a run/cassette
+   *  that never wired this field) — the evidence-unavailable signal for all_tasks_completed/task_status;
+   *  an empty `[]` is a valid "no tasks" state and is NOT the same as undefined. */
+  tasks?: Array<{ id: string; subject: string; status: string; description?: string; activeForm?: string }>;
 }
 
 export function evaluate(assertions: Assertion[], ctx: AssertContext): RunResult["assertions"] {
@@ -642,6 +647,28 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
                   ? `no skill-activation window matched "${skill}"`
                   : `no tool matching "${tool}" ran inside a window matching "${skill}"`,
               ),
+        );
+      }
+    }
+  }
+  if (a.all_tasks_completed !== undefined) {
+    if (ctx.tasks === undefined) results.push(fail(`evidence unavailable: tasks telemetry absent from result.json — cannot evaluate all_tasks_completed`));
+    else results.push(ctx.tasks.every((t) => t.status === "completed") ? ok() : fail(`not all tasks are completed: ${ctx.tasks.filter((t) => t.status !== "completed").map((t) => `${t.subject} (${t.status})`).join(", ")}`));
+  }
+  if (a.task_status !== undefined) {
+    const { match, status } = a.task_status;
+    if (ctx.tasks === undefined) results.push(fail(`evidence unavailable: tasks telemetry absent from result.json — cannot evaluate task_status`));
+    else {
+      const c = compileUserRegex(match);
+      if ("error" in c) results.push(fail(`task_status: bad regex "${match}": ${c.error}`));
+      else {
+        const found = ctx.tasks.find((t) => c.re.test(t.subject) || c.re.test(t.id));
+        results.push(
+          found === undefined
+            ? fail(`no task matched "${match}"`)
+            : found.status === status
+              ? ok()
+              : fail(`task "${found.subject}" matched "${match}" but has status "${found.status}", expected "${status}"`),
         );
       }
     }

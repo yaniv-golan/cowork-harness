@@ -3174,6 +3174,7 @@ async function cmdVerifyRun(args: string[]) {
     // reason (agent-tool-drift) when the real reason is just "this field didn't exist yet".
     skillToolAvailable: result.skillToolAvailable ?? true,
     skillActivity: result.skillActivity,
+    tasks: result.tasks,
     effectiveFidelity: result.effectiveFidelity,
     // verify-run re-checks a kept run dir on the SAME machine that ran it — the plan groups this
     // with the live execute.ts lane (both check a host-shaped computer:// link's path directly).

@@ -255,6 +255,19 @@ export const Assertion = z.object({
     .describe(
       "a tool matching `tool` ran inside a skill-activation window whose skillId matches `skill` — heuristic for inline skills (a sticky, sequential window faithfully matching the real agent's activeSkill scope, not an exact per-tool boundary; see RunResult.skillActivity's doc comment)",
     ),
+  all_tasks_completed: z
+    .literal(true)
+    .optional()
+    .describe(
+      'every task in RunResult.tasks[] reached status "completed" — vacuously true if there are zero tasks (pair with task_status to require at least one)',
+    ),
+  task_status: z
+    .object({
+      match: z.string().describe("regex matched against a task's subject OR id"),
+      status: z.string().describe("the status the matching task must have reached"),
+    })
+    .optional()
+    .describe("a task whose subject or id matches `match` reached `status`"),
   max_turns: z
     .number()
     .int()

@@ -761,6 +761,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     skillsInvoked: record.skillsInvoked,
     skillToolAvailable: record.initTools.includes("Skill"),
     skillActivity: timelineData ? foldSkillActivity(timelineData.events) : undefined,
+    tasks: record.tasks.size ? Array.from(record.tasks.values()) : undefined,
     effectiveFidelity,
     // Live lane (this run's own machine) — host-shaped computer:// links (hostloop) are checked
     // DIRECTLY on the filesystem, contained to the run's real workspace roots; verify-run shares

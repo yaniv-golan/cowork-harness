@@ -2789,6 +2789,8 @@ export const ALWAYS_CONTENT_KEYS: (keyof Assertion)[] = [
   "max_tool_errors",
   "max_redundant_tool_calls",
   "max_turns",
+  "all_tasks_completed",
+  "task_status",
   "result",
   // Verdict modifiers — NOT filesystem/egress assertions. Keep all of them on replay (each evaluates to a
   // no-op pass via assert.ts) so a standalone modifier neither inflates the "filesystem/egress skipped"
@@ -3050,6 +3052,7 @@ export async function replayCassette(
       skillsInvoked: rec.skillsInvoked,
       skillToolAvailable: rec.initTools.includes("Skill"),
       skillActivity: cassette.timeline ? foldSkillActivity(cassette.timeline) : undefined,
+      tasks: rec.tasks.size ? Array.from(rec.tasks.values()) : undefined,
       effectiveFidelity: cassette.effectiveFidelity,
       // Replay has no live filesystem — computer_links_resolve normalizes both link shapes against the
       // manifest instead (see the manifestKeys comment above + src/run/computer-links.ts).
