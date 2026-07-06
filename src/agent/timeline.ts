@@ -129,9 +129,14 @@ export class TimelineWriter {
   // it is deliberately NOT tracked per-toolUseId/frozen-at-dispatch-time: the real agent blocks
   // synchronously on a dispatch's own tool_result while the sub-agent runs (the dispatching turn
   // cannot emit a new top-level tool_use, including a Skill call, until the dispatch's result
-  // returns), so `currentSkillId` is provably invariant across the span from any dispatch to all of
-  // its children — a plain live read of this field at each child's arrival already equals whatever
-  // value was current when the dispatch itself opened. No separate per-dispatch snapshot is needed.
+  // returns across separate turns), so `currentSkillId` is invariant across the span from a dispatch
+  // to all of its children in the common case — a plain live read of this field at each child's
+  // arrival already equals whatever value was current when the dispatch itself opened. (Edge case,
+  // not guaranteed: a single assistant message that batches a subagent_dispatch tool_use FOLLOWED by
+  // a top-level Skill tool_use in the same turn would shift the window between the dispatch and its
+  // later-streamed children — an odd, likely-rare model behavior; skillScope is a documented
+  // best-effort heuristic (§5.4), so this is an accepted imprecision, not a correctness bug to guard
+  // against with a separate per-dispatch snapshot.)
   private currentSkillId = "(root)";
 
   constructor(outDir: string) {
