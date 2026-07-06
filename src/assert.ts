@@ -347,6 +347,11 @@ export interface AssertContext {
    *  evidence-unavailable signal for no_mcp_error; an empty `[]` is a valid "no MCP errors" state and
    *  is NOT the same as undefined. */
   mcpErrors?: RunResult["mcpErrors"];
+  /** RunResult.hookEvents — PreToolUse hook fire/block events. Undefined means no hook telemetry was
+   *  recorded for this run (an older run, or a replay whose cassette lacks `controlOut` — a custom
+   *  hook's decision lives only there) — the evidence-unavailable signal for hook_blocked/
+   *  no_hook_blocked; an empty `[]` is a valid "no hook fired" state and is NOT the same as undefined. */
+  hookEvents?: RunResult["hookEvents"];
 }
 
 export function evaluate(assertions: Assertion[], ctx: AssertContext): RunResult["assertions"] {
@@ -664,6 +669,26 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
     else {
       const bad = ctx.mcpErrors[0];
       results.push(ctx.mcpErrors.length === 0 ? ok() : fail(`no_mcp_error: server "${bad!.server}" failed: ${bad!.message}`));
+    }
+  }
+  if (a.hook_blocked !== undefined) {
+    const c = compileUserRegex(a.hook_blocked);
+    if ("error" in c) results.push(fail(`hook_blocked: bad regex "${a.hook_blocked}": ${c.error}`));
+    else if (ctx.hookEvents === undefined)
+      results.push(fail(`hook_blocked: no hook events (older run / replay without controlOut) — cannot verify`));
+    else {
+      const hit = ctx.hookEvents.find((h) => h.decision === "block" && h.tool !== undefined && c.re.test(h.tool));
+      results.push(hit ? ok() : fail(`hook_blocked: no blocked tool matched "${a.hook_blocked}"`));
+    }
+  }
+  if (a.no_hook_blocked !== undefined) {
+    if (ctx.hookEvents === undefined)
+      results.push(fail(`no_hook_blocked: no hook events (older run / replay without controlOut) — cannot verify`));
+    else {
+      const blk = ctx.hookEvents.find((h) => h.decision === "block");
+      results.push(
+        blk ? fail(`no_hook_blocked: "${blk.tool ?? blk.callbackId}" was blocked${blk.reason ? ` (${blk.reason})` : ""}`) : ok(),
+      );
     }
   }
   if (a.no_skill_triggered !== undefined) {

@@ -242,15 +242,21 @@ the rules and CI-placement rationale (why each category behaves this way), see
 | `questions_count_max` | at most N **sub-questions** asked — a bundled `AskUserQuestion` with K sub-questions counts as K, not 1; `trace --view questions`'s footer total uses the same definition |
 | `gate_answers_delivered` | answered gates' answers reached the model — **zero gates fired passes vacuously** (gate firing is model-dependent); pair with `gate_answer_count_min` to also require a gate |
 | `gate_answer_count_min` | at least N AskUserQuestion gates fired AND were delivered non-error — the presence companion to `gate_answers_delivered`'s vacuous-pass |
+| `hook_blocked` | a PreToolUse hook blocked a tool whose name matches the regex (`RunResult.hookEvents`) — replay: needs `controlOut` (a custom hook's decision lives only there) |
+| `no_hook_blocked` | no tool was hook-blocked during the run — replay: needs `controlOut`. **Only `true` is valid** |
 | `result` | run ended with `success` or `error` |
 | `allow_permissive_auto_allow` | verdict modifier — kept on replay → no-op pass (the live signal it suppresses is zeroed) |
 | `allow_missing_capability` | verdict modifier — kept on replay → no-op pass (the live signal it suppresses is zeroed) |
 | `allow_l0_plugin_divergence` | verdict modifier — kept on replay → no-op pass (the live signal it suppresses is zeroed) |
 | `allow_stall` | verdict modifier — kept on replay → no-op pass (suppresses the `stalled` default-fail; the stall is re-derived on the replay re-drive) |
 
-**`question_asked`, `questions_count_max`, `gate_answers_delivered`, `gate_answer_count_min` require
-`controlOut`** (full-fidelity replay). On an old cassette without `controlOut` these keys are excluded
-from evaluation — not vacuously passed — and a loud warning fires (see §Backward compatibility).
+**`question_asked`, `questions_count_max`, `gate_answers_delivered`, `gate_answer_count_min`, `hook_blocked`,
+`no_hook_blocked` require `controlOut`** (full-fidelity replay). On an old cassette without `controlOut`
+these keys are excluded from evaluation — not vacuously passed — and a loud warning fires (see §Backward
+compatibility). The hook keys need `controlOut` for a different reason than the question keys: a custom
+hook's block/allow decision is an opaque async reply recorded only in `control-out.jsonl`, not in the
+`events` stream — reconstructing from the stream alone would show only the built-in Task hook's view and
+could vacuously pass `no_hook_blocked` even if a custom hook genuinely blocked.
 
 `file_exists`, `user_visible_artifact`, `artifact_json`, `computer_links_resolve`, `no_unexpected_files`, and
 `input_unmodified` are **not** in the table above — see the next subsection; they're replay-checkable only

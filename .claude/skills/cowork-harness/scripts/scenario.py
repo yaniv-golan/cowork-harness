@@ -83,7 +83,14 @@ CONTENT_KEYS = {
     "task_status",
 }
 # content keys, but only evaluated on replay when the cassette carries controlOut
-GATE_KEYS = {"question_asked", "questions_count_max", "gate_answers_delivered", "gate_answer_count_min"}
+GATE_KEYS = {
+    "question_asked",
+    "questions_count_max",
+    "gate_answers_delivered",
+    "gate_answer_count_min",
+    "hook_blocked",
+    "no_hook_blocked",
+}
 # manifest-backed: replay-checkable when the cassette carries an `artifacts` manifest (record snapshots one);
 # a manifest-less cassette skips them. Since the 0.3.0 artifact-manifest these are NOT always live-only.
 # computer_links_resolve joins this bucket (not CONTENT_KEYS): resolving a non-empty link set needs
@@ -197,6 +204,7 @@ REGEX_KEYS = {
     "when_question",
     "subagent_dispatched",
     "question_asked",
+    "hook_blocked",
 }
 VALID_ON_UNANSWERED = {"fail", "prompt", "first", "llm"}
 VALID_TIERS = ("protocol", "container", "microvm", "hostloop", "cowork")

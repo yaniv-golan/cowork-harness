@@ -33,6 +33,7 @@ function partialRecord(over: Partial<RunRecord> = {}): RunRecord {
     context: { tools: [], mcpServers: [] },
     contextEvents: [],
     mcpErrors: [],
+    hookEvents: [],
     ...over,
   };
 }

@@ -78,7 +78,8 @@ export type AgentEvent =
   | { type: "error"; source: "spawn" | "agent" | "protocol" | "exit"; message: string }
   | { type: "raw"; line: string }
   | { type: "system_event"; subtype: string; data: Record<string, unknown> } // a `system` message we don't special-case (e.g. compact_boundary)
-  | { type: "mcp_error"; server: string; code?: number; message: string }; // an MCP round-trip the harness answered with a JSON-RPC error
+  | { type: "mcp_error"; server: string; code?: number; message: string } // an MCP round-trip the harness answered with a JSON-RPC error
+  | { type: "hook_event"; callbackId: string; decision: "block" | "allow"; reason?: string; tool?: string }; // a PreToolUse hook fired
 
 export type SdkMcp = {
   servers: string[];
@@ -186,6 +187,28 @@ export function hookOutput(callbackId: string, input: any): Record<string, unkno
     return { decision: "block", reason: "Background agents disabled" };
   }
   return {};
+}
+
+/** Map a hook reply body (built-in `hookOutput` result OR a custom bundle reply) + the request input
+ *  into a hook_event. A reply carrying `decision:"block"` (or `hookSpecificOutput.permissionDecision:"deny"`)
+ *  is a block; anything else is allow. `tool` is the gated tool name from the request input. Shared by the
+ *  live emit and the replay reconstruction so both classify a block identically. */
+export function hookEventFrom(
+  callbackId: string,
+  reply: Record<string, unknown> | undefined,
+  input: any,
+): { type: "hook_event"; callbackId: string; decision: "block" | "allow"; reason?: string; tool?: string } {
+  const r = reply ?? {};
+  const nested = (r.hookSpecificOutput ?? {}) as Record<string, unknown>;
+  const isBlock = r.decision === "block" || nested.permissionDecision === "deny";
+  const reason =
+    typeof r.reason === "string"
+      ? r.reason
+      : typeof nested.permissionDecisionReason === "string"
+        ? (nested.permissionDecisionReason as string)
+        : undefined;
+  const tool = typeof input?.tool_name === "string" ? input.tool_name : undefined;
+  return { type: "hook_event", callbackId, decision: isBlock ? "block" : "allow", reason, tool };
 }
 
 /** The key the in-VM AskUserQuestion handler indexes answers by — it does
@@ -489,9 +512,12 @@ export class LiveAgentSession implements AgentSession {
           out = { decision: "block", reason: `hook handler error: ${message}` };
         }
         this.write(successEnvelope(reqId, out));
+        yield hookEventFrom(callbackId, out, msg.request.input);
         return;
       }
-      this.write(successEnvelope(reqId, hookOutput(callbackId, msg.request.input)));
+      const builtInOut = hookOutput(callbackId, msg.request.input);
+      this.write(successEnvelope(reqId, builtInOut));
+      yield hookEventFrom(callbackId, builtInOut, msg.request.input);
       return;
     }
     // mcp_message is the only side-effecting branch (the driver computes + writes the response).

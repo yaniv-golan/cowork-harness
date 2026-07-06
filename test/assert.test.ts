@@ -416,6 +416,32 @@ describe("no_mcp_error", () => {
   });
 });
 
+describe("hook_blocked / no_hook_blocked", () => {
+  const blocked = [{ callbackId: "cowork-task-bg-block", decision: "block" as const, reason: "bg", tool: "Task" }];
+
+  it("hook_blocked matches a blocked tool by regex", () => {
+    const [pass1] = evaluate([{ hook_blocked: "Task" }], ctx({ hookEvents: blocked }));
+    expect(pass1.pass).toBe(true);
+    const [pass2] = evaluate([{ hook_blocked: "Bash" }], ctx({ hookEvents: blocked }));
+    expect(pass2.pass).toBe(false);
+  });
+
+  it("no_hook_blocked passes when nothing blocked, fails when something did", () => {
+    const [r1] = evaluate([{ no_hook_blocked: true }], ctx({ hookEvents: [{ callbackId: "x", decision: "allow" }] }));
+    expect(r1.pass).toBe(true);
+    const [r2] = evaluate([{ no_hook_blocked: true }], ctx({ hookEvents: blocked }));
+    expect(r2.pass).toBe(false);
+    expect(r2.message).toMatch(/Task/);
+  });
+
+  it("both are evidence-unavailable when hookEvents is undefined", () => {
+    const [r1] = evaluate([{ no_hook_blocked: true }], ctx({ hookEvents: undefined }));
+    expect(r1.pass).toBe(false);
+    const [r2] = evaluate([{ hook_blocked: "Task" }], ctx({ hookEvents: undefined }));
+    expect(r2.pass).toBe(false);
+  });
+});
+
 describe("tool_no_error (M3)", () => {
   it("passes when no tool matching the regex has any errors", () => {
     const c = ctx({ toolErrors: { Bash: { calls: 3, errors: 0 }, Read: { calls: 1, errors: 0 } } });

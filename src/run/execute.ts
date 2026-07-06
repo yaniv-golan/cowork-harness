@@ -798,6 +798,9 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // Always defined live — an empty array is a real "no MCP errors" signal, distinct from replay's
     // undefined (mcp round-trips are harness-computed, not in the cassette's frozen stdout stream).
     mcpErrors: record.mcpErrors,
+    // Always defined live — the built-in Task hook only fires on a dispatched background Task, so an
+    // empty array on a no-Task scenario is the real "nothing hook-blocked" signal no_hook_blocked needs.
+    hookEvents: record.hookEvents,
     effectiveFidelity,
     // Live lane (this run's own machine) — host-shaped computer:// links (hostloop) are checked
     // DIRECTLY on the filesystem, contained to the run's real workspace roots; verify-run shares
@@ -974,6 +977,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     workspaceFiles, // Working folder panel's canonical file model (output/mount/input) — see comment above
     contextEvents: record.contextEvents, // system events we don't special-case — powers compaction_occurred
     mcpErrors: record.mcpErrors, // uncollapsed — an empty [] is the real "no MCP errors" signal no_mcp_error needs
+    hookEvents: record.hookEvents, // uncollapsed — an empty [] on a no-Task scenario is the real "nothing hook-blocked" signal no_hook_blocked needs
     // The pre-spawn baseline no_unexpected_files diffs against (same single read the evaluate ctx got).
     // undefined = the run didn't capture (key not asserted, microvm, pre-seam) — the assertion then
     // fails evidence-unavailable, loud.
@@ -1208,6 +1212,7 @@ export function buildPartialResult(args: {
     workspaceFiles, // Working folder panel's canonical file model
     contextEvents: record.contextEvents, // system events we don't special-case — powers compaction_occurred
     mcpErrors: record.mcpErrors, // uncollapsed — an empty [] is the real "no MCP errors" signal no_mcp_error needs
+    hookEvents: record.hookEvents, // uncollapsed — an empty [] on a no-Task scenario is the real "nothing hook-blocked" signal no_hook_blocked needs
     preRunPaths: readPreRunManifest(args.outDir),
     preRunHashes: readPreRunManifestHashes(args.outDir),
     effectiveFidelity: args.effectiveFidelity,

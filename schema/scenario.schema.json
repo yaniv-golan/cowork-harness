@@ -312,6 +312,15 @@
             "type": "boolean",
             "const": true
           },
+          "hook_blocked": {
+            "description": "a PreToolUse hook blocked a tool whose name matches this regex (RunResult.hookEvents) — replay needs controlOut",
+            "type": "string"
+          },
+          "no_hook_blocked": {
+            "description": "no tool was hook-blocked during the run (distinguishes a real tool crash from an intentional block) — replay needs controlOut; only `true` is valid",
+            "type": "boolean",
+            "const": true
+          },
           "egress_denied": {
             "description": "egress to this host was denied",
             "type": "string"

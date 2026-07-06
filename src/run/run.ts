@@ -102,6 +102,7 @@ export interface RunRecord {
   context: { tools: string[]; mcpServers: unknown[]; availableSkills?: Array<{ id: string; whenToUse?: string }> };
   contextEvents: Array<{ subtype: string; data: Record<string, unknown> }>; // system events we don't special-case (compaction etc.)
   mcpErrors: Array<{ server: string; code?: number; message: string }>; // MCP round-trips the harness answered with a JSON-RPC error (no handler, or the handler threw)
+  hookEvents: Array<{ callbackId: string; decision: "block" | "allow"; reason?: string; tool?: string }>; // PreToolUse hook fire/block events (built-in Task hook + any custom hook bundle)
 }
 
 export interface RunHooks {
@@ -188,6 +189,7 @@ export class Run {
       context: { tools: [], mcpServers: [] },
       contextEvents: [],
       mcpErrors: [],
+      hookEvents: [],
     };
   }
 
@@ -445,6 +447,9 @@ export class Run {
             break;
           case "mcp_error":
             this.rec.mcpErrors.push({ server: ev.server, code: ev.code, message: ev.message });
+            break;
+          case "hook_event":
+            this.rec.hookEvents.push({ callbackId: ev.callbackId, decision: ev.decision, reason: ev.reason, tool: ev.tool });
             break;
         }
       }

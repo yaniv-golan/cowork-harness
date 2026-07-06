@@ -50,6 +50,7 @@ function fullyExplicitFixture(): CompleteRunResult {
     workspaceFiles: undefined,
     contextEvents: undefined,
     mcpErrors: undefined,
+    hookEvents: undefined,
     preRunPaths: undefined,
     preRunHashes: undefined,
     partial: undefined,

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseMessage } from "../src/agent/session.js";
+import { parseMessage, hookEventFrom } from "../src/agent/session.js";
 import type { AgentEvent, AgentSession, DecisionResponse } from "../src/agent/session.js";
 import { Run } from "../src/run/run.js";
 import { ScriptedDecider } from "../src/decide/decider.js";
@@ -48,5 +48,66 @@ describe("Run accumulates mcp_error events", () => {
     const ev: AgentEvent[] = [{ type: "result", isError: false }];
     const rec = await new Run(new MockSession(ev), new ScriptedDecider([])).drive("go");
     expect(rec.mcpErrors).toEqual([]);
+  });
+});
+
+// hookEventFrom is the single decision-reading rule shared by the live emit (translate()'s two
+// hook_callback paths) and the replay reconstruction (replayCassette) — tested directly here so both
+// callers are guaranteed to classify a block identically.
+describe("hookEventFrom", () => {
+  it("classifies the built-in Task hook's block reply as decision:block with the gated tool name", () => {
+    const ev = hookEventFrom(
+      "cowork-task-bg-block",
+      { decision: "block", reason: "Background agents disabled" },
+      { tool_name: "Task", tool_input: { run_in_background: true } },
+    );
+    expect(ev).toEqual({
+      type: "hook_event",
+      callbackId: "cowork-task-bg-block",
+      decision: "block",
+      reason: "Background agents disabled",
+      tool: "Task",
+    });
+  });
+
+  it("classifies an empty reply (allow) as decision:allow", () => {
+    const ev = hookEventFrom("cowork-task-bg-block", {}, { tool_name: "Task" });
+    expect(ev.decision).toBe("allow");
+    expect(ev.reason).toBeUndefined();
+  });
+
+  it("classifies a custom hook's hookSpecificOutput.permissionDecision:deny as a block", () => {
+    const ev = hookEventFrom(
+      "custom-hook",
+      { hookSpecificOutput: { permissionDecision: "deny", permissionDecisionReason: "path outside allowed roots" } },
+      { tool_name: "Bash" },
+    );
+    expect(ev.decision).toBe("block");
+    expect(ev.reason).toBe("path outside allowed roots");
+    expect(ev.tool).toBe("Bash");
+  });
+
+  it("omits tool when input.tool_name is not a string", () => {
+    const ev = hookEventFrom("x", {}, undefined);
+    expect(ev.tool).toBeUndefined();
+  });
+});
+
+describe("Run accumulates hook_event events", () => {
+  it("folds a blocking hook_event AgentEvent into rec.hookEvents", async () => {
+    const ev: AgentEvent[] = [
+      { type: "hook_event", callbackId: "cowork-task-bg-block", decision: "block", reason: "Background agents disabled", tool: "Task" },
+      { type: "result", isError: false },
+    ];
+    const rec = await new Run(new MockSession(ev), new ScriptedDecider([])).drive("go");
+    expect(rec.hookEvents).toEqual([
+      { callbackId: "cowork-task-bg-block", decision: "block", reason: "Background agents disabled", tool: "Task" },
+    ]);
+  });
+
+  it("rec.hookEvents is empty when no hook_event was seen", async () => {
+    const ev: AgentEvent[] = [{ type: "result", isError: false }];
+    const rec = await new Run(new MockSession(ev), new ScriptedDecider([])).drive("go");
+    expect(rec.hookEvents).toEqual([]);
   });
 });

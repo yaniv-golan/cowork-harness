@@ -100,3 +100,73 @@ describe("no_mcp_error on replay", () => {
     expect(computeVerdict(r, "replay").pass).toBe(true);
   });
 });
+
+describe("hookEvents reconstruction on replay", () => {
+  const hookReqId = "req-hook-1";
+  const hookCallbackEvent = JSON.stringify({
+    type: "control_request",
+    request_id: hookReqId,
+    request: {
+      subtype: "hook_callback",
+      callback_id: "cowork-task-bg-block",
+      tool_use_id: "tu1",
+      input: { tool_name: "Task", tool_input: { run_in_background: true } },
+    },
+  });
+  const hookReply = JSON.stringify({
+    type: "control_response",
+    response: { request_id: hookReqId, subtype: "success", response: { decision: "block", reason: "background Task blocked" } },
+  });
+  const baseEvents = [
+    JSON.stringify({ type: "system", subtype: "init", tools: [], skills: [] }),
+    hookCallbackEvent,
+    JSON.stringify({ type: "result", subtype: "success", is_error: false }),
+  ];
+
+  it("reconstructs hookEvents from events+controlOut and evaluates no_hook_blocked=false", async () => {
+    mute();
+    const r = await replayCassette({
+      scenario: {
+        name: "c",
+        baseline: "latest",
+        session: "(inline)",
+        fidelity: "container",
+        prompt: "hi",
+        answers: [],
+        expect_denied: [],
+        assert: [{ no_hook_blocked: true }],
+      },
+      events: baseEvents,
+      controlOut: [hookReply],
+      cassetteVersion: CASSETTE_VERSION,
+      userVisibleRoots: ["outputs"],
+      fingerprint: { baseline: LIVE },
+    } as any);
+    const a = r.assertions.find((x) => x.assertion.no_hook_blocked !== undefined);
+    expect(a?.pass).toBe(false); // a Task hook DID block
+    expect(a?.message).toMatch(/Task/);
+  });
+
+  it("excludes both keys loudly when controlOut is absent (never a vacuous pass)", async () => {
+    mute();
+    const r = await replayCassette({
+      scenario: {
+        name: "c",
+        baseline: "latest",
+        session: "(inline)",
+        fidelity: "container",
+        prompt: "hi",
+        answers: [],
+        expect_denied: [],
+        assert: [{ result: "success" }, { no_hook_blocked: true }],
+      },
+      events: baseEvents,
+      controlOut: [],
+      cassetteVersion: CASSETTE_VERSION,
+      userVisibleRoots: ["outputs"],
+      fingerprint: { baseline: LIVE },
+    } as any);
+    expect(r.assertions.some((a) => a.assertion.no_hook_blocked !== undefined)).toBe(false);
+    expect(computeVerdict(r, "replay").pass).toBe(true);
+  });
+});

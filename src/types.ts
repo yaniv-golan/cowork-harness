@@ -296,6 +296,16 @@ export const Assertion = z.object({
     .literal(true)
     .optional()
     .describe("no MCP round-trip failed (RunResult.mcpErrors is empty) — live-only (excluded on replay); only `true` is valid"),
+  hook_blocked: z
+    .string()
+    .optional()
+    .describe("a PreToolUse hook blocked a tool whose name matches this regex (RunResult.hookEvents) — replay needs controlOut"),
+  no_hook_blocked: z
+    .literal(true)
+    .optional()
+    .describe(
+      "no tool was hook-blocked during the run (distinguishes a real tool crash from an intentional block) — replay needs controlOut; only `true` is valid",
+    ),
   egress_denied: z.string().optional().describe("egress to this host was denied"),
   egress_allowed: z.string().optional().describe("egress to this host was allowed"),
   // Only `true` is accepted: `false` is rejected as a footgun. The assertion is presence-semantic — authoring
@@ -845,4 +855,8 @@ export interface RunResult {
    *  Live-only — MCP round-trips are harness-computed, not in the SDK stdout stream, so absent on
    *  replay (the assertion then fails evidence-unavailable, never vacuously passes). */
   mcpErrors?: Array<{ server: string; code?: number; message: string }>;
+  /** PreToolUse hook fire/block events. Reconstructed on replay only when the cassette carries
+   *  `controlOut` (a custom hook's decision lives there, not in the stream) — else the hook assertions
+   *  are excluded-loud, never vacuously passed. */
+  hookEvents?: Array<{ callbackId: string; decision: "block" | "allow"; reason?: string; tool?: string }>;
 }

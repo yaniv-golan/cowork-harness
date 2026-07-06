@@ -24,6 +24,7 @@ import {
   serializeDecision,
   deserializeDecision,
   canon,
+  hookEventFrom,
   type AgentSession,
   type AgentEvent,
   type DecisionRequest,
@@ -867,6 +868,7 @@ function minimalRec(): RunRecord {
     context: { tools: [], mcpServers: [] },
     contextEvents: [],
     mcpErrors: [],
+    hookEvents: [],
   };
 }
 
@@ -2192,6 +2194,7 @@ function replayErrorResult(file: string): RunResult {
     workspaceFiles: undefined, // no live filesystem to scan on replay (see the doc note in execute.ts)
     contextEvents: undefined, // no rec to read from on this early-bail lane
     mcpErrors: undefined, // live-only — this early-bail lane never drives a session
+    hookEvents: undefined, // no rec to read from on this early-bail lane
     preRunPaths: undefined,
     preRunHashes: undefined,
     partial: undefined,
@@ -2259,7 +2262,14 @@ function warnUncheckableOnDiskKeys(cassette: Cassette, frozen: Scenario, onDisk:
   // Reuse the exported classification constant — this local copy drifted once already (it was
   // missing computer_links_resolve), silently suppressing the on-disk warning for that key.
   const manifestKeys = new Set<keyof Assertion>(MANIFEST_KEYS);
-  const gateKeys = new Set<keyof Assertion>(["question_asked", "questions_count_max", "gate_answers_delivered", "gate_answer_count_min"]);
+  const gateKeys = new Set<keyof Assertion>([
+    "question_asked",
+    "questions_count_max",
+    "gate_answers_delivered",
+    "gate_answer_count_min",
+    "hook_blocked",
+    "no_hook_blocked",
+  ]);
   const liveOnlyKeys = new Set<keyof Assertion>([
     "egress_denied",
     "egress_allowed",
@@ -2889,6 +2899,8 @@ export const QUESTION_GATE_KEYS: (keyof Assertion)[] = [
   "questions_count_max",
   "gate_answers_delivered",
   "gate_answer_count_min",
+  "hook_blocked",
+  "no_hook_blocked",
 ];
 
 /** Assertion keys evaluated on replay only when the cassette carries an `artifacts` manifest.
@@ -2982,6 +2994,29 @@ export async function replayCassette(
     // a failing replay_protocol_fidelity assertion (exit 1, the same class as the permission-truncation path).
     truncatedMsg = `truncated cassette: ${e.message}`;
     rec = minimalRec();
+  }
+
+  // Reconstruct hook fire/block events from the recorded stream + control-out. A hook_callback is a
+  // control_request in the stream; the harness's reply (built-in or custom) is the matching
+  // control_response in controlOut. Both are already recorded — no cassette field needed. Only when
+  // controlOut is present: a custom hook's decision exists ONLY there, so without it we cannot know
+  // whether a custom hook blocked, and the hook keys must exclude-loud rather than reconstruct a
+  // partial (built-in-only) view that could false-green no_hook_blocked.
+  let replayHookEvents: RunResult["hookEvents"];
+  if (session.hasControlOut) {
+    replayHookEvents = [];
+    for (const line of cassette.events) {
+      let m: any;
+      try {
+        m = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (m?.type !== "control_request" || m?.request?.subtype !== "hook_callback") continue;
+      const reqId = typeof m.request_id === "string" ? m.request_id : undefined;
+      const reply = reqId ? session.controlOutIndex.get(reqId) : undefined;
+      replayHookEvents.push(hookEventFrom(m.request.callback_id, reply, m.request.input));
+    }
   }
 
   // build a conditional contentKeys — omit question/gate keys when controlOut is absent
@@ -3184,6 +3219,9 @@ export async function replayCassette(
       // live-only — MCP round-trips are harness-computed at drive time, not reproducible from the
       // cassette's frozen stdout stream (unlike contextEvents/toolErrors above).
       mcpErrors: undefined,
+      // reconstructed above from cassette.events + controlOut; undefined when controlOut is absent
+      // (excludes hook_blocked/no_hook_blocked loud, never a vacuous pass).
+      hookEvents: replayHookEvents,
       effectiveFidelity: cassette.effectiveFidelity,
       // Replay has no live filesystem — computer_links_resolve normalizes both link shapes against the
       // manifest instead (see the manifestKeys comment above + src/run/computer-links.ts).
@@ -3342,6 +3380,7 @@ export async function replayCassette(
       workspaceFiles: undefined, // no live filesystem to scan on replay (see the doc note in execute.ts)
       contextEvents: rec.contextEvents, // the re-drive reproduces system_event via parseMessage — powers compaction_occurred
       mcpErrors: undefined, // live-only — the re-drive never produces mcp_error
+      hookEvents: replayHookEvents, // reconstructed above from cassette.events + controlOut; undefined when controlOut is absent
       preRunPaths: undefined,
       preRunHashes: undefined,
       partial: undefined,
