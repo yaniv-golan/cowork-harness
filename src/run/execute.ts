@@ -53,7 +53,7 @@ import { runsWriteRoot } from "./trace-view.js";
 import { summarizeGateProvenance } from "./gate-provenance.js";
 import { collectSecrets, scrub } from "../secrets.js";
 import { indexRowFromResult, appendIndexRow } from "./run-index.js";
-import { collectArtifacts } from "./artifacts.js";
+import { collectArtifacts, classifyWorkspaceFiles } from "./artifacts.js";
 import { readPreRunManifest } from "./pre-run-manifest.js";
 import { readAvailableSkills } from "./skill-metadata.js";
 
@@ -892,6 +892,12 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // (DecisionRecord[], `by: string`) is assignable to the summarizer's `by?: string` param — no re-map.
   const gateProvenance = summarizeGateProvenance(record.decisions);
 
+  // Working folder panel's file model (§6.3, M6): classify+fingerprint every file under the
+  // user-visible roots (output/mount/input). Reuses the same walk `artifacts` uses below, over ALL
+  // userVisibleRoots (not captureRoots) — read-only inputs are still enumerated here, just tagged
+  // "input" instead of excluded outright.
+  const workspaceFiles = classifyWorkspaceFiles(workRoot, userVisibleRoots, readonlyFolderRoots);
+
   const result: RunResult = assembleRunResult({
     $schema: RUN_RESULT_SCHEMA_URL,
     generator: "cowork-harness",
@@ -941,6 +947,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     userVisibleRoots,
     readonlyFolderRoots,
     artifacts: collectArtifacts(workRoot, captureRoots), // ENV-MANIFEST: observed user-visible files (excl. read-only inputs)
+    workspaceFiles, // Working folder panel's canonical file model (output/mount/input, §6.3, M6) — see comment above
     // The pre-spawn baseline no_unexpected_files diffs against (same single read the evaluate ctx got).
     // undefined = the run didn't capture (key not asserted, microvm, pre-seam) — the assertion then
     // fails evidence-unavailable, loud.
@@ -1164,6 +1171,7 @@ export function buildPartialResult(args: {
       args.workRoot,
       args.userVisibleRoots.filter((r) => !args.readonlyFolderRoots.includes(r)),
     ),
+    workspaceFiles: classifyWorkspaceFiles(args.workRoot, args.userVisibleRoots, args.readonlyFolderRoots), // Working folder panel's canonical file model (§6.3, M6)
     preRunPaths: readPreRunManifest(args.outDir),
     effectiveFidelity: args.effectiveFidelity,
     gateProvenance: gp.total ? gp : undefined,

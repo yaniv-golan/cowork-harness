@@ -106,6 +106,11 @@ const full: RunResult = {
   userVisibleRoots: ["outputs", "project"],
   readonlyFolderRoots: ["project"],
   artifacts: [{ path: "outputs/report.pdf", bytes: 42 }],
+  workspaceFiles: [
+    { path: "outputs/report.pdf", bytes: 42, sha256: "e".repeat(64), class: "output" },
+    { path: "project/notes.md", bytes: 10, sha256: "f".repeat(64), class: "mount" },
+    { path: "reference/doc.md", bytes: 5, sha256: "0".repeat(64), class: "input" },
+  ],
   preRunPaths: ["project/existing.txt"],
   partial: false,
   unansweredGate: { message: "no rule matched", hint: "add a --answer rule" },

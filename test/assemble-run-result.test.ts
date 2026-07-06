@@ -45,6 +45,7 @@ function fullyExplicitFixture(): CompleteRunResult {
     userVisibleRoots: undefined,
     readonlyFolderRoots: undefined,
     artifacts: undefined,
+    workspaceFiles: undefined,
     preRunPaths: undefined,
     partial: undefined,
     unansweredGate: undefined,

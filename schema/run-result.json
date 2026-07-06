@@ -176,6 +176,10 @@
       "description": "Subset of userVisibleRoots that are read-only (mode:\"r\") connected-folder mounts — inputs, not deliverables. `artifacts` excludes them so `scaffold` doesn't emit file_exists for an input."
     },
     "artifacts": { "type": "array" },
+    "workspaceFiles": {
+      "type": "array",
+      "description": "Working folder panel's canonical file model (§6.3, M6) — every file under the user-visible roots, classified output|mount|input and sha256-fingerprinted. The Scratch pad's \"scratchpad\" class is deliberately not implemented (no host-materialization mechanism exists for it)."
+    },
     "preRunPaths": {
       "type": "array",
       "items": { "type": "string" },

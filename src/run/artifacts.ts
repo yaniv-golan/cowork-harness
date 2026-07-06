@@ -1,4 +1,5 @@
-import { lstatSync, readdirSync, realpathSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { join, sep } from "node:path";
 import { warn } from "../io.js";
 
@@ -22,6 +23,51 @@ export function collectArtifacts(workRoot: string, prefixes: string[], opts?: Wa
     return out; // workRoot itself absent/unreadable
   }
   for (const prefix of prefixes) walkInto(join(workRoot, prefix), prefix, workRootReal, visited, out, opts);
+  return out;
+}
+
+export type WorkspaceFileClass = "output" | "mount" | "input";
+
+export interface WorkspaceFile {
+  path: string;
+  bytes: number;
+  sha256: string;
+  class: WorkspaceFileClass;
+}
+
+/**
+ * The Working folder panel's canonical file model (§6.3, M6 — the Scratch pad's `"scratchpad"` class
+ * is deliberately NOT implemented here; see this task's scope-correction note in the plan for why).
+ * Classifies every file under the user-visible roots, reusing the SAME `collectArtifacts` walk
+ * `artifacts` already used pre-M6 — no second directory-walk implementation. Fingerprints mirror
+ * `cassette.ts`'s `buildManifest`'s sha256 approach; this file does its OWN read+hash rather than
+ * importing from `cassette.ts` (which already imports FROM `execute.ts`, and `execute.ts` imports
+ * this file's `collectArtifacts` — importing `cassette.ts` here would close a cycle; the hash itself
+ * is 2 lines of stdlib `crypto`, cheap enough to duplicate rather than restructure module boundaries).
+ *
+ * Classification matches each path against the FULL root string (not a first-path-segment split) —
+ * `userVisibleRoots`/`readonlyFolderRoots` entries can be multi-segment (e.g. `.projects/myfolder` on
+ * pre-1.14271.0 baselines), mirroring the exact full-string-equality convention the pre-existing
+ * `captureRoots` filter (`execute.ts:689`) already uses.
+ */
+export function classifyWorkspaceFiles(workRoot: string, userVisibleRoots: string[], readonlyFolderRoots: string[]): WorkspaceFile[] {
+  const hashFile = (relPath: string): string => {
+    try {
+      return createHash("sha256")
+        .update(readFileSync(join(workRoot, relPath)))
+        .digest("hex");
+    } catch {
+      return "";
+    }
+  };
+  const rootOf = (path: string): string | undefined => userVisibleRoots.find((r) => path === r || path.startsWith(r + "/"));
+  const out: WorkspaceFile[] = [];
+  for (const { path, bytes } of collectArtifacts(workRoot, userVisibleRoots)) {
+    const root = rootOf(path);
+    const cls: WorkspaceFileClass =
+      root !== undefined && readonlyFolderRoots.includes(root) ? "input" : root === "outputs" ? "output" : "mount";
+    out.push({ path, bytes, sha256: hashFile(path), class: cls });
+  }
   return out;
 }
 

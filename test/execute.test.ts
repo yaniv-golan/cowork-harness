@@ -1,4 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
+import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, linkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, isAbsolute } from "node:path";
@@ -13,6 +14,7 @@ import {
   readSessionManifest,
   parseEnvPort,
 } from "../src/run/execute.js";
+import { classifyWorkspaceFiles } from "../src/run/artifacts.js";
 import { loadSession, resolveSessionPaths } from "../src/session.js";
 import { spawnEnv, hostNativeSpawnEnv } from "../src/runtime/argv.js";
 import { loadBaseline } from "../src/baseline.js";
@@ -501,5 +503,69 @@ describe("collectArtifacts skips symlinks (lstat, no out-of-root follow, cycle-s
     const paths = got.map((g) => g.path);
     expect(paths).toContain("outputs/real.txt"); // the genuine single-link file is still recorded
     expect(paths).not.toContain("outputs/hard.txt"); // the hardlink (nlink=2) is rejected, not read
+  });
+});
+
+// Working folder panel's file model (§6.3, M6): classify + fingerprint every file under the
+// user-visible roots. Reuses collectArtifacts's walk (tested above); these tests cover only the
+// classification + hashing this function adds on top.
+describe("classifyWorkspaceFiles", () => {
+  it("classifies a file under outputs/ as class:output", () => {
+    const root = mkdtempSync(join(tmpdir(), "cwh-wf-output-"));
+    mkdirSync(join(root, "outputs"), { recursive: true });
+    writeFileSync(join(root, "outputs", "report.md"), "hello world");
+
+    const got = classifyWorkspaceFiles(root, ["outputs"], []);
+    expect(got).toHaveLength(1);
+    expect(got[0].path).toBe("outputs/report.md");
+    expect(got[0].class).toBe("output");
+    expect(got[0].bytes).toBe(Buffer.byteLength("hello world"));
+    expect(got[0].sha256).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("classifies a file under a writable connected-folder mount as class:mount", () => {
+    const root = mkdtempSync(join(tmpdir(), "cwh-wf-mount-"));
+    mkdirSync(join(root, "project"), { recursive: true });
+    writeFileSync(join(root, "project", "notes.md"), "notes");
+
+    const got = classifyWorkspaceFiles(root, ["outputs", "project"], []);
+    const entry = got.find((f) => f.path === "project/notes.md");
+    expect(entry?.class).toBe("mount");
+  });
+
+  it("classifies a file under a READ-ONLY connected-folder mount as class:input", () => {
+    const root = mkdtempSync(join(tmpdir(), "cwh-wf-input-"));
+    mkdirSync(join(root, "reference"), { recursive: true });
+    writeFileSync(join(root, "reference", "doc.md"), "reference doc");
+
+    const got = classifyWorkspaceFiles(root, ["outputs", "reference"], ["reference"]);
+    const entry = got.find((f) => f.path === "reference/doc.md");
+    expect(entry?.class).toBe("input");
+  });
+
+  // Regression guard for the exact bug an adversarial pre-implementation plan review caught: a
+  // naive `path.split("/")[0]` classifier would see rootPrefix===".projects", fail the
+  // `readonlyFolderRoots.includes()` check against the full ".projects/myfolder" string, and wrongly
+  // classify this as "mount" instead of "input".
+  it("correctly classifies a file under a MULTI-SEGMENT read-only root (e.g. '.projects/myfolder'), not misclassified as mount", () => {
+    const root = mkdtempSync(join(tmpdir(), "cwh-wf-multiseg-"));
+    mkdirSync(join(root, ".projects", "myfolder"), { recursive: true });
+    writeFileSync(join(root, ".projects", "myfolder", "doc.md"), "multi-segment root doc");
+
+    const got = classifyWorkspaceFiles(root, ["outputs", ".projects/myfolder"], [".projects/myfolder"]);
+    const entry = got.find((f) => f.path === ".projects/myfolder/doc.md");
+    expect(entry?.class).toBe("input");
+  });
+
+  it("computes a real sha256 matching the file's actual content", () => {
+    const root = mkdtempSync(join(tmpdir(), "cwh-wf-hash-"));
+    mkdirSync(join(root, "outputs"), { recursive: true });
+    const content = "known content for hashing";
+    writeFileSync(join(root, "outputs", "hashed.txt"), content);
+    const expected = createHash("sha256").update(Buffer.from(content)).digest("hex");
+
+    const got = classifyWorkspaceFiles(root, ["outputs"], []);
+    const entry = got.find((f) => f.path === "outputs/hashed.txt");
+    expect(entry?.sha256).toBe(expected);
   });
 });

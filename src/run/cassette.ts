@@ -2126,6 +2126,7 @@ function replayErrorResult(file: string): RunResult {
     userVisibleRoots: undefined,
     readonlyFolderRoots: undefined,
     artifacts: undefined,
+    workspaceFiles: undefined, // no live filesystem to scan on replay (see Task 6's doc note in execute.ts)
     preRunPaths: undefined,
     partial: undefined,
     unansweredGate: undefined,
@@ -3218,6 +3219,7 @@ export async function replayCassette(
       userVisibleRoots: undefined,
       readonlyFolderRoots: undefined,
       artifacts: undefined,
+      workspaceFiles: undefined, // no live filesystem to scan on replay (see Task 6's doc note in execute.ts)
       preRunPaths: undefined,
       partial: undefined,
       unansweredGate: undefined,

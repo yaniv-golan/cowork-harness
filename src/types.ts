@@ -795,4 +795,10 @@ export interface RunResult {
     mcpServers: Array<{ name: string; status?: string; [k: string]: unknown }>;
     availableSkills?: Array<{ id: string; whenToUse?: string }>;
   };
+  // Working folder panel's canonical file model (§6.3, M6 — Scratch pad's "scratchpad" class
+  // deliberately not implemented, see Task 6's scope note). `artifacts` (unchanged type, {path,bytes}[])
+  // becomes a DERIVED accessor of this in Task 7 — the class∈{output,mount} subset, computed in the
+  // assembler at read time (no drift risk: nothing stores `artifacts` independently anymore, on the
+  // live lane; replay is unaffected — see Task 7).
+  workspaceFiles?: Array<{ path: string; bytes: number; sha256: string; class: "output" | "mount" | "input" }>;
 }
