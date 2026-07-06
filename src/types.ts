@@ -702,9 +702,10 @@ export interface RunResult {
   /** Structured WebSearch calls — query + per-result {title,url}, parsed from the paired tool_result's
    *  "Web search results for query: ...\n\nLinks: [...]" convention (an AGENT-BINARY convention,
    *  verified against a real captured hostloop-fidelity cassette — re-verify the format on agent-version
-   *  bumps). Absent when no WebSearch call was made, or when every call's Links array failed to parse
-   *  (truncated past the assertText cap, or a future format change) — a parse failure drops that ONE
-   *  entry silently, it is never a partial/malformed entry in this array. */
+   *  bumps). `[]` (not absent) when the run made zero WebSearch calls, or when every call's Links array
+   *  failed to parse (truncated past the assertText cap, or a future format change) — a parse failure
+   *  drops that ONE entry silently, it is never a partial/malformed entry in this array. `undefined`
+   *  only on lanes where no run/record ever existed (e.g. an unreadable-cassette replay bail). */
   webSearches?: Array<{ toolUseId?: string; query: string; results: Array<{ title: string; url: string }> }>;
   // per-tool call-count/timing aggregate, folded from the timeline. Absent only when no
   // timeline data exists for this run (replayErrorResult — no run ever happened). Populated for
@@ -723,8 +724,9 @@ export interface RunResult {
   thinking?: Array<{ text: string }>;
   /** Count of reasoning blocks dropped past the 50-block cap on `thinking[]` (see `thinking`'s own doc
    *  comment) — lets a consumer tell "this is everything" from "this is the tail of a much longer chain
-   *  of reasoning." 0 (not absent) when thinking occurred but never hit the cap; absent only when no
-   *  thinking occurred at all or the run predates this field. */
+   *  of reasoning." 0 whenever the run produced a `thinking[]` array at all (capped or not) — a
+   *  meaningful "never hit the cap" signal, not an absence marker. `undefined` only on lanes where no
+   *  run/record ever existed (e.g. an unreadable-cassette replay bail). */
   thinkingElided?: number;
   // per-tool call/error rollup — same top-level-only scoping as toolCounts (sub-agent-internal
   // tool calls are tracked separately via subagents[].toolsUsed, not folded in here).
