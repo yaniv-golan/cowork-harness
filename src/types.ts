@@ -685,7 +685,19 @@ export interface RunResult {
   // (so verify-run/replay honor it without re-deriving). `omitted` = the image lacks them; `unverifiable` =
   // the tier couldn't probe (protocol/replay/skip). computeVerdict fails on this unless allow_missing_capability.
   requiresCapabilityUnmet?: { caps: string[]; reason: "omitted" | "unverifiable" };
-  decisions: Array<{ kind: string; name: string; decision: string; by?: string; model?: string; detail?: unknown; rationale?: string }>;
+  decisions: Array<{
+    kind: string;
+    name: string;
+    decision: string;
+    by?: string;
+    model?: string;
+    detail?: unknown;
+    rationale?: string;
+    // The full AskUserQuestion option set (label + description) as originally offered by the model —
+    // present only on kind:"question" decisions. Additive to `detail` (which already carries the flat
+    // {question: chosen-answer} map) so no existing detail-reading consumer needs to change.
+    questions?: Array<{ question: string; header?: string; options: { label: string; description?: string }[]; multiSelect?: boolean }>;
+  }>;
   toolCounts?: Record<string, number>; // truthful per-tool call count (use this, NOT usage.server_tool_use which is host-routed-blind in cowork)
   // per-tool call-count/timing aggregate, folded from the timeline. Absent only when no
   // timeline data exists for this run (replayErrorResult — no run ever happened). Populated for

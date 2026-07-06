@@ -43,3 +43,47 @@ describe("recordDecision — denied permission input", () => {
     expect(allowed!.detail).toBeUndefined();
   });
 });
+
+describe("recordDecision — AskUserQuestion full option set", () => {
+  it("records the full offered options (with descriptions) alongside the chosen answer", async () => {
+    const ev: AgentEvent[] = [
+      {
+        type: "decision",
+        request: {
+          id: "d1",
+          kind: "question",
+          toolUseId: "toolu_q1",
+          questions: [
+            {
+              question: "Which analyses should I run on this startup?",
+              options: [
+                { label: "Competitive positioning", description: "Map competitors and moat strength" },
+                { label: "Market sizing", description: "TAM/SAM/SOM estimate" },
+                { label: "IC simulation", description: "Simulate an investment committee debate" },
+              ],
+            },
+          ],
+        },
+      },
+      { type: "result", isError: false },
+    ];
+    const rec = await new Run(
+      new MockSession(ev),
+      new ScriptedDecider([{ when_question: "Which analyses", choose: "Market sizing" }]),
+    ).drive("go");
+
+    const answered = rec.decisions.find((d) => d.kind === "question");
+    expect(answered).toBeDefined();
+    expect(answered!.detail).toMatchObject({ "Which analyses should I run on this startup?": "Market sizing" });
+    expect(answered!.questions).toEqual([
+      {
+        question: "Which analyses should I run on this startup?",
+        options: [
+          { label: "Competitive positioning", description: "Map competitors and moat strength" },
+          { label: "Market sizing", description: "TAM/SAM/SOM estimate" },
+          { label: "IC simulation", description: "Simulate an investment committee debate" },
+        ],
+      },
+    ]);
+  });
+});

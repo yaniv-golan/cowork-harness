@@ -3420,7 +3420,7 @@ export async function replayCassette(
       resultSubtype: rec.resultSubtype, // re-derived from the frozen result event on the replay re-drive
       stderrLogPath: undefined, // live path only — no live process on replay
       stalledOnQuestion: rec.stalledOnQuestion, // re-derived by run.ts's detector during the replay re-drive — so a recorded stall fails replay too
-      decisions: rec.decisions.map((d) => ({ kind: d.kind, name: d.name, decision: d.decision, by: d.by })),
+      decisions: rec.decisions.map((d) => ({ kind: d.kind, name: d.name, decision: d.decision, by: d.by, model: d.model, detail: d.detail, rationale: d.rationale, questions: d.questions })),
       toolCounts: rec.toolCounts,
       toolDurations: cassette.timeline ? foldToolDurations(cassette.timeline) : undefined,
       skillActivity: cassette.timeline ? foldSkillActivity(cassette.timeline) : undefined,
