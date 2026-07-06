@@ -609,6 +609,19 @@ export interface RunResult {
   // truncated sha256 of the canonicalized {name,input} pair — no raw args in the rollup (they stay in
   // toolResults/events, which already carry them); this field is redaction-safe by construction.
   redundantToolCalls?: Array<{ name: string; argHash: string; count: number }>;
+  // per-skill-invocation window rollup (§5, M5) — a heuristic, sticky, ordinal window (see the field's
+  // full honesty caveat in docs/cassette.md / the master plan's §5.4): for INLINE skills, an unrelated
+  // top-level tool call after the skill's real work but before the next Skill invocation is still
+  // attributed to this window (faithfully reproducing the real agent's own activeSkill no-pop
+  // behavior, not a looser approximation of it). Absent only when no timeline data exists for this run.
+  skillActivity?: Array<{
+    skillId: string;
+    invocationSeq: number;
+    toolCounts: Record<string, number>;
+    toolCallCount: number;
+    dispatchCount: number;
+    durationMs?: number;
+  }>;
   // did each gate's answer reach the model? `reason` distinguishes a `delivered:null` that means
   // "no pairing metadata" (no toolUseId) from one that means "tool result not observed".
   gateDeliveries?: Array<{

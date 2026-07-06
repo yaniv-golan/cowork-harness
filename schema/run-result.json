@@ -94,6 +94,22 @@
         "additionalProperties": false
       }
     },
+    "skillActivity": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "skillId": { "type": "string" },
+          "invocationSeq": { "type": "number" },
+          "toolCounts": { "type": "object" },
+          "toolCallCount": { "type": "number" },
+          "dispatchCount": { "type": "number" },
+          "durationMs": { "type": "number" }
+        },
+        "required": ["skillId", "invocationSeq", "toolCounts", "toolCallCount", "dispatchCount"],
+        "additionalProperties": false
+      }
+    },
     "gateDeliveries": { "type": "array" },
     "egress": { "type": "array" },
     "assertions": { "type": "array" },

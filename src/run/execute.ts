@@ -44,7 +44,7 @@ import { makeDisplayTranslator, vmPathContextFromPlan } from "./display-translat
 import { writeVmPathContextFile } from "./vm-path-ctx-file.js";
 import { LiveAgentSession, type SdkMcp, type HookBundle } from "../agent/session.js";
 import { readTimeline } from "../agent/timeline.js";
-import { foldToolDurations } from "./timeline-fold.js";
+import { foldToolDurations, foldSkillActivity } from "./timeline-fold.js";
 import { buildDecider, ExternalDecider, LlmDecider, type Decider, type OnUnanswered, UnansweredError } from "../decide/decider.js";
 import { type DecisionChannel } from "../decide/external-channel.js";
 import { claudeCliComplete } from "../decide/llm-transport.js";
@@ -893,6 +893,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     })),
     toolCounts: record.toolCounts,
     toolDurations: timelineData ? foldToolDurations(timelineData.events) : undefined,
+    skillActivity: timelineData ? foldSkillActivity(timelineData.events) : undefined,
     models: record.models.length ? record.models : undefined,
     thinking: record.thinking.length ? record.thinking : undefined,
     toolErrors: record.toolErrors,
@@ -1102,6 +1103,7 @@ export function buildPartialResult(args: {
     })),
     toolCounts: record.toolCounts,
     toolDurations: timelineData ? foldToolDurations(timelineData.events) : undefined,
+    skillActivity: timelineData ? foldSkillActivity(timelineData.events) : undefined,
     models: record.models.length ? record.models : undefined,
     thinking: record.thinking.length ? record.thinking : undefined,
     toolErrors: record.toolErrors,

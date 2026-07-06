@@ -29,7 +29,7 @@ import {
   type DecisionRequest,
 } from "../agent/session.js";
 import { readTimeline, type TimelineHeader, type TimelineEvent } from "../agent/timeline.js";
-import { foldToolDurations } from "./timeline-fold.js";
+import { foldToolDurations, foldSkillActivity } from "./timeline-fold.js";
 import { ABSTAIN, UnansweredError, type Decider, type OnUnanswered } from "../decide/decider.js";
 import { fileChannel, type DecisionChannel } from "../decide/external-channel.js";
 import { pMapBounded } from "../async-pool.js";
@@ -2107,6 +2107,7 @@ function replayErrorResult(file: string): RunResult {
     requiresCapabilityUnmet: undefined,
     toolCounts: undefined,
     toolDurations: undefined,
+    skillActivity: undefined,
     models: undefined,
     thinking: undefined,
     toolErrors: undefined,
@@ -3153,6 +3154,7 @@ export async function replayCassette(
       decisions: rec.decisions.map((d) => ({ kind: d.kind, name: d.name, decision: d.decision, by: d.by })),
       toolCounts: rec.toolCounts,
       toolDurations: cassette.timeline ? foldToolDurations(cassette.timeline) : undefined,
+      skillActivity: cassette.timeline ? foldSkillActivity(cassette.timeline) : undefined,
       models: rec.models.length ? rec.models : undefined,
       thinking: rec.thinking.length ? rec.thinking : undefined,
       toolErrors: rec.toolErrors,

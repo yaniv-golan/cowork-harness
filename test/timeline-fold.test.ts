@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { foldToolDurations } from "../src/run/timeline-fold.js";
+import { foldToolDurations, foldSkillActivity } from "../src/run/timeline-fold.js";
 import type { TimelineEvent } from "../src/agent/timeline.js";
 
 function ev(partial: Partial<TimelineEvent> & Pick<TimelineEvent, "type">): TimelineEvent {
@@ -63,5 +63,42 @@ describe("foldToolDurations", () => {
       ev({ type: "tool_result", ts: 5, toolUseId: "t1", isError: false }),
     ];
     expect(foldToolDurations(timeline)).toEqual({ Bash: { calls: 1, totalMs: 5, maxMs: 5 } });
+  });
+});
+
+describe("foldSkillActivity", () => {
+  it("groups consecutive same-skillScope entries into one window, tallying toolCounts/toolCallCount/dispatchCount", () => {
+    const timeline: TimelineEvent[] = [
+      ev({ type: "tool_use", seq: 0, ts: 0, skillScope: "(root)", name: "Read" }),
+      ev({ type: "tool_use", seq: 1, ts: 10, skillScope: "my-skill", name: "Skill" }),
+      ev({ type: "tool_use", seq: 2, ts: 20, skillScope: "my-skill", name: "Bash" }),
+      ev({ type: "subagent_dispatch", seq: 3, ts: 30, skillScope: "my-skill", toolUseId: "d1", agentType: "x" }),
+    ];
+    const activity = foldSkillActivity(timeline);
+    expect(activity).toEqual([
+      { skillId: "(root)", invocationSeq: 0, toolCounts: { Read: 1 }, toolCallCount: 1, dispatchCount: 0, durationMs: 0 },
+      { skillId: "my-skill", invocationSeq: 1, toolCounts: { Skill: 1, Bash: 1 }, toolCallCount: 2, dispatchCount: 1, durationMs: 20 },
+    ]);
+  });
+
+  it("starts a new window when skillScope changes back to a PREVIOUSLY-seen value (sequential, not merged)", () => {
+    const timeline: TimelineEvent[] = [
+      ev({ type: "tool_use", seq: 0, ts: 0, skillScope: "a", name: "Read" }),
+      ev({ type: "tool_use", seq: 1, ts: 10, skillScope: "b", name: "Bash" }),
+      ev({ type: "tool_use", seq: 2, ts: 20, skillScope: "a", name: "Write" }),
+    ];
+    const activity = foldSkillActivity(timeline);
+    expect(activity).toHaveLength(3); // NOT merged into one "a" window — two separate "a" invocations
+    expect(activity.map((a) => a.skillId)).toEqual(["a", "b", "a"]);
+  });
+
+  it("treats entries with no skillScope (e.g. an older pre-M5 timeline) as belonging to '(root)'", () => {
+    const timeline: TimelineEvent[] = [ev({ type: "tool_use", seq: 0, ts: 0, name: "Read" })]; // no skillScope field
+    const activity = foldSkillActivity(timeline);
+    expect(activity[0].skillId).toBe("(root)");
+  });
+
+  it("returns [] for an empty timeline", () => {
+    expect(foldSkillActivity([])).toEqual([]);
   });
 });
