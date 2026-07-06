@@ -431,6 +431,19 @@ possible.
 - **`recorded in '<mode>' file-set mode, verifying in '<mode>'`** — the staleness boundary differs between
   record and verify (e.g. recorded in a git work tree but verified from a non-repo copy); the hashes are not
   comparable, so re-record under the same mode.
+- **`fidelity: cowork now resolves to '<tier>' … but the cassette was recorded at '<tier>'`** (class
+  `resolved-tier`) — a `fidelity: cowork` cassette's recorded `effectiveFidelity` (the concrete tier —
+  `hostloop` or `container` — the baseline's host-loop gate resolved to at record time) no longer matches
+  what the scenario's baseline resolves to today; the recording exercises the wrong tier. Re-record.
+- **`fidelity: cowork cassette predates effectiveFidelity — cannot verify tier stability`** (class
+  `unverifiable-tier`) — either the cassette has no recorded `effectiveFidelity` field, or the scenario's
+  pinned `baseline:` failed to load; the tier check couldn't run at all. Re-record to add the field (or
+  fix the baseline pin). An **explicit**-tier scenario (not `fidelity: cowork`) is statically knowable and
+  never produces this finding — at most a non-failing informational note.
+
+Both classes exist only for `fidelity: cowork` scenarios, whose tier is baseline-resolved rather than
+authored — see [fidelity-and-answers.md](../.claude/skills/cowork-harness/references/fidelity-and-answers.md)
+for the `cowork` → `hostloop`/`container` resolution.
 
 **The skill-hash boundary (v6+):** by default the hash covers the **git-tracked** files of each skill/plugin
 source dir (a dir not in a git repo falls back to a raw filesystem walk). **OS-junk** (`.DS_Store` /

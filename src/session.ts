@@ -82,7 +82,7 @@ export const SessionConfig = z.strictObject({
       marketplaces: z.array(z.string()).default([]), // plugin_marketplaces (git URLs / paths)
       local_marketplaces: z.array(z.string()).default([]), // LOCAL marketplace dirs -> registered via `claude plugin marketplace add`
       enabled: z.array(z.string()).default([]), // enabledPlugins (name@marketplace)
-      local_plugins: z.array(z.string()).default([]), // host plugin dirs -> mnt/.local-plugins/cache (--plugin-dir)
+      local_plugins: z.array(z.string()).default([]), // host plugin dirs -> mnt/.local-plugins/marketplaces/<marketplace>/<plugin> (>=1.14271.0; older baselines: mnt/.local-plugins/cache) (--plugin-dir)
       remote_plugins: z.array(z.string()).default([]), // host plugin dirs -> mnt/.remote-plugins
     })
     .default({ config_dir: null, marketplaces: [], local_marketplaces: [], enabled: [], local_plugins: [], remote_plugins: [] }),

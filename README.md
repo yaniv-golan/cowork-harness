@@ -88,6 +88,12 @@ npm ci && npm run build && npm link    # puts the `cowork-harness` command on yo
 cowork-harness replay examples/replays/example-pdf-skill.cassette.json
 ```
 
+> **Global install?** The path above is relative to a source checkout's `examples/replays/`. After
+> `npm i -g "cowork-harness@>=0.26.0"`, that relative path won't resolve from an arbitrary working
+> directory — use the package root instead:
+> `cowork-harness replay "$(npm root -g)/cowork-harness/examples/replays/example-pdf-skill.cassette.json"`
+> (or copy the cassette into your own project and pass that path).
+
 Live `run`/`skill` need the prerequisites in the next section — note the `protocol` tier skips Docker and the staged agent but **still calls a real model** (via the host `claude`), so it needs the auth token.
 
 > **Which path am I on?**
@@ -156,7 +162,10 @@ above becomes available once the skill's first command self-bootstraps `npx "cow
      ```bash
      docker build --platform linux/arm64 --build-arg COWORK_FULL_PARITY=1 -t cowork-agent-full:2 -f docker/Dockerfile.agent .
      ```
-     (A run on the core image that uses an omitted capability is flagged — see capability detection.) Both `-f docker/Dockerfile.agent .` paths are **repo-relative** — run from a source checkout, not a global `npm install -g`. On a global install, run `cowork-harness doctor --tier container` instead — it prints the exact `docker build` command with the correct package-local Dockerfile path.
+     (A run on the core image that uses an omitted capability is flagged with a `missing_capability`
+     verdict signal — see [`requires_capabilities`](./docs/scenario.md#declaring-required-capabilities-requires_capabilities)
+     in docs/scenario.md, or the `COWORK_SKIP_CAPABILITY_PROBE` var under
+     [Reproducibility knobs](#reproducibility-knobs) below.) Both `-f docker/Dockerfile.agent .` paths are **repo-relative** — run from a source checkout, not a global `npm install -g`. On a global install, run `cowork-harness doctor --tier container` instead — it prints the exact `docker build` command with the correct package-local Dockerfile path.
    - **`microvm` (Lima / Apple-VZ, no Docker):**
      ```bash
      brew install lima
@@ -166,7 +175,7 @@ above becomes available once the skill's first command self-bootstraps `npx "cow
 
 > The `pytest` lane (`python/README.md`) has its own, slightly different prerequisite list (adds `pytest`
 > + package importability) — see there if you're driving tests via `pytest` instead of the CLI directly.
-3. **An auth token** — either `export CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token)` (the `claude setup-token` step needs the **`claude` CLI**: `npm i -g @anthropic-ai/claude-code`) or a **`.env`** file (copy `.env.example` → `.env`; gitignored). The token resolves in priority order: exported env > `--dotenv <path>` > `./.env` (cwd) > `<install>/.env` (the package root), so a `npm link`ed install works from any directory. Keep `.env` at a working-dir or install root, never inside a mounted skill/project folder. (Use `--dotenv`, not `--env-file` — Node reserves the latter.) For a global `npm install -g` install, find the package root with `npm root -g`/`cowork-harness` (e.g. `$(npm root -g)/cowork-harness/.env`) — or simpler, just use `--dotenv <path>` / `./.env` in your working directory, which take priority over the package root anyway.
+3. **An auth token** — either `export CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token)` (the `claude setup-token` step needs the **`claude` CLI**: `npm i -g @anthropic-ai/claude-code`) or a **`.env`** file (copy `.env.example` → `.env`; gitignored). The token resolves in priority order: exported env > `--dotenv <path>` > `./.env` (cwd) > `<install>/.env` (the package root), so a `npm link`ed install works from any directory. Keep `.env` at a working-dir or install root, never inside a mounted skill/project folder. (Use `--dotenv`, not `--env-file` — Node reserves the latter.) For a global `npm install -g` install, find the package root with `` `$(npm root -g)/cowork-harness` `` (e.g. `$(npm root -g)/cowork-harness/.env`) — or simpler, just use `--dotenv <path>` / `./.env` in your working directory, which take priority over the package root anyway.
 
 > `sync` (below) is **optional for a first run** — the repo ships `baselines/desktop-*.json`, so `baseline: latest` already resolves. Run `sync` only to refresh the platform baseline after Claude Desktop updates. (`sync` is **macOS-only** today; on Linux/Windows use the committed baselines — they work cross-platform.)
 
@@ -360,11 +369,11 @@ Skill testing is the headline use, but the tool is a general harness over the Co
 |---|---|---|
 | `skill <folder> "<prompt>"` | Run a local skill/plugin folder once against the staged agent; `--compact`/`--demo` trim output for shareable screenshots/GIFs | ad-hoc "is the skill alive / does it do X?" — the fast inner loop |
 | `run <scenario.yaml \| dir/>` | Run authored scenarios with `assert:` + a CI-ready exit code; a decider can answer unscripted gates; `--repeat`/`--matrix` add variance runs / a compatibility matrix (detail below) | you want a repeatable, **asserted regression test** — to **measure flakiness** instead of trusting one green — or to **test a compatibility matrix** (multiple baselines/models/skill variants) in one run |
-| `chat <folder> [prompt]` | Interactive multi-turn REPL against a skill (TTY); optional seed prompt is sent as the first turn. `--upload <file>` / `--folder <dir>` (repeatable) attach files/project folders; `--verbose` shows thinking blocks + tool inputs; `--fidelity protocol\|container\|hostloop` (no `microvm`/`cowork` in the REPL) | debugging a multi-turn flow by hand |
+| `chat <folder> [prompt]` | Interactive multi-turn REPL against a skill (TTY); optional seed prompt is sent as the first turn. `--upload <file>` / `--folder <dir>` (repeatable) attach files/project folders; `--verbose` shows thinking blocks + tool inputs; `--fidelity protocol\|container\|hostloop` (no `microvm`/`cowork` in the REPL); `--raw` skips the control protocol for native `docker run -it` (rejects `--upload`/`--folder`/`--plugin`/`--fidelity`) | debugging a multi-turn flow by hand |
 | `record` / `replay` | **Record a live run once → replay it token-free, Docker-free thereafter** (key flags below) | **token-free, Docker-free CI** from a once-recorded run |
 | `verify-cassettes <file\|dir>` | Token-free CI gate over committed cassettes: a privacy scan (email/currency/domain/path/machine-inventory) + a staleness check (allowlist and skip flags below); a dir argument scans `*.cassette.json` non-recursively | gating **committed cassettes** against PII leaks + "edited the skill, forgot to re-record" |
 | `verify-run <run-dir> <scenario.yaml>` | Re-evaluate a scenario's `assert:` (and, when the scenario declares `answers:`, whether they still match the run's actual gates) against an already-kept run dir — **no live agent, no tokens, no Docker** (~1s) | iterating on a wrong assertion or a drifted `answer` without a full live re-record |
-| `trace <run-id>` | Digest a run's `events.jsonl` (`--view tools\|questions\|dispatches`; legacy `--tools` / `--gates` / `--dispatches` aliases still accepted) | "how many sub-agents *actually* dispatched, and which?" |
+| `trace <run-id>` | Digest a run's `events.jsonl` (`--view tools\|questions\|dispatches\|tool-durations`; `--translate-paths` rewrites VM paths to host paths in the text `tools`/default views; legacy `--tools` / `--gates` / `--dispatches` aliases still accepted) | "how many sub-agents *actually* dispatched, and which?" — or per-tool call/timing stats with `--view tool-durations` |
 | `inspect <run-id>` | Show what a run **produced**: the artifacts + a shallow field preview of each JSON artifact (`--output-format json` for a digest). Works on a salvaged partial run too | "did it do the job?" — without hand-parsing `…/mnt/outputs/…` |
 | `scaffold <run-id>` | Turn a kept run into a starter scenario YAML (gates→answers, artifacts→`file_exists`) | authoring a scenario from a real run instead of guessing |
 | `python3 …/scenario.py scaffold --name <name> --skill <dir>` | Generate a starter scenario skeleton from scratch (the `…` is `.claude/skills/cowork-harness/scripts/`) | starting a new scenario when you have no prior run |

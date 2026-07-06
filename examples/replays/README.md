@@ -19,6 +19,11 @@ Run it with:
 cowork-harness replay examples/replays/example-pdf-skill.cassette.json
 ```
 
+> **Installed globally instead of from a checkout?** The `examples/replays/...` path above is
+> relative to a source checkout and won't resolve from an arbitrary cwd. Resolve it against the
+> package root instead: `cowork-harness replay "$(npm root -g)/cowork-harness/examples/replays/example-pdf-skill.cassette.json"`
+> — or copy the cassette into your own project and pass that path.
+
 Or with JSON output (for CI):
 
 ```sh

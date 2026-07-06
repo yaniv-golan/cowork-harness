@@ -56,7 +56,7 @@ Before the first command, confirm the CLI is reachable and **fail loud** (never 
 
 Full command set: `skill · run · chat · record · replay · verify-cassettes · rehash · prune · lint ·
 verify-run · trace · inspect · diff · stats · decide · gates · answer · scaffold · assertions --list · sync ·
-list · boundary-check · status · vm <init|status|delete|prune> · doctor`. Always check `cowork-harness <cmd> --help`.
+list · boundary-check · status · vm <init|status|delete|prune> · doctor · init-redact`. Always check `cowork-harness <cmd> --help`.
 
 **Two different `scaffold` tools — don't confuse them.** The native `cowork-harness scaffold <run-id>`
 above turns an already-*recorded* run into a scenario (needs a run to exist first). The bundled
@@ -539,6 +539,14 @@ are the ones that bite hardest.
     *committed* body is scanned. `scaffold` won't emit `file_exists` for one either (it's not in
     `RunResult.artifacts`). A `mode: rw`/`rwd` folder's contents are captured with a full body, same as
     `outputs/`.
+
+21. **A `fidelity: cowork` cassette can go stale in a way `skill`/`format` drift won't catch.** Its recorded
+    `effectiveFidelity` field pins which concrete tier (`hostloop` or `container`) the baseline resolved to
+    AT RECORD TIME. If a later Desktop baseline flips that resolution, `verify-cassettes` reports it as a
+    `resolved-tier` finding (re-record — the recording now exercises the wrong tier); a cassette with no
+    `effectiveFidelity` at all, or an unloadable pinned `baseline:`, reports `unverifiable-tier` instead
+    (couldn't check — also re-record). Both are `fidelity: cowork`-only; an explicit-tier scenario never
+    produces them. See `docs/cassette.md` § tier staleness.
 
 For the complete gotcha list, the assertion catalog, the YAML schema, the fidelity/answer tables,
 and the CI recipe, read the files in `references/`.
