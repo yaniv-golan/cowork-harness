@@ -308,6 +308,11 @@ the four-stage pipeline.
 **not** an asserted test — no `assert:` block, no cassette. Use it to explore behavior, reproduce a
 bug interactively, or test a prompt before committing it to a scenario.
 
+Each session still writes an informational `result.json` (`mode: "chat"`, no `assertions`) plus a
+trace and index row under its run dir — the same telemetry (tool durations, model usage, resources,
+etc.) that `run`/`skill` produce — so `cowork-harness trace <chat-run-dir>` / `stats` work on a chat
+session too, even though it never yields a verdict.
+
 **`--plugin <dir>` flag (repeatable).** Load additional skill folders alongside the primary session
 plugin. Each `--plugin <dir>` appends the folder to `local_plugins`. Useful when the skill-under-test
 depends on a sibling plugin:
