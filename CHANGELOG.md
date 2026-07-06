@@ -78,6 +78,27 @@ additive: existing cassettes keep replaying with no cassette-version bump.
   from the cassette's frozen prompt (invisible to the skill/baseline fingerprint) is a hard fail, in its
   own `scenarioDrift` envelope bucket; an unresolvable/unparseable source degrades to a non-failing note.
   Opt out with `--skip-scenario-drift`. `replay` surfaces the same drift as a non-failing notice.
+- **`present_files` delivery is now served and observable on the container tier.** A new `cowork`
+  sdk-MCP server promotes a scratchpad file to `mnt/outputs` on `present_files` (with realpath/symlink
+  containment on the host-local copy), then injects a synthetic `notifySession` user turn so a
+  multi-turn skill learns the promoted path instead of continuing to write to the stale scratchpad one.
+  New `RunResult.presentedFiles` (one entry per presented file, classified `promoted` / `leaked` /
+  passthrough) and the `no_scratchpad_leak` assertion, both content-class (re-derived from the ordinary
+  `tool_use`/`tool_result` stream, so they replay identically). **Container tier only** — hostloop and
+  microvm don't serve `present_files`, so a scratchpad-delivered file on those tiers is neither promoted
+  nor detected; use `fidelity: container` for `present_files`-based delivery.
+- **`RunResult.decisions[].questions`** — the full `AskUserQuestion` option set (label + description per
+  offered option, plus `header`/`multiSelect`) as originally offered by the model, additive alongside
+  the existing `detail` (flat chosen-answer) field.
+- **Structured `WebSearch` capture.** `RunResult.webSearches` now carries the query and per-result
+  `{title, url}` pairs, parsed from the paired tool_result's link listing, instead of being dropped as
+  unrecoverable. Collapses to `undefined` (matching `models`/`thinking`/`tasks`) when the run made zero
+  `WebSearch` calls — cross-reference `toolCounts.WebSearch` if a zero-calls vs. all-parses-failed
+  distinction ever matters.
+- **`RunResult.thinkingElided`** — count of reasoning blocks dropped past the 50-block cap on
+  `thinking[]`, so a consumer can tell "this is everything" from "this is the tail of a much longer
+  chain." `0` whenever `thinking[]` exists at all (a meaningful "never hit the cap" signal); `undefined`
+  only on lanes where no run/record ever existed.
 
 ### Fixed
 
@@ -88,6 +109,12 @@ additive: existing cassettes keep replaying with no cassette-version bump.
   directory, so the relocatable (relative) session path couldn't resolve and the skill-staleness check
   always reported "can't verify". It now threads the cassette dir through, exactly as `verify-cassettes`
   does — the warning fires only on genuine drift.
+- **A `context:fork` skill's (or explicit `Agent(subagent_type:"fork")`) inner tool calls now count as
+  main-agent work.** They carry `parentToolUseId` = the `Skill` call's id, but the `Skill` call was never
+  a registered sub-agent dispatch, so they were silently dropped from `toolCounts`, `toolsCalled`,
+  `toolErrors`, and `redundantToolCalls`. A fork inherits the main agent's context, so its tools are the
+  run's own work; real (non-fork) sub-agent dispatches are unaffected — their inner tools stay isolated
+  in `subagents[].toolsUsed` exactly as before.
 
 ## [0.26.0] — 2026-07-05
 
