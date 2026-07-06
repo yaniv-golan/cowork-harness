@@ -6,6 +6,69 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+An observability pass: `RunResult` now surfaces per-tool timing, error/redundancy rollups, model
+attribution and spend, sub-agent and skill-level detail, context/progress/workspace panels,
+in-place mutation detection, hook/MCP/egress/crash diagnostics, and sandbox resource usage — plus a
+`chat` session now leaves the same trail (`result.json`, trace, run-index row) as a scripted run.
+
+> **Upgrade notes.**
+> - **`RunResult.subagents[].toolsUsed` changed from `string[]` to `Array<{ name, count }>`.** A
+>   consumer reading a sub-agent's tool usage directly off `result.json` must update — the field now
+>   carries per-tool call counts instead of a bare list of names.
+> - **`RunResult.artifacts` is now a derived view of `workspaceFiles`.** Same shape
+>   (`{ path, bytes }[]`), so no consumer action is needed unless you were relying on it being stored
+>   independently.
+
+### Added
+
+- **Per-tool durations and per-message model attribution.** `RunResult.toolDurations` (per-tool call
+  count / total ms / max ms) and `RunResult.models` (distinct model ids seen, first-seen order). New
+  `trace --view tool-durations`.
+- **Tool-error rollup, redundant-call detection, reasoning capture, and per-model usage.**
+  `RunResult.toolErrors` (per-tool call/error counts), `RunResult.redundantToolCalls` (repeated
+  identical `{name, args}` calls), `RunResult.thinking` (capped reasoning blocks), and
+  `RunResult.modelUsage` (per-model tokens/cost/cache, denormalized from the SDK result). New
+  assertions `tool_no_error`, `max_tool_errors`, `max_redundant_tool_calls`. New
+  `stats --metric cache-tokens|model-cost` and a cache-ratio footer on `trace`.
+- **Sub-agent enrichment.** `RunResult.subagents[]` entries gain `prompt`, `model`, `output`, and
+  `attributedSkillId`. `trace --view dispatches` now prints each node's prompt/output/model. New
+  assertion `subagent_output_contains`.
+- **Skill-to-tool-call attribution.** `RunResult.skillActivity[]` — per-skill-activation-window tool
+  tallies and durations. New assertion `skill_tool_used`.
+- **Context, progress, and working-folder panels.** `RunResult.context` (the init manifest's `tools`,
+  `mcpServers`, `availableSkills`), `RunResult.tasks[]` (from the agent's TaskCreate/TaskUpdate calls),
+  and `RunResult.workspaceFiles[]` (every user-visible file, classified `output` | `mount` | `input`,
+  with `bytes` and `sha256`). New assertions `all_tasks_completed`, `task_status`, `skill_available`,
+  `connector_available`, `tool_available`.
+- **`input_unmodified` assertion** — an in-place mutation detector backed by a new
+  `RunResult.preRunHashes` (per-path sha256 of the pre-run tree, size-capped): every pre-existing file
+  matching a glob must keep an unchanged content hash after the run. Complements
+  `no_unexpected_files`, which only sees newly created files.
+- **Hooks, MCP, egress, uncaught context events, and crash diagnostics.** `RunResult.hookEvents`
+  (PreToolUse fire/block), `RunResult.mcpErrors` (failed MCP round-trips), `RunResult.contextEvents`
+  (uncaught system events, including compaction boundaries); richer per-request egress detail
+  (method/path/port/bytes plus deny reason and timestamps); a finer-grained `RunResult.errorSource`
+  (spawn/protocol/exit/agent/result) and `RunResult.stderrLogPath`; the denied tool input is now
+  recorded in `decisions[].detail`. New assertions `hook_blocked`, `no_hook_blocked`,
+  `no_mcp_error`, `compaction_occurred`.
+- **Sandbox resource-usage telemetry.** `RunResult.resources` (peak RSS, avg/peak CPU%) sampled while
+  the run executes on every live tier (container/hostloop/microvm); sample interval tunable via
+  `COWORK_HARNESS_RESOURCE_INTERVAL_MS`. New live-only assertion `max_peak_rss_bytes`.
+- **`chat` sessions now write `result.json`, a trace, and a run-index row** (tagged `mode: "chat"`,
+  no verdict), so an interactive exploration is visible to `stats`, `trace`, and `scaffold` the same
+  way a scripted run is.
+
+The timing/resource/model fields above are informational — they never affect a scenario's pass/fail
+verdict on their own. `no_mcp_error` and `max_peak_rss_bytes` are live-only and excluded on replay;
+`hook_blocked`/`no_hook_blocked` need a `controlOut` cassette on replay; `input_unmodified` needs the
+pre-run hash manifest (container/hostloop — not captured on microvm). All new assertion keys are
+additive: existing cassettes keep replaying with no cassette-version bump.
+
+### Fixed
+
+- **A non-interactive `chat` session (piped/redirected stdin) no longer crashes with a readline error
+  before writing its result.** It now exits cleanly and still writes `result.json`.
+
 ## [0.26.0] — 2026-07-05
 
 Cassette/run-result **format-freeze** pass before 1.0 — fixes the parts of these schemas that become
