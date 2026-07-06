@@ -209,6 +209,11 @@ that accidentally returns `"first"` will fail the gate rather than silently gree
 Each list item under `assert:` is one assertion. **An item with multiple keys is an AND** — it
 passes only if every key passes. Keep one concern per item unless you mean conjunction.
 
+Looking for a key *by what you want to prove* (tool health, sub-agent work, panels, skill
+attribution, resources, diagnostics)? SKILL.md §6's "goal → key" map is the by-purpose index into this
+table; the table below is the full per-key reference, and `cowork-harness assertions --list` prints the
+same set live from the schema.
+
 | Assertion | Passes when |
 |---|---|
 | `result: success \| error` | the run ended with that status |

@@ -184,6 +184,35 @@ catches it before you push — run it (§9).
 
 See `references/scenario-schema.md` for the full assertion catalog with each key's replay class.
 
+### Which assertion for which question (goal → key)
+
+Beyond the outcome/content keys most scenarios reach for first (`result`, `transcript_*`,
+`file_exists`/`user_visible_artifact`, `artifact_json`), the harness surfaces the agent's *behavior*
+— tool health, sub-agent work, panels, skill attribution, resources — as assertable keys. Reach for
+them by what you're trying to prove:
+
+| You want to check that… | Reach for |
+|---|---|
+| the skill didn't error out of a tool | `tool_no_error: <regex>`, `max_tool_errors: <N>` |
+| it didn't waste repeated identical calls | `max_redundant_tool_calls: <N>` |
+| a deliverable reached the user | `user_visible_artifact: <path>` (+ `no_scratchpad_leak: true` if it delivers via `present_files` — **`container` only**) |
+| a to-do workflow finished | `all_tasks_completed: true`, `task_status: {match, status}` |
+| a skill / connector / tool was **offered** | `skill_available`, `connector_available`, `tool_available` (all `<regex>`) |
+| a skill actually **ran** (or must NOT) | `skill_triggered: <regex>`, `no_skill_triggered: <regex>` |
+| a tool ran **inside** a skill's scope | `skill_tool_used: {skill, tool}` |
+| a sub-agent did the work | `subagent_output_contains: {contains}`, `subagent_dispatched: <regex>`, `dispatch_count_max: <N>` |
+| a pre-existing input wasn't mutated | `input_unmodified: [<glob>]` (live/verify-run; not microvm) |
+| a resource ceiling held | `max_peak_rss_bytes: <N>` (**live-only**) |
+| a hook blocked / didn't block a tool | `hook_blocked: <regex>`, `no_hook_blocked: true` (replay needs a `controlOut` cassette) |
+| every MCP round-trip succeeded | `no_mcp_error: true` (**live-only**) |
+| a context compaction happened | `compaction_occurred: true` |
+
+Every one of these still obeys the two axes above — several are live-only or need a `controlOut`
+cassette on replay, so check the catalog's replay class before putting one on a PR gate.
+`cowork-harness assertions --list` prints the full, always-current key set with one-line semantics
+straight from the schema — treat it (and the catalog) as the source of truth; this map is a
+goal-oriented index into it, not a second catalog.
+
 ## 7. web_fetch (fail-closed, two-path)
 
 `web_fetch` behaves unlike `curl`. A URL is gated by **provenance**, not the egress allowlist:
@@ -269,6 +298,26 @@ The run verdict may include `WARN`-severity signals in addition to pass/fail. On
   not found. The model ran against an incomplete prompt. This is a `WARN`, not a hard failure, so
   the run can still green. If you see it, fix the asset path — a green with a missing asset is
   not a valid pass.
+
+### Inspecting a run's observability output
+
+A verdict is only the top of what a run records. Beyond pass/fail, every `run`/`skill`/`chat` writes a
+`result.json` and a trace you can read without a re-record — use these to *observe* behavior (and to decide
+which assertions from §6 are worth adding), and to diagnose a failure:
+
+- **`cowork-harness trace <run-dir> --view <view>`** — `tool-durations` (per-tool call count + timing),
+  `dispatches` (the sub-agent tree, each dispatch's prompt / model / output), `questions` (gates +
+  sub-question totals), `tools`. Default digests the run.
+- **`cowork-harness stats [--metric <m>]`** — aggregate across the run index: `cost`, `duration`,
+  `tokens`, `cache-tokens`, `model-cost`, `turns`, `pass-rate`.
+- **`result.json` carries the raw fields** the assertions read: `toolDurations`, `models`, `toolErrors`,
+  `redundantToolCalls`, `modelUsage`, `thinking`, `skillActivity`, `subagents[]` (prompt/model/output/
+  `attributedSkillId`), `context` (tools/mcpServers/availableSkills), `tasks`, `workspaceFiles`,
+  `presentedFiles`, `hookEvents`, `mcpErrors`, `contextEvents`, `resources` — see the README's
+  "Observability fields" for the full field semantics.
+- **Opaque failure?** A failed run also records **`errorSource`** (where the failure originated) and
+  **`stderrLogPath`** (the captured agent stderr) — read those and `trace <run-dir>` *before* re-running;
+  a re-record rarely tells you more than the captured stderr already does.
 
 ## 9. Scaffold a valid scenario, lint before you push, then place in CI
 
