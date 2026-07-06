@@ -1,4 +1,4 @@
-// E4 — queryable cross-run result store. index.jsonl (one JSON line per run) is the SOURCE OF TRUTH for
+// Queryable cross-run result store. index.jsonl (one JSON line per run) is the SOURCE OF TRUTH for
 // "what runs exist" — the run-dir-per-run physical layout (<runsRoot>/<slug>/<runId>/) still holds the
 // heavy artifacts (events.jsonl/trace.json/result.json); only the discovery/query layer moved here.
 import { existsSync, mkdirSync, appendFileSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
@@ -55,7 +55,7 @@ function slugAndRunIdFromOutDir(outDir: string): { slug: string; runId: string }
 
 /** Turns a real RunResult into an index row, reusing computeVerdict/budgetFields rather than re-deriving
  *  pass/fail or cost from scratch — same "don't re-implement verdict logic per writer" principle as
- *  E1/E3's rollups. NOT pure by default (`ts`/`git` default to "now"/the current checkout, both real I/O)
+ *  the repeat/matrix rollups. NOT pure by default (`ts`/`git` default to "now"/the current checkout, both real I/O)
  *  — correct for the LIVE-write call sites (execute.ts, right as a run completes: "now" and "this
  *  checkout" ARE the truth). `reindexFromRunsTree` overrides both explicitly, because for a HISTORICAL run
  *  being walked off disk, "now" and "the checkout doing the reindexing" are not the run's actual

@@ -195,7 +195,7 @@ export async function cmdChat(args: string[]) {
   const outDir = join(runsWriteRoot(), "chat", sessionId);
   mkdirSync(outDir, { recursive: true });
   const plan = buildLaunchPlan(session, baseline, outDir, fidelity, false); // chat has no resume concept
-  // Item 2 (mounts.json — see vm-path-ctx-file.ts's header): mirror execute.ts's unconditional write.
+  // mounts.json (see vm-path-ctx-file.ts's header): mirror execute.ts's unconditional write.
   // Chat's `fidelity` is fixed at CLI-parse time (no "cowork" gate resolution here, unlike execute.ts's
   // effectiveFidelity), so it IS the effective tier this session actually runs at. Best-effort; never
   // fails the chat session.

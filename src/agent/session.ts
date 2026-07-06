@@ -68,8 +68,8 @@ export type AgentEvent =
       usage?: Record<string, unknown>;
       resultText?: string;
       subtype?: string; // resultText/subtype carry the SDK result payload so a transport-error result can be classified
-      costUsd?: number; // SDK's total_cost_usd for this invocation (Wave 0 seam — was dropped on the floor before)
-      numTurns?: number; // SDK's num_turns for this invocation (Wave 0 seam — was dropped on the floor before)
+      costUsd?: number; // SDK's total_cost_usd for this invocation (was dropped on the floor before)
+      numTurns?: number; // SDK's num_turns for this invocation (was dropped on the floor before)
       // per-model cost/token breakdown, cumulative for the whole run — a TOP-LEVEL sibling of `usage` on
       // the raw result message, NOT nested inside it (empirically confirmed against a real captured
       // stream). Opaque per-entry shape (SDK-owned); RunResult types it more precisely.
@@ -146,7 +146,7 @@ const QuestionsSchema = z.array(QSpecSchema);
 // ---- Control-response envelopes (verified zod shape; the inner `response` nesting is load-bearing) ----
 /** The one success-envelope shape every control_response shares; the four builders below differ ONLY in
  *  the inner `body`. Keeping a single core stops the wrapper drifting between them.
- *  Exported (in addition to the four builders) so protocol-conformance tooling — e.g. the E9 golden
+ *  Exported (in addition to the four builders) so protocol-conformance tooling — e.g. the golden
  *  vector generator — can wrap `hookOutput()`'s bare body in the real envelope instead of hand-rolling
  *  a lookalike; it has no other external callers. */
 export function successEnvelope(requestId: string, body: Record<string, unknown>) {

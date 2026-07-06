@@ -72,7 +72,7 @@ export interface RunRecord {
   }[]; // did the answer reach the model? (null = unobserved or no-pairing-metadata)
   usage?: UsageInfo;
   cost?: CostInfo;
-  skillsInvoked: string[]; // top-level Skill tool_use ids, in call order, duplicates kept (Wave 1 / E8 seam)
+  skillsInvoked: string[]; // top-level Skill tool_use ids, in call order, duplicates kept
   models: string[]; // distinct model ids seen across assistant_text/tool_use/thinking events, first-seen order, deduped
   thinking: { text: string }[]; // reasoning blocks, capped: last 50 × 10KB each
   thinkingElided: number; // count of older thinking blocks dropped past the 50-block cap
@@ -286,7 +286,7 @@ export class Run {
               // block (live-verified), so counting the synthetic too would double-list it / add a bogus name.
               this.rec.toolsCalled.add(ev.name);
               this.rec.toolCounts[ev.name] = (this.rec.toolCounts[ev.name] ?? 0) + 1; // count top-level calls (subagent tools excluded, matching toolsCalled)
-              // Wave 1 / E8: a top-level Skill invocation — duplicates kept (re-triggering is signal).
+              // a top-level Skill invocation — duplicates kept (re-triggering is signal).
               if (ev.name === "Skill") this.rec.skillsInvoked.push(String((ev.input as Record<string, unknown> | undefined)?.skill ?? ""));
               if (ev.toolUseId) this.toolNameByUseId.set(ev.toolUseId, ev.name);
               // Progress panel: TaskCreate's input has no id — stash it, resolved by the
@@ -358,7 +358,7 @@ export class Run {
             });
             break;
           case "metrics":
-            // merge, don't overwrite — a "result" event may have already set/will later set `usd` (Wave 0 seam)
+            // merge, don't overwrite — a "result" event may have already set/will later set `usd`
             this.rec.cost = { ...this.rec.cost, raw: ev.data };
             break;
           case "decision":
@@ -375,7 +375,7 @@ export class Run {
               this.rec.result = "success";
               sawSuccessResult = true;
             }
-            // Wave 0 seam: fold the SDK's num_turns into usage as `turns` (there is no dedicated turns
+            // fold the SDK's num_turns into usage as `turns` (there is no dedicated turns
             // field) — only when there's something to report, so a bare `{isError:false}` result event
             // (still common in synthetic/older cassette events) leaves usage undefined, not a spurious {}.
             this.rec.usage =

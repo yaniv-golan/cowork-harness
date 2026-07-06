@@ -1,4 +1,4 @@
-// E1 — `run --repeat N` variance rollup. Pure functions over RunResult[] — no I/O, no execution; the
+// `run --repeat N` variance rollup. Pure functions over RunResult[] — no I/O, no execution; the
 // CLI loop in cli.ts drives N executeScenario calls and hands the results here.
 import type { RunResult, Assertion } from "../types.js";
 import { computeVerdict, type VerdictSignal } from "./verdict.js";
@@ -20,7 +20,7 @@ export interface RepeatRollup {
 
 /** The first DEFINED field name on an assertion object — the same "one behavior name" convention the
  *  CLI/docs already use to describe a multi-key assertion (e.g. `{result, tool_called}` displays as
- *  "result", its first key). Falls back to a positional label if somehow no key is set. Exported — E3's
+ *  "result", its first key). Falls back to a positional label if somehow no key is set. Exported — the
  *  matrix rollup reuses this exact convention for its `failedAssertions` labels, not a re-derivation. */
 export function firstAssertionKey(a: Assertion): string {
   for (const k of Object.keys(a)) if ((a as Record<string, unknown>)[k] !== undefined) return k;

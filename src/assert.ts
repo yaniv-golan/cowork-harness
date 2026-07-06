@@ -9,11 +9,11 @@ import { collectArtifacts } from "./run/artifacts.js";
 import { anyGlobMatches } from "./glob.js";
 
 /** Derives the four AssertContext budget fields (costUsd/tokensTotal/toolCallsTotal/turns) uniformly from
- *  any RunResult/RunRecord-shaped source — live, replay, and verify-run all read the same shapes (Wave 0's
+ *  any RunResult/RunRecord-shaped source — live, replay, and verify-run all read the same shapes (the
  *  shared UsageInfo/CostInfo types), so this is one function, not four copies. Each field's own
  *  undefined-ness IS the evidence-unavailable signal (see AssertContext's doc comments); no separate
- *  `*Missing` booleans needed for scalars. `turns` (Wave 2 / E6b) is a pure passthrough of
- *  `usage.turns` — Wave 0 already did the real extraction/fallback-counting work at the source, so there
+ *  `*Missing` booleans needed for scalars. `turns` is a pure passthrough of
+ *  `usage.turns` — that extraction/fallback-counting work already happened at the source, so there
  *  is no re-derivation here, unlike the other three fields which are actually computed from raw parts. */
 export function budgetFields(src: {
   usage?: UsageInfo;
@@ -244,24 +244,26 @@ export interface AssertContext {
    *  skill_triggered/no_skill_triggered cannot be evaluated (agent-version tool-name drift) and must fail
    *  as evidence-unavailable rather than risk a false negative. */
   skillToolAvailable: boolean;
-  /** Set by verify-run only when `result.skillsInvoked` is undefined in result.json (a run predating E8).
-   *  Prevents no_skill_triggered from passing vacuously (absent ≠ no skills invoked). Undefined/false on
-   *  live/replay. */
+  /** Set by verify-run only when `result.skillsInvoked` is undefined in result.json (an older result.json
+   *  that never captured this). Prevents no_skill_triggered from passing vacuously (absent ≠ no skills
+   *  invoked). Undefined/false on live/replay. */
   skillsInvokedMissing?: boolean;
-  /** RunResult.cost.usd — undefined when cost telemetry wasn't recorded for this run (a run predating
-   *  Wave 0, or the SDK didn't report total_cost_usd for this invocation). Its own undefined-ness IS the
-   *  evidence-unavailable signal for max_cost_usd — a real cost is always a defined number, including 0. */
+  /** RunResult.cost.usd — undefined when cost telemetry wasn't recorded for this run (an older run that
+   *  never captured cost telemetry, or the SDK didn't report total_cost_usd for this invocation). Its own
+   *  undefined-ness IS the evidence-unavailable signal for max_cost_usd — a real cost is always a defined
+   *  number, including 0. */
   costUsd?: number;
-  /** usage.input_tokens + usage.output_tokens — undefined when either isn't a number (a run predating
-   *  Wave 0, or a partial/old result.json). Own undefined-ness is the evidence-unavailable signal. */
+  /** usage.input_tokens + usage.output_tokens — undefined when either isn't a number (an older run that
+   *  never captured token usage, or a partial/old result.json). Own undefined-ness is the
+   *  evidence-unavailable signal. */
   tokensTotal?: number;
   /** Sum of toolCounts values (top-level calls only) — undefined when result.toolCounts itself is
    *  undefined (partial/old result.json), never 0 in that case (0 = genuinely zero tool calls, a real
    *  value). Own undefined-ness is the evidence-unavailable signal. */
   toolCallsTotal?: number;
-  /** usage.turns (Wave 0's extraction/fallback-count) — undefined when a run predates that seam or the
-   *  SDK reported neither num_turns nor a countable fallback. Own undefined-ness is the
-   *  evidence-unavailable signal for max_turns (Wave 2 / E6b) — 0 turns is a real, satisfying value. */
+  /** usage.turns (the extraction/fallback-count) — undefined when an older run predates that mechanism or
+   *  the SDK reported neither num_turns nor a countable fallback. Own undefined-ness is the
+   *  evidence-unavailable signal for max_turns — 0 turns is a real, satisfying value. */
   turns?: number;
   /** Per-tool call/error rollup — undefined means no data was captured (old/partial run), the
    *  evidence-unavailable signal for tool_no_error/max_tool_errors (an empty `{}` is a valid "ran clean"
@@ -271,8 +273,8 @@ export interface AssertContext {
    *  result.json), never 0 in that case (0 = genuinely zero errors, a real value). Own undefined-ness is
    *  the evidence-unavailable signal for max_tool_errors. */
   toolErrorsTotal?: number;
-  /** RunResult.skillActivity — skill-activation windows folded from the timeline (Task 2's
-   *  foldSkillActivity), NOT a RunRecord field (unlike toolErrors/redundantToolCalls above, which are read
+  /** RunResult.skillActivity — skill-activation windows folded from the timeline (via foldSkillActivity),
+   *  NOT a RunRecord field (unlike toolErrors/redundantToolCalls above, which are read
    *  straight off the record). Undefined means no timeline was available (old/partial run, or a lane that
    *  never wired the timeline read) — the evidence-unavailable signal for skill_tool_used; an empty `[]`
    *  is a valid "no skill windows" state and is NOT the same as undefined. */
@@ -298,7 +300,7 @@ export interface AssertContext {
    *  `check()` reads this directly (the mode split lives in `linkResolution.mode`). Undefined on an
    *  old result/cassette that predates the field; the message just omits the tier then. */
   effectiveFidelity?: string;
-  /** `computer_links_resolve` (P3) resolution context — see `src/run/computer-links.ts`. Undefined
+  /** `computer_links_resolve` resolution context — see `src/run/computer-links.ts`. Undefined
    *  means the calling lane hasn't wired this: any `computer://` link found then fails as
    *  evidence-unavailable rather than silently passing (the evidence-missing convention this file
    *  follows everywhere else — e.g. `transcriptMissing`, `scanMissing`). */
@@ -890,7 +892,7 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
       // where the real file is still on disk. (Existence keys stay green — existence is provable from
       // the recorded hash — but content is genuinely absent, so this fails loud, never vacuous.)
       const rel = relative(resolve(ctx.workRoot), file);
-      // Reason sources by lane: LIVE/verify-run derive read-only from the plan's `readonlyFolderRoots`
+      // Reason sources by lane: LIVE/verify-run derive read-only from `readonlyFolderRoots`
       // (no manifest exists at eval time); REPLAY reads the per-entry `truncationReason` off the
       // materialized manifest (`truncated.get(rel)`). Keeping both is complementary, not redundant.
       const liveReadonly = (ctx.readonlyFolderRoots ?? []).some((pre) => rel === pre || rel.startsWith(pre + "/"));

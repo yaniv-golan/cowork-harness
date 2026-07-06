@@ -157,7 +157,7 @@ export function makeRenderer(plan: RenderPlan, write: Sink = stderr): Renderer {
             if (plan.live) write(`\n${bold(plan, "claude›")} ${plan.linkify ? plan.linkify(text) : text}\n`);
           } else if (plan.verbose && e.text.trim()) {
             // sub-agent/dispatch-child text gets the SAME transform — production translates the whole
-            // message tree, not just the top-level agent's text (plan §P2 "Scope note").
+            // message tree, not just the top-level agent's text.
             const text = plan.translate ? plan.translate(e.text) : e.text;
             write(`  ${dim(plan, "↳ " + (plan.linkify ? plan.linkify(text) : text))}\n`);
           }

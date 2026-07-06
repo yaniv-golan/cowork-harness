@@ -41,10 +41,10 @@ export function parseOutputFormat(args: string[]): "text" | "json" {
 }
 
 export interface JsonEnvelopeOpts {
-  /** E1's `--repeat` additions. */
+  /** `--repeat` additions. */
   rollups?: RepeatRollup[];
   minPassRate?: number;
-  /** E3's `--matrix` addition. */
+  /** `--matrix` addition. */
   matrix?: MatrixRollup;
   /** `--matrix` + `--repeat` composed: each cell is its own repeat batch. */
   matrixRepeat?: MatrixRepeatRollup;
@@ -63,7 +63,7 @@ export interface JsonEnvelopeOpts {
  *  `ok` — for a NON-repeat, NON-matrix call, `ok` is derived from the SAME per-result verdicts as
  *  always (`results.every(pass)`) — unchanged, so it cannot diverge from them or from the exit code/footer.
  *  For a `--repeat` batch, `ok` is redefined DIRECTLY for that mode — computed from `rollups`/
- *  `rollupPasses`. For a `--matrix` run (E3), `ok` is `!matrix.anyFail` — a matrix is a compatibility gate,
+ *  `rollupPasses`. For a `--matrix` run, `ok` is `!matrix.anyFail` — a matrix is a compatibility gate,
  *  not a survey (any cell failing, an assertion OR an infra error, fails the whole batch). For `--matrix`
  *  + `--repeat` composed, `ok` is `!matrixRepeat.anyFail` — each cell's own repeat batch judged by
  *  `rollupPasses`. Checked in this order (matrixRepeat, then matrix, then rollups, then the default) — the
@@ -88,7 +88,7 @@ function jsonEnvelopeObj(command: string, results: RunResult[], opts: JsonEnvelo
 
 /** The standardized machine envelope emitted by every `--output-format json` command. COMPACT
  *  single-line JSON (machine output → trivially parseable; the pretty form lives in result.json).
- *  `opts.rollups`/`opts.minPassRate`/`opts.matrix` are additive (E1's `--repeat`, E3's `--matrix`) —
+ *  `opts.rollups`/`opts.minPassRate`/`opts.matrix` are additive (`--repeat`, `--matrix`) —
  *  omitted (undefined) for every other command, which is why they don't appear in a plain envelope
  *  (JSON.stringify drops `undefined` properties) rather than showing up as spurious `null`s. */
 export function jsonEnvelope(command: string, results: RunResult[], opts: JsonEnvelopeOpts = {}): string {

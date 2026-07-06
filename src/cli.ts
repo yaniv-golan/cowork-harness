@@ -97,8 +97,8 @@ import { spawnChannel, fileChannel, streamGates, answerGate, readGate, type Deci
 const out = (s: string) => writeSync(1, s + "\n"); // machine (stdout)
 const log = (s: string) => writeSync(2, s + "\n"); // human (stderr)
 
-// E3 (matrix runner) — mirrors record's own MAX_RECORD_CONCURRENCY bound (cassette.ts): above a handful,
-// concurrent runs exhaust Docker's default address pool / model API rate limits.
+// Matrix runner concurrency bound — mirrors record's own MAX_RECORD_CONCURRENCY bound (cassette.ts): above
+// a handful, concurrent runs exhaust Docker's default address pool / model API rate limits.
 const MAX_MATRIX_CONCURRENCY = 8;
 
 const HELP = `cowork-harness <command>   (v${"$VERSION"})
@@ -323,7 +323,7 @@ Input policy:
                                    scenarios that don't use the model terminal.
   (per-scenario answers/on_unanswered in the YAML take precedence where set)
 
-Repeat / flakiness measurement (E1):
+Repeat / flakiness measurement:
   --repeat <N>                     run each resolved scenario N times (int, 2-100) and aggregate a variance
                                    rollup (pass rate, per-assertion attribution, signal histogram). results[]
                                    still holds every raw run; only the batch verdict (ok/exit code) changes
@@ -338,7 +338,7 @@ Repeat / flakiness measurement (E1):
                                    but-clean stop is a warning, not a failure by itself; degrades LOUDLY
                                    (never silently runs all N) if a run reports no cost telemetry. Requires --repeat.
 
-Matrix testing (E3) — one scenario × a cross-product of axes, in one run:
+Matrix testing — one scenario × a cross-product of axes, in one run:
   --matrix <matrix.yaml>           run <scenario.yaml> across the cross-product of a matrix file's axes
                                    (baselines/models/skill_dirs — see docs/scenario.md). Requires exactly
                                    one scenario file (not a dir). Cannot combine with --repeat. Exit 1 if
@@ -409,7 +409,7 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
     "usage: verify-cassettes <file|dir> [--skip-privacy|--skip-staleness] [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-path <regex>]... [--allow-machine-inventory <regex>]... [--allow-patterns-file <path>]... [--output-format json]\n" +
     "       --allow <regex> is a PATTERN (matched against a finding); --allow-patterns-file <path> is a FILE of patterns, one regex per line — not a path to allow.",
   trace:
-    "usage: trace <run-id | run-dir | events.jsonl> [--view tools|questions|dispatches|tool-durations] [--translate-paths] [--output-format json]\n       --view tools           tool call / result rows\n       --view questions       gate lifecycle (question → answer → delivered)\n       --view dispatches      sub-agent dispatch tree + dispatch_count_max\n       --view tool-durations  per-tool call-count/timing table, folded from the sibling timeline.jsonl (M1; {} for a pre-M1 run)\n       --translate-paths  rewrite VM paths to host paths in the tools/default TEXT views only (needs a sibling mounts.json + an effective hostloop run; questions/dispatches views and --output-format json are unaffected)\n       (default: all views)\n       (for what the run PRODUCED — artifacts — use `inspect`)",
+    "usage: trace <run-id | run-dir | events.jsonl> [--view tools|questions|dispatches|tool-durations] [--translate-paths] [--output-format json]\n       --view tools           tool call / result rows\n       --view questions       gate lifecycle (question → answer → delivered)\n       --view dispatches      sub-agent dispatch tree + dispatch_count_max\n       --view tool-durations  per-tool call-count/timing table, folded from the sibling timeline.jsonl ({} when the run has no timing data)\n       --translate-paths  rewrite VM paths to host paths in the tools/default TEXT views only (needs a sibling mounts.json + an effective hostloop run; questions/dispatches views and --output-format json are unaffected)\n       (default: all views)\n       (for what the run PRODUCED — artifacts — use `inspect`)",
   assertions: "usage: assertions --list [--output-format json]",
   scaffold:
     "usage: scaffold <run-id | run-dir> [--out <file.yaml>] [--output-format text|json]\n       Turns a kept run into a starter scenario YAML (gates→answers, artifacts→file_exists).\n       Positional <run-id | run-dir> is the canonical form.",
@@ -417,7 +417,7 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
     'usage: status <run-id | run-dir> [--follow] [--output-format text|json]   (check whether a background run is alive, without ps aux — see docs/run-status.md)\n       --follow: stream one line per status change until the run reaches a terminal state (done/error); arm a Monitor here\n       exit codes: 0 healthy (running/done) · 1 the dir resolved but has no status.json yet (or a malformed one), or the run itself ended in state:"error" · 2 usage error, including an unresolvable <run-id | run-dir> (matches trace/inspect/scaffold) · 3 stale (probably dead — no exit handler can catch SIGKILL)',
   stats:
     "usage: stats [<scenario>] [--since <ISO date>] [--baseline <b>] [--branch <b>] [--metric pass-rate|cost|tokens|duration|turns|cache-tokens|model-cost] [--last <n>] [--reindex] [--output-format text|json]\n" +
-    "       queryable summary over <runsRoot>/index.jsonl (E4) — per-scenario run count, pass rate, cost/duration/token/turn p50/p95, last-green timestamp.\n" +
+    "       queryable summary over <runsRoot>/index.jsonl — per-scenario run count, pass rate, cost/duration/token/turn p50/p95, last-green timestamp.\n" +
     "       --reindex rebuilds the index from the physical run-dir tree first (one-time migration for pre-index runs, or if index.jsonl is lost/corrupted beyond its own per-line tolerance).\n" +
     "       --last <n>: the N most recent runs PER SCENARIO (not globally — a global cut would starve a low-frequency scenario out of the window).\n" +
     "       --metric narrows the TEXT line to one view; --output-format json always returns every field regardless (same convention as --quiet/--verbose — machine output stays full, only the human render narrows).\n" +
@@ -1003,7 +1003,7 @@ async function runOneScenario(p: {
   o: ReturnType<typeof resolveOutput>;
   keep?: boolean;
   extra?: Partial<ExecuteOptions>; // skill-only opts: session/sessionId/resume/llmIntent/nonDeterministicHint
-  /** E3: --matrix drives N cells from ONE process — a single cell's UnansweredError must never
+  /** --matrix drives N cells from ONE process — a single cell's UnansweredError must never
    *  process.exit() the whole matrix (the default `fail()` mapping below does exactly that). When true,
    *  re-throw UnansweredError like any other error instead, so the matrix cell loop's own per-cell catch
    *  can convert it into a distinct `cell error` — same shape as an agent-binary-unavailable failure,
@@ -1057,7 +1057,7 @@ async function runOneScenario(p: {
   return result;
 }
 
-/** E1: compact text-mode rollup table after a `--repeat N` batch. Renders pass rate, early-stop reason,
+/** Compact text-mode rollup table after a `--repeat N` batch. Renders pass rate, early-stop reason,
  *  the signal histogram, per-assertion attribution (only rows with at least one failure — an all-passing
  *  assertion across every iteration doesn't need a line), and cost/token/non-determinism totals when
  *  present. */
@@ -1173,8 +1173,8 @@ async function cmdRun(rawArgs: string[]) {
   // --decider-model overrides the LLM decider's answering model for scenarios that use `on_unanswered: llm`
   // (flag > env COWORK_HARNESS_DECIDER_MODEL > Sonnet default). `takeCommonFlags` doesn't know it (it's not a
   // common flag), so pull it out of argv first — otherwise it would land as an "unexpected argument".
-  // E1: --repeat/--max-budget-usd/--stop-on-diverge/--min-pass-rate are `run`-only the same way — not common
-  // flags, pre-extracted here exactly like --decider-model, cli.ts:897-911 in the plan's own citation.
+  // --repeat/--max-budget-usd/--stop-on-diverge/--min-pass-rate are `run`-only the same way — not common
+  // flags, pre-extracted here exactly like --decider-model.
   let deciderModel: string | undefined;
   let repeatN: number | undefined;
   let maxBudgetUsd: number | undefined;
@@ -1333,7 +1333,7 @@ async function cmdRun(rawArgs: string[]) {
   const o = resolveOutput("run", flags);
   noteRunsLocation({ json: o.json, quiet: !!flags.quiet, suppress: !!flags.demo });
 
-  // E3: --matrix is a completely separate mode from the per-file/--repeat loop below — one scenario, N
+  // --matrix is a completely separate mode from the per-file/--repeat loop below — one scenario, N
   // cells, not "N files each run once or N times" — so it's handled as its own early branch and exits.
   if (matrixFile !== undefined) {
     if (files.length !== 1)
@@ -1531,7 +1531,7 @@ async function cmdRun(rawArgs: string[]) {
         continue;
       }
 
-      // E1: --repeat N — run the SAME scenario N times, coexisting via local_<hrtime> run dirs
+      // --repeat N — run the SAME scenario N times, coexisting via local_<hrtime> run dirs
       // (execute.ts:177-180, no collision), aggregate into a RepeatRollup. results[] still gets every
       // raw RunResult (nothing hidden) — only the exit-code/`ok` formula changes for this mode.
       const { rollup } = await runRepeatBatch({
@@ -2309,7 +2309,7 @@ async function cmdSync(args: string[]) {
     // JSON.stringify(loadBaseline("latest")))` above) that nothing between here and there mutates in
     // place, so this surfaces real gate/content drift, not a diff against an already-updated copy.
     log(`=== diff vs latest committed baseline (desktop-${(base as { appVersion?: string }).appVersion}) ===`);
-    // E7: structured recursive diff, replacing the one-level diff() that printed a whole subtree on
+    // Structured recursive diff, replacing the one-level diff() that printed a whole subtree on
     // any nested change (e.g. a single gate flip three levels deep used to dump all of `provenance`).
     for (const line of formatDiffLines(diffBaselines(base, next))) log(`  ${line}`);
   }
@@ -2426,7 +2426,7 @@ function cmdList(args: string[] = []) {
   }
 }
 
-/** E4: one text-mode line per scenario. `--metric` narrows to a single focused view; omitted shows
+/** One text-mode line per scenario. `--metric` narrows to a single focused view; omitted shows
  *  everything the row has (a metric with no telemetry in the group is simply absent, not "0"). */
 function formatStatsLine(s: StatsSummary, metric?: string): string {
   const base = `${s.scenario}: ${s.runs} run(s), ${(s.passRate * 100).toFixed(0)}% pass`;
@@ -2449,7 +2449,7 @@ function formatStatsLine(s: StatsSummary, metric?: string): string {
   return `${base}${parts.length ? " — " + parts.join(", ") : ""}`;
 }
 
-/** `stats [<scenario>]` — a queryable summary over the run index (E4): per-scenario run count, pass rate,
+/** `stats [<scenario>]` — a queryable summary over the run index: per-scenario run count, pass rate,
  *  cost/duration/token/turn percentiles, last-green timestamp. Reads `<runsRoot>/index.jsonl`; `--reindex`
  *  rebuilds it from the physical run-dir tree first (the one-time local migration path for runs that
  *  predate the index, or if index.jsonl was ever lost/corrupted beyond its own per-line tolerance). */
@@ -3182,8 +3182,8 @@ async function cmdVerifyRun(args: string[]) {
     mcpServers: result.context?.mcpServers,
     availableTools: result.context?.tools,
     effectiveFidelity: result.effectiveFidelity,
-    // verify-run re-checks a kept run dir on the SAME machine that ran it — the plan groups this
-    // with the live execute.ts lane (both check a host-shaped computer:// link's path directly).
+    // verify-run re-checks a kept run dir on the SAME machine that ran it — grouped with the live
+    // execute.ts lane (both check a host-shaped computer:// link's path directly).
     linkResolution: { mode: "live" },
     ...budgetFields(result),
   };
@@ -3361,7 +3361,7 @@ function cmdTrace(args: string[]) {
 
   const view = viewArg as View | undefined;
 
-  // --translate-paths (Item 2's trace consumer): rewrite VM paths to host paths in TEXT output only —
+  // --translate-paths: rewrite VM paths to host paths in TEXT output only —
   // `--output-format json` stays the raw machine record (see cli.ts's gating below and
   // vm-path-ctx-file.ts's module header for the full rationale).
   const translatePaths = args.includes("--translate-paths");
@@ -3514,9 +3514,9 @@ interface DiffSide {
   transcript: string;
   artifacts?: Array<[string, string]>; // undefined = no manifest available for this side
   meta: Partial<DiffMetaSummary>;
-  // Identity metadata, NOT diffed content: used only for the cross-scenario warning (the plan's
-  // "allow + warn" resolution — comparing two different scenarios is legitimate for skill-variant
-  // comparison, but must be flagged, since the meta view doesn't surface scenario identity).
+  // Identity metadata, NOT diffed content: used only for the cross-scenario warning ("allow + warn" —
+  // comparing two different scenarios is legitimate for skill-variant comparison, but must be flagged,
+  // since the meta view doesn't surface scenario identity).
   scenarioName?: string;
 }
 
@@ -3660,7 +3660,7 @@ function renderDiffText(r: DiffViewResult, view: string): string[] {
   return lines;
 }
 
-/** E7 (baseline) + E2 (run/cassette, cross-comparable; baselines only pair with baselines). */
+/** Diffs a baseline pair or a run/cassette pair (cross-comparable; baselines only pair with baselines). */
 function cmdDiff(args: string[]) {
   if (hasHelp(args)) return void log(SUBCOMMAND_USAGE.diff);
   ensureOutputFormat("diff", args);
@@ -3717,8 +3717,8 @@ function cmdDiff(args: string[]) {
   } catch (e) {
     return void fail("diff", "usage", String((e as Error).message), undefined, json);
   }
-  // Allow + warn on a cross-scenario comparison (the plan's recommended resolution of its own open
-  // question): comparing runs of two DIFFERENT scenarios is legitimate (skill-variant comparison), but
+  // Allow + warn on a cross-scenario comparison: comparing runs of two DIFFERENT scenarios is
+  // legitimate (skill-variant comparison), but
   // the meta view doesn't surface scenario identity, so an unflagged mismatch would read as drift.
   // stderr only — stdout stays machine-clean in both output formats.
   if (a.scenarioName !== undefined && b.scenarioName !== undefined && a.scenarioName !== b.scenarioName)

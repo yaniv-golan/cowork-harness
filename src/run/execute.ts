@@ -92,7 +92,7 @@ export interface ExecuteOptions {
   /** mark the run non-deterministic even if no `by:"llm"` decision (e.g. a driving agent answers via `--decider-dir`). */
   nonDeterministicHint?: boolean;
   hooks?: RunHooks[];
-  /** E4: tags the run-index row this execution writes. Default "run" — the `run`/`skill` CLI commands pass
+  /** Tags the run-index row this execution writes. Default "run" — the `run`/`skill` CLI commands pass
    *  their own command name through; `record`'s live execution (cassette.ts) passes "record" explicitly so
    *  a recording session isn't misread as a `run` invocation in `stats`. */
   command?: "run" | "skill" | "record";
@@ -352,7 +352,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // translator once events start flowing. The translator itself gates on effectiveFidelity/shareable, so
   // this always resolves ctx unconditionally (harmless at non-hostloop tiers — the closure no-ops there).
   //
-  // Item 2 (mounts.json — see vm-path-ctx-file.ts's header): persist this SAME ctx to <outDir>/mounts.json,
+  // mounts.json (see vm-path-ctx-file.ts's header): persist this SAME ctx to <outDir>/mounts.json,
   // unconditionally and for EVERY tier/lane (not gated on opts.translateRef — `record` calls executeScenario
   // directly with no translateRef, and still needs a ctx file for a later `trace --translate-paths`/replay
   // reader). Reusing this one `vmPathContextFromPlan(...)` call (rather than a second, independent one)
@@ -958,7 +958,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     outputsDir: join(workRoot, "outputs"),
     userVisibleRoots,
     readonlyFolderRoots,
-    // Task 7: artifacts is a DERIVED VIEW of workspaceFiles — same collectArtifacts walk,
+    // artifacts is a DERIVED VIEW of workspaceFiles — same collectArtifacts walk,
     // filtered to the deliverable classes (excludes class:"input" read-only mounts). No second walk.
     artifacts: workspaceFiles.filter((f) => f.class === "output" || f.class === "mount").map((f) => ({ path: f.path, bytes: f.bytes })),
     workspaceFiles, // Working folder panel's canonical file model (output/mount/input) — see comment above
@@ -1071,7 +1071,7 @@ function validateScenarioRegexes(scenario: Scenario, scenarioPath: string): void
 }
 
 /** Load a session from a file and resolve its internal host paths relative to the session
- * file's own directory (see {@link resolveSessionPaths}). Exported for E3 (matrix runner) — cli.ts loads
+ * file's own directory (see {@link resolveSessionPaths}). Exported for the matrix runner — cli.ts loads
  * the base session ONCE per matrix run, then applies per-cell overrides (applySessionOverrides,
  * session.ts) on top of the SAME loaded+resolved object, rather than re-resolving paths per cell. */
 export function loadSessionFromFile(sessionRef: string): ReturnType<typeof loadSession> {
@@ -1139,7 +1139,7 @@ export function buildPartialResult(args: {
     ...args.record.context,
     availableSkills: resolveAvailableSkills(availableSkillIds, args.configDir, args.pluginSkillRoots),
   };
-  // Working folder panel's file model — same walk `artifacts` below derives from (Task 7).
+  // Working folder panel's file model — same walk `artifacts` below derives from.
   const workspaceFiles = classifyWorkspaceFiles(args.workRoot, args.userVisibleRoots, args.readonlyFolderRoots);
   return assembleRunResult({
     $schema: RUN_RESULT_SCHEMA_URL,
@@ -1189,7 +1189,7 @@ export function buildPartialResult(args: {
     outputsDir: join(args.workRoot, "outputs"),
     userVisibleRoots: args.userVisibleRoots,
     readonlyFolderRoots: args.readonlyFolderRoots,
-    // Task 7: artifacts is a DERIVED VIEW of workspaceFiles — same collectArtifacts walk,
+    // artifacts is a DERIVED VIEW of workspaceFiles — same collectArtifacts walk,
     // filtered to the deliverable classes (excludes class:"input" read-only mounts). No second walk.
     artifacts: workspaceFiles.filter((f) => f.class === "output" || f.class === "mount").map((f) => ({ path: f.path, bytes: f.bytes })),
     workspaceFiles, // Working folder panel's canonical file model

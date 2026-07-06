@@ -565,10 +565,10 @@ export interface RunStatus {
 }
 
 /** SDK usage payload (input_tokens, output_tokens, etc.) — pass-through, shape owned by the SDK, not the
- *  harness — plus `turns`, harness-computed from the SDK result message's `num_turns` (Wave 0 seam). */
+ *  harness — plus `turns`, harness-computed from the SDK result message's `num_turns`. */
 export type UsageInfo = Record<string, unknown> & { turns?: number };
 
-/** `usd` = the SDK result message's `total_cost_usd` for this invocation, when present (Wave 0 seam).
+/** `usd` = the SDK result message's `total_cost_usd` for this invocation, when present.
  *  `raw` = the `api_metrics` event payload (pre-existing; unrelated source, kept alongside `usd` rather
  *  than merged into it since the two are independent SDK signals). */
 export interface CostInfo {
@@ -627,7 +627,7 @@ export interface RunResult {
   models?: string[];
   // reasoning blocks surfaced for debugging — capped at the last 50 blocks (older ones
   // silently dropped; RunRecord tracks the elided count internally but it is NOT surfaced on
-  // RunResult, matching the plan's scope: an author reads the tail of reasoning, not a full history).
+  // RunResult, by design: an author reads the tail of reasoning, not a full history).
   // Scrubbed by the same secret-redaction pass as the rest of result.json.
   thinking?: Array<{ text: string }>;
   // per-tool call/error rollup — same top-level-only scoping as toolCounts (sub-agent-internal
@@ -773,8 +773,8 @@ export interface RunResult {
    *  nonDeterministic:false, not per-gate provenance). Derived from `decisions[]` at write time. */
   gateProvenance?: GateProvenanceSummary;
   /** Skill/plugin ids invoked via the Skill tool_use event (`{plugin}:{skill}`), in call order, duplicates
-   *  kept (re-triggering is signal). Backs `skill_triggered`/`no_skill_triggered`. Absent on a run that
-   *  predates E8 (old result.json) — `no_skill_triggered` treats absence as evidence-unavailable, never a
+   *  kept (re-triggering is signal). Backs `skill_triggered`/`no_skill_triggered`. Absent on a run from an
+   *  older result.json format — `no_skill_triggered` treats absence as evidence-unavailable, never a
    *  vacuous pass. */
   skillsInvoked?: string[];
   /** Whether the agent's init tool list included "Skill" — false means this runtime/agent version can't be

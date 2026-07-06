@@ -6,7 +6,7 @@ import { resolve, relative, isAbsolute, sep } from "node:path";
  * link payload from a model-visible transcript and resolves it against whatever evidence the calling
  * lane (live run / verify-run / replay) actually has, WITHOUT touching `src/vm-paths.ts` (that module
  * is the production-mirroring outbound DISPLAY transform; this one is the assertion-side consumer of
- * the same link shapes, deliberately kept separate — see the plan's P3 section).
+ * the same link shapes, deliberately kept separate).
  *
  * Note on percent-encoding: `ctx.transcript` is the RAW model-visible record (never touched by the
  * display transform, which only runs at render surfaces — see src/run/display-translate.ts), so in
@@ -146,8 +146,8 @@ function normalizeByStructuralMarker(hostPath: string): string | null {
   return null;
 }
 
-/** Replay-only: normalize a host-shaped link to a mount-relative path (for a manifest lookup), per the
- *  plan's "pEe-analog over recorded data". Two strategies, in order: (1) the outputs/uploads
+/** Replay-only: normalize a host-shaped link to a mount-relative path (for a manifest lookup),
+ *  reconstructing over the recorded data. Two strategies, in order: (1) the outputs/uploads
  *  structural marker above; (2) `folderPrefixes` — a recorded connected-folder HOST path prefix ->
  *  its resolved mount name (built at record-replay time from the cassette's recorded
  *  `session.folders` + `userVisibleRoots`; see cassette.ts's `buildFolderPrefixMap`). Returns null when
@@ -168,7 +168,7 @@ export function normalizeHostShapedForReplay(hostPath: string, folderPrefixes: M
 /** Resolution context threaded onto `AssertContext.linkResolution` — see `src/assert.ts`. */
 export interface LinkResolutionContext {
   /** "live" = execute.ts (real run) or verify-run (re-checking a kept run dir on the SAME machine) —
-   *  both check a host-shaped link's path DIRECTLY on the filesystem (the plan groups these two lanes
+   *  both check a host-shaped link's path DIRECTLY on the filesystem (these two lanes are grouped
    *  together). "replay" = a cassette re-drive with no live filesystem access. */
   mode: "live" | "replay";
   /** Replay-only: see `normalizeHostShapedForReplay`. Absent/empty on live (host-shaped links are

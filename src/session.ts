@@ -665,7 +665,7 @@ export function loadSession(parsed: unknown): SessionConfig {
 }
 
 /**
- * E3 (matrix runner) — the session-loading override seam. Pure: returns a new SessionConfig, never
+ * The matrix runner's session-loading override seam. Pure: returns a new SessionConfig, never
  * mutates `session`. `model` is a plain scalar overwrite. `skillDirSubstitution: [from, to]` swaps ONE
  * `plugins.local_plugins` entry — chosen by exact match on `from` — for `to`, leaving every other entry
  * untouched.
@@ -675,7 +675,7 @@ export function loadSession(parsed: unknown): SessionConfig {
  * override anywhere in this codebase. So substituting a directory with a DIFFERENT basename would silently
  * change the mount name the agent sees, invalidating any scenario assertion that references it (e.g. a
  * `skill_triggered` regex keyed on the old plugin id). Rather than build new plumbing to pin an arbitrary
- * mount name (real complexity the plan flags as having "no precedent in the codebase today"), this enforces
+ * mount name (real complexity that has no precedent in the codebase today), this enforces
  * same-basename substitution and fails loud otherwise — a `skill_dirs` matrix axis's candidate directories
  * must all share one basename (e.g. `variants/v1/my-pdf-skill/`, `variants/v2/my-pdf-skill/`).
  */

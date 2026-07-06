@@ -17,7 +17,7 @@ export interface RunStatusMeta {
 }
 
 // NOTE: `elapsedMs` is always derived from THIS module's own `meta.startedAt` (set at outDir creation,
-// in Task 3 right after mkdir). `durationMs` (terminal only) is passed in from the caller and, at the
+// right after mkdir). `durationMs` (terminal only) is passed in from the caller and, at the
 // two normal finalize sites, is `RunResult.durationMs` — timed from execute.ts's OWN later `startedAt`
 // (set just before the container/VM spawn, so it excludes dir-setup time). The two numbers are
 // deliberately NOT forced equal: `elapsedMs` answers "how long has status.json existed" (useful for a
@@ -114,7 +114,7 @@ export function finalizeRunStatus(
 }
 
 /** Best-effort terminal write when NO `RunRecord` is available — the crash-safety net. Bound to
- *  `process.on("exit", …)` right after `writeRunningStatus` (Task 3) and removed once a normal
+ *  `process.on("exit", …)` right after `writeRunningStatus` and removed once a normal
  *  `finalizeRunStatus` runs, so it fires ONLY for a genuine crash: an uncaught throw that unwinds past
  *  `executeScenario` without ever reaching either `RunResult` assembly site (a plain `throw` earlier in
  *  the function — e.g. a `BoundaryError` — or anything else that isn't the recoverable
@@ -122,7 +122,7 @@ export function finalizeRunStatus(
  *  crash — a false "still alive" signal, exactly the failure mode this feature exists to eliminate.
  *  Mirrors `writeDoneMarker`'s exit-handler precedent (`src/decide/external-channel.ts:58-64`); like
  *  that marker, this is idempotent + synchronous (`writeJsonAtomic` uses sync `fs` calls), which is a
- *  hard requirement for anything run from a Node `"exit"` handler. Not called directly by Task 3 — see
+ *  hard requirement for anything run from a Node `"exit"` handler. Not called directly — see
  *  `registerRunForCrashSafety` immediately below, which wraps this with the pending-set bookkeeping a
  *  SINGLE shared exit handler needs. */
 export function markRunStatusCrashed(outDir: string, meta: RunStatusMeta): void {
@@ -150,7 +150,7 @@ export function crashAllPendingRunStatuses(): void {
   pending.clear();
 }
 
-/** Register a run for crash-safety tracking — call once, right after `writeRunningStatus` (Task 3).
+/** Register a run for crash-safety tracking — call once, right after `writeRunningStatus`.
  *  Lazily registers the ONE shared `process.on("exit", crashAllPendingRunStatuses)` listener on first
  *  use (idempotent — a second/third call in the same process is a no-op). Returns a `finalize` function;
  *  call it at BOTH normal `RunResult` assembly sites once the run completes — it removes this run from
@@ -211,7 +211,7 @@ export function hasRunStatus(runDir: string): boolean {
 
 /** Resolve a `status` CLI argument (a literal run dir, or a run-id/fragment) to the run's directory.
  *  A literal directory is used DIRECTLY — the common case (a driving agent passes the exact `outDir`
- *  printed at run start, see Task 3) — and works even in the earliest moments of a run, BEFORE
+ *  printed at run start) — and works even in the earliest moments of a run, BEFORE
  *  `events.jsonl` exists (`resolveEventsFile` alone would reject that window, since it requires
  *  `events.jsonl` to already be present). Falls back to `resolveEventsFile` (run-id / fragment matching
  *  under the runs root) for everything else — the same resolver `trace`/`inspect` already use.

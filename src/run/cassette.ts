@@ -580,7 +580,7 @@ export interface FileSigDiff {
 }
 
 /** v5: diff two per-file manifests (recorded vs live) into the exact changed/added/removed path lists.
- *  Exported for E2's diff engine (artifacts view) — the exact same [path, sha256] shape it needs. */
+ *  Exported for the diff engine (artifacts view) — the exact same [path, sha256] shape it needs. */
 export function diffFileSigsPaths(recorded: Array<[string, string]>, live: Array<[string, string]>): FileSigDiff {
   const rec = new Map(recorded);
   const liv = new Map(live);
@@ -2126,7 +2126,7 @@ function replayErrorResult(file: string): RunResult {
     userVisibleRoots: undefined,
     readonlyFolderRoots: undefined,
     artifacts: undefined,
-    workspaceFiles: undefined, // no live filesystem to scan on replay (see Task 6's doc note in execute.ts)
+    workspaceFiles: undefined, // no live filesystem to scan on replay (see the doc note in execute.ts)
     preRunPaths: undefined,
     partial: undefined,
     unansweredGate: undefined,
@@ -2726,7 +2726,7 @@ export function cmdRehash(args: string[]): void {
 
 /**
  * Best-effort: recover the recorded scenario's connected-folder host paths (`session.folders[].from`)
- * for `computer_links_resolve`'s replay-lane host-shaped normalization (P3 plan). Mirrors
+ * for `computer_links_resolve`'s replay-lane host-shaped normalization. Mirrors
  * `skillSourceDirs`' own session-file resolution above (`cassetteDir` substitutes for the scenario's
  * original directory — the re-record-clean colocation convention this repo already relies on for
  * staleness fingerprinting). Returns `[]` (never throws) when the session file can't be read — a
@@ -3193,7 +3193,7 @@ export async function replayCassette(
       assertions,
       subagents: cassette.timeline ? attributeSubagentSkills(rec.subagents, cassette.timeline) : rec.subagents,
       nonReproducibleAnswers: rec.unanswered,
-      // Wave 0 seam: the live/success/partial assemblers already passed these through; replay never did,
+      // The live/success/partial assemblers already passed these through; replay never did,
       // so a cassette that recorded usage/cost silently dropped it on replay. re-drive (rec) recomputes
       // them deterministically from the same events, so this is a content key, not a live-only one.
       usage: rec.usage,
@@ -3222,7 +3222,7 @@ export async function replayCassette(
       userVisibleRoots: undefined,
       readonlyFolderRoots: undefined,
       artifacts: undefined,
-      workspaceFiles: undefined, // no live filesystem to scan on replay (see Task 6's doc note in execute.ts)
+      workspaceFiles: undefined, // no live filesystem to scan on replay (see the doc note in execute.ts)
       preRunPaths: undefined,
       partial: undefined,
       unansweredGate: undefined,

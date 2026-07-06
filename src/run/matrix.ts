@@ -1,4 +1,4 @@
-// E3 — matrix runner. Cross-product of baseline/model/skill_dir axes over one scenario, reusing E1's
+// Matrix runner. Cross-product of baseline/model/skill_dir axes over one scenario, reusing the repeat
 // rollup/table substrate. Pure functions only — no I/O, no execution; the CLI loop in cli.ts drives cells
 // through runOneScenario/pMapBounded and hands the results here.
 import { z } from "zod";
@@ -33,7 +33,7 @@ export interface MatrixExpansion {
 
 /** Cross-product of the declared axes, in `baselines × models × skill_dirs` order. An absent/empty axis
  *  contributes exactly one `undefined` value (not zero) — so a matrix with no axes at all still expands
- *  to one cell (the base scenario, unmodified), never to zero cells. Capped at `maxCells`; the plan's own
+ *  to one cell (the base scenario, unmodified), never to zero cells. Capped at `maxCells`; the
  *  "no silent caps" principle means callers must surface `truncated`/`totalBeforeCap`, not swallow them. */
 export function expandMatrix(matrix: MatrixFile, maxCells: number): MatrixExpansion {
   const baselines = matrix.baselines?.length ? matrix.baselines : [undefined];
@@ -129,8 +129,8 @@ export function formatMatrixRollup(r: MatrixRollup): string[] {
     lines.push(`  ${status} [${c.index}] ${label}${detail ? " " + detail : ""}`);
     if (!c.pass && c.failedAssertions.length) lines.push(`      failed: ${c.failedAssertions.join(", ")}`);
     // A cell can fail on a verdict signal with NO failing assertion at all (e.g. `stalled`,
-    // `host_path_leak`) — without this, that cell renders ✗ with no visible reason (E1's rollup surfaces
-    // the same signals via its histogram; do the same here per-cell).
+    // `host_path_leak`) — without this, that cell renders ✗ with no visible reason (the repeat rollup
+    // surfaces the same signals via its histogram; do the same here per-cell).
     if (!c.pass && c.signals.length) lines.push(`      signals: ${c.signals.join(", ")}`);
   }
   return lines;
@@ -158,7 +158,7 @@ export interface MatrixRepeatRollup {
   anyFail: boolean; // any cell's rollup fails rollupPasses(minPassRate), OR any cell hit a pre-execution error
 }
 
-/** Reuses `rollupPasses` (E1) for each cell's own pass/fail judgment — a matrix-of-repeats never
+/** Reuses `rollupPasses` for each cell's own pass/fail judgment — a matrix-of-repeats never
  *  re-implements the batch-verdict formula, it just applies it per cell. */
 export function buildMatrixRepeatRollup(
   cells: MatrixCellRepeatResult[],
