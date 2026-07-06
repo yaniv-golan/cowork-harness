@@ -246,7 +246,10 @@ const defaultRawFetch: RawFetch = async (url, pinnedAddresses) => {
  *
  * The bash tool description is the verbatim Cowork string.
  */
-type McpResult = { result: unknown } | { error: { code: number; message: string } };
+// `notify` is optional and success-only: a caller (the cowork present_files handler) can ask the
+// session to inject a synthetic user turn alongside the ordinary mcp_response. Unset for every
+// existing caller (bash/web_fetch never set it), so their behavior is unchanged.
+export type McpResult = { result: unknown; notify?: string } | { error: { code: number; message: string } };
 // the handler is async (web_fetch may await a provenance approval through the Decider).
 export type McpHandler = (server: string, jsonrpc: { id?: unknown; method?: string; params?: any }) => McpResult | Promise<McpResult>;
 

@@ -8,6 +8,8 @@ import { agentArgs, spawnEnv, dockerRunArgv, resolveMaxThinkingTokens } from "./
 import { runtimeAuthEnv } from "./host-env.js";
 import { stageWorkspace } from "./stage.js";
 import { capturePreRunManifest } from "../run/pre-run-manifest.js";
+import { makeCoworkHandler } from "../hostloop/cowork-handler.js";
+import type { McpHandler } from "../hostloop/workspace-handler.js";
 
 /**
  * L1 — container parity runtime. Runs the staged in-VM agent in a sandboxed arm64
@@ -41,6 +43,7 @@ export function spawnContainer(
   // same VM and never re-stages; see stage.ts).
   const sessionHost = join(resolve(outDir), "work", "session");
   const mntHost = join(sessionHost, "mnt");
+  const outputsHostDir = join(mntHost, "outputs");
   const { mcpStaged } = stageWorkspace(plan, mntHost);
   // no_unexpected_files baseline: snapshot the user-visible roots' paths post-staging, pre-spawn.
   capturePreRunManifest(plan, mntHost, outDir, "container");
@@ -68,7 +71,15 @@ export function spawnContainer(
       baseline.spawn?.maxThinkingTokens ?? DEFAULT_MAX_THINKING_TOKENS,
     ),
   });
-  const claudeArgs = agentArgs(baseline, plan, { mntRoot, systemPromptAppend: opts.systemPromptAppend, mcpGuest });
+  const claudeArgs = agentArgs(baseline, plan, {
+    mntRoot,
+    systemPromptAppend: opts.systemPromptAppend,
+    mcpGuest,
+    // present_files must be a known, pre-approved cowork tool — otherwise the agent's first call gets
+    // auto-allowed as OFF-REGISTRY, tripping the cowork-parity permissive-auto-allow guard and failing
+    // the run (confirmed live against a real container spawn before this was added).
+    extraTools: ["mcp__cowork__present_files"],
+  });
   const dockerArgs = dockerRunArgv({
     network,
     lockdown: (process.env.COWORK_LOCKDOWN ?? "on") !== "off",
@@ -84,5 +95,9 @@ export function spawnContainer(
   });
 
   const child = spawn(runner, dockerArgs, { stdio: ["pipe", "pipe", "pipe"] });
-  return { child, containerName };
+  const sdkMcp: { servers: string[]; handle: McpHandler } = {
+    servers: ["cowork"],
+    handle: makeCoworkHandler({ sessionRootVm: sessionRoot, sessionHostDir: sessionHost, outputsHostDir }),
+  };
+  return { child, containerName, sdkMcp };
 }

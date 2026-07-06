@@ -17,6 +17,7 @@ import { generateHostLoopShellSection } from "./hostloop-prompt.js";
  */
 const HOSTLOOP_DYNAMIC_PROMPT_MIN_VERSION = MOUNT_BARE_NAME_MIN_VERSION;
 import { makeWorkspaceHandler, type McpHandler, type EgressEntry, type WebFetchProvenance } from "../hostloop/workspace-handler.js";
+import { makeCoworkHandler } from "../hostloop/cowork-handler.js";
 import { baseAgentArgs, hostNativeSpawnEnv, dockerRunArgv, resolveMaxThinkingTokens } from "./argv.js";
 import { runtimeAuthEnv } from "./host-env.js";
 import { resolveHostLoopBindMounts, stageHostLoopWorkspace } from "./hostloop-stage.js";
@@ -115,7 +116,10 @@ export function spawnHostLoop(
     mcpGuest: mcpHostPath,
     systemPromptAppend,
     disallowed: ["Bash", "WebFetch", "NotebookEdit"],
-    extraTools: ["mcp__workspace__bash", "mcp__workspace__web_fetch"],
+    // present_files must be a known, pre-approved cowork tool — otherwise the agent's first call gets
+    // auto-allowed as OFF-REGISTRY, tripping the cowork-parity permissive-auto-allow guard and failing
+    // the run (confirmed live against a real container spawn before this was added).
+    extraTools: ["mcp__workspace__bash", "mcp__workspace__web_fetch", "mcp__cowork__present_files"],
   });
   const hostOutputsDir = join(mntHost, "outputs");
   const nativeEnv: NodeJS.ProcessEnv = {
@@ -219,18 +223,20 @@ export function spawnHostLoop(
   // Host-routed web_fetch bypasses the sidecar proxy, so collect its egress decisions here and
   // surface them to execute.ts → result.egress, making host-loop web_fetch visible to egress assertions.
   const hostEgress: EgressEntry[] = [];
+  const workspaceHandle = makeWorkspaceHandler({
+    containerName,
+    vmMnt: mntRoot,
+    runner,
+    webFetchAllow: plan.egressAllow,
+    onEgress: (e) => hostEgress.push(e),
+    onInfraError: logInfra,
+    provenanceRef: opts.provenanceRef,
+    execCwd,
+  });
+  const coworkHandle = makeCoworkHandler({ sessionRootVm: sessionRoot, sessionHostDir: sessionHost, outputsHostDir: hostOutputsDir });
   const sdkMcp: { servers: string[]; handle: McpHandler } = {
-    servers: ["workspace"],
-    handle: makeWorkspaceHandler({
-      containerName,
-      vmMnt: mntRoot,
-      runner,
-      webFetchAllow: plan.egressAllow,
-      onEgress: (e) => hostEgress.push(e),
-      onInfraError: logInfra,
-      provenanceRef: opts.provenanceRef,
-      execCwd,
-    }),
+    servers: ["workspace", "cowork"],
+    handle: (server, jr) => (server === "cowork" ? coworkHandle(server, jr) : workspaceHandle(server, jr)),
   };
   return { child, sdkMcp, hooks, pathGateFired, containerName, hostEgress };
 }

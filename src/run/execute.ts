@@ -567,6 +567,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       });
       child = ct.child;
       containerName = ct.containerName; // so the Ctrl-C / finally reap removes the agent container by name
+      sdkMcp = ct.sdkMcp; // serves cowork/present_files — container has no other sdk-MCP server today
     } else if (effectiveFidelity === "microvm") {
       child = spawnMicroVm(scenario, baseline, plan, outDir, sessionId, {
         systemPromptAppend: prompts.systemPromptAppend,
