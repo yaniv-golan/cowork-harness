@@ -869,6 +869,7 @@ function minimalRec(): RunRecord {
     contextEvents: [],
     mcpErrors: [],
     hookEvents: [],
+    presentedFiles: [],
   };
 }
 
@@ -2196,6 +2197,7 @@ function replayErrorResult(file: string): RunResult {
     contextEvents: undefined, // no rec to read from on this early-bail lane
     mcpErrors: undefined, // live-only — this early-bail lane never drives a session
     hookEvents: undefined, // no rec to read from on this early-bail lane
+    presentedFiles: undefined, // no rec to read from on this early-bail lane
     preRunPaths: undefined,
     preRunHashes: undefined,
     partial: undefined,
@@ -2887,6 +2889,10 @@ export const ALWAYS_CONTENT_KEYS: (keyof Assertion)[] = [
   "all_tasks_completed",
   "task_status",
   "result",
+  // content-class, NOT controlOut-gated: both the present_files tool_use and its own tool_result live
+  // in the ordinary events stream, so the re-drive reproduces `RunResult.presentedFiles` exactly like
+  // the other re-derived signals above (skill_triggered, redundantToolCalls, …).
+  "no_scratchpad_leak",
   // Verdict modifiers — NOT filesystem/egress assertions. Keep all of them on replay (each evaluates to a
   // no-op pass via assert.ts) so a standalone modifier neither inflates the "filesystem/egress skipped"
   // count nor emits a misleading warning, AND so the replay path actually exercises their assert.ts noop
@@ -3229,6 +3235,10 @@ export async function replayCassette(
       // reconstructed above from cassette.events + controlOut; undefined when controlOut is absent
       // (excludes hook_blocked/no_hook_blocked loud, never a vacuous pass).
       hookEvents: replayHookEvents,
+      // content-class — re-derived by the re-drive above exactly like the live lane; uncollapsed so an
+      // empty [] (nothing presented) vacuous-passes no_scratchpad_leak instead of reading as
+      // evidence-unavailable.
+      presentedFiles: rec.presentedFiles,
       effectiveFidelity: cassette.effectiveFidelity,
       // Replay has no live filesystem — computer_links_resolve normalizes both link shapes against the
       // manifest instead (see the manifestKeys comment above + src/run/computer-links.ts).
@@ -3389,6 +3399,11 @@ export async function replayCassette(
       contextEvents: rec.contextEvents, // the re-drive reproduces system_event via parseMessage — powers compaction_occurred
       mcpErrors: undefined, // live-only — the re-drive never produces mcp_error
       hookEvents: replayHookEvents, // reconstructed above from cassette.events + controlOut; undefined when controlOut is absent
+      // Content-class: the tool_use/tool_result pair lives in the ordinary events stream (not
+      // controlOut), so the re-drive reproduces it exactly like mcpErrors' live-only counterpart does
+      // NOT reproduce — this one genuinely re-derives. Uncollapsed (an empty [] is the real "nothing
+      // presented" signal no_scratchpad_leak's vacuous pass needs, matching live).
+      presentedFiles: rec.presentedFiles,
       preRunPaths: undefined,
       preRunHashes: undefined,
       partial: undefined,

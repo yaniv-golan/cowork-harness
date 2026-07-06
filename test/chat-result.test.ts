@@ -32,6 +32,7 @@ function minimalChatRecord(): RunRecord {
     contextEvents: [],
     mcpErrors: [],
     hookEvents: [],
+    presentedFiles: [],
   } as RunRecord;
 }
 

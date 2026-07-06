@@ -416,6 +416,38 @@ describe("no_mcp_error", () => {
   });
 });
 
+describe("no_scratchpad_leak", () => {
+  it("passes vacuously when nothing was presented", () => {
+    const [r] = evaluate([{ no_scratchpad_leak: true }], ctx({ presentedFiles: [] }));
+    expect(r.pass).toBe(true);
+  });
+  it("passes when every presented file was promoted or already under a mount", () => {
+    const [r] = evaluate(
+      [{ no_scratchpad_leak: true }],
+      ctx({
+        presentedFiles: [
+          { from: "/sessions/x/a.md", to: "/sessions/x/mnt/outputs/a.md", promoted: true, leaked: false },
+          { from: "/sessions/x/mnt/outputs/b.md", to: "/sessions/x/mnt/outputs/b.md", promoted: false, leaked: false },
+        ],
+      }),
+    );
+    expect(r.pass).toBe(true);
+  });
+  it("fails when a presented scratchpad file was never promoted (leaked)", () => {
+    const [r] = evaluate(
+      [{ no_scratchpad_leak: true }],
+      ctx({ presentedFiles: [{ from: "/sessions/x/bad.sh", to: "/sessions/x/bad.sh", promoted: false, leaked: true }] }),
+    );
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/bad\.sh/);
+  });
+  it("is evidence-unavailable when presentedFiles is undefined (older run predating the feature)", () => {
+    const [r] = evaluate([{ no_scratchpad_leak: true }], ctx({ presentedFiles: undefined }));
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/no present_files|cannot verify/i);
+  });
+});
+
 describe("max_peak_rss_bytes", () => {
   it("passes when peakRssBytes <= N", () => {
     const [r] = evaluate(

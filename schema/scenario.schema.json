@@ -327,6 +327,11 @@
             "type": "boolean",
             "const": true
           },
+          "no_scratchpad_leak": {
+            "description": "every file presented via present_files that was in the scratchpad was successfully promoted to outputs (none left behind); vacuous pass if nothing was presented — pair with a presence check to require a delivery; content-class (re-derived from the tool_use/tool_result stream, so checkable on replay too); only `true` is valid",
+            "type": "boolean",
+            "const": true
+          },
           "egress_denied": {
             "description": "egress to this host was denied",
             "type": "string"

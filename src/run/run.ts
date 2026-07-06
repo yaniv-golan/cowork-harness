@@ -32,6 +32,22 @@ function capDecisionInput(input: unknown): unknown {
   }
 }
 
+/** Extract the ordered `file_path` list from a `mcp__cowork__present_files` tool_use's `input`
+ *  (`{ files: [{ file_path }, …] }`) — guards every shape (missing/non-array `files`, a non-object or
+ *  non-string-`file_path` entry) so a malformed input can't throw mid-drive; a bad entry is just
+ *  dropped, not fatal (mirrors the input-guarding style used across this file, e.g. pendingTaskCreates). */
+function presentFilesInput(input: unknown): string[] {
+  const files = (input as { files?: unknown } | undefined)?.files;
+  if (!Array.isArray(files)) return [];
+  return files
+    .map((f) =>
+      f && typeof f === "object" && typeof (f as Record<string, unknown>).file_path === "string"
+        ? (f as Record<string, unknown>).file_path
+        : undefined,
+    )
+    .filter((p): p is string => p !== undefined);
+}
+
 /** the observable sub-agent dispatch tree (single owner = RunRecord). */
 export interface SubagentDispatch {
   toolUseId: string;
@@ -104,6 +120,15 @@ export interface RunRecord {
   contextEvents: Array<{ subtype: string; data: Record<string, unknown> }>; // system events we don't special-case (compaction etc.)
   mcpErrors: Array<{ server: string; code?: number; message: string }>; // MCP round-trips the harness answered with a JSON-RPC error (no handler, or the handler threw)
   hookEvents: Array<{ callbackId: string; decision: "block" | "allow"; reason?: string; tool?: string }>; // PreToolUse hook fire/block events (built-in Task hook + any custom hook bundle)
+  // Files delivered via the cowork `present_files` tool, in call order — derived from each
+  // `mcp__cowork__present_files` tool_use (the input file list) paired with its own tool_result (the
+  // returned path per file, in the same order). CONTENT-CLASS: both halves live in the ordinary
+  // tool_use/tool_result stream (events.jsonl), so this is re-derived identically on the replay
+  // re-drive — no controlOut/onPresent dependency. `promoted` = the file was in the scratchpad and
+  // landed under `mnt/outputs`; `leaked` = it was in the scratchpad but did NOT land there (the
+  // handler's copy-failure branch — present_files' own "remains in the scratchpad" case). A path
+  // already under a mount (passthrough) is neither promoted nor leaked.
+  presentedFiles: Array<{ from: string; to: string; promoted: boolean; leaked: boolean }>;
 }
 
 export interface RunHooks {
@@ -158,6 +183,10 @@ export class Run {
   // paired tool_result text ("Task #<N> created successfully: <subject>"). Keyed by toolUseId so the
   // eventual tool_result can look up which pending create it resolves, mirroring toolNameByUseId's pattern.
   private pendingTaskCreates = new Map<string, { subject: string; description?: string; activeForm?: string }>();
+  // Pending `mcp__cowork__present_files` calls, keyed by toolUseId — the input file list, stashed at
+  // tool_use time and resolved by the matching tool_result (see notePresentedFiles). Same
+  // stash-then-resolve pattern as pendingTaskCreates above.
+  private pendingPresentFiles = new Map<string, string[]>();
   // per-session web_fetch provenance set. Run owns it (it sees user turns + tool_results) and
   // seeds it during drive(); the workspace handler reads membership + escalates misses via the Decider.
   private provenance = new ProvenanceTracker();
@@ -199,6 +228,7 @@ export class Run {
       contextEvents: [],
       mcpErrors: [],
       hookEvents: [],
+      presentedFiles: [],
     };
   }
 
@@ -350,11 +380,17 @@ export class Run {
                 else sa.toolsUsed.push({ name: ev.name, count: 1 });
               }
             }
+            // A `present_files` call is stashed regardless of main-agent/sub-agent scope above — the
+            // observability question ("did a presented scratchpad file actually reach outputs?") applies
+            // run-wide, not just to main-agent-attributed tool calls.
+            if (ev.name === "mcp__cowork__present_files" && ev.toolUseId)
+              this.pendingPresentFiles.set(ev.toolUseId, presentFilesInput(ev.input));
             this.toolLog.push({ name: ev.name, input: ev.input, synthetic: ev.synthetic, parentToolUseId: ev.parentToolUseId }); // still logged for provenance/trace
             break;
           }
           case "tool_result": {
             this.rec.toolResults.push({ toolUseId: ev.toolUseId, isError: ev.isError, text: ev.text, assertText: ev.assertText });
+            if (ev.toolUseId) this.notePresentedFiles(ev.toolUseId, ev.textBlocks);
             if (ev.toolUseId) {
               const name = this.toolNameByUseId.get(ev.toolUseId);
               if (name) {
@@ -529,6 +565,37 @@ export class Run {
     this.foldRedundantToolCalls();
     for (const h of this.hooks) h.finalize?.(this.rec);
     return this.rec;
+  }
+
+  /** Resolves a pending `present_files` call (stashed by toolUseId at tool_use time) against its own
+   *  tool_result: `textBlocks` carries the returned path per input file, IN ORDER (the pinned
+   *  present_files contract — one text entry per input file). Zips `from` (input) with `to` (result)
+   *  by index and classifies each pair against the VM cwd (`weA`, the scratchpad predicate):
+   *    - `promoted`  — `from` was in the scratchpad AND `to` landed under `mnt/outputs/` (the handler's
+   *      success branch).
+   *    - `leaked`    — `from` was in the scratchpad but `to` did NOT land there (the handler's
+   *      copy-failure branch — the file "remains in the scratchpad").
+   *    - neither     — `from` was already under a mount (passthrough); nothing to promote or leak.
+   *  Without `rec.cwd` (an init event that predates it, or a MockSession test that omits init),
+   *  `isScratchpad` returns false for every path — fail-safe toward "nothing classified" rather than a
+   *  fabricated promoted/leaked verdict. A result with fewer entries than inputs pairs what it can and
+   *  drops the unmatched tail (never guesses a `to`). */
+  private notePresentedFiles(toolUseId: string, textBlocks: string[] | undefined): void {
+    const froms = this.pendingPresentFiles.get(toolUseId);
+    if (!froms) return;
+    this.pendingPresentFiles.delete(toolUseId);
+    const tos = textBlocks ?? [];
+    const cwd = this.rec.cwd;
+    const isScratchpad = (p: string): boolean => cwd !== undefined && p.startsWith(`${cwd}/`) && !p.startsWith(`${cwd}/mnt/`);
+    for (let i = 0; i < froms.length; i++) {
+      const from = froms[i];
+      const to = tos[i];
+      if (to === undefined) continue;
+      const scratchpad = isScratchpad(from);
+      const promoted = scratchpad && cwd !== undefined && to.startsWith(`${cwd}/mnt/outputs/`);
+      const leaked = scratchpad && !promoted;
+      this.rec.presentedFiles.push({ from, to, promoted, leaked });
+    }
   }
 
   /** Pairs each subagent dispatch's toolUseId against rec.toolResults to populate its `output`

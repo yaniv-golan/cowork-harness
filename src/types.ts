@@ -314,6 +314,12 @@ export const Assertion = z.object({
     .describe(
       "no tool was hook-blocked during the run (distinguishes a real tool crash from an intentional block) — replay needs controlOut; only `true` is valid",
     ),
+  no_scratchpad_leak: z
+    .literal(true)
+    .optional()
+    .describe(
+      "every file presented via present_files that was in the scratchpad was successfully promoted to outputs (none left behind); vacuous pass if nothing was presented — pair with a presence check to require a delivery; content-class (re-derived from the tool_use/tool_result stream, so checkable on replay too); only `true` is valid",
+    ),
   egress_denied: z.string().optional().describe("egress to this host was denied"),
   egress_allowed: z.string().optional().describe("egress to this host was allowed"),
   // Only `true` is accepted: `false` is rejected as a footgun. The assertion is presence-semantic — authoring
@@ -872,6 +878,17 @@ export interface RunResult {
    *  `controlOut` (a custom hook's decision lives there, not in the stream) — else the hook assertions
    *  are excluded-loud, never vacuously passed. */
   hookEvents?: Array<{ callbackId: string; decision: "block" | "allow"; reason?: string; tool?: string }>;
+  /** Files delivered via the cowork `present_files` tool, in call order — one entry per file the agent
+   *  presented, derived from pairing each `mcp__cowork__present_files` tool_use with its own
+   *  tool_result. `promoted` = the file was in the scratchpad and landed under `mnt/outputs`; `leaked` =
+   *  it was in the scratchpad but did NOT land there (present_files' own copy-failure branch — the file
+   *  "remains in the scratchpad", not deliverable to the user). A path already under a mount
+   *  (passthrough) is neither. CONTENT-CLASS: both the tool_use and tool_result live in the ordinary
+   *  events stream, so this is re-derived identically on the replay re-drive — undefined only means no
+   *  `present_files` telemetry was recorded for this run (an older run predating the feature), the
+   *  evidence-unavailable signal for `no_scratchpad_leak`; an empty `[]` is a valid "nothing presented"
+   *  state and is NOT the same as undefined. */
+  presentedFiles?: Array<{ from: string; to: string; promoted: boolean; leaked: boolean }>;
   /** Resource-usage telemetry sampled while the run executed (peak RSS, avg/peak CPU%). Live + tier-
    *  dependent (container/hostloop/microvm); undefined on protocol/replay, on a run shorter than one
    *  sample interval, and when the tier's probe tool was unavailable — the `max_peak_rss_bytes`

@@ -81,6 +81,7 @@ CONTENT_KEYS = {
     "compaction_occurred",
     "all_tasks_completed",
     "task_status",
+    "no_scratchpad_leak",
 }
 # content keys, but only evaluated on replay when the cassette carries controlOut
 GATE_KEYS = {

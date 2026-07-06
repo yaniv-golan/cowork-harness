@@ -48,7 +48,15 @@ export type AgentEvent =
   | { type: "init"; tools: string[]; mcpServers: unknown[]; skills: string[]; cwd?: string }
   | { type: "assistant_text"; text: string; parentToolUseId?: string; model?: string }
   | { type: "tool_use"; name: string; input: unknown; parentToolUseId?: string; toolUseId?: string; synthetic?: boolean; model?: string } // toolUseId for tool_use↔tool_result pairing; synthetic = the MCP round-trip echo (trace-only, NOT counted — the real call already arrives as an assistant tool_use block, live-verified); model = the assistant message's model
-  | { type: "tool_result"; toolUseId?: string; isError: boolean; text: string; provenanceText?: string; assertText?: string } // the OUTCOME of a tool call (from `user`/tool_result blocks). `text` is display-truncated; `provenanceText` is the larger raw value so URLs past the display cap still seed web_fetch provenance; `assertText` is assertion-fidelity cap (10 KB)
+  | {
+      type: "tool_result";
+      toolUseId?: string;
+      isError: boolean;
+      text: string;
+      provenanceText?: string;
+      assertText?: string;
+      textBlocks?: string[];
+    } // the OUTCOME of a tool call (from `user`/tool_result blocks). `text` is display-truncated; `provenanceText` is the larger raw value so URLs past the display cap still seed web_fetch provenance; `assertText` is assertion-fidelity cap (10 KB); `textBlocks` is the UNFLATTENED per-block text array (undefined for a string/non-array content, or an array with no text blocks) — `text`/`assertText`/`provenanceText` join a multi-block content array with a single space, losing per-entry boundaries a multi-file tool result (e.g. present_files, one path per input file) needs preserved
   | {
       type: "subagent_dispatch";
       toolUseId: string;
@@ -803,6 +811,7 @@ export function parseMessage(msg: any): AgentEvent[] {
             text: toolResultText(block.content),
             provenanceText: toolResultRaw(block.content),
             assertText: toolResultAssertText(block.content),
+            textBlocks: toolResultTextBlocks(block.content),
           });
       }
       break;
@@ -866,6 +875,17 @@ function toolResultRaw(content: unknown): string {
  *  truncation is still assertable. */
 function toolResultAssertText(content: unknown): string {
   return flattenToolResult(content, 10_240);
+}
+/** The raw per-block text array, UNFLATTENED — undefined for a string/non-array content, or an
+ *  array with no `type:"text"` blocks. `flattenToolResult` joins every block's text with a single
+ *  space, which is fine for display/assertion but loses per-entry boundaries for a tool whose result
+ *  is genuinely one entry per input (e.g. present_files: one path per presented file, in order). */
+function toolResultTextBlocks(content: unknown): string[] | undefined {
+  if (!Array.isArray(content)) return undefined;
+  const texts = content
+    .filter((b): b is { type: string; text: unknown } => !!b && typeof b === "object" && (b as Record<string, unknown>).type === "text")
+    .map((b) => String(b.text));
+  return texts.length ? texts : undefined;
 }
 
 export function toDecisionRequest(msg: any): DecisionRequest | null {

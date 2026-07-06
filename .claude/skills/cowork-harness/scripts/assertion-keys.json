@@ -27,6 +27,7 @@
     "no_delete_in_outputs",
     "no_hook_blocked",
     "no_mcp_error",
+    "no_scratchpad_leak",
     "no_skill_triggered",
     "no_unexpected_files",
     "question_asked",

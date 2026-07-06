@@ -36,6 +36,18 @@ export interface TimelineHeader {
  * the current agent build has zero stream-message producer sites for file-change events (only
  * hook-callback payloads exist, a different mechanism) — kept only for forward-compatibility with a
  * future SDK build.
+ *
+ * `scratchpad_promoted` stays unproduced by design, not by omission: giving it a producer would need
+ * `toTimelineFields`/`TimelineWriter` to (a) pair a `present_files` tool_use with its own tool_result
+ * across two separate calls (an `undefined`-content tool_use event carries no result yet) and (b)
+ * classify each pair against the VM cwd — both already implemented once, faithfully, in
+ * `Run.notePresentedFiles` (src/run/run.ts), which owns `RunRecord.cwd`. Duplicating that pairing +
+ * classification into this per-event, (mostly-)stateless mapper would fork the scratchpad-promotion
+ * signal across two independent implementations that could silently drift. `RunResult.presentedFiles`
+ * (and the `no_scratchpad_leak` assertion built on it) already give full observability — live AND
+ * replay, since both tool_use/tool_result live in the ordinary events stream — with a single source of
+ * truth. Revisit only if a consumer needs promotion positioned on the TIMELINE specifically (relative
+ * ordering against other tool calls), not just recorded that it happened.
  */
 export type TimelineEvent =
   | {

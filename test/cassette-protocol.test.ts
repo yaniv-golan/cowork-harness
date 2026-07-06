@@ -117,6 +117,71 @@ describe("skill_triggered / no_skill_triggered evaluate end-to-end on replay (Wa
   });
 });
 
+describe("no_scratchpad_leak evaluates end-to-end on replay (content-class, not controlOut-gated)", () => {
+  // present_files' tool_use (the input file list) and its own tool_result (one path per input file, in
+  // order) both live in the ordinary events stream — no controlOut needed, unlike the gate keys above.
+  const CWD = "/sessions/x";
+  const presentFilesEvents = (toFrom: { from: string; to: string }[]) => [
+    JSON.stringify({ type: "system", subtype: "init", tools: [], cwd: CWD }),
+    JSON.stringify({
+      type: "assistant",
+      message: {
+        content: [
+          {
+            type: "tool_use",
+            id: "toolu_1",
+            name: "mcp__cowork__present_files",
+            input: { files: toFrom.map((f) => ({ file_path: f.from })) },
+          },
+        ],
+      },
+    }),
+    JSON.stringify({
+      type: "user",
+      message: {
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "toolu_1",
+            is_error: false,
+            content: toFrom.map((f) => ({ type: "text", text: f.to })),
+          },
+        ],
+      },
+    }),
+    JSON.stringify({ type: "result", subtype: "success", is_error: false }),
+  ];
+
+  it("passes when the re-drive shows every presented scratchpad file was promoted", async () => {
+    muteStderr();
+    const events = presentFilesEvents([{ from: `${CWD}/a.md`, to: `${CWD}/mnt/outputs/a.md` }]);
+    const cassette: any = { scenario: makeScenario([{ no_scratchpad_leak: true }]), events, controlOut: [] };
+    const r = await replayCassette(cassette);
+    expect(r.assertions.every((a) => a.pass)).toBe(true);
+  });
+
+  it("fails when the re-drive shows a presented scratchpad file was never promoted (leaked)", async () => {
+    muteStderr();
+    // present_files' own copy-failure branch returns the ORIGINAL (still-scratchpad) path.
+    const events = presentFilesEvents([{ from: `${CWD}/bad.sh`, to: `${CWD}/bad.sh` }]);
+    const cassette: any = { scenario: makeScenario([{ no_scratchpad_leak: true }]), events, controlOut: [] };
+    const r = await replayCassette(cassette);
+    expect(r.assertions.some((a) => !a.pass)).toBe(true);
+  });
+
+  it("passes vacuously when present_files was never called (not excluded — content-class)", async () => {
+    muteStderr();
+    const events = [
+      JSON.stringify({ type: "system", subtype: "init", tools: [], cwd: CWD }),
+      JSON.stringify({ type: "result", subtype: "success", is_error: false }),
+    ];
+    const cassette: any = { scenario: makeScenario([{ no_scratchpad_leak: true }]), events, controlOut: [] };
+    const r = await replayCassette(cassette);
+    expect(r.assertions.length).toBe(1); // NOT skipped/excluded — content-class keys always evaluate
+    expect(r.assertions[0].pass).toBe(true);
+  });
+});
+
 describe("budget assertions evaluate end-to-end on replay (Wave 1 / E6a)", () => {
   it("max_cost_usd/max_tokens/tool_calls_max pass against a recorded cassette within budget", async () => {
     muteStderr();

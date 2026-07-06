@@ -352,6 +352,12 @@ export interface AssertContext {
    *  hook's decision lives only there) — the evidence-unavailable signal for hook_blocked/
    *  no_hook_blocked; an empty `[]` is a valid "no hook fired" state and is NOT the same as undefined. */
   hookEvents?: RunResult["hookEvents"];
+  /** RunResult.presentedFiles — files delivered via `present_files`, each already classified
+   *  promoted/leaked at derivation time (see RunResult's own doc comment). Undefined means no
+   *  `present_files` telemetry was recorded for this run (an older run predating the feature) — the
+   *  evidence-unavailable signal for no_scratchpad_leak; an empty `[]` is a valid "nothing presented"
+   *  state (vacuous pass) and is NOT the same as undefined. */
+  presentedFiles?: RunResult["presentedFiles"];
   /** RunResult.resources — resource-usage telemetry sampled while the run executed. Undefined means the
    *  tier never sampled (protocol/replay, a run shorter than one sample interval, or an unavailable probe
    *  tool) — the evidence-unavailable signal for max_peak_rss_bytes; never a vacuous pass. */
@@ -701,6 +707,14 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
       results.push(
         blk ? fail(`no_hook_blocked: "${blk.tool ?? blk.callbackId}" was blocked${blk.reason ? ` (${blk.reason})` : ""}`) : ok(),
       );
+    }
+  }
+  if (a.no_scratchpad_leak !== undefined) {
+    if (ctx.presentedFiles === undefined)
+      results.push(fail(`no_scratchpad_leak: no present_files telemetry recorded for this run — cannot verify`));
+    else {
+      const leaked = ctx.presentedFiles.find((p) => p.leaked);
+      results.push(leaked ? fail(`no_scratchpad_leak: "${leaked.from}" was presented but never left the scratchpad`) : ok());
     }
   }
   if (a.no_skill_triggered !== undefined) {

@@ -90,6 +90,7 @@ export function buildChatResult(record: RunRecord, opts: ChatResultOpts): RunRes
     contextEvents: record.contextEvents,
     mcpErrors: record.mcpErrors,
     hookEvents: record.hookEvents,
+    presentedFiles: record.presentedFiles,
     egress: opts.egress,
     resources,
     stderrLogPath: join(opts.outDir, "agent.stderr.log"),
