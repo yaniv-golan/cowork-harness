@@ -1,4 +1,4 @@
-import { writeFileSync, readFileSync } from "node:fs";
+import { writeFileSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { userVisibleRootsFromPlan, type LaunchPlan } from "../session.js";
@@ -28,12 +28,15 @@ function preRunHashCap(): number {
 }
 
 /** Hash one captured file relative to its base dir. Returns null over the cap (recorded, not hashed);
- *  null on an unreadable file too (loud evidence-unavailable downstream, never a silent pass). */
+ *  null on an unreadable file too (loud evidence-unavailable downstream, never a silent pass). The size
+ *  is checked with statSync BEFORE reading, so an over-cap file is never loaded into memory — that is
+ *  what actually bounds the walk on big connected folders (a post-read length check would still read
+ *  the whole file first). */
 function hashFileCapped(baseDir: string, relPath: string, cap: number): string | null {
+  const abs = join(baseDir, relPath);
   try {
-    const buf = readFileSync(join(baseDir, relPath));
-    if (buf.length > cap) return null;
-    return createHash("sha256").update(buf).digest("hex");
+    if (statSync(abs).size > cap) return null;
+    return createHash("sha256").update(readFileSync(abs)).digest("hex");
   } catch {
     return null;
   }

@@ -224,4 +224,48 @@ describe("capturePreRunManifest hashes", () => {
     capturePreRunManifest(minimalPlan([]), workRoot, outDir, "container");
     expect(readPreRunManifest(outDir)).toEqual(["outputs/seed.txt"]);
   });
+
+  it("hostloop: hashes a connected-folder file from its hostPath (mountPath prefix stripped), not workRoot", () => {
+    // Guards the hostloop branch's `m.hostPath` + prefix-strip logic: the real bytes live under
+    // hostFolder/sub/in.pdf, addressed in the manifest as ".projects/Acme/sub/in.pdf". A naive
+    // read from workRoot (where the folder is NOT staged on hostloop) would miss it → null.
+    const outDir = mkdtempSync(join(tmpdir(), "cwh-hl-hash-"));
+    const mntHost = join(outDir, "work", "session", "mnt");
+    const hostFolder = mkdtempSync(join(tmpdir(), "cwh-hl-host-"));
+    mkdirSync(join(mntHost, "outputs"), { recursive: true });
+    mkdirSync(join(hostFolder, "sub"), { recursive: true });
+    const body = "connected-folder input body";
+    writeFileSync(join(hostFolder, "sub", "in.pdf"), body);
+    writeFileSync(join(mntHost, "outputs", "seed.md"), "seed");
+
+    const plan = minimalPlan([{ kind: "folder", hostPath: hostFolder, mountPath: ".projects/Acme", mode: "rw" }]);
+    capturePreRunManifest(plan, mntHost, outDir, "hostloop");
+    const hashes = readPreRunManifestHashes(outDir)!;
+
+    const expected = createHash("sha256").update(body).digest("hex");
+    // real content hash from hostPath — NOT null (which is what a wrong-base read would produce)
+    expect(hashes[".projects/Acme/sub/in.pdf"]).toBe(expected);
+    // the workRoot-relative outputs file is hashed from mntHost
+    expect(hashes["outputs/seed.md"]).toBe(createHash("sha256").update("seed").digest("hex"));
+  });
+
+  it("hostloop: over-cap connected-folder file records null (statSync gate, no full read)", () => {
+    const prev = process.env.COWORK_HARNESS_PRERUN_HASH_CAP;
+    process.env.COWORK_HARNESS_PRERUN_HASH_CAP = "4";
+    try {
+      const outDir = mkdtempSync(join(tmpdir(), "cwh-hl-cap-"));
+      const mntHost = join(outDir, "work", "session", "mnt");
+      const hostFolder = mkdtempSync(join(tmpdir(), "cwh-hl-capfolder-"));
+      mkdirSync(join(mntHost, "outputs"), { recursive: true });
+      writeFileSync(join(hostFolder, "big.bin"), "0123456789"); // 10 bytes > cap 4
+      const plan = minimalPlan([{ kind: "folder", hostPath: hostFolder, mountPath: ".projects/Acme", mode: "rw" }]);
+      capturePreRunManifest(plan, mntHost, outDir, "hostloop");
+      const hashes = readPreRunManifestHashes(outDir)!;
+      expect(hashes[".projects/Acme/big.bin"]).toBeNull();
+      expect(readPreRunManifest(outDir)).toContain(".projects/Acme/big.bin"); // still in paths
+    } finally {
+      if (prev === undefined) delete process.env.COWORK_HARNESS_PRERUN_HASH_CAP;
+      else process.env.COWORK_HARNESS_PRERUN_HASH_CAP = prev;
+    }
+  });
 });
