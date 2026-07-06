@@ -1269,7 +1269,7 @@ export function buildPartialResult(args: {
 
 /** the structured run trace. */
 
-function writeTrace(outDir: string, rec: RunRecord, egress: RunResult["egress"], secrets: string[], durationMs?: number) {
+export function writeTrace(outDir: string, rec: RunRecord, egress: RunResult["egress"], secrets: string[], durationMs?: number) {
   const trace = {
     steps: [...rec.toolsCalled],
     toolCounts: rec.toolCounts, // truthful per-tool call counts (host-routed WebSearch shows here, not usage.server_tool_use)
