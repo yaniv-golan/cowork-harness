@@ -436,7 +436,11 @@ async function* ttyTurns(rl: readline.Interface): AsyncGenerator<string> {
   });
   const ask = () =>
     new Promise<string | null>((res) => {
-      if (closed) return res(null);
+      // Read the interface's REAL closed state, not just the local `closed` flag: with a non-interactive
+      // stdin (a pipe or /dev/null) the interface can emit `close` DURING the seed turn — before this
+      // generator's `once("close")` listener above is even registered — so the flag can miss it. Calling
+      // rl.question() on an already-closed interface throws ERR_USE_AFTER_CLOSE; treat closed as EOF → null.
+      if (closed || (rl as unknown as { closed?: boolean }).closed) return res(null);
       const onClose = () => res(null);
       rl.question("\nyou> ", (a) => {
         rl.removeListener("close", onClose);
