@@ -569,9 +569,15 @@ export function buildLaunchPlan(
       const entry = (manifest.plugins ?? []).find((p) => p.name === pName);
       if (!entry) continue;
       const pluginSrc = resolve(mkRoot, entry.source ?? `./${pName}`);
-      // reject entry.source values that escape the marketplace root (absolute paths or .. traversal).
+      // reject entry.source values that escape the marketplace root (absolute paths or .. traversal),
+      // OR that resolve to the marketplace root ITSELF. A present but degenerate source — "", ".", "./",
+      // "./." — all `resolve(mkRoot, …) === mkRoot`, so `relative(mkRoot, pluginSrc) === ""` neither starts
+      // with ".." nor is absolute, the realpath containment returns true on equality, and isDirectory()
+      // passes → the WHOLE marketplace root would stage as one plugin. `rel === ""` catches them all.
       if (entry.source !== undefined) {
         const rel = relative(mkRoot, pluginSrc);
+        if (rel === "")
+          throw new Error(`cowork-harness: marketplace entry.source "${entry.source}" resolves to the marketplace root itself`);
         if (rel.startsWith("..") || isAbsolute(rel))
           throw new Error(`cowork-harness: marketplace entry.source "${entry.source}" escapes the marketplace root`);
       }

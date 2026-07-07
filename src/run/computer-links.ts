@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { resolve, relative, isAbsolute, sep } from "node:path";
+import { containedRealPath } from "../boundary-paths.js";
 
 /**
  * `computer_links_resolve` support. Extracts every `computer://`
@@ -241,8 +242,22 @@ export function resolveComputerLink(link: ComputerLink, workRoot: string, resolu
         checkedDescription: `host path — no recorded workspace roots to verify against, can't confirm this is a delivered artifact: ${link.raw}`,
       };
     }
+    // Containment must dereference symlinks: a link lexically inside a root but pointing outside (e.g.
+    // root/sub -> /etc, link .../sub/hosts) would pass a lexical check yet existsSync outside the root.
+    // When the candidate EXISTS, compare realpath-resolved paths on both sides (containedRealPath); the
+    // both-sides realpath also avoids the macOS /var ↔ /private/var asymmetry. When it does NOT exist,
+    // realpath can't run — but a non-existent path can't be a symlink escape and existsSync below is false
+    // anyway, so fall back to a lexical (both-sides) check purely to preserve the in-root CLASSIFICATION.
     const base = resolve(link.raw);
+    const linkExists = existsSync(link.raw);
     const inside = resolution.hostRoots.some((root) => {
+      if (linkExists) {
+        try {
+          return containedRealPath(root, link.raw);
+        } catch {
+          /* root vanished mid-check → lexical fallback below */
+        }
+      }
       const r = resolve(root);
       return base === r || base.startsWith(r + sep);
     });
@@ -251,7 +266,7 @@ export function resolveComputerLink(link: ComputerLink, workRoot: string, resolu
         resolved: false,
         checkedDescription: `host path outside the run's workspace roots (not a delivered artifact): ${link.raw}`,
       };
-    return { resolved: existsSync(link.raw), checkedDescription: `host path (direct): ${link.raw}` };
+    return { resolved: linkExists, checkedDescription: `host path (direct): ${link.raw}` };
   }
   const rel = normalizeHostShapedForReplay(link.raw, resolution.folderPrefixes);
   if (rel === null) {

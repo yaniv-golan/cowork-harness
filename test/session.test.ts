@@ -364,6 +364,15 @@ describe("fail-loud declared-source staging", () => {
     expect(() => plan({ plugins: { local_marketplaces: [mk] } })).toThrow(/invalid shape.*source.*must be a string/);
   });
 
+  // #26: a present-but-degenerate source ("", ".", "./", "./.") resolves to the marketplace root itself,
+  // which would otherwise stage the WHOLE marketplace root as one plugin. Reject at the traversal guard.
+  it.each(["", ".", "./", "./."])("a plugin entry whose source is %o (marketplace root) is rejected", (src) => {
+    const mk = mkdtempSync(join(tmpdir(), "cowork-rootsrc-"));
+    mkdirSync(join(mk, ".claude-plugin"), { recursive: true });
+    writeFileSync(join(mk, ".claude-plugin", "marketplace.json"), JSON.stringify({ name: "mymkt", plugins: [{ name: "p", source: src }] }));
+    expect(() => plan({ plugins: { local_marketplaces: [mk], enabled: ["p@mymkt"] } })).toThrow(/resolves to the marketplace root itself/);
+  });
+
   it("rejects ':' in marketplace metadata (it would break the docker -v overlay)", () => {
     const mk = mktDir({ name: "mymkt", withPlugin: true, pluginVersion: "1.0:evil" });
     expect(() => plan({ plugins: { local_marketplaces: [mk], enabled: ["p@mymkt"] } })).toThrow(/unsafe plugin version/);

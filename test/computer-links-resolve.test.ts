@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { evaluate, type AssertContext } from "../src/assert.js";
@@ -203,6 +203,32 @@ describe("resolveComputerLink — live mode", () => {
     const link = extractComputerLinks(`computer://${realFile}`)[0];
     const outcome = resolveComputerLink(link, root, { mode: "live", hostRoots: [root] });
     expect(outcome.resolved).toBe(false);
+  });
+
+  // #40: an in-root symlink whose target escapes the root must NOT pass containment. Lexically the link
+  // path is inside `root`; only realpath dereferencing catches the escape.
+  it("host-shaped with hostRoots: an in-root symlink pointing OUTSIDE the root is rejected (not a delivered artifact)", () => {
+    const outside = mkdtempSync(join(tmpdir(), "cwh-links-esc-target-"));
+    const secret = join(outside, "secret.txt");
+    writeFileSync(secret, "x");
+    const linkPath = join(root, "escape"); // lexically inside root, but symlinks outside
+    symlinkSync(secret, linkPath);
+    const link = extractComputerLinks(`computer://${linkPath}`)[0];
+    const outcome = resolveComputerLink(link, "/some/unrelated/workroot", { mode: "live", hostRoots: [root] });
+    expect(outcome.resolved).toBe(false);
+    expect(outcome.checkedDescription).toMatch(/outside the run's workspace roots/);
+  });
+
+  // #40 guard: a NON-existent in-root path must still classify as in-root (dangling, resolved:false) and
+  // NOT regress to "outside workspace roots" — the /var↔/private/var asymmetry must not fire when realpath
+  // can't run on a missing candidate.
+  it("host-shaped with hostRoots: a non-existent in-root path is dangling-in-root, not outside-roots", () => {
+    const missing = join(root, "outputs", "never-created.pdf");
+    const link = extractComputerLinks(`computer://${missing}`)[0];
+    const outcome = resolveComputerLink(link, "/some/unrelated/workroot", { mode: "live", hostRoots: [root] });
+    expect(outcome.resolved).toBe(false);
+    expect(outcome.checkedDescription).toMatch(/host path \(direct\)/);
+    expect(outcome.checkedDescription).not.toMatch(/outside the run's workspace roots/);
   });
 });
 
