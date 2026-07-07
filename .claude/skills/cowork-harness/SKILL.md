@@ -50,9 +50,15 @@ Before the first command, confirm the CLI is reachable and **fail loud** (never 
   scenario file.
 - **Repeatable, asserted regression** → author a `scenarios/*.yaml` and run `cowork-harness run`.
   This is the CI-grade path and most of this skill.
-- **Multi-turn debugging** → `cowork-harness chat` (interactive; gates answered at the TTY, **not** an
-  asserted test — see *Debugging with `chat`* in `docs/scenario.md`, or `docs/debugging.md` for the full
-  debugging map).
+- **A run failed — or greened and you don't trust it** (the debugging loop) → don't re-run and hope.
+  The run already wrote its evidence to a **kept run dir** (`~/.cowork-harness/runs/…`; `--keep` prints
+  the path, `trace <run-id>` finds it). **Localize the failure post-hoc** from that evidence:
+  `cowork-harness trace <run-dir>`'s views + the emitted `result.json` to see what the run actually did,
+  then `verify-run` to re-check a suspect assertion — all token-free, no Docker, no re-record. This is
+  the loop 0.27.0's observability is built for; §8's *Inspecting a run's observability output* is the
+  detail, `docs/debugging.md` the full map.
+- **Multi-turn / interactive reproduction** → `cowork-harness chat` (interactive; gates answered at the
+  TTY, **not** an asserted test — see *Debugging with `chat`* in `docs/scenario.md`).
 
 Full command set: `skill · run · chat · record · replay · verify-cassettes · rehash · prune · lint ·
 verify-run · trace · inspect · diff · stats · decide · gates · answer · scaffold · assertions --list · sync ·
@@ -301,13 +307,16 @@ The run verdict may include `WARN`-severity signals in addition to pass/fail. On
 
 ### Inspecting a run's observability output
 
-A verdict is only the top of what a run records. Beyond pass/fail, every `run`/`skill`/`chat` writes a
-`result.json` and a trace you can read without a re-record — use these to *observe* behavior (and to decide
-which assertions from §6 are worth adding), and to diagnose a failure:
+A verdict is only the top of what a run records, and the run dir persists after the verdict
+(`~/.cowork-harness/runs/…`). Beyond pass/fail, every `run`/`skill`/`chat` writes a `result.json` and a
+trace you read back without a re-record — the debugging loop is *localize the failure from that
+already-written evidence*, not re-run-and-hope. Use them to diagnose a failure (and, secondarily, to
+decide which assertions from §6 are worth adding):
 
-- **`cowork-harness trace <run-dir> --view <view>`** — `tool-durations` (per-tool call count + timing),
-  `dispatches` (the sub-agent tree, each dispatch's prompt / model / output), `questions` (gates +
-  sub-question totals), `tools`. Default digests the run.
+- **`cowork-harness trace <run-dir> --view <view>`** — focuses one of the run's rollups (the per-tool
+  call-count/timing table, the sub-agent dispatch tree, the gate lifecycle, the tool/error rollups, …);
+  bare `trace` digests the whole run. The view set is actively being extended — run `trace --help` for
+  the current list rather than relying on a fixed enumeration here.
 - **`cowork-harness stats [--metric <m>]`** — aggregate across the run index: `cost`, `duration`,
   `tokens`, `cache-tokens`, `model-cost`, `turns`, `pass-rate`.
 - **`result.json` carries the raw fields** the assertions read: `toolDurations`, `models`, `toolErrors`,
