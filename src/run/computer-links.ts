@@ -199,6 +199,11 @@ export interface LinkResolutionContext {
    *  rather than falling back to a direct, unconstrained existence check — an arbitrary host path
    *  that happens to exist is never silently treated as "resolved". */
   hostRoots?: string[];
+  /** Replay-only: workRoot-relative paths that were a symlink/hardlink at record time (v10 `linkKind`
+   *  entries — see `materializeManifest`). Their placeholder resolves like a real file, but the cassette
+   *  never captured whether the link RESOLVED, so a link at the resolved path fails evidence-unavailable
+   *  rather than reporting a placeholder-backed `resolved:true`. Undefined on live. */
+  linkPaths?: Set<string>;
 }
 
 export interface LinkCheckOutcome {
@@ -230,6 +235,10 @@ export function resolveComputerLink(link: ComputerLink, workRoot: string, resolu
     const rel = link.raw.replace(VM_MOUNT_RE, "");
     const abs = safeJoin(workRoot, rel);
     if (!abs) return { resolved: false, checkedDescription: `unsafe path (escapes the work root): ${rel}` };
+    // REPLAY: the resolved path was a link at record time — its placeholder proves existence, not
+    // resolution. Fail evidence-unavailable (linkPaths is undefined on live, so this is a no-op there).
+    if (resolution.linkPaths?.has(relative(resolve(workRoot), abs)))
+      return { resolved: false, checkedDescription: `replay: "${rel}" was a symlink/hardlink at record time — resolution not captured; re-record or assert on the deliverable` };
     // safeJoin is LEXICAL — `existsSync` then FOLLOWS symlinks, so an agent-created in-tree symlink
     // pointing OUT of workRoot (the live container/microvm/hostloop work tree is agent-written) would
     // otherwise resolve TRUE by walking onto the assertion host (a false-green + a host-file-existence
@@ -300,5 +309,8 @@ export function resolveComputerLink(link: ComputerLink, workRoot: string, resolu
   }
   const abs = safeJoin(workRoot, rel);
   if (!abs) return { resolved: false, checkedDescription: `unsafe normalized path (escapes the work root): ${rel}` };
+  // A link entry's placeholder proves existence, not resolution — fail evidence-unavailable on replay.
+  if (resolution.linkPaths?.has(relative(resolve(workRoot), abs)))
+    return { resolved: false, checkedDescription: `replay: "${rel}" was a symlink/hardlink at record time — resolution not captured; re-record or assert on the deliverable` };
   return { resolved: existsSync(abs), checkedDescription: `replay manifest (normalized from host path): ${rel}` };
 }

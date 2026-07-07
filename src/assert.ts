@@ -248,6 +248,12 @@ export interface AssertContext {
    *  reason ("readonly"/"size"/"unreadable", or undefined on a pre-v8 entry) so artifact_json's remedy is
    *  precise. */
   truncatedPaths?: Map<string, "size" | "readonly" | "unreadable" | undefined>;
+  /** REPLAY-only: workRoot-relative paths that were a symlink/hardlink at record time (v10 `linkKind`
+   *  entries). They materialize as placeholder files indistinguishable from real files, so existence
+   *  assertions (file_exists / user_visible_artifact / computer_links_resolve) must treat them as
+   *  evidence-unavailable — the cassette records that a link EXISTED, not that it RESOLVED. Undefined on
+   *  live/verify-run (the real filesystem is checked directly there). */
+  linkPaths?: Set<string>;
   /** workRoot-relative mount prefixes of read-only (`mode:r`) connected folders. Used ONLY by the
    *  LIVE/verify-run lanes (which have no cassette manifest at eval time) to know a target will be
    *  captured body-less, so artifact_json is evidence-unavailable there too (symmetry with replay, which
@@ -480,7 +486,14 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
     if (!abs) results.push(fail(`unsafe file_exists path "${a.file_exists}" — must stay under the work root (no absolute paths or "..")`));
     else {
       const relPath = relative(resolve(ctx.workRoot), abs);
-      if (truncated.has(relPath)) {
+      if (ctx.linkPaths?.has(relPath)) {
+        // REPLAY: this path was a symlink/hardlink at record time — it materializes as a placeholder that
+        // proves NOTHING about resolution. Live could RED a dangling/escaping symlink; the cassette didn't
+        // capture that, so fail CLOSED rather than pass on the placeholder.
+        results.push(
+          fail(`evidence unavailable: "${a.file_exists}" was a symlink/hardlink at record time — replay can't confirm it resolves to real in-root content; re-record or assert on the deliverable`),
+        );
+      } else if (truncated.has(relPath)) {
         // A truncated manifest entry carries path+bytes+sha256 — positive proof the file existed at
         // record time. Existence is provable without the inlined body; only content assertions need it.
         results.push(ok());
@@ -500,7 +513,13 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
       results.push(fail(`unsafe user_visible_artifact path "${p}" — must stay under the work root (no absolute paths or "..")`));
     } else {
       const rel = relative(resolve(ctx.workRoot), abs); // normalized, guaranteed under workRoot
-      if (truncated.has(rel)) {
+      if (ctx.linkPaths?.has(rel)) {
+        // REPLAY: a link entry's placeholder proves existence-of-a-link, not resolution — fail closed
+        // (mirror file_exists). Live could RED a dangling/escaping symlink; the cassette didn't capture it.
+        results.push(
+          fail(`evidence unavailable: "${p}" was a symlink/hardlink at record time — replay can't confirm it resolves to real in-root content; re-record or assert on the deliverable`),
+        );
+      } else if (truncated.has(rel)) {
         // Truncated entry proves existence (path+bytes+sha256 recorded). Promotion is a path-prefix
         // property — also knowable without the body. Pass if under a user-visible prefix.
         const visible = ctx.userVisiblePrefixes.some((pre) => rel === pre || rel.startsWith(pre + "/"));

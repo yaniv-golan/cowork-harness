@@ -359,11 +359,17 @@ function decodeBody(e: ManifestEntry): Buffer {
 export function materializeManifest(
   entries: ManifestEntry[],
   roots: string[] = ["outputs", ".projects"],
-): { workRoot: string; prefixes: string[]; truncatedPaths: Map<string, ManifestEntry["truncationReason"]> } {
+): { workRoot: string; prefixes: string[]; truncatedPaths: Map<string, ManifestEntry["truncationReason"]>; linkPaths: Set<string> } {
   const workRoot = mkdtempSync(join(tmpdir(), "cwh-replay-"));
   // path → why the body is absent (from the entry's truncationReason; `undefined` on a pre-v8 entry that
   // had no reason). `.has()` still means "is body-less"; `.get()` gives the reason for the precise remedy.
   const truncatedPaths = new Map<string, ManifestEntry["truncationReason"]>();
+  // v10 link entries (symlink/hardlink) materialize as a placeholder file that is INDISTINGUISHABLE from a
+  // real file — so existence assertions (file_exists / user_visible_artifact / computer_links_resolve) would
+  // PASS on replay where live could RED a dangling/escaping symlink (a false-green). The cassette records
+  // only that a link EXISTED at the path, not that it RESOLVED, so replay must fail those checks CLOSED
+  // (evidence-unavailable). This set carries the link paths to the assertion layer.
+  const linkPaths = new Set<string>();
   for (const e of entries) {
     const abs = containedPath(workRoot, e.path); // reject absolute / `..` / out-of-root before writing
     const raw = decodeBody(e); // decode per the encoding marker
@@ -380,8 +386,9 @@ export function materializeManifest(
     mkdirSync(dirname(abs), { recursive: true });
     writeFileSync(abs, raw);
     if (e.truncated) truncatedPaths.set(relative(resolve(workRoot), abs), e.truncationReason);
+    if (e.linkKind) linkPaths.add(relative(resolve(workRoot), abs));
   }
-  return { workRoot, prefixes: roots, truncatedPaths };
+  return { workRoot, prefixes: roots, truncatedPaths, linkPaths };
 }
 
 /** The local skill/plugin/marketplace source dirs a session mounts — the "skill dir" hash unit.
@@ -3761,9 +3768,10 @@ export async function replayCassette(
     workRoot: replayWorkRoot,
     prefixes: replayPrefixes,
     truncatedPaths: replayTruncatedPaths,
+    linkPaths: replayLinkPaths,
   } = manifestKeys.length
     ? materializeManifest(cassette.artifacts!, cassette.userVisibleRoots ?? ["outputs", ".projects"])
-    : { workRoot: "", prefixes: [] as string[], truncatedPaths: new Map<string, ManifestEntry["truncationReason"]>() };
+    : { workRoot: "", prefixes: [] as string[], truncatedPaths: new Map<string, ManifestEntry["truncationReason"]>(), linkPaths: new Set<string>() };
   // computer_links_resolve's replay-lane folder-prefix resolution (Finding 24/25) — computed once,
   // outside the try, since it doesn't depend on anything materializeManifest produced.
   const folderPrefixResolution = buildFolderPrefixMap(cassette, opts.cassetteDir);
@@ -3867,6 +3875,7 @@ export async function replayCassette(
       toolErrors: rec.toolErrors,
       redundantToolCalls: rec.redundantToolCalls,
       truncatedPaths: replayTruncatedPaths,
+      linkPaths: replayLinkPaths, // replay-only: file_exists/user_visible_artifact fail-closed on a link entry (placeholder ≠ resolution)
       skillsInvoked: rec.skillsInvoked,
       skillToolAvailable: rec.initTools.includes("Skill"),
       skillActivity: cassette.timeline ? foldSkillActivity(cassette.timeline) : undefined,
@@ -3905,6 +3914,7 @@ export async function replayCassette(
         mode: "replay",
         folderPrefixes: folderPrefixResolution.map,
         folderPrefixesRequiredButAbsent: folderPrefixResolution.requiredButAbsent,
+        linkPaths: replayLinkPaths, // a link entry's placeholder proves existence, not resolution — fail evidence-unavailable
       },
       ...budgetFields(rec),
     });

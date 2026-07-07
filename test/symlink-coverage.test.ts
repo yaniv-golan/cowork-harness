@@ -144,4 +144,27 @@ describe("#38 record→replay parity — a symlink stray flags on BOTH lanes", (
     expect(r.pass).toBe(false);
     expect(r.message).toMatch(/outputs\/stray/);
   });
+
+  it("file_exists / user_visible_artifact on a link entry fail evidence-unavailable on replay (not a placeholder pass)", () => {
+    const root = mkdtempSync(join(tmpdir(), "cwh-rt-fe-"));
+    mkdirSync(join(root, "outputs"), { recursive: true });
+    writeFileSync(join(root, "outputs", "real.txt"), "content");
+    symlinkSync("/etc/hosts", join(root, "outputs", "link"));
+
+    const manifest = buildManifest(root, undefined, ["outputs"]);
+    const { workRoot: replayRoot, truncatedPaths, linkPaths } = materializeManifest(manifest, ["outputs"]);
+    const rctx = (over = {}) => ctx(replayRoot, { truncatedPaths, linkPaths, ...over });
+
+    // The link's placeholder must NOT prove existence/resolution — fail closed.
+    const [fe] = evaluate([{ file_exists: "outputs/link" }], rctx());
+    expect(fe.pass).toBe(false);
+    expect(fe.message).toMatch(/evidence unavailable/);
+    const [uva] = evaluate([{ user_visible_artifact: "outputs/link" }], rctx());
+    expect(uva.pass).toBe(false);
+    expect(uva.message).toMatch(/evidence unavailable/);
+
+    // A REAL file entry still passes (the link gate must not over-fail non-link paths).
+    const [feReal] = evaluate([{ file_exists: "outputs/real.txt" }], rctx());
+    expect(feReal.pass).toBe(true);
+  });
 });
