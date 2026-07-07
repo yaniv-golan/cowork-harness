@@ -600,9 +600,9 @@ def lint_file(path):
 SEV_ORDER = {"ERROR": 0, "WARN": 1, "INFO": 2}
 
 
-def _print_findings(findings, n_files):
+def _print_findings(findings, n_files, kind="scenario", clean_suffix=" — no silent-false-green findings."):
     if not findings:
-        print(f"✓ {n_files} scenario(s) clean — no silent-false-green findings.")
+        print(f"✓ {n_files} {kind}(s) clean{clean_suffix}")
         return
     for x in sorted(findings, key=lambda f: (str(f.file), SEV_ORDER[f.severity])):
         loc = f"{x.file}:{x.line}" if x.line else x.file
@@ -661,6 +661,175 @@ def cmd_lint(args):
         print(json.dumps([x.as_dict() for x in all_findings], indent=2))
     else:
         _print_findings(all_findings, len(args.files))
+    has_error = any(x.severity == "ERROR" for x in all_findings)
+    if has_error or (args.strict and all_findings):
+        return 1
+    return 0
+
+
+# --------------------------------------------------------------------------- #
+# lint-skill — SKILL.md-body checks for two Cowork host-loop footguns
+# --------------------------------------------------------------------------- #
+#
+# HONEST LIMITS (v1 is deliberately narrow to bound false positives):
+# Telling an "in-VM bash" usage apart from a correct host-side reference in freeform
+# markdown is heuristic. v1 only treats these as in-VM bash contexts:
+#   * a fenced ```bash / ```sh / ```shell (or ```zsh) code block,
+#   * a JSON `"command": "..."` value in a hooks config (a fenced ```json block or a hooks.json file),
+#   * a `Bash(...)` tool-directive line.
+# It NEVER inspects host-side prose or a `Read`/`Grep` directive — reading a reference via
+# `${CLAUDE_PLUGIN_ROOT}/references/x.md` in prose is the CORRECT, common idiom and is left alone.
+# Consequence: false negatives are expected. A `${CLAUDE_PLUGIN_ROOT}` path in an INDENTED (4-space)
+# or otherwise UNFENCED shell snippet won't be caught, because v1 keys entirely off fenced blocks +
+# hooks JSON. Widening the shell heuristic would trade those false negatives for false positives, which
+# v1 declines to do.
+
+_PLUGIN_ROOT_TOKEN = re.compile(r"\$\{?CLAUDE_PLUGIN_ROOT\}?")
+# Opening/closing fence: ``` or ~~~ (>=3), optional info string (language).
+_FENCE = re.compile(r"^\s*(`{3,}|~{3,})\s*([A-Za-z0-9_+-]*)\s*$")
+# A hooks-config command string: `"command": "<value>"` (value may contain escaped quotes).
+_HOOK_CMD = re.compile(r'"command"\s*:\s*"((?:[^"\\]|\\.)*)"')
+# A Bash(...) tool directive, e.g. `Bash(git status)` or an allowed-tools entry.
+_BASH_DIRECTIVE = re.compile(r"Bash\(([^)]*)\)")
+# `export NAME=...` anywhere in a command string (start, or after ; & | or whitespace).
+_HOOK_EXPORT = re.compile(r"(?:^|[;&|]|\s)export\s+[A-Za-z_][A-Za-z0-9_]*=")
+# A redirect (`>` / `>>`) into /tmp, or a `tee [flags] /tmp/...`.
+_HOOK_TMP_REDIRECT = re.compile(r">>?\s*/tmp/")
+_HOOK_TMP_TEE = re.compile(r"\btee\b(?:\s+-\S+)*\s+/tmp/")
+
+_BASH_FENCE_LANGS = {"bash", "sh", "shell", "zsh"}
+_JSON_FENCE_LANGS = {"json", "jsonc", "json5"}
+
+
+def _finding_plugin_root(path, line, ctx_label):
+    return Finding(
+        "WARN",
+        "plugin-root-in-vm-bash",
+        f"`${{CLAUDE_PLUGIN_ROOT}}` used as a path in an in-VM bash context ({ctx_label}): "
+        "dead in host-loop VM; discover the mount at runtime instead.",
+        "In VM-executed bash, don't hardcode ${CLAUDE_PLUGIN_ROOT} — resolve the skill/plugin mount at "
+        "runtime (e.g. derive it from the script's own location) instead.",
+        path,
+        line,
+    )
+
+
+def _finding_hook_host_write(path, line, what):
+    return Finding(
+        "WARN",
+        "hook-host-side-write",
+        f"hook command {what}: host-side hook write is not VM-visible in Cowork "
+        "(works in CLI, silently no-ops in Cowork).",
+        "A host-side hook can't seed env vars or /tmp for the in-VM agent. Provision inside the VM "
+        "(e.g. do the work in the skill body / a VM-run script), not in a host hook.",
+        path,
+        line,
+    )
+
+
+def _check_hook_command(path, line_no, cmd, findings):
+    """Apply both checks to a single hooks-config command string."""
+    if _PLUGIN_ROOT_TOKEN.search(cmd):
+        findings.append(_finding_plugin_root(path, line_no, "hooks command"))
+    if _HOOK_EXPORT.search(cmd):
+        findings.append(_finding_hook_host_write(path, line_no, "`export`s an env var"))
+    if _HOOK_TMP_REDIRECT.search(cmd) or _HOOK_TMP_TEE.search(cmd):
+        findings.append(_finding_hook_host_write(path, line_no, "writes into /tmp"))
+
+
+def _lint_skill_text(path, raw_lines, force_json=False):
+    """Scan one file. `force_json=True` treats every line as a hooks-config JSON body
+    (used for standalone hooks.json files); otherwise fences drive the context."""
+    findings = []
+    in_fence = False
+    fence_char = ""
+    fence_len = 0
+    fence_lang = ""
+    for i, line in enumerate(raw_lines, start=1):
+        m = _FENCE.match(line)
+        if m:
+            marker, lang = m.group(1), m.group(2).lower()
+            if not in_fence:
+                in_fence, fence_char, fence_len, fence_lang = True, marker[0], len(marker), lang
+                continue
+            # A closing fence uses the same char, is at least as long, and carries no language.
+            if marker[0] == fence_char and len(marker) >= fence_len and not lang:
+                in_fence = fence_char = ""
+                fence_len = 0
+                fence_lang = ""
+                continue
+            # otherwise: a fence-looking line inside a block — fall through as content
+
+        if force_json:
+            ctx = "json"
+        elif in_fence and fence_lang in _BASH_FENCE_LANGS:
+            ctx = "bash"
+        elif in_fence and fence_lang in _JSON_FENCE_LANGS:
+            ctx = "json"
+        elif in_fence:
+            ctx = "other-fence"  # e.g. ```python / ```yaml — not a shell context, leave alone
+        else:
+            ctx = "prose"
+
+        if ctx == "bash":
+            if _PLUGIN_ROOT_TOKEN.search(line):
+                findings.append(_finding_plugin_root(path, i, "```bash block"))
+        elif ctx == "json":
+            for cm in _HOOK_CMD.finditer(line):
+                _check_hook_command(path, i, cm.group(1), findings)
+        elif ctx == "prose":
+            # Only a Bash(...) tool directive counts as in-VM bash here — plain prose and
+            # Read/Grep directives are intentionally left alone.
+            for bm in _BASH_DIRECTIVE.finditer(line):
+                if _PLUGIN_ROOT_TOKEN.search(bm.group(1)):
+                    findings.append(_finding_plugin_root(path, i, "Bash() directive"))
+    return findings
+
+
+def _resolve_skill_targets(arg):
+    """Return (skill_md_path_or_None, [hooks.json paths]) for a directory or file arg."""
+    p = Path(arg)
+    if p.is_dir():
+        md = p / "SKILL.md"
+        hooks = sorted(str(q) for q in p.rglob("hooks.json"))
+        return (str(md) if md.is_file() else None), hooks
+    if p.is_file():
+        if p.suffix == ".json":
+            return None, [str(p)]
+        # a SKILL.md (or any markdown handed in directly); also pick up sibling hooks.json
+        hooks = sorted(str(q) for q in p.parent.rglob("hooks.json"))
+        return str(p), hooks
+    return None, []
+
+
+def cmd_lint_skill(args):
+    all_findings = []
+    n_files = 0
+    for arg in args.paths:
+        md, hooks = _resolve_skill_targets(arg)
+        if md is None and not hooks:
+            all_findings.append(
+                Finding(
+                    "ERROR",
+                    "no-skill",
+                    f"no SKILL.md or hooks.json found at {arg} — nothing to inspect.",
+                    "Point lint-skill at a SKILL.md file or a skill directory containing one.",
+                    arg,
+                )
+            )
+            continue
+        if md is not None:
+            n_files += 1
+            all_findings.extend(_lint_skill_text(md, Path(md).read_text(encoding="utf-8").splitlines()))
+        for hp in hooks:
+            n_files += 1
+            all_findings.extend(
+                _lint_skill_text(hp, Path(hp).read_text(encoding="utf-8").splitlines(), force_json=True)
+            )
+    if args.json:
+        print(json.dumps([x.as_dict() for x in all_findings], indent=2))
+    else:
+        _print_findings(all_findings, n_files, kind="skill file", clean_suffix=" — no Cowork host-loop footguns.")
     has_error = any(x.severity == "ERROR" for x in all_findings)
     if has_error or (args.strict and all_findings):
         return 1
@@ -833,6 +1002,28 @@ def main(argv=None):
     lp.add_argument("--json", action="store_true", help="emit findings as JSON")
     lp.add_argument("--strict", action="store_true", help="exit non-zero on WARN/INFO too, not just ERROR")
     lp.set_defaults(func=cmd_lint)
+
+    lsp = sub.add_parser(
+        "lint-skill",
+        help="lint SKILL.md bodies for two Cowork host-loop footguns (WARN-only, v1 narrow)",
+        description=(
+            "Inspect skill bodies (SKILL.md + any sibling hooks.json) for two antipatterns a paid "
+            "Cowork host-loop run would expose:\n"
+            "  (a) ${CLAUDE_PLUGIN_ROOT} used as a PATH in an in-VM bash context — dead in the host-loop VM;\n"
+            "  (b) a hook command that exports an env var or writes into /tmp for the in-VM agent — a "
+            "host-side hook write is not VM-visible (works in the CLI, silently no-ops in Cowork).\n\n"
+            "HONEST LIMITS (v1 is deliberately narrow to bound false positives): an in-VM bash context is "
+            "ONLY a fenced ```bash/```sh/```shell block, a hooks-config JSON \"command\" value, or a "
+            "Bash(...) directive. Host-side prose and Read/Grep directives (the correct way to read a "
+            "reference via ${CLAUDE_PLUGIN_ROOT}/...) are left alone. False negatives are expected: a token "
+            "in an indented/unfenced shell snippet won't be caught."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    lsp.add_argument("paths", nargs="+", help="SKILL.md file(s) or skill director(ies) to inspect")
+    lsp.add_argument("--json", action="store_true", help="emit findings as JSON")
+    lsp.add_argument("--strict", action="store_true", help="exit non-zero on WARN too, not just ERROR")
+    lsp.set_defaults(func=cmd_lint_skill)
 
     sp = sub.add_parser("scaffold", help="emit a valid scenario skeleton (self-linted)")
     sp.add_argument("--name", default="my-scenario", help="scenario name (default: my-scenario)")
