@@ -2500,56 +2500,145 @@ export function sessionFingerprintDrift(
  *  `controlOut`; egress/filesystem keys are live-only regardless. `expect_denied` is a scenario field (not an
  *  assert key) that desugars to live-only `egress_denied` checks — an edit to it is sourced but inert on
  *  replay, so warn when it differs from the frozen copy (closes the one remaining silent no-op). */
-function warnUncheckableOnDiskKeys(cassette: Cassette, frozen: Scenario, onDisk: Scenario): void {
+/** Why an on-disk assert key is not evaluable on THIS cassette's replay shape. `live-only` is DISTINCT
+ *  from the rest: `record` freezes live-only keys and replay STRIPS them (never a NEW false-green), so
+ *  `--write` may persist them; every OTHER reason means a key that would SILENTLY SKIP — a permanent
+ *  false-green if frozen — so `--write` refuses it. */
+export type UncheckableReason = "manifest-missing" | "prerunpaths-missing" | "prerunhashes-missing" | "controlout-missing" | "live-only";
+
+/** Classify which on-disk `assert:` keys are NOT evaluable on this cassette (reason code + human message
+ *  per key), plus whether `expect_denied` changed. The shared core behind BOTH the warn path
+ *  (`warnUncheckableOnDiskKeys`) and `replay --write`'s refuse decision — a single source so the two can't
+ *  drift on which keys are "checkable". Preserves the original per-key precedence and dedup order. */
+function classifyUncheckableOnDiskKeys(
+  cassette: Cassette,
+  frozen: Scenario,
+  onDisk: Scenario,
+): { keys: Map<keyof Assertion, { code: UncheckableReason; message: string }>; expectDeniedChanged: boolean } {
   const asserts = onDisk.assert ?? [];
   const hasManifest = !!cassette.artifacts?.length;
   const hasControlOut = !!cassette.controlOut?.length;
-  // Reuse the exported classification constant — this local copy drifted once already (it was
-  // missing computer_links_resolve), silently suppressing the on-disk warning for that key.
+  // Reuse the exported classification constants — a hand-copied gateKeys list drifted once already (it was
+  // missing computer_links_resolve on the manifest side), silently suppressing the on-disk warning.
   const manifestKeys = new Set<keyof Assertion>(MANIFEST_KEYS);
-  const gateKeys = new Set<keyof Assertion>([
-    "question_asked",
-    "questions_count_max",
-    "gate_answers_delivered",
-    "gate_answer_count_min",
-    "hook_blocked",
-    "no_hook_blocked",
-  ]);
+  const gateKeys = new Set<keyof Assertion>(QUESTION_GATE_KEYS);
   const liveOnlyKeys = new Set<keyof Assertion>(LIVE_ONLY_KEYS);
   const hasPreRun = cassette.preRunPaths !== undefined;
   const hasPreRunHashes = cassette.preRunHashes !== undefined;
-  // expect_denied: sourced from on-disk but live-only on replay — warn if the author changed it expecting effect.
-  if (JSON.stringify(frozen.expect_denied ?? []) !== JSON.stringify(onDisk.expect_denied ?? []))
-    warn(
-      "::warning:: [replay] on-disk `expect_denied:` differs from the cassette but is live-only — it is sourced, NOT evaluated on replay (run a live `run` to check egress)\n",
-    );
-  const seen = new Set<string>();
+  const keys = new Map<keyof Assertion, { code: UncheckableReason; message: string }>();
   for (const a of asserts) {
     for (const k of Object.keys(a) as (keyof Assertion)[]) {
-      if (a[k] === undefined || seen.has(k)) continue;
-      let reason = "";
-      if (liveOnlyKeys.has(k)) reason = "live-only";
+      if (a[k] === undefined || keys.has(k)) continue;
+      let entry: { code: UncheckableReason; message: string } | undefined;
+      if (liveOnlyKeys.has(k)) entry = { code: "live-only", message: "live-only" };
       // no_unexpected_files mirrors replayCassette's presence-gating: an artifacts field that exists
       // (even empty) + preRunPaths ⇒ checkable (no reason); missing baseline ⇒ its dedicated reason,
       // never the generic manifest one (which would misdiagnose an empty-but-present manifest).
-      else if (k === "no_unexpected_files" && cassette.artifacts === undefined) reason = "no artifact manifest in this cassette";
+      else if (k === "no_unexpected_files" && cassette.artifacts === undefined) entry = { code: "manifest-missing", message: "no artifact manifest in this cassette" };
       else if (k === "no_unexpected_files" && !hasPreRun)
-        reason = "no pre-run manifest in this cassette (recorded pre-0.24 or on microvm) — re-record on harness ≥0.24 (container/hostloop)";
+        entry = { code: "prerunpaths-missing", message: "no pre-run manifest in this cassette (recorded pre-0.24 or on microvm) — re-record on harness ≥0.24 (container/hostloop)" };
       // input_unmodified mirrors no_unexpected_files: checkable needs BOTH the artifacts manifest and the
       // preRunHashes baseline (a different pre-run field than no_unexpected_files' preRunPaths).
-      else if (k === "input_unmodified" && cassette.artifacts === undefined) reason = "no artifact manifest in this cassette";
+      else if (k === "input_unmodified" && cassette.artifacts === undefined) entry = { code: "manifest-missing", message: "no artifact manifest in this cassette" };
       else if (k === "input_unmodified" && !hasPreRunHashes)
-        reason =
-          "no pre-run hash manifest in this cassette (recorded pre-fingerprinted-manifest or on microvm) — re-record on a harness with hash-manifest support (container/hostloop)";
+        entry = {
+          code: "prerunhashes-missing",
+          message:
+            "no pre-run hash manifest in this cassette (recorded pre-fingerprinted-manifest or on microvm) — re-record on a harness with hash-manifest support (container/hostloop)",
+        };
       else if (k !== "no_unexpected_files" && k !== "input_unmodified" && manifestKeys.has(k) && !hasManifest)
-        reason = "no artifact manifest in this cassette";
-      else if (gateKeys.has(k) && !hasControlOut) reason = "no controlOut in this cassette";
-      if (reason) {
-        seen.add(k);
-        warn(`::warning:: [replay] on-disk assert key \`${String(k)}\` is not checkable on replay (${reason}) — skipped\n`);
-      }
+        entry = { code: "manifest-missing", message: "no artifact manifest in this cassette" };
+      else if (gateKeys.has(k) && !hasControlOut) entry = { code: "controlout-missing", message: "no controlOut in this cassette" };
+      if (entry) keys.set(k, entry);
     }
   }
+  const expectDeniedChanged = JSON.stringify(frozen.expect_denied ?? []) !== JSON.stringify(onDisk.expect_denied ?? []);
+  return { keys, expectDeniedChanged };
+}
+
+/** Warn per on-disk key that a newly-added-but-uncheckable assert would silently protect nothing on replay
+ *  (and per a live-only `expect_denied` edit). Thin wrapper over the shared classifier — output unchanged. */
+function warnUncheckableOnDiskKeys(cassette: Cassette, frozen: Scenario, onDisk: Scenario): void {
+  const { keys, expectDeniedChanged } = classifyUncheckableOnDiskKeys(cassette, frozen, onDisk);
+  // expect_denied: sourced from on-disk but live-only on replay — warn if the author changed it expecting effect.
+  if (expectDeniedChanged)
+    warn(
+      "::warning:: [replay] on-disk `expect_denied:` differs from the cassette but is live-only — it is sourced, NOT evaluated on replay (run a live `run` to check egress)\n",
+    );
+  for (const [k, r] of keys) warn(`::warning:: [replay] on-disk assert key \`${String(k)}\` is not checkable on replay (${r.message}) — skipped\n`);
+}
+
+/**
+ * `replay --reassert --write` — persist the token-free-revalidated on-disk `assert:`/`expect_denied:` block
+ * back into the cassette when ONLY the assert block changed. cmdReplay has already passed the drift guards
+ * (`recordingShapingDrift` + skill-drift), so the frozen events still correspond to this scenario, AND
+ * produced the reassert `verdict`. This mutates ONLY `scenario.assert` / `scenario.expect_denied` on the raw
+ * parsed cassette (unknown/future fields round-trip) — never events/controlOut/fingerprint.
+ *
+ * Three guards, mirroring `record`:
+ *  - M1 evaluability: refuse any added key that would SILENTLY SKIP on this cassette (every uncheckable
+ *    reason except `live-only`) — freezing it is a permanent false-green. Live-only keys + `expect_denied`
+ *    are written per record's freeze semantics (replay strips them; no NEW false-green).
+ *  - M3 verdict: refuse a failing reassert verdict unless `--allow-failing` (record refuses too).
+ *  - Redaction v2: redact ONLY the spliced block (the whole-cassette `redactCassette` re-tokenizes event
+ *    lines and is non-idempotent), verify it stays verdict-preserving, and write the redacted block.
+ */
+async function writeReassertedAssertBlock(
+  cassetteFile: string,
+  rawCassette: Cassette,
+  onDisk: Scenario,
+  srcPath: string,
+  verdict: ReturnType<typeof computeVerdict>,
+  allowFailing: boolean,
+): Promise<void> {
+  // M1 — evaluability guard.
+  const { keys } = classifyUncheckableOnDiskKeys(rawCassette, rawCassette.scenario, onDisk);
+  const refused = [...keys.entries()].filter(([, r]) => r.code !== "live-only");
+  if (refused.length) {
+    const detail = refused.map(([k, r]) => `\`${String(k)}\` (${r.message})`).join(", ");
+    throw new Error(
+      `refusing to --write: ${refused.length} on-disk assert key(s) would freeze as a SILENT no-op on this cassette (a permanent false-green): ${detail}. ` +
+        "These need evidence only a live re-record captures (artifact manifest / pre-run hashes / controlOut) — re-record to embed them.",
+    );
+  }
+  // M3 — verdict gate (mirror record's refusal to freeze a failing run).
+  if (!verdict.pass && !allowFailing) {
+    const why = verdict.signals
+      .filter((s) => s.severity === "fail")
+      .map((s) => `${s.code}: ${s.message}`)
+      .join("; ");
+    throw new Error(`refusing to --write a FAILING reassert verdict — ${why} (fix the scenario, or pass --allow-failing; mirrors record)`);
+  }
+  // Redaction v2 — block-only. Load the policy from the SAME dir set record uses, or it under-redacts.
+  const policy = loadRedactionPolicy([process.cwd(), dirname(srcPath), dirname(cassetteFile)]);
+  let nextAssert: unknown[] = onDisk.assert ?? [];
+  let nextExpectDenied: unknown[] = onDisk.expect_denied ?? [];
+  if (policy.patterns.length || policy.keyNames.length) {
+    const redactedAssert = redactStructural(onDisk.assert ?? [], policy) as unknown[];
+    const redactedExpectDenied = redactStructural(onDisk.expect_denied ?? [], policy) as unknown[];
+    // Verdict-preservation over two cassettes that differ ONLY in the assert block: events/controlOut are
+    // identical, so any verdict delta is the redaction's doing (not a fresh-base assumption). Refuse on a flip.
+    const base = { ...rawCassette, scenario: { ...rawCassette.scenario, assert: onDisk.assert ?? [], expect_denied: onDisk.expect_denied ?? [] } } as Cassette;
+    const redacted = { ...rawCassette, scenario: { ...rawCassette.scenario, assert: redactedAssert, expect_denied: redactedExpectDenied } } as Cassette;
+    await assertRedactionVerdictPreserved(base, redacted, dirname(cassetteFile));
+    nextAssert = redactedAssert;
+    nextExpectDenied = redactedExpectDenied;
+  }
+  // Write only if the (post-redaction) block differs from the frozen copy. Idempotent because we always
+  // redact from the PLAINTEXT on-disk source (deterministic) — a second --write yields the same block.
+  const scn = rawCassette.scenario as { assert?: unknown[]; expect_denied?: unknown[] };
+  const assertSame = JSON.stringify(scn.assert ?? []) === JSON.stringify(nextAssert);
+  const expectSame = JSON.stringify(scn.expect_denied ?? []) === JSON.stringify(nextExpectDenied);
+  if (assertSame && expectSame) {
+    warn(`::notice:: [replay --write] ${cassetteFile}: assert block already matches the on-disk block — no write\n`);
+    return;
+  }
+  scn.assert = nextAssert;
+  // Only manage expect_denied when it's meaningful — avoid gratuitously adding an empty field to a cassette
+  // that never had one (keep the diff to what actually changed).
+  if (nextExpectDenied.length || scn.expect_denied !== undefined) scn.expect_denied = nextExpectDenied;
+  writeFileAtomic(cassetteFile, JSON.stringify(rawCassette, null, 2)); // atomic — no partial cassette on a crash
+  warn(`::notice:: [replay --write] ${cassetteFile}: wrote the re-asserted block back to the cassette (events/controlOut unchanged)\n`);
 }
 
 /** `replay <file|dir>` — deterministic protocol-replay; re-evaluates content assertions. A directory
@@ -2566,7 +2655,7 @@ export async function cmdReplay(args: string[]) {
   try {
     p = parseArgs(args, {
       // --quiet/--verbose accepted for flag consistency but currently no-op in replay (renderer plan is fixed).
-      booleans: ["--strict", "--fail-on-skill-drift", "--reassert", "--best-effort-future-cassette", "--quiet", "--verbose"],
+      booleans: ["--strict", "--fail-on-skill-drift", "--reassert", "--write", "--allow-failing", "--best-effort-future-cassette", "--quiet", "--verbose"],
       values: ["--output-format", "--assert-from"],
       enums: { "--output-format": ["text", "json"] },
       aliases: { "-q": "--quiet" },
@@ -2578,7 +2667,7 @@ export async function cmdReplay(args: string[]) {
   const target = p.positionals[0];
   if (!target) {
     log(
-      "usage: replay <file.cassette.json | dir/> [--strict] [--fail-on-skill-drift] [--assert-from <scenario.yaml> | --reassert] [--output-format text|json]",
+      "usage: replay <file.cassette.json | dir/> [--strict] [--fail-on-skill-drift] [--assert-from <scenario.yaml> | --reassert] [--write [--allow-failing]] [--output-format text|json]",
     );
     return process.exit(2);
   }
@@ -2599,6 +2688,16 @@ export async function cmdReplay(args: string[]) {
     return process.exit(2);
   }
   const reassertMode = assertFrom !== undefined || reassert;
+  // `--write` persists the re-validated on-disk assert block back into the cassette — only meaningful on the
+  // reassert opt-in path (the drift guards there are what make it safe). `--allow-failing` relaxes the write's
+  // verdict gate (mirrors record).
+  const write = p.flags["--write"] ?? false;
+  const allowFailing = p.flags["--allow-failing"] ?? false;
+  if (write && !reassertMode) {
+    log("replay --write requires --reassert (or --assert-from <scenario.yaml>): it persists the RE-ASSERTED on-disk block, so there must be one to re-assert from");
+    return process.exit(2);
+  }
+  if (allowFailing && !write) warn("::notice:: [replay] --allow-failing only affects --write's verdict gate; it is a no-op without --write\n");
   const failOnSkillDrift = (p.flags["--fail-on-skill-drift"] ?? false) || reassertMode; // narrower gate: only skill-source drift fails
   if (strict && p.flags["--fail-on-skill-drift"])
     warn(
@@ -2625,6 +2724,12 @@ export async function cmdReplay(args: string[]) {
       `::warning:: [replay] --assert-from <one file> applied to ${resolved.files.length} cassettes — the SAME on-disk assert: is checked against each; ` +
         "use --reassert to resolve each cassette's own sibling\n",
     );
+  // `--assert-from <one file> --write` over a dir would clone-write ONE assert block into every cassette —
+  // the cross-assert footgun made permanent. For a dir, require --reassert (each cassette's own sibling).
+  if (write && assertFrom !== undefined && resolved.files.length > 1) {
+    log("replay --assert-from <one file> --write over a directory is refused (it would write one assert block into every cassette) — use --reassert for a per-cassette sibling");
+    return process.exit(2);
+  }
   const results: RunResult[] = [];
   let worst = 0;
   for (const f of resolved.files) {
@@ -2644,6 +2749,8 @@ export async function cmdReplay(args: string[]) {
     // an invalid YAML, and on the opt-in path that throw should fail THIS cassette (a tallied error), not
     // escape the loop and abort the batch.
     let result: RunResult;
+    // Captured on the reassert path so the post-verdict --write step (below) has the on-disk block + source.
+    let reassertWriteCtx: { onDisk: Scenario; srcPath: string } | undefined;
     try {
       let cassette = rc.cassette;
       if (reassertMode) {
@@ -2701,6 +2808,7 @@ export async function cmdReplay(args: string[]) {
             "::warning:: [replay] this cassette has no skill fingerprint, so skill-content drift can NOT be verified on --assert-from — " +
               "re-asserting against possibly-stale events; re-record to enable the skill-drift guard\n",
           );
+        if (write) reassertWriteCtx = { onDisk, srcPath };
       } else {
         // --- A-default: frozen assertions drive the verdict; only kill the SILENT no-op with a notice ---
         // Pure decoration — never throws, never changes the verdict. If the sibling resolves and its assert:
@@ -2743,7 +2851,18 @@ export async function cmdReplay(args: string[]) {
     // the replay lane evaluates assertions + result only; one verdict source for footer AND exit.
     if (!json) renderFooter(result, plan, { renderer, lane: "replay" });
     results.push(result);
-    worst = Math.max(worst, computeVerdict(result, "replay").exitCode);
+    const verdict = computeVerdict(result, "replay");
+    worst = Math.max(worst, verdict.exitCode);
+    // --write: persist the re-asserted block back into the cassette (reassert path only; the drift guards
+    // above already ran). A refusal is a per-file operational error (bump `worst`) — never a silent skip.
+    if (write && reassertWriteCtx) {
+      try {
+        await writeReassertedAssertBlock(f, rc.cassette, reassertWriteCtx.onDisk, reassertWriteCtx.srcPath, verdict, allowFailing);
+      } catch (e) {
+        log(`replay --write: ${f}: ${(e as Error)?.message ?? String(e)}`);
+        worst = Math.max(worst, 2);
+      }
+    }
   }
   // stdout = machine ONLY under --output-format json; humans get per-file footers on stderr.
   if (json) out(jsonEnvelope("replay", results));

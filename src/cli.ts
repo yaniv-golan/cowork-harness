@@ -416,9 +416,10 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
     "       (a live decider flags the cassette non-deterministic — re-recording may drift; replay stays deterministic. --rerecord-stale rejects these flags.)\n" +
     "       NOTE: --allow-failing only relaxes the post-run VERDICT gate; it does NOT salvage an unanswered gate (that throws before any cassette is written — use --on-unanswered first / a decider).",
   replay:
-    "usage: replay <file.cassette.json | dir/> [--strict] [--fail-on-skill-drift] [--assert-from <scenario.yaml> | --reassert] [--output-format text|json]\n" +
+    "usage: replay <file.cassette.json | dir/> [--strict] [--fail-on-skill-drift] [--assert-from <scenario.yaml> | --reassert] [--write [--allow-failing]] [--output-format text|json]\n" +
     "       by default the assertions FROZEN in the cassette drive the verdict (deterministic); a sibling scenario whose assert: differs only prints a notice.\n" +
-    "       --assert-from <file> / --reassert: token-free re-check against the on-disk assert:/expect_denied: — recording-shaping drift (prompt/answers/baseline/skills) and skill staleness HARD-FAIL.",
+    "       --assert-from <file> / --reassert: token-free re-check against the on-disk assert:/expect_denied: — recording-shaping drift (prompt/answers/baseline/skills) and skill staleness HARD-FAIL.\n" +
+    "       --write (reassert path only): persist the re-validated block back into the cassette when ONLY the assert block changed — no paid re-record. Refuses keys that would silently skip (need a manifest/hashes/controlOut) and, without --allow-failing, a failing verdict; events/controlOut stay byte-identical.",
   "verify-cassettes":
     "usage: verify-cassettes <file|dir> [--skip-privacy|--skip-staleness] [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-path <regex>]... [--allow-machine-inventory <regex>]... [--allow-patterns-file <path>]... [--output-format json]\n" +
     "       --allow <regex> is a PATTERN (matched against a finding); --allow-patterns-file <path> is a FILE of patterns, one regex per line — not a path to allow.",
