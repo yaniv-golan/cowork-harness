@@ -240,9 +240,9 @@ const defaultRawFetch: RawFetch = async (url, pinnedAddresses) => {
  * The workspace SDK-MCP server, driver-side — reproduces Cowork's host-loop shell:
  * the agent loop (in the container) routes `mcp__workspace__bash`/`web_fetch` calls to
  * the DRIVER (host) over the control protocol; the driver executes them in the VM view
- * (`docker exec` into the agent's container, cwd = /sessions/<id>/mnt). The container
- * has no `/host` path, so `${CLAUDE_PLUGIN_ROOT}` (a host path) is unresolvable in bash
- * → a skill must self-heal via `find /sessions/<id>/mnt …`, exactly like production.
+ * (`docker exec` into the agent's container, cwd = /sessions/<id>/mnt). `CLAUDE_PLUGIN_ROOT`
+ * is UNSET in that bash (the host-loop sidecar omits it, matching real host-loop) → a skill
+ * must self-heal via `find /sessions/<id>/mnt …`, exactly like production.
  *
  * The bash tool description is the verbatim Cowork string.
  */

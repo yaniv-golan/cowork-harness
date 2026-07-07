@@ -79,12 +79,11 @@ export function spawnHostLoop(
 
   // CLAUDE_PLUGIN_ROOT / --plugin-dir for the NATIVE process point at the staged plugin copy (the
   // production-analog `installPath`) — a REAL host path the native process can resolve directly, unlike
-  // the pre-split design where the agent ran in-container and needed an intentionally-unresolvable
-  // sentinel. bash's `docker exec` still gets the sentinel (below) so it still self-heals via
-  // `find /sessions/<id>/mnt ...`, exactly like production (2+ configured plugins keep the sentinel for
-  // BOTH consumers — the same pre-existing per-plugin-hook scoping limitation, not a regression here).
+  // the pre-split design where the agent ran in-container. bash's `docker exec` sidecar gets NO
+  // CLAUDE_PLUGIN_ROOT at all (the env key is omitted below), matching real host-loop where in-guest bash
+  // sees the var UNSET — the agent's `[ -z "$CLAUDE_PLUGIN_ROOT" ]` self-heal then discovers the mount via
+  // `find /sessions/<id>/mnt ...`, exactly as before, but WITHOUT a bogus /host sentinel leaking into bash.
   const claudePluginRootHost = resolveClaudePluginRootHostPath(plan, mntHost);
-  const hostPluginRoot = "/host/plugins/unmounted"; // bash-side sentinel — unresolvable in the VM, triggers self-heal
 
   const agentNativeHost = resolveHostAgentBinary(baseline);
   const agentVmHost = resolveAgentBinary(baseline); // unchanged — still the sidecar VM image's basis (bash execs into it)
@@ -189,7 +188,7 @@ export function spawnHostLoop(
     agentHost: agentVmHost,
     agentIn: "/usr/local/bin/claude", // kept bind-mounted (unused by any process) for parity/inspection; harmless
     image,
-    env: { CLAUDE_PLUGIN_ROOT: hostPluginRoot },
+    env: {}, // NO CLAUDE_PLUGIN_ROOT — real host-loop leaves it unset in the VM; the agent self-heals via `find`
     name: containerName,
     readOnlyMountPaths: plan.mounts.filter((mt) => mt.mode === "r" && mt.kind !== "folder").map((mt) => mt.mountPath),
     extraBinds: resolveHostLoopBindMounts(plan, sessionRoot),

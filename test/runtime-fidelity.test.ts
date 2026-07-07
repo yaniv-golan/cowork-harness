@@ -1,6 +1,10 @@
 import { describe, it, expect, afterEach } from "vitest";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { vmGatewayIp, guestFirewallScript, limaConfig, instanceName } from "../src/runtime/lima.js";
 import { firewallFailureAction, microvmShellScript, MICROVM_SECRET_SENTINEL } from "../src/runtime/microvm.js";
+import { dockerRunArgv } from "../src/runtime/argv.js";
 import type { PlatformBaseline } from "../src/types.js";
 
 /**
@@ -126,14 +130,27 @@ describe("Lima instance name is derived from the config hash", () => {
   });
 });
 
-describe("host-loop CLAUDE_PLUGIN_ROOT is a fixed unresolvable sentinel", () => {
-  // The full host-loop env is built inside spawnHostLoop, which spawns Docker and is not
-  // reachable token-free. Assert the sentinel constant directly — the value spawnHostLoop
-  // sets for CLAUDE_PLUGIN_ROOT (kept in sync with src/runtime/hostloop.ts).
-  it("is /host/plugins/unmounted (deliberately not tied to any plugin basename)", () => {
-    const hostPluginRoot = "/host/plugins/unmounted";
-    expect(hostPluginRoot).toBe("/host/plugins/unmounted");
-    // It must be an UNMOUNTED /host path so in-guest bash can't resolve it -> self-heal.
-    expect(hostPluginRoot.startsWith("/host/")).toBe(true);
+describe("host-loop sidecar leaves CLAUDE_PLUGIN_ROOT UNSET (matches real host-loop: VM bash sees no value)", () => {
+  // Real host-loop leaves CLAUDE_PLUGIN_ROOT unset in the VM (live probe: in-guest bash saw an empty
+  // value); the agent's `[ -z "$CLAUDE_PLUGIN_ROOT" ]` self-heal then fires via `find …/mnt`, exactly as
+  // an unresolvable sentinel used to trigger it — but WITHOUT a bogus /host path leaking into the guest.
+  // spawnHostLoop spawns Docker (not token-free), so we assert at the argv seam it renders through.
+  const SRC = join(dirname(fileURLToPath(import.meta.url)), "..", "src");
+  const base = { network: "none", lockdown: true, sessionRoot: "/s", sessionHost: "/h", image: "img" } as const;
+
+  it("dockerRunArgv omits CLAUDE_PLUGIN_ROOT when the env doesn't set it (the post-fix host-loop sidecar env)", () => {
+    const argv = dockerRunArgv({ ...base, env: {} });
+    expect(argv.join(" ")).not.toContain("CLAUDE_PLUGIN_ROOT");
+  });
+
+  it("dockerRunArgv DOES render the key when present — so OMISSION (not a sentinel) is what leaves it unset", () => {
+    const argv = dockerRunArgv({ ...base, env: { CLAUDE_PLUGIN_ROOT: "/x" } });
+    expect(argv.join(" ")).toContain("CLAUDE_PLUGIN_ROOT=/x");
+  });
+
+  it("the old unresolvable sentinel is gone from the host-loop sidecar", () => {
+    // Regression guard: re-introducing a `/host/plugins/unmounted` sentinel would leak a bogus path into
+    // guest bash again (the very drift from real host-loop this removed).
+    expect(readFileSync(join(SRC, "runtime", "hostloop.ts"), "utf8")).not.toContain("/host/plugins/unmounted");
   });
 });
