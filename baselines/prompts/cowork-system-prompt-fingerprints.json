@@ -1,0 +1,22 @@
+{
+  "$comment": "SHA-256 + code-point count + section-tag count of the RAW Cowork system-prompt constant (the module-scope backtick-template string consumed once as system_prompts.cowork_system_prompt.value.prompt) extracted from each Claude Desktop app.asar. Purpose: let a maintainer detect prompt-append DRIFT across Desktop releases WITHOUT publishing the proprietary verbatim text — the committed baselines/prompts/desktop-*/system-prompt-append.md are deliberately PARAPHRASED under the repo's no-bundling rule. This is prompt-SPECIFIC and complements provenance.asarFingerprint in baselines/desktop-*.json, which is a coarse 16-char hash over broad cowork slices and flips on any nearby churn (e.g. a minifier rename), not only on prompt content.",
+  "constant": "system_prompts.cowork_system_prompt.value.prompt",
+  "extractionMethod": "In the Desktop app.asar bundle, find the single consumption site `cowork_system_prompt:{value:{prompt:<id>}` and read the minified constant <id> (name is minifier-assigned and varies per build). Take the backtick-template body of `<id>=`...`` (raw template SOURCE — ${} placeholders and \\-escapes left intact, so the hash is minifier-name-independent) and SHA-256 its UTF-8 bytes. codePoints = [...utf8].length; sectionTags = count of /<([a-z_]+)>/g opens.",
+  "localRawRetention": "The verbatim raw is retained locally (NEVER committed) under ~/cowork-agent-backup/desktop-asar/<ver>/cowork-system-prompt-raw.txt, alongside a full app.asar backup — see the Desktop-asar backup ritual in the private CLAUDE.md.",
+  "versions": {
+    "1.18286.0": {
+      "sha256": null,
+      "codePoints": 37857,
+      "sectionTags": 43,
+      "constantId": "aui",
+      "note": "Recorded before this fingerprint file existed; the 1.18286.0 asar was pruned by the Desktop self-update before a hash could be captured, and old Desktop versions are not re-downloadable. codePoints + sectionTags are from the reconstruction (docs/internal). Presumed byte-identical to 1.18286.2 on the strength of an exact code-point + section-tag-structure match."
+    },
+    "1.18286.2": {
+      "sha256": "298464bd98816cb8724354471867a150dd2ff4b9f65db734fcc6df38335f32b2",
+      "codePoints": 37857,
+      "sectionTags": 43,
+      "constantId": "sIi",
+      "note": "First release with a retained raw + hash anchor. Prompt append verified UNCHANGED vs 1.18286.0 (identical 37857 code points and identical 43-tag section structure/order); the reconstructed 1.18286.0 paraphrase baseline remains faithful for 1.18286.2."
+    }
+  }
+}

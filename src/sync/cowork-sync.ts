@@ -293,7 +293,9 @@ export function checkWebFetchFacts(bundle: string): string[] {
 // ==========================================================================================
 
 /**
- * GrowthBook gate ids allowed to appear in W1's `At("…")` conditionals — the CLOSED set. A gate id in
+ * GrowthBook gate ids allowed to appear in W1's `<helper>("…")` conditionals — the CLOSED set. (The
+ * gate-check helper's minified name varies per Desktop build: `At` in 1.18286.0, `et` in 1.18286.2; the
+ * extractor matches it by shape, not by name.) A gate id in
  * the env windows but NOT here means a NEW gate-conditional env var was introduced: hard-fail so it gets
  * classified before the gate ever flips. Value = the env key it controls + disposition.
  */
@@ -447,7 +449,7 @@ function resolveStringArg(bundle: string, arg: string, isCall: boolean): string 
 /**
  * Resolve one `KEY:<expr>` value expression to a concrete string, or report it unresolvable. Recognized
  * shapes: string literal; template-with-default (`` `pfx${field??"def"}` `` → `pfx`+`def`); gate-ternary
- * (`At("id")?"a":"b"`); `String(<const|call>)`; and the modeled-session ternaries the standard 1p prod
+ * (`<helper>("id")?"a":"b"`, helper name minifier-assigned); `String(<const|call>)`; and the modeled-session ternaries the standard 1p prod
  * chat localAgent session pins deterministically (disableCron→"1", oauth-env prod→"", 3p-entrypoint→1p).
  * Anything else → `{ unknown: true }` (never a silent partial substitution).
  */
@@ -456,7 +458,7 @@ function resolveSpawnValue(bundle: string, expr: string, gates: Record<string, G
   let m: RegExpMatchArray | null;
   if ((m = e.match(/^"([^"]*)"$/)) || (m = e.match(/^'([^']*)'$/))) return { value: m[1] };
   if ((m = e.match(/^`([^`$]*)\$\{[^}]*\?\?"([^"]*)"\}`$/))) return { value: m[1] + m[2] };
-  if ((m = e.match(/^At\("(\d+)"\)\?"([^"]*)":"([^"]*)"$/))) {
+  if ((m = e.match(/^[A-Za-z_$][\w$]*\("(\d+)"\)\?"([^"]*)":"([^"]*)"$/))) {
     const id = m[1];
     if (!(id in SPAWN_GATES)) return { unknown: true };
     return { value: gates[id]?.on ? m[2] : m[3] };
@@ -592,8 +594,10 @@ export function deriveSpawnEnv(
   const enumerated = new Set<string>();
   let hardFail = false;
 
-  // Gate enumeration (W1 only — the sole window using At(…)): every referenced gate id must be known.
-  for (const gm of (w1 as string).matchAll(/At\("(\d+)"\)/g)) {
+  // Gate enumeration (W1 only — the sole window using gate-check conditionals): every referenced gate id
+  // must be known. The helper name is minifier-assigned (At/et/…); match by shape. The `(?<![\w$])`
+  // lookbehind keeps the match anchored to a full identifier so it can't start mid-token.
+  for (const gm of (w1 as string).matchAll(/(?<![\w$])[A-Za-z_$][\w$]*\("(\d+)"\)/g)) {
     if (!(gm[1] in SPAWN_GATES)) {
       flags.push(
         `spawn.env: unknown gate id ${gm[1]} in a W1 env conditional — a NEW gate-conditional env var was introduced; ${SPAWN_ADVICE}`,
@@ -634,13 +638,14 @@ export function deriveSpawnEnv(
     }
   };
 
-  // A window's non-gate-spread keys. Gate-conditional spreads (…At("id")&&{…}) are handled first (they
-  // must be resolved against gate STATE, not read as plain literals — an off-gate NONBLOCKING:"0" must
-  // not override W2's "true"), then blanked so the generic pass never sees them.
+  // A window's non-gate-spread keys. Gate-conditional spreads (…<helper>("id")&&{…}) are handled first
+  // (they must be resolved against gate STATE, not read as plain literals — an off-gate NONBLOCKING:"0"
+  // must not override W2's "true"), then blanked so the generic pass never sees them. Helper name is
+  // minifier-assigned (At/et/…); the leading `...` bounds the identifier start.
   const applyWindow = (text: string, target: Record<string, string>, isW1: boolean) => {
     let work = text;
     if (isW1) {
-      for (const sm of text.matchAll(/\.\.\.At\("(\d+)"\)&&\{([^{}]*)\}/g)) {
+      for (const sm of text.matchAll(/\.\.\.[A-Za-z_$][\w$]*\("(\d+)"\)&&\{([^{}]*)\}/g)) {
         const id = sm[1];
         const inner = sm[2];
         for (const k of enumSpawnKeys("{" + inner)) enumerated.add(k.key);
@@ -755,7 +760,7 @@ export function checkSpawnContractFacts(bundle: string): string[] {
     flags.push(
       `spawn: NEGATIVE INVARIANT S17 broken — CLAUDE_CODE_USE_COWORK_PLUGINS is now SET; it would flip the agent to cowork_settings.json/cowork_plugins; ${SPAWN_NO_BYPASS}`,
     );
-  if (!w1 || !has(/CLAUDE_CODE_EMIT_TOOL_USE_SUMMARIES:At\("66187241"\)\?"true":""/, w1))
+  if (!w1 || !has(/CLAUDE_CODE_EMIT_TOOL_USE_SUMMARIES:[A-Za-z_$][\w$]*\("66187241"\)\?"true":""/, w1))
     miss("S18 EMIT_TOOL_USE_SUMMARIES gate-ternary", "the gate-id↔key association changed");
   if (!w1 || !has(/CLAUDE_CODE_TAGS:`lam_session_type:\$\{/, w1))
     miss("S19 CLAUDE_CODE_TAGS template", "the lam_session_type template shape changed");

@@ -6,6 +6,30 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+
+- **Synced the platform baseline to Claude Desktop 1.18286.2** (`baselines/desktop-1.18286.2.json`).
+  The staged agent ELF moved to **2.1.202** (measured sha256 recorded). `sync` re-derived the volatile
+  facts: the full spawn contract (env, mounts, egress, gates) is **byte-identical** to `1.18286.0` — only
+  `appVersion`/`agentVersion`/`agentBinary`/`asarFingerprint` moved, no unknown deltas.
+
+### Fixed
+
+- **Un-pinned the minified gate-check helper name in the spawn-env extractor.** Desktop 1.18286.2
+  re-minified the renderer, renaming the GrowthBook gate-check helper (`At`→`et`). The extractor matched
+  it by literal name at four sites in `src/sync/cowork-sync.ts`, so `sync` reported unknown deltas and —
+  more importantly — one site silently failed open (an off-gate `MCP_CONNECTION_NONBLOCKING` spread would
+  have leaked `"0"` over the base env with no flag). The extractor now matches the helper by shape, still
+  guarded by the closed `SPAWN_GATES` set and the S18 anchor; a rename-regression test covers it.
+
+### Added
+
+- **Cowork system-prompt drift fingerprint** (`baselines/prompts/cowork-system-prompt-fingerprints.json`):
+  the SHA-256 + code-point/section-tag counts of the raw Cowork system-prompt constant per Desktop build,
+  so prompt-append drift is detectable across releases without publishing the proprietary verbatim text.
+  The append is verified **unchanged** from 1.18286.0 to 1.18286.2 (identical code-point count and section
+  structure).
+
 ## [0.27.0] — 2026-07-07
 
 An observability pass: `RunResult` now surfaces per-tool timing, error/redundancy rollups, model

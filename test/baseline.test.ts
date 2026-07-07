@@ -453,6 +453,20 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
     expect(checkSpawnContractFacts(fixture())).toEqual([]);
   });
 
+  // 1b. Minifier-rename regression: the gate-check helper's name is minifier-assigned and changed
+  // At→et across a Desktop build. Renaming every helper call must leave derivation byte-identical —
+  // in particular the off-gate 434204418 spread must still be blanked so MCP_CONNECTION_NONBLOCKING
+  // stays W2's "true" (an unblanked spread would leak "0" with no flag — a silent false-green).
+  it("helper-rename regression: At(→et( derives the identical pin map and no HARD-FAIL flags", () => {
+    const renamed = fixture().replaceAll('At("', 'et("');
+    expect(renamed).not.toBe(fixture()); // the rename actually applied
+    const { env, flags } = deriveSpawnEnv(renamed, greenGates());
+    expect(flags.filter((f) => !f.startsWith("NOTE:"))).toEqual([]);
+    expect(env).toEqual(EXPECTED_GREEN);
+    expect(env!.MCP_CONNECTION_NONBLOCKING).toBe("true");
+    expect(checkSpawnContractFacts(renamed)).toEqual([]);
+  });
+
   // 2. Per-fact mutation table: mutate/drop each token → exactly the matching flag names the field.
   const STRUCT_MUT: [string, string, string][] = [
     ['settingSources:["user"]', 'settingSources:["admin"]', "S2"],
