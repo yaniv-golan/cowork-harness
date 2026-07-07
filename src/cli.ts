@@ -50,6 +50,12 @@ import {
   formatDispatchTree,
   buildToolDurations,
   formatToolDurations,
+  buildToolErrors,
+  formatToolErrors,
+  buildFilesView,
+  formatFilesView,
+  buildUsageView,
+  formatUsageView,
   noteRunsLocation,
   eventsFromLines,
   runsRoot,
@@ -163,7 +169,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
 
 ── Debugging / inspection ─────────────────────────────────────────────────────
   trace <run-id | dir | path>  digest a run's events.jsonl (tools+result status, dispatches, decisions)
-      [--view tools|questions|dispatches|tool-durations] [--translate-paths]   focus on one view (default: all); see 'trace --help'
+      [--view tools|questions|dispatches|tool-durations|tool-errors|files|usage] [--translate-paths]   focus on one view (default: all); see 'trace --help'
       [--output-format json]   structured rows
   verify-run <run-dir> <scenario.yaml>   re-evaluate assert: against a kept run dir (no live agent, ~1s)
       [--output-format json]
@@ -417,7 +423,7 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
     "usage: verify-cassettes <file|dir> [--skip-privacy|--skip-staleness] [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-path <regex>]... [--allow-machine-inventory <regex>]... [--allow-patterns-file <path>]... [--output-format json]\n" +
     "       --allow <regex> is a PATTERN (matched against a finding); --allow-patterns-file <path> is a FILE of patterns, one regex per line — not a path to allow.",
   trace:
-    "usage: trace <run-id | run-dir | events.jsonl> [--view tools|questions|dispatches|tool-durations] [--translate-paths] [--output-format json]\n       --view tools           tool call / result rows\n       --view questions       gate lifecycle (question → answer → delivered)\n       --view dispatches      sub-agent dispatch tree + dispatch_count_max\n       --view tool-durations  per-tool call-count/timing table, folded from the sibling timeline.jsonl ({} when the run has no timing data)\n       --translate-paths  rewrite VM paths to host paths in the tools/default TEXT views only (needs a sibling mounts.json + an effective hostloop run; questions/dispatches views and --output-format json are unaffected)\n       (default: all views)\n       (for what the run PRODUCED — artifacts — use `inspect`)",
+    "usage: trace <run-id | run-dir | events.jsonl> [--view tools|questions|dispatches|tool-durations|tool-errors|files|usage] [--translate-paths] [--output-format json]\n       --view tools           tool call / result rows\n       --view questions       gate lifecycle (question → answer → delivered)\n       --view dispatches      sub-agent dispatch tree + dispatch_count_max\n       --view tool-durations  per-tool call-count/timing table, folded from the sibling timeline.jsonl ({} when the run has no timing data)\n       --view tool-errors     one row per errored tool call, with the full command + full multi-line stderr (each capped at 4KB); the tools view shows only the first 120 chars\n       --view files           workspaceFiles[] class-grouped tree + diff vs preRunHashes (added/modified/removed/unchanged); needs a run dir (reads result.json)\n       --view usage           per-model tokens/cost/cache-read ratio from modelUsage; needs a run dir (reads result.json)\n       --translate-paths  rewrite VM paths to host paths in the tools/default TEXT views only (needs a sibling mounts.json + an effective hostloop run; questions/dispatches views and --output-format json are unaffected)\n       (default: all views)\n       (for what the run PRODUCED — artifacts — use `inspect`)",
   assertions: "usage: assertions --list [--output-format json]",
   scaffold:
     "usage: scaffold <run-id | run-dir> [--out <file.yaml>] [--output-format text|json]\n       Turns a kept run into a starter scenario YAML (gates→answers, artifacts→file_exists).\n       Positional <run-id | run-dir> is the canonical form.",
@@ -3417,7 +3423,7 @@ function cmdTrace(args: string[]) {
   const viewEqMatch = args.find((a) => a.startsWith("--view="));
   let viewArg: string | undefined = viewEqMatch ? viewEqMatch.slice("--view=".length) : viewIdx >= 0 ? args[viewIdx + 1] : undefined;
 
-  const VIEWS = ["tools", "questions", "dispatches", "tool-durations"] as const;
+  const VIEWS = ["tools", "questions", "dispatches", "tool-durations", "tool-errors", "files", "usage"] as const;
   type View = (typeof VIEWS)[number];
   if (viewArg !== undefined && !VIEWS.includes(viewArg as View)) {
     fail("trace", "usage", `--view: expected one of ${VIEWS.join("|")}, got "${viewArg}"`, undefined, json);
@@ -3477,7 +3483,7 @@ function cmdTrace(args: string[]) {
     fail(
       "trace",
       "usage",
-      "usage: trace <run-id | run-dir | events.jsonl> [--view tools|questions|dispatches|tool-durations] [--translate-paths] [--output-format json]",
+      "usage: trace <run-id | run-dir | events.jsonl> [--view tools|questions|dispatches|tool-durations|tool-errors|files|usage] [--translate-paths] [--output-format json]",
       undefined,
       json,
     );
@@ -3506,6 +3512,27 @@ function cmdTrace(args: string[]) {
     const durations = buildToolDurations(file);
     if (json) out(JSON.stringify({ tool: "cowork-harness", command: "trace", file, durations }));
     else out(formatToolDurations(durations));
+    return;
+  }
+  if (view === "tool-errors") {
+    // tool-errors view: one row per errored tool call with the full command + full multi-line stderr.
+    const rows = buildToolErrors(file);
+    if (json) out(JSON.stringify({ tool: "cowork-harness", command: "trace", file, toolErrors: rows }));
+    else out(formatToolErrors(rows));
+    return;
+  }
+  if (view === "files") {
+    // files view: workspaceFiles[] class-grouped tree + diff vs preRunHashes — reads the sibling result.json.
+    const v = buildFilesView(file);
+    if (json) out(JSON.stringify({ tool: "cowork-harness", command: "trace", file, ...v }));
+    else out(formatFilesView(v));
+    return;
+  }
+  if (view === "usage") {
+    // usage view: per-model tokens/cost/cache-ratio from modelUsage — reads the sibling result.json.
+    const v = buildUsageView(file);
+    if (json) out(JSON.stringify({ tool: "cowork-harness", command: "trace", file, ...v }));
+    else out(formatUsageView(v));
     return;
   }
   // Build the translator, if any, ONLY for text output — json is the raw machine record and must stay

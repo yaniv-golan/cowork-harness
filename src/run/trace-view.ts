@@ -66,8 +66,15 @@ export interface TraceRow {
   child?: boolean; // ran inside a sub-agent (had a parentToolUseId)
   toolUseId?: string; // for pairing a tool row with its result
   resultStatus?: "ok" | "error"; // the tool's outcome (was invisible before)
-  resultText?: string; // first line of the result/error
+  resultText?: string; // first line of the result/error (120-char cap) — what the default/tools view shows
+  resultTextFull?: string; // error rows only: the FULL multi-line result, capped at TOOL_ERROR_TEXT_CAP —
+  detailFull?: string; // error rows only: the FULL (uncapped-to-cap) input/command — powers `--view tool-errors`
 }
+
+/** Cap for the fuller error captures (`resultTextFull`/`detailFull`). Bounds a runaway stderr / huge
+ *  argument blob so a single errored call can't balloon the `--view tool-errors` JSON envelope. Stated in
+ *  `trace --help`. The 120-char `resultText` other views use is unaffected. */
+const TOOL_ERROR_TEXT_CAP = 4096;
 
 function isDispatchTool(name: string, input: unknown): boolean {
   return name === "Agent" || name === "Task" || (typeof input === "object" && input !== null && "subagent_type" in input);
@@ -273,6 +280,13 @@ export function buildTraceFromEvents(events: AgentEvent[], opts: BuildTraceOptio
         row.resultStatus = r.isError ? "error" : "ok";
         // translate the first line BEFORE slicing (same ordering rule as summarize/rowFor above).
         row.resultText = translate(r.text.split("\n")[0]).slice(0, 120);
+        if (r.isError) {
+          // Fuller capture for the `tool-errors` drill-down: the WHOLE multi-line stderr (not just
+          // line 1) and the full input/command, each capped. The default/tools view still reads the
+          // 120-char first-line `resultText` above, so those rows are unchanged.
+          row.resultTextFull = translate(r.text).slice(0, TOOL_ERROR_TEXT_CAP);
+          if (ev.type === "tool_use") row.detailFull = translate(JSON.stringify(ev.input)).slice(0, TOOL_ERROR_TEXT_CAP);
+        }
       }
       rows.push(row);
     }
@@ -494,6 +508,170 @@ function cacheReadRatio(
   }
   const denom = input + cacheRead + cacheCreation;
   return denom > 0 ? cacheRead / denom : undefined;
+}
+
+/** Best-effort read of the sibling `result.json` for a run dir, given its `events.jsonl` path. Returns
+ *  `undefined` when there's no run dir (a bare `events.jsonl` was traced) or the file won't parse — the
+ *  same "absent means degrade gracefully, don't crash" tolerance `buildGateTrace`'s provenance pass uses. */
+function readSiblingResult(file: string): RunResult | undefined {
+  const p = join(dirname(file), "result.json");
+  if (!existsSync(p)) return undefined;
+  try {
+    return JSON.parse(readFileSync(p, "utf8")) as RunResult;
+  } catch (e) {
+    warn(`::warning:: trace: skipping unparseable ${p}: ${String((e as Error).message)}\n`);
+    return undefined;
+  }
+}
+
+/**
+ * `trace --view tool-errors` — one row per ERRORED tool call, with the full command and the full
+ * multi-line stderr (the `tools` view shows only the 120-char first line; `toolErrors` in `result.json`
+ * shows only counts). The single most-requested trace gap: reading the actual errored commands used to
+ * require `--view tools --output-format json | filter` and then hand-parsing `events.jsonl` because
+ * `resultText` was truncated to the first line.
+ */
+export interface ToolErrorRow {
+  name: string;
+  detail: string; // full input/command (capped at TOOL_ERROR_TEXT_CAP)
+  resultText: string; // full multi-line error text (capped at TOOL_ERROR_TEXT_CAP)
+  child: boolean; // ran inside a sub-agent
+}
+
+export function buildToolErrors(file: string): ToolErrorRow[] {
+  return buildTrace(file)
+    .filter((r) => r.kind === "tool" && r.resultStatus === "error")
+    .map((r) => ({ name: r.name ?? "", detail: r.detailFull ?? r.detail ?? "", resultText: r.resultTextFull ?? r.resultText ?? "", child: !!r.child }));
+}
+
+export function formatToolErrors(rows: ToolErrorRow[]): string {
+  if (!rows.length) return "(no tool errors in this run)";
+  const lines = rows.map((r) => {
+    // indent continuation lines of a multi-line stderr so the block reads as one entry
+    const err = r.resultText.split("\n").map((l, i) => (i === 0 ? l : "         " + l)).join("\n");
+    return `✗ ${r.name}${r.child ? " (sub-agent)" : ""}\n    $ ${r.detail}\n    → ${err}`;
+  });
+  lines.push(`\n${rows.length} errored tool call(s)`);
+  return lines.join("\n");
+}
+
+/**
+ * `trace --view files` — the run's `workspaceFiles[]` (class / bytes / sha256) as a class-grouped tree
+ * with a diff column vs `preRunHashes` (added / modified / removed / unchanged), so "did the skill write
+ * where expected / mutate an input" is a one-liner. Both fields live in `result.json`, so this view needs
+ * a run dir, not a bare `events.jsonl`.
+ */
+export interface FileRow {
+  path: string;
+  class?: "output" | "mount" | "input";
+  bytes?: number;
+  sha256?: string;
+  diff: "added" | "modified" | "removed" | "unchanged" | "unavailable";
+}
+export interface FilesView {
+  available: boolean; // false = no sibling result.json (bare events.jsonl was traced)
+  reason?: string; // set when !available
+  diffAvailable: boolean; // false = the run captured no preRunHashes (microvm / pre-0.27)
+  rows: FileRow[];
+}
+
+export function buildFilesView(file: string): FilesView {
+  const result = readSiblingResult(file);
+  if (!result) return { available: false, reason: "files view needs a run dir (no sibling result.json)", diffAvailable: false, rows: [] };
+  const wf = result.workspaceFiles ?? [];
+  const pre = result.preRunHashes; // Record<path, string | null> | undefined
+  const diffAvailable = pre !== undefined;
+  const seen = new Set<string>();
+  const rows: FileRow[] = [];
+  for (const f of wf) {
+    seen.add(f.path);
+    let diff: FileRow["diff"];
+    if (!diffAvailable) diff = "unavailable";
+    else {
+      const prev = pre![f.path];
+      // a scrubbed/over-cap pre-hash (null) or a post-run hashError (sha256 undefined) means we can't
+      // compare — surface "unavailable", NEVER a false "unchanged".
+      if (prev === null || f.sha256 === undefined) diff = "unavailable";
+      else if (prev === undefined) diff = "added";
+      else diff = prev === f.sha256 ? "unchanged" : "modified";
+    }
+    rows.push({ path: f.path, class: f.class, bytes: f.bytes, sha256: f.sha256, diff });
+  }
+  // removed: a path present pre-run but absent from the post-run tree (skip null pre-hashes — can't tell).
+  if (diffAvailable) {
+    for (const [p, h] of Object.entries(pre!)) {
+      if (seen.has(p) || h === null) continue;
+      rows.push({ path: p, diff: "removed" });
+    }
+  }
+  return { available: true, diffAvailable, rows };
+}
+
+export function formatFilesView(v: FilesView): string {
+  if (!v.available) return `(${v.reason})`;
+  if (!v.rows.length) return "(no workspace files recorded for this run)";
+  const mark = { added: "+", modified: "~", removed: "-", unchanged: " ", unavailable: "?" } as const;
+  const groups: Record<string, FileRow[]> = {};
+  for (const r of v.rows) (groups[r.class ?? "(removed)"] ??= []).push(r);
+  const lines: string[] = [];
+  if (!v.diffAvailable) lines.push("diff vs pre-run: unavailable (no preRunHashes — microvm or pre-0.27 run)\n");
+  for (const cls of Object.keys(groups)) {
+    lines.push(`${cls}:`);
+    for (const r of groups[cls]) {
+      const size = r.bytes !== undefined ? ` (${r.bytes}B)` : "";
+      lines.push(`  ${mark[r.diff]} ${r.path}${size}${r.diff === "unchanged" ? "" : `  [${r.diff}]`}`);
+    }
+  }
+  lines.push(`\n${v.rows.length} file(s)`);
+  return lines.join("\n");
+}
+
+/**
+ * `trace --view usage` — the per-model token/cost breakdown from `RunResult.modelUsage` plus a per-model
+ * cache-read ratio. The default view already prints a single combined cache-ratio FOOTER
+ * (`cli.ts`); this view is the full breakdown, so the two don't double-render. Needs a run dir.
+ */
+export interface UsageRow {
+  model: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadInputTokens?: number;
+  cacheCreationInputTokens?: number;
+  costUSD?: number;
+  cacheReadRatio?: number; // cacheRead / (input + cacheRead + cacheCreation); undefined when denom is 0
+}
+export interface UsageView {
+  rows: UsageRow[];
+  note?: string; // degrade explanation when rows is empty (no run dir / no usage recorded)
+}
+
+export function buildUsageView(file: string): UsageView {
+  const result = readSiblingResult(file);
+  if (!result) return { rows: [], note: "usage view needs a run dir (no sibling result.json)" };
+  const mu = result.modelUsage;
+  if (!mu || Object.keys(mu).length === 0) return { rows: [], note: "no usage recorded" };
+  const rows: UsageRow[] = Object.entries(mu).map(([model, u]) => ({
+    model,
+    inputTokens: u.inputTokens,
+    outputTokens: u.outputTokens,
+    cacheReadInputTokens: u.cacheReadInputTokens,
+    cacheCreationInputTokens: u.cacheCreationInputTokens,
+    costUSD: u.costUSD,
+    cacheReadRatio: cacheReadRatio({ [model]: u }), // reuse the single-model denominator guard
+  }));
+  return { rows };
+}
+
+export function formatUsageView(v: UsageView): string {
+  if (!v.rows.length) return `(${v.note ?? "no usage recorded"})`;
+  const lines = v.rows.map((r) => {
+    const cost = r.costUSD !== undefined ? `$${r.costUSD.toFixed(4)}` : "$?";
+    const ratio = r.cacheReadRatio !== undefined ? `${Math.round(r.cacheReadRatio * 100)}% cache-read` : "cache-read n/a";
+    return `${r.model}: in ${r.inputTokens ?? 0} / out ${r.outputTokens ?? 0} tok · ${cost} · ${ratio}`;
+  });
+  const totalCost = v.rows.reduce((sum, r) => sum + (r.costUSD ?? 0), 0);
+  lines.push(`\n${v.rows.length} model(s), $${totalCost.toFixed(4)} total`);
+  return lines.join("\n");
 }
 
 export function formatTrace(rows: TraceRow[], opts?: { modelUsage?: RunResult["modelUsage"] }): string {
