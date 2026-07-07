@@ -280,7 +280,9 @@ function d(runner: string, args: string[], ignoreError = false) {
  *  back instead of handing the agent a dead proxy. (A fuller in-container health probe needs the live lane.) */
 function waitProxyRunning(runner: string, name: string) {
   for (let i = 0; i < 16; i++) {
-    spawnSync("sh", ["-c", "sleep 0.2"]); // brief settle between samples
+    // Synchronous 200ms settle between samples — no `sh`/`sleep` fork (portability + one less process per
+    // poll). Atomics.wait on an unshared, never-notified word blocks the thread until its timeout elapses.
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200);
     const r = spawnSync(runner, ["inspect", "-f", "{{.State.Running}}", name], { encoding: "utf8" });
     if (r.status === 0 && (r.stdout ?? "").trim() === "true") return;
   }

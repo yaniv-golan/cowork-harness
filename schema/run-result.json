@@ -319,7 +319,67 @@
       "type": "array"
     },
     "subagents": {
-      "type": "array"
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "toolUseId",
+          "agentType",
+          "declaredTools",
+          "toolsUsed"
+        ],
+        "properties": {
+          "toolUseId": {
+            "type": "string"
+          },
+          "parentToolUseId": {
+            "type": "string",
+            "description": "the dispatching parent's toolUseId \u2014 reconstructs the nested dispatch tree (#16)"
+          },
+          "agentType": {
+            "type": "string"
+          },
+          "declaredTools": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "toolsUsed": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "name",
+                "count"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "count": {
+                  "type": "number"
+                }
+              }
+            }
+          },
+          "description": {
+            "type": "string"
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "output": {
+            "type": "string"
+          },
+          "attributedSkillId": {
+            "type": "string"
+          }
+        }
+      }
     },
     "nonReproducibleAnswers": {
       "type": "array"

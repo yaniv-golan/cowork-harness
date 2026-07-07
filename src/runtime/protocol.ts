@@ -41,6 +41,16 @@ export function spawnProtocol(
     if (existsSync(m.hostPath)) {
       const f = m.stageFilter ?? (gitModeEnabled() ? gitCpFilter(m.hostPath) : null);
       cpSync(m.hostPath, dest, { recursive: true, dereference: false, ...(f ? { filter: f } : {}) });
+    } else if ((process.env.COWORK_HARNESS_SOFT_MISSING ?? "") === "") {
+      // The source vanished between plan-build (which already validated existence for a REQUIRED mount)
+      // and staging — a TOCTOU race. Silently skipping would stage an empty tree, then a file_exists /
+      // no_unexpected_files assertion would run against nothing (a masked failure). Fail loud unless the
+      // caller opted into softMissing (where a missing source is an intended skip).
+      throw new BoundaryError(
+        `cowork-harness: mount source "${m.hostPath}" (→ ${m.mountPath}) is missing at staging time — set COWORK_HARNESS_SOFT_MISSING=1 to skip missing sources`,
+      );
+    } else {
+      warn(`::warning:: [mount] source missing at staging, skipped (COWORK_HARNESS_SOFT_MISSING): ${m.hostPath} → ${m.mountPath}\n`);
     }
   }
 

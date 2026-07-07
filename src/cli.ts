@@ -78,7 +78,7 @@ import {
 import type { Cassette } from "./run/cassette.js";
 import { buildScaffold } from "./run/scaffold.js";
 import { buildInspectView } from "./run/inspect-view.js";
-import { pkgVersion, jsonEnvelope, jsonError, parseOutputFormat, fail, isJsonOutput, type ErrCategory } from "./run/envelope.js";
+import { pkgVersion, jsonEnvelope, jsonPayloadEnvelope, jsonError, parseOutputFormat, fail, isJsonOutput, type ErrCategory } from "./run/envelope.js";
 import { buildRepeatRollup, rollupPasses, type RepeatRollup } from "./run/repeat.js";
 import {
   MatrixFile,
@@ -3372,9 +3372,10 @@ async function cmdVerifyRun(args: string[]) {
   const failed = assertions.filter((a) => !a.pass);
 
   if (json) {
+    // Wrapped in the shared payload envelope (tool/version/command/ok/error) for cross-command consistency;
+    // every prior field (pass/assertions/signals/answerCoverage) is preserved, and `ok` mirrors the verdict.
     out(
-      JSON.stringify({
-        command: "verify-run",
+      jsonPayloadEnvelope("verify-run", verdict.pass, {
         pass: verdict.pass,
         assertions: assertions.map((a) => ({ assertion: a.assertion, pass: a.pass, message: a.message })),
         signals: verdict.signals,
@@ -3411,7 +3412,7 @@ function cmdAssert(args: string[]) {
   rejectUnknownFlags("assertions", args, ["--list", "--output-format", "--output-format=json", "--output-format=text"], json);
   const shape = Assertion.shape as Record<string, { description?: string }>;
   const keys = Object.keys(shape).map((k) => ({ key: k, description: shape[k].description ?? "" }));
-  if (json) return void out(JSON.stringify({ tool: "cowork-harness", command: "assertions", assertions: keys }));
+  if (json) return void out(jsonPayloadEnvelope("assertions", true, { assertions: keys }));
   const width = Math.max(...keys.map((k) => k.key.length));
   out(`available assertions (${keys.length}) — use under a scenario's \`assert:\` list:\n`);
   for (const { key, description } of keys) out(`  ${key.padEnd(width)}  ${description}`);
@@ -3499,42 +3500,42 @@ function cmdTrace(args: string[]) {
   if (view === "questions") {
     // questions view: question → injected answer → delivered result, the full gate lifecycle.
     const rows = buildGateTrace(file);
-    if (json) out(JSON.stringify({ tool: "cowork-harness", command: "trace", file, gates: rows }));
+    if (json) out(jsonPayloadEnvelope("trace", true, { file, gates: rows }));
     else out(formatGateTrace(rows));
     return;
   }
   if (view === "dispatches") {
     // dispatches view: the sub-agent dispatch tree + the real total (read off dispatch_count_max).
     const tree = buildDispatchTree(file);
-    if (json) out(JSON.stringify({ tool: "cowork-harness", command: "trace", file, dispatches: tree.nodes, total: tree.total }));
+    if (json) out(jsonPayloadEnvelope("trace", true, { file, dispatches: tree.nodes, total: tree.total }));
     else out(formatDispatchTree(tree));
     return;
   }
   if (view === "tool-durations") {
     // tool-durations view: per-tool call-count/timing aggregate, folded from the sibling timeline.jsonl.
     const durations = buildToolDurations(file);
-    if (json) out(JSON.stringify({ tool: "cowork-harness", command: "trace", file, durations }));
+    if (json) out(jsonPayloadEnvelope("trace", true, { file, durations }));
     else out(formatToolDurations(durations));
     return;
   }
   if (view === "tool-errors") {
     // tool-errors view: one row per errored tool call with the full command + full multi-line stderr.
     const rows = buildToolErrors(file);
-    if (json) out(JSON.stringify({ tool: "cowork-harness", command: "trace", file, toolErrors: rows }));
+    if (json) out(jsonPayloadEnvelope("trace", true, { file, toolErrors: rows }));
     else out(formatToolErrors(rows));
     return;
   }
   if (view === "files") {
     // files view: workspaceFiles[] class-grouped tree + diff vs preRunHashes — reads the sibling result.json.
     const v = buildFilesView(file);
-    if (json) out(JSON.stringify({ tool: "cowork-harness", command: "trace", file, ...v }));
+    if (json) out(jsonPayloadEnvelope("trace", true, { file, ...v }));
     else out(formatFilesView(v));
     return;
   }
   if (view === "usage") {
     // usage view: per-model tokens/cost/cache-ratio from modelUsage — reads the sibling result.json.
     const v = buildUsageView(file);
-    if (json) out(JSON.stringify({ tool: "cowork-harness", command: "trace", file, ...v }));
+    if (json) out(jsonPayloadEnvelope("trace", true, { file, ...v }));
     else out(formatUsageView(v));
     return;
   }
@@ -3550,7 +3551,7 @@ function cmdTrace(args: string[]) {
     }
   }
   const rows = buildTrace(file, { tools: view === "tools", translate });
-  if (json) out(JSON.stringify({ tool: "cowork-harness", command: "trace", file, rows }));
+  if (json) out(jsonPayloadEnvelope("trace", true, { file, rows }));
   else {
     // cache-read-ratio footer: best-effort read of the sibling result.json, same
     // "if absent, just omit" tolerance buildGateTrace already uses for gate provenance.
@@ -3808,7 +3809,7 @@ function cmdDiff(args: string[]) {
     }
     const entries = diffBaselines(a, b);
     const identical = entries.length === 0;
-    if (json) out(JSON.stringify({ tool: "cowork-harness", command: "diff", kind: "baseline", a: aName, b: bName, identical, entries }));
+    if (json) out(jsonPayloadEnvelope("diff", identical, { kind: "baseline", a: aName, b: bName, identical, entries }));
     else if (changelog) out(renderChangelog(entries));
     else if (identical) out("No differences.");
     else for (const line of formatDiffLines(entries)) out(line);
@@ -3836,9 +3837,7 @@ function cmdDiff(args: string[]) {
   const result = compareDiffSides(a, b, normalize);
   if (json) {
     out(
-      JSON.stringify({
-        tool: "cowork-harness",
-        command: "diff",
+      jsonPayloadEnvelope("diff", result.identical, {
         kinds: [aKind, bKind],
         a: aName,
         b: bName,

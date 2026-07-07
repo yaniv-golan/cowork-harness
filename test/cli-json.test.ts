@@ -54,6 +54,21 @@ describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
     expect(r.json?.error?.category).toBe("usage");
   });
 
+  // #44-48: success JSON output carries the shared payload envelope frame (tool/version/command/ok/error).
+  // `assertions --list` is the cheapest to exercise (static, no run dir); its data field (assertions[]) is
+  // preserved alongside the frame.
+  it("assertions --list --json carries the shared envelope frame + preserves its payload", () => {
+    const r = run(["assertions", "--list", "--output-format", "json"]);
+    expect(r.code).toBe(0);
+    expect(r.json?.tool).toBe("cowork-harness");
+    expect(typeof r.json?.version).toBe("string");
+    expect(r.json?.command).toBe("assertions");
+    expect(r.json?.ok).toBe(true);
+    expect(r.json?.error).toBeNull();
+    expect(Array.isArray(r.json?.assertions)).toBe(true); // payload field preserved
+    expect(r.json.assertions.some((a: any) => a.key === "file_exists")).toBe(true);
+  });
+
   it("--resume without --session-id → usage error, exit 2", () => {
     const r = run(["skill", "./x", "hi", "--resume", "--output-format", "json"]);
     expect(r.code).toBe(2);
