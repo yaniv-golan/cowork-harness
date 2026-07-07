@@ -2883,14 +2883,66 @@ export async function cmdReplay(args: string[]) {
   return process.exit(worst);
 }
 
+type MarginKind = "max" | "min";
+interface MarginRow {
+  key: string;
+  kind: MarginKind; // "max" = a ceiling (headroom = budget/recorded); "min" = a floor (headroom = recorded/budget)
+  budget: number;
+  recorded: number | null; // null = not derivable from a bare cassette replay in v1
+  margin: number | null; // headroom ratio; null when recorded is null
+}
+
+/** Count-bound assertion keys `verify-cassettes --margins` folds a recorded count for. EXPLICIT and kept in
+ *  sync with the schema — a key missing here silently drops from the margin report. `questions_count_max` is
+ *  intentionally absent: its recorded value is a SUB-question count that needs the question sidecar, not
+ *  derivable from a bare cassette replay. The 6 budget-field keys reuse `budgetFields` (identical to what the
+ *  asserts evaluate); the array-count keys read the same RunResult fields the AssertContext builder does. */
+const COUNT_BOUND_MARGIN_KEYS: {
+  key: keyof Assertion;
+  kind: MarginKind;
+  recorded: (r: RunResult, bf: ReturnType<typeof budgetFields>) => number | undefined;
+}[] = [
+  { key: "tool_calls_max", kind: "max", recorded: (_r, bf) => bf.toolCallsTotal },
+  { key: "max_tokens", kind: "max", recorded: (_r, bf) => bf.tokensTotal },
+  { key: "max_cost_usd", kind: "max", recorded: (_r, bf) => bf.costUsd },
+  { key: "max_turns", kind: "max", recorded: (_r, bf) => bf.turns },
+  { key: "max_tool_errors", kind: "max", recorded: (_r, bf) => bf.toolErrorsTotal },
+  { key: "max_redundant_tool_calls", kind: "max", recorded: (_r, bf) => bf.redundantCallsTotal },
+  { key: "dispatch_count_max", kind: "max", recorded: (r) => r.subagents?.length },
+  { key: "task_count_min", kind: "min", recorded: (r) => r.tasks?.length },
+  { key: "gate_answer_count_min", kind: "min", recorded: (r) => (r.gateDeliveries === undefined ? undefined : r.gateDeliveries.filter((g) => g.delivered === true).length) },
+];
+
+/** Fold the recorded count for each count-bound assert in a cassette's frozen block by replaying it
+ *  (token-free). Returns [] when the cassette carries no count-bound asserts, so `--margins` skips a
+ *  needless replay for those cassettes. A SINGLE-SAMPLE estimate — one cassette is not a variance. */
+async function computeCassetteMargins(cassette: Cassette, cassetteDir: string): Promise<MarginRow[]> {
+  const present = COUNT_BOUND_MARGIN_KEYS.map((spec) => {
+    const entry = (cassette.scenario.assert ?? []).find((a) => (a as Record<string, unknown>)[spec.key as string] !== undefined);
+    const budget = entry ? Number((entry as Record<string, unknown>)[spec.key as string]) : undefined;
+    return budget !== undefined && Number.isFinite(budget) ? { spec, budget } : undefined;
+  }).filter((x): x is { spec: (typeof COUNT_BOUND_MARGIN_KEYS)[number]; budget: number } => x !== undefined);
+  if (present.length === 0) return [];
+  const result = await replayCassette(cassette, [], { cassetteDir });
+  const bf = budgetFields(result);
+  return present.map(({ spec, budget }) => {
+    const rec = spec.recorded(result, bf);
+    const recorded = rec === undefined ? null : rec;
+    let margin: number | null = null;
+    if (recorded !== null) margin = spec.kind === "max" ? (recorded === 0 ? Infinity : budget / recorded) : budget === 0 ? Infinity : recorded / budget;
+    return { key: spec.key as string, kind: spec.kind, budget, recorded, margin };
+  });
+}
+
 /** `verify-cassettes <file|dir>` — the CI gate (token/agent-free). Runs the privacy scan and the
  *  staleness check over one cassette or every `*.cassette.json` in a dir (non-recursive). Exit 1 on any
- *  real PII finding or staleness drift; `unscanned` notes are informational. Dedicated JSON envelope. */
-export function cmdVerifyCassettes(args: string[]) {
+ *  real PII finding or staleness drift; `unscanned` notes are informational. Dedicated JSON envelope.
+ *  `--margins` adds a per-count-assert recorded-vs-budget report (a per-cassette replay cost, single-sample). */
+export async function cmdVerifyCassettes(args: string[]) {
   let p;
   try {
     p = parseArgs(args, {
-      booleans: ["--skip-privacy", "--skip-staleness", "--skip-scenario-drift", "--quiet", "--verbose"],
+      booleans: ["--skip-privacy", "--skip-staleness", "--skip-scenario-drift", "--margins", "--quiet", "--verbose"],
       values: ["--output-format"],
       repeated: ["--allow", "--allow-domain", "--allow-email", "--allow-path", "--allow-machine-inventory", "--allow-patterns-file"],
       enums: { "--output-format": ["text", "json"] },
@@ -2911,6 +2963,7 @@ export function cmdVerifyCassettes(args: string[]) {
   const doPrivacy = !skipPrivacy;
   const doStaleness = !skipStaleness;
   const doScenarioDrift = !(p.flags["--skip-scenario-drift"] ?? false);
+  const doMargins = p.flags["--margins"] ?? false; // diagnostic only — never affects the gate verdict/exit
   // Allow model: each entry is whole-token anchored + class-scoped. A bare `--allow <regex>` is a single
   // PATTERN applied to every class (back-compat); `--allow-domain`/`--allow-email`/`--allow-path`/
   // `--allow-machine-inventory` scope a pattern to one class so a domain allow can't bleed into the
@@ -2948,10 +3001,13 @@ export function cmdVerifyCassettes(args: string[]) {
   const target = p.positionals[0];
   if (!target) {
     log(
-      "usage: verify-cassettes <file|dir> [--skip-privacy|--skip-staleness] [--skip-scenario-drift] [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-path <regex>]... [--allow-machine-inventory <regex>]... [--allow-patterns-file <path>]... [--output-format json]",
+      "usage: verify-cassettes <file|dir> [--skip-privacy|--skip-staleness] [--skip-scenario-drift] [--margins] [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-path <regex>]... [--allow-machine-inventory <regex>]... [--allow-patterns-file <path>]... [--output-format json]",
     );
     log(
       "  --allow <regex> is a PATTERN (matched against a finding); --allow-patterns-file <path> is a FILE of patterns, one regex per line — not a path to allow.",
+    );
+    log(
+      "  --margins reports recorded-vs-budget for each count-bound assert (adds a per-cassette replay cost; a SINGLE-SAMPLE estimate — one cassette ≠ variance). Diagnostic only; never changes the gate verdict.",
     );
     return process.exit(2);
   }
@@ -3018,6 +3074,22 @@ export function cmdVerifyCassettes(args: string[]) {
         : [];
     return { file: f, findings, staleness, notes, version, scenarioDrift, error: undefined as string | undefined };
   });
+  // --margins (diagnostic; never affects the gate): replay each cassette that carries count-bound asserts
+  // and report recorded-vs-budget + margin. A per-cassette replay cost the base command doesn't have.
+  let margins: { file: string; rows: MarginRow[]; error?: string }[] | undefined;
+  if (doMargins) {
+    margins = [];
+    for (const f of files) {
+      const rc = readCassette(f);
+      if ("error" in rc) continue; // unreadable — already flagged in `results`; skip its margins
+      try {
+        const rows = await computeCassetteMargins(rc.cassette, dirname(f));
+        if (rows.length) margins.push({ file: f, rows });
+      } catch (e) {
+        margins.push({ file: f, rows: [], error: (e as Error)?.message ?? String(e) }); // a diagnostic failure must not red the gate
+      }
+    }
+  }
   const realFindings = results.flatMap((r) => r.findings.filter((x) => x.cls !== "unscanned"));
   const staleAny = results.some((r) => r.staleness.length > 0);
   const versionAny = results.some((r) => r.version.length > 0);
@@ -3026,7 +3098,7 @@ export function cmdVerifyCassettes(args: string[]) {
   const ok = realFindings.length === 0 && !staleAny && !versionAny && !scenarioDriftAny && !errorAny;
   const coverage = { privacy: doPrivacy, staleness: doStaleness, scenarioDrift: doScenarioDrift };
   if (json) {
-    out(jsonPayloadEnvelope("verify-cassettes", ok, { coverage, results }));
+    out(jsonPayloadEnvelope("verify-cassettes", ok, { coverage, results, ...(margins ? { margins } : {}) }));
   } else {
     if (!doStaleness) log("⚠ cowork-harness: --skip-staleness: staleness check was skipped");
     if (!doPrivacy) log("⚠ cowork-harness: --skip-privacy: privacy scan was skipped");
@@ -3045,6 +3117,20 @@ export function cmdVerifyCassettes(args: string[]) {
         ? `✓ verify-cassettes: ${files.length} cassette(s) clean`
         : `✗ verify-cassettes: ${realFindings.length} PII finding(s)${staleAny ? " + staleness drift" : ""}${scenarioDriftAny ? " + scenario prompt drift" : ""}${versionAny ? " + version mismatch" : ""}${errorAny ? " + unreadable cassette(s)" : ""} across ${files.length} cassette(s)`,
     );
+    if (margins) {
+      log("\ncount-budget margins (recorded vs budget; a SINGLE-SAMPLE estimate — one cassette ≠ variance, use `run --repeat` for a distribution):");
+      if (margins.length === 0) log("  (no count-bound assertions in the checked cassette(s))");
+      for (const m of margins) {
+        log(`  ${m.file}:`);
+        if (m.error) log(`    [margins error] ${m.error}`);
+        for (const r of m.rows) {
+          const rec = r.recorded === null ? "unavailable" : String(r.recorded);
+          const marg = r.margin === null ? "n/a" : r.margin === Infinity ? "∞" : `${r.margin.toFixed(1)}×`;
+          const tight = typeof r.margin === "number" && r.margin < 1.5 ? "  ⚠ tight" : "";
+          log(`    ${r.key}: recorded=${rec}, budget=${r.budget} → margin ${marg}${tight}`);
+        }
+      }
+    }
   }
   return process.exit(ok ? 0 : 1);
 }
