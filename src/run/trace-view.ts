@@ -300,6 +300,7 @@ export function buildTrace(file: string, opts: BuildTraceOptions = {}): TraceRow
 
 export interface GateTraceRow {
   question: string;
+  requestId?: string; // the gate's request_id (from the events.jsonl decision) — used to pair provenance by id
   subQuestionCount: number; // req.questions.length — the number `questions_count_max` counts THIS gate as (a bundled AskUserQuestion with K sub-questions counts as K, not 1)
   injectedAnswer?: string; // what the harness answered (from control-out.jsonl)
   delivered: "ok" | "error" | "unobserved"; // the tool_result outcome
@@ -349,6 +350,7 @@ export function buildGateTrace(file: string): GateTraceRow[] {
     const tr = req.toolUseId ? results.get(req.toolUseId) : undefined;
     rows.push({
       question: req.questions.map((q) => q.question ?? q.header ?? "").join(" / "),
+      requestId: req.id,
       subQuestionCount: req.questions.length,
       injectedAnswer: answers.get(req.id),
       delivered: tr ? (tr.isError ? "error" : "ok") : "unobserved",
@@ -356,22 +358,34 @@ export function buildGateTrace(file: string): GateTraceRow[] {
     });
   }
   // Provenance annotation (best-effort): pair each gate row with its recorded `by`/`model` from the
-  // sibling result.json, in ask order. Missing result.json (bare events.jsonl trace) → left unannotated.
-  // Pair against EVERY question-kind decision (answered OR denied), not summarizeGateProvenance's
-  // gates[] — that array drops denied/mismatched gates, which would shift every row after one out of
-  // position (rows[] here includes every asked gate, so the index spaces must match). Still positional,
-  // not keyed by request_id: a duplicated/retried question event in events.jsonl (extra row, no matching
-  // decision) could still misalign later rows — GateTraceRow carries no id to detect that case.
+  // sibling result.json. Preferred pairing is BY request_id — a persisted answered question decision now
+  // carries `requestId` (#20), so a retried/duplicated gate event (an extra row with no matching decision)
+  // can't shift every later row's label out of position, which the old positional pairing was prone to.
+  // Records predating `requestId` fall back to the positional pairing (in ask order, against every
+  // question-kind decision so denied/mismatched gates keep the index spaces aligned).
   const resultPath = join(file, "..", "result.json");
   if (existsSync(resultPath)) {
     try {
       const persisted = JSON.parse(readFileSync(resultPath, "utf8")) as RunResult;
       const questionDecisions = (persisted.decisions ?? []).filter((d) => d.kind === "question");
-      for (let i = 0; i < rows.length; i++) {
-        const d = questionDecisions[i];
-        if (!d || d.decision !== "answered") continue;
-        rows[i].answeredBy = d.by;
-        rows[i].model = d.model;
+      const answeredById = new Map<string, (typeof questionDecisions)[number]>();
+      for (const d of questionDecisions) if (d.decision === "answered" && d.requestId) answeredById.set(d.requestId, d);
+      if (answeredById.size > 0) {
+        for (const row of rows) {
+          const d = row.requestId ? answeredById.get(row.requestId) : undefined;
+          if (d) {
+            row.answeredBy = d.by;
+            row.model = d.model;
+          }
+        }
+      } else {
+        // Legacy positional fallback (records written before requestId was persisted).
+        for (let i = 0; i < rows.length; i++) {
+          const d = questionDecisions[i];
+          if (!d || d.decision !== "answered") continue;
+          rows[i].answeredBy = d.by;
+          rows[i].model = d.model;
+        }
       }
     } catch (e) {
       warn(`::warning:: trace: skipping unparseable ${resultPath}: ${String((e as Error).message)}\n`);

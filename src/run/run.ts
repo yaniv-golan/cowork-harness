@@ -125,6 +125,10 @@ export interface DecisionRecord {
   name: string;
   decision: string;
   by: string;
+  // The gate's request_id (UUID). Present on question decisions so `trace --gates` can pair a persisted
+  // decision to its events.jsonl row BY ID rather than positionally — a retried/duplicated gate event
+  // would otherwise shift every later row's `by`/`model` label. Absent on older records (positional fallback).
+  requestId?: string;
   model?: string; // decider model for by:"llm" gates — surfaced in gate provenance for auditability
   detail?: unknown;
   rationale?: string;
@@ -184,7 +188,10 @@ export interface RunRecord {
   // Context/Connectors panel. availableSkills is optional and NOT set here — it's filled in
   // by the RunResult assemblers (execute.ts), which read it straight off the staged skill set on disk
   // rather than accumulating it from live events like tools/mcpServers.
-  context: { tools: string[]; mcpServers: unknown[]; availableSkills?: Array<{ id: string; whenToUse?: string }> };
+  // tools/mcpServers are OPTIONAL: they're set only when the SDK `system/init` event arrives. A pre-init
+  // crash leaves them undefined (evidence-unavailable) rather than an empty inventory that would falsely
+  // read as "the agent had no tools/connectors". availableSkills is re-derived from disk, so it's exempt.
+  context: { tools?: string[]; mcpServers?: unknown[]; availableSkills?: Array<{ id: string; whenToUse?: string }> };
   contextEvents: Array<{ subtype: string; data: Record<string, unknown> }>; // system events we don't special-case (compaction etc.)
   mcpErrors: Array<{ server: string; code?: number; message: string }>; // MCP round-trips the harness answered with a JSON-RPC error (no handler, or the handler threw)
   hookEvents: Array<{ callbackId: string; decision: "block" | "allow"; reason?: string; tool?: string }>; // PreToolUse hook fire/block events (built-in Task hook + any custom hook bundle)
@@ -312,7 +319,7 @@ export class Run {
       toolErrors: {},
       redundantToolCalls: [],
       tasks: new Map(),
-      context: { tools: [], mcpServers: [] },
+      context: {}, // tools/mcpServers stay undefined until system/init arrives (see the type comment); a pre-init crash → evidence-unavailable, not empty inventory
       contextEvents: [],
       mcpErrors: [],
       hookEvents: [],
@@ -841,6 +848,7 @@ export class Run {
         name: "AskUserQuestion",
         decision: "answered",
         by,
+        requestId: req.id, // for id-keyed pairing in `trace --gates` (not positional)
         model,
         detail: answers,
         rationale,

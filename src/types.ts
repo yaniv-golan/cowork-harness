@@ -714,6 +714,9 @@ export interface RunResult {
     name: string;
     decision: string;
     by?: string;
+    // request_id (UUID) of a question gate — lets `trace --gates` pair a decision to its event row by id
+    // instead of positionally (retried/duplicated gate events would shift a positional pairing). Optional.
+    requestId?: string;
     model?: string;
     detail?: unknown;
     rationale?: string;
@@ -937,8 +940,10 @@ export interface RunResult {
   // RunResult-assembly time (src/run/skill-metadata.ts) — it is NOT accumulated on RunRecord like
   // tools/mcpServers, since it needs no live event data, only the on-disk staged skill set.
   context?: {
-    tools: string[];
-    mcpServers: Array<{ name: string; status?: string; [k: string]: unknown }>;
+    // tools/mcpServers are present only once the SDK system/init event arrives; undefined on a pre-init
+    // crash (evidence-unavailable, NOT an empty inventory). availableSkills is re-derived from disk.
+    tools?: string[];
+    mcpServers?: Array<{ name: string; status?: string; [k: string]: unknown }>;
     availableSkills?: Array<{ id: string; whenToUse?: string }>;
   };
   // Working folder panel's canonical file model (Scratch pad's "scratchpad" class

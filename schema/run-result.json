@@ -4,75 +4,152 @@
   "title": "RunResult",
   "description": "Structured output written to runs/<sha>/result.json by cowork-harness executeScenario",
   "type": "object",
-  "required": ["scenario", "fidelity", "baseline", "result", "decisions", "egress", "assertions", "outDir"],
+  "required": [
+    "scenario",
+    "fidelity",
+    "baseline",
+    "result",
+    "decisions",
+    "egress",
+    "assertions",
+    "outDir"
+  ],
   "properties": {
-    "$schema": { "type": "string" },
-    "generator": { "type": "string" },
+    "$schema": {
+      "type": "string"
+    },
+    "generator": {
+      "type": "string"
+    },
     "mode": {
       "type": "string",
-      "enum": ["run", "chat"],
-      "description": "Which lane produced this result. 'run' = an asserted run/skill/record/replay (carries a verdict); 'chat' = an interactive exploratory session (no assertions, no verdict). Absent on results written before this field existed — treat absent as 'run'."
+      "enum": [
+        "run",
+        "chat"
+      ],
+      "description": "Which lane produced this result. 'run' = an asserted run/skill/record/replay (carries a verdict); 'chat' = an interactive exploratory session (no assertions, no verdict). Absent on results written before this field existed \u2014 treat absent as 'run'."
     },
-    "scenario": { "type": "string" },
-    "prompt": { "type": "string" },
-    "fidelity": { "type": "string" },
-    "baseline": { "type": "string" },
-    "result": { "type": "string", "enum": ["success", "error"] },
+    "scenario": {
+      "type": "string"
+    },
+    "prompt": {
+      "type": "string"
+    },
+    "fidelity": {
+      "type": "string"
+    },
+    "baseline": {
+      "type": "string"
+    },
+    "result": {
+      "type": "string",
+      "enum": [
+        "success",
+        "error"
+      ]
+    },
     "resultErrorKind": {
       "type": "string",
-      "enum": ["transport", "agent"],
+      "enum": [
+        "transport",
+        "agent"
+      ],
       "description": "Fix 5: when result is 'error', whether it was a tail-end transport drop (connection closed after a clean result) vs a genuine agent/skill failure"
     },
     "errorSource": {
       "type": "string",
-      "enum": ["spawn", "protocol", "exit", "agent", "result", "no_result", "timeout"],
-      "description": "How the run terminated in error — the error event's finer source (spawn/protocol/exit/agent, or 'result' for the SDK-wrapped is_error result), 'no_result' when the stream ended with no terminal event (turn/time exhaustion), or 'timeout' when the harness wall-clock limit killed the run. Additive diagnostic alongside resultErrorKind; not read by the verdict."
+      "enum": [
+        "spawn",
+        "protocol",
+        "exit",
+        "agent",
+        "result",
+        "no_result",
+        "timeout"
+      ],
+      "description": "How the run terminated in error \u2014 the error event's finer source (spawn/protocol/exit/agent, or 'result' for the SDK-wrapped is_error result), 'no_result' when the stream ended with no terminal event (turn/time exhaustion), or 'timeout' when the harness wall-clock limit killed the run. Additive diagnostic alongside resultErrorKind; not read by the verdict."
     },
     "resultSubtype": {
       "type": "string",
-      "description": "The SDK result message's subtype verbatim (e.g. error_max_turns, error_during_execution, success) — a pass-through diagnostic so a debugger can tell turn-exhaustion from a generic execution error without the harness inventing a taxonomy."
+      "description": "The SDK result message's subtype verbatim (e.g. error_max_turns, error_during_execution, success) \u2014 a pass-through diagnostic so a debugger can tell turn-exhaustion from a generic execution error without the harness inventing a taxonomy."
     },
     "stderrLogPath": {
       "type": "string",
-      "description": "Absolute path to the agent's full stderr log (<outDir>/agent.stderr.log), surfaced so an OOM/crash debugger knows where to look. Live path only — absent on replay."
+      "description": "Absolute path to the agent's full stderr log (<outDir>/agent.stderr.log), surfaced so an OOM/crash debugger knows where to look. Live path only \u2014 absent on replay."
     },
     "stalledOnQuestion": {
       "type": "boolean",
-      "description": "H2/H3: the run ended on a question having done no productive tool work after its last gate (the agent asked for input and stopped — incl. re-asking in plain text after answering an AskUserQuestion) while result==='success'. computeVerdict fails on this (a 'stalled' signal) unless the scenario asserts allow_stall."
+      "description": "H2/H3: the run ended on a question having done no productive tool work after its last gate (the agent asked for input and stopped \u2014 incl. re-asking in plain text after answering an AskUserQuestion) while result==='success'. computeVerdict fails on this (a 'stalled' signal) unless the scenario asserts allow_stall."
     },
     "capabilityProbe": {
       "type": "string",
-      "enum": ["definitive", "unverified", "skipped"],
-      "description": "Fix 6h: capability-probe outcome — definitive (ran, omitted-set known), unverified (probe failed), or skipped (protocol/replay/skip-env). Drives the guard roster's ran-clean vs not-run distinction."
+      "enum": [
+        "definitive",
+        "unverified",
+        "skipped"
+      ],
+      "description": "Fix 6h: capability-probe outcome \u2014 definitive (ran, omitted-set known), unverified (probe failed), or skipped (protocol/replay/skip-env). Drives the guard roster's ran-clean vs not-run distinction."
     },
     "requiresCapabilityUnmet": {
       "type": "object",
       "description": "Fix 4b: declared requires_capabilities the running tier could not satisfy (omitted by the image, or unverifiable on this tier). computeVerdict hard-fails on this unless allow_missing_capability.",
       "properties": {
-        "caps": { "type": "array", "items": { "type": "string" } },
-        "reason": { "type": "string", "enum": ["omitted", "unverifiable"] }
+        "caps": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "omitted",
+            "unverifiable"
+          ]
+        }
       }
     },
-    "decisions": { "type": "array" },
-    "toolCounts": { "type": "object" },
+    "decisions": {
+      "type": "array"
+    },
+    "toolCounts": {
+      "type": "object"
+    },
     "webSearches": {
       "type": "array",
       "items": {
         "type": "object",
         "properties": {
-          "toolUseId": { "type": "string" },
-          "query": { "type": "string" },
+          "toolUseId": {
+            "type": "string"
+          },
+          "query": {
+            "type": "string"
+          },
           "results": {
             "type": "array",
             "items": {
               "type": "object",
-              "properties": { "title": { "type": "string" }, "url": { "type": "string" } },
-              "required": ["title", "url"],
+              "properties": {
+                "title": {
+                  "type": "string"
+                },
+                "url": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "title",
+                "url"
+              ],
               "additionalProperties": false
             }
           }
         },
-        "required": ["query", "results"],
+        "required": [
+          "query",
+          "results"
+        ],
         "additionalProperties": false
       }
     },
@@ -81,46 +158,96 @@
       "additionalProperties": {
         "type": "object",
         "properties": {
-          "calls": { "type": "number" },
-          "totalMs": { "type": "number" },
-          "maxMs": { "type": "number" }
+          "calls": {
+            "type": "number"
+          },
+          "totalMs": {
+            "type": "number"
+          },
+          "maxMs": {
+            "type": "number"
+          }
         },
-        "required": ["calls", "totalMs", "maxMs"],
+        "required": [
+          "calls",
+          "totalMs",
+          "maxMs"
+        ],
         "additionalProperties": false
       }
     },
     "models": {
       "type": "array",
-      "items": { "type": "string" }
+      "items": {
+        "type": "string"
+      }
     },
     "thinking": {
       "type": "array",
-      "items": { "type": "object", "properties": { "text": { "type": "string" } }, "required": ["text"] }
+      "items": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ]
+      }
     },
-    "thinkingElided": { "type": "number" },
+    "thinkingElided": {
+      "type": "number"
+    },
     "toolErrors": {
       "type": "object",
       "additionalProperties": {
         "type": "object",
-        "properties": { "calls": { "type": "number" }, "errors": { "type": "number" } },
-        "required": ["calls", "errors"],
+        "properties": {
+          "calls": {
+            "type": "number"
+          },
+          "errors": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "calls",
+          "errors"
+        ],
         "additionalProperties": false
       }
     },
     "modelUsage": {
       "type": "object",
-      "description": "Per-model cost/token breakdown, denormalized from the SDK result message's own modelUsage field (§4.7, M3) — cumulative for the whole run. Field names match the real observed SDK payload.",
+      "description": "Per-model cost/token breakdown, denormalized from the SDK result message's own modelUsage field (\u00a74.7, M3) \u2014 cumulative for the whole run. Field names match the real observed SDK payload.",
       "additionalProperties": {
         "type": "object",
         "properties": {
-          "inputTokens": { "type": "number" },
-          "outputTokens": { "type": "number" },
-          "cacheReadInputTokens": { "type": "number" },
-          "cacheCreationInputTokens": { "type": "number" },
-          "costUSD": { "type": "number" },
-          "contextWindow": { "type": "number" },
-          "maxOutputTokens": { "type": "number" },
-          "webSearchRequests": { "type": "number" }
+          "inputTokens": {
+            "type": "number"
+          },
+          "outputTokens": {
+            "type": "number"
+          },
+          "cacheReadInputTokens": {
+            "type": "number"
+          },
+          "cacheCreationInputTokens": {
+            "type": "number"
+          },
+          "costUSD": {
+            "type": "number"
+          },
+          "contextWindow": {
+            "type": "number"
+          },
+          "maxOutputTokens": {
+            "type": "number"
+          },
+          "webSearchRequests": {
+            "type": "number"
+          }
         },
         "additionalProperties": false
       }
@@ -129,8 +256,22 @@
       "type": "array",
       "items": {
         "type": "object",
-        "properties": { "name": { "type": "string" }, "argHash": { "type": "string" }, "count": { "type": "number" } },
-        "required": ["name", "argHash", "count"],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "argHash": {
+            "type": "string"
+          },
+          "count": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "name",
+          "argHash",
+          "count"
+        ],
         "additionalProperties": false
       }
     },
@@ -139,47 +280,101 @@
       "items": {
         "type": "object",
         "properties": {
-          "skillId": { "type": "string" },
-          "invocationSeq": { "type": "number" },
-          "toolCounts": { "type": "object" },
-          "toolCallCount": { "type": "number" },
-          "dispatchCount": { "type": "number" },
-          "durationMs": { "type": "number" }
+          "skillId": {
+            "type": "string"
+          },
+          "invocationSeq": {
+            "type": "number"
+          },
+          "toolCounts": {
+            "type": "object"
+          },
+          "toolCallCount": {
+            "type": "number"
+          },
+          "dispatchCount": {
+            "type": "number"
+          },
+          "durationMs": {
+            "type": "number"
+          }
         },
-        "required": ["skillId", "invocationSeq", "toolCounts", "toolCallCount", "dispatchCount"],
+        "required": [
+          "skillId",
+          "invocationSeq",
+          "toolCounts",
+          "toolCallCount",
+          "dispatchCount"
+        ],
         "additionalProperties": false
       }
     },
-    "gateDeliveries": { "type": "array" },
-    "egress": { "type": "array" },
-    "assertions": { "type": "array" },
-    "subagents": { "type": "array" },
-    "nonReproducibleAnswers": { "type": "array" },
+    "gateDeliveries": {
+      "type": "array"
+    },
+    "egress": {
+      "type": "array"
+    },
+    "assertions": {
+      "type": "array"
+    },
+    "subagents": {
+      "type": "array"
+    },
+    "nonReproducibleAnswers": {
+      "type": "array"
+    },
     "usage": {
       "type": "object",
       "description": "SDK usage payload (input_tokens, output_tokens, etc.), pass-through, plus a harness-computed 'turns' field (from the SDK result message's num_turns) when available. Wave 0 seam.",
       "properties": {
-        "turns": { "type": "number" }
+        "turns": {
+          "type": "number"
+        }
       }
     },
     "cost": {
       "type": "object",
       "description": "usd = the SDK result message's total_cost_usd for this invocation, when available (Wave 0 seam). raw = the api_metrics event payload (pre-existing, independent source).",
       "properties": {
-        "usd": { "type": "number" },
-        "raw": { "type": "object" }
+        "usd": {
+          "type": "number"
+        },
+        "raw": {
+          "type": "object"
+        }
       }
     },
-    "durationMs": { "type": "number" },
+    "durationMs": {
+      "type": "number"
+    },
     "fingerprint": {
       "type": "object",
       "description": "Skill/plugin staleness fingerprint recorded at run time; persisted so `verify-run` can detect a kept run that predates a skill change and refuse to vouch for answer-coverage against stale gate labels.",
-      "required": ["baseline"],
+      "required": [
+        "baseline"
+      ],
       "properties": {
-        "baseline": { "type": "string", "description": "appVersion at record time" },
-        "skillHash": { "type": "string", "description": "hash of the session's local skill/plugin/marketplace dir contents (if any)" },
-        "skillSources": { "type": "array", "items": { "type": "string" } },
-        "skillScope": { "type": "array", "items": { "type": "string" } },
+        "baseline": {
+          "type": "string",
+          "description": "appVersion at record time"
+        },
+        "skillHash": {
+          "type": "string",
+          "description": "hash of the session's local skill/plugin/marketplace dir contents (if any)"
+        },
+        "skillSources": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "skillScope": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "sharedHash": {
           "type": "string",
           "description": "shared-root hash for scoped cassettes; absent on whole-tree or non-plugin-root mounts"
@@ -191,61 +386,116 @@
         "fileSigs": {
           "type": "array",
           "description": "per-file manifest [relpath, contentSha] of the exact files feeding skillHash",
-          "items": { "type": "array", "items": { "type": "string" }, "minItems": 2, "maxItems": 2 }
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 2,
+            "maxItems": 2
+          }
         },
-        "fileSigsOmitted": { "type": "boolean" },
+        "fileSigsOmitted": {
+          "type": "boolean"
+        },
         "mode": {
           "type": "string",
-          "enum": ["git", "raw"],
-          "description": "the file-set boundary used for skillHash — \"git\" (git-tracked set — the DEFAULT for a git work tree unless COWORK_HARNESS_GITSET=0) or \"raw\" (filesystem walk; used when GITSET=0 or the dir is not a git work tree)"
+          "enum": [
+            "git",
+            "raw"
+          ],
+          "description": "the file-set boundary used for skillHash \u2014 \"git\" (git-tracked set \u2014 the DEFAULT for a git work tree unless COWORK_HARNESS_GITSET=0) or \"raw\" (filesystem walk; used when GITSET=0 or the dir is not a git work tree)"
         },
-        "agentScope": { "type": "string", "enum": ["skill"] }
+        "agentScope": {
+          "type": "string",
+          "enum": [
+            "skill"
+          ]
+        }
       }
     },
-    "outDir": { "type": "string" },
-    "workDir": { "type": "string" },
-    "outputsDir": { "type": "string" },
+    "outDir": {
+      "type": "string"
+    },
+    "workDir": {
+      "type": "string"
+    },
+    "outputsDir": {
+      "type": "string"
+    },
     "userVisibleRoots": {
       "type": "array",
-      "items": { "type": "string" },
-      "description": "The user-visible mount roots (relative to mnt/) for this run — `outputs` plus each connected work folder's resolved mount name. Plugins are not included (read-only inputs, never artifact roots)."
+      "items": {
+        "type": "string"
+      },
+      "description": "The user-visible mount roots (relative to mnt/) for this run \u2014 `outputs` plus each connected work folder's resolved mount name. Plugins are not included (read-only inputs, never artifact roots)."
     },
     "readonlyFolderRoots": {
       "type": "array",
-      "items": { "type": "string" },
-      "description": "Subset of userVisibleRoots that are read-only (mode:\"r\") connected-folder mounts — inputs, not deliverables. `artifacts` excludes them so `scaffold` doesn't emit file_exists for an input."
+      "items": {
+        "type": "string"
+      },
+      "description": "Subset of userVisibleRoots that are read-only (mode:\"r\") connected-folder mounts \u2014 inputs, not deliverables. `artifacts` excludes them so `scaffold` doesn't emit file_exists for an input."
     },
-    "artifacts": { "type": "array" },
+    "artifacts": {
+      "type": "array"
+    },
     "workspaceFiles": {
       "type": "array",
-      "description": "Working folder panel's canonical file model (§6.3, M6) — every file under the user-visible roots, classified output|mount|input and sha256-fingerprinted. The Scratch pad's \"scratchpad\" class is deliberately not implemented (no host-materialization mechanism exists for it)."
+      "description": "Working folder panel's canonical file model (\u00a76.3, M6) \u2014 every file under the user-visible roots, classified output|mount|input and sha256-fingerprinted. The Scratch pad's \"scratchpad\" class is deliberately not implemented (no host-materialization mechanism exists for it)."
     },
     "preRunPaths": {
       "type": "array",
-      "items": { "type": "string" },
-      "description": "workRoot-relative paths that existed under the user-visible roots BEFORE the agent ran (captured post-staging, pre-spawn) — the baseline `no_unexpected_files` diffs against. Absent when the tier didn't capture it (microvm) or the run predates the seam."
+      "items": {
+        "type": "string"
+      },
+      "description": "workRoot-relative paths that existed under the user-visible roots BEFORE the agent ran (captured post-staging, pre-spawn) \u2014 the baseline `no_unexpected_files` diffs against. Absent when the tier didn't capture it (microvm) or the run predates the seam."
     },
     "preRunHashes": {
       "type": "object",
-      "additionalProperties": { "type": ["string", "null"] },
+      "additionalProperties": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
       "description": "Per-path sha256 of the user-visible tree BEFORE the agent ran (null = over the pre-run hash cap). Powers `input_unmodified`. Absent when the tier didn't capture it (microvm) or the run predates the seam."
     },
-    "partial": { "type": "boolean" },
-    "unansweredGate": { "type": "object" },
-    "nonDeterministic": { "type": "boolean" },
-    "nonDeterministicTerminal": { "type": "boolean" },
+    "partial": {
+      "type": "boolean"
+    },
+    "unansweredGate": {
+      "type": "object"
+    },
+    "nonDeterministic": {
+      "type": "boolean"
+    },
+    "nonDeterministicTerminal": {
+      "type": "boolean"
+    },
     "permissiveAutoAllow": {
       "type": "array",
-      "items": { "type": "string" },
+      "items": {
+        "type": "string"
+      },
       "description": "#6: off-registry auto-allows (real Cowork blocks these); non-empty means NOT a faithful pass"
     },
     "scan": {
       "type": "object",
       "description": "Post-run scan signals (live lane only)",
       "properties": {
-        "outputsDeletes": { "type": "array", "items": { "type": "string" } },
-        "hostPathLeaked": { "type": "boolean" },
-        "selfHealRan": { "type": "boolean" }
+        "outputsDeletes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "hostPathLeaked": {
+          "type": "boolean"
+        },
+        "selfHealRan": {
+          "type": "boolean"
+        }
       }
     },
     "effectiveFidelity": {
@@ -254,39 +504,57 @@
     },
     "fidelityWarnings": {
       "type": "array",
-      "items": { "type": "string" },
+      "items": {
+        "type": "string"
+      },
       "description": "#49: structured prompt warnings visible to JSON callers"
     },
-    "l0PluginDivergence": { "type": "boolean", "description": "#20: failing fidelity signal for protocol+plugins" },
+    "l0PluginDivergence": {
+      "type": "boolean",
+      "description": "#20: failing fidelity signal for protocol+plugins"
+    },
     "missingCapabilityUse": {
       "type": "array",
-      "items": { "type": "string" },
-      "description": "capability families the agent image omits but the skill used (live built-image tiers) — computeVerdict fails unless allow_missing_capability"
+      "items": {
+        "type": "string"
+      },
+      "description": "capability families the agent image omits but the skill used (live built-image tiers) \u2014 computeVerdict fails unless allow_missing_capability"
     },
     "gateProvenance": {
       "type": "object",
       "description": "Per-gate answer provenance (how each AskUserQuestion gate was answered) with a bySource histogram. Informational; never affects the verdict. Absent when the run had no gates, and absent on the replay lane (which reports reproducibility via nonDeterministic:false, not per-gate provenance).",
       "properties": {
-        "total": { "type": "number" },
-        "bySource": { "type": "object" },
-        "gates": { "type": "array" }
+        "total": {
+          "type": "number"
+        },
+        "bySource": {
+          "type": "object"
+        },
+        "gates": {
+          "type": "array"
+        }
       }
     },
     "skillsInvoked": {
       "type": "array",
-      "items": { "type": "string" },
+      "items": {
+        "type": "string"
+      },
       "description": "Wave 1 / E8: skill/plugin ids invoked via the Skill tool_use event, in call order, duplicates kept. Backs skill_triggered/no_skill_triggered. Absent on a run predating E8."
     },
     "skillToolAvailable": {
       "type": "boolean",
-      "description": "Wave 1 / E8: whether the agent's init tool list included \"Skill\" — false means skill_triggered/no_skill_triggered cannot be evaluated (agent-version tool-name drift)."
+      "description": "Wave 1 / E8: whether the agent's init tool list included \"Skill\" \u2014 false means skill_triggered/no_skill_triggered cannot be evaluated (agent-version tool-name drift)."
     },
     "staleness": {
       "type": "array",
       "description": "Replay only: class-tagged cassette-staleness findings, surfaced for a token-free JSON gate. Non-failing by default (a stale but passing replay stays ok:true); --strict fails on every class, --fail-on-skill-drift on skill/shared-root/unverifiable-skill only. See SPEC \u00a711 for per-class semantics.",
       "items": {
         "type": "object",
-        "required": ["class", "message"],
+        "required": [
+          "class",
+          "message"
+        ],
         "properties": {
           "class": {
             "type": "string",
@@ -301,7 +569,9 @@
               "unverifiable-tier"
             ]
           },
-          "message": { "type": "string" }
+          "message": {
+            "type": "string"
+          }
         }
       }
     },
@@ -309,8 +579,12 @@
       "type": "object",
       "description": "Replay only: count of live-only assertions NOT evaluated (full = whole assertion skipped; partial = content half ran, fs/egress half dropped). The skipped ones are absent from assertions[].",
       "properties": {
-        "full": { "type": "number" },
-        "partial": { "type": "number" }
+        "full": {
+          "type": "number"
+        },
+        "partial": {
+          "type": "number"
+        }
       }
     },
     "toolResults": {
@@ -318,40 +592,70 @@
       "description": "Tool-result text at assertion-fidelity cap (10 KB per result). Used by tool_result_contains / tool_result_not_contains. `assertText` is preferred when present; falls back to `text` (500-char display cap) for cassettes recorded before this field was added.",
       "items": {
         "type": "object",
-        "required": ["isError", "text"],
+        "required": [
+          "isError",
+          "text"
+        ],
         "properties": {
-          "toolUseId": { "type": "string" },
-          "isError": { "type": "boolean" },
-          "text": { "type": "string" },
-          "assertText": { "type": "string" }
+          "toolUseId": {
+            "type": "string"
+          },
+          "isError": {
+            "type": "boolean"
+          },
+          "text": {
+            "type": "string"
+          },
+          "assertText": {
+            "type": "string"
+          }
         }
       }
     },
     "tasks": {
       "type": "array",
-      "description": "Progress panel (§6.1, M6): TaskCreate/TaskUpdate tool calls folded into structured tasks. Deleted tasks are omitted (never appear here). `status` is a plain string, not a narrow enum — this milestone's live verification only observed pending/in_progress/completed + no delete/cancel path.",
+      "description": "Progress panel (\u00a76.1, M6): TaskCreate/TaskUpdate tool calls folded into structured tasks. Deleted tasks are omitted (never appear here). `status` is a plain string, not a narrow enum \u2014 this milestone's live verification only observed pending/in_progress/completed + no delete/cancel path.",
       "items": {
         "type": "object",
-        "required": ["id", "subject", "status"],
+        "required": [
+          "id",
+          "subject",
+          "status"
+        ],
         "properties": {
-          "id": { "type": "string" },
-          "subject": { "type": "string" },
-          "status": { "type": "string" },
-          "description": { "type": "string" },
-          "activeForm": { "type": "string" }
+          "id": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "activeForm": {
+            "type": "string"
+          }
         },
         "additionalProperties": false
       }
     },
     "context": {
       "type": "object",
-      "description": "Context/Connectors panel (§6.2, M6). mcpServers is SDK-owned pass-through data (loosely typed). availableSkills is a later addition to this same field.",
+      "description": "Context/Connectors panel (\u00a76.2, M6). mcpServers is SDK-owned pass-through data (loosely typed). availableSkills is a later addition to this same field.",
       "properties": {
-        "tools": { "type": "array" },
-        "mcpServers": { "type": "array" },
-        "availableSkills": { "type": "array" }
-      },
-      "required": ["tools", "mcpServers"]
+        "tools": {
+          "type": "array"
+        },
+        "mcpServers": {
+          "type": "array"
+        },
+        "availableSkills": {
+          "type": "array"
+        }
+      }
     }
   }
 }

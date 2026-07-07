@@ -414,12 +414,24 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
           ? ok()
           : fail(`transcript unexpectedly contains "${a.transcript_not_contains}"`),
     );
-  if (a.tool_result_contains !== undefined)
-    results.push(
-      ctx.toolResultTexts.some((t) => t.includes(a.tool_result_contains!))
-        ? ok()
-        : fail(`no tool result contained "${a.tool_result_contains}"`),
-    );
+  if (a.tool_result_contains !== undefined) {
+    const needle = a.tool_result_contains;
+    if (ctx.toolResultTexts.some((t) => t.includes(needle))) {
+      results.push(ok());
+    } else {
+      // No match found — but a match could sit PAST the display cap of a truncated result (assertText
+      // absent). Mirror the negative branch (tool_result_not_contains): the positive assertion still fails
+      // closed (evidence can't confirm it), but say WHY honestly instead of claiming the string is absent.
+      const anyTruncated = ctx.toolResultsTruncated !== undefined && ctx.toolResultTexts.some((_, i) => ctx.toolResultsTruncated![i] === true);
+      results.push(
+        anyTruncated
+          ? fail(
+              `evidence unavailable: no captured tool result contained "${needle}", but one or more results are display-truncated (no assertText) — a match may be past the cap`,
+            )
+          : fail(`no tool result contained "${needle}"`),
+      );
+    }
+  }
   if (a.tool_result_not_contains !== undefined) {
     if (ctx.toolResultsMissing) {
       results.push(fail(`evidence unavailable: tool results absent from result.json — cannot evaluate tool_result_not_contains`));

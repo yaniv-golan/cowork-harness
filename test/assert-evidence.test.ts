@@ -53,6 +53,28 @@ describe("assert evidence — passing checks surface a concrete evidence trail",
     expect(r.evidence).toContain("Bash");
   });
 
+  // #2: a positive tool_result_contains that finds no match fails closed — but when a searched result is
+  // display-truncated, say WHY (the match may be past the cap) instead of claiming the string is absent.
+  it("tool_result_contains: no match against a TRUNCATED result → evidence-unavailable reason (not a bare miss)", () => {
+    const [r] = evaluate(
+      [{ tool_result_contains: "SECRET" }],
+      ctx({ toolResultTexts: ["visible head only"], toolResultsTruncated: [true] }),
+    );
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/evidence unavailable/);
+    expect(r.message).toMatch(/truncated|past the cap/);
+  });
+
+  it("tool_result_contains: no match against a COMPLETE result → plain miss (fails closed, no truncation caveat)", () => {
+    const [r] = evaluate(
+      [{ tool_result_contains: "SECRET" }],
+      ctx({ toolResultTexts: ["full result text"], toolResultsTruncated: [false] }),
+    );
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/no tool result contained/);
+    expect(r.message).not.toMatch(/evidence unavailable/);
+  });
+
   it("transcript_contains evidence names the matched needle", () => {
     const [r] = evaluate([{ transcript_contains: "cap table" }], ctx({ transcript: "here is the cap table you asked for" }));
     expect(r.pass).toBe(true);

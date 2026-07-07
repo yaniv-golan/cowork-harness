@@ -3870,7 +3870,7 @@ export async function replayCassette(
       skillsInvoked: rec.skillsInvoked,
       skillToolAvailable: rec.initTools.includes("Skill"),
       skillActivity: cassette.timeline ? foldSkillActivity(cassette.timeline) : undefined,
-      tasks: rec.tasks.size ? Array.from(rec.tasks.values()) : undefined,
+      tasks: Array.from(rec.tasks.values()),
       // Context/Connectors panel — backs skill_available/connector_available/tool_available.
       // All three replay from the frozen init event: the cassette re-drive runs run.ts's init handler, which
       // seeds rec.context.{tools,mcpServers,availableSkills} from the recorded init line (availableSkills
@@ -4020,6 +4020,7 @@ export async function replayCassette(
         name: d.name,
         decision: d.decision,
         by: d.by,
+        requestId: d.requestId,
         model: d.model,
         detail: d.detail,
         rationale: d.rationale,
@@ -4037,7 +4038,7 @@ export async function replayCassette(
       toolErrors: rec.toolErrors,
       modelUsage: rec.modelUsage,
       redundantToolCalls: rec.redundantToolCalls,
-      tasks: rec.tasks.size ? Array.from(rec.tasks.values()) : undefined,
+      tasks: Array.from(rec.tasks.values()),
       // mcpServers is unknown[] on the RunRecord (verbatim from the SDK's init event) but RunResult
       // documents its loose per-server shape ({name, status?, ...}) for consumers — cast, not a
       // transformation; the underlying array is passed through unchanged.

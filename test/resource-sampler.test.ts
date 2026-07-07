@@ -57,6 +57,18 @@ it("foldResources aggregates peak RSS, peak+avg CPU; undefined when empty/missin
   expect(sum.avgCpuPct).toBeCloseTo(20, 5);
 });
 
+// #35: an all-malformed log must be distinguishable from a never-sampled tier (evidence-corruption,
+// not "this tier never sampled").
+it("foldResources returns sampleCount:0 + malformedLines for an all-garbage log (not undefined)", () => {
+  const d = mkdir();
+  writeFileSync(join(d, "resources.jsonl"), "not json\n{also bad\n\n{still bad}\n");
+  const sum = foldResources(d, "container", 1000);
+  expect(sum).not.toBeUndefined();
+  expect(sum!.sampleCount).toBe(0);
+  expect(sum!.malformedLines).toBeGreaterThan(0);
+  expect(sum!.peakRssBytes).toBeUndefined();
+});
+
 it("resolveIntervalMs honors the env override, rejects non-positive", () => {
   expect(resolveIntervalMs()).toBe(1000);
   process.env.COWORK_HARNESS_RESOURCE_INTERVAL_MS = "250";

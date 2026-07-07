@@ -100,7 +100,10 @@ describe("buildChatResult", () => {
     expect(r.thinkingElided).toBe(0);
   });
 
-  it("collapses webSearches to undefined when the run made zero WebSearch calls (matches models/thinking/tasks)", () => {
+  // NOTE: `tasks` is the deliberate EXCEPTION to this empty→undefined family — it emits [] for an observed
+  // zero-task run (the assert.ts [] ≠ undefined contract is tasks-specific, #8-10). models/thinking/
+  // webSearches keep collapsing to undefined.
+  it("collapses webSearches to undefined when the run made zero WebSearch calls (matches models/thinking)", () => {
     const r = buildChatResult(minimalChatRecord(), {
       scenario: "(chat)",
       prompt: "hi",
@@ -114,6 +117,24 @@ describe("buildChatResult", () => {
       durationMs: 5,
     });
     expect(r.webSearches).toBeUndefined();
+  });
+
+  // #8-10: `tasks` is emitted as [] (NOT collapsed to undefined) for an observed zero-task run — the
+  // assert.ts [] ≠ undefined contract distinguishes "observed, none" from "no telemetry".
+  it("emits tasks: [] (not undefined) for an observed zero-task run", () => {
+    const r = buildChatResult(minimalChatRecord(), {
+      scenario: "(chat)",
+      prompt: "hi",
+      fidelity: "container",
+      baseline: "1.0",
+      outDir: "/tmp/nope",
+      workRoot: "/tmp/nope/work",
+      userVisibleRoots: ["outputs"],
+      readonlyFolderRoots: [],
+      egress: [],
+      durationMs: 5,
+    });
+    expect(r.tasks).toEqual([]);
   });
 
   it("passes webSearches through unchanged when the run made at least one WebSearch call", () => {

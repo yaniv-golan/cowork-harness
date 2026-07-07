@@ -57,6 +57,20 @@ describe("execute — hostPathLeaked", () => {
     expect(hostPathLeaked("/sessions/abc/mnt/outputs/y")).toBe(false);
   });
 
+  // #19: macOS temp/volume roots are host paths too.
+  it("flags a macOS temp path under /var/folders/", () => {
+    expect(hostPathLeaked("wrote /var/folders/br/xy/T/cowork-abc/out.txt")).toBe(true);
+  });
+  it("flags a /private/var/ realpath host path", () => {
+    expect(hostPathLeaked("see /private/var/folders/br/xy/T/x")).toBe(true);
+  });
+  it("flags a /Volumes/ mounted-disk host path", () => {
+    expect(hostPathLeaked("open /Volumes/ExternalSSD/data.csv")).toBe(true);
+  });
+  it("does NOT flag /tmp (the in-VM HOME — appears legitimately in agent text)", () => {
+    expect(hostPathLeaked("cd /tmp/scratch && ls")).toBe(false);
+  });
+
   // file-URI forms: the path-leading `/` defeats the bare boundary class, so file:// is anchored explicitly.
   it("flags a file:// URI host path (macOS form)", () => {
     expect(hostPathLeaked("see file:///Users/alice/project/x.md")).toBe(true);

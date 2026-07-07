@@ -845,7 +845,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     skillsInvoked: record.skillsInvoked,
     skillToolAvailable: record.initTools.includes("Skill"),
     skillActivity: timelineData ? foldSkillActivity(timelineData.events) : undefined,
-    tasks: record.tasks.size ? Array.from(record.tasks.values()) : undefined,
+    tasks: Array.from(record.tasks.values()),
     // Context/Connectors panel — backs skill_available/connector_available/tool_available.
     // record.context is populated above (availableSkills merged in before this ctx literal; tools/mcpServers
     // set at init time in run.ts), so these are already live by the time evaluate() runs.
@@ -1015,6 +1015,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       name: d.name,
       decision: d.decision,
       by: d.by,
+      requestId: d.requestId,
       model: d.model,
       detail: d.detail,
       rationale: d.rationale,
@@ -1032,7 +1033,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     toolErrors: record.toolErrors,
     modelUsage: record.modelUsage,
     redundantToolCalls: record.redundantToolCalls,
-    tasks: record.tasks.size ? Array.from(record.tasks.values()) : undefined,
+    tasks: Array.from(record.tasks.values()),
     // mcpServers is unknown[] on the RunRecord (verbatim from the SDK's init event) but RunResult
     // documents its loose per-server shape ({name, status?, ...}) for consumers — cast, not a
     // transformation; the underlying array is passed through unchanged.
@@ -1272,6 +1273,7 @@ export function buildPartialResult(args: {
       name: d.name,
       decision: d.decision,
       by: d.by,
+      requestId: d.requestId,
       model: d.model,
       detail: d.detail,
       rationale: d.rationale,
@@ -1289,7 +1291,7 @@ export function buildPartialResult(args: {
     toolErrors: record.toolErrors,
     modelUsage: record.modelUsage,
     redundantToolCalls: record.redundantToolCalls,
-    tasks: record.tasks.size ? Array.from(record.tasks.values()) : undefined,
+    tasks: Array.from(record.tasks.values()),
     // mcpServers is unknown[] on the RunRecord (verbatim from the SDK's init event) but RunResult
     // documents its loose per-server shape ({name, status?, ...}) for consumers — cast, not a
     // transformation; the underlying array is passed through unchanged.
@@ -1394,7 +1396,10 @@ function scrubFileInPlace(path: string, secrets: string[]) {
  * `file:///C:/Users/` form is caught incidentally via the drive-letter `:` boundary.
  */
 export function hostPathLeaked(text: string): boolean {
-  const re = /(^|[\s"'(=:]|file:\/\/[^\s\/]*)(\/Users\/|\/opt\/cowork\/|\/home\/|\/root\/)/;
+  // macOS temp/volume roots are host paths too: `/var/folders/…` (the OS temp dir, and the realpath
+  // target of `/private/var/…`) and `/Volumes/…` (mounted disks). `/tmp` is deliberately NOT here — it is
+  // the in-VM HOME, so it legitimately appears in agent-visible text and would false-positive.
+  const re = /(^|[\s"'(=:]|file:\/\/[^\s\/]*)(\/Users\/|\/opt\/cowork\/|\/home\/|\/root\/|\/private\/var\/|\/var\/folders\/|\/Volumes\/)/;
   if (re.test(text)) return true;
   // also catch URL-encoded (%2FUsers%2F) and backslash (file:\\host\Users) forms by testing a
   // decoded + backslash-normalized copy. Decode each `%`-escape RUN independently rather than the

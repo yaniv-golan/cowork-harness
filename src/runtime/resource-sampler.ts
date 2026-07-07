@@ -106,7 +106,13 @@ export function foldResources(outDir: string, tier: string, intervalMs: number):
       continue;
     }
   }
-  if (samples.length === 0) return undefined;
+  if (samples.length === 0) {
+    // All-malformed ≠ never-sampled: if lines WERE present but every one failed to parse, surface an
+    // evidence-corruption summary (sampleCount 0 + malformedLines) rather than undefined, which reads as
+    // "this tier never sampled". A genuinely empty/absent log still returns undefined.
+    if (malformedLines > 0) return { tier, sampleCount: 0, intervalMs, malformedLines };
+    return undefined;
+  }
   const peak = (get: (s: ResourceSample) => number | undefined): number | undefined => {
     const vals = samples.map(get).filter((v): v is number => typeof v === "number");
     return vals.length ? Math.max(...vals) : undefined;

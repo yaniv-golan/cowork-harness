@@ -659,6 +659,33 @@ describe("buildGateTrace — provenance annotation", () => {
     ]);
   });
 
+  // #20: when decisions carry requestId, pairing is BY ID — robust even if the persisted decisions are in
+  // a different order than the asked gates (a retried/duplicated gate event would break positional pairing).
+  it("pairs provenance by requestId regardless of decision order (id-keyed, not positional)", () => {
+    const f = eventsFile([
+      gate("uuid-a", "toolu_a", "First?", "1"),
+      userResult("toolu_a", false, "ok"),
+      gate("uuid-b", "toolu_b", "Second?", "2"),
+      userResult("toolu_b", false, "ok"),
+      { type: "result", is_error: false },
+    ]);
+    writeFileSync(
+      join(f, "..", "result.json"),
+      JSON.stringify({
+        decisions: [
+          // reversed vs ask order — positional pairing would swap the labels; requestId keeps them correct
+          { kind: "question", name: "AskUserQuestion", decision: "answered", by: "llm", model: "m2", requestId: "uuid-b", detail: { "Second?": "2" } },
+          { kind: "question", name: "AskUserQuestion", decision: "answered", by: "scripted", requestId: "uuid-a", detail: { "First?": "1" } },
+        ],
+      }),
+    );
+    const rows = buildGateTrace(f);
+    expect(rows.map((r) => [r.question, r.answeredBy, r.model])).toEqual([
+      ["First?", "scripted", undefined],
+      ["Second?", "llm", "m2"],
+    ]);
+  });
+
   it("does not misattribute provenance when a middle gate is denied (mismatch→deny)", () => {
     // decisions[] has only 2 answered entries for 3 asked gates — the middle one was denied and
     // carries no `by`/`model` a reader should ever see. Positional pairing against the FILTERED
