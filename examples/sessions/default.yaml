@@ -31,9 +31,9 @@ plugins:
   # local_marketplaces: ["../my-marketplace"]  # LOCAL marketplace dirs (each with a marketplace.json)
   enabled: # enabledPlugins (name@marketplace)
     - my-pdf-skill@local
-  local_plugins: # host plugin dirs -> mnt/.local-plugins/marketplaces/local-desktop-app-uploads/<name> (>=1.14271.0)
+  local_plugins: # LEGACY pre-migration/install-staging shape -> mnt/.local-plugins/marketplaces/local-desktop-app-uploads/<name> (>=1.14271.0). For an uploaded plugin, prefer remote_plugins.
     - ../skills/my-pdf-skill
-  remote_plugins: [] # host plugin dirs -> mnt/.remote-plugins (org-remote-style)
+  remote_plugins: [] # uploaded / org-remote plugin dirs -> mnt/.remote-plugins/plugin_<id> (migrated-Cowork shape)
 
 skills:
   local: [] # extra host skill dirs -> CLAUDE_CONFIG_DIR/skills

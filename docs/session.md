@@ -54,7 +54,7 @@ plugins:
   local_plugins:                 # host plugin dirs → mnt/.local-plugins/marketplaces/<marketplace>/<plugin>
                                  #   (≥1.14271.0; older baselines use mnt/.local-plugins/cache)
     - ./skills/my-skill
-  remote_plugins: []             # host plugin dirs → mnt/.remote-plugins (org-remote-style)
+  remote_plugins: []             # uploaded / org-remote plugin dirs → mnt/.remote-plugins/plugin_<id> (migrated-Cowork shape)
 skills:
   local: []                      # extra host skill dirs → CLAUDE_CONFIG_DIR/skills
 mcp:
@@ -138,7 +138,7 @@ See [discovery.md](./discovery.md) for the full model. In short: the harness bui
 | `plugins.marketplaces[]` | `plugin_marketplaces` / `extraKnownMarketplaces` | git URLs or local paths. |
 | `plugins.local_marketplaces[]` | `claude plugin marketplace add` | LOCAL marketplace dirs (each holds a `marketplace.json`); plugins they reference are mounted. The `skill --marketplace` flag is the ad-hoc equivalent. |
 | `plugins.enabled[]` | `enabledPlugins` | `name@marketplace`. |
-| `plugins.local_plugins[]` / `remote_plugins[]` | Cowork plugin mounts | → `mnt/.local-plugins/marketplaces/<marketplace>/<plugin>` (≥1.14271.0; older baselines use `.local-plugins/cache`) / `mnt/.remote-plugins`. |
+| `plugins.local_plugins[]` / `remote_plugins[]` | Cowork plugin mounts | → `mnt/.local-plugins/marketplaces/<marketplace>/<plugin>` (≥1.14271.0; older baselines use `.local-plugins/cache`) / `mnt/.remote-plugins/plugin_<id>` (migrated-Cowork uploaded/org-remote shape; the id is a stable hash of the declared source). |
 | `skills.local[]` | `CLAUDE_CONFIG_DIR/skills` | extra host **skill** dirs (a folder *without* `.claude-plugin/plugin.json`) staged into the config dir's `skills/`. Use this for a single-skill folder; use `plugins.local_plugins` for a plugin root. |
 | `mcp.config` / `mcp.enabled[]` | `--mcp-config` / `enabledMcpjsonServers` | the supported way to attach an MCP server to a session under test. |
 

@@ -1,6 +1,7 @@
 import { warn } from "./io.js";
 import { z } from "zod";
 import { mkdirSync, writeFileSync, readFileSync, cpSync, existsSync, statSync, realpathSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join, resolve, relative, basename, isAbsolute } from "node:path";
 import { homedir } from "node:os";
 import type { PlatformBaseline } from "./types.js";
@@ -251,6 +252,21 @@ function readPluginVersion(pluginRoot: string): string | null {
   return typeof v === "string" && v ? v : null;
 }
 
+/** Synthesize a migrated-Cowork remote-plugin mount id (`plugin_<24 base62>`) from a declared source
+ *  string. Deterministic (same declared value → same id) and collision-safe across distinct values.
+ *  base62-encodes a sha256 of the value and takes 24 chars — matching the observed opaque shape (mixed-case
+ *  alnum), NOT a canonical uppercase ULID (no ULID library pulled in). */
+function synthRemotePluginId(declaredSource: string): string {
+  const alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+  let n = BigInt("0x" + createHash("sha256").update(declaredSource).digest("hex"));
+  let out = "";
+  while (out.length < 24) {
+    out = alphabet[Number(n % 62n)] + out;
+    n /= 62n;
+  }
+  return `plugin_${out}`;
+}
+
 /**
  * Materialize the session into a launch plan: builds a clean CLAUDE_CONFIG_DIR
  * (settings.json with enabledPlugins / enabledMcpjsonServers / plugin_marketplaces),
@@ -417,6 +433,9 @@ export function buildLaunchPlan(
     // Real Cowork (>= MIN) mounts ALL local-class plugins under `.local-plugins/marketplaces/<mp>/<plugin>`;
     // a user-added local dir maps to the synthetic `local-desktop-app-uploads` marketplace. No `cache/`, no
     // version segment. Below MIN, keep the legacy `.local-plugins/cache/<base>` shape (gated, unverified).
+    // NOTE: this is the LEGACY pre-migration / install-staging channel (`local-desktop-app-uploads` is a real
+    // marketplace). To exercise an UPLOADED plugin the way a migrated Cowork install serves it, use
+    // `remote_plugins` (→ `.remote-plugins/plugin_<id>`) below.
     const leaf = safePathSegment(basename(src), "local_plugin basename");
     const mountPath = bareNames ? `.local-plugins/marketplaces/local-desktop-app-uploads/${leaf}` : `.local-plugins/cache/${leaf}`;
     const stageFilter = existsSync(src) ? (stageFilterFor(src, `local_plugin '${leaf}'`) ?? undefined) : undefined;
@@ -428,10 +447,16 @@ export function buildLaunchPlan(
   }
   for (const p of session.plugins.remote_plugins) {
     const src = expand(p);
-    // same as local_plugins — a remote-plugin root is a directory; kind-check when present.
-    const remoteLeaf = safePathSegment(basename(src), "remote_plugin basename");
-    const mountPath = `.remote-plugins/${remoteLeaf}`;
-    const stageFilter = existsSync(src) ? (stageFilterFor(src, `remote_plugin '${remoteLeaf}'`) ?? undefined) : undefined;
+    // Real (migrated) Cowork serves UI-uploaded / org-remote plugins from `.remote-plugins/plugin_<ULID>`
+    // (live probe + asar migration), NOT the basename. Synthesize a DETERMINISTIC id from the declared
+    // source value `p` — not the content (churns on every skill edit → kills the dev loop) and not a fresh
+    // random id (would break replay determinism; real Cowork mints a per-upload ULID, but we need stability
+    // to re-derive the same layout on replay). Hashing the whole value (not just the basename) fixes the
+    // pre-existing basename collision (two remote_plugins sharing a basename now differ). Shape matches the
+    // observed opaque `plugin_` + 24 mixed-case base62 chars — NOT a canonical uppercase ULID (no lib).
+    const remoteId = synthRemotePluginId(p);
+    const mountPath = `.remote-plugins/${remoteId}`;
+    const stageFilter = existsSync(src) ? (stageFilterFor(src, `remote_plugin '${remoteId}'`) ?? undefined) : undefined;
     mounts.push({
       ...resolveDeclaredSource(src, mountPath, "r", "dir", { softMissing, deferMissing: true, what: `remote_plugin "${p}"` })!,
       kind: "remote-plugin",
