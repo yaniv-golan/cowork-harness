@@ -26,6 +26,91 @@ export function collectArtifacts(workRoot: string, prefixes: string[], opts?: Wa
   return out;
 }
 
+/** A link-kind for a path-walk entry. Absent (regular file) is the default; directories are
+ *  traversal-only and never emitted. */
+export type ArtifactLinkKind = "symlink" | "hardlink";
+
+export interface ArtifactPathEntry {
+  path: string;
+  /** absent = regular file. */
+  linkKind?: ArtifactLinkKind;
+}
+
+/**
+ * PATHS + LINK-KIND walk for the filesystem-coverage assertions (`no_unexpected_files`, and the pre-run
+ * baseline it diffs against). Unlike `collectArtifacts` (the CONTENT walk, which SKIPS symlinks and
+ * hardlinks so out-of-tree content can't be inlined into a committed cassette), this EMITS symlink and
+ * hardlink entries — tagged with `linkKind` — so an agent-created symlink/hardlink stray is visible to
+ * `no_unexpected_files`. It never reads or dereferences a target (no content is inlined; cycle-safe), so
+ * recording link identity is safe even for a symlink that points out of the work root. Directories are
+ * traversal-only (recursed, never emitted), matching `collectArtifacts`.
+ */
+export function collectArtifactPaths(workRoot: string, prefixes: string[]): ArtifactPathEntry[] {
+  const out: ArtifactPathEntry[] = [];
+  const visited = new Set<string>();
+  let workRootReal: string;
+  try {
+    workRootReal = realpathSync(workRoot);
+  } catch {
+    return out; // workRoot itself absent/unreadable
+  }
+  for (const prefix of prefixes) walkPaths(join(workRoot, prefix), prefix, workRootReal, visited, out);
+  return out;
+}
+
+/** Like `collectArtifactPaths` but rooted at an ARBITRARY directory mapped to `prefix` (the hostloop
+ *  pre-run variant, mirroring `collectArtifactsAt`). Returns `prefix/<rel>` entries with link-kind. */
+export function collectArtifactPathsAt(dir: string, prefix: string): ArtifactPathEntry[] {
+  const out: ArtifactPathEntry[] = [];
+  let dirReal: string;
+  try {
+    dirReal = realpathSync(dir);
+  } catch {
+    return out;
+  }
+  walkPaths(dir, prefix, dirReal, new Set<string>(), out);
+  return out;
+}
+
+function walkPaths(startAbs: string, startRel: string, containReal: string, visited: Set<string>, out: ArtifactPathEntry[]): void {
+  const walk = (abs: string, rel: string) => {
+    let real: string;
+    try {
+      real = realpathSync(abs); // only reached for real (non-symlink) directories — see the loop below
+    } catch {
+      return;
+    }
+    // A real directory whose realpath escapes the containment root (e.g. a bind mount) — skip the subtree.
+    if (real !== containReal && !real.startsWith(containReal + sep)) return;
+    if (visited.has(real)) return;
+    visited.add(real);
+    let entries: string[];
+    try {
+      entries = readdirSync(abs);
+    } catch {
+      return;
+    }
+    for (const name of entries.sort()) {
+      const childAbs = join(abs, name);
+      const childRel = rel ? `${rel}/${name}` : name;
+      let st;
+      try {
+        st = lstatSync(childAbs); // lstat: does NOT follow symlinks
+      } catch {
+        continue;
+      }
+      // EMIT a symlink as a link entry (never follow it — no escape/cycle, no target read).
+      if (st.isSymbolicLink()) {
+        out.push({ path: childRel, linkKind: "symlink" });
+        continue;
+      }
+      if (st.isDirectory()) walk(childAbs, childRel); // traversal-only, never emitted
+      else if (st.isFile()) out.push(st.nlink > 1 ? { path: childRel, linkKind: "hardlink" } : { path: childRel });
+    }
+  };
+  walk(startAbs, startRel);
+}
+
 export type WorkspaceFileClass = "output" | "mount" | "input";
 
 export interface WorkspaceFile {

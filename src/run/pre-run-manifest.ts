@@ -2,17 +2,17 @@ import { writeFileSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { userVisibleRootsFromPlan, type LaunchPlan } from "../session.js";
-import { collectArtifacts, collectArtifactsAt } from "./artifacts.js";
+import { collectArtifactPaths, collectArtifactPathsAt } from "./artifacts.js";
 
 // Written at outDir/ — ABOVE workRoot (work/ at protocol, work/session/mnt elsewhere), the same
 // placement rule as the `.origin` marker, so it is structurally invisible to collectArtifacts /
 // file_exists / user_visible_artifact and can never contaminate its own diff.
 const FILE = "pre-run-manifest.json";
 
-// The baseline is paths-only (no content is ever read into it), so the hardlink content-escape
-// guard doesn't apply — and MUST be lifted: the post-run side walks a cpSync copy where every file
-// is nlink=1, so a pre-existing hardlinked file skipped here would diff as agent-"created".
-const WALK: { includeHardlinkPaths: true } = { includeHardlinkPaths: true };
+// The baseline uses the PATHS+LINK-KIND walk (collectArtifactPaths): it emits symlink and hardlink
+// paths (the content walk skips them), so a pre-existing link appears in the baseline and is not later
+// flagged as an agent-"created" stray by no_unexpected_files. Link entries are path-only — never hashed
+// or dereferenced — so a symlink/hardlink target's (possibly out-of-root) content is never read.
 
 /** Per-file size cap for pre-run hashing: files larger than this record sha256:null (evidence-
  *  unavailable for that path under input_unmodified), keeping the pre-run walk bounded on big
@@ -83,26 +83,31 @@ export function capturePreRunManifest(plan: LaunchPlan, workRoot: string, outDir
   const paths: string[] = [];
   const hashes: Record<string, string | null> = {};
   const stats: Record<string, { mtimeMs: number; size: number } | null> = {};
-  const add = (relPath: string, baseDir: string) => {
+  // A link entry (symlink/hardlink) is recorded path-only: it goes into `paths` (so no_unexpected_files's
+  // baseline includes it) but NOT into `hashes`/`stats` (so input_unmodified — which iterates the hash
+  // map — never treats it as content, and its target is never dereferenced/read).
+  const add = (relPath: string, baseDir: string, linkKind?: "symlink" | "hardlink") => {
     paths.push(relPath);
+    if (linkKind) return;
     hashes[relPath] = hashFileCapped(baseDir, relPath, cap);
     stats[relPath] = statCapture(baseDir, relPath);
   };
   if (tier === "hostloop") {
-    for (const a of collectArtifacts(workRoot, ["outputs"], WALK)) add(a.path, workRoot);
+    for (const e of collectArtifactPaths(workRoot, ["outputs"])) add(e.path, workRoot, e.linkKind);
     for (const m of folderMounts) {
-      // collectArtifactsAt returns mountPath-prefixed paths; the real bytes live under hostPath at the
+      // collectArtifactPathsAt returns mountPath-prefixed paths; the real bytes live under hostPath at the
       // path with the mountPath prefix stripped (leading "<mountPath>/" removed).
-      for (const p of collectArtifactsAt(m.hostPath, m.mountPath, WALK)) {
-        const rel = p === m.mountPath ? "" : p.slice(m.mountPath.length + 1);
-        paths.push(p);
-        hashes[p] = hashFileCapped(m.hostPath, rel, cap);
-        stats[p] = statCapture(m.hostPath, rel);
+      for (const e of collectArtifactPathsAt(m.hostPath, m.mountPath)) {
+        paths.push(e.path);
+        if (e.linkKind) continue; // link: path-only, never hashed/dereferenced
+        const rel = e.path === m.mountPath ? "" : e.path.slice(m.mountPath.length + 1);
+        hashes[e.path] = hashFileCapped(m.hostPath, rel, cap);
+        stats[e.path] = statCapture(m.hostPath, rel);
       }
     }
     paths.sort();
   } else {
-    for (const a of collectArtifacts(workRoot, userVisibleRootsFromPlan(plan), WALK)) add(a.path, workRoot);
+    for (const e of collectArtifactPaths(workRoot, userVisibleRootsFromPlan(plan))) add(e.path, workRoot, e.linkKind);
     paths.sort();
   }
   writeFileSync(join(outDir, FILE), JSON.stringify({ paths, hashes, stats }, null, 2));

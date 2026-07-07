@@ -6,7 +6,7 @@ import { VERDICT_MODIFIER_KEYS } from "./types.js";
 import { compileUserRegex } from "./regex.js";
 import { normalizeHost } from "./boundary-paths.js";
 import { extractComputerLinks, resolveComputerLink, type LinkResolutionContext } from "./run/computer-links.js";
-import { collectArtifacts } from "./run/artifacts.js";
+import { collectArtifacts, collectArtifactPaths } from "./run/artifacts.js";
 import { anyGlobMatches } from "./glob.js";
 
 /** Derives the four AssertContext budget fields (costUsd/tokensTotal/toolCallsTotal/turns) uniformly from
@@ -911,7 +911,10 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
       );
     } else {
       const pre = new Set(ctx.preRunPaths.map((p) => p.replace(/\\/g, "/")));
-      const post = collectArtifacts(ctx.workRoot, ctx.userVisiblePrefixes).map((f) => f.path);
+      // Path-walk (not the content walk): it EMITS symlink/hardlink paths, so an agent-created link stray
+      // is visible here. The pre-run baseline uses the same walk (see capturePreRunManifest), so a
+      // pre-existing link is in `pre` and is not falsely flagged as created.
+      const post = collectArtifactPaths(ctx.workRoot, ctx.userVisiblePrefixes).map((e) => e.path);
       const created = post.filter((p) => !pre.has(p.replace(/\\/g, "/")));
       const stray = created.filter((p) => !anyGlobMatches(a.no_unexpected_files!, p));
       results.push(

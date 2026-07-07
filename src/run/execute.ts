@@ -61,13 +61,13 @@ import { runsWriteRoot } from "./trace-view.js";
 import { summarizeGateProvenance } from "./gate-provenance.js";
 import { collectSecrets, scrub } from "../secrets.js";
 import { indexRowFromResult, appendIndexRow } from "./run-index.js";
-import { classifyWorkspaceFiles, collectArtifacts } from "./artifacts.js";
+import { classifyWorkspaceFiles, collectArtifacts, collectArtifactPaths } from "./artifacts.js";
 import { readPreRunManifest, readPreRunManifestHashes } from "./pre-run-manifest.js";
 import { resolveAvailableSkills, type PluginSkillRoot } from "./skill-metadata.js";
 
 // Moved to ./artifacts.ts so assert.ts can use it without an assert→execute import cycle;
 // re-exported here for the existing importers (cassette.ts, tests).
-export { collectArtifacts } from "./artifacts.js";
+export { collectArtifacts, collectArtifactPaths } from "./artifacts.js";
 
 const RUN_RESULT_SCHEMA_URL = "https://raw.githubusercontent.com/yaniv-golan/cowork-harness/main/schema/run-result.json";
 
@@ -746,7 +746,9 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // tier that can't capture); the regex backstop still runs in that case, same as before this change.
   if (preRunPaths) {
     const preOutputs = new Set(preRunPaths.filter((p) => p === "outputs" || p.startsWith("outputs/")));
-    const postOutputs = new Set(collectArtifacts(workRoot, ["outputs"]).map((f) => f.path));
+    // Path walk (matching the pre-run baseline): it emits symlink/hardlink paths too, so a pre-existing
+    // link under outputs that survives is present on BOTH sides and is not falsely reported as removed.
+    const postOutputs = new Set(collectArtifactPaths(workRoot, ["outputs"]).map((e) => e.path));
     for (const p of preOutputs) if (!postOutputs.has(p)) scan.outputsDeletes.push(`[fs-diff] output file removed post-run: ${p}`);
   }
 

@@ -3,8 +3,10 @@ import { mkdtempSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
-import { resolve } from "node:path";
+import { resolve, dirname } from "node:path";
 import { computeContentSig } from "../src/run/skill-hash.js";
+import { buildFingerprint } from "../src/run/cassette.js";
+import { loadBaseline } from "../src/baseline.js";
 
 const CLI = resolve("dist/cli.js");
 const can = existsSync(CLI);
@@ -162,5 +164,33 @@ describe.skipIf(!can)("rehash CLI", () => {
     expect(out.command).toBe("rehash");
     expect(out.results[0].action).toBe("skipped");
     expect(out.results[0].reason).toMatch(/baseline drifted/i);
+  });
+
+  // #38: a v9 cassette that WOULD migrate cleanly (content unchanged, baseline matches, algo 4) must NOT be
+  // silently stamped to v10 — v10 records symlink/hardlink identity the old manifest never captured and
+  // rehash cannot synthesize. It routes to a re-record instead. We construct the clean-migrate case by
+  // computing the cassette's fingerprint exactly the way rehash recomputes it (buildFingerprint), so every
+  // earlier gate passes and only the v10 guard fires.
+  it("rehash refuses to stamp a v9→v10 bump even when content is unchanged (routes to re-record)", () => {
+    const liveBaseline = loadBaseline("latest").appVersion;
+    const skillDir = makeSkillDir({ "SKILL.md": "# probe\ndo a thing" });
+    const dir = mkdtempSync(join(tmpdir(), "cwh-rehash-v10-"));
+    const sessionPath = join(dir, "session.yaml");
+    writeFileSync(sessionPath, `skills:\n  local:\n    - ${skillDir}\n`);
+    // Compute the fingerprint the same way cmdRehash will (absolute session path ⇒ cassetteDir irrelevant).
+    const fp = buildFingerprint(sessionPath, liveBaseline, dir, undefined);
+    expect(fp.contentSig).toBeTruthy(); // sanity: skill dirs resolved, so we actually reach the migrate gate
+    const body = {
+      cassetteVersion: 9,
+      scenario: { name: "s", baseline: liveBaseline, session: sessionPath, fidelity: "container", prompt: "hi", answers: [], expect_denied: [], assert: [] },
+      events: [JSON.stringify({ type: "system", subtype: "init" }), JSON.stringify({ type: "result", subtype: "success", is_error: false })],
+      fingerprint: { baseline: liveBaseline, skillHash: fp.skillHash, contentSig: fp.contentSig },
+    };
+    writeFileSync(join(dir, "s.cassette.json"), JSON.stringify(body));
+    const r = spawnSync("node", [CLI, "rehash", "--output-format", "json", dir], { encoding: "utf8" });
+    expect(r.status).toBe(1); // error exit
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.results[0].action).toBe("error");
+    expect(out.results[0].reason).toMatch(/v10 records symlink\/hardlink/i);
   });
 });

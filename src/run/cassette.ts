@@ -24,7 +24,7 @@ import {
   Assertion as AssertionSchema,
   VERDICT_MODIFIER_KEYS,
 } from "../types.js";
-import { executeScenario, parseScenarioFile, collectArtifacts, parseSessionFile, slugForPath } from "./execute.js";
+import { executeScenario, parseScenarioFile, collectArtifactPaths, parseSessionFile, slugForPath } from "./execute.js";
 import { assembleRunResult } from "./assemble-run-result.js";
 import { loadSession, resolveSessionPaths } from "../session.js";
 import { loadBaseline } from "../baseline.js";
@@ -110,6 +110,11 @@ export interface ManifestEntry {
    *  failure at record time (sha256 is ""). ABSENT on pre-v8 cassettes → replay falls back to naming both
    *  size/readonly causes. v8+. */
   truncationReason?: "size" | "readonly" | "unreadable";
+  /** v10: this entry is a symlink or hardlink, NOT a regular file. Recorded path+kind only (body-less,
+   *  sha256 ""), never dereferenced — so an agent-created link stray is visible to `no_unexpected_files`
+   *  on replay (materializes as an empty placeholder, counted by the path walk), without inlining any
+   *  out-of-root target content into the committed cassette. ABSENT = regular file (all pre-v10 entries). */
+  linkKind?: "symlink" | "hardlink";
 }
 
 /** A staleness tripwire over the inputs that determine the recording — mirrors `asarFingerprint`
@@ -222,7 +227,15 @@ export interface Cassette {
 //  `computer_links_resolve` stops re-deriving that map from the CURRENT (possibly since-changed)
 //  session file (see `buildFolderPrefixMap`). Both ABSENT on a pre-v9 cassette → the legacy behavior
 //  applies unchanged (no session-fingerprint check; folder links reconstruct from the current session).
-export const CASSETTE_VERSION = 9;
+// v10: ManifestEntry.linkKind (#38). buildManifest now records symlink/hardlink entries (body-less,
+//  path+kind only, never dereferenced) so an agent-created link stray materializes on replay and is seen
+//  by no_unexpected_files — closing a live/replay false-green. CONTENTSIG_ALGO is unchanged (a manifest-
+//  SHAPE change, not a fingerprint-algorithm change), so a v9 cassette's skill fingerprint stays directly
+//  comparable and this bump alone forces no re-record. ABSENT linkKind on a pre-v10 entry = regular file
+//  (the pre-fix behavior — such a cassette simply never captured links; safe because it can't have
+//  recorded a link stray in the first place). `rehash` cannot synthesize link entries from an old
+//  manifest, so it routes a v9→v10 bump to a re-record (see cmdRehash).
+export const CASSETTE_VERSION = 10;
 // The contentSig algorithm version. Bumped whenever computeContentSig's INPUT/encoding changes (the v6
 // unification). `rehash` only byte-compares contentSig within the same algo version; across a bump it
 // re-records. Derived from cassetteVersion: < 6 ⇒ algo 1 (legacy), ≥ 6 ⇒ algo 2 (unified),
@@ -296,21 +309,27 @@ export function buildManifest(
   // `materializeManifest` writes a 0-byte placeholder and `computer_links_resolve` resolves identically
   // on live and replay (see T3 in the pre-1.0 fix plan).
   const isBodyLess = (path: string): boolean => bodyLessPrefixes.some((prefix) => path === prefix || path.startsWith(prefix + "/"));
-  return collectArtifacts(workRoot, roots).map(({ path, bytes }) => {
-    // collectArtifacts paths are derived from a directory walk; even though it already skips symlinks,
-    // an entry must not inline content outside the work root. Re-confirm containment before reading the body.
+  // Path+link-kind walk (v10): it EMITS symlink/hardlink entries the content walk skipped, so a link
+  // stray survives into the manifest → materializes as a placeholder → is seen by no_unexpected_files on
+  // replay, matching live. Link entries are path+kind only (never dereferenced/read), so no out-of-root
+  // target content is inlined into the committed cassette.
+  return collectArtifactPaths(workRoot, roots).map((e): ManifestEntry => {
+    const { path, linkKind } = e;
+    if (linkKind) return { path, bytes: 0, sha256: "", linkKind }; // body-less; never read the target
+    // Regular file: re-confirm containment before reading the body (never inline out-of-work-root content).
     let abs: string;
     try {
       abs = containedPath(workRoot, path);
     } catch {
-      return { path, bytes, sha256: "", truncated: true, truncationReason: "unreadable" };
+      return { path, bytes: 0, sha256: "", truncated: true, truncationReason: "unreadable" };
     }
     let buf: Buffer;
     try {
       buf = readFileSync(abs);
     } catch {
-      return { path, bytes, sha256: "", truncated: true, truncationReason: "unreadable" };
+      return { path, bytes: 0, sha256: "", truncated: true, truncationReason: "unreadable" };
     }
+    const bytes = buf.length;
     const sha256 = createHash("sha256").update(buf).digest("hex");
     // truncationReason names WHY the body is absent so replay can give the precise remedy without a
     // cassette-level roots list: "readonly" (a mode:r input — assert on a deliverable) vs "size" (over
@@ -3262,6 +3281,16 @@ export function cmdRehash(args: string[]): void {
       continue;
     }
 
+    // v10 records symlink/hardlink identity (ManifestEntry.linkKind) that the CONTENTSIG algorithm is
+    // blind to, so `rehash`'s content-unchanged check cannot vouch for it — and rehash has only the old
+    // manifest, not the vanished work tree, so it cannot synthesize the link entries a v10 cassette
+    // promises. A silent version-stamp would mint a v10-labeled cassette that never actually captured its
+    // links. Route a v9→v10 bump to a re-record. Placed AFTER the "already current" skip but this only
+    // needs to block the eventual STAMP — the content/baseline gates below still run and their own
+    // skip/error reasons (baseline drift, no contentSig) take precedence, so this fires only when a
+    // cassette would otherwise have migrated cleanly.
+    const crossesIntoV10 = recordedVersion < 10 && CASSETTE_VERSION >= 10;
+
     // No fingerprint — no skill dirs were tracked; only baseline staleness applies, which requires re-record.
     if (!cassette.fingerprint?.skillHash) {
       results.push({
@@ -3323,6 +3352,18 @@ export function cmdRehash(args: string[]): void {
         file,
         action: "error",
         reason: "skill content changed since recording (contentSig mismatch) — re-record required",
+      });
+      continue;
+    }
+
+    // Content is provably unchanged, so a pure version-stamp WOULD be safe for a hash-only bump — but a
+    // v9→v10 bump also promises symlink/hardlink identity that the old manifest never captured and rehash
+    // cannot synthesize. Refuse the stamp and route to a re-record (see the crossesIntoV10 note above).
+    if (crossesIntoV10) {
+      results.push({
+        file,
+        action: "error",
+        reason: `v10 records symlink/hardlink identity (#38) the v${recordedVersion} manifest could not capture — \`rehash\` cannot add it; re-record to migrate`,
       });
       continue;
     }
