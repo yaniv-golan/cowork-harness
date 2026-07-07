@@ -146,7 +146,16 @@ export const SessionConfig = z.strictObject({
     })
     .default({ hash_ignore: [] }),
 });
-export type SessionConfig = z.infer<typeof SessionConfig>;
+export type SessionConfig = z.infer<typeof SessionConfig> & {
+  /** Resolved-only, never authored: a map from each RESOLVED `remote_plugins` path to the synthetic mount id
+   *  derived from its DECLARED (pre-absolutization) source string. Populated by `resolveSessionPaths` so the
+   *  `.remote-plugins/plugin_<id>` leaf stays relocatable — a relative YAML declaration yields the same id on
+   *  any machine/checkout, instead of hashing a machine-specific absolute path. Absent on inline/CLI-arg
+   *  sessions (which skip resolution); `buildLaunchPlan` then falls back to hashing the given string directly.
+   *  Deliberately OUTSIDE the Zod strictObject schema so it can't be set from YAML and never enters the
+   *  session fingerprint / origin-source set. */
+  _remotePluginIds?: Record<string, string>;
+};
 
 /** A concrete mount the runtime should create (path relative to mnt cwd). */
 export interface Mount {
@@ -448,13 +457,17 @@ export function buildLaunchPlan(
   for (const p of session.plugins.remote_plugins) {
     const src = expand(p);
     // Real (migrated) Cowork serves UI-uploaded / org-remote plugins from `.remote-plugins/plugin_<ULID>`
-    // (live probe + asar migration), NOT the basename. Synthesize a DETERMINISTIC id from the declared
-    // source value `p` — not the content (churns on every skill edit → kills the dev loop) and not a fresh
-    // random id (would break replay determinism; real Cowork mints a per-upload ULID, but we need stability
-    // to re-derive the same layout on replay). Hashing the whole value (not just the basename) fixes the
-    // pre-existing basename collision (two remote_plugins sharing a basename now differ). Shape matches the
-    // observed opaque `plugin_` + 24 mixed-case base62 chars — NOT a canonical uppercase ULID (no lib).
-    const remoteId = synthRemotePluginId(p);
+    // (live probe + asar migration), NOT the basename. Synthesize a DETERMINISTIC id — not the content
+    // (churns on every skill edit → kills the dev loop) and not a fresh random id (would break replay
+    // determinism; real Cowork mints a per-upload ULID, but we need stability to re-derive the same layout
+    // on replay). Hashing the whole source (not just the basename) fixes the pre-existing basename collision
+    // (two remote_plugins sharing a basename now differ). Shape matches the observed opaque `plugin_` + 24
+    // mixed-case base62 chars — NOT a canonical uppercase ULID (no lib).
+    // For a FILE-loaded session the id is derived from the DECLARED (pre-resolution) string and carried in
+    // `_remotePluginIds` (keyed by this resolved path), so it's relocatable across machines/checkouts. Inline
+    // and CLI-arg sessions skip resolution → fall back to hashing the given string directly (there `p` IS the
+    // declared string, so the behavior is identical).
+    const remoteId = session._remotePluginIds?.[p] ?? synthRemotePluginId(p);
     const mountPath = `.remote-plugins/${remoteId}`;
     const stageFilter = existsSync(src) ? (stageFilterFor(src, `remote_plugin '${remoteId}'`) ?? undefined) : undefined;
     mounts.push({
@@ -772,6 +785,15 @@ export function resolveSessionPaths(session: SessionConfig, baseDir: string): Se
   };
   // `plugins.marketplaces` is mostly git URLs (left untouched); only a relative LOCAL path is resolved.
   const isUrl = (p: string) => /^[a-z][a-z0-9+.-]*:\/\//i.test(p) || p.startsWith("git@");
+  // Derive each remote_plugin's mount id from its DECLARED (pre-resolution) source string, keyed by the
+  // RESOLVED path buildLaunchPlan will iterate — so the id is relocatable (a relative YAML declaration →
+  // same id on any checkout) rather than a hash of a machine-specific absolute path.
+  const remotePluginIds: Record<string, string> = {};
+  const remotePlugins = session.plugins.remote_plugins.map((declared) => {
+    const resolved = r(declared);
+    remotePluginIds[resolved] = synthRemotePluginId(declared);
+    return resolved;
+  });
   return {
     ...session,
     uploads: session.uploads.map(r),
@@ -785,7 +807,8 @@ export function resolveSessionPaths(session: SessionConfig, baseDir: string): Se
       marketplaces: session.plugins.marketplaces.map((p) => (isUrl(p) ? p : r(p))),
       local_plugins: session.plugins.local_plugins.map(r),
       local_marketplaces: session.plugins.local_marketplaces.map(r),
-      remote_plugins: session.plugins.remote_plugins.map(r),
+      remote_plugins: remotePlugins,
     },
+    _remotePluginIds: remotePluginIds,
   };
 }

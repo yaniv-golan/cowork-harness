@@ -40,9 +40,19 @@ differs. To iterate on assertions token-free, opt in with `replay --assert-from 
 re-record). `expect_denied`/filesystem/egress keys are sourced but stay live-only. See
 [docs/scenario.md](./scenario.md#where-replay-reads-assert-from--frozen-by-default-on-disk-by-opt-in).
 
+A validated re-check does **not** reach a plain `replay` (which reads the frozen block) until it is written
+back. Add **`--write`** to `--reassert` to persist the re-validated block into the cassette — free, no re-record —
+when **only** the `assert:`/`expect_denied:` block changed; `events`/`controlOut` stay byte-identical. It refuses
+any key that would silently skip on this cassette (needs an artifact manifest, pre-run hashes, or `controlOut`)
+and, without `--allow-failing`, a failing verdict — so `--write` can't bake in a green a plain `replay` won't
+reproduce. See [docs/scenario.md](./scenario.md#how-an-assertion-edit-reaches-ci) for the full propagation chain.
+
 > Known limitation: if a redaction policy ran at record time, a frozen `assert:` literal (e.g. a
 > `transcript_contains` matching a secret pattern) is stored redacted while the on-disk block is plaintext, so
 > the default-path "assert differs" notice can fire spuriously. It's a notice only — it never changes a verdict.
+> The same overlap bounds `--reassert --write`: if the redaction policy matches content in a **shaping** field
+> (`prompt`/`answers`), the frozen copy is stored redacted while the on-disk file is plaintext, so `--reassert`
+> hard-fails as recording-shaping drift **before** `--write` runs — re-record is then the only path.
 
 ## File shape
 

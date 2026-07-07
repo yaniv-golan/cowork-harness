@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { CASSETTE_VERSION } from "../src/run/cassette.js";
@@ -79,5 +79,52 @@ describe.skipIf(!can)("verify-cassettes --margins", () => {
     const r = verify(cwd, ["c.cassette.json", "--output-format", "json"]);
     expect(r.code).toBe(0);
     expect(r.json?.margins).toBeUndefined();
+  });
+
+  // `questions_count_max` counts SUB-questions off the replay re-drive (not a separate sidecar) — derivable
+  // whenever the cassette carries controlOut. The committed multiselect-gate cassette has one gate → 1.
+  const GATE_CASSETTE = resolve("examples/replays/example-multiselect-gate.cassette.json");
+  function gateCassette(over: (c: any) => void): string {
+    const c = JSON.parse(readFileSync(GATE_CASSETTE, "utf8"));
+    c.scenario.assert = [{ questions_count_max: 5 }];
+    over(c);
+    return JSON.stringify(c);
+  }
+
+  // The committed fixture carries a synthetic email + a moved baseline; clear both so the assertion targets
+  // only the margins logic (privacy/staleness are exercised by other tests and never affect the margin rows).
+  const CLEAN = ["--skip-staleness", "--allow-email", "synthetic-user@example\\.com"];
+
+  it("questions_count_max: recorded sub-question count is derived from the re-drive (controlOut present)", () => {
+    const cwd = tmp();
+    writeFileSync(
+      join(cwd, "c.cassette.json"),
+      gateCassette(() => {}),
+    );
+    const r = verify(cwd, ["c.cassette.json", "--margins", ...CLEAN, "--output-format", "json"]);
+    expect(r.code).toBe(0);
+    const fileEntry = (r.json?.margins ?? []).find((m: any) => m.file.endsWith("c.cassette.json"));
+    const row = fileEntry?.rows.find((x: any) => x.key === "questions_count_max");
+    expect(row).toBeTruthy();
+    expect(row.recorded).toBe(1); // one AskUserQuestion gate, one sub-question
+    expect(row.budget).toBe(5);
+    expect(row.margin).toBeCloseTo(5, 5); // 5 / 1
+  });
+
+  it("questions_count_max: a controlOut-less cassette reports recorded=null (not a false-infinite margin)", () => {
+    const cwd = tmp();
+    // Strip controlOut → the re-drive can't answer the gate; the sub-question count is unknowable, so it must
+    // report "not derivable" (null) rather than a spurious 0 that would read as an infinite headroom.
+    writeFileSync(
+      join(cwd, "c.cassette.json"),
+      gateCassette((c) => (c.controlOut = [])),
+    );
+    const r = verify(cwd, ["c.cassette.json", "--margins", ...CLEAN, "--output-format", "json"]);
+    expect(r.code).toBe(0);
+    const fileEntry = (r.json?.margins ?? []).find((m: any) => m.file.endsWith("c.cassette.json"));
+    const row = fileEntry?.rows.find((x: any) => x.key === "questions_count_max");
+    expect(row).toBeTruthy();
+    expect(row.recorded).toBeNull();
+    expect(row.margin).toBeNull();
   });
 });

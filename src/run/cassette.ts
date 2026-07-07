@@ -1,6 +1,17 @@
 import { z } from "zod";
 import { warn } from "../io.js";
-import { readFileSync, writeFileSync, renameSync, mkdirSync, mkdtempSync, existsSync, readdirSync, statSync, rmSync, writeSync } from "node:fs";
+import {
+  readFileSync,
+  writeFileSync,
+  renameSync,
+  mkdirSync,
+  mkdtempSync,
+  existsSync,
+  readdirSync,
+  statSync,
+  rmSync,
+  writeSync,
+} from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join, dirname, relative, isAbsolute, resolve, sep } from "node:path";
@@ -2534,12 +2545,18 @@ function classifyUncheckableOnDiskKeys(
       // no_unexpected_files mirrors replayCassette's presence-gating: an artifacts field that exists
       // (even empty) + preRunPaths ⇒ checkable (no reason); missing baseline ⇒ its dedicated reason,
       // never the generic manifest one (which would misdiagnose an empty-but-present manifest).
-      else if (k === "no_unexpected_files" && cassette.artifacts === undefined) entry = { code: "manifest-missing", message: "no artifact manifest in this cassette" };
+      else if (k === "no_unexpected_files" && cassette.artifacts === undefined)
+        entry = { code: "manifest-missing", message: "no artifact manifest in this cassette" };
       else if (k === "no_unexpected_files" && !hasPreRun)
-        entry = { code: "prerunpaths-missing", message: "no pre-run manifest in this cassette (recorded pre-0.24 or on microvm) — re-record on harness ≥0.24 (container/hostloop)" };
+        entry = {
+          code: "prerunpaths-missing",
+          message:
+            "no pre-run manifest in this cassette (recorded pre-0.24 or on microvm) — re-record on harness ≥0.24 (container/hostloop)",
+        };
       // input_unmodified mirrors no_unexpected_files: checkable needs BOTH the artifacts manifest and the
       // preRunHashes baseline (a different pre-run field than no_unexpected_files' preRunPaths).
-      else if (k === "input_unmodified" && cassette.artifacts === undefined) entry = { code: "manifest-missing", message: "no artifact manifest in this cassette" };
+      else if (k === "input_unmodified" && cassette.artifacts === undefined)
+        entry = { code: "manifest-missing", message: "no artifact manifest in this cassette" };
       else if (k === "input_unmodified" && !hasPreRunHashes)
         entry = {
           code: "prerunhashes-missing",
@@ -2565,7 +2582,8 @@ function warnUncheckableOnDiskKeys(cassette: Cassette, frozen: Scenario, onDisk:
     warn(
       "::warning:: [replay] on-disk `expect_denied:` differs from the cassette but is live-only — it is sourced, NOT evaluated on replay (run a live `run` to check egress)\n",
     );
-  for (const [k, r] of keys) warn(`::warning:: [replay] on-disk assert key \`${String(k)}\` is not checkable on replay (${r.message}) — skipped\n`);
+  for (const [k, r] of keys)
+    warn(`::warning:: [replay] on-disk assert key \`${String(k)}\` is not checkable on replay (${r.message}) — skipped\n`);
 }
 
 /**
@@ -2618,8 +2636,14 @@ async function writeReassertedAssertBlock(
     const redactedExpectDenied = redactStructural(onDisk.expect_denied ?? [], policy) as unknown[];
     // Verdict-preservation over two cassettes that differ ONLY in the assert block: events/controlOut are
     // identical, so any verdict delta is the redaction's doing (not a fresh-base assumption). Refuse on a flip.
-    const base = { ...rawCassette, scenario: { ...rawCassette.scenario, assert: onDisk.assert ?? [], expect_denied: onDisk.expect_denied ?? [] } } as Cassette;
-    const redacted = { ...rawCassette, scenario: { ...rawCassette.scenario, assert: redactedAssert, expect_denied: redactedExpectDenied } } as Cassette;
+    const base = {
+      ...rawCassette,
+      scenario: { ...rawCassette.scenario, assert: onDisk.assert ?? [], expect_denied: onDisk.expect_denied ?? [] },
+    } as Cassette;
+    const redacted = {
+      ...rawCassette,
+      scenario: { ...rawCassette.scenario, assert: redactedAssert, expect_denied: redactedExpectDenied },
+    } as Cassette;
     await assertRedactionVerdictPreserved(base, redacted, dirname(cassetteFile));
     nextAssert = redactedAssert;
     nextExpectDenied = redactedExpectDenied;
@@ -2655,7 +2679,17 @@ export async function cmdReplay(args: string[]) {
   try {
     p = parseArgs(args, {
       // --quiet/--verbose accepted for flag consistency but currently no-op in replay (renderer plan is fixed).
-      booleans: ["--strict", "--fail-on-skill-drift", "--reassert", "--write", "--allow-failing", "--explain", "--best-effort-future-cassette", "--quiet", "--verbose"],
+      booleans: [
+        "--strict",
+        "--fail-on-skill-drift",
+        "--reassert",
+        "--write",
+        "--allow-failing",
+        "--explain",
+        "--best-effort-future-cassette",
+        "--quiet",
+        "--verbose",
+      ],
       values: ["--output-format", "--assert-from"],
       enums: { "--output-format": ["text", "json"] },
       aliases: { "-q": "--quiet" },
@@ -2698,10 +2732,13 @@ export async function cmdReplay(args: string[]) {
   // vacuous. Text-mode only; `--output-format json` already carries `assertions[].evidence` in the envelope.
   const explain = p.flags["--explain"] ?? false;
   if (write && !reassertMode) {
-    log("replay --write requires --reassert (or --assert-from <scenario.yaml>): it persists the RE-ASSERTED on-disk block, so there must be one to re-assert from");
+    log(
+      "replay --write requires --reassert (or --assert-from <scenario.yaml>): it persists the RE-ASSERTED on-disk block, so there must be one to re-assert from",
+    );
     return process.exit(2);
   }
-  if (allowFailing && !write) warn("::notice:: [replay] --allow-failing only affects --write's verdict gate; it is a no-op without --write\n");
+  if (allowFailing && !write)
+    warn("::notice:: [replay] --allow-failing only affects --write's verdict gate; it is a no-op without --write\n");
   const failOnSkillDrift = (p.flags["--fail-on-skill-drift"] ?? false) || reassertMode; // narrower gate: only skill-source drift fails
   if (strict && p.flags["--fail-on-skill-drift"])
     warn(
@@ -2731,7 +2768,9 @@ export async function cmdReplay(args: string[]) {
   // `--assert-from <one file> --write` over a dir would clone-write ONE assert block into every cassette —
   // the cross-assert footgun made permanent. For a dir, require --reassert (each cassette's own sibling).
   if (write && assertFrom !== undefined && resolved.files.length > 1) {
-    log("replay --assert-from <one file> --write over a directory is refused (it would write one assert block into every cassette) — use --reassert for a per-cassette sibling");
+    log(
+      "replay --assert-from <one file> --write over a directory is refused (it would write one assert block into every cassette) — use --reassert for a per-cassette sibling",
+    );
     return process.exit(2);
   }
   const results: RunResult[] = [];
@@ -2893,10 +2932,12 @@ interface MarginRow {
 }
 
 /** Count-bound assertion keys `verify-cassettes --margins` folds a recorded count for. EXPLICIT and kept in
- *  sync with the schema — a key missing here silently drops from the margin report. `questions_count_max` is
- *  intentionally absent: its recorded value is a SUB-question count that needs the question sidecar, not
- *  derivable from a bare cassette replay. The 6 budget-field keys reuse `budgetFields` (identical to what the
- *  asserts evaluate); the array-count keys read the same RunResult fields the AssertContext builder does. */
+ *  sync with the schema — a key missing here silently drops from the margin report. The 6 budget-field keys
+ *  reuse `budgetFields` (identical to what the asserts evaluate); the array-count keys read the same RunResult
+ *  fields the AssertContext builder does. `questions_count_max` counts SUB-questions off the re-drive's
+ *  `decisions[]` (matching the assert, which folds `rec.questions`); a controlOut-less cassette re-drives with
+ *  no question decisions, so `computeCassetteMargins` nulls its recorded count there (see the guard below)
+ *  rather than report a false-infinite margin off a spurious 0. */
 const COUNT_BOUND_MARGIN_KEYS: {
   key: keyof Assertion;
   kind: MarginKind;
@@ -2910,7 +2951,18 @@ const COUNT_BOUND_MARGIN_KEYS: {
   { key: "max_redundant_tool_calls", kind: "max", recorded: (_r, bf) => bf.redundantCallsTotal },
   { key: "dispatch_count_max", kind: "max", recorded: (r) => r.subagents?.length },
   { key: "task_count_min", kind: "min", recorded: (r) => r.tasks?.length },
-  { key: "gate_answer_count_min", kind: "min", recorded: (r) => (r.gateDeliveries === undefined ? undefined : r.gateDeliveries.filter((g) => g.delivered === true).length) },
+  {
+    key: "gate_answer_count_min",
+    kind: "min",
+    recorded: (r) => (r.gateDeliveries === undefined ? undefined : r.gateDeliveries.filter((g) => g.delivered === true).length),
+  },
+  // Sub-question total, matching what `questions_count_max` evaluates (assert.ts folds `rec.questions`, one
+  // entry per sub-question). Summed off `decisions[].questions` — populated on the replay re-drive.
+  {
+    key: "questions_count_max",
+    kind: "max",
+    recorded: (r) => (r.decisions ?? []).filter((d) => d.kind === "question").reduce((sum, d) => sum + (d.questions?.length ?? 0), 0),
+  },
 ];
 
 /** Fold the recorded count for each count-bound assert in a cassette's frozen block by replaying it
@@ -2925,11 +2977,15 @@ async function computeCassetteMargins(cassette: Cassette, cassetteDir: string): 
   if (present.length === 0) return [];
   const result = await replayCassette(cassette, [], { cassetteDir });
   const bf = budgetFields(result);
+  const hasControlOut = !!cassette.controlOut?.length;
   return present.map(({ spec, budget }) => {
-    const rec = spec.recorded(result, bf);
+    // A controlOut-less cassette re-drives with no question decisions (a truncated/legacy recording), so its
+    // sub-question count is a spurious 0 → a false-infinite margin. Report "not derivable" (null) instead.
+    const rec = spec.key === "questions_count_max" && !hasControlOut ? undefined : spec.recorded(result, bf);
     const recorded = rec === undefined ? null : rec;
     let margin: number | null = null;
-    if (recorded !== null) margin = spec.kind === "max" ? (recorded === 0 ? Infinity : budget / recorded) : budget === 0 ? Infinity : recorded / budget;
+    if (recorded !== null)
+      margin = spec.kind === "max" ? (recorded === 0 ? Infinity : budget / recorded) : budget === 0 ? Infinity : recorded / budget;
     return { key: spec.key as string, kind: spec.kind, budget, recorded, margin };
   });
 }
@@ -3118,7 +3174,9 @@ export async function cmdVerifyCassettes(args: string[]) {
         : `✗ verify-cassettes: ${realFindings.length} PII finding(s)${staleAny ? " + staleness drift" : ""}${scenarioDriftAny ? " + scenario prompt drift" : ""}${versionAny ? " + version mismatch" : ""}${errorAny ? " + unreadable cassette(s)" : ""} across ${files.length} cassette(s)`,
     );
     if (margins) {
-      log("\ncount-budget margins (recorded vs budget; a SINGLE-SAMPLE estimate — one cassette ≠ variance, use `run --repeat` for a distribution):");
+      log(
+        "\ncount-budget margins (recorded vs budget; a SINGLE-SAMPLE estimate — one cassette ≠ variance, use `run --repeat` for a distribution):",
+      );
       if (margins.length === 0) log("  (no count-bound assertions in the checked cassette(s))");
       for (const m of margins) {
         log(`  ${m.file}:`);

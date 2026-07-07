@@ -274,6 +274,19 @@ describe("assert.ts — computer_links_resolve", () => {
       }),
     );
     expect(pass(r)).toBe(true);
+    // Item 12 (--explain): a green computer_links_resolve carries a concrete evidence trail so it isn't
+    // trusted blind — it names how many links resolved (the count is the load-bearing distinction from a
+    // vacuous pass).
+    expect(r[0].evidence).toMatch(/1 computer:\/\/ link\(s\) all resolved/);
+  });
+
+  it("computer_links_resolve_if_present carries evidence on a vacuous (zero-link) pass", () => {
+    const r = evaluate(
+      [{ computer_links_resolve_if_present: true }],
+      ctx({ transcript: "no links here", linkResolution: { mode: "live" } }),
+    );
+    expect(pass(r)).toBe(true);
+    expect(r[0].evidence).toMatch(/no computer:\/\/ links.*vacuous pass/);
   });
 
   it("fails (live) and names the dangling link + which target was checked", () => {

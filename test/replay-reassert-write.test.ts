@@ -147,6 +147,19 @@ describe.skipIf(!can)("replay --reassert --write — refuse buckets (no silent f
     expect(forced.stderr).toMatch(/wrote the re-asserted block/);
     expect(readCassette(cwd).scenario.assert).toEqual([{ transcript_contains: "DEFINITELY_ABSENT" }]);
   });
+
+  it("(d) a recording-shaping (prompt) drift hard-fails --reassert BEFORE any write; cassette unchanged", () => {
+    const cwd = tmp();
+    write(cwd, "c.cassette.json", cassetteJson({ assert: [{ result: "success" }] }));
+    // The sibling changes the PROMPT (a recording-shaping field): the frozen events no longer correspond to
+    // this scenario, so --reassert must hard-fail before the write step ever runs — you must re-record.
+    write(cwd, "c.yaml", "name: c\nprompt: a DIFFERENT prompt\nassert:\n  - transcript_contains: hello\n");
+    const before = readFileSync(join(cwd, "c.cassette.json"), "utf8");
+    const w = replay(cwd, ["c.cassette.json", "--reassert", "--write"]);
+    expect(w.code).not.toBe(0);
+    expect(w.stderr).toMatch(/drift|re-record/i);
+    expect(readFileSync(join(cwd, "c.cassette.json"), "utf8")).toBe(before); // untouched — no partial write
+  });
 });
 
 describe.skipIf(!can)("replay --reassert --write — redaction v2 (block-only, verdict-preserving)", () => {
@@ -178,6 +191,23 @@ describe.skipIf(!can)("replay --reassert --write — redaction v2 (block-only, v
     expect(w.stderr).toMatch(/redact|verdict/i);
     expect(readCassette(cwd).scenario.assert).toEqual([{ result: "success" }]); // unchanged
   });
+
+  it("(M2) a redaction that touched a SHAPING field (prompt) → frozen-redacted vs on-disk-plaintext hard-fails --write", () => {
+    // The M2 bound: when a record-time policy matched the prompt/answers, the cassette froze the REDACTED
+    // prompt while the authored file stays plaintext. `recordingShapingDrift` compares the two and hard-fails
+    // BEFORE --write — a redacting consumer who edits a shaping field must re-record, not --write.
+    const cwd = tmp();
+    const cass = JSON.parse(cassetteJson({ assert: [{ result: "success" }] }));
+    cass.scenario.prompt = "call [REDACTED:apikey]"; // frozen prompt, redacted at record time
+    write(cwd, "c.cassette.json", JSON.stringify(cass, null, 2));
+    write(cwd, ".cowork-redact.json", JSON.stringify({ patterns: [{ regex: "ACME-\\d+-KEY", label: "apikey" }] }));
+    write(cwd, "c.yaml", "name: c\nprompt: call ACME-1234-KEY\nassert:\n  - transcript_contains: hello\n"); // plaintext
+    const before = readFileSync(join(cwd, "c.cassette.json"), "utf8");
+    const w = replay(cwd, ["c.cassette.json", "--reassert", "--write"]);
+    expect(w.code).not.toBe(0);
+    expect(w.stderr).toMatch(/drift|re-record/i);
+    expect(readFileSync(join(cwd, "c.cassette.json"), "utf8")).toBe(before); // unchanged — must re-record
+  });
 });
 
 describe.skipIf(!can)("replay --write — usage gates", () => {
@@ -196,5 +226,24 @@ describe.skipIf(!can)("replay --write — usage gates", () => {
     write(cwd, "edit.yaml", scenarioYaml("  - result: success\n"));
     const r = replay(cwd, [".", "--assert-from", "edit.yaml", "--write"]);
     expect(r.code).toBe(2);
+  });
+});
+
+describe.skipIf(!can)("replay --reassert --write — directory (per-cassette sibling)", () => {
+  it("writes EACH cassette's own sibling block over a directory target", () => {
+    const cwd = tmp();
+    // Two cassettes whose frozen asserts both FAIL; each has its own sibling that fixes it differently.
+    write(cwd, "c1.cassette.json", cassetteJson({ name: "c1", assert: [{ transcript_contains: "NOPE" }] }));
+    write(cwd, "c1.yaml", scenarioYaml("  - transcript_contains: hello\n"));
+    write(cwd, "c2.cassette.json", cassetteJson({ name: "c2", assert: [{ transcript_contains: "NOPE" }] }));
+    write(cwd, "c2.yaml", scenarioYaml("  - transcript_contains: there\n"));
+    const w = replay(cwd, [".", "--reassert", "--write", "--output-format", "json"]);
+    expect(w.code).toBe(0);
+    // --reassert resolves each cassette's OWN sibling (not one shared block), so the two land differently.
+    expect(readCassette(cwd, "c1.cassette.json").scenario.assert).toEqual([{ transcript_contains: "hello" }]);
+    expect(readCassette(cwd, "c2.cassette.json").scenario.assert).toEqual([{ transcript_contains: "there" }]);
+    // both plain replays are now green off their frozen copies
+    expect(replay(cwd, ["c1.cassette.json", "--output-format", "json"]).json?.ok).toBe(true);
+    expect(replay(cwd, ["c2.cassette.json", "--output-format", "json"]).json?.ok).toBe(true);
   });
 });
