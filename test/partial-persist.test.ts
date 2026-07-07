@@ -36,6 +36,8 @@ function partialRecord(over: Partial<RunRecord> = {}): RunRecord {
     hookEvents: [],
     presentedFiles: [],
     webSearches: [],
+    infraErrors: [],
+    evidenceErrors: { taskTracking: 0, webSearchParse: 0, presentFilesMalformed: 0 },
     ...over,
   };
 }
@@ -178,5 +180,57 @@ describe("buildPartialResult — salvage a whiffed run", () => {
     // and workspaceFiles (Task 6) still enumerates the read-only input, just tagged "input"
     const inputEntry = result.workspaceFiles?.find((f) => f.path === ".projects/myfolder/c.md");
     expect(inputEntry?.class).toBe("input");
+  });
+
+  // A gate-caused partial run used to hard-erase nonDeterministic/nonDeterministicTerminal to
+  // `undefined` regardless of what happened BEFORE the whiff. It should instead derive them the same
+  // way the success path does (from record.decisions + the onUnanswered policy), so an earlier
+  // LLM-decided gate on a run that later hit an unanswered gate still reports as non-reproducible.
+  it("derives nonDeterministic/nonDeterministicTerminal from the decision log, same as the success path", () => {
+    const { outDir, workRoot, configDir } = runDirWithArtifact();
+    const result = buildPartialResult({
+      scenarioName: "s",
+      prompt: "p",
+      fidelity: "container",
+      baseline: "b",
+      record: partialRecord({ decisions: [{ kind: "tool", name: "Bash", decision: "allow", by: "llm" }] }),
+      outDir,
+      workRoot,
+      configDir,
+      pluginSkillRoots: [],
+      userVisibleRoots: ["outputs"],
+      readonlyFolderRoots: [],
+      effectiveFidelity: "container",
+      egress: [],
+      durationMs: 1,
+      unanswered: { message: "m" },
+      onUnanswered: "llm",
+    });
+    expect(result.nonDeterministic).toBe(true);
+    expect(result.nonDeterministicTerminal).toBe(true);
+  });
+
+  it("reports nonDeterministic false (not undefined) when nothing in the decision log was non-deterministic", () => {
+    const { outDir, workRoot, configDir } = runDirWithArtifact();
+    const result = buildPartialResult({
+      scenarioName: "s",
+      prompt: "p",
+      fidelity: "container",
+      baseline: "b",
+      record: partialRecord(), // by: "parity" — deterministic
+      outDir,
+      workRoot,
+      configDir,
+      pluginSkillRoots: [],
+      userVisibleRoots: ["outputs"],
+      readonlyFolderRoots: [],
+      effectiveFidelity: "container",
+      egress: [],
+      durationMs: 1,
+      unanswered: { message: "m" },
+      onUnanswered: "fail",
+    });
+    expect(result.nonDeterministic).toBe(false);
+    expect(result.nonDeterministicTerminal).toBe(false);
   });
 });

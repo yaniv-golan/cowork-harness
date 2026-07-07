@@ -1161,25 +1161,33 @@ describe("Cassette — protocol replay", () => {
     expect(strict.assertions.some((a) => !a.pass && /stale/.test(a.message ?? ""))).toBe(true);
   });
 
-  // Cassette format version: a FUTURE version warns loudly (forward-compat) but still replays; absent = legacy (no warn).
-  it("cassette version: a newer format version warns but still replays; legacy (absent) does not warn", async () => {
+  // Cassette format version: a FUTURE version FAILS by default (future semantics may be misread → a
+  // false-green is possible); --best-effort-future-cassette opts into a warn-and-replay. Absent = legacy (no fail/warn).
+  it("cassette version: a newer format version fails by default; --best-effort warns and replays; legacy passes clean", async () => {
     const events = [
       JSON.stringify({ type: "system", subtype: "init", tools: ["Write"] }),
       JSON.stringify({ type: "result", subtype: "success", is_error: false }),
     ];
+    const future = { cassetteVersion: 999, scenario: makeScenario([{ result: "success" as const }]), events } as any;
+
+    // Default: a failing assertion is pushed (no warn on the default lane), so the replay is not green.
+    const def = await replayCassette(future);
+    expect(def.assertions.some((a) => !a.pass && /cassette format too new/.test(a.message ?? ""))).toBe(true);
+
+    // Opt-in: warns and replays without the failing assertion.
     const warnings: string[] = [];
     const orig = process.stderr.write.bind(process.stderr);
     (process.stderr as any).write = (s: string | Uint8Array): boolean => (warnings.push(String(s)), true);
+    let effort: Awaited<ReturnType<typeof replayCassette>>;
     try {
-      const future = { cassetteVersion: 999, scenario: makeScenario([{ result: "success" as const }]), events } as any;
-      expect((await replayCassette(future)).result).toBe("success");
-      const legacy = { scenario: makeScenario([{ result: "success" as const }]), events } as any; // no version → legacy
-      await replayCassette(legacy);
+      effort = await replayCassette(future, [], { bestEffortFutureCassette: true });
+      const legacy = { scenario: makeScenario([{ result: "success" as const }]), events } as any; // no version → legacy, clean
+      expect((await replayCassette(legacy)).assertions.every((a) => a.pass)).toBe(true);
     } finally {
       (process.stderr as any).write = orig;
     }
-    const all = warnings.join("");
-    expect((all.match(/is newer than this harness understands/g) ?? []).length).toBe(1); // only the future cassette warned
+    expect(effort.assertions.some((a) => !a.pass && /cassette format too new/.test(a.message ?? ""))).toBe(false);
+    expect((warnings.join("").match(/is newer than this harness understands/g) ?? []).length).toBe(1); // only the opt-in run warned
   });
 
   // ---- pin the bug BEFORE fixing it. ----

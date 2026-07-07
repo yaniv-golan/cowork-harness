@@ -84,9 +84,17 @@ describe("extractComputerLinks — the three positions + percent-decoding", () =
     expect(extractComputerLinks("no links here")).toEqual([]);
   });
 
-  it("an unterminated markdown-link opener is left unextracted (mirrors production leaving it verbatim)", () => {
+  it("an unterminated markdown-link opener still extracts the bare URL (a link the display would still show)", () => {
     const links = extractComputerLinks(`[View](computer:///sessions/${SID}/mnt/outputs/report.pdf without a closer`);
-    expect(links).toEqual([]);
+    expect(links).toHaveLength(1);
+    expect(links[0].raw).toBe(`/sessions/${SID}/mnt/outputs/report.pdf`);
+    expect(links[0].vmShaped).toBe(true);
+  });
+
+  it("well-formed markdown links are unaffected by the malformed-markdown fallback", () => {
+    const links = extractComputerLinks(`[View](computer:///sessions/${SID}/mnt/outputs/report.pdf) and more text`);
+    expect(links).toHaveLength(1);
+    expect(links[0].raw).toBe(`/sessions/${SID}/mnt/outputs/report.pdf`);
   });
 });
 
@@ -135,16 +143,25 @@ describe("resolveComputerLink — live mode", () => {
     expect(outcome.checkedDescription).toMatch(/unsafe/);
   });
 
-  it("host-shaped: checks the real host path DIRECTLY, bypassing any resolver", () => {
+  it("host-shaped: with no hostRoots, an existing real path is evidence-unavailable, never a silent existsSync pass", () => {
     const realFile = join(root, "host-file.txt");
     writeFileSync(realFile, "x");
     const link = extractComputerLinks(`computer://${realFile}`)[0];
     const outcome = resolveComputerLink(link, "/some/unrelated/workroot", { mode: "live" });
-    expect(outcome.resolved).toBe(true);
-    expect(outcome.checkedDescription).toMatch(/host path \(direct\)/);
+    expect(outcome.resolved).toBe(false);
+    expect(outcome.checkedDescription).toMatch(/no recorded workspace roots/);
   });
 
-  it("host-shaped: a nonexistent real path is dangling", () => {
+  it("host-shaped: with an empty hostRoots array, same evidence-unavailable outcome as hostRoots absent", () => {
+    const realFile = join(root, "host-file2.txt");
+    writeFileSync(realFile, "x");
+    const link = extractComputerLinks(`computer://${realFile}`)[0];
+    const outcome = resolveComputerLink(link, root, { mode: "live", hostRoots: [] });
+    expect(outcome.resolved).toBe(false);
+    expect(outcome.checkedDescription).toMatch(/no recorded workspace roots/);
+  });
+
+  it("host-shaped: a nonexistent real path with no hostRoots is also evidence-unavailable", () => {
     const link = extractComputerLinks(`computer:///definitely/not/a/real/path.txt`)[0];
     const outcome = resolveComputerLink(link, root, { mode: "live" });
     expect(outcome.resolved).toBe(false);
@@ -212,8 +229,17 @@ describe("resolveComputerLink — replay mode (no filesystem probe of host-shape
 });
 
 describe("assert.ts — computer_links_resolve", () => {
-  it("passes when the transcript has zero computer:// links (presence-gated separately)", () => {
+  it("FAILS when the transcript has zero computer:// links — presence-required", () => {
     const r = evaluate([{ computer_links_resolve: true }], ctx({ transcript: "no links at all", linkResolution: { mode: "live" } }));
+    expect(pass(r)).toBe(false);
+    expect(r[0].message).toMatch(/no computer:\/\/ link|if_present/i);
+  });
+
+  it("computer_links_resolve_if_present passes vacuously on zero links", () => {
+    const r = evaluate(
+      [{ computer_links_resolve_if_present: true }],
+      ctx({ transcript: "no links at all", linkResolution: { mode: "live" } }),
+    );
     expect(pass(r)).toBe(true);
   });
 
@@ -267,8 +293,24 @@ describe("assert.ts — computer_links_resolve", () => {
     expect(r[0].message).toMatch(/container/);
   });
 
-  it("passes (live, hostloop) when a host-shaped link's real path exists, checked directly", () => {
+  it("passes (live, hostloop) when a host-shaped link's real path exists inside a recorded hostRoot, checked directly", () => {
     const root = mkdtempSync(join(tmpdir(), "cwh-assert-live3-"));
+    const realFile = join(root, "report.pdf");
+    writeFileSync(realFile, "x");
+    const r = evaluate(
+      [{ computer_links_resolve: true }],
+      ctx({
+        transcript: `[View your report](computer://${realFile})`,
+        workRoot: "/irrelevant",
+        effectiveFidelity: "hostloop",
+        linkResolution: { mode: "live", hostRoots: [root] },
+      }),
+    );
+    expect(pass(r)).toBe(true);
+  });
+
+  it("fails (live, hostloop) evidence-unavailable when a host-shaped link's real path exists but no hostRoots were recorded", () => {
+    const root = mkdtempSync(join(tmpdir(), "cwh-assert-live4-"));
     const realFile = join(root, "report.pdf");
     writeFileSync(realFile, "x");
     const r = evaluate(
@@ -280,7 +322,8 @@ describe("assert.ts — computer_links_resolve", () => {
         linkResolution: { mode: "live" },
       }),
     );
-    expect(pass(r)).toBe(true);
+    expect(pass(r)).toBe(false);
+    expect(r[0].message).toMatch(/no recorded workspace roots/);
   });
 });
 
@@ -371,7 +414,11 @@ describe("replay classification — computer_links_resolve is a manifest key (no
     const artifacts = buildManifest(root, undefined, ["myproject-src"]);
 
     const cassette: Cassette = {
-      cassetteVersion: CASSETTE_VERSION,
+      // Pinned to v8 (not CASSETTE_VERSION): this test exercises the LEGACY current-session
+      // reconstruction fallback (no persisted folderPrefixMap). A v9+ cassette no longer falls back to
+      // re-reading the session file — see the "v9 cassette WITHOUT a persisted folderPrefixMap" test
+      // below, which covers the same fixture shape under the new behavior.
+      cassetteVersion: 8,
       scenario: {
         name: "t",
         baseline: "latest",
@@ -390,6 +437,75 @@ describe("replay classification — computer_links_resolve is a manifest key (no
     const result = await replayCassette(cassette, [], { cassetteDir: sessionsRoot });
     const entry = result.assertions.find((a) => "computer_links_resolve" in a.assertion);
     expect(entry?.pass).toBe(true);
+  });
+
+  it("v9 cassette WITH a persisted folderPrefixMap resolves via it — NOT the current session (which doesn't even exist)", async () => {
+    // Deliberately no session.yaml on disk anywhere — proves the persisted map alone drives resolution.
+    const hostFolder = "/some/recorded/host/myproject-src";
+    const root = mkdtempSync(join(tmpdir(), "cwh-replay-manifest4b-"));
+    mkdirSync(join(root, "myproject-src"), { recursive: true });
+    writeFileSync(join(root, "myproject-src", "notes.md"), "x");
+    const artifacts = buildManifest(root, undefined, ["myproject-src"]);
+
+    const cassette: Cassette = {
+      cassetteVersion: CASSETTE_VERSION,
+      scenario: {
+        name: "t",
+        baseline: "latest",
+        session: "(inline)", // no session file to reconstruct from at all
+        fidelity: "container",
+        prompt: "do the thing",
+        answers: [],
+        expect_denied: [],
+        assert: [{ computer_links_resolve: true }],
+      },
+      events: events(`computer://${hostFolder}/notes.md`),
+      controlOut: [],
+      artifacts,
+      userVisibleRoots: ["outputs", "myproject-src"],
+      folderPrefixMap: [{ from: hostFolder, mount: "myproject-src" }],
+    } as unknown as Cassette;
+    const result = await replayCassette(cassette, []);
+    const entry = result.assertions.find((a) => "computer_links_resolve" in a.assertion);
+    expect(entry?.pass).toBe(true);
+  });
+
+  it("v9 cassette WITHOUT a persisted folderPrefixMap fails evidence-unavailable — never reconstructs from the current session", async () => {
+    // Same fixture as the v8 test above (a real session.yaml with a matching folder), but this cassette
+    // is v9+ and carries NO folderPrefixMap. Even though the current-session reconstruction WOULD
+    // succeed (proven by the v8 test), a v9+ cassette must refuse to fall back to it.
+    const sessionsRoot = mkdtempSync(join(tmpdir(), "cwh-replay-session-v9-"));
+    const hostFolder = join(sessionsRoot, "myproject-src");
+    mkdirSync(hostFolder, { recursive: true });
+    writeFileSync(join(sessionsRoot, "session.yaml"), `folders:\n  - from: ${hostFolder}\n`);
+
+    const root = mkdtempSync(join(tmpdir(), "cwh-replay-manifest4c-"));
+    mkdirSync(join(root, "myproject-src"), { recursive: true });
+    writeFileSync(join(root, "myproject-src", "notes.md"), "x");
+    const artifacts = buildManifest(root, undefined, ["myproject-src"]);
+
+    const cassette: Cassette = {
+      cassetteVersion: CASSETTE_VERSION,
+      scenario: {
+        name: "t",
+        baseline: "latest",
+        session: "session.yaml",
+        fidelity: "container",
+        prompt: "do the thing",
+        answers: [],
+        expect_denied: [],
+        assert: [{ computer_links_resolve: true }],
+      },
+      events: events(`computer://${hostFolder}/notes.md`),
+      controlOut: [],
+      artifacts,
+      userVisibleRoots: ["outputs", "myproject-src"],
+      // no folderPrefixMap — unexpected for a v9+ cassette
+    } as unknown as Cassette;
+    const result = await replayCassette(cassette, [], { cassetteDir: sessionsRoot });
+    const entry = result.assertions.find((a) => "computer_links_resolve" in a.assertion);
+    expect(entry?.pass).toBe(false);
+    expect(entry?.message).toMatch(/evidence unavailable/i);
   });
 
   // T3 / adversarial-review finding M1 regression guard: a `mode: "r"` connected-folder input is
@@ -417,14 +533,18 @@ describe("replay classification — computer_links_resolve is a manifest key (no
     expect(entry.truncated).toBe(true);
     expect(entry.sha256).toMatch(/^[0-9a-f]{64}$/);
 
-    // LIVE: resolveComputerLink checks the host-shaped path directly on the real filesystem.
+    // LIVE: resolveComputerLink checks the host-shaped path directly on the real filesystem, given
+    // the folder's real host source as a recorded hostRoot (as execute.ts always supplies).
     const link = extractComputerLinks(`computer://${hostFolder}/notes.md`)[0];
-    const liveOutcome = resolveComputerLink(link, root, { mode: "live" });
+    const liveOutcome = resolveComputerLink(link, root, { mode: "live", hostRoots: [hostFolder] });
     expect(liveOutcome.resolved).toBe(true);
 
     // REPLAY: no live filesystem — must resolve from the materialized manifest's 0-byte placeholder.
     const cassette: Cassette = {
-      cassetteVersion: CASSETTE_VERSION,
+      // Pinned to v8: legacy current-session reconstruction fallback (see the note on the analogous
+      // test above) — this test is about the body-less/truncated-entry resolution path, not the
+      // folderPrefixMap persistence itself.
+      cassetteVersion: 8,
       scenario: {
         name: "t",
         baseline: "latest",

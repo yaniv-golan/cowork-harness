@@ -28,6 +28,8 @@ function fullyExplicitFixture(): CompleteRunResult {
     decisions: [],
     toolCounts: undefined,
     webSearches: undefined,
+    infraErrors: undefined,
+    evidenceErrors: undefined,
     toolDurations: undefined,
     models: undefined,
     thinking: undefined,

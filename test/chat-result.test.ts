@@ -34,6 +34,8 @@ function minimalChatRecord(): RunRecord {
     hookEvents: [],
     presentedFiles: [],
     webSearches: [],
+    infraErrors: [],
+    evidenceErrors: { taskTracking: 0, webSearchParse: 0, presentFilesMalformed: 0 },
   } as RunRecord;
 }
 

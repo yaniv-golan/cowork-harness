@@ -417,14 +417,15 @@ describe("no_mcp_error", () => {
 });
 
 describe("no_scratchpad_leak", () => {
-  it("passes vacuously when nothing was presented", () => {
-    const [r] = evaluate([{ no_scratchpad_leak: true }], ctx({ presentedFiles: [] }));
+  it("passes on container when nothing was presented (nothing to leak)", () => {
+    const [r] = evaluate([{ no_scratchpad_leak: true }], ctx({ effectiveFidelity: "container", presentedFiles: [] }));
     expect(r.pass).toBe(true);
   });
   it("passes when every presented file was promoted or already under a mount", () => {
     const [r] = evaluate(
       [{ no_scratchpad_leak: true }],
       ctx({
+        effectiveFidelity: "container",
         presentedFiles: [
           { from: "/sessions/x/a.md", to: "/sessions/x/mnt/outputs/a.md", promoted: true, leaked: false },
           { from: "/sessions/x/mnt/outputs/b.md", to: "/sessions/x/mnt/outputs/b.md", promoted: false, leaked: false },
@@ -436,13 +437,21 @@ describe("no_scratchpad_leak", () => {
   it("fails when a presented scratchpad file was never promoted (leaked)", () => {
     const [r] = evaluate(
       [{ no_scratchpad_leak: true }],
-      ctx({ presentedFiles: [{ from: "/sessions/x/bad.sh", to: "/sessions/x/bad.sh", promoted: false, leaked: true }] }),
+      ctx({
+        effectiveFidelity: "container",
+        presentedFiles: [{ from: "/sessions/x/bad.sh", to: "/sessions/x/bad.sh", promoted: false, leaked: true }],
+      }),
     );
     expect(r.pass).toBe(false);
     expect(r.message).toMatch(/bad\.sh/);
   });
-  it("is evidence-unavailable when presentedFiles is undefined (older run predating the feature)", () => {
-    const [r] = evaluate([{ no_scratchpad_leak: true }], ctx({ presentedFiles: undefined }));
+  it("is unsupported-tier (fails, not a vacuous pass) on a non-container tier — present_files isn't served there", () => {
+    const [r] = evaluate([{ no_scratchpad_leak: true }], ctx({ effectiveFidelity: "hostloop", presentedFiles: [] }));
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/container tier|cannot verify/i);
+  });
+  it("is evidence-unavailable when presentedFiles is undefined on container (older run predating the feature)", () => {
+    const [r] = evaluate([{ no_scratchpad_leak: true }], ctx({ effectiveFidelity: "container", presentedFiles: undefined }));
     expect(r.pass).toBe(false);
     expect(r.message).toMatch(/no present_files|cannot verify/i);
   });
@@ -633,9 +642,17 @@ describe("all_tasks_completed", () => {
     expect(evaluate([{ all_tasks_completed: true }], c)[0].pass).toBe(false);
   });
 
-  it("passes vacuously when there are zero tasks (documented, pair with task_status to require presence)", () => {
+  it("FAILS on zero tasks — presence-required (a task-free run cannot have completed them all)", () => {
     const c = ctx({ tasks: [] });
-    expect(evaluate([{ all_tasks_completed: true }], c)[0].pass).toBe(true);
+    const r = evaluate([{ all_tasks_completed: true }], c)[0];
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/no tasks|task_count_min/i);
+  });
+
+  it("task_count_min passes when ≥N tasks created, fails below", () => {
+    const c = ctx({ tasks: [{ id: "1", subject: "a", status: "pending" }] });
+    expect(evaluate([{ task_count_min: 1 }], c)[0].pass).toBe(true);
+    expect(evaluate([{ task_count_min: 2 }], c)[0].pass).toBe(false);
   });
 
   it("evidence-unavailable when tasks is absent", () => {

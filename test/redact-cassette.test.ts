@@ -177,10 +177,14 @@ describe("redaction must preserve computer:// link structure (guard check 4 — 
     JSON.stringify({ type: "result", subtype: "success", is_error: false }),
   ];
   // The exact bug class the first committed hostloop cassette shipped: a path pattern whose character
-  // class does not exclude ")" eats the markdown link's closing paren — extraction then sees an
-  // unterminated link and finds ZERO links, so `computer_links_resolve` passes VACUOUSLY on replay
-  // while the verdict compare sees pass==pass (a false green invisible to checks 1–3).
-  const GREEDY: RedactionPolicy = { patterns: [{ re: /\/Users\/[^\s"'\\]+/g, label: "local-path" }], keyNames: [] };
+  // class does not exclude ")" eats the markdown link's closing paren. Extraction now recovers a
+  // (garbage-valued) link from that malformed markdown via the same bare-token fallback the display
+  // transform uses (see computer-links.ts's extractComputerLinks), so a redaction that only eats the
+  // closing paren no longer changes the link COUNT — it's caught downstream instead, by
+  // `computer_links_resolve` failing to resolve the garbage value on replay, not by this guard.
+  // This guard (link count 1→0) still needs to catch a redaction pattern destructive enough to eat the
+  // `computer://` scheme token itself — nothing is left to even attempt extraction from.
+  const GREEDY: RedactionPolicy = { patterns: [{ re: /computer:\/\/[^\s"'\\]+/g, label: "local-path" }], keyNames: [] };
   // The fixed shape (mirrors this repo's .cowork-redact.json): redact only the machine-specific prefix
   // (stop before /mnt/) and exclude link delimiters from the fallback's character class.
   const PREFIX: RedactionPolicy = {
