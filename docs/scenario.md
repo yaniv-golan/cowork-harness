@@ -271,7 +271,8 @@ if *every* key passes (don't rely on the first; keep one concern per item unless
 | `tool_not_called: <Tool>` | the agent never invoked it |
 | `tool_result_contains: <str>` | a tool result includes the literal string (content / replay-checkable — substring match, **per individual result**, each scanned up to a 10 KB cap; a string spanning two separate results won't match) |
 | `tool_result_not_contains: <str>` | no tool result includes the literal string — content / replay-checkable; **fails loud** if tool results are absent from `result.json` (absent ≠ empty) or display-truncated (no assertable text) — it never vacuously passes when it can't see the evidence |
-| `tool_no_error: <regex>` | no tool whose name matches the regex has recorded any error (`RunResult.toolErrors[name].errors === 0` for every match) |
+| `tool_no_error: <regex>` | no tool whose name matches the regex recorded any error (`RunResult.toolErrors[name].errors === 0` for every match) — **requires ≥1 matching tool call** (a regex that matched nothing fails, so a typo can't silently pass) |
+| `tool_no_error_if_called: <regex>` | like `tool_no_error` but passes vacuously when no tool matches the regex — the presence-free variant for a tool that may legitimately not run |
 | `max_tool_errors: <N>` | total tool errors across all tools (sum of `RunResult.toolErrors[*].errors`) ≤ N |
 | `max_redundant_tool_calls: <N>` | total **wasted** repeated tool calls (sum of `count - 1` across every redundant `{name, args}` group in `RunResult.redundantToolCalls`) ≤ N — not the raw count of redundant groups |
 | `subagent_tool_used: <Tool>` | a sub-agent used the tool |
@@ -286,7 +287,8 @@ if *every* key passes (don't rely on the first; keep one concern per item unless
 | `skill_available: <regex>` | a staged skill's id matched the regex — **offered**, not necessarily invoked (see `skill_triggered` for invocation) |
 | `connector_available: <regex>` | an MCP server/connector's name matched the regex — available, not necessarily used |
 | `tool_available: <regex>` | a tool in the init manifest matched the regex — available, not necessarily called (see `tool_called` for invocation) |
-| `all_tasks_completed: true` | every task in the run's task list reached status `completed` — vacuously true if there are zero tasks (pair with `task_status` to require at least one); **only `true` is valid** |
+| `all_tasks_completed: true` | every task in the run's task list reached status `completed` — **requires ≥1 task** (a zero-task run fails; assert `task_count_min` for presence); **only `true` is valid** |
+| `task_count_min: <N>` | at least N tasks were created (`RunResult.tasks.length >= N`) — the presence companion for task assertions |
 | `task_status: {match, status}` | a task whose subject or id matches the `match` regex reached `status` |
 | `no_scratchpad_leak: true` | every file presented via `present_files` that was in the scratchpad was successfully promoted to `mnt/outputs` (none left behind) — vacuously passes if nothing was presented (pair with a presence check to require a delivery); content-class: both the `present_files` tool_use and its own tool_result live in the ordinary events stream, so this is meaningfully replay-checkable (the re-drive reproduces it); fails as **evidence unavailable** when `presentedFiles` telemetry is absent (an old run predating this key); **`fidelity: container` only** — `present_files` is not served on hostloop/microvm (a scratchpad-delivered file isn't promoted or detected there; use `container` for present_files-based delivery, or write directly to `outputs/`); **only `true` is valid** |
 | `max_cost_usd: <N>` | the run's SDK-reported cost is ≤ N USD — fails as **evidence unavailable** when cost telemetry is absent (an old run predating this key). **Live lane only in spirit**: on replay this asserts the *frozen recording's* cost, not fresh spend — a cost regression is caught by a live run, not a token-free replay |
@@ -311,7 +313,8 @@ if *every* key passes (don't rely on the first; keep one concern per item unless
 | `egress_denied: <host>` | the host was blocked by the egress proxy |
 | `egress_allowed: <host>` | the host was allowed through |
 | `artifact_json: {…}` | assert over a JSON artifact's contents — see below |
-| `computer_links_resolve: true` | every `computer://` link in the model-visible transcript resolves to an artifact that exists in the run's collected outputs/mounts (a dangling link fails, naming which target was checked — host path, work tree, or replay manifest); zero links in the transcript **passes** (this gates resolution, not presence — combine with `transcript_contains` to also require a link show up) — **only `true` is valid**, writing `false` is rejected by the schema |
+| `computer_links_resolve: true` | every `computer://` link in the model-visible transcript resolves to an artifact that exists in the run's collected outputs/mounts (a dangling link fails, naming which target was checked — host path, work tree, or replay manifest); **requires ≥1 link** (zero links fails — use `computer_links_resolve_if_present` for the presence-free variant) — **only `true` is valid**, writing `false` is rejected by the schema |
+| `computer_links_resolve_if_present: true` | like `computer_links_resolve` but passes vacuously when the transcript has zero `computer://` links — the presence-free variant; **only `true` is valid** |
 
 `expect_denied: [host, …]` is shorthand that adds an `egress_denied` assertion per host.
 

@@ -231,12 +231,14 @@ the rules and CI-placement rationale (why each category behaves this way), see
 | `max_cost_usd` | run's SDK-reported cost ≤ N USD — on replay this asserts the *frozen recording's* cost, not fresh spend |
 | `max_tokens` | `usage.input_tokens + usage.output_tokens` ≤ N (cache tokens excluded) — same frozen-recording caveat as `max_cost_usd` |
 | `tool_calls_max` | total top-level tool calls (sub-agent tools excluded) ≤ N — meaningfully replay-checkable; the re-drive recomputes `toolCounts` deterministically |
-| `tool_no_error` | no tool matching this regex recorded any error |
+| `tool_no_error` | no tool matching this regex recorded any error — REQUIRES ≥1 matching tool call (fails if the regex matched nothing) |
+| `tool_no_error_if_called` | like `tool_no_error` but passes vacuously when no tool matches (presence-free variant) |
 | `max_tool_errors` | total tool errors across all tools ≤ N |
 | `max_redundant_tool_calls` | total WASTED repeated tool calls (sum of (count-1) across every redundant `{name,args}` group in `RunResult.redundantToolCalls`) ≤ N — not the raw count of redundant groups |
 | `max_turns` | SDK-reported (or fallback-counted) turn count ≤ N — replay-checkable, recounted deterministically same as `tool_calls_max` |
 | `compaction_occurred` | a `compact_boundary` system event was recorded — lives in the stdout stream, so the re-drive reproduces it; evidence-unavailable when `RunResult.contextEvents` is absent |
-| `all_tasks_completed` | every task in `RunResult.tasks[]` reached status `"completed"` — vacuously passes on zero tasks (pair with `task_status` to require presence); evidence-unavailable when `tasks` telemetry is absent |
+| `all_tasks_completed` | every task in `RunResult.tasks[]` reached status `"completed"` — REQUIRES ≥1 task (a zero-task run FAILS; assert `task_count_min` for presence); evidence-unavailable when `tasks` telemetry is absent |
+| `task_count_min` | at least N tasks were created (`RunResult.tasks.length >= N`) — presence companion for task assertions; evidence-unavailable when `tasks` telemetry is absent |
 | `task_status` | a task whose `subject` OR `id` matches the `match` regex reached the given `status` — evidence-unavailable when `tasks` telemetry is absent |
 | `question_asked` | agent asked an AskUserQuestion matching the regex |
 | `questions_count_max` | at most N **sub-questions** asked — a bundled `AskUserQuestion` with K sub-questions counts as K, not 1; `trace --view questions`'s footer total uses the same definition |
@@ -259,8 +261,8 @@ hook's block/allow decision is an opaque async reply recorded only in `control-o
 `events` stream — reconstructing from the stream alone would show only the built-in Task hook's view and
 could vacuously pass `no_hook_blocked` even if a custom hook genuinely blocked.
 
-`file_exists`, `user_visible_artifact`, `artifact_json`, `computer_links_resolve`, `no_unexpected_files`, and
-`input_unmodified` are **not** in the table above — see the next subsection; they're replay-checkable only
+`file_exists`, `user_visible_artifact`, `artifact_json`, `computer_links_resolve`, `computer_links_resolve_if_present`,
+`no_unexpected_files`, and `input_unmodified` are **not** in the table above — see the next subsection; they're replay-checkable only
 when the cassette carries an artifacts manifest (`no_unexpected_files` also requires `preRunPaths`,
 recorded since 0.24 on container/hostloop; `input_unmodified` requires `preRunHashes`, the per-path
 sha256 baseline recorded alongside it — microvm cannot capture either baseline).

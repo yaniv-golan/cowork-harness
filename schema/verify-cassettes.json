@@ -4,8 +4,14 @@
   "title": "VerifyCassettesEnvelope",
   "description": "Structured stdout of `cowork-harness verify-cassettes --output-format json` (SPEC \u00a711.1) \u2014 the token-free CI gate over committed cassettes (privacy scan + staleness). A covered surface of the 1.0 compatibility contract (SPEC \u00a712): parse this, not the human-readable text output.",
   "type": "object",
-  "required": ["command", "ok", "coverage", "results"],
+  "required": ["tool", "version", "command", "ok", "coverage", "results", "error"],
   "properties": {
+    "tool": { "const": "cowork-harness", "description": "Shared machine-envelope discriminator (SPEC §11)." },
+    "version": { "type": "string", "description": "cowork-harness package version that produced this envelope." },
+    "error": {
+      "type": ["object", "null"],
+      "description": "null on success (verify-cassettes reports per-cassette failures inside results[], not here); the shared error-envelope object on a top-level usage/runtime failure."
+    },
     "command": { "const": "verify-cassettes" },
     "ok": {
       "type": "boolean",

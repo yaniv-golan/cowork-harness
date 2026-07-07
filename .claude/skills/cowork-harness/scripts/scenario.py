@@ -75,11 +75,13 @@ CONTENT_KEYS = {
     "max_tokens",
     "tool_calls_max",
     "tool_no_error",
+    "tool_no_error_if_called",
     "max_tool_errors",
     "max_redundant_tool_calls",
     "max_turns",
     "compaction_occurred",
     "all_tasks_completed",
+    "task_count_min",
     "task_status",
     "no_scratchpad_leak",
 }
@@ -101,6 +103,7 @@ MANIFEST_KEYS = {
     "user_visible_artifact",
     "artifact_json",
     "computer_links_resolve",
+    "computer_links_resolve_if_present",
     "no_unexpected_files",
     "input_unmodified",
 }
