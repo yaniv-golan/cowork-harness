@@ -101,7 +101,12 @@ describe("probeMicrovmOmitted — silent vmStatus gate", () => {
   // a bug (capabilityPreflightDecision already no-ops on a null probe), just an ordering that must stay
   // benign — the assertion guards against a future change making either side stop agreeing on that.
   it("null probe (VM not Running) composed with capabilityPreflightDecision skips the pre-flight, never aborts", () => {
-    spawnSync.mockImplementation(router(() => listResult("Absent"), () => shellProbeResult(["ocr"])));
+    spawnSync.mockImplementation(
+      router(
+        () => listResult("Absent"),
+        () => shellProbeResult(["ocr"]),
+      ),
+    );
     const omitted = probeMicrovmOmitted(INSTANCE);
     expect(omitted).toBeNull();
     const decision = capabilityPreflightDecision(["ocr", "pdf_tables"], omitted, false);

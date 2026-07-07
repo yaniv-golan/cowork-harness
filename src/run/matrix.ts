@@ -98,12 +98,7 @@ export interface MatrixRollup {
  *  un-run cells are an unknown, not a pass. `requested`/`ranCells` stay surfaced either way so a consumer
  *  can always see the gap. Pass `allowTruncated: true` to opt back into judging only the executed cells
  *  (the incomplete sample is still visible via `requested`/`ranCells`, just not treated as a failure). */
-export function buildMatrixRollup(
-  cells: MatrixCellResult[],
-  requested: number,
-  truncated: boolean,
-  allowTruncated = false,
-): MatrixRollup {
+export function buildMatrixRollup(cells: MatrixCellResult[], requested: number, truncated: boolean, allowTruncated = false): MatrixRollup {
   const anyFail = cells.some((c) => !c.pass) || (truncated && !allowTruncated);
   return { cells, requested, ranCells: cells.length, truncated, anyFail };
 }

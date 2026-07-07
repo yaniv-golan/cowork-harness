@@ -495,7 +495,9 @@ export function buildSessionFingerprint(sessionPath: string, cassetteDir?: strin
     egress: { extra_allow: [...cfg.egress.extra_allow].sort(), unrestricted: cfg.egress.unrestricted },
     web_fetch: { approved_domains: [...cfg.web_fetch.approved_domains].sort() },
   };
-  return createHash("sha256").update(Buffer.from(JSON.stringify(shape), "utf8")).digest("hex");
+  return createHash("sha256")
+    .update(Buffer.from(JSON.stringify(shape), "utf8"))
+    .digest("hex");
 }
 
 /** Scan the WHOLE cassette surface for PII (default classes: email/currency/domain). A `truncated`
@@ -1475,7 +1477,9 @@ export function readCassette(path: string): { cassette: Cassette } | { error: st
     if (r.success) return;
     const detail = `scenario.assert[${i}]: ${r.error.issues.map((iss) => `${iss.path.join(".") || "<root>"}: ${iss.message}`).join("; ")}`;
     if (isFutureCassette)
-      warn(`::warning:: [cassette] unrecognized assertion (tolerated — cassette v${recordedVersion} is newer than v${CASSETTE_VERSION}): ${detail}\n`);
+      warn(
+        `::warning:: [cassette] unrecognized assertion (tolerated — cassette v${recordedVersion} is newer than v${CASSETTE_VERSION}): ${detail}\n`,
+      );
     else assertErrors.push(detail);
   });
   if (assertErrors.length)
@@ -2442,7 +2446,10 @@ export function scenarioContentDrift(
     } catch (e) {
       // A source that DOES resolve but won't parse is a genuine "should be checkable but isn't" — worth a
       // note. Mirror the default replay lane: a mid-edit/invalid on-disk YAML must NEVER abort verify-cassettes.
-      return { verifiable: false, reason: `on-disk scenario ${src.path} did not parse (${(e as Error).message}) — prompt drift not checked` };
+      return {
+        verifiable: false,
+        reason: `on-disk scenario ${src.path} did not parse (${(e as Error).message}) — prompt drift not checked`,
+      };
     }
     const drifted = recordingShapingDrift(cassette.scenario as Scenario, onDisk);
     // Only a PERSISTED (exactly-recorded) source is trustworthy enough to HARD-FAIL on. A name-lookup match
@@ -3155,8 +3162,7 @@ interface FolderPrefixResolution {
 function buildFolderPrefixMap(cassette: Cassette, cassetteDir?: string): FolderPrefixResolution {
   const cassetteVersion = cassette.cassetteVersion ?? 0;
   if (cassetteVersion >= 9) {
-    if (cassette.folderPrefixMap)
-      return { map: new Map(cassette.folderPrefixMap.map((e) => [e.from, e.mount])), requiredButAbsent: false };
+    if (cassette.folderPrefixMap) return { map: new Map(cassette.folderPrefixMap.map((e) => [e.from, e.mount])), requiredButAbsent: false };
     return { map: new Map(), requiredButAbsent: true };
   }
   const map = new Map<string, string>();
@@ -3689,7 +3695,16 @@ export async function replayCassette(
       resultSubtype: rec.resultSubtype, // re-derived from the frozen result event on the replay re-drive
       stderrLogPath: undefined, // live path only — no live process on replay
       stalledOnQuestion: rec.stalledOnQuestion, // re-derived by run.ts's detector during the replay re-drive — so a recorded stall fails replay too
-      decisions: rec.decisions.map((d) => ({ kind: d.kind, name: d.name, decision: d.decision, by: d.by, model: d.model, detail: d.detail, rationale: d.rationale, questions: d.questions })),
+      decisions: rec.decisions.map((d) => ({
+        kind: d.kind,
+        name: d.name,
+        decision: d.decision,
+        by: d.by,
+        model: d.model,
+        detail: d.detail,
+        rationale: d.rationale,
+        questions: d.questions,
+      })),
       toolCounts: rec.toolCounts,
       webSearches: rec.webSearches.length ? rec.webSearches : undefined,
       infraErrors: infraErrorsForResult(rec),

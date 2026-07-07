@@ -59,11 +59,7 @@ export function containedRealPath(root: string, target: string): boolean {
  *   - Wildcard subdomain semantics (e.g. "*.example.com"): structural, not cosmetic.
  */
 export function normalizeHost(host: string): string {
-  return host
-    .toLowerCase()
-    .replace(/\.$/, "")
-    .replace(/^\[/, "")
-    .replace(/\]$/, "");
+  return host.toLowerCase().replace(/\.$/, "").replace(/^\[/, "").replace(/\]$/, "");
 }
 
 /**

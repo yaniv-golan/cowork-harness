@@ -9,8 +9,7 @@ import { scenarioContentDrift } from "../src/run/cassette.js";
 // prompt — the fingerprint doesn't cover the prompt, so this was previously invisible. A resolvable+drifted
 // prompt is a hard fail; an unresolvable/unparseable source is a non-failing note (can't compare ⇒ not red).
 
-const frozen = (prompt: string) =>
-  ({ scenarioSource: "s.yaml", scenario: { name: "c", prompt } }) as any;
+const frozen = (prompt: string) => ({ scenarioSource: "s.yaml", scenario: { name: "c", prompt } }) as any;
 
 describe("scenarioContentDrift (function-level)", () => {
   it("matching prompt → verifiable, no drift", () => {
@@ -109,7 +108,13 @@ describe.skipIf(!existsSync(CLI))("verify-cassettes gates on scenario prompt dri
   it("a nameless cassette in the batch does NOT abort the run — both files are scanned", () => {
     const d = mkdtempSync(join(tmpdir(), "cwh-scd-nameless-"));
     // lenient cassette shape: no scenario.name, no scenarioSource → the drift resolver would slug(undefined).
-    writeFileSync(join(d, "a.cassette.json"), JSON.stringify({ scenario: { prompt: "hi", session: "(inline)", assert: [] }, events: [JSON.stringify({ type: "result", subtype: "success" })] }));
+    writeFileSync(
+      join(d, "a.cassette.json"),
+      JSON.stringify({
+        scenario: { prompt: "hi", session: "(inline)", assert: [] },
+        events: [JSON.stringify({ type: "result", subtype: "success" })],
+      }),
+    );
     writeFileSync(join(d, "b.cassette.json"), JSON.stringify(cassetteFixture("hi")));
     const env = envelope(["verify-cassettes", d], d);
     expect(env.results).toHaveLength(2); // batch continued; not a crash with results:[]

@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.27.0] — 2026-07-07
+
 An observability pass: `RunResult` now surfaces per-tool timing, error/redundancy rollups, model
 attribution and spend, sub-agent and skill-level detail, context/progress/workspace panels,
 in-place mutation detection, hook/MCP/egress/crash diagnostics, and sandbox resource usage — plus a
@@ -115,6 +117,67 @@ additive: existing cassettes keep replaying with no cassette-version bump.
   `toolErrors`, and `redundantToolCalls`. A fork inherits the main agent's context, so its tools are the
   run's own work; real (non-fork) sub-agent dispatches are unaffected — their inner tools stay isolated
   in `subagents[].toolsUsed` exactly as before.
+
+### Changed — verification is now strict-by-default ("can't verify / incomplete is not green")
+
+A hardening pass over the false-green surface. Several assertions and lanes that previously passed on
+missing, malformed, or incomplete evidence now fail. This can flip a currently-green run to red — see
+the upgrade notes below.
+
+- **Missing/malformed telemetry fails "cannot verify"** instead of passing silently. Task tracking,
+  `present_files`, `WebSearch` parse, and resource samples now record error counters
+  (`RunResult.evidenceErrors`, and `resources.malformedLines`) that make the dependent assertion fail
+  malformed rather than dropping the bad data; an unreadable workspace file records `hashError` instead
+  of an empty hash.
+- **Presence-required assertions.** `tool_no_error`, `all_tasks_completed`, and `computer_links_resolve`
+  now require at least one matching element (a regex that matched nothing, zero tasks, or zero links
+  fails, so a typo can't pass vacuously). New opt-in siblings preserve the lenient behavior:
+  `tool_no_error_if_called`, `task_count_min`, `computer_links_resolve_if_present`.
+- **`no_scratchpad_leak` is gated to the container tier** (the only tier that serves `present_files`);
+  on any other tier it is evidence-unavailable, never a vacuous pass.
+- **Verdict modifiers (`allow_*`) are `true`-only** — `allow_x: false` is now a schema error (it
+  suppressed nothing but read as intentional). **`artifact_json` requires a non-empty `artifact`** and
+  rejects an explicit empty `path`. **A typo'd `requires_capabilities` family hard-fails** as an
+  authoring error instead of being silently ignored.
+- **Incomplete batches fail by default.** A truncated `--matrix` and a budget-stopped `--repeat` now
+  fail unless you pass `--allow-truncated-matrix` / `--allow-budget-stop`.
+- **Strict replay.** A cassette from a NEWER format version fails unless `--best-effort-future-cassette`;
+  an unrecognized/malformed assertion in a current-or-older cassette is rejected (it would otherwise
+  drop silently from replay); the assertion schema rejects unknown keys at scenario parse too.
+  `verify-cassettes` hard-fails **all** recording-shaping drift (baseline, fidelity, answers, skills,
+  capabilities — not just prompt) when the persisted source resolves exactly.
+- **`record --rerecord-stale` refuses the embedded-snapshot fallback** when no on-disk source resolves
+  (it would silently drop scenario edits) — pass `--from-embedded` to opt in; `record` also refuses to
+  overwrite a default-path cassette belonging to a different scenario (slug collision) unless `--force`.
+- **Infrastructure errors (egress/VM sidecar crashes) are a hard verdict fail on both lanes** and are
+  not author-suppressible — the run's evidence is contaminated.
+
+> **Upgrade notes (verification strictness).**
+> - Scenarios relying on any vacuous pass above will now fail; add the matching element, adopt the
+>   `*_if_present`/`task_count_min` sibling, or pass the relevant opt-in flag.
+> - **Cassette format v9.** New cassettes carry a session fingerprint and a persisted record-time folder
+>   map, so replay resolves host-shaped `computer://` links against the recorded correspondence rather
+>   than re-reading the current session. Existing v8-and-earlier cassettes keep replaying unchanged
+>   (backward-compatible); re-record to adopt the new staleness checks.
+> - `verify-cassettes`, `record --dry-run`, and `rehash` now emit the standard `{tool, version, ok,
+>   error}` JSON envelope under `--output-format json`.
+> - `verify-run` now treats `input_unmodified` as filesystem-bound (refuses "can't verify" when the work
+>   dir is gone, instead of a spurious removed-file failure).
+
+The additive pieces: new assertions `tool_no_error_if_called`, `computer_links_resolve_if_present`,
+`task_count_min`; flags `--allow-truncated-matrix`, `--allow-budget-stop`, `--best-effort-future-cassette`,
+`--from-embedded`, `--force`; `RunResult.infraErrors` and `RunResult.evidenceErrors`.
+
+The corrections: `present_files` restricts mount presentation to the real Cowork root allowlist
+(`outputs`/`uploads`/`.host-home`/`.auto-memory`/connected folders) instead of any `mnt/` path (binary-
+verified); egress host-matching strips IPv6 brackets and supports `*.` wildcards in assertions, without
+IDNA-folding allowlist entries (matching the sandbox proxy); resource sampling takes an immediate first
+sample (short runs are no longer unmeasured) and warns on an invalid interval env var; the egress sidecar
+no longer builds `dist/` at runtime and surfaces a fatal proxy error; `--run-dir ~/x` and session
+`~user` paths expand correctly; a non-array `present_files` argument returns a structured MCP error
+instead of throwing; output deletions via a script/non-bash tool are caught by a filesystem pre/post
+diff; and a read-only connected-folder file changed mid-run is attributed as external mutation rather
+than an agent violation.
 
 ## [0.26.0] — 2026-07-05
 

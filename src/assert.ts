@@ -702,7 +702,9 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
       results.push(fail(`max_peak_rss_bytes: live-only — no resource sampling on this lane (replay/protocol) — cannot verify`));
     else if (ctx.resources.malformedLines)
       results.push(
-        fail(`max_peak_rss_bytes: ${ctx.resources.malformedLines} malformed resource sample line(s) — telemetry is corrupt, cannot verify (malformed)`),
+        fail(
+          `max_peak_rss_bytes: ${ctx.resources.malformedLines} malformed resource sample line(s) — telemetry is corrupt, cannot verify (malformed)`,
+        ),
       );
     else if (ctx.resources.peakRssBytes === undefined)
       results.push(fail(`max_peak_rss_bytes: sampling captured no RSS value — cannot verify`));
@@ -820,7 +822,9 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
       results.push(fail(`evidence unavailable: tasks telemetry absent from result.json — cannot evaluate all_tasks_completed`));
     else if (ctx.evidenceErrors?.taskTracking)
       results.push(
-        fail(`all_tasks_completed: ${ctx.evidenceErrors.taskTracking} TaskCreate result(s) were unparseable — task telemetry is incomplete, cannot verify (malformed)`),
+        fail(
+          `all_tasks_completed: ${ctx.evidenceErrors.taskTracking} TaskCreate result(s) were unparseable — task telemetry is incomplete, cannot verify (malformed)`,
+        ),
       );
     else if (ctx.tasks.length === 0)
       // Presence-required: a run with zero tasks cannot have "completed them all". Assert task_count_min
@@ -845,7 +849,9 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
       results.push(fail(`evidence unavailable: tasks telemetry absent from result.json — cannot evaluate task_count_min`));
     else if (ctx.evidenceErrors?.taskTracking)
       results.push(
-        fail(`task_count_min: ${ctx.evidenceErrors.taskTracking} TaskCreate result(s) were unparseable — task count is under-reported, cannot verify (malformed)`),
+        fail(
+          `task_count_min: ${ctx.evidenceErrors.taskTracking} TaskCreate result(s) were unparseable — task count is under-reported, cannot verify (malformed)`,
+        ),
       );
     else
       results.push(
@@ -1015,10 +1021,14 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
       // Presence-required by default: zero links can't prove a deliverable link resolves. The
       // _if_present variant opts into the lenient vacuous pass.
       return requirePresence
-        ? fail(`${key}: no computer:// link in the transcript — cannot verify a deliverable link resolves (use computer_links_resolve_if_present to pass when no link is expected)`)
+        ? fail(
+            `${key}: no computer:// link in the transcript — cannot verify a deliverable link resolves (use computer_links_resolve_if_present to pass when no link is expected)`,
+          )
         : ok();
     if (!ctx.linkResolution)
-      return fail(`evidence unavailable: no link-resolution context wired for this lane — cannot evaluate ${key} (${links.length} link(s) found)`);
+      return fail(
+        `evidence unavailable: no link-resolution context wired for this lane — cannot evaluate ${key} (${links.length} link(s) found)`,
+      );
     const tierNote = ctx.effectiveFidelity ? ` (tier: ${ctx.effectiveFidelity})` : "";
     const dangling = links
       .map((link) => ({ link, outcome: resolveComputerLink(link, ctx.workRoot, ctx.linkResolution!) }))

@@ -89,7 +89,18 @@ function jsonEnvelopeObj(command: string, results: RunResult[], opts: JsonEnvelo
       : rollups
         ? rollups.every((ru) => rollupPasses(ru, minPassRate, allowBudgetStop))
         : withVerdict.length > 0 && withVerdict.every((r) => r.verdict.pass);
-  return { tool: "cowork-harness", version: pkgVersion(), command, ok, results: withVerdict, rollups, matrix, matrixRepeat, ...extra, error: null };
+  return {
+    tool: "cowork-harness",
+    version: pkgVersion(),
+    command,
+    ok,
+    results: withVerdict,
+    rollups,
+    matrix,
+    matrixRepeat,
+    ...extra,
+    error: null,
+  };
 }
 
 /** Machine envelope for commands whose payload is NOT a `RunResult[]` — `record --dry-run` (discovery),

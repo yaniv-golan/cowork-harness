@@ -155,7 +155,12 @@ describe("no_scratchpad_leak evaluates end-to-end on replay (content-class, not 
   it("passes when the re-drive shows every presented scratchpad file was promoted", async () => {
     muteStderr();
     const events = presentFilesEvents([{ from: `${CWD}/a.md`, to: `${CWD}/mnt/outputs/a.md` }]);
-    const cassette: any = { scenario: makeScenario([{ no_scratchpad_leak: true }]), events, controlOut: [], effectiveFidelity: "container" };
+    const cassette: any = {
+      scenario: makeScenario([{ no_scratchpad_leak: true }]),
+      events,
+      controlOut: [],
+      effectiveFidelity: "container",
+    };
     const r = await replayCassette(cassette);
     expect(r.assertions.every((a) => a.pass)).toBe(true);
   });
@@ -164,7 +169,12 @@ describe("no_scratchpad_leak evaluates end-to-end on replay (content-class, not 
     muteStderr();
     // present_files' own copy-failure branch returns the ORIGINAL (still-scratchpad) path.
     const events = presentFilesEvents([{ from: `${CWD}/bad.sh`, to: `${CWD}/bad.sh` }]);
-    const cassette: any = { scenario: makeScenario([{ no_scratchpad_leak: true }]), events, controlOut: [], effectiveFidelity: "container" };
+    const cassette: any = {
+      scenario: makeScenario([{ no_scratchpad_leak: true }]),
+      events,
+      controlOut: [],
+      effectiveFidelity: "container",
+    };
     const r = await replayCassette(cassette);
     expect(r.assertions.some((a) => !a.pass)).toBe(true);
   });
@@ -175,7 +185,12 @@ describe("no_scratchpad_leak evaluates end-to-end on replay (content-class, not 
       JSON.stringify({ type: "system", subtype: "init", tools: [], cwd: CWD }),
       JSON.stringify({ type: "result", subtype: "success", is_error: false }),
     ];
-    const cassette: any = { scenario: makeScenario([{ no_scratchpad_leak: true }]), events, controlOut: [], effectiveFidelity: "container" };
+    const cassette: any = {
+      scenario: makeScenario([{ no_scratchpad_leak: true }]),
+      events,
+      controlOut: [],
+      effectiveFidelity: "container",
+    };
     const r = await replayCassette(cassette);
     expect(r.assertions.length).toBe(1); // NOT skipped/excluded — content-class keys always evaluate
     expect(r.assertions[0].pass).toBe(true);

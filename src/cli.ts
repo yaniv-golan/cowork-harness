@@ -1705,7 +1705,8 @@ async function cmdSkill(rawArgs: string[]) {
       // `timeout_ms:` field (skill builds its scenario from flags, so there's no YAML to carry it).
       const raw = nextValStrict();
       const n = Number(raw);
-      if (!Number.isInteger(n) || n <= 0) fail("skill", "usage", `--timeout requires a positive integer (ms); got "${raw}"`, undefined, isJson0);
+      if (!Number.isInteger(n) || n <= 0)
+        fail("skill", "usage", `--timeout requires a positive integer (ms); got "${raw}"`, undefined, isJson0);
       timeoutMs = n;
     }
     // reject unknown flags (any token starting with - or -- that wasn't consumed above)
@@ -1812,7 +1813,21 @@ async function cmdSkill(rawArgs: string[]) {
     );
 
   if (dryRun) {
-    out(JSON.stringify({ fidelity, prompt, localPlugins, marketplaces, enabled: enables, answers, ...(timeoutMs !== undefined ? { timeout_ms: timeoutMs } : {}) }, null, 2));
+    out(
+      JSON.stringify(
+        {
+          fidelity,
+          prompt,
+          localPlugins,
+          marketplaces,
+          enabled: enables,
+          answers,
+          ...(timeoutMs !== undefined ? { timeout_ms: timeoutMs } : {}),
+        },
+        null,
+        2,
+      ),
+    );
     return;
   }
 
@@ -3165,13 +3180,7 @@ async function cmdVerifyRun(args: string[]) {
   // rather than report a false fail. Content-only re-asserts stay valid without it. no_unexpected_files
   // belongs here too: on a missing workRoot its post-run walk returns [] → zero created files → a vacuous
   // PASS (the other FS keys false-FAIL safe-direction; this one false-GREENS, the worse failure mode).
-  const FS_KEYS: (keyof Assertion)[] = [
-    "file_exists",
-    "user_visible_artifact",
-    "artifact_json",
-    "no_unexpected_files",
-    "input_unmodified",
-  ];
+  const FS_KEYS: (keyof Assertion)[] = ["file_exists", "user_visible_artifact", "artifact_json", "no_unexpected_files", "input_unmodified"];
   const hasFsAssert = scenario.assert.some((a) => FS_KEYS.some((k) => a[k] !== undefined));
   if (hasFsAssert && !existsSync(workRoot)) {
     return fail(

@@ -117,7 +117,10 @@ describe("buildChatResult", () => {
   });
 
   it("passes webSearches through unchanged when the run made at least one WebSearch call", () => {
-    const record = { ...minimalChatRecord(), webSearches: [{ toolUseId: "toolu_1", query: "market size", results: [{ title: "Report", url: "https://example.com" }] }] };
+    const record = {
+      ...minimalChatRecord(),
+      webSearches: [{ toolUseId: "toolu_1", query: "market size", results: [{ title: "Report", url: "https://example.com" }] }],
+    };
     const r = buildChatResult(record, {
       scenario: "(chat)",
       prompt: "hi",
@@ -130,6 +133,8 @@ describe("buildChatResult", () => {
       egress: [],
       durationMs: 5,
     });
-    expect(r.webSearches).toEqual([{ toolUseId: "toolu_1", query: "market size", results: [{ title: "Report", url: "https://example.com" }] }]);
+    expect(r.webSearches).toEqual([
+      { toolUseId: "toolu_1", query: "market size", results: [{ title: "Report", url: "https://example.com" }] },
+    ]);
   });
 });

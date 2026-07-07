@@ -428,10 +428,7 @@ export const Assertion = z.strictObject({
   // manifest (`record` snapshots one); a manifest-less cassette skips it (with a loud warning).
   artifact_json: z
     .object({
-      artifact: z
-        .string()
-        .min(1)
-        .describe("relative path to a JSON artifact under the work root (e.g. outputs/cap_state.json)"),
+      artifact: z.string().min(1).describe("relative path to a JSON artifact under the work root (e.g. outputs/cap_state.json)"),
       path: z
         .string()
         .min(1)

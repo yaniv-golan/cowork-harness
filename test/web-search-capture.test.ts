@@ -53,7 +53,9 @@ describe("Run — WebSearch capture", () => {
       },
     ];
     const rec = await new Run(new MockSession(ev), new ScriptedDecider([])).drive("go");
-    expect(rec.webSearches).toEqual([{ toolUseId: "toolu_1", query: "q", results: [{ title: "[2025] Market Report", url: "https://x.com" }] }]);
+    expect(rec.webSearches).toEqual([
+      { toolUseId: "toolu_1", query: "q", results: [{ title: "[2025] Market Report", url: "https://x.com" }] },
+    ]);
   });
 
   it("handles a title containing an UNBALANCED literal ']' (no matching '[') — proves string-awareness, not just coincidentally-balanced brackets", async () => {
