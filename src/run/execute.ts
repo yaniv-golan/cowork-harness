@@ -56,12 +56,12 @@ import { foldToolDurations, foldSkillActivity, attributeSubagentSkills } from ".
 import { buildDecider, ExternalDecider, LlmDecider, type Decider, type OnUnanswered, UnansweredError } from "../decide/decider.js";
 import { type DecisionChannel } from "../decide/external-channel.js";
 import { claudeCliComplete } from "../decide/llm-transport.js";
-import { Run, type RunRecord, type RunHooks } from "./run.js";
+import { Run, infraErrorsForResult, evidenceErrorsForResult, type RunRecord, type RunHooks } from "./run.js";
 import { runsWriteRoot } from "./trace-view.js";
 import { summarizeGateProvenance } from "./gate-provenance.js";
 import { collectSecrets, scrub } from "../secrets.js";
 import { indexRowFromResult, appendIndexRow } from "./run-index.js";
-import { classifyWorkspaceFiles } from "./artifacts.js";
+import { classifyWorkspaceFiles, collectArtifacts } from "./artifacts.js";
 import { readPreRunManifest, readPreRunManifestHashes } from "./pre-run-manifest.js";
 import { resolveAvailableSkills, type PluginSkillRoot } from "./skill-metadata.js";
 
@@ -343,12 +343,16 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     plan.resume = !!opts.resume;
   }
   // Pre-run baseline capture: only when something will consume it — the scenario asserts
-  // no_unexpected_files or input_unmodified, or this is a recording (cassettes always carry the
-  // baseline so a later assert-add stays replayable without re-record). Skipping keeps the pre-spawn
-  // walk (potentially a large live connected folder on hostloop) off runs that never look at it;
-  // absence stays loud.
+  // no_unexpected_files, input_unmodified, or no_delete_in_outputs (the filesystem pre/post outputs
+  // diff below needs this SAME baseline to catch a delete that never shows up as a Bash/mcp__workspace__bash
+  // command in events.jsonl — a script file, a renamed binary, a non-bash tool), or this is a recording
+  // (cassettes always carry the baseline so a later assert-add stays replayable without re-record).
+  // Skipping keeps the pre-spawn walk (potentially a large live connected folder on hostloop) off runs
+  // that never look at it; absence stays loud.
   plan.capturePreRun =
-    scenario.assert.some((a) => a.no_unexpected_files !== undefined || a.input_unmodified !== undefined) || opts.command === "record";
+    scenario.assert.some(
+      (a) => a.no_unexpected_files !== undefined || a.input_unmodified !== undefined || a.no_delete_in_outputs !== undefined,
+    ) || opts.command === "record";
 
   // Fill in the caller's display-translate ref (see ExecuteOptions.translateRef) now that plan +
   // effectiveFidelity exist — well before the child spawns, so the renderer never sees a stale identity
@@ -457,6 +461,12 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     (effectiveFidelity === "container" || effectiveFidelity === "hostloop" || effectiveFidelity === "microvm") &&
     process.env.COWORK_SKIP_CAPABILITY_PROBE !== "1"
   ) {
+    // microvm: `probeMicrovmOmitted` returns null (not an omitted-set) whenever the guest isn't
+    // already `Running` (cold run — nothing to `limactl shell` into yet). `capabilityPreflightDecision`
+    // treats a null probe as "indefinite" and always no-ops (`abort: false, message: null`) — so a
+    // declared-capability skill on a not-yet-running microvm silently SKIPS this pre-flight rather than
+    // false-failing; the post-run probe (after the guest is up) is what actually gates that tier.
+    // Pinned in test/capability-microvm.test.ts.
     const omitted =
       effectiveFidelity === "microvm"
         ? probeMicrovmOmitted(instanceName(baseline))
@@ -664,6 +674,11 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     hostProxy?.close();
   }
 
+  // A post-listen egress-sidecar crash (container topology) surfaces as `fatalError` after teardown —
+  // fold it into infraErrors so computeVerdict hard-fails the run (evidence contaminated). The live
+  // in-VM/hostloop sidecar surfaces its own crash as an `infra_error` event already collected above.
+  if (sidecar?.fatalError) record.infraErrors.push({ source: "egress-sidecar", message: sidecar.fatalError });
+
   // snapshot the gate rendezvous wire shapes (req/resp/.done) into the run dir BEFORE the caller
   // closes (and wipes) the channel — the forensic evidence you want after a gate bug survives --keep.
   opts.externalChannel?.snapshot?.(join(outDir, "gates"));
@@ -720,6 +735,21 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   const preRunPaths = readPreRunManifest(outDir);
   const preRunHashes = readPreRunManifestHashes(outDir);
 
+  // Filesystem pre/post diff of outputs/ — a backstop for `no_delete_in_outputs` INDEPENDENT of
+  // scanEvents' regex (which only inspects Bash/mcp__workspace__bash tool_use commands and so misses a
+  // delete via a script file, a renamed binary, or any non-bash tool). If the pre-run baseline captured
+  // outputs (it always does when captured at all — see pre-run-manifest.ts), any path recorded there
+  // under outputs/ that is no longer present in the post-run walk is a real deletion regardless of HOW
+  // it happened. Fed into the SAME `scan.outputsDeletes` array the regex populates — one signal, two
+  // detectors — so `no_delete_in_outputs` (src/assert.ts) needs no changes to see it. Skipped when there
+  // is no baseline (preRunPaths undefined — the scenario asserted neither key that triggers capture, or a
+  // tier that can't capture); the regex backstop still runs in that case, same as before this change.
+  if (preRunPaths) {
+    const preOutputs = new Set(preRunPaths.filter((p) => p === "outputs" || p.startsWith("outputs/")));
+    const postOutputs = new Set(collectArtifacts(workRoot, ["outputs"]).map((f) => f.path));
+    for (const p of preOutputs) if (!postOutputs.has(p)) scan.outputsDeletes.push(`[fs-diff] output file removed post-run: ${p}`);
+  }
+
   // Salvage path: the run exited on an unanswered gate. Persist a PARTIAL result.json (+ run.jsonl/trace) so
   // the artifacts the agent wrote before the whiff survive for inspection, then re-throw so the CLI still
   // exits 2. Skip assertion eval and the capability probe (a real container spawn) — a partial run has no
@@ -742,6 +772,9 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       durationMs: Date.now() - startedAt,
       unanswered: { message: unansweredErr.message, hint: unansweredErr.hint },
       fingerprint: buildFingerprint(scenario.session, baseline.appVersion, undefined, scenario.skills),
+      onUnanswered,
+      nonDeterministicHint: opts.nonDeterministicHint,
+      externalChannel: !!opts.externalChannel,
     });
     // Non-null: `durationMs` is set unconditionally just above (`Date.now() - startedAt`) — the field is
     // typed optional on RunResult/PartialResult for OTHER (non-execute.ts) producers, not this call site.
@@ -829,6 +862,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // Always defined live — an empty array is the real "nothing presented" signal no_scratchpad_leak's
     // vacuous pass needs, distinct from replay's evidence-unavailable undefined on an older cassette.
     presentedFiles: record.presentedFiles,
+    evidenceErrors: record.evidenceErrors,
     effectiveFidelity,
     // Live lane (this run's own machine) — host-shaped computer:// links (hostloop) are checked
     // DIRECTLY on the filesystem, contained to the run's real workspace roots; verify-run shares
@@ -925,10 +959,20 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       warn(
         `::warning:: [capability] requires_capabilities lists unknown famil(ies): ${unknown.join(", ")} — known: ${[...known].join(", ")}\n`,
       );
+    if (unknown.length) {
+      // An unknown family (typo) can NEVER appear in omittedFamilies (which lists only real families), so
+      // the definitive-lane `missing` filter below would silently drop it → false-green. Fold it into the
+      // unmet set so it hard-fails as an authoring error regardless of lane.
+      requiresCapabilityUnmet = { caps: unknown, reason: "unknown" };
+    }
     if (capabilityProbe === "definitive") {
-      const missing = requiredCaps.filter((c) => omittedFamilies?.includes(c));
-      if (missing.length) requiresCapabilityUnmet = { caps: missing, reason: "omitted" };
-    } else {
+      const missing = requiredCaps.filter((c) => known.has(c) && omittedFamilies?.includes(c));
+      if (missing.length)
+        requiresCapabilityUnmet = {
+          caps: [...(requiresCapabilityUnmet?.caps ?? []), ...missing],
+          reason: unknown.length ? "unknown" : "omitted",
+        };
+    } else if (!unknown.length) {
       // skipped (protocol/replay/skip-env) or unverified — cannot confirm the declared caps are present.
       requiresCapabilityUnmet = { caps: requiredCaps, reason: "unverifiable" };
       warn(
@@ -976,6 +1020,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     })),
     toolCounts: record.toolCounts,
     webSearches: record.webSearches.length ? record.webSearches : undefined,
+    infraErrors: infraErrorsForResult(record),
+    evidenceErrors: evidenceErrorsForResult(record),
     toolDurations: timelineData ? foldToolDurations(timelineData.events) : undefined,
     skillActivity: timelineData ? foldSkillActivity(timelineData.events) : undefined,
     models: record.models.length ? record.models : undefined,
@@ -1179,9 +1225,23 @@ export function buildPartialResult(args: {
   durationMs: number;
   unanswered: { message: string; hint?: string };
   fingerprint?: RunResult["fingerprint"];
+  /** Same three signals the success-path result derives `nonDeterministic`/`nonDeterministicTerminal`
+   *  from (see the `assembleRunResult` call below in `executeScenario`). Optional so pre-existing
+   *  callers that don't pass them (e.g. tests) still compile — they just get the decisions-only
+   *  derivation (record.decisions.some(...)), not the previous hardcoded `undefined`. */
+  onUnanswered?: OnUnanswered;
+  nonDeterministicHint?: boolean;
+  externalChannel?: boolean;
 }): RunResult {
   const { record } = args;
   const gp = summarizeGateProvenance(record.decisions);
+  // Same derivation the success path uses (see the `assembleRunResult` call in `executeScenario`) — a
+  // gate-caused partial run still reports whether EARLIER gates (before the whiff) were answered
+  // non-deterministically, instead of erasing that signal to `undefined`.
+  const nonDeterministic =
+    record.decisions.some((d) => d.by === "llm" || d.by === "external" || d.by === "human" || d.by === "first") ||
+    !!args.nonDeterministicHint;
+  const nonDeterministicTerminal = args.onUnanswered === "llm" || args.onUnanswered === "prompt" || !!args.externalChannel;
   const timelineData = readTimeline(args.outDir);
   // Context/Connectors panel: the SPINE is the id-only list run.ts's init handler already seeded
   // (authoritative — covers plugin/marketplace skills). Enrich with whenToUse read off disk across both
@@ -1217,6 +1277,8 @@ export function buildPartialResult(args: {
     })),
     toolCounts: record.toolCounts,
     webSearches: record.webSearches.length ? record.webSearches : undefined,
+    infraErrors: infraErrorsForResult(record),
+    evidenceErrors: evidenceErrorsForResult(record),
     toolDurations: timelineData ? foldToolDurations(timelineData.events) : undefined,
     skillActivity: timelineData ? foldSkillActivity(timelineData.events) : undefined,
     models: record.models.length ? record.models : undefined,
@@ -1269,8 +1331,10 @@ export function buildPartialResult(args: {
     stalledOnQuestion: undefined,
     capabilityProbe: undefined,
     requiresCapabilityUnmet: undefined,
-    nonDeterministic: undefined,
-    nonDeterministicTerminal: undefined,
+    // Derived above from the same decision log / policy the success path uses — NOT hardcoded to
+    // undefined: a gate-caused partial run still reports whether earlier gates were non-deterministic.
+    nonDeterministic,
+    nonDeterministicTerminal,
     permissiveAutoAllow: undefined,
     scan: undefined,
     fidelityWarnings: undefined,

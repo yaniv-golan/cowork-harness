@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { RunResult } from "../types.js";
-import type { RunRecord } from "./run.js";
+import { infraErrorsForResult, evidenceErrorsForResult, type RunRecord } from "./run.js";
 import { assembleRunResult } from "./assemble-run-result.js";
 import { classifyWorkspaceFiles } from "./artifacts.js";
 import { readTimeline } from "../agent/timeline.js";
@@ -65,6 +65,8 @@ export function buildChatResult(record: RunRecord, opts: ChatResultOpts): RunRes
     })),
     toolCounts: record.toolCounts,
     webSearches: record.webSearches.length ? record.webSearches : undefined,
+    infraErrors: infraErrorsForResult(record),
+    evidenceErrors: evidenceErrorsForResult(record),
     toolDurations: timeline ? foldToolDurations(timeline.events) : undefined,
     skillActivity: timeline ? foldSkillActivity(timeline.events) : undefined,
     models: record.models.length ? record.models : undefined,

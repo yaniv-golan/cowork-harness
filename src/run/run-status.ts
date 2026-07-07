@@ -1,10 +1,10 @@
 import { join, dirname } from "node:path";
-import { homedir } from "node:os";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { writeJsonAtomic, envPositiveNumber } from "../io.js";
 import type { RunStatus } from "../types.js";
 import type { RunRecord } from "./run.js";
 import { resolveEventsFile } from "./trace-view.js";
+import { expandUserPath } from "../session.js";
 
 export const STATUS_FILE = "status.json";
 
@@ -236,13 +236,14 @@ export function hasRunStatus(runDir: string): boolean {
  *  `events.jsonl` to already be present). Falls back to `resolveEventsFile` (run-id / fragment matching
  *  under the runs root) for everything else — the same resolver `trace`/`inspect` already use.
  *
- *  Defense-in-depth: a leading `~` (or `~/...`) is expanded to the user's home directory BEFORE the
- *  literal-directory check runs. The `[status]` printer (`src/run/execute.ts`) always emits the raw,
- *  un-tildeified `outDir` precisely so this program never needs to expand `~` for its own output — but a
- *  human may still paste in a `~`-abbreviated path copied from some other display context (shell history,
- *  a footer line, etc.), and a shell isn't in the loop to expand it for us here. */
+ *  Defense-in-depth: a leading `~` (or `~/...`) is expanded to the user's home directory (via the shared
+ *  {@link expandUserPath}, `src/session.ts`) BEFORE the literal-directory check runs. The `[status]`
+ *  printer (`src/run/execute.ts`) always emits the raw, un-tildeified `outDir` precisely so this program
+ *  never needs to expand `~` for its own output — but a human may still paste in a `~`-abbreviated path
+ *  copied from some other display context (shell history, a footer line, etc.), and a shell isn't in the
+ *  loop to expand it for us here. */
 export function resolveStatusDir(arg: string): string {
-  const expanded = arg === "~" ? homedir() : arg.startsWith("~/") ? join(homedir(), arg.slice(2)) : arg;
+  const expanded = expandUserPath(arg);
   if (existsSync(expanded) && statSync(expanded).isDirectory()) return expanded;
   return dirname(resolveEventsFile(expanded));
 }

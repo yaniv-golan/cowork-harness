@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
 import { Scenario, AnswerRule, Assertion, type RunResult, type RunStatus, type PlatformBaseline } from "./types.js";
 import { loadBaseline, BASELINES_DIR, cmpVersionStrings, sha256File } from "./baseline.js";
-import { loadSession, resolveSessionPaths, applySessionOverrides } from "./session.js";
+import { loadSession, resolveSessionPaths, applySessionOverrides, expandUserPath } from "./session.js";
 import {
   executeScenario,
   parseScenarioFile,
@@ -339,6 +339,9 @@ Repeat / flakiness measurement:
   --max-budget-usd <x>             stop the repeat loop once cumulative cost would exceed x. An incomplete-
                                    but-clean stop is a warning, not a failure by itself; degrades LOUDLY
                                    (never silently runs all N) if a run reports no cost telemetry. Requires --repeat.
+  --allow-budget-stop             opt back into a PASS verdict for a batch that --max-budget-usd stopped
+                                   early (default: a budget-stopped batch always fails — incomplete is not
+                                   green). Requires --repeat.
 
 Matrix testing — one scenario × a cross-product of axes, in one run:
   --matrix <matrix.yaml>           run <scenario.yaml> across the cross-product of a matrix file's axes
@@ -349,6 +352,9 @@ Matrix testing — one scenario × a cross-product of axes, in one run:
                                    not a survey. The JSON envelope gains an additive "matrix: {cells[]}" field.
   --max-cells <n>                  cap the cross-product (default 16); over the cap warns and runs only the
                                    first n. Requires --matrix.
+  --allow-truncated-matrix          judge only the cells that actually ran (default: a truncated matrix — some
+                                   cells never ran, per --max-cells — always fails, an un-run cell is an
+                                   unknown, not a pass). Requires --matrix.
   --concurrency <n>                run cells N at a time (default 1, max 8 — each run is fully isolated, the
                                    bound is for Docker address pool / model API rate limits). Requires --matrix.
                                    Rejected together with --decider-dir/--decider-cmd when > 1 (the external
@@ -577,7 +583,7 @@ async function main() {
       );
     }
     argv.splice(rdIdx, rdIsEquals ? 1 : 2);
-    process.env.COWORK_HARNESS_RUNS_DIR = resolve(process.cwd(), runDirVal);
+    process.env.COWORK_HARNESS_RUNS_DIR = expandUserPath(runDirVal);
   }
 
   const packageRootEnv = fileURLToPath(new URL("../.env", import.meta.url)); // dist/cli.js → <install>/.env
@@ -1063,9 +1069,9 @@ async function runOneScenario(p: {
  *  the signal histogram, per-assertion attribution (only rows with at least one failure — an all-passing
  *  assertion across every iteration doesn't need a line), and cost/token/non-determinism totals when
  *  present. */
-function formatRepeatRollup(r: RepeatRollup, minPassRate: number): string {
+function formatRepeatRollup(r: RepeatRollup, minPassRate: number, allowBudgetStop: boolean): string {
   const lines: string[] = [];
-  const verdict = rollupPasses(r, minPassRate) ? "PASS" : "FAIL";
+  const verdict = rollupPasses(r, minPassRate, allowBudgetStop) ? "PASS" : "FAIL";
   const stopNote = r.stoppedEarly ? ` (stopped early: ${r.stoppedEarly}, ${r.completed}/${r.requested} completed)` : "";
   lines.push(`repeat "${r.scenario}": ${verdict} — ${r.passes}/${r.completed} passed (${(r.passRate * 100).toFixed(0)}%)${stopNote}`);
   const signals = Object.entries(r.signalHistogram);
@@ -1185,6 +1191,8 @@ async function cmdRun(rawArgs: string[]) {
   let matrixFile: string | undefined;
   let maxCells = 16;
   let matrixConcurrency = 1;
+  let allowTruncatedMatrix = false;
+  let allowBudgetStop = false;
   const preArgs: string[] = [];
   for (let i = 0; i < rawArgs.length; i++) {
     const a = rawArgs[i];
@@ -1259,6 +1267,10 @@ async function cmdRun(rawArgs: string[]) {
           jsonOut,
         );
       matrixConcurrency = n;
+    } else if (a === "--allow-truncated-matrix") {
+      allowTruncatedMatrix = true;
+    } else if (a === "--allow-budget-stop") {
+      allowBudgetStop = true;
     } else preArgs.push(a);
   }
   if (maxBudgetUsd !== undefined && repeatN === undefined)
@@ -1269,6 +1281,10 @@ async function cmdRun(rawArgs: string[]) {
   if (maxCells !== 16 && matrixFile === undefined) fail("run", "usage", "--max-cells requires --matrix", undefined, isJsonOutput(rawArgs));
   if (matrixConcurrency !== 1 && matrixFile === undefined)
     fail("run", "usage", "--concurrency requires --matrix", undefined, isJsonOutput(rawArgs));
+  if (allowTruncatedMatrix && matrixFile === undefined)
+    fail("run", "usage", "--allow-truncated-matrix requires --matrix", undefined, isJsonOutput(rawArgs));
+  if (allowBudgetStop && repeatN === undefined)
+    fail("run", "usage", "--allow-budget-stop requires --repeat", undefined, isJsonOutput(rawArgs));
   const { rest: rawRest, flags } = takeCommonFlags(preArgs, "run");
   // An interactive driving agent × N runs is not a measurement — --decider-dir/--decider-cmd both answer
   // gates LIVE (this codebase's own "LIVE questions: --decider-llm / --decider-cmd / --decider-dir"
@@ -1455,9 +1471,16 @@ async function cmdRun(rawArgs: string[]) {
       } finally {
         externalChannel?.close?.();
       }
-      const matrixRepeat = buildMatrixRepeatRollup(cellResults, totalBeforeCap, truncated, minPassRate);
+      const matrixRepeat = buildMatrixRepeatRollup(
+        cellResults,
+        totalBeforeCap,
+        truncated,
+        minPassRate,
+        allowTruncatedMatrix,
+        allowBudgetStop,
+      );
       if (o.json) out(jsonEnvelope("run", results, { matrixRepeat }));
-      else for (const line of formatMatrixRepeatRollup(matrixRepeat, minPassRate)) log(line);
+      else for (const line of formatMatrixRepeatRollup(matrixRepeat, minPassRate, allowBudgetStop)) log(line);
       process.exit(matrixRepeat.anyFail ? 1 : 0);
     }
 
@@ -1494,7 +1517,7 @@ async function cmdRun(rawArgs: string[]) {
     } finally {
       externalChannel?.close?.();
     }
-    const matrix = buildMatrixRollup(cellResults, totalBeforeCap, truncated);
+    const matrix = buildMatrixRollup(cellResults, totalBeforeCap, truncated, allowTruncatedMatrix);
     if (o.json) out(jsonEnvelope("run", results, { matrix }));
     else for (const line of formatMatrixRollup(matrix)) log(line);
     process.exit(matrix.anyFail ? 1 : 0);
@@ -1566,9 +1589,11 @@ async function cmdRun(rawArgs: string[]) {
   // The rollup table is human output like every other per-run footer (renderFooter), so it goes to
   // stderr via log() — NOT out()/stdout, which text mode reserves for staying quiet (only json mode uses it).
   const usingRepeat = repeatN !== undefined;
-  if (o.json) out(jsonEnvelope("run", results, usingRepeat ? { rollups, minPassRate } : {}));
-  else if (usingRepeat) for (const r of rollups) log(formatRepeatRollup(r, minPassRate));
-  const ok = usingRepeat ? rollups.every((r) => rollupPasses(r, minPassRate)) : results.every((r) => computeVerdict(r, "live").pass);
+  if (o.json) out(jsonEnvelope("run", results, usingRepeat ? { rollups, minPassRate, allowBudgetStop } : {}));
+  else if (usingRepeat) for (const r of rollups) log(formatRepeatRollup(r, minPassRate, allowBudgetStop));
+  const ok = usingRepeat
+    ? rollups.every((r) => rollupPasses(r, minPassRate, allowBudgetStop))
+    : results.every((r) => computeVerdict(r, "live").pass);
   process.exit(ok ? 0 : 1);
 }
 
@@ -2959,8 +2984,18 @@ function cmdScaffold(args: string[]) {
     );
 
   // Positional is the only (canonical) form for the run id/dir.
-  const target = positionals(args, ["--out", "--output-format"])[0];
+  const pos = positionals(args, ["--out", "--output-format"]);
+  const target = pos[0];
   if (!target) return void fail("scaffold", "usage", "usage: scaffold <run-id | run-dir> [--out <file.yaml>]", undefined, json);
+  if (pos.length > 1) {
+    return void fail(
+      "scaffold",
+      "usage",
+      `scaffold takes a single <run-id | run-dir> (got ${pos.length}: ${pos.join(", ")})`,
+      undefined,
+      json,
+    );
+  }
   let file: string;
   try {
     file = resolveEventsFile(target);
@@ -2969,7 +3004,12 @@ function cmdScaffold(args: string[]) {
   }
   const yaml = buildScaffold(file);
   if (outPath !== undefined) {
-    writeFileSync(outPath, yaml);
+    try {
+      mkdirSync(dirname(outPath), { recursive: true });
+      writeFileSync(outPath, yaml);
+    } catch (e) {
+      return void fail("scaffold", "runtime", `failed to write ${outPath}: ${(e as Error).message}`, undefined, json);
+    }
     log(`✓ scaffolded scenario → ${outPath}`);
   } else out(yaml);
 }
@@ -3125,14 +3165,20 @@ async function cmdVerifyRun(args: string[]) {
   // rather than report a false fail. Content-only re-asserts stay valid without it. no_unexpected_files
   // belongs here too: on a missing workRoot its post-run walk returns [] → zero created files → a vacuous
   // PASS (the other FS keys false-FAIL safe-direction; this one false-GREENS, the worse failure mode).
-  const FS_KEYS: (keyof Assertion)[] = ["file_exists", "user_visible_artifact", "artifact_json", "no_unexpected_files"];
+  const FS_KEYS: (keyof Assertion)[] = [
+    "file_exists",
+    "user_visible_artifact",
+    "artifact_json",
+    "no_unexpected_files",
+    "input_unmodified",
+  ];
   const hasFsAssert = scenario.assert.some((a) => FS_KEYS.some((k) => a[k] !== undefined));
   if (hasFsAssert && !existsSync(workRoot)) {
     return fail(
       "verify-run",
       "runtime",
       `verify-run: work dir not found (${workRoot || "<unset>"}) — filesystem assertions ` +
-        `(file_exists/artifact_json/user_visible_artifact/no_unexpected_files) cannot be re-evaluated from this run dir; re-record. (can't verify ⇒ not green)`,
+        `(file_exists/artifact_json/user_visible_artifact/no_unexpected_files/input_unmodified) cannot be re-evaluated from this run dir; re-record. (can't verify ⇒ not green)`,
       undefined,
       isJsonOutput(args),
     );
@@ -3199,10 +3245,15 @@ async function cmdVerifyRun(args: string[]) {
     resources: result.resources,
     hookEvents: result.hookEvents,
     presentedFiles: result.presentedFiles,
+    evidenceErrors: result.evidenceErrors,
     effectiveFidelity: result.effectiveFidelity,
     // verify-run re-checks a kept run dir on the SAME machine that ran it — grouped with the live
-    // execute.ts lane (both check a host-shaped computer:// link's path directly).
-    linkResolution: { mode: "live" },
+    // execute.ts lane (both check a host-shaped computer:// link's path directly). result.json doesn't
+    // persist each connected folder's real host source path, so `workRoot` (the run's own mnt root,
+    // already required above for FS-class asserts) is the only host root verify-run can reconstruct —
+    // a host-shaped link pointing outside it (or with workRoot unset) resolves as evidence-unavailable
+    // rather than falling back to an unconstrained existsSync (see computer-links.ts).
+    linkResolution: { mode: "live", hostRoots: workRoot ? [workRoot] : [] },
     ...budgetFields(result),
   };
 

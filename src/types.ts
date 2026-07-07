@@ -165,7 +165,7 @@ export type AnswerRule = z.infer<typeof AnswerRule>;
 // Each field carries a `.describe()` so it is the SINGLE source for both the published JSON schema and
 // `cowork-harness assertions --list` (which reads `Assertion.shape[k].description`) — the list can never drift
 // from the schema. Keep descriptions one line.
-export const Assertion = z.object({
+export const Assertion = z.strictObject({
   transcript_contains: z.string().min(1).optional().describe("the transcript contains this literal substring"),
   transcript_not_contains: z.string().min(1).optional().describe("the transcript does NOT contain this literal substring"),
   transcript_matches: z.string().optional().describe("regex (case-insensitive) over the transcript — fuzzy content for stochastic prose"),
@@ -243,7 +243,15 @@ export const Assertion = z.object({
   tool_no_error: z
     .string()
     .optional()
-    .describe("no tool whose name matches this regex has recorded any error (RunResult.toolErrors[name].errors === 0 for every match)"),
+    .describe(
+      "no tool whose name matches this regex recorded any error (RunResult.toolErrors[name].errors === 0 for every match) — REQUIRES at least one matching tool call (fails if the regex matched nothing, so a typo can't silently pass; use tool_no_error_if_called for the presence-free variant)",
+    ),
+  tool_no_error_if_called: z
+    .string()
+    .optional()
+    .describe(
+      "like tool_no_error, but PASSES VACUOUSLY when no tool matches the regex — the lenient, presence-free variant for a tool that may legitimately not run",
+    ),
   max_tool_errors: z
     .number()
     .int()
@@ -271,8 +279,14 @@ export const Assertion = z.object({
     .literal(true)
     .optional()
     .describe(
-      'every task in RunResult.tasks[] reached status "completed" — vacuously true if there are zero tasks (pair with task_status to require at least one)',
+      'every task in RunResult.tasks[] reached status "completed" — REQUIRES at least one task (a run with zero tasks fails: it cannot have "completed them all"); only `true` is valid',
     ),
+  task_count_min: z
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .describe("at least N tasks were created (RunResult.tasks.length >= N) — the presence companion for task assertions"),
   task_status: z
     .object({
       match: z.string().describe("regex matched against a task's subject OR id"),
@@ -355,7 +369,13 @@ export const Assertion = z.object({
     .literal(true)
     .optional()
     .describe(
-      "fails if any computer:// link in the model-visible transcript does not resolve to an artifact that exists in the run's collected outputs/mounts (zero links in the transcript passes — combine with transcript_contains to also require presence); only `true` is valid (writing `false` is a rejected footgun — omit to skip the check)",
+      "fails if any computer:// link in the model-visible transcript does not resolve to an artifact that exists in the run's collected outputs/mounts — REQUIRES at least one link (zero links FAILS: use computer_links_resolve_if_present for the presence-free variant); only `true` is valid (writing `false` is a rejected footgun — omit to skip)",
+    ),
+  computer_links_resolve_if_present: z
+    .literal(true)
+    .optional()
+    .describe(
+      "like computer_links_resolve, but PASSES VACUOUSLY when the transcript has zero computer:// links — the lenient, presence-free variant; only `true` is valid",
     ),
   question_asked: z.string().optional().describe("a question matching this regex was asked"),
   questions_count_max: z.number().int().nonnegative().optional().describe("at most N questions were asked"),
@@ -373,25 +393,25 @@ export const Assertion = z.object({
     .describe("at least N AskUserQuestion gates fired AND were delivered non-error (presence companion to gate_answers_delivered)"),
   result: z.enum(["success", "error"]).optional().describe("the run's final result was success | error"),
   allow_permissive_auto_allow: z
-    .boolean()
+    .literal(true)
     .optional()
     .describe(
       "(verdict modifier) suppress the default-fail when the run recorded a cowork-parity permissive auto-allow — for tests that deliberately assert Cowork's permissive behavior",
     ),
   allow_l0_plugin_divergence: z
-    .boolean()
+    .literal(true)
     .optional()
     .describe(
       "(verdict modifier) suppress the default-fail when L0 (protocol) runs with plugins that load via --settings/managed config instead of --plugin-dir — for tests that deliberately test at L0 with plugins",
     ),
   allow_missing_capability: z
-    .boolean()
+    .literal(true)
     .optional()
     .describe(
       "(verdict modifier) suppress the default-fail when the (partial 'core') agent image omits a capability the skill used but real Cowork ships — assert this only when the skill's fallback is genuinely equivalent (otherwise rebuild full parity, --build-arg COWORK_FULL_PARITY=1)",
     ),
   allow_stall: z
-    .boolean()
+    .literal(true)
     .optional()
     .describe(
       "(verdict modifier) suppress the default-fail when a run ends on a question having done no productive tool work after its last gate (the agent asked for input and stopped — incl. re-asking in plain text after answering an AskUserQuestion) — assert this only when ending on a question is the intended terminal state; otherwise script the answer (answer:/--answer/decider)",
@@ -408,8 +428,15 @@ export const Assertion = z.object({
   // manifest (`record` snapshots one); a manifest-less cassette skips it (with a loud warning).
   artifact_json: z
     .object({
-      artifact: z.string().describe("relative path to a JSON artifact under the work root (e.g. outputs/cap_state.json)"),
-      path: z.string().optional().describe("dotted path into the JSON (e.g. me.run_id); omit to target the whole document"),
+      artifact: z
+        .string()
+        .min(1)
+        .describe("relative path to a JSON artifact under the work root (e.g. outputs/cap_state.json)"),
+      path: z
+        .string()
+        .min(1)
+        .optional()
+        .describe("dotted path into the JSON (e.g. me.run_id); omit to target the whole document (an explicit empty string is rejected)"),
       equals: z.unknown().optional().describe("the resolved value deep-equals this"),
       in: z
         .array(z.unknown())
@@ -684,7 +711,7 @@ export interface RunResult {
   // declared `requires_capabilities` the running tier could not satisfy — computed at run time
   // (so verify-run/replay honor it without re-deriving). `omitted` = the image lacks them; `unverifiable` =
   // the tier couldn't probe (protocol/replay/skip). computeVerdict fails on this unless allow_missing_capability.
-  requiresCapabilityUnmet?: { caps: string[]; reason: "omitted" | "unverifiable" };
+  requiresCapabilityUnmet?: { caps: string[]; reason: "omitted" | "unverifiable" | "unknown" };
   decisions: Array<{
     kind: string;
     name: string;
@@ -708,6 +735,13 @@ export interface RunResult {
    *  call's Links array failed to parse — the two are indistinguishable here by design; cross-reference
    *  `toolCounts.WebSearch` (the truthful call count) if that distinction ever matters to a consumer. */
   webSearches?: Array<{ toolUseId?: string; query: string; results: Array<{ title: string; url: string }> }>;
+  /** Infrastructure errors (VM/egress sidecar crashes). A non-empty list is a hard verdict fail on BOTH
+   *  lanes and is NOT author-suppressible — the run's evidence is contaminated. */
+  infraErrors?: Array<{ source: string; message: string }>;
+  /** Companion counters for malformed/dropped telemetry streams. A >0 count makes the dependent assertion
+   *  fail "malformed" rather than silently dropping the bad entries (`taskTracking` → task assertions,
+   *  `presentFilesMalformed` → no_scratchpad_leak); `webSearchParse` is observability-only (no assertion). */
+  evidenceErrors?: { taskTracking?: number; webSearchParse?: number; presentFilesMalformed?: number };
   // per-tool call-count/timing aggregate, folded from the timeline. Absent only when no
   // timeline data exists for this run (replayErrorResult — no run ever happened). Populated for
   // buildPartialResult too, when the salvaged run made at least one tool call. Wall-gap between
@@ -912,7 +946,7 @@ export interface RunResult {
   // becomes a DERIVED accessor of this — the class∈{output,mount} subset, computed in the
   // assembler at read time (no drift risk: nothing stores `artifacts` independently anymore, on the
   // live lane; replay is unaffected).
-  workspaceFiles?: Array<{ path: string; bytes: number; sha256: string; class: "output" | "mount" | "input" }>;
+  workspaceFiles?: Array<{ path: string; bytes: number; sha256?: string; hashError?: string; class: "output" | "mount" | "input" }>;
   /** `system` stream messages the harness doesn't special-case — e.g. `compact_boundary`. In the
    *  stdout stream, so reproduced on replay. Powers `compaction_occurred`. */
   contextEvents?: Array<{ subtype: string; ts?: number; data?: Record<string, unknown> }>;
@@ -947,5 +981,9 @@ export interface RunResult {
     peakRssBytes?: number;
     avgCpuPct?: number;
     peakCpuPct?: number;
+    /** Count of malformed `resources.jsonl` lines encountered while folding. >0 means the resource
+     *  telemetry is partially corrupt — resource assertions fail malformed rather than silently
+     *  dropping the bad lines. Absent on cassettes recorded before this field existed. */
+    malformedLines?: number;
   };
 }

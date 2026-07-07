@@ -1,7 +1,7 @@
 import { warn } from "../io.js";
 import { randomUUID, createHash } from "node:crypto";
 import type { AgentSession, AgentEvent, DecisionRequest, DecisionResponse, QSpec } from "../agent/session.js";
-import type { UsageInfo, CostInfo } from "../types.js";
+import type { UsageInfo, CostInfo, RunResult } from "../types.js";
 import { questionKey, questionLabel, canon } from "../agent/session.js";
 import {
   ABSTAIN,
@@ -36,16 +36,27 @@ function capDecisionInput(input: unknown): unknown {
  *  (`{ files: [{ file_path }, …] }`) — guards every shape (missing/non-array `files`, a non-object or
  *  non-string-`file_path` entry) so a malformed input can't throw mid-drive; a bad entry is just
  *  dropped, not fatal (mirrors the input-guarding style used across this file, e.g. pendingTaskCreates). */
-function presentFilesInput(input: unknown): string[] {
+function presentFilesInput(input: unknown): { files: string[]; malformed: number } {
   const files = (input as { files?: unknown } | undefined)?.files;
-  if (!Array.isArray(files)) return [];
-  return files
-    .map((f) =>
-      f && typeof f === "object" && typeof (f as Record<string, unknown>).file_path === "string"
-        ? (f as Record<string, unknown>).file_path
-        : undefined,
-    )
-    .filter((p): p is string => p !== undefined);
+  if (files === undefined) return { files: [], malformed: 0 };
+  if (!Array.isArray(files)) return { files: [], malformed: 1 }; // a non-array `files` is a malformed call
+  const mapped = files.map((f) =>
+    f && typeof f === "object" && typeof (f as Record<string, unknown>).file_path === "string"
+      ? ((f as Record<string, unknown>).file_path as string)
+      : undefined,
+  );
+  return { files: mapped.filter((p): p is string => p !== undefined), malformed: mapped.filter((p) => p === undefined).length };
+}
+
+/** Collapse a RunRecord's infra/evidence-error telemetry to the RunResult shape (undefined when clean, so
+ *  JSON.stringify drops the key on a healthy run). Shared by every RunResult assembler so the two fields
+ *  can't silently diverge across lanes. */
+export function infraErrorsForResult(rec: Pick<RunRecord, "infraErrors">): RunResult["infraErrors"] {
+  return rec.infraErrors.length ? rec.infraErrors : undefined;
+}
+export function evidenceErrorsForResult(rec: Pick<RunRecord, "evidenceErrors">): RunResult["evidenceErrors"] {
+  const e = rec.evidenceErrors;
+  return e.taskTracking || e.webSearchParse || e.presentFilesMalformed ? e : undefined;
 }
 
 /** Find the JSON array following a WebSearch tool_result's "Links: " marker, respecting quoted-string
@@ -192,6 +203,15 @@ export interface RunRecord {
   // format on agent-version bumps). A parse failure drops that ONE call silently (see
   // parseWebSearchLinks) rather than crashing the run.
   webSearches: Array<{ toolUseId?: string; query: string; results: Array<{ title: string; url: string }> }>;
+  /** Infrastructure errors (VM/egress sidecar crashes) — a non-empty list is a both-lane hard verdict fail
+   *  (not author-suppressible), the evidence is contaminated. Populated from `infra_error` events (live +
+   *  replay re-drive) and the sidecar's post-run `fatalError`. */
+  infraErrors: Array<{ source: string; message: string }>;
+  /** Companion counters for malformed/dropped telemetry — a >0 count means the relevant evidence stream
+   *  was partially unparseable, so the dependent assertion fails "malformed" rather than silently dropping
+   *  the bad entries. (resource malformed lines live on `resources.malformedLines`; hash errors on
+   *  `workspaceFiles[].hashError`.) */
+  evidenceErrors: { taskTracking: number; webSearchParse: number; presentFilesMalformed: number };
 }
 
 export interface RunHooks {
@@ -298,6 +318,8 @@ export class Run {
       hookEvents: [],
       presentedFiles: [],
       webSearches: [],
+      infraErrors: [],
+      evidenceErrors: { taskTracking: 0, webSearchParse: 0, presentFilesMalformed: 0 },
     };
   }
 
@@ -469,8 +491,11 @@ export class Run {
             // A `present_files` call is stashed regardless of main-agent/sub-agent scope above — the
             // observability question ("did a presented scratchpad file actually reach outputs?") applies
             // run-wide, not just to main-agent-attributed tool calls.
-            if (ev.name === "mcp__cowork__present_files" && ev.toolUseId)
-              this.pendingPresentFiles.set(ev.toolUseId, presentFilesInput(ev.input));
+            if (ev.name === "mcp__cowork__present_files" && ev.toolUseId) {
+              const pf = presentFilesInput(ev.input);
+              this.pendingPresentFiles.set(ev.toolUseId, pf.files);
+              this.rec.evidenceErrors.presentFilesMalformed += pf.malformed;
+            }
             this.toolLog.push({ name: ev.name, input: ev.input, synthetic: ev.synthetic, parentToolUseId: ev.parentToolUseId }); // still logged for provenance/trace
             break;
           }
@@ -493,6 +518,10 @@ export class Run {
                 this.pendingTaskCreates.delete(ev.toolUseId);
                 const m = /^Task #(\S+) created successfully/.exec(ev.text);
                 if (m) this.rec.tasks.set(m[1], { id: m[1], status: "pending", ...pending });
+                // A non-error TaskCreate result that didn't match the expected format = the task is lost
+                // from telemetry (upstream wording drift). Count it so task assertions fail malformed
+                // rather than silently under-counting. An errored result legitimately created no task.
+                else if (!ev.isError) this.rec.evidenceErrors.taskTracking++;
               }
               const pendingSearch = this.pendingWebSearches.get(ev.toolUseId);
               if (pendingSearch !== undefined) {
@@ -502,6 +531,9 @@ export class Run {
                 // exceeds 500 chars, so ev.text alone would silently drop nearly every real search.
                 const results = parseWebSearchLinks(ev.assertText ?? ev.text);
                 if (results) this.rec.webSearches.push({ toolUseId: ev.toolUseId, query: pendingSearch, results });
+                // A parse failure would otherwise erase the search silently — count it so parser drift is
+                // visible in RunResult.evidenceErrors instead of vanishing.
+                else this.rec.evidenceErrors.webSearchParse++;
               }
             }
             this.provenance.seedFromToolResult(ev.provenanceText ?? ev.text); // seed from the UNtruncated value so URLs past the display cap are still fetchable
@@ -603,6 +635,12 @@ export class Run {
             break;
           case "system_event":
             this.rec.contextEvents.push({ subtype: ev.subtype, data: ev.data });
+            break;
+          case "infra_error":
+            // An infrastructure crash contaminates the run's evidence — collect it as a both-lane hard
+            // fail (computeVerdict), not author-suppressible. Re-derived on the replay drive from the frozen
+            // events, so a recorded crash fails replay too.
+            this.rec.infraErrors.push({ source: "sidecar", message: ev.message });
             break;
           case "mcp_error":
             this.rec.mcpErrors.push({ server: ev.server, code: ev.code, message: ev.message });

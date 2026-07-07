@@ -31,7 +31,11 @@ export type WorkspaceFileClass = "output" | "mount" | "input";
 export interface WorkspaceFile {
   path: string;
   bytes: number;
-  sha256: string;
+  /** Absent (with `hashError` set instead) when the file could not be read/hashed — an empty
+   *  string would silently read as a legitimate hash of empty content. */
+  sha256?: string;
+  /** Short reason the file couldn't be hashed (e.g. an fs error code). Only present when `sha256` is absent. */
+  hashError?: string;
   class: WorkspaceFileClass;
 }
 
@@ -51,13 +55,18 @@ export interface WorkspaceFile {
  * `captureRoots` filter (`execute.ts:689`) already uses.
  */
 export function classifyWorkspaceFiles(workRoot: string, userVisibleRoots: string[], readonlyFolderRoots: string[]): WorkspaceFile[] {
-  const hashFile = (relPath: string): string => {
+  // On a read/hash failure returns `{ hashError }` instead of a `sha256` — an empty-string hash would
+  // otherwise be indistinguishable from a legitimately-hashed empty file.
+  const hashFile = (relPath: string): { sha256: string } | { hashError: string } => {
     try {
-      return createHash("sha256")
-        .update(readFileSync(join(workRoot, relPath)))
-        .digest("hex");
-    } catch {
-      return "";
+      return {
+        sha256: createHash("sha256")
+          .update(readFileSync(join(workRoot, relPath)))
+          .digest("hex"),
+      };
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException)?.code;
+      return { hashError: code ?? (err instanceof Error ? err.message : String(err)) };
     }
   };
   const rootOf = (path: string): string | undefined => userVisibleRoots.find((r) => path === r || path.startsWith(r + "/"));
@@ -66,7 +75,7 @@ export function classifyWorkspaceFiles(workRoot: string, userVisibleRoots: strin
     const root = rootOf(path);
     const cls: WorkspaceFileClass =
       root !== undefined && readonlyFolderRoots.includes(root) ? "input" : root === "outputs" ? "output" : "mount";
-    out.push({ path, bytes, sha256: hashFile(path), class: cls });
+    out.push({ path, bytes, ...hashFile(path), class: cls });
   }
   return out;
 }

@@ -97,7 +97,12 @@ export function spawnContainer(
   const child = spawn(runner, dockerArgs, { stdio: ["pipe", "pipe", "pipe"] });
   const sdkMcp: { servers: string[]; handle: McpHandler } = {
     servers: ["cowork"],
-    handle: makeCoworkHandler({ sessionRootVm: sessionRoot, sessionHostDir: sessionHost, outputsHostDir }),
+    handle: makeCoworkHandler({
+      sessionRootVm: sessionRoot,
+      sessionHostDir: sessionHost,
+      outputsHostDir,
+      folderMounts: plan.mounts.filter((m) => m.kind === "folder").map((m) => m.mountPath),
+    }),
   };
   return { child, containerName, sdkMcp };
 }

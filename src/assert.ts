@@ -156,14 +156,22 @@ const jsonEq = (a: unknown, b: unknown): boolean => deepJsonEqual(a, b);
  * Boundary-aware host matching: `host` must equal `needle` exactly or be a proper subdomain of it.
  * `evilanthropic.com` does NOT match `anthropic.com`; `x.anthropic.com` does.
  *
- * Both sides are normalized (lowercase + trailing-dot strip) so an author needle that differs from the
- * recorded host only in case or a trailing dot still matches the way runtime egress matching does.
- * Normalization is COMPOSED onto the existing subdomain semantics, not a replacement — the
- * `endsWith("." + needle)` proper-subdomain rule is preserved.
+ * Both sides are normalized (lowercase + trailing-dot strip + IPv6 bracket strip) so an author needle
+ * that differs from the recorded host only in case, a trailing dot, or brackets still matches the way
+ * runtime egress matching does. Normalization is COMPOSED onto the existing subdomain semantics, not a
+ * replacement — the `endsWith("." + needle)` proper-subdomain rule is preserved.
+ *
+ * A `*.suffix` needle is a proper-subdomain wildcard mirroring the egress proxy's `*.` semantics (matches
+ * `sub.suffix`, NOT the apex `suffix`). This is ADDITIVE — a bare needle keeps its existing
+ * subdomain-inclusive meaning (apex + subdomains); only an explicit `*.` prefix opts into subdomain-only.
  */
 export function hostMatches(host: string, needle: string): boolean {
   const h = normalizeHost(host);
   const n = normalizeHost(needle);
+  if (n.startsWith("*.")) {
+    const suffix = n.slice(2);
+    return h.endsWith("." + suffix);
+  }
   return h === n || h.endsWith("." + n);
 }
 
@@ -362,6 +370,9 @@ export interface AssertContext {
    *  tier never sampled (protocol/replay, a run shorter than one sample interval, or an unavailable probe
    *  tool) — the evidence-unavailable signal for max_peak_rss_bytes; never a vacuous pass. */
   resources?: RunResult["resources"];
+  /** Companion malformed-telemetry counters (see RunResult.evidenceErrors). A >0 count makes the dependent
+   *  assertion fail "malformed" instead of silently dropping the bad entries. */
+  evidenceErrors?: RunResult["evidenceErrors"];
 }
 
 export function evaluate(assertions: Assertion[], ctx: AssertContext): RunResult["assertions"] {
@@ -626,21 +637,26 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
           ? ok()
           : fail(`${ctx.toolCallsTotal} tool calls exceeds max ${a.tool_calls_max}`),
     );
-  if (a.tool_no_error !== undefined) {
-    const c = compileUserRegex(a.tool_no_error);
-    if ("error" in c) results.push(fail(`tool_no_error: bad regex "${a.tool_no_error}": ${c.error}`));
-    else if (ctx.toolErrors === undefined)
-      results.push(fail(`evidence unavailable: tool-error telemetry absent — cannot evaluate tool_no_error`));
-    else {
-      const matching = Object.entries(ctx.toolErrors).filter(([name]) => c.re.test(name));
-      const errored = matching.filter(([, v]) => v.errors > 0);
-      results.push(
-        errored.length === 0
-          ? ok()
-          : fail(`tool(s) matching "${a.tool_no_error}" had errors: ${errored.map(([n, v]) => `${n} (${v.errors})`).join(", ")}`),
-      );
-    }
-  }
+  const evalToolNoError = (pat: string, key: string, requirePresence: boolean) => {
+    const c = compileUserRegex(pat);
+    if ("error" in c) return fail(`${key}: bad regex "${pat}": ${c.error}`);
+    if (ctx.toolErrors === undefined) return fail(`evidence unavailable: tool-error telemetry absent — cannot evaluate ${key}`);
+    const matching = Object.entries(ctx.toolErrors).filter(([name]) => c.re.test(name));
+    if (matching.length === 0)
+      // A regex that matched no tool can't prove the tool ran error-free. Presence-required by default
+      // (a typo'd regex must not silently pass); the _if_called variant opts into the lenient pass.
+      return requirePresence
+        ? fail(
+            `${key}: no tool matching "${pat}" was called — cannot verify it ran error-free (use tool_no_error_if_called to pass when the tool may legitimately not run)`,
+          )
+        : ok();
+    const errored = matching.filter(([, v]) => v.errors > 0);
+    return errored.length === 0
+      ? ok()
+      : fail(`tool(s) matching "${pat}" had errors: ${errored.map(([n, v]) => `${n} (${v.errors})`).join(", ")}`);
+  };
+  if (a.tool_no_error !== undefined) results.push(evalToolNoError(a.tool_no_error, "tool_no_error", true));
+  if (a.tool_no_error_if_called !== undefined) results.push(evalToolNoError(a.tool_no_error_if_called, "tool_no_error_if_called", false));
   if (a.max_tool_errors !== undefined)
     results.push(
       ctx.toolErrorsTotal === undefined
@@ -684,6 +700,10 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
   if (a.max_peak_rss_bytes !== undefined) {
     if (ctx.resources === undefined)
       results.push(fail(`max_peak_rss_bytes: live-only — no resource sampling on this lane (replay/protocol) — cannot verify`));
+    else if (ctx.resources.malformedLines)
+      results.push(
+        fail(`max_peak_rss_bytes: ${ctx.resources.malformedLines} malformed resource sample line(s) — telemetry is corrupt, cannot verify (malformed)`),
+      );
     else if (ctx.resources.peakRssBytes === undefined)
       results.push(fail(`max_peak_rss_bytes: sampling captured no RSS value — cannot verify`));
     else if (ctx.resources.peakRssBytes <= a.max_peak_rss_bytes) results.push(ok());
@@ -710,7 +730,23 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
     }
   }
   if (a.no_scratchpad_leak !== undefined) {
-    if (ctx.presentedFiles === undefined)
+    // present_files is served ONLY on the container tier (binary-verified against real Cowork: hostloop/
+    // microvm/protocol don't advertise the tool, so `presentedFiles` is always [] there and the leak check
+    // below would pass VACUOUSLY). Gate on the tier: anything but container is unsupported → can't-verify,
+    // never a silent green. `effectiveFidelity` is populated on every lane's ctx (live/replay/verify-run).
+    if (ctx.effectiveFidelity !== "container")
+      results.push(
+        fail(
+          `no_scratchpad_leak: present_files is served only on the container tier (this run: ${ctx.effectiveFidelity ?? "unknown"}) — cannot verify; use fidelity: container for present_files-based delivery`,
+        ),
+      );
+    else if (ctx.evidenceErrors?.presentFilesMalformed)
+      results.push(
+        fail(
+          `no_scratchpad_leak: ${ctx.evidenceErrors.presentFilesMalformed} malformed present_files call(s) — leak evidence is incomplete, cannot verify (malformed telemetry)`,
+        ),
+      );
+    else if (ctx.presentedFiles === undefined)
       results.push(fail(`no_scratchpad_leak: no present_files telemetry recorded for this run — cannot verify`));
     else {
       const leaked = ctx.presentedFiles.find((p) => p.leaked);
@@ -782,6 +818,16 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
   if (a.all_tasks_completed !== undefined) {
     if (ctx.tasks === undefined)
       results.push(fail(`evidence unavailable: tasks telemetry absent from result.json — cannot evaluate all_tasks_completed`));
+    else if (ctx.evidenceErrors?.taskTracking)
+      results.push(
+        fail(`all_tasks_completed: ${ctx.evidenceErrors.taskTracking} TaskCreate result(s) were unparseable — task telemetry is incomplete, cannot verify (malformed)`),
+      );
+    else if (ctx.tasks.length === 0)
+      // Presence-required: a run with zero tasks cannot have "completed them all". Assert task_count_min
+      // (or drop this) if a task-free run is legitimate.
+      results.push(
+        fail(`all_tasks_completed: no tasks were created — cannot verify completion (assert task_count_min for presence, or drop this)`),
+      );
     else
       results.push(
         ctx.tasks.every((t) => t.status === "completed")
@@ -792,6 +838,20 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
                 .map((t) => `${t.subject} (${t.status})`)
                 .join(", ")}`,
             ),
+      );
+  }
+  if (a.task_count_min !== undefined) {
+    if (ctx.tasks === undefined)
+      results.push(fail(`evidence unavailable: tasks telemetry absent from result.json — cannot evaluate task_count_min`));
+    else if (ctx.evidenceErrors?.taskTracking)
+      results.push(
+        fail(`task_count_min: ${ctx.evidenceErrors.taskTracking} TaskCreate result(s) were unparseable — task count is under-reported, cannot verify (malformed)`),
+      );
+    else
+      results.push(
+        ctx.tasks.length >= a.task_count_min
+          ? ok()
+          : fail(`task_count_min: ${ctx.tasks.length} task(s) created, need ≥ ${a.task_count_min}`),
       );
   }
   if (a.task_status !== undefined) {
@@ -901,10 +961,30 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
           ),
         );
       else if (modified.length || removed.length) {
-        const parts: string[] = [];
-        if (modified.length) parts.push(`modified in place: ${modified.slice(0, 5).join(", ")}`);
-        if (removed.length) parts.push(`removed: ${removed.slice(0, 5).join(", ")}`);
-        results.push(fail(`pre-existing file(s) changed — ${parts.join("; ")}`));
+        // A change under a READ-ONLY connected folder root can't be the agent's doing — the mount is bound
+        // `:ro`, so the agent physically cannot write/delete there. Such a change is therefore EXTERNAL (a
+        // user editing the live folder mid-run — the hostloop live-folder-window exposure) → evidence-
+        // contaminated, NOT an agent violation. Only changes the agent COULD have made (writable roots) are
+        // a real input_unmodified violation.
+        const roRoots = ctx.readonlyFolderRoots ?? [];
+        const underRo = (p: string) => roRoots.some((r) => p === r || p.startsWith(`${r}/`));
+        const external = [...modified, ...removed].filter(underRo);
+        const agentChanged = { modified: modified.filter((p) => !underRo(p)), removed: removed.filter((p) => !underRo(p)) };
+        if (agentChanged.modified.length || agentChanged.removed.length) {
+          const parts: string[] = [];
+          if (agentChanged.modified.length) parts.push(`modified in place: ${agentChanged.modified.slice(0, 5).join(", ")}`);
+          if (agentChanged.removed.length) parts.push(`removed: ${agentChanged.removed.slice(0, 5).join(", ")}`);
+          results.push(fail(`pre-existing file(s) changed — ${parts.join("; ")}`));
+        } else {
+          // Every change was under a read-only root → external mutation, can't attribute to the agent.
+          results.push(
+            fail(
+              `evidence contaminated: pre-existing file(s) under a read-only connected folder changed mid-run (${external
+                .slice(0, 5)
+                .join(", ")}) — the agent cannot write there, so this is an EXTERNAL edit; cannot verify input integrity`,
+            ),
+          );
+        }
       } else results.push(ok());
     }
   }
@@ -928,31 +1008,26 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
           ? ok()
           : fail(`host path leaked into model-visible text: ${ctx.hostPathLeaked}`),
     );
-  if (a.computer_links_resolve !== undefined) {
-    if (ctx.transcriptMissing) {
-      results.push(fail(`evidence unavailable: transcript sidecar (run.jsonl) absent — cannot evaluate computer_links_resolve`));
-    } else {
-      const links = extractComputerLinks(ctx.transcript);
-      if (links.length === 0) {
-        // Presence-gated by design (see the schema description): zero links in the transcript passes —
-        // an author combines this with transcript_contains to also require a link be present.
-        results.push(ok());
-      } else if (!ctx.linkResolution) {
-        results.push(
-          fail(
-            `evidence unavailable: no link-resolution context wired for this lane — cannot evaluate computer_links_resolve (${links.length} link(s) found)`,
-          ),
-        );
-      } else {
-        const tierNote = ctx.effectiveFidelity ? ` (tier: ${ctx.effectiveFidelity})` : "";
-        const dangling = links
-          .map((link) => ({ link, outcome: resolveComputerLink(link, ctx.workRoot, ctx.linkResolution!) }))
-          .filter(({ outcome }) => !outcome.resolved)
-          .map(({ link, outcome }) => `computer://${link.raw} — checked ${outcome.checkedDescription}`);
-        results.push(dangling.length === 0 ? ok() : fail(`dangling computer:// link(s)${tierNote}: ${dangling.join("; ")}`));
-      }
-    }
-  }
+  const evalComputerLinks = (key: string, requirePresence: boolean) => {
+    if (ctx.transcriptMissing) return fail(`evidence unavailable: transcript sidecar (run.jsonl) absent — cannot evaluate ${key}`);
+    const links = extractComputerLinks(ctx.transcript);
+    if (links.length === 0)
+      // Presence-required by default: zero links can't prove a deliverable link resolves. The
+      // _if_present variant opts into the lenient vacuous pass.
+      return requirePresence
+        ? fail(`${key}: no computer:// link in the transcript — cannot verify a deliverable link resolves (use computer_links_resolve_if_present to pass when no link is expected)`)
+        : ok();
+    if (!ctx.linkResolution)
+      return fail(`evidence unavailable: no link-resolution context wired for this lane — cannot evaluate ${key} (${links.length} link(s) found)`);
+    const tierNote = ctx.effectiveFidelity ? ` (tier: ${ctx.effectiveFidelity})` : "";
+    const dangling = links
+      .map((link) => ({ link, outcome: resolveComputerLink(link, ctx.workRoot, ctx.linkResolution!) }))
+      .filter(({ outcome }) => !outcome.resolved)
+      .map(({ link, outcome }) => `computer://${link.raw} — checked ${outcome.checkedDescription}`);
+    return dangling.length === 0 ? ok() : fail(`dangling computer:// link(s)${tierNote}: ${dangling.join("; ")}`);
+  };
+  if (a.computer_links_resolve !== undefined) results.push(evalComputerLinks("computer_links_resolve", true));
+  if (a.computer_links_resolve_if_present !== undefined) results.push(evalComputerLinks("computer_links_resolve_if_present", false));
   if (a.question_asked !== undefined) {
     if (ctx.questionsMissing) {
       results.push(fail(`evidence unavailable: questions sidecar (trace.json) absent — cannot evaluate question_asked`));

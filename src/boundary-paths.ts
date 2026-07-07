@@ -48,17 +48,22 @@ export function containedRealPath(root: string, target: string): boolean {
 }
 
 /**
- * Normalize a hostname: lowercase + strip a single trailing dot. Extracted (and exported) from the
- * private helper that lived in `run.ts` so the approvedDomains set, egress seed validation, and
- * `hostMatches` assertions all fold case/trailing-dot the same way and cannot diverge.
+ * Normalize a hostname: lowercase + strip a single trailing dot + strip IPv6 brackets. Extracted
+ * (and exported) from the private helper that lived in `run.ts` so the approvedDomains set, egress
+ * seed validation, and `hostMatches` assertions all fold case/trailing-dot/brackets the same way
+ * and cannot diverge from the egress proxy, which strips brackets when parsing authorities.
  *
  * NOT normalized here (deferred — needs binary verification before touching matching semantics):
- *   - IPv6 bracket stripping (e.g. "[::1]" → "::1"): affects URL-parsing parity with the host sandbox.
- *   - Punycode / IDNA folding: requires a unicode-aware library not currently in scope.
+ *   - Punycode / IDNA folding: the egress proxy folds the request host (via URL parsing) but does
+ *     NOT fold allowlist entries, so folding here would diverge from real Cowork's entry-side matching.
  *   - Wildcard subdomain semantics (e.g. "*.example.com"): structural, not cosmetic.
  */
 export function normalizeHost(host: string): string {
-  return host.toLowerCase().replace(/\.$/, "");
+  return host
+    .toLowerCase()
+    .replace(/\.$/, "")
+    .replace(/^\[/, "")
+    .replace(/\]$/, "");
 }
 
 /**

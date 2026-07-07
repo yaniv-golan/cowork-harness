@@ -84,6 +84,7 @@ export type AgentEvent =
       modelUsage?: Record<string, Record<string, unknown>>;
     }
   | { type: "error"; source: "spawn" | "agent" | "protocol" | "exit"; message: string }
+  | { type: "infra_error"; message: string } // an infrastructure frame (e.g. VM/egress sidecar crash) appended to events.jsonl outside the SDK stream
   | { type: "raw"; line: string }
   | { type: "system_event"; subtype: string; data: Record<string, unknown> } // a `system` message we don't special-case (e.g. compact_boundary)
   | { type: "mcp_error"; server: string; code?: number; message: string } // an MCP round-trip the harness answered with a JSON-RPC error
@@ -748,6 +749,11 @@ export class LiveAgentSession implements AgentSession {
 export function parseMessage(msg: any): AgentEvent[] {
   const ev: AgentEvent[] = [];
   switch (msg.type) {
+    case "infra_error":
+      // An infrastructure frame (VM/egress sidecar crash) appended to events.jsonl by the runtime, outside
+      // the SDK stdout stream. Preserved in the frozen cassette, so the replay re-drive re-derives it too.
+      ev.push({ type: "infra_error", message: typeof msg.message === "string" ? msg.message : "infrastructure error" });
+      break;
     case "system":
       if (msg.subtype === "init")
         ev.push({ type: "init", tools: msg.tools ?? [], mcpServers: msg.mcp_servers ?? [], skills: msg.skills ?? [], cwd: msg.cwd });

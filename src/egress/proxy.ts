@@ -147,10 +147,17 @@ export function startEgressProxy(opts: ProxyOptions): EgressProxy {
   // response is fully sent). These are normal socket-teardown events and must not crash the proxy.
   // Using a direct `.on("error", …)` handler here — rather than a process-wide `uncaughtException`
   // hook — keeps the suppression scoped exactly to this server object and never masks unrelated errors.
+  let listening = false;
   server.on("error", (e: NodeJS.ErrnoException) => {
     if (e.code === "ECONNRESET" || e.code === "EPIPE") return; // benign socket teardown — ignore
-    // All other server errors (e.g. EADDRINUSE before `listening`) are captured via the `ready`
-    // rejection path below; re-throwing here would crash the process with no context.
+    // Pre-listen errors (e.g. EADDRINUSE) are surfaced via the `ready` rejection below; nothing more
+    // to do here. A post-listen error, though, has no rejection left to reach (that promise already
+    // settled at "listening") — without a signal here it was silently swallowed. Surface it on the
+    // one channel that crosses BOTH topologies this proxy runs under: in-process (microVM) and
+    // containerized (under the sidecar, where only stderr/exit code cross the boundary).
+    if (!listening) return;
+    process.stderr.write(JSON.stringify({ type: "proxy_fatal", code: e.code, message: e.message }) + "\n");
+    process.exit(1);
   });
 
   // readiness/error handshake. With an `error` listener a bind failure (EADDRINUSE) is a rejected
@@ -158,6 +165,7 @@ export function startEgressProxy(opts: ProxyOptions): EgressProxy {
   // before routing traffic so the agent never starts before the socket is accepting.
   const ready = new Promise<void>((resolve, reject) => {
     server.once("listening", () => {
+      listening = true;
       (server as EgressProxy).actualPort = (server.address() as net.AddressInfo).port;
       resolve();
     });

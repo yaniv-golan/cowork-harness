@@ -42,6 +42,20 @@ function hashFileCapped(baseDir: string, relPath: string, cap: number): string |
   }
 }
 
+/** Per-file mtime+size at capture time — metadata-only (no content read, no cap needed: statSync is
+ *  O(1) regardless of file size). This is what lets a later diff distinguish "the agent wrote this" from
+ *  "something external touched it between capture and the post-run read" for the SAME path — the hash
+ *  alone can't do that (a hash mismatch says content changed, not who/when). Null on an unreadable file
+ *  (race with a delete mid-walk, or a permissions error) — absence, not a fabricated zero. */
+function statCapture(baseDir: string, relPath: string): { mtimeMs: number; size: number } | null {
+  try {
+    const st = statSync(join(baseDir, relPath));
+    return { mtimeMs: st.mtimeMs, size: st.size };
+  } catch {
+    return null;
+  }
+}
+
 /** Snapshot the user-visible roots' file paths AFTER staging, BEFORE the agent spawns — the
  *  baseline `no_unexpected_files` diffs against (new-files-only semantic). Hostloop folders are
  *  bind-mounted live host paths (never staged): walk each folder SOURCE mapped to its mountPath,
@@ -68,9 +82,11 @@ export function capturePreRunManifest(plan: LaunchPlan, workRoot: string, outDir
   const cap = preRunHashCap();
   const paths: string[] = [];
   const hashes: Record<string, string | null> = {};
+  const stats: Record<string, { mtimeMs: number; size: number } | null> = {};
   const add = (relPath: string, baseDir: string) => {
     paths.push(relPath);
     hashes[relPath] = hashFileCapped(baseDir, relPath, cap);
+    stats[relPath] = statCapture(baseDir, relPath);
   };
   if (tier === "hostloop") {
     for (const a of collectArtifacts(workRoot, ["outputs"], WALK)) add(a.path, workRoot);
@@ -81,6 +97,7 @@ export function capturePreRunManifest(plan: LaunchPlan, workRoot: string, outDir
         const rel = p === m.mountPath ? "" : p.slice(m.mountPath.length + 1);
         paths.push(p);
         hashes[p] = hashFileCapped(m.hostPath, rel, cap);
+        stats[p] = statCapture(m.hostPath, rel);
       }
     }
     paths.sort();
@@ -88,7 +105,7 @@ export function capturePreRunManifest(plan: LaunchPlan, workRoot: string, outDir
     for (const a of collectArtifacts(workRoot, userVisibleRootsFromPlan(plan), WALK)) add(a.path, workRoot);
     paths.sort();
   }
-  writeFileSync(join(outDir, FILE), JSON.stringify({ paths, hashes }, null, 2));
+  writeFileSync(join(outDir, FILE), JSON.stringify({ paths, hashes, stats }, null, 2));
 }
 
 /** undefined = no manifest (an older kept run, a run that didn't capture, or a tier that can't —
@@ -112,6 +129,25 @@ export function readPreRunManifestHashes(outDir: string): Record<string, string 
     const h = parsed.hashes as Record<string, unknown>;
     for (const v of Object.values(h)) if (v !== null && typeof v !== "string") return undefined;
     return h as Record<string, string | null>;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The per-path {mtimeMs, size} map from the pre-run manifest (value null = unreadable at capture).
+ *  undefined = no manifest, or a manifest predating this field (an older run) — a caller that needs it to
+ *  distinguish an agent write from an externally-mutated path must treat undefined as evidence-unavailable
+ *  for that distinction, same convention as `readPreRunManifestHashes`. */
+export function readPreRunManifestStats(outDir: string): Record<string, { mtimeMs: number; size: number } | null> | undefined {
+  try {
+    const parsed = JSON.parse(readFileSync(join(outDir, FILE), "utf8")) as { stats?: unknown };
+    if (parsed.stats === null || typeof parsed.stats !== "object" || Array.isArray(parsed.stats)) return undefined;
+    const s = parsed.stats as Record<string, unknown>;
+    for (const v of Object.values(s)) {
+      if (v === null) continue;
+      if (typeof v !== "object" || typeof (v as any).mtimeMs !== "number" || typeof (v as any).size !== "number") return undefined;
+    }
+    return s as Record<string, { mtimeMs: number; size: number } | null>;
   } catch {
     return undefined;
   }

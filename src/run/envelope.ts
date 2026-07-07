@@ -44,10 +44,16 @@ export interface JsonEnvelopeOpts {
   /** `--repeat` additions. */
   rollups?: RepeatRollup[];
   minPassRate?: number;
+  /** `--allow-budget-stop`: opt out of the default-fail for a budget-stopped repeat batch. */
+  allowBudgetStop?: boolean;
   /** `--matrix` addition. */
   matrix?: MatrixRollup;
   /** `--matrix` + `--repeat` composed: each cell is its own repeat batch. */
   matrixRepeat?: MatrixRepeatRollup;
+  /** Command-specific metadata merged into the envelope alongside `results` (e.g. `record`'s
+   *  `artifacts`/`cassette`). Kept separate from `results` so the per-result verdict/`ok` computation
+   *  is unaffected. */
+  extra?: Record<string, unknown>;
 }
 
 /** The standardized machine envelope object (internal: `jsonEnvelope` stringifies it). `ok` is the
@@ -73,7 +79,7 @@ export interface JsonEnvelopeOpts {
  *  backward-compat constraint to preserve). `results[]` still holds every raw RunResult either way — across every cell
  *  and every one of its repeat iterations for the composed mode — nothing is hidden from any caller. */
 function jsonEnvelopeObj(command: string, results: RunResult[], opts: JsonEnvelopeOpts = {}): Record<string, unknown> {
-  const { rollups, minPassRate, matrix, matrixRepeat } = opts;
+  const { rollups, minPassRate, allowBudgetStop, matrix, matrixRepeat, extra } = opts;
   const lane = command === "replay" ? "replay" : "live";
   const withVerdict = results.map((r) => ({ ...r, verdict: computeVerdict(r, lane) }));
   const ok = matrixRepeat
@@ -81,9 +87,18 @@ function jsonEnvelopeObj(command: string, results: RunResult[], opts: JsonEnvelo
     : matrix
       ? !matrix.anyFail
       : rollups
-        ? rollups.every((ru) => rollupPasses(ru, minPassRate))
+        ? rollups.every((ru) => rollupPasses(ru, minPassRate, allowBudgetStop))
         : withVerdict.length > 0 && withVerdict.every((r) => r.verdict.pass);
-  return { tool: "cowork-harness", version: pkgVersion(), command, ok, results: withVerdict, rollups, matrix, matrixRepeat, error: null };
+  return { tool: "cowork-harness", version: pkgVersion(), command, ok, results: withVerdict, rollups, matrix, matrixRepeat, ...extra, error: null };
+}
+
+/** Machine envelope for commands whose payload is NOT a `RunResult[]` — `record --dry-run` (discovery),
+ *  `verify-cassettes` (coverage), `rehash` (migration). Shares the `{tool, version, command, ok, error}`
+ *  frame with `jsonEnvelope` but carries a command-specific `payload` and NEVER calls `computeVerdict`
+ *  (there is no `RunResult` to judge — `ok` is the caller's own success criterion, e.g. rehash `ok` =
+ *  zero migration errors). Keeps a single machine-readable envelope shape across every command. */
+export function jsonPayloadEnvelope(command: string, ok: boolean, payload: Record<string, unknown>): string {
+  return JSON.stringify({ tool: "cowork-harness", version: pkgVersion(), command, ok, ...payload, error: null });
 }
 
 /** The standardized machine envelope emitted by every `--output-format json` command. COMPACT

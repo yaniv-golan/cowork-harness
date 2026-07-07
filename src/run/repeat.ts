@@ -102,11 +102,14 @@ export function buildRepeatRollup(
  * away against whatever completed cleanly beforehand. `stoppedEarly:"error"` (an uncaught exception —
  * a BoundaryError or any other error mid-batch) always fails for the same reason: a batch that couldn't
  * finish because something broke is a real failure, not a clean-but-incomplete measurement.
- * `stoppedEarly:"budget"` is the one early-stop reason judged on its own completed-runs passRate like any
- * other batch (an incomplete-but-clean run isn't itself a failure — that's a `::warning::` at the call
- * site, not a verdict change).
+ * `stoppedEarly:"budget"` defaults to failing too — a budget cutoff means the batch never reached
+ * `requested`, so a clean-looking passRate over a small completed prefix is "incomplete is not green",
+ * the same principle `--matrix`'s `truncated` applies. Pass `allowBudgetStop: true` to opt back into the
+ * old behavior (judge a budget-stopped batch on its own completed-runs passRate like any other batch —
+ * an incomplete-but-clean run isn't itself a failure, that's a `::warning::` at the call site instead).
  */
-export function rollupPasses(rollup: RepeatRollup, minPassRate = 1.0): boolean {
+export function rollupPasses(rollup: RepeatRollup, minPassRate = 1.0, allowBudgetStop = false): boolean {
   if (rollup.stoppedEarly === "diverged" || rollup.stoppedEarly === "unanswered" || rollup.stoppedEarly === "error") return false;
+  if (rollup.stoppedEarly === "budget" && !allowBudgetStop) return false;
   return rollup.passRate >= minPassRate;
 }

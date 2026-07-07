@@ -18,7 +18,7 @@ import { assembleRunResult } from "./assemble-run-result.js";
 import { loadSession, resolveSessionPaths } from "../session.js";
 import { loadBaseline } from "../baseline.js";
 import { decideLoopFromBaseline } from "../loop-decision.js";
-import { Run, type RunHooks, type RunRecord } from "./run.js";
+import { Run, infraErrorsForResult, evidenceErrorsForResult, type RunHooks, type RunRecord } from "./run.js";
 import {
   parseMessage,
   serializeDecision,
@@ -42,7 +42,7 @@ import { evaluate, budgetFields, type AssertContext } from "../assert.js";
 import { anyGlobMatches } from "../glob.js";
 import { extractComputerLinks } from "./computer-links.js";
 import { makeRenderer, renderFooter, type RenderPlan } from "./renderer.js";
-import { jsonEnvelope, parseOutputFormat } from "./envelope.js";
+import { jsonEnvelope, jsonPayloadEnvelope, parseOutputFormat } from "./envelope.js";
 import { parseArgs } from "../cli-args.js";
 import { resolveInputs } from "./inputs.js";
 import { realProbe } from "./doctor.js";
@@ -159,6 +159,25 @@ export interface Cassette {
   // unlike the manifest/gate keys. Additive: CassetteShape is a looseObject, so no version bump.
   timeline?: TimelineEvent[];
   timelineHeader?: TimelineHeader;
+  // v9: session-SHAPE fingerprint (Finding 23) — a stable hash of the resolved session's content-
+  // relevant fields (connected folders + mode, plugin/skill/mcp discovery config, egress allowlist) at
+  // record time (see `buildSessionFingerprint`). Distinct from `fingerprint.skillHash` (skill/plugin
+  // FILE content): the session can drift — a folder swapped, egress widened — with the skill tree
+  // completely untouched, invisible to `fingerprint`. Recomputed and compared ONLY by `verify-cassettes`
+  // (see `sessionFingerprintDrift`) — deliberately NOT folded into `computeStaleness`/`checkStaleness`,
+  // so it never changes the default `replay` verdict (not even under `--strict`). ABSENT on a pre-v9
+  // cassette → not checked (backward-compat: an existing committed cassette never goes stale from this).
+  sessionFingerprint?: string;
+  // v9: the record-time connected-folder host-path -> resolved-mount-name correspondence (Finding 24),
+  // persisted so `computer_links_resolve` on replay normalizes a host-shaped link against THIS
+  // (guaranteed record-time-accurate) map instead of re-deriving it from the session file on disk AT
+  // REPLAY TIME — the prior approach (still used for a pre-v9 cassette, see `buildFolderPrefixMap`),
+  // which can silently zip against the WRONG host paths when the session changed since record but
+  // happens to still declare the same folder COUNT. ABSENT on a pre-v9 cassette → replay keeps the
+  // legacy current-session reconstruction (backward-compat). ABSENT on a v9+ cassette (unexpected —
+  // record always sets this when the folder count is derivable) → replay refuses to fall back to the
+  // current session and instead treats every host-shaped folder link as evidence-unavailable (Finding 25).
+  folderPrefixMap?: Array<{ from: string; mount: string }>;
 }
 
 /** Current cassette format version. Readers tolerate ABSENT (legacy → 0) and warn on a FUTURE version. */
@@ -180,7 +199,16 @@ export interface Cassette {
 // routes pre-v6 cassettes to a re-record (honest "algorithm changed" message, not "content changed").
 // v7: NUL-byte entry separator in hashDir and computeContentSig (replaces `\n`) to prevent hash collisions
 // for file paths containing newline characters.
-export const CASSETTE_VERSION = 8;
+// v9: two OPTIONAL fields, neither touching skillHash/contentSig (CONTENTSIG_ALGO stays 4 — a v8
+// cassette's skill fingerprint remains directly comparable, no re-record forced by this bump alone):
+//  `sessionFingerprint` — a hash of the session's content-relevant SHAPE (connected folders, plugin/
+//  skill/mcp discovery config, egress allowlist), checked ONLY by `verify-cassettes` (never the default
+//  replay verdict — see `sessionFingerprintDrift`); and `folderPrefixMap` — the record-time
+//  connected-folder host-path → resolved-mount-name correspondence, persisted so replay's
+//  `computer_links_resolve` stops re-deriving that map from the CURRENT (possibly since-changed)
+//  session file (see `buildFolderPrefixMap`). Both ABSENT on a pre-v9 cassette → the legacy behavior
+//  applies unchanged (no session-fingerprint check; folder links reconstruct from the current session).
+export const CASSETTE_VERSION = 9;
 // The contentSig algorithm version. Bumped whenever computeContentSig's INPUT/encoding changes (the v6
 // unification). `rehash` only byte-compares contentSig within the same algo version; across a bump it
 // re-records. Derived from cassetteVersion: < 6 ⇒ algo 1 (legacy), ≥ 6 ⇒ algo 2 (unified),
@@ -430,6 +458,44 @@ export function fingerprintSkillDrift(rec: Fingerprint, live: Fingerprint): stri
   if ((rec.agentScope ?? "off") !== (live.agentScope ?? "off")) return "agent-scope changed (COWORK_HARNESS_AGENT_SCOPE)";
   if (live.skillHash !== rec.skillHash) return "the skill/plugin source changed since this run was recorded";
   return null;
+}
+
+/** Session-SHAPE fingerprint (Finding 23) — a stable hash of the resolved session's content-relevant
+ *  fields: connected folders (+ mode), plugin/skill/mcp discovery config, and the egress allowlist.
+ *  Distinct from `buildFingerprint`'s skillHash (skill/plugin FILE content) — this covers what mounts/
+ *  discovery/network the recorded run SAW, which can drift (a folder swapped, a plugin added, egress
+ *  widened) with the skill tree itself completely unchanged, invisible to `fingerprint`. Mirrors
+ *  `buildFingerprint`'s hashing approach (resolve the session, hash a canonical JSON shape) but over
+ *  session shape rather than file content — so no raw host path is stored, only the digest. Returns
+ *  undefined ("can't verify", never a false mismatch) for an inline scenario or when the session file
+ *  can't be read/parsed from `sessionPath` (resolved against `cassetteDir` exactly like
+ *  `skillSourceDirs`). Arrays are sorted before hashing so authoring order can't spuriously move the hash. */
+export function buildSessionFingerprint(sessionPath: string, cassetteDir?: string): string | undefined {
+  if (sessionPath === "(inline)") return undefined;
+  const resolved = cassetteDir && !isAbsolute(sessionPath) ? join(cassetteDir, sessionPath) : sessionPath;
+  if (!existsSync(resolved)) return undefined;
+  let cfg;
+  try {
+    cfg = resolveSessionPaths(loadSession(parseSessionFile(resolved)), dirname(resolved));
+  } catch {
+    return undefined;
+  }
+  const shape = {
+    folders: [...cfg.folders].map((f) => ({ from: f.from, mode: f.mode })).sort((a, b) => a.from.localeCompare(b.from)),
+    plugins: {
+      config_dir: cfg.plugins.config_dir,
+      marketplaces: [...cfg.plugins.marketplaces].sort(),
+      local_marketplaces: [...cfg.plugins.local_marketplaces].sort(),
+      enabled: [...cfg.plugins.enabled].sort(),
+      local_plugins: [...cfg.plugins.local_plugins].sort(),
+      remote_plugins: [...cfg.plugins.remote_plugins].sort(),
+    },
+    skills: { local: [...cfg.skills.local].sort() },
+    mcp: { config: cfg.mcp.config, enabled: [...cfg.mcp.enabled].sort() },
+    egress: { extra_allow: [...cfg.egress.extra_allow].sort(), unrestricted: cfg.egress.unrestricted },
+    web_fetch: { approved_domains: [...cfg.web_fetch.approved_domains].sort() },
+  };
+  return createHash("sha256").update(Buffer.from(JSON.stringify(shape), "utf8")).digest("hex");
 }
 
 /** Scan the WHOLE cassette surface for PII (default classes: email/currency/domain). A `truncated`
@@ -871,6 +937,8 @@ function minimalRec(): RunRecord {
     hookEvents: [],
     presentedFiles: [],
     webSearches: [],
+    infraErrors: [],
+    evidenceErrors: { taskTracking: 0, webSearchParse: 0, presentFilesMalformed: 0 },
   };
 }
 
@@ -1361,6 +1429,9 @@ export function discoverScenarios(dir: string): ScenarioDiscovery {
 const CassetteShape = z.looseObject({
   events: z.array(z.string()),
   scenario: z.looseObject({ prompt: z.string(), session: z.string(), assert: z.array(z.unknown()).optional() }),
+  // v9 (Finding 23/24) — both optional; absent on any pre-v9 cassette (backward-compat).
+  sessionFingerprint: z.string().optional(),
+  folderPrefixMap: z.array(z.object({ from: z.string(), mount: z.string() })).optional(),
 });
 
 /** the ONE place the default cassette path is computed from a scenario name. Both `record --dry-run`
@@ -1392,19 +1463,27 @@ export function readCassette(path: string): { cassette: Cassette } | { error: st
   // so a missing-assert cassette can't NPE and abort a whole replay batch (readCassette's never-crash contract).
   const scn = cassette.scenario as { assert?: unknown[] };
   if (!Array.isArray(scn.assert)) scn.assert = [];
-  // validate each `scenario.assert` element against the assertion schema — but VALIDATE-AND-WARN,
-  // never reject. CassetteShape is deliberately `z.looseObject`; a strict-by-default load would hard-reject
-  // cassettes recorded by a NEWER harness that added an assertion key this build doesn't know (a forward-compat
-  // regression). So a malformed/unknown assert element is surfaced as a loud warning, not a load error.
+  // Validate each `scenario.assert` element against the (strict) assertion schema. An unrecognized/malformed
+  // assertion in a cassette recorded by THIS or an OLDER harness is a hard REJECT — it would otherwise vanish
+  // from replay evaluation and green by omission. A cassette recorded by a NEWER harness (future version) may
+  // legitimately carry an assertion key this build doesn't know: keep warn-and-tolerate there (forward-compat).
+  const recordedVersion = cassette.cassetteVersion ?? 0;
+  const isFutureCassette = recordedVersion > CASSETTE_VERSION;
+  const assertErrors: string[] = [];
   scn.assert.forEach((a, i) => {
     const r = AssertionSchema.safeParse(a);
-    if (!r.success)
-      warn(
-        `::warning:: [cassette] scenario.assert[${i}] is not a recognized assertion shape: ` +
-          `${r.error.issues.map((iss) => `${iss.path.join(".") || "<root>"}: ${iss.message}`).join("; ")} ` +
-          `(tolerated for forward-compat; pass --strict to a future hardened loader to reject)\n`,
-      );
+    if (r.success) return;
+    const detail = `scenario.assert[${i}]: ${r.error.issues.map((iss) => `${iss.path.join(".") || "<root>"}: ${iss.message}`).join("; ")}`;
+    if (isFutureCassette)
+      warn(`::warning:: [cassette] unrecognized assertion (tolerated — cassette v${recordedVersion} is newer than v${CASSETTE_VERSION}): ${detail}\n`);
+    else assertErrors.push(detail);
   });
+  if (assertErrors.length)
+    return {
+      error:
+        `cassette (v${recordedVersion} ≤ current v${CASSETTE_VERSION}) contains unrecognized assertion(s) — they would silently drop from replay: ` +
+        `${assertErrors.join("; ")}. Fix the assertion, or re-record.`,
+    };
   return { cassette };
 }
 
@@ -1426,6 +1505,7 @@ export function selectStaleCassettes(dir: string): { path: string; staleness: st
 interface RecordOpts {
   noRedact: boolean;
   allowFailing: boolean;
+  force?: boolean; // --force: overwrite a default-path cassette even if it belongs to a different scenario (slug collision)
   cassettePath?: string; // explicit --out (single); otherwise cassettes/<name>.cassette.json
   maxArtifactBytes?: number; // override the inline-body cap (else env / 64 KiB default)
   scenarioSourceFile?: string; // the on-disk scenario YAML this was recorded from (for --rerecord-stale)
@@ -1563,7 +1643,17 @@ export async function cmdRecord(args: string[]) {
   try {
     p = parseArgs(args, {
       // --quiet/--verbose accepted for flag consistency but currently no-op in record (renderer plan is fixed).
-      booleans: ["--no-redact", "--allow-failing", "--rerecord-stale", "--quiet", "--verbose", "--dry-run", "--decider-llm"],
+      booleans: [
+        "--no-redact",
+        "--allow-failing",
+        "--rerecord-stale",
+        "--from-embedded",
+        "--force",
+        "--quiet",
+        "--verbose",
+        "--dry-run",
+        "--decider-llm",
+      ],
       values: [
         "--out",
         "--output-format",
@@ -1596,6 +1686,8 @@ export async function cmdRecord(args: string[]) {
   const noRedact = p.flags["--no-redact"] ?? false;
   if (noRedact) log("record: --no-redact — content redaction is OFF; the cassette is written verbatim, so ensure inputs are synthetic.");
   const allowFailing = p.flags["--allow-failing"] ?? false;
+  const force = p.flags["--force"] ?? false;
+  const fromEmbedded = p.flags["--from-embedded"] ?? false; // --rerecord-stale: allow re-recording from the embedded snapshot when no on-disk source resolves
   const rerecordStale = p.flags["--rerecord-stale"] ?? false;
   // Live-decider flags: answer gates during the recording instead of pre-scripting them.
   const deciderDir = p.options["--decider-dir"];
@@ -1689,24 +1781,41 @@ export async function cmdRecord(args: string[]) {
     const agent = realProbe.agentBinary();
     const tokenLine = token ? "  token:  found" : "  token:  ✗ MISSING — set CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY";
     const agentLine = agent.ok ? `  agent:  ${agent.path}` : `  agent:  ✗ ${agent.error.split("\n")[0]}`;
+    const agentPayload = agent.ok ? { ok: true as const, path: agent.path } : { ok: false as const, error: agent.error };
 
     if (isDir) {
       const disc = discoverScenarios(target);
-      for (const s of disc.skipped) log(`· skipped: ${s}`);
-      for (const b of disc.broken) log(`✗ broken: ${b.file}: ${b.error}`);
+      if (asJson) {
+        out(
+          jsonPayloadEnvelope("record", true, {
+            dryRun: true,
+            target,
+            scenarios: disc.scenarios,
+            skipped: disc.skipped,
+            broken: disc.broken,
+            token,
+            agent: agentPayload,
+          }),
+        );
+      } else {
+        for (const s of disc.skipped) log(`· skipped: ${s}`);
+        for (const b of disc.broken) log(`✗ broken: ${b.file}: ${b.error}`);
+      }
       if (disc.scenarios.length === 0) {
         if (disc.broken.length === 0) {
-          log(`record --dry-run: no scenarios discovered under ${target}`);
+          if (!asJson) log(`record --dry-run: no scenarios discovered under ${target}`);
           // Exit 2 for "nothing discovered at all" — matches the non-dry-run batch path.
           return process.exit(2);
         }
         // Broken files found but no valid scenarios — exit 1 (broken, not nothing).
         return process.exit(1);
       }
-      log(`record --dry-run: ${disc.scenarios.length} scenario(s) in ${target}`);
-      for (let i = 0; i < disc.scenarios.length; i++) log(`  [${i + 1}] ${disc.scenarios[i]}`);
-      log(tokenLine);
-      log(agentLine);
+      if (!asJson) {
+        log(`record --dry-run: ${disc.scenarios.length} scenario(s) in ${target}`);
+        for (let i = 0; i < disc.scenarios.length; i++) log(`  [${i + 1}] ${disc.scenarios[i]}`);
+        log(tokenLine);
+        log(agentLine);
+      }
       // Exit 1 when there are broken files (they won't run but the user should know).
       return process.exit(disc.broken.length > 0 ? 1 : 0);
     }
@@ -1722,13 +1831,27 @@ export async function cmdRecord(args: string[]) {
     // mirror the EXACT default cassette path recordScenarioObject uses (slugForPath via the shared
     // defaultCassettePath helper) so a name with spaces/separators reports the same path it writes.
     const cassettePath = p.options["--out"] ?? defaultCassettePath(scenario.name);
-    log("record --dry-run");
-    log(`  scenario: ${scenario.name}`);
-    log(`  file:     ${target}`);
-    if (scenario.fidelity) log(`  fidelity: ${scenario.fidelity}`);
-    log(`  cassette: ${cassettePath}`);
-    log(tokenLine);
-    log(agentLine);
+    if (asJson) {
+      out(
+        jsonPayloadEnvelope("record", true, {
+          dryRun: true,
+          target,
+          scenario: scenario.name,
+          fidelity: scenario.fidelity,
+          cassette: cassettePath,
+          token,
+          agent: agentPayload,
+        }),
+      );
+    } else {
+      log("record --dry-run");
+      log(`  scenario: ${scenario.name}`);
+      log(`  file:     ${target}`);
+      if (scenario.fidelity) log(`  fidelity: ${scenario.fidelity}`);
+      log(`  cassette: ${cassettePath}`);
+      log(tokenLine);
+      log(agentLine);
+    }
     return process.exit(0);
   }
 
@@ -1807,12 +1930,19 @@ export async function cmdRecord(args: string[]) {
             maxArtifactBytes,
             skipRedactionPreflight: true,
           });
-        } else {
-          // No on-disk scenario found — fall back to the embedded snapshot (original behavior).
-          // The user should pass the scenario file directly (`record <scenario.yaml>`) to pick up edits.
+        } else if (!fromEmbedded) {
+          // No on-disk scenario resolved. Re-recording from the embedded snapshot silently DROPS any edits
+          // to the scenario YAML (the user believes stale cassettes were refreshed from edited YAML, but the
+          // old snapshot was replayed into a new cassette) — so this is a HARD FAILURE by default. Pass
+          // `--from-embedded` to intentionally re-record standalone cassettes from their embedded snapshot.
           log(
-            `  ⚠ ${tag} no on-disk scenario found for "${cassette.scenario.name}" — re-recording from embedded snapshot (edits to the scenario YAML won't apply; use \`record <scenario.yaml>\` to re-record from disk)`,
+            `  ✗ ${tag} no on-disk scenario found for "${cassette.scenario.name}" — refusing to re-record from the embedded snapshot (edits to the scenario YAML would be silently dropped). ` +
+              `Pass the scenario file directly (\`record <scenario.yaml>\`), or --from-embedded to re-record from the embedded snapshot on purpose.`,
           );
+          return false;
+        } else {
+          // --from-embedded: explicitly re-record from the embedded snapshot (edits to the YAML won't apply).
+          log(`  ⚠ ${tag} --from-embedded: re-recording "${cassette.scenario.name}" from the embedded snapshot (YAML edits won't apply)`);
           const sessionRef = cassette.scenario.session === "(inline)" ? "(inline)" : join(dirname(cp), cassette.scenario.session);
           r = await recordScenarioObject(
             { ...cassette.scenario, session: sessionRef },
@@ -1913,12 +2043,13 @@ export async function cmdRecord(args: string[]) {
     const r = await recordScenarioFile(target, {
       noRedact,
       allowFailing,
+      force,
       cassettePath,
       maxArtifactBytes,
       externalChannel: channel,
       ...liveDecider,
     });
-    if (asJson) out(JSON.stringify({ command: "record", result: r.result.result, artifacts: r.artifacts, cassette: r.cassettePath }));
+    if (asJson) out(jsonEnvelope("record", [r.result], { extra: { artifacts: r.artifacts, cassette: r.cassettePath } }));
     else log(`✓ recorded ${r.result.result} · ${r.artifacts} artifact(s) → ${r.cassettePath}`);
   } catch (e) {
     log(`record: ${recordErrorText(e)}`);
@@ -2138,6 +2269,14 @@ async function recordScenarioObject(
     authoring,
     timeline: timeline?.events,
     timelineHeader: timeline?.header,
+    // v9: session-shape fingerprint (Finding 23) — undefined for an inline/unresolvable session, exactly
+    // like `fingerprint`'s own skillHash-less case; `sessionFingerprintDrift` treats undefined as
+    // "not checked" (never a false mismatch).
+    sessionFingerprint: buildSessionFingerprint(scenario.session, undefined),
+    // v9: record-time connected-folder host-path -> mount-name map (Finding 24) — undefined when the
+    // zip against `recordRoots` doesn't line up (inline scenario, no folders, unreadable session);
+    // replay then treats this as a v9 cassette that unexpectedly lacks the map (Finding 25).
+    folderPrefixMap: buildRecordTimeFolderPrefixMap(scenario, recordRoots),
   };
   // (opt-in) content redaction over the whole surface. Empty policy → no-op. Non-empty → must be
   // VERDICT-PRESERVING: replay both and refuse to write on divergence (a manufactured green).
@@ -2149,6 +2288,24 @@ async function recordScenarioObject(
     const redacted = redactCassette(base, policy);
     await assertRedactionVerdictPreserved(base, redacted, dirname(cassettePath));
     cassette = redacted;
+  }
+  // Slug-collision guard (findings 19/20): a DEFAULT path is derived from `slugForPath(scenario.name)`, so
+  // two DIFFERENT scenario names that slugify identically would silently clobber the same cassette. Refuse to
+  // overwrite when the existing cassette on the default path was recorded for a DIFFERENT scenario name (a
+  // routine same-scenario re-record — or a moved scenario, same name — is unaffected). `--out`/`--force` opt out.
+  if (!opts.cassettePath && !opts.force && existsSync(cassettePath)) {
+    try {
+      const existing = JSON.parse(readFileSync(cassettePath, "utf8")) as { scenario?: { name?: string } };
+      const existingName = existing.scenario?.name;
+      if (existingName && existingName !== scenario.name)
+        throw new Error(
+          `refusing to overwrite ${cassettePath}: it belongs to scenario "${existingName}", but this record is "${scenario.name}" ` +
+            `(their names slugify to the same default path — pass --out <file> to disambiguate, or --force to overwrite).`,
+        );
+    } catch (e) {
+      if (e instanceof Error && e.message.startsWith("refusing to overwrite")) throw e;
+      /* an unreadable/malformed existing cassette is not a collision signal — let the write proceed */
+    }
   }
   writeFileAtomic(cassettePath, JSON.stringify(cassette, null, 2)); // atomic — no partial cassette on a mid-write crash
   return { result, cassettePath, artifacts: artifacts.length };
@@ -2181,6 +2338,8 @@ function replayErrorResult(file: string): RunResult {
     requiresCapabilityUnmet: undefined,
     toolCounts: undefined,
     webSearches: undefined,
+    infraErrors: undefined,
+    evidenceErrors: undefined,
     toolDurations: undefined,
     skillActivity: undefined,
     models: undefined,
@@ -2262,11 +2421,12 @@ function recordingShapingDrift(frozen: Scenario, onDisk: Scenario): string[] {
 /** Scenario-content drift for `verify-cassettes`: has the committed on-disk scenario's PROMPT diverged from
  *  the cassette's frozen copy? The fingerprint covers skill-dir content + baseline but NOT the scenario's own
  *  prompt, so an edited-but-not-re-recorded prompt silently diverges — invisible to `replay`/`verify-cassettes`
- *  and caught only by the opt-in `--assert-from`. Scoped to `prompt` only: baseline/skill drift are policed by
- *  the fingerprint/staleness path, and `answers` carries a documented default-churn false-positive risk
- *  (see recordingShapingDrift), so it stays out of the hard-fail bucket. A resolvable+drifted prompt is a
- *  DEFINITE divergence → hard fail; an unresolvable/unparseable source is "can't compare" → a non-failing
- *  note, never a false-red (many valid cassettes ship without a committed source). */
+ *  and caught only by the opt-in `--assert-from`. Now covers ALL recording-shaping fields (prompt, baseline,
+ *  fidelity, answers, skills, requires_capabilities — see recordingShapingDrift), each default-normalized so
+ *  a `[]`-vs-undefined churn can't false-positive. A resolvable+drifted field from an EXACTLY-recorded
+ *  (persisted) source is a DEFINITE divergence → hard fail; a name-resolved match, or an unresolvable/
+ *  unparseable source, is "can't compare" → a non-failing note, never a false-red (many valid cassettes ship
+ *  without a committed source). */
 export function scenarioContentDrift(
   cassette: Pick<Cassette, "scenarioSource" | "scenario">,
   cassetteFile: string,
@@ -2284,14 +2444,14 @@ export function scenarioContentDrift(
       // note. Mirror the default replay lane: a mid-edit/invalid on-disk YAML must NEVER abort verify-cassettes.
       return { verifiable: false, reason: `on-disk scenario ${src.path} did not parse (${(e as Error).message}) — prompt drift not checked` };
     }
-    const drifted = recordingShapingDrift(cassette.scenario as Scenario, onDisk).filter((f) => f === "prompt");
+    const drifted = recordingShapingDrift(cassette.scenario as Scenario, onDisk);
     // Only a PERSISTED (exactly-recorded) source is trustworthy enough to HARD-FAIL on. A name-lookup match
     // (the recorded scenarioSource is gone, or was never recorded) may be an unrelated same-named sibling —
     // downgrade any drift it finds to a non-failing note rather than red CI on a guess.
     if (drifted.length && src.via !== "persisted")
       return {
         verifiable: false,
-        reason: `on-disk ${src.path} (resolved by name, not a recorded source) has a different prompt — re-record or \`replay --assert-from\` to confirm`,
+        reason: `on-disk ${src.path} (resolved by name, not a recorded source) has drifted recording-shaping field(s) [${drifted.join(", ")}] — re-record or \`replay --assert-from\` to confirm`,
       };
     return { verifiable: true, drifted };
   } catch (e) {
@@ -2299,6 +2459,28 @@ export function scenarioContentDrift(
     // `_findScenarioOnDisk` would slug) degrades to "can't check" — NEVER aborts the verify-cassettes batch.
     return { verifiable: false, reason: `scenario-drift check skipped (${(e as Error).message})` };
   }
+}
+
+/** Session-shape drift (Finding 23) for `verify-cassettes` ONLY — deliberately NOT part of
+ *  `computeStaleness`/`checkStaleness`, so it can never change the default `replay` verdict (not even
+ *  under `--strict`/`--fail-on-skill-drift`; mirrors how prompt drift (`scenarioContentDrift`, above) is
+ *  its own bucket, not folded into the fingerprint-driven staleness checks). A pre-v9 cassette (no
+ *  `sessionFingerprint`) is NOT checked at all — backward-compat, never a false-red on an existing
+ *  committed cassette. When the cassette DOES carry one, it is compared against a fresh recompute from
+ *  the CURRENT session file; if the session can't be resolved (inline scenario, moved/deleted file,
+ *  unparsable YAML) the check can't run — "can't verify" is a non-failing note, never a mismatch. */
+export function sessionFingerprintDrift(
+  cassette: Pick<Cassette, "sessionFingerprint" | "scenario">,
+  cassetteDir: string | undefined,
+): { drifted: boolean; note?: string } {
+  if (cassette.sessionFingerprint === undefined) return { drifted: false }; // pre-v9 — not checked
+  const live = buildSessionFingerprint(cassette.scenario.session, cassetteDir);
+  if (live === undefined)
+    return {
+      drifted: false,
+      note: "session-fingerprint: could not resolve the current session file to recompute — cannot verify session-shape staleness",
+    };
+  return { drifted: live !== cassette.sessionFingerprint };
 }
 
 /** Assertion keys (and `expect_denied`) that are NOT evaluated on the replay lane in a given cassette's shape.
@@ -2374,7 +2556,7 @@ export async function cmdReplay(args: string[]) {
   try {
     p = parseArgs(args, {
       // --quiet/--verbose accepted for flag consistency but currently no-op in replay (renderer plan is fixed).
-      booleans: ["--strict", "--fail-on-skill-drift", "--reassert", "--quiet", "--verbose"],
+      booleans: ["--strict", "--fail-on-skill-drift", "--reassert", "--best-effort-future-cassette", "--quiet", "--verbose"],
       values: ["--output-format", "--assert-from"],
       enums: { "--output-format": ["text", "json"] },
       aliases: { "-q": "--quiet" },
@@ -2396,6 +2578,7 @@ export async function cmdReplay(args: string[]) {
   }
   const json = p.options["--output-format"] === "json";
   const strict = p.flags["--strict"] ?? false; // escalate ALL staleness findings to failures (release gate)
+  const bestEffortFutureCassette = p.flags["--best-effort-future-cassette"] ?? false; // opt into warn-and-replay for a future-version cassette
   // `--assert-from <file>` (explicit path) / `--reassert` (auto-resolve the sibling) opt INTO re-checking against
   // the on-disk `assert:`; mutually exclusive. On that path skill-content drift MUST hard-fail (else the frozen
   // events could green an edited assert against a skill that no longer produces them) — so OR in failOnSkillDrift.
@@ -2535,7 +2718,12 @@ export async function cmdReplay(args: string[]) {
           /* on-disk file is decoration on the default lane — a parse/read failure must not affect the run */
         }
       }
-      result = await replayCassette(cassette, renderer ? [renderer] : [], { strict, failOnSkillDrift, cassetteDir: dirname(f) });
+      result = await replayCassette(cassette, renderer ? [renderer] : [], {
+        strict,
+        failOnSkillDrift,
+        cassetteDir: dirname(f),
+        bestEffortFutureCassette,
+      });
     } catch (e) {
       log(`replay: ${f}: ${(e as Error)?.message ?? String(e)}`);
       results.push(replayErrorResult(f)); // turns the envelope's ok false (no false green)
@@ -2644,6 +2832,18 @@ export function cmdVerifyCassettes(args: string[]) {
     const stale = doStaleness ? computeStaleness(rc.cassette, dirname(f)) : { findings: [], notes: [] };
     const staleness = stale.findings.map((s) => s.message);
     const notes = [...stale.notes];
+    // Session-shape fingerprint drift (Finding 23): gated by the SAME --skip-staleness toggle (it's a
+    // staleness concept — session SHAPE, not skill content) but computed and hard-failed HERE ONLY, never
+    // through computeStaleness/checkStaleness — so it can never affect the default `replay` verdict. A
+    // pre-v9 cassette (no sessionFingerprint) is silently not checked; see sessionFingerprintDrift.
+    if (doStaleness) {
+      const sfd = sessionFingerprintDrift(rc.cassette, dirname(f));
+      if (sfd.drifted)
+        staleness.push(
+          "session-shape fingerprint differs from the current session file (connected folders/plugin/skill/mcp/egress config changed since record) — re-record",
+        );
+      if (sfd.note) notes.push(sfd.note);
+    }
     // Scenario-content (prompt) drift: the fingerprint doesn't cover the scenario's own prompt, so an
     // edited-but-not-re-recorded prompt would otherwise pass clean. A resolvable+drifted prompt is a hard
     // fail (its own bucket, so --skip-staleness can't mask it); an unresolvable/unparseable source is a
@@ -2652,8 +2852,10 @@ export function cmdVerifyCassettes(args: string[]) {
     if (doScenarioDrift) {
       const drift = scenarioContentDrift(rc.cassette, f);
       if (drift.verifiable) {
-        if (drift.drifted.includes("prompt"))
-          scenarioDrift.push("scenario prompt differs from the cassette's frozen prompt — the frozen events no longer correspond to this scenario; re-record or `replay --assert-from`");
+        if (drift.drifted.length)
+          scenarioDrift.push(
+            `scenario recording-shaping field(s) [${drift.drifted.join(", ")}] differ from the cassette's frozen copy — the frozen events no longer correspond to this scenario; re-record or \`replay --assert-from\``,
+          );
       } else if (drift.reason) {
         // Only when a resolvable source failed to parse — the common "no committed source" case is silent.
         notes.push(`scenario-drift: ${drift.reason}`);
@@ -2681,7 +2883,7 @@ export function cmdVerifyCassettes(args: string[]) {
   const ok = realFindings.length === 0 && !staleAny && !versionAny && !scenarioDriftAny && !errorAny;
   const coverage = { privacy: doPrivacy, staleness: doStaleness, scenarioDrift: doScenarioDrift };
   if (json) {
-    out(JSON.stringify({ command: "verify-cassettes", ok, coverage, results }));
+    out(jsonPayloadEnvelope("verify-cassettes", ok, { coverage, results }));
   } else {
     if (!doStaleness) log("⚠ cowork-harness: --skip-staleness: staleness check was skipped");
     if (!doPrivacy) log("⚠ cowork-harness: --skip-privacy: privacy scan was skipped");
@@ -2750,7 +2952,7 @@ export function cmdRehash(args: string[]): void {
     .map((f) => join(dir, f));
 
   if (files.length === 0) {
-    if (asJson) out(JSON.stringify({ command: "rehash", dryRun, migrated: 0, skipped: 0, errors: 0, results: [] }));
+    if (asJson) out(jsonPayloadEnvelope("rehash", true, { dryRun, migrated: 0, skipped: 0, errors: 0, results: [] }));
     else log("✓ rehash: nothing to migrate — no cassettes in directory");
     return process.exit(0);
   }
@@ -2862,7 +3064,7 @@ export function cmdRehash(args: string[]): void {
   const errors = results.filter((r) => r.action === "error").length;
 
   if (asJson) {
-    out(JSON.stringify({ command: "rehash", dryRun, migrated, skipped, errors, results }));
+    out(jsonPayloadEnvelope("rehash", errors === 0, { dryRun, migrated, skipped, errors, results }));
   } else {
     for (const r of results) {
       const glyph = r.action === "migrated" ? "✓" : r.action === "error" ? "✗" : "·";
@@ -2881,6 +3083,23 @@ export function cmdRehash(args: string[]): void {
   return process.exit(errors > 0 ? 1 : 0);
 }
 
+/** Record-time connected-folder host-path -> resolved-mount-name map (Finding 24), persisted onto a
+ *  v9+ cassette's `folderPrefixMap`. Zips `recordRoots` (minus the leading `outputs`) against
+ *  `scenario.session`'s `folders:` in file order — the SAME positional correspondence
+ *  `buildLaunchPlan` itself relies on (one mount per `session.folders` entry, in that array's order) —
+ *  but computed ONCE, right now, against the exact session state that produced `recordRoots`. That's
+ *  the whole point: unlike the legacy replay-time reconstruction (`loadCassetteSessionFolders` below,
+ *  still used for a pre-v9 cassette), this can never be fooled by a session file that changes AFTER
+ *  record but happens to keep the same folder count. Returns undefined when the lengths disagree (an
+ *  inline scenario, an unreadable/unparseable session, or a genuine mismatch) — a v9 cassette with no
+ *  persisted map is a signal replay must respect, not paper over (see `buildFolderPrefixMap` / Finding 25). */
+function buildRecordTimeFolderPrefixMap(scenario: Scenario, recordRoots: string[]): Array<{ from: string; mount: string }> | undefined {
+  const roots = recordRoots.filter((r) => r !== "outputs");
+  const folders = loadCassetteSessionFolders(scenario.session, undefined);
+  if (roots.length !== folders.length) return undefined;
+  return roots.map((mount, i) => ({ from: folders[i].from, mount }));
+}
+
 /**
  * Best-effort: recover the recorded scenario's connected-folder host paths (`session.folders[].from`)
  * for `computer_links_resolve`'s replay-lane host-shaped normalization. Mirrors
@@ -2888,6 +3107,10 @@ export function cmdRehash(args: string[]): void {
  * original directory — the re-record-clean colocation convention this repo already relies on for
  * staleness fingerprinting). Returns `[]` (never throws) when the session file can't be read — a
  * folder-shaped host link then correctly reports "no recorded prefix matched" instead of crashing replay.
+ *
+ * ONLY the legacy (pre-v9) replay path below calls this now — see `buildFolderPrefixMap`. A v9+
+ * cassette uses its persisted `folderPrefixMap` instead of re-deriving this from whatever the session
+ * file looks like AT REPLAY TIME.
  */
 function loadCassetteSessionFolders(sessionPath: string, cassetteDir?: string): { from: string }[] {
   if (sessionPath === "(inline)") return [];
@@ -2900,25 +3123,49 @@ function loadCassetteSessionFolders(sessionPath: string, cassetteDir?: string): 
   }
 }
 
+/** The result of resolving the replay-lane `folderPrefixes` map for `computer_links_resolve` (Finding
+ *  24/25). `map` is the host-path -> mount-name correspondence to normalize against; `requiredButAbsent`
+ *  is true ONLY for a v9+ cassette that (unexpectedly) has no persisted `folderPrefixMap` — the signal
+ *  that a host-shaped folder link must be treated as evidence-unavailable rather than silently falling
+ *  back to a current-session reconstruction (which is exactly the risky path v9 exists to close). */
+interface FolderPrefixResolution {
+  map: Map<string, string>;
+  requiredButAbsent: boolean;
+}
+
 /**
  * Build the replay-lane `folderPrefixes` map (recorded connected-folder host path -> its resolved
- * mount name) for `computer_links_resolve`. `userVisibleRoots` (persisted at record time, v4+) lists
- * `["outputs", ...folder mount names]` in the SAME order `buildLaunchPlan` pushes folder mounts — one
- * per `session.folders` entry, in that array's order (see `session.ts`'s mount-building loop). Zipping
- * the two positionally reproduces the host-path -> mount-name correspondence without re-deriving
- * `assignFolderMountNames` (which needs realpath-canonicalized paths that may not exist on THIS
- * machine at replay time). Only zips when the lengths agree — a legacy cassette without
- * `userVisibleRoots`, or one whose session file changed folder count since recording, yields an empty
- * map (host-shaped folder links then fall through to "no recorded prefix matched", never a wrong match).
+ * mount name) for `computer_links_resolve`.
+ *
+ * v9+ cassette: use the PERSISTED `folderPrefixMap` (built at record time by
+ * `buildRecordTimeFolderPrefixMap`) verbatim — never re-read the session file at replay time. Doing so
+ * is exactly the bug this persisted map exists to close: a session file that changed since record but
+ * still declares the same folder COUNT would otherwise zip cleanly into the WRONG host-path ->
+ * mount-name pairs, a silent misresolution. When a v9+ cassette unexpectedly carries no persisted map,
+ * return an empty map with `requiredButAbsent: true` — the caller must not fall back to reconstruction.
+ *
+ * Pre-v9 cassette: keep the legacy behavior — reconstruct from `userVisibleRoots` (persisted at record
+ * time, v4+; lists `["outputs", ...folder mount names]` in the SAME order `buildLaunchPlan` pushes
+ * folder mounts) zipped positionally against `loadCassetteSessionFolders`'s read of the CURRENT session
+ * file. Only zips when the lengths agree; a legacy cassette without `userVisibleRoots`, or one whose
+ * session file changed folder count since recording, yields an empty map (host-shaped folder links then
+ * fall through to "no recorded prefix matched", never a wrong match) — unchanged, `requiredButAbsent`
+ * never applies to a pre-v9 cassette.
  */
-function buildFolderPrefixMap(cassette: Cassette, cassetteDir?: string): Map<string, string> {
+function buildFolderPrefixMap(cassette: Cassette, cassetteDir?: string): FolderPrefixResolution {
+  const cassetteVersion = cassette.cassetteVersion ?? 0;
+  if (cassetteVersion >= 9) {
+    if (cassette.folderPrefixMap)
+      return { map: new Map(cassette.folderPrefixMap.map((e) => [e.from, e.mount])), requiredButAbsent: false };
+    return { map: new Map(), requiredButAbsent: true };
+  }
   const map = new Map<string, string>();
   const roots = (cassette.userVisibleRoots ?? []).filter((r) => r !== "outputs");
   const folders = loadCassetteSessionFolders(cassette.scenario.session, cassetteDir);
   if (roots.length === folders.length) {
     for (let i = 0; i < roots.length; i++) map.set(folders[i].from, roots[i]);
   }
-  return map;
+  return { map, requiredButAbsent: false };
 }
 
 /** Assertion keys ALWAYS evaluated on replay, independent of controlOut/manifest presence. Exported as the
@@ -2949,11 +3196,13 @@ export const ALWAYS_CONTENT_KEYS: (keyof Assertion)[] = [
   "max_tokens",
   "tool_calls_max",
   "tool_no_error",
+  "tool_no_error_if_called",
   "max_tool_errors",
   "max_redundant_tool_calls",
   "max_turns",
   "compaction_occurred",
   "all_tasks_completed",
+  "task_count_min",
   "task_status",
   "result",
   // content-class, NOT controlOut-gated: both the present_files tool_use and its own tool_result live
@@ -2991,6 +3240,7 @@ export const MANIFEST_KEYS: (keyof Assertion)[] = [
   "user_visible_artifact",
   "artifact_json",
   "computer_links_resolve",
+  "computer_links_resolve_if_present",
   "no_unexpected_files",
   "input_unmodified",
 ];
@@ -3019,23 +3269,19 @@ export const LIVE_ONLY_KEYS: (keyof Assertion)[] = [
 export async function replayCassette(
   cassette: Cassette,
   hooks: RunHooks[] = [],
-  opts: { strict?: boolean; failOnSkillDrift?: boolean; cassetteDir?: string } = {},
+  opts: { strict?: boolean; failOnSkillDrift?: boolean; cassetteDir?: string; bestEffortFutureCassette?: boolean } = {},
 ): Promise<RunResult> {
   // Cassette format version: ABSENT = legacy (0); a FUTURE version means this harness may misread fields
-  // it doesn't know about. in strict mode this is a hard failure (future semantics may not be
-  // correctly interpreted → a false-green is possible). In non-strict mode, warn clearly that results may
-  // be unreliable and continue (forward-compat best-effort).
+  // it doesn't know about, so a future-version cassette is a hard FAILURE BY DEFAULT (future semantics may
+  // not be interpreted correctly → a false-green is possible). Opt into a warn-and-continue with
+  // `--best-effort-future-cassette` for exploratory use (the failing assertion is pushed below).
   const cassetteVersion = cassette.cassetteVersion ?? 0;
   const futureVersionMsg =
     cassetteVersion > CASSETTE_VERSION
       ? `cassette format v${cassetteVersion} is newer than this harness understands (v${CASSETTE_VERSION}) — results may be unreliable; upgrade cowork-harness`
       : undefined;
-  if (futureVersionMsg) {
-    if (opts.strict) {
-      // fail fast via the staleness path — the assertions push is handled below with staleness[]
-    } else {
-      warn(`::warning:: [replay] ${futureVersionMsg}\n`);
-    }
+  if (futureVersionMsg && opts.bestEffortFutureCassette) {
+    warn(`::warning:: [replay] ${futureVersionMsg} (--best-effort-future-cassette: proceeding anyway)\n`);
   }
 
   const session = new CassetteAgentSession(cassette.events, cassette.controlOut);
@@ -3164,6 +3410,7 @@ export async function replayCassette(
       "user_visible_artifact",
       "artifact_json",
       "computer_links_resolve",
+      "computer_links_resolve_if_present",
       "no_unexpected_files",
       "input_unmodified",
       "egress_denied",
@@ -3191,6 +3438,9 @@ export async function replayCassette(
   } = manifestKeys.length
     ? materializeManifest(cassette.artifacts!, cassette.userVisibleRoots ?? ["outputs", ".projects"])
     : { workRoot: "", prefixes: [] as string[], truncatedPaths: new Map<string, ManifestEntry["truncationReason"]>() };
+  // computer_links_resolve's replay-lane folder-prefix resolution (Finding 24/25) — computed once,
+  // outside the try, since it doesn't depend on anything materializeManifest produced.
+  const folderPrefixResolution = buildFolderPrefixMap(cassette, opts.cassetteDir);
   // materializeManifest created a temp dir (`replayWorkRoot`) above; everything below uses it and
   // then returns. Wrap the rest in try/finally so the temp dir is removed on every exit path (normal
   // return OR a throw from evaluate/assert building) — otherwise `cwh-replay-*` dirs leak under tmpdir
@@ -3321,10 +3571,15 @@ export async function replayCassette(
       // empty [] (nothing presented) vacuous-passes no_scratchpad_leak instead of reading as
       // evidence-unavailable.
       presentedFiles: rec.presentedFiles,
+      evidenceErrors: rec.evidenceErrors,
       effectiveFidelity: cassette.effectiveFidelity,
       // Replay has no live filesystem — computer_links_resolve normalizes both link shapes against the
       // manifest instead (see the manifestKeys comment above + src/run/computer-links.ts).
-      linkResolution: { mode: "replay", folderPrefixes: buildFolderPrefixMap(cassette, opts.cassetteDir) },
+      linkResolution: {
+        mode: "replay",
+        folderPrefixes: folderPrefixResolution.map,
+        folderPrefixesRequiredButAbsent: folderPrefixResolution.requiredButAbsent,
+      },
       ...budgetFields(rec),
     });
 
@@ -3342,8 +3597,12 @@ export async function replayCassette(
 
     // future cassette version — hard failure under --strict (forward semantics may not be
     // correctly interpreted here, so a green replay would be a false-green).
-    if (futureVersionMsg && opts.strict)
-      assertions.push({ assertion: {} as Assertion, pass: false, message: `cassette format too new (--strict): ${futureVersionMsg}` });
+    if (futureVersionMsg && !opts.bestEffortFutureCassette)
+      assertions.push({
+        assertion: {} as Assertion,
+        pass: false,
+        message: `cassette format too new: ${futureVersionMsg} (pass --best-effort-future-cassette to attempt replay anyway)`,
+      });
 
     // differing duplicate request_ids in control-out are CONTRADICTORY protocol data — an
     // UNCONDITIONAL cassette-corruption failure (no longer strict-only). --strict stays reserved for
@@ -3433,6 +3692,8 @@ export async function replayCassette(
       decisions: rec.decisions.map((d) => ({ kind: d.kind, name: d.name, decision: d.decision, by: d.by, model: d.model, detail: d.detail, rationale: d.rationale, questions: d.questions })),
       toolCounts: rec.toolCounts,
       webSearches: rec.webSearches.length ? rec.webSearches : undefined,
+      infraErrors: infraErrorsForResult(rec),
+      evidenceErrors: evidenceErrorsForResult(rec),
       toolDurations: cassette.timeline ? foldToolDurations(cassette.timeline) : undefined,
       skillActivity: cassette.timeline ? foldSkillActivity(cassette.timeline) : undefined,
       models: rec.models.length ? rec.models : undefined,

@@ -12,6 +12,22 @@ import { gitModeEnabled, gitFilterFromSet, gitStageStats } from "./run/skill-fil
 import { BoundaryError } from "./errors.js";
 import type { PluginSkillRoot } from "./run/skill-metadata.js";
 
+/** Expand a leading `~` the way a shell would for THE CURRENT user only, then resolve whatever's left
+ *  against `base`. `~` and `~/x` become `homedir()` / `join(homedir(), "x")`; a bare absolute path is
+ *  returned untouched; anything else is `resolve(base ?? process.cwd(), p)`. A path that starts with
+ *  `~<user>` (someone ELSE's home directory) is not expandable without a passwd lookup this project
+ *  doesn't do — throw instead of silently passing it through as a literal relative path (that literal
+ *  would resolve under `${cwd}/~<user>/...`, a confusing folder easy to miss and easy to mistake for the
+ *  real target). This is the single place path expansion lives — `src/session.ts` and
+ *  `src/run/run-status.ts` both call it; `src/cli.ts`'s `--run-dir` handling should too (see cli.ts). */
+export function expandUserPath(p: string, base?: string): string {
+  if (p === "~") return homedir();
+  if (p.startsWith("~/")) return join(homedir(), p.slice(2));
+  if (p.startsWith("~")) throw new Error(`expandUserPath: "${p}" expands another user's home directory (~<user>), which is not supported`);
+  if (isAbsolute(p)) return p;
+  return resolve(base ?? process.cwd(), p);
+}
+
 /** Clone process env with Cowork's bg-env-strip applied. */
 function strippedEnv(baseline: PlatformBaseline): NodeJS.ProcessEnv {
   const env = { ...process.env };
@@ -251,6 +267,9 @@ export function buildLaunchPlan(
   // its resume flag here (set after the plan is built today, so it must be a param, not `plan.resume`).
   resume = false,
 ): LaunchPlan {
+  // Launch-time `~` expansion ONLY — leaves relative/absolute paths untouched so downstream mount-name
+  // derivation still sees the authored basename (e.g. a trailing `..` must stay `..` to be rejected).
+  // (Distinct from expandUserPath, which also resolves relative paths against cwd — wrong here.)
   const expand = (p: string) => p.replace(/^~(?=$|\/)/, homedir());
 
   // A plugin/skill source in a git work tree delivers only its git-TRACKED files (the fidelity
@@ -308,7 +327,7 @@ export function buildLaunchPlan(
       }),
     );
   if (session.mcp.enabled.length) settings.enabledMcpjsonServers = session.mcp.enabled;
-  settings.localAgentModeTrustedFolders = session.trusted_folders.map(expand);
+  settings.localAgentModeTrustedFolders = session.trusted_folders.map((p) => expand(p));
   settings.autoMountFolders = session.auto_mount_folders;
   const settingsJson = JSON.stringify(settings, null, 2);
   writeFileSync(join(configDir, "settings.json"), settingsJson);
@@ -714,12 +733,18 @@ export function applySessionOverrides(
 /**
  * Resolve a session's relative host paths against `baseDir` (the session file's own
  * directory), so a scenario+session bundle is relocatable and `run` behaves the same
- * from any working directory. `~` and already-absolute paths pass through untouched.
- * Applied only when a session is loaded from a FILE (the `run`/`record` path); paths
- * supplied as CLI args (`skill --upload/--folder`) stay relative to the user's cwd.
+ * from any working directory. `~` and `~/x` pass through as literals (buildLaunchPlan
+ * expands them at launch time, and a config_dir may be VM-relative), already-absolute
+ * paths pass through untouched, and a `~<user>` path now THROWS instead of surviving as an
+ * unexpanded literal (the finding this closes). Applied only when a session is loaded from a
+ * FILE (the `run`/`record` path); CLI-arg paths (`skill --upload/--folder`) stay cwd-relative.
  */
 export function resolveSessionPaths(session: SessionConfig, baseDir: string): SessionConfig {
-  const r = (p: string) => (p.startsWith("~") || isAbsolute(p) ? p : resolve(baseDir, p));
+  const r = (p: string) => {
+    if (p === "~" || p.startsWith("~/")) return p; // literal ~ pass-through — expanded later by buildLaunchPlan
+    if (p.startsWith("~")) throw new Error(`resolveSessionPaths: "${p}" is a ~<user> home path, which is not supported`);
+    return isAbsolute(p) ? p : resolve(baseDir, p);
+  };
   // `plugins.marketplaces` is mostly git URLs (left untouched); only a relative LOCAL path is resolved.
   const isUrl = (p: string) => /^[a-z][a-z0-9+.-]*:\/\//i.test(p) || p.startsWith("git@");
   return {

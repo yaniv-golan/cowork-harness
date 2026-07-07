@@ -127,11 +127,30 @@ export function makeCoworkHandler(opts: {
   sessionRootVm: string; // "/sessions/<id>"
   sessionHostDir: string; // host path bind-mounted at sessionRootVm
   outputsHostDir: string; // host path of mnt/outputs
+  /** Connected-folder mount paths (relative to mnt/, e.g. "my-src" or ".projects/my-src") — the
+   *  session's `folder`-kind mounts. Real Cowork accepts a presented mnt path under one of these too. */
+  folderMounts?: string[];
   onPresent?: (p: PresentedFile) => void;
 }): McpHandler {
-  const { sessionRootVm, sessionHostDir, outputsHostDir, onPresent } = opts;
+  const { sessionRootVm, sessionHostDir, outputsHostDir, folderMounts = [], onPresent } = opts;
   const isScratchpadVMPath = (vm: string) => vm.startsWith(`${sessionRootVm}/`) && !vm.startsWith(`${sessionRootVm}/mnt/`);
-  const isMountVMPath = (vm: string) => vm.startsWith(`${sessionRootVm}/mnt/`);
+
+  // A path under mnt/ is presentable only if it lands under an actual mount (binary-verified against real
+  // Cowork's sandbox handler): one of the fixed roots below, OR a connected folder's mount path. Any other
+  // mnt/<X> — and a `.`/`..`/empty first segment — falls through to the "not accessible" rejection. No
+  // existence/extension check here (those apply ONLY to scratchpad promotion, matching Cowork's ECe).
+  const MOUNT_ROOT_ALLOWLIST = new Set(["outputs", "uploads", ".host-home", ".auto-memory"]);
+  const isMountVMPath = (vm: string): boolean => {
+    const prefix = `${sessionRootVm}/mnt/`;
+    if (!vm.startsWith(prefix)) return false;
+    const rel = vm.slice(prefix.length);
+    const firstSegment = rel.split("/", 1)[0];
+    if (firstSegment === "" || firstSegment === "." || firstSegment === "..") return false;
+    if (MOUNT_ROOT_ALLOWLIST.has(firstSegment)) return true;
+    // A connected folder mounts at mnt/<mountPath> (mountPath may itself be multi-segment, e.g.
+    // ".projects/<name>") — accept a path AT or under it.
+    return folderMounts.some((mp) => rel === mp || rel.startsWith(`${mp}/`));
+  };
 
   const tools = [
     {
@@ -171,7 +190,14 @@ export function makeCoworkHandler(opts: {
     if (method === "tools/call") {
       const name = jr.params?.name;
       if (name !== "present_files") return { error: { code: -32602, message: `unknown tool: ${name}` } };
-      const files: { file_path: string }[] = jr.params?.arguments?.files ?? [];
+      const filesArg = jr.params?.arguments?.files ?? [];
+
+      // A non-array `files` (string, object, ...) must not reach `.some`/iteration below, which
+      // would throw a TypeError instead of failing gracefully back to the agent.
+      if (!Array.isArray(filesArg)) {
+        return { error: { code: -32602, message: "present_files: files must be an array" } };
+      }
+      const files: { file_path: string }[] = filesArg;
 
       // Every entry must carry a non-empty string file_path before any path logic runs below — otherwise
       // a missing/wrong-typed field reaches `.startsWith` further down and throws instead of failing

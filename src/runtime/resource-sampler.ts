@@ -20,14 +20,17 @@ export interface ResourceSummary {
   peakRssBytes?: number;
   avgCpuPct?: number;
   peakCpuPct?: number;
+  malformedLines: number;
 }
 
-/** COWORK_HARNESS_RESOURCE_INTERVAL_MS (positive int) else 1000. */
+/** COWORK_HARNESS_RESOURCE_INTERVAL_MS (positive int) else 1000. A set-but-invalid value (non-integer,
+ *  non-positive) warns and falls back to the default rather than silently sampling on the wrong cadence. */
 export function resolveIntervalMs(): number {
   const raw = process.env.COWORK_HARNESS_RESOURCE_INTERVAL_MS;
   if (raw !== undefined) {
     const n = Number(raw);
     if (Number.isInteger(n) && n > 0) return n;
+    warn(`::warning:: [resources] COWORK_HARNESS_RESOURCE_INTERVAL_MS=${raw} must be a positive integer; using default 1000ms\n`);
   }
   return 1000;
 }
@@ -56,6 +59,7 @@ export class ResourceSampler {
   }
   start(): void {
     if (this.timer) return;
+    void this.tick(); // sample immediately so a run shorter than one interval still records a sample
     this.timer = setInterval(() => void this.tick(), this.intervalMs);
     this.timer.unref?.(); // never keep the process alive past teardown
   }
@@ -83,7 +87,7 @@ export class ResourceSampler {
 /** Aggregate `resources.jsonl` into a summary. Returns `undefined` when the file is missing/empty (the
  *  tier never sampled — protocol/replay, a run shorter than one interval, or a tier whose probe tool was
  *  unavailable), so a downstream assertion reads evidence-unavailable rather than a vacuous pass.
- *  Malformed lines are skipped. */
+ *  Malformed lines are skipped but counted in `malformedLines`. */
 export function foldResources(outDir: string, tier: string, intervalMs: number): ResourceSummary | undefined {
   let text: string;
   try {
@@ -92,11 +96,13 @@ export function foldResources(outDir: string, tier: string, intervalMs: number):
     return undefined;
   }
   const samples: ResourceSample[] = [];
+  let malformedLines = 0;
   for (const line of text.split("\n")) {
     if (!line.trim()) continue;
     try {
       samples.push(JSON.parse(line));
     } catch {
+      malformedLines++;
       continue;
     }
   }
@@ -110,6 +116,7 @@ export function foldResources(outDir: string, tier: string, intervalMs: number):
     tier,
     sampleCount: samples.length,
     intervalMs,
+    malformedLines,
     peakRssBytes: peak((s) => s.rssBytes),
     peakCpuPct: peak((s) => s.cpuPct),
     avgCpuPct: cpuVals.length ? cpuVals.reduce((a, b) => a + b, 0) / cpuVals.length : undefined,
