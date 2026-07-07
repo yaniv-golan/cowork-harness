@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, writeSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "../cli-args.js";
@@ -7,9 +7,11 @@ import { resolveAgentBinary, resolveHostAgentBinary, loadBaseline, sha256File } 
 import { limaPath, vmStatus, instanceName } from "../runtime/lima.js";
 import { pkgVersion, fail, isJsonOutput } from "./envelope.js";
 
-// Synchronous fd writes (match cli.ts): machine→stdout, human→stderr.
-const out = (s: string) => process.stdout.write(s + "\n");
-const log = (s: string) => process.stderr.write(s + "\n");
+// Synchronous fd writes (match cli.ts): machine→stdout, human→stderr. A `process.stdout.write` +
+// `process.exit()` pair truncates on a PIPE (async tail dropped at exit past the ~64KB buffer); writeSync
+// blocks until drained.
+const out = (s: string) => writeSync(1, s + "\n");
+const log = (s: string) => writeSync(2, s + "\n");
 
 type Tier = "protocol" | "container" | "microvm" | "hostloop" | "cowork";
 const LIVE_TIERS: Tier[] = ["container", "microvm", "hostloop", "cowork"];
