@@ -480,6 +480,33 @@ corresponds to the scenario, this path is safe by construction:
 
 See [docs/cassette.md](./cassette.md) for the mental model, file shape, and the O7 `replay_protocol_fidelity` guard.
 
+#### How an assertion edit reaches CI
+
+`--assert-from`/`--reassert` **validate** an edit; they do not **persist** it. Because a plain `replay` (what
+CI runs by default) reads the block **frozen in the cassette**, a validated on-disk edit does **not** reach CI
+until it is written back into the cassette — this is the load-bearing step consumers miss. Two ways to embed it:
+
+- **Re-record** (`cowork-harness record`) — a live agent run, **paid**. Required when the recording *itself*
+  must change: a new `prompt`, a new/edited skill, or a new assertion that needs telemetry the old cassette
+  lacks (e.g. `input_unmodified` needs pre-run hashes). This also re-freezes the assert block as a side effect.
+- **`cowork-harness replay <cassette> --reassert --write`** — **free**, when **only** the `assert:` block
+  changed. It re-runs the token-free re-check above and, on a pass, persists the re-validated block back into
+  the cassette; `events`/`controlOut` stay byte-identical. It **refuses** any key that would silently skip on
+  that cassette (needs an artifact manifest, pre-run hashes, or `controlOut`) and — without `--allow-failing` —
+  refuses a failing verdict, so `--write` can't bake in a green that plain `replay` won't reproduce.
+
+Compact flow:
+
+```
+scenario edit
+  → replay --assert-from (validate, free)
+  → plain replay reads the FROZEN block (unchanged until you embed)
+  → embed via  record (paid, recording changed)  OR  replay --reassert --write (free, assert-only)
+```
+
+For the exact flags see `cowork-harness replay --help`; the frozen-vs-on-disk sourcing rules are the
+subsection above, and the live-run authoring loop is [`verify-run`](#re-checking-assertions-without-a-re-record-verify-run).
+
 #### Mixed assertions on the replay lane
 
 A multi-key assertion is an **AND** (every key must pass). That has a consequence on `replay`, where the
