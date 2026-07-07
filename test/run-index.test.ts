@@ -68,6 +68,11 @@ describe("indexRowFromResult — pure derivation from a RunResult", () => {
     expect(partialRow.partial).toBe(true);
   });
 
+  it("indexRowFromResult accepts a chat command", () => {
+    const row = indexRowFromResult(rr({ mode: "chat" }), { command: "chat", partial: false });
+    expect(row.command).toBe("chat");
+  });
+
   it("derives the scenario slug from outDir's parent-of-runId segment (matches the physical layout)", () => {
     const row = indexRowFromResult(rr({ outDir: "/home/x/.cowork-harness/runs/my-scenario/local_12345" }), {
       command: "run",
@@ -85,6 +90,26 @@ describe("indexRowFromResult — pure derivation from a RunResult", () => {
     expect(row.nonDeterministic).toBe(true);
     expect(row.effectiveFidelity).toBe("microvm");
     expect(row.durationMs).toBe(4200);
+  });
+
+  it("derives cacheReadTokens/modelCostUsd from modelUsage (summed across all models)", () => {
+    const row = indexRowFromResult(
+      rr({
+        modelUsage: {
+          "claude-opus-4-8": { cacheReadInputTokens: 1000, costUSD: 0.5 },
+          "claude-haiku-4-5": { cacheReadInputTokens: 200, costUSD: 0.1 },
+        },
+      }),
+      { command: "run", partial: false },
+    );
+    expect(row.cacheReadTokens).toBe(1200);
+    expect(row.modelCostUsd).toBeCloseTo(0.6);
+  });
+
+  it("leaves cacheReadTokens/modelCostUsd undefined when modelUsage is absent", () => {
+    const row = indexRowFromResult(rr({ modelUsage: undefined }), { command: "run", partial: false });
+    expect(row.cacheReadTokens).toBeUndefined();
+    expect(row.modelCostUsd).toBeUndefined();
   });
 });
 
@@ -195,6 +220,14 @@ describe("buildStats — per-scenario aggregation", () => {
     expect(a.p50CostUsd).toBeUndefined();
     expect(a.p50Tokens).toBeUndefined();
     expect(a.p50Turns).toBeUndefined();
+  });
+
+  it("computes p50/p95 cache-read-tokens and model-cost too (the --metric cache-tokens|model-cost targets)", () => {
+    const rows = [1, 2, 3, 4, 5].map((n) => row({ scenario: "a", cacheReadTokens: n * 100, modelCostUsd: n * 0.1 }));
+    const stats = buildStats(rows, {});
+    const a = stats.find((s) => s.scenario === "a")!;
+    expect(a.p50CacheReadTokens).toBe(300);
+    expect(a.p50ModelCostUsd).toBeCloseTo(0.3);
   });
 
   it("filters by scenario, since, baseline, and branch", () => {

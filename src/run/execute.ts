@@ -15,8 +15,16 @@ import { writeRunningStatus, startStatusTicker, registerRunForCrashSafety, statu
 // ESM live-binding cycle is safe. buildFingerprint's deps (skillSourceDirs → parseSessionFile) live here, so
 // the cycle is intrinsic — kept runtime-only rather than refactored.
 import { buildFingerprint } from "./cassette.js";
+import { assembleRunResult } from "./assemble-run-result.js";
 import { loadBaseline } from "../baseline.js";
-import { loadSession, resolveSessionPaths, buildLaunchPlan, userVisibleRootsFromPlan, readonlyFolderRootsFromPlan } from "../session.js";
+import {
+  loadSession,
+  resolveSessionPaths,
+  buildLaunchPlan,
+  userVisibleRootsFromPlan,
+  readonlyFolderRootsFromPlan,
+  pluginSkillRootsFromPlan,
+} from "../session.js";
 import { spawnProtocol } from "../runtime/protocol.js";
 import { spawnContainer } from "../runtime/container.js";
 import { spawnHostLoop } from "../runtime/hostloop.js";
@@ -32,26 +40,30 @@ import {
   CAPABILITY_FAMILIES,
 } from "../runtime/image-capabilities.js";
 import { instanceName } from "../runtime/lima.js";
+import { ResourceSampler, makeSampleOnce, foldResources, resolveIntervalMs } from "../runtime/resource-sampler.js";
 import { decideLoopFromBaseline, readGateFlag } from "../loop-decision.js";
 import type { WebFetchProvenance } from "../hostloop/workspace-handler.js";
 import { startEgressSidecar, registerCleanup, type EgressSidecar } from "../egress/sidecar.js";
 import { startEgressProxy } from "../egress/proxy.js";
-import { evaluate, hostMatches, budgetFields } from "../assert.js";
+import { evaluate, hostMatches, budgetFields, type AssertContext } from "../assert.js";
 import { compileUserRegex } from "../regex.js";
 import { renderPrompts } from "../prompt.js";
 import { makeDisplayTranslator, vmPathContextFromPlan } from "./display-translate.js";
 import { writeVmPathContextFile } from "./vm-path-ctx-file.js";
 import { LiveAgentSession, type SdkMcp, type HookBundle } from "../agent/session.js";
+import { readTimeline } from "../agent/timeline.js";
+import { foldToolDurations, foldSkillActivity, attributeSubagentSkills } from "./timeline-fold.js";
 import { buildDecider, ExternalDecider, LlmDecider, type Decider, type OnUnanswered, UnansweredError } from "../decide/decider.js";
 import { type DecisionChannel } from "../decide/external-channel.js";
 import { claudeCliComplete } from "../decide/llm-transport.js";
-import { Run, type RunRecord, type RunHooks } from "./run.js";
+import { Run, infraErrorsForResult, evidenceErrorsForResult, type RunRecord, type RunHooks } from "./run.js";
 import { runsWriteRoot } from "./trace-view.js";
 import { summarizeGateProvenance } from "./gate-provenance.js";
 import { collectSecrets, scrub } from "../secrets.js";
 import { indexRowFromResult, appendIndexRow } from "./run-index.js";
-import { collectArtifacts } from "./artifacts.js";
-import { readPreRunManifest } from "./pre-run-manifest.js";
+import { classifyWorkspaceFiles, collectArtifacts } from "./artifacts.js";
+import { readPreRunManifest, readPreRunManifestHashes } from "./pre-run-manifest.js";
+import { resolveAvailableSkills, type PluginSkillRoot } from "./skill-metadata.js";
 
 // Moved to ./artifacts.ts so assert.ts can use it without an assert→execute import cycle;
 // re-exported here for the existing importers (cassette.ts, tests).
@@ -81,7 +93,7 @@ export interface ExecuteOptions {
   /** mark the run non-deterministic even if no `by:"llm"` decision (e.g. a driving agent answers via `--decider-dir`). */
   nonDeterministicHint?: boolean;
   hooks?: RunHooks[];
-  /** E4: tags the run-index row this execution writes. Default "run" — the `run`/`skill` CLI commands pass
+  /** Tags the run-index row this execution writes. Default "run" — the `run`/`skill` CLI commands pass
    *  their own command name through; `record`'s live execution (cassette.ts) passes "record" explicitly so
    *  a recording session isn't misread as a `run` invocation in `stats`. */
   command?: "run" | "skill" | "record";
@@ -331,17 +343,23 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     plan.resume = !!opts.resume;
   }
   // Pre-run baseline capture: only when something will consume it — the scenario asserts
-  // no_unexpected_files, or this is a recording (cassettes always carry the baseline so a later
-  // assert-add stays replayable without re-record). Skipping keeps the pre-spawn walk (potentially a
-  // large live connected folder on hostloop) off runs that never look at it; absence stays loud.
-  plan.capturePreRun = scenario.assert.some((a) => a.no_unexpected_files !== undefined) || opts.command === "record";
+  // no_unexpected_files, input_unmodified, or no_delete_in_outputs (the filesystem pre/post outputs
+  // diff below needs this SAME baseline to catch a delete that never shows up as a Bash/mcp__workspace__bash
+  // command in events.jsonl — a script file, a renamed binary, a non-bash tool), or this is a recording
+  // (cassettes always carry the baseline so a later assert-add stays replayable without re-record).
+  // Skipping keeps the pre-spawn walk (potentially a large live connected folder on hostloop) off runs
+  // that never look at it; absence stays loud.
+  plan.capturePreRun =
+    scenario.assert.some(
+      (a) => a.no_unexpected_files !== undefined || a.input_unmodified !== undefined || a.no_delete_in_outputs !== undefined,
+    ) || opts.command === "record";
 
   // Fill in the caller's display-translate ref (see ExecuteOptions.translateRef) now that plan +
   // effectiveFidelity exist — well before the child spawns, so the renderer never sees a stale identity
   // translator once events start flowing. The translator itself gates on effectiveFidelity/shareable, so
   // this always resolves ctx unconditionally (harmless at non-hostloop tiers — the closure no-ops there).
   //
-  // Item 2 (mounts.json — see vm-path-ctx-file.ts's header): persist this SAME ctx to <outDir>/mounts.json,
+  // mounts.json (see vm-path-ctx-file.ts's header): persist this SAME ctx to <outDir>/mounts.json,
   // unconditionally and for EVERY tier/lane (not gated on opts.translateRef — `record` calls executeScenario
   // directly with no translateRef, and still needs a ctx file for a later `trace --translate-paths`/replay
   // reader). Reusing this one `vmPathContextFromPlan(...)` call (rather than a second, independent one)
@@ -413,6 +431,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   let egress: RunResult["egress"] = [];
   let sidecar: EgressSidecar | undefined;
   let hostProxy: ReturnType<typeof startEgressProxy> | undefined;
+  let resourceSampler: ResourceSampler | undefined;
   let microvmProxyPort: number | undefined;
   let record: RunRecord;
   let unansweredErr: UnansweredError | undefined; // set when a gate whiffs — drives the salvage branch below
@@ -442,6 +461,12 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     (effectiveFidelity === "container" || effectiveFidelity === "hostloop" || effectiveFidelity === "microvm") &&
     process.env.COWORK_SKIP_CAPABILITY_PROBE !== "1"
   ) {
+    // microvm: `probeMicrovmOmitted` returns null (not an omitted-set) whenever the guest isn't
+    // already `Running` (cold run — nothing to `limactl shell` into yet). `capabilityPreflightDecision`
+    // treats a null probe as "indefinite" and always no-ops (`abort: false, message: null`) — so a
+    // declared-capability skill on a not-yet-running microvm silently SKIPS this pre-flight rather than
+    // false-failing; the post-run probe (after the guest is up) is what actually gates that tier.
+    // Pinned in test/capability-microvm.test.ts.
     const omitted =
       effectiveFidelity === "microvm"
         ? probeMicrovmOmitted(instanceName(baseline))
@@ -552,6 +577,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       });
       child = ct.child;
       containerName = ct.containerName; // so the Ctrl-C / finally reap removes the agent container by name
+      sdkMcp = ct.sdkMcp; // serves cowork/present_files — container has no other sdk-MCP server today
     } else if (effectiveFidelity === "microvm") {
       child = spawnMicroVm(scenario, baseline, plan, outDir, sessionId, {
         systemPromptAppend: prompts.systemPromptAppend,
@@ -570,6 +596,21 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         );
     }
 
+    if (effectiveFidelity === "container" || effectiveFidelity === "hostloop" || effectiveFidelity === "microvm") {
+      // Sample the agent sandbox on an interval. Async probes only (shares the agent's event loop).
+      // hostloop samples the native agent process (child.pid); container samples the container by name;
+      // microvm reads /proc via limactl. A missing id / unavailable tool yields no samples (resources → undefined).
+      const sampleOnce = makeSampleOnce({
+        tier: effectiveFidelity,
+        runner,
+        containerName: effectiveFidelity === "container" ? containerName : undefined,
+        pid: effectiveFidelity === "hostloop" ? (child as { pid?: number } | undefined)?.pid : undefined,
+        instance: effectiveFidelity === "microvm" ? instanceName(baseline) : undefined,
+      });
+      resourceSampler = new ResourceSampler(outDir, effectiveFidelity, sampleOnce, resolveIntervalMs());
+      resourceSampler.start();
+    }
+
     const sessionT = new LiveAgentSession(child as any, outDir);
     // Terminal decider: an explicit external channel, else the LLM decider when `agent` is selected.
     const llmTerminal =
@@ -577,7 +618,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     const externalTerminal = opts.externalChannel ? new ExternalDecider(opts.externalChannel, secrets) : llmTerminal;
     const decider =
       opts.decider ?? buildDecider({ rules: scenario.answers, parity: plan.permissionParity, onUnanswered, external: externalTerminal });
-    const run = new Run(sessionT, decider, opts.hooks ?? [], sessionId, dialogTimeoutMs ?? undefined);
+    const run = new Run(sessionT, decider, opts.hooks ?? [], sessionId, dialogTimeoutMs ?? undefined, scenario.timeout_ms);
     run.seedApprovedDomains(session.web_fetch.approved_domains); // test convenience: pre-approved web_fetch hosts
     // fill the provenance bundle (backed by Run's tracker + recorded approval) BEFORE drive().
     // Host-loop only, and only when the web_fetch-via-API gate is on; otherwise the handler stays
@@ -611,6 +652,9 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       stopStatusTicker();
     }
   } finally {
+    // Stop sampling FIRST — before the container/process teardown below — so a final in-flight probe
+    // can't race (and fail against) a container that's already being removed.
+    resourceSampler?.stop();
     // Reap the agent container FIRST (before the sidecar networks), so a crashed/unanswered run can't
     // orphan a running container holding the network. On the success path the child has already
     // exited (--rm), so these are no-ops.
@@ -629,6 +673,11 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     if (hostEgress?.length) egress = [...egress, ...hostEgress];
     hostProxy?.close();
   }
+
+  // A post-listen egress-sidecar crash (container topology) surfaces as `fatalError` after teardown —
+  // fold it into infraErrors so computeVerdict hard-fails the run (evidence contaminated). The live
+  // in-VM/hostloop sidecar surfaces its own crash as an `infra_error` event already collected above.
+  if (sidecar?.fatalError) record.infraErrors.push({ source: "egress-sidecar", message: sidecar.fatalError });
 
   // snapshot the gate rendezvous wire shapes (req/resp/.done) into the run dir BEFORE the caller
   // closes (and wipes) the channel — the forensic evidence you want after a gate bug survives --keep.
@@ -681,12 +730,25 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // recorder strips their captured BODIES (fidelity/no-bloat) and `RunResult.artifacts` excludes them
   // outright (an input is not a `file_exists` target). Does NOT change `userVisibleRoots` above.
   const readonlyFolderRoots = readonlyFolderRootsFromPlan(plan);
-  // artifacts (the ENV-MANIFEST) excludes read-only inputs — a deliverable is something the agent wrote,
-  // not a pre-existing input it only read.
-  const captureRoots = userVisibleRoots.filter((r) => !readonlyFolderRoots.includes(r));
   // Read the pre-run baseline ONCE: the evaluate ctx and the persisted RunResult must see the same
   // value — two reads could disagree if the file were touched mid-run.
   const preRunPaths = readPreRunManifest(outDir);
+  const preRunHashes = readPreRunManifestHashes(outDir);
+
+  // Filesystem pre/post diff of outputs/ — a backstop for `no_delete_in_outputs` INDEPENDENT of
+  // scanEvents' regex (which only inspects Bash/mcp__workspace__bash tool_use commands and so misses a
+  // delete via a script file, a renamed binary, or any non-bash tool). If the pre-run baseline captured
+  // outputs (it always does when captured at all — see pre-run-manifest.ts), any path recorded there
+  // under outputs/ that is no longer present in the post-run walk is a real deletion regardless of HOW
+  // it happened. Fed into the SAME `scan.outputsDeletes` array the regex populates — one signal, two
+  // detectors — so `no_delete_in_outputs` (src/assert.ts) needs no changes to see it. Skipped when there
+  // is no baseline (preRunPaths undefined — the scenario asserted neither key that triggers capture, or a
+  // tier that can't capture); the regex backstop still runs in that case, same as before this change.
+  if (preRunPaths) {
+    const preOutputs = new Set(preRunPaths.filter((p) => p === "outputs" || p.startsWith("outputs/")));
+    const postOutputs = new Set(collectArtifacts(workRoot, ["outputs"]).map((f) => f.path));
+    for (const p of preOutputs) if (!postOutputs.has(p)) scan.outputsDeletes.push(`[fs-diff] output file removed post-run: ${p}`);
+  }
 
   // Salvage path: the run exited on an unanswered gate. Persist a PARTIAL result.json (+ run.jsonl/trace) so
   // the artifacts the agent wrote before the whiff survive for inspection, then re-throw so the CLI still
@@ -701,6 +763,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       record,
       outDir,
       workRoot,
+      configDir: plan.configDir,
+      pluginSkillRoots: pluginSkillRootsFromPlan(plan),
       userVisibleRoots,
       readonlyFolderRoots,
       effectiveFidelity,
@@ -708,6 +772,9 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       durationMs: Date.now() - startedAt,
       unanswered: { message: unansweredErr.message, hint: unansweredErr.hint },
       fingerprint: buildFingerprint(scenario.session, baseline.appVersion, undefined, scenario.skills),
+      onUnanswered,
+      nonDeterministicHint: opts.nonDeterministicHint,
+      externalChannel: !!opts.externalChannel,
     });
     // Non-null: `durationMs` is set unconditionally just above (`Date.now() - startedAt`) — the field is
     // typed optional on RunResult/PartialResult for OTHER (non-execute.ts) producers, not this call site.
@@ -726,6 +793,30 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     throw unansweredErr;
   }
 
+  // The session's TimelineWriter (src/agent/timeline.ts) flushes timeline.jsonl in its `finally` block
+  // during session.start(), which has already fully returned by this point (run.drive() awaited it above) —
+  // same guarantee scanEvents(join(outDir, "events.jsonl")) already relies on a few lines above. Read ONCE
+  // and reuse for both the evaluate ctx (skill_tool_used) and the later assembleRunResult call
+  // (toolDurations/skillActivity/subagents) below — two reads could disagree if the file were touched mid-run.
+  const timelineData = readTimeline(outDir);
+
+  // Context/Connectors panel: the SPINE is the id-only list run.ts's init handler already seeded
+  // onto record.context.availableSkills from the agent's own init event (authoritative — covers plugin/
+  // marketplace skills, which the disk scan never saw). Here we enrich each id with whenToUse read off
+  // disk, across BOTH delivery trees (skills.local under plan.configDir, plugin skills under each staged
+  // plugin mount). Populated HERE (before the evaluate() ctx below, which needs it for skill_available)
+  // rather than only later before assembleRunResult — reading it twice would be wasteful and out of order;
+  // this single assignment feeds both.
+  const availableSkillIds = record.context?.availableSkills?.map((s) => s.id) ?? [];
+  record.context = {
+    ...record.context,
+    availableSkills: resolveAvailableSkills(availableSkillIds, plan.configDir, pluginSkillRootsFromPlan(plan)),
+  };
+
+  // Fold resources.jsonl ONCE — reused by both the evaluate() ctx below (max_peak_rss_bytes) and the
+  // assembleRunResult call further down. A second read could disagree if the sampler wrote between them.
+  const resources = foldResources(outDir, effectiveFidelity, resolveIntervalMs());
+
   const assertions = evaluate(scenario.assert, {
     transcript: record.transcript,
     toolsCalled: record.toolsCalled,
@@ -738,6 +829,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // evidence-unavailable verdict here as on replay (see AssertContext.readonlyFolderRoots).
     readonlyFolderRoots,
     preRunPaths,
+    preRunHashes,
     outputsDeletes: scan.outputsDeletes,
     questions: record.questions,
     hostPathLeaked: scan.hostPathLeaked,
@@ -746,8 +838,31 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     gateDeliveries: record.gateDeliveries,
     toolResultTexts: record.toolResults.map((r) => r.assertText ?? r.text),
     toolResultsTruncated: record.toolResults.map((r) => r.assertText === undefined),
+    toolErrors: record.toolErrors,
+    redundantToolCalls: record.redundantToolCalls,
     skillsInvoked: record.skillsInvoked,
     skillToolAvailable: record.initTools.includes("Skill"),
+    skillActivity: timelineData ? foldSkillActivity(timelineData.events) : undefined,
+    tasks: record.tasks.size ? Array.from(record.tasks.values()) : undefined,
+    // Context/Connectors panel — backs skill_available/connector_available/tool_available.
+    // record.context is populated above (availableSkills merged in before this ctx literal; tools/mcpServers
+    // set at init time in run.ts), so these are already live by the time evaluate() runs.
+    availableSkills: record.context?.availableSkills,
+    // mcpServers is unknown[] on the RunRecord (verbatim from the SDK's init event) — cast, not a
+    // transformation, matching the same pass-through cast assembleRunResult uses below.
+    mcpServers: record.context?.mcpServers as AssertContext["mcpServers"],
+    availableTools: record.context?.tools,
+    contextEvents: record.contextEvents,
+    // Always defined live — an empty array is a real "no MCP errors" signal, distinct from replay's
+    // undefined (mcp round-trips are harness-computed, not in the cassette's frozen stdout stream).
+    mcpErrors: record.mcpErrors,
+    // Always defined live — the built-in Task hook only fires on a dispatched background Task, so an
+    // empty array on a no-Task scenario is the real "nothing hook-blocked" signal no_hook_blocked needs.
+    hookEvents: record.hookEvents,
+    // Always defined live — an empty array is the real "nothing presented" signal no_scratchpad_leak's
+    // vacuous pass needs, distinct from replay's evidence-unavailable undefined on an older cassette.
+    presentedFiles: record.presentedFiles,
+    evidenceErrors: record.evidenceErrors,
     effectiveFidelity,
     // Live lane (this run's own machine) — host-shaped computer:// links (hostloop) are checked
     // DIRECTLY on the filesystem, contained to the run's real workspace roots; verify-run shares
@@ -760,6 +875,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       ],
     },
     ...budgetFields(record),
+    resources,
   });
 
   if (scenario.fidelity === "protocol" && (record.toolsCalled.has("WebFetch") || record.toolsCalled.has("WebSearch"))) {
@@ -843,10 +959,20 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       warn(
         `::warning:: [capability] requires_capabilities lists unknown famil(ies): ${unknown.join(", ")} — known: ${[...known].join(", ")}\n`,
       );
+    if (unknown.length) {
+      // An unknown family (typo) can NEVER appear in omittedFamilies (which lists only real families), so
+      // the definitive-lane `missing` filter below would silently drop it → false-green. Fold it into the
+      // unmet set so it hard-fails as an authoring error regardless of lane.
+      requiresCapabilityUnmet = { caps: unknown, reason: "unknown" };
+    }
     if (capabilityProbe === "definitive") {
-      const missing = requiredCaps.filter((c) => omittedFamilies?.includes(c));
-      if (missing.length) requiresCapabilityUnmet = { caps: missing, reason: "omitted" };
-    } else {
+      const missing = requiredCaps.filter((c) => known.has(c) && omittedFamilies?.includes(c));
+      if (missing.length)
+        requiresCapabilityUnmet = {
+          caps: [...(requiresCapabilityUnmet?.caps ?? []), ...missing],
+          reason: unknown.length ? "unknown" : "omitted",
+        };
+    } else if (!unknown.length) {
       // skipped (protocol/replay/skip-env) or unverified — cannot confirm the declared caps are present.
       requiresCapabilityUnmet = { caps: requiredCaps, reason: "unverifiable" };
       warn(
@@ -862,15 +988,25 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // (DecisionRecord[], `by: string`) is assignable to the summarizer's `by?: string` param — no re-map.
   const gateProvenance = summarizeGateProvenance(record.decisions);
 
-  const result: RunResult = {
+  // Working folder panel's file model: classify+fingerprint every file under the
+  // user-visible roots (output/mount/input). Reuses the same walk `artifacts` derives from below, over
+  // ALL userVisibleRoots — read-only inputs are still enumerated here, just tagged "input" instead of
+  // excluded outright.
+  const workspaceFiles = classifyWorkspaceFiles(workRoot, userVisibleRoots, readonlyFolderRoots);
+
+  const result: RunResult = assembleRunResult({
     $schema: RUN_RESULT_SCHEMA_URL,
     generator: "cowork-harness",
+    mode: "run",
     scenario: scenario.name,
     prompt: scenario.prompt, // persisted for `scaffold <run-dir>`
     fidelity: scenario.fidelity,
     baseline: baseline.appVersion,
     result: record.result,
     resultErrorKind: record.resultErrorKind, // transport vs agent classification of a result:"error"
+    errorSource: record.errorSource, // finer error-event source, alongside the coarse resultErrorKind
+    resultSubtype: record.resultSubtype, // SDK result subtype pass-through (error_max_turns / …)
+    stderrLogPath: join(outDir, "agent.stderr.log"), // always written by the live agent process
     stalledOnQuestion: record.stalledOnQuestion, // run ended on an unanswered plain-text question
     decisions: record.decisions.map((d) => ({
       kind: d.kind,
@@ -880,13 +1016,30 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       model: d.model,
       detail: d.detail,
       rationale: d.rationale,
+      questions: d.questions,
     })),
     toolCounts: record.toolCounts,
+    webSearches: record.webSearches.length ? record.webSearches : undefined,
+    infraErrors: infraErrorsForResult(record),
+    evidenceErrors: evidenceErrorsForResult(record),
+    toolDurations: timelineData ? foldToolDurations(timelineData.events) : undefined,
+    skillActivity: timelineData ? foldSkillActivity(timelineData.events) : undefined,
+    models: record.models.length ? record.models : undefined,
+    thinking: record.thinking.length ? record.thinking : undefined,
+    thinkingElided: record.thinkingElided,
+    toolErrors: record.toolErrors,
+    modelUsage: record.modelUsage,
+    redundantToolCalls: record.redundantToolCalls,
+    tasks: record.tasks.size ? Array.from(record.tasks.values()) : undefined,
+    // mcpServers is unknown[] on the RunRecord (verbatim from the SDK's init event) but RunResult
+    // documents its loose per-server shape ({name, status?, ...}) for consumers — cast, not a
+    // transformation; the underlying array is passed through unchanged.
+    context: record.context as RunResult["context"],
     gateDeliveries: record.gateDeliveries,
     egress,
     assertions,
     toolResults: record.toolResults,
-    subagents: record.subagents,
+    subagents: timelineData ? attributeSubagentSkills(record.subagents, timelineData.events) : record.subagents,
     nonReproducibleAnswers: record.unanswered,
     usage: record.usage,
     cost: record.cost,
@@ -898,11 +1051,19 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     outputsDir: join(workRoot, "outputs"),
     userVisibleRoots,
     readonlyFolderRoots,
-    artifacts: collectArtifacts(workRoot, captureRoots), // ENV-MANIFEST: observed user-visible files (excl. read-only inputs)
+    // artifacts is a DERIVED VIEW of workspaceFiles — same collectArtifacts walk,
+    // filtered to the deliverable classes (excludes class:"input" read-only mounts). No second walk.
+    artifacts: workspaceFiles.filter((f) => f.class === "output" || f.class === "mount").map((f) => ({ path: f.path, bytes: f.bytes })),
+    workspaceFiles, // Working folder panel's canonical file model (output/mount/input) — see comment above
+    contextEvents: record.contextEvents, // system events we don't special-case — powers compaction_occurred
+    mcpErrors: record.mcpErrors, // uncollapsed — an empty [] is the real "no MCP errors" signal no_mcp_error needs
+    hookEvents: record.hookEvents, // uncollapsed — an empty [] on a no-Task scenario is the real "nothing hook-blocked" signal no_hook_blocked needs
+    presentedFiles: record.presentedFiles, // uncollapsed — an empty [] is the real "nothing presented" signal no_scratchpad_leak's vacuous pass needs
     // The pre-spawn baseline no_unexpected_files diffs against (same single read the evaluate ctx got).
     // undefined = the run didn't capture (key not asserted, microvm, pre-seam) — the assertion then
     // fails evidence-unavailable, loud.
     preRunPaths,
+    preRunHashes,
     nonDeterministic:
       // LLM-, external-, human-, or first-option-decided → not reproducible. `first` picks options[0] and
       // option order can vary run-to-run; it's already pushed to unanswered[], so include it here to agree.
@@ -922,7 +1083,15 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // detect a kept run that predates a skill change and refuse to vouch for answer-coverage. Same call the
     // record path uses for the cassette (cassette.ts) — `(inline)`/no-skill sessions yield a {baseline}-only fp.
     fingerprint: buildFingerprint(scenario.session, baseline.appVersion, undefined, scenario.skills),
-  };
+    resources, // same single fold as the evaluate() ctx above — not re-read
+    // Fields this lane has NEVER set (were implicitly `undefined` before this refactor; now explicit
+    // per assembleRunResult's contract — this line makes the omission a reviewable, greppable fact
+    // instead of an invisible one):
+    partial: undefined,
+    unansweredGate: undefined,
+    staleness: undefined,
+    skippedAssertions: undefined,
+  });
 
   // Non-null: see the matching comment at the partial-result finalize call above.
   runCrashSafety.finalize(record, result.result, result.durationMs!);
@@ -1001,7 +1170,7 @@ function validateScenarioRegexes(scenario: Scenario, scenarioPath: string): void
 }
 
 /** Load a session from a file and resolve its internal host paths relative to the session
- * file's own directory (see {@link resolveSessionPaths}). Exported for E3 (matrix runner) — cli.ts loads
+ * file's own directory (see {@link resolveSessionPaths}). Exported for the matrix runner — cli.ts loads
  * the base session ONCE per matrix run, then applies per-cell overrides (applySessionOverrides,
  * session.ts) on top of the SAME loaded+resolved object, rather than re-resolving paths per cell. */
 export function loadSessionFromFile(sessionRef: string): ReturnType<typeof loadSession> {
@@ -1047,6 +1216,8 @@ export function buildPartialResult(args: {
   record: RunRecord;
   outDir: string;
   workRoot: string;
+  configDir: string;
+  pluginSkillRoots: PluginSkillRoot[];
   userVisibleRoots: string[];
   readonlyFolderRoots: string[];
   effectiveFidelity: string;
@@ -1054,11 +1225,39 @@ export function buildPartialResult(args: {
   durationMs: number;
   unanswered: { message: string; hint?: string };
   fingerprint?: RunResult["fingerprint"];
+  /** Same three signals the success-path result derives `nonDeterministic`/`nonDeterministicTerminal`
+   *  from (see the `assembleRunResult` call below in `executeScenario`). Optional so pre-existing
+   *  callers that don't pass them (e.g. tests) still compile — they just get the decisions-only
+   *  derivation (record.decisions.some(...)), not the previous hardcoded `undefined`. */
+  onUnanswered?: OnUnanswered;
+  nonDeterministicHint?: boolean;
+  externalChannel?: boolean;
 }): RunResult {
   const { record } = args;
-  return {
+  const gp = summarizeGateProvenance(record.decisions);
+  // Same derivation the success path uses (see the `assembleRunResult` call in `executeScenario`) — a
+  // gate-caused partial run still reports whether EARLIER gates (before the whiff) were answered
+  // non-deterministically, instead of erasing that signal to `undefined`.
+  const nonDeterministic =
+    record.decisions.some((d) => d.by === "llm" || d.by === "external" || d.by === "human" || d.by === "first") ||
+    !!args.nonDeterministicHint;
+  const nonDeterministicTerminal = args.onUnanswered === "llm" || args.onUnanswered === "prompt" || !!args.externalChannel;
+  const timelineData = readTimeline(args.outDir);
+  // Context/Connectors panel: the SPINE is the id-only list run.ts's init handler already seeded
+  // (authoritative — covers plugin/marketplace skills). Enrich with whenToUse read off disk across both
+  // delivery trees. Own wiring, independent of executeScenario's (this function's own args.configDir /
+  // args.pluginSkillRoots).
+  const availableSkillIds = args.record.context?.availableSkills?.map((s) => s.id) ?? [];
+  args.record.context = {
+    ...args.record.context,
+    availableSkills: resolveAvailableSkills(availableSkillIds, args.configDir, args.pluginSkillRoots),
+  };
+  // Working folder panel's file model — same walk `artifacts` below derives from.
+  const workspaceFiles = classifyWorkspaceFiles(args.workRoot, args.userVisibleRoots, args.readonlyFolderRoots);
+  return assembleRunResult({
     $schema: RUN_RESULT_SCHEMA_URL,
     generator: "cowork-harness",
+    mode: "run",
     scenario: args.scenarioName,
     prompt: args.prompt,
     fidelity: args.fidelity,
@@ -1074,13 +1273,30 @@ export function buildPartialResult(args: {
       model: d.model,
       detail: d.detail,
       rationale: d.rationale,
+      questions: d.questions,
     })),
     toolCounts: record.toolCounts,
+    webSearches: record.webSearches.length ? record.webSearches : undefined,
+    infraErrors: infraErrorsForResult(record),
+    evidenceErrors: evidenceErrorsForResult(record),
+    toolDurations: timelineData ? foldToolDurations(timelineData.events) : undefined,
+    skillActivity: timelineData ? foldSkillActivity(timelineData.events) : undefined,
+    models: record.models.length ? record.models : undefined,
+    thinking: record.thinking.length ? record.thinking : undefined,
+    thinkingElided: record.thinkingElided,
+    toolErrors: record.toolErrors,
+    modelUsage: record.modelUsage,
+    redundantToolCalls: record.redundantToolCalls,
+    tasks: record.tasks.size ? Array.from(record.tasks.values()) : undefined,
+    // mcpServers is unknown[] on the RunRecord (verbatim from the SDK's init event) but RunResult
+    // documents its loose per-server shape ({name, status?, ...}) for consumers — cast, not a
+    // transformation; the underlying array is passed through unchanged.
+    context: record.context as RunResult["context"],
     gateDeliveries: record.gateDeliveries,
     egress: args.egress,
     assertions: [],
     toolResults: record.toolResults,
-    subagents: record.subagents,
+    subagents: timelineData ? attributeSubagentSkills(record.subagents, timelineData.events) : record.subagents,
     nonReproducibleAnswers: record.unanswered,
     usage: record.usage,
     cost: record.cost,
@@ -1092,23 +1308,46 @@ export function buildPartialResult(args: {
     outputsDir: join(args.workRoot, "outputs"),
     userVisibleRoots: args.userVisibleRoots,
     readonlyFolderRoots: args.readonlyFolderRoots,
-    artifacts: collectArtifacts(
-      args.workRoot,
-      args.userVisibleRoots.filter((r) => !args.readonlyFolderRoots.includes(r)),
-    ),
+    // artifacts is a DERIVED VIEW of workspaceFiles — same collectArtifacts walk,
+    // filtered to the deliverable classes (excludes class:"input" read-only mounts). No second walk.
+    artifacts: workspaceFiles.filter((f) => f.class === "output" || f.class === "mount").map((f) => ({ path: f.path, bytes: f.bytes })),
+    workspaceFiles, // Working folder panel's canonical file model
+    contextEvents: record.contextEvents, // system events we don't special-case — powers compaction_occurred
+    mcpErrors: record.mcpErrors, // uncollapsed — an empty [] is the real "no MCP errors" signal no_mcp_error needs
+    hookEvents: record.hookEvents, // uncollapsed — an empty [] on a no-Task scenario is the real "nothing hook-blocked" signal no_hook_blocked needs
+    presentedFiles: record.presentedFiles, // uncollapsed — an empty [] is the real "nothing presented" signal no_scratchpad_leak's vacuous pass needs
     preRunPaths: readPreRunManifest(args.outDir),
+    preRunHashes: readPreRunManifestHashes(args.outDir),
     effectiveFidelity: args.effectiveFidelity,
-    ...(() => {
-      const gp = summarizeGateProvenance(record.decisions);
-      return gp.total ? { gateProvenance: gp } : {};
-    })(),
-    ...(args.fingerprint ? { fingerprint: args.fingerprint } : {}),
-  };
+    gateProvenance: gp.total ? gp : undefined,
+    fingerprint: args.fingerprint,
+    errorSource: record.errorSource, // finer error-event source, alongside the coarse resultErrorKind
+    resultSubtype: record.resultSubtype, // SDK result subtype pass-through (error_max_turns / …)
+    stderrLogPath: join(args.outDir, "agent.stderr.log"), // always written by the live agent process
+    resources: foldResources(args.outDir, args.effectiveFidelity, resolveIntervalMs()),
+    // Fields this lane deliberately never sets (per this function's own doc comment: "no capability/
+    // verdict fields") — now explicit instead of implicit:
+    resultErrorKind: undefined,
+    stalledOnQuestion: undefined,
+    capabilityProbe: undefined,
+    requiresCapabilityUnmet: undefined,
+    // Derived above from the same decision log / policy the success path uses — NOT hardcoded to
+    // undefined: a gate-caused partial run still reports whether earlier gates were non-deterministic.
+    nonDeterministic,
+    nonDeterministicTerminal,
+    permissiveAutoAllow: undefined,
+    scan: undefined,
+    fidelityWarnings: undefined,
+    l0PluginDivergence: undefined,
+    missingCapabilityUse: undefined,
+    staleness: undefined,
+    skippedAssertions: undefined,
+  });
 }
 
 /** the structured run trace. */
 
-function writeTrace(outDir: string, rec: RunRecord, egress: RunResult["egress"], secrets: string[], durationMs?: number) {
+export function writeTrace(outDir: string, rec: RunRecord, egress: RunResult["egress"], secrets: string[], durationMs?: number) {
   const trace = {
     steps: [...rec.toolsCalled],
     toolCounts: rec.toolCounts, // truthful per-tool call counts (host-routed WebSearch shows here, not usage.server_tool_use)

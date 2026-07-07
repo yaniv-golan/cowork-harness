@@ -1,4 +1,5 @@
 import { existsSync, readFileSync, statSync, realpathSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join, resolve, relative, isAbsolute, sep } from "node:path";
 import type { Assertion, RunResult, UsageInfo, CostInfo } from "./types.js";
 import { VERDICT_MODIFIER_KEYS } from "./types.js";
@@ -9,17 +10,25 @@ import { collectArtifacts } from "./run/artifacts.js";
 import { anyGlobMatches } from "./glob.js";
 
 /** Derives the four AssertContext budget fields (costUsd/tokensTotal/toolCallsTotal/turns) uniformly from
- *  any RunResult/RunRecord-shaped source — live, replay, and verify-run all read the same shapes (Wave 0's
+ *  any RunResult/RunRecord-shaped source — live, replay, and verify-run all read the same shapes (the
  *  shared UsageInfo/CostInfo types), so this is one function, not four copies. Each field's own
  *  undefined-ness IS the evidence-unavailable signal (see AssertContext's doc comments); no separate
- *  `*Missing` booleans needed for scalars. `turns` (Wave 2 / E6b) is a pure passthrough of
- *  `usage.turns` — Wave 0 already did the real extraction/fallback-counting work at the source, so there
+ *  `*Missing` booleans needed for scalars. `turns` is a pure passthrough of
+ *  `usage.turns` — that extraction/fallback-counting work already happened at the source, so there
  *  is no re-derivation here, unlike the other three fields which are actually computed from raw parts. */
-export function budgetFields(src: { usage?: UsageInfo; cost?: CostInfo; toolCounts?: Record<string, number> }): {
+export function budgetFields(src: {
+  usage?: UsageInfo;
+  cost?: CostInfo;
+  toolCounts?: Record<string, number>;
+  toolErrors?: Record<string, { calls: number; errors: number }>;
+  redundantToolCalls?: Array<{ name: string; argHash: string; count: number }>;
+}): {
   costUsd?: number;
   tokensTotal?: number;
   toolCallsTotal?: number;
   turns?: number;
+  toolErrorsTotal?: number;
+  redundantCallsTotal?: number;
 } {
   const inTok = src.usage?.input_tokens;
   const outTok = src.usage?.output_tokens;
@@ -28,6 +37,9 @@ export function budgetFields(src: { usage?: UsageInfo; cost?: CostInfo; toolCoun
     tokensTotal: typeof inTok === "number" && typeof outTok === "number" ? inTok + outTok : undefined,
     toolCallsTotal: src.toolCounts === undefined ? undefined : Object.values(src.toolCounts).reduce((a, b) => a + b, 0),
     turns: src.usage?.turns,
+    toolErrorsTotal: src.toolErrors === undefined ? undefined : Object.values(src.toolErrors).reduce((sum, t) => sum + t.errors, 0),
+    redundantCallsTotal:
+      src.redundantToolCalls === undefined ? undefined : src.redundantToolCalls.reduce((sum, g) => sum + (g.count - 1), 0),
   };
 }
 
@@ -144,14 +156,22 @@ const jsonEq = (a: unknown, b: unknown): boolean => deepJsonEqual(a, b);
  * Boundary-aware host matching: `host` must equal `needle` exactly or be a proper subdomain of it.
  * `evilanthropic.com` does NOT match `anthropic.com`; `x.anthropic.com` does.
  *
- * Both sides are normalized (lowercase + trailing-dot strip) so an author needle that differs from the
- * recorded host only in case or a trailing dot still matches the way runtime egress matching does.
- * Normalization is COMPOSED onto the existing subdomain semantics, not a replacement — the
- * `endsWith("." + needle)` proper-subdomain rule is preserved.
+ * Both sides are normalized (lowercase + trailing-dot strip + IPv6 bracket strip) so an author needle
+ * that differs from the recorded host only in case, a trailing dot, or brackets still matches the way
+ * runtime egress matching does. Normalization is COMPOSED onto the existing subdomain semantics, not a
+ * replacement — the `endsWith("." + needle)` proper-subdomain rule is preserved.
+ *
+ * A `*.suffix` needle is a proper-subdomain wildcard mirroring the egress proxy's `*.` semantics (matches
+ * `sub.suffix`, NOT the apex `suffix`). This is ADDITIVE — a bare needle keeps its existing
+ * subdomain-inclusive meaning (apex + subdomains); only an explicit `*.` prefix opts into subdomain-only.
  */
 export function hostMatches(host: string, needle: string): boolean {
   const h = normalizeHost(host);
   const n = normalizeHost(needle);
+  if (n.startsWith("*.")) {
+    const suffix = n.slice(2);
+    return h.endsWith("." + suffix);
+  }
   return h === n || h.endsWith("." + n);
 }
 
@@ -167,11 +187,25 @@ export interface AssertContext {
    *  cassette.preRunPaths). undefined = no pre-run manifest (older run/cassette, or microvm) —
    *  no_unexpected_files then fails evidence-unavailable, never vacuous-passes. */
   preRunPaths?: string[];
+  /** Pre-run per-path sha256 (RunResult.preRunHashes / cassette.preRunHashes). undefined = no manifest —
+   *  input_unmodified fails evidence-unavailable. */
+  preRunHashes?: Record<string, string | null>;
+  /** Replay-lane ONLY: authoritative post-run per-path sha256 from the cassette manifest
+   *  (cassette.artifacts[].sha256). undefined on live/verify-run (there, input_unmodified re-hashes the
+   *  real tree under workRoot). Needed because replay's materialized tree writes 0-byte placeholders for
+   *  body-less entries, so re-hashing it would be wrong. */
+  postRunHashes?: Record<string, string>;
   outputsDeletes: string[]; // delete ops that touched mnt/outputs (post-run scan)
   questions: string[]; // AskUserQuestion question texts asked
   hostPathLeaked: boolean; // a host path (/Users//opt) appeared in model-visible text
   selfHealRan: boolean; // a /sessions/<id>/mnt plugin script was invoked (plugin-root self-heal)
-  subagents: { agentType: string; declaredTools: string[]; toolsUsed: string[]; description?: string }[]; // dispatch tree (sub-agent assertions)
+  subagents: {
+    agentType: string;
+    declaredTools: string[];
+    toolsUsed: Array<{ name: string; count: number }>;
+    description?: string;
+    output?: string;
+  }[]; // dispatch tree (sub-agent assertions)
   gateDeliveries: {
     question: string;
     delivered: boolean | null;
@@ -227,35 +261,118 @@ export interface AssertContext {
    *  skill_triggered/no_skill_triggered cannot be evaluated (agent-version tool-name drift) and must fail
    *  as evidence-unavailable rather than risk a false negative. */
   skillToolAvailable: boolean;
-  /** Set by verify-run only when `result.skillsInvoked` is undefined in result.json (a run predating E8).
-   *  Prevents no_skill_triggered from passing vacuously (absent ≠ no skills invoked). Undefined/false on
-   *  live/replay. */
+  /** Set by verify-run only when `result.skillsInvoked` is undefined in result.json (an older result.json
+   *  that never captured this). Prevents no_skill_triggered from passing vacuously (absent ≠ no skills
+   *  invoked). Undefined/false on live/replay. */
   skillsInvokedMissing?: boolean;
-  /** RunResult.cost.usd — undefined when cost telemetry wasn't recorded for this run (a run predating
-   *  Wave 0, or the SDK didn't report total_cost_usd for this invocation). Its own undefined-ness IS the
-   *  evidence-unavailable signal for max_cost_usd — a real cost is always a defined number, including 0. */
+  /** RunResult.cost.usd — undefined when cost telemetry wasn't recorded for this run (an older run that
+   *  never captured cost telemetry, or the SDK didn't report total_cost_usd for this invocation). Its own
+   *  undefined-ness IS the evidence-unavailable signal for max_cost_usd — a real cost is always a defined
+   *  number, including 0. */
   costUsd?: number;
-  /** usage.input_tokens + usage.output_tokens — undefined when either isn't a number (a run predating
-   *  Wave 0, or a partial/old result.json). Own undefined-ness is the evidence-unavailable signal. */
+  /** usage.input_tokens + usage.output_tokens — undefined when either isn't a number (an older run that
+   *  never captured token usage, or a partial/old result.json). Own undefined-ness is the
+   *  evidence-unavailable signal. */
   tokensTotal?: number;
   /** Sum of toolCounts values (top-level calls only) — undefined when result.toolCounts itself is
    *  undefined (partial/old result.json), never 0 in that case (0 = genuinely zero tool calls, a real
    *  value). Own undefined-ness is the evidence-unavailable signal. */
   toolCallsTotal?: number;
-  /** usage.turns (Wave 0's extraction/fallback-count) — undefined when a run predates that seam or the
-   *  SDK reported neither num_turns nor a countable fallback. Own undefined-ness is the
-   *  evidence-unavailable signal for max_turns (Wave 2 / E6b) — 0 turns is a real, satisfying value. */
+  /** usage.turns (the extraction/fallback-count) — undefined when an older run predates that mechanism or
+   *  the SDK reported neither num_turns nor a countable fallback. Own undefined-ness is the
+   *  evidence-unavailable signal for max_turns — 0 turns is a real, satisfying value. */
   turns?: number;
+  /** Per-tool call/error rollup — undefined means no data was captured (old/partial run), the
+   *  evidence-unavailable signal for tool_no_error/max_tool_errors (an empty `{}` is a valid "ran clean"
+   *  state and is NOT the same as undefined). */
+  toolErrors?: Record<string, { calls: number; errors: number }>;
+  /** Sum of toolErrors[*].errors — undefined when result.toolErrors itself is undefined (partial/old
+   *  result.json), never 0 in that case (0 = genuinely zero errors, a real value). Own undefined-ness is
+   *  the evidence-unavailable signal for max_tool_errors. */
+  toolErrorsTotal?: number;
+  /** RunResult.skillActivity — skill-activation windows folded from the timeline (via foldSkillActivity),
+   *  NOT a RunRecord field (unlike toolErrors/redundantToolCalls above, which are read
+   *  straight off the record). Undefined means no timeline was available (old/partial run, or a lane that
+   *  never wired the timeline read) — the evidence-unavailable signal for skill_tool_used; an empty `[]`
+   *  is a valid "no skill windows" state and is NOT the same as undefined. */
+  skillActivity?: Array<{
+    skillId: string;
+    invocationSeq: number;
+    toolCounts: Record<string, number>;
+    toolCallCount: number;
+    dispatchCount: number;
+    durationMs?: number;
+  }>;
+  /** Repeated identical tool calls, count>=2 groups only — undefined means no data was
+   *  captured (old/partial run); an empty `[]` is a valid "no redundancy" state and is NOT the same as
+   *  undefined. Not read directly by any `check()` branch today (mirrors toolErrors for parity/future use) —
+   *  `redundantCallsTotal` is the derived scalar `max_redundant_tool_calls` actually evaluates. */
+  redundantToolCalls?: Array<{ name: string; argHash: string; count: number }>;
+  /** Sum of (count-1) across every group in redundantToolCalls — undefined when redundantToolCalls itself
+   *  is undefined (partial/old result.json), never 0 in that case (0 = genuinely zero wasted calls, a real
+   *  value). Own undefined-ness is the evidence-unavailable signal for max_redundant_tool_calls. */
+  redundantCallsTotal?: number;
   /** The fidelity tier actually used this run (`RunResult.effectiveFidelity`) — used only to make
    *  `computer_links_resolve`'s failure message name the tier it checked against; no branching in
    *  `check()` reads this directly (the mode split lives in `linkResolution.mode`). Undefined on an
    *  old result/cassette that predates the field; the message just omits the tier then. */
   effectiveFidelity?: string;
-  /** `computer_links_resolve` (P3) resolution context — see `src/run/computer-links.ts`. Undefined
+  /** `computer_links_resolve` resolution context — see `src/run/computer-links.ts`. Undefined
    *  means the calling lane hasn't wired this: any `computer://` link found then fails as
    *  evidence-unavailable rather than silently passing (the evidence-missing convention this file
    *  follows everywhere else — e.g. `transcriptMissing`, `scanMissing`). */
   linkResolution?: LinkResolutionContext;
+  /** RunResult.tasks[] — Progress panel tasks accumulated from TaskCreate/TaskUpdate.
+   *  Undefined means no tasks telemetry was recorded for this run (an older run that never captured this
+   *  field, or a run/cassette that never wired this field) — the evidence-unavailable signal for
+   *  all_tasks_completed/task_status; an empty `[]` is a valid "no tasks" state and is NOT the same as
+   *  undefined. */
+  tasks?: Array<{ id: string; subject: string; status: string; description?: string; activeForm?: string }>;
+  /** RunResult.context.availableSkills — the staged skill set read straight off disk at RunResult-assembly
+   *  time. Undefined means this lane never wired the field (an older run that never captured this field,
+   *  or the replay lane, which has no live filesystem to re-stage skills from) — the evidence-unavailable
+   *  signal for skill_available; an empty `[]` is a valid "no skills staged" state and is NOT the same as
+   *  undefined. */
+  availableSkills?: Array<{ id: string; whenToUse?: string }>;
+  /** RunResult.context.mcpServers — the SDK's init-event MCP server/connector list. Undefined means no
+   *  context telemetry was recorded for this run (an older run that never captured this field) — the
+   *  evidence-unavailable signal for connector_available; an empty `[]` is a valid "no connectors" state
+   *  and is NOT the same as undefined. */
+  mcpServers?: Array<{ name: string; status?: string; [k: string]: unknown }>;
+  /** RunResult.context.tools — the SDK's init-event tool manifest. Undefined means no context telemetry
+   *  was recorded for this run (an older run that never captured this field) — the evidence-unavailable
+   *  signal for tool_available; an empty `[]` is a valid "no tools" state and is NOT the same as
+   *  undefined. */
+  availableTools?: string[];
+  /** RunResult.contextEvents — `system` stream messages the harness doesn't special-case (e.g.
+   *  `compact_boundary`). Undefined means no context-events telemetry was recorded for this run (an
+   *  older run that never captured this field, or a lane without context events) — the
+   *  evidence-unavailable signal for compaction_occurred; an empty `[]` is a valid "captured, saw
+   *  nothing uncaught" state and is NOT the same as undefined. */
+  contextEvents?: RunResult["contextEvents"];
+  /** RunResult.mcpErrors — MCP round-trips the harness answered with a JSON-RPC error. Undefined means
+   *  no mcp-error telemetry was recorded for this run (live-only — replay never reproduces it) — the
+   *  evidence-unavailable signal for no_mcp_error; an empty `[]` is a valid "no MCP errors" state and
+   *  is NOT the same as undefined. */
+  mcpErrors?: RunResult["mcpErrors"];
+  /** RunResult.hookEvents — PreToolUse hook fire/block events. Undefined means no hook telemetry was
+   *  recorded for this run (an older run, or a replay whose cassette lacks `controlOut` — a custom
+   *  hook's decision lives only there) — the evidence-unavailable signal for hook_blocked/
+   *  no_hook_blocked; an empty `[]` is a valid "no hook fired" state and is NOT the same as undefined. */
+  hookEvents?: RunResult["hookEvents"];
+  /** RunResult.presentedFiles — files delivered via `present_files`, each already classified
+   *  promoted/leaked at derivation time (see RunResult's own doc comment). Undefined means no
+   *  `present_files` telemetry was recorded for this run (an older run predating the feature) — the
+   *  evidence-unavailable signal for no_scratchpad_leak; an empty `[]` is a valid "nothing presented"
+   *  state (vacuous pass) and is NOT the same as undefined. */
+  presentedFiles?: RunResult["presentedFiles"];
+  /** RunResult.resources — resource-usage telemetry sampled while the run executed. Undefined means the
+   *  tier never sampled (protocol/replay, a run shorter than one sample interval, or an unavailable probe
+   *  tool) — the evidence-unavailable signal for max_peak_rss_bytes; never a vacuous pass. */
+  resources?: RunResult["resources"];
+  /** Companion malformed-telemetry counters (see RunResult.evidenceErrors). A >0 count makes the dependent
+   *  assertion fail "malformed" instead of silently dropping the bad entries. */
+  evidenceErrors?: RunResult["evidenceErrors"];
 }
 
 export function evaluate(assertions: Assertion[], ctx: AssertContext): RunResult["assertions"] {
@@ -423,6 +540,31 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
           : fail(`no sub-agent matching "${a.subagent_dispatched}" was dispatched (by type or description)`),
       );
   }
+  if (a.subagent_output_contains !== undefined) {
+    const { match, contains } = a.subagent_output_contains;
+    if (ctx.subagentsMissing) {
+      results.push(
+        fail(`evidence unavailable: sub-agent dispatch tree absent from result.json — cannot evaluate subagent_output_contains`),
+      );
+    } else if (match !== undefined) {
+      const c = compileUserRegex(match);
+      if ("error" in c) results.push(fail(`subagent_output_contains: bad regex "${match}": ${c.error}`));
+      else {
+        const candidates = ctx.subagents.filter((s) => c.re.test(s.agentType) || c.re.test(s.description ?? ""));
+        results.push(
+          candidates.some((s) => s.output?.includes(contains))
+            ? ok()
+            : fail(
+                candidates.length === 0
+                  ? `no sub-agent matching "${match}" was dispatched`
+                  : `no sub-agent matching "${match}" had output containing "${contains}"`,
+              ),
+        );
+      }
+    } else {
+      results.push(ctx.subagents.some((s) => s.output?.includes(contains)) ? ok() : fail(`no sub-agent's output contained "${contains}"`));
+    }
+  }
   if (a.subagent_declared_but_unused !== undefined) {
     const t = a.subagent_declared_but_unused;
     // Declared a tool but never USED it — the observable proxy for the v0.3.0 fabrication
@@ -435,10 +577,12 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
         fail(`evidence unavailable: sub-agent dispatch tree absent from result.json — cannot evaluate subagent_declared_but_unused`),
       );
     } else {
-      const culprit = ctx.subagents.find((s) => s.declaredTools.includes(t) && !s.toolsUsed.includes(t));
+      const culprit = ctx.subagents.find((s) => s.declaredTools.includes(t) && !s.toolsUsed.some((d) => d.name === t));
       results.push(
         culprit
-          ? fail(`sub-agent "${culprit.agentType}" declared "${t}" but never used it (used: ${culprit.toolsUsed.join(", ") || "none"})`)
+          ? fail(
+              `sub-agent "${culprit.agentType}" declared "${t}" but never used it (used: ${culprit.toolsUsed.map((d) => d.name).join(", ") || "none"})`,
+            )
           : ok(),
       );
     }
@@ -493,6 +637,42 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
           ? ok()
           : fail(`${ctx.toolCallsTotal} tool calls exceeds max ${a.tool_calls_max}`),
     );
+  const evalToolNoError = (pat: string, key: string, requirePresence: boolean) => {
+    const c = compileUserRegex(pat);
+    if ("error" in c) return fail(`${key}: bad regex "${pat}": ${c.error}`);
+    if (ctx.toolErrors === undefined) return fail(`evidence unavailable: tool-error telemetry absent — cannot evaluate ${key}`);
+    const matching = Object.entries(ctx.toolErrors).filter(([name]) => c.re.test(name));
+    if (matching.length === 0)
+      // A regex that matched no tool can't prove the tool ran error-free. Presence-required by default
+      // (a typo'd regex must not silently pass); the _if_called variant opts into the lenient pass.
+      return requirePresence
+        ? fail(
+            `${key}: no tool matching "${pat}" was called — cannot verify it ran error-free (use tool_no_error_if_called to pass when the tool may legitimately not run)`,
+          )
+        : ok();
+    const errored = matching.filter(([, v]) => v.errors > 0);
+    return errored.length === 0
+      ? ok()
+      : fail(`tool(s) matching "${pat}" had errors: ${errored.map(([n, v]) => `${n} (${v.errors})`).join(", ")}`);
+  };
+  if (a.tool_no_error !== undefined) results.push(evalToolNoError(a.tool_no_error, "tool_no_error", true));
+  if (a.tool_no_error_if_called !== undefined) results.push(evalToolNoError(a.tool_no_error_if_called, "tool_no_error_if_called", false));
+  if (a.max_tool_errors !== undefined)
+    results.push(
+      ctx.toolErrorsTotal === undefined
+        ? fail(`evidence unavailable: tool-error telemetry absent — cannot evaluate max_tool_errors`)
+        : ctx.toolErrorsTotal <= a.max_tool_errors
+          ? ok()
+          : fail(`${ctx.toolErrorsTotal} tool errors exceeds max ${a.max_tool_errors}`),
+    );
+  if (a.max_redundant_tool_calls !== undefined)
+    results.push(
+      ctx.redundantCallsTotal === undefined
+        ? fail(`evidence unavailable: redundant-call telemetry absent — cannot evaluate max_redundant_tool_calls`)
+        : ctx.redundantCallsTotal <= a.max_redundant_tool_calls
+          ? ok()
+          : fail(`${ctx.redundantCallsTotal} wasted redundant call(s) exceeds max ${a.max_redundant_tool_calls}`),
+    );
   if (a.max_turns !== undefined)
     results.push(
       ctx.turns === undefined
@@ -501,6 +681,80 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
           ? ok()
           : fail(`${ctx.turns} turns exceeds max ${a.max_turns}`),
     );
+  if (a.compaction_occurred !== undefined)
+    results.push(
+      ctx.contextEvents === undefined
+        ? fail(`compaction_occurred: no context events captured (older run / lane without context events) — cannot verify`)
+        : ctx.contextEvents.some((e) => e.subtype === "compact_boundary")
+          ? ok()
+          : fail(`compaction_occurred: no compact_boundary event was recorded`),
+    );
+  if (a.no_mcp_error !== undefined) {
+    if (ctx.mcpErrors === undefined)
+      results.push(fail(`no_mcp_error: live-only — mcp errors are not reconstructible on replay (re-record to check)`));
+    else {
+      const bad = ctx.mcpErrors[0];
+      results.push(ctx.mcpErrors.length === 0 ? ok() : fail(`no_mcp_error: server "${bad!.server}" failed: ${bad!.message}`));
+    }
+  }
+  if (a.max_peak_rss_bytes !== undefined) {
+    if (ctx.resources === undefined)
+      results.push(fail(`max_peak_rss_bytes: live-only — no resource sampling on this lane (replay/protocol) — cannot verify`));
+    else if (ctx.resources.malformedLines)
+      results.push(
+        fail(
+          `max_peak_rss_bytes: ${ctx.resources.malformedLines} malformed resource sample line(s) — telemetry is corrupt, cannot verify (malformed)`,
+        ),
+      );
+    else if (ctx.resources.peakRssBytes === undefined)
+      results.push(fail(`max_peak_rss_bytes: sampling captured no RSS value — cannot verify`));
+    else if (ctx.resources.peakRssBytes <= a.max_peak_rss_bytes) results.push(ok());
+    else results.push(fail(`max_peak_rss_bytes: peak RSS ${ctx.resources.peakRssBytes} > ${a.max_peak_rss_bytes}`));
+  }
+  if (a.hook_blocked !== undefined) {
+    const c = compileUserRegex(a.hook_blocked);
+    if ("error" in c) results.push(fail(`hook_blocked: bad regex "${a.hook_blocked}": ${c.error}`));
+    else if (ctx.hookEvents === undefined)
+      results.push(fail(`hook_blocked: no hook events (older run / replay without controlOut) — cannot verify`));
+    else {
+      const hit = ctx.hookEvents.find((h) => h.decision === "block" && h.tool !== undefined && c.re.test(h.tool));
+      results.push(hit ? ok() : fail(`hook_blocked: no blocked tool matched "${a.hook_blocked}"`));
+    }
+  }
+  if (a.no_hook_blocked !== undefined) {
+    if (ctx.hookEvents === undefined)
+      results.push(fail(`no_hook_blocked: no hook events (older run / replay without controlOut) — cannot verify`));
+    else {
+      const blk = ctx.hookEvents.find((h) => h.decision === "block");
+      results.push(
+        blk ? fail(`no_hook_blocked: "${blk.tool ?? blk.callbackId}" was blocked${blk.reason ? ` (${blk.reason})` : ""}`) : ok(),
+      );
+    }
+  }
+  if (a.no_scratchpad_leak !== undefined) {
+    // present_files is served ONLY on the container tier (binary-verified against real Cowork: hostloop/
+    // microvm/protocol don't advertise the tool, so `presentedFiles` is always [] there and the leak check
+    // below would pass VACUOUSLY). Gate on the tier: anything but container is unsupported → can't-verify,
+    // never a silent green. `effectiveFidelity` is populated on every lane's ctx (live/replay/verify-run).
+    if (ctx.effectiveFidelity !== "container")
+      results.push(
+        fail(
+          `no_scratchpad_leak: present_files is served only on the container tier (this run: ${ctx.effectiveFidelity ?? "unknown"}) — cannot verify; use fidelity: container for present_files-based delivery`,
+        ),
+      );
+    else if (ctx.evidenceErrors?.presentFilesMalformed)
+      results.push(
+        fail(
+          `no_scratchpad_leak: ${ctx.evidenceErrors.presentFilesMalformed} malformed present_files call(s) — leak evidence is incomplete, cannot verify (malformed telemetry)`,
+        ),
+      );
+    else if (ctx.presentedFiles === undefined)
+      results.push(fail(`no_scratchpad_leak: no present_files telemetry recorded for this run — cannot verify`));
+    else {
+      const leaked = ctx.presentedFiles.find((p) => p.leaked);
+      results.push(leaked ? fail(`no_scratchpad_leak: "${leaked.from}" was presented but never left the scratchpad`) : ok());
+    }
+  }
   if (a.no_skill_triggered !== undefined) {
     const c = compileUserRegex(a.no_skill_triggered);
     if ("error" in c) results.push(fail(`no_skill_triggered: bad regex "${a.no_skill_triggered}": ${c.error}`));
@@ -516,6 +770,114 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
       results.push(
         !ctx.skillsInvoked.some((s) => c.re.test(s)) ? ok() : fail(`skill unexpectedly triggered matching "${a.no_skill_triggered}"`),
       );
+  }
+  if (a.skill_available !== undefined) {
+    const c = compileUserRegex(a.skill_available);
+    if ("error" in c) results.push(fail(`skill_available: bad regex "${a.skill_available}": ${c.error}`));
+    else if (ctx.availableSkills === undefined)
+      results.push(fail(`evidence unavailable: availableSkills absent from result.json — cannot evaluate skill_available`));
+    else results.push(ctx.availableSkills.some((s) => c.re.test(s.id)) ? ok() : fail(`no staged skill matched "${a.skill_available}"`));
+  }
+  if (a.connector_available !== undefined) {
+    const c = compileUserRegex(a.connector_available);
+    if ("error" in c) results.push(fail(`connector_available: bad regex "${a.connector_available}": ${c.error}`));
+    else if (ctx.mcpServers === undefined)
+      results.push(fail(`evidence unavailable: mcpServers absent from result.json — cannot evaluate connector_available`));
+    else
+      results.push(ctx.mcpServers.some((s) => c.re.test(String(s.name))) ? ok() : fail(`no connector matched "${a.connector_available}"`));
+  }
+  if (a.tool_available !== undefined) {
+    const c = compileUserRegex(a.tool_available);
+    if ("error" in c) results.push(fail(`tool_available: bad regex "${a.tool_available}": ${c.error}`));
+    else if (ctx.availableTools === undefined)
+      results.push(fail(`evidence unavailable: availableTools absent from result.json — cannot evaluate tool_available`));
+    else results.push(ctx.availableTools.some((t) => c.re.test(t)) ? ok() : fail(`no available tool matched "${a.tool_available}"`));
+  }
+  if (a.skill_tool_used !== undefined) {
+    const { skill, tool } = a.skill_tool_used;
+    if (ctx.skillActivity === undefined) {
+      results.push(fail(`evidence unavailable: skill-activity telemetry absent from result.json — cannot evaluate skill_tool_used`));
+    } else {
+      const skillRe = compileUserRegex(skill);
+      const toolRe = compileUserRegex(tool);
+      if ("error" in skillRe) results.push(fail(`skill_tool_used: bad regex "${skill}": ${skillRe.error}`));
+      else if ("error" in toolRe) results.push(fail(`skill_tool_used: bad regex "${tool}": ${toolRe.error}`));
+      else {
+        const matchingWindows = ctx.skillActivity.filter((w) => skillRe.re.test(w.skillId));
+        const found = matchingWindows.some((w) => Object.keys(w.toolCounts).some((t) => toolRe.re.test(t)));
+        results.push(
+          found
+            ? ok()
+            : fail(
+                matchingWindows.length === 0
+                  ? `no skill-activation window matched "${skill}"`
+                  : `no tool matching "${tool}" ran inside a window matching "${skill}"`,
+              ),
+        );
+      }
+    }
+  }
+  if (a.all_tasks_completed !== undefined) {
+    if (ctx.tasks === undefined)
+      results.push(fail(`evidence unavailable: tasks telemetry absent from result.json — cannot evaluate all_tasks_completed`));
+    else if (ctx.evidenceErrors?.taskTracking)
+      results.push(
+        fail(
+          `all_tasks_completed: ${ctx.evidenceErrors.taskTracking} TaskCreate result(s) were unparseable — task telemetry is incomplete, cannot verify (malformed)`,
+        ),
+      );
+    else if (ctx.tasks.length === 0)
+      // Presence-required: a run with zero tasks cannot have "completed them all". Assert task_count_min
+      // (or drop this) if a task-free run is legitimate.
+      results.push(
+        fail(`all_tasks_completed: no tasks were created — cannot verify completion (assert task_count_min for presence, or drop this)`),
+      );
+    else
+      results.push(
+        ctx.tasks.every((t) => t.status === "completed")
+          ? ok()
+          : fail(
+              `not all tasks are completed: ${ctx.tasks
+                .filter((t) => t.status !== "completed")
+                .map((t) => `${t.subject} (${t.status})`)
+                .join(", ")}`,
+            ),
+      );
+  }
+  if (a.task_count_min !== undefined) {
+    if (ctx.tasks === undefined)
+      results.push(fail(`evidence unavailable: tasks telemetry absent from result.json — cannot evaluate task_count_min`));
+    else if (ctx.evidenceErrors?.taskTracking)
+      results.push(
+        fail(
+          `task_count_min: ${ctx.evidenceErrors.taskTracking} TaskCreate result(s) were unparseable — task count is under-reported, cannot verify (malformed)`,
+        ),
+      );
+    else
+      results.push(
+        ctx.tasks.length >= a.task_count_min
+          ? ok()
+          : fail(`task_count_min: ${ctx.tasks.length} task(s) created, need ≥ ${a.task_count_min}`),
+      );
+  }
+  if (a.task_status !== undefined) {
+    const { match, status } = a.task_status;
+    if (ctx.tasks === undefined)
+      results.push(fail(`evidence unavailable: tasks telemetry absent from result.json — cannot evaluate task_status`));
+    else {
+      const c = compileUserRegex(match);
+      if ("error" in c) results.push(fail(`task_status: bad regex "${match}": ${c.error}`));
+      else {
+        const found = ctx.tasks.find((t) => c.re.test(t.subject) || c.re.test(t.id));
+        results.push(
+          found === undefined
+            ? fail(`no task matched "${match}"`)
+            : found.status === status
+              ? ok()
+              : fail(`task "${found.subject}" matched "${match}" but has status "${found.status}", expected "${status}"`),
+        );
+      }
+    }
   }
   if (a.egress_denied !== undefined)
     results.push(
@@ -558,6 +920,80 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
       );
     }
   }
+  if (a.input_unmodified !== undefined) {
+    if (ctx.preRunHashes === undefined) {
+      results.push(
+        fail(
+          "evidence unavailable: no pre-run hash manifest for this run/cassette (predates the fingerprinted manifest, or a tier that cannot capture — microvm) — cannot compare content; re-run/re-record on container/hostloop",
+        ),
+      );
+    } else {
+      const globs = a.input_unmodified;
+      const matched = Object.keys(ctx.preRunHashes).filter((p) => anyGlobMatches(globs, p));
+      const modified: string[] = []; // present post-run with a different hash
+      const removed: string[] = []; // gone post-run (deletion is also a content change)
+      const uncheckable: string[] = [];
+      for (const p of matched) {
+        const pre = ctx.preRunHashes[p];
+        if (pre === null) {
+          uncheckable.push(p);
+          continue;
+        }
+        let post: string | null;
+        if (ctx.postRunHashes !== undefined) {
+          // Replay lane: authoritative post-run hash from the cassette manifest (the materialized tree
+          // has 0-byte placeholders for body-less entries, so re-hashing it would be wrong). Absent ⇒
+          // the file isn't in the post-run tree ⇒ removed.
+          post = ctx.postRunHashes[p] ?? null;
+        } else {
+          // Live / verify-run: re-hash the real file. Throw (gone/unreadable) ⇒ removed.
+          try {
+            post = createHash("sha256")
+              .update(readFileSync(join(ctx.workRoot, p)))
+              .digest("hex");
+          } catch {
+            post = null;
+          }
+        }
+        if (post === null) removed.push(p);
+        else if (post !== pre) modified.push(p);
+      }
+      // uncheckable dominates: if any matched path is unmeasurable, don't imply the rest were fully
+      // checked — surface evidence-unavailable rather than a clean verdict.
+      if (uncheckable.length)
+        results.push(
+          fail(
+            `evidence unavailable: pre-run hash missing (over size cap) for: ${uncheckable.slice(0, 5).join(", ")} — raise COWORK_HARNESS_PRERUN_HASH_CAP or narrow the glob`,
+          ),
+        );
+      else if (modified.length || removed.length) {
+        // A change under a READ-ONLY connected folder root can't be the agent's doing — the mount is bound
+        // `:ro`, so the agent physically cannot write/delete there. Such a change is therefore EXTERNAL (a
+        // user editing the live folder mid-run — the hostloop live-folder-window exposure) → evidence-
+        // contaminated, NOT an agent violation. Only changes the agent COULD have made (writable roots) are
+        // a real input_unmodified violation.
+        const roRoots = ctx.readonlyFolderRoots ?? [];
+        const underRo = (p: string) => roRoots.some((r) => p === r || p.startsWith(`${r}/`));
+        const external = [...modified, ...removed].filter(underRo);
+        const agentChanged = { modified: modified.filter((p) => !underRo(p)), removed: removed.filter((p) => !underRo(p)) };
+        if (agentChanged.modified.length || agentChanged.removed.length) {
+          const parts: string[] = [];
+          if (agentChanged.modified.length) parts.push(`modified in place: ${agentChanged.modified.slice(0, 5).join(", ")}`);
+          if (agentChanged.removed.length) parts.push(`removed: ${agentChanged.removed.slice(0, 5).join(", ")}`);
+          results.push(fail(`pre-existing file(s) changed — ${parts.join("; ")}`));
+        } else {
+          // Every change was under a read-only root → external mutation, can't attribute to the agent.
+          results.push(
+            fail(
+              `evidence contaminated: pre-existing file(s) under a read-only connected folder changed mid-run (${external
+                .slice(0, 5)
+                .join(", ")}) — the agent cannot write there, so this is an EXTERNAL edit; cannot verify input integrity`,
+            ),
+          );
+        }
+      } else results.push(ok());
+    }
+  }
   if (a.self_heal_ran !== undefined)
     results.push(
       ctx.scanMissing
@@ -578,31 +1014,30 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
           ? ok()
           : fail(`host path leaked into model-visible text: ${ctx.hostPathLeaked}`),
     );
-  if (a.computer_links_resolve !== undefined) {
-    if (ctx.transcriptMissing) {
-      results.push(fail(`evidence unavailable: transcript sidecar (run.jsonl) absent — cannot evaluate computer_links_resolve`));
-    } else {
-      const links = extractComputerLinks(ctx.transcript);
-      if (links.length === 0) {
-        // Presence-gated by design (see the schema description): zero links in the transcript passes —
-        // an author combines this with transcript_contains to also require a link be present.
-        results.push(ok());
-      } else if (!ctx.linkResolution) {
-        results.push(
-          fail(
-            `evidence unavailable: no link-resolution context wired for this lane — cannot evaluate computer_links_resolve (${links.length} link(s) found)`,
-          ),
-        );
-      } else {
-        const tierNote = ctx.effectiveFidelity ? ` (tier: ${ctx.effectiveFidelity})` : "";
-        const dangling = links
-          .map((link) => ({ link, outcome: resolveComputerLink(link, ctx.workRoot, ctx.linkResolution!) }))
-          .filter(({ outcome }) => !outcome.resolved)
-          .map(({ link, outcome }) => `computer://${link.raw} — checked ${outcome.checkedDescription}`);
-        results.push(dangling.length === 0 ? ok() : fail(`dangling computer:// link(s)${tierNote}: ${dangling.join("; ")}`));
-      }
-    }
-  }
+  const evalComputerLinks = (key: string, requirePresence: boolean) => {
+    if (ctx.transcriptMissing) return fail(`evidence unavailable: transcript sidecar (run.jsonl) absent — cannot evaluate ${key}`);
+    const links = extractComputerLinks(ctx.transcript);
+    if (links.length === 0)
+      // Presence-required by default: zero links can't prove a deliverable link resolves. The
+      // _if_present variant opts into the lenient vacuous pass.
+      return requirePresence
+        ? fail(
+            `${key}: no computer:// link in the transcript — cannot verify a deliverable link resolves (use computer_links_resolve_if_present to pass when no link is expected)`,
+          )
+        : ok();
+    if (!ctx.linkResolution)
+      return fail(
+        `evidence unavailable: no link-resolution context wired for this lane — cannot evaluate ${key} (${links.length} link(s) found)`,
+      );
+    const tierNote = ctx.effectiveFidelity ? ` (tier: ${ctx.effectiveFidelity})` : "";
+    const dangling = links
+      .map((link) => ({ link, outcome: resolveComputerLink(link, ctx.workRoot, ctx.linkResolution!) }))
+      .filter(({ outcome }) => !outcome.resolved)
+      .map(({ link, outcome }) => `computer://${link.raw} — checked ${outcome.checkedDescription}`);
+    return dangling.length === 0 ? ok() : fail(`dangling computer:// link(s)${tierNote}: ${dangling.join("; ")}`);
+  };
+  if (a.computer_links_resolve !== undefined) results.push(evalComputerLinks("computer_links_resolve", true));
+  if (a.computer_links_resolve_if_present !== undefined) results.push(evalComputerLinks("computer_links_resolve_if_present", false));
   if (a.question_asked !== undefined) {
     if (ctx.questionsMissing) {
       results.push(fail(`evidence unavailable: questions sidecar (trace.json) absent — cannot evaluate question_asked`));
@@ -683,7 +1118,7 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
       // where the real file is still on disk. (Existence keys stay green — existence is provable from
       // the recorded hash — but content is genuinely absent, so this fails loud, never vacuous.)
       const rel = relative(resolve(ctx.workRoot), file);
-      // Reason sources by lane: LIVE/verify-run derive read-only from the plan's `readonlyFolderRoots`
+      // Reason sources by lane: LIVE/verify-run derive read-only from `readonlyFolderRoots`
       // (no manifest exists at eval time); REPLAY reads the per-entry `truncationReason` off the
       // materialized manifest (`truncated.get(rel)`). Keeping both is complementary, not redundant.
       const liveReadonly = (ctx.readonlyFolderRoots ?? []).some((pre) => rel === pre || rel.startsWith(pre + "/"));

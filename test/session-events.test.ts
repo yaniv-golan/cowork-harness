@@ -1,0 +1,113 @@
+import { describe, it, expect } from "vitest";
+import { parseMessage, hookEventFrom } from "../src/agent/session.js";
+import type { AgentEvent, AgentSession, DecisionResponse } from "../src/agent/session.js";
+import { Run } from "../src/run/run.js";
+import { ScriptedDecider } from "../src/decide/decider.js";
+
+describe("parseMessage system-subtype catch-all", () => {
+  it("emits system_event for an unrecognized system subtype", () => {
+    // A real compact_boundary carries its payload at the TOP LEVEL of the system message,
+    // and systemEventData strips only the type/subtype envelope — so `data` is the top-level rest.
+    const evs = parseMessage({ type: "system", subtype: "compact_boundary", trigger: "auto" });
+    expect(evs).toContainEqual({ type: "system_event", subtype: "compact_boundary", data: { trigger: "auto" } });
+  });
+
+  it("does NOT emit system_event for init/api_metrics/thinking", () => {
+    for (const subtype of ["init", "api_metrics", "thinking"]) {
+      const evs = parseMessage({ type: "system", subtype, content: "x", tools: [], skills: [] });
+      expect(evs.some((e) => e.type === "system_event")).toBe(false);
+    }
+  });
+});
+
+// `translate()` is a private method on LiveAgentSession, so its two mcp_error emission paths
+// (handler-threw, no-handler-configured) are exercised there directly. What's tested here is the
+// ACCUMULATION side: a Run driven over a session that yields an mcp_error AgentEvent must fold it
+// into rec.mcpErrors (mirrors the MockSession pattern used for decisions elsewhere in the suite).
+class MockSession implements AgentSession {
+  constructor(private events: AgentEvent[]) {}
+  async *start(): AsyncIterable<AgentEvent> {
+    for (const e of this.events) yield e;
+  }
+  sendUserTurn() {}
+  respond(_id: string, _r: DecisionResponse) {}
+  close() {}
+}
+
+describe("Run accumulates mcp_error events", () => {
+  it("folds an mcp_error AgentEvent into rec.mcpErrors", async () => {
+    const ev: AgentEvent[] = [
+      { type: "mcp_error", server: "workspace", code: -32601, message: "no sdkMcp handler configured" },
+      { type: "result", isError: false },
+    ];
+    const rec = await new Run(new MockSession(ev), new ScriptedDecider([])).drive("go");
+    expect(rec.mcpErrors).toEqual([{ server: "workspace", code: -32601, message: "no sdkMcp handler configured" }]);
+  });
+
+  it("rec.mcpErrors is empty when no mcp_error event was seen", async () => {
+    const ev: AgentEvent[] = [{ type: "result", isError: false }];
+    const rec = await new Run(new MockSession(ev), new ScriptedDecider([])).drive("go");
+    expect(rec.mcpErrors).toEqual([]);
+  });
+});
+
+// hookEventFrom is the single decision-reading rule shared by the live emit (translate()'s two
+// hook_callback paths) and the replay reconstruction (replayCassette) — tested directly here so both
+// callers are guaranteed to classify a block identically.
+describe("hookEventFrom", () => {
+  it("classifies the built-in Task hook's block reply as decision:block with the gated tool name", () => {
+    const ev = hookEventFrom(
+      "cowork-task-bg-block",
+      { decision: "block", reason: "Background agents disabled" },
+      { tool_name: "Task", tool_input: { run_in_background: true } },
+    );
+    expect(ev).toEqual({
+      type: "hook_event",
+      callbackId: "cowork-task-bg-block",
+      decision: "block",
+      reason: "Background agents disabled",
+      tool: "Task",
+    });
+  });
+
+  it("classifies an empty reply (allow) as decision:allow", () => {
+    const ev = hookEventFrom("cowork-task-bg-block", {}, { tool_name: "Task" });
+    expect(ev.decision).toBe("allow");
+    expect(ev.reason).toBeUndefined();
+  });
+
+  it("classifies a custom hook's hookSpecificOutput.permissionDecision:deny as a block", () => {
+    const ev = hookEventFrom(
+      "custom-hook",
+      { hookSpecificOutput: { permissionDecision: "deny", permissionDecisionReason: "path outside allowed roots" } },
+      { tool_name: "Bash" },
+    );
+    expect(ev.decision).toBe("block");
+    expect(ev.reason).toBe("path outside allowed roots");
+    expect(ev.tool).toBe("Bash");
+  });
+
+  it("omits tool when input.tool_name is not a string", () => {
+    const ev = hookEventFrom("x", {}, undefined);
+    expect(ev.tool).toBeUndefined();
+  });
+});
+
+describe("Run accumulates hook_event events", () => {
+  it("folds a blocking hook_event AgentEvent into rec.hookEvents", async () => {
+    const ev: AgentEvent[] = [
+      { type: "hook_event", callbackId: "cowork-task-bg-block", decision: "block", reason: "Background agents disabled", tool: "Task" },
+      { type: "result", isError: false },
+    ];
+    const rec = await new Run(new MockSession(ev), new ScriptedDecider([])).drive("go");
+    expect(rec.hookEvents).toEqual([
+      { callbackId: "cowork-task-bg-block", decision: "block", reason: "Background agents disabled", tool: "Task" },
+    ]);
+  });
+
+  it("rec.hookEvents is empty when no hook_event was seen", async () => {
+    const ev: AgentEvent[] = [{ type: "result", isError: false }];
+    const rec = await new Run(new MockSession(ev), new ScriptedDecider([])).drive("go");
+    expect(rec.hookEvents).toEqual([]);
+  });
+});

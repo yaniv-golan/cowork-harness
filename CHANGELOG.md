@@ -6,6 +6,179 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.27.0] — 2026-07-07
+
+An observability pass: `RunResult` now surfaces per-tool timing, error/redundancy rollups, model
+attribution and spend, sub-agent and skill-level detail, context/progress/workspace panels,
+in-place mutation detection, hook/MCP/egress/crash diagnostics, and sandbox resource usage — plus a
+`chat` session now leaves the same trail (`result.json`, trace, run-index row) as a scripted run.
+
+> **Upgrade notes.**
+> - **`RunResult.subagents[].toolsUsed` changed from `string[]` to `Array<{ name, count }>`.** A
+>   consumer reading a sub-agent's tool usage directly off `result.json` must update — the field now
+>   carries per-tool call counts instead of a bare list of names.
+> - **`RunResult.artifacts` is now a derived view of `workspaceFiles`.** Same shape
+>   (`{ path, bytes }[]`), so no consumer action is needed unless you were relying on it being stored
+>   independently.
+
+### Added
+
+- **Per-tool durations and per-message model attribution.** `RunResult.toolDurations` (per-tool call
+  count / total ms / max ms) and `RunResult.models` (distinct model ids seen, first-seen order). New
+  `trace --view tool-durations`.
+- **Tool-error rollup, redundant-call detection, reasoning capture, and per-model usage.**
+  `RunResult.toolErrors` (per-tool call/error counts), `RunResult.redundantToolCalls` (repeated
+  identical `{name, args}` calls), `RunResult.thinking` (capped reasoning blocks), and
+  `RunResult.modelUsage` (per-model tokens/cost/cache, denormalized from the SDK result). New
+  assertions `tool_no_error`, `max_tool_errors`, `max_redundant_tool_calls`. New
+  `stats --metric cache-tokens|model-cost` and a cache-ratio footer on `trace`.
+- **Sub-agent enrichment.** `RunResult.subagents[]` entries gain `prompt`, `model`, `output`, and
+  `attributedSkillId`. `trace --view dispatches` now prints each node's prompt/output/model. New
+  assertion `subagent_output_contains`.
+- **Skill-to-tool-call attribution.** `RunResult.skillActivity[]` — per-skill-activation-window tool
+  tallies and durations. New assertion `skill_tool_used`.
+- **Context, progress, and working-folder panels.** `RunResult.context` (the init manifest's `tools`,
+  `mcpServers`, `availableSkills`), `RunResult.tasks[]` (from the agent's TaskCreate/TaskUpdate calls),
+  and `RunResult.workspaceFiles[]` (every user-visible file, classified `output` | `mount` | `input`,
+  with `bytes` and `sha256`). New assertions `all_tasks_completed`, `task_status`, `skill_available`,
+  `connector_available`, `tool_available`.
+- **`input_unmodified` assertion** — an in-place mutation detector backed by a new
+  `RunResult.preRunHashes` (per-path sha256 of the pre-run tree, size-capped): every pre-existing file
+  matching a glob must keep an unchanged content hash after the run. Complements
+  `no_unexpected_files`, which only sees newly created files.
+- **Hooks, MCP, egress, uncaught context events, and crash diagnostics.** `RunResult.hookEvents`
+  (PreToolUse fire/block), `RunResult.mcpErrors` (failed MCP round-trips), `RunResult.contextEvents`
+  (uncaught system events, including compaction boundaries); richer per-request egress detail
+  (method/path/port/bytes plus deny reason and timestamps); a finer-grained `RunResult.errorSource`
+  (spawn/protocol/exit/agent/result) and `RunResult.stderrLogPath`; the denied tool input is now
+  recorded in `decisions[].detail`. New assertions `hook_blocked`, `no_hook_blocked`,
+  `no_mcp_error`, `compaction_occurred`.
+- **Sandbox resource-usage telemetry.** `RunResult.resources` (peak RSS, avg/peak CPU%) sampled while
+  the run executes on every live tier (container/hostloop/microvm); sample interval tunable via
+  `COWORK_HARNESS_RESOURCE_INTERVAL_MS`. New live-only assertion `max_peak_rss_bytes`.
+- **`chat` sessions now write `result.json`, a trace, and a run-index row** (tagged `mode: "chat"`,
+  no verdict), so an interactive exploration is visible to `stats`, `trace`, and `scaffold` the same
+  way a scripted run is.
+
+The timing/resource/model fields above are informational — they never affect a scenario's pass/fail
+verdict on their own. `no_mcp_error` and `max_peak_rss_bytes` are live-only and excluded on replay;
+`hook_blocked`/`no_hook_blocked` need a `controlOut` cassette on replay; `input_unmodified` needs the
+pre-run hash manifest (container/hostloop — not captured on microvm). All new assertion keys are
+additive: existing cassettes keep replaying with no cassette-version bump.
+
+- **Legible terminal-error reasons.** A failed run no longer reads as a bare `error`. `RunResult` (and,
+  new, `status.json`) now carry `errorSource` — extended with `no_result` (the stream ended with no
+  terminal event, i.e. turn/time exhaustion) and `timeout` — plus `resultSubtype` (the SDK result
+  subtype verbatim, e.g. `error_max_turns`) and `stderrLogPath`. The CLI failure line names the reason
+  (`✗ error (error_max_turns)`, `✗ error (no_result)`, …). Diagnostic only — not read by the verdict.
+- **Turn and wall-clock budgets.** Session `agent_max_turns` raises the agent's turn ceiling via the
+  agent's own `--max-turns` (omitted by default → faithful to interactive Cowork, which passes none);
+  scenario `timeout_ms` (or `skill --timeout <ms>`) sets a wall-clock budget — on expiry the harness
+  kills the agent and the run ends `result:error` / `errorSource:timeout`. Both are distinct from the
+  `max_turns` *assertion* (a post-hoc upper-bound check).
+- **`verify-cassettes` now catches scenario prompt drift.** A committed scenario whose `prompt` diverged
+  from the cassette's frozen prompt (invisible to the skill/baseline fingerprint) is a hard fail, in its
+  own `scenarioDrift` envelope bucket; an unresolvable/unparseable source degrades to a non-failing note.
+  Opt out with `--skip-scenario-drift`. `replay` surfaces the same drift as a non-failing notice.
+- **`present_files` delivery is now served and observable on the container tier.** A new `cowork`
+  sdk-MCP server promotes a scratchpad file to `mnt/outputs` on `present_files` (with realpath/symlink
+  containment on the host-local copy), then injects a synthetic `notifySession` user turn so a
+  multi-turn skill learns the promoted path instead of continuing to write to the stale scratchpad one.
+  New `RunResult.presentedFiles` (one entry per presented file, classified `promoted` / `leaked` /
+  passthrough) and the `no_scratchpad_leak` assertion, both content-class (re-derived from the ordinary
+  `tool_use`/`tool_result` stream, so they replay identically). **Container tier only** — hostloop and
+  microvm don't serve `present_files`, so a scratchpad-delivered file on those tiers is neither promoted
+  nor detected; use `fidelity: container` for `present_files`-based delivery.
+- **`RunResult.decisions[].questions`** — the full `AskUserQuestion` option set (label + description per
+  offered option, plus `header`/`multiSelect`) as originally offered by the model, additive alongside
+  the existing `detail` (flat chosen-answer) field.
+- **Structured `WebSearch` capture.** `RunResult.webSearches` now carries the query and per-result
+  `{title, url}` pairs, parsed from the paired tool_result's link listing, instead of being dropped as
+  unrecoverable. Collapses to `undefined` (matching `models`/`thinking`/`tasks`) when the run made zero
+  `WebSearch` calls — cross-reference `toolCounts.WebSearch` if a zero-calls vs. all-parses-failed
+  distinction ever matters.
+- **`RunResult.thinkingElided`** — count of reasoning blocks dropped past the 50-block cap on
+  `thinking[]`, so a consumer can tell "this is everything" from "this is the tail of a much longer
+  chain." `0` whenever `thinking[]` exists at all (a meaningful "never hit the cap" signal); `undefined`
+  only on lanes where no run/record ever existed.
+
+### Fixed
+
+- **A non-interactive `chat` session (piped/redirected stdin) no longer crashes with a readline error
+  before writing its result.** It now exits cleanly and still writes `result.json`.
+- **`record` no longer prints a spurious `cassette stale: skill dirs not resolvable` warning on every
+  redacted recording.** The redaction verdict-preservation self-check replayed the cassette without its
+  directory, so the relocatable (relative) session path couldn't resolve and the skill-staleness check
+  always reported "can't verify". It now threads the cassette dir through, exactly as `verify-cassettes`
+  does — the warning fires only on genuine drift.
+- **A `context:fork` skill's (or explicit `Agent(subagent_type:"fork")`) inner tool calls now count as
+  main-agent work.** They carry `parentToolUseId` = the `Skill` call's id, but the `Skill` call was never
+  a registered sub-agent dispatch, so they were silently dropped from `toolCounts`, `toolsCalled`,
+  `toolErrors`, and `redundantToolCalls`. A fork inherits the main agent's context, so its tools are the
+  run's own work; real (non-fork) sub-agent dispatches are unaffected — their inner tools stay isolated
+  in `subagents[].toolsUsed` exactly as before.
+
+### Changed — verification is now strict-by-default ("can't verify / incomplete is not green")
+
+A hardening pass over the false-green surface. Several assertions and lanes that previously passed on
+missing, malformed, or incomplete evidence now fail. This can flip a currently-green run to red — see
+the upgrade notes below.
+
+- **Missing/malformed telemetry fails "cannot verify"** instead of passing silently. Task tracking,
+  `present_files`, `WebSearch` parse, and resource samples now record error counters
+  (`RunResult.evidenceErrors`, and `resources.malformedLines`) that make the dependent assertion fail
+  malformed rather than dropping the bad data; an unreadable workspace file records `hashError` instead
+  of an empty hash.
+- **Presence-required assertions.** `tool_no_error`, `all_tasks_completed`, and `computer_links_resolve`
+  now require at least one matching element (a regex that matched nothing, zero tasks, or zero links
+  fails, so a typo can't pass vacuously). New opt-in siblings preserve the lenient behavior:
+  `tool_no_error_if_called`, `task_count_min`, `computer_links_resolve_if_present`.
+- **`no_scratchpad_leak` is gated to the container tier** (the only tier that serves `present_files`);
+  on any other tier it is evidence-unavailable, never a vacuous pass.
+- **Verdict modifiers (`allow_*`) are `true`-only** — `allow_x: false` is now a schema error (it
+  suppressed nothing but read as intentional). **`artifact_json` requires a non-empty `artifact`** and
+  rejects an explicit empty `path`. **A typo'd `requires_capabilities` family hard-fails** as an
+  authoring error instead of being silently ignored.
+- **Incomplete batches fail by default.** A truncated `--matrix` and a budget-stopped `--repeat` now
+  fail unless you pass `--allow-truncated-matrix` / `--allow-budget-stop`.
+- **Strict replay.** A cassette from a NEWER format version fails unless `--best-effort-future-cassette`;
+  an unrecognized/malformed assertion in a current-or-older cassette is rejected (it would otherwise
+  drop silently from replay); the assertion schema rejects unknown keys at scenario parse too.
+  `verify-cassettes` hard-fails **all** recording-shaping drift (baseline, fidelity, answers, skills,
+  capabilities — not just prompt) when the persisted source resolves exactly.
+- **`record --rerecord-stale` refuses the embedded-snapshot fallback** when no on-disk source resolves
+  (it would silently drop scenario edits) — pass `--from-embedded` to opt in; `record` also refuses to
+  overwrite a default-path cassette belonging to a different scenario (slug collision) unless `--force`.
+- **Infrastructure errors (egress/VM sidecar crashes) are a hard verdict fail on both lanes** and are
+  not author-suppressible — the run's evidence is contaminated.
+
+> **Upgrade notes (verification strictness).**
+> - Scenarios relying on any vacuous pass above will now fail; add the matching element, adopt the
+>   `*_if_present`/`task_count_min` sibling, or pass the relevant opt-in flag.
+> - **Cassette format v9.** New cassettes carry a session fingerprint and a persisted record-time folder
+>   map, so replay resolves host-shaped `computer://` links against the recorded correspondence rather
+>   than re-reading the current session. Existing v8-and-earlier cassettes keep replaying unchanged
+>   (backward-compatible); re-record to adopt the new staleness checks.
+> - `verify-cassettes`, `record --dry-run`, and `rehash` now emit the standard `{tool, version, ok,
+>   error}` JSON envelope under `--output-format json`.
+> - `verify-run` now treats `input_unmodified` as filesystem-bound (refuses "can't verify" when the work
+>   dir is gone, instead of a spurious removed-file failure).
+
+The additive pieces: new assertions `tool_no_error_if_called`, `computer_links_resolve_if_present`,
+`task_count_min`; flags `--allow-truncated-matrix`, `--allow-budget-stop`, `--best-effort-future-cassette`,
+`--from-embedded`, `--force`; `RunResult.infraErrors` and `RunResult.evidenceErrors`.
+
+The corrections: `present_files` restricts mount presentation to the real Cowork root allowlist
+(`outputs`/`uploads`/`.host-home`/`.auto-memory`/connected folders) instead of any `mnt/` path (binary-
+verified); egress host-matching strips IPv6 brackets and supports `*.` wildcards in assertions, without
+IDNA-folding allowlist entries (matching the sandbox proxy); resource sampling takes an immediate first
+sample (short runs are no longer unmeasured) and warns on an invalid interval env var; the egress sidecar
+no longer builds `dist/` at runtime and surfaces a fatal proxy error; `--run-dir ~/x` and session
+`~user` paths expand correctly; a non-array `present_files` argument returns a structured MCP error
+instead of throwing; output deletions via a script/non-bash tool are caught by a filesystem pre/post
+diff; and a read-only connected-folder file changed mid-run is attributed as external mutation rather
+than an agent violation.
+
 ## [0.26.0] — 2026-07-05
 
 Cassette/run-result **format-freeze** pass before 1.0 — fixes the parts of these schemas that become

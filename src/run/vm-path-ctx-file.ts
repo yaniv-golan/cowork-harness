@@ -4,7 +4,7 @@ import { writeJsonAtomic, warn } from "../io.js";
 import type { VmPathContext } from "../vm-paths.js";
 
 /**
- * Persists ONE run's `VmPathContext` (the P1 mount/host-path resolution context — see
+ * Persists ONE run's `VmPathContext` (the mount/host-path resolution context — see
  * `display-translate.ts`'s module header) to `<outDir>/mounts.json`, a sibling of `status.json`. The
  * live process already has this ctx in memory (built once, at `buildLaunchPlan` time, and reused for
  * the live display translator); this module is what lets a LATER process — `trace` reading a kept run
@@ -59,7 +59,7 @@ import type { VmPathContext } from "../vm-paths.js";
  *
  * - **`prune`** deletes run dirs wholesale; `mounts.json` needs no special garbage collection — it goes
  *   with the rest of the directory.
- * - **The E4 run index** (`run-index.ts`) stays discovery-only per the parent plan: index rows never
+ * - **The run index** (`run-index.ts`) stays discovery-only: index rows never
  *   carry a mount map, so an indexed run still requires reading THIS file (via its `outDir`) for ctx.
  * - **Cassettes never carry this file.** `record` builds a cassette from exactly `events.jsonl` +
  *   `control-out.jsonl` + a manifest snapshot of the run's user-visible-roots subtree

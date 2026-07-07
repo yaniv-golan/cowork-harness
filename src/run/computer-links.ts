@@ -6,7 +6,7 @@ import { resolve, relative, isAbsolute, sep } from "node:path";
  * link payload from a model-visible transcript and resolves it against whatever evidence the calling
  * lane (live run / verify-run / replay) actually has, WITHOUT touching `src/vm-paths.ts` (that module
  * is the production-mirroring outbound DISPLAY transform; this one is the assertion-side consumer of
- * the same link shapes, deliberately kept separate — see the plan's P3 section).
+ * the same link shapes, deliberately kept separate).
  *
  * Note on percent-encoding: `ctx.transcript` is the RAW model-visible record (never touched by the
  * display transform, which only runs at render surfaces — see src/run/display-translate.ts), so in
@@ -78,8 +78,10 @@ const LINK_SCAN_RE = /(`computer:\/\/[^`]+`)|(\]\(computer:\/\/)|(computer:\/\/)
  * recognizes: markdown-link position (`](computer://...)`), backtick-quoted, and bare tokens.
  * Backtick-quoted links count as a link form (not excluded as "inside code") — production's own
  * rewrite treats them as a link position too (vm-paths.ts `translateString`, position 2). An
- * unterminated markdown-link opener (no matching `)`) is left unextracted, same as production leaves
- * it unrewritten.
+ * unterminated markdown-link opener (no matching `)`) still yields a link: production's bare-token
+ * pass rewrites the URL inside a malformed markdown link too (it doesn't require the `)` to close),
+ * so the bare `computer://` payload is extracted the same way a genuine bare token would be — a link
+ * the display would show is never silently un-extracted here.
  */
 export function extractComputerLinks(text: string): ComputerLink[] {
   const out: ComputerLink[] = [];
@@ -101,11 +103,13 @@ export function extractComputerLinks(text: string): ComputerLink[] {
         out.push(makeLink(text.slice(contentStart, end)));
         re.lastIndex = end + 1;
       } else {
-        // Unterminated `](computer://…` — don't extract, resume right after the opener. Known lenient
-        // divergence from the display transform: its BARE-token pass still rewrites the URL inside a
-        // malformed link (matching the production rewriter), so a link the display shows can go
-        // unasserted here. Lenient direction only (never a false "resolved"), malformed input only.
-        re.lastIndex = contentStart;
+        // Unterminated `](computer://…` — fall back to a bare-token scan from the same position (same
+        // delimiter rules as the `bare` branch below), so the URL is still extracted even though the
+        // markdown link itself never closes. Matches the display transform, which still rewrites this
+        // URL via its bare-token pass.
+        const bareEnd = scanTokenEnd(text, contentStart, BARE_TOKEN_DELIMITERS);
+        out.push(makeLink(text.slice(contentStart, bareEnd)));
+        re.lastIndex = bareEnd;
       }
     } else if (bare !== undefined) {
       const contentStart = m.index + whole.length;
@@ -146,8 +150,8 @@ function normalizeByStructuralMarker(hostPath: string): string | null {
   return null;
 }
 
-/** Replay-only: normalize a host-shaped link to a mount-relative path (for a manifest lookup), per the
- *  plan's "pEe-analog over recorded data". Two strategies, in order: (1) the outputs/uploads
+/** Replay-only: normalize a host-shaped link to a mount-relative path (for a manifest lookup),
+ *  reconstructing over the recorded data. Two strategies, in order: (1) the outputs/uploads
  *  structural marker above; (2) `folderPrefixes` — a recorded connected-folder HOST path prefix ->
  *  its resolved mount name (built at record-replay time from the cassette's recorded
  *  `session.folders` + `userVisibleRoots`; see cassette.ts's `buildFolderPrefixMap`). Returns null when
@@ -168,18 +172,27 @@ export function normalizeHostShapedForReplay(hostPath: string, folderPrefixes: M
 /** Resolution context threaded onto `AssertContext.linkResolution` — see `src/assert.ts`. */
 export interface LinkResolutionContext {
   /** "live" = execute.ts (real run) or verify-run (re-checking a kept run dir on the SAME machine) —
-   *  both check a host-shaped link's path DIRECTLY on the filesystem (the plan groups these two lanes
+   *  both check a host-shaped link's path DIRECTLY on the filesystem (these two lanes are grouped
    *  together). "replay" = a cassette re-drive with no live filesystem access. */
   mode: "live" | "replay";
   /** Replay-only: see `normalizeHostShapedForReplay`. Absent/empty on live (host-shaped links are
    *  checked directly there, no normalization needed) and on any cassette whose session folders
    *  couldn't be recovered from disk. */
   folderPrefixes?: Map<string, string>;
-  /** Live-only, optional: the run's real host roots (outputs/uploads host dirs + each connected
-   *  folder's host source). When present, a host-shaped link must live INSIDE one of them — a link
-   *  to an existing but out-of-workspace host path (e.g. computer:///etc/hosts) is a dangling link,
-   *  not a delivered artifact. When absent (verify-run, which cannot reconstruct folder host paths
-   *  from a kept run dir), host-shaped links fall back to a direct existence check. */
+  /** Replay-only (cassette Finding 25): true when a v9+ cassette REQUIRES a persisted folder-prefix map
+   *  (see cassette.ts's `buildFolderPrefixMap`) but does not carry one. Distinguishes "we have no
+   *  evidence to check this host-shaped link at all" from the ordinary "checked a real map, nothing
+   *  matched" case — a v9+ cassette never falls back to reconstructing `folderPrefixes` from the
+   *  CURRENT session file (that reconstruction is exactly what a stale/rotated session could silently
+   *  get wrong), so an absent map here must fail evidence-unavailable, not report a plain no-match. */
+  folderPrefixesRequiredButAbsent?: boolean;
+  /** Live-only: the run's real host roots (outputs/uploads host dirs + each connected folder's host
+   *  source). A host-shaped link must live INSIDE one of them — a link to an existing but
+   *  out-of-workspace host path (e.g. computer:///etc/hosts) is a dangling link, not a delivered
+   *  artifact. When absent/empty (e.g. verify-run against an older result.json, or a scenario with no
+   *  filesystem evidence to derive a root from), a host-shaped link resolves as evidence-unavailable
+   *  rather than falling back to a direct, unconstrained existence check — an arbitrary host path
+   *  that happens to exist is never silently treated as "resolved". */
   hostRoots?: string[];
 }
 
@@ -196,11 +209,12 @@ export interface LinkCheckOutcome {
  * `materializeManifest`) and `resolution`.
  *
  * VM-shaped links always resolve the same way in both modes: strip the `/sessions/<id>/mnt/` prefix
- * and existsSync the result under `workRoot`. Host-shaped links diverge: `"live"` existsSync's the
- * link's path DIRECTLY (bypassing any resolver — a hostloop link already names a real host path, not
- * a VM path a resolver would translate); `"replay"` cannot probe that host's filesystem, so it
- * normalizes the host path to a mount-relative path first (`normalizeHostShapedForReplay`), then does
- * the same `workRoot`-relative existsSync as a VM-shaped link.
+ * and existsSync the result under `workRoot`. Host-shaped links diverge: `"live"` requires the link's
+ * path to fall inside a recorded `hostRoots` entry, then existsSync's it DIRECTLY (bypassing any
+ * resolver — a hostloop link already names a real host path, not a VM path a resolver would
+ * translate); `"replay"` cannot probe that host's filesystem, so it normalizes the host path to a
+ * mount-relative path first (`normalizeHostShapedForReplay`), then does the same `workRoot`-relative
+ * existsSync as a VM-shaped link.
  */
 export function resolveComputerLink(link: ComputerLink, workRoot: string, resolution: LinkResolutionContext): LinkCheckOutcome {
   if (link.vmShaped) {
@@ -214,22 +228,36 @@ export function resolveComputerLink(link: ComputerLink, workRoot: string, resolu
     return { resolved: existsSync(abs), checkedDescription: `work tree: ${abs}` };
   }
   if (resolution.mode === "live") {
-    if (resolution.hostRoots?.length) {
-      const base = resolve(link.raw);
-      const inside = resolution.hostRoots.some((root) => {
-        const r = resolve(root);
-        return base === r || base.startsWith(r + sep);
-      });
-      if (!inside)
-        return {
-          resolved: false,
-          checkedDescription: `host path outside the run's workspace roots (not a delivered artifact): ${link.raw}`,
-        };
+    if (!resolution.hostRoots?.length) {
+      // No recorded roots to constrain against — do NOT fall back to a raw existsSync of an
+      // arbitrary host path (that would let e.g. computer:///etc/hosts "resolve" just because the
+      // host file happens to exist). Evidence-unavailable, not a silent pass.
+      return {
+        resolved: false,
+        checkedDescription: `host path — no recorded workspace roots to verify against, can't confirm this is a delivered artifact: ${link.raw}`,
+      };
     }
+    const base = resolve(link.raw);
+    const inside = resolution.hostRoots.some((root) => {
+      const r = resolve(root);
+      return base === r || base.startsWith(r + sep);
+    });
+    if (!inside)
+      return {
+        resolved: false,
+        checkedDescription: `host path outside the run's workspace roots (not a delivered artifact): ${link.raw}`,
+      };
     return { resolved: existsSync(link.raw), checkedDescription: `host path (direct): ${link.raw}` };
   }
   const rel = normalizeHostShapedForReplay(link.raw, resolution.folderPrefixes);
   if (rel === null) {
+    if (resolution.folderPrefixesRequiredButAbsent)
+      return {
+        resolved: false,
+        checkedDescription:
+          `evidence unavailable: this cassette has no persisted folder-mount map — a v9+ cassette must carry one, and replay ` +
+          `refuses to re-derive it from the current session (which may have drifted since record)`,
+      };
     return {
       resolved: false,
       checkedDescription: `no recorded folder/outputs/uploads prefix matched this host path (replay cannot probe the live filesystem)`,

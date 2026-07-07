@@ -1,13 +1,20 @@
 # Examples
 
 Runnable, CI-verified worked examples — copy these as the starting point for testing your
-own skill. Each scenario is executed in CI (`run examples/scenarios/`) and schema-validated
-by `test/examples.test.ts`, so they can't silently rot.
+own skill. Every scenario is schema-validated (`test/examples.test.ts`) and lint-checked, and
+the committed cassettes replay token-free on **every** CI run, fork PRs included. The live
+`run examples/scenarios/` pass additionally executes when `ANTHROPIC_API_KEY` is available to
+the workflow (main-repo pushes/PRs) — it's skipped on fork PRs, which never receive the secret.
+See `.github/workflows/ci.yml`.
 
 > These are *examples* of the layout you'd author in your own skill repo. In **your** repo,
 > `scenarios/` + `sessions/` typically live at the root; here they're under `examples/`
 > because this is the harness's own repo. (The harness's internal fidelity self-tests live
 > in `e2e/`, not here.)
+
+> **Untracked files don't mount.** Inside a git repo, the harness stages only **git-tracked** files
+> into the sandbox — `git add` a new skill/scenario file here or it (or the whole folder) mounts
+> empty. See [README → Test a local skill in one command](../README.md#test-a-local-skill-in-one-command).
 
 ## Layout
 
@@ -18,7 +25,10 @@ examples/
   skills/      the example skills under test (each a Claude Code plugin folder)
   data/        sample inputs the scenarios consume (CSVs, a PDF, an mcp.json)
   replays/     committed synthetic cassettes for token-free, Docker-free `replay`
-  answer-policies/  reusable scripted-answer YAML fragments, referenced via `answers: !include` — see docs/scenario.md
+  matrices/    `run --matrix <file>` compatibility-matrix configs (baseline/model/skill_dir axes)
+  answer-policies/  reusable scripted-answer YAML fragments, loaded with `--answer-policy <yaml>` on
+                    `skill`/`decide` (or authored inline via a scenario's `answers:` block) — see
+                    docs/scenario.md § Reusable answer policies (--answer-policy)
 ```
 
 `replays/` has its own [README](./replays/README.md) explaining what each committed cassette covers.
@@ -37,6 +47,7 @@ self-contained and relocatable.
 | `scenarios/csv-fx-normalize.yaml` | `container` | **graceful degradation** under default-deny egress — the skill's real network step is blocked, so `egress_denied` is backed by genuine behavior and the skill falls back instead of crashing. Its `egress_denied` assertion needs a sandboxed tier (`container`+) and is pre-rejected at `protocol` fidelity (no sandbox to enforce it would be a false pass) |
 | `scenarios/skill-loads.yaml` | `container` | an acceptance check that a local skill loads and the python toolchain is present |
 | `scenarios/trigger-accuracy-sweep/` | `container` | a **trigger-accuracy sweep** — a positive prompt and a negative-control prompt against the same skill, each asserting `skill_triggered`/`no_skill_triggered`; run the directory under `run --repeat N` to measure how reliably a description/trigger phrase actually invokes the skill across repeated tries (see [docs/scenario.md § Measuring flakiness](../docs/scenario.md#measuring-flakiness-run---repeat)) |
+| `scenarios/hostloop-computer-links.yaml` | `hostloop` | the harness's **only `hostloop`-tier worked example** — the agent writes a file and shares it back as a `computer://` link, asserting the link `computer_links_resolve`s to the real collected artifact (the "host" side of a hostloop mount is production's own real host path, so this is where link resolution is most load-bearing). Committed as `replays/hostloop-computer-links.cassette.json`, the harness's only token-free replay fixture at the `hostloop` tier. |
 
 ## Run them
 
@@ -71,6 +82,9 @@ cowork-harness run examples/scenarios/                    # all (CI-ready exit c
 ```
 
 > From a source checkout, `node dist/cli.js run …` works too (skip the `npm link`).
+
+> **CI note:** this live pass only runs when `ANTHROPIC_API_KEY` is set (main-repo pushes/PRs); fork
+> PRs get lint + schema validation + token-free replay only — see `.github/workflows/ci.yml`.
 
 The `container` scenarios above are **live `run`s**: they spawn the staged Cowork agent in a
 sandboxed arm64 container, so they need Docker (arm64) + the agent image, a Claude Desktop agent

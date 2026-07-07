@@ -227,6 +227,62 @@ describe("trace view", () => {
   });
 });
 
+describe("trace — thinking rows", () => {
+  it("renders a thinking event as a distinct row, truncated to 120 chars", () => {
+    const longThought = "reasoning ".repeat(20); // > 120 chars
+    const f = eventsFile([assistant([{ type: "thinking", thinking: longThought }]), { type: "result", is_error: false }]);
+    const rows = buildTrace(f);
+    const thinkingRow = rows.find((r) => r.kind === "thinking");
+    expect(thinkingRow).toBeDefined();
+    expect(thinkingRow!.detail!.length).toBeLessThanOrEqual(120);
+  });
+
+  it("formatTrace prints thinking rows with a distinct prefix, not confused with assistant text", () => {
+    const rows = [{ kind: "thinking" as const, detail: "let me check the file" }];
+    const out = formatTrace(rows);
+    expect(out).toContain("let me check the file");
+    expect(out).not.toContain("claude›"); // must not reuse the "text" kind's prefix
+  });
+});
+
+// modelUsage cache-read-ratio footer (§4.7, M3) — formatTrace takes an OPTIONAL second param so every
+// existing one-argument call site (src/cli.ts, and the formatTrace(rows) calls above) keeps compiling.
+describe("formatTrace — cache-read-ratio footer", () => {
+  const rows = [{ kind: "tool" as const, name: "Bash", detail: "ls" }];
+
+  it("includes a cache-read-ratio footer line when opts.modelUsage data is available via the trace context", () => {
+    const out = formatTrace(rows, {
+      modelUsage: {
+        "claude-opus-4-8": { inputTokens: 100, cacheReadInputTokens: 900 },
+      },
+    });
+    expect(out).toContain("cache-read ratio: 90%");
+  });
+
+  it("sums cache-read ratio across multiple models", () => {
+    const out = formatTrace(rows, {
+      modelUsage: {
+        "claude-opus-4-8": { inputTokens: 0, cacheReadInputTokens: 800, cacheCreationInputTokens: 0 },
+        "claude-haiku-4-5": { inputTokens: 0, cacheReadInputTokens: 200, cacheCreationInputTokens: 0 },
+      },
+    });
+    expect(out).toContain("cache-read ratio: 100%");
+  });
+
+  it("omits the footer line entirely when opts is not passed (existing one-arg call sites unaffected)", () => {
+    const out = formatTrace(rows);
+    expect(out).not.toContain("cache-read ratio");
+  });
+
+  it("omits the footer when modelUsage is present but empty/all-zero (guards divide-by-zero, no NaN%/Infinity%)", () => {
+    const out = formatTrace(rows, { modelUsage: {} });
+    expect(out).not.toContain("cache-read ratio");
+    const outZero = formatTrace(rows, { modelUsage: { m: { inputTokens: 0, cacheReadInputTokens: 0 } } });
+    expect(outZero).not.toContain("cache-read ratio");
+    expect(outZero).not.toMatch(/NaN|Infinity/);
+  });
+});
+
 // trace --dispatches: the sub-agent dispatch tree + the real total (read off dispatch_count_max).
 import { buildDispatchTree, formatDispatchTree } from "../src/run/trace-view.js";
 describe("trace --dispatches (dispatch tree + total)", () => {
@@ -267,6 +323,73 @@ describe("trace --dispatches (dispatch tree + total)", () => {
   it("no dispatches → friendly message", () => {
     const f = eventsFile([{ type: "assistant", message: { content: [{ type: "text", text: "hi" }] } }]);
     expect(formatDispatchTree(buildDispatchTree(f))).toMatch(/no sub-agent dispatches/);
+  });
+
+  it("buildDispatchTree pairs each dispatch's own tool_result output, and carries prompt/model", () => {
+    const f = eventsFile([
+      {
+        type: "assistant",
+        message: {
+          model: "claude-sonnet-4-5",
+          content: [{ type: "tool_use", id: "disp1", name: "Agent", input: { subagent_type: "general-purpose", prompt: "go explore" } }],
+        },
+      },
+      { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "disp1", content: "found 3 files" }] } },
+    ]);
+    const { nodes } = buildDispatchTree(f);
+    expect(nodes[0]).toMatchObject({ prompt: "go explore", model: "claude-sonnet-4-5", output: "found 3 files" });
+  });
+
+  it("formatDispatchTree prints the prompt and output first-line per node", () => {
+    const out = formatDispatchTree({
+      nodes: [
+        {
+          toolUseId: "d1",
+          agentType: "general-purpose",
+          declaredTools: [],
+          depth: 0,
+          prompt: "go explore\nmore detail",
+          output: "found 3 files\nmore output",
+        },
+      ],
+      total: 1,
+    });
+    expect(out).toContain("go explore");
+    expect(out).not.toContain("more detail"); // only the first line
+    expect(out).toContain("found 3 files");
+    expect(out).not.toContain("more output");
+  });
+});
+
+// trace --view tool-durations: per-tool call-count/timing aggregate, folded from the sibling
+// timeline.jsonl (M1) via foldToolDurations.
+import { buildToolDurations, formatToolDurations } from "../src/run/trace-view.js";
+describe("buildToolDurations / formatToolDurations", () => {
+  it("reads the sibling timeline.jsonl and folds it into a per-tool duration table", () => {
+    const f = eventsFile([]);
+    const header = JSON.stringify({ v: 1, startedAtWall: new Date(0).toISOString(), startedAtMono: "0" });
+    const lines = [
+      header,
+      JSON.stringify({ seq: 0, ts: 0, line: 0, type: "tool_use", toolUseId: "t1", name: "Bash" }),
+      JSON.stringify({ seq: 1, ts: 120, line: 1, type: "tool_result", toolUseId: "t1", isError: false }),
+    ];
+    writeFileSync(join(f, "..", "timeline.jsonl"), lines.join("\n") + "\n");
+    expect(buildToolDurations(f)).toEqual({ Bash: { calls: 1, totalMs: 120, maxMs: 120 } });
+  });
+
+  it("returns {} when no sibling timeline.jsonl exists (a pre-M1 run dir)", () => {
+    const f = eventsFile([]);
+    expect(buildToolDurations(f)).toEqual({});
+  });
+
+  it("formats an empty duration table as a no-data message", () => {
+    expect(formatToolDurations({})).toContain("no tool-duration data");
+  });
+
+  it("formats a populated duration table with a per-tool row and a total footer", () => {
+    const out = formatToolDurations({ Bash: { calls: 2, totalMs: 300, maxMs: 200 } });
+    expect(out).toContain("Bash");
+    expect(out).toContain("2");
   });
 });
 
@@ -433,6 +556,33 @@ describe("scaffold (SCAFFOLD-FROM-RUN)", () => {
     expect((parsed.assert ?? []).some((a: any) => a.file_exists)).toBe(false);
     expect((parsed.assert ?? []).some((a: any) => a.result)).toBe(false);
   });
+
+  it("scaffolds a scenario from a chat result.json (mode:chat, assertions:[] don't choke it)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "cwh-scaffold-chat-"));
+    const eventsFilePath = join(dir, "events.jsonl");
+    writeFileSync(eventsFilePath, ""); // buildGateTrace reads this with no ENOENT guard — an empty file is valid
+    writeFileSync(
+      join(dir, "result.json"),
+      JSON.stringify({
+        $schema: "x",
+        generator: "cowork-harness",
+        mode: "chat",
+        scenario: "(chat)",
+        prompt: "explore the CSV skill",
+        fidelity: "container",
+        baseline: "1.0",
+        result: "success",
+        assertions: [],
+        toolCounts: { Bash: 2 },
+        egress: [],
+        outDir: dir,
+      }),
+    );
+    const parsed = parseYaml(buildScaffold(eventsFilePath));
+    expect(parsed.prompt).toBe("explore the CSV skill");
+    expect(parsed.fidelity).toBe("container");
+    expect(parsed.assert.some((a: any) => a.result === "success")).toBe(true);
+  });
 });
 
 describe("buildGateTrace — provenance annotation", () => {
@@ -569,5 +719,64 @@ describe("buildGateTrace — provenance annotation", () => {
       ["First?", "scripted", undefined],
       ["Second?", "llm", "m"],
     ]);
+  });
+});
+
+// CLI-level: the `trace` command's cache-ratio footer wiring in src/cli.ts — reads the sibling
+// result.json next to the target events.jsonl (same pattern buildGateTrace already uses for gate
+// provenance) and passes its modelUsage through to formatTrace's new opts param.
+import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
+const CLI = resolve("dist/cli.js");
+const canCli = existsSync(CLI);
+
+function runCliTrace(args: string[], runsDir: string) {
+  const cwd = mkdtempSync(join(tmpdir(), "cwh-trace-cli-cwd-"));
+  const r = spawnSync("node", [CLI, ...args], { encoding: "utf8", cwd, env: { ...process.env, COWORK_HARNESS_RUNS_DIR: runsDir } });
+  return { code: r.status, stdout: r.stdout, stderr: r.stderr };
+}
+
+describe.skipIf(!canCli)("cli trace — cache-read-ratio footer (sibling result.json wiring)", () => {
+  it("prints the footer when a sibling result.json carries modelUsage", () => {
+    const runsDir = mkdtempSync(join(tmpdir(), "cwh-trace-cli-runs-"));
+    const outDir = join(runsDir, "a-scenario", "local_1");
+    mkdirSync(outDir, { recursive: true });
+    writeFileSync(
+      join(outDir, "events.jsonl"),
+      [
+        JSON.stringify({
+          type: "assistant",
+          message: { content: [{ type: "tool_use", id: "toolu_1", name: "Bash", input: { command: "ls" } }] },
+        }),
+        JSON.stringify({ type: "result", is_error: false }),
+      ].join("\n"),
+    );
+    writeFileSync(
+      join(outDir, "result.json"),
+      JSON.stringify({ modelUsage: { "claude-opus-4-8": { inputTokens: 100, cacheReadInputTokens: 900 } } }),
+    );
+    const r = runCliTrace(["trace", "local_1"], runsDir);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("cache-read ratio: 90%");
+  });
+
+  it("omits the footer when there is no sibling result.json (no crash)", () => {
+    const runsDir = mkdtempSync(join(tmpdir(), "cwh-trace-cli-runs-nosib-"));
+    const outDir = join(runsDir, "a-scenario", "local_1");
+    mkdirSync(outDir, { recursive: true });
+    writeFileSync(
+      join(outDir, "events.jsonl"),
+      [
+        JSON.stringify({
+          type: "assistant",
+          message: { content: [{ type: "tool_use", id: "toolu_1", name: "Bash", input: { command: "ls" } }] },
+        }),
+        JSON.stringify({ type: "result", is_error: false }),
+      ].join("\n"),
+    );
+    const r = runCliTrace(["trace", "local_1"], runsDir);
+    expect(r.code).toBe(0);
+    expect(r.stdout).not.toContain("cache-read ratio");
   });
 });

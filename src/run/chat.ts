@@ -2,9 +2,9 @@ import readline from "node:readline";
 import os from "node:os";
 import { spawn, spawnSync } from "node:child_process";
 import { join, resolve } from "node:path";
-import { mkdirSync, existsSync, readdirSync } from "node:fs";
+import { mkdirSync, existsSync, readdirSync, writeFileSync } from "node:fs";
 import { loadBaseline, resolveAgentBinary } from "../baseline.js";
-import { loadSession, buildLaunchPlan } from "../session.js";
+import { loadSession, buildLaunchPlan, userVisibleRootsFromPlan, readonlyFolderRootsFromPlan } from "../session.js";
 import { spawnContainer } from "../runtime/container.js";
 import { spawnHostLoop } from "../runtime/hostloop.js";
 import { spawnProtocol } from "../runtime/protocol.js";
@@ -17,6 +17,10 @@ import { LiveAgentSession, type AgentEvent } from "../agent/session.js";
 import { Run, type RunHooks } from "./run.js";
 import { makeRenderer, startHeartbeat, type RenderPlan } from "./renderer.js";
 import { runsWriteRoot } from "./trace-view.js";
+import { buildChatResult } from "./chat-result.js";
+import { writeTrace } from "./execute.js";
+import { appendIndexRow, indexRowFromResult } from "./run-index.js";
+import { scrub, collectSecrets } from "../secrets.js";
 import { Chain, ScriptedDecider, PermissionDefaultDecider, PromptDecider } from "../decide/decider.js";
 import { readGateFlag } from "../loop-decision.js";
 import type { WebFetchProvenance } from "../hostloop/workspace-handler.js";
@@ -195,7 +199,7 @@ export async function cmdChat(args: string[]) {
   const outDir = join(runsWriteRoot(), "chat", sessionId);
   mkdirSync(outDir, { recursive: true });
   const plan = buildLaunchPlan(session, baseline, outDir, fidelity, false); // chat has no resume concept
-  // Item 2 (mounts.json — see vm-path-ctx-file.ts's header): mirror execute.ts's unconditional write.
+  // mounts.json (see vm-path-ctx-file.ts's header): mirror execute.ts's unconditional write.
   // Chat's `fidelity` is fixed at CLI-parse time (no "cowork" gate resolution here, unlike execute.ts's
   // effectiveFidelity), so it IS the effective tier this session actually runs at. Best-effort; never
   // fails the chat session.
@@ -245,6 +249,7 @@ export async function cmdChat(args: string[]) {
   const runner = process.env.COWORK_CONTAINER_RUNTIME ?? "docker";
   let containerName: string | undefined;
   let child: { kill?: (s?: NodeJS.Signals) => void } | undefined;
+  let record: import("./run.js").RunRecord | undefined;
   // Ctrl-C — reap the agent container in the "container" phase (before the sidecar's network teardown).
   const deregisterContainerReap = sidecar
     ? registerCleanup({
@@ -298,7 +303,7 @@ export async function cmdChat(args: string[]) {
       const renderer = makeRenderer(renderPlan);
       const run = new Run(agent, decider, [renderer], sessionId);
       stopHeartbeat = startHeartbeat(renderer, renderPlan, start);
-      await run.drive(withSeedPrompt(seedPrompt, ttyTurns(rl)), {});
+      record = await run.drive(withSeedPrompt(seedPrompt, ttyTurns(rl)), {});
     } else if (fidelity === "hostloop") {
       // honor --fidelity hostloop in chat, mirroring execute.ts's branch selection.
       const hl = spawnHostLoop(scenario, baseline, plan, outDir, sessionId, {
@@ -352,7 +357,7 @@ export async function cmdChat(args: string[]) {
           permissiveMode: plan.permissionMode === "bypassPermissions",
         };
       }
-      await run.drive(withSeedPrompt(seedPrompt, ttyTurns(rl)), {
+      record = await run.drive(withSeedPrompt(seedPrompt, ttyTurns(rl)), {
         sdkMcp: hl.sdkMcp,
         hooks: hl.hooks,
       });
@@ -370,7 +375,7 @@ export async function cmdChat(args: string[]) {
       const renderer = makeRenderer(renderPlan);
       const run = new Run(agent, decider, [renderer], sessionId);
       stopHeartbeat = startHeartbeat(renderer, renderPlan, start);
-      await run.drive(withSeedPrompt(seedPrompt, ttyTurns(rl)), {});
+      record = await run.drive(withSeedPrompt(seedPrompt, ttyTurns(rl)), {});
     }
   } finally {
     stopHeartbeat?.();
@@ -386,6 +391,30 @@ export async function cmdChat(args: string[]) {
     rl.close(); // the one shared stdin interface — closed once, here
   }
   log(`\nchat ended (transcript under ${outDir})\n`);
+  // A session that crashed before the agent produced its first turn has no RunRecord — nothing to
+  // write. Otherwise write the same result.json/trace/index-row shape `run` and `skill` write, so a
+  // chat session shows up in `stats`/`trace`/`scaffold` — previously chat discarded `record` entirely.
+  if (record) {
+    // workRoot is tier-conditional (mirrors execute.ts): protocol runs the host binary directly with
+    // no container sandbox, so it has no `work/session/mnt` — only container/hostloop do.
+    const workRoot = fidelity === "protocol" ? join(resolve(outDir), "work") : join(resolve(outDir), "work", "session", "mnt");
+    const chatResult = buildChatResult(record, {
+      scenario: scenario.name || "(chat)",
+      prompt: seedPrompt ?? "",
+      fidelity,
+      baseline: baseline.appVersion,
+      outDir,
+      workRoot,
+      userVisibleRoots: userVisibleRootsFromPlan(plan),
+      readonlyFolderRoots: readonlyFolderRootsFromPlan(plan),
+      egress: sidecar ? sidecar.collect() : [],
+      durationMs: Date.now() - start,
+    });
+    const secrets = collectSecrets();
+    writeFileSync(join(outDir, "result.json"), scrub(JSON.stringify(chatResult, null, 2), secrets));
+    appendIndexRow(runsWriteRoot(), indexRowFromResult(chatResult, { command: "chat", partial: false }));
+    writeTrace(outDir, record, chatResult.egress, secrets, chatResult.durationMs);
+  }
 }
 
 /** Prepend an optional seed prompt before yielding from the TTY turn generator. */
@@ -407,7 +436,11 @@ async function* ttyTurns(rl: readline.Interface): AsyncGenerator<string> {
   });
   const ask = () =>
     new Promise<string | null>((res) => {
-      if (closed) return res(null);
+      // Read the interface's REAL closed state, not just the local `closed` flag: with a non-interactive
+      // stdin (a pipe or /dev/null) the interface can emit `close` DURING the seed turn — before this
+      // generator's `once("close")` listener above is even registered — so the flag can miss it. Calling
+      // rl.question() on an already-closed interface throws ERR_USE_AFTER_CLOSE; treat closed as EOF → null.
+      if (closed || (rl as unknown as { closed?: boolean }).closed) return res(null);
       const onClose = () => res(null);
       rl.question("\nyou> ", (a) => {
         rl.removeListener("close", onClose);

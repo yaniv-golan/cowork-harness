@@ -3,8 +3,8 @@ name: cowork-harness
 description: Test or debug a Claude Code skill/plugin under Claude Cowork's runtime — sandboxed agent, default-deny egress, the can_use_tool permission/question protocol — using the cowork-harness CLI. Use when validating or regression-testing a skill, authoring or debugging a scenario YAML (prompt + scripted answers + assert:), choosing a fidelity tier, scripting AskUserQuestion / tool-permission answers, or asserting artifacts, egress, or sub-agent dispatch. Especially when a harness run no-ops an assertion, fails on an unanswered gate, false-greens, a steered answer never reaches the model, or a web_fetch is unexpectedly denied or gated. NOT for generic unit testing (pytest/vitest of your own scripts) or non-Cowork CI. Covers the skill / run / chat / record / replay / trace / decide / assertions / scaffold commands and the session-vs-scenario split.
 metadata:
   author: cowork-harness
-  version: 0.26.0
-  tracks-harness: cowork-harness 0.26.0 (baseline desktop-1.18286.0)
+  version: 0.27.0
+  tracks-harness: cowork-harness 0.27.0 (baseline desktop-1.18286.0)
 ---
 
 # cowork-harness
@@ -22,7 +22,7 @@ flagged with a loud `::warning::`, not silent — auto-answer a gate, observe an
 allowlist). This skill exists mostly to keep you out of those traps — the Gotchas section below is
 the highest-value part. Read it.
 
-> **Version note:** the facts and `file:line` pointers here track `cowork-harness 0.26.0` (baseline
+> **Version note:** the facts and `file:line` pointers here track `cowork-harness 0.27.0` (baseline
 > `desktop-1.18286.0`). If your checkout is newer, prefer the live `--help`, `SPEC.md`, and
 > `docs/*.md` over this snapshot, and re-run the bundled linter.
 
@@ -38,10 +38,11 @@ cowork-harness skill ./my-skill "do X"      # run the skill once against the sta
 Before the first command, confirm the CLI is reachable and **fail loud** (never fake a pass) when a tier's dependencies are missing:
 
 - **One-shot check.** Run `cowork-harness doctor [--tier <tier>]` first — a read-only prerequisite check that inspects Docker, the staged agent, the token, and the baseline in one pass. The bullets below explain each thing it checks (and how to fix it).
-- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 0.26.0**. If it's missing or older, prefix every command with the version floor `npx "cowork-harness@>=0.26.0" <cmd>` (Node ≥ 20), or install once with `npm i -g "cowork-harness@>=0.26.0"`. **Pin `@>=0.26.0`, never `@latest`** — `@latest` can silently fetch an older CLI and the new commands fail as "unknown command", whereas the floor **fails loud** if no compatible version is published. (≥ 0.26.0 is what gates the commands/assertions this skill teaches: `assertions --list`, `scaffold <run-id>`, `trace --view dispatches`, `artifact_json` incl. the `in:` operator, `verify-cassettes`, batch `record <dir>`/`--rerecord-stale`, `record --concurrency <N>`, record-time redaction, multiSelect/`answer:`, `verify-run` answer-coverage, `record --max-artifact-bytes`, live record-time deciders, `verify-cassettes --allow-domain`/`--allow-email`/`--allow-path`/`--allow-patterns-file` (`path` — local absolute filesystem paths — is the scanner's 4th class, new in 0.21.0; `--allow-patterns-file <path>` is a FILE of patterns, one regex per line — not a path to allow, unlike `--allow <regex>`), scenario `skills:` staleness scoping with `COWORK_HARNESS_AGENT_SCOPE=skill`, `chat --plugin`, `/help` in the REPL, `hostloop`'s native host/VM process split with its `allow_host_writes:` consent field, and `computer_links_resolve` (new in 0.22.0).)
+- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 0.27.0**. If it's missing or older, prefix every command with the version floor `npx "cowork-harness@>=0.27.0" <cmd>` (Node ≥ 20), or install once with `npm i -g "cowork-harness@>=0.27.0"`. **Pin `@>=0.27.0`, never `@latest`** — `@latest` can silently fetch an older CLI and the new commands fail as "unknown command", whereas the floor **fails loud** if no compatible version is published. (≥ 0.27.0 is what gates the commands/assertions this skill teaches: `assertions --list`, `scaffold <run-id>`, `trace --view dispatches`, `artifact_json` incl. the `in:` operator (passes when the resolved value deep-equals one of the listed members — value ∈ your list, not the reverse), `verify-cassettes`, batch `record <dir>`/`--rerecord-stale`, `record --concurrency <N>`, record-time redaction, multiSelect/`answer:`, `verify-run` answer-coverage, `record --max-artifact-bytes`, live record-time deciders, `verify-cassettes --allow-domain`/`--allow-email`/`--allow-path`/`--allow-patterns-file` (`path` — local absolute filesystem paths — is the scanner's 4th class, new in 0.21.0; `--allow-patterns-file <path>` is a FILE of patterns, one regex per line — not a path to allow, unlike `--allow <regex>`), scenario `skills:` staleness scoping with `COWORK_HARNESS_AGENT_SCOPE=skill`, `chat --plugin`, `/help` in the REPL, `hostloop`'s native host/VM process split with its `allow_host_writes:` consent field, and `computer_links_resolve` (new in 0.22.0).)
 - **Agent binary (sandboxed live tiers — `container`/`microvm`/`hostloop`/`cowork`).** The staged Claude Code agent is **bind-mounted** from a local Claude Desktop install, or point `COWORK_AGENT_BINARY` at a `claude-code-vm/<ver>/claude` ELF. Nothing is bundled. `protocol` (L0) and `replay` need no staged agent; for the sandboxed tiers, no agent → no run; report that, don't skip silently.
 - **Docker / Lima.** Only `--fidelity protocol` (L0) runs without them. `container` / `microvm` / `hostloop` / `cowork` need Docker (Lima for L2). If they're absent, drop to `--fidelity protocol` and **say so** — a green that never exercised the sandbox is not a sandbox pass.
 - **Auth.** `CLAUDE_CODE_OAUTH_TOKEN` (preferred) or `ANTHROPIC_API_KEY`, via env or `.env`. Minting an OAuth token needs the **`claude` CLI** (`npm i -g @anthropic-ai/claude-code`, then `claude setup-token`).
+- **`--dotenv` is a GLOBAL flag — put it BEFORE the subcommand.** `cowork-harness --dotenv .env record …`, never `cowork-harness record … --dotenv .env`. Every *other* flag is subcommand-level, so muscle memory fights this one; the harness rejects the misplaced form with an exact-fix error, but placing it first avoids the round-trip.
 
 ## 1. Pick the loop
 
@@ -55,7 +56,7 @@ Before the first command, confirm the CLI is reachable and **fail loud** (never 
 
 Full command set: `skill · run · chat · record · replay · verify-cassettes · rehash · prune · lint ·
 verify-run · trace · inspect · diff · stats · decide · gates · answer · scaffold · assertions --list · sync ·
-list · boundary-check · status · vm <init|status|delete|prune> · doctor`. Always check `cowork-harness <cmd> --help`.
+list · boundary-check · status · vm <init|status|delete|prune> · doctor · init-redact`. Always check `cowork-harness <cmd> --help`.
 
 **Two different `scaffold` tools — don't confuse them.** The native `cowork-harness scaffold <run-id>`
 above turns an already-*recorded* run into a scenario (needs a run to exist first). The bundled
@@ -157,6 +158,12 @@ checkable regardless of PID namespace. The harness prints `[status] <outDir>` to
 run starts, so capture stderr to get the exact directory. `--follow` fails loud on a timeout/staleness
 rather than hanging forever. See `docs/run-status.md` for the full recipe.
 
+**A multi-minute `record`/`run` outlives a short-lived wrapper.** Don't launch a long record from a
+subagent that returns before it finishes — the returning agent tears down its process tree and kills the
+in-flight run mid-artifact-write. Run it foreground, or detached from any process that will exit first.
+(The `status.json` liveness above is exactly what surfaces such a teardown as `"error"`/`stale` rather
+than a stuck `"running"`.)
+
 ## 6. Assertions: two orthogonal axes
 
 Conflating these is the **biggest landmine**. An assertion key has two independent properties:
@@ -176,6 +183,35 @@ Getting Axis B wrong means a check that **does nothing in CI** — the harness w
 catches it before you push — run it (§9).
 
 See `references/scenario-schema.md` for the full assertion catalog with each key's replay class.
+
+### Which assertion for which question (goal → key)
+
+Beyond the outcome/content keys most scenarios reach for first (`result`, `transcript_*`,
+`file_exists`/`user_visible_artifact`, `artifact_json`), the harness surfaces the agent's *behavior*
+— tool health, sub-agent work, panels, skill attribution, resources — as assertable keys. Reach for
+them by what you're trying to prove:
+
+| You want to check that… | Reach for |
+|---|---|
+| the skill didn't error out of a tool | `tool_no_error: <regex>`, `max_tool_errors: <N>` |
+| it didn't waste repeated identical calls | `max_redundant_tool_calls: <N>` |
+| a deliverable reached the user | `user_visible_artifact: <path>` (+ `no_scratchpad_leak: true` if it delivers via `present_files` — **`container` only**) |
+| a to-do workflow finished | `all_tasks_completed: true`, `task_status: {match, status}` |
+| a skill / connector / tool was **offered** | `skill_available`, `connector_available`, `tool_available` (all `<regex>`) |
+| a skill actually **ran** (or must NOT) | `skill_triggered: <regex>`, `no_skill_triggered: <regex>` |
+| a tool ran **inside** a skill's scope | `skill_tool_used: {skill, tool}` |
+| a sub-agent did the work | `subagent_output_contains: {contains}`, `subagent_dispatched: <regex>`, `dispatch_count_max: <N>` |
+| a pre-existing input wasn't mutated | `input_unmodified: [<glob>]` (live/verify-run; not microvm) |
+| a resource ceiling held | `max_peak_rss_bytes: <N>` (**live-only**) |
+| a hook blocked / didn't block a tool | `hook_blocked: <regex>`, `no_hook_blocked: true` (replay needs a `controlOut` cassette) |
+| every MCP round-trip succeeded | `no_mcp_error: true` (**live-only**) |
+| a context compaction happened | `compaction_occurred: true` |
+
+Every one of these still obeys the two axes above — several are live-only or need a `controlOut`
+cassette on replay, so check the catalog's replay class before putting one on a PR gate.
+`cowork-harness assertions --list` prints the full, always-current key set with one-line semantics
+straight from the schema — treat it (and the catalog) as the source of truth; this map is a
+goal-oriented index into it, not a second catalog.
 
 ## 7. web_fetch (fail-closed, two-path)
 
@@ -263,6 +299,26 @@ The run verdict may include `WARN`-severity signals in addition to pass/fail. On
   the run can still green. If you see it, fix the asset path — a green with a missing asset is
   not a valid pass.
 
+### Inspecting a run's observability output
+
+A verdict is only the top of what a run records. Beyond pass/fail, every `run`/`skill`/`chat` writes a
+`result.json` and a trace you can read without a re-record — use these to *observe* behavior (and to decide
+which assertions from §6 are worth adding), and to diagnose a failure:
+
+- **`cowork-harness trace <run-dir> --view <view>`** — `tool-durations` (per-tool call count + timing),
+  `dispatches` (the sub-agent tree, each dispatch's prompt / model / output), `questions` (gates +
+  sub-question totals), `tools`. Default digests the run.
+- **`cowork-harness stats [--metric <m>]`** — aggregate across the run index: `cost`, `duration`,
+  `tokens`, `cache-tokens`, `model-cost`, `turns`, `pass-rate`.
+- **`result.json` carries the raw fields** the assertions read: `toolDurations`, `models`, `toolErrors`,
+  `redundantToolCalls`, `modelUsage`, `thinking`, `skillActivity`, `subagents[]` (prompt/model/output/
+  `attributedSkillId`), `context` (tools/mcpServers/availableSkills), `tasks`, `workspaceFiles`,
+  `presentedFiles`, `hookEvents`, `mcpErrors`, `contextEvents`, `resources` — see the README's
+  "Observability fields" for the full field semantics.
+- **Opaque failure?** A failed run also records **`errorSource`** (where the failure originated) and
+  **`stderrLogPath`** (the captured agent stderr) — read those and `trace <run-dir>` *before* re-running;
+  a re-record rarely tells you more than the captured stderr already does.
+
 ## 9. Scaffold a valid scenario, lint before you push, then place in CI
 
 Don't hand-write the YAML from memory — that's how invented keys (`assertions:` vs `assert:`,
@@ -307,6 +363,11 @@ the four-stage pipeline.
 `cowork-harness chat` opens an interactive multi-turn REPL against a live Cowork session. It is
 **not** an asserted test — no `assert:` block, no cassette. Use it to explore behavior, reproduce a
 bug interactively, or test a prompt before committing it to a scenario.
+
+Each session still writes an informational `result.json` (`mode: "chat"`, no `assertions`) plus a
+trace and index row under its run dir — the same telemetry (tool durations, model usage, resources,
+etc.) that `run`/`skill` produce — so `cowork-harness trace <chat-run-dir>` / `stats` work on a chat
+session too, even though it never yields a verdict.
 
 **`--plugin <dir>` flag (repeatable).** Load additional skill folders alongside the primary session
 plugin. Each `--plugin <dir>` appends the folder to `local_plugins`. Useful when the skill-under-test
@@ -478,6 +539,14 @@ are the ones that bite hardest.
     *committed* body is scanned. `scaffold` won't emit `file_exists` for one either (it's not in
     `RunResult.artifacts`). A `mode: rw`/`rwd` folder's contents are captured with a full body, same as
     `outputs/`.
+
+21. **A `fidelity: cowork` cassette can go stale in a way `skill`/`format` drift won't catch.** Its recorded
+    `effectiveFidelity` field pins which concrete tier (`hostloop` or `container`) the baseline resolved to
+    AT RECORD TIME. If a later Desktop baseline flips that resolution, `verify-cassettes` reports it as a
+    `resolved-tier` finding (re-record — the recording now exercises the wrong tier); a cassette with no
+    `effectiveFidelity` at all, or an unloadable pinned `baseline:`, reports `unverifiable-tier` instead
+    (couldn't check — also re-record). Both are `fidelity: cowork`-only; an explicit-tier scenario never
+    produces them. See `docs/cassette.md` § tier staleness.
 
 For the complete gotcha list, the assertion catalog, the YAML schema, the fidelity/answer tables,
 and the CI recipe, read the files in `references/`.

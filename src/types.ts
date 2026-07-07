@@ -165,7 +165,7 @@ export type AnswerRule = z.infer<typeof AnswerRule>;
 // Each field carries a `.describe()` so it is the SINGLE source for both the published JSON schema and
 // `cowork-harness assertions --list` (which reads `Assertion.shape[k].description`) — the list can never drift
 // from the schema. Keep descriptions one line.
-export const Assertion = z.object({
+export const Assertion = z.strictObject({
   transcript_contains: z.string().min(1).optional().describe("the transcript contains this literal substring"),
   transcript_not_contains: z.string().min(1).optional().describe("the transcript does NOT contain this literal substring"),
   transcript_matches: z.string().optional().describe("regex (case-insensitive) over the transcript — fuzzy content for stochastic prose"),
@@ -191,6 +191,13 @@ export const Assertion = z.object({
   subagent_tool_absent: z.string().optional().describe("no sub-agent used this tool"),
   subagent_dispatched: z.string().optional().describe("a sub-agent matching this regex (by agentType or description) was dispatched"),
   subagent_declared_but_unused: z.string().optional().describe("a sub-agent declared this tool but never used it (the fabrication proxy)"),
+  subagent_output_contains: z
+    .object({
+      match: z.string().optional().describe("regex over agentType or description, narrowing to specific dispatch(es); omit to check all"),
+      contains: z.string().describe("substring that must appear in the matched dispatch(es)' output"),
+    })
+    .optional()
+    .describe("a dispatched sub-agent's own output contained this substring (optionally narrowed to dispatches matching `match`)"),
   dispatch_count_max: z.number().int().nonnegative().optional().describe("total sub-agent dispatches ≤ N (the {global:3} ceiling)"),
   skill_triggered: z
     .string()
@@ -200,6 +207,18 @@ export const Assertion = z.object({
     .string()
     .optional()
     .describe("no invoked skill id matched this regex — the negative-control / description-collision catcher"),
+  skill_available: z
+    .string()
+    .optional()
+    .describe("a staged skill's id matched this regex (offered, not necessarily invoked — see skill_triggered for invocation)"),
+  connector_available: z
+    .string()
+    .optional()
+    .describe("an MCP server/connector's name matched this regex (available, not necessarily used)"),
+  tool_available: z
+    .string()
+    .optional()
+    .describe("a tool in the init manifest matched this regex (available, not necessarily called — see tool_called for invocation)"),
   max_cost_usd: z
     .number()
     .positive()
@@ -221,12 +240,100 @@ export const Assertion = z.object({
     .nonnegative()
     .optional()
     .describe("total top-level tool calls (sum of toolCounts, sub-agent tools excluded) ≤ N"),
+  tool_no_error: z
+    .string()
+    .optional()
+    .describe(
+      "no tool whose name matches this regex recorded any error (RunResult.toolErrors[name].errors === 0 for every match) — REQUIRES at least one matching tool call (fails if the regex matched nothing, so a typo can't silently pass; use tool_no_error_if_called for the presence-free variant)",
+    ),
+  tool_no_error_if_called: z
+    .string()
+    .optional()
+    .describe(
+      "like tool_no_error, but PASSES VACUOUSLY when no tool matches the regex — the lenient, presence-free variant for a tool that may legitimately not run",
+    ),
+  max_tool_errors: z
+    .number()
+    .int()
+    .nonnegative()
+    .optional()
+    .describe("total tool errors across all tools (sum of RunResult.toolErrors[*].errors) ≤ N"),
+  max_redundant_tool_calls: z
+    .number()
+    .int()
+    .nonnegative()
+    .optional()
+    .describe(
+      "total WASTED repeated tool calls (sum of (count-1) across every redundant {name,args} group in RunResult.redundantToolCalls) ≤ N — not the raw count of redundant groups",
+    ),
+  skill_tool_used: z
+    .object({
+      skill: z.string().describe("regex matched against a skill-activation window's skillId"),
+      tool: z.string().describe("regex matched against a tool name in that window's toolCounts"),
+    })
+    .optional()
+    .describe(
+      "a tool matching `tool` ran inside a skill-activation window whose skillId matches `skill` — heuristic for inline skills (a sticky, sequential window faithfully matching the real agent's activeSkill scope, not an exact per-tool boundary; see RunResult.skillActivity's doc comment)",
+    ),
+  all_tasks_completed: z
+    .literal(true)
+    .optional()
+    .describe(
+      'every task in RunResult.tasks[] reached status "completed" — REQUIRES at least one task (a run with zero tasks fails: it cannot have "completed them all"); only `true` is valid',
+    ),
+  task_count_min: z
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .describe("at least N tasks were created (RunResult.tasks.length >= N) — the presence companion for task assertions"),
+  task_status: z
+    .object({
+      match: z.string().describe("regex matched against a task's subject OR id"),
+      status: z.string().describe("the status the matching task must have reached"),
+    })
+    .optional()
+    .describe("a task whose subject or id matches `match` reached `status`"),
   max_turns: z
     .number()
     .int()
     .nonnegative()
     .optional()
     .describe("the SDK-reported (or fallback-counted) turn count ≤ N — replay-checkable (the re-drive recounts turns deterministically)"),
+  max_peak_rss_bytes: z
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .describe(
+      "peak sampled RSS of the agent sandbox <= N bytes — live-only (container/hostloop/microvm); evidence-unavailable on replay/protocol or when sampling captured no RSS",
+    ),
+  compaction_occurred: z
+    .literal(true)
+    .optional()
+    .describe(
+      "a context-compaction boundary occurred during the run (a `compact_boundary` system event was recorded); only `true` is valid — omit to not require it",
+    ),
+  no_mcp_error: z
+    .literal(true)
+    .optional()
+    .describe("no MCP round-trip failed (RunResult.mcpErrors is empty) — live-only (excluded on replay); only `true` is valid"),
+  hook_blocked: z
+    .string()
+    .optional()
+    .describe("a PreToolUse hook blocked a tool whose name matches this regex (RunResult.hookEvents) — replay needs controlOut"),
+  no_hook_blocked: z
+    .literal(true)
+    .optional()
+    .describe(
+      "no tool was hook-blocked during the run (distinguishes a real tool crash from an intentional block) — replay needs controlOut; only `true` is valid",
+    ),
+  no_scratchpad_leak: z
+    .literal(true)
+    .optional()
+    .describe(
+      "every file presented via present_files that was in the scratchpad was successfully promoted to outputs (none left behind); vacuous pass if nothing was presented — pair with a presence check to require a delivery; content-class (re-derived from the tool_use/tool_result stream, so checkable on replay too); CONTAINER TIER ONLY — present_files is not served on hostloop/microvm, where a scratchpad-delivered file is neither promoted nor detected (use fidelity: container for present_files-based delivery); only `true` is valid",
+    ),
   egress_denied: z.string().optional().describe("egress to this host was denied"),
   egress_allowed: z.string().optional().describe("egress to this host was allowed"),
   // Only `true` is accepted: `false` is rejected as a footgun. The assertion is presence-semantic — authoring
@@ -244,6 +351,13 @@ export const Assertion = z.object({
     .describe(
       "fails if the run CREATED a file under a user-visible root whose workRoot-relative path (e.g. outputs/x.md) matches none of these globs (** = whole path segment for any depth, * within a segment, ? one char); [] = no new files allowed; new-files-only — overwriting a pre-existing file in place is invisible (use content-level producer stamping); needs a pre-run manifest (harness ≥0.24 recordings) — absence fails loud on live/verify-run; microvm cannot capture (use container/hostloop)",
     ),
+  input_unmodified: z
+    .array(z.string().min(1))
+    .min(1)
+    .optional()
+    .describe(
+      "every pre-existing file whose workRoot-relative path matches a glob has an unchanged content hash after the run (in-place mutation detector)",
+    ),
   self_heal_ran: z.boolean().optional().describe("skill resolved scripts via /sessions (plugin-root self-heal)"),
   transcript_no_host_path: z
     .literal(true)
@@ -255,7 +369,13 @@ export const Assertion = z.object({
     .literal(true)
     .optional()
     .describe(
-      "fails if any computer:// link in the model-visible transcript does not resolve to an artifact that exists in the run's collected outputs/mounts (zero links in the transcript passes — combine with transcript_contains to also require presence); only `true` is valid (writing `false` is a rejected footgun — omit to skip the check)",
+      "fails if any computer:// link in the model-visible transcript does not resolve to an artifact that exists in the run's collected outputs/mounts — REQUIRES at least one link (zero links FAILS: use computer_links_resolve_if_present for the presence-free variant); only `true` is valid (writing `false` is a rejected footgun — omit to skip)",
+    ),
+  computer_links_resolve_if_present: z
+    .literal(true)
+    .optional()
+    .describe(
+      "like computer_links_resolve, but PASSES VACUOUSLY when the transcript has zero computer:// links — the lenient, presence-free variant; only `true` is valid",
     ),
   question_asked: z.string().optional().describe("a question matching this regex was asked"),
   questions_count_max: z.number().int().nonnegative().optional().describe("at most N questions were asked"),
@@ -273,25 +393,25 @@ export const Assertion = z.object({
     .describe("at least N AskUserQuestion gates fired AND were delivered non-error (presence companion to gate_answers_delivered)"),
   result: z.enum(["success", "error"]).optional().describe("the run's final result was success | error"),
   allow_permissive_auto_allow: z
-    .boolean()
+    .literal(true)
     .optional()
     .describe(
       "(verdict modifier) suppress the default-fail when the run recorded a cowork-parity permissive auto-allow — for tests that deliberately assert Cowork's permissive behavior",
     ),
   allow_l0_plugin_divergence: z
-    .boolean()
+    .literal(true)
     .optional()
     .describe(
       "(verdict modifier) suppress the default-fail when L0 (protocol) runs with plugins that load via --settings/managed config instead of --plugin-dir — for tests that deliberately test at L0 with plugins",
     ),
   allow_missing_capability: z
-    .boolean()
+    .literal(true)
     .optional()
     .describe(
       "(verdict modifier) suppress the default-fail when the (partial 'core') agent image omits a capability the skill used but real Cowork ships — assert this only when the skill's fallback is genuinely equivalent (otherwise rebuild full parity, --build-arg COWORK_FULL_PARITY=1)",
     ),
   allow_stall: z
-    .boolean()
+    .literal(true)
     .optional()
     .describe(
       "(verdict modifier) suppress the default-fail when a run ends on a question having done no productive tool work after its last gate (the agent asked for input and stopped — incl. re-asking in plain text after answering an AskUserQuestion) — assert this only when ending on a question is the intended terminal state; otherwise script the answer (answer:/--answer/decider)",
@@ -308,8 +428,12 @@ export const Assertion = z.object({
   // manifest (`record` snapshots one); a manifest-less cassette skips it (with a loud warning).
   artifact_json: z
     .object({
-      artifact: z.string().describe("relative path to a JSON artifact under the work root (e.g. outputs/cap_state.json)"),
-      path: z.string().optional().describe("dotted path into the JSON (e.g. me.run_id); omit to target the whole document"),
+      artifact: z.string().min(1).describe("relative path to a JSON artifact under the work root (e.g. outputs/cap_state.json)"),
+      path: z
+        .string()
+        .min(1)
+        .optional()
+        .describe("dotted path into the JSON (e.g. me.run_id); omit to target the whole document (an explicit empty string is rejected)"),
       equals: z.unknown().optional().describe("the resolved value deep-equals this"),
       in: z
         .array(z.unknown())
@@ -363,6 +487,14 @@ export const ScenarioObject = z.strictObject({
       "isolation tier: protocol (L0, no sandbox) | container/microvm (force a VM-loop tier) | hostloop (force host-loop) | cowork (auto-pick host-loop vs. container via Cowork's own gate logic)",
     ),
   prompt: z.string().describe("the user turn sent to the agent"),
+  timeout_ms: z
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .describe(
+      "wall-clock budget for the agent run; on expiry the harness kills the agent and the run ends result:error / errorSource:timeout. Omitted = no timeout (the agent runs to its own completion). Distinct from the max_turns assertion and agent_max_turns (turn budget).",
+    ),
   answers: z
     .array(AnswerRule)
     .default([])
@@ -503,13 +635,18 @@ export interface RunStatus {
   // present only once state !== "running"
   result?: "success" | "error";
   durationMs?: number;
+  // terminal-error diagnostics, surfaced so a failure-output debugger gets more than a bare "error"
+  // (these live in result.json but not status.json before this). Present only on a terminal error write.
+  errorSource?: "spawn" | "protocol" | "exit" | "agent" | "result" | "no_result" | "timeout";
+  resultSubtype?: string;
+  stderrLogPath?: string;
 }
 
 /** SDK usage payload (input_tokens, output_tokens, etc.) — pass-through, shape owned by the SDK, not the
- *  harness — plus `turns`, harness-computed from the SDK result message's `num_turns` (Wave 0 seam). */
+ *  harness — plus `turns`, harness-computed from the SDK result message's `num_turns`. */
 export type UsageInfo = Record<string, unknown> & { turns?: number };
 
-/** `usd` = the SDK result message's `total_cost_usd` for this invocation, when present (Wave 0 seam).
+/** `usd` = the SDK result message's `total_cost_usd` for this invocation, when present.
  *  `raw` = the `api_metrics` event payload (pre-existing; unrelated source, kept alongside `usd` rather
  *  than merged into it since the two are independent SDK signals). */
 export interface CostInfo {
@@ -517,15 +654,48 @@ export interface CostInfo {
   raw?: Record<string, unknown>;
 }
 
+/** One model's cost/token entry inside the SDK result message's `modelUsage` field. Field
+ *  names match the REAL observed SDK payload (empirically confirmed against a captured stream and
+ *  against committed example cassettes), not a guessed shape. Every field optional since this is a
+ *  passthrough of SDK-owned data, not harness-computed. */
+export interface ModelUsageEntry {
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadInputTokens?: number;
+  cacheCreationInputTokens?: number;
+  costUSD?: number;
+  contextWindow?: number;
+  maxOutputTokens?: number;
+  webSearchRequests?: number;
+}
+
 export interface RunResult {
   $schema?: string;
   generator?: string;
+  /** Which lane produced this result. "run" = an asserted run/skill/record/replay (carries a verdict);
+   *  "chat" = an interactive exploratory session (no assertions, no verdict — consumers must NOT read a
+   *  chat result as pass/fail). Absent on results written before this field existed — treat absent as "run". */
+  mode?: "run" | "chat";
   scenario: string;
   prompt?: string; // the prompt that was run — persisted so `scaffold <run-dir>` can reconstruct the scenario
   fidelity: string;
   baseline: string;
   result: "success" | "error";
   resultErrorKind?: "transport" | "agent"; // when result==="error", classify a tail-end transport drop vs a genuine failure
+  /** How the run terminated in error — the `error` event's finer source (`spawn`/`protocol`/`exit`/`agent`,
+   *  or `result` for the SDK-wrapped is_error-result path), OR `no_result` when the stream ended with no
+   *  terminal event at all (the turn/time-exhaustion case: neither a result nor an error event fired), OR
+   *  `timeout` when the harness's own wall-clock limit killed the run. Additive diagnostic detail alongside
+   *  the coarse verdict-relevant `resultErrorKind`; consumed by nobody in the verdict. Absent on a clean run;
+   *  a run that recovered from a non-fatal `agent` error and then succeeded keeps the first observed source. */
+  errorSource?: "spawn" | "protocol" | "exit" | "agent" | "result" | "no_result" | "timeout";
+  /** The SDK result message's `subtype` verbatim (e.g. `error_max_turns`, `error_during_execution`,
+   *  `success`) — a pass-through diagnostic so a debugger can tell turn-exhaustion from a generic execution
+   *  error without the harness inventing a taxonomy. Present when a result event carried a subtype. */
+  resultSubtype?: string;
+  /** Absolute path to the agent's full stderr log (`<outDir>/agent.stderr.log`), surfaced so an
+   *  OOM/crash debugger knows where to look. Live path only — absent on replay (no live process). */
+  stderrLogPath?: string;
   // the run ended on a question having done no productive tool work after its last gate (the agent
   // asked for input and stopped) while result==="success". A false-green: the SDK turn didn't error, but the
   // task did not complete. computeVerdict fails on this (a `stalled` signal) unless the scenario asserts
@@ -538,9 +708,86 @@ export interface RunResult {
   // declared `requires_capabilities` the running tier could not satisfy — computed at run time
   // (so verify-run/replay honor it without re-deriving). `omitted` = the image lacks them; `unverifiable` =
   // the tier couldn't probe (protocol/replay/skip). computeVerdict fails on this unless allow_missing_capability.
-  requiresCapabilityUnmet?: { caps: string[]; reason: "omitted" | "unverifiable" };
-  decisions: Array<{ kind: string; name: string; decision: string; by?: string; model?: string; detail?: unknown; rationale?: string }>;
+  requiresCapabilityUnmet?: { caps: string[]; reason: "omitted" | "unverifiable" | "unknown" };
+  decisions: Array<{
+    kind: string;
+    name: string;
+    decision: string;
+    by?: string;
+    model?: string;
+    detail?: unknown;
+    rationale?: string;
+    // The full AskUserQuestion option set (label + description) as originally offered by the model —
+    // present only on kind:"question" decisions. Additive to `detail` (which already carries the flat
+    // {question: chosen-answer} map) so no existing detail-reading consumer needs to change.
+    questions?: Array<{ question: string; header?: string; options: { label: string; description?: string }[]; multiSelect?: boolean }>;
+  }>;
   toolCounts?: Record<string, number>; // truthful per-tool call count (use this, NOT usage.server_tool_use which is host-routed-blind in cowork)
+  /** Structured WebSearch calls — query + per-result {title,url}, parsed from the paired tool_result's
+   *  "Web search results for query: ...\n\nLinks: [...]" convention (an AGENT-BINARY convention,
+   *  verified against a real captured hostloop-fidelity cassette — re-verify the format on agent-version
+   *  bumps). A parse failure (truncated past the assertText cap, or a future format change) drops that
+   *  ONE entry silently — it is never a partial/malformed entry in this array. Collapsed to `undefined`
+   *  (matching `models`/`thinking`/`tasks`) both when the run made zero WebSearch calls AND when every
+   *  call's Links array failed to parse — the two are indistinguishable here by design; cross-reference
+   *  `toolCounts.WebSearch` (the truthful call count) if that distinction ever matters to a consumer. */
+  webSearches?: Array<{ toolUseId?: string; query: string; results: Array<{ title: string; url: string }> }>;
+  /** Infrastructure errors (VM/egress sidecar crashes). A non-empty list is a hard verdict fail on BOTH
+   *  lanes and is NOT author-suppressible — the run's evidence is contaminated. */
+  infraErrors?: Array<{ source: string; message: string }>;
+  /** Companion counters for malformed/dropped telemetry streams. A >0 count makes the dependent assertion
+   *  fail "malformed" rather than silently dropping the bad entries (`taskTracking` → task assertions,
+   *  `presentFilesMalformed` → no_scratchpad_leak); `webSearchParse` is observability-only (no assertion). */
+  evidenceErrors?: { taskTracking?: number; webSearchParse?: number; presentFilesMalformed?: number };
+  // per-tool call-count/timing aggregate, folded from the timeline. Absent only when no
+  // timeline data exists for this run (replayErrorResult — no run ever happened). Populated for
+  // buildPartialResult too, when the salvaged run made at least one tool call. Wall-gap between
+  // tool_use and tool_result, NOT isolated script CPU time — see foldToolDurations's doc comment
+  // (src/run/timeline-fold.ts) for the honesty caveat.
+  toolDurations?: Record<string, { calls: number; totalMs: number; maxMs: number }>;
+  // distinct model ids seen across assistant_text/tool_use/thinking events, in first-seen order.
+  // Absent only when replayErrorResult (no run ever happened). Populated for buildPartialResult too,
+  // when the salvaged run had at least one assistant message.
+  models?: string[];
+  // reasoning blocks surfaced for debugging — capped at the last 50 blocks (older ones
+  // silently dropped; see `thinkingElided` below for the dropped count). An author reads the
+  // tail of reasoning, not a full history.
+  // Scrubbed by the same secret-redaction pass as the rest of result.json.
+  thinking?: Array<{ text: string }>;
+  /** Count of reasoning blocks dropped past the 50-block cap on `thinking[]` (see `thinking`'s own doc
+   *  comment) — lets a consumer tell "this is everything" from "this is the tail of a much longer chain
+   *  of reasoning." 0 whenever the run produced a `thinking[]` array at all (capped or not) — a
+   *  meaningful "never hit the cap" signal, not an absence marker. `undefined` only on lanes where no
+   *  run/record ever existed (e.g. an unreadable-cassette replay bail). */
+  thinkingElided?: number;
+  // per-tool call/error rollup — same top-level-only scoping as toolCounts (sub-agent-internal
+  // tool calls are tracked separately via subagents[].toolsUsed, not folded in here).
+  toolErrors?: Record<string, { calls: number; errors: number }>;
+  /** Per-model cost/token breakdown, denormalized from the SDK result message's own `modelUsage` field —
+   *  cumulative for the whole run, NOT per-turn (see the per-message `usage` object noted
+   *  as a future opportunity, not built here). Field names match the REAL observed
+   *  SDK payload (empirically confirmed), not a guessed shape. Every field optional since this is a
+   *  passthrough of SDK-owned data, not harness-computed. */
+  modelUsage?: Record<string, ModelUsageEntry>;
+  // repeated identical tool calls — count>=2 groups only, an optimization signal. argHash is a
+  // truncated sha256 of the canonicalized {name,input} pair — no raw args in the rollup (they stay in
+  // toolResults/events, which already carry them); this field is redaction-safe by construction.
+  redundantToolCalls?: Array<{ name: string; argHash: string; count: number }>;
+  // per-skill-invocation window rollup — a heuristic, sticky, ordinal window (see the field's
+  // full honesty caveat in docs/cassette.md): for INLINE skills, an unrelated
+  // top-level tool call after the skill's real work but before the next Skill invocation is still
+  // attributed to this window (faithfully reproducing the real agent's own activeSkill no-pop
+  // behavior, not a looser approximation of it). A window's toolCounts/toolCallCount also include tool
+  // calls made by any sub-agent dispatched during that window, not just literal top-level calls (mirrors
+  // foldToolDurations's same subagent-inclusive scope). Absent only when no timeline data exists for this run.
+  skillActivity?: Array<{
+    skillId: string;
+    invocationSeq: number;
+    toolCounts: Record<string, number>;
+    toolCallCount: number;
+    dispatchCount: number;
+    durationMs?: number;
+  }>;
   // did each gate's answer reach the model? `reason` distinguishes a `delivered:null` that means
   // "no pairing metadata" (no toolUseId) from one that means "tool result not observed".
   gateDeliveries?: Array<{
@@ -549,15 +796,28 @@ export interface RunResult {
     error?: string;
     reason?: "ok" | "errored" | "unobserved" | "no-pairing-metadata";
   }>;
-  egress: Array<{ host: string; decision: "allow" | "deny" }>;
+  egress: Array<{
+    host: string;
+    decision: "allow" | "deny";
+    ts?: number; // ms epoch of the decision
+    method?: string;
+    path?: string; // omitted for CONNECT/HTTPS (encrypted)
+    port?: number;
+    bytes?: number; // response/tunnel bytes on an allow
+    reason?: string; // denial reason (e.g. "not on allowlist")
+  }>;
   assertions: Array<{ assertion: Assertion; pass: boolean; message?: string }>;
   subagents?: Array<{
     toolUseId: string;
     parentToolUseId?: string;
     agentType: string;
     declaredTools: string[];
-    toolsUsed: string[];
+    toolsUsed: Array<{ name: string; count: number }>;
     description?: string;
+    prompt?: string; // dispatch input.prompt, assertText-capped
+    model?: string; // the dispatching message's model
+    output?: string; // the dispatch's own paired tool_result, assertText-capped
+    attributedSkillId?: string; // the skill-activation window this dispatch was attributed to — NOT Fingerprint.skillScope (a different, unrelated field)
   }>;
   /**
    * Decisions answered by a non-deterministic / non-authoritative source (LLM, external helper,
@@ -596,6 +856,10 @@ export interface RunResult {
    *  against. undefined = the tier didn't capture (microvm) or the run predates the seam; the
    *  assertion then fails evidence-unavailable, never vacuous-passes. */
   preRunPaths?: string[];
+  /** Per-path sha256 of the user-visible tree BEFORE the agent ran (from pre-run-manifest.json's
+   *  `hashes`). null for a file over the pre-run hash cap. Powers `input_unmodified`. undefined =
+   *  no manifest / an older run without hashes — the assertion then fails evidence-unavailable. */
+  preRunHashes?: Record<string, string | null>;
   /** True when the run did NOT complete because it exited on an unanswered gate, but its work (artifacts,
    *  events, partial transcript) was salvaged to disk anyway so it's still inspectable. A partial run still
    *  exits non-zero; consumers (verify-run, scaffold) must NOT treat its artifacts/result as a passing
@@ -652,12 +916,71 @@ export interface RunResult {
    *  nonDeterministic:false, not per-gate provenance). Derived from `decisions[]` at write time. */
   gateProvenance?: GateProvenanceSummary;
   /** Skill/plugin ids invoked via the Skill tool_use event (`{plugin}:{skill}`), in call order, duplicates
-   *  kept (re-triggering is signal). Backs `skill_triggered`/`no_skill_triggered`. Absent on a run that
-   *  predates E8 (old result.json) — `no_skill_triggered` treats absence as evidence-unavailable, never a
+   *  kept (re-triggering is signal). Backs `skill_triggered`/`no_skill_triggered`. Absent on a run from an
+   *  older result.json format — `no_skill_triggered` treats absence as evidence-unavailable, never a
    *  vacuous pass. */
   skillsInvoked?: string[];
   /** Whether the agent's init tool list included "Skill" — false means this runtime/agent version can't be
    *  observed invoking a skill through the recognized channel, so `skill_triggered`/`no_skill_triggered`
    *  fail as evidence-unavailable rather than risk a false negative on an agent-version tool rename. */
   skillToolAvailable?: boolean;
+  // Progress panel — deleted tasks are omitted (never appear here). `status` is a plain
+  // string (NOT a narrow "pending"|"in_progress"|"completed" literal union) deliberately: live
+  // verification only observed those 3 + no delete/cancel path; a real but unobserved status value
+  // (e.g. "failed"/"cancelled") should be stored faithfully, not silently coerced or dropped.
+  tasks?: Array<{ id: string; subject: string; status: string; description?: string; activeForm?: string }>;
+  // Context/Connectors panel. mcpServers is loosely typed (SDK-owned per-server shape,
+  // pass-through). availableSkills is read straight off each staged skill's SKILL.md frontmatter at
+  // RunResult-assembly time (src/run/skill-metadata.ts) — it is NOT accumulated on RunRecord like
+  // tools/mcpServers, since it needs no live event data, only the on-disk staged skill set.
+  context?: {
+    tools: string[];
+    mcpServers: Array<{ name: string; status?: string; [k: string]: unknown }>;
+    availableSkills?: Array<{ id: string; whenToUse?: string }>;
+  };
+  // Working folder panel's canonical file model (Scratch pad's "scratchpad" class
+  // deliberately not implemented). `artifacts` (unchanged type, {path,bytes}[])
+  // becomes a DERIVED accessor of this — the class∈{output,mount} subset, computed in the
+  // assembler at read time (no drift risk: nothing stores `artifacts` independently anymore, on the
+  // live lane; replay is unaffected).
+  workspaceFiles?: Array<{ path: string; bytes: number; sha256?: string; hashError?: string; class: "output" | "mount" | "input" }>;
+  /** `system` stream messages the harness doesn't special-case — e.g. `compact_boundary`. In the
+   *  stdout stream, so reproduced on replay. Powers `compaction_occurred`. */
+  contextEvents?: Array<{ subtype: string; ts?: number; data?: Record<string, unknown> }>;
+  /** MCP round-trips the harness answered with a JSON-RPC error (no handler, or the handler threw).
+   *  Live-only — MCP round-trips are harness-computed, not in the SDK stdout stream, so absent on
+   *  replay (the assertion then fails evidence-unavailable, never vacuously passes). */
+  mcpErrors?: Array<{ server: string; code?: number; message: string }>;
+  /** PreToolUse hook fire/block events. Reconstructed on replay only when the cassette carries
+   *  `controlOut` (a custom hook's decision lives there, not in the stream) — else the hook assertions
+   *  are excluded-loud, never vacuously passed. */
+  hookEvents?: Array<{ callbackId: string; decision: "block" | "allow"; reason?: string; tool?: string }>;
+  /** Files delivered via the cowork `present_files` tool, in call order — one entry per file the agent
+   *  presented, derived from pairing each `mcp__cowork__present_files` tool_use with its own
+   *  tool_result. `promoted` = the file was in the scratchpad and landed under `mnt/outputs`; `leaked` =
+   *  it was in the scratchpad but did NOT land there (present_files' own copy-failure branch — the file
+   *  "remains in the scratchpad", not deliverable to the user). A path already under a mount
+   *  (passthrough) is neither. CONTENT-CLASS: both the tool_use and tool_result live in the ordinary
+   *  events stream, so this is re-derived identically on the replay re-drive — undefined only means no
+   *  `present_files` telemetry was recorded for this run (an older run predating the feature), the
+   *  evidence-unavailable signal for `no_scratchpad_leak`; an empty `[]` is a valid "nothing presented"
+   *  state and is NOT the same as undefined. */
+  presentedFiles?: Array<{ from: string; to: string; promoted: boolean; leaked: boolean }>;
+  /** Resource-usage telemetry sampled while the run executed (peak RSS, avg/peak CPU%). Live + tier-
+   *  dependent (container/hostloop/microvm); undefined on protocol/replay, on a run shorter than one
+   *  sample interval, and when the tier's probe tool was unavailable — the `max_peak_rss_bytes`
+   *  assertion then reads evidence-unavailable, never a vacuous pass. microvm RSS is whole-VM (coarser
+   *  than container/hostloop's per-container/per-process figure). */
+  resources?: {
+    tier: string;
+    sampleCount: number;
+    intervalMs: number;
+    peakRssBytes?: number;
+    avgCpuPct?: number;
+    peakCpuPct?: number;
+    /** Count of malformed `resources.jsonl` lines encountered while folding. >0 means the resource
+     *  telemetry is partially corrupt — resource assertions fail malformed rather than silently
+     *  dropping the bad lines. Absent on cassettes recorded before this field existed. */
+    malformedLines?: number;
+  };
 }

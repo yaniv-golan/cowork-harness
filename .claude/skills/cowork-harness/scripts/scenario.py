@@ -63,21 +63,50 @@ CONTENT_KEYS = {
     "subagent_tool_absent",
     "subagent_dispatched",
     "subagent_declared_but_unused",
+    "subagent_output_contains",
     "dispatch_count_max",
     "skill_triggered",
     "no_skill_triggered",
+    "skill_available",
+    "connector_available",
+    "tool_available",
+    "skill_tool_used",
     "max_cost_usd",
     "max_tokens",
     "tool_calls_max",
+    "tool_no_error",
+    "tool_no_error_if_called",
+    "max_tool_errors",
+    "max_redundant_tool_calls",
     "max_turns",
+    "compaction_occurred",
+    "all_tasks_completed",
+    "task_count_min",
+    "task_status",
+    "no_scratchpad_leak",
 }
 # content keys, but only evaluated on replay when the cassette carries controlOut
-GATE_KEYS = {"question_asked", "questions_count_max", "gate_answers_delivered", "gate_answer_count_min"}
+GATE_KEYS = {
+    "question_asked",
+    "questions_count_max",
+    "gate_answers_delivered",
+    "gate_answer_count_min",
+    "hook_blocked",
+    "no_hook_blocked",
+}
 # manifest-backed: replay-checkable when the cassette carries an `artifacts` manifest (record snapshots one);
 # a manifest-less cassette skips them. Since the 0.3.0 artifact-manifest these are NOT always live-only.
 # computer_links_resolve joins this bucket (not CONTENT_KEYS): resolving a non-empty link set needs
 # either a live filesystem or the cassette's artifacts manifest — see cassette.ts's manifestKeys comment.
-MANIFEST_KEYS = {"file_exists", "user_visible_artifact", "artifact_json", "computer_links_resolve", "no_unexpected_files"}
+MANIFEST_KEYS = {
+    "file_exists",
+    "user_visible_artifact",
+    "artifact_json",
+    "computer_links_resolve",
+    "computer_links_resolve_if_present",
+    "no_unexpected_files",
+    "input_unmodified",
+}
 # live-only: ALWAYS skipped on replay, with a loud warning (no filesystem, no network on the token-free lane)
 LIVE_ONLY_KEYS = {
     "egress_denied",
@@ -85,6 +114,8 @@ LIVE_ONLY_KEYS = {
     "no_delete_in_outputs",
     "self_heal_ran",
     "transcript_no_host_path",
+    "no_mcp_error",
+    "max_peak_rss_bytes",
 }
 EGRESS_KEYS = {"egress_denied", "egress_allowed"}
 # verdict modifiers — don't verify anything themselves (e.g. suppress a default-fail)
@@ -141,6 +172,7 @@ _EMBEDDED_TOP_LEVEL_KEYS = {
     "fidelity",
     "on_unanswered",
     "prompt",
+    "timeout_ms",  # wall-clock budget → kill + errorSource:timeout on expiry
     "answers",
     "expect_denied",
     "assert",
@@ -178,6 +210,7 @@ REGEX_KEYS = {
     "when_question",
     "subagent_dispatched",
     "question_asked",
+    "hook_blocked",
 }
 VALID_ON_UNANSWERED = {"fail", "prompt", "first", "llm"}
 VALID_TIERS = ("protocol", "container", "microvm", "hostloop", "cowork")

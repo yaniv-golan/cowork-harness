@@ -42,15 +42,19 @@ export function freePort(): Promise<number> {
 
 export function startEgressProxy(opts: ProxyOptions): EgressProxy {
   const allow = compile(opts.allow);
-  const log = (host: string, decision: "allow" | "deny") => {
+  const log = (
+    host: string,
+    decision: "allow" | "deny",
+    detail?: { method?: string; path?: string; port?: number; bytes?: number; reason?: string },
+  ) => {
     opts.onDecision?.(host, decision);
-    if (opts.logPath) appendFileSync(opts.logPath, JSON.stringify({ ts: Date.now(), host, decision }) + "\n");
+    if (opts.logPath) appendFileSync(opts.logPath, JSON.stringify({ ts: Date.now(), host, decision, ...detail }) + "\n");
   };
 
   const server = http.createServer((req, res) => {
     const host = normalizeHost(hostOf(req.url ?? "", req.headers.host));
     if (!allow(host)) {
-      log(host, "deny");
+      log(host, "deny", { method: req.method, reason: "not on allowlist" });
       res.writeHead(403, { "content-type": "text/plain" });
       res.end(`egress denied: ${host} not on allowlist`);
       return;
@@ -74,7 +78,13 @@ export function startEgressProxy(opts: ProxyOptions): EgressProxy {
     const proxyReq = http.request(
       { host: target.hostname, port: target.port || 80, path: target.pathname + target.search, method: req.method, headers: req.headers },
       (proxyRes) => {
-        log(host, "allow");
+        const clen = Number(proxyRes.headers["content-length"]);
+        log(host, "allow", {
+          method: req.method,
+          path: target.pathname,
+          port: Number(target.port) || 80,
+          bytes: Number.isFinite(clen) ? clen : undefined,
+        });
         res.writeHead(proxyRes.statusCode ?? 502, proxyRes.headers);
         proxyRes.on("error", () => res.end());
         proxyRes.pipe(res);
@@ -103,7 +113,7 @@ export function startEgressProxy(opts: ProxyOptions): EgressProxy {
     const { host, port } = parseAuthority(req.url ?? "");
     const normalizedHost = normalizeHost(host);
     if (!allow(normalizedHost)) {
-      log(normalizedHost, "deny");
+      log(normalizedHost, "deny", { port, reason: "not on allowlist" });
       clientSocket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
       clientSocket.end();
       return;
@@ -112,7 +122,7 @@ export function startEgressProxy(opts: ProxyOptions): EgressProxy {
     // host passed the allowlist — otherwise `egress_allowed` false-passes when the connect fails
     // and nothing reached the host. The deny path above is unchanged.
     const upstream = net.connect(port, host, () => {
-      log(normalizedHost, "allow");
+      log(normalizedHost, "allow", { port });
       clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
       upstream.write(head);
       upstream.pipe(clientSocket);
@@ -137,10 +147,17 @@ export function startEgressProxy(opts: ProxyOptions): EgressProxy {
   // response is fully sent). These are normal socket-teardown events and must not crash the proxy.
   // Using a direct `.on("error", …)` handler here — rather than a process-wide `uncaughtException`
   // hook — keeps the suppression scoped exactly to this server object and never masks unrelated errors.
+  let listening = false;
   server.on("error", (e: NodeJS.ErrnoException) => {
     if (e.code === "ECONNRESET" || e.code === "EPIPE") return; // benign socket teardown — ignore
-    // All other server errors (e.g. EADDRINUSE before `listening`) are captured via the `ready`
-    // rejection path below; re-throwing here would crash the process with no context.
+    // Pre-listen errors (e.g. EADDRINUSE) are surfaced via the `ready` rejection below; nothing more
+    // to do here. A post-listen error, though, has no rejection left to reach (that promise already
+    // settled at "listening") — without a signal here it was silently swallowed. Surface it on the
+    // one channel that crosses BOTH topologies this proxy runs under: in-process (microVM) and
+    // containerized (under the sidecar, where only stderr/exit code cross the boundary).
+    if (!listening) return;
+    process.stderr.write(JSON.stringify({ type: "proxy_fatal", code: e.code, message: e.message }) + "\n");
+    process.exit(1);
   });
 
   // readiness/error handshake. With an `error` listener a bind failure (EADDRINUSE) is a rejected
@@ -148,6 +165,7 @@ export function startEgressProxy(opts: ProxyOptions): EgressProxy {
   // before routing traffic so the agent never starts before the socket is accepting.
   const ready = new Promise<void>((resolve, reject) => {
     server.once("listening", () => {
+      listening = true;
       (server as EgressProxy).actualPort = (server.address() as net.AddressInfo).port;
       resolve();
     });

@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
 import { Scenario, AnswerRule, Assertion, type RunResult, type RunStatus, type PlatformBaseline } from "./types.js";
 import { loadBaseline, BASELINES_DIR, cmpVersionStrings, sha256File } from "./baseline.js";
-import { loadSession, resolveSessionPaths, applySessionOverrides } from "./session.js";
+import { loadSession, resolveSessionPaths, applySessionOverrides, expandUserPath } from "./session.js";
 import {
   executeScenario,
   parseScenarioFile,
@@ -48,6 +48,8 @@ import {
   formatGateTrace,
   buildDispatchTree,
   formatDispatchTree,
+  buildToolDurations,
+  formatToolDurations,
   noteRunsLocation,
   eventsFromLines,
   runsRoot,
@@ -95,8 +97,8 @@ import { spawnChannel, fileChannel, streamGates, answerGate, readGate, type Deci
 const out = (s: string) => writeSync(1, s + "\n"); // machine (stdout)
 const log = (s: string) => writeSync(2, s + "\n"); // human (stderr)
 
-// E3 (matrix runner) — mirrors record's own MAX_RECORD_CONCURRENCY bound (cassette.ts): above a handful,
-// concurrent runs exhaust Docker's default address pool / model API rate limits.
+// Matrix runner concurrency bound — mirrors record's own MAX_RECORD_CONCURRENCY bound (cassette.ts): above
+// a handful, concurrent runs exhaust Docker's default address pool / model API rate limits.
 const MAX_MATRIX_CONCURRENCY = 8;
 
 const HELP = `cowork-harness <command>   (v${"$VERSION"})
@@ -161,7 +163,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
 
 ── Debugging / inspection ─────────────────────────────────────────────────────
   trace <run-id | dir | path>  digest a run's events.jsonl (tools+result status, dispatches, decisions)
-      [--view tools|questions|dispatches]   focus on one view (default: all); see 'trace --help'
+      [--view tools|questions|dispatches|tool-durations] [--translate-paths]   focus on one view (default: all); see 'trace --help'
       [--output-format json]   structured rows
   verify-run <run-dir> <scenario.yaml>   re-evaluate assert: against a kept run dir (no live agent, ~1s)
       [--output-format json]
@@ -178,7 +180,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
       [--output-format json]   structured status (--follow always emits raw JSON lines, format flag N/A there)
       exit codes: 0 healthy · 1 resolved dir has no/malformed status.json, or the run errored · 2 unresolvable <run-id | run-dir> · 3 stale
   stats [<scenario>]           queryable summary over indexed runs: count, pass rate, cost/duration/token/turn p50/p95
-      [--since <date>] [--baseline <b>] [--branch <b>] [--metric pass-rate|cost|tokens|duration|turns] [--last <n>] [--reindex]
+      [--since <date>] [--baseline <b>] [--branch <b>] [--metric pass-rate|cost|tokens|duration|turns|cache-tokens|model-cost] [--last <n>] [--reindex]
       (run 'stats --help' for the full flag reference)
 
 ── In-band gate plumbing (for --decider-dir) ─────────────────────────────────
@@ -194,7 +196,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
 ── Platform admin ─────────────────────────────────────────────────────────────
   sync [--diff] [--allow-empty|--force]  derive/refresh a platform baseline from the live Desktop install (macOS only)
   list                         list available platform baselines
-  boundary-check [baseline]    prove the sandbox enforces Cowork's limitations
+  boundary-check [baseline] [--session <file>]   prove the sandbox enforces Cowork's limitations
   vm <init|status|delete|prune>  manage the L2 Apple-VZ microVM (fidelity: microvm); macOS arm64 only
   doctor [--tier <tier>]       read-only prerequisite check (Docker, staged agent, token, baseline)
 
@@ -291,6 +293,8 @@ Output:
 
 Long runs:  an idle "still running" heartbeat prints on stderr after ~30s of silence.
             COWORK_HARNESS_NO_HEARTBEAT=1 disables it; COWORK_HARNESS_HEARTBEAT_MS tunes the interval.
+  --timeout <ms>                   wall-clock budget; on expiry the agent is killed and the run ends
+                                   result:error / errorSource:timeout (the CLI form of a scenario's timeout_ms).
 
 Auth:  CLAUDE_CODE_OAUTH_TOKEN (or ANTHROPIC_API_KEY) from process.env > --dotenv <path> > ./.env >
        <install>/.env. So you can run from any directory and still pick up the install's credentials.
@@ -321,7 +325,7 @@ Input policy:
                                    scenarios that don't use the model terminal.
   (per-scenario answers/on_unanswered in the YAML take precedence where set)
 
-Repeat / flakiness measurement (E1):
+Repeat / flakiness measurement:
   --repeat <N>                     run each resolved scenario N times (int, 2-100) and aggregate a variance
                                    rollup (pass rate, per-assertion attribution, signal histogram). results[]
                                    still holds every raw run; only the batch verdict (ok/exit code) changes
@@ -335,8 +339,11 @@ Repeat / flakiness measurement (E1):
   --max-budget-usd <x>             stop the repeat loop once cumulative cost would exceed x. An incomplete-
                                    but-clean stop is a warning, not a failure by itself; degrades LOUDLY
                                    (never silently runs all N) if a run reports no cost telemetry. Requires --repeat.
+  --allow-budget-stop             opt back into a PASS verdict for a batch that --max-budget-usd stopped
+                                   early (default: a budget-stopped batch always fails — incomplete is not
+                                   green). Requires --repeat.
 
-Matrix testing (E3) — one scenario × a cross-product of axes, in one run:
+Matrix testing — one scenario × a cross-product of axes, in one run:
   --matrix <matrix.yaml>           run <scenario.yaml> across the cross-product of a matrix file's axes
                                    (baselines/models/skill_dirs — see docs/scenario.md). Requires exactly
                                    one scenario file (not a dir). Cannot combine with --repeat. Exit 1 if
@@ -345,6 +352,9 @@ Matrix testing (E3) — one scenario × a cross-product of axes, in one run:
                                    not a survey. The JSON envelope gains an additive "matrix: {cells[]}" field.
   --max-cells <n>                  cap the cross-product (default 16); over the cap warns and runs only the
                                    first n. Requires --matrix.
+  --allow-truncated-matrix          judge only the cells that actually ran (default: a truncated matrix — some
+                                   cells never ran, per --max-cells — always fails, an un-run cell is an
+                                   unknown, not a pass). Requires --matrix.
   --concurrency <n>                run cells N at a time (default 1, max 8 — each run is fully isolated, the
                                    bound is for Docker address pool / model API rate limits). Requires --matrix.
                                    Rejected together with --decider-dir/--decider-cmd when > 1 (the external
@@ -407,15 +417,15 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
     "usage: verify-cassettes <file|dir> [--skip-privacy|--skip-staleness] [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-path <regex>]... [--allow-machine-inventory <regex>]... [--allow-patterns-file <path>]... [--output-format json]\n" +
     "       --allow <regex> is a PATTERN (matched against a finding); --allow-patterns-file <path> is a FILE of patterns, one regex per line — not a path to allow.",
   trace:
-    "usage: trace <run-id | run-dir | events.jsonl> [--view tools|questions|dispatches] [--translate-paths] [--output-format json]\n       --view tools       tool call / result rows\n       --view questions   gate lifecycle (question → answer → delivered)\n       --view dispatches  sub-agent dispatch tree + dispatch_count_max\n       --translate-paths  rewrite VM paths to host paths in the tools/default TEXT views only (needs a sibling mounts.json + an effective hostloop run; questions/dispatches views and --output-format json are unaffected)\n       (default: all views)\n       (for what the run PRODUCED — artifacts — use `inspect`)",
+    "usage: trace <run-id | run-dir | events.jsonl> [--view tools|questions|dispatches|tool-durations] [--translate-paths] [--output-format json]\n       --view tools           tool call / result rows\n       --view questions       gate lifecycle (question → answer → delivered)\n       --view dispatches      sub-agent dispatch tree + dispatch_count_max\n       --view tool-durations  per-tool call-count/timing table, folded from the sibling timeline.jsonl ({} when the run has no timing data)\n       --translate-paths  rewrite VM paths to host paths in the tools/default TEXT views only (needs a sibling mounts.json + an effective hostloop run; questions/dispatches views and --output-format json are unaffected)\n       (default: all views)\n       (for what the run PRODUCED — artifacts — use `inspect`)",
   assertions: "usage: assertions --list [--output-format json]",
   scaffold:
     "usage: scaffold <run-id | run-dir> [--out <file.yaml>] [--output-format text|json]\n       Turns a kept run into a starter scenario YAML (gates→answers, artifacts→file_exists).\n       Positional <run-id | run-dir> is the canonical form.",
   status:
     'usage: status <run-id | run-dir> [--follow] [--output-format text|json]   (check whether a background run is alive, without ps aux — see docs/run-status.md)\n       --follow: stream one line per status change until the run reaches a terminal state (done/error); arm a Monitor here\n       exit codes: 0 healthy (running/done) · 1 the dir resolved but has no status.json yet (or a malformed one), or the run itself ended in state:"error" · 2 usage error, including an unresolvable <run-id | run-dir> (matches trace/inspect/scaffold) · 3 stale (probably dead — no exit handler can catch SIGKILL)',
   stats:
-    "usage: stats [<scenario>] [--since <ISO date>] [--baseline <b>] [--branch <b>] [--metric pass-rate|cost|tokens|duration|turns] [--last <n>] [--reindex] [--output-format text|json]\n" +
-    "       queryable summary over <runsRoot>/index.jsonl (E4) — per-scenario run count, pass rate, cost/duration/token/turn p50/p95, last-green timestamp.\n" +
+    "usage: stats [<scenario>] [--since <ISO date>] [--baseline <b>] [--branch <b>] [--metric pass-rate|cost|tokens|duration|turns|cache-tokens|model-cost] [--last <n>] [--reindex] [--output-format text|json]\n" +
+    "       queryable summary over <runsRoot>/index.jsonl — per-scenario run count, pass rate, cost/duration/token/turn p50/p95, last-green timestamp.\n" +
     "       --reindex rebuilds the index from the physical run-dir tree first (one-time migration for pre-index runs, or if index.jsonl is lost/corrupted beyond its own per-line tolerance).\n" +
     "       --last <n>: the N most recent runs PER SCENARIO (not globally — a global cut would starve a low-frequency scenario out of the window).\n" +
     "       --metric narrows the TEXT line to one view; --output-format json always returns every field regardless (same convention as --quiet/--verbose — machine output stays full, only the human render narrows).\n" +
@@ -573,7 +583,7 @@ async function main() {
       );
     }
     argv.splice(rdIdx, rdIsEquals ? 1 : 2);
-    process.env.COWORK_HARNESS_RUNS_DIR = resolve(process.cwd(), runDirVal);
+    process.env.COWORK_HARNESS_RUNS_DIR = expandUserPath(runDirVal);
   }
 
   const packageRootEnv = fileURLToPath(new URL("../.env", import.meta.url)); // dist/cli.js → <install>/.env
@@ -1001,7 +1011,7 @@ async function runOneScenario(p: {
   o: ReturnType<typeof resolveOutput>;
   keep?: boolean;
   extra?: Partial<ExecuteOptions>; // skill-only opts: session/sessionId/resume/llmIntent/nonDeterministicHint
-  /** E3: --matrix drives N cells from ONE process — a single cell's UnansweredError must never
+  /** --matrix drives N cells from ONE process — a single cell's UnansweredError must never
    *  process.exit() the whole matrix (the default `fail()` mapping below does exactly that). When true,
    *  re-throw UnansweredError like any other error instead, so the matrix cell loop's own per-cell catch
    *  can convert it into a distinct `cell error` — same shape as an agent-binary-unavailable failure,
@@ -1055,13 +1065,13 @@ async function runOneScenario(p: {
   return result;
 }
 
-/** E1: compact text-mode rollup table after a `--repeat N` batch. Renders pass rate, early-stop reason,
+/** Compact text-mode rollup table after a `--repeat N` batch. Renders pass rate, early-stop reason,
  *  the signal histogram, per-assertion attribution (only rows with at least one failure — an all-passing
  *  assertion across every iteration doesn't need a line), and cost/token/non-determinism totals when
  *  present. */
-function formatRepeatRollup(r: RepeatRollup, minPassRate: number): string {
+function formatRepeatRollup(r: RepeatRollup, minPassRate: number, allowBudgetStop: boolean): string {
   const lines: string[] = [];
-  const verdict = rollupPasses(r, minPassRate) ? "PASS" : "FAIL";
+  const verdict = rollupPasses(r, minPassRate, allowBudgetStop) ? "PASS" : "FAIL";
   const stopNote = r.stoppedEarly ? ` (stopped early: ${r.stoppedEarly}, ${r.completed}/${r.requested} completed)` : "";
   lines.push(`repeat "${r.scenario}": ${verdict} — ${r.passes}/${r.completed} passed (${(r.passRate * 100).toFixed(0)}%)${stopNote}`);
   const signals = Object.entries(r.signalHistogram);
@@ -1144,7 +1154,7 @@ async function runRepeatBatch(opts: {
       if (b.costUsd === undefined) costTelemetryMissing = true;
       else cumulativeCostUsd += b.costUsd;
       if (costTelemetryMissing) {
-        // degrade LOUDLY, never silently run all N as if the cap didn't exist (§4/E1 risk) — but
+        // degrade LOUDLY, never silently run all N as if the cap didn't exist — but
         // only ONCE per batch, not once per remaining iteration (costTelemetryMissing never resets).
         if (!costTelemetryMissingWarned) {
           log(
@@ -1171,8 +1181,8 @@ async function cmdRun(rawArgs: string[]) {
   // --decider-model overrides the LLM decider's answering model for scenarios that use `on_unanswered: llm`
   // (flag > env COWORK_HARNESS_DECIDER_MODEL > Sonnet default). `takeCommonFlags` doesn't know it (it's not a
   // common flag), so pull it out of argv first — otherwise it would land as an "unexpected argument".
-  // E1: --repeat/--max-budget-usd/--stop-on-diverge/--min-pass-rate are `run`-only the same way — not common
-  // flags, pre-extracted here exactly like --decider-model, cli.ts:897-911 in the plan's own citation.
+  // --repeat/--max-budget-usd/--stop-on-diverge/--min-pass-rate are `run`-only the same way — not common
+  // flags, pre-extracted here exactly like --decider-model.
   let deciderModel: string | undefined;
   let repeatN: number | undefined;
   let maxBudgetUsd: number | undefined;
@@ -1181,6 +1191,8 @@ async function cmdRun(rawArgs: string[]) {
   let matrixFile: string | undefined;
   let maxCells = 16;
   let matrixConcurrency = 1;
+  let allowTruncatedMatrix = false;
+  let allowBudgetStop = false;
   const preArgs: string[] = [];
   for (let i = 0; i < rawArgs.length; i++) {
     const a = rawArgs[i];
@@ -1255,6 +1267,10 @@ async function cmdRun(rawArgs: string[]) {
           jsonOut,
         );
       matrixConcurrency = n;
+    } else if (a === "--allow-truncated-matrix") {
+      allowTruncatedMatrix = true;
+    } else if (a === "--allow-budget-stop") {
+      allowBudgetStop = true;
     } else preArgs.push(a);
   }
   if (maxBudgetUsd !== undefined && repeatN === undefined)
@@ -1265,6 +1281,10 @@ async function cmdRun(rawArgs: string[]) {
   if (maxCells !== 16 && matrixFile === undefined) fail("run", "usage", "--max-cells requires --matrix", undefined, isJsonOutput(rawArgs));
   if (matrixConcurrency !== 1 && matrixFile === undefined)
     fail("run", "usage", "--concurrency requires --matrix", undefined, isJsonOutput(rawArgs));
+  if (allowTruncatedMatrix && matrixFile === undefined)
+    fail("run", "usage", "--allow-truncated-matrix requires --matrix", undefined, isJsonOutput(rawArgs));
+  if (allowBudgetStop && repeatN === undefined)
+    fail("run", "usage", "--allow-budget-stop requires --repeat", undefined, isJsonOutput(rawArgs));
   const { rest: rawRest, flags } = takeCommonFlags(preArgs, "run");
   // An interactive driving agent × N runs is not a measurement — --decider-dir/--decider-cmd both answer
   // gates LIVE (this codebase's own "LIVE questions: --decider-llm / --decider-cmd / --decider-dir"
@@ -1331,7 +1351,7 @@ async function cmdRun(rawArgs: string[]) {
   const o = resolveOutput("run", flags);
   noteRunsLocation({ json: o.json, quiet: !!flags.quiet, suppress: !!flags.demo });
 
-  // E3: --matrix is a completely separate mode from the per-file/--repeat loop below — one scenario, N
+  // --matrix is a completely separate mode from the per-file/--repeat loop below — one scenario, N
   // cells, not "N files each run once or N times" — so it's handled as its own early branch and exits.
   if (matrixFile !== undefined) {
     if (files.length !== 1)
@@ -1451,9 +1471,16 @@ async function cmdRun(rawArgs: string[]) {
       } finally {
         externalChannel?.close?.();
       }
-      const matrixRepeat = buildMatrixRepeatRollup(cellResults, totalBeforeCap, truncated, minPassRate);
+      const matrixRepeat = buildMatrixRepeatRollup(
+        cellResults,
+        totalBeforeCap,
+        truncated,
+        minPassRate,
+        allowTruncatedMatrix,
+        allowBudgetStop,
+      );
       if (o.json) out(jsonEnvelope("run", results, { matrixRepeat }));
-      else for (const line of formatMatrixRepeatRollup(matrixRepeat, minPassRate)) log(line);
+      else for (const line of formatMatrixRepeatRollup(matrixRepeat, minPassRate, allowBudgetStop)) log(line);
       process.exit(matrixRepeat.anyFail ? 1 : 0);
     }
 
@@ -1490,7 +1517,7 @@ async function cmdRun(rawArgs: string[]) {
     } finally {
       externalChannel?.close?.();
     }
-    const matrix = buildMatrixRollup(cellResults, totalBeforeCap, truncated);
+    const matrix = buildMatrixRollup(cellResults, totalBeforeCap, truncated, allowTruncatedMatrix);
     if (o.json) out(jsonEnvelope("run", results, { matrix }));
     else for (const line of formatMatrixRollup(matrix)) log(line);
     process.exit(matrix.anyFail ? 1 : 0);
@@ -1529,9 +1556,9 @@ async function cmdRun(rawArgs: string[]) {
         continue;
       }
 
-      // E1: --repeat N — run the SAME scenario N times, coexisting via local_<hrtime> run dirs
+      // --repeat N — run the SAME scenario N times, coexisting via local_<hrtime> run dirs
       // (execute.ts:177-180, no collision), aggregate into a RepeatRollup. results[] still gets every
-      // raw RunResult (nothing hidden) — only the exit-code/`ok` formula changes for this mode (§8).
+      // raw RunResult (nothing hidden) — only the exit-code/`ok` formula changes for this mode.
       const { rollup } = await runRepeatBatch({
         scenarioName: scenario.name,
         repeatN,
@@ -1562,9 +1589,11 @@ async function cmdRun(rawArgs: string[]) {
   // The rollup table is human output like every other per-run footer (renderFooter), so it goes to
   // stderr via log() — NOT out()/stdout, which text mode reserves for staying quiet (only json mode uses it).
   const usingRepeat = repeatN !== undefined;
-  if (o.json) out(jsonEnvelope("run", results, usingRepeat ? { rollups, minPassRate } : {}));
-  else if (usingRepeat) for (const r of rollups) log(formatRepeatRollup(r, minPassRate));
-  const ok = usingRepeat ? rollups.every((r) => rollupPasses(r, minPassRate)) : results.every((r) => computeVerdict(r, "live").pass);
+  if (o.json) out(jsonEnvelope("run", results, usingRepeat ? { rollups, minPassRate, allowBudgetStop } : {}));
+  else if (usingRepeat) for (const r of rollups) log(formatRepeatRollup(r, minPassRate, allowBudgetStop));
+  const ok = usingRepeat
+    ? rollups.every((r) => rollupPasses(r, minPassRate, allowBudgetStop))
+    : results.every((r) => computeVerdict(r, "live").pass);
   process.exit(ok ? 0 : 1);
 }
 
@@ -1600,6 +1629,7 @@ async function cmdSkill(rawArgs: string[]) {
   let resume = false;
   let dryRun = false;
   let keep = false;
+  let timeoutMs: number | undefined;
   const isJson0 = flags.output === "json";
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
@@ -1670,6 +1700,15 @@ async function cmdSkill(rawArgs: string[]) {
       const [q, choose] = parts!;
       answers.push({ when_question: q, choose });
     } else if (name === "--answer-policy") answerPolicy = nextValStrict();
+    else if (name === "--timeout") {
+      // wall-clock budget (ms) for the ephemeral skill scenario — the CLI override of the scenario
+      // `timeout_ms:` field (skill builds its scenario from flags, so there's no YAML to carry it).
+      const raw = nextValStrict();
+      const n = Number(raw);
+      if (!Number.isInteger(n) || n <= 0)
+        fail("skill", "usage", `--timeout requires a positive integer (ms); got "${raw}"`, undefined, isJson0);
+      timeoutMs = n;
+    }
     // reject unknown flags (any token starting with - or -- that wasn't consumed above)
     else if (a.startsWith("-")) fail("skill", "usage", `unknown flag: ${a}`, undefined, isJson0);
     else positional.push(a);
@@ -1774,7 +1813,21 @@ async function cmdSkill(rawArgs: string[]) {
     );
 
   if (dryRun) {
-    out(JSON.stringify({ fidelity, prompt, localPlugins, marketplaces, enabled: enables, answers }, null, 2));
+    out(
+      JSON.stringify(
+        {
+          fidelity,
+          prompt,
+          localPlugins,
+          marketplaces,
+          enabled: enables,
+          answers,
+          ...(timeoutMs !== undefined ? { timeout_ms: timeoutMs } : {}),
+        },
+        null,
+        2,
+      ),
+    );
     return;
   }
 
@@ -1801,6 +1854,7 @@ async function cmdSkill(rawArgs: string[]) {
     session: "(inline)",
     fidelity,
     prompt,
+    ...(timeoutMs !== undefined ? { timeout_ms: timeoutMs } : {}),
     answers,
     assert: [{ result: "success" }],
   });
@@ -2307,7 +2361,7 @@ async function cmdSync(args: string[]) {
     // JSON.stringify(loadBaseline("latest")))` above) that nothing between here and there mutates in
     // place, so this surfaces real gate/content drift, not a diff against an already-updated copy.
     log(`=== diff vs latest committed baseline (desktop-${(base as { appVersion?: string }).appVersion}) ===`);
-    // E7: structured recursive diff, replacing the one-level diff() that printed a whole subtree on
+    // Structured recursive diff, replacing the one-level diff() that printed a whole subtree on
     // any nested change (e.g. a single gate flip three levels deep used to dump all of `provenance`).
     for (const line of formatDiffLines(diffBaselines(base, next))) log(`  ${line}`);
   }
@@ -2424,7 +2478,7 @@ function cmdList(args: string[] = []) {
   }
 }
 
-/** E4: one text-mode line per scenario. `--metric` narrows to a single focused view; omitted shows
+/** One text-mode line per scenario. `--metric` narrows to a single focused view; omitted shows
  *  everything the row has (a metric with no telemetry in the group is simply absent, not "0"). */
 function formatStatsLine(s: StatsSummary, metric?: string): string {
   const base = `${s.scenario}: ${s.runs} run(s), ${(s.passRate * 100).toFixed(0)}% pass`;
@@ -2435,6 +2489,9 @@ function formatStatsLine(s: StatsSummary, metric?: string): string {
   if (metric === "duration") return `${base} — duration p50=${fmtMs(s.p50DurationMs)} p95=${fmtMs(s.p95DurationMs)}`;
   if (metric === "tokens") return `${base} — tokens p50=${s.p50Tokens ?? "n/a"} p95=${s.p95Tokens ?? "n/a"}`;
   if (metric === "turns") return `${base} — turns p50=${s.p50Turns ?? "n/a"} p95=${s.p95Turns ?? "n/a"}`;
+  if (metric === "cache-tokens")
+    return `${base} — cache-read-tokens p50=${s.p50CacheReadTokens ?? "n/a"} p95=${s.p95CacheReadTokens ?? "n/a"}`;
+  if (metric === "model-cost") return `${base} — model-cost p50=${fmtCost(s.p50ModelCostUsd)} p95=${fmtCost(s.p95ModelCostUsd)}`;
   const parts = [
     s.p50CostUsd !== undefined ? `cost p50=${fmtCost(s.p50CostUsd)} p95=${fmtCost(s.p95CostUsd)}` : null,
     s.p50DurationMs !== undefined ? `duration p50=${fmtMs(s.p50DurationMs)} p95=${fmtMs(s.p95DurationMs)}` : null,
@@ -2444,7 +2501,7 @@ function formatStatsLine(s: StatsSummary, metric?: string): string {
   return `${base}${parts.length ? " — " + parts.join(", ") : ""}`;
 }
 
-/** `stats [<scenario>]` — a queryable summary over the run index (E4): per-scenario run count, pass rate,
+/** `stats [<scenario>]` — a queryable summary over the run index: per-scenario run count, pass rate,
  *  cost/duration/token/turn percentiles, last-green timestamp. Reads `<runsRoot>/index.jsonl`; `--reindex`
  *  rebuilds it from the physical run-dir tree first (the one-time local migration path for runs that
  *  predate the index, or if index.jsonl was ever lost/corrupted beyond its own per-line tolerance). */
@@ -2473,8 +2530,14 @@ function cmdStats(args: string[]) {
   const baseline = readValueFlag("stats", args, "--baseline", json);
   const branch = readValueFlag("stats", args, "--branch", json);
   const metric = readValueFlag("stats", args, "--metric", json);
-  if (metric !== undefined && !["pass-rate", "cost", "tokens", "duration", "turns"].includes(metric))
-    return void fail("stats", "usage", `--metric must be one of pass-rate|cost|tokens|duration|turns (got "${metric}")`, undefined, json);
+  if (metric !== undefined && !["pass-rate", "cost", "tokens", "duration", "turns", "cache-tokens", "model-cost"].includes(metric))
+    return void fail(
+      "stats",
+      "usage",
+      `--metric must be one of pass-rate|cost|tokens|duration|turns|cache-tokens|model-cost (got "${metric}")`,
+      undefined,
+      json,
+    );
   const lastRaw = readValueFlag("stats", args, "--last", json);
   let last: number | undefined;
   if (lastRaw !== undefined) {
@@ -2936,8 +2999,18 @@ function cmdScaffold(args: string[]) {
     );
 
   // Positional is the only (canonical) form for the run id/dir.
-  const target = positionals(args, ["--out", "--output-format"])[0];
+  const pos = positionals(args, ["--out", "--output-format"]);
+  const target = pos[0];
   if (!target) return void fail("scaffold", "usage", "usage: scaffold <run-id | run-dir> [--out <file.yaml>]", undefined, json);
+  if (pos.length > 1) {
+    return void fail(
+      "scaffold",
+      "usage",
+      `scaffold takes a single <run-id | run-dir> (got ${pos.length}: ${pos.join(", ")})`,
+      undefined,
+      json,
+    );
+  }
   let file: string;
   try {
     file = resolveEventsFile(target);
@@ -2946,7 +3019,12 @@ function cmdScaffold(args: string[]) {
   }
   const yaml = buildScaffold(file);
   if (outPath !== undefined) {
-    writeFileSync(outPath, yaml);
+    try {
+      mkdirSync(dirname(outPath), { recursive: true });
+      writeFileSync(outPath, yaml);
+    } catch (e) {
+      return void fail("scaffold", "runtime", `failed to write ${outPath}: ${(e as Error).message}`, undefined, json);
+    }
     log(`✓ scaffolded scenario → ${outPath}`);
   } else out(yaml);
 }
@@ -3102,14 +3180,14 @@ async function cmdVerifyRun(args: string[]) {
   // rather than report a false fail. Content-only re-asserts stay valid without it. no_unexpected_files
   // belongs here too: on a missing workRoot its post-run walk returns [] → zero created files → a vacuous
   // PASS (the other FS keys false-FAIL safe-direction; this one false-GREENS, the worse failure mode).
-  const FS_KEYS: (keyof Assertion)[] = ["file_exists", "user_visible_artifact", "artifact_json", "no_unexpected_files"];
+  const FS_KEYS: (keyof Assertion)[] = ["file_exists", "user_visible_artifact", "artifact_json", "no_unexpected_files", "input_unmodified"];
   const hasFsAssert = scenario.assert.some((a) => FS_KEYS.some((k) => a[k] !== undefined));
   if (hasFsAssert && !existsSync(workRoot)) {
     return fail(
       "verify-run",
       "runtime",
       `verify-run: work dir not found (${workRoot || "<unset>"}) — filesystem assertions ` +
-        `(file_exists/artifact_json/user_visible_artifact/no_unexpected_files) cannot be re-evaluated from this run dir; re-record. (can't verify ⇒ not green)`,
+        `(file_exists/artifact_json/user_visible_artifact/no_unexpected_files/input_unmodified) cannot be re-evaluated from this run dir; re-record. (can't verify ⇒ not green)`,
       undefined,
       isJsonOutput(args),
     );
@@ -3120,7 +3198,7 @@ async function cmdVerifyRun(args: string[]) {
   const ctx: AssertContext = {
     transcript: sidecarTranscript ?? "",
     toolsCalled: new Set(Object.keys(result.toolCounts ?? {})),
-    subagentTools: new Set((result.subagents ?? []).flatMap((s) => s.toolsUsed ?? [])),
+    subagentTools: new Set((result.subagents ?? []).flatMap((s) => (s.toolsUsed ?? []).map((d) => d.name))),
     egress: result.egress ?? [],
     result: result.result === "error" ? "error" : "success",
     workRoot,
@@ -3134,6 +3212,7 @@ async function cmdVerifyRun(args: string[]) {
     // pre-run-manifest.json, so a missing field means the baseline genuinely doesn't exist
     // (pre-field run, or the run never captured) — evidence-unavailable, loud.
     preRunPaths: result.preRunPaths,
+    preRunHashes: result.preRunHashes,
     outputsDeletes: scan.outputsDeletes,
     questions: sidecarQuestions ?? [],
     hostPathLeaked: scan.hostPathLeaked,
@@ -3143,6 +3222,7 @@ async function cmdVerifyRun(args: string[]) {
     gateDeliveriesMissing: result.gateDeliveries === undefined,
     toolResultTexts: (result.toolResults ?? []).map((r) => r.assertText ?? r.text),
     toolResultsTruncated: (result.toolResults ?? []).map((r) => r.assertText === undefined),
+    toolErrors: result.toolErrors,
     transcriptMissing: sidecarTranscript === null,
     questionsMissing: sidecarQuestions === null,
     // Evidence-missing flags: set ONLY when the underlying field is undefined (partial/old result.json),
@@ -3161,10 +3241,28 @@ async function cmdVerifyRun(args: string[]) {
     // false so an old run's skill_triggered doesn't spuriously read as evidence-unavailable for the WRONG
     // reason (agent-tool-drift) when the real reason is just "this field didn't exist yet".
     skillToolAvailable: result.skillToolAvailable ?? true,
+    skillActivity: result.skillActivity,
+    tasks: result.tasks,
+    // Context/Connectors panel — backs skill_available/connector_available/tool_available.
+    // result.json's own `context` was fully populated at RunResult-assembly time, so this is a
+    // straight read-through (no timing gap unlike the live evaluate() ctx in execute.ts).
+    availableSkills: result.context?.availableSkills,
+    mcpServers: result.context?.mcpServers,
+    availableTools: result.context?.tools,
+    contextEvents: result.contextEvents,
+    mcpErrors: result.mcpErrors,
+    resources: result.resources,
+    hookEvents: result.hookEvents,
+    presentedFiles: result.presentedFiles,
+    evidenceErrors: result.evidenceErrors,
     effectiveFidelity: result.effectiveFidelity,
-    // verify-run re-checks a kept run dir on the SAME machine that ran it — the plan groups this
-    // with the live execute.ts lane (both check a host-shaped computer:// link's path directly).
-    linkResolution: { mode: "live" },
+    // verify-run re-checks a kept run dir on the SAME machine that ran it — grouped with the live
+    // execute.ts lane (both check a host-shaped computer:// link's path directly). result.json doesn't
+    // persist each connected folder's real host source path, so `workRoot` (the run's own mnt root,
+    // already required above for FS-class asserts) is the only host root verify-run can reconstruct —
+    // a host-shaped link pointing outside it (or with workRoot unset) resolves as evidence-unavailable
+    // rather than falling back to an unconstrained existsSync (see computer-links.ts).
+    linkResolution: { mode: "live", hostRoots: workRoot ? [workRoot] : [] },
     ...budgetFields(result),
   };
 
@@ -3319,7 +3417,7 @@ function cmdTrace(args: string[]) {
   const viewEqMatch = args.find((a) => a.startsWith("--view="));
   let viewArg: string | undefined = viewEqMatch ? viewEqMatch.slice("--view=".length) : viewIdx >= 0 ? args[viewIdx + 1] : undefined;
 
-  const VIEWS = ["tools", "questions", "dispatches"] as const;
+  const VIEWS = ["tools", "questions", "dispatches", "tool-durations"] as const;
   type View = (typeof VIEWS)[number];
   if (viewArg !== undefined && !VIEWS.includes(viewArg as View)) {
     fail("trace", "usage", `--view: expected one of ${VIEWS.join("|")}, got "${viewArg}"`, undefined, json);
@@ -3341,7 +3439,7 @@ function cmdTrace(args: string[]) {
 
   const view = viewArg as View | undefined;
 
-  // --translate-paths (Item 2's trace consumer): rewrite VM paths to host paths in TEXT output only —
+  // --translate-paths: rewrite VM paths to host paths in TEXT output only —
   // `--output-format json` stays the raw machine record (see cli.ts's gating below and
   // vm-path-ctx-file.ts's module header for the full rationale).
   const translatePaths = args.includes("--translate-paths");
@@ -3379,7 +3477,7 @@ function cmdTrace(args: string[]) {
     fail(
       "trace",
       "usage",
-      "usage: trace <run-id | run-dir | events.jsonl> [--view tools|questions|dispatches] [--translate-paths] [--output-format json]",
+      "usage: trace <run-id | run-dir | events.jsonl> [--view tools|questions|dispatches|tool-durations] [--translate-paths] [--output-format json]",
       undefined,
       json,
     );
@@ -3403,6 +3501,13 @@ function cmdTrace(args: string[]) {
     else out(formatDispatchTree(tree));
     return;
   }
+  if (view === "tool-durations") {
+    // tool-durations view: per-tool call-count/timing aggregate, folded from the sibling timeline.jsonl.
+    const durations = buildToolDurations(file);
+    if (json) out(JSON.stringify({ tool: "cowork-harness", command: "trace", file, durations }));
+    else out(formatToolDurations(durations));
+    return;
+  }
   // Build the translator, if any, ONLY for text output — json is the raw machine record and must stay
   // untranslated. Gate (all three must hold): the flag was passed, a sibling mounts.json exists and
   // parses as a recognized (v1) ctx, and the run's EFFECTIVE fidelity was "hostloop" — the one tier
@@ -3416,7 +3521,20 @@ function cmdTrace(args: string[]) {
   }
   const rows = buildTrace(file, { tools: view === "tools", translate });
   if (json) out(JSON.stringify({ tool: "cowork-harness", command: "trace", file, rows }));
-  else out(formatTrace(rows));
+  else {
+    // cache-read-ratio footer: best-effort read of the sibling result.json, same
+    // "if absent, just omit" tolerance buildGateTrace already uses for gate provenance.
+    let modelUsage: RunResult["modelUsage"] | undefined;
+    const resultPath = join(dirname(file), "result.json");
+    if (existsSync(resultPath)) {
+      try {
+        modelUsage = (JSON.parse(readFileSync(resultPath, "utf8")) as RunResult).modelUsage;
+      } catch (e) {
+        log(`::warning:: trace: skipping unparseable ${resultPath}: ${String((e as Error).message)}`);
+      }
+    }
+    out(formatTrace(rows, { modelUsage }));
+  }
 }
 
 type DiffKind = "baseline" | "run" | "cassette";
@@ -3426,7 +3544,7 @@ type DiffKind = "baseline" | "run" | "cassette";
 const SDK_MESSAGE_TYPES = new Set(["system", "assistant", "user", "result", "control_request", "control_response"]);
 
 /** Kind detection by CONTENT, not filename or `resolveEventsFile` alone. Two real bugs, found only by
- *  actually running the command against real files (not synthetic unit tests — §9 lesson 1/2), forced
+ *  actually running the command against real files (not synthetic unit tests), forced
  *  this design:
  *  1. A first attempt checked `arg.endsWith(".cassette.json")` for cassette, else `resolveEventsFile`
  *     for run. `resolveEventsFile` accepts ANY existing file path UNCONDITIONALLY (it's built for
@@ -3474,9 +3592,9 @@ interface DiffSide {
   transcript: string;
   artifacts?: Array<[string, string]>; // undefined = no manifest available for this side
   meta: Partial<DiffMetaSummary>;
-  // Identity metadata, NOT diffed content: used only for the cross-scenario warning (the plan's
-  // "allow + warn" resolution — comparing two different scenarios is legitimate for skill-variant
-  // comparison, but must be flagged, since the meta view doesn't surface scenario identity).
+  // Identity metadata, NOT diffed content: used only for the cross-scenario warning ("allow + warn" —
+  // comparing two different scenarios is legitimate for skill-variant comparison, but must be flagged,
+  // since the meta view doesn't surface scenario identity).
   scenarioName?: string;
 }
 
@@ -3620,7 +3738,7 @@ function renderDiffText(r: DiffViewResult, view: string): string[] {
   return lines;
 }
 
-/** E7 (baseline) + E2 (run/cassette, cross-comparable; baselines only pair with baselines). */
+/** Diffs a baseline pair or a run/cassette pair (cross-comparable; baselines only pair with baselines). */
 function cmdDiff(args: string[]) {
   if (hasHelp(args)) return void log(SUBCOMMAND_USAGE.diff);
   ensureOutputFormat("diff", args);
@@ -3677,8 +3795,8 @@ function cmdDiff(args: string[]) {
   } catch (e) {
     return void fail("diff", "usage", String((e as Error).message), undefined, json);
   }
-  // Allow + warn on a cross-scenario comparison (the plan's recommended resolution of its own open
-  // question): comparing runs of two DIFFERENT scenarios is legitimate (skill-variant comparison), but
+  // Allow + warn on a cross-scenario comparison: comparing runs of two DIFFERENT scenarios is
+  // legitimate (skill-variant comparison), but
   // the meta view doesn't surface scenario identity, so an unflagged mismatch would read as drift.
   // stderr only — stdout stays machine-clean in both output formats.
   if (a.scenarioName !== undefined && b.scenarioName !== undefined && a.scenarioName !== b.scenarioName)

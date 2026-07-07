@@ -5,6 +5,7 @@ import { join } from "node:path";
 import readline from "node:readline";
 import type { ChildProcessByStdio } from "node:child_process";
 import type { Readable, Writable } from "node:stream";
+import { TimelineWriter } from "./timeline.js";
 
 /**
  * AgentSession: the stream-json control protocol over a runtime-provided child.
@@ -44,10 +45,18 @@ export type DecisionResponse =
   | { kind: "elicit"; action: "accept" | "decline" | "cancel"; content?: unknown };
 
 export type AgentEvent =
-  | { type: "init"; tools: string[]; mcpServers: unknown[]; cwd?: string }
-  | { type: "assistant_text"; text: string; parentToolUseId?: string }
-  | { type: "tool_use"; name: string; input: unknown; parentToolUseId?: string; toolUseId?: string; synthetic?: boolean } // toolUseId for tool_use↔tool_result pairing; synthetic = the MCP round-trip echo (trace-only, NOT counted — the real call already arrives as an assistant tool_use block, live-verified)
-  | { type: "tool_result"; toolUseId?: string; isError: boolean; text: string; provenanceText?: string; assertText?: string } // the OUTCOME of a tool call (from `user`/tool_result blocks). `text` is display-truncated; `provenanceText` is the larger raw value so URLs past the display cap still seed web_fetch provenance; `assertText` is assertion-fidelity cap (10 KB)
+  | { type: "init"; tools: string[]; mcpServers: unknown[]; skills: string[]; cwd?: string }
+  | { type: "assistant_text"; text: string; parentToolUseId?: string; model?: string }
+  | { type: "tool_use"; name: string; input: unknown; parentToolUseId?: string; toolUseId?: string; synthetic?: boolean; model?: string } // toolUseId for tool_use↔tool_result pairing; synthetic = the MCP round-trip echo (trace-only, NOT counted — the real call already arrives as an assistant tool_use block, live-verified); model = the assistant message's model
+  | {
+      type: "tool_result";
+      toolUseId?: string;
+      isError: boolean;
+      text: string;
+      provenanceText?: string;
+      assertText?: string;
+      textBlocks?: string[];
+    } // the OUTCOME of a tool call (from `user`/tool_result blocks). `text` is display-truncated; `provenanceText` is the larger raw value so URLs past the display cap still seed web_fetch provenance; `assertText` is assertion-fidelity cap (10 KB); `textBlocks` is the UNFLATTENED per-block text array (undefined for a string/non-array content, or an array with no text blocks) — `text`/`assertText`/`provenanceText` join a multi-block content array with a single space, losing per-entry boundaries a multi-file tool result (e.g. present_files, one path per input file) needs preserved
   | {
       type: "subagent_dispatch";
       toolUseId: string;
@@ -55,8 +64,10 @@ export type AgentEvent =
       agentType: string;
       declaredTools: string[];
       description?: string;
-    } // parentToolUseId = nesting, for the dispatch tree
-  | { type: "thinking"; text: string }
+      prompt?: string; // input.prompt, assertText-capped
+      model?: string; // the dispatching message's model
+    } // parentToolUseId = nesting, for the dispatch tree.
+  | { type: "thinking"; text: string; model?: string } // model set only when this thinking block came from an assistant message (not the system-subtype "thinking" event, which has no message.model)
   | { type: "metrics"; data: Record<string, unknown> } // api_metrics → cost
   | { type: "decision"; request: DecisionRequest }
   | {
@@ -65,11 +76,19 @@ export type AgentEvent =
       usage?: Record<string, unknown>;
       resultText?: string;
       subtype?: string; // resultText/subtype carry the SDK result payload so a transport-error result can be classified
-      costUsd?: number; // SDK's total_cost_usd for this invocation (Wave 0 seam — was dropped on the floor before)
-      numTurns?: number; // SDK's num_turns for this invocation (Wave 0 seam — was dropped on the floor before)
+      costUsd?: number; // SDK's total_cost_usd for this invocation (was dropped on the floor before)
+      numTurns?: number; // SDK's num_turns for this invocation (was dropped on the floor before)
+      // per-model cost/token breakdown, cumulative for the whole run — a TOP-LEVEL sibling of `usage` on
+      // the raw result message, NOT nested inside it (empirically confirmed against a real captured
+      // stream). Opaque per-entry shape (SDK-owned); RunResult types it more precisely.
+      modelUsage?: Record<string, Record<string, unknown>>;
     }
   | { type: "error"; source: "spawn" | "agent" | "protocol" | "exit"; message: string }
-  | { type: "raw"; line: string };
+  | { type: "infra_error"; message: string } // an infrastructure frame (e.g. VM/egress sidecar crash) appended to events.jsonl outside the SDK stream
+  | { type: "raw"; line: string }
+  | { type: "system_event"; subtype: string; data: Record<string, unknown> } // a `system` message we don't special-case (e.g. compact_boundary)
+  | { type: "mcp_error"; server: string; code?: number; message: string } // an MCP round-trip the harness answered with a JSON-RPC error
+  | { type: "hook_event"; callbackId: string; decision: "block" | "allow"; reason?: string; tool?: string }; // a PreToolUse hook fired
 
 export type SdkMcp = {
   servers: string[];
@@ -102,6 +121,10 @@ export interface AgentSession {
   sendUserTurn(text: string): void;
   respond(decisionId: string, r: DecisionResponse): void;
   close(): void;
+  /** Forcibly terminate the agent process (wall-clock timeout). Unlike `close()` (which only ends stdin
+   *  and lets a well-behaved agent exit), this SIGTERMs the child — tier-agnostic, since the child is
+   *  whatever was spawned (docker/limactl/native). Optional: replay/mock sessions have no live process. */
+  kill?(): void;
 }
 
 // ---- Protocol ingress validation (fail-closed) ----
@@ -139,7 +162,7 @@ const QuestionsSchema = z.array(QSpecSchema);
 // ---- Control-response envelopes (verified zod shape; the inner `response` nesting is load-bearing) ----
 /** The one success-envelope shape every control_response shares; the four builders below differ ONLY in
  *  the inner `body`. Keeping a single core stops the wrapper drifting between them.
- *  Exported (in addition to the four builders) so protocol-conformance tooling — e.g. the E9 golden
+ *  Exported (in addition to the four builders) so protocol-conformance tooling — e.g. the golden
  *  vector generator — can wrap `hookOutput()`'s bare body in the real envelope instead of hand-rolling
  *  a lookalike; it has no other external callers. */
 export function successEnvelope(requestId: string, body: Record<string, unknown>) {
@@ -177,6 +200,28 @@ export function hookOutput(callbackId: string, input: any): Record<string, unkno
     return { decision: "block", reason: "Background agents disabled" };
   }
   return {};
+}
+
+/** Map a hook reply body (built-in `hookOutput` result OR a custom bundle reply) + the request input
+ *  into a hook_event. A reply carrying `decision:"block"` (or `hookSpecificOutput.permissionDecision:"deny"`)
+ *  is a block; anything else is allow. `tool` is the gated tool name from the request input. Shared by the
+ *  live emit and the replay reconstruction so both classify a block identically. */
+export function hookEventFrom(
+  callbackId: string,
+  reply: Record<string, unknown> | undefined,
+  input: any,
+): { type: "hook_event"; callbackId: string; decision: "block" | "allow"; reason?: string; tool?: string } {
+  const r = reply ?? {};
+  const nested = (r.hookSpecificOutput ?? {}) as Record<string, unknown>;
+  const isBlock = r.decision === "block" || nested.permissionDecision === "deny";
+  const reason =
+    typeof r.reason === "string"
+      ? r.reason
+      : typeof nested.permissionDecisionReason === "string"
+        ? (nested.permissionDecisionReason as string)
+        : undefined;
+  const tool = typeof input?.tool_name === "string" ? input.tool_name : undefined;
+  return { type: "hook_event", callbackId, decision: isBlock ? "block" : "allow", reason, tool };
 }
 
 /** The key the in-VM AskUserQuestion handler indexes answers by — it does
@@ -311,6 +356,8 @@ export const CONTROL_OUT_MIRROR_CAP = 256 * 1024;
 export class LiveAgentSession implements AgentSession {
   private events: WriteStream;
   private controlOut: WriteStream;
+  private timeline: TimelineWriter;
+  private lineIndex = 0;
   private reqById = new Map<string, DecisionRequest>();
   private sdkMcp?: SdkMcp;
   private hookBundle?: HookBundle;
@@ -331,6 +378,7 @@ export class LiveAgentSession implements AgentSession {
   ) {
     this.events = createWriteStream(join(outDir, "events.jsonl"), { flags: "a" });
     this.controlOut = createWriteStream(join(outDir, "control-out.jsonl"), { flags: "a" });
+    this.timeline = new TimelineWriter(outDir);
     const errLog = createWriteStream(join(outDir, "agent.stderr.log"), { flags: "a" });
     this.proc.stderr.pipe(errLog);
     // keep a bounded stderr tail and capture the exit code/signal so a child that dies nonzero
@@ -403,6 +451,12 @@ export class LiveAgentSession implements AgentSession {
         const line = next.value;
         if (!line.trim()) continue;
         if (!this.closing) this.events.write(line + "\n");
+        // Ordinal of the Nth real stdout line consumed here — NOT a raw events.jsonl line index (see
+        // timeline.ts's TimelineEvent doc comment: harness-injected `_emu` markers are written to
+        // events.jsonl outside this loop and are never counted). Captured once per raw line and
+        // reused for every AgentEvent derived from it — one line commonly yields several (e.g. a
+        // tool_use that is also a sub-agent dispatch), and they must share this same `line` value.
+        const lineIndex = this.lineIndex++;
         let msg: any;
         try {
           msg = JSON.parse(line);
@@ -411,7 +465,10 @@ export class LiveAgentSession implements AgentSession {
           continue;
         }
         try {
-          yield* this.translate(msg);
+          for await (const ev of this.translate(msg)) {
+            this.timeline.record(ev, lineIndex);
+            yield ev;
+          }
         } catch (e) {
           yield { type: "error", source: "protocol", message: (e as Error)?.message ?? String(e) };
           return;
@@ -441,6 +498,7 @@ export class LiveAgentSession implements AgentSession {
       await Promise.all([
         new Promise<void>((res) => this.events.end(() => res())),
         new Promise<void>((res) => this.controlOut.end(() => res())),
+        new Promise<void>((res) => this.timeline.end(() => res())),
       ]);
     }
   }
@@ -467,9 +525,12 @@ export class LiveAgentSession implements AgentSession {
           out = { decision: "block", reason: `hook handler error: ${message}` };
         }
         this.write(successEnvelope(reqId, out));
+        yield hookEventFrom(callbackId, out, msg.request.input);
         return;
       }
-      this.write(successEnvelope(reqId, hookOutput(callbackId, msg.request.input)));
+      const builtInOut = hookOutput(callbackId, msg.request.input);
+      this.write(successEnvelope(reqId, builtInOut));
+      yield hookEventFrom(callbackId, builtInOut, msg.request.input);
       return;
     }
     // mcp_message is the only side-effecting branch (the driver computes + writes the response).
@@ -489,8 +550,20 @@ export class LiveAgentSession implements AgentSession {
           const message = (e as Error)?.message ?? String(e);
           warn(`::warning:: sdkMcp.handle threw for "${server}" — replying with a JSON-RPC error: ${message}\n`);
           out = { error: { code: -32603, message: `handler error: ${message}` } };
+          this.write(mcpResponseEnvelope(reqId, out as any, jr.id));
+          yield { type: "mcp_error", server, code: -32603, message: `handler error: ${message}` };
+          return;
         }
-        this.write(mcpResponseEnvelope(reqId, out as any, jr.id));
+        // `notify` is a driver-side follow-up, NOT part of the JSON-RPC response — strip it before
+        // building the wire envelope (otherwise it leaks into the mcp_response the agent receives), then
+        // inject it separately as a synthetic user turn below.
+        const { notify, ...rpc } = out as { result?: unknown; error?: { code: number; message: string }; notify?: string };
+        this.write(mcpResponseEnvelope(reqId, rpc, jr.id));
+        // A cowork present_files promotion returns a notifySession follow-up — inject it as a synthetic user
+        // turn so the agent learns the promoted outputs path (mirrors the real host's post-promotion notification).
+        if (typeof notify === "string" && notify) {
+          this.write({ type: "user", message: { role: "user", content: [{ type: "text", text: notify }] } });
+        }
         // Echo the MCP round-trip as a SYNTHETIC tool_use for provenance/trace only. The real tool call
         // also arrives as an assistant tool_use block (live-verified: mcp__workspace__bash co-occurs with
         // this mcp_message), which is what gets counted — so this is marked synthetic and excluded from
@@ -511,6 +584,7 @@ export class LiveAgentSession implements AgentSession {
         `::warning:: mcp_message for server "${server}" arrived but no sdkMcp handler is configured — replying with a JSON-RPC error (would otherwise deadlock)\n`,
       );
       this.write(mcpResponseEnvelope(reqId, { error: { code: -32601, message: "no sdkMcp handler configured" } }, jr.id));
+      yield { type: "mcp_error", server, code: -32601, message: "no sdkMcp handler configured" };
       return;
     }
     for (const ev of parseMessage(msg)) {
@@ -550,6 +624,22 @@ export class LiveAgentSession implements AgentSession {
   close(): void {
     try {
       this.proc.stdin.end();
+    } catch {
+      /* already gone */
+    }
+  }
+
+  kill(): void {
+    try {
+      this.proc.kill("SIGTERM");
+      // Escalate to SIGKILL if the child ignores SIGTERM (unref so the timer can't keep the process alive).
+      setTimeout(() => {
+        try {
+          if (this.proc.exitCode === null && this.proc.signalCode === null) this.proc.kill("SIGKILL");
+        } catch {
+          /* already gone */
+        }
+      }, 2000).unref?.();
     } catch {
       /* already gone */
     }
@@ -659,10 +749,20 @@ export class LiveAgentSession implements AgentSession {
 export function parseMessage(msg: any): AgentEvent[] {
   const ev: AgentEvent[] = [];
   switch (msg.type) {
+    case "infra_error":
+      // An infrastructure frame (VM/egress sidecar crash) appended to events.jsonl by the runtime, outside
+      // the SDK stdout stream. Preserved in the frozen cassette, so the replay re-drive re-derives it too.
+      ev.push({ type: "infra_error", message: typeof msg.message === "string" ? msg.message : "infrastructure error" });
+      break;
     case "system":
-      if (msg.subtype === "init") ev.push({ type: "init", tools: msg.tools ?? [], mcpServers: msg.mcp_servers ?? [], cwd: msg.cwd });
+      if (msg.subtype === "init")
+        ev.push({ type: "init", tools: msg.tools ?? [], mcpServers: msg.mcp_servers ?? [], skills: msg.skills ?? [], cwd: msg.cwd });
       else if (msg.subtype === "api_metrics") ev.push({ type: "metrics", data: msg });
       else if (msg.subtype === "thinking") ev.push({ type: "thinking", text: String(msg.content ?? "") });
+      else if (typeof msg.subtype === "string")
+        // Any other system subtype (compact_boundary, and anything a future build adds) is surfaced
+        // structurally instead of dropped. `data` carries the raw message minus the type/subtype envelope.
+        ev.push({ type: "system_event", subtype: msg.subtype, data: systemEventData(msg) });
       break;
     case "control_request": {
       const dr = toDecisionRequest(msg);
@@ -673,12 +773,15 @@ export function parseMessage(msg: any): AgentEvent[] {
       // Protocol v1: parentToolUseId is message-level. Block-level parent_tool_use_id (if present)
       // is canonical — prefer it when both exist (block-level is more precise for nested dispatches).
       const msgParentToolUseId = msg.parent_tool_use_id ? String(msg.parent_tool_use_id) : undefined;
+      // message.model is present on every real assistant stream-json message (live-confirmed) —
+      // read once per message, thread onto assistant_text/tool_use/thinking/subagent_dispatch.
+      const model = typeof msg.message?.model === "string" ? msg.message.model : undefined;
       let blockIndex = 0;
       for (const block of msg.message?.content ?? []) {
         // Block-level parent wins over message-level when both are present (see comment above).
         const parentToolUseId = block.parent_tool_use_id ? String(block.parent_tool_use_id) : msgParentToolUseId;
-        if (block.type === "text") ev.push({ type: "assistant_text", text: block.text, parentToolUseId });
-        else if (block.type === "thinking") ev.push({ type: "thinking", text: block.thinking ?? block.text ?? "" });
+        if (block.type === "text") ev.push({ type: "assistant_text", text: block.text, parentToolUseId, model });
+        else if (block.type === "thinking") ev.push({ type: "thinking", text: block.thinking ?? block.text ?? "", model });
         else if (block.type === "tool_use") {
           ev.push({
             type: "tool_use",
@@ -686,6 +789,7 @@ export function parseMessage(msg: any): AgentEvent[] {
             input: block.input,
             parentToolUseId,
             toolUseId: block.id ? String(block.id) : undefined,
+            model,
           });
           // Sub-agent dispatch. The real cowork agent uses the `Agent` tool (`{description,
           // subagent_type, prompt}`); older/other surfaces use `Task`. We recognize either name, plus
@@ -711,6 +815,8 @@ export function parseMessage(msg: any): AgentEvent[] {
               agentType: String(inp.subagent_type ?? inp.subagentType ?? "unknown"),
               declaredTools: declared,
               description: inp.description != null ? String(inp.description) : undefined,
+              prompt: inp.prompt != null ? toolResultAssertText(String(inp.prompt)) : undefined,
+              model,
             });
           }
         }
@@ -731,6 +837,7 @@ export function parseMessage(msg: any): AgentEvent[] {
             text: toolResultText(block.content),
             provenanceText: toolResultRaw(block.content),
             assertText: toolResultAssertText(block.content),
+            textBlocks: toolResultTextBlocks(block.content),
           });
       }
       break;
@@ -745,10 +852,18 @@ export function parseMessage(msg: any): AgentEvent[] {
         subtype: typeof msg.subtype === "string" ? msg.subtype : undefined,
         costUsd: typeof msg.total_cost_usd === "number" ? msg.total_cost_usd : undefined,
         numTurns: typeof msg.num_turns === "number" ? msg.num_turns : undefined,
+        modelUsage:
+          msg.modelUsage && typeof msg.modelUsage === "object" ? (msg.modelUsage as Record<string, Record<string, unknown>>) : undefined,
       });
       break;
   }
   return ev;
+}
+
+/** The raw system message minus its `type`/`subtype` envelope — the event-specific payload. */
+function systemEventData(msg: Record<string, unknown>): Record<string, unknown> {
+  const { type: _t, subtype: _s, ...rest } = msg;
+  return rest as Record<string, unknown>;
 }
 
 /** Flatten a tool_result `content` (a string, or an array of content blocks), capped at
@@ -786,6 +901,17 @@ function toolResultRaw(content: unknown): string {
  *  truncation is still assertable. */
 function toolResultAssertText(content: unknown): string {
   return flattenToolResult(content, 10_240);
+}
+/** The raw per-block text array, UNFLATTENED — undefined for a string/non-array content, or an
+ *  array with no `type:"text"` blocks. `flattenToolResult` joins every block's text with a single
+ *  space, which is fine for display/assertion but loses per-entry boundaries for a tool whose result
+ *  is genuinely one entry per input (e.g. present_files: one path per presented file, in order). */
+function toolResultTextBlocks(content: unknown): string[] | undefined {
+  if (!Array.isArray(content)) return undefined;
+  const texts = content
+    .filter((b): b is { type: string; text: unknown } => !!b && typeof b === "object" && (b as Record<string, unknown>).type === "text")
+    .map((b) => String(b.text));
+  return texts.length ? texts : undefined;
 }
 
 export function toDecisionRequest(msg: any): DecisionRequest | null {

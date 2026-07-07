@@ -219,19 +219,17 @@ export function spawnHostLoop(
   // Host-routed web_fetch bypasses the sidecar proxy, so collect its egress decisions here and
   // surface them to execute.ts → result.egress, making host-loop web_fetch visible to egress assertions.
   const hostEgress: EgressEntry[] = [];
-  const sdkMcp: { servers: string[]; handle: McpHandler } = {
-    servers: ["workspace"],
-    handle: makeWorkspaceHandler({
-      containerName,
-      vmMnt: mntRoot,
-      runner,
-      webFetchAllow: plan.egressAllow,
-      onEgress: (e) => hostEgress.push(e),
-      onInfraError: logInfra,
-      provenanceRef: opts.provenanceRef,
-      execCwd,
-    }),
-  };
+  const workspaceHandle = makeWorkspaceHandler({
+    containerName,
+    vmMnt: mntRoot,
+    runner,
+    webFetchAllow: plan.egressAllow,
+    onEgress: (e) => hostEgress.push(e),
+    onInfraError: logInfra,
+    provenanceRef: opts.provenanceRef,
+    execCwd,
+  });
+  const sdkMcp: { servers: string[]; handle: McpHandler } = { servers: ["workspace"], handle: workspaceHandle };
   return { child, sdkMcp, hooks, pathGateFired, containerName, hostEgress };
 }
 

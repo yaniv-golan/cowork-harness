@@ -3,6 +3,9 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { RunResult } from "../types.js";
+
+type EgressEntry = RunResult["egress"][number];
 
 /**
  * Per-run egress sidecar — the default-deny boundary that the container actually
@@ -18,11 +21,19 @@ import { fileURLToPath } from "node:url";
 export interface EgressSidecar {
   proxyUrl: string; // e.g. http://cowork-proxy-<id>:8080
   network: string; // internal network the agent must join
-  collect(): Array<{ host: string; decision: "allow" | "deny" }>;
+  collect(): EgressEntry[];
   teardown(): void;
+  /** Set once `teardown()` has run, if the proxy container exited non-zero — its exit code plus a
+   *  `docker logs --tail` excerpt. `undefined` means either the proxy is still up or it exited clean.
+   *  Read this AFTER calling `teardown()`. This is a raw signal only — nothing wires it into the run
+   *  verdict or RunRecord yet. */
+  readonly fatalError?: string;
 }
 
-const PROXY_IMAGE = process.env.COWORK_PROXY_IMAGE ?? "cowork-egress-proxy:1";
+// Tag bumped when the proxy's decision-log format changes so `ensureProxyImage` rebuilds instead of
+// reusing a cached image that logs the old shape (the image is built from dist/egress/proxy.js — a
+// cached older build would silently omit the per-request detail the log line now records).
+const PROXY_IMAGE = process.env.COWORK_PROXY_IMAGE ?? "cowork-egress-proxy:2";
 
 // A process-level cleanup registry so a Ctrl-C (SIGINT/SIGTERM) mid-run reaps in-flight egress resources
 // instead of orphaning them (the per-run `finally` paths don't run when the process is killed by a signal).
@@ -127,7 +138,11 @@ export function startEgressSidecar(allow: string[], outDir: string, runId: strin
     throw reframeEgressError(e);
   }
 
+  let fatalError: string | undefined;
   const reap = () => {
+    // Read the proxy's exit before `rm -f` erases it — a non-zero exit means the fatal-error channel
+    // in proxy.ts fired (structured stderr + non-zero exit) and nothing else would have surfaced it.
+    fatalError = detectProxyFatalError(runner, proxyName) ?? fatalError;
     d(runner, ["rm", "-f", proxyName], true); // proxy container before its networks (attached)
     d(runner, ["network", "rm", intNet], true);
     d(runner, ["network", "rm", outNet], true);
@@ -146,13 +161,29 @@ export function startEgressSidecar(allow: string[], outDir: string, runId: strin
         .split("\n")
         .filter(Boolean)
         .map(parseEgressLine)
-        .filter((x): x is { host: string; decision: "allow" | "deny" } => x !== null);
+        .filter((x): x is EgressEntry => x !== null);
+    },
+    get fatalError() {
+      return fatalError;
     },
     teardown() {
       deregister();
       reap();
     },
   };
+}
+
+/** Read back the proxy container's exit code and, if non-zero, a `docker logs --tail` excerpt.
+ *  Returns `undefined` if the container is still running, already gone, or exited clean — callers
+ *  should not overwrite a previously-captured `fatalError` with `undefined` (see `reap` above). */
+function detectProxyFatalError(runner: string, name: string): string | undefined {
+  const inspect = spawnSync(runner, ["inspect", "-f", "{{.State.ExitCode}}", name], { encoding: "utf8" });
+  if (inspect.status !== 0) return undefined; // container already gone / never started
+  const exitCode = Number((inspect.stdout ?? "").trim());
+  if (!Number.isFinite(exitCode) || exitCode === 0) return undefined;
+  const logs = spawnSync(runner, ["logs", "--tail", "20", name], { encoding: "utf8" });
+  const tail = (logs.stdout || logs.stderr || "").trim().slice(0, 2000);
+  return `proxy container ${name} exited ${exitCode}${tail ? `: ${tail}` : ""}`;
 }
 
 /**
@@ -163,7 +194,7 @@ export function startEgressSidecar(allow: string[], outDir: string, runId: strin
  * a silent false-green that could mask a real deny. Now both failure modes emit a
  * `::warning::` and DROP the line; we never invent an "allow" from corrupt input.
  */
-export function parseEgressLine(line: string): { host: string; decision: "allow" | "deny" } | null {
+export function parseEgressLine(line: string): EgressEntry | null {
   let o: any;
   try {
     o = JSON.parse(line);
@@ -186,7 +217,14 @@ export function parseEgressLine(line: string): { host: string; decision: "allow"
     warn(`::warning:: [egress] unknown decision "${o.decision}" for host ${host} — dropping (not coercing to allow)\n`);
     return null;
   }
-  return { host, decision: o.decision };
+  const out: EgressEntry = { host, decision: o.decision };
+  if (typeof o.ts === "number") out.ts = o.ts;
+  if (typeof o.method === "string") out.method = o.method;
+  if (typeof o.path === "string") out.path = o.path;
+  if (typeof o.port === "number") out.port = o.port;
+  if (typeof o.bytes === "number") out.bytes = o.bytes;
+  if (typeof o.reason === "string") out.reason = o.reason;
+  return out;
 }
 
 function ensureProxyImage(runner: string) {
@@ -196,11 +234,13 @@ function ensureProxyImage(runner: string) {
   // `.pathname`, so an install path with spaces / URL-escaped chars yields a valid build context.
   const repoRoot = resolve(fileURLToPath(new URL("../..", import.meta.url)));
   // Dockerfile.proxy COPYs the SHIPPED dist/egress; running from source (tsx) before
-  // `npm run build` leaves it absent, so the image build would fail confusingly. Build dist/ first.
+  // `npm run build` leaves it absent, so the image build would fail confusingly. A live run must
+  // never build/mutate the checkout as a side effect — fail loud and tell the caller to build first.
   if (!existsSync(join(repoRoot, "dist", "egress", "proxy.js"))) {
-    warn(`::warning:: [egress] dist/egress missing — running \`npm run build\` before the proxy image build\n`);
-    const built = spawnSync("npm", ["run", "build"], { cwd: repoRoot, stdio: "inherit" });
-    if (built.status !== 0) throw new Error("failed to build dist/ for the egress proxy image (npm run build)");
+    throw new Error(
+      "dist/egress/proxy.js is missing — the egress proxy image builds from the shipped dist/, not " +
+        "source. Run `npm run build` first, then re-run.",
+    );
   }
   const build = spawnSync(runner, ["build", "-t", PROXY_IMAGE, "-f", join(repoRoot, "docker", "Dockerfile.proxy"), repoRoot], {
     stdio: "inherit",

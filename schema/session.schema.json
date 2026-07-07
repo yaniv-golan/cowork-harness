@@ -37,6 +37,11 @@
         }
       ]
     },
+    "agent_max_turns": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
     "extended_thinking": {
       "description": "Inert / no-op — not a real Cowork toggle. Use max_thinking_tokens instead.",
       "type": "boolean"

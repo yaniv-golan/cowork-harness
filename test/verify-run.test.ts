@@ -25,7 +25,7 @@ function keptRun(): string {
     gateDeliveries: [],
     egress: [{ host: "tracker.evil.com", decision: "deny" }],
     assertions: [],
-    subagents: [{ agentType: "x", declaredTools: [], toolsUsed: ["Read"] }],
+    subagents: [{ agentType: "x", declaredTools: [], toolsUsed: [{ name: "Read", count: 1 }] }],
     outDir: root,
     workDir,
     durationMs: 1,
@@ -321,6 +321,28 @@ describe.skipIf(!can)("verify-run re-asserts a kept run dir without a live agent
       ["  - subagent_tool_absent: Bash", "  - dispatch_count_max: 3", "  - subagent_declared_but_unused: Bash"].join("\n"),
     );
     expect(verifyRun(run, sc).code).toBe(0);
+  });
+
+  // M4: confirms ctx.subagents[].output survives the real cli.ts verify-run ctx-building path
+  // (result.subagents ?? [] — a wholesale pass-through) and a round-trip through actual JSON
+  // serialization on disk, not just a hand-built AssertContext in assert.test.ts.
+  it("subagent_output_contains passes against a real result.json with output populated (verify-run ctx-site check)", () => {
+    const run = keptRun();
+    const result = JSON.parse(require("node:fs").readFileSync(join(run, "result.json"), "utf8"));
+    result.subagents = [{ agentType: "x", declaredTools: [], toolsUsed: [{ name: "Read", count: 1 }], output: "found 3 files" }];
+    writeFileSync(join(run, "result.json"), JSON.stringify(result));
+    const sc = scenarioFile(run, "  - subagent_output_contains: { contains: '3 files' }\n");
+    const { code, text } = verifyRun(run, sc);
+    expect(text).toContain("verify-run: all");
+    expect(code).toBe(0);
+  });
+  it("subagent_output_contains FAILS with 'evidence unavailable' when subagents is absent", () => {
+    const run = keptRunWithout_field("subagents");
+    const sc = scenarioFile(run, "  - subagent_output_contains: { contains: 'x' }\n");
+    const { code, text } = verifyRun(run, sc);
+    expect(code).toBe(1);
+    expect(text).toContain("evidence unavailable");
+    expect(text).toContain("subagent_output_contains");
   });
 
   // T1 (bug-#33 regression guard): an old/partial result.json with gateDeliveries undefined must NOT

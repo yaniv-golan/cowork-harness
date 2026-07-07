@@ -12,6 +12,7 @@ export interface VerdictSignal {
     | "non_deterministic"
     | "l0_plugin_divergence"
     | "missing_capability"
+    | "infra_error"
     | "stalled"
     | "prompt_asset_missing";
   severity: "fail" | "warn";
@@ -111,9 +112,22 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
       code: "missing_capability",
       severity: "fail",
       message:
-        reason === "omitted"
-          ? `the running image omits declared required capabilit(ies): ${caps.join(", ")} — rebuild full parity (--build-arg COWORK_FULL_PARITY=1), or assert allow_missing_capability: true if the fallback is equivalent.`
-          : `skill declares requires_capabilities [${caps.join(", ")}] but this tier could not verify them — run on a live built-image tier, or assert allow_missing_capability: true.`,
+        reason === "unknown"
+          ? `requires_capabilities lists unknown capability famil(ies): ${caps.join(", ")} — likely a typo (an unknown family can never be verified present, so it hard-fails rather than silently passing). Use a known family or fix the spelling.`
+          : reason === "omitted"
+            ? `the running image omits declared required capabilit(ies): ${caps.join(", ")} — rebuild full parity (--build-arg COWORK_FULL_PARITY=1), or assert allow_missing_capability: true if the fallback is equivalent.`
+            : `skill declares requires_capabilities [${caps.join(", ")}] but this tier could not verify them — run on a live built-image tier, or assert allow_missing_capability: true.`,
+    });
+  }
+
+  // an infrastructure crash (VM/egress sidecar) is a hard fail on BOTH lanes and is NOT author-suppressible
+  // (like a transport error — the run's evidence is contaminated, so "pass anyway" is never a valid choice).
+  // Re-derived on the replay drive from the frozen infra_error events, so a recorded crash fails replay too.
+  if (result.infraErrors && result.infraErrors.length > 0) {
+    signals.push({
+      code: "infra_error",
+      severity: "fail",
+      message: `infrastructure error(s) during the run (evidence contaminated): ${result.infraErrors.map((e) => e.message).join("; ")}`,
     });
   }
 

@@ -25,7 +25,7 @@ export interface RenderedPrompts {
 }
 
 /**
- * Host-loop's prompt-token substitution recipe (production's exact recipe — plan §1.4/P2a). Only
+ * Host-loop's prompt-token substitution recipe (production's exact recipe). Only
  * consulted when `effectiveFidelity === "hostloop"`; every other tier keeps today's VM-path tokens
  * byte-identical. All fields are HOST paths (hostloop is the one tier where the model already speaks
  * host paths, matching what production substitutes there).

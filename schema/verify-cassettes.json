@@ -4,8 +4,14 @@
   "title": "VerifyCassettesEnvelope",
   "description": "Structured stdout of `cowork-harness verify-cassettes --output-format json` (SPEC \u00a711.1) \u2014 the token-free CI gate over committed cassettes (privacy scan + staleness). A covered surface of the 1.0 compatibility contract (SPEC \u00a712): parse this, not the human-readable text output.",
   "type": "object",
-  "required": ["command", "ok", "coverage", "results"],
+  "required": ["tool", "version", "command", "ok", "coverage", "results", "error"],
   "properties": {
+    "tool": { "const": "cowork-harness", "description": "Shared machine-envelope discriminator (SPEC §11)." },
+    "version": { "type": "string", "description": "cowork-harness package version that produced this envelope." },
+    "error": {
+      "type": ["object", "null"],
+      "description": "null on success (verify-cassettes reports per-cassette failures inside results[], not here); the shared error-envelope object on a top-level usage/runtime failure."
+    },
     "command": { "const": "verify-cassettes" },
     "ok": {
       "type": "boolean",
@@ -13,11 +19,12 @@
     },
     "coverage": {
       "type": "object",
-      "description": "Which scans actually ran \u2014 false under --skip-privacy / --skip-staleness. A consumer gating on ok:true should also assert the coverage it expects (a skipped scan can't fail).",
-      "required": ["privacy", "staleness"],
+      "description": "Which scans actually ran \u2014 false under --skip-privacy / --skip-staleness / --skip-scenario-drift. A consumer gating on ok:true should also assert the coverage it expects (a skipped scan can't fail).",
+      "required": ["privacy", "staleness", "scenarioDrift"],
       "properties": {
         "privacy": { "type": "boolean" },
-        "staleness": { "type": "boolean" }
+        "staleness": { "type": "boolean" },
+        "scenarioDrift": { "type": "boolean" }
       }
     },
     "results": {
@@ -25,7 +32,7 @@
       "description": "One entry per cassette file, including unreadable ones (tallied via `error`, never a crash that aborts the batch).",
       "items": {
         "type": "object",
-        "required": ["file", "findings", "staleness", "notes", "version"],
+        "required": ["file", "findings", "staleness", "notes", "version", "scenarioDrift"],
         "properties": {
           "file": { "type": "string" },
           "findings": {
@@ -58,6 +65,11 @@
             "type": "array",
             "items": { "type": "string" },
             "description": "Format/version failures: the cassette was written by a NEWER harness than this one understands. Always fails the gate (can't verify \u21d2 not green), independent of --skip-staleness."
+          },
+          "scenarioDrift": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Scenario-content (prompt) drift: the committed on-disk scenario's prompt diverged from the cassette's frozen prompt. A definite divergence \u2014 each message fails the gate (own bucket so --skip-staleness can't mask it). Empty under --skip-scenario-drift, or when the source isn't resolvable (that becomes a non-failing `notes` entry instead)."
           },
           "error": {
             "type": "string",

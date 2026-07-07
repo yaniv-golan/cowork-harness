@@ -6,6 +6,8 @@ import { parseMessage, type AgentEvent, type DecisionRequest } from "../agent/se
 import { labelSource } from "./gate-provenance.js";
 import type { RunResult } from "../types.js";
 import { readIndex, resolveRunsExactFromIndex, resolveRunsFragmentFromIndex, type RunIndexRow } from "./run-index.js";
+import { readTimeline } from "../agent/timeline.js";
+import { foldToolDurations } from "./timeline-fold.js";
 
 /**
  * The default runs root when no override is set: a per-user state dir OUTSIDE any working tree, so run
@@ -55,7 +57,7 @@ export function noteRunsLocation(opts: { json: boolean; quiet: boolean; suppress
  * `tool_use` row is suppressed in favor of the richer dispatch row.
  */
 export interface TraceRow {
-  kind: "tool" | "dispatch" | "decision" | "text" | "result";
+  kind: "tool" | "dispatch" | "decision" | "text" | "result" | "thinking";
   name?: string;
   detail?: string;
   agentType?: string;
@@ -104,6 +106,8 @@ function rowFor(ev: AgentEvent, translate: (s: string) => string): TraceRow[] {
       return [{ kind: "dispatch", name: "Agent", agentType: ev.agentType, declaredTools: ev.declaredTools, description: ev.description }];
     case "assistant_text":
       return ev.parentToolUseId || !ev.text.trim() ? [] : [{ kind: "text", detail: translate(ev.text.replace(/\s+/g, " ")).slice(0, 120) }];
+    case "thinking":
+      return !ev.text.trim() ? [] : [{ kind: "thinking", detail: translate(ev.text.replace(/\s+/g, " ")).slice(0, 120) }];
     case "decision":
       return [{ kind: "decision", name: ev.request.kind, detail: decisionDetail(ev.request) }];
     case "result":
@@ -113,7 +117,7 @@ function rowFor(ev: AgentEvent, translate: (s: string) => string): TraceRow[] {
   }
 }
 
-/** E4: resolves `arg` against a set of already-tiered index rows (exact OR fragment — caller picks the
+/** Resolves `arg` against a set of already-tiered index rows (exact OR fragment — caller picks the
  *  tier), tie-breaking on the index row's `ts` (the run's actual creation time — a strictly better signal
  *  than a directory's `mtime`, which the filesystem walk uses and which can be touched by unrelated
  *  filesystem operations). Returns `undefined` on no rows, OR when the winning row's `events.jsonl` no
@@ -135,7 +139,7 @@ function resolveViaIndexRows(rows: RunIndexRow[], arg: string): string | undefin
 
 /** Resolve `arg` to an events.jsonl: a direct file, a run dir, or a run-id/scenario fragment under runs/.
  *  `resolveEventsFile` is the single choke point trace/inspect/scaffold/status all resolve a run-id/
- *  fragment through — making it index-aware (E4) migrates all four for free, with full behavioral safety:
+ *  fragment through — making it index-aware migrates all four for free, with full behavioral safety:
  *  an index MISS (a pre-index-era run, or index.jsonl never built via `--reindex`) falls straight through
  *  to the filesystem walk, unchanged.
  *
@@ -218,8 +222,8 @@ export function resolveEventsFile(arg: string): string {
 }
 
 /** Parse every event from a pre-read array of raw JSONL lines — the shared core both `eventsOf` (a run
- *  dir's events.jsonl on disk) and E2's diff engine (a cassette's `events[]`, already in memory, no file
- *  to read) build on. `source` is only used in the malformed-line warning. */
+ *  dir's events.jsonl on disk) and the cassette diff engine (a cassette's `events[]`, already in memory,
+ *  no file to read) build on. `source` is only used in the malformed-line warning. */
 export function eventsFromLines(lines: string[], source = "<lines>"): AgentEvent[] {
   const events: AgentEvent[] = [];
   for (const line of lines) {
@@ -242,19 +246,19 @@ function eventsOf(file: string): AgentEvent[] {
   return eventsFromLines(readFileSync(file, "utf8").split("\n"), file);
 }
 
-/** Options shared by `buildTrace`/`buildTraceFromEvents`. `translate` (Item 2's `trace --translate-paths`
+/** Options shared by `buildTrace`/`buildTraceFromEvents`. `translate` (the `trace --translate-paths`
  *  consumer) rewrites VM paths to host paths in row TEXT — summaries, assistant text, tool-result heads —
  *  BEFORE any of it is sliced to its ~100/120-char display length (see `summarize`/`rowFor`'s doc
  *  comments for why the order matters). Defaults to identity, matching every caller before this option
- *  existed (E2's diff engine and cassette replay both get untranslated rows unless they opt in). */
+ *  existed (the cassette diff engine and cassette replay both get untranslated rows unless they opt in). */
 export interface BuildTraceOptions {
   tools?: boolean;
   translate?: (text: string) => string;
 }
 
 /** Core trace-row building over an already-parsed event array — the part of `buildTrace` that doesn't
- *  care whether the events came from a file (run dir) or were passed in directly (E2's diff engine,
- *  cassette `events[]`). `buildTrace` is the file-path convenience wrapper over this. */
+ *  care whether the events came from a file (run dir) or were passed in directly (the cassette diff
+ *  engine, cassette `events[]`). `buildTrace` is the file-path convenience wrapper over this. */
 export function buildTraceFromEvents(events: AgentEvent[], opts: BuildTraceOptions = {}): TraceRow[] {
   const translate = opts.translate ?? ((s: string) => s);
   // Pair tool_use ↔ tool_result by toolUseId so each tool row carries its OUTCOME — the single
@@ -385,6 +389,9 @@ export interface DispatchNode {
   description?: string;
   declaredTools: string[];
   depth: number; // 0 = top-level dispatch; >0 = dispatched by another sub-agent
+  prompt?: string;
+  model?: string;
+  output?: string; // paired from a tool_result in the same events file, by toolUseId
 }
 
 /**
@@ -397,6 +404,10 @@ export function buildDispatchTree(file: string): { nodes: DispatchNode[]; total:
   const events = eventsOf(file);
   const dispatches = events.filter((e): e is Extract<AgentEvent, { type: "subagent_dispatch" }> => e.type === "subagent_dispatch");
   const byId = new Map(dispatches.map((d) => [d.toolUseId, d]));
+  // Pair each dispatch's own toolUseId against a tool_result in the SAME events file so `output` is
+  // available without reading RunResult/RunRecord (mirrors buildTraceFromEvents's results.set(...) pairing).
+  const results = new Map<string, string>();
+  for (const ev of events) if (ev.type === "tool_result" && ev.toolUseId) results.set(ev.toolUseId, ev.text);
   const depthOf = (d: Extract<AgentEvent, { type: "subagent_dispatch" }>): number => {
     let depth = 0;
     let cur = d.parentToolUseId;
@@ -414,22 +425,78 @@ export function buildDispatchTree(file: string): { nodes: DispatchNode[]; total:
     description: d.description,
     declaredTools: d.declaredTools,
     depth: depthOf(d),
+    prompt: d.prompt,
+    model: d.model,
+    output: results.get(d.toolUseId),
   }));
   return { nodes, total: nodes.length };
 }
 
 export function formatDispatchTree({ nodes, total }: { nodes: DispatchNode[]; total: number }): string {
   if (!nodes.length) return "(no sub-agent dispatches in this run)";
+  const firstLine = (s?: string) => (s ? s.split("\n")[0] : undefined);
   const lines = nodes.map((n) => {
     const indent = "  ".repeat(n.depth);
     const tools = n.declaredTools.length ? ` [${n.declaredTools.join(",")}]` : "";
-    return `${indent}└ ${n.agentType}${n.description ? ` (${n.description})` : ""}${tools}`;
+    const promptLine = firstLine(n.prompt);
+    const outputLine = firstLine(n.output);
+    const extra = [promptLine ? `prompt: ${promptLine}` : "", outputLine ? `output: ${outputLine}` : ""]
+      .filter(Boolean)
+      .map((s) => `\n${indent}  ${s}`)
+      .join("");
+    return `${indent}└ ${n.agentType}${n.description ? ` (${n.description})` : ""}${tools}${extra}`;
   });
   lines.push(`\n${total} sub-agent dispatch(es) total — assert with \`dispatch_count_max: ${total}\``);
   return lines.join("\n");
 }
 
-export function formatTrace(rows: TraceRow[]): string {
+/**
+ * `trace --view tool-durations` — per-tool call-count/timing aggregate, folded from the sibling
+ * `timeline.jsonl`. Returns `{}` for a run dir with no timeline (an older recording that predates this
+ * file, or a run that genuinely made no tool calls) — same "absent means no data, not an error" convention as the other
+ * `build*` functions in this file.
+ */
+export function buildToolDurations(file: string): Record<string, { calls: number; totalMs: number; maxMs: number }> {
+  const timelineData = readTimeline(join(file, ".."));
+  return timelineData ? foldToolDurations(timelineData.events) : {};
+}
+
+export function formatToolDurations(durations: Record<string, { calls: number; totalMs: number; maxMs: number }>): string {
+  const names = Object.keys(durations);
+  if (!names.length) return "(no tool-duration data for this run — an older recording without timing, or no tool calls)";
+  const lines = names.map((name) => {
+    const d = durations[name];
+    return `${name} ×${d.calls}, ${(d.totalMs / 1000).toFixed(1)}s total, ${(d.maxMs / 1000).toFixed(1)}s max`;
+  });
+  const totalMs = names.reduce((sum, name) => sum + durations[name].totalMs, 0);
+  lines.push(`\n${names.length} tool(s), ${(totalMs / 1000).toFixed(1)}s combined wall-gap total`);
+  return lines.join("\n");
+}
+
+/**
+ * Combined cache-read ratio across every model in `modelUsage` —
+ * `cacheReadInputTokens / (inputTokens + cacheReadInputTokens + cacheCreationInputTokens)`, summed
+ * per-field across models before dividing (not an average of per-model ratios, which would
+ * mis-weight a low-volume model against a high-volume one). Returns `undefined` when there's no
+ * data or the denominator is zero (guards a NaN/Infinity% footer) — absence means "don't print the
+ * footer line", not "0%".
+ */
+function cacheReadRatio(
+  modelUsage: Record<string, { inputTokens?: number; cacheReadInputTokens?: number; cacheCreationInputTokens?: number }>,
+): number | undefined {
+  let input = 0;
+  let cacheRead = 0;
+  let cacheCreation = 0;
+  for (const m of Object.values(modelUsage)) {
+    input += m.inputTokens ?? 0;
+    cacheRead += m.cacheReadInputTokens ?? 0;
+    cacheCreation += m.cacheCreationInputTokens ?? 0;
+  }
+  const denom = input + cacheRead + cacheCreation;
+  return denom > 0 ? cacheRead / denom : undefined;
+}
+
+export function formatTrace(rows: TraceRow[], opts?: { modelUsage?: RunResult["modelUsage"] }): string {
   const lines: string[] = [];
   for (const r of rows) {
     if (r.kind === "dispatch")
@@ -444,9 +511,14 @@ export function formatTrace(rows: TraceRow[]): string {
     else if (r.kind === "decision") lines.push(`? ${r.name}: ${r.detail}`);
     else if (r.kind === "result") lines.push(`= result: ${r.detail}`);
     else if (r.kind === "text") lines.push(`claude› ${r.detail}`);
+    else if (r.kind === "thinking") lines.push(`~ ${r.detail}`);
   }
   const tools = rows.filter((r) => r.kind === "tool").length;
   const dispatched = rows.filter((r) => r.kind === "dispatch").length;
   lines.push(`\n${tools} tool calls · ${dispatched} sub-agent dispatch(es)`);
+  if (opts?.modelUsage) {
+    const ratio = cacheReadRatio(opts.modelUsage);
+    if (ratio !== undefined) lines.push(`cache-read ratio: ${Math.round(ratio * 100)}%`);
+  }
   return lines.join("\n");
 }

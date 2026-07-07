@@ -37,6 +37,7 @@ const record = (over: Partial<RunRecord> = {}): RunRecord =>
     transcript: "",
     toolsCalled: new Set(),
     toolCounts: { Read: 2, Bash: 1 },
+    models: [],
     subagentTools: new Set(),
     subagents: [{ toolUseId: "t1", agentType: "Explore", declaredTools: [], toolsUsed: [] }],
     questions: [],

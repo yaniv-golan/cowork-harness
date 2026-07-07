@@ -198,5 +198,8 @@ assert len([s for s in r.subagents]) >= 1
 - **`on_unanswered=` takes `fail | first | prompt`.** `on_unanswered="llm"` is **rejected** by the CLI
   (exit 2) — the LLM terminal isn't exposed through this flag. To answer live questions from the lane, pass
   `decider_cmd=` (e.g. a `serve_decider(fn)` helper, above); to let a scenario use the model, set
-  `on_unanswered: llm` in the scenario **YAML** (flags the run non-deterministic).
+  `on_unanswered: llm` in the scenario **YAML** (flags the run non-deterministic). This wrapper's own
+  default is `"fail"` (an unanswered gate is a hard error) rather than the bare CLI's own
+  terminal-adaptive default — a deliberate choice so a `pytest` run never blocks on an interactive
+  prompt or silently picks an answer.
 - Each call shells out to node (and Docker) — treat this as a slow lane, not per-keystroke.

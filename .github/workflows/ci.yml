@@ -99,7 +99,7 @@ jobs:
         # real recording, not PII. A NEW/different domain finding still fails the gate.
         run: node dist/cli.js verify-cassettes examples/replays/ --allow-email 'synthetic-user@example\.com' --allow-domain 'claude\.com'
       - name: Lint example scenarios (no-silent-false-green invariants)
-        run: node dist/cli.js lint examples/scenarios/*.yaml
+        run: node dist/cli.js lint examples/scenarios/*.yaml examples/scenarios/trigger-accuracy-sweep/*.yaml
 
   # ── Stage 1a: packaged Action self-test (uses: ./ against THIS commit, packed as a tarball —
   # never against whatever's currently published on npm) ─────────────────────────

@@ -1,4 +1,4 @@
-// E1 — `run --repeat N` variance rollup. Pure functions over RunResult[] — no I/O, no execution; the
+// `run --repeat N` variance rollup. Pure functions over RunResult[] — no I/O, no execution; the
 // CLI loop in cli.ts drives N executeScenario calls and hands the results here.
 import type { RunResult, Assertion } from "../types.js";
 import { computeVerdict, type VerdictSignal } from "./verdict.js";
@@ -20,7 +20,7 @@ export interface RepeatRollup {
 
 /** The first DEFINED field name on an assertion object — the same "one behavior name" convention the
  *  CLI/docs already use to describe a multi-key assertion (e.g. `{result, tool_called}` displays as
- *  "result", its first key). Falls back to a positional label if somehow no key is set. Exported — E3's
+ *  "result", its first key). Falls back to a positional label if somehow no key is set. Exported — the
  *  matrix rollup reuses this exact convention for its `failedAssertions` labels, not a re-derivation. */
 export function firstAssertionKey(a: Assertion): string {
   for (const k of Object.keys(a)) if ((a as Record<string, unknown>)[k] !== undefined) return k;
@@ -90,7 +90,7 @@ export function buildRepeatRollup(
 }
 
 /**
- * The batch verdict formula (§8 of the plan: `ok` is redefined directly per invocation mode, no
+ * The batch verdict formula (`ok` is redefined directly per invocation mode, no
  * `batchVerdict` shadow field). Deliberately separate from `buildRepeatRollup` — the rollup is pure
  * OBSERVATION (what happened), this is the POLICY judgment (pass or fail against a threshold), the same
  * split `computeVerdict` draws between recorded facts and pass/fail.
@@ -102,11 +102,14 @@ export function buildRepeatRollup(
  * away against whatever completed cleanly beforehand. `stoppedEarly:"error"` (an uncaught exception —
  * a BoundaryError or any other error mid-batch) always fails for the same reason: a batch that couldn't
  * finish because something broke is a real failure, not a clean-but-incomplete measurement.
- * `stoppedEarly:"budget"` is the one early-stop reason judged on its own completed-runs passRate like any
- * other batch (an incomplete-but-clean run isn't itself a failure — that's a `::warning::` at the call
- * site, not a verdict change).
+ * `stoppedEarly:"budget"` defaults to failing too — a budget cutoff means the batch never reached
+ * `requested`, so a clean-looking passRate over a small completed prefix is "incomplete is not green",
+ * the same principle `--matrix`'s `truncated` applies. Pass `allowBudgetStop: true` to opt back into the
+ * old behavior (judge a budget-stopped batch on its own completed-runs passRate like any other batch —
+ * an incomplete-but-clean run isn't itself a failure, that's a `::warning::` at the call site instead).
  */
-export function rollupPasses(rollup: RepeatRollup, minPassRate = 1.0): boolean {
+export function rollupPasses(rollup: RepeatRollup, minPassRate = 1.0, allowBudgetStop = false): boolean {
   if (rollup.stoppedEarly === "diverged" || rollup.stoppedEarly === "unanswered" || rollup.stoppedEarly === "error") return false;
+  if (rollup.stoppedEarly === "budget" && !allowBudgetStop) return false;
   return rollup.passRate >= minPassRate;
 }

@@ -71,7 +71,7 @@ export function makeDisplayTranslator(opts: DisplayTranslateOptions): (text: str
  *   - folders: every `kind: "folder"` mount's `mountPath -> hostPath` (hostloop bind-mounts folders at
  *     their REAL host path — never a staged copy — so this is also production-identical, unlike the
  *     container/microvm tiers' staged-copy "host" side).
- * `.host-home`/`.auto-memory` are left unset (dormant features — see the plan's §1.8; `mapVMPathToHostPath`
+ * `.host-home`/`.auto-memory` are left unset (dormant features; `mapVMPathToHostPath`
  * already returns null for them without a resolver, which is correct until those gates flip).
  */
 export function vmPathContextFromPlan(
@@ -187,7 +187,7 @@ function wrapOSC8(displayText: string, displayPayload: string): string {
  * every other terminal). Pure and TUI-reusable: this function does no gating of its own (see
  * `shouldLinkify`) and touches only the string handed to it.
  *
- * Positions (rev 2, binding):
+ * Positions (binding):
  *   - Markdown-link (`](computer://...)`) and bare tokens are linkified when host-shaped.
  *   - Backtick-quoted (`` `computer://...` ``) spans are NEVER linkified — a code span is a
  *     quotation, not an affordance, and it sidesteps that position's deliberately-unencoded payload.
@@ -256,7 +256,7 @@ export function linkifyForTerminal(text: string): string {
 }
 
 /**
- * The hyperlink decoration gate (rev 2, item 3.2 — ALL must hold): the sink is a real TTY
+ * The hyperlink decoration gate (ALL must hold): the sink is a real TTY
  * (`stderr.isTTY`, since the renderer only ever writes decoration to stderr); `CI` is unset (CI logs
  * are files, not an interactive terminal someone clicks in — mirrors the existing `!process.env.CI`
  * TTY gate at the `--on-unanswered` default, cli.ts); `COWORK_HARNESS_NO_HYPERLINKS` is unset (an

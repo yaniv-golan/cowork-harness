@@ -56,7 +56,7 @@ export function envPositiveNumber(name: string, dflt: number): number {
  * Write to a same-dir temp (pid-suffixed so two concurrent writers can't collide) then `renameSync` over
  * the target (atomic on POSIX). Mirrors the existing temp+rename idiom already used independently in
  * `src/run/cassette.ts` (`writeFileAtomic`) and `src/decide/external-channel.ts` — this is the first
- * SHARED copy; the two existing call sites are left as-is (see the plan's Non-Goals).
+ * SHARED copy; the two existing call sites are left as-is (out of scope for this change).
  */
 export function writeJsonAtomic(path: string, data: unknown): void {
   const tmp = `${path}.tmp.${process.pid}`;

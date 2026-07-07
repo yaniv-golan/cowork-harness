@@ -109,9 +109,11 @@ describe("rollupPasses — the batch verdict formula (§8: ok redefined directly
     expect(rollupPasses(rollup, 1.0)).toBe(false);
   });
 
-  it("a stoppedEarly:'budget' batch is judged on its own completed-runs passRate — incomplete ≠ automatic failure", () => {
-    const rollup = buildRepeatRollup("t", 10, [rr({}), rr({})], "budget"); // 2/2 completed, all passing
-    expect(rollupPasses(rollup, 1.0)).toBe(true);
+  it("a stoppedEarly:'budget' batch FAILS by default — incomplete is not green (opt out with allowBudgetStop)", () => {
+    const rollup = buildRepeatRollup("t", 10, [rr({}), rr({})], "budget"); // 2/2 completed, all passing, but requested 10
+    expect(rollupPasses(rollup, 1.0)).toBe(false);
+    // Explicit opt-in restores the completed-runs passRate judgement, recording the incomplete sample.
+    expect(rollupPasses(rollup, 1.0, true)).toBe(true);
   });
 
   it(

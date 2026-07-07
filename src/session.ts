@@ -10,6 +10,23 @@ import { MOUNT_BARE_NAME_MIN_VERSION, cmpVersionStrings } from "./baseline.js";
 import { containedRealPath } from "./boundary-paths.js";
 import { gitModeEnabled, gitFilterFromSet, gitStageStats } from "./run/skill-files.js";
 import { BoundaryError } from "./errors.js";
+import type { PluginSkillRoot } from "./run/skill-metadata.js";
+
+/** Expand a leading `~` the way a shell would for THE CURRENT user only, then resolve whatever's left
+ *  against `base`. `~` and `~/x` become `homedir()` / `join(homedir(), "x")`; a bare absolute path is
+ *  returned untouched; anything else is `resolve(base ?? process.cwd(), p)`. A path that starts with
+ *  `~<user>` (someone ELSE's home directory) is not expandable without a passwd lookup this project
+ *  doesn't do — throw instead of silently passing it through as a literal relative path (that literal
+ *  would resolve under `${cwd}/~<user>/...`, a confusing folder easy to miss and easy to mistake for the
+ *  real target). This is the single place path expansion lives — `src/session.ts` and
+ *  `src/run/run-status.ts` both call it; `src/cli.ts`'s `--run-dir` handling should too (see cli.ts). */
+export function expandUserPath(p: string, base?: string): string {
+  if (p === "~") return homedir();
+  if (p.startsWith("~/")) return join(homedir(), p.slice(2));
+  if (p.startsWith("~")) throw new Error(`expandUserPath: "${p}" expands another user's home directory (~<user>), which is not supported`);
+  if (isAbsolute(p)) return p;
+  return resolve(base ?? process.cwd(), p);
+}
 
 /** Clone process env with Cowork's bg-env-strip applied. */
 function strippedEnv(baseline: PlatformBaseline): NodeJS.ProcessEnv {
@@ -52,6 +69,13 @@ export const SessionConfig = z.strictObject({
   // A positive integer (or a per-model map of them) — reject 0 / negative, which would
   // contradict the "never 0" budget invariant if it reached the CLI flag / env.
   max_thinking_tokens: z.union([z.number().int().positive(), z.record(z.string(), z.number().int().positive())]).optional(),
+  // Agent turn budget → the `--max-turns` CLI flag (verified supported by the staged agent binary:
+  // "Maximum number of agentic turns in non-interactive mode"). RAISES the ceiling for a heavy
+  // multi-step/subagent workflow. NAMED DISTINCTLY from the `max_turns` ASSERTION (a post-hoc upper-bound
+  // CHECK under `assert:`) to avoid conflating raise-the-ceiling with check-the-ceiling. Omitted by default
+  // → no flag passed → the agent inherits its own default (faithful: real Cowork passes no --max-turns for
+  // an interactive session, only scheduled tasks default to 100).
+  agent_max_turns: z.number().int().positive().optional(),
   extended_thinking: z.boolean().optional().describe("Inert / no-op — not a real Cowork toggle. Use max_thinking_tokens instead."), // inert: not a real Cowork toggle — use max_thinking_tokens.
   permission_mode: z.enum(["default", "acceptEdits", "plan", "bypassPermissions"]).default("default"), // setPermissionMode
   // cowork = pre-approve built-ins (like real Cowork's allowedTools) + auto-allow unscripted
@@ -74,7 +98,7 @@ export const SessionConfig = z.strictObject({
       marketplaces: z.array(z.string()).default([]), // plugin_marketplaces (git URLs / paths)
       local_marketplaces: z.array(z.string()).default([]), // LOCAL marketplace dirs -> registered via `claude plugin marketplace add`
       enabled: z.array(z.string()).default([]), // enabledPlugins (name@marketplace)
-      local_plugins: z.array(z.string()).default([]), // host plugin dirs -> mnt/.local-plugins/cache (--plugin-dir)
+      local_plugins: z.array(z.string()).default([]), // host plugin dirs -> mnt/.local-plugins/marketplaces/<marketplace>/<plugin> (>=1.14271.0; older baselines: mnt/.local-plugins/cache) (--plugin-dir)
       remote_plugins: z.array(z.string()).default([]), // host plugin dirs -> mnt/.remote-plugins
     })
     .default({ config_dir: null, marketplaces: [], local_marketplaces: [], enabled: [], local_plugins: [], remote_plugins: [] }),
@@ -152,6 +176,7 @@ export interface LaunchPlan {
   model?: string;
   effort?: string;
   maxThinkingTokens?: number | Record<string, number>; // session thinking budget (resolved per-model in spawnEnv)
+  agentMaxTurns?: number; // session turn budget → --max-turns (omitted ⇒ agent default; distinct from the max_turns assertion)
   permissionMode: string;
   permissionParity: "cowork" | "strict";
   baseEnv: NodeJS.ProcessEnv; // Cowork bg-env-strip applied; CLAUDE_CONFIG_DIR set by the runtime
@@ -180,6 +205,28 @@ export function userVisibleRootsFromPlan(plan: LaunchPlan): string[] {
  *  still enumerate these roots; only their captured content changes shape. */
 export function readonlyFolderRootsFromPlan(plan: LaunchPlan): string[] {
   return plan.mounts.filter((m) => m.kind === "folder" && m.mode === "r").map((m) => m.mountPath);
+}
+
+/** Plugin skill-source roots for `resolveAvailableSkills`'s whenToUse enrichment. Reads each
+ *  staged plugin mount's `.claude-plugin/plugin.json` for the plugin `name` + `skills` subdir; best-effort,
+ *  never throws (a missing/corrupt manifest falls back to the dir basename + a "skills" subdir). */
+export function pluginSkillRootsFromPlan(plan: LaunchPlan): PluginSkillRoot[] {
+  const out: PluginSkillRoot[] = [];
+  for (const m of plan.mounts) {
+    if (m.kind !== "local-plugin" && m.kind !== "remote-plugin" && m.kind !== "marketplace-plugin") continue;
+    let name = basename(m.hostPath);
+    let skillsSubdir = "skills";
+    const pj = join(m.hostPath, ".claude-plugin", "plugin.json");
+    try {
+      const parsed = JSON.parse(readFileSync(pj, "utf8")) as { name?: unknown; skills?: unknown };
+      if (typeof parsed.name === "string" && parsed.name) name = parsed.name;
+      if (typeof parsed.skills === "string" && parsed.skills) skillsSubdir = parsed.skills.replace(/^\.\//, "");
+    } catch {
+      /* missing/corrupt manifest — best-effort fallback */
+    }
+    out.push({ pluginName: name, hostPath: m.hostPath, skillsSubdir });
+  }
+  return out;
 }
 
 /**
@@ -220,6 +267,9 @@ export function buildLaunchPlan(
   // its resume flag here (set after the plan is built today, so it must be a param, not `plan.resume`).
   resume = false,
 ): LaunchPlan {
+  // Launch-time `~` expansion ONLY — leaves relative/absolute paths untouched so downstream mount-name
+  // derivation still sees the authored basename (e.g. a trailing `..` must stay `..` to be rejected).
+  // (Distinct from expandUserPath, which also resolves relative paths against cwd — wrong here.)
   const expand = (p: string) => p.replace(/^~(?=$|\/)/, homedir());
 
   // A plugin/skill source in a git work tree delivers only its git-TRACKED files (the fidelity
@@ -277,7 +327,7 @@ export function buildLaunchPlan(
       }),
     );
   if (session.mcp.enabled.length) settings.enabledMcpjsonServers = session.mcp.enabled;
-  settings.localAgentModeTrustedFolders = session.trusted_folders.map(expand);
+  settings.localAgentModeTrustedFolders = session.trusted_folders.map((p) => expand(p));
   settings.autoMountFolders = session.auto_mount_folders;
   const settingsJson = JSON.stringify(settings, null, 2);
   writeFileSync(join(configDir, "settings.json"), settingsJson);
@@ -627,6 +677,7 @@ export function buildLaunchPlan(
     model: session.model,
     effort: session.effort,
     maxThinkingTokens: session.max_thinking_tokens,
+    agentMaxTurns: session.agent_max_turns,
     permissionMode: session.permission_mode,
     permissionParity: session.permission_parity,
     baseEnv,
@@ -642,7 +693,7 @@ export function loadSession(parsed: unknown): SessionConfig {
 }
 
 /**
- * E3 (matrix runner) — the session-loading override seam. Pure: returns a new SessionConfig, never
+ * The matrix runner's session-loading override seam. Pure: returns a new SessionConfig, never
  * mutates `session`. `model` is a plain scalar overwrite. `skillDirSubstitution: [from, to]` swaps ONE
  * `plugins.local_plugins` entry — chosen by exact match on `from` — for `to`, leaving every other entry
  * untouched.
@@ -652,7 +703,7 @@ export function loadSession(parsed: unknown): SessionConfig {
  * override anywhere in this codebase. So substituting a directory with a DIFFERENT basename would silently
  * change the mount name the agent sees, invalidating any scenario assertion that references it (e.g. a
  * `skill_triggered` regex keyed on the old plugin id). Rather than build new plumbing to pin an arbitrary
- * mount name (real complexity the plan flags as having "no precedent in the codebase today"), this enforces
+ * mount name (real complexity that has no precedent in the codebase today), this enforces
  * same-basename substitution and fails loud otherwise — a `skill_dirs` matrix axis's candidate directories
  * must all share one basename (e.g. `variants/v1/my-pdf-skill/`, `variants/v2/my-pdf-skill/`).
  */
@@ -682,12 +733,18 @@ export function applySessionOverrides(
 /**
  * Resolve a session's relative host paths against `baseDir` (the session file's own
  * directory), so a scenario+session bundle is relocatable and `run` behaves the same
- * from any working directory. `~` and already-absolute paths pass through untouched.
- * Applied only when a session is loaded from a FILE (the `run`/`record` path); paths
- * supplied as CLI args (`skill --upload/--folder`) stay relative to the user's cwd.
+ * from any working directory. `~` and `~/x` pass through as literals (buildLaunchPlan
+ * expands them at launch time, and a config_dir may be VM-relative), already-absolute
+ * paths pass through untouched, and a `~<user>` path now THROWS instead of surviving as an
+ * unexpanded literal (the finding this closes). Applied only when a session is loaded from a
+ * FILE (the `run`/`record` path); CLI-arg paths (`skill --upload/--folder`) stay cwd-relative.
  */
 export function resolveSessionPaths(session: SessionConfig, baseDir: string): SessionConfig {
-  const r = (p: string) => (p.startsWith("~") || isAbsolute(p) ? p : resolve(baseDir, p));
+  const r = (p: string) => {
+    if (p === "~" || p.startsWith("~/")) return p; // literal ~ pass-through — expanded later by buildLaunchPlan
+    if (p.startsWith("~")) throw new Error(`resolveSessionPaths: "${p}" is a ~<user> home path, which is not supported`);
+    return isAbsolute(p) ? p : resolve(baseDir, p);
+  };
   // `plugins.marketplaces` is mostly git URLs (left untouched); only a relative LOCAL path is resolved.
   const isUrl = (p: string) => /^[a-z][a-z0-9+.-]*:\/\//i.test(p) || p.startsWith("git@");
   return {

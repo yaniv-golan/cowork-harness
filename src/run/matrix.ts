@@ -1,4 +1,4 @@
-// E3 — matrix runner. Cross-product of baseline/model/skill_dir axes over one scenario, reusing E1's
+// Matrix runner. Cross-product of baseline/model/skill_dir axes over one scenario, reusing the repeat
 // rollup/table substrate. Pure functions only — no I/O, no execution; the CLI loop in cli.ts drives cells
 // through runOneScenario/pMapBounded and hands the results here.
 import { z } from "zod";
@@ -33,7 +33,7 @@ export interface MatrixExpansion {
 
 /** Cross-product of the declared axes, in `baselines × models × skill_dirs` order. An absent/empty axis
  *  contributes exactly one `undefined` value (not zero) — so a matrix with no axes at all still expands
- *  to one cell (the base scenario, unmodified), never to zero cells. Capped at `maxCells`; the plan's own
+ *  to one cell (the base scenario, unmodified), never to zero cells. Capped at `maxCells`; the
  *  "no silent caps" principle means callers must surface `truncated`/`totalBeforeCap`, not swallow them. */
 export function expandMatrix(matrix: MatrixFile, maxCells: number): MatrixExpansion {
   const baselines = matrix.baselines?.length ? matrix.baselines : [undefined];
@@ -65,7 +65,7 @@ export interface MatrixCellResult {
 
 /** Turns one cell's real RunResult into a MatrixCellResult — the ONE place that reads RunResult fields for
  *  the matrix rollup, so cli.ts's cell loop stays a thin driver. Reuses computeVerdict/budgetFields/
- *  firstAssertionKey rather than re-deriving pass/fail or cost from scratch (§9 lesson: don't re-implement
+ *  firstAssertionKey rather than re-deriving pass/fail or cost from scratch (don't re-implement
  *  verdict logic per-mode). */
 export function matrixCellResultFromRun(cell: MatrixCell, result: RunResult): MatrixCellResult {
   const verdict = computeVerdict(result, "live");
@@ -88,11 +88,19 @@ export interface MatrixRollup {
   requested: number; // totalBeforeCap from expandMatrix
   ranCells: number; // cells actually executed (after the --max-cells cap)
   truncated: boolean;
-  anyFail: boolean; // a matrix is a compatibility gate, not a survey — any cell failing (assertion OR infra) fails the batch
+  anyFail: boolean; // a matrix is a compatibility gate, not a survey — any cell failing (assertion OR infra) fails
+  // the batch; ALSO forced true when truncated is true and allowTruncated wasn't passed to buildMatrixRollup
+  // (an un-run cell is an unknown, not a pass — see buildMatrixRollup's doc comment)
 }
 
-export function buildMatrixRollup(cells: MatrixCellResult[], requested: number, truncated: boolean): MatrixRollup {
-  return { cells, requested, ranCells: cells.length, truncated, anyFail: cells.some((c) => !c.pass) };
+/** `allowTruncated` defaults to false: a truncated matrix (some cells never ran, per `expandMatrix`'s cap)
+ *  fails the rollup regardless of whether the executed cells all passed — "incomplete is not green", the
+ *  un-run cells are an unknown, not a pass. `requested`/`ranCells` stay surfaced either way so a consumer
+ *  can always see the gap. Pass `allowTruncated: true` to opt back into judging only the executed cells
+ *  (the incomplete sample is still visible via `requested`/`ranCells`, just not treated as a failure). */
+export function buildMatrixRollup(cells: MatrixCellResult[], requested: number, truncated: boolean, allowTruncated = false): MatrixRollup {
+  const anyFail = cells.some((c) => !c.pass) || (truncated && !allowTruncated);
+  return { cells, requested, ranCells: cells.length, truncated, anyFail };
 }
 
 /** A compact human label for one cell's axes — reused for both the per-cell run label (cli.ts, so each
@@ -129,8 +137,8 @@ export function formatMatrixRollup(r: MatrixRollup): string[] {
     lines.push(`  ${status} [${c.index}] ${label}${detail ? " " + detail : ""}`);
     if (!c.pass && c.failedAssertions.length) lines.push(`      failed: ${c.failedAssertions.join(", ")}`);
     // A cell can fail on a verdict signal with NO failing assertion at all (e.g. `stalled`,
-    // `host_path_leak`) — without this, that cell renders ✗ with no visible reason (E1's rollup surfaces
-    // the same signals via its histogram; do the same here per-cell).
+    // `host_path_leak`) — without this, that cell renders ✗ with no visible reason (the repeat rollup
+    // surfaces the same signals via its histogram; do the same here per-cell).
     if (!c.pass && c.signals.length) lines.push(`      signals: ${c.signals.join(", ")}`);
   }
   return lines;
@@ -158,20 +166,26 @@ export interface MatrixRepeatRollup {
   anyFail: boolean; // any cell's rollup fails rollupPasses(minPassRate), OR any cell hit a pre-execution error
 }
 
-/** Reuses `rollupPasses` (E1) for each cell's own pass/fail judgment — a matrix-of-repeats never
+/** Reuses `rollupPasses` for each cell's own pass/fail judgment — a matrix-of-repeats never
  *  re-implements the batch-verdict formula, it just applies it per cell. */
 export function buildMatrixRepeatRollup(
   cells: MatrixCellRepeatResult[],
   requested: number,
   truncated: boolean,
   minPassRate: number,
+  allowTruncated = false,
+  allowBudgetStop = false,
 ): MatrixRepeatRollup {
   return {
     cells,
     requested,
     ranCells: cells.length,
     truncated,
-    anyFail: cells.some((c) => c.error !== undefined || (c.rollup !== undefined && !rollupPasses(c.rollup, minPassRate))),
+    // A truncated composed matrix fails by default (mirrors buildMatrixRollup) — un-run cells are
+    // not a pass; and each cell's own budget-stop is judged fail-by-default via rollupPasses.
+    anyFail:
+      cells.some((c) => c.error !== undefined || (c.rollup !== undefined && !rollupPasses(c.rollup, minPassRate, allowBudgetStop))) ||
+      (truncated && !allowTruncated),
   };
 }
 
@@ -179,9 +193,9 @@ export function buildMatrixRepeatRollup(
  *  summarizing that cell's OWN repeat batch (reusing `rollupPasses` for the pass/fail verdict, matching
  *  `formatMatrixRollup`'s truncation-warning convention: emitted once at expansion time in cli.ts, not
  *  repeated here). */
-export function formatMatrixRepeatRollup(r: MatrixRepeatRollup, minPassRate: number): string[] {
+export function formatMatrixRepeatRollup(r: MatrixRepeatRollup, minPassRate: number, allowBudgetStop = false): string[] {
   const lines: string[] = [];
-  const cellsPassing = r.cells.filter((c) => c.rollup && rollupPasses(c.rollup, minPassRate)).length;
+  const cellsPassing = r.cells.filter((c) => c.rollup && rollupPasses(c.rollup, minPassRate, allowBudgetStop)).length;
   lines.push(`matrix: ${cellsPassing}/${r.ranCells} cells passed${r.anyFail ? " — FAIL" : ""}`);
   for (const c of r.cells) {
     const label = axesLabel(c.axes);

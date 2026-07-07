@@ -15,4 +15,4 @@ assert:
   - result: success
   - tool_called: Bash
   - tool_called: Skill
-  - transcript_contains: "python"
+  - tool_result_contains: "Python 3"  # deterministic python3 --version output (robust to model phrasing)

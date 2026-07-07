@@ -1,9 +1,16 @@
 import { describe, it, expect } from "vitest";
 import { mkdtempSync, readFileSync, mkdirSync, writeFileSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, resolve, basename } from "node:path";
 import { loadBaseline } from "../src/baseline.js";
-import { loadSession, buildLaunchPlan, resolveSessionPaths, applySessionOverrides, readonlyFolderRootsFromPlan } from "../src/session.js";
+import {
+  loadSession,
+  buildLaunchPlan,
+  resolveSessionPaths,
+  applySessionOverrides,
+  readonlyFolderRootsFromPlan,
+  pluginSkillRootsFromPlan,
+} from "../src/session.js";
 import { parseSessionFile } from "../src/run/execute.js";
 import { agentArgs } from "../src/runtime/argv.js";
 import { Scenario } from "../src/types.js";
@@ -93,6 +100,26 @@ describe("readonlyFolderRootsFromPlan (T3 — mode:r inputs get a body-less cass
   it("is empty when no folder is mode:r", () => {
     const { plan: p } = plan({ folders: [{ from: "./examples/data/project" }] });
     expect(readonlyFolderRootsFromPlan(p)).toEqual([]);
+  });
+});
+
+describe("pluginSkillRootsFromPlan (§6.2, O1 fix — whenToUse enrichment source roots)", () => {
+  it("a local-plugin mount with a `.claude-plugin/plugin.json` {name, skills} reads the manifest's name + skills subdir", () => {
+    const { plan: p } = plan({ plugins: { local_plugins: ["./examples/skills/my-pdf-skill"] } });
+    const roots = pluginSkillRootsFromPlan(p);
+    expect(roots).toHaveLength(1);
+    expect(roots[0].pluginName).toBe("my-pdf-skill");
+    expect(roots[0].skillsSubdir).toBe("skills");
+    expect(roots[0].hostPath.endsWith("my-pdf-skill")).toBe(true);
+  });
+
+  it('falls back to the dir basename + a "skills" subdir when the plugin has no manifest', () => {
+    const noManifest = mkdtempSync(join(tmpdir(), "cwh-noplugin-manifest-"));
+    const { plan: p } = plan({ plugins: { local_plugins: [noManifest] } });
+    const roots = pluginSkillRootsFromPlan(p);
+    expect(roots).toHaveLength(1);
+    expect(roots[0].pluginName).toBe(basename(noManifest));
+    expect(roots[0].skillsSubdir).toBe("skills");
   });
 });
 

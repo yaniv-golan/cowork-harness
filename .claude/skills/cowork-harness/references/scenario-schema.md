@@ -1,6 +1,6 @@
 # Scenario & session schema, assertion catalog, web_fetch, full gotchas
 
-Self-contained reference for authoring `cowork-harness` scenarios. Tracks `cowork-harness 0.26.0`
+Self-contained reference for authoring `cowork-harness` scenarios. Tracks `cowork-harness 0.27.0`
 (baseline `desktop-1.18286.0`). If your checkout is newer, prefer the live `docs/scenario.md`,
 `docs/session.md`, and `SPEC.md`.
 
@@ -209,6 +209,11 @@ that accidentally returns `"first"` will fail the gate rather than silently gree
 Each list item under `assert:` is one assertion. **An item with multiple keys is an AND** — it
 passes only if every key passes. Keep one concern per item unless you mean conjunction.
 
+Looking for a key *by what you want to prove* (tool health, sub-agent work, panels, skill
+attribution, resources, diagnostics)? SKILL.md §6's "goal → key" map is the by-purpose index into this
+table; the table below is the full per-key reference, and `cowork-harness assertions --list` prints the
+same set live from the schema.
+
 | Assertion | Passes when |
 |---|---|
 | `result: success \| error` | the run ended with that status |
@@ -220,6 +225,7 @@ passes only if every key passes. Keep one concern per item unless you mean conju
 | `user_visible_artifact: <path>` | exists **and** under a user-visible root (`outputs/` + each connected folder's mount name) — the right primitive for a workspace deliverable when a folder is connected |
 | `no_delete_in_outputs: true` | no delete op touched `mnt/outputs` — **only `true` is valid**; `false` is rejected (omit to allow deletes) |
 | `no_unexpected_files: [<glob>, …]` | every **newly created** file under a user-visible root matches ≥1 glob (workRoot-relative paths; `**` = whole path segment for any depth — use `outputs/handoff/**` for per-run subdirs); `[]` = no new files; **new-files-only** — overwriting a pre-existing file in place is invisible (use content-level producer stamping); live/verify-run without a pre-run manifest ⇒ evidence-unavailable hard-fail (live runs capture the baseline only when this key is asserted; recordings always capture); **microvm cannot capture** (use container/hostloop); replay needs `cassette.preRunPaths` (≥0.24 container/hostloop recordings) — cassettes without it **exclude** the key with a loud warning |
+| `input_unmodified: [<glob>, …]` | every **pre-existing** file whose workRoot-relative path matches ≥1 glob keeps an unchanged content hash after the run — the in-place-mutation companion to `no_unexpected_files`'s new-files check (`[]` is rejected by the schema — list at least one glob); a matched file that was deleted counts as a content change (fails); live/verify-run without a pre-run hash manifest ⇒ evidence-unavailable hard-fail; **microvm cannot capture**; replay needs `cassette.preRunHashes` — cassettes without it **exclude** the key with a loud warning; on replay it compares against the manifest's recorded `sha256`, never a re-hash of the materialized tree |
 | `self_heal_ran: <bool>` | a plugin-root self-heal script was (not) invoked |
 | `tool_called: <Tool>` | the agent invoked the tool (actually ran it) |
 | `tool_not_called: <Tool>` | the agent never invoked it |
@@ -229,18 +235,34 @@ passes only if every key passes. Keep one concern per item unless you mean conju
 | `subagent_tool_absent: <Tool>` | no sub-agent used the tool |
 | `subagent_dispatched: <regex>` | a sub-agent whose `agentType` **or dispatch description** matches |
 | `subagent_declared_but_unused: <Tool>` | a sub-agent declared the tool but never used **that** tool (even if it used others) |
+| `subagent_output_contains: {match?, contains}` | a dispatched sub-agent's own output contains the substring `contains` — `match` (optional regex over `agentType`/`description`) narrows to specific dispatch(es); omitted, checks whether ANY dispatch's output contains it (existence check, not "all") |
 | `dispatch_count_max: <N>` | at most N sub-agents dispatched — an author-chosen budget (Cowork imposes no in-conversation Task-dispatch cap; records only, enforces nothing — see gotcha 12) |
 | `skill_triggered: <regex>` | a skill matching the regex (invoked id, e.g. `"plugin:skill"`) was invoked via the `Skill` tool — evidence-unavailable (not a normal fail) if the agent's init tools have no `Skill` tool |
 | `no_skill_triggered: <regex>` | no invoked skill id matched — the negative-control / description-collision catcher; evidence-unavailable (never a vacuous pass) if invocation data is absent or the `Skill` tool is unobservable |
+| `skill_available: <regex>` | a staged skill's id matched the regex (offered, not necessarily invoked — see `skill_triggered` for invocation) — content-class: the id list comes from the agent's init `skills` listing, so it replays from the frozen init event (id-only; the `whenToUse` enrichment is live-disk and thus absent on replay, but the id is what's matched); evidence-unavailable only if `RunResult.context.availableSkills` is absent entirely (an older cassette recorded before the available-skills listing was captured) |
+| `connector_available: <regex>` | an MCP server/connector's name matched the regex (available, not necessarily used) — evidence-unavailable if `RunResult.context.mcpServers` is absent |
+| `tool_available: <regex>` | a tool in the init manifest matched the regex (available, not necessarily called — see `tool_called` for invocation) — evidence-unavailable if `RunResult.context.tools` is absent |
+| `skill_tool_used: {skill, tool}` | a tool whose name matches `tool` ran inside a skill-activation window whose `skillId` matches `skill` (`RunResult.skillActivity`) — evidence-unavailable if skill-activity telemetry is absent; heuristic for inline skills (a sticky, sequential window matching the agent's `activeSkill` scope, not an exact per-tool boundary) |
 | `max_cost_usd: <N>` | the run's SDK-reported cost is ≤ N USD — evidence-unavailable if cost telemetry is absent. **Replay asserts the frozen recording's cost, not fresh spend** — a real regression needs a live `run` |
 | `max_tokens: <N>` | `usage.input_tokens + usage.output_tokens` ≤ N (cache tokens excluded) — same replay caveat as `max_cost_usd` |
 | `tool_calls_max: <N>` | total top-level tool calls (sum of `toolCounts`) ≤ N — meaningfully replay-checkable (re-drive recomputes `toolCounts` deterministically) |
+| `tool_no_error: <regex>` | no tool whose name matches the regex recorded any error (`RunResult.toolErrors[name].errors === 0` for every match) — **requires ≥1 matching tool call** (a regex matching nothing fails, so a typo can't silently pass); evidence-unavailable if tool-error telemetry is absent |
+| `tool_no_error_if_called: <regex>` | like `tool_no_error` but passes vacuously when no tool matches the regex — the presence-free variant |
+| `max_tool_errors: <N>` | total tool errors across all tools (sum of `RunResult.toolErrors[*].errors`) ≤ N — evidence-unavailable if tool-error telemetry is absent |
+| `max_redundant_tool_calls: <N>` | total WASTED repeated tool calls (sum of `(count-1)` across every redundant `{name,args}` group in `RunResult.redundantToolCalls`) ≤ N — not the raw count of redundant groups; evidence-unavailable if redundant-call telemetry is absent |
 | `max_turns: <N>` | the SDK-reported (or fallback-counted) turn count ≤ N — meaningfully replay-checkable (re-drive recounts turns deterministically, same as `tool_calls_max`) |
+| `compaction_occurred: true` | a context-compaction boundary occurred (a `compact_boundary` system event was recorded) — lives in the stdout stream, so meaningfully replay-checkable; evidence-unavailable if context-event telemetry is absent. **Only `true` is valid** — omit to not require it |
+| `all_tasks_completed: true` | every task in `RunResult.tasks[]` reached status `"completed"` — **requires ≥1 task** (a zero-task run fails; assert `task_count_min` for presence); evidence-unavailable if tasks telemetry is absent |
+| `task_count_min: <N>` | at least N tasks were created (`RunResult.tasks.length >= N`) — the presence companion for task assertions |
+| `task_status: {match, status}` | a task whose `subject` OR `id` matches the regex `match` reached `status` — evidence-unavailable if tasks telemetry is absent |
+| `no_scratchpad_leak: true` | every file presented via `present_files` that was in the scratchpad was successfully promoted to `mnt/outputs` (none left behind) — vacuously passes if nothing was presented (pair with a presence check to require a delivery); content-class: both the `present_files` tool_use and its own tool_result live in the ordinary events stream, so `RunResult.presentedFiles` re-derives identically on replay (meaningfully replay-checkable, same as `skill_triggered`); evidence-unavailable if `presentedFiles` telemetry is absent (an older run predating the feature). **`fidelity: container` only** — `present_files` is not served on hostloop/microvm, so a scratchpad-delivered file is neither promoted to `mnt/outputs` nor detected there (a skill that delivers via write-to-cwd→`present_files` will false-red `user_visible_artifact` on those tiers; use `container`, or write directly to `outputs/`). **Only `true` is valid** |
 | `question_asked: <regex>` | the agent asked an AskUserQuestion whose text matches |
 | `questions_count_max: <N>` | at most N **sub-questions** asked — a bundled `AskUserQuestion` with K sub-questions counts as K, not 1; `trace --view questions`'s footer total uses the same definition |
 | `gate_answers_delivered: true` | every answered gate's answer reached the model (observed `tool_result`; unobserved = fail); **zero gates fired passes vacuously** — pair with `gate_answer_count_min` to also require a gate |
 | `gate_answers_delivered: false` | asserts at least one answered gate's answer was **confirmed not delivered** (an observed delivery failure); an unobserved/null delivery does **not** satisfy this — for negative-path delivery tests |
 | `gate_answer_count_min: <N>` | at least N AskUserQuestion gates fired AND were delivered non-error — presence companion to `gate_answers_delivered`'s vacuous-pass |
+| `hook_blocked: <regex>` | a PreToolUse hook blocked a tool whose name matches the regex (`RunResult.hookEvents`) — evidence-unavailable if hook telemetry is absent. Replay: needs a `controlOut` cassette (a custom hook's decision lives only there, not the recorded stream) |
+| `no_hook_blocked: true` | no tool was hook-blocked during the run (distinguishes a real tool crash from an intentional hook block) — evidence-unavailable if hook telemetry is absent. Replay: needs a `controlOut` cassette. **Only `true` is valid** |
 | `allow_permissive_auto_allow: true` | verdict modifier — suppresses the default-fail when the run recorded a cowork-parity permissive auto-allow; for tests that deliberately assert Cowork's permissive behavior |
 | `allow_missing_capability: true` | verdict modifier — suppresses the default-fail when the (partial "core") agent image omits a capability the skill used but real Cowork ships (OCR/LibreOffice/markitdown/opencv/PDF-tables). Assert only when the skill's fallback is genuinely equivalent; otherwise rebuild full parity (`--build-arg COWORK_FULL_PARITY=1`). Also opts out of the `requires_capabilities` declared-need check. Live tiers only |
 | `allow_l0_plugin_divergence: true` | verdict modifier — opt into L0/protocol plugin divergence: suppresses the default-fail when a plugin behaves differently at `protocol` (L0) fidelity than under a sandboxed tier. Live tiers only |
@@ -248,8 +270,11 @@ passes only if every key passes. Keep one concern per item unless you mean conju
 | `transcript_no_host_path: true` | no host path (`/Users/`, `/opt/cowork/`, `/home/`, `/root/`) leaked into model-visible text — **incompatible with `hostloop` AND `protocol`**: hostloop's native file tools legitimately expose real host paths, and protocol (L0) runs the agent's file tools on the real host cwd with no sealed filesystem, so this fails BY DESIGN on both (the harness warns at run start if asserted anyway); use `container`/`microvm` for this check |
 | `egress_denied: <host>` | the host was blocked by the egress proxy |
 | `egress_allowed: <host>` | the host was allowed through |
+| `no_mcp_error: true` | no MCP round-trip failed (`RunResult.mcpErrors` is empty — no unhandled server, no handler throw) — live-only: MCP round-trips are harness-computed, not in the SDK stdout stream, so evidence-unavailable on replay (never a vacuous pass). **Only `true` is valid** |
+| `max_peak_rss_bytes: <N>` | peak sampled RSS of the agent sandbox ≤ N bytes (`RunResult.resources.peakRssBytes`) — live-only: replay never spawns a sandbox to sample, so evidence-unavailable on replay/protocol (never a vacuous pass); also evidence-unavailable when sampling captured no RSS value |
 | `artifact_json: {artifact, path, …}` | assert a JSON artifact's contents — `equals`/`gt`/`in`/`exists`/`absent`/`is_null` over a dotted `path` (`in` = membership in a list, for a stochastic/LLM value; `absent` ≠ `is_null`; an unresolved intermediate fails loud) |
-| `computer_links_resolve: true` | every `computer://` link in the model-visible transcript resolves to an artifact that exists in the run's collected outputs/mounts — a dangling link fails, naming which target was checked (a live host path, the collected work tree, or the replay manifest). Zero links in the transcript **passes** (presence-gated separately — pair with `transcript_contains` if you also need a link to show up). **Only `true` is valid** (`false` is rejected by the schema) |
+| `computer_links_resolve: true` | every `computer://` link in the model-visible transcript resolves to an artifact that exists in the run's collected outputs/mounts — a dangling link fails, naming which target was checked (a live host path, the collected work tree, or the replay manifest). **Requires ≥1 link** (zero links fails — use `computer_links_resolve_if_present` for the presence-free variant). **Only `true` is valid** (`false` is rejected by the schema) |
+| `computer_links_resolve_if_present: true` | like `computer_links_resolve` but passes vacuously when the transcript has zero `computer://` links — the presence-free variant. **Only `true` is valid** |
 
 `expect_denied: [host, …]` adds one `egress_denied` per host. Run `cowork-harness assertions --list` for this
 table from the live schema. Example: `artifact_json: { artifact: outputs/cap.json, path: me.run_id, equals: "r1" }`.
@@ -288,16 +313,21 @@ sourcing ≠ evaluation (replay warns when you edit one). `verify-run` is the on
 *run dir*; `--assert-from` is the equivalent for a *cassette*.
 
 **Evaluated on replay (content):** `transcript_*`, `tool_*`, `subagent_*`, `dispatch_count_max`,
-`skill_triggered`, `no_skill_triggered`, `max_cost_usd`, `max_tokens`, `tool_calls_max`, `max_turns`, `result`
+`skill_triggered`, `no_skill_triggered`, `skill_available`, `connector_available`, `tool_available`,
+`skill_tool_used`, `max_cost_usd`, `max_tokens`, `tool_calls_max`, `tool_no_error`,
+`max_tool_errors`, `max_redundant_tool_calls`, `max_turns`, `compaction_occurred`, `all_tasks_completed`, `task_status`, `result`
 (`max_cost_usd`/`max_tokens` assert the frozen recording's spend on replay, not fresh spend). The verdict
 modifiers `allow_permissive_auto_allow` / `allow_missing_capability` / `allow_l0_plugin_divergence` /
 `allow_stall` are also kept on replay, evaluated as no-op passes.
 
 **Gate keys — replay only with a `controlOut` cassette:** `question_asked`, `questions_count_max`,
-`gate_answers_delivered`, `gate_answer_count_min`. With `controlOut` present they evaluate; on an old
+`gate_answers_delivered`, `gate_answer_count_min`, `hook_blocked`, `no_hook_blocked`. With `controlOut` present they evaluate; on an old
 cassette without it, a **loud warning** fires and they are **excluded** (not vacuously passed). Re-record to enable them.
 `questions_count_max` counts sub-questions, not gates/tool-calls — see the catalog row above and
-`trace --view questions`.
+`trace --view questions`. `hook_blocked`/`no_hook_blocked` need `controlOut` for a different reason than
+the question keys: a custom hook's block/allow decision is an opaque async reply recorded only in
+`control-out.jsonl`, not the `events` stream — reconstructing from the stream alone would show only the
+built-in Task hook's view and could vacuously pass `no_hook_blocked` even if a custom hook genuinely blocked.
 
 **Filesystem — replay-checkable WITH an artifact manifest:** `file_exists`, `user_visible_artifact`,
 `artifact_json`, `computer_links_resolve` run on replay when the cassette carries an `artifacts` snapshot
@@ -308,13 +338,16 @@ by first normalizing it to a mount-relative path (recorded connected-folder pref
 mounts) — replay has no live filesystem to check a host path against directly (that only happens on a live
 `run`/`verify-run`). Without a manifest (older cassettes) all five are skipped; `no_unexpected_files` also
 needs `preRunPaths` (≥0.24 recordings) — without it the key is excluded with a loud warning (live/verify-run
-hard-fails evidence-unavailable instead). A green replay re-confirms
+hard-fails evidence-unavailable instead). `input_unmodified` is the same shape but needs `preRunHashes`
+(the pre-run per-path sha256 baseline) instead of `preRunPaths`; without it, likewise excluded with a loud
+warning. A green replay re-confirms
 *record-time* artifacts, not that the current skill still produces them — `replay --strict` fails when the
 staleness `fingerprint` shows ANY skill/baseline drift, or `replay --fail-on-skill-drift` only on
 skill-source drift; every replay result also reports it class-tagged in `staleness[]` for a JSON gate.
 
 **Egress + other filesystem — still skipped on replay (live-only):** `no_delete_in_outputs`,
-`self_heal_ran`, `transcript_no_host_path`, `egress_*` / `expect_denied`. These run only on a live `run`/`record`.
+`self_heal_ran`, `transcript_no_host_path`, `egress_*` / `expect_denied`, `no_mcp_error`, `max_peak_rss_bytes`.
+These run only on a live `run`/`record`.
 
 **Mixed assertions on replay:** before evaluating, `replay` strips each assertion to its replay-checkable
 keys and drops any left empty. So `{result, egress_denied}` evaluates on replay as `{result}` alone — its
@@ -377,8 +410,9 @@ at the top of this file.
    concern per item; run the linter. (`contentKeys` in `src/run/cassette.ts`.)
 
 2. **Gate keys need a `controlOut` cassette.** `question_asked`, `questions_count_max`,
-   `gate_answers_delivered`, `gate_answer_count_min` only evaluate on replay with `controlOut`; on an
-   old cassette they warn and are excluded (not passed). `gate_answers_delivered` **fails on
+   `gate_answers_delivered`, `gate_answer_count_min`, `hook_blocked`, `no_hook_blocked` only evaluate on
+   replay with `controlOut`; on an old cassette they warn and are excluded (not passed).
+   `gate_answers_delivered` **fails on
    unobserved delivery** (`delivered: null`) — absence of evidence is failure — but **passes
    vacuously when zero gates fired**; use `gate_answer_count_min: 1` to also require a gate to have
    fired. A **header-only gate** (empty `question`, only `header`) can never be keyed and is rejected

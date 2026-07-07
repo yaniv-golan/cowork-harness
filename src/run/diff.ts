@@ -1,4 +1,4 @@
-// E2 — run/cassette diff engine with normalization. Compares two runs, two cassettes, or a run and a
+// Run/cassette diff engine with normalization. Compares two runs, two cassettes, or a run and a
 // cassette (both reduce to an event stream + result metadata through parseMessage/buildTrace, the same
 // typed model `trace` uses — so this stays correct as the SDK schema evolves).
 import { DEFAULT_SCAN_PATTERNS } from "../scan.js";
@@ -22,7 +22,7 @@ const MASKS: { re: RegExp; token: string }[] = [
  *  ISO-8601 timestamps, host paths) with a stable placeholder token, so two runs of the SAME scenario
  *  diff as identical despite this per-run noise. Deliberately does NOT touch the redaction vocabulary's
  *  sensitive-value classes (email/currency/domain) — this is about comparison stability, not privacy.
- *  Host-path source — a DELIBERATE deviation from the plan, which cited src/redact.ts + io.ts's tildeify:
+ *  Host-path source — DELIBERATELY not src/redact.ts + io.ts's tildeify, the two obvious candidates:
  *  redact.ts turned out to be a user-policy-driven redactor (`.cowork-redact.json`/env; EMPTY_POLICY by
  *  default) with NO built-in host-path regex to reuse, and tildeify is a HOME→`~` display formatter, not a
  *  masker. The one built-in host-path vocabulary in the codebase is src/scan.ts's DEFAULT_SCAN_PATTERNS
@@ -179,8 +179,8 @@ export interface DiffMetaSummary {
 
 export type MetaDiffEntry = { field: string; from: unknown; to: unknown };
 
-/** result / effectiveFidelity / baseline-of-record / assertion-verdict deltas — the fixed, small field
- *  set the plan calls out (not a recursive object diff like E7's baseline differ; these are named,
+/** result / effectiveFidelity / baseline-of-record / assertion-verdict deltas — a fixed, small field
+ *  set (not a recursive object diff like the baseline differ; these are named,
  *  known fields with a fixed comparison, not an open-ended structure). */
 export function diffMeta(a: Partial<DiffMetaSummary>, b: Partial<DiffMetaSummary>): MetaDiffEntry[] {
   const fields: (keyof DiffMetaSummary)[] = ["result", "effectiveFidelity", "baseline", "assertionsPassed"];

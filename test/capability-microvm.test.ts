@@ -8,7 +8,7 @@ import { join } from "node:path";
 const spawnSync = vi.fn();
 vi.mock("node:child_process", () => ({ spawnSync: (...a: any[]) => spawnSync(...a) }));
 
-import { probeMicrovmOmitted } from "../src/runtime/image-capabilities.js";
+import { probeMicrovmOmitted, capabilityPreflightDecision } from "../src/runtime/image-capabilities.js";
 
 const INSTANCE = "cowork-vm-test";
 
@@ -92,5 +92,24 @@ describe("probeMicrovmOmitted — silent vmStatus gate", () => {
     // The shell probe was issued.
     const shellCalls = spawnSync.mock.calls.filter((c: any) => c[1][0] === "shell");
     expect(shellCalls).toHaveLength(1);
+  });
+
+  // execute.ts's pre-flight (finding 2 in the observability sweep) feeds probeMicrovmOmitted's result
+  // straight into capabilityPreflightDecision. Pin the composition end-to-end: a not-yet-Running microvm
+  // (the normal cold-start state at pre-flight time — the guest isn't up yet) must never abort the run
+  // even when the skill declares required capabilities, because there is nothing to probe yet. This isn't
+  // a bug (capabilityPreflightDecision already no-ops on a null probe), just an ordering that must stay
+  // benign — the assertion guards against a future change making either side stop agreeing on that.
+  it("null probe (VM not Running) composed with capabilityPreflightDecision skips the pre-flight, never aborts", () => {
+    spawnSync.mockImplementation(
+      router(
+        () => listResult("Absent"),
+        () => shellProbeResult(["ocr"]),
+      ),
+    );
+    const omitted = probeMicrovmOmitted(INSTANCE);
+    expect(omitted).toBeNull();
+    const decision = capabilityPreflightDecision(["ocr", "pdf_tables"], omitted, false);
+    expect(decision).toEqual({ abort: false, message: null });
   });
 });

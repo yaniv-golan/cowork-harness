@@ -177,10 +177,14 @@ describe("redaction must preserve computer:// link structure (guard check 4 — 
     JSON.stringify({ type: "result", subtype: "success", is_error: false }),
   ];
   // The exact bug class the first committed hostloop cassette shipped: a path pattern whose character
-  // class does not exclude ")" eats the markdown link's closing paren — extraction then sees an
-  // unterminated link and finds ZERO links, so `computer_links_resolve` passes VACUOUSLY on replay
-  // while the verdict compare sees pass==pass (a false green invisible to checks 1–3).
-  const GREEDY: RedactionPolicy = { patterns: [{ re: /\/Users\/[^\s"'\\]+/g, label: "local-path" }], keyNames: [] };
+  // class does not exclude ")" eats the markdown link's closing paren. Extraction now recovers a
+  // (garbage-valued) link from that malformed markdown via the same bare-token fallback the display
+  // transform uses (see computer-links.ts's extractComputerLinks), so a redaction that only eats the
+  // closing paren no longer changes the link COUNT — it's caught downstream instead, by
+  // `computer_links_resolve` failing to resolve the garbage value on replay, not by this guard.
+  // This guard (link count 1→0) still needs to catch a redaction pattern destructive enough to eat the
+  // `computer://` scheme token itself — nothing is left to even attempt extraction from.
+  const GREEDY: RedactionPolicy = { patterns: [{ re: /computer:\/\/[^\s"'\\]+/g, label: "local-path" }], keyNames: [] };
   // The fixed shape (mirrors this repo's .cowork-redact.json): redact only the machine-specific prefix
   // (stop before /mnt/) and exclude link delimiters from the fallback's character class.
   const PREFIX: RedactionPolicy = {
@@ -277,6 +281,65 @@ describe("redaction rewrites preRunPaths entries", () => {
     };
     const red: any = redactCassette(c, CUSTOMER_POLICY);
     expect(JSON.stringify(red)).not.toContain('"preRunPaths"');
+  });
+});
+
+describe("redaction rewrites preRunHashes KEYS (not values)", () => {
+  const CUSTOMER_POLICY: RedactionPolicy = { patterns: [{ re: /AcmeCorp/g, label: "cust" }], keyNames: [] };
+
+  it("redacts a customer-named path key and leaves the hex sha256 value untouched", () => {
+    const sha = "a".repeat(64);
+    const c: any = {
+      scenario: scenario([{ result: "success" }]),
+      events: [JSON.stringify({ type: "result", subtype: "success" })],
+      preRunHashes: { ".projects/AcmeCorp/input.pdf": sha, "outputs/over-cap.bin": null },
+    };
+    const red: any = redactCassette(c, CUSTOMER_POLICY);
+    const keys = Object.keys(red.preRunHashes);
+    expect(keys.some((k) => k.includes("AcmeCorp"))).toBe(false);
+    const redactedKey = keys.find((k) => k.startsWith(".projects/"))!;
+    expect(redactedKey).toMatch(/^\.projects\/\[REDACTED:cust:[0-9a-f]{12}\]\/input\.pdf$/);
+    expect(red.preRunHashes[redactedKey]).toBe(sha); // value (hash) is never redacted
+    expect(red.preRunHashes["outputs/over-cap.bin"]).toBeNull(); // null value passes through as-is
+  });
+
+  it("absent preRunHashes stays absent through redaction and serialization", () => {
+    const c: any = {
+      scenario: scenario([{ result: "success" }]),
+      events: [JSON.stringify({ type: "result", subtype: "success" })],
+    };
+    const red: any = redactCassette(c, CUSTOMER_POLICY);
+    expect(JSON.stringify(red)).not.toContain('"preRunHashes"');
+  });
+});
+
+// preRunHashes wiring: result.json → cassette → replay. `buildCassette`'s record-side assembly (inside
+// the unexported recordScenarioObject) needs a live executeScenario spawn to exercise directly, so this
+// covers the two independently-reachable seams: a cassette literal carrying `preRunHashes` verifies the
+// field survives JSON round-trip untouched (no transform needed — `redactCassette` with an empty policy
+// is exercised elsewhere), and `replayCassette` on that cassette confirms the produced RunResult mirrors
+// `preRunPaths` EXACTLY: `preRunHashes` is undefined in the output (never re-exposed on the RunResult),
+// even though the cassette carried it (it's consumed internally by the replay evaluate() ctx instead —
+// see the `postRunHashes`-adjacent ctx wiring in replayCassette).
+describe("preRunHashes wiring: cassette → replay RunResult", () => {
+  it("replay's produced RunResult.preRunHashes is undefined even when the cassette carries the field (mirrors preRunPaths)", async () => {
+    const body = "seed";
+    const sha = createHash("sha256").update(body).digest("hex");
+    const r = await replayCassette({
+      scenario: scenario([{ result: "success" }]),
+      events: [
+        JSON.stringify({ type: "system", subtype: "init", tools: [] }),
+        JSON.stringify({ type: "result", subtype: "success", is_error: false }),
+      ],
+      controlOut: [],
+      preRunPaths: ["outputs/seed.md"],
+      preRunHashes: { "outputs/seed.md": sha },
+      artifacts: [{ path: "outputs/seed.md", bytes: body.length, sha256: sha, body, encoding: undefined }],
+      userVisibleRoots: ["outputs"],
+      fingerprint: { baseline: "latest" },
+    } as any);
+    expect(r.preRunHashes).toBeUndefined();
+    expect(r.preRunPaths).toBeUndefined();
   });
 });
 

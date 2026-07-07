@@ -3,6 +3,7 @@ import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { evaluate, hostMatches, budgetFields, type AssertContext } from "../src/assert.js";
+import { Assertion as AssertionSchema } from "../src/types.js";
 
 function ctx(over: Partial<AssertContext> = {}): AssertContext {
   return {
@@ -167,6 +168,45 @@ describe("subagent_dispatched matches agentType OR description", () => {
   });
 });
 
+describe("subagent_output_contains", () => {
+  it("passes when a dispatch's output contains the substring (no match filter — checks all dispatches)", () => {
+    const c = ctx({ subagents: [{ agentType: "x", declaredTools: [], toolsUsed: [], output: "found 3 files" }] });
+    const result = evaluate([{ subagent_output_contains: { contains: "3 files" } }], c)[0];
+    expect(result.pass).toBe(true);
+  });
+
+  it("fails when no dispatch's output contains the substring", () => {
+    const c = ctx({ subagents: [{ agentType: "x", declaredTools: [], toolsUsed: [], output: "nothing here" }] });
+    const result = evaluate([{ subagent_output_contains: { contains: "3 files" } }], c)[0];
+    expect(result.pass).toBe(false);
+  });
+
+  it("narrows to a specific dispatch via match (regex over agentType/description), then checks only that dispatch's output", () => {
+    const c = ctx({
+      subagents: [
+        { agentType: "general-purpose", declaredTools: [], toolsUsed: [], output: "3 files" },
+        { agentType: "market-sizing", declaredTools: [], toolsUsed: [], output: "no match here" },
+      ],
+    });
+    const result = evaluate([{ subagent_output_contains: { match: "market-sizing", contains: "no match" } }], c)[0];
+    expect(result.pass).toBe(true);
+  });
+
+  it("evidence-unavailable when subagentsMissing", () => {
+    const c = ctx({ subagentsMissing: true });
+    const result = evaluate([{ subagent_output_contains: { contains: "x" } }], c)[0];
+    expect(result.pass).toBe(false);
+    expect(result.message).toContain("evidence unavailable");
+  });
+
+  it("bad match regex fails with a clear message, not a throw", () => {
+    const c = ctx({ subagents: [] });
+    const result = evaluate([{ subagent_output_contains: { match: "[unterminated", contains: "x" } }], c)[0];
+    expect(result.pass).toBe(false);
+    expect(result.message).toContain("bad regex");
+  });
+});
+
 describe("skill_triggered / no_skill_triggered (Wave 1 / E8)", () => {
   const invoked = ["my-pdf-skill:my-pdf-skill", "other-plugin:helper"];
 
@@ -209,6 +249,49 @@ describe("skill_triggered / no_skill_triggered (Wave 1 / E8)", () => {
   });
 });
 
+describe("skill_available", () => {
+  it("passes when a staged skill's id matches the regex", () => {
+    const c = ctx({ availableSkills: [{ id: "my-plugin:my-skill" }] });
+    expect(evaluate([{ skill_available: "my-skill" }], c)[0].pass).toBe(true);
+  });
+  it("fails when no staged skill matches", () => {
+    const c = ctx({ availableSkills: [{ id: "other" }] });
+    expect(evaluate([{ skill_available: "my-skill" }], c)[0].pass).toBe(false);
+  });
+  it("evidence-unavailable when availableSkills is absent", () => {
+    const c = ctx({ availableSkills: undefined });
+    const result = evaluate([{ skill_available: "x" }], c)[0];
+    expect(result.pass).toBe(false);
+    expect(result.message).toContain("evidence unavailable");
+  });
+});
+
+describe("connector_available", () => {
+  it("passes when an mcpServer's name matches the regex", () => {
+    const c = ctx({ mcpServers: [{ name: "my-connector" }] });
+    expect(evaluate([{ connector_available: "connector" }], c)[0].pass).toBe(true);
+  });
+  it("evidence-unavailable when mcpServers is absent", () => {
+    const c = ctx({ mcpServers: undefined });
+    const result = evaluate([{ connector_available: "x" }], c)[0];
+    expect(result.pass).toBe(false);
+    expect(result.message).toContain("evidence unavailable");
+  });
+});
+
+describe("tool_available", () => {
+  it("passes when a tool in the init manifest matches the regex", () => {
+    const c = ctx({ availableTools: ["Bash", "Read"] });
+    expect(evaluate([{ tool_available: "Bash" }], c)[0].pass).toBe(true);
+  });
+  it("evidence-unavailable when availableTools is absent", () => {
+    const c = ctx({ availableTools: undefined });
+    const result = evaluate([{ tool_available: "x" }], c)[0];
+    expect(result.pass).toBe(false);
+    expect(result.message).toContain("evidence unavailable");
+  });
+});
+
 describe("budgetFields (Wave 1 / E6a + Wave 2 / E6b) — the single derivation used by live/replay/verify-run", () => {
   it("computes all four from a fully-populated source", () => {
     expect(
@@ -227,6 +310,27 @@ describe("budgetFields (Wave 1 / E6a + Wave 2 / E6b) — the single derivation u
   it("turns passes through usage.turns directly (Wave 0 already computed it — no re-derivation here)", () => {
     expect(budgetFields({ usage: { turns: 4 } }).turns).toBe(4);
     expect(budgetFields({ usage: { turns: 0 } }).turns).toBe(0); // 0 turns is a real value, not "missing"
+  });
+  it("toolErrorsTotal (M3) sums errors across all tools, undefined when toolErrors is absent", () => {
+    expect(budgetFields({ toolErrors: { Bash: { calls: 3, errors: 1 }, Read: { calls: 2, errors: 2 } } }).toolErrorsTotal).toBe(3);
+    expect(budgetFields({}).toolErrorsTotal).toBeUndefined();
+  });
+  it("toolErrorsTotal is 0 (a real value, not undefined) when toolErrors is a populated-but-empty object", () => {
+    expect(budgetFields({ toolErrors: {} }).toolErrorsTotal).toBe(0);
+  });
+  it("redundantCallsTotal (M3) sums (count-1) across every redundant group, undefined when redundantToolCalls is absent", () => {
+    expect(
+      budgetFields({
+        redundantToolCalls: [
+          { name: "Bash", argHash: "a".repeat(16), count: 3 },
+          { name: "Read", argHash: "b".repeat(16), count: 2 },
+        ],
+      }).redundantCallsTotal,
+    ).toBe(3); // (3-1) + (2-1)
+    expect(budgetFields({}).redundantCallsTotal).toBeUndefined();
+  });
+  it("redundantCallsTotal is 0 (a real value, not undefined) when redundantToolCalls is a populated-but-empty array", () => {
+    expect(budgetFields({ redundantToolCalls: [] }).redundantCallsTotal).toBe(0);
   });
 });
 
@@ -276,6 +380,322 @@ describe("max_turns (Wave 2 / E6b — the last budget key, built on Wave 0's usa
     const r = evaluate([{ max_turns: 5 }], ctx({ turns: undefined }));
     expect(pass(r)).toBe(false);
     expect(r[0].message).toContain("evidence unavailable");
+  });
+});
+
+describe("compaction_occurred", () => {
+  it("passes when a compact_boundary event was recorded", () => {
+    const [r] = evaluate([{ compaction_occurred: true }], ctx({ contextEvents: [{ subtype: "compact_boundary" }] }));
+    expect(r.pass).toBe(true);
+  });
+  it("fails when no compaction event was recorded", () => {
+    const [r] = evaluate([{ compaction_occurred: true }], ctx({ contextEvents: [{ subtype: "other" }] }));
+    expect(r.pass).toBe(false);
+  });
+  it("is evidence-unavailable when contextEvents is undefined", () => {
+    const [r] = evaluate([{ compaction_occurred: true }], ctx({ contextEvents: undefined }));
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/no context events/i);
+  });
+});
+
+describe("no_mcp_error", () => {
+  it("passes when mcpErrors is empty", () => {
+    const [r] = evaluate([{ no_mcp_error: true }], ctx({ mcpErrors: [] }));
+    expect(r.pass).toBe(true);
+  });
+  it("fails when an mcp error was recorded", () => {
+    const [r] = evaluate([{ no_mcp_error: true }], ctx({ mcpErrors: [{ server: "x", message: "boom" }] }));
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/x/);
+  });
+  it("is evidence-unavailable when mcpErrors is undefined (replay)", () => {
+    const [r] = evaluate([{ no_mcp_error: true }], ctx({ mcpErrors: undefined }));
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/live-only|not checkable|no mcp/i);
+  });
+});
+
+describe("no_scratchpad_leak", () => {
+  it("passes on container when nothing was presented (nothing to leak)", () => {
+    const [r] = evaluate([{ no_scratchpad_leak: true }], ctx({ effectiveFidelity: "container", presentedFiles: [] }));
+    expect(r.pass).toBe(true);
+  });
+  it("passes when every presented file was promoted or already under a mount", () => {
+    const [r] = evaluate(
+      [{ no_scratchpad_leak: true }],
+      ctx({
+        effectiveFidelity: "container",
+        presentedFiles: [
+          { from: "/sessions/x/a.md", to: "/sessions/x/mnt/outputs/a.md", promoted: true, leaked: false },
+          { from: "/sessions/x/mnt/outputs/b.md", to: "/sessions/x/mnt/outputs/b.md", promoted: false, leaked: false },
+        ],
+      }),
+    );
+    expect(r.pass).toBe(true);
+  });
+  it("fails when a presented scratchpad file was never promoted (leaked)", () => {
+    const [r] = evaluate(
+      [{ no_scratchpad_leak: true }],
+      ctx({
+        effectiveFidelity: "container",
+        presentedFiles: [{ from: "/sessions/x/bad.sh", to: "/sessions/x/bad.sh", promoted: false, leaked: true }],
+      }),
+    );
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/bad\.sh/);
+  });
+  it("is unsupported-tier (fails, not a vacuous pass) on a non-container tier — present_files isn't served there", () => {
+    const [r] = evaluate([{ no_scratchpad_leak: true }], ctx({ effectiveFidelity: "hostloop", presentedFiles: [] }));
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/container tier|cannot verify/i);
+  });
+  it("is evidence-unavailable when presentedFiles is undefined on container (older run predating the feature)", () => {
+    const [r] = evaluate([{ no_scratchpad_leak: true }], ctx({ effectiveFidelity: "container", presentedFiles: undefined }));
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/no present_files|cannot verify/i);
+  });
+});
+
+describe("max_peak_rss_bytes", () => {
+  it("passes when peakRssBytes <= N", () => {
+    const [r] = evaluate(
+      [{ max_peak_rss_bytes: 1000 }],
+      ctx({ resources: { tier: "container", sampleCount: 1, intervalMs: 1000, peakRssBytes: 900 } }),
+    );
+    expect(r.pass).toBe(true);
+  });
+  it("fails when peakRssBytes > N", () => {
+    const [r] = evaluate(
+      [{ max_peak_rss_bytes: 1000 }],
+      ctx({ resources: { tier: "container", sampleCount: 1, intervalMs: 1000, peakRssBytes: 1500 } }),
+    );
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/1500|peak/i);
+  });
+  it("is evidence-unavailable when resources is undefined (replay/protocol)", () => {
+    const [r] = evaluate([{ max_peak_rss_bytes: 1000 }], ctx({ resources: undefined }));
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/live-only|no resource|not checkable/i);
+  });
+  it("is evidence-unavailable when peakRssBytes wasn't captured", () => {
+    const [r] = evaluate([{ max_peak_rss_bytes: 1000 }], ctx({ resources: { tier: "container", sampleCount: 1, intervalMs: 1000 } }));
+    expect(r.pass).toBe(false);
+  });
+});
+
+describe("hook_blocked / no_hook_blocked", () => {
+  const blocked = [{ callbackId: "cowork-task-bg-block", decision: "block" as const, reason: "bg", tool: "Task" }];
+
+  it("hook_blocked matches a blocked tool by regex", () => {
+    const [pass1] = evaluate([{ hook_blocked: "Task" }], ctx({ hookEvents: blocked }));
+    expect(pass1.pass).toBe(true);
+    const [pass2] = evaluate([{ hook_blocked: "Bash" }], ctx({ hookEvents: blocked }));
+    expect(pass2.pass).toBe(false);
+  });
+
+  it("no_hook_blocked passes when nothing blocked, fails when something did", () => {
+    const [r1] = evaluate([{ no_hook_blocked: true }], ctx({ hookEvents: [{ callbackId: "x", decision: "allow" }] }));
+    expect(r1.pass).toBe(true);
+    const [r2] = evaluate([{ no_hook_blocked: true }], ctx({ hookEvents: blocked }));
+    expect(r2.pass).toBe(false);
+    expect(r2.message).toMatch(/Task/);
+  });
+
+  it("both are evidence-unavailable when hookEvents is undefined", () => {
+    const [r1] = evaluate([{ no_hook_blocked: true }], ctx({ hookEvents: undefined }));
+    expect(r1.pass).toBe(false);
+    const [r2] = evaluate([{ hook_blocked: "Task" }], ctx({ hookEvents: undefined }));
+    expect(r2.pass).toBe(false);
+  });
+});
+
+describe("tool_no_error (M3)", () => {
+  it("passes when no tool matching the regex has any errors", () => {
+    const c = ctx({ toolErrors: { Bash: { calls: 3, errors: 0 }, Read: { calls: 1, errors: 0 } } });
+    expect(pass(evaluate([{ tool_no_error: "^Bash$" }], c))).toBe(true);
+  });
+  it("fails when a matching tool has at least one error", () => {
+    const c = ctx({ toolErrors: { Bash: { calls: 3, errors: 1 } } });
+    const r = evaluate([{ tool_no_error: "^Bash$" }], c);
+    expect(pass(r)).toBe(false);
+  });
+  it("fails as evidence-unavailable (not a vacuous pass) when toolErrors is absent", () => {
+    const c = ctx({ toolErrors: undefined });
+    const r = evaluate([{ tool_no_error: "^Bash$" }], c);
+    expect(pass(r)).toBe(false);
+    expect(r[0].message).toContain("evidence unavailable");
+  });
+  it("a malformed regex fails cleanly with a bad-regex message, not a throw", () => {
+    const c = ctx({ toolErrors: {} });
+    const r = evaluate([{ tool_no_error: "[unterminated" }], c);
+    expect(pass(r)).toBe(false);
+    expect(r[0].message).toContain("bad regex");
+  });
+});
+
+describe("max_tool_errors (M3)", () => {
+  // max_tool_errors reads the pre-derived ctx.toolErrorsTotal scalar (mirroring max_cost_usd/
+  // tool_calls_max's existing pattern), not ctx.toolErrors directly — budgetFields is what derives it
+  // from toolErrors in the real live/replay/verify-run lanes (covered separately below).
+  it("passes when total errors across all tools is <= N", () => {
+    expect(pass(evaluate([{ max_tool_errors: 2 }], ctx({ toolErrorsTotal: 2 })))).toBe(true);
+  });
+  it("fails when total errors exceeds N", () => {
+    const r = evaluate([{ max_tool_errors: 2 }], ctx({ toolErrorsTotal: 3 }));
+    expect(pass(r)).toBe(false);
+  });
+  it("fails as evidence-unavailable (not a vacuous pass) when toolErrorsTotal is absent", () => {
+    const r = evaluate([{ max_tool_errors: 2 }], ctx({ toolErrorsTotal: undefined }));
+    expect(pass(r)).toBe(false);
+    expect(r[0].message).toContain("evidence unavailable");
+  });
+});
+
+describe("max_redundant_tool_calls (M3)", () => {
+  // max_redundant_tool_calls reads the pre-derived ctx.redundantCallsTotal scalar (mirroring
+  // max_tool_errors's pattern), not ctx.redundantToolCalls directly — budgetFields is what derives it
+  // from redundantToolCalls in the real live/replay/verify-run lanes (covered separately above).
+  it("passes when total wasted redundant calls is <= N", () => {
+    expect(pass(evaluate([{ max_redundant_tool_calls: 2 }], ctx({ redundantCallsTotal: 2 })))).toBe(true);
+  });
+  it("fails when total wasted redundant calls exceeds N", () => {
+    const r = evaluate([{ max_redundant_tool_calls: 2 }], ctx({ redundantCallsTotal: 3 }));
+    expect(pass(r)).toBe(false);
+    expect(r[0].message).toContain("3");
+  });
+  it("fails as evidence-unavailable (not a vacuous pass) when redundantCallsTotal is absent", () => {
+    const r = evaluate([{ max_redundant_tool_calls: 2 }], ctx({ redundantCallsTotal: undefined }));
+    expect(pass(r)).toBe(false);
+    expect(r[0].message).toContain("evidence unavailable");
+  });
+  it("0 wasted calls is a real value that satisfies any non-negative max, not evidence-unavailable", () => {
+    expect(pass(evaluate([{ max_redundant_tool_calls: 0 }], ctx({ redundantCallsTotal: 0 })))).toBe(true);
+  });
+});
+
+describe("skill_tool_used", () => {
+  it("passes when a window matching the skill regex has a toolCounts key matching the tool regex", () => {
+    const c = ctx({
+      skillActivity: [{ skillId: "my-plugin:my-skill", invocationSeq: 0, toolCounts: { Bash: 2 }, toolCallCount: 2, dispatchCount: 0 }],
+    });
+    const result = evaluate([{ skill_tool_used: { skill: "my-skill", tool: "Bash" } }], c)[0];
+    expect(result.pass).toBe(true);
+  });
+
+  it("fails when no matching window's toolCounts contains a matching tool", () => {
+    const c = ctx({
+      skillActivity: [{ skillId: "my-plugin:my-skill", invocationSeq: 0, toolCounts: { Read: 1 }, toolCallCount: 1, dispatchCount: 0 }],
+    });
+    const result = evaluate([{ skill_tool_used: { skill: "my-skill", tool: "Bash" } }], c)[0];
+    expect(result.pass).toBe(false);
+  });
+
+  it("fails when no window matches the skill regex at all", () => {
+    const c = ctx({
+      skillActivity: [{ skillId: "(root)", invocationSeq: 0, toolCounts: { Bash: 1 }, toolCallCount: 1, dispatchCount: 0 }],
+    });
+    const result = evaluate([{ skill_tool_used: { skill: "no-such-skill", tool: "Bash" } }], c)[0];
+    expect(result.pass).toBe(false);
+  });
+
+  it("evidence-unavailable when skillActivity is absent", () => {
+    const c = ctx({ skillActivity: undefined });
+    const result = evaluate([{ skill_tool_used: { skill: "x", tool: "y" } }], c)[0];
+    expect(result.pass).toBe(false);
+    expect(result.message).toContain("evidence unavailable");
+  });
+
+  it("bad skill regex fails with a clear message, not a throw", () => {
+    const c = ctx({ skillActivity: [] });
+    const result = evaluate([{ skill_tool_used: { skill: "[unterminated", tool: "Bash" } }], c)[0];
+    expect(result.pass).toBe(false);
+    expect(result.message).toContain("bad regex");
+  });
+
+  it("bad tool regex fails with a clear message, not a throw", () => {
+    const c = ctx({ skillActivity: [{ skillId: "x", invocationSeq: 0, toolCounts: {}, toolCallCount: 0, dispatchCount: 0 }] });
+    const result = evaluate([{ skill_tool_used: { skill: "x", tool: "[unterminated" } }], c)[0];
+    expect(result.pass).toBe(false);
+    expect(result.message).toContain("bad regex");
+  });
+});
+
+describe("all_tasks_completed", () => {
+  it("passes when every task is completed", () => {
+    const c = ctx({
+      tasks: [
+        { id: "1", subject: "a", status: "completed" },
+        { id: "2", subject: "b", status: "completed" },
+      ],
+    });
+    expect(evaluate([{ all_tasks_completed: true }], c)[0].pass).toBe(true);
+  });
+
+  it("fails when any task is not completed", () => {
+    const c = ctx({
+      tasks: [
+        { id: "1", subject: "a", status: "completed" },
+        { id: "2", subject: "b", status: "pending" },
+      ],
+    });
+    expect(evaluate([{ all_tasks_completed: true }], c)[0].pass).toBe(false);
+  });
+
+  it("FAILS on zero tasks — presence-required (a task-free run cannot have completed them all)", () => {
+    const c = ctx({ tasks: [] });
+    const r = evaluate([{ all_tasks_completed: true }], c)[0];
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/no tasks|task_count_min/i);
+  });
+
+  it("task_count_min passes when ≥N tasks created, fails below", () => {
+    const c = ctx({ tasks: [{ id: "1", subject: "a", status: "pending" }] });
+    expect(evaluate([{ task_count_min: 1 }], c)[0].pass).toBe(true);
+    expect(evaluate([{ task_count_min: 2 }], c)[0].pass).toBe(false);
+  });
+
+  it("evidence-unavailable when tasks is absent", () => {
+    const c = ctx({ tasks: undefined });
+    const result = evaluate([{ all_tasks_completed: true }], c)[0];
+    expect(result.pass).toBe(false);
+    expect(result.message).toContain("evidence unavailable");
+  });
+});
+
+describe("task_status", () => {
+  it("passes when a task matching the regex (by subject or id) reached the given status", () => {
+    const c = ctx({ tasks: [{ id: "1", subject: "step one", status: "completed" }] });
+    expect(evaluate([{ task_status: { match: "step one", status: "completed" } }], c)[0].pass).toBe(true);
+  });
+
+  it("matches by id too, not just subject", () => {
+    const c = ctx({ tasks: [{ id: "1", subject: "step one", status: "completed" }] });
+    expect(evaluate([{ task_status: { match: "^1$", status: "completed" } }], c)[0].pass).toBe(true);
+  });
+
+  it("fails when the matching task has a different status", () => {
+    const c = ctx({ tasks: [{ id: "1", subject: "step one", status: "pending" }] });
+    expect(evaluate([{ task_status: { match: "step one", status: "completed" } }], c)[0].pass).toBe(false);
+  });
+
+  it("fails when no task matches the regex", () => {
+    const c = ctx({ tasks: [{ id: "1", subject: "step one", status: "completed" }] });
+    expect(evaluate([{ task_status: { match: "no-such-task", status: "completed" } }], c)[0].pass).toBe(false);
+  });
+
+  it("evidence-unavailable when tasks is absent", () => {
+    const c = ctx({ tasks: undefined });
+    const result = evaluate([{ task_status: { match: "x", status: "completed" } }], c)[0];
+    expect(result.pass).toBe(false);
+    expect(result.message).toContain("evidence unavailable");
+  });
+
+  it("bad regex fails with a clear message, not a throw", () => {
+    const c = ctx({ tasks: [] });
+    const result = evaluate([{ task_status: { match: "[unterminated", status: "completed" } }], c)[0];
+    expect(result.pass).toBe(false);
+    expect(result.message).toContain("bad regex");
   });
 });
 
@@ -660,5 +1080,96 @@ describe("replay lane: user_visible_artifact honors the cassette's stored userVi
   it("the SAME file is INVISIBLE under the legacy default roots (proves the stored field is load-bearing)", () => {
     const { workRoot, prefixes } = materializeManifest(entries); // default ["outputs",".projects"]
     expect(pass(evaluate([{ user_visible_artifact: "project/report.md" }], ctx({ workRoot, userVisiblePrefixes: prefixes })))).toBe(false);
+  });
+});
+
+describe("input_unmodified", () => {
+  it("passes when a matched pre-existing file's post-run hash is unchanged", () => {
+    const root = mkdtempSync(join(tmpdir(), "cwh-ium-ok-"));
+    mkdirSync(join(root, "project"), { recursive: true });
+    mkdirSync(join(root, "outputs"), { recursive: true });
+    const content = "original content";
+    writeFileSync(join(root, "project", "in.md"), content);
+    writeFileSync(join(root, "outputs", "out.md"), "unrelated");
+    const preHashes = {
+      "project/in.md": createHash("sha256").update(content).digest("hex"),
+      "outputs/out.md": "irrelevant-since-unmatched",
+    };
+    const [r] = evaluate([{ input_unmodified: ["project/**"] }], ctx({ workRoot: root, preRunHashes: preHashes }));
+    expect(r.pass).toBe(true);
+  });
+
+  it("fails when a matched file's content changed (hash differs)", () => {
+    const root = mkdtempSync(join(tmpdir(), "cwh-ium-changed-"));
+    mkdirSync(join(root, "project"), { recursive: true });
+    writeFileSync(join(root, "project", "in.md"), "mutated content");
+    const preHashes = { "project/in.md": createHash("sha256").update("original content").digest("hex") };
+    const [r] = evaluate([{ input_unmodified: ["project/**"] }], ctx({ workRoot: root, preRunHashes: preHashes }));
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/modified in place/);
+    expect(r.message).toMatch(/project\/in\.md/);
+  });
+
+  it("fails (content change) when a matched pre-existing file was deleted post-run", () => {
+    const root = mkdtempSync(join(tmpdir(), "cwh-ium-deleted-"));
+    mkdirSync(join(root, "project"), { recursive: true });
+    // project/in.md is NOT created on disk — simulates a post-run deletion.
+    const preHashes = { "project/in.md": createHash("sha256").update("original content").digest("hex") };
+    const [r] = evaluate([{ input_unmodified: ["project/**"] }], ctx({ workRoot: root, preRunHashes: preHashes }));
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/removed/);
+    expect(r.message).toMatch(/project\/in\.md/);
+  });
+
+  it("evidence-unavailable when a matched file's pre-run hash is null (over cap)", () => {
+    const root = mkdtempSync(join(tmpdir(), "cwh-ium-null-"));
+    const preHashes: Record<string, string | null> = { "project/big.md": null };
+    const [r] = evaluate([{ input_unmodified: ["project/**"] }], ctx({ workRoot: root, preRunHashes: preHashes }));
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/evidence unavailable/i);
+  });
+
+  it("evidence-unavailable when preRunHashes is absent entirely", () => {
+    const root = mkdtempSync(join(tmpdir(), "cwh-ium-nopre-"));
+    const [r] = evaluate([{ input_unmodified: ["project/**"] }], ctx({ workRoot: root }));
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/evidence unavailable/i);
+  });
+
+  it("rejects an empty glob list at schema validation (.min(1))", () => {
+    expect(AssertionSchema.safeParse({ input_unmodified: [] }).success).toBe(false);
+  });
+
+  it("only checks matched paths (an unmatched changed file does not fail)", () => {
+    const root = mkdtempSync(join(tmpdir(), "cwh-ium-unmatched-"));
+    mkdirSync(join(root, "project"), { recursive: true });
+    mkdirSync(join(root, "outputs"), { recursive: true });
+    const content = "original content";
+    writeFileSync(join(root, "project", "in.md"), content);
+    writeFileSync(join(root, "outputs", "out.md"), "CHANGED on disk");
+    const preHashes = {
+      "project/in.md": createHash("sha256").update(content).digest("hex"),
+      "outputs/out.md": createHash("sha256").update("original out content").digest("hex"), // differs from disk
+    };
+    const [r] = evaluate([{ input_unmodified: ["project/**"] }], ctx({ workRoot: root, preRunHashes: preHashes }));
+    expect(r.pass).toBe(true);
+  });
+
+  it("replay lane: uses postRunHashes, not a re-hash of the materialized placeholder tree", () => {
+    // Simulates the replay lane's materialized tree, where a body-less manifest entry is written as a
+    // 0-byte placeholder. Re-hashing that placeholder would wrongly report "modified in place" — the
+    // check must prefer the authoritative ctx.postRunHashes map instead.
+    const root = mkdtempSync(join(tmpdir(), "cwh-ium-replay-"));
+    mkdirSync(join(root, "ref"), { recursive: true });
+    writeFileSync(join(root, "ref", "in.md"), ""); // 0-byte placeholder, NOT the real content
+    const preRunHashes = { "ref/in.md": "H" };
+    const okCtx = ctx({ workRoot: root, preRunHashes, postRunHashes: { "ref/in.md": "H" } });
+    const [rOk] = evaluate([{ input_unmodified: ["ref/**"] }], okCtx);
+    expect(rOk.pass).toBe(true); // would FAIL against a naive re-hash of the empty placeholder
+
+    const changedCtx = ctx({ workRoot: root, preRunHashes, postRunHashes: { "ref/in.md": "DIFFERENT" } });
+    const [rChanged] = evaluate([{ input_unmodified: ["ref/**"] }], changedCtx);
+    expect(rChanged.pass).toBe(false);
+    expect(rChanged.message).toMatch(/modified in place/);
   });
 });

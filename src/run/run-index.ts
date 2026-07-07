@@ -1,4 +1,4 @@
-// E4 — queryable cross-run result store. index.jsonl (one JSON line per run) is the SOURCE OF TRUTH for
+// Queryable cross-run result store. index.jsonl (one JSON line per run) is the SOURCE OF TRUTH for
 // "what runs exist" — the run-dir-per-run physical layout (<runsRoot>/<slug>/<runId>/) still holds the
 // heavy artifacts (events.jsonl/trace.json/result.json); only the discovery/query layer moved here.
 import { existsSync, mkdirSync, appendFileSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
@@ -12,7 +12,7 @@ import { warn } from "../io.js";
 export interface RunIndexRow {
   v: 1;
   ts: string; // ISO
-  command: "run" | "skill" | "record";
+  command: "run" | "skill" | "record" | "chat";
   scenario: string;
   slug: string; // the <runsRoot>/<slug>/ path segment (slugForPath(scenario) at write time)
   runId: string; // the <slug>/<runId>/ path segment — local_<hrtime> | sess-<id>
@@ -25,6 +25,8 @@ export interface RunIndexRow {
   costUsd?: number;
   tokens?: number;
   turns?: number;
+  cacheReadTokens?: number; // summed across all models in RunResult.modelUsage (stats surfacing)
+  modelCostUsd?: number; // summed across all models in RunResult.modelUsage
   durationMs?: number;
   partial: boolean;
   nonDeterministic: boolean;
@@ -53,18 +55,31 @@ function slugAndRunIdFromOutDir(outDir: string): { slug: string; runId: string }
 
 /** Turns a real RunResult into an index row, reusing computeVerdict/budgetFields rather than re-deriving
  *  pass/fail or cost from scratch — same "don't re-implement verdict logic per writer" principle as
- *  E1/E3's rollups. NOT pure by default (`ts`/`git` default to "now"/the current checkout, both real I/O)
+ *  the repeat/matrix rollups. NOT pure by default (`ts`/`git` default to "now"/the current checkout, both real I/O)
  *  — correct for the LIVE-write call sites (execute.ts, right as a run completes: "now" and "this
  *  checkout" ARE the truth). `reindexFromRunsTree` overrides both explicitly, because for a HISTORICAL run
  *  being walked off disk, "now" and "the checkout doing the reindexing" are not the run's actual
  *  provenance — they'd be fabricated, not derived. */
 export function indexRowFromResult(
   result: RunResult,
-  opts: { command: "run" | "skill" | "record"; partial: boolean; ts?: string; git?: { branch: string | null; sha: string | null } },
+  opts: {
+    command: "run" | "skill" | "record" | "chat";
+    partial: boolean;
+    ts?: string;
+    git?: { branch: string | null; sha: string | null };
+  },
 ): RunIndexRow {
   const verdict = computeVerdict(result, "live");
   const budget = budgetFields(result);
   const { slug, runId } = slugAndRunIdFromOutDir(result.outDir);
+  // Separate from budgetFields — sums across RunResult.modelUsage's per-model entries, a
+  // different data source than the SDK result message's own cost/usage totals.
+  const modelUsageEntries = result.modelUsage ? Object.values(result.modelUsage) : undefined;
+  const cacheReadTokens = modelUsageEntries?.reduce(
+    (sum, m) => sum + (typeof m.cacheReadInputTokens === "number" ? m.cacheReadInputTokens : 0),
+    0,
+  );
+  const modelCostUsd = modelUsageEntries?.reduce((sum, m) => sum + (typeof m.costUSD === "number" ? m.costUSD : 0), 0);
   return {
     v: 1,
     ts: opts.ts ?? new Date().toISOString(),
@@ -81,6 +96,8 @@ export function indexRowFromResult(
     costUsd: budget.costUsd,
     tokens: budget.tokensTotal,
     turns: budget.turns,
+    cacheReadTokens,
+    modelCostUsd,
     durationMs: result.durationMs,
     partial: opts.partial,
     nonDeterministic: !!result.nonDeterministic,
@@ -173,7 +190,14 @@ export function reindexFromRunsTree(runsRoot: string): { rows: RunIndexRow[]; wr
         try {
           const result = JSON.parse(readFileSync(resultPath, "utf8")) as RunResult;
           const ts = statSync(resultPath).mtime.toISOString();
-          walked.push(indexRowFromResult(result, { command: "run", partial: !!result.partial, ts, git: { branch: null, sha: null } }));
+          walked.push(
+            indexRowFromResult(result, {
+              command: result.mode === "chat" ? "chat" : "run",
+              partial: !!result.partial,
+              ts,
+              git: { branch: null, sha: null },
+            }),
+          );
           walkedOutDirs.add(outDir);
         } catch {
           skipped++;
@@ -225,6 +249,10 @@ export interface StatsSummary {
   p95Tokens?: number;
   p50Turns?: number;
   p95Turns?: number;
+  p50CacheReadTokens?: number;
+  p95CacheReadTokens?: number;
+  p50ModelCostUsd?: number;
+  p95ModelCostUsd?: number;
   lastGreenTs?: string;
   prunedRuns: number; // rows whose outDir no longer exists on disk — still aggregated, just flagged
 }
@@ -284,6 +312,8 @@ export function buildStats(
     const durations = numbers((r) => r.durationMs);
     const tokens = numbers((r) => r.tokens);
     const turns = numbers((r) => r.turns);
+    const cacheReadTokensArr = numbers((r) => r.cacheReadTokens);
+    const modelCostArr = numbers((r) => r.modelCostUsd);
     const greens = group.filter((r) => r.pass).sort((a, b) => (a.ts < b.ts ? 1 : -1));
     summaries.push({
       scenario,
@@ -297,6 +327,10 @@ export function buildStats(
       p95Tokens: tokens.length ? percentile(tokens, 0.95) : undefined,
       p50Turns: turns.length ? percentile(turns, 0.5) : undefined,
       p95Turns: turns.length ? percentile(turns, 0.95) : undefined,
+      p50CacheReadTokens: cacheReadTokensArr.length ? percentile(cacheReadTokensArr, 0.5) : undefined,
+      p95CacheReadTokens: cacheReadTokensArr.length ? percentile(cacheReadTokensArr, 0.95) : undefined,
+      p50ModelCostUsd: modelCostArr.length ? percentile(modelCostArr, 0.5) : undefined,
+      p95ModelCostUsd: modelCostArr.length ? percentile(modelCostArr, 0.95) : undefined,
       lastGreenTs: greens[0]?.ts,
       prunedRuns: group.filter((r) => !existsSync(r.outDir)).length,
     });

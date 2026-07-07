@@ -117,6 +117,86 @@ describe("skill_triggered / no_skill_triggered evaluate end-to-end on replay (Wa
   });
 });
 
+describe("no_scratchpad_leak evaluates end-to-end on replay (content-class, not controlOut-gated)", () => {
+  // present_files' tool_use (the input file list) and its own tool_result (one path per input file, in
+  // order) both live in the ordinary events stream — no controlOut needed, unlike the gate keys above.
+  const CWD = "/sessions/x";
+  const presentFilesEvents = (toFrom: { from: string; to: string }[]) => [
+    JSON.stringify({ type: "system", subtype: "init", tools: [], cwd: CWD }),
+    JSON.stringify({
+      type: "assistant",
+      message: {
+        content: [
+          {
+            type: "tool_use",
+            id: "toolu_1",
+            name: "mcp__cowork__present_files",
+            input: { files: toFrom.map((f) => ({ file_path: f.from })) },
+          },
+        ],
+      },
+    }),
+    JSON.stringify({
+      type: "user",
+      message: {
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "toolu_1",
+            is_error: false,
+            content: toFrom.map((f) => ({ type: "text", text: f.to })),
+          },
+        ],
+      },
+    }),
+    JSON.stringify({ type: "result", subtype: "success", is_error: false }),
+  ];
+
+  it("passes when the re-drive shows every presented scratchpad file was promoted", async () => {
+    muteStderr();
+    const events = presentFilesEvents([{ from: `${CWD}/a.md`, to: `${CWD}/mnt/outputs/a.md` }]);
+    const cassette: any = {
+      scenario: makeScenario([{ no_scratchpad_leak: true }]),
+      events,
+      controlOut: [],
+      effectiveFidelity: "container",
+    };
+    const r = await replayCassette(cassette);
+    expect(r.assertions.every((a) => a.pass)).toBe(true);
+  });
+
+  it("fails when the re-drive shows a presented scratchpad file was never promoted (leaked)", async () => {
+    muteStderr();
+    // present_files' own copy-failure branch returns the ORIGINAL (still-scratchpad) path.
+    const events = presentFilesEvents([{ from: `${CWD}/bad.sh`, to: `${CWD}/bad.sh` }]);
+    const cassette: any = {
+      scenario: makeScenario([{ no_scratchpad_leak: true }]),
+      events,
+      controlOut: [],
+      effectiveFidelity: "container",
+    };
+    const r = await replayCassette(cassette);
+    expect(r.assertions.some((a) => !a.pass)).toBe(true);
+  });
+
+  it("passes vacuously when present_files was never called (not excluded — content-class)", async () => {
+    muteStderr();
+    const events = [
+      JSON.stringify({ type: "system", subtype: "init", tools: [], cwd: CWD }),
+      JSON.stringify({ type: "result", subtype: "success", is_error: false }),
+    ];
+    const cassette: any = {
+      scenario: makeScenario([{ no_scratchpad_leak: true }]),
+      events,
+      controlOut: [],
+      effectiveFidelity: "container",
+    };
+    const r = await replayCassette(cassette);
+    expect(r.assertions.length).toBe(1); // NOT skipped/excluded — content-class keys always evaluate
+    expect(r.assertions[0].pass).toBe(true);
+  });
+});
+
 describe("budget assertions evaluate end-to-end on replay (Wave 1 / E6a)", () => {
   it("max_cost_usd/max_tokens/tool_calls_max pass against a recorded cassette within budget", async () => {
     muteStderr();
@@ -273,36 +353,38 @@ describe("default cassette path is computed identically (slugForPath) for dry-ru
   });
 });
 
-describe("scenario.assert is validated-and-warned, never strict-rejected (forward-compat)", () => {
-  it("a malformed assert element (type-wrong known field) WARNS but the cassette still LOADS (no hard reject)", () => {
-    const lines = muteStderr();
-    const events = [
-      JSON.stringify({ type: "system", subtype: "init", tools: ["Write"] }),
-      JSON.stringify({ type: "result", subtype: "success", is_error: false }),
-    ];
+describe("scenario.assert validation: reject unknown/malformed for current-or-older, tolerate for future", () => {
+  const events = [
+    JSON.stringify({ type: "system", subtype: "init", tools: ["Write"] }),
+    JSON.stringify({ type: "result", subtype: "success", is_error: false }),
+  ];
+
+  it("a malformed assert element (type-wrong known field) in a current/older cassette is REJECTED (would silently drop from replay)", () => {
+    muteStderr();
     const d = mkdtempSync(join(tmpdir(), "cwh-a29-"));
     const cp = join(d, "fwd.cassette.json");
-    // transcript_contains must be a string — a number is a malformed assertion shape.
+    // transcript_contains must be a string — a number is a malformed assertion shape. No version = legacy (≤ current).
     writeFileSync(cp, JSON.stringify({ scenario: makeScenario([{ transcript_contains: 123 }, { result: "success" }]), events }));
     const r = readCassette(cp);
-    // Crucially: NOT an error — validate-and-WARN, never strict-reject (CassetteShape is .passthrough(),
-    // so a cassette from a newer harness must still load). A strict-by-default load here would be a
-    // forward-compat regression.
-    expect("error" in r).toBe(false);
-    // The malformed element is surfaced as a loud (non-fatal) warning.
-    expect(lines.join("")).toMatch(/scenario\.assert\[0\] is not a recognized assertion shape/);
+    expect("error" in r).toBe(true);
+    expect((r as { error: string }).error).toMatch(/unrecognized assertion/);
   });
 
-  it("an UNKNOWN assert key (newer-harness forward-compat) loads WITHOUT error", () => {
+  it("an UNKNOWN assert key in a current/older cassette is REJECTED (can't green by omission)", () => {
     muteStderr();
-    const events = [
-      JSON.stringify({ type: "system", subtype: "init", tools: ["Write"] }),
-      JSON.stringify({ type: "result", subtype: "success", is_error: false }),
-    ];
     const d = mkdtempSync(join(tmpdir(), "cwh-a29b-"));
     const cp = join(d, "fwd.cassette.json");
-    // A future assertion key this build doesn't know — must NOT be rejected (forward-compat).
     writeFileSync(cp, JSON.stringify({ scenario: makeScenario([{ some_future_assertion_key: "value" }]), events }));
+    expect("error" in readCassette(cp)).toBe(true);
+  });
+
+  it("an UNKNOWN assert key in a FUTURE-version cassette WARNS and loads (forward-compat)", () => {
+    const lines = muteStderr();
+    const d = mkdtempSync(join(tmpdir(), "cwh-a29c-"));
+    const cp = join(d, "fwd.cassette.json");
+    // cassetteVersion > CASSETTE_VERSION → a newer harness may have added this key; tolerate, don't reject.
+    writeFileSync(cp, JSON.stringify({ cassetteVersion: 999, scenario: makeScenario([{ some_future_assertion_key: "value" }]), events }));
     expect("error" in readCassette(cp)).toBe(false);
+    expect(lines.join("")).toMatch(/unrecognized assertion \(tolerated/);
   });
 });

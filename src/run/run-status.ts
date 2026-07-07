@@ -1,10 +1,10 @@
 import { join, dirname } from "node:path";
-import { homedir } from "node:os";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { writeJsonAtomic, envPositiveNumber } from "../io.js";
 import type { RunStatus } from "../types.js";
 import type { RunRecord } from "./run.js";
 import { resolveEventsFile } from "./trace-view.js";
+import { expandUserPath } from "../session.js";
 
 export const STATUS_FILE = "status.json";
 
@@ -17,7 +17,7 @@ export interface RunStatusMeta {
 }
 
 // NOTE: `elapsedMs` is always derived from THIS module's own `meta.startedAt` (set at outDir creation,
-// in Task 3 right after mkdir). `durationMs` (terminal only) is passed in from the caller and, at the
+// right after mkdir). `durationMs` (terminal only) is passed in from the caller and, at the
 // two normal finalize sites, is `RunResult.durationMs` — timed from execute.ts's OWN later `startedAt`
 // (set just before the container/VM spawn, so it excludes dir-setup time). The two numbers are
 // deliberately NOT forced equal: `elapsedMs` answers "how long has status.json existed" (useful for a
@@ -28,7 +28,13 @@ function buildStatus(
   meta: RunStatusMeta,
   state: RunStatus["state"],
   counts: { toolCounts: Record<string, number>; subagentCount: number },
-  terminal?: { result: "success" | "error"; durationMs: number },
+  terminal?: {
+    result: "success" | "error";
+    durationMs: number;
+    errorSource?: RunStatus["errorSource"];
+    resultSubtype?: string;
+    stderrLogPath?: string;
+  },
 ): RunStatus {
   const now = Date.now();
   return {
@@ -43,7 +49,16 @@ function buildStatus(
     elapsedMs: now - meta.startedAt,
     toolCounts: counts.toolCounts,
     subagentCount: counts.subagentCount,
-    ...(terminal ? { result: terminal.result, durationMs: terminal.durationMs } : {}),
+    // undefined-valued keys are dropped by JSON.stringify, so the diagnostics appear only when set.
+    ...(terminal
+      ? {
+          result: terminal.result,
+          durationMs: terminal.durationMs,
+          errorSource: terminal.errorSource,
+          resultSubtype: terminal.resultSubtype,
+          stderrLogPath: terminal.stderrLogPath,
+        }
+      : {}),
   };
 }
 
@@ -108,13 +123,18 @@ export function finalizeRunStatus(
       {
         result,
         durationMs,
+        // Terminal-error diagnostics so a failure-output reader gets more than a bare "error". stderrLogPath
+        // is the live agent log (same path the assembler records); only meaningful on the error terminal.
+        errorSource: result === "error" ? record.errorSource : undefined,
+        resultSubtype: result === "error" ? record.resultSubtype : undefined,
+        stderrLogPath: result === "error" ? join(outDir, "agent.stderr.log") : undefined,
       },
     ),
   );
 }
 
 /** Best-effort terminal write when NO `RunRecord` is available — the crash-safety net. Bound to
- *  `process.on("exit", …)` right after `writeRunningStatus` (Task 3) and removed once a normal
+ *  `process.on("exit", …)` right after `writeRunningStatus` and removed once a normal
  *  `finalizeRunStatus` runs, so it fires ONLY for a genuine crash: an uncaught throw that unwinds past
  *  `executeScenario` without ever reaching either `RunResult` assembly site (a plain `throw` earlier in
  *  the function — e.g. a `BoundaryError` — or anything else that isn't the recoverable
@@ -122,7 +142,7 @@ export function finalizeRunStatus(
  *  crash — a false "still alive" signal, exactly the failure mode this feature exists to eliminate.
  *  Mirrors `writeDoneMarker`'s exit-handler precedent (`src/decide/external-channel.ts:58-64`); like
  *  that marker, this is idempotent + synchronous (`writeJsonAtomic` uses sync `fs` calls), which is a
- *  hard requirement for anything run from a Node `"exit"` handler. Not called directly by Task 3 — see
+ *  hard requirement for anything run from a Node `"exit"` handler. Not called directly — see
  *  `registerRunForCrashSafety` immediately below, which wraps this with the pending-set bookkeeping a
  *  SINGLE shared exit handler needs. */
 export function markRunStatusCrashed(outDir: string, meta: RunStatusMeta): void {
@@ -150,7 +170,7 @@ export function crashAllPendingRunStatuses(): void {
   pending.clear();
 }
 
-/** Register a run for crash-safety tracking — call once, right after `writeRunningStatus` (Task 3).
+/** Register a run for crash-safety tracking — call once, right after `writeRunningStatus`.
  *  Lazily registers the ONE shared `process.on("exit", crashAllPendingRunStatuses)` listener on first
  *  use (idempotent — a second/third call in the same process is a no-op). Returns a `finalize` function;
  *  call it at BOTH normal `RunResult` assembly sites once the run completes — it removes this run from
@@ -211,18 +231,19 @@ export function hasRunStatus(runDir: string): boolean {
 
 /** Resolve a `status` CLI argument (a literal run dir, or a run-id/fragment) to the run's directory.
  *  A literal directory is used DIRECTLY — the common case (a driving agent passes the exact `outDir`
- *  printed at run start, see Task 3) — and works even in the earliest moments of a run, BEFORE
+ *  printed at run start) — and works even in the earliest moments of a run, BEFORE
  *  `events.jsonl` exists (`resolveEventsFile` alone would reject that window, since it requires
  *  `events.jsonl` to already be present). Falls back to `resolveEventsFile` (run-id / fragment matching
  *  under the runs root) for everything else — the same resolver `trace`/`inspect` already use.
  *
- *  Defense-in-depth: a leading `~` (or `~/...`) is expanded to the user's home directory BEFORE the
- *  literal-directory check runs. The `[status]` printer (`src/run/execute.ts`) always emits the raw,
- *  un-tildeified `outDir` precisely so this program never needs to expand `~` for its own output — but a
- *  human may still paste in a `~`-abbreviated path copied from some other display context (shell history,
- *  a footer line, etc.), and a shell isn't in the loop to expand it for us here. */
+ *  Defense-in-depth: a leading `~` (or `~/...`) is expanded to the user's home directory (via the shared
+ *  {@link expandUserPath}, `src/session.ts`) BEFORE the literal-directory check runs. The `[status]`
+ *  printer (`src/run/execute.ts`) always emits the raw, un-tildeified `outDir` precisely so this program
+ *  never needs to expand `~` for its own output — but a human may still paste in a `~`-abbreviated path
+ *  copied from some other display context (shell history, a footer line, etc.), and a shell isn't in the
+ *  loop to expand it for us here. */
 export function resolveStatusDir(arg: string): string {
-  const expanded = arg === "~" ? homedir() : arg.startsWith("~/") ? join(homedir(), arg.slice(2)) : arg;
+  const expanded = expandUserPath(arg);
   if (existsSync(expanded) && statSync(expanded).isDirectory()) return expanded;
   return dirname(resolveEventsFile(expanded));
 }

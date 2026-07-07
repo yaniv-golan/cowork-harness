@@ -47,11 +47,11 @@ what production would do. Two layers of defense:
 
 ### Cassette anatomy (what you're looking at when you open one)
 
-Top-level fields of a `*.cassette.json` (schema `schema/cassette.v7.json`):
+Top-level fields of a `*.cassette.json` (schema `schema/cassette.v9.json`):
 
 | Field | What it is |
 |---|---|
-| `$schema`, `generator`, `cassetteVersion` | Provenance: schema URL, producing tool, format version (current: 7) |
+| `$schema`, `generator`, `cassetteVersion` | Provenance: schema URL, producing tool, format version (current: 9) |
 | `scenario` | The embedded scenario snapshot at record time |
 | `events` | The recorded agent event stream (the replay source) |
 | `controlOut` | Driver→agent control responses — presence unlocks gate asserts on replay |
@@ -63,6 +63,8 @@ Top-level fields of a `*.cassette.json` (schema `schema/cassette.v7.json`):
 | `preRunPaths` | Pre-run file-path baseline for `no_unexpected_files` (workRoot-relative; co-present with `userVisibleRoots`) |
 | `scenarioSource` | Relative path to the authored YAML this was recorded from |
 | `authoring` | Present iff a live decider answered ≥1 gate during recording (`nonDeterministic: true`) |
+| `sessionFingerprint` | v9+: hash of the session's content-relevant SHAPE (folders/plugins/skills/mcp/egress). Checked ONLY by `verify-cassettes`, never the default replay verdict; absent on a pre-v9 cassette → not checked |
+| `folderPrefixMap` | v9+: the record-time connected-folder host-path → mount-name map. Replay's `computer_links_resolve` uses THIS (never the current session file) for a v9+ cassette; a pre-v9 cassette keeps reconstructing from the current session |
 
 ## Recipe 3 — Set up redaction BEFORE your first hostloop/protocol record
 

@@ -165,7 +165,7 @@ The policy that produces those `allow`/`deny` responses is the **Decider** seam 
 
 > **Machine-readable form:** the five shapes below are schema'd as `schema/protocol.v1.json`, with a golden vector pack at `fixtures/protocol/v1/` — see [docs/protocol.md](./docs/protocol.md) for scope, versioning, and how to conformance-test against them.
 
-### Control protocol — VERIFIED end-to-end against the live host CLI (macOS build 2.1.177+; the staged in-VM agent that L1/L2 run is 2.1.197, baseline `desktop-1.17377.1`)
+### Control protocol — VERIFIED end-to-end against the live host CLI (macOS build 2.1.177+; the staged in-VM agent that L1/L2 run is 2.1.197, baseline `desktop-1.17377.1` — the live end-to-end pass remains pinned here; asar/baseline analysis has since been carried through `desktop-1.18286.0` with no protocol-affecting deltas, pending a fresh live re-run against it)
 
 > The staged agent ELF is unchanged (2.1.181) across the 1.14271.0→1.15200.0 asar bump, and 2.1.187 across the 1.15200.0→1.15962.0 bump. The live scenario suite (`protocol` + `container` tiers) was re-run against the 1.15200.0 baseline; the 1.15962.0 bump was verified via asar analysis (content byte-identical: host-loop generator, system prompt, identity string, gates, and egress domains all unchanged) plus a full local test suite pass. The 1.15962.1→1.17377.1 bump moved the staged agent to **2.1.197** and added `api.claude.ai` to the egress allowlist; re-verified via `sync` (no unknown deltas) plus a manual asar spot-check of the reconstructed prompt content (substantively unchanged — see the Parity entry in CHANGELOG.md) and a full live scenario-suite pass (`protocol` + `container` tiers).
 
@@ -179,7 +179,7 @@ The handshake and shapes below were confirmed empirically with an end-to-end run
 
 > **Cowork mode is enabled by env, not a flag.** In the staged agent (2.1.197) `--cowork` is a *plugin-scope* flag ("can only be used with user scope") and is rejected by the agent invocation; cowork mode is entered via **`CLAUDE_CODE_IS_COWORK=1`**. (Do **not** also set `CLAUDE_CODE_USE_COWORK_PLUGINS` — Desktop doesn't, and it flips the agent's userSettings filename to `cowork_settings.json` and plugin cache to `cowork_plugins/` via `TSO()` — the minified Desktop helper that derives the cowork settings/cache paths; plugins are delivered via `--plugin-dir`.) The host CLI is a different (macOS) build, so L0 runs plain (control-loop validation only); L1/L2 run the staged **Linux/arm64** binary — bind-mounted from the user's own install.
 
-### Spawn contract + host-loop vs VM-loop (binary-verified through asar 1.17377.1)
+### Spawn contract + host-loop vs VM-loop (binary-verified through asar 1.17377.1; asar analysis since carried through 1.18286.0 with no spawn-contract deltas — the live end-to-end pass remains pinned to 1.17377.1)
 
 The full Desktop→agent spawn contract (cwd `/sessions/<id>`, `CLAUDE_CONFIG_DIR=mnt/.claude`, the env object, `--tools`/`--allowedTools`/`--plugin-dir`/`--effort`/`--setting-sources`, permission layers, prompt templates) is documented in [docs/cowork-spawn-contract-1.12603.1.md](./docs/cowork-spawn-contract-1.12603.1.md) and encoded in `baseline.spawn`.
 

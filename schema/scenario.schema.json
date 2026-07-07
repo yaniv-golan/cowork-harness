@@ -33,6 +33,12 @@
       "type": "string",
       "description": "the user turn sent to the agent"
     },
+    "timeout_ms": {
+      "description": "wall-clock budget for the agent run; on expiry the harness kills the agent and the run ends result:error / errorSource:timeout. Omitted = no timeout (the agent runs to its own completion). Distinct from the max_turns assertion and agent_max_turns (turn budget).",
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
     "answers": {
       "default": [],
       "description": "scripted answers, matched in order: AskUserQuestion gates by question-text regex, tool-permission gates by tool name (`when_tool`)",
@@ -176,6 +182,24 @@
             "description": "a sub-agent declared this tool but never used it (the fabrication proxy)",
             "type": "string"
           },
+          "subagent_output_contains": {
+            "description": "a dispatched sub-agent's own output contained this substring (optionally narrowed to dispatches matching `match`)",
+            "type": "object",
+            "properties": {
+              "match": {
+                "description": "regex over agentType or description, narrowing to specific dispatch(es); omit to check all",
+                "type": "string"
+              },
+              "contains": {
+                "type": "string",
+                "description": "substring that must appear in the matched dispatch(es)' output"
+              }
+            },
+            "required": [
+              "contains"
+            ],
+            "additionalProperties": false
+          },
           "dispatch_count_max": {
             "description": "total sub-agent dispatches ≤ N (the {global:3} ceiling)",
             "type": "integer",
@@ -188,6 +212,18 @@
           },
           "no_skill_triggered": {
             "description": "no invoked skill id matched this regex — the negative-control / description-collision catcher",
+            "type": "string"
+          },
+          "skill_available": {
+            "description": "a staged skill's id matched this regex (offered, not necessarily invoked — see skill_triggered for invocation)",
+            "type": "string"
+          },
+          "connector_available": {
+            "description": "an MCP server/connector's name matched this regex (available, not necessarily used)",
+            "type": "string"
+          },
+          "tool_available": {
+            "description": "a tool in the init manifest matched this regex (available, not necessarily called — see tool_called for invocation)",
             "type": "string"
           },
           "max_cost_usd": {
@@ -207,11 +243,110 @@
             "minimum": 0,
             "maximum": 9007199254740991
           },
+          "tool_no_error": {
+            "description": "no tool whose name matches this regex recorded any error (RunResult.toolErrors[name].errors === 0 for every match) — REQUIRES at least one matching tool call (fails if the regex matched nothing, so a typo can't silently pass; use tool_no_error_if_called for the presence-free variant)",
+            "type": "string"
+          },
+          "tool_no_error_if_called": {
+            "description": "like tool_no_error, but PASSES VACUOUSLY when no tool matches the regex — the lenient, presence-free variant for a tool that may legitimately not run",
+            "type": "string"
+          },
+          "max_tool_errors": {
+            "description": "total tool errors across all tools (sum of RunResult.toolErrors[*].errors) ≤ N",
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "max_redundant_tool_calls": {
+            "description": "total WASTED repeated tool calls (sum of (count-1) across every redundant {name,args} group in RunResult.redundantToolCalls) ≤ N — not the raw count of redundant groups",
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "skill_tool_used": {
+            "description": "a tool matching `tool` ran inside a skill-activation window whose skillId matches `skill` — heuristic for inline skills (a sticky, sequential window faithfully matching the real agent's activeSkill scope, not an exact per-tool boundary; see RunResult.skillActivity's doc comment)",
+            "type": "object",
+            "properties": {
+              "skill": {
+                "type": "string",
+                "description": "regex matched against a skill-activation window's skillId"
+              },
+              "tool": {
+                "type": "string",
+                "description": "regex matched against a tool name in that window's toolCounts"
+              }
+            },
+            "required": [
+              "skill",
+              "tool"
+            ],
+            "additionalProperties": false
+          },
+          "all_tasks_completed": {
+            "description": "every task in RunResult.tasks[] reached status \"completed\" — REQUIRES at least one task (a run with zero tasks fails: it cannot have \"completed them all\"); only `true` is valid",
+            "type": "boolean",
+            "const": true
+          },
+          "task_count_min": {
+            "description": "at least N tasks were created (RunResult.tasks.length >= N) — the presence companion for task assertions",
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "task_status": {
+            "description": "a task whose subject or id matches `match` reached `status`",
+            "type": "object",
+            "properties": {
+              "match": {
+                "type": "string",
+                "description": "regex matched against a task's subject OR id"
+              },
+              "status": {
+                "type": "string",
+                "description": "the status the matching task must have reached"
+              }
+            },
+            "required": [
+              "match",
+              "status"
+            ],
+            "additionalProperties": false
+          },
           "max_turns": {
             "description": "the SDK-reported (or fallback-counted) turn count ≤ N — replay-checkable (the re-drive recounts turns deterministically)",
             "type": "integer",
             "minimum": 0,
             "maximum": 9007199254740991
+          },
+          "max_peak_rss_bytes": {
+            "description": "peak sampled RSS of the agent sandbox <= N bytes — live-only (container/hostloop/microvm); evidence-unavailable on replay/protocol or when sampling captured no RSS",
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "compaction_occurred": {
+            "description": "a context-compaction boundary occurred during the run (a `compact_boundary` system event was recorded); only `true` is valid — omit to not require it",
+            "type": "boolean",
+            "const": true
+          },
+          "no_mcp_error": {
+            "description": "no MCP round-trip failed (RunResult.mcpErrors is empty) — live-only (excluded on replay); only `true` is valid",
+            "type": "boolean",
+            "const": true
+          },
+          "hook_blocked": {
+            "description": "a PreToolUse hook blocked a tool whose name matches this regex (RunResult.hookEvents) — replay needs controlOut",
+            "type": "string"
+          },
+          "no_hook_blocked": {
+            "description": "no tool was hook-blocked during the run (distinguishes a real tool crash from an intentional block) — replay needs controlOut; only `true` is valid",
+            "type": "boolean",
+            "const": true
+          },
+          "no_scratchpad_leak": {
+            "description": "every file presented via present_files that was in the scratchpad was successfully promoted to outputs (none left behind); vacuous pass if nothing was presented — pair with a presence check to require a delivery; content-class (re-derived from the tool_use/tool_result stream, so checkable on replay too); CONTAINER TIER ONLY — present_files is not served on hostloop/microvm, where a scratchpad-delivered file is neither promoted nor detected (use fidelity: container for present_files-based delivery); only `true` is valid",
+            "type": "boolean",
+            "const": true
           },
           "egress_denied": {
             "description": "egress to this host was denied",
@@ -234,6 +369,15 @@
               "minLength": 1
             }
           },
+          "input_unmodified": {
+            "description": "every pre-existing file whose workRoot-relative path matches a glob has an unchanged content hash after the run (in-place mutation detector)",
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
           "self_heal_ran": {
             "description": "skill resolved scripts via /sessions (plugin-root self-heal)",
             "type": "boolean"
@@ -244,7 +388,12 @@
             "const": true
           },
           "computer_links_resolve": {
-            "description": "fails if any computer:// link in the model-visible transcript does not resolve to an artifact that exists in the run's collected outputs/mounts (zero links in the transcript passes — combine with transcript_contains to also require presence); only `true` is valid (writing `false` is a rejected footgun — omit to skip the check)",
+            "description": "fails if any computer:// link in the model-visible transcript does not resolve to an artifact that exists in the run's collected outputs/mounts — REQUIRES at least one link (zero links FAILS: use computer_links_resolve_if_present for the presence-free variant); only `true` is valid (writing `false` is a rejected footgun — omit to skip)",
+            "type": "boolean",
+            "const": true
+          },
+          "computer_links_resolve_if_present": {
+            "description": "like computer_links_resolve, but PASSES VACUOUSLY when the transcript has zero computer:// links — the lenient, presence-free variant; only `true` is valid",
             "type": "boolean",
             "const": true
           },
@@ -278,19 +427,23 @@
           },
           "allow_permissive_auto_allow": {
             "description": "(verdict modifier) suppress the default-fail when the run recorded a cowork-parity permissive auto-allow — for tests that deliberately assert Cowork's permissive behavior",
-            "type": "boolean"
+            "type": "boolean",
+            "const": true
           },
           "allow_l0_plugin_divergence": {
             "description": "(verdict modifier) suppress the default-fail when L0 (protocol) runs with plugins that load via --settings/managed config instead of --plugin-dir — for tests that deliberately test at L0 with plugins",
-            "type": "boolean"
+            "type": "boolean",
+            "const": true
           },
           "allow_missing_capability": {
             "description": "(verdict modifier) suppress the default-fail when the (partial 'core') agent image omits a capability the skill used but real Cowork ships — assert this only when the skill's fallback is genuinely equivalent (otherwise rebuild full parity, --build-arg COWORK_FULL_PARITY=1)",
-            "type": "boolean"
+            "type": "boolean",
+            "const": true
           },
           "allow_stall": {
             "description": "(verdict modifier) suppress the default-fail when a run ends on a question having done no productive tool work after its last gate (the agent asked for input and stopped — incl. re-asking in plain text after answering an AskUserQuestion) — assert this only when ending on a question is the intended terminal state; otherwise script the answer (answer:/--answer/decider)",
-            "type": "boolean"
+            "type": "boolean",
+            "const": true
           },
           "replay_protocol_fidelity": {
             "description": "(replay-only, NOT authorable) serializeDecision output matched the frozen recording — the token-free re-serialization guard; synthesized by the replay lane and rejected if written in a scenario — listed here only so schema-driven editors can display it in read-only contexts; authoring it in a scenario is a load-time error, see src/run/execute.ts",
@@ -302,11 +455,13 @@
             "properties": {
               "artifact": {
                 "type": "string",
+                "minLength": 1,
                 "description": "relative path to a JSON artifact under the work root (e.g. outputs/cap_state.json)"
               },
               "path": {
-                "description": "dotted path into the JSON (e.g. me.run_id); omit to target the whole document",
-                "type": "string"
+                "description": "dotted path into the JSON (e.g. me.run_id); omit to target the whole document (an explicit empty string is rejected)",
+                "type": "string",
+                "minLength": 1
               },
               "equals": {
                 "description": "the resolved value deep-equals this"

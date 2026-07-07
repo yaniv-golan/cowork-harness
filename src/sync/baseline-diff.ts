@@ -1,4 +1,4 @@
-// E7 — the recursive structural differ for baselines, replacing the one-level `diff()` in cli.ts
+// The recursive structural differ for baselines, replacing the one-level `diff()` in cli.ts
 // (stringify-compares each top key, printing whole subtrees on any nested change). Used by both the
 // standalone `diff <baseline-a> <baseline-b>` command and the refactored `sync --diff`.
 

@@ -166,10 +166,10 @@ class MockSession implements AgentSession {
 }
 
 // ---- sub-agent dispatch recognition (real cowork uses the `Agent` tool, not `Task`) ----
-const assistant = (blocks: unknown[], parent?: string) => ({
+const assistant = (blocks: unknown[], parent?: string, model?: string) => ({
   type: "assistant",
   ...(parent ? { parent_tool_use_id: parent } : {}),
-  message: { content: blocks },
+  message: { content: blocks, ...(model ? { model } : {}) },
 });
 const dispatches = (msg: unknown) => parseMessage(msg).filter((e) => e.type === "subagent_dispatch");
 
@@ -251,6 +251,66 @@ describe("parseMessage — sub-agent dispatch", () => {
     });
     expect((dec[0] as any).request).toMatchObject({ kind: "question", id: "uuid-1", toolUseId: "toolu_g" });
   });
+
+  it("threads message.model onto assistant_text, tool_use, and thinking events", () => {
+    const ev = parseMessage(
+      assistant(
+        [
+          { type: "text", text: "on it" },
+          { type: "thinking", thinking: "let me check" },
+          { type: "tool_use", id: "toolu_1", name: "Bash", input: { command: "x" } },
+        ],
+        undefined,
+        "claude-sonnet-4-5",
+      ),
+    );
+    expect(ev.find((e) => e.type === "assistant_text")).toMatchObject({ model: "claude-sonnet-4-5" });
+    expect(ev.find((e) => e.type === "thinking")).toMatchObject({ model: "claude-sonnet-4-5" });
+    expect(ev.find((e) => e.type === "tool_use")).toMatchObject({ model: "claude-sonnet-4-5" });
+  });
+
+  it("subagent_dispatch DOES carry model, threaded from the enclosing message (M4)", () => {
+    const ev = parseMessage(
+      assistant(
+        [{ type: "tool_use", id: "toolu_1", name: "Agent", input: { subagent_type: "general-purpose", prompt: "go" } }],
+        undefined,
+        "claude-sonnet-4-5",
+      ),
+    );
+    const dispatch = ev.find((e) => e.type === "subagent_dispatch") as any;
+    expect(dispatch).toBeDefined();
+    expect(dispatch.model).toBe("claude-sonnet-4-5");
+  });
+
+  it("threads prompt and model onto a subagent_dispatch event (M4)", () => {
+    const d = dispatches(
+      assistant(
+        [
+          {
+            type: "tool_use",
+            id: "toolu_1",
+            name: "Agent",
+            input: { subagent_type: "general-purpose", prompt: "go explore the codebase", description: "explore" },
+          },
+        ],
+        undefined,
+        "claude-sonnet-4-5",
+      ),
+    );
+    expect(d[0]).toMatchObject({ prompt: "go explore the codebase", model: "claude-sonnet-4-5" });
+  });
+
+  it("caps an oversized subagent prompt at the 10KB assertText limit", () => {
+    const bigPrompt = "x".repeat(11_000);
+    const d = dispatches(assistant([{ type: "tool_use", id: "toolu_1", name: "Agent", input: { subagent_type: "x", prompt: bigPrompt } }]));
+    expect(d[0].prompt).toHaveLength(10 * 1024);
+  });
+
+  it("a system-subtype thinking event (no assistant message) has no model", () => {
+    const ev = parseMessage({ type: "system", subtype: "thinking", content: "internal note" });
+    expect(ev[0]).toMatchObject({ type: "thinking" });
+    expect((ev[0] as any).model).toBeUndefined();
+  });
 });
 
 describe("parseMessage — result event cost/turns (Wave 0 seam)", () => {
@@ -270,12 +330,31 @@ describe("parseMessage — result event cost/turns (Wave 0 seam)", () => {
     expect((ev[0] as any).costUsd).toBeUndefined();
     expect((ev[0] as any).numTurns).toBeUndefined();
   });
+
+  it("extracts modelUsage from the SDK result message (§4.7, M3 — a top-level sibling of usage, not nested inside it)", () => {
+    const ev = parseMessage({
+      type: "result",
+      is_error: false,
+      modelUsage: {
+        "claude-opus-4-8": { inputTokens: 100, outputTokens: 50, cacheReadInputTokens: 200, costUSD: 0.01 },
+      },
+    });
+    expect(ev[0]).toMatchObject({
+      type: "result",
+      modelUsage: { "claude-opus-4-8": { inputTokens: 100, outputTokens: 50, cacheReadInputTokens: 200, costUSD: 0.01 } },
+    });
+  });
+
+  it("modelUsage is undefined when the SDK result message omits it", () => {
+    const ev = parseMessage({ type: "result", is_error: false });
+    expect((ev[0] as any).modelUsage).toBeUndefined();
+  });
 });
 
 describe("Run — turn loop + record", () => {
   it("builds transcript, toolsCalled, and the sub-agent dispatch tree", async () => {
     const ev: AgentEvent[] = [
-      { type: "init", tools: ["Task", "Bash"], mcpServers: [], cwd: "/sessions/x" },
+      { type: "init", tools: ["Task", "Bash"], mcpServers: [], skills: [], cwd: "/sessions/x" },
       { type: "assistant_text", text: "working" },
       { type: "tool_use", name: "Task", input: { subagent_type: "researcher", tools: ["Bash", "Read"] } },
       { type: "subagent_dispatch", toolUseId: "tu1", agentType: "researcher", declaredTools: ["Bash", "Read"] },
@@ -290,8 +369,65 @@ describe("Run — turn loop + record", () => {
     expect(rec.subagents).toHaveLength(1);
     expect(rec.subagents[0].agentType).toBe("researcher");
     expect(rec.subagents[0].declaredTools).toEqual(["Bash", "Read"]);
-    expect(rec.subagents[0].toolsUsed).toEqual(["Read"]); // declared Bash but never used it → the culprit
+    expect(rec.subagents[0].toolsUsed).toEqual([{ name: "Read", count: 1 }]); // declared Bash but never used it → the culprit
     expect(rec.result).toBe("success");
+  });
+
+  it("captures mcpServers into rec.context (currently silently dropped by run.ts's init case)", async () => {
+    const ev: AgentEvent[] = [
+      { type: "init", tools: ["Read", "Bash"], mcpServers: [{ name: "my-server", status: "connected" }], skills: [], cwd: "/tmp" },
+      { type: "result", isError: false },
+    ];
+    const rec = await new Run(new MockSession(ev), new ScriptedDecider([])).drive("go");
+    expect(rec.context).toEqual({ tools: ["Read", "Bash"], mcpServers: [{ name: "my-server", status: "connected" }], availableSkills: [] });
+  });
+
+  it("seeds rec.context.availableSkills as an id-only list from the init event's skills array (§O1 fix — the authoritative spine, incl. plugin ids)", async () => {
+    const ev: AgentEvent[] = [
+      { type: "init", tools: ["Skill"], mcpServers: [], skills: ["a", "b:c"], cwd: "/tmp" },
+      { type: "result", isError: false },
+    ];
+    const rec = await new Run(new MockSession(ev), new ScriptedDecider([])).drive("go");
+    expect(rec.context?.availableSkills).toEqual([{ id: "a" }, { id: "b:c" }]);
+  });
+
+  it("increments toolsUsed's count for a repeated tool inside the same subagent dispatch (not a duplicate entry)", async () => {
+    const ev: AgentEvent[] = [
+      { type: "subagent_dispatch", toolUseId: "disp1", agentType: "general-purpose", declaredTools: ["Read"] },
+      { type: "tool_use", name: "Read", input: {}, toolUseId: "t1", parentToolUseId: "disp1" },
+      { type: "tool_result", toolUseId: "t1", isError: false, text: "" },
+      { type: "tool_use", name: "Read", input: {}, toolUseId: "t2", parentToolUseId: "disp1" },
+      { type: "tool_result", toolUseId: "t2", isError: false, text: "" },
+      { type: "result", isError: false },
+    ];
+    const rec = await new Run(new MockSession(ev), new ScriptedDecider([])).drive("go");
+    expect(rec.subagents[0].toolsUsed).toEqual([{ name: "Read", count: 2 }]);
+  });
+
+  it("denormalizes a subagent dispatch's paired tool_result onto rec.subagents[].output, assertText-capped (M4)", async () => {
+    const ev: AgentEvent[] = [
+      {
+        type: "subagent_dispatch",
+        toolUseId: "disp1",
+        agentType: "general-purpose",
+        declaredTools: [],
+        prompt: "explore",
+        model: "claude-sonnet-4-5",
+      },
+      { type: "tool_result", toolUseId: "disp1", isError: false, text: "found 3 files", assertText: "found 3 files" },
+      { type: "result", isError: false },
+    ];
+    const rec = await new Run(new MockSession(ev), new ScriptedDecider([])).drive("go");
+    expect(rec.subagents[0]).toMatchObject({ prompt: "explore", model: "claude-sonnet-4-5", output: "found 3 files" });
+  });
+
+  it("leaves rec.subagents[].output undefined when no tool_result matches the dispatch's toolUseId (M4)", async () => {
+    const ev: AgentEvent[] = [
+      { type: "subagent_dispatch", toolUseId: "disp1", agentType: "general-purpose", declaredTools: [] },
+      { type: "result", isError: false },
+    ];
+    const rec = await new Run(new MockSession(ev), new ScriptedDecider([])).drive("go");
+    expect(rec.subagents[0].output).toBeUndefined();
   });
 
   it("threads a result event's costUsd/numTurns into rec.cost.usd/rec.usage.turns (Wave 0 seam)", async () => {
@@ -318,7 +454,7 @@ describe("Run — turn loop + record", () => {
 
   it("captures a top-level Skill tool_use into rec.skillsInvoked (Wave 1 / E8)", async () => {
     const ev: AgentEvent[] = [
-      { type: "init", tools: ["Skill"], mcpServers: [] },
+      { type: "init", tools: ["Skill"], mcpServers: [], skills: [] },
       { type: "tool_use", name: "Skill", input: { skill: "my-pdf-skill:my-pdf-skill" } },
       { type: "result", isError: false },
     ];
@@ -346,6 +482,45 @@ describe("Run — turn loop + record", () => {
     ];
     const rec = await new Run(new MockSession(ev), new ScriptedDecider([])).drive("do it");
     expect(rec.skillsInvoked).toEqual([]);
+  });
+
+  it("accumulates distinct models across assistant_text/tool_use/thinking events, in first-seen order, deduped", async () => {
+    const ev: AgentEvent[] = [
+      { type: "assistant_text", text: "on it", model: "claude-haiku-4-5" },
+      { type: "tool_use", name: "Bash", input: {}, toolUseId: "toolu_1", model: "claude-haiku-4-5" },
+      { type: "tool_result", toolUseId: "toolu_1", isError: false, text: "ok" },
+      { type: "thinking", text: "hmm", model: "claude-sonnet-4-5" },
+      { type: "tool_use", name: "Read", input: {}, toolUseId: "toolu_2", model: "claude-sonnet-4-5" },
+      { type: "tool_result", toolUseId: "toolu_2", isError: false, text: "ok" },
+      { type: "result", isError: false },
+    ];
+    const rec = await new Run(new MockSession(ev), new ScriptedDecider([])).drive("go");
+    expect(rec.models).toEqual(["claude-haiku-4-5", "claude-sonnet-4-5"]);
+  });
+
+  it("accumulates thinking blocks into rec.thinking, each capped at 10KB", async () => {
+    const bigText = "x".repeat(11000); // over the 10KB cap
+    const ev: AgentEvent[] = [
+      { type: "thinking", text: "short reasoning" },
+      { type: "thinking", text: bigText },
+      { type: "result", isError: false },
+    ];
+    const rec = await new Run(new MockSession(ev), new ScriptedDecider([])).drive("go");
+    expect(rec.thinking).toHaveLength(2);
+    expect(rec.thinking[0].text).toBe("short reasoning");
+    expect(rec.thinking[1].text).toHaveLength(10 * 1024);
+  });
+
+  it("caps rec.thinking at the last 50 blocks, tracking an elision count for the rest", async () => {
+    const ev: AgentEvent[] = [
+      ...Array.from({ length: 55 }, (_, i) => ({ type: "thinking" as const, text: `block-${i}` })),
+      { type: "result", isError: false },
+    ];
+    const rec = await new Run(new MockSession(ev), new ScriptedDecider([])).drive("go");
+    expect(rec.thinking).toHaveLength(50);
+    expect(rec.thinking[0].text).toBe("block-5"); // the oldest 5 were dropped
+    expect(rec.thinking[49].text).toBe("block-54");
+    expect(rec.thinkingElided).toBe(5);
   });
 
   it("subagentTools counts only tools under a RECOGNIZED dispatch, not any parented tool_use", async () => {
@@ -403,6 +578,234 @@ describe("Run — turn loop + record", () => {
     ];
     const rec = await new Run(new MockSession(ev), new ScriptedDecider([])).drive("go");
     expect(rec.toolCounts).toEqual({ WebSearch: 2, Read: 1 }); // not 3 WebSearch — the subagent one is excluded
+  });
+
+  it("accumulates rec.toolErrors keyed by tool name, tracking calls and errors independently", async () => {
+    const ev: AgentEvent[] = [
+      { type: "tool_use", name: "Bash", input: {}, toolUseId: "t1" },
+      { type: "tool_result", toolUseId: "t1", isError: false, text: "ok" },
+      { type: "tool_use", name: "Bash", input: {}, toolUseId: "t2" },
+      { type: "tool_result", toolUseId: "t2", isError: true, text: "boom" },
+      { type: "tool_use", name: "Read", input: {}, toolUseId: "t3" },
+      { type: "tool_result", toolUseId: "t3", isError: false, text: "ok" },
+      { type: "result", isError: false },
+    ];
+    const rec = await new Run(new MockSession(ev), new ScriptedDecider([])).drive("go");
+    expect(rec.toolErrors).toEqual({
+      Bash: { calls: 2, errors: 1 },
+      Read: { calls: 1, errors: 0 },
+    });
+  });
+
+  it("a tool_result with no matching prior tool_use (e.g. subagent-internal calls not top-level-tracked) is silently NOT counted in toolErrors", async () => {
+    const ev: AgentEvent[] = [
+      { type: "tool_result", toolUseId: "orphan", isError: true, text: "boom" },
+      { type: "result", isError: false },
+    ];
+    const rec = await new Run(new MockSession(ev), new ScriptedDecider([])).drive("go");
+    expect(rec.toolErrors).toEqual({});
+  });
+
+  it("captures rec.modelUsage from the result event's modelUsage payload", async () => {
+    const ev: AgentEvent[] = [
+      { type: "result", isError: false, modelUsage: { "claude-opus-4-8": { inputTokens: 100, outputTokens: 50, costUSD: 0.01 } } },
+    ];
+    const rec = await new Run(new MockSession(ev), new ScriptedDecider([])).drive("go");
+    expect(rec.modelUsage).toEqual({ "claude-opus-4-8": { inputTokens: 100, outputTokens: 50, costUSD: 0.01 } });
+  });
+
+  it("detects redundant tool calls (same name + identical canonicalized input) via a post-drive fold over toolLog", async () => {
+    const events: AgentEvent[] = [
+      { type: "tool_use", name: "Bash", input: { command: "ls" }, toolUseId: "t1" },
+      { type: "tool_result", toolUseId: "t1", isError: false, text: "" },
+      { type: "tool_use", name: "Bash", input: { command: "ls" }, toolUseId: "t2" }, // same input, redundant
+      { type: "tool_result", toolUseId: "t2", isError: false, text: "" },
+      { type: "tool_use", name: "Bash", input: { command: "pwd" }, toolUseId: "t3" }, // different input, not redundant
+      { type: "tool_result", toolUseId: "t3", isError: false, text: "" },
+      { type: "result", isError: false },
+    ];
+    const fakeSession = {
+      async *start() {
+        for (const e of events) yield e;
+      },
+      sendUserTurn() {},
+      respond() {},
+      close() {},
+    } as any;
+    const run = new Run(fakeSession, { decide: async () => ABSTAIN } as any, [], "test-run");
+    const rec = await run.drive("go");
+    expect(rec.redundantToolCalls).toHaveLength(1);
+    expect(rec.redundantToolCalls[0]).toMatchObject({ name: "Bash", count: 2 });
+    expect(rec.redundantToolCalls[0].argHash).toMatch(/^[a-f0-9]{16}$/); // truncated sha256, 8 bytes hex
+  });
+
+  it("key ordering in the input object doesn't defeat redundancy detection (canon sorts keys)", async () => {
+    const events: AgentEvent[] = [
+      { type: "tool_use", name: "Write", input: { path: "a.txt", content: "x" }, toolUseId: "t1" },
+      { type: "tool_result", toolUseId: "t1", isError: false, text: "" },
+      { type: "tool_use", name: "Write", input: { content: "x", path: "a.txt" }, toolUseId: "t2" }, // same, reordered keys
+      { type: "tool_result", toolUseId: "t2", isError: false, text: "" },
+      { type: "result", isError: false },
+    ];
+    const fakeSession = {
+      async *start() {
+        for (const e of events) yield e;
+      },
+      sendUserTurn() {},
+      respond() {},
+      close() {},
+    } as any;
+    const run = new Run(fakeSession, { decide: async () => ABSTAIN } as any, [], "test-run");
+    const rec = await run.drive("go");
+    expect(rec.redundantToolCalls).toHaveLength(1);
+    expect(rec.redundantToolCalls[0].count).toBe(2);
+  });
+
+  it("excludes synthetic MCP-echo tool_use events from redundant-call detection (they'd otherwise double-count a real repeated MCP call)", async () => {
+    const events: AgentEvent[] = [
+      { type: "tool_use", name: "mcp__server__tool", input: { command: "x" }, toolUseId: "t1" },
+      { type: "tool_result", toolUseId: "t1", isError: false, text: "" },
+      { type: "tool_use", name: "mcp__server__tool", input: { command: "x" }, toolUseId: "t2" }, // real repeat, SHOULD count
+      { type: "tool_result", toolUseId: "t2", isError: false, text: "" },
+      {
+        type: "tool_use",
+        name: "mcp__server__tool",
+        input: { name: "mcp__server__tool", arguments: { command: "x" } },
+        toolUseId: "t1-echo",
+        synthetic: true,
+      }, // synthetic echo, DIFFERENT input shape, excluded regardless of shape
+      { type: "result", isError: false },
+    ];
+    const fakeSession = {
+      async *start() {
+        for (const e of events) yield e;
+      },
+      sendUserTurn() {},
+      respond() {},
+      close() {},
+    } as any;
+    const run = new Run(fakeSession, { decide: async () => ABSTAIN } as any, [], "test-run");
+    const rec = await run.drive("go");
+    expect(rec.redundantToolCalls).toHaveLength(1);
+    expect(rec.redundantToolCalls[0]).toMatchObject({ name: "mcp__server__tool", count: 2 });
+  });
+
+  it("excludes subagent-parented tool_use events from top-level redundantToolCalls", async () => {
+    const events: AgentEvent[] = [
+      { type: "tool_use", name: "Read", input: { path: "a" }, toolUseId: "t1", parentToolUseId: "dispatch1" },
+      { type: "tool_result", toolUseId: "t1", isError: false, text: "" },
+      { type: "tool_use", name: "Read", input: { path: "a" }, toolUseId: "t2", parentToolUseId: "dispatch1" }, // repeated INSIDE a subagent — should NOT count top-level
+      { type: "tool_result", toolUseId: "t2", isError: false, text: "" },
+      { type: "result", isError: false },
+    ];
+    const fakeSession = {
+      async *start() {
+        for (const e of events) yield e;
+      },
+      sendUserTurn() {},
+      respond() {},
+      close() {},
+    } as any;
+    const run = new Run(fakeSession, { decide: async () => ABSTAIN } as any, [], "test-run");
+    const rec = await run.drive("go");
+    expect(rec.redundantToolCalls).toEqual([]);
+  });
+
+  it("creates a task from TaskCreate, resolving the real id from the paired tool_result text (no id in the input)", async () => {
+    const events: AgentEvent[] = [
+      { type: "tool_use", name: "TaskCreate", input: { subject: "step one", description: "d1" }, toolUseId: "t1" },
+      { type: "tool_result", toolUseId: "t1", isError: false, text: "Task #1 created successfully: step one" },
+      { type: "result", isError: false },
+    ];
+    const fakeSession = {
+      async *start() {
+        for (const e of events) yield e;
+      },
+      sendUserTurn() {},
+      respond() {},
+      close() {},
+    } as any;
+    const rec = await new Run(fakeSession, new ScriptedDecider([])).drive("go");
+    expect(rec.tasks.get("1")).toEqual({ id: "1", subject: "step one", description: "d1", status: "pending", activeForm: undefined });
+  });
+
+  it("applies a TaskUpdate directly at tool_use time (taskId is already in the input, no correlation needed)", async () => {
+    const events: AgentEvent[] = [
+      { type: "tool_use", name: "TaskCreate", input: { subject: "step one" }, toolUseId: "t1" },
+      { type: "tool_result", toolUseId: "t1", isError: false, text: "Task #1 created successfully: step one" },
+      { type: "tool_use", name: "TaskUpdate", input: { taskId: "1", status: "in_progress" }, toolUseId: "t2" },
+      { type: "tool_result", toolUseId: "t2", isError: false, text: "Updated task #1 status" },
+      { type: "result", isError: false },
+    ];
+    const fakeSession = {
+      async *start() {
+        for (const e of events) yield e;
+      },
+      sendUserTurn() {},
+      respond() {},
+      close() {},
+    } as any;
+    const rec = await new Run(fakeSession, new ScriptedDecider([])).drive("go");
+    expect(rec.tasks.get("1")?.status).toBe("in_progress");
+  });
+
+  it("last-write-wins: a later TaskUpdate to the same taskId overwrites status, doesn't create a duplicate entry", async () => {
+    const events: AgentEvent[] = [
+      { type: "tool_use", name: "TaskCreate", input: { subject: "step one" }, toolUseId: "t1" },
+      { type: "tool_result", toolUseId: "t1", isError: false, text: "Task #1 created successfully: step one" },
+      { type: "tool_use", name: "TaskUpdate", input: { taskId: "1", status: "in_progress" }, toolUseId: "t2" },
+      { type: "tool_result", toolUseId: "t2", isError: false, text: "" },
+      { type: "tool_use", name: "TaskUpdate", input: { taskId: "1", status: "completed" }, toolUseId: "t3" },
+      { type: "tool_result", toolUseId: "t3", isError: false, text: "" },
+      { type: "result", isError: false },
+    ];
+    const fakeSession = {
+      async *start() {
+        for (const e of events) yield e;
+      },
+      sendUserTurn() {},
+      respond() {},
+      close() {},
+    } as any;
+    const rec = await new Run(fakeSession, new ScriptedDecider([])).drive("go");
+    expect(rec.tasks.size).toBe(1);
+    expect(rec.tasks.get("1")?.status).toBe("completed");
+  });
+
+  it("a TaskUpdate for an unknown taskId (no matching TaskCreate observed) is silently ignored, not a crash", async () => {
+    const events: AgentEvent[] = [
+      { type: "tool_use", name: "TaskUpdate", input: { taskId: "999", status: "completed" }, toolUseId: "t1" },
+      { type: "tool_result", toolUseId: "t1", isError: false, text: "" },
+      { type: "result", isError: false },
+    ];
+    const fakeSession = {
+      async *start() {
+        for (const e of events) yield e;
+      },
+      sendUserTurn() {},
+      respond() {},
+      close() {},
+    } as any;
+    const rec = await new Run(fakeSession, new ScriptedDecider([])).drive("go");
+    expect(rec.tasks.size).toBe(0);
+  });
+
+  it("a TaskCreate whose tool_result text doesn't match the expected format is silently dropped, not a crash", async () => {
+    const events: AgentEvent[] = [
+      { type: "tool_use", name: "TaskCreate", input: { subject: "step one" }, toolUseId: "t1" },
+      { type: "tool_result", toolUseId: "t1", isError: false, text: "unexpected format" },
+      { type: "result", isError: false },
+    ];
+    const fakeSession = {
+      async *start() {
+        for (const e of events) yield e;
+      },
+      sendUserTurn() {},
+      respond() {},
+      close() {},
+    } as any;
+    const rec = await new Run(fakeSession, new ScriptedDecider([])).drive("go");
+    expect(rec.tasks.size).toBe(0);
   });
 
   it("gateDeliveries pairs an answered gate with its tool_result (delivered vs failure)", async () => {
@@ -483,7 +886,7 @@ describe("Run — turn loop + record", () => {
     // MockSession that yields a typed {type:"error", source:"spawn"} event (as LiveAgentSession
     // now does when proc emits "error"). The Run loop must terminate and set rec.result = "error".
     const ev: AgentEvent[] = [
-      { type: "init", tools: ["Bash"], mcpServers: [] },
+      { type: "init", tools: ["Bash"], mcpServers: [], skills: [] },
       { type: "assistant_text", text: "starting up" },
       { type: "error", source: "spawn", message: "ENOENT: binary not found" },
       // A result event that would follow in a healthy run — must NOT be reached:
@@ -538,7 +941,7 @@ describe("Run — turn loop + record", () => {
     // rec.result = "success". A child that crashes nonzero after printing a result is NOT a passing run:
     // the exit error must override result back to "error" and surface the stderr tail.
     const ev: AgentEvent[] = [
-      { type: "init", tools: ["Bash"], mcpServers: [] },
+      { type: "init", tools: ["Bash"], mcpServers: [], skills: [] },
       { type: "result", isError: false },
       { type: "error", source: "exit", message: "agent process exited with code 137 — stderr tail: OOMKilled" },
     ];
@@ -758,25 +1161,33 @@ describe("Cassette — protocol replay", () => {
     expect(strict.assertions.some((a) => !a.pass && /stale/.test(a.message ?? ""))).toBe(true);
   });
 
-  // Cassette format version: a FUTURE version warns loudly (forward-compat) but still replays; absent = legacy (no warn).
-  it("cassette version: a newer format version warns but still replays; legacy (absent) does not warn", async () => {
+  // Cassette format version: a FUTURE version FAILS by default (future semantics may be misread → a
+  // false-green is possible); --best-effort-future-cassette opts into a warn-and-replay. Absent = legacy (no fail/warn).
+  it("cassette version: a newer format version fails by default; --best-effort warns and replays; legacy passes clean", async () => {
     const events = [
       JSON.stringify({ type: "system", subtype: "init", tools: ["Write"] }),
       JSON.stringify({ type: "result", subtype: "success", is_error: false }),
     ];
+    const future = { cassetteVersion: 999, scenario: makeScenario([{ result: "success" as const }]), events } as any;
+
+    // Default: a failing assertion is pushed (no warn on the default lane), so the replay is not green.
+    const def = await replayCassette(future);
+    expect(def.assertions.some((a) => !a.pass && /cassette format too new/.test(a.message ?? ""))).toBe(true);
+
+    // Opt-in: warns and replays without the failing assertion.
     const warnings: string[] = [];
     const orig = process.stderr.write.bind(process.stderr);
     (process.stderr as any).write = (s: string | Uint8Array): boolean => (warnings.push(String(s)), true);
+    let effort: Awaited<ReturnType<typeof replayCassette>>;
     try {
-      const future = { cassetteVersion: 999, scenario: makeScenario([{ result: "success" as const }]), events } as any;
-      expect((await replayCassette(future)).result).toBe("success");
-      const legacy = { scenario: makeScenario([{ result: "success" as const }]), events } as any; // no version → legacy
-      await replayCassette(legacy);
+      effort = await replayCassette(future, [], { bestEffortFutureCassette: true });
+      const legacy = { scenario: makeScenario([{ result: "success" as const }]), events } as any; // no version → legacy, clean
+      expect((await replayCassette(legacy)).assertions.every((a) => a.pass)).toBe(true);
     } finally {
       (process.stderr as any).write = orig;
     }
-    const all = warnings.join("");
-    expect((all.match(/is newer than this harness understands/g) ?? []).length).toBe(1); // only the future cassette warned
+    expect(effort.assertions.some((a) => !a.pass && /cassette format too new/.test(a.message ?? ""))).toBe(false);
+    expect((warnings.join("").match(/is newer than this harness understands/g) ?? []).length).toBe(1); // only the opt-in run warned
   });
 
   // ---- pin the bug BEFORE fixing it. ----
