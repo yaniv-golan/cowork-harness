@@ -806,7 +806,10 @@ export interface RunResult {
     bytes?: number; // response/tunnel bytes on an allow
     reason?: string; // denial reason (e.g. "not on allowlist")
   }>;
-  assertions: Array<{ assertion: Assertion; pass: boolean; message?: string }>;
+  // `evidence` (passing checks only) is the concrete file/value/tool/link that satisfied the assert —
+  // surfaced by `replay --explain` so a green can be trusted rather than assumed vacuous. Optional: a check
+  // with nothing concrete to cite omits it.
+  assertions: Array<{ assertion: Assertion; pass: boolean; message?: string; evidence?: string }>;
   subagents?: Array<{
     toolUseId: string;
     parentToolUseId?: string;

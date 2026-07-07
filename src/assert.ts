@@ -379,7 +379,10 @@ export function evaluate(assertions: Assertion[], ctx: AssertContext): RunResult
   return assertions.map((a) => check(a, ctx));
 }
 
-type KeyResult = { pass: true } | { pass: false; message: string };
+// A passing check may carry an optional `evidence` string — the concrete file/value/tool/link that
+// satisfied it — surfaced by `replay --explain` so a green can be trusted, not assumed vacuous. Absent
+// evidence is a clean opt-out (a check with nothing concrete to cite, e.g. a verdict modifier).
+type KeyResult = { pass: true; evidence?: string } | { pass: false; message: string };
 
 /**
  * Evaluate EVERY present key (AND semantics) — a multi-key assertion passes iff all of its
@@ -389,9 +392,9 @@ type KeyResult = { pass: true } | { pass: false; message: string };
  * cannot be evaluated (filesystem/egress, or question/gate when controlOut is absent) are stripped
  * from the object BEFORE this runs (see replayCassette), so AND never straddles replay classes.
  */
-function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: boolean; message?: string } {
+function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: boolean; message?: string; evidence?: string } {
   const results: KeyResult[] = [];
-  const ok = (): KeyResult => ({ pass: true });
+  const ok = (evidence?: string): KeyResult => ({ pass: true, evidence });
   const fail = (message: string): KeyResult => ({ pass: false, message });
   const truncated = ctx.truncatedPaths ?? new Map<string, "size" | "readonly" | "unreadable" | undefined>();
 
@@ -400,7 +403,7 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
       ctx.transcriptMissing
         ? fail(`evidence unavailable: transcript sidecar (run.jsonl) absent — cannot evaluate transcript_contains`)
         : ctx.transcript.includes(a.transcript_contains)
-          ? ok()
+          ? ok(`transcript_contains: found "${a.transcript_contains}"`)
           : fail(`transcript missing "${a.transcript_contains}"`),
     );
   if (a.transcript_not_contains !== undefined)
@@ -473,7 +476,7 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
         // verify the real path (after symlink resolution) is still under workRoot.
         const real = containedRealPath(ctx.workRoot, abs);
         if (!real) results.push(fail(`unsafe file_exists path "${a.file_exists}" — symlink target escapes the work root`));
-        else results.push(existsSync(real) ? ok() : fail(`file not found: ${a.file_exists} (under ${ctx.workRoot})`));
+        else results.push(existsSync(real) ? ok(`file_exists: "${a.file_exists}" present under ${ctx.workRoot}`) : fail(`file not found: ${a.file_exists} (under ${ctx.workRoot})`));
       }
     }
   }
@@ -509,7 +512,7 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
       }
     }
   }
-  if (a.tool_called !== undefined) results.push(ctx.toolsCalled.has(a.tool_called) ? ok() : fail(`tool not called: ${a.tool_called}`));
+  if (a.tool_called !== undefined) results.push(ctx.toolsCalled.has(a.tool_called) ? ok(`tool_called: ${a.tool_called} was called`) : fail(`tool not called: ${a.tool_called}`));
   if (a.tool_not_called !== undefined)
     results.push(
       ctx.toolsCalledMissing
@@ -618,7 +621,7 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
       ctx.costUsd === undefined
         ? fail(`evidence unavailable: cost telemetry absent — cannot evaluate max_cost_usd`)
         : ctx.costUsd <= a.max_cost_usd
-          ? ok()
+          ? ok(`max_cost_usd: $${ctx.costUsd} ≤ $${a.max_cost_usd}`)
           : fail(`cost $${ctx.costUsd} exceeds max $${a.max_cost_usd}`),
     );
   if (a.max_tokens !== undefined)
@@ -626,7 +629,7 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
       ctx.tokensTotal === undefined
         ? fail(`evidence unavailable: token telemetry absent — cannot evaluate max_tokens`)
         : ctx.tokensTotal <= a.max_tokens
-          ? ok()
+          ? ok(`max_tokens: ${ctx.tokensTotal} ≤ ${a.max_tokens}`)
           : fail(`${ctx.tokensTotal} tokens exceeds max ${a.max_tokens}`),
     );
   if (a.tool_calls_max !== undefined)
@@ -1024,7 +1027,7 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
         ? fail(
             `${key}: no computer:// link in the transcript — cannot verify a deliverable link resolves (use computer_links_resolve_if_present to pass when no link is expected)`,
           )
-        : ok();
+        : ok(`${key}: no computer:// links in the transcript (vacuous pass — _if_present)`);
     if (!ctx.linkResolution)
       return fail(
         `evidence unavailable: no link-resolution context wired for this lane — cannot evaluate ${key} (${links.length} link(s) found)`,
@@ -1034,7 +1037,9 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
       .map((link) => ({ link, outcome: resolveComputerLink(link, ctx.workRoot, ctx.linkResolution!) }))
       .filter(({ outcome }) => !outcome.resolved)
       .map(({ link, outcome }) => `computer://${link.raw} — checked ${outcome.checkedDescription}`);
-    return dangling.length === 0 ? ok() : fail(`dangling computer:// link(s)${tierNote}: ${dangling.join("; ")}`);
+    return dangling.length === 0
+      ? ok(`${key}: ${links.length} computer:// link(s) all resolved${tierNote}`)
+      : fail(`dangling computer:// link(s)${tierNote}: ${dangling.join("; ")}`);
   };
   if (a.computer_links_resolve !== undefined) results.push(evalComputerLinks("computer_links_resolve", true));
   if (a.computer_links_resolve_if_present !== undefined) results.push(evalComputerLinks("computer_links_resolve_if_present", false));
@@ -1236,9 +1241,15 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
       }
     }
   }
-  if (a.result !== undefined) results.push(ctx.result === a.result ? ok() : fail(`result was ${ctx.result}, expected ${a.result}`));
+  if (a.result !== undefined) results.push(ctx.result === a.result ? ok(`result: ${ctx.result}`) : fail(`result was ${ctx.result}, expected ${a.result}`));
 
   if (results.length === 0) return { assertion: a, pass: false, message: "empty assertion" };
   const firstFail = results.find((r): r is { pass: false; message: string } => !r.pass);
-  return firstFail ? { assertion: a, pass: false, message: firstFail.message } : { assertion: a, pass: true };
+  if (firstFail) return { assertion: a, pass: false, message: firstFail.message };
+  // All keys passed — gather the evidence each surfaced (AND-joined, one entry per key that cited something).
+  const evidence = results
+    .map((r) => (r as { evidence?: string }).evidence)
+    .filter(Boolean)
+    .join("; ");
+  return evidence ? { assertion: a, pass: true, evidence } : { assertion: a, pass: true };
 }

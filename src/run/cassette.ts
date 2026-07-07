@@ -2655,7 +2655,7 @@ export async function cmdReplay(args: string[]) {
   try {
     p = parseArgs(args, {
       // --quiet/--verbose accepted for flag consistency but currently no-op in replay (renderer plan is fixed).
-      booleans: ["--strict", "--fail-on-skill-drift", "--reassert", "--write", "--allow-failing", "--best-effort-future-cassette", "--quiet", "--verbose"],
+      booleans: ["--strict", "--fail-on-skill-drift", "--reassert", "--write", "--allow-failing", "--explain", "--best-effort-future-cassette", "--quiet", "--verbose"],
       values: ["--output-format", "--assert-from"],
       enums: { "--output-format": ["text", "json"] },
       aliases: { "-q": "--quiet" },
@@ -2667,7 +2667,7 @@ export async function cmdReplay(args: string[]) {
   const target = p.positionals[0];
   if (!target) {
     log(
-      "usage: replay <file.cassette.json | dir/> [--strict] [--fail-on-skill-drift] [--assert-from <scenario.yaml> | --reassert] [--write [--allow-failing]] [--output-format text|json]",
+      "usage: replay <file.cassette.json | dir/> [--strict] [--fail-on-skill-drift] [--assert-from <scenario.yaml> | --reassert] [--write [--allow-failing]] [--explain] [--output-format text|json]",
     );
     return process.exit(2);
   }
@@ -2693,6 +2693,10 @@ export async function cmdReplay(args: string[]) {
   // verdict gate (mirrors record).
   const write = p.flags["--write"] ?? false;
   const allowFailing = p.flags["--allow-failing"] ?? false;
+  // `--explain`: after each cassette's footer, print the evidence trail for its PASSING asserts (which link
+  // resolved, which file matched, which value satisfied a bound) — what lets an author trust a green isn't
+  // vacuous. Text-mode only; `--output-format json` already carries `assertions[].evidence` in the envelope.
+  const explain = p.flags["--explain"] ?? false;
   if (write && !reassertMode) {
     log("replay --write requires --reassert (or --assert-from <scenario.yaml>): it persists the RE-ASSERTED on-disk block, so there must be one to re-assert from");
     return process.exit(2);
@@ -2850,6 +2854,16 @@ export async function cmdReplay(args: string[]) {
     }
     // the replay lane evaluates assertions + result only; one verdict source for footer AND exit.
     if (!json) renderFooter(result, plan, { renderer, lane: "replay" });
+    if (explain && !json) {
+      // Per-passing-assert evidence trail. Names the concrete thing each green matched, so a vacuous pass
+      // (e.g. a presence-gated key that saw zero links) is legible instead of an unqualified "✓".
+      const passing = result.assertions.filter((r) => r.pass);
+      log(`\n[explain] ${f} — evidence for ${passing.length} passing assert(s):`);
+      for (const r of passing) {
+        const key = Object.keys(r.assertion).find((k) => (r.assertion as Record<string, unknown>)[k] !== undefined) ?? "(assert)";
+        log(`  ✓ ${key}${r.evidence ? ` — ${r.evidence}` : " — (no evidence trail for this key)"}`);
+      }
+    }
     results.push(result);
     const verdict = computeVerdict(result, "replay");
     worst = Math.max(worst, verdict.exitCode);
