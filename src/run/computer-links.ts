@@ -161,7 +161,11 @@ export function normalizeHostShapedForReplay(hostPath: string, folderPrefixes: M
   const structural = normalizeByStructuralMarker(hostPath);
   if (structural !== null) return structural;
   if (folderPrefixes) {
-    for (const [prefix, mountName] of folderPrefixes) {
+    // Longest prefix wins: Map iteration is insertion order, so nested connected folders (e.g.
+    // /Users/me/project declared after /Users/me) would otherwise remap to the wrong — shorter — mount.
+    // The `startsWith(prefix + "/")` boundary check below means the length sort introduces no new matches.
+    const byLongest = [...folderPrefixes].sort((a, b) => b[0].length - a[0].length);
+    for (const [prefix, mountName] of byLongest) {
       if (hostPath === prefix) return mountName;
       if (hostPath.startsWith(prefix + "/")) return mountName + hostPath.slice(prefix.length);
     }

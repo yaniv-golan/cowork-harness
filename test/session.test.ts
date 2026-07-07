@@ -53,6 +53,19 @@ describe("mount / path safety", () => {
     const existing = mkdtempSync(join(tmpdir(), "cowork-cfg-"));
     expect(() => plan({ plugins: { config_dir: existing } })).toThrow(/COWORK_HARNESS_ALLOW_CONFIG_DIR_WRITE/);
   });
+  it("pinning config_dir to a FILE fails with a clear not-a-directory error (even with the write opt-in)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "cowork-cfg-"));
+    const file = join(dir, "not-a-dir");
+    writeFileSync(file, "x");
+    const prev = process.env.COWORK_HARNESS_ALLOW_CONFIG_DIR_WRITE;
+    process.env.COWORK_HARNESS_ALLOW_CONFIG_DIR_WRITE = "1"; // past the existing-dir guard; must still reject a file
+    try {
+      expect(() => plan({ plugins: { config_dir: file } })).toThrow(/exists but is not a directory/);
+    } finally {
+      if (prev === undefined) delete process.env.COWORK_HARNESS_ALLOW_CONFIG_DIR_WRITE;
+      else process.env.COWORK_HARNESS_ALLOW_CONFIG_DIR_WRITE = prev;
+    }
+  });
   it("rejects a non-positive max_thinking_tokens (scalar and per-model map)", () => {
     expect(() => loadSession({ max_thinking_tokens: 0 })).toThrow();
     expect(() => loadSession({ max_thinking_tokens: -5 })).toThrow();

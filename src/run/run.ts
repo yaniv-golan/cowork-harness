@@ -555,6 +555,7 @@ export class Run {
           case "subagent_dispatch":
             this.rec.subagents.push({
               toolUseId: ev.toolUseId,
+              parentToolUseId: ev.parentToolUseId,
               agentType: ev.agentType,
               declaredTools: ev.declaredTools,
               toolsUsed: [],

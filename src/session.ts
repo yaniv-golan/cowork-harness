@@ -328,6 +328,10 @@ export function buildLaunchPlan(
       `plugins.config_dir is an existing directory (${pinnedConfigDir}); the harness would overwrite its settings.json/cowork_settings.json. ` +
         `Set COWORK_HARNESS_ALLOW_CONFIG_DIR_WRITE=1 to allow, or use a managed dir (config_dir: null).`,
     );
+  // A pinned config_dir that exists but is NOT a directory (e.g. a regular file) would otherwise fail
+  // cryptically at the mkdirSync below with ENOTDIR — behind the write escape-hatch above. Fail clearly.
+  if (pinnedConfigDir && existsSync(pinnedConfigDir) && !statSync(pinnedConfigDir).isDirectory())
+    throw new Error(`plugins.config_dir exists but is not a directory: ${pinnedConfigDir}`);
   const configDir = pinnedConfigDir ?? join(resolve(outDir), "claude-config");
   mkdirSync(join(configDir, "skills"), { recursive: true });
   mkdirSync(join(configDir, "plugins"), { recursive: true });

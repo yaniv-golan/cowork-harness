@@ -115,6 +115,17 @@ describe("normalizeHostShapedForReplay — structural marker + recorded folder p
   it("returns null for a host path matching no marker and no recorded prefix", () => {
     expect(normalizeHostShapedForReplay("/Users/joe/Elsewhere/report.pdf", new Map([["/Users/joe/Project", "myproject"]]))).toBeNull();
   });
+
+  it("picks the LONGEST matching prefix for nested connected folders (insertion order must not win)", () => {
+    // Parent declared BEFORE the nested child — a first-match loop would remap via the parent and
+    // produce the wrong mount. Longest-prefix wins regardless of Map insertion order.
+    const folderPrefixes = new Map([
+      ["/Users/me", "home"],
+      ["/Users/me/project", "proj"],
+    ]);
+    expect(normalizeHostShapedForReplay("/Users/me/project/x.txt", folderPrefixes)).toBe("proj/x.txt");
+    expect(normalizeHostShapedForReplay("/Users/me/other.txt", folderPrefixes)).toBe("home/other.txt");
+  });
 });
 
 describe("resolveComputerLink — live mode", () => {

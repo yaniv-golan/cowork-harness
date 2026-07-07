@@ -1155,16 +1155,19 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
         let doc: unknown;
         let parsed = true;
         const fileSizeLimit = 10 * 1024 * 1024;
-        const fileSize = statSync(realFile).size;
-        if (fileSize > fileSizeLimit) {
-          results.push(fail(`artifact_json: file too large to parse as JSON (${fileSize} bytes, limit 10 MiB)`));
-          parsed = false;
-        }
+        // statSync must be inside the same guard as readFileSync: evaluate()/check() are synchronous with no
+        // error boundary, so a TOCTOU/EACCES/IO error here (the file existed at existsSync but stat/read
+        // throws) would crash verification instead of failing the assertion.
         try {
+          const fileSize = statSync(realFile).size;
+          if (fileSize > fileSizeLimit) {
+            results.push(fail(`artifact_json: file too large to parse as JSON (${fileSize} bytes, limit 10 MiB)`));
+            parsed = false;
+          }
           if (parsed) doc = JSON.parse(readFileSync(realFile, "utf8"));
         } catch (e) {
           parsed = false;
-          results.push(fail(`artifact_json: ${aj.artifact} is not valid JSON: ${String((e as Error).message)}`));
+          results.push(fail(`artifact_json: ${aj.artifact} could not be read/parsed as JSON: ${String((e as Error).message)}`));
         }
         if (parsed) {
           const r = resolveDotPath(doc, aj.path);

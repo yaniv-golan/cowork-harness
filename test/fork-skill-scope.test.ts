@@ -89,4 +89,18 @@ describe("fork-scoped tool_use classification (fork skill / Agent(fork) inner to
     expect(bashGroup?.count).toBe(2);
     expect(rec.redundantToolCalls.find((g) => g.name === "Ls")).toBeUndefined();
   });
+
+  // #16: a subagent that dispatches a child carries parentToolUseId into its record, so result.json
+  // consumers can reconstruct the nested dispatch tree (it was silently dropped from the push before).
+  it("a nested subagent_dispatch records its parentToolUseId (dispatch tree is reconstructable)", async () => {
+    const rec = await drive([
+      { type: "tool_use", name: "Agent", input: { subagent_type: "general-purpose" }, toolUseId: "A" },
+      { type: "subagent_dispatch", toolUseId: "A", agentType: "general-purpose", declaredTools: [] },
+      { type: "subagent_dispatch", toolUseId: "C", parentToolUseId: "A", agentType: "general-purpose", declaredTools: [] },
+    ]);
+    const parent = rec.subagents.find((s) => s.toolUseId === "A");
+    const child = rec.subagents.find((s) => s.toolUseId === "C");
+    expect(parent?.parentToolUseId).toBeUndefined(); // top-level dispatch has no parent
+    expect(child?.parentToolUseId).toBe("A");
+  });
 });
