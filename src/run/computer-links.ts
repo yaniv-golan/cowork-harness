@@ -230,7 +230,20 @@ export function resolveComputerLink(link: ComputerLink, workRoot: string, resolu
     const rel = link.raw.replace(VM_MOUNT_RE, "");
     const abs = safeJoin(workRoot, rel);
     if (!abs) return { resolved: false, checkedDescription: `unsafe path (escapes the work root): ${rel}` };
-    return { resolved: existsSync(abs), checkedDescription: `work tree: ${abs}` };
+    // safeJoin is LEXICAL — `existsSync` then FOLLOWS symlinks, so an agent-created in-tree symlink
+    // pointing OUT of workRoot (the live container/microvm/hostloop work tree is agent-written) would
+    // otherwise resolve TRUE by walking onto the assertion host (a false-green + a host-file-existence
+    // oracle). Require realpath-containment once the path exists. Replay's materialized tree is
+    // symlink-free (materializeManifest writes placeholders, not symlinks), so this is a no-op there; a
+    // dangling / nonexistent path stays resolved:false via existsSync.
+    if (!existsSync(abs)) return { resolved: false, checkedDescription: `work tree: ${abs}` };
+    try {
+      if (!containedRealPath(workRoot, abs))
+        return { resolved: false, checkedDescription: `work tree: ${abs} — real path escapes the work root (symlink escape)` };
+    } catch {
+      return { resolved: false, checkedDescription: `work tree: ${abs} — containment check failed` };
+    }
+    return { resolved: true, checkedDescription: `work tree: ${abs}` };
   }
   if (resolution.mode === "live") {
     if (!resolution.hostRoots?.length) {
@@ -255,7 +268,10 @@ export function resolveComputerLink(link: ComputerLink, workRoot: string, resolu
         try {
           return containedRealPath(root, link.raw);
         } catch {
-          /* root vanished mid-check → lexical fallback below */
+          // realpath failed for an EXISTING link — the lexical fallback has no legitimate accepting case
+          // here (an existing link that realpath can't resolve is not a link we can vouch is in-root), so
+          // treat this root as non-containing rather than lexically (and possibly wrongly) accepting it.
+          return false;
         }
       }
       const r = resolve(root);

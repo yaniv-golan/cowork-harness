@@ -154,6 +154,18 @@ describe("resolveComputerLink — live mode", () => {
     expect(outcome.checkedDescription).toMatch(/unsafe/);
   });
 
+  // VM-shaped live: an agent-created in-tree symlink pointing OUT of workRoot must NOT resolve true by
+  // walking onto the host (existsSync follows symlinks; safeJoin is only lexical). Realpath-containment.
+  it("VM-shaped: an in-tree symlink whose target escapes workRoot is rejected (no host walk-out)", () => {
+    const outside = mkdtempSync(join(tmpdir(), "cwh-links-vm-esc-"));
+    writeFileSync(join(outside, "hosts"), "x");
+    symlinkSync(outside, join(root, "outputs", "evil")); // outputs/evil -> outside dir
+    const link = extractComputerLinks(`computer:///sessions/${SID}/mnt/outputs/evil/hosts`)[0];
+    const outcome = resolveComputerLink(link, root, { mode: "live" });
+    expect(outcome.resolved).toBe(false);
+    expect(outcome.checkedDescription).toMatch(/escape|escapes the work root/);
+  });
+
   it("host-shaped: with no hostRoots, an existing real path is evidence-unavailable, never a silent existsSync pass", () => {
     const realFile = join(root, "host-file.txt");
     writeFileSync(realFile, "x");

@@ -83,12 +83,16 @@ export function capturePreRunManifest(plan: LaunchPlan, workRoot: string, outDir
   const paths: string[] = [];
   const hashes: Record<string, string | null> = {};
   const stats: Record<string, { mtimeMs: number; size: number } | null> = {};
-  // A link entry (symlink/hardlink) is recorded path-only: it goes into `paths` (so no_unexpected_files's
-  // baseline includes it) but NOT into `hashes`/`stats` (so input_unmodified — which iterates the hash
-  // map — never treats it as content, and its target is never dereferenced/read).
+  // SYMLINK entries are recorded path-only: they go into `paths` (so no_unexpected_files's baseline
+  // includes them) but NOT into `hashes`/`stats` — a symlink has no protectable content and hashing would
+  // DEREFERENCE the target (potentially reading out-of-root content). HARDLINK entries ARE hashed like a
+  // regular file: a hardlink is a real inode with content at an in-root path (readFileSync reads it
+  // directly, no symlink following), so dropping it would silently strip a pre-existing hardlinked input
+  // (e.g. pnpm / `cp -l` trees on a hostloop folder mount) from input_unmodified's coverage — a vacuous
+  // pass where a real content check belongs.
   const add = (relPath: string, baseDir: string, linkKind?: "symlink" | "hardlink") => {
     paths.push(relPath);
-    if (linkKind) return;
+    if (linkKind === "symlink") return;
     hashes[relPath] = hashFileCapped(baseDir, relPath, cap);
     stats[relPath] = statCapture(baseDir, relPath);
   };
@@ -99,7 +103,7 @@ export function capturePreRunManifest(plan: LaunchPlan, workRoot: string, outDir
       // path with the mountPath prefix stripped (leading "<mountPath>/" removed).
       for (const e of collectArtifactPathsAt(m.hostPath, m.mountPath)) {
         paths.push(e.path);
-        if (e.linkKind) continue; // link: path-only, never hashed/dereferenced
+        if (e.linkKind === "symlink") continue; // symlink: path-only, never hashed/dereferenced (hardlink IS hashed)
         const rel = e.path === m.mountPath ? "" : e.path.slice(m.mountPath.length + 1);
         hashes[e.path] = hashFileCapped(m.hostPath, rel, cap);
         stats[e.path] = statCapture(m.hostPath, rel);

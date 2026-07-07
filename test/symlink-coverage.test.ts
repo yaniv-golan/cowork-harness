@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, linkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LaunchPlan } from "../src/session.js";
@@ -95,6 +95,20 @@ describe("#38 capturePreRunManifest — links path-only, never hashed/dereferenc
     expect(paths).toContain("outputs/real.txt");
     expect(Object.hasOwn(hashes, "outputs/link")).toBe(false); // NOT hashed — never dereferenced
     expect(Object.hasOwn(hashes, "outputs/real.txt")).toBe(true);
+  });
+
+  it("HASHES a pre-existing hardlink (real in-root content) so input_unmodified still covers it", () => {
+    const outDir = mkdtempSync(join(tmpdir(), "cwh-cap-hard-"));
+    const workRoot = join(outDir, "work", "session", "mnt");
+    mkdirSync(join(workRoot, "outputs"), { recursive: true });
+    writeFileSync(join(workRoot, "outputs", "a.txt"), "shared content");
+    linkSync(join(workRoot, "outputs", "a.txt"), join(workRoot, "outputs", "b.txt")); // hardlink: nlink=2 on both
+    capturePreRunManifest(minimalPlan(), workRoot, outDir, "container");
+    const hashes = readPreRunManifestHashes(outDir)!;
+    // A hardlink is a real inode with in-root content — it MUST be hashed (dropping it would silently
+    // strip it from input_unmodified's coverage). Both hardlinked names are hashed.
+    expect(typeof hashes["outputs/a.txt"]).toBe("string");
+    expect(typeof hashes["outputs/b.txt"]).toBe("string");
   });
 
   it("input_unmodified does not false-fail on a pre-existing symlink (link absent from hashes)", () => {
