@@ -53,7 +53,7 @@ import { evaluate, budgetFields, type AssertContext } from "../assert.js";
 import { anyGlobMatches } from "../glob.js";
 import { extractComputerLinks } from "./computer-links.js";
 import { makeRenderer, renderFooter, type RenderPlan } from "./renderer.js";
-import { jsonEnvelope, jsonPayloadEnvelope, parseOutputFormat } from "./envelope.js";
+import { jsonEnvelope, jsonPayloadEnvelope, parseOutputFormat, fail, isJsonOutput } from "./envelope.js";
 import { parseArgs } from "../cli-args.js";
 import { resolveInputs } from "./inputs.js";
 import { realProbe } from "./doctor.js";
@@ -1676,6 +1676,9 @@ async function recordScenarioFile(file: string, opts: RecordOpts): Promise<{ res
  *  run live + save a cassette. A single file records one; a dir batches; --rerecord-stale treats
  *  the dir as committed cassettes and re-records only those whose fingerprint drifted. */
 export async function cmdRecord(args: string[]) {
+  // Computed up front (isJsonOutput, not a bare p.options read) so every error path — including a
+  // parseArgs throw before options are known — emits the shared JSON error envelope in JSON mode.
+  const asJson = isJsonOutput(args);
   let p;
   try {
     p = parseArgs(args, {
@@ -1707,16 +1710,14 @@ export async function cmdRecord(args: string[]) {
       aliases: { "-q": "--quiet" },
     });
   } catch (e) {
-    log((e as Error).message);
-    return process.exit(2);
+    return fail("record", "usage", (e as Error).message, undefined, asJson);
   }
   let maxArtifactBytes: number | undefined;
   const mab = p.options["--max-artifact-bytes"];
   if (mab !== undefined) {
     const n = parseMaxArtifactBytes(mab);
     if (n === null) {
-      log(`record: --max-artifact-bytes must be a positive integer (got ${mab})`);
-      return process.exit(2);
+      return fail("record", "usage", `record: --max-artifact-bytes must be a positive integer (got ${mab})`, undefined, asJson);
     }
     maxArtifactBytes = n;
   }
@@ -1740,68 +1741,64 @@ export async function cmdRecord(args: string[]) {
   if (concRaw !== undefined) {
     const n = Number(concRaw);
     if (!Number.isInteger(n) || n < 1 || n > MAX_RECORD_CONCURRENCY) {
-      log(`record: --concurrency must be an integer 1..${MAX_RECORD_CONCURRENCY} (got ${concRaw})`);
-      return process.exit(2);
+      return fail("record", "usage", `record: --concurrency must be an integer 1..${MAX_RECORD_CONCURRENCY} (got ${concRaw})`, undefined, asJson);
     }
     concurrency = n;
   }
-  const asJson = p.options["--output-format"] === "json";
   const target = p.positionals[0];
   if (!target) {
-    log(
+    return fail(
+      "record",
+      "usage",
       "usage: record <scenario.yaml | dir/> [--out <file>] [--output-format text|json] [--rerecord-stale] [--no-redact] [--allow-failing] [--max-artifact-bytes <n>] [--concurrency <N>]\n" +
         '       answer gates live during the recording: [--decider-dir <dir>] (single scenario) | [--decider-llm [--intent "…"] [--decider-model <id>]] | [--on-unanswered fail|first]',
+      undefined,
+      asJson,
     );
-    return process.exit(2);
   }
   if (p.positionals.length > 1) {
-    log(`record takes a single scenario or dir (got ${p.positionals.length}: ${p.positionals.join(", ")})`);
-    return process.exit(2);
+    return fail("record", "usage", `record takes a single scenario or dir (got ${p.positionals.length}: ${p.positionals.join(", ")})`, undefined, asJson);
   }
   const isDir = existsSync(target) && statSync(target).isDirectory();
   // `--out` names ONE cassette; it has no meaning for a directory batch — reject rather than silently ignore.
   if (isDir && p.options["--out"] !== undefined) {
-    log("record: --out names a single cassette file and is not valid for a directory batch");
-    return process.exit(2);
+    return fail("record", "usage", "record: --out names a single cassette file and is not valid for a directory batch", undefined, asJson);
   }
 
   // Live-decider validation. Reuse the run/skill rules; reject ambiguous/unsupported combos
   // up front so a paid record never starts under a mis-specified policy.
   if (intent !== undefined && !deciderLlm) {
-    log("record: --intent requires --decider-llm (it states the test intent for the model answering live questions)");
-    return process.exit(2);
+    return fail("record", "usage", "record: --intent requires --decider-llm (it states the test intent for the model answering live questions)", undefined, asJson);
   }
   if (deciderModel !== undefined && !deciderLlm) {
-    log("record: --decider-model requires --decider-llm (it sets the model that answers live questions)");
-    return process.exit(2);
+    return fail("record", "usage", "record: --decider-model requires --decider-llm (it sets the model that answers live questions)", undefined, asJson);
   }
   if (deciderLlm && deciderDir !== undefined) {
-    log("record: --decider-llm and --decider-dir are mutually exclusive terminals (a model vs a driving agent). Drop one.");
-    return process.exit(2);
+    return fail("record", "usage", "record: --decider-llm and --decider-dir are mutually exclusive terminals (a model vs a driving agent). Drop one.", undefined, asJson);
   }
   if (deciderLlm && onUnansweredOpt !== undefined) {
-    log(`record: --decider-llm conflicts with --on-unanswered ${onUnansweredOpt} (it forces the model terminal). Drop one.`);
-    return process.exit(2);
+    return fail("record", "usage", `record: --decider-llm conflicts with --on-unanswered ${onUnansweredOpt} (it forces the model terminal). Drop one.`, undefined, asJson);
   }
   // --rerecord-stale re-records committed cassettes at the DEFAULT policy; a live decider there is undefined.
   if (rerecordStale && (deciderDir !== undefined || deciderLlm || onUnansweredOpt !== undefined)) {
-    log(
+    return fail(
+      "record",
+      "usage",
       "record: --rerecord-stale cannot be combined with --decider-dir/--decider-llm/--on-unanswered (it re-records existing cassettes at the default policy)",
+      undefined,
+      asJson,
     );
-    return process.exit(2);
   }
   // --decider-dir answers ONE interactive run in-band; a directory batch would interleave gates across N
   // cassettes on a single channel — bad UX. Restrict to a single scenario. (--decider-llm has no human, so a
   // batch is fine.)
   if (deciderDir !== undefined && isDir) {
-    log("record: --decider-dir answers a single interactive recording; use it with one scenario, not a directory batch");
-    return process.exit(2);
+    return fail("record", "usage", "record: --decider-dir answers a single interactive recording; use it with one scenario, not a directory batch", undefined, asJson);
   }
   // --concurrency only applies to a batch (dir-batch or --rerecord-stale over a dir); a single scenario has
   // nothing to parallelize. (--decider-dir is already dir-rejected above, so it can't co-occur with a batch.)
   if (concurrency > 1 && !isDir) {
-    log("record: --concurrency applies to a directory batch (or --rerecord-stale <dir>); a single scenario records one cassette");
-    return process.exit(2);
+    return fail("record", "usage", "record: --concurrency applies to a directory batch (or --rerecord-stale <dir>); a single scenario records one cassette", undefined, asJson);
   }
 
   const dryRun = p.flags["--dry-run"] ?? false;
@@ -1810,8 +1807,7 @@ export async function cmdRecord(args: string[]) {
     // Conflict guard: --dry-run + --rerecord-stale is undefined — dry-run of a stale re-record
     // has no clear semantics (it would need to select stale cassettes, which requires real FS work).
     if (rerecordStale) {
-      log("record: --dry-run and --rerecord-stale cannot be combined");
-      return process.exit(2);
+      return fail("record", "usage", "record: --dry-run and --rerecord-stale cannot be combined", undefined, asJson);
     }
 
     const token = realProbe.hasToken();
@@ -1841,11 +1837,12 @@ export async function cmdRecord(args: string[]) {
       if (disc.scenarios.length === 0) {
         if (disc.broken.length === 0) {
           if (!asJson) log(`record --dry-run: no scenarios discovered under ${target}`);
-          // Exit 2 for "nothing discovered at all" — matches the non-dry-run batch path.
-          return process.exit(2);
+          // Exit 2 for "nothing discovered at all" — matches the non-dry-run batch path. The JSON payload
+          // envelope was ALREADY emitted above; this is a status-only exit, so no error envelope here.
+          return process.exit(2); // cli-error-envelope-exempt: dry-run payload envelope already emitted above
         }
         // Broken files found but no valid scenarios — exit 1 (broken, not nothing).
-        return process.exit(1);
+        return process.exit(1); // cli-error-envelope-exempt: dry-run payload envelope already emitted above
       }
       if (!asJson) {
         log(`record --dry-run: ${disc.scenarios.length} scenario(s) in ${target}`);
@@ -1862,8 +1859,7 @@ export async function cmdRecord(args: string[]) {
     try {
       scenario = parseScenarioFile(target);
     } catch (e) {
-      log(`record --dry-run: cannot parse scenario: ${(e as Error).message}`);
-      return process.exit(2);
+      return fail("record", "usage", `record --dry-run: cannot parse scenario: ${(e as Error).message}`, undefined, asJson);
     }
     // mirror the EXACT default cassette path recordScenarioObject uses (slugForPath via the shared
     // defaultCassettePath helper) so a name with spaces/separators reports the same path it writes.
@@ -1897,11 +1893,14 @@ export async function cmdRecord(args: string[]) {
   // surface as result:"error" + empty stderr after the agent spawns.
   // Note: --dry-run bypasses this guard (dry-run branch exits before reaching here).
   if (!(process.env.CLAUDE_CODE_OAUTH_TOKEN || process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN)) {
-    log(
+    return fail(
+      "record",
+      "runtime",
       "record: no model credentials — set CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY " +
         "(in-Docker the macOS Keychain is not accessible; run `cowork-harness doctor` for full diagnostics)",
+      undefined,
+      asJson,
     );
-    return process.exit(2);
   }
 
   // Shared live-decider opts for the dir-batch and single-scenario record paths. (--rerecord-stale is
@@ -1916,8 +1915,7 @@ export async function cmdRecord(args: string[]) {
   // re-record only the drifted cassettes in a committed cassette dir.
   if (rerecordStale) {
     if (!isDir) {
-      log("record --rerecord-stale takes a DIRECTORY of committed cassettes");
-      return process.exit(2);
+      return fail("record", "usage", "record --rerecord-stale takes a DIRECTORY of committed cassettes", undefined, asJson);
     }
     const stale = selectStaleCassettes(target);
     if (stale.length === 0) {
@@ -2003,8 +2001,7 @@ export async function cmdRecord(args: string[]) {
     for (const s of disc.skipped) log(`· skipped (not a scenario — no \`prompt:\`): ${s}`);
     for (const b of disc.broken) log(`✗ ${b.file}: ${b.error}`);
     if (disc.scenarios.length === 0) {
-      log(`record: no scenarios discovered under ${target} (loud non-zero — not a vacuous "0 failures = green")`);
-      return process.exit(2);
+      return fail("record", "usage", `record: no scenarios discovered under ${target} (loud non-zero — not a vacuous "0 failures = green")`, undefined, asJson);
     }
     // Guard: two scenarios whose `name:` slugifies to the SAME default cassette path would clobber each other
     // (last-wins sequentially; a write RACE under --concurrency). Detect up front and fail loud — applies at
@@ -2024,11 +2021,14 @@ export async function cmdRecord(args: string[]) {
       else targets.set(cp, f);
     }
     if (dupes.length) {
-      log(
-        `record: ${dupes.length} scenario(s) share a cassette output path (their \`name:\` slugifies identically) — would clobber/race; give them distinct \`name:\`:`,
+      return fail(
+        "record",
+        "usage",
+        `record: ${dupes.length} scenario(s) share a cassette output path (their \`name:\` slugifies identically) — would clobber/race; give them distinct \`name:\`:\n` +
+          dupes.map((d) => `  ✗ ${d}`).join("\n"),
+        undefined,
+        asJson,
       );
-      for (const d of dupes) log(`  ✗ ${d}`);
-      return process.exit(2);
     }
 
     const total = disc.scenarios.length;
@@ -2089,8 +2089,7 @@ export async function cmdRecord(args: string[]) {
     if (asJson) out(jsonEnvelope("record", [r.result], { extra: { artifacts: r.artifacts, cassette: r.cassettePath } }));
     else log(`✓ recorded ${r.result.result} · ${r.artifacts} artifact(s) → ${r.cassettePath}`);
   } catch (e) {
-    log(`record: ${recordErrorText(e)}`);
-    return process.exit(1);
+    return fail("record", "usage", `record: ${recordErrorText(e)}`, undefined, asJson, 1);
   } finally {
     channel?.close?.();
   }
@@ -2694,6 +2693,8 @@ async function writeReassertedAssertBlock(
  *  `assert:`+`expect_denied:`; on that path recording-shaping drift (prompt/answers/baseline/skills) and skill
  *  staleness HARD-FAIL, so on-disk asserts can never green against events a different scenario/skill produced. */
 export async function cmdReplay(args: string[]) {
+  // Up-front JSON detection (see cmdRecord) so every error path emits the shared envelope in JSON mode.
+  const asJson = isJsonOutput(args);
   let p;
   try {
     p = parseArgs(args, {
@@ -2714,19 +2715,20 @@ export async function cmdReplay(args: string[]) {
       aliases: { "-q": "--quiet" },
     });
   } catch (e) {
-    log(String((e as Error).message));
-    return process.exit(2);
+    return fail("replay", "usage", String((e as Error).message), undefined, asJson);
   }
   const target = p.positionals[0];
   if (!target) {
-    log(
+    return fail(
+      "replay",
+      "usage",
       "usage: replay <file.cassette.json | dir/> [--strict] [--fail-on-skill-drift] [--assert-from <scenario.yaml> | --reassert] [--write [--allow-failing]] [--explain] [--output-format text|json]",
+      undefined,
+      asJson,
     );
-    return process.exit(2);
   }
   if (p.positionals.length > 1) {
-    log(`replay takes one target (got ${p.positionals.length}: ${p.positionals.join(", ")})`);
-    return process.exit(2);
+    return fail("replay", "usage", `replay takes one target (got ${p.positionals.length}: ${p.positionals.join(", ")})`, undefined, asJson);
   }
   const json = p.options["--output-format"] === "json";
   const strict = p.flags["--strict"] ?? false; // escalate ALL staleness findings to failures (release gate)
@@ -2737,8 +2739,7 @@ export async function cmdReplay(args: string[]) {
   const assertFrom = p.options["--assert-from"];
   const reassert = p.flags["--reassert"] ?? false;
   if (assertFrom !== undefined && reassert) {
-    log("replay: --assert-from and --reassert are mutually exclusive (--assert-from names a file; --reassert auto-resolves the sibling)");
-    return process.exit(2);
+    return fail("replay", "usage", "replay: --assert-from and --reassert are mutually exclusive (--assert-from names a file; --reassert auto-resolves the sibling)", undefined, asJson);
   }
   const reassertMode = assertFrom !== undefined || reassert;
   // `--write` persists the re-validated on-disk assert block back into the cassette — only meaningful on the
@@ -2751,10 +2752,13 @@ export async function cmdReplay(args: string[]) {
   // vacuous. Text-mode only; `--output-format json` already carries `assertions[].evidence` in the envelope.
   const explain = p.flags["--explain"] ?? false;
   if (write && !reassertMode) {
-    log(
+    return fail(
+      "replay",
+      "usage",
       "replay --write requires --reassert (or --assert-from <scenario.yaml>): it persists the RE-ASSERTED on-disk block, so there must be one to re-assert from",
+      undefined,
+      asJson,
     );
-    return process.exit(2);
   }
   if (allowFailing && !write)
     warn("::notice:: [replay] --allow-failing only affects --write's verdict gate; it is a no-op without --write\n");
@@ -2765,8 +2769,7 @@ export async function cmdReplay(args: string[]) {
     );
   const resolved = resolveInputs(target, ".cassette.json");
   if ("error" in resolved) {
-    log(`replay: ${resolved.error}`);
-    return process.exit(2);
+    return fail("replay", "usage", `replay: ${resolved.error}`, undefined, asJson);
   }
   const plan: RenderPlan = {
     live: false,
@@ -2787,10 +2790,13 @@ export async function cmdReplay(args: string[]) {
   // `--assert-from <one file> --write` over a dir would clone-write ONE assert block into every cassette —
   // the cross-assert footgun made permanent. For a dir, require --reassert (each cassette's own sibling).
   if (write && assertFrom !== undefined && resolved.files.length > 1) {
-    log(
+    return fail(
+      "replay",
+      "usage",
       "replay --assert-from <one file> --write over a directory is refused (it would write one assert block into every cassette) — use --reassert for a per-cassette sibling",
+      undefined,
+      asJson,
     );
-    return process.exit(2);
   }
   const results: RunResult[] = [];
   let worst = 0;
@@ -3014,6 +3020,8 @@ async function computeCassetteMargins(cassette: Cassette, cassetteDir: string): 
  *  real PII finding or staleness drift; `unscanned` notes are informational. Dedicated JSON envelope.
  *  `--margins` adds a per-count-assert recorded-vs-budget report (a per-cassette replay cost, single-sample). */
 export async function cmdVerifyCassettes(args: string[]) {
+  // Up-front JSON detection (see cmdRecord) so every error path emits the shared envelope in JSON mode.
+  const asJson = isJsonOutput(args);
   let p;
   try {
     p = parseArgs(args, {
@@ -3025,15 +3033,13 @@ export async function cmdVerifyCassettes(args: string[]) {
       aliases: { "-q": "--quiet" },
     });
   } catch (e) {
-    log(String((e as Error).message));
-    return process.exit(2);
+    return fail("verify-cassettes", "usage", String((e as Error).message), undefined, asJson);
   }
   const json = p.options["--output-format"] === "json";
   const skipPrivacy = p.flags["--skip-privacy"] ?? false;
   const skipStaleness = p.flags["--skip-staleness"] ?? false;
   if (skipPrivacy && skipStaleness) {
-    log("verify-cassettes: --skip-privacy and --skip-staleness are mutually exclusive (together they'd check nothing)");
-    return process.exit(2);
+    return fail("verify-cassettes", "usage", "verify-cassettes: --skip-privacy and --skip-staleness are mutually exclusive (together they'd check nothing)", undefined, asJson);
   }
   const doPrivacy = !skipPrivacy;
   const doStaleness = !skipStaleness;
@@ -3051,8 +3057,7 @@ export async function cmdVerifyCassettes(args: string[]) {
     try {
       allow.push({ cls, re: new RegExp(src, "i") });
     } catch {
-      log(`${flag}: invalid regex: ${src}`);
-      process.exit(2);
+      return fail("verify-cassettes", "usage", `${flag}: invalid regex: ${src}`, undefined, asJson);
     }
   };
   for (const src of p.repeated["--allow"] ?? []) addAllow(src, undefined, "--allow");
@@ -3065,8 +3070,7 @@ export async function cmdVerifyCassettes(args: string[]) {
     try {
       body = readFileSync(file, "utf8");
     } catch (e) {
-      log(`--allow-patterns-file: cannot read ${file}: ${(e as Error).message}`);
-      return process.exit(2);
+      return fail("verify-cassettes", "usage", `--allow-patterns-file: cannot read ${file}: ${(e as Error).message}`, undefined, asJson);
     }
     for (const raw of body.split("\n")) {
       const line = raw.trim();
@@ -3075,25 +3079,22 @@ export async function cmdVerifyCassettes(args: string[]) {
   }
   const target = p.positionals[0];
   if (!target) {
-    log(
-      "usage: verify-cassettes <file|dir> [--skip-privacy|--skip-staleness] [--skip-scenario-drift] [--margins] [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-path <regex>]... [--allow-machine-inventory <regex>]... [--allow-patterns-file <path>]... [--output-format json]",
+    return fail(
+      "verify-cassettes",
+      "usage",
+      "usage: verify-cassettes <file|dir> [--skip-privacy|--skip-staleness] [--skip-scenario-drift] [--margins] [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-path <regex>]... [--allow-machine-inventory <regex>]... [--allow-patterns-file <path>]... [--output-format json]\n" +
+        "  --allow <regex> is a PATTERN (matched against a finding); --allow-patterns-file <path> is a FILE of patterns, one regex per line — not a path to allow.\n" +
+        "  --margins reports recorded-vs-budget for each count-bound assert (adds a per-cassette replay cost; a SINGLE-SAMPLE estimate — one cassette ≠ variance). Diagnostic only; never changes the gate verdict.",
+      undefined,
+      asJson,
     );
-    log(
-      "  --allow <regex> is a PATTERN (matched against a finding); --allow-patterns-file <path> is a FILE of patterns, one regex per line — not a path to allow.",
-    );
-    log(
-      "  --margins reports recorded-vs-budget for each count-bound assert (adds a per-cassette replay cost; a SINGLE-SAMPLE estimate — one cassette ≠ variance). Diagnostic only; never changes the gate verdict.",
-    );
-    return process.exit(2);
   }
   if (p.positionals.length > 1) {
-    log(`verify-cassettes takes one <file|dir> (got ${p.positionals.length}: ${p.positionals.join(", ")})`);
-    return process.exit(2);
+    return fail("verify-cassettes", "usage", `verify-cassettes takes one <file|dir> (got ${p.positionals.length}: ${p.positionals.join(", ")})`, undefined, asJson);
   }
   const resolved = resolveInputs(target, ".cassette.json");
   if ("error" in resolved) {
-    log(`verify-cassettes: ${resolved.error}`);
-    return process.exit(2);
+    return fail("verify-cassettes", "usage", `verify-cassettes: ${resolved.error}`, undefined, asJson);
   }
   const files = resolved.files;
   const results = files.map((f) => {
@@ -3220,6 +3221,9 @@ export async function cmdVerifyCassettes(args: string[]) {
  *
  *  Safe to run repeatedly: already-current cassettes are reported as skipped. */
 export function cmdRehash(args: string[]): void {
+  // isJsonOutput (not a bare `p.options` read): it works even when parseArgs throws below, and honors the
+  // --output-format=json equals-form and the COWORK_HARNESS_OUTPUT_FORMAT env var a bare check would miss.
+  const asJson = isJsonOutput(args);
   let p;
   try {
     p = parseArgs(args, {
@@ -3228,28 +3232,23 @@ export function cmdRehash(args: string[]): void {
       enums: { "--output-format": ["text", "json"] },
     });
   } catch (e) {
-    log((e as Error).message);
-    return process.exit(2);
+    return fail("rehash", "usage", (e as Error).message, undefined, asJson);
   }
   if (p.positionals.length !== 1) {
-    log("usage: rehash <dir/> [--dry-run] [--output-format text|json]");
-    return process.exit(2);
+    return fail("rehash", "usage", "usage: rehash <dir/> [--dry-run] [--output-format text|json]", undefined, asJson);
   }
   const dir = p.positionals[0];
   if (!existsSync(dir) || !statSync(dir).isDirectory()) {
-    log(`rehash: not a directory: ${dir}`);
-    return process.exit(2);
+    return fail("rehash", "usage", `rehash: not a directory: ${dir}`, undefined, asJson);
   }
 
   const dryRun = p.flags["--dry-run"] ?? false;
-  const asJson = p.options["--output-format"] === "json";
 
   let liveBaseline: string;
   try {
     liveBaseline = loadBaseline("latest").appVersion;
   } catch (e) {
-    log(`rehash: cannot load latest baseline — ${(e as Error).message}`);
-    return process.exit(1);
+    return fail("rehash", "runtime", `rehash: cannot load latest baseline — ${(e as Error).message}`, undefined, asJson, 1);
   }
 
   const files = readdirSync(dir)
