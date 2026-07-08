@@ -467,6 +467,34 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
     expect(checkSpawnContractFacts(renamed)).toEqual([]);
   });
 
+  // 1c. Build-shape regression: the three anchors that drifted on the Vite/SDK bundle refactor must stay
+  // clean in their NEW shapes. CI runs on Linux with no Desktop, so the live-asar tests skip there; this
+  // exercises the new shapes synthetically so the regex branches are covered in CI too:
+  //  - S4: the inline `?const:0}` ternary hoisted into a helper (`return e??t??!r?const:0}`);
+  //  - S14b: the sdkOptions env var re-minified (V.env → F.env), blank helper still called on it;
+  //  - S17: the bundled SDK's typed env-var registry declares the key as a lazy export getter (`KEY:()=>x`)
+  //    — a declaration, not a spawn-env construction — which must NOT trip the negative invariant, while a
+  //    genuine construction (`KEY:"1"`) alongside it still does.
+  it("build-shape regression: hoisted S4 helper, F-renamed blank-env, and the SDK export getter stay clean", () => {
+    const variant =
+      fixture()
+        // S4: hoist the inline ternary into a helper — the key now holds a call, `?FKa:0}` lives in the body.
+        .replace("maxThinkingTokens:r.extendedThinkingEnabled??!mOt()?FKa:0}", "maxThinkingTokens:zHelper(r.extendedThinkingEnabled,ovr,mOt())}")
+        .replace("function FnA", "function zHelper(e,t,r){return e??t??!r?FKa:0}function FnA")
+        // S14b: re-minify the sdkOptions env var V.env → F.env; the blank helper is still called on it.
+        .replace(
+          "V.env={...V.env,ANTHROPIC_CUSTOM_HEADERS:jXe(V.env,pf)},FnA(V.env),",
+          "F.env={...F.env,ANTHROPIC_CUSTOM_HEADERS:jXe(F.env,pf)},FnA(F.env),",
+        ) +
+      // S17: the SDK env-registry's lazy export getter — a declaration, outside every env window.
+      ";CLAUDE_CODE_USE_COWORK_PLUGINS:()=>Pei;";
+    expect(variant).not.toBe(fixture()); // the transforms actually applied
+    expect(checkSpawnContractFacts(variant)).toEqual([]);
+    // A genuine construction of the key still fires S17 even alongside the benign getter form.
+    const withRealKey = variant.replace('CLAUDE_CODE_IS_COWORK:"1"', 'CLAUDE_CODE_USE_COWORK_PLUGINS:"1",CLAUDE_CODE_IS_COWORK:"1"');
+    expect(checkSpawnContractFacts(withRealKey).some((f) => f.includes("S17"))).toBe(true);
+  });
+
   // 2. Per-fact mutation table: mutate/drop each token → exactly the matching flag names the field.
   const STRUCT_MUT: [string, string, string][] = [
     ['settingSources:["user"]', 'settingSources:["admin"]', "S2"],

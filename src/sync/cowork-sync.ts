@@ -741,7 +741,12 @@ export function checkSpawnContractFacts(bundle: string): string[] {
   if (!has(/settingSources:\["user"\]/)) miss("S2 settingSources", 'settingSources:["user"] is gone');
   if (!has(/permissionMode:.{0,24}\?"default"/)) miss("S3 permissionMode", "the default-permissionMode ternary is gone");
   {
-    const m = bundle.match(/maxThinkingTokens:[^,}]{0,60}\?(\w+\$?):0\}/);
+    // The `?<const>:0}` max-thinking pin appears in two build shapes: inline at the `maxThinkingTokens:`
+    // key (older monolithic builds) OR hoisted into a small helper `return e??t??!r?<const>:0}` (the
+    // ternary was extracted into a named function, so the value expression at the key is now a call with
+    // commas and no longer matches an inline capture). Either branch captures the value-holding const,
+    // which must still resolve to 31999 — a mis-capture fails that check loudly rather than false-greening.
+    const m = bundle.match(/(?:maxThinkingTokens:[^,}]{0,60}|return [\w$]+\?\?[\w$]+\?\?![\w$]+)\?(\w+\$?):0\}/);
     if (!m) miss("S4 maxThinkingTokens", "the maxThinkingTokens capture is gone");
     else if (resolveConst(bundle, m[1]) !== "31999") miss("S4 maxThinkingTokens", `resolved to ${resolveConst(bundle, m[1])} not 31999`);
   }
@@ -775,12 +780,20 @@ export function checkSpawnContractFacts(bundle: string): string[] {
     miss("S13 DISABLE_CRON ternary", "the disableCron?'1':'' shape changed");
   if (!has(/for\(const \w+ of\s*\[?"ANTHROPIC_API_KEY","ANTHROPIC_AUTH_TOKEN","ANTHROPIC_CUSTOM_HEADERS"\]/))
     miss("S14a FnA definition", "the empty-ANTHROPIC_* delete helper is gone");
-  if (!has(/ANTHROPIC_CUSTOM_HEADERS:\w+\(V\.env[\s\S]{0,40}\},\w+\(V\.env\)/))
-    miss("S14b FnA application", "FnA(V.env) no longer runs on the spawn env — the '' blanks would leak into production");
+  // The blank-empties helper must be CALLED on the same env object that just received ANTHROPIC_CUSTOM_HEADERS
+  // (…},helper(X.env)). The sdkOptions var name is minifier-assigned (V→F across builds); capture it and
+  // backreference so the guarantee "blank runs on THIS env" survives the rename without hardcoding the name.
+  if (!has(/ANTHROPIC_CUSTOM_HEADERS:\w+\((\w+\$?)\.env[\s\S]{0,40}\},\w+\(\1\.env\)/))
+    miss("S14b FnA application", "the empty-ANTHROPIC_* blank helper no longer runs on the spawn env — the '' blanks would leak into production");
   if (!has(/preset:"claude_code"/)) miss("S15 promptTemplate delivery", "the claude_code preset-append delivery site is gone");
   if (!has(/appendSubagentSystemPrompt:\w+\(\{/))
     miss("S16 subagentAppend generator", "the per-session subagent-append generator call shape is gone");
-  if (has(/CLAUDE_CODE_USE_COWORK_PLUGINS\s*:/))
+  // Negative invariant: the spawn env must never CONSTRUCT this key (it would flip the agent to
+  // cowork_settings.json/cowork_plugins). The bundled SDK's typed env-var registry legitimately DECLARES
+  // the key as a lazy module-export getter (`CLAUDE_CODE_USE_COWORK_PLUGINS:()=>…`); that declaration is
+  // not a spawn-env construction, so exclude the `:()=>` getter shape. A real construction
+  // (`KEY:"1"`, `KEY:gate?"1":""`, `…cond&&{KEY:…}`) still matches and fires.
+  if (has(/CLAUDE_CODE_USE_COWORK_PLUGINS\s*:(?!\(\)=>)/))
     flags.push(
       `spawn: NEGATIVE INVARIANT S17 broken — CLAUDE_CODE_USE_COWORK_PLUGINS is now SET; it would flip the agent to cowork_settings.json/cowork_plugins; ${SPAWN_NO_BYPASS}`,
     );
