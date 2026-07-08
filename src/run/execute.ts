@@ -45,7 +45,8 @@ import { decideLoopFromBaseline, readGateFlag } from "../loop-decision.js";
 import type { WebFetchProvenance } from "../hostloop/workspace-handler.js";
 import { startEgressSidecar, registerCleanup, type EgressSidecar } from "../egress/sidecar.js";
 import { startEgressProxy } from "../egress/proxy.js";
-import { evaluate, hostMatches, budgetFields, type AssertContext } from "../assert.js";
+import { evaluate, hostMatches, budgetFields, runSemanticJudges, type AssertContext, type SemanticJudge } from "../assert.js";
+import { makeSemanticJudge } from "../decide/semantic-judge.js";
 import { compileUserRegex } from "../regex.js";
 import { renderPrompts } from "../prompt.js";
 import { makeDisplayTranslator, vmPathContextFromPlan } from "./display-translate.js";
@@ -90,6 +91,9 @@ export interface ExecuteOptions {
   llmIntent?: string;
   /** override the LLM decider's answering model (`--decider-model`); falls back to env then the Sonnet default. */
   llmModel?: string;
+  /** override the `semantic_matches` judge — mainly so tests inject a stub in place of the live LLM
+   *  judge. Default: makeSemanticJudge() (the real judge, via the shared claude -p transport). */
+  semanticJudge?: SemanticJudge;
   /** mark the run non-deterministic even if no `by:"llm"` decision (e.g. a driving agent answers via `--decider-dir`). */
   nonDeterministicHint?: boolean;
   hooks?: RunHooks[];
@@ -845,7 +849,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // assembleRunResult call further down. A second read could disagree if the sampler wrote between them.
   const resources = foldResources(outDir, effectiveFidelity, resolveIntervalMs());
 
-  const assertions = evaluate(scenario.assert, {
+  const assertCtx: AssertContext = {
     transcript: record.transcript,
     toolsCalled: record.toolsCalled,
     subagentTools: record.subagentTools,
@@ -908,7 +912,15 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     },
     ...budgetFields(record),
     resources,
-  });
+  };
+
+  // LIVE lane: grade any `semantic_matches` asserts with the LLM judge BEFORE the synchronous
+  // evaluate() reads the per-claim results into check(). Gated so a scenario with no such assert never
+  // spends a model call. (Replay strips `semantic_matches` as live-only, so it never reaches here.)
+  if (scenario.assert.some((a) => a.semantic_matches !== undefined)) {
+    await runSemanticJudges(scenario.assert, assertCtx, opts.semanticJudge ?? makeSemanticJudge());
+  }
+  const assertions = evaluate(scenario.assert, assertCtx);
 
   if (scenario.fidelity === "protocol" && (record.toolsCalled.has("WebFetch") || record.toolsCalled.has("WebSearch"))) {
     warn(`::warning:: ${scenario.name}: a network tool ran at L0 (protocol) — egress is NOT enforced here.\n`);
