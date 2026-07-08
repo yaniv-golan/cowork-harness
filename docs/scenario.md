@@ -21,6 +21,10 @@ name: my-test                             # OPTIONAL — defaults to the filenam
 baseline: latest                          # platform baseline: "latest" or "desktop-<ver>"
 session: ../sessions/default.yaml        # the pre-prompt setup (resolved relative to THIS file)
 fidelity: container                      # protocol | container | microvm | hostloop | cowork (see below)
+execution: local                         # OPTIONAL — orthogonal to fidelity (a privilege/sandbox tier, all
+                                         # local today): local (default) | cloud-describe (RESERVED — no
+                                         # runner exists yet; authoring it is a load-time error, not a
+                                         # silent no-op)
 on_unanswered: fail                      # optional: policy for unscripted questions (fail | prompt | first | llm)
 
 prompt: |                                # the user turn
@@ -401,10 +405,10 @@ and re-evaluates the **content** assertions. The authoritative list of content k
 `src/run/cassette.ts`; the table below is derived from it.
 
 **Evaluated on replay (content assertions):**
-`transcript_*` (incl. `transcript_matches`), `tool_*`, `subagent_*`, `dispatch_count_max`,
+`transcript_*` (incl. `transcript_matches`), `tool_*` (incl. `tool_available`), `subagent_*`, `dispatch_count_max`,
 `skill_triggered`, `no_skill_triggered`, `max_cost_usd`, `max_tokens`, `tool_calls_max`, `max_turns`,
 `max_tool_errors`, `max_redundant_tool_calls`, `skill_available`, `connector_available`,
-`skill_tool_used`, `compaction_occurred`, `all_tasks_completed`, `task_status`, `no_scratchpad_leak`,
+`skill_tool_used`, `compaction_occurred`, `all_tasks_completed`, `task_count_min`, `task_status`, `no_scratchpad_leak`,
 `present_files_called`,
 `result`, and the verdict modifiers `allow_permissive_auto_allow` / `allow_missing_capability` /
 `allow_l0_plugin_divergence` / `allow_stall` (kept on replay as no-op passes). `max_cost_usd`/`max_tokens`
@@ -419,7 +423,7 @@ When `controlOut` is absent (old cassette), a **loud warning** fires and these k
 from evaluation (not vacuously passed). Re-record with a current harness to enable them.
 
 **Filesystem assertions** (`file_exists`, `user_visible_artifact`, `artifact_json`, `computer_links_resolve`,
-`no_unexpected_files`, `input_unmodified`)
+`computer_links_resolve_if_present`, `no_unexpected_files`, `input_unmodified`)
 run on `replay` **when the cassette carries an artifact manifest** — `record` snapshots `outputs/` + connected
 folders (paths + hashes + small JSON bodies) into the cassette, and `replay` materializes that snapshot to
 evaluate them token-free. `artifact_json` needs the JSON body inlined (small files); a hash-only (oversized)
@@ -427,7 +431,7 @@ entry still satisfies `file_exists` but not `artifact_json`. `computer_links_res
 `/sessions/…/mnt/…`-shaped links and host-shaped (hostloop) links against the manifest — a host-shaped link
 normalizes to a mount-relative path first (via the recorded connected-folder prefixes + the outputs/uploads
 mounts), since replay has no live filesystem to probe directly (that direct check only happens on a live
-`run`/`verify-run`). Without a manifest (older cassettes), all four are **skipped** (loud).
+`run`/`verify-run`). Without a manifest (older cassettes), all seven are **skipped** (loud).
 
 A `mode: r` connected folder (see [session.md](./session.md)) holds pre-existing INPUTS, not deliverables —
 `record` captures its contents **body-less** (path + hash, `truncated: true`, no `body`): `file_exists` and
@@ -627,7 +631,8 @@ example.
 One scenario, a cross-product of axes, one command. `--matrix <matrix.yaml>` runs the resolved scenario
 once per cell of a matrix file's declared axes and reports one row per cell, instead of one pass/fail for
 the whole run. For a real, runnable starting point (not just the illustrative snippet below), see
-[`examples/matrices/csv-metrics-matrix.yaml`](../examples/matrices/csv-metrics-matrix.yaml) — it matrixes
+[`examples/matrices/csv-metrics-matrix.yaml`](../examples/matrices/csv-metrics-matrix.yaml)
+*(source checkout only — not shipped in the npm package)* — it matrixes
 `examples/scenarios/csv-metrics.yaml` across the two most recent shipped baselines:
 
 ```bash

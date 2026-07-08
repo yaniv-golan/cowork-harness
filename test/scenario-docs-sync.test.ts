@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { Assertion } from "../src/types.js";
+import { MANIFEST_KEYS } from "../src/run/cassette";
 
 // Anti-drift guard: docs/scenario.md's "Full schema" assertion table hand-documents every key in
 // the Assertion zod schema (src/types.ts) — the same source `assertion-keys.json` / `Assertion.shape`
@@ -46,5 +47,64 @@ describe("docs/scenario.md ↔ src/types.ts Assertion key sync", () => {
   it("every authorable assertion key is documented with a real table row", () => {
     const missing = authorableKeys.filter((k) => !tableRow(k).test(doc));
     expect(missing, `docs/scenario.md is missing assertion table rows for: ${missing.join(", ")}`).toEqual([]);
+  });
+});
+
+// Anti-drift guard: docs/scenario.md's "### Which assertions survive `replay` (CI placement)" section
+// hand-summarizes which assertion keys the replay lane evaluates, bucketed by when they're evaluated
+// (always / only with controlOut / only with an artifact manifest). MANIFEST_KEYS (src/run/cassette.ts)
+// is the authoritative list for the manifest-gated bucket ("Filesystem assertions") — this is the same
+// root cause that let the "Filesystem assertions" key list and its "all N are skipped" count drift
+// stale (both fixed alongside this guard). Catch a future drift mechanically instead of relying on a
+// human noticing during review, mirroring how test/cassette-docs-sync.test.ts guards docs/cassette.md
+// and README.md against the same three cassette.ts key arrays.
+describe("docs/scenario.md ↔ src/run/cassette.ts MANIFEST_KEYS sync", () => {
+  const doc = readFileSync(resolve("docs/scenario.md"), "utf8");
+
+  // Extract the whole "Which assertions survive `replay`" section (heading to the next same-level
+  // heading), not just the first bolded paragraph under it — the section's later "Filesystem
+  // assertions" paragraph is where MANIFEST_KEYS is actually enumerated. Anchoring by heading text
+  // (not a line number) survives edits elsewhere in the file; failing loudly if either anchor moved
+  // avoids a silent vacuous pass (same discipline the README section guard above uses).
+  const startMarker = "### Which assertions survive `replay` (CI placement)";
+  const endMarker = "### Scenario YAML vs the pytest `cowork` lane";
+  const startIdx = doc.indexOf(startMarker);
+  const endIdx = startIdx === -1 ? -1 : doc.indexOf(endMarker, startIdx);
+
+  it('found the "Which assertions survive `replay`" section', () => {
+    expect(startIdx, `docs/scenario.md's "${startMarker}" heading was not found — did it move or get renamed?`).toBeGreaterThan(-1);
+    expect(endIdx, `docs/scenario.md's "${endMarker}" heading (end of the section) was not found`).toBeGreaterThan(startIdx);
+  });
+
+  const section = startIdx === -1 || endIdx === -1 ? "" : doc.slice(startIdx, endIdx);
+
+  it("parsed a non-empty section", () => {
+    // sanity: catches a marker match that somehow yielded an empty/near-empty slice
+    expect(section.length).toBeGreaterThan(200);
+  });
+
+  it("parsed a sane MANIFEST_KEYS set", () => {
+    // sanity: catches an import that silently resolved to an empty/undefined array
+    expect(MANIFEST_KEYS.length).toBeGreaterThan(3);
+    expect(MANIFEST_KEYS).toContain("file_exists");
+  });
+
+  // A key is "covered" if its literal backtick token appears in the section, OR an accepted
+  // `prefix_*` wildcard token appears whose prefix is a prefix of the key — mirrors the covered()
+  // helper in test/cassette-docs-sync.test.ts's README guard. None of MANIFEST_KEYS currently share a
+  // wildcard-able prefix with the section's `transcript_*`/`tool_*`/`subagent_*` tokens, so today every
+  // member must be covered by a literal mention — but the wildcard branch is kept so this guard doesn't
+  // need updating if a future manifest key happens to share one of those prefixes.
+  const covered = (key: string): boolean => {
+    if (section.includes(`\`${key}\``)) return true;
+    for (const m of section.matchAll(/`([a-zA-Z0-9]+_)\*`/g)) {
+      if (key.startsWith(m[1])) return true;
+    }
+    return false;
+  };
+
+  it("every MANIFEST_KEYS member is covered in the section", () => {
+    const missing = MANIFEST_KEYS.filter((k) => !covered(k));
+    expect(missing, `docs/scenario.md's replay section is missing: ${missing.join(", ")}`).toEqual([]);
   });
 });

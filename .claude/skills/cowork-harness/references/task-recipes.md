@@ -66,6 +66,8 @@ Top-level fields of a `*.cassette.json` (schema `schema/cassette.v10.json`):
 | `authoring` | Present iff a live decider answered ≥1 gate during recording (`nonDeterministic: true`) |
 | `sessionFingerprint` | v9+: hash of the session's content-relevant SHAPE (folders/plugins/skills/mcp/egress). Checked ONLY by `verify-cassettes`, never the default replay verdict; absent on a pre-v9 cassette → not checked |
 | `folderPrefixMap` | v9+: the record-time connected-folder host-path → mount-name map. Replay's `computer_links_resolve` uses THIS (never the current session file) for a v9+ cassette; a pre-v9 cassette keeps reconstructing from the current session |
+| `timeline`, `timelineHeader` | The recorded per-event timeline (harness-observation timestamps for tool_use/tool_result/subagent_dispatch/thinking/decision/result, in total order) plus its header (`startedAtWall`/`startedAtMono` anchors); informational only — never affects the replay verdict. Absent on a cassette recorded before this field existed |
+| `environment` | Recording provenance: `location` (`"local"` on every cassette this harness produces), plus the resolved `tier` and `agentBinaryFormat` |
 
 ## Recipe 3 — Set up redaction BEFORE your first hostloop/protocol record
 

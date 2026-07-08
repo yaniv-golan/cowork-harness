@@ -116,6 +116,16 @@
       },
       "description": "workRoot-relative paths under userVisibleRoots that existed BEFORE the agent ran \u2014 the baseline `no_unexpected_files` diffs against on replay. Optional metadata (no cassetteVersion bump); ABSENT on pre-0.24 and microvm recordings \u2192 replay EXCLUDES `no_unexpected_files` with a loud warning. Always co-present with `userVisibleRoots` when present."
     },
+    "preRunHashes": {
+      "type": "object",
+      "additionalProperties": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "description": "Per-path sha256 of the user-visible tree BEFORE the agent ran (workRoot-relative keys). Powers `input_unmodified` on replay. A `null` value marks a path whose recorded artifact body was secret-scrubbed at record time \u2014 the scrubbed body's committed sha256 no longer matches the raw pre-run hash, so the path reports evidence-unavailable on replay instead of a false \"modified in place\". Added 0.27.0, no cassetteVersion bump."
+    },
     "scenarioSource": {
       "type": "string",
       "description": "The authored scenario SOURCE file this cassette was recorded from, RELATIVE to the cassette dir (relocatable, no absolute host path). `record --rerecord-stale` prefers this over a slug guess. ABSENT when recorded from an in-memory/inline scenario."
@@ -202,6 +212,71 @@
         "nonDeterministic"
       ]
     },
+    "timeline": {
+      "type": "array",
+      "description": "The recorded timeline (see src/agent/timeline.ts) \u2014 harness-observation timestamps for every meaningful in-run event (tool_use, tool_result, subagent_dispatch, thinking, decision, result, \u2026), in total order. Each entry carries `seq` (monotonic order), `ts` (ms elapsed since `timelineHeader.startedAtMono`), `line` (translated-stdout ordinal), `type`, plus type-specific fields. `ts` values are wall-clock-observation-time and are NOT reproducible on replay \u2014 frozen, not recomputed. ABSENT on a cassette recorded before this field existed, or when timeline.jsonl was empty/unreadable at record time; timing folds that read this are informational only (no verdict impact).",
+      "items": {
+        "type": "object",
+        "required": [
+          "seq",
+          "ts",
+          "line",
+          "type"
+        ],
+        "properties": {
+          "seq": {
+            "type": "integer",
+            "description": "per-timeline-entry monotonic counter (0, 1, 2, \u2026) \u2014 the total order over timeline entries."
+          },
+          "ts": {
+            "type": "number",
+            "description": "milliseconds elapsed since `timelineHeader.startedAtMono` (monotonic clock)."
+          },
+          "line": {
+            "type": "integer",
+            "description": "0-based ordinal of the Nth real stdout message translated from the child process (not a raw index into `events`)."
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "tool_use",
+              "tool_result",
+              "subagent_dispatch",
+              "skill_invoked",
+              "task_updated",
+              "file_changed",
+              "scratchpad_promoted",
+              "thinking",
+              "decision",
+              "result"
+            ]
+          }
+        }
+      }
+    },
+    "timelineHeader": {
+      "type": "object",
+      "description": "Written once as the first line of timeline.jsonl. `startedAtMono` is the raw start-time `process.hrtime.bigint()` value (as a string \u2014 JSON cannot serialize BigInt); every `timeline[].ts` is ms elapsed since this instant, not wall-clock time. `startedAtWall` is the wall-clock anchor (ISO string) so absolute times are recoverable from a purely-relative `ts` stream.",
+      "required": [
+        "v",
+        "startedAtWall",
+        "startedAtMono"
+      ],
+      "properties": {
+        "v": {
+          "type": "integer",
+          "const": 1
+        },
+        "startedAtWall": {
+          "type": "string",
+          "description": "ISO wall-clock timestamp anchor."
+        },
+        "startedAtMono": {
+          "type": "string",
+          "description": "raw `process.hrtime.bigint()` start value, stringified."
+        }
+      }
+    },
     "sessionFingerprint": {
       "type": "string",
       "description": "v9+: a hash of the resolved session's content-relevant SHAPE (connected folders + mode, plugin/skill/mcp discovery config, egress allowlist) at record time \u2014 distinct from `fingerprint.skillHash` (skill/plugin FILE content). Checked ONLY by `verify-cassettes` (never the default replay verdict). ABSENT on a pre-v9 cassette \u2192 not checked."
@@ -224,6 +299,28 @@
             "type": "string",
             "description": "its resolved mount name (a `userVisibleRoots` entry)"
           }
+        }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "description": "Recording ENVIRONMENT provenance — the location + tier this cassette was recorded under. Stamped `location:\"local\"` on every recording produced by this harness (only local runs are recorded), so a hypothetical future cloud-recorded cassette is positively distinguishable. `tier` is the resolved effective fidelity; `agentBinaryFormat` mirrors the baseline's agent-binary format. Additive — no cassetteVersion bump; readers that don't know it ignore it.",
+      "required": [
+        "location"
+      ],
+      "properties": {
+        "location": {
+          "type": "string",
+          "enum": [
+            "local",
+            "cloud"
+          ]
+        },
+        "tier": {
+          "type": "string"
+        },
+        "agentBinaryFormat": {
+          "type": "string"
         }
       }
     }

@@ -15,7 +15,7 @@ cowork-harness replay  scenarios/my-test.cassette.json # token-free re-evaluatio
 > [Recording prerequisites](#recording-prerequisites) below for how to commit a cassette instead.
 
 Recording follows whatever `fidelity:` the scenario declares — a `protocol`-fidelity scenario records with
-**no Docker at all** (still needs a token; see [`examples/scenarios/protocol-smoke.yaml`](../examples/scenarios/protocol-smoke.yaml)). The walkthrough below assumes `container` fidelity, the common case.
+**no Docker at all** (still needs a token; see [`examples/scenarios/protocol-smoke.yaml`](../examples/scenarios/protocol-smoke.yaml) *(source checkout only — not shipped in the npm package)*). The walkthrough below assumes `container` fidelity, the common case.
 
 ## Mental model
 
@@ -58,10 +58,13 @@ reproduce. See [docs/scenario.md](./scenario.md#how-an-assertion-edit-reaches-ci
 
 ```jsonc
 {
+  "generator": "cowork-harness",          // provenance: the tool that produced this file
   "cassetteVersion": 10,                  // format version; ABSENT = legacy (0); a FUTURE version warns
+  "scenarioSource": "scenarios/my-test.yaml", // the authored scenario SOURCE file this was recorded from, relative to the cassette dir (absent for an inline/in-memory scenario)
   "scenario": { /* Scenario object — same schema as the .yaml */ },
   "events": [ /* JSON lines from events.jsonl (child→driver stdout) */ ],
   "controlOut": [ /* JSON lines from control-out.jsonl (driver→child control_responses) */ ],
+  "effectiveFidelity": "container",       // the tier the live record actually resolved to (e.g. a `fidelity: cowork` scenario resolving to hostloop/container)
   "userVisibleRoots": ["outputs", "myproject"], // visible roots = outputs + each connected folder's mount name (its basename; `.projects` is the pre-1.14271.0 legacy fallback)
   "preRunPaths": ["outputs/existing.json"], // pre-run path baseline for `no_unexpected_files` (workRoot-relative)
   "preRunHashes": { "outputs/existing.json": "…", "myproject/readonly-in.xlsx": null }, // pre-run per-path sha256 baseline for `input_unmodified`; `null` = body secret-scrubbed (evidence-unavailable, never a false "modified")
