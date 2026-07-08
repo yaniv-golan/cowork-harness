@@ -22,8 +22,10 @@ For each run it builds a **clean, hermetic `CLAUDE_CONFIG_DIR`** (under the run 
 
 ```json
 {
-  "enabledPlugins": ["my-skill@local"],
-  "extraKnownMarketplaces": ["https://github.com/anthropics/claude-code.git"],
+  "enabledPlugins": { "my-skill@local": true },
+  "extraKnownMarketplaces": {
+    "claude-code": { "source": { "source": "git", "url": "https://github.com/anthropics/claude-code.git" } }
+  },
   "enabledMcpjsonServers": ["example-fs"],
   "localAgentModeTrustedFolders": ["/abs/path/to/project"],
   "autoMountFolders": false

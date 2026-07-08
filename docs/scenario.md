@@ -601,12 +601,15 @@ cowork-harness run examples/scenarios/csv-metrics.yaml --repeat 10 --min-pass-ra
 - `--stop-on-diverge` stops the loop as soon as **both** a pass and a fail have been observed — saves
   paid runs once flakiness is already proven. That batch always **fails**, regardless of the numeric
   rate reached: divergence *is* the failure this flag exists to catch.
-- `--max-budget-usd <x>` stops the loop once cumulative cost would exceed it. An incomplete-but-clean stop
-  (every completed run passed, but `N` wasn't reached) is a loud `::warning::`, not a failure by itself —
-  that batch is still judged on its own completed-runs pass rate. If a run reports no cost telemetry, the
-  cap degrades LOUDLY (one warning) instead of silently running all N as if the cap didn't exist.
-- `--repeat` rejects `--decider-dir` — an interactive driving agent answering gates live × N runs isn't a
-  reproducible measurement. `--decider-llm`/`on_unanswered: llm` are allowed, but a decided gate makes
+- `--max-budget-usd <x>` stops the loop once cumulative cost would exceed it. A budget-stopped batch
+  **fails by default**, even if every completed run passed — "incomplete is not green" is the same
+  principle `--matrix`'s `truncated` applies (see below). It still prints a loud `::warning::` naming the
+  stop. Pass `--allow-budget-stop` to opt back into judging the batch on its own completed-runs pass rate
+  instead. If a run reports no cost telemetry, the cap degrades LOUDLY (one warning) instead of silently
+  running all N as if the cap didn't exist.
+- `--repeat` rejects `--decider-dir`/`--decider-cmd` — an interactive driving agent or an external helper
+  answering gates live × N runs isn't a reproducible measurement. `--decider-llm`/`on_unanswered: llm` are
+  allowed, but a decided gate makes
   `RunResult.nonDeterministic: true`, and the rollup's `nonDeterministicRuns` count flags this: flakiness
   attribution downstream of a decided gate is confounded, since the gate itself isn't reproducible.
 
@@ -644,6 +647,9 @@ models: [claude-sonnet-4-6, claude-opus-4-8]         # optional axis; overrides 
   file with no axes at all still runs the scenario once.
 - The cross-product is capped at `--max-cells` (default 16) — over the cap, the harness warns and runs
   only the first N; it never silently drops cells without saying so.
+- A truncated matrix (some cells never ran because of the `--max-cells` cap) **fails by default** — an
+  un-run cell is treated the same as "incomplete is not green" elsewhere in this doc (see `--repeat
+  --max-budget-usd` above). Pass `--allow-truncated-matrix` to judge only the cells that actually ran.
 - `--concurrency <n>` (default 1, max 8) runs cells N at a time via the same bounded pool `record
   --concurrency` uses — each cell is a fully isolated run, so the bound exists only to stay under Docker's
   address pool / the model API's rate limits, not for correctness. **Exception**: `--concurrency > 1` is

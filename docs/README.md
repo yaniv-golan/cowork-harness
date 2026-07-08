@@ -48,3 +48,4 @@ Start with the [project README](../README.md) for the overview and quick start, 
 | CI recipe — copy-paste GitHub Actions for the token-free PR gate + nightly live lane | [../.claude/skills/cowork-harness/references/ci-recipe.md](../.claude/skills/cowork-harness/references/ci-recipe.md) |
 | Releasing — the branch → PR → tag publish flow | [../RELEASING.md](../RELEASING.md) |
 | Machine-readable project summary | [../llms.txt](../llms.txt) |
+| Architecture decision records — the "why" behind a cross-cutting default (e.g. verification strictness, fidelity) | [docs/decisions/](./decisions/) |

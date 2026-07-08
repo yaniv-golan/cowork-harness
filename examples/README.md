@@ -78,7 +78,7 @@ both, plus an auth token:
 
 ```bash
 cowork-harness run examples/scenarios/csv-metrics.yaml   # one
-cowork-harness run examples/scenarios/                    # all (CI-ready exit code)
+cowork-harness run examples/scenarios/                    # every top-level *.yaml (non-recursive; CI-ready exit code)
 ```
 
 > From a source checkout, `node dist/cli.js run …` works too (skip the `npm link`).

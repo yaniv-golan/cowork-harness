@@ -58,17 +58,22 @@ reproduce. See [docs/scenario.md](./scenario.md#how-an-assertion-edit-reaches-ci
 
 ```jsonc
 {
-  "cassetteVersion": 8,                  // format version; ABSENT = legacy (0); a FUTURE version warns
+  "cassetteVersion": 10,                  // format version; ABSENT = legacy (0); a FUTURE version warns
   "scenario": { /* Scenario object — same schema as the .yaml */ },
   "events": [ /* JSON lines from events.jsonl (child→driver stdout) */ ],
   "controlOut": [ /* JSON lines from control-out.jsonl (driver→child control_responses) */ ],
   "userVisibleRoots": ["outputs", "myproject"], // visible roots = outputs + each connected folder's mount name (its basename; `.projects` is the pre-1.14271.0 legacy fallback)
+  "preRunPaths": ["outputs/existing.json"], // pre-run path baseline for `no_unexpected_files` (workRoot-relative)
+  "preRunHashes": { "outputs/existing.json": "…", "myproject/readonly-in.xlsx": null }, // pre-run per-path sha256 baseline for `input_unmodified`; `null` = body secret-scrubbed (evidence-unavailable, never a false "modified")
   "artifacts": [                         // snapshot of outputs/ + connected folders (optional)
     { "path": "outputs/x.json", "bytes": 24, "sha256": "…", "body": "{…}" }, // body inlined ≤ 64 KiB
     { "path": "outputs/big.bin", "bytes": 9e6, "sha256": "…", "truncated": true, "truncationReason": "size" }, // oversized → hash-only (raise --max-artifact-bytes)
-    { "path": "carta-folder/input.xlsx", "bytes": 4096, "sha256": "…", "truncated": true, "truncationReason": "readonly" } // mode:r connected-folder INPUT → body-less (see below), regardless of size
+    { "path": "carta-folder/input.xlsx", "bytes": 4096, "sha256": "…", "truncated": true, "truncationReason": "readonly" }, // mode:r connected-folder INPUT → body-less (see below), regardless of size
+    { "path": "outputs/link-to-elsewhere", "bytes": 0, "sha256": "", "linkKind": "symlink" } // v10: symlink/hardlink — path+kind only, never dereferenced, so a link stray is still visible to no_unexpected_files
   ],
   "fingerprint": { "baseline": "1.15962.1", "skillHash": "…", "mode": "git", "contentSig": "…", "fileSigs": [["skills/x/SKILL.md", "…"]], "skillSources": ["…"] }, // staleness tripwire (v5: fileSigs only; v6: mode + git default; v7: NUL-delimited hash entries; v8: folds fixed-length content shas + type-prefixed/NUL-framed entries)
+  "sessionFingerprint": "…", // v9+: hash of the session's content-relevant SHAPE (folders/plugins/skills/mcp/egress) — verify-cassettes-only, never the default replay verdict
+  "folderPrefixMap": [{ "from": "/Users/me/myproject", "mount": "myproject" }], // v9+: record-time connected-folder host-path → mount-name map; computer_links_resolve uses THIS on replay
   "authoring": { "nonDeterministic": true, "channel": "decider-dir" } // present ONLY when a live decider answered ≥1 gate (see §Answering gates during recording); re-record may drift, replay is still deterministic
 }
 ```
@@ -440,6 +445,13 @@ possible.
   **both** buckets change you get **both** messages — a co-occurring shared change no longer masks the skill's
   own drift. (With `COWORK_HARNESS_AGENT_SCOPE=skill`, a changed `agents/<x>.md` is attributed to skill `x`,
   matching the hash boundary.)
+- **`session-shape fingerprint differs from the current session file (connected folders/plugin/skill/mcp/egress
+  config changed since record) — re-record`** (v9+) — the recorded `sessionFingerprint` no longer matches the
+  live session's SHAPE. Distinct from `fingerprint.skillHash` (skill/plugin file content): a folder swapped or
+  egress widened can drift the session with the skill tree untouched. Computed and hard-failed by
+  `verify-cassettes` **only**, gated by the same `--skip-staleness` flag as the rest of this list — it never
+  affects the default `replay` verdict, not even under `--strict`. Absent on a pre-v9 cassette → silently not
+  checked (no false stale on an old, still-valid recording).
 - **`recorded in '<mode>' file-set mode, verifying in '<mode>'`** — the staleness boundary differs between
   record and verify (e.g. recorded in a git work tree but verified from a non-repo copy); the hashes are not
   comparable, so re-record under the same mode.
@@ -610,10 +622,10 @@ email addresses at record time by default — extend its `patterns`/`keys` rathe
 ## Committed fixture
 
 `examples/replays/example-pdf-skill.cassette.json` is a **synthetic** cassette committed to the repo
-(not generated from a live run). It covers: assistant text, one permission gate, one AskUserQuestion
-gate with a matching `tool_result`, and a `result: success`. Its `assert:` block exercises
-`transcript_contains`, `tool_called`, `question_asked`, `gate_answers_delivered`, and `result` — the
-full-fidelity path end to end.
+(not generated from a live run). It covers: assistant text, tool calls (Read/Write), and a
+`result: success` — no gate exchange. Its `assert:` block exercises `result`, `user_visible_artifact`,
+`transcript_contains`, `tool_called`, and `tool_not_called`. For a fixture that exercises an actual
+AskUserQuestion gate, see `example-multiselect-gate.cassette.json`.
 
 It is safe to commit because:
 - It was hand-authored from the existing test patterns, not a live run with a real token.

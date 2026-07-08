@@ -342,9 +342,10 @@ Repeat / flakiness measurement:
   --stop-on-diverge                stop the repeat loop as soon as BOTH a pass and a fail have been observed
                                    (saves paid runs once flakiness is proven) — that batch always FAILS
                                    (divergence observed = flaky = what this flag exists to catch). Requires --repeat.
-  --max-budget-usd <x>             stop the repeat loop once cumulative cost would exceed x. An incomplete-
-                                   but-clean stop is a warning, not a failure by itself; degrades LOUDLY
-                                   (never silently runs all N) if a run reports no cost telemetry. Requires --repeat.
+  --max-budget-usd <x>             stop the repeat loop once cumulative cost would exceed x. A budget-stopped
+                                   batch fails by default (incomplete is not green; opt out with
+                                   --allow-budget-stop); degrades LOUDLY (never silently runs all N) if a run
+                                   reports no cost telemetry. Requires --repeat.
   --allow-budget-stop             opt back into a PASS verdict for a batch that --max-budget-usd stopped
                                    early (default: a budget-stopped batch always fails — incomplete is not
                                    green). Requires --repeat.

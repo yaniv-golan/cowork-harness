@@ -286,7 +286,7 @@ the expected path and (b) the session being resumable. The harness models both *
 ```
 allow:  {type:"control_response", response:{subtype:"success", request_id, response:{behavior:"allow", updatedInput}}}
 deny:   {type:"control_response", response:{subtype:"success", request_id, response:{behavior:"deny", message}}}
-AskUserQuestion allow.updatedInput.answers = Record<questionText, chosenLabel>
+AskUserQuestion allow.updatedInput = { questions: DecisionRequest["questions"], answers: Record<questionText, chosenLabel> } — BOTH keys required; dropping `questions` breaks the binary's built-in `questions.map(...)` handler (see §O7 below).
 mcp_message reply: {type:"control_response", response:{subtype:"success", request_id, response:{mcp_response:{jsonrpc:"2.0", id, result|error}}}}
 ```
 Payload sits under an **inner** `response`. Missing the nesting ⇒ `ZodError: expected object`.

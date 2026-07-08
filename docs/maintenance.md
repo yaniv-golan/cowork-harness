@@ -149,14 +149,15 @@ Versioning follows [SemVer](https://semver.org/); pre-1.0 minor bumps may includ
 Desktop release) is **not** a package version bump on its own — it ships in a normal patch/minor.
 
 Release flow — CD via `.github/workflows/release.yml`, published with **npm Trusted Publishing (OIDC)**
-(no stored token):
+(no stored token). Follow the branch → PR → tag sequence in [RELEASING.md](../RELEASING.md) — do not
+push a version bump + tag directly to `main`; the direct `npm version` + `git push --follow-tags` flow
+below is superseded by RELEASING.md's branch+PR approach and is shown here only for the OIDC/CI-gate
+mechanics, not as the sequence to actually run:
 
 ```bash
-# 1. land changes on main (CI green); add a new version heading to CHANGELOG.md
-# 2. bump + tag (creates a vX.Y.Z tag matching package.json)
-npm version patch        # or minor | major
-# 3. push the commit + tag
-git push --follow-tags
+# (on the release branch, after the PR is merged to main)
+npm version patch        # or minor | major — bumps + tags in one step
+git push origin main --follow-tags
 ```
 
 Pushing the `vX.Y.Z` tag triggers `release.yml`, which (in order) **waits for `ci.yml` to have succeeded

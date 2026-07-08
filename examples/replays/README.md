@@ -7,9 +7,12 @@ This directory contains committed cassette fixtures for token-free replay testin
 A **synthetic** fixture — NOT a real model recording. Hand-authored to exercise the full-fidelity
 replay path end-to-end, including:
 
-- An AskUserQuestion gate (permission → question → tool_result delivery)
-- A Write permission gate
-- `question_asked`, `gate_answers_delivered`, `transcript_contains`, `tool_called`, and `result` assertions
+- Reading `report.pdf` from uploads and writing a markdown checklist to `outputs/actions.md`
+- `result`, `user_visible_artifact`, `transcript_contains`, `tool_called`, and `tool_not_called` assertions
+
+(No gate exchange is recorded in this fixture — the paired scenario, `examples/scenarios/example-pdf-skill.yaml`,
+scripts `answers:` for a possible AskUserQuestion/Write gate, but none fired in this run. For a fixture that
+DOES exercise a real gate exchange, see `example-multiselect-gate.cassette.json`.)
 
 Run it with:
 

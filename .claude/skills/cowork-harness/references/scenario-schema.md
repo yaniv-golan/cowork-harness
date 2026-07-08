@@ -288,15 +288,29 @@ paraphrases (that re-records red). Structured JSON → assert it in YAML with **
 `path` + operator); use the pytest lane (`assert_artifact_json`) only for predicates too complex for a
 dotted path.
 
-**VerdictSignals in `result.signals`:** `computeVerdict` may push warning-severity signals into
-`result.signals` even on a `success` run. Current signal codes:
+**VerdictSignals in `result.signals`:** `computeVerdict` pushes signals into `result.signals`; most
+are **fail**-severity (they flip the run's pass/exit code even though `result.result` itself stays
+`"success"`) and only two are **warn**-severity (informational, never flip pass/fail). Current signal
+codes (`VerdictSignal["code"]` in `src/run/verdict.ts`):
 
 | Code | Severity | Meaning |
 |---|---|---|
-| `prompt_asset_missing` | warn | The run proceeded with a missing prompt asset (set `COWORK_HARNESS_ALLOW_MISSING_PROMPT=1`); fidelity is degraded. Re-run with the asset present or update the scenario. |
+| `assertion` | fail | An authored `assert:` item failed |
+| `result_error` | fail | The run's SDK result was `"error"` |
+| `transport_error` | fail | The connection dropped mid/after-run |
+| `permissive_auto_allow` | fail | A cowork-parity auto-allow real Cowork would block (opt out: `allow_permissive_auto_allow`) |
+| `outputs_delete` | fail | An unauthorized delete touched `mnt/outputs` (opt out: author `no_delete_in_outputs`) |
+| `host_path_leak` | fail | A host path leaked into model-visible text (opt out: author `transcript_no_host_path`) |
+| `l0_plugin_divergence` | fail | L0/protocol plugin loading diverged from Cowork (opt out: `allow_l0_plugin_divergence`) |
+| `missing_capability` | fail | A `requires_capabilities` need was unmet, or the skill used a capability the image omits (opt out: `allow_missing_capability`) |
+| `infra_error` | fail | A VM/egress sidecar crashed mid-run — not author-suppressible |
+| `stalled` | fail | The run ended on an unanswered question (opt out: `allow_stall`) |
+| `non_deterministic` | warn | The run was LLM/external/human-decided — not reproducible |
+| `prompt_asset_missing` | warn | The run proceeded with a missing prompt asset (`COWORK_HARNESS_ALLOW_MISSING_PROMPT=1`); fidelity is degraded |
 
-A `warn`-severity signal does **not** flip `result` to `error` — assert `result: success` still passes.
-To detect the signal programmatically, inspect `result.signals[].code` in the run's JSON output.
+A **fail**-severity signal does not change `result.result` (still `"success"`), but it DOES fail the
+overall run verdict and exit code — `assert result: success` alone won't catch it; check
+`result.signals[].severity` or the run's exit code. Only the two **warn** codes are truly benign.
 
 ## Replay class
 
@@ -315,7 +329,7 @@ sourcing ≠ evaluation (replay warns when you edit one). `verify-run` is the on
 **Evaluated on replay (content):** `transcript_*`, `tool_*`, `subagent_*`, `dispatch_count_max`,
 `skill_triggered`, `no_skill_triggered`, `skill_available`, `connector_available`, `tool_available`,
 `skill_tool_used`, `max_cost_usd`, `max_tokens`, `tool_calls_max`, `tool_no_error`,
-`max_tool_errors`, `max_redundant_tool_calls`, `max_turns`, `compaction_occurred`, `all_tasks_completed`, `task_status`, `result`
+`max_tool_errors`, `max_redundant_tool_calls`, `max_turns`, `compaction_occurred`, `all_tasks_completed`, `task_status`, `task_count_min`, `no_scratchpad_leak`, `result`
 (`max_cost_usd`/`max_tokens` assert the frozen recording's spend on replay, not fresh spend). The verdict
 modifiers `allow_permissive_auto_allow` / `allow_missing_capability` / `allow_l0_plugin_divergence` /
 `allow_stall` are also kept on replay, evaluated as no-op passes.
@@ -366,7 +380,10 @@ on a manifest-less cassette those are skipped, so the gate can't see the deliver
 `web_fetch` is gated by **URL provenance**, not the egress allowlist, and is **fail-closed**.
 
 - **Provenance:** a URL is provenanced iff it appeared in the **prompt (user message)** or a **prior
-  `web_fetch` result**. (There is no WebSearch tool, so no search-result seed path.) → to make a
+  `web_fetch` result**. (WebSearch is a real Cowork tool the harness now captures structurally in
+  `RunResult.webSearches`; for provenance its result text is scanned the same generic way as every
+  other tool result — there's no Cowork-style dedicated structured WebSearch seed extractor, but a
+  URL surfaced in a WebSearch result still gets provenanced.) → to make a
   fetch succeed deterministically, put the URL in the prompt.
 - **Path A (provenanced):** fetches. The egress hostname allowlist is **NOT consulted** (decoupled).
   It is not a raw `curl -L`: redirects are followed manually (max 5) with a per-hop scheme +

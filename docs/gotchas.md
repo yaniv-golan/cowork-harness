@@ -18,9 +18,10 @@
   Cowork Desktop once to stage it), no auth token resolvable, or no platform baseline on disk (`sync`
   on macOS, or restore a `baselines/desktop-*.json`).
 - **A `verify-cassettes` run fails on `scenarioDrift` after an intentional scenario edit.** You edited a
-  committed scenario's `prompt` without re-recording — the frozen cassette no longer matches it. Either
-  re-record, or pass `--skip-scenario-drift` if you're intentionally verifying the rest of the gate
-  against an out-of-date recording (see [README → Commands at a glance](../README.md#commands-at-a-glance)).
+  committed scenario's `prompt`, `baseline`, `fidelity`, `answers`, `skills`, or `requires_capabilities`
+  without re-recording — the frozen cassette no longer matches the on-disk scenario on one of these six
+  recording-shaping fields. Either re-record, or pass `--skip-scenario-drift` if you're intentionally
+  verifying the rest of the gate against an out-of-date recording (see [README → Commands at a glance](../README.md#commands-at-a-glance)).
 
 For the false-green ("✓ passed ≠ correct") landmine catalog, see
 [SKILL.md → Gotchas](../.claude/skills/cowork-harness/SKILL.md#gotchas--the--passed--correct-landmines) or

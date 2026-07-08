@@ -11,8 +11,9 @@ reads it back.
   on an unanswered gate) are indexed, tagged `partial:true` for the latter.
 - **`record`'s live execution** — tagged `command:"record"` so a recording session isn't misread as a
   `run` invocation in aggregate stats.
-- **NOT indexed**: `replay` results (they're re-checks against a frozen recording, not new evidence) and
-  `chat`'s interactive turns (not a scenario execution).
+- **NOT indexed**: `replay` results (they're re-checks against a frozen recording, not new evidence).
+  `chat` sessions ARE indexed (`command:"chat"`) once the REPL ends, so a chat session shows up in
+  `stats`/`trace`/`scaffold` too — see [README → Commands at a glance](../README.md#commands-at-a-glance).
 
 Each row: `{v, ts, command, scenario, slug, runId, fidelity, effectiveFidelity, baseline, result, pass,
 signals, costUsd?, tokens?, turns?, durationMs?, partial, nonDeterministic, outDir, git:{branch, sha}}`.
