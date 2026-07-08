@@ -72,6 +72,11 @@ The harness can no-op a check in ways that still produce a green run: skip an as
 flagged with a loud `::warning::`, not silent), auto-answer a gate, observe an empty egress allowlist.
 A green run is not automatically a correct run.
 
+- **`replay --explain`** — the flagship tool for exactly this hunt: after the footer, it prints the
+  evidence trail behind every **passing** assert (which `computer://` link resolved, which file matched,
+  which value satisfied a bound), so you can tell a real green from a vacuous one at a glance instead of
+  re-deriving it by hand. Text mode only; `--output-format json` already carries the same data in
+  `assertions[].evidence`. See `replay --help`.
 - **The "✓ passed ≠ correct" landmines** — the catalog of how a check can pass vacuously (mixed
   content/live assertion items, header-only gates that can't be keyed, replay-skipped egress keys) is in
   the companion skill's **Gotchas** section:

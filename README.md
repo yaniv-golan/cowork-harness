@@ -518,10 +518,11 @@ Secrets (the injected OAuth token / API key) are scrubbed from every persisted l
 **Observability fields** — `result.json` carries a lot more than the basics above:
 
 - **Timing & model:** `toolDurations` (per-tool call count / total / max ms), `models` (distinct model ids seen) — `trace <id> --view tool-durations` renders these as a table.
-- **Tool health:** `toolErrors` (per-tool call/error counts), `redundantToolCalls` (wasted repeated `{name,args}` calls), `thinking` (reasoning blocks, capped at the last 50), `modelUsage` (per-model tokens/cost/cache, denormalized from the SDK's own field).
+- **Tool health:** `toolErrors` (per-tool call/error counts), `redundantToolCalls` (wasted repeated `{name,args}` calls), `thinking` (reasoning blocks, capped at the last 50), `modelUsage` (per-model tokens/cost/cache, denormalized from the SDK's own field). `trace <id> --view tool-errors` renders one row per errored tool call with the full multi-line stderr (capped 4KB), vs. the 120-char preview `--view tools` shows.
 - **Sub-agents & skills:** `subagents[]` now also carries `prompt`, `model`, `output`, and `attributedSkillId`; `skillActivity[]` attributes tool calls to whichever skill was active when they ran.
-- **Panels:** `context` (available tools/mcpServers/skills), `tasks[]` (the agent's to-do list), `workspaceFiles[]` (every user-visible file, classified `output`/`mount`/`input`, with size + sha256).
+- **Panels:** `context` (available tools/mcpServers/skills), `tasks[]` (the agent's to-do list), `workspaceFiles[]` (every user-visible file, classified `output`/`mount`/`input`, with size + sha256). `trace <id> --view files` renders `workspaceFiles[]` as a class-grouped tree plus a diff against `preRunHashes` (added/modified/removed/unchanged); needs a run dir. `trace <id> --view usage` renders per-model tokens/cost/cache-read ratio from `modelUsage`; also needs a run dir.
 - **Runtime signals:** `hookEvents` (PreToolUse block/allow decisions), `mcpErrors` (failed MCP round-trips), `contextEvents` (incl. context-compaction boundaries), per-request `egress` detail (method/path/port/bytes + deny reason), `resources` (peak RSS, avg/peak CPU% — live lane only), `errorSource`/`stderrLogPath` (crash triage), `preRunHashes` (pre-run file hashes backing in-place-mutation checks).
+- **Execution location:** `execution` — `{location:"local"|"cloud", environmentId?, taskKind?:"interactive"|"scheduled"}`, orthogonal to `fidelity` (a local privilege tier). Stamped `location:"local"` on every locally-executed run; absence is **not** a "local" signal — it means a pre-taxonomy result or the error-replay lane, not a positive local claim.
 
 `cowork-harness assertions --list` is the full, always-current catalog built on these fields (e.g. `input_unmodified`, `tool_no_error`, `max_tool_errors`, `max_redundant_tool_calls`, `skill_tool_used`, `subagent_output_contains`, `all_tasks_completed`, `task_status`, `skill_available`, `connector_available`, `tool_available`, `hook_blocked`, `no_hook_blocked`, `no_mcp_error`, `compaction_occurred`, `max_peak_rss_bytes`); see [docs/scenario.md](./docs/scenario.md) for the same catalog with descriptions.
 
@@ -534,7 +535,7 @@ Secrets (the injected OAuth token / API key) are scrubbed from every persisted l
 
 It is informational — it never changes the verdict. The block is a live/`partial`-lane surface (absent on the replay lane, which reports reproducibility via `nonDeterministic: false`).
 
-**Debugging a run** — when a run misbehaves or a green looks too good to trust, [docs/debugging.md](./docs/debugging.md) is the map: `inspect` → `trace` → `chat` → `verify-run` for a misbehaving skill, and the false-green hunt for a green you don't trust.
+**Debugging a run** — when a run misbehaves or a green looks too good to trust, [docs/debugging.md](./docs/debugging.md) is the map: `inspect` → `trace` → `chat` → `verify-run` for a misbehaving skill, and the false-green hunt for a green you don't trust. `replay --explain` is the flagship false-green tool: it prints the evidence trail behind every passing assert (which link resolved, which file matched, which value satisfied a bound), text mode only (`--output-format json` already carries `assertions[].evidence`).
 
 ---
 

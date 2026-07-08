@@ -606,6 +606,11 @@ counts) — committed PII surface. Two layers, distinct from secret-scrub (which
     hard-code layout opinions like `tests/`; the plugin/test author declares its own runtime boundary. A
     slash-free glob matches that name at any depth; a slashed glob is anchored to the mount root.
 
+- **`--margins`** (diagnostic only, never affects the gate verdict) — reports a recorded-vs-budget count
+  plus margin for each count-bound assert (e.g. `max_tool_calls`, `max_redundant_tool_calls`), replaying
+  each affected cassette once to fold the count. A single-sample estimate — one cassette isn't a
+  distribution; use `run --repeat` for real variance. See `verify-cassettes --help`.
+
 ```bash
 cowork-harness verify-cassettes cassettes/ --allow 'NVCA|Cooley GO|Acme'
 ```
