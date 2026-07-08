@@ -8,6 +8,7 @@ import {
   loadEvalFiles,
   buildAnswerContext,
   parseJudge,
+  extractJsonObject,
   aggregate,
   runAll,
   EVALS_DIR,
@@ -113,6 +114,15 @@ describe("parseJudge", () => {
     expect(result.claims).toEqual([{ claim: "a", pass: true }]);
   });
 
+  it("tolerates a prose preamble before the JSON (real claude-opus-4-8 behavior)", () => {
+    // Verbatim shape of the live judge output that crashed the first REPS=1 run.
+    const raw =
+      "I'll grade this candidate answer against the rubric.\n\n" +
+      JSON.stringify({ claims: [{ claim: "reads effectiveFidelity", pass: true }], notes: "hits every point {ok}" });
+    const result = parseJudge(raw);
+    expect(result.claims).toEqual([{ claim: "reads effectiveFidelity", pass: true }]);
+  });
+
   it("throws a clear error on malformed (non-JSON) judge output", () => {
     expect(() => parseJudge("this is not JSON at all")).toThrow(/not valid JSON/);
   });
@@ -124,6 +134,11 @@ describe("parseJudge", () => {
   it("throws a clear error when a claim entry is malformed", () => {
     const raw = JSON.stringify({ claims: [{ claim: "ok", pass: "yes" }], notes: "" });
     expect(() => parseJudge(raw)).toThrow(/malformed/);
+  });
+
+  it("extractJsonObject returns the first balanced object and ignores braces inside strings", () => {
+    expect(extractJsonObject('prefix {"a":"has } brace","b":1} trailing')).toBe('{"a":"has } brace","b":1}');
+    expect(extractJsonObject("no object here")).toBeNull();
   });
 });
 

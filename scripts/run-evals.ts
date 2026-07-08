@@ -184,13 +184,47 @@ ${candidateAnswer}
 Return ONLY the JSON object.`;
 }
 
-/** Parse the judge's response into { claims, notes }. Tolerates a stray markdown code fence (some
- *  models wrap JSON in one despite instructions); otherwise throws a clear, actionable error — it
- *  never silently returns an empty/best-effort result for malformed judge output. */
+/** Extract the first balanced top-level `{...}` object from a string, ignoring braces inside JSON
+ *  string literals. Returns null if none is found. Needed because a real judge model frequently emits
+ *  a prose preamble ("I'll grade this answer...") before the JSON despite instructions — validated
+ *  live: claude-opus-4-8 does exactly this. */
+export function extractJsonObject(text: string): string | null {
+  const start = text.indexOf("{");
+  if (start < 0) return null;
+  let depth = 0;
+  let inStr = false;
+  let escaped = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (inStr) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') inStr = true;
+    else if (ch === "{") depth++;
+    else if (ch === "}") {
+      depth--;
+      if (depth === 0) return text.slice(start, i + 1);
+    }
+  }
+  return null;
+}
+
+/** Parse the judge's response into { claims, notes }. Tolerates a markdown code fence AND a prose
+ *  preamble/epilogue around the JSON (both observed from real judge models); otherwise throws a clear,
+ *  actionable error — it never silently returns an empty/best-effort result for malformed output. */
 export function parseJudge(raw: string): JudgeResult {
   const text = raw.trim();
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
-  const jsonText = fenced ? fenced[1].trim() : text;
+  // Prefer a fenced block; else the raw text if it is already a clean object; else the first balanced
+  // {...} object embedded in prose.
+  const jsonText = fenced
+    ? fenced[1].trim()
+    : text.startsWith("{")
+      ? text
+      : (extractJsonObject(text) ?? text);
 
   let parsed: unknown;
   try {
