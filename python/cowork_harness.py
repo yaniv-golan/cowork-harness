@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import uuid
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Union
 
@@ -251,6 +252,36 @@ class Skill:
         if decider_cmd:
             args += ["--decider-cmd", decider_cmd]
         return self._runner._invoke(args, check=check)
+
+    def conversation(
+        self,
+        prompts: list[str],
+        *,
+        fidelity: str = "container",
+        session_id: Optional[str] = None,
+        check: bool = False,
+        **kw,
+    ) -> list[Result]:
+        """Feed N user turns to ONE persisted session and return a `Result` per turn.
+
+        Turn 1 pins a stable ``--session-id``; every later turn adds ``--resume`` so the agent
+        reloads the conversation (its native session persists in the bind-mounted ``mnt/.claude``).
+        This makes the natural "ask -> inspect -> follow-up" loop (self-report, iterative probing) a
+        first-class, single-call API instead of hand-stitched ``session_id`` + ``resume`` calls.
+
+        Requires a SANDBOXED fidelity (``container`` and up) for real cross-turn persistence —
+        ``protocol`` has no durable session store. Each returned ``Result`` carries its own
+        ``RunResult.turn`` (1-based), and each turn's transcript/result is preserved on disk as
+        ``run.turn-<N>.jsonl`` / ``result.turn-<N>.json`` (the live one is the latest turn).
+        """
+        if fidelity == "protocol":
+            raise ValueError("conversation() needs a sandboxed fidelity (container+); protocol has no durable session store")
+        sid = session_id or f"conv-{uuid.uuid4().hex[:12]}"
+        results: list[Result] = []
+        for i, p in enumerate(prompts):
+            r = self.run(p, fidelity=fidelity, session_id=sid, resume=(i > 0), check=check, **kw)
+            results.append(r)
+        return results
 
 
 class Cowork:

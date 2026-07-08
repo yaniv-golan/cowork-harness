@@ -190,6 +190,13 @@ All notable changes to this project are documented here. The format is based on
   aggregator (`scripts/eval-baseline-profile.mjs`) for the project's own answer-quality eval gate over
   the companion skill (`test/evals/`, not shipped as part of the skill).
 
+- **Programmatic multi-turn (`cowork.skill(folder).conversation([...])`)** — feed N user turns to one
+  persisted session and get a `Result` per turn: turn 1 pins `--session-id`, later turns add `--resume`
+  so the agent reloads the conversation. Makes the natural "ask → inspect → follow-up" loop
+  (self-report, iterative probing) a single first-class call instead of hand-stitched session/resume
+  calls. Backed by a new **container-tier `--resume` continuity integration test** that proves the agent
+  session actually survives the container boundary (a fresh turn-2 container recalls a fact established
+  in turn 1) — the plumbing was argv-tested but never proven end-to-end before.
 - **`--ablate-skill`** (on `run` / `skill`) — run the same prompt with the skill(s)-under-test removed:
   a deterministic negative control for skill-lift measurement (with-skill vs. without). All plugin/skill
   discovery is stripped so nothing mounts and the agent answers from its own priors; model/folders/egress

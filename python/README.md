@@ -100,6 +100,7 @@ pytest -m 'not cowork'      # the fast loop (skips this lane) — the CI default
 | Call | Returns | Key params |
 |---|---|---|
 | `cowork.skill(folder).run(prompt, …)` | `Result` | `answers`, `on_unanswered`, `fidelity`, `upload`, `folder`, `session_id`+`resume`, `decider_cmd`, `prompt_file`, `check` |
+| `cowork.skill(folder).conversation([p1, p2, …], …)` | `list[Result]` | feeds N user turns to ONE persisted session (turn 1 pins `--session-id`, later turns add `--resume`) and returns a `Result` per turn — the "ask → inspect → follow-up" loop as one call. Needs a sandboxed `fidelity` (container+); each `Result` carries its own `.turn`. |
 | `cowork.run_scenario(path, …)` | `Result` \| `BatchResult` | `on_unanswered`, `check` (fidelity/answers are scenario-authored) |
 | `cowork.replay(cassette, …)` | `Result` \| `BatchResult` | — (deterministic; content assertions only) |
 | `cowork.trace(run_id_or_dir, …)` | `list[dict]` | `tools` |
