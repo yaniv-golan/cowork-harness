@@ -3439,7 +3439,7 @@ function cmdTrace(args: string[]) {
   // --view tools|questions|dispatches replaces the three boolean flags. Legacy flags kept as aliases.
   const viewIdx = args.indexOf("--view");
   const viewEqMatch = args.find((a) => a.startsWith("--view="));
-  let viewArg: string | undefined = viewEqMatch ? viewEqMatch.slice("--view=".length) : viewIdx >= 0 ? args[viewIdx + 1] : undefined;
+  const viewArg: string | undefined = viewEqMatch ? viewEqMatch.slice("--view=".length) : viewIdx >= 0 ? args[viewIdx + 1] : undefined;
 
   const VIEWS = ["tools", "questions", "dispatches", "tool-durations", "tool-errors", "files", "usage"] as const;
   type View = (typeof VIEWS)[number];
@@ -3447,19 +3447,6 @@ function cmdTrace(args: string[]) {
     fail("trace", "usage", `--view: expected one of ${VIEWS.join("|")}, got "${viewArg}"`, undefined, json);
     return;
   }
-
-  // Legacy flag aliases: --tools → tools, --gates → questions (renamed; old --gates still accepted),
-  // --dispatches → dispatches.
-  const legacyTools = args.includes("--tools");
-  const legacyGates = args.includes("--gates");
-  const legacyDispatches = args.includes("--dispatches");
-  const legacyCount = [legacyTools, legacyGates, legacyDispatches].filter(Boolean).length;
-  if (viewArg !== undefined && legacyCount > 0)
-    fail("trace", "usage", "--view and legacy flags (--tools/--gates/--dispatches) are mutually exclusive", undefined, json);
-  if (legacyCount > 1) fail("trace", "usage", "trace --tools/--gates/--dispatches are mutually exclusive (prefer --view)", undefined, json);
-  if (legacyTools) viewArg = "tools";
-  if (legacyGates) viewArg = "questions";
-  if (legacyDispatches) viewArg = "dispatches";
 
   const view = viewArg as View | undefined;
 
@@ -3477,9 +3464,6 @@ function cmdTrace(args: string[]) {
       "--output-format",
       "--output-format=json",
       "--output-format=text",
-      "--tools",
-      "--gates",
-      "--dispatches", // legacy aliases
       "--translate-paths",
     ],
     json,

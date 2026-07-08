@@ -125,7 +125,7 @@ export interface DecisionRecord {
   name: string;
   decision: string;
   by: string;
-  // The gate's request_id (UUID). Present on question decisions so `trace --gates` can pair a persisted
+  // The gate's request_id (UUID). Present on question decisions so `trace --view questions` can pair a persisted
   // decision to its events.jsonl row BY ID rather than positionally — a retried/duplicated gate event
   // would otherwise shift every later row's `by`/`model` label. Absent on older records (positional fallback).
   requestId?: string;
@@ -872,7 +872,7 @@ export class Run {
         name: "AskUserQuestion",
         decision: "answered",
         by,
-        requestId: req.id, // for id-keyed pairing in `trace --gates` (not positional)
+        requestId: req.id, // for id-keyed pairing in `trace --view questions` (not positional)
         model,
         detail: answers,
         rationale,

@@ -297,7 +297,7 @@ class Cowork:
         Raises RuntimeError on a nonzero exit code or unparseable stdout so that a failed
         trace is never silently indistinguishable from a legitimately empty trace (#11).
         """
-        args = ["trace", target, "--output-format", "json"] + (["--tools"] if tools else [])
+        args = ["trace", target, "--output-format", "json"] + (["--view", "tools"] if tools else [])
         proc = subprocess.run(["node", self.cli, *args], capture_output=True, text=True)
         if proc.returncode != 0:
             raise RuntimeError(

@@ -457,11 +457,15 @@ describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
     expect(r.json?.error?.message).toMatch(/usage: gates/);
   });
 
-  it("trace rejects more than one of --tools/--gates/--dispatches (exit 2)", () => {
-    const r = run(["trace", "somerun", "--tools", "--gates", "--output-format", "json"]);
-    expect(r.code).toBe(2);
-    expect(r.json?.error?.category).toBe("usage");
-    expect(r.json?.error?.message).toMatch(/mutually exclusive/);
+  it("trace rejects the retired --tools/--gates/--dispatches aliases as unknown flags (exit 2, not silent)", () => {
+    // The legacy view aliases were removed in favor of `--view <name>`. The old spellings must fail
+    // LOUD (unknown flag, exit 2), never silently no-op into the default view.
+    for (const alias of ["--tools", "--gates", "--dispatches"]) {
+      const r = run(["trace", "somerun", alias, "--output-format", "json"]);
+      expect(r.code, alias).toBe(2);
+      expect(r.json?.error?.category, alias).toBe("usage");
+      expect(r.json?.error?.message, alias).toMatch(new RegExp(`unknown flag: ${alias}`));
+    }
   });
 
   it("trace rejects extra positionals (exit 2)", () => {

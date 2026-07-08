@@ -178,6 +178,15 @@ All notable changes to this project are documented here. The format is based on
   aggregator (`scripts/eval-baseline-profile.mjs`) for the project's own answer-quality eval gate over
   the companion skill (`test/evals/`, not shipped as part of the skill).
 
+### Removed
+
+- **`trace`'s legacy `--tools` / `--gates` / `--dispatches` flag aliases.** Use `--view tools` /
+  `--view questions` / `--view dispatches` instead (the canonical form since the view set grew to seven
+  views). The retired spellings now fail loud as an unknown flag (exit 2) rather than silently
+  selecting a view, so a stale script surfaces immediately instead of tracing the wrong thing. Exit-code
+  semantics (0/1/2/3/127) and the `--output-format json` envelope are unchanged. The shipped Python
+  wrapper's `cowork.trace(..., tools=True)` now drives `--view tools` and keeps its signature.
+
 ### Changed
 
 - **Synced the platform baseline to Claude Desktop 1.18286.2** (`baselines/desktop-1.18286.2.json`).

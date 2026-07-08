@@ -113,7 +113,7 @@ describe("trace view", () => {
     expect(formatTrace(rows)).toContain("1 sub-agent dispatch(es)");
   });
 
-  it("--tools filters to tool/dispatch rows only", () => {
+  it("--view tools filters to tool/dispatch rows only", () => {
     const f = eventsFile([
       assistant([{ type: "text", text: "thinking out loud" }]),
       assistant([{ type: "tool_use", id: "r1", name: "Grep", input: { pattern: "x" } }]),
@@ -138,7 +138,7 @@ describe("trace view", () => {
     expect(formatTrace(buildTrace(f))).toContain("✗ error: boom");
   });
 
-  it("--gates pairs question → injected answer → delivered result (bridging UUID↔toolu_ keys)", () => {
+  it("--view questions pairs question → injected answer → delivered result (bridging UUID↔toolu_ keys)", () => {
     const f = eventsFile(
       [
         // gate: control_request carries BOTH the UUID request_id AND the toolu_ tool_use_id
@@ -172,7 +172,7 @@ describe("trace view", () => {
     expect(gates[0]).toMatchObject({ question: "Proceed?", injectedAnswer: '{"Proceed?":"Yes"}', delivered: "ok" });
   });
 
-  it("--gates flags a delivery failure (errored tool_result)", () => {
+  it("--view questions flags a delivery failure (errored tool_result)", () => {
     const f = eventsFile([
       {
         type: "control_request",
@@ -283,9 +283,9 @@ describe("formatTrace — cache-read-ratio footer", () => {
   });
 });
 
-// trace --dispatches: the sub-agent dispatch tree + the real total (read off dispatch_count_max).
+// trace --view dispatches: the sub-agent dispatch tree + the real total (read off dispatch_count_max).
 import { buildDispatchTree, formatDispatchTree } from "../src/run/trace-view.js";
-describe("trace --dispatches (dispatch tree + total)", () => {
+describe("trace --view dispatches (dispatch tree + total)", () => {
   it("builds the tree with depth from parentToolUseId nesting and a total", () => {
     const f = eventsFile([
       {

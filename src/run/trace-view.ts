@@ -310,7 +310,7 @@ export interface GateTraceRow {
 }
 
 /**
- * `trace --gates` — pair each AskUserQuestion gate's **question → injected answer → delivered result**, so
+ * `trace --view questions` — pair each AskUserQuestion gate's **question → injected answer → delivered result**, so
  * the full gate lifecycle is inspectable in one command (no hand-parsing control-out.jsonl). Bridges the
  * differing keys: the gate's `decision` (events.jsonl) carries both the UUID `request_id` AND the `toolu_`
  * `toolUseId`; the injected answer lives in `control-out.jsonl` keyed by `request_id`; the delivered result
@@ -423,7 +423,7 @@ export interface DispatchNode {
 }
 
 /**
- * `trace --dispatches` — the sub-agent dispatch tree, so an author can read off the REAL total
+ * `trace --view dispatches` — the sub-agent dispatch tree, so an author can read off the REAL total
  * dispatch count (what `dispatch_count_max` asserts against) instead of guess-and-check, and see the
  * nesting (a sub-agent that dispatches further). Ordered by appearance; depth derived from
  * `parentToolUseId` chains among the dispatches themselves.

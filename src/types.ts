@@ -761,7 +761,7 @@ export interface RunResult {
     name: string;
     decision: string;
     by?: string;
-    // request_id (UUID) of a question gate — lets `trace --gates` pair a decision to its event row by id
+    // request_id (UUID) of a question gate — lets `trace --view questions` pair a decision to its event row by id
     // instead of positionally (retried/duplicated gate events would shift a positional pairing). Optional.
     requestId?: string;
     model?: string;
