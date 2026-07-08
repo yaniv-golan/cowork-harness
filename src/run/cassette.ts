@@ -2441,6 +2441,7 @@ async function recordScenarioObject(
  *  non-zero exit (the cardinal no-false-green rule). */
 function replayErrorResult(file: string): RunResult {
   return assembleRunResult({
+    turn: undefined, // replay reconstructs one recorded run; no multi-turn attribution
     scenario: file,
     fidelity: "replay",
     baseline: "",
@@ -4121,6 +4122,7 @@ export async function replayCassette(
     }
 
     return assembleRunResult({
+      turn: undefined, // replay reconstructs one recorded run; no multi-turn attribution
       scenario: cassette.scenario.name,
       mode: "run",
       // Pass through the frozen recording-time provenance — an older cassette that predates

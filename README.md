@@ -505,7 +505,8 @@ run.jsonl           harness-observability log for the LATEST turn: decisions (+w
                     sub-agent dispatch tree, egress, transcript, cost, and a `turn` number
                     (replaces transcript.json/decisions.jsonl)
 run.turn-<N>.jsonl  prior turns of a resumed (--session-id + --resume) session, preserved so an
-                    earlier turn's transcript isn't clobbered by the next (only present after a resume)
+result.turn-<N>.json  earlier turn's transcript/result isn't clobbered by the next (both only present
+                    after a resume; the live run.jsonl/result.json carry a `turn` number)
 trace.json          structured run trace: steps, questions, sub-agents, egress, decisions, cost
 egress.log          raw allow/deny per outbound connection (microvm: at top level; container: under
                     proxy/ — the allow/deny decisions are also folded into run.jsonl/result.json)

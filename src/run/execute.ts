@@ -773,7 +773,9 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // exits 2. Skip assertion eval and the capability probe (a real container spawn) — a partial run has no
   // meaningful assertion or verdict outcome.
   if (unansweredErr) {
+    const turn = archivePriorTurnFiles(outDir);
     const partialResult = buildPartialResult({
+      turn,
       scenarioName: scenario.name,
       prompt: scenario.prompt,
       fidelity: scenario.fidelity,
@@ -799,7 +801,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     runCrashSafety.finalize(record, "error", partialResult.durationMs!);
     writeFileSync(join(outDir, "result.json"), scrub(JSON.stringify(partialResult, null, 2), secrets));
     appendIndexRow(runsWriteRoot(), indexRowFromResult(partialResult, { command: opts.command ?? "run", partial: true }));
-    writeRunJsonl(outDir, scenario, effectiveFidelity, record, egress, secrets);
+    writeRunJsonl(outDir, scenario, effectiveFidelity, record, egress, secrets, turn);
     writeTrace(outDir, record, egress, secrets, partialResult.durationMs);
     scrubFileInPlace(join(outDir, "events.jsonl"), secrets);
     scrubFileInPlace(join(outDir, "control-out.jsonl"), secrets);
@@ -1038,10 +1040,15 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // excluded outright.
   const workspaceFiles = classifyWorkspaceFiles(workRoot, userVisibleRoots, readonlyFolderRoots);
 
+  // Multi-turn: archive the prior turn's run.jsonl/result.json (if this is a --resume) and get THIS
+  // turn's number, so the RunResult and run.jsonl agree and each turn's result stays recoverable.
+  const turn = archivePriorTurnFiles(outDir);
+
   const result: RunResult = assembleRunResult({
     $schema: RUN_RESULT_SCHEMA_URL,
     generator: "cowork-harness",
     mode: "run",
+    turn,
     finalMessage: record.resultText,
     execution: { location: "local" }, // live local run — no scheduled-trigger lane exists yet (no taskKind)
     scenario: scenario.name,
@@ -1152,7 +1159,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // Artifacts: the harness-observability log `run.jsonl` REPLACES transcript.json/decisions.jsonl.
   writeFileSync(join(outDir, "result.json"), scrub(JSON.stringify(result, null, 2), secrets));
   appendIndexRow(runsWriteRoot(), indexRowFromResult(result, { command: opts.command ?? "run", partial: false }));
-  writeRunJsonl(outDir, scenario, effectiveFidelity, record, egress, secrets);
+  writeRunJsonl(outDir, scenario, effectiveFidelity, record, egress, secrets, turn);
   writeTrace(outDir, record, egress, secrets, result.durationMs);
   scrubFileInPlace(join(outDir, "events.jsonl"), secrets);
   scrubFileInPlace(join(outDir, "control-out.jsonl"), secrets);
@@ -1238,23 +1245,33 @@ export function loadSessionFromFile(sessionRef: string): ReturnType<typeof loadS
   return resolveSessionPaths(loadSession(parseSessionFile(sessionRef)), baseDir);
 }
 
-/** Determine this write's 1-based turn number and preserve any prior turn's `run.jsonl` so a resumed
- *  turn can't clobber it. `run.jsonl` always holds the LATEST turn (back-compat: the transcript-sidecar
- *  readers in cli.ts/assert.ts read the just-completed run's transcript from it); earlier turns are kept
- *  as `run.turn-<N>.jsonl`, so turn 1's transcript stays recoverable after a `--resume`. A fresh
- *  `--session-id` run rmSync's its dir first, so an existing `run.jsonl` here means a genuine resume. */
-export function archivePriorTurnRunJsonl(outDir: string): number {
+/** THIS write's 1-based turn number, derived from how many prior turns are already archived. Pure — no
+ *  side effects, so it can be read before the result is assembled (to stamp `RunResult.turn`). */
+export function currentTurn(outDir: string): number {
   const archived = readdirSync(outDir).filter((f) => /^run\.turn-\d+\.jsonl$/.test(f)).length;
-  const runPath = join(outDir, "run.jsonl");
-  if (existsSync(runPath)) {
-    const priorTurn = archived + 1; // the turn currently sitting in run.jsonl
-    renameSync(runPath, join(outDir, `run.turn-${priorTurn}.jsonl`));
-    return priorTurn + 1;
-  }
-  return archived + 1; // 1 on the first turn
+  return archived + (existsSync(join(outDir, "run.jsonl")) ? 1 : 0) + 1;
 }
 
-/** the harness-observability JSONL — lifecycle + decisions(by) + subagents + egress + cost. */
+/** Multi-turn preservation: before a resumed turn overwrites them, archive the prior turn's `run.jsonl`
+ *  and `result.json` under `<name>.turn-<N>` so an earlier turn's transcript/result stays recoverable.
+ *  `run.jsonl`/`result.json` themselves remain the LATEST turn (back-compat: the transcript-sidecar
+ *  readers in cli.ts/assert.ts, and every result.json consumer, read the just-completed run). Returns
+ *  THIS turn's 1-based number. A fresh `--session-id` run rmSync's its dir first, so an existing
+ *  `run.jsonl` here means a genuine resume. Call ONCE per turn, before writing the new result.json. */
+export function archivePriorTurnFiles(outDir: string): number {
+  const turn = currentTurn(outDir);
+  if (turn > 1) {
+    const prior = turn - 1;
+    const runPath = join(outDir, "run.jsonl");
+    if (existsSync(runPath)) renameSync(runPath, join(outDir, `run.turn-${prior}.jsonl`));
+    const resPath = join(outDir, "result.json");
+    if (existsSync(resPath)) renameSync(resPath, join(outDir, `result.turn-${prior}.json`));
+  }
+  return turn;
+}
+
+/** the harness-observability JSONL — lifecycle + decisions(by) + subagents + egress + cost. `turn` is
+ *  computed once by the caller (via {@link archivePriorTurnFiles}) so it matches `result.json`'s. */
 function writeRunJsonl(
   outDir: string,
   scenario: Scenario,
@@ -1262,8 +1279,8 @@ function writeRunJsonl(
   rec: RunRecord,
   egress: RunResult["egress"],
   secrets: string[],
+  turn: number,
 ) {
-  const turn = archivePriorTurnRunJsonl(outDir);
   const lines = [
     { t: "run", scenario: scenario.name, fidelity, runId: rec.runId, result: rec.result, cwd: rec.cwd, turn },
     { t: "init", tools: rec.initTools.length },
@@ -1286,6 +1303,8 @@ function writeRunJsonl(
  *  `partial:true` is the signal that lets consumers (verify-run, scaffold, the footer) refuse to read its
  *  populated `artifacts[]` as a passing run. */
 export function buildPartialResult(args: {
+  /** This turn's 1-based number (multi-turn attribution); undefined for callers that don't track it. */
+  turn?: number;
   scenarioName: string;
   prompt: string;
   fidelity: string;
@@ -1341,6 +1360,7 @@ export function buildPartialResult(args: {
     $schema: RUN_RESULT_SCHEMA_URL,
     generator: "cowork-harness",
     mode: "run",
+    turn: args.turn,
     finalMessage: args.record.resultText,
     execution: { location: "local" }, // live local run (salvaged partial) — same basis as the success path
     scenario: args.scenarioName,

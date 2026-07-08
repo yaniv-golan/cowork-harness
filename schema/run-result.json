@@ -21,6 +21,11 @@
     "generator": {
       "type": "string"
     },
+    "turn": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "1-based turn number within a resumed (--session-id + --resume) session; 1 for a normal single-shot run. result.json/run.jsonl hold the latest turn, prior turns are archived as result.turn-<N>.json / run.turn-<N>.jsonl. Absent on replay/chat lanes."
+    },
     "mode": {
       "type": "string",
       "enum": [

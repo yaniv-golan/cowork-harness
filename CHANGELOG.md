@@ -67,11 +67,12 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
-- **A resumed turn no longer clobbers an earlier turn's `run.jsonl`.** `run.jsonl` was rewritten in
-  full each turn, so after a `--session-id` + `--resume` session you could not recover turn 1's
-  transcript — while `events.jsonl`/`timeline.jsonl` (append-mode) blended turns. `run.jsonl` now stays
-  the **latest** turn (unchanged for transcript-sidecar readers) and carries a `turn` number; each prior
-  turn is preserved as `run.turn-<N>.jsonl`, so every turn's transcript remains recoverable.
+- **A resumed turn no longer clobbers an earlier turn's `run.jsonl` / `result.json`.** Both were
+  rewritten in full each turn, so after a `--session-id` + `--resume` session you could not recover
+  turn 1's transcript or result — while `events.jsonl`/`timeline.jsonl` (append-mode) blended turns.
+  `run.jsonl` and `result.json` now stay the **latest** turn (unchanged for their readers) and
+  `RunResult` carries a `turn` number; each prior turn is preserved as `run.turn-<N>.jsonl` /
+  `result.turn-<N>.json`, so every turn's transcript and result remain recoverable and attributable.
 - **`sync`'s asar-bundle reader followed a stale assumption about Desktop's Vite build output.** A
   Desktop release that code-splits `.vite/build/index.js` into a small entry stub plus a
   content-hashed chunk file (rather than one monolithic bundle) was silently read as near-empty

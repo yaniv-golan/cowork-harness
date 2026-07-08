@@ -874,6 +874,12 @@ export interface RunResult {
    *  answer from the envelope instead of parsing run.jsonl. Absent when no result event carried text
    *  (e.g. a spawn/exit error before the result). */
   finalMessage?: string;
+  /** 1-based turn number within a resumed (`--session-id` + `--resume`) session — 1 for a normal
+   *  single-shot run, incrementing per resume. `result.json`/`run.jsonl` hold the LATEST turn; prior
+   *  turns are archived as `result.turn-<N>.json` / `run.turn-<N>.jsonl`. Lets a multi-turn consumer
+   *  attribute a result to its turn instead of blending cumulative telemetry. Absent on replay/chat
+   *  lanes that don't track it. */
+  turn?: number;
   subagents?: Array<{
     toolUseId: string;
     parentToolUseId?: string;
