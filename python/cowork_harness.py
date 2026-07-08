@@ -53,6 +53,12 @@ class Result:
         return self.data.get("result", "error")
 
     @property
+    def turn(self) -> Optional[int]:
+        """1-based turn number within a resumed session (from conversation()/--resume); 1 for a normal
+        single-shot run, None on replay/chat lanes that don't track it."""
+        return self.data.get("turn")
+
+    @property
     def effective_fidelity(self) -> Optional[str]:
         """The tier actually used — differs from authored fidelity when scenario.fidelity='cowork' (#24)."""
         return self.data.get("effectiveFidelity")
@@ -270,8 +276,10 @@ class Skill:
         first-class, single-call API instead of hand-stitched ``session_id`` + ``resume`` calls.
 
         Requires a SANDBOXED fidelity (``container`` and up) for real cross-turn persistence —
-        ``protocol`` has no durable session store. Each returned ``Result`` carries its own
-        ``RunResult.turn`` (1-based), and each turn's transcript/result is preserved on disk as
+        ``protocol`` has no durable session store. ``container`` is the tier whose cross-container
+        continuity is covered by the integration test; the other sandboxed tiers use the same
+        bind-mounted session store but aren't separately proven here. Each returned ``Result`` carries
+        its own ``.turn`` (1-based), and each turn's transcript/result is preserved on disk as
         ``run.turn-<N>.jsonl`` / ``result.turn-<N>.json`` (the live one is the latest turn).
         """
         if fidelity == "protocol":

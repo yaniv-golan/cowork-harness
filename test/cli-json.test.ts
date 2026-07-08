@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, writeFileSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { VERDICT_MODIFIER_KEYS } from "../src/types.js";
@@ -455,6 +455,18 @@ describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
     expect(r.code).toBe(2);
     expect(r.json?.error?.category).toBe("usage");
     expect(r.json?.error?.message).toMatch(/usage: gates/);
+  });
+
+  it("skill rejects --ablate-skill + --resume as incoherent (exit 2, before any spawn)", () => {
+    // Ablation removes the skill; resume reuses the prior turn's staged skill — the combination would
+    // silently still have the skill while stamping ablated:true. Must fail loud, pre-Docker.
+    const folder = mkdtempSync(join(tmpdir(), "cc-ablate-"));
+    mkdirSync(join(folder, ".claude-plugin"), { recursive: true });
+    writeFileSync(join(folder, "SKILL.md"), "---\nname: h\ndescription: h.\n---\n# h\n");
+    const r = run(["skill", folder, "hi", "--session-id", "s1", "--resume", "--ablate-skill", "--output-format", "json"]);
+    expect(r.code).toBe(2);
+    expect(r.json?.error?.category).toBe("usage");
+    expect(r.json?.error?.message).toMatch(/--ablate-skill cannot be combined with --resume/);
   });
 
   it("trace rejects the retired --tools/--gates/--dispatches aliases as unknown flags (exit 2, not silent)", () => {

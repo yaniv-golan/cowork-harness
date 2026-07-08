@@ -2443,7 +2443,7 @@ async function recordScenarioObject(
 function replayErrorResult(file: string): RunResult {
   return assembleRunResult({
     turn: undefined, // replay reconstructs one recorded run; no multi-turn attribution
-    referencesRead: undefined, // replay doesn't re-derive the skill-file read-set (live-lane signal)
+    referencesRead: undefined, // synthetic error result for an unreadable cassette — no re-drive, nothing to derive
     ablated: undefined, // replay reconstructs a recorded run; ablation is a live-run control
     scenario: file,
     fidelity: "replay",
@@ -4126,7 +4126,7 @@ export async function replayCassette(
 
     return assembleRunResult({
       turn: undefined, // replay reconstructs one recorded run; no multi-turn attribution
-      referencesRead: undefined, // replay doesn't re-derive the skill-file read-set (live-lane signal)
+      referencesRead: rec.filesRead.length ? rec.filesRead : undefined, // re-derived from the frozen Read events on the replay re-drive, same as toolCounts
       ablated: undefined, // replay reconstructs a recorded run; ablation is a live-run control
       scenario: cassette.scenario.name,
       mode: "run",

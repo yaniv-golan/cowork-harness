@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { loadBaseline, resolveAgentBinary } from "../src/baseline.js";
@@ -37,6 +37,7 @@ function runSkill(
   prompt: string,
   sessionId: string,
   resume: boolean,
+  runsDir: string,
 ): { finalMessage: string; result: string; effectiveFidelity: string; turn?: number } {
   const args = [
     "skill",
@@ -54,7 +55,9 @@ function runSkill(
   if (resume) args.push("--resume");
   const r = spawnSync("node", [CLI, ...args], {
     encoding: "utf8",
-    env: { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: TOKEN, COWORK_HARNESS_GITSET: "0" },
+    // Isolate the pinned session under a throwaway runs dir so the test doesn't leak a sess-* dir into
+    // the machine-global ~/.cowork-harness/runs (exactly what --pinned-older-than exists to reclaim).
+    env: { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: TOKEN, COWORK_HARNESS_GITSET: "0", COWORK_HARNESS_RUNS_DIR: runsDir },
     timeout: 240_000,
   });
   const env = JSON.parse(r.stdout || "{}");
@@ -65,23 +68,32 @@ function runSkill(
 describe.skipIf(!CAN)("container --resume conversation continuity", () => {
   it("turn 2 (resumed) recalls a secret established in turn 1 — the session survived the container boundary", () => {
     const folder = mkdtempSync(join(tmpdir(), "cwh-resume-skill-"));
-    // minimal, valid skill so the mount isn't empty (copied raw — outside any repo, GITSET=0)
-    mkdirSync(join(folder, ".claude-plugin"), { recursive: true });
-    writeFileSync(join(folder, "SKILL.md"), "---\nname: helper\ndescription: A helper skill.\n---\n\n# helper\n\nAssist the user.\n");
+    const runsDir = mkdtempSync(join(tmpdir(), "cwh-resume-runs-"));
+    try {
+      // minimal, valid skill so the mount isn't empty (copied raw — outside any repo, GITSET=0)
+      mkdirSync(join(folder, ".claude-plugin"), { recursive: true });
+      writeFileSync(join(folder, "SKILL.md"), "---\nname: helper\ndescription: A helper skill.\n---\n\n# helper\n\nAssist the user.\n");
 
-    const sid = `resume-continuity-${process.pid}`;
-    const t1 = runSkill(
-      folder,
-      "Please remember this fact for later in our conversation: my project's codeword is ZEPHYR7. Just say OK.",
-      sid,
-      false,
-    );
-    expect(t1.result, "turn 1 should complete").toBe("success");
-    expect(t1.effectiveFidelity, "turn 1 must actually run in a container").toBe("container");
+      const sid = `resume-continuity-${process.pid}`;
+      const t1 = runSkill(
+        folder,
+        "Please remember this fact for later in our conversation: my project's codeword is ZEPHYR7. Just say OK.",
+        sid,
+        false,
+        runsDir,
+      );
+      expect(t1.result, "turn 1 should complete").toBe("success");
+      expect(t1.effectiveFidelity, "turn 1 must actually run in a container").toBe("container");
+      expect(t1.turn, "turn 1 stamps turn=1").toBe(1);
 
-    const t2 = runSkill(folder, "What codeword did I ask you to remember? Reply with only that word.", sid, true);
-    expect(t2.result, "turn 2 (resumed) should complete").toBe("success");
-    // turn 2 is a fresh container — recalling the codeword proves the agent session reloaded across it
-    expect(t2.finalMessage, `turn 2 must recall the turn-1 codeword — got: ${t2.finalMessage}`).toMatch(/ZEPHYR7/i);
+      const t2 = runSkill(folder, "What codeword did I ask you to remember? Reply with only that word.", sid, true, runsDir);
+      expect(t2.result, "turn 2 (resumed) should complete").toBe("success");
+      expect(t2.turn, "the resumed turn stamps turn=2 — end-to-end proof of per-turn attribution").toBe(2);
+      // turn 2 is a fresh container — recalling the codeword proves the agent session reloaded across it
+      expect(t2.finalMessage, `turn 2 must recall the turn-1 codeword — got: ${t2.finalMessage}`).toMatch(/ZEPHYR7/i);
+    } finally {
+      rmSync(folder, { recursive: true, force: true });
+      rmSync(runsDir, { recursive: true, force: true }); // don't leak the pinned sess-* dir
+    }
   }, 300_000);
 });

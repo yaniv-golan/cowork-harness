@@ -3439,7 +3439,8 @@ function cmdTrace(args: string[]) {
   ensureOutputFormat("trace", args);
   const json = isJsonOutput(args);
 
-  // --view tools|questions|dispatches replaces the three boolean flags. Legacy flags kept as aliases.
+  // --view <name> selects the rollup; the three legacy boolean flags (--tools/--gates/--dispatches) were
+  // removed and now error as unknown flags (see rejectUnknownFlags below).
   const viewIdx = args.indexOf("--view");
   const viewEqMatch = args.find((a) => a.startsWith("--view="));
   const viewArg: string | undefined = viewEqMatch ? viewEqMatch.slice("--view=".length) : viewIdx >= 0 ? args[viewIdx + 1] : undefined;

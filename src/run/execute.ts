@@ -204,6 +204,11 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // mirror the CLI guard (cli.ts:488) — a library caller skipping the CLI would otherwise get
   // a confusing `cannot resume "undefined"` error deep inside the resume branch.
   if (opts.resume && !opts.sessionId) throw new Error("resume requires sessionId (--session-id was not provided)");
+  // Ablation + resume is incoherent: a resumed session skips re-staging and reuses the prior turn's
+  // already-mounted skill files, so the skill would NOT actually be removed — a green ablation run that
+  // silently still had the skill. Reject rather than stamp a misleading `ablated:true`.
+  if (opts.ablateSkill && opts.resume)
+    throw new UsageError("--ablate-skill cannot be combined with --resume (a resumed session reuses the prior turn's staged skill, so ablation would not take effect)");
 
   const baseline = loadBaseline(scenario.baseline);
   const loadedSession = opts.session ?? loadSessionFromFile(scenario.session);
@@ -809,9 +814,10 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // Non-null: `durationMs` is set unconditionally just above (`Date.now() - startedAt`) — the field is
     // typed optional on RunResult/PartialResult for OTHER (non-execute.ts) producers, not this call site.
     runCrashSafety.finalize(record, "error", partialResult.durationMs!);
+    // run.jsonl before result.json — see the ordering rationale on the success path below.
+    writeRunJsonl(outDir, scenario, effectiveFidelity, record, egress, secrets, turn);
     writeFileSync(join(outDir, "result.json"), scrub(JSON.stringify(partialResult, null, 2), secrets));
     appendIndexRow(runsWriteRoot(), indexRowFromResult(partialResult, { command: opts.command ?? "run", partial: true }));
-    writeRunJsonl(outDir, scenario, effectiveFidelity, record, egress, secrets, turn);
     writeTrace(outDir, record, egress, secrets, partialResult.durationMs);
     scrubFileInPlace(join(outDir, "events.jsonl"), secrets);
     scrubFileInPlace(join(outDir, "control-out.jsonl"), secrets);
@@ -1174,9 +1180,13 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   runCrashSafety.finalize(record, result.result, result.durationMs!);
 
   // Artifacts: the harness-observability log `run.jsonl` REPLACES transcript.json/decisions.jsonl.
+  // Write run.jsonl BEFORE result.json: a crash between the two then leaves run.jsonl present (so the
+  // next resume computes turn N+1 and archives this orphan as run.turn-<N>.jsonl) rather than result.json
+  // present with run.jsonl absent (which would recompute the SAME turn N and overwrite the already-archived
+  // result.turn-<N-1>.json). Order matters — do not swap.
+  writeRunJsonl(outDir, scenario, effectiveFidelity, record, egress, secrets, turn);
   writeFileSync(join(outDir, "result.json"), scrub(JSON.stringify(result, null, 2), secrets));
   appendIndexRow(runsWriteRoot(), indexRowFromResult(result, { command: opts.command ?? "run", partial: false }));
-  writeRunJsonl(outDir, scenario, effectiveFidelity, record, egress, secrets, turn);
   writeTrace(outDir, record, egress, secrets, result.durationMs);
   scrubFileInPlace(join(outDir, "events.jsonl"), secrets);
   scrubFileInPlace(join(outDir, "control-out.jsonl"), secrets);

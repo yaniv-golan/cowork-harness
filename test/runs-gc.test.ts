@@ -107,10 +107,12 @@ describe.skipIf(!can)("prune", () => {
     expect(readdirSync(join(runsRoot, "s"))).toContain("sess-old"); // retained unconditionally
   });
 
-  it("--pinned-older-than rejects a malformed window (exit 2)", () => {
-    const r = spawnSync("node", [CLI, "prune", "--pinned-older-than", "soon"], { encoding: "utf8" });
-    expect(r.status).toBe(2);
-    expect(r.stderr).toMatch(/--pinned-older-than must be/);
+  it("--pinned-older-than rejects a malformed or zero window (exit 2)", () => {
+    for (const bad of ["soon", "0d", "0h"]) {
+      const r = spawnSync("node", [CLI, "prune", "--pinned-older-than", bad], { encoding: "utf8" });
+      expect(r.status, bad).toBe(2);
+      expect(r.stderr, bad).toMatch(/--pinned-older-than must be/);
+    }
   });
 
   // a COMPLETED run (has result.json) outranks a newer EMPTY scaffold dir for a keep slot. The completed

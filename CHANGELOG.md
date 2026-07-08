@@ -64,8 +64,9 @@ All notable changes to this project are documented here. The format is based on
   stripped on replay (skipped-loud), never a vacuous pass.
 - **`RunResult.referencesRead`** — the skill's `references/*` / `scripts/*` files the agent actually
   **Read** during the run (skill-relative, deduped in first-seen order): a progressive-disclosure signal
-  for "did the agent reach this content?" skill-quality measurement. `SKILL.md` is delivered whole as the
-  activation payload (never Read as a file), so it never appears. Live lane only.
+  for "did the agent reach this content?" skill-quality measurement. Main-agent Reads of `references/`/
+  `scripts/` (not `assets/`, not sub-agent reads); `SKILL.md` is delivered whole (never Read as a file),
+  so it never appears. Present on live and replay.
 - **`RunResult.finalMessage`** — the agent's final answer text: the SDK result message's own designated
   answer, not the joined transcript of every assistant turn. Lets a consumer read what the agent actually
   answered without parsing `run.jsonl`. Threaded through every `RunResult` producer (live success and
@@ -130,7 +131,7 @@ All notable changes to this project are documented here. The format is based on
   match against a display-truncated result reports evidence-unavailable instead of claiming the string
   is absent; host-path leak detection also flags `/private/var/`, `/var/folders/`, and `/Volumes/`; an
   all-malformed resource log reports `malformedLines` instead of looking never-sampled; gate-provenance
-  pairing in `trace --gates` uses the persisted `requestId` (retry/duplicate-safe) instead of position.
+  pairing in `trace --view questions` uses the persisted `requestId` (retry/duplicate-safe) instead of position.
 - `record`/`replay`/`verify-cassettes`/`rehash`'s `--output-format json` **error paths** now conform to
   the shared error envelope (previously bare plain-text on some paths); `verify-run`/`assertions`/
   `trace`/`diff`'s **success** JSON is now wrapped in the same envelope for cross-command consistency

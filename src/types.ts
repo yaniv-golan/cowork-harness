@@ -884,9 +884,11 @@ export interface RunResult {
   ablated?: boolean;
   /** Skill reference/script files the agent actually **Read** during the run (skill-relative:
    *  `references/foo.md`, `scripts/bar.py`), deduped in first-seen order. A progressive-disclosure
-   *  signal — "did the agent reach this content?" — for skill-quality measurement. `SKILL.md` is
-   *  delivered whole (never Read as a file), so it never appears here. Live lane only; absent when the
-   *  agent Read no skill files. */
+   *  signal — "did the agent reach this content?" — for skill-quality measurement. Scope: **main-agent
+   *  Reads only** (a sub-agent's reads aren't attributed), matching `references/`/`scripts/` under a
+   *  mounted plugin root — NOT `assets/`, and never `SKILL.md` (delivered whole, never Read as a file).
+   *  Derived from the run's Read events, so it's present on **both live and replay**; absent when no such
+   *  file was Read. */
   referencesRead?: string[];
   /** 1-based turn number within a resumed (`--session-id` + `--resume`) session — 1 for a normal
    *  single-shot run, incrementing per resume. `result.json`/`run.jsonl` hold the LATEST turn; prior

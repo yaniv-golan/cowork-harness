@@ -13,8 +13,10 @@ const DEFAULT_KEEP_LAST = 5;
 export function parseRetentionMs(s: string): number | undefined {
   const m = s.trim().match(/^(\d+)\s*([dhm])$/);
   if (!m) return undefined;
+  const n = Number(m[1]);
+  if (n <= 0) return undefined; // reject `0d`/`0h` — a zero window would reclaim EVERY pinned session
   const mult = m[2] === "d" ? 86_400_000 : m[2] === "h" ? 3_600_000 : 60_000;
-  return Number(m[1]) * mult;
+  return n * mult;
 }
 
 /** A "real run" — has a `result.json` (completed; success OR a recorded error) OR an `events.jsonl`
