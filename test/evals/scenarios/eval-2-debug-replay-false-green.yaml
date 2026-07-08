@@ -1,0 +1,18 @@
+name: eval-2-debug-replay-false-green
+baseline: latest
+session: ./_session.yaml
+fidelity: container
+prompt: "My cowork-harness scenario passes on our per-PR CI gate (which uses `cowork-harness replay`),\
+  \ but the deliverable file it's supposed to check is actually empty in real runs. Here's the scenario:\n\
+  \n```yaml\nname: report-check\nfidelity: container\nprompt: Generate the weekly report to outputs/report.md\n\
+  assert:\n  - file_exists: outputs/report.md\n```\n\nWhy is CI green when the output is wrong, and how\
+  \ do I fix it?"
+assert:
+- semantic_matches:
+    rubric:
+    - cowork-harness replay silently skips filesystem assertions like file_exists because they are live-only
+    - With only a file_exists assertion, the replay-based PR gate evaluates nothing and is vacuously green
+    - 'Fix: add a content assertion (e.g. transcript_matches on the report content) that survives replay'
+    - 'Alternative fix: move the file_exists check to a live run/record nightly gate'
+    - The harness warns loudly when an assertion is skipped on replay
+    - The bundled linter would catch this all-assertions-live-only issue

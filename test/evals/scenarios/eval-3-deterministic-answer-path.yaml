@@ -1,0 +1,19 @@
+name: eval-3-deterministic-answer-path
+baseline: latest
+session: ./_session.yaml
+fidelity: container
+prompt: My cowork-harness `run` keeps failing with an 'unanswered question' error because the skill asks
+  the user to pick an output format. I tried `--on-unanswered llm` but the CLI rejected it, and when I
+  used `--on-unanswered first` the run got flagged nonDeterministic. What's the correct way to make this
+  a deterministic CI regression test?
+assert:
+- semantic_matches:
+    rubric:
+    - 'Recommends scripted answers: a when_question regex matched to a choose rule in the scenario''s
+      answers: block'
+    - 'Recommends pairing scripted answers with on_unanswered: fail for deterministic CI'
+    - 'States that llm is not a valid --on-unanswered CLI value; use --decider-llm or on_unanswered: llm
+      in the YAML instead'
+    - 'Both --decider-llm and on_unanswered: llm are flagged as nonDeterministic'
+    - --on-unanswered first is also flagged nonDeterministic, so it is not a deterministic substitute
+    - Concludes scripted answers are the correct deterministic path for CI

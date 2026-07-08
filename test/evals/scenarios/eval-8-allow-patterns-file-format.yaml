@@ -1,0 +1,18 @@
+name: eval-8-allow-patterns-file-format
+baseline: latest
+session: ./_session.yaml
+fidelity: container
+prompt: Our CI runs `cowork-harness verify-cassettes cassettes/ --allow-domain 'api\.example\.com'` with
+  five more --allow-* flags and the command line is getting unwieldy. I heard there's an --allow-patterns-file
+  flag — what exactly goes in that file, and is there anything I lose by moving my class-scoped flags
+  into it?
+assert:
+- semantic_matches:
+    rubric:
+    - 'The file format is plain text: one regex pattern per line'
+    - 'Blank lines and lines starting with # are ignored'
+    - Patterns are matched whole-token and case-insensitively, same as --allow
+    - File entries are ALL-CLASS (equivalent to bare --allow), unlike a class-scoped flag like --allow-domain
+    - Moving a class-scoped allow into the file widens its scope (e.g. a domain pattern could also suppress
+      a path/email finding)
+    - --allow-patterns-file takes a path to a file OF patterns, not a path to allow directly

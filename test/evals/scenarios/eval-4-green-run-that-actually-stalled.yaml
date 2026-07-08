@@ -1,0 +1,21 @@
+name: eval-4-green-run-that-actually-stalled
+baseline: latest
+session: ./_session.yaml
+fidelity: container
+prompt: 'My cowork-harness scenario asserts only `result: success` and it''s green, but when I look at
+  the transcript the agent ended the turn by asking in plain text ''which file did you mean?'' after already
+  answering one AskUserQuestion gate earlier in the run — it never actually produced the deliverable.
+  Why did this pass, and what should I check or assert instead?'
+assert:
+- semantic_matches:
+    rubric:
+    - 'result: success only means the agent didn''t error — it does not mean the task was completed'
+    - 'A turn ending with a plain-text re-ask after an already-answered gate still reports result: success'
+    - The stalled verdict signal is designed to catch a run ending on a question with no productive tool
+      work after its last gate
+    - 'The stalled signal is a tool-position heuristic: any post-gate tool call, even an errored one,
+      clears the flag (false negative)'
+    - 'A deliverable written before a final confirmation gate does not clear the stalled flag (false positive)
+      — use allow_stall: true there'
+    - 'Recommends asserting the actual deliverable (file_exists/artifact_json/transcript_matches) and
+      checking the verdict signals array for stalled, rather than relying on result: success alone'

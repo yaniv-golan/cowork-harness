@@ -1,0 +1,21 @@
+name: eval-5-web-fetch-egress-allowlist-noop
+baseline: latest
+session: ./_session.yaml
+fidelity: container
+prompt: I added `weather.example.com` to my session's `egress.extra_allow` list because my skill calls
+  `web_fetch` on a URL from that domain that isn't in the prompt — but the harness still raises an unanswered
+  `webfetch:weather.example.com` approval gate and the run fails. I thought extra_allow was supposed to
+  let this through. What's actually gating this, and how do I fix it deterministically?
+assert:
+- semantic_matches:
+    rubric:
+    - web_fetch is gated by URL provenance (whether the URL appeared in the prompt or a prior web_fetch
+      result), not by the egress hostname allowlist
+    - Adding a host to egress.extra_allow is a no-op here because the approval gate is orthogonal to the
+      allowlist
+    - 'Fix 1: put the URL directly in the prompt, making it provenanced and skipping the gate (and the
+      allowlist) entirely'
+    - 'Fix 2: answer the webfetch:<domain> approval gate deterministically via a scripted when_tool rule
+      with grant: domain|once, or a session web_fetch.approved_domains entry'
+    - The webfetch approval gate is fail-closed — it is not auto-allowed, and --on-unanswered first does
+      not grant it

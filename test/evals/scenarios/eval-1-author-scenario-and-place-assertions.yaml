@@ -1,0 +1,19 @@
+name: eval-1-author-scenario-and-place-assertions
+baseline: latest
+session: ./_session.yaml
+fidelity: container
+prompt: I'm using the cowork-harness tool to regression-test a Claude Code skill. The skill lives at ./skills/report-gen,
+  it writes a markdown deliverable to outputs/report.md, and partway through it calls an external API
+  at api.weather.example.com. Write me a cowork-harness scenario YAML to test it, and tell me which assertions
+  belong on the fast per-PR gate vs the nightly job, and why.
+assert:
+- semantic_matches:
+    rubric:
+    - The scenario uses a sandboxed fidelity tier (e.g. container) since it must assert egress to api.weather.example.com
+    - 'The scenario uses scripted answers (when_question/choose rules) with on_unanswered: fail for determinism'
+    - Content assertions (e.g. transcript_matches/result) are kept in separate assert items from filesystem/egress
+      assertions (file_exists/egress_*)
+    - Content assertions like transcript_matches/result run on the token-free replay PR gate
+    - Filesystem and egress assertions (file_exists, egress_*) only evaluate on live runs, so they belong
+      on the nightly job
+    - A single assert item should not mix content keys with filesystem/egress keys

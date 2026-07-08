@@ -1,0 +1,22 @@
+name: eval-10-scripted-choose-hard-fail-and-header-gate
+baseline: latest
+session: ./_session.yaml
+fidelity: container
+prompt: 'My scenario''s scripted `choose:` names an option label but the run hard-fails with ''option
+  not offered'' even though I set `on_unanswered: first`. And a different gate that has only a header
+  with no question text can''t be steered at all. Explain what''s happening in each case and how to fix
+  them without a paid re-record.'
+assert:
+- semantic_matches:
+    rubric:
+    - 'A choose: rule that matched the gate but named a label the gate never offered is treated as an
+      authoring bug and hard-fails'
+    - 'This is distinct from an unanswered gate, so on_unanswered: first (or llm) does not backstop a
+      mismatched choose label'
+    - The error now prints the offered options plus a closest-match suggestion so the anchor can be fixed
+      from the error alone
+    - A header-only gate (empty question) can never be keyed because the steered answer can't be serialized
+      to it
+    - Every gate must have a non-empty question to be steerable
+    - Recommends verify-run answer-coverage against a kept run to catch these issues in about a second
+      before a paid record

@@ -1,0 +1,21 @@
+name: eval-7-which-tier-did-this-cassette-record-at
+baseline: latest
+session: ./eval-7-session.yaml
+fidelity: container
+prompt: 'Here''s a committed cassette from our fleet (report-check.cassette.json). The scenario says `fidelity:
+  cowork` — but which isolation tier did the recording ACTUALLY run at, and how would I catch it if a
+  future Cowork release changes what `cowork` resolves to?
+
+
+  (The cassette is uploaded at mnt/uploads/report-check.cassette.json.)'
+assert:
+- semantic_matches:
+    rubric:
+    - Reads the cassette top-level effectiveFidelity field (hostloop in this fixture) as the tier the
+      live run actually resolved to
+    - 'Explains fidelity: cowork means resolve from the baseline''s host-loop gate at record time, so
+      the authored value alone does not tell you the tier'
+    - 'Points to verify-cassettes to catch future drift: it raises a resolved-tier staleness finding when
+      a cowork cassette effectiveFidelity no longer matches what the current baseline resolves to'
+    - Mentions unverifiable-tier for a cassette that predates effectiveFidelity
+    - 'Does not incorrectly claim the scenario fidelity: field answers the question'

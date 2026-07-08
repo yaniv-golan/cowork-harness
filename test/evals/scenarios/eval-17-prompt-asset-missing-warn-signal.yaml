@@ -1,0 +1,16 @@
+name: eval-17-prompt-asset-missing-warn-signal
+baseline: latest
+session: ./_session.yaml
+fidelity: container
+prompt: My cowork-harness run came back green, but I noticed a `prompt_asset_missing` signal in the verdict
+  output. Does that block the pass, and what should I do about it?
+assert:
+- semantic_matches:
+    rubric:
+    - prompt_asset_missing is a WARN-severity verdict signal, not a hard failure
+    - The run proceeded and can still green even though a prompt asset referenced by the scenario was
+      not found
+    - A missing prompt asset means the model ran against an incomplete prompt
+    - Advises scanning the verdict signals array after every run
+    - Recommends treating prompt_asset_missing as a blocking error in CI by checking the signals array
+    - A green run with a missing prompt asset is not a valid pass — fix the asset path

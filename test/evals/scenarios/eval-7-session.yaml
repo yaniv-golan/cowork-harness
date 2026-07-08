@@ -1,0 +1,8 @@
+# eval-7: installs the companion skill AND uploads the cassette the prompt refers to.
+plugins:
+  local_plugins:
+    - ../../../.claude/skills/cowork-harness
+  enabled:
+    - cowork-harness@local
+uploads:
+  - ../files/report-check.cassette.json
