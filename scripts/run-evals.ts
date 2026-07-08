@@ -2,14 +2,14 @@
 // references/*.md + each eval's evals/files/*), so a skill-content edit that guts or drifts an
 // answer becomes visible as a claim-passCount regression instead of silently shipping.
 //
-//   npx tsx scripts/run-evals.ts --dry-run     # validate + assemble prompts, zero model calls
-//   npm run evals -- --out report.json         # live run, also writes the graded report to a file
+//   npx tsx scripts/run-evals.ts --dry-run       # validate + assemble prompts, zero model calls
+//   npm run evals -- --out report.json           # live run over all evals, writes the graded report
+//   npm run evals -- --ids 10,11 --out r.json    # live run over just those eval ids (cheap calibration)
 //
 // Env overrides: COWORK_EVAL_ANSWER_MODEL, COWORK_EVAL_JUDGE_MODEL, COWORK_EVAL_REPS.
 //
-// LIVE PATH IS UNVALIDATED IN THIS COMMIT. defaultCallModel() shells out to the `claude` CLI and
-// has not been exercised end-to-end against real models — treat any live run's numbers as needing
-// a live smoke test before trusting them for a real before/after diff.
+// Live path validated end-to-end against real models (claude-sonnet-5 answerer / claude-opus-4-8
+// judge). Single-rep numbers are noisy — use REPS>=3 for a before/after baseline diff.
 import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -17,7 +17,10 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 export const SKILL_DIR = join(REPO_ROOT, ".claude/skills/cowork-harness");
-export const EVALS_DIR = join(SKILL_DIR, "evals");
+// Eval data lives OUTSIDE the plugin dir (test/evals/) so the answer key isn't staged into the
+// sandbox or shipped in the published plugin — per the official skill-creator convention (evals are
+// dev artifacts, not skill content). SKILL_DIR/REFERENCES_DIR still point at the shipped skill.
+export const EVALS_DIR = join(REPO_ROOT, "test/evals");
 export const EVALS_JSON_PATH = join(EVALS_DIR, "evals.json");
 export const REFERENCES_DIR = join(SKILL_DIR, "references");
 
@@ -357,14 +360,15 @@ async function main(): Promise<void> {
   const dryRun = args.includes("--dry-run");
   const outIdx = args.indexOf("--out");
   const outPath = outIdx !== -1 ? args[outIdx + 1] : undefined;
+  const idsIdx = args.indexOf("--ids");
+  const idsFilter =
+    idsIdx !== -1 && args[idsIdx + 1]
+      ? new Set(args[idsIdx + 1].split(",").map((s) => Number(s.trim())))
+      : undefined;
 
-  process.stderr.write(
-    "run-evals: NOTE — the live model-calling path (defaultCallModel shelling out to `claude -p`) is " +
-      "UNVALIDATED in this commit; it has not been exercised end-to-end against real models. Treat any " +
-      "live run's numbers with caution until a live smoke test has been run.\n",
-  );
-
-  const evals = loadEvals();
+  const allEvals = loadEvals();
+  const evals = idsFilter ? allEvals.filter((e) => idsFilter.has(e.id)) : allEvals;
+  if (idsFilter && evals.length === 0) throw new Error(`run-evals: --ids matched no evals (have ${allEvals.map((e) => e.id).join(",")})`);
   const { skillMd, references } = loadSkillPayload();
 
   if (dryRun) {

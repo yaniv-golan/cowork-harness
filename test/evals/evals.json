@@ -48,7 +48,9 @@
       "name": "which-tier-did-this-cassette-record-at",
       "prompt": "Here's a committed cassette from our fleet (report-check.cassette.json). The scenario says `fidelity: cowork` — but which isolation tier did the recording ACTUALLY run at, and how would I catch it if a future Cowork release changes what `cowork` resolves to?",
       "expected_output": "Reads the cassette's top-level `effectiveFidelity` field (\"hostloop\" in the fixture) and correctly explains it records the tier the live run actually resolved to — `fidelity: cowork` means 'resolve from the baseline's host-loop gate at record time', so the authored value alone does not tell you the tier. For catching future drift, points to `verify-cassettes`: it raises a `resolved-tier` staleness finding when a cowork cassette's recorded effectiveFidelity no longer matches what the current baseline resolves to (and `unverifiable-tier` when the cassette predates effectiveFidelity). Should NOT claim the scenario's fidelity field answers the question or that grepping the events stream is required.",
-      "files": ["files/report-check.cassette.json"]
+      "files": [
+        "files/report-check.cassette.json"
+      ]
     },
     {
       "id": 8,
@@ -62,6 +64,69 @@
       "name": "batch-record-atomicity",
       "prompt": "I'm about to run `cowork-harness record scenarios/ --concurrency 4` over 20 scenarios in CI. If the job gets OOM-killed or one scenario fails mid-batch, can I end up with corrupt or half-written cassettes committed to my repo? What are the actual failure semantics?",
       "expected_output": "Correctly states per-file atomicity: each cassette is written via same-dir temp file + rename (atomic on POSIX), so a crash can never leave a partial/corrupt cassette at the target path — a cassette either exists complete or not at all. Batch semantics: scenarios are independent — one failure does not roll back or halt siblings; the batch continues and exits non-zero (1) if any scenario failed, so CI still fails loud. Bonus points: mentions the up-front duplicate-output guard (two scenarios whose name: slugifies to the same cassette path fail the batch before any spawn, since they would clobber/race), and that runs are fully isolated per scenario (unique sidecar networks/proxy) so --concurrency does not introduce cross-talk. Should NOT claim the batch is all-or-nothing/transactional, and should not claim a mid-batch failure corrupts previously written cassettes.",
+      "files": []
+    },
+    {
+      "id": 10,
+      "name": "scripted-choose-hard-fail-and-header-gate",
+      "prompt": "My scenario's scripted `choose:` names an option label but the run hard-fails with 'option not offered' even though I set `on_unanswered: first`. And a different gate that has only a header with no question text can't be steered at all. Explain what's happening in each case and how to fix them without a paid re-record.",
+      "expected_output": "Explains that a scripted rule that DID match the gate but whose `choose:` names a label the gate never offered (the model reworded it) is treated as an authoring bug and hard-fails the run — this is distinct from an *unanswered* gate, so `on_unanswered: first` (or llm) does NOT backstop it. Notes the error now prints the offered options plus a closest-match suggestion, so the anchor can be fixed from the error alone. Separately explains that a header-only gate (empty `question`) can never be keyed because the steered answer can't be serialized to it, so every gate must have a non-empty question. Recommends `verify-run` answer-coverage against a kept run to catch a reworded gate or a never-offered choose in about a second, before a paid record.",
+      "files": []
+    },
+    {
+      "id": 11,
+      "name": "external-decider-first-shorthand-disabled",
+      "prompt": "I wrote an external `--decider-cmd` helper for answering gates. When it returns the string \"first\" the gate fails instead of selecting option 1. Is that a bug in the harness?",
+      "expected_output": "Explains this is intentional, not a bug: the \"first\" keyword shorthand is DISABLED for external `--decider-cmd` / `--decider-dir` helpers — it stays active only for the built-in `--on-unanswered first` path. A helper that returns the literal string \"first\" must match an actual option label named \"first\", otherwise the gate fails loud. States the rationale: this prevents a helper bug (accidentally emitting \"first\") from silently green-ing option 1. Recommends helpers return a real label name or a numeric option index.",
+      "files": []
+    },
+    {
+      "id": 12,
+      "name": "fidelity-tier-for-egress-test",
+      "prompt": "I want to test that my skill's sandbox blocks an outbound call to an unexpected host under default-deny egress. Which fidelity tier should I use, why can't I use protocol, is microvm any better for this, and how do I set the tier?",
+      "expected_output": "Says an egress/boundary test needs a sandboxed tier — `container` (the default: real sandbox + real default-deny egress) is right for most functional and boundary tests. Explains `protocol` (L0) has no sandbox and no egress and is REJECTED (fails loud by design), not silently passed, when the scenario asserts egress. Notes `microvm` gives VM-grade escape isolation but its egress transport is the SAME allowlist proxy as container — it is not better network fidelity, so it's for testing untrusted-code escape, not network behavior. States the tier is set in the scenario's `fidelity:` field, not a `--fidelity` flag (`run` takes fidelity only from the scenario and rejects the flag).",
+      "files": []
+    },
+    {
+      "id": 13,
+      "name": "multi-key-and-tool-called-semantics",
+      "prompt": "Two questions about assertions. First, if I put `{tool_called: Write, egress_denied: api.example.com}` as one assert item and the run is green, does that prove BOTH happened? Second, does `tool_called: Bash` prove the agent at least attempted to run Bash?",
+      "expected_output": "Explains a single assert item with more than one key is an AND — it passes only if every key passes; and warns that a mixed content+live item like this loses its filesystem/egress half on the token-free replay lane, so keep one concern per item. Separately explains that `tool_called` does NOT mean 'attempted': tool counts are authoritative and de-duped, and a tool that was requested then denied does NOT register as called — so `tool_called` proves the tool actually ran, not that it was attempted.",
+      "files": []
+    },
+    {
+      "id": 14,
+      "name": "subagent-dispatch-and-declared-unused",
+      "prompt": "My `subagent_dispatched: researcher` assertion never matches even though a sub-agent clearly ran, and `subagent_declared_but_unused` keeps firing. How do these assertions actually match, and is `dispatch_count_max` a real production cap I'm reproducing?",
+      "expected_output": "Explains `subagent_dispatched` matches by the dispatch DESCRIPTION too, and that skills often dispatch with no `subagent_type` (agentType is 'unknown'), so you should match against the description rather than the type. Explains `subagent_declared_but_unused` fires when a sub-agent was declared a tool but didn't use THAT tool, even if it used other tools. States that `dispatch_count_max` is an author-chosen budget — a post-hoc count assertion, not a production cap — because Cowork imposes no in-conversation Task-dispatch cap to reproduce; use it only to catch a fan-out you don't want.",
+      "files": []
+    },
+    {
+      "id": 15,
+      "name": "mount-modes-delete-deny-and-readonly-recording",
+      "prompt": "I set a connected folder to `mode: rwd` expecting delete-protection on outputs/, but `rm` succeeded in the run. Separately, for a `mode: r` connected folder, are its files captured in the cassette, and do `file_exists` and `artifact_json` work against them on replay?",
+      "expected_output": "Explains that read-only (`mode: r`) mounts get a real `:ro` bind so a write fails in-guest, but `rw` vs `rwd` (write-but-no-delete on outputs/ or connected folders) is NOT mount-enforced — an `rm` succeeds and is only caught post-hoc by the `no_delete_in_outputs` assertion. Then explains a `mode: r` folder's contents are recorded body-less (path plus hash, truncated, no body) because it's an input the agent read, not a deliverable it wrote: `file_exists` (and computer_links_resolve) still pass on replay against the hash-only placeholder, but `artifact_json` reports evidence-unavailable on every lane (live, verify-run, and replay agree).",
+      "files": []
+    },
+    {
+      "id": 16,
+      "name": "gate-count-and-vacuous-delivery",
+      "prompt": "I asserted `questions_count_max: 3` and it failed on a run that only presented one AskUserQuestion gate. And separately `gate_answers_delivered: true` passed on a run where I don't think any gate fired at all. Are both of these behaving correctly?",
+      "expected_output": "Explains `questions_count_max` counts SUB-questions, not gates: one AskUserQuestion tool call can bundle several sub-questions into a single gate, and each sub-question is counted, so a 3-sub-question bundle counts as 3 — recommends reading the per-gate sub-question count from `trace --view questions`. Explains that `gate_answers_delivered: true` passes VACUOUSLY when no gate fires (whether a gate fires is model-dependent), so it can't catch 'the gate never fired at all' — pair it with `gate_answer_count_min: 1` when the presence of a gate matters, not just delivery.",
+      "files": []
+    },
+    {
+      "id": 17,
+      "name": "prompt-asset-missing-warn-signal",
+      "prompt": "My cowork-harness run came back green, but I noticed a `prompt_asset_missing` signal in the verdict output. Does that block the pass, and what should I do about it?",
+      "expected_output": "Explains `prompt_asset_missing` is a WARN-severity verdict signal, not a hard failure — the run proceeded and can still green even though a prompt asset referenced by the scenario was not found, meaning the model ran against an incomplete prompt. Advises scanning the verdict signals array after every run and treating `prompt_asset_missing` as a blocking error in CI by checking the signals array, and fixing the asset path, because a green with a missing prompt asset is not a valid pass.",
+      "files": []
+    },
+    {
+      "id": 18,
+      "name": "env-placement-and-base64-redaction",
+      "prompt": "Two safety questions. Where should I keep my .env so the OAuth token doesn't leak into the sandbox, and why did running from a git worktree give me 'no model credentials'? And separately, I have a base64 artifact that contained a secret — `record` scrubbed it and now my `artifact_json` assertion fails on replay. Why?",
+      "expected_output": "Explains you must keep `.env` OUT of any mounted folder because a mounted folder is copied into the sandbox and the token could leak — put it at a working-dir or install root (resolution order env, then --dotenv, then ./.env, then install .env). Notes the inverse footgun: a git worktree's ./.env is gitignored so it's absent there, causing 'no model credentials' — fix by passing `--dotenv <main-checkout>/.env`. Then explains that when `record` detects a secret embedded in a base64 artifact it replaces the entire artifact body with a [REDACTED:base64] marker and emits a warning, so any `artifact_json` or content assertion targeting that artifact fails at replay because the body no longer matches — the fix is to not let secrets flow into artifacts, and if the artifact is intentionally opaque, drop the content assertion and gate on `file_exists` on the live lane instead.",
       "files": []
     }
   ]

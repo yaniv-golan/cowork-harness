@@ -17,9 +17,9 @@ import {
 } from "../scripts/run-evals.js";
 
 describe("loadEvals", () => {
-  it("returns 9 evals, each with required non-empty fields", () => {
+  it("returns the eval set, each with required non-empty fields", () => {
     const evals = loadEvals();
-    expect(evals.length).toBe(9);
+    expect(evals.length).toBeGreaterThanOrEqual(18);
     for (const e of evals) {
       expect(typeof e.id).toBe("number");
       expect(e.name.trim()).not.toBe("");
