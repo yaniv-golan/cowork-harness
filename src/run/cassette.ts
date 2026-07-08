@@ -197,6 +197,12 @@ export interface Cassette {
   // record always sets this when the folder count is derivable) → replay refuses to fall back to the
   // current session and instead treats every host-shaped folder link as evidence-unavailable (Finding 25).
   folderPrefixMap?: Array<{ from: string; mount: string }>;
+  // Recording ENVIRONMENT provenance — the location + tier this cassette was recorded under. Stamped
+  // `location:"local"` on every recording (this harness records only local runs), so a hypothetical
+  // future cloud-recorded cassette is positively distinguishable. `tier` is the resolved effective
+  // fidelity; `agentBinaryFormat` mirrors baseline.agentBinary.format. Additive, looseObject → no
+  // CASSETTE_VERSION bump. Readers that don't know it ignore it (backward-compat).
+  environment?: { location: "local" | "cloud"; tier?: string; agentBinaryFormat?: string };
 }
 
 /** Current cassette format version. Readers tolerate ABSENT (legacy → 0) and warn on a FUTURE version. */
@@ -2341,6 +2347,14 @@ async function recordScenarioObject(
     }
   }
   const timeline = readTimeline(result.outDir);
+  // Load the baseline to extract agentBinaryFormat if available (optional).
+  let agentBinaryFormat: string | undefined;
+  try {
+    const baseline = loadBaseline(result.baseline);
+    agentBinaryFormat = baseline.agentBinary.format;
+  } catch {
+    // Baseline failed to load — proceed without agentBinaryFormat (it's optional).
+  }
   const base: Cassette = {
     $schema: CASSETTE_SCHEMA_URL,
     generator: "cowork-harness",
@@ -2374,6 +2388,9 @@ async function recordScenarioObject(
     // zip against `recordRoots` doesn't line up (inline scenario, no folders, unreadable session);
     // replay then treats this as a v9 cassette that unexpectedly lacks the map (Finding 25).
     folderPrefixMap: buildRecordTimeFolderPrefixMap(scenario, recordRoots),
+    // Recording environment provenance — location is always "local" (this harness records only local),
+    // tier is the resolved effective fidelity, agentBinaryFormat is optional (from baseline.agentBinary.format).
+    environment: { location: "local", tier: result.effectiveFidelity, agentBinaryFormat },
   };
   // (opt-in) content redaction over the whole surface. Empty policy → no-op. Non-empty → must be
   // VERDICT-PRESERVING: replay both and refuse to write on divergence (a manufactured green).
