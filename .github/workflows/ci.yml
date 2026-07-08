@@ -178,9 +178,9 @@ jobs:
             exit 1
           fi
 
-  # ── Stage 1b: pytest `cowork` lane — helper self-checks (no Docker/token; -m 'not cowork') ──
+  # ── Stage 1b: pytest helper lane — token-free subset only, excludes @pytest.mark.cowork (no Docker/token; -m 'not cowork') ──
   python:
-    name: pytest cowork-lane (helper self-checks)
+    name: pytest helper lane (-m 'not cowork')
     runs-on: ubuntu-latest
     needs: unit
     permissions:

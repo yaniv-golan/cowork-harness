@@ -24,9 +24,9 @@ Extra prerequisites for specific stages:
 - **Lima (`limactl`, macOS arm64)** — required only for the **L2 `microvm`** tier and the `vm` commands; the guest runs on Apple Virtualization.framework (`vmType: vz`). `microvm` does **not** use Docker. (`cowork-harness doctor --tier microvm` checks for Lima, not Docker.)
 
 CI Stage 1 (the `unit` job in `.github/workflows/ci.yml`) does **not** invoke `npm run ci`. It runs the
-gate steps individually — e.g. `format:check`, `typecheck`, `npm test`, `build`, a CLI smoke
-(`node dist/cli.js list`), the token-free `replay` gate, `verify-cassettes`, `lint`, and source-guard
-checks (see `ci.yml` for the authoritative list). Only `release.yml` calls `npm run ci`.
+gate steps individually — e.g. `check:versions`, `format:check`, `typecheck`, `npm test`, `build`, a CLI
+smoke (`node dist/cli.js list`), three token-free `replay` gate fixtures, `verify-cassettes`, `lint`, and
+source-guard checks (see `ci.yml` for the authoritative list). Only `release.yml` calls `npm run ci`.
 
 > **Cutting a release?** See [RELEASING.md](./RELEASING.md) for the branch → PR → tag → publish flow.
 
@@ -73,7 +73,7 @@ When a Desktop release moves something `sync` doesn't read, it reports an `unkno
 ## Commit & PR
 
 - Conventional, imperative commit subjects (`add …`, `fix …`, `parity: sync to <ver>`).
-- Open PRs against `main`. CI runs typecheck, tests, build, and boundary parity on every PR including forks (no secrets needed); live scenarios only run on same-repo PRs/pushes with `ANTHROPIC_API_KEY` set.
+- Open PRs against `main`. CI runs a six-stage pipeline (`unit`, `action-self-test`, `python`, `boundary`, `scenarios`, `parity-drift` — see `ci.yml`) on every PR including forks (no secrets needed) except `scenarios`; live scenarios only run on same-repo PRs/pushes with `ANTHROPIC_API_KEY` set.
 - Describe *what changed and why*; link issues.
 
 ## Reporting issues
