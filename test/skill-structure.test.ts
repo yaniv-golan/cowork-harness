@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-// Structural tripwire (7d) for .claude/skills/cowork-harness/SKILL.md.
+// Structural tripwire for .claude/skills/cowork-harness/SKILL.md.
 //
 // This is a TRIPWIRE, not a semantic gate: it checks a COUNT (are there still ~as many gotcha
 // items as before) and the PRESENCE of a few load-bearing section markers, matched as substrings

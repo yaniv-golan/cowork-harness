@@ -1,9 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { ablateSession } from "../src/run/execute";
 
-// C2: --ablate-skill strips ALL skill/plugin discovery so the same prompt runs with no skill (a
+// --ablate-skill strips ALL skill/plugin discovery so the same prompt runs with no skill (a
 // deterministic negative control), while preserving model/folders/egress.
-describe("ablateSession (C2)", () => {
+describe("ablateSession", () => {
   const base = {
     model: "claude-opus-4-8",
     folders: [{ from: "/x", mode: "rw" }],

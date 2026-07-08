@@ -4,10 +4,10 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { archivePriorTurnFiles, currentTurn } from "../src/run/execute";
 
-// A1/B3: a resumed turn must not clobber a prior turn's run.jsonl / result.json. Both stay the LATEST
+// A resumed turn must not clobber a prior turn's run.jsonl / result.json. Both stay the LATEST
 // turn (their readers depend on that); earlier turns are preserved as run.turn-<N>.jsonl /
 // result.turn-<N>.json so turn 1's transcript and result stay recoverable after --resume.
-describe("per-turn run.jsonl/result.json preservation (A1/B3)", () => {
+describe("per-turn run.jsonl/result.json preservation", () => {
   let dir: string;
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), "cc-runturns-"));

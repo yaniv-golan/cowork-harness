@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import ts from "typescript";
 
-// Task M11: keep schema/run-result.json in sync with the `RunResult` TYPE automatically. Rather than
+// Keep schema/run-result.json in sync with the `RunResult` TYPE automatically. Rather than
 // regenerate the hand-tuned §12 schema (its descriptions, permissive pass-through nodes, and loose
 // arrays are deliberate), this DERIVES the type's top-level field set from src/types.ts via the TS
 // compiler API and asserts the schema declares EXACTLY those fields — both directions. So a field added

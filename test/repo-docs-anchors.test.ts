@@ -10,8 +10,8 @@ import { resolve, join } from "node:path";
 // heading-slug set for every heading in root README.md and fails if any referenced `#slug` has no
 // matching heading.
 //
-// This is a repo-docs-only check (does not scan the skill payload — that's C1 in
-// skill-payload-links.test.ts).
+// This is a repo-docs-only check (does not scan the skill payload — the payload-link check in
+// skill-payload-links.test.ts covers that).
 
 const README_PATH = resolve("README.md");
 

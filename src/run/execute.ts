@@ -207,7 +207,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
 
   const baseline = loadBaseline(scenario.baseline);
   const loadedSession = opts.session ?? loadSessionFromFile(scenario.session);
-  // C2 ablation: strip ALL skill/plugin discovery so no skill-under-test mounts — the agent answers the
+  // Ablation: strip ALL skill/plugin discovery so no skill-under-test mounts — the agent answers the
   // same prompt from its own priors (a deterministic negative control for skill-lift). An empty
   // local_plugins means no mount is attempted, so the empty-mount hard-fail guard never fires.
   const session = opts.ablateSkill ? ablateSession(loadedSession) : loadedSession;

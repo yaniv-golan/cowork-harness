@@ -6,7 +6,7 @@ import { join, resolve } from "node:path";
 import { loadBaseline, resolveAgentBinary } from "../src/baseline.js";
 
 /**
- * B2: PROVE container-tier --resume actually reloads the conversation across a fresh container.
+ * PROVE container-tier --resume actually reloads the conversation across a fresh container.
  *
  * The --session-id + --resume plumbing was wired and argv-tested (test/session.test.ts) but never
  * proven end-to-end: does the native agent session persist in the bind-mounted mnt/.claude (not the
@@ -62,7 +62,7 @@ function runSkill(
   return { finalMessage: res.finalMessage ?? "", result: res.result ?? "", effectiveFidelity: res.effectiveFidelity ?? "", turn: res.turn };
 }
 
-describe.skipIf(!CAN)("container --resume conversation continuity (B2)", () => {
+describe.skipIf(!CAN)("container --resume conversation continuity", () => {
   it("turn 2 (resumed) recalls a secret established in turn 1 — the session survived the container boundary", () => {
     const folder = mkdtempSync(join(tmpdir(), "cwh-resume-skill-"));
     // minimal, valid skill so the mount isn't empty (copied raw — outside any repo, GITSET=0)

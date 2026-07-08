@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
 import { resolve, join, dirname, sep } from "node:path";
 
-// C1: payload-resolution link check.
+// Payload-resolution link check.
 //
 // The installed plugin ships ONLY the payload — .claude/skills/cowork-harness/{SKILL.md,
 // references/*.md, scripts/*, evals/*}. A markdown link `](target)` whose target escapes that
@@ -50,7 +50,7 @@ function isExempt(target: string): boolean {
   return false;
 }
 
-describe("skill payload links stay inside the shipped payload (C1)", () => {
+describe("skill payload links stay inside the shipped payload", () => {
   const files = skillMarkdownFiles();
   expect(files.length).toBeGreaterThan(1); // sanity: SKILL.md + at least one reference doc
 

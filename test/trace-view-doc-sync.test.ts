@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-// Anti-drift tripwire (C2): the `trace --view` enum lives in two places that must agree —
+// Anti-drift tripwire: the `trace --view` enum lives in two places that must agree —
 // src/cli.ts's VIEWS array (what the CLI actually accepts) and README.md's trace row (what a
 // user reading the docs believes is accepted). Neither is generated from the other, so a view
 // added/renamed/removed in one and not the other silently rots. Source of truth is src/cli.ts;

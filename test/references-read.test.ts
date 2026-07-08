@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { skillReferenceReadPath } from "../src/run/run";
 
-// B4: classify a Read tool's file_path as a skill reference/script access (the referencesRead signal).
-describe("skillReferenceReadPath (B4)", () => {
+// Classify a Read tool's file_path as a skill reference/script access (the referencesRead signal).
+describe("skillReferenceReadPath", () => {
   it("captures a reference Read under a mounted plugin root (container path shape)", () => {
     expect(
       skillReferenceReadPath(
