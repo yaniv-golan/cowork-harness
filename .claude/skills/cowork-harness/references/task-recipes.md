@@ -94,6 +94,11 @@ record — retrofitting means re-recording:
    version-controlled allowlist use `--allow-patterns-file <path>`: a FILE of bare all-class
    patterns, one regex per line, `#` comments and blank lines ignored — note the flag name is the
    FILE of patterns, not a path to allow.
+6. **Matching semantics (any allow — flag or file):** each pattern is anchored to the **whole finding
+   token** (`^(?:…)$`), so `example\.com` clears an `example.com` finding but NOT `sub.example.com` —
+   a narrow allow can't silently swallow a wider leak. Matching is **case-SENSITIVE** unless your regex
+   carries an `i` flag (e.g. `(?i)api\.example\.com`). It is NOT whole-token *and* case-insensitive by
+   default — write the `i` in yourself if you need it.
 
 ## Recipe 4 — Budget assertions without a two-pass record
 

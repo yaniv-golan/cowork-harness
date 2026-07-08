@@ -13,8 +13,6 @@ assert:
     - Scenarios in a batch are independent; one failure does not roll back or halt siblings
     - The batch continues on a failure but exits non-zero (1) if any scenario failed, so CI still fails
       loud
-    - Two scenarios whose name slugifies to the same cassette path are caught up front and fail the batch
-      before any spawn
     - Runs are fully isolated per scenario (unique sidecar networks/proxy), so --concurrency doesn't cause
       cross-talk
     - The batch is NOT all-or-nothing/transactional, and a mid-batch failure does not corrupt previously

@@ -11,7 +11,6 @@ assert:
     - A single assert item with more than one key is an AND — it passes only if every key passes
     - A mixed content+live item (like tool_called + egress_denied) loses its filesystem/egress half on
       the token-free replay lane
-    - Recommends keeping one concern per assert item
     - 'tool_called does not mean ''attempted'': tool counts are authoritative and de-duped'
     - A tool that was requested then denied does not register as tool_called
     - tool_called proves the tool actually ran, not merely that it was attempted

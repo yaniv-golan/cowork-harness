@@ -11,7 +11,8 @@ assert:
     rubric:
     - 'The file format is plain text: one regex pattern per line'
     - 'Blank lines and lines starting with # are ignored'
-    - Patterns are matched whole-token and case-insensitively, same as --allow
+    - Patterns are matched against the WHOLE finding token (anchored, not substring), and matching is
+      case-sensitive unless the regex carries an i flag
     - File entries are ALL-CLASS (equivalent to bare --allow), unlike a class-scoped flag like --allow-domain
     - Moving a class-scoped allow into the file widens its scope (e.g. a domain pattern could also suppress
       a path/email finding)
