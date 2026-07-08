@@ -138,3 +138,37 @@ describe.skipIf(!can)("replay --explain — prints the passing-assert evidence t
     expect(r.stderr).toMatch(/hello/);
   });
 });
+
+describe("present_files presence + skill/artifact evidence (#15/#16/#38)", () => {
+  it("present_files_called fails when nothing was presented, on the container tier (#15)", () => {
+    const [r] = evaluate([{ present_files_called: true }], ctx({ effectiveFidelity: "container", presentedFiles: [] }));
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/never called|no file was delivered/);
+  });
+
+  it("present_files_called passes when a file was actually presented (#15)", () => {
+    const [r] = evaluate(
+      [{ present_files_called: true }],
+      ctx({ effectiveFidelity: "container", presentedFiles: [{ from: "/x", to: "/mnt/outputs/x", promoted: true, leaked: false }] }),
+    );
+    expect(r.pass).toBe(true);
+  });
+
+  it("present_files_called is cannot-verify off the container tier (#15)", () => {
+    const [r] = evaluate([{ present_files_called: true }], ctx({ effectiveFidelity: "hostloop", presentedFiles: [] }));
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/container tier/);
+  });
+
+  it("skill_available is evidence-unavailable when availableSkills is undefined — a missing init inventory (#16)", () => {
+    const [r] = evaluate([{ skill_available: "my-skill" }], ctx({ availableSkills: undefined }));
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/evidence unavailable|absent/);
+  });
+
+  it("no_unexpected_files is evidence-unavailable when the baseline origin is local-unreadable (#38)", () => {
+    const [r] = evaluate([{ no_unexpected_files: [] }], ctx({ preRunOrigin: "local-unreadable", preRunPaths: [] }));
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/local-unreadable|evidence unavailable/);
+  });
+});

@@ -84,6 +84,7 @@ CONTENT_KEYS = {
     "task_count_min",
     "task_status",
     "no_scratchpad_leak",
+    "present_files_called",
 }
 # content keys, but only evaluated on replay when the cassette carries controlOut
 GATE_KEYS = {

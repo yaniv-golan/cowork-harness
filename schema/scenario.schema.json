@@ -357,6 +357,11 @@
             "type": "boolean",
             "const": true
           },
+          "present_files_called": {
+            "description": "at least one file was actually delivered via the present_files tool (presentedFiles is non-empty). The presence companion to no_scratchpad_leak (which passes vacuously when nothing was presented) — pair them to require a delivery AND require it not to leak; CONTAINER TIER ONLY — present_files is not served on hostloop/microvm; only `true` is valid",
+            "type": "boolean",
+            "const": true
+          },
           "egress_denied": {
             "description": "egress to this host was denied",
             "type": "string"

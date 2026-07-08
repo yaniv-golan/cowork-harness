@@ -334,6 +334,12 @@ export const Assertion = z.strictObject({
     .describe(
       "every file presented via present_files that was in the scratchpad was successfully promoted to outputs (none left behind); vacuous pass if nothing was presented — pair with a presence check to require a delivery; content-class (re-derived from the tool_use/tool_result stream, so checkable on replay too); CONTAINER TIER ONLY — present_files is not served on hostloop/microvm, where a scratchpad-delivered file is neither promoted nor detected (use fidelity: container for present_files-based delivery); only `true` is valid",
     ),
+  present_files_called: z
+    .literal(true)
+    .optional()
+    .describe(
+      "at least one file was actually delivered via the present_files tool (presentedFiles is non-empty). The presence companion to no_scratchpad_leak (which passes vacuously when nothing was presented) — pair them to require a delivery AND require it not to leak; CONTAINER TIER ONLY — present_files is not served on hostloop/microvm; only `true` is valid",
+    ),
   egress_denied: z.string().optional().describe("egress to this host was denied"),
   egress_allowed: z.string().optional().describe("egress to this host was allowed"),
   // Only `true` is accepted: `false` is rejected as a footgun. The assertion is presence-semantic — authoring

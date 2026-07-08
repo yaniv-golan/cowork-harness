@@ -3637,6 +3637,7 @@ export const ALWAYS_CONTENT_KEYS: (keyof Assertion)[] = [
   // in the ordinary events stream, so the re-drive reproduces `RunResult.presentedFiles` exactly like
   // the other re-derived signals above (skill_triggered, redundantToolCalls, …).
   "no_scratchpad_leak",
+  "present_files_called",
   // Verdict modifiers — NOT filesystem/egress assertions. Keep all of them on replay (each evaluates to a
   // no-op pass via assert.ts) so a standalone modifier neither inflates the "filesystem/egress skipped"
   // count nor emits a misleading warning, AND so the replay path actually exercises their assert.ts noop

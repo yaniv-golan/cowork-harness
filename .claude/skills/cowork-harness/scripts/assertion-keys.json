@@ -31,6 +31,7 @@
     "no_scratchpad_leak",
     "no_skill_triggered",
     "no_unexpected_files",
+    "present_files_called",
     "question_asked",
     "questions_count_max",
     "replay_protocol_fidelity",

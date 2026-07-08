@@ -263,6 +263,7 @@ the rules and CI-placement rationale (why each category behaves this way), see
 | `no_hook_blocked` | no tool was hook-blocked during the run — replay: needs `controlOut`. **Only `true` is valid** |
 | `result` | run ended with `success` or `error` |
 | `no_scratchpad_leak` | every file presented via `present_files` that was in the scratchpad was successfully promoted to `mnt/outputs` (none left behind) — vacuous pass if nothing was presented; content-class: both the tool_use and its own tool_result live in the ordinary events stream, so `RunResult.presentedFiles` re-derives identically on replay; evidence-unavailable only when `presentedFiles` is absent (an older run predating the feature); **container tier only** — `present_files` is not served on hostloop/microvm |
+| `present_files_called` | at least one file was delivered via `present_files` (`RunResult.presentedFiles` is non-empty) — the presence companion to `no_scratchpad_leak`; content-class (re-derives identically on replay); **container tier only** |
 | `allow_permissive_auto_allow` | verdict modifier — kept on replay → no-op pass (the live signal it suppresses is zeroed) |
 | `allow_missing_capability` | verdict modifier — kept on replay → no-op pass (the live signal it suppresses is zeroed) |
 | `allow_l0_plugin_divergence` | verdict modifier — kept on replay → no-op pass (the live signal it suppresses is zeroed) |

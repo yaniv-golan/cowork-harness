@@ -744,6 +744,11 @@ export class Run {
     this.pendingPresentFiles.delete(toolUseId);
     const tos = textBlocks ?? [];
     const cwd = this.rec.cwd;
+    // Without cwd we CANNOT classify any presented path as scratchpad-or-not, so every file below would
+    // be recorded leaked:false — a silently permissive pass. Count it as incomplete leak telemetry so
+    // no_scratchpad_leak fails "cannot verify" instead of vacuously green (the from/to are still recorded
+    // for forensics; only the promoted/leaked booleans are unreliable in this case). #14
+    if (cwd === undefined && froms.length > 0) this.rec.evidenceErrors.presentFilesMalformed += froms.length;
     const isScratchpad = (p: string): boolean => cwd !== undefined && p.startsWith(`${cwd}/`) && !p.startsWith(`${cwd}/mnt/`);
     for (let i = 0; i < froms.length; i++) {
       const from = froms[i];

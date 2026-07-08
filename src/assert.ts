@@ -201,7 +201,7 @@ export interface AssertContext {
    *  evidence-unavailable — the same loud path taken when preRunPaths/preRunHashes are absent entirely —
    *  never a vacuous pass just because a (locally meaningless) preRunPaths/preRunHashes happens to be
    *  present. undefined today on every real caller; only a hand-constructed ctx sets this. */
-  preRunOrigin?: "local-walk" | "remote-unavailable";
+  preRunOrigin?: "local-walk" | "remote-unavailable" | "local-unreadable";
   /** Replay-lane ONLY: authoritative post-run per-path sha256 from the cassette manifest
    *  (cassette.artifacts[].sha256). undefined on live/verify-run (there, input_unmodified re-hashes the
    *  real tree under workRoot). Needed because replay's materialized tree writes 0-byte placeholders for
@@ -804,7 +804,7 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
     else if (ctx.evidenceErrors?.presentFilesMalformed)
       results.push(
         fail(
-          `no_scratchpad_leak: ${ctx.evidenceErrors.presentFilesMalformed} malformed present_files call(s) — leak evidence is incomplete, cannot verify (malformed telemetry)`,
+          `no_scratchpad_leak: ${ctx.evidenceErrors.presentFilesMalformed} malformed/unclassifiable present_files call(s) — leak evidence is incomplete, cannot verify (e.g. malformed input, or no cwd to classify scratchpad membership)`,
         ),
       );
     else if (ctx.presentedFiles === undefined)
@@ -813,6 +813,20 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
       const leaked = ctx.presentedFiles.find((p) => p.leaked);
       results.push(leaked ? fail(`no_scratchpad_leak: "${leaked.from}" was presented but never left the scratchpad`) : ok());
     }
+  }
+  if (a.present_files_called !== undefined) {
+    // The presence companion to no_scratchpad_leak (which is a vacuous pass when nothing was presented).
+    // Same container-tier gate: present_files is only served there, so a missing delivery on another tier
+    // is "cannot verify," never a false negative.
+    if (ctx.effectiveFidelity !== "container")
+      results.push(
+        fail(
+          `present_files_called: present_files is served only on the container tier (this run: ${ctx.effectiveFidelity ?? "unknown"}) — cannot verify; use fidelity: container for present_files-based delivery`,
+        ),
+      );
+    else if (ctx.presentedFiles === undefined || ctx.presentedFiles.length === 0)
+      results.push(fail(`present_files_called: no file was delivered via present_files (the tool was never called)`));
+    else results.push(ok());
   }
   if (a.no_skill_triggered !== undefined) {
     const c = compileUserRegex(a.no_skill_triggered);
@@ -959,10 +973,10 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
           : fail(`delete op(s) touched outputs (forbidden in Cowork): ${ctx.outputsDeletes.slice(0, 3).join("; ")}`),
     );
   if (a.no_unexpected_files !== undefined) {
-    if (ctx.preRunOrigin === "remote-unavailable") {
+    if (ctx.preRunOrigin === "remote-unavailable" || ctx.preRunOrigin === "local-unreadable") {
       results.push(
         fail(
-          "evidence unavailable: pre-run manifest origin is remote-unavailable (a cloud run's filesystem is not locally observable) — cannot compute created files",
+          `evidence unavailable: pre-run manifest origin is ${ctx.preRunOrigin} (${ctx.preRunOrigin === "remote-unavailable" ? "a cloud run's filesystem is not locally observable" : "a connected-folder source was unreadable, so the baseline is incomplete"}) — cannot compute created files`,
         ),
       );
     } else if (ctx.preRunPaths === undefined) {
@@ -995,10 +1009,10 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
     }
   }
   if (a.input_unmodified !== undefined) {
-    if (ctx.preRunOrigin === "remote-unavailable") {
+    if (ctx.preRunOrigin === "remote-unavailable" || ctx.preRunOrigin === "local-unreadable") {
       results.push(
         fail(
-          "evidence unavailable: pre-run manifest origin is remote-unavailable (a cloud run's filesystem is not locally observable) — cannot compare content",
+          `evidence unavailable: pre-run manifest origin is ${ctx.preRunOrigin} (${ctx.preRunOrigin === "remote-unavailable" ? "a cloud run's filesystem is not locally observable" : "a connected-folder source was unreadable, so the baseline is incomplete"}) — cannot compare content`,
         ),
       );
     } else if (ctx.preRunHashes === undefined) {

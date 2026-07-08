@@ -1,4 +1,4 @@
-import { writeFileSync, readFileSync, statSync } from "node:fs";
+import { writeFileSync, readFileSync, statSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { userVisibleRootsFromPlan, type LaunchPlan } from "../session.js";
@@ -96,9 +96,21 @@ export function capturePreRunManifest(plan: LaunchPlan, workRoot: string, outDir
     hashes[relPath] = hashFileCapped(baseDir, relPath, cap);
     stats[relPath] = statCapture(baseDir, relPath);
   };
+  // Tracks whether any connected-folder source was unreadable during the walk (its baseline entries are
+  // then silently absent). Surfaced via the manifest `origin` so no_unexpected_files / input_unmodified
+  // fail evidence-unavailable rather than diffing against a false-empty baseline. #38
+  let baselineUnreadable = false;
   if (tier === "hostloop") {
     for (const e of collectArtifactPaths(workRoot, ["outputs"])) add(e.path, workRoot, e.linkKind);
     for (const m of folderMounts) {
+      try {
+        realpathSync(m.hostPath);
+      } catch {
+        // The connected-folder source vanished/became unreadable — collectArtifactPathsAt would return
+        // [] silently, yielding a false-empty baseline for this mount. Mark it and skip. #38
+        baselineUnreadable = true;
+        continue;
+      }
       // collectArtifactPathsAt returns mountPath-prefixed paths; the real bytes live under hostPath at the
       // path with the mountPath prefix stripped (leading "<mountPath>/" removed).
       for (const e of collectArtifactPathsAt(m.hostPath, m.mountPath)) {
@@ -114,14 +126,15 @@ export function capturePreRunManifest(plan: LaunchPlan, workRoot: string, outDir
     for (const e of collectArtifactPaths(workRoot, userVisibleRootsFromPlan(plan))) add(e.path, workRoot, e.linkKind);
     paths.sort();
   }
-  // origin of the pre-run baseline. "local-walk" = the filesystem was walked locally by this function
-  // (the ONLY producer today). "remote-unavailable" is RESERVED: a future cloud run's filesystem is not
-  // locally observable, so its manifest would record this and no_unexpected_files / input_unmodified
-  // must then fail EVIDENCE-UNAVAILABLE (see the assert.ts guard clause) — never vacuously pass on an
-  // unwalkable tree. No producer emits "remote-unavailable" yet.
+  // origin of the pre-run baseline. "local-walk" = the filesystem was walked locally by this function.
+  // "local-unreadable" = a connected-folder source was unreadable so the baseline is incomplete.
+  // "remote-unavailable" is RESERVED for a future cloud run whose filesystem is not locally observable.
+  // Both non-"local-walk" values make no_unexpected_files / input_unmodified fail EVIDENCE-UNAVAILABLE
+  // (see the assert.ts guard clauses) — never a vacuous pass on an incomplete/unwalkable tree.
+  const origin = baselineUnreadable ? "local-unreadable" : "local-walk";
   writeFileSync(
     join(outDir, FILE),
-    JSON.stringify({ version: MANIFEST_VERSION, origin: "local-walk", paths, hashes, stats }, null, 2),
+    JSON.stringify({ version: MANIFEST_VERSION, origin, paths, hashes, stats }, null, 2),
   );
 }
 
@@ -193,10 +206,12 @@ export function readPreRunManifestStats(outDir: string): Record<string, { mtimeM
  *  manifest predating this field, or a value that isn't one of the two known literals — callers must
  *  NOT treat undefined as "local-walk"; forward-compat callers should treat an unrecognized value the
  *  same conservative way they treat an absent manifest (evidence-unavailable), never assume it's safe. */
-export function readPreRunManifestOrigin(outDir: string): "local-walk" | "remote-unavailable" | undefined {
+export function readPreRunManifestOrigin(outDir: string): "local-walk" | "remote-unavailable" | "local-unreadable" | undefined {
   try {
     const parsed = JSON.parse(readFileSync(join(outDir, FILE), "utf8")) as { origin?: unknown };
-    return parsed.origin === "local-walk" || parsed.origin === "remote-unavailable" ? parsed.origin : undefined;
+    return parsed.origin === "local-walk" || parsed.origin === "remote-unavailable" || parsed.origin === "local-unreadable"
+      ? parsed.origin
+      : undefined;
   } catch {
     return undefined;
   }

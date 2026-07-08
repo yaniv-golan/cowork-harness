@@ -817,10 +817,15 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // plugin mount). Populated HERE (before the evaluate() ctx below, which needs it for skill_available)
   // rather than only later before assembleRunResult — reading it twice would be wasteful and out of order;
   // this single assignment feeds both.
-  const availableSkillIds = record.context?.availableSkills?.map((s) => s.id) ?? [];
+  // `initSkills` is the id-only list run.ts seeded from the agent's init event — undefined if init never
+  // delivered an inventory (a pre-init crash / an agent version that didn't emit it). PRESERVE that
+  // undefined: collapsing it to a defined [] (the old `?? []` + unconditional enrich) made skill_available
+  // report "no staged skill matched" (false-absent) instead of tripping its evidence-unavailable guard. #16
+  const initSkills = record.context?.availableSkills;
+  const availableSkillIds = initSkills?.map((s) => s.id) ?? [];
   record.context = {
     ...record.context,
-    availableSkills: resolveAvailableSkills(availableSkillIds, plan.configDir, pluginSkillRootsFromPlan(plan)),
+    availableSkills: initSkills === undefined ? undefined : resolveAvailableSkills(availableSkillIds, plan.configDir, pluginSkillRootsFromPlan(plan)),
   };
 
   // Fold resources.jsonl ONCE — reused by both the evaluate() ctx below (max_peak_rss_bytes) and the

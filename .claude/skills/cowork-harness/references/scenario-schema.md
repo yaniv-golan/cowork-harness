@@ -259,6 +259,7 @@ same set live from the schema.
 | `task_count_min: <N>` | at least N tasks were created (`RunResult.tasks.length >= N`) — the presence companion for task assertions |
 | `task_status: {match, status}` | a task whose `subject` OR `id` matches the regex `match` reached `status` — evidence-unavailable if tasks telemetry is absent |
 | `no_scratchpad_leak: true` | every file presented via `present_files` that was in the scratchpad was successfully promoted to `mnt/outputs` (none left behind) — vacuously passes if nothing was presented (pair with a presence check to require a delivery); content-class: both the `present_files` tool_use and its own tool_result live in the ordinary events stream, so `RunResult.presentedFiles` re-derives identically on replay (meaningfully replay-checkable, same as `skill_triggered`); evidence-unavailable if `presentedFiles` telemetry is absent (an older run predating the feature). **`fidelity: container` only** — `present_files` is not served on hostloop/microvm, so a scratchpad-delivered file is neither promoted to `mnt/outputs` nor detected there (a skill that delivers via write-to-cwd→`present_files` will false-red `user_visible_artifact` on those tiers; use `container`, or write directly to `outputs/`). **Only `true` is valid** |
+| `present_files_called: true` | at least one file was actually delivered via the `present_files` tool (`RunResult.presentedFiles` is non-empty) — the presence companion to `no_scratchpad_leak` (which passes vacuously when nothing was presented). Pair them to require a delivery **and** require it not to leak. Content-class (re-derives identically on replay). **`fidelity: container` only** — `present_files` is not served on hostloop/microvm. **Only `true` is valid** |
 | `question_asked: <regex>` | the agent asked an AskUserQuestion whose text matches |
 | `questions_count_max: <N>` | at most N **sub-questions** asked — a bundled `AskUserQuestion` with K sub-questions counts as K, not 1; `trace --view questions`'s footer total uses the same definition |
 | `gate_answers_delivered: true` | every answered gate's answer reached the model (observed `tool_result`; unobserved = fail); **zero gates fired passes vacuously** — pair with `gate_answer_count_min` to also require a gate |
@@ -332,7 +333,7 @@ sourcing ≠ evaluation (replay warns when you edit one). `verify-run` is the on
 **Evaluated on replay (content):** `transcript_*`, `tool_*`, `subagent_*`, `dispatch_count_max`,
 `skill_triggered`, `no_skill_triggered`, `skill_available`, `connector_available`, `tool_available`,
 `skill_tool_used`, `max_cost_usd`, `max_tokens`, `tool_calls_max`, `tool_no_error`,
-`max_tool_errors`, `max_redundant_tool_calls`, `max_turns`, `compaction_occurred`, `all_tasks_completed`, `task_status`, `task_count_min`, `no_scratchpad_leak`, `result`
+`max_tool_errors`, `max_redundant_tool_calls`, `max_turns`, `compaction_occurred`, `all_tasks_completed`, `task_status`, `task_count_min`, `no_scratchpad_leak`, `present_files_called`, `result`
 (`max_cost_usd`/`max_tokens` assert the frozen recording's spend on replay, not fresh spend). The verdict
 modifiers `allow_permissive_auto_allow` / `allow_missing_capability` / `allow_l0_plugin_divergence` /
 `allow_stall` are also kept on replay, evaluated as no-op passes.

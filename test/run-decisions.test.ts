@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import type { AgentEvent, AgentSession, DecisionResponse } from "../src/agent/session.js";
+import type { AgentEvent, AgentSession, DecisionResponse, DecisionDelivery } from "../src/agent/session.js";
 import { Run } from "../src/run/run.js";
 import { ScriptedDecider } from "../src/decide/decider.js";
 
@@ -12,9 +12,9 @@ class MockSession implements AgentSession {
     for (const e of this.events) yield e;
   }
   sendUserTurn() {}
-  respond(id: string, r: DecisionResponse) {
+  respond(id: string, r: DecisionResponse): DecisionDelivery {
     this.responded.push({ id, r });
-    return { delivered: true as const };
+    return { delivered: true };
   }
   close() {}
 }
@@ -93,8 +93,8 @@ describe("recordDecision — undelivered answer (#20)", () => {
   // A session that reports the answer did NOT reach the agent (the live session was draining when
   // respond() ran). The run must record the truth ("undelivered"), never a false "answered".
   class ClosingSession extends MockSession {
-    respond(_id: string, _r: DecisionResponse) {
-      return { delivered: false as const, reason: "session-closing" as const };
+    respond(_id: string, _r: DecisionResponse): DecisionDelivery {
+      return { delivered: false, reason: "session-closing" };
     }
   }
 
