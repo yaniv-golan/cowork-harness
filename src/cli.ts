@@ -78,7 +78,16 @@ import {
 import type { Cassette } from "./run/cassette.js";
 import { buildScaffold } from "./run/scaffold.js";
 import { buildInspectView } from "./run/inspect-view.js";
-import { pkgVersion, jsonEnvelope, jsonPayloadEnvelope, jsonError, parseOutputFormat, fail, isJsonOutput, type ErrCategory } from "./run/envelope.js";
+import {
+  pkgVersion,
+  jsonEnvelope,
+  jsonPayloadEnvelope,
+  jsonError,
+  parseOutputFormat,
+  fail,
+  isJsonOutput,
+  type ErrCategory,
+} from "./run/envelope.js";
 import { buildRepeatRollup, rollupPasses, type RepeatRollup } from "./run/repeat.js";
 import {
   MatrixFile,

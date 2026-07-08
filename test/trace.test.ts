@@ -674,8 +674,23 @@ describe("buildGateTrace — provenance annotation", () => {
       JSON.stringify({
         decisions: [
           // reversed vs ask order — positional pairing would swap the labels; requestId keeps them correct
-          { kind: "question", name: "AskUserQuestion", decision: "answered", by: "llm", model: "m2", requestId: "uuid-b", detail: { "Second?": "2" } },
-          { kind: "question", name: "AskUserQuestion", decision: "answered", by: "scripted", requestId: "uuid-a", detail: { "First?": "1" } },
+          {
+            kind: "question",
+            name: "AskUserQuestion",
+            decision: "answered",
+            by: "llm",
+            model: "m2",
+            requestId: "uuid-b",
+            detail: { "Second?": "2" },
+          },
+          {
+            kind: "question",
+            name: "AskUserQuestion",
+            decision: "answered",
+            by: "scripted",
+            requestId: "uuid-a",
+            detail: { "First?": "1" },
+          },
         ],
       }),
     );

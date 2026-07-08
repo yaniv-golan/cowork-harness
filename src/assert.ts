@@ -432,7 +432,8 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
       // No match found — but a match could sit PAST the display cap of a truncated result (assertText
       // absent). Mirror the negative branch (tool_result_not_contains): the positive assertion still fails
       // closed (evidence can't confirm it), but say WHY honestly instead of claiming the string is absent.
-      const anyTruncated = ctx.toolResultsTruncated !== undefined && ctx.toolResultTexts.some((_, i) => ctx.toolResultsTruncated![i] === true);
+      const anyTruncated =
+        ctx.toolResultsTruncated !== undefined && ctx.toolResultTexts.some((_, i) => ctx.toolResultsTruncated![i] === true);
       results.push(
         anyTruncated
           ? fail(
@@ -495,7 +496,9 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
         // proves NOTHING about resolution. Live could RED a dangling/escaping symlink; the cassette didn't
         // capture that, so fail CLOSED rather than pass on the placeholder.
         results.push(
-          fail(`evidence unavailable: "${a.file_exists}" was a symlink/hardlink at record time — replay can't confirm it resolves to real in-root content; re-record or assert on the deliverable`),
+          fail(
+            `evidence unavailable: "${a.file_exists}" was a symlink/hardlink at record time — replay can't confirm it resolves to real in-root content; re-record or assert on the deliverable`,
+          ),
         );
       } else if (truncated.has(relPath)) {
         // A truncated manifest entry carries path+bytes+sha256 — positive proof the file existed at
@@ -505,7 +508,12 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
         // verify the real path (after symlink resolution) is still under workRoot.
         const real = containedRealPath(ctx.workRoot, abs);
         if (!real) results.push(fail(`unsafe file_exists path "${a.file_exists}" — symlink target escapes the work root`));
-        else results.push(existsSync(real) ? ok(`file_exists: "${a.file_exists}" present under ${ctx.workRoot}`) : fail(`file not found: ${a.file_exists} (under ${ctx.workRoot})`));
+        else
+          results.push(
+            existsSync(real)
+              ? ok(`file_exists: "${a.file_exists}" present under ${ctx.workRoot}`)
+              : fail(`file not found: ${a.file_exists} (under ${ctx.workRoot})`),
+          );
       }
     }
   }
@@ -521,7 +529,9 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
         // REPLAY: a link entry's placeholder proves existence-of-a-link, not resolution — fail closed
         // (mirror file_exists). Live could RED a dangling/escaping symlink; the cassette didn't capture it.
         results.push(
-          fail(`evidence unavailable: "${p}" was a symlink/hardlink at record time — replay can't confirm it resolves to real in-root content; re-record or assert on the deliverable`),
+          fail(
+            `evidence unavailable: "${p}" was a symlink/hardlink at record time — replay can't confirm it resolves to real in-root content; re-record or assert on the deliverable`,
+          ),
         );
       } else if (truncated.has(rel)) {
         // Truncated entry proves existence (path+bytes+sha256 recorded). Promotion is a path-prefix
@@ -547,7 +557,10 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
       }
     }
   }
-  if (a.tool_called !== undefined) results.push(ctx.toolsCalled.has(a.tool_called) ? ok(`tool_called: ${a.tool_called} was called`) : fail(`tool not called: ${a.tool_called}`));
+  if (a.tool_called !== undefined)
+    results.push(
+      ctx.toolsCalled.has(a.tool_called) ? ok(`tool_called: ${a.tool_called} was called`) : fail(`tool not called: ${a.tool_called}`),
+    );
   if (a.tool_not_called !== undefined)
     results.push(
       ctx.toolsCalledMissing
@@ -1288,7 +1301,8 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
       }
     }
   }
-  if (a.result !== undefined) results.push(ctx.result === a.result ? ok(`result: ${ctx.result}`) : fail(`result was ${ctx.result}, expected ${a.result}`));
+  if (a.result !== undefined)
+    results.push(ctx.result === a.result ? ok(`result: ${ctx.result}`) : fail(`result was ${ctx.result}, expected ${a.result}`));
 
   if (results.length === 0) return { assertion: a, pass: false, message: "empty assertion" };
   const firstFail = results.find((r): r is { pass: false; message: string } => !r.pass);

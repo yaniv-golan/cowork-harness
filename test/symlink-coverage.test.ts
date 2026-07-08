@@ -4,7 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LaunchPlan } from "../src/session.js";
 import { collectArtifactPaths } from "../src/run/artifacts.js";
-import { capturePreRunManifest, readPreRunManifest, readPreRunManifestHashes, readPreRunManifestLinkAware } from "../src/run/pre-run-manifest.js";
+import {
+  capturePreRunManifest,
+  readPreRunManifest,
+  readPreRunManifestHashes,
+  readPreRunManifestLinkAware,
+} from "../src/run/pre-run-manifest.js";
 import { buildManifest, materializeManifest } from "../src/run/cassette.js";
 import { evaluate, type AssertContext } from "../src/assert.js";
 
@@ -99,10 +104,7 @@ describe("#38 no_unexpected_files — live lane", () => {
     mkdirSync(join(root, "outputs"), { recursive: true });
     writeFileSync(join(root, "outputs", "real.txt"), "x");
     symlinkSync("/etc/hosts", join(root, "outputs", "sneaky"));
-    const [r] = evaluate(
-      [{ no_unexpected_files: [] }],
-      ctx(root, { preRunPaths: ["outputs/real.txt"], preRunLinkAware: true }),
-    );
+    const [r] = evaluate([{ no_unexpected_files: [] }], ctx(root, { preRunPaths: ["outputs/real.txt"], preRunLinkAware: true }));
     expect(r.pass).toBe(false);
     expect(r.message).toMatch(/outputs\/sneaky/);
   });

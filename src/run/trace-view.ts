@@ -555,14 +555,22 @@ export interface ToolErrorRow {
 export function buildToolErrors(file: string): ToolErrorRow[] {
   return buildTrace(file)
     .filter((r) => r.kind === "tool" && r.resultStatus === "error")
-    .map((r) => ({ name: r.name ?? "", detail: r.detailFull ?? r.detail ?? "", resultText: r.resultTextFull ?? r.resultText ?? "", child: !!r.child }));
+    .map((r) => ({
+      name: r.name ?? "",
+      detail: r.detailFull ?? r.detail ?? "",
+      resultText: r.resultTextFull ?? r.resultText ?? "",
+      child: !!r.child,
+    }));
 }
 
 export function formatToolErrors(rows: ToolErrorRow[]): string {
   if (!rows.length) return "(no tool errors in this run)";
   const lines = rows.map((r) => {
     // indent continuation lines of a multi-line stderr so the block reads as one entry
-    const err = r.resultText.split("\n").map((l, i) => (i === 0 ? l : "         " + l)).join("\n");
+    const err = r.resultText
+      .split("\n")
+      .map((l, i) => (i === 0 ? l : "         " + l))
+      .join("\n");
     return `✗ ${r.name}${r.child ? " (sub-agent)" : ""}\n    $ ${r.detail}\n    → ${err}`;
   });
   lines.push(`\n${rows.length} errored tool call(s)`);

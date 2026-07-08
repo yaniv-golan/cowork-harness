@@ -182,8 +182,20 @@ describe.skipIf(!can)("rehash CLI", () => {
     expect(fp.contentSig).toBeTruthy(); // sanity: skill dirs resolved, so we actually reach the migrate gate
     const body = {
       cassetteVersion: 9,
-      scenario: { name: "s", baseline: liveBaseline, session: sessionPath, fidelity: "container", prompt: "hi", answers: [], expect_denied: [], assert: [] },
-      events: [JSON.stringify({ type: "system", subtype: "init" }), JSON.stringify({ type: "result", subtype: "success", is_error: false })],
+      scenario: {
+        name: "s",
+        baseline: liveBaseline,
+        session: sessionPath,
+        fidelity: "container",
+        prompt: "hi",
+        answers: [],
+        expect_denied: [],
+        assert: [],
+      },
+      events: [
+        JSON.stringify({ type: "system", subtype: "init" }),
+        JSON.stringify({ type: "result", subtype: "success", is_error: false }),
+      ],
       fingerprint: { baseline: liveBaseline, skillHash: fp.skillHash, contentSig: fp.contentSig },
     };
     writeFileSync(join(dir, "s.cassette.json"), JSON.stringify(body));

@@ -238,7 +238,10 @@ export function resolveComputerLink(link: ComputerLink, workRoot: string, resolu
     // REPLAY: the resolved path was a link at record time — its placeholder proves existence, not
     // resolution. Fail evidence-unavailable (linkPaths is undefined on live, so this is a no-op there).
     if (resolution.linkPaths?.has(relative(resolve(workRoot), abs)))
-      return { resolved: false, checkedDescription: `replay: "${rel}" was a symlink/hardlink at record time — resolution not captured; re-record or assert on the deliverable` };
+      return {
+        resolved: false,
+        checkedDescription: `replay: "${rel}" was a symlink/hardlink at record time — resolution not captured; re-record or assert on the deliverable`,
+      };
     // safeJoin is LEXICAL — `existsSync` then FOLLOWS symlinks, so an agent-created in-tree symlink
     // pointing OUT of workRoot (the live container/microvm/hostloop work tree is agent-written) would
     // otherwise resolve TRUE by walking onto the assertion host (a false-green + a host-file-existence
@@ -311,6 +314,9 @@ export function resolveComputerLink(link: ComputerLink, workRoot: string, resolu
   if (!abs) return { resolved: false, checkedDescription: `unsafe normalized path (escapes the work root): ${rel}` };
   // A link entry's placeholder proves existence, not resolution — fail evidence-unavailable on replay.
   if (resolution.linkPaths?.has(relative(resolve(workRoot), abs)))
-    return { resolved: false, checkedDescription: `replay: "${rel}" was a symlink/hardlink at record time — resolution not captured; re-record or assert on the deliverable` };
+    return {
+      resolved: false,
+      checkedDescription: `replay: "${rel}" was a symlink/hardlink at record time — resolution not captured; re-record or assert on the deliverable`,
+    };
   return { resolved: existsSync(abs), checkedDescription: `replay manifest (normalized from host path): ${rel}` };
 }

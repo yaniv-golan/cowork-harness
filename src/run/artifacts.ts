@@ -104,7 +104,8 @@ function walkPaths(startAbs: string, startRel: string, containReal: string, visi
         out.push({ path: childRel, linkKind: "symlink" });
         continue;
       }
-      if (st.isDirectory()) walk(childAbs, childRel); // traversal-only, never emitted
+      if (st.isDirectory())
+        walk(childAbs, childRel); // traversal-only, never emitted
       else if (st.isFile()) out.push(st.nlink > 1 ? { path: childRel, linkKind: "hardlink" } : { path: childRel });
     }
   };

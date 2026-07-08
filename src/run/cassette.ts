@@ -1748,7 +1748,13 @@ export async function cmdRecord(args: string[]) {
   if (concRaw !== undefined) {
     const n = Number(concRaw);
     if (!Number.isInteger(n) || n < 1 || n > MAX_RECORD_CONCURRENCY) {
-      return fail("record", "usage", `record: --concurrency must be an integer 1..${MAX_RECORD_CONCURRENCY} (got ${concRaw})`, undefined, asJson);
+      return fail(
+        "record",
+        "usage",
+        `record: --concurrency must be an integer 1..${MAX_RECORD_CONCURRENCY} (got ${concRaw})`,
+        undefined,
+        asJson,
+      );
     }
     concurrency = n;
   }
@@ -1764,7 +1770,13 @@ export async function cmdRecord(args: string[]) {
     );
   }
   if (p.positionals.length > 1) {
-    return fail("record", "usage", `record takes a single scenario or dir (got ${p.positionals.length}: ${p.positionals.join(", ")})`, undefined, asJson);
+    return fail(
+      "record",
+      "usage",
+      `record takes a single scenario or dir (got ${p.positionals.length}: ${p.positionals.join(", ")})`,
+      undefined,
+      asJson,
+    );
   }
   const isDir = existsSync(target) && statSync(target).isDirectory();
   // `--out` names ONE cassette; it has no meaning for a directory batch — reject rather than silently ignore.
@@ -1775,16 +1787,40 @@ export async function cmdRecord(args: string[]) {
   // Live-decider validation. Reuse the run/skill rules; reject ambiguous/unsupported combos
   // up front so a paid record never starts under a mis-specified policy.
   if (intent !== undefined && !deciderLlm) {
-    return fail("record", "usage", "record: --intent requires --decider-llm (it states the test intent for the model answering live questions)", undefined, asJson);
+    return fail(
+      "record",
+      "usage",
+      "record: --intent requires --decider-llm (it states the test intent for the model answering live questions)",
+      undefined,
+      asJson,
+    );
   }
   if (deciderModel !== undefined && !deciderLlm) {
-    return fail("record", "usage", "record: --decider-model requires --decider-llm (it sets the model that answers live questions)", undefined, asJson);
+    return fail(
+      "record",
+      "usage",
+      "record: --decider-model requires --decider-llm (it sets the model that answers live questions)",
+      undefined,
+      asJson,
+    );
   }
   if (deciderLlm && deciderDir !== undefined) {
-    return fail("record", "usage", "record: --decider-llm and --decider-dir are mutually exclusive terminals (a model vs a driving agent). Drop one.", undefined, asJson);
+    return fail(
+      "record",
+      "usage",
+      "record: --decider-llm and --decider-dir are mutually exclusive terminals (a model vs a driving agent). Drop one.",
+      undefined,
+      asJson,
+    );
   }
   if (deciderLlm && onUnansweredOpt !== undefined) {
-    return fail("record", "usage", `record: --decider-llm conflicts with --on-unanswered ${onUnansweredOpt} (it forces the model terminal). Drop one.`, undefined, asJson);
+    return fail(
+      "record",
+      "usage",
+      `record: --decider-llm conflicts with --on-unanswered ${onUnansweredOpt} (it forces the model terminal). Drop one.`,
+      undefined,
+      asJson,
+    );
   }
   // --rerecord-stale re-records committed cassettes at the DEFAULT policy; a live decider there is undefined.
   if (rerecordStale && (deciderDir !== undefined || deciderLlm || onUnansweredOpt !== undefined)) {
@@ -1800,12 +1836,24 @@ export async function cmdRecord(args: string[]) {
   // cassettes on a single channel — bad UX. Restrict to a single scenario. (--decider-llm has no human, so a
   // batch is fine.)
   if (deciderDir !== undefined && isDir) {
-    return fail("record", "usage", "record: --decider-dir answers a single interactive recording; use it with one scenario, not a directory batch", undefined, asJson);
+    return fail(
+      "record",
+      "usage",
+      "record: --decider-dir answers a single interactive recording; use it with one scenario, not a directory batch",
+      undefined,
+      asJson,
+    );
   }
   // --concurrency only applies to a batch (dir-batch or --rerecord-stale over a dir); a single scenario has
   // nothing to parallelize. (--decider-dir is already dir-rejected above, so it can't co-occur with a batch.)
   if (concurrency > 1 && !isDir) {
-    return fail("record", "usage", "record: --concurrency applies to a directory batch (or --rerecord-stale <dir>); a single scenario records one cassette", undefined, asJson);
+    return fail(
+      "record",
+      "usage",
+      "record: --concurrency applies to a directory batch (or --rerecord-stale <dir>); a single scenario records one cassette",
+      undefined,
+      asJson,
+    );
   }
 
   const dryRun = p.flags["--dry-run"] ?? false;
@@ -2008,7 +2056,13 @@ export async function cmdRecord(args: string[]) {
     for (const s of disc.skipped) log(`· skipped (not a scenario — no \`prompt:\`): ${s}`);
     for (const b of disc.broken) log(`✗ ${b.file}: ${b.error}`);
     if (disc.scenarios.length === 0) {
-      return fail("record", "usage", `record: no scenarios discovered under ${target} (loud non-zero — not a vacuous "0 failures = green")`, undefined, asJson);
+      return fail(
+        "record",
+        "usage",
+        `record: no scenarios discovered under ${target} (loud non-zero — not a vacuous "0 failures = green")`,
+        undefined,
+        asJson,
+      );
     }
     // Guard: two scenarios whose `name:` slugifies to the SAME default cassette path would clobber each other
     // (last-wins sequentially; a write RACE under --concurrency). Detect up front and fail loud — applies at
@@ -2747,7 +2801,13 @@ export async function cmdReplay(args: string[]) {
   const assertFrom = p.options["--assert-from"];
   const reassert = p.flags["--reassert"] ?? false;
   if (assertFrom !== undefined && reassert) {
-    return fail("replay", "usage", "replay: --assert-from and --reassert are mutually exclusive (--assert-from names a file; --reassert auto-resolves the sibling)", undefined, asJson);
+    return fail(
+      "replay",
+      "usage",
+      "replay: --assert-from and --reassert are mutually exclusive (--assert-from names a file; --reassert auto-resolves the sibling)",
+      undefined,
+      asJson,
+    );
   }
   const reassertMode = assertFrom !== undefined || reassert;
   // `--write` persists the re-validated on-disk assert block back into the cassette — only meaningful on the
@@ -3047,7 +3107,13 @@ export async function cmdVerifyCassettes(args: string[]) {
   const skipPrivacy = p.flags["--skip-privacy"] ?? false;
   const skipStaleness = p.flags["--skip-staleness"] ?? false;
   if (skipPrivacy && skipStaleness) {
-    return fail("verify-cassettes", "usage", "verify-cassettes: --skip-privacy and --skip-staleness are mutually exclusive (together they'd check nothing)", undefined, asJson);
+    return fail(
+      "verify-cassettes",
+      "usage",
+      "verify-cassettes: --skip-privacy and --skip-staleness are mutually exclusive (together they'd check nothing)",
+      undefined,
+      asJson,
+    );
   }
   const doPrivacy = !skipPrivacy;
   const doStaleness = !skipStaleness;
@@ -3098,7 +3164,13 @@ export async function cmdVerifyCassettes(args: string[]) {
     );
   }
   if (p.positionals.length > 1) {
-    return fail("verify-cassettes", "usage", `verify-cassettes takes one <file|dir> (got ${p.positionals.length}: ${p.positionals.join(", ")})`, undefined, asJson);
+    return fail(
+      "verify-cassettes",
+      "usage",
+      `verify-cassettes takes one <file|dir> (got ${p.positionals.length}: ${p.positionals.join(", ")})`,
+      undefined,
+      asJson,
+    );
   }
   const resolved = resolveInputs(target, ".cassette.json");
   if ("error" in resolved) {
@@ -3772,7 +3844,12 @@ export async function replayCassette(
     linkPaths: replayLinkPaths,
   } = manifestKeys.length
     ? materializeManifest(cassette.artifacts!, cassette.userVisibleRoots ?? ["outputs", ".projects"])
-    : { workRoot: "", prefixes: [] as string[], truncatedPaths: new Map<string, ManifestEntry["truncationReason"]>(), linkPaths: new Set<string>() };
+    : {
+        workRoot: "",
+        prefixes: [] as string[],
+        truncatedPaths: new Map<string, ManifestEntry["truncationReason"]>(),
+        linkPaths: new Set<string>(),
+      };
   // computer_links_resolve's replay-lane folder-prefix resolution (Finding 24/25) — computed once,
   // outside the try, since it doesn't depend on anything materializeManifest produced.
   const folderPrefixResolution = buildFolderPrefixMap(cassette, opts.cassetteDir);
