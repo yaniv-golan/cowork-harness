@@ -103,8 +103,12 @@ export function parseJudgeResults(raw: string, rubric: string[]): SemanticClaimR
 export function makeSemanticJudge(opts: { model?: string; complete?: Complete } = {}): SemanticJudge {
   const model = opts.model ?? DEFAULT_JUDGE_MODEL;
   const complete = opts.complete ?? claudeCliComplete;
-  return async (rubric, answer) => {
+  const judge: SemanticJudge = async (rubric, answer) => {
     const { text } = await complete(buildJudgePrompt(rubric, answer), model);
     return parseJudgeResults(text, rubric);
   };
+  // Expose the RESOLVED judge model so the caller can record which model graded (provenance) —
+  // read by runSemanticJudges into RunResult.assertions[].judgeModel.
+  judge.model = model;
+  return judge;
 }

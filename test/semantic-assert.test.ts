@@ -81,6 +81,26 @@ describe("semantic_matches — async pre-pass + synchronous evaluate() compose",
     await runSemanticJudges([a], c, alwaysPass);
     expect(evaluate([a], c)[0].pass).toBe(true);
   });
+
+  it("records the judge model as provenance on the assertion result", async () => {
+    const judge: SemanticJudge = Object.assign(async (rubric: string[]) => rubric.map((claim, index) => ({ index, claim, pass: true })), {
+      model: "claude-opus-4-8",
+    });
+    const a = sem(["x"]);
+    const c = ctx({ transcript: "x" });
+    await runSemanticJudges([a], c, judge);
+    expect(evaluate([a], c)[0].judgeModel).toBe("claude-opus-4-8");
+  });
+
+  it("honors a per-assert judge_model override via the judgeFor factory", async () => {
+    const runLevel: SemanticJudge = Object.assign(async (r: string[]) => r.map((claim, index) => ({ index, claim, pass: true })), { model: "run-level" });
+    const overrideJudge: SemanticJudge = Object.assign(async (r: string[]) => r.map((claim, index) => ({ index, claim, pass: true })), { model: "override-model" });
+    const a: Assertion = { semantic_matches: { rubric: ["x"], judge_model: "override-model" } };
+    const c = ctx({ transcript: "x" });
+    await runSemanticJudges([a], c, runLevel, (model) => (model === "override-model" ? overrideJudge : runLevel));
+    // the override judge graded, and its model is what's recorded — not the run-level default
+    expect(evaluate([a], c)[0].judgeModel).toBe("override-model");
+  });
 });
 
 describe("semantic_matches — replay classification", () => {

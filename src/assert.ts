@@ -183,8 +183,9 @@ export interface SemanticClaimResult {
   pass: boolean;
 }
 /** The semantic judge: grade a fixed rubric against the run's answer. LIVE-ONLY (a real model call).
- *  Injectable so tests can stub it; the shipped default is a placeholder pending a real LLM judge. */
-export type SemanticJudge = (rubric: string[], answer: string) => Promise<SemanticClaimResult[]>;
+ *  Injectable so tests can stub it; the real judge is `makeSemanticJudge` in src/decide/. `model` is the
+ *  resolved judge model id, recorded as provenance (`RunResult.assertions[].judgeModel`); a stub may omit it. */
+export type SemanticJudge = ((rubric: string[], answer: string) => Promise<SemanticClaimResult[]>) & { model?: string };
 
 export interface AssertContext {
   transcript: string;
@@ -193,6 +194,9 @@ export interface AssertContext {
    *  Absent on replay (semantic_matches is stripped as live-only) or on a live run where the pre-pass
    *  wasn't run → semantic_matches then fails evidence-unavailable, never vacuous-passes. */
   semanticResults?: Map<Assertion, SemanticClaimResult[]>;
+  /** Which judge model graded each `semantic_matches` assert (provenance) — populated by
+   *  runSemanticJudges alongside semanticResults, surfaced as `RunResult.assertions[].judgeModel`. */
+  judgeModels?: Map<Assertion, string>;
   toolsCalled: Set<string>;
   subagentTools: Set<string>;
   egress: RunResult["egress"];
@@ -428,11 +432,19 @@ export async function runSemanticJudges(
   assertions: Assertion[],
   ctx: AssertContext,
   judge: SemanticJudge,
+  /** Factory for a per-assert `judge_model` override — the run-level `judge` is used when an assert
+   *  doesn't override, or when no factory is supplied (e.g. a test stub). */
+  judgeFor?: (model: string) => SemanticJudge,
 ): Promise<void> {
   if (!ctx.semanticResults) ctx.semanticResults = new Map();
+  if (!ctx.judgeModels) ctx.judgeModels = new Map();
   for (const a of assertions) {
     if (a.semantic_matches === undefined) continue;
-    ctx.semanticResults.set(a, await judge(a.semantic_matches.rubric, ctx.transcript));
+    const override = a.semantic_matches.judge_model;
+    const j = override && judgeFor ? judgeFor(override) : judge;
+    ctx.semanticResults.set(a, await j(a.semantic_matches.rubric, ctx.transcript));
+    // Record the model that actually graded (override if wired, else the run-level judge's resolved id).
+    ctx.judgeModels.set(a, j.model ?? override ?? "unknown");
   }
 }
 
@@ -452,7 +464,7 @@ type KeyResult = { pass: true; evidence?: string } | { pass: false; message: str
 function check(
   a: Assertion,
   ctx: AssertContext,
-): { assertion: Assertion; pass: boolean; message?: string; evidence?: string; semanticClaims?: SemanticClaimResult[] } {
+): { assertion: Assertion; pass: boolean; message?: string; evidence?: string; semanticClaims?: SemanticClaimResult[]; judgeModel?: string } {
   const results: KeyResult[] = [];
   const ok = (evidence?: string): KeyResult => ({ pass: true, evidence });
   const fail = (message: string): KeyResult => ({ pass: false, message });
@@ -1426,7 +1438,12 @@ function check(
   // Structured per-claim results for a semantic_matches assert (undefined for every other key) — so a
   // consumer gets the per-claim profile, not just the summary message. Attached to fail AND pass.
   const semanticClaims = a.semantic_matches !== undefined ? ctx.semanticResults?.get(a) : undefined;
-  const withClaims = <T extends object>(r: T): T => (semanticClaims ? { ...r, semanticClaims } : r);
+  const judgeModel = a.semantic_matches !== undefined ? ctx.judgeModels?.get(a) : undefined;
+  const withClaims = <T extends object>(r: T): T => ({
+    ...r,
+    ...(semanticClaims ? { semanticClaims } : {}),
+    ...(judgeModel ? { judgeModel } : {}),
+  });
   const firstFail = results.find((r): r is { pass: false; message: string } => !r.pass);
   if (firstFail) return withClaims({ assertion: a, pass: false, message: firstFail.message });
   // All keys passed — gather the evidence each surfaced (AND-joined, one entry per key that cited something).

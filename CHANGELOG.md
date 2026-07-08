@@ -58,8 +58,10 @@ All notable changes to this project are documented here. The format is based on
   `RunResult.assertions[].semanticClaims` (`{index, claim, pass}`), so a candidate run's claim-level
   profile can be diffed against a baseline instead of only reading a single summary verdict. Supports a
   `min_pass` threshold (default: all claims) and a per-assert `judge_model` override (default
-  `claude-opus-4-8`, also settable via `COWORK_HARNESS_JUDGE_MODEL`). Classified live-only alongside
-  `egress_*` — stripped on replay (skipped-loud), never a vacuous pass.
+  `claude-opus-4-8`, also settable via `COWORK_HARNESS_JUDGE_MODEL`) — the override is now actually
+  honored per assert, and the model that graded is recorded on `RunResult.assertions[].judgeModel` so a
+  before/after eval can verify the judge was held constant. Classified live-only alongside `egress_*` —
+  stripped on replay (skipped-loud), never a vacuous pass.
 - **`RunResult.finalMessage`** — the agent's final answer text: the SDK result message's own designated
   answer, not the joined transcript of every assistant turn. Lets a consumer read what the agent actually
   answered without parsing `run.jsonl`. Threaded through every `RunResult` producer (live success and

@@ -920,7 +920,12 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // evaluate() reads the per-claim results into check(). Gated so a scenario with no such assert never
   // spends a model call. (Replay strips `semantic_matches` as live-only, so it never reaches here.)
   if (scenario.assert.some((a) => a.semantic_matches !== undefined)) {
-    await runSemanticJudges(scenario.assert, assertCtx, opts.semanticJudge ?? makeSemanticJudge());
+    await runSemanticJudges(
+      scenario.assert,
+      assertCtx,
+      opts.semanticJudge ?? makeSemanticJudge(),
+      (model) => makeSemanticJudge({ model }), // honor a per-assert judge_model override
+    );
   }
   const assertions = evaluate(scenario.assert, assertCtx);
 
