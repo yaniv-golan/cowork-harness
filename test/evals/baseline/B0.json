@@ -8,13 +8,13 @@
       {
         "index": 0,
         "claim": "The scenario uses a sandboxed fidelity tier (e.g. container) since it must assert egress to api.weather.example.com",
-        "pass": "2/3",
+        "pass": "3/3",
         "priors": null
       },
       {
         "index": 1,
         "claim": "The scenario pins determinism with on_unanswered: fail (and scripted when_question/choose answers only if the skill raises gates)",
-        "pass": "1/3",
+        "pass": "3/3",
         "priors": null
       },
       {
@@ -183,24 +183,18 @@
       },
       {
         "index": 2,
-        "claim": "Recommends keeping one concern per assert item",
-        "pass": "0/3",
-        "priors": null
-      },
-      {
-        "index": 3,
         "claim": "tool_called does not mean 'attempted': tool counts are authoritative and de-duped",
         "pass": "3/3",
         "priors": null
       },
       {
-        "index": 4,
+        "index": 3,
         "claim": "A tool that was requested then denied does not register as tool_called",
         "pass": "3/3",
         "priors": null
       },
       {
-        "index": 5,
+        "index": 4,
         "claim": "tool_called proves the tool actually ran, not merely that it was attempted",
         "pass": "3/3",
         "priors": null
@@ -246,7 +240,7 @@
       {
         "index": 5,
         "claim": "dispatch_count_max should be used only to catch a fan-out you don't want",
-        "pass": "2/3",
+        "pass": "3/3",
         "priors": null
       }
     ]
@@ -284,7 +278,7 @@
       {
         "index": 4,
         "claim": "file_exists (and computer_links_resolve) still pass on replay against the hash-only placeholder",
-        "pass": "2/3",
+        "pass": "3/3",
         "priors": null
       },
       {
@@ -310,7 +304,7 @@
       {
         "index": 1,
         "claim": "A single gate bundling 3 sub-questions counts as 3 against questions_count_max",
-        "pass": "3/3",
+        "pass": "2/3",
         "priors": null
       },
       {
@@ -328,7 +322,7 @@
       {
         "index": 4,
         "claim": "Whether a gate fires is model-dependent, so gate_answers_delivered can't catch 'the gate never fired'",
-        "pass": "3/3",
+        "pass": "2/3",
         "priors": null
       },
       {
@@ -366,7 +360,7 @@
       {
         "index": 3,
         "claim": "Advises scanning the verdict signals array after every run",
-        "pass": "3/3",
+        "pass": "2/3",
         "priors": null
       },
       {
@@ -480,7 +474,7 @@
       {
         "index": 3,
         "claim": "Both --decider-llm and on_unanswered: llm are flagged as nonDeterministic",
-        "pass": "2/3",
+        "pass": "3/3",
         "priors": null
       },
       {
@@ -594,7 +588,7 @@
       {
         "index": 1,
         "claim": "questions_count_max is a gate-lifecycle key that needs the cassette's controlOut stream; any modern recording already has it",
-        "pass": "3/3",
+        "pass": "2/3",
         "priors": null
       },
       {
@@ -612,7 +606,7 @@
       {
         "index": 4,
         "claim": "Answer edits (unlike assert-only edits) do force a re-record",
-        "pass": "2/3",
+        "pass": "1/3",
         "priors": null
       },
       {
@@ -625,39 +619,39 @@
   },
   "eval-7-cassette-tier": {
     "reps": 3,
-    "skillInvoked": "2/3",
+    "skillInvoked": "1/3",
     "success": "3/3",
     "minPass": "all",
     "claims": [
       {
         "index": 0,
         "claim": "Reads the cassette top-level effectiveFidelity field (hostloop in this fixture) as the tier the live run actually resolved to",
-        "pass": "2/2",
-        "priors": "0/1"
+        "pass": "1/1",
+        "priors": "2/2"
       },
       {
         "index": 1,
         "claim": "Explains fidelity: cowork means resolve from the baseline's host-loop gate at record time, so the authored value alone does not tell you the tier",
-        "pass": "2/2",
-        "priors": "0/1"
+        "pass": "1/1",
+        "priors": "2/2"
       },
       {
         "index": 2,
         "claim": "Points to verify-cassettes to catch future drift: it raises a resolved-tier staleness finding when a cowork cassette effectiveFidelity no longer matches what the current baseline resolves to",
-        "pass": "2/2",
-        "priors": "0/1"
+        "pass": "1/1",
+        "priors": "0/2"
       },
       {
         "index": 3,
         "claim": "Mentions unverifiable-tier for a cassette that predates effectiveFidelity",
-        "pass": "2/2",
-        "priors": "0/1"
+        "pass": "1/1",
+        "priors": "0/2"
       },
       {
         "index": 4,
         "claim": "Does not incorrectly claim the scenario fidelity: field answers the question",
-        "pass": "2/2",
-        "priors": "1/1"
+        "pass": "1/1",
+        "priors": "2/2"
       }
     ]
   },
@@ -681,8 +675,8 @@
       },
       {
         "index": 2,
-        "claim": "Patterns are matched whole-token and case-insensitively, same as --allow",
-        "pass": "0/2",
+        "claim": "Patterns are matched against the WHOLE finding token (anchored, not substring), and matching is case-sensitive unless the regex carries an i flag",
+        "pass": "1/2",
         "priors": "0/1"
       },
       {
@@ -714,7 +708,7 @@
       {
         "index": 0,
         "claim": "Each cassette is written via a same-dir temp file + atomic rename, so a crash can't leave a partial/corrupt cassette",
-        "pass": "0/3",
+        "pass": "3/3",
         "priors": null
       },
       {
@@ -731,20 +725,14 @@
       },
       {
         "index": 3,
-        "claim": "Two scenarios whose name slugifies to the same cassette path are caught up front and fail the batch before any spawn",
-        "pass": "0/3",
+        "claim": "Runs are fully isolated per scenario (unique sidecar networks/proxy), so --concurrency doesn't cause cross-talk",
+        "pass": "3/3",
         "priors": null
       },
       {
         "index": 4,
-        "claim": "Runs are fully isolated per scenario (unique sidecar networks/proxy), so --concurrency doesn't cause cross-talk",
-        "pass": "0/3",
-        "priors": null
-      },
-      {
-        "index": 5,
         "claim": "The batch is NOT all-or-nothing/transactional, and a mid-batch failure does not corrupt previously written cassettes",
-        "pass": "2/3",
+        "pass": "3/3",
         "priors": null
       }
     ]
