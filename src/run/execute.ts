@@ -1,7 +1,7 @@
 import { warn } from "../io.js";
 import { BoundaryError, UsageError } from "../errors.js";
 import { ZodError } from "zod";
-import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync, readdirSync, statSync, lstatSync, realpathSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync, readdirSync, renameSync, statSync, lstatSync, realpathSync } from "node:fs";
 import { randomUUID, createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
@@ -1238,6 +1238,22 @@ export function loadSessionFromFile(sessionRef: string): ReturnType<typeof loadS
   return resolveSessionPaths(loadSession(parseSessionFile(sessionRef)), baseDir);
 }
 
+/** Determine this write's 1-based turn number and preserve any prior turn's `run.jsonl` so a resumed
+ *  turn can't clobber it. `run.jsonl` always holds the LATEST turn (back-compat: the transcript-sidecar
+ *  readers in cli.ts/assert.ts read the just-completed run's transcript from it); earlier turns are kept
+ *  as `run.turn-<N>.jsonl`, so turn 1's transcript stays recoverable after a `--resume`. A fresh
+ *  `--session-id` run rmSync's its dir first, so an existing `run.jsonl` here means a genuine resume. */
+export function archivePriorTurnRunJsonl(outDir: string): number {
+  const archived = readdirSync(outDir).filter((f) => /^run\.turn-\d+\.jsonl$/.test(f)).length;
+  const runPath = join(outDir, "run.jsonl");
+  if (existsSync(runPath)) {
+    const priorTurn = archived + 1; // the turn currently sitting in run.jsonl
+    renameSync(runPath, join(outDir, `run.turn-${priorTurn}.jsonl`));
+    return priorTurn + 1;
+  }
+  return archived + 1; // 1 on the first turn
+}
+
 /** the harness-observability JSONL — lifecycle + decisions(by) + subagents + egress + cost. */
 function writeRunJsonl(
   outDir: string,
@@ -1247,8 +1263,9 @@ function writeRunJsonl(
   egress: RunResult["egress"],
   secrets: string[],
 ) {
+  const turn = archivePriorTurnRunJsonl(outDir);
   const lines = [
-    { t: "run", scenario: scenario.name, fidelity, runId: rec.runId, result: rec.result, cwd: rec.cwd },
+    { t: "run", scenario: scenario.name, fidelity, runId: rec.runId, result: rec.result, cwd: rec.cwd, turn },
     { t: "init", tools: rec.initTools.length },
     ...rec.decisions.map((d) => ({ t: "decision", ...d })),
     ...rec.subagents.map((s) => ({ t: "subagent", ...s })),

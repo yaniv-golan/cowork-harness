@@ -501,8 +501,11 @@ Every run writes to `~/.cowork-harness/runs/<scenario>/<sessionId>/` (out of any
 ```
 events.jsonl        full stream-json event log (child→driver; the cassette source)
 control-out.jsonl   driver→child control_responses (the other cassette half)
-run.jsonl           harness-observability log: decisions (+who decided), sub-agent dispatch
-                    tree, egress, transcript, cost  (replaces transcript.json/decisions.jsonl)
+run.jsonl           harness-observability log for the LATEST turn: decisions (+who decided),
+                    sub-agent dispatch tree, egress, transcript, cost, and a `turn` number
+                    (replaces transcript.json/decisions.jsonl)
+run.turn-<N>.jsonl  prior turns of a resumed (--session-id + --resume) session, preserved so an
+                    earlier turn's transcript isn't clobbered by the next (only present after a resume)
 trace.json          structured run trace: steps, questions, sub-agents, egress, decisions, cost
 egress.log          raw allow/deny per outbound connection (microvm: at top level; container: under
                     proxy/ — the allow/deny decisions are also folded into run.jsonl/result.json)
