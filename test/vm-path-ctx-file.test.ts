@@ -309,12 +309,18 @@ describe("cassette output shape — mounts can never enter a cassette", () => {
       "cassetteVersion",
       "controlOut",
       "effectiveFidelity",
+      "environment",
       "events",
       "fingerprint",
+      "folderPrefixMap",
       "generator",
+      "preRunHashes",
       "preRunPaths",
       "scenario",
       "scenarioSource",
+      "sessionFingerprint",
+      "timeline",
+      "timelineHeader",
       "userVisibleRoots",
     ]);
     expect(keys.some((k) => /mount/i.test(k))).toBe(false);

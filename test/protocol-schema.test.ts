@@ -127,9 +127,13 @@ describe("protocol.v1.json — conformance against COMMITTED cassettes", () => {
     expect(answerLine).toBeDefined();
     const updatedInput = answerLine.response.response.updatedInput;
     expect(compileDef("QuestionAnswerUpdatedInput")(updatedInput)).toBe(true);
-    // binary-verified wire shape: a multiSelect answer is one comma-joined STRING, never an array
-    expect(typeof updatedInput.answers["Which features do you want to enable?"]).toBe("string");
-    expect(updatedInput.answers["Which features do you want to enable?"]).toBe("Auth, Audit");
+    // binary-verified wire shape: a multiSelect answer is one comma-joined STRING, never an array.
+    // Key by the (single) recorded answer rather than the model-phrased question text — the exact
+    // question wording varies per re-record, but there is exactly one answer and it is the joined string.
+    const answerValues = Object.values(updatedInput.answers);
+    expect(answerValues).toHaveLength(1);
+    expect(typeof answerValues[0]).toBe("string");
+    expect(answerValues[0]).toBe("Auth, Audit");
   });
 });
 
