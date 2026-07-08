@@ -398,6 +398,13 @@ agent stderr) — read those before re-running; a re-record rarely tells you mor
 already does.
 <!-- END triage-canonical -->
 
+**Is it your skill's bug, or a known harness gap?** Before deep-debugging a wrong behavior, rule out a
+**deliberate fidelity gap** — the harness intentionally does *not* reproduce a few real-Cowork behaviors,
+so a "bug" you see here that real Cowork also has isn't yours to fix. The tier semantics are in
+`references/fidelity-and-answers.md` (shipped); the specific deltas vs. real Cowork and the sandbox
+boundary model live in `docs/fidelity-gaps.md` / `docs/boundary.md` (repo-only, not in the installed
+payload). If the behavior is on that gap list, it's expected — stop debugging your skill.
+
 ### Inspecting a run's observability output
 
 A verdict is only the top of what a run records, and the run dir persists after the verdict
@@ -421,6 +428,15 @@ decide which assertions from *Assertions: two orthogonal axes* are worth adding)
 - **Opaque failure?** A failed run also records **`errorSource`** (where the failure originated) and
   **`stderrLogPath`** (the captured agent stderr) — read those and `trace <run-dir>` *before* re-running;
   a re-record rarely tells you more than the captured stderr already does.
+- **Attributing cost to sub-agent work.** `subagents[]` gives the dispatch tree — each sub-agent's
+  `model`, `toolsUsed`, `prompt`/`output`, and `attributedSkillId` — but **not** its own token/cost;
+  aggregate cost is per-**model** in `modelUsage` (and `trace --view usage`), not per-sub-agent. So a
+  cost spike from fan-out reads as `trace --view dispatches` (how many, which agent) against that model's
+  per-model usage — the harness doesn't line-item each sub-agent's tokens.
+- **Debugging a wrong Cowork UI panel.** Each panel is reconstructed in `result.json`: **Progress** =
+  `tasks[]`, **Working folder** = `workspaceFiles[]` (classified output/mount/input, with a
+  `trace --view files` diff), **Context / Connectors** = `context` (tools / mcpServers / availableSkills),
+  **Scratch-pad → outputs** = `presentedFiles[]`. If a panel looks wrong in a run, read its field.
 
 ### Debugging with `chat`
 
