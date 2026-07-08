@@ -511,6 +511,10 @@
       },
       "description": "workRoot-relative paths that existed under the user-visible roots BEFORE the agent ran (captured post-staging, pre-spawn) \u2014 the baseline `no_unexpected_files` diffs against. Absent when the tier didn't capture it (microvm) or the run predates the seam."
     },
+    "preRunLinkAware": {
+      "type": "boolean",
+      "description": "true iff preRunPaths was captured with the link-aware walk (manifest v2+); absent/false \u21d2 a pre-#38 baseline, no_unexpected_files then excludes link entries from the post walk. Live/verify-run only."
+    },
     "preRunHashes": {
       "type": "object",
       "additionalProperties": {

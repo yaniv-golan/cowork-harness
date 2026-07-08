@@ -119,6 +119,7 @@ export function buildChatResult(record: RunRecord, opts: ChatResultOpts): RunRes
     requiresCapabilityUnmet: undefined,
     fingerprint: undefined,
     preRunPaths: undefined,
+    preRunLinkAware: undefined,
     preRunHashes: undefined,
     partial: undefined,
     unansweredGate: undefined,

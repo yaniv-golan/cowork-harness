@@ -187,6 +187,10 @@ export interface AssertContext {
    *  cassette.preRunPaths). undefined = no pre-run manifest (older run/cassette, or microvm) —
    *  no_unexpected_files then fails evidence-unavailable, never vacuous-passes. */
   preRunPaths?: string[];
+  /** True iff `preRunPaths` was captured link-aware (manifest v2+). When false/undefined (a pre-#38
+   *  baseline, or a re-verified pre-upgrade run dir), `no_unexpected_files` excludes link entries from the
+   *  post walk so a pre-existing symlink is not a false "created" stray. */
+  preRunLinkAware?: boolean;
   /** Pre-run per-path sha256 (RunResult.preRunHashes / cassette.preRunHashes). undefined = no manifest —
    *  input_unmodified fails evidence-unavailable. */
   preRunHashes?: Record<string, string | null>;
@@ -944,8 +948,14 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
       const pre = new Set(ctx.preRunPaths.map((p) => p.replace(/\\/g, "/")));
       // Path-walk (not the content walk): it EMITS symlink/hardlink paths, so an agent-created link stray
       // is visible here. The pre-run baseline uses the same walk (see capturePreRunManifest), so a
-      // pre-existing link is in `pre` and is not falsely flagged as created.
-      const post = collectArtifactPaths(ctx.workRoot, ctx.userVisiblePrefixes).map((e) => e.path);
+      // pre-existing link is in `pre` and is not falsely flagged as created — BUT only if that baseline was
+      // itself captured link-aware. On a re-verified PRE-#38 run dir (`preRunLinkAware` false) the baseline
+      // never listed symlinks, so exclude link entries here too and compare on the same links-blind basis;
+      // otherwise every pre-existing symlink would false-stray. (Moot on replay: the materialized tree has
+      // no real symlinks.)
+      const post = collectArtifactPaths(ctx.workRoot, ctx.userVisiblePrefixes)
+        .filter((e) => ctx.preRunLinkAware || !e.linkKind)
+        .map((e) => e.path);
       const created = post.filter((p) => !pre.has(p.replace(/\\/g, "/")));
       const stray = created.filter((p) => !anyGlobMatches(a.no_unexpected_files!, p));
       results.push(

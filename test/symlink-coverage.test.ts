@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LaunchPlan } from "../src/session.js";
 import { collectArtifactPaths } from "../src/run/artifacts.js";
-import { capturePreRunManifest, readPreRunManifest, readPreRunManifestHashes } from "../src/run/pre-run-manifest.js";
+import { capturePreRunManifest, readPreRunManifest, readPreRunManifestHashes, readPreRunManifestLinkAware } from "../src/run/pre-run-manifest.js";
 import { buildManifest, materializeManifest } from "../src/run/cassette.js";
 import { evaluate, type AssertContext } from "../src/assert.js";
 
@@ -66,8 +66,8 @@ describe("#38 no_unexpected_files — live lane", () => {
     const root = mkdtempSync(join(tmpdir(), "cwh-nuf-live-"));
     mkdirSync(join(root, "outputs"), { recursive: true });
     symlinkSync("/etc/hosts", join(root, "outputs", "sneaky"));
-    // empty baseline: the symlink is "created" and not in the allowlist → stray
-    const [r] = evaluate([{ no_unexpected_files: [] }], ctx(root, { preRunPaths: [] }));
+    // empty baseline (link-aware, as a live run always is): the symlink is "created" and not allow-listed → stray
+    const [r] = evaluate([{ no_unexpected_files: [] }], ctx(root, { preRunPaths: [], preRunLinkAware: true }));
     expect(r.pass).toBe(false);
     expect(r.message).toMatch(/outputs\/sneaky/);
   });
@@ -76,8 +76,35 @@ describe("#38 no_unexpected_files — live lane", () => {
     const root = mkdtempSync(join(tmpdir(), "cwh-nuf-pre-"));
     mkdirSync(join(root, "outputs"), { recursive: true });
     symlinkSync("/etc/hosts", join(root, "outputs", "preexisting"));
-    const [r] = evaluate([{ no_unexpected_files: [] }], ctx(root, { preRunPaths: ["outputs/preexisting"] }));
+    const [r] = evaluate([{ no_unexpected_files: [] }], ctx(root, { preRunPaths: ["outputs/preexisting"], preRunLinkAware: true }));
     expect(r.pass).toBe(true);
+  });
+
+  // #2 follow-up: re-verifying a PRE-#38 run dir (links-blind baseline, preRunLinkAware false) must NOT
+  // false-stray a pre-existing symlink the old baseline never listed — compare on the same links-blind basis.
+  it("does NOT flag a pre-existing symlink when the baseline is links-blind (preRunLinkAware false)", () => {
+    const root = mkdtempSync(join(tmpdir(), "cwh-nuf-old-"));
+    mkdirSync(join(root, "outputs"), { recursive: true });
+    writeFileSync(join(root, "outputs", "real.txt"), "x");
+    symlinkSync("/etc/hosts", join(root, "outputs", "legacy-link")); // pre-existing, NOT in the old baseline
+    const [r] = evaluate(
+      [{ no_unexpected_files: [] }],
+      ctx(root, { preRunPaths: ["outputs/real.txt"], preRunLinkAware: false }), // links-blind baseline
+    );
+    expect(r.pass).toBe(true);
+  });
+
+  it("STILL flags a genuine symlink stray when the baseline IS link-aware (full coverage preserved)", () => {
+    const root = mkdtempSync(join(tmpdir(), "cwh-nuf-aware-"));
+    mkdirSync(join(root, "outputs"), { recursive: true });
+    writeFileSync(join(root, "outputs", "real.txt"), "x");
+    symlinkSync("/etc/hosts", join(root, "outputs", "sneaky"));
+    const [r] = evaluate(
+      [{ no_unexpected_files: [] }],
+      ctx(root, { preRunPaths: ["outputs/real.txt"], preRunLinkAware: true }),
+    );
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/outputs\/sneaky/);
   });
 });
 
@@ -95,6 +122,21 @@ describe("#38 capturePreRunManifest — links path-only, never hashed/dereferenc
     expect(paths).toContain("outputs/real.txt");
     expect(Object.hasOwn(hashes, "outputs/link")).toBe(false); // NOT hashed — never dereferenced
     expect(Object.hasOwn(hashes, "outputs/real.txt")).toBe(true);
+  });
+
+  it("stamps the manifest link-aware (v2) so readPreRunManifestLinkAware is true", () => {
+    const outDir = mkdtempSync(join(tmpdir(), "cwh-cap-ver-"));
+    const workRoot = join(outDir, "work", "session", "mnt");
+    mkdirSync(join(workRoot, "outputs"), { recursive: true });
+    writeFileSync(join(workRoot, "outputs", "a.txt"), "x");
+    capturePreRunManifest(minimalPlan(), workRoot, outDir, "container");
+    expect(readPreRunManifestLinkAware(outDir)).toBe(true);
+  });
+
+  it("treats a pre-#38 manifest (no version field) as NOT link-aware", () => {
+    const outDir = mkdtempSync(join(tmpdir(), "cwh-cap-old-"));
+    writeFileSync(join(outDir, "pre-run-manifest.json"), JSON.stringify({ paths: ["outputs/x"], hashes: {}, stats: {} }));
+    expect(readPreRunManifestLinkAware(outDir)).toBe(false);
   });
 
   it("HASHES a pre-existing hardlink (real in-root content) so input_unmodified still covers it", () => {

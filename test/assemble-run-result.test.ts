@@ -59,6 +59,7 @@ function fullyExplicitFixture(): CompleteRunResult {
     hookEvents: undefined,
     presentedFiles: undefined,
     preRunPaths: undefined,
+    preRunLinkAware: undefined,
     preRunHashes: undefined,
     partial: undefined,
     unansweredGate: undefined,

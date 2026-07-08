@@ -62,7 +62,7 @@ import { summarizeGateProvenance } from "./gate-provenance.js";
 import { collectSecrets, scrub } from "../secrets.js";
 import { indexRowFromResult, appendIndexRow } from "./run-index.js";
 import { classifyWorkspaceFiles, collectArtifacts, collectArtifactPaths } from "./artifacts.js";
-import { readPreRunManifest, readPreRunManifestHashes } from "./pre-run-manifest.js";
+import { readPreRunManifest, readPreRunManifestHashes, readPreRunManifestLinkAware } from "./pre-run-manifest.js";
 import { resolveAvailableSkills, type PluginSkillRoot } from "./skill-metadata.js";
 
 // Moved to ./artifacts.ts so assert.ts can use it without an assert→execute import cycle;
@@ -733,6 +733,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // Read the pre-run baseline ONCE: the evaluate ctx and the persisted RunResult must see the same
   // value — two reads could disagree if the file were touched mid-run.
   const preRunPaths = readPreRunManifest(outDir);
+  const preRunLinkAware = readPreRunManifestLinkAware(outDir);
   const preRunHashes = readPreRunManifestHashes(outDir);
 
   // Filesystem pre/post diff of outputs/ — a backstop for `no_delete_in_outputs` INDEPENDENT of
@@ -831,6 +832,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // evidence-unavailable verdict here as on replay (see AssertContext.readonlyFolderRoots).
     readonlyFolderRoots,
     preRunPaths,
+    preRunLinkAware,
     preRunHashes,
     outputsDeletes: scan.outputsDeletes,
     questions: record.questions,
@@ -1066,6 +1068,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // undefined = the run didn't capture (key not asserted, microvm, pre-seam) — the assertion then
     // fails evidence-unavailable, loud.
     preRunPaths,
+    preRunLinkAware,
     preRunHashes,
     nonDeterministic:
       // LLM-, external-, human-, or first-option-decided → not reproducible. `first` picks options[0] and
@@ -1321,6 +1324,7 @@ export function buildPartialResult(args: {
     hookEvents: record.hookEvents, // uncollapsed — an empty [] on a no-Task scenario is the real "nothing hook-blocked" signal no_hook_blocked needs
     presentedFiles: record.presentedFiles, // uncollapsed — an empty [] is the real "nothing presented" signal no_scratchpad_leak's vacuous pass needs
     preRunPaths: readPreRunManifest(args.outDir),
+    preRunLinkAware: readPreRunManifestLinkAware(args.outDir),
     preRunHashes: readPreRunManifestHashes(args.outDir),
     effectiveFidelity: args.effectiveFidelity,
     gateProvenance: gp.total ? gp : undefined,

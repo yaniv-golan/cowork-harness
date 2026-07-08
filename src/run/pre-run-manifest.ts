@@ -114,7 +114,25 @@ export function capturePreRunManifest(plan: LaunchPlan, workRoot: string, outDir
     for (const e of collectArtifactPaths(workRoot, userVisibleRootsFromPlan(plan))) add(e.path, workRoot, e.linkKind);
     paths.sort();
   }
-  writeFileSync(join(outDir, FILE), JSON.stringify({ paths, hashes, stats }, null, 2));
+  writeFileSync(join(outDir, FILE), JSON.stringify({ version: MANIFEST_VERSION, paths, hashes, stats }, null, 2));
+}
+
+// Pre-run manifest format version. v2 = the LINK-AWARE walk (paths includes symlink/hardlink entries).
+// ABSENT (or < 2) = a pre-#38 manifest captured with the symlink-skipping content walk. `no_unexpected_files`
+// on `verify-run`/`--resume` of such an old run dir must NOT flag its pre-existing symlinks as strays (the
+// baseline never listed them) — it compares on the same links-blind basis. See `readPreRunManifestLinkAware`.
+const MANIFEST_VERSION = 2;
+
+/** True iff the on-disk pre-run manifest was captured with the link-aware walk (v2+). Absent/older ⇒ false
+ *  ⇒ `no_unexpected_files` excludes link entries from the post walk so a pre-existing symlink on a
+ *  pre-upgrade run dir is not a false stray. */
+export function readPreRunManifestLinkAware(outDir: string): boolean {
+  try {
+    const parsed = JSON.parse(readFileSync(join(outDir, FILE), "utf8")) as { version?: unknown };
+    return typeof parsed.version === "number" && parsed.version >= 2;
+  } catch {
+    return false;
+  }
 }
 
 /** undefined = no manifest (an older kept run, a run that didn't capture, or a tier that can't —

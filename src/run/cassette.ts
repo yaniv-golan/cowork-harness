@@ -2408,6 +2408,7 @@ function replayErrorResult(file: string): RunResult {
     hookEvents: undefined, // no rec to read from on this early-bail lane
     presentedFiles: undefined, // no rec to read from on this early-bail lane
     preRunPaths: undefined,
+    preRunLinkAware: undefined,
     preRunHashes: undefined,
     partial: undefined,
     unansweredGate: undefined,
@@ -3856,6 +3857,9 @@ export async function replayCassette(
       // readonlyFolderRoots (they have no manifest at eval time), so it's empty here.
       readonlyFolderRoots: [],
       preRunPaths: cassette.preRunPaths,
+      // A v10+ cassette recorded its baseline link-aware. Moot for replay's own no_unexpected_files (the
+      // materialized tree has no real symlinks), but honest for anything that reads this result.
+      preRunLinkAware: (cassette.cassetteVersion ?? 0) >= 10,
       preRunHashes: cassette.preRunHashes,
       // The authoritative post-run per-path sha256 from the manifest — NOT a re-hash of replayWorkRoot,
       // which materializeManifest fills with 0-byte placeholders for body-less entries (read-only inputs,
@@ -4097,6 +4101,7 @@ export async function replayCassette(
       // presented" signal no_scratchpad_leak's vacuous pass needs, matching live).
       presentedFiles: rec.presentedFiles,
       preRunPaths: undefined,
+      preRunLinkAware: undefined,
       preRunHashes: undefined,
       partial: undefined,
       unansweredGate: undefined,

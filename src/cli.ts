@@ -3221,6 +3221,9 @@ async function cmdVerifyRun(args: string[]) {
     // pre-run-manifest.json, so a missing field means the baseline genuinely doesn't exist
     // (pre-field run, or the run never captured) — evidence-unavailable, loud.
     preRunPaths: result.preRunPaths,
+    // A pre-#38 result.json has no preRunLinkAware ⇒ undefined ⇒ no_unexpected_files excludes links from the
+    // post walk, so re-verifying an old run dir doesn't false-stray its pre-existing symlinks.
+    preRunLinkAware: result.preRunLinkAware,
     preRunHashes: result.preRunHashes,
     outputsDeletes: scan.outputsDeletes,
     questions: sidecarQuestions ?? [],

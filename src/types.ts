@@ -862,6 +862,11 @@ export interface RunResult {
    *  against. undefined = the tier didn't capture (microvm) or the run predates the seam; the
    *  assertion then fails evidence-unavailable, never vacuous-passes. */
   preRunPaths?: string[];
+  /** True iff `preRunPaths` was captured with the LINK-AWARE walk (manifest v2+, post-#38) — i.e. it lists
+   *  symlink/hardlink entries. Absent/false ⇒ a pre-#38 baseline; `no_unexpected_files` then excludes link
+   *  entries from the post walk so a pre-existing symlink on a re-verified pre-upgrade run dir is not a
+   *  false stray. Only meaningful on the live/verify-run lanes (replay's materialized tree has no symlinks). */
+  preRunLinkAware?: boolean;
   /** Per-path sha256 of the user-visible tree BEFORE the agent ran (from pre-run-manifest.json's
    *  `hashes`). null for a file over the pre-run hash cap. Powers `input_unmodified`. undefined =
    *  no manifest / an older run without hashes — the assertion then fails evidence-unavailable. */
