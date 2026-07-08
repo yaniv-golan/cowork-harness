@@ -72,8 +72,8 @@ export function writeDoneMarker(dir: string): void {
 export function streamGates(dir: string, write: (line: string) => void, opts: { pollMs?: number; once?: boolean } = {}): Promise<void> {
   const pollMs = opts.pollMs ?? envPositiveNumber("COWORK_HARNESS_DECIDER_DIR_POLL_MS", 500);
   const seen = new Set<string>();
-  const tries = new Map<string, number>(); // per-file parse attempts — bound retries so a corrupt file drops loud
-  return new Promise<void>((resolve) => {
+  const tries = new Map<string, number>(); // per-file parse attempts — bound retries so a corrupt file fails loud
+  return new Promise<void>((resolve, reject) => {
     const tick = () => {
       let files: string[] = [];
       try {
@@ -89,13 +89,15 @@ export function streamGates(dir: string, write: (line: string) => void, opts: { 
           seen.add(f); // only mark consumed AFTER a clean parse — a mid-write is retried next tick
           write(JSON.stringify({ seq: seqOf(f), ...parsed }));
         } catch {
-          // A transient mid-write is retried next tick; a PERSISTENTLY corrupt file would otherwise be
-          // retried forever — bound it, then drop loud so the gap is visible (not a silent false-negative).
+          // A transient mid-write is retried next tick; a PERSISTENTLY corrupt gate-request file must
+          // FAIL the decider channel, not be dropped: dropping it leaves the agent blocked forever on a
+          // gate the decider can never answer. (Gate files are written temp+rename atomically, so a torn
+          // write can't reach here — a persistent parse failure means genuine corruption.)
           const n = (tries.get(f) ?? 0) + 1;
           tries.set(f, n);
           if (n >= 3) {
-            seen.add(f);
-            warn(`::warning:: [gates] ${f} is unreadable/malformed after ${n} tries — dropping\n`);
+            warn(`::warning:: [gates] ${f} is unreadable/malformed after ${n} tries — failing the decider channel\n`);
+            return reject(new Error(`[gates] decider channel failed: ${join(dir, f)} is unreadable/malformed after ${n} tries (the agent is waiting on a gate this file was meant to answer)`));
           }
         }
       }

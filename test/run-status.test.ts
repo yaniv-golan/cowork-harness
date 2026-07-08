@@ -262,6 +262,12 @@ describe("followRunStatus", () => {
     await expect(followRunStatus(dir, () => {}, { pollMs: 5, firstSeenTimeoutMs: 20 })).rejects.toThrow(/no status\.json/);
   });
 
+  it("rejects when status.json EXISTS but is persistently corrupt — no infinite poll (#48)", async () => {
+    const dir = tmp();
+    writeFileSync(join(dir, "status.json"), "{ this is not valid json"); // file exists, never parses
+    await expect(followRunStatus(dir, () => {}, { pollMs: 5, corruptTimeoutMs: 20 })).rejects.toThrow(/corrupt|never parsed/);
+  });
+
   it(
     "rejects if a running status goes STALE — the SIGKILL case, where status.json already exists so " +
       "firstSeenTimeoutMs alone would never fire and this would otherwise poll forever",

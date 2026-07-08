@@ -343,6 +343,13 @@ describe("gates stream + answer (the in-band transport the harness owns)", () =>
     expect(parsed.some((p) => p.seq === 1)).toBe(false); // the malformed file is never emitted as a gate
     expect(parsed[parsed.length - 1]).toEqual({ done: true });
   });
+
+  it("streamGates FAILS the decider channel on a persistently-corrupt gate with no done marker (#49)", async () => {
+    const dir = tmp();
+    writeFileSync(join(dir, "req-1.json"), "{ persistently corrupt"); // never parses; no done marker, no valid gate
+    // the old code did seen.add + warn + continue → the agent waits forever for an answer never sent.
+    await expect(streamGates(dir, () => {}, { pollMs: 5 })).rejects.toThrow(/decider channel failed/);
+  });
 });
 
 // fileChannel exit-listener leak: close() must remove the listener so multiple channels

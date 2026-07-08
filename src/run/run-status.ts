@@ -266,13 +266,18 @@ export function resolveStatusDir(arg: string): string {
 export function followRunStatus(
   runDir: string,
   write: (line: string) => void,
-  opts: { pollMs?: number; once?: boolean; firstSeenTimeoutMs?: number; staleMs?: number } = {},
+  opts: { pollMs?: number; once?: boolean; firstSeenTimeoutMs?: number; staleMs?: number; corruptTimeoutMs?: number } = {},
 ): Promise<void> {
   const pollMs = opts.pollMs ?? envPositiveNumber("COWORK_HARNESS_STATUS_POLL_MS", 1000);
   const firstSeenTimeoutMs = opts.firstSeenTimeoutMs ?? envPositiveNumber("COWORK_HARNESS_STATUS_FIRST_SEEN_TIMEOUT_MS", 60_000);
+  // How long a status.json may exist-but-never-parse before follow gives up. A mid-write parse failure is
+  // transient (retried next tick); a persistently corrupt/truncated file would otherwise loop forever once
+  // the file has appeared (sawStatus disables the "never appeared" reject). Bound it and reject loud.
+  const corruptTimeoutMs = opts.corruptTimeoutMs ?? envPositiveNumber("COWORK_HARNESS_STATUS_CORRUPT_TIMEOUT_MS", 30_000);
   const deadline = Date.now() + firstSeenTimeoutMs;
   let lastUpdatedAt: string | undefined;
   let sawStatus = false;
+  let corruptSince: number | undefined;
   return new Promise<void>((resolve, reject) => {
     const tick = () => {
       if (hasRunStatus(runDir)) {
@@ -280,8 +285,22 @@ export function followRunStatus(
         let status: RunStatus | undefined;
         try {
           status = readRunStatus(runDir);
+          corruptSince = undefined; // a clean read clears any transient-corruption streak
         } catch {
-          /* mid-write — retried next tick */
+          // mid-write is transient (retried next tick); a persistently corrupt/truncated status.json
+          // would otherwise loop forever once the file exists — bound it and reject loud.
+          if (corruptSince === undefined) corruptSince = Date.now();
+          if (Date.now() - corruptSince > corruptTimeoutMs) {
+            const ageS = Math.round((Date.now() - corruptSince) / 1000);
+            return reject(
+              Object.assign(
+                new Error(
+                  `${join(runDir, STATUS_FILE)} has existed but never parsed for ${ageS}s — the status file is corrupt/truncated, not mid-write`,
+                ),
+                { corrupt: true },
+              ),
+            );
+          }
         }
         if (status && status.updatedAt !== lastUpdatedAt) {
           lastUpdatedAt = status.updatedAt;
