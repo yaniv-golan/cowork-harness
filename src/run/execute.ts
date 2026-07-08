@@ -710,9 +710,13 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // self-heal) has no trustworthy evidence — treat it as unavailable, never as a clean scan.
   const scanUnavailable = scan.sidecarMissing || scan.malformedLines > 0;
   if (scan.sidecarMissing)
-    warn(`::warning:: [scan] events.jsonl missing — post-run scan evidence unavailable (host-path-leak / delete-in-outputs / self-heal cannot be verified)\n`);
+    warn(
+      `::warning:: [scan] events.jsonl missing — post-run scan evidence unavailable (host-path-leak / delete-in-outputs / self-heal cannot be verified)\n`,
+    );
   else if (scan.malformedLines > 0)
-    warn(`::warning:: [scan] ${scan.malformedLines} malformed line(s) in events.jsonl — scan evidence unreliable, treated as unavailable\n`);
+    warn(
+      `::warning:: [scan] ${scan.malformedLines} malformed line(s) in events.jsonl — scan evidence unreliable, treated as unavailable\n`,
+    );
   const workRoot = effectiveFidelity === "protocol" ? join(outDir, "work") : join(outDir, "work", "session", "mnt");
 
   // The runtime tripwire: if a gated tool call completed successfully with no evidence the path-containment
@@ -825,7 +829,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   const availableSkillIds = initSkills?.map((s) => s.id) ?? [];
   record.context = {
     ...record.context,
-    availableSkills: initSkills === undefined ? undefined : resolveAvailableSkills(availableSkillIds, plan.configDir, pluginSkillRootsFromPlan(plan)),
+    availableSkills:
+      initSkills === undefined ? undefined : resolveAvailableSkills(availableSkillIds, plan.configDir, pluginSkillRootsFromPlan(plan)),
   };
 
   // Fold resources.jsonl ONCE — reused by both the evaluate() ctx below (max_peak_rss_bytes) and the
@@ -1097,7 +1102,9 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // post-run scan signals (delete-in-outputs / host-path-leak / self-heal) — computeVerdict default-fails
     // when unasserted. `undefined` (NOT an all-false object) when events.jsonl was missing/corrupt, so
     // verify-run's `scanMissing = result.scan === undefined` fires and the dependent assertions fail loud.
-    scan: scanUnavailable ? undefined : { outputsDeletes: scan.outputsDeletes, hostPathLeaked: scan.hostPathLeaked, selfHealRan: scan.selfHealRan },
+    scan: scanUnavailable
+      ? undefined
+      : { outputsDeletes: scan.outputsDeletes, hostPathLeaked: scan.hostPathLeaked, selfHealRan: scan.selfHealRan },
     effectiveFidelity, // The tier actually used — differs from fidelity when fidelity:"cowork"
     fidelityWarnings: promptFidelityWarnings, // structured prompt warnings visible to JSON callers
     l0PluginDivergence: l0PluginDivergence || undefined, // failing fidelity signal for protocol+plugins

@@ -97,7 +97,11 @@ export function streamGates(dir: string, write: (line: string) => void, opts: { 
           tries.set(f, n);
           if (n >= 3) {
             warn(`::warning:: [gates] ${f} is unreadable/malformed after ${n} tries — failing the decider channel\n`);
-            return reject(new Error(`[gates] decider channel failed: ${join(dir, f)} is unreadable/malformed after ${n} tries (the agent is waiting on a gate this file was meant to answer)`));
+            return reject(
+              new Error(
+                `[gates] decider channel failed: ${join(dir, f)} is unreadable/malformed after ${n} tries (the agent is waiting on a gate this file was meant to answer)`,
+              ),
+            );
           }
         }
       }

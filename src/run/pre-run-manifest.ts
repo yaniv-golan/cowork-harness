@@ -132,10 +132,7 @@ export function capturePreRunManifest(plan: LaunchPlan, workRoot: string, outDir
   // Both non-"local-walk" values make no_unexpected_files / input_unmodified fail EVIDENCE-UNAVAILABLE
   // (see the assert.ts guard clauses) — never a vacuous pass on an incomplete/unwalkable tree.
   const origin = baselineUnreadable ? "local-unreadable" : "local-walk";
-  writeFileSync(
-    join(outDir, FILE),
-    JSON.stringify({ version: MANIFEST_VERSION, origin, paths, hashes, stats }, null, 2),
-  );
+  writeFileSync(join(outDir, FILE), JSON.stringify({ version: MANIFEST_VERSION, origin, paths, hashes, stats }, null, 2));
 }
 
 // Pre-run manifest format version. v2 = the LINK-AWARE walk (paths includes symlink/hardlink entries).
