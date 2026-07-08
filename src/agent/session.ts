@@ -113,13 +113,19 @@ export interface HookBundle {
   handle: (callbackId: string, input: any) => Promise<Record<string, unknown>> | Record<string, unknown>;
 }
 
+/** Outcome of `respond()`: whether the answer actually reached its destination (the live agent's
+ *  stdin, or — on replay — the recording). `delivered:false` means the answer was NOT applied, so the
+ *  caller must NOT record it as "answered". Deliberately a status return, never a throw: a late answer
+ *  racing session teardown is a normal shutdown condition, not an error. */
+export type DecisionDelivery = { delivered: boolean; reason?: "session-closing" | "unknown-decision" };
+
 export interface AgentSession {
   /** write `initialize` before the first user turn (idempotent; `start()` also calls it).
    *  Optional — replay sessions (cassette) have no live control channel and omit it. */
   init?(opts?: { subagentAppend?: string; sdkMcp?: SdkMcp; hooks?: HookBundle }): void;
   start(opts?: { subagentAppend?: string; sdkMcp?: SdkMcp; hooks?: HookBundle }): AsyncIterable<AgentEvent>;
   sendUserTurn(text: string): void;
-  respond(decisionId: string, r: DecisionResponse): void;
+  respond(decisionId: string, r: DecisionResponse): DecisionDelivery;
   close(): void;
   /** Forcibly terminate the agent process (wall-clock timeout). Unlike `close()` (which only ends stdin
    *  and lets a well-behaved agent exit), this SIGTERMs the child — tier-agnostic, since the child is
@@ -597,7 +603,7 @@ export class LiveAgentSession implements AgentSession {
     this.write({ type: "user", message: { role: "user", content: [{ type: "text", text }] } });
   }
 
-  respond(decisionId: string, r: DecisionResponse): void {
+  respond(decisionId: string, r: DecisionResponse): DecisionDelivery {
     const req = this.reqById.get(decisionId);
     if (!req) {
       // an id with no matching request_id is a protocol drift. Writing a guessed envelope would
@@ -605,7 +611,7 @@ export class LiveAgentSession implements AgentSession {
       warn(
         `::warning:: respond() for unknown decision id "${decisionId}" — no matching request_id was seen; the agent may block until timeout (protocol drift)\n`,
       );
-      return;
+      return { delivered: false, reason: "unknown-decision" };
     }
     // serializeDecision returns a safe deny envelope on a kind mismatch (defense in depth). That
     // deny goes to the agent silently today — surface it loudly so the run record can't read "answered"
@@ -615,10 +621,13 @@ export class LiveAgentSession implements AgentSession {
       warn(
         `::warning:: decider returned kind "${r.kind}" for a "${req.kind}" request (id ${decisionId}) → sending a safe deny/cancel; the agent did NOT receive an answer\n`,
       );
-    this.write(serializeDecision(req, r));
-    // Invariant: each decision id is answered at most once. Delete after a successful write so
-    // stale entries don't accumulate (live sessions may process thousands of decisions per run).
+    const delivered = this.write(serializeDecision(req, r));
+    // Invariant: each decision id is answered at most once. Delete after the write so stale
+    // entries don't accumulate (live sessions may process thousands of decisions per run).
     this.reqById.delete(decisionId);
+    // If the session was already draining, write() discarded the frame — report non-delivery so the
+    // caller records the truth instead of a false "answered".
+    return delivered ? { delivered: true } : { delivered: false, reason: "session-closing" };
   }
 
   close(): void {
@@ -645,9 +654,9 @@ export class LiveAgentSession implements AgentSession {
     }
   }
 
-  private write(obj: unknown): void {
+  private write(obj: unknown): boolean {
     const line = JSON.stringify(obj);
-    if (this.closing) return; // session draining — discard silently
+    if (this.closing) return false; // session draining — discard silently (caller reads the false return)
     // check stream writability before writing — a closed/destroyed stdin after a child crash
     // loses decision frames silently. Throw immediately so callers surface the failure rather than
     // hanging or silently dropping frames.
@@ -660,6 +669,7 @@ export class LiveAgentSession implements AgentSession {
       // the pump returns, so this only fires on unanticipated throws.
       if (this.rejectError) this.rejectError(err instanceof Error ? err : new Error(String(err)));
     });
+    return true;
   }
 
   private async pump(): Promise<void> {

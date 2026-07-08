@@ -48,7 +48,7 @@ class HangingSession implements AgentSession {
     await this.gate; // never yields on its own — only the timeout can end this
   }
   sendUserTurn(): void {}
-  respond(_id: string, _r: DecisionResponse): void {}
+  respond(_id: string, _r: DecisionResponse) { return { delivered: true }; }
   close(): void {
     this.release();
   }
@@ -75,7 +75,7 @@ describe("wall-clock timeout", () => {
         yield { type: "result", isError: false } as AgentEvent;
       },
       sendUserTurn() {},
-      respond() {},
+      respond() { return { delivered: true }; },
       close() {},
     };
     const rec = await new Run(quick, new ScriptedDecider([]), [], "t").drive("go");

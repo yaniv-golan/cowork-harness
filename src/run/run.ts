@@ -809,12 +809,23 @@ export class Run {
       this.rec.decisions.push({ kind: kindOf(req), name: nameOf(req), decision: "abstain→deny", by: "none" });
       return;
     }
-    this.session.respond(req.id, decided.response);
-    // serializeDecision rewrites a kind-mismatched response to a deny envelope (session.ts) — the agent
-    // did NOT get the intended answer. Record the TRUTH ("mismatch→deny"), not "answered", and skip the
-    // gateAnswers push (no answer was delivered). ✓ success ≠ correct. (the mismatch detection +
-    // warning is the SHARED helper that the synthetic web_fetch path also uses.)
-    if (isDecisionKindMismatch(req, decided.response, "permission")) {
+    const delivery = this.session.respond(req.id, decided.response);
+    if (!delivery.delivered) {
+      // The answer never reached the agent — the session was already draining when respond() ran
+      // (a decider answer racing teardown). Record the TRUTH, not "answered": a false "answered" here
+      // would let the run read as if the gate was satisfied when the agent never got the frame. #20
+      this.rec.decisions.push({
+        kind: kindOf(req),
+        name: nameOf(req),
+        decision: "undelivered",
+        by: decided.by,
+        rationale: `answer not delivered (${delivery.reason ?? "unknown"})`,
+      });
+    } else if (isDecisionKindMismatch(req, decided.response, "permission")) {
+      // serializeDecision rewrites a kind-mismatched response to a deny envelope (session.ts) — the agent
+      // did NOT get the intended answer. Record the TRUTH ("mismatch→deny"), not "answered", and skip the
+      // gateAnswers push (no answer was delivered). ✓ success ≠ correct. (the mismatch detection +
+      // warning is the SHARED helper that the synthetic web_fetch path also uses.)
       this.rec.decisions.push({
         kind: kindOf(req),
         name: nameOf(req),

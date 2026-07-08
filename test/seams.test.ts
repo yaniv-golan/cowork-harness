@@ -161,6 +161,7 @@ class MockSession implements AgentSession {
   }
   respond(id: string, r: DecisionResponse) {
     this.responded.push({ id, r });
+    return { delivered: true as const };
   }
   close() {}
 }
@@ -629,7 +630,7 @@ describe("Run — turn loop + record", () => {
         for (const e of events) yield e;
       },
       sendUserTurn() {},
-      respond() {},
+      respond() { return { delivered: true }; },
       close() {},
     } as any;
     const run = new Run(fakeSession, { decide: async () => ABSTAIN } as any, [], "test-run");
@@ -652,7 +653,7 @@ describe("Run — turn loop + record", () => {
         for (const e of events) yield e;
       },
       sendUserTurn() {},
-      respond() {},
+      respond() { return { delivered: true }; },
       close() {},
     } as any;
     const run = new Run(fakeSession, { decide: async () => ABSTAIN } as any, [], "test-run");
@@ -681,7 +682,7 @@ describe("Run — turn loop + record", () => {
         for (const e of events) yield e;
       },
       sendUserTurn() {},
-      respond() {},
+      respond() { return { delivered: true }; },
       close() {},
     } as any;
     const run = new Run(fakeSession, { decide: async () => ABSTAIN } as any, [], "test-run");
@@ -703,7 +704,7 @@ describe("Run — turn loop + record", () => {
         for (const e of events) yield e;
       },
       sendUserTurn() {},
-      respond() {},
+      respond() { return { delivered: true }; },
       close() {},
     } as any;
     const run = new Run(fakeSession, { decide: async () => ABSTAIN } as any, [], "test-run");
@@ -722,7 +723,7 @@ describe("Run — turn loop + record", () => {
         for (const e of events) yield e;
       },
       sendUserTurn() {},
-      respond() {},
+      respond() { return { delivered: true }; },
       close() {},
     } as any;
     const rec = await new Run(fakeSession, new ScriptedDecider([])).drive("go");
@@ -742,7 +743,7 @@ describe("Run — turn loop + record", () => {
         for (const e of events) yield e;
       },
       sendUserTurn() {},
-      respond() {},
+      respond() { return { delivered: true }; },
       close() {},
     } as any;
     const rec = await new Run(fakeSession, new ScriptedDecider([])).drive("go");
@@ -764,7 +765,7 @@ describe("Run — turn loop + record", () => {
         for (const e of events) yield e;
       },
       sendUserTurn() {},
-      respond() {},
+      respond() { return { delivered: true }; },
       close() {},
     } as any;
     const rec = await new Run(fakeSession, new ScriptedDecider([])).drive("go");
@@ -783,7 +784,7 @@ describe("Run — turn loop + record", () => {
         for (const e of events) yield e;
       },
       sendUserTurn() {},
-      respond() {},
+      respond() { return { delivered: true }; },
       close() {},
     } as any;
     const rec = await new Run(fakeSession, new ScriptedDecider([])).drive("go");
@@ -801,7 +802,7 @@ describe("Run — turn loop + record", () => {
         for (const e of events) yield e;
       },
       sendUserTurn() {},
-      respond() {},
+      respond() { return { delivered: true }; },
       close() {},
     } as any;
     const rec = await new Run(fakeSession, new ScriptedDecider([])).drive("go");
@@ -899,7 +900,7 @@ describe("Run — turn loop + record", () => {
         for (const e of ev) yield e;
       }
       sendUserTurn() {}
-      respond() {}
+      respond() { return { delivered: true }; }
       close() {
         closed = true;
       }
@@ -925,7 +926,7 @@ describe("Run — turn loop + record", () => {
         for (const e of ev) yield e;
       }
       sendUserTurn() {}
-      respond() {}
+      respond() { return { delivered: true }; }
       close() {
         closed = true;
       }
@@ -951,7 +952,7 @@ describe("Run — turn loop + record", () => {
         for (const e of ev) yield e;
       }
       sendUserTurn() {}
-      respond() {}
+      respond() { return { delivered: true }; }
       close() {
         closed = true;
       }
@@ -1073,7 +1074,7 @@ describe("Run — turn loop + record", () => {
         yield { type: "assistant_text", text: "hi" }; // ends with no `result` → only the finally can close
       }
       sendUserTurn() {}
-      respond() {}
+      respond() { return { delivered: true }; }
       close() {
         closes++;
       }
@@ -1894,7 +1895,7 @@ describe("Run — multi-question gate label", () => {
     async *start(): AsyncGenerator<AgentEvent> {
       yield* this.events;
     }
-    respond() {}
+    respond() { return { delivered: true }; }
     close() {}
   }
 

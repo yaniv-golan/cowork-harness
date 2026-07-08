@@ -9,7 +9,7 @@ class MockSession implements AgentSession {
     for (const e of this.events) yield e;
   }
   sendUserTurn() {}
-  respond() {}
+  respond() { return { delivered: true }; }
   close() {}
 }
 

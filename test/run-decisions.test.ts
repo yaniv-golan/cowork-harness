@@ -14,6 +14,7 @@ class MockSession implements AgentSession {
   sendUserTurn() {}
   respond(id: string, r: DecisionResponse) {
     this.responded.push({ id, r });
+    return { delivered: true as const };
   }
   close() {}
 }
@@ -85,5 +86,30 @@ describe("recordDecision — AskUserQuestion full option set", () => {
         ],
       },
     ]);
+  });
+});
+
+describe("recordDecision — undelivered answer (#20)", () => {
+  // A session that reports the answer did NOT reach the agent (the live session was draining when
+  // respond() ran). The run must record the truth ("undelivered"), never a false "answered".
+  class ClosingSession extends MockSession {
+    respond(_id: string, _r: DecisionResponse) {
+      return { delivered: false as const, reason: "session-closing" as const };
+    }
+  }
+
+  it("records 'undelivered', not 'answered', when respond() reports non-delivery", async () => {
+    const ev: AgentEvent[] = [
+      {
+        type: "decision",
+        request: { id: "d1", kind: "question", toolUseId: "toolu_q1", questions: [{ question: "Proceed?", options: [{ label: "Yes" }] }] },
+      },
+      { type: "result", isError: false },
+    ];
+    const rec = await new Run(new ClosingSession(ev), new ScriptedDecider([{ when_question: "Proceed", choose: "Yes" }])).drive("go");
+    const q = rec.decisions.find((d) => d.kind === "question");
+    expect(q).toBeDefined();
+    expect(q!.decision).toBe("undelivered");
+    expect(rec.decisions.some((d) => d.decision === "answered")).toBe(false);
   });
 });

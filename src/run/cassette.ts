@@ -1086,10 +1086,13 @@ export class CassetteAgentSession implements AgentSession {
 
   sendUserTurn(): void {}
 
-  respond(id: string, r: import("../agent/session.js").DecisionResponse): void {
-    if (!this.hasControlOut) return; // no-op in legacy mode
+  respond(id: string, r: import("../agent/session.js").DecisionResponse): import("../agent/session.js").DecisionDelivery {
+    // Replay never re-sends to a live process — the answer is "delivered" to the recording by
+    // definition. Always report delivered:true so run.ts records "answered" exactly as before on this
+    // lane; the delivered:false path is a LIVE-only session-teardown condition (#20).
+    if (!this.hasControlOut) return { delivered: true }; // no-op in legacy mode
     const req = this.reqById.get(id);
-    if (!req) return;
+    if (!req) return { delivered: true };
     // Re-serialize the response through serializeDecision (the live path) and compare to the
     // frozen recording — this is the re-serialization guard: if serializeDecision regresses (e.g. drops
     // `questions` from the AskUserQuestion updatedInput), the mismatch fires token-free.
@@ -1108,6 +1111,7 @@ export class CassetteAgentSession implements AgentSession {
       // otherwise replay as a silent abstain→deny with no fidelity failure).
       this.missingControlOut.push(id);
     }
+    return { delivered: true };
   }
 
   close(): void {}
