@@ -146,7 +146,9 @@ input (instead of a fleet-wide shared root) so editing one skill's sub-agent con
 **Mounting the skill under test:** put the skill folder in `plugins.local_plugins` and enable it via
 `plugins.enabled: [<plugin>@local]`. The folder is copied fresh each run — **git-tracked files** inside a
 repo, so `git add` a new skill (an all-untracked folder hard-fails as a would-be-empty mount;
-`COWORK_HARNESS_GITSET=0` copies untracked). For an ad-hoc `skill` run
+`COWORK_HARNESS_GITSET=0` copies untracked). Tracked = in the index; the **content** copied is the
+**working tree**, so uncommitted edits to a tracked file are tested without a commit — but real Cowork
+ships the committed tree, so commit before recording the locking cassette. For an ad-hoc `skill` run
 with no session file, the CLI flags `--folder <dir>` and `--upload <file>` are the equivalents of
 `folders[]` / `uploads[]`.
 

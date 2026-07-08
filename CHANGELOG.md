@@ -147,6 +147,19 @@ All notable changes to this project are documented here. The format is based on
 - Reorganized the skill's debugging guidance around the kept-run-dir → `trace`/`result.json` →
   `verify-run` loop as the primary, first-class debugging path (previously buried under interactive
   `chat`).
+- **Companion skill restructured around the three loops — author → run → debug.** `SKILL.md` now reads
+  Preflight → Orient → Part I (Author a scenario) → Part II (Run, record & lock) → Part III (Debug) →
+  Gotchas → References, with debugging a first-class Part reachable from the top rather than a
+  sub-section. Every prior section was re-homed, not dropped, and cross-references now cite stable
+  section titles instead of numbers so a future move can't silently break them.
+- **Single-source debug triage.** A link-free triage decision-table — which tool to reach for when "the
+  skill misbehaved" vs. when "a green you don't trust" — is authored once and kept byte-identical
+  between the shipped skill and `docs/debugging.md` by a test, so the two surfaces can't drift apart.
+- **Documented how uncommitted skill edits are staged.** The harness stages git-*tracked* files but
+  copies their *working-tree* content, so an uncommitted edit to an already-tracked skill file is tested
+  without committing (only brand-new files must be `git add`-ed to appear). Because real Cowork installs
+  the committed tree, commit before recording the locking cassette — a green on uncommitted edits isn't
+  yet a green on what ships.
 - **Companion skill: documented `semantic_matches` end to end, with a new recipe.** It walks authoring
   Q&A gate scenarios that install the skill, writing discriminating rubric claims verified against
   ground truth, confirming `skillsInvoked` (a rep where the skill never triggered measures the model's

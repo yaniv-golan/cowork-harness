@@ -143,7 +143,9 @@ See [discovery.md](./discovery.md) for the full model. In short: the harness bui
 | `mcp.config` / `mcp.enabled[]` | `--mcp-config` / `enabledMcpjsonServers` | the supported way to attach an MCP server to a session under test. |
 
 > Inside a git repo, `folders[]` and `skills.local[]` stage only **git-tracked** files into the mount (matching
-> real Cowork's install-from-repo behavior) — an untracked skill mounts empty. See
+> real Cowork's install-from-repo behavior) — an untracked skill mounts empty. The **content** staged is the
+> working tree, so uncommitted edits to a tracked file are tested without committing; but commit before
+> recording the locking cassette, since real Cowork ships the committed tree. See
 > [README → Test a local skill in one command](../README.md#test-a-local-skill-in-one-command).
 
 ### Egress
