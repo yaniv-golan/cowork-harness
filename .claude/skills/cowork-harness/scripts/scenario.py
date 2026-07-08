@@ -117,6 +117,7 @@ LIVE_ONLY_KEYS = {
     "transcript_no_host_path",
     "no_mcp_error",
     "max_peak_rss_bytes",
+    "semantic_matches",
 }
 EGRESS_KEYS = {"egress_denied", "egress_allowed"}
 # verdict modifiers — don't verify anything themselves (e.g. suppress a default-fail)

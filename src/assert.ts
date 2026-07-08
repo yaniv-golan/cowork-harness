@@ -175,8 +175,24 @@ export function hostMatches(host: string, needle: string): boolean {
   return h === n || h.endsWith("." + n);
 }
 
+/** One graded rubric claim from the semantic judge. Results align to the rubric BY INDEX, not by claim
+ *  text — the judge may reword a claim between calls, so text-keyed aggregation would misalign. */
+export interface SemanticClaimResult {
+  index: number;
+  claim: string;
+  pass: boolean;
+}
+/** The semantic judge: grade a fixed rubric against the run's answer. LIVE-ONLY (a real model call).
+ *  Injectable so tests can stub it; the shipped default is a placeholder pending a real LLM judge. */
+export type SemanticJudge = (rubric: string[], answer: string) => Promise<SemanticClaimResult[]>;
+
 export interface AssertContext {
   transcript: string;
+  /** LIVE-ONLY, populated by runSemanticJudges (an async pre-pass) BEFORE the synchronous evaluate(),
+   *  so check() reads judge results synchronously and evaluate() stays pure (replay determinism intact).
+   *  Absent on replay (semantic_matches is stripped as live-only) or on a live run where the pre-pass
+   *  wasn't run → semantic_matches then fails evidence-unavailable, never vacuous-passes. */
+  semanticResults?: Map<Assertion, SemanticClaimResult[]>;
   toolsCalled: Set<string>;
   subagentTools: Set<string>;
   egress: RunResult["egress"];
@@ -402,6 +418,29 @@ export function evaluate(assertions: Assertion[], ctx: AssertContext): RunResult
   return assertions.map((a) => check(a, ctx));
 }
 
+/** Placeholder judge, pending a real pinned-LLM judge. Deterministic + injectable so the sync/async
+ *  plumbing is testable without a model call. Degenerate rule: a claim passes iff the answer literally
+ *  contains it — REPLACE before this is used as a real assertion. */
+export const stubSemanticJudge: SemanticJudge = async (rubric, answer) =>
+  rubric.map((claim, index) => ({ index, claim, pass: answer.includes(claim) }));
+
+/** LIVE-ONLY async pre-pass. Grade every `semantic_matches` assert and stash per-claim results in
+ *  `ctx.semanticResults`, so the SYNCHRONOUS evaluate()/check() can read them. Call BEFORE evaluate() on
+ *  the LIVE lane only — the replay lane strips `semantic_matches` (LIVE_ONLY_KEYS) and must never reach a
+ *  model. Keeping the only async/model code here is what preserves evaluate()'s synchronous,
+ *  replay-deterministic contract. */
+export async function runSemanticJudges(
+  assertions: Assertion[],
+  ctx: AssertContext,
+  judge: SemanticJudge = stubSemanticJudge,
+): Promise<void> {
+  if (!ctx.semanticResults) ctx.semanticResults = new Map();
+  for (const a of assertions) {
+    if (a.semantic_matches === undefined) continue;
+    ctx.semanticResults.set(a, await judge(a.semantic_matches.rubric, ctx.transcript));
+  }
+}
+
 // A passing check may carry an optional `evidence` string — the concrete file/value/tool/link that
 // satisfied it — surfaced by `replay --explain` so a green can be trusted, not assumed vacuous. Absent
 // evidence is a clean opt-out (a check with nothing concrete to cite, e.g. a verdict modifier).
@@ -437,6 +476,25 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
           ? ok()
           : fail(`transcript unexpectedly contains "${a.transcript_not_contains}"`),
     );
+  if (a.semantic_matches !== undefined) {
+    // LIVE-ONLY. Judge results are pre-computed by runSemanticJudges (async pre-pass) into
+    // ctx.semanticResults; check() only reads them, so evaluate() stays synchronous. On replay the key
+    // is stripped (LIVE_ONLY_KEYS) and never reaches here.
+    const judged = ctx.semanticResults?.get(a);
+    if (!judged) {
+      results.push(fail("evidence unavailable: semantic judge not run (semantic_matches is live-only; skipped on replay)"));
+    } else {
+      const passed = judged.filter((c) => c.pass).length;
+      const mp = a.semantic_matches.min_pass;
+      const need = mp === undefined || mp === "all" ? a.semantic_matches.rubric.length : mp;
+      const failedIdx = judged.filter((c) => !c.pass).map((c) => c.index);
+      results.push(
+        passed >= need
+          ? ok(`semantic: ${passed}/${judged.length} rubric claims passed (need ${need})`)
+          : fail(`semantic: ${passed}/${judged.length} rubric claims passed (need ${need}); failed claim indices: ${failedIdx.join(",")}`),
+      );
+    }
+  }
   if (a.tool_result_contains !== undefined) {
     const needle = a.tool_result_contains;
     if (ctx.toolResultsMissing) {

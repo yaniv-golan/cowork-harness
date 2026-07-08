@@ -461,6 +461,20 @@ export const Assertion = z.strictObject({
     })
     .optional()
     .describe("assert over a JSON artifact's contents (dotted path + equals|in|gt|exists|absent|is_null)"),
+  semantic_matches: z
+    .object({
+      rubric: z
+        .array(z.string().min(1))
+        .min(1)
+        .describe("fixed, authored checkable claims — a pinned judge grades each; results align by INDEX (not re-extracted per rep)"),
+      min_pass: z
+        .union([z.literal("all"), z.number().int().positive()])
+        .optional()
+        .describe("how many rubric claims must pass for the assert to pass (default: all; do NOT rely on all for a gating scenario)"),
+      judge_model: z.string().optional().describe("override the run-level pinned judge model for this assert"),
+    })
+    .optional()
+    .describe("LIVE-ONLY: a pinned LLM judge grades the rubric against the run's answer; skipped-loud on replay (like egress_*)"),
 });
 export type Assertion = z.infer<typeof Assertion>;
 

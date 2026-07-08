@@ -3694,6 +3694,7 @@ export const LIVE_ONLY_KEYS: (keyof Assertion)[] = [
   "transcript_no_host_path",
   "no_mcp_error",
   "max_peak_rss_bytes",
+  "semantic_matches", // LIVE-ONLY: LLM-judge grade; skipped-loud on replay (the judge is a live model call)
 ];
 
 /** Replay a cassette through Run and re-evaluate the content assertions. With a `cassette.artifacts`
@@ -3856,6 +3857,7 @@ export async function replayCassette(
       "transcript_no_host_path",
       "no_mcp_error",
       "max_peak_rss_bytes",
+      "semantic_matches",
       "replay_protocol_fidelity",
       // (verdict modifiers allow_permissive_auto_allow / allow_missing_capability / allow_l0_plugin_divergence
       //  arrive via ...alwaysContentKeys above — kept on replay as no-op passes.)
