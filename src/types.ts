@@ -868,6 +868,12 @@ export interface RunResult {
      *  on the live lane where the judge ran; a consumer can diff these across runs to gate a change. */
     semanticClaims?: Array<{ index: number; claim: string; pass: boolean }>;
   }>;
+  /** The agent's final answer — the SDK result message (`{type:"result"}`.result), i.e. the model's
+   *  designated final response. This is what llm-transport treats as "the answer"; it is distinct from
+   *  the full joined transcript (every assistant turn concatenated). Surfaced so a consumer reads the
+   *  answer from the envelope instead of parsing run.jsonl. Absent when no result event carried text
+   *  (e.g. a spawn/exit error before the result). */
+  finalMessage?: string;
   subagents?: Array<{
     toolUseId: string;
     parentToolUseId?: string;

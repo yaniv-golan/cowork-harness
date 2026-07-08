@@ -48,6 +48,7 @@ export function buildChatResult(record: RunRecord, opts: ChatResultOpts): RunRes
     $schema: RUN_RESULT_SCHEMA_URL,
     generator: "cowork-harness",
     mode: "chat",
+    finalMessage: record.resultText,
     // Deliberate exception to chat's usual "every verdict/capability field is undefined" convention:
     // execution.location is descriptive provenance, not a verdict, and a chat genuinely knows it ran locally.
     execution: { location: "local" },

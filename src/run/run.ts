@@ -153,6 +153,11 @@ export interface RunRecord {
   // Pass-through diagnostic — captured on the result event, surfaced so a debugger can tell turn-exhaustion
   // from a generic execution error. Undefined until a result event with a subtype is seen.
   resultSubtype?: string;
+  // The SDK result message's text (`{type:"result"}`.result) — the model's designated FINAL answer,
+  // distinct from the joined `transcript` (every assistant turn concatenated). This is what
+  // llm-transport treats as "the answer"; surfaced as RunResult.finalMessage. Undefined until a result
+  // event carries text.
+  resultText?: string;
   // set true when the run ended on an unanswered plain-text question (see the post-loop detector in
   // drive()). Mapped into RunResult by execute.ts (live) and cassette.ts (replay re-drive).
   stalledOnQuestion?: boolean;
@@ -587,6 +592,9 @@ export class Run {
             // Pass through the SDK subtype on BOTH branches (a diagnostic, not just an error signal) —
             // error_max_turns / error_during_execution on failure, success on the clean path.
             if (ev.subtype !== undefined) this.rec.resultSubtype = ev.subtype;
+            // The SDK's designated final answer text (surfaced as RunResult.finalMessage). Kept even on
+            // an is_error result — the result text often IS the diagnostic.
+            if (ev.resultText !== undefined) this.rec.resultText = ev.resultText;
             if (ev.isError) {
               this.rec.result = "error";
               // path (a): the SDK wrapped a transport failure into an is_error result — the result IS the

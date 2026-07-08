@@ -14,6 +14,7 @@ function fullyExplicitFixture(): CompleteRunResult {
     generator: undefined,
     mode: undefined,
     execution: undefined,
+    finalMessage: undefined,
     scenario: "test-scenario",
     prompt: undefined,
     fidelity: "container",

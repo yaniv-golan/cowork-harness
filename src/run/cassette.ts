@@ -2445,6 +2445,7 @@ function replayErrorResult(file: string): RunResult {
     fidelity: "replay",
     baseline: "",
     result: "error",
+    finalMessage: undefined, // truncated/error cassette — no re-drive, no result text
     decisions: [],
     egress: [],
     assertions: [],
@@ -4134,6 +4135,7 @@ export async function replayCassette(
       resultErrorKind: rec.resultErrorKind, // re-derived by run.ts during the replay re-drive (same classifier)
       errorSource: rec.errorSource, // re-derived by run.ts during the replay re-drive, same as resultErrorKind
       resultSubtype: rec.resultSubtype, // re-derived from the frozen result event on the replay re-drive
+      finalMessage: rec.resultText, // the SDK result text, re-derived from the frozen result event
       stderrLogPath: undefined, // live path only — no live process on replay
       stalledOnQuestion: rec.stalledOnQuestion, // re-derived by run.ts's detector during the replay re-drive — so a recorded stall fails replay too
       decisions: rec.decisions.map((d) => ({
