@@ -52,6 +52,16 @@ describe("gitTrackedSet / gitCpFilter", () => {
     expect(gitTrackedSet(mkdtempSync(join(tmpdir(), "norepo-")))).toBeNull();
   });
 
+  it("throws (not silent raw-fallback) when in a repo but the index is corrupt — ls-files fails (#34)", () => {
+    withGit(() => {
+      const { dir } = gitRepo();
+      // Corrupt the index: rev-parse --show-toplevel still succeeds (doesn't read the index), but
+      // ls-files fails — the "in a repo, can't list tracked set" case that must fail loud, not raw-fallback.
+      writeFileSync(join(dir, ".git", "index"), "\x00not a valid git index\x00");
+      expect(() => gitTrackedSet(dir)).toThrow(/ls-files failed|cannot be computed/);
+    });
+  });
+
   it("gitCpFilter admits tracked files + dirs-on-the-path, rejects untracked", () => {
     const { dir } = gitRepo();
     const f = gitCpFilter(dir)!;

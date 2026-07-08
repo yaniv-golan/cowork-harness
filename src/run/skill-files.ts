@@ -41,9 +41,17 @@ function git(args: string[], cwd: string): { ok: boolean; stdout: string } {
  */
 export function gitTrackedSet(dir: string): Set<string> | null {
   const top = git(["rev-parse", "--show-toplevel"], dir);
-  if (!top.ok) return null; // not a repo / git unavailable → raw fallback
+  if (!top.ok) return null; // not a repo / no git binary → raw fallback (legitimate, unchanged)
   const ls = git(["ls-files", "-z", "--", "."], dir);
-  if (!ls.ok) return null;
+  if (!ls.ok)
+    // `rev-parse --show-toplevel` SUCCEEDED, so this dir IS inside a git work tree — but `ls-files`
+    // failed. That is NOT a non-repo (the first check handles those); it's a repo whose tracked set
+    // can't be listed (corrupt/locked index, or a permissions problem). Silently raw-copying here would
+    // change the delivered/hashed boundary with no signal — and this set feeds BOTH the hash walk
+    // (skill-hash.ts) and the mount-copy filter, so a silent fallback could desync them. Fail loud. #34
+    throw new Error(
+      `cowork-harness: git work tree at "${top.stdout.trim() || dir}" is present but 'git ls-files' failed — the tracked-file boundary cannot be computed (corrupt/locked .git or a permissions problem). Fix the repo, or set ${GITSET_ENV}=0 to force the raw-walk boundary.`,
+    );
   const set = new Set<string>();
   for (const f of ls.stdout.split("\0")) {
     if (!f) continue;
