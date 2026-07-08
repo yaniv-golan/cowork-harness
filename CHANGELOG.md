@@ -6,6 +6,9 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+> **In progress.** Restructuring of the companion skill's documentation for a clearer author → run →
+> debug flow.
+
 ### Added
 
 - **`trace --view tool-errors|files|usage`** — three new views: `tool-errors` (one row per errored
@@ -50,6 +53,17 @@ All notable changes to this project are documented here. The format is based on
   (`"local"` default | `"cloud-describe"`, which hard-errors at load time — like
   `replay_protocol_fidelity` — since no runner exists for it yet, rather than being silently accepted
   and ignored). No cloud execution capability is added; these are purely descriptive/forward-compat.
+- **`semantic_matches` assertion** — a live-only, LLM-judged assertion that grades a fixed `rubric` of
+  claims against the run's answer, one pass/fail per claim. Per-claim results are recorded on
+  `RunResult.assertions[].semanticClaims` (`{index, claim, pass}`), so a candidate run's claim-level
+  profile can be diffed against a baseline instead of only reading a single summary verdict. Supports a
+  `min_pass` threshold (default: all claims) and a per-assert `judge_model` override (default
+  `claude-opus-4-8`, also settable via `COWORK_HARNESS_JUDGE_MODEL`). Classified live-only alongside
+  `egress_*` — stripped on replay (skipped-loud), never a vacuous pass.
+- **`RunResult.finalMessage`** — the agent's final answer text: the SDK result message's own designated
+  answer, not the joined transcript of every assistant turn. Lets a consumer read what the agent actually
+  answered without parsing `run.jsonl`. Threaded through every `RunResult` producer (live success and
+  salvaged-partial, replay re-drive, `chat`); `undefined` on a truncated/error cassette.
 
 ### Fixed
 
@@ -119,6 +133,10 @@ All notable changes to this project are documented here. The format is based on
   assertion instead). A `config_dir` that exists but isn't a directory now gets a clear error instead
   of a raw `ENOTDIR`. Protocol staging now fails loud (`BoundaryError`) if a *required* mount's source
   vanishes between plan-build and staging, instead of silently staging an empty tree.
+- **The companion skill's own docs pointed at repo-only files** (`docs/`, `README.md`) that a
+  marketplace-installed agent never receives — only `SKILL.md` + `references/` + `scripts/` are staged.
+  Every such pointer is now prose describing where the fuller doc lives in the source repo, not a
+  markdown link, so it can no longer render as a dangling link for an installed agent.
 
 ### Documentation
 
@@ -129,6 +147,23 @@ All notable changes to this project are documented here. The format is based on
 - Reorganized the skill's debugging guidance around the kept-run-dir → `trace`/`result.json` →
   `verify-run` loop as the primary, first-class debugging path (previously buried under interactive
   `chat`).
+- **Companion skill: documented `semantic_matches` end to end, with a new recipe.** It walks authoring
+  Q&A gate scenarios that install the skill, writing discriminating rubric claims verified against
+  ground truth, confirming `skillsInvoked` (a rep where the skill never triggered measures the model's
+  own priors, not the skill's guidance), running several reps and reading the per-claim pass profile
+  rather than a single all-or-nothing run, and gating a change on the profile diff. Also documents two
+  guarantees the harness already provided but hadn't stated: batch `record` writes each cassette
+  atomically (same-directory temp file + rename, so an interrupted or OOM-killed batch never leaves a
+  partial/corrupt cassette), and each scenario gets full isolation under `--concurrency` (its own egress
+  sidecar network and proxy, its own run directory). And documents the actual
+  `--allow-domain`/`-email`/`-path` matching semantics: whole-token anchored, but case-sensitive unless
+  the pattern's regex carries an `i` flag.
+
+### Internal
+
+- Added a per-claim regression-diff (`scripts/eval-gate-diff.ts`) and an N-rep baseline-profile
+  aggregator (`scripts/eval-baseline-profile.mjs`) for the project's own answer-quality eval gate over
+  the companion skill (`test/evals/`, not shipped as part of the skill).
 
 ### Changed
 
