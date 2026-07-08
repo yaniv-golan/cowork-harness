@@ -39,6 +39,10 @@ decideLoop(i):
 
 `fidelity: cowork` ⇒ `decideLoopFromBaseline(baseline)` → `host`⇒`hostloop`, `vm`⇒`container`. Gate state from `baseline.provenance.gates["hostLoop:1143815894"]` (synced from `fcache`; currently `on(force)` ⇒ `cowork → hostloop`). Explicit `protocol|container|microvm|hostloop` bypass the decision.
 
+`execution` (scenario field, `src/types.ts`) is a separate axis, orthogonal to `fidelity` (a
+privilege/sandbox tier): `local` (default — run the agent locally) | `cloud-describe` (RESERVED — no
+runner exists yet; authoring it is a load-time error, not a silent no-op).
+
 ## 2. Launch plan (`buildLaunchPlan`) — pure
 
 Given a session + baseline, returns:
@@ -388,11 +392,12 @@ states in `baseline.provenance.gates`). A skill that ignores these behaves diffe
   `result`, the verdict modifiers (`allow_permissive_auto_allow`, `allow_missing_capability`,
   `allow_l0_plugin_divergence`, `allow_stall`), and (when `controlOut` is present) `question_asked`,
   `questions_count_max`, `gate_answers_delivered`, `gate_answer_count_min`, `hook_blocked`,
-  `no_hook_blocked`. `max_cost_usd`/`max_tokens` are evaluated against the *frozen recording's*
+  `no_hook_blocked` (illustrative — see `contentKeys` in `src/run/cassette.ts` for the authoritative
+  set; this list is not re-verified exhaustive on every addition). `max_cost_usd`/`max_tokens` are evaluated against the *frozen recording's*
   usage/cost on replay, not fresh spend; `tool_calls_max`/`max_turns` are meaningfully
   replay-checkable (the re-drive recomputes both deterministically).
 - **Filesystem assertions** (`file_exists`, `user_visible_artifact`, `artifact_json`, `computer_links_resolve`,
-  `no_unexpected_files`, `input_unmodified`) are evaluated **when the cassette carries an `artifacts` manifest**
+  `computer_links_resolve_if_present`, `no_unexpected_files`, `input_unmodified`) are evaluated **when the cassette carries an `artifacts` manifest**
   (`record` snapshots `outputs/` + connected folders; `replay` materializes it token-free — `artifact_json` needs the
   small JSON body inlined). `no_unexpected_files` additionally requires `preRunPaths` (optional cassette
   metadata since 0.24; container/hostloop recordings only — microvm cannot capture the baseline); without it
@@ -612,8 +617,10 @@ recording are also part of 0.8.0; see `docs/scenario.md` and `docs/cassette.md`.
 
 **CB-3/CB-4 — `chat` REPL flags and `/help`:** The `chat` subcommand accepts `[--plugin <dir>]…`
 (repeatable; CB-3) — each `<dir>` is appended to `localPlugins` and injected alongside the default
-skill folder in `plugins.local_plugins`. In `--raw` mode, `--plugin` flags are silently ignored (native
-docker mode mounts one skill folder only; a warning is logged). The REPL now accepts `/help` as a
+skill folder in `plugins.local_plugins`. In `--raw` mode, `--upload`/`--folder`/`--plugin`/`--fidelity`/
+`--allow-host-writes` are REJECTED with a usage error (exit 2) — native docker mode mounts one skill
+folder only and offers no equivalent for the others, so `chat.ts` fails loud rather than silently
+dropping them. The REPL now accepts `/help` as a
 built-in command (CB-4), printing `"Commands: /exit  /quit  /help"` without sending a turn; the startup
 prompt reads `"type your message (/help for commands)"`. **CB-2:** `flagValue()` in `src/cli.ts` and
 the inline `--model` parser in `src/run/chat.ts` both reject empty-string values (`""`/whitespace) with

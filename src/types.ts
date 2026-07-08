@@ -184,7 +184,9 @@ export const Assertion = z.strictObject({
   user_visible_artifact: z
     .string()
     .optional()
-    .describe("a file exists AND is under a user-visible prefix (mnt/outputs or mnt/.projects — Cowork-promoted)"),
+    .describe(
+      "a file exists AND is under a user-visible prefix: mnt/outputs, each connected-folder mount (mnt/<folder>), or the legacy mnt/.projects fallback (pre-1.14271.0)",
+    ),
   tool_called: z.string().optional().describe("a tool with this name was called"),
   tool_not_called: z.string().optional().describe("a tool with this name was NOT called"),
   subagent_tool_used: z.string().optional().describe("a sub-agent used this tool"),
@@ -198,7 +200,14 @@ export const Assertion = z.strictObject({
     })
     .optional()
     .describe("a dispatched sub-agent's own output contained this substring (optionally narrowed to dispatches matching `match`)"),
-  dispatch_count_max: z.number().int().nonnegative().optional().describe("total sub-agent dispatches ≤ N (the {global:3} ceiling)"),
+  dispatch_count_max: z
+    .number()
+    .int()
+    .nonnegative()
+    .optional()
+    .describe(
+      "total sub-agent dispatches ≤ N — an author-chosen budget; Cowork imposes no in-conversation Task-dispatch cap (see SPEC §10)",
+    ),
   skill_triggered: z
     .string()
     .optional()
@@ -499,7 +508,7 @@ export const ScenarioObject = z.strictObject({
     .enum(["local", "cloud-describe"])
     .default("local")
     .describe(
-      "execution location axis, ORTHOGONAL to fidelity (a local privilege tier): local (default — run the agent locally) | cloud-describe (RESERVED — describe/annotate a cloud-run scenario without executing it; no runner exists yet, authoring it is currently inert)",
+      "execution location axis, ORTHOGONAL to fidelity (a local privilege tier): local (default — run the agent locally) | cloud-describe (RESERVED — describe/annotate a cloud-run scenario without executing it; no runner exists yet, authoring it is a load-time error, not a silent no-op)",
     ),
   prompt: z.string().describe("the user turn sent to the agent"),
   timeout_ms: z

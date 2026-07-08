@@ -89,7 +89,8 @@ session = your setup.**
 ```yaml
 # model & reasoning
 model: claude-opus-4-8           # omit for the agent default
-account_name: my-account         # OPTIONAL — which configured account/credential set to run as
+account_name: my-account         # OPTIONAL — display name rendered into {{accountName}} / the prompt's
+                                    # "User name:" line; NOT a credential/identity selector (see src/prompt.ts, docs/session.md)
 effort: high                     # low | medium | high | xhigh
 max_thinking_tokens: 31999       # positive int, or per-model map {default, <model>: <n>}; default 31999
 extended_thinking: true          # INERT — not a real Cowork toggle; use max_thinking_tokens instead

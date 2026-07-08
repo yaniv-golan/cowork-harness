@@ -31,7 +31,7 @@
     },
     "execution": {
       "default": "local",
-      "description": "execution location axis, ORTHOGONAL to fidelity (a local privilege tier): local (default — run the agent locally) | cloud-describe (RESERVED — describe/annotate a cloud-run scenario without executing it; no runner exists yet, authoring it is currently inert)",
+      "description": "execution location axis, ORTHOGONAL to fidelity (a local privilege tier): local (default — run the agent locally) | cloud-describe (RESERVED — describe/annotate a cloud-run scenario without executing it; no runner exists yet, authoring it is a load-time error, not a silent no-op)",
       "type": "string",
       "enum": [
         "local",
@@ -164,7 +164,7 @@
             "minLength": 1
           },
           "user_visible_artifact": {
-            "description": "a file exists AND is under a user-visible prefix (mnt/outputs or mnt/.projects — Cowork-promoted)",
+            "description": "a file exists AND is under a user-visible prefix: mnt/outputs, each connected-folder mount (mnt/<folder>), or the legacy mnt/.projects fallback (pre-1.14271.0)",
             "type": "string"
           },
           "tool_called": {
@@ -210,7 +210,7 @@
             "additionalProperties": false
           },
           "dispatch_count_max": {
-            "description": "total sub-agent dispatches ≤ N (the {global:3} ceiling)",
+            "description": "total sub-agent dispatches ≤ N — an author-chosen budget; Cowork imposes no in-conversation Task-dispatch cap (see SPEC §10)",
             "type": "integer",
             "minimum": 0,
             "maximum": 9007199254740991
