@@ -29,6 +29,15 @@
         "cowork"
       ]
     },
+    "execution": {
+      "default": "local",
+      "description": "execution location axis, ORTHOGONAL to fidelity (a local privilege tier): local (default — run the agent locally) | cloud-describe (RESERVED — describe/annotate a cloud-run scenario without executing it; no runner exists yet, authoring it is currently inert)",
+      "type": "string",
+      "enum": [
+        "local",
+        "cloud-describe"
+      ]
+    },
     "prompt": {
       "type": "string",
       "description": "the user turn sent to the agent"

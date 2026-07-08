@@ -486,6 +486,15 @@ export const ScenarioObject = z.strictObject({
     .describe(
       "isolation tier: protocol (L0, no sandbox) | container/microvm (force a VM-loop tier) | hostloop (force host-loop) | cowork (auto-pick host-loop vs. container via Cowork's own gate logic)",
     ),
+  // execution LOCATION, orthogonal to `fidelity` (a local privilege tier) — do NOT collapse the two.
+  // `cloud-describe` is RESERVED: no runner exists yet, so authoring it is a load-time error (see
+  // execute.ts's validateScenarioRegexes, which mirrors the `replay_protocol_fidelity` rejection).
+  execution: z
+    .enum(["local", "cloud-describe"])
+    .default("local")
+    .describe(
+      "execution location axis, ORTHOGONAL to fidelity (a local privilege tier): local (default — run the agent locally) | cloud-describe (RESERVED — describe/annotate a cloud-run scenario without executing it; no runner exists yet, authoring it is currently inert)",
+    ),
   prompt: z.string().describe("the user turn sent to the agent"),
   timeout_ms: z
     .number()

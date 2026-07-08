@@ -148,3 +148,26 @@ describe("scenario.py assertion-keys.json is in sync with the zod Assertion sche
     expect(pyKeySet("_CLASSIFIED_KEYS")).toEqual(gen);
   });
 });
+
+// execution is an execution-LOCATION axis, orthogonal to fidelity (a local privilege tier) — see the
+// adjacent field comment in src/types.ts. `cloud-describe` is reserved (no runner exists yet) and is
+// rejected at load time (see execute.test.ts); only `local` is a live, runnable value today.
+describe("execution field (location axis, orthogonal to fidelity)", () => {
+  it("defaults to `local` when omitted", () => {
+    expect(ScenarioObject.parse({ prompt: "x" }).execution).toBe("local");
+  });
+  it("accepts an explicit `local` value", () => {
+    expect(ScenarioObject.parse({ prompt: "x", execution: "local" }).execution).toBe("local");
+  });
+  it("round-trips `cloud-describe` through the schema itself (the load-time reject lives in execute.ts, not here)", () => {
+    expect(ScenarioObject.parse({ prompt: "x", execution: "cloud-describe" }).execution).toBe("cloud-describe");
+  });
+  it("rejects an unknown execution value", () => {
+    expect(ScenarioObject.safeParse({ prompt: "x", execution: "bogus" }).success).toBe(false);
+  });
+  it("is in topLevelKeys and is not a VERDICT_MODIFIER_KEYS entry", () => {
+    const keys = JSON.parse(buildAssertionKeys()).topLevelKeys as string[];
+    expect(keys).toContain("execution");
+    expect([...VERDICT_MODIFIER_KEYS]).not.toContain("execution");
+  });
+});

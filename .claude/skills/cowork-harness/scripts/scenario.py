@@ -170,6 +170,7 @@ _EMBEDDED_TOP_LEVEL_KEYS = {
     "baseline",
     "session",
     "fidelity",
+    "execution",  # execution-location axis, orthogonal to fidelity; "cloud-describe" is reserved (load-time error)
     "on_unanswered",
     "prompt",
     "timeout_ms",  # wall-clock budget → kill + errorSource:timeout on expiry

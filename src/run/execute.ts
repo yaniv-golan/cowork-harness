@@ -1157,6 +1157,13 @@ function validateScenarioRegexes(scenario: Scenario, scenarioPath: string): void
         `${context}: \`replay_protocol_fidelity\` is synthesized by the replay lane and cannot be authored in a scenario — remove it (it would evaluate as "empty assertion" on a live run).`,
       );
   }
+  // `execution: cloud-describe` is RESERVED — no runner exists yet. An inert-but-accepted mode would be
+  // the same "silently never matches" footgun the AnswerRule.superRefine block exists to prevent
+  // elsewhere in this schema, so reject it loud at load time instead of silently no-opping.
+  if (scenario.execution === "cloud-describe")
+    throw new Error(
+      `${context}: \`execution: cloud-describe\` is reserved — no runner exists yet, so authoring it is a load-time error rather than a silent no-op. Remove it (or use the default \`execution: local\`) until a cloud runner ships.`,
+    );
   // assert[] patterns
   for (const a of scenario.assert) {
     for (const key of ["transcript_matches", "transcript_not_matches", "question_asked", "subagent_dispatched"] as const) {

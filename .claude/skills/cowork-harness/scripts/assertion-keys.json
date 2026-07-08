@@ -66,6 +66,7 @@
     "answers",
     "assert",
     "baseline",
+    "execution",
     "expect_denied",
     "fidelity",
     "name",

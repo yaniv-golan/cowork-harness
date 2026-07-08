@@ -77,6 +77,24 @@ describe("execute — file-relative path resolution", () => {
     expect(() => parseScenarioFile(join(root, "bad.yaml"))).toThrow(/replay_protocol_fidelity/);
   });
 
+  it("rejects `execution: cloud-describe` at load time (reserved — no runner exists yet)", () => {
+    const root = mkdtempSync(join(tmpdir(), "cowork-exec-"));
+    writeFileSync(
+      join(root, "bad.yaml"),
+      "name: bad\nbaseline: latest\nsession: (inline)\nfidelity: protocol\nprompt: hi\nexecution: cloud-describe\n",
+    );
+    expect(() => parseScenarioFile(join(root, "bad.yaml"))).toThrow(/cloud-describe/);
+  });
+
+  it("accepts `execution: local` (the default, live-runnable value)", () => {
+    const root = mkdtempSync(join(tmpdir(), "cowork-exec-ok-"));
+    writeFileSync(
+      join(root, "ok.yaml"),
+      "name: ok\nbaseline: latest\nsession: (inline)\nfidelity: protocol\nprompt: hi\nexecution: local\n",
+    );
+    expect(parseScenarioFile(join(root, "ok.yaml")).execution).toBe("local");
+  });
+
   it("defaults a scenario's name to its filename (sans extension) when omitted", () => {
     const root = mkdtempSync(join(tmpdir(), "cowork-name-"));
     writeFileSync(join(root, "my-test.yaml"), "baseline: latest\nsession: (inline)\nfidelity: protocol\nprompt: hi\n");
