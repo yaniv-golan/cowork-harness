@@ -68,6 +68,21 @@ describe("buildSessionFingerprint (function-level)", () => {
     writeFileSync(join(d, "s2.yaml"), `folders:\n  - from: ${fa}\negress:\n  unrestricted: true\n`);
     expect(buildSessionFingerprint("s1.yaml", d)).not.toEqual(buildSessionFingerprint("s2.yaml", d));
   });
+
+  it("is RELOCATABLE — a relative path hashes identically from two different checkout dirs (dev ≠ CI)", () => {
+    // The regression this guards: hashing the RESOLVED (absolutized) shape baked the checkout prefix into
+    // the digest, so a cassette recorded under /Users/… could never match the same session verified under
+    // a git worktree or CI's /home/runner/…. The authored relative shape must be prefix-independent.
+    const yaml = `folders:\n  - from: ./proj\nplugins:\n  local_plugins:\n    - ./skills/x\n`;
+    const d1 = mkdtempSync(join(tmpdir(), "cwh-sfp-reloc-a-"));
+    const d2 = mkdtempSync(join(tmpdir(), "cwh-sfp-reloc-b-"));
+    writeFileSync(join(d1, "s.yaml"), yaml);
+    writeFileSync(join(d2, "s.yaml"), yaml);
+    const a = buildSessionFingerprint("s.yaml", d1);
+    const b = buildSessionFingerprint("s.yaml", d2);
+    expect(a).toBeDefined();
+    expect(a).toEqual(b); // identical authored shape at two different absolute prefixes ⇒ identical hash
+  });
 });
 
 const baseScenario = (session: string) => ({

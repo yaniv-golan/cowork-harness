@@ -511,8 +511,9 @@ export function fingerprintSkillDrift(rec: Fingerprint, live: Fingerprint): stri
  *  Distinct from `buildFingerprint`'s skillHash (skill/plugin FILE content) — this covers what mounts/
  *  discovery/network the recorded run SAW, which can drift (a folder swapped, a plugin added, egress
  *  widened) with the skill tree itself completely unchanged, invisible to `fingerprint`. Mirrors
- *  `buildFingerprint`'s hashing approach (resolve the session, hash a canonical JSON shape) but over
- *  session shape rather than file content — so no raw host path is stored, only the digest. Returns
+ *  `buildFingerprint`'s hashing approach (read the authored session, hash a canonical JSON shape) but over
+ *  session shape rather than file content — so no raw host path is stored OR hashed (the shape is the
+ *  authored, relocatable form; see the note in the body), only the digest. Returns
  *  undefined ("can't verify", never a false mismatch) for an inline scenario or when the session file
  *  can't be read/parsed from `sessionPath` (resolved against `cassetteDir` exactly like
  *  `skillSourceDirs`). Arrays are sorted before hashing so authoring order can't spuriously move the hash. */
@@ -522,7 +523,13 @@ export function buildSessionFingerprint(sessionPath: string, cassetteDir?: strin
   if (!existsSync(resolved)) return undefined;
   let cfg;
   try {
-    cfg = resolveSessionPaths(loadSession(parseSessionFile(resolved)), dirname(resolved));
+    // Hash the AUTHORED (pre-resolution) session shape — do NOT run resolveSessionPaths here. Resolution
+    // absolutizes every path field (folders[].from, local_plugins, skills.local, mcp.config, …) against
+    // the session dir, which bakes the machine/checkout-specific prefix into the digest so it can never
+    // match on a different clone (CI, a git worktree, another dev's tree) even when nothing about the
+    // session actually changed. The authored relative paths ARE the relocatable shape: a genuine config
+    // edit (a swapped folder, an added plugin) still moves the hash; a bare relocation does not.
+    cfg = loadSession(parseSessionFile(resolved));
   } catch {
     return undefined;
   }
