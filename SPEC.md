@@ -74,8 +74,9 @@ claude -p --verbose
   --permission-prompt-tool stdio
   --permission-mode <session.permissionMode ?? baseline.spawn.permissionMode ?? default>
   --setting-sources user
-  --effort <session.effort ?? baseline.spawn.effortDefault>
-  --max-thinking-tokens <resolved budget>        # always emitted (never 0)
+  --effort <session.effort ?? baseline.spawn.effortDefault>   # always emitted; medium fallback; per-model validated
+  (--max-thinking-tokens 31999 | --thinking disabled)   # session.extended_thinking on|off (default on)
+                                                #   debug.max_thinking_tokens → --max-thinking-tokens <N> (fenced, non-Cowork)
   [--append-system-prompt <rendered cowork sections>]
   [--model <session.model>]
   [--mcp-config <configGuest>/mcp.json]         # if session.mcp.config set — HONORED in plain cowork mode (§6)
@@ -93,7 +94,7 @@ Hostloop's native process does NOT use this env shape — see §3.4 for its own 
 <baseline.spawn.env …>                  # CLAUDE_CODE_IS_COWORK=1, ENTRYPOINT=local-agent,
                                         # DISABLE_BACKGROUND_TASKS=1, ENABLE_APPEND_SUBAGENT_PROMPT=1, …
 CLAUDE_CONFIG_DIR = <configGuest>
-MAX_THINKING_TOKENS = <baseline.spawn.maxThinkingTokens>   # never 0
+# NO MAX_THINKING_TOKENS — real Cowork delivers the thinking budget via the CLI flag only (see §3.1), never an env var
 HOME = /tmp
 HTTP(S)_PROXY / http(s)_proxy = <egress proxy>
 [TZ] [ANTHROPIC_API_KEY] [CLAUDE_CODE_OAUTH_TOKEN]        # passthrough iff set in host env
@@ -338,7 +339,7 @@ Assert the **binary** still matches the contract (run on `sync`, skip without to
   `hostCwd = getOutputsDir(e)`), because it runs directly on the host, not inside `/sessions/<id>`. This
   divergence is the fidelity-correct choice, not a bug — do not "fix" it to match this invariant.
 - `CLAUDE_CODE_USE_COWORK_PLUGINS` never set; host `CLAUDE_*` never blanket-forwarded.
-- `MAX_THINKING_TOKENS` never `0`.
+- extended thinking is delivered via the `--max-thinking-tokens` / `--thinking` flags, never a `MAX_THINKING_TOKENS` env var (stripped from hostloop's inherited env).
 - plugins via `--plugin-dir`; marketplaces resolved to plugin dirs.
 - variadic tool flags last.
 - host FS sealed (only declared binds); egress default-deny at L1/L2.

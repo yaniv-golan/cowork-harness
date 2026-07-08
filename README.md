@@ -408,7 +408,7 @@ There's also a **Python `cowork` pytest lane** (`python/`) for driving any of th
 
 Configuration splits the way Cowork itself splits — *what you set up before the first prompt* vs. *what you ask*:
 
-- **Session setup** (`sessions/*.yaml`) — everything you'd configure in Cowork's pre-prompt setup: model, effort, thinking budget (`max_thinking_tokens`), permission mode, **mounted work folders / projects**, uploaded files, and **discovery** (marketplaces, plugins, skills, MCP servers). Hand-authored, one per project, reused across scenarios.
+- **Session setup** (`sessions/*.yaml`) — everything you'd configure in Cowork's pre-prompt setup: model, effort (`low|medium|high|extra|max`, per-model), extended thinking (on/off), permission mode, **mounted work folders / projects**, uploaded files, and **discovery** (marketplaces, plugins, skills, MCP servers). Hand-authored, one per project, reused across scenarios.
 - **Scenario** (`scenarios/*.yaml`) — the prompt, the **scripted answers**, and the assertions. References a session.
 
 > **Worked examples to copy** live under [`examples/`](./examples/) (see [examples/README.md](./examples/README.md)). `examples/skills/csv-metrics/` + `examples/sessions/csv-metrics.yaml` + `examples/scenarios/csv-metrics.yaml` is a complete, non-trivial skill running end-to-end: the agent loads the skill, runs its **bundled producer** (`scripts/metrics.py`, stdlib-only so it works under default-deny egress), and writes a structured `outputs/metrics.json` + a `outputs/summary.md`. The scenario asserts the structure (skill loaded, producer ran, artifacts exist); the paired [`python/test_csv_metrics_lane.py`](./python/test_csv_metrics_lane.py) adds a predicate over the JSON content (`assert_artifact_json`). Read those files to see the whole loop — discovery → run → deliverable → assert — that every real skill follows. (`examples/scenarios/example-pdf-skill.yaml` is the minimal counterpart: harness plumbing, placeholder skill.)
@@ -451,8 +451,8 @@ assert:
 # examples/sessions/default.yaml  (abridged — see the file for every field)
 # Relative paths below resolve from THIS file's dir (absolute and ~ are used as-is).
 model: claude-opus-4-8
-effort: high
-max_thinking_tokens: 8000               # kept low for EXAMPLE cost only — don't copy this value; real default is 31999 (see docs/session.md)
+effort: high                            # low | medium | high | extra | max — validated against the model
+extended_thinking: true                 # on/off toggle (default on). debug.max_thinking_tokens is a fenced, non-Cowork override
 permission_mode: default
 permission_parity: cowork                   # cowork (allow unscripted tool calls, the default) | strict (deny unscripted)
 folders:
