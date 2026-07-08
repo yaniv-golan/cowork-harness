@@ -418,21 +418,16 @@ export function evaluate(assertions: Assertion[], ctx: AssertContext): RunResult
   return assertions.map((a) => check(a, ctx));
 }
 
-/** Placeholder judge, pending a real pinned-LLM judge. Deterministic + injectable so the sync/async
- *  plumbing is testable without a model call. Degenerate rule: a claim passes iff the answer literally
- *  contains it — REPLACE before this is used as a real assertion. */
-export const stubSemanticJudge: SemanticJudge = async (rubric, answer) =>
-  rubric.map((claim, index) => ({ index, claim, pass: answer.includes(claim) }));
-
-/** LIVE-ONLY async pre-pass. Grade every `semantic_matches` assert and stash per-claim results in
- *  `ctx.semanticResults`, so the SYNCHRONOUS evaluate()/check() can read them. Call BEFORE evaluate() on
- *  the LIVE lane only — the replay lane strips `semantic_matches` (LIVE_ONLY_KEYS) and must never reach a
- *  model. Keeping the only async/model code here is what preserves evaluate()'s synchronous,
- *  replay-deterministic contract. */
+/** LIVE-ONLY async pre-pass. Grade every `semantic_matches` assert (via the supplied judge) and stash
+ *  per-claim results in `ctx.semanticResults`, so the SYNCHRONOUS evaluate()/check() can read them. Call
+ *  BEFORE evaluate() on the LIVE lane only — the replay lane strips `semantic_matches` (LIVE_ONLY_KEYS)
+ *  and must never reach a model. Keeping the only async/model code here is what preserves evaluate()'s
+ *  synchronous, replay-deterministic contract. The judge is REQUIRED (no default) so a live run can't
+ *  silently grade with a placeholder — the real judge is `makeSemanticJudge` in src/decide/. */
 export async function runSemanticJudges(
   assertions: Assertion[],
   ctx: AssertContext,
-  judge: SemanticJudge = stubSemanticJudge,
+  judge: SemanticJudge,
 ): Promise<void> {
   if (!ctx.semanticResults) ctx.semanticResults = new Map();
   for (const a of assertions) {
