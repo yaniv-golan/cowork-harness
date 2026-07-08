@@ -2355,16 +2355,23 @@ async function cmdSync(args: string[]) {
     agentBinary: nextAgentBinary,
     network: { ...(base.network as object), mode: res.networkMode ?? "gvisor", allowKind: "allowlist", allowDomains: res.allowDomains },
     requireFullVmSandbox: res.requireFullVmSandbox,
-    // spawn.env is the GENERATED tier: re-derived from the asar each sync, canonically
-    // ordered so a benign source-reorder is a zero-line diff. All the hand-curated spawn fields (tools,
-    // allowedTools, scalars, prompt pointers, $comment*) carry forward from base untouched. On a hard-fail
-    // deriveSpawnEnv returns null and the base env is preserved (the all-or-nothing contract).
+    // spawn.env AND spawn.effortByModel/effortRegexDefault are the GENERATED tier: re-derived from the asar
+    // each sync, canonically ordered so a benign source-reorder is a zero-line diff. All the hand-curated
+    // spawn fields (tools, allowedTools, scalars, prompt pointers, $comment*) carry forward from base
+    // untouched. On a hard-fail deriveSpawnEnv / extractModelEffortConfig returns null and the base values
+    // are preserved (the all-or-nothing contract).
     spawn: {
       ...(base.spawn as object),
       env: canonicalizeEnv(
         res.spawnEnv ?? (base.spawn as { env?: Record<string, string> })?.env,
         (base.spawn as { env?: Record<string, string> })?.env,
       ),
+      ...(res.modelEffortConfig
+        ? {
+            effortByModel: res.modelEffortConfig.effortByModel,
+            effortRegexDefault: res.modelEffortConfig.effortRegexDefault,
+          }
+        : {}),
     },
     provenance: { ...baseProvenance, gates: nextGates, asarFingerprint: res.asarFingerprint },
   };

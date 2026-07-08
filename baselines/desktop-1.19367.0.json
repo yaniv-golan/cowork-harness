@@ -103,7 +103,84 @@
     "$comment_promptTemplate": "Hand-pinned pointer to a RECONSTRUCTED asset (see $comment_prompts) — the generator cannot extract prose. Sentinel S15 pins the claude_code preset-append delivery site.",
     "$comment_subagentAppend": "Hand-pinned pointer to a reconstructed asset (see $comment_prompts). Sentinel S16 pins the per-session appendSubagentSystemPrompt generator call shape.",
     "$comment_notSet": "Deliberately NOT set: CLAUDE_CODE_USE_COWORK_PLUGINS (Desktop never sets it; would flip the agent to cowork_settings.json/cowork_plugins — asserted absent by the S17 negative invariant). Enumerated-but-not-pinned keys are enforced by SPAWN_ENV_ALLOWLIST in src/sync/cowork-sync.ts, each with a reason; categories: host-derived (CLAUDE_CONFIG_DIR, TZ, HOST_PLATFORM, OAUTH_TOKEN/BASE_URL/CUSTOM_HEADERS, account UUIDs, WORKSPACE_HOST_PATHS, OTEL), constructed-then-deleted (ANTHROPIC_API_KEY/AUTH_TOKEN via FnA), gate-conditional-off (MCP_CONNECT_TIMEOUT_MS, ENABLE_TOOL_SEARCH, SKIP_PRECOMPACT_LOAD), non-chat/project-session (BRIEF*, PROJECT*), user-settings (SUBAGENT_MODEL, AUTO_COMPACT_WINDOW, ...), and 3p-provider-only branches. The opaque ...g.env/...l session spreads are the known static-extraction blind spot (runtime lane backstop).",
-    "$comment_prompts": "Reconstructed cowork-specific sections, re-paraphrased from asar 1.18286.0 const aui (system prompt; RESTRUCTURED at this release — see the asset header) and 1.15200.0 generator CVr (subagent; verified unchanged in the 1.18286.0 asar, generator Zgn). Not the full base prompt (not cleanly extractable); generic refusal/safety policy elided. Delivered via --append-system-prompt (layered on the agent's built-in base prompt), NOT the initialize handshake; only the subagent append goes over initialize (appendSubagentSystemPrompt), gated on CLAUDE_CODE_ENABLE_APPEND_SUBAGENT_PROMPT."
+    "$comment_prompts": "Reconstructed cowork-specific sections, re-paraphrased from asar 1.18286.0 const aui (system prompt; RESTRUCTURED at this release — see the asset header) and 1.15200.0 generator CVr (subagent; verified unchanged in the 1.18286.0 asar, generator Zgn). Not the full base prompt (not cleanly extractable); generic refusal/safety policy elided. Delivered via --append-system-prompt (layered on the agent's built-in base prompt), NOT the initialize handshake; only the subagent append goes over initialize (appendSubagentSystemPrompt), gated on CLAUDE_CODE_ENABLE_APPEND_SUBAGENT_PROMPT.",
+    "effortByModel": {
+      "claude-haiku-4-5": {
+        "modes": [
+          "extended"
+        ]
+      },
+      "claude-sonnet-4-5": {
+        "modes": [
+          "extended"
+        ]
+      },
+      "claude-sonnet-4-6": {
+        "effortLevels": [
+          "low",
+          "medium",
+          "high",
+          "max"
+        ],
+        "recommended": "low",
+        "modes": [
+          "auto"
+        ]
+      },
+      "claude-opus-4-6": {
+        "effortLevels": [
+          "low",
+          "medium",
+          "high",
+          "max"
+        ],
+        "recommended": "medium",
+        "modes": [
+          "extended"
+        ]
+      },
+      "claude-opus-4-7": {
+        "effortLevels": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "recommended": "xhigh",
+        "modes": [
+          "auto"
+        ]
+      },
+      "claude-opus-4-8": {
+        "effortLevels": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "recommended": "high",
+        "modes": [
+          "auto"
+        ]
+      }
+    },
+    "effortRegexDefault": {
+      "pattern": "^(?:claude-)?(?:fable|mythos)(?:-|$)",
+      "effortLevels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "recommended": "high",
+      "modes": [
+        "auto"
+      ],
+      "disallowThinkingDisabled": true
+    }
   },
   "mountLayout": {
     "sessionRoot": "/sessions/{sessionId}",

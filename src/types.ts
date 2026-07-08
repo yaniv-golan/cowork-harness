@@ -1,7 +1,11 @@
 import { z } from "zod";
 
-/** Cowork's `DEFAULT_MAX_THINKING_TOKENS` (the ELF's `hre`), binary-verified = 31999. The single source
- *  for the schema default and every runtime arg/env fallback, so they can't drift. Never 0. */
+/** Cowork's `DEFAULT_MAX_THINKING_TOKENS` (the ELF's `hre`), binary-verified = 31999 — the ONE budget
+ *  extended thinking ever runs at when it's ON (there is no arbitrary N; off is 0/disabled, never a
+ *  smaller positive number). The single source for the `--max-thinking-tokens <N>` value argv.ts emits
+ *  when `extended_thinking` resolves ON, so it can't drift. Never used as an env value — real Cowork
+ *  delivers the budget as a CLI flag only (`--max-thinking-tokens` / `--thinking disabled`), no
+ *  `MAX_THINKING_TOKENS` env var. */
 export const DEFAULT_MAX_THINKING_TOKENS = 31999;
 
 /** PlatformBaseline — VOLATILE per-release facts (one synced snapshot per Cowork release), from cowork-sync. */
@@ -50,8 +54,37 @@ export const PlatformBaseline = z.looseObject({
       configDirInGuest: z.string().default("mnt/.claude"),
       settingSources: z.array(z.string()).default(["user"]),
       permissionMode: z.string().default("default"),
+      // Synced fact (hand-pinned; sentinel S4 in cowork-sync.ts VALUE-pins the resolved const to 31999).
+      // NOT read as a runtime env-value fallback anymore — extended thinking is a boolean toggle
+      // (`extended_thinking`) resolved directly to `DEFAULT_MAX_THINKING_TOKENS` at argv emission; this
+      // field stays only as the synced provenance record for that constant.
       maxThinkingTokens: z.number().default(DEFAULT_MAX_THINKING_TOKENS),
       effortDefault: z.string().default("medium"),
+      // Per-model effort config (baseline seam for the reasoning-config fidelity work): the literal
+      // per-model map (each id's {effortLevels?, recommended?, modes?} — a no-effort model like
+      // claude-haiku-4-5/claude-sonnet-4-5 has no effortLevels, so no picker) plus the regex-default
+      // entry + class regex applied to an id NOT in the literal map (e.g. the fable/mythos family).
+      // Synced by cowork-sync.ts's extractModelEffortConfig; drift-guarded by checkSpawnContractFacts's
+      // S20 sentinel. Optional: an older baseline synced before this field existed simply omits it.
+      effortByModel: z
+        .record(
+          z.string(),
+          z.object({
+            effortLevels: z.array(z.string()).optional(),
+            recommended: z.string().optional(),
+            modes: z.array(z.string()).optional(),
+          }),
+        )
+        .optional(),
+      effortRegexDefault: z
+        .object({
+          pattern: z.string(),
+          effortLevels: z.array(z.string()),
+          recommended: z.string(),
+          modes: z.array(z.string()),
+          disallowThinkingDisabled: z.boolean(),
+        })
+        .optional(),
       tools: z.array(z.string()).default([]),
       allowedTools: z.array(z.string()).default([]),
       env: z.record(z.string(), z.string()).default({}),

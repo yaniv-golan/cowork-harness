@@ -13,6 +13,7 @@ import {
   canonicalizeEnv,
   partitionSpawnFlags,
   resolveConst,
+  extractModelEffortConfig,
   REQUIRED_SPAWN_KEYS,
   type GateState,
 } from "../src/sync/cowork-sync.js";
@@ -421,7 +422,18 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
     'function FnA(V){for(const q of ["ANTHROPIC_API_KEY","ANTHROPIC_AUTH_TOKEN","ANTHROPIC_CUSTOM_HEADERS"])V[q]===""&&delete V[q]}' +
     "V.env={...V.env,ANTHROPIC_CUSTOM_HEADERS:jXe(V.env,pf)},FnA(V.env)," +
     'sysP:{type:"preset",preset:"claude_code",append:ap},appendSubagentSystemPrompt:FKgen({vm:i,hostLoopMode:E})';
-  const fixture = () => `HEADER;${W3};${W2};${W1}${STIER};TAIL`;
+  // Synthetic per-model effort config (fake minified names FKi1r/FKs1r/FKo1r) — extractModelEffortConfig
+  // locates this by CONTENT (the regex-default entry's literal shape + the fable|mythos regex source),
+  // never by identifier, so a fake name here still exercises the real anchors.
+  const MODELCFG =
+    'const FKi1r={effortLevels:["low","medium","high","xhigh","max"],recommended:"high",modes:["auto"],disallowThinkingDisabled:!0},' +
+    'FKs1r={"claude-haiku-4-5":{modes:["extended"]},"claude-sonnet-4-5":{modes:["extended"]},' +
+    '"claude-sonnet-4-6":{effortLevels:["low","medium","high","max"],recommended:"low",modes:["auto"]},' +
+    '"claude-opus-4-6":{effortLevels:["low","medium","high","max"],recommended:"medium",modes:["extended"]},' +
+    '"claude-opus-4-7":{effortLevels:["low","medium","high","xhigh","max"],recommended:"xhigh",modes:["auto"]},' +
+    '"claude-opus-4-8":{effortLevels:["low","medium","high","xhigh","max"],recommended:"high",modes:["auto"]}},' +
+    "FKo1r=/^(?:claude-)?(?:fable|mythos)(?:-|$)/;";
+  const fixture = () => `HEADER;${W3};${W2};${W1}${STIER};${MODELCFG}TAIL`;
 
   const EXPECTED_GREEN: Record<string, string> = {
     CLAUDE_CODE_IS_COWORK: "1",
@@ -479,7 +491,10 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
     const variant =
       fixture()
         // S4: hoist the inline ternary into a helper — the key now holds a call, `?FKa:0}` lives in the body.
-        .replace("maxThinkingTokens:r.extendedThinkingEnabled??!mOt()?FKa:0}", "maxThinkingTokens:zHelper(r.extendedThinkingEnabled,ovr,mOt())}")
+        .replace(
+          "maxThinkingTokens:r.extendedThinkingEnabled??!mOt()?FKa:0}",
+          "maxThinkingTokens:zHelper(r.extendedThinkingEnabled,ovr,mOt())}",
+        )
         .replace("function FnA", "function zHelper(e,t,r){return e??t??!r?FKa:0}function FnA")
         // S14b: re-minify the sdkOptions env var V.env → F.env; the blank helper is still called on it.
         .replace(
@@ -516,6 +531,7 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
     ["appendSubagentSystemPrompt:FKgen({", "appendSubagentSystemPrompt:x", "S16"],
     ['CLAUDE_CODE_EMIT_TOOL_USE_SUMMARIES:At("66187241")?"true":""', "EMIT_X:1", "S18"],
     ["CLAUDE_CODE_TAGS:`lam_session_type:${", "CLAUDE_CODE_TAGS:`other:${", "S19"],
+    ["FKo1r=/^(?:claude-)?(?:fable|mythos)(?:-|$)/", "FKo1r=/^(?:claude-)?(?:nope|mythos)(?:-|$)/", "S20"],
   ];
   for (const [from, to, field] of STRUCT_MUT) {
     it(`structural mutation flags ${field}`, () => {
@@ -677,6 +693,104 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
     expect(resolveConst(b, "zae")).toBe("6e4"); // alias hop
     expect(resolveConst(b, "Sde")).toBe("9e5");
     expect(resolveConst(b, "Zae")).toBe("31999");
+  });
+});
+
+// ==========================================================================================
+// extractModelEffortConfig (Phase 0 of the reasoning-config fidelity work): the literal per-model
+// effort map + the regex-default entry + class regex. Located by CONTENT, so the synthetic fixture
+// below uses FAKE minified names (FKi1r/FKs1r/FKo1r) to prove the extractor doesn't depend on them.
+// ==========================================================================================
+describe("extractModelEffortConfig (per-model effort config extraction, Phase 0)", () => {
+  const good =
+    'const FKi1r={effortLevels:["low","medium","high","xhigh","max"],recommended:"high",modes:["auto"],disallowThinkingDisabled:!0},' +
+    'FKs1r={"claude-haiku-4-5":{modes:["extended"]},"claude-sonnet-4-5":{modes:["extended"]},' +
+    '"claude-sonnet-4-6":{effortLevels:["low","medium","high","max"],recommended:"low",modes:["auto"]},' +
+    '"claude-opus-4-6":{effortLevels:["low","medium","high","max"],recommended:"medium",modes:["extended"]},' +
+    '"claude-opus-4-7":{effortLevels:["low","medium","high","xhigh","max"],recommended:"xhigh",modes:["auto"]},' +
+    '"claude-opus-4-8":{effortLevels:["low","medium","high","xhigh","max"],recommended:"high",modes:["auto"]}},' +
+    "FKo1r=/^(?:claude-)?(?:fable|mythos)(?:-|$)/;TAIL";
+
+  it("extracts the four literal-map classes + the regex-default entry from a content-anchored fixture (fake identifiers)", () => {
+    const { config, flags } = extractModelEffortConfig(good);
+    expect(flags).toEqual([]);
+    expect(config).not.toBeNull();
+    expect(config!.effortByModel).toEqual({
+      "claude-haiku-4-5": { modes: ["extended"] },
+      "claude-sonnet-4-5": { modes: ["extended"] },
+      "claude-sonnet-4-6": { effortLevels: ["low", "medium", "high", "max"], recommended: "low", modes: ["auto"] },
+      "claude-opus-4-6": { effortLevels: ["low", "medium", "high", "max"], recommended: "medium", modes: ["extended"] },
+      "claude-opus-4-7": { effortLevels: ["low", "medium", "high", "xhigh", "max"], recommended: "xhigh", modes: ["auto"] },
+      "claude-opus-4-8": { effortLevels: ["low", "medium", "high", "xhigh", "max"], recommended: "high", modes: ["auto"] },
+    });
+    expect(config!.effortRegexDefault).toEqual({
+      pattern: "^(?:claude-)?(?:fable|mythos)(?:-|$)",
+      effortLevels: ["low", "medium", "high", "xhigh", "max"],
+      recommended: "high",
+      modes: ["auto"],
+      disallowThinkingDisabled: true,
+    });
+  });
+
+  it("is minifier-name-proof: renaming FKi1r/FKs1r/FKo1r to different fake names doesn't change the result", () => {
+    const renamed = good.replaceAll("FKi1r", "Zeta9").replaceAll("FKs1r", "Yotta2").replaceAll("FKo1r", "Xi7");
+    expect(renamed).not.toBe(good);
+    const { config, flags } = extractModelEffortConfig(renamed);
+    expect(flags).toEqual([]);
+    expect(config!.effortByModel["claude-opus-4-8"]).toEqual({
+      effortLevels: ["low", "medium", "high", "xhigh", "max"],
+      recommended: "high",
+      modes: ["auto"],
+    });
+  });
+
+  it("hard-fails (config:null) when the regex-default marker is absent", () => {
+    const broken = good.replace(
+      'recommended:"high",modes:["auto"],disallowThinkingDisabled',
+      'recommended:"HIGH",modes:["auto"],disallowThinkingDisabled',
+    );
+    const { config, flags } = extractModelEffortConfig(broken);
+    expect(config).toBeNull();
+    expect(flags.some((f) => f.includes("regex-default entry") && f.includes("not found"))).toBe(true);
+  });
+
+  it("hard-fails when the literal map doesn't immediately follow the regex-default entry (declaration order changed)", () => {
+    const broken = good.replace("disallowThinkingDisabled:!0},FKs1r={", "disallowThinkingDisabled:!0};const OTHER=1;const FKs1r={");
+    const { config, flags } = extractModelEffortConfig(broken);
+    expect(config).toBeNull();
+    expect(flags.some((f) => f.includes("does not immediately follow the regex-default entry"))).toBe(true);
+  });
+
+  it("hard-fails when the class regex doesn't immediately follow the literal map (declaration order changed)", () => {
+    const broken = good.replace("}},FKo1r=/^", "}};const SPACER=1;FKo1r=/^");
+    const { config, flags } = extractModelEffortConfig(broken);
+    expect(config).toBeNull();
+    expect(flags.some((f) => f.includes("does not immediately follow the literal per-model map"))).toBe(true);
+  });
+
+  it("hard-fails when the class regex source has drifted away from fable|mythos", () => {
+    const broken = good.replace("(?:fable|mythos)", "(?:otherfam)");
+    const { config, flags } = extractModelEffortConfig(broken);
+    expect(config).toBeNull();
+    expect(flags.some((f) => f.includes("class regex"))).toBe(true);
+  });
+
+  it("hard-fails on a bundle with none of the anchors at all (never a silent empty map)", () => {
+    const { config, flags } = extractModelEffortConfig("totally unrelated bundle content");
+    expect(config).toBeNull();
+    expect(flags.length).toBeGreaterThan(0);
+  });
+
+  // Golden oracle (non-circular): the extractor over the REAL asar must deep-equal the hand-transcribed
+  // golden map. Skips gracefully off-macOS / without a live Desktop install.
+  it("golden oracle: extractModelEffortConfig(real asar) deep-equals the hand-transcribed golden map", () => {
+    const golden = JSON.parse(readFileSync(join(process.cwd(), "test", "fixtures", "model-effort-config.golden.json"), "utf8"))
+      .config as unknown;
+    const bundle = readRealBundleOrSkip();
+    if (!bundle) return;
+    const { config, flags } = extractModelEffortConfig(bundle);
+    expect(flags).toEqual([]);
+    expect(config).toEqual(golden);
   });
 });
 

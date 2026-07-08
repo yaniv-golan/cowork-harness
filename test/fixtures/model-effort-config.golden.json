@@ -1,0 +1,20 @@
+{
+  "$comment": "Hand-transcribed golden for extractModelEffortConfig(realAsarBundle) — binary-verified against Claude Desktop app.asar 1.19367.0. Update only after re-verifying against a real asar (see docs/maintenance.md).",
+  "config": {
+    "effortByModel": {
+      "claude-haiku-4-5": { "modes": ["extended"] },
+      "claude-sonnet-4-5": { "modes": ["extended"] },
+      "claude-sonnet-4-6": { "effortLevels": ["low", "medium", "high", "max"], "recommended": "low", "modes": ["auto"] },
+      "claude-opus-4-6": { "effortLevels": ["low", "medium", "high", "max"], "recommended": "medium", "modes": ["extended"] },
+      "claude-opus-4-7": { "effortLevels": ["low", "medium", "high", "xhigh", "max"], "recommended": "xhigh", "modes": ["auto"] },
+      "claude-opus-4-8": { "effortLevels": ["low", "medium", "high", "xhigh", "max"], "recommended": "high", "modes": ["auto"] }
+    },
+    "effortRegexDefault": {
+      "pattern": "^(?:claude-)?(?:fable|mythos)(?:-|$)",
+      "effortLevels": ["low", "medium", "high", "xhigh", "max"],
+      "recommended": "high",
+      "modes": ["auto"],
+      "disallowThinkingDisabled": true
+    }
+  }
+}

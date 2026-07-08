@@ -34,6 +34,9 @@ export interface SyncResult {
   asarFingerprint: string;
   gates: Record<string, GateState> | null; // decoded GrowthBook gate states (null = fcache absent/unreadable)
   spawnEnv: Record<string, string> | null; // derived spawn.env; null = a hard-fail flag blocked it (carry base env forward)
+  // per-model effort/regex-default config (the literal map + the fable|mythos regex-default class); null =
+  // a hard-fail flag blocked it (carry the base baseline's spawn.effortByModel/effortRegexDefault forward).
+  modelEffortConfig: ModelEffortConfig | null;
   unknownDeltas: string[];
   notes: string[]; // non-blocking informational hints (e.g. stale SPAWN_ENV_ALLOWLIST prune NOTEs) — surfaced by the CLI, never a delta
 }
@@ -161,7 +164,7 @@ export function sync(): SyncResult {
 
   // 5. Egress allowlist + spawn contract from the asar (vmAllowedDomains + firewallAlso + spawn.env),
   // merged with user hosts.
-  const { domains, fingerprint, spawnEnv, notes } = extractFromAsar(unknown, gates);
+  const { domains, fingerprint, spawnEnv, modelEffortConfig, notes } = extractFromAsar(unknown, gates);
   const allowDomains = dedupe([...domains, ...userAllow]);
 
   if (!gates) {
@@ -184,6 +187,7 @@ export function sync(): SyncResult {
     asarFingerprint: fingerprint,
     gates,
     spawnEnv,
+    modelEffortConfig,
     unknownDeltas: unknown,
     notes,
   };
@@ -213,14 +217,21 @@ export function readMainBundle(dir: string): string {
   return combined;
 }
 
-/** Extract domains + fingerprint + spawn.env from the asar main bundle without keeping it unpacked. */
+/** Extract domains + fingerprint + spawn.env + model-effort-config from the asar main bundle without
+ *  keeping it unpacked. */
 function extractFromAsar(
   unknown: string[],
   gates: Record<string, GateState> | null,
-): { domains: string[]; fingerprint: string; spawnEnv: Record<string, string> | null; notes: string[] } {
+): {
+  domains: string[];
+  fingerprint: string;
+  spawnEnv: Record<string, string> | null;
+  modelEffortConfig: ModelEffortConfig | null;
+  notes: string[];
+} {
   if (!existsSync(ASAR)) {
     flag(unknown, `asar not found at ${ASAR} — install/open Claude Desktop once, or fix ASAR in cowork-sync.ts`);
-    return { domains: [], fingerprint: "", spawnEnv: null, notes: [] };
+    return { domains: [], fingerprint: "", spawnEnv: null, modelEffortConfig: null, notes: [] };
   }
   const tmp = mkdtempSync(join(tmpdir(), "cowork-sync-"));
   try {
@@ -245,13 +256,17 @@ function extractFromAsar(
     const spawn = deriveSpawnEnv(bundle, gates);
     const { deltas: spawnDeltas, notes } = partitionSpawnFlags(spawn.flags);
     for (const f of spawnDeltas) flag(unknown, f);
+    // Per-model effort/regex-default config: same all-or-nothing contract as spawn.env — any anchor
+    // miss hard-fails (config:null) rather than reaching the baseline as a silent partial map.
+    const { config: modelEffortConfig, flags: modelEffortFlags } = extractModelEffortConfig(bundle);
+    for (const f of modelEffortFlags) flag(unknown, f);
     // Fingerprint over the cowork-relevant slices for "unknown delta" detection.
     const slice = sliceCowork(bundle);
     const fingerprint = createHash("sha256").update(slice).digest("hex").slice(0, 16);
-    return { domains, fingerprint, spawnEnv: spawn.env, notes };
+    return { domains, fingerprint, spawnEnv: spawn.env, modelEffortConfig, notes };
   } catch (e) {
     flag(unknown, `asar extract failed (npx @electron/asar): ${(e as Error).message} — check network/npx, or unpack ${ASAR} manually`);
-    return { domains: [], fingerprint: "", spawnEnv: null, notes: [] };
+    return { domains: [], fingerprint: "", spawnEnv: null, modelEffortConfig: null, notes: [] };
   } finally {
     // mkdtempSync extraction dir is otherwise leaked under $TMPDIR on every invocation.
     rmSync(tmp, { recursive: true, force: true });
@@ -784,7 +799,10 @@ export function checkSpawnContractFacts(bundle: string): string[] {
   // (…},helper(X.env)). The sdkOptions var name is minifier-assigned (V→F across builds); capture it and
   // backreference so the guarantee "blank runs on THIS env" survives the rename without hardcoding the name.
   if (!has(/ANTHROPIC_CUSTOM_HEADERS:\w+\((\w+\$?)\.env[\s\S]{0,40}\},\w+\(\1\.env\)/))
-    miss("S14b FnA application", "the empty-ANTHROPIC_* blank helper no longer runs on the spawn env — the '' blanks would leak into production");
+    miss(
+      "S14b FnA application",
+      "the empty-ANTHROPIC_* blank helper no longer runs on the spawn env — the '' blanks would leak into production",
+    );
   if (!has(/preset:"claude_code"/)) miss("S15 promptTemplate delivery", "the claude_code preset-append delivery site is gone");
   if (!has(/appendSubagentSystemPrompt:\w+\(\{/))
     miss("S16 subagentAppend generator", "the per-session subagent-append generator call shape is gone");
@@ -801,7 +819,169 @@ export function checkSpawnContractFacts(bundle: string): string[] {
     miss("S18 EMIT_TOOL_USE_SUMMARIES gate-ternary", "the gate-id↔key association changed");
   if (!w1 || !has(/CLAUDE_CODE_TAGS:`lam_session_type:\$\{/, w1))
     miss("S19 CLAUDE_CODE_TAGS template", "the lam_session_type template shape changed");
+  // S20: the per-model effort/regex-default config (extractModelEffortConfig) is a structural drift
+  // anchor, not a hand-pinned fact — re-run the extractor and confirm its own anchors still resolve AND
+  // that the four model classes documented alongside it (two literal-with-picker, two no-picker, the
+  // fable|mythos regex-default) are still shaped as expected. A miss here means the model-config moved
+  // and the synced spawn.effortByModel/effortRegexDefault would silently go stale.
+  {
+    const { config } = extractModelEffortConfig(bundle);
+    if (!config) miss("S20 modelEffortConfig", "extractModelEffortConfig could not resolve the per-model config (see its own flags)");
+    else {
+      const withPicker = ["claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6"];
+      const noPicker = ["claude-haiku-4-5", "claude-sonnet-4-5"];
+      for (const m of withPicker)
+        if (!config.effortByModel[m]?.effortLevels?.length)
+          miss("S20 modelEffortConfig", `expected class-1 (picker) model ${m} is missing or has no effortLevels`);
+      for (const m of noPicker)
+        if (config.effortByModel[m] === undefined || config.effortByModel[m].effortLevels !== undefined)
+          miss("S20 modelEffortConfig", `expected class-2 (no-picker) model ${m} is missing or unexpectedly has effortLevels`);
+      if (!config.effortRegexDefault.pattern.includes("fable") || !config.effortRegexDefault.pattern.includes("mythos"))
+        miss("S20 modelEffortConfig", "the fable|mythos class regex pattern is gone from the regex-default entry");
+    }
+  }
   return flags;
+}
+
+// ==========================================================================================
+// Per-model effort config extraction (Phase 0 of the reasoning-config fidelity work): the literal
+// per-model map (each entry's {effortLevels?, recommended?, modes?}) and the regex-default entry +
+// class regex that applies to ids not in the literal map (e.g. fable/mythos-family ids). Located by
+// CONTENT — the regex-default entry's exact literal shape and the class regex's own source — never by
+// the minified identifier, which is minifier-assigned and not asserted to stay stable across builds.
+// ==========================================================================================
+
+export interface ModelEffortEntry {
+  effortLevels?: string[];
+  recommended?: string;
+  modes?: string[];
+}
+
+export interface EffortRegexDefault {
+  /** The class regex's SOURCE (RegExp.prototype.source form, no delimiters) — the pattern selecting this
+   *  entry for a model id not present in the literal per-model map. */
+  pattern: string;
+  effortLevels: string[];
+  recommended: string;
+  modes: string[];
+  disallowThinkingDisabled: boolean;
+}
+
+export interface ModelEffortConfig {
+  effortByModel: Record<string, ModelEffortEntry>;
+  effortRegexDefault: EffortRegexDefault;
+}
+
+/** Balanced-brace scan starting AT an opening `{` (index `open`). String-aware (skips "…"/'…' spans —
+ *  the model-config object literals contain no template strings). Returns the index just past the
+ *  matching closing `}`, or -1 if the braces never balance before the bundle ends. */
+function scanBalancedObject(text: string, open: number): number {
+  let depth = 0;
+  let q: string | null = null;
+  for (let i = open; i < text.length; i++) {
+    const c = text[i];
+    if (q) {
+      if (c === "\\") i++;
+      else if (c === q) q = null;
+      continue;
+    }
+    if (c === '"' || c === "'") {
+      q = c;
+      continue;
+    }
+    if (c === "{") depth++;
+    else if (c === "}") {
+      depth--;
+      if (depth === 0) return i + 1;
+    }
+  }
+  return -1;
+}
+
+/** Parse a `["a","b",...]` array-literal body (the text between the brackets) into a string array. */
+function parseQuotedArray(inner: string): string[] {
+  return [...inner.matchAll(/"([^"]*)"/g)].map((m) => m[1]);
+}
+
+/** Parse one model/regex-default entry's `{...}` body text for the three fields the config carries. */
+function parseModelEntryBody(body: string): ModelEffortEntry {
+  const entry: ModelEffortEntry = {};
+  const el = body.match(/effortLevels:\[([^\]]*)\]/);
+  if (el) entry.effortLevels = parseQuotedArray(el[1]);
+  const rec = body.match(/recommended:"([^"]*)"/);
+  if (rec) entry.recommended = rec[1];
+  const modes = body.match(/modes:\[([^\]]*)\]/);
+  if (modes) entry.modes = parseQuotedArray(modes[1]);
+  return entry;
+}
+
+/**
+ * Extract Cowork's per-model effort config: the literal per-model map (each id's {effortLevels?,
+ * recommended?, modes?}), the regex-default entry (the config used for an id not in the literal map but
+ * matching the class regex), and the class regex's own source. All three are declared back-to-back in the
+ * asar as one `const <a>={...regex-default...},<b>={...literal map...},<c>=/<class regex>/` statement;
+ * located here by the regex-default entry's exact literal shape (content-anchored, minifier-name-proof),
+ * then the literal map by balanced-brace scan, then the class regex by its own known source. Any anchor
+ * miss returns `config:null` + a flag naming what moved — mirrors deriveSpawnEnv's all-or-nothing contract
+ * (never a partial/guessed map reaching the baseline).
+ */
+export function extractModelEffortConfig(bundle: string): { config: ModelEffortConfig | null; flags: string[] } {
+  const flags: string[] = [];
+  const fail = (msg: string): { config: null; flags: string[] } => {
+    flags.push(`modelEffortConfig: ${msg}`);
+    return { config: null, flags };
+  };
+
+  // Anchor 1: the regex-default entry's exact literal content (fixed key order: effortLevels, recommended,
+  // modes, disallowThinkingDisabled) — this IS the content anchor, not a name.
+  const marker =
+    /\{effortLevels:\["low","medium","high","xhigh","max"\],recommended:"high",modes:\["auto"\],disallowThinkingDisabled:(!0|!1|true|false)\}/;
+  const mm = marker.exec(bundle);
+  if (!mm || mm.index == null)
+    return fail(
+      "regex-default entry (effortLevels/recommended/modes/disallowThinkingDisabled literal) not found — the model-config shape moved",
+    );
+  const markerEnd = mm.index + mm[0].length;
+
+  // Anchor 2: immediately after the regex-default entry, `,<ident>={` opens the literal per-model map.
+  const afterMarker = bundle.slice(markerEnd);
+  const mapOpen = afterMarker.match(/^,[A-Za-z_$][\w$]*=\{/);
+  if (!mapOpen) return fail("literal per-model map does not immediately follow the regex-default entry — declaration order changed");
+  const mapBraceIdx = markerEnd + mapOpen[0].length - 1; // index of the map's opening "{"
+  const mapCloseIdx = scanBalancedObject(bundle, mapBraceIdx);
+  if (mapCloseIdx < 0) return fail("literal per-model map brace scan did not balance");
+  const mapBody = bundle.slice(mapBraceIdx + 1, mapCloseIdx - 1); // strip the outer { }
+
+  // Anchor 3: immediately after the literal map, `,<ident>=<regex-literal>` — the class regex (asserted by
+  // its known fable|mythos source, not by identifier name).
+  const afterMap = bundle.slice(mapCloseIdx);
+  const regexClass = afterMap.match(/^,[A-Za-z_$][\w$]*=\/(\^\(\?:claude-\)\?\(\?:fable\|mythos\)\(\?:-\|\$\))\//);
+  if (!regexClass)
+    return fail("class regex (fable|mythos) does not immediately follow the literal per-model map — declaration order changed");
+
+  // Parse the literal map's top-level `"id":{...}` entries. No entry body nests a `{`, so a non-brace
+  // char-class body match is safe (a future nested-object entry would fail this scan, not silently truncate).
+  const effortByModel: Record<string, ModelEffortEntry> = {};
+  for (const em of mapBody.matchAll(/"([\w.-]+)":\{([^{}]*)\}/g)) effortByModel[em[1]] = parseModelEntryBody(em[2]);
+  if (Object.keys(effortByModel).length === 0) return fail("literal per-model map parsed to zero entries — parser or shape drifted");
+
+  const regexDefaultEntry = parseModelEntryBody(mm[0]);
+  if (!regexDefaultEntry.effortLevels || !regexDefaultEntry.recommended || !regexDefaultEntry.modes)
+    return fail("regex-default entry parsed with a missing field (effortLevels/recommended/modes) — parser or shape drifted");
+
+  return {
+    config: {
+      effortByModel,
+      effortRegexDefault: {
+        pattern: regexClass[1],
+        effortLevels: regexDefaultEntry.effortLevels,
+        recommended: regexDefaultEntry.recommended,
+        modes: regexDefaultEntry.modes,
+        disallowThinkingDisabled: mm[1] === "!0" || mm[1] === "true",
+      },
+    },
+    flags,
+  };
 }
 
 /**
