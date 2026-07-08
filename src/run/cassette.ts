@@ -2442,6 +2442,7 @@ function replayErrorResult(file: string): RunResult {
     $schema: undefined,
     generator: undefined,
     mode: "run",
+    execution: undefined, // cassette unreadable/invalid — no environment provenance recoverable
     prompt: undefined,
     resultErrorKind: undefined,
     errorSource: undefined, // no rec to read from on this early-bail lane
@@ -4114,6 +4115,9 @@ export async function replayCassette(
     return assembleRunResult({
       scenario: cassette.scenario.name,
       mode: "run",
+      // Pass through the frozen recording-time provenance — an older cassette that predates
+      // Cassette.environment yields undefined (honest: pre-taxonomy recording), never a false "local" claim.
+      execution: cassette.environment?.location ? { location: cassette.environment.location } : undefined,
       fidelity: `replay:${cassette.scenario.fidelity}`,
       // The tier the LIVE run actually used (cowork → hostloop/container); falls back to authored fidelity
       // for an older cassette that didn't record it.

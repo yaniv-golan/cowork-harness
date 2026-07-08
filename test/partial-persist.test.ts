@@ -85,6 +85,8 @@ describe("buildPartialResult — salvage a whiffed run", () => {
     // forensic context survives
     expect(result.workDir).toBe(workRoot);
     expect(result.toolCounts).toEqual({ Read: 1 });
+    // a salvaged partial is still a live LOCAL run — execution provenance is stamped, not left undefined
+    expect(result.execution).toEqual({ location: "local" });
   });
 
   it("omits the hint key when the gate carried none", () => {

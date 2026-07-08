@@ -48,6 +48,32 @@
         "error"
       ]
     },
+    "execution": {
+      "type": "object",
+      "properties": {
+        "location": {
+          "type": "string",
+          "enum": [
+            "local",
+            "cloud"
+          ]
+        },
+        "environmentId": {
+          "type": "string"
+        },
+        "taskKind": {
+          "type": "string",
+          "enum": [
+            "interactive",
+            "scheduled"
+          ]
+        }
+      },
+      "required": [
+        "location"
+      ],
+      "description": "Execution location taxonomy — orthogonal to fidelity (a privilege/sandbox tier, all local). Stamped location:'local' on every locally-executed run so a future cloud-run artifact's differing/absent stamp is a detectable signal, never a silent mislabel. environmentId is the cloud environment_id (bridge sessions); taskKind distinguishes an interactive run from a scheduled-trigger run. ABSENCE IS NOT A POSITIVE 'local' SIGNAL: absent means either a pre-taxonomy result or the error-replay lane (no environment recoverable)."
+    },
     "resultErrorKind": {
       "type": "string",
       "enum": [

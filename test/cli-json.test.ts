@@ -248,6 +248,26 @@ describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
     expect(j.results).toHaveLength(1);
   });
 
+  // replayErrorResult (cassette.ts) is a private synthetic-result producer invoked only from cmdReplay
+  // when readCassette can't even parse the file — the ONE lane with genuinely no recoverable
+  // Cassette.environment to read execution provenance from. cmdReplay always process.exit()s, so this
+  // has to go through the built CLI (like the other cmdReplay-wiring tests in this file), not an
+  // in-process call.
+  it("replay of an unreadable cassette → synthetic error result with execution: undefined (not a false 'local' claim)", () => {
+    const r0 = run(["--version"]);
+    writeIn(r0.cwd, "bad.cassette.json", "{ this is not valid json");
+    const r = spawnSync("node", [CLI, "replay", "bad.cassette.json", "--output-format", "json"], {
+      encoding: "utf8",
+      cwd: r0.cwd,
+    });
+    expect(r.status).toBe(2);
+    const j = JSON.parse(r.stdout);
+    expect(j.ok).toBe(false);
+    expect(j.results).toHaveLength(1);
+    expect(j.results[0].result).toBe("error");
+    expect(j.results[0].execution).toBeUndefined();
+  });
+
   it("replay text mode emits NOTHING to stdout (footer → stderr)", () => {
     const r0 = run(["--version"]);
     writeIn(r0.cwd, "c.cassette.json", JSON.stringify(cassette([{ result: "success" }])));

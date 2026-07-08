@@ -46,6 +46,7 @@ const full: RunResult = {
   $schema: "https://raw.githubusercontent.com/yaniv-golan/cowork-harness/main/schema/run-result.json",
   generator: "cowork-harness",
   mode: "run",
+  execution: { location: "local" },
   scenario: "example",
   prompt: "do the thing",
   fidelity: "container",

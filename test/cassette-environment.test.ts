@@ -72,3 +72,20 @@ describe("Cassette.environment field", () => {
     expect(cassette.environment.tier).toBeUndefined();
   });
 });
+
+describe("RunResult.execution — replay-site wiring (reads Cassette.environment)", () => {
+  it("a replay of a cassette WITH environment stamped reproduces that location", async () => {
+    const cassette = makeMinimalCassette({
+      environment: { location: "local", tier: "hostloop", agentBinaryFormat: "elf" },
+    });
+    const result = await replayCassette(cassette);
+    expect(result.execution).toEqual({ location: "local" });
+  });
+
+  it("a replay of a cassette WITHOUT environment (older/pre-taxonomy) yields execution: undefined — not a false 'local' claim", async () => {
+    const cassette = makeMinimalCassette();
+    delete cassette.environment;
+    const result = await replayCassette(cassette);
+    expect(result.execution).toBeUndefined();
+  });
+});

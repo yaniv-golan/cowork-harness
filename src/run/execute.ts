@@ -1002,6 +1002,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     $schema: RUN_RESULT_SCHEMA_URL,
     generator: "cowork-harness",
     mode: "run",
+    execution: { location: "local" }, // live local run — no scheduled-trigger lane exists yet (no taskKind)
     scenario: scenario.name,
     prompt: scenario.prompt, // persisted for `scaffold <run-dir>`
     fidelity: scenario.fidelity,
@@ -1264,6 +1265,7 @@ export function buildPartialResult(args: {
     $schema: RUN_RESULT_SCHEMA_URL,
     generator: "cowork-harness",
     mode: "run",
+    execution: { location: "local" }, // live local run (salvaged partial) — same basis as the success path
     scenario: args.scenarioName,
     prompt: args.prompt,
     fidelity: args.fidelity,

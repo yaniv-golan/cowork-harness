@@ -13,6 +13,7 @@ function fullyExplicitFixture(): CompleteRunResult {
     $schema: undefined,
     generator: undefined,
     mode: undefined,
+    execution: undefined,
     scenario: "test-scenario",
     prompt: undefined,
     fidelity: "container",
@@ -112,6 +113,11 @@ describe("assembleRunResult", () => {
 
   it("passes mode through unchanged", () => {
     expect(assembleRunResult({ ...fullyExplicitFixture(), mode: "chat" }).mode).toBe("chat");
+  });
+
+  it("passes execution through unchanged", () => {
+    const out = assembleRunResult({ ...fullyExplicitFixture(), execution: { location: "cloud", environmentId: "env_1", taskKind: "scheduled" } });
+    expect(out.execution).toEqual({ location: "cloud", environmentId: "env_1", taskKind: "scheduled" });
   });
 });
 

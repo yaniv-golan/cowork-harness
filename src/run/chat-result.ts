@@ -33,6 +33,8 @@ export interface ChatResultOpts {
  * `configDir`, which isn't plumbed in here) — acceptable for an exploratory chat, where `whenToUse` is
  * unasserted. `nonReproducibleAnswers` and the other non-determinism/verdict signals are also left
  * `undefined`: a chat is deliberately verdict-less, so it declares no reproducibility outcome at all.
+ * One deliberate exception: `execution.location` is descriptive provenance, not a verdict, so a chat
+ * (a genuinely local interactive session) still gets `execution: { location: "local" }`.
  * Routed through `assembleRunResult` so the CompleteRunResult contract
  * forces every future field to be considered here too — chat cannot silently drift.
  */
@@ -46,6 +48,9 @@ export function buildChatResult(record: RunRecord, opts: ChatResultOpts): RunRes
     $schema: RUN_RESULT_SCHEMA_URL,
     generator: "cowork-harness",
     mode: "chat",
+    // Deliberate exception to chat's usual "every verdict/capability field is undefined" convention:
+    // execution.location is descriptive provenance, not a verdict, and a chat genuinely knows it ran locally.
+    execution: { location: "local" },
     scenario: opts.scenario,
     prompt: opts.prompt,
     fidelity: opts.fidelity,

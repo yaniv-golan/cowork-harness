@@ -676,6 +676,15 @@ export interface RunResult {
    *  "chat" = an interactive exploratory session (no assertions, no verdict — consumers must NOT read a
    *  chat result as pass/fail). Absent on results written before this field existed — treat absent as "run". */
   mode?: "run" | "chat";
+  /** Execution *location* taxonomy — orthogonal to `fidelity` (a privilege/sandbox tier, all local).
+   *  Stamped `location:"local"` on every locally-executed run so that a future cloud-run artifact's
+   *  differing/absent stamp is a detectable signal, never a silent mislabel. `environmentId` is the
+   *  cloud `environment_id` (analysis: `teleportToCloud` / bridge sessions) — absent on every local run.
+   *  `taskKind` distinguishes an interactive run from a scheduled-trigger run (CoworkScheduledTasks).
+   *  ABSENCE IS NOT A POSITIVE "local" SIGNAL: an absent block means EITHER a result written before this
+   *  field existed (pre-taxonomy) OR the error-replay lane (an unreadable cassette, where no environment
+   *  could be recovered). Do not read absence as "local"; read a present `location:"local"` as local. */
+  execution?: { location: "local" | "cloud"; environmentId?: string; taskKind?: "interactive" | "scheduled" };
   scenario: string;
   prompt?: string; // the prompt that was run — persisted so `scaffold <run-dir>` can reconstruct the scenario
   fidelity: string;

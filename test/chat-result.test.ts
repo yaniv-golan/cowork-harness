@@ -65,6 +65,9 @@ describe("buildChatResult", () => {
     expect(r.missingCapabilityUse).toBeUndefined();
     expect(r.scan).toBeUndefined();
     expect(r.gateProvenance).toBeUndefined();
+    // deliberate exception: execution.location is descriptive provenance, not a verdict — a chat
+    // genuinely knows it ran locally, so it's stamped even though every OTHER field above is undefined
+    expect(r.execution).toEqual({ location: "local" });
   });
 
   it("passes thinkingElided through onto the assembled result", () => {
