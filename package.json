@@ -55,6 +55,7 @@
     "llms.txt",
     "SECURITY.md",
     "CONTRIBUTING.md",
+    "RELEASING.md",
     "examples/README.md",
     ".claude/skills/cowork-harness/SKILL.md",
     ".claude/skills/cowork-harness/references"

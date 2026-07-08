@@ -40,7 +40,7 @@ Plugins are bind-mounted at the Cowork paths; the MCP config is passed via `--mc
 |---|---|
 | Test a single local **skill** dir in isolation | `skills.local: ["./skills/my-skill"]` (staged into the config dir's `skills/`). Use `plugins.local_plugins` instead only for a **plugin** root — a dir with `.claude-plugin/plugin.json` — mounted via `--plugin-dir`. |
 | Reproduce a real `~/.claude` setup | `plugins.config_dir: ~/.claude` (pins the real dir instead of a clean one) [^configdir] |
-| Swap an MCP server for a stub | point `mcp.config` at a test `mcp.json` (see `examples/data/mcp.json`) |
+| Swap an MCP server for a stub | point `mcp.config` at a test `mcp.json` (see `examples/data/mcp.json` *(source checkout only — not shipped in the npm package)*) |
 | Exercise an org-remote plugin | `plugins.remote_plugins: ["./fixtures/org-plugin"]` |
 | Disable all discovery | leave the `plugins` / `skills` / `mcp` blocks empty |
 

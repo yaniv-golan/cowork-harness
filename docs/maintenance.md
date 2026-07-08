@@ -38,6 +38,10 @@ cowork-harness sync --diff      # show what moved vs the committed baseline
 (`capturedAt` is rewritten to today on every `sync`, and `$comment` embeds that same date, so both always
 show in the diff even when nothing substantive moved — ignore them as noise.)
 
+**`--diff` interactions worth knowing:**
+- It is a pure preview: even when the sync would hit `⚠ unknown deltas` (below), `--diff` prints the deltas and exits **0** without writing anything — the hard exit-1 refusal only applies to a real (non-`--diff`) write.
+- It does **not** bypass the empty-`allowDomains` refusal: an empty derived allowlist still hard-fails (exit 1) with `--diff` passed. You still need `--allow-empty` to force through that specific case (the empty-allowlist check runs before, and independently of, the diff/write branch).
+
 Then commit:
 
 ```bash
@@ -60,6 +64,8 @@ There is deliberately **no `nativeSha256`**: the signed+notarized native `.app` 
 
 The resolved ELF is verified against the recorded `sha256` at run time **by default** (ELF only; opt out with `COWORK_HARNESS_VERIFY_AGENT_SHA=0`). A mismatch **hard-fails** only at the baseline's own staged path against a `measured-local` hash (the binary provably isn't what the baseline was synced against); it **advisory-warns** against an `official-manifest` hash (Desktop may repack what it stages) or when you deliberately supplied the binary via `COWORK_AGENT_BINARY` / the newest-sibling fallback (an intentional substitution is never hard-stopped). The check costs one hash per resolve (once per run) and no-ops when the baseline has no `sha256`.
 
+Another runtime knob in the same family: `COWORK_HARNESS_RESOURCE_INTERVAL_MS` sets the resource-sampler's polling cadence in milliseconds (`resolveIntervalMs()` in `src/runtime/resource-sampler.ts`; default `1000`). A set-but-invalid value (non-integer or non-positive) warns and falls back to the default rather than silently sampling on the wrong cadence.
+
 ### Recovering an old agent version
 
 Old staged binaries are re-downloadable from Anthropic's own release channel. For the **container/microvm** tiers the harness needs the **Linux/arm64 ELF**, so download it directly and point the resolver at it:
@@ -73,6 +79,8 @@ COWORK_AGENT_BINARY="$PWD/claude-$V" cowork-harness run <scenario>.yaml   # scen
 ```
 
 Note: `install.sh <version>` installs the **host CLI for the running platform** into `~/.local/bin` (clobbering an existing one) — it does **not** produce the Linux ELF the container tier bind-mounts, so recovering the ELF is the direct download above.
+
+For the `hostloop` tier's separate **native macOS** binary (`claude-code/<ver>/claude.app/Contents/MacOS/claude`, distinct from the Linux ELF above), the equivalent override is `COWORK_HOST_AGENT_BINARY=<path>` (checked before `baseline.agentBinary.nativeStagedPath`; `resolveHostAgentBinary` in `src/baseline.ts`).
 
 `sync` refuses to write a baseline in **two** cases: (a) an empty `allowDomains` allowlist — an empty egress allowlist is a safety tripwire (it would silently produce a baseline that permits nothing/everything rather than the real Desktop set); and (b) `⚠ unknown deltas` (see below). `--allow-empty` (alias `--force`) overrides **both** refusals and force-writes the baseline anyway — use it only when you understand the impact:
 

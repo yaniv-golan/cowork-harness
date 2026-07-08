@@ -4,7 +4,7 @@ Start with the [project README](../README.md) for the overview and quick start, 
 
 **Reading order (start here):** [../examples/README.md](../examples/README.md) (token-free `replay` + worked examples) → [boundary.md](./boundary.md) (the limitations model) → [session.md](./session.md) + [scenario.md](./scenario.md) (authoring tests) → [chat.md](./chat.md) (interactive debugging) → [cassette.md](./cassette.md) (record/replay deep-dive) → [debugging.md](./debugging.md) (when a run misbehaves or you don't trust a green) → [gotchas.md](./gotchas.md) (setup troubleshooting FAQ).
 
-> **Before a first *live* run** (any tier above `replay`/`protocol`): run `cowork-harness doctor` (or `doctor --tier <t>`) to check Docker + staged agent + token. `lint` needs **python3** on PATH; `--fidelity microvm` needs a one-time `cowork-harness vm init`.
+> **Before a first *live* run** (any tier above `replay`/`protocol`): run `cowork-harness doctor` (or `doctor --tier <t>`) to check Docker + staged agent + token. `lint` needs **python3** on PATH; `--fidelity microvm` needs a one-time `cowork-harness vm init`. Replay-only usage (running only committed cassettes) can **skip** `doctor` entirely — its default `container` tier checks Docker + the staged agent, neither of which replay touches. Note that **every** tier still validates an auth token — even `doctor --tier protocol` requires one, since `protocol` still calls a real model.
 
 ## Guides
 

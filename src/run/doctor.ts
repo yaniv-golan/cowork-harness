@@ -54,6 +54,10 @@ export interface DoctorProbe {
   // the gitignored .env doesn't travel to a worktree, a common "no token" first-run trap. null otherwise.
   worktreeEnv(): string | null;
   baseline(): { ok: true; version: string } | { ok: false; error: string };
+  // Advisory only (never blocks doctor) — is `python3` on PATH? `lint` requires it. Optional so existing
+  // test doubles don't need updating: when a probe doesn't implement it, doctor falls back to a real
+  // PATH check (mirrors realProbe's implementation below).
+  hasPython3?(): boolean;
 }
 
 /** Package-root `docker build` line for the agent image — resolved relative to THIS file (works from a
@@ -138,6 +142,10 @@ export const realProbe: DoctorProbe = {
     } catch (e) {
       return { ok: false, error: (e as Error).message };
     }
+  },
+  hasPython3() {
+    const r = spawnSync("python3", ["--version"], { stdio: "ignore", timeout: 5000 });
+    return !r.error && r.status === 0;
   },
 };
 
@@ -343,6 +351,18 @@ export function runDoctorChecks(tier: Tier, probe: DoctorProbe = realProbe): Doc
     detail: bl.ok ? `desktop-${bl.version}` : bl.error.split("\n")[0],
     remedy: bl.ok ? undefined : "run `cowork-harness sync` (macOS) or restore baselines/desktop-*.json",
     required: true,
+  });
+
+  // Advisory-only — `lint` needs python3, but doctor's own checks (record/replay/run) don't, so a miss
+  // never blocks any tier.
+  const python3Ok = (probe.hasPython3 ?? realProbe.hasPython3!)();
+  checks.push({
+    id: "python3",
+    title: "python3 (for `lint`)",
+    status: python3Ok ? "ok" : "warn",
+    detail: python3Ok ? "python3 found on PATH" : "python3 not found on PATH",
+    remedy: python3Ok ? undefined : "install python3 — only needed for `cowork-harness lint`",
+    required: false,
   });
 
   return checks;
