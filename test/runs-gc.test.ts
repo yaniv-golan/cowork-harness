@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, writeFileSync, mkdirSync, existsSync, readdirSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync, existsSync, readdirSync, utimesSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
@@ -81,6 +81,36 @@ describe.skipIf(!can)("prune", () => {
     expect(remaining).not.toContain("local_a");
     expect(remaining).not.toContain("local_b");
     expect(remaining.length).toBe(2);
+  });
+
+  it("--pinned-older-than reclaims only stale pinned sessions (opt-in), keeping fresh ones", () => {
+    const runsRoot = mkdtempSync(join(tmpdir(), "cwh-runs-"));
+    const stale = makeRunDir(runsRoot, "s", "sess-old");
+    makeRunDir(runsRoot, "s", "sess-fresh");
+    // backdate the stale pinned session's mtime to 10 days ago
+    const tenDaysAgo = new Date(Date.now() - 10 * 86_400_000);
+    utimesSync(stale, tenDaysAgo, tenDaysAgo);
+    const r = spawnSync("node", [CLI, "prune", "--pinned-older-than", "7d", runsRoot], { encoding: "utf8" });
+    expect(r.status).toBe(0);
+    const remaining = readdirSync(join(runsRoot, "s")).sort();
+    expect(remaining).toContain("sess-fresh"); // within the window → kept
+    expect(remaining).not.toContain("sess-old"); // older than 7d → reclaimed
+  });
+
+  it("without --pinned-older-than, no pinned session is ever touched (even a very old one)", () => {
+    const runsRoot = mkdtempSync(join(tmpdir(), "cwh-runs-"));
+    const old = makeRunDir(runsRoot, "s", "sess-old");
+    const longAgo = new Date(Date.now() - 400 * 86_400_000);
+    utimesSync(old, longAgo, longAgo);
+    const r = spawnSync("node", [CLI, "prune", runsRoot], { encoding: "utf8" });
+    expect(r.status).toBe(0);
+    expect(readdirSync(join(runsRoot, "s"))).toContain("sess-old"); // retained unconditionally
+  });
+
+  it("--pinned-older-than rejects a malformed window (exit 2)", () => {
+    const r = spawnSync("node", [CLI, "prune", "--pinned-older-than", "soon"], { encoding: "utf8" });
+    expect(r.status).toBe(2);
+    expect(r.stderr).toMatch(/--pinned-older-than must be/);
   });
 
   // a COMPLETED run (has result.json) outranks a newer EMPTY scaffold dir for a keep slot. The completed

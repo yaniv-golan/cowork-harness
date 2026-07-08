@@ -7,6 +7,16 @@ const log = (s: string) => process.stderr.write(s + "\n");
 
 const DEFAULT_KEEP_LAST = 5;
 
+/** Parse a `<N>d|h|m` retention window (e.g. `7d`, `24h`, `30m`) to milliseconds, or undefined if
+ *  malformed. Used only by the opt-in `--pinned-older-than` reclaim — pinned sessions are otherwise
+ *  never pruned. */
+export function parseRetentionMs(s: string): number | undefined {
+  const m = s.trim().match(/^(\d+)\s*([dhm])$/);
+  if (!m) return undefined;
+  const mult = m[2] === "d" ? 86_400_000 : m[2] === "h" ? 3_600_000 : 60_000;
+  return Number(m[1]) * mult;
+}
+
 /** A "real run" — has a `result.json` (completed; success OR a recorded error) OR an `events.jsonl`
  *  (a session started, so the run is in-flight or threw — e.g. an unanswered gate under on_unanswered:fail
  *  writes no result.json but DOES leave events.jsonl). A never-started empty `scaffold`/failed-before-session
@@ -21,7 +31,10 @@ const isRealRun = (dir: string) => existsSync(join(dir, "result.json")) || exist
  *  and removes the rest. So an older COMPLETED run beats a newer empty scaffold dir for a keep slot, but
  *  `--keep-last` stays a HARD CAP (the ranking only decides WHICH N survive — never grows the kept count).
  *  Do NOT run `prune` against an actively-writing runs root.
- *  Pinned `sess-*` dirs (persisted, resumable `--session-id` sessions) are retained unconditionally.
+ *  Pinned `sess-*` dirs (persisted, resumable `--session-id` sessions) are retained unconditionally by
+ *  default — pass `--pinned-older-than <N>d|h|m` to also reclaim pinned sessions whose last activity is
+ *  older than that window (opt-in, so a programmatic consumer that leaks one pinned session per run has a
+ *  policy to reclaim them; nothing pinned is touched without the flag).
  *  The default root is the flat, machine-global `~/.cowork-harness/runs` (shared across projects), so a
  *  bare `prune` prunes ephemeral runs from ALL projects; pass an explicit <runs-dir> to scope it.
  *  Safe by default (dry-run-able). */
@@ -30,7 +43,7 @@ export function cmdRunsGc(args: string[]): void {
   try {
     p = parseArgs(args, {
       booleans: ["--dry-run"],
-      values: ["--keep-last"],
+      values: ["--keep-last", "--pinned-older-than"],
     });
   } catch (e) {
     log((e as Error).message);
@@ -48,8 +61,19 @@ export function cmdRunsGc(args: string[]): void {
     return process.exit(2);
   }
 
+  const rawPinnedAge = p.options["--pinned-older-than"];
+  let pinnedOlderThanMs: number | undefined;
+  if (rawPinnedAge !== undefined) {
+    pinnedOlderThanMs = parseRetentionMs(rawPinnedAge);
+    if (pinnedOlderThanMs === undefined) {
+      log(`prune: --pinned-older-than must be <N>d|h|m (e.g. 7d, 24h, 30m) — got "${rawPinnedAge}"`);
+      return process.exit(2);
+    }
+  }
+
   const dryRun = p.flags["--dry-run"] ?? false;
   const runsRoot = p.positionals[0] ?? runsWriteRoot();
+  const now = Date.now();
 
   if (!existsSync(runsRoot)) {
     log(`✓ prune: ${runsRoot} does not exist — nothing to prune`);
@@ -106,7 +130,24 @@ export function cmdRunsGc(args: string[]): void {
     // Only ephemeral `local_*` runs are subject to --keep-last.
     const pinned = sorted.filter((d) => d.name.startsWith("sess-"));
     const ephemeral = sorted.filter((d) => !d.name.startsWith("sess-"));
-    kept += pinned.length;
+
+    // Pinned sessions are retained unconditionally UNLESS --pinned-older-than opts in to reclaiming the
+    // stale ones (by last-activity mtime). Nothing pinned is deleted without that explicit flag.
+    for (const d of pinned) {
+      let mtime = now;
+      try {
+        mtime = statSync(d.path).mtimeMs;
+      } catch {
+        /* deleted between filter and loop — treat as fresh (kept) */
+      }
+      if (pinnedOlderThanMs !== undefined && now - mtime > pinnedOlderThanMs) {
+        if (!dryRun) rmSync(d.path, { recursive: true, force: true });
+        log(`${dryRun ? "(dry-run) " : ""}✗ pruned pinned ${d.path}`);
+        deleted++;
+      } else {
+        kept++;
+      }
+    }
 
     for (let i = 0; i < ephemeral.length; i++) {
       if (i < keepLast) {

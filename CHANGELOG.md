@@ -190,6 +190,12 @@ All notable changes to this project are documented here. The format is based on
   aggregator (`scripts/eval-baseline-profile.mjs`) for the project's own answer-quality eval gate over
   the companion skill (`test/evals/`, not shipped as part of the skill).
 
+- **`prune --pinned-older-than <N>d|h|m`** — opt-in reclaim for pinned (`--session-id`) run dirs, which
+  are otherwise retained unconditionally. A programmatic consumer that mints one pinned session per run
+  (e.g. one per eval × rep) previously leaked them forever with no policy; this reclaims pinned sessions
+  whose last activity is older than the window, while fresh ones survive. Nothing pinned is touched
+  without the flag; `--dry-run` previews.
+
 ### Removed
 
 - **`trace`'s legacy `--tools` / `--gates` / `--dispatches` flag aliases.** Use `--view tools` /
