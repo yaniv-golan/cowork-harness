@@ -3850,14 +3850,7 @@ export async function replayCassette(
       "computer_links_resolve_if_present",
       "no_unexpected_files",
       "input_unmodified",
-      "egress_denied",
-      "egress_allowed",
-      "no_delete_in_outputs",
-      "self_heal_ran",
-      "transcript_no_host_path",
-      "no_mcp_error",
-      "max_peak_rss_bytes",
-      "semantic_matches",
+      ...LIVE_ONLY_KEYS, // single source of truth for the live-only bucket (stripped on replay)
       "replay_protocol_fidelity",
       // (verdict modifiers allow_permissive_auto_allow / allow_missing_capability / allow_l0_plugin_divergence
       //  arrive via ...alwaysContentKeys above — kept on replay as no-op passes.)
