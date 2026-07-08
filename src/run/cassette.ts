@@ -3844,6 +3844,10 @@ export async function replayCassette(
       );
     }
 
+    // A v10+ cassette recorded its baseline with the link-aware walk. Single source of truth so the
+    // evaluate() ctx and the returned RunResult can't disagree about which baseline semantics were used
+    // (moot for replay's own no_unexpected_files — the materialized tree has no real symlinks — but honest).
+    const replayLinkAware = (cassette.cassetteVersion ?? 0) >= 10;
     const assertions = evaluate(replayable, {
       transcript: rec.transcript,
       toolsCalled: rec.toolsCalled,
@@ -3857,9 +3861,7 @@ export async function replayCassette(
       // readonlyFolderRoots (they have no manifest at eval time), so it's empty here.
       readonlyFolderRoots: [],
       preRunPaths: cassette.preRunPaths,
-      // A v10+ cassette recorded its baseline link-aware. Moot for replay's own no_unexpected_files (the
-      // materialized tree has no real symlinks), but honest for anything that reads this result.
-      preRunLinkAware: (cassette.cassetteVersion ?? 0) >= 10,
+      preRunLinkAware: replayLinkAware,
       preRunHashes: cassette.preRunHashes,
       // The authoritative post-run per-path sha256 from the manifest — NOT a re-hash of replayWorkRoot,
       // which materializeManifest fills with 0-byte placeholders for body-less entries (read-only inputs,
@@ -4101,7 +4103,9 @@ export async function replayCassette(
       // presented" signal no_scratchpad_leak's vacuous pass needs, matching live).
       presentedFiles: rec.presentedFiles,
       preRunPaths: undefined,
-      preRunLinkAware: undefined,
+      // Report the baseline semantics actually used during evaluation above (not undefined) so the returned
+      // result doesn't misrepresent them. Same source of truth as the evaluate() ctx.
+      preRunLinkAware: replayLinkAware,
       preRunHashes: undefined,
       partial: undefined,
       unansweredGate: undefined,
