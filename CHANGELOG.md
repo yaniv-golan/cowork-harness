@@ -6,29 +6,117 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
-### Changed
+### Added
 
-- **Synced the platform baseline to Claude Desktop 1.18286.2** (`baselines/desktop-1.18286.2.json`).
-  The staged agent ELF moved to **2.1.202** (measured sha256 recorded). `sync` re-derived the volatile
-  facts: the full spawn contract (env, mounts, egress, gates) is **byte-identical** to `1.18286.0` — only
-  `appVersion`/`agentVersion`/`agentBinary`/`asarFingerprint` moved, no unknown deltas.
+- **`trace --view tool-errors|files|usage`** — three new views: `tool-errors` (one row per errored
+  tool call with the full multi-line stderr, capped at 4KB, vs. the 120-char preview in `tools`);
+  `files` (`workspaceFiles` as a class-grouped tree with an added/modified/removed/unchanged diff
+  column vs. `preRunHashes`); `usage` (the full per-model token/cost/cache breakdown behind the
+  default view's combined cache-ratio footer).
+- **`replay --explain`** — prints the concrete evidence behind every *passing* assert (which
+  `computer://` link resolved, which file matched, which value satisfied a bound), so a green run can
+  be told apart from a vacuous one (e.g. a presence-gated key that matched zero links).
+  `--output-format json` already carried `assertions[].evidence`; `--explain` governs the text render.
+- **`replay --reassert --write`** — persists a token-free-revalidated assert block back into the
+  cassette when *only* the assert block changed, closing the gap where a pure assert-semantics edit
+  (`max_tool_errors`, `task_count_min`, `computer_links_resolve_if_present`, `allow_stall`, …) cost a
+  paid re-record. Refuses to write any added key that would silently skip on this cassette
+  (evaluability guard), refuses a failing reassert verdict without `--allow-failing`, and redacts only
+  the spliced assert block (events/controlOut/fingerprint stay byte-identical).
+- **`verify-cassettes --margins`** — replays every cassette carrying a count-bound assert and reports
+  recorded-vs-budget with a margin ratio (e.g. `recorded=15, budget=30` → `2.0×`), flagging a tight
+  count budget without a paid `run --repeat`. Diagnostic only; never changes the gate verdict.
+- **`scenario.py lint-skill <dir|SKILL.md>`** — catches two Cowork host-loop authoring footguns before
+  a paid run: `${CLAUDE_PLUGIN_ROOT}` used as an in-VM bash path (it's unset in the host-loop VM), and
+  a hook that writes env vars or `/tmp` for the in-VM agent to read (host-side hook writes aren't
+  VM-visible). Consumer-aware — doesn't flag the token in host-side prose or `Read`/`Grep` directives.
+- **Cassette format v10 — symlink/hardlink-aware recording.** Manifest entries gain `linkKind`; links
+  record path-only (no dereference, sha256 `""`) and materialize on replay as placeholders. Pre-v10
+  cassettes keep replaying unchanged (no forced re-record).
+- **Cowork system-prompt drift fingerprint** (`baselines/prompts/cowork-system-prompt-fingerprints.json`):
+  the SHA-256 + code-point/section-tag counts of the raw Cowork system-prompt constant per Desktop build,
+  so prompt-append drift is detectable across releases without publishing the proprietary verbatim text.
+  The append is verified **unchanged** from 1.18286.0 to 1.18286.2 (identical code-point count and section
+  structure).
 
 ### Fixed
 
+- **`--output-format json` output from `replay`/`record`/`verify-cassettes`/`rehash`/`doctor` no longer
+  silently truncates past 64KB.** These commands wrote their JSON envelope via the async
+  `process.stdout` stream then exited; on a pipe, the buffered tail past the ~64KB pipe buffer was
+  dropped at exit — corrupting any `| jq` or `subprocess.run` consumer at exactly 65536 bytes (a file
+  redirect drained fully, hiding the bug). 0.27.0's richer replay envelope pushed real cassettes past
+  the threshold, exposing it. Both emitters now use synchronous `writeSync`, matching the CLI's
+  existing mitigation.
+- **Closed a symlink/hardlink blind spot spanning recording, containment, and assertions** that let an
+  agent-created link silently pass (or a legitimate one silently fail):
+  - `no_unexpected_files` and the pre-run baseline didn't see symlinks/hardlinks at all — a stray link
+    could ship a false-green. Both now walk a link-aware path collector.
+  - Live host-shaped and VM-shaped `computer://` containment checks were symlink-blind (lexical join,
+    following the link on `existsSync`) — an in-tree symlink escaping the work root could resolve as
+    contained. Both now realpath-resolve once the candidate exists.
+  - `input_unmodified`'s pre-run manifest skipped hardlinked inputs entirely (a real inode with
+    in-root content, common in `pnpm`/`cp -l` trees) — now hashed like any other file. Symlinks stay
+    path-only (correctly excluded from content hashing).
+  - On replay, a recorded link materialized as a placeholder file indistinguishable from a real one,
+    so `file_exists`/`user_visible_artifact`/`computer_links_resolve` PASSED where live could RED a
+    dangling or escaping symlink. These three now fail evidence-unavailable on a link path instead.
+  - `verify-run`/`--resume` against a pre-v10 run dir now compares on the same links-blind basis as
+    its baseline (new `RunResult.preRunLinkAware`), instead of false-straying every pre-existing
+    symlink as "created".
+  - A marketplace `entry.source` resolving to the marketplace root itself (`""`, `"."`, `"./"`) is now
+    rejected at the traversal guard — it previously staged the entire marketplace as one plugin.
+- **`CLAUDE_PLUGIN_ROOT` is left unset in the host-loop VM sidecar**, matching production (live-probed:
+  real host-loop leaves it unset and the agent self-heals via `find`). The harness previously injected
+  a bogus `/host/plugins/unmounted` sentinel that leaked a fake host path into guest bash. Skills that
+  read the token in the wrong context are now caught by `lint-skill` above.
+- **`remote_plugins` mounts to `.remote-plugins/plugin_<id>`**, matching a migrated Cowork install
+  (UI-uploaded / org-remote plugins), not `.remote-plugins/<basename>` — which also fixes a basename
+  collision when two `remote_plugins` entries shared a name. The synthetic id is derived from the
+  *declared* source string (not a resolved absolute path), so it stays stable across machines/checkouts.
+- **Nested sub-agent dispatch trees now reconstruct from `result.json`.** `parentToolUseId` was
+  silently dropped when a sub-agent record was pushed, so `trace --view dispatches` couldn't nest a
+  grandchild agent under its parent.
+- **Nested connected folders now remap to the correct mount on replay** regardless of the order they
+  were declared in (longest-prefix-first matching).
+- Several evidence-honesty corrections so `result.json` doesn't misreport what was actually observed: a
+  zero-task run now emits `tasks: []` (not `undefined`); `context.tools`/`context.mcpServers` are
+  unseeded (not a false empty inventory) when a crash happens before init; a `tool_result_contains`
+  match against a display-truncated result reports evidence-unavailable instead of claiming the string
+  is absent; host-path leak detection also flags `/private/var/`, `/var/folders/`, and `/Volumes/`; an
+  all-malformed resource log reports `malformedLines` instead of looking never-sampled; gate-provenance
+  pairing in `trace --gates` uses the persisted `requestId` (retry/duplicate-safe) instead of position.
+- `record`/`replay`/`verify-cassettes`/`rehash`'s `--output-format json` **error paths** now conform to
+  the shared error envelope (previously bare plain-text on some paths); `verify-run`/`assertions`/
+  `trace`/`diff`'s **success** JSON is now wrapped in the same envelope for cross-command consistency
+  (additive — every existing field and exit code is preserved).
 - **Un-pinned the minified gate-check helper name in the spawn-env extractor.** Desktop 1.18286.2
   re-minified the renderer, renaming the GrowthBook gate-check helper (`At`→`et`). The extractor matched
   it by literal name at four sites in `src/sync/cowork-sync.ts`, so `sync` reported unknown deltas and —
   more importantly — one site silently failed open (an off-gate `MCP_CONNECTION_NONBLOCKING` spread would
   have leaked `"0"` over the base env with no flag). The extractor now matches the helper by shape, still
   guarded by the closed `SPAWN_GATES` set and the S18 anchor; a rename-regression test covers it.
+- `artifact_json` no longer crashes on a stat race between the existence check and the read (fails the
+  assertion instead). A `config_dir` that exists but isn't a directory now gets a clear error instead
+  of a raw `ENOTDIR`. Protocol staging now fails loud (`BoundaryError`) if a *required* mount's source
+  vanishes between plan-build and staging, instead of silently staging an empty tree.
 
-### Added
+### Documentation
 
-- **Cowork system-prompt drift fingerprint** (`baselines/prompts/cowork-system-prompt-fingerprints.json`):
-  the SHA-256 + code-point/section-tag counts of the raw Cowork system-prompt constant per Desktop build,
-  so prompt-append drift is detectable across releases without publishing the proprietary verbatim text.
-  The append is verified **unchanged** from 1.18286.0 to 1.18286.2 (identical code-point count and section
-  structure).
+- Added `docs/plugin-root.md` — the `${CLAUDE_PLUGIN_ROOT}` two-namespace resolution model (host-side
+  reads vs. in-VM bash), the single most common Cowork authoring footgun.
+- Documented the assertion-edit-to-CI propagation chain (scenario edit → `--reassert`/`--assert-from`
+  validates free → embed via re-record or `--reassert --write`) next to the frozen-vs-on-disk rules.
+- Reorganized the skill's debugging guidance around the kept-run-dir → `trace`/`result.json` →
+  `verify-run` loop as the primary, first-class debugging path (previously buried under interactive
+  `chat`).
+
+### Changed
+
+- **Synced the platform baseline to Claude Desktop 1.18286.2** (`baselines/desktop-1.18286.2.json`).
+  The staged agent ELF moved to **2.1.202** (measured sha256 recorded). `sync` re-derived the volatile
+  facts: the full spawn contract (env, mounts, egress, gates) is **byte-identical** to `1.18286.0` — only
+  `appVersion`/`agentVersion`/`agentBinary`/`asarFingerprint` moved, no unknown deltas.
 
 ## [0.27.0] — 2026-07-07
 
