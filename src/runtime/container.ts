@@ -1,10 +1,9 @@
 import { spawn } from "node:child_process";
 import { resolve, join } from "node:path";
 import type { PlatformBaseline, Scenario } from "../types.js";
-import { DEFAULT_MAX_THINKING_TOKENS } from "../types.js";
 import type { LaunchPlan } from "../session.js";
 import { resolveMounts, resolveAgentBinary } from "../baseline.js";
-import { agentArgs, spawnEnv, dockerRunArgv, resolveMaxThinkingTokens } from "./argv.js";
+import { agentArgs, spawnEnv, dockerRunArgv } from "./argv.js";
 import { runtimeAuthEnv } from "./host-env.js";
 import { stageWorkspace } from "./stage.js";
 import { capturePreRunManifest } from "../run/pre-run-manifest.js";
@@ -65,11 +64,6 @@ export function spawnContainer(
     configGuest,
     proxyHost,
     extra: runtimeAuthEnv(),
-    maxThinkingTokens: resolveMaxThinkingTokens(
-      plan.maxThinkingTokens,
-      plan.model,
-      baseline.spawn?.maxThinkingTokens ?? DEFAULT_MAX_THINKING_TOKENS,
-    ),
   });
   const claudeArgs = agentArgs(baseline, plan, {
     mntRoot,

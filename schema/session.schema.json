@@ -11,40 +11,23 @@
         "low",
         "medium",
         "high",
-        "xhigh"
+        "xhigh",
+        "max",
+        "extra"
       ]
     },
     "account_name": {
       "type": "string"
     },
-    "max_thinking_tokens": {
-      "anyOf": [
-        {
-          "type": "integer",
-          "exclusiveMinimum": 0,
-          "maximum": 9007199254740991
-        },
-        {
-          "type": "object",
-          "propertyNames": {
-            "type": "string"
-          },
-          "additionalProperties": {
-            "type": "integer",
-            "exclusiveMinimum": 0,
-            "maximum": 9007199254740991
-          }
-        }
-      ]
+    "extended_thinking": {
+      "default": true,
+      "description": "real Cowork on/off toggle for extended thinking; default true (ON)",
+      "type": "boolean"
     },
     "agent_max_turns": {
       "type": "integer",
       "exclusiveMinimum": 0,
       "maximum": 9007199254740991
-    },
-    "extended_thinking": {
-      "description": "Inert / no-op — not a real Cowork toggle. Use max_thinking_tokens instead.",
-      "type": "boolean"
     },
     "permission_mode": {
       "default": "default",
@@ -273,6 +256,18 @@
             "type": "string",
             "minLength": 1
           }
+        }
+      },
+      "additionalProperties": false
+    },
+    "debug": {
+      "default": {},
+      "type": "object",
+      "properties": {
+        "max_thinking_tokens": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
         }
       },
       "additionalProperties": false

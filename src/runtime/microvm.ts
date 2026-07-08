@@ -1,11 +1,10 @@
 import { spawn } from "node:child_process";
 import { join } from "node:path";
 import type { PlatformBaseline, Scenario } from "../types.js";
-import { DEFAULT_MAX_THINKING_TOKENS } from "../types.js";
 import type { LaunchPlan } from "../session.js";
 import { limaPath, vmInit, applyGuestFirewall, vmGatewayIp, VM_WORK_HOST } from "./lima.js";
 import { resolveMounts } from "../baseline.js";
-import { spawnEnv, resolveMaxThinkingTokens, baseAgentArgs } from "./argv.js";
+import { spawnEnv, baseAgentArgs } from "./argv.js";
 import { stageWorkspace } from "./stage.js";
 import { runtimeAuthEnv, SECRET_ENV_KEYS } from "./host-env.js";
 
@@ -90,11 +89,6 @@ export function spawnMicroVm(
     configGuest: configVm,
     proxyHost: proxyUrl,
     extra: runtimeAuthEnv(),
-    maxThinkingTokens: resolveMaxThinkingTokens(
-      plan.maxThinkingTokens,
-      plan.model,
-      baseline.spawn?.maxThinkingTokens ?? DEFAULT_MAX_THINKING_TOKENS,
-    ),
   });
   // Keep SECRET values off the `limactl shell …` argv (host-visible via ps). Public env rides
   // argv via `env KEY=value`; secrets are handed to the guest over a stdin PROLOGUE the shell script

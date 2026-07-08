@@ -12,7 +12,7 @@ import { spawnProtocol } from "../src/runtime/protocol.js";
 import type { LaunchPlan } from "../src/session.js";
 import type { Scenario, PlatformBaseline } from "../src/types.js";
 
-function minimalPlan(mounts: { hostPath: string; mountPath: string }[]): LaunchPlan {
+function minimalPlan(mounts: { hostPath: string; mountPath: string }[], over: Partial<LaunchPlan> = {}): LaunchPlan {
   const root = mkdtempSync(join(tmpdir(), "proto-stage-"));
   const configDir = join(root, "config");
   mkdirSync(join(configDir, "skills"), { recursive: true });
@@ -26,6 +26,7 @@ function minimalPlan(mounts: { hostPath: string; mountPath: string }[]): LaunchP
     baseEnv: {},
     model: undefined,
     permissionMode: undefined,
+    ...over,
   } as unknown as LaunchPlan;
 }
 
@@ -73,5 +74,27 @@ describe("spawnProtocol — L0 mount staging symlink-escape guard (bug 19)", () 
     const plan = minimalPlan([{ hostPath: mountSrc, mountPath: "uploads/proj" }]);
     expect(() => spawnProtocol(SCENARIO, BASELINE, plan, outDir)).not.toThrow();
     expect(spawnMock).toHaveBeenCalledOnce();
+  });
+});
+
+describe("spawnProtocol — L0 --effort emission (reasoning-config fidelity, Phase 1)", () => {
+  beforeEach(() => spawnMock.mockClear());
+
+  it("emits --effort, falling back to medium when the plan carries no effort and the baseline has no spawn.effortDefault", () => {
+    const root = mkdtempSync(join(tmpdir(), "proto-effort-"));
+    const outDir = join(root, "out");
+    const plan = minimalPlan([]);
+    spawnProtocol(SCENARIO, BASELINE, plan, outDir);
+    const args = (spawnMock.mock.calls[0] as unknown as [string, string[]])[1];
+    expect(args[args.indexOf("--effort") + 1]).toBe("medium");
+  });
+
+  it("emits the plan's resolved effort verbatim when set", () => {
+    const root = mkdtempSync(join(tmpdir(), "proto-effort-"));
+    const outDir = join(root, "out");
+    const plan = minimalPlan([], { effort: "high" });
+    spawnProtocol(SCENARIO, BASELINE, plan, outDir);
+    const args = (spawnMock.mock.calls[0] as unknown as [string, string[]])[1];
+    expect(args[args.indexOf("--effort") + 1]).toBe("high");
   });
 });

@@ -44,10 +44,12 @@ function run(args: string[], cwd: string) {
 
 function leanSession(dir: string): string {
   const p = join(dir, "session.yaml");
-  // Deliberately cheap: low effort, small thinking budget, no mounts — this is a live-execution smoke
+  // Deliberately cheap: low effort, thinking disabled, no mounts — this is a live-execution smoke
   // test for the MATRIX RUNNER's own plumbing (cell expansion, per-cell overrides, rollup aggregation),
-  // not a test of skill/agent capability, so it should cost as little as possible per cell.
-  writeFileSync(p, "model: claude-opus-4-8\neffort: low\nmax_thinking_tokens: 1024\npermission_mode: default\npermission_parity: cowork\n");
+  // not a test of skill/agent capability, so it should cost as little as possible per cell. (This
+  // scenario runs at `fidelity: protocol`, which doesn't wire the thinking flag at all today, but the
+  // session must still be the cheapest faithful config.)
+  writeFileSync(p, "model: claude-opus-4-8\neffort: low\nextended_thinking: false\npermission_mode: default\npermission_parity: cowork\n");
   return p;
 }
 

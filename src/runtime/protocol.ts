@@ -103,6 +103,11 @@ export function spawnProtocol(
     ...discoveryArgs,
     ...(plan.model ? ["--model", plan.model] : []),
     ...(plan.permissionMode ? ["--permission-mode", plan.permissionMode] : []),
+    // Real Cowork ALWAYS emits `--effort`, falling back to the baseline's medium default when nothing
+    // is set — never omitted, for every model class (see buildLaunchPlan's validateEffort). The host
+    // CLI accepts the flag (live-verified), so L0 is a non-vacuous check of this too.
+    "--effort",
+    plan.effort ?? baseline.spawn?.effortDefault ?? "medium",
     ...(plan.mcpConfig ? ["--mcp-config", plan.mcpConfig] : []),
     // Thread the rendered system prompt append into L0, matching container/microvm/host-loop.
     // The host `claude` CLI accepts --append-system-prompt just like the staged binary does, so L0

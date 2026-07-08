@@ -66,11 +66,21 @@ describe("mount / path safety", () => {
       else process.env.COWORK_HARNESS_ALLOW_CONFIG_DIR_WRITE = prev;
     }
   });
-  it("rejects a non-positive max_thinking_tokens (scalar and per-model map)", () => {
-    expect(() => loadSession({ max_thinking_tokens: 0 })).toThrow();
-    expect(() => loadSession({ max_thinking_tokens: -5 })).toThrow();
-    expect(() => loadSession({ max_thinking_tokens: { default: 0 } })).toThrow();
-    expect(loadSession({ max_thinking_tokens: 12000 }).max_thinking_tokens).toBe(12000); // positive ok
+  it("extended_thinking is a real boolean, default ON", () => {
+    expect(loadSession({}).extended_thinking).toBe(true);
+    expect(loadSession({ extended_thinking: true }).extended_thinking).toBe(true);
+    expect(loadSession({ extended_thinking: false }).extended_thinking).toBe(false);
+  });
+  it("debug.max_thinking_tokens is a fenced escape hatch — rejects non-positive, accepts positive", () => {
+    expect(() => loadSession({ debug: { max_thinking_tokens: 0 } })).toThrow();
+    expect(() => loadSession({ debug: { max_thinking_tokens: -5 } })).toThrow();
+    expect(loadSession({ debug: { max_thinking_tokens: 50000 } }).debug.max_thinking_tokens).toBe(50000); // positive ok
+    expect(loadSession({}).debug.max_thinking_tokens).toBeUndefined(); // omitted by default
+  });
+  it("a legacy top-level `max_thinking_tokens` gets a targeted removal hint, not an opaque schema error", () => {
+    expect(() => loadSession({ max_thinking_tokens: 8000 })).toThrow(/max_thinking_tokens.*removed/s);
+    expect(() => loadSession({ max_thinking_tokens: 8000 })).toThrow(/extended_thinking/);
+    expect(() => loadSession({ max_thinking_tokens: 8000 })).toThrow(/debug\.max_thinking_tokens/);
   });
 });
 
@@ -242,21 +252,28 @@ describe("buildLaunchPlan", () => {
     expect(Object.keys(settings.extraKnownMarketplaces)).toEqual(["m"]);
   });
 
-  it("maps model/effort/permission/max-thinking-tokens", () => {
+  it("maps model/effort/permission/extended-thinking", () => {
     const { plan: p } = plan({
       model: "claude-opus-4-8",
       effort: "high",
-      max_thinking_tokens: { "claude-opus-4-8": 50000, default: 12000 },
+      extended_thinking: false,
       permission_mode: "acceptEdits",
     });
     expect(p.model).toBe("claude-opus-4-8");
     expect(p.permissionMode).toBe("acceptEdits");
-    // effort/thinking are plan fields (passed as CLI flags / non-zero env at L1/L2),
-    // NOT baseEnv vars (CLAUDE_EFFORT is a no-op; MAX_THINKING_TOKENS is never 0).
+    // effort/thinking are plan fields, passed as CLI flags at L1/L2 — NOT baseEnv vars (CLAUDE_EFFORT
+    // is a no-op; real Cowork sets no MAX_THINKING_TOKENS env, only the --max-thinking-tokens/--thinking
+    // flag).
     expect(p.effort).toBe("high");
-    // the session's thinking budget reaches the plan (resolved per-model in spawnEnv via f7e).
-    expect(p.maxThinkingTokens).toEqual({ "claude-opus-4-8": 50000, default: 12000 });
+    expect(p.extendedThinking).toBe(false);
+    expect(p.debugMaxThinkingTokens).toBeUndefined();
     expect(p.baseEnv.MAX_THINKING_TOKENS).toBeUndefined();
+  });
+
+  it("resolves the fenced debug.max_thinking_tokens escape hatch onto the plan", () => {
+    const { plan: p } = plan({ debug: { max_thinking_tokens: 50000 } });
+    expect(p.debugMaxThinkingTokens).toBe(50000);
+    expect(p.extendedThinking).toBe(true); // default ON, independent of the debug override
   });
 
   it("computes the egress allowlist from baseline + session, and honors unrestricted", () => {
@@ -288,6 +305,75 @@ describe("buildLaunchPlan", () => {
     const { plan: p } = plan({});
     expect(p.baseEnv.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
     delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+  });
+});
+
+describe("effort — per-model validation (reasoning-config fidelity, Phase 1)", () => {
+  // The 1.19367.0 baseline carries the full four-class spawn.effortByModel/effortRegexDefault map
+  // (Phase 0); the default test baseline (1.11847.5) predates it and is used for the class-4 checks.
+  const modern = loadBaseline("desktop-1.19367.0");
+  function modernPlan(sessionObj: unknown) {
+    const out = mkdtempSync(join(tmpdir(), "cowork-effort-test-"));
+    return buildLaunchPlan(loadSession(sessionObj), modern, out);
+  }
+
+  it("`extra` normalizes to `xhigh` on the wire (loadSession)", () => {
+    expect(loadSession({ effort: "extra" }).effort).toBe("xhigh");
+    expect(loadSession({ effort: "high" }).effort).toBe("high");
+    expect(loadSession({}).effort).toBeUndefined();
+  });
+
+  it("class 1 (picker model): an offered level is accepted", () => {
+    const p = modernPlan({ model: "claude-opus-4-8", effort: "xhigh" });
+    expect(p.effort).toBe("xhigh");
+  });
+
+  it("class 1 (picker model): a level the model doesn't offer throws, naming the supported levels", () => {
+    // claude-opus-4-6 offers low|medium|high|max — no xhigh.
+    expect(() => modernPlan({ model: "claude-opus-4-6", effort: "xhigh" })).toThrow(
+      /effort "xhigh" is not offered by model "claude-opus-4-6" — supported levels: low, medium, high, max/,
+    );
+  });
+
+  it("class 1: `extra` normalizes to `xhigh` BEFORE per-model validation, so it's still checked against the model's real levels", () => {
+    // claude-opus-4-8 DOES offer xhigh -> accepted once normalized.
+    expect(modernPlan({ model: "claude-opus-4-8", effort: "extra" }).effort).toBe("xhigh");
+    // claude-opus-4-6 does NOT -> still throws (naming xhigh, not "extra").
+    expect(() => modernPlan({ model: "claude-opus-4-6", effort: "extra" })).toThrow(/effort "xhigh" is not offered by model/);
+  });
+
+  it("class 2 (no-effort model): an explicit effort is a load-time error", () => {
+    expect(() => modernPlan({ model: "claude-haiku-4-5", effort: "medium" })).toThrow(/model "claude-haiku-4-5" has no effort selector/);
+    expect(() => modernPlan({ model: "claude-sonnet-4-5", effort: "low" })).toThrow(/has no effort selector/);
+  });
+
+  it("class 2 (no-effort model): an OMITTED effort does not throw and resolves to medium at argv emission", () => {
+    const p = modernPlan({ model: "claude-haiku-4-5" });
+    expect(p.effort).toBeUndefined(); // validated-but-unresolved; fallback happens in argv.ts/protocol.ts
+    const args = agentArgs(modern, p, { mntRoot: "/sessions/x/mnt" });
+    expect(args[args.indexOf("--effort") + 1]).toBe("medium");
+  });
+
+  it("class 3 (regex-default, fable/mythos family): validates against the regex-default's levels", () => {
+    expect(modernPlan({ model: "claude-fable-1", effort: "max" }).effort).toBe("max");
+    expect(modernPlan({ model: "mythos-2", effort: "high" }).effort).toBe("high");
+    expect(() => modernPlan({ model: "claude-fable-1", effort: "bogus" as any })).toThrow(); // Zod rejects a non-enum token first
+  });
+
+  it("class 4 (unknown model id): any of the six tokens passes through with no per-model check", () => {
+    expect(modernPlan({ model: "some-future-model", effort: "max" }).effort).toBe("max");
+    expect(modernPlan({ model: "some-future-model", effort: "low" }).effort).toBe("low");
+  });
+
+  it("class 4 (model omitted): any of the six tokens passes through, no throw", () => {
+    expect(modernPlan({ effort: "xhigh" }).effort).toBe("xhigh");
+  });
+
+  it("--effort is ALWAYS emitted, falling back to the baseline's medium default when unset", () => {
+    const noEffort = modernPlan({});
+    const args = agentArgs(modern, noEffort, { mntRoot: "/sessions/x/mnt" });
+    expect(args).toContain("--effort");
+    expect(args[args.indexOf("--effort") + 1]).toBe("medium");
   });
 });
 

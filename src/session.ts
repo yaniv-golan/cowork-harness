@@ -58,18 +58,25 @@ const Folder = z.object({
 export const SessionConfig = z.strictObject({
   // --- model & reasoning (Cowork model picker + toggles) ---
   model: z.string().optional(), // setModel
-  effort: z.enum(["low", "medium", "high", "xhigh"]).optional(), // setEffort
+  // setEffort. Accepts the 6-token superset (the 5 real Cowork levels plus `extra`, the UI label for
+  // `xhigh`) — the schema does ONLY the accept here (a Zod `.transform` can't be represented in the
+  // generated JSON schema, so the `extra` -> `xhigh` wire normalization happens in `loadSession`, the
+  // single entry point every session-loading call site funnels through). NO per-model check here: that
+  // runs in `buildLaunchPlan` (see `validateEffort`), where the RESOLVED model is available
+  // (`applySessionOverrides` rewrites `model` post-parse, so parse-time validation would check the wrong
+  // model in a matrix run). Omitted -> resolved to the baseline's medium fallback at argv emission time
+  // (real Cowork always emits `--effort`, never omits it).
+  effort: z.enum(["low", "medium", "high", "xhigh", "max", "extra"]).optional(),
   // Rendered into the prompt append's <env> "User name:" line ({{accountName}}, >=1.18286.0
   // reconstruction). Real Cowork uses the signed-in account's name; default "User".
   account_name: z.string().optional(),
-  // Thinking budget. Binary-verified against app.asar 1.12603.1: Cowork's config field is
-  // `maxThinkingTokens` — a flat NUMBER or a per-model map `{ default, <model>: <n> }` — resolved
-  // per-model by f7e() and emitted on BOTH channels: the `--max-thinking-tokens` CLI flag (agentArgs)
-  // and the `MAX_THINKING_TOKENS` env (spawnEnv). The ELF honors the env and env wins, so the
-  // two agree. There is NO "extended thinking" boolean; DEFAULT_MAX_THINKING_TOKENS (hre) = 31999.
-  // A positive integer (or a per-model map of them) — reject 0 / negative, which would
-  // contradict the "never 0" budget invariant if it reached the CLI flag / env.
-  max_thinking_tokens: z.union([z.number().int().positive(), z.record(z.string(), z.number().int().positive())]).optional(),
+  // Extended thinking. Binary-verified against app.asar 1.19367.0: Cowork's real control is a BOOLEAN
+  // toggle — `setExtendedThinking(sessionId, enabled: boolean)` — not a numeric budget. ON resolves to
+  // the fixed `DEFAULT_MAX_THINKING_TOKENS` budget (31999); OFF disables thinking outright
+  // (`--thinking disabled`). No code path in real Cowork ever produces an arbitrary N — it's always
+  // 31999-or-0. Default ON (matches Cowork's own default). See `debug.max_thinking_tokens` below for a
+  // fenced, non-Cowork way to emit an arbitrary budget.
+  extended_thinking: z.boolean().default(true).describe("real Cowork on/off toggle for extended thinking; default true (ON)"),
   // Agent turn budget → the `--max-turns` CLI flag (verified supported by the staged agent binary:
   // "Maximum number of agentic turns in non-interactive mode"). RAISES the ceiling for a heavy
   // multi-step/subagent workflow. NAMED DISTINCTLY from the `max_turns` ASSERTION (a post-hoc upper-bound
@@ -77,7 +84,6 @@ export const SessionConfig = z.strictObject({
   // → no flag passed → the agent inherits its own default (faithful: real Cowork passes no --max-turns for
   // an interactive session, only scheduled tasks default to 100).
   agent_max_turns: z.number().int().positive().optional(),
-  extended_thinking: z.boolean().optional().describe("Inert / no-op — not a real Cowork toggle. Use max_thinking_tokens instead."), // inert: not a real Cowork toggle — use max_thinking_tokens.
   permission_mode: z.enum(["default", "acceptEdits", "plan", "bypassPermissions"]).default("default"), // setPermissionMode
   // cowork = pre-approve built-ins (like real Cowork's allowedTools) + auto-allow unscripted
   // tools with a finding; strict = deny unmatched (for adversarial tests).
@@ -145,6 +151,21 @@ export const SessionConfig = z.strictObject({
       hash_ignore: z.array(z.string().min(1)).default([]),
     })
     .default({ hash_ignore: [] }),
+
+  // --- fenced debug escape hatches (NOT reachable via Cowork's UI) ---
+  // A run authored with any `debug.*` field does NOT represent a real Cowork config — kept in its own
+  // fenced, self-labeling group so it can never be mistaken for a faithful setting. Use only for targeted
+  // local testing (e.g. probing an out-of-band thinking budget); prefer `extended_thinking` for anything
+  // meant to model real Cowork behavior.
+  debug: z
+    .object({
+      // Overrides the emitted `--max-thinking-tokens <N>` budget directly, bypassing `extended_thinking`'s
+      // on(31999)/off boundary. Real Cowork never emits any budget besides 31999, or (via `--thinking
+      // disabled`) none at all — this exists purely as a harness-only escape hatch. Rejects 0/negative
+      // (a non-positive budget has no real meaning for the flag).
+      max_thinking_tokens: z.number().int().positive().optional(),
+    })
+    .default({}),
 });
 export type SessionConfig = z.infer<typeof SessionConfig> & {
   /** Resolved-only, never authored: a map from each RESOLVED `remote_plugins` path to the synthetic mount id
@@ -184,8 +205,18 @@ export interface LaunchPlan {
   configDir: string; // materialized CLAUDE_CONFIG_DIR (host path)
   mcpConfig: string | null; // host path to --mcp-config file, if any
   model?: string;
+  // Already validated against the resolved model's per-model config (see `validateEffort`) but NOT
+  // yet resolved to the medium fallback — that resolution is the runtime layer's job (argv.ts/protocol.ts),
+  // sourced from the baseline's `spawn.effortDefault`, so there is one fallback site, not one per plan field.
   effort?: string;
-  maxThinkingTokens?: number | Record<string, number>; // session thinking budget (resolved per-model in spawnEnv)
+  // extended_thinking, resolved (schema defaults it true). Optional here (undefined ⇒ the runtime layer
+  // treats it as ON, matching Cowork's own default) only so a LaunchPlan literal built directly in a test
+  // doesn't need to set it — buildLaunchPlan always carries a concrete boolean from the session field.
+  extendedThinking?: boolean;
+  // The fenced, non-Cowork `debug.max_thinking_tokens` override. When set, ALWAYS wins over
+  // `extendedThinking` and emits `--max-thinking-tokens <N>` verbatim — real Cowork has no such
+  // per-run override; a plan carrying this does not represent a real Cowork config.
+  debugMaxThinkingTokens?: number;
   agentMaxTurns?: number; // session turn budget → --max-turns (omitted ⇒ agent default; distinct from the max_turns assertion)
   permissionMode: string;
   permissionParity: "cowork" | "strict";
@@ -277,6 +308,43 @@ function synthRemotePluginId(declaredSource: string): string {
 }
 
 /**
+ * Validate an explicit `effort:` (already `extra`→`xhigh` normalized by Zod) against the RESOLVED
+ * model's per-model config in the baseline's `spawn` map — fail loud, per Cowork's four model classes
+ * (real Cowork ALWAYS emits `--effort`, falling back to `medium` when nothing is set; that fallback
+ * resolution happens in the runtime layer, not here — this function only validates an EXPLICIT value):
+ *
+ *   1. In `effortByModel` WITH `effortLevels` (a picker model, e.g. claude-opus-4-8): an explicit
+ *      `effort:` must be one of that model's offered levels, else throw naming them.
+ *   2. In `effortByModel` with NO `effortLevels` (a no-effort model, e.g. claude-haiku-4-5/
+ *      claude-sonnet-4-5 — no picker in the UI at all): an explicit `effort:` is itself the error.
+ *   3. Not in the literal map but matching `effortRegexDefault.pattern` (the fable/mythos regex-default
+ *      class): validate against its `effortLevels`.
+ *   4. Unknown model id, or no model declared: no per-model set to validate against — any of the six
+ *      accepted tokens (already normalized to five) passes through untouched.
+ */
+function validateEffort(effort: string | undefined, model: string | undefined, baseline: PlatformBaseline): void {
+  const spawn = baseline.spawn;
+  const entry = model !== undefined ? spawn?.effortByModel?.[model] : undefined;
+  if (entry) {
+    if (entry.effortLevels) {
+      if (effort !== undefined && !entry.effortLevels.includes(effort))
+        throw new Error(`effort "${effort}" is not offered by model "${model}" — supported levels: ${entry.effortLevels.join(", ")}`);
+    } else if (effort !== undefined) {
+      throw new Error(
+        `model "${model}" has no effort selector — omit \`effort:\` (real Cowork always runs it at the medium fallback, with no UI picker)`,
+      );
+    }
+    return;
+  }
+  const regexDefault = spawn?.effortRegexDefault;
+  if (model !== undefined && regexDefault && new RegExp(regexDefault.pattern).test(model)) {
+    if (effort !== undefined && !regexDefault.effortLevels.includes(effort))
+      throw new Error(`effort "${effort}" is not offered by model "${model}" — supported levels: ${regexDefault.effortLevels.join(", ")}`);
+  }
+  // else: class 4 (unknown model id, or no model declared) — accept any of the six tokens, no throw.
+}
+
+/**
  * Materialize the session into a launch plan: builds a clean CLAUDE_CONFIG_DIR
  * (settings.json with enabledPlugins / enabledMcpjsonServers / plugin_marketplaces),
  * stages skills + plugins, and computes mounts + flags. Because the agent we run
@@ -292,6 +360,10 @@ export function buildLaunchPlan(
   // its resume flag here (set after the plan is built today, so it must be a param, not `plan.resume`).
   resume = false,
 ): LaunchPlan {
+  // Fail loud before any staging side effect: an `effort:` the resolved model doesn't offer (or an
+  // explicit `effort:` on a no-picker model) is a load-time config error, not a silent coercion.
+  validateEffort(session.effort, session.model, baseline);
+
   // Launch-time `~` expansion ONLY — leaves relative/absolute paths untouched so downstream mount-name
   // derivation still sees the authored basename (e.g. a trailing `..` must stay `..` to be rejected).
   // (Distinct from expandUserPath, which also resolves relative paths against cwd — wrong here.)
@@ -726,19 +798,13 @@ export function buildLaunchPlan(
     .filter((m) => m.kind === "local-plugin" || m.kind === "remote-plugin" || m.kind === "marketplace-plugin")
     .map((m) => m.mountPath);
 
-  if (session.extended_thinking !== undefined) {
-    warn(
-      "::warning:: [session] `extended_thinking` is deprecated and inert — Cowork has no such toggle. " +
-        "Use `max_thinking_tokens` (a number or per-model map; default 31999) instead.\n",
-    );
-  }
-
   return {
     configDir,
     mcpConfig: session.mcp.config ? expand(session.mcp.config) : null,
     model: session.model,
     effort: session.effort,
-    maxThinkingTokens: session.max_thinking_tokens,
+    extendedThinking: session.extended_thinking,
+    debugMaxThinkingTokens: session.debug.max_thinking_tokens,
     agentMaxTurns: session.agent_max_turns,
     permissionMode: session.permission_mode,
     permissionParity: session.permission_parity,
@@ -749,9 +815,23 @@ export function buildLaunchPlan(
   };
 }
 
-/** Load + validate a session baseline from a YAML/JSON file. */
+/** Load + validate a session baseline from a YAML/JSON file. Normalizes `effort: extra` (the UI label
+ *  for `xhigh`) to `xhigh` on the wire — done here rather than as a Zod `.transform` on the field itself
+ *  because a transform can't be represented in the generated JSON schema (see the `effort` field comment). */
 export function loadSession(parsed: unknown): SessionConfig {
-  return SessionConfig.parse(parsed);
+  // A removed field surfaces only as `SessionConfig` (a `strictObject`) rejecting an unrecognized key —
+  // an opaque generic error for a session YAML authored against an older schema. Give it a targeted,
+  // actionable hint instead of letting the bare Zod error stand alone.
+  if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) && "max_thinking_tokens" in parsed) {
+    throw new Error(
+      "`max_thinking_tokens` removed — use `extended_thinking` (boolean; default true/ON) for the real Cowork " +
+        "toggle, or the fenced `debug.max_thinking_tokens` escape hatch for a raw numeric override (not reachable " +
+        "via Cowork's UI; a run authored with it does not represent a real Cowork config).",
+    );
+  }
+  const session = SessionConfig.parse(parsed);
+  if ((session.effort as string | undefined) === "extra") return { ...session, effort: "xhigh" };
+  return session;
 }
 
 /**

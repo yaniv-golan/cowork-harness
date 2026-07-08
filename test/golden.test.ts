@@ -89,12 +89,33 @@ describe("golden — container (VM-loop)", () => {
     expect(lastFlag(args)).toMatch(/--tools|--allowedTools/);
   });
 
+  it("extended thinking: default plan (extendedThinking unset) emits --max-thinking-tokens 31999 (ON)", () => {
+    expect(args[args.indexOf("--max-thinking-tokens") + 1]).toBe("31999");
+    expect(args).not.toContain("--thinking");
+  });
+
+  it("extended thinking: extendedThinking:false emits --thinking disabled, no budget flag", () => {
+    const off = agentArgs(baseline, plan({ extendedThinking: false }), { mntRoot });
+    expect(off[off.indexOf("--thinking") + 1]).toBe("disabled");
+    expect(off).not.toContain("--max-thinking-tokens");
+  });
+
+  it("extended thinking: debugMaxThinkingTokens ALWAYS wins over the boolean, on OR off", () => {
+    const debugOn = agentArgs(baseline, plan({ extendedThinking: true, debugMaxThinkingTokens: 8000 }), { mntRoot });
+    expect(debugOn[debugOn.indexOf("--max-thinking-tokens") + 1]).toBe("8000");
+    const debugOff = agentArgs(baseline, plan({ extendedThinking: false, debugMaxThinkingTokens: 50000 }), { mntRoot });
+    expect(debugOff[debugOff.indexOf("--max-thinking-tokens") + 1]).toBe("50000");
+    expect(debugOff).not.toContain("--thinking");
+  });
+
   it("SPEC §9 env invariants", () => {
     const env = spawnEnv(baseline, { configGuest, proxyHost: "P" });
     expect(env.CLAUDE_CONFIG_DIR).toBe(configGuest);
     expect(env.CLAUDE_CODE_IS_COWORK).toBe("1");
     expect(env.CLAUDE_CODE_USE_COWORK_PLUGINS).toBeUndefined(); // never set
-    expect(env.MAX_THINKING_TOKENS).toBe("31999"); // never 0
+    // real Cowork sets NO MAX_THINKING_TOKENS env — extended thinking is delivered as a CLI flag only
+    // (--max-thinking-tokens / --thinking disabled, see the agentArgs snapshot above).
+    expect(env.MAX_THINKING_TOKENS).toBeUndefined();
     expect(env.CLAUDE_CODE_HOST_PLATFORM).toBe(process.platform); // win32|darwin|linux, ELF-validated
   });
 });

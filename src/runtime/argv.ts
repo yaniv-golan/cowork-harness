@@ -31,6 +31,10 @@ export function baseAgentArgs(
   opts: { mntRoot: string; mcpGuest?: string; systemPromptAppend?: string; disallowed?: string[]; extraTools?: string[] },
 ): string[] {
   const spawn = baseline.spawn;
+  // Real Cowork ALWAYS emits `--effort`, for every model class (picker, no-picker, regex-default,
+  // unknown) — falling back to the baseline's synced medium default when the session left it unset
+  // (per-model validation of an EXPLICIT value already ran in buildLaunchPlan's validateEffort; the
+  // trailing "medium" only guards a baseline synced before `spawn.effortDefault` existed).
   const effort = plan.effort ?? spawn?.effortDefault ?? "medium";
   const tools = [...(spawn?.tools ?? []).filter(notIn(opts.disallowed)), ...(opts.extraTools ?? [])];
   const allowed = [...(spawn?.allowedTools ?? []).filter(notIn(opts.disallowed)), ...(opts.extraTools ?? [])];
@@ -52,12 +56,12 @@ export function baseAgentArgs(
     (spawn?.settingSources ?? ["user"]).join(","),
     "--effort",
     effort,
-    // Emit the thinking budget as a CLI flag too (channel fidelity — Cowork passes it). The ELF ALSO
-    // honors the MAX_THINKING_TOKENS env (set in spawnEnv) and env wins (binary-verified), so both
-    // channels carry the same resolved value. Kept among the FIXED flags so the variadic
+    // Extended thinking — a CLI FLAG ONLY (real Cowork sets no MAX_THINKING_TOKENS env; the SDK option
+    // maps straight to the flag). `debugMaxThinkingTokens` (the fenced, non-Cowork escape hatch) ALWAYS
+    // wins when set; otherwise the boolean resolves to the fixed 31999-or-disabled budget, matching
+    // Cowork's own "no arbitrary N" invariant. Kept among the FIXED flags so the variadic
     // --tools/--allowedTools stay last (golden invariant).
-    "--max-thinking-tokens",
-    String(resolveMaxThinkingTokens(plan.maxThinkingTokens, plan.model, spawn?.maxThinkingTokens ?? DEFAULT_MAX_THINKING_TOKENS)),
+    ...thinkingArgs(plan.extendedThinking, plan.debugMaxThinkingTokens),
     // Agent turn budget — emitted ONLY when the session opts in (`agent_max_turns`). Omitted by default so
     // the agent inherits its own turn ceiling (fidelity: real Cowork passes no --max-turns for interactive
     // sessions). The flag is verified supported by the staged agent binary.
@@ -91,41 +95,29 @@ export function agentArgs(baseline: PlatformBaseline, plan: LaunchPlan, opts: Ag
 }
 
 /**
- * Resolve the thinking-token budget. Faithful port of Cowork's `f7e` resolver
- * (binary-verified, app.asar 1.12603.1):
- *   function f7e(A,e){return typeof A=="number"?A : e&&e in A ? A[e] : A.default??hre}   // hre=31999
- * `value` = the session's `max_thinking_tokens` (a flat number or a per-model map), `model` = the
- * model id, `fallback` = the baseline default (synced `maxThinkingTokens`, = DEFAULT_MAX_THINKING_TOKENS).
+ * Resolve the extended-thinking CLI flag(s) — faithful port of Cowork's boolean resolver (binary-verified,
+ * app.asar 1.19367.0): `zgi(e,t,r){return e ?? t ?? !r ? NX : 0}` (`NX` = `DEFAULT_MAX_THINKING_TOKENS` =
+ * 31999) → the SDK maps a 0 budget to `{type:"disabled"}` and a positive one to
+ * `{type:"enabled",budgetTokens:N}`, which become `--thinking disabled` / `--max-thinking-tokens <N>`.
+ * There is no arbitrary N in real Cowork — `debugOverride` (the fenced, non-Cowork `debug.max_thinking_tokens`
+ * escape hatch) is the ONLY way this harness emits one, and it ALWAYS wins over `extendedThinking` when set.
  */
-export function resolveMaxThinkingTokens(
-  value: number | Record<string, number> | undefined,
-  model: string | undefined,
-  fallback: number,
-): number {
-  // Defense-in-depth — resolve, then reject a non-positive budget (the schema enforces positive
-  // for YAML, but this guards any other caller/path). "Never 0" is a hard invariant.
-  const resolved =
-    value === undefined
-      ? fallback
-      : typeof value === "number"
-        ? value
-        : model && model in value
-          ? value[model]
-          : (value.default ?? fallback);
-  if (!Number.isInteger(resolved) || resolved <= 0) throw new Error(`max_thinking_tokens must be a positive integer (got ${resolved})`);
-  return resolved;
+export function thinkingArgs(extendedThinking: boolean | undefined, debugOverride: number | undefined): string[] {
+  if (debugOverride !== undefined) return ["--max-thinking-tokens", String(debugOverride)];
+  return (extendedThinking ?? true) ? ["--max-thinking-tokens", String(DEFAULT_MAX_THINKING_TOKENS)] : ["--thinking", "disabled"];
 }
 
-/** The spawn env object. `extra` carries runtime-provided values (auth, TZ, CLAUDE_PLUGIN_ROOT). */
+/** The spawn env object. `extra` carries runtime-provided values (auth, TZ, CLAUDE_PLUGIN_ROOT). Extended
+ *  thinking is NOT delivered here — real Cowork sets no `MAX_THINKING_TOKENS` env; the SDK maps its
+ *  `maxThinkingTokens` option straight to the `--max-thinking-tokens` / `--thinking disabled` CLI flag
+ *  (see `thinkingArgs`), so the flag is the sole channel. */
 export function spawnEnv(
   baseline: PlatformBaseline,
-  opts: { configGuest: string; proxyHost: string; extra?: Record<string, string>; maxThinkingTokens?: number },
+  opts: { configGuest: string; proxyHost: string; extra?: Record<string, string> },
 ): Record<string, string> {
   return {
     ...(baseline.spawn?.env ?? { CLAUDE_CODE_IS_COWORK: "1" }),
     CLAUDE_CONFIG_DIR: opts.configGuest,
-    // Session override (resolved per-model) wins; else the synced baseline default (hre=31999). Never 0.
-    MAX_THINKING_TOKENS: String(opts.maxThinkingTokens ?? baseline.spawn?.maxThinkingTokens ?? DEFAULT_MAX_THINKING_TOKENS),
     HOME: "/tmp",
     HTTP_PROXY: opts.proxyHost,
     HTTPS_PROXY: opts.proxyHost,
@@ -154,7 +146,6 @@ export function hostNativeSpawnEnv(
   opts: {
     configDir: string;
     extra?: Record<string, string>;
-    maxThinkingTokens?: number;
     // Real HOST filesystem paths of currently-connected folders (Mount[] filtered to kind==="folder"),
     // not guest/mnt paths — hostloop is the only spawn tier where the agent process runs natively
     // against the real host tree, so it's the only tier where these are meaningful to emit.
@@ -164,7 +155,10 @@ export function hostNativeSpawnEnv(
   return {
     ...(baseline.spawn?.env ?? { CLAUDE_CODE_IS_COWORK: "1" }),
     CLAUDE_CONFIG_DIR: opts.configDir,
-    MAX_THINKING_TOKENS: String(opts.maxThinkingTokens ?? baseline.spawn?.maxThinkingTokens ?? DEFAULT_MAX_THINKING_TOKENS),
+    // NO MAX_THINKING_TOKENS — see spawnEnv's doc comment; the flag (thinkingArgs) is the sole channel.
+    // The caller (hostloop.ts) additionally STRIPS any inherited host MAX_THINKING_TOKENS from this
+    // process's `...process.env` base before spawning, so a stray host value can't silently override
+    // the flag (env would otherwise win were the ELF to still read it — belt-and-suspenders).
     // Binary-verified (asar @12472288): same host-platform identity var as the container spawn env.
     CLAUDE_CODE_HOST_PLATFORM: process.platform,
     // Binary-verified (asar @12473150): production sets this only when connected folders are present

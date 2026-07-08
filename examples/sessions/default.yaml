@@ -5,9 +5,14 @@
 # --- model & reasoning (Cowork model picker + toggles) ---
 model: claude-opus-4-8 # setModel; omit to use the agent default
 effort: high # setEffort: low | medium | high | xhigh
-max_thinking_tokens: 8000 # kept low for example cost; real default 31999 (see docs/session.md); the boolean thinking toggle is inert
+extended_thinking: true # real Cowork on/off toggle; default true (ON) -- see docs/session.md
 permission_mode: default # setPermissionMode: default | acceptEdits | plan | bypassPermissions
 permission_parity: cowork # cowork (allow unscripted tool calls, Cowork default) | strict (deny unscripted)
+
+# --- fenced debug escape hatch (NOT reachable via Cowork's UI) ---
+debug:
+  max_thinking_tokens: 8000 # kept low for EXAMPLE cost only -- bypasses extended_thinking's on(31999)/off
+                            # boundary; real Cowork never emits this value (see docs/session.md)
 
 # --- work folders (Cowork "add folder" / Spaces) -> mnt/<name> (>=1.14271.0) or mnt/.projects/<name> (legacy) ---
 # The mount name is ALWAYS derived (collision-resolved basename of the folder, matching real Cowork) —

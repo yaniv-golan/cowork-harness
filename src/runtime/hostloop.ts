@@ -4,7 +4,6 @@ import { appendFileSync, readFileSync, existsSync, readdirSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { PlatformBaseline, Scenario } from "../types.js";
-import { DEFAULT_MAX_THINKING_TOKENS } from "../types.js";
 import type { LaunchPlan, Mount } from "../session.js";
 import { resolveMounts, resolveAgentBinary, resolveHostAgentBinary, cmpVersionStrings, MOUNT_BARE_NAME_MIN_VERSION } from "../baseline.js";
 import { generateHostLoopShellSection } from "./hostloop-prompt.js";
@@ -17,7 +16,7 @@ import { generateHostLoopShellSection } from "./hostloop-prompt.js";
  */
 const HOSTLOOP_DYNAMIC_PROMPT_MIN_VERSION = MOUNT_BARE_NAME_MIN_VERSION;
 import { makeWorkspaceHandler, type McpHandler, type EgressEntry, type WebFetchProvenance } from "../hostloop/workspace-handler.js";
-import { baseAgentArgs, hostNativeSpawnEnv, dockerRunArgv, resolveMaxThinkingTokens } from "./argv.js";
+import { baseAgentArgs, hostNativeSpawnEnv, dockerRunArgv } from "./argv.js";
 import { runtimeAuthEnv } from "./host-env.js";
 import { resolveHostLoopBindMounts, stageHostLoopWorkspace } from "./hostloop-stage.js";
 import { capturePreRunManifest } from "../run/pre-run-manifest.js";
@@ -26,6 +25,26 @@ import type { HookBundle } from "../agent/session.js";
 import { stripComments } from "../prompt.js";
 
 const HOSTLOOP_PATH_GATE_ID = "hostloop-path-gate";
+
+/**
+ * Pure builder for the hostloop native process's env: `hostNativeSpawnEnv`'s contract-layer output
+ * layered over this REAL macOS process's own `...process.env` base (unlike container/microvm, which
+ * spawn into a container with an explicit `-e KEY[=value]` allowlist — see dockerRunArgv — this process
+ * inherits the operator's whole shell env). Real Cowork never sets `MAX_THINKING_TOKENS` (the
+ * `--max-thinking-tokens`/`--thinking disabled` flag is the sole delivery channel — see
+ * `hostNativeSpawnEnv`'s doc comment); a stray host `MAX_THINKING_TOKENS` already in the operator's shell
+ * would otherwise leak straight through `...process.env` and — were the ELF to still read the env —
+ * silently outrank the flag. Strip it explicitly. Extracted from `spawnHostLoop` so this env-construction
+ * step is unit-testable without spawning anything.
+ */
+export function buildHostLoopNativeEnv(baseline: PlatformBaseline, opts: Parameters<typeof hostNativeSpawnEnv>[1]): NodeJS.ProcessEnv {
+  const nativeEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    ...hostNativeSpawnEnv(baseline, opts),
+  };
+  delete nativeEnv.MAX_THINKING_TOKENS;
+  return nativeEnv;
+}
 
 /**
  * HOST-LOOP runtime — reproduces Cowork's REAL host-loop architecture: the agent LOOP is a native macOS
@@ -99,12 +118,6 @@ export function spawnHostLoop(
     .filter(Boolean)
     .join("\n\n");
 
-  const maxThinkingTokens = resolveMaxThinkingTokens(
-    plan.maxThinkingTokens,
-    plan.model,
-    baseline.spawn?.maxThinkingTokens ?? DEFAULT_MAX_THINKING_TOKENS,
-  );
-
   // The native process's argv reuses baseAgentArgs (the SAME pure contract layer container/microvm
   // use) but with HOST paths for the two guest-relative params: `mntRoot: mntHost` makes every
   // `--plugin-dir` a real host path to the staged copy, and `mcpGuest: mcpHostPath` makes
@@ -117,17 +130,13 @@ export function spawnHostLoop(
     extraTools: ["mcp__workspace__bash", "mcp__workspace__web_fetch"],
   });
   const hostOutputsDir = join(mntHost, "outputs");
-  const nativeEnv: NodeJS.ProcessEnv = {
-    ...process.env,
-    ...hostNativeSpawnEnv(baseline, {
-      configDir: plan.configDir,
-      extra: { CLAUDE_PLUGIN_ROOT: claudePluginRootHost ?? "", ...runtimeAuthEnv() },
-      maxThinkingTokens,
-      // Real host paths of connected folders (never staged copies) — the only spawn tier where these
-      // are meaningful, since container/microvm folders are staged as copies with no real host path.
-      folderHostPaths: plan.mounts.filter((mt) => mt.kind === "folder").map((mt) => mt.hostPath),
-    }),
-  };
+  const nativeEnv = buildHostLoopNativeEnv(baseline, {
+    configDir: plan.configDir,
+    extra: { CLAUDE_PLUGIN_ROOT: claudePluginRootHost ?? "", ...runtimeAuthEnv() },
+    // Real host paths of connected folders (never staged copies) — the only spawn tier where these
+    // are meaningful, since container/microvm folders are staged as copies with no real host path.
+    folderHostPaths: plan.mounts.filter((mt) => mt.kind === "folder").map((mt) => mt.hostPath),
+  });
 
   // The PreToolUse path-containment gate config. hostCwd = the harness-owned outputs dir (production's
   // `hostCwd = getOutputsDir(e)`); scratchRoots = [hostCwd] (hostCwd and hostOutputsDir are the SAME dir

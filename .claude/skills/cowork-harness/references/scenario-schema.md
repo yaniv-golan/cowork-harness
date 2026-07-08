@@ -91,11 +91,20 @@ session = your setup.**
 model: claude-opus-4-8           # omit for the agent default
 account_name: my-account         # OPTIONAL — display name rendered into {{accountName}} / the prompt's
                                     # "User name:" line; NOT a credential/identity selector (see src/prompt.ts, docs/session.md)
-effort: high                     # low | medium | high | xhigh
-max_thinking_tokens: 31999       # positive int, or per-model map {default, <model>: <n>}; default 31999
-extended_thinking: true          # INERT — not a real Cowork toggle; use max_thinking_tokens instead
+effort: high                     # low | medium | high | xhigh | max (+ extra, normalized to xhigh); validated against
+                                  # the resolved model's offered levels (docs/session.md); omit for Cowork's medium
+                                  # fallback — real Cowork always emits --effort, never omits it
+extended_thinking: true          # real Cowork on/off toggle; default true (ON) -> --max-thinking-tokens 31999,
+                                  # or --thinking disabled when false (no arbitrary budget in real Cowork)
 permission_mode: default         # default | acceptEdits | plan | bypassPermissions
 permission_parity: cowork        # cowork (unscripted tool calls allowed) | strict (deny unscripted)
+
+# fenced debug escape hatch (NOT reachable via Cowork's UI)
+debug:
+  max_thinking_tokens: 50000     # overrides --max-thinking-tokens directly; bypasses extended_thinking's
+                                  # on(31999)/off boundary — a run with this does NOT represent a real Cowork config
+                                  # (removed: the old numeric/per-model `max_thinking_tokens` field — a session
+                                  # YAML that still sets it fails to load with a targeted removal hint)
 
 # work folders / uploads  → mnt/<folder-name>, mnt/uploads/<basename>
 #   (mount name = collision-resolved folder basename; ≥1.14271.0, older baselines use mnt/.projects/<id>)

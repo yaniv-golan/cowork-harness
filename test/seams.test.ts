@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { createHash } from "node:crypto";
 import type { AgentEvent, AgentSession, DecisionRequest, DecisionResponse } from "../src/agent/session.js";
 import { serializeDecision, deserializeDecision, canon, parseMessage } from "../src/agent/session.js";
@@ -19,7 +19,8 @@ import {
 import { Run } from "../src/run/run.js";
 import { replayCassette } from "../src/run/cassette.js";
 import { microvmAgentArgs } from "../src/runtime/microvm.js";
-import { resolveMaxThinkingTokens } from "../src/runtime/argv.js";
+import { thinkingArgs, spawnEnv } from "../src/runtime/argv.js";
+import { loadBaseline } from "../src/baseline.js";
 import { executeScenario } from "../src/run/execute.js";
 import { Scenario } from "../src/types.js";
 import type { DecisionChannel } from "../src/decide/external-channel.js";
@@ -1990,24 +1991,53 @@ describe("microvmAgentArgs — session persistence", () => {
   });
 });
 
-describe("resolveMaxThinkingTokens — Cowork f7e port (binary-verified)", () => {
-  const FALLBACK = 31999; // baseline default = DEFAULT_MAX_THINKING_TOKENS (hre)
+describe("thinkingArgs — Cowork's boolean extended-thinking resolver (binary-verified, 1.19367.0)", () => {
+  it("ON (true) emits --max-thinking-tokens 31999", () => {
+    expect(thinkingArgs(true, undefined)).toEqual(["--max-thinking-tokens", "31999"]);
+  });
+  it("undefined defaults to ON (matches Cowork's own default)", () => {
+    expect(thinkingArgs(undefined, undefined)).toEqual(["--max-thinking-tokens", "31999"]);
+  });
+  it("OFF (false) emits --thinking disabled, never a budget", () => {
+    expect(thinkingArgs(false, undefined)).toEqual(["--thinking", "disabled"]);
+  });
+  it("the fenced debug override ALWAYS wins, regardless of the boolean", () => {
+    expect(thinkingArgs(true, 8000)).toEqual(["--max-thinking-tokens", "8000"]);
+    expect(thinkingArgs(false, 50000)).toEqual(["--max-thinking-tokens", "50000"]);
+    expect(thinkingArgs(undefined, 1)).toEqual(["--max-thinking-tokens", "1"]);
+  });
+});
 
-  it("returns the baseline fallback when unset (goldens unchanged)", () => {
-    expect(resolveMaxThinkingTokens(undefined, "claude-opus-4-8", FALLBACK)).toBe(31999);
+// B2 — the hostloop leak: hostloop merges `{...process.env, ...hostNativeSpawnEnv(...)}` for a REAL
+// native macOS process (container/microvm spawn into a container with an explicit `-e` allowlist and are
+// immune). Since neither spawnEnv nor hostNativeSpawnEnv sets MAX_THINKING_TOKENS anymore (real Cowork
+// never does — the flag is the sole channel), a stray value already in the operator's shell would
+// otherwise leak straight through untouched. This MUST set process.env.MAX_THINKING_TOKENS to a
+// non-empty value FIRST — an absence check against an already-clean env would false-green even if the
+// strip were missing entirely.
+describe("B2 — MAX_THINKING_TOKENS is absent from every runtime env, even with a stray host var set", () => {
+  const baseline = loadBaseline("desktop-1.12603.1");
+  const prevVal = process.env.MAX_THINKING_TOKENS;
+
+  beforeEach(() => {
+    process.env.MAX_THINKING_TOKENS = "9999";
   });
-  it("uses a flat number directly, regardless of model", () => {
-    expect(resolveMaxThinkingTokens(8000, "claude-opus-4-8", FALLBACK)).toBe(8000);
-    expect(resolveMaxThinkingTokens(8000, undefined, FALLBACK)).toBe(8000);
+  afterEach(() => {
+    if (prevVal === undefined) delete process.env.MAX_THINKING_TOKENS;
+    else process.env.MAX_THINKING_TOKENS = prevVal;
   });
-  it("uses the per-model entry when the model matches", () => {
-    expect(resolveMaxThinkingTokens({ "claude-opus-4-8": 50000, default: 12000 }, "claude-opus-4-8", FALLBACK)).toBe(50000);
+
+  it("container/microvm's spawnEnv never carries it", () => {
+    expect(process.env.MAX_THINKING_TOKENS).toBe("9999"); // sanity: the stray var really is set
+    const env = spawnEnv(baseline, { configGuest: "/sessions/T/mnt/.claude", proxyHost: "http://proxy:8080" });
+    expect(env.MAX_THINKING_TOKENS).toBeUndefined();
   });
-  it("falls back to the map's `default` when the model is absent", () => {
-    expect(resolveMaxThinkingTokens({ "claude-sonnet-4-6": 20000, default: 12000 }, "claude-opus-4-8", FALLBACK)).toBe(12000);
-  });
-  it("falls back to the baseline default when the map has neither the model nor `default`", () => {
-    expect(resolveMaxThinkingTokens({ "claude-sonnet-4-6": 20000 }, "claude-opus-4-8", FALLBACK)).toBe(31999);
+
+  it("hostloop's native env explicitly strips an inherited host MAX_THINKING_TOKENS", async () => {
+    expect(process.env.MAX_THINKING_TOKENS).toBe("9999"); // sanity: the stray var really is set
+    const { buildHostLoopNativeEnv } = await import("../src/runtime/hostloop.js");
+    const env = buildHostLoopNativeEnv(baseline, { configDir: "/HOST/CFG" });
+    expect(env.MAX_THINKING_TOKENS).toBeUndefined();
   });
 });
 

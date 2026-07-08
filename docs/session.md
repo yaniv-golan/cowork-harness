@@ -20,12 +20,22 @@ The full schema below documents every field.
 ```yaml
 # ── model & reasoning (Cowork model picker + toggles) ──────────────────────────
 model: claude-opus-4-8           # setModel; omit for the agent default
-effort: high                     # setEffort: low | medium | high | xhigh
-max_thinking_tokens: 31999       # thinking budget: a number, or a per-model map {default, <model>: <n>}; default 31999
+effort: high                     # setEffort: low | medium | high | xhigh | max (+ `extra`, normalized to xhigh) — validated
+                                  # per the resolved model's offered levels (see the field reference below); omit for
+                                  # Cowork's medium fallback (real Cowork always emits --effort, never omits it)
+extended_thinking: true          # real Cowork on/off toggle (setExtendedThinking); default true (ON) -> --max-thinking-tokens
+                                  # 31999, or --thinking disabled when false. No arbitrary budget — always 31999-or-off.
 agent_max_turns: 500             # optional turn ceiling -> agent --max-turns; omit for the agent default (distinct from the max_turns ASSERTION)
 permission_mode: default         # setPermissionMode: default | acceptEdits | plan | bypassPermissions
 permission_parity: cowork        # cowork (unscripted tool calls allowed, Cowork default) | strict (deny unscripted)
 account_name: Ada Lovelace       # {{accountName}} in the prompt append's <env> "User name:" line; default "User" (>=1.18286.0 reconstruction)
+
+# ── fenced debug escape hatch (NOT reachable via Cowork's UI) ────────────────────
+debug:
+  max_thinking_tokens: 50000     # overrides the emitted --max-thinking-tokens budget directly, bypassing
+                                 # extended_thinking's on(31999)/off boundary. A run authored with this does
+                                 # NOT represent a real Cowork config — real Cowork never emits any budget
+                                 # besides 31999 (or no budget, when thinking is off).
 
 # ── work folders / projects (Cowork "add folder" / Spaces) → mnt/<folder-name> ──
 #    (mount name = collision-resolved folder basename; ≥1.14271.0, older baselines use mnt/.projects/<id>)
@@ -110,12 +120,16 @@ that skill instead of the shared root.
 | Field | Type | Cowork control | Notes |
 |---|---|---|---|
 | `model` | string | model picker | e.g. `claude-opus-4-8`. Omit to use the agent default. |
-| `effort` | enum | effort selector | `low` \| `medium` \| `high` \| `xhigh`. Passed as the `--effort` CLI flag (the `CLAUDE_EFFORT` env var is a no-op). |
-| `max_thinking_tokens` | number \| map | thinking budget | a flat **positive integer**, or a per-model map `{ default, <model>: <n> }` of them (0/negative are rejected), resolved per-model (Cowork's `f7e`) and emitted as `MAX_THINKING_TOKENS`. Default `31999` (binary-verified `DEFAULT_MAX_THINKING_TOKENS`). The `extended_thinking` bool is inert — not a real Cowork toggle; use this field. |
+| `effort` | enum | effort selector | Accepts `low` \| `medium` \| `high` \| `xhigh` \| `max` \| `extra` (`extra` is the UI label for `xhigh` — normalized to `xhigh` on load). Validated against the *resolved* model's per-model config in the platform baseline (`spawn.effortByModel` / `spawn.effortRegexDefault`), per Cowork's four model classes: a **picker model** (e.g. `claude-opus-4-8`) must use one of its offered levels, else this is a load-time error naming them; a **no-effort model** (`claude-haiku-4-5`, `claude-sonnet-4-5` — no picker in the Cowork UI at all) rejects an explicit `effort:` outright; a **regex-default model** (the fable/mythos family) validates against that class's levels; an **unrecognized/omitted model** accepts any of the six tokens with no per-model check. Omit `effort:` entirely to get Cowork's flat `medium` fallback (binary-verified: real Cowork always emits `--effort`, defaulting to `medium` rather than the model's UI-only `recommended`, for every class — it never omits the flag). Passed as the `--effort` CLI flag (the `CLAUDE_EFFORT` env var is a no-op). |
+| `extended_thinking` | boolean | extended thinking toggle | Real, honored, **default `true` (ON)** — binary-verified (`setExtendedThinking(sessionId, enabled)`). ON resolves to the fixed `DEFAULT_MAX_THINKING_TOKENS` budget (`31999`) → `--max-thinking-tokens 31999`; OFF → `--thinking disabled`. No arbitrary N — real Cowork is always 31999-or-off. Delivered as a CLI flag only; there is **no** `MAX_THINKING_TOKENS` env in real Cowork. See `debug.max_thinking_tokens` for a fenced, non-Cowork way to emit an arbitrary budget. |
 | `agent_max_turns` | number | turn ceiling | a positive integer → the agent's `--max-turns` (early-exits after N agentic turns). Omit for the agent's own default — faithful to interactive Cowork, which passes no `--max-turns` (only scheduled tasks default to 100). **Distinct from the `max_turns` assertion**, which is a post-hoc upper-bound *check*, not a ceiling *setter*. |
 | `permission_mode` | enum | permission mode | `default` \| `acceptEdits` \| `plan` \| `bypassPermissions` → `--permission-mode`. |
 | `permission_parity` | enum | (harness policy) | `cowork` (default) \| `strict`. `cowork` mirrors Cowork's permission default — unscripted tool calls are allowed; `strict` denies any tool call that no scripted answer / decider covers. Affects the harness `Decider`, not a Cowork control. |
 | `account_name` | string | signed-in account name | Rendered into the prompt append's `<env>` "User name:" line (`{{accountName}}`, ≥1.18286.0 reconstruction). Real Cowork uses the signed-in account's name; defaults to `"User"` when unset. |
+| `debug.max_thinking_tokens` | number | *(none — harness-only escape hatch)* | **NOT reachable via Cowork's UI.** A fenced override that emits `--max-thinking-tokens <N>` verbatim, bypassing `extended_thinking`'s on(31999)/off boundary. A positive integer only (0/negative rejected). A run authored with this does not represent a real Cowork config — use it only for targeted local testing. |
+
+> **Removed:** the old numeric/per-model `max_thinking_tokens` field is gone — a session YAML that still
+> sets it fails to load with a targeted hint pointing at `extended_thinking` / `debug.max_thinking_tokens`.
 
 ### Folders, projects, uploads
 | Field | Maps to | Mounted at |
