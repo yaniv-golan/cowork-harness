@@ -10,9 +10,10 @@ prompt: "My cowork-harness scenario passes on our per-PR CI gate (which uses `co
 assert:
 - semantic_matches:
     rubric:
-    - cowork-harness replay silently skips filesystem assertions like file_exists because they are live-only
-    - With only a file_exists assertion, the replay-based PR gate evaluates nothing and is vacuously green
-    - 'Fix: add a content assertion (e.g. transcript_matches on the report content) that survives replay'
-    - 'Alternative fix: move the file_exists check to a live run/record nightly gate'
-    - The harness warns loudly when an assertion is skipped on replay
-    - The bundled linter would catch this all-assertions-live-only issue
+    - file_exists is satisfied by the path being present in the recorded artifacts manifest, not by the
+      file size or content, so a 0-byte or placeholder outputs/report.md passes exactly like a real one
+    - Whether file_exists is even evaluated on replay depends on the cassette carrying a record-time artifacts
+      manifest (with one it runs against the manifest; a manifest-less cassette skips it rather than failing)
+    - 'The fix is to assert on content rather than mere existence: a content-class assertion (e.g. transcript_contains
+      or transcript_matches on a stable marker) that survives replay and fails on empty output'
+    min_pass: 2
