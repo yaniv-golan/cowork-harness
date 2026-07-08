@@ -64,6 +64,12 @@ export function stageWorkspace(plan: LaunchPlan, mntHost: string): StageResult {
       if (existsSync(mt.hostPath)) {
         const f = mt.stageFilter ?? (gitModeEnabled() ? gitCpFilter(mt.hostPath) : null);
         cpSync(mt.hostPath, dest, { recursive: true, dereference: false, ...(f ? { filter: f } : {}) });
+      } else {
+        // buildLaunchPlan already validated every mount source present (or filtered it out under
+        // COWORK_HARNESS_SOFT_MISSING), so a source absent HERE means it vanished between plan-build
+        // and staging (TOCTOU). Fail loud with the source path rather than silently copy nothing and
+        // hand the agent an incomplete workspace.
+        throw new Error(`cowork-harness: mount source vanished after plan validation: ${mt.hostPath} -> ${mt.mountPath}`);
       }
     }
     // A declared mcp.config whose source is missing must FAIL on a fresh run (it was silently dropped

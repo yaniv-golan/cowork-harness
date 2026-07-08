@@ -129,6 +129,13 @@ describe("stageWorkspace — resume staging (fidelity guard)", () => {
     symlinkSync(outside, join(mntHost, ".projects")); // dest parent now resolves outside mntHost
     expect(() => stageWorkspace(plan, mntHost)).toThrow(/resolves outside the session tree/);
   });
+
+  it("throws (not silent skip) when a mount source vanished after plan validation (#23)", () => {
+    const { mntHost, plan } = fixture(false);
+    // simulate a TOCTOU vanish: buildLaunchPlan validated a present source, then it disappeared
+    (plan.mounts[0] as { hostPath: string }).hostPath = join(mkdtempSync(join(tmpdir(), "stage-gone-")), "does-not-exist");
+    expect(() => stageWorkspace(plan, mntHost)).toThrow(/mount source vanished/);
+  });
 });
 
 describe("stageWorkspace — resume MCP diagnostic", () => {

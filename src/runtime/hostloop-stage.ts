@@ -2,6 +2,7 @@ import { cpSync, existsSync, mkdirSync, realpathSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { containedRealPath } from "../boundary-paths.js";
 import { BoundaryError } from "../errors.js";
+import { warn } from "../io.js";
 import type { LaunchPlan } from "../session.js";
 import type { HostLoopBindMount } from "./argv.js";
 import { resolveDeclaredSource } from "../staging/resolve.js";
@@ -49,6 +50,10 @@ export function stageHostLoopWorkspace(plan: LaunchPlan, mntHost: string): { mcp
       if (existsSync(mt.hostPath)) {
         const f = mt.stageFilter ?? null; // uploads are single files; plugins carry stageFilter from plan-build
         cpSync(mt.hostPath, dest, { recursive: true, dereference: false, ...(f ? { filter: f } : {}) });
+      } else {
+        // buildLaunchPlan validated every source present (or filtered it under COWORK_HARNESS_SOFT_MISSING);
+        // absent here is a TOCTOU vanish. Fail loud instead of silently staging an incomplete workspace.
+        throw new Error(`cowork-harness: mount source vanished after plan validation: ${mt.hostPath} -> ${mt.mountPath}`);
       }
     }
     // mcp.json: resolved via resolveDeclaredSource exactly as stageWorkspace does, but into
@@ -89,9 +94,17 @@ export function snapshotHostLoopWorkspace(plan: LaunchPlan, mntHost: string): vo
     mkdirSync(dirname(dest), { recursive: true });
     if (!containedRealPath(mntHostReal, dirname(dest)))
       throw new BoundaryError(`cowork-harness: snapshot path "${mt.mountPath}" resolves outside the session tree (symlink escape)`);
+    // Check the source BEFORE the destructive rmSync. The old order (rm, THEN `if (existsSync) copy`)
+    // meant a connected-folder source that vanished after plan validation would leave `dest` deleted
+    // and nothing copied back — silently erasing the PRIOR run's snapshot evidence. Preserve the prior
+    // dest and warn instead. (The symlink-escape boundary check already ran above, before any op.)
+    if (!existsSync(mt.hostPath)) {
+      warn(`::warning:: [snapshot] connected-folder source vanished: ${mt.hostPath} — preserving prior snapshot for "${mt.mountPath}"\n`);
+      continue;
+    }
     // rm AFTER the guard — cpSync MERGES: a file the agent DELETED from the real folder would otherwise
     // survive from a prior run/resume and false-pass file_exists (a silent false-green).
     rmSync(dest, { recursive: true, force: true });
-    if (existsSync(mt.hostPath)) cpSync(mt.hostPath, dest, { recursive: true, dereference: false });
+    cpSync(mt.hostPath, dest, { recursive: true, dereference: false });
   }
 }

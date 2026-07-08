@@ -72,6 +72,12 @@ describe("hostloop-stage", () => {
       expect(readFileSync(join(mntHost, "uploads", "u.txt"), "utf8")).toBe("payload");
     });
 
+    it("throws (not silent skip) when a non-folder mount source vanished after plan validation (#24)", () => {
+      const uploadMount: Mount = { hostPath: join(base, "gone.txt"), mountPath: "uploads/gone.txt", mode: "r", kind: "upload" };
+      const plan = makePlan({ mounts: [uploadMount] }, configDir);
+      expect(() => stageHostLoopWorkspace(plan, mntHost)).toThrow(/mount source vanished/);
+    });
+
     it("throws BoundaryError when a staged mount path resolves outside the session tree via a symlinked parent", () => {
       mkdirSync(mntHost, { recursive: true });
       const outside = join(base, "outside");
@@ -118,6 +124,20 @@ describe("hostloop-stage", () => {
       writeFileSync(join(mntHost, "myfolder2", "stale.txt"), "should not survive");
       snapshotHostLoopWorkspace(plan, mntHost);
       expect(existsSync(join(mntHost, "myfolder2", "stale.txt"))).toBe(false);
+    });
+
+    it("source vanished (TOCTOU): prior snapshot is PRESERVED, not erased (#25)", () => {
+      mkdirSync(mntHost, { recursive: true });
+      const folderSrc = join(base, "vanished-folder");
+      // deliberately DO NOT create folderSrc — simulate a source that vanished after plan validation
+      const folderMount: Mount = { hostPath: folderSrc, mountPath: "vfolder", mode: "rw", kind: "folder" };
+      const plan = makePlan({ mounts: [folderMount] }, configDir);
+      // a prior run's snapshot exists at dest
+      mkdirSync(join(mntHost, "vfolder"), { recursive: true });
+      writeFileSync(join(mntHost, "vfolder", "prior.txt"), "prior evidence");
+      snapshotHostLoopWorkspace(plan, mntHost);
+      // the old rm-then-skip order would have deleted this; the fix preserves it
+      expect(existsSync(join(mntHost, "vfolder", "prior.txt"))).toBe(true);
     });
 
     it("no stage filter: an untracked agent-written file IS captured", () => {
