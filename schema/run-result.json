@@ -130,16 +130,128 @@
           "type": "string",
           "enum": [
             "omitted",
-            "unverifiable"
-          ]
+            "unverifiable",
+            "unknown"
+          ],
+          "description": "omitted = the image lacks the capabilities; unverifiable = the tier couldn't probe (protocol/replay/skip); unknown = requires_capabilities named a capability family the harness does not recognize. computeVerdict handles all three."
         }
       }
     },
     "decisions": {
-      "type": "array"
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "kind",
+          "name",
+          "decision"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "decision": {
+            "type": "string"
+          },
+          "by": {
+            "type": "string"
+          },
+          "requestId": {
+            "type": "string",
+            "description": "request_id (UUID) of a question gate — pairs a decision to its event row by id."
+          },
+          "model": {
+            "type": "string"
+          },
+          "detail": {},
+          "rationale": {
+            "type": "string"
+          },
+          "questions": {
+            "type": "array",
+            "description": "Full AskUserQuestion option set as originally offered — present only on kind:'question' decisions.",
+            "items": {
+              "type": "object",
+              "required": [
+                "question",
+                "options"
+              ],
+              "properties": {
+                "question": {
+                  "type": "string"
+                },
+                "header": {
+                  "type": "string"
+                },
+                "options": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "label"
+                    ],
+                    "properties": {
+                      "label": {
+                        "type": "string"
+                      },
+                      "description": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                },
+                "multiSelect": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        }
+      }
     },
     "toolCounts": {
-      "type": "object"
+      "type": "object",
+      "additionalProperties": {
+        "type": "number"
+      },
+      "description": "Truthful per-tool call count (use this, NOT usage.server_tool_use which is host-routed-blind in cowork)."
+    },
+    "infraErrors": {
+      "type": "array",
+      "description": "Infrastructure errors (VM/egress sidecar crashes). A non-empty list is a hard verdict fail on BOTH lanes and is NOT author-suppressible — the run's evidence is contaminated.",
+      "items": {
+        "type": "object",
+        "required": [
+          "source",
+          "message"
+        ],
+        "properties": {
+          "source": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "evidenceErrors": {
+      "type": "object",
+      "description": "Companion counters for malformed/dropped telemetry streams. A >0 count makes the dependent assertion fail 'malformed' rather than silently dropping the bad entries.",
+      "properties": {
+        "taskTracking": {
+          "type": "number"
+        },
+        "webSearchParse": {
+          "type": "number"
+        },
+        "presentFilesMalformed": {
+          "type": "number"
+        }
+      }
     },
     "webSearches": {
       "type": "array",
@@ -524,11 +636,56 @@
       "description": "Subset of userVisibleRoots that are read-only (mode:\"r\") connected-folder mounts \u2014 inputs, not deliverables. `artifacts` excludes them so `scaffold` doesn't emit file_exists for an input."
     },
     "artifacts": {
-      "type": "array"
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "path",
+          "bytes"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "bytes": {
+            "type": "number"
+          }
+        }
+      }
     },
     "workspaceFiles": {
       "type": "array",
-      "description": "Working folder panel's canonical file model (\u00a76.3, M6) \u2014 every file under the user-visible roots, classified output|mount|input and sha256-fingerprinted. The Scratch pad's \"scratchpad\" class is deliberately not implemented (no host-materialization mechanism exists for it)."
+      "description": "Working folder panel's canonical file model (\u00a76.3, M6) \u2014 every file under the user-visible roots, classified output|mount|input and sha256-fingerprinted. The Scratch pad's \"scratchpad\" class is deliberately not implemented (no host-materialization mechanism exists for it).",
+      "items": {
+        "type": "object",
+        "required": [
+          "path",
+          "bytes",
+          "class"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "bytes": {
+            "type": "number"
+          },
+          "sha256": {
+            "type": "string"
+          },
+          "hashError": {
+            "type": "string"
+          },
+          "class": {
+            "type": "string",
+            "enum": [
+              "output",
+              "mount",
+              "input"
+            ]
+          }
+        }
+      }
     },
     "preRunPaths": {
       "type": "array",
@@ -618,10 +775,35 @@
           "type": "number"
         },
         "bySource": {
-          "type": "object"
+          "type": "object",
+          "additionalProperties": {
+            "type": "number"
+          }
         },
         "gates": {
-          "type": "array"
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "question",
+              "answeredBy",
+              "answer"
+            ],
+            "properties": {
+              "question": {
+                "type": "string"
+              },
+              "answeredBy": {
+                "type": "string"
+              },
+              "answer": {
+                "type": "string"
+              },
+              "model": {
+                "type": "string"
+              }
+            }
+          }
         }
       }
     },
@@ -737,13 +919,34 @@
       "description": "Context/Connectors panel (\u00a76.2, M6). mcpServers is SDK-owned pass-through data (loosely typed). availableSkills is a later addition to this same field.",
       "properties": {
         "tools": {
-          "type": "array"
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         },
         "mcpServers": {
-          "type": "array"
+          "type": "array",
+          "description": "SDK-owned per-server shape, pass-through — deliberately left loosely typed (open object) so extra SDK keys are preserved, not rejected.",
+          "items": {
+            "type": "object"
+          }
         },
         "availableSkills": {
-          "type": "array"
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "id"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "whenToUse": {
+                "type": "string"
+              }
+            }
+          }
         }
       }
     }

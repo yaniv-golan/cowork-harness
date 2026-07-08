@@ -63,6 +63,8 @@ const full: RunResult = {
     { kind: "question", name: "AskUserQuestion", decision: "answered", by: "scripted", model: undefined, detail: {}, rationale: undefined },
   ],
   toolCounts: { Bash: 1 },
+  infraErrors: [{ source: "egress-sidecar", message: "sidecar exited 1" }],
+  evidenceErrors: { taskTracking: 1, webSearchParse: 0, presentFilesMalformed: 0 },
   webSearches: [{ toolUseId: "toolu_1", query: "market size", results: [{ title: "Example Report", url: "https://example.com" }] }],
   toolDurations: { Bash: { calls: 1, totalMs: 240, maxMs: 240 } },
   models: ["claude-sonnet-4-5"],
