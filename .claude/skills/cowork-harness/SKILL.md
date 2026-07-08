@@ -23,8 +23,8 @@ allowlist). This skill exists mostly to keep you out of those traps — the Gotc
 the highest-value part. Read it.
 
 > **Version note:** the facts and `file:line` pointers here track `cowork-harness 0.27.0` (baseline
-> `desktop-1.18286.2`). If your checkout is newer, prefer the live `--help`, `SPEC.md`, and
-> `docs/*.md` over this snapshot, and re-run the bundled linter.
+> `desktop-1.18286.2`). If your checkout is newer, prefer the live `--help` and — in a repo checkout —
+> `SPEC.md` / `docs/*.md` over this snapshot, and re-run the bundled linter.
 
 ## 0. Preflight — make sure the harness can actually run
 
@@ -56,9 +56,10 @@ Before the first command, confirm the CLI is reachable and **fail loud** (never 
   `cowork-harness trace <run-dir>`'s views + the emitted `result.json` to see what the run actually did,
   then `verify-run` to re-check a suspect assertion — all token-free, no Docker, no re-record. This is
   the loop 0.27.0's observability is built for; §8's *Inspecting a run's observability output* is the
-  detail, `docs/debugging.md` the full map.
+  detail (the fuller human-facing map lives in `docs/debugging.md` — repo-only, not shipped with the
+  installed skill).
 - **Multi-turn / interactive reproduction** → `cowork-harness chat` (interactive; gates answered at the
-  TTY, **not** an asserted test — see *Debugging with `chat`* in `docs/scenario.md`).
+  TTY, **not** an asserted test — see *Debugging with `chat`* in §10 below).
 
 Full command set: `skill · run · chat · record · replay · verify-cassettes · rehash · prune · lint ·
 verify-run · trace · inspect · diff · stats · decide · gates · answer · scaffold · assertions --list · sync ·
@@ -162,7 +163,8 @@ error/`SIGTERM`, AND staleness detection for a hard `SIGKILL`/OOM-kill that no e
 either way you get `"error"`/`stale` instead of a permanently-trusted `"running"`), so liveness is
 checkable regardless of PID namespace. The harness prints `[status] <outDir>` to stderr as soon as the
 run starts, so capture stderr to get the exact directory. `--follow` fails loud on a timeout/staleness
-rather than hanging forever. See `docs/run-status.md` for the full recipe.
+rather than hanging forever. (Fuller recipe in `docs/run-status.md` — repo-only, not in the installed
+payload; `cowork-harness status --help` has the flags.)
 
 **A multi-minute `record`/`run` outlives a short-lived wrapper.** Don't launch a long record from a
 subagent that returns before it finishes — the returning agent tears down its process tree and kills the
@@ -322,8 +324,9 @@ decide which assertions from §6 are worth adding):
 - **`result.json` carries the raw fields** the assertions read: `toolDurations`, `models`, `toolErrors`,
   `redundantToolCalls`, `modelUsage`, `thinking`, `skillActivity`, `subagents[]` (prompt/model/output/
   `attributedSkillId`), `context` (tools/mcpServers/availableSkills), `tasks`, `workspaceFiles`,
-  `presentedFiles`, `hookEvents`, `mcpErrors`, `contextEvents`, `resources` — see the README's
-  "Observability fields" for the full field semantics.
+  `presentedFiles`, `hookEvents`, `mcpErrors`, `contextEvents`, `resources`. (Full per-field semantics:
+  the README's "Observability fields" section — repo-only; `schema/run-result.json` is the machine
+  source.)
 - **Opaque failure?** A failed run also records **`errorSource`** (where the failure originated) and
   **`stderrLogPath`** (the captured agent stderr) — read those and `trace <run-dir>` *before* re-running;
   a re-record rarely tells you more than the captured stderr already does.
@@ -401,8 +404,8 @@ The startup banner now reads `type your message (/help for commands)` as a remin
 
 ## Gotchas — the "✓ passed ≠ correct" landmines
 
-Stated as *symptom → why → fix*. The full catalog (with `file:line`) is in the references; these
-are the ones that bite hardest.
+Stated as *symptom → why → fix*. **This is the full landmine catalog;** `references/scenario-schema.md`
+repeats the assertion/replay-relevant ones alongside the schema (a scoped subset, not a fuller list).
 
 1. **An assertion passed but tested nothing on the PR gate.** *Why:* on a manifest-less cassette
    `replay` skips filesystem/egress keys (`file_exists`, `user_visible_artifact`, `artifact_json`,
@@ -439,9 +442,9 @@ are the ones that bite hardest.
 6. **`dispatch_count_max` is an author-chosen budget, not a production cap.** It's a post-hoc count
    assertion: passing means "happened to dispatch ≤N this run," nothing more. Cowork imposes **no**
    in-conversation `Task`-dispatch cap — gate `1648655587`'s `{perTask:1, global:3}` governs the
-   separate scheduled/cron-task session scheduler, not the `Task` tool (binary-verified; see SPEC
-   §10). So there is no "skip-on-cap" for the harness to reproduce; use this key only to catch a
-   fan-out you don't want.
+   separate scheduled/cron-task session scheduler, not the `Task` tool (binary-verified; details in
+   `SPEC.md` §10 — repo-only). So there is no "skip-on-cap" for the harness to reproduce; use this key
+   only to catch a fan-out you don't want.
 
 7. **`protocol` is rejected (not silently passed) if the scenario asserts egress** — boundary
    assertions need a sandboxed tier (`container`+). Good: this one fails loud by design.
@@ -555,10 +558,11 @@ are the ones that bite hardest.
     `resolved-tier` finding (re-record — the recording now exercises the wrong tier); a cassette with no
     `effectiveFidelity` at all, or an unloadable pinned `baseline:`, reports `unverifiable-tier` instead
     (couldn't check — also re-record). Both are `fidelity: cowork`-only; an explicit-tier scenario never
-    produces them. See `docs/cassette.md` § tier staleness.
+    produces them. (Details: `docs/cassette.md` § tier staleness — repo-only.)
 
-For the complete gotcha list, the assertion catalog, the YAML schema, the fidelity/answer tables,
-and the CI recipe, read the files in `references/`.
+For the assertion catalog, the YAML schema, the fidelity/answer tables, and the CI recipe, read the
+files in `references/` (the gotchas above are the full list; the references repeat only the
+assertion/replay-relevant ones).
 
 ## References
 
@@ -567,10 +571,12 @@ and the CI recipe, read the files in `references/`.
   redaction before the first hostloop/protocol record, derive budget assertions without a
   two-pass record. Start here when the question is "how do I do X", not "what does flag Y mean".
 - `references/scenario-schema.md` — scenario/session YAML schema, full assertion catalog (with each
-  key's replay class), the web_fetch model, and the complete gotcha list.
+  key's replay class), the web_fetch model, and an assertion/replay-scoped gotcha subset (the full
+  landmine catalog lives in this SKILL's Gotchas section above).
 - `references/fidelity-and-answers.md` — fidelity tiers, answer paths, the determinism contract.
 - `references/ci-recipe.md` — the packaged GitHub Action, replay-vs-live lane split, and the four-stage
   GitHub Actions pipeline.
 - `scripts/scenario.py` — `scaffold` a valid scenario skeleton and `lint` scenarios for the
   no-silent-false-green invariants (both usable as CI steps).
-- `../../../docs/run-status.md` — checking a background run's status without `ps aux`.
+- Checking a background run's status without `ps aux` — covered in §5a above; the fuller recipe is in
+  `docs/run-status.md` (repo-only, not shipped with the installed skill).

@@ -45,8 +45,9 @@ jobs:
 Why this is a step *you* write, not an Action input the harness provides for you: pulling Anthropic's
 binary is a call about your own relationship with their distribution terms — keeping it in your own
 version-controlled workflow keeps that decision and its execution yours, auditable, and outside any
-third-party action's code. See the [agent-binary provenance runbook](../../../../docs/maintenance.md) for
-the full recovery/verification story (including why `COWORK_AGENT_BINARY` substitutions are
+third-party action's code. The agent-binary provenance runbook (`docs/maintenance.md` in the repo —
+not shipped with the installed skill) has the full recovery/verification story (including why
+`COWORK_AGENT_BINARY` substitutions are
 sha256-*checked* but not hard-blocking on mismatch — it's advisory for an intentional substitution).
 
 **Minimal token-free PR gate (manual form)** — the smallest thing worth committing; runs on stock

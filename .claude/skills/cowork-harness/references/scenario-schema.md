@@ -420,8 +420,12 @@ Find an artifact's real field paths by running once with `--keep`, then `cowork-
 
 ## Full gotcha list
 
-The "✓ passed ≠ correct" landmines, as *symptom → why → fix*. `file:line` pointers track the version
-at the top of this file.
+The "✓ passed ≠ correct" landmines relevant to **scenario/assertion authoring**, as
+*symptom → why → fix*. `file:line` pointers track the version at the top of this file.
+**Scope note:** this is the assertion/replay-focused view; the **companion `SKILL.md`'s Gotchas
+section is the full landmine catalog** (it adds workflow/record/answer-path landmines this schema
+reference omits). Neither list is a strict superset of the other — reach for this one while authoring
+`assert:`, and SKILL's when debugging a run's behavior.
 
 1. **Replay skips filesystem/egress assertions (two shapes) — with a loud warning.** *Full skip:* a pure
    live-only `egress_*`/`no_delete_in_outputs`/`self_heal_ran`/`transcript_no_host_path` item on a
