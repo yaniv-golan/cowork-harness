@@ -33,7 +33,9 @@ cowork-harness stats --metric cost --last 20        # last 20 runs per scenario,
 
 Default output is a per-scenario summary line: run count, pass rate, cost/duration p50 & p95, and the
 most recent **passing** run's timestamp (`lastGreenTs` — absent if the scenario has never passed).
-`--metric pass-rate|cost|tokens|duration|turns` narrows the line to just that one view. `--last <n>`
+`--metric pass-rate|cost|tokens|duration|turns|cache-tokens|model-cost` narrows the line to just that one
+view (`cache-tokens` shows cache-read-token p50/p95; `model-cost` shows per-model cost p50/p95, distinct
+from the plain `cost` metric's overall run cost). `--last <n>`
 windows to the N most recent runs **per scenario** (not globally — a global cut would starve a
 low-frequency scenario out of the window entirely once a high-frequency one dominates recent rows).
 

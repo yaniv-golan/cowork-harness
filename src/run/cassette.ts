@@ -1780,7 +1780,7 @@ export async function cmdRecord(args: string[]) {
     return fail(
       "record",
       "usage",
-      "usage: record <scenario.yaml | dir/> [--out <file>] [--output-format text|json] [--rerecord-stale] [--no-redact] [--allow-failing] [--max-artifact-bytes <n>] [--concurrency <N>]\n" +
+      "usage: record <scenario.yaml | dir/> [--out <file>] [--output-format text|json] [--rerecord-stale] [--from-embedded] [--force] [--no-redact] [--allow-failing] [--max-artifact-bytes <n>] [--concurrency <N>]\n" +
         '       answer gates live during the recording: [--decider-dir <dir>] (single scenario) | [--decider-llm [--intent "…"] [--decider-model <id>]] | [--on-unanswered fail|first]',
       undefined,
       asJson,

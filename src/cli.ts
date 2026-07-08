@@ -420,7 +420,7 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
   vm: "usage: vm <init|status|delete|prune> [--output-format text|json]   (macOS arm64 only)\n  init    create the L2 Apple-VZ microVM\n  status  show running VM state\n  delete  remove a named VM\n  prune   drop all orphaned VMs",
   chat: "usage: chat <skill-folder> [prompt] [--fidelity protocol|container|hostloop] [--model <id>]\n              [--upload <file>]... [--folder <dir>]... [--plugin <dir>]... [--verbose] [--raw]\n       --raw: native cowork mode via docker run -it; egress sandbox NOT applied; rejects --upload/--folder/--plugin/--fidelity (only --model applies)\n       --fidelity: protocol/container/hostloop only (no microvm/cowork); protocol = no Docker, no sandbox",
   record:
-    "usage: record <scenario.yaml | dir/> [--out <file>] [--output-format text|json] [--rerecord-stale] [--no-redact] [--allow-failing] [--max-artifact-bytes <n>] [--dry-run] [--concurrency <N>]\n" +
+    "usage: record <scenario.yaml | dir/> [--out <file>] [--output-format text|json] [--rerecord-stale] [--from-embedded] [--force] [--no-redact] [--allow-failing] [--max-artifact-bytes <n>] [--dry-run] [--concurrency <N>]\n" +
     "       --concurrency <N>: record a dir/ batch (or --rerecord-stale) N at a time (default 1, max 8). Runs are fully isolated; the bound is for Docker address pool + API rate limits.\n" +
     '       answer gates LIVE: [--decider-dir <dir>] (single scenario only) | [--decider-llm [--intent "<one line>"]] | [--on-unanswered fail|first]\n' +
     "       (a live decider flags the cassette non-deterministic — re-recording may drift; replay stays deterministic. --rerecord-stale rejects these flags.)\n" +
