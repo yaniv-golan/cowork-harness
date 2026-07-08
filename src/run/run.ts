@@ -32,6 +32,17 @@ function capDecisionInput(input: unknown): unknown {
   }
 }
 
+/** Classify a `Read` tool's `file_path` as a skill reference/script access, returning the skill-relative
+ *  suffix (`references/foo.md`, `scripts/bar.py`) or undefined if it isn't one. Namespace-agnostic: it
+ *  keys off the mounted plugin-root marker (`.local-plugins`/`.remote-plugins`) plus a `references/` or
+ *  `scripts/` segment, so it works regardless of the container-vs-host path shape. `SKILL.md` is delivered
+ *  whole (never Read as a file), so this only ever covers references/ and scripts/. */
+export function skillReferenceReadPath(filePath: string): string | undefined {
+  if (!filePath || !/(?:\.local-plugins|\.remote-plugins)\//.test(filePath)) return undefined;
+  const m = filePath.match(/\/((?:references|scripts)\/.+)$/);
+  return m ? m[1] : undefined;
+}
+
 /** Extract the ordered `file_path` list from a `mcp__cowork__present_files` tool_use's `input`
  *  (`{ files: [{ file_path }, …] }`) — guards every shape (missing/non-array `files`, a non-object or
  *  non-string-`file_path` entry) so a malformed input can't throw mid-drive; a bad entry is just
@@ -183,6 +194,7 @@ export interface RunRecord {
   usage?: UsageInfo;
   cost?: CostInfo;
   skillsInvoked: string[]; // top-level Skill tool_use ids, in call order, duplicates kept
+  filesRead: string[]; // skill-relative reference/script files the agent Read (progressive-disclosure signal), deduped, first-seen order
   models: string[]; // distinct model ids seen across assistant_text/tool_use/thinking events, first-seen order, deduped
   thinking: { text: string }[]; // reasoning blocks, capped: last 50 × 10KB each
   thinkingElided: number; // count of older thinking blocks dropped past the 50-block cap
@@ -308,6 +320,7 @@ export class Run {
       transcript: "",
       toolsCalled: new Set(),
       toolCounts: {},
+      filesRead: [],
       subagentTools: new Set(),
       subagents: [],
       questions: [],
@@ -460,6 +473,13 @@ export class Run {
               this.rec.toolCounts[ev.name] = (this.rec.toolCounts[ev.name] ?? 0) + 1; // count main-agent calls (isolated sub-agent tools excluded, matching toolsCalled)
               // a top-level (or fork-nested) Skill invocation — duplicates kept (re-triggering is signal).
               if (ev.name === "Skill") this.rec.skillsInvoked.push(String((ev.input as Record<string, unknown> | undefined)?.skill ?? ""));
+              // Progressive-disclosure signal: which of the skill's reference/script files the agent
+              // actually Read (SKILL.md is delivered whole, never Read as a file — so this covers
+              // references/* and scripts/*). Deduped, first-seen order.
+              if (ev.name === "Read") {
+                const ref = skillReferenceReadPath(String((ev.input as Record<string, unknown> | undefined)?.file_path ?? ""));
+                if (ref && !this.rec.filesRead.includes(ref)) this.rec.filesRead.push(ref);
+              }
               if (ev.toolUseId) this.toolNameByUseId.set(ev.toolUseId, ev.name);
               // A Skill call inherits the main agent's context when it runs (fork context) — seed its id so
               // any children it dispatches are recognized as main-agent flow too, transitively.

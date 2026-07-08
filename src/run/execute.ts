@@ -1054,6 +1054,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     generator: "cowork-harness",
     mode: "run",
     turn,
+    referencesRead: record.filesRead.length ? record.filesRead : undefined,
     finalMessage: record.resultText,
     execution: { location: "local" }, // live local run — no scheduled-trigger lane exists yet (no taskKind)
     scenario: scenario.name,
@@ -1366,6 +1367,7 @@ export function buildPartialResult(args: {
     generator: "cowork-harness",
     mode: "run",
     turn: args.turn,
+    referencesRead: args.record.filesRead.length ? args.record.filesRead : undefined,
     finalMessage: args.record.resultText,
     execution: { location: "local" }, // live local run (salvaged partial) — same basis as the success path
     scenario: args.scenarioName,

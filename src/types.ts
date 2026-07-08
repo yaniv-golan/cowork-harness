@@ -878,6 +878,12 @@ export interface RunResult {
    *  answer from the envelope instead of parsing run.jsonl. Absent when no result event carried text
    *  (e.g. a spawn/exit error before the result). */
   finalMessage?: string;
+  /** Skill reference/script files the agent actually **Read** during the run (skill-relative:
+   *  `references/foo.md`, `scripts/bar.py`), deduped in first-seen order. A progressive-disclosure
+   *  signal — "did the agent reach this content?" — for skill-quality measurement. `SKILL.md` is
+   *  delivered whole (never Read as a file), so it never appears here. Live lane only; absent when the
+   *  agent Read no skill files. */
+  referencesRead?: string[];
   /** 1-based turn number within a resumed (`--session-id` + `--resume`) session — 1 for a normal
    *  single-shot run, incrementing per resume. `result.json`/`run.jsonl` hold the LATEST turn; prior
    *  turns are archived as `result.turn-<N>.json` / `run.turn-<N>.jsonl`. Lets a multi-turn consumer

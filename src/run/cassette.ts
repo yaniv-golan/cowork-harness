@@ -970,6 +970,7 @@ function minimalRec(): RunRecord {
     transcript: "",
     toolsCalled: new Set(),
     toolCounts: {},
+    filesRead: [],
     subagentTools: new Set(),
     subagents: [],
     questions: [],
@@ -2442,6 +2443,7 @@ async function recordScenarioObject(
 function replayErrorResult(file: string): RunResult {
   return assembleRunResult({
     turn: undefined, // replay reconstructs one recorded run; no multi-turn attribution
+    referencesRead: undefined, // replay doesn't re-derive the skill-file read-set (live-lane signal)
     scenario: file,
     fidelity: "replay",
     baseline: "",
@@ -4123,6 +4125,7 @@ export async function replayCassette(
 
     return assembleRunResult({
       turn: undefined, // replay reconstructs one recorded run; no multi-turn attribution
+      referencesRead: undefined, // replay doesn't re-derive the skill-file read-set (live-lane signal)
       scenario: cassette.scenario.name,
       mode: "run",
       // Pass through the frozen recording-time provenance — an older cassette that predates

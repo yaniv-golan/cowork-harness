@@ -62,6 +62,10 @@ All notable changes to this project are documented here. The format is based on
   honored per assert, and the model that graded is recorded on `RunResult.assertions[].judgeModel` so a
   before/after eval can verify the judge was held constant. Classified live-only alongside `egress_*` —
   stripped on replay (skipped-loud), never a vacuous pass.
+- **`RunResult.referencesRead`** — the skill's `references/*` / `scripts/*` files the agent actually
+  **Read** during the run (skill-relative, deduped in first-seen order): a progressive-disclosure signal
+  for "did the agent reach this content?" skill-quality measurement. `SKILL.md` is delivered whole as the
+  activation payload (never Read as a file), so it never appears. Live lane only.
 - **`RunResult.finalMessage`** — the agent's final answer text: the SDK result message's own designated
   answer, not the joined transcript of every assistant turn. Lets a consumer read what the agent actually
   answered without parsing `run.jsonl`. Threaded through every `RunResult` producer (live success and
