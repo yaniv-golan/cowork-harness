@@ -114,7 +114,15 @@ export function capturePreRunManifest(plan: LaunchPlan, workRoot: string, outDir
     for (const e of collectArtifactPaths(workRoot, userVisibleRootsFromPlan(plan))) add(e.path, workRoot, e.linkKind);
     paths.sort();
   }
-  writeFileSync(join(outDir, FILE), JSON.stringify({ version: MANIFEST_VERSION, paths, hashes, stats }, null, 2));
+  // origin of the pre-run baseline. "local-walk" = the filesystem was walked locally by this function
+  // (the ONLY producer today). "remote-unavailable" is RESERVED: a future cloud run's filesystem is not
+  // locally observable, so its manifest would record this and no_unexpected_files / input_unmodified
+  // must then fail EVIDENCE-UNAVAILABLE (see the assert.ts guard clause) — never vacuously pass on an
+  // unwalkable tree. No producer emits "remote-unavailable" yet.
+  writeFileSync(
+    join(outDir, FILE),
+    JSON.stringify({ version: MANIFEST_VERSION, origin: "local-walk", paths, hashes, stats }, null, 2),
+  );
 }
 
 // Pre-run manifest format version. v2 = the LINK-AWARE walk (paths includes symlink/hardlink entries).
@@ -175,6 +183,20 @@ export function readPreRunManifestStats(outDir: string): Record<string, { mtimeM
       if (typeof v !== "object" || typeof (v as any).mtimeMs !== "number" || typeof (v as any).size !== "number") return undefined;
     }
     return s as Record<string, { mtimeMs: number; size: number } | null>;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The manifest's provenance ("local-walk" today; "remote-unavailable" is RESERVED for a future cloud
+ *  producer — see the write-site comment in capturePreRunManifest). undefined = no manifest, an older
+ *  manifest predating this field, or a value that isn't one of the two known literals — callers must
+ *  NOT treat undefined as "local-walk"; forward-compat callers should treat an unrecognized value the
+ *  same conservative way they treat an absent manifest (evidence-unavailable), never assume it's safe. */
+export function readPreRunManifestOrigin(outDir: string): "local-walk" | "remote-unavailable" | undefined {
+  try {
+    const parsed = JSON.parse(readFileSync(join(outDir, FILE), "utf8")) as { origin?: unknown };
+    return parsed.origin === "local-walk" || parsed.origin === "remote-unavailable" ? parsed.origin : undefined;
   } catch {
     return undefined;
   }

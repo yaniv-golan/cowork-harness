@@ -4,7 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import type { LaunchPlan } from "../src/session.js";
-import { capturePreRunManifest, readPreRunManifest, readPreRunManifestHashes } from "../src/run/pre-run-manifest.js";
+import {
+  capturePreRunManifest,
+  readPreRunManifest,
+  readPreRunManifestHashes,
+  readPreRunManifestOrigin,
+} from "../src/run/pre-run-manifest.js";
 import { collectArtifacts } from "../src/run/artifacts.js";
 import { snapshotHostLoopWorkspace } from "../src/runtime/hostloop-stage.js";
 import { evaluate } from "../src/assert.js";
@@ -267,5 +272,41 @@ describe("capturePreRunManifest hashes", () => {
       if (prev === undefined) delete process.env.COWORK_HARNESS_PRERUN_HASH_CAP;
       else process.env.COWORK_HARNESS_PRERUN_HASH_CAP = prev;
     }
+  });
+});
+
+describe("pre-run-manifest origin", () => {
+  it("a manifest written today records origin: \"local-walk\"", () => {
+    const outDir = mkdtempSync(join(tmpdir(), "cwh-origin-"));
+    const workRoot = join(outDir, "work", "session", "mnt");
+    mkdirSync(join(workRoot, "outputs"), { recursive: true });
+    writeFileSync(join(workRoot, "outputs", "seed.txt"), "x");
+    capturePreRunManifest(minimalPlan([]), workRoot, outDir, "container");
+    const parsed = JSON.parse(readFileSync(join(outDir, "pre-run-manifest.json"), "utf8")) as { origin?: unknown };
+    expect(parsed.origin).toBe("local-walk");
+    expect(readPreRunManifestOrigin(outDir)).toBe("local-walk");
+  });
+
+  it("readPreRunManifestOrigin returns undefined (never throws) on an older manifest lacking origin", () => {
+    const outDir = mkdtempSync(join(tmpdir(), "cwh-origin-older-"));
+    writeFileSync(join(outDir, "pre-run-manifest.json"), JSON.stringify({ paths: ["outputs/run1.json"] }));
+    expect(readPreRunManifestOrigin(outDir)).toBeUndefined();
+  });
+
+  it("readPreRunManifestOrigin returns undefined when the manifest is absent entirely", () => {
+    const noManifestOutDir = mkdtempSync(join(tmpdir(), "cwh-origin-none-"));
+    expect(readPreRunManifestOrigin(noManifestOutDir)).toBeUndefined();
+  });
+
+  it("readPreRunManifestOrigin returns undefined on a malformed origin value (not one of the two literals)", () => {
+    const outDir = mkdtempSync(join(tmpdir(), "cwh-origin-bad-"));
+    writeFileSync(join(outDir, "pre-run-manifest.json"), JSON.stringify({ paths: [], origin: "something-else" }));
+    expect(readPreRunManifestOrigin(outDir)).toBeUndefined();
+  });
+
+  it("round-trips origin: \"remote-unavailable\" from a hand-constructed fixture (no real producer emits this yet)", () => {
+    const outDir = mkdtempSync(join(tmpdir(), "cwh-origin-remote-"));
+    writeFileSync(join(outDir, "pre-run-manifest.json"), JSON.stringify({ paths: [], origin: "remote-unavailable" }));
+    expect(readPreRunManifestOrigin(outDir)).toBe("remote-unavailable");
   });
 });

@@ -194,6 +194,14 @@ export interface AssertContext {
   /** Pre-run per-path sha256 (RunResult.preRunHashes / cassette.preRunHashes). undefined = no manifest —
    *  input_unmodified fails evidence-unavailable. */
   preRunHashes?: Record<string, string | null>;
+  /** Manifest-local provenance (pre-run-manifest.ts's `readPreRunManifestOrigin`) — deliberately NOT a
+   *  RunResult/Cassette field (no producer emits anything but "local-walk" today, so there is nothing to
+   *  round-trip through a replay/verify lane yet). "remote-unavailable" is RESERVED for a future cloud
+   *  run whose filesystem isn't locally observable: no_unexpected_files / input_unmodified must then fail
+   *  evidence-unavailable — the same loud path taken when preRunPaths/preRunHashes are absent entirely —
+   *  never a vacuous pass just because a (locally meaningless) preRunPaths/preRunHashes happens to be
+   *  present. undefined today on every real caller; only a hand-constructed ctx sets this. */
+  preRunOrigin?: "local-walk" | "remote-unavailable";
   /** Replay-lane ONLY: authoritative post-run per-path sha256 from the cassette manifest
    *  (cassette.artifacts[].sha256). undefined on live/verify-run (there, input_unmodified re-hashes the
    *  real tree under workRoot). Needed because replay's materialized tree writes 0-byte placeholders for
@@ -951,7 +959,13 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
           : fail(`delete op(s) touched outputs (forbidden in Cowork): ${ctx.outputsDeletes.slice(0, 3).join("; ")}`),
     );
   if (a.no_unexpected_files !== undefined) {
-    if (ctx.preRunPaths === undefined) {
+    if (ctx.preRunOrigin === "remote-unavailable") {
+      results.push(
+        fail(
+          "evidence unavailable: pre-run manifest origin is remote-unavailable (a cloud run's filesystem is not locally observable) — cannot compute created files",
+        ),
+      );
+    } else if (ctx.preRunPaths === undefined) {
       results.push(
         fail(
           "evidence unavailable: no pre-run manifest for this run/cassette (predates 0.24 or tier cannot capture — microvm) — cannot compute created files; re-run/re-record on container/hostloop",
@@ -981,7 +995,13 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
     }
   }
   if (a.input_unmodified !== undefined) {
-    if (ctx.preRunHashes === undefined) {
+    if (ctx.preRunOrigin === "remote-unavailable") {
+      results.push(
+        fail(
+          "evidence unavailable: pre-run manifest origin is remote-unavailable (a cloud run's filesystem is not locally observable) — cannot compare content",
+        ),
+      );
+    } else if (ctx.preRunHashes === undefined) {
       results.push(
         fail(
           "evidence unavailable: no pre-run hash manifest for this run/cassette (predates the fingerprinted manifest, or a tier that cannot capture — microvm) — cannot compare content; re-run/re-record on container/hostloop",

@@ -4,7 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { evaluate } from "../src/assert.js";
 
-function ctx(workRoot: string, prefixes: string[], preRunPaths?: string[]) {
+function ctx(
+  workRoot: string,
+  prefixes: string[],
+  preRunPaths?: string[],
+  preRunOrigin?: "local-walk" | "remote-unavailable",
+) {
   return {
     transcript: "",
     toolsCalled: new Set<string>(),
@@ -14,6 +19,7 @@ function ctx(workRoot: string, prefixes: string[], preRunPaths?: string[]) {
     workRoot,
     userVisiblePrefixes: prefixes,
     preRunPaths,
+    preRunOrigin,
     outputsDeletes: [],
     questions: [],
     hostPathLeaked: false,
@@ -85,5 +91,17 @@ describe("no_unexpected_files", () => {
     const [r] = evaluate([{ no_unexpected_files: ["outputs/report.json"] }], ctx(root, ["outputs"], []));
     expect(r.pass).toBe(false);
     expect(r.message).toMatch(/placeholder\.bin/);
+  });
+
+  it("fails evidence-unavailable (never a vacuous pass) when the manifest origin is remote-unavailable", () => {
+    // Hand-constructed: no producer emits "remote-unavailable" today (RESERVED for a future cloud run
+    // whose filesystem isn't locally observable). Even with an empty allowlist (which would otherwise
+    // vacuously pass on an empty preRunPaths baseline), this must fail loud, not pass.
+    const root = mkdtempSync(join(tmpdir(), "cwh-nuf-remote-"));
+    mkdirSync(join(root, "outputs"), { recursive: true });
+    const [r] = evaluate([{ no_unexpected_files: [] }], ctx(root, ["outputs"], [], "remote-unavailable"));
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/evidence unavailable/i);
+    expect(r.message).toMatch(/remote-unavailable/i);
   });
 });

@@ -1136,6 +1136,24 @@ describe("input_unmodified", () => {
     expect(r.message).toMatch(/evidence unavailable/i);
   });
 
+  it("fails evidence-unavailable (never a vacuous pass) when the manifest origin is remote-unavailable, even with matching hashes present", () => {
+    // Hand-constructed: no producer emits "remote-unavailable" today (RESERVED for a future cloud run
+    // whose filesystem isn't locally observable). preRunHashes being present must NOT let this pass —
+    // the origin guard takes priority over an otherwise-checkable hash map.
+    const root = mkdtempSync(join(tmpdir(), "cwh-ium-remote-"));
+    mkdirSync(join(root, "project"), { recursive: true });
+    const content = "original content";
+    writeFileSync(join(root, "project", "in.md"), content);
+    const preHashes = { "project/in.md": createHash("sha256").update(content).digest("hex") };
+    const [r] = evaluate(
+      [{ input_unmodified: ["project/**"] }],
+      ctx({ workRoot: root, preRunHashes: preHashes, preRunOrigin: "remote-unavailable" }),
+    );
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/evidence unavailable/i);
+    expect(r.message).toMatch(/remote-unavailable/i);
+  });
+
   it("rejects an empty glob list at schema validation (.min(1))", () => {
     expect(AssertionSchema.safeParse({ input_unmodified: [] }).success).toBe(false);
   });
