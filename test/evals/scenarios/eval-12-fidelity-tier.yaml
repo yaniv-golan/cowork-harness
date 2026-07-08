@@ -1,0 +1,15 @@
+name: eval-12-fidelity-tier-for-egress
+baseline: latest
+session: ./_session.yaml
+fidelity: container
+prompt: I want to test that my skill's sandbox blocks an outbound call to an unexpected host under default-deny
+  egress. Which fidelity tier should I use, why can't I use protocol, is microvm any better for this,
+  and how do I set the tier?
+assert:
+- semantic_matches:
+    rubric:
+    - An egress/boundary test requires a sandboxed tier; container (the default) provides real default-deny
+      egress
+    - protocol (L0) is REJECTED / fails loud (not silently passed) when a scenario asserts egress
+    - microvm's egress transport is the same allowlist proxy as container — it is not better network fidelity
+    - 'The fidelity tier is set in the scenario fidelity: field, not via a --fidelity flag'
