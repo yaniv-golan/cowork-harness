@@ -5,7 +5,7 @@
       "id": 1,
       "name": "author-scenario-and-place-assertions",
       "prompt": "I'm using the cowork-harness tool to regression-test a Claude Code skill. The skill lives at ./skills/report-gen, it writes a markdown deliverable to outputs/report.md, and partway through it calls an external API at api.weather.example.com. Write me a cowork-harness scenario YAML to test it, and tell me which assertions belong on the fast per-PR gate vs the nightly job, and why.",
-      "expected_output": "A valid scenario YAML (correct fidelity tier for the egress check, scripted answers + on_unanswered: fail, content assertions separated from filesystem/egress ones) plus a correct explanation that content assertions (transcript_*/result) run on the token-free replay PR gate while file_exists/egress_* only run live (nightly). Should not mix content and filesystem keys in one assert item.",
+      "expected_output": "A valid scenario YAML (correct fidelity tier for the egress check, on_unanswered: fail for determinism plus scripted when_question/choose answers only if the skill raises gates, content assertions separated from filesystem/egress ones) plus a correct explanation that content assertions (transcript_*/result) run on the token-free replay PR gate, egress_* keys are live-only and never evaluate on replay, and filesystem keys (file_exists/user_visible_artifact) are replay-checkable only when the cassette carries a record-time artifacts manifest. Should not mix content and filesystem/egress keys in one assert item.",
       "files": []
     },
     {

@@ -10,10 +10,12 @@ assert:
 - semantic_matches:
     rubric:
     - The scenario uses a sandboxed fidelity tier (e.g. container) since it must assert egress to api.weather.example.com
-    - 'The scenario uses scripted answers (when_question/choose rules) with on_unanswered: fail for determinism'
+    - 'The scenario pins determinism with on_unanswered: fail (and scripted when_question/choose answers
+      only if the skill raises gates)'
     - Content assertions (e.g. transcript_matches/result) are kept in separate assert items from filesystem/egress
-      assertions (file_exists/egress_*)
+      assertions
     - Content assertions like transcript_matches/result run on the token-free replay PR gate
-    - Filesystem and egress assertions (file_exists, egress_*) only evaluate on live runs, so they belong
-      on the nightly job
+    - egress_* assertions are live-only and never evaluate on replay (they belong on a live/nightly lane),
+      while filesystem keys like file_exists/user_visible_artifact are replay-checkable only when the
+      cassette carries a record-time artifacts manifest
     - A single assert item should not mix content keys with filesystem/egress keys
