@@ -38,8 +38,27 @@ All notable changes to this project are documented here. The format is based on
   so prompt-append drift is detectable across releases without publishing the proprietary verbatim text.
   The append is verified **unchanged** from 1.18286.0 to 1.18286.2 (identical code-point count and section
   structure).
+- **Execution-location taxonomy** — four additive, absent-compatible fields so a future cloud-run
+  artifact can never be silently mislabeled as a local one, and filesystem-dependent guards degrade to
+  evidence-unavailable rather than false-passing: `RunResult.execution` (`{location, environmentId?,
+  taskKind?}`, stamped `location:"local"` on every locally-executed run, wired through all five
+  `RunResult`-assembling call sites — a replay honestly passes through the recording's own location
+  instead of guessing); `Cassette.environment` (recording-time provenance stamp, no `cassetteVersion`
+  bump); a manifest-local `origin` field on the pre-run manifest (`"local-walk"` today; a
+  `"remote-unavailable"` producer would make `no_unexpected_files`/`input_unmodified` fail loud instead
+  of vacuously passing on an unwalkable tree); and a reserved `Scenario.execution` enum
+  (`"local"` default | `"cloud-describe"`, which hard-errors at load time — like
+  `replay_protocol_fidelity` — since no runner exists for it yet, rather than being silently accepted
+  and ignored). No cloud execution capability is added; these are purely descriptive/forward-compat.
 
 ### Fixed
+
+- **`sync`'s asar-bundle reader followed a stale assumption about Desktop's Vite build output.** A
+  Desktop release that code-splits `.vite/build/index.js` into a small entry stub plus a
+  content-hashed chunk file (rather than one monolithic bundle) was silently read as near-empty
+  content, misreporting real spawn-contract/mount-mode/web_fetch facts as broken. `readMainBundle()`
+  now follows the entry's local `require()` references transitively so both bundle layouts read
+  correctly.
 
 - **`--output-format json` output from `replay`/`record`/`verify-cassettes`/`rehash`/`doctor` no longer
   silently truncates past 64KB.** These commands wrote their JSON envelope via the async

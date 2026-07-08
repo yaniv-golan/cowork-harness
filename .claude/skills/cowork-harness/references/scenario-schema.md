@@ -34,6 +34,9 @@ name: my-test                       # OPTIONAL — defaults to the filename; key
 baseline: latest                    # platform baseline: "latest" or "desktop-<ver>" (NOT "profile:")
 session: ../sessions/default.yaml   # pre-prompt setup (resolved relative to THIS file)
 fidelity: container                 # protocol | container | microvm | hostloop | cowork
+execution: local                    # OPTIONAL — orthogonal to fidelity (a privilege/sandbox tier, all
+                                    # local): local (default) | cloud-describe (RESERVED — no runner
+                                    # exists yet; authoring it is a load-time error, not a silent no-op)
 on_unanswered: fail                 # policy for unscripted gates: fail | prompt | first | llm
 
 prompt: |                           # the user turn
