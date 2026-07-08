@@ -50,6 +50,9 @@ Before the first command, confirm the CLI is reachable and **fail loud** (never 
   scenario file.
 - **Repeatable, asserted regression** → author a `scenarios/*.yaml` and run `cowork-harness run`.
   This is the CI-grade path and most of this skill.
+- **Regression-test your skill's ANSWER quality** (not just its behavior — does its guidance still lead to
+  correct answers after you edit it?) → author `semantic_matches` scenarios and gate on the per-claim
+  profile. See **Recipe 5** in `references/task-recipes.md` (validity, N≥3, discrimination — the traps).
 - **A run failed — or greened and you don't trust it** (the debugging loop) → don't re-run and hope.
   The run already wrote its evidence to a **kept run dir** (`~/.cowork-harness/runs/…`; `--keep` prints
   the path, `trace <run-id>` finds it). **Localize the failure post-hoc** from that evidence:

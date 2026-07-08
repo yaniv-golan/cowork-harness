@@ -1,4 +1,4 @@
-# Task recipes — end-to-end paths for the four jobs consumers actually reverse-engineer
+# Task recipes — end-to-end paths for the jobs consumers actually do
 
 Each recipe composes facts that live scattered across SKILL.md and the other references into one
 decision path. Every one answers a question a real fleet owner had to work out the hard way. Facts track the harness version in SKILL.md's
@@ -113,3 +113,46 @@ have:
    token-free on replay; `questions_count_max` needs `controlOut` (Recipe 1's tree applies).
    `max_cost_usd` / `max_tokens` on replay assert the FROZEN recording's spend — near-zero signal
    as a regression gate; if you need a cost gate, put it on the live lane via `stats`.
+
+## Recipe 5 — Evaluate your skill's ANSWER QUALITY (semantic regression gate)
+
+Behavioral asserts (`file_exists`, `egress_*`, `tool_called`) test what a skill *does*.
+`semantic_matches` tests what it *says* — whether the skill's guidance leads the agent to a correct
+answer. Use this to gate a skill edit (e.g. a SKILL.md refactor) so a restructure can't silently
+degrade the advice. It is real work to calibrate; these steps are the traps that make or break it.
+
+1. **Author a suite of Q&A scenarios — one per representative question.** Each installs your skill and
+   asserts the answer with a rubric:
+   ```yaml
+   session: ./_session.yaml      # plugins.local_plugins + enabled: [<your-skill>@local]
+   fidelity: container
+   prompt: <a real question a user of your skill would ask>
+   assert:
+     - semantic_matches:
+         rubric:
+           - <one discrete, checkable claim a correct answer MUST make>
+           - <another>
+   ```
+2. **Write DISCRIMINATING claims, and verify each against ground truth — not memory.** A claim that
+   contradicts how the tool actually behaves can *never* pass (the correct skill will contradict it), and
+   it silently poisons the gate. Check each claim against the code/docs. Decompose into single,
+   independently-checkable statements; prefer facts only your skill supplies.
+3. **Verify the skill was actually invoked.** A rep whose `RunResult.skillsInvoked` does NOT include your
+   skill answered from the model's priors, not your skill — it is not a valid measurement. Check it
+   (`trace <run-id>` / `result.json`) and discard or re-run invalid reps.
+4. **Run N≥3 reps; read the per-claim PROFILE, not a single verdict.** Agent answers vary run to run, so a
+   correct claim can pass one rep and miss the next. A claim's baseline is its pass *rate* (3/3, 2/3), read
+   from `RunResult.assertions[].semanticClaims`. Do **not** chase single-run all-pass — set `min_pass` to
+   the reliably-hit core for a green verdict, and treat the per-claim rates as the real signal. (N=1
+   routinely mislabels a stable 0/3 as "intermittent" and vice-versa.)
+5. **Check discrimination — does the skill actually help?** Run one rep with the skill NOT installed (or
+   inspect a not-invoked rep). If the answer still scores high, that claim is answerable from priors and
+   tests the model, not your skill — strengthen it (a skill-specific fact) or drop it.
+6. **Gate a change on the profile diff.** Capture the per-claim profile before your edit (the baseline),
+   make the edit, re-capture, and compare per claim: a claim that DROPPED (e.g. 3/3 → 0/3) is a regression
+   your edit caused; a claim already at 0/3 (a known gap) cannot regress. That turns "did my SKILL.md
+   refactor quietly make the advice worse?" into a checkable gate.
+
+**Lane note:** `semantic_matches` is **live-only** (the judge is a live model call), so these scenarios
+run on the `run` lane, never token-free `replay` — the linter's "all assertions live-only" warning is
+expected and correct here.
