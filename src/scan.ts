@@ -52,7 +52,12 @@ export const DEFAULT_SCAN_PATTERNS: { re: RegExp; cls: string }[] = [
     // over structured JSON at scan time (a deliberate design decision: structured extraction beats
     // a boolean over free-form text here). Unix-only by scope — a Windows path (C:\Users\...) does not match; this repo
     // records via Docker/Lima on macOS/Linux.
-    re: /(?<![^\s"'(=:])(\/Users\/|\/home\/|\/root\/)[^\s"')]+/gi,
+    // macOS-host-only prefixes (/private/var, /var/folders, /Volumes) are included alongside the
+    // universal /Users//home//root so a leaked temp-dir or external-volume host path is caught too —
+    // matching the (deliberately separate, encoding-aware) run-level `hostPathLeaked` detector's prefix
+    // set. `/opt/cowork/` is intentionally NOT here: the microvm tier legitimately mounts the agent at
+    // /opt/cowork/agent (src/runtime/lima.ts), so its appearance in a recording is expected, not a leak.
+    re: /(?<![^\s"'(=:])(\/Users\/|\/home\/|\/root\/|\/private\/var\/|\/var\/folders\/|\/Volumes\/)[^\s"')]+/gi,
     cls: "path",
   },
   {

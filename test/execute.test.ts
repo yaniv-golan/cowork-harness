@@ -254,6 +254,24 @@ describe("execute — scanEvents host-path leak detection", () => {
     expect(scanEvents(f).hostPathLeaked).toBe(false);
   });
 
+  it("flags sidecarMissing (NOT a clean scan) when events.jsonl is absent (#40)", () => {
+    const missing = join(mkdtempSync(join(tmpdir(), "cowork-scan-")), "does-not-exist.jsonl");
+    const out = scanEvents(missing);
+    expect(out.sidecarMissing).toBe(true);
+    // a genuinely clean scan of a present file must NOT be sidecarMissing — the two are distinguishable now
+    const clean = writeEvents([{ type: "system", content: "all good" }]);
+    expect(scanEvents(clean).sidecarMissing).toBe(false);
+  });
+
+  it("counts malformedLines on a corrupt/truncated events.jsonl (#41)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "cowork-scan-"));
+    const f = join(dir, "events.jsonl");
+    writeFileSync(f, ['{"type":"system","content":"ok"}', "{ this is not json", '{"type":"user"}'].join("\n"));
+    const out = scanEvents(f);
+    expect(out.malformedLines).toBe(1);
+    expect(out.sidecarMissing).toBe(false);
+  });
+
   it("trips on a host path that appears ONLY in a thinking block", () => {
     const f = writeEvents([
       { type: "assistant", message: { content: [{ type: "thinking", thinking: "the file is at /Users/yaniv/secret" }] } },

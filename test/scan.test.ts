@@ -17,6 +17,16 @@ describe("scanText — default PII heuristics (email + currency + domain + path 
   it("clean synthetic text → no findings", () => {
     expect(scanText("the quick brown fox jumped", "transcript", [])).toEqual([]);
   });
+  it("flags macOS-host-only path prefixes /private/var, /var/folders, /Volumes (#39)", () => {
+    for (const p of ["/private/var/folders/xx/tmpfile", "/var/folders/br/abc/T/leak", "/Volumes/Extern/secret"]) {
+      const f = scanText(`leaked ${p} here`, "transcript", []);
+      expect(f.some((x) => x.cls === "path")).toBe(true);
+    }
+  });
+  it("does NOT flag /opt/cowork/agent (legitimate in-VM microvm mount, not a host leak) (#39)", () => {
+    const f = scanText("binary at /opt/cowork/agent/claude", "transcript", []);
+    expect(f.some((x) => x.cls === "path")).toBe(false);
+  });
   it("does NOT flag multi-word proper names (opt-in only, not a default class)", () => {
     const f = scanText("Jane Doe met Acme Corp", "transcript", []);
     expect(f).toEqual([]);

@@ -706,6 +706,13 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   }
 
   const scan = scanEvents(join(outDir, "events.jsonl"));
+  // A missing or corrupt events.jsonl means the post-run scan (host-path-leak / delete-in-outputs /
+  // self-heal) has no trustworthy evidence — treat it as unavailable, never as a clean scan.
+  const scanUnavailable = scan.sidecarMissing || scan.malformedLines > 0;
+  if (scan.sidecarMissing)
+    warn(`::warning:: [scan] events.jsonl missing — post-run scan evidence unavailable (host-path-leak / delete-in-outputs / self-heal cannot be verified)\n`);
+  else if (scan.malformedLines > 0)
+    warn(`::warning:: [scan] ${scan.malformedLines} malformed line(s) in events.jsonl — scan evidence unreliable, treated as unavailable\n`);
   const workRoot = effectiveFidelity === "protocol" ? join(outDir, "work") : join(outDir, "work", "session", "mnt");
 
   // The runtime tripwire: if a gated tool call completed successfully with no evidence the path-containment
@@ -838,6 +845,9 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     questions: record.questions,
     hostPathLeaked: scan.hostPathLeaked,
     selfHealRan: scan.selfHealRan,
+    // Missing/corrupt events.jsonl → the scan-dependent assertions (no_delete_in_outputs /
+    // transcript_no_host_path / self_heal_ran) fail "evidence unavailable" instead of vacuously green.
+    scanMissing: scanUnavailable,
     subagents: record.subagents,
     gateDeliveries: record.gateDeliveries,
     toolResultTexts: record.toolResults.map((r) => r.assertText ?? r.text),
@@ -1079,7 +1089,10 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     nonDeterministicTerminal: onUnanswered === "llm" || onUnanswered === "prompt" || !!opts.externalChannel,
     gateProvenance: gateProvenance.total ? gateProvenance : undefined,
     permissiveAutoAllow: record.permissiveAutoAllow.length ? record.permissiveAutoAllow : undefined, // cowork-parity off-registry auto-allows (real Cowork blocks) — non-empty ⇒ NOT a faithful pass
-    scan, // post-run scan signals (delete-in-outputs / host-path-leak / self-heal) — computeVerdict default-fails when unasserted
+    // post-run scan signals (delete-in-outputs / host-path-leak / self-heal) — computeVerdict default-fails
+    // when unasserted. `undefined` (NOT an all-false object) when events.jsonl was missing/corrupt, so
+    // verify-run's `scanMissing = result.scan === undefined` fires and the dependent assertions fail loud.
+    scan: scanUnavailable ? undefined : { outputsDeletes: scan.outputsDeletes, hostPathLeaked: scan.hostPathLeaked, selfHealRan: scan.selfHealRan },
     effectiveFidelity, // The tier actually used — differs from fidelity when fidelity:"cowork"
     fidelityWarnings: promptFidelityWarnings, // structured prompt warnings visible to JSON callers
     l0PluginDivergence: l0PluginDivergence || undefined, // failing fidelity signal for protocol+plugins
@@ -1579,12 +1592,23 @@ export function outputsDeleteSnippet(cmd: string): string {
 }
 
 /** Scan a run's events.jsonl for limitation-fidelity signals (moved from cli.ts). */
-export function scanEvents(file: string): { outputsDeletes: string[]; hostPathLeaked: boolean; selfHealRan: boolean } {
-  const out = { outputsDeletes: [] as string[], hostPathLeaked: false, selfHealRan: false };
+export function scanEvents(file: string): {
+  outputsDeletes: string[];
+  hostPathLeaked: boolean;
+  selfHealRan: boolean;
+  // events.jsonl was absent/unreadable — the scan produced NO evidence. Distinct from a clean scan:
+  // callers must NOT persist an all-false scan for this case (that reads as "scanned, found nothing").
+  sidecarMissing: boolean;
+  // count of events.jsonl lines that failed JSON.parse — a corrupt/truncated log where a leak-bearing
+  // line could have been silently dropped. >0 makes the scan untrustworthy, treated as evidence-unavailable.
+  malformedLines: number;
+} {
+  const out = { outputsDeletes: [] as string[], hostPathLeaked: false, selfHealRan: false, sidecarMissing: false, malformedLines: 0 };
   let lines: string[] = [];
   try {
     lines = readFileSync(file, "utf8").trim().split("\n");
   } catch {
+    out.sidecarMissing = true;
     return out;
   }
   const selfHealRe = /\/sessions\/[^\s"]*\/mnt\/\.local-plugins/;
@@ -1593,6 +1617,7 @@ export function scanEvents(file: string): { outputsDeletes: string[]; hostPathLe
     try {
       msg = JSON.parse(l);
     } catch {
+      out.malformedLines++;
       continue;
     }
     // host-path leaks can appear in tool_result blocks (Bash stdout/stderr) and user messages,
