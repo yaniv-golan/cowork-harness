@@ -172,3 +172,45 @@ describe("present_files presence + skill/artifact evidence (#15/#16/#38)", () =>
     expect(r.message).toMatch(/local-unreadable|evidence unavailable/);
   });
 });
+
+describe("positive assertions emit evidence-unavailable (not a misleading negative) when the channel is missing (#1-#5)", () => {
+  it("tool_called → evidence unavailable when the tool-count channel is absent (#2)", () => {
+    const [r] = evaluate([{ tool_called: "Bash" }], ctx({ toolsCalledMissing: true }));
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/evidence unavailable.*tool counts/);
+    // and NOT the misleading substantive message
+    expect(r.message).not.toMatch(/tool not called/);
+  });
+
+  it("tool_result_contains → evidence unavailable when tool results are absent (#1)", () => {
+    const [r] = evaluate([{ tool_result_contains: "ok" }], ctx({ toolResultsMissing: true }));
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/evidence unavailable.*tool results/);
+  });
+
+  it("subagent_tool_used → evidence unavailable when the dispatch tree is absent (#3)", () => {
+    const [r] = evaluate([{ subagent_tool_used: "Read" }], ctx({ subagentsMissing: true }));
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/evidence unavailable.*dispatch tree/);
+    expect(r.message).not.toMatch(/did not use/);
+  });
+
+  it("subagent_dispatched → evidence unavailable when the dispatch tree is absent (#4)", () => {
+    const [r] = evaluate([{ subagent_dispatched: "general" }], ctx({ subagentsMissing: true }));
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/evidence unavailable.*dispatch tree/);
+  });
+
+  it("egress_denied/egress_allowed → evidence unavailable when the egress log field is absent (#5)", () => {
+    const [d] = evaluate([{ egress_denied: "evil.com" }], ctx({ egressMissing: true }));
+    expect(d.pass).toBe(false);
+    expect(d.message).toMatch(/evidence unavailable.*egress log/);
+    const [a] = evaluate([{ egress_allowed: "api.anthropic.com" }], ctx({ egressMissing: true }));
+    expect(a.pass).toBe(false);
+    expect(a.message).toMatch(/evidence unavailable.*egress log/);
+    // a legitimately-empty egress (zero attempts, NOT missing) still fails substantively, not "unavailable"
+    const [z] = evaluate([{ egress_allowed: "api.anthropic.com" }], ctx({ egress: [] }));
+    expect(z.pass).toBe(false);
+    expect(z.message).toMatch(/expected egress allowed/);
+  });
+});

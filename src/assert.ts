@@ -180,6 +180,11 @@ export interface AssertContext {
   toolsCalled: Set<string>;
   subagentTools: Set<string>;
   egress: RunResult["egress"];
+  /** Set by verify-run only when `result.egress` is undefined in result.json (a run predating the egress
+   *  field). Distinct from a legitimately-empty [] (a run that made zero egress attempts — the proxy
+   *  writes the log lazily on the first decision, so absent ≠ missing evidence). egress_denied/allowed
+   *  fail evidence-unavailable when set, rather than the misleading "expected egress denied". #5 */
+  egressMissing?: boolean;
   result: "success" | "error";
   workRoot: string; // dir under which file_exists paths resolve (L0: work/, L1/L2: work/session/mnt)
   userVisiblePrefixes: string[]; // path prefixes promoted to the user (e.g. outputs, .projects)
@@ -434,7 +439,11 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
     );
   if (a.tool_result_contains !== undefined) {
     const needle = a.tool_result_contains;
-    if (ctx.toolResultTexts.some((t) => t.includes(needle))) {
+    if (ctx.toolResultsMissing) {
+      // Mirror tool_result_not_contains: when the channel is absent, say WHY (evidence unavailable)
+      // instead of the misleading substantive "no tool result contained X". #1
+      results.push(fail(`evidence unavailable: tool results absent from result.json — cannot evaluate tool_result_contains`));
+    } else if (ctx.toolResultTexts.some((t) => t.includes(needle))) {
       results.push(ok());
     } else {
       // No match found — but a match could sit PAST the display cap of a truncated result (assertText
@@ -567,7 +576,12 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
   }
   if (a.tool_called !== undefined)
     results.push(
-      ctx.toolsCalled.has(a.tool_called) ? ok(`tool_called: ${a.tool_called} was called`) : fail(`tool not called: ${a.tool_called}`),
+      ctx.toolsCalledMissing
+        ? // Mirror tool_not_called: a missing tool-count channel is "cannot evaluate", not "not called". #2
+          fail(`evidence unavailable: tool counts absent from result.json — cannot evaluate tool_called`)
+        : ctx.toolsCalled.has(a.tool_called)
+          ? ok(`tool_called: ${a.tool_called} was called`)
+          : fail(`tool not called: ${a.tool_called}`),
     );
   if (a.tool_not_called !== undefined)
     results.push(
@@ -578,7 +592,14 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
           : fail(`tool unexpectedly called: ${a.tool_not_called}`),
     );
   if (a.subagent_tool_used !== undefined)
-    results.push(ctx.subagentTools.has(a.subagent_tool_used) ? ok() : fail(`sub-agent did not use: ${a.subagent_tool_used}`));
+    results.push(
+      ctx.subagentsMissing
+        ? // Mirror subagent_tool_absent: a missing dispatch tree is "cannot evaluate", not "did not use". #3
+          fail(`evidence unavailable: sub-agent dispatch tree absent from result.json — cannot evaluate subagent_tool_used`)
+        : ctx.subagentTools.has(a.subagent_tool_used)
+          ? ok()
+          : fail(`sub-agent did not use: ${a.subagent_tool_used}`),
+    );
   if (a.subagent_tool_absent !== undefined)
     results.push(
       ctx.subagentsMissing
@@ -592,6 +613,9 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
     // (no subagent_type → agentType "unknown"), so name-matching alone would miss those.
     const c = compileUserRegex(a.subagent_dispatched);
     if ("error" in c) results.push(fail(`subagent_dispatched: bad regex "${a.subagent_dispatched}": ${c.error}`));
+    else if (ctx.subagentsMissing)
+      // Mirror the sibling subagent assertions: a missing dispatch tree is "cannot evaluate". #4
+      results.push(fail(`evidence unavailable: sub-agent dispatch tree absent from result.json — cannot evaluate subagent_dispatched`));
     else
       results.push(
         ctx.subagents.some((s) => c.re.test(s.agentType) || c.re.test(s.description ?? ""))
@@ -954,15 +978,19 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
   }
   if (a.egress_denied !== undefined)
     results.push(
-      ctx.egress.some((e) => hostMatches(e.host, a.egress_denied!) && e.decision === "deny")
-        ? ok()
-        : fail(`expected egress denied: ${a.egress_denied}`),
+      ctx.egressMissing
+        ? fail(`evidence unavailable: egress log absent from result.json — cannot evaluate egress_denied`)
+        : ctx.egress.some((e) => hostMatches(e.host, a.egress_denied!) && e.decision === "deny")
+          ? ok()
+          : fail(`expected egress denied: ${a.egress_denied}`),
     );
   if (a.egress_allowed !== undefined)
     results.push(
-      ctx.egress.some((e) => hostMatches(e.host, a.egress_allowed!) && e.decision === "allow")
-        ? ok()
-        : fail(`expected egress allowed: ${a.egress_allowed}`),
+      ctx.egressMissing
+        ? fail(`evidence unavailable: egress log absent from result.json — cannot evaluate egress_allowed`)
+        : ctx.egress.some((e) => hostMatches(e.host, a.egress_allowed!) && e.decision === "allow")
+          ? ok()
+          : fail(`expected egress allowed: ${a.egress_allowed}`),
     );
   if (a.no_delete_in_outputs !== undefined)
     results.push(

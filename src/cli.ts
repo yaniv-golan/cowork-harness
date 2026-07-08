@@ -3219,6 +3219,7 @@ async function cmdVerifyRun(args: string[]) {
     toolsCalled: new Set(Object.keys(result.toolCounts ?? {})),
     subagentTools: new Set((result.subagents ?? []).flatMap((s) => (s.toolsUsed ?? []).map((d) => d.name))),
     egress: result.egress ?? [],
+    egressMissing: result.egress === undefined, // absent field (old result.json) ≠ a run that made zero egress attempts
     result: result.result === "error" ? "error" : "success",
     workRoot,
     // Read the roots persisted at run time (folder mount names are dynamic/gated, not a fixed prefix).
