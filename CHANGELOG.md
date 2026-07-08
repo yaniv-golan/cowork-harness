@@ -186,6 +186,13 @@ All notable changes to this project are documented here. The format is based on
 
 ### Internal
 
+- **`schema/run-result.json` is now kept in sync with the `RunResult` type automatically.** A new
+  name-level drift test derives the type's field set from `src/types.ts` (TS compiler API) and asserts
+  the schema declares exactly those fields, both directions — closing the gap where an added type field
+  could ship undeclared in the §12 schema (six such fields — `finalMessage`, `resources`,
+  `contextEvents`, `mcpErrors`, `hookEvents`, `presentedFiles` — were backfilled). Complements the
+  existing value-shape validation; the hand-authored descriptions/shapes are preserved (no fragile full
+  regenerator).
 - Added a per-claim regression-diff (`scripts/eval-gate-diff.ts`) and an N-rep baseline-profile
   aggregator (`scripts/eval-baseline-profile.mjs`) for the project's own answer-quality eval gate over
   the companion skill (`test/evals/`, not shipped as part of the skill).

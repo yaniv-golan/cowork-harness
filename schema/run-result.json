@@ -35,6 +35,34 @@
       "type": "boolean",
       "description": "True when the run was ablated (--ablate-skill): the skill(s)-under-test were removed so the same prompt runs with no skill — a negative control for skill-lift measurement. Never read an ablated run as a real (with-skill) pass."
     },
+    "finalMessage": {
+      "type": "string",
+      "description": "The agent's final answer text — the SDK result message's designated answer, not the joined transcript of every assistant turn. Absent when no result event carried text (a spawn/exit error before the result)."
+    },
+    "resources": {
+      "type": "object",
+      "description": "Resource telemetry sampled during the run (tier, sample count/interval, peak RSS bytes, avg/peak CPU%). Live lane only."
+    },
+    "contextEvents": {
+      "type": "array",
+      "items": { "type": "object" },
+      "description": "Context lifecycle events incl. compaction boundaries ({subtype, ts?, data?})."
+    },
+    "mcpErrors": {
+      "type": "array",
+      "items": { "type": "object" },
+      "description": "Failed MCP round-trips ({server, code?, message}). Live lane only."
+    },
+    "hookEvents": {
+      "type": "array",
+      "items": { "type": "object" },
+      "description": "PreToolUse hook block/allow decisions ({callbackId, decision, reason?, tool?})."
+    },
+    "presentedFiles": {
+      "type": "array",
+      "items": { "type": "object" },
+      "description": "present_files promotions ({from, to, promoted, leaked}) — scratch→outputs deliverable surfacing (container tier)."
+    },
     "mode": {
       "type": "string",
       "enum": [
