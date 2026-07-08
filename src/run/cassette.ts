@@ -2444,6 +2444,7 @@ function replayErrorResult(file: string): RunResult {
   return assembleRunResult({
     turn: undefined, // replay reconstructs one recorded run; no multi-turn attribution
     referencesRead: undefined, // replay doesn't re-derive the skill-file read-set (live-lane signal)
+    ablated: undefined, // replay reconstructs a recorded run; ablation is a live-run control
     scenario: file,
     fidelity: "replay",
     baseline: "",
@@ -4126,6 +4127,7 @@ export async function replayCassette(
     return assembleRunResult({
       turn: undefined, // replay reconstructs one recorded run; no multi-turn attribution
       referencesRead: undefined, // replay doesn't re-derive the skill-file read-set (live-lane signal)
+      ablated: undefined, // replay reconstructs a recorded run; ablation is a live-run control
       scenario: cassette.scenario.name,
       mode: "run",
       // Pass through the frozen recording-time provenance — an older cassette that predates

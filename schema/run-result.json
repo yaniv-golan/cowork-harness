@@ -31,6 +31,10 @@
       "items": { "type": "string" },
       "description": "Skill reference/script files the agent Read (skill-relative: references/foo.md, scripts/bar.py), deduped in first-seen order. A progressive-disclosure signal for skill-quality measurement. SKILL.md is delivered whole (never Read), so it never appears. Live lane only."
     },
+    "ablated": {
+      "type": "boolean",
+      "description": "True when the run was ablated (--ablate-skill): the skill(s)-under-test were removed so the same prompt runs with no skill — a negative control for skill-lift measurement. Never read an ablated run as a real (with-skill) pass."
+    },
     "mode": {
       "type": "string",
       "enum": [

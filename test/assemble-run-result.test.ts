@@ -13,6 +13,7 @@ function fullyExplicitFixture(): CompleteRunResult {
     $schema: undefined,
     generator: undefined,
     turn: undefined,
+    ablated: undefined,
     referencesRead: undefined,
     mode: undefined,
     execution: undefined,

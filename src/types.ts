@@ -878,6 +878,10 @@ export interface RunResult {
    *  answer from the envelope instead of parsing run.jsonl. Absent when no result event carried text
    *  (e.g. a spawn/exit error before the result). */
   finalMessage?: string;
+  /** True when the run was ABLATED (`--ablate-skill`): the skill(s)-under-test were deliberately removed
+   *  so the same prompt runs with no skill — a negative control for skill-lift measurement. A consumer
+   *  must never read an ablated run as a real (with-skill) pass. Absent/false on a normal run. */
+  ablated?: boolean;
   /** Skill reference/script files the agent actually **Read** during the run (skill-relative:
    *  `references/foo.md`, `scripts/bar.py`), deduped in first-seen order. A progressive-disclosure
    *  signal — "did the agent reach this content?" — for skill-quality measurement. `SKILL.md` is

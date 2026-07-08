@@ -49,6 +49,7 @@ export function buildChatResult(record: RunRecord, opts: ChatResultOpts): RunRes
     generator: "cowork-harness",
     mode: "chat",
     turn: undefined, // chat is its own multi-turn REPL; per-turn attribution isn't tracked here
+    ablated: undefined, // chat is exploratory, not an ablation control
     referencesRead: record.filesRead.length ? record.filesRead : undefined,
     finalMessage: record.resultText,
     // Deliberate exception to chat's usual "every verdict/capability field is undefined" convention:

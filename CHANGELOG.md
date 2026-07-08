@@ -190,6 +190,12 @@ All notable changes to this project are documented here. The format is based on
   aggregator (`scripts/eval-baseline-profile.mjs`) for the project's own answer-quality eval gate over
   the companion skill (`test/evals/`, not shipped as part of the skill).
 
+- **`--ablate-skill`** (on `run` / `skill`) — run the same prompt with the skill(s)-under-test removed:
+  a deterministic negative control for skill-lift measurement (with-skill vs. without). All plugin/skill
+  discovery is stripped so nothing mounts and the agent answers from its own priors; model/folders/egress
+  are preserved. The result is stamped `RunResult.ablated: true` so a consumer never reads an ablated run
+  as a real (with-skill) pass. Pairs with the `semantic_matches` per-claim profile to quantify how much a
+  claim depends on the skill vs. the model's priors.
 - **`prune --pinned-older-than <N>d|h|m`** — opt-in reclaim for pinned (`--session-id`) run dirs, which
   are otherwise retained unconditionally. A programmatic consumer that mints one pinned session per run
   (e.g. one per eval × rep) previously leaked them forever with no policy; this reclaims pinned sessions

@@ -94,6 +94,11 @@ export interface ExecuteOptions {
   /** override the `semantic_matches` judge — mainly so tests inject a stub in place of the live LLM
    *  judge. Default: makeSemanticJudge() (the real judge, via the shared claude -p transport). */
   semanticJudge?: SemanticJudge;
+  /** ABLATION (`--ablate-skill`): run the SAME prompt with the skill(s)-under-test removed — a
+   *  deterministic negative control for skill-lift measurement (with-skill vs without). All plugin/skill
+   *  discovery is stripped so nothing mounts and the agent answers from its own priors; the result is
+   *  stamped `ablated:true` so a consumer never reads it as a real run. */
+  ablateSkill?: boolean;
   /** mark the run non-deterministic even if no `by:"llm"` decision (e.g. a driving agent answers via `--decider-dir`). */
   nonDeterministicHint?: boolean;
   hooks?: RunHooks[];
@@ -201,7 +206,11 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   if (opts.resume && !opts.sessionId) throw new Error("resume requires sessionId (--session-id was not provided)");
 
   const baseline = loadBaseline(scenario.baseline);
-  const session = opts.session ?? loadSessionFromFile(scenario.session);
+  const loadedSession = opts.session ?? loadSessionFromFile(scenario.session);
+  // C2 ablation: strip ALL skill/plugin discovery so no skill-under-test mounts — the agent answers the
+  // same prompt from its own priors (a deterministic negative control for skill-lift). An empty
+  // local_plugins means no mount is attempted, so the empty-mount hard-fail guard never fires.
+  const session = opts.ablateSkill ? ablateSession(loadedSession) : loadedSession;
 
   // Session identity. Without a stable handle: a fresh ephemeral id (current behavior). WITH one
   // (--session-id / resume): a STABLE cwd id + run dir, so the agent's native sessionFile persists and
@@ -776,6 +785,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     const turn = archivePriorTurnFiles(outDir);
     const partialResult = buildPartialResult({
       turn,
+      ablated: opts.ablateSkill,
       scenarioName: scenario.name,
       prompt: scenario.prompt,
       fidelity: scenario.fidelity,
@@ -1054,6 +1064,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     generator: "cowork-harness",
     mode: "run",
     turn,
+    ablated: opts.ablateSkill || undefined,
     referencesRead: record.filesRead.length ? record.filesRead : undefined,
     finalMessage: record.resultText,
     execution: { location: "local" }, // live local run — no scheduled-trigger lane exists yet (no taskKind)
@@ -1242,6 +1253,19 @@ function validateScenarioRegexes(scenario: Scenario, scenarioPath: string): void
   }
 }
 
+/** ABLATION helper: return a clone of `session` with EVERY skill/plugin discovery source emptied, so a
+ *  run mounts no skill-under-test and the agent answers from its own priors. Clones (never mutates) the
+ *  loaded/injected session so a matrix or repeat run reusing the object is unaffected. Model/folders/
+ *  egress are preserved — only skill discovery is removed, which is what makes it a clean with-vs-without
+ *  control. */
+export function ablateSession<T extends { plugins: Record<string, unknown>; skills: Record<string, unknown> }>(session: T): T {
+  return {
+    ...session,
+    plugins: { ...session.plugins, local_plugins: [], remote_plugins: [], local_marketplaces: [], marketplaces: [], enabled: [] },
+    skills: { ...session.skills, local: [] },
+  };
+}
+
 /** Load a session from a file and resolve its internal host paths relative to the session
  * file's own directory (see {@link resolveSessionPaths}). Exported for the matrix runner — cli.ts loads
  * the base session ONCE per matrix run, then applies per-cell overrides (applySessionOverrides,
@@ -1311,6 +1335,8 @@ function writeRunJsonl(
 export function buildPartialResult(args: {
   /** This turn's 1-based number (multi-turn attribution); undefined for callers that don't track it. */
   turn?: number;
+  /** True when this partial run was ablated (--ablate-skill). */
+  ablated?: boolean;
   scenarioName: string;
   prompt: string;
   fidelity: string;
@@ -1367,6 +1393,7 @@ export function buildPartialResult(args: {
     generator: "cowork-harness",
     mode: "run",
     turn: args.turn,
+    ablated: args.ablated || undefined,
     referencesRead: args.record.filesRead.length ? args.record.filesRead : undefined,
     finalMessage: args.record.resultText,
     execution: { location: "local" }, // live local run (salvaged partial) — same basis as the success path

@@ -47,6 +47,7 @@ const full: RunResult = {
   generator: "cowork-harness",
   turn: 1,
   referencesRead: ["references/task-recipes.md", "scripts/scenario.py"],
+  ablated: false,
   mode: "run",
   execution: { location: "local" },
   scenario: "example",
