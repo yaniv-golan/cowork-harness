@@ -449,7 +449,10 @@ type KeyResult = { pass: true; evidence?: string } | { pass: false; message: str
  * cannot be evaluated (filesystem/egress, or question/gate when controlOut is absent) are stripped
  * from the object BEFORE this runs (see replayCassette), so AND never straddles replay classes.
  */
-function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: boolean; message?: string; evidence?: string } {
+function check(
+  a: Assertion,
+  ctx: AssertContext,
+): { assertion: Assertion; pass: boolean; message?: string; evidence?: string; semanticClaims?: SemanticClaimResult[] } {
   const results: KeyResult[] = [];
   const ok = (evidence?: string): KeyResult => ({ pass: true, evidence });
   const fail = (message: string): KeyResult => ({ pass: false, message });
@@ -1420,12 +1423,16 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
     results.push(ctx.result === a.result ? ok(`result: ${ctx.result}`) : fail(`result was ${ctx.result}, expected ${a.result}`));
 
   if (results.length === 0) return { assertion: a, pass: false, message: "empty assertion" };
+  // Structured per-claim results for a semantic_matches assert (undefined for every other key) — so a
+  // consumer gets the per-claim profile, not just the summary message. Attached to fail AND pass.
+  const semanticClaims = a.semantic_matches !== undefined ? ctx.semanticResults?.get(a) : undefined;
+  const withClaims = <T extends object>(r: T): T => (semanticClaims ? { ...r, semanticClaims } : r);
   const firstFail = results.find((r): r is { pass: false; message: string } => !r.pass);
-  if (firstFail) return { assertion: a, pass: false, message: firstFail.message };
+  if (firstFail) return withClaims({ assertion: a, pass: false, message: firstFail.message });
   // All keys passed — gather the evidence each surfaced (AND-joined, one entry per key that cited something).
   const evidence = results
     .map((r) => (r as { evidence?: string }).evidence)
     .filter(Boolean)
     .join("; ");
-  return evidence ? { assertion: a, pass: true, evidence } : { assertion: a, pass: true };
+  return withClaims(evidence ? { assertion: a, pass: true, evidence } : { assertion: a, pass: true });
 }

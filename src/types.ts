@@ -859,7 +859,15 @@ export interface RunResult {
   // `evidence` (passing checks only) is the concrete file/value/tool/link that satisfied the assert —
   // surfaced by `replay --explain` so a green can be trusted rather than assumed vacuous. Optional: a check
   // with nothing concrete to cite omits it.
-  assertions: Array<{ assertion: Assertion; pass: boolean; message?: string; evidence?: string }>;
+  assertions: Array<{
+    assertion: Assertion;
+    pass: boolean;
+    message?: string;
+    evidence?: string;
+    /** Per-claim results for a `semantic_matches` assert (aligned to its rubric by index) — present only
+     *  on the live lane where the judge ran; a consumer can diff these across runs to gate a change. */
+    semanticClaims?: Array<{ index: number; claim: string; pass: boolean }>;
+  }>;
   subagents?: Array<{
     toolUseId: string;
     parentToolUseId?: string;

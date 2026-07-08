@@ -43,11 +43,16 @@ describe("semantic_matches — async pre-pass + synchronous evaluate() compose",
     expect(Array.isArray(r)).toBe(true); // not a Promise — the async work lives only in runSemanticJudges
   });
 
-  it("pre-pass grades, then evaluate() reads it — all claims pass (default min_pass: all)", async () => {
+  it("pre-pass grades, then evaluate() reads it — all claims pass + structured per-claim results attached", async () => {
     const a = sem(["alpha", "beta"]); // one object, reused (results are keyed by assertion identity)
     const c = ctx({ transcript: "alpha and beta are both here" });
     await runSemanticJudges([a], c, stub);
-    expect(evaluate([a], c)[0].pass).toBe(true); // 2/2 >= all
+    const r = evaluate([a], c)[0];
+    expect(r.pass).toBe(true); // 2/2 >= all
+    expect(r.semanticClaims).toEqual([
+      { index: 0, claim: "alpha", pass: true },
+      { index: 1, claim: "beta", pass: true },
+    ]); // the per-claim profile a gate diffs across runs, not just the summary message
   });
 
   it("per-claim + min_pass verdict: default 'all' fails a partial; an integer threshold passes it", async () => {
