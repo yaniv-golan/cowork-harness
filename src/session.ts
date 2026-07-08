@@ -47,7 +47,7 @@ function strippedEnv(baseline: PlatformBaseline): NodeJS.ProcessEnv {
  */
 
 const Folder = z.object({
-  from: z.string(), // host path; the mount name is ALWAYS derived (collision-resolved basename of the
+  from: z.string().min(1), // host path; the mount name is ALWAYS derived (collision-resolved basename of the
   // canonical path), matching real Cowork — there is no author-chosen `to:` override (it has no Cowork
   // analog). For Desktop >= 1.14271.0 the folder mounts at `mnt/<name>`; below it at `mnt/.projects/<name>`.
   // Binary-verified default: Cowork mounts userSelectedFolders `rw` (delete DENIED until approved via
@@ -85,34 +85,34 @@ export const SessionConfig = z.strictObject({
 
   // --- work folders (Cowork "add folder" / Spaces) -> mnt/<name> (>=1.14271.0) or mnt/.projects/<name> (legacy) ---
   folders: z.array(Folder).default([]),
-  trusted_folders: z.array(z.string()).default([]), // localAgentModeTrustedFolders
+  trusted_folders: z.array(z.string().min(1)).default([]), // localAgentModeTrustedFolders
   auto_mount_folders: z.boolean().default(false), // autoMountFolders
 
   // --- files uploaded before first prompt -> mnt/uploads ---
-  uploads: z.array(z.string()).default([]),
+  uploads: z.array(z.string().min(1)).default([]),
 
   // --- discovery: marketplaces / plugins / skills / mcp ---
   // Faithful default = same roots the in-VM claude-code agent uses; override for tests.
   plugins: z
     .object({
-      config_dir: z.string().nullable().default(null), // CLAUDE_CONFIG_DIR; null = harness-managed clean dir
-      marketplaces: z.array(z.string()).default([]), // plugin_marketplaces (git URLs / paths)
-      local_marketplaces: z.array(z.string()).default([]), // LOCAL marketplace dirs -> registered via `claude plugin marketplace add`
-      enabled: z.array(z.string()).default([]), // enabledPlugins (name@marketplace)
-      local_plugins: z.array(z.string()).default([]), // host plugin dirs -> mnt/.local-plugins/marketplaces/<marketplace>/<plugin> (>=1.14271.0; older baselines: mnt/.local-plugins/cache) (--plugin-dir)
-      remote_plugins: z.array(z.string()).default([]), // host plugin dirs -> mnt/.remote-plugins
+      config_dir: z.string().min(1).nullable().default(null), // CLAUDE_CONFIG_DIR; null = harness-managed clean dir
+      marketplaces: z.array(z.string().min(1)).default([]), // plugin_marketplaces (git URLs / paths)
+      local_marketplaces: z.array(z.string().min(1)).default([]), // LOCAL marketplace dirs -> registered via `claude plugin marketplace add`
+      enabled: z.array(z.string().min(1)).default([]), // enabledPlugins (name@marketplace)
+      local_plugins: z.array(z.string().min(1)).default([]), // host plugin dirs -> mnt/.local-plugins/marketplaces/<marketplace>/<plugin> (>=1.14271.0; older baselines: mnt/.local-plugins/cache) (--plugin-dir)
+      remote_plugins: z.array(z.string().min(1)).default([]), // host plugin dirs -> mnt/.remote-plugins
     })
     .default({ config_dir: null, marketplaces: [], local_marketplaces: [], enabled: [], local_plugins: [], remote_plugins: [] }),
 
   skills: z
     .object({
-      local: z.array(z.string()).default([]), // host skill dirs -> CLAUDE_CONFIG_DIR/skills
+      local: z.array(z.string().min(1)).default([]), // host skill dirs -> CLAUDE_CONFIG_DIR/skills
     })
     .default({ local: [] }),
 
   mcp: z
     .object({
-      config: z.string().nullable().default(null), // --mcp-config file (mcpServers map)
+      config: z.string().min(1).nullable().default(null), // --mcp-config file (mcpServers map); "" rejected at parse (was silently treated as "no config")
       enabled: z.array(z.string()).default([]), // enabledMcpjsonServers
     })
     .default({ config: null, enabled: [] }),
@@ -120,7 +120,7 @@ export const SessionConfig = z.strictObject({
   // --- network (Cowork egress, pre-prompt) ---
   egress: z
     .object({
-      extra_allow: z.array(z.string()).default([]), // coworkEgressAllowedHosts additions
+      extra_allow: z.array(z.string().min(1)).default([]), // coworkEgressAllowedHosts additions
       unrestricted: z.boolean().default(false), // "*"
     })
     .default({ extra_allow: [], unrestricted: false }),
@@ -142,7 +142,7 @@ export const SessionConfig = z.strictObject({
   // root. Editing an ignored path no longer re-stales cassettes.
   staleness: z
     .object({
-      hash_ignore: z.array(z.string()).default([]),
+      hash_ignore: z.array(z.string().min(1)).default([]),
     })
     .default({ hash_ignore: [] }),
 });
@@ -531,8 +531,12 @@ export function buildLaunchPlan(
       warn(`::warning:: [marketplace] ${msg}, excluded (COWORK_HARNESS_SOFT_MISSING)\n`);
       continue;
     }
-    if (manifest.name !== undefined && typeof manifest.name !== "string") {
-      const msg = `local marketplace manifest has invalid shape: "name" must be a string (got ${typeof manifest.name}): ${manifestPath}`;
+    if (manifest.name !== undefined && (typeof manifest.name !== "string" || manifest.name.length === 0)) {
+      // An empty-string name is rejected here with a direct diagnostic rather than surviving the
+      // `?? basename` fallback below (which `??` does NOT replace) and failing far downstream inside
+      // `safeMountSegment` with a generic "unsafe marketplace name" error.
+      const got = typeof manifest.name !== "string" ? typeof manifest.name : "empty string";
+      const msg = `local marketplace manifest has invalid shape: "name" must be a non-empty string (got ${got}): ${manifestPath}`;
       if (!softMissing) throw new Error(msg + " Fix it, or set COWORK_HARNESS_SOFT_MISSING=1 to skip it.");
       warn(`::warning:: [marketplace] ${msg}, excluded (COWORK_HARNESS_SOFT_MISSING)\n`);
       continue;
@@ -540,8 +544,18 @@ export function buildLaunchPlan(
     let badEntry = false;
     for (const entry of manifest.plugins ?? []) {
       for (const field of ["name", "source", "version"] as const) {
-        if ((entry as any)[field] !== undefined && typeof (entry as any)[field] !== "string") {
-          const msg = `local marketplace manifest has invalid shape: plugin entry "${field}" must be a string (got ${typeof (entry as any)[field]}): ${manifestPath}`;
+        const val = (entry as any)[field];
+        if (val !== undefined && typeof val !== "string") {
+          const msg = `local marketplace manifest has invalid shape: plugin entry "${field}" must be a string (got ${typeof val}): ${manifestPath}`;
+          if (!softMissing) throw new Error(msg + " Fix it, or set COWORK_HARNESS_SOFT_MISSING=1 to skip it.");
+          warn(`::warning:: [marketplace] ${msg}, excluded (COWORK_HARNESS_SOFT_MISSING)\n`);
+          badEntry = true;
+          break;
+        }
+        // A plugin entry's `name` is used to derive its mount segment; an empty string yields the same
+        // cryptic downstream `safeMountSegment` failure — reject it here with a direct diagnostic.
+        if (field === "name" && typeof val === "string" && val.length === 0) {
+          const msg = `local marketplace manifest has invalid shape: plugin entry "name" must be non-empty: ${manifestPath}`;
           if (!softMissing) throw new Error(msg + " Fix it, or set COWORK_HARNESS_SOFT_MISSING=1 to skip it.");
           warn(`::warning:: [marketplace] ${msg}, excluded (COWORK_HARNESS_SOFT_MISSING)\n`);
           badEntry = true;

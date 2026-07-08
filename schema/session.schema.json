@@ -71,7 +71,8 @@
         "type": "object",
         "properties": {
           "from": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1
           },
           "mode": {
             "default": "rw",
@@ -93,7 +94,8 @@
       "default": [],
       "type": "array",
       "items": {
-        "type": "string"
+        "type": "string",
+        "minLength": 1
       }
     },
     "auto_mount_folders": {
@@ -104,7 +106,8 @@
       "default": [],
       "type": "array",
       "items": {
-        "type": "string"
+        "type": "string",
+        "minLength": 1
       }
     },
     "plugins": {
@@ -122,7 +125,8 @@
           "default": null,
           "anyOf": [
             {
-              "type": "string"
+              "type": "string",
+              "minLength": 1
             },
             {
               "type": "null"
@@ -133,35 +137,40 @@
           "default": [],
           "type": "array",
           "items": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1
           }
         },
         "local_marketplaces": {
           "default": [],
           "type": "array",
           "items": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1
           }
         },
         "enabled": {
           "default": [],
           "type": "array",
           "items": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1
           }
         },
         "local_plugins": {
           "default": [],
           "type": "array",
           "items": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1
           }
         },
         "remote_plugins": {
           "default": [],
           "type": "array",
           "items": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1
           }
         }
       },
@@ -177,7 +186,8 @@
           "default": [],
           "type": "array",
           "items": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1
           }
         }
       },
@@ -194,7 +204,8 @@
           "default": null,
           "anyOf": [
             {
-              "type": "string"
+              "type": "string",
+              "minLength": 1
             },
             {
               "type": "null"
@@ -222,7 +233,8 @@
           "default": [],
           "type": "array",
           "items": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1
           }
         },
         "unrestricted": {
@@ -258,7 +270,8 @@
           "default": [],
           "type": "array",
           "items": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1
           }
         }
       },
