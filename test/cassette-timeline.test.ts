@@ -45,5 +45,16 @@ describe("readTimeline", () => {
     const parsed = readTimeline(dir);
     expect(parsed).toBeDefined();
     expect(parsed!.events).toEqual([good]);
+    // #35: the dropped line is COUNTED (not silently swallowed) so the caller can treat the derived
+    // skillActivity/toolDurations as evidence-unavailable rather than silently incomplete.
+    expect(parsed!.malformedLines).toBe(1);
+  });
+
+  it("reports malformedLines: 0 for a fully-valid timeline (#35)", () => {
+    const dir = tmp();
+    const header = { v: 1, startedAtWall: "2026-07-05T00:00:00.000Z", startedAtMono: "1" };
+    const good = { seq: 0, ts: 0, line: 0, type: "result", isError: false };
+    writeFileSync(join(dir, "timeline.jsonl"), [JSON.stringify(header), JSON.stringify(good)].join("\n") + "\n");
+    expect(readTimeline(dir)!.malformedLines).toBe(0);
   });
 });

@@ -813,6 +813,14 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // and reuse for both the evaluate ctx (skill_tool_used) and the later assembleRunResult call
   // (toolDurations/skillActivity/subagents) below — two reads could disagree if the file were touched mid-run.
   const timelineData = readTimeline(outDir);
+  if (timelineData && timelineData.malformedLines > 0)
+    warn(
+      `::warning:: [timeline] ${timelineData.malformedLines} malformed line(s) in timeline.jsonl — skill-activity/tool-duration telemetry is incomplete, treated as unavailable\n`,
+    );
+  // A partially-corrupt timeline (valid header, dropped event lines) yields an INCOMPLETE fold — a dropped
+  // line could be a skill/tool window — so treat it as unavailable rather than silently incomplete (mirrors
+  // the scan missing/malformed handling; skill_tool_used then fails evidence-unavailable, never a false green). #35
+  const timelineEvents = timelineData && timelineData.malformedLines === 0 ? timelineData.events : undefined;
 
   // Context/Connectors panel: the SPINE is the id-only list run.ts's init handler already seeded
   // onto record.context.availableSkills from the agent's own init event (authoritative — covers plugin/
@@ -866,7 +874,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     redundantToolCalls: record.redundantToolCalls,
     skillsInvoked: record.skillsInvoked,
     skillToolAvailable: record.initTools.includes("Skill"),
-    skillActivity: timelineData ? foldSkillActivity(timelineData.events) : undefined,
+    skillActivity: timelineEvents ? foldSkillActivity(timelineEvents) : undefined,
     tasks: Array.from(record.tasks.values()),
     // Context/Connectors panel — backs skill_available/connector_available/tool_available.
     // record.context is populated above (availableSkills merged in before this ctx literal; tools/mcpServers
@@ -1048,8 +1056,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     webSearches: record.webSearches.length ? record.webSearches : undefined,
     infraErrors: infraErrorsForResult(record),
     evidenceErrors: evidenceErrorsForResult(record),
-    toolDurations: timelineData ? foldToolDurations(timelineData.events) : undefined,
-    skillActivity: timelineData ? foldSkillActivity(timelineData.events) : undefined,
+    toolDurations: timelineEvents ? foldToolDurations(timelineEvents) : undefined,
+    skillActivity: timelineEvents ? foldSkillActivity(timelineEvents) : undefined,
     models: record.models.length ? record.models : undefined,
     thinking: record.thinking.length ? record.thinking : undefined,
     thinkingElided: record.thinkingElided,
@@ -1065,7 +1073,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     egress,
     assertions,
     toolResults: record.toolResults,
-    subagents: timelineData ? attributeSubagentSkills(record.subagents, timelineData.events) : record.subagents,
+    subagents: timelineEvents ? attributeSubagentSkills(record.subagents, timelineEvents) : record.subagents,
     nonReproducibleAnswers: record.unanswered,
     usage: record.usage,
     cost: record.cost,
@@ -1282,6 +1290,12 @@ export function buildPartialResult(args: {
     !!args.nonDeterministicHint;
   const nonDeterministicTerminal = args.onUnanswered === "llm" || args.onUnanswered === "prompt" || !!args.externalChannel;
   const timelineData = readTimeline(args.outDir);
+  if (timelineData && timelineData.malformedLines > 0)
+    warn(
+      `::warning:: [timeline] ${timelineData.malformedLines} malformed line(s) in timeline.jsonl — skill-activity/tool-duration telemetry is incomplete, treated as unavailable\n`,
+    );
+  // Partially-corrupt timeline → incomplete fold; treat as unavailable (see the #35 note on the live path). #35
+  const timelineEvents = timelineData && timelineData.malformedLines === 0 ? timelineData.events : undefined;
   // Context/Connectors panel: the SPINE is the id-only list run.ts's init handler already seeded
   // (authoritative — covers plugin/marketplace skills). Enrich with whenToUse read off disk across both
   // delivery trees. Own wiring, independent of executeScenario's (this function's own args.configDir /
@@ -1320,8 +1334,8 @@ export function buildPartialResult(args: {
     webSearches: record.webSearches.length ? record.webSearches : undefined,
     infraErrors: infraErrorsForResult(record),
     evidenceErrors: evidenceErrorsForResult(record),
-    toolDurations: timelineData ? foldToolDurations(timelineData.events) : undefined,
-    skillActivity: timelineData ? foldSkillActivity(timelineData.events) : undefined,
+    toolDurations: timelineEvents ? foldToolDurations(timelineEvents) : undefined,
+    skillActivity: timelineEvents ? foldSkillActivity(timelineEvents) : undefined,
     models: record.models.length ? record.models : undefined,
     thinking: record.thinking.length ? record.thinking : undefined,
     thinkingElided: record.thinkingElided,
@@ -1337,7 +1351,7 @@ export function buildPartialResult(args: {
     egress: args.egress,
     assertions: [],
     toolResults: record.toolResults,
-    subagents: timelineData ? attributeSubagentSkills(record.subagents, timelineData.events) : record.subagents,
+    subagents: timelineEvents ? attributeSubagentSkills(record.subagents, timelineEvents) : record.subagents,
     nonReproducibleAnswers: record.unanswered,
     usage: record.usage,
     cost: record.cost,

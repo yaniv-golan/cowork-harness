@@ -218,7 +218,7 @@ function safeLines(path: string): string[] {
  *  Relocated here (from `src/run/cassette.ts`, where it originated) so both `src/run/execute.ts` and
  *  `src/run/cassette.ts` can import it from a leaf module with no imports back into `run/`, avoiding an
  *  import cycle. Exported for direct unit testing (test/cassette-timeline.test.ts). */
-export function readTimeline(outDir: string): { header: TimelineHeader; events: TimelineEvent[] } | undefined {
+export function readTimeline(outDir: string): { header: TimelineHeader; events: TimelineEvent[]; malformedLines: number } | undefined {
   const lines = safeLines(join(outDir, "timeline.jsonl"));
   if (lines.length === 0) return undefined;
   let header: TimelineHeader;
@@ -228,13 +228,17 @@ export function readTimeline(outDir: string): { header: TimelineHeader; events: 
     return undefined;
   }
   const events: TimelineEvent[] = [];
+  // Count dropped entry lines: a partially-corrupt timeline (valid header, some unparseable lines) yields
+  // an INCOMPLETE event set — a dropped line could be a skill/tool window. The caller uses this to treat
+  // the derived skillActivity/toolDurations as evidence-unavailable rather than silently incomplete. #35
+  let malformedLines = 0;
   for (const line of lines.slice(1)) {
     try {
       events.push(JSON.parse(line));
     } catch {
-      // a malformed individual entry is dropped, not fatal — see doc comment above.
+      malformedLines++;
       continue;
     }
   }
-  return { header, events };
+  return { header, events, malformedLines };
 }
