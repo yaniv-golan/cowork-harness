@@ -32,8 +32,25 @@ const TOKEN =
 const CAN = dockerOk && imageOk && !!AGENT && existsSync(AGENT) && !!TOKEN;
 const CLI = resolve("dist/cli.js");
 
-function runSkill(folder: string, prompt: string, sessionId: string, resume: boolean): { finalMessage: string; result: string; effectiveFidelity: string; turn?: number } {
-  const args = ["skill", folder, prompt, "--fidelity", "container", "--session-id", sessionId, "--output-format", "json", "--on-unanswered", "first"];
+function runSkill(
+  folder: string,
+  prompt: string,
+  sessionId: string,
+  resume: boolean,
+): { finalMessage: string; result: string; effectiveFidelity: string; turn?: number } {
+  const args = [
+    "skill",
+    folder,
+    prompt,
+    "--fidelity",
+    "container",
+    "--session-id",
+    sessionId,
+    "--output-format",
+    "json",
+    "--on-unanswered",
+    "first",
+  ];
   if (resume) args.push("--resume");
   const r = spawnSync("node", [CLI, ...args], {
     encoding: "utf8",
@@ -53,7 +70,12 @@ describe.skipIf(!CAN)("container --resume conversation continuity (B2)", () => {
     writeFileSync(join(folder, "SKILL.md"), "---\nname: helper\ndescription: A helper skill.\n---\n\n# helper\n\nAssist the user.\n");
 
     const sid = `resume-continuity-${process.pid}`;
-    const t1 = runSkill(folder, "Please remember this fact for later in our conversation: my project's codeword is ZEPHYR7. Just say OK.", sid, false);
+    const t1 = runSkill(
+      folder,
+      "Please remember this fact for later in our conversation: my project's codeword is ZEPHYR7. Just say OK.",
+      sid,
+      false,
+    );
     expect(t1.result, "turn 1 should complete").toBe("success");
     expect(t1.effectiveFidelity, "turn 1 must actually run in a container").toBe("container");
 

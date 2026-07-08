@@ -92,7 +92,9 @@ export function parseJudgeResults(raw: string, rubric: string[]): SemanticClaimR
   return rubric.map((claim, index) => {
     const pass = byIndex.get(index);
     if (pass === undefined)
-      throw new Error(`semantic judge: no result for rubric index ${index} (need exactly one per index, got ${byIndex.size}/${rubric.length})`);
+      throw new Error(
+        `semantic judge: no result for rubric index ${index} (need exactly one per index, got ${byIndex.size}/${rubric.length})`,
+      );
     return { index, claim, pass };
   });
 }

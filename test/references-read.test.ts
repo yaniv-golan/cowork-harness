@@ -5,7 +5,9 @@ import { skillReferenceReadPath } from "../src/run/run";
 describe("skillReferenceReadPath (B4)", () => {
   it("captures a reference Read under a mounted plugin root (container path shape)", () => {
     expect(
-      skillReferenceReadPath("/sessions/local_x/mnt/.local-plugins/marketplaces/local-desktop-app-uploads/cowork-harness/references/task-recipes.md"),
+      skillReferenceReadPath(
+        "/sessions/local_x/mnt/.local-plugins/marketplaces/local-desktop-app-uploads/cowork-harness/references/task-recipes.md",
+      ),
     ).toBe("references/task-recipes.md");
   });
 
