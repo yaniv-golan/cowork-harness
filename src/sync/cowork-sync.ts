@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync, existsSync, mkdtempSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { createHash } from "node:crypto";
 import { gunzipSync } from "node:zlib";
 
@@ -189,6 +189,30 @@ export function sync(): SyncResult {
   };
 }
 
+// Some Vite/electron-builder releases emit `.vite/build/index.js` as a small entry stub that
+// `require()`s the real code from a content-hashed sibling chunk (e.g. `index.chunk-XXXX.js`)
+// instead of one monolithic file. Follow local relative requires transitively (BFS, deduped) so
+// every fact-checker below sees the real bundle content regardless of which layout Desktop ships —
+// a stub-only read would silently report every anchor as missing, not that the contract changed.
+export function readMainBundle(dir: string): string {
+  const entryPath = join(dir, ".vite/build/index.js");
+  const visited = new Set<string>();
+  const queue = [entryPath];
+  let combined = "";
+  const localRequireRe = /require\(["']\.\/([^"']+)["']\)/g;
+  while (queue.length > 0) {
+    const p = queue.shift() as string;
+    if (visited.has(p) || !existsSync(p)) continue;
+    visited.add(p);
+    const content = readFileSync(p, "utf8");
+    combined += content;
+    for (const m of content.matchAll(localRequireRe)) {
+      queue.push(join(dirname(p), m[1]));
+    }
+  }
+  return combined;
+}
+
 /** Extract domains + fingerprint + spawn.env from the asar main bundle without keeping it unpacked. */
 function extractFromAsar(
   unknown: string[],
@@ -201,7 +225,7 @@ function extractFromAsar(
   const tmp = mkdtempSync(join(tmpdir(), "cowork-sync-"));
   try {
     execFileSync("npx", ["--yes", "@electron/asar", "extract", ASAR, tmp], { stdio: "ignore" });
-    const bundle = readIf(join(tmp, ".vite/build/index.js")) ?? "";
+    const bundle = readMainBundle(tmp);
     // Domains: anthropic.com / claude.ai / sentry.io / statsig hosts referenced in the bundle.
     const re = /[a-z0-9.-]+\.(?:anthropic\.com|claude\.ai)|sentry\.io|statsig[a-z.]*\.[a-z]+/g;
     const domains = dedupe([...bundle.matchAll(re)].map((m) => m[0]));

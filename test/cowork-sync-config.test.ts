@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, writeFileSync, rmSync, existsSync, readdirSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readConfigJson, parseEgressAllowedHosts } from "../src/sync/cowork-sync.js";
+import { readConfigJson, parseEgressAllowedHosts, readMainBundle } from "../src/sync/cowork-sync.js";
 
 describe("sync distinguishes missing vs corrupt user config", () => {
   it("returns {} with NO unknown delta when config.json is missing", () => {
@@ -139,5 +139,63 @@ describe("extractFromAsar temp dir cleanup (try/finally semantics)", () => {
     }
     const after = readdirSync(tmpdir()).filter((n) => n.startsWith("cowork-sync-test-"));
     expect(after.length).toBe(before.length);
+  });
+});
+
+describe("readMainBundle follows Vite's code-split index.js into its chunk file(s)", () => {
+  function makeAsarDir(files: Record<string, string>): string {
+    const dir = mkdtempSync(join(tmpdir(), "read-main-bundle-"));
+    mkdirSync(join(dir, ".vite/build"), { recursive: true });
+    for (const [rel, content] of Object.entries(files)) {
+      writeFileSync(join(dir, ".vite/build", rel), content);
+    }
+    return dir;
+  }
+
+  it("returns the entry content as-is for a monolithic index.js with no local requires", () => {
+    const dir = makeAsarDir({ "index.js": 'require("electron");const MARKER_MONOLITHIC=1;' });
+    try {
+      expect(readMainBundle(dir)).toContain("MARKER_MONOLITHIC");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("follows a local require() reference into its chunk file and includes both contents", () => {
+    const dir = makeAsarDir({
+      "index.js": 'require("node:fs");require("./index.chunk-ABC123.js");require("electron");',
+      "index.chunk-ABC123.js": 'const MARKER_CHUNK="found-me";',
+    });
+    try {
+      const bundle = readMainBundle(dir);
+      expect(bundle).toContain("index.chunk-ABC123.js"); // entry content preserved
+      expect(bundle).toContain("found-me"); // chunk content pulled in
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not throw and ignores non-relative requires (electron, node:*, bare packages)", () => {
+    const dir = makeAsarDir({ "index.js": 'require("electron");require("node:fs");require("some-package");' });
+    try {
+      expect(() => readMainBundle(dir)).not.toThrow();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("terminates and does not duplicate content when chunks require each other circularly", () => {
+    const dir = makeAsarDir({
+      "index.js": 'require("./a.js");',
+      "a.js": 'require("./b.js");const MARKER_A=1;',
+      "b.js": 'require("./a.js");const MARKER_B=1;',
+    });
+    try {
+      const bundle = readMainBundle(dir);
+      expect(bundle.match(/MARKER_A/g)?.length).toBe(1);
+      expect(bundle.match(/MARKER_B/g)?.length).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

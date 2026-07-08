@@ -6,7 +6,7 @@ import { gzipSync } from "node:zlib";
 import { compareBaselineVersions, loadBaseline, resolveAgentBinary, resolveMounts, sha256File } from "../src/baseline.js";
 import { createHash } from "node:crypto";
 import type { PlatformBaseline } from "../src/types.js";
-import { decodeFcacheGates, sync, checkMountModeFacts, checkWebFetchFacts } from "../src/sync/cowork-sync.js";
+import { decodeFcacheGates, sync, checkMountModeFacts, checkWebFetchFacts, readMainBundle } from "../src/sync/cowork-sync.js";
 import {
   deriveSpawnEnv,
   checkSpawnContractFacts,
@@ -685,7 +685,7 @@ function extractRealBundle(): string | null {
   try {
     realBundleTmpDir = mkdtempSync(join(tmpdir(), "cowork-asar-test-"));
     execFileSync("npx", ["--yes", "@electron/asar", "extract", LIVE_ASAR, realBundleTmpDir], { stdio: "ignore" });
-    return readFileSync(join(realBundleTmpDir, ".vite/build/index.js"), "utf8");
+    return readMainBundle(realBundleTmpDir);
   } catch (e) {
     return skipRealBundle(`asar extraction failed: ${(e as Error).message}`);
   }
