@@ -340,7 +340,7 @@ export function runDoctorChecks(tier: Tier, probe: DoctorProbe = realProbe): Doc
         : worktreeEnv
           ? `the main checkout has a .env — point at it: cowork-harness --dotenv ${worktreeEnv} <cmd> (or set CLAUDE_CODE_OAUTH_TOKEN)`
           : "export CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token), put it in ./.env, or point at another file: cowork-harness --dotenv <path> <cmd>",
-    required: true, // every doctor tier calls a real model (only a committed-cassette replay needs none)
+    required: true, // required for every tier doctor validates — each of those tiers calls a real model when actually run; only a committed-cassette replay needs none (and replay skips doctor)
   });
 
   const bl = probe.baseline();

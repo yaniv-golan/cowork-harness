@@ -758,6 +758,7 @@ a global install has them locally too, not just on GitHub.
 | [docs/fidelity-gaps.md](./docs/fidelity-gaps.md) | The known deltas vs. real Cowork — what the harness does and doesn't reproduce. |
 | [docs/decider-dir.md](./docs/decider-dir.md) | The `--decider-dir` recipe — a driving agent answers live gates in-band via `gates`/`answer` + a Monitor. |
 | [docs/discovery.md](./docs/discovery.md) | Where plugins/skills/MCP are found + overrides. |
+| [docs/plugin-root.md](./docs/plugin-root.md) | How `${CLAUDE_PLUGIN_ROOT}` resolves per execution mode (host-loop vs VM-loop) — for when a skill's bundled-file path doesn't resolve. |
 | [docs/maintenance.md](./docs/maintenance.md) | Parity across Desktop releases via `sync`. |
 | [DESIGN.md](./DESIGN.md) | Architecture deep-dive + full parity matrix. |
 | [SPEC.md](./SPEC.md) | The authoritative testable contract (scenario/session schema, `RunResult`, exit codes). |
