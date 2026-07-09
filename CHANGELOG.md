@@ -60,8 +60,11 @@ All notable changes to this project are documented here. The format is based on
   pass/fail per claim. Per-claim results are recorded on `RunResult.assertions[].semanticClaims`
   (`{index, claim, pass}`), so a candidate run's claim-level profile can be diffed against a baseline instead
   of only reading a single summary verdict; a rep whose grade can't be parsed (after one retry) is marked
-  `RunResult.assertions[].judgeInvalid` and **never silently dropped** — an invalid rep can't inflate a score
-  by shrinking the denominator. Supports a
+  `RunResult.assertions[].judgeInvalid` and **never silently dropped** — it is excluded from the pass
+  denominator, and the guard against a misleading score from that exclusion is the eval gate's
+  minimum-valid-rep floor (`MIN_VALID` ≥ 4) plus this visibility, not a claim that denominator-shrinking
+  inflation is impossible. Within a rep, a grade still unparseable after the retry fails that assert outright
+  (evidence-unavailable, not a vacuous pass). Supports a
   `min_pass` threshold (default: all claims) and a per-assert `judge_model` override (default
   `claude-opus-4-8`, also settable via `COWORK_HARNESS_JUDGE_MODEL`) — the override is now actually
   honored per assert, and the model that graded is recorded on `RunResult.assertions[].judgeModel` so a

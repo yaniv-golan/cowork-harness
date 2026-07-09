@@ -52,8 +52,9 @@ model drift, not skill quality) — re-record with `--rebaseline` after any inte
 1. `--rebaseline` + `--calibrate` on the current skill, commit `baseline/profile.json`.
 2. Make the SKILL.md/reference edit.
 3. `npm run eval-gate -- --dotenv .env`; read the per-claim buckets. Adjudicate any red (fix, escalate N,
-   or re-baseline with justification). **Editing a rubric claim unmatches it** (claims are keyed by text),
-   so a rubric change requires a fresh `--rebaseline`.
+   or re-baseline with justification). Baseline↔candidate claims are matched by **claim text**
+   (whitespace-normalized), so **editing a claim's wording unmatches it** — it is reported as `unmatched`
+   and never scored — and a rubric edit therefore requires a fresh `--rebaseline`.
 
 ## Cost
 
@@ -67,5 +68,18 @@ per-PR path.
   surfaces triaged, evidence-grounded improvement *ideas* for a skill (it never edits anything, always
   exits 0). Its live acceptance test is `scripts/skill-critique-acceptance.ts`
   (`npm run skill-critique-acceptance`).
+  **Limitation:** its evidence packager (`src/critique/package-evidence.ts`) caps `SKILL.md` at 16KB (and
+  the whole evidence package at 48KB), so a large `SKILL.md` (the flagship is ~51KB) is majority-truncated
+  in what the evaluator sees — verify any "missing guidance" finding against the full `SKILL.md` before
+  acting on it, since it may just be content that fell outside the cap.
 - Author-facing `semantic_matches` guidance for skill users lives in the skill itself
   (`.claude/skills/cowork-harness/references/task-recipes.md`, Recipe 5).
+
+## Rubric shape (frozen for 1.0)
+
+**Decision (C1, 2026-07-09): rubric stays `string[]`.** The `semantic_matches` `rubric` field remains a
+plain array of claim strings for 1.0 — `{id, text}[]` was considered and rejected. Rubrics are authored
+infrequently, and keying baseline↔candidate claims by claim *text* (whitespace-normalized, as
+`eval-gate.ts` already does) is sufficient for this maintainer-facing eval surface; a reworded claim
+forcing a fresh `--rebaseline` is an acceptable cost. Adopting `{id, text}[]` would add public schema
+surface (a stable id space to design and maintain) for little practical gain, so it is not planned.
