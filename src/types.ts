@@ -426,7 +426,12 @@ export const Assertion = z.strictObject({
       "like computer_links_resolve, but PASSES VACUOUSLY when the transcript has zero computer:// links — the lenient, presence-free variant; only `true` is valid",
     ),
   question_asked: z.string().optional().describe("a question matching this regex was asked"),
-  questions_count_max: z.number().int().nonnegative().optional().describe("at most N questions were asked"),
+  questions_count_max: z
+    .number()
+    .int()
+    .nonnegative()
+    .optional()
+    .describe("at most N sub-questions asked — a bundled AskUserQuestion with K sub-questions counts as K, not 1"),
   gate_answers_delivered: z
     .boolean()
     .optional()

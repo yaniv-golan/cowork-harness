@@ -38,9 +38,13 @@ execution: local                    # OPTIONAL — orthogonal to fidelity (a pri
                                     # local): local (default) | cloud-describe (RESERVED — no runner
                                     # exists yet; authoring it is a load-time error, not a silent no-op)
 on_unanswered: fail                 # policy for unscripted gates: fail | prompt | first | llm
+                                    # ("agent" is retired — no longer a valid value)
 
 prompt: |                           # the user turn
   Summarize report.pdf and write action items to outputs/actions.md
+
+timeout_ms: 600000                  # OPTIONAL wall-clock budget; on expiry the harness kills the agent
+                                    # and the run ends result:error / errorSource:timeout. Omit = no timeout.
 
 answers:                            # scripted answers (see below)
   - when_question: "Which output format"
@@ -96,6 +100,8 @@ effort: high                     # low | medium | high | xhigh | max (+ extra, n
                                   # fallback — real Cowork always emits --effort, never omits it
 extended_thinking: true          # real Cowork on/off toggle; default true (ON) -> --max-thinking-tokens 31999,
                                   # or --thinking disabled when false (no arbitrary budget in real Cowork)
+agent_max_turns: 500              # optional turn ceiling -> agent --max-turns; omit for the agent default
+                                  # (distinct from the max_turns ASSERTION)
 permission_mode: default         # default | acceptEdits | plan | bypassPermissions
 permission_parity: cowork        # cowork (unscripted tool calls allowed) | strict (deny unscripted)
 
@@ -367,7 +373,8 @@ small-file JSON `body` inlined; a hash-only entry still satisfies `file_exists`.
 resolves a `/sessions/…/mnt/…`-shaped link directly against the manifest, and a host-shaped (hostloop) link
 by first normalizing it to a mount-relative path (recorded connected-folder prefixes + the outputs/uploads
 mounts) — replay has no live filesystem to check a host path against directly (that only happens on a live
-`run`/`verify-run`). Without a manifest (older cassettes) all five are skipped; `no_unexpected_files` also
+`run`/`verify-run`). Without a manifest (older cassettes) all five are skipped (five need the manifest; two
+more — `no_unexpected_files` and `input_unmodified` — need the pre-run path/hash capture, below); `no_unexpected_files` also
 needs `preRunPaths` (≥0.24 recordings) — without it the key is excluded with a loud warning (live/verify-run
 hard-fails evidence-unavailable instead). `input_unmodified` is the same shape but needs `preRunHashes`
 (the pre-run per-path sha256 baseline) instead of `preRunPaths`; without it, likewise excluded with a loud

@@ -106,6 +106,37 @@ describe("buildMatrixRollup", () => {
     expect(rollup.ranCells).toBe(1);
     expect(rollup.truncated).toBe(true);
   });
+
+  it(
+    "anyFail is true when truncated is true and allowTruncated is omitted, even though every executed " +
+      "cell passes — incomplete is not green, the un-run cells are an unknown, not a pass",
+    () => {
+      const rollup = buildMatrixRollup([cellResult({}), cellResult({ index: 1 })], 9, true);
+      expect(rollup.cells.every((c) => c.pass)).toBe(true);
+      expect(rollup.anyFail).toBe(true);
+    },
+  );
+
+  it("anyFail stays true when truncated is true and allowTruncated is explicitly false, all cells passing", () => {
+    const rollup = buildMatrixRollup([cellResult({})], 9, true, false);
+    expect(rollup.anyFail).toBe(true);
+  });
+
+  it("anyFail is false when truncated is true but allowTruncated is true (opt-out honored) and all cells pass", () => {
+    const rollup = buildMatrixRollup([cellResult({}), cellResult({ index: 1 })], 9, true, true);
+    expect(rollup.anyFail).toBe(false);
+  });
+
+  it("truncated:true + allowTruncated:true still fails if an executed cell itself fails", () => {
+    const rollup = buildMatrixRollup([cellResult({ pass: false, failedAssertions: ["tool_called"] })], 9, true, true);
+    expect(rollup.anyFail).toBe(true);
+  });
+
+  it("control: truncated:false + all cells pass ⇒ anyFail is false (no truncation penalty applies)", () => {
+    const rollup = buildMatrixRollup([cellResult({}), cellResult({ index: 1 })], 2, false);
+    expect(rollup.truncated).toBe(false);
+    expect(rollup.anyFail).toBe(false);
+  });
 });
 
 describe("formatMatrixRollup — text rendering", () => {

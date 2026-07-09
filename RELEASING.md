@@ -74,7 +74,7 @@ packaged Action's inputs/outputs). Human-readable text output is explicitly NOT 
 - [ ] **CHANGELOG.md** — move everything under `## [Unreleased]` into a new
       `## [X.Y.Z] — YYYY-MM-DD` section; leave an empty `## [Unreleased]` on top. Include any
       **upgrade notes** (e.g. "re-record cassettes after the staleness-hash change").
-- [ ] Bump every version location listed above (items 1–7). `npm install` after bumping `package.json`.
+- [ ] Bump every version location listed above (items 1–10). `npm install` after bumping `package.json`.
 - [ ] `npm run format:check` — fix any issues (`npx prettier --write "src/**/*.ts" "test/**/*.ts"`).
       A format failure is the most common first-pass CI red.
 - [ ] `npx tsc -p tsconfig.test.json --noEmit` — typecheck including tests.

@@ -26,6 +26,7 @@ execution: local                         # OPTIONAL — orthogonal to fidelity (
                                          # runner exists yet; authoring it is a load-time error, not a
                                          # silent no-op)
 on_unanswered: fail                      # optional: policy for unscripted questions (fail | prompt | first | llm)
+                                         # ("agent" is retired — no longer a valid value)
 
 prompt: |                                # the user turn
   Summarize report.pdf and write action items to outputs/actions.md
@@ -432,7 +433,8 @@ entry still satisfies `file_exists` but not `artifact_json`. `computer_links_res
 `/sessions/…/mnt/…`-shaped links and host-shaped (hostloop) links against the manifest — a host-shaped link
 normalizes to a mount-relative path first (via the recorded connected-folder prefixes + the outputs/uploads
 mounts), since replay has no live filesystem to probe directly (that direct check only happens on a live
-`run`/`verify-run`). Without a manifest (older cassettes), all seven are **skipped** (loud).
+`run`/`verify-run`). Without a manifest (older cassettes), all seven are **skipped** (loud) — (five need
+the manifest; two more — `no_unexpected_files` and `input_unmodified` — need the pre-run path/hash capture).
 
 A `mode: r` connected folder (see [session.md](./session.md)) holds pre-existing INPUTS, not deliverables —
 `record` captures its contents **body-less** (path + hash, `truncated: true`, no `body`): `file_exists` and
@@ -560,6 +562,11 @@ trace.json        structured trace: steps, questions, sub-agents, egress, decisi
 egress.log        allow/deny per outbound connection (L1/L2)
 result.json       assertion results + decisions + sub-agents + usage + status (incl. workDir/outputsDir)
 session.json      session manifest (only when --session-id/--resume is used: id + the agent's session UUID)
+status.json       run status (phase, exit, timing) — see docs/run-status.md
+mounts.json       VM→host path map (feeds trace --translate-paths; hostloop runs)
+timeline.jsonl    per-tool-call timing (feeds trace --view tool-durations)
+agent.stderr.log  raw agent-process stderr
+proxy/            egress sidecar proxy logs (L1/L2)
 ```
 
 (`run.jsonl`/`trace.json` replace the old `transcript.json`/`decisions.jsonl`. Secrets are scrubbed

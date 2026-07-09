@@ -50,15 +50,18 @@ fields to a server-side narrowing it didn't ask for.
 `index.jsonl` only exists going forward from the version that introduced it. If you have an existing
 `~/.cowork-harness/runs/` full of pre-index runs (or the index file itself was ever lost or manually
 edited into an unrecoverable state — normal corrupt-trailing-line tolerance aside), `--reindex` rebuilds
-it from scratch by walking `<runsRoot>/<slug>/<runId>/result.json` for every run dir on disk:
+it by walking `<runsRoot>/<slug>/<runId>/result.json` for every run dir on disk, then merging in any rows
+the prior `index.jsonl` still held for run dirs no longer on disk (e.g. pruned ones):
 
 ```bash
 cowork-harness stats --reindex   # rebuild, then print the default summary
 ```
 
-This is a **true rebuild** (overwrites, never appends to, any prior `index.jsonl`), so it's safe to run
-more than once. A run dir with a missing or corrupt `result.json` is skipped, not fatal — one bad run dir
-never blocks indexing everything else.
+This **overwrites** `index.jsonl` wholesale (it never appends in place), so it's safe to run more than
+once. It is not a pure from-disk rebuild, though: rows for run dirs that are gone from disk (e.g. pruned)
+are carried over from the prior index, so pruned-run history survives a reindex — see
+[Interplay with `prune`](#interplay-with-prune). A run dir with a missing or corrupt `result.json` is
+skipped, not fatal — one bad run dir never blocks indexing everything else.
 
 ## Interplay with `prune`
 
