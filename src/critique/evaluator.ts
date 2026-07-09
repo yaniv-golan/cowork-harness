@@ -140,6 +140,11 @@ settle it — e.g. it would require seeing a sub-agent's own internal reasoning)
 that classification is reserved for verifying an EXTERNAL claim against the evidence (pass 2), not for your
 own findings.
 
+A missing or unclear instruction is a legitimate "grounded-and-actionable" finding EVEN IF the final answer
+turned out correct — judge whether the skill's text PROVIDED the guidance (check the SKILL.md / references
+sections), not whether the agent happened to manage without it. The agent succeeding is not evidence that
+the guidance existed.
+
 Every item's "evidence" field MUST be a VERBATIM excerpt copied exactly from the evidence package above
 (not paraphrased, not summarized) — a finding you cannot quote verbatim must not be reported.${truncated ? TRUNCATION_CAVEAT : ""}
 
@@ -176,6 +181,12 @@ classification by checking it against the evidence package:
   full document is delivered as text, not logged as a Read), or a claim about what happened INSIDE a
   dispatched sub-agent (its internal tool calls aren't in this evidence). Use this rather than guessing a
   grounded/confabulated verdict you cannot actually support.
+
+A "the skill never says X" / missing-guidance complaint is judged by whether the SKILL.md and references
+sections shown actually contain X: if they don't, it is "grounded-and-actionable" (a real gap); if they do,
+it is "already-covered". It is "confabulated" ONLY when the evidence POSITIVELY contradicts the claim (the
+skill demonstrably DOES state X, or a described event demonstrably did not occur). The agent still producing
+a correct answer is NOT a contradiction of a guidance gap — a gap is real even when the agent guessed well.
 
 For every classification EXCEPT "not-adjudicable", the "evidence" field MUST be a VERBATIM excerpt copied
 exactly from the evidence package above. For "not-adjudicable", "evidence" may be an empty string.${truncated ? TRUNCATION_CAVEAT : ""}
