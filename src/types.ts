@@ -909,6 +909,10 @@ export interface RunResult {
      *  pinned model, or a per-assert `judge_model` override. Lets a before/after eval verify the judge
      *  was held constant. Present only on the live lane where the judge ran. */
     judgeModel?: string;
+    /** True when a `semantic_matches` grade was INVALID (malformed/ambiguous after a retry). Distinct
+     *  from a normal fail: an eval aggregator counts this rep as invalid (not a fail, not absent), so a
+     *  flaky judge can neither inflate a pass rate (by the rep vanishing) nor manufacture a regression. */
+    judgeInvalid?: boolean;
   }>;
   /** The agent's final answer — the SDK result message (`{type:"result"}`.result), i.e. the model's
    *  designated final response. This is what llm-transport treats as "the answer"; it is distinct from

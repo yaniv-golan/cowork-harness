@@ -4,7 +4,9 @@ import type { Complete } from "../src/decide/decider.js";
 
 // A stubbed transport (same shape as the shared claudeCliComplete) so the judge's prompt/parse/align
 // logic is tested without a model call.
-const complete = (text: string): Complete => async (_prompt, model) => ({ text, model });
+const complete =
+  (text: string): Complete =>
+  async (_prompt, model) => ({ text, model });
 
 describe("semantic judge — parseJudgeResults (index-aligned, fail-loud)", () => {
   it("parses indexed results aligned to the rubric", () => {
@@ -25,20 +27,41 @@ describe("semantic judge — parseJudgeResults (index-aligned, fail-loud)", () =
     expect(r[0].pass).toBe(true);
   });
 
+  // These all lack a valid FULL-COVERAGE {results:[…]} grade → throw so the caller marks the rep invalid
+  // (the specific sub-reason is consolidated into one message now that the parser scans all brace groups).
   it("throws on non-JSON output", () => {
-    expect(() => parseJudgeResults("not json at all", ["a"])).toThrow(/not valid JSON/);
+    expect(() => parseJudgeResults("not json at all", ["a"])).toThrow(/no valid full-coverage/);
   });
 
   it("throws when a rubric index has no result (never manufactures a verdict)", () => {
-    expect(() => parseJudgeResults('{"results":[{"index":0,"pass":true}]}', ["a", "b"])).toThrow(/no result for rubric index 1/);
+    expect(() => parseJudgeResults('{"results":[{"index":0,"pass":true}]}', ["a", "b"])).toThrow(/no valid full-coverage/);
   });
 
   it("throws on a duplicate index", () => {
-    expect(() => parseJudgeResults('{"results":[{"index":0,"pass":true},{"index":0,"pass":false}]}', ["a"])).toThrow(/duplicate result for index 0/);
+    expect(() => parseJudgeResults('{"results":[{"index":0,"pass":true},{"index":0,"pass":false}]}', ["a"])).toThrow(
+      /no valid full-coverage/,
+    );
   });
 
   it("throws when an entry has the wrong shape", () => {
-    expect(() => parseJudgeResults('{"results":[{"index":0,"pass":"yes"}]}', ["a"])).toThrow(/index:number, pass:boolean/);
+    expect(() => parseJudgeResults('{"results":[{"index":0,"pass":"yes"}]}', ["a"])).toThrow(/no valid full-coverage/);
+  });
+
+  it("ignores the prompt's echoed example and grades the real answer (a leading prose brace too)", () => {
+    // Two brace groups: a prose object, then the real grade. Only the full-coverage grade is used.
+    const raw = 'Here is my assessment {note: "grading now"}. {"results":[{"index":0,"pass":false},{"index":1,"pass":true}]}';
+    const r = parseJudgeResults(raw, ["a", "b"]);
+    expect(r.map((c) => c.pass)).toEqual([false, true]);
+  });
+
+  it("dedupes an identical restated grade (fenced + unfenced) instead of failing ambiguous", () => {
+    const raw = '```json\n{"results":[{"index":0,"pass":true}]}\n```\n{"results":[{"index":0,"pass":true}]}';
+    expect(parseJudgeResults(raw, ["a"])[0].pass).toBe(true);
+  });
+
+  it("throws ambiguous when two DIFFERENT full grades appear", () => {
+    const raw = '{"results":[{"index":0,"pass":true}]} then {"results":[{"index":0,"pass":false}]}';
+    expect(() => parseJudgeResults(raw, ["a"])).toThrow(/DIFFERENT full-coverage grades/);
   });
 });
 

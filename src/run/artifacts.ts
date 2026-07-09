@@ -259,3 +259,48 @@ function walkInto(
   };
   walk(startAbs, startRel);
 }
+
+/** One file the run authored (created or modified), with its final on-disk content — the judge's evidence
+ *  for "what the skill produced", independent of whether the agent also inlined it in prose. */
+export interface AuthoredFile {
+  path: string;
+  content: string;
+  truncated?: boolean;
+}
+
+/** Files the run CREATED or MODIFIED under user-visible roots (added/modified vs the pre-run manifest),
+ *  read back at their final on-disk content. Excludes read-only inputs (unchanged mounts). Size-bounded:
+ *  a per-file cap and a total cap; over-cap content is truncated and flagged. Returns `[]` when there is
+ *  no pre-run manifest (e.g. microvm) — no diff is possible, so the caller notes evidence-unavailable
+ *  rather than dumping the whole workspace. Must be called AFTER the run completes (files finalized). */
+export function captureAuthoredFiles(
+  workRoot: string,
+  userVisibleRoots: string[],
+  readonlyFolderRoots: string[],
+  preRunHashes: Record<string, string | null> | undefined,
+  opts: { perFileBytes?: number; totalBytes?: number } = {},
+): AuthoredFile[] {
+  if (preRunHashes === undefined) return []; // no pre-run manifest → can't diff added/modified → no capture
+  const perFile = opts.perFileBytes ?? 16 * 1024;
+  const total = opts.totalBytes ?? 64 * 1024;
+  const out: AuthoredFile[] = [];
+  let used = 0;
+  for (const f of classifyWorkspaceFiles(workRoot, userVisibleRoots, readonlyFolderRoots)) {
+    if (f.class === "input") continue; // read-only mount — not authored by this run
+    const sha = (f as { sha256?: string }).sha256;
+    const prior = preRunHashes[f.path]; // undefined = new file; null = unreadable pre-run; string = prior hash
+    const authored = prior === undefined || prior === null || (sha !== undefined && sha !== prior);
+    if (!authored) continue;
+    if (used >= total) break;
+    try {
+      const buf = readFileSync(join(workRoot, f.path));
+      const slice = buf.subarray(0, Math.min(perFile, total - used));
+      const truncated = buf.length > slice.length;
+      out.push({ path: f.path, content: slice.toString("utf8"), ...(truncated ? { truncated: true } : {}) });
+      used += slice.length;
+    } catch {
+      /* unreadable at read-back → evidence-honest omission */
+    }
+  }
+  return out;
+}

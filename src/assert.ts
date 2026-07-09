@@ -6,6 +6,8 @@ import { VERDICT_MODIFIER_KEYS } from "./types.js";
 import { compileUserRegex } from "./regex.js";
 import { normalizeHost } from "./boundary-paths.js";
 import { extractComputerLinks, resolveComputerLink, type LinkResolutionContext } from "./run/computer-links.js";
+import { scrub } from "./secrets.js";
+import { warn } from "./io.js";
 import { collectArtifacts, collectArtifactPaths } from "./run/artifacts.js";
 import { anyGlobMatches } from "./glob.js";
 
@@ -197,6 +199,18 @@ export interface AssertContext {
   /** Which judge model graded each `semantic_matches` assert (provenance) — populated by
    *  runSemanticJudges alongside semanticResults, surfaced as `RunResult.assertions[].judgeModel`. */
   judgeModels?: Map<Assertion, string>;
+  /** `semantic_matches` asserts whose judge grade was INVALID (malformed/ambiguous after a retry) —
+   *  populated by runSemanticJudges. Distinct from "not graded": the check surfaces `judgeInvalid:true` so
+   *  a consumer counts the rep as invalid, never silently drops it (which would inflate the score). */
+  judgeInvalid?: Set<Assertion>;
+  /** The agent's final answer (SDK result text) — the first part of the judged document, so a
+   *  correct *inline* answer is graded even when no file is written. */
+  finalMessage?: string;
+  /** Files the run authored (final on-disk content) — appended to the judged document so the judge grades
+   *  what the skill PRODUCED, not only what it inlined. Populated live; absent on replay/microvm. */
+  authoredFiles?: import("./run/artifacts.js").AuthoredFile[];
+  /** Secret values to scrub from the judged document before it leaves for the judge. */
+  secrets?: string[];
   toolsCalled: Set<string>;
   subagentTools: Set<string>;
   egress: RunResult["egress"];
@@ -438,14 +452,43 @@ export async function runSemanticJudges(
 ): Promise<void> {
   if (!ctx.semanticResults) ctx.semanticResults = new Map();
   if (!ctx.judgeModels) ctx.judgeModels = new Map();
+  if (!ctx.judgeInvalid) ctx.judgeInvalid = new Set();
+  const answer = buildJudgedDocument(ctx); // finalMessage + transcript + authored files, scrubbed
   for (const a of assertions) {
     if (a.semantic_matches === undefined) continue;
     const override = a.semantic_matches.judge_model;
     const j = override && judgeFor ? judgeFor(override) : judge;
-    ctx.semanticResults.set(a, await j(a.semantic_matches.rubric, ctx.transcript));
-    // Record the model that actually graded (override if wired, else the run-level judge's resolved id).
     ctx.judgeModels.set(a, j.model ?? override ?? "unknown");
+    // Grade with ONE retry — a stochastic judge sometimes emits a malformed grade. If it still throws,
+    // mark the rep INVALID (not absent): the check surfaces it so a consumer counts it, never drops it.
+    let graded: SemanticClaimResult[] | undefined;
+    for (let attempt = 0; attempt < 2 && graded === undefined; attempt++) {
+      try {
+        graded = await j(a.semantic_matches.rubric, answer);
+      } catch (e) {
+        if (attempt === 1) {
+          ctx.judgeInvalid.add(a);
+          warn(
+            `::warning:: semantic judge grade invalid after retry (rep counts as invalid, not passed): ${(e as Error).message.split("\n")[0]}\n`,
+          );
+        }
+      }
+    }
+    if (graded) ctx.semanticResults.set(a, graded);
   }
+}
+
+/** Compose the document the judge grades: the agent's final answer + the full transcript + the content of
+ *  files the run authored (each headed), scrubbed of secrets. Grading the authored files (not only the
+ *  inlined prose) is what makes a claim about a *written* artifact presentation-stable; keeping the
+ *  finalMessage/transcript is what still grades a correct *inline* answer that wrote no file. */
+function buildJudgedDocument(ctx: AssertContext): string {
+  const parts: string[] = [];
+  if (ctx.finalMessage) parts.push(`## Final answer\n${ctx.finalMessage}`);
+  parts.push(`## Transcript\n${ctx.transcript}`);
+  for (const f of ctx.authoredFiles ?? []) parts.push(`## Authored file: ${f.path}${f.truncated ? " (truncated)" : ""}\n${f.content}`);
+  const doc = parts.join("\n\n");
+  return ctx.secrets && ctx.secrets.length ? scrub(doc, ctx.secrets) : doc;
 }
 
 // A passing check may carry an optional `evidence` string — the concrete file/value/tool/link that
@@ -464,7 +507,15 @@ type KeyResult = { pass: true; evidence?: string } | { pass: false; message: str
 function check(
   a: Assertion,
   ctx: AssertContext,
-): { assertion: Assertion; pass: boolean; message?: string; evidence?: string; semanticClaims?: SemanticClaimResult[]; judgeModel?: string } {
+): {
+  assertion: Assertion;
+  pass: boolean;
+  message?: string;
+  evidence?: string;
+  semanticClaims?: SemanticClaimResult[];
+  judgeModel?: string;
+  judgeInvalid?: boolean;
+} {
   const results: KeyResult[] = [];
   const ok = (evidence?: string): KeyResult => ({ pass: true, evidence });
   const fail = (message: string): KeyResult => ({ pass: false, message });
@@ -491,7 +542,9 @@ function check(
     // ctx.semanticResults; check() only reads them, so evaluate() stays synchronous. On replay the key
     // is stripped (LIVE_ONLY_KEYS) and never reaches here.
     const judged = ctx.semanticResults?.get(a);
-    if (!judged) {
+    if (ctx.judgeInvalid?.has(a)) {
+      results.push(fail("judge grade INVALID (malformed/ambiguous after retry) — rep counts as invalid, not a pass"));
+    } else if (!judged) {
       results.push(fail("evidence unavailable: semantic judge not run (semantic_matches is live-only; skipped on replay)"));
     } else {
       const passed = judged.filter((c) => c.pass).length;
@@ -1439,10 +1492,12 @@ function check(
   // consumer gets the per-claim profile, not just the summary message. Attached to fail AND pass.
   const semanticClaims = a.semantic_matches !== undefined ? ctx.semanticResults?.get(a) : undefined;
   const judgeModel = a.semantic_matches !== undefined ? ctx.judgeModels?.get(a) : undefined;
+  const judgeInvalid = a.semantic_matches !== undefined && ctx.judgeInvalid?.has(a) ? true : undefined;
   const withClaims = <T extends object>(r: T): T => ({
     ...r,
     ...(semanticClaims ? { semanticClaims } : {}),
     ...(judgeModel ? { judgeModel } : {}),
+    ...(judgeInvalid ? { judgeInvalid } : {}),
   });
   const firstFail = results.find((r): r is { pass: false; message: string } => !r.pass);
   if (firstFail) return withClaims({ assertion: a, pass: false, message: firstFail.message });
