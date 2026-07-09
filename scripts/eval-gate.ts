@@ -20,6 +20,8 @@ const ALPHA = 0.05;
 const MIN_VALID = 4; // a scenario with fewer valid+invoked reps than this errors the capture loud
 const BASELINE = resolve("test/evals/baseline/profile.json");
 const SCENARIO_DIR = resolve("test/evals/scenarios");
+const HARNESS_VERSION = (JSON.parse(readFileSync(resolve("package.json"), "utf8")) as { version?: string }).version ?? "unknown";
+const today = (): string => new Date().toISOString().slice(0, 10);
 
 // ─────────────────────────────── pure statistics (exported for tests) ───────────────────────────────
 
@@ -70,6 +72,33 @@ export interface ScenarioProfile {
   claims: ClaimProfile[];
 }
 export type Profile = Record<string, ScenarioProfile>;
+
+/** Provenance of a baseline: WHICH models produced these rates. The gate compares answer QUALITY, so a
+ *  baseline recorded under a different judge or answerer is not comparable — diffing across it would report
+ *  model drift as a skill regression. Recorded here so the guard (below) can enforce it. */
+export interface ProfileMeta {
+  judgeModel: string | null;
+  answererModel: string | null;
+  harnessVersion: string;
+  date: string;
+}
+/** The on-disk baseline: provenance header + the per-scenario profiles. */
+export interface ProfileFile {
+  __meta__: ProfileMeta;
+  scenarios: Profile;
+}
+
+/** Null iff the candidate's observed models match the baseline's recorded provenance; otherwise a loud,
+ *  human-readable reason the gate must refuse to diff. A null recorded model (older baseline) is treated as
+ *  "unknown" and does NOT block — only a concrete mismatch does. Exported for unit tests. */
+export function modelMismatch(base: ProfileMeta, candJudge: string | null, candAnswerer: string | null): string | null {
+  const bad: string[] = [];
+  if (base.judgeModel && candJudge && base.judgeModel !== candJudge)
+    bad.push(`judge: baseline "${base.judgeModel}" vs candidate "${candJudge}"`);
+  if (base.answererModel && candAnswerer && base.answererModel !== candAnswerer)
+    bad.push(`answerer: baseline "${base.answererModel}" vs candidate "${candAnswerer}"`);
+  return bad.length ? bad.join("; ") : null;
+}
 
 const frac = (s: string): number | null => {
   const [n, d] = s.split("/").map(Number);
@@ -218,7 +247,13 @@ function runOnce(file: string, dotenv: string | undefined, ablate: boolean): Pro
 
 /** Run every (scenario × rep) job through a bounded concurrency pool, aggregate by scenario. Container
  *  runs are heavy, so the default cap is small; each scenario is fully isolated per the harness. */
-async function capture(reps: number, dotenv: string | undefined, ablate: boolean, concurrency: number): Promise<Profile> {
+interface Capture {
+  scenarios: Profile;
+  judgeModel: string | null;
+  answererModel: string | null;
+}
+
+async function capture(reps: number, dotenv: string | undefined, ablate: boolean, concurrency: number): Promise<Capture> {
   const files = scenarioFiles();
   const jobs: { name: string; file: string }[] = [];
   for (const file of files) for (let i = 0; i < reps; i++) jobs.push({ name: basename(file, ".yaml"), file });
@@ -241,11 +276,36 @@ async function capture(reps: number, dotenv: string | undefined, ablate: boolean
     const name = basename(file, ".yaml");
     profile[name] = aggregateScenario(name, byScenario.get(name) ?? [], ablate);
   }
-  return profile;
+  // Observe which models actually produced these runs — recorded as baseline provenance and checked by the
+  // gate's same-model guard (a run must be model-homogeneous for the guard to mean anything).
+  const judge = new Set<string>();
+  const answerer = new Set<string>();
+  for (const envs of byScenario.values())
+    for (const env of envs) {
+      const r = (env as { results?: unknown[] }).results?.[0] as { assertions?: { judgeModel?: string }[]; models?: string[] } | undefined;
+      if (!r) continue;
+      for (const a of r.assertions ?? []) if (typeof a.judgeModel === "string") judge.add(a.judgeModel);
+      for (const m of r.models ?? []) if (typeof m === "string") answerer.add(m);
+    }
+  const single = (s: Set<string>, label: string): string | null => {
+    if (s.size === 0) return null;
+    if (s.size > 1)
+      process.stderr.write(
+        `[eval-gate] WARNING: ${s.size} distinct ${label} models observed (${[...s].join(", ")}) — run was not model-homogeneous\n`,
+      );
+    return [...s].sort()[0]!;
+  };
+  return { scenarios: profile, judgeModel: single(judge, "judge"), answererModel: single(answerer, "answerer") };
 }
 
-function readProfile(path: string): Profile {
-  return JSON.parse(readFileSync(path, "utf8")) as Profile;
+/** Read the on-disk baseline, tolerating a legacy flat (header-less) profile as "provenance unknown". */
+function readProfileFile(path: string): ProfileFile {
+  const raw = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+  if (raw && typeof raw === "object" && "scenarios" in raw && "__meta__" in raw) return raw as unknown as ProfileFile;
+  return {
+    __meta__: { judgeModel: null, answererModel: null, harnessVersion: "unknown", date: "unknown" },
+    scenarios: raw as unknown as Profile,
+  };
 }
 
 async function main(): Promise<void> {
@@ -259,9 +319,10 @@ async function main(): Promise<void> {
   if (flag("--calibrate")) {
     // Ablation: a claim that still passes WITHOUT the skill is not discriminating → excluded from the gate.
     const ablated = await capture(reps, dotenv, true, concurrency);
-    const base = readProfile(BASELINE);
+    const file = readProfileFile(BASELINE);
+    const base = file.scenarios;
     const forced: string[] = [];
-    for (const [scen, sp] of Object.entries(ablated)) {
+    for (const [scen, sp] of Object.entries(ablated.scenarios)) {
       const b = base[scen];
       if (!b) continue;
       // Too few gradeable skill-removed reps ⇒ removing the skill reliably broke the run: the strongest
@@ -280,22 +341,38 @@ async function main(): Promise<void> {
       process.stderr.write(
         `[eval-gate] skill-removal broke these scenarios (all their claims marked discriminating):\n  ${forced.join("\n  ")}\n`,
       );
-    writeFileSync(BASELINE, JSON.stringify(base, null, 2) + "\n");
+    writeFileSync(BASELINE, JSON.stringify(file, null, 2) + "\n"); // preserves the rebaseline's provenance header
     process.stderr.write(`[eval-gate] calibration written to ${BASELINE}\n`);
     return;
   }
 
   if (flag("--rebaseline")) {
-    const profile = await capture(reps, dotenv, false, concurrency);
-    writeFileSync(BASELINE, JSON.stringify(profile, null, 2) + "\n");
-    process.stderr.write(`[eval-gate] baseline written to ${BASELINE} (run --calibrate next to tag discriminating claims)\n`);
+    const cap = await capture(reps, dotenv, false, concurrency);
+    const file: ProfileFile = {
+      __meta__: { judgeModel: cap.judgeModel, answererModel: cap.answererModel, harnessVersion: HARNESS_VERSION, date: today() },
+      scenarios: cap.scenarios,
+    };
+    writeFileSync(BASELINE, JSON.stringify(file, null, 2) + "\n");
+    process.stderr.write(
+      `[eval-gate] baseline written to ${BASELINE} (judge=${cap.judgeModel}, answerer=${cap.answererModel}; run --calibrate next to tag discriminating claims)\n`,
+    );
     return;
   }
 
   // Gate.
-  const baseline = readProfile(BASELINE);
-  const candidate = await capture(reps, dotenv, false, concurrency);
-  const b = bucketDiff(baseline, candidate);
+  const baseFile = readProfileFile(BASELINE);
+  const cap = await capture(reps, dotenv, false, concurrency);
+  // Refuse to diff across a model change — otherwise the gate reports model drift as a skill regression.
+  const mism = modelMismatch(baseFile.__meta__, cap.judgeModel, cap.answererModel);
+  if (mism) {
+    process.stderr.write(
+      `[eval-gate] REFUSING to gate — candidate models differ from the baseline's provenance, so a diff would measure model behavior, not skill quality:\n  ${mism}\n` +
+        `  Re-record the baseline (--rebaseline) under the current models, or restore the pinned models, then retry.\n`,
+    );
+    process.exitCode = 1;
+    return;
+  }
+  const b = bucketDiff(baseFile.scenarios, cap.scenarios);
   const lines: string[] = [];
   if (b.regressions.length) {
     lines.push(`✗ ${b.regressions.length} regression(s) (discriminating claim, Fisher p ≤ ${ALPHA}):`);

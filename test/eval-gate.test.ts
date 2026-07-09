@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { fisherDropP, bucketDiff, aggregateScenario, type Profile } from "../scripts/eval-gate";
+import { fisherDropP, bucketDiff, aggregateScenario, modelMismatch, type Profile, type ProfileMeta } from "../scripts/eval-gate";
 
 describe("fisherDropP — one-sided drop significance", () => {
   it("fires on a single-claim collapse, stays quiet on a wobble (the documented boundary)", () => {
@@ -52,6 +52,28 @@ describe("bucketDiff — regression / inconclusive / improvement / trigger / non
   });
   it("flags a trigger-rate collapse separately", () => {
     expect(r.triggerRegressions.map((x) => x.scenario)).toContain("eval-b");
+  });
+});
+
+describe("modelMismatch — the gate's same-model precondition", () => {
+  const meta = (over: Partial<ProfileMeta> = {}): ProfileMeta => ({
+    judgeModel: "claude-opus-4-8",
+    answererModel: "claude-sonnet-5",
+    harnessVersion: "0.27.0",
+    date: "2026-07-09",
+    ...over,
+  });
+
+  it("passes (null) when both models match the baseline provenance", () => {
+    expect(modelMismatch(meta(), "claude-opus-4-8", "claude-sonnet-5")).toBeNull();
+  });
+  it("blocks when the judge OR the answerer differs", () => {
+    expect(modelMismatch(meta(), "claude-opus-4-7", "claude-sonnet-5")).toMatch(/judge:/);
+    expect(modelMismatch(meta(), "claude-opus-4-8", "claude-sonnet-4")).toMatch(/answerer:/);
+  });
+  it("does NOT block on an unknown (legacy header-less) baseline or an unobserved candidate model", () => {
+    expect(modelMismatch(meta({ judgeModel: null, answererModel: null }), "x", "y")).toBeNull();
+    expect(modelMismatch(meta(), null, null)).toBeNull(); // candidate models unobservable → don't false-block
   });
 });
 
