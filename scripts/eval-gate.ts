@@ -218,14 +218,20 @@ export function aggregateScenario(name: string, envelopes: unknown[], ablated = 
   const rubric = reps.find((r) => r.claims.length)?.claims.map((c) => c.claim) ?? [];
   const rate = (set: typeof reps, idx: number) => set.filter((r) => r.claims.find((c) => c.index === idx)?.pass).length;
 
-  // Untrustworthy ONLY when the skill fired enough but the JUDGE failed on too many of those reps — a
-  // broken MEASUREMENT. Too few INVOCATIONS is NOT untrustworthy: it IS the trigger-rate signal ("skill
-  // stopped firing") and must flow through to bucketDiff — which flags it — instead of crashing the whole
-  // capture on the very regression the gate exists to catch (a scenario emitted with a low skillInvoked
-  // ratio and, if measured is empty, "k/0" claim rates that bucketDiff skips per-claim while still
-  // reporting the trigger regression). So throw only when invoked ≥ MIN_VALID yet valid < MIN_VALID. The
-  // ABLATED path never throws (skill-removed runs are expected to fail; that failure is the discrimination
-  // signal the calibrate loop reads from validReps).
+  // Two distinct UNTRUSTWORTHY conditions must throw loud (never silently write an empty/degenerate
+  // profile — that is the vacuous-green trap the gate exists to prevent):
+  //   1. Too few reps RAN at all (`ran < MIN_VALID`): most runs errored/crashed (rate-limit, transport,
+  //      Docker) — we cannot trust anything, regardless of invocation.
+  //   2. Enough ran AND enough invoked, but too few had a VALID judge grade: the judge kept failing.
+  // What must NOT throw is the genuine trigger signal — enough reps RAN but few INVOKED the skill ("skill
+  // stopped firing") — which flows through to bucketDiff (low skillInvoked ratio; "k/0" claim rates it
+  // skips per-claim) so the trigger regression is REPORTED, not crashed on. The ABLATED path never throws
+  // (skill-removed runs are expected to fail; that failure is the discrimination signal calibrate reads).
+  const ran = reps.length; // envelopes that parsed WITH a semantic_matches assertion present
+  if (!ablated && ran < MIN_VALID)
+    throw new Error(
+      `eval-gate: scenario ${name} produced only ${ran}/${envelopes.length} gradeable runs (rest errored) — capture is untrustworthy (rate-limit / transport / resource); lower --concurrency or retry`,
+    );
   if (!ablated && invokedReps.length >= MIN_VALID && measured.length < MIN_VALID)
     throw new Error(
       `eval-gate: scenario ${name} had only ${measured.length}/${invokedReps.length} skill-invoked reps with a VALID judge grade (need ≥${MIN_VALID}) — judge failures make this capture untrustworthy`,

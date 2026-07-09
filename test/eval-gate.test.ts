@@ -129,6 +129,16 @@ describe("aggregateScenario — invalid reps counted-not-dropped, invoked-only r
     ).toThrow(/untrustworthy/);
   });
 
+  it("F1: throws LOUD when most reps ERRORED (empty envelopes) — never silently writes a vacuous profile", () => {
+    // 6 errored envelopes ({} = crashed/rate-limited, no parseable assertion) → ran=0 < MIN_VALID → throw.
+    // This is the mass-error case that must fail loud instead of producing claims:[] (a vacuous baseline).
+    expect(() => aggregateScenario("eval-err", [{}, {}, {}, {}, {}, {}])).toThrow(/gradeable runs.*errored/);
+    // Mixed: 2 ran, 4 errored → still < MIN_VALID ran → throw.
+    expect(() => aggregateScenario("eval-err2", [env(true, false, [true, true]), env(true, false, [true, true]), {}, {}, {}, {}])).toThrow(
+      /gradeable runs/,
+    );
+  });
+
   it("F1: a scenario that STOPPED INVOKING does not throw — it emits a low-invocation profile for the trigger check", () => {
     // Skill fired in only 1/6 reps (it stopped triggering). This must NOT crash the capture (the old bug):
     // it is the trigger-rate signal itself and must reach bucketDiff.
