@@ -26,6 +26,7 @@ execution: local                         # OPTIONAL — orthogonal to fidelity (
                                          # runner exists yet; authoring it is a load-time error, not a
                                          # silent no-op)
 on_unanswered: fail                      # optional: policy for unscripted questions (fail | prompt | first | llm)
+                                         # ("agent" is retired — no longer a valid value)
 
 prompt: |                                # the user turn
   Summarize report.pdf and write action items to outputs/actions.md
@@ -432,7 +433,8 @@ entry still satisfies `file_exists` but not `artifact_json`. `computer_links_res
 `/sessions/…/mnt/…`-shaped links and host-shaped (hostloop) links against the manifest — a host-shaped link
 normalizes to a mount-relative path first (via the recorded connected-folder prefixes + the outputs/uploads
 mounts), since replay has no live filesystem to probe directly (that direct check only happens on a live
-`run`/`verify-run`). Without a manifest (older cassettes), all seven are **skipped** (loud).
+`run`/`verify-run`). Without a manifest (older cassettes), all seven are **skipped** (loud) — (five need
+the manifest; two more — `no_unexpected_files` and `input_unmodified` — need the pre-run path/hash capture).
 
 A `mode: r` connected folder (see [session.md](./session.md)) holds pre-existing INPUTS, not deliverables —
 `record` captures its contents **body-less** (path + hash, `truncated: true`, no `body`): `file_exists` and

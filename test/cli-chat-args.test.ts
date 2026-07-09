@@ -21,7 +21,7 @@ function chat(args: string[], env?: Record<string, string>) {
 }
 
 // Every option the chat parser consumes — the help-completeness contract asserts each appears.
-const CHAT_FLAGS = ["--raw", "--verbose", "--fidelity", "--model", "--upload", "--folder", "--plugin"];
+const CHAT_FLAGS = ["--raw", "--verbose", "--fidelity", "--model", "--upload", "--folder", "--plugin", "--allow-host-writes"];
 
 describe.skipIf(!can)("chat arg guards", () => {
   // ── extra positionals ──

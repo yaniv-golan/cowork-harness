@@ -160,8 +160,8 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
       [--strict]               fail (exit 1) on ANY stale cassette instead of warning
       [--fail-on-skill-drift]  fail only on skill-source drift (skill/shared-root); baseline drift stays a warning
       [--output-format json]
-  verify-cassettes <file|dir>  CI gate (no token): privacy scan + staleness — exit 1 on finding or drift
-      [--skip-privacy|--skip-staleness]  skip one check
+  verify-cassettes <file|dir>  CI gate (no token): privacy + staleness + scenario-drift — exit 1 on finding or drift
+      [--skip-privacy|--skip-staleness|--skip-scenario-drift] [--margins]  skip a check / print per-assert budget margins
       [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-path <regex>]... [--allow-machine-inventory <regex>]... [--allow-patterns-file <path>]... [--output-format json]
       --allow <regex> is a PATTERN (matched against a finding); --allow-patterns-file <path> is a FILE of patterns, one regex per line — not a path to allow
   rehash <dir/>                migrate cassette fingerprints to current version when content is provably unchanged (requires contentSig from v3+)
@@ -223,7 +223,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
   --version, -v                print version        --help, -h    print this help
 
   Env-var defaults (CLI flags take precedence):
-    COWORK_HARNESS_FIDELITY        default --fidelity tier (skill/chat; run takes fidelity from the scenario)
+    COWORK_HARNESS_FIDELITY        default --fidelity tier (skill; chat: protocol/container/hostloop only; run takes fidelity from the scenario)
     COWORK_HARNESS_OUTPUT_FORMAT   default --output-format (text|json)
     COWORK_HARNESS_MODEL           default --model
     NO_COLOR=1                     disable ANSI output`;
@@ -418,7 +418,7 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
   list: "usage: list [--output-format text|json]   (list available platform baselines)",
   "boundary-check": "usage: boundary-check [<baseline>] [--session <file>] [--output-format text|json]",
   vm: "usage: vm <init|status|delete|prune> [--output-format text|json]   (macOS arm64 only)\n  init    create the L2 Apple-VZ microVM\n  status  show running VM state\n  delete  remove a named VM\n  prune   drop all orphaned VMs",
-  chat: "usage: chat <skill-folder> [prompt] [--fidelity protocol|container|hostloop] [--model <id>]\n              [--upload <file>]... [--folder <dir>]... [--plugin <dir>]... [--verbose] [--raw]\n       --raw: native cowork mode via docker run -it; egress sandbox NOT applied; rejects --upload/--folder/--plugin/--fidelity (only --model applies)\n       --fidelity: protocol/container/hostloop only (no microvm/cowork); protocol = no Docker, no sandbox",
+  chat: "usage: chat <skill-folder> [prompt] [--fidelity protocol|container|hostloop] [--model <id>]\n              [--upload <file>]... [--folder <dir>]... [--plugin <dir>]... [--verbose] [--raw] [--allow-host-writes]\n       --raw: native cowork mode via docker run -it; egress sandbox NOT applied; rejects --upload/--folder/--plugin/--fidelity/--allow-host-writes (only --model applies)\n       --allow-host-writes: consent to a writable hostloop connected folder (native host FS access); refused loud otherwise\n       --fidelity: protocol/container/hostloop only (no microvm/cowork); protocol = no Docker, no sandbox",
   record:
     "usage: record <scenario.yaml | dir/> [--out <file>] [--output-format text|json] [--rerecord-stale] [--from-embedded] [--force] [--no-redact] [--allow-failing] [--max-artifact-bytes <n>] [--dry-run] [--concurrency <N>]\n" +
     "       --concurrency <N>: record a dir/ batch (or --rerecord-stale) N at a time (default 1, max 8). Runs are fully isolated; the bound is for Docker address pool + API rate limits.\n" +
@@ -432,7 +432,7 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
     "       --assert-from <file> / --reassert: token-free re-check against the on-disk assert:/expect_denied: — recording-shaping drift (prompt/answers/baseline/skills) and skill staleness HARD-FAIL.\n" +
     "       --write (reassert path only): persist the re-validated block back into the cassette when ONLY the assert block changed — no paid re-record. Refuses keys that would silently skip (need a manifest/hashes/controlOut) and, without --allow-failing, a failing verdict; events/controlOut stay byte-identical.",
   "verify-cassettes":
-    "usage: verify-cassettes <file|dir> [--skip-privacy|--skip-staleness] [--margins] [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-path <regex>]... [--allow-machine-inventory <regex>]... [--allow-patterns-file <path>]... [--output-format json]\n" +
+    "usage: verify-cassettes <file|dir> [--skip-privacy|--skip-staleness] [--skip-scenario-drift] [--margins] [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-path <regex>]... [--allow-machine-inventory <regex>]... [--allow-patterns-file <path>]... [--output-format json]\n" +
     "       --allow <regex> is a PATTERN (matched against a finding); --allow-patterns-file <path> is a FILE of patterns, one regex per line — not a path to allow.\n" +
     "       --margins: recorded-vs-budget + margin per count-bound assert (adds a per-cassette replay cost; single-sample estimate). Diagnostic only — never changes the gate verdict.",
   trace:
