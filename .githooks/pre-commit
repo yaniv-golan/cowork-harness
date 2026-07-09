@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+#
+# Block committing prettier-unformatted TypeScript.
+#
+# Checks ONLY the staged src/ and test/ .ts files against .prettierrc.json, so it
+# never trips on pre-existing formatting debt in files you did not touch. This is
+# the local guard for the same rule CI enforces (`npm run format:check`), which
+# otherwise only runs on a pushed branch.
+#
+# Bypass (not recommended): git commit --no-verify
+#
+set -euo pipefail
+
+# Staged (Added/Copied/Modified/Renamed) TypeScript under src/ or test/.
+files=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '^(src|test)/.*\.ts$' || true)
+[ -z "$files" ] && exit 0
+
+# Degrade gracefully if deps aren't installed yet (e.g. fresh clone pre-`npm install`).
+if ! npx --no-install prettier --version >/dev/null 2>&1; then
+  echo "⚠ pre-commit: prettier not installed (run 'npm install') — skipping format check."
+  exit 0
+fi
+
+# prettier honors .prettierrc.json + .prettierignore; --check lists unformatted files.
+# shellcheck disable=SC2086
+if ! npx --no-install prettier --check $files; then
+  echo ""
+  echo "✖ pre-commit: the staged TypeScript above is not prettier-formatted."
+  echo "  Fix these:  npx prettier --write $files"
+  echo "  Or all:     npm run format:write"
+  echo "  Then re-stage and commit. (Bypass with 'git commit --no-verify' if you must.)"
+  exit 1
+fi

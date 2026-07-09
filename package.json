@@ -79,6 +79,8 @@
     "test:golden:update": "vitest run -u test/golden.test.ts test/golden-render.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
     "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.ts\"",
+    "format:write": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
+    "prepare": "git config core.hooksPath .githooks || true",
     "smoke:cli": "node dist/cli.js list",
     "ci": "npm run typecheck && npm run build && npm run test",
     "prepack": "find .claude/skills/cowork-harness/scripts/_vendor -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true",
