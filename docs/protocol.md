@@ -134,3 +134,7 @@ least one vector.
 
 - **2026-07-03** — initial publication. Verified against staged agent 2.1.197 / baselines through
   `desktop-1.18286.0.json`.
+- **2026-07-09** — baseline set extended through `desktop-1.19367.0` (staged agent 2.1.202). The `v1`
+  control-protocol facts are unchanged across this bump — confirmed by the re-recorded conformance
+  cassettes passing `test/protocol-schema.test.ts`. The 2026-07-03 verification above stays scoped to
+  its stated 2.1.197 range (it is not restamped; newer baselines carry agent 2.1.202).
