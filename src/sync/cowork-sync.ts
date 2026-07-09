@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync, writeFileSync, existsSync, mkdtempSync, rmSync } from "node:fs";
+import { readFileSync, existsSync, mkdtempSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { createHash } from "node:crypto";
@@ -338,7 +338,7 @@ export function checkWebFetchFacts(bundle: string): string[] {
  * the env windows but NOT here means a NEW gate-conditional env var was introduced: hard-fail so it gets
  * classified before the gate ever flips. Value = the env key it controls + disposition.
  */
-export const SPAWN_GATES: Record<string, string> = {
+const SPAWN_GATES: Record<string, string> = {
   "434204418": "on → MCP_CONNECTION_NONBLOCKING:'0' + MCP_CONNECT_TIMEOUT_MS:'10000' (pinned gate)",
   "66187241": "CLAUDE_CODE_EMIT_TOOL_USE_SUMMARIES 'true' vs '' (pinned gate)",
   "1936081873": "CLAUDE_CODE_OAUTH_SCOPES (value host-derived → allowlisted; pinned gate)",
@@ -354,7 +354,7 @@ export const SPAWN_GATES: Record<string, string> = {
  * session ternaries out of the generated env). A stale entry (allowlisted but no longer constructed
  * anywhere) emits a non-blocking NOTE for pruning, surfaced as SyncResult.notes in the sync output.
  */
-export const SPAWN_ENV_ALLOWLIST: Record<string, string> = {
+const SPAWN_ENV_ALLOWLIST: Record<string, string> = {
   CLAUDE_CONFIG_DIR: "modeled as spawn.configDirInGuest; injected per-session by spawnEnv() (src/runtime/argv.ts)",
   TZ: "host-derived (Intl timezone)",
   CLAUDE_CODE_HOST_PLATFORM: "host-derived; runtime-injected (src/runtime/argv.ts)",
@@ -402,7 +402,7 @@ export const SPAWN_ENV_ALLOWLIST: Record<string, string> = {
  * (the drift class this whole check exists to kill). Value resolution is structural (from the asar
  * window), so a value CHANGE on any pinned key still shows as a --diff line.
  */
-export const SPAWN_PIN_KEYS: readonly string[] = [
+const SPAWN_PIN_KEYS: readonly string[] = [
   "CLAUDE_CODE_IS_COWORK",
   "CLAUDE_CODE_ENTRYPOINT",
   "CLAUDE_CODE_TAGS",
@@ -851,13 +851,13 @@ export function checkSpawnContractFacts(bundle: string): string[] {
 // the minified identifier, which is minifier-assigned and not asserted to stay stable across builds.
 // ==========================================================================================
 
-export interface ModelEffortEntry {
+interface ModelEffortEntry {
   effortLevels?: string[];
   recommended?: string;
   modes?: string[];
 }
 
-export interface EffortRegexDefault {
+interface EffortRegexDefault {
   /** The class regex's SOURCE (RegExp.prototype.source form, no delimiters) — the pattern selecting this
    *  entry for a model id not present in the literal per-model map. */
   pattern: string;

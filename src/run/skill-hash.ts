@@ -11,11 +11,11 @@ import { gitModeEnabled, gitTrackedSet, gitAccept } from "./skill-files.js";
  * cassette written under the hashed tree changing its own hash) is fixed by the `*.cassette.json` file
  * exclusion below, which carries no false-negative risk.
  */
-export const SKILL_HASH_DIR_DENYLIST = new Set([".git", "node_modules", "__pycache__", ".pytest_cache", ".mypy_cache"]);
+const SKILL_HASH_DIR_DENYLIST = new Set([".git", "node_modules", "__pycache__", ".pytest_cache", ".mypy_cache"]);
 
 /** The plugin-local ignore file: gitignore-style globs the PLUGIN declares as non-runtime, co-located
  *  with the plugin so its hash boundary travels with it. Read per mount root; not itself hashed. */
-export const HASH_IGNORE_FILE = ".cowork-hashignore";
+const HASH_IGNORE_FILE = ".cowork-hashignore";
 
 /**
  * Compile one consumer-declared ignore glob into a RegExp tested against an entry's root-relative POSIX path

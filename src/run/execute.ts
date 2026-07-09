@@ -1,18 +1,7 @@
 import { warn } from "../io.js";
 import { BoundaryError, UsageError } from "../errors.js";
 import { ZodError } from "zod";
-import {
-  readFileSync,
-  writeFileSync,
-  mkdirSync,
-  existsSync,
-  rmSync,
-  readdirSync,
-  renameSync,
-  statSync,
-  lstatSync,
-  realpathSync,
-} from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync, readdirSync, renameSync, realpathSync } from "node:fs";
 import { randomUUID, createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
@@ -41,7 +30,6 @@ import { spawnContainer } from "../runtime/container.js";
 import { spawnHostLoop } from "../runtime/hostloop.js";
 import { snapshotHostLoopWorkspace } from "../runtime/hostloop-stage.js";
 import { checkHostLoopWriteConsent, logHostWriteNotice } from "../hostloop/safety.js";
-import { PATH_GATE_TOOL_NAMES } from "../hostloop/pretooluse-path-hook.js";
 import { spawnMicroVm } from "../runtime/microvm.js";
 import {
   probeImageOmitted,
@@ -73,7 +61,7 @@ import { runsWriteRoot } from "./trace-view.js";
 import { summarizeGateProvenance } from "./gate-provenance.js";
 import { collectSecrets, scrub } from "../secrets.js";
 import { indexRowFromResult, appendIndexRow } from "./run-index.js";
-import { classifyWorkspaceFiles, collectArtifacts, collectArtifactPaths, captureAuthoredFiles } from "./artifacts.js";
+import { classifyWorkspaceFiles, collectArtifactPaths, captureAuthoredFiles } from "./artifacts.js";
 import { readPreRunManifest, readPreRunManifestHashes, readPreRunManifestLinkAware } from "./pre-run-manifest.js";
 import { resolveAvailableSkills, type PluginSkillRoot } from "./skill-metadata.js";
 
@@ -1724,7 +1712,7 @@ export function isOutputsDelete(cmd: string): boolean {
  *  preceded it (the finding then showed only the assignment block). This surfaces the delete/mv itself, with
  *  simple `VAR=literal` assignments resolved so the real target path is visible. Falls back to the whole
  *  (expanded) command if no single statement isolates the delete. Bounded length for the stored finding. */
-export function outputsDeleteSnippet(cmd: string): string {
+function outputsDeleteSnippet(cmd: string): string {
   // Iterate var expansion to a fixed point so CHAINED assignments (ARTIFACTS_ROOT → ANALYSIS_DIR → rm) fully
   // resolve in the displayed path. (Detection keeps the single-pass `expandSimpleVars` — its semantics are
   // pinned by tests; multi-pass here only sharpens the finding, never changes what gets flagged.)

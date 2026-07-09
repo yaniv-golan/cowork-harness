@@ -75,7 +75,6 @@ export function isLocalOrPrivate(host: string): boolean {
       const hexMapped = h.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
       if (hexMapped) {
         const hi = parseInt(hexMapped[1], 16);
-        const lo = parseInt(hexMapped[2], 16);
         return isPrivateIPv4Octets((hi >> 8) & 0xff, hi & 0xff);
       }
       return false;
@@ -321,7 +320,7 @@ export function makeWorkspaceHandler(opts: WorkspaceHandlerOptions): McpHandler 
       inputSchema: { type: "object", properties: { url: { type: "string" } }, required: ["url"] },
     },
   ];
-  return async (server, jr) => {
+  return async (_server, jr) => {
     const method = jr.method;
     if (method === "initialize")
       return {

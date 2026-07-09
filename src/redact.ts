@@ -34,8 +34,6 @@ export interface RedactionPolicy {
   keyNames: string[]; // JSON keys whose (string) value is redacted wholesale, regardless of pattern
 }
 
-export const EMPTY_POLICY: RedactionPolicy = { patterns: [], keyNames: [] };
-
 function csv(v: string | undefined): string[] {
   return (v ?? "")
     .split(",")
@@ -45,8 +43,8 @@ function csv(v: string | undefined): string[] {
 
 /** Assemble a redaction policy from `.cowork-redact.json` (searched in `searchDirs`, e.g. cwd then the
  *  scenario/cassette dir) merged with `COWORK_HARNESS_REDACT_PATTERNS`/`_KEYS`. No config + no env →
- *  EMPTY_POLICY (the opt-in default; the scanner is the always-on safety net). A malformed regex throws —
- *  a silently-dropped redaction rule is under-redaction, i.e. a leak. */
+ *  an empty policy (the opt-in default; the scanner is the always-on safety net). A malformed regex
+ *  throws — a silently-dropped redaction rule is under-redaction, i.e. a leak. */
 export function loadRedactionPolicy(searchDirs: string[]): RedactionPolicy {
   const patterns: { re: RegExp; label: string }[] = [];
   const keyNames: string[] = [];

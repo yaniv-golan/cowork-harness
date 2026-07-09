@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import type { AgentEvent, AgentSession, DecisionResponse } from "../src/agent/session.js";
+import type { AgentEvent, AgentSession } from "../src/agent/session.js";
 import { Run } from "../src/run/run.js";
 import { ScriptedDecider } from "../src/decide/decider.js";
 

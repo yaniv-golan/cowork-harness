@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
-import { resolve, dirname } from "node:path";
+import { resolve } from "node:path";
 import { computeContentSig } from "../src/run/skill-hash.js";
 import { buildFingerprint } from "../src/run/cassette.js";
 import { loadBaseline } from "../src/baseline.js";

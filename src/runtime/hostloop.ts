@@ -62,7 +62,7 @@ export function buildHostLoopNativeEnv(baseline: PlatformBaseline, opts: Paramet
  * loud notice, and the runtime tripwire below that catches the gate silently failing to fire).
  */
 export function spawnHostLoop(
-  scenario: Scenario,
+  _scenario: Scenario,
   baseline: PlatformBaseline,
   plan: LaunchPlan,
   outDir: string,
@@ -81,9 +81,6 @@ export function spawnHostLoop(
   // Name by the per-invocation runToken (NOT sessionId) so a --resume after a failed run doesn't collide
   // on a leftover same-named container. cwd/work dir stay keyed by sessionId (stable for resume).
   const containerName = `cowork-hl-${opts.runToken ?? sessionId}`;
-  // Explicit opts take priority over process.env (concurrency-safe); env var is the
-  // manual/dev fallback for direct `docker run` invocations that bypass the sidecar.
-  const proxyHost = opts.egressProxy ?? process.env.COWORK_EGRESS_PROXY ?? "http://egress-proxy:8080";
   const network = opts.dockerNetwork ?? process.env.COWORK_DOCKER_NETWORK ?? "cowork-net";
 
   // Stage the writable session tree: NO folder copies (bind-mounted real paths instead), uploads/

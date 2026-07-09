@@ -20,7 +20,7 @@ import type { McpHandler } from "../hostloop/workspace-handler.js";
  * The agent binary is bind-mounted from the user's own install (not in the image).
  */
 export function spawnContainer(
-  scenario: Scenario,
+  _scenario: Scenario,
   baseline: PlatformBaseline,
   plan: LaunchPlan,
   outDir: string,

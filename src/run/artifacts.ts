@@ -28,7 +28,7 @@ export function collectArtifacts(workRoot: string, prefixes: string[], opts?: Wa
 
 /** A link-kind for a path-walk entry. Absent (regular file) is the default; directories are
  *  traversal-only and never emitted. */
-export type ArtifactLinkKind = "symlink" | "hardlink";
+type ArtifactLinkKind = "symlink" | "hardlink";
 
 export interface ArtifactPathEntry {
   path: string;
@@ -59,7 +59,7 @@ export function collectArtifactPaths(workRoot: string, prefixes: string[]): Arti
 }
 
 /** Like `collectArtifactPaths` but rooted at an ARBITRARY directory mapped to `prefix` (the hostloop
- *  pre-run variant, mirroring `collectArtifactsAt`). Returns `prefix/<rel>` entries with link-kind. */
+ *  pre-run variant). Returns `prefix/<rel>` entries with link-kind. */
 export function collectArtifactPathsAt(dir: string, prefix: string): ArtifactPathEntry[] {
   const out: ArtifactPathEntry[] = [];
   let dirReal: string;
@@ -112,7 +112,7 @@ function walkPaths(startAbs: string, startRel: string, containReal: string, visi
   walk(startAbs, startRel);
 }
 
-export type WorkspaceFileClass = "output" | "mount" | "input";
+type WorkspaceFileClass = "output" | "mount" | "input";
 
 export interface WorkspaceFile {
   path: string;
@@ -173,23 +173,6 @@ export function classifyWorkspaceFiles(workRoot: string, userVisibleRoots: strin
  *  them pre-run would report a pre-existing hardlinked file as agent-"created" (false stray). */
 export interface WalkOpts {
   includeHardlinkPaths?: boolean;
-}
-
-/** Walk an ARBITRARY directory (containment-rooted at itself), emitting `prefix/<rel>` paths — the
- *  hostloop pre-run variant of collectArtifacts: connected folders are bind-mounted live host paths
- *  (never staged), so the pre-run snapshot walks each folder SOURCE mapped to its mountPath, mirroring
- *  the path space snapshotHostLoopWorkspace's post-run copy produces. Same symlink-skip /
- *  hardlink-reject / realpath-containment guards. */
-export function collectArtifactsAt(dir: string, prefix: string, opts?: WalkOpts): string[] {
-  const out: { path: string; bytes: number }[] = [];
-  let dirReal: string;
-  try {
-    dirReal = realpathSync(dir);
-  } catch {
-    return []; // source dir absent/unreadable — nothing pre-existing
-  }
-  walkInto(dir, prefix, dirReal, new Set<string>(), out, opts);
-  return out.map((f) => f.path);
 }
 
 /** The shared walk. `containReal` is the realpath every visited directory must stay under;

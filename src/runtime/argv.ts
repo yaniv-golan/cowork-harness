@@ -172,7 +172,7 @@ export function hostNativeSpawnEnv(
   };
 }
 
-export const HARDENING = [
+const HARDENING = [
   "--cap-drop",
   "ALL",
   "--security-opt",

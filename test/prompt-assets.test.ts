@@ -1,7 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { readdirSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { renderPrompts } from "../src/prompt.js";
 import { loadBaseline, BASELINES_DIR } from "../src/baseline.js";
 import { SessionConfig } from "../src/session.js";

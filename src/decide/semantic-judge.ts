@@ -12,7 +12,7 @@ import type { SemanticClaimResult, SemanticJudge } from "../assert.js";
  *  before/after comparison — a floating alias ("opus") resolves to whatever the latest is at call time.
  *  A strong grader is the right default: rubric grading needs reliability. Env-overridable; can also be
  *  set per-assert. */
-export const DEFAULT_JUDGE_MODEL = process.env.COWORK_HARNESS_JUDGE_MODEL || "claude-opus-4-8";
+const DEFAULT_JUDGE_MODEL = process.env.COWORK_HARNESS_JUDGE_MODEL || "claude-opus-4-8";
 
 /** Extract EVERY balanced top-level `{...}` object from a string, ignoring braces inside JSON string
  *  literals. Judge models routinely wrap the JSON in prose, restate it fenced + unfenced, or echo the

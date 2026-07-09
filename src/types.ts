@@ -9,7 +9,7 @@ import { z } from "zod";
 export const DEFAULT_MAX_THINKING_TOKENS = 31999;
 
 /** PlatformBaseline — VOLATILE per-release facts (one synced snapshot per Cowork release), from cowork-sync. */
-export const MountSpec = z.object({
+const MountSpec = z.object({
   name: z.string(),
   mountPath: z.string(),
   mode: z.enum(["r", "rw", "rwd"]),
@@ -664,7 +664,7 @@ export interface Fingerprint {
  *  `unverifiable-tier` = the tier check could not run for a baseline-dependent (`fidelity: cowork`)
  *  cassette (no recorded `effectiveFidelity`, or the scenario's pinned baseline failed to load) —
  *  can't verify ⇒ not green on the verify-cassettes gate. */
-export type StalenessClass =
+type StalenessClass =
   "baseline" | "skill" | "shared-root" | "format" | "unverifiable-baseline" | "unverifiable-skill" | "resolved-tier" | "unverifiable-tier";
 export interface StalenessFinding {
   class: StalenessClass;
@@ -734,7 +734,7 @@ export interface CostInfo {
  *  names match the REAL observed SDK payload (empirically confirmed against a captured stream and
  *  against committed example cassettes), not a guessed shape. Every field optional since this is a
  *  passthrough of SDK-owned data, not harness-computed. */
-export interface ModelUsageEntry {
+interface ModelUsageEntry {
   inputTokens?: number;
   outputTokens?: number;
   cacheReadInputTokens?: number;

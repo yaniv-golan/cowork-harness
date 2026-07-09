@@ -1397,23 +1397,6 @@ describe("Cassette — protocol replay", () => {
       }),
       JSON.stringify({ type: "result", subtype: "success", is_error: false }),
     ];
-    // Tampered: `questions` dropped from updatedInput (the regression)
-    const controlOut = [
-      JSON.stringify({
-        type: "control_response",
-        response: {
-          subtype: "success",
-          request_id: reqId,
-          response: {
-            behavior: "allow",
-            updatedInput: {
-              questions: [{ question: "Which format?", options: [{ label: "PDF" }, { label: "DOCX" }] }],
-              answers: { "Which format?": "PDF" },
-            },
-          },
-        },
-      }),
-    ];
     // We simulate what happens if serializeDecision drops `questions` by making a tampered
     // controlOut that has `questions` but the re-serialized output won't have them.
     // Actually the real test: record with questions present, then the re-serialize should match.

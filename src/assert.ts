@@ -8,7 +8,7 @@ import { normalizeHost } from "./boundary-paths.js";
 import { extractComputerLinks, resolveComputerLink, type LinkResolutionContext } from "./run/computer-links.js";
 import { scrub } from "./secrets.js";
 import { warn } from "./io.js";
-import { collectArtifacts, collectArtifactPaths } from "./run/artifacts.js";
+import { collectArtifactPaths } from "./run/artifacts.js";
 import { anyGlobMatches } from "./glob.js";
 
 /** Derives the four AssertContext budget fields (costUsd/tokensTotal/toolCallsTotal/turns) uniformly from

@@ -53,14 +53,14 @@ import { evaluate, budgetFields, type AssertContext } from "../assert.js";
 import { anyGlobMatches } from "../glob.js";
 import { extractComputerLinks } from "./computer-links.js";
 import { makeRenderer, renderFooter, type RenderPlan } from "./renderer.js";
-import { jsonEnvelope, jsonPayloadEnvelope, parseOutputFormat, fail, isJsonOutput } from "./envelope.js";
+import { jsonEnvelope, jsonPayloadEnvelope, fail, isJsonOutput } from "./envelope.js";
 import { parseArgs } from "../cli-args.js";
 import { resolveInputs } from "./inputs.js";
 import { realProbe } from "./doctor.js";
 import { hashSkillDirs, hashSharedOnly, computeContentSig, skillHashEntries, OS_JUNK_PATTERN, agentSkillName } from "./skill-hash.js";
 import { computeVerdict } from "./verdict.js";
 import { redactJsonLine, redactText, redactStructural, loadRedactionPolicy, type RedactionPolicy } from "../redact.js";
-import { collectSecrets, scrub, scrubField } from "../secrets.js";
+import { collectSecrets, scrubField } from "../secrets.js";
 import { scanText, DEFAULT_SCAN_PATTERNS, MANIFEST_SCAN_PATTERNS, type ScanFinding, type AllowInput, type AllowPattern } from "../scan.js";
 import { parse as parseYaml } from "yaml";
 
@@ -655,11 +655,7 @@ const DEBUG_SKILLHASH_ENV = "COWORK_HARNESS_DEBUG_SKILLHASH";
 /** Debug: dump the per-file entries currently feeding the skill hash for a session (same resolution as
  *  `buildFingerprint`), so a staleness mismatch shows WHICH files are in the hash — incl. unexpected
  *  OS-junk / run-generated files that are the usual "stale immediately after record" cause. */
-export function explainSkillHash(
-  sessionPath: string,
-  cassetteDir: string | undefined,
-  scopeSkills?: string[],
-): { path: string; sha: string }[] {
+function explainSkillHash(sessionPath: string, cassetteDir: string | undefined, scopeSkills?: string[]): { path: string; sha: string }[] {
   const { dirs, hashIgnore } = skillSourceDirs(sessionPath, cassetteDir);
   if (dirs.length === 0) return [];
   return skillHashEntries(dirs, scopeSkills, hashIgnore);
@@ -1009,7 +1005,7 @@ function minimalRec(): RunRecord {
  * (the decider does not run) — a backward-compat warning is emitted and question/gate assertions
  * are excluded from evaluation (not vacuously passed) to honour "no silent false-greens".
  */
-export class CassetteAgentSession implements AgentSession {
+class CassetteAgentSession implements AgentSession {
   /** Indexed by decision req.id; populated during start() for use in respond(). */
   private reqById = new Map<string, DecisionRequest>();
   /** re-serialize mismatches (request_id → {expected, actual}) — surfaced as failing assertions. */
@@ -1197,7 +1193,7 @@ function buildControlOutIndex(controlOut: string[]): {
  * Looks up the recorded envelope for each decision req.id, deserializes it, and returns it.
  * If no recorded envelope exists → ABSTAIN (lets Run's fail-loud-on-unanswered-question fire).
  */
-function buildReplayDecider(session: CassetteAgentSession, controlOutIndex: Map<string, Record<string, unknown>>): Decider {
+function buildReplayDecider(_session: CassetteAgentSession, controlOutIndex: Map<string, Record<string, unknown>>): Decider {
   return {
     async decide(req: DecisionRequest) {
       const body = controlOutIndex.get(req.id);
@@ -2629,7 +2625,7 @@ export function sessionFingerprintDrift(
  *  from the rest: `record` freezes live-only keys and replay STRIPS them (never a NEW false-green), so
  *  `--write` may persist them; every OTHER reason means a key that would SILENTLY SKIP — a permanent
  *  false-green if frozen — so `--write` refuses it. */
-export type UncheckableReason = "manifest-missing" | "prerunpaths-missing" | "prerunhashes-missing" | "controlout-missing" | "live-only";
+type UncheckableReason = "manifest-missing" | "prerunpaths-missing" | "prerunhashes-missing" | "controlout-missing" | "live-only";
 
 /** Classify which on-disk `assert:` keys are NOT evaluable on this cassette (reason code + human message
  *  per key), plus whether `expect_denied` changed. The shared core behind BOTH the warn path

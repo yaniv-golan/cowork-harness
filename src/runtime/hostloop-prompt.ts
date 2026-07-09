@@ -19,7 +19,7 @@ import { dirname } from "node:path";
  * legacy static-file path is combined.
  */
 
-export interface HostLoopFolder {
+interface HostLoopFolder {
   /** Real host path of the mounted folder/upload. */
   hostPath: string;
   /** Mount path RELATIVE to mntRoot (e.g. "project" for a work folder, "uploads/foo.txt"). */

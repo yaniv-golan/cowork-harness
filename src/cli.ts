@@ -62,7 +62,7 @@ import {
 } from "./run/trace-view.js";
 import { loadVmPathContext } from "./run/vm-path-ctx-file.js";
 import { makeDisplayTranslator, linkifyForTerminal, shouldLinkify } from "./run/display-translate.js";
-import { readIndex, reindexFromRunsTree, buildStats, resolveRunsFromIndex, type RunIndexRow, type StatsSummary } from "./run/run-index.js";
+import { readIndex, reindexFromRunsTree, buildStats, type StatsSummary } from "./run/run-index.js";
 import {
   canonicalizeInput,
   diffToolSequence,
@@ -78,16 +78,7 @@ import {
 import type { Cassette } from "./run/cassette.js";
 import { buildScaffold } from "./run/scaffold.js";
 import { buildInspectView } from "./run/inspect-view.js";
-import {
-  pkgVersion,
-  jsonEnvelope,
-  jsonPayloadEnvelope,
-  jsonError,
-  parseOutputFormat,
-  fail,
-  isJsonOutput,
-  type ErrCategory,
-} from "./run/envelope.js";
+import { pkgVersion, jsonEnvelope, jsonPayloadEnvelope, jsonError, parseOutputFormat, fail, isJsonOutput } from "./run/envelope.js";
 import { buildRepeatRollup, rollupPasses, type RepeatRollup } from "./run/repeat.js";
 import {
   MatrixFile,
@@ -3470,13 +3461,7 @@ function cmdTrace(args: string[]) {
   rejectUnknownFlags(
     "trace",
     args,
-    [
-      "--view",
-      "--output-format",
-      "--output-format=json",
-      "--output-format=text",
-      "--translate-paths",
-    ],
+    ["--view", "--output-format", "--output-format=json", "--output-format=text", "--translate-paths"],
     json,
   );
 

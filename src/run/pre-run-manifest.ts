@@ -179,25 +179,6 @@ export function readPreRunManifestHashes(outDir: string): Record<string, string 
   }
 }
 
-/** The per-path {mtimeMs, size} map from the pre-run manifest (value null = unreadable at capture).
- *  undefined = no manifest, or a manifest predating this field (an older run) — a caller that needs it to
- *  distinguish an agent write from an externally-mutated path must treat undefined as evidence-unavailable
- *  for that distinction, same convention as `readPreRunManifestHashes`. */
-export function readPreRunManifestStats(outDir: string): Record<string, { mtimeMs: number; size: number } | null> | undefined {
-  try {
-    const parsed = JSON.parse(readFileSync(join(outDir, FILE), "utf8")) as { stats?: unknown };
-    if (parsed.stats === null || typeof parsed.stats !== "object" || Array.isArray(parsed.stats)) return undefined;
-    const s = parsed.stats as Record<string, unknown>;
-    for (const v of Object.values(s)) {
-      if (v === null) continue;
-      if (typeof v !== "object" || typeof (v as any).mtimeMs !== "number" || typeof (v as any).size !== "number") return undefined;
-    }
-    return s as Record<string, { mtimeMs: number; size: number } | null>;
-  } catch {
-    return undefined;
-  }
-}
-
 /** The manifest's provenance ("local-walk" today; "remote-unavailable" is RESERVED for a future cloud
  *  producer — see the write-site comment in capturePreRunManifest). undefined = no manifest, an older
  *  manifest predating this field, or a value that isn't one of the two known literals — callers must

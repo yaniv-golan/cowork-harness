@@ -31,10 +31,10 @@ function parseEnvPortMicroVm(name: string, defaultValue: number): number {
  * Egress: a host-side allowlist proxy + a guest default-deny iptables firewall.
  */
 export function spawnMicroVm(
-  scenario: Scenario,
+  _scenario: Scenario,
   baseline: PlatformBaseline,
   plan: LaunchPlan,
-  outDir: string,
+  _outDir: string,
   sessionId: string,
   opts: { systemPromptAppend?: string; proxyPort?: number } = {},
 ) {

@@ -6,7 +6,7 @@ import type { RunRecord } from "./run.js";
 import { resolveEventsFile } from "./trace-view.js";
 import { expandUserPath } from "../session.js";
 
-export const STATUS_FILE = "status.json";
+const STATUS_FILE = "status.json";
 
 export interface RunStatusMeta {
   pid: number;

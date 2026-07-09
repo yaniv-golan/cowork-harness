@@ -990,7 +990,6 @@ describe("file_exists / user_visible_artifact pass on truncated cassette entries
   });
 
   it("user_visible_artifact fails for a truncated entry NOT under a user-visible prefix", () => {
-    const r = evaluate([{ user_visible_artifact: "outputs/non-visible/internal.log" }], base);
     // path is under outputs/ so it IS visible — this just confirms prefix logic still runs for truncated
     expect(pass(evaluate([{ user_visible_artifact: "outputs/non-visible/internal.log" }], base))).toBe(true);
   });

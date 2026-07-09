@@ -14,11 +14,6 @@ import {
 import { ProvenanceTracker } from "../hostloop/provenance.js";
 import { normalizeHost, validateBareDomain } from "../boundary-paths.js";
 
-// Re-export the shared `normalizeHost` from run.ts's public surface. It used to be a private helper
-// here (assert.ts needs it too); it now lives in boundary-paths.ts as the single source
-// of truth, and is re-exported so existing `run.js` importers keep working.
-export { normalizeHost };
-
 /** Bound a captured decision input so a large tool payload can't bloat the run record. Objects pass
  *  through structurally (consumers read fields like `.command`); only an over-cap JSON serialization is
  *  truncated to a marker string. */
@@ -119,7 +114,7 @@ function parseWebSearchLinks(text: string): Array<{ title: string; url: string }
 }
 
 /** the observable sub-agent dispatch tree (single owner = RunRecord). */
-export interface SubagentDispatch {
+interface SubagentDispatch {
   toolUseId: string;
   parentToolUseId?: string;
   agentType: string;
@@ -131,7 +126,7 @@ export interface SubagentDispatch {
   output?: string; // the dispatch's own paired tool_result, assertText-capped — populated by a finalize step, not at push time
 }
 
-export interface DecisionRecord {
+interface DecisionRecord {
   kind: "tool" | "question" | "dialog" | "elicit";
   name: string;
   decision: string;

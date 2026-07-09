@@ -3,14 +3,12 @@ import {
   LlmDecider,
   ScriptedDecider,
   UnansweredError,
-  ABSTAIN,
   isBoundaryPrefix,
   echoPrefixMatch,
   suffixCanonMatch,
   parseIndexReply,
   coerceLabel,
   type RunContext,
-  type Complete,
 } from "../src/decide/decider.js";
 import type { DecisionRequest } from "../src/agent/session.js";
 import type { AnswerRule } from "../src/types.js";

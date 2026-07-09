@@ -266,7 +266,7 @@ export interface BuildTraceOptions {
 /** Core trace-row building over an already-parsed event array — the part of `buildTrace` that doesn't
  *  care whether the events came from a file (run dir) or were passed in directly (the cassette diff
  *  engine, cassette `events[]`). `buildTrace` is the file-path convenience wrapper over this. */
-export function buildTraceFromEvents(events: AgentEvent[], opts: BuildTraceOptions = {}): TraceRow[] {
+function buildTraceFromEvents(events: AgentEvent[], opts: BuildTraceOptions = {}): TraceRow[] {
   const translate = opts.translate ?? ((s: string) => s);
   // Pair tool_use ↔ tool_result by toolUseId so each tool row carries its OUTCOME — the single
   // highest-value forensics fix: a tool error (e.g. the q.map) is now visible in one command.
@@ -583,7 +583,7 @@ export function formatToolErrors(rows: ToolErrorRow[]): string {
  * where expected / mutate an input" is a one-liner. Both fields live in `result.json`, so this view needs
  * a run dir, not a bare `events.jsonl`.
  */
-export interface FileRow {
+interface FileRow {
   path: string;
   class?: "output" | "mount" | "input";
   bytes?: number;
@@ -653,7 +653,7 @@ export function formatFilesView(v: FilesView): string {
  * cache-read ratio. The default view already prints a single combined cache-ratio FOOTER
  * (`cli.ts`); this view is the full breakdown, so the two don't double-render. Needs a run dir.
  */
-export interface UsageRow {
+interface UsageRow {
   model: string;
   inputTokens?: number;
   outputTokens?: number;

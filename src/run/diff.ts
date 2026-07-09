@@ -23,7 +23,7 @@ const MASKS: { re: RegExp; token: string }[] = [
  *  diff as identical despite this per-run noise. Deliberately does NOT touch the redaction vocabulary's
  *  sensitive-value classes (email/currency/domain) — this is about comparison stability, not privacy.
  *  Host-path source — DELIBERATELY not src/redact.ts + io.ts's tildeify, the two obvious candidates:
- *  redact.ts turned out to be a user-policy-driven redactor (`.cowork-redact.json`/env; EMPTY_POLICY by
+ *  redact.ts turned out to be a user-policy-driven redactor (`.cowork-redact.json`/env; empty by
  *  default) with NO built-in host-path regex to reuse, and tildeify is a HOME→`~` display formatter, not a
  *  masker. The one built-in host-path vocabulary in the codebase is src/scan.ts's DEFAULT_SCAN_PATTERNS
  *  "path" class — so that regex (only the regex, not the scanner machinery) is reused instead. */

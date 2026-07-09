@@ -1,6 +1,5 @@
 import { describe, it, expect } from "vitest";
 import { assembleRunResult } from "../src/run/assemble-run-result.js";
-import type { RunResult } from "../src/types.js";
 
 import type { CompleteRunResult } from "../src/run/assemble-run-result.js";
 
@@ -120,7 +119,10 @@ describe("assembleRunResult", () => {
   });
 
   it("passes execution through unchanged", () => {
-    const out = assembleRunResult({ ...fullyExplicitFixture(), execution: { location: "cloud", environmentId: "env_1", taskKind: "scheduled" } });
+    const out = assembleRunResult({
+      ...fullyExplicitFixture(),
+      execution: { location: "cloud", environmentId: "env_1", taskKind: "scheduled" },
+    });
     expect(out.execution).toEqual({ location: "cloud", environmentId: "env_1", taskKind: "scheduled" });
   });
 });

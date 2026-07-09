@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync, readFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { loadBaseline, resolveAgentBinary } from "../src/baseline.js";

@@ -2,14 +2,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  type Cassette,
-  computeStaleness,
-  checkStaleness,
-  buildFingerprint,
-  replayCassette,
-  CASSETTE_VERSION,
-} from "../src/run/cassette.js";
+import { type Cassette, computeStaleness, buildFingerprint, replayCassette, CASSETTE_VERSION } from "../src/run/cassette.js";
 import { loadBaseline } from "../src/baseline.js";
 import type { Fingerprint } from "../src/types.js";
 

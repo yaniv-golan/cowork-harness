@@ -10,7 +10,7 @@ const DEFAULT_KEEP_LAST = 5;
 /** Parse a `<N>d|h|m` retention window (e.g. `7d`, `24h`, `30m`) to milliseconds, or undefined if
  *  malformed. Used only by the opt-in `--pinned-older-than` reclaim — pinned sessions are otherwise
  *  never pruned. */
-export function parseRetentionMs(s: string): number | undefined {
+function parseRetentionMs(s: string): number | undefined {
   const m = s.trim().match(/^(\d+)\s*([dhm])$/);
   if (!m) return undefined;
   const n = Number(m[1]);

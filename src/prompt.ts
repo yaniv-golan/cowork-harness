@@ -1,6 +1,6 @@
 import { warn } from "./io.js";
 import { readFileSync, existsSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { PlatformBaseline } from "./types.js";
 import type { SessionConfig } from "./session.js";

@@ -139,7 +139,7 @@ export interface AgentSession {
  *  a malformed control frame; reject LOUDLY rather than echoing an unusable id into a response envelope
  *  (which the in-VM agent could never match → it blocks until timeout). Shared by every control-request
  *  branch (mcp_message, hook_callback, decision) so none can drift into trusting an unchecked id. */
-export function requireRequestId(msg: any): string {
+function requireRequestId(msg: any): string {
   if (typeof msg?.request_id !== "string" || msg.request_id === "")
     throw new Error(`control-in: malformed request_id: ${JSON.stringify(msg?.request_id)}`);
   return msg.request_id;
@@ -174,10 +174,10 @@ const QuestionsSchema = z.array(QSpecSchema);
 export function successEnvelope(requestId: string, body: Record<string, unknown>) {
   return { type: "control_response", response: { subtype: "success", request_id: requestId, response: body } };
 }
-export function allowEnvelope(requestId: string, updatedInput: Record<string, unknown>) {
+function allowEnvelope(requestId: string, updatedInput: Record<string, unknown>) {
   return successEnvelope(requestId, { behavior: "allow", updatedInput });
 }
-export function denyEnvelope(requestId: string, message: string) {
+function denyEnvelope(requestId: string, message: string) {
   return successEnvelope(requestId, { behavior: "deny", message });
 }
 export function mcpResponseEnvelope(
@@ -357,7 +357,7 @@ export function deserializeDecision(req: DecisionRequest, body: Record<string, u
 /** the largest control-out frame we mirror verbatim into control-out.jsonl. A frame above this
  *  cannot be faithfully recorded (a truncation marker is unreplayable), so we fail the live recording
  *  rather than freeze an unreplayable cassette. */
-export const CONTROL_OUT_MIRROR_CAP = 256 * 1024;
+const CONTROL_OUT_MIRROR_CAP = 256 * 1024;
 
 export class LiveAgentSession implements AgentSession {
   private events: WriteStream;
@@ -380,7 +380,7 @@ export class LiveAgentSession implements AgentSession {
 
   constructor(
     private proc: ChildProcessByStdio<Writable, Readable, Readable>,
-    private outDir: string,
+    outDir: string,
   ) {
     this.events = createWriteStream(join(outDir, "events.jsonl"), { flags: "a" });
     this.controlOut = createWriteStream(join(outDir, "control-out.jsonl"), { flags: "a" });
