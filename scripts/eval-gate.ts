@@ -11,10 +11,9 @@
 // significant at α=0.05 UNADJUSTED. The gate is adjudicated (a red is reviewed by a human, not an auto-merge
 // block), so it must be able to fire on a single-claim collapse — which strict FDR at ~99 claims cannot.
 // Discrete Fisher runs sub-nominal, so ~1–3 false reds/run over 99 claims, absorbed by adjudication.
-import { readFileSync, writeFileSync, readdirSync, mkdtempSync, rmSync } from "node:fs";
+import { readFileSync, writeFileSync, readdirSync } from "node:fs";
 import { join, resolve, basename } from "node:path";
-import { tmpdir } from "node:os";
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 
 const SKILL = "cowork-harness";
 const ALPHA = 0.05;
@@ -140,7 +139,7 @@ export function bucketDiff(baseline: Profile, candidate: Profile): Bucketed {
 /** Aggregate a set of run envelopes (one scenario, N reps) into a ScenarioProfile. Reps that never invoked
  *  the skill measure priors, not the skill; reps whose judge grade was INVALID are counted (never dropped)
  *  but excluded from the pass denominator. Errors loud if too few valid+invoked reps remain. */
-export function aggregateScenario(name: string, envelopes: unknown[]): ScenarioProfile {
+export function aggregateScenario(name: string, envelopes: unknown[], ablated = false): ScenarioProfile {
   const reps = envelopes
     .map((raw) => {
       const r = (raw as { results?: unknown[] }).results?.[0] as
@@ -160,25 +159,27 @@ export function aggregateScenario(name: string, envelopes: unknown[]): ScenarioP
     })
     .filter((x): x is NonNullable<typeof x> => x !== null);
 
-  const invokedValid = reps.filter((r) => r.invoked && !r.invalid);
+  // The measured set: skill-invoked & valid reps for a normal run; ALL valid reps for an ablated (skill
+  // removed by design, so it never "invokes") calibration run.
+  const measured = ablated ? reps.filter((r) => !r.invalid) : reps.filter((r) => r.invoked && !r.invalid);
   const notInvoked = reps.filter((r) => !r.invoked);
   const rubric = reps.find((r) => r.claims.length)?.claims.map((c) => c.claim) ?? [];
   const rate = (set: typeof reps, idx: number) => set.filter((r) => r.claims.find((c) => c.index === idx)?.pass).length;
 
-  if (invokedValid.length < MIN_VALID)
+  if (measured.length < MIN_VALID)
     throw new Error(
-      `eval-gate: scenario ${name} has only ${invokedValid.length}/${reps.length} valid skill-invoked reps (need ≥${MIN_VALID}) — capture is not trustworthy`,
+      `eval-gate: scenario ${name} has only ${measured.length}/${reps.length} valid ${ablated ? "" : "skill-invoked "}reps (need ≥${MIN_VALID}) — capture is not trustworthy`,
     );
 
   return {
     reps: reps.length,
     skillInvoked: `${reps.filter((r) => r.invoked).length}/${reps.length}`,
-    validReps: invokedValid.length,
+    validReps: measured.length,
     errored: envelopes.length - reps.length,
     claims: rubric.map((claim, index) => ({
       index,
       claim,
-      pass: `${rate(invokedValid, index)}/${invokedValid.length}`,
+      pass: `${rate(measured, index)}/${measured.length}`,
       priors: notInvoked.length ? `${rate(notInvoked, index)}/${notInvoked.length}` : null,
     })),
   };
@@ -192,28 +193,49 @@ function scenarioFiles(): string[] {
     .map((f) => join(SCENARIO_DIR, f));
 }
 
-/** Run one scenario N times, return the parsed --output-format json envelopes. */
-function runScenario(file: string, reps: number, dotenv: string | undefined, ablate: boolean): unknown[] {
-  const out: unknown[] = [];
-  for (let i = 0; i < reps; i++) {
+/** One `run --output-format json` invocation, parsed. Async so a pool can run several at once. */
+function runOnce(file: string, dotenv: string | undefined, ablate: boolean): Promise<unknown> {
+  return new Promise((resolveJob) => {
     const args = ["tsx", "src/cli.ts", ...(dotenv ? ["--dotenv", dotenv] : []), "run", file, "--output-format", "json"];
     if (ablate) args.push("--ablate-skill");
-    const r = spawnSync("npx", args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
-    try {
-      out.push(JSON.parse(r.stdout || "{}"));
-    } catch {
-      out.push({});
-    }
-  }
-  return out;
+    const child = spawn("npx", args, { stdio: ["ignore", "pipe", "ignore"] });
+    let buf = "";
+    child.stdout.on("data", (d: Buffer) => (buf += d.toString()));
+    child.on("close", () => {
+      try {
+        resolveJob(JSON.parse(buf || "{}"));
+      } catch {
+        resolveJob({});
+      }
+    });
+    child.on("error", () => resolveJob({}));
+  });
 }
 
-function capture(reps: number, dotenv: string | undefined, ablate: boolean): Profile {
+/** Run every (scenario × rep) job through a bounded concurrency pool, aggregate by scenario. Container
+ *  runs are heavy, so the default cap is small; each scenario is fully isolated per the harness. */
+async function capture(reps: number, dotenv: string | undefined, ablate: boolean, concurrency: number): Promise<Profile> {
+  const files = scenarioFiles();
+  const jobs: { name: string; file: string }[] = [];
+  for (const file of files) for (let i = 0; i < reps; i++) jobs.push({ name: basename(file, ".yaml"), file });
+  const byScenario = new Map<string, unknown[]>();
+  let next = 0;
+  let done = 0;
+  const worker = async (): Promise<void> => {
+    while (next < jobs.length) {
+      const job = jobs[next++];
+      const env = await runOnce(job.file, dotenv, ablate);
+      (byScenario.get(job.name) ?? byScenario.set(job.name, []).get(job.name)!).push(env);
+      done++;
+      if (done % 5 === 0 || done === jobs.length)
+        process.stderr.write(`[eval-gate] ${ablate ? "ablate " : ""}${done}/${jobs.length} runs\n`);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, jobs.length) }, worker));
   const profile: Profile = {};
-  for (const file of scenarioFiles()) {
+  for (const file of files) {
     const name = basename(file, ".yaml");
-    process.stderr.write(`[eval-gate] ${ablate ? "ablate " : ""}${name} ×${reps}…\n`);
-    profile[name] = aggregateScenario(name, runScenario(file, reps, dotenv, ablate));
+    profile[name] = aggregateScenario(name, byScenario.get(name) ?? [], ablate);
   }
   return profile;
 }
@@ -222,16 +244,17 @@ function readProfile(path: string): Profile {
   return JSON.parse(readFileSync(path, "utf8")) as Profile;
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const flag = (n: string) => argv.includes(n);
   const val = (n: string) => (argv.includes(n) ? argv[argv.indexOf(n) + 1] : undefined);
   const reps = Number(val("--reps") ?? (flag("--calibrate") ? 4 : 6));
   const dotenv = val("--dotenv");
+  const concurrency = Number(val("--concurrency") ?? 4);
 
   if (flag("--calibrate")) {
     // Ablation: a claim that still passes WITHOUT the skill is not discriminating → excluded from the gate.
-    const ablated = capture(reps, dotenv, true);
+    const ablated = await capture(reps, dotenv, true, concurrency);
     const base = readProfile(BASELINE);
     for (const [scen, sp] of Object.entries(ablated)) {
       const b = base[scen];
@@ -247,7 +270,7 @@ function main(): void {
   }
 
   if (flag("--rebaseline")) {
-    const profile = capture(reps, dotenv, false);
+    const profile = await capture(reps, dotenv, false, concurrency);
     writeFileSync(BASELINE, JSON.stringify(profile, null, 2) + "\n");
     process.stderr.write(`[eval-gate] baseline written to ${BASELINE} (run --calibrate next to tag discriminating claims)\n`);
     return;
@@ -255,7 +278,7 @@ function main(): void {
 
   // Gate.
   const baseline = readProfile(BASELINE);
-  const candidate = capture(reps, dotenv, false);
+  const candidate = await capture(reps, dotenv, false, concurrency);
   const b = bucketDiff(baseline, candidate);
   const lines: string[] = [];
   if (b.regressions.length) {
