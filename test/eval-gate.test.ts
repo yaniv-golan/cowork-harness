@@ -85,6 +85,14 @@ describe("aggregateScenario — invalid reps counted-not-dropped, invoked-only r
     expect(p.validReps).toBe(4);
   });
 
+  it("does NOT throw on an ABLATED scenario below the valid-rep floor (skill-removal broke it — that IS the signal)", () => {
+    // Only 2 gradeable skill-removed reps (< MIN_VALID) must not crash the calibration pass; the calibrate
+    // loop reads the low validReps to force the scenario's claims discriminating.
+    const p = aggregateScenario("eval-z", [env(true, false, [true, false]), env(true, false, [false, true])], true);
+    expect(p.validReps).toBe(2);
+    expect(p.claims).toHaveLength(2);
+  });
+
   it("counts an INVALID rep (does not drop it) and errors below the valid-rep floor", () => {
     // 5 invoked reps but 2 are judge-invalid → only 3 valid < MIN_VALID(4) → loud error
     expect(() =>

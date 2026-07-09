@@ -146,7 +146,7 @@ export function aggregateScenario(name: string, envelopes: unknown[], ablated = 
         | {
             assertions?: {
               assertion?: { semantic_matches?: unknown };
-              semanticClaims?: { index: number; pass: boolean }[];
+              semanticClaims?: { index: number; claim: string; pass: boolean }[];
               judgeInvalid?: boolean;
             }[];
             skillsInvoked?: string[];
@@ -166,9 +166,13 @@ export function aggregateScenario(name: string, envelopes: unknown[], ablated = 
   const rubric = reps.find((r) => r.claims.length)?.claims.map((c) => c.claim) ?? [];
   const rate = (set: typeof reps, idx: number) => set.filter((r) => r.claims.find((c) => c.index === idx)?.pass).length;
 
-  if (measured.length < MIN_VALID)
+  // The baseline/gate path needs trustworthy rates, so too few valid reps is a loud error. The ABLATED
+  // calibration path deliberately does NOT throw: skill-removed runs are EXPECTED to fail more often, and
+  // that failure IS the discrimination signal — the calibrate loop reads `validReps` to force such a
+  // scenario's claims discriminating rather than crashing the whole pass on the first flaky scenario.
+  if (!ablated && measured.length < MIN_VALID)
     throw new Error(
-      `eval-gate: scenario ${name} has only ${measured.length}/${reps.length} valid ${ablated ? "" : "skill-invoked "}reps (need ≥${MIN_VALID}) — capture is not trustworthy`,
+      `eval-gate: scenario ${name} has only ${measured.length}/${reps.length} valid skill-invoked reps (need ≥${MIN_VALID}) — capture is not trustworthy`,
     );
 
   return {
@@ -256,14 +260,26 @@ async function main(): Promise<void> {
     // Ablation: a claim that still passes WITHOUT the skill is not discriminating → excluded from the gate.
     const ablated = await capture(reps, dotenv, true, concurrency);
     const base = readProfile(BASELINE);
+    const forced: string[] = [];
     for (const [scen, sp] of Object.entries(ablated)) {
       const b = base[scen];
       if (!b) continue;
-      for (const claim of sp.claims) {
-        const bc = b.claims.find((c) => c.index === claim.index);
-        if (bc) bc.discriminating = (frac(claim.pass) ?? 0) < 0.75; // passes <3/4 without the skill ⇒ discriminating
+      // Too few gradeable skill-removed reps ⇒ removing the skill reliably broke the run: the strongest
+      // discrimination signal there is. Mark every claim in the scenario discriminating rather than
+      // trusting a <MIN_VALID-sample rate. Iterate the BASELINE's claims so each is tagged even when
+      // ablation produced zero gradeable reps for it (a claim absent from the ablated set defaults
+      // discriminating — the safe direction, since an untagged claim is gated on anyway).
+      const insufficient = sp.validReps < MIN_VALID;
+      if (insufficient) forced.push(`${scen} (${sp.validReps}/${reps} gradeable ablated reps)`);
+      for (const bc of b.claims) {
+        const ac = sp.claims.find((c) => c.index === bc.index);
+        bc.discriminating = insufficient || !ac ? true : (frac(ac.pass) ?? 0) < 0.75; // passes <3/4 without the skill ⇒ discriminating
       }
     }
+    if (forced.length)
+      process.stderr.write(
+        `[eval-gate] skill-removal broke these scenarios (all their claims marked discriminating):\n  ${forced.join("\n  ")}\n`,
+      );
     writeFileSync(BASELINE, JSON.stringify(base, null, 2) + "\n");
     process.stderr.write(`[eval-gate] calibration written to ${BASELINE}\n`);
     return;
