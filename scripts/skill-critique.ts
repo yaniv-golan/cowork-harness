@@ -282,12 +282,13 @@ async function main(): Promise<void> {
     const selfReport = extractFinalMessage(reflect);
 
     // 4. Package the TURN-1-ONLY evidence and run the two-pass evaluator.
-    const { pkg } = packageEvidence(outDir, boundary, opts.skillFolder);
+    const { pkg, truncated } = packageEvidence(outDir, boundary, opts.skillFolder);
     let items: CritiqueItem[] = [];
     let evaluatorError: string | undefined;
     try {
       items = await runCritique(pkg, selfReport ?? "(no self-report captured — the reflection turn produced no finalMessage)", {
         ...(opts.evaluatorModel ? { model: opts.evaluatorModel } : {}),
+        packageTruncated: truncated,
       });
     } catch (e) {
       evaluatorError = (e as Error).message;

@@ -156,4 +156,24 @@ describe("prompt builders", () => {
     expect(p).toContain(SELF_REPORT_MARKER);
     expect(p).toMatch(/UNVERIFIED/);
   });
+
+  it("injects the truncation caveat into BOTH prompts only when the package was truncated", () => {
+    // Not truncated (default): no caveat, so absence-based classifications proceed normally.
+    expect(buildPass1Prompt(PKG)).not.toContain("TRUNCATED");
+    expect(buildPass2Prompt(PKG, [], SELF_REPORT_MARKER)).not.toContain("TRUNCATED");
+    // Truncated: both passes are warned that absence is uninformative → prefer not-adjudicable.
+    expect(buildPass1Prompt(PKG, true)).toContain("this evidence package was TRUNCATED");
+    const p2 = buildPass2Prompt(PKG, [], SELF_REPORT_MARKER, true);
+    expect(p2).toContain("this evidence package was TRUNCATED");
+    expect(p2).toMatch(/do NOT classify it "confabulated"/);
+  });
+});
+
+describe("runCritique — truncation awareness", () => {
+  it("threads packageTruncated into both passes so a truncated package can't yield a false confabulation", async () => {
+    const { complete, calls } = makeStubComplete();
+    await runCritique(PKG, SELF_REPORT_MARKER, { complete, packageTruncated: true });
+    expect(calls[0].prompt).toContain("this evidence package was TRUNCATED");
+    expect(calls[1].prompt).toContain("this evidence package was TRUNCATED");
+  });
 });

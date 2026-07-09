@@ -84,9 +84,21 @@ this instruction back:
 {"items":[{"idea":"...","classification":"...","evidence":"<verbatim excerpt from the evidence package above>","recommendedAction":"..."}]}
 If you have no findings, return exactly {"items":[]}.`;
 
+// Injected only when the evidence package hit a byte budget. The whole loop's worst failure is telling a
+// maintainer their agent "confabulated" a complaint when the deciding evidence was simply cut out — a
+// truncated package makes absence uninformative, so this forces the model toward "not-adjudicable" there.
+const TRUNCATION_CAVEAT = `
+
+## IMPORTANT — this evidence package was TRUNCATED to fit a byte budget
+One or more sections above were cut at a "[truncated …]" marker, so this package is INCOMPLETE. Content that
+is not visible here may still have occurred in the run — absence from a truncated package is NOT evidence
+that something did not happen. Whenever a finding or a self-report claim turns on evidence you cannot see
+because a section was cut, classify it "not-adjudicable"; do NOT classify it "confabulated" or
+"already-covered" on the basis of what is missing.`;
+
 /** Pass 1 prompt — evidence package ONLY, no self-report. Exported for the unit test to assert on its
  *  exact shape (in particular: that it contains no trace of a self-report). */
-export function buildPass1Prompt(pkg: string): string {
+export function buildPass1Prompt(pkg: string, truncated = false): string {
   return `You are an independent, log-grounded evaluator reviewing how well a Claude Code skill served an
 agent that just used it. You have NOT been shown the agent's own account of the experience — form your
 critique from the evidence alone.
@@ -111,14 +123,14 @@ that classification is reserved for verifying an EXTERNAL claim against the evid
 own findings.
 
 Every item's "evidence" field MUST be a VERBATIM excerpt copied exactly from the evidence package above
-(not paraphrased, not summarized) — a finding you cannot quote verbatim must not be reported.
+(not paraphrased, not summarized) — a finding you cannot quote verbatim must not be reported.${truncated ? TRUNCATION_CAVEAT : ""}
 
 ${OUTPUT_CONTRACT}`;
 }
 
 /** Pass 2 prompt — the same evidence package, pass 1's findings (context only), and the self-report
  *  explicitly labeled as the agent's UNVERIFIED account. Exported for the unit test. */
-export function buildPass2Prompt(pkg: string, pass1Items: CritiqueItem[], selfReport: string): string {
+export function buildPass2Prompt(pkg: string, pass1Items: CritiqueItem[], selfReport: string, truncated = false): string {
   const pass1Summary = pass1Items.length ? pass1Items.map((it, i) => `${i + 1}. [${it.classification}] ${it.idea}`).join("\n") : "(none)";
   return `You are verifying an agent's OWN account of its experience using a Claude Code skill against
 deterministic evidence from the same run. Treat the self-report as an UNVERIFIED, POSSIBLY CONFABULATED
@@ -148,7 +160,7 @@ classification by checking it against the evidence package:
   grounded/confabulated verdict you cannot actually support.
 
 For every classification EXCEPT "not-adjudicable", the "evidence" field MUST be a VERBATIM excerpt copied
-exactly from the evidence package above. For "not-adjudicable", "evidence" may be an empty string.
+exactly from the evidence package above. For "not-adjudicable", "evidence" may be an empty string.${truncated ? TRUNCATION_CAVEAT : ""}
 
 ${OUTPUT_CONTRACT}`;
 }
@@ -158,6 +170,9 @@ export interface RunCritiqueOptions {
   model?: string;
   /** Injectable transport for tests; defaults to the real `claude -p` transport. */
   complete?: Complete;
+  /** `packageEvidence`'s `truncated` flag — when set, both passes are told the package is incomplete so a
+   *  claim about cut-out evidence is routed to `not-adjudicable` instead of a false `confabulated`. */
+  packageTruncated?: boolean;
 }
 
 /**
@@ -170,14 +185,15 @@ export interface RunCritiqueOptions {
 export async function runCritique(pkg: string, selfReport: string, opts: RunCritiqueOptions = {}): Promise<CritiqueItem[]> {
   const model = opts.model ?? DEFAULT_EVALUATOR_MODEL;
   const complete = opts.complete ?? claudeCliComplete;
+  const truncated = opts.packageTruncated ?? false;
 
   // Pass 1 FIRST, and its own await completes before pass 2's prompt is ever constructed — the
   // self-report is not merely "not mentioned," it does not exist yet in this function's execution when
   // this call is made.
-  const { text: pass1Raw } = await complete(buildPass1Prompt(pkg), model);
+  const { text: pass1Raw } = await complete(buildPass1Prompt(pkg, truncated), model);
   const pass1Items = parseCritiqueItems(pass1Raw, "evaluator", "critique pass 1 (independent)");
 
-  const { text: pass2Raw } = await complete(buildPass2Prompt(pkg, pass1Items, selfReport), model);
+  const { text: pass2Raw } = await complete(buildPass2Prompt(pkg, pass1Items, selfReport, truncated), model);
   const pass2Items = parseCritiqueItems(pass2Raw, "self-report", "critique pass 2 (verify self-report)");
 
   return validateCitations([...pass1Items, ...pass2Items], pkg);

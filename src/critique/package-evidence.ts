@@ -74,6 +74,10 @@ const MAX_PACKAGE_BYTES = 48 * 1024;
 
 export interface PackageEvidenceResult {
   pkg: string;
+  /** True if ANY section (or the overall document) hit its byte budget and was cut. The evaluator MUST be
+   *  told this: a claim about something that fell outside a truncated window is `not-adjudicable`, NOT
+   *  `confabulated` — absence from a truncated package is not proof the thing didn't happen. */
+  truncated: boolean;
 }
 
 /** Assemble the evidence document for `runCritique`. `runDir` is the KEPT run dir of the task+reflection
@@ -82,6 +86,15 @@ export interface PackageEvidenceResult {
  *  test (containing `SKILL.md` and, optionally, a `references/` subdir). Pure and testable: every input is
  *  a path or an already-captured boundary, nothing here spawns a process or calls a model. */
 export function packageEvidence(runDir: string, boundary: TurnBoundary, skillDir: string): PackageEvidenceResult {
+  // Track whether any budget was hit. `boundText` returns its input UNCHANGED when it fits, so `out !== s`
+  // is an exact truncation signal — no separate length check that could drift from boundText's own cut rule.
+  let truncated = false;
+  const bound = (s: string, maxBytes: number): string => {
+    const out = boundText(s, maxBytes);
+    if (out !== s) truncated = true;
+    return out;
+  };
+
   const raw = readTurn1Result(runDir) as Record<string, unknown> | null;
 
   const finalMessage = typeof raw?.finalMessage === "string" ? raw.finalMessage : "";
@@ -124,31 +137,31 @@ export function packageEvidence(runDir: string, boundary: TurnBoundary, skillDir
   }
 
   const sections = [
-    section("Final answer (turn 1)", boundText(finalMessage, FINAL_MESSAGE_CAP)),
-    section("Turn-1 outcome", boundText(safeJson({ result: outcome, resultSubtype }), STRUCTURED_CAP)),
-    section("toolCounts (turn 1, top-level tool calls)", boundText(safeJson(toolCounts), STRUCTURED_CAP)),
-    section("skillActivity (turn 1, per-invocation window rollups)", boundText(safeJson(skillActivity), STRUCTURED_CAP)),
-    section("Sub-agents dispatched (turn 1; agentType/description only)", boundText(safeJson(subagents), STRUCTURED_CAP)),
+    section("Final answer (turn 1)", bound(finalMessage, FINAL_MESSAGE_CAP)),
+    section("Turn-1 outcome", bound(safeJson({ result: outcome, resultSubtype }), STRUCTURED_CAP)),
+    section("toolCounts (turn 1, top-level tool calls)", bound(safeJson(toolCounts), STRUCTURED_CAP)),
+    section("skillActivity (turn 1, per-invocation window rollups)", bound(safeJson(skillActivity), STRUCTURED_CAP)),
+    section("Sub-agents dispatched (turn 1; agentType/description only)", bound(safeJson(subagents), STRUCTURED_CAP)),
     section(
       "referencesRead (turn 1, main-agent Reads only, references/+scripts/ under the mounted skill — " +
         "NEVER includes SKILL.md itself, which is delivered whole and never Read as a file)",
-      boundText(referencesRead.length ? referencesRead.join("\n") : "(none)", REFERENCES_READ_CAP),
+      bound(referencesRead.length ? referencesRead.join("\n") : "(none)", REFERENCES_READ_CAP),
     ),
     section(
       skillMdFound ? "SKILL.md (verbatim skill source, for presence checks the referencesRead list cannot make)" : "SKILL.md",
-      boundText(skillMdFound ? skillMd : `(no SKILL.md found at ${join(skillDir, "SKILL.md")})`, SKILL_MD_CAP),
+      bound(skillMdFound ? skillMd : `(no SKILL.md found at ${join(skillDir, "SKILL.md")})`, SKILL_MD_CAP),
     ),
     section(
       "references/ available (filenames only, NOT content — presence, not coverage)",
-      boundText(referenceFiles.length ? referenceFiles.join("\n") : "(none)", REFERENCE_LIST_CAP),
+      bound(referenceFiles.length ? referenceFiles.join("\n") : "(none)", REFERENCE_LIST_CAP),
     ),
     section(
       "Transcript (turn 1 only — the reflection turn's own reads/output are excluded by construction)",
-      boundText(transcript, TRANSCRIPT_CAP),
+      bound(transcript, TRANSCRIPT_CAP),
     ),
   ];
 
   let pkg = sections.join("\n");
-  pkg = boundText(pkg, MAX_PACKAGE_BYTES); // belt-and-suspenders: the whole document, even if every section individually fit
-  return { pkg };
+  pkg = bound(pkg, MAX_PACKAGE_BYTES); // belt-and-suspenders: the whole document, even if every section individually fit
+  return { pkg, truncated };
 }
