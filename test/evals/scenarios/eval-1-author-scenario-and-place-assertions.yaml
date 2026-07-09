@@ -4,8 +4,8 @@ session: ./_session.yaml
 fidelity: container
 prompt: I'm using the cowork-harness tool to regression-test a Claude Code skill. The skill lives at ./skills/report-gen,
   it writes a markdown deliverable to outputs/report.md, and partway through it calls an external API
-  at api.weather.example.com. Write me a cowork-harness scenario YAML to test it, and tell me which assertions
-  belong on the fast per-PR gate vs the nightly job, and why.
+  at api.weather.example.com. Write me a cowork-harness scenario YAML to test it — save it to outputs/scenario.yaml
+  — and tell me which assertions belong on the fast per-PR gate vs the nightly job, and why.
 assert:
 - semantic_matches:
     rubric:

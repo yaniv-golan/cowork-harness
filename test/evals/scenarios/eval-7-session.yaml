@@ -1,4 +1,6 @@
 # eval-7: installs the companion skill AND uploads the cassette the prompt refers to.
+# Pinned to a mid-tier answerer: too-strong an answerer masks skill-content regressions.
+model: claude-sonnet-5
 plugins:
   local_plugins:
     - ../../../.claude/skills/cowork-harness

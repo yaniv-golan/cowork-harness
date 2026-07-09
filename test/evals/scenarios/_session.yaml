@@ -1,5 +1,7 @@
 # Installs the companion cowork-harness skill so an eval scenario can ask the agent to use it.
 # Path is relative to this file's dir.
+# Pinned to a mid-tier answerer: too-strong an answerer masks skill-content regressions.
+model: claude-sonnet-5
 plugins:
   local_plugins:
     - ../../../.claude/skills/cowork-harness
