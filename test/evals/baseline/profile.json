@@ -2,6 +2,7 @@
   "__meta__": {
     "judgeModel": "claude-opus-4-8",
     "answererModel": "claude-sonnet-5",
+    "judgePromptHash": "stale-pre-F5-rebaseline-required",
     "harnessVersion": "0.27.0",
     "date": "2026-07-09"
   },

@@ -87,4 +87,14 @@ describe("semantic judge — makeSemanticJudge (stubbed transport)", () => {
     expect(p).toContain("1. second claim");
     expect(p).toContain("MY ANSWER");
   });
+
+  it("F5: the embedded output example is a NON-PARSEABLE template — it can never be mistaken for a grade, even for a 2-claim rubric", () => {
+    // The example uses <…> placeholders, so JSON.parse fails on it → tryParseGrade returns null → it is
+    // never a valid full-coverage survivor. Feeding the whole prompt (which contains the example) to the
+    // parser for a 2-claim rubric must therefore find NO grade and throw, rather than grading on the example.
+    const p = buildJudgePrompt(["a", "b"], "ans");
+    expect(() => parseJudgeResults(p, ["a", "b"])).toThrow(/no valid full-coverage/);
+    // Belt: the example must not contain a bare, parseable {"index":0,"pass":true} literal.
+    expect(p).not.toMatch(/\{"index":\s*0,\s*"pass":\s*(true|false)\}/);
+  });
 });

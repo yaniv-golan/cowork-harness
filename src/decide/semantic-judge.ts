@@ -66,9 +66,10 @@ ${numbered}
 ${answer}
 
 ## Output
-Return STRICT JSON ONLY — no markdown code fences, no prose before or after, and do NOT repeat this
-example — one object per rubric index (0..${rubric.length - 1}), in this shape:
-{"results":[{"index":0,"pass":true},{"index":1,"pass":false}]}`;
+Return STRICT JSON ONLY — no markdown code fences, no prose before or after. Emit one result object per
+rubric index (0..${rubric.length - 1}), in this SHAPE — a template: replace each <…> placeholder with a
+real value; do NOT copy the placeholders verbatim:
+{"results":[{"index":<claim number>,"pass":<true or false>}, …]}`;
 }
 
 /** Try to read one balanced `{...}` group as a FULL-COVERAGE grade: a `results` array with exactly one

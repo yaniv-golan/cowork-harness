@@ -18,7 +18,7 @@
 // Part 3: an end-to-end smoke of the real command (spawn → resume → package → evaluate → report), proving
 // the composition — not just the evaluator — works live and archives the turn-1 slice.
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import { loadDotenv } from "../src/dotenv.js";
 import { runCritique } from "../src/critique/evaluator.js";
@@ -253,7 +253,7 @@ async function main(): Promise<void> {
   lines.push(`${e2eMark} end-to-end command smoke: ${e2eDetail}`);
 
   lines.push("", pass ? "ACCEPTANCE PASSED" : "ACCEPTANCE FAILED");
-  process.stdout.write(lines.join("\n") + "\n");
+  writeSync(1, lines.join("\n") + "\n"); // synchronous flush, consistent with the report writers
   process.exitCode = pass ? 0 : 1;
 }
 

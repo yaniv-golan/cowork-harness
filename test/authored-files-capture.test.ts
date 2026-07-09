@@ -44,6 +44,30 @@ describe("captureAuthoredFiles — the judge's authored-artifact evidence", () =
     expect(got[0].truncated).toBe(true);
     expect(got[0].content.length).toBe(100);
   });
+
+  it("F12: captures cwd-relative scratchpad deliverables outside mnt, skips dotfiles + the mnt subtree", () => {
+    // Simulate a container session tree: session root (scratchpad) with an `mnt` workspace inside it.
+    const sessionRoot = mkdtempSync(join(tmpdir(), "cwh-sess-"));
+    const mnt = join(sessionRoot, "mnt");
+    mkdirSync(join(mnt, "outputs"), { recursive: true });
+    // captured via mnt/userVisibleRoots (the existing path):
+    writeFileSync(join(mnt, "outputs", "in-mnt.yaml"), "fidelity: container");
+    // a cwd-relative write that landed in the scratchpad (the F12 coin-flip) — MUST be captured:
+    mkdirSync(join(sessionRoot, "outputs"), { recursive: true });
+    writeFileSync(join(sessionRoot, "outputs", "scenario.yaml"), "on_unanswered: fail");
+    writeFileSync(join(sessionRoot, "loose.md"), "a bare relative write");
+    // $HOME runtime noise → excluded:
+    mkdirSync(join(sessionRoot, ".claude"), { recursive: true });
+    writeFileSync(join(sessionRoot, ".claude", "state.json"), "{}");
+    const got = captureAuthoredFiles(mnt, ["outputs"], [], {}, { scratchpadRoot: sessionRoot });
+    const paths = got.map((f) => f.path).sort();
+    expect(paths).toContain("outputs/in-mnt.yaml"); // mnt path (unprefixed)
+    expect(paths).toContain("scratchpad/outputs/scenario.yaml"); // the recovered coin-flip deliverable
+    expect(paths).toContain("scratchpad/loose.md");
+    expect(paths.some((p) => p.includes(".claude"))).toBe(false); // dotfile runtime state excluded
+    expect(paths.some((p) => p.startsWith("scratchpad/mnt"))).toBe(false); // mnt not double-walked
+    rmSync(sessionRoot, { recursive: true, force: true });
+  });
 });
 
 const sem = (rubric: string[]): Assertion => ({ semantic_matches: { rubric } });

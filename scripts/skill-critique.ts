@@ -12,6 +12,7 @@
 // so the tier is pinned rather than left to the caller.
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { writeSync } from "node:fs";
 import { packageEvidence } from "../src/critique/package-evidence.js";
 import { snapshotTurnBoundary } from "../src/critique/evidence.js";
 import { runCritique, DEFAULT_EVALUATOR_MODEL } from "../src/critique/evaluator.js";
@@ -190,7 +191,7 @@ function printTextReport(args: {
   if (evaluatorError) {
     out.push(`EVALUATOR FAILED: ${evaluatorError}`);
     out.push(`No critique items were produced. Re-run, or inspect ${outDir} directly.`);
-    process.stdout.write(out.join("\n") + "\n");
+    writeSync(1, out.join("\n") + "\n"); // writeSync: flush before the hard exit(0) (async stdout truncates a long report on a pipe past ~64KB)
     return;
   }
 
@@ -218,7 +219,7 @@ function printTextReport(args: {
   );
 
   if (items.length === 0) out.push("No findings from either pass.");
-  process.stdout.write(out.join("\n") + "\n");
+  writeSync(1, out.join("\n") + "\n"); // writeSync: flush before the hard exit(0) (async stdout truncates a long report on a pipe past ~64KB)
 }
 
 async function main(): Promise<void> {
@@ -296,7 +297,8 @@ async function main(): Promise<void> {
 
     // 5. Report.
     if (opts.outputFormat === "json") {
-      process.stdout.write(
+      writeSync(
+        1, // writeSync: a long JSON report piped to `jq` truncates past the ~64KB buffer with async write + exit(0)
         JSON.stringify(
           evaluatorError
             ? { skillFolder: opts.skillFolder, sessionId, outDir, taskResult, evaluatorError, items: [] }

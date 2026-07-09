@@ -272,19 +272,39 @@ export interface AuthoredFile {
  *  read back at their final on-disk content. Excludes read-only inputs (unchanged mounts). Size-bounded:
  *  a per-file cap and a total cap; over-cap content is truncated and flagged. Returns `[]` when there is
  *  no pre-run manifest (e.g. microvm) — no diff is possible, so the caller notes evidence-unavailable
- *  rather than dumping the whole workspace. Must be called AFTER the run completes (files finalized). */
+ *  rather than dumping the whole workspace. Must be called AFTER the run completes (files finalized).
+ *
+ *  `scratchpadRoot` (the session root, i.e. the PARENT of the `mnt` workspace) closes a real coin-flip: at
+ *  container/hostloop fidelity the agent's cwd is the session root, NOT `mnt`, so a relative `Write
+ *  outputs/x` lands in the scratchpad — outside `workRoot`/`userVisibleRoots` and thus previously uncaptured
+ *  (SPEC/plan §R2 H2). When provided, we also capture non-dotfile deliverables directly under it. The
+ *  scratchpad is staged empty except `mnt/`, so a non-dot file there was authored this run; dot-prefixed
+ *  entries (`.claude`, `.cache`, XDG state — the agent's $HOME runtime noise) and the `mnt` subtree
+ *  (already captured above) are excluded. Everything is scrubbed downstream before it reaches a judge. */
 export function captureAuthoredFiles(
   workRoot: string,
   userVisibleRoots: string[],
   readonlyFolderRoots: string[],
   preRunHashes: Record<string, string | null> | undefined,
-  opts: { perFileBytes?: number; totalBytes?: number } = {},
+  opts: { perFileBytes?: number; totalBytes?: number; scratchpadRoot?: string } = {},
 ): AuthoredFile[] {
   if (preRunHashes === undefined) return []; // no pre-run manifest → can't diff added/modified → no capture
   const perFile = opts.perFileBytes ?? 16 * 1024;
   const total = opts.totalBytes ?? 64 * 1024;
   const out: AuthoredFile[] = [];
   let used = 0;
+  const pushFile = (absPath: string, relPath: string): void => {
+    if (used >= total) return;
+    try {
+      const buf = readFileSync(absPath);
+      const slice = buf.subarray(0, Math.min(perFile, total - used));
+      const truncated = buf.length > slice.length;
+      out.push({ path: relPath, content: slice.toString("utf8"), ...(truncated ? { truncated: true } : {}) });
+      used += slice.length;
+    } catch {
+      /* unreadable at read-back → evidence-honest omission */
+    }
+  };
   for (const f of classifyWorkspaceFiles(workRoot, userVisibleRoots, readonlyFolderRoots)) {
     if (f.class === "input") continue; // read-only mount — not authored by this run
     const sha = (f as { sha256?: string }).sha256;
@@ -292,15 +312,50 @@ export function captureAuthoredFiles(
     const authored = prior === undefined || prior === null || (sha !== undefined && sha !== prior);
     if (!authored) continue;
     if (used >= total) break;
-    try {
-      const buf = readFileSync(join(workRoot, f.path));
-      const slice = buf.subarray(0, Math.min(perFile, total - used));
-      const truncated = buf.length > slice.length;
-      out.push({ path: f.path, content: slice.toString("utf8"), ...(truncated ? { truncated: true } : {}) });
-      used += slice.length;
-    } catch {
-      /* unreadable at read-back → evidence-honest omission */
-    }
+    pushFile(join(workRoot, f.path), f.path);
+  }
+  // Scratchpad deliverables (cwd-relative writes outside mnt). Walk the session root, skipping dot-entries
+  // (runtime $HOME state) and the `mnt` subtree; symlinks/hardlinks are not followed (escape/cycle guard,
+  // mirroring collectArtifactPaths).
+  if (opts.scratchpadRoot) {
+    const visited = new Set<string>();
+    const walk = (absDir: string, relDir: string): void => {
+      if (used >= total) return;
+      let real: string;
+      try {
+        real = realpathSync(absDir);
+      } catch {
+        return;
+      }
+      if (visited.has(real)) return;
+      visited.add(real);
+      let entries: string[];
+      try {
+        entries = readdirSync(absDir).sort();
+      } catch {
+        return;
+      }
+      for (const name of entries) {
+        if (name.startsWith(".")) continue; // $HOME runtime noise (.claude/.cache/XDG state)
+        if (relDir === "" && name === "mnt") continue; // captured via userVisibleRoots above
+        const childAbs = join(absDir, name);
+        const childRel = relDir ? `${relDir}/${name}` : name;
+        let st;
+        try {
+          st = lstatSync(childAbs);
+        } catch {
+          continue;
+        }
+        if (st.isSymbolicLink()) continue; // not followed (may escape/cycle)
+        if (st.isDirectory()) walk(childAbs, childRel);
+        else if (st.isFile()) {
+          if (st.nlink > 1) continue; // hardlink → may reference out-of-root content
+          if (used >= total) return;
+          pushFile(childAbs, `scratchpad/${childRel}`);
+        }
+      }
+    };
+    walk(opts.scratchpadRoot, "");
   }
   return out;
 }

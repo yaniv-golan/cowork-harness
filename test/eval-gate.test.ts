@@ -59,6 +59,7 @@ describe("modelMismatch — the gate's same-model precondition", () => {
   const meta = (over: Partial<ProfileMeta> = {}): ProfileMeta => ({
     judgeModel: "claude-opus-4-8",
     answererModel: "claude-sonnet-5",
+    judgePromptHash: "abc123",
     harnessVersion: "0.27.0",
     date: "2026-07-09",
     ...over,
@@ -86,7 +87,7 @@ describe("aggregateScenario — invalid reps counted-not-dropped, invoked-only r
           {
             assertion: { semantic_matches: { rubric: ["a", "b"] } },
             judgeInvalid: invalid,
-            semanticClaims: passes.map((p, i) => ({ index: i, pass: p })),
+            semanticClaims: passes.map((p, i) => ({ index: i, claim: `claim ${i}`, pass: p })),
           },
         ],
       },
@@ -115,8 +116,8 @@ describe("aggregateScenario — invalid reps counted-not-dropped, invoked-only r
     expect(p.claims).toHaveLength(2);
   });
 
-  it("counts an INVALID rep (does not drop it) and errors below the valid-rep floor", () => {
-    // 5 invoked reps but 2 are judge-invalid → only 3 valid < MIN_VALID(4) → loud error
+  it("F1: throws ONLY when the skill fired enough but the JUDGE failed (untrustworthy), not on low invocation", () => {
+    // 5 invoked reps but 2 are judge-invalid → 3 valid < MIN_VALID(4) → loud error (broken measurement)
     expect(() =>
       aggregateScenario("eval-y", [
         env(true, false, [true, true]),
@@ -125,6 +126,43 @@ describe("aggregateScenario — invalid reps counted-not-dropped, invoked-only r
         env(true, true, [true, true]),
         env(true, true, [true, true]),
       ]),
-    ).toThrow(/valid skill-invoked reps/);
+    ).toThrow(/untrustworthy/);
+  });
+
+  it("F1: a scenario that STOPPED INVOKING does not throw — it emits a low-invocation profile for the trigger check", () => {
+    // Skill fired in only 1/6 reps (it stopped triggering). This must NOT crash the capture (the old bug):
+    // it is the trigger-rate signal itself and must reach bucketDiff.
+    const p = aggregateScenario("eval-trig", [
+      env(true, false, [true, true]),
+      env(false, false, [true, true]),
+      env(false, false, [true, true]),
+      env(false, false, [true, true]),
+      env(false, false, [true, true]),
+      env(false, false, [true, true]),
+    ]);
+    expect(p.skillInvoked).toBe("1/6");
+    expect(p.validReps).toBe(1);
+    // And it composes: a baseline that fired fully vs this candidate → a trigger-rate regression is REPORTED
+    // (previously unreachable because aggregateScenario threw first).
+    const baseline: Profile = { "eval-trig": scen("6/6", [claim(0, "6/6", { discriminating: true })]) };
+    const cand: Profile = { "eval-trig": { reps: 6, skillInvoked: "1/6", validReps: 1, errored: 0, claims: p.claims } };
+    expect(bucketDiff(baseline, cand).triggerRegressions.map((x) => x.scenario)).toContain("eval-trig");
+  });
+
+  it("F2: an edited claim's wording UNMATCHES (never scored), instead of diffing against the wrong baseline claim", () => {
+    const baseline: Profile = { "eval-e": scen("6/6", [claim(0, "6/6", { discriminating: true })]) };
+    // candidate reworded claim 0 → same index, different text → must be unmatched, NOT diffed as 6/6→0/6.
+    const cand: Profile = {
+      "eval-e": {
+        reps: 6,
+        skillInvoked: "6/6",
+        validReps: 6,
+        errored: 0,
+        claims: [{ index: 0, claim: "a REWORDED claim 0", pass: "0/6" }],
+      },
+    };
+    const d = bucketDiff(baseline, cand);
+    expect(d.regressions).toHaveLength(0); // no false red from a text mismatch
+    expect(d.unmatched.some((u) => u.includes("eval-e"))).toBe(true);
   });
 });

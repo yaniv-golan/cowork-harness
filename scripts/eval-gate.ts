@@ -14,6 +14,8 @@
 import { readFileSync, writeFileSync, readdirSync } from "node:fs";
 import { join, resolve, basename } from "node:path";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
+import { buildJudgePrompt } from "../src/decide/semantic-judge.js";
 
 const SKILL = "cowork-harness";
 const ALPHA = 0.05;
@@ -22,6 +24,14 @@ const BASELINE = resolve("test/evals/baseline/profile.json");
 const SCENARIO_DIR = resolve("test/evals/scenarios");
 const HARNESS_VERSION = (JSON.parse(readFileSync(resolve("package.json"), "utf8")) as { version?: string }).version ?? "unknown";
 const today = (): string => new Date().toISOString().slice(0, 10);
+// Fingerprint of the JUDGE PROMPT TEMPLATE (rendered on a fixed sentinel rubric/answer, so it changes iff
+// the template changes). Recorded in the baseline and checked by the gate: a prompt edit silently shifts
+// every pass rate, and the model-provenance guard can't see it — so a baseline captured under a different
+// prompt is not comparable and the gate must refuse to diff across it (M1).
+const JUDGE_PROMPT_HASH = createHash("sha256")
+  .update(buildJudgePrompt(["<c0>", "<c1>", "<c2>"], "<ANSWER>"))
+  .digest("hex")
+  .slice(0, 16);
 
 // ─────────────────────────────── pure statistics (exported for tests) ───────────────────────────────
 
@@ -79,6 +89,7 @@ export type Profile = Record<string, ScenarioProfile>;
 export interface ProfileMeta {
   judgeModel: string | null;
   answererModel: string | null;
+  judgePromptHash: string | null; // fingerprint of the judge-prompt template at capture time (M1)
   harnessVersion: string;
   date: string;
 }
@@ -104,6 +115,11 @@ const frac = (s: string): number | null => {
   const [n, d] = s.split("/").map(Number);
   return d ? n / d : null;
 };
+
+/** Identity of a rubric claim for baseline↔candidate matching — the claim text, whitespace-normalized so a
+ *  reflow doesn't unmatch, but otherwise exact (any wording change unmatches → forces a rebaseline).
+ *  Null-safe: a malformed claim (missing text) collapses to "" and simply won't match, never crashes. */
+const claimKey = (claim: string | undefined): string => (claim ?? "").trim().replace(/\s+/g, " ");
 
 export interface Bucketed {
   regressions: { scenario: string; index: number; claim: string; base: string; cand: string; p: number }[];
@@ -136,9 +152,15 @@ export function bucketDiff(baseline: Profile, candidate: Profile): Bucketed {
     if (bTot && bInv / bTot >= 0.8 && cTot && cInv / cTot <= 0.5)
       out.triggerRegressions.push({ scenario, base: bs.skillInvoked, cand: cs.skillInvoked });
     for (const bc of bs.claims) {
-      const cc = cs.claims.find((x) => x.index === bc.index);
+      // Match claims by TEXT, not index (C1: rubric is `string[]`, so the claim text IS its identity).
+      // Index matching would silently diff mismatched claims after any rubric edit/insert; text matching
+      // makes an edited/removed claim UNMATCHED (never scored) — the documented "a rubric edit requires a
+      // fresh --rebaseline" workflow, now actually enforced rather than a false green/red.
+      const cc = cs.claims.find((x) => claimKey(x.claim) === claimKey(bc.claim));
       if (!cc) {
-        out.unmatched.push(`${scenario}[${bc.index}] (claim missing in candidate)`);
+        out.unmatched.push(
+          `${scenario}[${bc.index}] "${bc.claim.slice(0, 60)}" (no text match in candidate — claim edited/removed; rebaseline)`,
+        );
         continue;
       }
       if (bc.discriminating === false) {
@@ -190,18 +212,23 @@ export function aggregateScenario(name: string, envelopes: unknown[], ablated = 
 
   // The measured set: skill-invoked & valid reps for a normal run; ALL valid reps for an ablated (skill
   // removed by design, so it never "invokes") calibration run.
-  const measured = ablated ? reps.filter((r) => !r.invalid) : reps.filter((r) => r.invoked && !r.invalid);
+  const invokedReps = ablated ? reps : reps.filter((r) => r.invoked);
+  const measured = invokedReps.filter((r) => !r.invalid);
   const notInvoked = reps.filter((r) => !r.invoked);
   const rubric = reps.find((r) => r.claims.length)?.claims.map((c) => c.claim) ?? [];
   const rate = (set: typeof reps, idx: number) => set.filter((r) => r.claims.find((c) => c.index === idx)?.pass).length;
 
-  // The baseline/gate path needs trustworthy rates, so too few valid reps is a loud error. The ABLATED
-  // calibration path deliberately does NOT throw: skill-removed runs are EXPECTED to fail more often, and
-  // that failure IS the discrimination signal — the calibrate loop reads `validReps` to force such a
-  // scenario's claims discriminating rather than crashing the whole pass on the first flaky scenario.
-  if (!ablated && measured.length < MIN_VALID)
+  // Untrustworthy ONLY when the skill fired enough but the JUDGE failed on too many of those reps — a
+  // broken MEASUREMENT. Too few INVOCATIONS is NOT untrustworthy: it IS the trigger-rate signal ("skill
+  // stopped firing") and must flow through to bucketDiff — which flags it — instead of crashing the whole
+  // capture on the very regression the gate exists to catch (a scenario emitted with a low skillInvoked
+  // ratio and, if measured is empty, "k/0" claim rates that bucketDiff skips per-claim while still
+  // reporting the trigger regression). So throw only when invoked ≥ MIN_VALID yet valid < MIN_VALID. The
+  // ABLATED path never throws (skill-removed runs are expected to fail; that failure is the discrimination
+  // signal the calibrate loop reads from validReps).
+  if (!ablated && invokedReps.length >= MIN_VALID && measured.length < MIN_VALID)
     throw new Error(
-      `eval-gate: scenario ${name} has only ${measured.length}/${reps.length} valid skill-invoked reps (need ≥${MIN_VALID}) — capture is not trustworthy`,
+      `eval-gate: scenario ${name} had only ${measured.length}/${invokedReps.length} skill-invoked reps with a VALID judge grade (need ≥${MIN_VALID}) — judge failures make this capture untrustworthy`,
     );
 
   return {
@@ -303,7 +330,7 @@ function readProfileFile(path: string): ProfileFile {
   const raw = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
   if (raw && typeof raw === "object" && "scenarios" in raw && "__meta__" in raw) return raw as unknown as ProfileFile;
   return {
-    __meta__: { judgeModel: null, answererModel: null, harnessVersion: "unknown", date: "unknown" },
+    __meta__: { judgeModel: null, answererModel: null, judgePromptHash: null, harnessVersion: "unknown", date: "unknown" },
     scenarios: raw as unknown as Profile,
   };
 }
@@ -349,7 +376,13 @@ async function main(): Promise<void> {
   if (flag("--rebaseline")) {
     const cap = await capture(reps, dotenv, false, concurrency);
     const file: ProfileFile = {
-      __meta__: { judgeModel: cap.judgeModel, answererModel: cap.answererModel, harnessVersion: HARNESS_VERSION, date: today() },
+      __meta__: {
+        judgeModel: cap.judgeModel,
+        answererModel: cap.answererModel,
+        judgePromptHash: JUDGE_PROMPT_HASH,
+        harnessVersion: HARNESS_VERSION,
+        date: today(),
+      },
       scenarios: cap.scenarios,
     };
     writeFileSync(BASELINE, JSON.stringify(file, null, 2) + "\n");
@@ -368,6 +401,16 @@ async function main(): Promise<void> {
     process.stderr.write(
       `[eval-gate] REFUSING to gate — candidate models differ from the baseline's provenance, so a diff would measure model behavior, not skill quality:\n  ${mism}\n` +
         `  Re-record the baseline (--rebaseline) under the current models, or restore the pinned models, then retry.\n`,
+    );
+    process.exitCode = 1;
+    return;
+  }
+  // Refuse across a judge-prompt change too (M1) — a prompt edit silently shifts every pass rate, invisible
+  // to the model guard. A null recorded hash (legacy baseline) is treated as unknown and does not block.
+  if (baseFile.__meta__.judgePromptHash && baseFile.__meta__.judgePromptHash !== JUDGE_PROMPT_HASH) {
+    process.stderr.write(
+      `[eval-gate] REFUSING to gate — the judge prompt changed since this baseline was recorded ` +
+        `(baseline ${baseFile.__meta__.judgePromptHash} vs current ${JUDGE_PROMPT_HASH}); every pass rate may have shifted. Re-record with --rebaseline.\n`,
     );
     process.exitCode = 1;
     return;

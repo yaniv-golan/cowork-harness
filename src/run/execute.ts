@@ -884,7 +884,11 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // on-disk content), so a claim about a written artifact is presentation-stable (not a paste-vs-write
   // coin-flip). Captured here — BEFORE the semantic pre-pass below — using the pre-run manifest to diff
   // added/modified files. (`[]` when there's no manifest, e.g. microvm.)
-  const authoredFiles = captureAuthoredFiles(workRoot, userVisibleRoots, readonlyFolderRoots, preRunHashes);
+  // F12: at container/hostloop the agent's cwd is the SESSION ROOT (parent of `mnt`), not `mnt` — so a
+  // relative `Write outputs/x` lands in the scratchpad, outside `workRoot`. Pass the session root so those
+  // cwd-relative deliverables are captured too (`workRoot` ends `/session/mnt`; its parent is the root).
+  const scratchpadRoot = workRoot.endsWith(`${sep}mnt`) ? dirname(workRoot) : undefined;
+  const authoredFiles = captureAuthoredFiles(workRoot, userVisibleRoots, readonlyFolderRoots, preRunHashes, { scratchpadRoot });
 
   const assertCtx: AssertContext = {
     transcript: record.transcript,
