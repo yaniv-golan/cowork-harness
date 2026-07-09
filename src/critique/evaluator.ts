@@ -19,6 +19,24 @@ import { validateCitations, type CritiqueItem } from "./evidence.js";
 //     is flagged `citationResolved:false`, so a hallucinated "evidence" excerpt can't silently ship as a
 //     trusted recommendation. `not-adjudicable` items need no citation (there is, by definition, no
 //     deciding evidence) and always resolve.
+//
+// WHY TOOL-LESS (rather than an agentic evaluator handed the run dir + skill folder to read/grep): the
+// single-call-over-a-fixed-package shape is what makes the two guarantees above MECHANICAL rather than
+// hopeful. A filesystem-tool evaluator would break both:
+//   - Citation grounding needs a CLOSED corpus. `validateCitations` works only because "the evidence
+//     package" is one known, immutable string to substring-check against. An evaluator reading arbitrary
+//     files has an open, per-run-variable evidence set — nothing fixed to verify a citation against.
+//   - Turn-1 isolation would RE-CONTAMINATE. `events.jsonl`/`timeline.jsonl` are append-only with no turn
+//     markers; we hand the evaluator a byte-sliced [0, boundary) view (evidence.ts) precisely so it cannot
+//     see the reflection turn's own reads. An evaluator that greps those files itself reads the WHOLE
+//     file, past the boundary — exactly the contamination the turn-1 slicing exists to prevent.
+// It also keeps the loop deterministic and unit-testable (stubbed transport, no filesystem) and keeps
+// pass-1 independence clean (a file-reading pass 1 could read the self-report off disk and defeat it).
+// The accepted PRICE is truncation-blindness (package-evidence.ts's byte caps can cut a long transcript or
+// SKILL.md, so absence from the package is not proof of absence in the run) — mitigated, not eliminated, by
+// the truncation caveat below. If truncation proves costly, the natural next step is a SANDBOXED read tool
+// over the turn-1 slice ONLY, which must rebuild the two guarantees above to stay sound — do not simply
+// hand the evaluator the raw run dir.
 
 /** The evaluator model. A concrete/dated id, like the semantic judge's `DEFAULT_JUDGE_MODEL` — a floating
  *  alias would make "which model produced this critique" unrecoverable after the fact. Env-overridable;
