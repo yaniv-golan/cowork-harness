@@ -1,7 +1,18 @@
 import { warn } from "../io.js";
 import { BoundaryError, UsageError } from "../errors.js";
 import { ZodError } from "zod";
-import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync, readdirSync, renameSync, statSync, lstatSync, realpathSync } from "node:fs";
+import {
+  readFileSync,
+  writeFileSync,
+  mkdirSync,
+  existsSync,
+  rmSync,
+  readdirSync,
+  renameSync,
+  statSync,
+  lstatSync,
+  realpathSync,
+} from "node:fs";
 import { randomUUID, createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
@@ -62,7 +73,7 @@ import { runsWriteRoot } from "./trace-view.js";
 import { summarizeGateProvenance } from "./gate-provenance.js";
 import { collectSecrets, scrub } from "../secrets.js";
 import { indexRowFromResult, appendIndexRow } from "./run-index.js";
-import { classifyWorkspaceFiles, collectArtifacts, collectArtifactPaths } from "./artifacts.js";
+import { classifyWorkspaceFiles, collectArtifacts, collectArtifactPaths, captureAuthoredFiles } from "./artifacts.js";
 import { readPreRunManifest, readPreRunManifestHashes, readPreRunManifestLinkAware } from "./pre-run-manifest.js";
 import { resolveAvailableSkills, type PluginSkillRoot } from "./skill-metadata.js";
 
@@ -208,7 +219,9 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // already-mounted skill files, so the skill would NOT actually be removed — a green ablation run that
   // silently still had the skill. Reject rather than stamp a misleading `ablated:true`.
   if (opts.ablateSkill && opts.resume)
-    throw new UsageError("--ablate-skill cannot be combined with --resume (a resumed session reuses the prior turn's staged skill, so ablation would not take effect)");
+    throw new UsageError(
+      "--ablate-skill cannot be combined with --resume (a resumed session reuses the prior turn's staged skill, so ablation would not take effect)",
+    );
 
   const baseline = loadBaseline(scenario.baseline);
   const loadedSession = opts.session ?? loadSessionFromFile(scenario.session);
@@ -867,8 +880,17 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // assembleRunResult call further down. A second read could disagree if the sampler wrote between them.
   const resources = foldResources(outDir, effectiveFidelity, resolveIntervalMs());
 
+  // D1: the judge grades the union of the final answer + transcript + the files the run AUTHORED (final
+  // on-disk content), so a claim about a written artifact is presentation-stable (not a paste-vs-write
+  // coin-flip). Captured here — BEFORE the semantic pre-pass below — using the pre-run manifest to diff
+  // added/modified files. (`[]` when there's no manifest, e.g. microvm.)
+  const authoredFiles = captureAuthoredFiles(workRoot, userVisibleRoots, readonlyFolderRoots, preRunHashes);
+
   const assertCtx: AssertContext = {
     transcript: record.transcript,
+    finalMessage: record.resultText,
+    authoredFiles,
+    secrets,
     toolsCalled: record.toolsCalled,
     subagentTools: record.subagentTools,
     egress,

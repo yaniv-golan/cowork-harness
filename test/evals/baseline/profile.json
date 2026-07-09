@@ -1,0 +1,847 @@
+{
+  "__meta__": {
+    "judgeModel": "claude-opus-4-8",
+    "answererModel": "claude-sonnet-5",
+    "harnessVersion": "0.27.0",
+    "date": "2026-07-09"
+  },
+  "scenarios": {
+    "eval-1-author-scenario-and-place-assertions": {
+      "reps": 6,
+      "skillInvoked": "6/6",
+      "validReps": 6,
+      "errored": 0,
+      "claims": [
+        {
+          "index": 0,
+          "claim": "The scenario uses a sandboxed fidelity tier (e.g. container) since it must assert egress to api.weather.example.com",
+          "pass": "5/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 1,
+          "claim": "The scenario pins determinism with on_unanswered: fail (and scripted when_question/choose answers only if the skill raises gates)",
+          "pass": "0/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 2,
+          "claim": "Content assertions (e.g. transcript_matches/result) are kept in separate assert items from filesystem/egress assertions",
+          "pass": "2/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 3,
+          "claim": "Content assertions like transcript_matches/result run on the token-free replay PR gate",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 4,
+          "claim": "egress_* assertions are live-only and never evaluate on replay (they belong on a live/nightly lane), while filesystem keys like file_exists/user_visible_artifact are replay-checkable only when the cassette carries a record-time artifacts manifest",
+          "pass": "5/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 5,
+          "claim": "A single assert item should not mix content keys with filesystem/egress keys",
+          "pass": "2/6",
+          "priors": null,
+          "discriminating": true
+        }
+      ]
+    },
+    "eval-10-scripted-choose-hard-fail-and-header-gate": {
+      "reps": 6,
+      "skillInvoked": "6/6",
+      "validReps": 6,
+      "errored": 0,
+      "claims": [
+        {
+          "index": 0,
+          "claim": "A choose: rule that matched the gate but named a label the gate never offered is treated as an authoring bug and hard-fails",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 1,
+          "claim": "This is distinct from an unanswered gate, so on_unanswered: first (or llm) does not backstop a mismatched choose label",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 2,
+          "claim": "The error now prints the offered options plus a closest-match suggestion so the anchor can be fixed from the error alone",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 3,
+          "claim": "A header-only gate (empty question) can never be keyed because the steered answer can't be serialized to it",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 4,
+          "claim": "Every gate must have a non-empty question to be steerable",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 5,
+          "claim": "Recommends verify-run answer-coverage against a kept run to catch these issues in about a second before a paid record",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": true
+        }
+      ]
+    },
+    "eval-11-external-decider-first-shorthand-disabled": {
+      "reps": 6,
+      "skillInvoked": "6/6",
+      "validReps": 6,
+      "errored": 0,
+      "claims": [
+        {
+          "index": 0,
+          "claim": "This is intentional behavior, not a bug",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 1,
+          "claim": "The 'first' keyword shorthand is disabled for external --decider-cmd / --decider-dir helpers",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 2,
+          "claim": "The 'first' shorthand stays active only for the built-in --on-unanswered first path",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 3,
+          "claim": "A helper returning the literal string 'first' must match an actual option label named 'first', or the gate fails loud",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 4,
+          "claim": "Rationale: this prevents a helper bug from accidentally emitting 'first' and silently green-ing option 1",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 5,
+          "claim": "Recommends helpers return a real label name or a numeric option index",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": true
+        }
+      ]
+    },
+    "eval-12-fidelity-tier": {
+      "reps": 6,
+      "skillInvoked": "6/6",
+      "validReps": 6,
+      "errored": 0,
+      "claims": [
+        {
+          "index": 0,
+          "claim": "An egress/boundary test requires a sandboxed tier; container (the default) provides real default-deny egress",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 1,
+          "claim": "protocol (L0) is REJECTED / fails loud (not silently passed) when a scenario asserts egress",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 2,
+          "claim": "microvm's egress transport is the same allowlist proxy as container — it is not better network fidelity",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 3,
+          "claim": "The fidelity tier is set in the scenario fidelity: field, not via a --fidelity flag",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": true
+        }
+      ]
+    },
+    "eval-13-multi-key-and-tool-called-semantics": {
+      "reps": 6,
+      "skillInvoked": "6/6",
+      "validReps": 6,
+      "errored": 0,
+      "claims": [
+        {
+          "index": 0,
+          "claim": "A single assert item with more than one key is an AND — it passes only if every key passes",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": false
+        },
+        {
+          "index": 1,
+          "claim": "A mixed content+live item (like tool_called + egress_denied) loses its filesystem/egress half on the token-free replay lane",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 2,
+          "claim": "tool_called does not mean 'attempted': tool counts are authoritative and de-duped",
+          "pass": "5/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 3,
+          "claim": "A tool that was requested then denied does not register as tool_called",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 4,
+          "claim": "tool_called proves the tool actually ran, not merely that it was attempted",
+          "pass": "4/6",
+          "priors": null,
+          "discriminating": true
+        }
+      ]
+    },
+    "eval-14-subagent-dispatch-and-declared-unused": {
+      "reps": 6,
+      "skillInvoked": "6/6",
+      "validReps": 6,
+      "errored": 0,
+      "claims": [
+        {
+          "index": 0,
+          "claim": "subagent_dispatched matches by the dispatch description too, not only by subagent_type",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 1,
+          "claim": "Skills often dispatch with no subagent_type (agentType is 'unknown'), so matching should use the description",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 2,
+          "claim": "subagent_declared_but_unused fires when a declared sub-agent tool was not used, even if other tools were used",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 3,
+          "claim": "dispatch_count_max is an author-chosen budget / post-hoc count assertion, not a reproduction of a production cap",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 4,
+          "claim": "Cowork imposes no in-conversation Task-dispatch cap to reproduce",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 5,
+          "claim": "dispatch_count_max should be used only to catch a fan-out you don't want",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": true
+        }
+      ]
+    },
+    "eval-15-mount-modes-delete-deny-and-readonly-recording": {
+      "reps": 6,
+      "skillInvoked": "6/6",
+      "validReps": 6,
+      "errored": 0,
+      "claims": [
+        {
+          "index": 0,
+          "claim": "A mode: r mount gets a real :ro bind, so a write fails in-guest",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 1,
+          "claim": "mode: rw vs rwd (delete protection on outputs/ or connected folders) is NOT mount-enforced — an rm succeeds in-guest",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 2,
+          "claim": "rwd delete-protection is only caught post-hoc by the no_delete_in_outputs assertion",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 3,
+          "claim": "A mode: r folder's contents are recorded body-less (path plus hash, truncated, no body) since it's an input, not a deliverable",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 4,
+          "claim": "file_exists (and computer_links_resolve) still pass on replay against the hash-only placeholder",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 5,
+          "claim": "artifact_json reports evidence-unavailable on every lane (live, verify-run, replay) for a mode: r file",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": true
+        }
+      ]
+    },
+    "eval-16-gate-count-and-vacuous-delivery": {
+      "reps": 6,
+      "skillInvoked": "6/6",
+      "validReps": 6,
+      "errored": 0,
+      "claims": [
+        {
+          "index": 0,
+          "claim": "questions_count_max counts sub-questions, not gates — one AskUserQuestion call can bundle several sub-questions",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 1,
+          "claim": "A single gate bundling 3 sub-questions counts as 3 against questions_count_max",
+          "pass": "5/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 2,
+          "claim": "Recommends reading the per-gate sub-question count from trace --view questions",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 3,
+          "claim": "gate_answers_delivered: true passes vacuously when no gate fires at all",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": false
+        },
+        {
+          "index": 4,
+          "claim": "Whether a gate fires is model-dependent, so gate_answers_delivered can't catch 'the gate never fired'",
+          "pass": "5/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 5,
+          "claim": "Pair gate_answers_delivered with gate_answer_count_min: 1 when the presence of a gate matters",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": true
+        }
+      ]
+    },
+    "eval-17-prompt-asset-missing-warn-signal": {
+      "reps": 6,
+      "skillInvoked": "6/6",
+      "validReps": 6,
+      "errored": 0,
+      "claims": [
+        {
+          "index": 0,
+          "claim": "prompt_asset_missing is a WARN-severity verdict signal, not a hard failure",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 1,
+          "claim": "The run proceeded and can still green even though a prompt asset referenced by the scenario was not found",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 2,
+          "claim": "A missing prompt asset means the model ran against an incomplete prompt",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 3,
+          "claim": "Advises scanning the verdict signals array after every run",
+          "pass": "3/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 4,
+          "claim": "Recommends treating prompt_asset_missing as a blocking error in CI by checking the signals array",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 5,
+          "claim": "A green run with a missing prompt asset is not a valid pass — fix the asset path",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": true
+        }
+      ]
+    },
+    "eval-18-env-placement-and-base64-redaction": {
+      "reps": 6,
+      "skillInvoked": "5/6",
+      "validReps": 5,
+      "errored": 0,
+      "claims": [
+        {
+          "index": 0,
+          "claim": "Keep .env OUT of any mounted folder — a mounted folder is copied into the sandbox and the token could leak",
+          "pass": "5/5",
+          "priors": "1/1",
+          "discriminating": true
+        },
+        {
+          "index": 1,
+          "claim": ".env resolution order is: env vars, then --dotenv, then ./.env, then the install .env",
+          "pass": "4/5",
+          "priors": "1/1",
+          "discriminating": true
+        },
+        {
+          "index": 2,
+          "claim": "A git worktree's ./.env is gitignored/absent, causing 'no model credentials' — fix with --dotenv <main-checkout>/.env",
+          "pass": "5/5",
+          "priors": "1/1",
+          "discriminating": true
+        },
+        {
+          "index": 3,
+          "claim": "record detects a secret embedded in a base64 artifact and replaces the whole body with a [REDACTED:base64] marker plus a warning",
+          "pass": "5/5",
+          "priors": "1/1",
+          "discriminating": true
+        },
+        {
+          "index": 4,
+          "claim": "An artifact_json/content assertion targeting that artifact fails at replay because the body no longer matches",
+          "pass": "5/5",
+          "priors": "1/1",
+          "discriminating": true
+        },
+        {
+          "index": 5,
+          "claim": "Fix: don't let secrets flow into artifacts; for intentionally opaque artifacts, drop the content assertion and gate on file_exists on the live lane",
+          "pass": "5/5",
+          "priors": "1/1",
+          "discriminating": true
+        }
+      ]
+    },
+    "eval-2-debug-replay-false-green": {
+      "reps": 6,
+      "skillInvoked": "6/6",
+      "validReps": 6,
+      "errored": 0,
+      "claims": [
+        {
+          "index": 0,
+          "claim": "file_exists is satisfied by the path being present in the recorded artifacts manifest, not by the file size or content, so a 0-byte or placeholder outputs/report.md passes exactly like a real one",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": false
+        },
+        {
+          "index": 1,
+          "claim": "Whether file_exists is even evaluated on replay depends on the cassette carrying a record-time artifacts manifest (with one it runs against the manifest; a manifest-less cassette skips it rather than failing)",
+          "pass": "4/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 2,
+          "claim": "The fix is to assert on content rather than mere existence: a content-class assertion (e.g. transcript_contains or transcript_matches on a stable marker) that survives replay and fails on empty output",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": false
+        }
+      ]
+    },
+    "eval-3-deterministic-answer-path": {
+      "reps": 6,
+      "skillInvoked": "6/6",
+      "validReps": 6,
+      "errored": 0,
+      "claims": [
+        {
+          "index": 0,
+          "claim": "Recommends scripted answers: a when_question regex matched to a choose rule in the scenario's answers: block",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 1,
+          "claim": "Recommends pairing scripted answers with on_unanswered: fail for deterministic CI",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 2,
+          "claim": "States that llm is not a valid --on-unanswered CLI value; use --decider-llm or on_unanswered: llm in the YAML instead",
+          "pass": "5/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 3,
+          "claim": "Both --decider-llm and on_unanswered: llm are flagged as nonDeterministic",
+          "pass": "5/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 4,
+          "claim": "--on-unanswered first is also flagged nonDeterministic, so it is not a deterministic substitute",
+          "pass": "5/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 5,
+          "claim": "Concludes scripted answers are the correct deterministic path for CI",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": true
+        }
+      ]
+    },
+    "eval-4-green-run-that-actually-stalled": {
+      "reps": 6,
+      "skillInvoked": "5/6",
+      "validReps": 5,
+      "errored": 0,
+      "claims": [
+        {
+          "index": 0,
+          "claim": "result: success only means the agent didn't error — it does not mean the task was completed",
+          "pass": "5/5",
+          "priors": "1/1",
+          "discriminating": false
+        },
+        {
+          "index": 1,
+          "claim": "A turn ending with a plain-text re-ask after an already-answered gate still reports result: success",
+          "pass": "5/5",
+          "priors": "1/1",
+          "discriminating": false
+        },
+        {
+          "index": 2,
+          "claim": "The stalled verdict signal is designed to catch a run ending on a question with no productive tool work after its last gate",
+          "pass": "5/5",
+          "priors": "1/1",
+          "discriminating": true
+        },
+        {
+          "index": 3,
+          "claim": "The stalled signal is a tool-position heuristic: any post-gate tool call, even an errored one, clears the flag (false negative)",
+          "pass": "5/5",
+          "priors": "1/1",
+          "discriminating": true
+        },
+        {
+          "index": 4,
+          "claim": "A deliverable written before a final confirmation gate does not clear the stalled flag (false positive) — use allow_stall: true there",
+          "pass": "4/5",
+          "priors": "1/1",
+          "discriminating": true
+        },
+        {
+          "index": 5,
+          "claim": "Recommends asserting the actual deliverable (file_exists/artifact_json/transcript_matches) and checking the verdict signals array for stalled, rather than relying on result: success alone",
+          "pass": "5/5",
+          "priors": "1/1",
+          "discriminating": true
+        }
+      ]
+    },
+    "eval-5-web-fetch-egress-allowlist-noop": {
+      "reps": 6,
+      "skillInvoked": "6/6",
+      "validReps": 6,
+      "errored": 0,
+      "claims": [
+        {
+          "index": 0,
+          "claim": "web_fetch is gated by URL provenance (whether the URL appeared in the prompt or a prior web_fetch result), not by the egress hostname allowlist",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 1,
+          "claim": "Adding a host to egress.extra_allow is a no-op here because the approval gate is orthogonal to the allowlist",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": false
+        },
+        {
+          "index": 2,
+          "claim": "Fix 1: put the URL directly in the prompt, making it provenanced and skipping the gate (and the allowlist) entirely",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 3,
+          "claim": "Fix 2: answer the webfetch:<domain> approval gate deterministically via a scripted when_tool rule with grant: domain|once, or a session web_fetch.approved_domains entry",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 4,
+          "claim": "The webfetch approval gate is fail-closed — it is not auto-allowed, and --on-unanswered first does not grant it",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": true
+        }
+      ]
+    },
+    "eval-6-assert-evolution-no-rerecord": {
+      "reps": 6,
+      "skillInvoked": "6/6",
+      "validReps": 6,
+      "errored": 0,
+      "claims": [
+        {
+          "index": 0,
+          "claim": "No blanket re-record needed: replay --assert-from <scenario.yaml> re-evaluates the edited assert: block against each committed cassette token-free",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 1,
+          "claim": "questions_count_max is a gate-lifecycle key that needs the cassette's controlOut stream; any modern recording already has it",
+          "pass": "5/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 2,
+          "claim": "Only a pre-controlOut cassette needs a single re-record to permanently unlock gate assertions",
+          "pass": "5/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 3,
+          "claim": "--assert-from hard-fails if the scenario's answers: differ from the recording's answers, so assert-only edits must be sequenced separately from answer edits",
+          "pass": "3/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 4,
+          "claim": "Assert-only edits are re-checkable token-free via replay --assert-from/--reassert (and verify-run against a kept run dir), while a prompt/answers/skill change reshapes the recording itself and needs a real re-record",
+          "pass": "5/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 5,
+          "claim": "Should not recommend re-recording the whole fleet or hand-editing the cassettes' frozen assert blocks",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": false
+        }
+      ]
+    },
+    "eval-7-cassette-tier": {
+      "reps": 6,
+      "skillInvoked": "4/6",
+      "validReps": 4,
+      "errored": 0,
+      "claims": [
+        {
+          "index": 0,
+          "claim": "Reads the cassette top-level effectiveFidelity field (hostloop in this fixture) as the tier the live run actually resolved to",
+          "pass": "4/4",
+          "priors": "2/2",
+          "discriminating": false
+        },
+        {
+          "index": 1,
+          "claim": "Explains fidelity: cowork means resolve from the baseline's host-loop gate at record time, so the authored value alone does not tell you the tier",
+          "pass": "4/4",
+          "priors": "2/2",
+          "discriminating": true
+        },
+        {
+          "index": 2,
+          "claim": "Points to verify-cassettes to catch future drift: it raises a resolved-tier staleness finding when a cowork cassette effectiveFidelity no longer matches what the current baseline resolves to",
+          "pass": "4/4",
+          "priors": "1/2",
+          "discriminating": true
+        },
+        {
+          "index": 3,
+          "claim": "Mentions unverifiable-tier for a cassette that predates effectiveFidelity",
+          "pass": "4/4",
+          "priors": "2/2",
+          "discriminating": true
+        },
+        {
+          "index": 4,
+          "claim": "Does not incorrectly claim the scenario fidelity: field answers the question",
+          "pass": "4/4",
+          "priors": "2/2",
+          "discriminating": false
+        }
+      ]
+    },
+    "eval-8-allow-patterns-file-format": {
+      "reps": 6,
+      "skillInvoked": "6/6",
+      "validReps": 6,
+      "errored": 0,
+      "claims": [
+        {
+          "index": 0,
+          "claim": "The file format is plain text: one regex pattern per line",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 1,
+          "claim": "Blank lines and lines starting with # are ignored",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 2,
+          "claim": "Patterns are matched against the WHOLE finding token (anchored, not substring), and matching is case-sensitive unless the regex carries an i flag",
+          "pass": "5/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 3,
+          "claim": "File entries are ALL-CLASS (equivalent to bare --allow), unlike a class-scoped flag like --allow-domain",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 4,
+          "claim": "Moving a class-scoped allow into the file widens its scope (e.g. a domain pattern could also suppress a path/email finding)",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 5,
+          "claim": "--allow-patterns-file takes a path to a file OF patterns, not a path to allow directly",
+          "pass": "4/6",
+          "priors": null,
+          "discriminating": true
+        }
+      ]
+    },
+    "eval-9-batch-record-atomicity": {
+      "reps": 6,
+      "skillInvoked": "6/6",
+      "validReps": 6,
+      "errored": 0,
+      "claims": [
+        {
+          "index": 0,
+          "claim": "Each cassette is written via a same-dir temp file + atomic rename, so a crash can't leave a partial/corrupt cassette",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 1,
+          "claim": "Scenarios in a batch are independent; one failure does not roll back or halt siblings",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 2,
+          "claim": "The batch continues on a failure but exits non-zero (1) if any scenario failed, so CI still fails loud",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 3,
+          "claim": "Runs are fully isolated per scenario (unique sidecar networks/proxy), so --concurrency doesn't cause cross-talk",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": true
+        },
+        {
+          "index": 4,
+          "claim": "The batch is NOT all-or-nothing/transactional, and a mid-batch failure does not corrupt previously written cassettes",
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": true
+        }
+      ]
+    }
+  }
+}

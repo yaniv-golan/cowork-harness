@@ -14,16 +14,16 @@ import type { SemanticClaimResult, SemanticJudge } from "../assert.js";
  *  set per-assert. */
 export const DEFAULT_JUDGE_MODEL = process.env.COWORK_HARNESS_JUDGE_MODEL || "claude-opus-4-8";
 
-/** Extract the first balanced top-level `{...}` object from a string, ignoring braces inside JSON string
- *  literals. Judge models frequently prepend a prose sentence ("I'll grade this answer…") before the
- *  JSON despite instructions, so a bare `JSON.parse` of the whole reply fails. Returns null if none. */
-export function extractJsonObject(text: string): string | null {
-  const start = text.indexOf("{");
-  if (start < 0) return null;
+/** Extract EVERY balanced top-level `{...}` object from a string, ignoring braces inside JSON string
+ *  literals. Judge models routinely wrap the JSON in prose, restate it fenced + unfenced, or echo the
+ *  prompt's own example — so there can be several top-level groups. Returned in source order. */
+export function extractAllJsonObjects(text: string): string[] {
+  const out: string[] = [];
   let depth = 0;
+  let start = -1;
   let inStr = false;
   let escaped = false;
-  for (let i = start; i < text.length; i++) {
+  for (let i = 0; i < text.length; i++) {
     const ch = text[i];
     if (inStr) {
       if (escaped) escaped = false;
@@ -32,13 +32,22 @@ export function extractJsonObject(text: string): string | null {
       continue;
     }
     if (ch === '"') inStr = true;
-    else if (ch === "{") depth++;
-    else if (ch === "}") {
-      depth--;
-      if (depth === 0) return text.slice(start, i + 1);
+    else if (ch === "{") {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (ch === "}") {
+      if (depth > 0) {
+        depth--;
+        if (depth === 0 && start >= 0) out.push(text.slice(start, i + 1));
+      }
     }
   }
-  return null;
+  return out;
+}
+
+/** First balanced top-level `{...}` (back-compat for non-judge callers). */
+export function extractJsonObject(text: string): string | null {
+  return extractAllJsonObjects(text)[0] ?? null;
 }
 
 /** Grading prompt for a FIXED, authored rubric. The judge grades every numbered claim by its index and
@@ -57,46 +66,66 @@ ${numbered}
 ${answer}
 
 ## Output
-Return STRICT JSON ONLY — no markdown code fences, no prose before or after — in exactly this shape,
-with exactly one entry per rubric index (0..${rubric.length - 1}):
+Return STRICT JSON ONLY — no markdown code fences, no prose before or after, and do NOT repeat this
+example — one object per rubric index (0..${rubric.length - 1}), in this shape:
 {"results":[{"index":0,"pass":true},{"index":1,"pass":false}]}`;
 }
 
-/** Parse the judge's indexed JSON into per-claim results aligned to `rubric` BY INDEX. Tolerates a
- *  markdown code fence and a prose preamble/epilogue around the JSON. Throws a clear error — never
- *  guesses — when the output is malformed OR does not cover every rubric index exactly once: a
- *  malformed grade must fail loud (the caller marks the rep invalid), not manufacture a pass or fail. */
-export function parseJudgeResults(raw: string, rubric: string[]): SemanticClaimResult[] {
-  const text = raw.trim();
-  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
-  const jsonText = fenced ? fenced[1].trim() : text.startsWith("{") ? text : (extractJsonObject(text) ?? text);
-
+/** Try to read one balanced `{...}` group as a FULL-COVERAGE grade: a `results` array with exactly one
+ *  `{index:number,pass:boolean}` per rubric index `0..n-1`. Returns the ordered pass map, or null if this
+ *  group isn't a valid full grade (so the prompt's own embedded EXAMPLE, a partial restatement, or a prose
+ *  brace group is simply skipped rather than mistaken for the grade). */
+function tryParseGrade(group: string, rubric: string[]): boolean[] | null {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(jsonText);
-  } catch (e) {
-    throw new Error(`semantic judge: response was not valid JSON (${(e as Error).message}).\n--- raw judge output ---\n${raw}`);
+    parsed = JSON.parse(group);
+  } catch {
+    return null;
   }
   const results = (parsed as { results?: unknown }).results;
-  if (!Array.isArray(results)) throw new Error(`semantic judge: JSON is missing a "results" array.\n--- raw judge output ---\n${raw}`);
-
+  if (!Array.isArray(results)) return null;
   const byIndex = new Map<number, boolean>();
   for (const r of results) {
     const idx = (r as { index?: unknown }).index;
     const pass = (r as { pass?: unknown }).pass;
-    if (typeof idx !== "number" || typeof pass !== "boolean")
-      throw new Error(`semantic judge: each result must be {index:number, pass:boolean}; got ${JSON.stringify(r)}`);
-    if (byIndex.has(idx)) throw new Error(`semantic judge: duplicate result for index ${idx}`);
+    if (typeof idx !== "number" || typeof pass !== "boolean") return null;
+    if (byIndex.has(idx)) return null; // duplicate index within one group
     byIndex.set(idx, pass);
   }
-  return rubric.map((claim, index) => {
-    const pass = byIndex.get(index);
-    if (pass === undefined)
-      throw new Error(
-        `semantic judge: no result for rubric index ${index} (need exactly one per index, got ${byIndex.size}/${rubric.length})`,
-      );
-    return { index, claim, pass };
-  });
+  if (byIndex.size !== rubric.length) return null;
+  const grade: boolean[] = [];
+  for (let i = 0; i < rubric.length; i++) {
+    const p = byIndex.get(i);
+    if (p === undefined) return null; // not exactly 0..n-1
+    grade.push(p);
+  }
+  return grade;
+}
+
+/** Parse the judge's indexed JSON into per-claim results aligned to `rubric` BY INDEX. Scans EVERY
+ *  top-level `{...}` group (handles fenced/unfenced restatements and a leading prose brace), keeps those
+ *  that are a valid full-coverage grade, **dedupes structurally-identical grades** (a judge that restates
+ *  its own JSON must not self-invalidate), and requires **exactly one distinct** grade. Zero (malformed /
+ *  partial) or more than one *distinct* grade throws — a malformed/ambiguous grade must fail loud so the
+ *  caller marks the rep INVALID, never manufacturing a pass/fail (and never silently grabbing the prompt's
+ *  embedded example). */
+export function parseJudgeResults(raw: string, rubric: string[]): SemanticClaimResult[] {
+  const groups = extractAllJsonObjects(raw);
+  const distinct = new Map<string, boolean[]>();
+  for (const g of groups) {
+    const grade = tryParseGrade(g, rubric);
+    if (grade) distinct.set(grade.join(","), grade); // dedupe identical grades
+  }
+  if (distinct.size === 0)
+    throw new Error(
+      `semantic judge: no valid full-coverage {results:[…]} grade for a ${rubric.length}-claim rubric.\n--- raw judge output ---\n${raw}`,
+    );
+  if (distinct.size > 1)
+    throw new Error(
+      `semantic judge: ${distinct.size} DIFFERENT full-coverage grades in one reply (ambiguous).\n--- raw judge output ---\n${raw}`,
+    );
+  const grade = [...distinct.values()][0];
+  return rubric.map((claim, index) => ({ index, claim, pass: grade[index] }));
 }
 
 /** The real semantic judge. `complete` is injectable so tests exercise the parse/prompt logic without a

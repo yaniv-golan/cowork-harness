@@ -15,5 +15,7 @@ assert:
     - Only a pre-controlOut cassette needs a single re-record to permanently unlock gate assertions
     - '--assert-from hard-fails if the scenario''s answers: differ from the recording''s answers, so assert-only
       edits must be sequenced separately from answer edits'
-    - Answer edits (unlike assert-only edits) do force a re-record
+    - Assert-only edits are re-checkable token-free via replay --assert-from/--reassert (and verify-run
+      against a kept run dir), while a prompt/answers/skill change reshapes the recording itself and needs
+      a real re-record
     - Should not recommend re-recording the whole fleet or hand-editing the cassettes' frozen assert blocks
