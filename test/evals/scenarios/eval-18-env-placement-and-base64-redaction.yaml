@@ -1,0 +1,22 @@
+name: eval-18-env-placement-and-base64-redaction
+baseline: latest
+session: ./_session.yaml
+fidelity: container
+prompt: Two safety questions. Where should I keep my .env so the OAuth token doesn't leak into the sandbox,
+  and why did running from a git worktree give me 'no model credentials'? And separately, I have a base64
+  artifact that contained a secret — `record` scrubbed it and now my `artifact_json` assertion fails on
+  replay. Why?
+assert:
+- semantic_matches:
+    rubric:
+    - Keep .env OUT of any mounted folder — a mounted folder is copied into the sandbox and the token
+      could leak
+    - '.env resolution order is: env vars, then --dotenv, then ./.env, then the install .env'
+    - A git worktree's ./.env is gitignored/absent, causing 'no model credentials' — fix with --dotenv
+      <main-checkout>/.env
+    - record detects a secret embedded in a base64 artifact and replaces the whole body with a [REDACTED:base64]
+      marker plus a warning
+    - An artifact_json/content assertion targeting that artifact fails at replay because the body no longer
+      matches
+    - 'Fix: don''t let secrets flow into artifacts; for intentionally opaque artifacts, drop the content
+      assertion and gate on file_exists on the live lane'

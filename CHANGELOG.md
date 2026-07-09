@@ -6,6 +6,9 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+> **In progress.** Restructuring of the companion skill's documentation for a clearer author → run →
+> debug flow.
+
 ### Added
 
 - **`trace --view tool-errors|files|usage`** — three new views: `tool-errors` (one row per errored
@@ -50,9 +53,33 @@ All notable changes to this project are documented here. The format is based on
   (`"local"` default | `"cloud-describe"`, which hard-errors at load time — like
   `replay_protocol_fidelity` — since no runner exists for it yet, rather than being silently accepted
   and ignored). No cloud execution capability is added; these are purely descriptive/forward-compat.
+- **`semantic_matches` assertion** — a live-only, LLM-judged assertion that grades a fixed `rubric` of
+  claims against the run's answer, one pass/fail per claim. Per-claim results are recorded on
+  `RunResult.assertions[].semanticClaims` (`{index, claim, pass}`), so a candidate run's claim-level
+  profile can be diffed against a baseline instead of only reading a single summary verdict. Supports a
+  `min_pass` threshold (default: all claims) and a per-assert `judge_model` override (default
+  `claude-opus-4-8`, also settable via `COWORK_HARNESS_JUDGE_MODEL`) — the override is now actually
+  honored per assert, and the model that graded is recorded on `RunResult.assertions[].judgeModel` so a
+  before/after eval can verify the judge was held constant. Classified live-only alongside `egress_*` —
+  stripped on replay (skipped-loud), never a vacuous pass.
+- **`RunResult.referencesRead`** — the skill's `references/*` / `scripts/*` files the agent actually
+  **Read** during the run (skill-relative, deduped in first-seen order): a progressive-disclosure signal
+  for "did the agent reach this content?" skill-quality measurement. Main-agent Reads of `references/`/
+  `scripts/` (not `assets/`, not sub-agent reads); `SKILL.md` is delivered whole (never Read as a file),
+  so it never appears. Present on live and replay.
+- **`RunResult.finalMessage`** — the agent's final answer text: the SDK result message's own designated
+  answer, not the joined transcript of every assistant turn. Lets a consumer read what the agent actually
+  answered without parsing `run.jsonl`. Threaded through every `RunResult` producer (live success and
+  salvaged-partial, replay re-drive, `chat`); `undefined` on a truncated/error cassette.
 
 ### Fixed
 
+- **A resumed turn no longer clobbers an earlier turn's `run.jsonl` / `result.json`.** Both were
+  rewritten in full each turn, so after a `--session-id` + `--resume` session you could not recover
+  turn 1's transcript or result — while `events.jsonl`/`timeline.jsonl` (append-mode) blended turns.
+  `run.jsonl` and `result.json` now stay the **latest** turn (unchanged for their readers) and
+  `RunResult` carries a `turn` number; each prior turn is preserved as `run.turn-<N>.jsonl` /
+  `result.turn-<N>.json`, so every turn's transcript and result remain recoverable and attributable.
 - **`sync`'s asar-bundle reader followed a stale assumption about Desktop's Vite build output.** A
   Desktop release that code-splits `.vite/build/index.js` into a small entry stub plus a
   content-hashed chunk file (rather than one monolithic bundle) was silently read as near-empty
@@ -104,7 +131,7 @@ All notable changes to this project are documented here. The format is based on
   match against a display-truncated result reports evidence-unavailable instead of claiming the string
   is absent; host-path leak detection also flags `/private/var/`, `/var/folders/`, and `/Volumes/`; an
   all-malformed resource log reports `malformedLines` instead of looking never-sampled; gate-provenance
-  pairing in `trace --gates` uses the persisted `requestId` (retry/duplicate-safe) instead of position.
+  pairing in `trace --view questions` uses the persisted `requestId` (retry/duplicate-safe) instead of position.
 - `record`/`replay`/`verify-cassettes`/`rehash`'s `--output-format json` **error paths** now conform to
   the shared error envelope (previously bare plain-text on some paths); `verify-run`/`assertions`/
   `trace`/`diff`'s **success** JSON is now wrapped in the same envelope for cross-command consistency
@@ -119,6 +146,10 @@ All notable changes to this project are documented here. The format is based on
   assertion instead). A `config_dir` that exists but isn't a directory now gets a clear error instead
   of a raw `ENOTDIR`. Protocol staging now fails loud (`BoundaryError`) if a *required* mount's source
   vanishes between plan-build and staging, instead of silently staging an empty tree.
+- **The companion skill's own docs pointed at repo-only files** (`docs/`, `README.md`) that a
+  marketplace-installed agent never receives — only `SKILL.md` + `references/` + `scripts/` are staged.
+  Every such pointer is now prose describing where the fuller doc lives in the source repo, not a
+  markdown link, so it can no longer render as a dangling link for an installed agent.
 
 ### Documentation
 
@@ -129,6 +160,71 @@ All notable changes to this project are documented here. The format is based on
 - Reorganized the skill's debugging guidance around the kept-run-dir → `trace`/`result.json` →
   `verify-run` loop as the primary, first-class debugging path (previously buried under interactive
   `chat`).
+- **Companion skill restructured around the three loops — author → run → debug.** `SKILL.md` now reads
+  Preflight → Orient → Part I (Author a scenario) → Part II (Run, record & lock) → Part III (Debug) →
+  Gotchas → References, with debugging a first-class Part reachable from the top rather than a
+  sub-section. Every prior section was re-homed, not dropped, and cross-references now cite stable
+  section titles instead of numbers so a future move can't silently break them.
+- **Single-source debug triage.** A link-free triage decision-table — which tool to reach for when "the
+  skill misbehaved" vs. when "a green you don't trust" — is authored once and kept byte-identical
+  between the shipped skill and `docs/debugging.md` by a test, so the two surfaces can't drift apart.
+- **Documented how uncommitted skill edits are staged.** The harness stages git-*tracked* files but
+  copies their *working-tree* content, so an uncommitted edit to an already-tracked skill file is tested
+  without committing (only brand-new files must be `git add`-ed to appear). Because real Cowork installs
+  the committed tree, commit before recording the locking cassette — a green on uncommitted edits isn't
+  yet a green on what ships.
+- **Companion skill: documented `semantic_matches` end to end, with a new recipe.** It walks authoring
+  Q&A gate scenarios that install the skill, writing discriminating rubric claims verified against
+  ground truth, confirming `skillsInvoked` (a rep where the skill never triggered measures the model's
+  own priors, not the skill's guidance), running several reps and reading the per-claim pass profile
+  rather than a single all-or-nothing run, and gating a change on the profile diff. Also documents two
+  guarantees the harness already provided but hadn't stated: batch `record` writes each cassette
+  atomically (same-directory temp file + rename, so an interrupted or OOM-killed batch never leaves a
+  partial/corrupt cassette), and each scenario gets full isolation under `--concurrency` (its own egress
+  sidecar network and proxy, its own run directory). And documents the actual
+  `--allow-domain`/`-email`/`-path` matching semantics: whole-token anchored, but case-sensitive unless
+  the pattern's regex carries an `i` flag.
+
+### Internal
+
+- **`schema/run-result.json` is now kept in sync with the `RunResult` type automatically.** A new
+  name-level drift test derives the type's field set from `src/types.ts` (TS compiler API) and asserts
+  the schema declares exactly those fields, both directions — closing the gap where an added type field
+  could ship undeclared in the §12 schema (six such fields — `finalMessage`, `resources`,
+  `contextEvents`, `mcpErrors`, `hookEvents`, `presentedFiles` — were backfilled). Complements the
+  existing value-shape validation; the hand-authored descriptions/shapes are preserved (no fragile full
+  regenerator).
+- Added a per-claim regression-diff (`scripts/eval-gate-diff.ts`) and an N-rep baseline-profile
+  aggregator (`scripts/eval-baseline-profile.mjs`) for the project's own answer-quality eval gate over
+  the companion skill (`test/evals/`, not shipped as part of the skill).
+
+- **Programmatic multi-turn (`cowork.skill(folder).conversation([...])`)** — feed N user turns to one
+  persisted session and get a `Result` per turn: turn 1 pins `--session-id`, later turns add `--resume`
+  so the agent reloads the conversation. Makes the natural "ask → inspect → follow-up" loop
+  (self-report, iterative probing) a single first-class call instead of hand-stitched session/resume
+  calls. Backed by a new **container-tier `--resume` continuity integration test** that proves the agent
+  session actually survives the container boundary (a fresh turn-2 container recalls a fact established
+  in turn 1) — the plumbing was argv-tested but never proven end-to-end before.
+- **`--ablate-skill`** (on `run` / `skill`) — run the same prompt with the skill(s)-under-test removed:
+  a deterministic negative control for skill-lift measurement (with-skill vs. without). All plugin/skill
+  discovery is stripped so nothing mounts and the agent answers from its own priors; model/folders/egress
+  are preserved. The result is stamped `RunResult.ablated: true` so a consumer never reads an ablated run
+  as a real (with-skill) pass. Pairs with the `semantic_matches` per-claim profile to quantify how much a
+  claim depends on the skill vs. the model's priors.
+- **`prune --pinned-older-than <N>d|h|m`** — opt-in reclaim for pinned (`--session-id`) run dirs, which
+  are otherwise retained unconditionally. A programmatic consumer that mints one pinned session per run
+  (e.g. one per eval × rep) previously leaked them forever with no policy; this reclaims pinned sessions
+  whose last activity is older than the window, while fresh ones survive. Nothing pinned is touched
+  without the flag; `--dry-run` previews.
+
+### Removed
+
+- **`trace`'s legacy `--tools` / `--gates` / `--dispatches` flag aliases.** Use `--view tools` /
+  `--view questions` / `--view dispatches` instead (the canonical form since the view set grew to seven
+  views). The retired spellings now fail loud as an unknown flag (exit 2) rather than silently
+  selecting a view, so a stale script surfaces immediately instead of tracing the wrong thing. Exit-code
+  semantics (0/1/2/3/127) and the `--output-format json` envelope are unchanged. The shipped Python
+  wrapper's `cowork.trace(..., tools=True)` now drives `--view tools` and keeps its signature.
 
 ### Changed
 

@@ -1,0 +1,17 @@
+name: eval-11-external-decider-first-shorthand-disabled
+baseline: latest
+session: ./_session.yaml
+fidelity: container
+prompt: I wrote an external `--decider-cmd` helper for answering gates. When it returns the string "first"
+  the gate fails instead of selecting option 1. Is that a bug in the harness?
+assert:
+- semantic_matches:
+    rubric:
+    - This is intentional behavior, not a bug
+    - The 'first' keyword shorthand is disabled for external --decider-cmd / --decider-dir helpers
+    - The 'first' shorthand stays active only for the built-in --on-unanswered first path
+    - A helper returning the literal string 'first' must match an actual option label named 'first', or
+      the gate fails loud
+    - 'Rationale: this prevents a helper bug from accidentally emitting ''first'' and silently green-ing
+      option 1'
+    - Recommends helpers return a real label name or a numeric option index

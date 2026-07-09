@@ -494,6 +494,20 @@ export const Assertion = z.strictObject({
     })
     .optional()
     .describe("assert over a JSON artifact's contents (dotted path + equals|in|gt|exists|absent|is_null)"),
+  semantic_matches: z
+    .object({
+      rubric: z
+        .array(z.string().min(1))
+        .min(1)
+        .describe("fixed, authored checkable claims — a pinned judge grades each; results align by INDEX (not re-extracted per rep)"),
+      min_pass: z
+        .union([z.literal("all"), z.number().int().positive()])
+        .optional()
+        .describe("how many rubric claims must pass for the assert to pass (default: all; do NOT rely on all for a gating scenario)"),
+      judge_model: z.string().optional().describe("override the run-level pinned judge model for this assert"),
+    })
+    .optional()
+    .describe("LIVE-ONLY: a pinned LLM judge grades the rubric against the run's answer; skipped-loud on replay (like egress_*)"),
 });
 export type Assertion = z.infer<typeof Assertion>;
 
@@ -780,7 +794,7 @@ export interface RunResult {
     name: string;
     decision: string;
     by?: string;
-    // request_id (UUID) of a question gate — lets `trace --gates` pair a decision to its event row by id
+    // request_id (UUID) of a question gate — lets `trace --view questions` pair a decision to its event row by id
     // instead of positionally (retried/duplicated gate events would shift a positional pairing). Optional.
     requestId?: string;
     model?: string;
@@ -878,7 +892,43 @@ export interface RunResult {
   // `evidence` (passing checks only) is the concrete file/value/tool/link that satisfied the assert —
   // surfaced by `replay --explain` so a green can be trusted rather than assumed vacuous. Optional: a check
   // with nothing concrete to cite omits it.
-  assertions: Array<{ assertion: Assertion; pass: boolean; message?: string; evidence?: string }>;
+  assertions: Array<{
+    assertion: Assertion;
+    pass: boolean;
+    message?: string;
+    evidence?: string;
+    /** Per-claim results for a `semantic_matches` assert (aligned to its rubric by index) — present only
+     *  on the live lane where the judge ran; a consumer can diff these across runs to gate a change. */
+    semanticClaims?: Array<{ index: number; claim: string; pass: boolean }>;
+    /** The judge model that graded a `semantic_matches` assert (provenance) — the resolved run-level
+     *  pinned model, or a per-assert `judge_model` override. Lets a before/after eval verify the judge
+     *  was held constant. Present only on the live lane where the judge ran. */
+    judgeModel?: string;
+  }>;
+  /** The agent's final answer — the SDK result message (`{type:"result"}`.result), i.e. the model's
+   *  designated final response. This is what llm-transport treats as "the answer"; it is distinct from
+   *  the full joined transcript (every assistant turn concatenated). Surfaced so a consumer reads the
+   *  answer from the envelope instead of parsing run.jsonl. Absent when no result event carried text
+   *  (e.g. a spawn/exit error before the result). */
+  finalMessage?: string;
+  /** True when the run was ABLATED (`--ablate-skill`): the skill(s)-under-test were deliberately removed
+   *  so the same prompt runs with no skill — a negative control for skill-lift measurement. A consumer
+   *  must never read an ablated run as a real (with-skill) pass. Absent/false on a normal run. */
+  ablated?: boolean;
+  /** Skill reference/script files the agent actually **Read** during the run (skill-relative:
+   *  `references/foo.md`, `scripts/bar.py`), deduped in first-seen order. A progressive-disclosure
+   *  signal — "did the agent reach this content?" — for skill-quality measurement. Scope: **main-agent
+   *  Reads only** (a sub-agent's reads aren't attributed), matching `references/`/`scripts/` under a
+   *  mounted plugin root — NOT `assets/`, and never `SKILL.md` (delivered whole, never Read as a file).
+   *  Derived from the run's Read events, so it's present on **both live and replay**; absent when no such
+   *  file was Read. */
+  referencesRead?: string[];
+  /** 1-based turn number within a resumed (`--session-id` + `--resume`) session — 1 for a normal
+   *  single-shot run, incrementing per resume. `result.json`/`run.jsonl` hold the LATEST turn; prior
+   *  turns are archived as `result.turn-<N>.json` / `run.turn-<N>.jsonl`. Lets a multi-turn consumer
+   *  attribute a result to its turn instead of blending cumulative telemetry. Absent on replay/chat
+   *  lanes that don't track it. */
+  turn?: number;
   subagents?: Array<{
     toolUseId: string;
     parentToolUseId?: string;

@@ -12,8 +12,12 @@ function fullyExplicitFixture(): CompleteRunResult {
   return {
     $schema: undefined,
     generator: undefined,
+    turn: undefined,
+    ablated: undefined,
+    referencesRead: undefined,
     mode: undefined,
     execution: undefined,
+    finalMessage: undefined,
     scenario: "test-scenario",
     prompt: undefined,
     fidelity: "container",

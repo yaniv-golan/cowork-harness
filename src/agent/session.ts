@@ -30,7 +30,7 @@ export type DecisionRequest =
   // answers with for a `webfetch:<domain>` gate. Absent for ordinary agent permissions (binary allow/deny).
   | { id: string; kind: "permission"; tool: string; input: Record<string, unknown>; options?: { label: string; description?: string }[] }
   // toolUseId (the `toolu_…` id, distinct from the UUID `id`/request_id) pairs this gate with its
-  // tool_result for delivery verification + `trace --gates`.
+  // tool_result for delivery verification + `trace --view questions`.
   | { id: string; kind: "question"; questions: QSpec[]; toolUseId?: string }
   | { id: string; kind: "dialog"; dialogKind: string; payload: unknown } // request_user_dialog (~6s auto-cancel)
   | { id: string; kind: "elicit"; server?: string; prompt?: string; schema?: unknown }; // elicitation / side_question
@@ -837,7 +837,7 @@ export function parseMessage(msg: any): AgentEvent[] {
     case "user":
       // Tool OUTCOMES come back as `user` messages carrying tool_result blocks. We never parsed these
       // before, so every tool result — including the AskUserQuestion `q.map` error — was invisible to the
-      // recorder/trace. Capture them for delivery verification + `trace --tools`/`--gates`.
+      // recorder/trace. Capture them for delivery verification + `trace --view tools`/`--view questions`.
       for (const block of msg.message?.content ?? []) {
         if (block.type === "tool_result")
           ev.push({

@@ -731,6 +731,7 @@ interface CommonFlags {
   verbose: boolean;
   compact?: boolean; // --compact: drop informational capability ::notice:: lines (safety net stays)
   demo?: boolean; // --demo: shareable output — compact + suppress the runs-location header (runs stay durable)
+  ablateSkill?: boolean; // --ablate-skill: run the same prompt with the skill(s)-under-test removed (negative control)
   deciderCmd?: string; // --decider-cmd: spawn a helper that answers each decision (external channel B)
   deciderDir?: string; // --decider-dir: file-rendezvous for a driving agent's Monitor (external channel C)
 }
@@ -874,6 +875,7 @@ function takeCommonFlags(args: string[], commandName: string = "skill"): { rest:
     else if (a === "--verbose") flags.verbose = true;
     else if (a === "--compact") flags.compact = true;
     else if (a === "--demo") flags.demo = true;
+    else if (a === "--ablate-skill") flags.ablateSkill = true;
     else if (name === "--decider-cmd") {
       const v = readVal();
       if (eqVal === undefined && v.startsWith("-"))
@@ -1066,6 +1068,7 @@ async function runOneScenario(p: {
       externalChannel,
       hooks: renderer ? [renderer] : [],
       compact: !!(flags.compact || flags.demo), // --demo implies --compact
+      ablateSkill: flags.ablateSkill,
       translateRef,
     });
   } catch (e) {
@@ -3443,10 +3446,11 @@ function cmdTrace(args: string[]) {
   ensureOutputFormat("trace", args);
   const json = isJsonOutput(args);
 
-  // --view tools|questions|dispatches replaces the three boolean flags. Legacy flags kept as aliases.
+  // --view <name> selects the rollup; the three legacy boolean flags (--tools/--gates/--dispatches) were
+  // removed and now error as unknown flags (see rejectUnknownFlags below).
   const viewIdx = args.indexOf("--view");
   const viewEqMatch = args.find((a) => a.startsWith("--view="));
-  let viewArg: string | undefined = viewEqMatch ? viewEqMatch.slice("--view=".length) : viewIdx >= 0 ? args[viewIdx + 1] : undefined;
+  const viewArg: string | undefined = viewEqMatch ? viewEqMatch.slice("--view=".length) : viewIdx >= 0 ? args[viewIdx + 1] : undefined;
 
   const VIEWS = ["tools", "questions", "dispatches", "tool-durations", "tool-errors", "files", "usage"] as const;
   type View = (typeof VIEWS)[number];
@@ -3454,19 +3458,6 @@ function cmdTrace(args: string[]) {
     fail("trace", "usage", `--view: expected one of ${VIEWS.join("|")}, got "${viewArg}"`, undefined, json);
     return;
   }
-
-  // Legacy flag aliases: --tools → tools, --gates → questions (renamed; old --gates still accepted),
-  // --dispatches → dispatches.
-  const legacyTools = args.includes("--tools");
-  const legacyGates = args.includes("--gates");
-  const legacyDispatches = args.includes("--dispatches");
-  const legacyCount = [legacyTools, legacyGates, legacyDispatches].filter(Boolean).length;
-  if (viewArg !== undefined && legacyCount > 0)
-    fail("trace", "usage", "--view and legacy flags (--tools/--gates/--dispatches) are mutually exclusive", undefined, json);
-  if (legacyCount > 1) fail("trace", "usage", "trace --tools/--gates/--dispatches are mutually exclusive (prefer --view)", undefined, json);
-  if (legacyTools) viewArg = "tools";
-  if (legacyGates) viewArg = "questions";
-  if (legacyDispatches) viewArg = "dispatches";
 
   const view = viewArg as View | undefined;
 
@@ -3484,9 +3475,6 @@ function cmdTrace(args: string[]) {
       "--output-format",
       "--output-format=json",
       "--output-format=text",
-      "--tools",
-      "--gates",
-      "--dispatches", // legacy aliases
       "--translate-paths",
     ],
     json,

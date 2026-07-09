@@ -506,6 +506,43 @@
               "artifact"
             ],
             "additionalProperties": false
+          },
+          "semantic_matches": {
+            "description": "LIVE-ONLY: a pinned LLM judge grades the rubric against the run's answer; skipped-loud on replay (like egress_*)",
+            "type": "object",
+            "properties": {
+              "rubric": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "description": "fixed, authored checkable claims — a pinned judge grades each; results align by INDEX (not re-extracted per rep)"
+              },
+              "min_pass": {
+                "description": "how many rubric claims must pass for the assert to pass (default: all; do NOT rely on all for a gating scenario)",
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "const": "all"
+                  },
+                  {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                  }
+                ]
+              },
+              "judge_model": {
+                "description": "override the run-level pinned judge model for this assert",
+                "type": "string"
+              }
+            },
+            "required": [
+              "rubric"
+            ],
+            "additionalProperties": false
           }
         },
         "additionalProperties": false

@@ -2,26 +2,28 @@
 
 Start with the [project README](../README.md) for the overview and quick start, then dig in here.
 
-**Reading order (start here):** [../examples/README.md](../examples/README.md) (token-free `replay` + worked examples) → [boundary.md](./boundary.md) (the limitations model) → [session.md](./session.md) + [scenario.md](./scenario.md) (authoring tests) → [chat.md](./chat.md) (interactive debugging) → [cassette.md](./cassette.md) (record/replay deep-dive) → [debugging.md](./debugging.md) (when a run misbehaves or you don't trust a green) → [gotchas.md](./gotchas.md) (setup troubleshooting FAQ).
+**Reading order (author → run → debug):** get oriented with [../examples/README.md](../examples/README.md) (token-free `replay` + worked examples) and [boundary.md](./boundary.md) (the limitations model) → **author:** [session.md](./session.md) + [scenario.md](./scenario.md) → **run, record & lock:** [cassette.md](./cassette.md) (record/replay deep-dive), [stats.md](./stats.md) (cross-run history), [run-status.md](./run-status.md) (liveness) → **debug:** [debugging.md](./debugging.md) (when a run misbehaves or you don't trust a green) + [chat.md](./chat.md) (interactive reproduction) → [gotchas.md](./gotchas.md) (setup troubleshooting FAQ).
 
 > **Before a first *live* run** (any tier above `replay`/`protocol`): run `cowork-harness doctor` (or `doctor --tier <t>`) to check Docker + staged agent + token. `lint` needs **python3** on PATH; `--fidelity microvm` needs a one-time `cowork-harness vm init`. Replay-only usage (running only committed cassettes) can **skip** `doctor` entirely — its default `container` tier checks Docker + the staged agent, neither of which replay touches. Note that **every** tier still validates an auth token — even `doctor --tier protocol` requires one, since `protocol` still calls a real model.
 
 ## Guides
 
+Grouped by the same **author → run → debug** spine as the reading order above.
+
 | Doc | What it covers |
 |---|---|
 | [boundary.md](./boundary.md) | **The limitations model** — how the harness reproduces Cowork's sealed filesystem, default-deny egress, and MCP-only crossing, per fidelity tier; how to verify it. Read this if you care about *constraint* fidelity. |
-| [session.md](./session.md) | Reference for `sessions/*.yaml` — every pre-prompt setting (model, folders/projects, uploads, discovery, egress) and its Cowork mapping. |
-| [scenario.md](./scenario.md) | Reference for `scenarios/*.yaml` — prompt, scripted answers, assertions. |
-| [chat.md](./chat.md) | Reference for the interactive `chat` command — multi-turn sessions, `--folder`, fidelity tiers, and how it differs from `skill`. |
-| [debugging.md](./debugging.md) | **Debugging a run** — the post-hoc loop (`inspect` → `trace` → `chat` → `verify-run`) for a misbehaving skill, and how to hunt a false-green (Gotchas, `lint`, `verify-cassettes`). A router into the tools, not a re-doc. |
-| [fidelity-gaps.md](./fidelity-gaps.md) | What the harness deliberately does NOT reproduce vs real Cowork — the known, faithful gaps. |
-| [decider-dir.md](./decider-dir.md) | The `--decider-dir` recipe — answer LIVE questions in-band from a driving agent: the gates/answer file channel (`req-N.json`/`resp-N.json`) plus a Monitor walkthrough. |
-| [run-status.md](./run-status.md) | Checking whether a background run is alive without `ps aux` — the `status.json` file + `cowork-harness status [--follow]`. |
-| [cassette.md](./cassette.md) | Cassette `record`/`replay` — file shape, the assertion table (content vs. skipped), full-fidelity replay (`controlOut` + the O7 guard), backward compat, and the committed CI fixture. |
+| [session.md](./session.md) | **Author** — reference for `sessions/*.yaml`: every pre-prompt setting (model, folders/projects, uploads, discovery, egress) and its Cowork mapping. |
+| [scenario.md](./scenario.md) | **Author** — reference for `scenarios/*.yaml`: prompt, scripted answers, assertions. |
+| [cassette.md](./cassette.md) | **Run, record & lock** — cassette `record`/`replay`: file shape, the assertion table (content vs. skipped), full-fidelity replay (`controlOut` + the O7 guard), backward compat, and the committed CI fixture. |
+| [stats.md](./stats.md) | **Run** — the `stats` command + `index.jsonl`: querying pass rate, cost/duration/token/turn percentiles, and last-green across every past run, filtered/windowed per scenario. |
+| [run-status.md](./run-status.md) | **Run** — checking whether a background run is alive without `ps aux`: the `status.json` file + `cowork-harness status [--follow]`. |
+| [debugging.md](./debugging.md) | **Debug** — the post-hoc loop (`inspect` → `trace` → `verify-run` → `diff`) for a misbehaving skill, and how to hunt a false-green (Gotchas, `lint`, `verify-cassettes`). A router into the tools, not a re-doc. |
+| [chat.md](./chat.md) | **Debug** — reference for the interactive `chat` command: multi-turn sessions, `--folder`, fidelity tiers, and how it differs from `skill`. |
+| [decider-dir.md](./decider-dir.md) | **Debug** — the `--decider-dir` recipe: answer LIVE questions in-band from a driving agent: the gates/answer file channel (`req-N.json`/`resp-N.json`) plus a Monitor walkthrough. |
+| [fidelity-gaps.md](./fidelity-gaps.md) | **Debug** — what the harness deliberately does NOT reproduce vs real Cowork: the known, faithful gaps (sometimes the "bug" is one of these). |
 | [discovery.md](./discovery.md) | Where the agent finds marketplaces, plugins, skills, MCP servers — and how to override each for tests. |
 | [maintenance.md](./maintenance.md) | Keeping parity across Claude Desktop releases with `cowork-harness sync`. |
-| [stats.md](./stats.md) | The `stats` command + `index.jsonl` — querying pass rate, cost/duration/token/turn percentiles, and last-green across every past run, filtered/windowed per scenario. |
 | [protocol.md](./protocol.md) | The hand-authored `schema/protocol.v1.json` control-channel wire-protocol schema — versioning policy, golden vector pack, and its explicit descriptive-not-normative scope. |
 | [invariants.md](./invariants.md) | A consolidated index of the harness's cross-cutting invariants, one row per invariant with its enforcement point and test anchor. |
 | [../python/README.md](../python/README.md) | The **`cowork` pytest lane** — drive any of the above from `pytest` (incl. `serve_decider` for live-question helpers). |

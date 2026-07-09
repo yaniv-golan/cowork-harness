@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import uuid
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Union
 
@@ -50,6 +51,12 @@ class Result:
     @property
     def result(self) -> str:
         return self.data.get("result", "error")
+
+    @property
+    def turn(self) -> Optional[int]:
+        """1-based turn number within a resumed session (from conversation()/--resume); 1 for a normal
+        single-shot run, None on replay/chat lanes that don't track it."""
+        return self.data.get("turn")
 
     @property
     def effective_fidelity(self) -> Optional[str]:
@@ -252,6 +259,38 @@ class Skill:
             args += ["--decider-cmd", decider_cmd]
         return self._runner._invoke(args, check=check)
 
+    def conversation(
+        self,
+        prompts: list[str],
+        *,
+        fidelity: str = "container",
+        session_id: Optional[str] = None,
+        check: bool = False,
+        **kw,
+    ) -> list[Result]:
+        """Feed N user turns to ONE persisted session and return a `Result` per turn.
+
+        Turn 1 pins a stable ``--session-id``; every later turn adds ``--resume`` so the agent
+        reloads the conversation (its native session persists in the bind-mounted ``mnt/.claude``).
+        This makes the natural "ask -> inspect -> follow-up" loop (self-report, iterative probing) a
+        first-class, single-call API instead of hand-stitched ``session_id`` + ``resume`` calls.
+
+        Requires a SANDBOXED fidelity (``container`` and up) for real cross-turn persistence —
+        ``protocol`` has no durable session store. ``container`` is the tier whose cross-container
+        continuity is covered by the integration test; the other sandboxed tiers use the same
+        bind-mounted session store but aren't separately proven here. Each returned ``Result`` carries
+        its own ``.turn`` (1-based), and each turn's transcript/result is preserved on disk as
+        ``run.turn-<N>.jsonl`` / ``result.turn-<N>.json`` (the live one is the latest turn).
+        """
+        if fidelity == "protocol":
+            raise ValueError("conversation() needs a sandboxed fidelity (container+); protocol has no durable session store")
+        sid = session_id or f"conv-{uuid.uuid4().hex[:12]}"
+        results: list[Result] = []
+        for i, p in enumerate(prompts):
+            r = self.run(p, fidelity=fidelity, session_id=sid, resume=(i > 0), check=check, **kw)
+            results.append(r)
+        return results
+
 
 class Cowork:
     def __init__(self, cli: Optional[str] = None):
@@ -297,7 +336,7 @@ class Cowork:
         Raises RuntimeError on a nonzero exit code or unparseable stdout so that a failed
         trace is never silently indistinguishable from a legitimately empty trace (#11).
         """
-        args = ["trace", target, "--output-format", "json"] + (["--tools"] if tools else [])
+        args = ["trace", target, "--output-format", "json"] + (["--view", "tools"] if tools else [])
         proc = subprocess.run(["node", self.cli, *args], capture_output=True, text=True)
         if proc.returncode != 0:
             raise RuntimeError(

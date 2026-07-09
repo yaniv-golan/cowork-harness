@@ -1,0 +1,16 @@
+name: eval-13-multi-key-and-tool-called-semantics
+baseline: latest
+session: ./_session.yaml
+fidelity: container
+prompt: 'Two questions about assertions. First, if I put `{tool_called: Write, egress_denied: api.example.com}`
+  as one assert item and the run is green, does that prove BOTH happened? Second, does `tool_called: Bash`
+  prove the agent at least attempted to run Bash?'
+assert:
+- semantic_matches:
+    rubric:
+    - A single assert item with more than one key is an AND — it passes only if every key passes
+    - A mixed content+live item (like tool_called + egress_denied) loses its filesystem/egress half on
+      the token-free replay lane
+    - 'tool_called does not mean ''attempted'': tool counts are authoritative and de-duped'
+    - A tool that was requested then denied does not register as tool_called
+    - tool_called proves the tool actually ran, not merely that it was attempted

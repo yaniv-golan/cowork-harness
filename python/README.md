@@ -100,6 +100,7 @@ pytest -m 'not cowork'      # the fast loop (skips this lane) — the CI default
 | Call | Returns | Key params |
 |---|---|---|
 | `cowork.skill(folder).run(prompt, …)` | `Result` | `answers`, `on_unanswered`, `fidelity`, `upload`, `folder`, `session_id`+`resume`, `decider_cmd`, `prompt_file`, `check` |
+| `cowork.skill(folder).conversation([p1, p2, …], …)` | `list[Result]` | feeds N user turns to ONE persisted session (turn 1 pins `--session-id`, later turns add `--resume`) and returns a `Result` per turn — the "ask → inspect → follow-up" loop as one call. Needs a sandboxed `fidelity` (container+); each `Result` carries its own `.turn`. |
 | `cowork.run_scenario(path, …)` | `Result` \| `BatchResult` | `on_unanswered`, `check` (fidelity/answers are scenario-authored) |
 | `cowork.replay(cassette, …)` | `Result` \| `BatchResult` | — (deterministic; content assertions only) |
 | `cowork.trace(run_id_or_dir, …)` | `list[dict]` | `tools` |
@@ -160,8 +161,8 @@ pytest -m 'not cowork'      # the fast loop (skips this lane) — the CI default
   `.results`. A single-file input still returns a plain `Result`.
 - `cowork.trace(run_id_or_dir, tools=False)` → `list[dict]` of trace rows (tool calls, sub-agent
   dispatches, decisions) — for asserting the *real* dispatch count vs. todo items named after sub-agents.
-  Pass `tools=True` to include tool rows (drives the CLI's legacy `--tools`; the canonical CLI form is
-  `--view tools|questions|dispatches`).
+  Pass `tools=True` to include tool rows (runs `trace --view tools`; the CLI view set is
+  `--view tools|questions|dispatches|tool-durations|tool-errors|files|usage`).
 - `Result`: `.assert_success()`, `.assert_transcript_contains(s)`, `.assert_tool_called(name)`,
   `.assert_subagent_dispatched(agent_type)`, `.assert_dispatch_count_max(n)`,
   `.assert_artifact_json(rel_path, predicate)`; plus `.result`, `.out_dir`, `.work_dir`, `.outputs_dir`

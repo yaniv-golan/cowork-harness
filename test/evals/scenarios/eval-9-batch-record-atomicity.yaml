@@ -1,0 +1,19 @@
+name: eval-9-batch-record-atomicity
+baseline: latest
+session: ./_session.yaml
+fidelity: container
+prompt: I'm about to run `cowork-harness record scenarios/ --concurrency 4` over 20 scenarios in CI. If
+  the job gets OOM-killed or one scenario fails mid-batch, can I end up with corrupt or half-written cassettes
+  committed to my repo? What are the actual failure semantics?
+assert:
+- semantic_matches:
+    rubric:
+    - Each cassette is written via a same-dir temp file + atomic rename, so a crash can't leave a partial/corrupt
+      cassette
+    - Scenarios in a batch are independent; one failure does not roll back or halt siblings
+    - The batch continues on a failure but exits non-zero (1) if any scenario failed, so CI still fails
+      loud
+    - Runs are fully isolated per scenario (unique sidecar networks/proxy), so --concurrency doesn't cause
+      cross-talk
+    - The batch is NOT all-or-nothing/transactional, and a mid-batch failure does not corrupt previously
+      written cassettes

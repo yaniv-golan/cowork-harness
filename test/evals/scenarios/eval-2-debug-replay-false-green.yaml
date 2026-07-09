@@ -1,0 +1,19 @@
+name: eval-2-debug-replay-false-green
+baseline: latest
+session: ./_session.yaml
+fidelity: container
+prompt: "My cowork-harness scenario passes on our per-PR CI gate (which uses `cowork-harness replay`),\
+  \ but the deliverable file it's supposed to check is actually empty in real runs. Here's the scenario:\n\
+  \n```yaml\nname: report-check\nfidelity: container\nprompt: Generate the weekly report to outputs/report.md\n\
+  assert:\n  - file_exists: outputs/report.md\n```\n\nWhy is CI green when the output is wrong, and how\
+  \ do I fix it?"
+assert:
+- semantic_matches:
+    rubric:
+    - file_exists is satisfied by the path being present in the recorded artifacts manifest, not by the
+      file size or content, so a 0-byte or placeholder outputs/report.md passes exactly like a real one
+    - Whether file_exists is even evaluated on replay depends on the cassette carrying a record-time artifacts
+      manifest (with one it runs against the manifest; a manifest-less cassette skips it rather than failing)
+    - 'The fix is to assert on content rather than mere existence: a content-class assertion (e.g. transcript_contains
+      or transcript_matches on a stable marker) that survives replay and fails on empty output'
+    min_pass: 2

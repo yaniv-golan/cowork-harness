@@ -1,0 +1,17 @@
+name: eval-16-gate-count-and-vacuous-delivery
+baseline: latest
+session: ./_session.yaml
+fidelity: container
+prompt: 'I asserted `questions_count_max: 3` and it failed on a run that only presented one AskUserQuestion
+  gate. And separately `gate_answers_delivered: true` passed on a run where I don''t think any gate fired
+  at all. Are both of these behaving correctly?'
+assert:
+- semantic_matches:
+    rubric:
+    - questions_count_max counts sub-questions, not gates — one AskUserQuestion call can bundle several
+      sub-questions
+    - A single gate bundling 3 sub-questions counts as 3 against questions_count_max
+    - Recommends reading the per-gate sub-question count from trace --view questions
+    - 'gate_answers_delivered: true passes vacuously when no gate fires at all'
+    - Whether a gate fires is model-dependent, so gate_answers_delivered can't catch 'the gate never fired'
+    - 'Pair gate_answers_delivered with gate_answer_count_min: 1 when the presence of a gate matters'

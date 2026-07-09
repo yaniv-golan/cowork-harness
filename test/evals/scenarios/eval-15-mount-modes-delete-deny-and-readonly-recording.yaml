@@ -1,0 +1,19 @@
+name: eval-15-mount-modes-delete-deny-and-readonly-recording
+baseline: latest
+session: ./_session.yaml
+fidelity: container
+prompt: 'I set a connected folder to `mode: rwd` expecting delete-protection on outputs/, but `rm` succeeded
+  in the run. Separately, for a `mode: r` connected folder, are its files captured in the cassette, and
+  do `file_exists` and `artifact_json` work against them on replay?'
+assert:
+- semantic_matches:
+    rubric:
+    - 'A mode: r mount gets a real :ro bind, so a write fails in-guest'
+    - 'mode: rw vs rwd (delete protection on outputs/ or connected folders) is NOT mount-enforced — an
+      rm succeeds in-guest'
+    - rwd delete-protection is only caught post-hoc by the no_delete_in_outputs assertion
+    - 'A mode: r folder''s contents are recorded body-less (path plus hash, truncated, no body) since
+      it''s an input, not a deliverable'
+    - file_exists (and computer_links_resolve) still pass on replay against the hash-only placeholder
+    - 'artifact_json reports evidence-unavailable on every lane (live, verify-run, replay) for a mode:
+      r file'

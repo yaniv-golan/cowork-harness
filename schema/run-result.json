@@ -21,6 +21,48 @@
     "generator": {
       "type": "string"
     },
+    "turn": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "1-based turn number within a resumed (--session-id + --resume) session; 1 for a normal single-shot run. result.json/run.jsonl hold the latest turn, prior turns are archived as result.turn-<N>.json / run.turn-<N>.jsonl. Absent on replay/chat lanes."
+    },
+    "referencesRead": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Skill reference/script files the agent Read (skill-relative: references/foo.md, scripts/bar.py), deduped in first-seen order. A progressive-disclosure signal for skill-quality measurement. Main-agent Reads only (sub-agent reads not attributed); references/ and scripts/ under a mounted plugin root, not assets/, never SKILL.md (delivered whole). Present on both live and replay."
+    },
+    "ablated": {
+      "type": "boolean",
+      "description": "True when the run was ablated (--ablate-skill): the skill(s)-under-test were removed so the same prompt runs with no skill — a negative control for skill-lift measurement. Never read an ablated run as a real (with-skill) pass."
+    },
+    "finalMessage": {
+      "type": "string",
+      "description": "The agent's final answer text — the SDK result message's designated answer, not the joined transcript of every assistant turn. Absent when no result event carried text (a spawn/exit error before the result)."
+    },
+    "resources": {
+      "type": "object",
+      "description": "Resource telemetry sampled during the run (tier, sample count/interval, peak RSS bytes, avg/peak CPU%). Live lane only."
+    },
+    "contextEvents": {
+      "type": "array",
+      "items": { "type": "object" },
+      "description": "Context lifecycle events incl. compaction boundaries ({subtype, ts?, data?})."
+    },
+    "mcpErrors": {
+      "type": "array",
+      "items": { "type": "object" },
+      "description": "Failed MCP round-trips ({server, code?, message}). Live lane only."
+    },
+    "hookEvents": {
+      "type": "array",
+      "items": { "type": "object" },
+      "description": "PreToolUse hook block/allow decisions ({callbackId, decision, reason?, tool?})."
+    },
+    "presentedFiles": {
+      "type": "array",
+      "items": { "type": "object" },
+      "description": "present_files promotions ({from, to, promoted, leaked}) — scratch→outputs deliverable surfacing (container tier)."
+    },
     "mode": {
       "type": "string",
       "enum": [

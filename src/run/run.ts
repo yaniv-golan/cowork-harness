@@ -32,6 +32,17 @@ function capDecisionInput(input: unknown): unknown {
   }
 }
 
+/** Classify a `Read` tool's `file_path` as a skill reference/script access, returning the skill-relative
+ *  suffix (`references/foo.md`, `scripts/bar.py`) or undefined if it isn't one. Namespace-agnostic: it
+ *  keys off the mounted plugin-root marker (`.local-plugins`/`.remote-plugins`) plus a `references/` or
+ *  `scripts/` segment, so it works regardless of the container-vs-host path shape. `SKILL.md` is delivered
+ *  whole (never Read as a file), so this only ever covers references/ and scripts/. */
+export function skillReferenceReadPath(filePath: string): string | undefined {
+  if (!filePath || !/(?:\.local-plugins|\.remote-plugins)\//.test(filePath)) return undefined;
+  const m = filePath.match(/\/((?:references|scripts)\/.+)$/);
+  return m ? m[1] : undefined;
+}
+
 /** Extract the ordered `file_path` list from a `mcp__cowork__present_files` tool_use's `input`
  *  (`{ files: [{ file_path }, …] }`) — guards every shape (missing/non-array `files`, a non-object or
  *  non-string-`file_path` entry) so a malformed input can't throw mid-drive; a bad entry is just
@@ -125,7 +136,7 @@ export interface DecisionRecord {
   name: string;
   decision: string;
   by: string;
-  // The gate's request_id (UUID). Present on question decisions so `trace --gates` can pair a persisted
+  // The gate's request_id (UUID). Present on question decisions so `trace --view questions` can pair a persisted
   // decision to its events.jsonl row BY ID rather than positionally — a retried/duplicated gate event
   // would otherwise shift every later row's `by`/`model` label. Absent on older records (positional fallback).
   requestId?: string;
@@ -153,6 +164,11 @@ export interface RunRecord {
   // Pass-through diagnostic — captured on the result event, surfaced so a debugger can tell turn-exhaustion
   // from a generic execution error. Undefined until a result event with a subtype is seen.
   resultSubtype?: string;
+  // The SDK result message's text (`{type:"result"}`.result) — the model's designated FINAL answer,
+  // distinct from the joined `transcript` (every assistant turn concatenated). This is what
+  // llm-transport treats as "the answer"; surfaced as RunResult.finalMessage. Undefined until a result
+  // event carries text.
+  resultText?: string;
   // set true when the run ended on an unanswered plain-text question (see the post-loop detector in
   // drive()). Mapped into RunResult by execute.ts (live) and cassette.ts (replay re-drive).
   stalledOnQuestion?: boolean;
@@ -178,6 +194,7 @@ export interface RunRecord {
   usage?: UsageInfo;
   cost?: CostInfo;
   skillsInvoked: string[]; // top-level Skill tool_use ids, in call order, duplicates kept
+  filesRead: string[]; // skill-relative reference/script files the agent Read (progressive-disclosure signal), deduped, first-seen order
   models: string[]; // distinct model ids seen across assistant_text/tool_use/thinking events, first-seen order, deduped
   thinking: { text: string }[]; // reasoning blocks, capped: last 50 × 10KB each
   thinkingElided: number; // count of older thinking blocks dropped past the 50-block cap
@@ -303,6 +320,7 @@ export class Run {
       transcript: "",
       toolsCalled: new Set(),
       toolCounts: {},
+      filesRead: [],
       subagentTools: new Set(),
       subagents: [],
       questions: [],
@@ -455,6 +473,13 @@ export class Run {
               this.rec.toolCounts[ev.name] = (this.rec.toolCounts[ev.name] ?? 0) + 1; // count main-agent calls (isolated sub-agent tools excluded, matching toolsCalled)
               // a top-level (or fork-nested) Skill invocation — duplicates kept (re-triggering is signal).
               if (ev.name === "Skill") this.rec.skillsInvoked.push(String((ev.input as Record<string, unknown> | undefined)?.skill ?? ""));
+              // Progressive-disclosure signal: which of the skill's reference/script files the agent
+              // actually Read (SKILL.md is delivered whole, never Read as a file — so this covers
+              // references/* and scripts/*). Deduped, first-seen order.
+              if (ev.name === "Read") {
+                const ref = skillReferenceReadPath(String((ev.input as Record<string, unknown> | undefined)?.file_path ?? ""));
+                if (ref && !this.rec.filesRead.includes(ref)) this.rec.filesRead.push(ref);
+              }
               if (ev.toolUseId) this.toolNameByUseId.set(ev.toolUseId, ev.name);
               // A Skill call inherits the main agent's context when it runs (fork context) — seed its id so
               // any children it dispatches are recognized as main-agent flow too, transitively.
@@ -587,6 +612,9 @@ export class Run {
             // Pass through the SDK subtype on BOTH branches (a diagnostic, not just an error signal) —
             // error_max_turns / error_during_execution on failure, success on the clean path.
             if (ev.subtype !== undefined) this.rec.resultSubtype = ev.subtype;
+            // The SDK's designated final answer text (surfaced as RunResult.finalMessage). Kept even on
+            // an is_error result — the result text often IS the diagnostic.
+            if (ev.resultText !== undefined) this.rec.resultText = ev.resultText;
             if (ev.isError) {
               this.rec.result = "error";
               // path (a): the SDK wrapped a transport failure into an is_error result — the result IS the
@@ -864,7 +892,7 @@ export class Run {
         name: "AskUserQuestion",
         decision: "answered",
         by,
-        requestId: req.id, // for id-keyed pairing in `trace --gates` (not positional)
+        requestId: req.id, // for id-keyed pairing in `trace --view questions` (not positional)
         model,
         detail: answers,
         rationale,

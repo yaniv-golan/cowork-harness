@@ -970,6 +970,7 @@ function minimalRec(): RunRecord {
     transcript: "",
     toolsCalled: new Set(),
     toolCounts: {},
+    filesRead: [],
     subagentTools: new Set(),
     subagents: [],
     questions: [],
@@ -2441,10 +2442,14 @@ async function recordScenarioObject(
  *  non-zero exit (the cardinal no-false-green rule). */
 function replayErrorResult(file: string): RunResult {
   return assembleRunResult({
+    turn: undefined, // replay reconstructs one recorded run; no multi-turn attribution
+    referencesRead: undefined, // synthetic error result for an unreadable cassette — no re-drive, nothing to derive
+    ablated: undefined, // replay reconstructs a recorded run; ablation is a live-run control
     scenario: file,
     fidelity: "replay",
     baseline: "",
     result: "error",
+    finalMessage: undefined, // truncated/error cassette — no re-drive, no result text
     decisions: [],
     egress: [],
     assertions: [],
@@ -3694,6 +3699,7 @@ export const LIVE_ONLY_KEYS: (keyof Assertion)[] = [
   "transcript_no_host_path",
   "no_mcp_error",
   "max_peak_rss_bytes",
+  "semantic_matches", // LIVE-ONLY: LLM-judge grade; skipped-loud on replay (the judge is a live model call)
 ];
 
 /** Replay a cassette through Run and re-evaluate the content assertions. With a `cassette.artifacts`
@@ -3849,13 +3855,7 @@ export async function replayCassette(
       "computer_links_resolve_if_present",
       "no_unexpected_files",
       "input_unmodified",
-      "egress_denied",
-      "egress_allowed",
-      "no_delete_in_outputs",
-      "self_heal_ran",
-      "transcript_no_host_path",
-      "no_mcp_error",
-      "max_peak_rss_bytes",
+      ...LIVE_ONLY_KEYS, // single source of truth for the live-only bucket (stripped on replay)
       "replay_protocol_fidelity",
       // (verdict modifiers allow_permissive_auto_allow / allow_missing_capability / allow_l0_plugin_divergence
       //  arrive via ...alwaysContentKeys above — kept on replay as no-op passes.)
@@ -4125,6 +4125,9 @@ export async function replayCassette(
     }
 
     return assembleRunResult({
+      turn: undefined, // replay reconstructs one recorded run; no multi-turn attribution
+      referencesRead: rec.filesRead.length ? rec.filesRead : undefined, // re-derived from the frozen Read events on the replay re-drive, same as toolCounts
+      ablated: undefined, // replay reconstructs a recorded run; ablation is a live-run control
       scenario: cassette.scenario.name,
       mode: "run",
       // Pass through the frozen recording-time provenance — an older cassette that predates
@@ -4139,6 +4142,7 @@ export async function replayCassette(
       resultErrorKind: rec.resultErrorKind, // re-derived by run.ts during the replay re-drive (same classifier)
       errorSource: rec.errorSource, // re-derived by run.ts during the replay re-drive, same as resultErrorKind
       resultSubtype: rec.resultSubtype, // re-derived from the frozen result event on the replay re-drive
+      finalMessage: rec.resultText, // the SDK result text, re-derived from the frozen result event
       stderrLogPath: undefined, // live path only — no live process on replay
       stalledOnQuestion: rec.stalledOnQuestion, // re-derived by run.ts's detector during the replay re-drive — so a recorded stall fails replay too
       decisions: rec.decisions.map((d) => ({

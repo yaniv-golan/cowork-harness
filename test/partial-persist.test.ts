@@ -14,6 +14,7 @@ function partialRecord(over: Partial<RunRecord> = {}): RunRecord {
     transcript: "I read the PDF and extracted the cap table.",
     toolsCalled: new Set(["Read"]),
     toolCounts: { Read: 1 },
+    filesRead: [],
     subagentTools: new Set(),
     subagents: [],
     questions: [],

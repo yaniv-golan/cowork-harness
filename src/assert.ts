@@ -175,8 +175,28 @@ export function hostMatches(host: string, needle: string): boolean {
   return h === n || h.endsWith("." + n);
 }
 
+/** One graded rubric claim from the semantic judge. Results align to the rubric BY INDEX, not by claim
+ *  text — the judge may reword a claim between calls, so text-keyed aggregation would misalign. */
+export interface SemanticClaimResult {
+  index: number;
+  claim: string;
+  pass: boolean;
+}
+/** The semantic judge: grade a fixed rubric against the run's answer. LIVE-ONLY (a real model call).
+ *  Injectable so tests can stub it; the real judge is `makeSemanticJudge` in src/decide/. `model` is the
+ *  resolved judge model id, recorded as provenance (`RunResult.assertions[].judgeModel`); a stub may omit it. */
+export type SemanticJudge = ((rubric: string[], answer: string) => Promise<SemanticClaimResult[]>) & { model?: string };
+
 export interface AssertContext {
   transcript: string;
+  /** LIVE-ONLY, populated by runSemanticJudges (an async pre-pass) BEFORE the synchronous evaluate(),
+   *  so check() reads judge results synchronously and evaluate() stays pure (replay determinism intact).
+   *  Absent on replay (semantic_matches is stripped as live-only) or on a live run where the pre-pass
+   *  wasn't run → semantic_matches then fails evidence-unavailable, never vacuous-passes. */
+  semanticResults?: Map<Assertion, SemanticClaimResult[]>;
+  /** Which judge model graded each `semantic_matches` assert (provenance) — populated by
+   *  runSemanticJudges alongside semanticResults, surfaced as `RunResult.assertions[].judgeModel`. */
+  judgeModels?: Map<Assertion, string>;
   toolsCalled: Set<string>;
   subagentTools: Set<string>;
   egress: RunResult["egress"];
@@ -402,6 +422,32 @@ export function evaluate(assertions: Assertion[], ctx: AssertContext): RunResult
   return assertions.map((a) => check(a, ctx));
 }
 
+/** LIVE-ONLY async pre-pass. Grade every `semantic_matches` assert (via the supplied judge) and stash
+ *  per-claim results in `ctx.semanticResults`, so the SYNCHRONOUS evaluate()/check() can read them. Call
+ *  BEFORE evaluate() on the LIVE lane only — the replay lane strips `semantic_matches` (LIVE_ONLY_KEYS)
+ *  and must never reach a model. Keeping the only async/model code here is what preserves evaluate()'s
+ *  synchronous, replay-deterministic contract. The judge is REQUIRED (no default) so a live run can't
+ *  silently grade with a placeholder — the real judge is `makeSemanticJudge` in src/decide/. */
+export async function runSemanticJudges(
+  assertions: Assertion[],
+  ctx: AssertContext,
+  judge: SemanticJudge,
+  /** Factory for a per-assert `judge_model` override — the run-level `judge` is used when an assert
+   *  doesn't override, or when no factory is supplied (e.g. a test stub). */
+  judgeFor?: (model: string) => SemanticJudge,
+): Promise<void> {
+  if (!ctx.semanticResults) ctx.semanticResults = new Map();
+  if (!ctx.judgeModels) ctx.judgeModels = new Map();
+  for (const a of assertions) {
+    if (a.semantic_matches === undefined) continue;
+    const override = a.semantic_matches.judge_model;
+    const j = override && judgeFor ? judgeFor(override) : judge;
+    ctx.semanticResults.set(a, await j(a.semantic_matches.rubric, ctx.transcript));
+    // Record the model that actually graded (override if wired, else the run-level judge's resolved id).
+    ctx.judgeModels.set(a, j.model ?? override ?? "unknown");
+  }
+}
+
 // A passing check may carry an optional `evidence` string — the concrete file/value/tool/link that
 // satisfied it — surfaced by `replay --explain` so a green can be trusted, not assumed vacuous. Absent
 // evidence is a clean opt-out (a check with nothing concrete to cite, e.g. a verdict modifier).
@@ -415,7 +461,10 @@ type KeyResult = { pass: true; evidence?: string } | { pass: false; message: str
  * cannot be evaluated (filesystem/egress, or question/gate when controlOut is absent) are stripped
  * from the object BEFORE this runs (see replayCassette), so AND never straddles replay classes.
  */
-function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: boolean; message?: string; evidence?: string } {
+function check(
+  a: Assertion,
+  ctx: AssertContext,
+): { assertion: Assertion; pass: boolean; message?: string; evidence?: string; semanticClaims?: SemanticClaimResult[]; judgeModel?: string } {
   const results: KeyResult[] = [];
   const ok = (evidence?: string): KeyResult => ({ pass: true, evidence });
   const fail = (message: string): KeyResult => ({ pass: false, message });
@@ -437,6 +486,25 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
           ? ok()
           : fail(`transcript unexpectedly contains "${a.transcript_not_contains}"`),
     );
+  if (a.semantic_matches !== undefined) {
+    // LIVE-ONLY. Judge results are pre-computed by runSemanticJudges (async pre-pass) into
+    // ctx.semanticResults; check() only reads them, so evaluate() stays synchronous. On replay the key
+    // is stripped (LIVE_ONLY_KEYS) and never reaches here.
+    const judged = ctx.semanticResults?.get(a);
+    if (!judged) {
+      results.push(fail("evidence unavailable: semantic judge not run (semantic_matches is live-only; skipped on replay)"));
+    } else {
+      const passed = judged.filter((c) => c.pass).length;
+      const mp = a.semantic_matches.min_pass;
+      const need = mp === undefined || mp === "all" ? a.semantic_matches.rubric.length : mp;
+      const failedIdx = judged.filter((c) => !c.pass).map((c) => c.index);
+      results.push(
+        passed >= need
+          ? ok(`semantic: ${passed}/${judged.length} rubric claims passed (need ${need})`)
+          : fail(`semantic: ${passed}/${judged.length} rubric claims passed (need ${need}); failed claim indices: ${failedIdx.join(",")}`),
+      );
+    }
+  }
   if (a.tool_result_contains !== undefined) {
     const needle = a.tool_result_contains;
     if (ctx.toolResultsMissing) {
@@ -1367,12 +1435,21 @@ function check(a: Assertion, ctx: AssertContext): { assertion: Assertion; pass: 
     results.push(ctx.result === a.result ? ok(`result: ${ctx.result}`) : fail(`result was ${ctx.result}, expected ${a.result}`));
 
   if (results.length === 0) return { assertion: a, pass: false, message: "empty assertion" };
+  // Structured per-claim results for a semantic_matches assert (undefined for every other key) — so a
+  // consumer gets the per-claim profile, not just the summary message. Attached to fail AND pass.
+  const semanticClaims = a.semantic_matches !== undefined ? ctx.semanticResults?.get(a) : undefined;
+  const judgeModel = a.semantic_matches !== undefined ? ctx.judgeModels?.get(a) : undefined;
+  const withClaims = <T extends object>(r: T): T => ({
+    ...r,
+    ...(semanticClaims ? { semanticClaims } : {}),
+    ...(judgeModel ? { judgeModel } : {}),
+  });
   const firstFail = results.find((r): r is { pass: false; message: string } => !r.pass);
-  if (firstFail) return { assertion: a, pass: false, message: firstFail.message };
+  if (firstFail) return withClaims({ assertion: a, pass: false, message: firstFail.message });
   // All keys passed — gather the evidence each surfaced (AND-joined, one entry per key that cited something).
   const evidence = results
     .map((r) => (r as { evidence?: string }).evidence)
     .filter(Boolean)
     .join("; ");
-  return evidence ? { assertion: a, pass: true, evidence } : { assertion: a, pass: true };
+  return withClaims(evidence ? { assertion: a, pass: true, evidence } : { assertion: a, pass: true });
 }

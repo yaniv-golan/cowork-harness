@@ -1,0 +1,7 @@
+# Installs the companion cowork-harness skill so an eval scenario can ask the agent to use it.
+# Path is relative to this file's dir.
+plugins:
+  local_plugins:
+    - ../../../.claude/skills/cowork-harness
+  enabled:
+    - cowork-harness@local

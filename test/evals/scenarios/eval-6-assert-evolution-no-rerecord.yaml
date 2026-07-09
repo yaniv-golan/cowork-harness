@@ -1,0 +1,19 @@
+name: eval-6-assert-evolution-no-rerecord
+baseline: latest
+session: ./_session.yaml
+fidelity: container
+prompt: 'I have 30 committed cowork-harness cassettes and I want to add a `questions_count_max: 2` assertion
+  to each scenario. Live records cost real tokens — do I need to re-record all 30 cassettes, or is there
+  a cheaper way? Any traps?'
+assert:
+- semantic_matches:
+    rubric:
+    - 'No blanket re-record needed: replay --assert-from <scenario.yaml> re-evaluates the edited assert:
+      block against each committed cassette token-free'
+    - questions_count_max is a gate-lifecycle key that needs the cassette's controlOut stream; any modern
+      recording already has it
+    - Only a pre-controlOut cassette needs a single re-record to permanently unlock gate assertions
+    - '--assert-from hard-fails if the scenario''s answers: differ from the recording''s answers, so assert-only
+      edits must be sequenced separately from answer edits'
+    - Answer edits (unlike assert-only edits) do force a re-record
+    - Should not recommend re-recording the whole fleet or hand-editing the cassettes' frozen assert blocks

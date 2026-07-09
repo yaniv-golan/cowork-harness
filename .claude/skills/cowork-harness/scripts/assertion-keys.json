@@ -37,6 +37,7 @@
     "replay_protocol_fidelity",
     "result",
     "self_heal_ran",
+    "semantic_matches",
     "skill_available",
     "skill_tool_used",
     "skill_triggered",

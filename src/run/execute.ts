@@ -1,7 +1,7 @@
 import { warn } from "../io.js";
 import { BoundaryError, UsageError } from "../errors.js";
 import { ZodError } from "zod";
-import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync, readdirSync, statSync, lstatSync, realpathSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync, readdirSync, renameSync, statSync, lstatSync, realpathSync } from "node:fs";
 import { randomUUID, createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
@@ -45,7 +45,8 @@ import { decideLoopFromBaseline, readGateFlag } from "../loop-decision.js";
 import type { WebFetchProvenance } from "../hostloop/workspace-handler.js";
 import { startEgressSidecar, registerCleanup, type EgressSidecar } from "../egress/sidecar.js";
 import { startEgressProxy } from "../egress/proxy.js";
-import { evaluate, hostMatches, budgetFields, type AssertContext } from "../assert.js";
+import { evaluate, hostMatches, budgetFields, runSemanticJudges, type AssertContext, type SemanticJudge } from "../assert.js";
+import { makeSemanticJudge } from "../decide/semantic-judge.js";
 import { compileUserRegex } from "../regex.js";
 import { renderPrompts } from "../prompt.js";
 import { makeDisplayTranslator, vmPathContextFromPlan } from "./display-translate.js";
@@ -90,6 +91,14 @@ export interface ExecuteOptions {
   llmIntent?: string;
   /** override the LLM decider's answering model (`--decider-model`); falls back to env then the Sonnet default. */
   llmModel?: string;
+  /** override the `semantic_matches` judge — mainly so tests inject a stub in place of the live LLM
+   *  judge. Default: makeSemanticJudge() (the real judge, via the shared claude -p transport). */
+  semanticJudge?: SemanticJudge;
+  /** ABLATION (`--ablate-skill`): run the SAME prompt with the skill(s)-under-test removed — a
+   *  deterministic negative control for skill-lift measurement (with-skill vs without). All plugin/skill
+   *  discovery is stripped so nothing mounts and the agent answers from its own priors; the result is
+   *  stamped `ablated:true` so a consumer never reads it as a real run. */
+  ablateSkill?: boolean;
   /** mark the run non-deterministic even if no `by:"llm"` decision (e.g. a driving agent answers via `--decider-dir`). */
   nonDeterministicHint?: boolean;
   hooks?: RunHooks[];
@@ -195,9 +204,18 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // mirror the CLI guard (cli.ts:488) — a library caller skipping the CLI would otherwise get
   // a confusing `cannot resume "undefined"` error deep inside the resume branch.
   if (opts.resume && !opts.sessionId) throw new Error("resume requires sessionId (--session-id was not provided)");
+  // Ablation + resume is incoherent: a resumed session skips re-staging and reuses the prior turn's
+  // already-mounted skill files, so the skill would NOT actually be removed — a green ablation run that
+  // silently still had the skill. Reject rather than stamp a misleading `ablated:true`.
+  if (opts.ablateSkill && opts.resume)
+    throw new UsageError("--ablate-skill cannot be combined with --resume (a resumed session reuses the prior turn's staged skill, so ablation would not take effect)");
 
   const baseline = loadBaseline(scenario.baseline);
-  const session = opts.session ?? loadSessionFromFile(scenario.session);
+  const loadedSession = opts.session ?? loadSessionFromFile(scenario.session);
+  // Ablation: strip ALL skill/plugin discovery so no skill-under-test mounts — the agent answers the
+  // same prompt from its own priors (a deterministic negative control for skill-lift). An empty
+  // local_plugins means no mount is attempted, so the empty-mount hard-fail guard never fires.
+  const session = opts.ablateSkill ? ablateSession(loadedSession) : loadedSession;
 
   // Session identity. Without a stable handle: a fresh ephemeral id (current behavior). WITH one
   // (--session-id / resume): a STABLE cwd id + run dir, so the agent's native sessionFile persists and
@@ -769,7 +787,10 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // exits 2. Skip assertion eval and the capability probe (a real container spawn) — a partial run has no
   // meaningful assertion or verdict outcome.
   if (unansweredErr) {
+    const turn = archivePriorTurnFiles(outDir);
     const partialResult = buildPartialResult({
+      turn,
+      ablated: opts.ablateSkill,
       scenarioName: scenario.name,
       prompt: scenario.prompt,
       fidelity: scenario.fidelity,
@@ -793,9 +814,10 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // Non-null: `durationMs` is set unconditionally just above (`Date.now() - startedAt`) — the field is
     // typed optional on RunResult/PartialResult for OTHER (non-execute.ts) producers, not this call site.
     runCrashSafety.finalize(record, "error", partialResult.durationMs!);
+    // run.jsonl before result.json — see the ordering rationale on the success path below.
+    writeRunJsonl(outDir, scenario, effectiveFidelity, record, egress, secrets, turn);
     writeFileSync(join(outDir, "result.json"), scrub(JSON.stringify(partialResult, null, 2), secrets));
     appendIndexRow(runsWriteRoot(), indexRowFromResult(partialResult, { command: opts.command ?? "run", partial: true }));
-    writeRunJsonl(outDir, scenario, effectiveFidelity, record, egress, secrets);
     writeTrace(outDir, record, egress, secrets, partialResult.durationMs);
     scrubFileInPlace(join(outDir, "events.jsonl"), secrets);
     scrubFileInPlace(join(outDir, "control-out.jsonl"), secrets);
@@ -845,7 +867,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // assembleRunResult call further down. A second read could disagree if the sampler wrote between them.
   const resources = foldResources(outDir, effectiveFidelity, resolveIntervalMs());
 
-  const assertions = evaluate(scenario.assert, {
+  const assertCtx: AssertContext = {
     transcript: record.transcript,
     toolsCalled: record.toolsCalled,
     subagentTools: record.subagentTools,
@@ -908,7 +930,20 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     },
     ...budgetFields(record),
     resources,
-  });
+  };
+
+  // LIVE lane: grade any `semantic_matches` asserts with the LLM judge BEFORE the synchronous
+  // evaluate() reads the per-claim results into check(). Gated so a scenario with no such assert never
+  // spends a model call. (Replay strips `semantic_matches` as live-only, so it never reaches here.)
+  if (scenario.assert.some((a) => a.semantic_matches !== undefined)) {
+    await runSemanticJudges(
+      scenario.assert,
+      assertCtx,
+      opts.semanticJudge ?? makeSemanticJudge(),
+      (model) => makeSemanticJudge({ model }), // honor a per-assert judge_model override
+    );
+  }
+  const assertions = evaluate(scenario.assert, assertCtx);
 
   if (scenario.fidelity === "protocol" && (record.toolsCalled.has("WebFetch") || record.toolsCalled.has("WebSearch"))) {
     warn(`::warning:: ${scenario.name}: a network tool ran at L0 (protocol) — egress is NOT enforced here.\n`);
@@ -1026,10 +1061,18 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // excluded outright.
   const workspaceFiles = classifyWorkspaceFiles(workRoot, userVisibleRoots, readonlyFolderRoots);
 
+  // Multi-turn: archive the prior turn's run.jsonl/result.json (if this is a --resume) and get THIS
+  // turn's number, so the RunResult and run.jsonl agree and each turn's result stays recoverable.
+  const turn = archivePriorTurnFiles(outDir);
+
   const result: RunResult = assembleRunResult({
     $schema: RUN_RESULT_SCHEMA_URL,
     generator: "cowork-harness",
     mode: "run",
+    turn,
+    ablated: opts.ablateSkill || undefined,
+    referencesRead: record.filesRead.length ? record.filesRead : undefined,
+    finalMessage: record.resultText,
     execution: { location: "local" }, // live local run — no scheduled-trigger lane exists yet (no taskKind)
     scenario: scenario.name,
     prompt: scenario.prompt, // persisted for `scaffold <run-dir>`
@@ -1137,9 +1180,13 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   runCrashSafety.finalize(record, result.result, result.durationMs!);
 
   // Artifacts: the harness-observability log `run.jsonl` REPLACES transcript.json/decisions.jsonl.
+  // Write run.jsonl BEFORE result.json: a crash between the two then leaves run.jsonl present (so the
+  // next resume computes turn N+1 and archives this orphan as run.turn-<N>.jsonl) rather than result.json
+  // present with run.jsonl absent (which would recompute the SAME turn N and overwrite the already-archived
+  // result.turn-<N-1>.json). Order matters — do not swap.
+  writeRunJsonl(outDir, scenario, effectiveFidelity, record, egress, secrets, turn);
   writeFileSync(join(outDir, "result.json"), scrub(JSON.stringify(result, null, 2), secrets));
   appendIndexRow(runsWriteRoot(), indexRowFromResult(result, { command: opts.command ?? "run", partial: false }));
-  writeRunJsonl(outDir, scenario, effectiveFidelity, record, egress, secrets);
   writeTrace(outDir, record, egress, secrets, result.durationMs);
   scrubFileInPlace(join(outDir, "events.jsonl"), secrets);
   scrubFileInPlace(join(outDir, "control-out.jsonl"), secrets);
@@ -1216,6 +1263,19 @@ function validateScenarioRegexes(scenario: Scenario, scenarioPath: string): void
   }
 }
 
+/** ABLATION helper: return a clone of `session` with EVERY skill/plugin discovery source emptied, so a
+ *  run mounts no skill-under-test and the agent answers from its own priors. Clones (never mutates) the
+ *  loaded/injected session so a matrix or repeat run reusing the object is unaffected. Model/folders/
+ *  egress are preserved — only skill discovery is removed, which is what makes it a clean with-vs-without
+ *  control. */
+export function ablateSession<T extends { plugins: Record<string, unknown>; skills: Record<string, unknown> }>(session: T): T {
+  return {
+    ...session,
+    plugins: { ...session.plugins, local_plugins: [], remote_plugins: [], local_marketplaces: [], marketplaces: [], enabled: [] },
+    skills: { ...session.skills, local: [] },
+  };
+}
+
 /** Load a session from a file and resolve its internal host paths relative to the session
  * file's own directory (see {@link resolveSessionPaths}). Exported for the matrix runner — cli.ts loads
  * the base session ONCE per matrix run, then applies per-cell overrides (applySessionOverrides,
@@ -1225,7 +1285,33 @@ export function loadSessionFromFile(sessionRef: string): ReturnType<typeof loadS
   return resolveSessionPaths(loadSession(parseSessionFile(sessionRef)), baseDir);
 }
 
-/** the harness-observability JSONL — lifecycle + decisions(by) + subagents + egress + cost. */
+/** THIS write's 1-based turn number, derived from how many prior turns are already archived. Pure — no
+ *  side effects, so it can be read before the result is assembled (to stamp `RunResult.turn`). */
+export function currentTurn(outDir: string): number {
+  const archived = readdirSync(outDir).filter((f) => /^run\.turn-\d+\.jsonl$/.test(f)).length;
+  return archived + (existsSync(join(outDir, "run.jsonl")) ? 1 : 0) + 1;
+}
+
+/** Multi-turn preservation: before a resumed turn overwrites them, archive the prior turn's `run.jsonl`
+ *  and `result.json` under `<name>.turn-<N>` so an earlier turn's transcript/result stays recoverable.
+ *  `run.jsonl`/`result.json` themselves remain the LATEST turn (back-compat: the transcript-sidecar
+ *  readers in cli.ts/assert.ts, and every result.json consumer, read the just-completed run). Returns
+ *  THIS turn's 1-based number. A fresh `--session-id` run rmSync's its dir first, so an existing
+ *  `run.jsonl` here means a genuine resume. Call ONCE per turn, before writing the new result.json. */
+export function archivePriorTurnFiles(outDir: string): number {
+  const turn = currentTurn(outDir);
+  if (turn > 1) {
+    const prior = turn - 1;
+    const runPath = join(outDir, "run.jsonl");
+    if (existsSync(runPath)) renameSync(runPath, join(outDir, `run.turn-${prior}.jsonl`));
+    const resPath = join(outDir, "result.json");
+    if (existsSync(resPath)) renameSync(resPath, join(outDir, `result.turn-${prior}.json`));
+  }
+  return turn;
+}
+
+/** the harness-observability JSONL — lifecycle + decisions(by) + subagents + egress + cost. `turn` is
+ *  computed once by the caller (via {@link archivePriorTurnFiles}) so it matches `result.json`'s. */
 function writeRunJsonl(
   outDir: string,
   scenario: Scenario,
@@ -1233,9 +1319,10 @@ function writeRunJsonl(
   rec: RunRecord,
   egress: RunResult["egress"],
   secrets: string[],
+  turn: number,
 ) {
   const lines = [
-    { t: "run", scenario: scenario.name, fidelity, runId: rec.runId, result: rec.result, cwd: rec.cwd },
+    { t: "run", scenario: scenario.name, fidelity, runId: rec.runId, result: rec.result, cwd: rec.cwd, turn },
     { t: "init", tools: rec.initTools.length },
     ...rec.decisions.map((d) => ({ t: "decision", ...d })),
     ...rec.subagents.map((s) => ({ t: "subagent", ...s })),
@@ -1256,6 +1343,10 @@ function writeRunJsonl(
  *  `partial:true` is the signal that lets consumers (verify-run, scaffold, the footer) refuse to read its
  *  populated `artifacts[]` as a passing run. */
 export function buildPartialResult(args: {
+  /** This turn's 1-based number (multi-turn attribution); undefined for callers that don't track it. */
+  turn?: number;
+  /** True when this partial run was ablated (--ablate-skill). */
+  ablated?: boolean;
   scenarioName: string;
   prompt: string;
   fidelity: string;
@@ -1311,6 +1402,10 @@ export function buildPartialResult(args: {
     $schema: RUN_RESULT_SCHEMA_URL,
     generator: "cowork-harness",
     mode: "run",
+    turn: args.turn,
+    ablated: args.ablated || undefined,
+    referencesRead: args.record.filesRead.length ? args.record.filesRead : undefined,
+    finalMessage: args.record.resultText,
     execution: { location: "local" }, // live local run (salvaged partial) — same basis as the success path
     scenario: args.scenarioName,
     prompt: args.prompt,

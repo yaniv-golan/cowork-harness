@@ -155,7 +155,9 @@ input (instead of a fleet-wide shared root) so editing one skill's sub-agent con
 **Mounting the skill under test:** put the skill folder in `plugins.local_plugins` and enable it via
 `plugins.enabled: [<plugin>@local]`. The folder is copied fresh each run — **git-tracked files** inside a
 repo, so `git add` a new skill (an all-untracked folder hard-fails as a would-be-empty mount;
-`COWORK_HARNESS_GITSET=0` copies untracked). For an ad-hoc `skill` run
+`COWORK_HARNESS_GITSET=0` copies untracked). Tracked = in the index; the **content** copied is the
+**working tree**, so uncommitted edits to a tracked file are tested without a commit — but real Cowork
+ships the committed tree, so commit before recording the locking cassette. For an ad-hoc `skill` run
 with no session file, the CLI flags `--folder <dir>` and `--upload <file>` are the equivalents of
 `folders[]` / `uploads[]`.
 
@@ -286,6 +288,7 @@ same set live from the schema.
 | `egress_allowed: <host>` | the host was allowed through |
 | `no_mcp_error: true` | no MCP round-trip failed (`RunResult.mcpErrors` is empty — no unhandled server, no handler throw) — live-only: MCP round-trips are harness-computed, not in the SDK stdout stream, so evidence-unavailable on replay (never a vacuous pass). **Only `true` is valid** |
 | `max_peak_rss_bytes: <N>` | peak sampled RSS of the agent sandbox ≤ N bytes (`RunResult.resources.peakRssBytes`) — live-only: replay never spawns a sandbox to sample, so evidence-unavailable on replay/protocol (never a vacuous pass); also evidence-unavailable when sampling captured no RSS value |
+| `semantic_matches: {rubric: [...], min_pass?, judge_model?}` | a pinned LLM judge grades each fixed `rubric` claim against the run's answer (`RunResult.finalMessage` — the agent's final result text); the assert passes iff ≥ `min_pass` claims pass (default: all — avoid for a gating scenario). Results align by claim index and are recorded per-claim in `RunResult.assertions[].semanticClaims` (`[{index, claim, pass}]`, so a consumer can diff the per-claim profile across runs). `judge_model` pins the grader (a dated id keeps a before/after comparison reproducible). Live-only: the judge is a live model call, so evidence-unavailable / skipped-loud on replay (never a vacuous pass) |
 | `artifact_json: {artifact, path, …}` | assert a JSON artifact's contents — `equals`/`gt`/`in`/`exists`/`absent`/`is_null` over a dotted `path` (`in` = membership in a list, for a stochastic/LLM value; `absent` ≠ `is_null`; an unresolved intermediate fails loud) |
 | `computer_links_resolve: true` | every `computer://` link in the model-visible transcript resolves to an artifact that exists in the run's collected outputs/mounts — a dangling link fails, naming which target was checked (a live host path, the collected work tree, or the replay manifest). **Requires ≥1 link** (zero links fails — use `computer_links_resolve_if_present` for the presence-free variant). **Only `true` is valid** (`false` is rejected by the schema) |
 | `computer_links_resolve_if_present: true` | like `computer_links_resolve` but passes vacuously when the transcript has zero `computer://` links — the presence-free variant. **Only `true` is valid** |
@@ -429,8 +432,12 @@ Find an artifact's real field paths by running once with `--keep`, then `cowork-
 
 ## Full gotcha list
 
-The "✓ passed ≠ correct" landmines, as *symptom → why → fix*. `file:line` pointers track the version
-at the top of this file.
+The "✓ passed ≠ correct" landmines relevant to **scenario/assertion authoring**, as
+*symptom → why → fix*. `file:line` pointers track the version at the top of this file.
+**Scope note:** this is the assertion/replay-focused view; the **companion `SKILL.md`'s Gotchas
+section is the full landmine catalog** (it adds workflow/record/answer-path landmines this schema
+reference omits). Neither list is a strict superset of the other — reach for this one while authoring
+`assert:`, and SKILL's when debugging a run's behavior.
 
 1. **Replay skips filesystem/egress assertions (two shapes) — with a loud warning.** *Full skip:* a pure
    live-only `egress_*`/`no_delete_in_outputs`/`self_heal_ran`/`transcript_no_host_path` item on a

@@ -4,11 +4,21 @@ When a run does the wrong thing — or greens when you don't trust it — this i
 the right tool; the authoritative reference for each command's flags is its `--help` and the
 [README → Commands at a glance](../README.md#commands-at-a-glance).
 
-Two situations need different tools. Figure out which one you're in first:
+<!-- BEGIN triage-canonical -->
+Two situations need different tools — figure out which one you're in first, then reach for the tool
+instead of re-running and hoping. The run already wrote its evidence to a kept run dir (`--keep` prints
+the path; `trace <run-id>` finds it), and every tool below reads that evidence **token-free** — no
+Docker, no re-record.
 
-- **The skill misbehaved** — wrong output, a gate you didn't expect, a tool denied. Investigate the run.
-- **The run was green but you don't trust it** — an assertion that may have tested nothing, a stale
-  cassette, an auto-answered gate. Hunt the false-green.
+| Situation | Symptom | Reach for (in order) |
+|---|---|---|
+| **The skill misbehaved** | wrong output, an unexpected gate, a denied tool, an opaque crash | `inspect` — what did it produce? · `trace <run-dir> --view <view>` — what did it actually do (tools, gates, sub-agent tree)? · `verify-run` — re-assert cheaply when only an assertion is wrong · `diff <old-run> <new-run>` — what changed since it worked · `chat` — reproduce it by hand |
+| **A green you don't trust** | an assert that may have tested nothing, a stale cassette, an auto-answered or decided gate | `replay --explain` — the evidence trail behind each *passing* assert · `lint` — assertions on the wrong CI lane / mixed-class keys · `verify-cassettes` — privacy + staleness over committed cassettes · the Gotchas landmine catalog — how a check passes vacuously · `run --repeat N` — did it pass, or pass once? · `stats` — flaky or expensive over time |
+
+A failed run also records `errorSource` (where the failure originated) and `stderrLogPath` (the captured
+agent stderr) — read those before re-running; a re-record rarely tells you more than the captured stderr
+already does.
+<!-- END triage-canonical -->
 
 Every run writes to `~/.cowork-harness/runs/<scenario>/<sessionId>/` (relocatable). The files there —
 `events.jsonl`, `run.jsonl`, `trace.json`, `result.json`, `egress.log`, `agent.stderr.log` — are the raw
@@ -72,6 +82,11 @@ The harness can no-op a check in ways that still produce a green run: skip an as
 flagged with a loud `::warning::`, not silent), auto-answer a gate, observe an empty egress allowlist.
 A green run is not automatically a correct run.
 
+- **`replay --explain`** — the flagship tool for exactly this hunt: after the footer, it prints the
+  evidence trail behind every **passing** assert (which `computer://` link resolved, which file matched,
+  which value satisfied a bound), so you can tell a real green from a vacuous one at a glance instead of
+  re-deriving it by hand. Text mode only; `--output-format json` already carries the same data in
+  `assertions[].evidence`. See `replay --help`.
 - **The "✓ passed ≠ correct" landmines** — the catalog of how a check can pass vacuously (mixed
   content/live assertion items, header-only gates that can't be keyed, replay-skipped egress keys) is in
   the companion skill's **Gotchas** section:

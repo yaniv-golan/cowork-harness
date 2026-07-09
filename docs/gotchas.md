@@ -23,6 +23,14 @@
   recording-shaping fields. Either re-record, or pass `--skip-scenario-drift` if you're intentionally
   verifying the rest of the gate against an out-of-date recording (see [README → Commands at a glance](../README.md#commands-at-a-glance)).
 
+- **A skill works in the Claude Code CLI but misbehaves under Cowork's host-loop.** Two common footguns:
+  a `${CLAUDE_PLUGIN_ROOT}` path hardcoded into in-VM bash (dead in the host-loop VM — resolve the mount
+  at runtime instead), and a hook command that `export`s an env var or writes into `/tmp` (a host-side
+  hook write isn't VM-visible to the agent). `scenario.py lint-skill <SKILL.md | skill-dir>` scans a
+  skill's body (and any sibling `hooks.json`) for both, WARN-only and deliberately narrow (fenced bash/sh/
+  shell code blocks, hooks-config JSON, and `Bash(...)` directives only — host-side prose and `Read`/`Grep`
+  directives are left alone, so false negatives on unfenced snippets are expected).
+
 For the false-green ("✓ passed ≠ correct") landmine catalog, see
 [SKILL.md → Gotchas](../.claude/skills/cowork-harness/SKILL.md#gotchas--the--passed--correct-landmines) or
 [debugging.md](./debugging.md#the-run-was-green-but-you-dont-trust-it--hunt-the-false-green).
