@@ -468,7 +468,7 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
     "       transcript is advisory (model-stochastic prose differs across live re-records no matter what) — tools/artifacts/meta are the gateable signal.\n" +
     "       runs anywhere (reads committed JSON / cassette files only — no live Desktop install needed for baseline mode, unlike `sync --diff`; no Docker/token needed for run/cassette mode).\n" +
     "       exit codes: 0 identical · 1 differing · 2 usage (e.g. an unresolvable baseline name, or a run/cassette with no matching side).",
-  doctor: "usage: doctor [--tier protocol|container|microvm|hostloop|cowork] [--output-format json]   (read-only prerequisite check)",
+  doctor: "usage: doctor [--tier protocol|container|microvm|hostloop|cowork] [--output-format text|json]   (read-only prerequisite check)",
   rehash:
     "usage: rehash <dir/> [--dry-run] [--output-format text|json]   (migrate cassettes across format bumps using contentSig verification; no re-record needed)",
   prune: "usage: prune [--keep-last <n>] [--dry-run] [<runs-dir>]   (prune accumulated run dirs; default --keep-last 5)",

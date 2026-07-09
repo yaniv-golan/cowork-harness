@@ -416,7 +416,7 @@
             "type": "string"
           },
           "questions_count_max": {
-            "description": "at most N questions were asked",
+            "description": "at most N sub-questions asked — a bundled AskUserQuestion with K sub-questions counts as K, not 1",
             "type": "integer",
             "minimum": 0,
             "maximum": 9007199254740991

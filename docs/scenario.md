@@ -562,6 +562,11 @@ trace.json        structured trace: steps, questions, sub-agents, egress, decisi
 egress.log        allow/deny per outbound connection (L1/L2)
 result.json       assertion results + decisions + sub-agents + usage + status (incl. workDir/outputsDir)
 session.json      session manifest (only when --session-id/--resume is used: id + the agent's session UUID)
+status.json       run status (phase, exit, timing) — see docs/run-status.md
+mounts.json       VM→host path map (feeds trace --translate-paths; hostloop runs)
+timeline.jsonl    per-tool-call timing (feeds trace --view tool-durations)
+agent.stderr.log  raw agent-process stderr
+proxy/            egress sidecar proxy logs (L1/L2)
 ```
 
 (`run.jsonl`/`trace.json` replace the old `transcript.json`/`decisions.jsonl`. Secrets are scrubbed
