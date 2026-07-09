@@ -7,8 +7,8 @@ assertions. Record once in CI (or locally); replay on every PR for free.
 **Minimal loop** — record once (live), then replay for free:
 
 ```bash
-cowork-harness record scenarios/my-test.yaml          # live: writes my-test.cassette.json
-cowork-harness replay  scenarios/my-test.cassette.json # token-free re-evaluation of content assertions
+cowork-harness record scenarios/my-test.yaml          # live: writes cassettes/my-test.cassette.json
+cowork-harness replay  cassettes/my-test.cassette.json # token-free re-evaluation of content assertions
 ```
 
 > Without `--out`, this writes to `cassettes/<scenario-name>.cassette.json` — gitignored by default. See
@@ -59,7 +59,7 @@ reproduce. See [docs/scenario.md](./scenario.md#how-an-assertion-edit-reaches-ci
 ```jsonc
 {
   "generator": "cowork-harness",          // provenance: the tool that produced this file
-  "cassetteVersion": 10,                  // format version; ABSENT = legacy (0); a FUTURE version warns
+  "cassetteVersion": 10,                  // format version; ABSENT = legacy (0); a FUTURE version hard-fails unless --best-effort-future-cassette
   "scenarioSource": "scenarios/my-test.yaml", // the authored scenario SOURCE file this was recorded from, relative to the cassette dir (absent for an inline/in-memory scenario)
   "scenario": { /* Scenario object — same schema as the .yaml */ },
   "events": [ /* JSON lines from events.jsonl (child→driver stdout) */ ],

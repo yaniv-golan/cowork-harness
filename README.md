@@ -303,7 +303,7 @@ see *what it did*, not just a green; `run` is verdict-first but prints the faili
 cowork-harness skill ~/my-plugin "..." --plugin ~/other-plugin
 ```
 
-**Test a specific local marketplace version** — point at the marketplace dir (the one with `.claude-plugin/marketplace.json`); it's registered fresh each run via `claude plugin marketplace add`, no clone/cache:
+**Test a specific local marketplace version** — point at the marketplace dir (the one with `.claude-plugin/marketplace.json`); the harness reads its `marketplace.json` and **mounts** the referenced plugins at the Cowork plugin path (passing `--plugin-dir`) — the marketplace registry is inert in cowork mode, so there is no `claude plugin marketplace add`, clone, or cache:
 ```bash
 cowork-harness skill --marketplace ~/my-marketplace --enable my-skill@my-marketplace "Use my-skill"
 ```

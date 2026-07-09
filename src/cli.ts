@@ -171,7 +171,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
 
 ── CI lint + assertion reference ──────────────────────────────────────────────
   lint <scenario.yaml | dir/>…  check scenarios for silent false-greens (bundled scenario.py; needs python3 — PyYAML is bundled)
-      [--strict]               escalate cassette-staleness warning to failure
+      [--strict]               fail on any lint finding (WARN/INFO), not just ERROR
       NOTE: exit 127 means python3 itself is missing — treat any non-zero exit as a CI failure, do not swallow it.
   assertions --list            list available scenario assertions (generated from Zod schema)
       [--output-format json]
