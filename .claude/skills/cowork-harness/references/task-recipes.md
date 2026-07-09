@@ -127,7 +127,9 @@ answer. Use this to gate a skill edit (e.g. a SKILL.md refactor) so a restructur
 degrade the advice. It is real work to calibrate; these steps are the traps that make or break it.
 
 1. **Author a suite of Q&A scenarios — one per representative question.** Each installs your skill and
-   asserts the answer with a rubric:
+   asserts the answer with a rubric. The judge grades the **union of the agent's final answer, the
+   transcript, and any files it wrote**, so a claim about content your skill leads the agent to *write to a
+   file* grades as reliably as one about inlined prose — you don't have to force an inline answer:
    ```yaml
    session: ./_session.yaml      # plugins.local_plugins + enabled: [<your-skill>@local]
    fidelity: container

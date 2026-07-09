@@ -66,6 +66,13 @@ Paths inside a scenario/session resolve relative to that file (see [docs/session
 - **Consumer-visible workflow changes update the skill.** A change a scenario author would act on — a new assertion key, cassette field, CLI command, or a changed record/replay/verify workflow — must land with a matching update to `.claude/skills/cowork-harness/` (SKILL.md or `references/`). The machine-checkable slices are enforced (`test/skill-docs-sync.test.ts` pins the skill against the assertion-key catalog and the cassette schema's field list; `test/cli-help.test.ts` pins the README command table); prose workflows are on you — this checklist line exists because `effectiveFidelity` shipped consumer-visible and stayed undocumented in the skill until an external consumer flagged it.
 - **Format.** `npm run format:check` must pass (`npx prettier --write "src/**/*.ts" "test/**/*.ts"` to fix).
 
+## Validating a companion-skill edit (answer quality)
+
+A behavioral change to `.claude/skills/cowork-harness/` (a SKILL.md refactor, a moved reference) can quietly make the *advice* worse without failing any deterministic test. Two dev instruments over `test/evals/` (live, real money — not part of `npm run ci`, never gate a PR) catch that:
+
+- `npm run eval-gate -- --rebaseline --dotenv .env` records a per-claim pass-rate baseline; `-- --calibrate` tags which claims the skill actually drives (skill-ablation); then a plain `npm run eval-gate -- --dotenv .env` gates a candidate edit with a per-claim Fisher-exact test and refuses to diff across a judge/answerer model change. Commit `test/evals/baseline/profile.json` when you intend to move the baseline.
+- `npm run skill-critique -- <skill-dir> --prompt "…" --dotenv .env` surfaces triaged, evidence-grounded improvement *ideas* for a skill (it never edits anything, always exits 0) — a discovery aid, not a gate.
+
 ## Extending the sync extractor
 
 When a Desktop release moves something `sync` doesn't read, it reports an `unknown delta`. Extend `src/sync/cowork-sync.ts` to parse the new shape, add the field to the baseline, and note it in the CHANGELOG.

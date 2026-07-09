@@ -54,9 +54,14 @@ All notable changes to this project are documented here. The format is based on
   `replay_protocol_fidelity` — since no runner exists for it yet, rather than being silently accepted
   and ignored). No cloud execution capability is added; these are purely descriptive/forward-compat.
 - **`semantic_matches` assertion** — a live-only, LLM-judged assertion that grades a fixed `rubric` of
-  claims against the run's answer, one pass/fail per claim. Per-claim results are recorded on
-  `RunResult.assertions[].semanticClaims` (`{index, claim, pass}`), so a candidate run's claim-level
-  profile can be diffed against a baseline instead of only reading a single summary verdict. Supports a
+  claims against the run's answer — the **union of the agent's final result text (`RunResult.finalMessage`),
+  the transcript, and the final on-disk content of any files it authored during the run**, so a claim about
+  content the skill led the agent to *write to a file* grades as reliably as one about inlined prose — one
+  pass/fail per claim. Per-claim results are recorded on `RunResult.assertions[].semanticClaims`
+  (`{index, claim, pass}`), so a candidate run's claim-level profile can be diffed against a baseline instead
+  of only reading a single summary verdict; a rep whose grade can't be parsed (after one retry) is marked
+  `RunResult.assertions[].judgeInvalid` and **never silently dropped** — an invalid rep can't inflate a score
+  by shrinking the denominator. Supports a
   `min_pass` threshold (default: all claims) and a per-assert `judge_model` override (default
   `claude-opus-4-8`, also settable via `COWORK_HARNESS_JUDGE_MODEL`) — the override is now actually
   honored per assert, and the model that graded is recorded on `RunResult.assertions[].judgeModel` so a
@@ -194,9 +199,20 @@ All notable changes to this project are documented here. The format is based on
   `contextEvents`, `mcpErrors`, `hookEvents`, `presentedFiles` — were backfilled). Complements the
   existing value-shape validation; the hand-authored descriptions/shapes are preserved (no fragile full
   regenerator).
-- Added a per-claim regression-diff (`scripts/eval-gate-diff.ts`) and an N-rep baseline-profile
-  aggregator (`scripts/eval-baseline-profile.mjs`) for the project's own answer-quality eval gate over
-  the companion skill (`test/evals/`, not shipped as part of the skill).
+- **Answer-quality regression gate** for the project's own companion skill — one tool
+  (`scripts/eval-gate.ts`; `test/evals/`, not shipped as part of the skill; live, not in `npm run ci`).
+  `--rebaseline` records a per-claim pass-rate baseline; `--calibrate` tags which claims the skill actually
+  drives via skill-ablation (a claim that still passes without the skill is excluded from the gate); the
+  default run gates a candidate skill edit with a one-sided Fisher-exact test per discriminating claim
+  (α=0.05) plus a trigger-rate check. The baseline records the judge + answerer models it was captured
+  under, and the gate refuses to diff across a model change (which would report model drift as a skill
+  regression). Replaces an earlier per-claim diff + baseline-profile aggregator that never composed.
+- **Reflective skill-critique loop** (`scripts/skill-critique.ts`; a maintainer discovery instrument,
+  not shipped with the skill, never in CI) — runs a skill against a probe, resumes the session for the
+  agent's own subjective account, then has a separate, log-grounded two-pass evaluator classify each idea
+  against turn-1-only evidence (`grounded-and-actionable` / `already-covered` / `confabulated` /
+  `not-adjudicable`) with mechanically-validated verbatim citations. Emits triaged, human-adjudicated
+  recommendations; it never edits the skill and always exits 0.
 
 - **Programmatic multi-turn (`cowork.skill(folder).conversation([...])`)** — feed N user turns to one
   persisted session and get a `Result` per turn: turn 1 pins `--session-id`, later turns add `--resume`
