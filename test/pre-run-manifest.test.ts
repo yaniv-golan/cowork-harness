@@ -276,7 +276,7 @@ describe("capturePreRunManifest hashes", () => {
 });
 
 describe("pre-run-manifest origin", () => {
-  it("a manifest written today records origin: \"local-walk\"", () => {
+  it('a manifest written today records origin: "local-walk"', () => {
     const outDir = mkdtempSync(join(tmpdir(), "cwh-origin-"));
     const workRoot = join(outDir, "work", "session", "mnt");
     mkdirSync(join(workRoot, "outputs"), { recursive: true });
@@ -304,7 +304,7 @@ describe("pre-run-manifest origin", () => {
     expect(readPreRunManifestOrigin(outDir)).toBeUndefined();
   });
 
-  it("round-trips origin: \"remote-unavailable\" from a hand-constructed fixture (no real producer emits this yet)", () => {
+  it('round-trips origin: "remote-unavailable" from a hand-constructed fixture (no real producer emits this yet)', () => {
     const outDir = mkdtempSync(join(tmpdir(), "cwh-origin-remote-"));
     writeFileSync(join(outDir, "pre-run-manifest.json"), JSON.stringify({ paths: [], origin: "remote-unavailable" }));
     expect(readPreRunManifestOrigin(outDir)).toBe("remote-unavailable");

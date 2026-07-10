@@ -69,7 +69,14 @@ describe("debug triage localizes an injected gate-delivery failure", () => {
       [
         {
           type: "control_response",
-          response: { subtype: "success", request_id: "uuid-9", response: { behavior: "allow", updatedInput: { questions: [{ question: "Which format?" }], answers: { "Which format?": "PDF" } } } },
+          response: {
+            subtype: "success",
+            request_id: "uuid-9",
+            response: {
+              behavior: "allow",
+              updatedInput: { questions: [{ question: "Which format?" }], answers: { "Which format?": "PDF" } },
+            },
+          },
         },
       ],
     );

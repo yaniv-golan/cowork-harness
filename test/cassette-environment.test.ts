@@ -14,7 +14,10 @@ function makeMinimalCassette(overrides: Record<string, any> = {}): any {
       expect_denied: [],
       assert: [{ result: "success" }],
     },
-    events: [JSON.stringify({ type: "system", subtype: "init", tools: ["Bash"] }), JSON.stringify({ type: "result", subtype: "success", is_error: false })],
+    events: [
+      JSON.stringify({ type: "system", subtype: "init", tools: ["Bash"] }),
+      JSON.stringify({ type: "result", subtype: "success", is_error: false }),
+    ],
     controlOut: [],
     ...overrides,
   };

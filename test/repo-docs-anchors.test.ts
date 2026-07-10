@@ -97,9 +97,7 @@ describe("repo docs' ../README.md anchors resolve to real README headings (C1b)"
     const broken = allRefs.filter((r) => !slugs.has(r.slug));
     expect(
       broken,
-      broken
-        .map((r) => `${r.file.replace(resolve(".") + "/", "")}: ${r.raw} — #${r.slug} has no matching README heading`)
-        .join("\n"),
+      broken.map((r) => `${r.file.replace(resolve(".") + "/", "")}: ${r.raw} — #${r.slug} has no matching README heading`).join("\n"),
     ).toEqual([]);
   });
 });

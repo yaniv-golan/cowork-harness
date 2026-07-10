@@ -4,12 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { evaluate } from "../src/assert.js";
 
-function ctx(
-  workRoot: string,
-  prefixes: string[],
-  preRunPaths?: string[],
-  preRunOrigin?: "local-walk" | "remote-unavailable",
-) {
+function ctx(workRoot: string, prefixes: string[], preRunPaths?: string[], preRunOrigin?: "local-walk" | "remote-unavailable") {
   return {
     transcript: "",
     toolsCalled: new Set<string>(),
