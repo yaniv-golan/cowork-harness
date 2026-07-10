@@ -79,9 +79,10 @@ describe("modelMismatch — the gate's same-model precondition", () => {
 });
 
 describe("aggregateScenario — invalid reps counted-not-dropped, invoked-only rates", () => {
-  const env = (invoked: boolean, invalid: boolean, passes: boolean[]) => ({
+  const env = (invoked: boolean, invalid: boolean, passes: boolean[], result: "success" | "error" = "success") => ({
     results: [
       {
+        result,
         skillsInvoked: invoked ? ["cowork-harness"] : [],
         assertions: [
           {
@@ -137,6 +138,40 @@ describe("aggregateScenario — invalid reps counted-not-dropped, invoked-only r
     expect(() => aggregateScenario("eval-err2", [env(true, false, [true, true]), env(true, false, [true, true]), {}, {}, {}, {}])).toThrow(
       /gradeable runs/,
     );
+  });
+
+  it("F1: an ERRORED rep (rate-limit) counts as errored, NOT as 'skill didn't fire' — no false trigger regression", () => {
+    // 6 reps that ran+invoked+passed, plus 4 that ERRORED (result:error, skillsInvoked empty). The errored
+    // reps must NOT inflate the not-invoked count (which would fake a trigger regression); they count as
+    // errored. 6 gradeable ≥ MIN_VALID so no throw; skillInvoked reflects only the gradeable reps.
+    const p = aggregateScenario("eval-rl", [
+      env(true, false, [true, true]),
+      env(true, false, [true, true]),
+      env(true, false, [true, true]),
+      env(true, false, [true, true]),
+      env(true, false, [true, true]),
+      env(true, false, [true, true]),
+      env(false, false, [false, false], "error"),
+      env(false, false, [false, false], "error"),
+      env(false, false, [false, false], "error"),
+      env(false, false, [false, false], "error"),
+    ]);
+    expect(p.errored).toBe(4);
+    expect(p.skillInvoked).toBe("6/6"); // errored reps excluded from the denominator, not counted as not-invoked
+  });
+
+  it("F1: too many ERRORED reps → loud throw (untrustworthy), never a false trigger regression", () => {
+    // 2 gradeable + 4 errored → ran=2 < MIN_VALID → throw (matches a rate-limited candidate run).
+    expect(() =>
+      aggregateScenario("eval-rl2", [
+        env(true, false, [true, true]),
+        env(true, false, [true, true]),
+        env(false, false, [false, false], "error"),
+        env(false, false, [false, false], "error"),
+        env(false, false, [false, false], "error"),
+        env(false, false, [false, false], "error"),
+      ]),
+    ).toThrow(/gradeable runs.*errored/);
   });
 
   it("F1: a scenario that STOPPED INVOKING does not throw — it emits a low-invocation profile for the trigger check", () => {

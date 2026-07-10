@@ -195,6 +195,7 @@ export function aggregateScenario(name: string, envelopes: unknown[], ablated = 
     .map((raw) => {
       const r = (raw as { results?: unknown[] }).results?.[0] as
         | {
+            result?: "success" | "error";
             assertions?: {
               assertion?: { semantic_matches?: unknown };
               semanticClaims?: { index: number; claim: string; pass: boolean }[];
@@ -204,6 +205,12 @@ export function aggregateScenario(name: string, envelopes: unknown[], ablated = 
           }
         | undefined;
       if (!r || !Array.isArray(r.assertions)) return null;
+      // A run that ERRORED (result:"error" — e.g. a session/rate limit, transport failure, or a genuine
+      // task failure) produced no clean answer-quality measurement. Drop it here so it counts as `errored`,
+      // NOT as a "ran but skill didn't fire" data point — otherwise a rate-limited candidate manufactures
+      // false trigger-rate regressions (skillsInvoked is empty on an errored run) and false claim drops.
+      // Too many errored ⇒ ran < MIN_VALID ⇒ the loud "untrustworthy" throw fires, which is correct.
+      if (r.result === "error") return null;
       const sem = r.assertions.find((a) => a.assertion && (a.assertion as { semantic_matches?: unknown }).semantic_matches);
       if (!sem) return null;
       return { invoked: (r.skillsInvoked ?? []).includes(SKILL), invalid: sem.judgeInvalid === true, claims: sem.semanticClaims ?? [] };
@@ -311,14 +318,18 @@ async function capture(reps: number, dotenv: string | undefined, ablate: boolean
   }
   // Observe which models actually produced these runs — recorded as baseline provenance and checked by the
   // gate's same-model guard (a run must be model-homogeneous for the guard to mean anything).
+  // Only REAL live model ids count. Placeholder markers wrapped in angle brackets (e.g. `<synthetic>`, the
+  // model field of a cassette/replay rep that used NO live model) are not answerers — including them would
+  // pollute the set and, via single()'s sort, spuriously flip the provenance and refuse a valid gate.
+  const isLiveModel = (m: unknown): m is string => typeof m === "string" && !m.startsWith("<");
   const judge = new Set<string>();
   const answerer = new Set<string>();
   for (const envs of byScenario.values())
     for (const env of envs) {
       const r = (env as { results?: unknown[] }).results?.[0] as { assertions?: { judgeModel?: string }[]; models?: string[] } | undefined;
       if (!r) continue;
-      for (const a of r.assertions ?? []) if (typeof a.judgeModel === "string") judge.add(a.judgeModel);
-      for (const m of r.models ?? []) if (typeof m === "string") answerer.add(m);
+      for (const a of r.assertions ?? []) if (isLiveModel(a.judgeModel)) judge.add(a.judgeModel);
+      for (const m of r.models ?? []) if (isLiveModel(m)) answerer.add(m);
     }
   const single = (s: Set<string>, label: string): string | null => {
     if (s.size === 0) return null;
