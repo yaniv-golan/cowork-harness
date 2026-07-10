@@ -6,8 +6,7 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
-> **In progress.** Restructuring of the companion skill's documentation for a clearer author → run →
-> debug flow.
+## [0.28.0] — 2026-07-10
 
 ### Added
 

@@ -91,7 +91,7 @@ node dist/cli.js replay examples/replays/example-pdf-skill.cassette.json
 
 > **Installed globally instead?** Once linked/installed, the same command is `cowork-harness replay
 > <cassette>` — but the relative path above only resolves from a source checkout's `examples/replays/`.
-> From a global install (`npm i -g "cowork-harness@>=0.27.0"`), point at the package root instead:
+> From a global install (`npm i -g "cowork-harness@>=0.28.0"`), point at the package root instead:
 > `cowork-harness replay "$(npm root -g)/cowork-harness/examples/replays/example-pdf-skill.cassette.json"`
 > (or copy the cassette into your own project and pass that path).
 
@@ -101,7 +101,7 @@ Live `run`/`skill` need the prerequisites in the next section — note the `prot
 > - **Replay only (zero setup):** `cowork-harness replay <cassette>` — no token, no Docker, no agent. The command above.
 > - **`protocol` (real model, no Docker):** needs only the auth token (item 3 below).
 > - **Live `container` / `microvm` / `hostloop` / `cowork`:** needs Docker (or Lima for `microvm`), a staged agent, and the token — run `cowork-harness doctor` first.
-> - **Invocation:** from a source checkout, `node dist/cli.js <cmd>` (or `npm link` to get the `cowork-harness` command); from a global install, `cowork-harness <cmd>`; the companion skill falls back to `npx "cowork-harness@>=0.27.0"`.
+> - **Invocation:** from a source checkout, `node dist/cli.js <cmd>` (or `npm link` to get the `cowork-harness` command); from a global install, `cowork-harness <cmd>`; the companion skill falls back to `npx "cowork-harness@>=0.28.0"`.
 
 Two more worked examples worth knowing about: `examples/scenarios/protocol-smoke.yaml` (zero-Docker smoke
 test) and `examples/scenarios/skill-loads.yaml` (container-tier acceptance check) — see
@@ -126,7 +126,7 @@ claude plugin marketplace add yaniv-golan/cowork-harness
 claude plugin install cowork-harness@cowork-harness
 ```
 
-The skill **self-bootstraps the CLI**: if `cowork-harness` isn't on your PATH it falls back to `npx "cowork-harness@>=0.27.0"` (a version floor that fails loud rather than silently fetching a too-old CLI; Node ≥ 20). Tiers above `protocol` still need Docker/Lima and a Claude Desktop agent binary — see the prerequisites below.
+The skill **self-bootstraps the CLI**: if `cowork-harness` isn't on your PATH it falls back to `npx "cowork-harness@>=0.28.0"` (a version floor that fails loud rather than silently fetching a too-old CLI; Node ≥ 20). Tiers above `protocol` still need Docker/Lima and a Claude Desktop agent binary — see the prerequisites below.
 
 It also follows the open [Agent Skills](https://agentskills.io) spec, so it installs cross-editor (Cursor, Codex, OpenCode, …) via [`npx skills`](https://github.com/vercel-labs/skills) (Vercel Labs' CLI implementation of that spec):
 
@@ -147,7 +147,7 @@ A global install is enough for CI `lint`, reading the teaching skill, and replay
 To `run` the worked examples live or copy them as a starting point, use a source checkout. (The marketplace
 skill install itself only pulls `.claude/skills/cowork-harness/` — SKILL.md + `references/` + `scenario.py`/
 assertion keys, per `.claude-plugin/marketplace.json`'s `source` — not the rest of this table; the full set
-above becomes available once the skill's first command self-bootstraps `npx "cowork-harness@>=0.27.0"` — see
+above becomes available once the skill's first command self-bootstraps `npx "cowork-harness@>=0.28.0"` — see
 [above](#drive-it-from-claude-code-companion-skill) — which pulls the same npm package as the global-install row.)
 
 ### Prerequisites for anything above `protocol` fidelity
@@ -781,7 +781,7 @@ inputs/outputs. Human-readable terminal text is explicitly **not** part of the c
 
 ## Status
 
-**Verified end-to-end against the live staged agent (2.1.197 / asar 1.17377.1).** Host-side parity (egress/gates/mount/web_fetch facts) re-derived via `sync` — no unknown deltas; only `asarFingerprint` moved, plus `api.claude.ai` joining `network.allowDomains`. The reconstructed prompt appends (`prompts/desktop-1.15200.0/`) were spot-checked against the new asar: substantively unchanged (minor punctuation-level rewording only) — the load-bearing "is NOT Claude Code" correction, the host-loop `## Shell access` generator, and the web_fetch/mount facts all still hold. The live scenario suite (`protocol` + `container` tiers) passes against this baseline. The latest shipped baseline — what `baseline: latest` resolves to (`cowork-harness list`) — is **`desktop-1.19367.0`** (the committed baseline file and version-lockstep checks track it; it additionally carries the synced per-model effort config, and there are no known spawn-contract deltas — the `1.19367.0` bundle's anchor drift was benign and is resolved in `src/sync/cowork-sync.ts`. The "verified end-to-end" pass above is pinned to `1.17377.1` pending a fresh live re-run against `1.19367.0`).
+**Verified end-to-end against the live staged agent (2.1.202 / asar 1.19367.0).** Host-side parity (egress/gates/mount/web_fetch facts) re-derived via `sync` — no unknown deltas; only `asarFingerprint` moved, plus `api.claude.ai` joining `network.allowDomains`. The reconstructed prompt appends (`prompts/desktop-1.15200.0/`) were spot-checked against the new asar: substantively unchanged (minor punctuation-level rewording only) — the load-bearing "is NOT Claude Code" correction, the host-loop `## Shell access` generator, and the web_fetch/mount facts all still hold. The live scenario suite (`protocol` + `container` + `hostloop` tiers) passes against this baseline (fresh live re-run 2026-07-10). The latest shipped baseline — what `baseline: latest` resolves to (`cowork-harness list`) — is **`desktop-1.19367.0`** (the committed baseline file and version-lockstep checks track it; it additionally carries the synced per-model effort config, and there are no known spawn-contract deltas — the `1.19367.0` bundle's anchor drift was benign and is resolved in `src/sync/cowork-sync.ts`).
 
 - ✅ **Three isolation tiers (L0/L1/L2) + two loop-mode overlays** — see [Fidelity tiers](#fidelity-tiers-pick-per-scenario--per-ci-job) for the full decision guide; in short:
   - `protocol` (L0, control loop only), `container` (L1, sandboxed arm64 + per-run default-deny egress sidecar), `microvm` (L2, real Apple-VZ Linux microVM + guest firewall).
