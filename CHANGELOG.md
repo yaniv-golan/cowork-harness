@@ -6,6 +6,29 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **Usage/quota-limit runs are now classified as `resultErrorKind: "usage_limit"`.** A session/weekly/model/
+  spend/org quota-exhaustion arrives as an `is_error` result with the SDK's misleading `subtype: "success"`
+  and HTTP 429 — previously an undifferentiated error, indistinguishable from a real skill regression.
+  Detection is conjunctive (`api_error_status === 429` **and** a terminal usage-limit message; a bare 429 is
+  a transient overload and is not reclassified). `resultSubtype` is kept verbatim (faithful SDK passthrough).
+  Surfaced on `RunResult`, `status.json`, and a distinct verdict signal ("retry after reset") so a batch can
+  halt-fast; the `claude -p` decider transport fails fast (non-retryable) on a usage limit instead of
+  retrying into a spent quota.
+- **`input_unmodified` can now guard uploaded files (`uploads/**`).** Uploads are captured as a read-only
+  input root (hash-only in cassettes — a private upload is never inlined), so a scenario can assert the agent
+  didn't mutate an uploaded file; a mutation is attributed to the agent (not excused as an external edit).
+  Previously only connected-folder inputs were guardable.
+
+### Changed
+
+- **`input_unmodified` accepts a single glob string** as well as an array (`input_unmodified: 'uploads/**'`
+  no longer errors "expected array").
+- **`scenario.py lint-skill`** downgrades a `${CLAUDE_PLUGIN_ROOT}`-in-VM-bash use to a `plugin-root-guarded`
+  **INFO** (from WARN) when the same bash block self-heals it at runtime (`[ -d ] || find /sessions …`), so a
+  correctly-guarded block no longer shares the alarming WARN class with a genuinely-unguarded use.
+
 ## [0.28.0] — 2026-07-10
 
 ### Added
