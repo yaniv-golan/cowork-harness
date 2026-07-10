@@ -127,6 +127,31 @@ describe.skipIf(!havePython)("scenario.py lint-skill — Cowork host-loop footgu
     expect(status).toBe(0); // clean, no findings
   });
 
+  it("Item 4: a self-healed ${CLAUDE_PLUGIN_ROOT} bash block is INFO (guarded), not WARN", () => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-skill-guarded-"));
+    const md = [
+      "# Guarded skill",
+      "",
+      "```bash",
+      'S="${CLAUDE_PLUGIN_ROOT}/scripts/x.py"',
+      '[ -d "$S" ] || S="$(find /sessions -name x.py -path \'*/scripts/*\' | head -1)"',
+      'python3 "$S" run',
+      "```",
+      "",
+    ].join("\n");
+    writeFileSync(join(d, "SKILL.md"), md);
+
+    const { findings, status } = lintSkill(d);
+    // downgraded to INFO (the block self-heals via find /sessions) — NOT the alarming WARN
+    expect(findings.some((f) => f.rule === "plugin-root-in-vm-bash")).toBe(false);
+    const guarded = findings.find((f) => f.rule === "plugin-root-guarded");
+    expect(guarded, "expected a plugin-root-guarded INFO").toBeDefined();
+    expect(guarded?.severity).toBe("INFO");
+    expect(guarded?.line).toBe(4); // 1-based line of the token use, preserved through the buffered emit
+    expect(guarded?.fix).toMatch(/not validated/i);
+    expect(status).toBe(0); // INFO is clean
+  });
+
   it("exit code: WARN findings are clean (0) by default but non-zero under --strict", () => {
     const d = mkdtempSync(join(tmpdir(), "cwh-skill-strict-"));
     const md = ["# S", "", "```bash", 'cat "${CLAUDE_PLUGIN_ROOT}/x.sh"', "```", ""].join("\n");
