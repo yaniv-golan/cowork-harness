@@ -49,10 +49,12 @@ jobs:
           registry-url: "https://registry.npmjs.org"
           cache: npm
 
-      # Trusted Publishing (OIDC) requires npm >= 11.5.1; the Node runtime ships an older npm, so pull the
-      # latest. Node 22 (not 20) because npm@latest is now v12, which requires Node >= 22 (EBADENGINE on 20).
+      # Trusted Publishing (OIDC) requires npm >= 11.5.1; the Node runtime ships an older npm, so pull a
+      # newer one. Pin to npm 11 (latest major) rather than @latest: npm 12.0.0 shipped broken for our use
+      # — it needs Node >= 22 AND its --provenance path fails with a missing `sigstore` module. 11.x is
+      # OIDC-capable and stable; revisit the pin when a 12.x is known-good.
       - name: Use a trusted-publishing-capable npm
-        run: npm install -g npm@latest
+        run: npm install -g npm@11
 
       - run: npm ci
 
