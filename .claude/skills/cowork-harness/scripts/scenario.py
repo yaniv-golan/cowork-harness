@@ -45,7 +45,7 @@ import sys
 from pathlib import Path
 
 # --- the replay-class taxonomy ---
-# NB: this is NOT a 1:1 mirror of `contentKeys` in src/run/cassette.ts. cassette.ts keeps the verdict
+# NB: this is NOT a 1:1 mirror of the ALWAYS_CONTENT_KEYS/QUESTION_GATE_KEYS/MANIFEST_KEYS buckets in src/run/cassette.ts. cassette.ts keeps the verdict
 # modifiers (VERDICT_MODIFIER_KEYS) in its content set so they replay as no-op passes; the linter
 # deliberately keeps them OUT of CONTENT_KEYS so a modifier-only scenario still trips the `replay-noop`
 # warning below (a no-op pass verifies nothing real — exactly what that warning is for).

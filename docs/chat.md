@@ -53,6 +53,10 @@ Even without `--verbose`, the REPL shows more than raw assistant text:
 | `container` (default) | Agent in a Docker container with per-session default-deny egress proxy. | Everyday debugging with a real sandbox. |
 | `hostloop` | Agent loop runs as a **native macOS process** on the host (no container around the file tools) — matching production's own risk model. Only `bash`/`web_fetch` route into a Docker sidecar via `docker exec`; that sidecar has no agent inside it. | Reproducing Cowork's production split-execution model. |
 
+`microvm` and `cowork` are not available here — `chat`'s interactive REPL only accepts
+`protocol`/`container`/`hostloop` (no Lima/auto-pick plumbing in the interactive path); passing either
+is a loud CLI usage error, not a silent fallback.
+
 `container` is the right default for almost all debugging. Use `protocol` when you need rapid
 iteration and do not care about egress behavior. Use `hostloop` when you are chasing a bug that
 only manifests in the production execution split.

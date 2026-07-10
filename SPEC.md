@@ -385,7 +385,7 @@ states in `baseline.provenance.gates`). A skill that ignores these behaves diffe
   `rec.gateAnswers`, and `rec.gateDeliveries` exactly as in a live run.
 
 **Assertion evaluation on replay:**
-- **Content assertions** (`contentKeys` in `src/run/cassette.ts`) are evaluated — `transcript_*`,
+- **Content assertions** (`ALWAYS_CONTENT_KEYS`/`QUESTION_GATE_KEYS` in `src/run/cassette.ts`) are evaluated — `transcript_*`,
   `tool_*` (incl. `tool_no_error`), `max_tool_errors`, `max_redundant_tool_calls`, `subagent_*` (incl.
   `subagent_output_contains`), `dispatch_count_max`, `skill_triggered`, `no_skill_triggered`,
   `skill_tool_used`, `skill_available`, `connector_available`, `tool_available`, `all_tasks_completed`,
@@ -393,7 +393,7 @@ states in `baseline.provenance.gates`). A skill that ignores these behaves diffe
   `result`, the verdict modifiers (`allow_permissive_auto_allow`, `allow_missing_capability`,
   `allow_l0_plugin_divergence`, `allow_stall`), and (when `controlOut` is present) `question_asked`,
   `questions_count_max`, `gate_answers_delivered`, `gate_answer_count_min`, `hook_blocked`,
-  `no_hook_blocked` (illustrative — see `contentKeys` in `src/run/cassette.ts` for the authoritative
+  `no_hook_blocked` (illustrative — see `ALWAYS_CONTENT_KEYS`/`QUESTION_GATE_KEYS` in `src/run/cassette.ts` for the authoritative
   set; this list is not re-verified exhaustive on every addition). `max_cost_usd`/`max_tokens` are evaluated against the *frozen recording's*
   usage/cost on replay, not fresh spend; `tool_calls_max`/`max_turns` are meaningfully
   replay-checkable (the re-drive recomputes both deterministically).
@@ -409,7 +409,7 @@ states in `baseline.provenance.gates`). A skill that ignores these behaves diffe
   distinct field); without it replay excludes the key with the same loud-warning treatment. On older,
   manifest-less cassettes they are skipped (loud) — absent from `assertions[]`, not present-and-passing.
 - **Egress / live-only assertions** (`no_delete_in_outputs`, `self_heal_ran`, `transcript_no_host_path`,
-  `no_mcp_error`, `max_peak_rss_bytes`, `egress_*`, `expect_denied`) are always skipped on replay — absent
+  `no_mcp_error`, `max_peak_rss_bytes`, `semantic_matches`, `egress_*`, `expect_denied`) are always skipped on replay — absent
   from `assertions[]`. The count of skipped (full / partial) assertions is reported in
   `RunResult.skippedAssertions`, so a JSON consumer doesn't read a green replay as having evaluated
   everything.
@@ -424,7 +424,7 @@ green replay does not imply the recording is still valid. Each finding is surfac
   `::warning::` fires and these keys are excluded (not vacuously passed). The hook keys need
   `controlOut` for a different reason than the question keys: a custom hook's block/allow decision is
   an opaque async reply recorded only in `control-out.jsonl`, not in the `events` stream, so it cannot
-  be reconstructed without it. The authoritative list is `contentKeys` in `src/run/cassette.ts`;
+  be reconstructed without it. The authoritative list is `QUESTION_GATE_KEYS` in `src/run/cassette.ts`;
   `docs/cassette.md` mirrors it — consult it for the full table.
 - **`gate_answers_delivered: true` passes vacuously when zero `AskUserQuestion` gates fired** (gate
   firing is model-dependent). Pair it with `gate_answer_count_min: <N>` to also require that at least
@@ -455,7 +455,8 @@ response via `serializeDecision` and compares to the frozen `controlOut` envelop
 key-sorted JSON). A mismatch produces a synthesized `{ assertion: { replay_protocol_fidelity: true },
 pass: false, message }` entry in `assertions[]` and exits 1. This catches regressions in
 `serializeDecision` — e.g. dropping `questions` from the AskUserQuestion `updatedInput` — on the
-token-free lane. `replay_protocol_fidelity` is not a user-authored `contentKeys` entry — it is
+token-free lane. `replay_protocol_fidelity` is not a user-authored content-key entry
+(`ALWAYS_CONTENT_KEYS`/`QUESTION_GATE_KEYS`/`MANIFEST_KEYS` in `src/run/cassette.ts`) — it is
 synthesized and evaluated automatically on every replay (see the O7 guard above).
 
 `run`, `skill`, and `replay` emit a single JSON object on **stdout** under `--output-format json` (nothing

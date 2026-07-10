@@ -47,10 +47,13 @@ Verified against, at the time `protocol.v1.json` was written (mirrors the versio
 note):
 
 - **Baselines committed in this repo at the time of writing:** `baselines/desktop-1.17377.1.json` through
-  `baselines/desktop-1.18286.0.json` (see `baselines/` for the current set — `sync` may have added newer
-  ones since). The staged agent ELF is unchanged across this range (2.1.197 throughout — see each
-  baseline's `agentBinary.stagedPath`), so the verification below covers all of them.
-- **Staged in-VM agent:** 2.1.197.
+  `baselines/desktop-1.19367.0.json` (see `baselines/` for the current set — `sync` may have added newer
+  ones since). The staged agent ELF is 2.1.197 through the `1.18286.0` baseline, then 2.1.202 from
+  `1.18286.2` onward (see each baseline's `agentBinary.stagedPath`) — DESIGN.md's "Spawn contract +
+  host-loop vs VM-loop" note already establishes the spawn contract itself is byte-identical/behaviorally
+  identical across that ELF bump, so the verification below still covers the whole range despite the
+  binary version change partway through.
+- **Staged in-VM agent:** 2.1.197 (through `1.18286.0`), 2.1.202 (`1.18286.2` onward).
 - **Host CLI used for the original end-to-end verification:** macOS build 2.1.177+.
 
 If you're conformance-testing a *different* agent build against this schema and it fails, that's a signal

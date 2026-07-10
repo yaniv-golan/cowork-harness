@@ -11,12 +11,9 @@ import { spawnSync } from "node:child_process";
  */
 export function resolveScenarioScript(): string {
   const root = fileURLToPath(new URL("../..", import.meta.url)); // dist/run/.. (or src/run/..) → package root
-  const candidates = [
-    join(root, ".claude", "skills", "cowork-harness", "scripts", "scenario.py"),
-    join(root, "python", "scenario.py"), // build-copy fallback location
-  ];
-  for (const c of candidates) if (existsSync(c)) return c;
-  throw new Error(`bundled scenario.py not found (looked in: ${candidates.join(", ")}). Reinstall cowork-harness.`);
+  const script = join(root, ".claude", "skills", "cowork-harness", "scripts", "scenario.py");
+  if (existsSync(script)) return script;
+  throw new Error(`bundled scenario.py not found (looked in: ${script}). Reinstall cowork-harness.`);
 }
 
 /** `cowork-harness lint <files…>` → `python3 scenario.py lint <files…>` (npm-consumer ergonomics; skill

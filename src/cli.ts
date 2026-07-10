@@ -294,6 +294,8 @@ Output:
   --run-dir <path>                 GLOBAL flag — must PRECEDE the subcommand (cowork-harness --run-dir <path> skill …);
                                    relocates runs/ output (default ~/.cowork-harness/runs) out of the working tree.
                                    flag > COWORK_HARNESS_RUNS_DIR > default. (placed after the subcommand it is rejected.)
+  --ablate-skill                   negative control: re-run the same prompt with the skill(s)-under-test
+                                   removed, to check whether the agent "succeeds" even without them
   --model <id>                     override the session model
   --dry-run                        preview scenarios, token and binary checks, without recording     NO_COLOR=1   disable ANSI
 
@@ -301,9 +303,6 @@ Long runs:  an idle "still running" heartbeat prints on stderr after ~30s of sil
             COWORK_HARNESS_NO_HEARTBEAT=1 disables it; COWORK_HARNESS_HEARTBEAT_MS tunes the interval.
   --timeout <ms>                   wall-clock budget; on expiry the agent is killed and the run ends
                                    result:error / errorSource:timeout (the CLI form of a scenario's timeout_ms).
-
-Auth:  CLAUDE_CODE_OAUTH_TOKEN (or ANTHROPIC_API_KEY) from process.env > --dotenv <path> > ./.env >
-       <install>/.env. So you can run from any directory and still pick up the install's credentials.
 
 Auth:  Run 'doctor' to check auth. CLAUDE_CODE_OAUTH_TOKEN (or ANTHROPIC_API_KEY) from process.env >
        --dotenv <path> > ./.env > <install>/.env.
@@ -379,6 +378,8 @@ Output:
   --quiet, -q                      verdict only            --verbose       live stream + per-tool markers
   --compact                        drop the informational capability ::notice:: lines (the probe + hard-fail stay)
   --demo                           shareable output: --compact + suppress the "runs →" header (runs stay durable)
+  --ablate-skill                   negative control: re-run the same prompt with the skill(s)-under-test
+                                   removed, to check whether the agent "succeeds" even without them
   --run-dir <path>                 GLOBAL flag — must PRECEDE the subcommand (cowork-harness --run-dir <path> run …);
                                    relocates runs/ output (default ~/.cowork-harness/runs) out of the working tree.
                                    flag > COWORK_HARNESS_RUNS_DIR > default. (placed after the subcommand it is rejected.)

@@ -344,7 +344,7 @@ overall run verdict and exit code — `assert result: success` alone won't catch
 ## Replay class
 
 A cassette (`record`/`replay`) has **no filesystem and no network**. `replay` re-evaluates only the
-**content** assertions. The authoritative list is `contentKeys` in `src/run/cassette.ts`.
+**content** assertions. The authoritative list is `ALWAYS_CONTENT_KEYS`/`QUESTION_GATE_KEYS`/`MANIFEST_KEYS` (composed) in `src/run/cassette.ts`.
 
 **Assertion source — frozen by default, on-disk by opt-in.** A plain `replay` evaluates the `assert:` block
 **frozen in the cassette** (byte-deterministic, ignores the working tree); editing `scenarios/<name>.yaml` does
@@ -458,7 +458,7 @@ reference omits). Neither list is a strict superset of the other — reach for t
    are replay-checkable **when the cassette carries an `artifacts` manifest**; without one they are
    skipped too.) *Partial skip:* a mixed `{result, egress_denied}` greens on `result` while
    `egress_denied` is dropped. Both now warn loudly. → put egress/live-only checks on a live gate; one
-   concern per item; run the linter. (`contentKeys` in `src/run/cassette.ts`.)
+   concern per item; run the linter. (`LIVE_ONLY_KEYS`/`MANIFEST_KEYS` in `src/run/cassette.ts`.)
 
 2. **Gate keys need a `controlOut` cassette.** `question_asked`, `questions_count_max`,
    `gate_answers_delivered`, `gate_answer_count_min`, `hook_blocked`, `no_hook_blocked` only evaluate on
@@ -468,7 +468,7 @@ reference omits). Neither list is a strict superset of the other — reach for t
    vacuously when zero gates fired**; use `gate_answer_count_min: 1` to also require a gate to have
    fired. A **header-only gate** (empty `question`, only `header`) can never be keyed and is rejected
    loudly — every gate needs a non-empty `question`.
-   (`contentKeys` in `src/run/cassette.ts`; `src/assert.ts`.)
+   (`QUESTION_GATE_KEYS` in `src/run/cassette.ts`; `src/assert.ts`.)
 
 3. **The LLM-decider's two spellings.** Scripted answers + `on_unanswered: fail` is deterministic;
    the stochastic path flags the run `nonDeterministic`. The LLM decider is one mechanism, two

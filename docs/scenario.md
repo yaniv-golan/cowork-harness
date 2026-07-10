@@ -25,7 +25,7 @@ execution: local                         # OPTIONAL — orthogonal to fidelity (
                                          # local today): local (default) | cloud-describe (RESERVED — no
                                          # runner exists yet; authoring it is a load-time error, not a
                                          # silent no-op)
-on_unanswered: fail                      # optional: policy for unscripted questions (fail | prompt | first | llm)
+on_unanswered: fail                      # optional: policy for unscripted questions (fail | prompt | first | llm — run rejects prompt; see Scripted answers below)
                                          # ("agent" is retired — no longer a valid value)
 
 prompt: |                                # the user turn
@@ -306,7 +306,7 @@ if *every* key passes (don't rely on the first; keep one concern per item unless
 | `hook_blocked: <regex>` | a `PreToolUse` hook blocked a tool whose name matches the regex (`RunResult.hookEvents`) — replay-checkable only when the cassette carries `controlOut` |
 | `no_hook_blocked: true` | no tool was hook-blocked during the run — distinguishes a genuine tool crash from an intentional block; replay-checkable only when the cassette carries `controlOut`; **only `true` is valid** |
 | `max_peak_rss_bytes: <N>` | peak sampled RSS of the agent sandbox ≤ N bytes — **live lane only** (container/hostloop/microvm); evidence-unavailable on replay/protocol or when sampling captured no RSS |
-| `semantic_matches: {rubric, min_pass?}` | a pinned LLM judge grades each fixed `rubric` claim against the run's answer — the agent's final message, the transcript, and any files it authored (authored-file evidence is unavailable on the **microvm** tier — no pre-run manifest to diff against; `container`/`hostloop` do capture it) — so a claim about written-file content grades like one about inlined prose; passes iff ≥ `min_pass` claims pass (default: all) — **live lane only** (an LLM judge call); skipped-loud on replay |
+| `semantic_matches: {rubric, min_pass?, judge_model?}` | a pinned LLM judge grades each fixed `rubric` claim against the run's answer — the agent's final message, the transcript, and any files it authored (authored-file evidence is unavailable on the **microvm** tier — no pre-run manifest to diff against; `container`/`hostloop` do capture it) — so a claim about written-file content grades like one about inlined prose; passes iff ≥ `min_pass` claims pass (default: all) — **live lane only** (an LLM judge call); skipped-loud on replay. `judge_model` pins the grading model (flag/env precedence: per-assertion `judge_model` > `COWORK_HARNESS_JUDGE_MODEL` env > the harness default) — pin it for a reproducible before/after comparison. |
 | `question_asked: <regex>` | the agent asked an AskUserQuestion whose text matches |
 | `questions_count_max: <N>` | at most N **sub-questions** asked — a bundled `AskUserQuestion` with K sub-questions counts as K, not 1 (this is a decision-load budget, not a per-tool-call count); `trace --view questions`'s footer total is computed the same way, so it always matches what this key compares against |
 | `gate_answers_delivered: true` | every answered AskUserQuestion gate's answer actually reached the model — requires a positive, observed `tool_result` (an **unobserved** delivery fails too, not only an errored one — no silent false-green); **zero gates fired passes vacuously** (gate firing is model-dependent) — pair with `gate_answer_count_min` to also require a gate |
@@ -403,8 +403,10 @@ dependency-free and side-effect-free.)
 
 A cassette (`record`/`replay`) has no filesystem or network. `replay` consumes BOTH recorded protocol
 directions — the child→driver `events` stream and the driver→child `controlOut` decision responses —
-and re-evaluates the **content** assertions. The authoritative list of content keys is `contentKeys` in
-`src/run/cassette.ts`; the table below is derived from it.
+and re-evaluates the **content** assertions. The authoritative list of content keys is the union of
+`ALWAYS_CONTENT_KEYS`, `QUESTION_GATE_KEYS` (only when the cassette carries `controlOut`), and
+`MANIFEST_KEYS` (only when it carries an artifacts manifest) — all exported from `src/run/cassette.ts`,
+alongside the explicit exclusion list `LIVE_ONLY_KEYS`; the table below is derived from them.
 
 **Evaluated on replay (content assertions):**
 `transcript_*` (incl. `transcript_matches`), `tool_*` (incl. `tool_available`), `subagent_*`, `dispatch_count_max`,

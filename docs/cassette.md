@@ -216,13 +216,13 @@ whole-field decode pass triggered; or a scrubbed string from the direct pass.
 
 ## Assertion table
 
-This table mirrors the union of `alwaysContentKeys`/`questionGateKeys`/`manifestKeys` in
+This table mirrors the union of `ALWAYS_CONTENT_KEYS`/`QUESTION_GATE_KEYS`/`MANIFEST_KEYS` in
 `src/run/cassette.ts`, which is **the single source of truth**.
 Content keys are evaluated on replay; everything else is skipped. This is the per-key reference; for
 the rules and CI-placement rationale (why each category behaves this way), see
 [docs/scenario.md → Which assertions survive replay](./scenario.md#which-assertions-survive-replay-ci-placement).
 
-### Evaluated on replay (contentKeys)
+### Evaluated on replay (ALWAYS_CONTENT_KEYS ∪ QUESTION_GATE_KEYS ∪ MANIFEST_KEYS)
 
 | Assertion key | What it checks |
 |---|---|
@@ -328,7 +328,8 @@ Either way, every replay result also reports the drift in `staleness[]` (class-t
 `no_delete_in_outputs`, `self_heal_ran`, `transcript_no_host_path`, `egress_denied`, `egress_allowed`,
 `no_mcp_error` (MCP round-trips are harness-computed at drive time, not in the cassette's frozen stdout
 stream, so `RunResult.mcpErrors` is absent on replay), `max_peak_rss_bytes` (replay never spawns a sandbox
-to sample, so `RunResult.resources` is absent on replay)
+to sample, so `RunResult.resources` is absent on replay), `semantic_matches` (an LLM judge call — never
+evaluable from a frozen cassette)
 (and `expect_denied` — a **scenario-level shorthand** that expands to `egress_denied` assertions, not an
 assertion key in its own right).
 
@@ -675,7 +676,7 @@ the [README Testing section](../README.md#testing--cicd).
 - [docs/scenario.md](./scenario.md) — `scenarios/*.yaml` schema, the full assertion reference, and
   which assertions survive replay.
 - [SPEC.md](../SPEC.md) — the replay-fidelity contract clause (§11 / RunResult shape).
-- `src/run/cassette.ts` — the implementation: `contentKeys`, `replayCassette`, `CassetteAgentSession`.
+- `src/run/cassette.ts` — the implementation: `ALWAYS_CONTENT_KEYS`/`QUESTION_GATE_KEYS`/`MANIFEST_KEYS`/`LIVE_ONLY_KEYS` (the content-key buckets), `replayCassette`, `CassetteAgentSession`.
 - `src/agent/session.ts` — `serializeDecision` (and its declared inverse `deserializeDecision`).
 - `src/secrets.ts` — `scrubField` + `collectSecrets`, published as the `cowork-harness/secrets` subpath
   export for custom scrubbing pipelines.
