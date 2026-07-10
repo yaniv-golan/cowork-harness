@@ -272,16 +272,16 @@ if *every* key passes (don't rely on the first; keep one concern per item unless
 | `no_unexpected_files: [<glob>, …]` | every **newly created** file under a user-visible root matches ≥1 workRoot-relative glob (`**` matches any depth — e.g. `outputs/handoff/**` for per-run subdirs); `[]` = no new files allowed; **new-files-only** (overwrite-in-place is invisible — pair with `artifact_json` / producer stamping); post-hoc detection like `no_delete_in_outputs`, not mount enforcement; live/verify-run without pre-run manifest ⇒ evidence-unavailable (live runs capture the baseline only when this key is asserted; recordings always capture, so a later assert-add replays without re-record); microvm tier cannot capture; replay-checkable when the cassette carries `artifacts` **and** `preRunPaths` |
 | `input_unmodified: [<glob>, …]` | every **pre-existing** file whose workRoot-relative path matches a glob has an unchanged content hash after the run (the in-place-mutation detector — the counterpart to `no_unexpected_files`, which only watches for *new* files); needs the pre-run content-hash manifest (harness ≥0.24 recordings) — same capture caveats as `no_unexpected_files` |
 | `self_heal_ran: <bool>` | a `/sessions/<id>/mnt` plugin script was (not) invoked — the plugin-root self-heal path |
-| `tool_called: <Tool>` | the agent invoked the tool |
-| `tool_not_called: <Tool>` | the agent never invoked it |
+| `tool_called: <glob>` | a tool the agent ran matched this glob (`*`/`?`, exact when literal, anchored, case-sensitive); `mcp__workspace__*` = any workspace tool. Glob, not regex |
+| `tool_not_called: <glob>` | no tool the agent ran matched this glob (`mcp__*` = no MCP tool ran) |
 | `tool_result_contains: <str>` | a tool result includes the literal string (content / replay-checkable — substring match, **per individual result**, each scanned up to a 10 KB cap; a string spanning two separate results won't match) |
 | `tool_result_not_contains: <str>` | no tool result includes the literal string — content / replay-checkable; **fails loud** if tool results are absent from `result.json` (absent ≠ empty) or display-truncated (no assertable text) — it never vacuously passes when it can't see the evidence |
 | `tool_no_error: <regex>` | no tool whose name matches the regex recorded any error (`RunResult.toolErrors[name].errors === 0` for every match) — **requires ≥1 matching tool call** (a regex that matched nothing fails, so a typo can't silently pass) |
 | `tool_no_error_if_called: <regex>` | like `tool_no_error` but passes vacuously when no tool matches the regex — the presence-free variant for a tool that may legitimately not run |
 | `max_tool_errors: <N>` | total tool errors across all tools (sum of `RunResult.toolErrors[*].errors`) ≤ N |
 | `max_redundant_tool_calls: <N>` | total **wasted** repeated tool calls (sum of `count - 1` across every redundant `{name, args}` group in `RunResult.redundantToolCalls`) ≤ N — not the raw count of redundant groups |
-| `subagent_tool_used: <Tool>` | a sub-agent used the tool |
-| `subagent_tool_absent: <Tool>` | no sub-agent used the tool |
+| `subagent_tool_used: <glob>` | a sub-agent used a tool matching this glob (same semantics as `tool_called`) |
+| `subagent_tool_absent: <glob>` | no sub-agent used a tool matching this glob |
 | `subagent_dispatched: <regex>` | a sub-agent whose `agentType` **or dispatch `description`** matches was dispatched (skills often dispatch with only a `description` and no `subagent_type` → `agentType:"unknown"`, so match by description, e.g. `subagent_dispatched: "TOP_DOWN"`) |
 | `subagent_declared_but_unused: <Tool>` | fails if a sub-agent declared the tool but never used **that** tool (even if it used others) — the v0.3.0 fabrication proxy |
 | `subagent_output_contains: {match?, contains}` | a dispatched sub-agent's own output contains the `contains` substring, optionally narrowed to dispatch(es) whose `agentType`/description match the `match` regex (omit `match` to check all dispatches) |

@@ -220,10 +220,21 @@ export const Assertion = z.strictObject({
     .describe(
       "a file exists AND is under a user-visible prefix: mnt/outputs, each connected-folder mount (mnt/<folder>), or the legacy mnt/.projects fallback (pre-1.14271.0)",
     ),
-  tool_called: z.string().optional().describe("a tool with this name was called"),
-  tool_not_called: z.string().optional().describe("a tool with this name was NOT called"),
-  subagent_tool_used: z.string().optional().describe("a sub-agent used this tool"),
-  subagent_tool_absent: z.string().optional().describe("no sub-agent used this tool"),
+  tool_called: z
+    .string()
+    .optional()
+    .describe(
+      "a called tool matched this glob (* = any run, ? = one char; exact when literal; anchored, case-sensitive) — e.g. mcp__workspace__*",
+    ),
+  tool_not_called: z.string().optional().describe("NO called tool matched this glob (* / ?; exact when literal; anchored, case-sensitive)"),
+  subagent_tool_used: z
+    .string()
+    .optional()
+    .describe("a sub-agent used a tool matching this glob (* / ?; exact when literal; anchored, case-sensitive)"),
+  subagent_tool_absent: z
+    .string()
+    .optional()
+    .describe("NO sub-agent used a tool matching this glob (* / ?; exact when literal; anchored, case-sensitive)"),
   subagent_dispatched: z.string().optional().describe("a sub-agent matching this regex (by agentType or description) was dispatched"),
   subagent_declared_but_unused: z.string().optional().describe("a sub-agent declared this tool but never used it (the fabrication proxy)"),
   subagent_output_contains: z

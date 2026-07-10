@@ -248,12 +248,12 @@ same set live from the schema.
 | `no_unexpected_files: [<glob>, …]` | every **newly created** file under a user-visible root matches ≥1 glob (workRoot-relative paths; `**` = whole path segment for any depth — use `outputs/handoff/**` for per-run subdirs); `[]` = no new files; **new-files-only** — overwriting a pre-existing file in place is invisible (use content-level producer stamping); live/verify-run without a pre-run manifest ⇒ evidence-unavailable hard-fail (live runs capture the baseline only when this key is asserted; recordings always capture); **microvm cannot capture** (use container/hostloop); replay needs `cassette.preRunPaths` (≥0.24 container/hostloop recordings) — cassettes without it **exclude** the key with a loud warning |
 | `input_unmodified: [<glob>, …]` | every **pre-existing** file whose workRoot-relative path matches ≥1 glob keeps an unchanged content hash after the run — the in-place-mutation companion to `no_unexpected_files`'s new-files check (`[]` is rejected by the schema — list at least one glob); a matched file that was deleted counts as a content change (fails); live/verify-run without a pre-run hash manifest ⇒ evidence-unavailable hard-fail; **microvm cannot capture**; replay needs `cassette.preRunHashes` — cassettes without it **exclude** the key with a loud warning; on replay it compares against the manifest's recorded `sha256`, never a re-hash of the materialized tree |
 | `self_heal_ran: <bool>` | a plugin-root self-heal script was (not) invoked |
-| `tool_called: <Tool>` | the agent invoked the tool (actually ran it) |
-| `tool_not_called: <Tool>` | the agent never invoked it |
+| `tool_called: <glob>` | a tool the agent ran matched this **glob** — `*` = any run, `?` = one char, exact when literal, anchored + case-sensitive. Exact name (`Write`) matches only that tool; `mcp__workspace__*` matches any workspace tool. GLOB, not regex (`.` is literal; `.*`/`\|` match nothing → warned) |
+| `tool_not_called: <glob>` | NO tool the agent ran matched this glob (`mcp__*` = "no MCP tool ran"). Same glob semantics as `tool_called` |
 | `tool_result_contains: <str>` | a tool result includes the literal string (content / replay-checkable — substring match) |
 | `tool_result_not_contains: <str>` | no tool result includes the literal string (content / replay-checkable; fails loud when tool results are absent) |
-| `subagent_tool_used: <Tool>` | a sub-agent used the tool |
-| `subagent_tool_absent: <Tool>` | no sub-agent used the tool |
+| `subagent_tool_used: <glob>` | a sub-agent used a tool matching this glob (same `*`/`?`, anchored, case-sensitive semantics as `tool_called`) |
+| `subagent_tool_absent: <glob>` | no sub-agent used a tool matching this glob |
 | `subagent_dispatched: <regex>` | a sub-agent whose `agentType` **or dispatch description** matches |
 | `subagent_declared_but_unused: <Tool>` | a sub-agent declared the tool but never used **that** tool (even if it used others) |
 | `subagent_output_contains: {match?, contains}` | a dispatched sub-agent's own output contains the substring `contains` — `match` (optional regex over `agentType`/`description`) narrows to specific dispatch(es); omitted, checks whether ANY dispatch's output contains it (existence check, not "all") |
@@ -263,6 +263,12 @@ same set live from the schema.
 | `skill_available: <regex>` | a staged skill's id matched the regex (offered, not necessarily invoked — see `skill_triggered` for invocation) — content-class: the id list comes from the agent's init `skills` listing, so it replays from the frozen init event (id-only; the `whenToUse` enrichment is live-disk and thus absent on replay, but the id is what's matched); evidence-unavailable only if `RunResult.context.availableSkills` is absent entirely (an older cassette recorded before the available-skills listing was captured) |
 | `connector_available: <regex>` | an MCP server/connector's name matched the regex (available, not necessarily used) — evidence-unavailable if `RunResult.context.mcpServers` is absent |
 | `tool_available: <regex>` | a tool in the init manifest matched the regex (available, not necessarily called — see `tool_called` for invocation) — evidence-unavailable if `RunResult.context.tools` is absent |
+
+**Name-matching styles differ by key (don't mix them up):** `tool_called`, `tool_not_called`,
+`subagent_tool_used`, `subagent_tool_absent` are **glob** (anchored, case-sensitive, `*`/`?`). `tool_available`,
+`skill_triggered`/`no_skill_triggered`, `skill_available`, `connector_available`, `skill_tool_used`,
+`subagent_type` are **regex** (unanchored, case-insensitive). So `tool_called: mcp__workspace__*` (glob) but
+`tool_available: mcp__workspace__.*` (regex) — a `.*` in a `tool_called` glob matches nothing and is warned.
 | `skill_tool_used: {skill, tool}` | a tool whose name matches `tool` ran inside a skill-activation window whose `skillId` matches `skill` (`RunResult.skillActivity`) — evidence-unavailable if skill-activity telemetry is absent; heuristic for inline skills (a sticky, sequential window matching the agent's `activeSkill` scope, not an exact per-tool boundary) |
 | `max_cost_usd: <N>` | the run's SDK-reported cost is ≤ N USD — evidence-unavailable if cost telemetry is absent. **Replay asserts the frozen recording's cost, not fresh spend** — a real regression needs a live `run` |
 | `max_tokens: <N>` | `usage.input_tokens + usage.output_tokens` ≤ N (cache tokens excluded) — same replay caveat as `max_cost_usd` |

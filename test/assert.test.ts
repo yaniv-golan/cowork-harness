@@ -148,7 +148,61 @@ describe("multi-key assertions evaluate ALL keys (AND), not just the first", () 
     // second key fails → whole assertion fails (first-key-wins would have passed on transcript)
     const r = evaluate([{ transcript_contains: "hello", tool_called: "Read" }], c);
     expect(pass(r)).toBe(false);
-    expect(r[0].message).toContain("tool not called: Read");
+    expect(r[0].message).toContain('no called tool matched "Read"');
+  });
+});
+
+describe("tool_called / tool_not_called / subagent_tool_* — glob matching", () => {
+  it("an exact literal name still matches exactly (no over-match)", () => {
+    const c = ctx({ toolsCalled: new Set(["Edit", "Write"]) });
+    expect(pass(evaluate([{ tool_called: "Edit" }], c))).toBe(true);
+    // exact literal must NOT match a superstring tool — the anti-over-match guard vs the regex alternative
+    expect(pass(evaluate([{ tool_called: "dit" }], c))).toBe(false);
+    const c2 = ctx({ toolsCalled: new Set(["MultiEdit"]) });
+    expect(pass(evaluate([{ tool_called: "Edit" }], c2))).toBe(false); // "Edit" ≠ "MultiEdit"
+  });
+
+  it("a family wildcard matches any tool in the family (the canary case)", () => {
+    const c = ctx({ toolsCalled: new Set(["mcp__workspace__bash", "Read"]) });
+    expect(pass(evaluate([{ tool_called: "mcp__workspace__*" }], c))).toBe(true);
+    expect(pass(evaluate([{ tool_called: "mcp__other__*" }], c))).toBe(false);
+    // ? matches exactly one char
+    expect(pass(evaluate([{ tool_called: "Rea?" }], c))).toBe(true);
+    expect(pass(evaluate([{ tool_called: "Re?" }], c))).toBe(false);
+  });
+
+  it("tool_not_called globs: passes iff NO called tool matches the family", () => {
+    const c = ctx({ toolsCalled: new Set(["mcp__workspace__bash"]) });
+    expect(pass(evaluate([{ tool_not_called: "Bash" }], c))).toBe(true); // native Bash not called
+    expect(pass(evaluate([{ tool_not_called: "mcp__workspace__*" }], c))).toBe(false); // a workspace tool WAS called
+    // the failure names the offending match
+    const r = evaluate([{ tool_not_called: "mcp__*" }], c);
+    expect(r[0].pass).toBe(false);
+    expect((r[0] as { message: string }).message).toContain("mcp__workspace__bash");
+  });
+
+  it("subagent_tool_used / _absent glob against the dispatch tree", () => {
+    const c = ctx({ subagentTools: new Set(["mcp__workspace__bash", "Read"]) });
+    expect(pass(evaluate([{ subagent_tool_used: "mcp__workspace__*" }], c))).toBe(true);
+    expect(pass(evaluate([{ subagent_tool_absent: "mcp__workspace__*" }], c))).toBe(false);
+    expect(pass(evaluate([{ subagent_tool_absent: "WebFetch" }], c))).toBe(true);
+  });
+
+  it("evidence-unavailable is preserved (a missing channel is not a silent pass/fail)", () => {
+    // toolsCalledMissing → both directions report evidence-unavailable, never vacuous.
+    const r1 = evaluate([{ tool_called: "mcp__*" }], ctx({ toolsCalledMissing: true }));
+    expect(r1[0].pass).toBe(false);
+    expect((r1[0] as { message: string }).message).toContain("evidence unavailable");
+    const r2 = evaluate([{ tool_not_called: "mcp__*" }], ctx({ toolsCalledMissing: true }));
+    expect(r2[0].pass).toBe(false);
+    expect((r2[0] as { message: string }).message).toContain("evidence unavailable");
+  });
+
+  it("a passing tool_called reports which concrete tool satisfied the glob", () => {
+    const c = ctx({ toolsCalled: new Set(["mcp__workspace__bash"]) });
+    const r = evaluate([{ tool_called: "mcp__workspace__*" }], c);
+    expect(r[0].pass).toBe(true);
+    expect((r[0] as { evidence?: string }).evidence).toContain("mcp__workspace__bash");
   });
 });
 

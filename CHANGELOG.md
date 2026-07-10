@@ -82,6 +82,15 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **`tool_called` / `tool_not_called` / `subagent_tool_used` / `subagent_tool_absent` are now GLOB-matched,
+  not exact-string.** These four keys did an exact tool-name lookup, so a family pattern like
+  `tool_called: mcp__workspace__*` was unsatisfiable (it searched for a tool literally named
+  `mcp__workspace__*`). They now match a glob — `*` = any run, `?` = one char, everything else literal,
+  anchored + case-sensitive — so `mcp__workspace__*` matches any workspace tool while an exact name (`Write`)
+  still matches only that tool (no over-match: `Edit` ≠ `MultiEdit`). Existing exact-name asserts are
+  unchanged. A pattern carrying a regex-only metacharacter (`.*`, `|`, `[…]`) is warned, since it matches no
+  tool name under glob and could otherwise silently pass a `_not_`/`_absent` assert. Failure messages now
+  list the tools that actually ran. (Distinct from `tool_available`, which stays a regex.)
 - **A resumed turn no longer clobbers an earlier turn's `run.jsonl` / `result.json`.** Both were
   rewritten in full each turn, so after a `--session-id` + `--resume` session you could not recover
   turn 1's transcript or result — while `events.jsonl`/`timeline.jsonl` (append-mode) blended turns.

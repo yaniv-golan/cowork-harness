@@ -521,6 +521,27 @@ function check(
   const fail = (message: string): KeyResult => ({ pass: false, message });
   const truncated = ctx.truncatedPaths ?? new Map<string, "size" | "readonly" | "unreadable" | undefined>();
 
+  // Tool-name matching for tool_called / tool_not_called / subagent_tool_used / subagent_tool_absent:
+  // a GLOB over the closed set of literal tool identifiers (`*` any run, `?` one char; every other char
+  // literal; anchored full-match, case-sensitive). A pattern with no metachar is an exact name — so all
+  // existing exact asserts are unchanged — while `mcp__workspace__*` matches any workspace tool. Reuses the
+  // path-glob engine; its `/`-segment / `**` handling is inert for tool names (they contain no `/`).
+  const toolMatches = (pattern: string, name: string): boolean => anyGlobMatches([pattern], name);
+  // These four keys are GLOB-matched, not regex. A pattern carrying a regex-only metacharacter is almost
+  // always a regex-habit slip (`mcp__*.*`, `Bash|Read`) that would match NOTHING under glob — a silent
+  // false-green for the `_not_`/`_absent` direction the failure message can't reach. Warn loudly.
+  const warnIfRegexish = (key: string, pattern: string): void => {
+    if (/\.\*|\.\+|[|()[\]+^$]|\\[dwsb]/.test(pattern))
+      warn(
+        `::warning:: ${key}: "${pattern}" looks like a regex, but this key is GLOB-matched (use * and ?, not .* or | []). ` +
+          `A regex-only pattern matches no tool name and can silently pass a _not_/_absent assert.\n`,
+      );
+  };
+  const toolSample = (s: Set<string>): string => {
+    const arr = [...s];
+    return arr.length ? arr.slice(0, 12).join(", ") + (arr.length > 12 ? `, …(+${arr.length - 12})` : "") : "(none called)";
+  };
+
   if (a.transcript_contains !== undefined)
     results.push(
       ctx.transcriptMissing
@@ -695,40 +716,52 @@ function check(
       }
     }
   }
-  if (a.tool_called !== undefined)
+  if (a.tool_called !== undefined) {
+    warnIfRegexish("tool_called", a.tool_called);
+    const hit = [...ctx.toolsCalled].find((t) => toolMatches(a.tool_called!, t));
     results.push(
       ctx.toolsCalledMissing
         ? // Mirror tool_not_called: a missing tool-count channel is "cannot evaluate", not "not called". #2
           fail(`evidence unavailable: tool counts absent from result.json — cannot evaluate tool_called`)
-        : ctx.toolsCalled.has(a.tool_called)
-          ? ok(`tool_called: ${a.tool_called} was called`)
-          : fail(`tool not called: ${a.tool_called}`),
+        : hit !== undefined
+          ? ok(`tool_called: "${a.tool_called}" matched ${hit}`)
+          : fail(`tool not called: no called tool matched "${a.tool_called}" (called: ${toolSample(ctx.toolsCalled)})`),
     );
-  if (a.tool_not_called !== undefined)
+  }
+  if (a.tool_not_called !== undefined) {
+    warnIfRegexish("tool_not_called", a.tool_not_called);
+    const hits = [...ctx.toolsCalled].filter((t) => toolMatches(a.tool_not_called!, t));
     results.push(
       ctx.toolsCalledMissing
         ? fail(`evidence unavailable: tool counts absent from result.json — cannot evaluate tool_not_called`)
-        : !ctx.toolsCalled.has(a.tool_not_called)
+        : hits.length === 0
           ? ok()
-          : fail(`tool unexpectedly called: ${a.tool_not_called}`),
+          : fail(`tool unexpectedly called: "${a.tool_not_called}" matched ${hits.join(", ")}`),
     );
-  if (a.subagent_tool_used !== undefined)
+  }
+  if (a.subagent_tool_used !== undefined) {
+    warnIfRegexish("subagent_tool_used", a.subagent_tool_used);
+    const hit = [...ctx.subagentTools].find((t) => toolMatches(a.subagent_tool_used!, t));
     results.push(
       ctx.subagentsMissing
         ? // Mirror subagent_tool_absent: a missing dispatch tree is "cannot evaluate", not "did not use". #3
           fail(`evidence unavailable: sub-agent dispatch tree absent from result.json — cannot evaluate subagent_tool_used`)
-        : ctx.subagentTools.has(a.subagent_tool_used)
-          ? ok()
-          : fail(`sub-agent did not use: ${a.subagent_tool_used}`),
+        : hit !== undefined
+          ? ok(`subagent_tool_used: "${a.subagent_tool_used}" matched ${hit}`)
+          : fail(`sub-agent did not use: no sub-agent tool matched "${a.subagent_tool_used}" (used: ${toolSample(ctx.subagentTools)})`),
     );
-  if (a.subagent_tool_absent !== undefined)
+  }
+  if (a.subagent_tool_absent !== undefined) {
+    warnIfRegexish("subagent_tool_absent", a.subagent_tool_absent);
+    const hits = [...ctx.subagentTools].filter((t) => toolMatches(a.subagent_tool_absent!, t));
     results.push(
       ctx.subagentsMissing
         ? fail(`evidence unavailable: sub-agent dispatch tree absent from result.json — cannot evaluate subagent_tool_absent`)
-        : !ctx.subagentTools.has(a.subagent_tool_absent)
+        : hits.length === 0
           ? ok()
-          : fail(`sub-agent unexpectedly used: ${a.subagent_tool_absent}`),
+          : fail(`sub-agent unexpectedly used: "${a.subagent_tool_absent}" matched ${hits.join(", ")}`),
     );
+  }
   if (a.subagent_dispatched !== undefined) {
     // Match the agentType OR the description — skills often dispatch with only a `description`
     // (no subagent_type → agentType "unknown"), so name-matching alone would miss those.
