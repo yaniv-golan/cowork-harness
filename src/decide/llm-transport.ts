@@ -1,11 +1,28 @@
 import { spawn } from "node:child_process";
 import { warn, envPositiveNumber } from "../io.js";
+import { isUsageLimit } from "../usage-limit.js";
 import type { Complete, CompleteResult } from "./decider.js";
 
 /** A spawn rejection the retry wrapper may re-attempt: a TRANSIENT non-zero exit. Timeout / maxBytes /
- *  spawn-ENOENT failures leave this false so they fail loud on the first attempt (see claudeCliComplete). */
+ *  spawn-ENOENT failures leave this false so they fail loud on the first attempt (see claudeCliComplete).
+ *  A usage-limit exit also sets it false — retrying into a spent quota just burns the batch. */
 class TransportExit extends Error {
-  retryable = true;
+  retryable: boolean;
+  constructor(message: string, retryable = true) {
+    super(message);
+    this.retryable = retryable;
+  }
+}
+
+/** Best-effort `api_error_status` from a `claude -p --output-format json` envelope (429 on a rate/usage
+ *  error). null if absent or the envelope doesn't parse. */
+function tryExtractApiErrorStatus(raw: string): number | undefined {
+  try {
+    const parsed = JSON.parse(raw) as { api_error_status?: number };
+    return typeof parsed.api_error_status === "number" ? parsed.api_error_status : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Tail of a captured stream for an error message — keep the END (where the diagnosis is), bounded. */
@@ -140,9 +157,17 @@ function spawnOnce(bin: string, prompt: string, model: string, timeoutMs: number
       }
       // Non-zero exit: fold the captured output into the message (the diagnosis lives in stdout, not stderr —
       // verified) and mark RETRYABLE so a transient hiccup gets a bounded re-attempt before failing loud.
-      const o = tail(tryExtractResultText(raw) ?? raw);
+      const resultText = tryExtractResultText(raw);
+      const o = tail(resultText ?? raw);
       const e = tail(err);
       const diag = [o && `stdout: ${o}`, e && `stderr: ${e}`].filter(Boolean).join(" | ");
+      // Usage/quota limit: don't retry into a spent quota — fail loud & fast so a batch halts.
+      if (resultText && isUsageLimit(resultText, tryExtractApiErrorStatus(raw))) {
+        reject(
+          new TransportExit(`LLM decider transport (${bin} -p): usage/quota limit hit — retry after the limit resets. ${diag}`, false),
+        );
+        return;
+      }
       reject(new TransportExit(`LLM decider transport (${bin} -p) exited ${code}${diag ? ` — ${diag}` : " (no output captured)"}`));
     });
   });

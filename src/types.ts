@@ -411,11 +411,10 @@ export const Assertion = z.strictObject({
       "fails if the run CREATED a file under a user-visible root whose workRoot-relative path (e.g. outputs/x.md) matches none of these globs (** = whole path segment for any depth, * within a segment, ? one char); [] = no new files allowed; new-files-only — overwriting a pre-existing file in place is invisible (use content-level producer stamping); needs a pre-run manifest (harness ≥0.24 recordings) — absence fails loud on live/verify-run; microvm cannot capture (use container/hostloop)",
     ),
   input_unmodified: z
-    .array(z.string().min(1))
-    .min(1)
+    .union([z.string().min(1), z.array(z.string().min(1)).min(1)])
     .optional()
     .describe(
-      "every pre-existing file whose workRoot-relative path matches a glob has an unchanged content hash after the run (in-place mutation detector)",
+      "a single glob OR an array of globs; every pre-existing file whose workRoot-relative path matches has an unchanged content hash after the run (in-place mutation detector)",
     ),
   self_heal_ran: z.boolean().optional().describe("skill resolved scripts via /sessions (plugin-root self-heal)"),
   transcript_no_host_path: z
@@ -725,6 +724,9 @@ export interface RunStatus {
   // terminal-error diagnostics, surfaced so a failure-output debugger gets more than a bare "error"
   // (these live in result.json but not status.json before this). Present only on a terminal error write.
   errorSource?: "spawn" | "protocol" | "exit" | "agent" | "result" | "no_result" | "timeout";
+  // classifies the error KIND — surfaced here so a batch/status watcher can halt-fast on `usage_limit`
+  // (quota exhausted; retrying into a spent quota just burns the batch) rather than treating it as generic.
+  resultErrorKind?: "transport" | "agent" | "usage_limit";
   resultSubtype?: string;
   stderrLogPath?: string;
 }
@@ -777,7 +779,10 @@ export interface RunResult {
   fidelity: string;
   baseline: string;
   result: "success" | "error";
-  resultErrorKind?: "transport" | "agent"; // when result==="error", classify a tail-end transport drop vs a genuine failure
+  // when result==="error", classify the KIND: a tail-end transport drop, a genuine agent/skill failure, or
+  // usage_limit (quota exhausted — an is_error result with HTTP 429 + a terminal usage-limit message; NOT
+  // the skill's fault, retry after the reset). Verdict- and renderer-relevant.
+  resultErrorKind?: "transport" | "agent" | "usage_limit";
   /** How the run terminated in error — the `error` event's finer source (`spawn`/`protocol`/`exit`/`agent`,
    *  or `result` for the SDK-wrapped is_error-result path), OR `no_result` when the stream ended with no
    *  terminal event at all (the turn/time-exhaustion case: neither a result nor an error event fired), OR

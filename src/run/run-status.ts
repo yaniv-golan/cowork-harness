@@ -32,6 +32,7 @@ function buildStatus(
     result: "success" | "error";
     durationMs: number;
     errorSource?: RunStatus["errorSource"];
+    resultErrorKind?: RunStatus["resultErrorKind"];
     resultSubtype?: string;
     stderrLogPath?: string;
   },
@@ -55,6 +56,7 @@ function buildStatus(
           result: terminal.result,
           durationMs: terminal.durationMs,
           errorSource: terminal.errorSource,
+          resultErrorKind: terminal.resultErrorKind,
           resultSubtype: terminal.resultSubtype,
           stderrLogPath: terminal.stderrLogPath,
         }
@@ -126,6 +128,7 @@ export function finalizeRunStatus(
         // Terminal-error diagnostics so a failure-output reader gets more than a bare "error". stderrLogPath
         // is the live agent log (same path the assembler records); only meaningful on the error terminal.
         errorSource: result === "error" ? record.errorSource : undefined,
+        resultErrorKind: result === "error" ? record.resultErrorKind : undefined,
         resultSubtype: result === "error" ? record.resultSubtype : undefined,
         stderrLogPath: result === "error" ? join(outDir, "agent.stderr.log") : undefined,
       },

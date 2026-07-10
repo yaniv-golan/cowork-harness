@@ -2330,7 +2330,9 @@ async function recordScenarioObject(
   // has no use for this warning; noise on every secret-scrubbed recording would drown out the signal.
   if (nulledPaths.length) {
     const affectsInputUnmodified = scenario.assert.some(
-      (a) => a.input_unmodified !== undefined && nulledPaths.some((p) => anyGlobMatches(a.input_unmodified!, p)),
+      (a) =>
+        a.input_unmodified !== undefined &&
+        nulledPaths.some((p) => anyGlobMatches(Array.isArray(a.input_unmodified) ? a.input_unmodified : [a.input_unmodified!], p)),
     );
     if (affectsInputUnmodified) {
       warn(

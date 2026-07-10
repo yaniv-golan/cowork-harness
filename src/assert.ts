@@ -1204,7 +1204,7 @@ function check(
         ),
       );
     } else {
-      const globs = a.input_unmodified;
+      const globs = Array.isArray(a.input_unmodified) ? a.input_unmodified : [a.input_unmodified]; // accept a bare string
       const matched = Object.keys(ctx.preRunHashes).filter((p) => anyGlobMatches(globs, p));
       const modified: string[] = []; // present post-run with a different hash
       const removed: string[] = []; // gone post-run (deletion is also a content change)

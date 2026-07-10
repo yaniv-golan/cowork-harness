@@ -76,6 +76,7 @@ export type AgentEvent =
       usage?: Record<string, unknown>;
       resultText?: string;
       subtype?: string; // resultText/subtype carry the SDK result payload so a transport-error result can be classified
+      apiErrorStatus?: number; // HTTP status of an API error (429 + terminal usage-limit text ⇒ quota exhausted)
       costUsd?: number; // SDK's total_cost_usd for this invocation (was dropped on the floor before)
       numTurns?: number; // SDK's num_turns for this invocation (was dropped on the floor before)
       // per-model cost/token breakdown, cumulative for the whole run — a TOP-LEVEL sibling of `usage` on
@@ -860,6 +861,9 @@ export function parseMessage(msg: any): AgentEvent[] {
         // (e.g. "API Error: Connection closed", subtype error_during_execution) from a skill failure.
         resultText: typeof msg.result === "string" ? msg.result : undefined,
         subtype: typeof msg.subtype === "string" ? msg.subtype : undefined,
+        // HTTP status of the API error on an is_error result (401/403/413/429/529). 429 + a terminal
+        // usage-limit message ⇒ quota exhausted (classified as usage_limit, distinct from a transient 429).
+        apiErrorStatus: typeof msg.api_error_status === "number" ? msg.api_error_status : undefined,
         costUsd: typeof msg.total_cost_usd === "number" ? msg.total_cost_usd : undefined,
         numTurns: typeof msg.num_turns === "number" ? msg.num_turns : undefined,
         modelUsage:

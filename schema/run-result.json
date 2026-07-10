@@ -120,9 +120,10 @@
       "type": "string",
       "enum": [
         "transport",
-        "agent"
+        "agent",
+        "usage_limit"
       ],
-      "description": "Fix 5: when result is 'error', whether it was a tail-end transport drop (connection closed after a clean result) vs a genuine agent/skill failure"
+      "description": "when result is 'error', the KIND: a tail-end transport drop (connection closed after a clean result), a genuine agent/skill failure, or usage_limit (quota exhausted — an is_error result with HTTP 429 + a terminal usage-limit message; not the skill's fault, retry after reset)"
     },
     "errorSource": {
       "type": "string",

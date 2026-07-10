@@ -90,6 +90,16 @@ describe("computeVerdict (the single verdict source)", () => {
       "live",
     );
     expect(alsoFailed.signals.find((s) => s.code === "transport_error")?.message).toMatch(/real failure/);
+
+    // usage_limit → its own signal (still fail, but "not a skill failure; retry after reset")
+    const usage = computeVerdict(rr({ result: "error", resultErrorKind: "usage_limit" }), "live");
+    expect(usage.pass).toBe(false);
+    const us = usage.signals.find((s) => s.code === "usage_limit");
+    expect(us).toBeDefined();
+    expect(us?.message).toMatch(/not a skill failure/i);
+    expect(us?.message).toMatch(/reset/i);
+    // and it must NOT also emit the generic result_error/transport_error
+    expect(usage.signals.some((s) => s.code === "result_error" || s.code === "transport_error")).toBe(false);
   });
 
   it("guard roster reflects lane + probe outcome; never ✓ for a guard that didn't run", () => {

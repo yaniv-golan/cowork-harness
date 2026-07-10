@@ -1,4 +1,5 @@
 import { warn } from "../io.js";
+import { isUsageLimit } from "../usage-limit.js";
 import { randomUUID, createHash } from "node:crypto";
 import type { AgentSession, AgentEvent, DecisionRequest, DecisionResponse, QSpec } from "../agent/session.js";
 import type { UsageInfo, CostInfo, RunResult } from "../types.js";
@@ -149,7 +150,7 @@ export interface RunRecord {
   result: "success" | "error";
   // when result === "error", whether the error looks like a transport drop (connection closed after a
   // clean result) vs a genuine agent/skill failure. Undefined on success or unclassified errors.
-  resultErrorKind?: "transport" | "agent";
+  resultErrorKind?: "transport" | "agent" | "usage_limit";
   // finer error source than resultErrorKind's binary — the raw `error`-event source, or "result" for
   // the SDK-wrapped is_error result path, or "no_result" when the stream closed with no terminal event,
   // or "timeout" when the harness's wall-clock limit killed the run. Undefined when no error fired; a
@@ -261,7 +262,12 @@ export function classifyResultError(
   source: "result" | "exit" | "spawn" | "protocol",
   signature: string,
   sawSuccessResult: boolean,
-): "transport" | "agent" {
+  apiErrorStatus?: number,
+): "transport" | "agent" | "usage_limit" {
+  // Quota exhaustion: an is_error result carrying HTTP 429 AND terminal usage-limit text (a bare 429 is an
+  // ambiguous transient/overload window the SDK retries, so BOTH are required — see usage-limit.ts). Only
+  // the "result" path carries api_error_status.
+  if (source === "result" && isUsageLimit(signature, apiErrorStatus)) return "usage_limit";
   const isTransport = TRANSPORT_SIGNATURE.test(signature);
   if (source === "result") return isTransport ? "transport" : "agent";
   if (source === "exit") return sawSuccessResult && isTransport ? "transport" : "agent";
@@ -614,7 +620,12 @@ export class Run {
               this.rec.result = "error";
               // path (a): the SDK wrapped a transport failure into an is_error result — the result IS the
               // signal (no prior-result gate). Classify off the SDK result payload + subtype.
-              this.rec.resultErrorKind = classifyResultError("result", `${ev.subtype ?? ""} ${ev.resultText ?? ""}`, sawSuccessResult);
+              this.rec.resultErrorKind = classifyResultError(
+                "result",
+                `${ev.subtype ?? ""} ${ev.resultText ?? ""}`,
+                sawSuccessResult,
+                ev.apiErrorStatus,
+              );
               this.rec.errorSource = "result";
             } else {
               this.rec.result = "success";
