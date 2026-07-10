@@ -2,7 +2,7 @@
   "__meta__": {
     "judgeModel": "claude-opus-4-8",
     "answererModel": "claude-sonnet-5",
-    "judgePromptHash": "stale-pre-F5-rebaseline-required",
+    "judgePromptHash": "d0e18a8e3a2eca73",
     "harnessVersion": "0.27.0",
     "date": "2026-07-09"
   },
@@ -16,21 +16,21 @@
         {
           "index": 0,
           "claim": "The scenario uses a sandboxed fidelity tier (e.g. container) since it must assert egress to api.weather.example.com",
-          "pass": "5/6",
+          "pass": "6/6",
           "priors": null,
           "discriminating": true
         },
         {
           "index": 1,
           "claim": "The scenario pins determinism with on_unanswered: fail (and scripted when_question/choose answers only if the skill raises gates)",
-          "pass": "0/6",
+          "pass": "3/6",
           "priors": null,
           "discriminating": true
         },
         {
           "index": 2,
           "claim": "Content assertions (e.g. transcript_matches/result) are kept in separate assert items from filesystem/egress assertions",
-          "pass": "2/6",
+          "pass": "3/6",
           "priors": null,
           "discriminating": true
         },
@@ -44,14 +44,14 @@
         {
           "index": 4,
           "claim": "egress_* assertions are live-only and never evaluate on replay (they belong on a live/nightly lane), while filesystem keys like file_exists/user_visible_artifact are replay-checkable only when the cassette carries a record-time artifacts manifest",
-          "pass": "5/6",
+          "pass": "6/6",
           "priors": null,
           "discriminating": true
         },
         {
           "index": 5,
           "claim": "A single assert item should not mix content keys with filesystem/egress keys",
-          "pass": "2/6",
+          "pass": "4/6",
           "priors": null,
           "discriminating": true
         }
@@ -80,7 +80,7 @@
         {
           "index": 2,
           "claim": "The error now prints the offered options plus a closest-match suggestion so the anchor can be fixed from the error alone",
-          "pass": "6/6",
+          "pass": "5/6",
           "priors": null,
           "discriminating": true
         },
@@ -216,7 +216,7 @@
         {
           "index": 2,
           "claim": "tool_called does not mean 'attempted': tool counts are authoritative and de-duped",
-          "pass": "5/6",
+          "pass": "6/6",
           "priors": null,
           "discriminating": true
         },
@@ -230,7 +230,7 @@
         {
           "index": 4,
           "claim": "tool_called proves the tool actually ran, not merely that it was attempted",
-          "pass": "4/6",
+          "pass": "6/6",
           "priors": null,
           "discriminating": true
         }
@@ -352,7 +352,7 @@
         {
           "index": 1,
           "claim": "A single gate bundling 3 sub-questions counts as 3 against questions_count_max",
-          "pass": "5/6",
+          "pass": "4/6",
           "priors": null,
           "discriminating": true
         },
@@ -368,12 +368,12 @@
           "claim": "gate_answers_delivered: true passes vacuously when no gate fires at all",
           "pass": "6/6",
           "priors": null,
-          "discriminating": false
+          "discriminating": true
         },
         {
           "index": 4,
           "claim": "Whether a gate fires is model-dependent, so gate_answers_delivered can't catch 'the gate never fired'",
-          "pass": "5/6",
+          "pass": "4/6",
           "priors": null,
           "discriminating": true
         },
@@ -416,7 +416,7 @@
         {
           "index": 3,
           "claim": "Advises scanning the verdict signals array after every run",
-          "pass": "3/6",
+          "pass": "6/6",
           "priors": null,
           "discriminating": true
         },
@@ -447,12 +447,12 @@
           "claim": "Keep .env OUT of any mounted folder — a mounted folder is copied into the sandbox and the token could leak",
           "pass": "5/5",
           "priors": "1/1",
-          "discriminating": true
+          "discriminating": false
         },
         {
           "index": 1,
           "claim": ".env resolution order is: env vars, then --dotenv, then ./.env, then the install .env",
-          "pass": "4/5",
+          "pass": "5/5",
           "priors": "1/1",
           "discriminating": true
         },
@@ -475,7 +475,7 @@
           "claim": "An artifact_json/content assertion targeting that artifact fails at replay because the body no longer matches",
           "pass": "5/5",
           "priors": "1/1",
-          "discriminating": true
+          "discriminating": false
         },
         {
           "index": 5,
@@ -502,14 +502,14 @@
         {
           "index": 1,
           "claim": "Whether file_exists is even evaluated on replay depends on the cassette carrying a record-time artifacts manifest (with one it runs against the manifest; a manifest-less cassette skips it rather than failing)",
-          "pass": "4/6",
+          "pass": "1/6",
           "priors": null,
           "discriminating": true
         },
         {
           "index": 2,
           "claim": "The fix is to assert on content rather than mere existence: a content-class assertion (e.g. transcript_contains or transcript_matches on a stable marker) that survives replay and fails on empty output",
-          "pass": "6/6",
+          "pass": "5/6",
           "priors": null,
           "discriminating": false
         }
@@ -545,14 +545,14 @@
         {
           "index": 3,
           "claim": "Both --decider-llm and on_unanswered: llm are flagged as nonDeterministic",
-          "pass": "5/6",
+          "pass": "6/6",
           "priors": null,
           "discriminating": true
         },
         {
           "index": 4,
           "claim": "--on-unanswered first is also flagged nonDeterministic, so it is not a deterministic substitute",
-          "pass": "5/6",
+          "pass": "6/6",
           "priors": null,
           "discriminating": true
         },
@@ -567,50 +567,50 @@
     },
     "eval-4-green-run-that-actually-stalled": {
       "reps": 6,
-      "skillInvoked": "5/6",
-      "validReps": 5,
+      "skillInvoked": "6/6",
+      "validReps": 6,
       "errored": 0,
       "claims": [
         {
           "index": 0,
           "claim": "result: success only means the agent didn't error — it does not mean the task was completed",
-          "pass": "5/5",
-          "priors": "1/1",
+          "pass": "6/6",
+          "priors": null,
           "discriminating": false
         },
         {
           "index": 1,
           "claim": "A turn ending with a plain-text re-ask after an already-answered gate still reports result: success",
-          "pass": "5/5",
-          "priors": "1/1",
-          "discriminating": false
+          "pass": "6/6",
+          "priors": null,
+          "discriminating": true
         },
         {
           "index": 2,
           "claim": "The stalled verdict signal is designed to catch a run ending on a question with no productive tool work after its last gate",
-          "pass": "5/5",
-          "priors": "1/1",
+          "pass": "6/6",
+          "priors": null,
           "discriminating": true
         },
         {
           "index": 3,
           "claim": "The stalled signal is a tool-position heuristic: any post-gate tool call, even an errored one, clears the flag (false negative)",
-          "pass": "5/5",
-          "priors": "1/1",
+          "pass": "6/6",
+          "priors": null,
           "discriminating": true
         },
         {
           "index": 4,
           "claim": "A deliverable written before a final confirmation gate does not clear the stalled flag (false positive) — use allow_stall: true there",
-          "pass": "4/5",
-          "priors": "1/1",
+          "pass": "6/6",
+          "priors": null,
           "discriminating": true
         },
         {
           "index": 5,
           "claim": "Recommends asserting the actual deliverable (file_exists/artifact_json/transcript_matches) and checking the verdict signals array for stalled, rather than relying on result: success alone",
-          "pass": "5/5",
-          "priors": "1/1",
+          "pass": "6/6",
+          "priors": null,
           "discriminating": true
         }
       ]
@@ -633,12 +633,12 @@
           "claim": "Adding a host to egress.extra_allow is a no-op here because the approval gate is orthogonal to the allowlist",
           "pass": "6/6",
           "priors": null,
-          "discriminating": false
+          "discriminating": true
         },
         {
           "index": 2,
           "claim": "Fix 1: put the URL directly in the prompt, making it provenanced and skipping the gate (and the allowlist) entirely",
-          "pass": "6/6",
+          "pass": "5/6",
           "priors": null,
           "discriminating": true
         },
@@ -674,14 +674,14 @@
         {
           "index": 1,
           "claim": "questions_count_max is a gate-lifecycle key that needs the cassette's controlOut stream; any modern recording already has it",
-          "pass": "5/6",
+          "pass": "6/6",
           "priors": null,
           "discriminating": true
         },
         {
           "index": 2,
           "claim": "Only a pre-controlOut cassette needs a single re-record to permanently unlock gate assertions",
-          "pass": "5/6",
+          "pass": "6/6",
           "priors": null,
           "discriminating": true
         },
@@ -695,7 +695,7 @@
         {
           "index": 4,
           "claim": "Assert-only edits are re-checkable token-free via replay --assert-from/--reassert (and verify-run against a kept run dir), while a prompt/answers/skill change reshapes the recording itself and needs a real re-record",
-          "pass": "5/6",
+          "pass": "6/6",
           "priors": null,
           "discriminating": true
         },
@@ -704,99 +704,99 @@
           "claim": "Should not recommend re-recording the whole fleet or hand-editing the cassettes' frozen assert blocks",
           "pass": "6/6",
           "priors": null,
-          "discriminating": false
+          "discriminating": true
         }
       ]
     },
     "eval-7-cassette-tier": {
       "reps": 6,
-      "skillInvoked": "4/6",
-      "validReps": 4,
+      "skillInvoked": "3/6",
+      "validReps": 3,
       "errored": 0,
       "claims": [
         {
           "index": 0,
           "claim": "Reads the cassette top-level effectiveFidelity field (hostloop in this fixture) as the tier the live run actually resolved to",
-          "pass": "4/4",
-          "priors": "2/2",
+          "pass": "3/3",
+          "priors": "3/3",
           "discriminating": false
         },
         {
           "index": 1,
           "claim": "Explains fidelity: cowork means resolve from the baseline's host-loop gate at record time, so the authored value alone does not tell you the tier",
-          "pass": "4/4",
-          "priors": "2/2",
+          "pass": "3/3",
+          "priors": "2/3",
           "discriminating": true
         },
         {
           "index": 2,
           "claim": "Points to verify-cassettes to catch future drift: it raises a resolved-tier staleness finding when a cowork cassette effectiveFidelity no longer matches what the current baseline resolves to",
-          "pass": "4/4",
-          "priors": "1/2",
+          "pass": "3/3",
+          "priors": "1/3",
           "discriminating": true
         },
         {
           "index": 3,
           "claim": "Mentions unverifiable-tier for a cassette that predates effectiveFidelity",
-          "pass": "4/4",
-          "priors": "2/2",
+          "pass": "3/3",
+          "priors": "1/3",
           "discriminating": true
         },
         {
           "index": 4,
           "claim": "Does not incorrectly claim the scenario fidelity: field answers the question",
-          "pass": "4/4",
-          "priors": "2/2",
+          "pass": "3/3",
+          "priors": "3/3",
           "discriminating": false
         }
       ]
     },
     "eval-8-allow-patterns-file-format": {
       "reps": 6,
-      "skillInvoked": "6/6",
-      "validReps": 6,
+      "skillInvoked": "5/6",
+      "validReps": 5,
       "errored": 0,
       "claims": [
         {
           "index": 0,
           "claim": "The file format is plain text: one regex pattern per line",
-          "pass": "6/6",
-          "priors": null,
+          "pass": "5/5",
+          "priors": "1/1",
           "discriminating": true
         },
         {
           "index": 1,
           "claim": "Blank lines and lines starting with # are ignored",
-          "pass": "6/6",
-          "priors": null,
+          "pass": "4/5",
+          "priors": "1/1",
           "discriminating": true
         },
         {
           "index": 2,
           "claim": "Patterns are matched against the WHOLE finding token (anchored, not substring), and matching is case-sensitive unless the regex carries an i flag",
-          "pass": "5/6",
-          "priors": null,
+          "pass": "4/5",
+          "priors": "1/1",
           "discriminating": true
         },
         {
           "index": 3,
           "claim": "File entries are ALL-CLASS (equivalent to bare --allow), unlike a class-scoped flag like --allow-domain",
-          "pass": "6/6",
-          "priors": null,
+          "pass": "4/5",
+          "priors": "1/1",
           "discriminating": true
         },
         {
           "index": 4,
           "claim": "Moving a class-scoped allow into the file widens its scope (e.g. a domain pattern could also suppress a path/email finding)",
-          "pass": "6/6",
-          "priors": null,
+          "pass": "5/5",
+          "priors": "1/1",
           "discriminating": true
         },
         {
           "index": 5,
           "claim": "--allow-patterns-file takes a path to a file OF patterns, not a path to allow directly",
-          "pass": "4/6",
-          "priors": null,
+          "pass": "2/5",
+          "priors": "0/1",
           "discriminating": true
         }
       ]

@@ -55,6 +55,27 @@ describe("bucketDiff — regression / inconclusive / improvement / trigger / non
   });
 });
 
+describe("bucketDiff — trigger-rate uses the Fisher test, not a crude threshold", () => {
+  const trig = (base: string, cand: string) =>
+    bucketDiff({ s: scen(base, [claim(0, "6/6", { discriminating: true })]) }, { s: scen(cand, [claim(0, "6/6")]) }).triggerRegressions
+      .length;
+
+  it("does NOT fire on a statistically-insignificant invocation dip (the real eval-8 case: 5/6→3/6, p≈0.3)", () => {
+    // Model-invocation nondeterminism on a SAME-CODE run must not manufacture a trigger regression.
+    expect(fisherDropP(5, 6, 3, 6)).toBeGreaterThan(0.05);
+    expect(trig("5/6", "3/6")).toBe(0);
+    expect(trig("6/6", "4/6")).toBe(0); // 6/6→4/6 p≈0.11, noise
+  });
+  it("DOES fire on a real invocation collapse from a reliable baseline", () => {
+    expect(trig("6/6", "1/6")).toBe(1); // 6/6→1/6 p≈0.008
+    expect(trig("6/6", "0/6")).toBe(1); // total collapse
+    expect(trig("6/6", "2/6")).toBe(1); // 6/6→2/6 p≈0.03
+  });
+  it("does not fire when the baseline itself was not reliably invoking (<0.8)", () => {
+    expect(trig("3/6", "0/6")).toBe(0); // baseline never reliably fired → nothing to regress from
+  });
+});
+
 describe("modelMismatch — the gate's same-model precondition", () => {
   const meta = (over: Partial<ProfileMeta> = {}): ProfileMeta => ({
     judgeModel: "claude-opus-4-8",

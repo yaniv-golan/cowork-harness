@@ -146,10 +146,14 @@ export function bucketDiff(baseline: Profile, candidate: Profile): Bucketed {
       out.unmatched.push(`${scenario} (missing from candidate)`);
       continue;
     }
-    // trigger-rate: baseline invoked ~fully → candidate ≤ half
+    // trigger-rate regression: the skill reliably fired at baseline (≥0.8) and its invocation dropped
+    // SIGNIFICANTLY in the candidate — judged by the SAME one-sided Fisher test used per-claim, not a crude
+    // fixed threshold. A fixed "candidate ≤ 0.5" fires on a statistically-insignificant dip (e.g. 5/6→3/6,
+    // p≈0.3) driven by model-invocation nondeterminism, manufacturing a false red on a same-code run;
+    // Fisher fires only on a real collapse (6/6→≤1/6) and routes noise to inconclusive.
     const [bInv, bTot] = bs.skillInvoked.split("/").map(Number);
     const [cInv, cTot] = cs.skillInvoked.split("/").map(Number);
-    if (bTot && bInv / bTot >= 0.8 && cTot && cInv / cTot <= 0.5)
+    if (bTot && cTot && bInv / bTot >= 0.8 && cInv / cTot < bInv / bTot && fisherDropP(bInv, bTot, cInv, cTot) <= ALPHA)
       out.triggerRegressions.push({ scenario, base: bs.skillInvoked, cand: cs.skillInvoked });
     for (const bc of bs.claims) {
       // Match claims by TEXT, not index (C1: rubric is `string[]`, so the claim text IS its identity).
