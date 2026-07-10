@@ -125,6 +125,7 @@ interface SubagentDispatch {
   prompt?: string; // dispatch input.prompt, assertText-capped
   model?: string; // the dispatching message's model
   output?: string; // the dispatch's own paired tool_result, assertText-capped — populated by a finalize step, not at push time
+  outputTruncated?: boolean; // `output` was cut at the assert cap (#9) — set in denormalizeSubagentOutputs
 }
 
 interface DecisionRecord {
@@ -179,7 +180,7 @@ export interface RunRecord {
   decisions: DecisionRecord[];
   permissiveAutoAllow: string[]; // tools auto-allowed by cowork parity for unscripted/off-registry perms (real Cowork blocks these)
   unanswered: { question: string; chosen: string; by: string; rationale?: string; model?: string }[];
-  toolResults: { toolUseId?: string; isError: boolean; text: string; assertText?: string }[]; // captured tool OUTCOMES
+  toolResults: { toolUseId?: string; isError: boolean; text: string; assertText?: string; assertTextTruncated?: boolean }[]; // captured tool OUTCOMES
   gateAnswers: { question: string; toolUseId?: string; answers: Record<string, string> }[]; // answered AskUserQuestion gates
   gateDeliveries: {
     question: string;
@@ -231,7 +232,7 @@ export interface RunRecord {
    *  was partially unparseable, so the dependent assertion fails "malformed" rather than silently dropping
    *  the bad entries. (resource malformed lines live on `resources.malformedLines`; hash errors on
    *  `workspaceFiles[].hashError`.) */
-  evidenceErrors: { taskTracking: number; webSearchParse: number; presentFilesMalformed: number };
+  evidenceErrors: { taskTracking: number; webSearchParse: number; presentFilesMalformed: number; egressParse?: number };
 }
 
 export interface RunHooks {
@@ -533,7 +534,13 @@ export class Run {
             break;
           }
           case "tool_result": {
-            this.rec.toolResults.push({ toolUseId: ev.toolUseId, isError: ev.isError, text: ev.text, assertText: ev.assertText });
+            this.rec.toolResults.push({
+              toolUseId: ev.toolUseId,
+              isError: ev.isError,
+              text: ev.text,
+              assertText: ev.assertText,
+              assertTextTruncated: ev.assertTextTruncated,
+            });
             if (ev.toolUseId) this.notePresentedFiles(ev.toolUseId, ev.textBlocks);
             if (ev.toolUseId) {
               const name = this.toolNameByUseId.get(ev.toolUseId);
@@ -701,6 +708,17 @@ export class Run {
     }
 
     this.rec.transcript = transcript.join("\n");
+    // Stream-end reconciliation: a TaskCreate / WebSearch whose tool_use was seen but whose paired
+    // tool_result never arrived (stream truncated between use and result) stays in its pending map,
+    // never reaching rec.tasks/rec.webSearches AND never bumping an evidenceError — so a dependent
+    // assertion would evaluate the resolved SUBSET as if it were complete. Flush every still-pending
+    // entry into the matching incomplete-evidence counter so task/search assertions fail "cannot verify
+    // (incomplete)" (taskTracking gates all_tasks_completed / task_count_min / task_status) instead of
+    // silently under-counting. #5
+    this.rec.evidenceErrors.taskTracking += this.pendingTaskCreates.size;
+    this.pendingTaskCreates.clear();
+    this.rec.evidenceErrors.webSearchParse += this.pendingWebSearches.size;
+    this.pendingWebSearches.clear();
     // Wall-clock timeout override: the kill above surfaces as an "exit" error (or ends the stream), but the
     // authoritative reason is the timeout. Set it here so it wins over the exit/no_result labeling below.
     if (timedOut) {
@@ -800,7 +818,12 @@ export class Run {
   private denormalizeSubagentOutputs(): void {
     for (const sa of this.rec.subagents) {
       const tr = this.rec.toolResults.find((r) => r.toolUseId === sa.toolUseId);
-      if (tr) sa.output = tr.assertText ?? tr.text;
+      if (tr) {
+        sa.output = tr.assertText ?? tr.text;
+        // Mark truncation so subagent_output_contains reports "cannot verify" (not a false absence) when
+        // the searched substring could lie past the assert-cap cut. #9
+        if (tr.assertTextTruncated) sa.outputTruncated = true;
+      }
     }
   }
 

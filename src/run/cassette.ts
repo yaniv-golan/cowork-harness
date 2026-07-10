@@ -2614,19 +2614,52 @@ export function scenarioContentDrift(
  *  `sessionFingerprint`) is NOT checked at all — backward-compat, never a false-red on an existing
  *  committed cassette. When the cassette DOES carry one, it is compared against a fresh recompute from
  *  the CURRENT session file; if the session can't be resolved (inline scenario, moved/deleted file,
- *  unparsable YAML) the check can't run — "can't verify" is a non-failing note, never a mismatch. */
+ *  unparsable YAML) the check can't run — "can't verify" is a non-failing note, never a mismatch (F45:
+ *  flagged `unverifiable:true`, a typed signal distinct from a `drifted:false` that means "recomputed
+ *  and confirmed identical", so a consumer can tell the two apart instead of reading both as "clean").
+ *
+ *  F51: `cassette.scenario.session` resolves via a relative offset from `cassetteDir` — the SAME
+ *  mechanism `cassette.scenarioSource` uses (see `scenarioContentDrift`/`_resolveRerecordSource` above).
+ *  If the cassette was relocated onto a directory tree that doesn't mirror the original layout, that
+ *  offset can coincidentally land on an UNRELATED same-named session file, producing a false mismatch
+ *  (never a false match — an unrelated file hashing equal by chance isn't the risk here). `sourceVia`
+ *  — the caller's `_resolveRerecordSource(...).via` for the SAME cassette — is the only available trust
+ *  signal for whether this cassette's relative-offset resolution is intact (a persisted-source hit means
+ *  the tree still mirrors record time; a name-lookup fallback means it doesn't and the offset can't be
+ *  trusted). Reusing it here mirrors `scenarioContentDrift`'s own "resolved by name, may be an unrelated
+ *  same-named sibling → non-failing note" downgrade, without storing or hashing an absolute host path
+ *  (forbidden — see the relocatable-cassette contract at ~528-529, ~2270, ~2399-2400). Only
+ *  `"name-lookup"` downgrades — `"none"` means "nothing nearby to compare the layout against" (mirrors
+ *  `scenarioContentDrift`'s own silent `!src.path` early-return, not its low-confidence branch) and is
+ *  NOT evidence the tree moved. Omitting `sourceVia` entirely (the unit-level tests below, and any
+ *  future caller that hasn't computed it) also keeps the pre-F51 behavior: trust the resolution, hard-fail
+ *  on a genuine mismatch. */
 export function sessionFingerprintDrift(
   cassette: Pick<Cassette, "sessionFingerprint" | "scenario">,
   cassetteDir: string | undefined,
-): { drifted: boolean; note?: string } {
+  sourceVia?: "persisted" | "name-lookup" | "none",
+): { drifted: boolean; note?: string; unverifiable?: boolean } {
   if (cassette.sessionFingerprint === undefined) return { drifted: false }; // pre-v9 — not checked
   const live = buildSessionFingerprint(cassette.scenario.session, cassetteDir);
   if (live === undefined)
     return {
       drifted: false,
+      unverifiable: true,
       note: "session-fingerprint: could not resolve the current session file to recompute — cannot verify session-shape staleness",
     };
-  return { drifted: live !== cassette.sessionFingerprint };
+  if (live === cassette.sessionFingerprint) return { drifted: false };
+  // Only "name-lookup" (a scenario WAS found, but not at its persisted/expected offset — the SAME
+  // low-confidence signal scenarioContentDrift downgrades on) is grounds to distrust this mismatch.
+  // "none" means "nothing to compare the layout against" (mirrors scenarioContentDrift's own `!src.path`
+  // early return, which stays silent rather than downgrading) — it is NOT evidence the tree moved, so it
+  // must NOT mask a genuine drift; keep the pre-F51 hard-fail for "none" and for an omitted argument.
+  if (sourceVia === "name-lookup")
+    return {
+      drifted: false,
+      unverifiable: true,
+      note: "session-fingerprint: differs from the current session file, but this cassette's directory structure could not be confirmed intact (scenario source resolved by name lookup, not its persisted path) — may be an unrelated same-named sibling; re-record, or verify manually before trusting the mismatch",
+    };
+  return { drifted: true };
 }
 
 /** Assertion keys (and `expect_denied`) that are NOT evaluated on the replay lane in a given cassette's shape.
@@ -3237,7 +3270,12 @@ export async function cmdVerifyCassettes(args: string[]) {
     // through computeStaleness/checkStaleness — so it can never affect the default `replay` verdict. A
     // pre-v9 cassette (no sessionFingerprint) is silently not checked; see sessionFingerprintDrift.
     if (doStaleness) {
-      const sfd = sessionFingerprintDrift(rc.cassette, dirname(f));
+      // F51: reuse the SAME "is this cassette's relative-offset resolution intact" signal
+      // scenarioContentDrift (below) computes for the scenario source — the session path resolves via
+      // the identical relative-to-cassetteDir mechanism, so a broken offset is equally untrustworthy
+      // for either. Cheap (an existsSync probe or two), safe to compute unconditionally here.
+      const sourceVia = _resolveRerecordSource(f, rc.cassette).via;
+      const sfd = sessionFingerprintDrift(rc.cassette, dirname(f), sourceVia);
       if (sfd.drifted)
         staleness.push(
           "session-shape fingerprint differs from the current session file (connected folders/plugin/skill/mcp/egress config changed since record) — re-record",
@@ -4135,6 +4173,17 @@ export async function replayCassette(
       assertions.push({ assertion: { replay_protocol_fidelity: true }, pass: false, message: truncatedMsg });
     }
 
+    // F46: RunResult.fingerprint is documented (src/types.ts:978-980) as the RUN-TIME staleness
+    // fingerprint; a cassette only ever carries the FROZEN one computed at record time (never
+    // recomputed on replay — that's what `computeStaleness`, ~line 858, diffs against). Surfacing it
+    // unlabeled would misrepresent when it was taken, so a `frozen:true` marker rides along. Built as a
+    // separate typed-cast variable (not an inline object literal) so it can carry the extra key without
+    // an excess-property error under `Fingerprint`'s declared shape — additive, no cassetteVersion bump,
+    // no schema `additionalProperties:false` on this node to violate.
+    const frozenFingerprint: Fingerprint | undefined = cassette.fingerprint
+      ? ({ ...cassette.fingerprint, frozen: true } as Fingerprint)
+      : undefined;
+
     return assembleRunResult({
       turn: undefined, // replay reconstructs one recorded run; no multi-turn attribution
       referencesRead: rec.filesRead.length ? rec.filesRead : undefined, // re-derived from the frozen Read events on the replay re-drive, same as toolCounts
@@ -4210,7 +4259,9 @@ export async function replayCassette(
       // today. Preserve exactly; fixing it is out of scope for this pure refactor.
       $schema: undefined,
       generator: undefined,
-      prompt: undefined,
+      // F46: the scenario's prompt is already in hand (it's what drove the replay re-drive) — was
+      // dropped as undefined even though a live/success/partial result always carries it.
+      prompt: cassette.scenario.prompt,
       capabilityProbe: undefined,
       requiresCapabilityUnmet: undefined,
       workDir: undefined,
@@ -4241,8 +4292,12 @@ export async function replayCassette(
       l0PluginDivergence: undefined,
       missingCapabilityUse: undefined,
       gateProvenance: undefined,
-      fingerprint: undefined,
-      toolResults: undefined,
+      // F46: cassette.fingerprint is the record-time snapshot; frozenFingerprint (above) is it plus a
+      // `frozen:true` marker so a consumer can't mistake it for a fresh run-time recompute.
+      fingerprint: frozenFingerprint,
+      // F46: rec.toolResults is already built and fed to the eval context above (toolResultTexts/
+      // toolResultsTruncated) — was dropped as undefined even though it's on hand.
+      toolResults: rec.toolResults,
       durationMs: undefined,
       resources: undefined, // replay never spawns a sandbox to sample; no live resource telemetry
     });

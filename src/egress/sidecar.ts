@@ -21,7 +21,13 @@ type EgressEntry = RunResult["egress"][number];
 export interface EgressSidecar {
   proxyUrl: string; // e.g. http://cowork-proxy-<id>:8080
   network: string; // internal network the agent must join
-  collect(): EgressEntry[];
+  /** Parse the proxy log into entries PLUS a count of lines that were dropped as malformed/unknown-decision
+   *  (see parseEgressLine). Returning the drop count — rather than silently filtering — lets the caller
+   *  record it in evidenceErrors so a partial proxy log is visible (parity with resources/timeline
+   *  malformedLines). NOTE: egress assertions are positive-only (egress_denied/egress_allowed), so a dropped
+   *  line spuriously FAILS an assert (loud), never silently passes one — this is an observability signal,
+   *  not a gating one. #39 */
+  collect(): { entries: EgressEntry[]; malformedLines: number };
   teardown(): void;
   /** Set once `teardown()` has run, if the proxy container exited non-zero — its exit code plus a
    *  `docker logs --tail` excerpt. `undefined` means either the proxy is still up or it exited clean.
@@ -155,13 +161,12 @@ export function startEgressSidecar(allow: string[], outDir: string, runId: strin
     proxyUrl: `http://${proxyName}:8080`,
     network: intNet,
     collect() {
-      if (!existsSync(logFileHost)) return [];
-      return readFileSync(logFileHost, "utf8")
-        .trim()
-        .split("\n")
-        .filter(Boolean)
-        .map(parseEgressLine)
-        .filter((x): x is EgressEntry => x !== null);
+      if (!existsSync(logFileHost)) return { entries: [], malformedLines: 0 };
+      const lines = readFileSync(logFileHost, "utf8").trim().split("\n").filter(Boolean);
+      const entries = lines.map(parseEgressLine).filter((x): x is EgressEntry => x !== null);
+      // A non-empty log line that parseEgressLine dropped (bad JSON, non-object, missing host, unknown
+      // decision) is malformed evidence — count the difference so the caller can surface it. #39
+      return { entries, malformedLines: lines.length - entries.length };
     },
     get fatalError() {
       return fatalError;

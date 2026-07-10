@@ -841,8 +841,9 @@ export interface RunResult {
   infraErrors?: Array<{ source: string; message: string }>;
   /** Companion counters for malformed/dropped telemetry streams. A >0 count makes the dependent assertion
    *  fail "malformed" rather than silently dropping the bad entries (`taskTracking` → task assertions,
-   *  `presentFilesMalformed` → no_scratchpad_leak); `webSearchParse` is observability-only (no assertion). */
-  evidenceErrors?: { taskTracking?: number; webSearchParse?: number; presentFilesMalformed?: number };
+   *  `presentFilesMalformed` → no_scratchpad_leak); `webSearchParse` and `egressParse` are observability-only
+   *  (no assertion — egress asserts are positive-only, so a dropped line already fails loud). */
+  evidenceErrors?: { taskTracking?: number; webSearchParse?: number; presentFilesMalformed?: number; egressParse?: number };
   // per-tool call-count/timing aggregate, folded from the timeline. Absent only when no
   // timeline data exists for this run (replayErrorResult — no run ever happened). Populated for
   // buildPartialResult too, when the salvaged run made at least one tool call. Wall-gap between
@@ -964,6 +965,7 @@ export interface RunResult {
     prompt?: string; // dispatch input.prompt, assertText-capped
     model?: string; // the dispatching message's model
     output?: string; // the dispatch's own paired tool_result, assertText-capped
+    outputTruncated?: boolean; // `output` was cut at the assert cap — a negative content check is unverifiable, not a proven absence (#9)
     attributedSkillId?: string; // the skill-activation window this dispatch was attributed to — NOT Fingerprint.skillScope (a different, unrelated field)
   }>;
   /**

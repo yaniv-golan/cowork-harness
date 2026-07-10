@@ -256,6 +256,7 @@ export interface AssertContext {
     toolsUsed: Array<{ name: string; count: number }>;
     description?: string;
     output?: string;
+    outputTruncated?: boolean; // #9: output was cut at the assert cap — a negative content check is unverifiable
   }[]; // dispatch tree (sub-agent assertions)
   gateDeliveries: {
     question: string;
@@ -486,12 +487,25 @@ export async function runSemanticJudges(
  *  files the run authored (each headed), scrubbed of secrets. Grading the authored files (not only the
  *  inlined prose) is what makes a claim about a *written* artifact presentation-stable; keeping the
  *  finalMessage/transcript is what still grades a correct *inline* answer that wrote no file. */
+// Per-section and aggregate character budgets for the judged document (#10). Authored files already carry
+// their own caps (16 KiB/file, 64 KiB total, in captureAuthoredFiles), but finalMessage and the transcript
+// were previously concatenated WHOLE — so a long run could overflow the model context or make grading cost
+// and latency unbounded. Cap each section and the joined document with an explicit truncation marker, so the
+// judge SEES that evidence was elided (never reads a truncated tail as "the requirement was not met").
+const JUDGE_FINAL_CAP = 32 * 1024;
+const JUDGE_TRANSCRIPT_CAP = 128 * 1024;
+const JUDGE_DOC_CAP = 256 * 1024;
+function capForJudge(text: string, cap: number): string {
+  if (text.length <= cap) return text;
+  return `${text.slice(0, cap)}\n…[${text.length - cap} chars truncated for the judge input budget — evidence beyond this point was NOT shown; do not infer absence from this cut]`;
+}
+
 function buildJudgedDocument(ctx: AssertContext): string {
   const parts: string[] = [];
-  if (ctx.finalMessage) parts.push(`## Final answer\n${ctx.finalMessage}`);
-  parts.push(`## Transcript\n${ctx.transcript}`);
+  if (ctx.finalMessage) parts.push(`## Final answer\n${capForJudge(ctx.finalMessage, JUDGE_FINAL_CAP)}`);
+  parts.push(`## Transcript\n${capForJudge(ctx.transcript ?? "", JUDGE_TRANSCRIPT_CAP)}`);
   for (const f of ctx.authoredFiles ?? []) parts.push(`## Authored file: ${f.path}${f.truncated ? " (truncated)" : ""}\n${f.content}`);
-  const doc = parts.join("\n\n");
+  const doc = capForJudge(parts.join("\n\n"), JUDGE_DOC_CAP);
   return ctx.secrets && ctx.secrets.length ? scrub(doc, ctx.secrets) : doc;
 }
 
@@ -795,15 +809,27 @@ function check(
         results.push(
           candidates.some((s) => s.output?.includes(contains))
             ? ok()
-            : fail(
-                candidates.length === 0
-                  ? `no sub-agent matching "${match}" was dispatched`
-                  : `no sub-agent matching "${match}" had output containing "${contains}"`,
-              ),
+            : candidates.length === 0
+              ? fail(`no sub-agent matching "${match}" was dispatched`)
+              : // #9: a miss against a TRUNCATED output is unverifiable, not a proven absence — the substring
+                // could lie past the assert-cap cut. Only claim absence when the searched output was complete.
+                candidates.some((s) => s.outputTruncated)
+                ? fail(
+                    `evidence unavailable: a sub-agent matching "${match}" had its output truncated at the assert cap — cannot verify it does not contain "${contains}"`,
+                  )
+                : fail(`no sub-agent matching "${match}" had output containing "${contains}"`),
         );
       }
     } else {
-      results.push(ctx.subagents.some((s) => s.output?.includes(contains)) ? ok() : fail(`no sub-agent's output contained "${contains}"`));
+      results.push(
+        ctx.subagents.some((s) => s.output?.includes(contains))
+          ? ok()
+          : ctx.subagents.some((s) => s.outputTruncated)
+            ? fail(
+                `evidence unavailable: a sub-agent's output was truncated at the assert cap — cannot verify it does not contain "${contains}"`,
+              )
+            : fail(`no sub-agent's output contained "${contains}"`),
+      );
     }
   }
   if (a.subagent_declared_but_unused !== undefined) {
@@ -1119,6 +1145,15 @@ function check(
     const { match, status } = a.task_status;
     if (ctx.tasks === undefined)
       results.push(fail(`evidence unavailable: tasks telemetry absent from result.json — cannot evaluate task_status`));
+    else if (ctx.evidenceErrors?.taskTracking)
+      // Mirror all_tasks_completed / task_count_min: known-corrupt TaskCreate telemetry means the surviving
+      // task subset is incomplete, so a status match against it could pass against demonstrably-partial
+      // evidence. Refuse to evaluate rather than pass on a subset. #6
+      results.push(
+        fail(
+          `task_status: ${ctx.evidenceErrors.taskTracking} TaskCreate result(s) were unparseable — task telemetry is incomplete, cannot verify (malformed)`,
+        ),
+      );
     else {
       const c = compileUserRegex(match);
       if ("error" in c) results.push(fail(`task_status: bad regex "${match}": ${c.error}`));

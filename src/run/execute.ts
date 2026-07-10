@@ -448,6 +448,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
 
   const containerLike = effectiveFidelity === "container" || effectiveFidelity === "hostloop";
   let egress: RunResult["egress"] = [];
+  let egressMalformedLines = 0; // dropped proxy-log lines, surfaced into record.evidenceErrors.egressParse once `record` is assigned (#39)
   let sidecar: EgressSidecar | undefined;
   let hostProxy: ReturnType<typeof startEgressProxy> | undefined;
   let resourceSampler: ResourceSampler | undefined;
@@ -672,8 +673,10 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     }
   } finally {
     // Stop sampling FIRST — before the container/process teardown below — so a final in-flight probe
-    // can't race (and fail against) a container that's already being removed.
-    resourceSampler?.stop();
+    // can't race (and fail against) a container that's already being removed. `stop()` is async (it awaits
+    // the in-flight tick, bounded) so a run shorter than one interval still has its immediate sample land
+    // before `foldResources` reads resources.jsonl below. #40
+    await resourceSampler?.stop();
     // Reap the agent container FIRST (before the sidecar networks), so a crashed/unanswered run can't
     // orphan a running container holding the network. On the success path the child has already
     // exited (--rm), so these are no-ops.
@@ -685,7 +688,9 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     }
     if (containerName) spawnSync(runner, ["rm", "-f", containerName], { stdio: "ignore" });
     if (sidecar) {
-      egress = sidecar.collect();
+      const eg = sidecar.collect();
+      egress = eg.entries;
+      egressMalformedLines += eg.malformedLines; // applied to record.evidenceErrors after the finally, where `record` is assigned (#39)
       sidecar.teardown();
     }
     // merge host-routed web_fetch decisions (host-loop) so they're visible to egress assertions.
@@ -864,9 +869,15 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       initSkills === undefined ? undefined : resolveAvailableSkills(availableSkillIds, plan.configDir, pluginSkillRootsFromPlan(plan)),
   };
 
+  // Surface dropped egress proxy-log lines as evidence health (collected in the finally above; applied here
+  // where `record` is definitely assigned). #39
+  if (egressMalformedLines > 0) record.evidenceErrors.egressParse = (record.evidenceErrors.egressParse ?? 0) + egressMalformedLines;
+
   // Fold resources.jsonl ONCE — reused by both the evaluate() ctx below (max_peak_rss_bytes) and the
   // assembleRunResult call further down. A second read could disagree if the sampler wrote between them.
-  const resources = foldResources(outDir, effectiveFidelity, resolveIntervalMs());
+  // Thread the sampler's probe-failure count so the summary can distinguish "sampling failed" from
+  // "sampling unsupported / never ran". #41
+  const resources = foldResources(outDir, effectiveFidelity, resolveIntervalMs(), resourceSampler?.probeFailures);
 
   // D1: the judge grades the union of the final answer + transcript + the files the run AUTHORED (final
   // on-disk content), so a claim about a written artifact is presentation-stable (not a paste-vs-write
@@ -876,7 +887,13 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // relative `Write outputs/x` lands in the scratchpad, outside `workRoot`. Pass the session root so those
   // cwd-relative deliverables are captured too (`workRoot` ends `/session/mnt`; its parent is the root).
   const scratchpadRoot = workRoot.endsWith(`${sep}mnt`) ? dirname(workRoot) : undefined;
-  const authoredFiles = captureAuthoredFiles(workRoot, userVisibleRoots, readonlyFolderRoots, preRunHashes, { scratchpadRoot });
+  // On a resume the session root is REUSED, so the scratchpad no longer starts empty — a prior turn's files
+  // would be mis-attributed as this turn's authorship. Skip the scratchpad walk in that case (evidence-
+  // unavailable is safer than misattribution). #17
+  const authoredFiles = captureAuthoredFiles(workRoot, userVisibleRoots, readonlyFolderRoots, preRunHashes, {
+    scratchpadRoot,
+    resume: plan.resume,
+  });
 
   const assertCtx: AssertContext = {
     transcript: record.transcript,
@@ -1266,6 +1283,26 @@ function validateScenarioRegexes(scenario: Scenario, scenarioPath: string): void
         const c = compileUserRegex(pattern);
         if ("error" in c) throw new Error(`bad regex in ${key} in ${context}: ${c.error}`);
       }
+    }
+    // Tool-GLOB keys (not regex). Two authored-time footguns both produce a vacuous pass on the
+    // `_not_`/`_absent` (negative) direction — matching NO tool — so the assert silently proves nothing:
+    //   • an empty/whitespace glob (#8): matches only a "" tool name, which never exists;
+    //   • a regex-habit slip like `Bash|Read` or `mcp__*.*` (#7): a regex-only metacharacter matches no
+    //     tool name under glob semantics.
+    // Reject both at authored load — the runtime `warnIfRegexish` only warns (invisible in a green CI
+    // summary) and there is no runtime empty-glob guard. Enforced HERE (parseScenarioFile), NOT in the
+    // shared AssertionSchema, so a previously-recorded cassette re-validated by readCassette is unaffected.
+    for (const key of ["tool_called", "tool_not_called", "subagent_tool_used", "subagent_tool_absent"] as const) {
+      const glob = a[key];
+      if (glob === undefined) continue;
+      if (glob.trim() === "")
+        throw new Error(
+          `${context}: \`${key}\` is empty — an empty tool glob matches no tool and would pass vacuously. Give a tool name/glob (e.g. Bash, mcp__workspace__*).`,
+        );
+      if (/\.\*|\.\+|[|()[\]+^$]|\\[dwsb]/.test(glob))
+        throw new Error(
+          `${context}: \`${key}: "${glob}"\` looks like a regex, but this key is GLOB-matched (use * and ?, not .* or | []). A regex-only pattern matches no tool name and would pass a _not_/_absent assert vacuously.`,
+        );
     }
   }
   // answers[].when_question patterns (ScriptedDecider uses these)

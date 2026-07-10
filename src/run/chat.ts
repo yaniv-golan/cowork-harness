@@ -15,6 +15,7 @@ import { startEgressSidecar, registerCleanup } from "../egress/sidecar.js";
 import { Scenario } from "../types.js";
 import { LiveAgentSession, type AgentEvent } from "../agent/session.js";
 import { Run, type RunHooks } from "./run.js";
+import { ResourceSampler, makeSampleOnce, resolveIntervalMs } from "../runtime/resource-sampler.js";
 import { makeRenderer, startHeartbeat, type RenderPlan } from "./renderer.js";
 import { runsWriteRoot } from "./trace-view.js";
 import { buildChatResult } from "./chat-result.js";
@@ -250,6 +251,9 @@ export async function cmdChat(args: string[]) {
   let containerName: string | undefined;
   let child: { kill?: (s?: NodeJS.Signals) => void } | undefined;
   let record: import("./run.js").RunRecord | undefined;
+  // Sampled for the container/hostloop branches only (mirrors execute.ts) — protocol runs the host
+  // binary directly with no container/process id to probe, so it legitimately never gets one.
+  let resourceSampler: ResourceSampler | undefined;
   // Ctrl-C — reap the agent container in the "container" phase (before the sidecar's network teardown).
   const deregisterContainerReap = sidecar
     ? registerCleanup({
@@ -315,6 +319,17 @@ export async function cmdChat(args: string[]) {
       });
       child = hl.child;
       containerName = hl.containerName;
+      // Same ResourceSampler lifecycle execute.ts uses for hostloop: sample the native agent process by
+      // pid on an interval so buildChatResult's foldResources() call (chat-result.ts) has something to
+      // fold — previously no sampler was ever started here, so a hostloop chat's resources.jsonl never
+      // existed despite chat-result.ts's doc-comment claiming resource parity with the run lane.
+      resourceSampler = new ResourceSampler(
+        outDir,
+        "hostloop",
+        makeSampleOnce({ tier: "hostloop", runner, pid: (hl.child as { pid?: number } | undefined)?.pid }),
+        resolveIntervalMs(),
+      );
+      resourceSampler.start();
       logHostWriteNotice(
         plan.mounts.filter((mt) => mt.kind === "folder").map((mt) => ({ from: mt.hostPath, mode: mt.mode })),
         (msg) => log(msg),
@@ -370,6 +385,16 @@ export async function cmdChat(args: string[]) {
       });
       child = ct.child;
       containerName = ct.containerName; // so Ctrl-C / finally reap the agent container by name
+      // Same ResourceSampler lifecycle execute.ts uses for container: sample by container name on an
+      // interval so buildChatResult's foldResources() call (chat-result.ts) has something to fold —
+      // previously no sampler was ever started here (see the hostloop branch above for the same fix).
+      resourceSampler = new ResourceSampler(
+        outDir,
+        "container",
+        makeSampleOnce({ tier: "container", runner, containerName }),
+        resolveIntervalMs(),
+      );
+      resourceSampler.start();
       const agent = new LiveAgentSession(child as any, outDir);
       const decider = Chain(new ScriptedDecider([]), new PermissionDefaultDecider("cowork"), new PromptDecider(ask));
       const renderer = makeRenderer(renderPlan);
@@ -379,6 +404,11 @@ export async function cmdChat(args: string[]) {
     }
   } finally {
     stopHeartbeat?.();
+    // Stop sampling FIRST — before the container/process teardown below — so a final in-flight probe
+    // can't race (and fail against) a container that's already being removed (mirrors execute.ts). The
+    // `await` (stop() is async) also ensures a run shorter than one interval still has its immediate
+    // first sample land in resources.jsonl before buildChatResult's foldResources() reads it, below.
+    await resourceSampler?.stop();
     deregisterContainerReap?.(); // normal path owns the reap below
     // Reap the agent container first (mirrors execute.ts hardening).
     try {
@@ -407,7 +437,7 @@ export async function cmdChat(args: string[]) {
       workRoot,
       userVisibleRoots: userVisibleRootsFromPlan(plan),
       readonlyFolderRoots: readonlyFolderRootsFromPlan(plan),
-      egress: sidecar ? sidecar.collect() : [],
+      egress: sidecar ? sidecar.collect().entries : [],
       durationMs: Date.now() - start,
     });
     const secrets = collectSecrets();

@@ -293,6 +293,9 @@
         },
         "presentFilesMalformed": {
           "type": "number"
+        },
+        "egressParse": {
+          "type": "number"
         }
       }
     },

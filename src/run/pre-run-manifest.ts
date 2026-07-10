@@ -27,18 +27,27 @@ function preRunHashCap(): number {
   return n;
 }
 
-/** Hash one captured file relative to its base dir. Returns null over the cap (recorded, not hashed);
- *  null on an unreadable file too (loud evidence-unavailable downstream, never a silent pass). The size
- *  is checked with statSync BEFORE reading, so an over-cap file is never loaded into memory — that is
- *  what actually bounds the walk on big connected folders (a post-read length check would still read
- *  the whole file first). */
-function hashFileCapped(baseDir: string, relPath: string, cap: number): string | null {
+/** F15: why a path's `hashes[path]` is `null` — kept SEPARATE from the `hashes` map (whose value shape is
+ *  `string | null` and is already relied on by readers elsewhere — `readPreRunManifestHashes`,
+ *  `AssertContext.preRunHashes`, `RunResult.preRunHashes` — so widening it would ripple far outside this
+ *  file). "over-cap" = the file was too large to hash (see `preRunHashCap`); "unreadable" = the file
+ *  existed but couldn't be read/stat'd (permissions, a race, …). Both are an UNKNOWN baseline, not a
+ *  "no file existed" signal — a consumer diffing against `hashes[path] === null` must not assume the path
+ *  was absent pre-run (see `captureAuthoredFiles`'s F15 handling in artifacts.ts). */
+export type HashUnavailableReason = "over-cap" | "unreadable";
+
+/** Hash one captured file relative to its base dir. Returns `{ hash }` on success, or `{ hash: null,
+ *  reason }` over the cap or on an unreadable file (loud evidence-unavailable downstream, never a silent
+ *  pass). The size is checked with statSync BEFORE reading, so an over-cap file is never loaded into
+ *  memory — that is what actually bounds the walk on big connected folders (a post-read length check
+ *  would still read the whole file first). */
+function hashFileCapped(baseDir: string, relPath: string, cap: number): { hash: string } | { hash: null; reason: HashUnavailableReason } {
   const abs = join(baseDir, relPath);
   try {
-    if (statSync(abs).size > cap) return null;
-    return createHash("sha256").update(readFileSync(abs)).digest("hex");
+    if (statSync(abs).size > cap) return { hash: null, reason: "over-cap" };
+    return { hash: createHash("sha256").update(readFileSync(abs)).digest("hex") };
   } catch {
-    return null;
+    return { hash: null, reason: "unreadable" };
   }
 }
 
@@ -83,6 +92,10 @@ export function capturePreRunManifest(plan: LaunchPlan, workRoot: string, outDir
   const paths: string[] = [];
   const hashes: Record<string, string | null> = {};
   const stats: Record<string, { mtimeMs: number; size: number } | null> = {};
+  // F15: WHY a `hashes[path]` entry is null — additive alongside `hashes` (unchanged shape/reader), so an
+  // "unknown baseline" consumer (captureAuthoredFiles) can tell an over-cap file from a genuinely
+  // unreadable one, and so a future consumer isn't stuck re-deriving the reason from `stats` presence.
+  const unavailableReasons: Record<string, HashUnavailableReason> = {};
   // SYMLINK entries are recorded path-only: they go into `paths` (so no_unexpected_files's baseline
   // includes them) but NOT into `hashes`/`stats` — a symlink has no protectable content and hashing would
   // DEREFERENCE the target (potentially reading out-of-root content). HARDLINK entries ARE hashed like a
@@ -93,7 +106,9 @@ export function capturePreRunManifest(plan: LaunchPlan, workRoot: string, outDir
   const add = (relPath: string, baseDir: string, linkKind?: "symlink" | "hardlink") => {
     paths.push(relPath);
     if (linkKind === "symlink") return;
-    hashes[relPath] = hashFileCapped(baseDir, relPath, cap);
+    const result = hashFileCapped(baseDir, relPath, cap);
+    hashes[relPath] = result.hash;
+    if (result.hash === null) unavailableReasons[relPath] = result.reason;
     stats[relPath] = statCapture(baseDir, relPath);
   };
   // Tracks whether any connected-folder source was unreadable during the walk (its baseline entries are
@@ -120,7 +135,9 @@ export function capturePreRunManifest(plan: LaunchPlan, workRoot: string, outDir
         paths.push(e.path);
         if (e.linkKind === "symlink") continue; // symlink: path-only, never hashed/dereferenced (hardlink IS hashed)
         const rel = e.path === m.mountPath ? "" : e.path.slice(m.mountPath.length + 1);
-        hashes[e.path] = hashFileCapped(m.hostPath, rel, cap);
+        const result = hashFileCapped(m.hostPath, rel, cap);
+        hashes[e.path] = result.hash;
+        if (result.hash === null) unavailableReasons[e.path] = result.reason;
         stats[e.path] = statCapture(m.hostPath, rel);
       }
     }
@@ -138,7 +155,10 @@ export function capturePreRunManifest(plan: LaunchPlan, workRoot: string, outDir
   // Both non-"local-walk" values make no_unexpected_files / input_unmodified fail EVIDENCE-UNAVAILABLE
   // (see the assert.ts guard clauses) — never a vacuous pass on an incomplete/unwalkable tree.
   const origin = baselineUnreadable ? "local-unreadable" : "local-walk";
-  writeFileSync(join(outDir, FILE), JSON.stringify({ version: MANIFEST_VERSION, origin, paths, hashes, stats }, null, 2));
+  writeFileSync(
+    join(outDir, FILE),
+    JSON.stringify({ version: MANIFEST_VERSION, origin, paths, hashes, stats, unavailableReasons }, null, 2),
+  );
 }
 
 // Pre-run manifest format version. v2 = the LINK-AWARE walk (paths includes symlink/hardlink entries).
@@ -180,6 +200,47 @@ export function readPreRunManifestHashes(outDir: string): Record<string, string 
     const h = parsed.hashes as Record<string, unknown>;
     for (const v of Object.values(h)) if (v !== null && typeof v !== "string") return undefined;
     return h as Record<string, string | null>;
+  } catch {
+    return undefined;
+  }
+}
+
+/** F15: per-path mtime+size captured alongside the pre-run hash — lets a consumer disambiguate a
+ *  `hashes[path] === null` entry (unknown baseline) from a genuine change, via an exact post-run stat
+ *  match. undefined = no manifest, or a manifest with no `stats` field (an older run) — same
+ *  evidence-unavailable convention as `readPreRunManifestHashes`. */
+export function readPreRunManifestStats(outDir: string): Record<string, { mtimeMs: number; size: number } | null> | undefined {
+  try {
+    const parsed = JSON.parse(readFileSync(join(outDir, FILE), "utf8")) as { stats?: unknown };
+    if (parsed.stats === null || typeof parsed.stats !== "object" || Array.isArray(parsed.stats)) return undefined;
+    const s = parsed.stats as Record<string, unknown>;
+    for (const v of Object.values(s)) {
+      if (v === null) continue;
+      if (
+        typeof v !== "object" ||
+        typeof (v as { mtimeMs?: unknown }).mtimeMs !== "number" ||
+        typeof (v as { size?: unknown }).size !== "number"
+      )
+        return undefined;
+    }
+    return s as Record<string, { mtimeMs: number; size: number } | null>;
+  } catch {
+    return undefined;
+  }
+}
+
+/** F15: WHY each `null` entry in `hashes` is null (see `HashUnavailableReason`). undefined = no manifest,
+ *  or a manifest predating this field (an older run, or one hand-written by a test fixture) — a caller
+ *  that wants the reason should treat undefined the same conservative way it already treats an absent
+ *  `hashes` map: as "no discriminating signal available", never as "over-cap" or "unreadable" by default. */
+export function readPreRunManifestUnavailableReasons(outDir: string): Record<string, HashUnavailableReason> | undefined {
+  try {
+    const parsed = JSON.parse(readFileSync(join(outDir, FILE), "utf8")) as { unavailableReasons?: unknown };
+    if (parsed.unavailableReasons === null || typeof parsed.unavailableReasons !== "object" || Array.isArray(parsed.unavailableReasons))
+      return undefined;
+    const r = parsed.unavailableReasons as Record<string, unknown>;
+    for (const v of Object.values(r)) if (v !== "over-cap" && v !== "unreadable") return undefined;
+    return r as Record<string, HashUnavailableReason>;
   } catch {
     return undefined;
   }

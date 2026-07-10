@@ -28,7 +28,13 @@ export interface ChatResultOpts {
  * `assertions` is empty, `mode` is "chat", and every verdict / capability / gate / staleness field is
  * `undefined`. Most informational fields (tool counts, models, thinking, tasks, timeline folds,
  * workspace files, resources) are populated the same way the run lane does, so `stats`/`trace`/`scaffold`
- * see a chat session. `context` carries the skill IDs the agent had available but NOT the `whenToUse`
+ * see a chat session. Resources are the one field with a fidelity-conditional exception: `chat.ts` starts
+ * a real `ResourceSampler` (mirroring `execute.ts`) for the container and hostloop branches, so THOSE
+ * chats fold real `resources.jsonl` samples here — but the protocol branch runs the host `claude` binary
+ * directly with no container/process id to probe, so it legitimately has no sampler and `resources` stays
+ * `undefined` for a protocol chat (an honest gap, not a bug: `foldResources` below returns `undefined`
+ * when `resources.jsonl` was never written).
+ * `context` carries the skill IDs the agent had available but NOT the `whenToUse`
  * enrichment the run lane adds by reading each skill's SKILL.md frontmatter (that enrichment needs
  * `configDir`, which isn't plumbed in here) — acceptable for an exploratory chat, where `whenToUse` is
  * unasserted. `nonReproducibleAnswers` and the other non-determinism/verdict signals are also left
