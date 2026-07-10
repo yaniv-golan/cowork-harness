@@ -101,7 +101,10 @@ export function capturePreRunManifest(plan: LaunchPlan, workRoot: string, outDir
   // fail evidence-unavailable rather than diffing against a false-empty baseline. #38
   let baselineUnreadable = false;
   if (tier === "hostloop") {
-    for (const e of collectArtifactPaths(workRoot, ["outputs"])) add(e.path, workRoot, e.linkKind);
+    // "outputs" + "uploads" are both STAGED under workRoot (unlike connected folders, walked at their live
+    // source below). "uploads" is a read-only INPUT root: including it in the baseline lets input_unmodified
+    // guard an uploaded file (absent when there are no uploads — the walk is a no-op). #Item2
+    for (const e of collectArtifactPaths(workRoot, ["outputs", "uploads"])) add(e.path, workRoot, e.linkKind);
     for (const m of folderMounts) {
       try {
         realpathSync(m.hostPath);
@@ -123,7 +126,10 @@ export function capturePreRunManifest(plan: LaunchPlan, workRoot: string, outDir
     }
     paths.sort();
   } else {
-    for (const e of collectArtifactPaths(workRoot, userVisibleRootsFromPlan(plan))) add(e.path, workRoot, e.linkKind);
+    // userVisible roots (outputs + folder mounts) PLUS "uploads" — the read-only INPUT root, so
+    // input_unmodified can guard an uploaded file. "uploads" is NOT a userVisible root (kept out of
+    // no_unexpected_files's post-walk and cassette.userVisibleRoots); it only enlarges the baseline. #Item2
+    for (const e of collectArtifactPaths(workRoot, [...userVisibleRootsFromPlan(plan), "uploads"])) add(e.path, workRoot, e.linkKind);
     paths.sort();
   }
   // origin of the pre-run baseline. "local-walk" = the filesystem was walked locally by this function.

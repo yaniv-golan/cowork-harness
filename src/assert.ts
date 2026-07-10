@@ -298,7 +298,7 @@ export interface AssertContext {
    *  materializeManifest(); empty on live/verify-run. `.has(rel)` = "is body-less"; `.get(rel)` gives the
    *  reason ("readonly"/"size"/"unreadable", or undefined on a pre-v8 entry) so artifact_json's remedy is
    *  precise. */
-  truncatedPaths?: Map<string, "size" | "readonly" | "unreadable" | undefined>;
+  truncatedPaths?: Map<string, "size" | "readonly" | "unreadable" | "input" | undefined>;
   /** REPLAY-only: workRoot-relative paths that were a symlink/hardlink at record time (v10 `linkKind`
    *  entries). They materialize as placeholder files indistinguishable from real files, so existence
    *  assertions (file_exists / user_visible_artifact / computer_links_resolve) must treat them as
@@ -519,7 +519,7 @@ function check(
   const results: KeyResult[] = [];
   const ok = (evidence?: string): KeyResult => ({ pass: true, evidence });
   const fail = (message: string): KeyResult => ({ pass: false, message });
-  const truncated = ctx.truncatedPaths ?? new Map<string, "size" | "readonly" | "unreadable" | undefined>();
+  const truncated = ctx.truncatedPaths ?? new Map<string, "size" | "readonly" | "unreadable" | "input" | undefined>();
 
   // Tool-name matching for tool_called / tool_not_called / subagent_tool_used / subagent_tool_absent:
   // a GLOB over the closed set of literal tool identifiers (`*` any run, `?` one char; every other char

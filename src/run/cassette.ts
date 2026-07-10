@@ -106,10 +106,12 @@ export interface ManifestEntry {
   truncated?: boolean; // too big to inline → hash-only (file_exists/user_visible_artifact PASS — existence proven by path+sha; artifact_json cannot run)
   /** WHY the body is absent, when `truncated` — so replay gives the precise artifact_json remedy without a
    *  cassette-level roots list. "size" = over the body cap (raise --max-artifact-bytes); "readonly" = a
-   *  mode:r connected-folder input (assert on a deliverable instead); "unreadable" = a read/containment
-   *  failure at record time (sha256 is ""). ABSENT on pre-v8 cassettes → replay falls back to naming both
-   *  size/readonly causes. v8+. */
-  truncationReason?: "size" | "readonly" | "unreadable";
+   *  mode:r connected-folder input (assert on a deliverable instead); "input" = an UPLOADED file (captured
+   *  hash-only — a user's private upload is never inlined into a committed cassette; input_unmodified still
+   *  guards it via the sha256, and a change IS attributable to the agent, unlike "readonly"); "unreadable" =
+   *  a read/containment failure at record time (sha256 is ""). ABSENT on pre-v8 cassettes → replay falls
+   *  back to naming both size/readonly causes. v8+. */
+  truncationReason?: "size" | "readonly" | "unreadable" | "input";
   /** v10: this entry is a symlink or hardlink, NOT a regular file. Recorded path+kind only (body-less,
    *  sha256 ""), never dereferenced — so an agent-created link stray is visible to `no_unexpected_files`
    *  on replay (materializes as an empty placeholder, counted by the path walk), without inlining any
@@ -307,6 +309,7 @@ export function buildManifest(
   cap?: number,
   roots: string[] = ["outputs", ".projects"],
   bodyLessPrefixes: string[] = [],
+  inputRoots: string[] = ["uploads"],
 ): ManifestEntry[] {
   const limit = cap ?? defaultBodyCap();
   // Read-only connected-folder inputs (`bodyLessPrefixes`) are captured path+bytes+sha256 only, same as
@@ -319,7 +322,13 @@ export function buildManifest(
   // stray survives into the manifest → materializes as a placeholder → is seen by no_unexpected_files on
   // replay, matching live. Link entries are path+kind only (never dereferenced/read), so no out-of-root
   // target content is inlined into the committed cassette.
-  return collectArtifactPaths(workRoot, roots).map((e): ManifestEntry => {
+  // Uploaded inputs (`inputRoots`, default "uploads") are captured HASH-ONLY, always body-less with reason
+  // "input" — a user's private upload is never inlined into a committed cassette, yet input_unmodified can
+  // still guard it (the sha256 survives) AND a change is correctly attributed to the agent (unlike a
+  // "readonly" connected folder, which the assert layer excuses as external). Walked separately from `roots`
+  // so they never enter recordRoots / cassette.userVisibleRoots (which drive materialize prefixes + the
+  // folder-prefix zip). Prefixes are disjoint (uploads/ vs outputs/ vs folders), so no dedup is needed. #Item2
+  const readEntry = (e: { path: string; linkKind?: "symlink" | "hardlink" }, forceBodyLessReason?: "input"): ManifestEntry => {
     const { path, linkKind } = e;
     if (linkKind) return { path, bytes: 0, sha256: "", linkKind }; // body-less; never read the target
     // Regular file: re-confirm containment before reading the body (never inline out-of-work-root content).
@@ -338,15 +347,19 @@ export function buildManifest(
     const bytes = buf.length;
     const sha256 = createHash("sha256").update(buf).digest("hex");
     // truncationReason names WHY the body is absent so replay can give the precise remedy without a
-    // cassette-level roots list: "readonly" (a mode:r input — assert on a deliverable) vs "size" (over
-    // the body cap — raise --max-artifact-bytes). "unreadable" is the catch branches above.
+    // cassette-level roots list: "input" (an uploaded file — hash-only), "readonly" (a mode:r connected
+    // folder input), "size" (over the body cap — raise --max-artifact-bytes). "unreadable" is the catches above.
+    if (forceBodyLessReason) return { path, bytes, sha256, truncated: true, truncationReason: forceBodyLessReason };
     if (isBodyLess(path)) return { path, bytes, sha256, truncated: true, truncationReason: "readonly" };
     if (buf.length > limit) return { path, bytes, sha256, truncated: true, truncationReason: "size" };
     // store an encoding marker. UTF-8-safe bodies stay text (readable cassettes); binary bodies go
     // base64 so the record→replay round-trip is byte-exact and the sha256 verify stays valid.
     if (isLosslessUtf8(buf)) return { path, bytes, sha256, body: buf.toString("utf8") };
     return { path, bytes, sha256, body: buf.toString("base64"), encoding: "base64" };
-  });
+  };
+  const userVisible = collectArtifactPaths(workRoot, roots).map((e) => readEntry(e));
+  const inputs = inputRoots.length ? collectArtifactPaths(workRoot, inputRoots).map((e) => readEntry(e, "input")) : [];
+  return [...userVisible, ...inputs];
 }
 
 /** decode an entry's body to its RAW bytes per the encoding marker (default utf8). */
