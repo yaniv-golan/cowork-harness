@@ -391,6 +391,43 @@ function scenarioFiles(): string[] {
 const RUN_TIMEOUT_MS = 10 * 60_000; // F23: a hung-but-alive child (stuck container, network stall) must not block the whole capture pool forever
 const RUN_MAX_STDOUT_BYTES = 16 * 1024 * 1024; // F23: bound a spewing/looping child rather than growing the buffer unbounded
 
+// F23 residual: `detached: true` (below) makes each spawned child its OWN process-group leader — which is
+// exactly why `killGroup` can `process.kill(-pid, ...)` to take `npx`→`tsx`→`node` down together on a
+// timeout/byte-cap. The SAME detachment means a SIGINT/SIGTERM delivered to THIS process (an operator's
+// Ctrl-C mid-capture) does NOT propagate to an already-running child's group — an interrupted capture leaks
+// running container runs for up to RUN_TIMEOUT_MS × the concurrency pool. Track every outstanding child's
+// pid (its own group id) so an entry-path signal handler can kill them all before this process actually
+// exits. Exported for a unit test of the tracking set itself — reliably simulating a real SIGINT/SIGTERM
+// against a live child in a test harness is environment-dependent, so the set's add/remove lifecycle is
+// what's verified directly.
+export const outstandingChildPids = new Set<number>();
+
+function killAllOutstandingChildGroups(): void {
+  for (const pid of outstandingChildPids) {
+    try {
+      process.kill(-pid, "SIGKILL");
+    } catch {
+      /* already gone */
+    }
+  }
+  outstandingChildPids.clear();
+}
+
+let orphanCleanupHandlersInstalled = false;
+/** Idempotent (F23 residual): installs the Ctrl-C/SIGTERM cleanup at most once no matter how many times it's
+ *  called (a test calling it repeatedly, or a future second entry path) — repeat calls are a no-op. Exported
+ *  for the unit test to verify idempotency directly; the real entry path below always calls it. */
+export function installOrphanCleanupHandlers(): void {
+  if (orphanCleanupHandlersInstalled) return;
+  orphanCleanupHandlersInstalled = true;
+  for (const sig of ["SIGINT", "SIGTERM"] as const) {
+    process.on(sig, () => {
+      killAllOutstandingChildGroups();
+      process.exit(1);
+    });
+  }
+}
+
 /** Spawn `cmd args...`, capturing stdout, bounded by a wall-clock TIMEOUT and a stdout BYTE CAP (F23) — both
  *  kill the whole process GROUP (the child is `detached`, so `npx` → `tsx` → `node` all die together; killing
  *  only the `npx` pid can leave the real runner alive and hung) and resolve `{}`. An empty-object resolution
@@ -402,6 +439,7 @@ const RUN_MAX_STDOUT_BYTES = 16 * 1024 * 1024; // F23: bound a spewing/looping c
 export function boundedSpawnJson(cmd: string, args: string[], timeoutMs = RUN_TIMEOUT_MS, maxBytes = RUN_MAX_STDOUT_BYTES): Promise<unknown> {
   return new Promise((resolveJob) => {
     const child = spawn(cmd, args, { stdio: ["ignore", "pipe", "ignore"], detached: true });
+    if (child.pid) outstandingChildPids.add(child.pid); // F23 residual: tracked until settled, below
     let buf = "";
     let bytes = 0;
     let settled = false;
@@ -421,6 +459,7 @@ export function boundedSpawnJson(cmd: string, args: string[], timeoutMs = RUN_TI
       if (settled) return; // a killed child can still emit a trailing close/error; only the first result counts
       settled = true;
       clearTimeout(timer);
+      if (child.pid) outstandingChildPids.delete(child.pid);
       resolveJob(value);
     };
     const timer = setTimeout(() => {
@@ -684,6 +723,7 @@ async function main(): Promise<void> {
 
 import { pathToFileURL } from "node:url";
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  installOrphanCleanupHandlers(); // F23 residual: a Ctrl-C must kill any outstanding bounded-spawn child group
   // Top-level loud-error catch: F20 (model heterogeneity), F22 (malformed profile), F24 (bad --reps/
   // --concurrency), F25 (inconsistent rubric across reps), F26 (calibration claim-text mismatch), and F27
   // (malformed fraction) all throw an `Error` rather than silently degrading; this is the single place that

@@ -45,7 +45,10 @@ export interface ChatResultOpts {
  * forces every future field to be considered here too — chat cannot silently drift.
  */
 export function buildChatResult(record: RunRecord, opts: ChatResultOpts): RunResult {
-  const timeline = readTimeline(opts.outDir);
+  const timelineRaw = readTimeline(opts.outDir);
+  // Only trust a CLEAN timeline (parsed header, no malformed entry lines) — a corrupt/partial timeline is
+  // evidence-unavailable, not present-empty, so derived tool-duration/skill-activity stay undefined. #43
+  const timeline = timelineRaw && timelineRaw.malformedLines === 0 && !timelineRaw.headerCorrupt ? timelineRaw : undefined;
   const workspaceFiles = existsSync(opts.workRoot)
     ? classifyWorkspaceFiles(opts.workRoot, opts.userVisibleRoots, opts.readonlyFolderRoots)
     : [];

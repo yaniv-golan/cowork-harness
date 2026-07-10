@@ -501,12 +501,17 @@ function capForJudge(text: string, cap: number): string {
 }
 
 function buildJudgedDocument(ctx: AssertContext): string {
+  // SCRUB BEFORE CAP (#10): scrub is exact-string replacement, so a secret straddling a cap boundary would
+  // be truncated mid-token and slip past scrub into the doc sent to the (external) judge. Scrub each raw
+  // section FIRST, then cap the already-redacted text — capping redacted content can never re-expose a secret.
+  const secrets = ctx.secrets ?? [];
+  const s = (t: string): string => (secrets.length ? scrub(t, secrets) : t);
   const parts: string[] = [];
-  if (ctx.finalMessage) parts.push(`## Final answer\n${capForJudge(ctx.finalMessage, JUDGE_FINAL_CAP)}`);
-  parts.push(`## Transcript\n${capForJudge(ctx.transcript ?? "", JUDGE_TRANSCRIPT_CAP)}`);
-  for (const f of ctx.authoredFiles ?? []) parts.push(`## Authored file: ${f.path}${f.truncated ? " (truncated)" : ""}\n${f.content}`);
-  const doc = capForJudge(parts.join("\n\n"), JUDGE_DOC_CAP);
-  return ctx.secrets && ctx.secrets.length ? scrub(doc, ctx.secrets) : doc;
+  if (ctx.finalMessage) parts.push(`## Final answer\n${capForJudge(s(ctx.finalMessage), JUDGE_FINAL_CAP)}`);
+  parts.push(`## Transcript\n${capForJudge(s(ctx.transcript ?? ""), JUDGE_TRANSCRIPT_CAP)}`);
+  for (const f of ctx.authoredFiles ?? [])
+    parts.push(`## Authored file: ${s(f.path)}${f.truncated ? " (truncated)" : ""}\n${s(f.content)}`);
+  return capForJudge(parts.join("\n\n"), JUDGE_DOC_CAP); // aggregate backstop, over already-scrubbed content
 }
 
 // A passing check may carry an optional `evidence` string — the concrete file/value/tool/link that

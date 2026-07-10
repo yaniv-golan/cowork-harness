@@ -643,6 +643,7 @@ export type Scenario = z.infer<typeof ScenarioObject>;
  *  refuse to vouch for answer-coverage against stale gate labels). */
 export interface Fingerprint {
   baseline: string; // appVersion at record time
+  frozen?: boolean; // #46: set when surfaced from a cassette's record-time fingerprint on replay (not a fresh run-time recompute)
   skillHash?: string; // hash of the session's local skill/plugin/marketplace dir contents (if any)
   skillSources?: string[]; // the local dirs that fed skillHash (for the replay recompute + diagnostics)
   skillScope?: string[]; // the skills the hash was scoped to (empty/absent = whole-tree); diagnostics

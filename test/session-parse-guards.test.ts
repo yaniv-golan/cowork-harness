@@ -120,22 +120,31 @@ describe("F2: parseMessage — assistant content block guards (crash fix)", () =
 // F3 — synthesized dispatch id uniqueness across messages
 // ---------------------------------------------------------------------------
 describe("F3: parseMessage — synthesized dispatch id uniqueness across messages (bug fix)", () => {
+  // A real assistant message always carries `message.id` (the Anthropic message id); the fallback keys off it.
+  const anonymousDispatch = (msgId: string, label: string) => ({
+    type: "assistant",
+    message: { id: msgId, content: [{ type: "tool_use", name: "Agent", input: { description: label } }] }, // no block `id` → synthesized
+  });
+
   it("two anonymous Agent dispatches in two SEPARATE assistant messages get DISTINCT synthesized toolUseIds", () => {
-    const anonymousDispatch = (label: string) => ({
-      type: "assistant",
-      message: { content: [{ type: "tool_use", name: "Agent", input: { description: label } }] }, // no `id` → synthesized
-    });
-    const firstDispatch = parseMessage(anonymousDispatch("first")).find((e) => e.type === "subagent_dispatch") as any;
-    const secondDispatch = parseMessage(anonymousDispatch("second")).find((e) => e.type === "subagent_dispatch") as any;
+    const firstDispatch = parseMessage(anonymousDispatch("msg_1", "first")).find((e) => e.type === "subagent_dispatch") as any;
+    const secondDispatch = parseMessage(anonymousDispatch("msg_2", "second")).find((e) => e.type === "subagent_dispatch") as any;
     expect(firstDispatch?.toolUseId).toBeTruthy();
     expect(secondDispatch?.toolUseId).toBeTruthy();
     expect(firstDispatch.toolUseId).not.toEqual(secondDispatch.toolUseId);
   });
 
-  it("two anonymous dispatches within the SAME message also get distinct ids (existing blockIndex behavior preserved)", () => {
+  it("re-parsing the SAME message (record→replay) yields the SAME synthesized id — deterministic, not a process counter", () => {
+    const once = parseMessage(anonymousDispatch("msg_42", "x")).find((e) => e.type === "subagent_dispatch") as any;
+    const twice = parseMessage(anonymousDispatch("msg_42", "x")).find((e) => e.type === "subagent_dispatch") as any;
+    expect(once.toolUseId).toEqual(twice.toolUseId); // a process-lifetime counter would fail this
+  });
+
+  it("two anonymous dispatches within the SAME message also get distinct ids (blockIndex disambiguates)", () => {
     const events = parseMessage({
       type: "assistant",
       message: {
+        id: "msg_multi",
         content: [
           { type: "tool_use", name: "Agent", input: { description: "a" } },
           { type: "tool_use", name: "Agent", input: { description: "b" } },

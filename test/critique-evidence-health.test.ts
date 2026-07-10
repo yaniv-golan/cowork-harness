@@ -129,6 +129,42 @@ describe("F29 — append-only prefix tamper detection (defense-in-depth)", () =>
   });
 });
 
+describe("F29 residual — truncation BELOW the captured boundary is detected, not silently served as 'ok'", () => {
+  it("verifyBoundaryIntegrity reports 'mismatch' (not 'ok') when the file shrank below the captured boundary", () => {
+    const path = join(dir, "events.jsonl");
+    const original = '{"t":"init"}\n{"t":"read","path":"references/tiers.md"}\n{"t":"read","path":"references/answers.md"}\n';
+    writeFileSync(path, original);
+    const boundary = snapshotTurnBoundary(dir); // captures size + prefix hash of the FULL original content
+    // Truncate to well under the captured boundary — the surviving bytes are still an untouched PREFIX of
+    // the original (so a prefix-hash-only compare would wrongly say "ok"), but the stream is now shorter
+    // than what was captured as the turn-1 region.
+    writeFileSync(path, '{"t":"init"}\n');
+    expect(verifyBoundaryIntegrity(dir, "events.jsonl", boundary)).toBe("mismatch");
+  });
+
+  it("readTurn1Slice throws (never returns a silent short slice) when the file is now shorter than the captured boundary", () => {
+    const path = join(dir, "events.jsonl");
+    writeFileSync(path, '{"t":"init"}\n{"t":"read","path":"references/tiers.md"}\n{"t":"read","path":"references/answers.md"}\n');
+    const boundary = snapshotTurnBoundary(dir);
+    writeFileSync(path, '{"t":"init"}\n'); // truncated below the captured boundary
+    expect(() => readTurn1Slice(dir, "events.jsonl", boundary)).toThrow(/SHORTER than its captured turn-1 boundary/);
+  });
+
+  it("packageEvidence surfaces turn1SliceDegraded (not a silently-short transcript) when events.jsonl was truncated below its boundary", () => {
+    const path = join(dir, "events.jsonl");
+    writeFileSync(path, '{"t":"init"}\n{"t":"read","path":"references/tiers.md"}\n{"t":"read","path":"references/answers.md"}\n');
+    const boundary = snapshotTurnBoundary(dir);
+    writeFileSync(path, '{"t":"init"}\n'); // truncated below the captured boundary — no run.turn-1.jsonl archive,
+    // so packageEvidence falls back to the events.jsonl slice, which must now be flagged degraded.
+    const skillDir = mkdtempSync(join(tmpdir(), "cwh-crit-skill-"));
+    writeFileSync(join(skillDir, "SKILL.md"), "# a skill\nguidance");
+    const result = packageEvidence(dir, boundary, skillDir);
+    expect(result.turn1SliceDegraded).toBe(true);
+    expect(result.pkg).toMatch(/DEGRADED/);
+    rmSync(skillDir, { recursive: true, force: true });
+  });
+});
+
 describe("F30 — a corrupt canonical turn-1 result surfaces a typed degradation flag (never a silent turn-2 substitution)", () => {
   it("readTurn1ResultWithStatus reports 'corrupted' for a malformed result.turn-1.json and does NOT fall back to result.json", () => {
     writeFileSync(join(dir, "result.turn-1.json"), "{ this is not valid json");
@@ -161,6 +197,48 @@ describe("F30 — a corrupt canonical turn-1 result surfaces a typed degradation
     expect(result.turn1ResultDegraded).toBe(true);
     expect(result.pkg).toMatch(/DEGRADED/);
     expect(result.pkg).not.toContain("TURN-2-ONLY-SENTINEL-TEXT"); // no silent turn-2 substitution
+    rmSync(skillDir, { recursive: true, force: true });
+  });
+});
+
+describe("F30 residual — a MISSING (not corrupt) turn-1 archive on a validated resume never silently serves turn-2 data", () => {
+  it("readTurn1ResultWithStatus(outDir, requireArchive:true) reports 'missing' — and never even looks at result.json — when result.turn-1.json was never archived", () => {
+    // No result.turn-1.json at all; result.json exists (this IS the turn-2 result on a resumed run).
+    writeFileSync(join(dir, "result.json"), JSON.stringify({ turn: 2, finalMessage: "TURN-2 DATA — must not leak" }));
+    const { value, status } = readTurn1ResultWithStatus(dir, true);
+    expect(status).toBe("missing");
+    expect(value).toBeNull(); // requireArchive:true never falls through to result.json
+  });
+
+  it("readTurn1ResultWithStatus(outDir, requireArchive:false) (the default) still tolerates the single-shot 'no archive, result.json IS turn 1' case", () => {
+    writeFileSync(join(dir, "result.json"), JSON.stringify({ turn: 1, from: "single-shot" }));
+    const { value, status } = readTurn1ResultWithStatus(dir); // default requireArchive:false, unchanged behavior
+    expect(status).toBe("ok");
+    expect((value as { from: string }).from).toBe("single-shot");
+  });
+
+  it("packageEvidence(..., isResume:true) sets turn1ResultDegraded and never leaks result.json's turn-2 content when the archive is simply MISSING", () => {
+    // No result.turn-1.json — only the turn-2 result.json, exactly the shape a resumed session has if the
+    // archive step silently failed.
+    writeFileSync(join(dir, "result.json"), JSON.stringify({ finalMessage: "TURN-2-ONLY-SENTINEL-TEXT", turn: 2 }));
+    const boundary: TurnBoundary = { events: { size: 0 }, timeline: { size: 0 } };
+    const skillDir = mkdtempSync(join(tmpdir(), "cwh-crit-skill-"));
+    writeFileSync(join(skillDir, "SKILL.md"), "# a skill\nguidance");
+    const result = packageEvidence(dir, boundary, skillDir, true); // isResume:true
+    expect(result.turn1ResultDegraded).toBe(true);
+    expect(result.pkg).toMatch(/DEGRADED/);
+    expect(result.pkg).not.toContain("TURN-2-ONLY-SENTINEL-TEXT"); // never substituted turn-2 data for turn-1
+    rmSync(skillDir, { recursive: true, force: true });
+  });
+
+  it("packageEvidence(..., isResume:false) (the default) does NOT flag the same missing-archive shape as degraded — result.json legitimately IS turn 1 there", () => {
+    writeFileSync(join(dir, "result.json"), JSON.stringify({ finalMessage: "single-shot turn-1 result", turn: 1 }));
+    const boundary: TurnBoundary = { events: { size: 0 }, timeline: { size: 0 } };
+    const skillDir = mkdtempSync(join(tmpdir(), "cwh-crit-skill-"));
+    writeFileSync(join(skillDir, "SKILL.md"), "# a skill\nguidance");
+    const result = packageEvidence(dir, boundary, skillDir); // isResume defaults to false
+    expect(result.turn1ResultDegraded).toBe(false);
+    expect(result.pkg).toContain("single-shot turn-1 result");
     rmSync(skillDir, { recursive: true, force: true });
   });
 });

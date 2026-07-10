@@ -559,6 +559,10 @@
           "output": {
             "type": "string"
           },
+          "outputTruncated": {
+            "type": "boolean",
+            "description": "the dispatch output was cut at the assert cap — a negative content check is unverifiable, not a proven absence (#9)"
+          },
           "attributedSkillId": {
             "type": "string"
           }
@@ -602,6 +606,10 @@
         "baseline": {
           "type": "string",
           "description": "appVersion at record time"
+        },
+        "frozen": {
+          "type": "boolean",
+          "description": "true when surfaced from a cassette's record-time fingerprint on the replay lane (not a fresh run-time recompute) (#46)"
         },
         "skillHash": {
           "type": "string",
@@ -926,6 +934,10 @@
           },
           "assertText": {
             "type": "string"
+          },
+          "assertTextTruncated": {
+            "type": "boolean",
+            "description": "assertText was cut at the 10 KB assert cap — a substring miss is unverifiable, not a proven absence (#9)"
           }
         }
       }

@@ -2369,7 +2369,11 @@ async function recordScenarioObject(
       else throw new Error(msg);
     }
   }
-  const timeline = readTimeline(result.outDir);
+  const timelineRaw = readTimeline(result.outDir);
+  // Record only a CLEAN timeline — a corrupt header or malformed entry lines is evidence-unavailable, so
+  // recording `timeline: []` / `timelineHeader: undefined` would bake a novel "ran, no activity" shape into
+  // the cassette instead of the honest "no timeline" (undefined) a corrupt read should produce. #43
+  const timeline = timelineRaw && timelineRaw.malformedLines === 0 && !timelineRaw.headerCorrupt ? timelineRaw : undefined;
   // Load the baseline to extract agentBinaryFormat if available (optional).
   let agentBinaryFormat: string | undefined;
   try {
@@ -3274,7 +3278,12 @@ export async function cmdVerifyCassettes(args: string[]) {
       // scenarioContentDrift (below) computes for the scenario source — the session path resolves via
       // the identical relative-to-cassetteDir mechanism, so a broken offset is equally untrustworthy
       // for either. Cheap (an existsSync probe or two), safe to compute unconditionally here.
-      const sourceVia = _resolveRerecordSource(f, rc.cassette).via;
+      // #51: downgrade ONLY when a PERSISTED source path broke (persistedMissing) — that is the actual
+      // "cassette relocated off its tree" signal. A cassette with NO persisted source at all also resolves
+      // `via: "name-lookup"`, but that is not evidence of relocation, so it must keep the hard-fail (else a
+      // programmatic-record cassette would silently downgrade every genuine session drift → false-green).
+      const rr = _resolveRerecordSource(f, rc.cassette);
+      const sourceVia = rr.persistedMissing ? "name-lookup" : "none";
       const sfd = sessionFingerprintDrift(rc.cassette, dirname(f), sourceVia);
       if (sfd.drifted)
         staleness.push(

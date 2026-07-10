@@ -62,7 +62,7 @@ import { summarizeGateProvenance } from "./gate-provenance.js";
 import { collectSecrets, scrub } from "../secrets.js";
 import { indexRowFromResult, appendIndexRow } from "./run-index.js";
 import { classifyWorkspaceFiles, collectArtifactPaths, captureAuthoredFiles } from "./artifacts.js";
-import { readPreRunManifest, readPreRunManifestHashes, readPreRunManifestLinkAware } from "./pre-run-manifest.js";
+import { readPreRunManifest, readPreRunManifestHashes, readPreRunManifestLinkAware, readPreRunManifestStats } from "./pre-run-manifest.js";
 import { resolveAvailableSkills, type PluginSkillRoot } from "./skill-metadata.js";
 
 // Moved to ./artifacts.ts so assert.ts can use it without an assert→execute import cycle;
@@ -841,14 +841,14 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // and reuse for both the evaluate ctx (skill_tool_used) and the later assembleRunResult call
   // (toolDurations/skillActivity/subagents) below — two reads could disagree if the file were touched mid-run.
   const timelineData = readTimeline(outDir);
-  if (timelineData && timelineData.malformedLines > 0)
+  if (timelineData && (timelineData.malformedLines > 0 || timelineData.headerCorrupt))
     warn(
       `::warning:: [timeline] ${timelineData.malformedLines} malformed line(s) in timeline.jsonl — skill-activity/tool-duration telemetry is incomplete, treated as unavailable\n`,
     );
   // A partially-corrupt timeline (valid header, dropped event lines) yields an INCOMPLETE fold — a dropped
   // line could be a skill/tool window — so treat it as unavailable rather than silently incomplete (mirrors
   // the scan missing/malformed handling; skill_tool_used then fails evidence-unavailable, never a false green). #35
-  const timelineEvents = timelineData && timelineData.malformedLines === 0 ? timelineData.events : undefined;
+  const timelineEvents = timelineData && timelineData.malformedLines === 0 && !timelineData.headerCorrupt ? timelineData.events : undefined;
 
   // Context/Connectors panel: the SPINE is the id-only list run.ts's init handler already seeded
   // onto record.context.availableSkills from the agent's own init event (authoritative — covers plugin/
@@ -893,6 +893,9 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   const authoredFiles = captureAuthoredFiles(workRoot, userVisibleRoots, readonlyFolderRoots, preRunHashes, {
     scratchpadRoot,
     resume: plan.resume,
+    // Pre-run mtime/size lets an over-cap/unreadable prior file (hash === null) be positively confirmed
+    // UNCHANGED rather than either mis-attributed as authored or silently dropped from evidence. #15/#12
+    preRunStats: readPreRunManifestStats(outDir),
   });
 
   const assertCtx: AssertContext = {
@@ -1299,9 +1302,12 @@ function validateScenarioRegexes(scenario: Scenario, scenarioPath: string): void
         throw new Error(
           `${context}: \`${key}\` is empty — an empty tool glob matches no tool and would pass vacuously. Give a tool name/glob (e.g. Bash, mcp__workspace__*).`,
         );
-      if (/\.\*|\.\+|[|()[\]+^$]|\\[dwsb]/.test(glob))
+      // Regex-only metacharacters AND minimatch brace-expansion (`{Bash,Read}`) are matched LITERALLY by the
+      // tool-glob engine (only `*`/`?` are special), so they match no real tool name and would pass a
+      // _not_/_absent assert vacuously. Tool names never contain these, so rejecting them is safe. #7/#8
+      if (/\.\*|\.\+|[|()[\]+^${}]|\\[dwsb]/.test(glob))
         throw new Error(
-          `${context}: \`${key}: "${glob}"\` looks like a regex, but this key is GLOB-matched (use * and ?, not .* or | []). A regex-only pattern matches no tool name and would pass a _not_/_absent assert vacuously.`,
+          `${context}: \`${key}: "${glob}"\` looks like a regex or brace-expansion, but this key is GLOB-matched (only * and ? are special — no .* | [] {}). Such a pattern matches no tool name and would pass a _not_/_absent assert vacuously.`,
         );
     }
   }
@@ -1432,12 +1438,12 @@ export function buildPartialResult(args: {
     !!args.nonDeterministicHint;
   const nonDeterministicTerminal = args.onUnanswered === "llm" || args.onUnanswered === "prompt" || !!args.externalChannel;
   const timelineData = readTimeline(args.outDir);
-  if (timelineData && timelineData.malformedLines > 0)
+  if (timelineData && (timelineData.malformedLines > 0 || timelineData.headerCorrupt))
     warn(
       `::warning:: [timeline] ${timelineData.malformedLines} malformed line(s) in timeline.jsonl — skill-activity/tool-duration telemetry is incomplete, treated as unavailable\n`,
     );
   // Partially-corrupt timeline → incomplete fold; treat as unavailable (see the #35 note on the live path). #35
-  const timelineEvents = timelineData && timelineData.malformedLines === 0 ? timelineData.events : undefined;
+  const timelineEvents = timelineData && timelineData.malformedLines === 0 && !timelineData.headerCorrupt ? timelineData.events : undefined;
   // Context/Connectors panel: the SPINE is the id-only list run.ts's init handler already seeded
   // (authoritative — covers plugin/marketplace skills). Enrich with whenToUse read off disk across both
   // delivery trees. Own wiring, independent of executeScenario's (this function's own args.configDir /

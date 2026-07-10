@@ -92,7 +92,17 @@ export function readTurn1Slice(outDir: string, file: "events.jsonl" | "timeline.
     );
   }
   const buf = readFileSync(path);
-  return buf.subarray(0, Math.min(sb.size, buf.length)).toString("utf8");
+  // F29 residual: a stream truncated BELOW its captured boundary (e.g. 50KB→10KB) must not silently hand
+  // back a SHORT slice as if it were the full turn-1 region — that is exactly the "looks like ok, isn't"
+  // shape this whole module exists to prevent. A short read is therefore its own abort condition, distinct
+  // from (and checked in addition to) `verifyBoundaryIntegrity`'s prefix-hash tripwire.
+  if (buf.length < sb.size) {
+    throw new Error(
+      `readTurn1Slice: ${file} is now ${buf.length} bytes, SHORTER than its captured turn-1 boundary (${sb.size}) — ` +
+        `the stream was truncated below the already-captured boundary; refusing to silently return a short slice as if it were the full turn-1 region.`,
+    );
+  }
+  return buf.subarray(0, sb.size).toString("utf8");
 }
 
 export type BoundaryIntegrity = "ok" | "mismatch" | "unavailable";
@@ -114,6 +124,20 @@ export function verifyBoundaryIntegrity(
   if (sb.size === null || sb.prefixHash === undefined) return "unavailable";
   const path = join(outDir, file);
   if (!existsSync(path)) return "unavailable";
+  let currentSize: number;
+  try {
+    currentSize = statSync(path).size;
+  } catch {
+    return "unavailable";
+  }
+  // F29 residual: a stream truncated BELOW its captured boundary (e.g. 50KB→10KB) keeps its first
+  // PREFIX_HASH_BYTES bytes byte-for-byte intact — the prefix-hash compare alone would report "ok" even
+  // though everything from the new (smaller) EOF up to the captured boundary is now GONE, and
+  // `readTurn1Slice` would silently hand back a short slice instead of the full turn-1 region. A byte-length
+  // regression below the captured boundary is therefore its own mismatch condition, checked BEFORE (and
+  // independent of) the prefix-hash compare below — a plain "did the length shrink" check the hash alone
+  // cannot express.
+  if (currentSize < sb.size) return "mismatch";
   let current: string;
   try {
     current = hashPrefix(readPrefixBytes(path, Math.min(sb.size, PREFIX_HASH_BYTES)));
@@ -129,9 +153,18 @@ export type Turn1ResultStatus = "ok" | "missing" | "corrupted";
  *  turn-1 result file existed but failed to parse, vs. `"missing"` when neither `result.turn-1.json` nor
  *  `result.json` exists at all. Deliberately does NOT fall further down the preference list past a corrupt
  *  file — on a resumed session `result.json` is the TURN-2 result, and silently substituting it for a
- *  corrupt `result.turn-1.json` would contaminate turn-1 isolation. */
-export function readTurn1ResultWithStatus(outDir: string): { value: unknown | null; status: Turn1ResultStatus } {
-  for (const f of ["result.turn-1.json", "result.json"]) {
+ *  corrupt `result.turn-1.json` would contaminate turn-1 isolation.
+ *
+ *  `requireArchive` (F30 residual): when the CALLER already knows this run resumed (a validated turn>1
+ *  reflection), a MISSING `result.turn-1.json` is just as unsafe to paper over as a corrupt one — falling
+ *  through to `result.json` would silently serve TURN-2 data labeled as turn 1. Set `requireArchive: true`
+ *  in that case: the fallback to `result.json` is skipped entirely (never even read) and a missing archive
+ *  reports `status: "missing"` with `value: null`, exactly like the corrupted case, rather than treating
+ *  `result.json` as a legitimate substitute. Defaults to `false` (the original single-shot-tolerant
+ *  behavior: no archive exists on a run that never resumed, and `result.json` genuinely IS turn 1 there). */
+export function readTurn1ResultWithStatus(outDir: string, requireArchive = false): { value: unknown | null; status: Turn1ResultStatus } {
+  const candidates = requireArchive ? ["result.turn-1.json"] : ["result.turn-1.json", "result.json"];
+  for (const f of candidates) {
     const p = join(outDir, f);
     if (existsSync(p)) {
       try {

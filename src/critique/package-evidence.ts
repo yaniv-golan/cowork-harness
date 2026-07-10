@@ -97,12 +97,14 @@ export interface PackageEvidenceResult {
    *  told this: a claim about something that fell outside a truncated window is `not-adjudicable`, NOT
    *  `confabulated` — absence from a truncated package is not proof the thing didn't happen. */
   truncated: boolean;
-  /** F30: true when the canonical turn-1 result file (`result.turn-1.json`, or `result.json` on an
-   *  unresumed run) existed but failed to parse. The "Turn-1 outcome" / toolCounts / skillActivity /
-   *  subagents / "Final answer" sections above are therefore EMPTY DEFAULTS, not a genuinely empty turn-1
-   *  result — the evaluator must treat their absence as UNKNOWN, never as evidence something didn't happen.
-   *  This is never resolved by falling back to `result.json`'s turn-2 data (that would contaminate turn-1
-   *  isolation) — it is a degradation signal only. */
+  /** F30 (+ residual): true when the canonical turn-1 result file (`result.turn-1.json`) either existed but
+   *  failed to parse (corrupted), OR — on a validated resume (`isResume: true`) — never existed at all
+   *  (missing archive). The "Turn-1 outcome" / toolCounts / skillActivity / subagents / "Final answer"
+   *  sections above are therefore EMPTY DEFAULTS, not a genuinely empty turn-1 result — the evaluator must
+   *  treat their absence as UNKNOWN, never as evidence something didn't happen. This is never resolved by
+   *  falling back to `result.json`'s turn-2 data (that would contaminate turn-1 isolation) — it is a
+   *  degradation signal only. (On a non-resumed run, a missing archive is NOT degraded — `result.json`
+   *  genuinely IS turn 1 there, per `readTurn1ResultWithStatus`'s `requireArchive:false` default.) */
   turn1ResultDegraded: boolean;
   /** F28/F29: true when the turn-1 transcript's `events.jsonl`-slice fallback could not be trusted as
    *  ground truth — either the byte boundary was never established (a `snapshotTurnBoundary` stat failure)
@@ -118,8 +120,16 @@ export interface PackageEvidenceResult {
  *  session (post-resume, so `run.turn-1.jsonl`/`result.turn-1.json` are archived); `boundary` is the
  *  `snapshotTurnBoundary` captured right before the reflection turn; `skillDir` is the skill folder under
  *  test (containing `SKILL.md` and, optionally, a `references/` subdir). Pure and testable: every input is
- *  a path or an already-captured boundary, nothing here spawns a process or calls a model. */
-export function packageEvidence(runDir: string, boundary: TurnBoundary, skillDir: string): PackageEvidenceResult {
+ *  a path or an already-captured boundary, nothing here spawns a process or calls a model.
+ *
+ *  `isResume` (F30 residual): true when the CALLER has already validated this is a genuine resume (turn>1
+ *  reflection) — the only case this function is actually invoked in today (`scripts/skill-critique.ts`
+ *  calls this only after `validateReflectionTurn` succeeds). In that case `result.turn-1.json` MUST have
+ *  been archived by the resume; a missing archive is never papered over by falling back to `result.json`
+ *  (which would be TURN-2 data at that point) — it is instead treated exactly like a corrupted archive
+ *  (`turn1ResultDegraded: true`, empty-default sections). Defaults to `false` so a hypothetical future
+ *  single-shot (never-resumed) caller keeps the original "no archive → `result.json` IS turn 1" behavior. */
+export function packageEvidence(runDir: string, boundary: TurnBoundary, skillDir: string, isResume = false): PackageEvidenceResult {
   // Track whether any budget was hit. `boundText` returns its input UNCHANGED when it fits, so `out !== s`
   // is an exact truncation signal — no separate length check that could drift from boundText's own cut rule.
   let truncated = false;
@@ -129,8 +139,13 @@ export function packageEvidence(runDir: string, boundary: TurnBoundary, skillDir
     return out;
   };
 
-  const turn1Result = readTurn1ResultWithStatus(runDir);
-  const turn1ResultDegraded = turn1Result.status === "corrupted";
+  const turn1Result = readTurn1ResultWithStatus(runDir, isResume);
+  // F30 residual: on a validated resume, "missing" is JUST as degraded as "corrupted" — `readTurn1ResultWithStatus`
+  // was called with `requireArchive: isResume` above, so a "missing" status here means the archive genuinely
+  // never existed (result.json was NOT silently substituted); that must be surfaced the same way a corrupt
+  // archive already was, never treated as "no turn-1 result, nothing to show" (the pre-fix default for a
+  // status other than "corrupted").
+  const turn1ResultDegraded = turn1Result.status === "corrupted" || (isResume && turn1Result.status === "missing");
   const raw = turn1Result.value as Record<string, unknown> | null;
 
   const finalMessage = typeof raw?.finalMessage === "string" ? raw.finalMessage : "";
@@ -181,7 +196,9 @@ export function packageEvidence(runDir: string, boundary: TurnBoundary, skillDir
   }
 
   const turn1ResultDegradedNote = turn1ResultDegraded
-    ? " [DEGRADED: the canonical turn-1 result file exists but failed to parse — this section is an empty default, NOT a genuinely empty turn-1 result; treat as unknown, not as evidence of absence]"
+    ? turn1Result.status === "corrupted"
+      ? " [DEGRADED: the canonical turn-1 result file exists but failed to parse — this section is an empty default, NOT a genuinely empty turn-1 result; treat as unknown, not as evidence of absence]"
+      : " [DEGRADED: this is a resumed session but result.turn-1.json was never archived — this section is an empty default (NEVER the turn-2 result.json substituted in its place); treat as unknown, not as evidence of absence]"
     : "";
   const skillMdSectionTitle =
     skillMdStatus === "readable"

@@ -81,24 +81,30 @@ export class ResourceSampler {
   }
   start(): void {
     if (this.timer) return;
-    this.tickPromise = this.tick(); // sample immediately so a run shorter than one interval still records a sample
-    this.timer = setInterval(() => {
-      this.tickPromise = this.tick();
-    }, this.intervalMs);
+    this.tick(); // sample immediately so a run shorter than one interval still records a sample
+    this.timer = setInterval(() => this.tick(), this.intervalMs);
     this.timer.unref?.(); // never keep the process alive past teardown
   }
-  private async tick(): Promise<void> {
-    if (this.inFlight || this.stopped) return; // no overlap; no work after stop
+  /** `tick()` OWNS `tickPromise`: it reassigns it ONLY when a tick actually starts work, so `tickPromise`
+   *  always points at the latest REAL in-flight sample — never a skipped no-op. A probe slower than the
+   *  interval (docker stats ≈1-2 s vs a 1 s interval) would otherwise leave `tickPromise` pointing at a
+   *  resolved no-op, and `stop()` would await that instead of the real sample and suppress it (#40). */
+  private tick(): Promise<void> {
+    if (this.inFlight || this.stopped) return this.tickPromise ?? Promise.resolve(); // no overlap; no work after stop
     this.inFlight = true;
-    try {
-      const sample = await this.sampleOnce();
-      if (sample === undefined && this.sampleOnce !== UNSUPPORTED_PROBE) this.probeFailureCount++;
-      if (sample && !this.stopped) appendFileSync(this.path, JSON.stringify(sample) + "\n");
-    } catch (e) {
-      warn(`::warning:: [resources] sample failed (${this.tier}): ${String((e as Error)?.message ?? e)}\n`);
-    } finally {
-      this.inFlight = false;
-    }
+    const p = (async () => {
+      try {
+        const sample = await this.sampleOnce();
+        if (sample === undefined && this.sampleOnce !== UNSUPPORTED_PROBE) this.probeFailureCount++;
+        if (sample && !this.stopped) appendFileSync(this.path, JSON.stringify(sample) + "\n");
+      } catch (e) {
+        warn(`::warning:: [resources] sample failed (${this.tier}): ${String((e as Error)?.message ?? e)}\n`);
+      } finally {
+        this.inFlight = false;
+      }
+    })();
+    this.tickPromise = p;
+    return p;
   }
   /** Stops future ticks, then awaits the in-flight tick (bounded — a hung probe can't block teardown
    *  forever) so a run shorter than one interval still has its immediate first sample land in
@@ -115,7 +121,15 @@ export class ResourceSampler {
       this.timer = undefined;
     }
     if (this.tickPromise) {
-      await Promise.race([this.tickPromise, new Promise<void>((r) => setTimeout(r, STOP_WAIT_DEADLINE_MS))]);
+      // Bounded wait for the in-flight tick. Clear the deadline timer when the race settles so a fast tick
+      // doesn't leave a dangling 2.5 s timer pinning the event loop and delaying CLI exit (#40).
+      let deadlineTimer: NodeJS.Timeout | undefined;
+      const deadline = new Promise<void>((r) => {
+        deadlineTimer = setTimeout(r, STOP_WAIT_DEADLINE_MS);
+        deadlineTimer.unref?.();
+      });
+      await Promise.race([this.tickPromise, deadline]);
+      if (deadlineTimer) clearTimeout(deadlineTimer);
     }
     this.stopped = true;
   }

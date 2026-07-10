@@ -13,7 +13,9 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { writeSync } from "node:fs";
+import { basename } from "node:path";
 import { packageEvidence } from "../src/critique/package-evidence.js";
+import type { SkillMdStatus } from "../src/critique/package-evidence.js";
 import { snapshotTurnBoundary } from "../src/critique/evidence.js";
 import { runCritique, DEFAULT_EVALUATOR_MODEL } from "../src/critique/evaluator.js";
 import type { CritiqueItem } from "../src/critique/evidence.js";
@@ -104,6 +106,42 @@ interface TurnOutcome {
 const TURN_TIMEOUT_MS = 10 * 60_000;
 const TURN_MAX_BYTES = 16 * 1024 * 1024;
 
+// F23/F36 residual: `detached: true` (below) makes each spawned child its OWN process-group leader — which
+// is exactly why `killGroup` can `process.kill(-pid, ...)` to take `npx`→`tsx`→`node` down together on a
+// timeout/byte-cap. The SAME detachment means a SIGINT/SIGTERM delivered to THIS process (an operator's
+// Ctrl-C) does NOT propagate to an already-running child's group — an interrupted capture leaks a running
+// container run for up to TURN_TIMEOUT_MS. Track every outstanding child's pid (its own group id) so an
+// entry-path signal handler can kill them all before this process actually exits. Exported for a unit test
+// of the tracking set itself — reliably simulating a real SIGINT/SIGTERM against a live child in a test
+// harness is environment-dependent, so the set's add/remove lifecycle is what's verified directly.
+export const outstandingChildPids = new Set<number>();
+
+function killAllOutstandingChildGroups(): void {
+  for (const pid of outstandingChildPids) {
+    try {
+      process.kill(-pid, "SIGKILL");
+    } catch {
+      /* already gone */
+    }
+  }
+  outstandingChildPids.clear();
+}
+
+let orphanCleanupHandlersInstalled = false;
+/** Idempotent (F23/F36 residual): installs the Ctrl-C/SIGTERM cleanup at most once no matter how many times
+ *  it's called (a test calling it repeatedly, or a future second entry path) — repeat calls are a no-op.
+ *  Exported for the unit test to verify idempotency directly; the real entry path below always calls it. */
+export function installOrphanCleanupHandlers(): void {
+  if (orphanCleanupHandlersInstalled) return;
+  orphanCleanupHandlersInstalled = true;
+  for (const sig of ["SIGINT", "SIGTERM"] as const) {
+    process.on(sig, () => {
+      killAllOutstandingChildGroups();
+      process.exit(1);
+    });
+  }
+}
+
 /** Generic bounded spawn: any `cmd args...`, captured, bounded by a wall-clock TIMEOUT and a BYTE CAP on
  *  stdout+stderr (F36) — both kill the whole process GROUP (the child is `detached`, so e.g. `npx` → `tsx` →
  *  `node` all die together; killing only the top pid can leave the real runner alive and hung) and resolve
@@ -115,6 +153,7 @@ const TURN_MAX_BYTES = 16 * 1024 * 1024;
 export function boundedSpawn(cmd: string, args: string[], timeoutMs: number, maxBytes: number): Promise<TurnOutcome> {
   return new Promise((resolvePromise) => {
     const child = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"], detached: true });
+    if (child.pid) outstandingChildPids.add(child.pid); // F23/F36 residual: tracked until settled, below
     let stdout = "";
     let stderr = "";
     let stdoutBytes = 0;
@@ -139,6 +178,7 @@ export function boundedSpawn(cmd: string, args: string[], timeoutMs: number, max
       if (settled) return; // a killed child can still emit a trailing close/error; only the first result counts
       settled = true;
       clearTimeout(timer);
+      if (child.pid) outstandingChildPids.delete(child.pid);
       resolvePromise({ stdout, stderr, code, timedOut, truncated });
     };
     const timer = setTimeout(() => {
@@ -233,9 +273,23 @@ function extractResult(turn: TurnOutcome): "success" | "error" | undefined {
  *  turn's own success/error, which is a GRADEABLE outcome (a legitimate input to the critique, not an infra
  *  problem) — the reflection turn has no "task" to grade, so anything short of a clean protocol turn here
  *  (nonzero exit, no parseable envelope, `ok !== true`, or a `turn` that doesn't actually show a resume) is
- *  an infrastructure/protocol failure, never a "the agent had nothing to say" self-report. Exported for the
- *  unit test. */
-export function validateReflectionTurn(turn: TurnOutcome, expectedSessionId: string): { ok: true; envelope: SkillEnvelope } | { ok: false; reason: string } {
+ *  an infrastructure/protocol failure, never a "the agent had nothing to say" self-report.
+ *
+ *  F37 residual: `turn > 1` alone is NOT proof this resumed the RIGHT session — a resume that (via some bug
+ *  or stale on-disk state) silently picked up a DIFFERENT, unrelated session would also show `turn > 1`,
+ *  and everything downstream (evidence packaging, the critique) would then be built from the wrong run
+ *  entirely. `execute.ts` computes a run's `outDir` as `join(runsWriteRoot(), slug(scenario), sessionId)` —
+ *  the session id IS the outDir's own last path segment — so an EXACT `outDir` match against the task
+ *  turn's own `outDir` (`expectedOutDir`) is a mechanical, available proof of session continuity that needs
+ *  no new field: same `outDir` can only happen if it's the same session directory. The session id is also
+ *  checked independently via that same `outDir`'s basename against `expectedSessionId`, for defense in
+ *  depth (redundant when the outDir check already passed, but cheap and catches the two checks disagreeing
+ *  under any future change to how `outDir` is derived). Exported for the unit test. */
+export function validateReflectionTurn(
+  turn: TurnOutcome,
+  expectedSessionId: string,
+  expectedOutDir: string,
+): { ok: true; envelope: SkillEnvelope } | { ok: false; reason: string } {
   if (turn.timedOut) return { ok: false, reason: "reflection turn timed out and was killed before it could complete" };
   if (turn.truncated) return { ok: false, reason: "reflection turn's output exceeded the byte cap and was killed" };
   if (turn.code !== 0) return { ok: false, reason: `reflection turn exited with code ${turn.code ?? "null"} (expected 0)` };
@@ -252,7 +306,35 @@ export function validateReflectionTurn(turn: TurnOutcome, expectedSessionId: str
       ok: false,
       reason: `reflection turn's result.turn is ${r0.turn ?? "missing"} (expected >1 — a genuine resume of session ${expectedSessionId}, not a fresh session)`,
     };
+  if (typeof r0.outDir !== "string" || !r0.outDir)
+    return { ok: false, reason: "reflection turn envelope's results[0] has no outDir (cannot verify session/outDir continuity)" };
+  if (r0.outDir !== expectedOutDir)
+    return {
+      ok: false,
+      reason:
+        `reflection turn's outDir (${r0.outDir}) does not match the task turn's outDir (${expectedOutDir}) — ` +
+        `this shows turn>1 but looks like a resume of a DIFFERENT session, not session ${expectedSessionId}`,
+    };
+  const reflectedSessionId = basename(r0.outDir);
+  if (reflectedSessionId !== expectedSessionId)
+    return {
+      ok: false,
+      reason: `reflection turn's outDir implies session id "${reflectedSessionId}", expected "${expectedSessionId}"`,
+    };
   return { ok: true, envelope: env };
+}
+
+/** F37 (part 2): a byte-capped or timed-out TASK turn produced an incomplete/unreliable run — even when an
+ *  `outDir` was extractable (e.g. via the `[status]` stderr line written before the kill), the task's own
+ *  `result`/`finalMessage` must not be trusted as a legitimate gradeable outcome, and the reflection turn
+ *  must never even be attempted against a task that was killed mid-run. Returns the infra-failure reason, or
+ *  `undefined` for a task turn that completed (cleanly OR with a genuine `result:"error"` — that remains a
+ *  gradeable outcome, not an infra failure). `main()` itself spawns real processes and isn't directly
+ *  testable, so this decision is factored out and exported for the unit test. */
+export function taskTurnInfraFailure(task: TurnOutcome): string | undefined {
+  if (task.timedOut) return "task turn timed out and was killed before it could complete";
+  if (task.truncated) return "task turn's output exceeded the byte cap and was killed";
+  return undefined;
 }
 
 type Bucket = "actionable" | "other" | "not-adjudicable" | "dropped";
@@ -296,12 +378,39 @@ interface ReportState {
    *  or broken session/turn continuity) — the evaluator was never invoked at all, distinct from a gradeable
    *  task failure or an evaluator-side parse error. */
   infraFailure?: string;
+  /** F28/F30 (thread-through, D): `packageEvidence`'s `turn1ResultDegraded` — true when the canonical
+   *  turn-1 result was corrupted, or (on a validated resume) its archive was simply never written. `undefined`
+   *  when packaging never ran (an infra failure short-circuited before it). */
+  turn1ResultDegraded?: boolean;
+  /** F29 (thread-through, D): `packageEvidence`'s `turn1SliceDegraded` — true when the turn-1 transcript's
+   *  `events.jsonl`-slice fallback could not be trusted (boundary never established, or the append-only
+   *  prefix it depends on changed/truncated under it). */
+  turn1SliceDegraded?: boolean;
+  /** F31 (thread-through, D): `packageEvidence`'s `skillMdStatus` — readability of the packaged SKILL.md
+   *  source; a non-`"readable"` value means presence/coverage classification was refused (see
+   *  `runCritique`'s `skillMdUnreadable` option). */
+  skillMdStatus?: SkillMdStatus;
 }
 
 /** Pure report-text builder (no I/O) so it's directly unit-testable. `printTextReport` below just flushes
  *  this to fd 1. */
 export function buildTextReport(state: ReportState): string {
-  const { skillFolder, prompt, sessionId, outDir, taskResult, selfReportStatus, items, evaluatorModel, requestedModel, evaluatorError, infraFailure } = state;
+  const {
+    skillFolder,
+    prompt,
+    sessionId,
+    outDir,
+    taskResult,
+    selfReportStatus,
+    items,
+    evaluatorModel,
+    requestedModel,
+    evaluatorError,
+    infraFailure,
+    turn1ResultDegraded,
+    turn1SliceDegraded,
+    skillMdStatus,
+  } = state;
   const out: string[] = [];
   out.push(`skill-critique: ${skillFolder}`);
   out.push(`  probe: ${prompt}`);
@@ -315,6 +424,14 @@ export function buildTextReport(state: ReportState): string {
   out.push(`  self-report: ${selfReportStatus}`);
   if (selfReportStatus === "unavailable")
     out.push(`  NOTE: no self-report was captured — pass 2 (self-report verification) was skipped; findings below are pass 1 (independent) only.`);
+  // F28/F30/F31 (D): the typed degradation flags packageEvidence produces, surfaced as machine-readable
+  // report state — not just the inline "[DEGRADED: ...]" prose already embedded in the evidence package.
+  if (turn1ResultDegraded)
+    out.push(`  turn-1 result: DEGRADED (corrupted, or a validated resume's result.turn-1.json archive was never written — see the evidence package)`);
+  if (turn1SliceDegraded)
+    out.push(`  turn-1 transcript slice: DEGRADED (boundary never established, or the append-only prefix it depends on changed/truncated under it)`);
+  if (skillMdStatus && skillMdStatus !== "readable")
+    out.push(`  SKILL.md: ${skillMdStatus} — presence/coverage classification was REFUSED (see the "already-covered" downgrade in the evaluator)`);
   out.push("");
 
   if (infraFailure) {
@@ -364,8 +481,23 @@ function printTextReport(state: ReportState): void {
 /** Pure JSON-report builder (no I/O), mirroring `buildTextReport` — directly unit-testable. F38's typed
  *  `selfReportStatus` marker is carried in BOTH output formats (this one and the text report above). */
 export function buildJsonReport(state: ReportState): Record<string, unknown> {
-  const { skillFolder, sessionId, outDir, taskResult, selfReportStatus, items, evaluatorModel, evaluatorError, infraFailure } = state;
-  const base = { skillFolder, sessionId, outDir, taskResult, selfReportStatus };
+  const {
+    skillFolder,
+    sessionId,
+    outDir,
+    taskResult,
+    selfReportStatus,
+    items,
+    evaluatorModel,
+    evaluatorError,
+    infraFailure,
+    turn1ResultDegraded,
+    turn1SliceDegraded,
+    skillMdStatus,
+  } = state;
+  // F28/F30/F31 (D): threaded into `base` (not appended per-branch) so every return path below — infra
+  // failure, evaluator error, or a normal critique — carries the same machine-readable degradation state.
+  const base = { skillFolder, sessionId, outDir, taskResult, selfReportStatus, turn1ResultDegraded, turn1SliceDegraded, skillMdStatus };
   if (infraFailure) return { ...base, infraFailure, items: [] };
   if (evaluatorError) return { ...base, evaluatorError, items: [] };
   return { ...base, evaluatorModel, items };
@@ -412,6 +544,30 @@ async function main(): Promise<void> {
       process.exit(0);
       return;
     }
+
+    // F37 (part 2): a byte-capped or timed-out TASK turn is unreliable EVEN when an outDir was extractable
+    // (e.g. via the `[status]` stderr line written before the kill) — its result/finalMessage must not be
+    // trusted as a legitimate gradeable outcome, and the reflection turn must never be attempted against a
+    // task that was killed mid-run. Reported via the SAME ReportState/infraFailure shape as a broken
+    // reflection turn below, rather than silently proceeding to package evidence from a killed run.
+    const taskInfra = taskTurnInfraFailure(task);
+    if (taskInfra) {
+      const state: ReportState = {
+        skillFolder: opts.skillFolder,
+        prompt: opts.prompt,
+        sessionId,
+        outDir,
+        taskResult: undefined,
+        selfReportStatus: "unavailable",
+        items: [],
+        requestedModel: opts.evaluatorModel ?? DEFAULT_EVALUATOR_MODEL,
+        infraFailure: taskInfra,
+      };
+      if (opts.outputFormat === "json") writeSync(1, JSON.stringify(buildJsonReport(state)) + "\n");
+      else printTextReport(state);
+      process.exit(0);
+      return;
+    }
     // NOTE: `taskResult` ("success" | "error") is a GRADEABLE outcome of the task itself — a task that ended
     // in error is still valid input to the critique (the evaluator can reason about what happened before the
     // failure); it is deliberately NOT treated as an infrastructure failure the way a broken reflection is
@@ -439,10 +595,11 @@ async function main(): Promise<void> {
     ]);
 
     // F37: validate the reflection turn at the PROTOCOL level — exit code, envelope shape, and
-    // session/turn continuity — BEFORE trusting its `finalMessage` as a self-report or handing anything to
-    // the evaluator. A failed reflection (crash, bad envelope, a resume that silently didn't resume) must be
-    // reported as an infrastructure/protocol defect, never fall through to "the agent had nothing to say."
-    const reflectionValidation = validateReflectionTurn(reflect, sessionId);
+    // session/turn continuity (turn>1 AND outDir/sessionId match the task turn's) — BEFORE trusting its
+    // `finalMessage` as a self-report or handing anything to the evaluator. A failed reflection (crash, bad
+    // envelope, a resume that silently didn't resume, or a resume of the WRONG session) must be reported as
+    // an infrastructure/protocol defect, never fall through to "the agent had nothing to say."
+    const reflectionValidation = validateReflectionTurn(reflect, sessionId, outDir);
 
     const requestedModel = opts.evaluatorModel ?? DEFAULT_EVALUATOR_MODEL;
     let items: CritiqueItem[] = [];
@@ -450,6 +607,9 @@ async function main(): Promise<void> {
     let infraFailure: string | undefined;
     let evaluatorModel: string | undefined;
     let selfReportStatus: SelfReportStatus = "unavailable";
+    let turn1ResultDegraded: boolean | undefined;
+    let turn1SliceDegraded: boolean | undefined;
+    let skillMdStatus: SkillMdStatus | undefined;
 
     if (!reflectionValidation.ok) {
       infraFailure = reflectionValidation.reason;
@@ -462,12 +622,26 @@ async function main(): Promise<void> {
       const selfReport = extractFinalMessage(reflect);
       selfReportStatus = selfReport !== undefined ? "captured" : "unavailable";
 
-      // 4. Package the TURN-1-ONLY evidence and run the critique.
-      const { pkg, truncated } = packageEvidence(outDir, boundary, opts.skillFolder);
+      // 4. Package the TURN-1-ONLY evidence and run the critique. `isResume: true` (F30 residual) — we are
+      // only ever here after `validateReflectionTurn` confirmed a genuine, continuity-checked resume, so a
+      // missing `result.turn-1.json` archive must be treated as degraded, never silently backfilled from the
+      // turn-2 `result.json`.
+      const { pkg, truncated, turn1ResultDegraded: trd, turn1SliceDegraded: tsd, skillMdStatus: sms } = packageEvidence(
+        outDir,
+        boundary,
+        opts.skillFolder,
+        true,
+      );
+      turn1ResultDegraded = trd;
+      turn1SliceDegraded = tsd;
+      skillMdStatus = sms;
       try {
         items = await runCritique(pkg, selfReport, {
           model: requestedModel,
           packageTruncated: truncated,
+          // F31: SKILL.md not confirmed readable → refuse presence/coverage classification (both a soft
+          // prompt caveat and a mechanical "already-covered" → "not-adjudicable" downgrade inside runCritique).
+          skillMdUnreadable: sms !== "readable",
           onResolvedModel: (m) => {
             evaluatorModel = m;
           },
@@ -490,6 +664,9 @@ async function main(): Promise<void> {
       requestedModel,
       evaluatorError,
       infraFailure,
+      turn1ResultDegraded,
+      turn1SliceDegraded,
+      skillMdStatus,
     };
     if (opts.outputFormat === "json") {
       // writeSync: a long JSON report piped to `jq` truncates past the ~64KB buffer with async write + exit(0)
@@ -504,7 +681,10 @@ async function main(): Promise<void> {
 }
 
 import { pathToFileURL } from "node:url";
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) void main();
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  installOrphanCleanupHandlers(); // F23/F36 residual: a Ctrl-C must kill any outstanding bounded-spawn child group
+  void main();
+}
 
 // Exported for the reflection-prompt version to be inspectable/testable without spawning anything.
 export { REFLECTION_PROMPT, REFLECTION_PROMPT_VERSION, parseArgs };

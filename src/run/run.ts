@@ -63,7 +63,9 @@ export function infraErrorsForResult(rec: Pick<RunRecord, "infraErrors">): RunRe
 }
 export function evidenceErrorsForResult(rec: Pick<RunRecord, "evidenceErrors">): RunResult["evidenceErrors"] {
   const e = rec.evidenceErrors;
-  return e.taskTracking || e.webSearchParse || e.presentFilesMalformed ? e : undefined;
+  // egressParse (#39) MUST be in this presence gate — otherwise a run whose ONLY evidence problem is dropped
+  // proxy-log lines serializes evidenceErrors:undefined, silently absorbing exactly what the counter records.
+  return e.taskTracking || e.webSearchParse || e.presentFilesMalformed || e.egressParse ? e : undefined;
 }
 
 /** Find the JSON array following a WebSearch tool_result's "Links: " marker, respecting quoted-string
@@ -719,6 +721,10 @@ export class Run {
     this.pendingTaskCreates.clear();
     this.rec.evidenceErrors.webSearchParse += this.pendingWebSearches.size;
     this.pendingWebSearches.clear();
+    // present_files matters most here: no_scratchpad_leak gates on presentFilesMalformed, so an unresolved
+    // present_files call (result truncated away) would otherwise let a leak check pass on an incomplete set. #5
+    this.rec.evidenceErrors.presentFilesMalformed += this.pendingPresentFiles.size;
+    this.pendingPresentFiles.clear();
     // Wall-clock timeout override: the kill above surfaces as an "exit" error (or ends the stream), but the
     // authoritative reason is the timeout. Set it here so it wins over the exit/no_result labeling below.
     if (timedOut) {

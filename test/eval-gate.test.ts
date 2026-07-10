@@ -13,6 +13,8 @@ import {
   positiveIntFlag,
   calibrateScenario,
   boundedSpawnJson,
+  outstandingChildPids,
+  installOrphanCleanupHandlers,
   type Profile,
   type ProfileMeta,
   type ScenarioProfile,
@@ -625,4 +627,30 @@ describe("boundedSpawnJson — F23: a per-child timeout and stdout byte cap, res
     const out = await boundedSpawnJson("node", ["-e", "process.stdout.write('x'.repeat(5000)); setTimeout(() => {}, 5000)"], 10_000, 100);
     expect(out).toEqual({});
   }, 10_000);
+});
+
+describe("F23 residual: boundedSpawnJson tracks outstanding child pids so a Ctrl-C can clean them up", () => {
+  it("tracks a pid while its bounded child is outstanding, and untracks it once resolved", async () => {
+    const before = outstandingChildPids.size;
+    const p = boundedSpawnJson("node", ["-e", "setTimeout(() => process.stdout.write('{}'), 200)"], 5000, 1_000_000);
+    // give the spawn a tick to actually register before we assert
+    await new Promise((r) => setTimeout(r, 20));
+    expect(outstandingChildPids.size).toBeGreaterThan(before);
+    await p;
+    expect(outstandingChildPids.size).toBe(before);
+  }, 10_000);
+
+  it("untracks the pid on a killed (timed-out) child too, not only a clean exit", async () => {
+    const before = outstandingChildPids.size;
+    await boundedSpawnJson("node", ["-e", "setTimeout(() => {}, 5000)"], 150, 1_000_000);
+    expect(outstandingChildPids.size).toBe(before); // killGroup → finish() → untracked, even though it never exited on its own
+  }, 10_000);
+
+  it("installOrphanCleanupHandlers is idempotent — a second call never registers a duplicate listener", () => {
+    installOrphanCleanupHandlers();
+    const afterFirst = process.listenerCount("SIGTERM");
+    installOrphanCleanupHandlers();
+    installOrphanCleanupHandlers();
+    expect(process.listenerCount("SIGTERM")).toBe(afterFirst);
+  });
 });

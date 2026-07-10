@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { evaluate, runSemanticJudges, type AssertContext, type SemanticJudge } from "../src/assert.js";
 import { parseScenarioFile } from "../src/run/execute.js";
 import { parseEgressLine } from "../src/egress/sidecar.js";
-import { Run } from "../src/run/run.js";
+import { Run, evidenceErrorsForResult } from "../src/run/run.js";
 import { ScriptedDecider } from "../src/decide/decider.js";
 import type { AgentEvent, AgentSession, DecisionResponse, DecisionDelivery } from "../src/agent/session.js";
 
@@ -76,6 +76,29 @@ describe("#5 unpaired TaskCreate / WebSearch calls are reconciled at stream end"
     const rec = await new Run(new MockSession(ev), new ScriptedDecider([])).drive("go");
     expect(rec.evidenceErrors.taskTracking).toBe(0);
   });
+
+  it("an unpaired present_files call bumps presentFilesMalformed (no_scratchpad_leak gates on it)", async () => {
+    const ev: AgentEvent[] = [
+      { type: "tool_use", name: "mcp__cowork__present_files", toolUseId: "p1", input: { files: ["/outputs/a"] } },
+      { type: "result", isError: false },
+    ];
+    const rec = await new Run(new MockSession(ev), new ScriptedDecider([])).drive("go");
+    expect(rec.evidenceErrors.presentFilesMalformed).toBeGreaterThan(0);
+  });
+});
+
+describe("#39 egressParse reaches result.json (presence-gate fix, not just parseEgressLine)", () => {
+  it("a run whose ONLY evidence problem is dropped egress lines still serializes evidenceErrors", () => {
+    const e = evidenceErrorsForResult({ evidenceErrors: { taskTracking: 0, webSearchParse: 0, presentFilesMalformed: 0, egressParse: 2 } });
+    expect(e).toBeDefined();
+    expect(e?.egressParse).toBe(2);
+  });
+
+  it("all-zero evidence errors still serialize undefined (no spurious object)", () => {
+    expect(
+      evidenceErrorsForResult({ evidenceErrors: { taskTracking: 0, webSearchParse: 0, presentFilesMalformed: 0, egressParse: 0 } }),
+    ).toBeUndefined();
+  });
 });
 
 describe("#6 task_status honors known task-telemetry corruption", () => {
@@ -131,7 +154,11 @@ describe("#7/#8 tool-glob validation rejects vacuous negatives at scenario load"
   });
 
   it("rejects a regex-habit tool_not_called glob like `Bash|Read` (#7)", () => {
-    expect(() => parseScenarioFile(writeScenario(`  - tool_not_called: "Bash|Read"`))).toThrow(/looks like a regex/);
+    expect(() => parseScenarioFile(writeScenario(`  - tool_not_called: "Bash|Read"`))).toThrow(/regex or brace-expansion/);
+  });
+
+  it("rejects a minimatch brace-expansion glob like `{Bash,Read}` (#7/#8)", () => {
+    expect(() => parseScenarioFile(writeScenario(`  - tool_not_called: "{Bash,Read}"`))).toThrow(/regex or brace-expansion/);
   });
 
   it("accepts a literal tool glob unchanged", () => {
@@ -151,6 +178,22 @@ describe("#10 the judged document is budget-capped with a truncation marker", ()
     expect(captured.length).toBeLessThan(300_000); // capped well below the raw 500k
     expect(captured).toMatch(/truncated for the judge input budget/);
     expect(captured).toMatch(/do not infer absence from this cut/);
+  });
+
+  it("a secret straddling a cap boundary is fully redacted, not truncated mid-token into the judge input (scrub-before-cap)", async () => {
+    let captured = "";
+    const judge: SemanticJudge = async (_rubric, answer) => {
+      captured = answer;
+      return [{ index: 0, claim: "c", pass: true }];
+    };
+    const SECRET = "SUPERSECRET_TOKEN_ABCDEFGHIJKLMNOP";
+    // 40 copies spread across ~200 KB guarantees at least one straddles the (128 KB) transcript cap.
+    let transcript = "";
+    for (let i = 0; i < 40; i++) transcript += "x".repeat(5000) + SECRET;
+    const c = ctx({ transcript, secrets: [SECRET] });
+    await runSemanticJudges([{ semantic_matches: { rubric: ["c"] } }], c, judge);
+    // With cap-before-scrub, the straddling copy leaks its prefix; scrub-before-cap redacts every copy first.
+    expect(captured).not.toContain(SECRET.slice(0, 15));
   });
 });
 

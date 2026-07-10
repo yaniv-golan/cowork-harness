@@ -801,17 +801,6 @@ export class LiveAgentSession implements AgentSession {
   }
 }
 
-/** Monotonic counter for synthesizing a fallback `tool_use` id when a sub-agent-dispatch-shaped block
- *  (`Agent`/`Task`/anything with `subagent_type`) has no `id` (an SDK omission). `parseMessage` is a
- *  stateless pure function called from three independent sites (`LiveAgentSession.translate` below,
- *  `CassetteAgentSession.start` in cassette.ts, and `eventsFromLines` in trace-view.ts) with no shared
- *  session object to hang per-session state on, so a module-scoped counter is the only monotonic source
- *  available without changing any of those callers' signatures. It only needs to be unique, not
- *  stable/replayable byte-for-byte — nothing keys off the literal `unpaired-N` string (diagnostic only),
- *  so process-lifetime monotonicity is a strictly stronger guarantee than the required
- *  "unique within one session" bar. */
-let unpairedDispatchCounter = 0;
-
 /** Validate one of the `system/init` frame's optional array fields (`tools`, `mcp_servers`, `skills`).
  *  Previously each field was defaulted with `?? []`, which only guards against `null`/`undefined` — a
  *  non-array scalar or object (a malformed/misbehaving agent build) survived untouched into the `init`
@@ -910,14 +899,16 @@ export function parseMessage(msg: any): AgentEvent[] {
               : Array.isArray(inp.allowedTools)
                 ? (inp.allowedTools as unknown[]).map(String)
                 : []; // the `Agent` tool declares no tools list → []; declared-but-unused is legacy-`Task`-only
-            // When block.id is absent, synthesize a fallback to avoid collapsing all anonymous
-            // dispatches into the empty-string identity, which breaks dispatch tracking. Previously this
-            // was `unpaired-${blockIndex}` — a PER-ASSISTANT-MESSAGE index that resets to 0 on every
-            // `parseMessage` call, so two anonymous dispatches in two different messages both synthesized
-            // `unpaired-0` and collided. `unpairedDispatchCounter` (module-scoped — see its doc comment)
-            // is monotonic for the process lifetime, so every synthesized id is unique; `blockIndex` is
-            // kept in the string purely for diagnostics.
-            const toolUseId = block.id ? String(block.id) : `unpaired-${unpairedDispatchCounter++}-b${blockIndex}`;
+            // When block.id is absent, synthesize a fallback to avoid collapsing all anonymous dispatches
+            // into the empty-string identity (which breaks dispatch tracking). The fallback keys off the
+            // ASSISTANT MESSAGE's id (stable and unique per message) plus the intra-message blockIndex — so
+            // it is unique across messages AND deterministic across record→replay (the message id is frozen
+            // in the cassette bytes). A process-lifetime counter would be unique but would synthesize a
+            // DIFFERENT id on replay, breaking the timeline↔subagent join (attributedSkillId) that keys on
+            // the exact toolUseId. `msg.uuid` is a defensive secondary key; "anon" only for a synthetic
+            // frame carrying neither (never a real stream).
+            const msgKey = String(msg.message?.id ?? msg.uuid ?? "anon");
+            const toolUseId = block.id ? String(block.id) : `unpaired-${msgKey}-b${blockIndex}`;
             ev.push({
               type: "subagent_dispatch",
               toolUseId,
@@ -941,6 +932,10 @@ export function parseMessage(msg: any): AgentEvent[] {
       // before, so every tool result — including the AskUserQuestion `q.map` error — was invisible to the
       // recorder/trace. Capture them for delivery verification + `trace --view tools`/`--view questions`.
       for (const block of msg.message?.content ?? []) {
+        // Guard a non-object content entry (null/scalar — a malformed/corrupt frame): `block.type` on a
+        // primitive silently returns undefined, but `block === null` throws. Mirror the assistant loop's
+        // up-front object check so a bad user block is skipped, not a crash. #2
+        if (!block || typeof block !== "object") continue;
         if (block.type === "tool_result") {
           const provText = toolResultRaw(block.content);
           ev.push({
