@@ -63,6 +63,13 @@ are carried over from the prior index, so pruned-run history survives a reindex 
 [Interplay with `prune`](#interplay-with-prune). A run dir with a missing or corrupt `result.json` is
 skipped, not fatal — one bad run dir never blocks indexing everything else.
 
+`result.json` now persists a `command` field (`run`/`skill`/`record`/`chat`), and `--reindex` prefers it:
+`result.command` first, falling back to the prior index row's `command` (for results written before that
+field existed), then to deriving from `RunResult.mode`. Previously reindex derived `command` from `mode`
+alone, which has no `skill`/`record` value — so every rebuild silently relabeled a `skill`/`record` run as
+`run`. Preferring the persisted `command` (with the prior-index fallback for older results) keeps a
+`skill`/`record` run's history correctly labeled across repeated reindexes.
+
 ## Interplay with `prune`
 
 `prune` deletes run **dirs**, never index rows — the index is the durable history, so a pruned scenario's

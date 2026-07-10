@@ -20,6 +20,24 @@ All notable changes to this project are documented here. The format is based on
   input root (hash-only in cassettes — a private upload is never inlined), so a scenario can assert the agent
   didn't mutate an uploaded file; a mutation is attributed to the agent (not excused as an external edit).
   Previously only connected-folder inputs were guardable.
+- **`RunResult.command`** records the exact command that produced a result (`run`/`skill`/`record`/`chat`/
+  `replay`) — finer than `mode` (which only distinguishes run vs. chat, so a `skill`/`record` run was
+  indistinguishable from a plain `run`). `reindex` now prefers this field, so a rebuilt run index no longer
+  relabels a `skill`/`record` run as `run`; it falls back to a prior index row, then to `mode`, on older
+  results that predate the field.
+- **`RunResult.evidenceErrors.egressParse`** counts proxy-log lines the egress sidecar dropped as malformed
+  (bad JSON, missing host, unknown decision) — previously filtered out silently. Observability only (egress
+  assertions are positive, so a dropped line already fails loud), but now visible.
+- **`subagents[].outputTruncated` and `toolResults[].assertTextTruncated`** flag when a captured value was cut
+  at the 10 KB assertion cap, so `subagent_output_contains` (and the equivalent substring checks) report
+  "evidence unavailable" instead of a false "not found" when the searched text could lie past the cut.
+- **`fingerprint.frozen`** marks, on the replay lane, that the staleness fingerprint is the cassette's
+  record-time snapshot rather than a fresh recompute, so a consumer can't mistake one for the other.
+- **Replay results now populate `prompt` and `toolResults`** (the scenario prompt that drove the re-drive and
+  the tool-result records already built for evaluation) — both were previously always `undefined` on replay.
+- **`ResourceSummary.probeFailures`** counts resource-sampling probes that actually failed (nonzero exit,
+  timeout, parse error), distinct from a tier that was never sampleable (protocol/replay) — "sampling broke"
+  is now told apart from "sampling wasn't attempted."
 
 ### Changed
 
@@ -28,6 +46,67 @@ All notable changes to this project are documented here. The format is based on
 - **`scenario.py lint-skill`** downgrades a `${CLAUDE_PLUGIN_ROOT}`-in-VM-bash use to a `plugin-root-guarded`
   **INFO** (from WARN) when the same bash block self-heals it at runtime (`[ -d ] || find /sessions …`), so a
   correctly-guarded block no longer shares the alarming WARN class with a genuinely-unguarded use.
+- **`no_unexpected_files` now requires a complete post-run filesystem walk.** An unreadable subtree
+  (permission error, race) previously collapsed to "no files found there" and could vacuously pass; the check
+  now fails "evidence unavailable" when any part of the tree couldn't be observed.
+- **`semantic_matches` refuses to grade over incomplete authored-file evidence.** When a file the run authored
+  was dropped at the capture-size budget or was unreadable at read-back (or, on `--resume`, the scratchpad was
+  skipped to avoid misattributing a prior turn's files), the assertion fails "evidence unavailable" rather than
+  trusting a judge grade made without that content. The judged document is also size-capped now (per-section
+  and total, with an explicit truncation marker) so a long run can't overflow the judge's context; secret
+  scrubbing runs before the cap, so a secret can never be exposed by falling on a truncation boundary.
+- **`task_status` now honors corrupt task telemetry** — when a `TaskCreate` result was unparseable it fails
+  "malformed" instead of matching against the surviving subset, consistent with `all_tasks_completed` /
+  `task_count_min`.
+- **Empty or regex/brace-expansion tool globs are rejected at load.** `tool_called` / `tool_not_called` /
+  `subagent_tool_used` / `subagent_tool_absent` values that are empty or contain regex/brace metacharacters
+  (`.*`, `|`, `[]`, `{}`, …) match no real tool name and used to pass a `_not_`/`_absent` assertion vacuously;
+  they are now a hard schema error for authored scenarios and recorded cassettes alike.
+- **`readRunStatus` validates the shape of `status.json`**, not just that it parses — a truncated or otherwise
+  structurally-invalid write (e.g. `{}`) is reported malformed instead of being trusted as a valid status; a
+  `--follow` loop resolves only after observing a genuinely valid status.
+- **Answered gates reconcile against actual delivery.** A control-response that was optimistically reported
+  delivered (queued) but whose write later failed before reaching the agent is corrected once the run
+  completes, so delivery telemetry and `trace --view questions` read the true outcome.
+- **A `TaskCreate` / `WebSearch` / `present_files` call whose result never arrived before the stream ended now
+  counts as incomplete evidence** (`evidenceErrors.*`) instead of silently vanishing from the resolved set, so
+  the dependent assertion fails "cannot verify" rather than grading a truncated subset as complete.
+- **Bounded hashing/reads.** `classifyWorkspaceFiles` caps per-file hashing (50 MiB, matching the pre-run
+  manifest) and reports `hashError: "over-cap"` instead of reading a huge file whole; authored-file capture
+  reads only the bytes it retains.
+
+### Fixed
+
+- **Two anonymous sub-agent dispatches in different assistant turns could collide on the same synthesized id**
+  (the fallback id was derived only from the block's position within its own message). It now derives from the
+  message id plus block index — unique across the run and stable across record→replay — fixing dispatch nesting
+  in `trace --view dispatches` for skills that dispatch multiple unnamed sub-agents.
+- **The semantic judge's recorded model could name the wrong one.** `assertions[].judgeModel` was stamped from
+  the requested alias (e.g. `opus`) before the call; the transport resolves an alias to a concrete model per
+  call, so the resolved model is now recorded after the call completes.
+- **`matrix --repeat`'s per-cell pass/fail glyph didn't honor `--allow-budget-stop`**, though the aggregate
+  "N/M cells passed" count did — a cell that passed under a permitted budget stop could print as failed next to
+  its own row while counting as a pass in the summary.
+- **The resource sampler could miss a short run's only sample.** `stop()` now waits (bounded) for an in-flight
+  probe before returning, so a run shorter than one sampling interval reliably records its first sample instead
+  of racing teardown.
+- **A corrupt `timeline.jsonl` header was indistinguishable from an absent timeline** — both read as "no
+  timeline," so a corrupt read could be baked into a recorded cassette as a clean empty timeline. A corrupt
+  header now reads as a distinct "present but corrupt" state, kept out of both live results and cassettes.
+- **A malformed `system/init` frame** (a non-array `tools`/`mcp_servers`/`skills`, or a non-object content
+  block) could crash with an uncaught `TypeError`; it is now rejected as a typed protocol error at parse time,
+  and the `trace` reconstruction lane skips it instead of aborting.
+
+### Internal
+
+- **Eval-gate hardening** (`scripts/eval-gate.ts`, maintainer instrument — not shipped with the skill): a
+  missing/edited scenario or discriminating claim now fails the gate (opt-out `--allow-unmatched`); a mixed-model
+  capture, a null candidate model against a concrete baseline, and a malformed profile/fraction are refused
+  instead of silently collapsing; child runs are bounded by a timeout, output cap, and process-group kill.
+- **Skill-critique hardening** (`scripts/skill-critique.ts`, `src/critique/*`): the reflection turn's exit,
+  envelope, and session/output continuity are validated before evaluation; a corrupt or missing turn archive is
+  reported rather than substituting turn-2 data; the untrusted self-report is fenced as inert data before the
+  evaluator prompt; child turns are bounded and orphaned process groups are killed on interrupt.
 
 ## [0.28.0] — 2026-07-10
 

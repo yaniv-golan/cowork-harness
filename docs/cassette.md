@@ -72,6 +72,7 @@ reproduce. See [docs/scenario.md](./scenario.md#how-an-assertion-edit-reaches-ci
     { "path": "outputs/x.json", "bytes": 24, "sha256": "…", "body": "{…}" }, // body inlined ≤ 64 KiB
     { "path": "outputs/big.bin", "bytes": 9e6, "sha256": "…", "truncated": true, "truncationReason": "size" }, // oversized → hash-only (raise --max-artifact-bytes)
     { "path": "carta-folder/input.xlsx", "bytes": 4096, "sha256": "…", "truncated": true, "truncationReason": "readonly" }, // mode:r connected-folder INPUT → body-less (see below), regardless of size
+    { "path": "uploads/report.pdf", "bytes": 51200, "sha256": "…", "truncated": true, "truncationReason": "input" }, // uploaded file under an inputRoots root → body-less, hash-only (see below), regardless of size
     { "path": "outputs/link-to-elsewhere", "bytes": 0, "sha256": "", "linkKind": "symlink" } // v10: symlink/hardlink — path+kind only, never dereferenced, so a link stray is still visible to no_unexpected_files
   ],
   "fingerprint": { "baseline": "1.15962.1", "skillHash": "…", "mode": "git", "contentSig": "…", "fileSigs": [["skills/x/SKILL.md", "…"]], "skillSources": ["…"] }, // staleness tripwire (v5: fileSigs only; v6: mode + git default; v7: NUL-delimited hash entries; v8: folds fixed-length content shas + type-prefixed/NUL-framed entries)
@@ -295,11 +296,15 @@ sha256 baseline recorded alongside it — microvm cannot capture either baseline
 metadata since 0.24 — no version bump); without it the key is **excluded with a loud warning**, not a
 vacuous pass (live/verify-run without a pre-run manifest hard-fails evidence-unavailable instead —
 deliberate asymmetry). `input_unmodified` — the in-place mutation detector: every pre-existing file whose
-workRoot-relative path matches a glob keeps an unchanged content hash after the run — requires
-`preRunHashes` (the pre-run per-path sha256 baseline); without it the key is likewise **excluded with a
-loud warning**. On replay it compares against the AUTHORITATIVE post-run hash recorded in the `artifacts[]`
-manifest (`sha256`), never a re-hash of the materialized tree — a body-less (hash-only) entry materializes
-as a 0-byte placeholder, so re-hashing it would falsely report a change. `artifact_json` needs the JSON `body`
+workRoot-relative path matches a glob (accepts either a single glob string or an array of globs) keeps an
+unchanged content hash after the run — requires `preRunHashes` (the pre-run per-path sha256 baseline);
+without it the key is likewise **excluded with a loud warning**. On replay it compares against the
+AUTHORITATIVE post-run hash recorded in the `artifacts[]` manifest (`sha256`), never a re-hash of the
+materialized tree — a body-less (hash-only) entry materializes as a 0-byte placeholder, so re-hashing it
+would falsely report a change. The pre-run baseline also walks `uploads` (alongside `outputs` and any
+connected folders), so an uploaded file is a valid `input_unmodified` target even though `uploads` stays
+**out** of `no_unexpected_files` (that key's baseline is the user-visible tree only — an upload is an
+input, not a place a stray output would land). `artifact_json` needs the JSON `body`
 inlined (small files); a hash-only (`truncated`) entry still satisfies `file_exists` but not `artifact_json`.
 The inline cap is 64 KiB; raise it with `record --max-artifact-bytes <n>` (or
 `COWORK_HARNESS_MAX_ARTIFACT_BYTES`) so a large structured deliverable stays replay-checkable, and `record`
@@ -317,6 +322,13 @@ resolve identically live and on replay; only `artifact_json` (which needs the in
 one. Two side benefits: no cassette bloat from a large input file, and no `binary` privacy finding (the
 scanner only flags a *committed* binary body) — so a `mode: r` input never needs `--allow`. A `mode: rw`/`rwd`
 folder's contents are captured with a full body exactly as `outputs/` is.
+
+**Uploaded files are captured body-less the same way**, tagged `truncationReason: "input"` rather than
+`"readonly"`. `record` snapshots every path under each root in `inputRoots` (default `["uploads"]`) —
+path + `bytes` + `sha256`, `truncated: true`, no `body` — regardless of size, so an uploaded fixture never
+bloats the cassette or trips the `binary` privacy finding. `truncationReason` is therefore one of four
+values: `"size"` (over the inline cap), `"readonly"` (a `mode: r` connected-folder input), `"unreadable"`
+(the file existed but couldn't be read), or `"input"` (an `inputRoots` upload).
 
 A green replay re-confirms *record-time* artifacts, **not** that the current
 skill still produces them — `replay --strict` fails the run when the `fingerprint` shows ANY skill/baseline
@@ -395,6 +407,15 @@ This is the **O7 guard on the token-free lane**: if a future change to `serializ
 `replay_protocol_fidelity` is a synthesized assertion, not user-authored. It will never appear in a
 scenario's `assert:` block; on the live path it would fail as an empty assertion.
 
+### What replay's `RunResult` carries
+
+A replay `RunResult` is built from the same frozen recording, so several fields that were previously
+hardcoded `undefined` are now populated from it: `prompt` (the scenario prompt that drove the re-drive),
+`toolResults` (the tool-result records, already reconstructed for assertion evaluation), and `fingerprint`
+(the record-time value — carried with a `frozen: true` flag so a consumer can't mistake it for a fresh
+run-time recompute). `resources` stays `undefined` on replay: a replay re-drive never spawns a sandbox, so
+there is no process to sample (see `max_peak_rss_bytes` above).
+
 ## Backward compatibility (old cassettes without controlOut)
 
 Cassettes recorded before full-fidelity replay lack `controlOut`. Replay handles them without silently
@@ -456,7 +477,11 @@ possible.
   egress widened can drift the session with the skill tree untouched. Computed and hard-failed by
   `verify-cassettes` **only**, gated by the same `--skip-staleness` flag as the rest of this list — it never
   affects the default `replay` verdict, not even under `--strict`. Absent on a pre-v9 cassette → silently not
-  checked (no false stale on an old, still-valid recording).
+  checked (no false stale on an old, still-valid recording). A genuine mismatch is normally a hard fail —
+  **except** when the session file was only resolved via a name-lookup fallback (its persisted source path
+  was missing, so the cassette may have been relocated onto a tree that doesn't mirror the original layout
+  and the match could be an unrelated same-named sibling). In that one case `verify-cassettes` downgrades the
+  mismatch to a non-failing note instead of a hard fail.
 - **`recorded in '<mode>' file-set mode, verifying in '<mode>'`** — the staleness boundary differs between
   record and verify (e.g. recorded in a git work tree but verified from a non-repo copy); the hashes are not
   comparable, so re-record under the same mode.

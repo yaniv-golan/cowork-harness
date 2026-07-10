@@ -27,9 +27,16 @@ wire surface — the harness's *own* protocol, not Anthropic's.
 
 **Out of scope, on purpose** — the Claude Agent SDK's own event stream (`assistant`/`result`/`user`
 tool-result messages, `system/init` capability manifests, `api_metrics`). That surface is Anthropic's,
-changes per SDK release, and is already covered by `parseMessage`'s tolerant, ad-hoc parsing
-(`src/agent/session.ts`) rather than a frozen schema — freezing it here would either lag every SDK bump
-or force a spec change on every one. The `{type:"user", message:{role:"user", ...}}` turn-send message
+changes per SDK release, and is already covered by `parseMessage` (`src/agent/session.ts`) rather than a
+frozen schema — freezing it here would either lag every SDK bump or force a spec change on every one.
+`parseMessage` tolerates unknown or missing fields, but it fails closed on unsafe structural
+malformation: a `system/init` frame whose `tools`/`mcp_servers`/`skills` is present but not an array, or
+an assistant content-block entry that isn't an object, throws a typed `control-in: malformed …` protocol
+error rather than propagating a shape that would crash downstream unguarded. Every caller — the live
+session, cassette replay, and `trace` reconstruction — catches that error and skips the offending frame
+loudly rather than aborting. (The frozen `schema/protocol.v1.json` control shapes documented below are
+unaffected by this — `parseMessage`'s SDK-event handling is a separate code path.) The `{type:"user",
+message:{role:"user", ...}}` turn-send message
 (`sendUserTurn`) is mirrored into `control-out.jsonl` for full-fidelity replay but is also SDK input
 shape, not a control-protocol shape — also out of scope (the conformance tests explicitly skip it).
 

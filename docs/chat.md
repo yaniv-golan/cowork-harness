@@ -123,6 +123,10 @@ cowork-harness trace <session-id> --view tools  # tool calls with summarized inp
 
 There is no `--keep` flag — `chat` always writes the transcript and always keeps it.
 
+At the `container` and `hostloop` tiers, the run dir also captures `resources.jsonl` (periodic
+process/container resource samples), the same way a `run` does. `protocol` has no sandbox process to
+sample, so no `resources.jsonl` is written there.
+
 ## `chat` vs `skill`
 
 | | `chat` | `skill` |
