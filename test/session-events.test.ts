@@ -18,6 +18,22 @@ describe("parseMessage system-subtype catch-all", () => {
       expect(evs.some((e) => e.type === "system_event")).toBe(false);
     }
   });
+
+  it("Item 1: parseMessage preserves api_error_status on a result event (so replay reclassifies usage_limit)", () => {
+    // The replay re-drive re-parses the frozen raw events.jsonl through parseMessage, so api_error_status
+    // must survive the parse for a recorded usage-limit run to re-classify identically on replay.
+    const [ev] = parseMessage({
+      type: "result",
+      is_error: true,
+      subtype: "success",
+      api_error_status: 429,
+      result: "You've hit your session limit · resets 4pm",
+    });
+    expect(ev).toMatchObject({ type: "result", isError: true, apiErrorStatus: 429, subtype: "success" });
+    // a result with no api_error_status leaves it undefined (older binaries; not a spurious 0)
+    const [ev2] = parseMessage({ type: "result", is_error: false });
+    expect((ev2 as { apiErrorStatus?: number }).apiErrorStatus).toBeUndefined();
+  });
 });
 
 // `translate()` is a private method on LiveAgentSession, so its two mcp_error emission paths

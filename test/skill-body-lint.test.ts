@@ -152,6 +152,30 @@ describe.skipIf(!havePython)("scenario.py lint-skill — Cowork host-loop footgu
     expect(status).toBe(0); // INFO is clean
   });
 
+  it("Item 4: two bash fences — one guarded (INFO), one not (WARN) — get INDEPENDENT verdicts", () => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-skill-multi-"));
+    const md = [
+      "# Two blocks",
+      "",
+      "```bash", // guarded block
+      'A="${CLAUDE_PLUGIN_ROOT}/scripts/a.py"',
+      '[ -d "$A" ] || A="$(find /sessions -name a.py | head -1)"',
+      "```",
+      "",
+      "```bash", // unguarded block
+      'bash "${CLAUDE_PLUGIN_ROOT}/scripts/b.sh"',
+      "```",
+      "",
+    ].join("\n");
+    writeFileSync(join(d, "SKILL.md"), md);
+    const { findings } = lintSkill(d);
+    const guarded = findings.find((f) => f.rule === "plugin-root-guarded");
+    const warn = findings.find((f) => f.rule === "plugin-root-in-vm-bash");
+    expect(guarded?.line).toBe(4); // first block's token → INFO
+    expect(warn?.line).toBe(9); // second block's token → WARN (buffer reset between fences)
+    expect(warn?.severity).toBe("WARN");
+  });
+
   it("exit code: WARN findings are clean (0) by default but non-zero under --strict", () => {
     const d = mkdtempSync(join(tmpdir(), "cwh-skill-strict-"));
     const md = ["# S", "", "```bash", 'cat "${CLAUDE_PLUGIN_ROOT}/x.sh"', "```", ""].join("\n");

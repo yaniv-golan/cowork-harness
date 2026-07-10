@@ -1402,6 +1402,7 @@ function check(
       const liveReadonly = (ctx.readonlyFolderRoots ?? []).some((pre) => rel === pre || rel.startsWith(pre + "/"));
       const replayReason = truncated.get(rel); // undefined if not body-less on replay, or a pre-v8 entry with no reason
       const isReadonlyInput = liveReadonly || replayReason === "readonly";
+      const isUploadInput = replayReason === "input"; // an uploaded file — captured hash-only, body deliberately absent
       const isOverCap = replayReason === "size";
       const bodyLess = truncated.has(rel) || liveReadonly;
       if (!realFile) {
@@ -1412,11 +1413,13 @@ function check(
         // Precise remedy when the cause is known (read-only ⇒ assert on a deliverable; over-cap ⇒ raise
         // the cap). A pre-v8 entry carries no reason ⇒ name both causes (we can't tell). "unreadable"
         // also falls here — it's a record-time read failure, so the both-causes text is the safe hint.
-        const cause = isReadonlyInput
-          ? `(read-only connected-folder input — its content is never captured; assert artifact_json on a deliverable instead)`
-          : isOverCap
-            ? `(larger than the artifact-body cap — raise --max-artifact-bytes to capture it)`
-            : `(a read-only connected-folder input, or an artifact larger than the body cap — if an input, assert on a deliverable; if a large deliverable, raise --max-artifact-bytes)`;
+        const cause = isUploadInput
+          ? `(an uploaded input — its content is captured hash-only, never inlined; assert artifact_json on a deliverable instead)`
+          : isReadonlyInput
+            ? `(read-only connected-folder input — its content is never captured; assert artifact_json on a deliverable instead)`
+            : isOverCap
+              ? `(larger than the artifact-body cap — raise --max-artifact-bytes to capture it)`
+              : `(a read-only connected-folder input, or an artifact larger than the body cap — if an input, assert on a deliverable; if a large deliverable, raise --max-artifact-bytes)`;
         results.push(
           fail(
             `evidence unavailable: artifact_json target "${aj.artifact}" was captured body-less ` +

@@ -11,6 +11,7 @@
 
 const USAGE_LIMIT_TERMINAL = [
   /\byou'?ve (?:hit|reached) your\b[^.]*\blimit\b/i, // session/weekly/Opus/Sonnet/Fable 5/fast/monthly-spend/org limit
+  /\byou'?ve used\b[^.]*\b(?:usage )?limit\b/i, // "You've used your … limit" / "…all your usage limit" (terminal variant)
   /\byou'?re out of usage\b/i, // "You're out of usage credits"
   /\byour org is out of usage\b/i,
   /\bout of usage credits\b/i,
@@ -19,9 +20,16 @@ const USAGE_LIMIT_TERMINAL = [
   /\byour seat type doesn'?t include\b/i,
 ];
 
-/** True iff `text` (a result's subtype+message) is a TERMINAL usage/quota-limit message. Only meaningful in
- *  conjunction with HTTP 429 (a bare 429 is a transient overload). */
+// A TRANSIENT (retryable) 429 window — a per-minute / overload rate limit, NOT quota exhaustion. Even if
+// such a message is worded with a "You've hit your …" opener, it must NOT be classified usage_limit (which
+// would make it non-retryable and halt a batch). Checked as an exclusion so the terminal-quota families win
+// only when the message is not the transient rate-limit/overload kind.
+const TRANSIENT_LIMIT = /\brate limit\b|\boverloaded\b|\btry again\b/i;
+
+/** True iff `text` (a result's subtype+message) is a TERMINAL usage/quota-limit message (and NOT a transient
+ *  rate-limit/overload). Only meaningful in conjunction with HTTP 429 (a bare 429 is a transient overload). */
 export function matchesTerminalUsageLimitText(text: string): boolean {
+  if (TRANSIENT_LIMIT.test(text)) return false; // a retryable rate-limit/overload is not quota exhaustion
   return USAGE_LIMIT_TERMINAL.some((re) => re.test(text));
 }
 
