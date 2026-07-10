@@ -8,7 +8,7 @@ import { normalizeHost } from "./boundary-paths.js";
 import { extractComputerLinks, resolveComputerLink, type LinkResolutionContext } from "./run/computer-links.js";
 import { scrub } from "./secrets.js";
 import { warn } from "./io.js";
-import { collectArtifactPaths } from "./run/artifacts.js";
+import { collectArtifactPathsWithHealth } from "./run/artifacts.js";
 import { anyGlobMatches } from "./glob.js";
 
 /** Derives the four AssertContext budget fields (costUsd/tokensTotal/toolCallsTotal/turns) uniformly from
@@ -209,6 +209,11 @@ export interface AssertContext {
   /** Files the run authored (final on-disk content) — appended to the judged document so the judge grades
    *  what the skill PRODUCED, not only what it inlined. Populated live; absent on replay/microvm. */
   authoredFiles?: import("./run/artifacts.js").AuthoredFile[];
+  /** Health of the authored-file capture (#14/#16): files dropped at the total-size cap (`omittedPaths`)
+   *  or authored-but-unreadable at read-back (`readErrors`). When either is non-empty the judged document
+   *  is INCOMPLETE, so `semantic_matches` fails evidence-unavailable rather than trusting a grade the judge
+   *  made without the omitted content. Absent = capture was complete (or lane doesn't author files). */
+  authoredFilesHealth?: import("./run/artifacts.js").AuthoredFilesHealth;
   /** Secret values to scrub from the judged document before it leaves for the judge. */
   secrets?: string[];
   toolsCalled: Set<string>;
@@ -511,6 +516,21 @@ function buildJudgedDocument(ctx: AssertContext): string {
   parts.push(`## Transcript\n${capForJudge(s(ctx.transcript ?? ""), JUDGE_TRANSCRIPT_CAP)}`);
   for (const f of ctx.authoredFiles ?? [])
     parts.push(`## Authored file: ${s(f.path)}${f.truncated ? " (truncated)" : ""}\n${s(f.content)}`);
+  // Surface authored-file incompleteness to the judge so it never reads an omitted/unreadable file's
+  // ABSENCE as evidence the skill didn't produce it (#14/#16). The verdict is separately forced to
+  // evidence-unavailable in the semantic_matches check; this note keeps a still-produced grade honest.
+  const h = ctx.authoredFilesHealth;
+  if (h && (h.omittedPaths.length || h.readErrors.length || h.scratchpadSkippedOnResume)) {
+    const notes: string[] = [];
+    if (h.omittedPaths.length)
+      notes.push(`- ${h.omittedPaths.length} authored file(s) OMITTED (capture size budget exhausted): ${s(h.omittedPaths.join(", "))}`);
+    if (h.readErrors.length)
+      notes.push(`- ${h.readErrors.length} authored file(s) could NOT be read back: ${s(h.readErrors.map((e) => e.path).join(", "))}`);
+    if (h.scratchpadSkippedOnResume) notes.push(`- scratchpad deliverables were not captured (this is a --resume turn; #17)`);
+    parts.push(
+      `## Evidence health (INCOMPLETE)\nThe authored-file evidence above is NOT complete — do NOT infer content is absent just because it is not shown here:\n${notes.join("\n")}`,
+    );
+  }
   return capForJudge(parts.join("\n\n"), JUDGE_DOC_CAP); // aggregate backstop, over already-scrubbed content
 }
 
@@ -586,8 +606,17 @@ function check(
     // ctx.semanticResults; check() only reads them, so evaluate() stays synchronous. On replay the key
     // is stripped (LIVE_ONLY_KEYS) and never reaches here.
     const judged = ctx.semanticResults?.get(a);
+    const ah = ctx.authoredFilesHealth;
     if (ctx.judgeInvalid?.has(a)) {
       results.push(fail("judge grade INVALID (malformed/ambiguous after retry) — rep counts as invalid, not a pass"));
+    } else if (ah && (ah.omittedPaths.length || ah.readErrors.length)) {
+      // #14/#16: the judge graded a document missing authored files (dropped at the size cap, or unreadable
+      // at read-back), so a "claim not satisfied" could be a false absence. Refuse the verdict.
+      results.push(
+        fail(
+          `evidence unavailable: authored-file evidence was incomplete (${ah.omittedPaths.length} omitted at the capture cap, ${ah.readErrors.length} unreadable) — the judge graded a partial document, cannot trust the semantic verdict`,
+        ),
+      );
     } else if (!judged) {
       results.push(fail("evidence unavailable: semantic judge not run (semantic_matches is live-only; skipped on replay)"));
     } else {
@@ -1220,18 +1249,29 @@ function check(
       // never listed symlinks, so exclude link entries here too and compare on the same links-blind basis;
       // otherwise every pre-existing symlink would false-stray. (Moot on replay: the materialized tree has
       // no real symlinks.)
-      const post = collectArtifactPaths(ctx.workRoot, ctx.userVisiblePrefixes)
-        .filter((e) => ctx.preRunLinkAware || !e.linkKind)
-        .map((e) => e.path);
-      const created = post.filter((p) => !pre.has(p.replace(/\\/g, "/")));
-      const stray = created.filter((p) => !anyGlobMatches(a.no_unexpected_files!, p));
-      results.push(
-        stray.length === 0
-          ? ok()
-          : fail(
-              `unexpected file(s) created outside the allowlist: ${stray.join(", ")} (allow: ${a.no_unexpected_files!.join(", ") || "(none)"})`,
-            ),
-      );
+      const walk = collectArtifactPathsWithHealth(ctx.workRoot, ctx.userVisiblePrefixes);
+      if (!walk.complete) {
+        // #18: an incomplete walk (an unreadable subtree — EACCES, etc.) can HIDE a stray, so "no strays
+        // found" would be a vacuous pass. Require a complete filesystem observation for this absence check.
+        results.push(
+          fail(
+            `evidence unavailable: the post-run filesystem walk was incomplete (${walk.errors
+              .map((e) => `${e.path || "<root>"}: ${e.error}`)
+              .join("; ")}) — cannot prove no unexpected files were created`,
+          ),
+        );
+      } else {
+        const post = walk.entries.filter((e) => ctx.preRunLinkAware || !e.linkKind).map((e) => e.path);
+        const created = post.filter((p) => !pre.has(p.replace(/\\/g, "/")));
+        const stray = created.filter((p) => !anyGlobMatches(a.no_unexpected_files!, p));
+        results.push(
+          stray.length === 0
+            ? ok()
+            : fail(
+                `unexpected file(s) created outside the allowlist: ${stray.join(", ")} (allow: ${a.no_unexpected_files!.join(", ") || "(none)"})`,
+              ),
+        );
+      }
     }
   }
   if (a.input_unmodified !== undefined) {

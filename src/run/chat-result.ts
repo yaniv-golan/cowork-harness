@@ -57,6 +57,7 @@ export function buildChatResult(record: RunRecord, opts: ChatResultOpts): RunRes
     $schema: RUN_RESULT_SCHEMA_URL,
     generator: "cowork-harness",
     mode: "chat",
+    command: "chat", // #48
     turn: undefined, // chat is its own multi-turn REPL; per-turn attribution isn't tracked here
     ablated: undefined, // chat is exploratory, not an ablation control
     referencesRead: record.filesRead.length ? record.filesRead : undefined,

@@ -196,6 +196,17 @@ export const AnswerRule = z
 export type AnswerRule = z.infer<typeof AnswerRule>;
 
 // Each field carries a `.describe()` so it is the SINGLE source for both the published JSON schema and
+// A tool GLOB value (only `*`/`?` are special). Reject an empty string AND regex/brace-expansion
+// metacharacters — both match no real tool name and would pass a `_not_`/`_absent` assert VACUOUSLY. Enforced
+// in the schema (so a recorded cassette's frozen assert is caught on read too, not only authored scenarios).
+// #7/#8
+const toolGlob = z
+  .string()
+  .min(1, "tool glob is empty — an empty glob matches no tool and passes vacuously")
+  .refine((g) => !/\.\*|\.\+|[|()[\]+^${}]|\\[dwsb]/.test(g), {
+    message: "tool glob looks like a regex or brace-expansion — only * and ? are special (no .* | [] {})",
+  });
+
 // `cowork-harness assertions --list` (which reads `Assertion.shape[k].description`) — the list can never drift
 // from the schema. Keep descriptions one line.
 export const Assertion = z.strictObject({
@@ -220,19 +231,16 @@ export const Assertion = z.strictObject({
     .describe(
       "a file exists AND is under a user-visible prefix: mnt/outputs, each connected-folder mount (mnt/<folder>), or the legacy mnt/.projects fallback (pre-1.14271.0)",
     ),
-  tool_called: z
-    .string()
+  tool_called: toolGlob
     .optional()
     .describe(
       "a called tool matched this glob (* = any run, ? = one char; exact when literal; anchored, case-sensitive) — e.g. mcp__workspace__*",
     ),
-  tool_not_called: z.string().optional().describe("NO called tool matched this glob (* / ?; exact when literal; anchored, case-sensitive)"),
-  subagent_tool_used: z
-    .string()
+  tool_not_called: toolGlob.optional().describe("NO called tool matched this glob (* / ?; exact when literal; anchored, case-sensitive)"),
+  subagent_tool_used: toolGlob
     .optional()
     .describe("a sub-agent used a tool matching this glob (* / ?; exact when literal; anchored, case-sensitive)"),
-  subagent_tool_absent: z
-    .string()
+  subagent_tool_absent: toolGlob
     .optional()
     .describe("NO sub-agent used a tool matching this glob (* / ?; exact when literal; anchored, case-sensitive)"),
   subagent_dispatched: z.string().optional().describe("a sub-agent matching this regex (by agentType or description) was dispatched"),
@@ -766,6 +774,11 @@ export interface RunResult {
    *  "chat" = an interactive exploratory session (no assertions, no verdict — consumers must NOT read a
    *  chat result as pass/fail). Absent on results written before this field existed — treat absent as "run". */
   mode?: "run" | "chat";
+  /** The CLI COMMAND that produced this result — finer than `mode` (which only distinguishes run/chat).
+   *  `skill`/`record` both have `mode:"run"`, so this is the only place that provenance survives; the run
+   *  index prefers it during a reindex so a `skill`/`record` row isn't relabeled `run` (#48). Absent on
+   *  results written before this field existed — reindex falls back to a prior index row, then to `mode`. */
+  command?: "run" | "skill" | "record" | "chat" | "replay";
   /** Execution *location* taxonomy — orthogonal to `fidelity` (a privilege/sandbox tier, all local).
    *  Stamped `location:"local"` on every locally-executed run so that a future cloud-run artifact's
    *  differing/absent stamp is a detectable signal, never a silent mislabel. `environmentId` is the

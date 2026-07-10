@@ -127,9 +127,10 @@ export interface HookBundle {
  *  the actual OS write (EPIPE) is therefore reported `delivered:true` optimistically, then recorded as
  *  `control_undelivered` in events.jsonl a tick later. Making `respond()` itself awaitable would give
  *  the correct answer but ripples into every `AgentSession` consumer that reads `.delivered`
- *  synchronously today; short of that, `LiveAgentSession.hasUndeliveredReconciliation(decisionId)`
- *  (outside this interface, so it doesn't force that ripple) lets a caller that needs ground truth
- *  reconcile the optimistic answer after the fact instead of trusting it blindly. */
+ *  synchronously today; short of that, the OPTIONAL `hasUndeliveredReconciliation(decisionId)` method
+ *  below (implemented by `LiveAgentSession`, omitted by replay sessions — it doesn't force that ripple on
+ *  any other implementer) lets a caller that needs ground truth reconcile the optimistic answer after the
+ *  fact instead of trusting it blindly. `Run.drive()` (run.ts) is that caller today. */
 export type DecisionDelivery = { delivered: boolean; reason?: "session-closing" | "unknown-decision" };
 
 export interface AgentSession {
@@ -144,6 +145,17 @@ export interface AgentSession {
    *  and lets a well-behaved agent exit), this SIGTERMs the child — tier-agnostic, since the child is
    *  whatever was spawned (docker/limactl/native). Optional: replay/mock sessions have no live process. */
   kill?(): void;
+  /** Ground truth for a `respond()` answer that was reported `delivered:true` optimistically (see
+   *  `DecisionDelivery`'s doc comment above): true iff the control_response frame for `decisionId` was
+   *  later confirmed to have NEVER reached the child (an async EPIPE/destroyed-pipe write failure
+   *  discovered after `respond()` already returned). Optional and NOT implemented by every session on
+   *  purpose — only a session with a live stdin pipe (`LiveAgentSession`) can discover this after the
+   *  fact; a replay/cassette session has no live pipe to fail, so it omits this method entirely and a
+   *  caller's `?.()` call reads `undefined` (nothing to reconcile — correct, a frozen cassette can't
+   *  produce a fresh write failure). A caller that needs ground truth (rather than the synchronous
+   *  best-effort `respond()` signal) should call this defensively, once the stream has settled, for every
+   *  decisionId it optimistically recorded as delivered. */
+  hasUndeliveredReconciliation?(decisionId: string): boolean;
 }
 
 // ---- Protocol ingress validation (fail-closed) ----
@@ -657,9 +669,11 @@ export class LiveAgentSession implements AgentSession {
   /** True once a `respond()`-written control_response for `decisionId` is confirmed to have NEVER
    *  reached the child (an async EPIPE/destroyed-pipe failure discovered in `pump()` after `respond()`
    *  already returned `{delivered:true}` — see DecisionDelivery's doc comment for why `respond()` can't
-   *  just wait for this itself). Not part of the `AgentSession` interface on purpose: `respond()` stays
-   *  synchronous (every current caller reads `.delivered` immediately), so this is the escape hatch for
-   *  a caller that needs ground truth rather than the synchronous best-effort signal. */
+   *  just wait for this itself). Declared OPTIONAL on the `AgentSession` interface (not required) so
+   *  `respond()` stays synchronous (every current caller reads `.delivered` immediately) and a
+   *  replay/cassette session — with no live pipe to ever fail — need not implement it; `Run.drive()`
+   *  calls it defensively (`this.session.hasUndeliveredReconciliation?.(id)`) once the stream has settled,
+   *  to reconcile every decision it optimistically recorded as delivered against this ground truth. */
   hasUndeliveredReconciliation(decisionId: string): boolean {
     return this.reconciledUndelivered.has(decisionId);
   }

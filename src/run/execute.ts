@@ -61,7 +61,7 @@ import { runsWriteRoot } from "./trace-view.js";
 import { summarizeGateProvenance } from "./gate-provenance.js";
 import { collectSecrets, scrub } from "../secrets.js";
 import { indexRowFromResult, appendIndexRow } from "./run-index.js";
-import { classifyWorkspaceFiles, collectArtifactPaths, captureAuthoredFiles } from "./artifacts.js";
+import { classifyWorkspaceFiles, collectArtifactPaths, captureAuthoredFilesWithHealth } from "./artifacts.js";
 import { readPreRunManifest, readPreRunManifestHashes, readPreRunManifestLinkAware, readPreRunManifestStats } from "./pre-run-manifest.js";
 import { resolveAvailableSkills, type PluginSkillRoot } from "./skill-metadata.js";
 
@@ -890,7 +890,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // On a resume the session root is REUSED, so the scratchpad no longer starts empty — a prior turn's files
   // would be mis-attributed as this turn's authorship. Skip the scratchpad walk in that case (evidence-
   // unavailable is safer than misattribution). #17
-  const authoredFiles = captureAuthoredFiles(workRoot, userVisibleRoots, readonlyFolderRoots, preRunHashes, {
+  const authored = captureAuthoredFilesWithHealth(workRoot, userVisibleRoots, readonlyFolderRoots, preRunHashes, {
     scratchpadRoot,
     resume: plan.resume,
     // Pre-run mtime/size lets an over-cap/unreadable prior file (hash === null) be positively confirmed
@@ -901,7 +901,13 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   const assertCtx: AssertContext = {
     transcript: record.transcript,
     finalMessage: record.resultText,
-    authoredFiles,
+    authoredFiles: authored.files,
+    // #14/#16: carry capture health (omitted-at-cap / unreadable files) so a semantic grade over an
+    // incomplete authored document is refused, not trusted. Undefined when the capture was complete.
+    authoredFilesHealth:
+      authored.health.omittedPaths.length || authored.health.readErrors.length || authored.health.scratchpadSkippedOnResume
+        ? authored.health
+        : undefined,
     secrets,
     toolsCalled: record.toolsCalled,
     subagentTools: record.subagentTools,
@@ -1103,6 +1109,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     $schema: RUN_RESULT_SCHEMA_URL,
     generator: "cowork-harness",
     mode: "run",
+    command: opts.command ?? "run", // #48: persist the originating command (skill/record share mode:"run")
     turn,
     ablated: opts.ablateSkill || undefined,
     referencesRead: record.filesRead.length ? record.filesRead : undefined,
@@ -1287,29 +1294,8 @@ function validateScenarioRegexes(scenario: Scenario, scenarioPath: string): void
         if ("error" in c) throw new Error(`bad regex in ${key} in ${context}: ${c.error}`);
       }
     }
-    // Tool-GLOB keys (not regex). Two authored-time footguns both produce a vacuous pass on the
-    // `_not_`/`_absent` (negative) direction — matching NO tool — so the assert silently proves nothing:
-    //   • an empty/whitespace glob (#8): matches only a "" tool name, which never exists;
-    //   • a regex-habit slip like `Bash|Read` or `mcp__*.*` (#7): a regex-only metacharacter matches no
-    //     tool name under glob semantics.
-    // Reject both at authored load — the runtime `warnIfRegexish` only warns (invisible in a green CI
-    // summary) and there is no runtime empty-glob guard. Enforced HERE (parseScenarioFile), NOT in the
-    // shared AssertionSchema, so a previously-recorded cassette re-validated by readCassette is unaffected.
-    for (const key of ["tool_called", "tool_not_called", "subagent_tool_used", "subagent_tool_absent"] as const) {
-      const glob = a[key];
-      if (glob === undefined) continue;
-      if (glob.trim() === "")
-        throw new Error(
-          `${context}: \`${key}\` is empty — an empty tool glob matches no tool and would pass vacuously. Give a tool name/glob (e.g. Bash, mcp__workspace__*).`,
-        );
-      // Regex-only metacharacters AND minimatch brace-expansion (`{Bash,Read}`) are matched LITERALLY by the
-      // tool-glob engine (only `*`/`?` are special), so they match no real tool name and would pass a
-      // _not_/_absent assert vacuously. Tool names never contain these, so rejecting them is safe. #7/#8
-      if (/\.\*|\.\+|[|()[\]+^${}]|\\[dwsb]/.test(glob))
-        throw new Error(
-          `${context}: \`${key}: "${glob}"\` looks like a regex or brace-expansion, but this key is GLOB-matched (only * and ? are special — no .* | [] {}). Such a pattern matches no tool name and would pass a _not_/_absent assert vacuously.`,
-        );
-    }
+    // (Empty / regex-ish / brace-expansion tool globs are rejected by the `toolGlob` schema in types.ts —
+    // enforced on EVERY parse path including a recorded cassette's frozen asserts, not just here. #7/#8)
   }
   // answers[].when_question patterns (ScriptedDecider uses these)
   for (const rule of scenario.answers) {
@@ -1459,6 +1445,7 @@ export function buildPartialResult(args: {
     $schema: RUN_RESULT_SCHEMA_URL,
     generator: "cowork-harness",
     mode: "run",
+    command: undefined, // #48: reconstruction lane — the originating command isn't in `args`; reindex falls back to the prior index row
     turn: args.turn,
     ablated: args.ablated || undefined,
     referencesRead: args.record.filesRead.length ? args.record.filesRead : undefined,

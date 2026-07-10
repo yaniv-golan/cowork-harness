@@ -502,4 +502,32 @@ describe("reindexFromRunsTree — one-time migration from result.json files", ()
       expect(rows[0].command).toBe("skill");
     },
   );
+
+  it(
+    "prefers the command persisted in result.json (#48) with NO prior index row — the lost-index case a " +
+      "reindex is FOR: a result recorded as `skill` keeps `skill`, not defaulted to `run`",
+    () => {
+      const runsRoot = mkdtempSync(join(tmpdir(), "run-index-tree-"));
+      const outDir = join(runsRoot, "s", "local_1");
+      mkdirSync(outDir, { recursive: true });
+      writeFileSync(
+        join(outDir, "result.json"),
+        JSON.stringify({
+          scenario: "s",
+          fidelity: "container",
+          baseline: "x",
+          result: "success",
+          command: "skill", // #48: persisted originating command
+          decisions: [],
+          egress: [],
+          assertions: [],
+          outDir,
+        }),
+      );
+      // NO prior index.jsonl at all (the reason to reindex) — provenance must come from result.json.
+      const { rows } = reindexFromRunsTree(runsRoot);
+      expect(rows).toHaveLength(1);
+      expect(rows[0].command).toBe("skill");
+    },
+  );
 });

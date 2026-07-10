@@ -169,19 +169,23 @@
           },
           "tool_called": {
             "description": "a called tool matched this glob (* = any run, ? = one char; exact when literal; anchored, case-sensitive) — e.g. mcp__workspace__*",
-            "type": "string"
+            "type": "string",
+            "minLength": 1
           },
           "tool_not_called": {
             "description": "NO called tool matched this glob (* / ?; exact when literal; anchored, case-sensitive)",
-            "type": "string"
+            "type": "string",
+            "minLength": 1
           },
           "subagent_tool_used": {
             "description": "a sub-agent used a tool matching this glob (* / ?; exact when literal; anchored, case-sensitive)",
-            "type": "string"
+            "type": "string",
+            "minLength": 1
           },
           "subagent_tool_absent": {
             "description": "NO sub-agent used a tool matching this glob (* / ?; exact when literal; anchored, case-sensitive)",
-            "type": "string"
+            "type": "string",
+            "minLength": 1
           },
           "subagent_dispatched": {
             "description": "a sub-agent matching this regex (by agentType or description) was dispatched",

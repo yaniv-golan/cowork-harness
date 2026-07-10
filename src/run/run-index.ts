@@ -190,13 +190,15 @@ export function reindexFromRunsTree(runsRoot: string): { rows: RunIndexRow[]; wr
         try {
           const result = JSON.parse(readFileSync(resultPath, "utf8")) as RunResult;
           const ts = statSync(resultPath).mtime.toISOString();
-          // RunResult.mode has no "skill"/"record" value, so a run originally recorded under one of
-          // those commands would otherwise be relabeled "run"/"chat" on every reindex. Carry the prior
-          // index row's `command` forward when this outDir already has one — it's the only surviving
-          // record of that provenance — and fall back to deriving from `result.mode` only when there's
-          // no prior row to consult (this outDir is new to the index).
+          // RunResult.mode has no "skill"/"record" value, so a run originally recorded under one of those
+          // commands would otherwise be relabeled "run"/"chat" on every reindex. Prefer the command now
+          // persisted in result.json (#48); fall back to a prior index row (for results written before that
+          // field existed), then to deriving from `result.mode` for a brand-new outDir with neither.
           const prior = priorByOutDir.get(outDir);
-          const command = prior ? prior.command : result.mode === "chat" ? "chat" : "run";
+          // "replay" is never indexed (re-checks aren't new evidence), so exclude it from the index row's
+          // narrower command union; it can't legitimately appear here anyway.
+          const persisted = result.command && result.command !== "replay" ? result.command : undefined;
+          const command = persisted ?? prior?.command ?? (result.mode === "chat" ? "chat" : "run");
           walked.push(
             indexRowFromResult(result, {
               command,

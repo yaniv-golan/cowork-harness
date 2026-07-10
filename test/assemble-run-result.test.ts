@@ -15,6 +15,7 @@ function fullyExplicitFixture(): CompleteRunResult {
     ablated: undefined,
     referencesRead: undefined,
     mode: undefined,
+    command: undefined,
     execution: undefined,
     finalMessage: undefined,
     scenario: "test-scenario",

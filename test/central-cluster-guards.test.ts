@@ -87,6 +87,52 @@ describe("#5 unpaired TaskCreate / WebSearch calls are reconciled at stream end"
   });
 });
 
+describe("#14/#16 semantic_matches refuses a grade made over incomplete authored evidence", () => {
+  it("fails evidence-unavailable when authored files were omitted at the capture cap", () => {
+    const a = { semantic_matches: { rubric: ["the skill wrote a valid report"] } };
+    const [r] = evaluate(
+      [a],
+      ctx({
+        semanticResults: new Map([[a, [{ index: 0, claim: "the skill wrote a valid report", pass: false }]]]),
+        authoredFilesHealth: { omittedPaths: ["outputs/report.bin"], totalCapExhausted: true, readErrors: [] },
+      }),
+    );
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/evidence unavailable/);
+    expect(r.message).toMatch(/incomplete/);
+  });
+
+  it("fails evidence-unavailable when an authored file was unreadable at read-back", () => {
+    const a = { semantic_matches: { rubric: ["c"] } };
+    const [r] = evaluate(
+      [a],
+      ctx({
+        semanticResults: new Map([[a, [{ index: 0, claim: "c", pass: true }]]]),
+        authoredFilesHealth: { omittedPaths: [], totalCapExhausted: false, readErrors: [{ path: "outputs/x", error: "EACCES" }] },
+      }),
+    );
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/evidence unavailable/);
+  });
+
+  it("grades normally when authored evidence is complete (a resume-only skip does NOT block the verdict)", () => {
+    const a = { semantic_matches: { rubric: ["c"] } };
+    const passing = new Map([[a, [{ index: 0, claim: "c", pass: true }]]]);
+    // complete capture:
+    const [ok1] = evaluate([a], ctx({ semanticResults: passing }));
+    expect(ok1.pass).toBe(true);
+    // scratchpad skipped on resume is informational only (#17) — must NOT force evidence-unavailable:
+    const [ok2] = evaluate(
+      [a],
+      ctx({
+        semanticResults: passing,
+        authoredFilesHealth: { omittedPaths: [], totalCapExhausted: false, readErrors: [], scratchpadSkippedOnResume: true },
+      }),
+    );
+    expect(ok2.pass).toBe(true);
+  });
+});
+
 describe("#39 egressParse reaches result.json (presence-gate fix, not just parseEgressLine)", () => {
   it("a run whose ONLY evidence problem is dropped egress lines still serializes evidenceErrors", () => {
     const e = evidenceErrorsForResult({ evidenceErrors: { taskTracking: 0, webSearchParse: 0, presentFilesMalformed: 0, egressParse: 2 } });

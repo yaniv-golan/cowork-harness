@@ -378,6 +378,10 @@ export interface AuthoredFilesHealth {
    *  "this run authored no such file" from "it existed and was authored, but became unreadable at
    *  read-back time" (F16) — previously a bare `catch {}` with no trace either way. */
   readErrors: { path: string; error: string }[];
+  /** F17: true when the scratchpad walk was skipped because this is a `--resume` (the reused session root
+   *  makes prior-turn scratchpad files unattributable). Scratchpad deliverables are absent-by-policy, not
+   *  absent-in-fact — informational (does NOT force a semantic verdict to evidence-unavailable). */
+  scratchpadSkippedOnResume?: boolean;
 }
 
 export interface CaptureAuthoredFilesResult {
@@ -525,7 +529,9 @@ export function captureAuthoredFilesWithHealth(
   // Scratchpad deliverables (cwd-relative writes outside mnt). Walk the session root, skipping dot-entries
   // (runtime $HOME state) and the `mnt` subtree; symlinks/hardlinks are not followed (escape/cycle guard,
   // mirroring collectArtifactPaths).
-  // F17: skip entirely on resume — see `CaptureAuthoredFilesOpts.resume`'s doc comment.
+  // F17: skip entirely on resume — see `CaptureAuthoredFilesOpts.resume`'s doc comment. Record the skip in
+  // health so a consumer knows scratchpad deliverables are absent-by-policy (not absent-in-fact).
+  if (opts.scratchpadRoot && opts.resume) health.scratchpadSkippedOnResume = true;
   if (opts.scratchpadRoot && !opts.resume) {
     const visited = new Set<string>();
     const walk = (absDir: string, relDir: string): void => {

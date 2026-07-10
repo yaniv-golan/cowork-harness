@@ -71,6 +71,17 @@
       ],
       "description": "Which lane produced this result. 'run' = an asserted run/skill/record/replay (carries a verdict); 'chat' = an interactive exploratory session (no assertions, no verdict). Absent on results written before this field existed \u2014 treat absent as 'run'."
     },
+    "command": {
+      "type": "string",
+      "enum": [
+        "run",
+        "skill",
+        "record",
+        "chat",
+        "replay"
+      ],
+      "description": "The CLI command that produced this result \u2014 finer than 'mode' (skill/record both have mode:'run'). The run index prefers it during a reindex so a skill/record row isn't relabeled 'run' (#48). Absent on pre-field results."
+    },
     "scenario": {
       "type": "string"
     },
