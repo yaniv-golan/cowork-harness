@@ -210,22 +210,43 @@ function safeLines(path: string): string[] {
   }
 }
 
+/**
+ * Result of a `readTimeline` call that found SOME `timeline.jsonl` content — as opposed to the file
+ * being missing/empty, which `readTimeline` still reports as `undefined` (see below). `header` and
+ * `headerCorrupt` are mutually exclusive: a healthy read has `header` set and omits `headerCorrupt`; a
+ * header-parse failure sets `headerCorrupt: true` and omits `header` (with `events: []` and
+ * `malformedLines: 0`, since no entries could be attributed to a timeline whose header never parsed).
+ * `malformedLines` (per-ENTRY corruption, counted separately from header corruption — see #35 below)
+ * stays a plain number on the healthy shape so existing callers that already branch on
+ * `malformedLines > 0` keep compiling and behaving the same. #43
+ */
+export interface TimelineReadResult {
+  header?: TimelineHeader;
+  events: TimelineEvent[];
+  malformedLines: number;
+  headerCorrupt?: true;
+}
+
 /** Reads and parses `timeline.jsonl` (written by `TimelineWriter` above). The first line is the
- *  header, the rest are entries. Returns `undefined` if the file is missing/empty (an older harness
- *  build, or a run that predates this feature) or if the header itself doesn't parse — informational
- *  data, so a partially-corrupt file degrades to "absent" rather than throwing and aborting the whole
- *  caller. Malformed individual entry lines are dropped (not fatal) rather than aborting the whole read.
- *  Relocated here (from `src/run/cassette.ts`, where it originated) so both `src/run/execute.ts` and
- *  `src/run/cassette.ts` can import it from a leaf module with no imports back into `run/`, avoiding an
- *  import cycle. Exported for direct unit testing (test/cassette-timeline.test.ts). */
-export function readTimeline(outDir: string): { header: TimelineHeader; events: TimelineEvent[]; malformedLines: number } | undefined {
+ *  header, the rest are entries. Returns `undefined` ONLY if the file is missing/empty (an older
+ *  harness build, or a run that predates this feature) — genuine feature-absence. If the file EXISTS
+ *  but its header line doesn't parse, that is feature-PRESENT-but-corrupt, a materially different
+ *  condition for a caller deciding whether to trust derived evidence — so it returns a distinct
+ *  `{ headerCorrupt: true, events: [], malformedLines: 0 }` result instead of collapsing to the same
+ *  `undefined` a missing file produces (#43; before this fix the two were indistinguishable). Malformed
+ *  individual entry lines (header parsed fine, some entry lines didn't) are dropped and counted in
+ *  `malformedLines` rather than aborting the whole read. Relocated here (from `src/run/cassette.ts`,
+ *  where it originated) so both `src/run/execute.ts` and `src/run/cassette.ts` can import it from a leaf
+ *  module with no imports back into `run/`, avoiding an import cycle. Exported for direct unit testing
+ *  (test/cassette-timeline.test.ts). */
+export function readTimeline(outDir: string): TimelineReadResult | undefined {
   const lines = safeLines(join(outDir, "timeline.jsonl"));
   if (lines.length === 0) return undefined;
   let header: TimelineHeader;
   try {
     header = JSON.parse(lines[0]);
   } catch {
-    return undefined;
+    return { events: [], malformedLines: 0, headerCorrupt: true };
   }
   const events: TimelineEvent[] = [];
   // Count dropped entry lines: a partially-corrupt timeline (valid header, some unparseable lines) yields

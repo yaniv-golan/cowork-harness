@@ -473,4 +473,33 @@ describe("reindexFromRunsTree — one-time migration from result.json files", ()
     expect(rows).toEqual([]);
     expect(written).toBe(0);
   });
+
+  it(
+    'carries forward the prior row\'s `command` (e.g. "skill") when re-deriving a walked row whose ' +
+      "outDir ALSO exists in the prior index — RunResult.mode has no skill/record value, so defaulting " +
+      "to run/chat would mislabel a run that was originally recorded as `skill` or `record`",
+    () => {
+      const runsRoot = mkdtempSync(join(tmpdir(), "run-index-tree-"));
+      const outDir = join(runsRoot, "s", "local_1");
+      mkdirSync(outDir, { recursive: true });
+      writeFileSync(
+        join(outDir, "result.json"),
+        JSON.stringify({
+          scenario: "s",
+          fidelity: "container",
+          baseline: "x",
+          result: "success",
+          decisions: [],
+          egress: [],
+          assertions: [],
+          outDir,
+        }),
+      );
+      // seed a prior index row for this SAME outDir, originally recorded as "skill"
+      appendIndexRow(runsRoot, indexRowFromResult(rr({ scenario: "s", outDir }), { command: "skill", partial: false }));
+      const { rows } = reindexFromRunsTree(runsRoot);
+      expect(rows).toHaveLength(1);
+      expect(rows[0].command).toBe("skill");
+    },
+  );
 });

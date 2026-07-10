@@ -6,6 +6,9 @@ import { warn } from "../io.js";
 
 const pexec = promisify(execFile);
 const DEFAULT_SAMPLE_TIMEOUT_MS = 2000;
+/** Upper bound `stop()` will wait for an in-flight tick — comfortably above the probe timeout above so a
+ *  well-behaved probe always lands, without letting a hung one block teardown indefinitely. */
+const STOP_WAIT_DEADLINE_MS = 2500;
 
 export interface ResourceSample {
   ts: number;
@@ -21,7 +24,18 @@ export interface ResourceSummary {
   avgCpuPct?: number;
   peakCpuPct?: number;
   malformedLines: number;
+  /** Count of `sampleOnce()` calls that returned `undefined` for a tier that IS sampleable (nonzero
+   *  exit, timeout, spawn failure, parse failure) — distinct from a genuinely-unsupported tier, which
+   *  never counts here. Only populated when the caller passes it through from the live `ResourceSampler`
+   *  (see `ResourceSampler.probeFailures`); omitted (undefined) otherwise. */
+  probeFailures?: number;
 }
+
+/** Sentinel identity for `makeSampleOnce`'s "this tier can't be sampled" fallback (protocol/replay, or a
+ *  required container/pid/instance id missing). `ResourceSampler` compares against this reference so a
+ *  genuinely-unsupported tier is never counted as a probe *failure* — only a real probe returning
+ *  `undefined` (nonzero exit, timeout, spawn failure, parse failure) increments `probeFailures`. */
+const UNSUPPORTED_PROBE: () => Promise<ResourceSample | undefined> = async () => undefined;
 
 /** COWORK_HARNESS_RESOURCE_INTERVAL_MS (positive int) else 1000. A set-but-invalid value (non-integer,
  *  non-positive) warns and falls back to the default rather than silently sampling on the wrong cadence. */
@@ -49,6 +63,9 @@ export class ResourceSampler {
   private timer: NodeJS.Timeout | undefined;
   private inFlight = false;
   private stopped = false;
+  private probeFailureCount = 0;
+  /** Latest in-flight (or just-completed) tick, so `stop()` can await it instead of racing it. */
+  private tickPromise: Promise<void> | undefined;
   constructor(
     outDir: string,
     private tier: string,
@@ -57,10 +74,17 @@ export class ResourceSampler {
   ) {
     this.path = join(outDir, "resources.jsonl");
   }
+  /** Count of `sampleOnce()` calls that returned `undefined` for THIS tier, excluding the genuinely-
+   *  unsupported-tier fallback (see `UNSUPPORTED_PROBE`) — "sampling failed" vs. "sampling impossible". */
+  get probeFailures(): number {
+    return this.probeFailureCount;
+  }
   start(): void {
     if (this.timer) return;
-    void this.tick(); // sample immediately so a run shorter than one interval still records a sample
-    this.timer = setInterval(() => void this.tick(), this.intervalMs);
+    this.tickPromise = this.tick(); // sample immediately so a run shorter than one interval still records a sample
+    this.timer = setInterval(() => {
+      this.tickPromise = this.tick();
+    }, this.intervalMs);
     this.timer.unref?.(); // never keep the process alive past teardown
   }
   private async tick(): Promise<void> {
@@ -68,6 +92,7 @@ export class ResourceSampler {
     this.inFlight = true;
     try {
       const sample = await this.sampleOnce();
+      if (sample === undefined && this.sampleOnce !== UNSUPPORTED_PROBE) this.probeFailureCount++;
       if (sample && !this.stopped) appendFileSync(this.path, JSON.stringify(sample) + "\n");
     } catch (e) {
       warn(`::warning:: [resources] sample failed (${this.tier}): ${String((e as Error)?.message ?? e)}\n`);
@@ -75,12 +100,24 @@ export class ResourceSampler {
       this.inFlight = false;
     }
   }
-  stop(): void {
-    this.stopped = true;
+  /** Stops future ticks, then awaits the in-flight tick (bounded — a hung probe can't block teardown
+   *  forever) so a run shorter than one interval still has its immediate first sample land in
+   *  resources.jsonl BEFORE the caller reads it via `foldResources` right after `stop()` returns.
+   *
+   *  `stopped` is set only AFTER that wait (not before): the append it guards
+   *  (`if (sample && !this.stopped)` above) must stay open while we're waiting on THIS in-flight tick,
+   *  or the very sample we're waiting for would suppress itself. If the tick is still pending once the
+   *  bounded wait elapses (a hung probe), setting `stopped` afterward still suppresses that late write
+   *  once it eventually resolves — the original race this flag existed to prevent. */
+  async stop(): Promise<void> {
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = undefined;
     }
+    if (this.tickPromise) {
+      await Promise.race([this.tickPromise, new Promise<void>((r) => setTimeout(r, STOP_WAIT_DEADLINE_MS))]);
+    }
+    this.stopped = true;
   }
 }
 
@@ -88,7 +125,7 @@ export class ResourceSampler {
  *  tier never sampled — protocol/replay, a run shorter than one interval, or a tier whose probe tool was
  *  unavailable), so a downstream assertion reads evidence-unavailable rather than a vacuous pass.
  *  Malformed lines are skipped but counted in `malformedLines`. */
-export function foldResources(outDir: string, tier: string, intervalMs: number): ResourceSummary | undefined {
+export function foldResources(outDir: string, tier: string, intervalMs: number, probeFailures?: number): ResourceSummary | undefined {
   let text: string;
   try {
     text = readFileSync(join(outDir, "resources.jsonl"), "utf8");
@@ -99,18 +136,27 @@ export function foldResources(outDir: string, tier: string, intervalMs: number):
   let malformedLines = 0;
   for (const line of text.split("\n")) {
     if (!line.trim()) continue;
+    let parsed: unknown;
     try {
-      samples.push(JSON.parse(line));
+      parsed = JSON.parse(line);
     } catch {
       malformedLines++;
       continue;
     }
+    // Valid JSON that isn't a non-null object (e.g. `null`, a number, an array) parses fine here but
+    // would throw on the field reads below (s.rssBytes / s.cpuPct), OUTSIDE this catch — crashing the
+    // fold instead of counting the line as malformed. Reject it the same way here.
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      malformedLines++;
+      continue;
+    }
+    samples.push(parsed as ResourceSample);
   }
   if (samples.length === 0) {
     // All-malformed ≠ never-sampled: if lines WERE present but every one failed to parse, surface an
     // evidence-corruption summary (sampleCount 0 + malformedLines) rather than undefined, which reads as
     // "this tier never sampled". A genuinely empty/absent log still returns undefined.
-    if (malformedLines > 0) return { tier, sampleCount: 0, intervalMs, malformedLines };
+    if (malformedLines > 0) return { tier, sampleCount: 0, intervalMs, malformedLines, probeFailures };
     return undefined;
   }
   const peak = (get: (s: ResourceSample) => number | undefined): number | undefined => {
@@ -123,6 +169,7 @@ export function foldResources(outDir: string, tier: string, intervalMs: number):
     sampleCount: samples.length,
     intervalMs,
     malformedLines,
+    probeFailures,
     peakRssBytes: peak((s) => s.rssBytes),
     peakCpuPct: peak((s) => s.cpuPct),
     avgCpuPct: cpuVals.length ? cpuVals.reduce((a, b) => a + b, 0) / cpuVals.length : undefined,
@@ -267,5 +314,5 @@ export function makeSampleOnce(opts: {
       return parsed.sample;
     };
   }
-  return async () => undefined; // protocol/replay or missing id — never sampled
+  return UNSUPPORTED_PROBE; // protocol/replay or missing id — never sampled, never a "failure"
 }

@@ -458,7 +458,6 @@ export async function runSemanticJudges(
     if (a.semantic_matches === undefined) continue;
     const override = a.semantic_matches.judge_model;
     const j = override && judgeFor ? judgeFor(override) : judge;
-    ctx.judgeModels.set(a, j.model ?? override ?? "unknown");
     // Grade with ONE retry — a stochastic judge sometimes emits a malformed grade. If it still throws,
     // mark the rep INVALID (not absent): the check surfaces it so a consumer counts it, never drops it.
     let graded: SemanticClaimResult[] | undefined;
@@ -474,6 +473,11 @@ export async function runSemanticJudges(
         }
       }
     }
+    // Record provenance AFTER the call, not before: `j.model` may be a factory-time alias (e.g. "opus")
+    // until the transport resolves it per-call to a concrete id (`makeSemanticJudge` mutates `.model` onto
+    // the resolved value once its `complete()` call returns). Reading it before the call would stamp the
+    // requested alias even when the transport actually resolved to a different concrete model (F11).
+    ctx.judgeModels.set(a, j.model ?? override ?? "unknown");
     if (graded) ctx.semanticResults.set(a, graded);
   }
 }

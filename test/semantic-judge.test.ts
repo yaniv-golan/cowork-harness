@@ -88,6 +88,21 @@ describe("semantic judge — makeSemanticJudge (stubbed transport)", () => {
     expect(p).toContain("MY ANSWER");
   });
 
+  it("F11: records the TRANSPORT-RESOLVED model, not the requested alias, after a call (provenance)", async () => {
+    // The transport (e.g. claudeCliComplete) resolves a floating alias like "opus" to a concrete, dated
+    // model id per call — provenance must reflect what ACTUALLY graded, not what was requested. Before the
+    // fix, `judge.model` stayed pinned to the requested alias for the judge's whole lifetime.
+    const resolvingComplete: Complete = async (_prompt, _model) => ({
+      text: '{"results":[{"index":0,"pass":true}]}',
+      model: "resolved-xyz",
+    });
+    const judge = makeSemanticJudge({ model: "opus", complete: resolvingComplete });
+    expect(judge.model).toBe("opus"); // before any call: still the requested alias (best-effort seed)
+    await judge(["claim0"], "the candidate answer");
+    expect(judge.model).toBe("resolved-xyz"); // after the call: the transport-resolved concrete model
+    expect(judge.model).not.toBe("opus");
+  });
+
   it("F5: the embedded output example is a NON-PARSEABLE template — it can never be mistaken for a grade, even for a 2-claim rubric", () => {
     // The example uses <…> placeholders, so JSON.parse fails on it → tryParseGrade returns null → it is
     // never a valid full-coverage survivor. Feeding the whole prompt (which contains the example) to the

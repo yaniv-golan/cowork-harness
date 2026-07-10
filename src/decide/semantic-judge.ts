@@ -133,14 +133,24 @@ export function parseJudgeResults(raw: string, rubric: string[]): SemanticClaimR
  *  model call; the default is the shared `claude -p` transport (`claudeCliComplete`, with its timeout /
  *  retry / bin-override). Pin the model to a dated id for a reproducible before/after gate. */
 export function makeSemanticJudge(opts: { model?: string; complete?: Complete } = {}): SemanticJudge {
-  const model = opts.model ?? DEFAULT_JUDGE_MODEL;
+  // The REQUESTED model/alias (e.g. "opus") — only ever used to make the call. Never read back for
+  // provenance: `complete()` (the transport, e.g. `claudeCliComplete`) resolves an alias to a concrete,
+  // dated model id per call (see llm-transport.ts's `parseEnvelope` / `CompleteResult.model`), and a
+  // floating alias can resolve to a DIFFERENT concrete model between calls (F11) — so the requested alias
+  // alone is not a truthful "which model graded" record.
+  const requestedModel = opts.model ?? DEFAULT_JUDGE_MODEL;
   const complete = opts.complete ?? claudeCliComplete;
   const judge: SemanticJudge = async (rubric, answer) => {
-    const { text } = await complete(buildJudgePrompt(rubric, answer), model);
+    const { text, model: resolvedModel } = await complete(buildJudgePrompt(rubric, answer), requestedModel);
+    // Stash the per-call RESOLVED model onto the judge (mutated synchronously before this async fn
+    // resolves) so a caller reading `judge.model` AFTER awaiting this call sees what actually graded,
+    // not the factory-time alias. This is the only way to thread a per-call, async-resolved value out of
+    // this closure onto the (necessarily synchronous, factory-time) `.model` property.
+    judge.model = resolvedModel;
     return parseJudgeResults(text, rubric);
   };
-  // Expose the RESOLVED judge model so the caller can record which model graded (provenance) —
-  // read by runSemanticJudges into RunResult.assertions[].judgeModel.
-  judge.model = model;
+  // Seed with the requested alias so a caller reading `.model` BEFORE any call still gets something
+  // (e.g. logging) — overwritten with the resolved model as soon as a call completes, above.
+  judge.model = requestedModel;
   return judge;
 }
