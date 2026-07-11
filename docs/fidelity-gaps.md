@@ -221,3 +221,19 @@ supported real-rootfs parity path sidesteps boot entirely: `scripts/build-rootfs
 `docker import`s the rootfs *filesystem* and the harness execs the agent directly — bypassing
 `coworkd` init and its host-device coupling — producing an agent image with verified
 byte-for-byte file parity, consumed via `COWORK_AGENT_IMAGE`.
+
+---
+
+## Protocol-tier sub-agents get no Cowork environment append
+
+**Real Cowork behaviour:** every session delivers a per-loop sub-agent environment append
+(`subagent_env_hl` on host-loop, `subagent_env_vm` in the VM loop) via the `initialize`
+control_request; the agent applies it to Task-dispatched children (fork/`useExactTools` dispatches are
+excluded agent-side).
+
+**Harness behaviour:** hostloop delivers the hl branch, container/microvm the vm branch; the
+**protocol** tier deliberately sends none. Protocol runs the CLI over a private `work/` cwd with no VM
+mounts — neither branch's environment description is factually true there, so sending either would
+teach the model false claims about its filesystem. Consequence: protocol sub-agents get no Cowork
+environment framing. This is a decided divergence, not an oversight; use hostloop (the production
+default loop) or container for sub-agent environment fidelity.

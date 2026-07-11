@@ -236,7 +236,7 @@ export async function cmdChat(args: string[]) {
             hostSkillsDir: skillsStaged ? skillsDir : undefined,
           };
         })()
-      : undefined;
+      : { effectiveFidelity: fidelity };
   const prompts = renderPrompts(baseline, session, sessionId, plan.mounts.find((m) => m.kind === "folder")?.mountPath, hostLoopOpts);
 
   log(`cowork chat [${fidelity}] — run: ${sessionId}\n`);

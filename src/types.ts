@@ -90,6 +90,7 @@ export const PlatformBaseline = z.looseObject({
       env: z.record(z.string(), z.string()).default({}),
       promptTemplate: z.string().optional(),
       subagentAppend: z.string().optional(),
+      subagentAppendHostLoop: z.string().optional(),
     })
     .partial()
     .optional(),

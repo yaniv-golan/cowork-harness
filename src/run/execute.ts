@@ -569,7 +569,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
                 hostSkillsDir: skillsStaged ? skillsDir : undefined,
               };
             })()
-          : undefined;
+          : { effectiveFidelity };
       const prompts = renderPrompts(baseline, session, sessionId, plan.mounts.find((m) => m.kind === "folder")?.mountPath, hostLoopOpts);
       promptFidelityWarnings = prompts.fidelityWarnings; // hoist out so RunResult construction (after try) can access it
       let sdkMcp: SdkMcp | undefined;
