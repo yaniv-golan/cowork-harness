@@ -244,6 +244,13 @@ export interface Cassette {
 //  recorded a link stray in the first place). `rehash` cannot synthesize link entries from an old
 //  manifest, so it routes a v9→v10 bump to a re-record (see cmdRehash).
 export const CASSETTE_VERSION = 10;
+
+/** Minimum cassette format version this build will read. Pre-1.0.0: no legacy-format compatibility is
+ *  maintained below this floor — an older cassette must be re-recorded, not silently tolerated. Raising
+ *  this floor is how the pre-v9 legacy-reconstruction branches (buildFolderPrefixMap, cmdRehash's
+ *  pre-v3/pre-v6 checks, contentSigAlgoOf) became dead code and were deleted. */
+export const MIN_SUPPORTED_CASSETTE_VERSION = 9;
+
 // The contentSig algorithm version. Bumped whenever computeContentSig's INPUT/encoding changes (the v6
 // unification). `rehash` only byte-compares contentSig within the same algo version; across a bump it
 // re-records. Derived from cassetteVersion: < 6 ⇒ algo 1 (legacy), ≥ 6 ⇒ algo 2 (unified),
@@ -1537,6 +1544,14 @@ export function readCassette(path: string): { cassette: Cassette } | { error: st
   // from replay evaluation and green by omission. A cassette recorded by a NEWER harness (future version) may
   // legitimately carry an assertion key this build doesn't know: keep warn-and-tolerate there (forward-compat).
   const recordedVersion = cassette.cassetteVersion ?? 0;
+  if (recordedVersion < MIN_SUPPORTED_CASSETTE_VERSION) {
+    return {
+      error:
+        `cassette recorded at v${recordedVersion} is older than the minimum supported version ` +
+        `v${MIN_SUPPORTED_CASSETTE_VERSION} — re-record this cassette (pre-1.0, no compatibility is ` +
+        `maintained for cassette formats below v${MIN_SUPPORTED_CASSETTE_VERSION})`,
+    };
+  }
   const isFutureCassette = recordedVersion > CASSETTE_VERSION;
   const assertErrors: string[] = [];
   scn.assert.forEach((a, i) => {

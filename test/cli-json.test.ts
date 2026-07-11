@@ -28,6 +28,7 @@ function writeIn(cwd: string, name: string, body: string) {
   writeFileSync(join(cwd, name), body);
 }
 const cassette = (assert: unknown[], text = "hello there", controlOut?: string[]) => ({
+  cassetteVersion: CASSETTE_VERSION,
   scenario: {
     name: "c",
     baseline: "latest",
@@ -670,10 +671,10 @@ describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
     // live/integration test suite (requires a real record run).
     const cwd = mkdtempSync(join(tmpdir(), "cc-prov-"));
     const body = {
-      $schema: "https://raw.githubusercontent.com/yaniv-golan/cowork-harness/main/schema/cassette.v2.json",
-      generator: "cowork-harness",
-      cassetteVersion: 2,
       ...cassette([]),
+      $schema: "https://raw.githubusercontent.com/yaniv-golan/cowork-harness/main/schema/cassette.v9.json",
+      generator: "cowork-harness",
+      cassetteVersion: 9,
     };
     writeIn(cwd, "s.cassette.json", JSON.stringify(body));
     const r = spawnSync("node", [CLI, "replay", "s.cassette.json"], { encoding: "utf8", cwd });
@@ -685,7 +686,7 @@ describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
 // cmdReplay→replayCassette opt wiring (a real bug caught only at the binary). These spawn the built CLI.
 describe.skipIf(!can)("replay staleness JSON + --fail-on-skill-drift (CLI wiring)", () => {
   const LIVE = loadBaseline("latest").appVersion;
-  const staleCassette = (fingerprint: object) => ({ cassetteVersion: CASSETTE_VERSION, fingerprint, ...cassette([{ result: "success" }]) });
+  const staleCassette = (fingerprint: object) => ({ fingerprint, ...cassette([{ result: "success" }]) });
 
   it("default replay surfaces class-tagged staleness[] but stays ok:true (exit 0)", () => {
     const cwd = mkdtempSync(join(tmpdir(), "cc-stale-"));

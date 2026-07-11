@@ -42,6 +42,7 @@ function envelope(args: string[], cwd: string): unknown {
 }
 
 const cassette = (over: Record<string, unknown> = {}) => ({
+  cassetteVersion: 9,
   scenario: {
     name: "c",
     baseline: "latest",

@@ -363,8 +363,11 @@ describe("scenario.assert validation: reject unknown/malformed for current-or-ol
     muteStderr();
     const d = mkdtempSync(join(tmpdir(), "cwh-a29-"));
     const cp = join(d, "fwd.cassette.json");
-    // transcript_contains must be a string — a number is a malformed assertion shape. No version = legacy (≤ current).
-    writeFileSync(cp, JSON.stringify({ scenario: makeScenario([{ transcript_contains: 123 }, { result: "success" }]), events }));
+    // transcript_contains must be a string — a number is a malformed assertion shape. At the v9 floor = current-or-older.
+    writeFileSync(
+      cp,
+      JSON.stringify({ cassetteVersion: 9, scenario: makeScenario([{ transcript_contains: 123 }, { result: "success" }]), events }),
+    );
     const r = readCassette(cp);
     expect("error" in r).toBe(true);
     expect((r as { error: string }).error).toMatch(/unrecognized assertion/);
@@ -374,7 +377,7 @@ describe("scenario.assert validation: reject unknown/malformed for current-or-ol
     muteStderr();
     const d = mkdtempSync(join(tmpdir(), "cwh-a29b-"));
     const cp = join(d, "fwd.cassette.json");
-    writeFileSync(cp, JSON.stringify({ scenario: makeScenario([{ some_future_assertion_key: "value" }]), events }));
+    writeFileSync(cp, JSON.stringify({ cassetteVersion: 9, scenario: makeScenario([{ some_future_assertion_key: "value" }]), events }));
     expect("error" in readCassette(cp)).toBe(true);
   });
 

@@ -17,6 +17,7 @@ function run(args: string[], cwd: string) {
 
 const cassette = () =>
   JSON.stringify({
+    cassetteVersion: 9,
     scenario: {
       name: "c",
       baseline: "latest",
@@ -89,6 +90,7 @@ describe.skipIf(!can)("CLI arg guards — migrated commands fail loud", () => {
   it("replay: a cassette missing the optional `assert` key does not crash (readCassette normalizes it)", () => {
     const d = mkdtempSync(join(tmpdir(), "g-"));
     const noAssert = JSON.stringify({
+      cassetteVersion: 9,
       scenario: { name: "c", baseline: "latest", session: "(inline)", fidelity: "container", prompt: "hi", answers: [], expect_denied: [] },
       events: [JSON.stringify({ type: "result", subtype: "success" })],
     });

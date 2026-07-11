@@ -3,9 +3,10 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, basename } from "node:path";
 import { resolve } from "node:path";
-import { selectStaleCassettes, _findScenarioOnDisk, _resolveRerecordSource } from "../src/run/cassette.js";
+import { selectStaleCassettes, _findScenarioOnDisk, _resolveRerecordSource, CASSETTE_VERSION } from "../src/run/cassette.js";
 
 const cassette = (fingerprint?: unknown, name = "c") => ({
+  cassetteVersion: CASSETTE_VERSION,
   scenario: {
     name,
     baseline: "latest",
