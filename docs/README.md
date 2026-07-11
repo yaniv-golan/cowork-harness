@@ -44,7 +44,7 @@ Grouped by the same **author → run → debug** spine as the reading order abov
 | In-band gate answering from a driving agent (`gates` / `answer`) | [decider-dir.md](./decider-dir.md) |
 | Checking a background run's liveness (`status`) | [run-status.md](./run-status.md) |
 | Fidelity — three isolation tiers (L0/L1/L2) + two loop overlays (`hostloop`, `cowork`) | [boundary.md](./boundary.md), [README](../README.md) |
-| Control-protocol / spawn contract | [cowork-spawn-contract-1.12603.1.md](./cowork-spawn-contract-1.12603.1.md) (verified on `desktop-1.12603.1`; control-protocol fields unchanged through `desktop-1.13576.1`; mount-layout fork at ≥`1.14271.0`; volatile fields — `agentVersion`, egress allowlist, GrowthBook gates — tracked in `baselines/`); see also [SPEC.md](../SPEC.md) |
+| Control-protocol / spawn contract | [cowork-spawn-contract-1.12603.1.md](./cowork-spawn-contract-1.12603.1.md) (frozen historical research, verified on `desktop-1.12603.1`; control-protocol fields re-verified unchanged through `desktop-1.13576.1`; mount-layout fork at ≥`1.14271.0`; volatile fields — `agentVersion`, egress allowlist, GrowthBook gates — tracked in `baselines/`); see also [SPEC.md](../SPEC.md) |
 | AI agent instructions for this repo | [AGENTS.md](../AGENTS.md) |
 | Security & threat model | [../SECURITY.md](../SECURITY.md) |
 | Contributing | [../CONTRIBUTING.md](../CONTRIBUTING.md) |

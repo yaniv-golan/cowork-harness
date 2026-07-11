@@ -14,12 +14,14 @@
 //   5. README floor === floor: every `cowork-harness@>=X.Y.Z` in README.md matches the SKILL.md floor
 //                              (README is not version-controlled by the package; it drifts silently otherwise).
 //   6. ref stamps === tracks:  each `references/*.md` "Tracks `cowork-harness X.Y.Z`" matches tracks-harness.
-//   7. baseline pins agree:    SKILL.md's `(baseline desktop-X.Y.Z)`, README.md's "latest shipped baseline"
-//                              sentence, and docs/cowork-spawn-contract-*.md's "current baseline is" sentence
-//                              all agree with each other AND are not behind the max version present in
-//                              baselines/desktop-*.json. (DESIGN.md is deliberately NOT checked here — its
-//                              baseline mentions are point-in-time verification stamps, not "current" pins,
-//                              and are allowed to lag until a real re-verification pass.)
+//   7. baseline pins agree:    SKILL.md's `(baseline desktop-X.Y.Z)` and README.md's "latest shipped
+//                              baseline" sentence agree with each other AND are not behind the max
+//                              version present in baselines/desktop-*.json. (DESIGN.md is deliberately
+//                              NOT checked here — its baseline mentions are point-in-time verification
+//                              stamps, not "current" pins, and are allowed to lag until a real
+//                              re-verification pass. docs/cowork-spawn-contract-*.md is likewise NOT a
+//                              pin: it is frozen historical research, not updated per release — see its
+//                              own applicability note.)
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -62,10 +64,6 @@ export function checkVersions(): { ok: boolean; errors: string[]; values: Record
   const readmeBaseline = readmeText.match(
     /latest shipped baseline[^.]*?is\s+\*\*`desktop-(\d+\.\d+\.\d+)`\*\*/,
   )?.[1];
-  const spawnContractPath = "docs/cowork-spawn-contract-1.12603.1.md";
-  const spawnContractBaseline = r(spawnContractPath).match(
-    /current baseline is\s+`desktop-(\d+\.\d+\.\d+)`/,
-  )?.[1];
   const baselineFiles = readdirSync(join(REPO_ROOT, "baselines")).filter((f) =>
     /^desktop-\d+\.\d+\.\d+\.json$/.test(f),
   );
@@ -83,7 +81,6 @@ export function checkVersions(): { ok: boolean; errors: string[]; values: Record
     floor,
     skillBaseline,
     readmeBaseline,
-    spawnContractBaseline,
     maxBaseline,
   };
 
@@ -142,16 +139,12 @@ export function checkVersions(): { ok: boolean; errors: string[]; values: Record
   if (!readmeBaseline) {
     errors.push(`could not find the "latest shipped baseline ... is **\`desktop-X.Y.Z\`**" sentence in README.md`);
   }
-  if (!spawnContractBaseline) {
-    errors.push(`could not find "current baseline is \`desktop-X.Y.Z\`" in ${spawnContractPath}`);
-  }
   if (baselineVersions.length === 0) {
     errors.push(`no baselines/desktop-*.json files found — cannot compute max baseline`);
   }
   const pins: Array<{ label: string; version: string | undefined }> = [
     { label: "SKILL.md tracks-harness baseline", version: skillBaseline },
     { label: "README.md latest-shipped-baseline", version: readmeBaseline },
-    { label: `${spawnContractPath} current-baseline`, version: spawnContractBaseline },
   ];
   const presentPins = pins.filter((p): p is { label: string; version: string } => p.version !== undefined);
   for (let i = 1; i < presentPins.length; i++) {

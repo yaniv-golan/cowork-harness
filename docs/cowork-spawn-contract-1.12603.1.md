@@ -1,7 +1,8 @@
 # Cowork spawn contract — app.asar 1.12603.1 / agent ELF 2.1.170
 
-> **Applicability note:** verified on `desktop-1.12603.1`. The current baseline is `desktop-1.20186.1`
-> (agent ELF 2.1.202; native host app 2.1.205). Control-protocol fields documented here (spawn flags, handshake envelope,
+> **Applicability note:** verified on `desktop-1.12603.1`; **frozen as historical research** —
+> this document is not updated per release (the live values are tracked in the newest
+> `baselines/desktop-*.json`). Control-protocol fields documented here (spawn flags, handshake envelope,
 > permission/question shapes) are **unchanged**; the **mount layout changed at ≥1.14271.0** (work folders
 > now mount at `mnt/<name>`, not `mnt/.projects/<id>` — see CHANGELOG). Volatile fields — `agentVersion`,
 > egress `allowDomains`, GrowthBook gate values — have moved and are tracked in the latest baseline
