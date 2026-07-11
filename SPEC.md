@@ -512,9 +512,14 @@ and a fail observed) always fails that batch, regardless of the numeric rate.
 ```jsonc
 {
   "scenario": "string",
+  "command?": "run|skill|record|chat|replay",    // the CLI command that produced this result — finer than `mode` (which only distinguishes run/chat); `reindex` prefers this over `mode` so a `skill`/`record` row isn't relabeled `run`
   "fidelity": "protocol|container|microvm|hostloop|cowork  (replay: \"replay:<f>\")",
   "baseline": "string",                          // platform baseline appVersion
   "result": "success" | "error",                // did the agent turn end without error (NOT "task completed")
+  "resultErrorKind?": "transport|agent|usage_limit", // when result==="error": a tail-end transport drop, a genuine agent/skill failure, or usage_limit (quota exhausted — is_error + HTTP 429 + a terminal usage-limit message; not the skill's fault, retry after reset)
+  "errorSource?": "spawn|protocol|exit|agent|result|no_result|timeout", // finer diagnostic detail alongside resultErrorKind; no_result = stream ended with no terminal event; timeout = the harness's own wall-clock limit fired
+  "resultSubtype?": "string",                    // the SDK result message's subtype verbatim (e.g. error_max_turns), pass-through diagnostic
+  "stderrLogPath?": "string",                    // absolute path to the agent's full stderr log; live only, absent on replay
   "stalledOnQuestion?": bool,                     // H2/H3: ended on a question with no productive tool work after its last gate → `stalled` verdict fail unless allow_stall
   "decisions": [{ "kind","name","decision","by","model?","rationale?","detail?" }], // model set for by:"llm" gates
   "toolCounts?": { "WebSearch": 8, … },          // truthful per-tool call count (top-level; host-routed WebSearch shows HERE, not usage.server_tool_use)
@@ -542,7 +547,8 @@ and a fail observed) always fails that batch, regardless of the numeric rate.
   "skippedAssertions?": { "full": number, "partial": number }, // replay only; count of live-only assertions NOT evaluated (full = whole assertion skipped; partial = content half ran, fs/egress half dropped). The skipped ones are absent from `assertions[]`.
   "toolResults?": [{ "toolUseId?","isError","text","assertText?" }], // tool-result text at assertion-fidelity cap (10 KB); backs tool_result_contains/tool_result_not_contains
   "skillsInvoked?": ["string"],                  // Wave 1: skill/plugin ids invoked via the Skill tool_use event, call order, duplicates kept. Backs skill_triggered/no_skill_triggered.
-  "skillToolAvailable?": bool                     // Wave 1: whether the agent's init tool list included "Skill" — false ⇒ skill_triggered/no_skill_triggered fail as evidence-unavailable (agent-version drift)
+  "skillToolAvailable?": bool,                    // Wave 1: whether the agent's init tool list included "Skill" — false ⇒ skill_triggered/no_skill_triggered fail as evidence-unavailable (agent-version drift)
+  "evidenceErrors?": { "taskTracking?": number, "webSearchParse?": number, "presentFilesMalformed?": number, "egressParse?": number } // dropped/malformed telemetry lines per stream; a >0 taskTracking/presentFilesMalformed count fails the dependent assertion "malformed" rather than silently dropping bad entries; webSearchParse/egressParse are observability-only
 }
 ```
 

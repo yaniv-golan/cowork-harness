@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.29.0] — 2026-07-11
+
 ### Added
 
 - **Parity baseline for Claude Desktop 1.20186.0.** `baseline: latest` now resolves to `desktop-1.20186.0`
@@ -49,11 +51,23 @@ All notable changes to this project are documented here. The format is based on
 - **`ResourceSummary.probeFailures`** counts resource-sampling probes that actually failed (nonzero exit,
   timeout, parse error), distinct from a tier that was never sampleable (protocol/replay) — "sampling broke"
   is now told apart from "sampling wasn't attempted."
+- **`chat` now samples real resources on the `container`/`hostloop` tiers.** Previously no `ResourceSampler`
+  was ever started for a chat session on either tier, so `resources.jsonl` was always empty despite
+  `chat-result.ts`'s doc-comment claiming resource parity with `run`; a protocol-tier chat legitimately has
+  none (no container/process id to probe against the host `claude` binary).
 
 ### Changed
 
 - **`input_unmodified` accepts a single glob string** as well as an array (`input_unmodified: 'uploads/**'`
   no longer errors "expected array").
+- **`sessionFingerprintDrift` keeps an unresolvable session fingerprint non-failing (informational)** and
+  downgrades a mismatch to a non-failing note when the cassette's session was only resolved via a
+  name-lookup fallback (the SAME low-confidence signal `scenarioContentDrift` already downgrades on) —
+  a relocated cassette whose relative-offset resolution lands on an unrelated same-named session file no
+  longer reads as a false "session shape drifted."
+- **`artifact_json`'s replay remedy names an uploaded input distinctly** — a body-less target that was
+  captured hash-only because it's an *upload* now says so directly, instead of the prior combined
+  readonly-or-over-cap wording that didn't cover the uploads case.
 - **`scenario.py lint-skill`** downgrades a `${CLAUDE_PLUGIN_ROOT}`-in-VM-bash use to a `plugin-root-guarded`
   **INFO** (from WARN) when the same bash block self-heals it at runtime (`[ -d ] || find /sessions …`), so a
   correctly-guarded block no longer shares the alarming WARN class with a genuinely-unguarded use.
@@ -113,6 +127,11 @@ All notable changes to this project are documented here. The format is based on
 - **A malformed `system/init` frame** (a non-array `tools`/`mcp_servers`/`skills`, or a non-object content
   block) could crash with an uncaught `TypeError`; it is now rejected as a typed protocol error at parse time,
   and the `trace` reconstruction lane skips it instead of aborting.
+- **`verify-cassettes` no longer aborts the whole batch on a nameless cassette.** A lenient cassette with
+  no `scenario.name` (and no `scenarioSource`) threw inside the per-file verification, which aborted the
+  entire run (`results: []` — a false-green by abort) instead of reporting that one file's error and
+  continuing. Each file's verification is now wrapped so a per-file crash becomes that file's error row
+  (mirrors `replay`'s existing per-file catch).
 
 ### Internal
 
