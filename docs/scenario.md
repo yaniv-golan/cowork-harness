@@ -743,7 +743,13 @@ passes at "2/2 gates matched". A **failure** means a *fired* gate had no matchin
 `choose:` named an option the run never offered (the model reworded the gate) — surfacing the drift in ~1s
 instead of on a paid re-record. This **changes the exit-code contract**: a run that is green on `assert:` can
 now exit `1` on such a mismatch. If the scenario declares answers but the kept run dir has no `events.jsonl`,
-verify-run **refuses** (exit `2`, "can't verify ⇒ not green") rather than vacuously passing.
+verify-run **refuses** (exit `2`, "can't verify ⇒ not green") rather than vacuously passing. The same
+fail-closed rule covers *degraded* evidence: an `events.jsonl` with unparseable lines (truncation, a hand
+edit, or raw agent-stdout noise), or one that yields fewer gates than `trace.json` recorded questions,
+also refuses — a present-but-corrupt stream is otherwise indistinguishable from "zero gates fired" and
+would certify answer coverage at a hollow 0/0. And independent of answers, a `result.json` that parses
+but is structurally invalid (no `"success" | "error"` result field — truncated, hand-edited, or not
+harness-written) refuses instead of being certified as success.
 A scenario with no `answers:` is unaffected (assert-only, exactly as before). Scenarios using
 `on_unanswered: first`/`llm` treat an unmatched gate as an acceptable auto-answer, not a failure.
 

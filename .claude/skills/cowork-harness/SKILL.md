@@ -292,7 +292,9 @@ scenario's gates or their labels: `--keep` ONE run, then `cowork-harness trace <
 your `answers:` against that kept run, then record once. **But the kept run is a snapshot:** if you change the
 skill's gate phrasing afterward, re-`--keep` — verify-run's answer-coverage *refuses* (exit 2, "predates the
 current skill") rather than vouch against stale labels, but the trace/inspect path can't warn you, so re-keep
-deliberately. (A token-free probe of "which gates fire" isn't possible — gates are model-decided per run.)
+deliberately. (Same fail-closed family: corrupt gate evidence — unparseable `events.jsonl` lines, or fewer
+gates than `trace.json` recorded questions — and a structurally invalid `result.json` also refuse rather
+than certify.) (A token-free probe of "which gates fire" isn't possible — gates are model-decided per run.)
 
 Run artifacts are written to `~/.cowork-harness/runs/…` by default — **outside any working tree**, so a run
 launched from a repo root never drops sensitive skill inputs/outputs into it. Pass `--run-dir <path>` (or set
