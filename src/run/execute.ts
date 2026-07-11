@@ -30,6 +30,7 @@ import { spawnContainer } from "../runtime/container.js";
 import { spawnHostLoop } from "../runtime/hostloop.js";
 import { snapshotHostLoopWorkspace } from "../runtime/hostloop-stage.js";
 import { checkHostLoopWriteConsent, logHostWriteNotice } from "../hostloop/safety.js";
+import { makeHostLoopCanUseToolGate } from "../hostloop/canusetool-gate.js";
 import { spawnMicroVm } from "../runtime/microvm.js";
 import {
   probeImageOmitted,
@@ -53,7 +54,7 @@ import { writeVmPathContextFile } from "./vm-path-ctx-file.js";
 import { LiveAgentSession, type SdkMcp, type HookBundle } from "../agent/session.js";
 import { readTimeline } from "../agent/timeline.js";
 import { foldToolDurations, foldSkillActivity, attributeSubagentSkills } from "./timeline-fold.js";
-import { buildDecider, ExternalDecider, LlmDecider, type Decider, type OnUnanswered, UnansweredError } from "../decide/decider.js";
+import { buildDecider, Chain, ExternalDecider, LlmDecider, type Decider, type OnUnanswered, UnansweredError } from "../decide/decider.js";
 import { type DecisionChannel } from "../decide/external-channel.js";
 import { claudeCliComplete } from "../decide/llm-transport.js";
 import { Run, infraErrorsForResult, evidenceErrorsForResult, type RunRecord, type RunHooks } from "./run.js";
@@ -644,8 +645,12 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       const llmTerminal =
         onUnanswered === "llm" ? new LlmDecider(claudeCliComplete, opts.llmIntent, opts.llmModel || undefined, secrets) : undefined;
       const externalTerminal = opts.externalChannel ? new ExternalDecider(opts.externalChannel, secrets) : llmTerminal;
-      const decider =
+      const policyDecider =
         opts.decider ?? buildDecider({ rules: scenario.answers, parity: plan.permissionParity, onUnanswered, external: externalTerminal });
+      // Production interposes the canUseTool path gate BEFORE the user-facing callback (xe ?? Qt ?? Se);
+      // the harness analog is FIRST in the Chain — Chain stops at the first non-abstain, so any later
+      // placement would let a scripted/default answer preempt a production-shaped deny.
+      const decider = effectiveFidelity === "hostloop" ? Chain(makeHostLoopCanUseToolGate(), policyDecider) : policyDecider;
       const run = new Run(sessionT, decider, opts.hooks ?? [], sessionId, dialogTimeoutMs ?? undefined, scenario.timeout_ms);
       run.seedApprovedDomains(session.web_fetch.approved_domains); // test convenience: pre-approved web_fetch hosts
       // fill the provenance bundle (backed by Run's tracker + recorded approval) BEFORE drive().

@@ -27,6 +27,7 @@ import { readGateFlag } from "../loop-decision.js";
 import type { WebFetchProvenance } from "../hostloop/workspace-handler.js";
 import { checkHostLoopWriteConsent, logHostWriteNotice } from "../hostloop/safety.js";
 import { PATH_GATE_TOOL_NAMES } from "../hostloop/pretooluse-path-hook.js";
+import { makeHostLoopCanUseToolGate } from "../hostloop/canusetool-gate.js";
 
 const log = (s: string) => process.stderr.write(s);
 
@@ -345,7 +346,15 @@ export async function cmdChat(args: string[]) {
         (msg) => log(msg),
       );
       const agent = new LiveAgentSession(hl.child as any, outDir);
-      const decider = Chain(new ScriptedDecider([]), new PermissionDefaultDecider("cowork"), new PromptDecider(ask));
+      // Production interposes the canUseTool path gate BEFORE the user-facing callback (xe ?? Qt ?? Se);
+      // the harness analog is FIRST in the Chain — Chain stops at the first non-abstain, so any later
+      // placement would let the scripted/default/prompt deciders preempt a production-shaped deny.
+      const decider = Chain(
+        makeHostLoopCanUseToolGate(),
+        new ScriptedDecider([]),
+        new PermissionDefaultDecider("cowork"),
+        new PromptDecider(ask),
+      );
       const renderer = makeRenderer(renderPlan);
       // The path-containment gate's runtime tripwire: a gated tool call that completed successfully
       // with no evidence the gate ran on it means real filesystem access is unverified for this

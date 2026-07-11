@@ -28,7 +28,17 @@ export interface QSpec {
 export type DecisionRequest =
   // `options` is OFF-WIRE (web_fetch approval is host-synthesized): the grant-scope choices a decider
   // answers with for a `webfetch:<domain>` gate. Absent for ordinary agent permissions (binary allow/deny).
-  | { id: string; kind: "permission"; tool: string; input: Record<string, unknown>; options?: { label: string; description?: string }[] }
+  | {
+      id: string;
+      kind: "permission";
+      tool: string;
+      input: Record<string, unknown>;
+      options?: { label: string; description?: string }[];
+      toolUseId?: string; // request.tool_use_id — pairs the ask with its tool_use (correlation for path telemetry)
+      agentId?: string; // request.agent_id — present ONLY when the ask fired inside a sub-agent (binary-verified hook/request schema)
+      decisionReason?: string; // request.decision_reason — the SDK's suggested deny reason (e.g. the workingDir constant)
+      decisionReasonType?: string; // request.decision_reason_type (e.g. "workingDir")
+    }
   // toolUseId (the `toolu_…` id, distinct from the UUID `id`/request_id) pairs this gate with its
   // tool_result for delivery verification + `trace --view questions`.
   | { id: string; kind: "question"; questions: QSpec[]; toolUseId?: string }
@@ -1072,7 +1082,16 @@ export function toDecisionRequest(msg: any): DecisionRequest | null {
         toolUseId: msg.request.tool_use_id ? String(msg.request.tool_use_id) : undefined,
       };
     }
-    return { id, kind: "permission", tool, input: msg.request.input ?? {} };
+    return {
+      id,
+      kind: "permission",
+      tool,
+      input: msg.request.input ?? {},
+      toolUseId: msg.request.tool_use_id ? String(msg.request.tool_use_id) : undefined,
+      agentId: msg.request.agent_id ? String(msg.request.agent_id) : undefined,
+      decisionReason: typeof msg.request.decision_reason === "string" ? msg.request.decision_reason : undefined,
+      decisionReasonType: typeof msg.request.decision_reason_type === "string" ? msg.request.decision_reason_type : undefined,
+    };
   }
   if (sub === "request_user_dialog")
     return { id, kind: "dialog", dialogKind: msg.request.dialogKind ?? msg.request.dialog_kind ?? "unknown", payload: msg.request.payload };

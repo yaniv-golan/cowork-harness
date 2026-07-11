@@ -2210,3 +2210,21 @@ describe("execute.ts — COWORK_HARNESS_DIALOG_TIMEOUT_MS configuration guard", 
     }
   });
 });
+
+describe("toDecisionRequest — replay lane surfaces the SDK deny-reason fields (seams: cassette.ts re-parses with parseMessage)", () => {
+  it("replay lane surfaces decision_reason from a frozen control_request line", () => {
+    const line = JSON.stringify({
+      type: "control_request",
+      request_id: "req-9",
+      request: {
+        subtype: "can_use_tool",
+        tool_name: "Edit",
+        input: { file_path: "/x" },
+        decision_reason: "Path is outside allowed working directories",
+        decision_reason_type: "workingDir",
+      },
+    });
+    const [ev] = parseMessage(JSON.parse(line));
+    expect((ev as { request: { decisionReason?: string } }).request.decisionReason).toBe("Path is outside allowed working directories");
+  });
+});

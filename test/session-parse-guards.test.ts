@@ -201,3 +201,41 @@ describe("F4: respond() delivery reconciliation across an async stdin EPIPE (bug
     proc.stdout.end();
   });
 });
+
+describe("toDecisionRequest — SDK deny-reason + correlation fields survive parsing (live AND replay share parseMessage)", () => {
+  const frame = {
+    type: "control_request",
+    request_id: "req-1",
+    request: {
+      subtype: "can_use_tool",
+      tool_name: "Write",
+      input: { file_path: "/tmp/x" },
+      tool_use_id: "toolu_01",
+      agent_id: "agent_7",
+      decision_reason: "Path is outside allowed working directories",
+      decision_reason_type: "workingDir",
+    },
+  };
+  it("carries decisionReason/decisionReasonType/toolUseId/agentId on the permission request", () => {
+    const [ev] = parseMessage(frame);
+    expect(ev).toMatchObject({
+      type: "decision",
+      request: {
+        kind: "permission",
+        tool: "Write",
+        toolUseId: "toolu_01",
+        agentId: "agent_7",
+        decisionReason: "Path is outside allowed working directories",
+        decisionReasonType: "workingDir",
+      },
+    });
+  });
+  it("absent fields stay undefined (no fabrication)", () => {
+    const [ev] = parseMessage({
+      type: "control_request",
+      request_id: "r",
+      request: { subtype: "can_use_tool", tool_name: "Read", input: {} },
+    });
+    expect((ev as { request: Record<string, unknown> }).request.decisionReason).toBeUndefined();
+  });
+});
