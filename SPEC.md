@@ -674,9 +674,11 @@ nothing here is guaranteed; minor versions may break any surface — see [RELEAS
   CI recipes and the packaged Action steer consumers to parse; renaming or removing a key is
   breaking, adding one is not.
 - **Cassette format** — the current `cassetteVersion` (**10**, `schema/cassette.v10.json`) and its
-  verdict-modifier assertion keys. Older-version cassettes (the retained
-  `schema/cassette.v2/v3/v5/v6/v7/v8/v9.json` — no v4 schema was ever published) stay replayable;
-  dropping a still-emitted version's readability is breaking.
+  verdict-modifier assertion keys. The minimum supported read version is **v9**
+  (`MIN_SUPPORTED_CASSETTE_VERSION`): a cassette below the floor is refused at load time with a
+  re-record error (a pre-1.0 decision — no compatibility is maintained for formats below v9, and
+  their schema files are no longer shipped; `schema/cassette.v9.json` is retained alongside v10).
+  Post-1.0, raising this floor past a still-readable version is breaking.
 - **Control protocol** — `schema/protocol.v1.json` + the golden control-response vectors (§5).
 - **Environment variables** — the documented `COWORK_HARNESS_*` knobs plus `COWORK_AGENT_BINARY` and
   `COWORK_AGENT_IMAGE`. Renaming a documented var or changing its meaning is breaking.

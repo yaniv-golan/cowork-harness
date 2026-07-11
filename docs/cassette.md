@@ -59,7 +59,7 @@ reproduce. See [docs/scenario.md](./scenario.md#how-an-assertion-edit-reaches-ci
 ```jsonc
 {
   "generator": "cowork-harness",          // provenance: the tool that produced this file
-  "cassetteVersion": 10,                  // format version; ABSENT = legacy (0); a FUTURE version hard-fails unless --best-effort-future-cassette
+  "cassetteVersion": 10,                  // format version; ABSENT reads as 0 and, like anything below the v9 read floor, is refused at load time with a re-record error; a FUTURE version hard-fails unless --best-effort-future-cassette
   "scenarioSource": "scenarios/my-test.yaml", // the authored scenario SOURCE file this was recorded from, relative to the cassette dir (absent for an inline/in-memory scenario)
   "scenario": { /* Scenario object — same schema as the .yaml */ },
   "events": [ /* JSON lines from events.jsonl (child→driver stdout) */ ],
@@ -458,12 +458,11 @@ possible.
 
 `verify-cassettes` reports these staleness causes:
 - **`recorded under an older hash format (vN → vM)`** — format upgrade; re-record once and the message
-  goes away. (Cassettes recorded before format **v6** all need one re-record — see the boundary note below.
-  Cassettes recorded at **v6** need one re-record after upgrading to the v7 format, which switched the
-  hash-entry delimiter from `\n` to `\0`. Cassettes recorded at **v7** need one re-record after upgrading
-  to **v8**, which folds fixed-length content shas and type-prefixes/NUL-frames the hash entries — a v7
-  fingerprint is non-comparable, so `rehash` routes v7 cassettes to re-record. A cassette that carries no
-  `skillHash` is unaffected and keeps replaying.)
+  goes away. (Any cassette recorded below the **v9** read floor is refused at load time with a re-record
+  error before `verify-cassettes`/`rehash` ever reach this staleness check — see the boundary note below.
+  Within the readable v9+ range, this message just tracks the ordinary `cassetteVersion` bump, e.g. a v9
+  cassette needing one re-record after upgrading to v10. A cassette that carries no `skillHash` is
+  unaffected and keeps replaying.)
 - **`skill files changed since record — N changed (path, …)`** — the **exact** changed/added/removed file(s),
   from the per-file manifest (`fileSigs`). For a scoped cassette the drift is attributed **per bucket** by the
   actual changed paths: a `shared root changed (scope: skills/x) [N changed (…)]` message for shared-dependency
@@ -476,7 +475,8 @@ possible.
   live session's SHAPE. Distinct from `fingerprint.skillHash` (skill/plugin file content): a folder swapped or
   egress widened can drift the session with the skill tree untouched. Computed and hard-failed by
   `verify-cassettes` **only**, gated by the same `--skip-staleness` flag as the rest of this list — it never
-  affects the default `replay` verdict, not even under `--strict`. Absent on a pre-v9 cassette → silently not
+  affects the default `replay` verdict, not even under `--strict`. `sessionFingerprint` is optional even on a
+  v9+ cassette (below v9 the cassette is refused at load, not silently tolerated) — absent → silently not
   checked (no false stale on an old, still-valid recording). A genuine mismatch is normally a hard fail —
   **except** when the session file was only resolved via a name-lookup fallback (its persisted source path
   was missing, so the cassette may have been relocated onto a tree that doesn't mirror the original layout
@@ -504,8 +504,8 @@ source dir (a dir not in a git repo falls back to a raw filesystem walk). **OS-j
 `Thumbs.db` / `desktop.ini`) is always excluded, so a Finder touch never re-stales a cassette. Opt out of git
 mode with `COWORK_HARNESS_GITSET=0`. Set `COWORK_HARNESS_DEBUG_SKILLHASH=1` to dump the exact file set on a
 mismatch. Declare per-plugin non-runtime paths in `.cowork-hashignore` / the session `staleness.hash_ignore`.
-Note `rehash` cannot migrate a pre-v6 cassette (the hash *input set* changed, not just the digest format) —
-re-record those.
+Any cassette recorded before this boundary is below the v9 read floor and is refused at load time with a
+re-record error — `rehash` never gets the chance to attempt a digest-only migration for it.
 
 ## Batch recording
 

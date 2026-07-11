@@ -1,7 +1,7 @@
 {
-  "$schema": "https://raw.githubusercontent.com/yaniv-golan/cowork-harness/main/schema/cassette.v7.json",
+  "$schema": "https://raw.githubusercontent.com/yaniv-golan/cowork-harness/main/schema/cassette.v10.json",
   "generator": "cowork-harness",
-  "cassetteVersion": 7,
+  "cassetteVersion": 10,
   "scenario": {
     "name": "report-check",
     "fidelity": "cowork",

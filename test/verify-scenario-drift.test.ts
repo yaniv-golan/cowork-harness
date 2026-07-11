@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
-import { scenarioContentDrift } from "../src/run/cassette.js";
+import { scenarioContentDrift, CASSETTE_VERSION } from "../src/run/cassette.js";
 
 // WS-A2: verify-cassettes must catch a committed scenario whose PROMPT diverged from the cassette's frozen
 // prompt — the fingerprint doesn't cover the prompt, so this was previously invisible. A resolvable+drifted
@@ -63,6 +63,7 @@ describe("scenarioContentDrift (function-level)", () => {
 // the built CLI so the whole path (emit → ok → schema) is exercised.
 const CLI = resolve("dist/cli.js");
 const cassetteFixture = (prompt: string) => ({
+  cassetteVersion: CASSETTE_VERSION,
   scenario: {
     name: "c",
     baseline: "latest",
@@ -111,6 +112,7 @@ describe.skipIf(!existsSync(CLI))("verify-cassettes gates on scenario prompt dri
     writeFileSync(
       join(d, "a.cassette.json"),
       JSON.stringify({
+        cassetteVersion: CASSETTE_VERSION,
         scenario: { prompt: "hi", session: "(inline)", assert: [] },
         events: [JSON.stringify({ type: "result", subtype: "success" })],
       }),

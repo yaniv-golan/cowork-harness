@@ -139,7 +139,7 @@ describe.skipIf(!can)("rehash CLI", () => {
     const sig = computeContentSig([skillDir]);
     const dir = mkdtempSync(join(tmpdir(), "cwh-rehash-"));
     const body = {
-      cassetteVersion: 2,
+      cassetteVersion: 9,
       scenario: {
         name: "s",
         baseline: "not-a-real-baseline",

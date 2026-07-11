@@ -136,8 +136,8 @@ describe("sessionFingerprintDrift (function-level)", () => {
   });
 });
 
-// End-to-end: verify-cassettes hard-fails a v9 session-fingerprint mismatch, and does NOT check a v8
-// cassette at all (same fixture, only cassetteVersion/sessionFingerprint differ) — mirrors
+// End-to-end: verify-cassettes hard-fails a v9 session-fingerprint mismatch, and does NOT check a v9
+// cassette that simply lacks the (optional) sessionFingerprint field — mirrors
 // verify-scenario-drift.test.ts's CLI-level pattern for prompt drift.
 const CLI = resolve("dist/cli.js");
 function envelope(args: string[], cwd: string): any {
@@ -183,16 +183,16 @@ describe.skipIf(!existsSync(CLI))("verify-cassettes gates on session-fingerprint
     expect(drifted.results[0].staleness.some((s: string) => /session-shape fingerprint/.test(s))).toBe(true);
   });
 
-  it("v8 cassette (no sessionFingerprint) is NOT checked even though the session drifted", () => {
-    const d = mkdtempSync(join(tmpdir(), "cwh-sfd-e2e-v8-"));
+  it("v9 cassette (no sessionFingerprint) is NOT checked even though the session drifted", () => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-sfd-e2e-v9-"));
     const folder = join(d, "proj");
     mkdirSync(folder, { recursive: true });
     writeFileSync(join(d, "s.yaml"), `folders:\n  - from: ${folder}\n`);
 
     const cassettePath = join(d, "c.cassette.json");
     const cassette = {
-      cassetteVersion: 8,
-      // no sessionFingerprint — a genuine pre-v9 cassette
+      cassetteVersion: 9,
+      // no sessionFingerprint — optional field, absent even at the v9 floor (backward-compat within v9+)
       scenario: {
         name: "c",
         baseline: "latest",

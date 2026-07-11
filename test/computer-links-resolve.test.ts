@@ -463,44 +463,6 @@ describe("replay classification — computer_links_resolve is a manifest key (no
     expect(entry?.pass).toBe(true);
   });
 
-  it("host-shaped normalizes via the recorded session's connected-folder prefix on replay", async () => {
-    const sessionsRoot = mkdtempSync(join(tmpdir(), "cwh-replay-session-"));
-    const hostFolder = join(sessionsRoot, "myproject-src");
-    mkdirSync(hostFolder, { recursive: true });
-    const sessionPath = join(sessionsRoot, "session.yaml");
-    writeFileSync(sessionPath, `folders:\n  - from: ${hostFolder}\n`);
-
-    const root = mkdtempSync(join(tmpdir(), "cwh-replay-manifest4-"));
-    mkdirSync(join(root, "myproject-src"), { recursive: true });
-    writeFileSync(join(root, "myproject-src", "notes.md"), "x");
-    const artifacts = buildManifest(root, undefined, ["myproject-src"]);
-
-    const cassette: Cassette = {
-      // Pinned to v8 (not CASSETTE_VERSION): this test exercises the LEGACY current-session
-      // reconstruction fallback (no persisted folderPrefixMap). A v9+ cassette no longer falls back to
-      // re-reading the session file — see the "v9 cassette WITHOUT a persisted folderPrefixMap" test
-      // below, which covers the same fixture shape under the new behavior.
-      cassetteVersion: 8,
-      scenario: {
-        name: "t",
-        baseline: "latest",
-        session: "session.yaml", // relative to cassetteDir, see loadCassetteSessionFolders
-        fidelity: "container",
-        prompt: "do the thing",
-        answers: [],
-        expect_denied: [],
-        assert: [{ computer_links_resolve: true }],
-      },
-      events: events(`computer://${hostFolder}/notes.md`),
-      controlOut: [],
-      artifacts,
-      userVisibleRoots: ["outputs", "myproject-src"],
-    } as unknown as Cassette;
-    const result = await replayCassette(cassette, [], { cassetteDir: sessionsRoot });
-    const entry = result.assertions.find((a) => "computer_links_resolve" in a.assertion);
-    expect(entry?.pass).toBe(true);
-  });
-
   it("v9 cassette WITH a persisted folderPrefixMap resolves via it — NOT the current session (which doesn't even exist)", async () => {
     // Deliberately no session.yaml on disk anywhere — proves the persisted map alone drives resolution.
     const hostFolder = "/some/recorded/host/myproject-src";
@@ -602,11 +564,10 @@ describe("replay classification — computer_links_resolve is a manifest key (no
     expect(liveOutcome.resolved).toBe(true);
 
     // REPLAY: no live filesystem — must resolve from the materialized manifest's 0-byte placeholder.
+    // This test is about the body-less/truncated-entry resolution path, not folderPrefixMap persistence
+    // itself, so the map is supplied directly (v9+ resolves via the persisted map, not session reconstruction).
     const cassette: Cassette = {
-      // Pinned to v8: legacy current-session reconstruction fallback (see the note on the analogous
-      // test above) — this test is about the body-less/truncated-entry resolution path, not the
-      // folderPrefixMap persistence itself.
-      cassetteVersion: 8,
+      cassetteVersion: CASSETTE_VERSION,
       scenario: {
         name: "t",
         baseline: "latest",
@@ -621,6 +582,7 @@ describe("replay classification — computer_links_resolve is a manifest key (no
       controlOut: [],
       artifacts,
       userVisibleRoots: ["outputs", "myproject-src"], // full root set — body-less, not excluded
+      folderPrefixMap: [{ from: hostFolder, mount: "myproject-src" }],
     } as unknown as Cassette;
     const result = await replayCassette(cassette, [], { cassetteDir: sessionsRoot });
     const replayEntry = result.assertions.find((a) => "computer_links_resolve" in a.assertion);

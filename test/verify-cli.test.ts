@@ -21,6 +21,7 @@ function run(args: string[], cwd: string) {
 }
 
 const cassette = (events: string[]) => ({
+  cassetteVersion: 9,
   scenario: {
     name: "c",
     baseline: "latest",

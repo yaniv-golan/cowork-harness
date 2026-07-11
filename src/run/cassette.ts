@@ -207,25 +207,14 @@ export interface Cassette {
   environment?: { location: "local" | "cloud"; tier?: string; agentBinaryFormat?: string };
 }
 
-/** Current cassette format version. Readers tolerate ABSENT (legacy → 0) and warn on a FUTURE version. */
-// v2: the fingerprint may be SCOPED to a scenario's `skills:` (whole-tree default stays byte-identical
-// to v1). Bumped because a scoped `skillHash` is not reproducible by a pre-v2 reader — which would recompute
-// whole-tree and mis-flag a scoped cassette as stale; the version lets such a reader warn instead.
-// v3: adds `contentSig` to Fingerprint — an algorithm-independent content fingerprint that survives
-// hash-algorithm changes, enabling `rehash` to migrate cassettes without a full re-record.
-// v4: persists `userVisibleRoots` (outputs + resolved folder mount names) so replay derives
-// user_visible_artifact from the real mount set instead of a hardcoded `.projects/` prefix. A folder-
-// artifact cassette recorded pre-v4 has no folder root stored → must be RE-RECORDED, not rehashed
-// (rehash only re-hashes skill fingerprints; it cannot reconstruct folder names).
-// v5: `skillHash` EXCLUDES OS-junk files (.DS_Store/Thumbs.db/desktop.ini/…) so an out-of-band OS
-// metadata touch can't re-stale a cassette; per-file manifest (`fileSigs`) added for exact-diff reporting.
-// v6 (staleness redesign — breaking): `contentSig` is UNIFIED onto the `skillHash` walk (same file set:
-// OS-junk/scope/ignore + in-tree-symlink-by-target), and the **git-tracked file set is the DEFAULT boundary**
-// (a dir in a git work tree hashes/delivers only tracked files; non-repo dirs fall back to raw). The
-// `contentSig` algorithm therefore changed → a pre-v6 cassette's `contentSig` is non-comparable, so `rehash`
-// routes pre-v6 cassettes to a re-record (honest "algorithm changed" message, not "content changed").
-// v7: NUL-byte entry separator in hashDir and computeContentSig (replaces `\n`) to prevent hash collisions
-// for file paths containing newline characters.
+/** Current cassette format version. Readers tolerate a FUTURE version (warn) but REFUSE anything below
+ *  MIN_SUPPORTED_CASSETTE_VERSION (see readCassette) — pre-1.0, no legacy-format compatibility is
+ *  maintained. Historical summary of the now-unreadable v2-v8 evolution (fingerprint scoping in v2,
+ *  algorithm-independent contentSig in v3, userVisibleRoots persistence in v4 — never published — OS-junk
+ *  exclusion + per-file manifest in v5, the git-tracked-file-set staleness redesign in v6, NUL-byte entry
+ *  separators in v7, the folded-content-sha manifest format in v8): these are why the number is 10, but
+ *  their branch-by-branch behavior no longer exists in this codebase.
+ */
 // v9: two OPTIONAL fields, neither touching skillHash/contentSig (CONTENTSIG_ALGO stays 4 — a v8
 // cassette's skill fingerprint remains directly comparable, no re-record forced by this bump alone):
 //  `sessionFingerprint` — a hash of the session's content-relevant SHAPE (connected folders, plugin/
@@ -244,13 +233,19 @@ export interface Cassette {
 //  recorded a link stray in the first place). `rehash` cannot synthesize link entries from an old
 //  manifest, so it routes a v9→v10 bump to a re-record (see cmdRehash).
 export const CASSETTE_VERSION = 10;
-// The contentSig algorithm version. Bumped whenever computeContentSig's INPUT/encoding changes (the v6
-// unification). `rehash` only byte-compares contentSig within the same algo version; across a bump it
-// re-records. Derived from cassetteVersion: < 6 ⇒ algo 1 (legacy), ≥ 6 ⇒ algo 2 (unified),
-// ≥ 7 ⇒ algo 3 (NUL-byte separator), ≥ 8 ⇒ algo 4 (skillHash folds fixed-length content shas +
-// contentSig/link entries are type-prefixed & NUL-framed — closes unframed-concatenation collisions).
+
+/** Minimum cassette format version this build will read. Pre-1.0.0: no legacy-format compatibility is
+ *  maintained below this floor — an older cassette must be re-recorded, not silently tolerated. Raising
+ *  this floor is how the pre-v9 legacy-reconstruction branches (buildFolderPrefixMap, cmdRehash's
+ *  pre-v3/pre-v6 checks, contentSigAlgoOf) became dead code and were deleted. */
+export const MIN_SUPPORTED_CASSETTE_VERSION = 9;
+
+// The contentSig algorithm version: every v9+ cassette (the read floor) was recorded under this same
+// algorithm — skillHash folds fixed-length content shas and contentSig/link entries are type-prefixed &
+// NUL-framed (closes unframed-concatenation collisions). Kept as documentation of which algorithm
+// version is now implicitly guaranteed by the read floor; no code branches on it anymore (the classifier
+// that once compared a per-cassette algorithm version against this constant was deleted with the floor).
 const CONTENTSIG_ALGO = 4;
-const contentSigAlgoOf = (cassetteVersion: number) => (cassetteVersion >= 8 ? 4 : cassetteVersion >= 7 ? 3 : cassetteVersion >= 6 ? 2 : 1);
 
 /** Canonical URL of the JSON Schema for this cassette format version.
  *  Appears in every written cassette as `$schema` so editors and unfamiliar readers
@@ -1537,6 +1532,14 @@ export function readCassette(path: string): { cassette: Cassette } | { error: st
   // from replay evaluation and green by omission. A cassette recorded by a NEWER harness (future version) may
   // legitimately carry an assertion key this build doesn't know: keep warn-and-tolerate there (forward-compat).
   const recordedVersion = cassette.cassetteVersion ?? 0;
+  if (recordedVersion < MIN_SUPPORTED_CASSETTE_VERSION) {
+    return {
+      error:
+        `cassette recorded at v${recordedVersion} is older than the minimum supported version ` +
+        `v${MIN_SUPPORTED_CASSETTE_VERSION} — re-record this cassette (pre-1.0, no compatibility is ` +
+        `maintained for cassette formats below v${MIN_SUPPORTED_CASSETTE_VERSION})`,
+    };
+  }
   const isFutureCassette = recordedVersion > CASSETTE_VERSION;
   const assertErrors: string[] = [];
   scn.assert.forEach((a, i) => {
@@ -3400,7 +3403,7 @@ export async function cmdVerifyCassettes(args: string[]) {
  *
  *  Migrates cassettes recorded under an older `cassetteVersion` to the current version
  *  WITHOUT a full re-record — but ONLY when `contentSig` confirms the skill content is
- *  provably unchanged. Cassettes without `contentSig` (pre-v3) cannot be rehashed; re-record once.
+ *  provably unchanged (every v9+ cassette — the read floor — always has one).
  *
  *  Safe to run repeatedly: already-current cassettes are reported as skipped. */
 export function cmdRehash(args: string[]): void {
@@ -3469,8 +3472,8 @@ export function cmdRehash(args: string[]): void {
     // promises. A silent version-stamp would mint a v10-labeled cassette that never actually captured its
     // links. Route a v9→v10 bump to a re-record. Placed AFTER the "already current" skip but this only
     // needs to block the eventual STAMP — the content/baseline gates below still run and their own
-    // skip/error reasons (baseline drift, no contentSig) take precedence, so this fires only when a
-    // cassette would otherwise have migrated cleanly.
+    // skip/error reasons (baseline drift) take precedence, so this fires only when a cassette would
+    // otherwise have migrated cleanly.
     const crossesIntoV10 = recordedVersion < 10 && CASSETTE_VERSION >= 10;
 
     // No fingerprint — no skill dirs were tracked; only baseline staleness applies, which requires re-record.
@@ -3479,16 +3482,6 @@ export function cmdRehash(args: string[]): void {
         file,
         action: "skipped",
         reason: "no skillHash in fingerprint — only baseline drift is possible; re-record if needed",
-      });
-      continue;
-    }
-
-    // Pre-v3: no contentSig present — can't verify content is unchanged; must re-record once to adopt it.
-    if (!cassette.fingerprint.contentSig) {
-      results.push({
-        file,
-        action: "error",
-        reason: "no contentSig (recorded before v3) — re-record once to enable `rehash` for future format bumps",
       });
       continue;
     }
@@ -3516,19 +3509,8 @@ export function cmdRehash(args: string[]): void {
       continue;
     }
 
-    // v6: contentSig is only comparable WITHIN the same algorithm version. The v6 unification changed the
-    // algorithm, so a pre-v6 cassette's contentSig is apples-to-oranges — route it to a re-record with an
-    // HONEST message (NOT "content changed", which would falsely imply the skill changed).
-    if (contentSigAlgoOf(recordedVersion) !== CONTENTSIG_ALGO) {
-      results.push({
-        file,
-        action: "error",
-        reason: `the content-fingerprint algorithm changed in v${CASSETTE_VERSION} (unified file set / git-tracked) — \`rehash\` cannot bridge an input-set change; re-record to migrate`,
-      });
-      continue;
-    }
-
-    // The content check: current contentSig must match the recorded one (same algo version).
+    // The content check: current contentSig must match the recorded one. Every v9+ cassette (the read
+    // floor) was recorded under CONTENTSIG_ALGO, so no algorithm-mismatch branch is needed here.
     if (liveFingerprint.contentSig !== cassette.fingerprint.contentSig) {
       results.push({
         file,
@@ -3598,11 +3580,10 @@ export function cmdRehash(args: string[]): void {
  *  `scenario.session`'s `folders:` in file order — the SAME positional correspondence
  *  `buildLaunchPlan` itself relies on (one mount per `session.folders` entry, in that array's order) —
  *  but computed ONCE, right now, against the exact session state that produced `recordRoots`. That's
- *  the whole point: unlike the legacy replay-time reconstruction (`loadCassetteSessionFolders` below,
- *  still used for a pre-v9 cassette), this can never be fooled by a session file that changes AFTER
- *  record but happens to keep the same folder count. Returns undefined when the lengths disagree (an
- *  inline scenario, an unreadable/unparseable session, or a genuine mismatch) — a v9 cassette with no
- *  persisted map is a signal replay must respect, not paper over (see `buildFolderPrefixMap` / Finding 25). */
+ *  the whole point: unlike a replay-time reconstruction would be, this can never be fooled by a session
+ *  file that changes AFTER record but happens to keep the same folder count. Returns undefined when the
+ *  lengths disagree (an inline scenario, an unreadable/unparseable session, or a genuine mismatch) — a v9
+ *  cassette with no persisted map is a signal replay must respect, not paper over (see `buildFolderPrefixMap`). */
 function buildRecordTimeFolderPrefixMap(scenario: Scenario, recordRoots: string[]): Array<{ from: string; mount: string }> | undefined {
   const roots = recordRoots.filter((r) => r !== "outputs");
   const folders = loadCassetteSessionFolders(scenario.session, undefined);
@@ -3618,9 +3599,9 @@ function buildRecordTimeFolderPrefixMap(scenario: Scenario, recordRoots: string[
  * staleness fingerprinting). Returns `[]` (never throws) when the session file can't be read — a
  * folder-shaped host link then correctly reports "no recorded prefix matched" instead of crashing replay.
  *
- * ONLY the legacy (pre-v9) replay path below calls this now — see `buildFolderPrefixMap`. A v9+
- * cassette uses its persisted `folderPrefixMap` instead of re-deriving this from whatever the session
- * file looks like AT REPLAY TIME.
+ * ONLY the record-time path (`buildRecordTimeFolderPrefixMap` above) calls this now. Replay never does —
+ * a v9+ cassette uses its persisted `folderPrefixMap` instead of re-deriving this from whatever the
+ * session file looks like AT REPLAY TIME (see `buildFolderPrefixMap`).
  */
 function loadCassetteSessionFolders(sessionPath: string, cassetteDir?: string): { from: string }[] {
   if (sessionPath === "(inline)") return [];
@@ -3643,38 +3624,11 @@ interface FolderPrefixResolution {
   requiredButAbsent: boolean;
 }
 
-/**
- * Build the replay-lane `folderPrefixes` map (recorded connected-folder host path -> its resolved
- * mount name) for `computer_links_resolve`.
- *
- * v9+ cassette: use the PERSISTED `folderPrefixMap` (built at record time by
- * `buildRecordTimeFolderPrefixMap`) verbatim — never re-read the session file at replay time. Doing so
- * is exactly the bug this persisted map exists to close: a session file that changed since record but
- * still declares the same folder COUNT would otherwise zip cleanly into the WRONG host-path ->
- * mount-name pairs, a silent misresolution. When a v9+ cassette unexpectedly carries no persisted map,
- * return an empty map with `requiredButAbsent: true` — the caller must not fall back to reconstruction.
- *
- * Pre-v9 cassette: keep the legacy behavior — reconstruct from `userVisibleRoots` (persisted at record
- * time, v4+; lists `["outputs", ...folder mount names]` in the SAME order `buildLaunchPlan` pushes
- * folder mounts) zipped positionally against `loadCassetteSessionFolders`'s read of the CURRENT session
- * file. Only zips when the lengths agree; a legacy cassette without `userVisibleRoots`, or one whose
- * session file changed folder count since recording, yields an empty map (host-shaped folder links then
- * fall through to "no recorded prefix matched", never a wrong match) — unchanged, `requiredButAbsent`
- * never applies to a pre-v9 cassette.
- */
-function buildFolderPrefixMap(cassette: Cassette, cassetteDir?: string): FolderPrefixResolution {
-  const cassetteVersion = cassette.cassetteVersion ?? 0;
-  if (cassetteVersion >= 9) {
-    if (cassette.folderPrefixMap) return { map: new Map(cassette.folderPrefixMap.map((e) => [e.from, e.mount])), requiredButAbsent: false };
-    return { map: new Map(), requiredButAbsent: true };
-  }
-  const map = new Map<string, string>();
-  const roots = (cassette.userVisibleRoots ?? []).filter((r) => r !== "outputs");
-  const folders = loadCassetteSessionFolders(cassette.scenario.session, cassetteDir);
-  if (roots.length === folders.length) {
-    for (let i = 0; i < roots.length; i++) map.set(folders[i].from, roots[i]);
-  }
-  return { map, requiredButAbsent: false };
+/** All cassettes read by this build are v9+ (see MIN_SUPPORTED_CASSETTE_VERSION), so folderPrefixMap
+ *  is always the record-time source of truth — no reconstruction-from-session fallback is needed. */
+function buildFolderPrefixMap(cassette: Cassette): FolderPrefixResolution {
+  if (cassette.folderPrefixMap) return { map: new Map(cassette.folderPrefixMap.map((e) => [e.from, e.mount])), requiredButAbsent: false };
+  return { map: new Map(), requiredButAbsent: true };
 }
 
 /** Assertion keys ALWAYS evaluated on replay, independent of controlOut/manifest presence. Exported as the
@@ -3951,7 +3905,7 @@ export async function replayCassette(
       };
   // computer_links_resolve's replay-lane folder-prefix resolution (Finding 24/25) — computed once,
   // outside the try, since it doesn't depend on anything materializeManifest produced.
-  const folderPrefixResolution = buildFolderPrefixMap(cassette, opts.cassetteDir);
+  const folderPrefixResolution = buildFolderPrefixMap(cassette);
   // materializeManifest created a temp dir (`replayWorkRoot`) above; everything below uses it and
   // then returns. Wrap the rest in try/finally so the temp dir is removed on every exit path (normal
   // return OR a throw from evaluate/assert building) — otherwise `cwh-replay-*` dirs leak under tmpdir
