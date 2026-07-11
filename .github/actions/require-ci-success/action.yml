@@ -1,0 +1,32 @@
+name: require-ci-success
+description: >-
+  Poll ci.yml for this commit and fail unless it concluded success (publish gate — no weaker
+  than the merge gate). Fail-closed: tagging a commit with no findable ci.yml run (never
+  pushed to main, or the run was pruned) times out after ~30 min and refuses; a re-pushed old
+  tag predating this action file fails at composite resolution (also closed). Manual
+  republish path: workflow_dispatch skips this gate by design (see publish-image.yml).
+runs:
+  using: composite
+  steps:
+    - name: Require ci.yml success for this commit
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      # Written but not yet verified headless — verify on the first tag pushed after this lands.
+      # `--event push`: the tag SHA's ci.yml run is always a push event; without the filter a
+      # same-SHA pull_request run could in principle be selected instead.
+      run: |
+        SHA="$GITHUB_SHA"
+        echo "Waiting for ci.yml to complete for $SHA…"
+        for i in $(seq 1 60); do
+          ID=$(gh run list -R "$GITHUB_REPOSITORY" --workflow=ci.yml --commit="$SHA" --event push -L1 \
+               --json databaseId -q '.[0].databaseId' 2>/dev/null || true)
+          if [ -z "$ID" ]; then echo "  no ci.yml run yet… ($i/60)"; sleep 30; continue; fi
+          STATUS=$(gh run view "$ID" -R "$GITHUB_REPOSITORY" --json status -q '.status')
+          if [ "$STATUS" != "completed" ]; then echo "  ci.yml $ID: $STATUS… ($i/60)"; sleep 30; continue; fi
+          CONCL=$(gh run view "$ID" -R "$GITHUB_REPOSITORY" --json conclusion -q '.conclusion')
+          echo "ci.yml run $ID concluded: $CONCL"
+          [ "$CONCL" = "success" ] && exit 0
+          echo "::error::ci.yml for $SHA concluded '$CONCL' — refusing to publish"; exit 1
+        done
+        echo "::error::timed out waiting for ci.yml on $SHA"; exit 1
