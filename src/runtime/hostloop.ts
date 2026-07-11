@@ -111,7 +111,8 @@ export function spawnHostLoop(
   // Shell-access prompt section. Host-loop excludes the asar's HOST_LOOP_EXCLUDED_BUILTIN_TOOLS =
   // {Bash, NotebookEdit, REPL, JavaScript, WebFetch}; of those only Bash/NotebookEdit/WebFetch exist in
   // the CLI agent's registry, so disallowing the three real ones is the faithful set.
-  const systemPromptAppend = [opts.systemPromptAppend, hostLoopShellSection(baseline, m.sessionRoot, mntRoot, plan)]
+  const hostOutputsDir = join(mntHost, "outputs");
+  const systemPromptAppend = [opts.systemPromptAppend, hostLoopShellSection(baseline, m.sessionRoot, mntRoot, plan, hostOutputsDir)]
     .filter(Boolean)
     .join("\n\n");
 
@@ -126,7 +127,6 @@ export function spawnHostLoop(
     disallowed: ["Bash", "WebFetch", "NotebookEdit"],
     extraTools: ["mcp__workspace__bash", "mcp__workspace__web_fetch"],
   });
-  const hostOutputsDir = join(mntHost, "outputs");
   const nativeEnv = buildHostLoopNativeEnv(baseline, {
     configDir: plan.configDir,
     extra: { CLAUDE_PLUGIN_ROOT: claudePluginRootHost ?? "", ...runtimeAuthEnv() },
@@ -250,7 +250,13 @@ function resolveClaudePluginRootHostPath(plan: LaunchPlan, mntHost: string): str
   return join(mntHost, pluginMounts[0].mountPath);
 }
 
-function hostLoopShellSection(baseline: PlatformBaseline, sessionRoot: string, mntRoot: string, plan: LaunchPlan): string {
+function hostLoopShellSection(
+  baseline: PlatformBaseline,
+  sessionRoot: string,
+  mntRoot: string,
+  plan: LaunchPlan,
+  hostOutputsDir: string,
+): string {
   const appVersion = baseline.appVersion;
   // Generator era (Desktop >= 1.14271.0): the section is built from live mount state, not a static
   // file. Branch BEFORE any file read so generator-era versions never hit the missing-asset throw.
@@ -263,6 +269,7 @@ function hostLoopShellSection(baseline: PlatformBaseline, sessionRoot: string, m
       folders: plan.mounts.filter((m) => m.kind === "folder"),
       uploads: plan.mounts.filter((m) => m.kind === "upload"),
       skillsConfigDir: skillsPresent ? plan.configDir : undefined,
+      hostOutputsDir,
     });
   }
 

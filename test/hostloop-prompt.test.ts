@@ -9,6 +9,7 @@ import { generateHostLoopShellSection } from "../src/runtime/hostloop-prompt.js"
 describe("generateHostLoopShellSection (1.14271.0 dynamic table)", () => {
   const SESSION = "/sessions/abc";
   const MNT = "/sessions/abc/mnt";
+  const OUT = "/Users/me/runs/abc/work/session/mnt/outputs";
 
   it("canonical case: one work folder + skills + uploads + outputs", () => {
     const out = generateHostLoopShellSection({
@@ -17,6 +18,7 @@ describe("generateHostLoopShellSection (1.14271.0 dynamic table)", () => {
       folders: [{ hostPath: "/Users/me/proj", mountPath: ".projects/proj" }],
       uploads: [{ hostPath: "/Users/me/attachments/foo.txt", mountPath: "uploads/foo.txt" }],
       skillsConfigDir: "/work/.claude",
+      hostOutputsDir: OUT,
     });
     expect(out).toBe(
       `## Shell access
@@ -25,7 +27,7 @@ Shell commands use \`mcp__workspace__bash\` and run in an isolated Linux environ
 
 Paths in bash differ from what file tools (Read/Write/Edit) see:
 - /Users/me/proj → /sessions/abc/mnt/.projects/proj/
-- /sessions/abc → /sessions/abc/mnt/outputs/  (your outputs directory — cwd)
+- ${OUT} → /sessions/abc/mnt/outputs/  (your outputs directory — cwd)
 - /work/.claude/skills → /sessions/abc/mnt/.claude/skills/ (read-only)
 - /Users/me/attachments → /sessions/abc/mnt/uploads/ (read-only, attached files)
 
@@ -41,6 +43,7 @@ The Linux environment boots in the background. If bash returns "Workspace still 
       mntRoot: MNT,
       folders: [],
       uploads: [],
+      hostOutputsDir: OUT,
     });
     expect(out).toBe(
       `## Shell access
@@ -48,9 +51,9 @@ The Linux environment boots in the background. If bash returns "Workspace still 
 Shell commands use \`mcp__workspace__bash\` and run in an isolated Linux environment. Each call is independent — no cwd or env carryover between calls. Use absolute paths.
 
 Paths in bash differ from what file tools (Read/Write/Edit) see:
-- /sessions/abc → /sessions/abc/mnt/outputs/  (your outputs directory — cwd)
+- ${OUT} → /sessions/abc/mnt/outputs/  (your outputs directory — cwd)
 
-So a file you Read at /sessions/abc/foo.txt is reached in bash at /sessions/abc/mnt/outputs/foo.txt — use the mapping above to translate.
+So a file you Read at ${OUT}/foo.txt is reached in bash at /sessions/abc/mnt/outputs/foo.txt — use the mapping above to translate.
 
 No user folders are connected yet. To work with the user's files, request a folder with mcp__cowork__request_cowork_directory.
 
@@ -67,6 +70,7 @@ The Linux environment boots in the background. If bash returns "Workspace still 
         { hostPath: "/w/beta", mountPath: ".projects/beta" },
       ],
       uploads: [],
+      hostOutputsDir: OUT,
     });
     expect(out).toContain("- /w/alpha → /sessions/abc/mnt/.projects/alpha/\n- /w/beta → /sessions/abc/mnt/.projects/beta/");
     // example line anchored to the FIRST folder
@@ -83,15 +87,32 @@ The Linux environment boots in the background. If bash returns "Workspace still 
       mntRoot: MNT,
       folders: [{ hostPath: "/w/p", mountPath: ".projects/p" }],
       uploads: [],
+      hostOutputsDir: OUT,
     });
     expect(out).not.toContain("read-only");
     expect(out).not.toContain("Skill scripts can be run");
   });
 
   it("preserves the exact unicode glyphs and bash tool name", () => {
-    const out = generateHostLoopShellSection({ sessionRoot: SESSION, mntRoot: MNT, folders: [], uploads: [] });
+    const out = generateHostLoopShellSection({ sessionRoot: SESSION, mntRoot: MNT, folders: [], uploads: [], hostOutputsDir: OUT });
     expect(out).toContain("→"); // U+2192
     expect(out).toContain("—"); // U+2014
     expect(out).toContain("`mcp__workspace__bash`");
+  });
+});
+
+describe("hostOutputsDir (production q=Ct??me)", () => {
+  const base = {
+    sessionRoot: "/sessions/vm_x",
+    mntRoot: "/sessions/vm_x/mnt",
+    folders: [],
+    uploads: [],
+  };
+  it("outputs bullet uses the HOST outputs dir when provided (file-tool side is a host path)", () => {
+    const out = generateHostLoopShellSection({ ...base, hostOutputsDir: "/Users/me/runs/x/work/session/mnt/outputs" });
+    expect(out).toContain("- /Users/me/runs/x/work/session/mnt/outputs → /sessions/vm_x/mnt/outputs/  (your outputs directory — cwd)");
+    // the no-folder translate example must use the SAME host path, never the VM sessionRoot
+    expect(out).toContain("a file you Read at /Users/me/runs/x/work/session/mnt/outputs/foo.txt");
+    expect(out).not.toContain("Read at /sessions/vm_x/foo.txt");
   });
 });
