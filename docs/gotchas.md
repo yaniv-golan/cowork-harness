@@ -8,9 +8,6 @@
 - **A git worktree can't find your token.** A worktree's `./.env` is gitignored and absent there even if the
   main checkout has one. Point at it: `cowork-harness --dotenv <path-to-main-checkout>/.env <cmd>`, or run
   `doctor` — it detects this and prints the exact remedy.
-- **A live run hangs with no egress activity.** Check the egress-proxy container actually started
-  (`docker ps` for `cowork-egress-proxy`); a race on first run can leave it building while the agent already
-  attempted a request. Re-run once the image is built (`doctor --tier container` reports proxy-image status).
 - **Reading `doctor`'s output.** Each line is one check: `✓` ok, `✗` fail (blocks the tier), `!` warn
   (works but worth fixing), `·` skipped (not needed for this tier). A `✗`/`!` line prints a `→ remedy`
   right after it — that's the fix, not a generic "something's wrong." Common `✗`s: Node < 20, no
