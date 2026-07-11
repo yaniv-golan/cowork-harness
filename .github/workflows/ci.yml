@@ -260,7 +260,16 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           if [ -z "$ANTHROPIC_API_KEY" ]; then
-            echo "::warning::ANTHROPIC_API_KEY not set — skipping live scenario suite."
+            # Hard-fail ONLY on non-PR canonical-repo events: push to main (the SHA release.yml gates
+            # on) AND workflow_dispatch (a manual re-run with a missing key should red, not soft-skip).
+            # Dependabot PRs run from same-repo branches, PASS the job's same-repo `if:`, but GitHub
+            # withholds Actions secrets from them — hard-failing there would red every weekly
+            # Dependabot PR. PR lanes were never the publish gate; the push lane is.
+            if [ "$GITHUB_REPOSITORY" = "yaniv-golan/cowork-harness" ] && [ "$GITHUB_EVENT_NAME" != "pull_request" ]; then
+              echo "::error::ANTHROPIC_API_KEY is not set on the canonical repo — the live scenario suite is part of the publish gate and must not silently skip."
+              exit 1
+            fi
+            echo "::warning::ANTHROPIC_API_KEY not set — skipping live scenario suite (fork or Dependabot PR)."
             echo "live=false" >> "$GITHUB_OUTPUT"
           else
             echo "live=true" >> "$GITHUB_OUTPUT"
