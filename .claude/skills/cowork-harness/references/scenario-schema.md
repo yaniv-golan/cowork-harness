@@ -319,7 +319,7 @@ dotted path.
 
 **VerdictSignals in `result.signals`:** `computeVerdict` pushes signals into `result.signals`; most
 are **fail**-severity (they flip the run's pass/exit code even though `result.result` itself stays
-`"success"`) and only two are **warn**-severity (informational, never flip pass/fail). Current signal
+`"success"`) and only three are **warn**-severity (informational, never flip pass/fail). Current signal
 codes (`VerdictSignal["code"]` in `src/run/verdict.ts`):
 
 | Code | Severity | Meaning |
@@ -337,10 +337,11 @@ codes (`VerdictSignal["code"]` in `src/run/verdict.ts`):
 | `stalled` | fail | The run ended on an unanswered question (opt out: `allow_stall`) |
 | `non_deterministic` | warn | The run was LLM/external/human-decided — not reproducible |
 | `prompt_asset_missing` | warn | The run proceeded with a missing prompt asset (`COWORK_HARNESS_ALLOW_MISSING_PROMPT=1`); fidelity is degraded |
+| `scan_unavailable` | warn | Post-run scan evidence unavailable (`RunResult.scan` undefined) — the host-path and outputs-delete guards did not run this run |
 
 A **fail**-severity signal does not change `result.result` (still `"success"`), but it DOES fail the
 overall run verdict and exit code — `assert result: success` alone won't catch it; check
-`result.signals[].severity` or the run's exit code. Only the two **warn** codes are truly benign.
+`result.signals[].severity` or the run's exit code. Only the three **warn** codes are truly benign.
 
 ## Replay class
 

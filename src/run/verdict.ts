@@ -15,7 +15,8 @@ export interface VerdictSignal {
     | "missing_capability"
     | "infra_error"
     | "stalled"
-    | "prompt_asset_missing";
+    | "prompt_asset_missing"
+    | "scan_unavailable";
   severity: "fail" | "warn";
   message: string;
 }
@@ -49,9 +50,13 @@ function guardRoster(result: RunResult, lane: "live" | "replay", signals: Verdic
   roster.push({ name: "capability-use", status: cap });
 
   // fail-when-silent scan guards run on the live lane only; a cassette can't reproduce them.
+  // scan-backed guards: absent scan evidence means the guard did NOT run — never ✓ for a guard
+  // that didn't run. `unverified` is the roster's existing vocabulary for exactly this.
+  const scanStatus = (code: VerdictSignal["code"]): GuardStatus =>
+    !live ? "na" : result.scan === undefined ? "unverified" : fired(code) ? "fired" : "ok";
   roster.push({ name: "permissive-auto-allow", status: !live ? "na" : fired("permissive_auto_allow") ? "fired" : "ok" });
-  roster.push({ name: "host-path", status: !live ? "na" : fired("host_path_leak") ? "fired" : "ok" });
-  roster.push({ name: "outputs-delete", status: !live ? "na" : fired("outputs_delete") ? "fired" : "ok" });
+  roster.push({ name: "host-path", status: scanStatus("host_path_leak") });
+  roster.push({ name: "outputs-delete", status: scanStatus("outputs_delete") });
   return roster;
 }
 
@@ -178,6 +183,19 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
           `the agent image omits capabilit(ies) the skill used: ${result.missingCapabilityUse.join(", ")} — ` +
           "likely a FALSE NEGATIVE (real Cowork ships them). Rebuild full parity (--build-arg COWORK_FULL_PARITY=1); " +
           "or assert allow_missing_capability: true if the fallback is equivalent.",
+      });
+
+    // absent scan evidence means host-path/outputs-delete did NOT run — a silent ✓ there would be its own
+    // false-green. Warn, not fail: matches the capability-probe `unverified` precedent, and a hard-fail would
+    // fail every verify-run over a pre-scan-era result.json. An authored scan assertion still hard-fails via
+    // scanMissing regardless of this signal.
+    if (result.scan === undefined)
+      signals.push({
+        code: "scan_unavailable",
+        severity: "warn",
+        message:
+          "post-run scan evidence unavailable (events.jsonl missing or corrupt) — the host-path and " +
+          "outputs-delete guards did not run; assert no_delete_in_outputs/transcript_no_host_path to hard-fail on this",
       });
 
     if (result.scan?.outputsDeletes.length && !authored.some((a) => a.no_delete_in_outputs !== undefined))
