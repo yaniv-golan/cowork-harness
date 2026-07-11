@@ -114,6 +114,25 @@ cowork-harness sync --allow-empty   # force-write past an empty allowlist or unk
    miss, since a deployment-gated placeholder can leave the *rendered* prompt byte-identical while the
    prompt *source* still changed.
 
+   **Includes the two-branch sub-agent append sentinel.** `checkSubagentPromptFacts` pins the
+   `subagent_env_hl`/`subagent_env_vm` key pair, the `hostLoopMode` branch ternary, a normalized
+   two-branch content fingerprint (`subagentAppendVersions` in
+   `baselines/prompts/cowork-system-prompt-fingerprints.json`), the substitution-map keys **and values**
+   (a host/VM cwd swap fails), the `resolveSection` gate shape, and the delivery-call argument list. On a
+   *legitimate* sub-agent append text change the fingerprint drifts and `sync` refuses to write. To
+   re-derive the two `sha16`s, after `npm run build` extract the new asar and feed the **per-file map**
+   (not the joined bundle) through the exported helpers:
+
+   ```bash
+   TMP=$(mktemp -d) && npx --yes @electron/asar extract <path-to>/app.asar "$TMP" \
+   && node -e "import('./dist/sync/cowork-sync.js').then(m => { const f = m.readMainBundleFiles('$TMP'); const s = m.extractSubagentBranchSlices(f); console.log({ hl: m.subagentBranchFingerprint(s.hl), vm: m.subagentBranchFingerprint(s.vm) }); })" \
+   && rm -rf "$TMP"
+   ```
+
+   Update the paraphrase asset(s) if the branch *semantics* moved, append a new `subagentAppendVersions`
+   entry (BOTH `hl` and `vm` are mandatory — a partial entry is itself a hard-fail), then re-run
+   `cowork-harness sync`.
+
 2. **`asarFingerprint` → a `--diff` tripwire (separate).** `sync` also records a fingerprint over the
    cowork-relevant code regions (`sliceCowork` tokens). It does **not** itself raise an unknown delta — a
    change just surfaces as a field diff under `sync --diff`, a hint to re-verify the extractor even when

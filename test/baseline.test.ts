@@ -27,6 +27,7 @@ import {
   type GateState,
   type PromptFingerprint,
 } from "../src/sync/cowork-sync.js";
+import { extractSubagentBranchSlices, subagentBranchFingerprint, checkSubagentPromptFacts } from "../src/sync/cowork-sync.js";
 import { MODELED_PLACEHOLDER_NAMES, INTENTIONALLY_UNMODELED_PLACEHOLDERS } from "../src/prompt.js";
 import { readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -1016,5 +1017,102 @@ describe("checkSubagentOverrideGate (gate 124685897 — subagent-append server o
     expect(flags).toHaveLength(1);
     expect(flags[0]).toMatch(/subagentPromptServerOverride/);
     expect(flags[0]).toMatch(/override/i);
+  });
+});
+
+/** Synthetic bundle reproducing the verified 1.20186.1 generator/delivery SHAPES with PARAPHRASED
+ *  branch bodies. Only the short discriminator fragments and interpolation shapes the sentinel keys
+ *  on ("on the user's machine" / "exist only in the sandbox" / "working directory `${a??b}`" /
+ *  "rooted at `${x}`" / "mounted under `${x}/mnt/`") are verbatim — the real branch texts never
+ *  enter the public tree; the committed golden below derives from THIS synthetic text, so the suite
+ *  is self-consistent, while the real-asar fingerprints live only in the baselines JSON. The inner
+ *  markdown backticks are escaped (\`) to reproduce real minified template syntax, so the branch
+ *  slicer decodes them instead of terminating the slice at the first inner backtick. */
+function subagentBundle(overrides: Partial<Record<"keys" | "ternary" | "hl" | "vm" | "gate" | "map" | "delivery", string>> = {}): string {
+  const keys = overrides.keys ?? `subagentEnvHostLoop:"subagent_env_hl",subagentEnvVm:"subagent_env_vm"`;
+  const hl =
+    overrides.hl ??
+    "## Cowork environment\\n\\nSynthetic hl body: a subagent on the user's machine; file tools act on the real filesystem (working directory \\`${t??i}\\`); shell goes through \\`mcp__${n.WORKSPACE_MCP_SERVER}__${n.WORKSPACE_BASH}\\` with attached folders mounted under \\`${i}/mnt/\\`.";
+  const vm =
+    overrides.vm ??
+    "## Cowork environment\\n\\nSynthetic vm body: a subagent whose shell runs in a Linux sandbox rooted at \\`${i}\\`; files written there exist only in the sandbox; attached folders are mounted under \\`${i}/mnt/\\`.";
+  const ternary = overrides.ternary ?? "?Q.subagentEnvHostLoop:Q.subagentEnvVm";
+  const gate = overrides.gate ?? `function krt(e,o,r){if(!$t("124685897"))return r;...}`;
+  const map = overrides.map ?? "{vmCwd:i,hostCwd:t??i,workspaceBash:w}";
+  const delivery =
+    overrides.delivery ??
+    "appendSubagentSystemPrompt:I.buildSubagentEnvironmentPrompt({vmProcessName:v,hostLoopMode:f,hostCwd:S??void 0,spSectionPrompts:P})";
+  return `const SP={${keys}};${gate};function zo({vmProcessName:v,hostLoopMode:h,hostCwd:t,spSectionPrompts:P}){const i=\`/sessions/\${v}\`;const s=h?\`${hl}\`:\`${vm}\`;const a=h${ternary};const l=krt(P,a,s);return"\\n\\n"+sub(l,${map},a)}const buildSubagentEnvironmentPrompt=zo;const opts={${delivery}};`;
+}
+// The sentinel takes a per-MODULE file map (readMainBundleFiles' output). One synthetic "generator
+// module" is enough for these fixtures; a real bundle has three modules — the join covers the literal
+// anchors, the module scoping covers the branch texts.
+const genFiles = (o?: Parameters<typeof subagentBundle>[0]) => new Map([["index.chunk-gen.js", subagentBundle(o)]]);
+
+describe("checkSubagentPromptFacts — hl/vm sub-agent append sentinel", () => {
+  const clean = extractSubagentBranchSlices(genFiles())!;
+  const committed = { versions: { "1.20186.1": { hl: subagentBranchFingerprint(clean.hl), vm: subagentBranchFingerprint(clean.vm) } } };
+
+  it("clean bundle → no flags", () => {
+    expect(checkSubagentPromptFacts(genFiles(), committed)).toEqual([]);
+  });
+  it("body-text edit → fingerprint mismatch flags (head phrases alone would miss it)", () => {
+    const files = new Map([["index.chunk-gen.js", subagentBundle().replace("attached folders mounted", "attached folders placed")]]);
+    expect(checkSubagentPromptFacts(files, committed).some((f) => /fingerprint/.test(f))).toBe(true);
+  });
+  it("host/VM cwd SWAP in the hl branch → substitution-VALUE proof flags", () => {
+    // keeps the discriminator fragment AND both interpolation shapes (so slicing + the value proof
+    // run) but rebinds the mount to the HOST cwd instead of the vm session root — a genuine swap.
+    const swapped = genFiles({
+      hl: "## Cowork environment\\n\\nSynthetic hl body: a subagent on the user's machine (working directory \\`${t??i}\\`) with attached folders mounted under \\`${t}/mnt/\\`.",
+    });
+    expect(checkSubagentPromptFacts(swapped, null).some((f) => /substitution|hl substitution/.test(f))).toBe(true);
+  });
+  it("VM-branch root/mount BINDING mismatch → substitution-VALUE proof flags", () => {
+    const badVm = genFiles({
+      vm: "## Cowork environment\\n\\nSynthetic vm body: a subagent whose shell runs in a Linux sandbox rooted at \\`${i}\\`; files written there exist only in the sandbox; attached folders are mounted under \\`${j}/mnt/\\`.",
+    });
+    expect(checkSubagentPromptFacts(badVm, null).some((f) => /vm substitution/.test(f))).toBe(true);
+  });
+  it("key-pair renamed → flags", () => {
+    expect(
+      checkSubagentPromptFacts(genFiles({ keys: `subagentEnvHost:"subagent_env_hl",subagentEnvVm:"subagent_env_vm"` }), null).length,
+    ).toBeGreaterThan(0);
+  });
+  it("branch ternary inverted (vm-first) → flags", () => {
+    expect(checkSubagentPromptFacts(genFiles({ ternary: "?Q.subagentEnvVm:Q.subagentEnvHostLoop" }), null).length).toBeGreaterThan(0);
+  });
+  it("substitution map key renamed → flags", () => {
+    expect(checkSubagentPromptFacts(genFiles({ map: "{cwdVm:i,hostCwd:t??i,workspaceBash:w}" }), null).length).toBeGreaterThan(0);
+  });
+  it("delivery call missing spSectionPrompts → flags", () => {
+    expect(
+      checkSubagentPromptFacts(
+        genFiles({
+          delivery: "appendSubagentSystemPrompt:I.buildSubagentEnvironmentPrompt({vmProcessName:v,hostLoopMode:f,hostCwd:S??void 0})",
+        }),
+        null,
+      ).length,
+    ).toBeGreaterThan(0);
+  });
+  it("gate id changed in resolveSection → flags", () => {
+    expect(checkSubagentPromptFacts(genFiles({ gate: `function krt(e,o,r){if(!$t("999"))return r;...}` }), null).length).toBeGreaterThan(0);
+  });
+  it("DECOY: literals all present but the generator MODULE is gone (disconnected) → flags", () => {
+    // literals live in one module; the discriminators/generator in NONE — no module satisfies the
+    // co-occurrence, so the branch-text slice fails. Proves per-module connectivity is required.
+    const decoy = new Map([
+      ["a.js", `const SP={subagentEnvHostLoop:"subagent_env_hl",subagentEnvVm:"subagent_env_vm"};`],
+      ["b.js", `const t="on the user's machine";`], // no buildSubagentEnvironmentPrompt, no vm discriminator
+      ["c.js", `const u="exist only in the sandbox";`],
+    ]);
+    expect(checkSubagentPromptFacts(decoy, committed).some((f) => /generator branch texts/.test(f))).toBe(true);
+  });
+  it("PARTIAL committed entry (hl only) → hard-fail (a missing vm fingerprint must not silently pass)", () => {
+    const partial = { versions: { "1.20186.1": { hl: committed.versions["1.20186.1"].hl } as { hl: string; vm: string } } };
+    expect(checkSubagentPromptFacts(genFiles(), partial).some((f) => /missing an hl or vm fingerprint/.test(f))).toBe(true);
+  });
+  it("no committed fingerprints → hard-fail flag (never a silent skip)", () => {
+    expect(checkSubagentPromptFacts(genFiles(), null).some((f) => /fingerprint/.test(f))).toBe(true);
   });
 });
