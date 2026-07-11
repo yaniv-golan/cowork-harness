@@ -367,6 +367,9 @@ observations that nuance the verdict rather than flip it:
 - `prompt_asset_missing` (**warn**) — the run proceeded with a missing prompt asset (e.g.
   `COWORK_HARNESS_ALLOW_MISSING_PROMPT=1`); fidelity is degraded (the agent ran, but not against the full
   faithful prompt surface).
+- `scan_unavailable` (**warn**) — post-run scan evidence unavailable (`RunResult.scan` undefined); the
+  host-path and outputs-delete guards did not run this run (assert `no_delete_in_outputs` /
+  `transcript_no_host_path` to hard-fail on this instead).
 
 See the skill reference [`scenario-schema.md`](../.claude/skills/cowork-harness/references/scenario-schema.md) for the full signal list.
 

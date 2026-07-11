@@ -195,4 +195,17 @@ describe("computeVerdict (the single verdict source)", () => {
     expect(computeVerdict(optIn, "live").pass).toBe(true); // allow_stall suppresses the stall (standalone modifier)
     expect(computeVerdict(rr({}), "live").signals.some((s) => s.code === "stalled")).toBe(false); // not stalled → no signal
   });
+
+  it("reports host-path/outputs-delete as unverified (not ok) when scan evidence is absent", () => {
+    const v = computeVerdict(rr({ scan: undefined }), "live");
+    const byName = Object.fromEntries(v.guards.map((g) => [g.name, g.status]));
+    expect(byName["host-path"]).toBe("unverified");
+    expect(byName["outputs-delete"]).toBe("unverified");
+  });
+
+  it("emits a warn signal when scan evidence is absent on the live lane", () => {
+    const v = computeVerdict(rr({ scan: undefined }), "live");
+    expect(v.signals).toContainEqual(expect.objectContaining({ code: "scan_unavailable", severity: "warn" }));
+    expect(v.pass).toBe(true); // warn, not fail
+  });
 });
