@@ -41,7 +41,7 @@
     },
     "resources": {
       "type": "object",
-      "description": "Resource telemetry sampled during the run (tier, sample count/interval, peak RSS bytes, avg/peak CPU%). Live lane only."
+      "description": "Resource telemetry sampled during the run (tier, sample count/interval, peak RSS bytes, avg/peak CPU%, malformed-line and failed-probe counts). Live lane only."
     },
     "contextEvents": {
       "type": "array",

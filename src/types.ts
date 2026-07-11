@@ -1152,5 +1152,9 @@ export interface RunResult {
      *  telemetry is partially corrupt — resource assertions fail malformed rather than silently
      *  dropping the bad lines. Absent on cassettes recorded before this field existed. */
     malformedLines?: number;
+    /** Count of sampler probes that FAILED during the run — tells "sampling broke" apart from
+     *  "sampling wasn't attempted". Observability-only: persisted in result.json but not yet consumed
+     *  by resource assertions (that consumption tier is deliberately deferred). */
+    probeFailures?: number;
   };
 }
