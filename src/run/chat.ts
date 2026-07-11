@@ -19,7 +19,7 @@ import { ResourceSampler, makeSampleOnce, resolveIntervalMs } from "../runtime/r
 import { makeRenderer, startHeartbeat, type RenderPlan } from "./renderer.js";
 import { runsWriteRoot } from "./trace-view.js";
 import { buildChatResult } from "./chat-result.js";
-import { writeTrace } from "./execute.js";
+import { writeTrace, scrubRawRunLogs } from "./execute.js";
 import { appendIndexRow, indexRowFromResult } from "./run-index.js";
 import { scrub, collectSecrets } from "../secrets.js";
 import { Chain, ScriptedDecider, PermissionDefaultDecider, PromptDecider } from "../decide/decider.js";
@@ -419,6 +419,11 @@ export async function cmdChat(args: string[]) {
     if (containerName) spawnSync(runner, ["rm", "-f", containerName], { stdio: "ignore" });
     sidecar?.teardown();
     rl.close(); // the one shared stdin interface — closed once, here
+    // LAST in the teardown, unconditional on `record`: a chat that crashes before its first turn
+    // still streamed raw events/control-out/stderr to disk, and the result-writing block below is
+    // `if (record)`-gated so it can't be the scrub's home. (Mirrors executeScenario's outermost
+    // finally; being after the kill/reap minimizes the stderr flush window.)
+    scrubRawRunLogs(outDir, collectSecrets());
   }
   log(`\nchat ended (transcript under ${outDir})\n`);
   // A session that crashed before the agent produced its first turn has no RunRecord — nothing to

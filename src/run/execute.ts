@@ -501,737 +501,748 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     if (message && !opts.compact)
       warn(`::notice:: [capability] (pre-flight) ${message} (allow_missing_capability asserted — proceeding)\n`);
   }
+  // EVERY exit path from here down must leave the raw streamed logs scrubbed on disk — success, the
+  // unanswered-gate salvage rethrow, and any fault rethrown mid-run (agent crash, infra error, hostloop
+  // snapshot failure). The `finally` at the very bottom of this function owns that; nothing else in
+  // between may scrub events.jsonl earlier, because the post-run readers (scanEvents,
+  // findUngatedPathToolCalls, detectCapabilityUse) must see the RAW stream — a user-registered scrub
+  // value (COWORK_HARNESS_SCRUB_VALUES) that overlaps a host path or a script path would otherwise
+  // false-green leak/capability detection.
   try {
-    // acquire the egress sidecar / host proxy INSIDE the protected try so a throw in resource
-    // acquisition OR in renderPrompts below can't leak a Docker network / a bound proxy port — the `finally`
-    // tears down whatever was assigned to sidecar/hostProxy. (Previously these were acquired before the try,
-    // so a renderPrompts throw skipped teardown and orphaned the resource.)
-    if (containerLike) {
-      // thread proxy/network EXPLICITLY into spawn opts — no process.env mutation so
-      // concurrent executeScenario calls don't stomp each other's values.
-      sidecar = startEgressSidecar(plan.egressAllow, outDir, runToken);
-      // on Ctrl-C, reap the agent container in the "container" PHASE so it runs BEFORE the sidecar's
-      // network teardown (network rm fails while the container is still attached). The thunk reads `child`/
-      // `containerName` at call time (assigned below). De-registered in the finally so a clean exit doesn't
-      // double-run it (and the reap is idempotent regardless).
-      deregisterContainerReap = registerCleanup({
-        phase: "container",
-        run: () => {
-          try {
-            child?.kill?.("SIGKILL");
-          } catch {
-            /* already gone */
-          }
-          if (containerName) spawnSync(runner, ["rm", "-f", containerName], { stdio: "ignore" });
-        },
-      });
-    } else if (effectiveFidelity === "microvm") {
-      // Bind the proxy first (port 0 → OS assigns), then read the actual port back from the live socket.
-      // The firewall rule and HTTP(S)_PROXY (written in spawnMicroVm below) just need the port before the
-      // agent spawns, not before the proxy binds — so proxy-first eliminates the freePort() TOCTOU window.
-      hostProxy = startEgressProxy({
-        allow: plan.egressAllow,
-        port: process.env.COWORK_VM_PROXY_PORT ? parseEnvPort("COWORK_VM_PROXY_PORT", 0) : 0,
-        logPath: join(outDir, "egress.log"),
-        onDecision: (host, decision) => egress.push({ host, decision }),
-      });
-      await hostProxy.ready; // don't spawn the agent until the proxy is accepting (or fail loud on a bind error)
-      microvmProxyPort = hostProxy.actualPort; // read from the live, still-bound socket — no TOCTOU gap
-    }
-
-    // Host-loop prompt-token substitution (P2a): renderPrompts runs BEFORE spawnHostLoop below, so these
-    // host dirs are recomputed here via the SAME pure joins hostloop's own runtime uses, rather than
-    // restructuring the call order. hostCwd/hostUploadsDir mirror hostOutputsDir's derivation
-    // (src/runtime/hostloop.ts: `mntHost = join(resolve(outDir), "work", "session", "mnt")`) and the
-    // sibling uploads dir stageHostLoopWorkspace creates there (src/runtime/hostloop-stage.ts:39).
-    // hostSkillsDir mirrors hostLoopShellSection's own staged-skills check (same file) — plan.configDir's
-    // skills copy is already materialized by buildLaunchPlan above, so this is a plain existence check,
-    // not a restructuring; undefined (skills absent/unstaged) lets renderPrompts' fallback string stand.
-    const hostLoopOpts =
-      effectiveFidelity === "hostloop"
-        ? (() => {
-            const hostMnt = join(resolve(outDir), "work", "session", "mnt");
-            const skillsDir = join(plan.configDir, "skills");
-            const skillsStaged = existsSync(skillsDir) && readdirSync(skillsDir).length > 0;
-            return {
-              effectiveFidelity,
-              hostCwd: join(hostMnt, "outputs"),
-              hostUploadsDir: join(hostMnt, "uploads"),
-              hostWorkspaceFolder: plan.mounts.find((m) => m.kind === "folder")?.hostPath,
-              hostSkillsDir: skillsStaged ? skillsDir : undefined,
-            };
-          })()
-        : undefined;
-    const prompts = renderPrompts(baseline, session, sessionId, plan.mounts.find((m) => m.kind === "folder")?.mountPath, hostLoopOpts);
-    promptFidelityWarnings = prompts.fidelityWarnings; // hoist out so RunResult construction (after try) can access it
-    let sdkMcp: SdkMcp | undefined;
-    if (effectiveFidelity === "hostloop") {
-      const hl = spawnHostLoop(scenario, baseline, plan, outDir, sessionId, {
-        systemPromptAppend: prompts.systemPromptAppend,
-        runToken,
-        egressProxy: sidecar?.proxyUrl,
-        dockerNetwork: sidecar?.network,
-        provenanceRef,
-      });
-      child = hl.child;
-      sdkMcp = hl.sdkMcp;
-      containerName = hl.containerName;
-      hostEgress = hl.hostEgress;
-      hostloopHooks = hl.hooks;
-      hostloopPathGateFired = hl.pathGateFired;
-      logHostWriteNotice(
-        plan.mounts.filter((mt) => mt.kind === "folder").map((mt) => ({ from: mt.hostPath, mode: mt.mode })),
-        warn,
-      );
-      if (scenario.assert.some((a) => a.transcript_no_host_path === true) && !opts.compact)
-        warn(
-          `::warning:: [hostloop] scenario asserts transcript_no_host_path — hostloop's native file tools legitimately ` +
-            `expose real host paths to the model, so this assertion will FAIL by design at this fidelity.\n`,
-        );
-    } else if (effectiveFidelity === "container") {
-      const ct = spawnContainer(scenario, baseline, plan, outDir, sessionId, {
-        systemPromptAppend: prompts.systemPromptAppend,
-        egressProxy: sidecar?.proxyUrl,
-        dockerNetwork: sidecar?.network,
-        runToken,
-      });
-      child = ct.child;
-      containerName = ct.containerName; // so the Ctrl-C / finally reap removes the agent container by name
-      sdkMcp = ct.sdkMcp; // serves cowork/present_files — container has no other sdk-MCP server today
-    } else if (effectiveFidelity === "microvm") {
-      child = spawnMicroVm(scenario, baseline, plan, outDir, sessionId, {
-        systemPromptAppend: prompts.systemPromptAppend,
-        proxyPort: microvmProxyPort,
-      });
-    } else {
-      // pass systemPromptAppend so L0 records carry Cowork framing (matches container/microvm/host-loop).
-      // capture l0PluginDivergence so computeVerdict can fail the run when plugins are configured.
-      const proto = spawnProtocol(scenario, baseline, plan, outDir, { systemPromptAppend: prompts.systemPromptAppend });
-      child = proto.child;
-      l0PluginDivergence = proto.l0PluginDivergence;
-      if (scenario.assert.some((a) => a.transcript_no_host_path === true) && !opts.compact)
-        warn(
-          `::warning:: [protocol] scenario asserts transcript_no_host_path — protocol (L0) runs the agent's file tools ` +
-            `on the real host cwd with no sealed filesystem, so this assertion will FAIL by design at this fidelity.\n`,
-        );
-    }
-
-    if (effectiveFidelity === "container" || effectiveFidelity === "hostloop" || effectiveFidelity === "microvm") {
-      // Sample the agent sandbox on an interval. Async probes only (shares the agent's event loop).
-      // hostloop samples the native agent process (child.pid); container samples the container by name;
-      // microvm reads /proc via limactl. A missing id / unavailable tool yields no samples (resources → undefined).
-      const sampleOnce = makeSampleOnce({
-        tier: effectiveFidelity,
-        runner,
-        containerName: effectiveFidelity === "container" ? containerName : undefined,
-        pid: effectiveFidelity === "hostloop" ? (child as { pid?: number } | undefined)?.pid : undefined,
-        instance: effectiveFidelity === "microvm" ? instanceName(baseline) : undefined,
-      });
-      resourceSampler = new ResourceSampler(outDir, effectiveFidelity, sampleOnce, resolveIntervalMs());
-      resourceSampler.start();
-    }
-
-    const sessionT = new LiveAgentSession(child as any, outDir);
-    // Terminal decider: an explicit external channel, else the LLM decider when `agent` is selected.
-    const llmTerminal =
-      onUnanswered === "llm" ? new LlmDecider(claudeCliComplete, opts.llmIntent, opts.llmModel || undefined, secrets) : undefined;
-    const externalTerminal = opts.externalChannel ? new ExternalDecider(opts.externalChannel, secrets) : llmTerminal;
-    const decider =
-      opts.decider ?? buildDecider({ rules: scenario.answers, parity: plan.permissionParity, onUnanswered, external: externalTerminal });
-    const run = new Run(sessionT, decider, opts.hooks ?? [], sessionId, dialogTimeoutMs ?? undefined, scenario.timeout_ms);
-    run.seedApprovedDomains(session.web_fetch.approved_domains); // test convenience: pre-approved web_fetch hosts
-    // fill the provenance bundle (backed by Run's tracker + recorded approval) BEFORE drive().
-    // Host-loop only, and only when the web_fetch-via-API gate is on; otherwise the handler stays
-    // allowlist-only (ref.current undefined). Run seeds the set from turns + tool_results.
-    if (effectiveFidelity === "hostloop" && viaApiOn) {
-      provenanceRef.current = {
-        isAllowed: (u) => run.provenanceHas(u),
-        markAllowed: (u) => run.provenanceAdd(u),
-        requestApproval: (d, u) => run.requestWebFetchApproval(d, u),
-        promptGateOn,
-        permissiveMode: plan.permissionMode === "bypassPermissions",
-      };
-    }
-    const stopStatusTicker = startStatusTicker(outDir, runStatusMeta, () => run.partial());
     try {
-      try {
-        record = await run.drive(scenario.prompt, {
-          subagentAppend: prompts.subagentAppend,
-          sdkMcp,
-          hooks: hostloopHooks,
+      // acquire the egress sidecar / host proxy INSIDE the protected try so a throw in resource
+      // acquisition OR in renderPrompts below can't leak a Docker network / a bound proxy port — the `finally`
+      // tears down whatever was assigned to sidecar/hostProxy. (Previously these were acquired before the try,
+      // so a renderPrompts throw skipped teardown and orphaned the resource.)
+      if (containerLike) {
+        // thread proxy/network EXPLICITLY into spawn opts — no process.env mutation so
+        // concurrent executeScenario calls don't stomp each other's values.
+        sidecar = startEgressSidecar(plan.egressAllow, outDir, runToken);
+        // on Ctrl-C, reap the agent container in the "container" PHASE so it runs BEFORE the sidecar's
+        // network teardown (network rm fails while the container is still attached). The thunk reads `child`/
+        // `containerName` at call time (assigned below). De-registered in the finally so a clean exit doesn't
+        // double-run it (and the reap is idempotent regardless).
+        deregisterContainerReap = registerCleanup({
+          phase: "container",
+          run: () => {
+            try {
+              child?.kill?.("SIGKILL");
+            } catch {
+              /* already gone */
+            }
+            if (containerName) spawnSync(runner, ["rm", "-f", containerName], { stdio: "ignore" });
+          },
         });
-      } catch (e) {
-        // An unanswered gate is recoverable: grab the in-progress record so the work done before the whiff can
-        // be salvaged to disk below. Any other error is a genuine fault — keep today's fail-fast behavior.
-        if (e instanceof UnansweredError) {
-          unansweredErr = e;
-          record = run.partial();
-        } else throw e;
+      } else if (effectiveFidelity === "microvm") {
+        // Bind the proxy first (port 0 → OS assigns), then read the actual port back from the live socket.
+        // The firewall rule and HTTP(S)_PROXY (written in spawnMicroVm below) just need the port before the
+        // agent spawns, not before the proxy binds — so proxy-first eliminates the freePort() TOCTOU window.
+        hostProxy = startEgressProxy({
+          allow: plan.egressAllow,
+          port: process.env.COWORK_VM_PROXY_PORT ? parseEnvPort("COWORK_VM_PROXY_PORT", 0) : 0,
+          logPath: join(outDir, "egress.log"),
+          onDecision: (host, decision) => egress.push({ host, decision }),
+        });
+        await hostProxy.ready; // don't spawn the agent until the proxy is accepting (or fail loud on a bind error)
+        microvmProxyPort = hostProxy.actualPort; // read from the live, still-bound socket — no TOCTOU gap
+      }
+
+      // Host-loop prompt-token substitution (P2a): renderPrompts runs BEFORE spawnHostLoop below, so these
+      // host dirs are recomputed here via the SAME pure joins hostloop's own runtime uses, rather than
+      // restructuring the call order. hostCwd/hostUploadsDir mirror hostOutputsDir's derivation
+      // (src/runtime/hostloop.ts: `mntHost = join(resolve(outDir), "work", "session", "mnt")`) and the
+      // sibling uploads dir stageHostLoopWorkspace creates there (src/runtime/hostloop-stage.ts:39).
+      // hostSkillsDir mirrors hostLoopShellSection's own staged-skills check (same file) — plan.configDir's
+      // skills copy is already materialized by buildLaunchPlan above, so this is a plain existence check,
+      // not a restructuring; undefined (skills absent/unstaged) lets renderPrompts' fallback string stand.
+      const hostLoopOpts =
+        effectiveFidelity === "hostloop"
+          ? (() => {
+              const hostMnt = join(resolve(outDir), "work", "session", "mnt");
+              const skillsDir = join(plan.configDir, "skills");
+              const skillsStaged = existsSync(skillsDir) && readdirSync(skillsDir).length > 0;
+              return {
+                effectiveFidelity,
+                hostCwd: join(hostMnt, "outputs"),
+                hostUploadsDir: join(hostMnt, "uploads"),
+                hostWorkspaceFolder: plan.mounts.find((m) => m.kind === "folder")?.hostPath,
+                hostSkillsDir: skillsStaged ? skillsDir : undefined,
+              };
+            })()
+          : undefined;
+      const prompts = renderPrompts(baseline, session, sessionId, plan.mounts.find((m) => m.kind === "folder")?.mountPath, hostLoopOpts);
+      promptFidelityWarnings = prompts.fidelityWarnings; // hoist out so RunResult construction (after try) can access it
+      let sdkMcp: SdkMcp | undefined;
+      if (effectiveFidelity === "hostloop") {
+        const hl = spawnHostLoop(scenario, baseline, plan, outDir, sessionId, {
+          systemPromptAppend: prompts.systemPromptAppend,
+          runToken,
+          egressProxy: sidecar?.proxyUrl,
+          dockerNetwork: sidecar?.network,
+          provenanceRef,
+        });
+        child = hl.child;
+        sdkMcp = hl.sdkMcp;
+        containerName = hl.containerName;
+        hostEgress = hl.hostEgress;
+        hostloopHooks = hl.hooks;
+        hostloopPathGateFired = hl.pathGateFired;
+        logHostWriteNotice(
+          plan.mounts.filter((mt) => mt.kind === "folder").map((mt) => ({ from: mt.hostPath, mode: mt.mode })),
+          warn,
+        );
+        if (scenario.assert.some((a) => a.transcript_no_host_path === true) && !opts.compact)
+          warn(
+            `::warning:: [hostloop] scenario asserts transcript_no_host_path — hostloop's native file tools legitimately ` +
+              `expose real host paths to the model, so this assertion will FAIL by design at this fidelity.\n`,
+          );
+      } else if (effectiveFidelity === "container") {
+        const ct = spawnContainer(scenario, baseline, plan, outDir, sessionId, {
+          systemPromptAppend: prompts.systemPromptAppend,
+          egressProxy: sidecar?.proxyUrl,
+          dockerNetwork: sidecar?.network,
+          runToken,
+        });
+        child = ct.child;
+        containerName = ct.containerName; // so the Ctrl-C / finally reap removes the agent container by name
+        sdkMcp = ct.sdkMcp; // serves cowork/present_files — container has no other sdk-MCP server today
+      } else if (effectiveFidelity === "microvm") {
+        child = spawnMicroVm(scenario, baseline, plan, outDir, sessionId, {
+          systemPromptAppend: prompts.systemPromptAppend,
+          proxyPort: microvmProxyPort,
+        });
+      } else {
+        // pass systemPromptAppend so L0 records carry Cowork framing (matches container/microvm/host-loop).
+        // capture l0PluginDivergence so computeVerdict can fail the run when plugins are configured.
+        const proto = spawnProtocol(scenario, baseline, plan, outDir, { systemPromptAppend: prompts.systemPromptAppend });
+        child = proto.child;
+        l0PluginDivergence = proto.l0PluginDivergence;
+        if (scenario.assert.some((a) => a.transcript_no_host_path === true) && !opts.compact)
+          warn(
+            `::warning:: [protocol] scenario asserts transcript_no_host_path — protocol (L0) runs the agent's file tools ` +
+              `on the real host cwd with no sealed filesystem, so this assertion will FAIL by design at this fidelity.\n`,
+          );
+      }
+
+      if (effectiveFidelity === "container" || effectiveFidelity === "hostloop" || effectiveFidelity === "microvm") {
+        // Sample the agent sandbox on an interval. Async probes only (shares the agent's event loop).
+        // hostloop samples the native agent process (child.pid); container samples the container by name;
+        // microvm reads /proc via limactl. A missing id / unavailable tool yields no samples (resources → undefined).
+        const sampleOnce = makeSampleOnce({
+          tier: effectiveFidelity,
+          runner,
+          containerName: effectiveFidelity === "container" ? containerName : undefined,
+          pid: effectiveFidelity === "hostloop" ? (child as { pid?: number } | undefined)?.pid : undefined,
+          instance: effectiveFidelity === "microvm" ? instanceName(baseline) : undefined,
+        });
+        resourceSampler = new ResourceSampler(outDir, effectiveFidelity, sampleOnce, resolveIntervalMs());
+        resourceSampler.start();
+      }
+
+      const sessionT = new LiveAgentSession(child as any, outDir);
+      // Terminal decider: an explicit external channel, else the LLM decider when `agent` is selected.
+      const llmTerminal =
+        onUnanswered === "llm" ? new LlmDecider(claudeCliComplete, opts.llmIntent, opts.llmModel || undefined, secrets) : undefined;
+      const externalTerminal = opts.externalChannel ? new ExternalDecider(opts.externalChannel, secrets) : llmTerminal;
+      const decider =
+        opts.decider ?? buildDecider({ rules: scenario.answers, parity: plan.permissionParity, onUnanswered, external: externalTerminal });
+      const run = new Run(sessionT, decider, opts.hooks ?? [], sessionId, dialogTimeoutMs ?? undefined, scenario.timeout_ms);
+      run.seedApprovedDomains(session.web_fetch.approved_domains); // test convenience: pre-approved web_fetch hosts
+      // fill the provenance bundle (backed by Run's tracker + recorded approval) BEFORE drive().
+      // Host-loop only, and only when the web_fetch-via-API gate is on; otherwise the handler stays
+      // allowlist-only (ref.current undefined). Run seeds the set from turns + tool_results.
+      if (effectiveFidelity === "hostloop" && viaApiOn) {
+        provenanceRef.current = {
+          isAllowed: (u) => run.provenanceHas(u),
+          markAllowed: (u) => run.provenanceAdd(u),
+          requestApproval: (d, u) => run.requestWebFetchApproval(d, u),
+          promptGateOn,
+          permissiveMode: plan.permissionMode === "bypassPermissions",
+        };
+      }
+      const stopStatusTicker = startStatusTicker(outDir, runStatusMeta, () => run.partial());
+      try {
+        try {
+          record = await run.drive(scenario.prompt, {
+            subagentAppend: prompts.subagentAppend,
+            sdkMcp,
+            hooks: hostloopHooks,
+          });
+        } catch (e) {
+          // An unanswered gate is recoverable: grab the in-progress record so the work done before the whiff can
+          // be salvaged to disk below. Any other error is a genuine fault — keep today's fail-fast behavior.
+          if (e instanceof UnansweredError) {
+            unansweredErr = e;
+            record = run.partial();
+          } else throw e;
+        }
+      } finally {
+        stopStatusTicker();
       }
     } finally {
-      stopStatusTicker();
+      // Stop sampling FIRST — before the container/process teardown below — so a final in-flight probe
+      // can't race (and fail against) a container that's already being removed. `stop()` is async (it awaits
+      // the in-flight tick, bounded) so a run shorter than one interval still has its immediate sample land
+      // before `foldResources` reads resources.jsonl below. #40
+      await resourceSampler?.stop();
+      // Reap the agent container FIRST (before the sidecar networks), so a crashed/unanswered run can't
+      // orphan a running container holding the network. On the success path the child has already
+      // exited (--rm), so these are no-ops.
+      deregisterContainerReap?.(); // normal path owns the reap below; drop the signal-time thunk
+      try {
+        child?.kill?.("SIGKILL");
+      } catch {
+        /* already gone */
+      }
+      if (containerName) spawnSync(runner, ["rm", "-f", containerName], { stdio: "ignore" });
+      if (sidecar) {
+        const eg = sidecar.collect();
+        egress = eg.entries;
+        egressMalformedLines += eg.malformedLines; // applied to record.evidenceErrors after the finally, where `record` is assigned (#39)
+        sidecar.teardown();
+      }
+      // merge host-routed web_fetch decisions (host-loop) so they're visible to egress assertions.
+      if (hostEgress?.length) egress = [...egress, ...hostEgress];
+      hostProxy?.close();
     }
-  } finally {
-    // Stop sampling FIRST — before the container/process teardown below — so a final in-flight probe
-    // can't race (and fail against) a container that's already being removed. `stop()` is async (it awaits
-    // the in-flight tick, bounded) so a run shorter than one interval still has its immediate sample land
-    // before `foldResources` reads resources.jsonl below. #40
-    await resourceSampler?.stop();
-    // Reap the agent container FIRST (before the sidecar networks), so a crashed/unanswered run can't
-    // orphan a running container holding the network. On the success path the child has already
-    // exited (--rm), so these are no-ops.
-    deregisterContainerReap?.(); // normal path owns the reap below; drop the signal-time thunk
-    try {
-      child?.kill?.("SIGKILL");
-    } catch {
-      /* already gone */
-    }
-    if (containerName) spawnSync(runner, ["rm", "-f", containerName], { stdio: "ignore" });
-    if (sidecar) {
-      const eg = sidecar.collect();
-      egress = eg.entries;
-      egressMalformedLines += eg.malformedLines; // applied to record.evidenceErrors after the finally, where `record` is assigned (#39)
-      sidecar.teardown();
-    }
-    // merge host-routed web_fetch decisions (host-loop) so they're visible to egress assertions.
-    if (hostEgress?.length) egress = [...egress, ...hostEgress];
-    hostProxy?.close();
-  }
 
-  // A post-listen egress-sidecar crash (container topology) surfaces as `fatalError` after teardown —
-  // fold it into infraErrors so computeVerdict hard-fails the run (evidence contaminated). The live
-  // in-VM/hostloop sidecar surfaces its own crash as an `infra_error` event already collected above.
-  if (sidecar?.fatalError) record.infraErrors.push({ source: "egress-sidecar", message: sidecar.fatalError });
+    // A post-listen egress-sidecar crash (container topology) surfaces as `fatalError` after teardown —
+    // fold it into infraErrors so computeVerdict hard-fails the run (evidence contaminated). The live
+    // in-VM/hostloop sidecar surfaces its own crash as an `infra_error` event already collected above.
+    if (sidecar?.fatalError) record.infraErrors.push({ source: "egress-sidecar", message: sidecar.fatalError });
 
-  // snapshot the gate rendezvous wire shapes (req/resp/.done) into the run dir BEFORE the caller
-  // closes (and wipes) the channel — the forensic evidence you want after a gate bug survives --keep.
-  opts.externalChannel?.snapshot?.(join(outDir, "gates"));
+    // snapshot the gate rendezvous wire shapes (req/resp/.done) into the run dir BEFORE the caller
+    // closes (and wipes) the channel — the forensic evidence you want after a gate bug survives --keep.
+    opts.externalChannel?.snapshot?.(join(outDir, "gates"));
 
-  // hostloop never copies connected folders into the run dir while the agent runs (they're bind-mounted
-  // real host paths) — snapshot them NOW so every post-run consumer below (evaluate ctx, collectArtifacts,
-  // verify-run, cassette record, detectCapabilityUse) keeps reading the same frozen tree the copy-based
-  // tiers have always produced. Must run before `workRoot`-relative code below.
-  if (effectiveFidelity === "hostloop") {
-    try {
-      snapshotHostLoopWorkspace(plan, join(outDir, "work", "session", "mnt"));
-    } catch (err) {
-      // On the unanswered-gate salvage path, a snapshot failure here must not replace the original
-      // UnansweredError and skip partial persistence entirely — that would be worse than the folder
-      // artifacts simply being incomplete. Best-effort + loud there; still hard-fail on the success path,
-      // where nothing more important is being masked by throwing.
-      if (unansweredErr) {
-        warn(
-          `::warning:: [hostloop] snapshot failed during salvage — folder artifacts may be missing from this partial result: ${err instanceof Error ? err.message : String(err)}\n`,
-        );
-      } else {
-        throw err;
+    // hostloop never copies connected folders into the run dir while the agent runs (they're bind-mounted
+    // real host paths) — snapshot them NOW so every post-run consumer below (evaluate ctx, collectArtifacts,
+    // verify-run, cassette record, detectCapabilityUse) keeps reading the same frozen tree the copy-based
+    // tiers have always produced. Must run before `workRoot`-relative code below.
+    if (effectiveFidelity === "hostloop") {
+      try {
+        snapshotHostLoopWorkspace(plan, join(outDir, "work", "session", "mnt"));
+      } catch (err) {
+        // On the unanswered-gate salvage path, a snapshot failure here must not replace the original
+        // UnansweredError and skip partial persistence entirely — that would be worse than the folder
+        // artifacts simply being incomplete. Best-effort + loud there; still hard-fail on the success path,
+        // where nothing more important is being masked by throwing.
+        if (unansweredErr) {
+          warn(
+            `::warning:: [hostloop] snapshot failed during salvage — folder artifacts may be missing from this partial result: ${err instanceof Error ? err.message : String(err)}\n`,
+          );
+        } else {
+          throw err;
+        }
       }
     }
-  }
 
-  const scan = scanEvents(join(outDir, "events.jsonl"));
-  // A missing or corrupt events.jsonl means the post-run scan (host-path-leak / delete-in-outputs /
-  // self-heal) has no trustworthy evidence — treat it as unavailable, never as a clean scan.
-  const scanUnavailable = scan.sidecarMissing || scan.malformedLines > 0;
-  if (scan.sidecarMissing)
-    warn(
-      `::warning:: [scan] events.jsonl missing — post-run scan evidence unavailable (host-path-leak / delete-in-outputs / self-heal cannot be verified)\n`,
-    );
-  else if (scan.malformedLines > 0)
-    warn(
-      `::warning:: [scan] ${scan.malformedLines} malformed line(s) in events.jsonl — scan evidence unreliable, treated as unavailable\n`,
-    );
-  const workRoot = effectiveFidelity === "protocol" ? join(outDir, "work") : join(outDir, "work", "session", "mnt");
-
-  // The runtime tripwire: if a gated tool call completed successfully with no evidence the path-containment
-  // gate ever ran on it, the run's real-filesystem safety is unverified — hard-fail rather than pass silently.
-  if (effectiveFidelity === "hostloop" && hostloopPathGateFired) {
-    const ungated = findUngatedPathToolCalls(join(outDir, "events.jsonl"), hostloopPathGateFired);
-    if (ungated.length) {
+    const scan = scanEvents(join(outDir, "events.jsonl"));
+    // A missing or corrupt events.jsonl means the post-run scan (host-path-leak / delete-in-outputs /
+    // self-heal) has no trustworthy evidence — treat it as unavailable, never as a clean scan.
+    const scanUnavailable = scan.sidecarMissing || scan.malformedLines > 0;
+    if (scan.sidecarMissing)
       warn(
-        `::warning:: [hostloop] path-containment gate did not fire for: ${ungated.join(", ")} — real filesystem access is UNVERIFIED for this run.\n`,
+        `::warning:: [scan] events.jsonl missing — post-run scan evidence unavailable (host-path-leak / delete-in-outputs / self-heal cannot be verified)\n`,
       );
-      record.result = "error";
+    else if (scan.malformedLines > 0)
+      warn(
+        `::warning:: [scan] ${scan.malformedLines} malformed line(s) in events.jsonl — scan evidence unreliable, treated as unavailable\n`,
+      );
+    const workRoot = effectiveFidelity === "protocol" ? join(outDir, "work") : join(outDir, "work", "session", "mnt");
+
+    // The runtime tripwire: if a gated tool call completed successfully with no evidence the path-containment
+    // gate ever ran on it, the run's real-filesystem safety is unverified — hard-fail rather than pass silently.
+    if (effectiveFidelity === "hostloop" && hostloopPathGateFired) {
+      const ungated = findUngatedPathToolCalls(join(outDir, "events.jsonl"), hostloopPathGateFired);
+      if (ungated.length) {
+        warn(
+          `::warning:: [hostloop] path-containment gate did not fire for: ${ungated.join(", ")} — real filesystem access is UNVERIFIED for this run.\n`,
+        );
+        record.result = "error";
+      }
     }
-  }
 
-  // User-visible roots = outputs + each connected work folder's RESOLVED mount name (derived from the
-  // actual mount set, NOT a hardcoded `.projects/` prefix — folder names are now dynamic/gated). Plugins
-  // are read-only inputs and are NOT visible roots. Persisted to RunResult so the plan-less lanes
-  // (verify reads result.json; replay reads the cassette) match this without rebuilding a LaunchPlan.
-  // Shared with the pre-run baseline walk (userVisibleRootsFromPlan) — pre and post MUST agree.
-  const userVisibleRoots = userVisibleRootsFromPlan(plan);
-  // Read-only (`mode: "r"`) connected-folder roots — inputs, not deliverables. Persisted so the cassette
-  // recorder strips their captured BODIES (fidelity/no-bloat) and `RunResult.artifacts` excludes them
-  // outright (an input is not a `file_exists` target). Does NOT change `userVisibleRoots` above.
-  const readonlyFolderRoots = readonlyFolderRootsFromPlan(plan);
-  // Read the pre-run baseline ONCE: the evaluate ctx and the persisted RunResult must see the same
-  // value — two reads could disagree if the file were touched mid-run.
-  const preRunPaths = readPreRunManifest(outDir);
-  const preRunLinkAware = readPreRunManifestLinkAware(outDir);
-  const preRunHashes = readPreRunManifestHashes(outDir);
+    // User-visible roots = outputs + each connected work folder's RESOLVED mount name (derived from the
+    // actual mount set, NOT a hardcoded `.projects/` prefix — folder names are now dynamic/gated). Plugins
+    // are read-only inputs and are NOT visible roots. Persisted to RunResult so the plan-less lanes
+    // (verify reads result.json; replay reads the cassette) match this without rebuilding a LaunchPlan.
+    // Shared with the pre-run baseline walk (userVisibleRootsFromPlan) — pre and post MUST agree.
+    const userVisibleRoots = userVisibleRootsFromPlan(plan);
+    // Read-only (`mode: "r"`) connected-folder roots — inputs, not deliverables. Persisted so the cassette
+    // recorder strips their captured BODIES (fidelity/no-bloat) and `RunResult.artifacts` excludes them
+    // outright (an input is not a `file_exists` target). Does NOT change `userVisibleRoots` above.
+    const readonlyFolderRoots = readonlyFolderRootsFromPlan(plan);
+    // Read the pre-run baseline ONCE: the evaluate ctx and the persisted RunResult must see the same
+    // value — two reads could disagree if the file were touched mid-run.
+    const preRunPaths = readPreRunManifest(outDir);
+    const preRunLinkAware = readPreRunManifestLinkAware(outDir);
+    const preRunHashes = readPreRunManifestHashes(outDir);
 
-  // Filesystem pre/post diff of outputs/ — a backstop for `no_delete_in_outputs` INDEPENDENT of
-  // scanEvents' regex (which only inspects Bash/mcp__workspace__bash tool_use commands and so misses a
-  // delete via a script file, a renamed binary, or any non-bash tool). If the pre-run baseline captured
-  // outputs (it always does when captured at all — see pre-run-manifest.ts), any path recorded there
-  // under outputs/ that is no longer present in the post-run walk is a real deletion regardless of HOW
-  // it happened. Fed into the SAME `scan.outputsDeletes` array the regex populates — one signal, two
-  // detectors — so `no_delete_in_outputs` (src/assert.ts) needs no changes to see it. Skipped when there
-  // is no baseline (preRunPaths undefined — the scenario asserted neither key that triggers capture, or a
-  // tier that can't capture); the regex backstop still runs in that case, same as before this change.
-  if (preRunPaths) {
-    const preOutputs = new Set(preRunPaths.filter((p) => p === "outputs" || p.startsWith("outputs/")));
-    // Path walk (matching the pre-run baseline): it emits symlink/hardlink paths too, so a pre-existing
-    // link under outputs that survives is present on BOTH sides and is not falsely reported as removed.
-    const postOutputs = new Set(collectArtifactPaths(workRoot, ["outputs"]).map((e) => e.path));
-    for (const p of preOutputs) if (!postOutputs.has(p)) scan.outputsDeletes.push(`[fs-diff] output file removed post-run: ${p}`);
-  }
+    // Filesystem pre/post diff of outputs/ — a backstop for `no_delete_in_outputs` INDEPENDENT of
+    // scanEvents' regex (which only inspects Bash/mcp__workspace__bash tool_use commands and so misses a
+    // delete via a script file, a renamed binary, or any non-bash tool). If the pre-run baseline captured
+    // outputs (it always does when captured at all — see pre-run-manifest.ts), any path recorded there
+    // under outputs/ that is no longer present in the post-run walk is a real deletion regardless of HOW
+    // it happened. Fed into the SAME `scan.outputsDeletes` array the regex populates — one signal, two
+    // detectors — so `no_delete_in_outputs` (src/assert.ts) needs no changes to see it. Skipped when there
+    // is no baseline (preRunPaths undefined — the scenario asserted neither key that triggers capture, or a
+    // tier that can't capture); the regex backstop still runs in that case, same as before this change.
+    if (preRunPaths) {
+      const preOutputs = new Set(preRunPaths.filter((p) => p === "outputs" || p.startsWith("outputs/")));
+      // Path walk (matching the pre-run baseline): it emits symlink/hardlink paths too, so a pre-existing
+      // link under outputs that survives is present on BOTH sides and is not falsely reported as removed.
+      const postOutputs = new Set(collectArtifactPaths(workRoot, ["outputs"]).map((e) => e.path));
+      for (const p of preOutputs) if (!postOutputs.has(p)) scan.outputsDeletes.push(`[fs-diff] output file removed post-run: ${p}`);
+    }
 
-  // Salvage path: the run exited on an unanswered gate. Persist a PARTIAL result.json (+ run.jsonl/trace) so
-  // the artifacts the agent wrote before the whiff survive for inspection, then re-throw so the CLI still
-  // exits 2. Skip assertion eval and the capability probe (a real container spawn) — a partial run has no
-  // meaningful assertion or verdict outcome.
-  if (unansweredErr) {
+    // Salvage path: the run exited on an unanswered gate. Persist a PARTIAL result.json (+ run.jsonl/trace) so
+    // the artifacts the agent wrote before the whiff survive for inspection, then re-throw so the CLI still
+    // exits 2. Skip assertion eval and the capability probe (a real container spawn) — a partial run has no
+    // meaningful assertion or verdict outcome.
+    if (unansweredErr) {
+      const turn = archivePriorTurnFiles(outDir);
+      const partialResult = buildPartialResult({
+        turn,
+        ablated: opts.ablateSkill,
+        scenarioName: scenario.name,
+        prompt: scenario.prompt,
+        fidelity: scenario.fidelity,
+        baseline: baseline.appVersion,
+        record,
+        outDir,
+        workRoot,
+        configDir: plan.configDir,
+        pluginSkillRoots: pluginSkillRootsFromPlan(plan),
+        userVisibleRoots,
+        readonlyFolderRoots,
+        effectiveFidelity,
+        egress,
+        durationMs: Date.now() - startedAt,
+        unanswered: { message: unansweredErr.message, hint: unansweredErr.hint },
+        fingerprint: buildFingerprint(scenario.session, baseline.appVersion, undefined, scenario.skills),
+        onUnanswered,
+        nonDeterministicHint: opts.nonDeterministicHint,
+        externalChannel: !!opts.externalChannel,
+      });
+      // Non-null: `durationMs` is set unconditionally just above (`Date.now() - startedAt`) — the field is
+      // typed optional on RunResult/PartialResult for OTHER (non-execute.ts) producers, not this call site.
+      runCrashSafety.finalize(record, "error", partialResult.durationMs!);
+      // run.jsonl before result.json — see the ordering rationale on the success path below.
+      writeRunJsonl(outDir, scenario, effectiveFidelity, record, egress, secrets, turn);
+      writeFileSync(join(outDir, "result.json"), scrub(JSON.stringify(partialResult, null, 2), secrets));
+      appendIndexRow(runsWriteRoot(), indexRowFromResult(partialResult, { command: opts.command ?? "run", partial: true }));
+      writeTrace(outDir, record, egress, secrets, partialResult.durationMs);
+      // Loud PARTIAL marker so the populated artifacts are never misread as success (the no-false-green rule).
+      warn(
+        `::notice:: [partial] run did NOT complete (unanswered gate) — salvaged the pre-failure work to:\n` +
+          `  ${outDir}\n  inspect it: cowork-harness inspect ${outDir}\n`,
+      );
+      throw unansweredErr;
+    }
+
+    // The session's TimelineWriter (src/agent/timeline.ts) flushes timeline.jsonl in its `finally` block
+    // during session.start(), which has already fully returned by this point (run.drive() awaited it above) —
+    // same guarantee scanEvents(join(outDir, "events.jsonl")) already relies on a few lines above. Read ONCE
+    // and reuse for both the evaluate ctx (skill_tool_used) and the later assembleRunResult call
+    // (toolDurations/skillActivity/subagents) below — two reads could disagree if the file were touched mid-run.
+    const timelineData = readTimeline(outDir);
+    if (timelineData && (timelineData.malformedLines > 0 || timelineData.headerCorrupt))
+      warn(
+        `::warning:: [timeline] ${timelineData.malformedLines} malformed line(s) in timeline.jsonl — skill-activity/tool-duration telemetry is incomplete, treated as unavailable\n`,
+      );
+    // A partially-corrupt timeline (valid header, dropped event lines) yields an INCOMPLETE fold — a dropped
+    // line could be a skill/tool window — so treat it as unavailable rather than silently incomplete (mirrors
+    // the scan missing/malformed handling; skill_tool_used then fails evidence-unavailable, never a false green). #35
+    const timelineEvents =
+      timelineData && timelineData.malformedLines === 0 && !timelineData.headerCorrupt ? timelineData.events : undefined;
+
+    // Context/Connectors panel: the SPINE is the id-only list run.ts's init handler already seeded
+    // onto record.context.availableSkills from the agent's own init event (authoritative — covers plugin/
+    // marketplace skills, which the disk scan never saw). Here we enrich each id with whenToUse read off
+    // disk, across BOTH delivery trees (skills.local under plan.configDir, plugin skills under each staged
+    // plugin mount). Populated HERE (before the evaluate() ctx below, which needs it for skill_available)
+    // rather than only later before assembleRunResult — reading it twice would be wasteful and out of order;
+    // this single assignment feeds both.
+    // `initSkills` is the id-only list run.ts seeded from the agent's init event — undefined if init never
+    // delivered an inventory (a pre-init crash / an agent version that didn't emit it). PRESERVE that
+    // undefined: collapsing it to a defined [] (the old `?? []` + unconditional enrich) made skill_available
+    // report "no staged skill matched" (false-absent) instead of tripping its evidence-unavailable guard. #16
+    const initSkills = record.context?.availableSkills;
+    const availableSkillIds = initSkills?.map((s) => s.id) ?? [];
+    record.context = {
+      ...record.context,
+      availableSkills:
+        initSkills === undefined ? undefined : resolveAvailableSkills(availableSkillIds, plan.configDir, pluginSkillRootsFromPlan(plan)),
+    };
+
+    // Surface dropped egress proxy-log lines as evidence health (collected in the finally above; applied here
+    // where `record` is definitely assigned). #39
+    if (egressMalformedLines > 0) record.evidenceErrors.egressParse = (record.evidenceErrors.egressParse ?? 0) + egressMalformedLines;
+
+    // Fold resources.jsonl ONCE — reused by both the evaluate() ctx below (max_peak_rss_bytes) and the
+    // assembleRunResult call further down. A second read could disagree if the sampler wrote between them.
+    // Thread the sampler's probe-failure count so the summary can distinguish "sampling failed" from
+    // "sampling unsupported / never ran". #41
+    const resources = foldResources(outDir, effectiveFidelity, resolveIntervalMs(), resourceSampler?.probeFailures);
+
+    // D1: the judge grades the union of the final answer + transcript + the files the run AUTHORED (final
+    // on-disk content), so a claim about a written artifact is presentation-stable (not a paste-vs-write
+    // coin-flip). Captured here — BEFORE the semantic pre-pass below — using the pre-run manifest to diff
+    // added/modified files. (`[]` when there's no manifest, e.g. microvm.)
+    // F12: at container/hostloop the agent's cwd is the SESSION ROOT (parent of `mnt`), not `mnt` — so a
+    // relative `Write outputs/x` lands in the scratchpad, outside `workRoot`. Pass the session root so those
+    // cwd-relative deliverables are captured too (`workRoot` ends `/session/mnt`; its parent is the root).
+    const scratchpadRoot = workRoot.endsWith(`${sep}mnt`) ? dirname(workRoot) : undefined;
+    // On a resume the session root is REUSED, so the scratchpad no longer starts empty — a prior turn's files
+    // would be mis-attributed as this turn's authorship. Skip the scratchpad walk in that case (evidence-
+    // unavailable is safer than misattribution). #17
+    const authored = captureAuthoredFilesWithHealth(workRoot, userVisibleRoots, readonlyFolderRoots, preRunHashes, {
+      scratchpadRoot,
+      resume: plan.resume,
+      // Pre-run mtime/size lets an over-cap/unreadable prior file (hash === null) be positively confirmed
+      // UNCHANGED rather than either mis-attributed as authored or silently dropped from evidence. #15/#12
+      preRunStats: readPreRunManifestStats(outDir),
+    });
+
+    const assertCtx: AssertContext = {
+      transcript: record.transcript,
+      finalMessage: record.resultText,
+      authoredFiles: authored.files,
+      // #14/#16: carry capture health (omitted-at-cap / unreadable files) so a semantic grade over an
+      // incomplete authored document is refused, not trusted. Undefined when the capture was complete.
+      authoredFilesHealth:
+        authored.health.omittedPaths.length || authored.health.readErrors.length || authored.health.scratchpadSkippedOnResume
+          ? authored.health
+          : undefined,
+      secrets,
+      toolsCalled: record.toolsCalled,
+      subagentTools: record.subagentTools,
+      egress,
+      result: record.result,
+      workRoot,
+      userVisiblePrefixes: userVisibleRoots,
+      // Read-only folder inputs are captured body-less; artifact_json must reach the same
+      // evidence-unavailable verdict here as on replay (see AssertContext.readonlyFolderRoots).
+      readonlyFolderRoots,
+      preRunPaths,
+      preRunLinkAware,
+      preRunHashes,
+      outputsDeletes: scan.outputsDeletes,
+      questions: record.questions,
+      hostPathLeaked: scan.hostPathLeaked,
+      selfHealRan: scan.selfHealRan,
+      // Missing/corrupt events.jsonl → the scan-dependent assertions (no_delete_in_outputs /
+      // transcript_no_host_path / self_heal_ran) fail "evidence unavailable" instead of vacuously green.
+      scanMissing: scanUnavailable,
+      subagents: record.subagents,
+      gateDeliveries: record.gateDeliveries,
+      toolResultTexts: record.toolResults.map((r) => r.assertText ?? r.text),
+      toolResultsTruncated: record.toolResults.map((r) => r.assertText === undefined),
+      toolErrors: record.toolErrors,
+      redundantToolCalls: record.redundantToolCalls,
+      skillsInvoked: record.skillsInvoked,
+      skillToolAvailable: record.initTools.includes("Skill"),
+      skillActivity: timelineEvents ? foldSkillActivity(timelineEvents) : undefined,
+      tasks: Array.from(record.tasks.values()),
+      // Context/Connectors panel — backs skill_available/connector_available/tool_available.
+      // record.context is populated above (availableSkills merged in before this ctx literal; tools/mcpServers
+      // set at init time in run.ts), so these are already live by the time evaluate() runs.
+      availableSkills: record.context?.availableSkills,
+      // mcpServers is unknown[] on the RunRecord (verbatim from the SDK's init event) — cast, not a
+      // transformation, matching the same pass-through cast assembleRunResult uses below.
+      mcpServers: record.context?.mcpServers as AssertContext["mcpServers"],
+      availableTools: record.context?.tools,
+      contextEvents: record.contextEvents,
+      // Always defined live — an empty array is a real "no MCP errors" signal, distinct from replay's
+      // undefined (mcp round-trips are harness-computed, not in the cassette's frozen stdout stream).
+      mcpErrors: record.mcpErrors,
+      // Always defined live — the built-in Task hook only fires on a dispatched background Task, so an
+      // empty array on a no-Task scenario is the real "nothing hook-blocked" signal no_hook_blocked needs.
+      hookEvents: record.hookEvents,
+      // Always defined live — an empty array is the real "nothing presented" signal no_scratchpad_leak's
+      // vacuous pass needs, distinct from replay's evidence-unavailable undefined on an older cassette.
+      presentedFiles: record.presentedFiles,
+      evidenceErrors: record.evidenceErrors,
+      effectiveFidelity,
+      // Live lane (this run's own machine) — host-shaped computer:// links (hostloop) are checked
+      // DIRECTLY on the filesystem, contained to the run's real workspace roots; verify-run shares
+      // this same "live" mode without hostRoots (see cli.ts's cmdVerifyRun).
+      linkResolution: {
+        mode: "live",
+        hostRoots: [
+          join(resolve(outDir), "work", "session", "mnt"),
+          ...plan.mounts.filter((m) => m.kind === "folder").map((m) => m.hostPath),
+        ],
+      },
+      ...budgetFields(record),
+      resources,
+    };
+
+    // LIVE lane: grade any `semantic_matches` asserts with the LLM judge BEFORE the synchronous
+    // evaluate() reads the per-claim results into check(). Gated so a scenario with no such assert never
+    // spends a model call. (Replay strips `semantic_matches` as live-only, so it never reaches here.)
+    if (scenario.assert.some((a) => a.semantic_matches !== undefined)) {
+      await runSemanticJudges(
+        scenario.assert,
+        assertCtx,
+        opts.semanticJudge ?? makeSemanticJudge(),
+        (model) => makeSemanticJudge({ model }), // honor a per-assert judge_model override
+      );
+    }
+    const assertions = evaluate(scenario.assert, assertCtx);
+
+    if (scenario.fidelity === "protocol" && (record.toolsCalled.has("WebFetch") || record.toolsCalled.has("WebSearch"))) {
+      warn(`::warning:: ${scenario.name}: a network tool ran at L0 (protocol) — egress is NOT enforced here.\n`);
+    }
+
+    for (const host of scenario.expect_denied) {
+      assertions.push({
+        assertion: { egress_denied: host },
+        pass: egress.some((e) => hostMatches(e.host, host) && e.decision === "deny"),
+        message: `expected ${host} to be denied`,
+      });
+    }
+
+    // Capability fidelity: on a live sandboxed tier, probe what the runtime OMITS vs the real
+    // Cowork rootfs, then detect whether the skill USED an omitted family. A non-empty intersection on an
+    // otherwise-green run is a likely FALSE NEGATIVE → computeVerdict fails it (unless allow_missing_capability).
+    // Probing is structural (the runtime is the source of truth), so an old `:1` / custom image can't silently
+    // fail-open. container/hostloop → Docker image probe; microvm → `limactl shell` guest probe. Skipped on
+    // protocol/replay (no live runtime to probe) and via COWORK_SKIP_CAPABILITY_PROBE.
+    let missingCapabilityUse: string[] | undefined;
+    let capabilityProbe: RunResult["capabilityProbe"] = "skipped"; // default — probe didn't run this tier/lane
+    let omittedFamilies: string[] | null = null; // the probe's omitted-set (null = not run / unverified)
+    if (
+      (effectiveFidelity === "container" || effectiveFidelity === "hostloop" || effectiveFidelity === "microvm") &&
+      process.env.COWORK_SKIP_CAPABILITY_PROBE !== "1"
+    ) {
+      const omitted =
+        effectiveFidelity === "microvm"
+          ? probeMicrovmOmitted(instanceName(baseline))
+          : probeImageOmitted({
+              runtime: process.env.COWORK_CONTAINER_RUNTIME ?? "docker",
+              image: process.env.COWORK_AGENT_IMAGE ?? "cowork-agent-base:2",
+              tier: effectiveFidelity,
+            });
+      omittedFamilies = omitted;
+      capabilityProbe = omitted === null ? "unverified" : "definitive"; // ran → definitive; failed → unverified
+      if (omitted === null) {
+        const w =
+          "agent runtime could not be probed for capabilities — capability fidelity unverified (capability false-negatives won't be caught this run)";
+        warn(`::warning:: [capability] (informational, unverified) ${w}\n`);
+        promptFidelityWarnings = [...(promptFidelityWarnings ?? []), w];
+      } else if (omitted.length) {
+        // state the safety net the notice is otherwise silent about — an omitted family that the skill
+        // actually USES hard-fails the run below (no silent false-pass). Tag the verdict impact so an observer
+        // never reads an informational line as a failure cause (or vice-versa).
+        if (!opts.compact)
+          warn(
+            `::notice:: [capability] (informational, guarded) this image omits: ${omitted.join(", ")} — ` +
+              `if a skill actually USES one, this run HARD-FAILS (no silent false-pass). ` +
+              `Only rebuild full parity (--build-arg COWORK_FULL_PARITY=1) if your skill needs them.\n`,
+          );
+        // The probe + hard-fail safety net runs regardless of --compact (only the informational notice above is gated).
+        const used = detectCapabilityUse(join(outDir, "events.jsonl"), omitted, workRoot);
+        if (used.length) {
+          missingCapabilityUse = used;
+          warn(
+            `::warning:: [capability] (FAILED THIS RUN) the skill USED omitted capabilit(ies) [${used.join(", ")}] — likely a FALSE NEGATIVE, ` +
+              `not a skill bug. Rebuild full parity (--build-arg COWORK_FULL_PARITY=1), or assert allow_missing_capability: true if the fallback is equivalent.\n`,
+          );
+        } else {
+          // close the loop — the bare omits-notice + a green run reads as a false-green RISK unless we say
+          // the guard ran and found nothing. Emit ONLY here (probe ran, families omitted), never in the
+          // omitted===null unverified branch (which has no basis to claim "not used").
+          if (!opts.compact)
+            warn(`::notice:: [capability] (informational, guarded) omitted families were not used this run → no false-negative.\n`);
+        }
+      }
+    }
+
+    // a skill can DECLARE the capability families its core path needs. If the running tier omits one
+    // (clause a) or can't verify them — protocol/replay/skip (clause b) — the run hard-fails (computeVerdict),
+    // closing the false-green for extraction-heavy skills. Computed at run time so verify-run/replay honor the
+    // recorded outcome (a clean full-parity run records nothing → no false-fail on later verify-run).
+    let requiresCapabilityUnmet: RunResult["requiresCapabilityUnmet"];
+    const requiredCaps = scenario.requires_capabilities ?? [];
+    if (requiredCaps.length) {
+      const known = new Set(Object.keys(CAPABILITY_FAMILIES));
+      const unknown = requiredCaps.filter((c) => !known.has(c));
+      if (unknown.length)
+        warn(
+          `::warning:: [capability] requires_capabilities lists unknown famil(ies): ${unknown.join(", ")} — known: ${[...known].join(", ")}\n`,
+        );
+      if (unknown.length) {
+        // An unknown family (typo) can NEVER appear in omittedFamilies (which lists only real families), so
+        // the definitive-lane `missing` filter below would silently drop it → false-green. Fold it into the
+        // unmet set so it hard-fails as an authoring error regardless of lane.
+        requiresCapabilityUnmet = { caps: unknown, reason: "unknown" };
+      }
+      if (capabilityProbe === "definitive") {
+        const missing = requiredCaps.filter((c) => known.has(c) && omittedFamilies?.includes(c));
+        if (missing.length)
+          requiresCapabilityUnmet = {
+            caps: [...(requiresCapabilityUnmet?.caps ?? []), ...missing],
+            reason: unknown.length ? "unknown" : "omitted",
+          };
+      } else if (!unknown.length) {
+        // skipped (protocol/replay/skip-env) or unverified — cannot confirm the declared caps are present.
+        requiresCapabilityUnmet = { caps: requiredCaps, reason: "unverifiable" };
+        warn(
+          `::warning:: [capability] (FAILED THIS RUN) skill declares requires_capabilities [${requiredCaps.join(", ")}] but this tier ` +
+            `cannot verify them (${capabilityProbe}) — run on a live built-image tier, or assert allow_missing_capability: true.\n`,
+        );
+      }
+    }
+
+    // Gate provenance: how each AskUserQuestion gate was answered (scripted / decided / first / prompt).
+    // Derived from the same decision log the envelope persists; `undefined` when the run had no gates so
+    // the field self-suppresses. Informational — never affects the verdict. `record.decisions`
+    // (DecisionRecord[], `by: string`) is assignable to the summarizer's `by?: string` param — no re-map.
+    const gateProvenance = summarizeGateProvenance(record.decisions);
+
+    // Working folder panel's file model: classify+fingerprint every file under the
+    // user-visible roots (output/mount/input). Reuses the same walk `artifacts` derives from below, over
+    // ALL userVisibleRoots — read-only inputs are still enumerated here, just tagged "input" instead of
+    // excluded outright.
+    const workspaceFiles = classifyWorkspaceFiles(workRoot, userVisibleRoots, readonlyFolderRoots);
+
+    // Multi-turn: archive the prior turn's run.jsonl/result.json (if this is a --resume) and get THIS
+    // turn's number, so the RunResult and run.jsonl agree and each turn's result stays recoverable.
     const turn = archivePriorTurnFiles(outDir);
-    const partialResult = buildPartialResult({
+
+    const result: RunResult = assembleRunResult({
+      $schema: RUN_RESULT_SCHEMA_URL,
+      generator: "cowork-harness",
+      mode: "run",
+      command: opts.command ?? "run", // #48: persist the originating command (skill/record share mode:"run")
       turn,
-      ablated: opts.ablateSkill,
-      scenarioName: scenario.name,
-      prompt: scenario.prompt,
+      ablated: opts.ablateSkill || undefined,
+      referencesRead: record.filesRead.length ? record.filesRead : undefined,
+      finalMessage: record.resultText,
+      execution: { location: "local" }, // live local run — no scheduled-trigger lane exists yet (no taskKind)
+      scenario: scenario.name,
+      prompt: scenario.prompt, // persisted for `scaffold <run-dir>`
       fidelity: scenario.fidelity,
       baseline: baseline.appVersion,
-      record,
+      result: record.result,
+      resultErrorKind: record.resultErrorKind, // transport vs agent classification of a result:"error"
+      errorSource: record.errorSource, // finer error-event source, alongside the coarse resultErrorKind
+      resultSubtype: record.resultSubtype, // SDK result subtype pass-through (error_max_turns / …)
+      stderrLogPath: join(outDir, "agent.stderr.log"), // always written by the live agent process
+      stalledOnQuestion: record.stalledOnQuestion, // run ended on an unanswered plain-text question
+      decisions: record.decisions.map((d) => ({
+        kind: d.kind,
+        name: d.name,
+        decision: d.decision,
+        by: d.by,
+        requestId: d.requestId,
+        model: d.model,
+        detail: d.detail,
+        rationale: d.rationale,
+        questions: d.questions,
+      })),
+      toolCounts: record.toolCounts,
+      webSearches: record.webSearches.length ? record.webSearches : undefined,
+      infraErrors: infraErrorsForResult(record),
+      evidenceErrors: evidenceErrorsForResult(record),
+      toolDurations: timelineEvents ? foldToolDurations(timelineEvents) : undefined,
+      skillActivity: timelineEvents ? foldSkillActivity(timelineEvents) : undefined,
+      models: record.models.length ? record.models : undefined,
+      thinking: record.thinking.length ? record.thinking : undefined,
+      thinkingElided: record.thinkingElided,
+      toolErrors: record.toolErrors,
+      modelUsage: record.modelUsage,
+      redundantToolCalls: record.redundantToolCalls,
+      tasks: Array.from(record.tasks.values()),
+      // mcpServers is unknown[] on the RunRecord (verbatim from the SDK's init event) but RunResult
+      // documents its loose per-server shape ({name, status?, ...}) for consumers — cast, not a
+      // transformation; the underlying array is passed through unchanged.
+      context: record.context as RunResult["context"],
+      gateDeliveries: record.gateDeliveries,
+      egress,
+      assertions,
+      toolResults: record.toolResults,
+      subagents: timelineEvents ? attributeSubagentSkills(record.subagents, timelineEvents) : record.subagents,
+      nonReproducibleAnswers: record.unanswered,
+      usage: record.usage,
+      cost: record.cost,
+      skillsInvoked: record.skillsInvoked,
+      skillToolAvailable: record.initTools.includes("Skill"),
+      durationMs: Date.now() - startedAt,
       outDir,
-      workRoot,
-      configDir: plan.configDir,
-      pluginSkillRoots: pluginSkillRootsFromPlan(plan),
+      workDir: workRoot,
+      outputsDir: join(workRoot, "outputs"),
       userVisibleRoots,
       readonlyFolderRoots,
-      effectiveFidelity,
-      egress,
-      durationMs: Date.now() - startedAt,
-      unanswered: { message: unansweredErr.message, hint: unansweredErr.hint },
+      // artifacts is a DERIVED VIEW of workspaceFiles — same collectArtifacts walk,
+      // filtered to the deliverable classes (excludes class:"input" read-only mounts). No second walk.
+      artifacts: workspaceFiles.filter((f) => f.class === "output" || f.class === "mount").map((f) => ({ path: f.path, bytes: f.bytes })),
+      workspaceFiles, // Working folder panel's canonical file model (output/mount/input) — see comment above
+      contextEvents: record.contextEvents, // system events we don't special-case — powers compaction_occurred
+      mcpErrors: record.mcpErrors, // uncollapsed — an empty [] is the real "no MCP errors" signal no_mcp_error needs
+      hookEvents: record.hookEvents, // uncollapsed — an empty [] on a no-Task scenario is the real "nothing hook-blocked" signal no_hook_blocked needs
+      presentedFiles: record.presentedFiles, // uncollapsed — an empty [] is the real "nothing presented" signal no_scratchpad_leak's vacuous pass needs
+      // The pre-spawn baseline no_unexpected_files diffs against (same single read the evaluate ctx got).
+      // undefined = the run didn't capture (key not asserted, microvm, pre-seam) — the assertion then
+      // fails evidence-unavailable, loud.
+      preRunPaths,
+      preRunLinkAware,
+      preRunHashes,
+      nonDeterministic:
+        // LLM-, external-, human-, or first-option-decided → not reproducible. `first` picks options[0] and
+        // option order can vary run-to-run; it's already pushed to unanswered[], so include it here to agree.
+        record.decisions.some((d) => d.by === "llm" || d.by === "external" || d.by === "human" || d.by === "first") ||
+        !!opts.nonDeterministicHint,
+      nonDeterministicTerminal: onUnanswered === "llm" || onUnanswered === "prompt" || !!opts.externalChannel,
+      gateProvenance: gateProvenance.total ? gateProvenance : undefined,
+      permissiveAutoAllow: record.permissiveAutoAllow.length ? record.permissiveAutoAllow : undefined, // cowork-parity off-registry auto-allows (real Cowork blocks) — non-empty ⇒ NOT a faithful pass
+      // post-run scan signals (delete-in-outputs / host-path-leak / self-heal) — computeVerdict default-fails
+      // when unasserted. `undefined` (NOT an all-false object) when events.jsonl was missing/corrupt, so
+      // verify-run's `scanMissing = result.scan === undefined` fires and the dependent assertions fail loud.
+      scan: scanUnavailable
+        ? undefined
+        : { outputsDeletes: scan.outputsDeletes, hostPathLeaked: scan.hostPathLeaked, selfHealRan: scan.selfHealRan },
+      effectiveFidelity, // The tier actually used — differs from fidelity when fidelity:"cowork"
+      fidelityWarnings: promptFidelityWarnings, // structured prompt warnings visible to JSON callers
+      l0PluginDivergence: l0PluginDivergence || undefined, // failing fidelity signal for protocol+plugins
+      missingCapabilityUse, // capability fidelity: omitted-capability families the skill used (live built-image tiers) — computeVerdict fails unless allow_missing_capability
+      capabilityProbe, // probe outcome (definitive | unverified | skipped) for the guard roster
+      requiresCapabilityUnmet, // declared requires_capabilities the tier couldn't satisfy → computeVerdict fails unless allow_missing_capability
+      // Skill staleness fingerprint, persisted on EVERY run (runs are always kept on disk) so `verify-run` can
+      // detect a kept run that predates a skill change and refuse to vouch for answer-coverage. Same call the
+      // record path uses for the cassette (cassette.ts) — `(inline)`/no-skill sessions yield a {baseline}-only fp.
       fingerprint: buildFingerprint(scenario.session, baseline.appVersion, undefined, scenario.skills),
-      onUnanswered,
-      nonDeterministicHint: opts.nonDeterministicHint,
-      externalChannel: !!opts.externalChannel,
+      resources, // same single fold as the evaluate() ctx above — not re-read
+      // Fields this lane has NEVER set (were implicitly `undefined` before this refactor; now explicit
+      // per assembleRunResult's contract — this line makes the omission a reviewable, greppable fact
+      // instead of an invisible one):
+      partial: undefined,
+      unansweredGate: undefined,
+      staleness: undefined,
+      skippedAssertions: undefined,
     });
-    // Non-null: `durationMs` is set unconditionally just above (`Date.now() - startedAt`) — the field is
-    // typed optional on RunResult/PartialResult for OTHER (non-execute.ts) producers, not this call site.
-    runCrashSafety.finalize(record, "error", partialResult.durationMs!);
-    // run.jsonl before result.json — see the ordering rationale on the success path below.
+
+    // Non-null: see the matching comment at the partial-result finalize call above.
+    runCrashSafety.finalize(record, result.result, result.durationMs!);
+
+    // Artifacts: the harness-observability log `run.jsonl` REPLACES transcript.json/decisions.jsonl.
+    // Write run.jsonl BEFORE result.json: a crash between the two then leaves run.jsonl present (so the
+    // next resume computes turn N+1 and archives this orphan as run.turn-<N>.jsonl) rather than result.json
+    // present with run.jsonl absent (which would recompute the SAME turn N and overwrite the already-archived
+    // result.turn-<N-1>.json). Order matters — do not swap.
     writeRunJsonl(outDir, scenario, effectiveFidelity, record, egress, secrets, turn);
-    writeFileSync(join(outDir, "result.json"), scrub(JSON.stringify(partialResult, null, 2), secrets));
-    appendIndexRow(runsWriteRoot(), indexRowFromResult(partialResult, { command: opts.command ?? "run", partial: true }));
-    writeTrace(outDir, record, egress, secrets, partialResult.durationMs);
-    scrubFileInPlace(join(outDir, "events.jsonl"), secrets);
-    scrubFileInPlace(join(outDir, "control-out.jsonl"), secrets);
-    // Loud PARTIAL marker so the populated artifacts are never misread as success (the no-false-green rule).
-    warn(
-      `::notice:: [partial] run did NOT complete (unanswered gate) — salvaged the pre-failure work to:\n` +
-        `  ${outDir}\n  inspect it: cowork-harness inspect ${outDir}\n`,
-    );
-    throw unansweredErr;
+    writeFileSync(join(outDir, "result.json"), scrub(JSON.stringify(result, null, 2), secrets));
+    appendIndexRow(runsWriteRoot(), indexRowFromResult(result, { command: opts.command ?? "run", partial: false }));
+    writeTrace(outDir, record, egress, secrets, result.durationMs);
+    return result;
+  } finally {
+    // LAST on purpose: the raw-stream readers above ran on the unscrubbed files — see the comment at
+    // the matching `try`. A finally runs on return AND on every throw, so the only in-process exits
+    // that skip this are ones where no raw log exists yet (throws before the try).
+    scrubRawRunLogs(outDir, secrets);
   }
-
-  // The session's TimelineWriter (src/agent/timeline.ts) flushes timeline.jsonl in its `finally` block
-  // during session.start(), which has already fully returned by this point (run.drive() awaited it above) —
-  // same guarantee scanEvents(join(outDir, "events.jsonl")) already relies on a few lines above. Read ONCE
-  // and reuse for both the evaluate ctx (skill_tool_used) and the later assembleRunResult call
-  // (toolDurations/skillActivity/subagents) below — two reads could disagree if the file were touched mid-run.
-  const timelineData = readTimeline(outDir);
-  if (timelineData && (timelineData.malformedLines > 0 || timelineData.headerCorrupt))
-    warn(
-      `::warning:: [timeline] ${timelineData.malformedLines} malformed line(s) in timeline.jsonl — skill-activity/tool-duration telemetry is incomplete, treated as unavailable\n`,
-    );
-  // A partially-corrupt timeline (valid header, dropped event lines) yields an INCOMPLETE fold — a dropped
-  // line could be a skill/tool window — so treat it as unavailable rather than silently incomplete (mirrors
-  // the scan missing/malformed handling; skill_tool_used then fails evidence-unavailable, never a false green). #35
-  const timelineEvents = timelineData && timelineData.malformedLines === 0 && !timelineData.headerCorrupt ? timelineData.events : undefined;
-
-  // Context/Connectors panel: the SPINE is the id-only list run.ts's init handler already seeded
-  // onto record.context.availableSkills from the agent's own init event (authoritative — covers plugin/
-  // marketplace skills, which the disk scan never saw). Here we enrich each id with whenToUse read off
-  // disk, across BOTH delivery trees (skills.local under plan.configDir, plugin skills under each staged
-  // plugin mount). Populated HERE (before the evaluate() ctx below, which needs it for skill_available)
-  // rather than only later before assembleRunResult — reading it twice would be wasteful and out of order;
-  // this single assignment feeds both.
-  // `initSkills` is the id-only list run.ts seeded from the agent's init event — undefined if init never
-  // delivered an inventory (a pre-init crash / an agent version that didn't emit it). PRESERVE that
-  // undefined: collapsing it to a defined [] (the old `?? []` + unconditional enrich) made skill_available
-  // report "no staged skill matched" (false-absent) instead of tripping its evidence-unavailable guard. #16
-  const initSkills = record.context?.availableSkills;
-  const availableSkillIds = initSkills?.map((s) => s.id) ?? [];
-  record.context = {
-    ...record.context,
-    availableSkills:
-      initSkills === undefined ? undefined : resolveAvailableSkills(availableSkillIds, plan.configDir, pluginSkillRootsFromPlan(plan)),
-  };
-
-  // Surface dropped egress proxy-log lines as evidence health (collected in the finally above; applied here
-  // where `record` is definitely assigned). #39
-  if (egressMalformedLines > 0) record.evidenceErrors.egressParse = (record.evidenceErrors.egressParse ?? 0) + egressMalformedLines;
-
-  // Fold resources.jsonl ONCE — reused by both the evaluate() ctx below (max_peak_rss_bytes) and the
-  // assembleRunResult call further down. A second read could disagree if the sampler wrote between them.
-  // Thread the sampler's probe-failure count so the summary can distinguish "sampling failed" from
-  // "sampling unsupported / never ran". #41
-  const resources = foldResources(outDir, effectiveFidelity, resolveIntervalMs(), resourceSampler?.probeFailures);
-
-  // D1: the judge grades the union of the final answer + transcript + the files the run AUTHORED (final
-  // on-disk content), so a claim about a written artifact is presentation-stable (not a paste-vs-write
-  // coin-flip). Captured here — BEFORE the semantic pre-pass below — using the pre-run manifest to diff
-  // added/modified files. (`[]` when there's no manifest, e.g. microvm.)
-  // F12: at container/hostloop the agent's cwd is the SESSION ROOT (parent of `mnt`), not `mnt` — so a
-  // relative `Write outputs/x` lands in the scratchpad, outside `workRoot`. Pass the session root so those
-  // cwd-relative deliverables are captured too (`workRoot` ends `/session/mnt`; its parent is the root).
-  const scratchpadRoot = workRoot.endsWith(`${sep}mnt`) ? dirname(workRoot) : undefined;
-  // On a resume the session root is REUSED, so the scratchpad no longer starts empty — a prior turn's files
-  // would be mis-attributed as this turn's authorship. Skip the scratchpad walk in that case (evidence-
-  // unavailable is safer than misattribution). #17
-  const authored = captureAuthoredFilesWithHealth(workRoot, userVisibleRoots, readonlyFolderRoots, preRunHashes, {
-    scratchpadRoot,
-    resume: plan.resume,
-    // Pre-run mtime/size lets an over-cap/unreadable prior file (hash === null) be positively confirmed
-    // UNCHANGED rather than either mis-attributed as authored or silently dropped from evidence. #15/#12
-    preRunStats: readPreRunManifestStats(outDir),
-  });
-
-  const assertCtx: AssertContext = {
-    transcript: record.transcript,
-    finalMessage: record.resultText,
-    authoredFiles: authored.files,
-    // #14/#16: carry capture health (omitted-at-cap / unreadable files) so a semantic grade over an
-    // incomplete authored document is refused, not trusted. Undefined when the capture was complete.
-    authoredFilesHealth:
-      authored.health.omittedPaths.length || authored.health.readErrors.length || authored.health.scratchpadSkippedOnResume
-        ? authored.health
-        : undefined,
-    secrets,
-    toolsCalled: record.toolsCalled,
-    subagentTools: record.subagentTools,
-    egress,
-    result: record.result,
-    workRoot,
-    userVisiblePrefixes: userVisibleRoots,
-    // Read-only folder inputs are captured body-less; artifact_json must reach the same
-    // evidence-unavailable verdict here as on replay (see AssertContext.readonlyFolderRoots).
-    readonlyFolderRoots,
-    preRunPaths,
-    preRunLinkAware,
-    preRunHashes,
-    outputsDeletes: scan.outputsDeletes,
-    questions: record.questions,
-    hostPathLeaked: scan.hostPathLeaked,
-    selfHealRan: scan.selfHealRan,
-    // Missing/corrupt events.jsonl → the scan-dependent assertions (no_delete_in_outputs /
-    // transcript_no_host_path / self_heal_ran) fail "evidence unavailable" instead of vacuously green.
-    scanMissing: scanUnavailable,
-    subagents: record.subagents,
-    gateDeliveries: record.gateDeliveries,
-    toolResultTexts: record.toolResults.map((r) => r.assertText ?? r.text),
-    toolResultsTruncated: record.toolResults.map((r) => r.assertText === undefined),
-    toolErrors: record.toolErrors,
-    redundantToolCalls: record.redundantToolCalls,
-    skillsInvoked: record.skillsInvoked,
-    skillToolAvailable: record.initTools.includes("Skill"),
-    skillActivity: timelineEvents ? foldSkillActivity(timelineEvents) : undefined,
-    tasks: Array.from(record.tasks.values()),
-    // Context/Connectors panel — backs skill_available/connector_available/tool_available.
-    // record.context is populated above (availableSkills merged in before this ctx literal; tools/mcpServers
-    // set at init time in run.ts), so these are already live by the time evaluate() runs.
-    availableSkills: record.context?.availableSkills,
-    // mcpServers is unknown[] on the RunRecord (verbatim from the SDK's init event) — cast, not a
-    // transformation, matching the same pass-through cast assembleRunResult uses below.
-    mcpServers: record.context?.mcpServers as AssertContext["mcpServers"],
-    availableTools: record.context?.tools,
-    contextEvents: record.contextEvents,
-    // Always defined live — an empty array is a real "no MCP errors" signal, distinct from replay's
-    // undefined (mcp round-trips are harness-computed, not in the cassette's frozen stdout stream).
-    mcpErrors: record.mcpErrors,
-    // Always defined live — the built-in Task hook only fires on a dispatched background Task, so an
-    // empty array on a no-Task scenario is the real "nothing hook-blocked" signal no_hook_blocked needs.
-    hookEvents: record.hookEvents,
-    // Always defined live — an empty array is the real "nothing presented" signal no_scratchpad_leak's
-    // vacuous pass needs, distinct from replay's evidence-unavailable undefined on an older cassette.
-    presentedFiles: record.presentedFiles,
-    evidenceErrors: record.evidenceErrors,
-    effectiveFidelity,
-    // Live lane (this run's own machine) — host-shaped computer:// links (hostloop) are checked
-    // DIRECTLY on the filesystem, contained to the run's real workspace roots; verify-run shares
-    // this same "live" mode without hostRoots (see cli.ts's cmdVerifyRun).
-    linkResolution: {
-      mode: "live",
-      hostRoots: [
-        join(resolve(outDir), "work", "session", "mnt"),
-        ...plan.mounts.filter((m) => m.kind === "folder").map((m) => m.hostPath),
-      ],
-    },
-    ...budgetFields(record),
-    resources,
-  };
-
-  // LIVE lane: grade any `semantic_matches` asserts with the LLM judge BEFORE the synchronous
-  // evaluate() reads the per-claim results into check(). Gated so a scenario with no such assert never
-  // spends a model call. (Replay strips `semantic_matches` as live-only, so it never reaches here.)
-  if (scenario.assert.some((a) => a.semantic_matches !== undefined)) {
-    await runSemanticJudges(
-      scenario.assert,
-      assertCtx,
-      opts.semanticJudge ?? makeSemanticJudge(),
-      (model) => makeSemanticJudge({ model }), // honor a per-assert judge_model override
-    );
-  }
-  const assertions = evaluate(scenario.assert, assertCtx);
-
-  if (scenario.fidelity === "protocol" && (record.toolsCalled.has("WebFetch") || record.toolsCalled.has("WebSearch"))) {
-    warn(`::warning:: ${scenario.name}: a network tool ran at L0 (protocol) — egress is NOT enforced here.\n`);
-  }
-
-  for (const host of scenario.expect_denied) {
-    assertions.push({
-      assertion: { egress_denied: host },
-      pass: egress.some((e) => hostMatches(e.host, host) && e.decision === "deny"),
-      message: `expected ${host} to be denied`,
-    });
-  }
-
-  // Capability fidelity: on a live sandboxed tier, probe what the runtime OMITS vs the real
-  // Cowork rootfs, then detect whether the skill USED an omitted family. A non-empty intersection on an
-  // otherwise-green run is a likely FALSE NEGATIVE → computeVerdict fails it (unless allow_missing_capability).
-  // Probing is structural (the runtime is the source of truth), so an old `:1` / custom image can't silently
-  // fail-open. container/hostloop → Docker image probe; microvm → `limactl shell` guest probe. Skipped on
-  // protocol/replay (no live runtime to probe) and via COWORK_SKIP_CAPABILITY_PROBE.
-  let missingCapabilityUse: string[] | undefined;
-  let capabilityProbe: RunResult["capabilityProbe"] = "skipped"; // default — probe didn't run this tier/lane
-  let omittedFamilies: string[] | null = null; // the probe's omitted-set (null = not run / unverified)
-  if (
-    (effectiveFidelity === "container" || effectiveFidelity === "hostloop" || effectiveFidelity === "microvm") &&
-    process.env.COWORK_SKIP_CAPABILITY_PROBE !== "1"
-  ) {
-    const omitted =
-      effectiveFidelity === "microvm"
-        ? probeMicrovmOmitted(instanceName(baseline))
-        : probeImageOmitted({
-            runtime: process.env.COWORK_CONTAINER_RUNTIME ?? "docker",
-            image: process.env.COWORK_AGENT_IMAGE ?? "cowork-agent-base:2",
-            tier: effectiveFidelity,
-          });
-    omittedFamilies = omitted;
-    capabilityProbe = omitted === null ? "unverified" : "definitive"; // ran → definitive; failed → unverified
-    if (omitted === null) {
-      const w =
-        "agent runtime could not be probed for capabilities — capability fidelity unverified (capability false-negatives won't be caught this run)";
-      warn(`::warning:: [capability] (informational, unverified) ${w}\n`);
-      promptFidelityWarnings = [...(promptFidelityWarnings ?? []), w];
-    } else if (omitted.length) {
-      // state the safety net the notice is otherwise silent about — an omitted family that the skill
-      // actually USES hard-fails the run below (no silent false-pass). Tag the verdict impact so an observer
-      // never reads an informational line as a failure cause (or vice-versa).
-      if (!opts.compact)
-        warn(
-          `::notice:: [capability] (informational, guarded) this image omits: ${omitted.join(", ")} — ` +
-            `if a skill actually USES one, this run HARD-FAILS (no silent false-pass). ` +
-            `Only rebuild full parity (--build-arg COWORK_FULL_PARITY=1) if your skill needs them.\n`,
-        );
-      // The probe + hard-fail safety net runs regardless of --compact (only the informational notice above is gated).
-      const used = detectCapabilityUse(join(outDir, "events.jsonl"), omitted, workRoot);
-      if (used.length) {
-        missingCapabilityUse = used;
-        warn(
-          `::warning:: [capability] (FAILED THIS RUN) the skill USED omitted capabilit(ies) [${used.join(", ")}] — likely a FALSE NEGATIVE, ` +
-            `not a skill bug. Rebuild full parity (--build-arg COWORK_FULL_PARITY=1), or assert allow_missing_capability: true if the fallback is equivalent.\n`,
-        );
-      } else {
-        // close the loop — the bare omits-notice + a green run reads as a false-green RISK unless we say
-        // the guard ran and found nothing. Emit ONLY here (probe ran, families omitted), never in the
-        // omitted===null unverified branch (which has no basis to claim "not used").
-        if (!opts.compact)
-          warn(`::notice:: [capability] (informational, guarded) omitted families were not used this run → no false-negative.\n`);
-      }
-    }
-  }
-
-  // a skill can DECLARE the capability families its core path needs. If the running tier omits one
-  // (clause a) or can't verify them — protocol/replay/skip (clause b) — the run hard-fails (computeVerdict),
-  // closing the false-green for extraction-heavy skills. Computed at run time so verify-run/replay honor the
-  // recorded outcome (a clean full-parity run records nothing → no false-fail on later verify-run).
-  let requiresCapabilityUnmet: RunResult["requiresCapabilityUnmet"];
-  const requiredCaps = scenario.requires_capabilities ?? [];
-  if (requiredCaps.length) {
-    const known = new Set(Object.keys(CAPABILITY_FAMILIES));
-    const unknown = requiredCaps.filter((c) => !known.has(c));
-    if (unknown.length)
-      warn(
-        `::warning:: [capability] requires_capabilities lists unknown famil(ies): ${unknown.join(", ")} — known: ${[...known].join(", ")}\n`,
-      );
-    if (unknown.length) {
-      // An unknown family (typo) can NEVER appear in omittedFamilies (which lists only real families), so
-      // the definitive-lane `missing` filter below would silently drop it → false-green. Fold it into the
-      // unmet set so it hard-fails as an authoring error regardless of lane.
-      requiresCapabilityUnmet = { caps: unknown, reason: "unknown" };
-    }
-    if (capabilityProbe === "definitive") {
-      const missing = requiredCaps.filter((c) => known.has(c) && omittedFamilies?.includes(c));
-      if (missing.length)
-        requiresCapabilityUnmet = {
-          caps: [...(requiresCapabilityUnmet?.caps ?? []), ...missing],
-          reason: unknown.length ? "unknown" : "omitted",
-        };
-    } else if (!unknown.length) {
-      // skipped (protocol/replay/skip-env) or unverified — cannot confirm the declared caps are present.
-      requiresCapabilityUnmet = { caps: requiredCaps, reason: "unverifiable" };
-      warn(
-        `::warning:: [capability] (FAILED THIS RUN) skill declares requires_capabilities [${requiredCaps.join(", ")}] but this tier ` +
-          `cannot verify them (${capabilityProbe}) — run on a live built-image tier, or assert allow_missing_capability: true.\n`,
-      );
-    }
-  }
-
-  // Gate provenance: how each AskUserQuestion gate was answered (scripted / decided / first / prompt).
-  // Derived from the same decision log the envelope persists; `undefined` when the run had no gates so
-  // the field self-suppresses. Informational — never affects the verdict. `record.decisions`
-  // (DecisionRecord[], `by: string`) is assignable to the summarizer's `by?: string` param — no re-map.
-  const gateProvenance = summarizeGateProvenance(record.decisions);
-
-  // Working folder panel's file model: classify+fingerprint every file under the
-  // user-visible roots (output/mount/input). Reuses the same walk `artifacts` derives from below, over
-  // ALL userVisibleRoots — read-only inputs are still enumerated here, just tagged "input" instead of
-  // excluded outright.
-  const workspaceFiles = classifyWorkspaceFiles(workRoot, userVisibleRoots, readonlyFolderRoots);
-
-  // Multi-turn: archive the prior turn's run.jsonl/result.json (if this is a --resume) and get THIS
-  // turn's number, so the RunResult and run.jsonl agree and each turn's result stays recoverable.
-  const turn = archivePriorTurnFiles(outDir);
-
-  const result: RunResult = assembleRunResult({
-    $schema: RUN_RESULT_SCHEMA_URL,
-    generator: "cowork-harness",
-    mode: "run",
-    command: opts.command ?? "run", // #48: persist the originating command (skill/record share mode:"run")
-    turn,
-    ablated: opts.ablateSkill || undefined,
-    referencesRead: record.filesRead.length ? record.filesRead : undefined,
-    finalMessage: record.resultText,
-    execution: { location: "local" }, // live local run — no scheduled-trigger lane exists yet (no taskKind)
-    scenario: scenario.name,
-    prompt: scenario.prompt, // persisted for `scaffold <run-dir>`
-    fidelity: scenario.fidelity,
-    baseline: baseline.appVersion,
-    result: record.result,
-    resultErrorKind: record.resultErrorKind, // transport vs agent classification of a result:"error"
-    errorSource: record.errorSource, // finer error-event source, alongside the coarse resultErrorKind
-    resultSubtype: record.resultSubtype, // SDK result subtype pass-through (error_max_turns / …)
-    stderrLogPath: join(outDir, "agent.stderr.log"), // always written by the live agent process
-    stalledOnQuestion: record.stalledOnQuestion, // run ended on an unanswered plain-text question
-    decisions: record.decisions.map((d) => ({
-      kind: d.kind,
-      name: d.name,
-      decision: d.decision,
-      by: d.by,
-      requestId: d.requestId,
-      model: d.model,
-      detail: d.detail,
-      rationale: d.rationale,
-      questions: d.questions,
-    })),
-    toolCounts: record.toolCounts,
-    webSearches: record.webSearches.length ? record.webSearches : undefined,
-    infraErrors: infraErrorsForResult(record),
-    evidenceErrors: evidenceErrorsForResult(record),
-    toolDurations: timelineEvents ? foldToolDurations(timelineEvents) : undefined,
-    skillActivity: timelineEvents ? foldSkillActivity(timelineEvents) : undefined,
-    models: record.models.length ? record.models : undefined,
-    thinking: record.thinking.length ? record.thinking : undefined,
-    thinkingElided: record.thinkingElided,
-    toolErrors: record.toolErrors,
-    modelUsage: record.modelUsage,
-    redundantToolCalls: record.redundantToolCalls,
-    tasks: Array.from(record.tasks.values()),
-    // mcpServers is unknown[] on the RunRecord (verbatim from the SDK's init event) but RunResult
-    // documents its loose per-server shape ({name, status?, ...}) for consumers — cast, not a
-    // transformation; the underlying array is passed through unchanged.
-    context: record.context as RunResult["context"],
-    gateDeliveries: record.gateDeliveries,
-    egress,
-    assertions,
-    toolResults: record.toolResults,
-    subagents: timelineEvents ? attributeSubagentSkills(record.subagents, timelineEvents) : record.subagents,
-    nonReproducibleAnswers: record.unanswered,
-    usage: record.usage,
-    cost: record.cost,
-    skillsInvoked: record.skillsInvoked,
-    skillToolAvailable: record.initTools.includes("Skill"),
-    durationMs: Date.now() - startedAt,
-    outDir,
-    workDir: workRoot,
-    outputsDir: join(workRoot, "outputs"),
-    userVisibleRoots,
-    readonlyFolderRoots,
-    // artifacts is a DERIVED VIEW of workspaceFiles — same collectArtifacts walk,
-    // filtered to the deliverable classes (excludes class:"input" read-only mounts). No second walk.
-    artifacts: workspaceFiles.filter((f) => f.class === "output" || f.class === "mount").map((f) => ({ path: f.path, bytes: f.bytes })),
-    workspaceFiles, // Working folder panel's canonical file model (output/mount/input) — see comment above
-    contextEvents: record.contextEvents, // system events we don't special-case — powers compaction_occurred
-    mcpErrors: record.mcpErrors, // uncollapsed — an empty [] is the real "no MCP errors" signal no_mcp_error needs
-    hookEvents: record.hookEvents, // uncollapsed — an empty [] on a no-Task scenario is the real "nothing hook-blocked" signal no_hook_blocked needs
-    presentedFiles: record.presentedFiles, // uncollapsed — an empty [] is the real "nothing presented" signal no_scratchpad_leak's vacuous pass needs
-    // The pre-spawn baseline no_unexpected_files diffs against (same single read the evaluate ctx got).
-    // undefined = the run didn't capture (key not asserted, microvm, pre-seam) — the assertion then
-    // fails evidence-unavailable, loud.
-    preRunPaths,
-    preRunLinkAware,
-    preRunHashes,
-    nonDeterministic:
-      // LLM-, external-, human-, or first-option-decided → not reproducible. `first` picks options[0] and
-      // option order can vary run-to-run; it's already pushed to unanswered[], so include it here to agree.
-      record.decisions.some((d) => d.by === "llm" || d.by === "external" || d.by === "human" || d.by === "first") ||
-      !!opts.nonDeterministicHint,
-    nonDeterministicTerminal: onUnanswered === "llm" || onUnanswered === "prompt" || !!opts.externalChannel,
-    gateProvenance: gateProvenance.total ? gateProvenance : undefined,
-    permissiveAutoAllow: record.permissiveAutoAllow.length ? record.permissiveAutoAllow : undefined, // cowork-parity off-registry auto-allows (real Cowork blocks) — non-empty ⇒ NOT a faithful pass
-    // post-run scan signals (delete-in-outputs / host-path-leak / self-heal) — computeVerdict default-fails
-    // when unasserted. `undefined` (NOT an all-false object) when events.jsonl was missing/corrupt, so
-    // verify-run's `scanMissing = result.scan === undefined` fires and the dependent assertions fail loud.
-    scan: scanUnavailable
-      ? undefined
-      : { outputsDeletes: scan.outputsDeletes, hostPathLeaked: scan.hostPathLeaked, selfHealRan: scan.selfHealRan },
-    effectiveFidelity, // The tier actually used — differs from fidelity when fidelity:"cowork"
-    fidelityWarnings: promptFidelityWarnings, // structured prompt warnings visible to JSON callers
-    l0PluginDivergence: l0PluginDivergence || undefined, // failing fidelity signal for protocol+plugins
-    missingCapabilityUse, // capability fidelity: omitted-capability families the skill used (live built-image tiers) — computeVerdict fails unless allow_missing_capability
-    capabilityProbe, // probe outcome (definitive | unverified | skipped) for the guard roster
-    requiresCapabilityUnmet, // declared requires_capabilities the tier couldn't satisfy → computeVerdict fails unless allow_missing_capability
-    // Skill staleness fingerprint, persisted on EVERY run (runs are always kept on disk) so `verify-run` can
-    // detect a kept run that predates a skill change and refuse to vouch for answer-coverage. Same call the
-    // record path uses for the cassette (cassette.ts) — `(inline)`/no-skill sessions yield a {baseline}-only fp.
-    fingerprint: buildFingerprint(scenario.session, baseline.appVersion, undefined, scenario.skills),
-    resources, // same single fold as the evaluate() ctx above — not re-read
-    // Fields this lane has NEVER set (were implicitly `undefined` before this refactor; now explicit
-    // per assembleRunResult's contract — this line makes the omission a reviewable, greppable fact
-    // instead of an invisible one):
-    partial: undefined,
-    unansweredGate: undefined,
-    staleness: undefined,
-    skippedAssertions: undefined,
-  });
-
-  // Non-null: see the matching comment at the partial-result finalize call above.
-  runCrashSafety.finalize(record, result.result, result.durationMs!);
-
-  // Artifacts: the harness-observability log `run.jsonl` REPLACES transcript.json/decisions.jsonl.
-  // Write run.jsonl BEFORE result.json: a crash between the two then leaves run.jsonl present (so the
-  // next resume computes turn N+1 and archives this orphan as run.turn-<N>.jsonl) rather than result.json
-  // present with run.jsonl absent (which would recompute the SAME turn N and overwrite the already-archived
-  // result.turn-<N-1>.json). Order matters — do not swap.
-  writeRunJsonl(outDir, scenario, effectiveFidelity, record, egress, secrets, turn);
-  writeFileSync(join(outDir, "result.json"), scrub(JSON.stringify(result, null, 2), secrets));
-  appendIndexRow(runsWriteRoot(), indexRowFromResult(result, { command: opts.command ?? "run", partial: false }));
-  writeTrace(outDir, record, egress, secrets, result.durationMs);
-  scrubFileInPlace(join(outDir, "events.jsonl"), secrets);
-  scrubFileInPlace(join(outDir, "control-out.jsonl"), secrets);
-  return result;
 }
 
 export function parseSessionFile(path: string): unknown {
@@ -1566,6 +1577,21 @@ function scrubFileInPlace(path: string, secrets: string[]) {
   } catch {
     /* file may not exist (e.g. no control-out at protocol fidelity) */
   }
+}
+
+/** Scrub the raw streamed run logs in place: events.jsonl, control-out.jsonl, agent.stderr.log
+ *  (timeline.jsonl is deliberately not scrubbed — it carries tool names/durations only). Called from
+ *  executeScenario's outermost `finally` (and the chat lane's teardown) so every exit path AFTER the
+ *  agent session exists scrubs — success, the unanswered-gate salvage rethrow, and any rethrown fault
+ *  (agent crash, infra error, hostloop snapshot failure). Deliberately NOT total coverage: a throw
+ *  before that try has no raw logs yet; a SIGKILL of the harness process skips any finally; and the
+ *  agent.stderr.log write stream is never awaited, so bytes still buffered at scrub time can land raw
+ *  afterwards (closing that needs an awaitable stderr-sink close on the session — a follow-up, not
+ *  this seam). Exported for tests. */
+export function scrubRawRunLogs(outDir: string, secrets: string[]): void {
+  scrubFileInPlace(join(outDir, "events.jsonl"), secrets);
+  scrubFileInPlace(join(outDir, "control-out.jsonl"), secrets);
+  scrubFileInPlace(join(outDir, "agent.stderr.log"), secrets);
 }
 
 /**
