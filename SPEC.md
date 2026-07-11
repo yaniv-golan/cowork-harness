@@ -176,11 +176,14 @@ inline PreToolUse hook body — is hostloop's ENTIRE security boundary for real 
 Installed via the `hooks` seam (§4, a caller-supplied `HookBundle` merged onto the always-on
 `COWORK_PRETOOLUSE_HOOKS` in the `initialize` control_request). Denies any `Read`/`Write`/`Edit`/`Glob`/
 `Grep`/`MultiEdit` whose resolved path falls outside the session's allowed roots (outputs, uploads,
-skills, writable connected folders, the staged plugin copy; read-only folders are readable but not
-writable). A `/sessions/...`-shaped path is denied with a distinct "is a VM path, use bash" message. A
-run-end runtime tripwire (`execute.ts`'s `findUngatedPathToolCalls` / `chat.ts`'s inline `tripwireHook`)
-hard-fails the run/session if a gated tool call ever completes successfully with no evidence the gate
-fired for it — version-skew insurance, not doubt about the currently-pinned binary.
+spooled projects, skills, writable connected folders, the staged plugin copy). Three of those roots are
+READ-ONLY categories, not a blanket allow: a mutating call into `uploads` (hardlink write-block —
+per-session-type text), the spooled-projects dir, or the staged skills/plugin copies (no exemption for
+plugin content anymore) is denied with that category's own message while remaining readable. A
+`/sessions/...`-shaped path is denied with a distinct "is a VM path, use bash" message. A run-end runtime
+tripwire (`execute.ts`'s `findUngatedPathToolCalls` / `chat.ts`'s inline `tripwireHook`) hard-fails the
+run/session if a gated tool call ever completes successfully with no evidence the gate fired for it —
+version-skew insurance, not doubt about the currently-pinned binary.
 
 A `hostloop` scenario with a WRITABLE connected folder requires the top-level `allow_host_writes: true`
 scenario field (or `--allow-host-writes` for `chat`) — `checkHostLoopWriteConsent` refuses to spawn

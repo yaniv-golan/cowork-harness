@@ -138,14 +138,19 @@ export function spawnHostLoop(
   // The PreToolUse path-containment gate config. hostCwd = the harness-owned outputs dir (production's
   // `hostCwd = getOutputsDir(e)`); scratchRoots = [hostCwd] (hostCwd and hostOutputsDir are the SAME dir
   // here, so this is one entry, not two).
+  const uploadsRoot = join(mntHost, "uploads");
+  const spoolRoot = join(plan.configDir, "projects"); // production's spooled-tool-results dir analog: the staged config dir's own "projects" subdir
+  const skillsRoot = join(plan.configDir, "skills");
+  const pluginRoots = plan.mounts.filter((mt) => mt.kind !== "folder" && mt.kind !== "upload").map((mt) => join(mntHost, mt.mountPath));
   const gateCfg: HostLoopPathGateConfig = {
     hostCwd: hostOutputsDir,
     allowedRoots: [
       hostOutputsDir,
-      join(mntHost, "uploads"),
-      join(plan.configDir, "skills"),
+      uploadsRoot,
+      spoolRoot,
+      skillsRoot,
       ...plan.mounts.filter((mt) => mt.kind === "folder" && mt.mode !== "r").map((mt) => mt.hostPath),
-      ...plan.mounts.filter((mt) => mt.kind !== "folder" && mt.kind !== "upload").map((mt) => join(mntHost, mt.mountPath)),
+      ...pluginRoots,
     ],
     readOnlyRoots: plan.mounts.filter((mt) => mt.kind === "folder" && mt.mode === "r").map((mt) => mt.hostPath),
     scratchRoots: [hostOutputsDir],
@@ -157,8 +162,15 @@ export function spawnHostLoop(
     // connected folder in chat is an operator-constructed fixture, not a production chat topology — so this
     // is a known, consented fidelity gap, not a safety break (security-reviewed 2026-07-04). Revisit if
     // chat hostloop should thread session-type scratchMode for closer fidelity.
+    //
+    // 1.20186.1 addendum: production chat-type sessions ALSO differ in (i) scratch containment,
+    // (ii) chat read-roots including uploads + both projects spool dirs, (iii) connected-folder scope.
+    // Retained divergence for the chat lane (see docs/fidelity-gaps.md "Chat-lane session topology");
+    // the TASK-lane read-only categories (uploads/spool/plugin write-blocks) ARE modeled above.
     scratchMode: false,
-    claudePluginRoot: claudePluginRootHost,
+    uploadsRoots: [uploadsRoot],
+    spooledProjectsRoots: [spoolRoot],
+    readOnlyPluginRoots: [skillsRoot, ...pluginRoots],
   };
   const pathGateFired = new Set<string>(); // tool_use_ids the gate actually saw — feeds the runtime tripwire below
   const hooks: HookBundle = {

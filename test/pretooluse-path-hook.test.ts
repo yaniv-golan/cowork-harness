@@ -32,6 +32,9 @@ describe("pretooluse-path-hook", () => {
       readOnlyRoots: [],
       scratchRoots: [allowed],
       scratchMode: false,
+      uploadsRoots: [],
+      spooledProjectsRoots: [],
+      readOnlyPluginRoots: [],
       ...overrides,
     };
   }
@@ -149,30 +152,58 @@ describe("pretooluse-path-hook", () => {
       expect(writeOut).toMatchObject({ decision: "block" });
     });
 
-    it("a path genuinely inside claudePluginRoot passes even in scratch mode", async () => {
-      const pluginRoot = join(base, "plugin");
-      mkdirSync(pluginRoot, { recursive: true });
-      const out = await checkHostLoopPathGate(
-        "Read",
-        { file_path: join(pluginRoot, "SKILL.md") },
-        cfg({ scratchMode: true, scratchRoots: [allowed], claudePluginRoot: pluginRoot }),
-      );
-      expect(out).toEqual({});
-    });
-
-    it("../../ through claudePluginRoot resolves outside and is denied", async () => {
-      const pluginRoot = join(base, "plugin2");
-      mkdirSync(pluginRoot, { recursive: true });
-      const out = await checkHostLoopPathGate(
-        "Read",
-        { file_path: join(pluginRoot, "..", "..", "outside", "x.txt") },
-        cfg({ allowedRoots: [], claudePluginRoot: pluginRoot }),
-      );
-      expect(out).toMatchObject({ decision: "block" });
-    });
-
     it("PATH_GATE_TOOL_NAMES is exactly the 5 gated tools", () => {
       expect([...PATH_GATE_TOOL_NAMES].sort()).toEqual(["Edit", "Glob", "Grep", "Read", "Write"]);
+    });
+  });
+
+  describe("read-only categories (production qt, 1.20186.1)", () => {
+    it("plugin/skill content: Read passes, Write blocks with the plugin message (task session)", async () => {
+      const pluginRoot = join(base, "plugin");
+      mkdirSync(pluginRoot, { recursive: true });
+      const c = cfg({ allowedRoots: [allowed, pluginRoot], readOnlyPluginRoots: [pluginRoot] });
+      expect(await checkHostLoopPathGate("Read", { file_path: join(pluginRoot, "SKILL.md") }, c)).toEqual({});
+      const out = await checkHostLoopPathGate("Write", { file_path: join(pluginRoot, "SKILL.md") }, c);
+      expect(out).toMatchObject({ decision: "block" });
+      expect((out as { reason: string }).reason).toContain("(plugin, skill, or knowledge content)");
+      expect((out as { reason: string }).reason).toContain("outputs directory");
+    });
+    it("uploads: Read passes; task-session Write blocks with the HARDLINK message", async () => {
+      const uploads = join(base, "uploads");
+      mkdirSync(uploads, { recursive: true });
+      const c = cfg({ allowedRoots: [allowed, uploads], uploadsRoots: [uploads] });
+      expect(await checkHostLoopPathGate("Read", { file_path: join(uploads, "doc.pdf") }, c)).toEqual({});
+      const out = await checkHostLoopPathGate("Write", { file_path: join(uploads, "doc.pdf") }, c);
+      expect(out).toMatchObject({ decision: "block" });
+      expect((out as { reason: string }).reason).toContain("hardlink to the user's original file");
+    });
+    it("uploads in scratchMode (chat proxy) keep the scratch-copy message, not the hardlink one", async () => {
+      const uploads = join(base, "uploads");
+      mkdirSync(uploads, { recursive: true });
+      const c = cfg({ scratchMode: true, scratchRoots: [allowed], uploadsRoots: [uploads] });
+      const out = await checkHostLoopPathGate("Write", { file_path: join(uploads, "doc.pdf") }, c);
+      expect((out as { reason: string }).reason).toContain("scratch directory");
+      expect((out as { reason: string }).reason).not.toContain("hardlink");
+    });
+    it("spooled projects: Read passes, Write blocks with the spooled-tool-results message", async () => {
+      const spool = join(base, "projects");
+      mkdirSync(spool, { recursive: true });
+      const c = cfg({ allowedRoots: [allowed, spool], spooledProjectsRoots: [spool] });
+      expect(await checkHostLoopPathGate("Read", { file_path: join(spool, "x.jsonl") }, c)).toEqual({});
+      const out = await checkHostLoopPathGate("Write", { file_path: join(spool, "x.jsonl") }, c);
+      expect((out as { reason: string }).reason).toContain("(spooled tool results)");
+    });
+    it("the old blanket plugin exemption is GONE: scratch-mode Write inside a plugin root blocks", async () => {
+      const pluginRoot = join(base, "plugin");
+      mkdirSync(pluginRoot, { recursive: true });
+      const c = cfg({ scratchMode: true, scratchRoots: [allowed], readOnlyPluginRoots: [pluginRoot] });
+      const out = await checkHostLoopPathGate("Write", { file_path: join(pluginRoot, "SKILL.md") }, c);
+      expect(out).toMatchObject({ decision: "block" });
+    });
+    it("mode:r folder semantics are preserved (harness extension: Read passes, Write blocks)", async () => {
+      const roCfg = cfg({ allowedRoots: [], readOnlyRoots: [allowed] });
+      expect(await checkHostLoopPathGate("Read", { file_path: join(allowed, "x.txt") }, roCfg)).toEqual({});
+      expect(await checkHostLoopPathGate("Write", { file_path: join(allowed, "x.txt") }, roCfg)).toMatchObject({ decision: "block" });
     });
   });
 });

@@ -237,3 +237,30 @@ mounts — neither branch's environment description is factually true there, so 
 teach the model false claims about its filesystem. Consequence: protocol sub-agents get no Cowork
 environment framing. This is a decided divergence, not an oversight; use hostloop (the production
 default loop) or container for sub-agent environment fidelity.
+
+---
+
+## Path-gate roots are frozen at spawn
+
+**Real Cowork behaviour:** the host-loop path gate recomputes folder-permission and mid-session
+read-only roots PER HOOK CALL (`getFolderPermissionPaths()` / `getMidSessionReadOnlyPaths()` in the
+per-call root assembly), so a folder added mid-session is picked up live.
+
+**Harness behaviour:** `allowedRoots`/`readOnlyRoots` are computed once at spawn (hostloop.ts). The
+harness has no mid-session folder-add mechanism (see "Mid-session folder addition" above), so the
+frozen set is behaviorally equivalent today — there is nothing that could change between calls.
+Revisit if mid-session adds ever land.
+
+---
+
+## Chat-lane session topology (scratchMode stays false)
+
+**Real Cowork behaviour:** chat-type sessions have scratch containment (writes confined to
+hostCwd/outputs) and read-roots that include uploads plus both `projects` spool dirs; plugin content is
+absent from chat roots entirely.
+
+**Harness behaviour:** the `chat` lane runs cowork-type sessions with `scratchMode: false`
+(hostloop.ts, consented gap, security-reviewed 2026-07-04). Consequences vs a production chat session:
+writes are gated by `allow_host_writes` consent instead of scratch containment; spooled-projects
+read-roots exist only as the task-lane spool dir; connected-folder scope differs. The task-lane
+read-only categories (uploads hardlink write-block, spool, plugin) ARE modeled.
