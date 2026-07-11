@@ -13,7 +13,7 @@ import { makeDisplayTranslator, vmPathContextFromPlan, linkifyForTerminal, shoul
 import { writeVmPathContextFile } from "./vm-path-ctx-file.js";
 import { startEgressSidecar, registerCleanup } from "../egress/sidecar.js";
 import { Scenario } from "../types.js";
-import { LiveAgentSession, type AgentEvent } from "../agent/session.js";
+import { LiveAgentSession, type AgentEvent, type SdkMcp, type HookBundle } from "../agent/session.js";
 import { Run, type RunHooks } from "./run.js";
 import { ResourceSampler, makeSampleOnce, resolveIntervalMs } from "../runtime/resource-sampler.js";
 import { makeRenderer, startHeartbeat, type RenderPlan } from "./renderer.js";
@@ -29,6 +29,16 @@ import { checkHostLoopWriteConsent, logHostWriteNotice } from "../hostloop/safet
 import { PATH_GATE_TOOL_NAMES } from "../hostloop/pretooluse-path-hook.js";
 
 const log = (s: string) => process.stderr.write(s);
+
+/** The chat lane's drive() options. Chat previously passed NO subagentAppend on any branch — a
+ *  delivery bug (production sends the per-loop sub-agent append on every Cowork session). Pure and
+ *  exported so the delivery contract is unit-testable without spawning a session. */
+export function chatDriveOpts(
+  prompts: { subagentAppend?: string },
+  hl?: { sdkMcp: SdkMcp; hooks: HookBundle },
+): { subagentAppend?: string; sdkMcp?: SdkMcp; hooks?: HookBundle } {
+  return { subagentAppend: prompts.subagentAppend, ...(hl ? { sdkMcp: hl.sdkMcp, hooks: hl.hooks } : {}) };
+}
 
 /** Fidelity tiers `chat` supports. A subset of the full Scenario tier set: `microvm`/`cowork` are NOT
  *  supported in the interactive REPL (no Lima/auto-pick plumbing here), so they are rejected loudly
@@ -307,7 +317,7 @@ export async function cmdChat(args: string[]) {
       const renderer = makeRenderer(renderPlan);
       const run = new Run(agent, decider, [renderer], sessionId);
       stopHeartbeat = startHeartbeat(renderer, renderPlan, start);
-      record = await run.drive(withSeedPrompt(seedPrompt, ttyTurns(rl)), {});
+      record = await run.drive(withSeedPrompt(seedPrompt, ttyTurns(rl)), chatDriveOpts(prompts));
     } else if (fidelity === "hostloop") {
       // honor --fidelity hostloop in chat, mirroring execute.ts's branch selection.
       const hl = spawnHostLoop(scenario, baseline, plan, outDir, sessionId, {
@@ -372,10 +382,7 @@ export async function cmdChat(args: string[]) {
           permissiveMode: plan.permissionMode === "bypassPermissions",
         };
       }
-      record = await run.drive(withSeedPrompt(seedPrompt, ttyTurns(rl)), {
-        sdkMcp: hl.sdkMcp,
-        hooks: hl.hooks,
-      });
+      record = await run.drive(withSeedPrompt(seedPrompt, ttyTurns(rl)), chatDriveOpts(prompts, hl));
     } else {
       const ct = spawnContainer(scenario, baseline, plan, outDir, sessionId, {
         systemPromptAppend: prompts.systemPromptAppend,
@@ -400,7 +407,7 @@ export async function cmdChat(args: string[]) {
       const renderer = makeRenderer(renderPlan);
       const run = new Run(agent, decider, [renderer], sessionId);
       stopHeartbeat = startHeartbeat(renderer, renderPlan, start);
-      record = await run.drive(withSeedPrompt(seedPrompt, ttyTurns(rl)), {});
+      record = await run.drive(withSeedPrompt(seedPrompt, ttyTurns(rl)), chatDriveOpts(prompts));
     }
   } finally {
     stopHeartbeat?.();
