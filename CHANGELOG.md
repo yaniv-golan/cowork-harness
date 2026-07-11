@@ -6,6 +6,64 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+
+- **Cassette v9 read floor.** `readCassette` now refuses cassettes recorded below v9
+  (`MIN_SUPPORTED_CASSETTE_VERSION`) with a clear re-record error instead of silently tolerating
+  legacy formats; the pre-v9 reconstruction branches (`contentSigAlgoOf`, `buildFolderPrefixMap`'s
+  session-fallback, `cmdRehash`'s pre-v3/pre-v6 checks) are deleted as unreachable, and SPEC.md's
+  stability contract states the floor. The superseded `schema/cassette.v2`–`v8.json` files are
+  removed (v9/v10 remain).
+- **`verify-run` fails closed on degraded evidence.** A `result.json` that parses but is
+  structurally invalid (no `"success" | "error"` result field) refuses instead of being certified
+  as success; an `events.jsonl` with unparseable lines, or one yielding fewer gates than
+  `trace.json` recorded questions, refuses instead of passing answer coverage at a hollow 0/0.
+- **Verdict honesty for missing scan evidence.** When post-run scan evidence is unavailable, the
+  `host-path` / `outputs-delete` guards report `?` (unverified) instead of a false ✓, and a new
+  warn-severity `scan_unavailable` signal surfaces in the verdict JSON.
+- **Release gates hardened.** The CI scenario suite hard-fails on the canonical repo when
+  `ANTHROPIC_API_KEY` is missing on non-PR events (fork and Dependabot PRs keep the warn+skip);
+  image publishing now waits on ci.yml success for the tagged commit and verifies tag↔package
+  lockstep via a composite action shared with the npm release gate (`workflow_dispatch` remains
+  the documented manual-republish escape hatch).
+- `ResourceSummary.probeFailures` (shipped at runtime in 0.29.0) is now declared on the RunResult
+  type and JSON Schema; assertion-side consumption remains deferred.
+
+### Fixed
+
+- **Raw run logs are scrubbed on every exit path.** Previously only the success and
+  unanswered-gate paths scrubbed `events.jsonl`/`control-out.jsonl`, and `agent.stderr.log` was
+  never scrubbed — a mid-run fault kept raw (potentially secret-bearing) logs on disk. An
+  outermost finally now scrubs all three on success, salvage, and every rethrown fault, in the
+  run and chat lanes alike; leak/capability scanners still read the raw stream first.
+- A truncated `present_files` result (fewer returned paths than inputs, or extras) now counts as
+  malformed evidence, so `no_scratchpad_leak` fails "cannot verify" instead of green-lighting
+  only the pairs that came back.
+- Baseline pins caught up to `desktop-1.20186.1` (the parity sync landed the baseline file
+  without bumping them, leaving `check:versions` red).
+- `docker/Dockerfile.agent` preinstalls `pyyaml==6.0.3`, matching real rootfs provisioning (the
+  container tier no longer exercises the vendored-YAML fallback the real environment never needs).
+
+### Removed
+
+- The subagent-grant canary (`src/canary/`, its fixture, test, and empty snapshot) — never wired
+  to `sync`, and its drift snapshot could never fail.
+- `scripts/boot-rootfs-vz.ts` — the tested-infeasible generic-VZ boot attempt; its finding is
+  preserved in `docs/fidelity-gaps.md`.
+- From the npm tarball: the 1.5 MB README banner and the compiled critique evaluator (relocated
+  to `scripts/lib/critique/`, dev-only) — the package drops from 2.57 MB to ~1.05 MB compressed.
+
+### Docs
+
+- README's `## Status` section collapsed to the baseline-pin sentence (the perishable
+  verification narrative lives in this changelog; the feature catalogue lives in the sections
+  above it).
+- `docs/cowork-spawn-contract-1.12603.1.md` is frozen as historical research and no longer a
+  release version-pin; `check:versions` gates on the SKILL.md and README pins only.
+- Dropped the stale first-run egress-race gotcha (proxy startup has been synchronous for a
+  while); documented `verify-run`'s fail-closed refusal family in `docs/scenario.md` and the
+  companion skill.
+
 ## [0.29.0] — 2026-07-11
 
 ### Added
