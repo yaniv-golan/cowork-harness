@@ -1074,29 +1074,39 @@ describe("checkSubagentPromptFacts — hl/vm sub-agent append sentinel", () => {
     });
     expect(checkSubagentPromptFacts(badVm, null).some((f) => /vm substitution/.test(f))).toBe(true);
   });
-  it("key-pair renamed → flags", () => {
+  it("key-pair renamed → flags the SP_SECTION_KEYS anchor specifically", () => {
     expect(
-      checkSubagentPromptFacts(genFiles({ keys: `subagentEnvHost:"subagent_env_hl",subagentEnvVm:"subagent_env_vm"` }), null).length,
-    ).toBeGreaterThan(0);
+      checkSubagentPromptFacts(genFiles({ keys: `subagentEnvHost:"subagent_env_hl",subagentEnvVm:"subagent_env_vm"` }), null).some((f) =>
+        /SP_SECTION_KEYS/.test(f),
+      ),
+    ).toBe(true);
   });
-  it("branch ternary inverted (vm-first) → flags", () => {
-    expect(checkSubagentPromptFacts(genFiles({ ternary: "?Q.subagentEnvVm:Q.subagentEnvHostLoop" }), null).length).toBeGreaterThan(0);
+  it("branch ternary inverted (vm-first) → flags the branch ternary anchor specifically", () => {
+    expect(
+      checkSubagentPromptFacts(genFiles({ ternary: "?Q.subagentEnvVm:Q.subagentEnvHostLoop" }), null).some((f) => /branch ternary/.test(f)),
+    ).toBe(true);
   });
-  it("substitution map key renamed → flags", () => {
-    expect(checkSubagentPromptFacts(genFiles({ map: "{cwdVm:i,hostCwd:t??i,workspaceBash:w}" }), null).length).toBeGreaterThan(0);
+  it("substitution map key renamed → flags the substitution map anchor specifically", () => {
+    expect(
+      checkSubagentPromptFacts(genFiles({ map: "{cwdVm:i,hostCwd:t??i,workspaceBash:w}" }), null).some((f) => /substitution map/.test(f)),
+    ).toBe(true);
   });
-  it("delivery call missing spSectionPrompts → flags", () => {
+  it("delivery call missing spSectionPrompts → flags the delivery argument list anchor specifically", () => {
     expect(
       checkSubagentPromptFacts(
         genFiles({
           delivery: "appendSubagentSystemPrompt:I.buildSubagentEnvironmentPrompt({vmProcessName:v,hostLoopMode:f,hostCwd:S??void 0})",
         }),
         null,
-      ).length,
-    ).toBeGreaterThan(0);
+      ).some((f) => /delivery argument list/.test(f)),
+    ).toBe(true);
   });
-  it("gate id changed in resolveSection → flags", () => {
-    expect(checkSubagentPromptFacts(genFiles({ gate: `function krt(e,o,r){if(!$t("999"))return r;...}` }), null).length).toBeGreaterThan(0);
+  it("gate id changed in resolveSection → flags the resolveSection gate anchor specifically", () => {
+    expect(
+      checkSubagentPromptFacts(genFiles({ gate: `function krt(e,o,r){if(!$t("999"))return r;...}` }), null).some((f) =>
+        /resolveSection gate/.test(f),
+      ),
+    ).toBe(true);
   });
   it("DECOY: literals all present but the generator MODULE is gone (disconnected) → flags", () => {
     // literals live in one module; the discriminators/generator in NONE — no module satisfies the
