@@ -1,5 +1,0 @@
-{
-  "_comment": "B2 per-version grant canary baseline: {agentType -> declaredTools}. Refreshed by `cowork-harness sync` on an agent-version bump; a drift here is a RED diff in the unit CI lane. Seeded empty until a live capture (a recorded run with sub-agent dispatches) populates it.",
-  "agentVersion": "2.1.170",
-  "grants": {}
-}

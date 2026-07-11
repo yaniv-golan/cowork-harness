@@ -51,7 +51,7 @@ test/                 vitest unit tests
 baselines/             committed platform baselines (one per Desktop release)
 examples/             user-facing worked examples (CI-verified): scenarios/ sessions/ skills/ data/
 e2e/                  the harness's own fidelity self-tests: scenarios/ sessions/
-fixtures/             harness runtime fixtures (e.g. subagent-grants.json)
+fixtures/             harness runtime fixtures (protocol/ golden control-response vectors)
 docs/                 guides + references
 ```
 

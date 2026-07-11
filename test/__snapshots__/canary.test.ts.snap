@@ -1,3 +1,0 @@
-// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
-
-exports[`sub-agent grant canary (runs in the failing \`unit\` CI lane) > the committed grant map is well-formed; any drift is a red snapshot diff 1`] = `{}`;
