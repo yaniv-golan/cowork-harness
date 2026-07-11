@@ -4,7 +4,7 @@ description: Test or debug a Claude Code skill/plugin under Claude Cowork's runt
 metadata:
   author: cowork-harness
   version: 0.29.0
-  tracks-harness: cowork-harness 0.29.0 (baseline desktop-1.20186.0)
+  tracks-harness: cowork-harness 0.29.0 (baseline desktop-1.20186.1)
 ---
 
 # cowork-harness
