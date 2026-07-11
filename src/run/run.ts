@@ -839,8 +839,11 @@ export class Run {
    *    - neither     — `from` was already under a mount (passthrough); nothing to promote or leak.
    *  Without `rec.cwd` (an init event that predates it, or a MockSession test that omits init),
    *  `isScratchpad` returns false for every path — fail-safe toward "nothing classified" rather than a
-   *  fabricated promoted/leaked verdict. A result with fewer entries than inputs pairs what it can and
-   *  drops the unmatched tail (never guesses a `to`). */
+   *  fabricated promoted/leaked verdict. The handler contract is one text entry per input file, so a
+   *  result with fewer or more entries than inputs is out-of-contract: each unmatched input (a shorter
+   *  result — the input's fate is unknown) and each surplus output (a longer result) bumps
+   *  `presentFilesMalformed` instead of being silently dropped, so `no_scratchpad_leak` fails "cannot
+   *  verify" rather than green-lighting only the pairs that happened to come back. */
   private notePresentedFiles(toolUseId: string, textBlocks: string[] | undefined): void {
     const froms = this.pendingPresentFiles.get(toolUseId);
     if (!froms) return;
@@ -856,12 +859,17 @@ export class Run {
     for (let i = 0; i < froms.length; i++) {
       const from = froms[i];
       const to = tos[i];
-      if (to === undefined) continue;
+      if (to === undefined) {
+        this.rec.evidenceErrors.presentFilesMalformed++;
+        continue;
+      }
       const scratchpad = isScratchpad(from);
       const promoted = scratchpad && cwd !== undefined && to.startsWith(`${cwd}/mnt/outputs/`);
       const leaked = scratchpad && !promoted;
       this.rec.presentedFiles.push({ from, to, promoted, leaked });
     }
+    // Extra outputs are equally out-of-contract: count the surplus.
+    if (tos.length > froms.length) this.rec.evidenceErrors.presentFilesMalformed += tos.length - froms.length;
   }
 
   /** Pairs each subagent dispatch's toolUseId against rec.toolResults to populate its `output`

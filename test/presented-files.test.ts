@@ -109,4 +109,26 @@ describe("Run derives presentedFiles from present_files tool_use + tool_result",
     ]);
     expect(rec.presentedFiles).toEqual([]);
   });
+
+  it("counts unmatched inputs when the result returns fewer paths than inputs", async () => {
+    const rec = await drive([
+      initEv(CWD),
+      presentFilesUse("tu1", [`${CWD}/a.md`, `${CWD}/b.md`]),
+      presentFilesResult("tu1", [`${CWD}/mnt/outputs/a.md`]),
+      { type: "result", isError: false },
+    ]);
+    expect(rec.presentedFiles).toHaveLength(1);
+    expect(rec.evidenceErrors.presentFilesMalformed).toBe(1);
+  });
+
+  it("counts extra outputs when the result returns more paths than inputs", async () => {
+    const rec = await drive([
+      initEv(CWD),
+      presentFilesUse("tu1", [`${CWD}/a.md`]),
+      presentFilesResult("tu1", [`${CWD}/mnt/outputs/a.md`, `${CWD}/mnt/outputs/b.md`]),
+      { type: "result", isError: false },
+    ]);
+    expect(rec.presentedFiles).toHaveLength(1);
+    expect(rec.evidenceErrors.presentFilesMalformed).toBe(1);
+  });
 });
