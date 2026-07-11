@@ -6,7 +6,14 @@ import { gzipSync } from "node:zlib";
 import { compareBaselineVersions, loadBaseline, resolveAgentBinary, resolveMounts, sha256File } from "../src/baseline.js";
 import { createHash } from "node:crypto";
 import type { PlatformBaseline } from "../src/types.js";
-import { decodeFcacheGates, sync, checkMountModeFacts, checkWebFetchFacts, readMainBundle } from "../src/sync/cowork-sync.js";
+import {
+  decodeFcacheGates,
+  sync,
+  checkMountModeFacts,
+  checkWebFetchFacts,
+  readMainBundle,
+  checkSubagentOverrideGate,
+} from "../src/sync/cowork-sync.js";
 import {
   deriveSpawnEnv,
   checkSpawnContractFacts,
@@ -990,5 +997,24 @@ describe("prompt drift guard (H1-H3)", () => {
     const result = checkPromptDrift(fp, fakeFingerprintsFile, MODELED_PLACEHOLDER_NAMES, INTENTIONALLY_UNMODELED_PLACEHOLDERS);
     expect(result.unknownDeltas.some((d) => d.includes("workspaceContext"))).toBe(false);
     expect(result.unknownDeltas.some((d) => d.includes("modelIdentity"))).toBe(false);
+  });
+});
+
+describe("checkSubagentOverrideGate (gate 124685897 — subagent-append server override)", () => {
+  const gate = (on: boolean) => ({
+    "124685897": { id: "124685897", name: "subagentPromptServerOverride", on, source: "defaultValue", value: undefined },
+  });
+  it("OFF (live state) → no delta", () => {
+    expect(checkSubagentOverrideGate(gate(false))).toEqual([]);
+  });
+  it("absent from fcache → no delta (the missing-fcache case is flagged separately by sync)", () => {
+    expect(checkSubagentOverrideGate(null)).toEqual([]);
+    expect(checkSubagentOverrideGate({})).toEqual([]);
+  });
+  it("ON → a HARD-STOP unknown delta (a pinned-gate drift alone only warns)", () => {
+    const flags = checkSubagentOverrideGate(gate(true));
+    expect(flags).toHaveLength(1);
+    expect(flags[0]).toMatch(/subagentPromptServerOverride/);
+    expect(flags[0]).toMatch(/override/i);
   });
 });

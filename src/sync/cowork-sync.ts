@@ -68,6 +68,13 @@ const PINNED_GATES: Record<string, string> = {
   "123929380": "autoMemoryStandardSessions", // auto-memory dir for a plain (non-Spaces) cowork session (off)
   "1696890383": "memoryGuidelinesEnv", // CLAUDE_COWORK_MEMORY_GUIDELINES env for auto-memory (off)
   "2860753854": "memoryExtraGuidelines", // CLAUDE_COWORK_MEMORY_EXTRA_GUIDELINES PII block (on, but inert-default)
+  // Sub-agent append server override: gates ONLY whether a server-delivered spSectionPrompts entry
+  // replaces the hardcoded subagent_env_hl / subagent_env_vm fallback texts (resolveSection). OFF live
+  // (source defaultValue) -> the hardcoded texts are the wire text the committed paraphrase assets
+  // model. An ON flip is invisible to the text sentinel (the hardcoded template is unchanged), so
+  // checkSubagentOverrideGate additionally emits a HARD-STOP unknown delta on ON — a pinned drift
+  // alone is a non-blocking warning.
+  "124685897": "subagentPromptServerOverride",
   // Spawn-env conditional gates: each controls a key in the Desktop→agent spawn env
   // (SPAWN_GATES). Pinned so a production flip surfaces BOTH as a provenance.gates diff AND as the
   // corresponding spawn.env value diff (deriveSpawnEnv resolves the pin from the same decoded state).
@@ -131,6 +138,19 @@ export function decodeFcacheGates(path = join(SUPPORT, "fcache")): Record<string
   return out;
 }
 
+/** Gate 124685897 ON = a server-delivered subagent-append override is active; the harness has no
+ *  captured override text, so proceeding would emit the committed fallback assets as if verified.
+ *  Hard-stop via unknownDeltas (a PINNED_GATES drift alone only WARNS and still writes the baseline). */
+export function checkSubagentOverrideGate(gates: Record<string, GateState> | null): string[] {
+  if (!gates?.["124685897"]?.on) return [];
+  return [
+    "gate subagentPromptServerOverride:124685897 reads ON — a server-delivered spSectionPrompts override " +
+      "is active for the sub-agent append; the harness has no captured override text, so the committed " +
+      "fallback assets would ship as if verified. Capture the override text, update the subagent-append " +
+      "assets + fingerprints, then re-sync.",
+  ];
+}
+
 export function sync(): SyncResult {
   // defensive platform guard. The paths above (SUPPORT/ASAR/Info.plist) are macOS-only; on
   // Windows/Linux they don't exist, so the extractor would return EMPTY version/allowlist/gate fields
@@ -182,6 +202,8 @@ export function sync(): SyncResult {
       "gates: fcache decoded but NONE of the pinned gate IDs matched — gate IDs may have been re-keyed; update PINNED_GATES in cowork-sync.ts",
     );
   }
+
+  for (const f of checkSubagentOverrideGate(gates)) flag(unknown, f);
 
   return {
     appVersion,
