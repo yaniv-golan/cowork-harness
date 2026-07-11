@@ -148,3 +148,10 @@ least one vector.
   control-protocol facts are unchanged across this bump — confirmed by the re-recorded conformance
   cassettes passing `test/protocol-schema.test.ts`. The 2026-07-03 verification above stays scoped to
   its stated 2.1.197 range (it is not restamped; newer baselines carry agent 2.1.202).
+- **2026-07-11** — baseline set extended through `desktop-1.20186.0` (VM ELF 2.1.202 unchanged; native
+  host app 2.1.205). The `v1` control-protocol facts are unchanged across this bump — the 1.20186.0
+  asar was a minifier re-anchor with a byte/behaviourally-identical value-resolved spawn contract
+  (extractor re-anchored in `src/sync/cowork-sync.ts`), confirmed by the live spawn-contract tests plus
+  a live end-to-end pass across `protocol`/`container`/`hostloop`. The system-prompt source added a
+  deployment-gated `{{modelIdentity}}` placeholder that is stripped on first-party, so the rendered
+  prompt is byte-identical.

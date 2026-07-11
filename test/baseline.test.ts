@@ -14,9 +14,13 @@ import {
   partitionSpawnFlags,
   resolveConst,
   extractModelEffortConfig,
+  extractPromptFingerprint,
+  checkPromptDrift,
   REQUIRED_SPAWN_KEYS,
   type GateState,
+  type PromptFingerprint,
 } from "../src/sync/cowork-sync.js";
+import { MODELED_PLACEHOLDER_NAMES, INTENTIONALLY_UNMODELED_PLACEHOLDERS } from "../src/prompt.js";
 import { readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 
@@ -455,6 +459,36 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
     USE_STAGING_OAUTH: "",
   };
 
+  // 1.20186.0 build-shape fixture — guards the member-receiver (o.isFeatureEnabled / o.getMcpToolTimeout /
+  // o.appendCoworkTelemetryHeaders / o.dropEmptyAuthEnvSentinels / o.buildSubagentEnvironmentPrompt) +
+  // one-hop export-alias (TASK_TOOL_NAMES:uae, getMcpToolTimeout:f4, DEFAULT_MAX_THINKING_TOKENS:x7e)
+  // shapes Anthropic shipped in 1.20186.0. W3/W2/MODELCFG are reused unchanged; only W1 (gate spreads via
+  // o.isFeatureEnabled) and STIER (alias table) take the new shape, so the fixture must derive the identical
+  // pin map — proving each re-anchor widened the accepted syntax without moving the protected fact.
+  const W1_1201860 = W1.replaceAll('At("', 'o.isFeatureEnabled("').replace(
+    "MCP_TOOL_TIMEOUT:String(FKe())",
+    "MCP_TOOL_TIMEOUT:String(o.getMcpToolTimeout())",
+  );
+  const STIER_1201860 =
+    // Decoys placed BEFORE their real definitions (mirrors live bundle order): `,vae=GWe` precedes the
+    // `{vae=t}` decoy; the real `DEFAULT_MAX_THINKING_TOKENS:x7e` follows a `:0` decoy AND a second
+    // differently-shaped `function Ua`. Identifier-shaped alias captures must skip every `:0`/`:t` decoy,
+    // so a decoy-first placement is what actually proves the reworked lookups aren't passing by match-order.
+    "const FKd=9e5,GWe=6e4,x7e=31999,vae=GWe;" +
+    "var zNoise={DEFAULT_MAX_THINKING_TOKENS:0};function Ua(t){return t};{vae=t};" +
+    "function f4(){var e;return((e=go())==null?void 0:e.mcpToolTimeoutMs)??vae}" +
+    "function Ua(r,e,t){return r??e??!t?o.DEFAULT_MAX_THINKING_TOKENS:0}" +
+    'var uae=["TaskCreate","TaskUpdate","TaskGet","TaskList","TaskStop"];' +
+    "var o={TASK_TOOL_NAMES:uae,DEFAULT_MAX_THINKING_TOKENS:x7e,getMcpToolTimeout:f4};" +
+    'sessionPath:`/sessions/${sid}/mnt/.claude`,settingSources:["user"],permissionMode:S?"default":(I==null?void 0:I.permissionMode)??"default",' +
+    'maxThinkingTokens:Ua(r.extendedThinkingEnabled??!mOt())},effortCfg:{level:z.effort,fallback:"medium"},' +
+    'tools:["Task","Bash","Glob","Grep","Read","Edit","Write","NotebookEdit","WebFetch",...o.TASK_TOOL_NAMES,"WebSearch","Skill","REPL","JavaScript","AskUserQuestion","ToolSearch",...z.sessionType===FKu?[]:[]],' +
+    'allowedTools:["Task","Bash","Glob","Grep","Read","Edit","Write","NotebookEdit","WebFetch",...o.TASK_TOOL_NAMES,"WebSearch","Skill","REPL","JavaScript","ToolSearch","mcp__srv__tool"],' +
+    'function FnA(V){for(const q of ["ANTHROPIC_API_KEY","ANTHROPIC_AUTH_TOKEN","ANTHROPIC_CUSTOM_HEADERS"])V[q]===""&&delete V[q]}' +
+    "V.env={...V.env,ANTHROPIC_CUSTOM_HEADERS:o.appendCoworkTelemetryHeaders(V.env??{},ie.app.getVersion())},o.dropEmptyAuthEnvSentinels(V.env)," +
+    'sysP:{type:"preset",preset:"claude_code",append:ap},appendSubagentSystemPrompt:I.buildSubagentEnvironmentPrompt({vm:i})';
+  const fixture1201860 = () => `HEADER;${W3};${W2};${W1_1201860}${STIER_1201860};${MODELCFG}TAIL`;
+
   // 1. Green path — the fixture resolves to the exact expected pin map; the S-tier returns [].
   it("green path: derives the full pin map (gates off except 714014285/1936081873) and no HARD-FAIL flags", () => {
     const { env, flags } = deriveSpawnEnv(fixture(), greenGates());
@@ -508,6 +542,34 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
     // A genuine construction of the key still fires S17 even alongside the benign getter form.
     const withRealKey = variant.replace('CLAUDE_CODE_IS_COWORK:"1"', 'CLAUDE_CODE_USE_COWORK_PLUGINS:"1",CLAUDE_CODE_IS_COWORK:"1"');
     expect(checkSpawnContractFacts(withRealKey).some((f) => f.includes("S17"))).toBe(true);
+  });
+
+  // 1d. 1.20186.0 build-shape regression: the member-receiver + export-alias re-anchors (A2/B1–B6) must
+  // derive the IDENTICAL green pin map and keep checkSpawnContractFacts clean on the new build shape — so
+  // older asars stay re-derivable (old fixture above) AND the new shape is accepted here.
+  it("1.20186.0 build shape: member-receiver gates + export-alias hops derive the identical pin map and stay clean", () => {
+    const { env, flags } = deriveSpawnEnv(fixture1201860(), greenGates());
+    expect(flags.filter((f) => !f.startsWith("NOTE:"))).toEqual([]);
+    expect(env).toEqual(EXPECTED_GREEN);
+    // B6 guard (the ONLY automated signal the 687 fix landed): gate 434204418 off → the
+    // `...o.isFeatureEnabled("434204418")&&{MCP_CONNECTION_NONBLOCKING:"0",…}` block must be BLANKED, not
+    // read as an unconditional literal — so MCP_CONNECTION_NONBLOCKING stays W2's "true", never "0".
+    expect(env!.MCP_CONNECTION_NONBLOCKING).toBe("true");
+    // B2: String(o.getMcpToolTimeout()) → alias f4 → body `??vae` → `,vae=GWe` (real, before the {vae=t} decoy) → GWe=6e4.
+    expect(env!.MCP_TOOL_TIMEOUT).toBe("60000");
+    // B1: o.isFeatureEnabled("66187241") (gate off) → "".
+    expect(env!.CLAUDE_CODE_EMIT_TOOL_USE_SUMMARIES).toBe("");
+    expect(checkSpawnContractFacts(fixture1201860())).toEqual([]);
+  });
+
+  // 1e. B6 positive proof: the new-shape gate spread is genuinely PARSED (not merely absent) — flipping
+  // gate 434204418 ON must resolve the in-block "0"/"10000" against gate STATE, exactly as the old shape.
+  it("1.20186.0 build shape: gate 434204418 ON pins MCP_CONNECTION_NONBLOCKING:'0' + MCP_CONNECT_TIMEOUT_MS:'10000'", () => {
+    const g = greenGates();
+    g["434204418"] = mkGate("434204418", true);
+    const { env } = deriveSpawnEnv(fixture1201860(), g);
+    expect(env!.MCP_CONNECTION_NONBLOCKING).toBe("0");
+    expect(env!.MCP_CONNECT_TIMEOUT_MS).toBe("10000");
   });
 
   // 2. Per-fact mutation table: mutate/drop each token → exactly the matching flag names the field.
@@ -835,4 +897,98 @@ function extractRealBundle(): string | null {
 
 afterAll(() => {
   if (realBundleTmpDir) rmSync(realBundleTmpDir, { recursive: true, force: true });
+});
+
+// ==========================================================================================
+// Prompt drift guard (H1-H3): extractPromptFingerprint (golden oracle against the real asar) +
+// checkPromptDrift (pure, token-free — the synthetic cases don't need a live Desktop install).
+// ==========================================================================================
+describe("prompt drift guard (H1-H3)", () => {
+  const COMMITTED_1_20186_0_SHA = "0189a96cafe73f82bf9c492a17a4ff2f1b87c8486c54232c4e70e78ab98d836a";
+
+  // Golden oracle (non-circular): extractPromptFingerprint over the REAL asar must match the
+  // committed 1.20186.0 fingerprint entry exactly. Skips gracefully off-macOS / without a live
+  // Desktop install (same readRealBundleOrSkip seam the spawn-contract oracles use).
+  it("golden oracle: extractPromptFingerprint(real asar) matches the committed 1.20186.0 fingerprint", () => {
+    const bundle = readRealBundleOrSkip();
+    if (!bundle) return;
+    const fp = extractPromptFingerprint(bundle);
+    expect(fp).not.toBeNull();
+    expect(fp!.sha256).toBe(COMMITTED_1_20186_0_SHA);
+    expect(fp!.codePoints).toBe(37875);
+    expect(fp!.sectionTags).toBe(43);
+    expect(fp!.placeholders).toHaveLength(10);
+  });
+
+  // Clean path (non-circular against the real committed fingerprints file): a fingerprint matching
+  // the newest committed entry, checked against the REAL renderer substitution set +
+  // intentional-inline allowlist, produces zero deltas and zero notes.
+  it("checkPromptDrift is clean when fp matches the committed newest entry (real fingerprints file, real modeled/allowlisted sets)", () => {
+    const bundle = readRealBundleOrSkip();
+    if (!bundle) return;
+    const fp = extractPromptFingerprint(bundle);
+    expect(fp).not.toBeNull();
+    const fingerprintsFile = JSON.parse(
+      readFileSync(join(process.cwd(), "baselines", "prompts", "cowork-system-prompt-fingerprints.json"), "utf8"),
+    );
+    const result = checkPromptDrift(fp, fingerprintsFile, MODELED_PLACEHOLDER_NAMES, INTENTIONALLY_UNMODELED_PLACEHOLDERS);
+    expect(result).toEqual({ unknownDeltas: [], notes: [] });
+  });
+
+  const fakeFingerprintsFile = {
+    versions: {
+      "1.20186.0": {
+        sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        placeholders: ["cwd", "modelName"],
+        sectionTagNames: ["env"],
+      },
+    },
+  };
+  const makeFp = (overrides: Partial<PromptFingerprint> = {}): PromptFingerprint => ({
+    constantId: "tOt",
+    codePoints: 100,
+    sectionTags: 1,
+    sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    placeholders: ["cwd", "modelName"],
+    sectionTagNames: ["env"],
+    ...overrides,
+  });
+
+  it("checkPromptDrift: fp === null hard-fails with a layout-moved unknownDelta", () => {
+    const result = checkPromptDrift(null, fakeFingerprintsFile, MODELED_PLACEHOLDER_NAMES, INTENTIONALLY_UNMODELED_PLACEHOLDERS);
+    expect(result.unknownDeltas.some((d) => d.includes("consumption site") && d.includes("not found"))).toBe(true);
+  });
+
+  it("checkPromptDrift: missing/unreadable fingerprints file emits a note, not a hard-fail (still runs H3)", () => {
+    const result = checkPromptDrift(makeFp(), null, MODELED_PLACEHOLDER_NAMES, INTENTIONALLY_UNMODELED_PLACEHOLDERS);
+    expect(result.unknownDeltas).toEqual([]);
+    expect(result.notes.some((n) => n.includes("missing/unreadable"))).toBe(true);
+  });
+
+  it("checkPromptDrift (H1): a sha mismatch vs the newest committed entry is an unknownDelta mentioning 'drifted'", () => {
+    const fp = makeFp({ sha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" });
+    const result = checkPromptDrift(fp, fakeFingerprintsFile, MODELED_PLACEHOLDER_NAMES, INTENTIONALLY_UNMODELED_PLACEHOLDERS);
+    expect(result.unknownDeltas.some((d) => d.includes("drifted"))).toBe(true);
+  });
+
+  it("checkPromptDrift (H2): a new placeholder / new section vs the committed entry is a note, not a delta", () => {
+    const fp = makeFp({ placeholders: ["cwd", "modelName", "skillsDir"], sectionTagNames: ["env", "artifacts"] });
+    const result = checkPromptDrift(fp, fakeFingerprintsFile, MODELED_PLACEHOLDER_NAMES, INTENTIONALLY_UNMODELED_PLACEHOLDERS);
+    expect(result.unknownDeltas).toEqual([]); // skillsDir IS modeled, so no H3 hit either
+    expect(result.notes.some((n) => n === "prompt inventory: NEW placeholder {{skillsDir}}")).toBe(true);
+    expect(result.notes.some((n) => n === "prompt inventory: NEW section <artifacts>")).toBe(true);
+  });
+
+  it("checkPromptDrift (H3): an unmodeled, non-allowlisted placeholder is an unknownDelta naming it", () => {
+    const fp = makeFp({ placeholders: ["cwd", "modelName", "foo"] });
+    const result = checkPromptDrift(fp, fakeFingerprintsFile, MODELED_PLACEHOLDER_NAMES, INTENTIONALLY_UNMODELED_PLACEHOLDERS);
+    expect(result.unknownDeltas.some((d) => d.includes("unmodeled placeholder {{foo}}"))).toBe(true);
+  });
+
+  it("checkPromptDrift (H3): an allowlisted out-of-band placeholder produces NO unknownDelta for it", () => {
+    const fp = makeFp({ placeholders: ["cwd", "modelName", "workspaceContext", "modelIdentity"] });
+    const result = checkPromptDrift(fp, fakeFingerprintsFile, MODELED_PLACEHOLDER_NAMES, INTENTIONALLY_UNMODELED_PLACEHOLDERS);
+    expect(result.unknownDeltas.some((d) => d.includes("workspaceContext"))).toBe(false);
+    expect(result.unknownDeltas.some((d) => d.includes("modelIdentity"))).toBe(false);
+  });
 });

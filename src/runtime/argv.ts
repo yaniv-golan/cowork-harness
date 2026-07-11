@@ -96,8 +96,10 @@ export function agentArgs(baseline: PlatformBaseline, plan: LaunchPlan, opts: Ag
 
 /**
  * Resolve the extended-thinking CLI flag(s) — faithful port of Cowork's boolean resolver (binary-verified,
- * app.asar 1.19367.0): `zgi(e,t,r){return e ?? t ?? !r ? NX : 0}` (`NX` = `DEFAULT_MAX_THINKING_TOKENS` =
- * 31999) → the SDK maps a 0 budget to `{type:"disabled"}` and a positive one to
+ * app.asar 1.19367.0: `zgi(e,t,r){return e ?? t ?? !r ? NX : 0}`; re-verified 1.20186.0, where the same
+ * resolver is `Ua(r,e,t){return r??e??!t?o.DEFAULT_MAX_THINKING_TOKENS:0}` — helper renamed and the const
+ * hoisted behind the `DEFAULT_MAX_THINKING_TOKENS` export alias `x7e`, value unchanged) (`NX` /
+ * `x7e` = `DEFAULT_MAX_THINKING_TOKENS` = 31999) → the SDK maps a 0 budget to `{type:"disabled"}` and a positive one to
  * `{type:"enabled",budgetTokens:N}`, which become `--thinking disabled` / `--max-thinking-tokens <N>`.
  * There is no arbitrary N in real Cowork — `debugOverride` (the fenced, non-Cowork `debug.max_thinking_tokens`
  * escape hatch) is the ONLY way this harness emits one, and it ALWAYS wins over `extendedThinking` when set.

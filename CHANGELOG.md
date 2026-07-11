@@ -8,6 +8,17 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **Parity baseline for Claude Desktop 1.20186.0.** `baseline: latest` now resolves to `desktop-1.20186.0`
+  (VM agent ELF 2.1.202 unchanged; native host app 2.1.205). The 1.20186.0 asar was a minifier re-anchor —
+  the value-resolved spawn contract is byte/behaviourally identical; the sync extractor's structural anchors
+  were re-anchored to the new bundle shapes (hoisted helpers became namespace-method calls; const spreads
+  became export aliases). Verified live across the `protocol`, `container`, and `hostloop` tiers.
+- **`sync` now guards Cowork system-prompt drift.** Each sync fingerprints the prompt (a minifier-independent
+  content hash plus a `{{placeholder}}` / `<section>` inventory) and **refuses to write** when the content
+  drifts from the committed fingerprint until a new fingerprint entry is added, and **hard-fails** on a
+  `{{placeholder}}` the renderer neither substitutes nor explicitly allowlists. This closes a gap where a
+  prompt change (e.g. the deployment-gated `{{modelIdentity}}` placeholder added in 1.20186.0, which is
+  stripped on first-party so the rendered prompt is unchanged) could slip past the coarse `asarFingerprint`.
 - **Usage/quota-limit runs are now classified as `resultErrorKind: "usage_limit"`.** A session/weekly/model/
   spend/org quota-exhaustion arrives as an `is_error` result with the SDK's misleading `subtype: "success"`
   and HTTP 429 — previously an undifferentiated error, indistinguishable from a real skill regression.
@@ -77,6 +88,12 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **`sync` no longer derives a phantom `nativeStagedPath`.** The native macOS agent app (`claude-code/`) and
+  the container/microvm Linux ELF (`claude-code-vm/`) version on independent cadences; `sync` derived the
+  native (hostloop) path from the VM `.sdk-version`, producing a path that did not exist whenever the two had
+  drifted — and freezing that phantom into the written baseline. It now resolves the native path from the
+  newest app actually staged under `claude-code/`, falling back to the version-derived convention only when no
+  native app is staged at all.
 - **Two anonymous sub-agent dispatches in different assistant turns could collide on the same synthesized id**
   (the fallback id was derived only from the block's position within its own message). It now derives from the
   message id plus block index — unique across the run and stable across record→replay — fixing dispatch nesting
