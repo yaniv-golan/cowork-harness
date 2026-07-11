@@ -28,6 +28,7 @@ import {
   type PromptFingerprint,
 } from "../src/sync/cowork-sync.js";
 import { extractSubagentBranchSlices, subagentBranchFingerprint, checkSubagentPromptFacts } from "../src/sync/cowork-sync.js";
+import { checkPathHookFacts } from "../src/sync/cowork-sync.js";
 import { MODELED_PLACEHOLDER_NAMES, INTENTIONALLY_UNMODELED_PLACEHOLDERS } from "../src/prompt.js";
 import { readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -1124,5 +1125,79 @@ describe("checkSubagentPromptFacts — hl/vm sub-agent append sentinel", () => {
   });
   it("no committed fingerprints → hard-fail flag (never a silent skip)", () => {
     expect(checkSubagentPromptFacts(genFiles(), null).some((f) => /fingerprint/.test(f))).toBe(true);
+  });
+});
+
+function pathHookFiles(mut: Partial<Record<"defining" | "consuming", (s: string) => string>> = {}): Map<string, string> {
+  let defining =
+    `const g5e=["Read","Write","Edit","Glob","Grep"],p5e=["Bash","NotebookEdit","REPL","JavaScript","WebFetch"],Jse="request_cowork_directory",Bse="chat";` +
+    // resolveFilePath lives in the SHARED/defining chunk — its two hard-block strings are here, NOT in
+    // the hostloop consumer (which only carries the caller-side "could not be safely resolved").
+    `function JKe(p){throw new Error("Refusing to resolve non-regular file")||new Error("Failed to resolve path")}` +
+    `export{g5e as HOST_LOOP_PATH_GATED_BUILTIN_TOOLS,p5e as HOST_LOOP_EXCLUDED_BUILTIN_TOOLS,Jse as REQUEST_COWORK_DIRECTORY,Bse as SESSION_TYPE_CHAT,Nce as isPathContainedInFolders,JKe as resolveFilePath};`;
+  let consuming =
+    `const Yt=["Write","Edit","MultiEdit"];` +
+    `function qt(e){return "read-only in this session — it is a hardlink to the user's original file" && "(spooled tool results)" && "(plugin, skill, or knowledge content)"}` +
+    `const Zt="Path is outside allowed working directories";` +
+    `function xe(e,o){for(const k of ["file_path","path"]){}return "is a VM path. In this session the \${e} tool runs on the host filesystem"}` +
+    `const ie=n===t.SESSION_TYPE_CHAT,st=ie?[...be,...nt]:[c,u,h];` +
+    `PreToolUse:[{matcher:[...t.HOST_LOOP_PATH_GATED_BUILTIN_TOOLS,"MultiEdit"].join("|"),hooks:[async g=>{` +
+    `const raw=["file_path","path"].map(k=>g[k]).find(v=>typeof v=="string");` +
+    `try{}catch(err){return "could not be safely resolved"}` +
+    `if(qt(g))return qt(g);` +
+    `const lt=[...st,...T(),...ie||ct?[]:(ne==null?void 0:ne())??[]];getMidSessionReadOnlyPaths;spooledProjectsReadOnlyRoots;` +
+    `if(!t.isPathContainedInFolders(cand,lt))return ct?"is outside this session's scratch directory, so \${e}":"is outside this session's connected folders, so \${e}"}]}],` +
+    `const Se=e.canUseTool;Se&&(e.canUseTool=async(g,S,k)=>xe(g,S)??Qt(g,S,k.decisionReason,n)??Se(g,S,k));`;
+  if (mut.defining) defining = mut.defining(defining);
+  if (mut.consuming) consuming = mut.consuming(consuming);
+  return new Map([
+    ["index.chunk-zFJ_MSb3.js", defining],
+    ["index.chunk-CS-g0Skn.js", consuming],
+  ]);
+}
+
+describe("checkPathHookFacts — 1.20186.1 path-gate sentinel (module-bounded)", () => {
+  it("clean bundle → no flags", () => {
+    expect(checkPathHookFacts(pathHookFiles())).toEqual([]);
+  });
+  it("MUTATION: gated set membership changed → flags", () => {
+    const f = pathHookFiles({ defining: (s) => s.replace(`"Grep"]`, `"Grep","Bash"]`) });
+    expect(checkPathHookFacts(f).length).toBeGreaterThan(0);
+  });
+  it("MUTATION: a deny text reworded → flags (each text is its OWN anchor)", () => {
+    const f = pathHookFiles({ consuming: (s) => s.replace("connected folders, so", "attached folders, so") });
+    expect(checkPathHookFacts(f).some((x) => /connected folders/.test(x))).toBe(true);
+  });
+  it("MUTATION: canUseTool wrapper made unconditional (Se&& dropped) → flags", () => {
+    const f = pathHookFiles({ consuming: (s) => s.replace("Se&&(e.canUseTool", "(e.canUseTool") });
+    expect(checkPathHookFacts(f).length).toBeGreaterThan(0);
+  });
+  it("MUTATION: qt order inverted (containment before qt) → flags", () => {
+    const f = pathHookFiles({
+      consuming: (s) => s.replace("if(qt(g))return qt(g);", "").replace("return ct?", "return qt(g)??ct?"),
+    });
+    expect(checkPathHookFacts(f).length).toBeGreaterThan(0);
+  });
+  it("MUTATION: excluded-tool set changed → flags", () => {
+    const f = pathHookFiles({ defining: (s) => s.replace(`"WebFetch"]`, `"WebFetch","Agent"]`) });
+    expect(checkPathHookFacts(f).length).toBeGreaterThan(0);
+  });
+  it("DECOY: the gated-set array exists but is NOT bound to the export name → flags (array↔export binding required)", () => {
+    // g5e still holds the 5-tool array, but the EXPORT points at an unrelated local zzz=[] — the hop
+    // from HOST_LOOP_PATH_GATED_BUILTIN_TOOLS must land on the WRONG array and fail. Proves the
+    // sentinel binds the array to its export name, not "some 5-tool array exists somewhere".
+    const f = pathHookFiles({
+      defining: (s) =>
+        s
+          .replace(`g5e as HOST_LOOP_PATH_GATED_BUILTIN_TOOLS`, `zzz as HOST_LOOP_PATH_GATED_BUILTIN_TOOLS`)
+          .replace(`Bse="chat";`, `Bse="chat",zzz=["Read","Edit"];`),
+    });
+    expect(checkPathHookFacts(f).some((x) => /gated 5-set/.test(x))).toBe(true);
+  });
+  it("DECOY: install site references a DIFFERENT property name than the defining export → flags", () => {
+    const f = pathHookFiles({
+      consuming: (s) => s.replace('.HOST_LOOP_PATH_GATED_BUILTIN_TOOLS,"MultiEdit"]', '.SOME_OTHER_SET,"MultiEdit"]'),
+    });
+    expect(checkPathHookFacts(f).some((x) => /install site/.test(x))).toBe(true);
   });
 });

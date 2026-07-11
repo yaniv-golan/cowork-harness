@@ -282,6 +282,7 @@ function extractFromAsar(
     // mode FACTS still hold so a policy change is a loud flag, not silent baseline rot.
     for (const f of checkMountModeFacts(bundle)) flag(unknown, f);
     for (const f of checkWebFetchFacts(bundle)) flag(unknown, f);
+    for (const f of checkPathHookFacts(bundleFiles)) flag(unknown, f);
     // Spawn contract: S-tier structural sentinels + the generated spawn.env. Non-NOTE flags
     // become unknown deltas (hard-fail); NOTEs (stale-allowlist prune hints) are collected into
     // `notes` and printed by the sync CLI as informational lines — never a delta, never write-blocking.
@@ -359,6 +360,118 @@ export function checkWebFetchFacts(bundle: string): string[] {
       flags.push(
         `web_fetch: ${what} is gone from the asar — Cowork's web_fetch mechanism may have changed; re-verify the two-path port (see webfetch-high-fidelity-plan)`,
       );
+  return flags;
+}
+
+/** Path-gate sentinel (1.20186.1 shapes). Module-bounded: anchors run against the CORRECT chunk only
+ *  — the DEFINING chunk (found by the HOST_LOOP_PATH_GATED_BUILTIN_TOOLS export) for set contents, the
+ *  CONSUMING chunk (found by the matcher install site) for the hook body, deny texts, topology,
+ *  ordering, and the canUseTool chain. Each tool-set array is bound to its EXPORT NAME (not "some
+ *  matching array exists"), and the install site must reference the same export property. */
+export function checkPathHookFacts(files: Map<string, string>): string[] {
+  const flags: string[] = [];
+  const miss = (what: string, why: string) => flags.push(`path-hook: ${what} anchor missing — ${why}`);
+  const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+  // --- defining chunk: the one that EXPORTS the name (alias or property form), not merely mentions
+  //     it as a namespace-property consumer (the hostloop chunk references `.HOST_LOOP_…` too) ---
+  const definesExport = /[\w$]+\s+as\s+HOST_LOOP_PATH_GATED_BUILTIN_TOOLS\b|\bHOST_LOOP_PATH_GATED_BUILTIN_TOOLS[:=][\w$]/;
+  const defining = [...files.values()].find((c) => definesExport.test(c));
+  if (!defining) miss("defining chunk", "no chunk exports HOST_LOOP_PATH_GATED_BUILTIN_TOOLS");
+  else {
+    const hop = (exportName: string, arrayRe: RegExp, label: string) => {
+      // Resolve the LOCAL bound to this export: ESM `<local> as ExportName`, OR the object-property /
+      // alias forms `ExportName:<local>` / `ExportName=<local>`. Then require `<local>=<exact array>`.
+      // Binding to the export (not a free array search) is what makes a decoy array fail.
+      const alias =
+        defining.match(new RegExp(`([\\w$]+)\\s+as\\s+${exportName}\\b`)) ?? defining.match(new RegExp(`\\b${exportName}[:=]([\\w$]+)`));
+      const local = alias?.[1];
+      if (!local) {
+        miss(label, `could not resolve the local bound to the ${exportName} export`);
+        return;
+      }
+      if (!new RegExp(`(?<![\\w$])${esc(local)}=${arrayRe.source}`).test(defining))
+        miss(label, `the ${exportName} export's local (${local}) is not bound to its exact array literal`);
+    };
+    hop("HOST_LOOP_PATH_GATED_BUILTIN_TOOLS", /\["Read","Write","Edit","Glob","Grep"\]/, "gated 5-set");
+    hop("HOST_LOOP_EXCLUDED_BUILTIN_TOOLS", /\["Bash","NotebookEdit","REPL","JavaScript","WebFetch"\]/, "excluded set");
+    if (!/REQUEST_COWORK_DIRECTORY/.test(defining) || !/"request_cowork_directory"/.test(defining))
+      miss("REQUEST_COWORK_DIRECTORY", "the export or its literal is gone");
+    if (!/SESSION_TYPE_CHAT/.test(defining) || !/"chat"/.test(defining)) miss("SESSION_TYPE_CHAT", "the export or its literal is gone");
+  }
+
+  // --- consuming chunk: located by the install site (namespace-property connectivity) ---
+  const consuming = [...files.values()].find((c) => /\.HOST_LOOP_PATH_GATED_BUILTIN_TOOLS,"MultiEdit"\]\.join\("\|"\)/.test(c));
+  if (!consuming) {
+    miss("install site", 'no chunk contains [...NS.HOST_LOOP_PATH_GATED_BUILTIN_TOOLS,"MultiEdit"].join("|")');
+    return flags; // everything below is scoped to this chunk
+  }
+  const inHook = (re: RegExp, label: string, why: string) => {
+    if (!re.test(consuming)) miss(label, why);
+  };
+  inHook(/=\["Write","Edit","MultiEdit"\]/, "mutating set", "the Write/Edit/MultiEdit literal moved");
+  inHook(
+    /is a VM path\. In this session the \$\{[^}]+\} tool runs on the host filesystem/,
+    "VM-path deny",
+    "the /sessions guard text changed",
+  );
+  // resolveFilePath's two hard-block strings live in the DEFINING/shared chunk, not the consumer.
+  if (!defining || !/Refusing to resolve non-regular file/.test(defining))
+    miss("resolver hard-block", "the non-regular-file branch is gone from the shared resolver");
+  if (!defining || !/Failed to resolve path/.test(defining))
+    miss("resolver failure text", "the resolve-failure branch is gone from the shared resolver");
+  inHook(/could not be safely resolved/, "resolver caller block", "the active non-ENOENT block branch is gone from the hook"); // caller-side text — stays in the consumer
+  inHook(/is outside this session's scratch directory, so \$\{/, "scratch deny", "the scratch directory deny-variant text changed");
+  inHook(/is outside this session's connected folders, so \$\{/, "connected deny", "the connected folders deny-variant text changed");
+  inHook(/hardlink to the user's original file/, "uploads-task deny", "the hardlink category text changed");
+  inHook(/\(spooled tool results\)/, "spool deny", "the spooled-projects category text changed");
+  inHook(/\(plugin, skill, or knowledge content\)/, "plugin deny", "the plugin category text changed");
+  inHook(/"Path is outside allowed working directories"/, "SDK deny const", "the workingDir constant changed");
+  inHook(/\["file_path","path"\]/, "path key pair", "the file_path/path key array is gone");
+  // First-string extraction over the path keys: `<keys>.map(k=>o[k]).find(v=>typeof v=="string")`.
+  // The keys are bound to a local (real: `pe=["file_path","path"]`, used as `pe.map(…)`) rather than
+  // inlined, so anchor the map/find/typeof-string SHAPE (both proven by the separate path-key anchor).
+  inHook(
+    /\.map\([\w$]+=>[\w$]+\[[\w$]+\]\)\.find\([\w$]+=>typeof [\w$]+=="string"\)/,
+    "first-match extraction",
+    "the .map().find() extraction shape is gone",
+  );
+  inHook(/spooledProjectsReadOnlyRoots/, "spool roots identifier", "spooledProjectsReadOnlyRoots is gone");
+  inHook(/getMidSessionReadOnlyPaths/, "mid-session roots", "getMidSessionReadOnlyPaths is no longer wired");
+  inHook(
+    /\?\[\]:\([\w$]+==null\?void 0:[\w$]+\(\)\)\?\?\[\]/,
+    "readOnly-tail rule",
+    "the ...ie||ct?[]:(ne?.())??[] per-call assembly shape is gone",
+  );
+  inHook(/===[\w$]+\.SESSION_TYPE_CHAT/, "chat-type connectivity", "the sessionType===SESSION_TYPE_CHAT comparison is gone");
+  inHook(/=[\w$]+\?\[\.\.\.[\w$]+,\.\.\.[\w$]+\]:\[/, "root topology ternary", "the chat/task st root-assembly ternary is gone");
+  inHook(
+    /const [\w$]+=[\w$]+\.canUseTool;[\w$]+&&\([\w$]+\.canUseTool=async\(/,
+    "conditional canUseTool install",
+    "the Se&&(e.canUseTool=…) conditional install is gone",
+  );
+  inHook(
+    /canUseTool=async\([^)]*\)=>[\w$]+\([^)]*\)\?\?[\w$]+\([^)]*\)\?\?[\w$]+\(/,
+    "canUseTool ?? chain",
+    "the xe ?? Qt ?? original ordering is gone",
+  );
+
+  // qt-before-containment ORDER + removed-exemption ABSENCE: inside the hook body slice, the category
+  // guard's function must be referenced BEFORE any containment-helper call, and NO containment call may
+  // precede it (a blanket early-allow shape).
+  const qtDef = consuming.match(/function ([\w$]+)\([\w$]+\)\{[\s\S]{0,2000}?hardlink to the user's original file/);
+  const installAt = consuming.search(/\.HOST_LOOP_PATH_GATED_BUILTIN_TOOLS,"MultiEdit"\]\.join\("\|"\)/);
+  if (!qtDef) miss("qt definition", "no function contains the hardlink category text");
+  else if (installAt >= 0) {
+    const hookSlice = consuming.slice(installAt, installAt + 6000);
+    const qtCallAt = hookSlice.indexOf(`${qtDef[1]}(`);
+    if (qtCallAt < 0) miss("qt call in hook", "the category guard is not invoked from the hook body");
+    else {
+      const containAt = hookSlice.search(/\.isPathContainedInFolders\(|isContained\(/);
+      if (containAt >= 0 && containAt < qtCallAt)
+        miss("qt-before-containment order", "a containment call precedes the category guard — an early-allow/blanket-exemption shape");
+    }
+  }
   return flags;
 }
 
