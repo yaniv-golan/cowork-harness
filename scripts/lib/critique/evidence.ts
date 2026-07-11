@@ -44,7 +44,7 @@ function hashPrefix(buf: Buffer): string {
  *  truth or simply unknown (F28). `prefixHash` is a cheap defense-in-depth tripwire (F29): re-verified by
  *  `verifyBoundaryIntegrity` at read time to catch the append-only invariant being violated
  *  (truncation/replacement of the already-captured region) between snapshot and packaging. */
-export interface StreamBoundary {
+interface StreamBoundary {
   size: number | null;
   /** SHA-256 of the stream's first `PREFIX_HASH_BYTES` bytes at capture time. `undefined` when the stat
    *  failed (`size: null`) or the stream was empty at capture (nothing to hash). */

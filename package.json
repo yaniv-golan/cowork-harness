@@ -46,6 +46,7 @@
     "!scripts/eval-gate.ts",
     "!scripts/skill-critique.ts",
     "!scripts/skill-critique-acceptance.ts",
+    "!scripts/lib/critique",
     ".claude/skills/cowork-harness/scripts/scenario.py",
     ".claude/skills/cowork-harness/scripts/assertion-keys.json",
     ".claude/skills/cowork-harness/scripts/_vendor",

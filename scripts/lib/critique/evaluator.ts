@@ -1,6 +1,6 @@
-import { claudeCliComplete } from "../decide/llm-transport.js";
-import type { Complete } from "../decide/decider.js";
-import { extractAllJsonObjects } from "../decide/semantic-judge.js";
+import { claudeCliComplete } from "../../../src/decide/llm-transport.js";
+import type { Complete } from "../../../src/decide/decider.js";
+import { extractAllJsonObjects } from "../../../src/decide/semantic-judge.js";
 import { validateCitations, type CritiqueItem } from "./evidence.js";
 
 // The two-pass, tool-less evaluator. Reuses the shared `claude -p` transport (same reasoning as
@@ -201,8 +201,8 @@ const SELF_REPORT_FENCE = "⟦COWORK-HARNESS-SELF-REPORT-DATA-9f21⟧";
  *  Also strips any embedded occurrence of the fence marker ITSELF from the self-report before encoding —
  *  even though such an occurrence would stay safely inside the JSON-quoted string (never actually closing
  *  the real fence), a reader skimming raw text for the marker rather than parsing JSON could be misled into
- *  treating it as a third boundary. Exported for the unit test. */
-export function sanitizeSelfReportForPrompt(selfReport: string): string {
+ *  treating it as a third boundary. */
+function sanitizeSelfReportForPrompt(selfReport: string): string {
   const withoutEmbeddedFence = selfReport.split(SELF_REPORT_FENCE).join("[fence-marker-redacted]");
   return JSON.stringify(withoutEmbeddedFence)
     .replace(/\u2028/g, "\\u2028")
