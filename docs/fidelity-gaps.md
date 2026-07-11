@@ -194,3 +194,30 @@ The harness `--fidelity` flag selects how closely the execution environment matc
 | `cowork` | Resolves to `hostloop` or `container` at run time — inherits whichever tier's gaps. |
 
 The `chat` command accepts `protocol`, `container`, and `hostloop`. `microvm` and `cowork` are omitted — `microvm` has a slow boot (~20s) that makes interactive use painful, and `cowork` would require replicating the cowork-tier wiring, which resolves the tier via the shared `decideLoopFromBaseline` gate logic (`src/run/execute.ts` → `src/loop-decision.ts`).
+
+---
+
+## Booting the real rootfs image under a generic VZ host
+
+**Real Cowork behaviour:** the rootfs boots under Anthropic's proprietary `@ant/claude-swift`
+VZ host, which provides Anthropic-specific virtio devices (the `smol-bin` device and a control
+channel) that the guest's own init depends on.
+
+**Harness behaviour:** not supported — tested infeasible (2026-06-21). Booting the extracted
+rootfs under a generic VZ host (Lima) fails structurally: `coworkd`, the rootfs's PID-1 init
+(not standard systemd/cloud-init), loops on `failed to mount smol-bin: smol-bin device not
+found after 10s` waiting for the host-side virtio device only Claude Desktop's own VZ host
+provides — and Lima in turn hangs waiting for its own guest agent, because cloud-init/NoCloud
+is present in the image but never reached (coworkd hijacks boot before multi-user, so Lima can
+never SSH in). Replicating Anthropic's device model is out of scope. A runnable diagnostic
+script (`scripts/boot-rootfs-vz.ts`) existed through 0.29.0 and was removed as dead weight —
+this section preserves its finding.
+
+### Why it can't be replicated
+
+The blocker is the device model, not the filesystem: the guest's PID-1 is hardwired to
+host-provided virtio devices that only the proprietary Swift host binary implements. The
+supported real-rootfs parity path sidesteps boot entirely: `scripts/build-rootfs-image.ts`
+`docker import`s the rootfs *filesystem* and the harness execs the agent directly — bypassing
+`coworkd` init and its host-device coupling — producing an agent image with verified
+byte-for-byte file parity, consumed via `COWORK_AGENT_IMAGE`.
