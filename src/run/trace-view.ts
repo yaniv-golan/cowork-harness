@@ -243,7 +243,14 @@ export function eventsFromLines(lines: string[], source = "<lines>"): AgentEvent
       warn(`::warning:: trace: skipping malformed JSON line in ${source}: ${line.slice(0, 120)}\n`);
       continue;
     }
-    events.push(...parseMessage(msg));
+    // parseMessage now THROWS a typed protocol error on a malformed init/content frame (#1/#2). The trace
+    // lane must not abort on one bad frame — skip it loudly (same "skip malformed but be LOUD" contract as
+    // the JSON.parse catch above and cassette.ts's per-line handling).
+    try {
+      events.push(...parseMessage(msg));
+    } catch (e) {
+      warn(`::warning:: trace: skipping malformed protocol frame in ${source}: ${String((e as Error)?.message ?? e).slice(0, 160)}\n`);
+    }
   }
   return events;
 }

@@ -4,6 +4,8 @@ import { homedir, tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { createHash } from "node:crypto";
 import { gunzipSync } from "node:zlib";
+import { BASELINES_DIR, cmpVersionStrings } from "../baseline.js";
+import { MODELED_PLACEHOLDER_NAMES, INTENTIONALLY_UNMODELED_PLACEHOLDERS } from "../prompt.js";
 
 /**
  * cowork-sync — derive a VOLATILE parity baseline from the live Claude Desktop
@@ -37,6 +39,9 @@ export interface SyncResult {
   // per-model effort/regex-default config (the literal map + the fable|mythos regex-default class); null =
   // a hard-fail flag blocked it (carry the base baseline's spawn.effortByModel/effortRegexDefault forward).
   modelEffortConfig: ModelEffortConfig | null;
+  // Cowork system-prompt content fingerprint (H1-H3 prompt-drift guard) — null when the consumption
+  // site / constant definition couldn't be found in the asar (itself an unknownDeltas entry).
+  promptFingerprint: PromptFingerprint | null;
   unknownDeltas: string[];
   notes: string[]; // non-blocking informational hints (e.g. stale SPAWN_ENV_ALLOWLIST prune NOTEs) — surfaced by the CLI, never a delta
 }
@@ -164,7 +169,7 @@ export function sync(): SyncResult {
 
   // 5. Egress allowlist + spawn contract from the asar (vmAllowedDomains + firewallAlso + spawn.env),
   // merged with user hosts.
-  const { domains, fingerprint, spawnEnv, modelEffortConfig, notes } = extractFromAsar(unknown, gates);
+  const { domains, fingerprint, spawnEnv, modelEffortConfig, promptFingerprint, notes } = extractFromAsar(unknown, gates);
   const allowDomains = dedupe([...domains, ...userAllow]);
 
   if (!gates) {
@@ -188,6 +193,7 @@ export function sync(): SyncResult {
     gates,
     spawnEnv,
     modelEffortConfig,
+    promptFingerprint,
     unknownDeltas: unknown,
     notes,
   };
@@ -227,11 +233,12 @@ function extractFromAsar(
   fingerprint: string;
   spawnEnv: Record<string, string> | null;
   modelEffortConfig: ModelEffortConfig | null;
+  promptFingerprint: PromptFingerprint | null;
   notes: string[];
 } {
   if (!existsSync(ASAR)) {
     flag(unknown, `asar not found at ${ASAR} — install/open Claude Desktop once, or fix ASAR in cowork-sync.ts`);
-    return { domains: [], fingerprint: "", spawnEnv: null, modelEffortConfig: null, notes: [] };
+    return { domains: [], fingerprint: "", spawnEnv: null, modelEffortConfig: null, promptFingerprint: null, notes: [] };
   }
   const tmp = mkdtempSync(join(tmpdir(), "cowork-sync-"));
   try {
@@ -263,10 +270,22 @@ function extractFromAsar(
     // Fingerprint over the cowork-relevant slices for "unknown delta" detection.
     const slice = sliceCowork(bundle);
     const fingerprint = createHash("sha256").update(slice).digest("hex").slice(0, 16);
-    return { domains, fingerprint, spawnEnv: spawn.env, modelEffortConfig, notes };
+    // H1-H3 prompt-drift guard: extract the raw system-prompt content fingerprint and diff it against
+    // the committed baselines/prompts/cowork-system-prompt-fingerprints.json (sha drift = hard-fail,
+    // placeholder/section inventory diff = informational, unmodeled placeholder = hard-fail).
+    const promptFingerprint = extractPromptFingerprint(bundle);
+    const fingerprintsFile = readPromptFingerprintsFile();
+    const promptDrift = checkPromptDrift(
+      promptFingerprint,
+      fingerprintsFile,
+      MODELED_PLACEHOLDER_NAMES,
+      INTENTIONALLY_UNMODELED_PLACEHOLDERS,
+    );
+    for (const d of promptDrift.unknownDeltas) flag(unknown, d);
+    return { domains, fingerprint, spawnEnv: spawn.env, modelEffortConfig, promptFingerprint, notes: [...notes, ...promptDrift.notes] };
   } catch (e) {
     flag(unknown, `asar extract failed (npx @electron/asar): ${(e as Error).message} — check network/npx, or unpack ${ASAR} manually`);
-    return { domains: [], fingerprint: "", spawnEnv: null, modelEffortConfig: null, notes: [] };
+    return { domains: [], fingerprint: "", spawnEnv: null, modelEffortConfig: null, promptFingerprint: null, notes: [] };
   } finally {
     // mkdtempSync extraction dir is otherwise leaked under $TMPDIR on every invocation.
     rmSync(tmp, { recursive: true, force: true });
@@ -313,6 +332,152 @@ export function checkWebFetchFacts(bundle: string): string[] {
         `web_fetch: ${what} is gone from the asar — Cowork's web_fetch mechanism may have changed; re-verify the two-path port (see webfetch-high-fidelity-plan)`,
       );
   return flags;
+}
+
+// ==========================================================================================
+// Prompt-drift guard (H1-H3): the Cowork system-prompt raw content is a hand-maintained
+// side-artifact (baselines/prompts/cowork-system-prompt-fingerprints.json) that `sync` previously
+// never touched — this section folds a fingerprint-vs-committed-baseline check into `sync` itself
+// so a prompt-content change (or a newly-added, unmodeled {{placeholder}}) surfaces as a loud
+// unknown delta rather than requiring a human to notice by hand. The committed fingerprints live in
+// baselines/prompts/cowork-system-prompt-fingerprints.json; the drift signal complements the coarse
+// asarFingerprint (which flips on any minifier rename) with the minifier-independent content hash.
+// ==========================================================================================
+
+export interface PromptFingerprint {
+  constantId: string;
+  codePoints: number;
+  sectionTags: number;
+  sha256: string;
+  placeholders: string[]; // sorted unique {{name}} names
+  sectionTagNames: string[]; // sorted unique <name> open-tag names
+}
+
+/**
+ * Extract the raw Cowork system-prompt constant's content fingerprint from the asar main bundle.
+ * Mirrors the method documented in baselines/prompts/cowork-system-prompt-fingerprints.json
+ * (`extractionMethod`): find the single `cowork_system_prompt:{value:{prompt:<id>}` consumption
+ * site, capture `<id>` (minifier-assigned, varies per build), then find `<id>=` followed by a
+ * backtick and read the backtick-template body char-by-char — preserving `\`-escapes intact (a
+ * `\` consumes the next char too, so an escaped backtick inside the template never ends the scan
+ * early) — stopping at the first UNescaped backtick. Returns null if either anchor is missing (the
+ * prompt-asset layout moved — the caller turns that into a hard-fail unknown delta, never a silent
+ * skip).
+ */
+export function extractPromptFingerprint(bundle: string): PromptFingerprint | null {
+  const consumptionM = bundle.match(/cowork_system_prompt:\{value:\{prompt:([A-Za-z_$][\w$]*)/);
+  if (!consumptionM) return null;
+  const id = consumptionM[1];
+  const idEsc = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const defM = bundle.match(new RegExp(`(?:[,;{(]|\\b(?:const|let|var)\\s+)${idEsc}=\``));
+  if (!defM || defM.index == null) return null;
+  const bodyStart = defM.index + defM[0].length; // index of the char right after the opening backtick
+  let body = "";
+  let i = bodyStart;
+  let closed = false;
+  for (; i < bundle.length; i++) {
+    const c = bundle[i];
+    if (c === "\\") {
+      // Preserve the escape AND the escaped char intact (raw template source, not a decoded string).
+      body += c + (bundle[i + 1] ?? "");
+      i++; // skip the escaped char too (loop's i++ advances past the backslash)
+      continue;
+    }
+    if (c === "`") {
+      closed = true;
+      break;
+    }
+    body += c;
+  }
+  if (!closed) return null;
+
+  const sha256 = createHash("sha256").update(Buffer.from(body, "utf8")).digest("hex");
+  const codePoints = [...body].length;
+  const sectionTags = [...body.matchAll(/<[a-z_]+>/g)].length;
+  const placeholders = dedupe([...body.matchAll(/\{\{([a-zA-Z0-9_]+)\}\}/g)].map((m) => m[1])).sort();
+  const sectionTagNames = dedupe([...body.matchAll(/<([a-z_]+)>/g)].map((m) => m[1])).sort();
+  return { constantId: id, codePoints, sectionTags, sha256, placeholders, sectionTagNames };
+}
+
+interface PromptFingerprintsFile {
+  versions: Record<string, { sha256?: string | null; placeholders?: string[]; sectionTagNames?: string[] }>;
+}
+
+/** Load baselines/prompts/cowork-system-prompt-fingerprints.json; null on any read/parse failure
+ *  (missing file, corrupt JSON, or no `versions` map) — treated as "cannot check", not a hard-fail
+ *  (see checkPromptDrift). */
+function readPromptFingerprintsFile(): PromptFingerprintsFile | null {
+  try {
+    const raw = readFileSync(join(BASELINES_DIR, "prompts", "cowork-system-prompt-fingerprints.json"), "utf8");
+    const parsed = JSON.parse(raw) as PromptFingerprintsFile;
+    if (!parsed || typeof parsed !== "object" || !parsed.versions) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * H1 (sha drift -> BLOCK) + H2 (placeholder/section inventory diff -> informational) + H3 (unmodeled
+ * placeholder -> BLOCK). Pure over its inputs so it's token-free unit-testable without a real asar.
+ * Drift key is content-hash-vs-newest-committed-entry, NOT appVersion — a byte-identical prompt on a
+ * new Desktop version must pass silently (matches the plan's "1.19367.0 needs no new baseline").
+ */
+export function checkPromptDrift(
+  fp: PromptFingerprint | null,
+  fingerprintsFile: { versions: Record<string, { sha256?: string | null; placeholders?: string[]; sectionTagNames?: string[] }> } | null,
+  modeled: ReadonlySet<string>,
+  allowlisted: ReadonlySet<string>,
+): { unknownDeltas: string[]; notes: string[] } {
+  const unknownDeltas: string[] = [];
+  const notes: string[] = [];
+  if (!fp) {
+    unknownDeltas.push(
+      "prompt fingerprint: the cowork_system_prompt consumption site or its constant definition was not found — the prompt-asset layout moved; re-verify extractPromptFingerprint",
+    );
+    return { unknownDeltas, notes };
+  }
+  const versions = fingerprintsFile ? Object.keys(fingerprintsFile.versions) : [];
+  if (!fingerprintsFile || versions.length === 0) {
+    notes.push("prompt fingerprint: cowork-system-prompt-fingerprints.json missing/unreadable — cannot check prompt drift");
+  } else {
+    let newestVer = versions[0];
+    for (const v of versions) if (cmpVersionStrings(v, newestVer) > 0) newestVer = v;
+    const entry = fingerprintsFile.versions[newestVer];
+
+    // H1 — sha drift vs the newest committed entry (BLOCK).
+    if (entry.sha256 && fp.sha256 !== entry.sha256) {
+      unknownDeltas.push(
+        `prompt content drifted vs the newest committed fingerprint (${newestVer}): sha ${entry.sha256.slice(0, 12)}… -> ${fp.sha256.slice(0, 12)}… (codePoints -> ${fp.codePoints}, sectionTags -> ${fp.sectionTags}). Confirm the RENDERED-prompt impact (a placeholder may be deployment-gated/stripped like {{modelIdentity}}), then add a new version entry to baselines/prompts/cowork-system-prompt-fingerprints.json.`,
+      );
+    }
+
+    // H2 — placeholder/section inventory diff (informational; appended to notes).
+    if (entry.placeholders) {
+      const before = new Set(entry.placeholders);
+      const after = new Set(fp.placeholders);
+      for (const p of after) if (!before.has(p)) notes.push(`prompt inventory: NEW placeholder {{${p}}}`);
+      for (const p of before) if (!after.has(p)) notes.push(`prompt inventory: REMOVED placeholder {{${p}}}`);
+    }
+    if (entry.sectionTagNames) {
+      const before = new Set(entry.sectionTagNames);
+      const after = new Set(fp.sectionTagNames);
+      for (const t of after) if (!before.has(t)) notes.push(`prompt inventory: NEW section <${t}>`);
+      for (const t of before) if (!after.has(t)) notes.push(`prompt inventory: REMOVED section <${t}>`);
+    }
+  }
+
+  // H3 — unmodeled placeholder guard (BLOCK): every {{placeholder}} in the extracted prompt must be
+  // either substituted by the renderer or explicitly allowlisted as intentionally out-of-band.
+  for (const p of fp.placeholders) {
+    if (!modeled.has(p) && !allowlisted.has(p)) {
+      unknownDeltas.push(
+        `unmodeled placeholder {{${p}}}: not in the renderer substitution set (src/prompt.ts MODELED_PLACEHOLDER_NAMES) nor the intentional-inline allowlist (INTENTIONALLY_UNMODELED_PLACEHOLDERS) — model it or allowlist it, else the harness would render it literally.`,
+      );
+    }
+  }
+
+  return { unknownDeltas, notes };
 }
 
 // ==========================================================================================
@@ -473,7 +638,19 @@ export function resolveConst(bundle: string, id: string, hops = 0): string | nul
 function resolveStringArg(bundle: string, arg: string, isCall: boolean): string | null {
   let constId = arg;
   if (isCall) {
-    const esc = arg.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    // B2: `arg` may now be a dotted member call (`o.getMcpToolTimeout`) rather than a bare hoisted
+    // helper name. A dotted arg is itself an export alias — resolve `<lastSegment>[:=]<alias>` first
+    // (identifier-shaped capture only, so it can't land on a `:0`-style decoy), then look up the
+    // function body under the resolved alias, exactly as the bare-name path already did.
+    let fnName = arg;
+    if (fnName.includes(".")) {
+      const last = fnName.slice(fnName.lastIndexOf(".") + 1);
+      const escLast = last.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const aliasM = bundle.match(new RegExp(`${escLast}[:=]([A-Za-z_$][\\w$]*)`));
+      if (!aliasM) return null;
+      fnName = aliasM[1];
+    }
+    const esc = fnName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const fm = bundle.match(new RegExp(`function ${esc}\\([^)]*\\)\\{[^{}]*\\?\\?(\\w+)`));
     if (!fm) return null;
     constId = fm[1];
@@ -497,12 +674,17 @@ function resolveSpawnValue(bundle: string, expr: string, gates: Record<string, G
   let m: RegExpMatchArray | null;
   if ((m = e.match(/^"([^"]*)"$/)) || (m = e.match(/^'([^']*)'$/))) return { value: m[1] };
   if ((m = e.match(/^`([^`$]*)\$\{[^}]*\?\?"([^"]*)"\}`$/))) return { value: m[1] + m[2] };
-  if ((m = e.match(/^[A-Za-z_$][\w$]*\("(\d+)"\)\?"([^"]*)":"([^"]*)"$/))) {
+  // B1: the gate helper may now be reached via a namespace-method receiver (`o.isFeatureEnabled(...)`)
+  // instead of a bare hoisted call; the optional `(?:[A-Za-z_$][\w$]*\.)?` prefix admits both, and the
+  // gate-id capture (still `m[1]`) is unaffected either way.
+  if ((m = e.match(/^(?:[A-Za-z_$][\w$]*\.)?[A-Za-z_$][\w$]*\("(\d+)"\)\?"([^"]*)":"([^"]*)"$/))) {
     const id = m[1];
     if (!(id in SPAWN_GATES)) return { unknown: true };
     return { value: gates[id]?.on ? m[2] : m[3] };
   }
-  if ((m = e.match(/^String\((\w+)(\(\))?\)$/))) {
+  // B2: the `String()` argument may now be a dotted member call (`o.getMcpToolTimeout()`); widen the
+  // capture to admit `.` and let resolveStringArg follow the export-alias hop.
+  if ((m = e.match(/^String\(([\w$.]+)(\(\))?\)$/))) {
     const v = resolveStringArg(bundle, m[1], !!m[2]);
     return v == null ? { unknown: true } : { value: v };
   }
@@ -684,7 +866,10 @@ export function deriveSpawnEnv(
   const applyWindow = (text: string, target: Record<string, string>, isW1: boolean) => {
     let work = text;
     if (isW1) {
-      for (const sm of text.matchAll(/\.\.\.[A-Za-z_$][\w$]*\("(\d+)"\)&&\{([^{}]*)\}/g)) {
+      // B6: the gate helper acquired an `o.`-style receiver here too (`...o.isFeatureEnabled("id")&&{…}`);
+      // without this widening the block is never blanked and the generic pass below reads its inner keys
+      // (e.g. MCP_CONNECTION_NONBLOCKING:"0") as unconditional literals, silently corrupting a pinned value.
+      for (const sm of text.matchAll(/\.\.\.(?:[\w$]+\.)?[A-Za-z_$][\w$]*\("(\d+)"\)&&\{([^{}]*)\}/g)) {
         const id = sm[1];
         const inner = sm[2];
         for (const k of enumSpawnKeys("{" + inner)) enumerated.add(k.key);
@@ -761,26 +946,61 @@ export function checkSpawnContractFacts(bundle: string): string[] {
     // ternary was extracted into a named function, so the value expression at the key is now a call with
     // commas and no longer matches an inline capture). Either branch captures the value-holding const,
     // which must still resolve to 31999 — a mis-capture fails that check loudly rather than false-greening.
-    const m = bundle.match(/(?:maxThinkingTokens:[^,}]{0,60}|return [\w$]+\?\?[\w$]+\?\?![\w$]+)\?(\w+\$?):0\}/);
+    // B3: the ternary arm may now be a member expression (`o.DEFAULT_MAX_THINKING_TOKENS`) instead of a
+    // bare const — the body-shape anchor (branch 2) stays the disambiguator (globally unique, shape- not
+    // name-keyed); only the arm capture widens to admit a dot, then a dotted arm is resolved through the
+    // export-alias hop before the 31999 assertion.
+    const m = bundle.match(/(?:maxThinkingTokens:[^,}]{0,60}|return [\w$]+\?\?[\w$]+\?\?![\w$]+)\?([\w$.]+):0\}/);
     if (!m) miss("S4 maxThinkingTokens", "the maxThinkingTokens capture is gone");
-    else if (resolveConst(bundle, m[1]) !== "31999") miss("S4 maxThinkingTokens", `resolved to ${resolveConst(bundle, m[1])} not 31999`);
+    else {
+      let armId: string | null = m[1];
+      if (armId.includes(".")) {
+        const last = armId.slice(armId.lastIndexOf(".") + 1);
+        const escLast = last.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const aliasM = bundle.match(new RegExp(`${escLast}[:=]([A-Za-z_$][\\w$]*)`));
+        armId = aliasM ? aliasM[1] : null;
+      }
+      const resolved = armId ? resolveConst(bundle, armId) : null;
+      if (resolved !== "31999") miss("S4 maxThinkingTokens", `resolved to ${resolved} not 31999`);
+    }
   }
   if (!has(/\.effort\b.{0,60}:"medium"/)) miss("S5 effortDefault", 'the .effort … :"medium" default is gone');
   if (!has(/\/sessions\/\$\{[^}]+\}\/mnt\/\.claude/)) miss("S1 configDirInGuest", "the mnt/.claude session-path template is gone");
 
+  // A1: the spread target may now be a member expression (`...o.TASK_TOOL_NAMES`) instead of a bare
+  // hoisted local const; widen the capture to admit `.`/`$` while the literal head+tail stay the anchor.
   const s6 = bundle.match(
-    /tools:\["Task","Bash","Glob","Grep","Read","Edit","Write","NotebookEdit","WebFetch",\.\.\.(\w+),"WebSearch","Skill","REPL","JavaScript","AskUserQuestion","ToolSearch"/,
+    /tools:\["Task","Bash","Glob","Grep","Read","Edit","Write","NotebookEdit","WebFetch",\.\.\.([\w.$]+),"WebSearch","Skill","REPL","JavaScript","AskUserQuestion","ToolSearch"/,
   );
   if (!s6) miss("S6 tools head", "the tools[] head list moved");
   else {
-    const id = s6[1].replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    if (!has(new RegExp(`\\b${id}=\\["TaskCreate","TaskUpdate","TaskGet","TaskList","TaskStop"\\]`)))
-      miss("S7 Task-tools spread", "the TaskCreate…TaskStop spread that tools[] injects moved");
+    // A2: a dotted id (`o.TASK_TOOL_NAMES`) is not a local-const definition — it is an export-alias hop
+    // (`TASK_TOOL_NAMES:uae` / `TASK_TOOL_NAMES=uae`) to the real array site (`,uae=[...]`). Follow the
+    // hop (identifier-shaped capture only, so a `:0`-style decoy can't be captured) and require the exact
+    // five-name array at the resolved alias — never resolveConst, whose 40-char/no-comma value budget
+    // can't hold the array literal. A bare id keeps the original local-const lookup.
+    const rawId = s6[1];
+    const taskArray = `\\["TaskCreate","TaskUpdate","TaskGet","TaskList","TaskStop"\\]`;
+    if (rawId.includes(".")) {
+      const last = rawId.slice(rawId.lastIndexOf(".") + 1).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const aliasM = bundle.match(new RegExp(`${last}[:=]([A-Za-z_$][\\w$]*)`));
+      if (!aliasM) miss("S7 Task-tools spread", "the TASK_TOOL_NAMES export alias could not be resolved");
+      else {
+        const alias = aliasM[1].replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        if (!has(new RegExp(`(?<![\\w$])${alias}=${taskArray}`)))
+          miss("S7 Task-tools spread", "the TaskCreate…TaskStop spread that tools[] injects moved");
+      }
+    } else {
+      const id = rawId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      if (!has(new RegExp(`\\b${id}=${taskArray}`)))
+        miss("S7 Task-tools spread", "the TaskCreate…TaskStop spread that tools[] injects moved");
+    }
   }
   if (!has(/"ToolSearch",\.\.\.\w+\.sessionType===/)) miss("S8 tools tail-guard", "a tool appended after ToolSearch would evade S6");
+  // A3: same member-expression spread widening as S6.
   if (
     !has(
-      /allowedTools:\["Task","Bash","Glob","Grep","Read","Edit","Write","NotebookEdit","WebFetch",\.\.\.\w+,"WebSearch","Skill","REPL","JavaScript","ToolSearch"/,
+      /allowedTools:\["Task","Bash","Glob","Grep","Read","Edit","Write","NotebookEdit","WebFetch",\.\.\.[\w.$]+,"WebSearch","Skill","REPL","JavaScript","ToolSearch"/,
     )
   )
     miss("S9 allowedTools head", "the allowedTools[] head list moved (AskUserQuestion is tools-only)");
@@ -798,13 +1018,18 @@ export function checkSpawnContractFacts(bundle: string): string[] {
   // The blank-empties helper must be CALLED on the same env object that just received ANTHROPIC_CUSTOM_HEADERS
   // (…},helper(X.env)). The sdkOptions var name is minifier-assigned (V→F across builds); capture it and
   // backreference so the guarantee "blank runs on THIS env" survives the rename without hardcoding the name.
-  if (!has(/ANTHROPIC_CUSTOM_HEADERS:\w+\((\w+\$?)\.env[\s\S]{0,40}\},\w+\(\1\.env\)/))
+  // B5: both env helper calls may now carry a namespace-method receiver (`o.appendCoworkTelemetryHeaders`
+  // / `o.dropEmptyAuthEnvSentinels`); the `(\w+\$?)\.env … \1\.env` backreference — the guarantee that the
+  // blank-sentinel helper runs on the SAME env object — is untouched by the added optional receivers.
+  if (!has(/ANTHROPIC_CUSTOM_HEADERS:(?:[\w$]+\.)?\w+\((\w+\$?)\.env[\s\S]{0,40}\},(?:[\w$]+\.)?\w+\(\1\.env\)/))
     miss(
       "S14b FnA application",
       "the empty-ANTHROPIC_* blank helper no longer runs on the spawn env — the '' blanks would leak into production",
     );
   if (!has(/preset:"claude_code"/)) miss("S15 promptTemplate delivery", "the claude_code preset-append delivery site is gone");
-  if (!has(/appendSubagentSystemPrompt:\w+\(\{/))
+  // B4: the generator call may now carry a namespace-method receiver (`I.buildSubagentEnvironmentPrompt`);
+  // the object-literal first-arg `{` survived live, so it stays part of the anchor (stronger than a bare call).
+  if (!has(/appendSubagentSystemPrompt:(?:[\w$]+\.)?[\w$]+\(\{/))
     miss("S16 subagentAppend generator", "the per-session subagent-append generator call shape is gone");
   // Negative invariant: the spawn env must never CONSTRUCT this key (it would flip the agent to
   // cowork_settings.json/cowork_plugins). The bundled SDK's typed env-var registry legitimately DECLARES
@@ -815,7 +1040,8 @@ export function checkSpawnContractFacts(bundle: string): string[] {
     flags.push(
       `spawn: NEGATIVE INVARIANT S17 broken — CLAUDE_CODE_USE_COWORK_PLUGINS is now SET; it would flip the agent to cowork_settings.json/cowork_plugins; ${SPAWN_NO_BYPASS}`,
     );
-  if (!w1 || !has(/CLAUDE_CODE_EMIT_TOOL_USE_SUMMARIES:[A-Za-z_$][\w$]*\("66187241"\)\?"true":""/, w1))
+  // B1: same optional namespace-method receiver on the gate helper as the resolveSpawnValue recognizer.
+  if (!w1 || !has(/CLAUDE_CODE_EMIT_TOOL_USE_SUMMARIES:(?:[A-Za-z_$][\w$]*\.)?[A-Za-z_$][\w$]*\("66187241"\)\?"true":""/, w1))
     miss("S18 EMIT_TOOL_USE_SUMMARIES gate-ternary", "the gate-id↔key association changed");
   if (!w1 || !has(/CLAUDE_CODE_TAGS:`lam_session_type:\$\{/, w1))
     miss("S19 CLAUDE_CODE_TAGS template", "the lam_session_type template shape changed");

@@ -1,4 +1,5 @@
 import { warn } from "../io.js";
+import { isUsageLimit } from "../usage-limit.js";
 import { randomUUID, createHash } from "node:crypto";
 import type { AgentSession, AgentEvent, DecisionRequest, DecisionResponse, QSpec } from "../agent/session.js";
 import type { UsageInfo, CostInfo, RunResult } from "../types.js";
@@ -62,7 +63,9 @@ export function infraErrorsForResult(rec: Pick<RunRecord, "infraErrors">): RunRe
 }
 export function evidenceErrorsForResult(rec: Pick<RunRecord, "evidenceErrors">): RunResult["evidenceErrors"] {
   const e = rec.evidenceErrors;
-  return e.taskTracking || e.webSearchParse || e.presentFilesMalformed ? e : undefined;
+  // egressParse (#39) MUST be in this presence gate — otherwise a run whose ONLY evidence problem is dropped
+  // proxy-log lines serializes evidenceErrors:undefined, silently absorbing exactly what the counter records.
+  return e.taskTracking || e.webSearchParse || e.presentFilesMalformed || e.egressParse ? e : undefined;
 }
 
 /** Find the JSON array following a WebSearch tool_result's "Links: " marker, respecting quoted-string
@@ -124,6 +127,7 @@ interface SubagentDispatch {
   prompt?: string; // dispatch input.prompt, assertText-capped
   model?: string; // the dispatching message's model
   output?: string; // the dispatch's own paired tool_result, assertText-capped — populated by a finalize step, not at push time
+  outputTruncated?: boolean; // `output` was cut at the assert cap (#9) — set in denormalizeSubagentOutputs
 }
 
 interface DecisionRecord {
@@ -131,9 +135,14 @@ interface DecisionRecord {
   name: string;
   decision: string;
   by: string;
-  // The gate's request_id (UUID). Present on question decisions so `trace --view questions` can pair a persisted
-  // decision to its events.jsonl row BY ID rather than positionally — a retried/duplicated gate event
-  // would otherwise shift every later row's `by`/`model` label. Absent on older records (positional fallback).
+  // The gate's request_id (UUID), set on every decision recordDecision() pushes (question/permission/
+  // dialog/elicit). Originally added so `trace --view questions` can pair a persisted decision to its
+  // events.jsonl row BY ID rather than positionally — a retried/duplicated gate event would otherwise
+  // shift every later row's `by`/`model` label. Also doubles as the reconciliation key: drive()'s
+  // post-loop pass consults `session.hasUndeliveredReconciliation?.(requestId)` to flip an optimistically
+  // "delivered" decision whose control_response frame actually never reached the child (F4). Absent on
+  // older records (positional fallback) and on the synchronous abstain→deny/undelivered/mismatch→deny
+  // paths in handleDecision (those already record the true outcome at push time — nothing to reconcile).
   requestId?: string;
   model?: string; // decider model for by:"llm" gates — surfaced in gate provenance for auditability
   detail?: unknown;
@@ -149,7 +158,7 @@ export interface RunRecord {
   result: "success" | "error";
   // when result === "error", whether the error looks like a transport drop (connection closed after a
   // clean result) vs a genuine agent/skill failure. Undefined on success or unclassified errors.
-  resultErrorKind?: "transport" | "agent";
+  resultErrorKind?: "transport" | "agent" | "usage_limit";
   // finer error source than resultErrorKind's binary — the raw `error`-event source, or "result" for
   // the SDK-wrapped is_error result path, or "no_result" when the stream closed with no terminal event,
   // or "timeout" when the harness's wall-clock limit killed the run. Undefined when no error fired; a
@@ -178,12 +187,21 @@ export interface RunRecord {
   decisions: DecisionRecord[];
   permissiveAutoAllow: string[]; // tools auto-allowed by cowork parity for unscripted/off-registry perms (real Cowork blocks these)
   unanswered: { question: string; chosen: string; by: string; rationale?: string; model?: string }[];
-  toolResults: { toolUseId?: string; isError: boolean; text: string; assertText?: string }[]; // captured tool OUTCOMES
-  gateAnswers: { question: string; toolUseId?: string; answers: Record<string, string> }[]; // answered AskUserQuestion gates
+  toolResults: { toolUseId?: string; isError: boolean; text: string; assertText?: string; assertTextTruncated?: boolean }[]; // captured tool OUTCOMES
+  // requestId (the decision's `id`) rides along so post-loop reconciliation (drive()'s gateDeliveries
+  // build below) can consult `session.hasUndeliveredReconciliation?.(requestId)` for ground truth on a
+  // frame that respond() reported delivered optimistically but whose async stdin write later failed.
+  gateAnswers: { question: string; toolUseId?: string; requestId?: string; answers: Record<string, string> }[]; // answered AskUserQuestion gates
   gateDeliveries: {
     question: string;
     delivered: boolean | null;
     error?: string;
+    // NOTE: this union is hand-mirrored onto RunResult.gateDeliveries in types.ts (owned by the main
+    // thread) — do not add a new literal here without updating that mirror too. A reconciled-undelivered
+    // gate (F4 — the control_response frame confirmed to have never reached the child, an async EPIPE
+    // after respond()'s optimistic `delivered:true`) reuses "errored" below rather than adding a new
+    // literal, since both mean "the answer did not reach the agent" from this field's consumers' view;
+    // `error` carries the distinguishing detail ("epipe" vs. a tool_result error).
     reason?: "ok" | "errored" | "unobserved" | "no-pairing-metadata";
   }[]; // did the answer reach the model? (null = unobserved or no-pairing-metadata)
   usage?: UsageInfo;
@@ -230,7 +248,7 @@ export interface RunRecord {
    *  was partially unparseable, so the dependent assertion fails "malformed" rather than silently dropping
    *  the bad entries. (resource malformed lines live on `resources.malformedLines`; hash errors on
    *  `workspaceFiles[].hashError`.) */
-  evidenceErrors: { taskTracking: number; webSearchParse: number; presentFilesMalformed: number };
+  evidenceErrors: { taskTracking: number; webSearchParse: number; presentFilesMalformed: number; egressParse?: number };
 }
 
 export interface RunHooks {
@@ -261,7 +279,12 @@ export function classifyResultError(
   source: "result" | "exit" | "spawn" | "protocol",
   signature: string,
   sawSuccessResult: boolean,
-): "transport" | "agent" {
+  apiErrorStatus?: number,
+): "transport" | "agent" | "usage_limit" {
+  // Quota exhaustion: an is_error result carrying HTTP 429 AND terminal usage-limit text (a bare 429 is an
+  // ambiguous transient/overload window the SDK retries, so BOTH are required — see usage-limit.ts). Only
+  // the "result" path carries api_error_status.
+  if (source === "result" && isUsageLimit(signature, apiErrorStatus)) return "usage_limit";
   const isTransport = TRANSPORT_SIGNATURE.test(signature);
   if (source === "result") return isTransport ? "transport" : "agent";
   if (source === "exit") return sawSuccessResult && isTransport ? "transport" : "agent";
@@ -527,7 +550,13 @@ export class Run {
             break;
           }
           case "tool_result": {
-            this.rec.toolResults.push({ toolUseId: ev.toolUseId, isError: ev.isError, text: ev.text, assertText: ev.assertText });
+            this.rec.toolResults.push({
+              toolUseId: ev.toolUseId,
+              isError: ev.isError,
+              text: ev.text,
+              assertText: ev.assertText,
+              assertTextTruncated: ev.assertTextTruncated,
+            });
             if (ev.toolUseId) this.notePresentedFiles(ev.toolUseId, ev.textBlocks);
             if (ev.toolUseId) {
               const name = this.toolNameByUseId.get(ev.toolUseId);
@@ -614,7 +643,12 @@ export class Run {
               this.rec.result = "error";
               // path (a): the SDK wrapped a transport failure into an is_error result — the result IS the
               // signal (no prior-result gate). Classify off the SDK result payload + subtype.
-              this.rec.resultErrorKind = classifyResultError("result", `${ev.subtype ?? ""} ${ev.resultText ?? ""}`, sawSuccessResult);
+              this.rec.resultErrorKind = classifyResultError(
+                "result",
+                `${ev.subtype ?? ""} ${ev.resultText ?? ""}`,
+                sawSuccessResult,
+                ev.apiErrorStatus,
+              );
               this.rec.errorSource = "result";
             } else {
               this.rec.result = "success";
@@ -690,6 +724,40 @@ export class Run {
     }
 
     this.rec.transcript = transcript.join("\n");
+    // Stream-end reconciliation: a TaskCreate / WebSearch whose tool_use was seen but whose paired
+    // tool_result never arrived (stream truncated between use and result) stays in its pending map,
+    // never reaching rec.tasks/rec.webSearches AND never bumping an evidenceError — so a dependent
+    // assertion would evaluate the resolved SUBSET as if it were complete. Flush every still-pending
+    // entry into the matching incomplete-evidence counter so task/search assertions fail "cannot verify
+    // (incomplete)" (taskTracking gates all_tasks_completed / task_count_min / task_status) instead of
+    // silently under-counting. #5
+    this.rec.evidenceErrors.taskTracking += this.pendingTaskCreates.size;
+    this.pendingTaskCreates.clear();
+    this.rec.evidenceErrors.webSearchParse += this.pendingWebSearches.size;
+    this.pendingWebSearches.clear();
+    // present_files matters most here: no_scratchpad_leak gates on presentFilesMalformed, so an unresolved
+    // present_files call (result truncated away) would otherwise let a leak check pass on an incomplete set. #5
+    this.rec.evidenceErrors.presentFilesMalformed += this.pendingPresentFiles.size;
+    this.pendingPresentFiles.clear();
+    // Gate-delivery reconciliation (F4): `respond()` reports `delivered:true` optimistically as soon as
+    // the control_response frame is QUEUED — the async stdin write confirmation lands later in pump(), so
+    // a write that fails AFTER respond() already returned (EPIPE / destroyed pipe) was never consulted
+    // and every decision recordDecision() pushed still read "answered"/allow/deny as if the child actually
+    // received it (see DecisionDelivery's doc comment in session.ts). By this point the stream has fully
+    // drained (the for-await loop above only exits once LiveAgentSession.start()'s own finally has awaited
+    // drainAll()), so every write failure that will ever be discovered for this run has already been
+    // recorded — safe to consult ground truth now. `hasUndeliveredReconciliation` is optional on
+    // AgentSession (only a live session has a pipe that can fail this way); `?.()` on a replay/cassette
+    // session returns undefined, so nothing here is reconciled (correct — a frozen cassette can't produce
+    // a fresh EPIPE).
+    for (const d of this.rec.decisions) {
+      if (d.requestId && this.session.hasUndeliveredReconciliation?.(d.requestId)) {
+        d.rationale = d.rationale
+          ? `${d.rationale} (reconciled: control frame undelivered — epipe)`
+          : "reconciled: control frame undelivered — epipe";
+        d.decision = "undelivered";
+      }
+    }
     // Wall-clock timeout override: the kill above surfaces as an "exit" error (or ends the stream), but the
     // authoritative reason is the timeout. Set it here so it wins over the exit/no_result labeling below.
     if (timedOut) {
@@ -730,6 +798,18 @@ export class Run {
     // result was observed; false iff it errored; null if no result was observed (e.g. protocol
     // fidelity, or the run ended before the tool ran) — null is neutral for `gate_answers_delivered`.
     this.rec.gateDeliveries = this.rec.gateAnswers.map((g) => {
+      // Reconciled ground truth wins over the tool_result-based inference below: if the control_response
+      // frame for this gate's decision is now confirmed to have NEVER reached the child (F4 — see the
+      // reconciliation loop above), the answer was not delivered regardless of what tool_result (if any)
+      // later showed up for the same toolUseId — a stale/unrelated tool_result must not read as "ok".
+      if (g.requestId && this.session.hasUndeliveredReconciliation?.(g.requestId)) {
+        return {
+          question: g.question,
+          delivered: false,
+          reason: "errored" as const, // no dedicated literal — see the reason union's comment above (types.ts mirror)
+          error: "control_response frame never reached the agent (epipe)",
+        };
+      }
       // No toolUseId = no pairing metadata (distinct from "tool result not observed"). Both report
       // delivered:null but `reason` tells them apart so a missing pairing doesn't read as benign.
       if (!g.toolUseId) return { question: g.question, delivered: null, reason: "no-pairing-metadata" as const };
@@ -789,7 +869,12 @@ export class Run {
   private denormalizeSubagentOutputs(): void {
     for (const sa of this.rec.subagents) {
       const tr = this.rec.toolResults.find((r) => r.toolUseId === sa.toolUseId);
-      if (tr) sa.output = tr.assertText ?? tr.text;
+      if (tr) {
+        sa.output = tr.assertText ?? tr.text;
+        // Mark truncation so subagent_output_contains reports "cannot verify" (not a false absence) when
+        // the searched substring could lie past the assert-cap cut. #9
+        if (tr.assertTextTruncated) sa.outputTruncated = true;
+      }
     }
   }
 
@@ -898,7 +983,7 @@ export class Run {
       const label = req.questions.map(questionLabel).filter(Boolean).join(" / ") || "";
       // Record the answered gate (with its toolUseId) so finalize can pair it with the tool_result to
       // verify the answer actually reached the model. Independent of `by` — delivery ≠ attribution.
-      this.rec.gateAnswers.push({ question: label, toolUseId: req.toolUseId, answers });
+      this.rec.gateAnswers.push({ question: label, toolUseId: req.toolUseId, requestId: req.id, answers });
       for (const [question, chosen] of Object.entries(answers)) {
         if (by !== "scripted") this.rec.unanswered.push({ question, chosen: String(chosen), by, rationale, model });
       }
@@ -908,7 +993,7 @@ export class Run {
       // name. The input rides through the same record-time scrub as every other captured value; cap it so
       // a large input can't bloat the record. Allow keeps detail unset (the input isn't diagnostic there).
       const detail = behavior === "deny" ? { input: capDecisionInput(req.input) } : undefined;
-      this.rec.decisions.push({ kind: "tool", name: req.tool, decision: behavior ?? "?", by, rationale, detail });
+      this.rec.decisions.push({ kind: "tool", name: req.tool, decision: behavior ?? "?", by, requestId: req.id, rationale, detail });
       // A cowork-parity off-registry auto-allow is a SILENT false-green risk — real Cowork blocks for the
       // user. Make it loud (stderr) AND machine-distinguishable (rec.permissiveAutoAllow → the envelope),
       // so a green carrying one isn't mistaken for a faithful pass.
@@ -920,7 +1005,7 @@ export class Run {
       }
     } else {
       const outcome = resp.kind === "dialog" ? resp.behavior : resp.kind === "elicit" ? resp.action : "?";
-      this.rec.decisions.push({ kind: req.kind, name: req.kind, decision: outcome, by, rationale });
+      this.rec.decisions.push({ kind: req.kind, name: req.kind, decision: outcome, by, requestId: req.id, rationale });
     }
   }
 

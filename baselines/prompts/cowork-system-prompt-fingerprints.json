@@ -17,6 +17,22 @@
       "sectionTags": 43,
       "constantId": "sIi",
       "note": "First release with a retained raw + hash anchor. Prompt append verified UNCHANGED vs 1.18286.0 (identical 37857 code points and identical 43-tag section structure/order); the reconstructed 1.18286.0 paraphrase baseline remains faithful for 1.18286.2."
+    },
+    "1.19367.0": {
+      "sha256": "298464bd98816cb8724354471867a150dd2ff4b9f65db734fcc6df38335f32b2",
+      "codePoints": 37857,
+      "sectionTags": 43,
+      "constantId": "JDr",
+      "note": "Back-filled 2026-07-10 from the retained asar backup. Prompt append BYTE-IDENTICAL to 1.18286.2 (same SHA-256, same 37857 code points / 43 tags); only the minifier-assigned constant id changed (sIi -> JDr). The 1.18286.0 paraphrase baseline remains faithful."
+    },
+    "1.20186.0": {
+      "sha256": "0189a96cafe73f82bf9c492a17a4ff2f1b87c8486c54232c4e70e78ab98d836a",
+      "codePoints": 37875,
+      "sectionTags": 43,
+      "constantId": "tOt",
+      "placeholders": ["accountName", "currentDateTime", "currentTimezone", "cwd", "folderSelected", "modelIdentity", "modelName", "skillsDir", "workspaceContext", "workspaceFolder"],
+      "sectionTagNames": ["additional_skills_reminder", "antartifact", "application_details", "artifact", "artifacts", "ask_user_question_tool", "available_skills", "citation_requirements", "claude_behavior", "company", "computer_use", "country", "env", "evenhandedness", "examples", "file_creation_advice", "file_handling_rules", "good_file_sharing_examples", "high_level_computer_use_explanation", "knowledge_cutoff", "legal_and_financial_advice", "lists_and_bullets", "notes_on_user_uploaded_files", "package_management", "producing_outputs", "product_information", "refusal_handling", "responding_to_mistakes_and_criticism", "sharing_files", "skills", "strong", "suggesting_claude_actions", "todo_list_tool", "tone_and_formatting", "tool_result_safety", "unnecessary_computer_use_avoidance", "user_wellbeing", "verification_step", "web_content_restrictions", "working_with_user_files"],
+      "note": "Prompt CHANGED vs 1.19367.0: +18 code points, purely additive (37933-byte prefix identical; trailing bytes = '\\n{{modelIdentity}}' appended after </env>), section-tag structure unchanged (43 opens / 40 unique names). The {{modelIdentity}} placeholder is DEPLOYMENT-GATED: rendered only for custom-3p/enterprise deployments; on the first-party Cowork the harness emulates (deployment class type='1p', rendererConfig()=null) the renderer takes the strip branch (/\\n?\\{\\{modelIdentity\\}\\}/g -> '') so the RENDERED prompt is byte-identical to pre-1.20186.0. The 1.18286.0 paraphrase baseline therefore remains faithful (no new paraphrase dir / renderer change). placeholders + sectionTagNames are consumed by the sync-time prompt-inventory drift-diff."
     }
   }
 }

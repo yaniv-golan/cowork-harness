@@ -27,9 +27,16 @@ wire surface — the harness's *own* protocol, not Anthropic's.
 
 **Out of scope, on purpose** — the Claude Agent SDK's own event stream (`assistant`/`result`/`user`
 tool-result messages, `system/init` capability manifests, `api_metrics`). That surface is Anthropic's,
-changes per SDK release, and is already covered by `parseMessage`'s tolerant, ad-hoc parsing
-(`src/agent/session.ts`) rather than a frozen schema — freezing it here would either lag every SDK bump
-or force a spec change on every one. The `{type:"user", message:{role:"user", ...}}` turn-send message
+changes per SDK release, and is already covered by `parseMessage` (`src/agent/session.ts`) rather than a
+frozen schema — freezing it here would either lag every SDK bump or force a spec change on every one.
+`parseMessage` tolerates unknown or missing fields, but it fails closed on unsafe structural
+malformation: a `system/init` frame whose `tools`/`mcp_servers`/`skills` is present but not an array, or
+an assistant content-block entry that isn't an object, throws a typed `control-in: malformed …` protocol
+error rather than propagating a shape that would crash downstream unguarded. Every caller — the live
+session, cassette replay, and `trace` reconstruction — catches that error and skips the offending frame
+loudly rather than aborting. (The frozen `schema/protocol.v1.json` control shapes documented below are
+unaffected by this — `parseMessage`'s SDK-event handling is a separate code path.) The `{type:"user",
+message:{role:"user", ...}}` turn-send message
 (`sendUserTurn`) is mirrored into `control-out.jsonl` for full-fidelity replay but is also SDK input
 shape, not a control-protocol shape — also out of scope (the conformance tests explicitly skip it).
 
@@ -47,10 +54,13 @@ Verified against, at the time `protocol.v1.json` was written (mirrors the versio
 note):
 
 - **Baselines committed in this repo at the time of writing:** `baselines/desktop-1.17377.1.json` through
-  `baselines/desktop-1.18286.0.json` (see `baselines/` for the current set — `sync` may have added newer
-  ones since). The staged agent ELF is unchanged across this range (2.1.197 throughout — see each
-  baseline's `agentBinary.stagedPath`), so the verification below covers all of them.
-- **Staged in-VM agent:** 2.1.197.
+  `baselines/desktop-1.19367.0.json` (see `baselines/` for the current set — `sync` may have added newer
+  ones since). The staged agent ELF is 2.1.197 through the `1.18286.0` baseline, then 2.1.202 from
+  `1.18286.2` onward (see each baseline's `agentBinary.stagedPath`) — DESIGN.md's "Spawn contract +
+  host-loop vs VM-loop" note already establishes the spawn contract itself is byte-identical/behaviorally
+  identical across that ELF bump, so the verification below still covers the whole range despite the
+  binary version change partway through.
+- **Staged in-VM agent:** 2.1.197 (through `1.18286.0`), 2.1.202 (`1.18286.2` onward).
 - **Host CLI used for the original end-to-end verification:** macOS build 2.1.177+.
 
 If you're conformance-testing a *different* agent build against this schema and it fails, that's a signal
@@ -138,3 +148,10 @@ least one vector.
   control-protocol facts are unchanged across this bump — confirmed by the re-recorded conformance
   cassettes passing `test/protocol-schema.test.ts`. The 2026-07-03 verification above stays scoped to
   its stated 2.1.197 range (it is not restamped; newer baselines carry agent 2.1.202).
+- **2026-07-11** — baseline set extended through `desktop-1.20186.0` (VM ELF 2.1.202 unchanged; native
+  host app 2.1.205). The `v1` control-protocol facts are unchanged across this bump — the 1.20186.0
+  asar was a minifier re-anchor with a byte/behaviourally-identical value-resolved spawn contract
+  (extractor re-anchored in `src/sync/cowork-sync.ts`), confirmed by the live spawn-contract tests plus
+  a live end-to-end pass across `protocol`/`container`/`hostloop`. The system-prompt source added a
+  deployment-gated `{{modelIdentity}}` placeholder that is stripped on first-party, so the rendered
+  prompt is byte-identical.

@@ -55,6 +55,7 @@ export type AgentEvent =
       text: string;
       provenanceText?: string;
       assertText?: string;
+      assertTextTruncated?: boolean; // assertText was cut at the 10 KB assert cap — a substring search past the cut is unverifiable, not absent (#9)
       textBlocks?: string[];
     } // the OUTCOME of a tool call (from `user`/tool_result blocks). `text` is display-truncated; `provenanceText` is the larger raw value so URLs past the display cap still seed web_fetch provenance; `assertText` is assertion-fidelity cap (10 KB); `textBlocks` is the UNFLATTENED per-block text array (undefined for a string/non-array content, or an array with no text blocks) — `text`/`assertText`/`provenanceText` join a multi-block content array with a single space, losing per-entry boundaries a multi-file tool result (e.g. present_files, one path per input file) needs preserved
   | {
@@ -76,6 +77,7 @@ export type AgentEvent =
       usage?: Record<string, unknown>;
       resultText?: string;
       subtype?: string; // resultText/subtype carry the SDK result payload so a transport-error result can be classified
+      apiErrorStatus?: number; // HTTP status of an API error (429 + terminal usage-limit text ⇒ quota exhausted)
       costUsd?: number; // SDK's total_cost_usd for this invocation (was dropped on the floor before)
       numTurns?: number; // SDK's num_turns for this invocation (was dropped on the floor before)
       // per-model cost/token breakdown, cumulative for the whole run — a TOP-LEVEL sibling of `usage` on
@@ -116,7 +118,19 @@ export interface HookBundle {
 /** Outcome of `respond()`: whether the answer actually reached its destination (the live agent's
  *  stdin, or — on replay — the recording). `delivered:false` means the answer was NOT applied, so the
  *  caller must NOT record it as "answered". Deliberately a status return, never a throw: a late answer
- *  racing session teardown is a normal shutdown condition, not an error. */
+ *  racing session teardown is a normal shutdown condition, not an error.
+ *
+ *  CAVEAT (LiveAgentSession only): `delivered:true` here means the control_response frame was
+ *  successfully QUEUED, NOT that the child's stdin write callback actually confirmed it — that
+ *  confirmation lands asynchronously in `pump()`, after `respond()` (a synchronous method on this
+ *  interface, per every current caller) has already returned. A pipe that dies between the queue and
+ *  the actual OS write (EPIPE) is therefore reported `delivered:true` optimistically, then recorded as
+ *  `control_undelivered` in events.jsonl a tick later. Making `respond()` itself awaitable would give
+ *  the correct answer but ripples into every `AgentSession` consumer that reads `.delivered`
+ *  synchronously today; short of that, the OPTIONAL `hasUndeliveredReconciliation(decisionId)` method
+ *  below (implemented by `LiveAgentSession`, omitted by replay sessions — it doesn't force that ripple on
+ *  any other implementer) lets a caller that needs ground truth reconcile the optimistic answer after the
+ *  fact instead of trusting it blindly. `Run.drive()` (run.ts) is that caller today. */
 export type DecisionDelivery = { delivered: boolean; reason?: "session-closing" | "unknown-decision" };
 
 export interface AgentSession {
@@ -131,6 +145,17 @@ export interface AgentSession {
    *  and lets a well-behaved agent exit), this SIGTERMs the child — tier-agnostic, since the child is
    *  whatever was spawned (docker/limactl/native). Optional: replay/mock sessions have no live process. */
   kill?(): void;
+  /** Ground truth for a `respond()` answer that was reported `delivered:true` optimistically (see
+   *  `DecisionDelivery`'s doc comment above): true iff the control_response frame for `decisionId` was
+   *  later confirmed to have NEVER reached the child (an async EPIPE/destroyed-pipe write failure
+   *  discovered after `respond()` already returned). Optional and NOT implemented by every session on
+   *  purpose — only a session with a live stdin pipe (`LiveAgentSession`) can discover this after the
+   *  fact; a replay/cassette session has no live pipe to fail, so it omits this method entirely and a
+   *  caller's `?.()` call reads `undefined` (nothing to reconcile — correct, a frozen cassette can't
+   *  produce a fresh write failure). A caller that needs ground truth (rather than the synchronous
+   *  best-effort `respond()` signal) should call this defensively, once the stream has settled, for every
+   *  decisionId it optimistically recorded as delivered. */
+  hasUndeliveredReconciliation?(decisionId: string): boolean;
 }
 
 // ---- Protocol ingress validation (fail-closed) ----
@@ -373,10 +398,17 @@ export class LiveAgentSession implements AgentSession {
   private rejectError?: (e: Error) => void;
   /** Bounded tail of the child's stderr, for the nonzero-exit error message. */
   private stderrTail = "";
-  private writeQueue: string[] = [];
+  // `decisionId` is only set for a control_response written by `respond()` — it's how a later
+  // `pump()` write failure gets traced back to the decision that was already optimistically reported
+  // `delivered:true` (see DecisionDelivery's doc comment + `hasUndeliveredReconciliation`).
+  private writeQueue: { line: string; decisionId?: string }[] = [];
   private pumping = false;
   private queueIdle?: () => void;
   private closing = false;
+  /** DecisionIds whose `respond()`-written control_response frame was optimistically reported
+   *  `delivered:true` but whose actual stdin write later failed (EPIPE / destroyed pipe) — populated by
+   *  `recordUndelivered()`. See `hasUndeliveredReconciliation`'s doc comment. */
+  private reconciledUndelivered = new Set<string>();
 
   constructor(
     private proc: ChildProcessByStdio<Writable, Readable, Readable>,
@@ -621,13 +653,29 @@ export class LiveAgentSession implements AgentSession {
       warn(
         `::warning:: decider returned kind "${r.kind}" for a "${req.kind}" request (id ${decisionId}) → sending a safe deny/cancel; the agent did NOT receive an answer\n`,
       );
-    const delivered = this.write(serializeDecision(req, r));
+    // `decisionId` tags the queued frame so a later write failure in pump() (an async EPIPE — see
+    // DecisionDelivery's doc comment) can be traced back to this decision and reconciled via
+    // `hasUndeliveredReconciliation`, even though the `delivered:true` returned below is only a
+    // synchronous "queued successfully" signal, not stdin write confirmation.
+    const delivered = this.write(serializeDecision(req, r), decisionId);
     // Invariant: each decision id is answered at most once. Delete after the write so stale
     // entries don't accumulate (live sessions may process thousands of decisions per run).
     this.reqById.delete(decisionId);
     // If the session was already draining, write() discarded the frame — report non-delivery so the
     // caller records the truth instead of a false "answered".
     return delivered ? { delivered: true } : { delivered: false, reason: "session-closing" };
+  }
+
+  /** True once a `respond()`-written control_response for `decisionId` is confirmed to have NEVER
+   *  reached the child (an async EPIPE/destroyed-pipe failure discovered in `pump()` after `respond()`
+   *  already returned `{delivered:true}` — see DecisionDelivery's doc comment for why `respond()` can't
+   *  just wait for this itself). Declared OPTIONAL on the `AgentSession` interface (not required) so
+   *  `respond()` stays synchronous (every current caller reads `.delivered` immediately) and a
+   *  replay/cassette session — with no live pipe to ever fail — need not implement it; `Run.drive()`
+   *  calls it defensively (`this.session.hasUndeliveredReconciliation?.(id)`) once the stream has settled,
+   *  to reconcile every decision it optimistically recorded as delivered against this ground truth. */
+  hasUndeliveredReconciliation(decisionId: string): boolean {
+    return this.reconciledUndelivered.has(decisionId);
   }
 
   close(): void {
@@ -654,7 +702,17 @@ export class LiveAgentSession implements AgentSession {
     }
   }
 
-  private write(obj: unknown): boolean {
+  /** Record that `frame` never reached the child's stdin. When it came from `respond()` (carries
+   *  `decisionId`), first mark that decision reconciled-undelivered (see
+   *  `hasUndeliveredReconciliation`'s doc comment) so the optimistic `delivered:true` `respond()`
+   *  already returned can be overridden by a caller that checks — THEN write the `_emu:
+   *  "control_undelivered"` marker (unchanged shape, plus the new `decisionId` field when present). */
+  private recordUndelivered(frame: string, decisionId?: string): void {
+    if (decisionId) this.reconciledUndelivered.add(decisionId);
+    this.events.write(JSON.stringify({ _emu: "control_undelivered", frame, ...(decisionId ? { decisionId } : {}) }) + "\n");
+  }
+
+  private write(obj: unknown, decisionId?: string): boolean {
     const line = JSON.stringify(obj);
     if (this.closing) return false; // session draining — discard silently (caller reads the false return)
     // check stream writability before writing — a closed/destroyed stdin after a child crash
@@ -662,7 +720,10 @@ export class LiveAgentSession implements AgentSession {
     // hanging or silently dropping frames.
     if (this.proc.stdin.destroyed || !this.proc.stdin.writable)
       throw new Error("control-protocol write failed: child stdin is no longer writable (process may have crashed)");
-    this.writeQueue.push(line + "\n");
+    // `decisionId` is threaded through to pump() ONLY so an async write failure discovered later can be
+    // traced back to the decision that this frame answers (see DecisionDelivery's doc comment on why
+    // `respond()` itself can't wait for that confirmation).
+    this.writeQueue.push({ line: line + "\n", decisionId });
     void this.pump().catch((err) => {
       // Route unexpected pump errors through rejectError so they surface as a typed error + clean
       // teardown instead of a silent hang. Known failure modes call rejectError themselves before
@@ -677,13 +738,13 @@ export class LiveAgentSession implements AgentSession {
     this.pumping = true;
     try {
       while (this.writeQueue.length) {
-        const frame = this.writeQueue.shift()!;
+        const { line: frame, decisionId } = this.writeQueue.shift()!;
         if (this.proc.stdin.destroyed || !this.proc.stdin.writable) {
-          this.events.write(JSON.stringify({ _emu: "control_undelivered", frame }) + "\n");
+          this.recordUndelivered(frame, decisionId);
           if (this.rejectError) this.rejectError(new Error("stdin no longer writable while draining queue"));
           while (this.writeQueue.length) {
             const remaining = this.writeQueue.shift()!;
-            this.events.write(JSON.stringify({ _emu: "control_undelivered", frame: remaining }) + "\n");
+            this.recordUndelivered(remaining.line, remaining.decisionId);
           }
           break;
         }
@@ -700,11 +761,11 @@ export class LiveAgentSession implements AgentSession {
           }
         });
         if (writeErr) {
-          this.events.write(JSON.stringify({ _emu: "control_undelivered", frame }) + "\n");
+          this.recordUndelivered(frame, decisionId);
           if (this.rejectError) this.rejectError(writeErr);
           while (this.writeQueue.length) {
             const remaining = this.writeQueue.shift()!;
-            this.events.write(JSON.stringify({ _emu: "control_undelivered", frame: remaining }) + "\n");
+            this.recordUndelivered(remaining.line, remaining.decisionId);
           }
           break;
         } else {
@@ -735,7 +796,7 @@ export class LiveAgentSession implements AgentSession {
       while (this.writeQueue.length) {
         const remaining = this.writeQueue.shift()!;
         try {
-          this.events.write(JSON.stringify({ _emu: "control_undelivered", frame: remaining }) + "\n");
+          this.recordUndelivered(remaining.line, remaining.decisionId);
         } catch {
           /* events may already be ended; discard silently */
         }
@@ -754,6 +815,22 @@ export class LiveAgentSession implements AgentSession {
   }
 }
 
+/** Validate one of the `system/init` frame's optional array fields (`tools`, `mcp_servers`, `skills`).
+ *  Previously each field was defaulted with `?? []`, which only guards against `null`/`undefined` — a
+ *  non-array scalar or object (a malformed/misbehaving agent build) survived untouched into the `init`
+ *  AgentEvent, and `Run.drive` later does `ev.skills.map(...)` → an uncaught TypeError, not a typed
+ *  protocol failure. Throwing here (mirroring `requireRequestId` / the AskUserQuestion `questions` check
+ *  above) converts a malformed field into a typed protocol error at both call sites that already catch a
+ *  `parseMessage` throw (`LiveAgentSession.start`'s try/catch around `translate()`, and
+ *  `CassetteAgentSession.start`'s per-line catch in cassette.ts). */
+function requireInitArray(msg: Record<string, unknown>, field: string): unknown[] {
+  const v = msg[field];
+  if (v === undefined) return [];
+  if (!Array.isArray(v))
+    throw new Error(`control-in: malformed system/init frame: "${field}" must be an array, got ${v === null ? "null" : typeof v}`);
+  return v;
+}
+
 /** Pure translation of one parsed stream-json message → AgentEvents (no side-effects). Shared by
  *  LiveAgentSession and CassetteAgentSession. mcp_message is handled by Live before this is called. */
 export function parseMessage(msg: any): AgentEvent[] {
@@ -766,7 +843,13 @@ export function parseMessage(msg: any): AgentEvent[] {
       break;
     case "system":
       if (msg.subtype === "init")
-        ev.push({ type: "init", tools: msg.tools ?? [], mcpServers: msg.mcp_servers ?? [], skills: msg.skills ?? [], cwd: msg.cwd });
+        ev.push({
+          type: "init",
+          tools: requireInitArray(msg, "tools") as string[],
+          mcpServers: requireInitArray(msg, "mcp_servers"),
+          skills: requireInitArray(msg, "skills") as string[],
+          cwd: msg.cwd,
+        });
       else if (msg.subtype === "api_metrics") ev.push({ type: "metrics", data: msg });
       else if (msg.subtype === "thinking") ev.push({ type: "thinking", text: String(msg.content ?? "") });
       else if (typeof msg.subtype === "string")
@@ -787,7 +870,18 @@ export function parseMessage(msg: any): AgentEvent[] {
       // read once per message, thread onto assistant_text/tool_use/thinking/subagent_dispatch.
       const model = typeof msg.message?.model === "string" ? msg.message.model : undefined;
       let blockIndex = 0;
-      for (const block of msg.message?.content ?? []) {
+      for (const rawBlock of msg.message?.content ?? []) {
+        // A content-array entry that isn't an object (null, a bare number/string — a malformed/corrupt
+        // frame) previously reached `block.parent_tool_use_id`/`block.type` etc. unguarded; most of
+        // those accesses silently return undefined for a primitive, but `block === null` throws
+        // immediately ("Cannot read properties of null"). Validate once, up front, and turn a malformed
+        // block into a typed protocol error (same throw-and-catch convention as
+        // requireRequestId/requireInitArray) instead of an uncaught TypeError.
+        if (!rawBlock || typeof rawBlock !== "object")
+          throw new Error(
+            `control-in: malformed assistant content block at index ${blockIndex}: expected an object, got ${rawBlock === null ? "null" : typeof rawBlock}`,
+          );
+        const block = rawBlock as Record<string, any>;
         // Block-level parent wins over message-level when both are present (see comment above).
         const parentToolUseId = block.parent_tool_use_id ? String(block.parent_tool_use_id) : msgParentToolUseId;
         if (block.type === "text") ev.push({ type: "assistant_text", text: block.text, parentToolUseId, model });
@@ -806,16 +900,29 @@ export function parseMessage(msg: any): AgentEvent[] {
           // any tool whose input carries `subagent_type` (rename-robust). Crucially we DON'T match the
           // cowork `TaskCreate`/`TaskUpdate` todo-list tools (`{subject, description, activeForm}` /
           // `{taskId, status}`) — they have no `subagent_type`, so they're excluded and never miscount.
-          const inp = (block.input ?? {}) as Record<string, unknown>;
+          // Normalize BEFORE the `in` check below: `block.input ?? {}` only guards null/undefined, so a
+          // non-object input (e.g. a bare number `42`) survived as-is and `"subagent_type" in inp` threw
+          // ("Cannot use 'in' operator to search for 'subagent_type' in 42"). A scalar/array input isn't
+          // itself malformed — it just can never BE a dispatch — so normalizing to `{}` here (without
+          // throwing) correctly falls through to "not a dispatch" instead of crashing. The raw
+          // `block.input` above (in the `tool_use` AgentEvent) is left untouched.
+          const inp = block.input && typeof block.input === "object" ? (block.input as Record<string, unknown>) : {};
           if (block.name === "Agent" || block.name === "Task" || "subagent_type" in inp) {
             const declared = Array.isArray(inp.tools)
               ? (inp.tools as unknown[]).map(String)
               : Array.isArray(inp.allowedTools)
                 ? (inp.allowedTools as unknown[]).map(String)
                 : []; // the `Agent` tool declares no tools list → []; declared-but-unused is legacy-`Task`-only
-            // When block.id is absent, synthesize a fallback to avoid collapsing all anonymous
-            // dispatches into the empty-string identity, which breaks dispatch tracking.
-            const toolUseId = block.id ? String(block.id) : `unpaired-${blockIndex}`;
+            // When block.id is absent, synthesize a fallback to avoid collapsing all anonymous dispatches
+            // into the empty-string identity (which breaks dispatch tracking). The fallback keys off the
+            // ASSISTANT MESSAGE's id (stable and unique per message) plus the intra-message blockIndex — so
+            // it is unique across messages AND deterministic across record→replay (the message id is frozen
+            // in the cassette bytes). A process-lifetime counter would be unique but would synthesize a
+            // DIFFERENT id on replay, breaking the timeline↔subagent join (attributedSkillId) that keys on
+            // the exact toolUseId. `msg.uuid` is a defensive secondary key; "anon" only for a synthetic
+            // frame carrying neither (never a real stream).
+            const msgKey = String(msg.message?.id ?? msg.uuid ?? "anon");
+            const toolUseId = block.id ? String(block.id) : `unpaired-${msgKey}-b${blockIndex}`;
             ev.push({
               type: "subagent_dispatch",
               toolUseId,
@@ -839,16 +946,26 @@ export function parseMessage(msg: any): AgentEvent[] {
       // before, so every tool result — including the AskUserQuestion `q.map` error — was invisible to the
       // recorder/trace. Capture them for delivery verification + `trace --view tools`/`--view questions`.
       for (const block of msg.message?.content ?? []) {
-        if (block.type === "tool_result")
+        // Guard a non-object content entry (null/scalar — a malformed/corrupt frame): `block.type` on a
+        // primitive silently returns undefined, but `block === null` throws. Mirror the assistant loop's
+        // up-front object check so a bad user block is skipped, not a crash. #2
+        if (!block || typeof block !== "object") continue;
+        if (block.type === "tool_result") {
+          const provText = toolResultRaw(block.content);
           ev.push({
             type: "tool_result",
             toolUseId: block.tool_use_id ? String(block.tool_use_id) : undefined,
             isError: !!block.is_error,
             text: toolResultText(block.content),
-            provenanceText: toolResultRaw(block.content),
+            provenanceText: provText,
             assertText: toolResultAssertText(block.content),
+            // The assert-fidelity value was cut iff the fuller provenance flatten already exceeds the assert
+            // cap (same join, wider slice) — carry the flag so a content assertion against a subagent's
+            // capped output can report "cannot verify" instead of a false absence past the cut. #9
+            assertTextTruncated: provText.length > ASSERT_TEXT_CAP,
             textBlocks: toolResultTextBlocks(block.content),
           });
+        }
       }
       break;
     case "result":
@@ -860,6 +977,9 @@ export function parseMessage(msg: any): AgentEvent[] {
         // (e.g. "API Error: Connection closed", subtype error_during_execution) from a skill failure.
         resultText: typeof msg.result === "string" ? msg.result : undefined,
         subtype: typeof msg.subtype === "string" ? msg.subtype : undefined,
+        // HTTP status of the API error on an is_error result (401/403/413/429/529). 429 + a terminal
+        // usage-limit message ⇒ quota exhausted (classified as usage_limit, distinct from a transient 429).
+        apiErrorStatus: typeof msg.api_error_status === "number" ? msg.api_error_status : undefined,
         costUsd: typeof msg.total_cost_usd === "number" ? msg.total_cost_usd : undefined,
         numTurns: typeof msg.num_turns === "number" ? msg.num_turns : undefined,
         modelUsage:
@@ -909,8 +1029,9 @@ function toolResultRaw(content: unknown): string {
 /** Assertion-fidelity cap — enough to cover realistic tool outputs for content assertions without
  *  blowing up result.json; deliberately larger than the 500-char display cap so text past the display
  *  truncation is still assertable. */
+const ASSERT_TEXT_CAP = 10_240;
 function toolResultAssertText(content: unknown): string {
-  return flattenToolResult(content, 10_240);
+  return flattenToolResult(content, ASSERT_TEXT_CAP);
 }
 /** The raw per-block text array, UNFLATTENED — undefined for a string/non-array content, or an
  *  array with no `type:"text"` blocks. `flattenToolResult` joins every block's text with a single

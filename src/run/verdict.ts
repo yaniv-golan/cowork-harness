@@ -6,6 +6,7 @@ export interface VerdictSignal {
     | "assertion"
     | "result_error"
     | "transport_error"
+    | "usage_limit"
     | "permissive_auto_allow"
     | "outputs_delete"
     | "host_path_leak"
@@ -87,7 +88,15 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
     // stream didn't cleanly complete is not a faithful green — but distinguish it from a skill failure so the
     // footer doesn't read as a skill defect. Message is assertion-count-aware (no false comfort on an
     // unasserted run) and lane-aware (replay/verify-run write no artifacts, so don't claim they were).
-    if (result.resultErrorKind === "transport") {
+    if (result.resultErrorKind === "usage_limit") {
+      // Quota exhausted (429 + terminal usage-limit text) — NOT a skill defect. Still a fail (the run didn't
+      // complete), but flagged distinctly so a batch halts fast instead of retrying into a spent quota.
+      signals.push({
+        code: "usage_limit",
+        severity: "fail",
+        message: "usage/quota limit hit (not a skill failure) — retry after the limit resets",
+      });
+    } else if (result.resultErrorKind === "transport") {
       const allPass = result.assertions.every((a) => a.pass);
       const msg =
         result.assertions.length === 0

@@ -196,6 +196,17 @@ export const AnswerRule = z
 export type AnswerRule = z.infer<typeof AnswerRule>;
 
 // Each field carries a `.describe()` so it is the SINGLE source for both the published JSON schema and
+// A tool GLOB value (only `*`/`?` are special). Reject an empty string AND regex/brace-expansion
+// metacharacters — both match no real tool name and would pass a `_not_`/`_absent` assert VACUOUSLY. Enforced
+// in the schema (so a recorded cassette's frozen assert is caught on read too, not only authored scenarios).
+// #7/#8
+const toolGlob = z
+  .string()
+  .min(1, "tool glob is empty — an empty glob matches no tool and passes vacuously")
+  .refine((g) => !/\.\*|\.\+|[|()[\]+^${}]|\\[dwsb]/.test(g), {
+    message: "tool glob looks like a regex or brace-expansion — only * and ? are special (no .* | [] {})",
+  });
+
 // `cowork-harness assertions --list` (which reads `Assertion.shape[k].description`) — the list can never drift
 // from the schema. Keep descriptions one line.
 export const Assertion = z.strictObject({
@@ -220,19 +231,16 @@ export const Assertion = z.strictObject({
     .describe(
       "a file exists AND is under a user-visible prefix: mnt/outputs, each connected-folder mount (mnt/<folder>), or the legacy mnt/.projects fallback (pre-1.14271.0)",
     ),
-  tool_called: z
-    .string()
+  tool_called: toolGlob
     .optional()
     .describe(
       "a called tool matched this glob (* = any run, ? = one char; exact when literal; anchored, case-sensitive) — e.g. mcp__workspace__*",
     ),
-  tool_not_called: z.string().optional().describe("NO called tool matched this glob (* / ?; exact when literal; anchored, case-sensitive)"),
-  subagent_tool_used: z
-    .string()
+  tool_not_called: toolGlob.optional().describe("NO called tool matched this glob (* / ?; exact when literal; anchored, case-sensitive)"),
+  subagent_tool_used: toolGlob
     .optional()
     .describe("a sub-agent used a tool matching this glob (* / ?; exact when literal; anchored, case-sensitive)"),
-  subagent_tool_absent: z
-    .string()
+  subagent_tool_absent: toolGlob
     .optional()
     .describe("NO sub-agent used a tool matching this glob (* / ?; exact when literal; anchored, case-sensitive)"),
   subagent_dispatched: z.string().optional().describe("a sub-agent matching this regex (by agentType or description) was dispatched"),
@@ -411,11 +419,10 @@ export const Assertion = z.strictObject({
       "fails if the run CREATED a file under a user-visible root whose workRoot-relative path (e.g. outputs/x.md) matches none of these globs (** = whole path segment for any depth, * within a segment, ? one char); [] = no new files allowed; new-files-only — overwriting a pre-existing file in place is invisible (use content-level producer stamping); needs a pre-run manifest (harness ≥0.24 recordings) — absence fails loud on live/verify-run; microvm cannot capture (use container/hostloop)",
     ),
   input_unmodified: z
-    .array(z.string().min(1))
-    .min(1)
+    .union([z.string().min(1), z.array(z.string().min(1)).min(1)])
     .optional()
     .describe(
-      "every pre-existing file whose workRoot-relative path matches a glob has an unchanged content hash after the run (in-place mutation detector)",
+      "a single glob OR an array of globs; every pre-existing file whose workRoot-relative path matches has an unchanged content hash after the run (in-place mutation detector)",
     ),
   self_heal_ran: z.boolean().optional().describe("skill resolved scripts via /sessions (plugin-root self-heal)"),
   transcript_no_host_path: z
@@ -644,6 +651,7 @@ export type Scenario = z.infer<typeof ScenarioObject>;
  *  refuse to vouch for answer-coverage against stale gate labels). */
 export interface Fingerprint {
   baseline: string; // appVersion at record time
+  frozen?: boolean; // #46: set when surfaced from a cassette's record-time fingerprint on replay (not a fresh run-time recompute)
   skillHash?: string; // hash of the session's local skill/plugin/marketplace dir contents (if any)
   skillSources?: string[]; // the local dirs that fed skillHash (for the replay recompute + diagnostics)
   skillScope?: string[]; // the skills the hash was scoped to (empty/absent = whole-tree); diagnostics
@@ -725,6 +733,9 @@ export interface RunStatus {
   // terminal-error diagnostics, surfaced so a failure-output debugger gets more than a bare "error"
   // (these live in result.json but not status.json before this). Present only on a terminal error write.
   errorSource?: "spawn" | "protocol" | "exit" | "agent" | "result" | "no_result" | "timeout";
+  // classifies the error KIND — surfaced here so a batch/status watcher can halt-fast on `usage_limit`
+  // (quota exhausted; retrying into a spent quota just burns the batch) rather than treating it as generic.
+  resultErrorKind?: "transport" | "agent" | "usage_limit";
   resultSubtype?: string;
   stderrLogPath?: string;
 }
@@ -763,6 +774,11 @@ export interface RunResult {
    *  "chat" = an interactive exploratory session (no assertions, no verdict — consumers must NOT read a
    *  chat result as pass/fail). Absent on results written before this field existed — treat absent as "run". */
   mode?: "run" | "chat";
+  /** The CLI COMMAND that produced this result — finer than `mode` (which only distinguishes run/chat).
+   *  `skill`/`record` both have `mode:"run"`, so this is the only place that provenance survives; the run
+   *  index prefers it during a reindex so a `skill`/`record` row isn't relabeled `run` (#48). Absent on
+   *  results written before this field existed — reindex falls back to a prior index row, then to `mode`. */
+  command?: "run" | "skill" | "record" | "chat" | "replay";
   /** Execution *location* taxonomy — orthogonal to `fidelity` (a privilege/sandbox tier, all local).
    *  Stamped `location:"local"` on every locally-executed run so that a future cloud-run artifact's
    *  differing/absent stamp is a detectable signal, never a silent mislabel. `environmentId` is the
@@ -777,7 +793,10 @@ export interface RunResult {
   fidelity: string;
   baseline: string;
   result: "success" | "error";
-  resultErrorKind?: "transport" | "agent"; // when result==="error", classify a tail-end transport drop vs a genuine failure
+  // when result==="error", classify the KIND: a tail-end transport drop, a genuine agent/skill failure, or
+  // usage_limit (quota exhausted — an is_error result with HTTP 429 + a terminal usage-limit message; NOT
+  // the skill's fault, retry after the reset). Verdict- and renderer-relevant.
+  resultErrorKind?: "transport" | "agent" | "usage_limit";
   /** How the run terminated in error — the `error` event's finer source (`spawn`/`protocol`/`exit`/`agent`,
    *  or `result` for the SDK-wrapped is_error-result path), OR `no_result` when the stream ended with no
    *  terminal event at all (the turn/time-exhaustion case: neither a result nor an error event fired), OR
@@ -836,8 +855,9 @@ export interface RunResult {
   infraErrors?: Array<{ source: string; message: string }>;
   /** Companion counters for malformed/dropped telemetry streams. A >0 count makes the dependent assertion
    *  fail "malformed" rather than silently dropping the bad entries (`taskTracking` → task assertions,
-   *  `presentFilesMalformed` → no_scratchpad_leak); `webSearchParse` is observability-only (no assertion). */
-  evidenceErrors?: { taskTracking?: number; webSearchParse?: number; presentFilesMalformed?: number };
+   *  `presentFilesMalformed` → no_scratchpad_leak); `webSearchParse` and `egressParse` are observability-only
+   *  (no assertion — egress asserts are positive-only, so a dropped line already fails loud). */
+  evidenceErrors?: { taskTracking?: number; webSearchParse?: number; presentFilesMalformed?: number; egressParse?: number };
   // per-tool call-count/timing aggregate, folded from the timeline. Absent only when no
   // timeline data exists for this run (replayErrorResult — no run ever happened). Populated for
   // buildPartialResult too, when the salvaged run made at least one tool call. Wall-gap between
@@ -959,6 +979,7 @@ export interface RunResult {
     prompt?: string; // dispatch input.prompt, assertText-capped
     model?: string; // the dispatching message's model
     output?: string; // the dispatch's own paired tool_result, assertText-capped
+    outputTruncated?: boolean; // `output` was cut at the assert cap — a negative content check is unverifiable, not a proven absence (#9)
     attributedSkillId?: string; // the skill-activation window this dispatch was attributed to — NOT Fingerprint.skillScope (a different, unrelated field)
   }>;
   /**

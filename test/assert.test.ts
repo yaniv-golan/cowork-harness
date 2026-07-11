@@ -1209,6 +1209,23 @@ describe("input_unmodified", () => {
 
   it("rejects an empty glob list at schema validation (.min(1))", () => {
     expect(AssertionSchema.safeParse({ input_unmodified: [] }).success).toBe(false);
+    expect(AssertionSchema.safeParse({ input_unmodified: "" }).success).toBe(false); // empty string too
+  });
+
+  it("accepts a bare string (coerced to a one-element array) and matches identically", () => {
+    // schema accepts both forms
+    expect(AssertionSchema.safeParse({ input_unmodified: "project/**" }).success).toBe(true);
+    const root = mkdtempSync(join(tmpdir(), "cwh-ium-str-"));
+    mkdirSync(join(root, "project"), { recursive: true });
+    writeFileSync(join(root, "project", "in.md"), "same");
+    const preHashes = { "project/in.md": createHash("sha256").update("same").digest("hex") };
+    // bare string form evaluates the same as the array form
+    const [rStr] = evaluate([{ input_unmodified: "project/**" }], ctx({ workRoot: root, preRunHashes: preHashes }));
+    expect(rStr.pass).toBe(true);
+    writeFileSync(join(root, "project", "in.md"), "MUTATED");
+    const [rBad] = evaluate([{ input_unmodified: "project/**" }], ctx({ workRoot: root, preRunHashes: preHashes }));
+    expect(rBad.pass).toBe(false);
+    expect(rBad.message).toMatch(/modified in place/);
   });
 
   it("only checks matched paths (an unmatched changed file does not fail)", () => {

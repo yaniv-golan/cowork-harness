@@ -19,10 +19,19 @@ describe("readTimeline", () => {
     expect(readTimeline(dir)).toBeUndefined();
   });
 
-  it("returns undefined when the header line itself doesn't parse as JSON", () => {
+  it("returns a header-corrupt signal, distinct from a missing file, when the header line itself doesn't parse as JSON (F43)", () => {
     const dir = tmp();
     writeFileSync(join(dir, "timeline.jsonl"), "not json\n");
-    expect(readTimeline(dir)).toBeUndefined();
+    const missing = readTimeline(tmp());
+    const corrupt = readTimeline(dir);
+    // Feature-absent (no timeline.jsonl at all) is still undefined...
+    expect(missing).toBeUndefined();
+    // ...but header corruption must NOT collapse to that same "absent" value: a consumer needs to be
+    // able to tell "the harness never wrote a timeline" apart from "it wrote one and it's corrupt".
+    expect(corrupt).toBeDefined();
+    expect(corrupt).not.toEqual(missing);
+    expect(corrupt!.headerCorrupt).toBe(true);
+    expect(corrupt!.header).toBeUndefined();
   });
 
   it("parses a header plus entries written in TimelineWriter's real format", () => {

@@ -203,7 +203,7 @@ export function formatMatrixRepeatRollup(r: MatrixRepeatRollup, minPassRate: num
       lines.push(`  ✗ [${c.index}] ${label} — cell error: ${c.error ?? "no rollup produced"}`);
       continue;
     }
-    const passed = rollupPasses(c.rollup, minPassRate);
+    const passed = rollupPasses(c.rollup, minPassRate, allowBudgetStop);
     const status = passed ? "✓" : "✗";
     const stopNote = c.rollup.stoppedEarly
       ? ` (stopped early: ${c.rollup.stoppedEarly}, ${c.rollup.completed}/${c.rollup.requested} completed)`

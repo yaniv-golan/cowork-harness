@@ -39,6 +39,28 @@ describe("capturePreRunManifest", () => {
     expect(readPreRunManifest(outDir)).toEqual(["outputs/seed.txt"]);
   });
 
+  it("Item 2: captures uploads/** into the baseline (so input_unmodified can guard an uploaded file)", () => {
+    const outDir = mkdtempSync(join(tmpdir(), "cwh-cap-up-"));
+    const workRoot = join(outDir, "work", "session", "mnt");
+    mkdirSync(join(workRoot, "outputs"), { recursive: true });
+    mkdirSync(join(workRoot, "uploads"), { recursive: true });
+    writeFileSync(join(workRoot, "outputs", "seed.txt"), "x");
+    writeFileSync(join(workRoot, "uploads", "safe.xlsx"), "PRIVATE");
+    capturePreRunManifest(minimalPlan([]), workRoot, outDir, "container");
+    expect(readPreRunManifest(outDir)).toEqual(["outputs/seed.txt", "uploads/safe.xlsx"]);
+    const hashes = readPreRunManifestHashes(outDir)!;
+    expect(hashes["uploads/safe.xlsx"]).toBe(createHash("sha256").update("PRIVATE").digest("hex"));
+  });
+
+  it("Item 2: hostloop tier also captures uploads/** (staged under workRoot alongside outputs)", () => {
+    const outDir = mkdtempSync(join(tmpdir(), "cwh-cap-up-hl-"));
+    const workRoot = join(outDir, "work", "session", "mnt");
+    mkdirSync(join(workRoot, "uploads"), { recursive: true });
+    writeFileSync(join(workRoot, "uploads", "model.xlsx"), "M");
+    capturePreRunManifest(minimalPlan([]), workRoot, outDir, "hostloop");
+    expect(readPreRunManifest(outDir)).toContain("uploads/model.xlsx");
+  });
+
   it("does not overwrite an existing manifest on resume", () => {
     const outDir = mkdtempSync(join(tmpdir(), "cwh-resume-"));
     const workRoot = join(outDir, "work", "session", "mnt");

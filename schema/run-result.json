@@ -71,6 +71,17 @@
       ],
       "description": "Which lane produced this result. 'run' = an asserted run/skill/record/replay (carries a verdict); 'chat' = an interactive exploratory session (no assertions, no verdict). Absent on results written before this field existed \u2014 treat absent as 'run'."
     },
+    "command": {
+      "type": "string",
+      "enum": [
+        "run",
+        "skill",
+        "record",
+        "chat",
+        "replay"
+      ],
+      "description": "The CLI command that produced this result \u2014 finer than 'mode' (skill/record both have mode:'run'). The run index prefers it during a reindex so a skill/record row isn't relabeled 'run' (#48). Absent on pre-field results."
+    },
     "scenario": {
       "type": "string"
     },
@@ -120,9 +131,10 @@
       "type": "string",
       "enum": [
         "transport",
-        "agent"
+        "agent",
+        "usage_limit"
       ],
-      "description": "Fix 5: when result is 'error', whether it was a tail-end transport drop (connection closed after a clean result) vs a genuine agent/skill failure"
+      "description": "when result is 'error', the KIND: a tail-end transport drop (connection closed after a clean result), a genuine agent/skill failure, or usage_limit (quota exhausted — an is_error result with HTTP 429 + a terminal usage-limit message; not the skill's fault, retry after reset)"
     },
     "errorSource": {
       "type": "string",
@@ -291,6 +303,9 @@
           "type": "number"
         },
         "presentFilesMalformed": {
+          "type": "number"
+        },
+        "egressParse": {
           "type": "number"
         }
       }
@@ -555,6 +570,10 @@
           "output": {
             "type": "string"
           },
+          "outputTruncated": {
+            "type": "boolean",
+            "description": "the dispatch output was cut at the assert cap — a negative content check is unverifiable, not a proven absence (#9)"
+          },
           "attributedSkillId": {
             "type": "string"
           }
@@ -598,6 +617,10 @@
         "baseline": {
           "type": "string",
           "description": "appVersion at record time"
+        },
+        "frozen": {
+          "type": "boolean",
+          "description": "true when surfaced from a cassette's record-time fingerprint on the replay lane (not a fresh run-time recompute) (#46)"
         },
         "skillHash": {
           "type": "string",
@@ -922,6 +945,10 @@
           },
           "assertText": {
             "type": "string"
+          },
+          "assertTextTruncated": {
+            "type": "boolean",
+            "description": "assertText was cut at the 10 KB assert cap — a substring miss is unverifiable, not a proven absence (#9)"
           }
         }
       }

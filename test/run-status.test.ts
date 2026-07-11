@@ -203,6 +203,33 @@ describe("hasRunStatus / readRunStatus", () => {
   });
 });
 
+describe("readRunStatus shape validation (F49)", () => {
+  it("rejects a status.json that parses as valid JSON but is shape-invalid: `{}`", () => {
+    const dir = tmp();
+    writeFileSync(join(dir, "status.json"), "{}");
+    expect(() => readRunStatus(dir)).toThrow(/shape/);
+  });
+
+  it("rejects a status.json with a wrong-typed `state` field: `{state:123}`", () => {
+    const dir = tmp();
+    writeFileSync(join(dir, "status.json"), JSON.stringify({ state: 123, updatedAt: new Date().toISOString() }));
+    expect(() => readRunStatus(dir)).toThrow(/shape/);
+  });
+
+  it("accepts a genuinely valid status", () => {
+    const dir = tmp();
+    writeRunningStatus(dir, meta());
+    const status = readRunStatus(dir);
+    expect(status.state).toBe("running");
+  });
+
+  it("a shape-invalid-but-parseable status routes through followRunStatus's SAME corrupt-status deadline as a parse failure, instead of resolving as a fake terminal status", async () => {
+    const dir = tmp();
+    writeFileSync(join(dir, "status.json"), "{}"); // parses fine, fails shape validation — `state` isn't even present
+    await expect(followRunStatus(dir, () => {}, { pollMs: 5, corruptTimeoutMs: 20 })).rejects.toThrow(/corrupt|never parsed/);
+  });
+});
+
 describe("resolveStatusDir", () => {
   it("returns a literal directory argument directly (works even before events.jsonl exists)", () => {
     const dir = tmp();
@@ -255,6 +282,17 @@ describe("followRunStatus", () => {
     await followRunStatus(dir, (l) => lines.push(l), { pollMs: 5, once: true });
     expect(lines.length).toBe(1);
     expect(JSON.parse(lines[0]).state).toBe("running");
+  });
+
+  it("with once:true against an EMPTY dir (no status.json ever), does NOT resolve immediately on the phantom first tick — falls through to the firstSeen deadline and rejects (F50)", async () => {
+    const dir = tmp(); // empty — status.json never appears
+    await expect(followRunStatus(dir, () => {}, { pollMs: 5, once: true, firstSeenTimeoutMs: 20 })).rejects.toThrow(/no status\.json/);
+  });
+
+  it("with once:true against a persistently CORRUPT status.json, does NOT resolve immediately either — falls through to the corrupt deadline and rejects (F50)", async () => {
+    const dir = tmp();
+    writeFileSync(join(dir, "status.json"), "{ this is not valid json");
+    await expect(followRunStatus(dir, () => {}, { pollMs: 5, once: true, corruptTimeoutMs: 20 })).rejects.toThrow(/corrupt|never parsed/);
   });
 
   it("rejects if status.json never appears within firstSeenTimeoutMs (fail loud, not a silent hang)", async () => {

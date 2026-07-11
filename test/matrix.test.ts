@@ -287,4 +287,32 @@ describe("formatMatrixRepeatRollup — text rendering", () => {
     const joined = formatMatrixRepeatRollup(rollup, 1.0).join("\n");
     expect(joined).toMatch(/unanswered/i);
   });
+
+  it("a budget-stopped cell shows a pass glyph and is counted in the header when allowBudgetStop=true", () => {
+    const rollup = buildMatrixRepeatRollup(
+      [cellRepeatResult({ rollup: buildRepeatRollup("t", 4, [rr({}), rr({})], "budget") })],
+      1,
+      false,
+      1.0,
+      false,
+      true,
+    );
+    const lines = formatMatrixRepeatRollup(rollup, 1.0, true);
+    expect(lines[0]).toContain("1/1 cells passed"); // header counts the budget-stopped cell as passing
+    expect(lines[1]).toContain("✓"); // row glyph must agree with the header count
+  });
+
+  it("a budget-stopped cell shows a fail glyph and is NOT counted in the header when allowBudgetStop=false", () => {
+    const rollup = buildMatrixRepeatRollup(
+      [cellRepeatResult({ rollup: buildRepeatRollup("t", 4, [rr({}), rr({})], "budget") })],
+      1,
+      false,
+      1.0,
+      false,
+      false,
+    );
+    const lines = formatMatrixRepeatRollup(rollup, 1.0, false);
+    expect(lines[0]).toContain("0/1 cells passed"); // header does not count the budget-stopped cell
+    expect(lines[1]).toContain("✗"); // row glyph must agree with the header count
+  });
 });

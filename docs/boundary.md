@@ -28,6 +28,11 @@ This page describes the limitations the harness reproduces, how each tier enforc
 | MCP-only crossing | ⚠️ not enforced | ✅ no host FS/procs; egress via proxy only | ✅ VM boundary |
 | Escape resistance (untrusted code) | ❌ | ⚠️ container-grade | ✅ VM-grade |
 
+`hostloop` and `cowork` aren't columns here: `hostloop`'s boundary model is a split (software
+path-containment for its native file tools, the same container/VM egress path as above for
+`bash`/`web_fetch`) that doesn't reduce to one cell per row, and `cowork` isn't a boundary model of its
+own — it resolves to `hostloop` or `container` at run time. Both are covered in full below.
+
 **`protocol` runs on the host with no sandbox.** It's for fast logic iteration only. The CLI **refuses** to "pass" any scenario that asserts boundary behavior (`egress_denied`, `egress_allowed`, `expect_denied`) at this tier — that would be a false pass. Use it for "did the skill produce the right output / answer the question correctly," not "does the skill respect the boundary."
 
 **`container` is the default and reproduces all three constraints:**

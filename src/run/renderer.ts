@@ -289,7 +289,15 @@ export function renderFooter(
   // stale subtype from an earlier turn's result could mislabel a later exit/timeout/no_result error.
   const errReason = r.errorSource === "result" && r.resultSubtype && r.resultSubtype !== "success" ? r.resultSubtype : r.errorSource;
   const errLabel =
-    r.result === "error" ? (r.resultErrorKind === "transport" ? "transport-error" : errReason ? `error (${errReason})` : "error") : "FAIL";
+    r.result === "error"
+      ? r.resultErrorKind === "usage_limit"
+        ? "usage-limit (retry after reset)"
+        : r.resultErrorKind === "transport"
+          ? "transport-error"
+          : errReason
+            ? `error (${errReason})`
+            : "error"
+      : "FAIL";
   write(`${red(plan, "✗ " + errLabel)} ${meta}\n`);
   if (r.result === "error" && r.errorSource === "no_result")
     write(

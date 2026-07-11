@@ -31,3 +31,39 @@ if ! npx --no-install prettier --check $files; then
   echo "  Then re-stage and commit. (Bypass with 'git commit --no-verify' if you must.)"
   exit 1
 fi
+
+#
+# Block committing a new/moved baseline (baselines/desktop-*.json) without re-stamping or
+# re-recording the committed example cassettes against it first.
+#
+# `latest` resolves to the newest baselines/desktop-*.json by version (src/baseline.ts,
+# latestBaselineFile) — so ANY staged baseline file can move `latest` and instantly stale every
+# example cassette's embedded fingerprint.baseline. This has bitten three separate release cycles
+# (3431e09, 9eaba8d, and the 0.29.0 cycle) — always caught late, on the release PR's first-ever CI
+# run, because these commits accumulate locally for a while before ever being pushed through a
+# branch that triggers CI. This is the local guard for the same check CI runs
+# (`verify-cassettes examples/replays/` in .github/workflows/ci.yml), so it fires at commit time
+# instead of at release time.
+#
+baseline_files=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '^baselines/desktop-.*\.json$' || true)
+if [ -n "$baseline_files" ]; then
+  if [ ! -f dist/cli.js ]; then
+    echo "⚠ pre-commit: dist/cli.js not built (run 'npm run build') — skipping cassette staleness check."
+  else
+    if ! node dist/cli.js verify-cassettes examples/replays/ --allow-email 'synthetic-user@example\.com' --allow-domain 'claude\.com' >/tmp/cwh-verify-cassettes.$$ 2>&1; then
+      cat /tmp/cwh-verify-cassettes.$$
+      rm -f /tmp/cwh-verify-cassettes.$$
+      echo ""
+      echo "✖ pre-commit: a staged baseline file staled the committed example cassettes above."
+      echo "  Re-stamp fingerprint.baseline in examples/replays/*.cassette.json to the new version"
+      echo "  (safe when the spawn contract is unchanged — see 9eaba8d for precedent), or re-record"
+      echo "  for real: cowork-harness record <scenario> --out examples/replays/<name>.cassette.json"
+      echo "  (needs Docker + a live token — and DO NOT run this from an ambient dev session with"
+      echo "  its own MCP servers/skills configured, at protocol/hostloop tier that inherits the host"
+      echo "  environment: it bakes your personal tool/skill/MCP list into the committed fixture)."
+      echo "  Then re-stage and commit. (Bypass with 'git commit --no-verify' if you must.)"
+      exit 1
+    fi
+    rm -f /tmp/cwh-verify-cassettes.$$
+  fi
+fi

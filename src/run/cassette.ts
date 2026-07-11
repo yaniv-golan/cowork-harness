@@ -106,10 +106,12 @@ export interface ManifestEntry {
   truncated?: boolean; // too big to inline → hash-only (file_exists/user_visible_artifact PASS — existence proven by path+sha; artifact_json cannot run)
   /** WHY the body is absent, when `truncated` — so replay gives the precise artifact_json remedy without a
    *  cassette-level roots list. "size" = over the body cap (raise --max-artifact-bytes); "readonly" = a
-   *  mode:r connected-folder input (assert on a deliverable instead); "unreadable" = a read/containment
-   *  failure at record time (sha256 is ""). ABSENT on pre-v8 cassettes → replay falls back to naming both
-   *  size/readonly causes. v8+. */
-  truncationReason?: "size" | "readonly" | "unreadable";
+   *  mode:r connected-folder input (assert on a deliverable instead); "input" = an UPLOADED file (captured
+   *  hash-only — a user's private upload is never inlined into a committed cassette; input_unmodified still
+   *  guards it via the sha256, and a change IS attributable to the agent, unlike "readonly"); "unreadable" =
+   *  a read/containment failure at record time (sha256 is ""). ABSENT on pre-v8 cassettes → replay falls
+   *  back to naming both size/readonly causes. v8+. */
+  truncationReason?: "size" | "readonly" | "unreadable" | "input";
   /** v10: this entry is a symlink or hardlink, NOT a regular file. Recorded path+kind only (body-less,
    *  sha256 ""), never dereferenced — so an agent-created link stray is visible to `no_unexpected_files`
    *  on replay (materializes as an empty placeholder, counted by the path walk), without inlining any
@@ -307,6 +309,7 @@ export function buildManifest(
   cap?: number,
   roots: string[] = ["outputs", ".projects"],
   bodyLessPrefixes: string[] = [],
+  inputRoots: string[] = ["uploads"],
 ): ManifestEntry[] {
   const limit = cap ?? defaultBodyCap();
   // Read-only connected-folder inputs (`bodyLessPrefixes`) are captured path+bytes+sha256 only, same as
@@ -319,7 +322,13 @@ export function buildManifest(
   // stray survives into the manifest → materializes as a placeholder → is seen by no_unexpected_files on
   // replay, matching live. Link entries are path+kind only (never dereferenced/read), so no out-of-root
   // target content is inlined into the committed cassette.
-  return collectArtifactPaths(workRoot, roots).map((e): ManifestEntry => {
+  // Uploaded inputs (`inputRoots`, default "uploads") are captured HASH-ONLY, always body-less with reason
+  // "input" — a user's private upload is never inlined into a committed cassette, yet input_unmodified can
+  // still guard it (the sha256 survives) AND a change is correctly attributed to the agent (unlike a
+  // "readonly" connected folder, which the assert layer excuses as external). Walked separately from `roots`
+  // so they never enter recordRoots / cassette.userVisibleRoots (which drive materialize prefixes + the
+  // folder-prefix zip). Prefixes are disjoint (uploads/ vs outputs/ vs folders), so no dedup is needed. #Item2
+  const readEntry = (e: { path: string; linkKind?: "symlink" | "hardlink" }, forceBodyLessReason?: "input"): ManifestEntry => {
     const { path, linkKind } = e;
     if (linkKind) return { path, bytes: 0, sha256: "", linkKind }; // body-less; never read the target
     // Regular file: re-confirm containment before reading the body (never inline out-of-work-root content).
@@ -338,15 +347,19 @@ export function buildManifest(
     const bytes = buf.length;
     const sha256 = createHash("sha256").update(buf).digest("hex");
     // truncationReason names WHY the body is absent so replay can give the precise remedy without a
-    // cassette-level roots list: "readonly" (a mode:r input — assert on a deliverable) vs "size" (over
-    // the body cap — raise --max-artifact-bytes). "unreadable" is the catch branches above.
+    // cassette-level roots list: "input" (an uploaded file — hash-only), "readonly" (a mode:r connected
+    // folder input), "size" (over the body cap — raise --max-artifact-bytes). "unreadable" is the catches above.
+    if (forceBodyLessReason) return { path, bytes, sha256, truncated: true, truncationReason: forceBodyLessReason };
     if (isBodyLess(path)) return { path, bytes, sha256, truncated: true, truncationReason: "readonly" };
     if (buf.length > limit) return { path, bytes, sha256, truncated: true, truncationReason: "size" };
     // store an encoding marker. UTF-8-safe bodies stay text (readable cassettes); binary bodies go
     // base64 so the record→replay round-trip is byte-exact and the sha256 verify stays valid.
     if (isLosslessUtf8(buf)) return { path, bytes, sha256, body: buf.toString("utf8") };
     return { path, bytes, sha256, body: buf.toString("base64"), encoding: "base64" };
-  });
+  };
+  const userVisible = collectArtifactPaths(workRoot, roots).map((e) => readEntry(e));
+  const inputs = inputRoots.length ? collectArtifactPaths(workRoot, inputRoots).map((e) => readEntry(e, "input")) : [];
+  return [...userVisible, ...inputs];
 }
 
 /** decode an entry's body to its RAW bytes per the encoding marker (default utf8). */
@@ -1657,7 +1670,7 @@ export function artifactJsonTargetsTruncated(scenario: Scenario, workRoot: strin
  *  warning when a persisted source has gone missing). Exported for unit tests; not part of the public API. */
 export function _resolveRerecordSource(
   cassettePath: string,
-  cassette: Pick<Cassette, "scenarioSource"> & { scenario: { name: string } },
+  cassette: Pick<Cassette, "scenarioSource"> & { scenario: { name?: string } },
 ): { path: string | null; via: "persisted" | "name-lookup" | "none"; persistedMissing?: string } {
   if (cassette.scenarioSource) {
     const persisted = resolve(dirname(cassettePath), cassette.scenarioSource);
@@ -1670,7 +1683,8 @@ export function _resolveRerecordSource(
   return { path: fallback, via: fallback ? "name-lookup" : "none" };
 }
 
-export function _findScenarioOnDisk(cassettePath: string, scenarioName: string): string | null {
+export function _findScenarioOnDisk(cassettePath: string, scenarioName: string | undefined): string | null {
+  if (!scenarioName) return null; // a lenient (nameless) cassette has no derivable scenario path
   const safeName = slugForPath(scenarioName);
   const cassetteDir = dirname(cassettePath);
   const candidates = [
@@ -2330,7 +2344,9 @@ async function recordScenarioObject(
   // has no use for this warning; noise on every secret-scrubbed recording would drown out the signal.
   if (nulledPaths.length) {
     const affectsInputUnmodified = scenario.assert.some(
-      (a) => a.input_unmodified !== undefined && nulledPaths.some((p) => anyGlobMatches(a.input_unmodified!, p)),
+      (a) =>
+        a.input_unmodified !== undefined &&
+        nulledPaths.some((p) => anyGlobMatches(Array.isArray(a.input_unmodified) ? a.input_unmodified : [a.input_unmodified!], p)),
     );
     if (affectsInputUnmodified) {
       warn(
@@ -2354,7 +2370,11 @@ async function recordScenarioObject(
       else throw new Error(msg);
     }
   }
-  const timeline = readTimeline(result.outDir);
+  const timelineRaw = readTimeline(result.outDir);
+  // Record only a CLEAN timeline — a corrupt header or malformed entry lines is evidence-unavailable, so
+  // recording `timeline: []` / `timelineHeader: undefined` would bake a novel "ran, no activity" shape into
+  // the cassette instead of the honest "no timeline" (undefined) a corrupt read should produce. #43
+  const timeline = timelineRaw && timelineRaw.malformedLines === 0 && !timelineRaw.headerCorrupt ? timelineRaw : undefined;
   // Load the baseline to extract agentBinaryFormat if available (optional).
   let agentBinaryFormat: string | undefined;
   try {
@@ -2439,6 +2459,7 @@ async function recordScenarioObject(
 function replayErrorResult(file: string): RunResult {
   return assembleRunResult({
     turn: undefined, // replay reconstructs one recorded run; no multi-turn attribution
+    command: "replay", // #48
     referencesRead: undefined, // synthetic error result for an unreadable cassette — no re-drive, nothing to derive
     ablated: undefined, // replay reconstructs a recorded run; ablation is a live-run control
     scenario: file,
@@ -2599,19 +2620,52 @@ export function scenarioContentDrift(
  *  `sessionFingerprint`) is NOT checked at all — backward-compat, never a false-red on an existing
  *  committed cassette. When the cassette DOES carry one, it is compared against a fresh recompute from
  *  the CURRENT session file; if the session can't be resolved (inline scenario, moved/deleted file,
- *  unparsable YAML) the check can't run — "can't verify" is a non-failing note, never a mismatch. */
+ *  unparsable YAML) the check can't run — "can't verify" is a non-failing note, never a mismatch (F45:
+ *  flagged `unverifiable:true`, a typed signal distinct from a `drifted:false` that means "recomputed
+ *  and confirmed identical", so a consumer can tell the two apart instead of reading both as "clean").
+ *
+ *  F51: `cassette.scenario.session` resolves via a relative offset from `cassetteDir` — the SAME
+ *  mechanism `cassette.scenarioSource` uses (see `scenarioContentDrift`/`_resolveRerecordSource` above).
+ *  If the cassette was relocated onto a directory tree that doesn't mirror the original layout, that
+ *  offset can coincidentally land on an UNRELATED same-named session file, producing a false mismatch
+ *  (never a false match — an unrelated file hashing equal by chance isn't the risk here). `sourceVia`
+ *  — the caller's `_resolveRerecordSource(...).via` for the SAME cassette — is the only available trust
+ *  signal for whether this cassette's relative-offset resolution is intact (a persisted-source hit means
+ *  the tree still mirrors record time; a name-lookup fallback means it doesn't and the offset can't be
+ *  trusted). Reusing it here mirrors `scenarioContentDrift`'s own "resolved by name, may be an unrelated
+ *  same-named sibling → non-failing note" downgrade, without storing or hashing an absolute host path
+ *  (forbidden — see the relocatable-cassette contract at ~528-529, ~2270, ~2399-2400). Only
+ *  `"name-lookup"` downgrades — `"none"` means "nothing nearby to compare the layout against" (mirrors
+ *  `scenarioContentDrift`'s own silent `!src.path` early-return, not its low-confidence branch) and is
+ *  NOT evidence the tree moved. Omitting `sourceVia` entirely (the unit-level tests below, and any
+ *  future caller that hasn't computed it) also keeps the pre-F51 behavior: trust the resolution, hard-fail
+ *  on a genuine mismatch. */
 export function sessionFingerprintDrift(
   cassette: Pick<Cassette, "sessionFingerprint" | "scenario">,
   cassetteDir: string | undefined,
-): { drifted: boolean; note?: string } {
+  sourceVia?: "persisted" | "name-lookup" | "none",
+): { drifted: boolean; note?: string; unverifiable?: boolean } {
   if (cassette.sessionFingerprint === undefined) return { drifted: false }; // pre-v9 — not checked
   const live = buildSessionFingerprint(cassette.scenario.session, cassetteDir);
   if (live === undefined)
     return {
       drifted: false,
+      unverifiable: true,
       note: "session-fingerprint: could not resolve the current session file to recompute — cannot verify session-shape staleness",
     };
-  return { drifted: live !== cassette.sessionFingerprint };
+  if (live === cassette.sessionFingerprint) return { drifted: false };
+  // Only "name-lookup" (a scenario WAS found, but not at its persisted/expected offset — the SAME
+  // low-confidence signal scenarioContentDrift downgrades on) is grounds to distrust this mismatch.
+  // "none" means "nothing to compare the layout against" (mirrors scenarioContentDrift's own `!src.path`
+  // early return, which stays silent rather than downgrading) — it is NOT evidence the tree moved, so it
+  // must NOT mask a genuine drift; keep the pre-F51 hard-fail for "none" and for an omitted argument.
+  if (sourceVia === "name-lookup")
+    return {
+      drifted: false,
+      unverifiable: true,
+      note: "session-fingerprint: differs from the current session file, but this cassette's directory structure could not be confirmed intact (scenario source resolved by name lookup, not its persisted path) — may be an unrelated same-named sibling; re-record, or verify manually before trusting the mismatch",
+    };
+  return { drifted: true };
 }
 
 /** Assertion keys (and `expect_denied`) that are NOT evaluated on the replay lane in a given cassette's shape.
@@ -3208,6 +3262,15 @@ export async function cmdVerifyCassettes(args: string[]) {
   }
   const files = resolved.files;
   const results = files.map((f) => {
+    try {
+      return verifyOneCassette(f);
+    } catch (e) {
+      // A per-file crash must be TALLIED as that file's error, never abort the batch (results:[] reads
+      // as "nothing to report" — a false-green by abort). Mirrors cmdReplay's per-file catch.
+      return { file: f, findings: [], staleness: [], notes: [], version: [], scenarioDrift: [], error: (e as Error)?.message ?? String(e) };
+    }
+  });
+  function verifyOneCassette(f: string) {
     const rc = readCassette(f);
     if ("error" in rc) return { file: f, findings: [], staleness: [], notes: [], version: [], scenarioDrift: [], error: rc.error };
     const findings = doPrivacy ? scanCassette(rc.cassette, allow) : [];
@@ -3222,7 +3285,17 @@ export async function cmdVerifyCassettes(args: string[]) {
     // through computeStaleness/checkStaleness — so it can never affect the default `replay` verdict. A
     // pre-v9 cassette (no sessionFingerprint) is silently not checked; see sessionFingerprintDrift.
     if (doStaleness) {
-      const sfd = sessionFingerprintDrift(rc.cassette, dirname(f));
+      // F51: reuse the SAME "is this cassette's relative-offset resolution intact" signal
+      // scenarioContentDrift (below) computes for the scenario source — the session path resolves via
+      // the identical relative-to-cassetteDir mechanism, so a broken offset is equally untrustworthy
+      // for either. Cheap (an existsSync probe or two), safe to compute unconditionally here.
+      // #51: downgrade ONLY when a PERSISTED source path broke (persistedMissing) — that is the actual
+      // "cassette relocated off its tree" signal. A cassette with NO persisted source at all also resolves
+      // `via: "name-lookup"`, but that is not evidence of relocation, so it must keep the hard-fail (else a
+      // programmatic-record cassette would silently downgrade every genuine session drift → false-green).
+      const rr = _resolveRerecordSource(f, rc.cassette);
+      const sourceVia = rr.persistedMissing ? "name-lookup" : "none";
+      const sfd = sessionFingerprintDrift(rc.cassette, dirname(f), sourceVia);
       if (sfd.drifted)
         staleness.push(
           "session-shape fingerprint differs from the current session file (connected folders/plugin/skill/mcp/egress config changed since record) — re-record",
@@ -3259,7 +3332,7 @@ export async function cmdVerifyCassettes(args: string[]) {
           ]
         : [];
     return { file: f, findings, staleness, notes, version, scenarioDrift, error: undefined as string | undefined };
-  });
+  }
   // --margins (diagnostic; never affects the gate): replay each cassette that carries count-bound asserts
   // and report recorded-vs-budget + margin. A per-cassette replay cost the base command doesn't have.
   let margins: { file: string; rows: MarginRow[]; error?: string }[] | undefined;
@@ -4120,8 +4193,20 @@ export async function replayCassette(
       assertions.push({ assertion: { replay_protocol_fidelity: true }, pass: false, message: truncatedMsg });
     }
 
+    // F46: RunResult.fingerprint is documented (src/types.ts:978-980) as the RUN-TIME staleness
+    // fingerprint; a cassette only ever carries the FROZEN one computed at record time (never
+    // recomputed on replay — that's what `computeStaleness`, ~line 858, diffs against). Surfacing it
+    // unlabeled would misrepresent when it was taken, so a `frozen:true` marker rides along. Built as a
+    // separate typed-cast variable (not an inline object literal) so it can carry the extra key without
+    // an excess-property error under `Fingerprint`'s declared shape — additive, no cassetteVersion bump,
+    // no schema `additionalProperties:false` on this node to violate.
+    const frozenFingerprint: Fingerprint | undefined = cassette.fingerprint
+      ? ({ ...cassette.fingerprint, frozen: true } as Fingerprint)
+      : undefined;
+
     return assembleRunResult({
       turn: undefined, // replay reconstructs one recorded run; no multi-turn attribution
+      command: "replay", // #48
       referencesRead: rec.filesRead.length ? rec.filesRead : undefined, // re-derived from the frozen Read events on the replay re-drive, same as toolCounts
       ablated: undefined, // replay reconstructs a recorded run; ablation is a live-run control
       scenario: cassette.scenario.name,
@@ -4195,7 +4280,9 @@ export async function replayCassette(
       // today. Preserve exactly; fixing it is out of scope for this pure refactor.
       $schema: undefined,
       generator: undefined,
-      prompt: undefined,
+      // F46: the scenario's prompt is already in hand (it's what drove the replay re-drive) — was
+      // dropped as undefined even though a live/success/partial result always carries it.
+      prompt: cassette.scenario.prompt,
       capabilityProbe: undefined,
       requiresCapabilityUnmet: undefined,
       workDir: undefined,
@@ -4226,8 +4313,12 @@ export async function replayCassette(
       l0PluginDivergence: undefined,
       missingCapabilityUse: undefined,
       gateProvenance: undefined,
-      fingerprint: undefined,
-      toolResults: undefined,
+      // F46: cassette.fingerprint is the record-time snapshot; frozenFingerprint (above) is it plus a
+      // `frozen:true` marker so a consumer can't mistake it for a fresh run-time recompute.
+      fingerprint: frozenFingerprint,
+      // F46: rec.toolResults is already built and fed to the eval context above (toolResultTexts/
+      // toolResultsTruncated) — was dropped as undefined even though it's on hand.
+      toolResults: rec.toolResults,
       durationMs: undefined,
       resources: undefined, // replay never spawns a sandbox to sample; no live resource telemetry
     });

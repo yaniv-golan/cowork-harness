@@ -1,6 +1,6 @@
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { readTurn1Result, readTurn1Slice, type TurnBoundary } from "./evidence.js";
+import { readTurn1ResultWithStatus, readTurn1Slice, verifyBoundaryIntegrity, type TurnBoundary } from "./evidence.js";
 
 // Assembles the TURN-1-ONLY evidence document a tool-less, one-shot evaluator model is graded against.
 // This packager is a from-scratch, load-bearing build (§R of the reflective-critique plan): a tool-less
@@ -12,8 +12,14 @@ import { readTurn1Result, readTurn1Slice, type TurnBoundary } from "./evidence.j
 /** Read the ARCHIVED turn-1 transcript out of `run.turn-1.jsonl`'s `{t:"transcript"}` line — the exact
  *  text `execute.ts` records for the completed task turn. Present once a resume has archived turn 1
  *  (`archivePriorTurnFiles`); if for any reason that file isn't there yet, fall back to the turn-1 slice of
- *  `events.jsonl` (still turn-1-only, just a rawer view than the assembled transcript string). */
-function readTurn1Transcript(runDir: string, boundary: TurnBoundary): string {
+ *  `events.jsonl` (still turn-1-only, just a rawer view than the assembled transcript string).
+ *
+ *  The fallback slice depends on the byte boundary `snapshotTurnBoundary` captured before the reflection
+ *  turn — `degraded: true` means that dependency broke (F28: the boundary was never established, so
+ *  `readTurn1Slice` refused rather than returning a false zero-byte slice; F29: the append-only prefix the
+ *  boundary relies on changed between capture and packaging) and the returned text must NOT be treated as
+ *  reliable ground truth by the evaluator. */
+function readTurn1Transcript(runDir: string, boundary: TurnBoundary): { text: string; degraded: boolean } {
   const archived = join(runDir, "run.turn-1.jsonl");
   if (existsSync(archived)) {
     try {
@@ -26,13 +32,20 @@ function readTurn1Transcript(runDir: string, boundary: TurnBoundary): string {
           continue; // one malformed line must not sink the whole read
         }
         const rec = obj as { t?: unknown; text?: unknown };
-        if (rec.t === "transcript" && typeof rec.text === "string") return rec.text;
+        if (rec.t === "transcript" && typeof rec.text === "string") return { text: rec.text, degraded: false };
       }
     } catch {
       /* fall through to the slice fallback below */
     }
   }
-  return readTurn1Slice(runDir, "events.jsonl", boundary);
+  try {
+    const text = readTurn1Slice(runDir, "events.jsonl", boundary);
+    const integrity = verifyBoundaryIntegrity(runDir, "events.jsonl", boundary);
+    return { text, degraded: integrity === "mismatch" };
+  } catch {
+    // F28: the boundary for events.jsonl was never established — an error, not a valid empty slice.
+    return { text: "", degraded: true };
+  }
 }
 
 /** Byte-bound a text section, appending a loud (never silent) truncation marker so the evaluator knows the
@@ -72,20 +85,51 @@ const TRANSCRIPT_CAP = 16 * 1024;
  *  evaluator's effective context). */
 const MAX_PACKAGE_BYTES = 48 * 1024;
 
+/** Readability of the skill's `SKILL.md` source (F31): distinguishes a legitimately-absent file (no
+ *  `SKILL.md` at that path) from an unreadable one (exists, but a permission/OS error prevented reading
+ *  it) — the previous prose-only fallback collapsed both into one indistinguishable "(no SKILL.md
+ *  found...)" note. */
+export type SkillMdStatus = "readable" | "missing" | "unreadable";
+
 export interface PackageEvidenceResult {
   pkg: string;
   /** True if ANY section (or the overall document) hit its byte budget and was cut. The evaluator MUST be
    *  told this: a claim about something that fell outside a truncated window is `not-adjudicable`, NOT
    *  `confabulated` — absence from a truncated package is not proof the thing didn't happen. */
   truncated: boolean;
+  /** F30 (+ residual): true when the canonical turn-1 result file (`result.turn-1.json`) either existed but
+   *  failed to parse (corrupted), OR — on a validated resume (`isResume: true`) — never existed at all
+   *  (missing archive). The "Turn-1 outcome" / toolCounts / skillActivity / subagents / "Final answer"
+   *  sections above are therefore EMPTY DEFAULTS, not a genuinely empty turn-1 result — the evaluator must
+   *  treat their absence as UNKNOWN, never as evidence something didn't happen. This is never resolved by
+   *  falling back to `result.json`'s turn-2 data (that would contaminate turn-1 isolation) — it is a
+   *  degradation signal only. (On a non-resumed run, a missing archive is NOT degraded — `result.json`
+   *  genuinely IS turn 1 there, per `readTurn1ResultWithStatus`'s `requireArchive:false` default.) */
+  turn1ResultDegraded: boolean;
+  /** F28/F29: true when the turn-1 transcript's `events.jsonl`-slice fallback could not be trusted as
+   *  ground truth — either the byte boundary was never established (a `snapshotTurnBoundary` stat failure)
+   *  or the append-only prefix it depends on changed between the boundary snapshot and packaging. The
+   *  "Transcript" section is annotated inline for the same reason, but the evaluator prompt path also needs
+   *  this as a typed flag. */
+  turn1SliceDegraded: boolean;
+  /** F31: see `SkillMdStatus`. */
+  skillMdStatus: SkillMdStatus;
 }
 
 /** Assemble the evidence document for `runCritique`. `runDir` is the KEPT run dir of the task+reflection
  *  session (post-resume, so `run.turn-1.jsonl`/`result.turn-1.json` are archived); `boundary` is the
  *  `snapshotTurnBoundary` captured right before the reflection turn; `skillDir` is the skill folder under
  *  test (containing `SKILL.md` and, optionally, a `references/` subdir). Pure and testable: every input is
- *  a path or an already-captured boundary, nothing here spawns a process or calls a model. */
-export function packageEvidence(runDir: string, boundary: TurnBoundary, skillDir: string): PackageEvidenceResult {
+ *  a path or an already-captured boundary, nothing here spawns a process or calls a model.
+ *
+ *  `isResume` (F30 residual): true when the CALLER has already validated this is a genuine resume (turn>1
+ *  reflection) — the only case this function is actually invoked in today (`scripts/skill-critique.ts`
+ *  calls this only after `validateReflectionTurn` succeeds). In that case `result.turn-1.json` MUST have
+ *  been archived by the resume; a missing archive is never papered over by falling back to `result.json`
+ *  (which would be TURN-2 data at that point) — it is instead treated exactly like a corrupted archive
+ *  (`turn1ResultDegraded: true`, empty-default sections). Defaults to `false` so a hypothetical future
+ *  single-shot (never-resumed) caller keeps the original "no archive → `result.json` IS turn 1" behavior. */
+export function packageEvidence(runDir: string, boundary: TurnBoundary, skillDir: string, isResume = false): PackageEvidenceResult {
   // Track whether any budget was hit. `boundText` returns its input UNCHANGED when it fits, so `out !== s`
   // is an exact truncation signal — no separate length check that could drift from boundText's own cut rule.
   let truncated = false;
@@ -95,7 +139,14 @@ export function packageEvidence(runDir: string, boundary: TurnBoundary, skillDir
     return out;
   };
 
-  const raw = readTurn1Result(runDir) as Record<string, unknown> | null;
+  const turn1Result = readTurn1ResultWithStatus(runDir, isResume);
+  // F30 residual: on a validated resume, "missing" is JUST as degraded as "corrupted" — `readTurn1ResultWithStatus`
+  // was called with `requireArchive: isResume` above, so a "missing" status here means the archive genuinely
+  // never existed (result.json was NOT silently substituted); that must be surfaced the same way a corrupt
+  // archive already was, never treated as "no turn-1 result, nothing to show" (the pre-fix default for a
+  // status other than "corrupted").
+  const turn1ResultDegraded = turn1Result.status === "corrupted" || (isResume && turn1Result.status === "missing");
+  const raw = turn1Result.value as Record<string, unknown> | null;
 
   const finalMessage = typeof raw?.finalMessage === "string" ? raw.finalMessage : "";
   const referencesRead = Array.isArray(raw?.referencesRead)
@@ -114,17 +165,25 @@ export function packageEvidence(runDir: string, boundary: TurnBoundary, skillDir
     description: typeof s.description === "string" ? s.description : undefined,
   }));
 
-  const transcript = readTurn1Transcript(runDir, boundary);
+  const { text: transcript, degraded: turn1SliceDegraded } = readTurn1Transcript(runDir, boundary);
 
   // Skill source. SKILL.md is delivered whole to the agent and is NEVER captured by a Read event (see
   // referencesRead's own doc comment) — so it must be packaged verbatim here, or "did the agent already
   // have this guidance" is unanswerable for anything SKILL.md-resident (most of a skill's content).
+  // existsSync/readFileSync are checked separately (F31) so a permission failure on a file that DOES exist
+  // is never reported as if it were simply absent.
+  const skillMdPath = join(skillDir, "SKILL.md");
   let skillMd = "";
-  let skillMdFound = true;
-  try {
-    skillMd = readFileSync(join(skillDir, "SKILL.md"), "utf8");
-  } catch {
-    skillMdFound = false;
+  let skillMdStatus: SkillMdStatus;
+  if (!existsSync(skillMdPath)) {
+    skillMdStatus = "missing";
+  } else {
+    try {
+      skillMd = readFileSync(skillMdPath, "utf8");
+      skillMdStatus = "readable";
+    } catch {
+      skillMdStatus = "unreadable";
+    }
   }
   let referenceFiles: string[] = [];
   try {
@@ -136,32 +195,57 @@ export function packageEvidence(runDir: string, boundary: TurnBoundary, skillDir
     /* no references/ subdir — an empty list is a legitimate answer, not an error */
   }
 
+  const turn1ResultDegradedNote = turn1ResultDegraded
+    ? turn1Result.status === "corrupted"
+      ? " [DEGRADED: the canonical turn-1 result file exists but failed to parse — this section is an empty default, NOT a genuinely empty turn-1 result; treat as unknown, not as evidence of absence]"
+      : " [DEGRADED: this is a resumed session but result.turn-1.json was never archived — this section is an empty default (NEVER the turn-2 result.json substituted in its place); treat as unknown, not as evidence of absence]"
+    : "";
+  const skillMdSectionTitle =
+    skillMdStatus === "readable"
+      ? "SKILL.md (verbatim skill source, for presence checks the referencesRead list cannot make)"
+      : skillMdStatus === "unreadable"
+        ? "SKILL.md [DEGRADED: exists but could not be read — permission/OS error, NOT a legitimately absent file]"
+        : "SKILL.md";
+  const skillMdSectionBody =
+    skillMdStatus === "readable"
+      ? skillMd
+      : skillMdStatus === "unreadable"
+        ? `(SKILL.md exists at ${skillMdPath} but could not be read)`
+        : `(no SKILL.md found at ${skillMdPath})`;
+
   const sections = [
-    section("Final answer (turn 1)", bound(finalMessage, FINAL_MESSAGE_CAP)),
-    section("Turn-1 outcome", bound(safeJson({ result: outcome, resultSubtype }), STRUCTURED_CAP)),
-    section("toolCounts (turn 1, top-level tool calls)", bound(safeJson(toolCounts), STRUCTURED_CAP)),
-    section("skillActivity (turn 1, per-invocation window rollups)", bound(safeJson(skillActivity), STRUCTURED_CAP)),
-    section("Sub-agents dispatched (turn 1; agentType/description only)", bound(safeJson(subagents), STRUCTURED_CAP)),
+    section("Final answer (turn 1)" + turn1ResultDegradedNote, bound(finalMessage, FINAL_MESSAGE_CAP)),
+    section("Turn-1 outcome" + turn1ResultDegradedNote, bound(safeJson({ result: outcome, resultSubtype }), STRUCTURED_CAP)),
+    section("toolCounts (turn 1, top-level tool calls)" + turn1ResultDegradedNote, bound(safeJson(toolCounts), STRUCTURED_CAP)),
+    section(
+      "skillActivity (turn 1, per-invocation window rollups)" + turn1ResultDegradedNote,
+      bound(safeJson(skillActivity), STRUCTURED_CAP),
+    ),
+    section(
+      "Sub-agents dispatched (turn 1; agentType/description only)" + turn1ResultDegradedNote,
+      bound(safeJson(subagents), STRUCTURED_CAP),
+    ),
     section(
       "referencesRead (turn 1, main-agent Reads only, references/+scripts/ under the mounted skill — " +
-        "NEVER includes SKILL.md itself, which is delivered whole and never Read as a file)",
+        "NEVER includes SKILL.md itself, which is delivered whole and never Read as a file)" +
+        turn1ResultDegradedNote,
       bound(referencesRead.length ? referencesRead.join("\n") : "(none)", REFERENCES_READ_CAP),
     ),
-    section(
-      skillMdFound ? "SKILL.md (verbatim skill source, for presence checks the referencesRead list cannot make)" : "SKILL.md",
-      bound(skillMdFound ? skillMd : `(no SKILL.md found at ${join(skillDir, "SKILL.md")})`, SKILL_MD_CAP),
-    ),
+    section(skillMdSectionTitle, bound(skillMdSectionBody, SKILL_MD_CAP)),
     section(
       "references/ available (filenames only, NOT content — presence, not coverage)",
       bound(referenceFiles.length ? referenceFiles.join("\n") : "(none)", REFERENCE_LIST_CAP),
     ),
     section(
-      "Transcript (turn 1 only — the reflection turn's own reads/output are excluded by construction)",
+      "Transcript (turn 1 only — the reflection turn's own reads/output are excluded by construction)" +
+        (turn1SliceDegraded
+          ? " [DEGRADED: the turn-1/turn-2 boundary for this fallback slice could not be verified — treat gaps as unknown, not as evidence of absence]"
+          : ""),
       bound(transcript, TRANSCRIPT_CAP),
     ),
   ];
 
   let pkg = sections.join("\n");
   pkg = bound(pkg, MAX_PACKAGE_BYTES); // belt-and-suspenders: the whole document, even if every section individually fit
-  return { pkg, truncated };
+  return { pkg, truncated, turn1ResultDegraded, turn1SliceDegraded, skillMdStatus };
 }

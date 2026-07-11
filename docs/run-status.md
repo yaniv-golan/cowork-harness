@@ -25,8 +25,10 @@ namespace.
    more with a terminal `state` (`"done"` or `"error"`). On a terminal **error**, it also carries the
    terminal-error diagnostics — `errorSource` (`spawn`/`protocol`/`exit`/`agent`/`result`/`no_result`/`timeout`
    — `no_result` = the stream ended with no result event, i.e. turn/time exhaustion), the SDK `resultSubtype`
-   (e.g. `error_max_turns`), and `stderrLogPath` — so a failure-output reader gets more than a bare `"error"`
-   (these mirror the same fields in `result.json`).
+   (e.g. `error_max_turns`), `stderrLogPath`, and `resultErrorKind` (`transport`/`agent`/`usage_limit`) — so a
+   failure-output reader gets more than a bare `"error"` (these mirror the same fields in `result.json`).
+   `resultErrorKind: "usage_limit"` is worth checking for specifically: a batch/status watcher can halt fast
+   on it instead of retrying into an already-spent quota.
 4. **Crash safety net:** if the process unwinds via an uncaught throw (or receives `SIGTERM`) before
    either normal completion path runs, an `"exit"` handler still writes a terminal `"error"` status —
    `status.json` never gets stuck reporting `"running"` for a process that's actually gone.
@@ -95,6 +97,10 @@ cowork-harness status "$OUT_DIR" --follow
   no such requirement; only filesystem access to `outDir` is needed.
 - **status.json is diagnostic, not authoritative.** For the real, verdict-affecting result, read
   `result.json` (or the process exit code / footer) once the run is `"done"`/`"error"`.
+- **`readRunStatus` shape-validates `status.json`, not just parses it.** A file that's valid JSON but the
+  wrong shape (`{}`, or a `state` of the wrong type) is reported **malformed** (exit `1`) rather than
+  trusted as a bogus `state: undefined` — a corrupt/truncated write caught mid-shape fails loud instead of
+  silently misreading the run's phase.
 - **A `"running"` result can still mean "probably dead."** If the process was `SIGKILL`'d/OOM-killed/
   segfaulted, nothing in it ran to write a terminal state — check `stale` (JSON) or the `probably-dead`
   label (text) rather than treating any `"running"` read as gospel. This is inherent to any

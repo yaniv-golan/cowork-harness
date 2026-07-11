@@ -46,6 +46,23 @@ export interface HostLoopPromptOpts {
   hostWorkspaceFolder?: string;
 }
 
+/** The {{placeholder}} names renderPrompts() substitutes. KEEP IN LOCKSTEP with the `tokens` map below. */
+export const MODELED_PLACEHOLDER_NAMES: ReadonlySet<string> = new Set([
+  "cwd",
+  "skillsDir",
+  "workspaceFolder",
+  "folderSelected",
+  "modelName",
+  "currentDateTime",
+  "currentTimezone",
+  "accountName",
+]);
+/** Placeholders present in the Desktop raw prompt the harness deliberately does NOT substitute:
+ *  - workspaceContext: resolved inline in the paraphrase baseline (HTML comment stripped by stripComments)
+ *  - modelIdentity: deployment-gated in real Cowork (first-party rendererConfig()=null -> stripped); the
+ *    paraphrase omits it, so the rendered prompt is byte-identical to pre-1.20186.0. */
+export const INTENTIONALLY_UNMODELED_PLACEHOLDERS: ReadonlySet<string> = new Set(["workspaceContext", "modelIdentity"]);
+
 export function renderPrompts(
   baseline: PlatformBaseline,
   session: SessionConfig,

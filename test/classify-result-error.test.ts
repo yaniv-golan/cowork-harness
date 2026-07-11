@@ -36,6 +36,19 @@ describe("classifyResultError (transport vs agent)", () => {
     expect(classifyResultError("spawn", "fetch failed", true)).toBe("agent");
     expect(classifyResultError("protocol", "connection closed", true)).toBe("agent");
   });
+
+  it("usage_limit: requires BOTH 429 AND terminal usage-limit text (conjunctive)", () => {
+    expect(classifyResultError("result", "success You've hit your session limit · resets 4pm", false, 429)).toBe("usage_limit");
+    expect(classifyResultError("result", "success You've reached your Opus limit", false, 429)).toBe("usage_limit");
+    // 429 WITHOUT terminal text (a transient overload) → NOT usage_limit
+    expect(classifyResultError("result", "success overloaded, please retry", false, 429)).toBe("agent");
+    // terminal text but a NON-429 status → NOT usage_limit (status present & wrong)
+    expect(classifyResultError("result", "success You've hit your session limit", false, 500)).toBe("agent");
+    // terminal text with NO status (older binary) → usage_limit via text fallback
+    expect(classifyResultError("result", "success You're out of usage credits", false, undefined)).toBe("usage_limit");
+    // advisory (non-terminal) text must never classify, even at 429
+    expect(classifyResultError("result", "success You're close to your session limit", false, 429)).toBe("agent");
+  });
 });
 
 describe("Run.drive sets rec.resultErrorKind end-to-end", () => {
@@ -85,6 +98,24 @@ describe("Run.drive sets rec.resultErrorKind end-to-end", () => {
       { type: "error", source: "exit", message: "agent process exited with code 1 — stderr tail: Connection closed" },
     ]);
     expect(rec.result).toBe("error");
+    expect(rec.resultErrorKind).toBe("agent");
+  });
+
+  it("a usage-limit is_error result (429 + terminal text) → resultErrorKind:usage_limit, subtype kept verbatim", async () => {
+    const rec = await drive([
+      { type: "result", isError: true, subtype: "success", apiErrorStatus: 429, resultText: "You've hit your session limit · resets 4pm" },
+    ]);
+    expect(rec.result).toBe("error");
+    expect(rec.resultErrorKind).toBe("usage_limit");
+    expect(rec.errorSource).toBe("result");
+    // resultSubtype is the raw SDK value — kept verbatim (fidelity); the honest classification lives in resultErrorKind
+    expect(rec.resultSubtype).toBe("success");
+  });
+
+  it("a bare-429 is_error result WITHOUT terminal text (transient overload) → agent, not usage_limit", async () => {
+    const rec = await drive([
+      { type: "result", isError: true, subtype: "error_during_execution", apiErrorStatus: 429, resultText: "Overloaded" },
+    ]);
     expect(rec.resultErrorKind).toBe("agent");
   });
 

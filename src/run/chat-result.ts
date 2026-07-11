@@ -28,7 +28,13 @@ export interface ChatResultOpts {
  * `assertions` is empty, `mode` is "chat", and every verdict / capability / gate / staleness field is
  * `undefined`. Most informational fields (tool counts, models, thinking, tasks, timeline folds,
  * workspace files, resources) are populated the same way the run lane does, so `stats`/`trace`/`scaffold`
- * see a chat session. `context` carries the skill IDs the agent had available but NOT the `whenToUse`
+ * see a chat session. Resources are the one field with a fidelity-conditional exception: `chat.ts` starts
+ * a real `ResourceSampler` (mirroring `execute.ts`) for the container and hostloop branches, so THOSE
+ * chats fold real `resources.jsonl` samples here — but the protocol branch runs the host `claude` binary
+ * directly with no container/process id to probe, so it legitimately has no sampler and `resources` stays
+ * `undefined` for a protocol chat (an honest gap, not a bug: `foldResources` below returns `undefined`
+ * when `resources.jsonl` was never written).
+ * `context` carries the skill IDs the agent had available but NOT the `whenToUse`
  * enrichment the run lane adds by reading each skill's SKILL.md frontmatter (that enrichment needs
  * `configDir`, which isn't plumbed in here) — acceptable for an exploratory chat, where `whenToUse` is
  * unasserted. `nonReproducibleAnswers` and the other non-determinism/verdict signals are also left
@@ -39,7 +45,10 @@ export interface ChatResultOpts {
  * forces every future field to be considered here too — chat cannot silently drift.
  */
 export function buildChatResult(record: RunRecord, opts: ChatResultOpts): RunResult {
-  const timeline = readTimeline(opts.outDir);
+  const timelineRaw = readTimeline(opts.outDir);
+  // Only trust a CLEAN timeline (parsed header, no malformed entry lines) — a corrupt/partial timeline is
+  // evidence-unavailable, not present-empty, so derived tool-duration/skill-activity stay undefined. #43
+  const timeline = timelineRaw && timelineRaw.malformedLines === 0 && !timelineRaw.headerCorrupt ? timelineRaw : undefined;
   const workspaceFiles = existsSync(opts.workRoot)
     ? classifyWorkspaceFiles(opts.workRoot, opts.userVisibleRoots, opts.readonlyFolderRoots)
     : [];
@@ -48,6 +57,7 @@ export function buildChatResult(record: RunRecord, opts: ChatResultOpts): RunRes
     $schema: RUN_RESULT_SCHEMA_URL,
     generator: "cowork-harness",
     mode: "chat",
+    command: "chat", // #48
     turn: undefined, // chat is its own multi-turn REPL; per-turn attribution isn't tracked here
     ablated: undefined, // chat is exploratory, not an ablation control
     referencesRead: record.filesRead.length ? record.filesRead : undefined,

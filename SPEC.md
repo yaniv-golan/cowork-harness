@@ -385,7 +385,7 @@ states in `baseline.provenance.gates`). A skill that ignores these behaves diffe
   `rec.gateAnswers`, and `rec.gateDeliveries` exactly as in a live run.
 
 **Assertion evaluation on replay:**
-- **Content assertions** (`contentKeys` in `src/run/cassette.ts`) are evaluated — `transcript_*`,
+- **Content assertions** (`ALWAYS_CONTENT_KEYS`/`QUESTION_GATE_KEYS` in `src/run/cassette.ts`) are evaluated — `transcript_*`,
   `tool_*` (incl. `tool_no_error`), `max_tool_errors`, `max_redundant_tool_calls`, `subagent_*` (incl.
   `subagent_output_contains`), `dispatch_count_max`, `skill_triggered`, `no_skill_triggered`,
   `skill_tool_used`, `skill_available`, `connector_available`, `tool_available`, `all_tasks_completed`,
@@ -393,7 +393,7 @@ states in `baseline.provenance.gates`). A skill that ignores these behaves diffe
   `result`, the verdict modifiers (`allow_permissive_auto_allow`, `allow_missing_capability`,
   `allow_l0_plugin_divergence`, `allow_stall`), and (when `controlOut` is present) `question_asked`,
   `questions_count_max`, `gate_answers_delivered`, `gate_answer_count_min`, `hook_blocked`,
-  `no_hook_blocked` (illustrative — see `contentKeys` in `src/run/cassette.ts` for the authoritative
+  `no_hook_blocked` (illustrative — see `ALWAYS_CONTENT_KEYS`/`QUESTION_GATE_KEYS` in `src/run/cassette.ts` for the authoritative
   set; this list is not re-verified exhaustive on every addition). `max_cost_usd`/`max_tokens` are evaluated against the *frozen recording's*
   usage/cost on replay, not fresh spend; `tool_calls_max`/`max_turns` are meaningfully
   replay-checkable (the re-drive recomputes both deterministically).
@@ -409,7 +409,7 @@ states in `baseline.provenance.gates`). A skill that ignores these behaves diffe
   distinct field); without it replay excludes the key with the same loud-warning treatment. On older,
   manifest-less cassettes they are skipped (loud) — absent from `assertions[]`, not present-and-passing.
 - **Egress / live-only assertions** (`no_delete_in_outputs`, `self_heal_ran`, `transcript_no_host_path`,
-  `no_mcp_error`, `max_peak_rss_bytes`, `egress_*`, `expect_denied`) are always skipped on replay — absent
+  `no_mcp_error`, `max_peak_rss_bytes`, `semantic_matches`, `egress_*`, `expect_denied`) are always skipped on replay — absent
   from `assertions[]`. The count of skipped (full / partial) assertions is reported in
   `RunResult.skippedAssertions`, so a JSON consumer doesn't read a green replay as having evaluated
   everything.
@@ -424,7 +424,7 @@ green replay does not imply the recording is still valid. Each finding is surfac
   `::warning::` fires and these keys are excluded (not vacuously passed). The hook keys need
   `controlOut` for a different reason than the question keys: a custom hook's block/allow decision is
   an opaque async reply recorded only in `control-out.jsonl`, not in the `events` stream, so it cannot
-  be reconstructed without it. The authoritative list is `contentKeys` in `src/run/cassette.ts`;
+  be reconstructed without it. The authoritative list is `QUESTION_GATE_KEYS` in `src/run/cassette.ts`;
   `docs/cassette.md` mirrors it — consult it for the full table.
 - **`gate_answers_delivered: true` passes vacuously when zero `AskUserQuestion` gates fired** (gate
   firing is model-dependent). Pair it with `gate_answer_count_min: <N>` to also require that at least
@@ -455,7 +455,8 @@ response via `serializeDecision` and compares to the frozen `controlOut` envelop
 key-sorted JSON). A mismatch produces a synthesized `{ assertion: { replay_protocol_fidelity: true },
 pass: false, message }` entry in `assertions[]` and exits 1. This catches regressions in
 `serializeDecision` — e.g. dropping `questions` from the AskUserQuestion `updatedInput` — on the
-token-free lane. `replay_protocol_fidelity` is not a user-authored `contentKeys` entry — it is
+token-free lane. `replay_protocol_fidelity` is not a user-authored content-key entry
+(`ALWAYS_CONTENT_KEYS`/`QUESTION_GATE_KEYS`/`MANIFEST_KEYS` in `src/run/cassette.ts`) — it is
 synthesized and evaluated automatically on every replay (see the O7 guard above).
 
 `run`, `skill`, and `replay` emit a single JSON object on **stdout** under `--output-format json` (nothing
@@ -511,9 +512,14 @@ and a fail observed) always fails that batch, regardless of the numeric rate.
 ```jsonc
 {
   "scenario": "string",
+  "command?": "run|skill|record|chat|replay",    // the CLI command that produced this result — finer than `mode` (which only distinguishes run/chat); `reindex` prefers this over `mode` so a `skill`/`record` row isn't relabeled `run`
   "fidelity": "protocol|container|microvm|hostloop|cowork  (replay: \"replay:<f>\")",
   "baseline": "string",                          // platform baseline appVersion
   "result": "success" | "error",                // did the agent turn end without error (NOT "task completed")
+  "resultErrorKind?": "transport|agent|usage_limit", // when result==="error": a tail-end transport drop, a genuine agent/skill failure, or usage_limit (quota exhausted — is_error + HTTP 429 + a terminal usage-limit message; not the skill's fault, retry after reset)
+  "errorSource?": "spawn|protocol|exit|agent|result|no_result|timeout", // finer diagnostic detail alongside resultErrorKind; no_result = stream ended with no terminal event; timeout = the harness's own wall-clock limit fired
+  "resultSubtype?": "string",                    // the SDK result message's subtype verbatim (e.g. error_max_turns), pass-through diagnostic
+  "stderrLogPath?": "string",                    // absolute path to the agent's full stderr log; live only, absent on replay
   "stalledOnQuestion?": bool,                     // H2/H3: ended on a question with no productive tool work after its last gate → `stalled` verdict fail unless allow_stall
   "decisions": [{ "kind","name","decision","by","model?","rationale?","detail?" }], // model set for by:"llm" gates
   "toolCounts?": { "WebSearch": 8, … },          // truthful per-tool call count (top-level; host-routed WebSearch shows HERE, not usage.server_tool_use)
@@ -541,7 +547,8 @@ and a fail observed) always fails that batch, regardless of the numeric rate.
   "skippedAssertions?": { "full": number, "partial": number }, // replay only; count of live-only assertions NOT evaluated (full = whole assertion skipped; partial = content half ran, fs/egress half dropped). The skipped ones are absent from `assertions[]`.
   "toolResults?": [{ "toolUseId?","isError","text","assertText?" }], // tool-result text at assertion-fidelity cap (10 KB); backs tool_result_contains/tool_result_not_contains
   "skillsInvoked?": ["string"],                  // Wave 1: skill/plugin ids invoked via the Skill tool_use event, call order, duplicates kept. Backs skill_triggered/no_skill_triggered.
-  "skillToolAvailable?": bool                     // Wave 1: whether the agent's init tool list included "Skill" — false ⇒ skill_triggered/no_skill_triggered fail as evidence-unavailable (agent-version drift)
+  "skillToolAvailable?": bool,                    // Wave 1: whether the agent's init tool list included "Skill" — false ⇒ skill_triggered/no_skill_triggered fail as evidence-unavailable (agent-version drift)
+  "evidenceErrors?": { "taskTracking?": number, "webSearchParse?": number, "presentFilesMalformed?": number, "egressParse?": number } // dropped/malformed telemetry lines per stream; a >0 taskTracking/presentFilesMalformed count fails the dependent assertion "malformed" rather than silently dropping bad entries; webSearchParse/egressParse are observability-only
 }
 ```
 

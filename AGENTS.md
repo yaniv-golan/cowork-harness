@@ -42,10 +42,11 @@ protocol layer or run-loop bookkeeping in the CLI.
   scenario key is retired vocabulary — the alias is gone and it is now rejected as an unknown key — do
   not reintroduce the term.
 - **A new assertion must pick its replay class.** *Content* assertions (read only `ctx.transcript` / the
-  record) go in `src/run/cassette.ts` `contentKeys` so they run on the token-free `replay` PR gate;
-  *filesystem / egress* assertions do NOT — they are excluded **by omission** from `contentKeys`, so they
-  only run on live (non-replay) gates. `contentKeys` is the single source of truth; the README's "what
-  replay checks" prose just describes it. The wrong choice is a **silent no-op in CI**.
+  record) go in one of `src/run/cassette.ts`'s exported buckets — `ALWAYS_CONTENT_KEYS`, `QUESTION_GATE_KEYS`,
+  or `MANIFEST_KEYS` — so they run on the token-free `replay` PR gate; *filesystem / egress* assertions go
+  in `LIVE_ONLY_KEYS` instead, so they only run on live (non-replay) gates. These four exported constants
+  are the single source of truth; the README's "what replay checks" prose just describes them. The wrong
+  bucket is a **silent no-op in CI**.
 - **`replay` consumes `controlOut` and re-serializes via `serializeDecision` to guard the AskUserQuestion
   answer shape (O7) on the token-free lane. A new decision *kind* must extend BOTH `serializeDecision`
   AND `deserializeDecision` (declared inverses in `src/agent/session.ts`) — they must not drift.**

@@ -61,8 +61,8 @@ import { runsWriteRoot } from "./trace-view.js";
 import { summarizeGateProvenance } from "./gate-provenance.js";
 import { collectSecrets, scrub } from "../secrets.js";
 import { indexRowFromResult, appendIndexRow } from "./run-index.js";
-import { classifyWorkspaceFiles, collectArtifactPaths, captureAuthoredFiles } from "./artifacts.js";
-import { readPreRunManifest, readPreRunManifestHashes, readPreRunManifestLinkAware } from "./pre-run-manifest.js";
+import { classifyWorkspaceFiles, collectArtifactPaths, captureAuthoredFilesWithHealth } from "./artifacts.js";
+import { readPreRunManifest, readPreRunManifestHashes, readPreRunManifestLinkAware, readPreRunManifestStats } from "./pre-run-manifest.js";
 import { resolveAvailableSkills, type PluginSkillRoot } from "./skill-metadata.js";
 
 // Moved to ./artifacts.ts so assert.ts can use it without an assert→execute import cycle;
@@ -448,6 +448,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
 
   const containerLike = effectiveFidelity === "container" || effectiveFidelity === "hostloop";
   let egress: RunResult["egress"] = [];
+  let egressMalformedLines = 0; // dropped proxy-log lines, surfaced into record.evidenceErrors.egressParse once `record` is assigned (#39)
   let sidecar: EgressSidecar | undefined;
   let hostProxy: ReturnType<typeof startEgressProxy> | undefined;
   let resourceSampler: ResourceSampler | undefined;
@@ -672,8 +673,10 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     }
   } finally {
     // Stop sampling FIRST — before the container/process teardown below — so a final in-flight probe
-    // can't race (and fail against) a container that's already being removed.
-    resourceSampler?.stop();
+    // can't race (and fail against) a container that's already being removed. `stop()` is async (it awaits
+    // the in-flight tick, bounded) so a run shorter than one interval still has its immediate sample land
+    // before `foldResources` reads resources.jsonl below. #40
+    await resourceSampler?.stop();
     // Reap the agent container FIRST (before the sidecar networks), so a crashed/unanswered run can't
     // orphan a running container holding the network. On the success path the child has already
     // exited (--rm), so these are no-ops.
@@ -685,7 +688,9 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     }
     if (containerName) spawnSync(runner, ["rm", "-f", containerName], { stdio: "ignore" });
     if (sidecar) {
-      egress = sidecar.collect();
+      const eg = sidecar.collect();
+      egress = eg.entries;
+      egressMalformedLines += eg.malformedLines; // applied to record.evidenceErrors after the finally, where `record` is assigned (#39)
       sidecar.teardown();
     }
     // merge host-routed web_fetch decisions (host-loop) so they're visible to egress assertions.
@@ -836,14 +841,14 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // and reuse for both the evaluate ctx (skill_tool_used) and the later assembleRunResult call
   // (toolDurations/skillActivity/subagents) below — two reads could disagree if the file were touched mid-run.
   const timelineData = readTimeline(outDir);
-  if (timelineData && timelineData.malformedLines > 0)
+  if (timelineData && (timelineData.malformedLines > 0 || timelineData.headerCorrupt))
     warn(
       `::warning:: [timeline] ${timelineData.malformedLines} malformed line(s) in timeline.jsonl — skill-activity/tool-duration telemetry is incomplete, treated as unavailable\n`,
     );
   // A partially-corrupt timeline (valid header, dropped event lines) yields an INCOMPLETE fold — a dropped
   // line could be a skill/tool window — so treat it as unavailable rather than silently incomplete (mirrors
   // the scan missing/malformed handling; skill_tool_used then fails evidence-unavailable, never a false green). #35
-  const timelineEvents = timelineData && timelineData.malformedLines === 0 ? timelineData.events : undefined;
+  const timelineEvents = timelineData && timelineData.malformedLines === 0 && !timelineData.headerCorrupt ? timelineData.events : undefined;
 
   // Context/Connectors panel: the SPINE is the id-only list run.ts's init handler already seeded
   // onto record.context.availableSkills from the agent's own init event (authoritative — covers plugin/
@@ -864,9 +869,15 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       initSkills === undefined ? undefined : resolveAvailableSkills(availableSkillIds, plan.configDir, pluginSkillRootsFromPlan(plan)),
   };
 
+  // Surface dropped egress proxy-log lines as evidence health (collected in the finally above; applied here
+  // where `record` is definitely assigned). #39
+  if (egressMalformedLines > 0) record.evidenceErrors.egressParse = (record.evidenceErrors.egressParse ?? 0) + egressMalformedLines;
+
   // Fold resources.jsonl ONCE — reused by both the evaluate() ctx below (max_peak_rss_bytes) and the
   // assembleRunResult call further down. A second read could disagree if the sampler wrote between them.
-  const resources = foldResources(outDir, effectiveFidelity, resolveIntervalMs());
+  // Thread the sampler's probe-failure count so the summary can distinguish "sampling failed" from
+  // "sampling unsupported / never ran". #41
+  const resources = foldResources(outDir, effectiveFidelity, resolveIntervalMs(), resourceSampler?.probeFailures);
 
   // D1: the judge grades the union of the final answer + transcript + the files the run AUTHORED (final
   // on-disk content), so a claim about a written artifact is presentation-stable (not a paste-vs-write
@@ -876,12 +887,27 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // relative `Write outputs/x` lands in the scratchpad, outside `workRoot`. Pass the session root so those
   // cwd-relative deliverables are captured too (`workRoot` ends `/session/mnt`; its parent is the root).
   const scratchpadRoot = workRoot.endsWith(`${sep}mnt`) ? dirname(workRoot) : undefined;
-  const authoredFiles = captureAuthoredFiles(workRoot, userVisibleRoots, readonlyFolderRoots, preRunHashes, { scratchpadRoot });
+  // On a resume the session root is REUSED, so the scratchpad no longer starts empty — a prior turn's files
+  // would be mis-attributed as this turn's authorship. Skip the scratchpad walk in that case (evidence-
+  // unavailable is safer than misattribution). #17
+  const authored = captureAuthoredFilesWithHealth(workRoot, userVisibleRoots, readonlyFolderRoots, preRunHashes, {
+    scratchpadRoot,
+    resume: plan.resume,
+    // Pre-run mtime/size lets an over-cap/unreadable prior file (hash === null) be positively confirmed
+    // UNCHANGED rather than either mis-attributed as authored or silently dropped from evidence. #15/#12
+    preRunStats: readPreRunManifestStats(outDir),
+  });
 
   const assertCtx: AssertContext = {
     transcript: record.transcript,
     finalMessage: record.resultText,
-    authoredFiles,
+    authoredFiles: authored.files,
+    // #14/#16: carry capture health (omitted-at-cap / unreadable files) so a semantic grade over an
+    // incomplete authored document is refused, not trusted. Undefined when the capture was complete.
+    authoredFilesHealth:
+      authored.health.omittedPaths.length || authored.health.readErrors.length || authored.health.scratchpadSkippedOnResume
+        ? authored.health
+        : undefined,
     secrets,
     toolsCalled: record.toolsCalled,
     subagentTools: record.subagentTools,
@@ -1083,6 +1109,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     $schema: RUN_RESULT_SCHEMA_URL,
     generator: "cowork-harness",
     mode: "run",
+    command: opts.command ?? "run", // #48: persist the originating command (skill/record share mode:"run")
     turn,
     ablated: opts.ablateSkill || undefined,
     referencesRead: record.filesRead.length ? record.filesRead : undefined,
@@ -1267,6 +1294,8 @@ function validateScenarioRegexes(scenario: Scenario, scenarioPath: string): void
         if ("error" in c) throw new Error(`bad regex in ${key} in ${context}: ${c.error}`);
       }
     }
+    // (Empty / regex-ish / brace-expansion tool globs are rejected by the `toolGlob` schema in types.ts —
+    // enforced on EVERY parse path including a recorded cassette's frozen asserts, not just here. #7/#8)
   }
   // answers[].when_question patterns (ScriptedDecider uses these)
   for (const rule of scenario.answers) {
@@ -1395,12 +1424,12 @@ export function buildPartialResult(args: {
     !!args.nonDeterministicHint;
   const nonDeterministicTerminal = args.onUnanswered === "llm" || args.onUnanswered === "prompt" || !!args.externalChannel;
   const timelineData = readTimeline(args.outDir);
-  if (timelineData && timelineData.malformedLines > 0)
+  if (timelineData && (timelineData.malformedLines > 0 || timelineData.headerCorrupt))
     warn(
       `::warning:: [timeline] ${timelineData.malformedLines} malformed line(s) in timeline.jsonl — skill-activity/tool-duration telemetry is incomplete, treated as unavailable\n`,
     );
   // Partially-corrupt timeline → incomplete fold; treat as unavailable (see the #35 note on the live path). #35
-  const timelineEvents = timelineData && timelineData.malformedLines === 0 ? timelineData.events : undefined;
+  const timelineEvents = timelineData && timelineData.malformedLines === 0 && !timelineData.headerCorrupt ? timelineData.events : undefined;
   // Context/Connectors panel: the SPINE is the id-only list run.ts's init handler already seeded
   // (authoritative — covers plugin/marketplace skills). Enrich with whenToUse read off disk across both
   // delivery trees. Own wiring, independent of executeScenario's (this function's own args.configDir /
@@ -1416,6 +1445,7 @@ export function buildPartialResult(args: {
     $schema: RUN_RESULT_SCHEMA_URL,
     generator: "cowork-harness",
     mode: "run",
+    command: undefined, // #48: reconstruction lane — the originating command isn't in `args`; reindex falls back to the prior index row
     turn: args.turn,
     ablated: args.ablated || undefined,
     referencesRead: args.record.filesRead.length ? args.record.filesRead : undefined,

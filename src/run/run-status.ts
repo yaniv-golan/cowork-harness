@@ -32,6 +32,7 @@ function buildStatus(
     result: "success" | "error";
     durationMs: number;
     errorSource?: RunStatus["errorSource"];
+    resultErrorKind?: RunStatus["resultErrorKind"];
     resultSubtype?: string;
     stderrLogPath?: string;
   },
@@ -55,6 +56,7 @@ function buildStatus(
           result: terminal.result,
           durationMs: terminal.durationMs,
           errorSource: terminal.errorSource,
+          resultErrorKind: terminal.resultErrorKind,
           resultSubtype: terminal.resultSubtype,
           stderrLogPath: terminal.stderrLogPath,
         }
@@ -126,6 +128,7 @@ export function finalizeRunStatus(
         // Terminal-error diagnostics so a failure-output reader gets more than a bare "error". stderrLogPath
         // is the live agent log (same path the assembler records); only meaningful on the error terminal.
         errorSource: result === "error" ? record.errorSource : undefined,
+        resultErrorKind: result === "error" ? record.resultErrorKind : undefined,
         resultSubtype: result === "error" ? record.resultSubtype : undefined,
         stderrLogPath: result === "error" ? join(outDir, "agent.stderr.log") : undefined,
       },
@@ -219,10 +222,43 @@ export function isStatusStale(status: RunStatus, thresholdMs?: number): boolean 
   return Number.isNaN(age) || age > t;
 }
 
-/** Read+parse status.json from a run dir. Throws (ENOENT / SyntaxError) if missing or malformed — the
- *  `status` CLI command translates that into a usage-style error message. */
+const RUN_STATUS_STATES = new Set<RunStatus["state"]>(["running", "done", "error"]);
+
+/** Shape-validate a freshly-`JSON.parse`d value against the `RunStatus` contract. There's no Zod schema
+ *  for `RunStatus` (it's a hand-maintained `types.ts` interface, unlike the Zod-backed scenario/session
+ *  types), so this is a minimal structural check rather than a generated one: `{}` or a status with a
+ *  wrong-typed `state` parses as valid JSON but must NOT be treated as a real status. Checks the two
+ *  fields callers actually branch on — `state` (must be one of the known enum values; `followRunStatus`
+ *  and `isStatusStale` both switch on it) and `updatedAt` (must be present as a string; every "is this
+ *  status fresher than the last one" / staleness check keys off it) — plus `toolCounts`/`subagentCount`
+ *  being the right basic type, enough to catch a `{}` or hand-truncated file without needing to mirror
+ *  every optional field. */
+function isValidRunStatus(value: unknown): value is RunStatus {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.state === "string" &&
+    RUN_STATUS_STATES.has(v.state as RunStatus["state"]) &&
+    typeof v.updatedAt === "string" &&
+    v.updatedAt.length > 0 &&
+    typeof v.toolCounts === "object" &&
+    v.toolCounts !== null &&
+    typeof v.subagentCount === "number"
+  );
+}
+
+/** Read+parse status.json from a run dir. Throws if missing, unparseable (ENOENT / SyntaxError), OR
+ *  structurally invalid (valid JSON that doesn't match the `RunStatus` shape — e.g. `{}` or a
+ *  corrupt/truncated write caught mid-shape) — the `status` CLI command translates any of these into a
+ *  usage-style error message, and `followRunStatus` routes a shape failure through the SAME
+ *  corrupt-status deadline it already uses for a parse failure (see its `catch` block), rather than
+ *  treating a shape-invalid-but-parseable file as a legitimate terminal status. */
 export function readRunStatus(runDir: string): RunStatus {
-  return JSON.parse(readFileSync(join(runDir, STATUS_FILE), "utf8")) as RunStatus;
+  const parsed: unknown = JSON.parse(readFileSync(join(runDir, STATUS_FILE), "utf8"));
+  if (!isValidRunStatus(parsed)) {
+    throw new Error(`status.json at ${join(runDir, STATUS_FILE)} does not match the expected RunStatus shape`);
+  }
+  return parsed;
 }
 
 export function hasRunStatus(runDir: string): boolean {
@@ -249,7 +285,10 @@ export function resolveStatusDir(arg: string): string {
 }
 
 /** Poll `runDir/status.json` and emit one line per CHANGE (by `updatedAt`), stopping once the run
- *  reaches a terminal state (done/error) or `opts.once` is set. Mirrors `streamGates`'s shape
+ *  reaches a terminal state (done/error) or, with `opts.once` set, once a VALID status has been observed
+ *  (a status.json that is missing or fails to parse/shape-validate on a given tick does NOT count as an
+ *  observation — `once` still falls through to the firstSeen/corrupt deadlines below rather than
+ *  resolving on a phantom "first tick"). Mirrors `streamGates`'s shape
  *  (`src/decide/external-channel.ts:72-111`) — the closest existing precedent for "poll a file for run
  *  status" — so `status --follow` needs just one Monitor instead of a hand-rolled poll loop.
  *
@@ -280,9 +319,11 @@ export function followRunStatus(
   let corruptSince: number | undefined;
   return new Promise<void>((resolve, reject) => {
     const tick = () => {
+      // Declared at `tick`-scope (not inside the `if` below) so the `once` check after the if/else — which
+      // needs to know whether a status was actually parsed THIS tick — can see it too.
+      let status: RunStatus | undefined;
       if (hasRunStatus(runDir)) {
         sawStatus = true;
-        let status: RunStatus | undefined;
         try {
           status = readRunStatus(runDir);
           corruptSince = undefined; // a clean read clears any transient-corruption streak
@@ -328,7 +369,13 @@ export function followRunStatus(
           ),
         );
       }
-      if (opts.once) return resolve();
+      // `once` means "return after one VALID status observation" — only resolve here when a status was
+      // actually parsed THIS tick (`status` truthy). A missing file (status.json never appeared yet) or a
+      // mid-write/corrupt parse failure (status undefined via the catch above) must fall through to the
+      // deadline/reject logic below and keep ticking instead of resolving on a phantom "first tick" — the
+      // two rejects above are dead code for `once` callers otherwise, since they'd never get a second tick
+      // to observe the corrupt/first-seen timeout firing.
+      if (opts.once && status) return resolve();
       setTimeout(tick, pollMs);
     };
     tick();

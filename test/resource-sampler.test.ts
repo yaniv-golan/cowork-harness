@@ -9,6 +9,7 @@ import {
   parseDockerStats,
   parsePsLine,
   parseProcMeminfoStat,
+  makeSampleOnce,
 } from "../src/runtime/resource-sampler.js";
 
 type ResourceSampleT = { ts: number; rssBytes?: number; cpuPct?: number };
@@ -92,6 +93,64 @@ it("parsePsLine reads rss(KiB)->bytes and pcpu; undefined on empty", () => {
   expect(s.cpuPct).toBeCloseTo(7.5, 5);
   expect(parsePsLine("")).toBeUndefined();
 });
+// F42: a `null` (or array) JSON line parses fine but has no fields; reading s.rssBytes/s.cpuPct on it
+// must not throw — it should count as malformed, like unparseable JSON.
+it("foldResources counts a JSON `null` / array line as malformed instead of throwing", () => {
+  const d = mkdir();
+  writeFileSync(
+    join(d, "resources.jsonl"),
+    [JSON.stringify({ ts: 1, rssBytes: 100, cpuPct: 10 }), "null", "[1,2,3]", JSON.stringify({ ts: 2, rssBytes: 200, cpuPct: 20 })].join(
+      "\n",
+    ) + "\n",
+  );
+  expect(() => foldResources(d, "container", 1000)).not.toThrow();
+  const sum = foldResources(d, "container", 1000)!;
+  expect(sum.sampleCount).toBe(2);
+  expect(sum.malformedLines).toBe(2);
+});
+
+// F41: a probe that always returns undefined for a sampleable tier should be visible as "sampling
+// failed" via probeFailures, distinct from a genuinely-unsupported tier (makeSampleOnce's fallback),
+// which must NOT increment it.
+it("ResourceSampler.probeFailures counts undefined returns from a real (sampleable) probe", async () => {
+  const d = mkdir();
+  const s = new ResourceSampler(d, "container", async () => undefined, 5);
+  s.start();
+  await new Promise((r) => setTimeout(r, 30));
+  await s.stop();
+  expect(s.probeFailures).toBeGreaterThan(0);
+});
+
+it("ResourceSampler.probeFailures stays 0 for the genuinely-unsupported-tier fallback (makeSampleOnce)", async () => {
+  const d = mkdir();
+  // No containerName/pid/instance supplied -> makeSampleOnce returns its "can't be sampled" fallback.
+  const sampleOnce = makeSampleOnce({ tier: "container", runner: "docker" });
+  const s = new ResourceSampler(d, "container", sampleOnce, 5);
+  s.start();
+  await new Promise((r) => setTimeout(r, 30));
+  await s.stop();
+  expect(s.probeFailures).toBe(0);
+});
+
+// F40: start() fires an immediate tick so a run shorter than one interval still samples; stop() must
+// await that in-flight tick so the sample lands before a caller reads resources.jsonl right after.
+it("stop() awaits the in-flight first tick so a run stopped immediately still yields the first sample", async () => {
+  const d = mkdir();
+  let resolveProbe!: (v: ResourceSampleT) => void;
+  const probePromise = new Promise<ResourceSampleT>((r) => (resolveProbe = r));
+  const s = new ResourceSampler(d, "container", () => probePromise, 10_000); // long interval: only the immediate tick fires
+  s.start();
+  await new Promise((r) => setTimeout(r, 5)); // let start()'s immediate tick begin and mark inFlight
+  const stopPromise = s.stop(); // must await the in-flight tick rather than returning immediately
+  resolveProbe({ ts: 1, rssBytes: 42 });
+  await stopPromise;
+  const written = existsSync(join(d, "resources.jsonl")) ? readFileSync(join(d, "resources.jsonl"), "utf8").trim() : "";
+  expect(written).not.toBe("");
+  const sum = foldResources(d, "container", 10_000)!;
+  expect(sum.sampleCount).toBe(1);
+  expect(sum.peakRssBytes).toBe(42);
+});
+
 it("parseProcMeminfoStat computes RSS from Mem, CPU% from a delta across two ticks", () => {
   const text = (total: number, avail: number, work: number, idle: number) =>
     `MemTotal:       ${total} kB\nMemAvailable:   ${avail} kB\n---\ncpu  ${work} 0 0 ${idle} 0 0 0 0`;

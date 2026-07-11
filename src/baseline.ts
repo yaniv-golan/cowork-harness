@@ -106,7 +106,7 @@ function newestStagedBinary(stagedPath: string): string | undefined {
  * `newestStagedHostBinary` (native Mach-O: `<versionRoot>/<ver>/claude.app/Contents/MacOS/claude`) — `leaf`
  * is the path segment(s) AFTER the version dir. Numeric/semver-aware sort matching compareBaselineVersions.
  */
-function newestStagedSibling(versionRoot: string, leaf: string): string | undefined {
+export function newestStagedSibling(versionRoot: string, leaf: string): string | undefined {
   if (!existsSync(versionRoot)) return undefined;
   const seg = (v: string) =>
     v.split(".").map((s) => {

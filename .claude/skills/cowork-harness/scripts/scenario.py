@@ -45,7 +45,7 @@ import sys
 from pathlib import Path
 
 # --- the replay-class taxonomy ---
-# NB: this is NOT a 1:1 mirror of `contentKeys` in src/run/cassette.ts. cassette.ts keeps the verdict
+# NB: this is NOT a 1:1 mirror of the ALWAYS_CONTENT_KEYS/QUESTION_GATE_KEYS/MANIFEST_KEYS buckets in src/run/cassette.ts. cassette.ts keeps the verdict
 # modifiers (VERDICT_MODIFIER_KEYS) in its content set so they replay as no-op passes; the linter
 # deliberately keeps them OUT of CONTENT_KEYS so a modifier-only scenario still trips the `replay-noop`
 # warning below (a no-op pass verifies nothing real — exactly what that warning is for).
@@ -688,6 +688,12 @@ def cmd_lint(args):
 # v1 declines to do.
 
 _PLUGIN_ROOT_TOKEN = re.compile(r"\$\{?CLAUDE_PLUGIN_ROOT\}?")
+# A runtime SELF-HEAL for a dead ${CLAUDE_PLUGIN_ROOT}: discovering the real mount under /sessions at run
+# time (the prescribed pattern — e.g. `[ -d "$X" ] || X=$(find /sessions ... -name ...)`, or an inline
+# `|| python3 "$(find /sessions ...)"`). When a bash block that uses the token ALSO contains a `find` over
+# /sessions, the token is dead but the block rescues it → downgrade the WARN to INFO (Item 4). Conservative:
+# we do NOT verify the find pattern actually matches the plugin's layout (hence the INFO's "not validated").
+_SELF_HEAL = re.compile(r"\bfind\b[^\n]*/sessions")
 # Opening/closing fence: ``` or ~~~ (>=3), optional info string (language).
 _FENCE = re.compile(r"^\s*(`{3,}|~{3,})\s*([A-Za-z0-9_+-]*)\s*$")
 # A hooks-config command string: `"command": "<value>"` (value may contain escaped quotes).
@@ -712,6 +718,19 @@ def _finding_plugin_root(path, line, ctx_label):
         "dead in host-loop VM; discover the mount at runtime instead.",
         "In VM-executed bash, don't hardcode ${CLAUDE_PLUGIN_ROOT} — resolve the skill/plugin mount at "
         "runtime (e.g. derive it from the script's own location) instead.",
+        path,
+        line,
+    )
+
+
+def _finding_plugin_root_guarded(path, line, ctx_label):
+    return Finding(
+        "INFO",
+        "plugin-root-guarded",
+        f"`${{CLAUDE_PLUGIN_ROOT}}` used in an in-VM bash context ({ctx_label}), but the same block "
+        "self-heals it (a runtime `find` under /sessions) — the dead token is harmless here.",
+        "Guard not validated: the linter does not check the `find` pattern actually matches the plugin's "
+        "layout. Prefer resolving the mount from the script's own location over a find-fallback.",
         path,
         line,
     )
@@ -748,6 +767,24 @@ def _lint_skill_text(path, raw_lines, force_json=False):
     fence_char = ""
     fence_len = 0
     fence_lang = ""
+    # Per-bash-fence buffer (Item 4): plugin-root token hit line numbers + the whole block's text, so a
+    # ${CLAUDE_PLUGIN_ROOT} use that is self-healed elsewhere IN THE SAME BLOCK downgrades WARN -> INFO.
+    # Emission is deferred to fence close (or EOF) but original 1-based line numbers are preserved.
+    bash_token_lines = []
+    bash_block_text = []
+
+    def flush_bash():
+        if bash_token_lines:
+            healed = _SELF_HEAL.search("\n".join(bash_block_text)) is not None
+            for ln in bash_token_lines:
+                findings.append(
+                    _finding_plugin_root_guarded(path, ln, "```bash block")
+                    if healed
+                    else _finding_plugin_root(path, ln, "```bash block")
+                )
+        bash_token_lines.clear()
+        bash_block_text.clear()
+
     for i, line in enumerate(raw_lines, start=1):
         m = _FENCE.match(line)
         if m:
@@ -757,6 +794,8 @@ def _lint_skill_text(path, raw_lines, force_json=False):
                 continue
             # A closing fence uses the same char, is at least as long, and carries no language.
             if marker[0] == fence_char and len(marker) >= fence_len and not lang:
+                if fence_lang in _BASH_FENCE_LANGS:
+                    flush_bash()  # decide WARN vs INFO now that the whole block is known
                 in_fence = fence_char = ""
                 fence_len = 0
                 fence_lang = ""
@@ -775,8 +814,9 @@ def _lint_skill_text(path, raw_lines, force_json=False):
             ctx = "prose"
 
         if ctx == "bash":
+            bash_block_text.append(line)  # buffer the block; token hits emit on flush (self-heal aware)
             if _PLUGIN_ROOT_TOKEN.search(line):
-                findings.append(_finding_plugin_root(path, i, "```bash block"))
+                bash_token_lines.append(i)
         elif ctx == "json":
             for cm in _HOOK_CMD.finditer(line):
                 _check_hook_command(path, i, cm.group(1), findings)
@@ -786,6 +826,10 @@ def _lint_skill_text(path, raw_lines, force_json=False):
             for bm in _BASH_DIRECTIVE.finditer(line):
                 if _PLUGIN_ROOT_TOKEN.search(bm.group(1)):
                     findings.append(_finding_plugin_root(path, i, "Bash() directive"))
+    # A bash fence left unclosed at EOF still has buffered token hits — flush them (else a real WARN/INFO
+    # would be silently dropped).
+    if in_fence and fence_lang in _BASH_FENCE_LANGS:
+        flush_bash()
     return findings
 
 

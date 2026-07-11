@@ -8,7 +8,7 @@ import { normalizeHost } from "./boundary-paths.js";
 import { extractComputerLinks, resolveComputerLink, type LinkResolutionContext } from "./run/computer-links.js";
 import { scrub } from "./secrets.js";
 import { warn } from "./io.js";
-import { collectArtifactPaths } from "./run/artifacts.js";
+import { collectArtifactPathsWithHealth } from "./run/artifacts.js";
 import { anyGlobMatches } from "./glob.js";
 
 /** Derives the four AssertContext budget fields (costUsd/tokensTotal/toolCallsTotal/turns) uniformly from
@@ -209,6 +209,11 @@ export interface AssertContext {
   /** Files the run authored (final on-disk content) — appended to the judged document so the judge grades
    *  what the skill PRODUCED, not only what it inlined. Populated live; absent on replay/microvm. */
   authoredFiles?: import("./run/artifacts.js").AuthoredFile[];
+  /** Health of the authored-file capture (#14/#16): files dropped at the total-size cap (`omittedPaths`)
+   *  or authored-but-unreadable at read-back (`readErrors`). When either is non-empty the judged document
+   *  is INCOMPLETE, so `semantic_matches` fails evidence-unavailable rather than trusting a grade the judge
+   *  made without the omitted content. Absent = capture was complete (or lane doesn't author files). */
+  authoredFilesHealth?: import("./run/artifacts.js").AuthoredFilesHealth;
   /** Secret values to scrub from the judged document before it leaves for the judge. */
   secrets?: string[];
   toolsCalled: Set<string>;
@@ -256,6 +261,7 @@ export interface AssertContext {
     toolsUsed: Array<{ name: string; count: number }>;
     description?: string;
     output?: string;
+    outputTruncated?: boolean; // #9: output was cut at the assert cap — a negative content check is unverifiable
   }[]; // dispatch tree (sub-agent assertions)
   gateDeliveries: {
     question: string;
@@ -298,7 +304,7 @@ export interface AssertContext {
    *  materializeManifest(); empty on live/verify-run. `.has(rel)` = "is body-less"; `.get(rel)` gives the
    *  reason ("readonly"/"size"/"unreadable", or undefined on a pre-v8 entry) so artifact_json's remedy is
    *  precise. */
-  truncatedPaths?: Map<string, "size" | "readonly" | "unreadable" | undefined>;
+  truncatedPaths?: Map<string, "size" | "readonly" | "unreadable" | "input" | undefined>;
   /** REPLAY-only: workRoot-relative paths that were a symlink/hardlink at record time (v10 `linkKind`
    *  entries). They materialize as placeholder files indistinguishable from real files, so existence
    *  assertions (file_exists / user_visible_artifact / computer_links_resolve) must treat them as
@@ -458,7 +464,6 @@ export async function runSemanticJudges(
     if (a.semantic_matches === undefined) continue;
     const override = a.semantic_matches.judge_model;
     const j = override && judgeFor ? judgeFor(override) : judge;
-    ctx.judgeModels.set(a, j.model ?? override ?? "unknown");
     // Grade with ONE retry — a stochastic judge sometimes emits a malformed grade. If it still throws,
     // mark the rep INVALID (not absent): the check surfaces it so a consumer counts it, never drops it.
     let graded: SemanticClaimResult[] | undefined;
@@ -474,6 +479,11 @@ export async function runSemanticJudges(
         }
       }
     }
+    // Record provenance AFTER the call, not before: `j.model` may be a factory-time alias (e.g. "opus")
+    // until the transport resolves it per-call to a concrete id (`makeSemanticJudge` mutates `.model` onto
+    // the resolved value once its `complete()` call returns). Reading it before the call would stamp the
+    // requested alias even when the transport actually resolved to a different concrete model (F11).
+    ctx.judgeModels.set(a, j.model ?? override ?? "unknown");
     if (graded) ctx.semanticResults.set(a, graded);
   }
 }
@@ -482,13 +492,46 @@ export async function runSemanticJudges(
  *  files the run authored (each headed), scrubbed of secrets. Grading the authored files (not only the
  *  inlined prose) is what makes a claim about a *written* artifact presentation-stable; keeping the
  *  finalMessage/transcript is what still grades a correct *inline* answer that wrote no file. */
+// Per-section and aggregate character budgets for the judged document (#10). Authored files already carry
+// their own caps (16 KiB/file, 64 KiB total, in captureAuthoredFiles), but finalMessage and the transcript
+// were previously concatenated WHOLE — so a long run could overflow the model context or make grading cost
+// and latency unbounded. Cap each section and the joined document with an explicit truncation marker, so the
+// judge SEES that evidence was elided (never reads a truncated tail as "the requirement was not met").
+const JUDGE_FINAL_CAP = 32 * 1024;
+const JUDGE_TRANSCRIPT_CAP = 128 * 1024;
+const JUDGE_DOC_CAP = 256 * 1024;
+function capForJudge(text: string, cap: number): string {
+  if (text.length <= cap) return text;
+  return `${text.slice(0, cap)}\n…[${text.length - cap} chars truncated for the judge input budget — evidence beyond this point was NOT shown; do not infer absence from this cut]`;
+}
+
 function buildJudgedDocument(ctx: AssertContext): string {
+  // SCRUB BEFORE CAP (#10): scrub is exact-string replacement, so a secret straddling a cap boundary would
+  // be truncated mid-token and slip past scrub into the doc sent to the (external) judge. Scrub each raw
+  // section FIRST, then cap the already-redacted text — capping redacted content can never re-expose a secret.
+  const secrets = ctx.secrets ?? [];
+  const s = (t: string): string => (secrets.length ? scrub(t, secrets) : t);
   const parts: string[] = [];
-  if (ctx.finalMessage) parts.push(`## Final answer\n${ctx.finalMessage}`);
-  parts.push(`## Transcript\n${ctx.transcript}`);
-  for (const f of ctx.authoredFiles ?? []) parts.push(`## Authored file: ${f.path}${f.truncated ? " (truncated)" : ""}\n${f.content}`);
-  const doc = parts.join("\n\n");
-  return ctx.secrets && ctx.secrets.length ? scrub(doc, ctx.secrets) : doc;
+  if (ctx.finalMessage) parts.push(`## Final answer\n${capForJudge(s(ctx.finalMessage), JUDGE_FINAL_CAP)}`);
+  parts.push(`## Transcript\n${capForJudge(s(ctx.transcript ?? ""), JUDGE_TRANSCRIPT_CAP)}`);
+  for (const f of ctx.authoredFiles ?? [])
+    parts.push(`## Authored file: ${s(f.path)}${f.truncated ? " (truncated)" : ""}\n${s(f.content)}`);
+  // Surface authored-file incompleteness to the judge so it never reads an omitted/unreadable file's
+  // ABSENCE as evidence the skill didn't produce it (#14/#16). The verdict is separately forced to
+  // evidence-unavailable in the semantic_matches check; this note keeps a still-produced grade honest.
+  const h = ctx.authoredFilesHealth;
+  if (h && (h.omittedPaths.length || h.readErrors.length || h.scratchpadSkippedOnResume)) {
+    const notes: string[] = [];
+    if (h.omittedPaths.length)
+      notes.push(`- ${h.omittedPaths.length} authored file(s) OMITTED (capture size budget exhausted): ${s(h.omittedPaths.join(", "))}`);
+    if (h.readErrors.length)
+      notes.push(`- ${h.readErrors.length} authored file(s) could NOT be read back: ${s(h.readErrors.map((e) => e.path).join(", "))}`);
+    if (h.scratchpadSkippedOnResume) notes.push(`- scratchpad deliverables were not captured (this is a --resume turn; #17)`);
+    parts.push(
+      `## Evidence health (INCOMPLETE)\nThe authored-file evidence above is NOT complete — do NOT infer content is absent just because it is not shown here:\n${notes.join("\n")}`,
+    );
+  }
+  return capForJudge(parts.join("\n\n"), JUDGE_DOC_CAP); // aggregate backstop, over already-scrubbed content
 }
 
 // A passing check may carry an optional `evidence` string — the concrete file/value/tool/link that
@@ -519,7 +562,7 @@ function check(
   const results: KeyResult[] = [];
   const ok = (evidence?: string): KeyResult => ({ pass: true, evidence });
   const fail = (message: string): KeyResult => ({ pass: false, message });
-  const truncated = ctx.truncatedPaths ?? new Map<string, "size" | "readonly" | "unreadable" | undefined>();
+  const truncated = ctx.truncatedPaths ?? new Map<string, "size" | "readonly" | "unreadable" | "input" | undefined>();
 
   // Tool-name matching for tool_called / tool_not_called / subagent_tool_used / subagent_tool_absent:
   // a GLOB over the closed set of literal tool identifiers (`*` any run, `?` one char; every other char
@@ -563,8 +606,17 @@ function check(
     // ctx.semanticResults; check() only reads them, so evaluate() stays synchronous. On replay the key
     // is stripped (LIVE_ONLY_KEYS) and never reaches here.
     const judged = ctx.semanticResults?.get(a);
+    const ah = ctx.authoredFilesHealth;
     if (ctx.judgeInvalid?.has(a)) {
       results.push(fail("judge grade INVALID (malformed/ambiguous after retry) — rep counts as invalid, not a pass"));
+    } else if (ah && (ah.omittedPaths.length || ah.readErrors.length)) {
+      // #14/#16: the judge graded a document missing authored files (dropped at the size cap, or unreadable
+      // at read-back), so a "claim not satisfied" could be a false absence. Refuse the verdict.
+      results.push(
+        fail(
+          `evidence unavailable: authored-file evidence was incomplete (${ah.omittedPaths.length} omitted at the capture cap, ${ah.readErrors.length} unreadable) — the judge graded a partial document, cannot trust the semantic verdict`,
+        ),
+      );
     } else if (!judged) {
       results.push(fail("evidence unavailable: semantic judge not run (semantic_matches is live-only; skipped on replay)"));
     } else {
@@ -791,15 +843,27 @@ function check(
         results.push(
           candidates.some((s) => s.output?.includes(contains))
             ? ok()
-            : fail(
-                candidates.length === 0
-                  ? `no sub-agent matching "${match}" was dispatched`
-                  : `no sub-agent matching "${match}" had output containing "${contains}"`,
-              ),
+            : candidates.length === 0
+              ? fail(`no sub-agent matching "${match}" was dispatched`)
+              : // #9: a miss against a TRUNCATED output is unverifiable, not a proven absence — the substring
+                // could lie past the assert-cap cut. Only claim absence when the searched output was complete.
+                candidates.some((s) => s.outputTruncated)
+                ? fail(
+                    `evidence unavailable: a sub-agent matching "${match}" had its output truncated at the assert cap — cannot verify it does not contain "${contains}"`,
+                  )
+                : fail(`no sub-agent matching "${match}" had output containing "${contains}"`),
         );
       }
     } else {
-      results.push(ctx.subagents.some((s) => s.output?.includes(contains)) ? ok() : fail(`no sub-agent's output contained "${contains}"`));
+      results.push(
+        ctx.subagents.some((s) => s.output?.includes(contains))
+          ? ok()
+          : ctx.subagents.some((s) => s.outputTruncated)
+            ? fail(
+                `evidence unavailable: a sub-agent's output was truncated at the assert cap — cannot verify it does not contain "${contains}"`,
+              )
+            : fail(`no sub-agent's output contained "${contains}"`),
+      );
     }
   }
   if (a.subagent_declared_but_unused !== undefined) {
@@ -1115,6 +1179,15 @@ function check(
     const { match, status } = a.task_status;
     if (ctx.tasks === undefined)
       results.push(fail(`evidence unavailable: tasks telemetry absent from result.json — cannot evaluate task_status`));
+    else if (ctx.evidenceErrors?.taskTracking)
+      // Mirror all_tasks_completed / task_count_min: known-corrupt TaskCreate telemetry means the surviving
+      // task subset is incomplete, so a status match against it could pass against demonstrably-partial
+      // evidence. Refuse to evaluate rather than pass on a subset. #6
+      results.push(
+        fail(
+          `task_status: ${ctx.evidenceErrors.taskTracking} TaskCreate result(s) were unparseable — task telemetry is incomplete, cannot verify (malformed)`,
+        ),
+      );
     else {
       const c = compileUserRegex(match);
       if ("error" in c) results.push(fail(`task_status: bad regex "${match}": ${c.error}`));
@@ -1176,18 +1249,29 @@ function check(
       // never listed symlinks, so exclude link entries here too and compare on the same links-blind basis;
       // otherwise every pre-existing symlink would false-stray. (Moot on replay: the materialized tree has
       // no real symlinks.)
-      const post = collectArtifactPaths(ctx.workRoot, ctx.userVisiblePrefixes)
-        .filter((e) => ctx.preRunLinkAware || !e.linkKind)
-        .map((e) => e.path);
-      const created = post.filter((p) => !pre.has(p.replace(/\\/g, "/")));
-      const stray = created.filter((p) => !anyGlobMatches(a.no_unexpected_files!, p));
-      results.push(
-        stray.length === 0
-          ? ok()
-          : fail(
-              `unexpected file(s) created outside the allowlist: ${stray.join(", ")} (allow: ${a.no_unexpected_files!.join(", ") || "(none)"})`,
-            ),
-      );
+      const walk = collectArtifactPathsWithHealth(ctx.workRoot, ctx.userVisiblePrefixes);
+      if (!walk.complete) {
+        // #18: an incomplete walk (an unreadable subtree — EACCES, etc.) can HIDE a stray, so "no strays
+        // found" would be a vacuous pass. Require a complete filesystem observation for this absence check.
+        results.push(
+          fail(
+            `evidence unavailable: the post-run filesystem walk was incomplete (${walk.errors
+              .map((e) => `${e.path || "<root>"}: ${e.error}`)
+              .join("; ")}) — cannot prove no unexpected files were created`,
+          ),
+        );
+      } else {
+        const post = walk.entries.filter((e) => ctx.preRunLinkAware || !e.linkKind).map((e) => e.path);
+        const created = post.filter((p) => !pre.has(p.replace(/\\/g, "/")));
+        const stray = created.filter((p) => !anyGlobMatches(a.no_unexpected_files!, p));
+        results.push(
+          stray.length === 0
+            ? ok()
+            : fail(
+                `unexpected file(s) created outside the allowlist: ${stray.join(", ")} (allow: ${a.no_unexpected_files!.join(", ") || "(none)"})`,
+              ),
+        );
+      }
     }
   }
   if (a.input_unmodified !== undefined) {
@@ -1204,7 +1288,7 @@ function check(
         ),
       );
     } else {
-      const globs = a.input_unmodified;
+      const globs = Array.isArray(a.input_unmodified) ? a.input_unmodified : [a.input_unmodified]; // accept a bare string
       const matched = Object.keys(ctx.preRunHashes).filter((p) => anyGlobMatches(globs, p));
       const modified: string[] = []; // present post-run with a different hash
       const removed: string[] = []; // gone post-run (deletion is also a content change)
@@ -1402,6 +1486,7 @@ function check(
       const liveReadonly = (ctx.readonlyFolderRoots ?? []).some((pre) => rel === pre || rel.startsWith(pre + "/"));
       const replayReason = truncated.get(rel); // undefined if not body-less on replay, or a pre-v8 entry with no reason
       const isReadonlyInput = liveReadonly || replayReason === "readonly";
+      const isUploadInput = replayReason === "input"; // an uploaded file — captured hash-only, body deliberately absent
       const isOverCap = replayReason === "size";
       const bodyLess = truncated.has(rel) || liveReadonly;
       if (!realFile) {
@@ -1412,11 +1497,13 @@ function check(
         // Precise remedy when the cause is known (read-only ⇒ assert on a deliverable; over-cap ⇒ raise
         // the cap). A pre-v8 entry carries no reason ⇒ name both causes (we can't tell). "unreadable"
         // also falls here — it's a record-time read failure, so the both-causes text is the safe hint.
-        const cause = isReadonlyInput
-          ? `(read-only connected-folder input — its content is never captured; assert artifact_json on a deliverable instead)`
-          : isOverCap
-            ? `(larger than the artifact-body cap — raise --max-artifact-bytes to capture it)`
-            : `(a read-only connected-folder input, or an artifact larger than the body cap — if an input, assert on a deliverable; if a large deliverable, raise --max-artifact-bytes)`;
+        const cause = isUploadInput
+          ? `(an uploaded input — its content is captured hash-only, never inlined; assert artifact_json on a deliverable instead)`
+          : isReadonlyInput
+            ? `(read-only connected-folder input — its content is never captured; assert artifact_json on a deliverable instead)`
+            : isOverCap
+              ? `(larger than the artifact-body cap — raise --max-artifact-bytes to capture it)`
+              : `(a read-only connected-folder input, or an artifact larger than the body cap — if an input, assert on a deliverable; if a large deliverable, raise --max-artifact-bytes)`;
         results.push(
           fail(
             `evidence unavailable: artifact_json target "${aj.artifact}" was captured body-less ` +

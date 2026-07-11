@@ -103,6 +103,17 @@ cowork-harness sync --allow-empty   # force-write past an empty allowlist or unk
         network.allowDomains in the written baseline (bridge)
    ```
 
+   **Includes the Cowork system-prompt drift guard.** Alongside the asar-structure checks above, `sync`
+   also fingerprints the Cowork system-prompt append itself (a minifier-independent content hash plus a
+   `{{placeholder}}` / `<section>` inventory — `src/prompt.ts`'s `MODELED_PLACEHOLDER_NAMES` /
+   `INTENTIONALLY_UNMODELED_PLACEHOLDERS`) and feeds two more cases into the same unknown-deltas list: a
+   sha drift against the newest entry in `baselines/prompts/cowork-system-prompt-fingerprints.json`
+   (confirm the *rendered*-prompt impact — a placeholder may be deployment-gated/stripped like
+   `{{modelIdentity}}` — then add a new fingerprint entry), and any `{{placeholder}}` the renderer neither
+   substitutes nor explicitly allowlists. This catches a class the coarse `asarFingerprint` below can
+   miss, since a deployment-gated placeholder can leave the *rendered* prompt byte-identical while the
+   prompt *source* still changed.
+
 2. **`asarFingerprint` → a `--diff` tripwire (separate).** `sync` also records a fingerprint over the
    cowork-relevant code regions (`sliceCowork` tokens). It does **not** itself raise an unknown delta — a
    change just surfaces as a field diff under `sync --diff`, a hint to re-verify the extractor even when
