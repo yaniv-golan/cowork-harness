@@ -234,6 +234,16 @@ describe.skipIf(!can)("verify-run re-asserts a kept run dir without a live agent
     expect(text).toContain("no result.json");
   });
 
+  it("refuses a result.json that parses but is structurally invalid", () => {
+    const run = mkdtempSync(join(tmpdir(), "cwh-vr-bad-"));
+    // Valid JSON, but no `result` field — the field the verdict hinges on.
+    writeFileSync(join(run, "result.json"), JSON.stringify({ assertions: [] }));
+    const sc = scenarioFile(run, "  - result: success\n");
+    const { code, text } = verifyRun(run, sc);
+    expect(code).not.toBe(0);
+    expect(text).toMatch(/structurally invalid/);
+  });
+
   it("FAILS with 'evidence unavailable' when run.jsonl is absent and transcript_not_contains is asserted", () => {
     const run = keptRunWithout("transcript");
     const sc = scenarioFile(run, '  - transcript_not_contains: "needle"');

@@ -3100,10 +3100,20 @@ function readQuestionsSidecar(file: string): string[] | null {
 
 /** Reconstruct the AskUserQuestion gates (WITH their offered options) a kept run actually fired,
  *  from its `events.jsonl` (the verbatim child→driver stream — the only sidecar that retains options; the
- *  distilled trace.json drops them). Returns the question-kind DecisionRequests, or `null` if events.jsonl is
- *  absent/unreadable (distinct from "present but zero gates" → `[]`). A malformed frame is skipped, not fatal —
- *  these are harness-written and should be well-formed; `toDecisionRequest` throws on a bad frame, so guard it. */
-function parseGatesFromEvents(file: string): DecisionRequest[] | null {
+ *  distilled trace.json drops them). Returns `{ gates, corruptLines }`, or `null` if events.jsonl is
+ *  absent/unreadable (distinct from "present but zero gates" → `{ gates: [], corruptLines: 0 }`).
+ *
+ *  Two deliberate decisions, both because this is a certification command and refuses rather than guesses:
+ *  (a) a real events.jsonl can legitimately contain raw, non-JSON agent stdout lines (the child→driver stream
+ *  is persisted verbatim before parsing) — so `corruptLines` counts ONLY a JSON.parse failure or a
+ *  `toDecisionRequest` throw on an otherwise-`control_request`-typed frame, never a valid-JSON line that
+ *  simply isn't a gate (e.g. an `assistant` event); the caller refuses when `corruptLines > 0` rather than
+ *  silently skipping, because a present-but-fully-corrupt file is otherwise indistinguishable from "zero
+ *  gates fired" and would false-green answer-coverage at 0/0. (b) the live lane (`scanEvents`) stays
+ *  warn-only for this same class of evidence gap — this asymmetry with verify-run's hard refusal is
+ *  intentional: a live run has already happened and a warn is the most a post-hoc scan can do, but
+ *  verify-run is the tool a user runs specifically to certify a scenario as green, so it fails closed. */
+function parseGatesFromEvents(file: string): { gates: DecisionRequest[]; corruptLines: number } | null {
   let text: string;
   try {
     text = readFileSync(file, "utf8");
@@ -3111,6 +3121,7 @@ function parseGatesFromEvents(file: string): DecisionRequest[] | null {
     return null;
   }
   const gates: DecisionRequest[] = [];
+  let corruptLines = 0;
   for (const line of text.split("\n")) {
     const t = line.trim();
     if (!t) continue;
@@ -3118,6 +3129,7 @@ function parseGatesFromEvents(file: string): DecisionRequest[] | null {
     try {
       msg = JSON.parse(t);
     } catch {
+      corruptLines++;
       continue;
     }
     if ((msg as { type?: string })?.type !== "control_request") continue;
@@ -3125,11 +3137,12 @@ function parseGatesFromEvents(file: string): DecisionRequest[] | null {
     try {
       req = toDecisionRequest(msg);
     } catch {
-      continue; // malformed AskUserQuestion frame — not the linter's job to fail on; skip
+      corruptLines++; // malformed control_request frame — untrustworthy, counted; caller decides
+      continue;
     }
     if (req && req.kind === "question") gates.push(req);
   }
-  return gates;
+  return { gates, corruptLines };
 }
 
 /** The question text used to label a gate in answer-coverage output. */
@@ -3188,6 +3201,21 @@ async function cmdVerifyRun(args: string[]) {
     result = JSON.parse(readFileSync(resultPath, "utf8")) as RunResult;
   } catch (e) {
     return fail("verify-run", "runtime", `verify-run: cannot read ${resultPath}: ${(e as Error).message}`, undefined, isJsonOutput(args));
+  }
+  // JSON.parse alone would let `{}` (or any foreign/truncated-then-hand-fixed JSON) through, and
+  // the `result.result === "error" ? "error" : "success"` collapse below would then certify
+  // garbage as success. Gate on the one field the verdict hinges on. Everything else is
+  // deliberately lenient: absent optional fields degrade loudly via the evidence-missing flags.
+  const resultField = (result as { result?: unknown }).result;
+  if (resultField !== "success" && resultField !== "error") {
+    return fail(
+      "verify-run",
+      "runtime",
+      `verify-run: ${resultPath} is structurally invalid — \`result\` is ${JSON.stringify(resultField)}, ` +
+        `expected "success" | "error" (truncated, hand-edited, or not harness-written). (can't verify ⇒ not green)`,
+      undefined,
+      json,
+    );
   }
   // A partial run did NOT complete (it exited on an unanswered gate). Its assertion outcome is empty and its
   // artifacts are pre-failure, so re-evaluating asserts against it would vouch for a run that never finished.
@@ -3351,13 +3379,36 @@ async function cmdVerifyRun(args: string[]) {
         );
       }
     }
-    const gates = parseGatesFromEvents(join(runDir, "events.jsonl"));
-    if (gates === null) {
+    const parsed = parseGatesFromEvents(join(runDir, "events.jsonl"));
+    if (parsed === null) {
       return fail(
         "verify-run",
         "runtime",
         `verify-run: scenario declares answers but ${runDir} has no events.jsonl — cannot verify answer coverage ` +
           `(re-keep the run with the gates, or drop answers). (can't verify ⇒ not green)`,
+        undefined,
+        isJsonOutput(args),
+      );
+    }
+    if (parsed.corruptLines > 0) {
+      return fail(
+        "verify-run",
+        "runtime",
+        `verify-run: events.jsonl under ${runDir} has ${parsed.corruptLines} unparseable line(s) — ` +
+          `truncation, a hand edit, or raw agent-stdout noise in the stream; either way gate evidence ` +
+          `is untrustworthy and answer coverage cannot be certified; re-record. (can't verify ⇒ not green)`,
+        undefined,
+        isJsonOutput(args),
+      );
+    }
+    const gates = parsed.gates;
+    const gateQuestionCount = gates.reduce((n, g) => n + (g.kind === "question" ? g.questions.length : 0), 0);
+    if (sidecarQuestions !== null && gateQuestionCount < sidecarQuestions.length) {
+      return fail(
+        "verify-run",
+        "runtime",
+        `verify-run: trace.json records ${sidecarQuestions.length} question(s) but events.jsonl yields ` +
+          `${gateQuestionCount} — gate evidence incomplete (truncated events.jsonl?); re-record. (can't verify ⇒ not green)`,
         undefined,
         isJsonOutput(args),
       );

@@ -131,4 +131,30 @@ describe.skipIf(!can)("verify-run answer-coverage", () => {
     const r = verifyRun(run, sc);
     expect(r.code).toBe(0);
   });
+
+  it("refuses when events.jsonl has corrupt lines", () => {
+    const run = keptRun(); // no gate → no events.jsonl written by default
+    // Two lines that each fail JSON.parse — truncation / hand edit / raw agent-stdout noise.
+    writeFileSync(
+      join(run, "events.jsonl"),
+      ['{"type":"control_request","request_id":"req-1","request":{"subtype":"can_use_tool"', "not json at all"].join("\n") + "\n",
+    );
+    const sc = scenarioFile(run, `answers:\n  - when_question: "anything"\n    choose: "X"\nassert:\n  - result: success\n`);
+    const r = verifyRun(run, sc);
+    expect(r.code).not.toBe(0);
+    expect(r.text).toMatch(/unparseable line/);
+    expect(r.text).toMatch(/truncation, a hand edit, or raw agent-stdout noise/);
+  });
+
+  it("refuses when trace.json records more questions than events.jsonl yields gates", () => {
+    const run = keptRun(); // no gate → clean-but-gateless
+    // A clean, well-formed non-control_request line — NOT corrupt, just not a gate.
+    writeFileSync(join(run, "events.jsonl"), JSON.stringify({ type: "assistant", text: "thinking" }) + "\n");
+    // trace.json records a question the (gateless) events.jsonl never yields — incomplete evidence.
+    writeFileSync(join(run, "trace.json"), JSON.stringify({ questions: ["Which scenario?"], steps: [] }));
+    const sc = scenarioFile(run, `answers:\n  - when_question: "anything"\n    choose: "X"\nassert:\n  - result: success\n`);
+    const r = verifyRun(run, sc);
+    expect(r.code).not.toBe(0);
+    expect(r.text).toMatch(/gate evidence incomplete/);
+  });
 });
