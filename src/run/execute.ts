@@ -820,7 +820,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         egress,
         durationMs: Date.now() - startedAt,
         unanswered: { message: unansweredErr.message, hint: unansweredErr.hint },
-        fingerprint: buildFingerprint(scenario.session, baseline.appVersion, undefined, scenario.skills),
+        fingerprint: buildFingerprint(scenario.session, baseline.appVersion, undefined, scenario.skills, baseline),
         onUnanswered,
         nonDeterministicHint: opts.nonDeterministicHint,
         externalChannel: !!opts.externalChannel,
@@ -1213,7 +1213,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       // Skill staleness fingerprint, persisted on EVERY run (runs are always kept on disk) so `verify-run` can
       // detect a kept run that predates a skill change and refuse to vouch for answer-coverage. Same call the
       // record path uses for the cassette (cassette.ts) — `(inline)`/no-skill sessions yield a {baseline}-only fp.
-      fingerprint: buildFingerprint(scenario.session, baseline.appVersion, undefined, scenario.skills),
+      fingerprint: buildFingerprint(scenario.session, baseline.appVersion, undefined, scenario.skills, baseline),
       resources, // same single fold as the evaluate() ctx above — not re-read
       // Fields this lane has NEVER set (were implicitly `undefined` before this refactor; now explicit
       // per assembleRunResult's contract — this line makes the omission a reviewable, greppable fact

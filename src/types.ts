@@ -671,6 +671,12 @@ export interface Fingerprint {
   // computed — a skill-named `agents/<n>` was treated as skill <n>'s private input rather than a shared root.
   // ABSENT = the default (agents/ is a fleet-wide shared root). A record-vs-verify mismatch → re-record.
   agentScope?: "skill";
+  /** sha16 over the baseline's committed prompt-asset FILE bytes (spawn.promptTemplate /
+   *  subagentAppend / subagentAppendHostLoop, key-ordered). Prompt identity was previously keyed on
+   *  appVersion alone, so an asset edit under the SAME appVersion silently replayed old-prompt
+   *  behavior. Asset-file bytes (not the rendered string) keep it deterministic and host-path-free.
+   *  Absent on cassettes recorded before this field existed → informational note, never a finding. */
+  promptAssetsHash?: string;
 }
 
 /** The cause-class of a replay staleness finding. `unverifiable-baseline` (env/platform: the latest baseline
@@ -683,9 +689,21 @@ export interface Fingerprint {
  *  today (gate 1143815894 flipped since record — the recording exercises the WRONG tier);
  *  `unverifiable-tier` = the tier check could not run for a baseline-dependent (`fidelity: cowork`)
  *  cassette (no recorded `effectiveFidelity`, or the scenario's pinned baseline failed to load) —
- *  can't verify ⇒ not green on the verify-cassettes gate. */
+ *  can't verify ⇒ not green on the verify-cassettes gate. `prompt-assets` = the baseline's committed
+ *  prompt-asset files changed since record under the SAME appVersion (warn-by-default, `--strict`
+ *  fails, re-record); `unverifiable-prompt-assets` = a recorded prompt-asset hash exists but the live
+ *  baseline's prompt assets can't be hashed (a moved/dangling pointer) — can't verify ⇒ not green. */
 type StalenessClass =
-  "baseline" | "skill" | "shared-root" | "format" | "unverifiable-baseline" | "unverifiable-skill" | "resolved-tier" | "unverifiable-tier";
+  | "baseline"
+  | "skill"
+  | "shared-root"
+  | "format"
+  | "unverifiable-baseline"
+  | "unverifiable-skill"
+  | "resolved-tier"
+  | "unverifiable-tier"
+  | "prompt-assets"
+  | "unverifiable-prompt-assets";
 export interface StalenessFinding {
   class: StalenessClass;
   message: string;

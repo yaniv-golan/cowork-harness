@@ -450,9 +450,13 @@ can't record green and replay red). This keeps a read-only input out of the cass
 the folder as a user-visible root. A `mode: rw`/`rwd` folder's contents are captured with a full body, same
 as `outputs/`.
 A green `replay` re-confirms *record-time* artifacts, **not** that the current skill still produces them —
-that needs a live `run` (the cassette's staleness fingerprint warns when the skill/baseline drifted; `replay
---strict` fails on any drift, `--fail-on-skill-drift` on skill-source drift only, and every result reports it
-in `staleness[]` for a JSON gate).
+that needs a live `run` (the cassette's staleness fingerprint warns when the skill/baseline/prompt-assets
+drifted — `baseline`, `skill`/`shared-root`, `format`, `resolved-tier`, `prompt-assets`, plus the
+`unverifiable-*` can't-verify variants of each; `replay --strict` fails on any drift, `--fail-on-skill-drift`
+on skill-source drift only, and every result reports it in `staleness[]` for a JSON gate). `prompt-assets`
+covers a committed prompt-asset FILE (`spawn.promptTemplate`/`subagentAppend`/`subagentAppendHostLoop`)
+edited under the same `appVersion` — a change `baseline`/`skill` drift alone would miss, since prompt
+identity was previously keyed on `appVersion` only.
 
 **Egress + other filesystem** assertions (`no_delete_in_outputs`, `self_heal_ran`,
 `transcript_no_host_path`, `egress_*`/`expect_denied`, `no_mcp_error`, `max_peak_rss_bytes`) are still

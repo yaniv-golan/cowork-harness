@@ -75,7 +75,7 @@ reproduce. See [docs/scenario.md](./scenario.md#how-an-assertion-edit-reaches-ci
     { "path": "uploads/report.pdf", "bytes": 51200, "sha256": "…", "truncated": true, "truncationReason": "input" }, // uploaded file under an inputRoots root → body-less, hash-only (see below), regardless of size
     { "path": "outputs/link-to-elsewhere", "bytes": 0, "sha256": "", "linkKind": "symlink" } // v10: symlink/hardlink — path+kind only, never dereferenced, so a link stray is still visible to no_unexpected_files
   ],
-  "fingerprint": { "baseline": "1.15962.1", "skillHash": "…", "mode": "git", "contentSig": "…", "fileSigs": [["skills/x/SKILL.md", "…"]], "skillSources": ["…"] }, // staleness tripwire (v5: fileSigs only; v6: mode + git default; v7: NUL-delimited hash entries; v8: folds fixed-length content shas + type-prefixed/NUL-framed entries)
+  "fingerprint": { "baseline": "1.15962.1", "skillHash": "…", "mode": "git", "contentSig": "…", "fileSigs": [["skills/x/SKILL.md", "…"]], "skillSources": ["…"], "promptAssetsHash": "…" }, // staleness tripwire (v5: fileSigs only; v6: mode + git default; v7: NUL-delimited hash entries; v8: folds fixed-length content shas + type-prefixed/NUL-framed entries; promptAssetsHash: sha16 over the baseline's committed prompt-asset files, keyed independently of `baseline` (appVersion) — see the prompt-assets staleness class below)
   "sessionFingerprint": "…", // v9+: hash of the session's content-relevant SHAPE (folders/plugins/skills/mcp/egress) — verify-cassettes-only, never the default replay verdict
   "folderPrefixMap": [{ "from": "/Users/me/myproject", "mount": "myproject" }], // v9+: record-time connected-folder host-path → mount-name map; computer_links_resolve uses THIS on replay
   "authoring": { "nonDeterministic": true, "channel": "decider-dir" } // present ONLY when a live decider answered ≥1 gate (see §Answering gates during recording); re-record may drift, replay is still deterministic
@@ -498,6 +498,18 @@ possible.
 Both classes exist only for `fidelity: cowork` scenarios, whose tier is baseline-resolved rather than
 authored — see [fidelity-and-answers.md](../.claude/skills/cowork-harness/references/fidelity-and-answers.md)
 for the `cowork` → `hostloop`/`container` resolution.
+
+- **`the baseline's committed prompt assets changed since this cassette was recorded (same appVersion) …`**
+  (class `prompt-assets`) — prompt identity was previously keyed on `fingerprint.baseline` (appVersion)
+  alone, so editing a committed prompt asset (`spawn.promptTemplate` / `subagentAppend` /
+  `subagentAppendHostLoop`) under the SAME appVersion silently replayed old-prompt behavior. Non-failing
+  by default (warns), `--strict` fails, `verify-cassettes` treats it like any other finding — re-record.
+- **`cassette recorded a prompt-asset fingerprint but the live baseline's prompt assets can't be hashed …`**
+  (class `unverifiable-prompt-assets`) — a recorded `fingerprint.promptAssetsHash` exists but the live
+  baseline's prompt-asset pointer moved or the asset file is missing, so the drift check can't run at all
+  (can't verify ⇒ not green on `verify-cassettes`, warns on the default replay gate). A cassette recorded
+  **before** `promptAssetsHash` existed carries no field at all — that's a non-failing informational note
+  ("cassette predates prompt-asset fingerprinting"), not a finding.
 
 **The skill-hash boundary (v6+):** by default the hash covers the **git-tracked** files of each skill/plugin
 source dir (a dir not in a git repo falls back to a raw filesystem walk). **OS-junk** (`.DS_Store` /

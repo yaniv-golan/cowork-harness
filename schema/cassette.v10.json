@@ -190,6 +190,10 @@
             "skill"
           ],
           "description": "Opt-in per-skill agent scoping (COWORK_HARNESS_AGENT_SCOPE=skill) was active for this scoped hash: a skill-named agents/<n> was treated as skill <n>'s private input, not a fleet-wide shared root. ABSENT = the default (agents/ is shared). A record-vs-verify flip \u2192 re-record under the same setting."
+        },
+        "promptAssetsHash": {
+          "type": "string",
+          "description": "sha16 over the baseline's committed prompt-asset FILE bytes (spawn.promptTemplate / subagentAppend / subagentAppendHostLoop, key-ordered, comment-stripped). Prompt identity was previously keyed on `baseline` (appVersion) alone, so a prompt-asset edit under the SAME appVersion silently replayed old-prompt behavior. ABSENT on a cassette recorded before this field existed \u2192 informational note, never a finding."
         }
       }
     },

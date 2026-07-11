@@ -674,6 +674,10 @@
           "enum": [
             "skill"
           ]
+        },
+        "promptAssetsHash": {
+          "type": "string",
+          "description": "sha16 over the baseline's committed prompt-asset FILE bytes (spawn.promptTemplate / subagentAppend / subagentAppendHostLoop, key-ordered, comment-stripped). Prompt identity was previously keyed on `baseline` (appVersion) alone, so a prompt-asset edit under the SAME appVersion silently replayed old-prompt behavior. Absent on a run recorded before this field existed → informational note, never a finding."
         }
       }
     },
@@ -903,7 +907,9 @@
               "unverifiable-baseline",
               "unverifiable-skill",
               "resolved-tier",
-              "unverifiable-tier"
+              "unverifiable-tier",
+              "prompt-assets",
+              "unverifiable-prompt-assets"
             ]
           },
           "message": {

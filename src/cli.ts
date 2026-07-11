@@ -3366,6 +3366,9 @@ async function cmdVerifyRun(args: string[]) {
           `cannot confirm it is current vs the skill; re-keep a fresh run to be sure answer-coverage is against live gates.`,
       );
     } else if (recFp.skillHash !== undefined) {
+      // Only `recFp.baseline` (a STRING) is in scope here, not a resolved baseline object — the trailing
+      // `buildFingerprint` arg is omitted (never re-resolved by appVersion; see hashBaselinePromptAssets).
+      // This compares skillHash only (fingerprintSkillDrift), so the missing promptAssetsHash is moot.
       const liveFp = buildFingerprint(scenario.session, recFp.baseline, undefined, scenario.skills);
       const drift = fingerprintSkillDrift(recFp, liveFp);
       if (drift) {

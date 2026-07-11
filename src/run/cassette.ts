@@ -21,13 +21,15 @@ import {
   type Assertion,
   type Fingerprint,
   type StalenessFinding,
+  type PlatformBaseline,
   Assertion as AssertionSchema,
   VERDICT_MODIFIER_KEYS,
 } from "../types.js";
 import { executeScenario, parseScenarioFile, collectArtifactPaths, parseSessionFile, slugForPath } from "./execute.js";
 import { assembleRunResult } from "./assemble-run-result.js";
 import { loadSession, resolveSessionPaths } from "../session.js";
-import { loadBaseline } from "../baseline.js";
+import { loadBaseline, BASELINES_DIR } from "../baseline.js";
+import { stripComments } from "../prompt.js";
 import { decideLoopFromBaseline } from "../loop-decision.js";
 import { Run, infraErrorsForResult, evidenceErrorsForResult, type RunHooks, type RunRecord } from "./run.js";
 import {
@@ -433,14 +435,41 @@ function skillSourceDirs(sessionPath: string, cassetteDir?: string): { dirs: str
   return { dirs, baseDir, hashIgnore: cfg.staleness.hash_ignore };
 }
 
+// Takes the RESOLVED baseline OBJECT (never re-resolves by appVersion — that could hash a different
+// committed baseline than a supported absolute custom baseline). Undefined = no prompt pointers, or a
+// dangling pointer (evidence-unavailable, never a fabricated hash). Hashes the COMMENT-STRIPPED
+// template (what renderPrompts actually renders — prompt.ts strips HTML comments before
+// substitution), so a comment-only edit doesn't produce false staleness; {{tokens}} are left intact
+// (they're deterministic pre-substitution).
+type PromptAssetKey = "promptTemplate" | "subagentAppend" | "subagentAppendHostLoop";
+export function hashBaselinePromptAssets(baseline: PlatformBaseline): string | undefined {
+  const spawn = (baseline.spawn ?? {}) as Record<string, unknown>;
+  const entries = (["promptTemplate", "subagentAppend", "subagentAppendHostLoop"] as const satisfies readonly PromptAssetKey[])
+    .map((k) => [k, spawn[k]] as const)
+    .filter((e): e is readonly [PromptAssetKey, string] => typeof e[1] === "string");
+  if (entries.length === 0) return undefined;
+  const h = createHash("sha256");
+  for (const [key, rel] of entries) {
+    const p = join(BASELINES_DIR, rel);
+    if (!existsSync(p)) return undefined; // a dangling pointer already fails test/prompt-assets.test.ts
+    h.update(key)
+      .update("\0")
+      .update(stripComments(readFileSync(p, "utf8")).trim())
+      .update("\0");
+  }
+  return h.digest("hex").slice(0, 16);
+}
+
 export function buildFingerprint(
   sessionPath: string,
   baselineAppVersion: string,
   cassetteDir?: string,
   scopeSkills?: string[],
+  baseline?: PlatformBaseline,
 ): Fingerprint {
+  const promptAssetsHash = baseline ? hashBaselinePromptAssets(baseline) : undefined;
   const { dirs, baseDir, hashIgnore } = skillSourceDirs(sessionPath, cassetteDir);
-  if (dirs.length === 0) return { baseline: baselineAppVersion };
+  if (dirs.length === 0) return { baseline: baselineAppVersion, ...(promptAssetsHash ? { promptAssetsHash } : {}) };
   // hashSkillDirs excludes recorded cassettes (*.cassette.json) + VCS/cache dirs so a committed cassette
   // and unrelated VCS noise don't self-invalidate the fingerprint they were recorded under. When
   // scopeSkills is set, the hash is scoped to those skills' dirs + the plugin's shared roots (fail-closed);
@@ -455,13 +484,18 @@ export function buildFingerprint(
   // skillHash. checkStaleness already treats a missing live.skillHash as a gate failure. Errors are already
   // written to stderr inside hashSkillDirs/hashDir.
   if (hashResult.readErrors && hashResult.readErrors.length > 0) {
-    return { baseline: baselineAppVersion, skillSources: dirs.sort().map((d) => relative(baseDir, d)) };
+    return {
+      baseline: baselineAppVersion,
+      skillSources: dirs.sort().map((d) => relative(baseDir, d)),
+      ...(promptAssetsHash ? { promptAssetsHash } : {}),
+    };
   }
   // Store skillSources RELATIVE to the session-file dir — diagnostics only (the replay recompute re-derives
   // the dirs from the session), so a relative path is enough and never leaks an absolute `/Users/...` path.
   const fp: Fingerprint = {
     baseline: baselineAppVersion,
     skillHash: hashResult.hash,
+    ...(promptAssetsHash ? { promptAssetsHash } : {}),
     contentSig: computeContentSig(dirs, scopeSkills, hashIgnore), // v6: unified onto the skillHash walk (same set)
     skillSources: dirs.sort().map((d) => relative(baseDir, d)),
   };
@@ -831,6 +865,34 @@ function computeTierStaleness(cassette: Cassette): { findings: StalenessFinding[
   return { findings: [], notes: [] };
 }
 
+/** Prompt-asset drift for one fingerprint vs the LIVE baseline OBJECT (never a re-resolve of
+ *  fp.baseline). Gated on appVersion match — a version bump already fires the `baseline` finding, so
+ *  comparing across versions would double-flag. Returns a finding, a legacy note, or null. */
+export function promptAssetStaleness(
+  fp: Fingerprint,
+  liveBaselineObj: PlatformBaseline | undefined,
+): StalenessFinding | { note: string } | null {
+  if (fp.promptAssetsHash === undefined)
+    return {
+      note: "cassette predates prompt-asset fingerprinting — a prompt-asset edit since record would be invisible; re-record to adopt the guard",
+    };
+  if (liveBaselineObj === undefined || liveBaselineObj.appVersion !== fp.baseline) return null; // baseline finding handles the version mismatch
+  const liveAssets = hashBaselinePromptAssets(liveBaselineObj);
+  if (liveAssets === undefined)
+    return {
+      class: "unverifiable-prompt-assets",
+      message:
+        "cassette recorded a prompt-asset fingerprint but the live baseline's prompt assets can't be hashed (a pointer moved or the asset is absent) — can't verify prompt drift ⇒ not green",
+    };
+  if (liveAssets !== fp.promptAssetsHash)
+    return {
+      class: "prompt-assets",
+      message:
+        "the baseline's committed prompt assets changed since this cassette was recorded (same appVersion) — the recorded model saw a different rendered prompt; re-record",
+    };
+  return null;
+}
+
 /** The SINGLE staleness diagnosis (unifies what used to be two divergent copies: `checkStaleness` and the
  *  inline block in `replayCassette`). Recompute the fingerprint and report drift as class-tagged findings;
  *  each CALLER applies its own gate-vs-warn policy:
@@ -851,12 +913,13 @@ export function computeStaleness(cassette: Cassette, cassetteDir: string | undef
   const notes: string[] = [...tier.notes];
   const fp = cassette.fingerprint;
   if (!fp) return { findings, notes };
-  let liveBaseline: string | undefined;
+  let liveBaselineObj: PlatformBaseline | undefined;
   try {
-    liveBaseline = loadBaseline("latest").appVersion;
+    liveBaselineObj = loadBaseline("latest");
   } catch {
     /* baseline not loadable */
   }
+  const liveBaseline = liveBaselineObj?.appVersion;
   // The cassette carries a baseline-of-record but we can't load the current one to compare. Surfaced as
   // `unverifiable-baseline` (env/platform, not skill drift): a non-failing warning on the default replay gate,
   // but a hard fail for `verify-cassettes`/the work-list via the class-blind string adapter (can't verify ⇒
@@ -869,6 +932,11 @@ export function computeStaleness(cassette: Cassette, cassetteDir: string | undef
     });
   else if (liveBaseline !== fp.baseline)
     findings.push({ class: "baseline", message: `baseline moved ${fp.baseline} → ${liveBaseline} since record — re-record` });
+  const pa = promptAssetStaleness(fp, liveBaselineObj);
+  if (pa) {
+    if ("note" in pa) notes.push(pa.note);
+    else findings.push(pa);
+  }
   if (fp.skillHash) {
     const live = buildFingerprint(cassette.scenario.session, fp.baseline, cassetteDir, cassette.scenario.skills);
     const recMode = fp.mode ?? "raw";
@@ -2407,7 +2475,10 @@ async function recordScenarioObject(
     // persist the authored scenario source file RELATIVE to the cassette dir (relocatable, no
     // absolute host path) so `--rerecord-stale` re-records from the edited YAML even when name ≠ filename.
     scenarioSource: opts.scenarioSourceFile ? relative(dirname(cassettePath), opts.scenarioSourceFile) : undefined,
-    fingerprint: buildFingerprint(scenario.session, result.baseline, undefined, scenario.skills),
+    // Persist the RUN-TIME fingerprint (computed by execute.ts WITH the resolved baseline object, so it
+    // carries promptAssetsHash) rather than recomputing here without the object — a recompute would
+    // silently drop promptAssetsHash. The `??` fallback only fires for a result that never carried one.
+    fingerprint: result.fingerprint ?? buildFingerprint(scenario.session, result.baseline, undefined, scenario.skills),
     authoring,
     timeline: timeline?.events,
     timelineHeader: timeline?.header,
