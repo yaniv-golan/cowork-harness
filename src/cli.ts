@@ -3189,6 +3189,21 @@ async function cmdVerifyRun(args: string[]) {
   } catch (e) {
     return fail("verify-run", "runtime", `verify-run: cannot read ${resultPath}: ${(e as Error).message}`, undefined, isJsonOutput(args));
   }
+  // JSON.parse alone would let `{}` (or any foreign/truncated-then-hand-fixed JSON) through, and
+  // the `result.result === "error" ? "error" : "success"` collapse below would then certify
+  // garbage as success. Gate on the one field the verdict hinges on. Everything else is
+  // deliberately lenient: absent optional fields degrade loudly via the evidence-missing flags.
+  const resultField = (result as { result?: unknown }).result;
+  if (resultField !== "success" && resultField !== "error") {
+    return fail(
+      "verify-run",
+      "runtime",
+      `verify-run: ${resultPath} is structurally invalid — \`result\` is ${JSON.stringify(resultField)}, ` +
+        `expected "success" | "error" (truncated, hand-edited, or not harness-written). (can't verify ⇒ not green)`,
+      undefined,
+      json,
+    );
+  }
   // A partial run did NOT complete (it exited on an unanswered gate). Its assertion outcome is empty and its
   // artifacts are pre-failure, so re-evaluating asserts against it would vouch for a run that never finished.
   // Refuse rather than false-fail or false-pass.
