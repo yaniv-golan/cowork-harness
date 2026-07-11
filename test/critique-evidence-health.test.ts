@@ -8,8 +8,8 @@ import {
   verifyBoundaryIntegrity,
   readTurn1ResultWithStatus,
   type TurnBoundary,
-} from "../src/critique/evidence.js";
-import { packageEvidence } from "../src/critique/package-evidence.js";
+} from "../scripts/lib/critique/evidence.js";
+import { packageEvidence } from "../scripts/lib/critique/package-evidence.js";
 
 // Critique-evidence-packaging health cluster (F28-F31): the reflective skill-critique loop's safety claim
 // depends on the evaluator being able to tell "this evidence is solid ground truth" apart from "this

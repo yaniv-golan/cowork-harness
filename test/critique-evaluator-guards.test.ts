@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { runCritique, buildPass1Prompt, buildPass2Prompt } from "../src/critique/evaluator";
+import { runCritique, buildPass1Prompt, buildPass2Prompt } from "../scripts/lib/critique/evaluator";
 import type { Complete } from "../src/decide/decider";
 import {
   boundedSpawn,
@@ -10,7 +10,7 @@ import {
   outstandingChildPids,
   installOrphanCleanupHandlers,
 } from "../scripts/skill-critique";
-import type { CritiqueItem } from "../src/critique/evidence";
+import type { CritiqueItem } from "../scripts/lib/critique/evidence";
 
 // Guard tests for 7 validated bugs (F32-F38) across src/critique/evaluator.ts and scripts/skill-critique.ts,
 // PLUS the adversarial-review residual fixes on top of them (F29/F30/F31/F37 residuals, F23/F36 orphan

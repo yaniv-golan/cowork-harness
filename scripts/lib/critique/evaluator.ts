@@ -1,6 +1,6 @@
-import { claudeCliComplete } from "../decide/llm-transport.js";
-import type { Complete } from "../decide/decider.js";
-import { extractAllJsonObjects } from "../decide/semantic-judge.js";
+import { claudeCliComplete } from "../../../src/decide/llm-transport.js";
+import type { Complete } from "../../../src/decide/decider.js";
+import { extractAllJsonObjects } from "../../../src/decide/semantic-judge.js";
 import { validateCitations, type CritiqueItem } from "./evidence.js";
 
 // The two-pass, tool-less evaluator. Reuses the shared `claude -p` transport (same reasoning as

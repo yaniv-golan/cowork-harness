@@ -14,11 +14,11 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { writeSync } from "node:fs";
 import { basename } from "node:path";
-import { packageEvidence } from "../src/critique/package-evidence.js";
-import type { SkillMdStatus } from "../src/critique/package-evidence.js";
-import { snapshotTurnBoundary } from "../src/critique/evidence.js";
-import { runCritique, DEFAULT_EVALUATOR_MODEL } from "../src/critique/evaluator.js";
-import type { CritiqueItem } from "../src/critique/evidence.js";
+import { packageEvidence } from "./lib/critique/package-evidence.js";
+import type { SkillMdStatus } from "./lib/critique/package-evidence.js";
+import { snapshotTurnBoundary } from "./lib/critique/evidence.js";
+import { runCritique, DEFAULT_EVALUATOR_MODEL } from "./lib/critique/evaluator.js";
+import type { CritiqueItem } from "./lib/critique/evidence.js";
 
 const REFLECTION_PROMPT_VERSION = 1;
 

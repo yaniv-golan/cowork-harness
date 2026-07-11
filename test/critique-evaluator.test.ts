@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { runCritique, buildPass1Prompt, buildPass2Prompt, DEFAULT_EVALUATOR_MODEL } from "../src/critique/evaluator";
+import { runCritique, buildPass1Prompt, buildPass2Prompt, DEFAULT_EVALUATOR_MODEL } from "../scripts/lib/critique/evaluator";
 import type { Complete } from "../src/decide/decider";
 
 const PKG = `## Final answer (turn 1)
