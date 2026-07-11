@@ -59,6 +59,21 @@ describe("_findScenarioOnDisk — on-disk scenario probe", () => {
     writeFileSync(scenarioPath, "prompt: hi\n");
     expect(_findScenarioOnDisk(cassettePath, "my-scenario")).toBe(scenarioPath);
   });
+
+  it("returns null for a nameless (undefined) scenario name, and does NOT probe the slugForPath fallback", () => {
+    // A lenient (nameless) cassette yields scenario.name === undefined. The guard must live HERE
+    // (undefined → "no derivable path"), NOT in slugForPath — whose `|| "scenario"` fallback would
+    // otherwise make a nameless cassette silently probe/drift-compare against an unrelated
+    // scenarios/scenario.yaml sibling (a false-red worse than the original crash).
+    const d = mkdtempSync(join(tmpdir(), "cwh-find-nameless-"));
+    mkdirSync(join(d, "cassettes"), { recursive: true });
+    mkdirSync(join(d, "scenarios"), { recursive: true });
+    const cassettePath = join(d, "cassettes", "c.cassette.json");
+    writeFileSync(cassettePath, "{}");
+    // a decoy that the misplaced slugForPath("scenario") fallback WOULD have matched
+    writeFileSync(join(d, "scenarios", "scenario.yaml"), "prompt: decoy\n");
+    expect(_findScenarioOnDisk(cassettePath, undefined)).toBeNull();
+  });
 });
 
 describe("_resolveRerecordSource prefers the persisted scenarioSource over the name lookup", () => {
@@ -89,6 +104,14 @@ describe("_resolveRerecordSource prefers the persisted scenarioSource over the n
     expect(r.via).toBe("name-lookup");
     expect(r.persistedMissing).toBe("deleted.yaml");
     expect(r.path).toBe(scenarioPath);
+  });
+
+  it("a nameless cassette (no scenarioSource, no name) resolves to {path:null, via:'none'} without throwing", () => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-nameless-src-"));
+    const cassettePath = join(d, "c.cassette.json");
+    writeFileSync(cassettePath, "{}");
+    const r = _resolveRerecordSource(cassettePath, { scenario: {} });
+    expect(r).toEqual({ path: null, via: "none" });
   });
 
   it("with no persisted source, uses the name lookup (back-compat, older cassettes)", () => {

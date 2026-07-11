@@ -1670,7 +1670,7 @@ export function artifactJsonTargetsTruncated(scenario: Scenario, workRoot: strin
  *  warning when a persisted source has gone missing). Exported for unit tests; not part of the public API. */
 export function _resolveRerecordSource(
   cassettePath: string,
-  cassette: Pick<Cassette, "scenarioSource"> & { scenario: { name: string } },
+  cassette: Pick<Cassette, "scenarioSource"> & { scenario: { name?: string } },
 ): { path: string | null; via: "persisted" | "name-lookup" | "none"; persistedMissing?: string } {
   if (cassette.scenarioSource) {
     const persisted = resolve(dirname(cassettePath), cassette.scenarioSource);
@@ -1683,7 +1683,8 @@ export function _resolveRerecordSource(
   return { path: fallback, via: fallback ? "name-lookup" : "none" };
 }
 
-export function _findScenarioOnDisk(cassettePath: string, scenarioName: string): string | null {
+export function _findScenarioOnDisk(cassettePath: string, scenarioName: string | undefined): string | null {
+  if (!scenarioName) return null; // a lenient (nameless) cassette has no derivable scenario path
   const safeName = slugForPath(scenarioName);
   const cassetteDir = dirname(cassettePath);
   const candidates = [
@@ -3261,6 +3262,15 @@ export async function cmdVerifyCassettes(args: string[]) {
   }
   const files = resolved.files;
   const results = files.map((f) => {
+    try {
+      return verifyOneCassette(f);
+    } catch (e) {
+      // A per-file crash must be TALLIED as that file's error, never abort the batch (results:[] reads
+      // as "nothing to report" — a false-green by abort). Mirrors cmdReplay's per-file catch.
+      return { file: f, findings: [], staleness: [], notes: [], version: [], scenarioDrift: [], error: (e as Error)?.message ?? String(e) };
+    }
+  });
+  function verifyOneCassette(f: string) {
     const rc = readCassette(f);
     if ("error" in rc) return { file: f, findings: [], staleness: [], notes: [], version: [], scenarioDrift: [], error: rc.error };
     const findings = doPrivacy ? scanCassette(rc.cassette, allow) : [];
@@ -3322,7 +3332,7 @@ export async function cmdVerifyCassettes(args: string[]) {
           ]
         : [];
     return { file: f, findings, staleness, notes, version, scenarioDrift, error: undefined as string | undefined };
-  });
+  }
   // --margins (diagnostic; never affects the gate): replay each cassette that carries count-bound asserts
   // and report recorded-vs-budget + margin. A per-cassette replay cost the base command doesn't have.
   let margins: { file: string; rows: MarginRow[]; error?: string }[] | undefined;
