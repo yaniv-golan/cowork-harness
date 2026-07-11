@@ -60,7 +60,7 @@ RUN pip3 install --break-system-packages --no-cache-dir \
       pdf2image==1.17.0 img2pdf==0.6.3 pypdfium2==5.9.0 playa-pdf==1.1.0 \
       matplotlib==3.10.9 seaborn==0.13.2 pillow==12.2.0 reportlab==4.5.1 \
       lxml==6.1.1 beautifulsoup4==4.15.0 markdownify==1.2.2 marko==2.2.3 mistune==3.2.1 \
-      tabulate==0.10.0 jsonschema==3.2.0 python-dotenv==1.2.2 requests==2.34.2 \
+      tabulate==0.10.0 jsonschema==3.2.0 python-dotenv==1.2.2 pyyaml==6.0.3 requests==2.34.2 \
       graphviz==0.21 sympy==1.14.0 python-magic==0.4.24 Markdown==3.10.2 Jinja2==3.0.3
 
 # --- Node doc-gen globals (the real rootfs installs these into a shared global prefix on NODE_PATH;
