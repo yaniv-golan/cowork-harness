@@ -111,6 +111,7 @@ const full: RunResult = {
     fileSigsOmitted: false,
     mode: "git",
     agentScope: "skill",
+    promptAssetsHash: "a1b2c3d4e5f60718",
   },
   outDir: "/runs/example/local_abc",
   workDir: "/runs/example/local_abc/work/session/mnt",
