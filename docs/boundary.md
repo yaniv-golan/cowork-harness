@@ -60,6 +60,25 @@ Because the native file tools run with no OS sandbox, hostloop's filesystem boun
 
 **`cowork`** is not a sandbox of its own: it resolves at run time to either `hostloop` or `container` — the same choice real Cowork makes, read from the synced baseline's GrowthBook host-loop gate (`1143815894`). (An org policy `requireCoworkFullVmSandbox` forces the VM loop and *overrides* the gate.) The two resolved tiers do **not** share one boundary model: `container` seals the agent's file tools inside the container wall; `hostloop` runs them natively on the host under the software path-containment gate described above. A scenario authored with `fidelity: cowork` should not assume which one it lands on for filesystem-boundary assertions — pin `hostloop`/`container` explicitly if the distinction matters to the test.
 
+### Where a sub-agent (or the main agent) writes deliverables — tier-qualified, no single literal form
+
+The path a dispatched sub-agent (or the main loop) should write outputs to differs by tier — a skill
+that hardcodes one relative form is only portable to the tier it was authored against:
+
+- **`hostloop`**: the agent's file-tool cwd IS the host outputs dir, so cwd-relative `artifacts/<...>`
+  is the stable contract. `/sessions/...` is **denied unconditionally** by the path gate above — it
+  doesn't exist on this tier's host filesystem.
+- **`container` / `microvm`**: the agent cwd is `/sessions/<id>`, there is no path gate, and
+  `/sessions/...` is a **valid** path there. The outputs mount is `mnt/outputs`, so the deliverable
+  path is cwd-relative `mnt/outputs/artifacts/<...>` or absolute
+  `/sessions/<id>/mnt/outputs/artifacts/<...>`. A bare `artifacts/<...>` on this tier resolves to
+  `/sessions/<id>/artifacts` — sandbox scratch outside the outputs mount, not denied but silently
+  non-deliverable.
+
+See [subagents.md](./subagents.md) for the full capability/path matrix (uploads, plugin content,
+spooled tool results, connected folders, delete semantics, `${CLAUDE_PLUGIN_ROOT}`) and the sub-agent
+tool-composition rules that sit alongside this path contract.
+
 ## Verifying the boundary holds
 
 The harness validates its **own** faithfulness — don't take our word for it:

@@ -330,6 +330,13 @@ if *every* key passes (don't rely on the first; keep one concern per item unless
 
 `expect_denied: [host, …]` is shorthand that adds an `egress_denied` assertion per host.
 
+> **Authoring `subagent_*` assertions.** `subagent_tool_used`/`subagent_tool_absent`/`subagent_dispatched`
+> and the type-less-dispatch trap they guard against are covered in full in
+> [subagents.md](./subagents.md): the tool-composition rules that decide what a dispatched child can
+> reach, and the caveat that `subagent_tool_absent` proves only "no matching *attempt*," not capability
+> absence — plus the case-sensitive glob gap between host-loop's `mcp__workspace__*` and the VM tiers'
+> literal `Bash` that a cross-tier "shell-free" policy needs to cover explicitly.
+
 ### Declaring required capabilities (`requires_capabilities`)
 
 A scenario-level `requires_capabilities: [<family>, …]` declares the capability families the skill's core
