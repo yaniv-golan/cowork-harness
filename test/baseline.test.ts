@@ -1,9 +1,17 @@
 import { describe, it, expect, vi, afterEach, afterAll } from "vitest";
 import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { gzipSync } from "node:zlib";
-import { compareBaselineVersions, loadBaseline, resolveAgentBinary, resolveMounts, sha256File } from "../src/baseline.js";
+import {
+  compareBaselineVersions,
+  loadBaseline,
+  resolveAgentBinary,
+  resolveHostAgentBinary,
+  classifyNativeStagingDrift,
+  resolveMounts,
+  sha256File,
+} from "../src/baseline.js";
 import { createHash } from "node:crypto";
 import type { PlatformBaseline } from "../src/types.js";
 import {
@@ -270,6 +278,108 @@ describe("resolveAgentBinary newest-sibling fallback", () => {
     const baseline = baselineWith(join(vmRoot, "2.1.999", "claude"));
 
     expect(() => resolveAgentBinary(baseline)).toThrow(/Staged agent binary not found/);
+  });
+});
+
+// A mid-session Claude Desktop auto-update prunes the pinned NATIVE binary version and stages a newer
+// one. The native resolver has NO sha256 pin (unlike the ELF), so a same-major.minor PATCH bump is
+// safe to auto-tolerate; a major/minor drift keeps the existing env-gated-fallback-or-throw behavior.
+describe("resolveHostAgentBinary / classifyNativeStagingDrift — native staging-drift tolerance", () => {
+  const NATIVE_LEAF = "claude.app/Contents/MacOS/claude";
+  const nativeBaselineWith = (nativeStagedPath: string) => ({ agentBinary: { nativeStagedPath } }) as unknown as PlatformBaseline;
+
+  // Stage claude-code/<ver>/claude.app/Contents/MacOS/claude binaries under a temp root.
+  const stageNative = (versions: string[]) => {
+    const root = mkdtempSync(join(tmpdir(), "cowork-native-"));
+    const nativeRoot = join(root, "claude-code");
+    for (const v of versions) {
+      const leafDir = join(nativeRoot, v, "claude.app", "Contents", "MacOS");
+      mkdirSync(leafDir, { recursive: true });
+      writeFileSync(join(leafDir, "claude"), "#!/bin/sh\n");
+    }
+    return nativeRoot;
+  };
+  const nativePath = (nativeRoot: string, v: string) => join(nativeRoot, v, NATIVE_LEAF);
+
+  afterEach(() => {
+    delete process.env.COWORK_HOST_AGENT_BINARY;
+    delete process.env.COWORK_HARNESS_ALLOW_AGENT_FALLBACK;
+    vi.restoreAllMocks();
+  });
+
+  it("exact pinned path present → returns it, no note, kind 'exact'", () => {
+    const nativeRoot = stageNative(["2.1.205"]);
+    const staged = nativePath(nativeRoot, "2.1.205");
+    const baseline = nativeBaselineWith(staged);
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+
+    expect(resolveHostAgentBinary(baseline)).toBe(staged);
+    expect(stderr).not.toHaveBeenCalled();
+    expect(classifyNativeStagingDrift(baseline)).toMatchObject({ kind: "exact", pinned: "2.1.205", found: "2.1.205" });
+  });
+
+  it("pinned pruned, only a PATCH-newer sibling present → auto-tolerated: returns the sibling + a stderr note, NO env var needed", () => {
+    const nativeRoot = stageNative(["2.1.208"]); // pin 2.1.205 is gone; only a patch-newer sibling remains
+    const pinnedPath = nativePath(nativeRoot, "2.1.205");
+    const baseline = nativeBaselineWith(pinnedPath);
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+
+    const drift = classifyNativeStagingDrift(baseline);
+    expect(drift).toMatchObject({ kind: "patch", pinned: "2.1.205", found: "2.1.208" });
+
+    const resolved = resolveHostAgentBinary(baseline);
+    expect(resolved).toBe(nativePath(nativeRoot, "2.1.208"));
+    expect(stderr).toHaveBeenCalled();
+    const note = stderr.mock.calls.map((c) => String(c[0])).join("");
+    expect(note).toMatch(/2\.1\.205/);
+    expect(note).toMatch(/2\.1\.208/);
+    expect(note).not.toMatch(/COWORK_HARNESS_ALLOW_AGENT_FALLBACK/); // no env-var mention — it's not required here
+  });
+
+  it("pinned pruned, only a MINOR/MAJOR-different sibling → hard throws without the env var; falls back WITH it", () => {
+    const nativeRoot = stageNative(["2.2.0"]); // pin 2.1.205 is gone; sibling differs in minor
+    const pinnedPath = nativePath(nativeRoot, "2.1.205");
+    const baseline = nativeBaselineWith(pinnedPath);
+
+    expect(classifyNativeStagingDrift(baseline)).toMatchObject({ kind: "major-minor", pinned: "2.1.205", found: "2.2.0" });
+    expect(() => resolveHostAgentBinary(baseline)).toThrow("COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1");
+
+    process.env.COWORK_HARNESS_ALLOW_AGENT_FALLBACK = "1";
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    expect(resolveHostAgentBinary(baseline)).toBe(nativePath(nativeRoot, "2.2.0"));
+    expect(stderr).toHaveBeenCalled();
+  });
+
+  it("no sibling at all → kind 'missing', hard throws with the stage-it remedy", () => {
+    const nativeRoot = stageNative([]); // claude-code exists but is empty
+    const baseline = nativeBaselineWith(nativePath(nativeRoot, "2.1.205"));
+
+    expect(classifyNativeStagingDrift(baseline)).toMatchObject({ kind: "missing" });
+    expect(() => resolveHostAgentBinary(baseline)).toThrow(/Staged NATIVE agent binary not found/);
+  });
+
+  it("COWORK_HOST_AGENT_BINARY override keeps top precedence over both the exact path and any drift tolerance", () => {
+    const nativeRoot = stageNative(["2.1.205", "2.1.208"]);
+    const override = nativePath(nativeRoot, "2.1.205");
+    process.env.COWORK_HOST_AGENT_BINARY = override;
+    const baseline = nativeBaselineWith(nativePath(nativeRoot, "2.1.999")); // pinned path irrelevant when overridden
+
+    expect(resolveHostAgentBinary(baseline)).toBe(resolve(override));
+  });
+
+  // Regression guard: patch tolerance is a NATIVE-only carve-out. The sha256-pinned ELF resolver
+  // (resolveAgentBinary) must keep its existing strict behavior — a patch-only sibling must NOT be
+  // silently accepted without the opt-in env var, or the sha hard-fail would be quietly weakened.
+  it("ELF resolver regression guard: resolveAgentBinary still hard-throws on a patch-only sibling with NO env var", () => {
+    const root = mkdtempSync(join(tmpdir(), "cowork-vm-patch-"));
+    const vmRoot = join(root, "claude-code-vm");
+    for (const v of ["2.1.208"]) {
+      mkdirSync(join(vmRoot, v), { recursive: true });
+      writeFileSync(join(vmRoot, v, "claude"), "#!/bin/sh\n");
+    }
+    const elfBaseline = { agentBinary: { stagedPath: join(vmRoot, "2.1.205", "claude") } } as unknown as PlatformBaseline;
+
+    expect(() => resolveAgentBinary(elfBaseline)).toThrow("COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1");
   });
 });
 

@@ -3,7 +3,7 @@ import { existsSync, writeSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "../cli-args.js";
-import { resolveAgentBinary, resolveHostAgentBinary, loadBaseline, sha256File } from "../baseline.js";
+import { resolveAgentBinary, resolveHostAgentBinary, classifyNativeStagingDrift, loadBaseline, sha256File } from "../baseline.js";
 import { limaPath, vmStatus, instanceName } from "../runtime/lima.js";
 import { pkgVersion, fail, isJsonOutput } from "./envelope.js";
 
@@ -45,7 +45,9 @@ export interface DoctorProbe {
   agentBinary(): { ok: true; path: string } | { ok: false; error: string };
   // Native macOS agent binary that `hostloop`/`cowork` spawn directly (distinct from the Linux ELF
   // `agentBinary()` resolves — see resolveHostAgentBinary in baseline.ts). Not meaningful for other tiers.
-  hostAgentBinary(): { ok: true; path: string } | { ok: false; error: string };
+  // `note` is set when the resolved path came from a PATCH-tolerated staging-drift substitution (see
+  // `classifyNativeStagingDrift`) — surfaced so the substitution is visible, not silent.
+  hostAgentBinary(): { ok: true; path: string; note?: string } | { ok: false; error: string };
   hasToken(): boolean;
   // macOS only: is there a Claude Code OAuth credential in the login Keychain? Used purely to improve the
   // "no token" remedy — the in-Docker agent can't read the Keychain, so doctor points the user at .env.
@@ -111,7 +113,13 @@ export const realProbe: DoctorProbe = {
   },
   hostAgentBinary() {
     try {
-      return { ok: true, path: resolveHostAgentBinary(loadBaseline("latest")) };
+      const baseline = loadBaseline("latest");
+      const path = resolveHostAgentBinary(baseline);
+      // Same classifier the resolver used internally — so doctor's note can never disagree with what
+      // resolveHostAgentBinary actually did.
+      const drift = classifyNativeStagingDrift(baseline);
+      const note = drift.kind === "patch" ? `patch-tolerated: pinned ${drift.pinned}, using ${drift.found}` : undefined;
+      return { ok: true, path, note };
     } catch (e) {
       return { ok: false, error: (e as Error).message };
     }
@@ -284,11 +292,14 @@ export function runDoctorChecks(tier: Tier, probe: DoctorProbe = realProbe): Doc
 
     if (tier === "hostloop" || tier === "cowork") {
       const hostAgent = probe.hostAgentBinary();
+      // A patch-tolerated staging-drift substitution stays `ok` (it's safe — the native binary has no
+      // sha256 pin), but the note names the pinned-vs-found versions so the substitution is visible.
+      const note = hostAgent.ok && hostAgent.note ? `  [${hostAgent.note}]` : "";
       checks.push({
         id: "hostAgent",
         title: "Staged native agent binary (hostloop)",
         status: hostAgent.ok ? "ok" : "fail",
-        detail: hostAgent.ok ? hostAgent.path : hostAgent.error.split("\n")[0],
+        detail: hostAgent.ok ? hostAgent.path + note : hostAgent.error.split("\n")[0],
         remedy: hostAgent.ok
           ? undefined
           : "open Claude Cowork once to stage the native macOS binary, or set COWORK_HOST_AGENT_BINARY=<path>",

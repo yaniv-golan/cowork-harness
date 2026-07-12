@@ -76,6 +76,16 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **The staged NATIVE agent binary (hostloop/cowork tiers) now tolerates a patch-level staging drift by
+  default, instead of forcing `COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1`.** A mid-session Claude Desktop
+  auto-update prunes the pinned native version dir and stages a newer one; since the native binary
+  carries no sha256 pin, a same-major.minor patch bump is now auto-accepted (with a loud stderr note
+  naming the pinned and substituted versions) rather than hard-failing. A major/minor drift keeps the
+  existing behavior — env-gated fallback or a hard throw. `doctor`'s native-binary check surfaces the
+  same substitution as an `ok` status with a version-substitution note, sharing one classifier with the
+  resolver so the two can't disagree. The sha256-pinned VM ELF resolver is unchanged — it keeps its
+  strict exact-or-env-gated-or-throw behavior on a patch-only sibling, verified by a regression test.
+
 - **`lint-skill --strict` no longer fails on an INFO-only result.** The `subagent_type` ladder
   (`subagent-type-unresolvable` / `-not-found-in-plugin` / `-unknown`) is always INFO by design — there
   is no harness registry of built-in agent types to disprove an unknown value against — but `--strict`
