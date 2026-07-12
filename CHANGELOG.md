@@ -50,6 +50,17 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed (breaking, pre-1.0)
 
+- **`lint-skill`'s `subagent-type-not-found-in-plugin` finding is now WARN, not INFO** — so
+  `lint-skill --strict` newly gates on it. This is the one `subagent_type` outcome that's a *provable*
+  typo: a `<this-plugin>:<agent>` value whose prefix names the SKILL.md's own enclosing plugin, where
+  that plugin's `agents/*.md` was fully enumerated and doesn't contain the agent — the namespace prefix
+  already commits the value to this plugin, so a miss can never be another binary's built-in hiding
+  from static analysis. The other two `subagent_type` outcomes stay INFO, unchanged, because they
+  genuinely can't be disproven: `subagent-type-unresolvable` (a `<other-plugin>:<agent>` — belongs to
+  a plugin this linter didn't scan) and `subagent-type-unknown` (a bare value with no in-plugin match —
+  may be an agent-binary built-in). A `lint-skill --strict` run that previously passed clean may now
+  fail if it carries this exact typo shape; fix the agent name (or add the missing `agents/<agent>.md`)
+  to restore a clean `--strict` run.
 - **`analyze-skill <dir> --strict` may newly fail where it passed clean before**, if `references/`/
   `agents/` carries a `/sessions`-addressed teaching example that the old SKILL.md-only scan never looked
   at. Annotate the example with `analyze-skill: ignore-next-line` (or an `ignore-start`/`ignore-end`

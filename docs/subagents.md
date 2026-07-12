@@ -233,20 +233,34 @@ agent frontmatter:
   enclosing plugin by walking up from the SKILL.md to the nearest ancestor with a
   `.claude-plugin/plugin.json`/`plugin.json`, and classifies each value:
   - resolves within that plugin's `agents/`, or is literally `general-purpose` → clean, no finding;
+  - a `<this-plugin>:<agent>` (colon-qualified, prefix EQUALS this plugin's own name) whose `agent`
+    is missing from that plugin's fully-enumerated `agents/*.md` → **`subagent-type-not-found-in-plugin`**
+    — "names this plugin but that agent doesn't exist — likely a typo";
   - a `<other-plugin>:<agent>` (colon-qualified, prefix isn't this plugin's name) →
     **`subagent-type-unresolvable`** — "belongs to another plugin, can't confirm it resolves from
     here";
   - any other unresolved value → **`subagent-type-unknown`** — "not defined in this plugin and not
     the `general-purpose` built-in, can't confirm statically (may be an agent-binary built-in)".
 
-**Both findings are INFO, never WARN — by design, not an oversight.** There is no harness registry of
-built-in agent types (`Explore`, teammate-style built-ins, etc.) to disprove an unresolved bare value
+**`subagent-type-not-found-in-plugin` is WARN — it's a provable typo, not an unconfirmable unknown.**
+The namespace prefix already commits the value to THIS plugin, and the plugin's agent set was fully
+enumerated from `agents/*.md`, so a miss there can never be another binary's built-in agent hiding
+from static analysis — it's simply wrong. Being provable, it's promoted out of INFO so
+`lint-skill --strict` gates on it (exit 1).
+
+**The other two, `subagent-type-unresolvable` and `subagent-type-unknown`, stay INFO, never WARN — by
+design, not an oversight.** There is no harness registry of built-in agent types (`Explore`,
+teammate-style built-ins, etc.) to disprove an unresolved bare value or a cross-plugin reference
 against — the built-in set is agent-binary-version-dependent and the harness deliberately does not
 ship a committed list of it (it would go stale and either false-warn a real built-in or false-clear a
-typo). So an unresolved `subagent_type` is always *surfaced*, never *failed* — `lint-skill` only
-exits non-zero on it under `--strict`, matching the WARN-class footguns above. If you want a stronger
-guarantee for a specific agent, name it as `general-purpose` explicitly or ship it under the same
-plugin's `agents/` so it resolves in-plugin.
+typo). So those two are always *surfaced*, never *failed*, even under `--strict`. If you want a
+stronger guarantee for a specific agent, name it as `general-purpose` explicitly or ship it under the
+same plugin's `agents/` so it resolves in-plugin.
+
+**Run `lint-skill --strict` in CI, not plain `lint-skill`.** Plain `lint-skill` is advisory-only —
+it prints every finding (WARN and INFO alike) but exits 0. `--strict` is what turns the two
+host-loop-footgun WARNs and the provable `subagent-type-not-found-in-plugin` WARN into an actual
+gate; the naive first-reach invocation without `--strict` is a silent rubber-stamp.
 
 ## Capability / path matrix
 

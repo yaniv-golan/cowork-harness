@@ -84,6 +84,10 @@ for the in-VM agent — while leaving correct host-side `Read`/`Grep` references
 heuristic v1 (see its `--help` for the documented limits), so treat a clean result as "no *obvious*
 footgun," not a proof.
 
+**Plain `lint-skill` (no `--strict`) is advisory-only** — it prints these WARNs but exits 0. CI should
+run `lint-skill --strict path/to/skill/` to actually gate on them (this also gates on the provable
+in-plugin `subagent_type` typo — see [subagents.md](./subagents.md#static-subagent_type-resolution-resolve-agent-types--lint-skill)).
+
 - **A third WARN, `guard-pattern-mismatch`:** the mount-discovery self-heal pattern above ([recovering
   a lost `${CLAUDE_PLUGIN_ROOT}`](#in-vm-bash--the-token-is-not-reliable)) recovers the mount by
   `find`-ing it at runtime by a `-path` glob naming the skill/plugin — but a copy-pasted glob that
