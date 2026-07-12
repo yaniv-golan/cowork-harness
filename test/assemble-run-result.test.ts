@@ -63,6 +63,7 @@ function fullyExplicitFixture(): CompleteRunResult {
     mcpErrors: undefined,
     hookEvents: undefined,
     fileToolAttempts: undefined,
+    pathDenials: undefined,
     presentedFiles: undefined,
     preRunPaths: undefined,
     preRunLinkAware: undefined,
@@ -124,6 +125,14 @@ describe("assembleRunResult", () => {
     expect(out.fileToolAttempts).toEqual([
       { tool: "Read", paths: { file_path: "outputs/a.md" }, gatePath: "outputs/a.md", origin: "main", toolUseId: "t1" },
     ]);
+  });
+
+  it("passes pathDenials through unchanged", () => {
+    const out = assembleRunResult({
+      ...fullyExplicitFixture(),
+      pathDenials: [{ source: "can_use_tool", tool: "Edit", path: "/sessions/x", decision: "deny", toolUseId: "t1" }],
+    });
+    expect(out.pathDenials).toEqual([{ source: "can_use_tool", tool: "Edit", path: "/sessions/x", decision: "deny", toolUseId: "t1" }]);
   });
 
   it("passes mode through unchanged", () => {

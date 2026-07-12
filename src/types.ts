@@ -1155,6 +1155,24 @@ export interface RunResult {
     parentToolUseId?: string;
     toolUseId?: string;
   }>;
+  /** DECISION-level path-denial telemetry from all THREE producers that can deny a gated file-tool call
+   *  on a path grounds — the PreToolUse path gate itself, a denied `can_use_tool` ask on a gated file
+   *  tool with a path, and a pre-ask `permission_denied` correlated to a recorded gated attempt. Each
+   *  producer independently filters to path-relevant denials (see RunRecord.pathDenials for the exact
+   *  filter each applies). Undefined = evidence unavailable (an older result, or a replay whose cassette
+   *  lacks `controlOut` — the can_use_tool source is reconstructible ONLY from controlOut); [] = captured,
+   *  no path denials. */
+  pathDenials?: Array<{
+    source: "pretooluse" | "can_use_tool" | "permission_denied";
+    tool: string;
+    path?: string;
+    callbackId?: string;
+    decisionReasonType?: string;
+    agentId?: string;
+    decision: "deny";
+    reason?: string;
+    toolUseId?: string;
+  }>;
   /** Files delivered via the cowork `present_files` tool, in call order — one entry per file the agent
    *  presented, derived from pairing each `mcp__cowork__present_files` tool_use with its own
    *  tool_result. `promoted` = the file was in the scratchpad and landed under `mnt/outputs`; `leaked` =

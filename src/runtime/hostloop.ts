@@ -24,7 +24,10 @@ import { checkHostLoopPathGate, PATH_GATE_TOOL_NAMES, type HostLoopPathGateConfi
 import type { HookBundle } from "../agent/session.js";
 import { stripComments } from "../prompt.js";
 
-const HOSTLOOP_PATH_GATE_ID = "hostloop-path-gate";
+/** The path-gate's own PreToolUse hook callback id — exported so RunRecord.pathDenials' pretooluse
+ *  producer (run.ts) and its replay reconstruction (cassette.ts) can filter to THIS gate's own
+ *  decisions and exclude every other custom-hook callback the same `hook_callback` mechanism fires. */
+export const HOSTLOOP_PATH_GATE_ID = "hostloop-path-gate";
 
 /**
  * Pure builder for the hostloop native process's env: `hostNativeSpawnEnv`'s contract-layer output

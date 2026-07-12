@@ -15,10 +15,22 @@ import {
 import { ProvenanceTracker } from "../hostloop/provenance.js";
 import { normalizeHost, validateBareDomain } from "../boundary-paths.js";
 import { PATH_GATE_TOOL_NAMES } from "../hostloop/pretooluse-path-hook.js";
+import { HOSTLOOP_PATH_GATE_ID } from "../runtime/hostloop.js";
 
 /** The production-gated file-tool surface (path-gate tools + MultiEdit, which the path hook's own
- *  matcher also covers — see runtime/hostloop.ts's PreToolUse matcher). */
-const FILE_ATTEMPT_TOOLS = new Set<string>([...PATH_GATE_TOOL_NAMES, "MultiEdit"]);
+ *  matcher also covers — see runtime/hostloop.ts's PreToolUse matcher). Exported so the replay
+ *  reconstruction (cassette.ts) can apply the SAME can_use_tool pathDenials filter directly from the
+ *  frozen request + controlOut pairing, without duplicating the tool set. */
+export const FILE_ATTEMPT_TOOLS = new Set<string>([...PATH_GATE_TOOL_NAMES, "MultiEdit"]);
+
+/** Extract the DENIED path from a captured `{file_path?, path?}`-shaped input: whichever key is a
+ *  `/sessions`-prefixed value (what the VM path-gate actually flags), else the first present key (the
+ *  gate's own scan order — file_path before path). Shared by the can_use_tool producer (below) and its
+ *  replay reconstruction (cassette.ts) so both pick the same path from an identical input shape. */
+export function deniedPathFrom(inp: Record<string, unknown>): string | undefined {
+  const vals = ["file_path", "path"].map((k) => inp[k]).filter((v): v is string => typeof v === "string");
+  return vals.find((v) => v === "/sessions" || v.startsWith("/sessions/")) ?? vals[0];
+}
 
 /** Bound a captured decision input so a large tool payload can't bloat the run record. Objects pass
  *  through structurally (consumers read fields like `.command`); only an over-cap JSON serialization is
@@ -241,6 +253,23 @@ export interface RunRecord {
     parentToolUseId?: string;
     toolUseId?: string;
   }>;
+  /** DECISION-level path-denial telemetry from all THREE producers that can deny a gated file-tool call
+   *  on a path grounds: the PreToolUse path gate's own hook decision, a denied `can_use_tool` ask on a
+   *  gated file tool with a path, and a pre-ask `permission_denied` stream event correlated (by
+   *  tool_use_id) to a recorded gated attempt. Each producer is independently FILTERED to path-relevant
+   *  denials — see the push sites for the exact filter each one applies (custom-hook callbacks / non-
+   *  gated tools / pathless or uncorrelated denies are never ingested). */
+  pathDenials: Array<{
+    source: "pretooluse" | "can_use_tool" | "permission_denied";
+    tool: string;
+    path?: string;
+    callbackId?: string; // pretooluse only
+    decisionReasonType?: string;
+    agentId?: string; // the binary's own sub-agent attribution (present only inside sub-agents)
+    decision: "deny";
+    reason?: string;
+    toolUseId?: string;
+  }>;
   // Files delivered via the cowork `present_files` tool, in call order — derived from each
   // `mcp__cowork__present_files` tool_use (the input file list) paired with its own tool_result (the
   // returned path per file, in the same order). CONTENT-CLASS: both halves live in the ordinary
@@ -376,6 +405,7 @@ export class Run {
       mcpErrors: [],
       hookEvents: [],
       fileToolAttempts: [],
+      pathDenials: [],
       presentedFiles: [],
       webSearches: [],
       infraErrors: [],
@@ -740,6 +770,30 @@ export class Run {
             break;
           case "system_event":
             this.rec.contextEvents.push({ subtype: ev.subtype, data: ev.data });
+            // pathDenials producer (3): permission_denied is PRE-ASK ONLY, carries no structured path,
+            // and is NOT necessarily path-related (a real production permission_denied denied
+            // `present_files`) — so it is ingested ONLY when correlated (by tool_use_id) to a recorded
+            // gated-file-tool attempt that itself carries a path. Never ingest every permission_denied.
+            if (ev.subtype === "permission_denied") {
+              const d = ev.data as Record<string, unknown>;
+              const attempt = this.rec.fileToolAttempts.find(
+                (a) => a.toolUseId !== undefined && a.toolUseId === d.tool_use_id && a.gatePath !== undefined,
+              );
+              if (attempt)
+                this.rec.pathDenials.push({
+                  source: "permission_denied",
+                  tool: String(d.tool_name ?? attempt.tool),
+                  path: attempt.gatePath,
+                  callbackId: undefined,
+                  decisionReasonType: typeof d.decision_reason_type === "string" ? d.decision_reason_type : undefined,
+                  agentId: typeof d.agent_id === "string" ? d.agent_id : undefined,
+                  decision: "deny",
+                  // the observed permission_denied event carries the human text in `message`, not always
+                  // `decision_reason` (audit.jsonl shows `message`) — fall back to it.
+                  reason: typeof d.decision_reason === "string" ? d.decision_reason : typeof d.message === "string" ? d.message : undefined,
+                  toolUseId: String(d.tool_use_id),
+                });
+            }
             break;
           case "infra_error":
             // An infrastructure crash contaminates the run's evidence — collect it as a both-lane hard
@@ -752,6 +806,27 @@ export class Run {
             break;
           case "hook_event":
             this.rec.hookEvents.push({ callbackId: ev.callbackId, decision: ev.decision, reason: ev.reason, tool: ev.tool });
+            // pathDenials producer (1): INGEST ONLY the path gate's own callbackId — hookEventFrom
+            // handles EVERY hook callback (the built-in Task hook + any custom bundle), so an unfiltered
+            // ingestion here would pollute the channel with unrelated custom-hook denials.
+            if (ev.callbackId === HOSTLOOP_PATH_GATE_ID && ev.decision === "block") {
+              const fp = ev.paths?.file_path;
+              const pp = ev.paths?.path;
+              // the DENIED path is whichever key the VM guard flagged — a /sessions-prefixed value if
+              // present, else the first non-empty key (matching the gate's own scan order).
+              const vmHit = [fp, pp].find((v) => v !== undefined && (v === "/sessions" || v.startsWith("/sessions/")));
+              this.rec.pathDenials.push({
+                source: "pretooluse",
+                tool: ev.tool ?? "?",
+                path: vmHit ?? fp ?? pp,
+                callbackId: ev.callbackId,
+                decisionReasonType: undefined,
+                agentId: ev.agentId,
+                decision: "deny",
+                reason: ev.reason,
+                toolUseId: ev.toolUseId,
+              });
+            }
             break;
         }
       }
@@ -1050,6 +1125,24 @@ export class Run {
         warn(
           `::warning:: [permission] "${req.tool}" auto-allowed by cowork parity (unscripted, off-registry) — real Cowork would BLOCK for the user. Not a faithful pass; pin with --answer or set permission_parity: strict.\n`,
         );
+      }
+      // pathDenials producer (2): a DENIED can_use_tool ask on a gated file tool with a path attempt —
+      // captures EVERY deny regardless of which decider produced it (scripted, parity default, the
+      // hostloop gate, or a human). Pathless or non-gated denies are never ingested.
+      if (behavior === "deny" && FILE_ATTEMPT_TOOLS.has(req.tool)) {
+        const p = deniedPathFrom(req.input);
+        if (p !== undefined)
+          this.rec.pathDenials.push({
+            source: "can_use_tool",
+            tool: req.tool,
+            path: p,
+            callbackId: undefined,
+            decisionReasonType: req.decisionReasonType,
+            agentId: req.agentId,
+            decision: "deny",
+            reason: resp.kind === "permission" ? resp.message : undefined,
+            toolUseId: req.toolUseId,
+          });
       }
     } else {
       const outcome = resp.kind === "dialog" ? resp.behavior : resp.kind === "elicit" ? resp.action : "?";

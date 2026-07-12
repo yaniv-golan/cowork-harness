@@ -7,7 +7,8 @@ import { parseScenarioFile } from "../src/run/execute.js";
 import { parseEgressLine } from "../src/egress/sidecar.js";
 import { Run, evidenceErrorsForResult } from "../src/run/run.js";
 import { ScriptedDecider } from "../src/decide/decider.js";
-import type { AgentEvent, AgentSession, DecisionResponse, DecisionDelivery } from "../src/agent/session.js";
+import { ABSTAIN, type Decider } from "../src/decide/decider.js";
+import type { AgentEvent, AgentSession, DecisionRequest, DecisionResponse, DecisionDelivery } from "../src/agent/session.js";
 
 /** Minimal scripted AgentSession (mirrors the MockSession in run-decisions.test.ts) for driving a Run. */
 class MockSession implements AgentSession {
@@ -312,5 +313,156 @@ describe("fileToolAttempts — attempt-level path telemetry for gated file tools
     expect(rec.fileToolAttempts.find((a) => a.toolUseId === "t5")?.origin).toBe("subagent");
     expect(rec.fileToolAttempts.find((a) => a.toolUseId === "t6")?.origin).toBe("main");
     expect(rec.fileToolAttempts.find((a) => a.toolUseId === "t7")?.origin).toBe("unknown");
+  });
+});
+
+/** Synthetic `hook_event` AgentEvent builder for driving a Run over a scripted event list — `path`
+ *  populates the `path` key of the paired `paths` bag (the `file_path` key is exercised via
+ *  session-events.test.ts / the session.ts unit coverage, not needed for the producer-filter tests here). */
+function hookEvent(opts: {
+  callbackId: string;
+  decision: "block" | "allow";
+  reason?: string;
+  tool?: string;
+  path?: string;
+  toolUseId?: string;
+  agentId?: string;
+}): AgentEvent {
+  return {
+    type: "hook_event",
+    callbackId: opts.callbackId,
+    decision: opts.decision,
+    reason: opts.reason,
+    tool: opts.tool,
+    paths: opts.path !== undefined ? { path: opts.path } : undefined,
+    toolUseId: opts.toolUseId,
+    agentId: opts.agentId,
+  };
+}
+
+/** Synthetic `system_event` AgentEvent builder. */
+function systemEvent(subtype: string, data: Record<string, unknown>): AgentEvent {
+  return { type: "system_event", subtype, data };
+}
+
+let reqCounter = 0;
+/** Synthetic `permission` DecisionRequest builder for driving a Run over a scripted decision list. */
+function permissionReq(
+  tool: string,
+  input: unknown,
+  opts: { toolUseId?: string; decisionReasonType?: string; agentId?: string } = {},
+): DecisionRequest {
+  return {
+    id: `req-${++reqCounter}`,
+    kind: "permission",
+    tool,
+    input: input as Record<string, unknown>,
+    toolUseId: opts.toolUseId,
+    decisionReasonType: opts.decisionReasonType,
+    agentId: opts.agentId,
+  };
+}
+
+/** Synthetic deny `DecisionResponse` builder. */
+function deny(message: string): DecisionResponse {
+  return { kind: "permission", behavior: "deny", message };
+}
+
+/** Drive a `Run` over a scripted `{req, answer}` decision list — a tiny by-id `Decider` answers each
+ *  `permissionReq` with its paired `answer`, mirroring `driveRunOverEvents`' auto-appended terminal
+ *  `result` event. */
+async function driveRunOverDecisions(items: { req: DecisionRequest; answer: DecisionResponse }[]) {
+  const events: AgentEvent[] = [
+    ...items.map((i) => ({ type: "decision", request: i.req }) as AgentEvent),
+    { type: "result", isError: false },
+  ];
+  const byId = new Map(items.map((i) => [i.req.id, i.answer]));
+  const decider: Decider = {
+    async decide(req) {
+      const answer = byId.get(req.id);
+      return answer ? { response: answer, by: "scripted" } : ABSTAIN;
+    },
+  };
+  return new Run(new MockSession(events), decider).drive("go");
+}
+
+describe("pathDenials — decision-level path-denial telemetry (three filtered producers)", () => {
+  it("pretooluse: ingests ONLY the hostloop path gate's callbackId (custom-hook denials excluded)", async () => {
+    const rec = await driveRunOverEvents([
+      hookEvent({
+        callbackId: "hostloop-path-gate",
+        decision: "block",
+        reason: "…is a VM path…",
+        tool: "Write",
+        path: "/sessions/x/y",
+        toolUseId: "t1",
+        agentId: "agent_7",
+      }),
+      hookEvent({ callbackId: "my-custom-hook", decision: "block", reason: "nope", tool: "Write", path: "/x" }),
+    ]);
+    expect(rec.pathDenials).toEqual([
+      {
+        source: "pretooluse",
+        tool: "Write",
+        path: "/sessions/x/y",
+        callbackId: "hostloop-path-gate",
+        decisionReasonType: undefined,
+        agentId: "agent_7",
+        decision: "deny",
+        reason: "…is a VM path…",
+        toolUseId: "t1",
+      },
+    ]);
+  });
+
+  it("can_use_tool: a DENIED gated-file-tool permission with a path attempt is ingested; pathless or non-gated denials are not", async () => {
+    const rec = await driveRunOverDecisions([
+      {
+        req: permissionReq("Edit", { file_path: "/sessions/x" }, { toolUseId: "t2", decisionReasonType: "workingDir" }),
+        answer: deny("blocked"),
+      },
+      { req: permissionReq("mcp__workspace__bash", { command: "ls" }), answer: deny("no") }, // not gated — excluded
+      { req: permissionReq("Grep", { pattern: "q" }), answer: deny("no") }, // no path — excluded
+    ]);
+    expect(rec.pathDenials).toEqual([
+      {
+        source: "can_use_tool",
+        tool: "Edit",
+        path: "/sessions/x",
+        callbackId: undefined,
+        decisionReasonType: "workingDir",
+        agentId: undefined,
+        decision: "deny",
+        reason: "blocked",
+        toolUseId: "t2",
+      },
+    ]);
+  });
+
+  it("permission_denied: ingested ONLY when correlated (by tool_use_id) to a recorded gated attempt with a path", async () => {
+    const rec = await driveRunOverEvents([
+      toolUse("Write", { file_path: "/sessions/x/z" }, { toolUseId: "t3" }),
+      systemEvent("permission_denied", {
+        tool_name: "Write",
+        tool_use_id: "t3",
+        agent_id: "agent_9",
+        decision_reason_type: "workingDir",
+        decision_reason: "denied pre-ask",
+      }),
+      systemEvent("permission_denied", { tool_name: "mcp__cowork__present_files", tool_use_id: "t9" }), // uncorrelated/non-path — excluded
+    ]);
+    expect(rec.pathDenials).toEqual([
+      {
+        source: "permission_denied",
+        tool: "Write",
+        path: "/sessions/x/z",
+        callbackId: undefined,
+        decisionReasonType: "workingDir",
+        agentId: "agent_9",
+        decision: "deny",
+        reason: "denied pre-ask",
+        toolUseId: "t3",
+      },
+    ]);
   });
 });

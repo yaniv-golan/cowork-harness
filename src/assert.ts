@@ -426,6 +426,10 @@ export interface AssertContext {
   /** RunResult.fileToolAttempts — gated-file-tool attempt telemetry. Undefined = evidence unavailable
    *  (older result) — dependent assertions fail "cannot verify" (excluded-loud), mirroring hookEvents. */
   fileToolAttempts?: RunResult["fileToolAttempts"];
+  /** RunResult.pathDenials — decision-level path-denial telemetry (pretooluse/can_use_tool/
+   *  permission_denied). Undefined = evidence unavailable — older result, or replay without controlOut
+   *  (the can_use_tool source is reconstructible ONLY from controlOut). */
+  pathDenials?: RunResult["pathDenials"];
   /** RunResult.presentedFiles — files delivered via `present_files`, each already classified
    *  promoted/leaked at derivation time (see RunResult's own doc comment). Undefined means no
    *  `present_files` telemetry was recorded for this run (an older run predating the feature) — the

@@ -77,6 +77,25 @@
       },
       "description": "Attempt-level gated-file-tool telemetry (raw paths as sent, per Read/Write/Edit/Glob/Grep/MultiEdit tool_use). Undefined = evidence unavailable; [] = captured, no gated attempts."
     },
+    "pathDenials": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["source", "tool", "decision"],
+        "properties": {
+          "source": { "enum": ["pretooluse", "can_use_tool", "permission_denied"] },
+          "tool": { "type": "string" },
+          "path": { "type": "string" },
+          "callbackId": { "type": "string" },
+          "decisionReasonType": { "type": "string" },
+          "agentId": { "type": "string" },
+          "decision": { "enum": ["deny"] },
+          "reason": { "type": "string" },
+          "toolUseId": { "type": "string" }
+        }
+      },
+      "description": "Decision-level path-denial telemetry from three filtered producers: the PreToolUse path gate's own callback, a denied can_use_tool ask on a gated file tool with a path, and a pre-ask permission_denied correlated to a recorded gated attempt. Undefined = evidence unavailable (older result, or replay without controlOut); [] = captured, no path denials."
+    },
     "presentedFiles": {
       "type": "array",
       "items": { "type": "object" },

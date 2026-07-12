@@ -3327,6 +3327,7 @@ async function cmdVerifyRun(args: string[]) {
     resources: result.resources,
     hookEvents: result.hookEvents,
     fileToolAttempts: result.fileToolAttempts,
+    pathDenials: result.pathDenials,
     presentedFiles: result.presentedFiles,
     evidenceErrors: result.evidenceErrors,
     effectiveFidelity: result.effectiveFidelity,

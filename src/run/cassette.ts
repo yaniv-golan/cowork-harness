@@ -31,17 +31,27 @@ import { loadSession, resolveSessionPaths } from "../session.js";
 import { loadBaseline, BASELINES_DIR } from "../baseline.js";
 import { stripComments } from "../prompt.js";
 import { decideLoopFromBaseline } from "../loop-decision.js";
-import { Run, infraErrorsForResult, evidenceErrorsForResult, type RunHooks, type RunRecord } from "./run.js";
+import {
+  Run,
+  infraErrorsForResult,
+  evidenceErrorsForResult,
+  FILE_ATTEMPT_TOOLS,
+  deniedPathFrom,
+  type RunHooks,
+  type RunRecord,
+} from "./run.js";
 import {
   parseMessage,
   serializeDecision,
   deserializeDecision,
+  toDecisionRequest,
   canon,
   hookEventFrom,
   type AgentSession,
   type AgentEvent,
   type DecisionRequest,
 } from "../agent/session.js";
+import { HOSTLOOP_PATH_GATE_ID } from "../runtime/hostloop.js";
 import { readTimeline, type TimelineHeader, type TimelineEvent } from "../agent/timeline.js";
 import { foldToolDurations, foldSkillActivity, attributeSubagentSkills } from "./timeline-fold.js";
 import { ABSTAIN, UnansweredError, type Decider, type OnUnanswered } from "../decide/decider.js";
@@ -1064,6 +1074,7 @@ function minimalRec(): RunRecord {
     mcpErrors: [],
     hookEvents: [],
     fileToolAttempts: [],
+    pathDenials: [],
     presentedFiles: [],
     webSearches: [],
     infraErrors: [],
@@ -2587,6 +2598,7 @@ function replayErrorResult(file: string): RunResult {
     mcpErrors: undefined, // live-only — this early-bail lane never drives a session
     hookEvents: undefined, // no rec to read from on this early-bail lane
     fileToolAttempts: undefined, // no rec to read from on this early-bail lane
+    pathDenials: undefined, // no rec to read from on this early-bail lane
     presentedFiles: undefined, // no rec to read from on this early-bail lane
     preRunPaths: undefined,
     preRunLinkAware: undefined,
@@ -3890,8 +3902,92 @@ export async function replayCassette(
       if (m?.type !== "control_request" || m?.request?.subtype !== "hook_callback") continue;
       const reqId = typeof m.request_id === "string" ? m.request_id : undefined;
       const reply = reqId ? session.controlOutIndex.get(reqId) : undefined;
-      replayHookEvents.push(hookEventFrom(m.request.callback_id, reply, m.request.input));
+      replayHookEvents.push(
+        hookEventFrom(
+          m.request.callback_id,
+          reply,
+          m.request.input,
+          typeof m.request.tool_use_id === "string" ? m.request.tool_use_id : undefined,
+        ),
+      );
     }
+  }
+
+  // Reconstruct DECISION-level pathDenials from the SAME frozen stream + control-out pairing as
+  // replayHookEvents above, plus the re-driven `rec` for the one source that's pure stream content.
+  //  - producer (1) pretooluse: same hook_callback pairing as replayHookEvents, filtered to the path
+  //    gate's own callback id (parseMessage never turns a hook_callback into a `decision` AgentEvent —
+  //    see replayHookEvents' own doc comment — so this source is UNREACHABLE from the re-driven `rec`
+  //    and must be reconstructed here, exactly like hookEvents).
+  //  - producer (2) can_use_tool: pair the frozen `can_use_tool` request with its controlOut response —
+  //    the pairing extension this channel needed (previously the pairing here covered ONLY hook_callback
+  //    requests). Reconstructed directly (not read off `rec.pathDenials`) so it's never double-counted
+  //    against the merge below.
+  //  - producer (3) permission_denied: pure stream content (the tool_use + system_event both live in the
+  //    ordinary events stream, not controlOut) — the re-drive reproduces it identically via run.ts's own
+  //    correlation filter, so it's merged straight from `rec.pathDenials`.
+  // Only when controlOut is present: without it, source (2) never even reaches the re-drive (a
+  // can_use_tool `decision` event is skipped by CassetteAgentSession.start() in legacy mode), and source
+  // (1)'s custom-hook decision doesn't exist anywhere else — so the whole channel is evidence-unavailable.
+  let replayPathDenials: RunResult["pathDenials"];
+  if (session.hasControlOut) {
+    replayPathDenials = [];
+    for (const line of cassette.events) {
+      let m: any;
+      try {
+        m = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (m?.type !== "control_request") continue;
+      const reqId = typeof m.request_id === "string" ? m.request_id : undefined;
+      const reply = reqId ? session.controlOutIndex.get(reqId) : undefined;
+      if (m.request?.subtype === "hook_callback") {
+        const callbackId = m.request.callback_id;
+        if (callbackId !== HOSTLOOP_PATH_GATE_ID) continue;
+        const toolUseId = typeof m.request.tool_use_id === "string" ? m.request.tool_use_id : undefined;
+        const hev = hookEventFrom(callbackId, reply, m.request.input, toolUseId);
+        if (hev.decision !== "block") continue;
+        const fp = hev.paths?.file_path;
+        const pp = hev.paths?.path;
+        const vmHit = [fp, pp].find((v) => v !== undefined && (v === "/sessions" || v.startsWith("/sessions/")));
+        replayPathDenials.push({
+          source: "pretooluse",
+          tool: hev.tool ?? "?",
+          path: vmHit ?? fp ?? pp,
+          callbackId,
+          decisionReasonType: undefined,
+          agentId: hev.agentId,
+          decision: "deny",
+          reason: hev.reason,
+          toolUseId: hev.toolUseId,
+        });
+      } else if (m.request?.subtype === "can_use_tool" && reply) {
+        let req: DecisionRequest | null;
+        try {
+          req = toDecisionRequest(m);
+        } catch {
+          continue; // malformed frame — already surfaced elsewhere as a replay_protocol_fidelity failure
+        }
+        if (!req || req.kind !== "permission" || !FILE_ATTEMPT_TOOLS.has(req.tool)) continue;
+        const resp = deserializeDecision(req, reply);
+        if (resp.kind !== "permission" || resp.behavior !== "deny") continue;
+        const p = deniedPathFrom(req.input);
+        if (p === undefined) continue;
+        replayPathDenials.push({
+          source: "can_use_tool",
+          tool: req.tool,
+          path: p,
+          callbackId: undefined,
+          decisionReasonType: req.decisionReasonType,
+          agentId: req.agentId,
+          decision: "deny",
+          reason: resp.message,
+          toolUseId: req.toolUseId,
+        });
+      }
+    }
+    replayPathDenials.push(...rec.pathDenials.filter((d) => d.source === "permission_denied"));
   }
 
   // build a conditional contentKeys — omit question/gate keys when controlOut is absent
@@ -4114,6 +4210,9 @@ export async function replayCassette(
       // content-class — the tool_use blocks are frozen stream content, so the re-drive reproduces
       // fileToolAttempts exactly like the live lane (same reasoning as presentedFiles below).
       fileToolAttempts: rec.fileToolAttempts,
+      // reconstructed above (beside replayHookEvents) from cassette.events + controlOut; undefined when
+      // controlOut is absent.
+      pathDenials: replayPathDenials,
       // content-class — re-derived by the re-drive above exactly like the live lane; uncollapsed so an
       // empty [] (nothing presented) vacuous-passes no_scratchpad_leak instead of reading as
       // evidence-unavailable.
@@ -4327,6 +4426,10 @@ export async function replayCassette(
       // Content-class: the tool_use blocks live in the ordinary events stream (not controlOut), so the
       // re-drive reproduces fileToolAttempts automatically — same reasoning as presentedFiles below.
       fileToolAttempts: rec.fileToolAttempts,
+      // reconstructed above (beside replayHookEvents) from cassette.events + controlOut, pairing the
+      // pretooluse/can_use_tool sources with their controlOut reply and merging the permission_denied
+      // source from the re-drive; undefined when controlOut is absent.
+      pathDenials: replayPathDenials,
       // Content-class: the tool_use/tool_result pair lives in the ordinary events stream (not
       // controlOut), so the re-drive reproduces it exactly like mcpErrors' live-only counterpart does
       // NOT reproduce — this one genuinely re-derives. Uncollapsed (an empty [] is the real "nothing

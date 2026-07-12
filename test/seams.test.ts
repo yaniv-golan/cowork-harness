@@ -1878,6 +1878,59 @@ describe("Cassette — protocol replay", () => {
   });
 });
 
+// ---- pathDenials reconstruction: the can_use_tool pairing extension ----
+// The hook_callback pairing at cassette.ts's replayHookEvents region handles the pretooluse source
+// today; this pins its EXTENSION to also pair a `can_use_tool` control_request with its controlOut
+// control_response for the can_use_tool source (RunRecord.pathDenials).
+describe("Cassette — pathDenials reconstruction on replay (can_use_tool pairing)", () => {
+  const reqId = "req-cut-1";
+  const events = [
+    JSON.stringify({ type: "system", subtype: "init", tools: ["Edit"] }),
+    JSON.stringify({
+      type: "control_request",
+      request_id: reqId,
+      request: {
+        subtype: "can_use_tool",
+        tool_name: "Edit",
+        input: { file_path: "/sessions/x" },
+        tool_use_id: "tu2",
+        decision_reason_type: "workingDir",
+      },
+    }),
+    JSON.stringify({ type: "result", subtype: "success", is_error: false }),
+  ];
+  const controlOut = [
+    JSON.stringify({
+      type: "control_response",
+      response: { subtype: "success", request_id: reqId, response: { behavior: "deny", message: "blocked" } },
+    }),
+  ];
+
+  it("a gated can_use_tool deny with a path, paired with its controlOut reply, becomes a can_use_tool pathDenial", async () => {
+    const cassette = { scenario: makeScenario([{ result: "success" as const }]), events, controlOut } as any;
+    const r = await replayCassette(cassette);
+    expect(r.pathDenials).toEqual([
+      {
+        source: "can_use_tool",
+        tool: "Edit",
+        path: "/sessions/x",
+        callbackId: undefined,
+        decisionReasonType: "workingDir",
+        agentId: undefined,
+        decision: "deny",
+        reason: "blocked",
+        toolUseId: "tu2",
+      },
+    ]);
+  });
+
+  it("the SAME cassette without controlOut: pathDenials is undefined (evidence-unavailable, never a vacuous pass)", async () => {
+    const cassette = { scenario: makeScenario([{ result: "success" as const }]), events, controlOut: [] } as any;
+    const r = await replayCassette(cassette);
+    expect(r.pathDenials).toBeUndefined();
+  });
+});
+
 // ---- canon() unit tests ----
 describe("canon — recursive key-sorting canonicalizer", () => {
   it("normalises key order for flat objects", () => {

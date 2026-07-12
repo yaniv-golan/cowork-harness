@@ -100,7 +100,16 @@ export type AgentEvent =
   | { type: "raw"; line: string }
   | { type: "system_event"; subtype: string; data: Record<string, unknown> } // a `system` message we don't special-case (e.g. compact_boundary)
   | { type: "mcp_error"; server: string; code?: number; message: string } // an MCP round-trip the harness answered with a JSON-RPC error
-  | { type: "hook_event"; callbackId: string; decision: "block" | "allow"; reason?: string; tool?: string }; // a PreToolUse hook fired
+  | {
+      type: "hook_event";
+      callbackId: string;
+      decision: "block" | "allow";
+      reason?: string;
+      tool?: string;
+      paths?: { file_path?: string; path?: string }; // BOTH keys the VM path-gate scans (pretooluse-path-hook.ts) — never first-match-only
+      toolUseId?: string; // msg.request.tool_use_id — a SIBLING of `input` on the hook_callback request, NOT inside it
+      agentId?: string; // input.agent_id — present only when the hook fired inside a sub-agent
+    }; // a PreToolUse hook fired
 
 export type SdkMcp = {
   servers: string[];
@@ -251,7 +260,17 @@ export function hookEventFrom(
   callbackId: string,
   reply: Record<string, unknown> | undefined,
   input: any,
-): { type: "hook_event"; callbackId: string; decision: "block" | "allow"; reason?: string; tool?: string } {
+  toolUseId?: string, // = msg.request.tool_use_id — a SIBLING of `input` on the request, NOT inside it
+): {
+  type: "hook_event";
+  callbackId: string;
+  decision: "block" | "allow";
+  reason?: string;
+  tool?: string;
+  paths?: { file_path?: string; path?: string };
+  toolUseId?: string;
+  agentId?: string;
+} {
   const r = reply ?? {};
   const nested = (r.hookSpecificOutput ?? {}) as Record<string, unknown>;
   const isBlock = r.decision === "block" || nested.permissionDecision === "deny";
@@ -262,7 +281,24 @@ export function hookEventFrom(
         ? (nested.permissionDecisionReason as string)
         : undefined;
   const tool = typeof input?.tool_name === "string" ? input.tool_name : undefined;
-  return { type: "hook_event", callbackId, decision: isBlock ? "block" : "allow", reason, tool };
+  // BOTH path keys — the VM path-gate scans file_path AND path (pretooluse-path-hook.ts:92-107) and
+  // denies on whichever is a /sessions path, so recording only the first would mis-report a
+  // {file_path:"/allowed", path:"/sessions/x"} call as "/allowed".
+  const ti = (input?.tool_input ?? {}) as Record<string, unknown>;
+  const paths: { file_path?: string; path?: string } = {};
+  if (typeof ti.file_path === "string") paths.file_path = ti.file_path;
+  if (typeof ti.path === "string") paths.path = ti.path;
+  const agentId = typeof input?.agent_id === "string" ? input.agent_id : undefined; // inside the hook input, present only within a sub-agent
+  return {
+    type: "hook_event",
+    callbackId,
+    decision: isBlock ? "block" : "allow",
+    reason,
+    tool,
+    paths: paths.file_path !== undefined || paths.path !== undefined ? paths : undefined,
+    toolUseId,
+    agentId,
+  };
 }
 
 /** The key the in-VM AskUserQuestion handler indexes answers by — it does
@@ -573,12 +609,22 @@ export class LiveAgentSession implements AgentSession {
           out = { decision: "block", reason: `hook handler error: ${message}` };
         }
         this.write(successEnvelope(reqId, out));
-        yield hookEventFrom(callbackId, out, msg.request.input);
+        yield hookEventFrom(
+          callbackId,
+          out,
+          msg.request.input,
+          typeof msg.request.tool_use_id === "string" ? msg.request.tool_use_id : undefined,
+        );
         return;
       }
       const builtInOut = hookOutput(callbackId, msg.request.input);
       this.write(successEnvelope(reqId, builtInOut));
-      yield hookEventFrom(callbackId, builtInOut, msg.request.input);
+      yield hookEventFrom(
+        callbackId,
+        builtInOut,
+        msg.request.input,
+        typeof msg.request.tool_use_id === "string" ? msg.request.tool_use_id : undefined,
+      );
       return;
     }
     // mcp_message is the only side-effecting branch (the driver computes + writes the response).

@@ -155,6 +155,19 @@ const full: RunResult = {
   fileToolAttempts: [
     { tool: "Read", paths: { file_path: "outputs/report.pdf" }, gatePath: "outputs/report.pdf", origin: "main", toolUseId: "tu_1" },
   ],
+  pathDenials: [
+    {
+      source: "can_use_tool",
+      tool: "Edit",
+      path: "/sessions/x",
+      callbackId: undefined,
+      decisionReasonType: "workingDir",
+      agentId: "agent_1",
+      decision: "deny",
+      reason: "blocked",
+      toolUseId: "tu_1",
+    },
+  ],
 };
 
 describe("schema/run-result.json", () => {
