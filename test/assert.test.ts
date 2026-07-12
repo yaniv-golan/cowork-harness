@@ -564,6 +564,126 @@ describe("hook_blocked / no_hook_blocked", () => {
   });
 });
 
+describe("VM-path + path-denial assertions", () => {
+  const hlCtx = (over: Partial<AssertContext>) => ctx({ effectiveFidelity: "hostloop", ...over });
+
+  it("no_vm_path_file_op passes on clean attempts, fails on an exact /sessions or /sessions/-prefixed attempt, ignores /sessionsfoo", () => {
+    const clean = evaluate(
+      [{ no_vm_path_file_op: true }],
+      hlCtx({ fileToolAttempts: [{ tool: "Read", paths: { file_path: "/sessionsfoo/x" }, gatePath: "/sessionsfoo/x", origin: "main" }] }),
+    );
+    expect(clean.every((r) => r.pass)).toBe(true);
+    const dirty = evaluate(
+      [{ no_vm_path_file_op: true }],
+      hlCtx({
+        fileToolAttempts: [{ tool: "Write", paths: { file_path: "/sessions/x/y" }, gatePath: "/sessions/x/y", origin: "subagent" }],
+      }),
+    );
+    expect(dirty[0].pass).toBe(false);
+  });
+
+  it("no_vm_path_file_op on a NON-hostloop tier FAILS cannot-verify (never excluded into a green run)", () => {
+    const [r] = evaluate([{ no_vm_path_file_op: true }], ctx({ effectiveFidelity: "container", fileToolAttempts: [] }));
+    expect(r.pass).toBe(false);
+    expect((r as { message: string }).message).toMatch(/cannot verify/);
+  });
+
+  it("undefined evidence on the RIGHT tier fails cannot-verify (older result)", () => {
+    const [r] = evaluate([{ no_vm_path_file_op: true }], hlCtx({ fileToolAttempts: undefined }));
+    expect(r.pass).toBe(false);
+    expect((r as { message: string }).message).toMatch(/cannot verify/);
+  });
+
+  it("path_denied matches on tool glob + path regex + source + agent_scope conjunctively", () => {
+    const c = hlCtx({
+      pathDenials: [{ source: "can_use_tool", tool: "Edit", path: "/sessions/a/b", decision: "deny", agentId: "agent_1" }],
+    });
+    expect(
+      evaluate([{ path_denied: { tool: "Edit", path_matches: "^/sessions/", source: "can_use_tool", agent_scope: "subagent" } }], c)[0]
+        .pass,
+    ).toBe(true);
+    expect(evaluate([{ path_denied: { agent_scope: "main" } }], c)[0].pass).toBe(false);
+  });
+
+  it("vm_path_denied requires a /sessions-targeted denial; no_path_denied fails on any denial", () => {
+    const c = hlCtx({ pathDenials: [{ source: "pretooluse", tool: "Write", path: "/sessions/x", decision: "deny" }] });
+    expect(evaluate([{ vm_path_denied: true }], c)[0].pass).toBe(true);
+    expect(evaluate([{ no_path_denied: true }], c)[0].pass).toBe(false);
+  });
+
+  it("path_denied/vm_path_denied/no_path_denied on a NON-hostloop tier FAIL cannot-verify", () => {
+    const c = ctx({ effectiveFidelity: "container", pathDenials: [] });
+    for (const a of [{ vm_path_denied: true }, { path_denied: {} }, { no_path_denied: true }] as const) {
+      const [r] = evaluate([a], c);
+      expect(r.pass).toBe(false);
+      expect((r as { message: string }).message).toMatch(/cannot verify/);
+    }
+  });
+
+  it("subagent_file_write: needs a SUBAGENT-origin write attempt with the suffix AND a paired non-error result", () => {
+    const attempts = [
+      {
+        tool: "Write",
+        paths: { file_path: "artifacts/probe.json" },
+        gatePath: "artifacts/probe.json",
+        origin: "subagent" as const,
+        toolUseId: "t1",
+      },
+    ];
+    const okCtx = ctx({ effectiveFidelity: "hostloop", fileToolAttempts: attempts, toolResults: [{ toolUseId: "t1", isError: false }] });
+    expect(evaluate([{ subagent_file_write: { path_suffix: "artifacts/probe.json" } }], okCtx)[0].pass).toBe(true);
+
+    const mainOnly = ctx({
+      effectiveFidelity: "hostloop",
+      fileToolAttempts: [{ ...attempts[0], origin: "main" as const }],
+      toolResults: [{ toolUseId: "t1", isError: false }],
+    });
+    // a MAIN write must not green the probe
+    expect(evaluate([{ subagent_file_write: { path_suffix: "artifacts/probe.json" } }], mainOnly)[0].pass).toBe(false);
+
+    const errored = ctx({ effectiveFidelity: "hostloop", fileToolAttempts: attempts, toolResults: [{ toolUseId: "t1", isError: true }] });
+    expect(evaluate([{ subagent_file_write: { path_suffix: "artifacts/probe.json" } }], errored)[0].pass).toBe(false);
+  });
+
+  it("subagent_file_write: exact `path` rejects a suffix-only coincidence (foo/artifacts/probe.json)", () => {
+    const attempts = [
+      {
+        tool: "Write",
+        paths: { file_path: "foo/artifacts/probe.json" },
+        gatePath: "foo/artifacts/probe.json",
+        origin: "subagent" as const,
+        toolUseId: "t1",
+      },
+    ];
+    const c = ctx({ effectiveFidelity: "hostloop", fileToolAttempts: attempts, toolResults: [{ toolUseId: "t1", isError: false }] });
+    expect(evaluate([{ subagent_file_write: { path: "artifacts/probe.json" } }], c)[0].pass).toBe(false);
+    expect(evaluate([{ subagent_file_write: { path_suffix: "artifacts/probe.json" } }], c)[0].pass).toBe(true);
+  });
+
+  it("subagent_file_write is tier-agnostic — passes on a non-hostloop tier too", () => {
+    const attempts = [
+      {
+        tool: "Write",
+        paths: { file_path: "artifacts/probe.json" },
+        gatePath: "artifacts/probe.json",
+        origin: "subagent" as const,
+        toolUseId: "t1",
+      },
+    ];
+    const c = ctx({ effectiveFidelity: "container", fileToolAttempts: attempts, toolResults: [{ toolUseId: "t1", isError: false }] });
+    expect(evaluate([{ subagent_file_write: { path_suffix: "artifacts/probe.json" } }], c)[0].pass).toBe(true);
+  });
+
+  it("subagent_file_write is evidence-unavailable when attempt/result telemetry is undefined", () => {
+    const [r] = evaluate(
+      [{ subagent_file_write: { path_suffix: "artifacts/probe.json" } }],
+      ctx({ fileToolAttempts: undefined, toolResults: undefined }),
+    );
+    expect(r.pass).toBe(false);
+    expect((r as { message: string }).message).toMatch(/cannot verify/);
+  });
+});
+
 describe("tool_no_error (M3)", () => {
   it("passes when no tool matching the regex has any errors", () => {
     const c = ctx({ toolErrors: { Bash: { calls: 3, errors: 0 }, Read: { calls: 1, errors: 0 } } });

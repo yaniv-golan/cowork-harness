@@ -244,6 +244,53 @@ export const Assertion = z.strictObject({
   subagent_tool_absent: toolGlob
     .optional()
     .describe("NO sub-agent used a tool matching this glob (* / ?; exact when literal; anchored, case-sensitive)"),
+  no_vm_path_file_op: z
+    .literal(true)
+    .optional()
+    .describe(
+      "hostloop-only: NO gated file tool (Read/Write/Edit/Glob/Grep/MultiEdit) attempted a path that is exactly /sessions or /sessions/-prefixed — the production VM-path boundary. Only `true` is valid — omit to not require it. Any other tier FAILS (cannot verify: /sessions/... is valid there).",
+    ),
+  vm_path_denied: z
+    .literal(true)
+    .optional()
+    .describe(
+      "hostloop-only: at least one recorded path denial targeted a /sessions VM path (any source). Only `true` is valid. Needs controlOut on replay (else skipped-and-surfaced).",
+    ),
+  path_denied: z
+    .object({
+      tool: toolGlob.optional().describe("glob over the denied tool name"),
+      path_matches: z.string().optional().describe("regex over the denied path"),
+      source: z.enum(["pretooluse", "can_use_tool", "permission_denied"]).optional(),
+      agent_scope: z
+        .enum(["main", "subagent", "any"])
+        .optional()
+        .describe("subagent = the binary's agent_id attribution present; main = absent; default any"),
+    })
+    .optional()
+    .describe("hostloop-only: a path denial matching ALL given matchers was recorded"),
+  no_path_denied: z
+    .literal(true)
+    .optional()
+    .describe(
+      "hostloop-only: NO path denial was recorded (the channel is path-scoped already, unlike no_hook_blocked). Only `true` is valid.",
+    ),
+  subagent_file_write: z
+    .object({
+      path: z
+        .string()
+        .min(1)
+        .optional()
+        .describe("EXACT raw path the sub-agent's write must have sent (strongest — proves the exact path, not just a suffix)"),
+      path_suffix: z.string().min(1).optional().describe("the target path's suffix (weaker than `path`; e.g. artifacts/probe.json)"),
+      tool: toolGlob.optional().describe("glob over the writing tool; default matches Write/Edit/MultiEdit"),
+    })
+    .refine((v) => v.path !== undefined || v.path_suffix !== undefined, {
+      message: "subagent_file_write needs `path` (exact) or `path_suffix`",
+    })
+    .optional()
+    .describe(
+      "a SUB-AGENT-origin write attempt whose raw path EQUALS `path` (or ends with `path_suffix`) has a PAIRED non-error tool_result — the causal half of a delivery probe (pair with artifact_json for content). Prefer `path` (exact) so a foo/artifacts/probe.json can't satisfy an artifacts/probe.json suffix. Tier-agnostic.",
+    ),
   subagent_dispatched: z.string().optional().describe("a sub-agent matching this regex (by agentType or description) was dispatched"),
   subagent_declared_but_unused: z.string().optional().describe("a sub-agent declared this tool but never used it (the fabrication proxy)"),
   subagent_output_contains: z

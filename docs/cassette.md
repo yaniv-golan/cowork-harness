@@ -237,6 +237,8 @@ the rules and CI-placement rationale (why each category behaves this way), see
 | `tool_result_not_contains` | literal absent from all tool results |
 | `subagent_tool_used` | a sub-agent used the tool |
 | `subagent_tool_absent` | no sub-agent used the tool |
+| `no_vm_path_file_op` | **`fidelity: hostloop` only** — no gated file tool attempted a `/sessions`(-prefixed) path (`RunResult.fileToolAttempts`) — content-class, re-derived from the frozen `tool_use` stream; any other tier FAILS "cannot verify" (`/sessions/...` is valid there) |
+| `subagent_file_write` | a sub-agent-origin write attempt (`path` exact or `path_suffix`) has a paired non-error tool_result (`RunResult.fileToolAttempts` + `RunResult.toolResults`) — content-class, tier-agnostic |
 | `subagent_dispatched` | a sub-agent matching the regex was dispatched |
 | `subagent_declared_but_unused` | sub-agent declared the tool but never used **that** tool (even if it used others) |
 | `subagent_output_contains` | a dispatched sub-agent's own output contains the substring — `match` (optional regex over `agentType`/`description`) narrows to specific dispatch(es); omitted, checks whether ANY dispatch's output contains it |
@@ -265,6 +267,9 @@ the rules and CI-placement rationale (why each category behaves this way), see
 | `gate_answer_count_min` | at least N AskUserQuestion gates fired AND were delivered non-error — the presence companion to `gate_answers_delivered`'s vacuous-pass |
 | `hook_blocked` | a PreToolUse hook blocked a tool whose name matches the regex (`RunResult.hookEvents`) — replay: needs `controlOut` (a custom hook's decision lives only there) |
 | `no_hook_blocked` | no tool was hook-blocked during the run — replay: needs `controlOut`. **Only `true` is valid** |
+| `vm_path_denied` | **`fidelity: hostloop` only** — a path denial (`RunResult.pathDenials`, any source) targeted a `/sessions` VM path — replay: needs `controlOut`; any other tier FAILS "cannot verify" |
+| `path_denied` | **`fidelity: hostloop` only** — a path denial matched all given matchers (`tool`/`path_matches`/`source`/`agent_scope`) — replay: needs `controlOut`; any other tier FAILS "cannot verify" |
+| `no_path_denied` | **`fidelity: hostloop` only** — no path denial was recorded at all — replay: needs `controlOut`. **Only `true` is valid**; any other tier FAILS "cannot verify" |
 | `result` | run ended with `success` or `error` |
 | `no_scratchpad_leak` | every file presented via `present_files` that was in the scratchpad was successfully promoted to `mnt/outputs` (none left behind) — vacuous pass if nothing was presented; content-class: both the tool_use and its own tool_result live in the ordinary events stream, so `RunResult.presentedFiles` re-derives identically on replay; evidence-unavailable only when `presentedFiles` is absent (an older run predating the feature); **container tier only** — `present_files` is not served on hostloop/microvm |
 | `present_files_called` | at least one file was delivered via `present_files` (`RunResult.presentedFiles` is non-empty) — the presence companion to `no_scratchpad_leak`; content-class (re-derives identically on replay); **container tier only** |
@@ -274,12 +279,13 @@ the rules and CI-placement rationale (why each category behaves this way), see
 | `allow_stall` | verdict modifier — kept on replay → no-op pass (suppresses the `stalled` default-fail; the stall is re-derived on the replay re-drive) |
 
 **`question_asked`, `questions_count_max`, `gate_answers_delivered`, `gate_answer_count_min`, `hook_blocked`,
-`no_hook_blocked` require `controlOut`** (full-fidelity replay). On an old cassette without `controlOut`
-these keys are excluded from evaluation — not vacuously passed — and a loud warning fires (see §Backward
-compatibility). The hook keys need `controlOut` for a different reason than the question keys: a custom
-hook's block/allow decision is an opaque async reply recorded only in `control-out.jsonl`, not in the
-`events` stream — reconstructing from the stream alone would show only the built-in Task hook's view and
-could vacuously pass `no_hook_blocked` even if a custom hook genuinely blocked.
+`no_hook_blocked`, `vm_path_denied`, `path_denied`, `no_path_denied` require `controlOut`** (full-fidelity
+replay). On an old cassette without `controlOut` these keys are excluded from evaluation — not vacuously
+passed — and a loud warning fires (see §Backward compatibility). The hook and path-denial keys need
+`controlOut` for a different reason than the question keys: a custom hook's block/allow decision (and the
+`can_use_tool` source of a path denial) is an opaque async reply recorded only in `control-out.jsonl`, not in
+the `events` stream — reconstructing from the stream alone would show only the built-in Task hook's view and
+could vacuously pass `no_hook_blocked`/`no_path_denied` even if a custom hook or gated ask genuinely blocked.
 
 `file_exists`, `user_visible_artifact`, `artifact_json`, `computer_links_resolve`, `computer_links_resolve_if_present`,
 `no_unexpected_files`, and `input_unmodified` are **not** in the table above — see the next subsection; they're replay-checkable only

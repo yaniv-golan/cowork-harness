@@ -64,6 +64,8 @@ CONTENT_KEYS = {
     "subagent_dispatched",
     "subagent_declared_but_unused",
     "subagent_output_contains",
+    "no_vm_path_file_op",
+    "subagent_file_write",
     "dispatch_count_max",
     "skill_triggered",
     "no_skill_triggered",
@@ -94,6 +96,9 @@ GATE_KEYS = {
     "gate_answer_count_min",
     "hook_blocked",
     "no_hook_blocked",
+    "vm_path_denied",
+    "path_denied",
+    "no_path_denied",
 }
 # manifest-backed: replay-checkable when the cassette carries an `artifacts` manifest (record snapshots one);
 # a manifest-less cassette skips them. Since the 0.3.0 artifact-manifest these are NOT always live-only.

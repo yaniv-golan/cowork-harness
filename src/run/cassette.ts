@@ -3758,6 +3758,11 @@ export const ALWAYS_CONTENT_KEYS: (keyof Assertion)[] = [
   // the other re-derived signals above (skill_triggered, redundantToolCalls, …).
   "no_scratchpad_leak",
   "present_files_called",
+  // content-class, NOT controlOut-gated: fileToolAttempts re-derives from frozen tool_use blocks (the
+  // gated-file-tool attempt, not the gate decision) — same re-derivation reasoning as fileToolAttempts
+  // itself above (see the comment beside `fileToolAttempts: rec.fileToolAttempts` in replayCassette).
+  "no_vm_path_file_op",
+  "subagent_file_write",
   // Verdict modifiers — NOT filesystem/egress assertions. Keep all of them on replay (each evaluates to a
   // no-op pass via assert.ts) so a standalone modifier neither inflates the "filesystem/egress skipped"
   // count nor emits a misleading warning, AND so the replay path actually exercises their assert.ts noop
@@ -3775,6 +3780,11 @@ export const QUESTION_GATE_KEYS: (keyof Assertion)[] = [
   "gate_answer_count_min",
   "hook_blocked",
   "no_hook_blocked",
+  // Decision-level pathDenials — reconstructed from cassette.events + controlOut (the can_use_tool
+  // source is reconstructible ONLY from controlOut), same evidence class as hook_blocked above.
+  "vm_path_denied",
+  "path_denied",
+  "no_path_denied",
 ];
 
 /** Assertion keys evaluated on replay only when the cassette carries an `artifacts` manifest.
@@ -4177,6 +4187,8 @@ export async function replayCassette(
       gateDeliveries: rec.gateDeliveries,
       toolResultTexts: rec.toolResults.map((r) => r.assertText ?? r.text),
       toolResultsTruncated: rec.toolResults.map((r) => r.assertText === undefined),
+      // content-class, same as toolResultTexts above — pairing info for subagent_file_write.
+      toolResults: rec.toolResults.map((r) => ({ toolUseId: r.toolUseId, isError: r.isError })),
       toolErrors: rec.toolErrors,
       redundantToolCalls: rec.redundantToolCalls,
       truncatedPaths: replayTruncatedPaths,

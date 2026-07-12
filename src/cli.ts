@@ -3295,6 +3295,9 @@ async function cmdVerifyRun(args: string[]) {
     gateDeliveriesMissing: result.gateDeliveries === undefined,
     toolResultTexts: (result.toolResults ?? []).map((r) => r.assertText ?? r.text),
     toolResultsTruncated: (result.toolResults ?? []).map((r) => r.assertText === undefined),
+    // undefined (not []) when result.toolResults itself is absent — an old/partial result.json,
+    // distinct from a genuine empty array — mirrors toolResultsMissing's own undefined-preserving convention.
+    toolResults: result.toolResults?.map((r) => ({ toolUseId: r.toolUseId, isError: r.isError })),
     toolErrors: result.toolErrors,
     transcriptMissing: sidecarTranscript === null,
     questionsMissing: sidecarQuestions === null,

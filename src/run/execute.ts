@@ -944,6 +944,9 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       gateDeliveries: record.gateDeliveries,
       toolResultTexts: record.toolResults.map((r) => r.assertText ?? r.text),
       toolResultsTruncated: record.toolResults.map((r) => r.assertText === undefined),
+      // Minimal pairing info (toolUseId/isError, no text) for subagent_file_write's causal pairing
+      // against fileToolAttempts. Always defined live — an empty array is a real "no tool results" signal.
+      toolResults: record.toolResults.map((r) => ({ toolUseId: r.toolUseId, isError: r.isError })),
       toolErrors: record.toolErrors,
       redundantToolCalls: record.redundantToolCalls,
       skillsInvoked: record.skillsInvoked,
