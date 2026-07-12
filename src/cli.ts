@@ -167,8 +167,10 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
       NOTE: exit 127 means python3 itself is missing — treat any non-zero exit as a CI failure, do not swallow it.
   lint-skill <SKILL.md | skill-dir/>…  lint a skill body (and any sibling hooks.json) for Cowork host-loop footguns (bundled scenario.py; needs python3)
       [--strict]               fail on any finding (the two footguns are WARN-only by default), not just ERROR
-  analyze-skill <SKILL.md | skill-dir/>  token-free CI gate: flags a /sessions/... path handed to a file tool or dispatch/sub-agent output (denied on host-loop) — reuses the ported /sessions path-gate predicate; only the extraction is heuristic
-      [--output-format json]   exit 1 = finding(s) · exit 0 = clean · exit 2 = usage; a clean result is a PRE-FLIGHT signal, not proof of on-tier resolution
+  analyze-skill <SKILL.md | skill-dir/>  ADVISORY token-free scan: warns on a /sessions/... path handed to a file tool or dispatch/sub-agent output (denied on host-loop) — reuses the ported /sessions path-gate predicate; only the extraction is heuristic
+      [--strict]               fail (exit 1) on any finding instead of just warning (mirrors lint-skill's --strict)
+      analyze-skill: ignore    a line with this marker (bare or in an HTML comment) in a SKILL.md silences EVERY finding for that file, even under --strict
+      [--output-format json]   exit 0 = default (even with findings) · exit 1 = --strict + finding(s) · exit 2 = usage; a clean/suppressed result is a PRE-FLIGHT signal, not proof of on-tier resolution
   assertions --list            list available scenario assertions (generated from Zod schema)
       [--output-format json]
 
@@ -472,10 +474,11 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
   "init-redact":
     "usage: init-redact [--force] [--output-format json]   (copy the packaged reference .cowork-redact.json into the cwd; refuses to overwrite an existing one without --force)",
   "analyze-skill":
-    "usage: analyze-skill <SKILL.md | skill-dir/> [--output-format text|json]   (token-free CI gate: flags a /sessions/... path handed to a file tool or dispatch/sub-agent output — denied on host-loop)\n" +
+    "usage: analyze-skill <SKILL.md | skill-dir/> [--strict] [--output-format text|json]   (ADVISORY token-free scan: flags a /sessions/... path handed to a file tool or dispatch/sub-agent output — denied on host-loop)\n" +
     "       reuses the harness's own ported /sessions path-gate predicate (isVmSessionsPath) as the deny decision; only the EXTRACTION from SKILL.md text is heuristic.\n" +
-    "       exit 1 = at least one finding (this is a focused gate, unlike the advisory lint-skill) · exit 0 = clean · exit 2 = usage error.\n" +
-    "       a clean result is a PRE-FLIGHT signal only — the runtime no_vm_path_file_op / vm_path_denied asserts remain authoritative (see docs/subagents.md).",
+    "       findings are WARNINGS: exit 0 by default even when findings are printed. --strict fails (exit 1) on any finding instead (mirrors lint-skill's --strict). exit 2 = usage error.\n" +
+    "       a line containing `analyze-skill: ignore` (bare, or inside an HTML comment) anywhere in a SKILL.md silences EVERY path-fidelity finding for that file — even under --strict, even a genuine true positive (an explicit author override).\n" +
+    "       a clean/suppressed result is a PRE-FLIGHT signal only — the runtime no_vm_path_file_op / vm_path_denied asserts remain authoritative (see docs/subagents.md).",
 };
 
 // Known subcommands — used by the global value-flag parsers (`--dotenv`, `--run-dir`) to reject a command

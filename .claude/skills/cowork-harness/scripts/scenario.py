@@ -1168,7 +1168,13 @@ def cmd_lint_skill(args):
     else:
         _print_findings(all_findings, n_files, kind="skill file", clean_suffix=" — no Cowork host-loop footguns.")
     has_error = any(x.severity == "ERROR" for x in all_findings)
-    if has_error or (args.strict and all_findings):
+    # --strict fails on WARN too, per its own --help text ("exit non-zero on WARN too, not just ERROR")
+    # — but NEVER on INFO. The subagent_type ladder (subagent-type-unresolvable /
+    # -not-found-in-plugin / -unknown) and plugin-root-guarded are always INFO by design (there is no
+    # harness registry to disprove an unknown value against — see the subparser help above), so they
+    # must always be surfaced, never failed, even under --strict.
+    has_warn = any(x.severity == "WARN" for x in all_findings)
+    if has_error or (args.strict and has_warn):
         return 1
     return 0
 

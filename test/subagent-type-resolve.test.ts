@@ -173,6 +173,18 @@ describe.skipIf(!havePython)("scenario.py lint-skill — subagent_type static re
     expect(status).toBe(0); // fail-on-break: INFO does not exit non-zero without --strict
   });
 
+  it("REGRESSION: `lint-skill --strict` does NOT fail on an INFO-only result (a pinned built-in like `Explore`)", () => {
+    const dir = makeFixturePlugin();
+    const skillPath = writeSkill(dir, 'subagent_type="Explore"');
+    const r = spawnSync(py, [SCRIPT, "lint-skill", "--strict", "--json", skillPath], { encoding: "utf8" });
+    const findings: Finding[] = JSON.parse(r.stdout || "[]");
+    const hit = findings.find((f) => f.rule === "subagent-type-unknown");
+    expect(hit, "expected a subagent-type-unknown INFO for the unresolved bare built-in").toBeDefined();
+    expect(hit?.severity).toBe("INFO");
+    expect(findings.every((f) => f.severity === "INFO")).toBe(true); // no WARN/ERROR riding along
+    expect(r.status).toBe(0); // --strict fails on WARN/ERROR, never on INFO alone
+  });
+
   it("YAML-form `subagent_type: <value>` frontmatter-style pin is also detected", () => {
     const dir = makeFixturePlugin();
     const skillsDir = join(dir, "skills", "demo2");

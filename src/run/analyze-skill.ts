@@ -24,6 +24,13 @@ const log = (s: string) => writeSync(2, s + "\n");
  * deliberately conservative: several EXEMPT guards exist specifically to suppress a firing that isn't
  * really the /sessions-to-file-tool defect, and when a heuristic can't tell, it does NOT flag (see the
  * "Honest limits" block at the bottom).
+ *
+ * ADVISORY POSTURE: because the extraction is still heuristic and can over-flag innocent
+ * documentation/teaching text, findings are WARNINGS, not a hard gate — `cmdAnalyzeSkill` exits 0 by
+ * default even when findings are printed; `--strict` opts into a hard gate (exit 1 on any finding,
+ * mirroring `lint-skill --strict`). A SKILL.md can also silence the ENTIRE warning class for itself via
+ * the `analyze-skill: ignore` marker (see `hasIgnoreMarker` below) — for a VM-tier-only skill that
+ * legitimately uses `/sessions` paths, or one that merely documents them in prose/teaching examples.
  */
 
 export type SkillAnalysisRuleId = "sessions-path-to-file-tool" | "sessions-find-into-file-read";
@@ -437,9 +444,28 @@ function splitLines(text: string): { lines: LineInfo[]; blocks: { lang: string; 
   return { lines, blocks };
 }
 
+/** The file-level silence marker: a line containing `analyze-skill: ignore` (accepted bare, or inside
+ *  an HTML comment `<!-- analyze-skill: ignore -->` — the regex only cares about the substring, not
+ *  what wraps it). Matched case-insensitively, anywhere on the line. This is the ONE switch documented
+ *  to turn off every `analyze-skill` path-fidelity finding for a SKILL.md — a VM-tier-only skill that
+ *  legitimately uses `/sessions` paths, or one that merely documents/teaches them in prose, puts this
+ *  marker in and the whole warning class goes quiet for that file, INCLUDING a genuine true positive
+ *  (an explicit author override, not a narrower FP guard). */
+const IGNORE_MARKER_RE = /analyze-skill:\s*ignore\b/i;
+
+/** Does `text` contain the `analyze-skill: ignore` marker on any line? Exported so the CLI can print an
+ *  explanatory note distinguishing "suppressed by marker" from "genuinely clean" without re-deriving the
+ *  regex. */
+export function hasIgnoreMarker(text: string): boolean {
+  return text.split(/\r?\n/).some((line) => IGNORE_MARKER_RE.test(line));
+}
+
 /** Scan one SKILL.md's full text and return every finding, ordered by line number. `filePath` is used
- *  only to stamp `SkillFinding.path` (the caller resolves it once per target). */
+ *  only to stamp `SkillFinding.path` (the caller resolves it once per target). Returns `[]` immediately,
+ *  before any rule runs, when the file carries the `analyze-skill: ignore` marker (see `hasIgnoreMarker`)
+ *  — the marker is an author override and must suppress even a genuine true positive. */
 export function analyzeSkillText(text: string, filePath: string): SkillFinding[] {
+  if (hasIgnoreMarker(text)) return [];
   const findings: SkillFinding[] = [];
   // Dedup key is (rule, line, token) — NOT (rule, line, message) — so the SAME token on the SAME line
   // yields at most one finding even when more than one positive context matches it (e.g. an
@@ -561,23 +587,39 @@ function resolveSkillTarget(target: string): { file: string } | { error: string 
 }
 
 /**
- * `cowork-harness analyze-skill <SKILL.md | skill-dir/>` — a FOCUSED CI gate (unlike the advisory
- * `lint-skill`): exit 1 on ANY finding, exit 0 clean, exit 2 on a usage error. A clean run is a
- * PRE-FLIGHT signal only — it does not prove the skill is safe on host-loop, it proves this static
- * heuristic found nothing to flag. The authoritative, on-tier signal remains the runtime
- * `no_vm_path_file_op` / `pathDenials` assertions (see `docs/subagents.md`).
+ * `cowork-harness analyze-skill <SKILL.md | skill-dir/>` — an ADVISORY, token-free scan (unlike the
+ * `lint-skill` two-footgun WARN check, which is also advisory by default): findings are printed but
+ * exit 0 by DEFAULT, since the extraction is heuristic and can over-flag innocent documentation. Pass
+ * `--strict` to turn it into a hard gate (exit 1 on any finding, mirroring `lint-skill --strict`
+ * exactly). A SKILL.md can silence the whole warning class for itself with the `analyze-skill: ignore`
+ * marker (see `hasIgnoreMarker`) — 0 findings, exit 0 even under `--strict`. exit 2 on a usage error. A
+ * clean/suppressed run is a PRE-FLIGHT signal only — it does not prove the skill is safe on host-loop,
+ * it proves this static heuristic found nothing to flag (or was told not to look). The authoritative,
+ * on-tier signal remains the runtime `no_vm_path_file_op` / `pathDenials` assertions (see
+ * `docs/subagents.md`).
  */
 export function cmdAnalyzeSkill(args: string[]): void {
   const asJson = isJsonOutput(args);
   let p;
   try {
-    p = parseArgs(args, { values: ["--output-format"], enums: { "--output-format": ["text", "json"] } });
+    p = parseArgs(args, {
+      values: ["--output-format"],
+      enums: { "--output-format": ["text", "json"] },
+      booleans: ["--strict"],
+    });
   } catch (e) {
     return fail("analyze-skill", "usage", String((e as Error).message), undefined, asJson);
   }
   const json = p.options["--output-format"] === "json";
+  const strict = p.flags["--strict"] === true;
   if (p.positionals.length === 0) {
-    return fail("analyze-skill", "usage", "usage: analyze-skill <SKILL.md | skill-dir/> [--output-format text|json]", undefined, asJson);
+    return fail(
+      "analyze-skill",
+      "usage",
+      "usage: analyze-skill <SKILL.md | skill-dir/> [--strict] [--output-format text|json]",
+      undefined,
+      asJson,
+    );
   }
   if (p.positionals.length > 1) {
     return fail(
@@ -599,22 +641,31 @@ export function cmdAnalyzeSkill(args: string[]): void {
   } catch (e) {
     return fail("analyze-skill", "usage", `analyze-skill: cannot read ${resolved.file}: ${(e as Error).message}`, undefined, asJson);
   }
-  const findings = analyzeSkillText(text, resolved.file);
+  const suppressed = hasIgnoreMarker(text);
+  const findings = analyzeSkillText(text, resolved.file); // [] when `suppressed` — see analyzeSkillText
   const ok = findings.length === 0;
+  const failing = strict && findings.length > 0; // suppressed files never reach here with findings, so --strict can't fail them
 
   if (json) {
-    out(jsonPayloadEnvelope("analyze-skill", ok, { file: resolved.file, findings }));
+    out(jsonPayloadEnvelope("analyze-skill", ok, { file: resolved.file, findings, suppressed, strict }));
   } else {
-    if (ok) {
+    if (suppressed) {
+      log(`⊘ analyze-skill: ${resolved.file} — path-fidelity warnings suppressed for this file by the ` + "`analyze-skill: ignore` marker");
+    } else if (ok) {
       log(`✓ analyze-skill: ${resolved.file} — no /sessions-to-file-tool findings`);
     } else {
-      for (const f of findings) log(`✗ ${f.path}:${f.line}: [${f.rule}] ${f.message}`);
-      log(`✗ analyze-skill: ${findings.length} finding(s) in ${resolved.file} (exit 1)`);
+      for (const f of findings) log(`⚠ ${f.path}:${f.line}: [${f.rule}] ${f.message}`);
+      log(
+        `⚠ analyze-skill: ${findings.length} finding(s) in ${resolved.file} — advisory (exit 0)` +
+          (strict ? ", failing on --strict (exit 1)" : "; pass --strict to fail on findings"),
+      );
     }
-    log(
-      "  a clean result is a PRE-FLIGHT signal, not proof of on-tier resolution — the runtime " +
-        "no_vm_path_file_op / vm_path_denied asserts remain authoritative (see docs/subagents.md).",
-    );
+    if (!suppressed) {
+      log(
+        "  a clean result is a PRE-FLIGHT signal, not proof of on-tier resolution — the runtime " +
+          "no_vm_path_file_op / vm_path_denied asserts remain authoritative (see docs/subagents.md).",
+      );
+    }
   }
-  return process.exit(ok ? 0 : 1);
+  return process.exit(failing ? 1 : 0);
 }

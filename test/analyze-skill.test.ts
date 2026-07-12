@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
-import { analyzeSkillText } from "../src/run/analyze-skill.js";
+import { analyzeSkillText, hasIgnoreMarker } from "../src/run/analyze-skill.js";
 
 const RULE1 = "sessions-path-to-file-tool";
 const RULE2 = "sessions-find-into-file-read";
@@ -459,6 +459,42 @@ describe("analyzeSkillText — restored true positives (context-confidence fixes
 });
 
 // --------------------------------------------------------------------------------------------- //
+// The `analyze-skill: ignore` file-level marker — the single switch that silences the ENTIRE
+// path-fidelity warning class for a SKILL.md, including a genuine true positive (an explicit author
+// override, not a narrower FP guard).
+// --------------------------------------------------------------------------------------------- //
+
+describe("analyzeSkillText — `analyze-skill: ignore` marker", () => {
+  it("hasIgnoreMarker detects a bare marker line", () => {
+    expect(hasIgnoreMarker("some text\nanalyze-skill: ignore\nmore text")).toBe(true);
+  });
+
+  it("hasIgnoreMarker detects the marker inside an HTML comment", () => {
+    expect(hasIgnoreMarker("some text\n<!-- analyze-skill: ignore -->\nmore text")).toBe(true);
+  });
+
+  it("hasIgnoreMarker is false when the marker is absent", () => {
+    expect(hasIgnoreMarker("Write(/sessions/{{id}}/mnt/outputs/out.md)")).toBe(false);
+  });
+
+  it("suppresses a genuine true-positive Write(/sessions/...) directive when the file carries the marker", () => {
+    const text = ["<!-- analyze-skill: ignore -->", "", "Then call `Write(/sessions/{{id}}/mnt/outputs/out.md)` to save the report."].join(
+      "\n",
+    );
+    // Test-honesty check first: the same text WITHOUT the marker actually fires.
+    const withoutMarker = text.replace("<!-- analyze-skill: ignore -->\n\n", "");
+    expect(analyzeSkillText(withoutMarker, "SKILL.md").length).toBeGreaterThan(0);
+    // With the marker, every finding — including this real violation — is suppressed.
+    expect(analyzeSkillText(text, "SKILL.md")).toEqual([]);
+  });
+
+  it("suppresses a bare marker line (no HTML comment) the same way", () => {
+    const text = ["analyze-skill: ignore", "", "OUTPUT_PATH=/sessions/{{session_id}}/mnt/outputs/notes.md"].join("\n");
+    expect(analyzeSkillText(text, "SKILL.md")).toEqual([]);
+  });
+});
+
+// --------------------------------------------------------------------------------------------- //
 // Fail-on-break: every firing fixture MUST flip to clean when isVmSessionsPath is stubbed to
 // always-false (proves this analyzer defers to the production predicate, not a re-implementation).
 // --------------------------------------------------------------------------------------------- //
@@ -504,8 +540,8 @@ function run(args: string[], cwd: string) {
   return { code: r.status, out: r.stdout, err: r.stderr };
 }
 
-describe.skipIf(!can)("analyze-skill CLI — exit codes and envelope", () => {
-  it("exits 1 with a finding, 0 clean, on a real SKILL.md file target", () => {
+describe.skipIf(!can)("analyze-skill CLI — exit codes and envelope (ADVISORY: exit 0 by default, --strict to gate)", () => {
+  it("a finding prints but exits 0 by default; a clean file also exits 0", () => {
     const d = mkdtempSync(join(tmpdir(), "as-cli-"));
     const dirty = join(d, "SKILL-dirty.md");
     writeFileSync(dirty, "Write(/sessions/{{id}}/mnt/outputs/out.md)\n");
@@ -513,10 +549,40 @@ describe.skipIf(!can)("analyze-skill CLI — exit codes and envelope", () => {
     writeFileSync(clean, "OUTPUT_PATH=artifacts/out.md\n");
 
     const dirtyRun = run(["analyze-skill", dirty], d);
-    expect(dirtyRun.code).toBe(1);
+    expect(dirtyRun.code).toBe(0);
+    expect(dirtyRun.err).toMatch(new RegExp(RULE1));
 
     const cleanRun = run(["analyze-skill", clean], d);
     expect(cleanRun.code).toBe(0);
+  });
+
+  it("--strict flips a finding to exit 1; a clean file still exits 0 under --strict", () => {
+    const d = mkdtempSync(join(tmpdir(), "as-cli-strict-"));
+    const dirty = join(d, "SKILL-dirty.md");
+    writeFileSync(dirty, "Write(/sessions/{{id}}/mnt/outputs/out.md)\n");
+    const clean = join(d, "SKILL-clean.md");
+    writeFileSync(clean, "OUTPUT_PATH=artifacts/out.md\n");
+
+    expect(run(["analyze-skill", dirty, "--strict"], d).code).toBe(1);
+    expect(run(["analyze-skill", clean, "--strict"], d).code).toBe(0);
+  });
+
+  it("the `analyze-skill: ignore` marker suppresses a real finding — exit 0 even under --strict", () => {
+    const d = mkdtempSync(join(tmpdir(), "as-cli-marker-"));
+    const suppressed = join(d, "SKILL.md");
+    writeFileSync(suppressed, ["<!-- analyze-skill: ignore -->", "", "Write(/sessions/{{id}}/mnt/outputs/out.md)"].join("\n"));
+
+    const defaultRun = run(["analyze-skill", suppressed], d);
+    expect(defaultRun.code).toBe(0);
+
+    const strictRun = run(["analyze-skill", suppressed, "--strict"], d);
+    expect(strictRun.code).toBe(0);
+
+    const jsonRun = run(["analyze-skill", suppressed, "--strict", "--output-format", "json"], d);
+    expect(jsonRun.code).toBe(0);
+    const payload = JSON.parse(jsonRun.out.trim());
+    expect(payload.findings).toEqual([]);
+    expect(payload.suppressed).toBe(true);
   });
 
   it("resolves a skill directory to its SKILL.md", () => {
@@ -524,8 +590,8 @@ describe.skipIf(!can)("analyze-skill CLI — exit codes and envelope", () => {
     const skillDir = join(d, "my-skill");
     mkdirSync(skillDir);
     writeFileSync(join(skillDir, "SKILL.md"), "Write(/sessions/{{id}}/mnt/outputs/out.md)\n");
-    const r = run(["analyze-skill", skillDir], d);
-    expect(r.code).toBe(1);
+    expect(run(["analyze-skill", skillDir], d).code).toBe(0);
+    expect(run(["analyze-skill", skillDir, "--strict"], d).code).toBe(1);
   });
 
   it("exits 2 on a directory with no SKILL.md, and on a missing target", () => {
@@ -536,12 +602,12 @@ describe.skipIf(!can)("analyze-skill CLI — exit codes and envelope", () => {
     expect(run(["analyze-skill"], d).code).toBe(2);
   });
 
-  it("--output-format json emits a machine envelope with ok/findings", () => {
+  it("--output-format json emits a machine envelope with ok/findings (default exit 0 despite findings)", () => {
     const d = mkdtempSync(join(tmpdir(), "as-cli-json-"));
     const dirty = join(d, "SKILL.md");
     writeFileSync(dirty, "Write(/sessions/{{id}}/mnt/outputs/out.md)\n");
     const r = run(["analyze-skill", dirty, "--output-format", "json"], d);
-    expect(r.code).toBe(1);
+    expect(r.code).toBe(0);
     const payload = JSON.parse(r.out.trim());
     expect(payload.tool).toBe("cowork-harness");
     expect(payload.command).toBe("analyze-skill");
@@ -549,6 +615,17 @@ describe.skipIf(!can)("analyze-skill CLI — exit codes and envelope", () => {
     expect(Array.isArray(payload.findings)).toBe(true);
     expect(payload.findings.length).toBeGreaterThan(0);
     expect(payload.findings[0].rule).toBe(RULE1);
+  });
+
+  it("--output-format json + --strict exits 1 on a finding", () => {
+    const d = mkdtempSync(join(tmpdir(), "as-cli-json-strict-"));
+    const dirty = join(d, "SKILL.md");
+    writeFileSync(dirty, "Write(/sessions/{{id}}/mnt/outputs/out.md)\n");
+    const r = run(["analyze-skill", dirty, "--strict", "--output-format", "json"], d);
+    expect(r.code).toBe(1);
+    const payload = JSON.parse(r.out.trim());
+    expect(payload.ok).toBe(false);
+    expect(payload.findings.length).toBeGreaterThan(0);
   });
 
   it("rejects an unknown flag (exit 2, not silently accepted)", () => {

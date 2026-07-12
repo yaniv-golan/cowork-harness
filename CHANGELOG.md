@@ -8,7 +8,7 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
-- **`analyze-skill <SKILL.md | skill-dir/>` — a token-free static CI gate for the "skill hands a
+- **`analyze-skill <SKILL.md | skill-dir/>` — a token-free static ADVISORY scan for the "skill hands a
   `/sessions/...` path to a file tool" defect class.** Previously the only way to discover that a skill's
   dispatch prompt or file-tool directive points at a `/sessions/...` VM path — which production's
   host-loop path gate denies unconditionally, since the agent's file tools run on the host filesystem —
@@ -17,11 +17,14 @@ All notable changes to this project are documented here. The format is based on
   deny decision; only the extraction of candidate paths from markdown is heuristic, and it is
   conservative by design — a `/sessions` token inside a fenced bash/sh/shell/zsh block, an
   anti-instruction line ("never write to `/sessions/...`"), or plain prose with no file-tool/output
-  context is never flagged. Two WARN rules (`sessions-path-to-file-tool`,
-  `sessions-find-into-file-read`); exit 1 on any finding, exit 0 clean, exit 2 on usage error. See
-  [docs/subagents.md](./docs/subagents.md#static-path-fidelity-check-analyze-skill) — a clean result is
-  a PRE-FLIGHT signal only, not proof of on-tier resolution; the runtime `no_vm_path_file_op` /
-  `vm_path_denied` assertions remain authoritative.
+  context is never flagged. Findings from two rules (`sessions-path-to-file-tool`,
+  `sessions-find-into-file-read`) print as advisory warnings and exit 0 by default — the extraction is
+  heuristic enough that a hard gate would over-flag innocent documentation; pass `--strict` to fail
+  (exit 1) on any finding instead, and put a line containing `analyze-skill: ignore` (bare, or inside an
+  HTML comment) in a SKILL.md to silence every finding for that file, even under `--strict`. Exit 2 on a
+  usage error. See [docs/subagents.md](./docs/subagents.md#static-path-fidelity-check-analyze-skill) — a
+  clean/suppressed result is a PRE-FLIGHT signal only, not proof of on-tier resolution; the runtime
+  `no_vm_path_file_op` / `vm_path_denied` assertions remain authoritative.
 
 - **`scenario.py resolve-agent-types <plugin-dir>` + a `subagent_type` check folded into `lint-skill`
   — static resolution of a pinned `subagent_type` against a plugin's own agents.** A `Task` dispatch
@@ -70,6 +73,15 @@ All notable changes to this project are documented here. The format is based on
   in the same run. The JSON envelope (`schema/verify-cassettes.json`) gained a matching `unverifiable[]`
   bucket per result, split out of what used to be a class-blind `staleness[]`; text output now marks
   those rows `[unverifiable]` instead of `[stale]`.
+
+### Fixed
+
+- **`lint-skill --strict` no longer fails on an INFO-only result.** The `subagent_type` ladder
+  (`subagent-type-unresolvable` / `-not-found-in-plugin` / `-unknown`) is always INFO by design — there
+  is no harness registry of built-in agent types to disprove an unknown value against — but `--strict`
+  was exiting non-zero on ANY finding, INFO included, contradicting its own `--help` text ("exit
+  non-zero on WARN too, not just ERROR") and failing a correctly-authored skill that merely pins a
+  built-in `subagent_type` (e.g. `Explore`). `--strict` now fails only on WARN or ERROR severity.
 
 ## [0.30.0] — 2026-07-12
 

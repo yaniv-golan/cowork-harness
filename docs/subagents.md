@@ -33,7 +33,19 @@ on one hardcoded relative form.
 file tool" defect described above **statically**, token-free — no Docker, no model call, no live
 host-loop run — by scanning a SKILL.md's text. It reuses the harness's own ported `/sessions` path-gate
 predicate (`isVmSessionsPath`) as the DENY decision; the only heuristic part is extracting candidate
-paths out of markdown text. Two WARN rules, both exit-1 findings:
+paths out of markdown text.
+
+**ADVISORY by default.** Because the extraction is heuristic and can over-flag innocent
+documentation/teaching examples, findings print as warnings but the command **exits 0 by default even
+when it prints findings**. Pass `--strict` to turn it into a hard gate — exit 1 on any finding, mirroring
+`lint-skill --strict` exactly. A SKILL.md can also silence the ENTIRE warning class for itself: a line
+containing `analyze-skill: ignore` (bare, or inside an HTML comment `<!-- analyze-skill: ignore -->`)
+anywhere in the file suppresses every `analyze-skill` finding for that file — including a genuine true
+positive, since this is an explicit author override, not a narrower false-positive guard. Use it on a
+SKILL.md that legitimately uses `/sessions` paths (a VM-tier-only skill) or that documents them in
+prose/teaching examples. Under `--strict`, a suppressed file never fails.
+
+Two rules, both advisory findings:
 
 - **`sessions-path-to-file-tool`** — a `/sessions/...` token in a file-tool/output POSITIVE context: an
   `OUTPUT_PATH=`/`OUTPUT_DIR=` assignment, a `Write(`/`Read(`/`Edit(`/`Glob(`/`Grep(` directive target,
@@ -108,8 +120,8 @@ that tier (the finding message names the tier explicitly so this is visible at r
 itself has no way to know which tier(s) a given SKILL.md targets). Run it against skills meant to work
 on host-loop, or skills written to work across tiers via the tier-qualified addressing above.
 
-**A clean `analyze-skill` is a PRE-FLIGHT signal, not proof of on-tier resolution.** The authoritative
-check remains the runtime `no_vm_path_file_op` / `vm_path_denied` assertions (see
+**A clean or suppressed `analyze-skill` is a PRE-FLIGHT signal, not proof of on-tier resolution.** The
+authoritative check remains the runtime `no_vm_path_file_op` / `vm_path_denied` assertions (see
 [scenario.md](./scenario.md)) against a real recorded/live run — `analyze-skill` exists to catch the
 obvious cases before paying for that run, not to replace it.
 
