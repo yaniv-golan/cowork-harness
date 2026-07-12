@@ -1051,7 +1051,8 @@ export interface RunResult {
     toolsUsed: Array<{ name: string; count: number }>;
     description?: string;
     prompt?: string; // dispatch input.prompt, assertText-capped
-    model?: string; // the dispatching message's model
+    dispatchModel?: string; // the DISPATCHING message's model (ex-"model" — renamed when resolvedModel landed beside it)
+    resolvedModel?: string; // the RESOLVED child model from the dispatch's tool_use_result envelope
     output?: string; // the dispatch's own paired tool_result, assertText-capped
     outputTruncated?: boolean; // `output` was cut at the assert cap — a negative content check is unverifiable, not a proven absence (#9)
     attributedSkillId?: string; // the skill-activation window this dispatch was attributed to — NOT Fingerprint.skillScope (a different, unrelated field)

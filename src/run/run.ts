@@ -158,7 +158,8 @@ interface SubagentDispatch {
   toolsUsed: Array<{ name: string; count: number }>;
   description?: string; // the dispatch's `description` — identifies it when the skill set no subagent_type
   prompt?: string; // dispatch input.prompt, assertText-capped
-  model?: string; // the dispatching message's model
+  dispatchModel?: string; // the DISPATCHING message's model (ex-`model` — renamed when resolvedModel landed beside it)
+  resolvedModel?: string; // the RESOLVED child model from the dispatch's tool_use_result envelope (subagent_result_meta) — strictly better evidence than dispatchModel for what the child actually ran as
   output?: string; // the dispatch's own paired tool_result, assertText-capped — populated by a finalize step, not at push time
   outputTruncated?: boolean; // `output` was cut at the assert cap (#9) — set in denormalizeSubagentOutputs
 }
@@ -704,13 +705,26 @@ export class Run {
               toolsUsed: [],
               description: ev.description,
               prompt: ev.prompt,
-              model: ev.model,
+              dispatchModel: ev.dispatchModel,
             });
             // An explicit Agent(subagent_type:"fork") inherits the main agent's context (unlike every
             // other dispatch type, which starts isolated) — so its children are main-agent flow. Still
             // push to rec.subagents unconditionally above, so dispatch_count_max stays unaffected.
             if (ev.dispatchAgentType === "fork" && ev.toolUseId) this.forkScopedIds.add(ev.toolUseId);
             break;
+          case "subagent_result_meta": {
+            // The dispatch's paired result envelope (tool_use_result) — joined strictly by toolUseId,
+            // same convention as task_started above. A tool-free child (no parented assistant frame at
+            // all) is covered here: this event doesn't depend on any parented frame having fired.
+            const sa = this.rec.subagents.find((s) => s.toolUseId === ev.toolUseId);
+            if (sa) {
+              sa.resolvedModel = ev.resolvedModel;
+              // corroborates task_started's resolvedAgentType — only fills a gap, never overwrites
+              // stronger evidence that already landed.
+              if (sa.resolvedAgentType === undefined && ev.agentType !== undefined) sa.resolvedAgentType = ev.agentType;
+            }
+            break;
+          }
           case "metrics":
             // merge, don't overwrite — a "result" event may have already set/will later set `usd`
             this.rec.cost = { ...this.rec.cost, raw: ev.data };

@@ -349,6 +349,29 @@ function systemEvent(subtype: string, data: Record<string, unknown>): AgentEvent
   return { type: "system_event", subtype, data };
 }
 
+/** Synthetic `subagent_result_meta` AgentEvent builder — the dispatch's paired `tool_use_result` envelope. */
+function subagentResultMeta(opts: {
+  toolUseId: string;
+  resolvedModel?: string;
+  agentId?: string;
+  agentType?: string;
+  status?: string;
+}): AgentEvent {
+  return { type: "subagent_result_meta", ...opts };
+}
+
+describe("subagent_result_meta consumption — resolved child model from the dispatch's envelope", () => {
+  it("a tool-free child still gets resolvedModel (envelope-sourced, not parented-assistant-sourced)", async () => {
+    const rec = await driveRunOverEvents([
+      dispatch("t1", "founder-skills:ic-sim"),
+      subagentResultMeta({ toolUseId: "t1", resolvedModel: "claude-haiku-x", agentType: "founder-skills:ic-sim", status: "completed" }),
+    ]);
+    const sa = rec.subagents.find((s) => s.toolUseId === "t1")!;
+    expect(sa.resolvedModel).toBe("claude-haiku-x");
+    expect(sa.dispatchModel).toBeUndefined(); // the dispatching-message field is a separate channel, never repurposed
+  });
+});
+
 describe("task_started family consumption (resolved child type + omission note)", () => {
   it("joins task_started to the dispatch by tool_use_id and records the RESOLVED type", async () => {
     const rec = await driveRunOverEvents([

@@ -92,6 +92,8 @@ const full: RunResult = {
       declaredTools: ["Read"],
       toolsUsed: [{ name: "Read", count: 1 }],
       description: "explore",
+      dispatchModel: "claude-sonnet-4-5",
+      resolvedModel: "claude-haiku-x",
       attributedSkillId: "my-plugin:my-skill",
     },
   ],

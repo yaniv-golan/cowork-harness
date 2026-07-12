@@ -433,7 +433,8 @@ export interface DispatchNode {
   declaredTools: string[];
   depth: number; // 0 = top-level dispatch; >0 = dispatched by another sub-agent
   prompt?: string;
-  model?: string;
+  dispatchModel?: string; // the DISPATCHING message's model (ex-`model`)
+  resolvedModel?: string; // the RESOLVED child model, from the dispatch's paired subagent_result_meta event (tool_use_result envelope)
   output?: string; // paired from a tool_result in the same events file, by toolUseId
 }
 
@@ -441,7 +442,9 @@ export interface DispatchNode {
  * `trace --view dispatches` — the sub-agent dispatch tree, so an author can read off the REAL total
  * dispatch count (what `dispatch_count_max` asserts against) instead of guess-and-check, and see the
  * nesting (a sub-agent that dispatches further). Ordered by appearance; depth derived from
- * `parentToolUseId` chains among the dispatches themselves.
+ * `parentToolUseId` chains among the dispatches themselves. Each node's `resolvedModel` is paired from
+ * a `subagent_result_meta` event in the SAME events file (also parsed by `eventsOf`/`parseMessage`) —
+ * the dispatch's own `dispatchModel` is early/fallback evidence only; `resolvedModel` is authoritative.
  */
 export function buildDispatchTree(file: string): { nodes: DispatchNode[]; total: number } {
   const events = eventsOf(file);
@@ -451,6 +454,13 @@ export function buildDispatchTree(file: string): { nodes: DispatchNode[]; total:
   // available without reading RunResult/RunRecord (mirrors buildTraceFromEvents's results.set(...) pairing).
   const results = new Map<string, string>();
   for (const ev of events) if (ev.type === "tool_result" && ev.toolUseId) results.set(ev.toolUseId, ev.text);
+  // Pair each dispatch's toolUseId against its paired subagent_result_meta event (the tool_use_result
+  // envelope) for resolvedModel — same events file, keyed the same way as `results` above.
+  const metaById = new Map(
+    events
+      .filter((e): e is Extract<AgentEvent, { type: "subagent_result_meta" }> => e.type === "subagent_result_meta")
+      .map((m) => [m.toolUseId, m]),
+  );
   const depthOf = (d: Extract<AgentEvent, { type: "subagent_dispatch" }>): number => {
     let depth = 0;
     let cur = d.parentToolUseId;
@@ -469,7 +479,8 @@ export function buildDispatchTree(file: string): { nodes: DispatchNode[]; total:
     declaredTools: d.declaredTools,
     depth: depthOf(d),
     prompt: d.prompt,
-    model: d.model,
+    dispatchModel: d.dispatchModel,
+    resolvedModel: metaById.get(d.toolUseId)?.resolvedModel,
     output: results.get(d.toolUseId),
   }));
   return { nodes, total: nodes.length };
@@ -483,7 +494,11 @@ export function formatDispatchTree({ nodes, total }: { nodes: DispatchNode[]; to
     const tools = n.declaredTools.length ? ` [${n.declaredTools.join(",")}]` : "";
     const promptLine = firstLine(n.prompt);
     const outputLine = firstLine(n.output);
-    const extra = [promptLine ? `prompt: ${promptLine}` : "", outputLine ? `output: ${outputLine}` : ""]
+    const extra = [
+      promptLine ? `prompt: ${promptLine}` : "",
+      outputLine ? `output: ${outputLine}` : "",
+      n.resolvedModel ? `resolvedModel=${n.resolvedModel}` : "",
+    ]
       .filter(Boolean)
       .map((s) => `\n${indent}  ${s}`)
       .join("");

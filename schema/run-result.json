@@ -611,8 +611,13 @@
           "prompt": {
             "type": "string"
           },
-          "model": {
-            "type": "string"
+          "dispatchModel": {
+            "type": "string",
+            "description": "the DISPATCHING message's model (ex-\"model\" — renamed when resolvedModel landed beside it)"
+          },
+          "resolvedModel": {
+            "type": "string",
+            "description": "the RESOLVED child model from the dispatch's tool_use_result envelope"
           },
           "output": {
             "type": "string"

@@ -281,7 +281,7 @@ describe("parseMessage — sub-agent dispatch", () => {
     );
     const dispatch = ev.find((e) => e.type === "subagent_dispatch") as any;
     expect(dispatch).toBeDefined();
-    expect(dispatch.model).toBe("claude-sonnet-4-5");
+    expect(dispatch.dispatchModel).toBe("claude-sonnet-4-5");
   });
 
   it("threads prompt and model onto a subagent_dispatch event (M4)", () => {
@@ -299,7 +299,7 @@ describe("parseMessage — sub-agent dispatch", () => {
         "claude-sonnet-4-5",
       ),
     );
-    expect(d[0]).toMatchObject({ prompt: "go explore the codebase", model: "claude-sonnet-4-5" });
+    expect(d[0]).toMatchObject({ prompt: "go explore the codebase", dispatchModel: "claude-sonnet-4-5" });
   });
 
   it("caps an oversized subagent prompt at the 10KB assertText limit", () => {
@@ -415,13 +415,13 @@ describe("Run — turn loop + record", () => {
         typeOmitted: false,
         declaredTools: [],
         prompt: "explore",
-        model: "claude-sonnet-4-5",
+        dispatchModel: "claude-sonnet-4-5",
       },
       { type: "tool_result", toolUseId: "disp1", isError: false, text: "found 3 files", assertText: "found 3 files" },
       { type: "result", isError: false },
     ];
     const rec = await new Run(new MockSession(ev), new ScriptedDecider([])).drive("go");
-    expect(rec.subagents[0]).toMatchObject({ prompt: "explore", model: "claude-sonnet-4-5", output: "found 3 files" });
+    expect(rec.subagents[0]).toMatchObject({ prompt: "explore", dispatchModel: "claude-sonnet-4-5", output: "found 3 files" });
   });
 
   it("leaves rec.subagents[].output undefined when no tool_result matches the dispatch's toolUseId (M4)", async () => {

@@ -337,7 +337,28 @@ describe("trace --view dispatches (dispatch tree + total)", () => {
       { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "disp1", content: "found 3 files" }] } },
     ]);
     const { nodes } = buildDispatchTree(f);
-    expect(nodes[0]).toMatchObject({ prompt: "go explore", model: "claude-sonnet-4-5", output: "found 3 files" });
+    expect(nodes[0]).toMatchObject({ prompt: "go explore", dispatchModel: "claude-sonnet-4-5", output: "found 3 files" });
+  });
+
+  it("attaches resolvedModel from a paired subagent_result_meta event (the dispatch's tool_use_result envelope)", () => {
+    const f = eventsFile([
+      {
+        type: "assistant",
+        message: {
+          model: "claude-sonnet-4-5",
+          content: [{ type: "tool_use", id: "disp1", name: "Agent", input: { subagent_type: "general-purpose", prompt: "go explore" } }],
+        },
+      },
+      {
+        type: "user",
+        tool_use_result: { resolvedModel: "claude-haiku-x", agentType: "general-purpose", status: "completed" },
+        message: { content: [{ type: "tool_result", tool_use_id: "disp1", content: "found 3 files" }] },
+      },
+    ]);
+    const { nodes } = buildDispatchTree(f);
+    expect(nodes[0]).toMatchObject({ dispatchModel: "claude-sonnet-4-5", resolvedModel: "claude-haiku-x" });
+    const txt = formatDispatchTree({ nodes, total: nodes.length });
+    expect(txt).toContain("resolvedModel=claude-haiku-x");
   });
 
   it("formatDispatchTree prints the prompt and output first-line per node", () => {

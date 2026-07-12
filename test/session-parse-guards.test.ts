@@ -133,6 +133,26 @@ describe("subagent_dispatch — typeOmitted is a parse-time fact (full input par
   });
 });
 
+describe("subagent_result_meta — the dispatch's paired tool_use_result envelope", () => {
+  it("emits resolvedModel/agentId/agentType/status keyed by the tool_result block's id", () => {
+    const evs = parseMessage({
+      type: "user",
+      tool_use_result: { resolvedModel: "claude-haiku-x", agentId: "agent_3", agentType: "general-purpose", status: "completed" },
+      message: { content: [{ type: "tool_result", tool_use_id: "t1", content: "done" }] },
+    });
+    expect(evs.find((e) => e.type === "subagent_result_meta")).toMatchObject({
+      toolUseId: "t1",
+      resolvedModel: "claude-haiku-x",
+      agentType: "general-purpose",
+      status: "completed",
+    });
+  });
+  it("a user message without the envelope emits no meta event", () => {
+    const evs = parseMessage({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "t1", content: "x" }] } });
+    expect(evs.some((e) => e.type === "subagent_result_meta")).toBe(false);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // F3 — synthesized dispatch id uniqueness across messages
 // ---------------------------------------------------------------------------

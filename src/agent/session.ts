@@ -77,8 +77,20 @@ export type AgentEvent =
       declaredTools: string[];
       description?: string;
       prompt?: string; // input.prompt, assertText-capped
-      model?: string; // the dispatching message's model
+      dispatchModel?: string; // the DISPATCHING message's model (ex-"model" — renamed when resolvedModel landed beside it on RunResult.subagents[])
     } // parentToolUseId = nesting, for the dispatch tree.
+  | {
+      // The dispatch's paired result envelope: `tool_use_result` on the `user` message carries the
+      // RESOLVED child metadata (resolvedModel/agentId/agentType/status) — a TOP-LEVEL sibling of
+      // `message`, previously discarded entirely (only content blocks were parsed). Keyed by the first
+      // tool_result block's id so it joins onto the matching `subagent_dispatch` by toolUseId.
+      type: "subagent_result_meta";
+      toolUseId: string;
+      resolvedModel?: string;
+      agentId?: string;
+      agentType?: string;
+      status?: string;
+    }
   | { type: "thinking"; text: string; model?: string } // model set only when this thinking block came from an assistant message (not the system-subtype "thinking" event, which has no message.model)
   | { type: "metrics"; data: Record<string, unknown> } // api_metrics → cost
   | { type: "decision"; request: DecisionRequest }
@@ -995,7 +1007,7 @@ export function parseMessage(msg: any): AgentEvent[] {
               declaredTools: declared,
               description: inp.description != null ? String(inp.description) : undefined,
               prompt: inp.prompt != null ? toolResultAssertText(String(inp.prompt)) : undefined,
-              model,
+              dispatchModel: model,
             });
           }
         }
@@ -1007,6 +1019,32 @@ export function parseMessage(msg: any): AgentEvent[] {
       // Tool OUTCOMES come back as `user` messages carrying tool_result blocks. We never parsed these
       // before, so every tool result — including the AskUserQuestion `q.map` error — was invisible to the
       // recorder/trace. Capture them for delivery verification + `trace --view tools`/`--view questions`.
+      //
+      // The dispatch's paired result envelope: tool_use_result carries the RESOLVED child metadata
+      // (resolvedModel/agentId/agentType/status) as a TOP-LEVEL sibling of message — previously
+      // discarded (only content blocks were parsed). Keyed by the first tool_result block's id.
+      {
+        const env = msg.tool_use_result;
+        if (env && typeof env === "object" && !Array.isArray(env)) {
+          const blocks = Array.isArray(msg.message?.content) ? msg.message.content : [];
+          const tr = blocks.find(
+            (b: Record<string, unknown> | null) => b && typeof b === "object" && (b as Record<string, unknown>).type === "tool_result",
+          );
+          const toolUseId =
+            tr && (tr as Record<string, unknown>).tool_use_id ? String((tr as Record<string, unknown>).tool_use_id) : undefined;
+          const e = env as Record<string, unknown>;
+          const has = typeof e.resolvedModel === "string" || typeof e.agentType === "string" || typeof e.status === "string";
+          if (toolUseId && has)
+            ev.push({
+              type: "subagent_result_meta",
+              toolUseId,
+              resolvedModel: typeof e.resolvedModel === "string" ? e.resolvedModel : undefined,
+              agentId: typeof e.agentId === "string" ? e.agentId : undefined,
+              agentType: typeof e.agentType === "string" ? e.agentType : undefined,
+              status: typeof e.status === "string" ? e.status : undefined,
+            });
+        }
+      }
       for (const block of msg.message?.content ?? []) {
         // Guard a non-object content entry (null/scalar — a malformed/corrupt frame): `block.type` on a
         // primitive silently returns undefined, but `block === null` throws. Mirror the assistant loop's
