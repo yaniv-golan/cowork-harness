@@ -59,6 +59,17 @@ All notable changes to this project are documented here. The format is based on
   `subagent_type` ladder's honest-limit posture. See
   [docs/subagents.md](./docs/subagents.md#static-subagent_type-resolution-resolve-agent-types--lint-skill).
 
+- **`subagent_dispatch_healthy: {type?, delivered?, path?, path_suffix?, no_vm_paths?}` — a composite
+  assertion for a single dispatch's per-dispatch correlation.** `subagent_file_write` matches ANY
+  sub-agent-origin write, so it can't distinguish a delivery from the SELECTED dispatch from one made by
+  a sibling dispatch. `subagent_dispatch_healthy` selects dispatch(es) by `type` (same matching as
+  `subagent_dispatched`; omit to require every dispatch healthy) and, for each, checks its OWN paired
+  non-error write (`delivered`, default `true`, optionally narrowed by `path`/`path_suffix`) and its OWN
+  freedom from any `/sessions` VM-path attempt (`no_vm_paths`, default `true`) — both tied to that
+  dispatch's `parentToolUseId`, never any other dispatch's. Hostloop-only (the VM-path conjunct can't
+  verify off that tier); content-class (`RunResult.fileToolAttempts` + `RunResult.toolResults`),
+  replay-checkable without `controlOut`.
+
 ### Changed
 
 - **Breaking (pre-1.0): `verify-cassettes` now distinguishes "could not verify" from "verified and

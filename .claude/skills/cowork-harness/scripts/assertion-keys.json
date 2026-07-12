@@ -45,6 +45,7 @@
     "skill_tool_used",
     "skill_triggered",
     "subagent_declared_but_unused",
+    "subagent_dispatch_healthy",
     "subagent_dispatched",
     "subagent_file_write",
     "subagent_output_contains",

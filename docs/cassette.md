@@ -239,6 +239,7 @@ the rules and CI-placement rationale (why each category behaves this way), see
 | `subagent_tool_absent` | no sub-agent used the tool |
 | `no_vm_path_file_op` | **`fidelity: hostloop` only** — no gated file tool attempted a `/sessions`(-prefixed) path (`RunResult.fileToolAttempts`) — content-class, re-derived from the frozen `tool_use` stream; any other tier FAILS "cannot verify" (`/sessions/...` is valid there) |
 | `subagent_file_write` | a sub-agent-origin write attempt (`path` exact or `path_suffix`) has a paired non-error tool_result (`RunResult.fileToolAttempts` + `RunResult.toolResults`) — content-class, tier-agnostic |
+| `subagent_dispatch_healthy` | **`fidelity: hostloop` only** — composite: ties ONE selected dispatch's own delivered write (`delivered`, default true) and path-cleanliness (`no_vm_paths`, default true) to it via `parentToolUseId` — the per-dispatch correlation `subagent_file_write` (which matches ANY sub-agent write) lacks; content-class (`RunResult.fileToolAttempts` + `RunResult.toolResults`) |
 | `subagent_dispatched` | a sub-agent matching the regex was dispatched |
 | `subagent_declared_but_unused` | sub-agent declared the tool but never used **that** tool (even if it used others) |
 | `subagent_output_contains` | a dispatched sub-agent's own output contains the substring — `match` (optional regex over `agentType`/`description`) narrows to specific dispatch(es); omitted, checks whether ANY dispatch's output contains it |

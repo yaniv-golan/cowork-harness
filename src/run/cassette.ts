@@ -3813,6 +3813,10 @@ export const ALWAYS_CONTENT_KEYS: (keyof Assertion)[] = [
   // itself above (see the comment beside `fileToolAttempts: rec.fileToolAttempts` in replayCassette).
   "no_vm_path_file_op",
   "subagent_file_write",
+  // content-class, NOT controlOut-gated: the composite reads only fileToolAttempts/toolResults (same
+  // frozen-stream evidence as subagent_file_write above), scoped per-dispatch via parentToolUseId — see
+  // assert.ts's subagent_dispatch_healthy evaluator.
+  "subagent_dispatch_healthy",
   // Verdict modifiers — NOT filesystem/egress assertions. Keep all of them on replay (each evaluates to a
   // no-op pass via assert.ts) so a standalone modifier neither inflates the "filesystem/egress skipped"
   // count nor emits a misleading warning, AND so the replay path actually exercises their assert.ts noop

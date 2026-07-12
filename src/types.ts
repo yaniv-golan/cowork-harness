@@ -291,6 +291,31 @@ export const Assertion = z.strictObject({
     .describe(
       "a SUB-AGENT-origin write attempt whose raw path EQUALS `path` (or ends with `path_suffix`) has a PAIRED non-error tool_result — the causal half of a delivery probe (pair with artifact_json for content). Prefer `path` (exact) so a foo/artifacts/probe.json can't satisfy an artifacts/probe.json suffix. Tier-agnostic.",
     ),
+  subagent_dispatch_healthy: z
+    .object({
+      type: z
+        .string()
+        .optional()
+        .describe(
+          "regex over dispatchAgentType OR resolvedAgentType OR description, selecting the dispatch(es) to check — same matching as subagent_dispatched; omit to require EVERY dispatch to be healthy",
+        ),
+      delivered: z
+        .boolean()
+        .optional()
+        .describe(
+          "default true: the selected dispatch's OWN sub-agent-origin write (matched by parentToolUseId, not any sub-agent's write) has a paired non-error tool_result",
+        ),
+      path: z.string().min(1).optional().describe("EXACT raw path the delivered write must have sent (strongest); narrows `delivered`"),
+      path_suffix: z.string().min(1).optional().describe("the delivered write's path suffix (weaker than `path`)"),
+      no_vm_paths: z
+        .boolean()
+        .optional()
+        .describe("default true: the selected dispatch attempted NO `/sessions` VM path (its own parentToolUseId only)"),
+    })
+    .optional()
+    .describe(
+      "hostloop-only composite: ties ONE dispatch's resolved type to ITS OWN delivered write and path-cleanliness via parentToolUseId — the per-dispatch correlation `subagent_file_write` (which matches ANY sub-agent write) lacks. Content-class (fileToolAttempts + toolResults), replay-checkable without controlOut.",
+    ),
   subagent_dispatched: z
     .string()
     .optional()

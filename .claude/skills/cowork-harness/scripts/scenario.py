@@ -67,6 +67,7 @@ CONTENT_KEYS = {
     "subagent_output_contains",
     "no_vm_path_file_op",
     "subagent_file_write",
+    "subagent_dispatch_healthy",
     "dispatch_count_max",
     "skill_triggered",
     "no_skill_triggered",
