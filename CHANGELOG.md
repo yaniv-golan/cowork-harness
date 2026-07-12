@@ -104,7 +104,10 @@ All notable changes to this project are documented here. The format is based on
   `ANTHROPIC_API_KEY` is missing on non-PR events (fork and Dependabot PRs keep the warn+skip);
   image publishing now waits on ci.yml success for the tagged commit and verifies tag↔package
   lockstep via a composite action shared with the npm release gate (`workflow_dispatch` remains
-  the documented manual-republish escape hatch).
+  the documented manual-republish escape hatch). An admin can deliberately skip the live scenario
+  suite for a single release by setting a `SKIP_LIVE_SCENARIOS` repo variable to that exact commit
+  SHA — an explicit, auditable, per-commit override (a later commit can't inherit it), not a silent
+  skip; see [RELEASING.md](./RELEASING.md).
 - `ResourceSummary.probeFailures` (shipped at runtime in 0.29.0) is now declared on the RunResult
   type and JSON Schema; assertion-side consumption remains deferred.
 - **Breaking (pre-1.0): `subagents[].agentType` renamed to `dispatchAgentType`, and `subagents[].model`

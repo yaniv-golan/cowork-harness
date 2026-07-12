@@ -258,6 +258,11 @@ jobs:
         id: guard
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Admin override (see RELEASING.md): a repo VARIABLE pinned to the EXACT commit SHA being
+          # released. Setting a repo variable requires admin, and pinning it to one SHA means a later
+          # commit (different SHA) can never inherit the skip — so this is a deliberate, per-release,
+          # auditable override, NOT a re-opening of the silent-skip hole the hard-fail below closes.
+          SKIP_LIVE_SHA: ${{ vars.SKIP_LIVE_SCENARIOS }}
         run: |
           if [ -z "$ANTHROPIC_API_KEY" ]; then
             # Hard-fail ONLY on non-PR canonical-repo events: push to main (the SHA release.yml gates
@@ -265,11 +270,16 @@ jobs:
             # Dependabot PRs run from same-repo branches, PASS the job's same-repo `if:`, but GitHub
             # withholds Actions secrets from them — hard-failing there would red every weekly
             # Dependabot PR. PR lanes were never the publish gate; the push lane is.
-            if [ "$GITHUB_REPOSITORY" = "yaniv-golan/cowork-harness" ] && [ "$GITHUB_EVENT_NAME" != "pull_request" ]; then
-              echo "::error::ANTHROPIC_API_KEY is not set on the canonical repo — the live scenario suite is part of the publish gate and must not silently skip."
+            if [ "$GITHUB_REPOSITORY" = "yaniv-golan/cowork-harness" ] && [ "$GITHUB_EVENT_NAME" != "pull_request" ] \
+               && ! { [ -n "$SKIP_LIVE_SHA" ] && [ "$SKIP_LIVE_SHA" = "$GITHUB_SHA" ]; }; then
+              echo "::error::ANTHROPIC_API_KEY is not set on the canonical repo — the live scenario suite is part of the publish gate and must not silently skip. (Admin override: set the SKIP_LIVE_SCENARIOS repo variable to this exact commit SHA to deliberately skip it for one release — see RELEASING.md.)"
               exit 1
             fi
-            echo "::warning::ANTHROPIC_API_KEY not set — skipping live scenario suite (fork or Dependabot PR)."
+            if [ -n "$SKIP_LIVE_SHA" ] && [ "$SKIP_LIVE_SHA" = "$GITHUB_SHA" ]; then
+              echo "::warning::ADMIN OVERRIDE — SKIP_LIVE_SCENARIOS matches this commit ($GITHUB_SHA); the live scenario suite is being deliberately skipped for this publish. This is an explicit, auditable admin choice, not a silent skip."
+            else
+              echo "::warning::ANTHROPIC_API_KEY not set — skipping live scenario suite (fork or Dependabot PR)."
+            fi
             echo "live=false" >> "$GITHUB_OUTPUT"
           else
             echo "live=true" >> "$GITHUB_OUTPUT"

@@ -6,6 +6,33 @@ Pushing a `vX.Y.Z` tag triggers the `.github/workflows/release.yml` workflow, wh
 npm via **OIDC Trusted Publishing** (no stored token). Do **not** run `npm publish` manually — it
 requires an OTP and is not how this repo ships.
 
+## Admin override — deliberately skipping the live scenario suite for one release
+
+The live scenario suite is part of the publish gate: on a canonical-repo push to `main` (the SHA
+`release.yml` gates on), `ci.yml` **hard-fails** if `ANTHROPIC_API_KEY` is missing, so a release can
+never silently publish without it. When you must ship a release without running the live suite (e.g.
+the key is temporarily unavailable), override it **explicitly and per-commit** — never by weakening the
+gate:
+
+1. Set a repository **variable** (not a secret) named `SKIP_LIVE_SCENARIOS` to the **exact full commit
+   SHA** you are releasing:
+   ```
+   gh variable set SKIP_LIVE_SCENARIOS --repo yaniv-golan/cowork-harness --body "<full-40-char-SHA>"
+   ```
+   The `ci.yml` guard skips the live suite (loud `::warning::ADMIN OVERRIDE`) **only** when this
+   variable equals the running commit's SHA. Because it is pinned to one SHA, a later commit can never
+   inherit the skip — the override auto-expires. Setting a repo variable requires admin, so the bypass
+   is admin-gated and auditable in the run log.
+2. Push that commit / re-run `ci.yml`; the scenario job now passes, so `require-ci-success` (the publish
+   gate) is satisfied and the tag can publish.
+3. **Unset it afterward** so the next release runs the live suite normally:
+   ```
+   gh variable delete SKIP_LIVE_SCENARIOS --repo yaniv-golan/cowork-harness
+   ```
+
+This keeps the gate strict by default (a missing key still reds every un-overridden publish) while
+giving an admin a deliberate, one-release, logged escape hatch.
+
 ## The preferred three-phase sequence (branch → PR → merge → tag)
 
 CI triggers on pushes to `main`, on pull requests, and via manual `workflow_dispatch`. Pushing a release
