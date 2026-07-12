@@ -317,14 +317,15 @@ describe("fileToolAttempts — attempt-level path telemetry for gated file tools
 });
 
 /** Synthetic `hook_event` AgentEvent builder for driving a Run over a scripted event list — `path`
- *  populates the `path` key of the paired `paths` bag (the `file_path` key is exercised via
- *  session-events.test.ts / the session.ts unit coverage, not needed for the producer-filter tests here). */
+ *  populates the `path` key of the paired `paths` bag, `filePath` (added for the dual-key regression
+ *  coverage below) populates the `file_path` key. Either, both, or neither may be set. */
 function hookEvent(opts: {
   callbackId: string;
   decision: "block" | "allow";
   reason?: string;
   tool?: string;
   path?: string;
+  filePath?: string;
   toolUseId?: string;
   agentId?: string;
 }): AgentEvent {
@@ -334,7 +335,7 @@ function hookEvent(opts: {
     decision: opts.decision,
     reason: opts.reason,
     tool: opts.tool,
-    paths: opts.path !== undefined ? { path: opts.path } : undefined,
+    paths: opts.path !== undefined || opts.filePath !== undefined ? { file_path: opts.filePath, path: opts.path } : undefined,
     toolUseId: opts.toolUseId,
     agentId: opts.agentId,
   };
@@ -464,5 +465,62 @@ describe("pathDenials — decision-level path-denial telemetry (three filtered p
         toolUseId: "t3",
       },
     ]);
+  });
+
+  it("permission_denied: falls back to `message` when `decision_reason` is absent (production-observed shape)", async () => {
+    const rec = await driveRunOverEvents([
+      toolUse("Write", { file_path: "/sessions/x/m" }, { toolUseId: "t10" }),
+      systemEvent("permission_denied", { tool_name: "Write", tool_use_id: "t10", message: "denied via message field" }),
+    ]);
+    expect(rec.pathDenials).toEqual([
+      expect.objectContaining({
+        source: "permission_denied",
+        path: "/sessions/x/m",
+        reason: "denied via message field",
+      }),
+    ]);
+  });
+});
+
+// Regression coverage for a review finding: for a DUAL-KEY denial (`{file_path:"/allowed",
+// path:"/sessions/x"}`), all three pathDenials producers must record the SAME /sessions-preferring
+// value. Before the fix, producers (1)/(2) picked "/sessions/x" (via the shared /sessions-preferring
+// scan) while producer (3) picked "/allowed" (via `attempt.gatePath`, a first-key-wins value) — a
+// source-dependent `path` for what is really the same denied event. Producer (3) now derives its
+// path with `deniedPathFrom(attempt.paths)`, the SAME selection producers (1)/(2) use.
+describe("pathDenials — dual-key selection is consistent across all three producers (/sessions wins over file_path)", () => {
+  const filePath = "/allowed";
+  const sessionsPath = "/sessions/x";
+
+  it("pretooluse: a dual-key hook block records the /sessions path, not file_path", async () => {
+    const rec = await driveRunOverEvents([
+      hookEvent({
+        callbackId: "hostloop-path-gate",
+        decision: "block",
+        tool: "Write",
+        filePath,
+        path: sessionsPath,
+        toolUseId: "dk1",
+      }),
+    ]);
+    expect(rec.pathDenials).toHaveLength(1);
+    expect(rec.pathDenials[0].path).toBe(sessionsPath);
+  });
+
+  it("can_use_tool: a dual-key denied permission input records the /sessions path, not file_path", async () => {
+    const rec = await driveRunOverDecisions([
+      { req: permissionReq("Edit", { file_path: filePath, path: sessionsPath }, { toolUseId: "dk2" }), answer: deny("blocked") },
+    ]);
+    expect(rec.pathDenials).toHaveLength(1);
+    expect(rec.pathDenials[0].path).toBe(sessionsPath);
+  });
+
+  it("permission_denied: a dual-key correlated attempt records the /sessions path, not file_path (matches producers 1/2)", async () => {
+    const rec = await driveRunOverEvents([
+      toolUse("Write", { file_path: filePath, path: sessionsPath }, { toolUseId: "dk3" }),
+      systemEvent("permission_denied", { tool_name: "Write", tool_use_id: "dk3" }),
+    ]);
+    expect(rec.pathDenials).toHaveLength(1);
+    expect(rec.pathDenials[0].path).toBe(sessionsPath);
   });
 });

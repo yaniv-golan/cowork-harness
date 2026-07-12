@@ -783,7 +783,10 @@ export class Run {
                 this.rec.pathDenials.push({
                   source: "permission_denied",
                   tool: String(d.tool_name ?? attempt.tool),
-                  path: attempt.gatePath,
+                  // /sessions-preferring selection — SAME as producers (1)/(2) (deniedPathFrom), so a
+                  // dual-key attempt ({file_path, path}) records the identical VM path across all three
+                  // producers. attempt.gatePath is first-key-wins and would diverge here.
+                  path: deniedPathFrom(attempt.paths),
                   callbackId: undefined,
                   decisionReasonType: typeof d.decision_reason_type === "string" ? d.decision_reason_type : undefined,
                   agentId: typeof d.agent_id === "string" ? d.agent_id : undefined,
