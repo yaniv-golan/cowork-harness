@@ -6,6 +6,21 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking (pre-1.0): `verify-cassettes` now distinguishes "could not verify" from "verified and
+  found a real problem" in its exit code.** Previously every non-clean outcome exited `1`, so a
+  consumer's non-zero-exit tripwire couldn't tell a genuine finding apart from a cassette verification
+  simply couldn't run against (e.g. one written by a newer harness) — a version-refused cassette could
+  false-green an inverted "must-fail" canary for the wrong reason. Exit `1` is now reserved for
+  verification that RAN and found a real problem (a PII finding, a genuine — non-`unverifiable-*` —
+  staleness drift, or scenario-prompt drift); exit `3` covers everything that means verification could
+  NOT complete (any `unverifiable-*`-class staleness finding, a cassette from a version this harness
+  doesn't understand, or a per-file read error/crash). A real finding still wins exit `1` when both occur
+  in the same run. The JSON envelope (`schema/verify-cassettes.json`) gained a matching `unverifiable[]`
+  bucket per result, split out of what used to be a class-blind `staleness[]`; text output now marks
+  those rows `[unverifiable]` instead of `[stale]`.
+
 ## [0.30.0] — 2026-07-12
 
 > **Upgrade notes.**

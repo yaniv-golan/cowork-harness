@@ -583,6 +583,17 @@ with its own meanings); this reservation applies only to the `run`/`skill` famil
 **Per-command exceptions:** `lint` exits `127` when `python3` is missing (spawn error); `replay` exits
 `2` on a malformed/unreadable cassette (distinct from the `0`/`1` verdict); `sync` exits `2` on a
 non-macOS platform (the platform guard, alongside the `sync` hard-failure → `1` note below).
+**`verify-cassettes` uses its OWN three-way split, not the `run`/`skill` meanings above:** `0` clean ·
+`1` verification RAN and found a real problem (any PII finding, any staleness finding whose
+`StalenessFinding.class` is NOT `unverifiable-*`, or scenario-prompt drift) · `2` usage · `3`
+verification could NOT complete (any `unverifiable-*`-class staleness finding, a cassette written by a
+newer harness than this one understands, or a per-file read error/crash — including a
+malformed/unreadable cassette, which is tallied there rather than as a `1` finding). A real finding
+always outranks a could-not-verify signal within the same run, so exit `1` wins if both occur.
+**Collision warning:** the `run`/`skill` family's exit `3` means *boundary/integrity* (§11 above);
+`verify-cassettes`' exit `3` means *could not verify*. These are unrelated per-command meanings that
+happen to share a number — a CI script that branches on exit code across commands must not conflate
+them. See §11.1.
 
 > The `3` "boundary" category here is the **typed `BoundaryError`** raised during a `run`/`skill` (e.g.
 > asserting egress behavior at `protocol` fidelity). It is distinct from the **`boundary-check` command**,
@@ -600,14 +611,15 @@ verdict logic a finding doesn't have) — it emits its own, published as
 
 ```jsonc
 { "command": "verify-cassettes",
-  "ok": true,                       // false if any real finding, staleness drift, version mismatch, or unreadable cassette
+  "ok": true,                       // false if any real finding, staleness drift, unverifiable staleness, version mismatch, or unreadable cassette
   "coverage": { "privacy": true, "staleness": true },  // which scans ran (false under --skip-privacy / --skip-staleness)
   "results": [ { "file": "string",
                  "findings": [ { "where": "string", "cls": "email|currency|domain|path|machine-inventory|unscanned", "sample": "string" } ],
-                 "staleness": [ "string" ],   // drift / unresolvable-fingerprint messages (gate failures)
+                 "staleness": [ "string" ],   // GENUINE drift: a StalenessFinding whose class is NOT `unverifiable-*` (gate failure, exit 1)
+                 "unverifiable": [ "string" ],// a StalenessFinding whose class IS `unverifiable-*` — could not verify (exit 3, unless the SAME run also has a `staleness`/`findings`/`scenarioDrift` entry, which wins exit 1)
                  "notes": [ "string" ],       // NON-failing informational channel (never affects ok/exit) — e.g. a pre-effectiveFidelity cassette with an explicit tier: statically knowable, nothing baseline-dependent to verify. Text output: a `·`-prefixed row.
-                 "version": [ "string" ],     // cassette written by a NEWER harness than this one understands — always a hard fail (can't verify ⇒ not green), independent of --skip-staleness
-                 "error?": "string" } ] }     // a malformed cassette is TALLIED here, never crashes the batch
+                 "version": [ "string" ],     // cassette written by a NEWER harness than this one understands — always a could-not-verify failure (exit 3), independent of --skip-staleness
+                 "error?": "string" } ] }     // a malformed/unreadable cassette (or a per-file crash) is TALLIED here, never crashes the batch — a could-not-verify failure (exit 3)
 ```
 
 The full net (email/currency/domain/path/machine-inventory) runs over the WHOLE cassette (deliverable
@@ -619,11 +631,19 @@ distinguish from customer data, so `currency`/`domain` are excluded there). `ema
 `machine-inventory` still scan them: the registry `account` field can carry the dev's email, those
 same messages' own structural fields (`cwd`/`plugins[].path`/`memory_paths`) are exactly where a real
 local filesystem path lives, and a live-enumerated app/process inventory sentinel is never legitimate
-catalog boilerplate either. `ok = no finding with cls!="unscanned"  &&  no staleness message  &&  no version message  &&  no error`. An `unscanned` finding (a
+catalog boilerplate either. `ok = no finding with cls!="unscanned"  &&  no staleness message  &&  no unverifiable message  &&  no version message  &&  no error`. An `unscanned` finding (a
 `>64 KiB`/unreadable artifact body, which is hash-only — nothing committed to leak) is reported but does NOT
-fail the gate. **Exit codes:** `0` clean · `1` any finding/staleness/version/error · `2` usage (e.g.
+fail the gate.
+
+**Exit codes:** `0` clean · `1` **verification RAN and found a real problem** — any `findings[]` entry
+(cls != `unscanned`), any `staleness[]` entry, or any `scenarioDrift[]` entry · `2` usage (e.g.
 `--skip-privacy`+`--skip-staleness` together, or zero cassettes under a dir — a loud non-zero, never a
-vacuous pass). The `in:` assert operator (§ scenario schema) and `record <dir>`/`--rerecord-stale` batch
+vacuous pass) · `3` **verification could NOT complete** — any `unverifiable[]` entry, any `version[]`
+entry, or any `error` (a malformed/unreadable cassette or a per-file crash). A real finding always wins
+`1` over a co-occurring could-not-verify signal in the same run. This split exists so a consumer's
+non-zero-exit tripwire can't false-green on a could-not-verify outcome (e.g. a cassette a newer harness
+wrote) mistaking it for the finding the tripwire was built to catch — see the collision note in §11.
+The `in:` assert operator (§ scenario schema) and `record <dir>`/`--rerecord-stale` batch
 recording are also part of 0.8.0; see `docs/scenario.md` and `docs/cassette.md`.
 
 **CB-3/CB-4 — `chat` REPL flags and `/help`:** The `chat` subcommand accepts `[--plugin <dir>]…`
@@ -673,9 +693,9 @@ nothing here is guaranteed; minor versions may break any surface — see [RELEAS
   `ok` / `results[]` / `error` shape and the verdict-signal codes (§11.0).
 - **`verify-cassettes` envelope** — `schema/verify-cassettes.json` under `--output-format json`
   (§11.1): the `command` / `ok` / `coverage` / `results[]` shape with the per-file
-  `findings` / `staleness` / `notes` / `version` / `error` channels. This is the machine output the
-  CI recipes and the packaged Action steer consumers to parse; renaming or removing a key is
-  breaking, adding one is not.
+  `findings` / `staleness` / `unverifiable` / `notes` / `version` / `error` channels, and the exit-code
+  split (`0`/`1`/`2`/`3`, §11) they map to. This is the machine output the CI recipes and the packaged
+  Action steer consumers to parse; renaming or removing a key is breaking, adding one is not.
 - **Cassette format** — the current `cassetteVersion` (**10**, `schema/cassette.v10.json`) and its
   verdict-modifier assertion keys. The minimum supported read version is **v9**
   (`MIN_SUPPORTED_CASSETTE_VERSION`): a cassette below the floor is refused at load time with a

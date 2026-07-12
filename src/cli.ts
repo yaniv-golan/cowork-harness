@@ -151,7 +151,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
       [--strict]               fail (exit 1) on ANY stale cassette instead of warning
       [--fail-on-skill-drift]  fail only on skill-source drift (skill/shared-root); baseline drift stays a warning
       [--output-format json]
-  verify-cassettes <file|dir>  CI gate (no token): privacy + staleness + scenario-drift — exit 1 on finding or drift
+  verify-cassettes <file|dir>  CI gate (no token): privacy + staleness + scenario-drift — exit 1 = verified & failed, exit 3 = could not verify
       [--skip-privacy|--skip-staleness|--skip-scenario-drift] [--margins]  skip a check / print per-assert budget margins
       [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-path <regex>]... [--allow-machine-inventory <regex>]... [--allow-patterns-file <path>]... [--output-format json]
       --allow <regex> is a PATTERN (matched against a finding); --allow-patterns-file <path> is a FILE of patterns, one regex per line — not a path to allow

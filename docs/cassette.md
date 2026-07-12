@@ -659,6 +659,26 @@ counts) — committed PII surface. Two layers, distinct from secret-scrub (which
 cowork-harness verify-cassettes cassettes/ --allow 'NVCA|Cooley GO|Acme'
 ```
 
+### Reading the result
+
+`verify-cassettes` exits one of three codes — don't treat every non-zero exit as "the gate caught a
+leak/drift":
+
+| exit | meaning | JSON buckets populated |
+|---|---|---|
+| `0` | clean | none |
+| `1` | **verification RAN and found a real problem** | `findings[]` (a PII/privacy match), `staleness[]` (a genuine, non-`unverifiable-*` drift finding), and/or `scenarioDrift[]` |
+| `2` | usage error (e.g. `--skip-privacy`+`--skip-staleness` together, zero cassettes under a dir) | n/a |
+| `3` | **verification could NOT complete** | `unverifiable[]` (an `unverifiable-*`-class staleness finding), `version[]` (the cassette is from a newer harness than this one understands), and/or `error` (a malformed/unreadable cassette, or a per-file crash) |
+
+If a run has both a real finding and a could-not-verify signal, `1` wins — a confirmed problem is the
+stronger signal. This split matters for CI: a naive `[ $? -ne 0 ]` (or a `must-fail` canary built the
+other way around) can't tell "the scan found a leak" apart from "a cassette couldn't be read" — branch
+on the exit code, or read the `unverifiable`/`version`/`error` buckets directly, when that distinction
+matters. Text-output rows carry the same split: `[stale]` = a genuine drift finding, `[unverifiable]` =
+could-not-verify, `[version]`/`[error]` unchanged. A per-file `[error]` row is a bug to report (a
+malformed cassette or a crash), not a signal to re-record.
+
 The cardinal rule still holds: record against **synthetic** inputs (e.g. "Cadence / Acme", made-up
 numbers) — redaction and the scan are belt-and-suspenders, not a license to record real customer data.
 
