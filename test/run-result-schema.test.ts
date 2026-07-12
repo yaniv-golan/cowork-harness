@@ -91,6 +91,7 @@ const full: RunResult = {
       dispatchTypeOmitted: true,
       declaredTools: ["Read"],
       toolsUsed: [{ name: "Read", count: 1 }],
+      referencesRead: ["references/sub-agent-notes.md"],
       description: "explore",
       dispatchModel: "claude-sonnet-4-5",
       resolvedModel: "claude-haiku-x",

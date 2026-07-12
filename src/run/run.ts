@@ -162,6 +162,11 @@ interface SubagentDispatch {
   dispatchTypeOmitted?: boolean; // the dispatch input carried no subagent_type at all (proven by the full input parse) — the wildcard-fallback trap fired
   declaredTools: string[];
   toolsUsed: Array<{ name: string; count: number }>;
+  // Skill reference/script files THIS sub-agent Read (skill-relative: `references/foo.md`,
+  // `scripts/bar.py`), deduped in first-seen order — the sub-agent counterpart of the top-level
+  // (main-agent-only) RunRecord.filesRead. Attributed via the same parentToolUseId join that builds
+  // toolsUsed above, using the identical skillReferenceReadPath() predicate the main path uses.
+  referencesRead: string[];
   description?: string; // the dispatch's `description` — identifies it when the skill set no subagent_type
   prompt?: string; // dispatch input.prompt, assertText-capped
   dispatchModel?: string; // the DISPATCHING message's model (ex-`model` — renamed when resolvedModel landed beside it)
@@ -633,6 +638,13 @@ export class Run {
                 const entry = sa.toolsUsed.find((d) => d.name === ev.name);
                 if (entry) entry.count++;
                 else sa.toolsUsed.push({ name: ev.name, count: 1 });
+                // Sub-agent counterpart of the main-agent-only filesRead capture at :594-597 above —
+                // same skillReferenceReadPath() predicate, attributed to THIS dispatch instead of the
+                // top-level record. Deduped, first-seen order (mirrors the main filesRead dedupe).
+                if (ev.name === "Read") {
+                  const ref = skillReferenceReadPath(String((ev.input as Record<string, unknown> | undefined)?.file_path ?? ""));
+                  if (ref && !sa.referencesRead.includes(ref)) sa.referencesRead.push(ref);
+                }
               }
             }
             // A `present_files` call is stashed regardless of main-agent/sub-agent scope above — the
@@ -713,6 +725,7 @@ export class Run {
               dispatchTypeOmitted: ev.typeOmitted || undefined,
               declaredTools: ev.declaredTools,
               toolsUsed: [],
+              referencesRead: [],
               description: ev.description,
               prompt: ev.prompt,
               dispatchModel: ev.dispatchModel,

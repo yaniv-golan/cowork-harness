@@ -8,6 +8,13 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **`RunResult.subagents[].referencesRead`** — the skill `references/*` / `scripts/*` files a SUB-AGENT
+  dispatch actually **Read**, attributed per-dispatch (skill-relative, deduped in first-seen order, same
+  filter as the existing top-level `referencesRead`). Previously a sub-agent's Reads were dropped
+  entirely even though its `tool_use` blocks already ride the parent stream — this closes that gap
+  without touching the top-level (main-agent-only) `referencesRead`, which is unchanged. Present on live
+  and replay.
+
 - **`analyze-skill <SKILL.md | skill-dir/>` — a token-free static ADVISORY scan for the "skill hands a
   `/sessions/...` path to a file tool" defect class.** Previously the only way to discover that a skill's
   dispatch prompt or file-tool directive points at a `/sessions/...` VM path — which production's

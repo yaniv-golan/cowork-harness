@@ -605,6 +605,13 @@
               }
             }
           },
+          "referencesRead": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "skill reference/script files THIS sub-agent Read (same shape/dedupe as the top-level referencesRead), attributed via the dispatch's toolUseId"
+          },
           "description": {
             "type": "string"
           },

@@ -1055,10 +1055,11 @@ export interface RunResult {
   /** Skill reference/script files the agent actually **Read** during the run (skill-relative:
    *  `references/foo.md`, `scripts/bar.py`), deduped in first-seen order. A progressive-disclosure
    *  signal — "did the agent reach this content?" — for skill-quality measurement. Scope: **main-agent
-   *  Reads only** (a sub-agent's reads aren't attributed), matching `references/`/`scripts/` under a
-   *  mounted plugin root — NOT `assets/`, and never `SKILL.md` (delivered whole, never Read as a file).
-   *  Derived from the run's Read events, so it's present on **both live and replay**; absent when no such
-   *  file was Read. */
+   *  Reads only**; a sub-agent's reads are attributed separately, per-dispatch, on
+   *  `subagents[].referencesRead` below — this top-level field's data is unaffected by that addition,
+   *  matching `references/`/`scripts/` under a mounted plugin root — NOT `assets/`, and never `SKILL.md`
+   *  (delivered whole, never Read as a file). Derived from the run's Read events, so it's present on
+   *  **both live and replay**; absent when no such file was Read. */
   referencesRead?: string[];
   /** 1-based turn number within a resumed (`--session-id` + `--resume`) session — 1 for a normal
    *  single-shot run, incrementing per resume. `result.json`/`run.jsonl` hold the LATEST turn; prior
@@ -1074,6 +1075,11 @@ export interface RunResult {
     dispatchTypeOmitted?: boolean; // the dispatch input carried no subagent_type (proven by full input parse) — the wildcard-fallback trap fired
     declaredTools: string[];
     toolsUsed: Array<{ name: string; count: number }>;
+    /** Skill reference/script files THIS sub-agent Read (same skill-relative shape and dedupe rule as
+     *  the top-level `referencesRead` above), attributed via the dispatch's `toolUseId` — the sub-agent
+     *  counterpart of the main-agent-only top-level field. Absent/empty when the dispatch Read no
+     *  reference/script file. */
+    referencesRead?: string[];
     description?: string;
     prompt?: string; // dispatch input.prompt, assertText-capped
     dispatchModel?: string; // the DISPATCHING message's model (ex-"model" — renamed when resolvedModel landed beside it)
