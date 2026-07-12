@@ -16,7 +16,11 @@ assert:
   - dispatch_count_max: 1            # exactly one dispatch — so the matched write is THE child's
   - subagent_tool_used: "Write"
   - subagent_file_write:
-      path: "artifacts/probe.json"   # EXACT raw path — a foo/artifacts/probe.json cannot satisfy this
+      # The agent resolves the relative artifacts/ path against its outputs cwd, so the recorded raw
+      # path is the absolute .../mnt/outputs/artifacts/probe.json (and per-run variable via local_<id>).
+      # Anchor the suffix to the outputs mount: a foo/artifacts/probe.json can't satisfy it (no
+      # /mnt/outputs/ prefix), and no_vm_path_file_op separately rejects any /sessions attempt.
+      path_suffix: "/mnt/outputs/artifacts/probe.json"
   - no_vm_path_file_op: true
   - artifact_json:                    # exact path (not a suffix) — proves the file landed in outputs
       artifact: "outputs/artifacts/probe.json"
