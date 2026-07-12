@@ -423,6 +423,12 @@ and re-evaluates the **content** assertions. The authoritative list of content k
 `MANIFEST_KEYS` (only when it carries an artifacts manifest) — all exported from `src/run/cassette.ts`,
 alongside the explicit exclusion list `LIVE_ONLY_KEYS`; the table below is derived from them.
 
+> **This is a different question from "does my YAML edit take effect."** This section answers whether a key
+> *can be evaluated on replay at all* (content-class vs live-only). It does **not** mean an edit to that key in
+> `scenarios/<name>.yaml` reaches a default replay — a default replay reads the **frozen** copy regardless of
+> class. Content-class ⇒ *evaluable* on replay, **not** *your edit runs*. Which copy is used is the separate
+> frozen-by-default rule: see [Where `replay` reads `assert:` from](#where-replay-reads-assert-from--frozen-by-default-on-disk-by-opt-in).
+
 **Evaluated on replay (content assertions):**
 `transcript_*` (incl. `transcript_matches`), `tool_*` (incl. `tool_available`), `subagent_*`, `dispatch_count_max`,
 `skill_triggered`, `no_skill_triggered`, `max_cost_usd`, `max_tokens`, `tool_calls_max`, `max_turns`,
@@ -491,6 +497,11 @@ plain `replay` is byte-deterministic and independent of the working tree — edi
 `assert:` does **not** change a default replay. To keep that from being a *silent* trap, when a sibling
 scenario resolves and its `assert:` differs from the frozen copy, replay prints a `::notice::` pointing at the
 opt-in flag.
+
+This is a **separate axis** from content-class vs live-only ([Which assertions survive `replay`](#which-assertions-survive-replay-ci-placement)):
+that axis says *whether* a key can be evaluated on replay; this one says *which copy* of the key is evaluated —
+the recorded one, not your working-tree edit. A content-class key whose YAML you just edited is still evaluated
+from the frozen copy until you re-record or `replay --reassert --write`.
 
 `--assert-from <scenario.yaml>` (explicit) / `--reassert` (auto-resolve the sibling) re-check the cassette
 against the **on-disk** `assert:` (+`expect_denied:`) — the token-free "edit the assert, re-check without a
