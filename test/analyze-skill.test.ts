@@ -279,6 +279,35 @@ describe("analyzeSkillText — near-miss clean cases (anti-FP guards)", () => {
     const text = ['Run `find /sessions/{{id}}/mnt/uploads -name "$NAME"` with the bash tool.', "Read(docs/$NAME/index.md)"].join("\n");
     expect(findRule(text, RULE2)).toEqual([]);
   });
+
+  // --- D-1: the "bash tool" instrument phrase suppresses prose regardless of WHERE on the line it sits -- //
+
+  it("does NOT flag a FRONTED bash-tool instrument clause, comma-severed from the verb ('Using the bash tool, write ... to `/sessions/...`') (D-1)", () => {
+    const text = "Using the bash tool, write the summary to `/sessions/{{session_id}}/mnt/outputs/summary.md`.";
+    expect(analyzeSkillText(text, "SKILL.md")).toEqual([]);
+  });
+
+  it("does NOT flag a TRAILING bash-tool instrument clause, after the path token ('Write ... to `/sessions/...` using the bash tool.') (D-1)", () => {
+    const text = "Write the report to `/sessions/{{session_id}}/mnt/outputs/report.md` using the bash tool.";
+    expect(analyzeSkillText(text, "SKILL.md")).toEqual([]);
+  });
+
+  // --- D-3: a negation in the SAME CLAUSE as a structured directive is the teaching idiom, not a violation --- //
+
+  it("does NOT flag the teaching idiom '❌ Write(...) — never do this; use the bash tool instead.' (D-3, same-clause negation carve-out)", () => {
+    const text = "❌ Write(/sessions/{{id}}/mnt/outputs/x.md) — never do this; use the bash tool instead.";
+    expect(analyzeSkillText(text, "SKILL.md")).toEqual([]);
+  });
+
+  // --- D-4: a `#` comment mentioning Task( must not un-exempt the indented block it heads --------------- //
+
+  it("does NOT flag an indented block where the ONLY dispatch marker is inside a `#` comment (D-4)", () => {
+    const text = [
+      "    # after the Task( dispatch returns, collect via bash:",
+      "    OUTPUT_PATH=/sessions/{{id}}/mnt/outputs/report.md",
+    ].join("\n");
+    expect(analyzeSkillText(text, "SKILL.md")).toEqual([]);
+  });
 });
 
 // --------------------------------------------------------------------------------------------- //
@@ -385,6 +414,30 @@ describe("analyzeSkillText — restored true positives (context-confidence fixes
   it("still does NOT flag a plain INDENTED shell template with no dispatch marker (regression check for OC-4)", () => {
     const text = ["Run this locally:", "", "    OUTPUT_PATH=/sessions/{{session_id}}/mnt/outputs/report.md", "    ./run.sh"].join("\n");
     expect(analyzeSkillText(text, "SKILL.md")).toEqual([]);
+  });
+
+  // --- D-2: a BLANK line inside an indented dispatch template must not sever the marker from the path -- //
+
+  it("analyzes an INDENTED dispatch template even when a BLANK line separates Task( from OUTPUT_PATH= (D-2)", () => {
+    const text = [
+      "Dispatch template:",
+      "",
+      '    Task(subagent_type="general-purpose")',
+      "",
+      "    OUTPUT_PATH=/sessions/{{id}}/mnt/outputs/result.json",
+    ].join("\n");
+    const hits = findRule(text, RULE1);
+    expect(hits.length).toBeGreaterThan(0);
+    expect(hits.some((f) => f.line === 5)).toBe(true);
+  });
+
+  // --- D-1 regression: OC-3's unrelated fronted clause ("bash step", not "the bash tool") must still fire --- //
+
+  it("still flags OC-3's fronted 'bash step' clause after the D-1 whole-line 'bash tool' phrase check (regression check for OC-3/D-1)", () => {
+    const text = "After the bash step completes, use the Write tool to write the final summary to `/sessions/{{id}}/mnt/outputs/final.md`.";
+    const hits = findRule(text, RULE1);
+    expect(hits.length).toBeGreaterThan(0);
+    expect(hits[0].message).toContain("prose");
   });
 
   // --- NFP-1 (positive counterpart): a real VAR=$(find ...) assignment still feeds a Read($VAR) -- //

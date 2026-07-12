@@ -65,11 +65,18 @@ const PROSE_PREP_RE = /\b(to|at)\b/gi;
 const PASSIVE_AUX_RE = /\b(?:is|are|was|were|be|been|being)\s*$/i;
 /** A mention of the `bash` tool. Scoped to the prose context only — an explicit `Write(/sessions/...)`
  *  directive is unambiguous regardless of a stray "bash" nearby, so this is never consulted for
- *  structured (OUTPUT_PATH/directive/bare-dispatch-path) contexts. Within prose, suppression is further
- *  scoped to the CLAUSE that links the verb to the path (see `bashInLastClause`) — not anywhere on the
- *  line — so an earlier, unrelated clause naming "bash" (e.g. "After the bash step completes, use the
- *  Write tool to write ... to /sessions/...") does not suppress a genuinely different instrument. */
+ *  structured (OUTPUT_PATH/directive/bare-dispatch-path) contexts. Within prose, suppression has TWO
+ *  tiers (see `proseContextBeforeToken`): the INSTRUMENT phrase "bash tool" (bare `BASH_TOOL_PHRASE_RE`
+ *  below) suppresses if it appears ANYWHERE on the line — a fronted or trailing instrument clause
+ *  ("Using the bash tool, write ... to /sessions/...", "Write ... to /sessions/... using the bash tool")
+ *  is still the tool's own correct remediation even though it sits outside the clause that links the verb
+ *  to the path. A BARE "bash" mention (no "tool") is narrower and stays CLAUSE-scoped (`bashInLastClause`)
+ *  — "After the bash step completes, use the Write tool to write ... to /sessions/..." names an unrelated
+ *  earlier clause ("bash step", not "the bash tool") and must not suppress. */
 const BASH_TOOL_MENTION_RE = /\bbash\b/i;
+/** The INSTRUMENT phrase "bash tool" (optionally "the bash tool") — see `BASH_TOOL_MENTION_RE` above for
+ *  the two-tier rationale. Matched anywhere on the line, not clause-scoped. */
+const BASH_TOOL_PHRASE_RE = /\bbash tool\b/i;
 /** Clause-boundary punctuation (`,` `.` `;`) used to isolate the FINAL clause of a prose fragment —
  *  the one that actually contains the verb-to-path instruction — from any earlier clause. */
 const CLAUSE_BOUNDARY_RE = /[,.;]/;
@@ -90,13 +97,17 @@ const FIND_ASSIGN_RE = /\b([A-Za-z_]\w*)\s*=\s*\$\(\s*find\b/i;
 /** `find ... > $VAR` / `find ... > VAR` redirection — captures the OUTPUT var/file name, same rationale
  *  as `FIND_ASSIGN_RE`. */
 const FIND_REDIRECT_RE = /\bfind\b[^|;]*?>\s*\$?\{?([A-Za-z_]\w*)\}?/i;
-/** Anti-instruction guard: "NEVER write to `/sessions/...`" (and siblings) must NOT fire. Deliberately
- *  broad (whole-line, not proximity-scoped) — a stray "not" elsewhere on the line also suppresses, which
- *  trades a few accepted false negatives for never flagging a line that is teaching the rule, not
- *  breaking it. That trade is the point of this analyzer's conservative posture. The guard also looks at
- *  the IMMEDIATELY ADJACENT line (previous and next), not just the current one — "Never use a file tool
- *  for VM paths. / Instead, write the report to `/sessions/...`" must not fire either, since the
- *  anti-instruction sits one clause/line away (see `hasNegationNearby`). */
+/** Anti-instruction guard: "NEVER write to `/sessions/...`" (and siblings). Applied whole-line
+ *  (`hasNegationNearby`, current + adjacent line) ONLY to the low-confidence PROSE context — "Never use a
+ *  file tool for VM paths. / Instead, write the report to `/sessions/...`" must not fire, since the
+ *  anti-instruction sits one clause/line away. It is NOT consulted whole-line for the HIGH-confidence
+ *  STRUCTURED contexts (OUTPUT_PATH/directive-target/bare-dispatch-path): a stray "not"/"avoid" elsewhere
+ *  on the line or on an adjacent line must never suppress those (OC-1/2/6/9) — an author writing
+ *  `Write(/sessions/...)` next to "Do not modify any other file." is still handing a `/sessions` path to a
+ *  file tool. Structured contexts instead get a NARROW, directive-scoped carve-out
+ *  (`directiveClauseHasNegation`) for the genuine teaching idiom "❌ Write(/sessions/...) — never do this;
+ *  use the bash tool instead." — the negation must sit in the SAME clause as the directive itself, not
+ *  merely on the same line. */
 const NEGATION_RE = /\b(never|don'?t|do\s+not|avoid|not)\b/i;
 const DISPATCH_MARKER_RE = /\bTask\(|\bsubagent_type\b/;
 const FIND_KEYWORD_RE = /\bfind\b/i;
@@ -137,20 +148,49 @@ function bashInLastClause(before: string): boolean {
   return BASH_TOOL_MENTION_RE.test(segments[segments.length - 1]);
 }
 
+/** D-3: does the CLAUSE containing the match span `[start, end)` on `line` also carry a negation token
+ *  (`never`/`don't`/`do not`/`avoid`/`not`)? Finds the nearest clause-boundary punctuation (`,` `.` `;`)
+ *  before `start` and at-or-after `end` and tests `NEGATION_RE` only within that bounded clause — NOT the
+ *  whole line. This is a NARROW carve-out for a structured (OUTPUT_PATH=/directive-target) finding: it
+ *  suppresses the teaching idiom "❌ Write(/sessions/...) — never do this; use the bash tool instead." (the
+ *  directive and "never do this" share one clause, the em dash is not a clause boundary), but must NOT
+ *  suppress OC-1/2/6/9's unrelated same-or-adjacent-line negations ("Write(/sessions/...) saves the
+ *  report." on one line, "Do not modify any other file." on the next — different lines entirely, so this
+ *  same-line clause scan never even sees the negation word). */
+function directiveClauseHasNegation(line: string, start: number, end: number): boolean {
+  let clauseStart = 0;
+  let clauseEnd = line.length;
+  const boundary = new RegExp(CLAUSE_BOUNDARY_RE.source, "g");
+  let bm: RegExpExecArray | null;
+  while ((bm = boundary.exec(line))) {
+    const idx = bm.index;
+    if (idx < start) clauseStart = idx + 1;
+    if (idx >= end && idx < clauseEnd) clauseEnd = idx;
+  }
+  return NEGATION_RE.test(line.slice(clauseStart, clauseEnd));
+}
+
 /** POSITIVE context 2b: prose "write/save/read/edit … to|at `/sessions/...`" — a verb somewhere before a
  *  to/at preposition that sits immediately (within a few chars, allowing for a quote/backtick) before the
  *  path token. Scoped to the SAME line only (no cross-line prose inference).
  *
- *  Three guards narrow this to genuine IMPERATIVE file-tool instructions:
- *   - a `bash` mention in the clause that links the verb to the path suppresses entirely (see
- *     `bashInLastClause`) — "Use the bash tool to write ... to `/sessions/...`" is the tool's own correct
- *     remediation, not a file-tool violation; an unrelated "bash" in an earlier, punctuation-severed
- *     clause does not suppress;
+ *  Four guards narrow this to genuine IMPERATIVE file-tool instructions:
+ *   - the INSTRUMENT phrase "bash tool" (`BASH_TOOL_PHRASE_RE`) anywhere on the WHOLE line suppresses
+ *     entirely — "Using the bash tool, write the summary to `/sessions/...`" (fronted, comma-severed) and
+ *     "Write the report to `/sessions/...` using the bash tool." (trailing, after the token) are both the
+ *     tool's own correct remediation even though the instrument phrase sits outside the clause that links
+ *     the verb to the path;
+ *   - failing that, a BARE `bash` mention (no "tool") in the clause that links the verb to the path
+ *     suppresses (see `bashInLastClause`) — narrower and clause-scoped on purpose: "After the bash step
+ *     completes, use the Write tool to write ... to `/sessions/...`" has an earlier, punctuation-severed
+ *     clause naming "bash step" (not "the bash tool"), a genuinely different, unrelated instrument, and
+ *     must NOT suppress;
  *   - "read" immediately followed by "-only" is the adjective ("Uploads are read-only at ..."), not the
  *     verb "read";
  *   - a verb immediately preceded by a passive-voice auxiliary (is/are/was/were/be/been/being) is
  *     documentation ("Deliverables are saved at ...") — the passive doesn't direct the agent to act. */
 function proseContextBeforeToken(line: string, tokenIndex: number): boolean {
+  if (BASH_TOOL_PHRASE_RE.test(line)) return false;
   const before = line.slice(0, tokenIndex);
   if (bashInLastClause(before)) return false;
   PROSE_PREP_RE.lastIndex = 0;
@@ -185,20 +225,27 @@ function proseContextBeforeToken(line: string, tokenIndex: number): boolean {
  *  `hasNegationNearby`). The OUTPUT_PATH/OUTPUT_DIR assignment and file-tool directive-target contexts
  *  are machine-unambiguous — a stray "not"/"avoid" on the same or an adjacent line must never suppress
  *  them (an author writing `Write(/sessions/...)` next to "Do not modify any other file." is still handing
- *  a `/sessions` path to a file tool). Only the low-confidence PROSE idiom keeps the negation guard. */
+ *  a `/sessions` path to a file tool). Instead, each structured context gets its OWN narrow,
+ *  directive-scoped carve-out (`directiveClauseHasNegation`, D-3): a negation token in the SAME CLAUSE as
+ *  the assignment/directive itself (not merely the same or an adjacent line) suppresses that one hit —
+ *  the genuine teaching idiom "❌ Write(/sessions/...) — never do this; use the bash tool instead." — while
+ *  leaving OC-1/2/6/9's unrelated same-or-adjacent-line negations firing exactly as before. */
 function classifyLineRule1(line: string, suppressProse: boolean): Map<string, string> {
   const result = new Map<string, string>();
 
   for (const m of line.matchAll(OUTPUT_ASSIGN_RE)) {
     const key = m[1];
     const trimmed = trimTrailingPunct(m[2]);
-    if (isVmSessionsPath(trimmed) && !result.has(trimmed)) result.set(trimmed, `a \`${key}\` assignment`);
+    if (!isVmSessionsPath(trimmed) || result.has(trimmed)) continue;
+    if (directiveClauseHasNegation(line, m.index, m.index + m[0].length)) continue;
+    result.set(trimmed, `a \`${key}\` assignment`);
   }
 
   for (const m of line.matchAll(DIRECTIVE_RE)) {
     const tool = m[1];
     const body = m[2];
     if (FIND_KEYWORD_RE.test(body)) continue; // rule 2's territory (find-substitution into a read)
+    if (directiveClauseHasNegation(line, m.index, m.index + m[0].length)) continue; // D-3: same-clause teaching idiom
     for (const { token } of extractSessionsTokens(body)) {
       if (!result.has(token)) result.set(token, `a \`${tool}(...)\` directive target`);
     }
@@ -294,10 +341,25 @@ function hasNegationNearby(arr: LineInfo[], idx: number): boolean {
  *
  *  The exemption is NOT unconditional, though (OC-4): a contiguous run of indented lines that contains a
  *  dispatch marker (`Task(`/`subagent_type`) is the analyzer's HEADLINE defect class, not VM bash — an
- *  indented `Task(...)` + `OUTPUT_PATH=/sessions/...` template must still be analyzed. `splitLines` below
- *  groups contiguous indented runs and un-exempts (and registers as a dispatch block) any run whose body
- *  contains a dispatch marker; a plain indented VM-bash template (no dispatch marker) stays exempt. */
+ *  indented `Task(...)` + `OUTPUT_PATH=/sessions/...` template must still be analyzed, EVEN when a blank
+ *  line sits between the marker and the path (D-2): CommonMark treats a blank-line-separated indented
+ *  block as ONE indented code block, and templates routinely contain blank lines for readability, so a
+ *  blank line CONTINUES the run rather than splitting it. `splitLines` below groups contiguous indented
+ *  runs (a blank line does not flush the run; only a non-blank, non-indented line does) and un-exempts
+ *  (and registers as a dispatch block) any run whose body contains a dispatch marker OUTSIDE a `#`
+ *  comment (D-4 — see `flushIndentedRun`); a plain indented VM-bash template (no dispatch marker) stays
+ *  exempt. */
 const INDENTED_CODE_RE = /^(?: {4,}|\t)\S/;
+
+/** D-4: strip a `#`-comment tail from an indented-block line before it is tested for a dispatch marker —
+ *  `# after the Task( dispatch returns, collect via bash:` must not un-exempt the block it heads, since a
+ *  `Task(` mention inside a comment is not itself a dispatch construct. Simple `#`-to-end-of-line strip
+ *  (no shell-quote awareness, consistent with this file's conservative, non-shell-parsing posture
+ *  elsewhere); only used for the marker TEST, never applied to the line text stored/scanned elsewhere. */
+function stripLineComment(text: string): string {
+  const idx = text.indexOf("#");
+  return idx === -1 ? text : text.slice(0, idx);
+}
 
 /** First pass: classify every line by fence state, and group non-bash-ish fenced blocks AND
  *  dispatch-marker-carrying indented runs (with their body lines) so the dispatch-construct rule (3rd
@@ -316,7 +378,7 @@ function splitLines(text: string): { lines: LineInfo[]; blocks: { lang: string; 
   let indentedRun: LineInfo[] = [];
   const flushIndentedRun = () => {
     if (indentedRun.length === 0) return;
-    const bodyText = indentedRun.map((l) => l.text).join("\n");
+    const bodyText = indentedRun.map((l) => stripLineComment(l.text)).join("\n"); // D-4: comment-stripped for the marker test only
     if (DISPATCH_MARKER_RE.test(bodyText)) {
       for (const info of indentedRun) info.codeExempt = false; // OC-4: not VM bash — a dispatch template
       blocks.push({ lang: "indented-dispatch", lines: indentedRun });
@@ -362,8 +424,8 @@ function splitLines(text: string): { lines: LineInfo[]; blocks: { lang: string; 
 
     if (isIndented) {
       indentedRun.push(info);
-    } else {
-      flushIndentedRun();
+    } else if (raw.trim() !== "") {
+      flushIndentedRun(); // D-2: a BLANK line does not flush — it continues the run (see INDENTED_CODE_RE doc)
     }
   }
   // An unterminated non-bash-ish fence at EOF still has its buffered lines flushed (mirrors scenario.py's
