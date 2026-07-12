@@ -742,6 +742,53 @@ def _finding_plugin_root_guarded(path, line, ctx_label):
     )
 
 
+# A self-heal `find`'s `-path '<glob>'` / `-path "<glob>"` value (same-quote char, non-greedy so a
+# quote inside the glob — unlikely in practice — doesn't get swallowed).
+_FIND_PATH_VALUE = re.compile(r"""-path\s+(['"])(.*?)\1""")
+# The skill segment out of a `*/skills/<name>/...` glob.
+_FIND_PATH_SKILLS_SEG = re.compile(r"/skills/([A-Za-z0-9_.-]+)/")
+# The plugin segment out of a `*/plugins/<name>/...` glob.
+_FIND_PATH_PLUGINS_SEG = re.compile(r"/plugins/([A-Za-z0-9_.-]+)/")
+# A generic `*/<name>/scripts` glob (no `skills/`/`plugins/` literal prefix) — the segment right
+# before a `/scripts` path component. This is what a plugin-level self-heal targeting its own
+# `<plugin>/scripts/...` layout looks like once the real mount path (e.g. `mnt/.local-plugins/...`)
+# is glob-abbreviated to `*/<plugin>/scripts`.
+_FIND_PATH_SCRIPTS_SEG = re.compile(r"/([A-Za-z0-9_.-]+)/scripts\b")
+
+
+def _extract_find_path_token(find_cmd_line):
+    """Pull the skill/plugin-naming token out of a self-heal `find`'s `-path` glob (on the SAME
+    line as the `find`, matching how `_SELF_HEAL` itself is line-scoped), or None if there's no
+    `-path` clause or none of the recognized glob shapes match. A bare glob wildcard segment (e.g.
+    `*/scripts/*`, no name between the slashes) intentionally does not match the `[A-Za-z0-9_.-]+`
+    character class — that's a real absence of an extractable token, not a token, so it stays
+    conservative (INFO) rather than manufacturing a bogus `*` token to compare."""
+    m = _FIND_PATH_VALUE.search(find_cmd_line)
+    if not m:
+        return None
+    glob = m.group(2)
+    for pat in (_FIND_PATH_SKILLS_SEG, _FIND_PATH_PLUGINS_SEG, _FIND_PATH_SCRIPTS_SEG):
+        seg = pat.search(glob)
+        if seg:
+            return seg.group(1)
+    return None
+
+
+def _finding_guard_pattern_mismatch(path, line, ctx_label, token, skill_name, plugin_name):
+    plugin_part = f" (plugin `{plugin_name}`)" if plugin_name else ""
+    return Finding(
+        "WARN",
+        "guard-pattern-mismatch",
+        f"`${{CLAUDE_PLUGIN_ROOT}}` used in an in-VM bash context ({ctx_label}); the block's self-heal "
+        f"`find` targets `{token}`, but this skill is `{skill_name}`{plugin_part} — the guard won't "
+        "discover THIS skill's mount (likely a copy-pasted self-heal).",
+        f"Fix the `find` pattern's `-path` to match this skill/plugin's own layout (`{skill_name}`"
+        f"{plugin_part}), not `{token}`.",
+        path,
+        line,
+    )
+
+
 def _finding_hook_host_write(path, line, what):
     return Finding(
         "WARN",
@@ -779,15 +826,46 @@ def _lint_skill_text(path, raw_lines, force_json=False):
     bash_token_lines = []
     bash_block_text = []
 
+    # Task E: identity of the skill/plugin under lint, used to check a self-heal `find -path`
+    # actually names THIS skill or its enclosing plugin (not a copy-pasted mismatch). Only
+    # meaningful when linting an actual SKILL.md (force_json=False is exactly that case here — a
+    # hooks.json body never enters the "bash" ctx below, so this is otherwise unused).
+    skill_name = None
+    plugin_name = None
+    self_plugin_tokens = set()
+    if not force_json:
+        dir_name = Path(path).resolve().parent.name
+        fm_name = _agent_name_from_frontmatter(path, _require_yaml())
+        # Prefer the frontmatter `name:` (the skill's declared identity) for display when present;
+        # the parent-dir name is always in the match set as a cross-check (both count as "this
+        # skill" — a self-heal naming either is not a mismatch).
+        skill_name = fm_name or dir_name
+        self_plugin_tokens.add(dir_name)
+        if fm_name:
+            self_plugin_tokens.add(fm_name)
+        plugin_dir = _find_enclosing_plugin_dir(path)
+        if plugin_dir is not None:
+            plugin_name = _read_plugin_name(plugin_dir)
+            if plugin_name:
+                self_plugin_tokens.add(plugin_name)
+            self_plugin_tokens.add(Path(plugin_dir).name)
+
     def flush_bash():
         if bash_token_lines:
-            healed = _SELF_HEAL.search("\n".join(bash_block_text)) is not None
+            self_heal_line = next((bl for bl in bash_block_text if _SELF_HEAL.search(bl)), None)
+            healed = self_heal_line is not None
+            token = _extract_find_path_token(self_heal_line) if healed else None
             for ln in bash_token_lines:
-                findings.append(
-                    _finding_plugin_root_guarded(path, ln, "```bash block")
-                    if healed
-                    else _finding_plugin_root(path, ln, "```bash block")
-                )
+                if not healed:
+                    findings.append(_finding_plugin_root(path, ln, "```bash block"))
+                elif token is not None and token not in self_plugin_tokens:
+                    findings.append(
+                        _finding_guard_pattern_mismatch(
+                            path, ln, "```bash block", token, skill_name, plugin_name
+                        )
+                    )
+                else:
+                    findings.append(_finding_plugin_root_guarded(path, ln, "```bash block"))
         bash_token_lines.clear()
         bash_block_text.clear()
 
@@ -875,8 +953,10 @@ _AGENT_FRONTMATTER = re.compile(r"^---\s*\n(.*?\n)---\s*(?:\n|$)", re.DOTALL)
 
 
 def _agent_name_from_frontmatter(md_path, yaml_mod):
-    """Return an `agents/*.md` file's `name:` frontmatter value, or None if there's no frontmatter,
-    no `name:` field, or it fails to parse — caller falls back to the filename stem."""
+    """Return a markdown file's `name:` frontmatter value, or None if there's no frontmatter, no
+    `name:` field, or it fails to parse. Originally for `agents/*.md` (caller falls back to the
+    filename stem there); also reused by Task E for a SKILL.md, whose frontmatter has the same
+    `---\\nname: ...\\n---` shape — the parser itself is generic, only the name is agent-specific."""
     try:
         text = Path(md_path).read_text(encoding="utf-8")
     except Exception:
