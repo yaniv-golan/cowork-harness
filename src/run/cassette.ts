@@ -1063,6 +1063,7 @@ function minimalRec(): RunRecord {
     contextEvents: [],
     mcpErrors: [],
     hookEvents: [],
+    fileToolAttempts: [],
     presentedFiles: [],
     webSearches: [],
     infraErrors: [],
@@ -2585,6 +2586,7 @@ function replayErrorResult(file: string): RunResult {
     contextEvents: undefined, // no rec to read from on this early-bail lane
     mcpErrors: undefined, // live-only — this early-bail lane never drives a session
     hookEvents: undefined, // no rec to read from on this early-bail lane
+    fileToolAttempts: undefined, // no rec to read from on this early-bail lane
     presentedFiles: undefined, // no rec to read from on this early-bail lane
     preRunPaths: undefined,
     preRunLinkAware: undefined,
@@ -4109,6 +4111,9 @@ export async function replayCassette(
       // reconstructed above from cassette.events + controlOut; undefined when controlOut is absent
       // (excludes hook_blocked/no_hook_blocked loud, never a vacuous pass).
       hookEvents: replayHookEvents,
+      // content-class — the tool_use blocks are frozen stream content, so the re-drive reproduces
+      // fileToolAttempts exactly like the live lane (same reasoning as presentedFiles below).
+      fileToolAttempts: rec.fileToolAttempts,
       // content-class — re-derived by the re-drive above exactly like the live lane; uncollapsed so an
       // empty [] (nothing presented) vacuous-passes no_scratchpad_leak instead of reading as
       // evidence-unavailable.
@@ -4319,6 +4324,9 @@ export async function replayCassette(
       contextEvents: rec.contextEvents, // the re-drive reproduces system_event via parseMessage — powers compaction_occurred
       mcpErrors: undefined, // live-only — the re-drive never produces mcp_error
       hookEvents: replayHookEvents, // reconstructed above from cassette.events + controlOut; undefined when controlOut is absent
+      // Content-class: the tool_use blocks live in the ordinary events stream (not controlOut), so the
+      // re-drive reproduces fileToolAttempts automatically — same reasoning as presentedFiles below.
+      fileToolAttempts: rec.fileToolAttempts,
       // Content-class: the tool_use/tool_result pair lives in the ordinary events stream (not
       // controlOut), so the re-drive reproduces it exactly like mcpErrors' live-only counterpart does
       // NOT reproduce — this one genuinely re-derives. Uncollapsed (an empty [] is the real "nothing

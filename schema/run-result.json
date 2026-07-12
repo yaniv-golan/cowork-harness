@@ -58,6 +58,25 @@
       "items": { "type": "object" },
       "description": "PreToolUse hook block/allow decisions ({callbackId, decision, reason?, tool?})."
     },
+    "fileToolAttempts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["tool", "paths", "origin"],
+        "properties": {
+          "tool": { "type": "string" },
+          "paths": {
+            "type": "object",
+            "properties": { "file_path": { "type": "string" }, "path": { "type": "string" } }
+          },
+          "gatePath": { "type": "string" },
+          "origin": { "enum": ["main", "subagent", "unknown"] },
+          "parentToolUseId": { "type": "string" },
+          "toolUseId": { "type": "string" }
+        }
+      },
+      "description": "Attempt-level gated-file-tool telemetry (raw paths as sent, per Read/Write/Edit/Glob/Grep/MultiEdit tool_use). Undefined = evidence unavailable; [] = captured, no gated attempts."
+    },
     "presentedFiles": {
       "type": "array",
       "items": { "type": "object" },

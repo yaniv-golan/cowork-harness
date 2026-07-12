@@ -152,6 +152,9 @@ const full: RunResult = {
     mcpServers: [{ name: "my-server", status: "connected" }],
     availableSkills: [{ id: "my-plugin:my-skill", whenToUse: "Use for X" }],
   },
+  fileToolAttempts: [
+    { tool: "Read", paths: { file_path: "outputs/report.pdf" }, gatePath: "outputs/report.pdf", origin: "main", toolUseId: "tu_1" },
+  ],
 };
 
 describe("schema/run-result.json", () => {

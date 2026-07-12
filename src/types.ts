@@ -1144,6 +1144,17 @@ export interface RunResult {
    *  `controlOut` (a custom hook's decision lives there, not in the stream) — else the hook assertions
    *  are excluded-loud, never vacuously passed. */
   hookEvents?: Array<{ callbackId: string; decision: "block" | "allow"; reason?: string; tool?: string }>;
+  /** Attempt-level gated-file-tool telemetry (raw paths as sent). Undefined = evidence unavailable
+   *  (a result recorded before this field existed); [] = captured, no gated attempts. Replay
+   *  re-derives it (tool_use blocks are frozen stream content). */
+  fileToolAttempts?: Array<{
+    tool: string;
+    paths: { file_path?: string; path?: string };
+    gatePath?: string;
+    origin: "main" | "subagent" | "unknown";
+    parentToolUseId?: string;
+    toolUseId?: string;
+  }>;
   /** Files delivered via the cowork `present_files` tool, in call order — one entry per file the agent
    *  presented, derived from pairing each `mcp__cowork__present_files` tool_use with its own
    *  tool_result. `promoted` = the file was in the scratchpad and landed under `mnt/outputs`; `leaked` =

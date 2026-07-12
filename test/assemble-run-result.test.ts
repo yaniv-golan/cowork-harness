@@ -62,6 +62,7 @@ function fullyExplicitFixture(): CompleteRunResult {
     contextEvents: undefined,
     mcpErrors: undefined,
     hookEvents: undefined,
+    fileToolAttempts: undefined,
     presentedFiles: undefined,
     preRunPaths: undefined,
     preRunLinkAware: undefined,
@@ -113,6 +114,16 @@ describe("assembleRunResult", () => {
       resources: { tier: "container", sampleCount: 3, intervalMs: 1000, peakRssBytes: 999 },
     });
     expect(out.resources).toMatchObject({ tier: "container", peakRssBytes: 999 });
+  });
+
+  it("passes fileToolAttempts through unchanged", () => {
+    const out = assembleRunResult({
+      ...fullyExplicitFixture(),
+      fileToolAttempts: [{ tool: "Read", paths: { file_path: "outputs/a.md" }, gatePath: "outputs/a.md", origin: "main", toolUseId: "t1" }],
+    });
+    expect(out.fileToolAttempts).toEqual([
+      { tool: "Read", paths: { file_path: "outputs/a.md" }, gatePath: "outputs/a.md", origin: "main", toolUseId: "t1" },
+    ]);
   });
 
   it("passes mode through unchanged", () => {

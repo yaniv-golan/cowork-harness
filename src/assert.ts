@@ -423,6 +423,9 @@ export interface AssertContext {
    *  hook's decision lives only there) — the evidence-unavailable signal for hook_blocked/
    *  no_hook_blocked; an empty `[]` is a valid "no hook fired" state and is NOT the same as undefined. */
   hookEvents?: RunResult["hookEvents"];
+  /** RunResult.fileToolAttempts — gated-file-tool attempt telemetry. Undefined = evidence unavailable
+   *  (older result) — dependent assertions fail "cannot verify" (excluded-loud), mirroring hookEvents. */
+  fileToolAttempts?: RunResult["fileToolAttempts"];
   /** RunResult.presentedFiles — files delivered via `present_files`, each already classified
    *  promoted/leaked at derivation time (see RunResult's own doc comment). Undefined means no
    *  `present_files` telemetry was recorded for this run (an older run predating the feature) — the

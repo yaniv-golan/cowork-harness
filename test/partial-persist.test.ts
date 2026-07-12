@@ -35,6 +35,7 @@ function partialRecord(over: Partial<RunRecord> = {}): RunRecord {
     contextEvents: [],
     mcpErrors: [],
     hookEvents: [],
+    fileToolAttempts: [],
     presentedFiles: [],
     webSearches: [],
     infraErrors: [],

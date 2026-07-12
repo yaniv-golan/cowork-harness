@@ -14,6 +14,11 @@ import {
 } from "../decide/decider.js";
 import { ProvenanceTracker } from "../hostloop/provenance.js";
 import { normalizeHost, validateBareDomain } from "../boundary-paths.js";
+import { PATH_GATE_TOOL_NAMES } from "../hostloop/pretooluse-path-hook.js";
+
+/** The production-gated file-tool surface (path-gate tools + MultiEdit, which the path hook's own
+ *  matcher also covers — see runtime/hostloop.ts's PreToolUse matcher). */
+const FILE_ATTEMPT_TOOLS = new Set<string>([...PATH_GATE_TOOL_NAMES, "MultiEdit"]);
 
 /** Bound a captured decision input so a large tool payload can't bloat the run record. Objects pass
  *  through structurally (consumers read fields like `.command`); only an over-cap JSON serialization is
@@ -225,6 +230,17 @@ export interface RunRecord {
   contextEvents: Array<{ subtype: string; data: Record<string, unknown> }>; // system events we don't special-case (compaction etc.)
   mcpErrors: Array<{ server: string; code?: number; message: string }>; // MCP round-trips the harness answered with a JSON-RPC error (no handler, or the handler threw)
   hookEvents: Array<{ callbackId: string; decision: "block" | "allow"; reason?: string; tool?: string }>; // PreToolUse hook fire/block events (built-in Task hook + any custom hook bundle)
+  /** Every GATED-file-tool tool_use (Read/Write/Edit/Glob/Grep/MultiEdit), raw paths as sent. The
+   *  attempt-level evidence source for no_vm_path_file_op / subagent_file_write — raw inputs otherwise
+   *  live only in the private toolLog. Synthetic MCP echoes excluded. */
+  fileToolAttempts: Array<{
+    tool: string;
+    paths: { file_path?: string; path?: string };
+    gatePath?: string;
+    origin: "main" | "subagent" | "unknown";
+    parentToolUseId?: string;
+    toolUseId?: string;
+  }>;
   // Files delivered via the cowork `present_files` tool, in call order — derived from each
   // `mcp__cowork__present_files` tool_use (the input file list) paired with its own tool_result (the
   // returned path per file, in the same order). CONTENT-CLASS: both halves live in the ordinary
@@ -359,6 +375,7 @@ export class Run {
       contextEvents: [],
       mcpErrors: [],
       hookEvents: [],
+      fileToolAttempts: [],
       presentedFiles: [],
       webSearches: [],
       infraErrors: [],
@@ -484,6 +501,29 @@ export class Run {
             // parented falls to the sub-agent branch below (attributed if the parent is a recognized
             // dispatch, dropped otherwise — unchanged from before).
             const isMainAgentFlow = !ev.parentToolUseId || this.forkScopedIds.has(ev.parentToolUseId);
+            // Attempt-level telemetry for every GATED file tool, recorded OUTSIDE the main/subagent
+            // branch below so every gated attempt is captured regardless of attribution. `origin` uses
+            // the SAME recognized-dispatch membership check the sub-agent attribution branch uses (see
+            // `this.rec.subagents.find` at the parentToolUseId branch below) — a parent that isn't a
+            // recognized dispatch is "unknown", never "subagent" (bare parent-id presence is not enough).
+            if (!ev.synthetic && FILE_ATTEMPT_TOOLS.has(ev.name)) {
+              const inp = (ev.input && typeof ev.input === "object" ? ev.input : {}) as Record<string, unknown>;
+              const paths: { file_path?: string; path?: string } = {};
+              if (typeof inp.file_path === "string") paths.file_path = inp.file_path;
+              if (typeof inp.path === "string") paths.path = inp.path;
+              this.rec.fileToolAttempts.push({
+                tool: ev.name,
+                paths, // RAW strings — matcher normalization (if any) lives in the assertion, never here
+                gatePath: paths.file_path ?? paths.path, // first-match order = ["file_path","path"], production's extraction order
+                origin: isMainAgentFlow
+                  ? "main"
+                  : this.rec.subagents.some((s) => s.toolUseId === ev.parentToolUseId)
+                    ? "subagent"
+                    : "unknown",
+                parentToolUseId: ev.parentToolUseId,
+                toolUseId: ev.toolUseId,
+              });
+            }
             if (isMainAgentFlow && !ev.synthetic) {
               // synthetic = the MCP round-trip echo; the real call already arrived as an assistant tool_use
               // block (live-verified), so counting the synthetic too would double-list it / add a bogus name.

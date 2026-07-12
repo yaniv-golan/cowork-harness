@@ -965,6 +965,9 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       // Always defined live — the built-in Task hook only fires on a dispatched background Task, so an
       // empty array on a no-Task scenario is the real "nothing hook-blocked" signal no_hook_blocked needs.
       hookEvents: record.hookEvents,
+      // Always defined live — an empty array is the real "no gated attempts" signal, matching hookEvents/
+      // presentedFiles' own uncollapsed convention.
+      fileToolAttempts: record.fileToolAttempts,
       // Always defined live — an empty array is the real "nothing presented" signal no_scratchpad_leak's
       // vacuous pass needs, distinct from replay's evidence-unavailable undefined on an older cassette.
       presentedFiles: record.presentedFiles,
@@ -1188,6 +1191,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       contextEvents: record.contextEvents, // system events we don't special-case — powers compaction_occurred
       mcpErrors: record.mcpErrors, // uncollapsed — an empty [] is the real "no MCP errors" signal no_mcp_error needs
       hookEvents: record.hookEvents, // uncollapsed — an empty [] on a no-Task scenario is the real "nothing hook-blocked" signal no_hook_blocked needs
+      fileToolAttempts: record.fileToolAttempts, // uncollapsed — content-class, same as toolResults/decisions above
       presentedFiles: record.presentedFiles, // uncollapsed — an empty [] is the real "nothing presented" signal no_scratchpad_leak's vacuous pass needs
       // The pre-spawn baseline no_unexpected_files diffs against (same single read the evaluate ctx got).
       // undefined = the run didn't capture (key not asserted, microvm, pre-seam) — the assertion then
@@ -1525,6 +1529,7 @@ export function buildPartialResult(args: {
     contextEvents: record.contextEvents, // system events we don't special-case — powers compaction_occurred
     mcpErrors: record.mcpErrors, // uncollapsed — an empty [] is the real "no MCP errors" signal no_mcp_error needs
     hookEvents: record.hookEvents, // uncollapsed — an empty [] on a no-Task scenario is the real "nothing hook-blocked" signal no_hook_blocked needs
+    fileToolAttempts: record.fileToolAttempts, // uncollapsed — content-class, same as toolResults/decisions above
     presentedFiles: record.presentedFiles, // uncollapsed — an empty [] is the real "nothing presented" signal no_scratchpad_leak's vacuous pass needs
     preRunPaths: readPreRunManifest(args.outDir),
     preRunLinkAware: readPreRunManifestLinkAware(args.outDir),

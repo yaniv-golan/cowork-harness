@@ -251,3 +251,66 @@ describe("#39 egress parsing drops malformed/unknown-decision lines (health sign
     expect(parseEgressLine(JSON.stringify({ host: "x", decision: "deny" }))).toEqual({ host: "x", decision: "deny" });
   });
 });
+
+/** Synthetic `tool_use` AgentEvent builder for driving a Run over a scripted event list. */
+function toolUse(
+  name: string,
+  input: unknown,
+  opts: { toolUseId?: string; parentToolUseId?: string; synthetic?: boolean } = {},
+): AgentEvent {
+  return {
+    type: "tool_use",
+    name,
+    input,
+    toolUseId: opts.toolUseId,
+    parentToolUseId: opts.parentToolUseId,
+    synthetic: opts.synthetic,
+  };
+}
+
+/** Synthetic `subagent_dispatch` AgentEvent builder — registers a RECOGNIZED dispatch under `toolUseId`. */
+function dispatch(toolUseId: string, agentType: string): AgentEvent {
+  return { type: "subagent_dispatch", toolUseId, agentType, declaredTools: [] };
+}
+
+/** Drive a `Run` over a scripted event list (via `MockSession`), auto-appending a terminal `result` event
+ *  when the caller's list doesn't already end the stream, and return the finished `RunRecord`. */
+async function driveRunOverEvents(events: AgentEvent[]) {
+  const withResult = events.some((e) => e.type === "result") ? events : [...events, { type: "result", isError: false } as AgentEvent];
+  return new Run(new MockSession(withResult), new ScriptedDecider([])).drive("go");
+}
+
+describe("fileToolAttempts — attempt-level path telemetry for gated file tools", () => {
+  it("records raw paths (both keys), gatePath = first match, and skips synthetic MCP echoes", async () => {
+    const rec = await driveRunOverEvents([
+      toolUse("Read", { file_path: "/sessions/x/mnt/outputs/a", path: "/elsewhere" }, { toolUseId: "t1" }),
+      toolUse("Grep", { pattern: "x" }, { toolUseId: "t2" }), // pathless — still an entry
+      toolUse("Write", { file_path: "/tmp/echo" }, { toolUseId: "t3", synthetic: true }), // NOT recorded
+      toolUse("Bash", { command: "ls" }, { toolUseId: "t4" }), // not a gated file tool — NOT recorded
+    ]);
+    expect(rec.fileToolAttempts).toEqual([
+      {
+        tool: "Read",
+        paths: { file_path: "/sessions/x/mnt/outputs/a", path: "/elsewhere" },
+        gatePath: "/sessions/x/mnt/outputs/a",
+        origin: "main",
+        parentToolUseId: undefined,
+        toolUseId: "t1",
+      },
+      { tool: "Grep", paths: {}, gatePath: undefined, origin: "main", parentToolUseId: undefined, toolUseId: "t2" },
+    ]);
+  });
+
+  it("origin follows the recognized-dispatch/fork rules, not bare parent-id presence", async () => {
+    const rec = await driveRunOverEvents([
+      dispatch("d1", "founder-skills:ic-sim"),
+      toolUse("Write", { file_path: "artifacts/x.json" }, { toolUseId: "t5", parentToolUseId: "d1" }), // recognized dispatch -> subagent
+      toolUse("Skill", { skill: "s" }, { toolUseId: "sk1" }), // fork-scoped parent
+      toolUse("Edit", { file_path: "y" }, { toolUseId: "t6", parentToolUseId: "sk1" }), // fork-scoped -> MAIN
+      toolUse("Write", { file_path: "z" }, { toolUseId: "t7", parentToolUseId: "not-a-dispatch" }), // unrecognized parent -> unknown, NEVER subagent
+    ]);
+    expect(rec.fileToolAttempts.find((a) => a.toolUseId === "t5")?.origin).toBe("subagent");
+    expect(rec.fileToolAttempts.find((a) => a.toolUseId === "t6")?.origin).toBe("main");
+    expect(rec.fileToolAttempts.find((a) => a.toolUseId === "t7")?.origin).toBe("unknown");
+  });
+});
