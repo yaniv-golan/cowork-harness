@@ -38,14 +38,45 @@ paths out of markdown text.
 **ADVISORY by default.** Because the extraction is heuristic and can over-flag innocent
 documentation/teaching examples, findings print as warnings but the command **exits 0 by default even
 when it prints findings**. Pass `--strict` to turn it into a hard gate — exit 1 on any finding, mirroring
-`lint-skill --strict` exactly. A SKILL.md can also silence the ENTIRE warning class for itself: a line
-containing `analyze-skill: ignore` (bare, or inside an HTML comment `<!-- analyze-skill: ignore -->`)
-anywhere in the file suppresses every `analyze-skill` finding for that file — including a genuine true
-positive, since this is an explicit author override, not a narrower false-positive guard. Use it on a
-SKILL.md that legitimately uses `/sessions` paths (a VM-tier-only skill) or that documents them in
-prose/teaching examples. Under `--strict`, a suppressed file never fails.
+`lint-skill --strict` exactly.
 
-Two rules, both advisory findings:
+**Three ignore markers, three scopes.** A SKILL.md can silence findings at the granularity that fits the
+false positive — from a single teaching line up to the whole file:
+
+- **`analyze-skill: ignore-next-line`** — suppresses findings on the SINGLE line immediately following
+  the marker line. The narrowest tier: use it right above one teaching example (`❌ Write(/sessions/...)`
+  in a "don't do this" callout, a one-line illustrative snippet) without touching anything else in the
+  file.
+- **`analyze-skill: ignore-start`** … **`analyze-skill: ignore-end`** — suppresses findings on every line
+  from `ignore-start` through the matching `ignore-end`, inclusive. Use it to wrap a multi-line teaching
+  block — e.g. a `references/`/`agents/` code sample that legitimately demonstrates `/sessions` addressing
+  for a VM-tier reader. A `ignore-start` with **no matching `ignore-end` before EOF** is itself a finding
+  — `unclosed-ignore-fence` — that prints and gates under `--strict` exactly like any other finding (it
+  still suppresses everything from the stray `ignore-start` to EOF, fail-open, but the missing-`ignore-end`
+  mistake itself is never silent).
+- **`analyze-skill: ignore`** (file-wide, unchanged) — silences the ENTIRE warning class for the file,
+  including a genuine true positive, since this is an explicit whole-file author override, not a narrower
+  false-positive guard. Use it on a SKILL.md that legitimately uses `/sessions` paths throughout (a
+  VM-tier-only skill). Under `--strict`, a file-wide-suppressed file never fails, and it never emits
+  `unclosed-ignore-fence` either — the whole-file override wins outright.
+
+All three accept the same wrappers as the file-wide marker: bare (`analyze-skill: ignore-next-line`), an
+HTML comment (`<!-- analyze-skill: ignore-start -->`), a markdown reference-link comment
+(`[//]: # (analyze-skill: ignore-end)`), a `#`-prefixed line, or a list bullet (`- analyze-skill:
+ignore-next-line`). Every marker is **line-anchored** — the marker text must be the line's ENTIRE
+meaningful content (allowing only the wrapper and whitespace) to take effect; a SKILL.md that merely
+*documents* one of these markers in prose (e.g. `` add `analyze-skill: ignore-next-line` to skip a line
+``) does not accidentally trigger it.
+
+**Teaching examples in `references/`/`agents/` — the pattern this unlocks.** A skill's `references/` or
+`agents/` files often carry a deliberately WRONG code sample under a "don't do this" heading — exactly the
+`/sessions`-to-file-tool shape this analyzer flags, but as a teaching illustration, not a live defect. Wrap
+just that sample in `ignore-start`/`ignore-end` (or prefix the one bad line with `ignore-next-line`)
+instead of reaching for the file-wide marker — the rest of the file, including any REAL `/sessions`
+mistake introduced later, stays fully scanned.
+
+Three rules, all advisory findings — including `unclosed-ignore-fence`, which fires on this file's own
+ignore-marker syntax rather than on `/sessions` addressing:
 
 - **`sessions-path-to-file-tool`** — a `/sessions/...` token in a file-tool/output POSITIVE context: an
   `OUTPUT_PATH=`/`OUTPUT_DIR=` assignment, a `Write(`/`Read(`/`Edit(`/`Glob(`/`Grep(` directive target,
@@ -59,6 +90,10 @@ Two rules, both advisory findings:
   `find … > $VAR`/`> VAR` redirection — not merely any `$VAR` token that happens to appear on the find
   line (an `-name "$NAME"` argument is find's INPUT, not its output, and sharing that token with an
   unrelated `Read(` does not fire).
+- **`unclosed-ignore-fence`** — an `analyze-skill: ignore-start` line with no matching `ignore-end` before
+  EOF. Not a `/sessions`-addressing finding at all — a syntax mistake in the file's OWN ignore markup,
+  reported so a forgotten `ignore-end` (which would otherwise fail-open and silently blind the rest of the
+  file) is never a silent stderr-only notice on a green exit.
 
 **Context confidence governs which guards apply.** HIGH-confidence STRUCTURED contexts — an
 `OUTPUT_PATH=`/`OUTPUT_DIR=` assignment, a `Write(`/`Read(`/`Edit(`/`Glob(`/`Grep(` directive target, and a

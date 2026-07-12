@@ -7,6 +7,7 @@ import { analyzeSkillText, hasIgnoreMarker } from "../src/run/analyze-skill.js";
 
 const RULE1 = "sessions-path-to-file-tool";
 const RULE2 = "sessions-find-into-file-read";
+const RULE_UNCLOSED = "unclosed-ignore-fence";
 
 function findRule(text: string, rule: string) {
   return analyzeSkillText(text, "SKILL.md").filter((f) => f.rule === rule);
@@ -519,6 +520,122 @@ describe("analyzeSkillText — `analyze-skill: ignore` marker", () => {
 });
 
 // --------------------------------------------------------------------------------------------- //
+// Scoped ignores — `ignore-next-line` and `ignore-start`/`ignore-end`. Unlike the file-wide
+// `analyze-skill: ignore` marker (which blinds the WHOLE file), these silence only the exact
+// line(s) they scope, so a single teaching example doesn't blind the rest of the file to a real
+// finding — the regression these markers exist to prevent.
+// --------------------------------------------------------------------------------------------- //
+
+describe("analyzeSkillText — `ignore-next-line` (line-scoped)", () => {
+  it("silences the immediately-following line while a genuine finding on an un-ignored line still fires (regression: adjacent finding must not go silent)", () => {
+    const text = [
+      "<!-- analyze-skill: ignore-next-line -->",
+      "Write(/sessions/{{id}}/mnt/outputs/teaching-example.md)",
+      "Write(/sessions/{{id}}/mnt/outputs/real-violation.md)",
+    ].join("\n");
+    const hits = findRule(text, RULE1);
+    // The ignored line (2) is absent...
+    expect(hits.some((f) => f.line === 2)).toBe(false);
+    // ...but the un-ignored line (3) still fires — the exact regression the file-wide marker caused.
+    expect(hits.some((f) => f.line === 3)).toBe(true);
+  });
+
+  it("works with the bare, `#`, and list-bullet marker spellings", () => {
+    for (const marker of ["analyze-skill: ignore-next-line", "# analyze-skill: ignore-next-line", "- analyze-skill: ignore-next-line"]) {
+      const text = [marker, "Write(/sessions/{{id}}/mnt/outputs/x.md)"].join("\n");
+      expect(findRule(text, RULE1), `marker=${marker}`).toEqual([]);
+    }
+  });
+
+  it("does NOT suppress when the marker only appears mid-prose (line-anchored, same as the file-wide marker)", () => {
+    const text = ["add `analyze-skill: ignore-next-line` to skip a line", "Write(/sessions/{{id}}/mnt/outputs/out.md)"].join("\n");
+    const hits = findRule(text, RULE1);
+    expect(hits.some((f) => f.line === 2)).toBe(true);
+  });
+
+  it("only silences the ONE following line, not the rest of the file", () => {
+    const text = [
+      "analyze-skill: ignore-next-line",
+      "Write(/sessions/{{id}}/mnt/outputs/ignored.md)",
+      "Write(/sessions/{{id}}/mnt/outputs/second.md)",
+    ].join("\n");
+    const hits = findRule(text, RULE1);
+    expect(hits.map((f) => f.line)).toEqual([3]);
+  });
+});
+
+describe("analyzeSkillText — `ignore-start` / `ignore-end` (block-scoped)", () => {
+  it("silences findings inside the fence while findings outside still fire", () => {
+    const text = [
+      "Write(/sessions/{{id}}/mnt/outputs/before.md)",
+      "<!-- analyze-skill: ignore-start -->",
+      "Write(/sessions/{{id}}/mnt/outputs/inside-1.md)",
+      "Write(/sessions/{{id}}/mnt/outputs/inside-2.md)",
+      "<!-- analyze-skill: ignore-end -->",
+      "Write(/sessions/{{id}}/mnt/outputs/after.md)",
+    ].join("\n");
+    const hits = findRule(text, RULE1);
+    expect(hits.map((f) => f.line).sort((a, b) => a - b)).toEqual([1, 6]);
+  });
+
+  it("works with the bare marker spelling", () => {
+    const text = ["analyze-skill: ignore-start", "Write(/sessions/{{id}}/mnt/outputs/inside.md)", "analyze-skill: ignore-end"].join("\n");
+    expect(findRule(text, RULE1)).toEqual([]);
+  });
+
+  it("does NOT suppress when either marker only appears mid-prose (line-anchored)", () => {
+    const text = [
+      "Wrap a block in `analyze-skill: ignore-start` / `analyze-skill: ignore-end` to silence it.",
+      "Write(/sessions/{{id}}/mnt/outputs/out.md)",
+    ].join("\n");
+    const hits = findRule(text, RULE1);
+    expect(hits.some((f) => f.line === 2)).toBe(true);
+  });
+
+  it("a properly closed fence never emits `unclosed-ignore-fence`", () => {
+    const text = ["analyze-skill: ignore-start", "Write(/sessions/{{id}}/mnt/outputs/inside.md)", "analyze-skill: ignore-end"].join("\n");
+    expect(findRule(text, RULE_UNCLOSED)).toEqual([]);
+  });
+});
+
+describe("analyzeSkillText — unclosed `ignore-start` (must-fix: gates visibly, never a silent notice)", () => {
+  it("emits its OWN `unclosed-ignore-fence` finding, at the ignore-start line, when there is no matching ignore-end", () => {
+    const text = [
+      "Write(/sessions/{{id}}/mnt/outputs/before.md)",
+      "analyze-skill: ignore-start",
+      "Write(/sessions/{{id}}/mnt/outputs/inside.md)",
+    ].join("\n");
+    const unclosed = findRule(text, RULE_UNCLOSED);
+    expect(unclosed).toHaveLength(1);
+    expect(unclosed[0].line).toBe(2);
+
+    // Fail-on-break: this is a REAL finding (not a side-channel notice) — it appears in the same
+    // findings array as every other rule and would gate under --strict exactly like a genuine
+    // sessions-path finding. Removing the unclosed-fence detection would flip `unclosed` to [].
+    const all = analyzeSkillText(text, "SKILL.md");
+    expect(all.some((f) => f.rule === RULE_UNCLOSED && f.line === 2)).toBe(true);
+  });
+
+  it("still suppresses findings from the unclosed ignore-start to EOF (suppress-to-EOF), while the fence finding itself is not suppressed by its own range", () => {
+    const text = [
+      "analyze-skill: ignore-start",
+      "Write(/sessions/{{id}}/mnt/outputs/inside.md)",
+      "Write(/sessions/{{id}}/mnt/outputs/also-inside.md)",
+    ].join("\n");
+    const rule1Hits = findRule(text, RULE1);
+    expect(rule1Hits).toEqual([]); // suppressed to EOF
+    const unclosedHits = findRule(text, RULE_UNCLOSED);
+    expect(unclosedHits).toHaveLength(1); // the fence finding itself still fires
+    expect(unclosedHits[0].line).toBe(1);
+  });
+
+  it("does not emit `unclosed-ignore-fence` when the file-wide `analyze-skill: ignore` marker is ALSO present (explicit whole-file override wins)", () => {
+    const text = ["analyze-skill: ignore", "analyze-skill: ignore-start", "Write(/sessions/{{id}}/mnt/outputs/x.md)"].join("\n");
+    expect(analyzeSkillText(text, "SKILL.md")).toEqual([]);
+  });
+});
+
+// --------------------------------------------------------------------------------------------- //
 // Fail-on-break: every firing fixture MUST flip to clean when isVmSessionsPath is stubbed to
 // always-false (proves this analyzer defers to the production predicate, not a re-implementation).
 // --------------------------------------------------------------------------------------------- //
@@ -633,6 +750,23 @@ describe.skipIf(!can)("analyze-skill CLI — exit codes and envelope (ADVISORY: 
     const payload = JSON.parse(jsonRun.out.trim());
     expect(payload.suppressed).toBe(false);
     expect(payload.findings.length).toBeGreaterThan(0);
+  });
+
+  it("an unclosed `ignore-start` prints visibly and gates under --strict (never a silent stderr-only notice)", () => {
+    const d = mkdtempSync(join(tmpdir(), "as-cli-unclosed-"));
+    const dirty = join(d, "SKILL.md");
+    writeFileSync(dirty, ["analyze-skill: ignore-start", "OUTPUT_PATH=artifacts/out.md"].join("\n"));
+
+    const defaultRun = run(["analyze-skill", dirty], d);
+    expect(defaultRun.code).toBe(0);
+    expect(defaultRun.err).toMatch(new RegExp(RULE_UNCLOSED));
+
+    const strictRun = run(["analyze-skill", dirty, "--strict"], d);
+    expect(strictRun.code).toBe(1);
+
+    const jsonRun = run(["analyze-skill", dirty, "--output-format", "json"], d);
+    const payload = JSON.parse(jsonRun.out.trim());
+    expect(payload.findings.some((f: { rule: string }) => f.rule === RULE_UNCLOSED)).toBe(true);
   });
 
   it("resolves a skill directory to its SKILL.md", () => {

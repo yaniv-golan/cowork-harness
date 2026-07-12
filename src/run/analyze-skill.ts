@@ -33,7 +33,7 @@ const log = (s: string) => writeSync(2, s + "\n");
  * legitimately uses `/sessions` paths, or one that merely documents them in prose/teaching examples.
  */
 
-export type SkillAnalysisRuleId = "sessions-path-to-file-tool" | "sessions-find-into-file-read";
+export type SkillAnalysisRuleId = "sessions-path-to-file-tool" | "sessions-find-into-file-read" | "unclosed-ignore-fence";
 
 export interface SkillFinding {
   rule: SkillAnalysisRuleId;
@@ -456,8 +456,32 @@ function splitLines(text: string): { lines: LineInfo[]; blocks: { lang: string; 
  *  a SKILL.md — a VM-tier-only skill that legitimately uses `/sessions` paths puts a genuine
  *  marker LINE in and the whole warning class goes quiet for that file, INCLUDING a real true positive
  *  (an explicit author override, not a narrower FP guard). */
-const IGNORE_MARKER_LINE_RE =
-  /^\s*(?:<!--\s*analyze-skill:\s*ignore\s*-->|\[[^\]]*\]:\s*#\s*\(\s*analyze-skill:\s*ignore\s*\)|#+\s*analyze-skill:\s*ignore|[-*]\s*analyze-skill:\s*ignore|analyze-skill:\s*ignore)\s*$/i;
+/** Builds a line-anchored marker regex for `analyze-skill: <word>`, with the SAME five accepted
+ *  wrappers as the original hand-written `analyze-skill: ignore` pattern (HTML comment, markdown
+ *  reference-link comment, `#`-prefixed, list bullet, bare) — factored out so the three SCOPED marker
+ *  spellings (`ignore-next-line`, `ignore-start`, `ignore-end`) get byte-identical line-anchoring to the
+ *  file-wide marker, not a re-derived approximation. `word` is always one of a fixed set of literal
+ *  marker names (no regex-special characters), so no escaping is needed. Anchoring to `\s*$` right after
+ *  `word` is what prevents cross-marker collisions without any extra logic: `ignore-start` never matches
+ *  the `ignore` pattern (or vice versa) because the shorter word's alternative requires whitespace-to-EOL
+ *  immediately after it, and `-start`/`-next-line` is not whitespace. */
+function buildMarkerLineRe(word: string): RegExp {
+  return new RegExp(
+    `^\\s*(?:<!--\\s*analyze-skill:\\s*${word}\\s*-->|\\[[^\\]]*\\]:\\s*#\\s*\\(\\s*analyze-skill:\\s*${word}\\s*\\)|#+\\s*analyze-skill:\\s*${word}|[-*]\\s*analyze-skill:\\s*${word}|analyze-skill:\\s*${word})\\s*$`,
+    "i",
+  );
+}
+
+const IGNORE_MARKER_LINE_RE = buildMarkerLineRe("ignore");
+/** `analyze-skill: ignore-next-line` — suppresses findings on the SINGLE line immediately following
+ *  the marker line (not the marker line itself). See `computeScopedIgnores`. */
+const IGNORE_NEXT_LINE_MARKER_RE = buildMarkerLineRe("ignore-next-line");
+/** `analyze-skill: ignore-start` — opens a suppression fence; findings on this line through the
+ *  matching `ignore-end` line (inclusive) are suppressed. See `computeScopedIgnores`. */
+const IGNORE_START_MARKER_RE = buildMarkerLineRe("ignore-start");
+/** `analyze-skill: ignore-end` — closes the nearest open `ignore-start` fence. See
+ *  `computeScopedIgnores`. */
+const IGNORE_END_MARKER_RE = buildMarkerLineRe("ignore-end");
 
 /** Does `text` carry the `analyze-skill: ignore` marker as its OWN line (see `IGNORE_MARKER_LINE_RE`)?
  *  Exported so the CLI can print an explanatory note distinguishing "suppressed by marker" from
@@ -466,10 +490,76 @@ export function hasIgnoreMarker(text: string): boolean {
   return text.split(/\r?\n/).some((line) => IGNORE_MARKER_LINE_RE.test(line));
 }
 
+/** Result of one pass over `text` for the two SCOPED ignore markers (`ignore-next-line` and the
+ *  `ignore-start`/`ignore-end` fence) — deliberately separate from the file-wide `analyze-skill: ignore`
+ *  marker (`hasIgnoreMarker`), which is an all-or-nothing author override handled earlier by
+ *  `analyzeSkillText`'s own early return. */
+interface ScopedIgnores {
+  /** Every 1-based line number whose findings are suppressed: `ignore-next-line`'s target line, plus
+   *  every line within a closed (or, suppressed-to-EOF, unclosed) `ignore-start`/`ignore-end` fence. */
+  suppressedLines: Set<number>;
+  /** Line number of each `ignore-start` marker that reached EOF with no matching `ignore-end` — the
+   *  must-fix case: each one becomes its own gating `unclosed-ignore-fence` finding (see
+   *  `analyzeSkillText`), never a silent notice. */
+  unclosedStartLines: number[];
+}
+
+/** One pass over `text`'s raw lines (NOT the fence/indent-aware `LineInfo[]` `splitLines` produces —
+ *  ignore markers apply to the raw document text regardless of code-fence state, same as the file-wide
+ *  marker) computing which lines the two scoped markers suppress. Fences do not nest: once an
+ *  `ignore-start` is open, a second `ignore-start` line is ordinary (non-marker) content until the first
+ *  `ignore-end` closes it — this keeps the state machine (and the "which fence does this ignore-end
+ *  close" question) unambiguous. An `ignore-start` still open at EOF suppresses every line from itself
+ *  through EOF (fail-open, deliberately: an author who forgets `ignore-end` should not have every
+ *  subsequent finding in the file resurface) AND is recorded in `unclosedStartLines` so
+ *  `analyzeSkillText` can emit the gating `unclosed-ignore-fence` finding at the
+ *  fence's own start line — a line the fence's own suppression range does not need to cover for this to
+ *  work, since that finding is added directly, never filtered against `suppressedLines`. */
+function computeScopedIgnores(text: string): ScopedIgnores {
+  const rawLines = text.split(/\r?\n/);
+  const suppressedLines = new Set<number>();
+  const unclosedStartLines: number[] = [];
+  let openStart: number | null = null;
+
+  for (let i = 0; i < rawLines.length; i++) {
+    const lineNo = i + 1;
+    const line = rawLines[i];
+    if (openStart === null) {
+      if (IGNORE_NEXT_LINE_MARKER_RE.test(line)) {
+        if (lineNo + 1 <= rawLines.length) suppressedLines.add(lineNo + 1);
+        continue;
+      }
+      if (IGNORE_START_MARKER_RE.test(line)) {
+        openStart = lineNo;
+        continue;
+      }
+    } else if (IGNORE_END_MARKER_RE.test(line)) {
+      for (let l = openStart; l <= lineNo; l++) suppressedLines.add(l);
+      openStart = null;
+    }
+  }
+
+  if (openStart !== null) {
+    unclosedStartLines.push(openStart);
+    for (let l = openStart; l <= rawLines.length; l++) suppressedLines.add(l);
+  }
+
+  return { suppressedLines, unclosedStartLines };
+}
+
 /** Scan one SKILL.md's full text and return every finding, ordered by line number. `filePath` is used
  *  only to stamp `SkillFinding.path` (the caller resolves it once per target). Returns `[]` immediately,
- *  before any rule runs, when the file carries the `analyze-skill: ignore` marker (see `hasIgnoreMarker`)
- *  — the marker is an author override and must suppress even a genuine true positive. */
+ *  before any rule runs, when the file carries the FILE-WIDE `analyze-skill: ignore` marker (see
+ *  `hasIgnoreMarker`) — that marker is an explicit whole-file author override and must suppress even a
+ *  genuine true positive, INCLUDING this file's own `unclosed-ignore-fence` finding below (an unclosed
+ *  scoped fence is moot once the whole file is silenced).
+ *
+ *  The two SCOPED markers (`ignore-next-line`, `ignore-start`/`ignore-end`) are narrower: rather than an
+ *  early return, every rule below still runs over the FULL file, and the scoped-ignore line ranges
+ *  (`computeScopedIgnores`) are used only to FILTER the resulting findings by line at the end — so a
+ *  teaching example wrapped in `ignore-start`/`ignore-end` (or preceded by `ignore-next-line`) doesn't
+ *  blind the rest of the file to a genuine finding elsewhere, the exact regression the file-wide marker
+ *  caused and this task fixes. */
 export function analyzeSkillText(text: string, filePath: string): SkillFinding[] {
   if (hasIgnoreMarker(text)) return [];
   const findings: SkillFinding[] = [];
@@ -577,7 +667,31 @@ export function analyzeSkillText(text: string, filePath: string): SkillFinding[]
     }
   }
 
-  return findings.sort((a, b) => a.line - b.line || a.rule.localeCompare(b.rule));
+  // Scoped-ignore filter: drop every finding whose line falls inside an `ignore-next-line` target or an
+  // `ignore-start`/`ignore-end` fence (open or closed — an unclosed fence still suppresses to EOF, see
+  // `computeScopedIgnores`). Applied here, AFTER every rule above has already run over the full file, so
+  // a scoped ignore narrows what's REPORTED without narrowing what's SCANNED.
+  const { suppressedLines, unclosedStartLines } = computeScopedIgnores(text);
+  const scoped = suppressedLines.size === 0 ? findings : findings.filter((f) => !suppressedLines.has(f.line));
+
+  // Unclosed-fence must-fix: an `ignore-start` with no matching `ignore-end` is itself a real, gating
+  // finding — added directly (not via `add`/`seen`, and never filtered against `suppressedLines`, so the
+  // fence's own suppress-to-EOF range can never silently swallow it) so it prints under the normal
+  // finding path and gates under `--strict` exactly like any other finding. This is the must-fix this
+  // task exists to guarantee: a forgotten `ignore-end` fails VISIBLE, never a silent stderr-only notice.
+  for (const lineNo of unclosedStartLines) {
+    scoped.push({
+      rule: "unclosed-ignore-fence",
+      path: filePath,
+      line: lineNo,
+      message:
+        "`analyze-skill: ignore-start` has no matching `analyze-skill: ignore-end` before EOF — findings from " +
+        "this line through EOF are suppressed (fail-open), but this fence itself is a finding: add the missing " +
+        "`ignore-end`, or remove the stray `ignore-start`.",
+    });
+  }
+
+  return scoped.sort((a, b) => a.line - b.line || a.rule.localeCompare(b.rule));
 }
 
 /** Resolve the CLI target to the SKILL.md text to analyze: a file is used as-is, a directory is expected

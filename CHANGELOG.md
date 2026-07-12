@@ -6,6 +6,21 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **`analyze-skill` line- and block-scoped ignore markers** — `analyze-skill: ignore-next-line` and
+  `analyze-skill: ignore-start` / `analyze-skill: ignore-end`, alongside the existing file-wide
+  `analyze-skill: ignore`. The file-wide marker silences EVERY finding in the file, which was too coarse
+  for a SKILL.md that carries just one `/sessions`-addressed teaching example (e.g. a "don't do this"
+  callout in `references/`/`agents/`): the whole file went blind to any OTHER, genuine finding. The two
+  new markers suppress only the exact line (`ignore-next-line`) or fenced range (`ignore-start`/
+  `ignore-end`, inclusive) they scope, reusing the same line-anchored marker matching as the file-wide
+  marker (bare, `#`-prefixed, list-bullet, HTML comment, or markdown reference-link comment — never
+  triggered by a marker merely documented mid-prose). An `ignore-start` with no matching `ignore-end`
+  before EOF emits its own gating `unclosed-ignore-fence` finding — it still suppresses to EOF (fail-open),
+  but the missing-`ignore-end` mistake itself prints and fails under `--strict` like any other finding,
+  never a silent notice on a green exit.
+
 ## [0.31.0] — 2026-07-12
 
 ### Added
