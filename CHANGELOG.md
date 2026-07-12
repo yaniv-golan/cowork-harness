@@ -186,6 +186,18 @@ All notable changes to this project are documented here. The format is based on
   non-zero on WARN too, not just ERROR") and failing a correctly-authored skill that merely pins a
   built-in `subagent_type` (e.g. `Explore`). `--strict` now fails only on WARN or ERROR severity.
 
+### Docs
+
+- **`docs/subagents.md`: new "Stream observability" subsection.** Names the wire channels
+  `RunResult`'s sub-agent and path telemetry are actually derived from — the `task_started` event
+  family behind `subagents[].resolvedAgentType`/`dispatchTypeOmitted`, the `toolUseResult` envelope
+  (`subagent_result_meta`) behind `resolvedModel`/`output`, the three filtered `pathDenials[]`
+  producers (`pretooluse`/`can_use_tool`/`permission_denied`), and the `parent_tool_use_id`
+  attribution mechanism behind `toolsUsed`/`referencesRead`. Documents the honest limit that
+  sub-agent `thinking` blocks are parsed without a `parentToolUseId` at all, so sub-agent
+  reasoning cannot be attributed to a dispatch and never appears in the run artifact — a real gap,
+  not a harness omission.
+
 ## [0.30.0] — 2026-07-12
 
 > **Upgrade notes.**
