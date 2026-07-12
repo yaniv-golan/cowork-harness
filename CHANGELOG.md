@@ -8,6 +8,21 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **`probe-dispatch <skill-dir> "<prompt>"`** — a cheap, focused mechanics probe for a single `Task`
+  dispatch. A THIN wrapper over `skill` (same inline session/scenario construction, same `runOneScenario`
+  execution; default fidelity `hostloop`, since path-fidelity — this probe's whole reason to exist — only
+  matters there): scope the prompt to trigger ONE dispatch, and it prints just that dispatch's
+  `{resolvedAgentType, pathDenials, delivered}` instead of the full run transcript. No new `RunResult`
+  field backs it — it's a pure projection of data `skill`/`run` already produce
+  (`subagents[]`/`fileToolAttempts`/`pathDenials`/`toolResults`); `pathDenials` is scoped to the specific
+  dispatch by joining a denial's own `toolUseId` through `fileToolAttempts[].parentToolUseId` (falling
+  back to the run-level list, clearly labeled, when `fileToolAttempts` isn't available), and `delivered`
+  mirrors the `subagent_dispatch_healthy` assertion's own paired-write computation. `--expect-write
+  <suffix>` narrows `delivered` to a specific target path; `--output-format json` emits a compact
+  `{dispatches: [...], verdict}` envelope. "One dispatch" is PROMPT-SCOPED, not enforced — Cowork imposes
+  no in-conversation dispatch cap — so the probe just asserts it (`subagent_dispatched` +
+  `dispatch_count_max: 1`) and reports a failed verdict if the prompt fanned out.
+
 - **`RunResult.subagents[].referencesRead`** — the skill `references/*` / `scripts/*` files a SUB-AGENT
   dispatch actually **Read**, attributed per-dispatch (skill-relative, deduped in first-seen order, same
   filter as the existing top-level `referencesRead`). Previously a sub-agent's Reads were dropped

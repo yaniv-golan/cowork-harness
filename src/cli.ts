@@ -36,6 +36,7 @@ import { cmdRunsGc } from "./run/runs-gc.js";
 import { resolveInputs } from "./run/inputs.js";
 import { cmdLint, cmdLintSkill } from "./run/scenario-tool.js";
 import { cmdAnalyzeSkill } from "./run/analyze-skill.js";
+import { projectDispatchProbe, formatDispatchProbe } from "./run/probe-dispatch.js";
 import { cmdDoctor } from "./run/doctor.js";
 import { readRunStatus, hasRunStatus, followRunStatus, resolveStatusDir, isStatusStale } from "./run/run-status.js";
 import { parseArgs } from "./cli-args.js";
@@ -175,6 +176,9 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
       [--output-format json]
 
 ── Debugging / inspection ─────────────────────────────────────────────────────
+  probe-dispatch <skill-dir> "<prompt>"  cheap single-dispatch mechanics probe: runs the skill (default
+                               fidelity: hostloop) and prints ONE Task dispatch's {resolvedAgentType,
+                               pathDenials, delivered} — a thin wrapper over 'skill' (see 'probe-dispatch --help')
   trace <run-id | dir | path>  digest a run's events.jsonl (tools+result status, dispatches, decisions)
       [--view tools|questions|dispatches|tool-durations|tool-errors|files|usage] [--translate-paths]   focus on one view (default: all); see 'trace --help'
       [--output-format json]   structured rows
@@ -508,6 +512,7 @@ const COMMANDS = [
   "lint",
   "lint-skill",
   "analyze-skill",
+  "probe-dispatch",
   "doctor",
   "rehash",
   "init-redact",
@@ -697,6 +702,8 @@ async function main() {
       return cmdLintSkill(rest);
     case "analyze-skill":
       return cmdAnalyzeSkill(rest);
+    case "probe-dispatch":
+      return cmdProbeDispatch(rest);
     case "verify-cassettes":
       return cmdVerifyCassettes(rest);
     case "rehash":
@@ -1034,7 +1041,7 @@ function loadAnswerPolicy(command: string, path: string, json: boolean): AnswerR
  * across the file loop), the `--output-format json` envelope, and the exit code.
  */
 async function runOneScenario(p: {
-  command: "run" | "skill";
+  command: "run" | "skill" | "probe-dispatch";
   scenario: Scenario;
   label: string;
   flags: CommonFlags;
@@ -1072,9 +1079,15 @@ async function runOneScenario(p: {
   const stopHeartbeat = o.json || externalChannel ? () => {} : startHeartbeat(renderer, o.plan, start);
   let result: RunResult;
   try {
+    // executeScenario's own `command` option (→ RunResult.command) doesn't know about "probe-dispatch"
+    // (its type, and RunResult.command's, are unchanged by this command — it's built via the exact same
+    // inline-session/scenario machinery as `skill`, so "skill" is what RunResult.command should read too).
+    // The wider `command` value above still drives THIS function's own footer-prefix/fail()-label/
+    // scaffoldTip choices.
+    const execCommand: "run" | "skill" | "record" = command === "run" ? "run" : "skill";
     result = await executeScenario(scenario, {
       ...extra,
-      command,
+      command: execCommand,
       onUnanswered: policy,
       externalChannel,
       hooks: renderer ? [renderer] : [],
@@ -1924,6 +1937,165 @@ async function cmdSkill(rawArgs: string[]) {
   // mutually exclusive with --output-format json). The footer itself is emitted inside runOneScenario.
   if (o.json) out(jsonEnvelope("skill", [result]));
   process.exit(computeVerdict(result, "live").pass ? 0 : 1);
+}
+
+const PROBE_DISPATCH_HELP = `cowork-harness probe-dispatch <skill-dir> "<prompt>"
+
+  A cheap, focused mechanics probe: runs the skill/plugin folder against the staged Cowork agent (a THIN
+  wrapper over 'skill' — same inline session + scenario construction, same runOneScenario execution) with
+  a prompt you scope to trigger ONE Task dispatch, then prints just that dispatch's mechanics:
+  {resolvedAgentType, pathDenials, delivered}. NO new data model — every field is a projection of the same
+  RunResult 'skill' already produces (subagents[]/fileToolAttempts/pathDenials/toolResults).
+
+  "One dispatch" is PROMPT-SCOPED, not enforced by the harness: Cowork itself imposes no in-conversation
+  Task-dispatch cap. The probe just ASSERTS it (subagent_dispatched + dispatch_count_max: 1) so a prompt
+  that fanned out to several dispatches shows up as a failed verdict instead of a silently-averaged one.
+
+Fidelity  --fidelity <container|microvm|hostloop>   (default: hostloop — path-fidelity, this probe's whole
+                               reason to exist, only matters on hostloop; override only if you can't stage
+                               a native agent binary — see 'skill --help' for the tier descriptions)
+
+Source:
+  <skill-dir>                  dir containing .claude-plugin/plugin.json
+  --plugin <dir>                extra plugin source (repeatable)
+
+Files:
+  --upload <path>                mount a file at mnt/uploads/<name> (repeatable)
+  --folder <dir>                 connect a folder at mnt/<folder-name> (repeatable)
+
+Probe tuning:
+  --model <id>                   override the session model (e.g. pin a cheaper model for the probe)
+  --expect-write <suffix>         narrow "delivered" to a sub-agent write whose path ends with this suffix
+                                 (default: ANY sub-agent-origin write under the dispatch's own toolUseId)
+
+Output:
+  --output-format text|json      text = one line per dispatch + verdict (default); json = a compact
+                                 {dispatches: [{resolvedAgentType, dispatchTypeOmitted, pathDenials,
+                                 delivered, referencesRead}], verdict} envelope
+  --quiet, -q                    suppress the live tool stream; verdict + dispatch lines only
+
+Dependency: forced hostloop needs the NATIVE agent binary staged (a patch-drift-tolerant match within the
+  same major.minor resolves — see 'sync'). If none is staged, this fails with the existing
+  resolveHostAgentBinary remedy — the probe cannot run hostloop without it; this command does NOT add new
+  staging logic.
+
+Exit codes:  0 pass · 1 assertion/agent failure · 2 usage / unanswered-under-fail · 3 boundary/integrity.`;
+
+async function cmdProbeDispatch(rawArgs: string[]) {
+  if (hasHelp(rawArgs)) return void log(PROBE_DISPATCH_HELP);
+  const { rest: args, flags } = takeCommonFlags(rawArgs, "probe-dispatch");
+  const isJson = flags.output === "json";
+  const positional: string[] = [];
+  const extraPlugins: string[] = [];
+  const uploads: string[] = [];
+  const folders: string[] = [];
+  const PD_FID = ["container", "microvm", "hostloop"] as const;
+  let fidelity: (typeof PD_FID)[number] = "hostloop"; // forced-default: path-fidelity (this probe's whole point) only matters on hostloop
+  let model: string | undefined = process.env.COWORK_HARNESS_MODEL;
+  let expectWriteSuffix: string | undefined;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    const eq = a.startsWith("--") ? a.indexOf("=") : -1;
+    const name = eq > 0 ? a.slice(0, eq) : a;
+    const eqVal = eq > 0 ? a.slice(eq + 1) : undefined;
+    const nextVal = (): string => {
+      if (eqVal !== undefined) {
+        if (eqVal.trim() === "") fail("probe-dispatch", "usage", `${name} requires a non-empty value`, undefined, isJson);
+        return eqVal;
+      }
+      return flagValueStrict("probe-dispatch", args, i++, name, isJson);
+    };
+    if (name === "--fidelity") {
+      const v = nextVal();
+      if (!(PD_FID as readonly string[]).includes(v))
+        fail("probe-dispatch", "usage", `--fidelity must be one of ${PD_FID.join("|")} (got "${v}")`, undefined, isJson);
+      fidelity = v as (typeof PD_FID)[number];
+    } else if (name === "--model") model = nextVal();
+    else if (name === "--plugin") extraPlugins.push(nextVal());
+    else if (name === "--upload") uploads.push(nextVal());
+    else if (name === "--folder") folders.push(nextVal());
+    else if (name === "--expect-write") expectWriteSuffix = nextVal();
+    else if (a.startsWith("-")) fail("probe-dispatch", "usage", `unknown flag: ${a}`, undefined, isJson);
+    else positional.push(a);
+  }
+  if (positional.length !== 2)
+    fail(
+      "probe-dispatch",
+      "usage",
+      'usage: cowork-harness probe-dispatch <skill-dir> "<prompt>" [--fidelity container|microvm|hostloop] [--model <id>] [--expect-write <suffix>] [--plugin <dir>]… [--upload <file>]… [--folder <dir>]… [--output-format text|json]  (probe-dispatch --help for the full flag reference)',
+      undefined,
+      isJson,
+    );
+  const [folder, prompt] = positional;
+
+  // Session + scenario construction mirrors cmdSkill's own inline-session path (loadSession →
+  // resolveSessionPaths, Scenario.parse) — the "thin wrapper, don't reinvent" seam the design calls for.
+  // Kept inline rather than factored into a shared helper: the two commands' flag surfaces diverge enough
+  // (skill's marketplaces/resume/decider-llm/dry-run vs. this command's --expect-write/forced-hostloop
+  // default) that a shared helper would need almost as many parameters as it saves lines.
+  const localPlugins = [folder, ...extraPlugins];
+  const session = resolveSessionPaths(
+    loadSession({
+      model,
+      permission_parity: "cowork",
+      plugins: { local_plugins: localPlugins, local_marketplaces: [], enabled: [] },
+      uploads,
+      folders: folders.map((from) => ({ from, mode: "rw" as const })),
+    }),
+    process.cwd(),
+  );
+  const sourceName = basename(folder.replace(/\/+$/, "")) || "probe";
+  const scenario = Scenario.parse({
+    name: `probe-dispatch-${sourceName
+      .replace(/[^a-zA-Z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 40)}`,
+    baseline: "latest",
+    session: "(inline)",
+    fidelity,
+    prompt,
+    answers: [],
+    // Note in --help/docs: PROMPT-SCOPED, not enforced — this just flags a prompt that fanned out.
+    assert: [{ subagent_dispatched: ".*" }, { dispatch_count_max: 1 }],
+  });
+
+  // --decider-dir/--decider-cmd (captured generically by takeCommonFlags) are honored here for free via
+  // the same resolveExternal seam `skill` uses — an external channel forces the `fail` terminal
+  // (matching cmdSkill's own precedence), so an external decider never races an adaptive prompt.
+  const externalChannel = resolveExternal("probe-dispatch", flags);
+  const policy: OnUnanswered = externalChannel ? "fail" : resolvePolicy("skill", flags); // same adaptive default as `skill`: prompt on TTY, fail in CI
+  const o = resolveOutput("skill", flags);
+  noteRunsLocation({ json: o.json, quiet: !!flags.quiet, suppress: !!flags.demo });
+  let result: RunResult;
+  try {
+    result = await runOneScenario({
+      command: "probe-dispatch",
+      scenario,
+      label: scenario.name,
+      flags,
+      policy,
+      externalChannel,
+      o,
+      extra: { session },
+    });
+  } finally {
+    externalChannel?.close?.();
+  }
+
+  const projection = projectDispatchProbe(result, { expectWriteSuffix });
+  // jsonPayloadEnvelope's payload is a plain Record (no index signature on DispatchProbeProjection) —
+  // spread into a fresh object literal rather than an opaque `as` cast, so a future field addition to
+  // DispatchProbeProjection is still type-checked structurally at this call site.
+  if (o.json)
+    out(
+      jsonPayloadEnvelope("probe-dispatch", projection.verdict.pass, {
+        dispatches: projection.dispatches,
+        subagentsUnavailable: projection.subagentsUnavailable,
+        verdict: projection.verdict,
+      }),
+    );
+  else out(formatDispatchProbe(projection));
+  process.exit(projection.verdict.pass ? 0 : 1);
 }
 
 /** All fidelity tiers the harness understands (the canonical Scenario `fidelity:` enum), surfaced so a
