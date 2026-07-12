@@ -34,7 +34,7 @@ import { cmdChat } from "./run/chat.js";
 import { cmdRecord, cmdReplay, cmdVerifyCassettes, cmdRehash, buildFingerprint, fingerprintSkillDrift } from "./run/cassette.js";
 import { cmdRunsGc } from "./run/runs-gc.js";
 import { resolveInputs } from "./run/inputs.js";
-import { cmdLint } from "./run/scenario-tool.js";
+import { cmdLint, cmdLintSkill } from "./run/scenario-tool.js";
 import { cmdDoctor } from "./run/doctor.js";
 import { readRunStatus, hasRunStatus, followRunStatus, resolveStatusDir, isStatusStale } from "./run/run-status.js";
 import { parseArgs } from "./cli-args.js";
@@ -164,6 +164,8 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
   lint <scenario.yaml | dir/>…  check scenarios for silent false-greens (bundled scenario.py; needs python3 — PyYAML is bundled)
       [--strict]               fail on any lint finding (WARN/INFO), not just ERROR
       NOTE: exit 127 means python3 itself is missing — treat any non-zero exit as a CI failure, do not swallow it.
+  lint-skill <SKILL.md | skill-dir/>…  lint a skill body (and any sibling hooks.json) for Cowork host-loop footguns (bundled scenario.py; needs python3)
+      [--strict]               fail on any finding (the two footguns are WARN-only by default), not just ERROR
   assertions --list            list available scenario assertions (generated from Zod schema)
       [--output-format json]
 
@@ -400,8 +402,8 @@ function hasHelp(args: string[]): boolean {
   return args.includes("--help") || args.includes("-h");
 }
 
-// Per-subcommand `--help`. `run`/`skill` already print their own help via hasHelp(); `lint` delegates
-// to the Python argparse path (which has its own --help). Every OTHER subcommand goes straight to parseArgs,
+// Per-subcommand `--help`. `run`/`skill` already print their own help via hasHelp(); `lint`/`lint-skill`
+// delegate to the Python argparse path (which has its own --help). Every OTHER subcommand goes straight to parseArgs,
 // where `--help` was an "unknown flag" error — so you could only discover flags by triggering a bad
 // invocation. Intercept `--help`/`-h` at dispatch and print the command's usage (exit 0). One concise line
 // per command, kept in sync with each command's own bad-invocation `usage:` string.
@@ -493,6 +495,7 @@ const COMMANDS = [
   "boundary-check",
   "vm",
   "lint",
+  "lint-skill",
   "doctor",
   "rehash",
   "init-redact",
@@ -616,7 +619,7 @@ async function main() {
   const [cmd, ...rest] = argv;
   if (cmd === "--version" || cmd === "-v") return void out(pkgVersion());
   if (cmd === undefined || cmd === "--help" || cmd === "-h" || cmd === "help") return printHelp();
-  // Per-subcommand --help for the parseArgs-direct commands (run/skill/lint self-handle, so they're
+  // Per-subcommand --help for the parseArgs-direct commands (run/skill/lint/lint-skill self-handle, so they're
   // absent from the map and fall through to their own handling).
   if (hasHelp(rest) && cmd in SUBCOMMAND_USAGE) return void log(SUBCOMMAND_USAGE[cmd]);
   // validate COWORK_HARNESS_OUTPUT_FORMAT here — AFTER the --version/--help/per-subcommand-help
@@ -678,6 +681,8 @@ async function main() {
       return cmdReplay(rest);
     case "lint":
       return cmdLint(rest);
+    case "lint-skill":
+      return cmdLintSkill(rest);
     case "verify-cassettes":
       return cmdVerifyCassettes(rest);
     case "rehash":

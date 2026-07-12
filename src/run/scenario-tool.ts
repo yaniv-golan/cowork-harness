@@ -34,3 +34,23 @@ export function cmdLint(args: string[]): never {
   }
   return process.exit(r.status ?? 1);
 }
+
+/** `cowork-harness lint-skill <files…>` → `python3 scenario.py lint-skill <files…>` (npm-consumer
+ *  ergonomics; skill authors can still invoke python3 on the bundled script directly). Inherits stdio,
+ *  exits with the child code. A missing python3 is exit 127 (the only thing the wrapper guards); PyYAML
+ *  is bundled alongside scenario.py, so the linter no longer needs a separate install. */
+export function cmdLintSkill(args: string[]): never {
+  const script = resolveScenarioScript();
+  const py = process.env.PYTHON ?? "python3";
+  const r = spawnSync(py, [script, "lint-skill", ...args], { stdio: "inherit" });
+  if (r.error) {
+    const enoent = (r.error as NodeJS.ErrnoException).code === "ENOENT";
+    process.stderr.write(
+      (enoent
+        ? `${py} not found — \`lint-skill\` needs Python 3 (PyYAML is bundled). Set $PYTHON or install Python.`
+        : String(r.error.message)) + "\n",
+    );
+    return process.exit(127);
+  }
+  return process.exit(r.status ?? 1);
+}

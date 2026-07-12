@@ -73,8 +73,10 @@ inside the VM. (It works in the CLI, which is why it slips through.) Do the setu
 The bundled linter flags both antipatterns from a skill's source, before you spend a live Cowork run:
 
 ```bash
-python3 .claude/skills/cowork-harness/scripts/scenario.py lint-skill path/to/skill/
+cowork-harness lint-skill path/to/skill/
 ```
+
+(also runnable directly as `python3 .claude/skills/cowork-harness/scripts/scenario.py lint-skill path/to/skill/`)
 
 It warns on `${CLAUDE_PLUGIN_ROOT}` used as a path in an in-VM bash context (fenced `bash`/`sh` blocks,
 `hooks.json` command values, `Bash(...)` directives) and on a hook that exports an env var / writes `/tmp`
