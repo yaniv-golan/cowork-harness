@@ -8,6 +8,9 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **`assertions --list` now documents that `subagent_dispatch_healthy`'s `type` matches the dispatch
+  description** (not just resolvedAgentType/dispatchAgentType), so a regex can narrow to one dispatch in a
+  same-agent-type fleet — previously only in `docs/scenario.md`.
 - **`analyze-skill` line- and block-scoped ignore markers** — `analyze-skill: ignore-next-line` and
   `analyze-skill: ignore-start` / `analyze-skill: ignore-end`, alongside the existing file-wide
   `analyze-skill: ignore`. The file-wide marker silences EVERY finding in the file, which was too coarse
