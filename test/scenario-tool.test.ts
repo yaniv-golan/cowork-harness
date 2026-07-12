@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
@@ -238,5 +238,78 @@ describe.skipIf(!can || !havePython)("cowork-harness lint-skill --output-format 
     expect(payload.command).toBe("lint-skill");
     expect(payload.ok).toBe(false);
     expect(payload.error.category).toBe("usage");
+  });
+});
+
+// `lint`/`lint-skill` previously accepted ANY `--output-format` value that wasn't literally "text" or
+// "json" (and a valueless trailing `--output-format`) by silently falling through isJsonOutput's strict
+// match into text mode — unlike every other command, which validates via parseOutputFormat and exits 2
+// "expected one of text|json". These prove the wrapper now rejects it the same way.
+describe.skipIf(!can || !havePython)("cowork-harness lint/lint-skill --output-format validation", () => {
+  it("lint --output-format xml is a usage error (exit 2), not a silent text-mode degrade", () => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-lint-badfmt-"));
+    const scenario = writeCleanScenario(d);
+    const { code, stderr } = runCli(["lint", scenario, "--output-format", "xml"]);
+    expect(code).toBe(2);
+    expect(stderr).toMatch(/--output-format must be "text" or "json"/);
+  });
+
+  it("lint --output-format xml followed by a later --output-format json is still a usage error, routed through the json envelope", () => {
+    // parseOutputFormat is first-occurrence-authoritative (the invalid "xml" wins and throws), but
+    // isJsonOutput independently finds the later "json" occurrence and reports json mode — so the usage
+    // error must come back as a jsonError envelope, not bare text, matching every other command's
+    // fail(..., isJsonOutput(args)) plumbing.
+    const d = mkdtempSync(join(tmpdir(), "cwh-lint-badfmt-json-"));
+    const scenario = writeCleanScenario(d);
+    const { code, stdout } = runCli(["lint", scenario, "--output-format", "xml", "--output-format", "json"]);
+    expect(code).toBe(2);
+    const payload = JSON.parse(stdout.trim());
+    expect(payload.ok).toBe(false);
+    expect(payload.error.category).toBe("usage");
+  });
+
+  it("lint-skill with a valueless trailing --output-format is a usage error (exit 2)", () => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-lint-skill-badfmt-"));
+    writeCleanSkill(d);
+    const { code, stderr } = runCli(["lint-skill", d, "--output-format"]);
+    expect(code).toBe(2);
+    expect(stderr).toMatch(/--output-format must be "text" or "json"/);
+  });
+
+  it("lint --output-format json (a valid value) still works — the new validation doesn't regress the happy path", () => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-lint-goodfmt-"));
+    const scenario = writeCleanScenario(d);
+    const { code, stdout } = runCli(["lint", scenario, "--output-format", "json"]);
+    expect(code).toBe(0);
+    const payload = JSON.parse(stdout.trim());
+    expect(payload.ok).toBe(true);
+  });
+});
+
+// action.yml's Run step builds the cowork-harness arg array in bash. --strict is accepted only by
+// replay/lint/lint-skill/analyze-skill — verify-cassettes/run exit 2 ("unknown flag") on it — so the
+// step must NOT unconditionally append --strict; it has to guard on inputs.command the same way it
+// already guards --fail-on-skill-drift to replay-only. This asserts the guard textually (no bash
+// interpreter here) so a future edit that removes the case-guard and reintroduces the unconditional
+// append is caught.
+describe("action.yml — --strict is guarded to the commands that accept it", () => {
+  const actionYml = readFileSync(resolve("action.yml"), "utf8");
+  const runStep = actionYml.slice(actionYml.indexOf("Run cowork-harness"), actionYml.indexOf("Report"));
+
+  it("guards the --strict append behind a case/if that lists exactly the four commands that accept it", () => {
+    expect(runStep).toMatch(/replay\s*\|\s*lint\s*\|\s*lint-skill\s*\|\s*analyze-skill/);
+    // the --strict append line itself must appear AFTER the case guard opens (i.e. inside the case body)
+    const caseIdx = runStep.search(/case "\$\{\{ inputs\.command \}\}" in/);
+    const strictAppendIdx = runStep.indexOf('args+=("--strict")');
+    expect(caseIdx).toBeGreaterThan(-1);
+    expect(strictAppendIdx).toBeGreaterThan(caseIdx);
+  });
+
+  it("verify-cassettes and run are absent from the --strict guard's command list", () => {
+    const caseIdx = runStep.search(/case "\$\{\{ inputs\.command \}\}" in/);
+    const esacIdx = runStep.indexOf("esac", caseIdx);
+    const guardBody = runStep.slice(caseIdx, esacIdx);
+    expect(guardBody).not.toMatch(/verify-cassettes/);
+    expect(guardBody).not.toMatch(/\brun\b/);
   });
 });

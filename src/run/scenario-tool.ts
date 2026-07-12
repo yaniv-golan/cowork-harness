@@ -2,7 +2,7 @@ import { existsSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
-import { isJsonOutput, jsonError, jsonPayloadEnvelope } from "./envelope.js";
+import { fail, isJsonOutput, jsonError, jsonPayloadEnvelope, parseOutputFormat } from "./envelope.js";
 
 // Synchronous fd write (match envelope.ts/cli.ts/doctor.ts): writeSync flushes before process.exit on
 // a pipe, where an async process.stdout.write can truncate.
@@ -63,6 +63,15 @@ function pythonNotFoundMessage(py: string, cmd: string): string {
  *  A missing python3 is exit 127 in both modes (the ENOENT guard, unchanged); PyYAML is bundled
  *  alongside scenario.py, so neither lane needs a separate install. */
 function runLintLike(subcommand: "lint" | "lint-skill", args: string[]): never {
+  // Validate --output-format BEFORE isJsonOutput (matching every other command's ensureOutputFormat
+  // gate) — otherwise an unrecognized value (`--output-format xml`, or a valueless trailing flag) falls
+  // through isJsonOutput's strict text/json match and silently degrades to text mode, unlike every other
+  // command, which exits 2 "expected one of text|json" on the same input.
+  try {
+    parseOutputFormat(args);
+  } catch (e) {
+    fail(subcommand, "usage", String((e as Error).message), undefined, isJsonOutput(args));
+  }
   const script = resolveScenarioScript();
   const py = process.env.PYTHON ?? "python3";
   const json = isJsonOutput(args);
@@ -89,10 +98,9 @@ function runLintLike(subcommand: "lint" | "lint-skill", args: string[]): never {
   try {
     findings = JSON.parse(r.stdout ?? "");
   } catch {
-    const stderrTail = (r.stderr ?? "").trim();
-    out(
-      jsonError(subcommand, "usage", `${subcommand}: python emitted non-JSON output on --json (exit ${status})`, stderrTail || undefined),
-    );
+    // stdio's stderr slot is "inherit" (see the spawnSync call above), so python's usage text already
+    // reached the step log directly — r.stderr is always null here, there's no tail to surface as a hint.
+    out(jsonError(subcommand, "usage", `${subcommand}: python emitted non-JSON output on --json (exit ${status})`));
     return process.exit(status);
   }
   out(jsonPayloadEnvelope(subcommand, status === 0, { findings }));

@@ -30,7 +30,8 @@ inputs:
       Pass --strict — fail on any finding instead of just the default gate: for `replay`, any
       cassette-staleness finding (not just skill/shared-root drift); for `lint`/`lint-skill`, any
       WARN/INFO finding (not just ERROR); for `analyze-skill`, any advisory finding at all (it's exit-0
-      by default). No effect on `verify-cassettes`/`run`.
+      by default). `verify-cassettes`/`run` don't accept `--strict` (unknown-flag usage error), so it is
+      IGNORED (not forwarded) for those two commands.
     required: false
     default: "false"
   fail-on-skill-drift:
@@ -100,7 +101,13 @@ runs:
       run: |
         set +e
         args=("${{ inputs.command }}" "${{ inputs.path }}" "--output-format" "json")
-        [ "${{ inputs.strict }}" = "true" ] && args+=("--strict")
+        # --strict is accepted only by replay/lint/lint-skill/analyze-skill; verify-cassettes/run exit 2
+        # ("unknown flag") on it, so it must NOT be forwarded to those two commands.
+        case "${{ inputs.command }}" in
+          replay | lint | lint-skill | analyze-skill)
+            [ "${{ inputs.strict }}" = "true" ] && args+=("--strict")
+            ;;
+        esac
         # --fail-on-skill-drift is REPLAY-only (a cassette/skill-drift staleness flag); lint/lint-skill/
         # analyze-skill don't know it — forwarding it there would be the same class of "unknown flag"
         # breakage --output-format used to cause, just for a narrower input combination.
