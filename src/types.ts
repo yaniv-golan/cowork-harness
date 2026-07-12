@@ -937,7 +937,10 @@ export interface RunResult {
     // {question: chosen-answer} map) so no existing detail-reading consumer needs to change.
     questions?: Array<{ question: string; header?: string; options: { label: string; description?: string }[]; multiSelect?: boolean }>;
   }>;
-  toolCounts?: Record<string, number>; // truthful per-tool call count (use this, NOT usage.server_tool_use which is host-routed-blind in cowork)
+  // truthful per-tool CALL-COUNT map — always {tool: number} (NOT usage.server_tool_use, host-routed-blind in
+  // cowork). For per-tool ERRORS use `toolErrors` ({tool:{calls,errors}}); for timing `toolDurations`
+  // ({tool:{calls,totalMs,maxMs}}). The value here is never an object — don't conflate the three rollups.
+  toolCounts?: Record<string, number>;
   /** Structured WebSearch calls — query + per-result {title,url}, parsed from the paired tool_result's
    *  "Web search results for query: ...\n\nLinks: [...]" convention (an AGENT-BINARY convention,
    *  verified against a real captured hostloop-fidelity cassette — re-verify the format on agent-version

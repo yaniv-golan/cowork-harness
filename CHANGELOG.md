@@ -131,6 +131,11 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed
 
+- **`toolCounts` shape pinned + clarified.** `RunResult.toolCounts` is always a `{tool: number}`
+  call-count map — the schema now strictly pins the value type (including the per-window
+  `skillActivity[].toolCounts`, previously unconstrained), and the description distinguishes it from the
+  separately-shaped `toolErrors` (`{tool: {calls, errors}}`) and `toolDurations`
+  (`{tool: {calls, totalMs, maxMs}}`) so a `jq` recipe can't conflate the three rollups.
 - **Breaking (pre-1.0): `verify-cassettes` now distinguishes "could not verify" from "verified and
   found a real problem" in its exit code.** Previously every non-clean outcome exited `1`, so a
   consumer's non-zero-exit tripwire couldn't tell a genuine finding apart from a cassette verification

@@ -309,7 +309,7 @@
       "additionalProperties": {
         "type": "number"
       },
-      "description": "Truthful per-tool call count (use this, NOT usage.server_tool_use which is host-routed-blind in cowork)."
+      "description": "Truthful per-tool CALL-COUNT map: a plain number per tool name (NOT usage.server_tool_use, which is host-routed-blind in cowork). Shape is always {tool: number} — for per-tool error counts use the separately-shaped toolErrors ({tool: {calls, errors}}); for per-tool timing use toolDurations ({tool: {calls, totalMs, maxMs}}). Do not expect an object value here."
     },
     "infraErrors": {
       "type": "array",
@@ -520,7 +520,10 @@
             "type": "number"
           },
           "toolCounts": {
-            "type": "object"
+            "type": "object",
+            "additionalProperties": {
+              "type": "number"
+            }
           },
           "toolCallCount": {
             "type": "number"
