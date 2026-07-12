@@ -23,6 +23,21 @@ All notable changes to this project are documented here. The format is based on
   a PRE-FLIGHT signal only, not proof of on-tier resolution; the runtime `no_vm_path_file_op` /
   `vm_path_denied` assertions remain authoritative.
 
+- **`scenario.py resolve-agent-types <plugin-dir>` + a `subagent_type` check folded into `lint-skill`
+  — static resolution of a pinned `subagent_type` against a plugin's own agents.** A `Task` dispatch
+  pinning a `subagent_type` that doesn't actually resolve (e.g. `founder-skills:cap-table` when the
+  agent is named `captable`) fails a definition lookup at dispatch time — previously only discoverable
+  by paying for a live run. `resolve-agent-types` reads a plugin's `name` from
+  `.claude-plugin/plugin.json` (fallback `plugin.json`) and each `agents/*.md`'s `name:` frontmatter
+  (filename-stem fallback) to build the plugin's valid `<plugin>:<agent>` set (`--json` for a machine
+  array); `lint-skill` now extracts every pinned `subagent_type` in a SKILL.md (YAML and
+  dispatch-prose forms, not limited to fenced blocks), resolves the enclosing plugin, and flags a
+  value that doesn't resolve as `subagent-type-unresolvable` (belongs to another plugin) or
+  `subagent-type-unknown` (unresolved bare value). Both are **INFO, never WARN** — there is no
+  harness registry of built-in agent types to disprove an unknown value against (only
+  `general-purpose` is harness-known), so an unresolved value is always surfaced, never failed. See
+  [docs/subagents.md](./docs/subagents.md#static-subagent_type-resolution-resolve-agent-types--lint-skill).
+
 ### Changed
 
 - **Breaking (pre-1.0): `verify-cassettes` now distinguishes "could not verify" from "verified and

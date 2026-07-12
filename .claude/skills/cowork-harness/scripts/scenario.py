@@ -838,6 +838,163 @@ def _lint_skill_text(path, raw_lines, force_json=False):
     return findings
 
 
+# --------------------------------------------------------------------------- #
+# subagent_type static resolution — Task D
+# --------------------------------------------------------------------------- #
+#
+# A pinned `subagent_type:` value that doesn't resolve to a real agent fails a definition lookup at
+# dispatch time — but that's only discoverable via a live dispatch today. Resolve it statically from
+# a plugin's own `.claude-plugin/plugin.json` (or `plugin.json`) + `agents/*.md` frontmatter instead.
+#
+# HONEST LIMIT: there is no harness registry of built-in agent types (the built-in set is
+# agent-binary-version-dependent) — only `general-purpose` is harness-known. So an unresolved bare
+# value is surfaced as INFO, never failed as WARN/ERROR; the linter can't disprove it's a real
+# built-in. Do NOT add a committed built-in agent-type list here — that would silently go stale and
+# either false-warn a real built-in or false-clear a typo.
+
+_SUBAGENT_TYPE_RE = re.compile(r"subagent_type\s*[:=]\s*['\"]?([A-Za-z0-9_.:/-]+)['\"]?")
+
+
+def _read_plugin_name(plugin_dir):
+    """Return the `name` field from `<plugin_dir>/.claude-plugin/plugin.json` (fallback
+    `<plugin_dir>/plugin.json`), or None if neither file exists or is parsable. Never raises."""
+    p = Path(plugin_dir)
+    for candidate in (p / ".claude-plugin" / "plugin.json", p / "plugin.json"):
+        if candidate.is_file():
+            try:
+                data = json.loads(candidate.read_text(encoding="utf-8"))
+            except Exception:
+                return None
+            name = data.get("name") if isinstance(data, dict) else None
+            return name if isinstance(name, str) and name.strip() else None
+    return None
+
+
+_AGENT_FRONTMATTER = re.compile(r"^---\s*\n(.*?\n)---\s*(?:\n|$)", re.DOTALL)
+
+
+def _agent_name_from_frontmatter(md_path, yaml_mod):
+    """Return an `agents/*.md` file's `name:` frontmatter value, or None if there's no frontmatter,
+    no `name:` field, or it fails to parse — caller falls back to the filename stem."""
+    try:
+        text = Path(md_path).read_text(encoding="utf-8")
+    except Exception:
+        return None
+    m = _AGENT_FRONTMATTER.match(text)
+    if not m:
+        return None
+    try:
+        data = yaml_mod.safe_load(m.group(1))
+    except Exception:
+        return None
+    if isinstance(data, dict):
+        name = data.get("name")
+        if isinstance(name, str) and name.strip():
+            return name.strip()
+    return None
+
+
+def _resolve_plugin_agents(plugin_dir):
+    """Part 1: return the set of valid `<plugin>:<agent>` subagent types defined WITHIN plugin_dir.
+    Reads the plugin name from plugin.json and each agents/*.md's `name:` frontmatter (filename stem
+    fallback). Returns an empty set (never crashes) when no plugin.json is found — a bare SKILL.md
+    dir with no plugin manifest has nothing to resolve against."""
+    plugin_name = _read_plugin_name(plugin_dir)
+    if not plugin_name:
+        return set()
+    agents_dir = Path(plugin_dir) / "agents"
+    if not agents_dir.is_dir():
+        return set()
+    yaml = _require_yaml()
+    types = set()
+    for md in sorted(agents_dir.glob("*.md")):
+        agent_name = _agent_name_from_frontmatter(md, yaml) or md.stem
+        types.add(f"{plugin_name}:{agent_name}")
+    return types
+
+
+def cmd_resolve_agent_types(args):
+    types = sorted(_resolve_plugin_agents(args.plugin_dir))
+    if args.json:
+        print(json.dumps(types))
+    else:
+        for t in types:
+            print(t)
+    return 0
+
+
+def _find_enclosing_plugin_dir(skill_md_path):
+    """Part 3 (resolution step): walk up from a SKILL.md to the nearest ancestor dir containing
+    `.claude-plugin/plugin.json` or `plugin.json` — that's the enclosing plugin. None if no ancestor
+    has one (a bare SKILL.md dir with no plugin manifest anywhere above it)."""
+    start = Path(skill_md_path).resolve().parent
+    for anc in [start, *start.parents]:
+        if (anc / ".claude-plugin" / "plugin.json").is_file() or (anc / "plugin.json").is_file():
+            return anc
+    return None
+
+
+def _finding_subagent_unresolvable(path, line, value):
+    return Finding(
+        "INFO",
+        "subagent-type-unresolvable",
+        f"pinned type `{value}` belongs to another plugin — can't confirm it resolves from here",
+        "Verify it resolves in that plugin's own agents/ dir (e.g. `scenario.py resolve-agent-types "
+        "<that-plugin-dir>`), or dispatch without pinning a cross-plugin type.",
+        path,
+        line,
+    )
+
+
+def _finding_subagent_unknown(path, line, value):
+    return Finding(
+        "INFO",
+        "subagent-type-unknown",
+        f"pinned type `{value}` is not defined in this plugin and is not the `general-purpose` "
+        "built-in — can't confirm statically (may be an agent-binary built-in)",
+        "If it's meant to be an in-plugin agent, add `agents/<name>.md` with a `name:` frontmatter "
+        "matching the pinned value (or rely on the filename-stem fallback). If it's a real built-in "
+        "agent type, this INFO is expected — the linter has no built-in registry to check it against.",
+        path,
+        line,
+    )
+
+
+def _classify_subagent_type(value, plugin_name, plugin_agent_types):
+    """Part 3 severity ladder. Returns a Finding-builder (path, line, value) -> Finding, or None if
+    clean. Severity is ALWAYS INFO — see the HONEST LIMIT note above this section; never WARN/ERROR."""
+    if value == "general-purpose" or value in plugin_agent_types:
+        return None
+    if ":" in value:
+        prefix = value.split(":", 1)[0]
+        if plugin_name is None or prefix != plugin_name:
+            return _finding_subagent_unresolvable
+    return _finding_subagent_unknown
+
+
+def _lint_subagent_types(path, raw_lines):
+    """Part 3: scan a SKILL.md's raw text (not limited to fenced blocks — a pinned `subagent_type`
+    can appear in prose or YAML frontmatter) for pinned `subagent_type` values and classify each
+    against the enclosing plugin's in-plugin agent set (Part 1)."""
+    matches = []
+    for i, line in enumerate(raw_lines, start=1):
+        for m in _SUBAGENT_TYPE_RE.finditer(line):
+            matches.append((i, m.group(1)))
+    if not matches:
+        return []
+
+    plugin_dir = _find_enclosing_plugin_dir(path)
+    plugin_name = _read_plugin_name(plugin_dir) if plugin_dir else None
+    plugin_agent_types = _resolve_plugin_agents(plugin_dir) if plugin_dir else set()
+
+    findings = []
+    for line_no, value in matches:
+        builder = _classify_subagent_type(value, plugin_name, plugin_agent_types)
+        if builder is not None:
+            findings.append(builder(path, line_no, value))
+    return findings
+
+
 def _resolve_skill_targets(arg):
     """Return (skill_md_path_or_None, [hooks.json paths]) for a directory or file arg."""
     p = Path(arg)
@@ -872,7 +1029,9 @@ def cmd_lint_skill(args):
             continue
         if md is not None:
             n_files += 1
-            all_findings.extend(_lint_skill_text(md, Path(md).read_text(encoding="utf-8").splitlines()))
+            md_lines = Path(md).read_text(encoding="utf-8").splitlines()
+            all_findings.extend(_lint_skill_text(md, md_lines))
+            all_findings.extend(_lint_subagent_types(md, md_lines))
         for hp in hooks:
             n_files += 1
             all_findings.extend(
@@ -1057,7 +1216,7 @@ def main(argv=None):
 
     lsp = sub.add_parser(
         "lint-skill",
-        help="lint SKILL.md bodies for two Cowork host-loop footguns (WARN-only, v1 narrow)",
+        help="lint SKILL.md bodies for Cowork host-loop footguns + static subagent_type resolution",
         description=(
             "Inspect skill bodies (SKILL.md + any sibling hooks.json) for two antipatterns a paid "
             "Cowork host-loop run would expose:\n"
@@ -1068,7 +1227,12 @@ def main(argv=None):
             "ONLY a fenced ```bash/```sh/```shell block, a hooks-config JSON \"command\" value, or a "
             "Bash(...) directive. Host-side prose and Read/Grep directives (the correct way to read a "
             "reference via ${CLAUDE_PLUGIN_ROOT}/...) are left alone. False negatives are expected: a token "
-            "in an indented/unfenced shell snippet won't be caught."
+            "in an indented/unfenced shell snippet won't be caught.\n\n"
+            "Also statically resolves any pinned `subagent_type` value in the SKILL.md against the "
+            "enclosing plugin's `agents/*.md` (see `resolve-agent-types`): a value that resolves in-plugin "
+            "or is `general-purpose` is clean; a `<other-plugin>:<agent>` or any other unresolved value is "
+            "reported as `subagent-type-unresolvable`/`subagent-type-unknown` — always INFO, never WARN, "
+            "since there is no harness registry of built-in agent types to disprove an unknown value against."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -1076,6 +1240,24 @@ def main(argv=None):
     lsp.add_argument("--json", action="store_true", help="emit findings as JSON")
     lsp.add_argument("--strict", action="store_true", help="exit non-zero on WARN too, not just ERROR")
     lsp.set_defaults(func=cmd_lint_skill)
+
+    rap = sub.add_parser(
+        "resolve-agent-types",
+        help="print a plugin's valid <plugin>:<agent> subagent types (from plugin.json + agents/*.md)",
+        description=(
+            "Statically resolve the set of `<plugin>:<agent>` subagent types defined WITHIN a plugin "
+            "dir: the plugin name comes from `.claude-plugin/plugin.json` (fallback `plugin.json`), "
+            "each agent name comes from `agents/*.md`'s `name:` frontmatter (filename-stem fallback "
+            "when a file has no `name:`). Prints an empty result (exit 0) for a dir with no "
+            "plugin.json — nothing to resolve against. This is the token-free 'does "
+            "`<plugin>:<agent>` resolve within this plugin?' answer that backs the `subagent_type` "
+            "check folded into `lint-skill`."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    rap.add_argument("plugin_dir", help="plugin directory (containing .claude-plugin/plugin.json or plugin.json)")
+    rap.add_argument("--json", action="store_true", help="emit the resolved types as a JSON array instead of one per line")
+    rap.set_defaults(func=cmd_resolve_agent_types)
 
     sp = sub.add_parser("scaffold", help="emit a valid scenario skeleton (self-linted)")
     sp.add_argument("--name", default="my-scenario", help="scenario name (default: my-scenario)")

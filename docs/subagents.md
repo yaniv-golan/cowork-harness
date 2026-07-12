@@ -113,6 +113,42 @@ check remains the runtime `no_vm_path_file_op` / `vm_path_denied` assertions (se
 [scenario.md](./scenario.md)) against a real recorded/live run — `analyze-skill` exists to catch the
 obvious cases before paying for that run, not to replace it.
 
+## Static `subagent_type` resolution (`resolve-agent-types` / `lint-skill`)
+
+A pinned `subagent_type` value that doesn't resolve to a real agent (e.g.
+`founder-skills:cap-table` when the agent is actually named `captable`) fails a definition lookup at
+`Task` dispatch time and breaks the skill — but until now that was only discoverable via a live
+dispatch. `scenario.py` resolves it **statically**, token-free, from a plugin's own manifest and
+agent frontmatter:
+
+- **`scenario.py resolve-agent-types <plugin-dir>`** — reads the plugin's `name` from
+  `<plugin-dir>/.claude-plugin/plugin.json` (fallback `<plugin-dir>/plugin.json`), globs
+  `<plugin-dir>/agents/*.md`, and for each file reads the `name:` YAML frontmatter field (falling
+  back to the filename stem — `foo.md` → `foo` — when a file has no `name:`). Prints the resulting
+  `{plugin}:{agent}` set, one per line or as a JSON array with `--json`. A dir with no plugin.json
+  prints an empty set (exit 0) — a bare SKILL.md dir with no plugin manifest has nothing to resolve
+  against, and this never crashes.
+- **Folded into `scenario.py lint-skill`** — the SKILL.md body scan also extracts every pinned
+  `subagent_type` value (`subagent_type: <value>` YAML, `subagent_type="<value>"` /
+  `subagent_type: "<value>"` dispatch-prose forms — not limited to fenced blocks), resolves the
+  enclosing plugin by walking up from the SKILL.md to the nearest ancestor with a
+  `.claude-plugin/plugin.json`/`plugin.json`, and classifies each value:
+  - resolves within that plugin's `agents/`, or is literally `general-purpose` → clean, no finding;
+  - a `<other-plugin>:<agent>` (colon-qualified, prefix isn't this plugin's name) →
+    **`subagent-type-unresolvable`** — "belongs to another plugin, can't confirm it resolves from
+    here";
+  - any other unresolved value → **`subagent-type-unknown`** — "not defined in this plugin and not
+    the `general-purpose` built-in, can't confirm statically (may be an agent-binary built-in)".
+
+**Both findings are INFO, never WARN — by design, not an oversight.** There is no harness registry of
+built-in agent types (`Explore`, teammate-style built-ins, etc.) to disprove an unresolved bare value
+against — the built-in set is agent-binary-version-dependent and the harness deliberately does not
+ship a committed list of it (it would go stale and either false-warn a real built-in or false-clear a
+typo). So an unresolved `subagent_type` is always *surfaced*, never *failed* — `lint-skill` only
+exits non-zero on it under `--strict`, matching the WARN-class footguns above. If you want a stronger
+guarantee for a specific agent, name it as `general-purpose` explicitly or ship it under the same
+plugin's `agents/` so it resolves in-plugin.
+
 ## Capability / path matrix
 
 | Path class | host-loop (file tools) | host-loop (workspace bash) | VM loop (file tools = bash view) |
