@@ -1,12 +1,12 @@
 {
   "baselineVersion": 1,
   "appVersion": "1.20186.1",
-  "agentVersion": "2.1.202",
+  "agentVersion": "2.1.205",
   "agentBinary": {
-    "stagedPath": "~/Library/Application Support/Claude/claude-code-vm/2.1.202/claude",
+    "stagedPath": "~/Library/Application Support/Claude/claude-code-vm/2.1.205/claude",
     "format": "elf-aarch64",
     "nativeStagedPath": "~/Library/Application Support/Claude/claude-code/2.1.205/claude.app/Contents/MacOS/claude",
-    "sha256": "de5e0bb28e2b32409444ed4c1431e2931001c05ed270a3dc96c6706b0693867f",
+    "sha256": "c1874c85bcd3a88b70439fd50ff5910b7e6ac5371c14dd49d4ccc2878a592d09",
     "shaProvenance": "measured-local",
     "manifestChecksumMatch": true
   },
@@ -257,8 +257,8 @@
       "CLAUDE_CODE_SESSION_LOG"
     ]
   },
-  "$comment": "Platform baseline auto-derived by `cowork-harness sync` from a live Claude Desktop install + app.asar. VOLATILE per-release facts only. Regenerate per release; review the diff. Captured 2026-07-11 on macOS arm64.",
-  "capturedAt": "2026-07-11",
+  "$comment": "Platform baseline auto-derived by `cowork-harness sync` from a live Claude Desktop install + app.asar. VOLATILE per-release facts only. Regenerate per release; review the diff. Captured 2026-07-12 on macOS arm64.",
+  "capturedAt": "2026-07-12",
   "platform": "darwin-arm64",
   "settings": {
     "autoMountFolders": {
@@ -281,6 +281,11 @@
         "value": false
       },
       "autoMemoryStandardSessions:123929380": {
+        "on": false,
+        "source": "defaultValue",
+        "value": false
+      },
+      "subagentPromptServerOverride:124685897": {
         "on": false,
         "source": "defaultValue",
         "value": false
