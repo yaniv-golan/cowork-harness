@@ -381,15 +381,42 @@ both `subagents[].toolsUsed` and the newer `subagents[].referencesRead` (skill r
 *that sub-agent* Read, same `skillReferenceReadPath()` predicate the main-agent `referencesRead` uses,
 deduped in first-seen order).
 
-HONEST LIMIT: `thinking` blocks are parsed **without** a `parentToolUseId` at all. Compare
-`src/agent/session.ts:967` (`text` → `assistant_text`, threads `parentToolUseId`) and `:969` (`tool_use`,
-threads it) against `:968` (`thinking` — does not); the synthetic event type itself has no
-`parentToolUseId` field on `thinking` (`src/agent/session.ts:94`). So even where a sub-agent's own
-reasoning could in principle land on the parent stream, the harness has no key to attribute it to a
-dispatch — `RunResult.thinking` is populated unconditionally at the top level
-(`src/run/run.ts:716-719`) and is never scoped to a `subagents[]` entry. **A consumer must not expect
-sub-agent reasoning/thinking to appear anywhere in the run artifact** — it is not captured, by an SDK
-limitation upstream of the harness, not a harness omission.
+HONEST LIMIT, scoped to the **parent SDK stream**: `thinking` blocks arriving on THAT stream are parsed
+**without** a `parentToolUseId` at all. Compare `src/agent/session.ts:967` (`text` → `assistant_text`,
+threads `parentToolUseId`) and `:969` (`tool_use`, threads it) against `:968` (`thinking` — does not);
+the synthetic event type itself has no `parentToolUseId` field on `thinking` (`src/agent/session.ts:94`).
+So even where a sub-agent's own reasoning could in principle land on the parent stream, the harness has
+no key to attribute *that copy* to a dispatch — `RunResult.thinking` is populated unconditionally at the
+top level (`src/run/run.ts:716-719`) and is never scoped to a `subagents[]` entry from this channel. This
+is still true and unchanged — **a consumer must not expect the top-level `thinking[]` field to carry
+attributable sub-agent reasoning**, an SDK limitation upstream of the harness, not a harness omission.
+It does **not** mean sub-agent reasoning is uncaptured altogether — see the next subsection.
+
+### `subagents[].reasoning` — the on-disk child-transcript channel (new in 0.31.0)
+
+The parent-stream gap above is closed by a **separate** channel that doesn't depend on
+`parentToolUseId` at all: the on-disk child session transcript the agent binary itself writes per
+`Task` dispatch, `<configDirRoot>/projects/**/subagents/agent-<id>.jsonl`
+(`src/run/subagent-reasoning.ts`). At finalize (after `assembleRunResult`, before `result.json` is
+written), `captureSubagentReasoning` walks `<configDirRoot>/projects/**/subagents/` for every
+`agent-*.meta.json`, reads its `toolUseId`, and joins it to the matching `subagents[]` entry by an
+**exact** `toolUseId` match — no path reconstruction from the projSlug/parentSessionUUID segments.
+The sibling `agent-<id>.jsonl` is then parsed into ordered `{kind: "thinking"|"text", text}` turns
+(`tool_use`/`tool_result` blocks excluded — already covered by `toolsUsed`/`referencesRead`) and
+written to that dispatch's `subagents[].reasoning`.
+
+- **LIVE/record lane only** — the child transcript exists only while the real agent binary ran, so
+  `reasoning` is `undefined` on replay, same as `resources`/`mcpErrors`.
+- **Capped like the top-level `thinking[]` field** — the same 50-entry / 10KB-per-entry convention
+  (`REASONING_CAP`/`REASONING_TEXT_CAP_BYTES`, intentionally identical values to `Run.THINKING_CAP`/
+  `Run.THINKING_TEXT_CAP_BYTES` but separate constants), with `reasoningElided` counting turns pushed
+  out past the cap (only present when non-zero).
+- **`configDirRoot` is fidelity-tier-resolved** — hostloop vs. the container/microvm sandboxed config
+  dir; an unresolvable root (e.g. `protocol`) leaves `reasoning` undefined on every dispatch.
+- **Never fails the run.** A missing/malformed child transcript, an unreadable `configDirRoot`, or a
+  meta file with no matching `subagents[]` entry is a silent per-dispatch no-op — `reasoning` just
+  stays `undefined` for that dispatch (distinct from `[]`, which means a child file WAS found but
+  produced no thinking/text turns).
 
 **Where to look.** `schema/run-result.json` is the authoritative field reference — every field named
 above has a `description` there (`subagents[]` at line 640; top-level `fileToolAttempts`/`pathDenials` at

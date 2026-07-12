@@ -6,7 +6,14 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.31.0] — 2026-07-12
+
 ### Added
+
+- **`cowork-harness lint-skill <dir|SKILL.md>`** — the skill-authoring linter (`scenario.py lint-skill`)
+  is now shipped in the npm package and reachable as a first-class subcommand, the same fidelity
+  `lint` got in 0.4.0: a consumer who `npm i`s the harness (with no skill checkout) can run the
+  host-loop-footgun / `subagent_type`-resolution checks in CI, not just via the bundled `scenario.py`.
 
 - **`RunResult.subagents[].reasoning`** — a sub-agent's own THINKING and TEXT turns, in transcript order,
   surfaced per dispatch. The SDK suppresses sub-agent thinking on the parent event stream entirely, so
@@ -35,15 +42,17 @@ All notable changes to this project are documented here. The format is based on
   run-dir handle in docs/scenario.md's "Output" section.
 
 - **`RunResult.verdict`** — a kept run's `result.json` now persists the overall pass/fail: `{pass,
-  exitCode, failures}`, the same pass/fail/exit-code `computeVerdict` (the single verdict source)
-  computes for the run/skill exit, the footer, and the JSON envelope's `ok`. Previously the ONLY way to
-  see why a kept run failed was to re-run `verify-run`; `jq '.verdict' result.json` now answers it
-  directly, with `failures[]` naming the failing assertion key (when a failure traces to one) or a
-  hard-verdict guard reason (an infra error, an unanswered gate, a scan-based host-path leak, …)
-  otherwise. Populated on both the success path and a salvaged (unanswered-gate) partial run — a whiffed
-  gate is itself a verdict fail, and its `failures[]` names the gate reason rather than a generic
-  placeholder. Scope: the run/asserted lane only — `chat` carries no assertions and no verdict, so the
-  field stays absent (undefined) there, same as it always has for every other verdict-adjacent field.
+  exitCode, signals, guards, failures}`, `computeVerdict`'s (the single verdict source) full `Verdict`
+  shape, persisted VERBATIM. This is the SAME shape the `--output-format json` stdout envelope attaches
+  to every result — the persisted and the streamed verdict are one `computeVerdict` shape, so the two
+  channels can never diverge. Previously the ONLY way to see why a kept run failed was to re-run
+  `verify-run`; `jq '.verdict' result.json` now answers it directly, with `failures[]` naming the
+  failing assertion key (when a failure traces to one) or a hard-verdict guard reason (an infra error,
+  an unanswered gate, a scan-based host-path leak, …) otherwise. Populated on both the success path and
+  a salvaged (unanswered-gate) partial run — a whiffed gate is itself a verdict fail, and its
+  `failures[]` names the gate reason rather than a generic placeholder. Scope: the run/asserted lane
+  only — `chat` carries no assertions and no verdict, so the field stays absent (undefined) there, same
+  as it always has for every other verdict-adjacent field.
 
 - **`probe-dispatch <skill-dir> "<prompt>"`** — a cheap, focused mechanics probe for a single `Task`
   dispatch. A THIN wrapper over `skill` (same inline session/scenario construction, same `runOneScenario`
@@ -129,18 +138,6 @@ All notable changes to this project are documented here. The format is based on
   verify off that tier); content-class (`RunResult.fileToolAttempts` + `RunResult.toolResults`),
   replay-checkable without `controlOut`.
 
-- **Docs: a "mechanics-only cheap-model" recipe for observing a skill's plumbing without paying for
-  analytical quality.** No new code — this documents combining existing knobs (`--model <cheap-id>` on
-  `skill`/`run`, a session's `model:` field, `run --matrix`'s `models:` axis for the main loop;
-  `agent_env.subagent_model` for sub-agents) with the path/dispatch telemetry a run already produces
-  (`fileToolAttempts`, `pathDenials`, `subagents[].resolvedAgentType`/`dispatchTypeOmitted`) and its
-  matching assert keys (`no_vm_path_file_op`, `path_denied`/`vm_path_denied`, `subagent_dispatched`,
-  `subagent_dispatch_healthy`) — none of which depend on model quality to be meaningful. Cross-links
-  the static, token-free `analyze-skill` scan as the first line and the cheap live run as the second.
-  Also states the honest limit: there is no scripted-step driver, so a cheap model still walks a
-  skill's steps unassisted and may never reach the step you wanted to observe. See
-  [docs/subagents.md](./docs/subagents.md#observing-mechanics-cheaply).
-
 ### Changed
 
 - **`toolCounts` shape pinned + clarified.** `RunResult.toolCounts` is always a `{tool: number}`
@@ -199,6 +196,29 @@ All notable changes to this project are documented here. The format is based on
   built-in `subagent_type` (e.g. `Explore`). `--strict` now fails only on WARN or ERROR severity.
 
 ### Docs
+
+- **A "mechanics-only cheap-model" recipe for observing a skill's plumbing without paying for
+  analytical quality.** No new code — this documents combining existing knobs (`--model <cheap-id>` on
+  `skill`/`run`, a session's `model:` field, `run --matrix`'s `models:` axis for the main loop;
+  `agent_env.subagent_model` for sub-agents) with the path/dispatch telemetry a run already produces
+  (`fileToolAttempts`, `pathDenials`, `subagents[].resolvedAgentType`/`dispatchTypeOmitted`) and its
+  matching assert keys (`no_vm_path_file_op`, `path_denied`/`vm_path_denied`, `subagent_dispatched`,
+  `subagent_dispatch_healthy`) — none of which depend on model quality to be meaningful. Cross-links
+  the static, token-free `analyze-skill` scan as the first line and the cheap live run as the second.
+  Also states the honest limit: there is no scripted-step driver, so a cheap model still walks a
+  skill's steps unassisted and may never reach the step you wanted to observe. See
+  [docs/subagents.md](./docs/subagents.md#observing-mechanics-cheaply).
+
+- **`docs/scenario.md`: cross-linked the two independent assert axes.** A scenario's `assert:` block is
+  evaluated per-key along two SEPARATE axes — evaluable-on-replay vs. live-only, and content-class vs.
+  frozen-by-default — and conflating them invites the misread "my `assert:` block is content-class, so
+  editing my YAML re-evaluates it against the frozen cassette on replay." It doesn't: a frozen-by-default
+  cassette replays its OWN recorded assert block unless `--assert-from` (or an embedded re-assert) opts
+  it back onto the live YAML, independent of whether the individual keys involved are evaluable on
+  replay at all. The two axes are now cross-linked at each other's definition so neither reads as
+  standalone. See
+  [docs/scenario.md](./docs/scenario.md#which-assertions-survive-replay-ci-placement) and
+  [Where `replay` reads `assert:` from](./docs/scenario.md#where-replay-reads-assert-from--frozen-by-default-on-disk-by-opt-in).
 
 - **`docs/subagents.md`: new "Stream observability" subsection.** Names the wire channels
   `RunResult`'s sub-agent and path telemetry are actually derived from — the `task_started` event

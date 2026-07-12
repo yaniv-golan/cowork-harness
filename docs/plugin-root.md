@@ -84,6 +84,14 @@ for the in-VM agent — while leaving correct host-side `Read`/`Grep` references
 heuristic v1 (see its `--help` for the documented limits), so treat a clean result as "no *obvious*
 footgun," not a proof.
 
+- **A third WARN, `guard-pattern-mismatch`:** the mount-discovery self-heal pattern above ([recovering
+  a lost `${CLAUDE_PLUGIN_ROOT}`](#in-vm-bash--the-token-is-not-reliable)) recovers the mount by
+  `find`-ing it at runtime by a `-path` glob naming the skill/plugin — but a copy-pasted glob that
+  actually names a *different* skill's or plugin's directory silently fails to discover THIS skill's
+  own mount instead. `lint-skill` extracts the `-path` glob's skill/plugin/scripts-segment token and
+  compares it against the SKILL.md's own frontmatter `name:` (or parent-directory name) and its
+  enclosing plugin name, warning when they don't match.
+
 See also [session.md](./session.md) (plugin mounts), [scenario.md](./scenario.md) (fidelity tiers), and
 [subagents.md](./subagents.md) (the same env-var-absence rule as it applies to a dispatched sub-agent's
 own tool set).
