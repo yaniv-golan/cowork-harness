@@ -102,7 +102,7 @@ const FIND_REDIRECT_RE = /\bfind\b[^|;]*?>\s*\$?\{?([A-Za-z_]\w*)\}?/i;
  *  file tool for VM paths. / Instead, write the report to `/sessions/...`" must not fire, since the
  *  anti-instruction sits one clause/line away. It is NOT consulted whole-line for the HIGH-confidence
  *  STRUCTURED contexts (OUTPUT_PATH/directive-target/bare-dispatch-path): a stray "not"/"avoid" elsewhere
- *  on the line or on an adjacent line must never suppress those (OC-1/2/6/9) — an author writing
+ *  on the line or on an adjacent line must never suppress those — an author writing
  *  `Write(/sessions/...)` next to "Do not modify any other file." is still handing a `/sessions` path to a
  *  file tool. Structured contexts instead get a NARROW, directive-scoped carve-out
  *  (`directiveClauseHasNegation`) for the genuine teaching idiom "❌ Write(/sessions/...) — never do this;
@@ -148,15 +148,15 @@ function bashInLastClause(before: string): boolean {
   return BASH_TOOL_MENTION_RE.test(segments[segments.length - 1]);
 }
 
-/** D-3: does the CLAUSE containing the match span `[start, end)` on `line` also carry a negation token
+/** Directive-clause negation check: does the CLAUSE containing the match span `[start, end)` on `line` also carry a negation token
  *  (`never`/`don't`/`do not`/`avoid`/`not`)? Finds the nearest clause-boundary punctuation (`,` `.` `;`)
  *  before `start` and at-or-after `end` and tests `NEGATION_RE` only within that bounded clause — NOT the
  *  whole line. This is a NARROW carve-out for a structured (OUTPUT_PATH=/directive-target) finding: it
  *  suppresses the teaching idiom "❌ Write(/sessions/...) — never do this; use the bash tool instead." (the
  *  directive and "never do this" share one clause, the em dash is not a clause boundary), but must NOT
- *  suppress OC-1/2/6/9's unrelated same-or-adjacent-line negations ("Write(/sessions/...) saves the
- *  report." on one line, "Do not modify any other file." on the next — different lines entirely, so this
- *  same-line clause scan never even sees the negation word). */
+ *  suppress the whole-line/adjacent-line negation guard's unrelated same-or-adjacent-line negations
+ *  ("Write(/sessions/...) saves the report." on one line, "Do not modify any other file." on the next —
+ *  different lines entirely, so this same-line clause scan never even sees the negation word). */
 function directiveClauseHasNegation(line: string, start: number, end: number): boolean {
   let clauseStart = 0;
   let clauseEnd = line.length;
@@ -226,10 +226,11 @@ function proseContextBeforeToken(line: string, tokenIndex: number): boolean {
  *  are machine-unambiguous — a stray "not"/"avoid" on the same or an adjacent line must never suppress
  *  them (an author writing `Write(/sessions/...)` next to "Do not modify any other file." is still handing
  *  a `/sessions` path to a file tool). Instead, each structured context gets its OWN narrow,
- *  directive-scoped carve-out (`directiveClauseHasNegation`, D-3): a negation token in the SAME CLAUSE as
+ *  directive-scoped carve-out (`directiveClauseHasNegation`): a negation token in the SAME CLAUSE as
  *  the assignment/directive itself (not merely the same or an adjacent line) suppresses that one hit —
  *  the genuine teaching idiom "❌ Write(/sessions/...) — never do this; use the bash tool instead." — while
- *  leaving OC-1/2/6/9's unrelated same-or-adjacent-line negations firing exactly as before. */
+ *  leaving the whole-line/adjacent-line negation guard's unrelated same-or-adjacent-line negations firing
+ *  exactly as before. */
 function classifyLineRule1(line: string, suppressProse: boolean): Map<string, string> {
   const result = new Map<string, string>();
 
@@ -245,7 +246,7 @@ function classifyLineRule1(line: string, suppressProse: boolean): Map<string, st
     const tool = m[1];
     const body = m[2];
     if (FIND_KEYWORD_RE.test(body)) continue; // rule 2's territory (find-substitution into a read)
-    if (directiveClauseHasNegation(line, m.index, m.index + m[0].length)) continue; // D-3: same-clause teaching idiom
+    if (directiveClauseHasNegation(line, m.index, m.index + m[0].length)) continue; // same-clause teaching idiom carve-out
     for (const { token } of extractSessionsTokens(body)) {
       if (!result.has(token)) result.set(token, `a \`${tool}(...)\` directive target`);
     }
@@ -303,7 +304,7 @@ function findLineVars(line: string): Set<string> {
 /** The find LINE's OUTPUT-CAPTURE variable(s) only — `VAR=$(find … /sessions …)` command substitution,
  *  or `find … /sessions … > $VAR` / `> VAR` redirection. Deliberately NARROWER than "every `$VAR` on the
  *  line": a `find /sessions/... -name "$NAME"` argument uses `$NAME` as find's INPUT pattern, not its
- *  output, and must not be harvested as if `find` had assigned it — that was the NFP-1 false positive
+ *  output, and must not be harvested as if `find` had assigned it — that was a real false positive
  *  (a `Read(docs/$NAME/index.md)` on the next line shared the token but read an unrelated host path). */
 function findOutputVars(line: string): Set<string> {
   const vars = new Set<string>();
@@ -339,19 +340,19 @@ function hasNegationNearby(arr: LineInfo[], idx: number): boolean {
  *  violation. Over-exempting an indented sub-bullet that ISN'T code just trades a false negative for the
  *  false positive this guards against — the accepted posture throughout this file.
  *
- *  The exemption is NOT unconditional, though (OC-4): a contiguous run of indented lines that contains a
+ *  The exemption is NOT unconditional, though: a contiguous run of indented lines that contains a
  *  dispatch marker (`Task(`/`subagent_type`) is the analyzer's HEADLINE defect class, not VM bash — an
  *  indented `Task(...)` + `OUTPUT_PATH=/sessions/...` template must still be analyzed, EVEN when a blank
- *  line sits between the marker and the path (D-2): CommonMark treats a blank-line-separated indented
+ *  line sits between the marker and the path: CommonMark treats a blank-line-separated indented
  *  block as ONE indented code block, and templates routinely contain blank lines for readability, so a
  *  blank line CONTINUES the run rather than splitting it. `splitLines` below groups contiguous indented
  *  runs (a blank line does not flush the run; only a non-blank, non-indented line does) and un-exempts
  *  (and registers as a dispatch block) any run whose body contains a dispatch marker OUTSIDE a `#`
- *  comment (D-4 — see `flushIndentedRun`); a plain indented VM-bash template (no dispatch marker) stays
+ *  comment (see `flushIndentedRun`); a plain indented VM-bash template (no dispatch marker) stays
  *  exempt. */
 const INDENTED_CODE_RE = /^(?: {4,}|\t)\S/;
 
-/** D-4: strip a `#`-comment tail from an indented-block line before it is tested for a dispatch marker —
+/** Comment-stripped marker test: strip a `#`-comment tail from an indented-block line before it is tested for a dispatch marker —
  *  `# after the Task( dispatch returns, collect via bash:` must not un-exempt the block it heads, since a
  *  `Task(` mention inside a comment is not itself a dispatch construct. Simple `#`-to-end-of-line strip
  *  (no shell-quote awareness, consistent with this file's conservative, non-shell-parsing posture
@@ -378,9 +379,9 @@ function splitLines(text: string): { lines: LineInfo[]; blocks: { lang: string; 
   let indentedRun: LineInfo[] = [];
   const flushIndentedRun = () => {
     if (indentedRun.length === 0) return;
-    const bodyText = indentedRun.map((l) => stripLineComment(l.text)).join("\n"); // D-4: comment-stripped for the marker test only
+    const bodyText = indentedRun.map((l) => stripLineComment(l.text)).join("\n"); // comment-stripped for the marker test only
     if (DISPATCH_MARKER_RE.test(bodyText)) {
-      for (const info of indentedRun) info.codeExempt = false; // OC-4: not VM bash — a dispatch template
+      for (const info of indentedRun) info.codeExempt = false; // not VM bash — a dispatch template
       blocks.push({ lang: "indented-dispatch", lines: indentedRun });
     }
     indentedRun = [];
@@ -425,7 +426,7 @@ function splitLines(text: string): { lines: LineInfo[]; blocks: { lang: string; 
     if (isIndented) {
       indentedRun.push(info);
     } else if (raw.trim() !== "") {
-      flushIndentedRun(); // D-2: a BLANK line does not flush — it continues the run (see INDENTED_CODE_RE doc)
+      flushIndentedRun(); // a BLANK line does not flush — it continues the run (see INDENTED_CODE_RE doc)
     }
   }
   // An unterminated non-bash-ish fence at EOF still has its buffered lines flushed (mirrors scenario.py's
@@ -510,7 +511,7 @@ export function analyzeSkillText(text: string, filePath: string): SkillFinding[]
   // alone is not enough: the find line must carry a visible OUTPUT-CAPTURE data-flow marker — a
   // `VAR=$(find …)` assignment or a `find … > $VAR`/`> VAR` redirection (see `findOutputVars`) — and the
   // Read(/Grep( line must reference that SAME variable. Harvesting every `$VAR` referenced anywhere on
-  // the find line (e.g. an `-name "$NAME"` INPUT pattern) is deliberately NOT enough (NFP-1): pure
+  // the find line (e.g. an `-name "$NAME"` INPUT pattern) is deliberately NOT enough: pure
   // token-sharing with find's own arguments, or pure proximity to an unrelated Read( targeting a
   // different path, must NOT fire.
   for (let i = 0; i < lines.length; i++) {

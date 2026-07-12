@@ -826,7 +826,7 @@ def _lint_skill_text(path, raw_lines, force_json=False):
     bash_token_lines = []
     bash_block_text = []
 
-    # Task E: identity of the skill/plugin under lint, used to check a self-heal `find -path`
+    # Self-heal find-pattern guard: identity of the skill/plugin under lint, used to check a self-heal `find -path`
     # actually names THIS skill or its enclosing plugin (not a copy-pasted mismatch). Only
     # meaningful when linting an actual SKILL.md (force_json=False is exactly that case here — a
     # hooks.json body never enters the "bash" ctx below, so this is otherwise unused).
@@ -918,7 +918,7 @@ def _lint_skill_text(path, raw_lines, force_json=False):
 
 
 # --------------------------------------------------------------------------- #
-# subagent_type static resolution — Task D
+# subagent_type static resolution
 # --------------------------------------------------------------------------- #
 #
 # A pinned `subagent_type:` value that doesn't resolve to a real agent fails a definition lookup at
@@ -955,7 +955,7 @@ _AGENT_FRONTMATTER = re.compile(r"^---\s*\n(.*?\n)---\s*(?:\n|$)", re.DOTALL)
 def _agent_name_from_frontmatter(md_path, yaml_mod):
     """Return a markdown file's `name:` frontmatter value, or None if there's no frontmatter, no
     `name:` field, or it fails to parse. Originally for `agents/*.md` (caller falls back to the
-    filename stem there); also reused by Task E for a SKILL.md, whose frontmatter has the same
+    filename stem there); also reused by the self-heal find-pattern guard for a SKILL.md, whose frontmatter has the same
     `---\\nname: ...\\n---` shape — the parser itself is generic, only the name is agent-specific."""
     try:
         text = Path(md_path).read_text(encoding="utf-8")
@@ -976,7 +976,7 @@ def _agent_name_from_frontmatter(md_path, yaml_mod):
 
 
 def _resolve_plugin_agents(plugin_dir):
-    """Part 1: return the set of valid `<plugin>:<agent>` subagent types defined WITHIN plugin_dir.
+    """Resolve in-plugin agent types: return the set of valid `<plugin>:<agent>` subagent types defined WITHIN plugin_dir.
     Reads the plugin name from plugin.json and each agents/*.md's `name:` frontmatter (filename stem
     fallback). Returns an empty set (never crashes) when no plugin.json is found — a bare SKILL.md
     dir with no plugin manifest has nothing to resolve against."""
@@ -1005,7 +1005,7 @@ def cmd_resolve_agent_types(args):
 
 
 def _find_enclosing_plugin_dir(skill_md_path):
-    """Part 3 (resolution step): walk up from a SKILL.md to the nearest ancestor dir containing
+    """Resolve the enclosing plugin: walk up from a SKILL.md to the nearest ancestor dir containing
     `.claude-plugin/plugin.json` or `plugin.json` — that's the enclosing plugin. None if no ancestor
     has one (a bare SKILL.md dir with no plugin manifest anywhere above it)."""
     start = Path(skill_md_path).resolve().parent
@@ -1061,7 +1061,7 @@ def _finding_subagent_not_found_in_plugin(path, line, value, plugin_name, agent,
 
 
 def _classify_subagent_type(value, plugin_name, plugin_agent_types):
-    """Part 3 severity ladder. Returns a Finding-builder (path, line, value) -> Finding, or None if
+    """subagent_type severity ladder. Returns a Finding-builder (path, line, value) -> Finding, or None if
     clean. Severity is ALWAYS INFO — see the HONEST LIMIT note above this section; never WARN/ERROR.
 
     Precedence:
@@ -1099,9 +1099,9 @@ def _classify_subagent_type(value, plugin_name, plugin_agent_types):
 
 
 def _lint_subagent_types(path, raw_lines):
-    """Part 3: scan a SKILL.md's raw text (not limited to fenced blocks — a pinned `subagent_type`
+    """Scan a SKILL.md's raw text (not limited to fenced blocks — a pinned `subagent_type`
     can appear in prose or YAML frontmatter) for pinned `subagent_type` values and classify each
-    against the enclosing plugin's in-plugin agent set (Part 1)."""
+    against the enclosing plugin's in-plugin agent set."""
     matches = []
     for i, line in enumerate(raw_lines, start=1):
         for m in _SUBAGENT_TYPE_RE.finditer(line):

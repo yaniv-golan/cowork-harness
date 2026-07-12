@@ -38,6 +38,24 @@ All notable changes to this project are documented here. The format is based on
   `general-purpose` is harness-known), so an unresolved value is always surfaced, never failed. See
   [docs/subagents.md](./docs/subagents.md#static-subagent_type-resolution-resolve-agent-types--lint-skill).
 
+- **`lint-skill` gained a `guard-pattern-mismatch` WARN: a `${CLAUDE_PLUGIN_ROOT}` self-heal `find`
+  that targets a different skill/plugin than the one being linted.** The mount-discovery self-heal
+  pattern recovers `${CLAUDE_PLUGIN_ROOT}` by `find`-ing the plugin's own mount at runtime, but a
+  copy-pasted `-path` glob naming another skill's or plugin's directory silently fails to discover
+  THIS skill's mount instead. `lint-skill` now extracts the `-path` glob's skill/plugin/scripts-segment
+  token and compares it against the SKILL.md's own frontmatter `name:` (or parent-directory name) and
+  enclosing plugin name, warning when they don't match. See
+  [docs/plugin-root.md](./docs/plugin-root.md#catch-both-before-a-paid-run).
+
+- **`lint-skill`'s `subagent_type` check gained a third outcome: `subagent-type-not-found-in-plugin`
+  (INFO).** A pinned `subagent_type` whose `<plugin>:<agent>` prefix names THIS skill's own enclosing
+  plugin, but whose `<agent>` isn't among that plugin's enumerated `agents/*.md`, can never be another
+  binary's built-in — the namespace prefix already commits it to this plugin, and the plugin's agent
+  set was fully enumerable — so it's reported as `subagent-type-not-found-in-plugin` rather than the
+  more equivocal `subagent-type-unknown`. Still INFO, not WARN, consistent with the rest of the
+  `subagent_type` ladder's honest-limit posture. See
+  [docs/subagents.md](./docs/subagents.md#static-subagent_type-resolution-resolve-agent-types--lint-skill).
+
 ### Changed
 
 - **Breaking (pre-1.0): `verify-cassettes` now distinguishes "could not verify" from "verified and
