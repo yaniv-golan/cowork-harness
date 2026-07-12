@@ -86,10 +86,14 @@ const full: RunResult = {
     {
       toolUseId: "tu_1",
       parentToolUseId: undefined,
-      agentType: "general-purpose",
+      dispatchAgentType: "unknown",
+      resolvedAgentType: "general-purpose",
+      dispatchTypeOmitted: true,
       declaredTools: ["Read"],
       toolsUsed: [{ name: "Read", count: 1 }],
       description: "explore",
+      dispatchModel: "claude-sonnet-4-5",
+      resolvedModel: "claude-haiku-x",
       attributedSkillId: "my-plugin:my-skill",
     },
   ],
@@ -111,6 +115,7 @@ const full: RunResult = {
     fileSigsOmitted: false,
     mode: "git",
     agentScope: "skill",
+    promptAssetsHash: "a1b2c3d4e5f60718",
   },
   outDir: "/runs/example/local_abc",
   workDir: "/runs/example/local_abc/work/session/mnt",
@@ -151,6 +156,22 @@ const full: RunResult = {
     mcpServers: [{ name: "my-server", status: "connected" }],
     availableSkills: [{ id: "my-plugin:my-skill", whenToUse: "Use for X" }],
   },
+  fileToolAttempts: [
+    { tool: "Read", paths: { file_path: "outputs/report.pdf" }, gatePath: "outputs/report.pdf", origin: "main", toolUseId: "tu_1" },
+  ],
+  pathDenials: [
+    {
+      source: "can_use_tool",
+      tool: "Edit",
+      path: "/sessions/x",
+      callbackId: undefined,
+      decisionReasonType: "workingDir",
+      agentId: "agent_1",
+      decision: "deny",
+      reason: "blocked",
+      toolUseId: "tu_1",
+    },
+  ],
 };
 
 describe("schema/run-result.json", () => {

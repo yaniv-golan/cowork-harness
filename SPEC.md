@@ -176,11 +176,14 @@ inline PreToolUse hook body — is hostloop's ENTIRE security boundary for real 
 Installed via the `hooks` seam (§4, a caller-supplied `HookBundle` merged onto the always-on
 `COWORK_PRETOOLUSE_HOOKS` in the `initialize` control_request). Denies any `Read`/`Write`/`Edit`/`Glob`/
 `Grep`/`MultiEdit` whose resolved path falls outside the session's allowed roots (outputs, uploads,
-skills, writable connected folders, the staged plugin copy; read-only folders are readable but not
-writable). A `/sessions/...`-shaped path is denied with a distinct "is a VM path, use bash" message. A
-run-end runtime tripwire (`execute.ts`'s `findUngatedPathToolCalls` / `chat.ts`'s inline `tripwireHook`)
-hard-fails the run/session if a gated tool call ever completes successfully with no evidence the gate
-fired for it — version-skew insurance, not doubt about the currently-pinned binary.
+spooled projects, skills, writable connected folders, the staged plugin copy). Three of those roots are
+READ-ONLY categories, not a blanket allow: a mutating call into `uploads` (hardlink write-block —
+per-session-type text), the spooled-projects dir, or the staged skills/plugin copies (no exemption for
+plugin content anymore) is denied with that category's own message while remaining readable. A
+`/sessions/...`-shaped path is denied with a distinct "is a VM path, use bash" message. A run-end runtime
+tripwire (`execute.ts`'s `findUngatedPathToolCalls` / `chat.ts`'s inline `tripwireHook`) hard-fails the
+run/session if a gated tool call ever completes successfully with no evidence the gate fired for it —
+version-skew insurance, not doubt about the currently-pinned binary.
 
 A `hostloop` scenario with a WRITABLE connected folder requires the top-level `allow_host_writes: true`
 scenario field (or `--allow-host-writes` for `chat`) — `checkHostLoopWriteConsent` refuses to spawn
@@ -543,7 +546,7 @@ and a fail observed) always fails that batch, regardless of the numeric rate.
   "nonDeterministic?": bool,                      // true if any decision came from a non-deterministic source → not reproducible
   "gateProvenance?": { "total": number, "bySource": {…}, "gates": [{ "question","answeredBy","answer","model?" }] }, // how each AskUserQuestion gate was answered; informational (never fails the verdict); live/partial lane only (absent on replay)
   "permissiveAutoAllow?": ["string"],             // tools auto-allowed by cowork parity that real Cowork BLOCKS → green is NOT faithful
-  "staleness?": [{ "class": "baseline|skill|shared-root|format|unverifiable-baseline|unverifiable-skill|resolved-tier|unverifiable-tier", "message" }], // replay only; cassette-staleness findings, surfaced for a JSON gate. Non-failing by default (a stale but passing replay stays ok:true); `--strict` fails on every class, `--fail-on-skill-drift` on skill/shared-root/unverifiable-skill only. `resolved-tier` = a `fidelity: cowork` cassette's recorded effectiveFidelity no longer matches the tier the scenario's baseline (pinned `baseline:` or `latest`) resolves to today — the recording exercises the wrong tier; `unverifiable-tier` = the tier check couldn't run for a baseline-dependent (`fidelity: cowork`) cassette (no recorded effectiveFidelity, or its pinned baseline failed to load). Tier resolution is baseline-only (the CLAUDE_FORCE_HOST_LOOP env override is suppressed) so verify results can't differ across machines.
+  "staleness?": [{ "class": "baseline|skill|shared-root|format|unverifiable-baseline|unverifiable-skill|resolved-tier|unverifiable-tier|prompt-assets|unverifiable-prompt-assets", "message" }], // replay only; cassette-staleness findings, surfaced for a JSON gate. Non-failing by default (a stale but passing replay stays ok:true); `--strict` fails on every class, `--fail-on-skill-drift` on skill/shared-root/unverifiable-skill only. `resolved-tier` = a `fidelity: cowork` cassette's recorded effectiveFidelity no longer matches the tier the scenario's baseline (pinned `baseline:` or `latest`) resolves to today — the recording exercises the wrong tier; `unverifiable-tier` = the tier check couldn't run for a baseline-dependent (`fidelity: cowork`) cassette (no recorded effectiveFidelity, or its pinned baseline failed to load). Tier resolution is baseline-only (the CLAUDE_FORCE_HOST_LOOP env override is suppressed) so verify results can't differ across machines. `prompt-assets` = the baseline's committed prompt-asset files (spawn.promptTemplate/subagentAppend/subagentAppendHostLoop) changed since record under the SAME appVersion — warn by default, `--strict` fails, re-record; `unverifiable-prompt-assets` = a recorded `fingerprint.promptAssetsHash` exists but the live baseline's prompt assets can't be hashed (a moved/dangling pointer) — can't verify ⇒ not green.
   "skippedAssertions?": { "full": number, "partial": number }, // replay only; count of live-only assertions NOT evaluated (full = whole assertion skipped; partial = content half ran, fs/egress half dropped). The skipped ones are absent from `assertions[]`.
   "toolResults?": [{ "toolUseId?","isError","text","assertText?" }], // tool-result text at assertion-fidelity cap (10 KB); backs tool_result_contains/tool_result_not_contains
   "skillsInvoked?": ["string"],                  // Wave 1: skill/plugin ids invoked via the Skill tool_use event, call order, duplicates kept. Backs skill_triggered/no_skill_triggered.

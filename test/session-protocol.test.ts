@@ -504,6 +504,12 @@ describe("session protocol loud-failure fixes", () => {
     const toolUse = JSON.parse(lines[1]);
     const dispatch = JSON.parse(lines[2]);
     expect(toolUse).toMatchObject({ seq: 0, line: 0, type: "tool_use", toolUseId: "toolu_2", name: "Agent" });
-    expect(dispatch).toMatchObject({ seq: 1, line: 0, type: "subagent_dispatch", toolUseId: "toolu_2", agentType: "general-purpose" });
+    expect(dispatch).toMatchObject({
+      seq: 1,
+      line: 0,
+      type: "subagent_dispatch",
+      toolUseId: "toolu_2",
+      dispatchAgentType: "general-purpose",
+    });
   });
 });

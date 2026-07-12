@@ -36,7 +36,7 @@ describe("fork-scoped tool_use classification (fork skill / Agent(fork) inner to
   it("a real Agent dispatch's inner Bash stays isolated in subagentTools, not toolCounts (regression pin)", async () => {
     const rec = await drive([
       { type: "tool_use", name: "Agent", input: { subagent_type: "general-purpose" }, toolUseId: "A" },
-      { type: "subagent_dispatch", toolUseId: "A", agentType: "general-purpose", declaredTools: [] },
+      { type: "subagent_dispatch", toolUseId: "A", dispatchAgentType: "general-purpose", declaredTools: [], typeOmitted: false },
       { type: "tool_use", name: "Bash", input: { command: "echo hi" }, parentToolUseId: "A", toolUseId: "B" },
     ]);
     expect(rec.toolCounts.Agent).toBe(1);
@@ -56,7 +56,7 @@ describe("fork-scoped tool_use classification (fork skill / Agent(fork) inner to
   it("a fork skill invoked INSIDE a sub-agent does NOT leak into main-agent toolCounts (it inherits the sub-agent's context, not the main agent's)", async () => {
     const rec = await drive([
       { type: "tool_use", name: "Agent", input: { subagent_type: "general-purpose" }, toolUseId: "A" },
-      { type: "subagent_dispatch", toolUseId: "A", agentType: "general-purpose", declaredTools: [] },
+      { type: "subagent_dispatch", toolUseId: "A", dispatchAgentType: "general-purpose", declaredTools: [], typeOmitted: false },
       { type: "tool_use", name: "Skill", input: { skill: "probe" }, parentToolUseId: "A", toolUseId: "S" },
       { type: "tool_use", name: "Bash", input: { command: "echo hi" }, parentToolUseId: "S", toolUseId: "B" },
     ]);
@@ -66,7 +66,7 @@ describe("fork-scoped tool_use classification (fork skill / Agent(fork) inner to
   it("an explicit Agent(subagent_type:'fork') dispatch's inner Bash counts as main-agent work, while dispatch_count is unaffected", async () => {
     const rec = await drive([
       { type: "tool_use", name: "Agent", input: { subagent_type: "fork" }, toolUseId: "F" },
-      { type: "subagent_dispatch", toolUseId: "F", agentType: "fork", declaredTools: [] },
+      { type: "subagent_dispatch", toolUseId: "F", dispatchAgentType: "fork", declaredTools: [], typeOmitted: false },
       { type: "tool_use", name: "Bash", input: { command: "echo hi" }, parentToolUseId: "F", toolUseId: "B" },
     ]);
     expect(rec.toolCounts.Bash).toBe(1);
@@ -83,7 +83,7 @@ describe("fork-scoped tool_use classification (fork skill / Agent(fork) inner to
       { type: "tool_use", name: "Bash", input: { command: "echo hi" }, parentToolUseId: "S", toolUseId: "B2" },
       // real sub-agent: same Ls call twice → excluded from redundantToolCalls (isolated).
       { type: "tool_use", name: "Agent", input: { subagent_type: "general-purpose" }, toolUseId: "A" },
-      { type: "subagent_dispatch", toolUseId: "A", agentType: "general-purpose", declaredTools: [] },
+      { type: "subagent_dispatch", toolUseId: "A", dispatchAgentType: "general-purpose", declaredTools: [], typeOmitted: false },
       { type: "tool_use", name: "Ls", input: { path: "." }, parentToolUseId: "A", toolUseId: "L1" },
       { type: "tool_use", name: "Ls", input: { path: "." }, parentToolUseId: "A", toolUseId: "L2" },
     ]);
@@ -97,8 +97,15 @@ describe("fork-scoped tool_use classification (fork skill / Agent(fork) inner to
   it("a nested subagent_dispatch records its parentToolUseId (dispatch tree is reconstructable)", async () => {
     const rec = await drive([
       { type: "tool_use", name: "Agent", input: { subagent_type: "general-purpose" }, toolUseId: "A" },
-      { type: "subagent_dispatch", toolUseId: "A", agentType: "general-purpose", declaredTools: [] },
-      { type: "subagent_dispatch", toolUseId: "C", parentToolUseId: "A", agentType: "general-purpose", declaredTools: [] },
+      { type: "subagent_dispatch", toolUseId: "A", dispatchAgentType: "general-purpose", declaredTools: [], typeOmitted: false },
+      {
+        type: "subagent_dispatch",
+        toolUseId: "C",
+        parentToolUseId: "A",
+        dispatchAgentType: "general-purpose",
+        declaredTools: [],
+        typeOmitted: false,
+      },
     ]);
     const parent = rec.subagents.find((s) => s.toolUseId === "A");
     const child = rec.subagents.find((s) => s.toolUseId === "C");

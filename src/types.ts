@@ -90,6 +90,7 @@ export const PlatformBaseline = z.looseObject({
       env: z.record(z.string(), z.string()).default({}),
       promptTemplate: z.string().optional(),
       subagentAppend: z.string().optional(),
+      subagentAppendHostLoop: z.string().optional(),
     })
     .partial()
     .optional(),
@@ -243,11 +244,64 @@ export const Assertion = z.strictObject({
   subagent_tool_absent: toolGlob
     .optional()
     .describe("NO sub-agent used a tool matching this glob (* / ?; exact when literal; anchored, case-sensitive)"),
-  subagent_dispatched: z.string().optional().describe("a sub-agent matching this regex (by agentType or description) was dispatched"),
+  no_vm_path_file_op: z
+    .literal(true)
+    .optional()
+    .describe(
+      "hostloop-only: NO gated file tool (Read/Write/Edit/Glob/Grep/MultiEdit) attempted a path that is exactly /sessions or /sessions/-prefixed — the production VM-path boundary. Only `true` is valid — omit to not require it. Any other tier FAILS (cannot verify: /sessions/... is valid there).",
+    ),
+  vm_path_denied: z
+    .literal(true)
+    .optional()
+    .describe(
+      "hostloop-only: at least one recorded path denial targeted a /sessions VM path (any source). Only `true` is valid. Needs controlOut on replay (else skipped-and-surfaced).",
+    ),
+  path_denied: z
+    .object({
+      tool: toolGlob.optional().describe("glob over the denied tool name"),
+      path_matches: z.string().optional().describe("regex over the denied path"),
+      source: z.enum(["pretooluse", "can_use_tool", "permission_denied"]).optional(),
+      agent_scope: z
+        .enum(["main", "subagent", "any"])
+        .optional()
+        .describe("subagent = the binary's agent_id attribution present; main = absent; default any"),
+    })
+    .optional()
+    .describe("hostloop-only: a path denial matching ALL given matchers was recorded"),
+  no_path_denied: z
+    .literal(true)
+    .optional()
+    .describe(
+      "hostloop-only: NO path denial was recorded (the channel is path-scoped already, unlike no_hook_blocked). Only `true` is valid.",
+    ),
+  subagent_file_write: z
+    .object({
+      path: z
+        .string()
+        .min(1)
+        .optional()
+        .describe("EXACT raw path the sub-agent's write must have sent (strongest — proves the exact path, not just a suffix)"),
+      path_suffix: z.string().min(1).optional().describe("the target path's suffix (weaker than `path`; e.g. artifacts/probe.json)"),
+      tool: toolGlob.optional().describe("glob over the writing tool; default matches Write/Edit/MultiEdit"),
+    })
+    .refine((v) => v.path !== undefined || v.path_suffix !== undefined, {
+      message: "subagent_file_write needs `path` (exact) or `path_suffix`",
+    })
+    .optional()
+    .describe(
+      "a SUB-AGENT-origin write attempt whose raw path EQUALS `path` (or ends with `path_suffix`) has a PAIRED non-error tool_result — the causal half of a delivery probe (pair with artifact_json for content). Prefer `path` (exact) so a foo/artifacts/probe.json can't satisfy an artifacts/probe.json suffix. Tier-agnostic.",
+    ),
+  subagent_dispatched: z
+    .string()
+    .optional()
+    .describe("a sub-agent matching this regex (by dispatch or resolved agent type, or description) was dispatched"),
   subagent_declared_but_unused: z.string().optional().describe("a sub-agent declared this tool but never used it (the fabrication proxy)"),
   subagent_output_contains: z
     .object({
-      match: z.string().optional().describe("regex over agentType or description, narrowing to specific dispatch(es); omit to check all"),
+      match: z
+        .string()
+        .optional()
+        .describe("regex over dispatchAgentType or description, narrowing to specific dispatch(es); omit to check all"),
       contains: z.string().describe("substring that must appear in the matched dispatch(es)' output"),
     })
     .optional()
@@ -670,6 +724,12 @@ export interface Fingerprint {
   // computed — a skill-named `agents/<n>` was treated as skill <n>'s private input rather than a shared root.
   // ABSENT = the default (agents/ is a fleet-wide shared root). A record-vs-verify mismatch → re-record.
   agentScope?: "skill";
+  /** sha16 over the baseline's committed prompt-asset FILE bytes (spawn.promptTemplate /
+   *  subagentAppend / subagentAppendHostLoop, key-ordered). Prompt identity was previously keyed on
+   *  appVersion alone, so an asset edit under the SAME appVersion silently replayed old-prompt
+   *  behavior. Asset-file bytes (not the rendered string) keep it deterministic and host-path-free.
+   *  Absent on cassettes recorded before this field existed → informational note, never a finding. */
+  promptAssetsHash?: string;
 }
 
 /** The cause-class of a replay staleness finding. `unverifiable-baseline` (env/platform: the latest baseline
@@ -682,9 +742,21 @@ export interface Fingerprint {
  *  today (gate 1143815894 flipped since record — the recording exercises the WRONG tier);
  *  `unverifiable-tier` = the tier check could not run for a baseline-dependent (`fidelity: cowork`)
  *  cassette (no recorded `effectiveFidelity`, or the scenario's pinned baseline failed to load) —
- *  can't verify ⇒ not green on the verify-cassettes gate. */
+ *  can't verify ⇒ not green on the verify-cassettes gate. `prompt-assets` = the baseline's committed
+ *  prompt-asset files changed since record under the SAME appVersion (warn-by-default, `--strict`
+ *  fails, re-record); `unverifiable-prompt-assets` = a recorded prompt-asset hash exists but the live
+ *  baseline's prompt assets can't be hashed (a moved/dangling pointer) — can't verify ⇒ not green. */
 type StalenessClass =
-  "baseline" | "skill" | "shared-root" | "format" | "unverifiable-baseline" | "unverifiable-skill" | "resolved-tier" | "unverifiable-tier";
+  | "baseline"
+  | "skill"
+  | "shared-root"
+  | "format"
+  | "unverifiable-baseline"
+  | "unverifiable-skill"
+  | "resolved-tier"
+  | "unverifiable-tier"
+  | "prompt-assets"
+  | "unverifiable-prompt-assets";
 export interface StalenessFinding {
   class: StalenessClass;
   message: string;
@@ -972,12 +1044,15 @@ export interface RunResult {
   subagents?: Array<{
     toolUseId: string;
     parentToolUseId?: string;
-    agentType: string;
+    dispatchAgentType: string; // the DISPATCH-INPUT type ("unknown" when the input omitted it)
+    resolvedAgentType?: string; // the BINARY-resolved child type from task_started (incl. the general-purpose fallback); dispatchAgentType above keeps its dispatch-input semantics
+    dispatchTypeOmitted?: boolean; // the dispatch input carried no subagent_type (proven by full input parse) — the wildcard-fallback trap fired
     declaredTools: string[];
     toolsUsed: Array<{ name: string; count: number }>;
     description?: string;
     prompt?: string; // dispatch input.prompt, assertText-capped
-    model?: string; // the dispatching message's model
+    dispatchModel?: string; // the DISPATCHING message's model (ex-"model" — renamed when resolvedModel landed beside it)
+    resolvedModel?: string; // the RESOLVED child model from the dispatch's tool_use_result envelope
     output?: string; // the dispatch's own paired tool_result, assertText-capped
     outputTruncated?: boolean; // `output` was cut at the assert cap — a negative content check is unverifiable, not a proven absence (#9)
     attributedSkillId?: string; // the skill-activation window this dispatch was attributed to — NOT Fingerprint.skillScope (a different, unrelated field)
@@ -1125,6 +1200,35 @@ export interface RunResult {
    *  `controlOut` (a custom hook's decision lives there, not in the stream) — else the hook assertions
    *  are excluded-loud, never vacuously passed. */
   hookEvents?: Array<{ callbackId: string; decision: "block" | "allow"; reason?: string; tool?: string }>;
+  /** Attempt-level gated-file-tool telemetry (raw paths as sent). Undefined = evidence unavailable
+   *  (a result recorded before this field existed); [] = captured, no gated attempts. Replay
+   *  re-derives it (tool_use blocks are frozen stream content). */
+  fileToolAttempts?: Array<{
+    tool: string;
+    paths: { file_path?: string; path?: string };
+    gatePath?: string;
+    origin: "main" | "subagent" | "unknown";
+    parentToolUseId?: string;
+    toolUseId?: string;
+  }>;
+  /** DECISION-level path-denial telemetry from all THREE producers that can deny a gated file-tool call
+   *  on a path grounds — the PreToolUse path gate itself, a denied `can_use_tool` ask on a gated file
+   *  tool with a path, and a pre-ask `permission_denied` correlated to a recorded gated attempt. Each
+   *  producer independently filters to path-relevant denials (see RunRecord.pathDenials for the exact
+   *  filter each applies). Undefined = evidence unavailable (an older result, or a replay whose cassette
+   *  lacks `controlOut` — the can_use_tool source is reconstructible ONLY from controlOut); [] = captured,
+   *  no path denials. */
+  pathDenials?: Array<{
+    source: "pretooluse" | "can_use_tool" | "permission_denied";
+    tool: string;
+    path?: string;
+    callbackId?: string;
+    decisionReasonType?: string;
+    agentId?: string;
+    decision: "deny";
+    reason?: string;
+    toolUseId?: string;
+  }>;
   /** Files delivered via the cowork `present_files` tool, in call order — one entry per file the agent
    *  presented, derived from pairing each `mcp__cowork__present_files` tool_use with its own
    *  tool_result. `promoted` = the file was in the scratchpad and landed under `mnt/outputs`; `leaked` =

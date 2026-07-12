@@ -42,6 +42,10 @@ export interface HostLoopShellInputs {
    * (the asar's `Ae` line is conditional on a skills root — we don't fabricate one).
    */
   skillsConfigDir?: string;
+  /** HOST path of the outputs dir — the file-tool side of the outputs bullet and the no-folder
+   *  translate example (production `q = Ct ?? me`, `Ct` = hostOutputsDir). REQUIRED: the caller always
+   *  knows it, and the old sessionRoot rendering was the bug — no fallback keeps it representable. */
+  hostOutputsDir: string;
   // Constants — defaulted to the binary-verified production names; overridable for tests.
   workspaceServer?: string;
   bashTool?: string;
@@ -56,11 +60,11 @@ export function generateHostLoopShellSection(inp: HostLoopShellInputs): string {
   const ws = inp.workspaceServer ?? "workspace";
   const bash = inp.bashTool ?? "bash";
   const reqFolder = inp.requestFolderTool ?? "request_cowork_directory";
-  const { sessionRoot, mntRoot, folders, uploads } = inp;
+  const { mntRoot, folders, uploads } = inp;
 
-  // Outputs bullet (asar `CA`). The harness has no separate hostOutputsDir/hostCwd, so oe === cwd ===
-  // sessionRoot → the " — cwd" suffix is always present. Outputs is NOT in plan.mounts; synthesize it.
-  const outputsBullet = `- ${sessionRoot} → ${mntRoot}/outputs/  (your outputs directory — cwd)`;
+  // Outputs bullet (asar `CA`): the file-tool side is production's `q = Ct ?? me` — the HOST outputs
+  // dir, never the VM sessionRoot. Outputs is NOT in plan.mounts; synthesize it.
+  const outputsBullet = `- ${inp.hostOutputsDir} → ${mntRoot}/outputs/  (your outputs directory — cwd)`;
 
   // Per-folder bullets (asar `te`): `- <hostPath> → <mntRoot>/<name>/`. We render the folder's REAL
   // resolved mount path. For Desktop >= 1.14271.0 that's the bare collision-resolved basename (matching
@@ -80,7 +84,7 @@ export function generateHostLoopShellSection(inp: HostLoopShellInputs): string {
 
   // Example translate line (asar `zA`/`DA`): first folder if any, else the outputs dir.
   const first = folders[0];
-  const zA = first ? first.hostPath : sessionRoot;
+  const zA = first ? first.hostPath : inp.hostOutputsDir;
   const DA = first ? `${mntRoot}/${first.mountPath}` : `${mntRoot}/outputs`;
 
   // "No folders connected" branch (asar `PA`).

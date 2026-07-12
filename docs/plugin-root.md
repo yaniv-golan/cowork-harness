@@ -2,7 +2,8 @@
 
 A skill references its own bundled files through `${CLAUDE_PLUGIN_ROOT}`. The token means **different
 things depending on WHERE it is evaluated**, and getting this wrong is the single most common Cowork
-authoring footgun — a skill that works in the Claude Code CLI silently breaks in Cowork's host-loop VM.
+authoring footgun — a skill that works in the Claude Code CLI silently breaks under Cowork's in-VM
+shell, on every fidelity tier.
 
 This is an authoring guide: it describes the **observable behavior** a skill author must design around.
 
@@ -27,7 +28,7 @@ deliberately leaves it alone.
 When your skill runs **shell** — a ` ```bash ` step, a `Bash(...)` directive, or a hook command — the token
 is a different story:
 
-- In the **host-loop** runtime, the in-VM shell has `CLAUDE_PLUGIN_ROOT` **unset**. A line like
+- On **every** fidelity tier, the in-VM shell has `CLAUDE_PLUGIN_ROOT` **unset**. A line like
   `bash ${CLAUDE_PLUGIN_ROOT}/scripts/build.sh` expands to `bash /scripts/build.sh` (or an empty path) and
   fails. The agent's own plugin-hook self-heal recovers by **discovering** the mount at runtime, but a
   hardcoded `${CLAUDE_PLUGIN_ROOT}` path in *your* script does not get that treatment.
@@ -44,15 +45,21 @@ is a different story:
 
 ## How the tiers map
 
-The harness reproduces two resolution modes; pick a scenario `fidelity` to exercise the one you care about.
+The harness reproduces host-loop and VM-loop plugin staging as two distinct mount layouts (different
+guest paths, different staging mechanism), but the token's behavior in a Bash-tool subprocess is
+identical on both: unset. Pick a scenario `fidelity` to exercise the staging layout you care about.
 
 | Fidelity tier | Resolution mode | In-VM bash sees `${CLAUDE_PLUGIN_ROOT}` |
 |---|---|---|
 | `hostloop` | host-loop | **unset** — discover the mount at runtime |
-| `container` / `microvm` | VM-loop analog (agent runs in the VM) | the bind-mounted plugin path |
+| `container` / `microvm` | VM-loop analog (agent runs in the VM) | **unset** — the plugin's files ARE present at the bind-mounted path, but not via this env var; discover the mount at runtime |
 
-Because host-loop is the stricter of the two (the token is unset there), **author for host-loop** and the
-skill works in both: never hardcode `${CLAUDE_PLUGIN_ROOT}` in a VM shell step; discover the mount.
+The env var is absent from a Bash-tool subprocess on **every** tier, not just host-loop — a plugin's
+own file references resolve because the agent substitutes the path directly into the plugin's prompt
+TEXT when the definition loads, not because any tier's shell inherits `CLAUDE_PLUGIN_ROOT`. Because the
+token is unset everywhere in-VM bash actually runs, **author for the mount-discovery pattern
+unconditionally**: never hardcode `${CLAUDE_PLUGIN_ROOT}` in a VM shell step; discover the mount, as
+shown above.
 
 ## A second, related footgun: host-side hooks
 
@@ -75,4 +82,6 @@ for the in-VM agent — while leaving correct host-side `Read`/`Grep` references
 heuristic v1 (see its `--help` for the documented limits), so treat a clean result as "no *obvious*
 footgun," not a proof.
 
-See also [session.md](./session.md) (plugin mounts) and [scenario.md](./scenario.md) (fidelity tiers).
+See also [session.md](./session.md) (plugin mounts), [scenario.md](./scenario.md) (fidelity tiers), and
+[subagents.md](./subagents.md) (the same env-var-absence rule as it applies to a dispatched sub-agent's
+own tool set).

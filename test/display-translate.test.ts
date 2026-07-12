@@ -164,7 +164,7 @@ describe("renderer surfaces agree on translated text (assistant text, sub-agent 
     { type: "assistant_text", text: "see /sessions/sess1/mnt/outputs/report.pdf" },
     { type: "tool_use", name: "Bash", input: { command: "cat /sessions/sess1/mnt/outputs/report.pdf" }, toolUseId: "tu1" },
     { type: "tool_result", toolUseId: "tu1", isError: false, text: "/sessions/sess1/mnt/outputs/report.pdf: 3 lines" },
-    { type: "subagent_dispatch", toolUseId: "tu2", agentType: "researcher", declaredTools: ["Read"] },
+    { type: "subagent_dispatch", toolUseId: "tu2", dispatchAgentType: "researcher", typeOmitted: false, declaredTools: ["Read"] },
     { type: "assistant_text", text: "sub-note: /sessions/sess1/mnt/outputs/notes.md", parentToolUseId: "tu2" },
   ];
 

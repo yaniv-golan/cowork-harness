@@ -72,7 +72,7 @@ describe("foldSkillActivity", () => {
       ev({ type: "tool_use", seq: 0, ts: 0, skillScope: "(root)", name: "Read", toolUseId: "t0" }),
       ev({ type: "tool_use", seq: 1, ts: 10, skillScope: "my-skill", name: "Skill", toolUseId: "t1" }),
       ev({ type: "tool_use", seq: 2, ts: 20, skillScope: "my-skill", name: "Bash", toolUseId: "t2" }),
-      ev({ type: "subagent_dispatch", seq: 3, ts: 30, skillScope: "my-skill", toolUseId: "d1", agentType: "x" }),
+      ev({ type: "subagent_dispatch", seq: 3, ts: 30, skillScope: "my-skill", toolUseId: "d1", dispatchAgentType: "x" }),
     ];
     const activity = foldSkillActivity(timeline);
     expect(activity).toEqual([
@@ -125,22 +125,24 @@ describe("foldSkillActivity", () => {
 describe("attributeSubagentSkills", () => {
   it("copies each subagent's matching TimelineEvent.subagent_dispatch.skillScope onto attributedSkillId, by toolUseId", () => {
     const timeline: TimelineEvent[] = [
-      ev({ type: "subagent_dispatch", seq: 0, ts: 0, skillScope: "my-skill", toolUseId: "d1", agentType: "x" }),
+      ev({ type: "subagent_dispatch", seq: 0, ts: 0, skillScope: "my-skill", toolUseId: "d1", dispatchAgentType: "x" }),
     ];
-    const subagents = [{ toolUseId: "d1", agentType: "x", declaredTools: [], toolsUsed: [] }];
+    const subagents = [{ toolUseId: "d1", dispatchAgentType: "x", declaredTools: [], toolsUsed: [] }];
     const result = attributeSubagentSkills(subagents, timeline);
     expect(result[0].attributedSkillId).toBe("my-skill");
   });
 
   it("leaves attributedSkillId undefined when no matching timeline entry exists (e.g. no timeline data)", () => {
-    const subagents = [{ toolUseId: "d1", agentType: "x", declaredTools: [], toolsUsed: [] }];
+    const subagents = [{ toolUseId: "d1", dispatchAgentType: "x", declaredTools: [], toolsUsed: [] }];
     const result = attributeSubagentSkills(subagents, []);
     expect(result[0].attributedSkillId).toBeUndefined();
   });
 
   it("does not mutate the input array (returns a new array with new objects)", () => {
-    const timeline: TimelineEvent[] = [ev({ type: "subagent_dispatch", seq: 0, ts: 0, skillScope: "x", toolUseId: "d1", agentType: "x" })];
-    const subagents = [{ toolUseId: "d1", agentType: "x", declaredTools: [], toolsUsed: [] }];
+    const timeline: TimelineEvent[] = [
+      ev({ type: "subagent_dispatch", seq: 0, ts: 0, skillScope: "x", toolUseId: "d1", dispatchAgentType: "x" }),
+    ];
+    const subagents = [{ toolUseId: "d1", dispatchAgentType: "x", declaredTools: [], toolsUsed: [] }];
     const result = attributeSubagentSkills(subagents, timeline);
     expect(result).not.toBe(subagents);
     expect(subagents[0]).not.toHaveProperty("attributedSkillId");

@@ -256,7 +256,8 @@ export interface AssertContext {
   hostPathLeaked: boolean; // a host path (/Users//opt) appeared in model-visible text
   selfHealRan: boolean; // a /sessions/<id>/mnt plugin script was invoked (plugin-root self-heal)
   subagents: {
-    agentType: string;
+    dispatchAgentType: string;
+    resolvedAgentType?: string; // the BINARY-resolved child type from task_started — strictly better evidence than dispatchAgentType for a type-less dispatch
     declaredTools: string[];
     toolsUsed: Array<{ name: string; count: number }>;
     description?: string;
@@ -423,6 +424,19 @@ export interface AssertContext {
    *  hook's decision lives only there) — the evidence-unavailable signal for hook_blocked/
    *  no_hook_blocked; an empty `[]` is a valid "no hook fired" state and is NOT the same as undefined. */
   hookEvents?: RunResult["hookEvents"];
+  /** RunResult.fileToolAttempts — gated-file-tool attempt telemetry. Undefined = evidence unavailable
+   *  (older result) — dependent assertions fail "cannot verify" (excluded-loud), mirroring hookEvents. */
+  fileToolAttempts?: RunResult["fileToolAttempts"];
+  /** RunResult.pathDenials — decision-level path-denial telemetry (pretooluse/can_use_tool/
+   *  permission_denied). Undefined = evidence unavailable — older result, or replay without controlOut
+   *  (the can_use_tool source is reconstructible ONLY from controlOut). */
+  pathDenials?: RunResult["pathDenials"];
+  /** Minimal per-result pairing info (toolUseId/isError only, no text) for `subagent_file_write`'s
+   *  causal pairing — the exact half `toolResultTexts` drops (it's `assertText ?? text`, no id/error).
+   *  Sourced from `RunResult.toolResults` at all three ctx-construction sites (live/replay/verify).
+   *  Undefined = evidence unavailable (older run/result.json); `subagent_file_write` fails cannot-verify
+   *  rather than risk pairing an attempt with the wrong (or no) result. */
+  toolResults?: { toolUseId?: string; isError: boolean }[];
   /** RunResult.presentedFiles — files delivered via `present_files`, each already classified
    *  promoted/leaked at derivation time (see RunResult's own doc comment). Undefined means no
    *  `present_files` telemetry was recorded for this run (an older run predating the feature) — the
@@ -815,8 +829,10 @@ function check(
     );
   }
   if (a.subagent_dispatched !== undefined) {
-    // Match the agentType OR the description — skills often dispatch with only a `description`
-    // (no subagent_type → agentType "unknown"), so name-matching alone would miss those.
+    // Match dispatchAgentType OR resolvedAgentType OR the description — skills often dispatch with only
+    // a `description` (no subagent_type → dispatchAgentType "unknown"), so name-matching alone would
+    // miss those. resolvedAgentType (from task_started) is strictly better evidence than dispatchAgentType
+    // for a type-less dispatch that RESOLVED to e.g. "general-purpose".
     const c = compileUserRegex(a.subagent_dispatched);
     if ("error" in c) results.push(fail(`subagent_dispatched: bad regex "${a.subagent_dispatched}": ${c.error}`));
     else if (ctx.subagentsMissing)
@@ -824,7 +840,12 @@ function check(
       results.push(fail(`evidence unavailable: sub-agent dispatch tree absent from result.json — cannot evaluate subagent_dispatched`));
     else
       results.push(
-        ctx.subagents.some((s) => c.re.test(s.agentType) || c.re.test(s.description ?? ""))
+        ctx.subagents.some(
+          (s) =>
+            c.re.test(s.dispatchAgentType) ||
+            (s.resolvedAgentType !== undefined && c.re.test(s.resolvedAgentType)) ||
+            c.re.test(s.description ?? ""),
+        )
           ? ok()
           : fail(`no sub-agent matching "${a.subagent_dispatched}" was dispatched (by type or description)`),
       );
@@ -839,7 +860,14 @@ function check(
       const c = compileUserRegex(match);
       if ("error" in c) results.push(fail(`subagent_output_contains: bad regex "${match}": ${c.error}`));
       else {
-        const candidates = ctx.subagents.filter((s) => c.re.test(s.agentType) || c.re.test(s.description ?? ""));
+        // Match dispatchAgentType OR resolvedAgentType OR description — mirrors subagent_dispatched so a
+        // type-less dispatch that RESOLVED to e.g. "general-purpose" is selectable here too.
+        const candidates = ctx.subagents.filter(
+          (s) =>
+            c.re.test(s.dispatchAgentType) ||
+            (s.resolvedAgentType !== undefined && c.re.test(s.resolvedAgentType)) ||
+            c.re.test(s.description ?? ""),
+        );
         results.push(
           candidates.some((s) => s.output?.includes(contains))
             ? ok()
@@ -882,7 +910,7 @@ function check(
       results.push(
         culprit
           ? fail(
-              `sub-agent "${culprit.agentType}" declared "${t}" but never used it (used: ${culprit.toolsUsed.map((d) => d.name).join(", ") || "none"})`,
+              `sub-agent "${culprit.dispatchAgentType}" declared "${t}" but never used it (used: ${culprit.toolsUsed.map((d) => d.name).join(", ") || "none"})`,
             )
           : ok(),
       );
@@ -1604,6 +1632,101 @@ function check(
       }
     }
   }
+  // VM-path-boundary + path-denial assertions. `VM_PATH` is exact-or-prefix — NEVER a bare
+  // `startsWith("/sessions")`, which would wrongly match "/sessionsfoo". `hostloopOnly` mirrors the
+  // no_scratchpad_leak tier-gate precedent above: on a non-hostloop tier /sessions/... is a VALID VM
+  // path (no path hook exists there), so excluding the key could green a wrong-tier scenario — it must
+  // FAIL "cannot verify" instead.
+  const VM_PATH = (p: string | undefined): boolean => p !== undefined && (p === "/sessions" || p.startsWith("/sessions/"));
+  const hostloopOnly = (key: string): KeyResult | null =>
+    ctx.effectiveFidelity !== "hostloop"
+      ? fail(
+          `${key}: hostloop-only — /sessions/... is valid and there is no path hook on tier "${ctx.effectiveFidelity ?? "unknown"}" — cannot verify; pin fidelity: hostloop`,
+        )
+      : null;
+
+  if (a.no_vm_path_file_op !== undefined) {
+    const gate = hostloopOnly("no_vm_path_file_op");
+    if (gate) results.push(gate);
+    else if (ctx.fileToolAttempts === undefined) results.push(fail("no_vm_path_file_op: no attempt telemetry (older run) — cannot verify"));
+    else {
+      const hit = ctx.fileToolAttempts.find((at) => VM_PATH(at.paths.file_path) || VM_PATH(at.paths.path));
+      results.push(
+        hit ? fail(`no_vm_path_file_op: ${hit.tool} (${hit.origin}) attempted VM path "${hit.paths.file_path ?? hit.paths.path}"`) : ok(),
+      );
+    }
+  }
+  if (a.vm_path_denied !== undefined) {
+    const gate = hostloopOnly("vm_path_denied");
+    if (gate) results.push(gate);
+    else if (ctx.pathDenials === undefined)
+      results.push(fail("vm_path_denied: no path-denial telemetry (older run / replay without controlOut) — cannot verify"));
+    else results.push(ctx.pathDenials.some((d) => VM_PATH(d.path)) ? ok() : fail("vm_path_denied: no /sessions-targeted denial recorded"));
+  }
+  if (a.path_denied !== undefined) {
+    const gate = hostloopOnly("path_denied");
+    if (gate) results.push(gate);
+    else if (ctx.pathDenials === undefined)
+      results.push(fail("path_denied: no path-denial telemetry (older run / replay without controlOut) — cannot verify"));
+    else {
+      const q = a.path_denied;
+      const re = q.path_matches ? compileUserRegex(q.path_matches) : undefined;
+      if (re && "error" in re) results.push(fail(`path_denied: bad regex "${q.path_matches}": ${re.error}`));
+      else {
+        const hit = ctx.pathDenials.find(
+          (d) =>
+            (q.tool === undefined || toolMatches(q.tool, d.tool)) &&
+            (q.source === undefined || d.source === q.source) &&
+            (re === undefined || (d.path !== undefined && (re as { re: RegExp }).re.test(d.path))) &&
+            (q.agent_scope === undefined || q.agent_scope === "any" || (q.agent_scope === "subagent") === (d.agentId !== undefined)),
+        );
+        results.push(
+          hit ? ok(`${hit.source}: ${hit.tool} ${hit.path ?? ""}`) : fail("path_denied: no recorded denial matched all matchers"),
+        );
+      }
+    }
+  }
+  if (a.no_path_denied !== undefined) {
+    const gate = hostloopOnly("no_path_denied");
+    if (gate) results.push(gate);
+    else if (ctx.pathDenials === undefined)
+      results.push(fail("no_path_denied: no path-denial telemetry (older run / replay without controlOut) — cannot verify"));
+    else {
+      const d = ctx.pathDenials[0];
+      results.push(d ? fail(`no_path_denied: ${d.source} denied ${d.tool} on "${d.path ?? "?"}"`) : ok());
+    }
+  }
+  if (a.subagent_file_write !== undefined) {
+    if (ctx.fileToolAttempts === undefined || ctx.toolResults === undefined)
+      results.push(fail("subagent_file_write: attempt/result telemetry unavailable (older run) — cannot verify"));
+    else {
+      const q = a.subagent_file_write;
+      const writeTools = q.tool
+        ? (n: string) => toolMatches(q.tool!, n)
+        : (n: string) => n === "Write" || n === "Edit" || n === "MultiEdit";
+      // exact when `path` is given, else suffix — `path` is deliberately the stronger match (a
+      // foo/artifacts/probe.json write must not satisfy an `artifacts/probe.json` suffix query).
+      const pathMatch = (gp: string | undefined): boolean =>
+        gp !== undefined && (q.path !== undefined ? gp === q.path : gp.endsWith(q.path_suffix!));
+      const chain = ctx.fileToolAttempts.find(
+        (at) =>
+          at.origin === "subagent" &&
+          writeTools(at.tool) &&
+          pathMatch(at.gatePath) &&
+          at.toolUseId !== undefined &&
+          ctx.toolResults!.some((r) => r.toolUseId === at.toolUseId && !r.isError),
+      );
+      const want = q.path !== undefined ? `== "${q.path}"` : `ending "${q.path_suffix}"`;
+      results.push(
+        chain
+          ? ok(`${chain.tool} ${chain.gatePath}`)
+          : fail(
+              `subagent_file_write: no SUB-AGENT-origin ${q.tool ?? "Write/Edit/MultiEdit"} attempt with path ${want} and a non-error paired result`,
+            ),
+      );
+    }
+  }
+
   if (a.result !== undefined)
     results.push(ctx.result === a.result ? ok(`result: ${ctx.result}`) : fail(`result was ${ctx.result}, expected ${a.result}`));
 

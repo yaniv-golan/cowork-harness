@@ -211,7 +211,7 @@ export class ScriptedDecider implements Decider {
           kind: "permission",
           behavior,
           ...(behavior === "allow" ? { updatedInput: req.input } : { message: "denied by scenario policy" }),
-          // web_fetch grant scope (off-wire; only consumed by Run.requestWebFetchApproval). Default "once".
+          // web_fetch grant scope (off-wire; consumed by Run's decideWebFetchDomain/resolveWebFetchGate). Default "once".
           ...(behavior === "allow" && req.tool.startsWith("webfetch:") ? { grant: rule.grant ?? "once" } : {}),
         },
         by: "scripted",

@@ -282,9 +282,11 @@ if *every* key passes (don't rely on the first; keep one concern per item unless
 | `max_redundant_tool_calls: <N>` | total **wasted** repeated tool calls (sum of `count - 1` across every redundant `{name, args}` group in `RunResult.redundantToolCalls`) ≤ N — not the raw count of redundant groups |
 | `subagent_tool_used: <glob>` | a sub-agent used a tool matching this glob (same semantics as `tool_called`, incl. the load-time reject on an empty or regex-like glob) |
 | `subagent_tool_absent: <glob>` | no sub-agent used a tool matching this glob (same load-time reject as `tool_called`) |
-| `subagent_dispatched: <regex>` | a sub-agent whose `agentType` **or dispatch `description`** matches was dispatched (skills often dispatch with only a `description` and no `subagent_type` → `agentType:"unknown"`, so match by description, e.g. `subagent_dispatched: "TOP_DOWN"`) |
+| `no_vm_path_file_op: true` | **`fidelity: hostloop` only** — NO gated file tool (Read/Write/Edit/Glob/Grep/MultiEdit) attempted a path that is exactly `/sessions` or `/sessions/`-prefixed — the production VM-path boundary; content-class (re-derived from the frozen `tool_use` stream, so replay-checkable without `controlOut`); any other tier **FAILS** ("cannot verify" — `/sessions/...` is a valid path there, so excluding the key could green a wrong-tier scenario); **only `true` is valid** |
+| `subagent_file_write: {path?, path_suffix?, tool?}` | a **sub-agent-origin** write attempt whose raw path equals `path` (exact — the stronger match) or ends with `path_suffix` has a paired **non-error** tool_result — the causal half of a delivery probe (pair with `artifact_json` to also check content); requires one of `path`/`path_suffix`; `tool` defaults to Write/Edit/MultiEdit; content-class (re-derived from the frozen attempt/result stream); **tier-agnostic** |
+| `subagent_dispatched: <regex>` | a sub-agent whose **dispatch or resolved agent type, or description**, matches was dispatched (skills often dispatch with only a `description` and no `subagent_type` → `dispatchAgentType:"unknown"`, so match by description, e.g. `subagent_dispatched: "TOP_DOWN"`; a type-less dispatch that RESOLVED to e.g. `general-purpose` via the binary's `task_started` event also matches on `resolvedAgentType`) |
 | `subagent_declared_but_unused: <Tool>` | fails if a sub-agent declared the tool but never used **that** tool (even if it used others) — the v0.3.0 fabrication proxy |
-| `subagent_output_contains: {match?, contains}` | a dispatched sub-agent's own output contains the `contains` substring, optionally narrowed to dispatch(es) whose `agentType`/description match the `match` regex (omit `match` to check all dispatches) — a miss against a sub-agent output truncated at the assert cap fails **evidence unavailable**, not a proven absence |
+| `subagent_output_contains: {match?, contains}` | a dispatched sub-agent's own output contains the `contains` substring, optionally narrowed to dispatch(es) whose `dispatchAgentType`/description match the `match` regex (omit `match` to check all dispatches) — a miss against a sub-agent output truncated at the assert cap fails **evidence unavailable**, not a proven absence |
 | `dispatch_count_max: <N>` | at most N sub-agents were dispatched — an **author-chosen** budget. (Cowork imposes **no** in-conversation Task-dispatch cap; gate `1648655587`'s `{perTask:1, global:3}` governs the separate scheduled/cron-task session scheduler, not the `Task` tool — see SPEC §10.) |
 | `skill_triggered: <regex>` | a skill matching the regex (by its invoked id, e.g. `"plugin:skill"`) was invoked via the `Skill` tool — fails as **evidence unavailable** (not a normal fail) when the agent's init tool list has no `Skill` tool at all, since that means invocation can't be observed on this agent version |
 | `no_skill_triggered: <regex>` | no invoked skill id matched the regex — the negative-control / description-collision catcher; fails as **evidence unavailable** (never a vacuous pass) when skill-invocation data is absent (an old `result.json` predating this key) or the `Skill` tool itself is unobservable |
@@ -305,6 +307,9 @@ if *every* key passes (don't rely on the first; keep one concern per item unless
 | `no_mcp_error: true` | no MCP round-trip failed during the run (`RunResult.mcpErrors` is empty) — **live lane only** (excluded on replay); **only `true` is valid** |
 | `hook_blocked: <regex>` | a `PreToolUse` hook blocked a tool whose name matches the regex (`RunResult.hookEvents`) — replay-checkable only when the cassette carries `controlOut` |
 | `no_hook_blocked: true` | no tool was hook-blocked during the run — distinguishes a genuine tool crash from an intentional block; replay-checkable only when the cassette carries `controlOut`; **only `true` is valid** |
+| `vm_path_denied: true` | **`fidelity: hostloop` only** — at least one recorded path denial (`RunResult.pathDenials`, any of the three sources) targeted a `/sessions` VM path; decision-level — replay-checkable only when the cassette carries `controlOut` (else skipped-and-surfaced, not a false-green); any other tier **FAILS** ("cannot verify"); **only `true` is valid** |
+| `path_denied: {tool?, path_matches?, source?, agent_scope?}` | **`fidelity: hostloop` only** — a path denial matching **all** given matchers was recorded (`tool` glob, `path_matches` regex, `source` ∈ pretooluse/can_use_tool/permission_denied, `agent_scope` ∈ main/subagent/any — subagent means the binary's `agent_id` attribution is present); decision-level — needs `controlOut` on replay; any other tier **FAILS** ("cannot verify") |
+| `no_path_denied: true` | **`fidelity: hostloop` only** — NO path denial was recorded at all (the channel is already path-scoped, unlike `no_hook_blocked`'s indiscriminate reject); decision-level — needs `controlOut` on replay; any other tier **FAILS** ("cannot verify"); **only `true` is valid** |
 | `max_peak_rss_bytes: <N>` | peak sampled RSS of the agent sandbox ≤ N bytes — **live lane only** (container/hostloop/microvm); evidence-unavailable on replay/protocol or when sampling captured no RSS |
 | `semantic_matches: {rubric, min_pass?, judge_model?}` | a pinned LLM judge grades each fixed `rubric` claim against the run's answer — the agent's final message, the transcript, and any files it authored — so a claim about written-file content grades like one about inlined prose; passes iff ≥ `min_pass` claims pass (default: all) — **live lane only** (an LLM judge call); skipped-loud on replay. Authored-file evidence is **unavailable** on the **microvm** tier (no pre-run manifest to diff against) versus **incomplete** on `container`/`hostloop` (a file was dropped at the capture-size cap, or came back unreadable at read-back) — the incomplete case now also fails **evidence unavailable**, rather than trusting a judge grade against a partial document. `judge_model` pins the grading model (flag/env precedence: per-assertion `judge_model` > `COWORK_HARNESS_JUDGE_MODEL` env > the harness default) — pin it for a reproducible before/after comparison. |
 | `question_asked: <regex>` | the agent asked an AskUserQuestion whose text matches |
@@ -324,6 +329,13 @@ if *every* key passes (don't rely on the first; keep one concern per item unless
 | `computer_links_resolve_if_present: true` | like `computer_links_resolve` but passes vacuously when the transcript has zero `computer://` links — the presence-free variant; **only `true` is valid** |
 
 `expect_denied: [host, …]` is shorthand that adds an `egress_denied` assertion per host.
+
+> **Authoring `subagent_*` assertions.** `subagent_tool_used`/`subagent_tool_absent`/`subagent_dispatched`
+> and the type-less-dispatch trap they guard against are covered in full in
+> [subagents.md](./subagents.md): the tool-composition rules that decide what a dispatched child can
+> reach, and the caveat that `subagent_tool_absent` proves only "no matching *attempt*," not capability
+> absence — plus the case-sensitive glob gap between host-loop's `mcp__workspace__*` and the VM tiers'
+> literal `Bash` that a cross-tier "shell-free" policy needs to cover explicitly.
 
 ### Declaring required capabilities (`requires_capabilities`)
 
@@ -450,9 +462,13 @@ can't record green and replay red). This keeps a read-only input out of the cass
 the folder as a user-visible root. A `mode: rw`/`rwd` folder's contents are captured with a full body, same
 as `outputs/`.
 A green `replay` re-confirms *record-time* artifacts, **not** that the current skill still produces them —
-that needs a live `run` (the cassette's staleness fingerprint warns when the skill/baseline drifted; `replay
---strict` fails on any drift, `--fail-on-skill-drift` on skill-source drift only, and every result reports it
-in `staleness[]` for a JSON gate).
+that needs a live `run` (the cassette's staleness fingerprint warns when the skill/baseline/prompt-assets
+drifted — `baseline`, `skill`/`shared-root`, `format`, `resolved-tier`, `prompt-assets`, plus the
+`unverifiable-*` can't-verify variants of each; `replay --strict` fails on any drift, `--fail-on-skill-drift`
+on skill-source drift only, and every result reports it in `staleness[]` for a JSON gate). `prompt-assets`
+covers a committed prompt-asset FILE (`spawn.promptTemplate`/`subagentAppend`/`subagentAppendHostLoop`)
+edited under the same `appVersion` — a change `baseline`/`skill` drift alone would miss, since prompt
+identity was previously keyed on `appVersion` only.
 
 **Egress + other filesystem** assertions (`no_delete_in_outputs`, `self_heal_ran`,
 `transcript_no_host_path`, `egress_*`/`expect_denied`, `no_mcp_error`, `max_peak_rss_bytes`) are still

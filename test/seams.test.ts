@@ -191,7 +191,7 @@ describe("parseMessage — sub-agent dispatch", () => {
     expect(d[0]).toMatchObject({
       type: "subagent_dispatch",
       toolUseId: "toolu_1",
-      agentType: "example-skills:deck-review",
+      dispatchAgentType: "example-skills:deck-review",
       declaredTools: [],
     });
   });
@@ -201,7 +201,7 @@ describe("parseMessage — sub-agent dispatch", () => {
       assistant([{ type: "tool_use", id: "t2", name: "Task", input: { subagent_type: "researcher", tools: ["Read", "Grep"] } }]),
     );
     expect(d).toHaveLength(1);
-    expect(d[0]).toMatchObject({ agentType: "researcher", declaredTools: ["Read", "Grep"] });
+    expect(d[0]).toMatchObject({ dispatchAgentType: "researcher", declaredTools: ["Read", "Grep"] });
   });
 
   it("recognizes any tool whose input carries subagent_type (rename-robust)", () => {
@@ -281,7 +281,7 @@ describe("parseMessage — sub-agent dispatch", () => {
     );
     const dispatch = ev.find((e) => e.type === "subagent_dispatch") as any;
     expect(dispatch).toBeDefined();
-    expect(dispatch.model).toBe("claude-sonnet-4-5");
+    expect(dispatch.dispatchModel).toBe("claude-sonnet-4-5");
   });
 
   it("threads prompt and model onto a subagent_dispatch event (M4)", () => {
@@ -299,7 +299,7 @@ describe("parseMessage — sub-agent dispatch", () => {
         "claude-sonnet-4-5",
       ),
     );
-    expect(d[0]).toMatchObject({ prompt: "go explore the codebase", model: "claude-sonnet-4-5" });
+    expect(d[0]).toMatchObject({ prompt: "go explore the codebase", dispatchModel: "claude-sonnet-4-5" });
   });
 
   it("caps an oversized subagent prompt at the 10KB assertText limit", () => {
@@ -359,7 +359,7 @@ describe("Run — turn loop + record", () => {
       { type: "init", tools: ["Task", "Bash"], mcpServers: [], skills: [], cwd: "/sessions/x" },
       { type: "assistant_text", text: "working" },
       { type: "tool_use", name: "Task", input: { subagent_type: "researcher", tools: ["Bash", "Read"] } },
-      { type: "subagent_dispatch", toolUseId: "tu1", agentType: "researcher", declaredTools: ["Bash", "Read"] },
+      { type: "subagent_dispatch", toolUseId: "tu1", dispatchAgentType: "researcher", declaredTools: ["Bash", "Read"], typeOmitted: false },
       { type: "tool_use", name: "Read", input: {}, parentToolUseId: "tu1" }, // sub-agent used Read, not Bash
       { type: "result", isError: false, usage: { output_tokens: 5 } },
     ];
@@ -369,7 +369,7 @@ describe("Run — turn loop + record", () => {
     expect(rec.transcript).toBe("working");
     expect(rec.toolsCalled.has("Task")).toBe(true);
     expect(rec.subagents).toHaveLength(1);
-    expect(rec.subagents[0].agentType).toBe("researcher");
+    expect(rec.subagents[0].dispatchAgentType).toBe("researcher");
     expect(rec.subagents[0].declaredTools).toEqual(["Bash", "Read"]);
     expect(rec.subagents[0].toolsUsed).toEqual([{ name: "Read", count: 1 }]); // declared Bash but never used it → the culprit
     expect(rec.result).toBe("success");
@@ -395,7 +395,7 @@ describe("Run — turn loop + record", () => {
 
   it("increments toolsUsed's count for a repeated tool inside the same subagent dispatch (not a duplicate entry)", async () => {
     const ev: AgentEvent[] = [
-      { type: "subagent_dispatch", toolUseId: "disp1", agentType: "general-purpose", declaredTools: ["Read"] },
+      { type: "subagent_dispatch", toolUseId: "disp1", dispatchAgentType: "general-purpose", declaredTools: ["Read"], typeOmitted: false },
       { type: "tool_use", name: "Read", input: {}, toolUseId: "t1", parentToolUseId: "disp1" },
       { type: "tool_result", toolUseId: "t1", isError: false, text: "" },
       { type: "tool_use", name: "Read", input: {}, toolUseId: "t2", parentToolUseId: "disp1" },
@@ -411,21 +411,22 @@ describe("Run — turn loop + record", () => {
       {
         type: "subagent_dispatch",
         toolUseId: "disp1",
-        agentType: "general-purpose",
+        dispatchAgentType: "general-purpose",
+        typeOmitted: false,
         declaredTools: [],
         prompt: "explore",
-        model: "claude-sonnet-4-5",
+        dispatchModel: "claude-sonnet-4-5",
       },
       { type: "tool_result", toolUseId: "disp1", isError: false, text: "found 3 files", assertText: "found 3 files" },
       { type: "result", isError: false },
     ];
     const rec = await new Run(new MockSession(ev), new ScriptedDecider([])).drive("go");
-    expect(rec.subagents[0]).toMatchObject({ prompt: "explore", model: "claude-sonnet-4-5", output: "found 3 files" });
+    expect(rec.subagents[0]).toMatchObject({ prompt: "explore", dispatchModel: "claude-sonnet-4-5", output: "found 3 files" });
   });
 
   it("leaves rec.subagents[].output undefined when no tool_result matches the dispatch's toolUseId (M4)", async () => {
     const ev: AgentEvent[] = [
-      { type: "subagent_dispatch", toolUseId: "disp1", agentType: "general-purpose", declaredTools: [] },
+      { type: "subagent_dispatch", toolUseId: "disp1", dispatchAgentType: "general-purpose", declaredTools: [], typeOmitted: false },
       { type: "result", isError: false },
     ];
     const rec = await new Run(new MockSession(ev), new ScriptedDecider([])).drive("go");
@@ -478,7 +479,7 @@ describe("Run — turn loop + record", () => {
   it("does NOT capture a sub-agent-parented Skill tool_use (not a top-level invocation)", async () => {
     const ev: AgentEvent[] = [
       { type: "tool_use", name: "Task", input: { subagent_type: "researcher" } },
-      { type: "subagent_dispatch", toolUseId: "tu1", agentType: "researcher", declaredTools: [] },
+      { type: "subagent_dispatch", toolUseId: "tu1", dispatchAgentType: "researcher", declaredTools: [], typeOmitted: false },
       { type: "tool_use", name: "Skill", input: { skill: "nested:nested" }, parentToolUseId: "tu1" },
       { type: "result", isError: false },
     ];
@@ -528,7 +529,7 @@ describe("Run — turn loop + record", () => {
   it("subagentTools counts only tools under a RECOGNIZED dispatch, not any parented tool_use", async () => {
     const ev: AgentEvent[] = [
       { type: "tool_use", name: "Task", input: { subagent_type: "researcher" } },
-      { type: "subagent_dispatch", toolUseId: "tu1", agentType: "researcher", declaredTools: [] },
+      { type: "subagent_dispatch", toolUseId: "tu1", dispatchAgentType: "researcher", declaredTools: [], typeOmitted: false },
       { type: "tool_use", name: "Read", input: {}, parentToolUseId: "tu1" }, // under a real dispatch → counted
       { type: "tool_use", name: "Bash", input: {}, parentToolUseId: "orphan-no-dispatch" }, // orphan parent → NOT counted
       { type: "result", isError: false },
@@ -1878,6 +1879,59 @@ describe("Cassette — protocol replay", () => {
   });
 });
 
+// ---- pathDenials reconstruction: the can_use_tool pairing extension ----
+// The hook_callback pairing at cassette.ts's replayHookEvents region handles the pretooluse source
+// today; this pins its EXTENSION to also pair a `can_use_tool` control_request with its controlOut
+// control_response for the can_use_tool source (RunRecord.pathDenials).
+describe("Cassette — pathDenials reconstruction on replay (can_use_tool pairing)", () => {
+  const reqId = "req-cut-1";
+  const events = [
+    JSON.stringify({ type: "system", subtype: "init", tools: ["Edit"] }),
+    JSON.stringify({
+      type: "control_request",
+      request_id: reqId,
+      request: {
+        subtype: "can_use_tool",
+        tool_name: "Edit",
+        input: { file_path: "/sessions/x" },
+        tool_use_id: "tu2",
+        decision_reason_type: "workingDir",
+      },
+    }),
+    JSON.stringify({ type: "result", subtype: "success", is_error: false }),
+  ];
+  const controlOut = [
+    JSON.stringify({
+      type: "control_response",
+      response: { subtype: "success", request_id: reqId, response: { behavior: "deny", message: "blocked" } },
+    }),
+  ];
+
+  it("a gated can_use_tool deny with a path, paired with its controlOut reply, becomes a can_use_tool pathDenial", async () => {
+    const cassette = { scenario: makeScenario([{ result: "success" as const }]), events, controlOut } as any;
+    const r = await replayCassette(cassette);
+    expect(r.pathDenials).toEqual([
+      {
+        source: "can_use_tool",
+        tool: "Edit",
+        path: "/sessions/x",
+        callbackId: undefined,
+        decisionReasonType: "workingDir",
+        agentId: undefined,
+        decision: "deny",
+        reason: "blocked",
+        toolUseId: "tu2",
+      },
+    ]);
+  });
+
+  it("the SAME cassette without controlOut: pathDenials is undefined (evidence-unavailable, never a vacuous pass)", async () => {
+    const cassette = { scenario: makeScenario([{ result: "success" as const }]), events, controlOut: [] } as any;
+    const r = await replayCassette(cassette);
+    expect(r.pathDenials).toBeUndefined();
+  });
+});
+
 // ---- canon() unit tests ----
 describe("canon — recursive key-sorting canonicalizer", () => {
   it("normalises key order for flat objects", () => {
@@ -2024,87 +2078,6 @@ describe("B2 — MAX_THINKING_TOKENS is absent from every runtime env, even with
   });
 });
 
-describe("Run.requestWebFetchApproval — recorded synthetic permission", () => {
-  // drive() returns this.rec by reference; requestWebFetchApproval mutates the same record post-drive.
-  const resultOnly = () => new MockSession([{ type: "result", isError: false }]);
-
-  it("scripted allow → true, recorded as an allow decision", async () => {
-    const run = new Run(resultOnly(), new ScriptedDecider([{ when_tool: "webfetch:ok.com", allow_if: "true" }]), [], "t");
-    const rec = await run.drive("hi");
-    expect(await run.requestWebFetchApproval("ok.com", "https://ok.com/x")).toBe(true);
-    expect(rec.decisions.find((d) => d.name === "webfetch:ok.com")).toMatchObject({ decision: "allow", by: "scripted" });
-  });
-
-  it("scripted deny → false, recorded as a deny decision", async () => {
-    const run = new Run(resultOnly(), new ScriptedDecider([{ when_tool: "webfetch:no.com", allow_if: "false", else: "deny" }]), [], "t");
-    const rec = await run.drive("hi");
-    expect(await run.requestWebFetchApproval("no.com", "https://no.com/x")).toBe(false);
-    expect(rec.decisions.find((d) => d.name === "webfetch:no.com")).toMatchObject({ decision: "deny", by: "scripted" });
-  });
-
-  it("ABSTAIN → fail-closed deny, recorded by:abstain-fallback, and NEVER responds to the agent (no stray control_response)", async () => {
-    const session = resultOnly();
-    const run = new Run(session, new ScriptedDecider([]), [], "t");
-    const rec = await run.drive("hi");
-    expect(await run.requestWebFetchApproval("x.com", "https://x.com/x")).toBe(false);
-    expect(rec.decisions.find((d) => d.name === "webfetch:x.com")).toMatchObject({ decision: "deny", by: "abstain-fallback" });
-    expect(session.responded.length).toBe(0); // synthetic id is never sent to the agent
-  });
-
-  it("an 'Allow all for website' grant approves the host for the run — a 2nd fetch raises NO gate", async () => {
-    const run = new Run(resultOnly(), new ScriptedDecider([{ when_tool: "webfetch:ok.com", decide: "allow", grant: "domain" }]), [], "t");
-    const rec = await run.drive("hi");
-    expect(await run.requestWebFetchApproval("ok.com", "https://ok.com/a")).toBe(true);
-    const after1 = rec.decisions.length;
-    expect(await run.requestWebFetchApproval("ok.com", "https://ok.com/b")).toBe(true); // approved host
-    expect(rec.decisions.length).toBe(after1); // no new decision — the gate was skipped
-  });
-
-  it("seedApprovedDomains pre-approves a host — its first fetch raises NO gate", async () => {
-    const run = new Run(resultOnly(), new ScriptedDecider([]), [], "t"); // no rules → would fail-closed
-    const rec = await run.drive("hi");
-    run.seedApprovedDomains(["ok.com"]);
-    expect(await run.requestWebFetchApproval("ok.com", "https://ok.com/a")).toBe(true); // pre-approved
-    expect(rec.decisions.some((d) => d.name === "webfetch:ok.com")).toBe(false); // no gate raised
-    expect(await run.requestWebFetchApproval("other.com", "https://other.com/a")).toBe(false); // not pre-approved → fail-closed
-  });
-
-  it("an 'Allow once' grant does NOT approve the host — a 2nd fetch re-gates", async () => {
-    const run = new Run(resultOnly(), new ScriptedDecider([{ when_tool: "webfetch:ok.com", decide: "allow", grant: "once" }]), [], "t");
-    const rec = await run.drive("hi");
-    expect(await run.requestWebFetchApproval("ok.com", "https://ok.com/a")).toBe(true);
-    const after1 = rec.decisions.length;
-    expect(await run.requestWebFetchApproval("ok.com", "https://ok.com/b")).toBe(true);
-    expect(rec.decisions.length).toBe(after1 + 1); // re-gated → a new decision recorded
-  });
-
-  it("a kind-mismatched decider response is recorded as mismatch→deny + warns (not a silent decision:'?')", async () => {
-    // A decider that answers a "permission" web_fetch request with a "question"-kind response — a protocol
-    // mismatch. Previously this recorded decision:"?" with NO warning; now it records mismatch→deny + warns.
-    const mismatchDecider = {
-      async decide() {
-        return { response: { kind: "question", answers: {} } as DecisionResponse, by: "scripted" as const, rationale: "wrong kind" };
-      },
-    };
-    const warnings: string[] = [];
-    const orig = process.stderr.write.bind(process.stderr);
-    (process.stderr as any).write = (s: string | Uint8Array): boolean => (warnings.push(String(s)), true);
-    let rec, allowed: boolean;
-    try {
-      const run = new Run(resultOnly(), mismatchDecider, [], "t");
-      rec = await run.drive("hi");
-      allowed = await run.requestWebFetchApproval("bad.com", "https://bad.com/x");
-    } finally {
-      (process.stderr as any).write = orig;
-    }
-    expect(allowed).toBe(false); // fail-closed on mismatch
-    const d = rec.decisions.find((x) => x.name === "webfetch:bad.com");
-    expect(d).toMatchObject({ decision: "mismatch→deny" });
-    expect(d?.decision).not.toBe("?"); // the old silent value is gone
-    expect(warnings.some((w) => w.includes("webfetch") && w.includes('returned kind "question"'))).toBe(true);
-  });
-});
-
 describe("Cassette — transcript_not_contains evaluates on content (not on missing flag) during replay", () => {
   it("passes when the cassette transcript does not contain the needle", async () => {
     const events = [
@@ -2208,5 +2181,23 @@ describe("execute.ts — COWORK_HARNESS_DIALOG_TIMEOUT_MS configuration guard", 
       if (prev === undefined) delete process.env.COWORK_HARNESS_DIALOG_TIMEOUT_MS;
       else process.env.COWORK_HARNESS_DIALOG_TIMEOUT_MS = prev;
     }
+  });
+});
+
+describe("toDecisionRequest — replay lane surfaces the SDK deny-reason fields (seams: cassette.ts re-parses with parseMessage)", () => {
+  it("replay lane surfaces decision_reason from a frozen control_request line", () => {
+    const line = JSON.stringify({
+      type: "control_request",
+      request_id: "req-9",
+      request: {
+        subtype: "can_use_tool",
+        tool_name: "Edit",
+        input: { file_path: "/x" },
+        decision_reason: "Path is outside allowed working directories",
+        decision_reason_type: "workingDir",
+      },
+    });
+    const [ev] = parseMessage(JSON.parse(line));
+    expect((ev as { request: { decisionReason?: string } }).request.decisionReason).toBe("Path is outside allowed working directories");
   });
 });

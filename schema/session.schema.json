@@ -271,6 +271,26 @@
         }
       },
       "additionalProperties": false
+    },
+    "agent_env": {
+      "default": {},
+      "type": "object",
+      "properties": {
+        "subagent_model": {
+          "type": "string"
+        },
+        "tool_search": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "off"
+          ]
+        },
+        "disable_experimental_betas": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": false,

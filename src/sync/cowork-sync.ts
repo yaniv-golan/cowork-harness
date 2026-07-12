@@ -68,6 +68,13 @@ const PINNED_GATES: Record<string, string> = {
   "123929380": "autoMemoryStandardSessions", // auto-memory dir for a plain (non-Spaces) cowork session (off)
   "1696890383": "memoryGuidelinesEnv", // CLAUDE_COWORK_MEMORY_GUIDELINES env for auto-memory (off)
   "2860753854": "memoryExtraGuidelines", // CLAUDE_COWORK_MEMORY_EXTRA_GUIDELINES PII block (on, but inert-default)
+  // Sub-agent append server override: gates ONLY whether a server-delivered spSectionPrompts entry
+  // replaces the hardcoded subagent_env_hl / subagent_env_vm fallback texts (resolveSection). OFF live
+  // (source defaultValue) -> the hardcoded texts are the wire text the committed paraphrase assets
+  // model. An ON flip is invisible to the text sentinel (the hardcoded template is unchanged), so
+  // checkSubagentOverrideGate additionally emits a HARD-STOP unknown delta on ON — a pinned drift
+  // alone is a non-blocking warning.
+  "124685897": "subagentPromptServerOverride",
   // Spawn-env conditional gates: each controls a key in the Desktop→agent spawn env
   // (SPAWN_GATES). Pinned so a production flip surfaces BOTH as a provenance.gates diff AND as the
   // corresponding spawn.env value diff (deriveSpawnEnv resolves the pin from the same decoded state).
@@ -131,6 +138,19 @@ export function decodeFcacheGates(path = join(SUPPORT, "fcache")): Record<string
   return out;
 }
 
+/** Gate 124685897 ON = a server-delivered subagent-append override is active; the harness has no
+ *  captured override text, so proceeding would emit the committed fallback assets as if verified.
+ *  Hard-stop via unknownDeltas (a PINNED_GATES drift alone only WARNS and still writes the baseline). */
+export function checkSubagentOverrideGate(gates: Record<string, GateState> | null): string[] {
+  if (!gates?.["124685897"]?.on) return [];
+  return [
+    "gate subagentPromptServerOverride:124685897 reads ON — a server-delivered spSectionPrompts override " +
+      "is active for the sub-agent append; the harness has no captured override text, so the committed " +
+      "fallback assets would ship as if verified. Capture the override text, update the subagent-append " +
+      "assets + fingerprints, then re-sync.",
+  ];
+}
+
 export function sync(): SyncResult {
   // defensive platform guard. The paths above (SUPPORT/ASAR/Info.plist) are macOS-only; on
   // Windows/Linux they don't exist, so the extractor would return EMPTY version/allowlist/gate fields
@@ -183,6 +203,8 @@ export function sync(): SyncResult {
     );
   }
 
+  for (const f of checkSubagentOverrideGate(gates)) flag(unknown, f);
+
   return {
     appVersion,
     agentVersion,
@@ -204,23 +226,26 @@ export function sync(): SyncResult {
 // instead of one monolithic file. Follow local relative requires transitively (BFS, deduped) so
 // every fact-checker below sees the real bundle content regardless of which layout Desktop ships —
 // a stub-only read would silently report every anchor as missing, not that the contract changed.
-export function readMainBundle(dir: string): string {
+export function readMainBundleFiles(dir: string): Map<string, string> {
   const entryPath = join(dir, ".vite/build/index.js");
   const visited = new Set<string>();
   const queue = [entryPath];
-  let combined = "";
+  const out = new Map<string, string>();
   const localRequireRe = /require\(["']\.\/([^"']+)["']\)/g;
   while (queue.length > 0) {
     const p = queue.shift() as string;
     if (visited.has(p) || !existsSync(p)) continue;
     visited.add(p);
     const content = readFileSync(p, "utf8");
-    combined += content;
+    out.set(p.slice(p.lastIndexOf("/") + 1), content);
     for (const m of content.matchAll(localRequireRe)) {
       queue.push(join(dirname(p), m[1]));
     }
   }
-  return combined;
+  return out;
+}
+export function readMainBundle(dir: string): string {
+  return [...readMainBundleFiles(dir).values()].join("");
 }
 
 /** Extract domains + fingerprint + spawn.env + model-effort-config from the asar main bundle without
@@ -243,7 +268,8 @@ function extractFromAsar(
   const tmp = mkdtempSync(join(tmpdir(), "cowork-sync-"));
   try {
     execFileSync("npx", ["--yes", "@electron/asar", "extract", ASAR, tmp], { stdio: "ignore" });
-    const bundle = readMainBundle(tmp);
+    const bundleFiles = readMainBundleFiles(tmp);
+    const bundle = [...bundleFiles.values()].join("");
     // Domains: anthropic.com / claude.ai / sentry.io / statsig hosts referenced in the bundle.
     const re = /[a-z0-9.-]+\.(?:anthropic\.com|claude\.ai)|sentry\.io|statsig[a-z.]*\.[a-z]+/g;
     const domains = dedupe([...bundle.matchAll(re)].map((m) => m[0]));
@@ -256,10 +282,13 @@ function extractFromAsar(
     // mode FACTS still hold so a policy change is a loud flag, not silent baseline rot.
     for (const f of checkMountModeFacts(bundle)) flag(unknown, f);
     for (const f of checkWebFetchFacts(bundle)) flag(unknown, f);
+    for (const f of checkPathHookFacts(bundleFiles)) flag(unknown, f);
     // Spawn contract: S-tier structural sentinels + the generated spawn.env. Non-NOTE flags
     // become unknown deltas (hard-fail); NOTEs (stale-allowlist prune hints) are collected into
     // `notes` and printed by the sync CLI as informational lines — never a delta, never write-blocking.
     for (const f of checkSpawnContractFacts(bundle)) flag(unknown, f);
+    const subagentFps = readSubagentFingerprints();
+    for (const f of checkSubagentPromptFacts(bundleFiles, subagentFps)) flag(unknown, f);
     const spawn = deriveSpawnEnv(bundle, gates);
     const { deltas: spawnDeltas, notes } = partitionSpawnFlags(spawn.flags);
     for (const f of spawnDeltas) flag(unknown, f);
@@ -331,6 +360,118 @@ export function checkWebFetchFacts(bundle: string): string[] {
       flags.push(
         `web_fetch: ${what} is gone from the asar — Cowork's web_fetch mechanism may have changed; re-verify the two-path port (see webfetch-high-fidelity-plan)`,
       );
+  return flags;
+}
+
+/** Path-gate sentinel (1.20186.1 shapes). Module-bounded: anchors run against the CORRECT chunk only
+ *  — the DEFINING chunk (found by the HOST_LOOP_PATH_GATED_BUILTIN_TOOLS export) for set contents, the
+ *  CONSUMING chunk (found by the matcher install site) for the hook body, deny texts, topology,
+ *  ordering, and the canUseTool chain. Each tool-set array is bound to its EXPORT NAME (not "some
+ *  matching array exists"), and the install site must reference the same export property. */
+export function checkPathHookFacts(files: Map<string, string>): string[] {
+  const flags: string[] = [];
+  const miss = (what: string, why: string) => flags.push(`path-hook: ${what} anchor missing — ${why}`);
+  const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+  // --- defining chunk: the one that EXPORTS the name (alias or property form), not merely mentions
+  //     it as a namespace-property consumer (the hostloop chunk references `.HOST_LOOP_…` too) ---
+  const definesExport = /[\w$]+\s+as\s+HOST_LOOP_PATH_GATED_BUILTIN_TOOLS\b|\bHOST_LOOP_PATH_GATED_BUILTIN_TOOLS[:=][\w$]/;
+  const defining = [...files.values()].find((c) => definesExport.test(c));
+  if (!defining) miss("defining chunk", "no chunk exports HOST_LOOP_PATH_GATED_BUILTIN_TOOLS");
+  else {
+    const hop = (exportName: string, arrayRe: RegExp, label: string) => {
+      // Resolve the LOCAL bound to this export: ESM `<local> as ExportName`, OR the object-property /
+      // alias forms `ExportName:<local>` / `ExportName=<local>`. Then require `<local>=<exact array>`.
+      // Binding to the export (not a free array search) is what makes a decoy array fail.
+      const alias =
+        defining.match(new RegExp(`([\\w$]+)\\s+as\\s+${exportName}\\b`)) ?? defining.match(new RegExp(`\\b${exportName}[:=]([\\w$]+)`));
+      const local = alias?.[1];
+      if (!local) {
+        miss(label, `could not resolve the local bound to the ${exportName} export`);
+        return;
+      }
+      if (!new RegExp(`(?<![\\w$])${esc(local)}=${arrayRe.source}`).test(defining))
+        miss(label, `the ${exportName} export's local (${local}) is not bound to its exact array literal`);
+    };
+    hop("HOST_LOOP_PATH_GATED_BUILTIN_TOOLS", /\["Read","Write","Edit","Glob","Grep"\]/, "gated 5-set");
+    hop("HOST_LOOP_EXCLUDED_BUILTIN_TOOLS", /\["Bash","NotebookEdit","REPL","JavaScript","WebFetch"\]/, "excluded set");
+    if (!/REQUEST_COWORK_DIRECTORY/.test(defining) || !/"request_cowork_directory"/.test(defining))
+      miss("REQUEST_COWORK_DIRECTORY", "the export or its literal is gone");
+    if (!/SESSION_TYPE_CHAT/.test(defining) || !/"chat"/.test(defining)) miss("SESSION_TYPE_CHAT", "the export or its literal is gone");
+  }
+
+  // --- consuming chunk: located by the install site (namespace-property connectivity) ---
+  const consuming = [...files.values()].find((c) => /\.HOST_LOOP_PATH_GATED_BUILTIN_TOOLS,"MultiEdit"\]\.join\("\|"\)/.test(c));
+  if (!consuming) {
+    miss("install site", 'no chunk contains [...NS.HOST_LOOP_PATH_GATED_BUILTIN_TOOLS,"MultiEdit"].join("|")');
+    return flags; // everything below is scoped to this chunk
+  }
+  const inHook = (re: RegExp, label: string, why: string) => {
+    if (!re.test(consuming)) miss(label, why);
+  };
+  inHook(/=\["Write","Edit","MultiEdit"\]/, "mutating set", "the Write/Edit/MultiEdit literal moved");
+  inHook(
+    /is a VM path\. In this session the \$\{[^}]+\} tool runs on the host filesystem/,
+    "VM-path deny",
+    "the /sessions guard text changed",
+  );
+  // resolveFilePath's two hard-block strings live in the DEFINING/shared chunk, not the consumer.
+  if (!defining || !/Refusing to resolve non-regular file/.test(defining))
+    miss("resolver hard-block", "the non-regular-file branch is gone from the shared resolver");
+  if (!defining || !/Failed to resolve path/.test(defining))
+    miss("resolver failure text", "the resolve-failure branch is gone from the shared resolver");
+  inHook(/could not be safely resolved/, "resolver caller block", "the active non-ENOENT block branch is gone from the hook"); // caller-side text — stays in the consumer
+  inHook(/is outside this session's scratch directory, so \$\{/, "scratch deny", "the scratch directory deny-variant text changed");
+  inHook(/is outside this session's connected folders, so \$\{/, "connected deny", "the connected folders deny-variant text changed");
+  inHook(/hardlink to the user's original file/, "uploads-task deny", "the hardlink category text changed");
+  inHook(/\(spooled tool results\)/, "spool deny", "the spooled-projects category text changed");
+  inHook(/\(plugin, skill, or knowledge content\)/, "plugin deny", "the plugin category text changed");
+  inHook(/"Path is outside allowed working directories"/, "SDK deny const", "the workingDir constant changed");
+  inHook(/\["file_path","path"\]/, "path key pair", "the file_path/path key array is gone");
+  // First-string extraction over the path keys: `<keys>.map(k=>o[k]).find(v=>typeof v=="string")`.
+  // The keys are bound to a local (real: `pe=["file_path","path"]`, used as `pe.map(…)`) rather than
+  // inlined, so anchor the map/find/typeof-string SHAPE (both proven by the separate path-key anchor).
+  inHook(
+    /\.map\([\w$]+=>[\w$]+\[[\w$]+\]\)\.find\([\w$]+=>typeof [\w$]+=="string"\)/,
+    "first-match extraction",
+    "the .map().find() extraction shape is gone",
+  );
+  inHook(/spooledProjectsReadOnlyRoots/, "spool roots identifier", "spooledProjectsReadOnlyRoots is gone");
+  inHook(/getMidSessionReadOnlyPaths/, "mid-session roots", "getMidSessionReadOnlyPaths is no longer wired");
+  inHook(
+    /\?\[\]:\([\w$]+==null\?void 0:[\w$]+\(\)\)\?\?\[\]/,
+    "readOnly-tail rule",
+    "the ...ie||ct?[]:(ne?.())??[] per-call assembly shape is gone",
+  );
+  inHook(/===[\w$]+\.SESSION_TYPE_CHAT/, "chat-type connectivity", "the sessionType===SESSION_TYPE_CHAT comparison is gone");
+  inHook(/=[\w$]+\?\[\.\.\.[\w$]+,\.\.\.[\w$]+\]:\[/, "root topology ternary", "the chat/task st root-assembly ternary is gone");
+  inHook(
+    /const [\w$]+=[\w$]+\.canUseTool;[\w$]+&&\([\w$]+\.canUseTool=async\(/,
+    "conditional canUseTool install",
+    "the Se&&(e.canUseTool=…) conditional install is gone",
+  );
+  inHook(
+    /canUseTool=async\([^)]*\)=>[\w$]+\([^)]*\)\?\?[\w$]+\([^)]*\)\?\?[\w$]+\(/,
+    "canUseTool ?? chain",
+    "the xe ?? Qt ?? original ordering is gone",
+  );
+
+  // qt-before-containment ORDER + removed-exemption ABSENCE: inside the hook body slice, the category
+  // guard's function must be referenced BEFORE any containment-helper call, and NO containment call may
+  // precede it (a blanket early-allow shape).
+  const qtDef = consuming.match(/function ([\w$]+)\([\w$]+\)\{[\s\S]{0,2000}?hardlink to the user's original file/);
+  const installAt = consuming.search(/\.HOST_LOOP_PATH_GATED_BUILTIN_TOOLS,"MultiEdit"\]\.join\("\|"\)/);
+  if (!qtDef) miss("qt definition", "no function contains the hardlink category text");
+  else if (installAt >= 0) {
+    const hookSlice = consuming.slice(installAt, installAt + 6000);
+    const qtCallAt = hookSlice.indexOf(`${qtDef[1]}(`);
+    if (qtCallAt < 0) miss("qt call in hook", "the category guard is not invoked from the hook body");
+    else {
+      const containAt = hookSlice.search(/\.isPathContainedInFolders\(|isContained\(/);
+      if (containAt >= 0 && containAt < qtCallAt)
+        miss("qt-before-containment order", "a containment call precedes the category guard — an early-allow/blanket-exemption shape");
+    }
+  }
   return flags;
 }
 
@@ -417,6 +558,19 @@ function readPromptFingerprintsFile(): PromptFingerprintsFile | null {
   }
 }
 
+/** subagentAppendVersions map from cowork-system-prompt-fingerprints.json; null = unreadable/absent
+ *  (checkSubagentPromptFacts turns that into a hard-fail flag — never a silent skip). */
+function readSubagentFingerprints(): { versions: Record<string, { hl: string; vm: string }> } | null {
+  try {
+    const raw = readFileSync(join(BASELINES_DIR, "prompts", "cowork-system-prompt-fingerprints.json"), "utf8");
+    const parsed = JSON.parse(raw) as { subagentAppendVersions?: Record<string, { hl: string; vm: string }> };
+    if (!parsed?.subagentAppendVersions) return null;
+    return { versions: parsed.subagentAppendVersions };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * H1 (sha drift -> BLOCK) + H2 (placeholder/section inventory diff -> informational) + H3 (unmodeled
  * placeholder -> BLOCK). Pure over its inputs so it's token-free unit-testable without a real asar.
@@ -478,6 +632,178 @@ export function checkPromptDrift(
   }
 
   return { unknownDeltas, notes };
+}
+
+// ==========================================================================================
+// Sub-agent append sentinel (hl/vm branches). Complements S16 (which pins only that a
+// generator CALL exists) with: the SP_SECTION_KEYS pair, the hostLoopMode branch ternary, the two
+// branch templates sliced from the ONE module that defines the generator, a normalized two-branch
+// content fingerprint (BOTH mandatory), the substitution-map keys AND VALUES (a host/VM cwd swap AND
+// a same-side root/mount binding mismatch fail), the resolveSection gate shape, and the delivery-call
+// argument list. All anchors MANDATORY. Scope note: this proves the PRODUCT still has the modeled
+// shape; harness-side delivery (per-tier selection, chat lane, {{vmCwd}} rendering) is guarded by
+// vitest regression tests, not by sync.
+// ==========================================================================================
+
+/** Return the decoded body of the backtick template that ENCLOSES `at`, scanning a single module
+ *  string. Backward: the opening delimiter is the nearest UNESCAPED backtick before `at` (escaped
+ *  backticks `\`` are literal code-span backticks inside the body, not delimiters). Forward: escaped
+ *  backticks are DECODED to a bare backtick (so the returned slice reads like the rendered template
+ *  and the value-proof regexes can match), every other escape is preserved verbatim (keeps the
+ *  fingerprint stable), and the first UNESCAPED backtick terminates the body. Operates per-module
+ *  (never the concatenated bundle) so an unrelated template can't be captured. */
+function templateBodyAt(module: string, at: number): string | null {
+  if (at < 0) return null;
+  let open = -1;
+  for (let i = at; i >= 0; i--) {
+    if (module[i] === "`" && module[i - 1] !== "\\") {
+      open = i;
+      break;
+    }
+  }
+  if (open < 0) return null;
+  let out = "";
+  for (let i = open + 1; i < module.length; i++) {
+    const c = module[i];
+    if (c === "\\") {
+      const next = module[i + 1] ?? "";
+      if (next === "`") {
+        // Escaped backtick = a literal code-span backtick in the body, not the terminator. Decode it.
+        out += "`";
+        i++;
+        continue;
+      }
+      // Any other escape (\n, \\, …) is preserved as-is so the normalized fingerprint stays stable.
+      out += c + next;
+      i++;
+      continue;
+    }
+    if (c === "`") return out; // a truly UNescaped backtick is the template's real closing delimiter.
+    out += c;
+  }
+  return null;
+}
+
+/** Extract the two raw branch template bodies from the SINGLE module that defines the generator.
+ *  Module-scoped, not whole-bundle: the defining module is the one that references
+ *  buildSubagentEnvironmentPrompt AND contains BOTH short discriminator fragments (hl: "on the user's
+ *  machine"; vm: "exist only in the sandbox" — both verbatim production substrings). The vm
+ *  discriminator is unique; the hl fragment also occurs in unrelated prose, so the hl branch is
+ *  anchored to the occurrence immediately preceding the vm branch (the hostLoopMode ternary's true
+ *  arm). Each body is sliced by backtick scanning from its discriminator — no function-body brace
+ *  matching, which the old draft got wrong (it grabbed the destructured-param `{` of `zo({…})`). */
+export function extractSubagentBranchSlices(files: Map<string, string>): { module: string; hl: string; vm: string } | null {
+  const module = [...files.values()].find(
+    (c) => c.includes("buildSubagentEnvironmentPrompt") && c.includes("on the user's machine") && c.includes("exist only in the sandbox"),
+  );
+  if (!module) return null;
+  const vmAt = module.indexOf("exist only in the sandbox");
+  const hlAt = module.lastIndexOf("on the user's machine", vmAt);
+  if (vmAt < 0 || hlAt < 0) return null;
+  const hl = templateBodyAt(module, hlAt);
+  const vm = templateBodyAt(module, vmAt);
+  if (!hl || !vm) return null;
+  return { module, hl, vm };
+}
+
+/** sha16 of a branch text after minifier-identifier normalization: every ${...} interpolation is
+ *  replaced by the canonical token `${}` so a minifier rename never moves the hash, while any
+ *  body-text edit does. */
+export function subagentBranchFingerprint(branchText: string): string {
+  const normalized = branchText.replace(/\$\{[^{}]*\}/g, "${}");
+  return createHash("sha256").update(Buffer.from(normalized, "utf8")).digest("hex").slice(0, 16);
+}
+
+export function checkSubagentPromptFacts(
+  files: Map<string, string>,
+  committed: { versions: Record<string, { hl: string; vm: string }> } | null,
+): string[] {
+  const flags: string[] = [];
+  const bundle = [...files.values()].join(""); // literal anchors below span 3 modules (SP_SECTION_KEYS, generator, delivery) — check them against the join; branch-TEXT slicing is module-scoped
+  const miss = (what: string, why: string) => flags.push(`subagent-append: ${what} anchor missing — ${why}`);
+
+  // (1) key-pair literal (verbatim in all backed-up asars).
+  if (!/subagentEnvHostLoop:"subagent_env_hl",subagentEnvVm:"subagent_env_vm"/.test(bundle))
+    miss("SP_SECTION_KEYS pair", "the subagent_env_hl/subagent_env_vm key pair moved or was renamed");
+  // (2) branch ternary — hl-first on the hostLoopMode boolean (receiver admits bare-local and NS. forms).
+  if (!/\?[\w$.]*\.?subagentEnvHostLoop:[\w$.]*\.?subagentEnvVm/.test(bundle))
+    miss("branch ternary", "the hostLoopMode ? subagentEnvHostLoop : subagentEnvVm selection is gone (or inverted)");
+  // (3) module-scoped branch texts + MANDATORY two-branch fingerprints + VALUE proofs.
+  const slices = extractSubagentBranchSlices(files);
+  if (!slices) {
+    miss("generator branch texts", "the module defining buildSubagentEnvironmentPrompt with both branch discriminators could not be found");
+  } else {
+    // Substitution-VALUE proofs — a host/VM cwd swap must fail. Prove the SAME binding is used for
+    // root AND mount on EACH side:
+    //   hl: working directory `${host??vmRoot}`; mounts `${vmRoot}/mnt/` — mount binding MUST equal the
+    //       ?? FALLBACK binding (the vm root), never the host binding.
+    //   vm: rooted at `${vmRoot}`; mounts `${vmRoot}/mnt/` — root binding MUST equal the mount binding.
+    const hlWd = slices.hl.match(/working directory `\$\{([\w$]+)\?\?([\w$]+)\}`/);
+    const hlMnt = slices.hl.match(/mounted under `?\$\{([\w$]+)\}\/mnt\//);
+    if (!hlWd) miss("hl working-directory interpolation", "expected the `${hostCwd??vmRoot}` shape");
+    if (!hlMnt) miss("hl mounts interpolation", "expected `${vmRoot}/mnt/`");
+    if (hlWd && hlMnt && hlWd[2] !== hlMnt[1])
+      miss(
+        "hl substitution values",
+        `hl mounts bind ${hlMnt[1]} but the working-directory ?? fallback (vm root) is ${hlWd[2]} — host/VM swap?`,
+      );
+    const vmRoot = slices.vm.match(/rooted at `?\$\{([\w$]+)\}`?/);
+    const vmMnt = slices.vm.match(/mounted under `?\$\{([\w$]+)\}\/mnt\//);
+    if (!vmRoot) miss("vm root interpolation", "expected `rooted at ${vmRoot}`");
+    if (!vmMnt) miss("vm mounts interpolation", "expected `${vmRoot}/mnt/`");
+    if (vmRoot && vmMnt && vmRoot[1] !== vmMnt[1])
+      miss(
+        "vm substitution values",
+        `vm root binds ${vmRoot[1]} but mounts bind ${vmMnt[1]} — the two must be the same session-root binding`,
+      );
+    if (!/mcp__\$\{[^}]+\}__\$\{[^}]+\}/.test(slices.hl))
+      miss("hl workspace-bash interpolation", "expected mcp__${…WORKSPACE_MCP_SERVER}__${…WORKSPACE_BASH}");
+    // BOTH fingerprints MANDATORY — no per-branch `if (want.x)` skip (a missing committed value must
+    // not silently disable a branch). A partial committed entry is itself a hard-fail.
+    const hlFp = subagentBranchFingerprint(slices.hl);
+    const vmFp = subagentBranchFingerprint(slices.vm);
+    const versions = committed ? Object.keys(committed.versions) : [];
+    if (!committed || versions.length === 0) {
+      flags.push(
+        "subagent-append: no committed subagentAppendVersions fingerprints — cannot verify branch-text drift (add them to baselines/prompts/cowork-system-prompt-fingerprints.json)",
+      );
+    } else {
+      let newest = versions[0];
+      for (const v of versions) if (cmpVersionStrings(v, newest) > 0) newest = v;
+      const want = committed.versions[newest];
+      if (typeof want.hl !== "string" || typeof want.vm !== "string")
+        flags.push(
+          `subagent-append: committed entry ${newest} is missing an hl or vm fingerprint — both are mandatory (a partial entry silently disables a branch)`,
+        );
+      if (typeof want.hl === "string" && want.hl !== hlFp)
+        flags.push(
+          `subagent-append: hl branch text fingerprint drifted vs ${newest} (${want.hl} -> ${hlFp}) — re-derive, update the paraphrase asset if semantics moved, then add a new version entry`,
+        );
+      if (typeof want.vm === "string" && want.vm !== vmFp)
+        flags.push(
+          `subagent-append: vm branch text fingerprint drifted vs ${newest} (${want.vm} -> ${vmFp}) — re-derive, update the paraphrase asset if semantics moved, then add a new version entry`,
+        );
+    }
+  }
+  // (4) resolveSection gate shape: if(!<eval>("124685897"))return <fallback>.
+  if (!/if\(!\s*[\w$.]+\("124685897"\)\)return [\w$]+/.test(bundle))
+    miss("resolveSection gate", 'the if(!gate("124685897"))return fallback shape is gone');
+  // (5) substitution-map keys at the generator call. workspaceBash binds either a bare identifier or the
+  //     inline mcp__${…}__${…} template literal that the release actually ships.
+  if (!/\{vmCwd:[\w$]+,hostCwd:[\w$]+\?\?[\w$]+,workspaceBash:(?:[\w$]+|`mcp__\$\{[^}]+\}__\$\{[^}]+\}`)\}/.test(bundle))
+    miss("substitution map", "the {vmCwd, hostCwd: hostCwd??vmRoot, workspaceBash} map keys/values moved");
+  // (6) delivery-call argument-list connectivity at the appendSubagentSystemPrompt: site (S16 proves
+  //     only that SOME call exists).
+  if (
+    !/appendSubagentSystemPrompt:(?:[\w$]+\.)?[\w$]+\(\{vmProcessName[\s\S]{0,80}hostLoopMode[\s\S]{0,80}hostCwd[\s\S]{0,80}spSectionPrompts/.test(
+      bundle,
+    )
+  )
+    miss(
+      "delivery argument list",
+      "the {vmProcessName, hostLoopMode, hostCwd, spSectionPrompts} argument list at the delivery site changed",
+    );
+  return flags;
 }
 
 // ==========================================================================================

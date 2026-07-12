@@ -54,6 +54,7 @@
             "subtype": { "const": "initialize" },
             "appendSubagentSystemPrompt": { "type": "string" },
             "sdkMcpServers": { "type": "array", "items": { "type": "string" } },
+            "toolAliases": { "type": "object", "additionalProperties": { "type": "string" } },
             "hooks": {
               "type": "object",
               "properties": {

@@ -75,7 +75,7 @@ reproduce. See [docs/scenario.md](./scenario.md#how-an-assertion-edit-reaches-ci
     { "path": "uploads/report.pdf", "bytes": 51200, "sha256": "…", "truncated": true, "truncationReason": "input" }, // uploaded file under an inputRoots root → body-less, hash-only (see below), regardless of size
     { "path": "outputs/link-to-elsewhere", "bytes": 0, "sha256": "", "linkKind": "symlink" } // v10: symlink/hardlink — path+kind only, never dereferenced, so a link stray is still visible to no_unexpected_files
   ],
-  "fingerprint": { "baseline": "1.15962.1", "skillHash": "…", "mode": "git", "contentSig": "…", "fileSigs": [["skills/x/SKILL.md", "…"]], "skillSources": ["…"] }, // staleness tripwire (v5: fileSigs only; v6: mode + git default; v7: NUL-delimited hash entries; v8: folds fixed-length content shas + type-prefixed/NUL-framed entries)
+  "fingerprint": { "baseline": "1.15962.1", "skillHash": "…", "mode": "git", "contentSig": "…", "fileSigs": [["skills/x/SKILL.md", "…"]], "skillSources": ["…"], "promptAssetsHash": "…" }, // staleness tripwire (v5: fileSigs only; v6: mode + git default; v7: NUL-delimited hash entries; v8: folds fixed-length content shas + type-prefixed/NUL-framed entries; promptAssetsHash: sha16 over the baseline's committed prompt-asset files, keyed independently of `baseline` (appVersion) — see the prompt-assets staleness class below)
   "sessionFingerprint": "…", // v9+: hash of the session's content-relevant SHAPE (folders/plugins/skills/mcp/egress) — verify-cassettes-only, never the default replay verdict
   "folderPrefixMap": [{ "from": "/Users/me/myproject", "mount": "myproject" }], // v9+: record-time connected-folder host-path → mount-name map; computer_links_resolve uses THIS on replay
   "authoring": { "nonDeterministic": true, "channel": "decider-dir" } // present ONLY when a live decider answered ≥1 gate (see §Answering gates during recording); re-record may drift, replay is still deterministic
@@ -237,6 +237,8 @@ the rules and CI-placement rationale (why each category behaves this way), see
 | `tool_result_not_contains` | literal absent from all tool results |
 | `subagent_tool_used` | a sub-agent used the tool |
 | `subagent_tool_absent` | no sub-agent used the tool |
+| `no_vm_path_file_op` | **`fidelity: hostloop` only** — no gated file tool attempted a `/sessions`(-prefixed) path (`RunResult.fileToolAttempts`) — content-class, re-derived from the frozen `tool_use` stream; any other tier FAILS "cannot verify" (`/sessions/...` is valid there) |
+| `subagent_file_write` | a sub-agent-origin write attempt (`path` exact or `path_suffix`) has a paired non-error tool_result (`RunResult.fileToolAttempts` + `RunResult.toolResults`) — content-class, tier-agnostic |
 | `subagent_dispatched` | a sub-agent matching the regex was dispatched |
 | `subagent_declared_but_unused` | sub-agent declared the tool but never used **that** tool (even if it used others) |
 | `subagent_output_contains` | a dispatched sub-agent's own output contains the substring — `match` (optional regex over `agentType`/`description`) narrows to specific dispatch(es); omitted, checks whether ANY dispatch's output contains it |
@@ -265,6 +267,9 @@ the rules and CI-placement rationale (why each category behaves this way), see
 | `gate_answer_count_min` | at least N AskUserQuestion gates fired AND were delivered non-error — the presence companion to `gate_answers_delivered`'s vacuous-pass |
 | `hook_blocked` | a PreToolUse hook blocked a tool whose name matches the regex (`RunResult.hookEvents`) — replay: needs `controlOut` (a custom hook's decision lives only there) |
 | `no_hook_blocked` | no tool was hook-blocked during the run — replay: needs `controlOut`. **Only `true` is valid** |
+| `vm_path_denied` | **`fidelity: hostloop` only** — a path denial (`RunResult.pathDenials`, any source) targeted a `/sessions` VM path — replay: needs `controlOut`; any other tier FAILS "cannot verify" |
+| `path_denied` | **`fidelity: hostloop` only** — a path denial matched all given matchers (`tool`/`path_matches`/`source`/`agent_scope`) — replay: needs `controlOut`; any other tier FAILS "cannot verify" |
+| `no_path_denied` | **`fidelity: hostloop` only** — no path denial was recorded at all — replay: needs `controlOut`. **Only `true` is valid**; any other tier FAILS "cannot verify" |
 | `result` | run ended with `success` or `error` |
 | `no_scratchpad_leak` | every file presented via `present_files` that was in the scratchpad was successfully promoted to `mnt/outputs` (none left behind) — vacuous pass if nothing was presented; content-class: both the tool_use and its own tool_result live in the ordinary events stream, so `RunResult.presentedFiles` re-derives identically on replay; evidence-unavailable only when `presentedFiles` is absent (an older run predating the feature); **container tier only** — `present_files` is not served on hostloop/microvm |
 | `present_files_called` | at least one file was delivered via `present_files` (`RunResult.presentedFiles` is non-empty) — the presence companion to `no_scratchpad_leak`; content-class (re-derives identically on replay); **container tier only** |
@@ -274,12 +279,13 @@ the rules and CI-placement rationale (why each category behaves this way), see
 | `allow_stall` | verdict modifier — kept on replay → no-op pass (suppresses the `stalled` default-fail; the stall is re-derived on the replay re-drive) |
 
 **`question_asked`, `questions_count_max`, `gate_answers_delivered`, `gate_answer_count_min`, `hook_blocked`,
-`no_hook_blocked` require `controlOut`** (full-fidelity replay). On an old cassette without `controlOut`
-these keys are excluded from evaluation — not vacuously passed — and a loud warning fires (see §Backward
-compatibility). The hook keys need `controlOut` for a different reason than the question keys: a custom
-hook's block/allow decision is an opaque async reply recorded only in `control-out.jsonl`, not in the
-`events` stream — reconstructing from the stream alone would show only the built-in Task hook's view and
-could vacuously pass `no_hook_blocked` even if a custom hook genuinely blocked.
+`no_hook_blocked`, `vm_path_denied`, `path_denied`, `no_path_denied` require `controlOut`** (full-fidelity
+replay). On an old cassette without `controlOut` these keys are excluded from evaluation — not vacuously
+passed — and a loud warning fires (see §Backward compatibility). The hook and path-denial keys need
+`controlOut` for a different reason than the question keys: a custom hook's block/allow decision (and the
+`can_use_tool` source of a path denial) is an opaque async reply recorded only in `control-out.jsonl`, not in
+the `events` stream — reconstructing from the stream alone would show only the built-in Task hook's view and
+could vacuously pass `no_hook_blocked`/`no_path_denied` even if a custom hook or gated ask genuinely blocked.
 
 `file_exists`, `user_visible_artifact`, `artifact_json`, `computer_links_resolve`, `computer_links_resolve_if_present`,
 `no_unexpected_files`, and `input_unmodified` are **not** in the table above — see the next subsection; they're replay-checkable only
@@ -498,6 +504,18 @@ possible.
 Both classes exist only for `fidelity: cowork` scenarios, whose tier is baseline-resolved rather than
 authored — see [fidelity-and-answers.md](../.claude/skills/cowork-harness/references/fidelity-and-answers.md)
 for the `cowork` → `hostloop`/`container` resolution.
+
+- **`the baseline's committed prompt assets changed since this cassette was recorded (same appVersion) …`**
+  (class `prompt-assets`) — prompt identity was previously keyed on `fingerprint.baseline` (appVersion)
+  alone, so editing a committed prompt asset (`spawn.promptTemplate` / `subagentAppend` /
+  `subagentAppendHostLoop`) under the SAME appVersion silently replayed old-prompt behavior. Non-failing
+  by default (warns), `--strict` fails, `verify-cassettes` treats it like any other finding — re-record.
+- **`cassette recorded a prompt-asset fingerprint but the live baseline's prompt assets can't be hashed …`**
+  (class `unverifiable-prompt-assets`) — a recorded `fingerprint.promptAssetsHash` exists but the live
+  baseline's prompt-asset pointer moved or the asset file is missing, so the drift check can't run at all
+  (can't verify ⇒ not green on `verify-cassettes`, warns on the default replay gate). A cassette recorded
+  **before** `promptAssetsHash` existed carries no field at all — that's a non-failing informational note
+  ("cassette predates prompt-asset fingerprinting"), not a finding.
 
 **The skill-hash boundary (v6+):** by default the hash covers the **git-tracked** files of each skill/plugin
 source dir (a dir not in a git repo falls back to a raw filesystem walk). **OS-junk** (`.DS_Store` /

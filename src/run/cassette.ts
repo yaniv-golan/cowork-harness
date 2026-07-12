@@ -21,25 +21,37 @@ import {
   type Assertion,
   type Fingerprint,
   type StalenessFinding,
+  type PlatformBaseline,
   Assertion as AssertionSchema,
   VERDICT_MODIFIER_KEYS,
 } from "../types.js";
 import { executeScenario, parseScenarioFile, collectArtifactPaths, parseSessionFile, slugForPath } from "./execute.js";
 import { assembleRunResult } from "./assemble-run-result.js";
-import { loadSession, resolveSessionPaths } from "../session.js";
-import { loadBaseline } from "../baseline.js";
+import { loadSession, resolveSessionPaths, agentEnvOverrides } from "../session.js";
+import { loadBaseline, BASELINES_DIR } from "../baseline.js";
+import { stripComments } from "../prompt.js";
 import { decideLoopFromBaseline } from "../loop-decision.js";
-import { Run, infraErrorsForResult, evidenceErrorsForResult, type RunHooks, type RunRecord } from "./run.js";
+import {
+  Run,
+  infraErrorsForResult,
+  evidenceErrorsForResult,
+  FILE_ATTEMPT_TOOLS,
+  deniedPathFrom,
+  type RunHooks,
+  type RunRecord,
+} from "./run.js";
 import {
   parseMessage,
   serializeDecision,
   deserializeDecision,
+  toDecisionRequest,
   canon,
   hookEventFrom,
   type AgentSession,
   type AgentEvent,
   type DecisionRequest,
 } from "../agent/session.js";
+import { HOSTLOOP_PATH_GATE_ID } from "../runtime/hostloop.js";
 import { readTimeline, type TimelineHeader, type TimelineEvent } from "../agent/timeline.js";
 import { foldToolDurations, foldSkillActivity, attributeSubagentSkills } from "./timeline-fold.js";
 import { ABSTAIN, UnansweredError, type Decider, type OnUnanswered } from "../decide/decider.js";
@@ -433,14 +445,41 @@ function skillSourceDirs(sessionPath: string, cassetteDir?: string): { dirs: str
   return { dirs, baseDir, hashIgnore: cfg.staleness.hash_ignore };
 }
 
+// Takes the RESOLVED baseline OBJECT (never re-resolves by appVersion — that could hash a different
+// committed baseline than a supported absolute custom baseline). Undefined = no prompt pointers, or a
+// dangling pointer (evidence-unavailable, never a fabricated hash). Hashes the COMMENT-STRIPPED
+// template (what renderPrompts actually renders — prompt.ts strips HTML comments before
+// substitution), so a comment-only edit doesn't produce false staleness; {{tokens}} are left intact
+// (they're deterministic pre-substitution).
+type PromptAssetKey = "promptTemplate" | "subagentAppend" | "subagentAppendHostLoop";
+export function hashBaselinePromptAssets(baseline: PlatformBaseline): string | undefined {
+  const spawn = (baseline.spawn ?? {}) as Record<string, unknown>;
+  const entries = (["promptTemplate", "subagentAppend", "subagentAppendHostLoop"] as const satisfies readonly PromptAssetKey[])
+    .map((k) => [k, spawn[k]] as const)
+    .filter((e): e is readonly [PromptAssetKey, string] => typeof e[1] === "string");
+  if (entries.length === 0) return undefined;
+  const h = createHash("sha256");
+  for (const [key, rel] of entries) {
+    const p = join(BASELINES_DIR, rel);
+    if (!existsSync(p)) return undefined; // a dangling pointer already fails test/prompt-assets.test.ts
+    h.update(key)
+      .update("\0")
+      .update(stripComments(readFileSync(p, "utf8")).trim())
+      .update("\0");
+  }
+  return h.digest("hex").slice(0, 16);
+}
+
 export function buildFingerprint(
   sessionPath: string,
   baselineAppVersion: string,
   cassetteDir?: string,
   scopeSkills?: string[],
+  baseline?: PlatformBaseline,
 ): Fingerprint {
+  const promptAssetsHash = baseline ? hashBaselinePromptAssets(baseline) : undefined;
   const { dirs, baseDir, hashIgnore } = skillSourceDirs(sessionPath, cassetteDir);
-  if (dirs.length === 0) return { baseline: baselineAppVersion };
+  if (dirs.length === 0) return { baseline: baselineAppVersion, ...(promptAssetsHash ? { promptAssetsHash } : {}) };
   // hashSkillDirs excludes recorded cassettes (*.cassette.json) + VCS/cache dirs so a committed cassette
   // and unrelated VCS noise don't self-invalidate the fingerprint they were recorded under. When
   // scopeSkills is set, the hash is scoped to those skills' dirs + the plugin's shared roots (fail-closed);
@@ -455,13 +494,18 @@ export function buildFingerprint(
   // skillHash. checkStaleness already treats a missing live.skillHash as a gate failure. Errors are already
   // written to stderr inside hashSkillDirs/hashDir.
   if (hashResult.readErrors && hashResult.readErrors.length > 0) {
-    return { baseline: baselineAppVersion, skillSources: dirs.sort().map((d) => relative(baseDir, d)) };
+    return {
+      baseline: baselineAppVersion,
+      skillSources: dirs.sort().map((d) => relative(baseDir, d)),
+      ...(promptAssetsHash ? { promptAssetsHash } : {}),
+    };
   }
   // Store skillSources RELATIVE to the session-file dir — diagnostics only (the replay recompute re-derives
   // the dirs from the session), so a relative path is enough and never leaks an absolute `/Users/...` path.
   const fp: Fingerprint = {
     baseline: baselineAppVersion,
     skillHash: hashResult.hash,
+    ...(promptAssetsHash ? { promptAssetsHash } : {}),
     contentSig: computeContentSig(dirs, scopeSkills, hashIgnore), // v6: unified onto the skillHash walk (same set)
     skillSources: dirs.sort().map((d) => relative(baseDir, d)),
   };
@@ -541,6 +585,7 @@ export function buildSessionFingerprint(sessionPath: string, cassetteDir?: strin
   } catch {
     return undefined;
   }
+  const agentEnv = agentEnvOverrides(cfg.agent_env);
   const shape = {
     folders: [...cfg.folders].map((f) => ({ from: f.from, mode: f.mode })).sort((a, b) => a.from.localeCompare(b.from)),
     plugins: {
@@ -555,6 +600,11 @@ export function buildSessionFingerprint(sessionPath: string, cassetteDir?: strin
     mcp: { config: cfg.mcp.config, enabled: [...cfg.mcp.enabled].sort() },
     egress: { extra_allow: [...cfg.egress.extra_allow].sort(), unrestricted: cfg.egress.unrestricted },
     web_fetch: { approved_domains: [...cfg.web_fetch.approved_domains].sort() },
+    // Only when NON-DEFAULT, so every existing session's fingerprint stays byte-stable across this
+    // field's introduction — a knob-less session's hash doesn't move. A knob change (which silently
+    // affects only hostloop/protocol replay behavior — see agent_env's doc comment) moves the hash so
+    // `verify-cassettes` surfaces the drift instead of a cassette quietly replaying stale env behavior.
+    ...(Object.keys(agentEnv).length ? { agent_env: agentEnv } : {}),
   };
   return createHash("sha256")
     .update(Buffer.from(JSON.stringify(shape), "utf8"))
@@ -831,6 +881,34 @@ function computeTierStaleness(cassette: Cassette): { findings: StalenessFinding[
   return { findings: [], notes: [] };
 }
 
+/** Prompt-asset drift for one fingerprint vs the LIVE baseline OBJECT (never a re-resolve of
+ *  fp.baseline). Gated on appVersion match — a version bump already fires the `baseline` finding, so
+ *  comparing across versions would double-flag. Returns a finding, a legacy note, or null. */
+export function promptAssetStaleness(
+  fp: Fingerprint,
+  liveBaselineObj: PlatformBaseline | undefined,
+): StalenessFinding | { note: string } | null {
+  if (fp.promptAssetsHash === undefined)
+    return {
+      note: "cassette predates prompt-asset fingerprinting — a prompt-asset edit since record would be invisible; re-record to adopt the guard",
+    };
+  if (liveBaselineObj === undefined || liveBaselineObj.appVersion !== fp.baseline) return null; // baseline finding handles the version mismatch
+  const liveAssets = hashBaselinePromptAssets(liveBaselineObj);
+  if (liveAssets === undefined)
+    return {
+      class: "unverifiable-prompt-assets",
+      message:
+        "cassette recorded a prompt-asset fingerprint but the live baseline's prompt assets can't be hashed (a pointer moved or the asset is absent) — can't verify prompt drift ⇒ not green",
+    };
+  if (liveAssets !== fp.promptAssetsHash)
+    return {
+      class: "prompt-assets",
+      message:
+        "the baseline's committed prompt assets changed since this cassette was recorded (same appVersion) — the recorded model saw a different rendered prompt; re-record",
+    };
+  return null;
+}
+
 /** The SINGLE staleness diagnosis (unifies what used to be two divergent copies: `checkStaleness` and the
  *  inline block in `replayCassette`). Recompute the fingerprint and report drift as class-tagged findings;
  *  each CALLER applies its own gate-vs-warn policy:
@@ -851,12 +929,13 @@ export function computeStaleness(cassette: Cassette, cassetteDir: string | undef
   const notes: string[] = [...tier.notes];
   const fp = cassette.fingerprint;
   if (!fp) return { findings, notes };
-  let liveBaseline: string | undefined;
+  let liveBaselineObj: PlatformBaseline | undefined;
   try {
-    liveBaseline = loadBaseline("latest").appVersion;
+    liveBaselineObj = loadBaseline("latest");
   } catch {
     /* baseline not loadable */
   }
+  const liveBaseline = liveBaselineObj?.appVersion;
   // The cassette carries a baseline-of-record but we can't load the current one to compare. Surfaced as
   // `unverifiable-baseline` (env/platform, not skill drift): a non-failing warning on the default replay gate,
   // but a hard fail for `verify-cassettes`/the work-list via the class-blind string adapter (can't verify ⇒
@@ -869,6 +948,11 @@ export function computeStaleness(cassette: Cassette, cassetteDir: string | undef
     });
   else if (liveBaseline !== fp.baseline)
     findings.push({ class: "baseline", message: `baseline moved ${fp.baseline} → ${liveBaseline} since record — re-record` });
+  const pa = promptAssetStaleness(fp, liveBaselineObj);
+  if (pa) {
+    if ("note" in pa) notes.push(pa.note);
+    else findings.push(pa);
+  }
   if (fp.skillHash) {
     const live = buildFingerprint(cassette.scenario.session, fp.baseline, cassetteDir, cassette.scenario.skills);
     const recMode = fp.mode ?? "raw";
@@ -995,6 +1079,8 @@ function minimalRec(): RunRecord {
     contextEvents: [],
     mcpErrors: [],
     hookEvents: [],
+    fileToolAttempts: [],
+    pathDenials: [],
     presentedFiles: [],
     webSearches: [],
     infraErrors: [],
@@ -2407,7 +2493,10 @@ async function recordScenarioObject(
     // persist the authored scenario source file RELATIVE to the cassette dir (relocatable, no
     // absolute host path) so `--rerecord-stale` re-records from the edited YAML even when name ≠ filename.
     scenarioSource: opts.scenarioSourceFile ? relative(dirname(cassettePath), opts.scenarioSourceFile) : undefined,
-    fingerprint: buildFingerprint(scenario.session, result.baseline, undefined, scenario.skills),
+    // Persist the RUN-TIME fingerprint (computed by execute.ts WITH the resolved baseline object, so it
+    // carries promptAssetsHash) rather than recomputing here without the object — a recompute would
+    // silently drop promptAssetsHash. The `??` fallback only fires for a result that never carried one.
+    fingerprint: result.fingerprint ?? buildFingerprint(scenario.session, result.baseline, undefined, scenario.skills),
     authoring,
     timeline: timeline?.events,
     timelineHeader: timeline?.header,
@@ -2514,6 +2603,8 @@ function replayErrorResult(file: string): RunResult {
     contextEvents: undefined, // no rec to read from on this early-bail lane
     mcpErrors: undefined, // live-only — this early-bail lane never drives a session
     hookEvents: undefined, // no rec to read from on this early-bail lane
+    fileToolAttempts: undefined, // no rec to read from on this early-bail lane
+    pathDenials: undefined, // no rec to read from on this early-bail lane
     presentedFiles: undefined, // no rec to read from on this early-bail lane
     preRunPaths: undefined,
     preRunLinkAware: undefined,
@@ -3673,6 +3764,11 @@ export const ALWAYS_CONTENT_KEYS: (keyof Assertion)[] = [
   // the other re-derived signals above (skill_triggered, redundantToolCalls, …).
   "no_scratchpad_leak",
   "present_files_called",
+  // content-class, NOT controlOut-gated: fileToolAttempts re-derives from frozen tool_use blocks (the
+  // gated-file-tool attempt, not the gate decision) — same re-derivation reasoning as fileToolAttempts
+  // itself above (see the comment beside `fileToolAttempts: rec.fileToolAttempts` in replayCassette).
+  "no_vm_path_file_op",
+  "subagent_file_write",
   // Verdict modifiers — NOT filesystem/egress assertions. Keep all of them on replay (each evaluates to a
   // no-op pass via assert.ts) so a standalone modifier neither inflates the "filesystem/egress skipped"
   // count nor emits a misleading warning, AND so the replay path actually exercises their assert.ts noop
@@ -3690,6 +3786,11 @@ export const QUESTION_GATE_KEYS: (keyof Assertion)[] = [
   "gate_answer_count_min",
   "hook_blocked",
   "no_hook_blocked",
+  // Decision-level pathDenials — reconstructed from cassette.events + controlOut (the can_use_tool
+  // source is reconstructible ONLY from controlOut), same evidence class as hook_blocked above.
+  "vm_path_denied",
+  "path_denied",
+  "no_path_denied",
 ];
 
 /** Assertion keys evaluated on replay only when the cassette carries an `artifacts` manifest.
@@ -3817,8 +3918,92 @@ export async function replayCassette(
       if (m?.type !== "control_request" || m?.request?.subtype !== "hook_callback") continue;
       const reqId = typeof m.request_id === "string" ? m.request_id : undefined;
       const reply = reqId ? session.controlOutIndex.get(reqId) : undefined;
-      replayHookEvents.push(hookEventFrom(m.request.callback_id, reply, m.request.input));
+      replayHookEvents.push(
+        hookEventFrom(
+          m.request.callback_id,
+          reply,
+          m.request.input,
+          typeof m.request.tool_use_id === "string" ? m.request.tool_use_id : undefined,
+        ),
+      );
     }
+  }
+
+  // Reconstruct DECISION-level pathDenials from the SAME frozen stream + control-out pairing as
+  // replayHookEvents above, plus the re-driven `rec` for the one source that's pure stream content.
+  //  - producer (1) pretooluse: same hook_callback pairing as replayHookEvents, filtered to the path
+  //    gate's own callback id (parseMessage never turns a hook_callback into a `decision` AgentEvent —
+  //    see replayHookEvents' own doc comment — so this source is UNREACHABLE from the re-driven `rec`
+  //    and must be reconstructed here, exactly like hookEvents).
+  //  - producer (2) can_use_tool: pair the frozen `can_use_tool` request with its controlOut response —
+  //    the pairing extension this channel needed (previously the pairing here covered ONLY hook_callback
+  //    requests). Reconstructed directly (not read off `rec.pathDenials`) so it's never double-counted
+  //    against the merge below.
+  //  - producer (3) permission_denied: pure stream content (the tool_use + system_event both live in the
+  //    ordinary events stream, not controlOut) — the re-drive reproduces it identically via run.ts's own
+  //    correlation filter, so it's merged straight from `rec.pathDenials`.
+  // Only when controlOut is present: without it, source (2) never even reaches the re-drive (a
+  // can_use_tool `decision` event is skipped by CassetteAgentSession.start() in legacy mode), and source
+  // (1)'s custom-hook decision doesn't exist anywhere else — so the whole channel is evidence-unavailable.
+  let replayPathDenials: RunResult["pathDenials"];
+  if (session.hasControlOut) {
+    replayPathDenials = [];
+    for (const line of cassette.events) {
+      let m: any;
+      try {
+        m = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (m?.type !== "control_request") continue;
+      const reqId = typeof m.request_id === "string" ? m.request_id : undefined;
+      const reply = reqId ? session.controlOutIndex.get(reqId) : undefined;
+      if (m.request?.subtype === "hook_callback") {
+        const callbackId = m.request.callback_id;
+        if (callbackId !== HOSTLOOP_PATH_GATE_ID) continue;
+        const toolUseId = typeof m.request.tool_use_id === "string" ? m.request.tool_use_id : undefined;
+        const hev = hookEventFrom(callbackId, reply, m.request.input, toolUseId);
+        if (hev.decision !== "block") continue;
+        const fp = hev.paths?.file_path;
+        const pp = hev.paths?.path;
+        const vmHit = [fp, pp].find((v) => v !== undefined && (v === "/sessions" || v.startsWith("/sessions/")));
+        replayPathDenials.push({
+          source: "pretooluse",
+          tool: hev.tool ?? "?",
+          path: vmHit ?? fp ?? pp,
+          callbackId,
+          decisionReasonType: undefined,
+          agentId: hev.agentId,
+          decision: "deny",
+          reason: hev.reason,
+          toolUseId: hev.toolUseId,
+        });
+      } else if (m.request?.subtype === "can_use_tool" && reply) {
+        let req: DecisionRequest | null;
+        try {
+          req = toDecisionRequest(m);
+        } catch {
+          continue; // malformed frame — already surfaced elsewhere as a replay_protocol_fidelity failure
+        }
+        if (!req || req.kind !== "permission" || !FILE_ATTEMPT_TOOLS.has(req.tool)) continue;
+        const resp = deserializeDecision(req, reply);
+        if (resp.kind !== "permission" || resp.behavior !== "deny") continue;
+        const p = deniedPathFrom(req.input);
+        if (p === undefined) continue;
+        replayPathDenials.push({
+          source: "can_use_tool",
+          tool: req.tool,
+          path: p,
+          callbackId: undefined,
+          decisionReasonType: req.decisionReasonType,
+          agentId: req.agentId,
+          decision: "deny",
+          reason: resp.message,
+          toolUseId: req.toolUseId,
+        });
+      }
+    }
+    replayPathDenials.push(...rec.pathDenials.filter((d) => d.source === "permission_denied"));
   }
 
   // build a conditional contentKeys — omit question/gate keys when controlOut is absent
@@ -4008,6 +4193,8 @@ export async function replayCassette(
       gateDeliveries: rec.gateDeliveries,
       toolResultTexts: rec.toolResults.map((r) => r.assertText ?? r.text),
       toolResultsTruncated: rec.toolResults.map((r) => r.assertText === undefined),
+      // content-class, same as toolResultTexts above — pairing info for subagent_file_write.
+      toolResults: rec.toolResults.map((r) => ({ toolUseId: r.toolUseId, isError: r.isError })),
       toolErrors: rec.toolErrors,
       redundantToolCalls: rec.redundantToolCalls,
       truncatedPaths: replayTruncatedPaths,
@@ -4038,6 +4225,12 @@ export async function replayCassette(
       // reconstructed above from cassette.events + controlOut; undefined when controlOut is absent
       // (excludes hook_blocked/no_hook_blocked loud, never a vacuous pass).
       hookEvents: replayHookEvents,
+      // content-class — the tool_use blocks are frozen stream content, so the re-drive reproduces
+      // fileToolAttempts exactly like the live lane (same reasoning as presentedFiles below).
+      fileToolAttempts: rec.fileToolAttempts,
+      // reconstructed above (beside replayHookEvents) from cassette.events + controlOut; undefined when
+      // controlOut is absent.
+      pathDenials: replayPathDenials,
       // content-class — re-derived by the re-drive above exactly like the live lane; uncollapsed so an
       // empty [] (nothing presented) vacuous-passes no_scratchpad_leak instead of reading as
       // evidence-unavailable.
@@ -4248,6 +4441,13 @@ export async function replayCassette(
       contextEvents: rec.contextEvents, // the re-drive reproduces system_event via parseMessage — powers compaction_occurred
       mcpErrors: undefined, // live-only — the re-drive never produces mcp_error
       hookEvents: replayHookEvents, // reconstructed above from cassette.events + controlOut; undefined when controlOut is absent
+      // Content-class: the tool_use blocks live in the ordinary events stream (not controlOut), so the
+      // re-drive reproduces fileToolAttempts automatically — same reasoning as presentedFiles below.
+      fileToolAttempts: rec.fileToolAttempts,
+      // reconstructed above (beside replayHookEvents) from cassette.events + controlOut, pairing the
+      // pretooluse/can_use_tool sources with their controlOut reply and merging the permission_denied
+      // source from the re-drive; undefined when controlOut is absent.
+      pathDenials: replayPathDenials,
       // Content-class: the tool_use/tool_result pair lives in the ordinary events stream (not
       // controlOut), so the re-drive reproduces it exactly like mcpErrors' live-only counterpart does
       // NOT reproduce — this one genuinely re-derives. Uncollapsed (an empty [] is the real "nothing

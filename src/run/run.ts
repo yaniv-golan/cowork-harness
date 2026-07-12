@@ -14,6 +14,42 @@ import {
 } from "../decide/decider.js";
 import { ProvenanceTracker } from "../hostloop/provenance.js";
 import { normalizeHost, validateBareDomain } from "../boundary-paths.js";
+import { PATH_GATE_TOOL_NAMES } from "../hostloop/pretooluse-path-hook.js";
+import { HOSTLOOP_PATH_GATE_ID } from "../runtime/hostloop.js";
+
+/** The production-gated file-tool surface (path-gate tools + MultiEdit, which the path hook's own
+ *  matcher also covers — see runtime/hostloop.ts's PreToolUse matcher). Exported so the replay
+ *  reconstruction (cassette.ts) can apply the SAME can_use_tool pathDenials filter directly from the
+ *  frozen request + controlOut pairing, without duplicating the tool set. */
+export const FILE_ATTEMPT_TOOLS = new Set<string>([...PATH_GATE_TOOL_NAMES, "MultiEdit"]);
+
+/** The workspace SDK-MCP tool name web_fetch resolves to on host-loop (mcp__workspace__web_fetch) —
+ *  when the can_use_tool web_fetch gate is enabled (enableWebFetchGate), a `can_use_tool` for exactly
+ *  this tool is answered by the shared provenance/domain decision instead of the ordinary decider chain. */
+const WORKSPACE_WEB_FETCH_TOOL = "mcp__workspace__web_fetch";
+
+/** The `task_started` sibling family — written against the WHOLE emitter family (not one subtype) so a
+ *  new sibling lands in the same consumer instead of a subtype-specific dead end. Only `task_started`
+ *  carries the binary-RESOLVED child type today; the others are consumed here only in the sense that
+ *  they no longer fall through un-flagged (the pre-existing `contextEvents` push still records all of
+ *  them; this set exists so a future sibling-specific consumer has a single place to extend). */
+const TASK_EVENT_SUBTYPES = new Set([
+  "task_started",
+  "task_progress",
+  "task_updated",
+  "task_notification",
+  "background_tasks_changed",
+  "thinking_tokens",
+]);
+
+/** Extract the DENIED path from a captured `{file_path?, path?}`-shaped input: whichever key is a
+ *  `/sessions`-prefixed value (what the VM path-gate actually flags), else the first present key (the
+ *  gate's own scan order — file_path before path). Shared by the can_use_tool producer (below) and its
+ *  replay reconstruction (cassette.ts) so both pick the same path from an identical input shape. */
+export function deniedPathFrom(inp: Record<string, unknown>): string | undefined {
+  const vals = ["file_path", "path"].map((k) => inp[k]).filter((v): v is string => typeof v === "string");
+  return vals.find((v) => v === "/sessions" || v.startsWith("/sessions/")) ?? vals[0];
+}
 
 /** Bound a captured decision input so a large tool payload can't bloat the run record. Objects pass
  *  through structurally (consumers read fields like `.command`); only an over-cap JSON serialization is
@@ -120,12 +156,15 @@ function parseWebSearchLinks(text: string): Array<{ title: string; url: string }
 interface SubagentDispatch {
   toolUseId: string;
   parentToolUseId?: string;
-  agentType: string;
+  dispatchAgentType: string; // the DISPATCH-INPUT type ("unknown" when the dispatch omitted subagent_type) — unchanged meaning, renamed from the ambiguous `agentType` now that a resolved type lands beside it
+  resolvedAgentType?: string; // the BINARY-resolved child type from task_started (incl. the general-purpose fallback) — strictly better evidence than dispatchAgentType for a type-less dispatch
+  dispatchTypeOmitted?: boolean; // the dispatch input carried no subagent_type at all (proven by the full input parse) — the wildcard-fallback trap fired
   declaredTools: string[];
   toolsUsed: Array<{ name: string; count: number }>;
   description?: string; // the dispatch's `description` — identifies it when the skill set no subagent_type
   prompt?: string; // dispatch input.prompt, assertText-capped
-  model?: string; // the dispatching message's model
+  dispatchModel?: string; // the DISPATCHING message's model (ex-`model` — renamed when resolvedModel landed beside it)
+  resolvedModel?: string; // the RESOLVED child model from the dispatch's tool_use_result envelope (subagent_result_meta) — strictly better evidence than dispatchModel for what the child actually ran as
   output?: string; // the dispatch's own paired tool_result, assertText-capped — populated by a finalize step, not at push time
   outputTruncated?: boolean; // `output` was cut at the assert cap (#9) — set in denormalizeSubagentOutputs
 }
@@ -225,6 +264,34 @@ export interface RunRecord {
   contextEvents: Array<{ subtype: string; data: Record<string, unknown> }>; // system events we don't special-case (compaction etc.)
   mcpErrors: Array<{ server: string; code?: number; message: string }>; // MCP round-trips the harness answered with a JSON-RPC error (no handler, or the handler threw)
   hookEvents: Array<{ callbackId: string; decision: "block" | "allow"; reason?: string; tool?: string }>; // PreToolUse hook fire/block events (built-in Task hook + any custom hook bundle)
+  /** Every GATED-file-tool tool_use (Read/Write/Edit/Glob/Grep/MultiEdit), raw paths as sent. The
+   *  attempt-level evidence source for no_vm_path_file_op / subagent_file_write — raw inputs otherwise
+   *  live only in the private toolLog. Synthetic MCP echoes excluded. */
+  fileToolAttempts: Array<{
+    tool: string;
+    paths: { file_path?: string; path?: string };
+    gatePath?: string;
+    origin: "main" | "subagent" | "unknown";
+    parentToolUseId?: string;
+    toolUseId?: string;
+  }>;
+  /** DECISION-level path-denial telemetry from all THREE producers that can deny a gated file-tool call
+   *  on a path grounds: the PreToolUse path gate's own hook decision, a denied `can_use_tool` ask on a
+   *  gated file tool with a path, and a pre-ask `permission_denied` stream event correlated (by
+   *  tool_use_id) to a recorded gated attempt. Each producer is independently FILTERED to path-relevant
+   *  denials — see the push sites for the exact filter each one applies (custom-hook callbacks / non-
+   *  gated tools / pathless or uncorrelated denies are never ingested). */
+  pathDenials: Array<{
+    source: "pretooluse" | "can_use_tool" | "permission_denied";
+    tool: string;
+    path?: string;
+    callbackId?: string; // pretooluse only
+    decisionReasonType?: string;
+    agentId?: string; // the binary's own sub-agent attribution (present only inside sub-agents)
+    decision: "deny";
+    reason?: string;
+    toolUseId?: string;
+  }>;
   // Files delivered via the cowork `present_files` tool, in call order — derived from each
   // `mcp__cowork__present_files` tool_use (the input file list) paired with its own tool_result (the
   // returned path per file, in the same order). CONTENT-CLASS: both halves live in the ordinary
@@ -322,6 +389,10 @@ export class Run {
   // web_fetch per-DOMAIN approvals ("Allow all for website"). Per-Run, ephemeral (starts empty) —
   // verified the grant is session-scoped, not persistent. An approved host fetches with no re-prompt.
   private approvedDomains = new Set<string>();
+  // Set by enableWebFetchGate() — host-loop, coworkWebFetchViaApi on. When true, a can_use_tool for
+  // WORKSPACE_WEB_FETCH_TOOL is answered by resolveWebFetchGate (the shared provenance/domain decision)
+  // instead of falling through to the ordinary decider chain.
+  private webFetchGate = false;
 
   constructor(
     private session: AgentSession,
@@ -359,6 +430,8 @@ export class Run {
       contextEvents: [],
       mcpErrors: [],
       hookEvents: [],
+      fileToolAttempts: [],
+      pathDenials: [],
       presentedFiles: [],
       webSearches: [],
       infraErrors: [],
@@ -484,6 +557,29 @@ export class Run {
             // parented falls to the sub-agent branch below (attributed if the parent is a recognized
             // dispatch, dropped otherwise — unchanged from before).
             const isMainAgentFlow = !ev.parentToolUseId || this.forkScopedIds.has(ev.parentToolUseId);
+            // Attempt-level telemetry for every GATED file tool, recorded OUTSIDE the main/subagent
+            // branch below so every gated attempt is captured regardless of attribution. `origin` uses
+            // the SAME recognized-dispatch membership check the sub-agent attribution branch uses (see
+            // `this.rec.subagents.find` at the parentToolUseId branch below) — a parent that isn't a
+            // recognized dispatch is "unknown", never "subagent" (bare parent-id presence is not enough).
+            if (!ev.synthetic && FILE_ATTEMPT_TOOLS.has(ev.name)) {
+              const inp = (ev.input && typeof ev.input === "object" ? ev.input : {}) as Record<string, unknown>;
+              const paths: { file_path?: string; path?: string } = {};
+              if (typeof inp.file_path === "string") paths.file_path = inp.file_path;
+              if (typeof inp.path === "string") paths.path = inp.path;
+              this.rec.fileToolAttempts.push({
+                tool: ev.name,
+                paths, // RAW strings — matcher normalization (if any) lives in the assertion, never here
+                gatePath: paths.file_path ?? paths.path, // first-match order = ["file_path","path"], production's extraction order
+                origin: isMainAgentFlow
+                  ? "main"
+                  : this.rec.subagents.some((s) => s.toolUseId === ev.parentToolUseId)
+                    ? "subagent"
+                    : "unknown",
+                parentToolUseId: ev.parentToolUseId,
+                toolUseId: ev.toolUseId,
+              });
+            }
             if (isMainAgentFlow && !ev.synthetic) {
               // synthetic = the MCP round-trip echo; the real call already arrived as an assistant tool_use
               // block (live-verified), so counting the synthetic too would double-list it / add a bogus name.
@@ -612,18 +708,32 @@ export class Run {
             this.rec.subagents.push({
               toolUseId: ev.toolUseId,
               parentToolUseId: ev.parentToolUseId,
-              agentType: ev.agentType,
+              dispatchAgentType: ev.dispatchAgentType,
+              dispatchTypeOmitted: ev.typeOmitted || undefined,
               declaredTools: ev.declaredTools,
               toolsUsed: [],
               description: ev.description,
               prompt: ev.prompt,
-              model: ev.model,
+              dispatchModel: ev.dispatchModel,
             });
             // An explicit Agent(subagent_type:"fork") inherits the main agent's context (unlike every
             // other dispatch type, which starts isolated) — so its children are main-agent flow. Still
             // push to rec.subagents unconditionally above, so dispatch_count_max stays unaffected.
-            if (ev.agentType === "fork" && ev.toolUseId) this.forkScopedIds.add(ev.toolUseId);
+            if (ev.dispatchAgentType === "fork" && ev.toolUseId) this.forkScopedIds.add(ev.toolUseId);
             break;
+          case "subagent_result_meta": {
+            // The dispatch's paired result envelope (tool_use_result) — joined strictly by toolUseId,
+            // same convention as task_started above. A tool-free child (no parented assistant frame at
+            // all) is covered here: this event doesn't depend on any parented frame having fired.
+            const sa = this.rec.subagents.find((s) => s.toolUseId === ev.toolUseId);
+            if (sa) {
+              sa.resolvedModel = ev.resolvedModel;
+              // corroborates task_started's resolvedAgentType — only fills a gap, never overwrites
+              // stronger evidence that already landed.
+              if (sa.resolvedAgentType === undefined && ev.agentType !== undefined) sa.resolvedAgentType = ev.agentType;
+            }
+            break;
+          }
           case "metrics":
             // merge, don't overwrite — a "result" event may have already set/will later set `usd`
             this.rec.cost = { ...this.rec.cost, raw: ev.data };
@@ -700,6 +810,57 @@ export class Run {
             break;
           case "system_event":
             this.rec.contextEvents.push({ subtype: ev.subtype, data: ev.data });
+            // Task-event FAMILY (task_started + siblings) — written against the whole family so a new
+            // sibling lands here, not in a subtype-specific dead end. task_started carries the
+            // binary-RESOLVED child type (incl. the general-purpose fallback); join strictly by id.
+            if (TASK_EVENT_SUBTYPES.has(ev.subtype)) {
+              const d = ev.data as Record<string, unknown>;
+              // Join ONLY on tool_use_id — that is what subagents[].toolUseId holds (the dispatch's
+              // toolu_ id). `task_id` is a DIFFERENT identifier and can never match a dispatch's
+              // toolUseId, so falling back to it would silently mis-join (or no-op). If a future need
+              // arises to correlate the task_id-only sibling events, persist a separate task_id→toolUseId
+              // map; today's task_started carries tool_use_id, so this direct join suffices.
+              const joinId = typeof d.tool_use_id === "string" ? d.tool_use_id : undefined;
+              if (ev.subtype === "task_started" && joinId !== undefined && typeof d.subagent_type === "string") {
+                const sa = this.rec.subagents.find((s) => s.toolUseId === joinId);
+                if (sa) {
+                  sa.resolvedAgentType = d.subagent_type;
+                  if (sa.dispatchTypeOmitted && d.subagent_type === "general-purpose")
+                    warn(
+                      `::warning:: [subagent] dispatch ${joinId} OMITTED subagent_type and fell back to general-purpose ` +
+                        `(tools:["*"] — every surviving session MCP tool, incl. workspace bash, is in scope). ` +
+                        `Pin subagent_type explicitly; assert with subagent_dispatched + subagent_tool_absent.\n`,
+                    );
+                }
+              }
+            }
+            // pathDenials producer (3): permission_denied is PRE-ASK ONLY, carries no structured path,
+            // and is NOT necessarily path-related (a real production permission_denied denied
+            // `present_files`) — so it is ingested ONLY when correlated (by tool_use_id) to a recorded
+            // gated-file-tool attempt that itself carries a path. Never ingest every permission_denied.
+            if (ev.subtype === "permission_denied") {
+              const d = ev.data as Record<string, unknown>;
+              const attempt = this.rec.fileToolAttempts.find(
+                (a) => a.toolUseId !== undefined && a.toolUseId === d.tool_use_id && a.gatePath !== undefined,
+              );
+              if (attempt)
+                this.rec.pathDenials.push({
+                  source: "permission_denied",
+                  tool: String(d.tool_name ?? attempt.tool),
+                  // /sessions-preferring selection — SAME as producers (1)/(2) (deniedPathFrom), so a
+                  // dual-key attempt ({file_path, path}) records the identical VM path across all three
+                  // producers. attempt.gatePath is first-key-wins and would diverge here.
+                  path: deniedPathFrom(attempt.paths),
+                  callbackId: undefined,
+                  decisionReasonType: typeof d.decision_reason_type === "string" ? d.decision_reason_type : undefined,
+                  agentId: typeof d.agent_id === "string" ? d.agent_id : undefined,
+                  decision: "deny",
+                  // the observed permission_denied event carries the human text in `message`, not always
+                  // `decision_reason` (audit.jsonl shows `message`) — fall back to it.
+                  reason: typeof d.decision_reason === "string" ? d.decision_reason : typeof d.message === "string" ? d.message : undefined,
+                  toolUseId: String(d.tool_use_id),
+                });
+            }
             break;
           case "infra_error":
             // An infrastructure crash contaminates the run's evidence — collect it as a both-lane hard
@@ -712,6 +873,27 @@ export class Run {
             break;
           case "hook_event":
             this.rec.hookEvents.push({ callbackId: ev.callbackId, decision: ev.decision, reason: ev.reason, tool: ev.tool });
+            // pathDenials producer (1): INGEST ONLY the path gate's own callbackId — hookEventFrom
+            // handles EVERY hook callback (the built-in Task hook + any custom bundle), so an unfiltered
+            // ingestion here would pollute the channel with unrelated custom-hook denials.
+            if (ev.callbackId === HOSTLOOP_PATH_GATE_ID && ev.decision === "block") {
+              const fp = ev.paths?.file_path;
+              const pp = ev.paths?.path;
+              // the DENIED path is whichever key the VM guard flagged — a /sessions-prefixed value if
+              // present, else the first non-empty key (matching the gate's own scan order).
+              const vmHit = [fp, pp].find((v) => v !== undefined && (v === "/sessions" || v.startsWith("/sessions/")));
+              this.rec.pathDenials.push({
+                source: "pretooluse",
+                tool: ev.tool ?? "?",
+                path: vmHit ?? fp ?? pp,
+                callbackId: ev.callbackId,
+                decisionReasonType: undefined,
+                agentId: ev.agentId,
+                decision: "deny",
+                reason: ev.reason,
+                toolUseId: ev.toolUseId,
+              });
+            }
             break;
         }
       }
@@ -913,7 +1095,20 @@ export class Run {
     // string (`answers[q]` = "Label A, Label B"). The ScriptedDecider validates each member against the
     // offered options and joins; fallback terminals answer with a single (valid) member.
 
-    const decided = await this.withDialogTimeout(req, this.decider.decide(req, this.ctx()));
+    // web_fetch can_use_tool gate (host-loop, coworkWebFetchViaApi on): answer via the shared
+    // provenance/domain decision instead of the ordinary decider chain — the can_use_tool response IS
+    // the shared webfetch:<domain> decision, recorded ONCE (skipRecord suppresses the record for an
+    // automatic allow — a provenance hit or an already-approved domain — matching the legacy
+    // "records nothing on a repeat fetch" contract).
+    let decided: Decision | typeof ABSTAIN;
+    let skipRecord = false;
+    if (this.webFetchGate && req.kind === "permission" && req.tool === WORKSPACE_WEB_FETCH_TOOL) {
+      const g = await this.resolveWebFetchGate(req);
+      decided = g.decided;
+      skipRecord = g.skipRecord;
+    } else {
+      decided = await this.withDialogTimeout(req, this.decider.decide(req, this.ctx()));
+    }
     if (decided === ABSTAIN) {
       // A QUESTION must NEVER be silently answered with option 1 (the worst failure mode: a wrong-branch
       // run that still prints ✓ success). If no terminal answered it, fail LOUD. (Permission/dialog/elicit
@@ -954,7 +1149,9 @@ export class Run {
         by: decided.by,
         rationale: "decider returned a mismatched response kind",
       });
-    } else {
+    } else if (!skipRecord) {
+      // `req` here is the ORIGINAL can_use_tool request (not a synthetic webfetch:<domain> one), so on
+      // the web_fetch gate path this is the ONE recorded decision, with name:"mcp__workspace__web_fetch".
       this.recordDecision(req, decided.response, decided.by, decided.rationale, decided.model);
     }
   }
@@ -1011,6 +1208,24 @@ export class Run {
           `::warning:: [permission] "${req.tool}" auto-allowed by cowork parity (unscripted, off-registry) — real Cowork would BLOCK for the user. Not a faithful pass; pin with --answer or set permission_parity: strict.\n`,
         );
       }
+      // pathDenials producer (2): a DENIED can_use_tool ask on a gated file tool with a path attempt —
+      // captures EVERY deny regardless of which decider produced it (scripted, parity default, the
+      // hostloop gate, or a human). Pathless or non-gated denies are never ingested.
+      if (behavior === "deny" && FILE_ATTEMPT_TOOLS.has(req.tool)) {
+        const p = deniedPathFrom(req.input);
+        if (p !== undefined)
+          this.rec.pathDenials.push({
+            source: "can_use_tool",
+            tool: req.tool,
+            path: p,
+            callbackId: undefined,
+            decisionReasonType: req.decisionReasonType,
+            agentId: req.agentId,
+            decision: "deny",
+            reason: resp.kind === "permission" ? resp.message : undefined,
+            toolUseId: req.toolUseId,
+          });
+      }
     } else {
       const outcome = resp.kind === "dialog" ? resp.behavior : resp.kind === "elicit" ? resp.action : "?";
       this.rec.decisions.push({ kind: req.kind, name: req.kind, decision: outcome, by, requestId: req.id, rationale });
@@ -1026,7 +1241,7 @@ export class Run {
    *  `compile()`, then `normalizeHost`, so an empty string / URL / scheme / path / port can no longer be
    *  admitted as an entry that could never match a bare fetch host. Invalid seeds THROW (consistent with
    *  `compile()` — fail loud, not silently warn-and-skip). A seed "domain" is matched by exact host
-   *  equality (`approvedDomains.has(normalizeHost(domain))` in requestWebFetchApproval), so a `*` /
+   *  equality (`approvedDomains.has(normalizeHost(domain))` in decideWebFetchDomain), so a `*` /
    *  `*.suffix` WILDCARD is meaningless here and is rejected — provenance approval is per concrete host.
    *  (The IPv6/punycode/wildcard normalization deferrals documented on `normalizeHost` still apply.) */
   seedApprovedDomains(domains: string[]): void {
@@ -1050,19 +1265,28 @@ export class Run {
     this.provenance.add(url);
   }
 
-  /**
-   * Harness-initiated web_fetch approval for a provenance miss — a synthetic `webfetch:<domain>`
-   * permission routed through the SAME Decider and RECORDED in rec.decisions (so it shows in
-   * result.decisions and flips nonDeterministic when answered by agent/external/human). Mirrors
-   * Cowork's host-initiated handleToolPermission(`webfetch:${domain}`, {domain,url}). This does NOT
-   * go through handleDecision (no agent control_request exists for the synthetic id), so it resolves
-   * ABSTAIN→deny explicitly and never calls session.respond.
-   */
-  async requestWebFetchApproval(domain: string, url: string): Promise<boolean> {
-    // Per-run "Allow all for website" grant: an already-approved host fetches with NO gate and records
-    // nothing (a 2nd fetch to an approved host does not re-prompt). Checked BEFORE the decider.
-    // Normalize both sides so "Example.com" and "example.com" match the same stored entry.
-    if (this.approvedDomains.has(normalizeHost(domain))) return true;
+  /** Enable the can_use_tool web_fetch gate (host-loop, coworkWebFetchViaApi on): with web_fetch
+   *  dropped from --allowedTools, the CLI emits a real can_use_tool for each fetch; handleDecision
+   *  answers it via the shared provenance/domain decision (resolveWebFetchGate) — ONE recorded
+   *  decision, marking provenance on allow — so the workspace handler's own self-approval block
+   *  (requestApproval) is never reached on this path (the handler is always wired with requestApproval
+   *  undefined; see execute.ts/chat.ts). Off by default — the allowlist-fallback shape (gate off)
+   *  still routes through the ordinary decider chain, unchanged. */
+  enableWebFetchGate(): void {
+    this.webFetchGate = true;
+  }
+
+  /** The shared webfetch:<domain> decision core — consults the Decider (so scenario `--answer
+   *  webfetch:…` rules still match) and returns the decided request/response/attribution WITHOUT
+   *  recording anything. `null` = the domain is already approved (an "Allow all for website" hit —
+   *  auto-allow, no decider consult, nothing to record). Recording is the CALLER's choice: the sole
+   *  caller today (resolveWebFetchGate, the can_use_tool gate path) records the ORIGINAL can_use_tool
+   *  request as the one decision. */
+  private async decideWebFetchDomain(
+    domain: string,
+    url: string,
+  ): Promise<{ req: DecisionRequest; by: Decision["by"]; resp: DecisionResponse; mismatch: boolean } | null> {
+    if (this.approvedDomains.has(normalizeHost(domain))) return null;
     const req: DecisionRequest = {
       id: `webfetch-${randomUUID()}`,
       kind: "permission",
@@ -1073,37 +1297,66 @@ export class Run {
     const d = await this.decider.decide(req, this.ctx());
     // "fail" conflated the FailDecider class with the internal abstain-fallback path. Use a distinct
     // provenance value so readers can tell "no decider answered" apart from an explicit FailDecider deny.
-    const by = d === ABSTAIN ? "abstain-fallback" : d.by;
-    // Pass the RESPONSE BODY + by (recordDecision reads resp.behavior) — not the whole Decision.
-    const resp: DecisionResponse =
-      d === ABSTAIN ? { kind: "permission", behavior: "deny", message: "no decider answer (fail-closed)" } : d.response;
+    const by: Decision["by"] = d === ABSTAIN ? "abstain-fallback" : d.by;
+    if (d === ABSTAIN)
+      return { req, by, resp: { kind: "permission", behavior: "deny", message: "no decider answer (fail-closed)" }, mismatch: false };
     // mirror handleDecision's mismatched-kind guard. A decider that answers a "permission" request
-    // with a non-permission response is a protocol error — previously this recorded `decision:"?"` (via
-    // recordDecision's behavior===undefined branch) with NO warning. Record `mismatch→deny`, warn loudly,
-    // and DENY the fetch (fail-closed), instead of silently treating it as "?".
-    if (d !== ABSTAIN && isDecisionKindMismatch(req, resp, "webfetch")) {
-      this.rec.decisions.push({
-        kind: kindOf(req),
-        name: nameOf(req),
-        decision: "mismatch→deny",
+    // with a non-permission response is a protocol error — deny (fail-closed) rather than silently
+    // treating it as "?". `mismatch:true` lets a caller distinguish this from an ordinary decider deny.
+    if (isDecisionKindMismatch(req, d.response, "webfetch"))
+      return {
+        req,
         by,
-        rationale: "decider returned a mismatched response kind",
-      });
-      return false;
+        resp: { kind: "permission", behavior: "deny", message: "decider returned a mismatched response kind" },
+        mismatch: true,
+      };
+    return { req, by, resp: d.response, mismatch: false };
+  }
+
+  /** Decide a web_fetch can_use_tool via the shared provenance/domain logic (decideWebFetchDomain). On
+   *  allow, marks provenance so the subsequent actual fetch (routed through the workspace handler) is a
+   *  provenance HIT and never re-triggers the handler's own self-approval block. `skipRecord:true` means
+   *  the allow was AUTOMATIC (a provenance hit or an already-approved domain) — the can_use_tool is
+   *  still answered allow, but nothing is recorded, matching the legacy "a repeat fetch records
+   *  nothing" contract. */
+  private async resolveWebFetchGate(
+    req: Extract<DecisionRequest, { kind: "permission" }>,
+  ): Promise<{ decided: Decision; skipRecord: boolean }> {
+    const allowResp: DecisionResponse = { kind: "permission", behavior: "allow", updatedInput: req.input };
+    const denyResp = (message: string): DecisionResponse => ({ kind: "permission", behavior: "deny", message });
+    const url = typeof req.input.url === "string" ? req.input.url : undefined;
+    if (url === undefined) return { decided: { response: denyResp("web_fetch: missing 'url'"), by: "agent" }, skipRecord: false };
+    let domain: string;
+    try {
+      domain = new URL(url).hostname;
+    } catch {
+      return { decided: { response: denyResp("web_fetch failed: invalid URL"), by: "agent" }, skipRecord: false };
     }
-    const allow = resp.kind === "permission" && resp.behavior === "allow";
-    const grant = resp.kind === "permission" ? resp.grant : undefined;
-    this.recordDecision(req, resp, by);
-    // "Allow all for website" → approve the host for the rest of the run (off-wire; Run-side state).
-    if (allow && grant === "domain") this.approvedDomains.add(normalizeHost(domain));
-    return allow;
+    // provenance hit (the URL already appeared in a user turn or a prior fetch result) — auto-allow, no
+    // decider consult, nothing recorded.
+    if (this.provenance.has(url)) return { decided: { response: allowResp, by: "agent" }, skipRecord: true };
+    const r = await this.decideWebFetchDomain(domain, url);
+    if (r === null) {
+      // an already-approved domain ("Allow all for website" from an earlier fetch this run) — auto-allow.
+      this.provenance.add(url);
+      return { decided: { response: allowResp, by: "agent" }, skipRecord: true };
+    }
+    const allow = r.resp.kind === "permission" && r.resp.behavior === "allow";
+    const grant = r.resp.kind === "permission" ? r.resp.grant : undefined;
+    if (allow) {
+      this.provenance.add(url);
+      if (grant === "domain") this.approvedDomains.add(normalizeHost(domain));
+    }
+    // the can_use_tool RESPONSE the agent actually receives carries no off-wire `grant` (the domain
+    // approval above is Run-side state, not wire content) — plain allow/deny, mirroring `allowResp`.
+    return { decided: { response: allow ? allowResp : denyResp("Web fetch was not allowed."), by: r.by }, skipRecord: false };
   }
 }
 
 /** shared decision-kind validation. A decider response whose `kind` differs from the request's is a
  *  protocol mismatch — the agent would receive a safe deny (serializeDecision rewrites it), NOT the intended
- *  answer. Return true + WARN loudly so neither the normal-permission path (handleDecision) nor the synthetic
- *  web_fetch path (requestWebFetchApproval) can silently record a mismatched response as if it were honored. */
+ *  answer. Return true + WARN loudly so the normal-permission path (handleDecision) never silently records
+ *  a mismatched response as if it were honored. */
 function isDecisionKindMismatch(req: DecisionRequest, resp: DecisionResponse, context: string): boolean {
   if (resp.kind === req.kind) return false;
   warn(

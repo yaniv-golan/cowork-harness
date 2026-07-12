@@ -206,12 +206,12 @@ describe("tool_called / tool_not_called / subagent_tool_* — glob matching", ()
   });
 });
 
-describe("subagent_dispatched matches agentType OR description", () => {
+describe("subagent_dispatched matches dispatchAgentType OR resolvedAgentType OR description", () => {
   const subs = [
-    { agentType: "unknown", declaredTools: [], toolsUsed: [], description: "TOP_DOWN market sizing for Cadence" },
-    { agentType: "example-skills:market-sizing", declaredTools: [], toolsUsed: [], description: "coaching" },
+    { dispatchAgentType: "unknown", declaredTools: [], toolsUsed: [], description: "TOP_DOWN market sizing for Cadence" },
+    { dispatchAgentType: "example-skills:market-sizing", declaredTools: [], toolsUsed: [], description: "coaching" },
   ];
-  it("matches a named dispatch by agentType", () => {
+  it("matches a named dispatch by dispatchAgentType", () => {
     expect(pass(evaluate([{ subagent_dispatched: "market-sizing" }], ctx({ subagents: subs })))).toBe(true);
   });
   it("matches an UNKNOWN-typed dispatch by its description (the skill set no subagent_type)", () => {
@@ -220,26 +220,30 @@ describe("subagent_dispatched matches agentType OR description", () => {
   it("fails when neither type nor description matches", () => {
     expect(pass(evaluate([{ subagent_dispatched: "SLIDE_REVIEWS" }], ctx({ subagents: subs })))).toBe(false);
   });
+  it("matches a type-less dispatch by its RESOLVED type (task_started evidence is strictly better than dispatchAgentType)", () => {
+    const resolved = [{ dispatchAgentType: "unknown", resolvedAgentType: "general-purpose", declaredTools: [], toolsUsed: [] }];
+    expect(pass(evaluate([{ subagent_dispatched: "general-purpose" }], ctx({ subagents: resolved })))).toBe(true);
+  });
 });
 
 describe("subagent_output_contains", () => {
   it("passes when a dispatch's output contains the substring (no match filter — checks all dispatches)", () => {
-    const c = ctx({ subagents: [{ agentType: "x", declaredTools: [], toolsUsed: [], output: "found 3 files" }] });
+    const c = ctx({ subagents: [{ dispatchAgentType: "x", declaredTools: [], toolsUsed: [], output: "found 3 files" }] });
     const result = evaluate([{ subagent_output_contains: { contains: "3 files" } }], c)[0];
     expect(result.pass).toBe(true);
   });
 
   it("fails when no dispatch's output contains the substring", () => {
-    const c = ctx({ subagents: [{ agentType: "x", declaredTools: [], toolsUsed: [], output: "nothing here" }] });
+    const c = ctx({ subagents: [{ dispatchAgentType: "x", declaredTools: [], toolsUsed: [], output: "nothing here" }] });
     const result = evaluate([{ subagent_output_contains: { contains: "3 files" } }], c)[0];
     expect(result.pass).toBe(false);
   });
 
-  it("narrows to a specific dispatch via match (regex over agentType/description), then checks only that dispatch's output", () => {
+  it("narrows to a specific dispatch via match (regex over dispatchAgentType/description), then checks only that dispatch's output", () => {
     const c = ctx({
       subagents: [
-        { agentType: "general-purpose", declaredTools: [], toolsUsed: [], output: "3 files" },
-        { agentType: "market-sizing", declaredTools: [], toolsUsed: [], output: "no match here" },
+        { dispatchAgentType: "general-purpose", declaredTools: [], toolsUsed: [], output: "3 files" },
+        { dispatchAgentType: "market-sizing", declaredTools: [], toolsUsed: [], output: "no match here" },
       ],
     });
     const result = evaluate([{ subagent_output_contains: { match: "market-sizing", contains: "no match" } }], c)[0];
@@ -258,6 +262,22 @@ describe("subagent_output_contains", () => {
     const result = evaluate([{ subagent_output_contains: { match: "[unterminated", contains: "x" } }], c)[0];
     expect(result.pass).toBe(false);
     expect(result.message).toContain("bad regex");
+  });
+
+  it("narrows to a specific dispatch via match against its RESOLVED type (parity with subagent_dispatched)", () => {
+    const c = ctx({
+      subagents: [
+        {
+          dispatchAgentType: "unknown",
+          resolvedAgentType: "general-purpose",
+          declaredTools: [],
+          toolsUsed: [],
+          output: "found 3 files",
+        },
+      ],
+    });
+    const result = evaluate([{ subagent_output_contains: { match: "general-purpose", contains: "3 files" } }], c)[0];
+    expect(result.pass).toBe(true);
   });
 });
 
@@ -561,6 +581,138 @@ describe("hook_blocked / no_hook_blocked", () => {
     expect(r1.pass).toBe(false);
     const [r2] = evaluate([{ hook_blocked: "Task" }], ctx({ hookEvents: undefined }));
     expect(r2.pass).toBe(false);
+  });
+});
+
+describe("VM-path + path-denial assertions", () => {
+  const hlCtx = (over: Partial<AssertContext>) => ctx({ effectiveFidelity: "hostloop", ...over });
+
+  it("no_vm_path_file_op passes on clean attempts, fails on an exact /sessions or /sessions/-prefixed attempt, ignores /sessionsfoo", () => {
+    const clean = evaluate(
+      [{ no_vm_path_file_op: true }],
+      hlCtx({ fileToolAttempts: [{ tool: "Read", paths: { file_path: "/sessionsfoo/x" }, gatePath: "/sessionsfoo/x", origin: "main" }] }),
+    );
+    expect(clean.every((r) => r.pass)).toBe(true);
+    const dirty = evaluate(
+      [{ no_vm_path_file_op: true }],
+      hlCtx({
+        fileToolAttempts: [{ tool: "Write", paths: { file_path: "/sessions/x/y" }, gatePath: "/sessions/x/y", origin: "subagent" }],
+      }),
+    );
+    expect(dirty[0].pass).toBe(false);
+  });
+
+  it("no_vm_path_file_op on a NON-hostloop tier FAILS cannot-verify (never excluded into a green run)", () => {
+    const [r] = evaluate([{ no_vm_path_file_op: true }], ctx({ effectiveFidelity: "container", fileToolAttempts: [] }));
+    expect(r.pass).toBe(false);
+    expect((r as { message: string }).message).toMatch(/cannot verify/);
+  });
+
+  it("undefined evidence on the RIGHT tier fails cannot-verify (older result)", () => {
+    const [r] = evaluate([{ no_vm_path_file_op: true }], hlCtx({ fileToolAttempts: undefined }));
+    expect(r.pass).toBe(false);
+    expect((r as { message: string }).message).toMatch(/cannot verify/);
+  });
+
+  it("path_denied matches on tool glob + path regex + source + agent_scope conjunctively", () => {
+    const c = hlCtx({
+      pathDenials: [{ source: "can_use_tool", tool: "Edit", path: "/sessions/a/b", decision: "deny", agentId: "agent_1" }],
+    });
+    expect(
+      evaluate([{ path_denied: { tool: "Edit", path_matches: "^/sessions/", source: "can_use_tool", agent_scope: "subagent" } }], c)[0]
+        .pass,
+    ).toBe(true);
+    expect(evaluate([{ path_denied: { agent_scope: "main" } }], c)[0].pass).toBe(false);
+  });
+
+  it("vm_path_denied requires a /sessions-targeted denial; no_path_denied fails on any denial", () => {
+    const c = hlCtx({ pathDenials: [{ source: "pretooluse", tool: "Write", path: "/sessions/x", decision: "deny" }] });
+    expect(evaluate([{ vm_path_denied: true }], c)[0].pass).toBe(true);
+    expect(evaluate([{ no_path_denied: true }], c)[0].pass).toBe(false);
+  });
+
+  it("vm_path_denied FAILS when pathDenials has denials but none target /sessions", () => {
+    const c = hlCtx({ pathDenials: [{ source: "pretooluse", tool: "Write", path: "/workspace/x", decision: "deny" }] });
+    const [r] = evaluate([{ vm_path_denied: true }], c);
+    expect(r.pass).toBe(false);
+    expect((r as { message: string }).message).toMatch(/no \/sessions-targeted denial recorded/);
+  });
+
+  it("no_path_denied passes when pathDenials is empty", () => {
+    const c = hlCtx({ pathDenials: [] });
+    expect(evaluate([{ no_path_denied: true }], c)[0].pass).toBe(true);
+  });
+
+  it("path_denied/vm_path_denied/no_path_denied on a NON-hostloop tier FAIL cannot-verify", () => {
+    const c = ctx({ effectiveFidelity: "container", pathDenials: [] });
+    for (const a of [{ vm_path_denied: true }, { path_denied: {} }, { no_path_denied: true }] as const) {
+      const [r] = evaluate([a], c);
+      expect(r.pass).toBe(false);
+      expect((r as { message: string }).message).toMatch(/cannot verify/);
+    }
+  });
+
+  it("subagent_file_write: needs a SUBAGENT-origin write attempt with the suffix AND a paired non-error result", () => {
+    const attempts = [
+      {
+        tool: "Write",
+        paths: { file_path: "artifacts/probe.json" },
+        gatePath: "artifacts/probe.json",
+        origin: "subagent" as const,
+        toolUseId: "t1",
+      },
+    ];
+    const okCtx = ctx({ effectiveFidelity: "hostloop", fileToolAttempts: attempts, toolResults: [{ toolUseId: "t1", isError: false }] });
+    expect(evaluate([{ subagent_file_write: { path_suffix: "artifacts/probe.json" } }], okCtx)[0].pass).toBe(true);
+
+    const mainOnly = ctx({
+      effectiveFidelity: "hostloop",
+      fileToolAttempts: [{ ...attempts[0], origin: "main" as const }],
+      toolResults: [{ toolUseId: "t1", isError: false }],
+    });
+    // a MAIN write must not green the probe
+    expect(evaluate([{ subagent_file_write: { path_suffix: "artifacts/probe.json" } }], mainOnly)[0].pass).toBe(false);
+
+    const errored = ctx({ effectiveFidelity: "hostloop", fileToolAttempts: attempts, toolResults: [{ toolUseId: "t1", isError: true }] });
+    expect(evaluate([{ subagent_file_write: { path_suffix: "artifacts/probe.json" } }], errored)[0].pass).toBe(false);
+  });
+
+  it("subagent_file_write: exact `path` rejects a suffix-only coincidence (foo/artifacts/probe.json)", () => {
+    const attempts = [
+      {
+        tool: "Write",
+        paths: { file_path: "foo/artifacts/probe.json" },
+        gatePath: "foo/artifacts/probe.json",
+        origin: "subagent" as const,
+        toolUseId: "t1",
+      },
+    ];
+    const c = ctx({ effectiveFidelity: "hostloop", fileToolAttempts: attempts, toolResults: [{ toolUseId: "t1", isError: false }] });
+    expect(evaluate([{ subagent_file_write: { path: "artifacts/probe.json" } }], c)[0].pass).toBe(false);
+    expect(evaluate([{ subagent_file_write: { path_suffix: "artifacts/probe.json" } }], c)[0].pass).toBe(true);
+  });
+
+  it("subagent_file_write is tier-agnostic — passes on a non-hostloop tier too", () => {
+    const attempts = [
+      {
+        tool: "Write",
+        paths: { file_path: "artifacts/probe.json" },
+        gatePath: "artifacts/probe.json",
+        origin: "subagent" as const,
+        toolUseId: "t1",
+      },
+    ];
+    const c = ctx({ effectiveFidelity: "container", fileToolAttempts: attempts, toolResults: [{ toolUseId: "t1", isError: false }] });
+    expect(evaluate([{ subagent_file_write: { path_suffix: "artifacts/probe.json" } }], c)[0].pass).toBe(true);
+  });
+
+  it("subagent_file_write is evidence-unavailable when attempt/result telemetry is undefined", () => {
+    const [r] = evaluate(
+      [{ subagent_file_write: { path_suffix: "artifacts/probe.json" } }],
+      ctx({ fileToolAttempts: undefined, toolResults: undefined }),
+    );
+    expect(r.pass).toBe(false);
+    expect((r as { message: string }).message).toMatch(/cannot verify/);
   });
 });
 

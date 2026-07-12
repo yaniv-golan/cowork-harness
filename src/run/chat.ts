@@ -6,14 +6,14 @@ import { mkdirSync, existsSync, readdirSync, writeFileSync } from "node:fs";
 import { loadBaseline, resolveAgentBinary } from "../baseline.js";
 import { loadSession, buildLaunchPlan, userVisibleRootsFromPlan, readonlyFolderRootsFromPlan } from "../session.js";
 import { spawnContainer } from "../runtime/container.js";
-import { spawnHostLoop } from "../runtime/hostloop.js";
+import { spawnHostLoop, WORKSPACE_TOOL_ALIASES } from "../runtime/hostloop.js";
 import { spawnProtocol } from "../runtime/protocol.js";
 import { renderPrompts } from "../prompt.js";
 import { makeDisplayTranslator, vmPathContextFromPlan, linkifyForTerminal, shouldLinkify } from "./display-translate.js";
 import { writeVmPathContextFile } from "./vm-path-ctx-file.js";
 import { startEgressSidecar, registerCleanup } from "../egress/sidecar.js";
 import { Scenario } from "../types.js";
-import { LiveAgentSession, type AgentEvent } from "../agent/session.js";
+import { LiveAgentSession, type AgentEvent, type SdkMcp, type HookBundle } from "../agent/session.js";
 import { Run, type RunHooks } from "./run.js";
 import { ResourceSampler, makeSampleOnce, resolveIntervalMs } from "../runtime/resource-sampler.js";
 import { makeRenderer, startHeartbeat, type RenderPlan } from "./renderer.js";
@@ -27,8 +27,24 @@ import { readGateFlag } from "../loop-decision.js";
 import type { WebFetchProvenance } from "../hostloop/workspace-handler.js";
 import { checkHostLoopWriteConsent, logHostWriteNotice } from "../hostloop/safety.js";
 import { PATH_GATE_TOOL_NAMES } from "../hostloop/pretooluse-path-hook.js";
+import { makeHostLoopCanUseToolGate } from "../hostloop/canusetool-gate.js";
 
 const log = (s: string) => process.stderr.write(s);
+
+/** The chat lane's drive() options. Chat previously passed NO subagentAppend on any branch — a
+ *  delivery bug (production sends the per-loop sub-agent append on every Cowork session). Pure and
+ *  exported so the delivery contract is unit-testable without spawning a session. */
+export function chatDriveOpts(
+  prompts: { subagentAppend?: string },
+  hl?: { sdkMcp: SdkMcp; hooks: HookBundle },
+): { subagentAppend?: string; sdkMcp?: SdkMcp; hooks?: HookBundle; toolAliases?: Record<string, string> } {
+  return {
+    subagentAppend: prompts.subagentAppend,
+    // toolAliases rides along with the hostloop sdkMcp/hooks bundle (host-loop-only — see
+    // src/runtime/hostloop.ts's WORKSPACE_TOOL_ALIASES doc comment).
+    ...(hl ? { sdkMcp: hl.sdkMcp, hooks: hl.hooks, toolAliases: WORKSPACE_TOOL_ALIASES } : {}),
+  };
+}
 
 /** Fidelity tiers `chat` supports. A subset of the full Scenario tier set: `microvm`/`cowork` are NOT
  *  supported in the interactive REPL (no Lima/auto-pick plumbing here), so they are rejected loudly
@@ -236,7 +252,7 @@ export async function cmdChat(args: string[]) {
             hostSkillsDir: skillsStaged ? skillsDir : undefined,
           };
         })()
-      : undefined;
+      : { effectiveFidelity: fidelity };
   const prompts = renderPrompts(baseline, session, sessionId, plan.mounts.find((m) => m.kind === "folder")?.mountPath, hostLoopOpts);
 
   log(`cowork chat [${fidelity}] — run: ${sessionId}\n`);
@@ -307,7 +323,7 @@ export async function cmdChat(args: string[]) {
       const renderer = makeRenderer(renderPlan);
       const run = new Run(agent, decider, [renderer], sessionId);
       stopHeartbeat = startHeartbeat(renderer, renderPlan, start);
-      record = await run.drive(withSeedPrompt(seedPrompt, ttyTurns(rl)), {});
+      record = await run.drive(withSeedPrompt(seedPrompt, ttyTurns(rl)), chatDriveOpts(prompts));
     } else if (fidelity === "hostloop") {
       // honor --fidelity hostloop in chat, mirroring execute.ts's branch selection.
       const hl = spawnHostLoop(scenario, baseline, plan, outDir, sessionId, {
@@ -316,6 +332,7 @@ export async function cmdChat(args: string[]) {
         egressProxy: sidecar!.proxyUrl,
         dockerNetwork: sidecar!.network,
         provenanceRef,
+        webFetchViaApi: viaApiOn,
       });
       child = hl.child;
       containerName = hl.containerName;
@@ -335,7 +352,15 @@ export async function cmdChat(args: string[]) {
         (msg) => log(msg),
       );
       const agent = new LiveAgentSession(hl.child as any, outDir);
-      const decider = Chain(new ScriptedDecider([]), new PermissionDefaultDecider("cowork"), new PromptDecider(ask));
+      // Production interposes the canUseTool path gate BEFORE the user-facing callback (xe ?? Qt ?? Se);
+      // the harness analog is FIRST in the Chain — Chain stops at the first non-abstain, so any later
+      // placement would let the scripted/default/prompt deciders preempt a production-shaped deny.
+      const decider = Chain(
+        makeHostLoopCanUseToolGate(),
+        new ScriptedDecider([]),
+        new PermissionDefaultDecider("cowork"),
+        new PromptDecider(ask),
+      );
       const renderer = makeRenderer(renderPlan);
       // The path-containment gate's runtime tripwire: a gated tool call that completed successfully
       // with no evidence the gate ran on it means real filesystem access is unverified for this
@@ -364,18 +389,16 @@ export async function cmdChat(args: string[]) {
       const run = new Run(agent, decider, [renderer, tripwireHook], sessionId);
       stopHeartbeat = startHeartbeat(renderer, renderPlan, start);
       if (viaApiOn) {
+        run.enableWebFetchGate();
         provenanceRef.current = {
           isAllowed: (u) => run.provenanceHas(u),
           markAllowed: (u) => run.provenanceAdd(u),
-          requestApproval: (d, u) => run.requestWebFetchApproval(d, u),
+          requestApproval: undefined, // gated at can_use_tool — the handler must not self-approve (was the 2nd record)
           promptGateOn,
           permissiveMode: plan.permissionMode === "bypassPermissions",
         };
       }
-      record = await run.drive(withSeedPrompt(seedPrompt, ttyTurns(rl)), {
-        sdkMcp: hl.sdkMcp,
-        hooks: hl.hooks,
-      });
+      record = await run.drive(withSeedPrompt(seedPrompt, ttyTurns(rl)), chatDriveOpts(prompts, hl));
     } else {
       const ct = spawnContainer(scenario, baseline, plan, outDir, sessionId, {
         systemPromptAppend: prompts.systemPromptAppend,
@@ -400,7 +423,7 @@ export async function cmdChat(args: string[]) {
       const renderer = makeRenderer(renderPlan);
       const run = new Run(agent, decider, [renderer], sessionId);
       stopHeartbeat = startHeartbeat(renderer, renderPlan, start);
-      record = await run.drive(withSeedPrompt(seedPrompt, ttyTurns(rl)), {});
+      record = await run.drive(withSeedPrompt(seedPrompt, ttyTurns(rl)), chatDriveOpts(prompts));
     }
   } finally {
     stopHeartbeat?.();

@@ -6,7 +6,14 @@ import { gzipSync } from "node:zlib";
 import { compareBaselineVersions, loadBaseline, resolveAgentBinary, resolveMounts, sha256File } from "../src/baseline.js";
 import { createHash } from "node:crypto";
 import type { PlatformBaseline } from "../src/types.js";
-import { decodeFcacheGates, sync, checkMountModeFacts, checkWebFetchFacts, readMainBundle } from "../src/sync/cowork-sync.js";
+import {
+  decodeFcacheGates,
+  sync,
+  checkMountModeFacts,
+  checkWebFetchFacts,
+  readMainBundle,
+  checkSubagentOverrideGate,
+} from "../src/sync/cowork-sync.js";
 import {
   deriveSpawnEnv,
   checkSpawnContractFacts,
@@ -20,6 +27,8 @@ import {
   type GateState,
   type PromptFingerprint,
 } from "../src/sync/cowork-sync.js";
+import { extractSubagentBranchSlices, subagentBranchFingerprint, checkSubagentPromptFacts } from "../src/sync/cowork-sync.js";
+import { checkPathHookFacts } from "../src/sync/cowork-sync.js";
 import { MODELED_PLACEHOLDER_NAMES, INTENTIONALLY_UNMODELED_PLACEHOLDERS } from "../src/prompt.js";
 import { readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -990,5 +999,205 @@ describe("prompt drift guard (H1-H3)", () => {
     const result = checkPromptDrift(fp, fakeFingerprintsFile, MODELED_PLACEHOLDER_NAMES, INTENTIONALLY_UNMODELED_PLACEHOLDERS);
     expect(result.unknownDeltas.some((d) => d.includes("workspaceContext"))).toBe(false);
     expect(result.unknownDeltas.some((d) => d.includes("modelIdentity"))).toBe(false);
+  });
+});
+
+describe("checkSubagentOverrideGate (gate 124685897 — subagent-append server override)", () => {
+  const gate = (on: boolean) => ({
+    "124685897": { id: "124685897", name: "subagentPromptServerOverride", on, source: "defaultValue", value: undefined },
+  });
+  it("OFF (live state) → no delta", () => {
+    expect(checkSubagentOverrideGate(gate(false))).toEqual([]);
+  });
+  it("absent from fcache → no delta (the missing-fcache case is flagged separately by sync)", () => {
+    expect(checkSubagentOverrideGate(null)).toEqual([]);
+    expect(checkSubagentOverrideGate({})).toEqual([]);
+  });
+  it("ON → a HARD-STOP unknown delta (a pinned-gate drift alone only warns)", () => {
+    const flags = checkSubagentOverrideGate(gate(true));
+    expect(flags).toHaveLength(1);
+    expect(flags[0]).toMatch(/subagentPromptServerOverride/);
+    expect(flags[0]).toMatch(/override/i);
+  });
+});
+
+/** Synthetic bundle reproducing the verified 1.20186.1 generator/delivery SHAPES with PARAPHRASED
+ *  branch bodies. Only the short discriminator fragments and interpolation shapes the sentinel keys
+ *  on ("on the user's machine" / "exist only in the sandbox" / "working directory `${a??b}`" /
+ *  "rooted at `${x}`" / "mounted under `${x}/mnt/`") are verbatim — the real branch texts never
+ *  enter the public tree; the committed golden below derives from THIS synthetic text, so the suite
+ *  is self-consistent, while the real-asar fingerprints live only in the baselines JSON. The inner
+ *  markdown backticks are escaped (\`) to reproduce real minified template syntax, so the branch
+ *  slicer decodes them instead of terminating the slice at the first inner backtick. */
+function subagentBundle(overrides: Partial<Record<"keys" | "ternary" | "hl" | "vm" | "gate" | "map" | "delivery", string>> = {}): string {
+  const keys = overrides.keys ?? `subagentEnvHostLoop:"subagent_env_hl",subagentEnvVm:"subagent_env_vm"`;
+  const hl =
+    overrides.hl ??
+    "## Cowork environment\\n\\nSynthetic hl body: a subagent on the user's machine; file tools act on the real filesystem (working directory \\`${t??i}\\`); shell goes through \\`mcp__${n.WORKSPACE_MCP_SERVER}__${n.WORKSPACE_BASH}\\` with attached folders mounted under \\`${i}/mnt/\\`.";
+  const vm =
+    overrides.vm ??
+    "## Cowork environment\\n\\nSynthetic vm body: a subagent whose shell runs in a Linux sandbox rooted at \\`${i}\\`; files written there exist only in the sandbox; attached folders are mounted under \\`${i}/mnt/\\`.";
+  const ternary = overrides.ternary ?? "?Q.subagentEnvHostLoop:Q.subagentEnvVm";
+  const gate = overrides.gate ?? `function krt(e,o,r){if(!$t("124685897"))return r;...}`;
+  const map = overrides.map ?? "{vmCwd:i,hostCwd:t??i,workspaceBash:w}";
+  const delivery =
+    overrides.delivery ??
+    "appendSubagentSystemPrompt:I.buildSubagentEnvironmentPrompt({vmProcessName:v,hostLoopMode:f,hostCwd:S??void 0,spSectionPrompts:P})";
+  return `const SP={${keys}};${gate};function zo({vmProcessName:v,hostLoopMode:h,hostCwd:t,spSectionPrompts:P}){const i=\`/sessions/\${v}\`;const s=h?\`${hl}\`:\`${vm}\`;const a=h${ternary};const l=krt(P,a,s);return"\\n\\n"+sub(l,${map},a)}const buildSubagentEnvironmentPrompt=zo;const opts={${delivery}};`;
+}
+// The sentinel takes a per-MODULE file map (readMainBundleFiles' output). One synthetic "generator
+// module" is enough for these fixtures; a real bundle has three modules — the join covers the literal
+// anchors, the module scoping covers the branch texts.
+const genFiles = (o?: Parameters<typeof subagentBundle>[0]) => new Map([["index.chunk-gen.js", subagentBundle(o)]]);
+
+describe("checkSubagentPromptFacts — hl/vm sub-agent append sentinel", () => {
+  const clean = extractSubagentBranchSlices(genFiles())!;
+  const committed = { versions: { "1.20186.1": { hl: subagentBranchFingerprint(clean.hl), vm: subagentBranchFingerprint(clean.vm) } } };
+
+  it("clean bundle → no flags", () => {
+    expect(checkSubagentPromptFacts(genFiles(), committed)).toEqual([]);
+  });
+  it("body-text edit → fingerprint mismatch flags (head phrases alone would miss it)", () => {
+    const files = new Map([["index.chunk-gen.js", subagentBundle().replace("attached folders mounted", "attached folders placed")]]);
+    expect(checkSubagentPromptFacts(files, committed).some((f) => /fingerprint/.test(f))).toBe(true);
+  });
+  it("host/VM cwd SWAP in the hl branch → substitution-VALUE proof flags", () => {
+    // keeps the discriminator fragment AND both interpolation shapes (so slicing + the value proof
+    // run) but rebinds the mount to the HOST cwd instead of the vm session root — a genuine swap.
+    const swapped = genFiles({
+      hl: "## Cowork environment\\n\\nSynthetic hl body: a subagent on the user's machine (working directory \\`${t??i}\\`) with attached folders mounted under \\`${t}/mnt/\\`.",
+    });
+    expect(checkSubagentPromptFacts(swapped, null).some((f) => /substitution|hl substitution/.test(f))).toBe(true);
+  });
+  it("VM-branch root/mount BINDING mismatch → substitution-VALUE proof flags", () => {
+    const badVm = genFiles({
+      vm: "## Cowork environment\\n\\nSynthetic vm body: a subagent whose shell runs in a Linux sandbox rooted at \\`${i}\\`; files written there exist only in the sandbox; attached folders are mounted under \\`${j}/mnt/\\`.",
+    });
+    expect(checkSubagentPromptFacts(badVm, null).some((f) => /vm substitution/.test(f))).toBe(true);
+  });
+  it("key-pair renamed → flags the SP_SECTION_KEYS anchor specifically", () => {
+    expect(
+      checkSubagentPromptFacts(genFiles({ keys: `subagentEnvHost:"subagent_env_hl",subagentEnvVm:"subagent_env_vm"` }), null).some((f) =>
+        /SP_SECTION_KEYS/.test(f),
+      ),
+    ).toBe(true);
+  });
+  it("branch ternary inverted (vm-first) → flags the branch ternary anchor specifically", () => {
+    expect(
+      checkSubagentPromptFacts(genFiles({ ternary: "?Q.subagentEnvVm:Q.subagentEnvHostLoop" }), null).some((f) => /branch ternary/.test(f)),
+    ).toBe(true);
+  });
+  it("substitution map key renamed → flags the substitution map anchor specifically", () => {
+    expect(
+      checkSubagentPromptFacts(genFiles({ map: "{cwdVm:i,hostCwd:t??i,workspaceBash:w}" }), null).some((f) => /substitution map/.test(f)),
+    ).toBe(true);
+  });
+  it("delivery call missing spSectionPrompts → flags the delivery argument list anchor specifically", () => {
+    expect(
+      checkSubagentPromptFacts(
+        genFiles({
+          delivery: "appendSubagentSystemPrompt:I.buildSubagentEnvironmentPrompt({vmProcessName:v,hostLoopMode:f,hostCwd:S??void 0})",
+        }),
+        null,
+      ).some((f) => /delivery argument list/.test(f)),
+    ).toBe(true);
+  });
+  it("gate id changed in resolveSection → flags the resolveSection gate anchor specifically", () => {
+    expect(
+      checkSubagentPromptFacts(genFiles({ gate: `function krt(e,o,r){if(!$t("999"))return r;...}` }), null).some((f) =>
+        /resolveSection gate/.test(f),
+      ),
+    ).toBe(true);
+  });
+  it("DECOY: literals all present but the generator MODULE is gone (disconnected) → flags", () => {
+    // literals live in one module; the discriminators/generator in NONE — no module satisfies the
+    // co-occurrence, so the branch-text slice fails. Proves per-module connectivity is required.
+    const decoy = new Map([
+      ["a.js", `const SP={subagentEnvHostLoop:"subagent_env_hl",subagentEnvVm:"subagent_env_vm"};`],
+      ["b.js", `const t="on the user's machine";`], // no buildSubagentEnvironmentPrompt, no vm discriminator
+      ["c.js", `const u="exist only in the sandbox";`],
+    ]);
+    expect(checkSubagentPromptFacts(decoy, committed).some((f) => /generator branch texts/.test(f))).toBe(true);
+  });
+  it("PARTIAL committed entry (hl only) → hard-fail (a missing vm fingerprint must not silently pass)", () => {
+    const partial = { versions: { "1.20186.1": { hl: committed.versions["1.20186.1"].hl } as { hl: string; vm: string } } };
+    expect(checkSubagentPromptFacts(genFiles(), partial).some((f) => /missing an hl or vm fingerprint/.test(f))).toBe(true);
+  });
+  it("no committed fingerprints → hard-fail flag (never a silent skip)", () => {
+    expect(checkSubagentPromptFacts(genFiles(), null).some((f) => /fingerprint/.test(f))).toBe(true);
+  });
+});
+
+function pathHookFiles(mut: Partial<Record<"defining" | "consuming", (s: string) => string>> = {}): Map<string, string> {
+  let defining =
+    `const g5e=["Read","Write","Edit","Glob","Grep"],p5e=["Bash","NotebookEdit","REPL","JavaScript","WebFetch"],Jse="request_cowork_directory",Bse="chat";` +
+    // resolveFilePath lives in the SHARED/defining chunk — its two hard-block strings are here, NOT in
+    // the hostloop consumer (which only carries the caller-side "could not be safely resolved").
+    `function JKe(p){throw new Error("Refusing to resolve non-regular file")||new Error("Failed to resolve path")}` +
+    `export{g5e as HOST_LOOP_PATH_GATED_BUILTIN_TOOLS,p5e as HOST_LOOP_EXCLUDED_BUILTIN_TOOLS,Jse as REQUEST_COWORK_DIRECTORY,Bse as SESSION_TYPE_CHAT,Nce as isPathContainedInFolders,JKe as resolveFilePath};`;
+  let consuming =
+    `const Yt=["Write","Edit","MultiEdit"];` +
+    `function qt(e){return "read-only in this session — it is a hardlink to the user's original file" && "(spooled tool results)" && "(plugin, skill, or knowledge content)"}` +
+    `const Zt="Path is outside allowed working directories";` +
+    `function xe(e,o){for(const k of ["file_path","path"]){}return "is a VM path. In this session the \${e} tool runs on the host filesystem"}` +
+    `const ie=n===t.SESSION_TYPE_CHAT,st=ie?[...be,...nt]:[c,u,h];` +
+    `PreToolUse:[{matcher:[...t.HOST_LOOP_PATH_GATED_BUILTIN_TOOLS,"MultiEdit"].join("|"),hooks:[async g=>{` +
+    `const raw=["file_path","path"].map(k=>g[k]).find(v=>typeof v=="string");` +
+    `try{}catch(err){return "could not be safely resolved"}` +
+    `if(qt(g))return qt(g);` +
+    `const lt=[...st,...T(),...ie||ct?[]:(ne==null?void 0:ne())??[]];getMidSessionReadOnlyPaths;spooledProjectsReadOnlyRoots;` +
+    `if(!t.isPathContainedInFolders(cand,lt))return ct?"is outside this session's scratch directory, so \${e}":"is outside this session's connected folders, so \${e}"}]}],` +
+    `const Se=e.canUseTool;Se&&(e.canUseTool=async(g,S,k)=>xe(g,S)??Qt(g,S,k.decisionReason,n)??Se(g,S,k));`;
+  if (mut.defining) defining = mut.defining(defining);
+  if (mut.consuming) consuming = mut.consuming(consuming);
+  return new Map([
+    ["index.chunk-zFJ_MSb3.js", defining],
+    ["index.chunk-CS-g0Skn.js", consuming],
+  ]);
+}
+
+describe("checkPathHookFacts — 1.20186.1 path-gate sentinel (module-bounded)", () => {
+  it("clean bundle → no flags", () => {
+    expect(checkPathHookFacts(pathHookFiles())).toEqual([]);
+  });
+  it("MUTATION: gated set membership changed → flags", () => {
+    const f = pathHookFiles({ defining: (s) => s.replace(`"Grep"]`, `"Grep","Bash"]`) });
+    expect(checkPathHookFacts(f).length).toBeGreaterThan(0);
+  });
+  it("MUTATION: a deny text reworded → flags (each text is its OWN anchor)", () => {
+    const f = pathHookFiles({ consuming: (s) => s.replace("connected folders, so", "attached folders, so") });
+    expect(checkPathHookFacts(f).some((x) => /connected folders/.test(x))).toBe(true);
+  });
+  it("MUTATION: canUseTool wrapper made unconditional (Se&& dropped) → flags", () => {
+    const f = pathHookFiles({ consuming: (s) => s.replace("Se&&(e.canUseTool", "(e.canUseTool") });
+    expect(checkPathHookFacts(f).length).toBeGreaterThan(0);
+  });
+  it("MUTATION: qt order inverted (containment before qt) → flags", () => {
+    const f = pathHookFiles({
+      consuming: (s) => s.replace("if(qt(g))return qt(g);", "").replace("return ct?", "return qt(g)??ct?"),
+    });
+    expect(checkPathHookFacts(f).length).toBeGreaterThan(0);
+  });
+  it("MUTATION: excluded-tool set changed → flags", () => {
+    const f = pathHookFiles({ defining: (s) => s.replace(`"WebFetch"]`, `"WebFetch","Agent"]`) });
+    expect(checkPathHookFacts(f).length).toBeGreaterThan(0);
+  });
+  it("DECOY: the gated-set array exists but is NOT bound to the export name → flags (array↔export binding required)", () => {
+    // g5e still holds the 5-tool array, but the EXPORT points at an unrelated local zzz=[] — the hop
+    // from HOST_LOOP_PATH_GATED_BUILTIN_TOOLS must land on the WRONG array and fail. Proves the
+    // sentinel binds the array to its export name, not "some 5-tool array exists somewhere".
+    const f = pathHookFiles({
+      defining: (s) =>
+        s
+          .replace(`g5e as HOST_LOOP_PATH_GATED_BUILTIN_TOOLS`, `zzz as HOST_LOOP_PATH_GATED_BUILTIN_TOOLS`)
+          .replace(`Bse="chat";`, `Bse="chat",zzz=["Read","Edit"];`),
+    });
+    expect(checkPathHookFacts(f).some((x) => /gated 5-set/.test(x))).toBe(true);
+  });
+  it("DECOY: install site references a DIFFERENT property name than the defining export → flags", () => {
+    const f = pathHookFiles({
+      consuming: (s) => s.replace('.HOST_LOOP_PATH_GATED_BUILTIN_TOOLS,"MultiEdit"]', '.SOME_OTHER_SET,"MultiEdit"]'),
+    });
+    expect(checkPathHookFacts(f).some((x) => /install site/.test(x))).toBe(true);
   });
 });

@@ -5,7 +5,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import readline from "node:readline";
 import { loadBaseline } from "../src/baseline.js";
-import { resolveAgentBinary } from "../src/baseline.js";
+import { resolveAgentBinary, resolveHostAgentBinary } from "../src/baseline.js";
 
 /**
  * Live contract tests — assert the real staged agent STILL behaves as the SPEC + the
@@ -231,4 +231,34 @@ describe.skipIf(!CAN || !TOKEN)("live contract — full turn (needs token)", () 
     // our runAgent auto-allows; for AskUserQuestion the answer must carry updatedInput.answers
     expect(r.result?.is_error).toBe(false);
   }, 90000);
+});
+
+// F: hostloop additionally needs the NATIVE host agent binary (resolveHostAgentBinary) alongside the
+// Linux/arm64 ELF + sidecar image the suite above already gates on — a container-only CAN would let
+// this describe attempt a hostloop run with no native binary staged.
+let NATIVE_AGENT = "";
+try {
+  NATIVE_AGENT = resolveHostAgentBinary(loadBaseline("latest"));
+} catch {
+  /* nativeOk false below */
+}
+const nativeOk = !!NATIVE_AGENT && existsSync(NATIVE_AGENT);
+const PROBE_CAN = dockerOk && imageOk && binOk && nativeOk && !!TOKEN; // hostloop needs BOTH agents + image + token
+
+describe.skipIf(!PROBE_CAN)("live: sub-agent relative-Write acceptance probe (hostloop)", () => {
+  it("the causal chain holds: dispatch -> child Write -> non-error result -> artifact content, zero VM paths", () => {
+    const r = spawnSync("node", ["dist/cli.js", "run", "examples/probes/subagent-write-probe.scenario.yaml", "--output-format", "json"], {
+      encoding: "utf8",
+      env: { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: TOKEN },
+      timeout: 600_000,
+    });
+    const out = JSON.parse(r.stdout);
+    const assertions = (out.results ?? []).flatMap(
+      (res: { assertions?: { pass: boolean; assertion?: unknown; message?: string }[] }) => res.assertions ?? [],
+    );
+    const failed = assertions.filter((a: { pass: boolean }) => !a.pass);
+    expect(assertions.length, "no assertions evaluated — did the run reach the assert phase?").toBeGreaterThan(0);
+    expect(failed, JSON.stringify(failed, null, 2)).toEqual([]);
+    expect(r.status).toBe(0);
+  }, 620_000);
 });

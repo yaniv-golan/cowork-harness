@@ -196,7 +196,9 @@ export function makeRenderer(plan: RenderPlan, write: Sink = stderr): Renderer {
           const depth = e.parentToolUseId ? (agentDepth.get(e.parentToolUseId) ?? 0) + 1 : 1;
           agentDepth.set(e.toolUseId, depth);
           if (plan.verbose)
-            write(`  ${"  ".repeat(depth - 1)}${dim(plan, "└ sub-agent: " + e.agentType + " [" + e.declaredTools.join(",") + "]")}\n`);
+            write(
+              `  ${"  ".repeat(depth - 1)}${dim(plan, "└ sub-agent: " + e.dispatchAgentType + " [" + e.declaredTools.join(",") + "]")}\n`,
+            );
           break;
         }
         case "thinking":

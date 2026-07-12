@@ -221,3 +221,61 @@ supported real-rootfs parity path sidesteps boot entirely: `scripts/build-rootfs
 `docker import`s the rootfs *filesystem* and the harness execs the agent directly — bypassing
 `coworkd` init and its host-device coupling — producing an agent image with verified
 byte-for-byte file parity, consumed via `COWORK_AGENT_IMAGE`.
+
+---
+
+## Protocol-tier sub-agents get no Cowork environment append
+
+**Real Cowork behaviour:** every session delivers a per-loop sub-agent environment append
+(`subagent_env_hl` on host-loop, `subagent_env_vm` in the VM loop) via the `initialize`
+control_request; the agent applies it to Task-dispatched children (fork/`useExactTools` dispatches are
+excluded agent-side).
+
+**Harness behaviour:** hostloop delivers the hl branch, container/microvm the vm branch; the
+**protocol** tier deliberately sends none. Protocol runs the CLI over a private `work/` cwd with no VM
+mounts — neither branch's environment description is factually true there, so sending either would
+teach the model false claims about its filesystem. Consequence: protocol sub-agents get no Cowork
+environment framing. This is a decided divergence, not an oversight; use hostloop (the production
+default loop) or container for sub-agent environment fidelity.
+
+---
+
+## Path-gate roots are frozen at spawn
+
+**Real Cowork behaviour:** the host-loop path gate recomputes folder-permission and mid-session
+read-only roots PER HOOK CALL (`getFolderPermissionPaths()` / `getMidSessionReadOnlyPaths()` in the
+per-call root assembly), so a folder added mid-session is picked up live.
+
+**Harness behaviour:** `allowedRoots`/`readOnlyRoots` are computed once at spawn (hostloop.ts). The
+harness has no mid-session folder-add mechanism (see "Mid-session folder addition" above), so the
+frozen set is behaviorally equivalent today — there is nothing that could change between calls.
+Revisit if mid-session adds ever land.
+
+---
+
+## Chat-lane session topology (scratchMode stays false)
+
+**Real Cowork behaviour:** chat-type sessions have scratch containment (writes confined to
+hostCwd/outputs) and read-roots that include uploads plus both `projects` spool dirs; plugin content is
+absent from chat roots entirely.
+
+**Harness behaviour:** the `chat` lane runs cowork-type sessions with `scratchMode: false`
+(hostloop.ts, consented gap, security-reviewed 2026-07-04). Consequences vs a production chat session:
+writes are gated by `allow_host_writes` consent instead of scratch containment; spooled-projects
+read-roots exist only as the task-lane spool dir; connected-folder scope differs. The task-lane
+read-only categories (uploads hardlink write-block, spool, plugin) ARE modeled.
+
+---
+
+## VM tiers have no workspace tool aliases
+
+**Real Cowork behaviour:** host-loop aliases `Bash→mcp__workspace__bash` and
+`WebFetch→mcp__workspace__web_fetch`; the VM loop ALSO aliases WebFetch to a host-side SDK-MCP
+`web_fetch` (gate `coworkWebFetchViaApi`, live true) — "Bash is the only tool that truly diverges
+between loops."
+
+**Harness behaviour:** host-loop sets both aliases (`WORKSPACE_TOOL_ALIASES`, hostloop.ts) on the
+`initialize` control_request. The container/microvm tiers register only the `cowork` SDK server — no
+workspace `web_fetch` server exists there to alias to — so they set NO aliases. Consequence: a VM-tier
+model emitting a bare `WebFetch` errors in the harness where production resolves it. Host-loop is the
+production-default loop; use hostloop for alias-sensitive scenarios.

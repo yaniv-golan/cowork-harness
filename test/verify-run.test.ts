@@ -25,7 +25,7 @@ function keptRun(): string {
     gateDeliveries: [],
     egress: [{ host: "tracker.evil.com", decision: "deny" }],
     assertions: [],
-    subagents: [{ agentType: "x", declaredTools: [], toolsUsed: [{ name: "Read", count: 1 }] }],
+    subagents: [{ dispatchAgentType: "x", declaredTools: [], toolsUsed: [{ name: "Read", count: 1 }] }],
     outDir: root,
     workDir,
     durationMs: 1,
@@ -339,7 +339,7 @@ describe.skipIf(!can)("verify-run re-asserts a kept run dir without a live agent
   it("subagent_output_contains passes against a real result.json with output populated (verify-run ctx-site check)", () => {
     const run = keptRun();
     const result = JSON.parse(require("node:fs").readFileSync(join(run, "result.json"), "utf8"));
-    result.subagents = [{ agentType: "x", declaredTools: [], toolsUsed: [{ name: "Read", count: 1 }], output: "found 3 files" }];
+    result.subagents = [{ dispatchAgentType: "x", declaredTools: [], toolsUsed: [{ name: "Read", count: 1 }], output: "found 3 files" }];
     writeFileSync(join(run, "result.json"), JSON.stringify(result));
     const sc = scenarioFile(run, "  - subagent_output_contains: { contains: '3 files' }\n");
     const { code, text } = verifyRun(run, sc);

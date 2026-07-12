@@ -49,14 +49,15 @@ describe("toTimelineFields", () => {
       type: "subagent_dispatch",
       toolUseId: "toolu_2",
       parentToolUseId: undefined,
-      agentType: "general-purpose",
+      dispatchAgentType: "general-purpose",
+      typeOmitted: false,
       declaredTools: [],
     };
     expect(toTimelineFields(ev)).toEqual({
       type: "subagent_dispatch",
       toolUseId: "toolu_2",
       parentToolUseId: undefined,
-      agentType: "general-purpose",
+      dispatchAgentType: "general-purpose",
     });
   });
 
@@ -142,7 +143,10 @@ describe("TimelineWriter", () => {
     const w = new TimelineWriter(outDir);
     const first = w.record({ type: "tool_use", name: "Agent", input: { subagent_type: "general-purpose" }, toolUseId: "toolu_3" }, 5);
     const skipped = w.record({ type: "assistant_text", text: "narrating" }, 5);
-    const second = w.record({ type: "subagent_dispatch", toolUseId: "toolu_3", agentType: "general-purpose", declaredTools: [] }, 5);
+    const second = w.record(
+      { type: "subagent_dispatch", toolUseId: "toolu_3", dispatchAgentType: "general-purpose", declaredTools: [], typeOmitted: false },
+      5,
+    );
     expect(first).toMatchObject({ seq: 0, line: 5 });
     expect(skipped).toBeUndefined();
     expect(second).toMatchObject({ seq: 1, line: 5 });
@@ -177,7 +181,10 @@ describe("TimelineWriter", () => {
     const outDir = tmp();
     const w = new TimelineWriter(outDir);
     w.record({ type: "tool_use", name: "Skill", input: { skill: "a" }, toolUseId: "t1" }, 0);
-    const dispatch = w.record({ type: "subagent_dispatch", toolUseId: "disp1", agentType: "general-purpose", declaredTools: [] }, 1);
+    const dispatch = w.record(
+      { type: "subagent_dispatch", toolUseId: "disp1", dispatchAgentType: "general-purpose", declaredTools: [], typeOmitted: false },
+      1,
+    );
     expect(dispatch).toMatchObject({ skillScope: "a" });
     const child = w.record({ type: "tool_use", name: "Read", input: {}, toolUseId: "t3", parentToolUseId: "disp1" }, 2);
     expect(child).toMatchObject({ skillScope: "a" }); // rule 3: child inherits the sticky window (unchanged since the dispatch opened)
@@ -186,7 +193,10 @@ describe("TimelineWriter", () => {
   it("a Skill tool_use that is itself parented (inside a sub-agent) does NOT change the top-level sticky window", () => {
     const outDir = tmp();
     const w = new TimelineWriter(outDir);
-    const dispatch = w.record({ type: "subagent_dispatch", toolUseId: "disp1", agentType: "general-purpose", declaredTools: [] }, 0);
+    const dispatch = w.record(
+      { type: "subagent_dispatch", toolUseId: "disp1", dispatchAgentType: "general-purpose", declaredTools: [], typeOmitted: false },
+      0,
+    );
     expect(dispatch).toMatchObject({ skillScope: "(root)" });
     w.record({ type: "tool_use", name: "Skill", input: { skill: "nested" }, toolUseId: "t1", parentToolUseId: "disp1" }, 1);
     const afterward = w.record({ type: "tool_use", name: "Read", input: {}, toolUseId: "t2" }, 2);

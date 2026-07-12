@@ -39,7 +39,7 @@ const record = (over: Partial<RunRecord> = {}): RunRecord =>
     toolCounts: { Read: 2, Bash: 1 },
     models: [],
     subagentTools: new Set(),
-    subagents: [{ toolUseId: "t1", agentType: "Explore", declaredTools: [], toolsUsed: [] }],
+    subagents: [{ toolUseId: "t1", dispatchAgentType: "Explore", declaredTools: [], toolsUsed: [] }],
     questions: [],
     decisions: [],
     permissiveAutoAllow: [],

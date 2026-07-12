@@ -3295,6 +3295,9 @@ async function cmdVerifyRun(args: string[]) {
     gateDeliveriesMissing: result.gateDeliveries === undefined,
     toolResultTexts: (result.toolResults ?? []).map((r) => r.assertText ?? r.text),
     toolResultsTruncated: (result.toolResults ?? []).map((r) => r.assertText === undefined),
+    // undefined (not []) when result.toolResults itself is absent — an old/partial result.json,
+    // distinct from a genuine empty array — mirrors toolResultsMissing's own undefined-preserving convention.
+    toolResults: result.toolResults?.map((r) => ({ toolUseId: r.toolUseId, isError: r.isError })),
     toolErrors: result.toolErrors,
     transcriptMissing: sidecarTranscript === null,
     questionsMissing: sidecarQuestions === null,
@@ -3326,6 +3329,8 @@ async function cmdVerifyRun(args: string[]) {
     mcpErrors: result.mcpErrors,
     resources: result.resources,
     hookEvents: result.hookEvents,
+    fileToolAttempts: result.fileToolAttempts,
+    pathDenials: result.pathDenials,
     presentedFiles: result.presentedFiles,
     evidenceErrors: result.evidenceErrors,
     effectiveFidelity: result.effectiveFidelity,
@@ -3366,6 +3371,9 @@ async function cmdVerifyRun(args: string[]) {
           `cannot confirm it is current vs the skill; re-keep a fresh run to be sure answer-coverage is against live gates.`,
       );
     } else if (recFp.skillHash !== undefined) {
+      // Only `recFp.baseline` (a STRING) is in scope here, not a resolved baseline object — the trailing
+      // `buildFingerprint` arg is omitted (never re-resolved by appVersion; see hashBaselinePromptAssets).
+      // This compares skillHash only (fingerprintSkillDrift), so the missing promptAssetsHash is moot.
       const liveFp = buildFingerprint(scenario.session, recFp.baseline, undefined, scenario.skills);
       const drift = fingerprintSkillDrift(recFp, liveFp);
       if (drift) {

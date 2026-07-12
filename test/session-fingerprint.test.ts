@@ -83,6 +83,26 @@ describe("buildSessionFingerprint (function-level)", () => {
     expect(a).toBeDefined();
     expect(a).toEqual(b); // identical authored shape at two different absolute prefixes ⇒ identical hash
   });
+
+  it("a default session (no agent_env) hashes IDENTICALLY to one authored before the field existed", () => {
+    // `agent_env` is folded into the shape ONLY when non-default, so every existing session's fingerprint
+    // stays byte-stable across this change — a knob-less session must not move.
+    const d = mkdtempSync(join(tmpdir(), "cwh-sfp-agentenv-default-"));
+    const folder = join(d, "proj");
+    mkdirSync(folder, { recursive: true });
+    writeFileSync(join(d, "s1.yaml"), `folders:\n  - from: ${folder}\n`);
+    writeFileSync(join(d, "s2.yaml"), `folders:\n  - from: ${folder}\nagent_env: {}\n`);
+    expect(buildSessionFingerprint("s1.yaml", d)).toEqual(buildSessionFingerprint("s2.yaml", d));
+  });
+
+  it("a knob-bearing session's hash DIFFERS from the same session without agent_env", () => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-sfp-agentenv-diff-"));
+    const folder = join(d, "proj");
+    mkdirSync(folder, { recursive: true });
+    writeFileSync(join(d, "s1.yaml"), `folders:\n  - from: ${folder}\n`);
+    writeFileSync(join(d, "s2.yaml"), `folders:\n  - from: ${folder}\nagent_env:\n  subagent_model: claude-haiku-x\n`);
+    expect(buildSessionFingerprint("s1.yaml", d)).not.toEqual(buildSessionFingerprint("s2.yaml", d));
+  });
 });
 
 const baseScenario = (session: string) => ({

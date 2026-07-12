@@ -15,7 +15,12 @@ export interface AgentArgsOpts {
   systemPromptAppend?: string;
   mcpGuest?: string;
   disallowed?: string[]; // e.g. ["Bash","WebFetch"] for host-loop
-  extraTools?: string[]; // e.g. mcp__workspace__bash — appended to --tools AND --allowedTools
+  extraTools?: string[]; // e.g. mcp__workspace__bash — appended to --tools (registration)
+  // Deliberately NOT defaulted from extraTools: registering a tool and pre-approving it
+  // session-wide are different decisions, so each caller states its pre-approval set explicitly —
+  // appended to --allowedTools ONLY. e.g. host-loop pre-approves bash but gates web_fetch through
+  // can_use_tool, so the two lists diverge.
+  extraAllowedTools?: string[];
 }
 
 /**
@@ -28,7 +33,14 @@ export interface AgentArgsOpts {
 export function baseAgentArgs(
   baseline: PlatformBaseline,
   plan: LaunchPlan,
-  opts: { mntRoot: string; mcpGuest?: string; systemPromptAppend?: string; disallowed?: string[]; extraTools?: string[] },
+  opts: {
+    mntRoot: string;
+    mcpGuest?: string;
+    systemPromptAppend?: string;
+    disallowed?: string[];
+    extraTools?: string[];
+    extraAllowedTools?: string[];
+  },
 ): string[] {
   const spawn = baseline.spawn;
   // Real Cowork ALWAYS emits `--effort`, for every model class (picker, no-picker, regex-default,
@@ -37,7 +49,11 @@ export function baseAgentArgs(
   // trailing "medium" only guards a baseline synced before `spawn.effortDefault` existed).
   const effort = plan.effort ?? spawn?.effortDefault ?? "medium";
   const tools = [...(spawn?.tools ?? []).filter(notIn(opts.disallowed)), ...(opts.extraTools ?? [])];
-  const allowed = [...(spawn?.allowedTools ?? []).filter(notIn(opts.disallowed)), ...(opts.extraTools ?? [])];
+  // extraAllowedTools is deliberately NOT defaulted from extraTools: registering a tool and
+  // pre-approving it session-wide are different decisions, so each caller states its pre-approval set
+  // explicitly (no hidden coupling). Callers keep their CURRENT sets — behavior is unchanged except
+  // where a caller opts into the split (host-loop's web_fetch gate).
+  const allowed = [...(spawn?.allowedTools ?? []).filter(notIn(opts.disallowed)), ...(opts.extraAllowedTools ?? [])];
   return [
     "-p",
     "--verbose",
@@ -90,6 +106,7 @@ export function agentArgs(baseline: PlatformBaseline, plan: LaunchPlan, opts: Ag
       systemPromptAppend: opts.systemPromptAppend,
       disallowed: opts.disallowed,
       extraTools: opts.extraTools,
+      extraAllowedTools: opts.extraAllowedTools,
     }),
   ];
 }

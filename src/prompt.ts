@@ -25,13 +25,21 @@ export interface RenderedPrompts {
 }
 
 /**
- * Host-loop's prompt-token substitution recipe (production's exact recipe). Only
- * consulted when `effectiveFidelity === "hostloop"`; every other tier keeps today's VM-path tokens
- * byte-identical. All fields are HOST paths (hostloop is the one tier where the model already speaks
- * host paths, matching what production substitutes there).
+ * `renderPrompts` options. `effectiveFidelity` is REQUIRED on every call — it is both the tier the
+ * caller is rendering for AND the sub-agent-append branch selector (hostloop -> subagent_env_hl
+ * asset; container/microvm -> subagent_env_vm asset; protocol -> no append, a decided divergence —
+ * see docs/fidelity-gaps.md). An omitted tier used to silently select the vm branch; that bug class
+ * is why the parameter is now required rather than optional-with-a-default.
+ *
+ * The host-path fields below are only consulted when `effectiveFidelity === "hostloop"`; every other
+ * tier keeps today's VM-path tokens byte-identical. All fields are HOST paths (hostloop is the one
+ * tier where the model already speaks host paths, matching what production substitutes there).
  */
-export interface HostLoopPromptOpts {
-  effectiveFidelity?: string;
+export interface RenderPromptOpts {
+  /** The effective tier — ALSO the sub-agent-append branch selector, REQUIRED on every call
+   *  (hostloop -> subagent_env_hl asset; container/microvm -> subagent_env_vm asset;
+   *  protocol -> no append, a decided divergence — see docs/fidelity-gaps.md). */
+  effectiveFidelity: string;
   /** `{{cwd}}` -> this (production: `hostCwd ?? sessionRoot`). */
   hostCwd?: string;
   /** Pre-replacement target for the literal substring `{{cwd}}/mnt/uploads` — MUST be applied before
@@ -49,6 +57,7 @@ export interface HostLoopPromptOpts {
 /** The {{placeholder}} names renderPrompts() substitutes. KEEP IN LOCKSTEP with the `tokens` map below. */
 export const MODELED_PLACEHOLDER_NAMES: ReadonlySet<string> = new Set([
   "cwd",
+  "vmCwd",
   "skillsDir",
   "workspaceFolder",
   "folderSelected",
@@ -73,8 +82,8 @@ export function renderPrompts(
    * uses the ACTUAL resolved+gated mount name and can never drift from where the folder is really mounted.
    * Undefined when no folder is connected.
    */
-  firstFolderMountPath?: string,
-  hostLoopOpts?: HostLoopPromptOpts,
+  firstFolderMountPath: string | undefined,
+  opts: RenderPromptOpts,
 ): RenderedPrompts {
   const spawn = baseline.spawn;
   if (!spawn) return {};
@@ -89,7 +98,7 @@ export function renderPrompts(
   const pad = (n: number) => String(n).padStart(2, "0");
   const localDateTime =
     `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ` + `${pad(now.getHours())}:${pad(now.getMinutes())}`;
-  const isHostLoop = hostLoopOpts?.effectiveFidelity === "hostloop";
+  const isHostLoop = opts.effectiveFidelity === "hostloop";
   const tokens: Record<string, string> = {};
   // Host-loop's uploads pre-replacement MUST be inserted BEFORE the "{{cwd}}" entry below: `subst`
   // applies tokens in Object.entries insertion order (guaranteed for string keys), each a global
@@ -98,12 +107,14 @@ export function renderPrompts(
   // only what's left. Reversing the order would rewrite "{{cwd}}/mnt/uploads" via the generic {{cwd}}
   // token first, then naively append "/mnt/uploads" to whatever host path that yields — which is only
   // correct when the uploads dir happens to be a literal `<hostCwd>/mnt/uploads` child, not in general.
-  if (isHostLoop && hostLoopOpts?.hostUploadsDir) tokens["{{cwd}}/mnt/uploads"] = hostLoopOpts.hostUploadsDir;
-  tokens["{{cwd}}"] = isHostLoop ? (hostLoopOpts?.hostCwd ?? sessionRoot) : sessionRoot;
-  tokens["{{skillsDir}}"] = isHostLoop ? (hostLoopOpts?.hostSkillsDir ?? "(no skills directory — skip skill reads)") : `${mntRoot}/.claude`;
-  tokens["{{workspaceFolder}}"] = isHostLoop
-    ? (hostLoopOpts?.hostWorkspaceFolder ?? hostLoopOpts?.hostCwd ?? sessionRoot)
-    : workspaceFolder;
+  if (isHostLoop && opts.hostUploadsDir) tokens["{{cwd}}/mnt/uploads"] = opts.hostUploadsDir;
+  tokens["{{cwd}}"] = isHostLoop ? (opts.hostCwd ?? sessionRoot) : sessionRoot;
+  // {{vmCwd}}: the VM session root — used by the hl sub-agent append's bash-mount clause, where the
+  // mounts live under /sessions/<id>/mnt/ even though file tools run on the host. Valued from the
+  // renderer's own sessionRoot on every tier (a second input could disagree with it).
+  tokens["{{vmCwd}}"] = sessionRoot;
+  tokens["{{skillsDir}}"] = isHostLoop ? (opts.hostSkillsDir ?? "(no skills directory — skip skill reads)") : `${mntRoot}/.claude`;
+  tokens["{{workspaceFolder}}"] = isHostLoop ? (opts.hostWorkspaceFolder ?? opts.hostCwd ?? sessionRoot) : workspaceFolder;
   tokens["{{folderSelected}}"] = firstFolderMountPath ? "true" : "false";
   tokens["{{modelName}}"] = session.model ?? "Claude";
   // <env> tokens (>=1.18286.0 append). The exact Desktop date format is unverified from the asar
@@ -130,9 +141,28 @@ export function renderPrompts(
     }
     return subst(stripComments(readFileSync(p, "utf8"))).trim();
   };
+  const isProtocol = opts.effectiveFidelity === "protocol";
+  const readSubagentAppend = (): string | undefined => {
+    if (isProtocol) return undefined; // decided divergence: neither branch text is true on protocol topology
+    if (!isHostLoop) return read(spawn.subagentAppend);
+    if (!spawn.subagentAppendHostLoop) {
+      // A hostloop run must NEVER silently fall back to the VM branch text — that is exactly the
+      // factually-inverted append this selection exists to fix. Same escape hatch as read().
+      const msg =
+        `[prompt] baseline has no spawn.subagentAppendHostLoop pointer — hostloop sub-agents would get ` +
+        `the WRONG (VM) environment text. Backfill the pointer (verified families: >=1.18286.2) or run a supported baseline.`;
+      if (process.env.COWORK_HARNESS_ALLOW_MISSING_PROMPT === "1") {
+        warn(`::warning:: ${msg}\n`);
+        fidelityWarnings.push(msg);
+        return undefined;
+      }
+      throw new Error(`cowork-harness: ${msg}`);
+    }
+    return read(spawn.subagentAppendHostLoop);
+  };
   return {
     systemPromptAppend: read(spawn.promptTemplate),
-    subagentAppend: read(spawn.subagentAppend),
+    subagentAppend: readSubagentAppend(),
     fidelityWarnings: fidelityWarnings.length ? fidelityWarnings : undefined,
   };
 }

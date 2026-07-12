@@ -166,7 +166,53 @@ export const SessionConfig = z.strictObject({
       max_thinking_tokens: z.number().int().positive().optional(),
     })
     .default({}),
+
+  // --- tier-uniform agent-env knob ---
+  // hostloop AND protocol spawn the agent over the OPERATOR's full shell env (`...process.env` /
+  // `{...plan.baseEnv}`), while container/microvm build a constructed allowlist. So an operator-exported
+  // CLAUDE_CODE_SUBAGENT_MODEL / ENABLE_TOOL_SEARCH / CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS silently
+  // affects only the env-inheriting tiers. This field is the authored, uniform replacement: it applies
+  // across ALL FOUR tiers, and the three keys are additionally SCRUBBED from the operator layer on
+  // hostloop/protocol (the only tiers that inherit it) so an unset stray shell value can never leak
+  // through. Precedence is TIER-QUALIFIED: hostloop/container/microvm layer a baseline `spawn.env`, so
+  // it's knob > baseline spawn.env > operator env (scrubbed); protocol has no baseline-env overlay (it
+  // spawns from `{...plan.baseEnv}` only), so it's the two-layer knob > operator env (scrubbed).
+  // `tool_search` unset (key absent) = binary mode `tst` — ToolSearch ON first-party; the binary's
+  // "standard" mode name means DISABLED (a naming trap) — `tool_search: "off"` emits
+  // `ENABLE_TOOL_SEARCH="off"`, the binary's actual disable spelling.
+  agent_env: z
+    .strictObject({
+      subagent_model: z.string().optional(), // -> CLAUDE_CODE_SUBAGENT_MODEL (binary precedence: env > dispatch param > frontmatter > inherit)
+      tool_search: z.enum(["auto", "off"]).optional(), // -> ENABLE_TOOL_SEARCH
+      disable_experimental_betas: z.boolean().optional(), // -> CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS="1" (also disables ToolSearch)
+    })
+    .default({}),
 });
+
+/** The three env keys that leak asymmetrically: hostloop/protocol inherit them from the operator's shell
+ *  (`...process.env` / `{...plan.baseEnv}`); container/microvm never do (a constructed allowlist). Scrubbed
+ *  from the OPERATOR layer alone (before any baseline/knob overlay) on the two inheriting tiers. */
+export const SCRUBBED_AGENT_ENV_KEYS = [
+  "CLAUDE_CODE_SUBAGENT_MODEL",
+  "ENABLE_TOOL_SEARCH",
+  "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS",
+] as const;
+
+/** Map the authored `agent_env` knob to its exact env keys. An unset field emits NO key — never an empty
+ *  string — so e.g. omitted `tool_search` leaves the binary at its own default (mode `tst`, ToolSearch ON
+ *  first-party), rather than accidentally forcing some empty-string mode. */
+export function agentEnvOverrides(cfg: {
+  subagent_model?: string;
+  tool_search?: "auto" | "off";
+  disable_experimental_betas?: boolean;
+}): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (cfg.subagent_model !== undefined) out.CLAUDE_CODE_SUBAGENT_MODEL = cfg.subagent_model;
+  if (cfg.tool_search !== undefined) out.ENABLE_TOOL_SEARCH = cfg.tool_search;
+  if (cfg.disable_experimental_betas) out.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS = "1";
+  return out;
+}
+
 export type SessionConfig = z.infer<typeof SessionConfig> & {
   /** Resolved-only, never authored: a map from each RESOLVED `remote_plugins` path to the synthetic mount id
    *  derived from its DECLARED (pre-absolutization) source string. Populated by `resolveSessionPaths` so the
@@ -218,6 +264,13 @@ export interface LaunchPlan {
   // per-run override; a plan carrying this does not represent a real Cowork config.
   debugMaxThinkingTokens?: number;
   agentMaxTurns?: number; // session turn budget → --max-turns (omitted ⇒ agent default; distinct from the max_turns assertion)
+  // The tier-uniform agent-env knob (agentEnvOverrides(session.agent_env)) — each runtime layers this
+  // LAST over its own env construction (knob wins), after scrubbing SCRUBBED_AGENT_ENV_KEYS from the
+  // operator layer on the tiers that inherit one (hostloop/protocol). Optional (like extendedThinking
+  // above) only so a LaunchPlan literal built directly in a test doesn't need to set it — every runtime
+  // treats `plan.agentEnv ?? {}` as a no-op; buildLaunchPlan always carries a concrete (possibly empty)
+  // object from the session field.
+  agentEnv?: Record<string, string>;
   permissionMode: string;
   permissionParity: "cowork" | "strict";
   baseEnv: NodeJS.ProcessEnv; // Cowork bg-env-strip applied; CLAUDE_CONFIG_DIR set by the runtime
@@ -806,6 +859,7 @@ export function buildLaunchPlan(
     extendedThinking: session.extended_thinking,
     debugMaxThinkingTokens: session.debug.max_thinking_tokens,
     agentMaxTurns: session.agent_max_turns,
+    agentEnv: agentEnvOverrides(session.agent_env),
     permissionMode: session.permission_mode,
     permissionParity: session.permission_parity,
     baseEnv,

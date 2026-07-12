@@ -121,11 +121,16 @@ describe("golden — container (VM-loop)", () => {
 });
 
 describe("golden — host-loop (deltas)", () => {
+  // extraAllowedTools: bash-only (production shape, coworkWebFetchViaApi on — see hostloop.ts's
+  // webFetchViaApi-gated extraAllowedTools) — web_fetch stays REGISTERED (extraTools/--tools) but is
+  // gated through a real can_use_tool, not pre-approved (extraTools no longer implicitly
+  // pre-approves; each caller states its --allowedTools set explicitly).
   const args = agentArgs(baseline, plan(), {
     mntRoot,
     systemPromptAppend: "## Shell access\n...",
     disallowed: ["Bash", "WebFetch", "NotebookEdit"],
     extraTools: ["mcp__workspace__bash", "mcp__workspace__web_fetch"],
+    extraAllowedTools: ["mcp__workspace__bash"],
   });
   it("agentArgs snapshot", () => expect(args).toMatchSnapshot());
   it("dockerRunArgv snapshot (named for docker exec)", () =>
@@ -139,6 +144,14 @@ describe("golden — host-loop (deltas)", () => {
     expect(dockerRunArgv(dockerInput(args, `cowork-hl-${ID}`))).toContain("--name");
     const env = spawnEnv(baseline, { configGuest, proxyHost: "P", extra: { CLAUDE_PLUGIN_ROOT: "/host/plugins/my-skill" } });
     expect(env.CLAUDE_PLUGIN_ROOT).toMatch(/^\/host\//); // unmounted host path -> self-heal
+  });
+
+  it("web_fetch is REGISTERED (--tools) but NOT pre-approved (--allowedTools) — production's can_use_tool gate shape", () => {
+    const tools = args.slice(args.indexOf("--tools") + 1, args.indexOf("--allowedTools"));
+    const allowed = args.slice(args.indexOf("--allowedTools") + 1);
+    expect(tools).toContain("mcp__workspace__web_fetch");
+    expect(allowed).toContain("mcp__workspace__bash"); // bash stays pre-approved
+    expect(allowed).not.toContain("mcp__workspace__web_fetch"); // web_fetch is gated, not pre-approved
   });
 });
 

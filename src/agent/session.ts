@@ -28,7 +28,17 @@ export interface QSpec {
 export type DecisionRequest =
   // `options` is OFF-WIRE (web_fetch approval is host-synthesized): the grant-scope choices a decider
   // answers with for a `webfetch:<domain>` gate. Absent for ordinary agent permissions (binary allow/deny).
-  | { id: string; kind: "permission"; tool: string; input: Record<string, unknown>; options?: { label: string; description?: string }[] }
+  | {
+      id: string;
+      kind: "permission";
+      tool: string;
+      input: Record<string, unknown>;
+      options?: { label: string; description?: string }[];
+      toolUseId?: string; // request.tool_use_id — pairs the ask with its tool_use (correlation for path telemetry)
+      agentId?: string; // request.agent_id — present ONLY when the ask fired inside a sub-agent (binary-verified hook/request schema)
+      decisionReason?: string; // request.decision_reason — the SDK's suggested deny reason (e.g. the workingDir constant)
+      decisionReasonType?: string; // request.decision_reason_type (e.g. "workingDir")
+    }
   // toolUseId (the `toolu_…` id, distinct from the UUID `id`/request_id) pairs this gate with its
   // tool_result for delivery verification + `trace --view questions`.
   | { id: string; kind: "question"; questions: QSpec[]; toolUseId?: string }
@@ -36,7 +46,7 @@ export type DecisionRequest =
   | { id: string; kind: "elicit"; server?: string; prompt?: string; schema?: unknown }; // elicitation / side_question
 export type DecisionResponse =
   // `grant` is a WEB_FETCH-LOCAL, OFF-WIRE field (once = this fetch only; domain = approve the whole host
-  // for the run). web_fetch approval is host-synthesized (Run.requestWebFetchApproval) and never serialized,
+  // for the run). web_fetch approval is host-synthesized (Run's decideWebFetchDomain) and never serialized,
   // so `grant` must NEVER reach serializeDecision — a guard there throws if it does (catches a future
   // refactor that routes web_fetch through the wire, where serialize would silently drop it).
   | { kind: "permission"; behavior: "allow" | "deny"; updatedInput?: unknown; message?: string; grant?: "once" | "domain" }
@@ -62,12 +72,25 @@ export type AgentEvent =
       type: "subagent_dispatch";
       toolUseId: string;
       parentToolUseId?: string;
-      agentType: string;
+      dispatchAgentType: string; // the DISPATCH-INPUT type ("unknown" when the input omitted subagent_type); the BINARY-resolved type (incl. the general-purpose fallback) arrives later on the record via task_started — see RunRecord.subagents[].resolvedAgentType
+      typeOmitted: boolean; // the dispatch input carried no subagent_type key at all (proven by the full input parse, never a prefix grep) — a deliberate explicit "general-purpose" is NOT this
       declaredTools: string[];
       description?: string;
       prompt?: string; // input.prompt, assertText-capped
-      model?: string; // the dispatching message's model
+      dispatchModel?: string; // the DISPATCHING message's model (ex-"model" — renamed when resolvedModel landed beside it on RunResult.subagents[])
     } // parentToolUseId = nesting, for the dispatch tree.
+  | {
+      // The dispatch's paired result envelope: `tool_use_result` on the `user` message carries the
+      // RESOLVED child metadata (resolvedModel/agentId/agentType/status) — a TOP-LEVEL sibling of
+      // `message`, previously discarded entirely (only content blocks were parsed). Keyed by the first
+      // tool_result block's id so it joins onto the matching `subagent_dispatch` by toolUseId.
+      type: "subagent_result_meta";
+      toolUseId: string;
+      resolvedModel?: string;
+      agentId?: string;
+      agentType?: string;
+      status?: string;
+    }
   | { type: "thinking"; text: string; model?: string } // model set only when this thinking block came from an assistant message (not the system-subtype "thinking" event, which has no message.model)
   | { type: "metrics"; data: Record<string, unknown> } // api_metrics → cost
   | { type: "decision"; request: DecisionRequest }
@@ -90,7 +113,16 @@ export type AgentEvent =
   | { type: "raw"; line: string }
   | { type: "system_event"; subtype: string; data: Record<string, unknown> } // a `system` message we don't special-case (e.g. compact_boundary)
   | { type: "mcp_error"; server: string; code?: number; message: string } // an MCP round-trip the harness answered with a JSON-RPC error
-  | { type: "hook_event"; callbackId: string; decision: "block" | "allow"; reason?: string; tool?: string }; // a PreToolUse hook fired
+  | {
+      type: "hook_event";
+      callbackId: string;
+      decision: "block" | "allow";
+      reason?: string;
+      tool?: string;
+      paths?: { file_path?: string; path?: string }; // BOTH keys the VM path-gate scans (pretooluse-path-hook.ts) — never first-match-only
+      toolUseId?: string; // msg.request.tool_use_id — a SIBLING of `input` on the hook_callback request, NOT inside it
+      agentId?: string; // input.agent_id — present only when the hook fired inside a sub-agent
+    }; // a PreToolUse hook fired
 
 export type SdkMcp = {
   servers: string[];
@@ -136,8 +168,13 @@ export type DecisionDelivery = { delivered: boolean; reason?: "session-closing" 
 export interface AgentSession {
   /** write `initialize` before the first user turn (idempotent; `start()` also calls it).
    *  Optional — replay sessions (cassette) have no live control channel and omit it. */
-  init?(opts?: { subagentAppend?: string; sdkMcp?: SdkMcp; hooks?: HookBundle }): void;
-  start(opts?: { subagentAppend?: string; sdkMcp?: SdkMcp; hooks?: HookBundle }): AsyncIterable<AgentEvent>;
+  init?(opts?: { subagentAppend?: string; sdkMcp?: SdkMcp; hooks?: HookBundle; toolAliases?: Record<string, string> }): void;
+  start(opts?: {
+    subagentAppend?: string;
+    sdkMcp?: SdkMcp;
+    hooks?: HookBundle;
+    toolAliases?: Record<string, string>;
+  }): AsyncIterable<AgentEvent>;
   sendUserTurn(text: string): void;
   respond(decisionId: string, r: DecisionResponse): DecisionDelivery;
   close(): void;
@@ -241,7 +278,17 @@ export function hookEventFrom(
   callbackId: string,
   reply: Record<string, unknown> | undefined,
   input: any,
-): { type: "hook_event"; callbackId: string; decision: "block" | "allow"; reason?: string; tool?: string } {
+  toolUseId?: string, // = msg.request.tool_use_id — a SIBLING of `input` on the request, NOT inside it
+): {
+  type: "hook_event";
+  callbackId: string;
+  decision: "block" | "allow";
+  reason?: string;
+  tool?: string;
+  paths?: { file_path?: string; path?: string };
+  toolUseId?: string;
+  agentId?: string;
+} {
   const r = reply ?? {};
   const nested = (r.hookSpecificOutput ?? {}) as Record<string, unknown>;
   const isBlock = r.decision === "block" || nested.permissionDecision === "deny";
@@ -252,7 +299,24 @@ export function hookEventFrom(
         ? (nested.permissionDecisionReason as string)
         : undefined;
   const tool = typeof input?.tool_name === "string" ? input.tool_name : undefined;
-  return { type: "hook_event", callbackId, decision: isBlock ? "block" : "allow", reason, tool };
+  // BOTH path keys — the VM path-gate scans file_path AND path (pretooluse-path-hook.ts:92-107) and
+  // denies on whichever is a /sessions path, so recording only the first would mis-report a
+  // {file_path:"/allowed", path:"/sessions/x"} call as "/allowed".
+  const ti = (input?.tool_input ?? {}) as Record<string, unknown>;
+  const paths: { file_path?: string; path?: string } = {};
+  if (typeof ti.file_path === "string") paths.file_path = ti.file_path;
+  if (typeof ti.path === "string") paths.path = ti.path;
+  const agentId = typeof input?.agent_id === "string" ? input.agent_id : undefined; // inside the hook input, present only within a sub-agent
+  return {
+    type: "hook_event",
+    callbackId,
+    decision: isBlock ? "block" : "allow",
+    reason,
+    tool,
+    paths: paths.file_path !== undefined || paths.path !== undefined ? paths : undefined,
+    toolUseId,
+    agentId,
+  };
 }
 
 /** The key the in-VM AskUserQuestion handler indexes answers by — it does
@@ -439,7 +503,7 @@ export class LiveAgentSession implements AgentSession {
    * also calls it so a standalone `start()` (no prior `init`) still initializes. Guarded so the two
    * call sites never double-write init-1.
    */
-  init(opts: { subagentAppend?: string; sdkMcp?: SdkMcp; hooks?: HookBundle } = {}): void {
+  init(opts: { subagentAppend?: string; sdkMcp?: SdkMcp; hooks?: HookBundle; toolAliases?: Record<string, string> } = {}): void {
     if (this.initWritten) return;
     this.initWritten = true;
     this.sdkMcp = opts.sdkMcp;
@@ -452,10 +516,16 @@ export class LiveAgentSession implements AgentSession {
     initRequest.hooks = opts.hooks
       ? { PreToolUse: [...COWORK_PRETOOLUSE_HOOKS.PreToolUse, ...opts.hooks.definitions.PreToolUse] }
       : COWORK_PRETOOLUSE_HOOKS;
+    // Production's host-loop-only tool alias map (Bash→mcp__workspace__bash, WebFetch→mcp__workspace__web_fetch)
+    // — omitted entirely (not an empty object) when the caller passes none, so container/microvm's
+    // initialize request is byte-identical to before this option existed.
+    if (opts.toolAliases && Object.keys(opts.toolAliases).length) initRequest.toolAliases = opts.toolAliases;
     this.write({ type: "control_request", request_id: "init-1", request: initRequest });
   }
 
-  async *start(opts: { subagentAppend?: string; sdkMcp?: SdkMcp; hooks?: HookBundle } = {}): AsyncIterable<AgentEvent> {
+  async *start(
+    opts: { subagentAppend?: string; sdkMcp?: SdkMcp; hooks?: HookBundle; toolAliases?: Record<string, string> } = {},
+  ): AsyncIterable<AgentEvent> {
     this.init(opts); // idempotent — a no-op if drive() already wrote init-1 before the first user turn
 
     // race-approach latch — `errorPromise` rejects when proc emits an error, which is
@@ -563,12 +633,22 @@ export class LiveAgentSession implements AgentSession {
           out = { decision: "block", reason: `hook handler error: ${message}` };
         }
         this.write(successEnvelope(reqId, out));
-        yield hookEventFrom(callbackId, out, msg.request.input);
+        yield hookEventFrom(
+          callbackId,
+          out,
+          msg.request.input,
+          typeof msg.request.tool_use_id === "string" ? msg.request.tool_use_id : undefined,
+        );
         return;
       }
       const builtInOut = hookOutput(callbackId, msg.request.input);
       this.write(successEnvelope(reqId, builtInOut));
-      yield hookEventFrom(callbackId, builtInOut, msg.request.input);
+      yield hookEventFrom(
+        callbackId,
+        builtInOut,
+        msg.request.input,
+        typeof msg.request.tool_use_id === "string" ? msg.request.tool_use_id : undefined,
+      );
       return;
     }
     // mcp_message is the only side-effecting branch (the driver computes + writes the response).
@@ -927,13 +1007,18 @@ export function parseMessage(msg: any): AgentEvent[] {
               type: "subagent_dispatch",
               toolUseId,
               parentToolUseId,
-              // Skills often dispatch with only {description, prompt} (no subagent_type) → agentType is
-              // "unknown" but the description still identifies the dispatch (e.g. "TOP_DOWN market sizing").
-              agentType: String(inp.subagent_type ?? inp.subagentType ?? "unknown"),
+              // Skills often dispatch with only {description, prompt} (no subagent_type) → dispatchAgentType
+              // is "unknown" but the description still identifies the dispatch (e.g. "TOP_DOWN market sizing").
+              dispatchAgentType: String(inp.subagent_type ?? inp.subagentType ?? "unknown"),
+              // Parse-time fact from the FULL input parse (never a prefix grep): the dispatch input carried
+              // neither key at all. Distinguishes an omitted type (the wildcard-fallback trap — the binary
+              // resolves it to general-purpose with tools:["*"]) from an EXPLICIT subagent_type:"general-purpose"
+              // (a deliberate choice, not a trap).
+              typeOmitted: !("subagent_type" in inp) && !("subagentType" in inp),
               declaredTools: declared,
               description: inp.description != null ? String(inp.description) : undefined,
               prompt: inp.prompt != null ? toolResultAssertText(String(inp.prompt)) : undefined,
-              model,
+              dispatchModel: model,
             });
           }
         }
@@ -945,6 +1030,32 @@ export function parseMessage(msg: any): AgentEvent[] {
       // Tool OUTCOMES come back as `user` messages carrying tool_result blocks. We never parsed these
       // before, so every tool result — including the AskUserQuestion `q.map` error — was invisible to the
       // recorder/trace. Capture them for delivery verification + `trace --view tools`/`--view questions`.
+      //
+      // The dispatch's paired result envelope: tool_use_result carries the RESOLVED child metadata
+      // (resolvedModel/agentId/agentType/status) as a TOP-LEVEL sibling of message — previously
+      // discarded (only content blocks were parsed). Keyed by the first tool_result block's id.
+      {
+        const env = msg.tool_use_result;
+        if (env && typeof env === "object" && !Array.isArray(env)) {
+          const blocks = Array.isArray(msg.message?.content) ? msg.message.content : [];
+          const tr = blocks.find(
+            (b: Record<string, unknown> | null) => b && typeof b === "object" && (b as Record<string, unknown>).type === "tool_result",
+          );
+          const toolUseId =
+            tr && (tr as Record<string, unknown>).tool_use_id ? String((tr as Record<string, unknown>).tool_use_id) : undefined;
+          const e = env as Record<string, unknown>;
+          const has = typeof e.resolvedModel === "string" || typeof e.agentType === "string" || typeof e.status === "string";
+          if (toolUseId && has)
+            ev.push({
+              type: "subagent_result_meta",
+              toolUseId,
+              resolvedModel: typeof e.resolvedModel === "string" ? e.resolvedModel : undefined,
+              agentId: typeof e.agentId === "string" ? e.agentId : undefined,
+              agentType: typeof e.agentType === "string" ? e.agentType : undefined,
+              status: typeof e.status === "string" ? e.status : undefined,
+            });
+        }
+      }
       for (const block of msg.message?.content ?? []) {
         // Guard a non-object content entry (null/scalar — a malformed/corrupt frame): `block.type` on a
         // primitive silently returns undefined, but `block === null` throws. Mirror the assistant loop's
@@ -1072,7 +1183,16 @@ export function toDecisionRequest(msg: any): DecisionRequest | null {
         toolUseId: msg.request.tool_use_id ? String(msg.request.tool_use_id) : undefined,
       };
     }
-    return { id, kind: "permission", tool, input: msg.request.input ?? {} };
+    return {
+      id,
+      kind: "permission",
+      tool,
+      input: msg.request.input ?? {},
+      toolUseId: msg.request.tool_use_id ? String(msg.request.tool_use_id) : undefined,
+      agentId: msg.request.agent_id ? String(msg.request.agent_id) : undefined,
+      decisionReason: typeof msg.request.decision_reason === "string" ? msg.request.decision_reason : undefined,
+      decisionReasonType: typeof msg.request.decision_reason_type === "string" ? msg.request.decision_reason_type : undefined,
+    };
   }
   if (sub === "request_user_dialog")
     return { id, kind: "dialog", dialogKind: msg.request.dialogKind ?? msg.request.dialog_kind ?? "unknown", payload: msg.request.payload };

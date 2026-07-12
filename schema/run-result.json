@@ -58,6 +58,44 @@
       "items": { "type": "object" },
       "description": "PreToolUse hook block/allow decisions ({callbackId, decision, reason?, tool?})."
     },
+    "fileToolAttempts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["tool", "paths", "origin"],
+        "properties": {
+          "tool": { "type": "string" },
+          "paths": {
+            "type": "object",
+            "properties": { "file_path": { "type": "string" }, "path": { "type": "string" } }
+          },
+          "gatePath": { "type": "string" },
+          "origin": { "enum": ["main", "subagent", "unknown"] },
+          "parentToolUseId": { "type": "string" },
+          "toolUseId": { "type": "string" }
+        }
+      },
+      "description": "Attempt-level gated-file-tool telemetry (raw paths as sent, per Read/Write/Edit/Glob/Grep/MultiEdit tool_use). Undefined = evidence unavailable; [] = captured, no gated attempts."
+    },
+    "pathDenials": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["source", "tool", "decision"],
+        "properties": {
+          "source": { "enum": ["pretooluse", "can_use_tool", "permission_denied"] },
+          "tool": { "type": "string" },
+          "path": { "type": "string" },
+          "callbackId": { "type": "string" },
+          "decisionReasonType": { "type": "string" },
+          "agentId": { "type": "string" },
+          "decision": { "enum": ["deny"] },
+          "reason": { "type": "string" },
+          "toolUseId": { "type": "string" }
+        }
+      },
+      "description": "Decision-level path-denial telemetry from three filtered producers: the PreToolUse path gate's own callback, a denied can_use_tool ask on a gated file tool with a path, and a pre-ask permission_denied correlated to a recorded gated attempt. Undefined = evidence unavailable (older result, or replay without controlOut); [] = captured, no path denials."
+    },
     "presentedFiles": {
       "type": "array",
       "items": { "type": "object" },
@@ -519,7 +557,7 @@
         "type": "object",
         "required": [
           "toolUseId",
-          "agentType",
+          "dispatchAgentType",
           "declaredTools",
           "toolsUsed"
         ],
@@ -531,8 +569,17 @@
             "type": "string",
             "description": "the dispatching parent's toolUseId \u2014 reconstructs the nested dispatch tree (#16)"
           },
-          "agentType": {
-            "type": "string"
+          "dispatchAgentType": {
+            "type": "string",
+            "description": "the DISPATCH-INPUT type (\"unknown\" when the input omitted subagent_type) \u2014 unchanged meaning, renamed from the ambiguous agentType now that a resolved type lands beside it"
+          },
+          "resolvedAgentType": {
+            "type": "string",
+            "description": "the BINARY-resolved child type from task_started (incl. the general-purpose fallback) \u2014 strictly better evidence than dispatchAgentType for a type-less dispatch"
+          },
+          "dispatchTypeOmitted": {
+            "type": "boolean",
+            "description": "the dispatch input carried no subagent_type at all (proven by the full input parse) \u2014 the wildcard-fallback trap fired"
           },
           "declaredTools": {
             "type": "array",
@@ -564,8 +611,13 @@
           "prompt": {
             "type": "string"
           },
-          "model": {
-            "type": "string"
+          "dispatchModel": {
+            "type": "string",
+            "description": "the DISPATCHING message's model (ex-\"model\" — renamed when resolvedModel landed beside it)"
+          },
+          "resolvedModel": {
+            "type": "string",
+            "description": "the RESOLVED child model from the dispatch's tool_use_result envelope"
           },
           "output": {
             "type": "string"
@@ -674,6 +726,10 @@
           "enum": [
             "skill"
           ]
+        },
+        "promptAssetsHash": {
+          "type": "string",
+          "description": "sha16 over the baseline's committed prompt-asset FILE bytes (spawn.promptTemplate / subagentAppend / subagentAppendHostLoop, key-ordered, comment-stripped). Prompt identity was previously keyed on `baseline` (appVersion) alone, so a prompt-asset edit under the SAME appVersion silently replayed old-prompt behavior. Absent on a run recorded before this field existed → informational note, never a finding."
         }
       }
     },
@@ -903,7 +959,9 @@
               "unverifiable-baseline",
               "unverifiable-skill",
               "resolved-tier",
-              "unverifiable-tier"
+              "unverifiable-tier",
+              "prompt-assets",
+              "unverifiable-prompt-assets"
             ]
           },
           "message": {

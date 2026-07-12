@@ -88,7 +88,9 @@ export function spawnMicroVm(
   const env = spawnEnv(baseline, {
     configGuest: configVm,
     proxyHost: proxyUrl,
-    extra: runtimeAuthEnv(),
+    // The tier-uniform agent_env knob rides in via `extra`, which spawnEnv applies LAST — no scrub
+    // needed here: the microvm's env is a constructed allowlist, never the operator's shell.
+    extra: { ...runtimeAuthEnv(), ...plan.agentEnv },
   });
   // Keep SECRET values off the `limactl shell …` argv (host-visible via ps). Public env rides
   // argv via `env KEY=value`; secrets are handed to the guest over a stdin PROLOGUE the shell script

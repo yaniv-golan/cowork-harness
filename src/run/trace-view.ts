@@ -60,7 +60,7 @@ export interface TraceRow {
   kind: "tool" | "dispatch" | "decision" | "text" | "result" | "thinking";
   name?: string;
   detail?: string;
-  agentType?: string;
+  dispatchAgentType?: string;
   declaredTools?: string[];
   description?: string; // dispatch description — identifies an `unknown`-typed dispatch
   child?: boolean; // ran inside a sub-agent (had a parentToolUseId)
@@ -110,7 +110,15 @@ function rowFor(ev: AgentEvent, translate: (s: string) => string): TraceRow[] {
         { kind: "tool", name: ev.name, detail: summarize(ev.input, translate), child: !!ev.parentToolUseId, toolUseId: ev.toolUseId },
       ];
     case "subagent_dispatch":
-      return [{ kind: "dispatch", name: "Agent", agentType: ev.agentType, declaredTools: ev.declaredTools, description: ev.description }];
+      return [
+        {
+          kind: "dispatch",
+          name: "Agent",
+          dispatchAgentType: ev.dispatchAgentType,
+          declaredTools: ev.declaredTools,
+          description: ev.description,
+        },
+      ];
     case "assistant_text":
       return ev.parentToolUseId || !ev.text.trim() ? [] : [{ kind: "text", detail: translate(ev.text.replace(/\s+/g, " ")).slice(0, 120) }];
     case "thinking":
@@ -420,12 +428,13 @@ export function formatGateTrace(rows: GateTraceRow[]): string {
 
 export interface DispatchNode {
   toolUseId: string;
-  agentType: string;
+  dispatchAgentType: string;
   description?: string;
   declaredTools: string[];
   depth: number; // 0 = top-level dispatch; >0 = dispatched by another sub-agent
   prompt?: string;
-  model?: string;
+  dispatchModel?: string; // the DISPATCHING message's model (ex-`model`)
+  resolvedModel?: string; // the RESOLVED child model, from the dispatch's paired subagent_result_meta event (tool_use_result envelope)
   output?: string; // paired from a tool_result in the same events file, by toolUseId
 }
 
@@ -433,7 +442,9 @@ export interface DispatchNode {
  * `trace --view dispatches` — the sub-agent dispatch tree, so an author can read off the REAL total
  * dispatch count (what `dispatch_count_max` asserts against) instead of guess-and-check, and see the
  * nesting (a sub-agent that dispatches further). Ordered by appearance; depth derived from
- * `parentToolUseId` chains among the dispatches themselves.
+ * `parentToolUseId` chains among the dispatches themselves. Each node's `resolvedModel` is paired from
+ * a `subagent_result_meta` event in the SAME events file (also parsed by `eventsOf`/`parseMessage`) —
+ * the dispatch's own `dispatchModel` is early/fallback evidence only; `resolvedModel` is authoritative.
  */
 export function buildDispatchTree(file: string): { nodes: DispatchNode[]; total: number } {
   const events = eventsOf(file);
@@ -443,6 +454,13 @@ export function buildDispatchTree(file: string): { nodes: DispatchNode[]; total:
   // available without reading RunResult/RunRecord (mirrors buildTraceFromEvents's results.set(...) pairing).
   const results = new Map<string, string>();
   for (const ev of events) if (ev.type === "tool_result" && ev.toolUseId) results.set(ev.toolUseId, ev.text);
+  // Pair each dispatch's toolUseId against its paired subagent_result_meta event (the tool_use_result
+  // envelope) for resolvedModel — same events file, keyed the same way as `results` above.
+  const metaById = new Map(
+    events
+      .filter((e): e is Extract<AgentEvent, { type: "subagent_result_meta" }> => e.type === "subagent_result_meta")
+      .map((m) => [m.toolUseId, m]),
+  );
   const depthOf = (d: Extract<AgentEvent, { type: "subagent_dispatch" }>): number => {
     let depth = 0;
     let cur = d.parentToolUseId;
@@ -456,12 +474,13 @@ export function buildDispatchTree(file: string): { nodes: DispatchNode[]; total:
   };
   const nodes = dispatches.map((d) => ({
     toolUseId: d.toolUseId,
-    agentType: d.agentType,
+    dispatchAgentType: d.dispatchAgentType,
     description: d.description,
     declaredTools: d.declaredTools,
     depth: depthOf(d),
     prompt: d.prompt,
-    model: d.model,
+    dispatchModel: d.dispatchModel,
+    resolvedModel: metaById.get(d.toolUseId)?.resolvedModel,
     output: results.get(d.toolUseId),
   }));
   return { nodes, total: nodes.length };
@@ -475,11 +494,15 @@ export function formatDispatchTree({ nodes, total }: { nodes: DispatchNode[]; to
     const tools = n.declaredTools.length ? ` [${n.declaredTools.join(",")}]` : "";
     const promptLine = firstLine(n.prompt);
     const outputLine = firstLine(n.output);
-    const extra = [promptLine ? `prompt: ${promptLine}` : "", outputLine ? `output: ${outputLine}` : ""]
+    const extra = [
+      promptLine ? `prompt: ${promptLine}` : "",
+      outputLine ? `output: ${outputLine}` : "",
+      n.resolvedModel ? `resolvedModel=${n.resolvedModel}` : "",
+    ]
       .filter(Boolean)
       .map((s) => `\n${indent}  ${s}`)
       .join("");
-    return `${indent}└ ${n.agentType}${n.description ? ` (${n.description})` : ""}${tools}${extra}`;
+    return `${indent}└ ${n.dispatchAgentType}${n.description ? ` (${n.description})` : ""}${tools}${extra}`;
   });
   lines.push(`\n${total} sub-agent dispatch(es) total — assert with \`dispatch_count_max: ${total}\``);
   return lines.join("\n");
@@ -708,7 +731,7 @@ export function formatTrace(rows: TraceRow[], opts?: { modelUsage?: RunResult["m
   for (const r of rows) {
     if (r.kind === "dispatch")
       lines.push(
-        `└ dispatch ${r.agentType}${r.description ? ` (${r.description})` : ""}${r.declaredTools?.length ? " [" + r.declaredTools.join(",") + "]" : ""}`,
+        `└ dispatch ${r.dispatchAgentType}${r.description ? ` (${r.description})` : ""}${r.declaredTools?.length ? " [" + r.declaredTools.join(",") + "]" : ""}`,
       );
     else if (r.kind === "tool")
       lines.push(

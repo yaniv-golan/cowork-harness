@@ -27,9 +27,10 @@ import {
 } from "../session.js";
 import { spawnProtocol } from "../runtime/protocol.js";
 import { spawnContainer } from "../runtime/container.js";
-import { spawnHostLoop } from "../runtime/hostloop.js";
+import { spawnHostLoop, WORKSPACE_TOOL_ALIASES } from "../runtime/hostloop.js";
 import { snapshotHostLoopWorkspace } from "../runtime/hostloop-stage.js";
 import { checkHostLoopWriteConsent, logHostWriteNotice } from "../hostloop/safety.js";
+import { makeHostLoopCanUseToolGate } from "../hostloop/canusetool-gate.js";
 import { spawnMicroVm } from "../runtime/microvm.js";
 import {
   probeImageOmitted,
@@ -53,7 +54,7 @@ import { writeVmPathContextFile } from "./vm-path-ctx-file.js";
 import { LiveAgentSession, type SdkMcp, type HookBundle } from "../agent/session.js";
 import { readTimeline } from "../agent/timeline.js";
 import { foldToolDurations, foldSkillActivity, attributeSubagentSkills } from "./timeline-fold.js";
-import { buildDecider, ExternalDecider, LlmDecider, type Decider, type OnUnanswered, UnansweredError } from "../decide/decider.js";
+import { buildDecider, Chain, ExternalDecider, LlmDecider, type Decider, type OnUnanswered, UnansweredError } from "../decide/decider.js";
 import { type DecisionChannel } from "../decide/external-channel.js";
 import { claudeCliComplete } from "../decide/llm-transport.js";
 import { Run, infraErrorsForResult, evidenceErrorsForResult, type RunRecord, type RunHooks } from "./run.js";
@@ -569,7 +570,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
                 hostSkillsDir: skillsStaged ? skillsDir : undefined,
               };
             })()
-          : undefined;
+          : { effectiveFidelity };
       const prompts = renderPrompts(baseline, session, sessionId, plan.mounts.find((m) => m.kind === "folder")?.mountPath, hostLoopOpts);
       promptFidelityWarnings = prompts.fidelityWarnings; // hoist out so RunResult construction (after try) can access it
       let sdkMcp: SdkMcp | undefined;
@@ -580,6 +581,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
           egressProxy: sidecar?.proxyUrl,
           dockerNetwork: sidecar?.network,
           provenanceRef,
+          webFetchViaApi: viaApiOn,
         });
         child = hl.child;
         sdkMcp = hl.sdkMcp;
@@ -644,18 +646,23 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       const llmTerminal =
         onUnanswered === "llm" ? new LlmDecider(claudeCliComplete, opts.llmIntent, opts.llmModel || undefined, secrets) : undefined;
       const externalTerminal = opts.externalChannel ? new ExternalDecider(opts.externalChannel, secrets) : llmTerminal;
-      const decider =
+      const policyDecider =
         opts.decider ?? buildDecider({ rules: scenario.answers, parity: plan.permissionParity, onUnanswered, external: externalTerminal });
+      // Production interposes the canUseTool path gate BEFORE the user-facing callback (xe ?? Qt ?? Se);
+      // the harness analog is FIRST in the Chain — Chain stops at the first non-abstain, so any later
+      // placement would let a scripted/default answer preempt a production-shaped deny.
+      const decider = effectiveFidelity === "hostloop" ? Chain(makeHostLoopCanUseToolGate(), policyDecider) : policyDecider;
       const run = new Run(sessionT, decider, opts.hooks ?? [], sessionId, dialogTimeoutMs ?? undefined, scenario.timeout_ms);
       run.seedApprovedDomains(session.web_fetch.approved_domains); // test convenience: pre-approved web_fetch hosts
       // fill the provenance bundle (backed by Run's tracker + recorded approval) BEFORE drive().
       // Host-loop only, and only when the web_fetch-via-API gate is on; otherwise the handler stays
       // allowlist-only (ref.current undefined). Run seeds the set from turns + tool_results.
       if (effectiveFidelity === "hostloop" && viaApiOn) {
+        run.enableWebFetchGate();
         provenanceRef.current = {
           isAllowed: (u) => run.provenanceHas(u),
           markAllowed: (u) => run.provenanceAdd(u),
-          requestApproval: (d, u) => run.requestWebFetchApproval(d, u),
+          requestApproval: undefined, // gated at can_use_tool — the handler must not self-approve (was the 2nd record)
           promptGateOn,
           permissiveMode: plan.permissionMode === "bypassPermissions",
         };
@@ -667,6 +674,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
             subagentAppend: prompts.subagentAppend,
             sdkMcp,
             hooks: hostloopHooks,
+            ...(effectiveFidelity === "hostloop" ? { toolAliases: WORKSPACE_TOOL_ALIASES } : {}),
           });
         } catch (e) {
           // An unanswered gate is recoverable: grab the in-progress record so the work done before the whiff can
@@ -820,7 +828,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         egress,
         durationMs: Date.now() - startedAt,
         unanswered: { message: unansweredErr.message, hint: unansweredErr.hint },
-        fingerprint: buildFingerprint(scenario.session, baseline.appVersion, undefined, scenario.skills),
+        fingerprint: buildFingerprint(scenario.session, baseline.appVersion, undefined, scenario.skills, baseline),
         onUnanswered,
         nonDeterministicHint: opts.nonDeterministicHint,
         externalChannel: !!opts.externalChannel,
@@ -939,6 +947,9 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       gateDeliveries: record.gateDeliveries,
       toolResultTexts: record.toolResults.map((r) => r.assertText ?? r.text),
       toolResultsTruncated: record.toolResults.map((r) => r.assertText === undefined),
+      // Minimal pairing info (toolUseId/isError, no text) for subagent_file_write's causal pairing
+      // against fileToolAttempts. Always defined live — an empty array is a real "no tool results" signal.
+      toolResults: record.toolResults.map((r) => ({ toolUseId: r.toolUseId, isError: r.isError })),
       toolErrors: record.toolErrors,
       redundantToolCalls: record.redundantToolCalls,
       skillsInvoked: record.skillsInvoked,
@@ -960,6 +971,12 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       // Always defined live — the built-in Task hook only fires on a dispatched background Task, so an
       // empty array on a no-Task scenario is the real "nothing hook-blocked" signal no_hook_blocked needs.
       hookEvents: record.hookEvents,
+      // Always defined live — an empty array is the real "no gated attempts" signal, matching hookEvents/
+      // presentedFiles' own uncollapsed convention.
+      fileToolAttempts: record.fileToolAttempts,
+      // Always defined live — an empty array is the real "no path denials" signal, matching
+      // fileToolAttempts/hookEvents' own uncollapsed convention.
+      pathDenials: record.pathDenials,
       // Always defined live — an empty array is the real "nothing presented" signal no_scratchpad_leak's
       // vacuous pass needs, distinct from replay's evidence-unavailable undefined on an older cassette.
       presentedFiles: record.presentedFiles,
@@ -1183,6 +1200,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       contextEvents: record.contextEvents, // system events we don't special-case — powers compaction_occurred
       mcpErrors: record.mcpErrors, // uncollapsed — an empty [] is the real "no MCP errors" signal no_mcp_error needs
       hookEvents: record.hookEvents, // uncollapsed — an empty [] on a no-Task scenario is the real "nothing hook-blocked" signal no_hook_blocked needs
+      fileToolAttempts: record.fileToolAttempts, // uncollapsed — content-class, same as toolResults/decisions above
+      pathDenials: record.pathDenials, // uncollapsed — content-class, same as fileToolAttempts above
       presentedFiles: record.presentedFiles, // uncollapsed — an empty [] is the real "nothing presented" signal no_scratchpad_leak's vacuous pass needs
       // The pre-spawn baseline no_unexpected_files diffs against (same single read the evaluate ctx got).
       // undefined = the run didn't capture (key not asserted, microvm, pre-seam) — the assertion then
@@ -1213,7 +1232,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       // Skill staleness fingerprint, persisted on EVERY run (runs are always kept on disk) so `verify-run` can
       // detect a kept run that predates a skill change and refuse to vouch for answer-coverage. Same call the
       // record path uses for the cassette (cassette.ts) — `(inline)`/no-skill sessions yield a {baseline}-only fp.
-      fingerprint: buildFingerprint(scenario.session, baseline.appVersion, undefined, scenario.skills),
+      fingerprint: buildFingerprint(scenario.session, baseline.appVersion, undefined, scenario.skills, baseline),
       resources, // same single fold as the evaluate() ctx above — not re-read
       // Fields this lane has NEVER set (were implicitly `undefined` before this refactor; now explicit
       // per assembleRunResult's contract — this line makes the omission a reviewable, greppable fact
@@ -1520,6 +1539,8 @@ export function buildPartialResult(args: {
     contextEvents: record.contextEvents, // system events we don't special-case — powers compaction_occurred
     mcpErrors: record.mcpErrors, // uncollapsed — an empty [] is the real "no MCP errors" signal no_mcp_error needs
     hookEvents: record.hookEvents, // uncollapsed — an empty [] on a no-Task scenario is the real "nothing hook-blocked" signal no_hook_blocked needs
+    fileToolAttempts: record.fileToolAttempts, // uncollapsed — content-class, same as toolResults/decisions above
+    pathDenials: record.pathDenials, // uncollapsed — content-class, same as fileToolAttempts above
     presentedFiles: record.presentedFiles, // uncollapsed — an empty [] is the real "nothing presented" signal no_scratchpad_leak's vacuous pass needs
     preRunPaths: readPreRunManifest(args.outDir),
     preRunLinkAware: readPreRunManifestLinkAware(args.outDir),

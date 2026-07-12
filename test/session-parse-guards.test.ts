@@ -104,7 +104,7 @@ describe("F2: parseMessage — assistant content block guards (crash fix)", () =
       message: { model: "claude-x", content: [{ type: "tool_use", id: "toolu_2", name: "Agent", input: 42 }] },
     });
     const dispatch = events.find((e) => e.type === "subagent_dispatch");
-    expect(dispatch).toMatchObject({ type: "subagent_dispatch", toolUseId: "toolu_2", agentType: "unknown", declaredTools: [] });
+    expect(dispatch).toMatchObject({ type: "subagent_dispatch", toolUseId: "toolu_2", dispatchAgentType: "unknown", declaredTools: [] });
   });
 
   it("a null entry in the assistant content array is rejected as a typed protocol error (not an uncaught 'Cannot read properties of null')", () => {
@@ -113,6 +113,43 @@ describe("F2: parseMessage — assistant content block guards (crash fix)", () =
 
   it("a scalar entry in the assistant content array is likewise rejected", () => {
     expect(() => parseMessage({ type: "assistant", message: { content: ["not-an-object"] } })).toThrow(/malformed assistant content block/);
+  });
+});
+
+describe("subagent_dispatch — typeOmitted is a parse-time fact (full input parse, never a prefix grep)", () => {
+  const dispatchMsg = (input: Record<string, unknown>) => ({
+    type: "assistant",
+    message: { id: "msg_1", model: "claude-x", content: [{ type: "tool_use", id: "t1", name: "Agent", input }] },
+  });
+  it("omitted subagent_type → typeOmitted true, dispatchAgentType 'unknown'", () => {
+    const ev = parseMessage(dispatchMsg({ description: "d", prompt: "p" })).find((e) => e.type === "subagent_dispatch");
+    expect(ev).toMatchObject({ dispatchAgentType: "unknown", typeOmitted: true });
+  });
+  it("EXPLICIT general-purpose → typeOmitted false (deliberate choice, not a trap)", () => {
+    const ev = parseMessage(dispatchMsg({ description: "d", prompt: "p", subagent_type: "general-purpose" })).find(
+      (e) => e.type === "subagent_dispatch",
+    );
+    expect(ev).toMatchObject({ dispatchAgentType: "general-purpose", typeOmitted: false });
+  });
+});
+
+describe("subagent_result_meta — the dispatch's paired tool_use_result envelope", () => {
+  it("emits resolvedModel/agentId/agentType/status keyed by the tool_result block's id", () => {
+    const evs = parseMessage({
+      type: "user",
+      tool_use_result: { resolvedModel: "claude-haiku-x", agentId: "agent_3", agentType: "general-purpose", status: "completed" },
+      message: { content: [{ type: "tool_result", tool_use_id: "t1", content: "done" }] },
+    });
+    expect(evs.find((e) => e.type === "subagent_result_meta")).toMatchObject({
+      toolUseId: "t1",
+      resolvedModel: "claude-haiku-x",
+      agentType: "general-purpose",
+      status: "completed",
+    });
+  });
+  it("a user message without the envelope emits no meta event", () => {
+    const evs = parseMessage({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "t1", content: "x" }] } });
+    expect(evs.some((e) => e.type === "subagent_result_meta")).toBe(false);
   });
 });
 
@@ -199,5 +236,43 @@ describe("F4: respond() delivery reconciliation across an async stdin EPIPE (bug
     // An unrelated/unanswered decisionId must NOT be reported as reconciled-undelivered.
     expect((session as any).hasUndeliveredReconciliation("some-other-decision")).toBe(false);
     proc.stdout.end();
+  });
+});
+
+describe("toDecisionRequest — SDK deny-reason + correlation fields survive parsing (live AND replay share parseMessage)", () => {
+  const frame = {
+    type: "control_request",
+    request_id: "req-1",
+    request: {
+      subtype: "can_use_tool",
+      tool_name: "Write",
+      input: { file_path: "/tmp/x" },
+      tool_use_id: "toolu_01",
+      agent_id: "agent_7",
+      decision_reason: "Path is outside allowed working directories",
+      decision_reason_type: "workingDir",
+    },
+  };
+  it("carries decisionReason/decisionReasonType/toolUseId/agentId on the permission request", () => {
+    const [ev] = parseMessage(frame);
+    expect(ev).toMatchObject({
+      type: "decision",
+      request: {
+        kind: "permission",
+        tool: "Write",
+        toolUseId: "toolu_01",
+        agentId: "agent_7",
+        decisionReason: "Path is outside allowed working directories",
+        decisionReasonType: "workingDir",
+      },
+    });
+  });
+  it("absent fields stay undefined (no fabrication)", () => {
+    const [ev] = parseMessage({
+      type: "control_request",
+      request_id: "r",
+      request: { subtype: "can_use_tool", tool_name: "Read", input: {} },
+    });
+    expect((ev as { request: Record<string, unknown> }).request.decisionReason).toBeUndefined();
   });
 });

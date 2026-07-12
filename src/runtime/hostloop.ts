@@ -5,6 +5,7 @@ import { resolve, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { PlatformBaseline, Scenario } from "../types.js";
 import type { LaunchPlan, Mount } from "../session.js";
+import { SCRUBBED_AGENT_ENV_KEYS } from "../session.js";
 import { resolveMounts, resolveAgentBinary, resolveHostAgentBinary, cmpVersionStrings, MOUNT_BARE_NAME_MIN_VERSION } from "../baseline.js";
 import { generateHostLoopShellSection } from "./hostloop-prompt.js";
 
@@ -24,7 +25,17 @@ import { checkHostLoopPathGate, PATH_GATE_TOOL_NAMES, type HostLoopPathGateConfi
 import type { HookBundle } from "../agent/session.js";
 import { stripComments } from "../prompt.js";
 
-const HOSTLOOP_PATH_GATE_ID = "hostloop-path-gate";
+/** The path-gate's own PreToolUse hook callback id — exported so RunRecord.pathDenials' pretooluse
+ *  producer (run.ts) and its replay reconstruction (cassette.ts) can filter to THIS gate's own
+ *  decisions and exclude every other custom-hook callback the same `hook_callback` mechanism fires. */
+export const HOSTLOOP_PATH_GATE_ID = "hostloop-path-gate";
+
+/** Production's host-loop tool aliases (asar `et()`; single-hop, deny rules do NOT expand across the
+ *  alias). An alias never GRANTS a tool — it resolves only when the target is already in the caller's
+ *  bound set, so a bare Bash/WebFetch from a sub-agent without the workspace tool bound still fails.
+ *  Host-loop-only: the container/microvm tiers register no workspace server to alias to (see
+ *  docs/fidelity-gaps.md). */
+export const WORKSPACE_TOOL_ALIASES: Record<string, string> = { Bash: "mcp__workspace__bash", WebFetch: "mcp__workspace__web_fetch" };
 
 /**
  * Pure builder for the hostloop native process's env: `hostNativeSpawnEnv`'s contract-layer output
@@ -36,13 +47,25 @@ const HOSTLOOP_PATH_GATE_ID = "hostloop-path-gate";
  * would otherwise leak straight through `...process.env` and — were the ELF to still read the env —
  * silently outrank the flag. Strip it explicitly. Extracted from `spawnHostLoop` so this env-construction
  * step is unit-testable without spawning anything.
+ *
+ * Layers apply in precedence order — knob > baseline spawn.env > operator env (scrubbed):
+ *   1. the operator's shell (`...process.env`), but with `SCRUBBED_AGENT_ENV_KEYS` deleted from THIS
+ *      layer alone, before anything else touches it — container/microvm never inherit these keys, so
+ *      leaking them only here (and on protocol) is exactly the asymmetry `agent_env` closes. Scrubbing
+ *      AFTER the baseline overlay would also erase a value the baseline legitimately sets; scrubbing
+ *      the operator layer first keeps that value intact.
+ *   2. `hostNativeSpawnEnv`'s baseline-derived output (may legitimately set any of the three keys).
+ *   3. the authored `agentEnv` knob, applied last so it always wins.
  */
-export function buildHostLoopNativeEnv(baseline: PlatformBaseline, opts: Parameters<typeof hostNativeSpawnEnv>[1]): NodeJS.ProcessEnv {
-  const nativeEnv: NodeJS.ProcessEnv = {
-    ...process.env,
-    ...hostNativeSpawnEnv(baseline, opts),
-  };
+export function buildHostLoopNativeEnv(
+  baseline: PlatformBaseline,
+  opts: Parameters<typeof hostNativeSpawnEnv>[1] & { agentEnv?: Record<string, string> },
+): NodeJS.ProcessEnv {
+  const nativeEnv: NodeJS.ProcessEnv = { ...process.env };
+  for (const k of SCRUBBED_AGENT_ENV_KEYS) delete nativeEnv[k];
+  Object.assign(nativeEnv, hostNativeSpawnEnv(baseline, opts));
   delete nativeEnv.MAX_THINKING_TOKENS;
+  Object.assign(nativeEnv, opts.agentEnv ?? {});
   return nativeEnv;
 }
 
@@ -73,6 +96,10 @@ export function spawnHostLoop(
     egressProxy?: string;
     dockerNetwork?: string;
     provenanceRef?: { current?: WebFetchProvenance }; // filled by execute.ts/chat.ts (Run-backed)
+    // coworkWebFetchViaApi (readGateFlag, execute.ts/chat.ts) — when on, web_fetch is gated through
+    // can_use_tool (production shape: bash pre-approved, web_fetch is not) instead of pre-approved
+    // alongside bash (the allowlist-fallback shape, gate off).
+    webFetchViaApi?: boolean;
   } = {},
 ) {
   const m = resolveMounts(baseline, sessionId, "proj1");
@@ -111,7 +138,8 @@ export function spawnHostLoop(
   // Shell-access prompt section. Host-loop excludes the asar's HOST_LOOP_EXCLUDED_BUILTIN_TOOLS =
   // {Bash, NotebookEdit, REPL, JavaScript, WebFetch}; of those only Bash/NotebookEdit/WebFetch exist in
   // the CLI agent's registry, so disallowing the three real ones is the faithful set.
-  const systemPromptAppend = [opts.systemPromptAppend, hostLoopShellSection(baseline, m.sessionRoot, mntRoot, plan)]
+  const hostOutputsDir = join(mntHost, "outputs");
+  const systemPromptAppend = [opts.systemPromptAppend, hostLoopShellSection(baseline, m.sessionRoot, mntRoot, plan, hostOutputsDir)]
     .filter(Boolean)
     .join("\n\n");
 
@@ -124,28 +152,37 @@ export function spawnHostLoop(
     mcpGuest: mcpHostPath,
     systemPromptAppend,
     disallowed: ["Bash", "WebFetch", "NotebookEdit"],
-    extraTools: ["mcp__workspace__bash", "mcp__workspace__web_fetch"],
+    extraTools: ["mcp__workspace__bash", "mcp__workspace__web_fetch"], // both REGISTERED regardless of the gate
+    extraAllowedTools: opts.webFetchViaApi
+      ? ["mcp__workspace__bash"] // web_fetch is gated via can_use_tool (production shape) — pre-approve bash only
+      : ["mcp__workspace__bash", "mcp__workspace__web_fetch"], // gate off (allowlist fallback) — keep web_fetch pre-approved
   });
-  const hostOutputsDir = join(mntHost, "outputs");
   const nativeEnv = buildHostLoopNativeEnv(baseline, {
     configDir: plan.configDir,
     extra: { CLAUDE_PLUGIN_ROOT: claudePluginRootHost ?? "", ...runtimeAuthEnv() },
     // Real host paths of connected folders (never staged copies) — the only spawn tier where these
     // are meaningful, since container/microvm folders are staged as copies with no real host path.
     folderHostPaths: plan.mounts.filter((mt) => mt.kind === "folder").map((mt) => mt.hostPath),
+    // The tier-uniform agent_env knob — wins over both the (scrubbed) operator layer and baseline spawn.env.
+    agentEnv: plan.agentEnv,
   });
 
   // The PreToolUse path-containment gate config. hostCwd = the harness-owned outputs dir (production's
   // `hostCwd = getOutputsDir(e)`); scratchRoots = [hostCwd] (hostCwd and hostOutputsDir are the SAME dir
   // here, so this is one entry, not two).
+  const uploadsRoot = join(mntHost, "uploads");
+  const spoolRoot = join(plan.configDir, "projects"); // production's spooled-tool-results dir analog: the staged config dir's own "projects" subdir
+  const skillsRoot = join(plan.configDir, "skills");
+  const pluginRoots = plan.mounts.filter((mt) => mt.kind !== "folder" && mt.kind !== "upload").map((mt) => join(mntHost, mt.mountPath));
   const gateCfg: HostLoopPathGateConfig = {
     hostCwd: hostOutputsDir,
     allowedRoots: [
       hostOutputsDir,
-      join(mntHost, "uploads"),
-      join(plan.configDir, "skills"),
+      uploadsRoot,
+      spoolRoot,
+      skillsRoot,
       ...plan.mounts.filter((mt) => mt.kind === "folder" && mt.mode !== "r").map((mt) => mt.hostPath),
-      ...plan.mounts.filter((mt) => mt.kind !== "folder" && mt.kind !== "upload").map((mt) => join(mntHost, mt.mountPath)),
+      ...pluginRoots,
     ],
     readOnlyRoots: plan.mounts.filter((mt) => mt.kind === "folder" && mt.mode === "r").map((mt) => mt.hostPath),
     scratchRoots: [hostOutputsDir],
@@ -157,8 +194,15 @@ export function spawnHostLoop(
     // connected folder in chat is an operator-constructed fixture, not a production chat topology — so this
     // is a known, consented fidelity gap, not a safety break (security-reviewed 2026-07-04). Revisit if
     // chat hostloop should thread session-type scratchMode for closer fidelity.
+    //
+    // 1.20186.1 addendum: production chat-type sessions ALSO differ in (i) scratch containment,
+    // (ii) chat read-roots including uploads + both projects spool dirs, (iii) connected-folder scope.
+    // Retained divergence for the chat lane (see docs/fidelity-gaps.md "Chat-lane session topology");
+    // the TASK-lane read-only categories (uploads/spool/plugin write-blocks) ARE modeled above.
     scratchMode: false,
-    claudePluginRoot: claudePluginRootHost,
+    uploadsRoots: [uploadsRoot],
+    spooledProjectsRoots: [spoolRoot],
+    readOnlyPluginRoots: [skillsRoot, ...pluginRoots],
   };
   const pathGateFired = new Set<string>(); // tool_use_ids the gate actually saw — feeds the runtime tripwire below
   const hooks: HookBundle = {
@@ -250,7 +294,13 @@ function resolveClaudePluginRootHostPath(plan: LaunchPlan, mntHost: string): str
   return join(mntHost, pluginMounts[0].mountPath);
 }
 
-function hostLoopShellSection(baseline: PlatformBaseline, sessionRoot: string, mntRoot: string, plan: LaunchPlan): string {
+function hostLoopShellSection(
+  baseline: PlatformBaseline,
+  sessionRoot: string,
+  mntRoot: string,
+  plan: LaunchPlan,
+  hostOutputsDir: string,
+): string {
   const appVersion = baseline.appVersion;
   // Generator era (Desktop >= 1.14271.0): the section is built from live mount state, not a static
   // file. Branch BEFORE any file read so generator-era versions never hit the missing-asset throw.
@@ -263,6 +313,7 @@ function hostLoopShellSection(baseline: PlatformBaseline, sessionRoot: string, m
       folders: plan.mounts.filter((m) => m.kind === "folder"),
       uploads: plan.mounts.filter((m) => m.kind === "upload"),
       skillsConfigDir: skillsPresent ? plan.configDir : undefined,
+      hostOutputsDir,
     });
   }
 
